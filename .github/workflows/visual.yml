@@ -855,7 +855,7 @@ jobs:
           sleep 3
           xdotool key Tab; sleep 1
           xdotool type --delay 80 "Stipple"
-          # Caret now after "Stipple"; move left twice and insert -> "ForXYma".
+          # Caret now after "Stipple"; move left twice and insert -> "StippXYle".
           xdotool key Left Left; sleep 0.5
           xdotool type --delay 80 "XY"
           sleep 2

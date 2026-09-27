@@ -159,7 +159,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   `LayoutNode` IR carries an optional caret byte index; `paint_focus` draws the
   caret bar at that index (prefix-measured), and the reconciler treats a caret
   move as damage. `text_editor` renders it; **CI-verified** on X11 (type
-  "Stipple", arrow-left ×2, insert "XY" → "ForXYma" with a mid-string caret).
+  "Stipple", arrow-left ×2, insert "XY" → "StippXYle" with a mid-string caret).
 - ✅ **Text selection**: `EditBuffer` gains a selection anchor — Shift+arrows /
   Home / End extend the selection, plain motions collapse it, typing/delete
   replace it, and Ctrl/Cmd+A selects all (UTF-8-boundary-safe). The X11 backend
@@ -180,7 +180,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   selection) through `text_pos_at`/`find_text_pos`. `EditBuffer` gains
   `place_caret`/`extend_to`; `text_editor` takes a `&mut EditBuffer` accessor and
   wires keyboard + pointer together. **CI-verified** on X11 — mouse drag selects
-  "ForXYm" (`docs/screenshots/stipple-x11-dragselect.png`).
+  the leading characters (`docs/screenshots/stipple-x11-dragselect.png`).
 - ✅ **Word-wrapping**: `Font::wrap` greedily wraps text to a max width (breaking
   at spaces, honoring hard newlines, shaping each word once); a `wrap` flag on
   text elements wraps to the laid-out content width in both measure (growing
