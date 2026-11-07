@@ -126,7 +126,7 @@ mod tests {
     fn blit_composites_at_offset() {
         let mut dst = Pixmap::new(PhysicalSize::new(4, 4));
         let mut src = Pixmap::new(PhysicalSize::new(2, 2));
-        for px in src.as_bytes_mut().chunks_exact_mut(4) {
+        for px in src.as_bytes_mut().as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[1, 2, 3, 4]);
         }
         dst.blit(&src, 1, 1);
@@ -141,7 +141,7 @@ mod tests {
     fn blit_clips_to_destination_bounds() {
         let mut dst = Pixmap::new(PhysicalSize::new(2, 2));
         let mut src = Pixmap::new(PhysicalSize::new(2, 2));
-        for px in src.as_bytes_mut().chunks_exact_mut(4) {
+        for px in src.as_bytes_mut().as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[9, 9, 9, 9]);
         }
         // Origin near the far corner: only the (1,1) pixel lands inside.

@@ -1635,7 +1635,7 @@ mod tests {
 
         // Register solid-magenta content sized to the viewport's physical extent.
         let mut content = Pixmap::new(PhysicalSize::new(40, 30));
-        for px in content.as_bytes_mut().chunks_exact_mut(4) {
+        for px in content.as_bytes_mut().as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[255, 0, 255, 255]);
         }
         app.set_viewport_content(vid, content);

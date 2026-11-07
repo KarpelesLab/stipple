@@ -191,7 +191,7 @@ fn rd_u32(b: &[u8], off: usize) -> Option<u32> {
 fn rgba_to_bgrx(rgba: &[u8], out: &mut Vec<u8>) {
     out.clear();
     out.reserve(rgba.len());
-    for px in rgba.chunks_exact(4) {
+    for px in rgba.as_chunks::<4>().0 {
         out.extend_from_slice(&[px[2], px[1], px[0], 0]);
     }
 }
@@ -199,7 +199,12 @@ fn rgba_to_bgrx(rgba: &[u8], out: &mut Vec<u8>) {
 /// Swizzle a straight-RGBA8 row in place into a ZPixmap (`[B, G, R, 0]`) row of
 /// equal pixel count. Used to fill the shared-memory image without allocating.
 fn swizzle_row(src: &[u8], dst: &mut [u8]) {
-    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+    for (s, d) in src
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(dst.as_chunks_mut::<4>().0.iter_mut())
+    {
         d[0] = s[2];
         d[1] = s[1];
         d[2] = s[0];
@@ -1433,8 +1438,10 @@ fn fetch_keymap(conn: &mut Conn) -> io::Result<Keymap> {
     let mut body = vec![0u8; len_words * 4];
     conn.stream.read_exact(&mut body)?;
     let syms = body
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect();
     Ok(Keymap { syms, per, min })
 }

@@ -516,7 +516,12 @@ fn read_str(args: &[u8], off: usize) -> Option<(String, usize)> {
 
 /// Convert a straight-RGBA8 pixmap into `wl_shm` XRGB8888 bytes (`[B, G, R, 0]`).
 fn rgba_to_xrgb(rgba: &[u8], dst: &mut [u8]) {
-    for (s, d) in rgba.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+    for (s, d) in rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(dst.as_chunks_mut::<4>().0.iter_mut())
+    {
         d[0] = s[2];
         d[1] = s[1];
         d[2] = s[0];

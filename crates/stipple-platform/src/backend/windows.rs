@@ -430,7 +430,12 @@ impl Surface for WinSurface {
         let src = pixmap.as_bytes();
         // RGBA -> BGRA (Win32 DIBs are BGRA, top-down via negative height).
         let mut fb = vec![0u8; src.len()];
-        for (d, s) in fb.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        for (d, s) in fb
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.as_chunks::<4>().0)
+        {
             d[0] = s[2];
             d[1] = s[1];
             d[2] = s[0];
