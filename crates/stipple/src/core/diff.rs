@@ -50,8 +50,8 @@ impl Damage {
     /// [`Surface`] contract reads as "assume everything changed". Callers that
     /// want to skip a no-op present should check [`Damage::is_empty`] first.
     ///
-    /// [`Surface`]: stipple::render::Surface
-    /// [`Surface::present`]: stipple::render::Surface::present
+    /// [`Surface`]: crate::render::Surface
+    /// [`Surface::present`]: crate::render::Surface::present
     pub fn to_physical(&self, scale: ScaleFactor, bounds: Rect) -> Vec<Rect> {
         let Damage::Regions(regions) = self else {
             return Vec::new();

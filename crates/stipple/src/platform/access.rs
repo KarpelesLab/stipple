@@ -1,7 +1,7 @@
 //! Platform-neutral accessibility tree.
 //!
 //! `stipple::platform` is dependency-free, so it can't name
-//! `stipple::core::AccessNode`. The umbrella `App` maps that semantic tree into
+//! `stipple::core::AccessNode`. `App` maps that semantic tree into
 //! this mirror and hands it to a backend through
 //! [`Window::set_accessibility_tree`](crate::platform::Window::set_accessibility_tree).
 //! Each backend then exposes it to its OS accessibility API — `NSAccessibility`
