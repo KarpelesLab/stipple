@@ -1,6 +1,6 @@
 use crate::geometry::{PhysicalSize, ScaleFactor, Size};
 use crate::platform::event::WindowId;
-use crate::render::Surface;
+use crate::render::{Color, Surface};
 
 /// Desired initial properties for a window. Consumed by the backend when
 /// creating the window; later changes go through [`Window`] methods.
@@ -17,6 +17,9 @@ pub struct WindowAttributes {
     /// Whether the window's title bar should be dark, to match its content.
     /// `None` leaves it to the OS. Honored on Windows and macOS.
     pub dark: Option<bool>,
+    /// The color behind the content, for any window area the app doesn't draw.
+    /// Honored on iOS, where the safe area leaves such areas around the content.
+    pub background: Option<Color>,
 }
 
 impl Default for WindowAttributes {
@@ -27,6 +30,7 @@ impl Default for WindowAttributes {
             resizable: true,
             position: None,
             dark: None,
+            background: None,
         }
     }
 }

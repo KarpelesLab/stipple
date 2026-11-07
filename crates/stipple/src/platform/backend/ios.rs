@@ -194,6 +194,8 @@ struct IosCtx {
     size: PhysicalSize,
     /// Physical pixels per logical pixel: `UIScreen.scale`.
     scale: f64,
+    /// What shows around the safe area.
+    background: Option<crate::render::Color>,
     /// Raw pointer to the (type-erased) handler. `UIApplicationMain` never
     /// returns, so the handler in `run`'s frame lives for the process lifetime.
     handler: *mut DynHandler,
@@ -265,7 +267,23 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
         // The root view fills the screen behind the status bar and home indicator;
         // our view sits inside the safe area on top of it.
         let root = msg_alloc_init_frame(class("UIView"), bounds);
-        let background = msg_id(class("UIColor"), sel("systemBackgroundColor"));
+        let background = match CTX.with(|c| c.borrow().background) {
+            Some(color) => {
+                let (r, g, b, a) = (color.r, color.g, color.b, color.a);
+                let c = |v: u8| v as f64 / 255.0;
+                let f: unsafe extern "C" fn(Id, Sel, f64, f64, f64, f64) -> Id =
+                    std::mem::transmute(objc_msgSend as *const c_void);
+                f(
+                    class("UIColor"),
+                    sel("colorWithRed:green:blue:alpha:"),
+                    c(r),
+                    c(g),
+                    c(b),
+                    c(a),
+                )
+            }
+            None => msg_id(class("UIColor"), sel("systemBackgroundColor")),
+        };
         msg_void_id(root, sel("setBackgroundColor:"), background);
         let view = msg_alloc_init_frame(register_view_class(), bounds);
         msg_void_id(root, sel("addSubview:"), view);
@@ -506,6 +524,7 @@ where
     CTX.with(|c| {
         let mut c = c.borrow_mut();
         c.size = size;
+        c.background = attrs.background;
         c.handler = boxed;
     });
 

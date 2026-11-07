@@ -1157,8 +1157,10 @@ impl<S> App<S> {
 
         // Title bars match the content under every theme.
         let dark = self.theme.is_dark();
+        let background = self.theme.palette.background;
         for pane in &mut self.panes {
             pane.attrs.dark.get_or_insert(dark);
+            pane.attrs.background.get_or_insert(background);
         }
         let primary_attrs = self.panes[0].attrs.clone();
         // Per-pane surfaces, created lazily on first present, parallel to panes.
