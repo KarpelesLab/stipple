@@ -50,5 +50,6 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
+- [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

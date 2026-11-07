@@ -491,6 +491,13 @@ pub enum NodeContent {
     /// [`ViewportId`]. Painted via
     /// [`Scene::fill_viewport`](crate::render::Scene::fill_viewport).
     Viewport(ViewportId),
+    /// An image placed per `fit` in the node's bounds less `padding`. Compares
+    /// by image identity, so swapping the image damages the node.
+    Image {
+        source: crate::render::ImageSource,
+        fit: crate::render::ImageFit,
+        padding: crate::geometry::Insets,
+    },
 }
 
 /// A laid-out, retained node: absolute bounds, paint decoration, optional text

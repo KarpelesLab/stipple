@@ -1636,7 +1636,7 @@ pub mod prelude {
         Track, View,
     };
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
-    pub use crate::render::{Color, Font, Pixmap};
+    pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg};
     pub use crate::style::Theme;
     pub use crate::style::{Palette, Spacing, Typography};
     pub use crate::widgets::{
@@ -1645,6 +1645,7 @@ pub mod prelude {
         paragraph, progress_bar, radio, row, scroll, setting_row, slider, spacer, spinner, swatch,
         switch, tabs, text_area, text_editor, text_field, tooltip, viewport,
     };
+    pub use crate::widgets::{image, svg};
     pub use std::time::Duration;
 }
 

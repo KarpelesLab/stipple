@@ -25,12 +25,14 @@
 
 mod color;
 mod convert;
+mod image;
 mod scene;
 mod software;
 mod surface;
 mod text;
 
 pub use color::Color;
+pub use image::{ImageError, ImageFit, ImageSource, Svg, image_formats};
 pub use scene::{DrawCmd, Scene};
 pub use software::SoftwareRenderer;
 pub use surface::{Pixmap, Surface};
@@ -41,4 +43,10 @@ pub use text::{Font, FontError};
 /// shaping bridge) and need to share Stipple's geometry conventions.
 pub mod oxideav_bridge {
     pub use crate::render::convert::{to_ox_point, to_transform2d};
+    /// The `oxideav` frame, pixel-format and registry types the image API
+    /// takes ([`Pixmap::from_video_frame`](crate::render::Pixmap::from_video_frame),
+    /// [`Pixmap::decode_with`](crate::render::Pixmap::decode_with)), re-exported
+    /// so apps needn't depend on `oxideav-core` / `oxideav-image` directly.
+    pub use oxideav_core::{PixelFormat, RuntimeContext, VideoFrame, VideoPlane};
+    pub use oxideav_image::Image as OxImage;
 }

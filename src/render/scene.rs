@@ -11,7 +11,7 @@ use crate::render::convert::to_ox_point;
 use crate::render::{Color, Pixmap};
 use oxideav_core::{
     Group, ImageRef, Node, Paint, Path, PathNode, Point as OxPoint, Rect as OxRect, Rgba, Stroke,
-    Transform2D, VectorFrame, VideoFrame, VideoPlane, ViewBox,
+    Transform2D, VectorFrame, ViewBox,
 };
 use std::sync::Arc;
 
@@ -107,16 +107,8 @@ impl Scene {
 
     /// Draw `image` (straight-alpha RGBA) into `rect`.
     pub fn draw_image(&mut self, rect: Rect, image: Arc<Pixmap>) {
-        let size = image.size();
-        let frame = VideoFrame {
-            pts: None,
-            planes: vec![VideoPlane {
-                stride: size.width as usize * 4,
-                data: image.as_bytes().to_vec(),
-            }],
-        };
         self.emit(Node::Image(ImageRef {
-            frame: Box::new(frame),
+            frame: Box::new(image.to_video_frame()),
             bounds: OxRect {
                 x: rect.min_x() as f32,
                 y: rect.min_y() as f32,

@@ -11,7 +11,7 @@ use crate::core::runtime::{
 use crate::geometry::Insets;
 use crate::layout::{Axis, Track};
 use crate::platform::native::NativeDeco;
-use crate::render::Color;
+use crate::render::{Color, ImageFit, ImageSource};
 
 /// Alignment of children along an axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -101,6 +101,11 @@ pub enum ElementKind {
     /// [`width`](Element::width)/[`height`](Element::height) overrides (or grow),
     /// not to content.
     Viewport { id: ViewportId },
+    /// A bitmap or SVG image, placed in the element's box per `fit`. Sizes to
+    /// the image's natural size in logical pixels; a single
+    /// [`width`](Element::width)/[`height`](Element::height) override scales
+    /// the other axis to keep the aspect ratio.
+    Image { source: ImageSource, fit: ImageFit },
 }
 
 /// A node in the element tree: layout properties, decoration, an optional
@@ -222,6 +227,31 @@ impl Element {
             scroll: None,
             clip: false,
             kind: ElementKind::Viewport { id },
+        }
+    }
+
+    /// An image leaf showing `source` (a bitmap or SVG behind an `Arc`), sized
+    /// to its natural size and placed with [`ImageFit::Contain`] by default
+    /// (see [`fit`](Element::fit)).
+    pub fn image(source: impl Into<ImageSource>) -> Self {
+        Self {
+            layout: LayoutStyle::default(),
+            decoration: BoxStyle::default(),
+            action: None,
+            focus: None,
+            drag: None,
+            context: None,
+            caret: None,
+            selection: None,
+            text_pos: None,
+            wrap: false,
+            native: None,
+            scroll: None,
+            clip: false,
+            kind: ElementKind::Image {
+                source: source.into(),
+                fit: ImageFit::default(),
+            },
         }
     }
 
@@ -490,6 +520,15 @@ impl Element {
     pub fn scrollable(mut self, id: ScrollId) -> Self {
         self.scroll = Some(id);
         self.clip = true;
+        self
+    }
+
+    /// How an image element places its image in its box. No effect on other
+    /// elements.
+    pub fn fit(mut self, mode: ImageFit) -> Self {
+        if let ElementKind::Image { fit, .. } = &mut self.kind {
+            *fit = mode;
+        }
         self
     }
 

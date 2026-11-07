@@ -58,6 +58,23 @@ pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         // A viewport sizes purely to its width/height overrides (or grow); it
         // has no intrinsic content size.
         ElementKind::Leaf | ElementKind::Viewport { .. } => Size::ZERO,
+        ElementKind::Image { source, .. } => {
+            // The natural size, unless one axis is fixed: then the other follows
+            // the image's aspect ratio.
+            let natural = source.size();
+            let fixed = |v: Option<f64>, p: f64| v.map(|v| (v - p).max(0.0));
+            let w = fixed(el.layout.size.width, pad.horizontal());
+            let h = fixed(el.layout.size.height, pad.vertical());
+            match (w, h) {
+                (Some(w), None) if natural.width > 0.0 => {
+                    Size::new(w, w * natural.height / natural.width)
+                }
+                (None, Some(h)) if natural.height > 0.0 => {
+                    Size::new(h * natural.width / natural.height, h)
+                }
+                _ => natural,
+            }
+        }
         ElementKind::Text { text, size, .. } => match font {
             // Wrapping text takes the available width and grows in height.
             Some(f) if el.wrap && inner.width.is_finite() => {
@@ -298,6 +315,11 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
             color: *color,
         },
         ElementKind::Viewport { id } => NodeContent::Viewport(*id),
+        ElementKind::Image { source, fit } => NodeContent::Image {
+            source: source.clone(),
+            fit: *fit,
+            padding: el.layout.padding,
+        },
         _ => NodeContent::None,
     };
     let mut node = LayoutNode {
@@ -674,6 +696,13 @@ pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
         // viewport command so the app/GPU composites real content into the rect.
         NodeContent::Viewport(id) => {
             scene.fill_viewport(node.bounds, id.0 as u64, VIEWPORT_PLACEHOLDER);
+        }
+        NodeContent::Image {
+            source,
+            fit,
+            padding,
+        } => {
+            scene.draw_image_source(node.bounds.inset(*padding), source, *fit);
         }
         NodeContent::None => {}
     }
@@ -1238,5 +1267,52 @@ mod tests {
         assert_eq!(order, vec![FocusId(1), FocusId(2)]);
         let a11y = accessibility_tree(&tree, None);
         assert!(a11y.count() >= 3);
+    }
+
+    #[test]
+    fn image_measures_to_natural_size_and_keeps_aspect() {
+        use crate::geometry::{Insets, PhysicalSize};
+        use crate::render::{DrawCmd, ImageFit, Pixmap};
+        use std::sync::Arc;
+
+        let pm = Arc::new(Pixmap::new(PhysicalSize::new(40, 20)));
+        let avail = Size::new(1000.0, 1000.0);
+        assert_eq!(
+            measure(&Element::image(&pm), avail, None),
+            Size::new(40.0, 20.0)
+        );
+        // One fixed axis scales the other; both fixed wins outright.
+        assert_eq!(
+            measure(&Element::image(&pm).width(80.0), avail, None),
+            Size::new(80.0, 40.0)
+        );
+        assert_eq!(
+            measure(&Element::image(&pm).height(10.0), avail, None),
+            Size::new(20.0, 10.0)
+        );
+        assert_eq!(
+            measure(&Element::image(&pm).width(30.0).height(30.0), avail, None),
+            Size::new(30.0, 30.0)
+        );
+        // Padding adds around the natural size.
+        let padded = Element::image(&pm).padding(Insets::uniform(5.0));
+        assert_eq!(measure(&padded, avail, None), Size::new(50.0, 30.0));
+
+        // Painting places the image inside the padding, fitted (contain).
+        let el = Element::image(&pm)
+            .padding(Insets::uniform(5.0))
+            .fit(ImageFit::Contain);
+        let tree = layout(&el, Rect::from_xywh(0.0, 0.0, 50.0, 50.0), None);
+        let mut scene = Scene::new(Size::new(50.0, 50.0));
+        paint(&tree, &mut scene, None);
+        let rects: Vec<Rect> = scene
+            .commands()
+            .iter()
+            .filter_map(|c| match c {
+                DrawCmd::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rects, vec![Rect::from_xywh(5.0, 15.0, 40.0, 20.0)]);
     }
 }

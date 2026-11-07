@@ -20,8 +20,9 @@ use crate::core::{
 };
 use crate::geometry::{Insets, Point};
 use crate::platform::native::{self, NativeControl};
-use crate::render::Color;
+use crate::render::{Color, ImageSource, Svg};
 use crate::style::Theme;
+use std::sync::Arc;
 
 /// A vertical container.
 /// Apply the size the OS gives `control`.
@@ -105,6 +106,27 @@ pub fn viewport(theme: &Theme, id: ViewportId, width: f64, height: f64) -> Eleme
         .width(width)
         .height(height)
         .border(theme.palette.border, 1.0)
+}
+
+/// An image: a decoded bitmap (see [`Pixmap::decode`]) or an [`Svg`], shared
+/// by `Arc`. Sized to the image's natural size in logical pixels; override with
+/// [`width`](Element::width)/[`height`](Element::height) (one alone keeps the
+/// aspect ratio) and choose placement with [`fit`](Element::fit) (default
+/// [`ImageFit::Contain`]).
+///
+/// Keep the `Arc` in your state or a `static` rather than decoding in the view:
+/// images compare by identity, so a fresh `Arc` each frame repaints each frame.
+///
+/// [`Pixmap::decode`]: crate::render::Pixmap::decode
+/// [`ImageFit::Contain`]: crate::render::ImageFit::Contain
+pub fn image(source: impl Into<ImageSource>) -> Element {
+    Element::image(source)
+}
+
+/// An SVG document, rasterized at the physical size it's shown at so it stays
+/// sharp at any scale. Sized like [`image`].
+pub fn svg(doc: &Arc<Svg>) -> Element {
+    Element::image(doc)
 }
 
 /// A raised surface card: themed fill, hairline border, rounded corners, and

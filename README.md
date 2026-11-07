@@ -147,7 +147,9 @@ Widgets available in the prelude: `panel`, `row`, `column`, `spacer`,
 `button_variant`, `text_field`, `text_editor`, `text_area`, `checkbox`,
 `radio`, `switch`, `slider`, `progress_bar`, `spinner`, `swatch`,
 `setting_row`, `tabs`, `scroll`, `menu` / `menu_item` / `open_menu`,
-`open_dialog`, `tooltip`, and `viewport` (embedded external content).
+`open_dialog`, `tooltip`, `image` / `svg` (PNG, JPEG, GIF, WebP, BMP and SVG,
+decoded by the oxideav stack; see [docs/images.md](./docs/images.md)), and
+`viewport` (embedded external content).
 
 ## Examples
 
@@ -166,6 +168,7 @@ cargo run -p multiwindow   # two OS windows sharing one state
 cargo run -p filedialog    # native file dialog (portal, IFileDialog, NSOpenPanel)
 cargo run -p themegallery  # one card under four themes (writes .raw files)
 cargo run -p material3demo # Material 3 baseline + dynamic-color themes
+cargo run -p imagedemo     # PNG and SVG images, and the fit modes
 ```
 
 Each opens a real native window via `App::run` (Wayland, then X11, on Linux;

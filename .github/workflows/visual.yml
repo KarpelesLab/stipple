@@ -221,6 +221,77 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
+  # Image and SVG widgets: the imagedemo decodes a bundled PNG (through the
+  # oxideav-image registry) and parses a bundled SVG (oxideav-svg), then shows
+  # them at fixed offsets in the window's top-left. Screenshot the window and
+  # assert both image areas hold real content (many distinct colors: the PNG's
+  # gradient, the SVG's antialiased shapes) rather than the flat background.
+  visual-image:
+    name: Visual test (Image / X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, ImageMagick, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick fonts-dejavu-core
+
+      - name: Build the image demo
+        run: cargo build --release -p imagedemo
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 -noreset &
+          echo "XVFB_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Launch the image demo and check the image areas
+        env:
+          DISPLAY: ":99"
+        run: |
+          mkdir -p visual_output
+          ./target/release/imagedemo > visual_output/image.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          import -window root visual_output/stipple-image-root.png
+          echo "=== image.log ==="; cat visual_output/image.log || true
+          # The window (580x340) sits at the root top-left; crop it for the artifact.
+          convert visual_output/stipple-image-root.png -crop 580x340+0+0 +repage \
+            visual_output/stipple-image.png
+          # The PNG is drawn at (24,24) 128x128 and the 2x SVG at (176,24)
+          # 128x128; crop 96x96 inside each (the demo's unit test pins these).
+          convert visual_output/stipple-image.png -crop 96x96+40+40 +repage \
+            visual_output/image-png-region.png
+          convert visual_output/stipple-image.png -crop 96x96+192+40 +repage \
+            visual_output/image-svg-region.png
+          png_colors=$(convert visual_output/image-png-region.png -format '%k' info:)
+          svg_colors=$(convert visual_output/image-svg-region.png -format '%k' info:)
+          echo "distinct colors: png=$png_colors svg=$svg_colors"
+          [ "$png_colors" -gt 50 ]
+          [ "$svg_colors" -gt 4 ]
+          # The gap between the two images is the plain background.
+          gap_colors=$(convert visual_output/stipple-image.png -crop 20x96+154+40 +repage \
+            -format '%k' info:)
+          echo "distinct colors in the gap: $gap_colors"
+          [ "$gap_colors" -eq 1 ]
+
+      - name: Stop the app and Xvfb
+        if: always()
+        run: |
+          [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      - name: Upload screenshot + log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-image-screenshot
+          path: visual_output/*
+          if-no-files-found: warn
+
   # Scroll containers: a tall list clipped to a fixed-height viewport, wheel-
   # scrolled with xdotool. Screenshot before/after and assert the visible frame
   # changed (content moved) — proving offset + clip work end to end.

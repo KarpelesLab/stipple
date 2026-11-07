@@ -564,7 +564,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 | 2D vector rasterization | `oxideav-raster` |
 | Scene graph / primitives | `oxideav-core` (`VectorFrame`, `Node`, `Group`, `Transform2D`) |
 | Font parsing + shaping | `oxideav-ttf`, `oxideav-otf`, `oxideav-scribe` |
-| Image decode | `oxideav-png` + sibling codecs |
+| Image decode | `oxideav-image` over `oxideav-png`, `-mjpeg`, `-gif`, `-webp`, `-bmp` |
 | SVG (icons) | `oxideav-svg` |
 | Pixel conversion / blit prep | `oxideav-pixfmt` |
 | Windowing, input, IME, clipboard | **Stipple, hand-written per OS** |
@@ -851,8 +851,10 @@ Most input only works on X11 today.
 - ⬜ Drag and drop, notifications, system tray, opening URLs.
 
 #### 7e — Widgets and layout
-- ⬜ Image and SVG widgets (`Scene` can already draw images; `oxideav-svg` is a
-  dependency).
+- ✅ Image and SVG widgets: `image(...)` / `svg(...)` with fill / contain /
+  cover fit; `Pixmap::decode` through the `oxideav-image` registry (PNG, JPEG,
+  GIF, WebP, BMP); `Svg` parsed by `oxideav-svg` and rasterized at the physical
+  size shown; `VideoFrame` ⇄ `Pixmap` interop; `imagedemo` + `visual-image` CI.
 - ⬜ Select / dropdown, number input, split pane, toolbar, toast.
 - ⬜ Table, tree and data grid.
 - ✅ Grid layout (fixed, `fr` and auto tracks, gaps, spans), wrapping stacks,

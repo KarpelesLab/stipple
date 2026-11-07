@@ -364,4 +364,31 @@ mod tests {
                 .is_empty()
         );
     }
+
+    /// Images compare by identity: the same `Arc` is no damage, a different
+    /// one (even with equal pixels) damages exactly the image's box.
+    #[test]
+    fn swapped_image_damages_its_node() {
+        use crate::geometry::{Insets, PhysicalSize};
+        use crate::render::{ImageFit, ImageSource, Pixmap};
+        use std::sync::Arc;
+
+        let img = |pm: &Arc<Pixmap>| {
+            let mut n = node(Rect::from_xywh(10.0, 10.0, 16.0, 16.0), None, vec![]);
+            n.content = NodeContent::Image {
+                source: ImageSource::from(pm),
+                fit: ImageFit::Contain,
+                padding: Insets::default(),
+            };
+            n
+        };
+        let a_pm = Arc::new(Pixmap::new(PhysicalSize::new(4, 4)));
+        let b_pm = Arc::new(Pixmap::new(PhysicalSize::new(4, 4)));
+        let a = root(vec![img(&a_pm)]);
+        assert_eq!(diff_trees(&a, &root(vec![img(&a_pm)])), Damage::None);
+        assert_eq!(
+            diff_trees(&a, &root(vec![img(&b_pm)])),
+            Damage::Regions(vec![Rect::from_xywh(10.0, 10.0, 16.0, 16.0)])
+        );
+    }
 }

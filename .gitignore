@@ -12,3 +12,4 @@ Cargo.lock
 !docs/**/*.png
 *.raw
 *.log
+!examples/imagedemo/src/assets/*.png

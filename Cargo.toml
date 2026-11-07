@@ -27,6 +27,16 @@ tokio = ["dep:tokio"]
 oxideav-core.workspace = true
 oxideav-raster.workspace = true
 oxideav-scribe.workspace = true
+oxideav-svg.workspace = true
+oxideav-image.workspace = true
+oxideav-png.workspace = true
+oxideav-mjpeg.workspace = true
+oxideav-gif.workspace = true
+oxideav-webp.workspace = true
+oxideav-bmp.workspace = true
+# Not used directly: a version floor. oxideav-image 0.0.5 asks for any pixfmt 0.1
+# but needs APIs added in 0.1.11, so an older lockfile would fail to build.
+oxideav-pixfmt.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Only the multi-threaded scheduler; apps enable the drivers they use (net, time,
@@ -62,7 +72,17 @@ oxideav-raster = "0.1.2"
 oxideav-scribe = "0.1.8"
 oxideav-ttf = "0.1.6"
 oxideav-otf = "0.1.2"
-oxideav-svg = "0.1.5"
+oxideav-svg = "0.1.9"
+# Image decode for `Pixmap::decode`: the oxideav-image gateway over a format
+# registry the codec crates register into. Pinned below the releases that need
+# rustc 1.95 (the MSRV-aware resolver would pick these anyway).
+oxideav-image = "0.0.5"
+oxideav-pixfmt = "0.1.11"
+oxideav-png = "0.1.12"
+oxideav-mjpeg = "0.1.13"
+oxideav-gif = "0.0.14"
+oxideav-webp = "0.3.1"
+oxideav-bmp = "0.1.8"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
