@@ -155,7 +155,8 @@ jobs:
           kill "$APP_PID" 2>/dev/null || true
           cargo build --release -p widgetsdemo
           STIPPLE_X11_DEBUG=1 ./target/release/widgetsdemo > visual_output/widgets.log 2>&1 &
-          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          WPID=$!
+          echo "APP_PID=$WPID" >> "$GITHUB_ENV"
           sleep 4
           import -window root -crop 720x480+0+0 +repage visual_output/stipple-x11-widgets.png
           # Click the size select (SELECT_AT in the demo, pinned by its test):
@@ -169,10 +170,14 @@ jobs:
           echo "pixels changed under the select: $diff"
           if [ "$(echo "$diff" | awk '{printf "%d", $1}')" -le 500 ]; then
             # Diagnose a stall: is the app alive and busy, and where is it?
-            ps -o pid,stat,pcpu,etime,cmd -p "$APP_PID" || echo "app exited"
+            if ps -o pid,stat,pcpu,etime,cmd -p "$WPID"; then
+              echo "app still running"
+            else
+              wait "$WPID" || echo "app exited with status $?"
+            fi
             uniq -c visual_output/widgets.log | tail -8
             sudo apt-get install -y gdb > /dev/null 2>&1 || true
-            sudo gdb -p "$APP_PID" -batch -ex "thread apply all bt 30" 2>&1 | grep -E '^(#|Thread)' | head -80 || true
+            sudo gdb -p "$WPID" -batch -ex "thread apply all bt 30" 2>&1 | grep -E '^(#|Thread)' | head -80 || true
             exit 1
           fi
 
