@@ -457,6 +457,46 @@ fn symbol_list(t: &str) -> Option<Vec<&str>> {
 /// symbols (`key <NAME> { [ sym1, sym2 ] };`, or the multi-line form with a
 /// `symbols[Group1]= [ … ]` line), and `modifier_map ModN { … };` to learn
 /// which modifier bits Alt and Super use.
+/// A keysym name as the rest of the backend expects it. Keymaps written by
+/// tools like `wtype` name keysyms by value (`0x61`, `0xff09`, `0x100263a`)
+/// rather than by name; those become the name (`Tab`), the character (`a`) or
+/// the `UXXXX` form, which [`keysym_name_to_event`] understands.
+fn keysym_canonical_name(sym: &str) -> String {
+    let Some(value) = sym
+        .strip_prefix("0x")
+        .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+    else {
+        return sym.to_string();
+    };
+    let named = match value {
+        0xff09 => "Tab",
+        0xfe20 => "ISO_Left_Tab",
+        0xff0d => "Return",
+        0xff8d => "KP_Enter",
+        0xff08 => "BackSpace",
+        0xffff => "Delete",
+        0xff51 => "Left",
+        0xff52 => "Up",
+        0xff53 => "Right",
+        0xff54 => "Down",
+        0xff50 => "Home",
+        0xff57 => "End",
+        0xff55 => "Prior",
+        0xff56 => "Next",
+        0xff63 => "Insert",
+        0xff1b => "Escape",
+        0x20 => "space",
+        0xffbe..=0xffc9 => return format!("F{}", value - 0xffbe + 1),
+        // Latin-1 keysyms are the code point; 0x01000000 + cp is Unicode.
+        0x21..=0x7e | 0xa0..=0xff => {
+            return char::from_u32(value).map_or_else(|| sym.to_string(), String::from);
+        }
+        0x0100_0000..=0x0110_ffff => return format!("U{:04X}", value - 0x0100_0000),
+        _ => return sym.to_string(),
+    };
+    named.to_string()
+}
+
 fn parse_xkb(text: &str) -> XkbKeymap {
     use std::collections::HashMap;
     let mut codes: HashMap<&str, u32> = HashMap::new();
@@ -470,7 +510,7 @@ fn parse_xkb(text: &str) -> XkbKeymap {
             list.get(i)
                 .copied()
                 .filter(|s| !s.is_empty() && *s != "NoSymbol")
-                .map(str::to_string)
+                .map(keysym_canonical_name)
         };
         if let Some(base) = level(0) {
             syms.insert(name, (base, level(1)));
@@ -1879,6 +1919,25 @@ mod tests {
                 modifiers: shift,
             })
         );
+    }
+
+    #[test]
+    fn keysyms_given_by_value_become_names() {
+        assert_eq!(keysym_canonical_name("0xff09"), "Tab");
+        assert_eq!(keysym_canonical_name("0x61"), "a");
+        assert_eq!(keysym_canonical_name("0x20"), "space");
+        assert_eq!(keysym_canonical_name("0xffbf"), "F2");
+        assert_eq!(keysym_canonical_name("0x100263a"), "U263A");
+        assert_eq!(keysym_canonical_name("Return"), "Return");
+        let ev = keysym_name_to_event(
+            &keysym_canonical_name("0x63"),
+            true,
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+        );
+        assert!(ev.is_some(), "Ctrl+c from a wtype keymap");
     }
 
     #[test]

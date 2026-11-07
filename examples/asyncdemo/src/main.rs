@@ -107,8 +107,14 @@ fn main() {
     }
     let handle = app.handle();
     let quit = handle.clone();
+    let worker = handle.clone();
     handle.every(Duration::from_millis(100), move |s: &mut State| {
         s.ticks += 1;
+        // The selftest starts the work once the loop is running, so a slow
+        // first frame (macOS CI takes over a second) can't swallow the load.
+        if selftest && s.ticks == 1 {
+            start_work(&worker);
+        }
         if s.result.is_some() {
             s.ticks_idle += 1;
         } else {
@@ -125,7 +131,9 @@ fn main() {
             quit.exit();
         }
     });
-    start_work(&handle);
+    if !selftest {
+        start_work(&handle);
+    }
     app.run();
     if selftest {
         println!("asyncdemo: event loop exited");

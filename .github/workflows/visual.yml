@@ -167,8 +167,14 @@ jobs:
           convert visual_output/stipple-x11-widgets-open.png -crop 160x150+124+150 +repage visual_output/widgets-after.png
           diff=$(compare -metric AE visual_output/widgets-before.png visual_output/widgets-after.png null: 2>&1 || true)
           echo "pixels changed under the select: $diff"
-          grep -v present visual_output/widgets.log | tail -20 || true
-          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 500 ]
+          if [ "$(echo "$diff" | awk '{printf "%d", $1}')" -le 500 ]; then
+            # Diagnose a stall: is the app alive and busy, and where is it?
+            ps -o pid,stat,pcpu,etime,cmd -p "$APP_PID" || echo "app exited"
+            uniq -c visual_output/widgets.log | tail -8
+            sudo apt-get install -y gdb > /dev/null 2>&1 || true
+            sudo gdb -p "$APP_PID" -batch -ex "thread apply all bt 30" 2>&1 | grep -E '^(#|Thread)' | head -80 || true
+            exit 1
+          fi
 
       - name: Stop the app and Xvfb
         if: always()
@@ -1048,10 +1054,13 @@ jobs:
           ./target/release/textinput > visual_output/wl-input.log 2>&1 &
           TXT_PID=$!
           sleep 4
+          # Each wtype run creates a virtual keyboard, and the app only binds
+          # its wl_keyboard once the seat advertises one, so `-s 500` waits
+          # before the first key (a press sent sooner never reaches the app).
           # One wtype session keeps a single virtual keyboard alive for the whole
           # sequence (Tab to focus, then type), so the keymap stays valid: Tab,
           # then "stipple wl", with a delay between keystrokes.
-          wtype -d 120 -k Tab -- "stipple wl" 2>> visual_output/wtype.log; sleep 2
+          wtype -s 500 -d 120 -k Tab -- "stipple wl" 2>> visual_output/wtype.log; sleep 2
           grim visual_output/stipple-wayland-input.png || echo "grim failed"
           echo "=== wtype.log ==="; cat visual_output/wtype.log || true
           kill "$TXT_PID" 2>/dev/null || true
@@ -1064,7 +1073,7 @@ jobs:
           CLIP_PID=$!
           sleep 4
           # Focus the field ("Clip"), select all, copy: the app owns the selection.
-          wtype -d 120 -k Tab -M ctrl -k a -k c -m ctrl 2>> visual_output/wtype.log; sleep 1
+          wtype -s 500 -d 120 -k Tab -M ctrl -k a -k c -m ctrl 2>> visual_output/wtype.log; sleep 1
           out=$(timeout 10 wl-paste -n || true)
           echo "after copy, wl-paste = '$out'"
           [ "$out" = "Clip" ]
