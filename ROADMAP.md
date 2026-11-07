@@ -855,7 +855,9 @@ Most input only works on X11 today.
   dependency).
 - ⬜ Select / dropdown, number input, split pane, toolbar, toast.
 - ⬜ Table, tree and data grid.
-- ⬜ Grid layout, wrapping, and minimum / maximum size constraints.
+- ✅ Grid layout (fixed, `fr` and auto tracks, gaps, spans), wrapping stacks,
+  and minimum / maximum size constraints (with opt-in `shrink`); see
+  [docs/layout.md](docs/layout.md) and `examples/layoutdemo`.
 - ⬜ Virtualized lists, so 10,000 rows don't build 10,000 elements.
 
 #### 7f — Platform completeness

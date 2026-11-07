@@ -6,7 +6,8 @@
 //!    overrides; text measures via the active [`Font`]).
 //! 2. **layout** — top-down assignment of absolute bounds, using
 //!    [`crate::layout::solve_main_axis`] to distribute the main axis and
-//!    [`Align`] to position children on the cross axis. Produces a
+//!    [`Align`] to position children on the cross axis (per line, for wrapping
+//!    stacks), or [`crate::layout::solve_tracks`] for grids. Produces a
 //!    [`LayoutNode`] tree that survives the frame so pointer events can be
 //!    routed against it (see [`crate::core::hit_test`]).
 //! 3. **paint** — walk the layout tree, drawing each node's decoration and text.
@@ -16,7 +17,10 @@ use crate::core::runtime::{
     ActionId, FocusId, LayoutNode, NodeContent, ScrollId, find_action, find_focus, first_text,
 };
 use crate::geometry::{PhysicalSize, Point, Rect, Size, Vec2};
-use crate::layout::{Axis, FlexItem, solve_main_axis};
+use crate::layout::{
+    Axis, FlexItem, Span, Track, TrackItem, break_lines, clamp_len, place_cells, solve_main_axis,
+    solve_tracks, span_extent,
+};
 use crate::platform::native::NativeState;
 use crate::render::{Color, Font, Scene};
 
@@ -26,13 +30,27 @@ use crate::render::{Color, Font, Scene};
 const VIEWPORT_PLACEHOLDER: Color = Color::rgb(0x20, 0x24, 0x2c);
 
 /// Natural (desired) size of `el` given the `avail` space and active `font`.
+///
+/// The result honors the element's fixed size and its min/max bounds; the
+/// space its content measures against is the fixed size (or `avail`), clamped
+/// to those bounds.
 pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
     let pad = el.layout.padding;
+    let (min, max) = (min_size(el), max_size(el));
     // A fixed size is the space the content actually gets, so wrapped text inside
     // a `.width(360.0)` panel must measure against 360, not the parent's width.
+    // Likewise a max-width caps (and a min-width widens) that space.
     let outer = Size::new(
-        el.layout.size.width.unwrap_or(avail.width),
-        el.layout.size.height.unwrap_or(avail.height),
+        clamp_len(
+            el.layout.size.width.unwrap_or(avail.width),
+            min.width,
+            max.width,
+        ),
+        clamp_len(
+            el.layout.size.height.unwrap_or(avail.height),
+            min.height,
+            max.height,
+        ),
     );
     let inner = outer.deflate(pad);
 
@@ -59,17 +77,52 @@ pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
             children,
             ..
         } => {
-            let mut main = 0.0;
-            let mut cross: f64 = 0.0;
-            for c in children {
-                let cs = measure(c, inner, font);
-                main += axis.main(cs);
-                cross = cross.max(axis.cross(cs));
-            }
-            if children.len() > 1 {
-                main += gap * (children.len() as f64 - 1.0);
+            let sizes: Vec<Size> = children.iter().map(|c| measure(c, inner, font)).collect();
+            let lines = if el.wrap {
+                let mains: Vec<f64> = sizes.iter().map(|s| axis.main(*s)).collect();
+                break_lines(axis.main(inner), *gap, &mains)
+            } else {
+                std::iter::once(0..children.len()).collect()
+            };
+            // Widest line along the main axis; lines stacked across it.
+            let mut main: f64 = 0.0;
+            let mut cross = 0.0;
+            for (k, line) in lines.iter().enumerate() {
+                let n = line.len() as f64;
+                let line_main: f64 = sizes[line.clone()].iter().map(|s| axis.main(*s)).sum();
+                main = main.max(line_main + gap * (n - 1.0).max(0.0));
+                cross += sizes[line.clone()]
+                    .iter()
+                    .map(|s| axis.cross(*s))
+                    .fold(0.0_f64, f64::max);
+                if k > 0 {
+                    cross += gap;
+                }
             }
             axis.size(main, cross)
+        }
+        ElementKind::Grid {
+            columns,
+            rows,
+            column_gap,
+            row_gap,
+            children,
+            ..
+        } => {
+            // fr columns share a finite available width (a grid fills its
+            // container's width, like wrapped text); fr rows size to their
+            // content here, and share the actual height once laid out.
+            let g = grid_geometry(
+                columns,
+                rows,
+                *column_gap,
+                *row_gap,
+                children,
+                inner,
+                false,
+                font,
+            );
+            Size::new(tracks_end(&g.columns), tracks_end(&g.rows))
         }
     };
 
@@ -83,7 +136,156 @@ pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         .size
         .height
         .unwrap_or(content.height + pad.vertical());
-    Size::new(w, h)
+    Size::new(
+        clamp_len(w, min.width, max.width),
+        clamp_len(h, min.height, max.height),
+    )
+}
+
+/// The element's lower size bounds (zero where unset).
+fn min_size(el: &Element) -> Size {
+    Size::new(
+        el.layout.min.width.unwrap_or(0.0),
+        el.layout.min.height.unwrap_or(0.0),
+    )
+}
+
+/// The element's upper size bounds (infinite where unset).
+fn max_size(el: &Element) -> Size {
+    Size::new(
+        el.layout.max.width.unwrap_or(f64::INFINITY),
+        el.layout.max.height.unwrap_or(f64::INFINITY),
+    )
+}
+
+/// Where the last track of an axis ends (its total extent, gaps included).
+fn tracks_end(spans: &[Span]) -> f64 {
+    spans.last().map(|s| s.offset + s.length).unwrap_or(0.0)
+}
+
+/// A grid's resolved tracks and cell assignments.
+struct GridGeometry {
+    columns: Vec<Span>,
+    rows: Vec<Span>,
+    /// Per child: `(row, column, row_span, column_span)`.
+    cells: Vec<(usize, usize, usize, usize)>,
+    /// Per child: natural size measured against its cell's width.
+    sizes: Vec<Size>,
+}
+
+/// Size a grid's tracks within `inner` and place its children. Columns are
+/// sized first (auto columns from each child's natural width), then every child
+/// is re-measured at its cell's width — so wrapped text in an `fr` column gets
+/// the right height — and the rows are sized from those heights.
+#[allow(clippy::too_many_arguments)]
+fn grid_geometry(
+    columns: &[Track],
+    rows: &[Track],
+    column_gap: f64,
+    row_gap: f64,
+    children: &[Element],
+    inner: Size,
+    rows_definite: bool,
+    font: Option<&Font>,
+) -> GridGeometry {
+    let auto = [Track::Auto];
+    let columns = if columns.is_empty() {
+        &auto[..]
+    } else {
+        columns
+    };
+    let ncols = columns.len();
+    let spans: Vec<(usize, usize)> = children
+        .iter()
+        .map(|c| {
+            (
+                (c.layout.column_span.max(1) as usize).min(ncols),
+                c.layout.row_span.max(1) as usize,
+            )
+        })
+        .collect();
+    let (placed, nrows) = place_cells(ncols, &spans);
+
+    let col_items: Vec<TrackItem> = children
+        .iter()
+        .zip(&spans)
+        .zip(&placed)
+        .map(|((c, &(cs, _)), &(_, col))| {
+            // Inside fixed columns the child measures against their width.
+            let fixed: Option<f64> = columns[col..col + cs]
+                .iter()
+                .map(|t| match t {
+                    Track::Fixed(v) => Some(*v),
+                    _ => None,
+                })
+                .sum();
+            let probe = fixed.map(|w| w + column_gap * (cs as f64 - 1.0));
+            let width = measure(
+                c,
+                Size::new(probe.unwrap_or(inner.width), inner.height),
+                font,
+            )
+            .width;
+            TrackItem {
+                start: col,
+                span: cs,
+                size: width,
+            }
+        })
+        .collect();
+    let col_avail = inner.width.is_finite().then_some(inner.width);
+    let col_spans = solve_tracks(columns, col_avail, column_gap, &col_items);
+
+    let sizes: Vec<Size> = children
+        .iter()
+        .zip(&spans)
+        .zip(&placed)
+        .map(|((c, &(cs, _)), &(_, col))| {
+            let (_, cell_w) = span_extent(&col_spans, col, cs);
+            measure(c, Size::new(cell_w, inner.height), font)
+        })
+        .collect();
+    let row_tracks: Vec<Track> = (0..nrows.max(rows.len()))
+        .map(|r| rows.get(r).copied().unwrap_or(Track::Auto))
+        .collect();
+    let row_items: Vec<TrackItem> = sizes
+        .iter()
+        .zip(&spans)
+        .zip(&placed)
+        .map(|((s, &(_, rs)), &(row, _))| TrackItem {
+            start: row,
+            span: rs,
+            size: s.height,
+        })
+        .collect();
+    let row_avail = (rows_definite && inner.height.is_finite()).then_some(inner.height);
+    let row_spans = solve_tracks(&row_tracks, row_avail, row_gap, &row_items);
+
+    GridGeometry {
+        columns: col_spans,
+        rows: row_spans,
+        cells: placed
+            .iter()
+            .zip(&spans)
+            .map(|(&(r, c), &(cs, rs))| (r, c, rs, cs))
+            .collect(),
+        sizes,
+    }
+}
+
+/// Position a child of natural length `natural` in a slot of length `slot`
+/// along one axis per `align`, honoring its `min..=max`: `(offset, length)`.
+fn align_in(align: Align, natural: f64, slot: f64, min: f64, max: f64) -> (f64, f64) {
+    let length = match align {
+        Align::Stretch => clamp_len(slot, min, max),
+        _ => clamp_len(natural.min(slot), min, max),
+    };
+    let offset = match align {
+        Align::Start | Align::Stretch => 0.0,
+        Align::Center => (slot - length) / 2.0,
+        Align::End => slot - length,
+    };
+    (offset, length)
 }
 
 /// Lay `el` out within `bounds`, producing a retained [`LayoutNode`] tree with
@@ -116,6 +318,60 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
         children: Vec::new(),
     };
 
+    if let ElementKind::Grid {
+        columns,
+        rows,
+        column_gap,
+        row_gap,
+        align,
+        children,
+    } = &el.kind
+    {
+        let inner = bounds.inset(el.layout.padding);
+        // A scrolling grid's rows overflow at natural size instead of sharing
+        // the viewport height.
+        let g = grid_geometry(
+            columns,
+            rows,
+            *column_gap,
+            *row_gap,
+            children,
+            inner.size,
+            el.scroll.is_none(),
+            font,
+        );
+        node.children.reserve(children.len());
+        for (k, child) in children.iter().enumerate() {
+            let (row, col, rs, cs) = g.cells[k];
+            let (cx, cw) = span_extent(&g.columns, col, cs);
+            let (cy, ch) = span_extent(&g.rows, row, rs);
+            let (min, max, m) = (min_size(child), max_size(child), g.sizes[k]);
+            // As in CSS, `Stretch` leaves a child's fixed size alone (it sits at
+            // the cell's start); only unsized axes fill the cell.
+            let fixed = |a: Align, size: Option<f64>| match (a, size) {
+                (Align::Stretch, Some(_)) => Align::Start,
+                _ => a,
+            };
+            let (dx, w) = align_in(
+                fixed(align.0, child.layout.size.width),
+                m.width,
+                cw,
+                min.width,
+                max.width,
+            );
+            let (dy, h) = align_in(
+                fixed(align.1, child.layout.size.height),
+                m.height,
+                ch,
+                min.height,
+                max.height,
+            );
+            let rect = Rect::from_xywh(inner.min_x() + cx + dx, inner.min_y() + cy + dy, w, h);
+            node.children.push(layout(child, rect, font));
+        }
+        return node;
+    }
+
     let ElementKind::Stack {
         axis,
         gap,
@@ -133,67 +389,86 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
     let inner = bounds.inset(el.layout.padding);
     let avail = inner.size;
     let axis = *axis;
+    let main_avail = axis.main(avail);
 
     // Main-axis distribution.
     let measured: Vec<Size> = children.iter().map(|c| measure(c, avail, font)).collect();
-    // A scroll container lays its children out at their *natural* main size
-    // (so content can overflow the viewport), stacked from the start with no
-    // grow/shrink; the offset + clip are applied afterward (see `apply_scroll`).
-    let (spans, main_shift) = if el.scroll.is_some() {
-        let mut spans = Vec::with_capacity(children.len());
-        let mut cursor = 0.0;
-        for m in &measured {
-            let length = axis.main(*m);
-            spans.push(crate::layout::Span {
-                offset: cursor,
-                length,
-            });
-            cursor += length + *gap;
-        }
-        (spans, 0.0)
+    // A wrapping stack flows children onto lines that fit the main axis; each
+    // line is then laid out like an unwrapped stack whose cross extent is the
+    // line's tallest child. Lines pack from the cross start, `gap` apart.
+    let lines = if el.wrap {
+        let mains: Vec<f64> = measured.iter().map(|m| axis.main(*m)).collect();
+        break_lines(main_avail, *gap, &mains)
     } else {
-        let items: Vec<FlexItem> = children
-            .iter()
-            .zip(&measured)
-            .map(|(c, m)| FlexItem {
-                basis: axis.main(*m),
-                grow: c.layout.grow,
-            })
-            .collect();
-        let spans = solve_main_axis(axis.main(avail), *gap, &items);
-        // If nothing grows, the block may be shorter than the content area;
-        // shift it as a whole per the main-axis alignment.
-        let used_main = spans.last().map(|s| s.offset + s.length).unwrap_or(0.0);
-        let leftover = (axis.main(avail) - used_main).max(0.0);
-        let main_shift = match main_align {
-            Align::Start | Align::Stretch => 0.0,
-            Align::Center => leftover / 2.0,
-            Align::End => leftover,
-        };
-        (spans, main_shift)
+        std::iter::once(0..children.len()).collect()
     };
 
     node.children.reserve(children.len());
-    for ((child, m), span) in children.iter().zip(&measured).zip(&spans) {
-        let cross_avail = axis.cross(avail);
-        let cross_len = match cross_align {
-            Align::Stretch => cross_avail,
-            _ => axis.cross(*m).min(cross_avail),
+    let mut cross_cursor = 0.0;
+    for line in lines {
+        let line_children = &children[line.clone()];
+        let line_measured = &measured[line.clone()];
+        // A scroll container lays its children out at their *natural* main size
+        // (so content can overflow the viewport), stacked from the start with no
+        // grow/shrink; the offset + clip are applied afterward (see
+        // `apply_scroll`).
+        let (spans, main_shift) = if el.scroll.is_some() {
+            let items: Vec<FlexItem> = line_measured
+                .iter()
+                .map(|m| FlexItem::fixed(axis.main(*m)))
+                .collect();
+            (solve_main_axis(f64::INFINITY, *gap, &items), 0.0)
+        } else {
+            let items: Vec<FlexItem> = line_children
+                .iter()
+                .zip(line_measured)
+                .map(|(c, m)| {
+                    FlexItem::fixed(axis.main(*m))
+                        .with_grow(c.layout.grow)
+                        .with_shrink(c.layout.shrink)
+                        .with_bounds(axis.main(min_size(c)), axis.main(max_size(c)))
+                })
+                .collect();
+            let spans = solve_main_axis(main_avail, *gap, &items);
+            // If nothing grows, the line may be shorter than the content area;
+            // shift it as a whole per the main-axis alignment.
+            let leftover = (main_avail - tracks_end(&spans)).max(0.0);
+            let main_shift = match main_align {
+                Align::Start | Align::Stretch => 0.0,
+                Align::Center => leftover / 2.0,
+                Align::End => leftover,
+            };
+            (spans, main_shift)
         };
-        let cross_off = match cross_align {
-            Align::Start | Align::Stretch => 0.0,
-            Align::Center => (cross_avail - cross_len) / 2.0,
-            Align::End => cross_avail - cross_len,
+
+        // An unwrapped stack's single line spans the whole cross extent.
+        let line_cross = if el.wrap {
+            line_measured
+                .iter()
+                .map(|m| axis.cross(*m))
+                .fold(0.0_f64, f64::max)
+        } else {
+            axis.cross(avail)
         };
-        let child_bounds = child_rect(
-            axis,
-            inner,
-            span.offset + main_shift,
-            span.length,
-            cross_off,
-            cross_len,
-        );
-        node.children.push(layout(child, child_bounds, font));
+        for ((child, m), span) in line_children.iter().zip(line_measured).zip(&spans) {
+            let (cross_off, cross_len) = align_in(
+                *cross_align,
+                axis.cross(*m),
+                line_cross,
+                axis.cross(min_size(child)),
+                axis.cross(max_size(child)),
+            );
+            let child_bounds = child_rect(
+                axis,
+                inner,
+                span.offset + main_shift,
+                span.length,
+                cross_cursor + cross_off,
+                cross_len,
+            );
+            node.children.push(layout(child, child_bounds, font));
+        }
+        cross_cursor += line_cross + *gap;
     }
     node
 }
@@ -623,5 +898,345 @@ mod tests {
         let mut scene = Scene::new(Size::new(200.0, 20.0));
         paint(&tree, &mut scene, None);
         assert_eq!(scene.len(), 1); // only the filled flex box paints
+    }
+
+    fn block(w: f64, h: f64) -> Element {
+        Element::boxed(BoxStyle::default()).width(w).height(h)
+    }
+
+    /// An unsized box with a minimum size: natural size `w`×`h`, but free to
+    /// stretch (a fixed-size box keeps its size in a grid cell).
+    fn cell(w: f64, h: f64) -> Element {
+        Element::boxed(BoxStyle::default())
+            .min_width(w)
+            .min_height(h)
+    }
+
+    fn rects(node: &LayoutNode) -> Vec<Rect> {
+        node.children.iter().map(|c| c.bounds).collect()
+    }
+
+    #[test]
+    fn measure_clamps_to_min_and_max() {
+        let big = Size::new(1000.0, 1000.0);
+        // Content 20×10, but min-width 50 and max-height 5.
+        let el = Element::stack(Axis::Vertical, vec![block(20.0, 10.0)])
+            .min_width(50.0)
+            .max_height(5.0);
+        assert_eq!(measure(&el, big, None), Size::new(50.0, 5.0));
+        // A fixed size is clamped too.
+        let el = block(300.0, 300.0).max_width(120.0).min_height(400.0);
+        assert_eq!(measure(&el, big, None), Size::new(120.0, 400.0));
+    }
+
+    #[test]
+    fn max_width_constrains_wrapped_text() {
+        let Some(font) = Font::system_default() else {
+            return;
+        };
+        let text = "several words that need to wrap inside a rather narrow maximum width";
+        let el = Element::text(text, 14.0, Color::BLACK)
+            .wrap()
+            .max_width(120.0);
+        let lines = font.wrap(text, 14.0, 120.0).len();
+        assert!(lines > 1);
+        let s = measure(&el, Size::new(4000.0, 4000.0), Some(&font));
+        assert!(s.width <= 120.0);
+        assert_eq!(s.height, font.line_height(14.0) * lines as f64);
+    }
+
+    #[test]
+    fn layout_grow_stops_at_max_width() {
+        let row = Element::stack(
+            Axis::Horizontal,
+            vec![
+                Element::boxed(BoxStyle::default())
+                    .grow(1.0)
+                    .max_width(50.0),
+                Element::boxed(BoxStyle::default()).grow(1.0),
+            ],
+        )
+        .gap(10.0);
+        let tree = layout(&row, Rect::from_xywh(0.0, 0.0, 210.0, 20.0), None);
+        assert_eq!(tree.children[0].bounds.width(), 50.0);
+        assert_eq!(
+            tree.children[1].bounds,
+            Rect::from_xywh(60.0, 0.0, 150.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn layout_shrink_stops_at_min_width() {
+        // 150 + 150 in 200: both shrink, but the first stops at 120.
+        let row = Element::stack(
+            Axis::Horizontal,
+            vec![
+                block(150.0, 10.0).shrink(1.0).min_width(120.0),
+                block(150.0, 10.0).shrink(1.0),
+            ],
+        );
+        let tree = layout(&row, Rect::from_xywh(0.0, 0.0, 200.0, 10.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(0.0, 0.0, 120.0, 10.0),
+                Rect::from_xywh(120.0, 0.0, 80.0, 10.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn stretch_honors_cross_max_and_min() {
+        let col = Element::stack(
+            Axis::Vertical,
+            vec![
+                Element::boxed(BoxStyle::default())
+                    .height(10.0)
+                    .max_width(80.0),
+                Element::boxed(BoxStyle::default()).height(10.0),
+            ],
+        )
+        .align(Align::Start, Align::Stretch);
+        let tree = layout(&col, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), None);
+        assert_eq!(tree.children[0].bounds.width(), 80.0);
+        assert_eq!(tree.children[1].bounds.width(), 200.0);
+        // Centered, a child wider than the column still keeps its min width.
+        let col = Element::stack(Axis::Vertical, vec![block(10.0, 10.0).min_width(300.0)])
+            .align(Align::Start, Align::Center);
+        let tree = layout(&col, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), None);
+        assert_eq!(
+            tree.children[0].bounds,
+            Rect::from_xywh(-50.0, 0.0, 300.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn wrapping_row_measures_lines() {
+        // Five 40×20 blocks, gap 10, in 150 wide: 3 per line (140), then 2.
+        let row = Element::stack(
+            Axis::Horizontal,
+            (0..5).map(|_| block(40.0, 20.0)).collect(),
+        )
+        .gap(10.0)
+        .wrap();
+        assert_eq!(
+            measure(&row, Size::new(150.0, 1000.0), None),
+            Size::new(140.0, 50.0)
+        );
+        // With unlimited width everything fits on one line.
+        assert_eq!(
+            measure(&row, Size::new(f64::INFINITY, 1000.0), None),
+            Size::new(240.0, 20.0)
+        );
+        // Padding is outside the wrapping width.
+        let padded = row.padding(crate::geometry::Insets::uniform(5.0));
+        assert_eq!(
+            measure(&padded, Size::new(160.0, 1000.0), None),
+            Size::new(150.0, 60.0)
+        );
+    }
+
+    #[test]
+    fn wrapping_row_lays_out_lines_with_per_line_alignment() {
+        // Line 1: 40×20, 40×30 (cross 30); line 2: 40×10. Width 100, gap 10.
+        let row = Element::stack(
+            Axis::Horizontal,
+            vec![block(40.0, 20.0), block(40.0, 30.0), block(40.0, 10.0)],
+        )
+        .gap(10.0)
+        .wrap()
+        .align(Align::Center, Align::End);
+        let tree = layout(&row, Rect::from_xywh(0.0, 0.0, 100.0, 200.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                // line 1 is 90 wide → shifted 5; children end-aligned in 30.
+                Rect::from_xywh(5.0, 10.0, 40.0, 20.0),
+                Rect::from_xywh(55.0, 0.0, 40.0, 30.0),
+                // line 2 starts at 30 + 10; 40 wide → shifted 30.
+                Rect::from_xywh(30.0, 40.0, 40.0, 10.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn wrapping_row_grows_and_stretches_within_each_line() {
+        let row = Element::stack(
+            Axis::Horizontal,
+            vec![
+                block(40.0, 20.0),
+                block(40.0, 10.0).grow(1.0),
+                block(40.0, 10.0).grow(1.0),
+            ],
+        )
+        .gap(10.0)
+        .wrap()
+        .align(Align::Start, Align::Stretch);
+        let tree = layout(&row, Rect::from_xywh(0.0, 0.0, 100.0, 200.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(0.0, 0.0, 40.0, 20.0),
+                Rect::from_xywh(50.0, 0.0, 50.0, 20.0),
+                Rect::from_xywh(0.0, 30.0, 100.0, 10.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_places_cells_in_fixed_auto_fr_columns() {
+        let g = Element::grid(
+            vec![Track::px(50.0), Track::Auto, Track::fr(1.0)],
+            vec![
+                cell(10.0, 10.0),
+                cell(30.0, 20.0),
+                cell(5.0, 5.0),
+                cell(10.0, 40.0),
+            ],
+        )
+        .gap(10.0)
+        .padding(crate::geometry::Insets::uniform(5.0));
+        // Width fills the 300 available; rows: 20, then 40.
+        assert_eq!(
+            measure(&g, Size::new(300.0, 1000.0), None),
+            Size::new(300.0, 5.0 + 20.0 + 10.0 + 40.0 + 5.0)
+        );
+        let tree = layout(&g, Rect::from_xywh(0.0, 0.0, 300.0, 80.0), None);
+        // fr column: 290 - 50 - 30 - 20 = 190, at 5 + 50 + 10 + 30 + 10 = 105.
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(5.0, 5.0, 50.0, 20.0),
+                Rect::from_xywh(65.0, 5.0, 30.0, 20.0),
+                Rect::from_xywh(105.0, 5.0, 190.0, 20.0),
+                Rect::from_xywh(5.0, 35.0, 50.0, 40.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_aligns_cells_and_honors_bounds() {
+        let g = Element::grid(
+            vec![Track::px(100.0), Track::px(100.0)],
+            vec![block(20.0, 10.0), block(20.0, 30.0).max_width(60.0)],
+        )
+        .align(Align::Center, Align::End);
+        let tree = layout(&g, Rect::from_xywh(0.0, 0.0, 200.0, 30.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(40.0, 20.0, 20.0, 10.0),
+                Rect::from_xywh(140.0, 0.0, 20.0, 30.0),
+            ]
+        );
+        // Stretched, the max width still caps the cell's child.
+        let g = Element::grid(
+            vec![Track::px(100.0)],
+            vec![Element::boxed(BoxStyle::default()).max_width(60.0)],
+        )
+        .rows(vec![Track::px(30.0)]);
+        let tree = layout(&g, Rect::from_xywh(0.0, 0.0, 100.0, 30.0), None);
+        assert_eq!(
+            tree.children[0].bounds,
+            Rect::from_xywh(0.0, 0.0, 60.0, 30.0)
+        );
+    }
+
+    #[test]
+    fn grid_fr_rows_size_to_content_then_share_the_laid_out_height() {
+        let cells = || vec![cell(10.0, 10.0), cell(10.0, 30.0)];
+        let g = Element::grid(vec![Track::Auto], cells())
+            .rows(vec![Track::fr(1.0), Track::fr(1.0)])
+            .row_gap(10.0);
+        // Indefinite: the 1fr unit fits the taller row → 30 + 10 + 30.
+        assert_eq!(
+            measure(&g, Size::new(500.0, 500.0), None),
+            Size::new(10.0, 70.0)
+        );
+        // Laid out in 110: (110 - 10) / 2 = 50 each.
+        let tree = layout(&g, Rect::from_xywh(0.0, 0.0, 10.0, 110.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(0.0, 0.0, 10.0, 50.0),
+                Rect::from_xywh(0.0, 60.0, 10.0, 50.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_spans_cells() {
+        // A header spanning both columns, then a 2-row sidebar beside two cells.
+        let g = Element::grid(
+            vec![Track::px(40.0), Track::px(60.0)],
+            vec![
+                cell(10.0, 10.0).span(2, 1),
+                cell(10.0, 10.0).span(1, 2),
+                cell(10.0, 15.0),
+                cell(10.0, 15.0),
+            ],
+        )
+        .gap(5.0);
+        let tree = layout(&g, Rect::from_xywh(0.0, 0.0, 105.0, 100.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(0.0, 0.0, 105.0, 10.0),
+                Rect::from_xywh(0.0, 15.0, 40.0, 35.0),
+                Rect::from_xywh(45.0, 15.0, 60.0, 15.0),
+                Rect::from_xywh(45.0, 35.0, 60.0, 15.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_wrapped_text_measures_at_its_column_width() {
+        let Some(font) = Font::system_default() else {
+            return;
+        };
+        let text = "a paragraph long enough to wrap inside one of two equal grid columns";
+        let g = Element::grid(
+            vec![Track::fr(1.0), Track::fr(1.0)],
+            vec![
+                Element::text(text, 14.0, Color::BLACK).wrap(),
+                block(10.0, 10.0),
+            ],
+        );
+        let lines = font.wrap(text, 14.0, 150.0).len();
+        assert!(lines > 1);
+        let h = measure(&g, Size::new(300.0, 1000.0), Some(&font)).height;
+        assert_eq!(h, font.line_height(14.0) * lines as f64);
+    }
+
+    #[test]
+    fn grid_and_wrap_trees_route_input_focus_and_accessibility() {
+        use crate::core::a11y::accessibility_tree;
+        use crate::core::runtime::{ActionId, FocusId, collect_focusables, focus_at, hit_test};
+
+        let mut tappable = cell(40.0, 20.0);
+        tappable.action = Some(ActionId(7));
+        let mut field = Element::text("name", 14.0, Color::BLACK);
+        field.focus = Some(FocusId(1));
+        let mut field2 = block(30.0, 20.0);
+        field2.focus = Some(FocusId(2));
+        let wrapped = Element::stack(Axis::Horizontal, vec![block(80.0, 20.0), field2])
+            .wrap()
+            .gap(4.0);
+        let g = Element::grid(
+            vec![Track::px(100.0), Track::px(100.0)],
+            vec![tappable, field, wrapped],
+        );
+        let tree = layout(&g, Rect::from_xywh(0.0, 0.0, 200.0, 100.0), None);
+
+        // The tappable cell stretches over (0,0)-(100,20).
+        assert_eq!(hit_test(&tree, Point::new(90.0, 10.0)), Some(ActionId(7)));
+        assert_eq!(hit_test(&tree, Point::new(150.0, 10.0)), None);
+        // The wrapped row's second item moved to a new line in its 100px cell.
+        assert_eq!(focus_at(&tree, Point::new(10.0, 50.0)), Some(FocusId(2)));
+        let mut order = Vec::new();
+        collect_focusables(&tree, &mut order);
+        assert_eq!(order, vec![FocusId(1), FocusId(2)]);
+        let a11y = accessibility_tree(&tree, None);
+        assert!(a11y.count() >= 3);
     }
 }

@@ -9,7 +9,7 @@ use crate::core::runtime::{
     ActionId, ContextId, Cx, DragId, FocusId, KeyInput, ScrollId, TextPosId, ViewportId,
 };
 use crate::geometry::Insets;
-use crate::layout::Axis;
+use crate::layout::{Axis, Track};
 use crate::platform::native::NativeDeco;
 use crate::render::Color;
 
@@ -38,6 +38,20 @@ pub struct LayoutStyle {
     pub size: SizeOverride,
     /// Main-axis grow weight when this element is a flex child. `0.0` = fixed.
     pub grow: f64,
+    /// Main-axis shrink weight when this element is a flex child and its
+    /// siblings overflow: it gives up space in proportion to `shrink × natural
+    /// size`, down to its minimum. `0.0` (the default) = never shrinks.
+    pub shrink: f64,
+    /// Lower bounds on the element's size (`None` = no bound). Honored when
+    /// measuring, growing, shrinking, stretching and placing in a grid cell.
+    pub min: SizeOverride,
+    /// Upper bounds on the element's size (`None` = no bound). A `min` larger
+    /// than the `max` wins, as in CSS.
+    pub max: SizeOverride,
+    /// Grid placement: how many columns and rows this element spans when it is
+    /// a grid cell. `0` counts as `1`.
+    pub column_span: u16,
+    pub row_span: u16,
 }
 
 /// The painted decoration of an element's box: fill, corner radius, border.
@@ -68,6 +82,18 @@ pub enum ElementKind {
         gap: f64,
         main_align: Align,
         cross_align: Align,
+        children: Vec<Element>,
+    },
+    /// A two-dimensional container placing `children` into cells, in order,
+    /// row by row. `columns` defines the column tracks; `rows` the first row
+    /// tracks (rows past the list are [`Track::Auto`]). Each child sits in its
+    /// cell per `align` (horizontal, vertical); `Stretch` fills the cell.
+    Grid {
+        columns: Vec<Track>,
+        rows: Vec<Track>,
+        column_gap: f64,
+        row_gap: f64,
+        align: (Align, Align),
         children: Vec<Element>,
     },
     /// An embedded-content viewport: a leaf reserving a rectangle the compositor
@@ -225,6 +251,26 @@ impl Element {
         }
     }
 
+    /// A grid laying `children` into cells, row by row, across the given column
+    /// `columns`. Cells stretch unsized children by default; set row tracks with
+    /// [`rows`](Element::rows), spacing with [`gap`](Element::gap) and
+    /// [`row_gap`](Element::row_gap), cell alignment with
+    /// [`align`](Element::align), and multi-cell children with
+    /// [`span`](Element::span).
+    pub fn grid(columns: Vec<Track>, children: Vec<Element>) -> Self {
+        Self {
+            kind: ElementKind::Grid {
+                columns,
+                rows: Vec::new(),
+                column_gap: 0.0,
+                row_gap: 0.0,
+                align: (Align::Stretch, Align::Stretch),
+                children,
+            },
+            ..Self::stack(Axis::Vertical, Vec::new())
+        }
+    }
+
     /// Route pointer taps on this element to `handler`, which runs against the
     /// app state. Registers the handler in `cx` and stamps its [`ActionId`].
     ///
@@ -334,6 +380,70 @@ impl Element {
         self
     }
 
+    /// Let this element shrink below its natural main-axis size, with weight
+    /// `shrink`, when its flex siblings overflow (stopping at its minimum).
+    pub fn shrink(mut self, shrink: f64) -> Self {
+        self.layout.shrink = shrink;
+        self
+    }
+
+    /// Never narrower than `w`, even when shrunk, stretched or in a grid cell.
+    pub fn min_width(mut self, w: f64) -> Self {
+        self.layout.min.width = Some(w);
+        self
+    }
+
+    /// Never wider than `w`, even when grown or stretched; content measures
+    /// against at most `w` (so wrapped text wraps there).
+    pub fn max_width(mut self, w: f64) -> Self {
+        self.layout.max.width = Some(w);
+        self
+    }
+
+    /// Never shorter than `h`.
+    pub fn min_height(mut self, h: f64) -> Self {
+        self.layout.min.height = Some(h);
+        self
+    }
+
+    /// Never taller than `h`.
+    pub fn max_height(mut self, h: f64) -> Self {
+        self.layout.max.height = Some(h);
+        self
+    }
+
+    /// As a grid cell, span `columns` columns and `rows` rows.
+    pub fn span(mut self, columns: u16, rows: u16) -> Self {
+        self.layout.column_span = columns;
+        self.layout.row_span = rows;
+        self
+    }
+
+    /// Set a grid's row tracks (rows past the list size to content). No effect
+    /// on other elements.
+    pub fn rows(mut self, tracks: Vec<Track>) -> Self {
+        if let ElementKind::Grid { rows, .. } = &mut self.kind {
+            *rows = tracks;
+        }
+        self
+    }
+
+    /// Set a grid's gap between rows only ([`gap`](Element::gap) sets both).
+    pub fn row_gap(mut self, gap: f64) -> Self {
+        if let ElementKind::Grid { row_gap, .. } = &mut self.kind {
+            *row_gap = gap;
+        }
+        self
+    }
+
+    /// Set a grid's gap between columns only ([`gap`](Element::gap) sets both).
+    pub fn column_gap(mut self, gap: f64) -> Self {
+        if let ElementKind::Grid { column_gap, .. } = &mut self.kind {
+            *column_gap = gap;
+        }
+        self
+    }
+
     /// Mark this text element's caret position (a byte index into its text), so
     /// the focus overlay draws the caret bar there instead of at the end. No
     /// effect on non-text elements.
@@ -356,9 +466,11 @@ impl Element {
         self
     }
 
-    /// Enable word-wrapping for a text element: the text wraps to the element's
-    /// content width across as many lines as needed. No effect on non-text
-    /// elements.
+    /// Enable wrapping. On a text element the text word-wraps to the element's
+    /// content width across as many lines as needed. On a stack (row or
+    /// column), children that don't fit the main axis flow onto new lines, with
+    /// the stack's gap between items and between lines; main-axis alignment and
+    /// grow apply per line, and cross-axis alignment within each line.
     pub fn wrap(mut self) -> Self {
         self.wrap = true;
         self
@@ -381,22 +493,38 @@ impl Element {
         self
     }
 
+    /// Space between a stack's children (and its wrapped lines), or between a
+    /// grid's columns and rows.
     pub fn gap(mut self, gap: f64) -> Self {
-        if let ElementKind::Stack { gap: g, .. } = &mut self.kind {
-            *g = gap;
+        match &mut self.kind {
+            ElementKind::Stack { gap: g, .. } => *g = gap,
+            ElementKind::Grid {
+                column_gap,
+                row_gap,
+                ..
+            } => {
+                *column_gap = gap;
+                *row_gap = gap;
+            }
+            _ => {}
         }
         self
     }
 
+    /// A stack's (main-axis, cross-axis) alignment of its children; for a grid,
+    /// the (horizontal, vertical) alignment of each child within its cell.
     pub fn align(mut self, main: Align, cross: Align) -> Self {
-        if let ElementKind::Stack {
-            main_align,
-            cross_align,
-            ..
-        } = &mut self.kind
-        {
-            *main_align = main;
-            *cross_align = cross;
+        match &mut self.kind {
+            ElementKind::Stack {
+                main_align,
+                cross_align,
+                ..
+            } => {
+                *main_align = main;
+                *cross_align = cross;
+            }
+            ElementKind::Grid { align, .. } => *align = (main, cross),
+            _ => {}
         }
         self
     }

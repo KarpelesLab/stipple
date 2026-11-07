@@ -54,8 +54,8 @@ pub use runtime::{
 // passes have one import path for the active font.
 pub use crate::render::Font;
 
-// Re-export the layout axis so widget crates speak one vocabulary.
-pub use crate::layout::Axis;
+// Re-export the layout axis and grid tracks so widget crates speak one vocabulary.
+pub use crate::layout::{Axis, Track};
 
 use crate::geometry::{Rect, Size};
 use crate::render::Scene;

@@ -1632,7 +1632,8 @@ pub mod prelude {
     pub use crate::anim::{Easing, Spring, Tween};
     pub use crate::core::ViewportId;
     pub use crate::core::{
-        Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, TimerId, View,
+        Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, TimerId,
+        Track, View,
     };
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::render::{Color, Font, Pixmap};
@@ -1640,9 +1641,9 @@ pub mod prelude {
     pub use crate::style::{Palette, Spacing, Typography};
     pub use crate::widgets::{
         EditBuffer, Variant, button, button_labeled, button_variant, checkbox, column, divider,
-        edit_string, heading, label, menu, menu_item, open_dialog, open_menu, panel, paragraph,
-        progress_bar, radio, row, scroll, setting_row, slider, spacer, spinner, swatch, switch,
-        tabs, text_area, text_editor, text_field, tooltip, viewport,
+        edit_string, grid, heading, label, menu, menu_item, open_dialog, open_menu, panel,
+        paragraph, progress_bar, radio, row, scroll, setting_row, slider, spacer, spinner, swatch,
+        switch, tabs, text_area, text_editor, text_field, tooltip, viewport,
     };
     pub use std::time::Duration;
 }

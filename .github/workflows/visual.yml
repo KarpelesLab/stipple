@@ -117,6 +117,19 @@ jobs:
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' visual_output/async.log
           grep -q 'asyncdemo: event loop exited' visual_output/async.log
 
+      - name: Screenshot the layout demo (grid, wrap, min/max)
+        env:
+          DISPLAY: ":99"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          # Back to 1x after the Xft.dpi step above.
+          printf 'Xft.dpi: 96\n' | xrdb -nocpp -merge
+          cargo build --release -p layoutdemo
+          ./target/release/layoutdemo > visual_output/layout.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          import -window root -crop 720x520+0+0 +repage visual_output/stipple-x11-layout.png
+
       - name: Stop the app and Xvfb
         if: always()
         run: |

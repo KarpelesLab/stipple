@@ -5,7 +5,7 @@
 //! their colors and metrics from a [`Theme`], so a single theme swap re-skins
 //! the whole UI.
 //!
-//! Available widgets: structure (`column`, `row`, `spacer`, `panel`), content
+//! Available widgets: structure (`column`, `row`, `grid`, `spacer`, `panel`), content
 //! (`label`, `heading`, `swatch`, `divider`), and interactive controls —
 //! `button_variant` (Primary/Secondary/Ghost/Danger) / `button_labeled`
 //! ([`Element::on_tap`]), `text_field` / `text_editor` ([`Element::on_key`]; the
@@ -15,7 +15,9 @@
 
 #![forbid(unsafe_code)]
 
-use crate::core::{Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, ViewportId};
+use crate::core::{
+    Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Track, ViewportId,
+};
 use crate::geometry::{Insets, Point};
 use crate::platform::native::{self, NativeControl};
 use crate::render::Color;
@@ -51,6 +53,27 @@ pub fn column(children: Vec<Element>) -> Element {
 /// A horizontal container.
 pub fn row(children: Vec<Element>) -> Element {
     Element::stack(Axis::Horizontal, children)
+}
+
+/// A grid placing `children` in order, row by row, across `columns` tracks:
+/// [`Track::px`] fixed, [`Track::fr`] fractional, or [`Track::Auto`]
+/// (content-sized). Rows size to their content unless set with
+/// [`Element::rows`]; cells stretch to fill by default.
+///
+/// ```
+/// use stipple::prelude::*;
+/// let form = grid(
+///     vec![Track::Auto, Track::fr(1.0)],
+///     vec![
+///         Element::boxed(BoxStyle::default()).width(60.0).height(20.0),
+///         Element::boxed(BoxStyle::default()).height(20.0),
+///     ],
+/// )
+/// .gap(8.0);
+/// # let _ = form;
+/// ```
+pub fn grid(columns: Vec<Track>, children: Vec<Element>) -> Element {
+    Element::grid(columns, children)
 }
 
 /// A flexible gap that pushes siblings apart (grow = 1).
