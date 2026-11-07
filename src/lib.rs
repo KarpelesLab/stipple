@@ -118,6 +118,47 @@ pub type FrameRenderer = Box<dyn FnMut(&Scene, Color, ScaleFactor) -> Pixmap>;
 /// handlers) to an [`Element`] tree. Boxed so each window can hold its own view.
 pub type ViewFn<S> = Box<dyn FnMut(&S, &mut Cx<'_, S>) -> Element>;
 
+/// The longest gap between presses that still counts as a multi-click. 500 ms
+/// is the default double-click time on Windows, GTK and macOS; the platforms
+/// let users change it, but Stipple doesn't read that setting (yet).
+const MULTI_CLICK_TIME: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How far (logical px, on each axis) the pointer may drift between presses of
+/// a multi-click.
+const MULTI_CLICK_SLOP: f64 = 4.0;
+
+/// Counts consecutive presses at (nearly) the same spot within
+/// [`MULTI_CLICK_TIME`]: 1 for a single click, 2 for a double, 3 for a triple;
+/// a fourth press starts over at 1.
+#[derive(Clone, Copy, Debug, Default)]
+struct ClickCounter {
+    last: Option<(std::time::Instant, Point)>,
+    count: u32,
+}
+
+impl ClickCounter {
+    /// Register a press at `pos` at time `now`, returning its click count.
+    fn press(&mut self, now: std::time::Instant, pos: Point) -> u32 {
+        let repeat = self.last.is_some_and(|(t, p)| {
+            now.saturating_duration_since(t) <= MULTI_CLICK_TIME
+                && (pos.x - p.x).abs() <= MULTI_CLICK_SLOP
+                && (pos.y - p.y).abs() <= MULTI_CLICK_SLOP
+        });
+        self.count = if repeat && self.count < 3 {
+            self.count + 1
+        } else {
+            1
+        };
+        self.last = Some((now, pos));
+        self.count
+    }
+
+    /// Forget the previous press (e.g. it landed somewhere else).
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
 /// Logical-pixel margin added around a focused element's bounds so the damage
 /// region covers the focus ring (a 2px stroke straddling the bounds).
 const FOCUS_RING_MARGIN: f64 = 2.0;
@@ -175,6 +216,9 @@ struct Pane<S> {
     dragging: Option<(DragId, Rect)>,
     // The text element currently being selected by a pointer drag.
     text_selecting: Option<TextPosId>,
+    // Consecutive presses on text, for double-click (word) and triple-click
+    // (line) selection.
+    clicks: ClickCounter,
     // Set when state/focus/hover changed so the next build rebuilds the tree.
     dirty: bool,
     // The tree + overlay state that is currently on screen, used as the diff
@@ -230,6 +274,7 @@ impl<S> Pane<S> {
             hovered: None,
             dragging: None,
             text_selecting: None,
+            clicks: ClickCounter::default(),
             dirty: true,
             presented: None,
             last_pixmap: None,
@@ -828,16 +873,20 @@ impl<S> Pane<S> {
         self.dragging = None;
     }
 
-    /// Begin a pointer text interaction at `pos` (logical pixels): if an editable
-    /// text element is under the cursor, focus it, resolve the caret byte index
-    /// from the pointer x, place the caret there (clearing any selection), and
-    /// latch a drag-selection. Returns `true` if a text element was hit.
+    /// Begin a pointer text interaction at `pos` (logical pixels) pressed at
+    /// time `now`: if an editable text element is under the cursor, focus it,
+    /// resolve the caret byte index from the pointer x, place the caret there
+    /// (clearing any selection), and latch a drag-selection. A double-click
+    /// then selects the word there and a triple-click the line (sent to the
+    /// focused element as [`KeyInput::SelectWord`] / [`KeyInput::SelectLine`]).
+    /// Returns `true` if a text element was hit.
     fn text_press_at(
         &mut self,
         state: &mut S,
         theme: &Theme,
         font: Option<&Font>,
         pos: Point,
+        now: std::time::Instant,
     ) -> bool {
         self.ensure_tree(state, theme, font);
         let Some((id, index, foc)) = self.tree.as_ref().and_then(|t| {
@@ -845,6 +894,7 @@ impl<S> Pane<S> {
             let index = caret_index_at(node, pos, font)?;
             Some((id, index, focus_at(t, pos)))
         }) else {
+            self.clicks.reset();
             return false;
         };
         if foc != self.focused {
@@ -852,6 +902,15 @@ impl<S> Pane<S> {
         }
         self.text_selecting = Some(id);
         self.handlers.dispatch_text_pos(id, index, false, state);
+        match self.clicks.press(now, pos) {
+            2 => {
+                self.send_key(state, theme, font, KeyInput::SelectWord);
+            }
+            3 => {
+                self.send_key(state, theme, font, KeyInput::SelectLine);
+            }
+            _ => {}
+        }
         self.dirty = true;
         true
     }
@@ -1095,7 +1154,7 @@ impl<S> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].text_press_at(state, theme, font.as_ref(), pos)
+        panes[idx].text_press_at(state, theme, font.as_ref(), pos, std::time::Instant::now())
     }
 
     fn pane_text_drag_at(&mut self, idx: usize, pos: Point) -> bool {
@@ -1511,12 +1570,28 @@ impl<S> App<S> {
 /// Translate a platform [`KeyCode`] (plus active `modifiers`) into a core
 /// [`KeyInput`] editing command. Character input arrives via [`Event::Text`], so
 /// only editing/navigation keys map here. Shift turns caret motions into
-/// selection-extending motions; Ctrl/Cmd+A selects all.
+/// selection-extending motions; Ctrl/Cmd+A selects all; Ctrl/Cmd+Z undoes and
+/// Ctrl+Y or Ctrl/Cmd+Shift+Z redoes. The word modifier (Ctrl, or Alt on macOS)
+/// makes Left/Right move by word and Backspace/Delete delete a word.
 fn map_key(code: KeyCode, modifiers: Modifiers) -> Option<KeyInput> {
+    map_key_for(code, modifiers, cfg!(target_os = "macos"))
+}
+
+/// [`map_key`] with the platform convention explicit, so both can be tested:
+/// on macOS (`mac`) the word modifier is Alt (Option), elsewhere Ctrl.
+fn map_key_for(code: KeyCode, modifiers: Modifiers, mac: bool) -> Option<KeyInput> {
     let shift = modifiers.shift;
+    let command = modifiers.ctrl || modifiers.meta;
+    let word = if mac { modifiers.alt } else { modifiers.ctrl };
     Some(match code {
+        KeyCode::Backspace if word => KeyInput::DeleteWordBackward,
         KeyCode::Backspace => KeyInput::Backspace,
+        KeyCode::Delete if word => KeyInput::DeleteWordForward,
         KeyCode::Delete => KeyInput::Delete,
+        KeyCode::ArrowLeft if word && shift => KeyInput::SelectWordLeft,
+        KeyCode::ArrowLeft if word => KeyInput::WordLeft,
+        KeyCode::ArrowRight if word && shift => KeyInput::SelectWordRight,
+        KeyCode::ArrowRight if word => KeyInput::WordRight,
         KeyCode::ArrowLeft if shift => KeyInput::SelectLeft,
         KeyCode::ArrowLeft => KeyInput::Left,
         KeyCode::ArrowRight if shift => KeyInput::SelectRight,
@@ -1541,6 +1616,10 @@ fn map_key(code: KeyCode, modifiers: Modifiers) -> Option<KeyInput> {
         KeyCode::Char('v') | KeyCode::Char('V') if modifiers.ctrl || modifiers.meta => {
             KeyInput::Paste
         }
+        // With Shift held the backend may report the shifted keysym ('Z').
+        KeyCode::Char('z') | KeyCode::Char('Z') if command && shift => KeyInput::Redo,
+        KeyCode::Char('z') | KeyCode::Char('Z') if command => KeyInput::Undo,
+        KeyCode::Char('y') | KeyCode::Char('Y') if modifiers.ctrl && !mac => KeyInput::Redo,
         KeyCode::Enter => KeyInput::Enter,
         KeyCode::Escape => KeyInput::Escape,
         _ => return None,
@@ -1935,5 +2014,183 @@ mod tests {
             .collect();
         assert_eq!(focused.len(), 1);
         assert_eq!(focused[0].role, Role::TextField);
+    }
+
+    fn mods(shift: bool, ctrl: bool, alt: bool, meta: bool) -> Modifiers {
+        Modifiers {
+            shift,
+            ctrl,
+            alt,
+            meta,
+        }
+    }
+
+    #[test]
+    fn undo_redo_shortcuts_map() {
+        let none = Modifiers::default();
+        let ctrl = mods(false, true, false, false);
+        let ctrl_shift = mods(true, true, false, false);
+        let cmd = mods(false, false, false, true);
+        let cmd_shift = mods(true, false, false, true);
+        for mac in [false, true] {
+            let m = |c, md| map_key_for(KeyCode::Char(c), md, mac);
+            assert_eq!(m('z', ctrl), Some(KeyInput::Undo));
+            assert_eq!(m('z', cmd), Some(KeyInput::Undo));
+            assert_eq!(m('z', ctrl_shift), Some(KeyInput::Redo));
+            assert_eq!(m('Z', ctrl_shift), Some(KeyInput::Redo));
+            assert_eq!(m('Z', cmd_shift), Some(KeyInput::Redo));
+            assert_eq!(m('z', none), None);
+        }
+        assert_eq!(
+            map_key_for(KeyCode::Char('y'), ctrl, false),
+            Some(KeyInput::Redo)
+        );
+        // Ctrl+Y isn't redo on macOS.
+        assert_eq!(map_key_for(KeyCode::Char('y'), ctrl, true), None);
+    }
+
+    #[test]
+    fn word_shortcuts_use_ctrl_or_mac_alt() {
+        let ctrl = mods(false, true, false, false);
+        let ctrl_shift = mods(true, true, false, false);
+        let alt = mods(false, false, true, false);
+        let alt_shift = mods(true, false, true, false);
+        let cases = [
+            (
+                KeyCode::ArrowLeft,
+                KeyInput::WordLeft,
+                KeyInput::SelectWordLeft,
+            ),
+            (
+                KeyCode::ArrowRight,
+                KeyInput::WordRight,
+                KeyInput::SelectWordRight,
+            ),
+        ];
+        for (code, plain, shifted) in cases {
+            assert_eq!(map_key_for(code, ctrl, false), Some(plain.clone()));
+            assert_eq!(map_key_for(code, ctrl_shift, false), Some(shifted.clone()));
+            assert_eq!(map_key_for(code, alt, true), Some(plain));
+            assert_eq!(map_key_for(code, alt_shift, true), Some(shifted));
+        }
+        assert_eq!(
+            map_key_for(KeyCode::Backspace, ctrl, false),
+            Some(KeyInput::DeleteWordBackward)
+        );
+        assert_eq!(
+            map_key_for(KeyCode::Delete, ctrl, false),
+            Some(KeyInput::DeleteWordForward)
+        );
+        assert_eq!(
+            map_key_for(KeyCode::Backspace, alt, true),
+            Some(KeyInput::DeleteWordBackward)
+        );
+        assert_eq!(
+            map_key_for(KeyCode::Delete, alt, true),
+            Some(KeyInput::DeleteWordForward)
+        );
+        // The other platform's word modifier is a plain motion.
+        assert_eq!(
+            map_key_for(KeyCode::ArrowLeft, alt, false),
+            Some(KeyInput::Left)
+        );
+        assert_eq!(
+            map_key_for(KeyCode::Backspace, ctrl, true),
+            Some(KeyInput::Backspace)
+        );
+    }
+
+    #[test]
+    fn click_counter_counts_nearby_quick_presses() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let p = Point::new(10.0, 10.0);
+        let mut c = ClickCounter::default();
+        assert_eq!(c.press(t0, p), 1);
+        assert_eq!(
+            c.press(t0 + Duration::from_millis(200), Point::new(12.0, 9.0)),
+            2
+        );
+        assert_eq!(c.press(t0 + Duration::from_millis(400), p), 3);
+        // A fourth press starts over.
+        assert_eq!(c.press(t0 + Duration::from_millis(600), p), 1);
+        // Too slow: the gap is measured from the previous press.
+        assert_eq!(c.press(t0 + Duration::from_millis(1200), p), 1);
+        assert_eq!(c.press(t0 + Duration::from_millis(1700), p), 2);
+        // Too far away.
+        assert_eq!(
+            c.press(t0 + Duration::from_millis(1800), Point::new(20.0, 10.0)),
+            1
+        );
+        // Reset forgets the last press.
+        c.reset();
+        assert_eq!(
+            c.press(t0 + Duration::from_millis(1850), Point::new(20.0, 10.0)),
+            1
+        );
+    }
+
+    #[derive(Default)]
+    struct Editor {
+        buf: crate::widgets::EditBuffer,
+    }
+
+    #[test]
+    fn double_click_selects_word_and_triple_click_selects_all() {
+        use std::time::{Duration, Instant};
+        let Some(font) = Font::system_default() else {
+            eprintln!("skipping: no system font found");
+            return;
+        };
+        let state = Editor {
+            buf: crate::widgets::EditBuffer::from_text("hello world"),
+        };
+        let mut app = App::new(state, |s: &Editor, cx: &mut Cx<Editor>| {
+            let theme = *cx.theme();
+            crate::widgets::text_editor(cx, &theme, &s.buf, |s: &mut Editor| &mut s.buf)
+                .width(300.0)
+                .height(40.0)
+        })
+        .logical_size(Size::new(300.0, 40.0))
+        .font(font);
+        app.render_once();
+        // Find a point over "world": the far right of the text, but well inside
+        // the field (the text starts after the field's padding).
+        let tree = app.panes[0].tree.clone().unwrap();
+        let leaf = {
+            fn first_text(n: &LayoutNode) -> Option<&LayoutNode> {
+                if matches!(n.content, crate::core::NodeContent::Text { .. }) {
+                    return Some(n);
+                }
+                n.children.iter().find_map(first_text)
+            }
+            first_text(&tree).unwrap().bounds
+        };
+        let at = Point::new(leaf.max_x() - 8.0, leaf.center().y);
+        let press = |app: &mut App<Editor>, t: Instant| {
+            let App {
+                state,
+                theme,
+                font,
+                panes,
+                ..
+            } = app;
+            assert!(panes[0].text_press_at(state, theme, font.as_ref(), at, t));
+            panes[0].end_text_select();
+        };
+        let t0 = Instant::now();
+        press(&mut app, t0);
+        assert_eq!(app.state().buf.selection(), None);
+        press(&mut app, t0 + Duration::from_millis(150));
+        assert_eq!(app.state().buf.selected_text().as_deref(), Some("world"));
+        press(&mut app, t0 + Duration::from_millis(300));
+        assert_eq!(
+            app.state().buf.selected_text().as_deref(),
+            Some("hello world")
+        );
+        // A slow second press is a fresh single click.
+        press(&mut app, t0 + Duration::from_millis(2000));
+        press(&mut app, t0 + Duration::from_millis(2600));
+        assert_eq!(app.state().buf.selection(), None);
     }
 }

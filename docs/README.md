@@ -44,6 +44,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 ## Topics
 
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
+- [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

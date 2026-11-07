@@ -830,7 +830,8 @@ Most input only works on X11 today.
   Wayland, XIM or IBus on X11, `NSTextInputClient` on macOS, IMM32 / TSF on
   Windows, and the mobile soft keyboards.
 - ⬜ Dead keys and compose sequences.
-- ⬜ Undo and redo, word-wise movement and deletion, double-click to select a word.
+- ✅ Undo and redo, word-wise movement and deletion, double-click to select a word
+  (triple-click selects the line). See [docs/text-editing.md](docs/text-editing.md).
 - ⬜ Right-to-left and bidirectional text, from `oxideav-scribe`'s bidi support.
 
 #### 7d — OS integration

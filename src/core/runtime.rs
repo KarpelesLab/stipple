@@ -129,6 +129,30 @@ pub enum KeyInput {
     Cut,
     /// Paste the clipboard at the caret, replacing the selection (Ctrl/Cmd+V).
     Paste,
+    /// Move the caret to the previous word start (Ctrl+Left; Alt+Left on macOS).
+    WordLeft,
+    /// Move the caret to the next word end (Ctrl+Right; Alt+Right on macOS).
+    WordRight,
+    /// Extend the selection to the previous word start (with Shift).
+    SelectWordLeft,
+    /// Extend the selection to the next word end (with Shift).
+    SelectWordRight,
+    /// Delete the selection, or back to the previous word start
+    /// (Ctrl+Backspace; Alt+Backspace on macOS).
+    DeleteWordBackward,
+    /// Delete the selection, or forward to the next word end
+    /// (Ctrl+Delete; Alt+Delete on macOS).
+    DeleteWordForward,
+    /// Select the word (or run of punctuation / spaces) at the caret, as a
+    /// double-click does.
+    SelectWord,
+    /// Select the line containing the caret, as a triple-click does. Single-line
+    /// fields treat it as [`SelectAll`](KeyInput::SelectAll).
+    SelectLine,
+    /// Undo the last edit group (Ctrl/Cmd+Z).
+    Undo,
+    /// Redo the last undone edit group (Ctrl+Y, Ctrl/Cmd+Shift+Z).
+    Redo,
     Enter,
     Escape,
 }

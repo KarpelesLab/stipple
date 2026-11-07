@@ -217,13 +217,104 @@ pub fn edit_string(value: &mut String, input: &KeyInput) {
 /// boundary. Text is inserted and deleted at the caret; the arrow / Home / End
 /// keys move it. Drive it by feeding [`KeyInput`]s to [`EditBuffer::apply`], and
 /// render it (with a positioned caret) via [`text_editor`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Edits are recorded for [`undo`](Self::undo) / [`redo`](Self::redo).
+/// Consecutive typing (and consecutive Backspace or Delete presses) coalesce
+/// into one undo step; a caret move, a selection change, or a different kind of
+/// edit ends the step. Equality compares the text, caret and selection only,
+/// not the undo history.
+#[derive(Clone, Debug, Default)]
 pub struct EditBuffer {
     text: String,
     caret: usize,
     /// The fixed end of an active selection (the caret is the moving end);
     /// `None` when nothing is selected.
     anchor: Option<usize>,
+    history: History,
+}
+
+impl PartialEq for EditBuffer {
+    fn eq(&self, other: &Self) -> bool {
+        self.text == other.text && self.caret == other.caret && self.anchor == other.anchor
+    }
+}
+
+impl Eq for EditBuffer {}
+
+/// The most undo steps an [`EditBuffer`] keeps; older steps are dropped.
+const UNDO_LIMIT: usize = 1000;
+
+/// What kind of edit an undo step records, deciding whether the next edit may
+/// join it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditKind {
+    /// Typed text: consecutive typing coalesces.
+    Typing,
+    /// Backspace: consecutive presses coalesce.
+    Backspace,
+    /// Delete: consecutive presses coalesce.
+    Delete,
+    /// Anything else (paste, cut, newline, word delete, typing over a
+    /// selection): always its own step.
+    Other,
+}
+
+/// One primitive replacement: at byte `at`, `removed` was replaced by
+/// `inserted`.
+#[derive(Clone, Debug)]
+struct Edit {
+    at: usize,
+    removed: String,
+    inserted: String,
+}
+
+/// One undo step: a run of primitive edits plus the caret/anchor before and
+/// after, so undo and redo restore the selection too.
+#[derive(Clone, Debug)]
+struct UndoStep {
+    kind: EditKind,
+    edits: Vec<Edit>,
+    before: (usize, Option<usize>),
+    after: (usize, Option<usize>),
+}
+
+/// The undo and redo stacks of an [`EditBuffer`].
+#[derive(Clone, Debug, Default)]
+struct History {
+    undo: Vec<UndoStep>,
+    redo: Vec<UndoStep>,
+    /// Whether the top undo step may still absorb the next edit of its kind.
+    /// Cleared by caret moves, selection changes, and undo/redo.
+    open: bool,
+}
+
+/// A character class for word-wise movement and double-click selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CharClass {
+    /// Line break: never part of a double-click selection.
+    Newline,
+    /// Other whitespace.
+    Space,
+    /// Letters and digits (any script) and `_`.
+    Word,
+    /// Everything else (punctuation, symbols).
+    Punct,
+}
+
+fn char_class(c: char) -> CharClass {
+    if c == '\n' {
+        CharClass::Newline
+    } else if c.is_whitespace() {
+        CharClass::Space
+    } else if c.is_alphanumeric() || c == '_' {
+        CharClass::Word
+    } else {
+        CharClass::Punct
+    }
+}
+
+fn is_blank(class: CharClass) -> bool {
+    matches!(class, CharClass::Newline | CharClass::Space)
 }
 
 impl EditBuffer {
@@ -240,6 +331,7 @@ impl EditBuffer {
             text,
             caret,
             anchor: None,
+            history: History::default(),
         }
     }
 
@@ -267,13 +359,56 @@ impl EditBuffer {
         }
     }
 
-    /// Delete the active selection (if any), leaving the caret at its start.
-    /// Returns `true` if something was removed.
+    /// Replace `range` with `s`, leave the caret after the insertion with no
+    /// selection, and record the change for undo as an edit of `kind`.
+    fn replace(&mut self, range: std::ops::Range<usize>, s: &str, kind: EditKind) {
+        if range.is_empty() && s.is_empty() {
+            return;
+        }
+        let before = (self.caret, self.anchor);
+        let removed = self.text[range.clone()].to_string();
+        self.text.replace_range(range.clone(), s);
+        self.caret = range.start + s.len();
+        self.anchor = None;
+        let edit = Edit {
+            at: range.start,
+            removed,
+            inserted: s.to_string(),
+        };
+        let after = (self.caret, None);
+        let h = &mut self.history;
+        h.redo.clear();
+        match h.undo.last_mut() {
+            Some(step) if h.open && kind != EditKind::Other && step.kind == kind => {
+                step.edits.push(edit);
+                step.after = after;
+            }
+            _ => {
+                h.undo.push(UndoStep {
+                    kind,
+                    edits: vec![edit],
+                    before,
+                    after,
+                });
+                if h.undo.len() > UNDO_LIMIT {
+                    h.undo.remove(0);
+                }
+            }
+        }
+        h.open = kind != EditKind::Other;
+    }
+
+    /// End the current undo step, so the next edit starts a new one. Called on
+    /// every caret move and selection change.
+    fn seal(&mut self) {
+        self.history.open = false;
+    }
+
+    /// Delete the active selection (if any) as its own undo step, leaving the
+    /// caret at its start. Returns `true` if something was removed.
     fn delete_selection(&mut self) -> bool {
         if let Some((s, e)) = self.selection() {
-            self.text.replace_range(s..e, "");
-            self.caret = s;
-            self.anchor = None;
+            self.replace(s..e, "", EditKind::Other);
             true
         } else {
             self.anchor = None;
@@ -281,11 +416,20 @@ impl EditBuffer {
         }
     }
 
-    /// Insert `s`, replacing the selection first, and advance the caret past it.
+    /// Insert `s` as typed text, replacing the selection first, and advance the
+    /// caret past it. Consecutive typing coalesces into one undo step.
     pub fn insert(&mut self, s: &str) {
-        self.delete_selection();
-        self.text.insert_str(self.caret, s);
-        self.caret += s.len();
+        self.insert_as(s, EditKind::Typing);
+    }
+
+    /// Insert `s` at the caret (replacing any selection) as an edit of `kind`.
+    /// Typing over a selection is always its own undo step.
+    fn insert_as(&mut self, s: &str, kind: EditKind) {
+        let (range, kind) = match self.selection() {
+            Some((a, b)) => (a..b, EditKind::Other),
+            None => (self.caret..self.caret, kind),
+        };
+        self.replace(range, s, kind);
     }
 
     /// Delete the selection, or the character before the caret (Backspace).
@@ -294,8 +438,7 @@ impl EditBuffer {
             return;
         }
         if let Some(prev) = self.prev_boundary(self.caret) {
-            self.text.replace_range(prev..self.caret, "");
-            self.caret = prev;
+            self.replace(prev..self.caret, "", EditKind::Backspace);
         }
     }
 
@@ -305,8 +448,179 @@ impl EditBuffer {
             return;
         }
         if let Some(next) = self.next_boundary(self.caret) {
-            self.text.replace_range(self.caret..next, "");
+            self.replace(self.caret..next, "", EditKind::Delete);
         }
+    }
+
+    /// Delete the selection, or from the previous word start to the caret
+    /// (Ctrl+Backspace; Alt+Backspace on macOS).
+    pub fn delete_word_backward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        let start = self.word_left_of(self.caret);
+        self.replace(start..self.caret, "", EditKind::Other);
+    }
+
+    /// Delete the selection, or from the caret to the next word end
+    /// (Ctrl+Delete; Alt+Delete on macOS).
+    pub fn delete_word_forward(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        let end = self.word_right_of(self.caret);
+        self.replace(self.caret..end, "", EditKind::Other);
+    }
+
+    /// `true` if there is an edit to [`undo`](Self::undo).
+    pub fn can_undo(&self) -> bool {
+        !self.history.undo.is_empty()
+    }
+
+    /// `true` if there is an undone edit to [`redo`](Self::redo).
+    pub fn can_redo(&self) -> bool {
+        !self.history.redo.is_empty()
+    }
+
+    /// Revert the last undo step, restoring the text, caret and selection as
+    /// they were before it. Returns `false` if there was nothing to undo.
+    pub fn undo(&mut self) -> bool {
+        let Some(step) = self.history.undo.pop() else {
+            return false;
+        };
+        for e in step.edits.iter().rev() {
+            self.text
+                .replace_range(e.at..e.at + e.inserted.len(), &e.removed);
+        }
+        (self.caret, self.anchor) = step.before;
+        self.history.redo.push(step);
+        self.seal();
+        true
+    }
+
+    /// Re-apply the last undone step. Returns `false` if there was nothing to
+    /// redo. Any new edit clears the redo stack.
+    pub fn redo(&mut self) -> bool {
+        let Some(step) = self.history.redo.pop() else {
+            return false;
+        };
+        for e in &step.edits {
+            self.text
+                .replace_range(e.at..e.at + e.removed.len(), &e.inserted);
+        }
+        (self.caret, self.anchor) = step.after;
+        self.history.undo.push(step);
+        self.seal();
+        true
+    }
+
+    /// Forget all undo and redo steps (e.g. after loading a new document).
+    pub fn clear_history(&mut self) {
+        self.history = History::default();
+    }
+
+    /// The class of the char starting at byte `i`, or `None` at the end.
+    fn class_after(&self, i: usize) -> Option<CharClass> {
+        self.text[i..].chars().next().map(char_class)
+    }
+
+    /// The class of the char ending at byte `i`, or `None` at the start.
+    fn class_before(&self, i: usize) -> Option<CharClass> {
+        self.text[..i].chars().next_back().map(char_class)
+    }
+
+    /// The start of the word at or before `i`: skip whitespace backwards, then
+    /// the run of same-class chars (a word, or a run of punctuation).
+    fn word_left_of(&self, mut i: usize) -> usize {
+        while self.class_before(i).is_some_and(is_blank) {
+            i = self.prev_boundary(i).unwrap_or(0);
+        }
+        if let Some(class) = self.class_before(i) {
+            while self.class_before(i) == Some(class) {
+                i = self.prev_boundary(i).unwrap_or(0);
+            }
+        }
+        i
+    }
+
+    /// The end of the word at or after `i`: skip whitespace forwards, then the
+    /// run of same-class chars.
+    fn word_right_of(&self, mut i: usize) -> usize {
+        while self.class_after(i).is_some_and(is_blank) {
+            i = self.next_boundary(i).unwrap_or(self.text.len());
+        }
+        if let Some(class) = self.class_after(i) {
+            while self.class_after(i) == Some(class) {
+                i = self.next_boundary(i).unwrap_or(self.text.len());
+            }
+        }
+        i
+    }
+
+    /// The byte range `[start, end)` of the word (or run of punctuation, or of
+    /// spaces) at byte `i`. A word touching `i` on either side wins over
+    /// punctuation, and punctuation over spaces, so a click just past a word's
+    /// last letter still picks the word. Never spans a line break; empty when
+    /// `i` sits between two line breaks.
+    pub fn word_range_at(&self, i: usize) -> (usize, usize) {
+        let i = self.snap(i);
+        let sides = [self.class_after(i), self.class_before(i)];
+        let Some(class) = [CharClass::Word, CharClass::Punct, CharClass::Space]
+            .into_iter()
+            .find(|c| sides.contains(&Some(*c)))
+        else {
+            return (i, i);
+        };
+        let mut start = i;
+        while self.class_before(start) == Some(class) {
+            start = self.prev_boundary(start).unwrap_or(0);
+        }
+        let mut end = i;
+        while self.class_after(end) == Some(class) {
+            end = self.next_boundary(end).unwrap_or(self.text.len());
+        }
+        (start, end)
+    }
+
+    /// Move the caret to the previous word start, clearing the selection.
+    pub fn word_left(&mut self) {
+        self.caret = self.word_left_of(self.caret);
+        self.anchor = None;
+        self.seal();
+    }
+
+    /// Move the caret to the next word end, clearing the selection.
+    pub fn word_right(&mut self) {
+        self.caret = self.word_right_of(self.caret);
+        self.anchor = None;
+        self.seal();
+    }
+
+    /// Extend the selection to the previous word start.
+    pub fn select_word_left(&mut self) {
+        self.extend(|b| b.caret = b.word_left_of(b.caret));
+    }
+
+    /// Extend the selection to the next word end.
+    pub fn select_word_right(&mut self) {
+        self.extend(|b| b.caret = b.word_right_of(b.caret));
+    }
+
+    /// Select the word at the caret (see [`word_range_at`](Self::word_range_at)),
+    /// as a double-click does.
+    pub fn select_word(&mut self) {
+        let (s, e) = self.word_range_at(self.caret);
+        self.anchor = Some(s);
+        self.caret = e;
+        self.seal();
+    }
+
+    /// Select the line containing the caret (without its line break), as a
+    /// triple-click does.
+    pub fn select_line(&mut self) {
+        self.anchor = Some(self.line_start(self.caret));
+        self.caret = self.line_end(self.caret);
+        self.seal();
     }
 
     /// Move the caret one character left, collapsing any selection to its start.
@@ -317,6 +631,7 @@ impl EditBuffer {
             self.caret = prev;
         }
         self.anchor = None;
+        self.seal();
     }
 
     /// Move the caret one character right, collapsing any selection to its end.
@@ -327,30 +642,35 @@ impl EditBuffer {
             self.caret = next;
         }
         self.anchor = None;
+        self.seal();
     }
 
     /// Move the caret to the start of the current line, clearing the selection.
     pub fn home(&mut self) {
         self.caret = self.line_start(self.caret);
         self.anchor = None;
+        self.seal();
     }
 
     /// Move the caret to the end of the current line, clearing the selection.
     pub fn end(&mut self) {
         self.caret = self.line_end(self.caret);
         self.anchor = None;
+        self.seal();
     }
 
     /// Move the caret up one line (same byte column), clearing the selection.
     pub fn up(&mut self) {
         self.caret = self.caret_up(self.caret);
         self.anchor = None;
+        self.seal();
     }
 
     /// Move the caret down one line (same byte column), clearing the selection.
     pub fn down(&mut self) {
         self.caret = self.caret_down(self.caret);
         self.anchor = None;
+        self.seal();
     }
 
     /// Byte index of the start of the line containing `byte` (after the
@@ -401,6 +721,7 @@ impl EditBuffer {
         let anchor = self.anchor;
         motion(self);
         self.anchor = anchor; // motion's `move_*` clears it; restore.
+        self.seal();
     }
 
     /// Extend the selection one character left.
@@ -435,6 +756,7 @@ impl EditBuffer {
     pub fn select_all(&mut self) {
         self.anchor = Some(0);
         self.caret = self.text.len();
+        self.seal();
     }
 
     /// Place the caret at byte index `i` (snapped to a char boundary) and clear
@@ -442,6 +764,7 @@ impl EditBuffer {
     pub fn place_caret(&mut self, i: usize) {
         self.caret = self.snap(i);
         self.anchor = None;
+        self.seal();
     }
 
     /// Move the caret (the selection's moving end) to byte index `i`, anchoring
@@ -452,6 +775,7 @@ impl EditBuffer {
             self.anchor = Some(self.caret);
         }
         self.caret = self.snap(i);
+        self.seal();
     }
 
     /// Snap a byte index to the nearest char boundary at or below it, clamped to
@@ -484,6 +808,20 @@ impl EditBuffer {
             KeyInput::SelectHome => self.select_home(),
             KeyInput::SelectEnd => self.select_end(),
             KeyInput::SelectAll => self.select_all(),
+            KeyInput::WordLeft => self.word_left(),
+            KeyInput::WordRight => self.word_right(),
+            KeyInput::SelectWordLeft => self.select_word_left(),
+            KeyInput::SelectWordRight => self.select_word_right(),
+            KeyInput::DeleteWordBackward => self.delete_word_backward(),
+            KeyInput::DeleteWordForward => self.delete_word_forward(),
+            KeyInput::SelectWord => self.select_word(),
+            KeyInput::SelectLine => self.select_line(),
+            KeyInput::Undo => {
+                self.undo();
+            }
+            KeyInput::Redo => {
+                self.redo();
+            }
             // Clipboard: copy/cut write the selection to the process clipboard
             // mirror (the app syncs it to the OS); paste inserts the mirror text.
             KeyInput::Copy => {
@@ -500,11 +838,12 @@ impl EditBuffer {
             KeyInput::Paste => {
                 let text = crate::core::clipboard_text();
                 if !text.is_empty() {
-                    self.insert(&text);
+                    self.insert_as(&text, EditKind::Other);
                 }
             }
-            // Enter inserts a newline (the buffer is multi-line capable).
-            KeyInput::Enter => self.insert("\n"),
+            // Enter inserts a newline (the buffer is multi-line capable), as
+            // its own undo step.
+            KeyInput::Enter => self.insert_as("\n", EditKind::Other),
             KeyInput::Escape => {}
         }
     }
@@ -611,7 +950,11 @@ pub fn text_editor<S>(
         .align(Align::Start, Align::Center)
         .width(200.0)
         .native_text_frame(theme)
-        .on_key(cx, move |s, k| field(s).apply(k))
+        .on_key(cx, move |s, k| match k {
+            // Single-line: a triple-click selects the whole field.
+            KeyInput::SelectLine => field(s).select_all(),
+            _ => field(s).apply(k),
+        })
         .on_text_pos(cx, move |s, index, extend| {
             let b = field(s);
             if extend {
@@ -1234,5 +1577,338 @@ mod tests {
             panic!("text_editor should be a stack");
         };
         assert_eq!(children[0].caret, Some(5));
+    }
+
+    /// Feed each key to `b` in order.
+    fn keys(b: &mut EditBuffer, ks: &[KeyInput]) {
+        for k in ks {
+            b.apply(k);
+        }
+    }
+
+    fn typed(b: &mut EditBuffer, s: &str) {
+        for c in s.chars() {
+            b.apply(&KeyInput::Text(c.to_string()));
+        }
+    }
+
+    #[test]
+    fn undo_coalesces_consecutive_typing() {
+        let mut b = EditBuffer::new();
+        assert!(!b.can_undo());
+        typed(&mut b, "hello");
+        assert!(b.can_undo());
+        b.apply(&KeyInput::Undo);
+        assert_eq!(b.text(), "");
+        assert_eq!(b.caret(), 0);
+        assert!(!b.can_undo());
+        b.apply(&KeyInput::Redo);
+        assert_eq!(b.text(), "hello");
+        assert_eq!(b.caret(), 5);
+    }
+
+    #[test]
+    fn caret_move_ends_the_typing_group() {
+        let mut b = EditBuffer::new();
+        typed(&mut b, "ab");
+        // Left then Right returns to the same spot, but still ends the group.
+        keys(&mut b, &[KeyInput::Left, KeyInput::Right]);
+        typed(&mut b, "cd");
+        assert_eq!(b.text(), "abcd");
+        b.undo();
+        assert_eq!(b.text(), "ab");
+        assert_eq!(b.caret(), 2);
+        b.undo();
+        assert_eq!(b.text(), "");
+        assert!(!b.undo());
+    }
+
+    #[test]
+    fn different_edit_kind_ends_the_group() {
+        let mut b = EditBuffer::new();
+        typed(&mut b, "abc");
+        keys(&mut b, &[KeyInput::Backspace, KeyInput::Backspace]);
+        typed(&mut b, "XY");
+        assert_eq!(b.text(), "aXY");
+        b.undo(); // typing "XY"
+        assert_eq!(b.text(), "a");
+        b.undo(); // both backspaces, as one step
+        assert_eq!(b.text(), "abc");
+        assert_eq!(b.caret(), 3);
+        b.undo(); // typing "abc"
+        assert_eq!(b.text(), "");
+    }
+
+    #[test]
+    fn delete_presses_coalesce() {
+        let mut b = EditBuffer::from_text("abcdef");
+        b.place_caret(1);
+        keys(
+            &mut b,
+            &[KeyInput::Delete, KeyInput::Delete, KeyInput::Delete],
+        );
+        assert_eq!(b.text(), "aef");
+        b.undo();
+        assert_eq!(b.text(), "abcdef");
+        assert_eq!(b.caret(), 1);
+    }
+
+    #[test]
+    fn newline_and_paste_are_their_own_steps() {
+        let mut b = EditBuffer::new();
+        typed(&mut b, "ab");
+        b.apply(&KeyInput::Enter);
+        typed(&mut b, "cd");
+        assert_eq!(b.text(), "ab\ncd");
+        b.undo();
+        assert_eq!(b.text(), "ab\n");
+        b.undo();
+        assert_eq!(b.text(), "ab");
+        b.undo();
+        assert_eq!(b.text(), "");
+    }
+
+    #[test]
+    fn undo_restores_a_replaced_selection() {
+        let mut b = EditBuffer::from_text("hello world");
+        b.place_caret(6);
+        b.extend_to(11);
+        typed(&mut b, "there");
+        assert_eq!(b.text(), "hello there");
+        // Replacing the selection plus the typing that followed it.
+        b.undo();
+        assert_eq!(b.text(), "hello t");
+        b.undo();
+        assert_eq!(b.text(), "hello world");
+        assert_eq!(b.selection(), Some((6, 11)));
+        b.redo();
+        assert_eq!(b.text(), "hello t");
+        assert_eq!(b.selection(), None);
+        assert_eq!(b.caret(), 7);
+    }
+
+    #[test]
+    fn new_edit_clears_redo() {
+        let mut b = EditBuffer::new();
+        typed(&mut b, "ab");
+        b.undo();
+        assert!(b.can_redo());
+        typed(&mut b, "x");
+        assert!(!b.can_redo());
+        assert!(!b.redo());
+        assert_eq!(b.text(), "x");
+    }
+
+    #[test]
+    fn undo_redo_round_trip_multibyte() {
+        let mut b = EditBuffer::from_text("é🦀z");
+        b.place_caret("é🦀".len());
+        b.backspace(); // removes the crab
+        b.apply(&KeyInput::Left);
+        typed(&mut b, "日本");
+        assert_eq!(b.text(), "日本éz");
+        b.undo();
+        assert_eq!(b.text(), "éz");
+        b.undo();
+        assert_eq!(b.text(), "é🦀z");
+        assert_eq!(b.caret(), "é🦀".len());
+        b.redo();
+        b.redo();
+        assert_eq!(b.text(), "日本éz");
+        assert_eq!(b.caret(), "日本".len());
+        b.clear_history();
+        assert!(!b.can_undo() && !b.can_redo());
+    }
+
+    #[test]
+    fn equality_ignores_history() {
+        let mut a = EditBuffer::new();
+        typed(&mut a, "hi");
+        assert_eq!(a, EditBuffer::from_text("hi"));
+    }
+
+    #[test]
+    fn word_movement_stops_at_word_and_punctuation_runs() {
+        let text = "foo bar_baz, qux";
+        let mut b = EditBuffer::from_text(text);
+        b.place_caret(0);
+        let mut stops = Vec::new();
+        for _ in 0..5 {
+            b.apply(&KeyInput::WordRight);
+            stops.push(b.caret());
+        }
+        // foo| bar_baz|,| qux| (then stays at the end)
+        assert_eq!(stops, vec![3, 11, 12, 16, 16]);
+        let mut back = Vec::new();
+        for _ in 0..5 {
+            b.apply(&KeyInput::WordLeft);
+            back.push(b.caret());
+        }
+        assert_eq!(back, vec![13, 11, 4, 0, 0]);
+    }
+
+    #[test]
+    fn word_movement_handles_unicode() {
+        // Accented and CJK letters are word chars; the em dash is punctuation.
+        let text = "café — 日本語 x";
+        let mut b = EditBuffer::from_text(text);
+        b.place_caret(0);
+        b.word_right();
+        assert_eq!(&text[..b.caret()], "café");
+        b.word_right();
+        assert_eq!(&text[..b.caret()], "café —");
+        b.word_right();
+        assert_eq!(&text[..b.caret()], "café — 日本語");
+        b.word_left();
+        assert_eq!(&text[..b.caret()], "café — ");
+        // Every stop lands on a char boundary.
+        b.place_caret(text.len());
+        while b.caret() > 0 {
+            b.word_left();
+            assert!(text.is_char_boundary(b.caret()));
+        }
+    }
+
+    #[test]
+    fn word_movement_crosses_lines() {
+        let mut b = EditBuffer::from_text("one\n  two");
+        b.word_left();
+        assert_eq!(b.caret(), 6);
+        b.word_left();
+        assert_eq!(b.caret(), 0);
+        b.word_right();
+        assert_eq!(b.caret(), 3);
+        b.word_right();
+        assert_eq!(b.caret(), 9);
+    }
+
+    #[test]
+    fn shift_word_movement_extends_selection() {
+        let mut b = EditBuffer::from_text("alpha beta gamma");
+        b.place_caret(6);
+        keys(
+            &mut b,
+            &[KeyInput::SelectWordRight, KeyInput::SelectWordRight],
+        );
+        assert_eq!(b.selection(), Some((6, 16)));
+        assert_eq!(b.selected_text().as_deref(), Some("beta gamma"));
+        // Back past the anchor flips the selection to the other side.
+        keys(
+            &mut b,
+            &[
+                KeyInput::SelectWordLeft,
+                KeyInput::SelectWordLeft,
+                KeyInput::SelectWordLeft,
+            ],
+        );
+        assert_eq!(b.selection(), Some((0, 6)));
+        // A plain word move collapses it.
+        b.apply(&KeyInput::WordRight);
+        assert_eq!(b.selection(), None);
+        assert_eq!(b.caret(), 5);
+    }
+
+    #[test]
+    fn word_delete_backward_and_forward() {
+        let mut b = EditBuffer::from_text("let x = foo.bar;");
+        b.apply(&KeyInput::DeleteWordBackward); // ";"
+        assert_eq!(b.text(), "let x = foo.bar");
+        b.apply(&KeyInput::DeleteWordBackward); // "bar"
+        assert_eq!(b.text(), "let x = foo.");
+        b.place_caret(3);
+        b.apply(&KeyInput::DeleteWordForward); // " x"
+        assert_eq!(b.text(), "let = foo.");
+        assert_eq!(b.caret(), 3);
+        // Each word delete is its own undo step.
+        b.undo();
+        assert_eq!(b.text(), "let x = foo.");
+        b.undo();
+        assert_eq!(b.text(), "let x = foo.bar");
+        // At the edges word deletes are no-ops (and record nothing).
+        let mut e = EditBuffer::from_text("ab");
+        e.place_caret(0);
+        e.delete_word_backward();
+        e.place_caret(2);
+        e.delete_word_forward();
+        assert_eq!(e.text(), "ab");
+        assert!(!e.can_undo());
+    }
+
+    #[test]
+    fn word_delete_removes_selection_first() {
+        let mut b = EditBuffer::from_text("one two three");
+        b.place_caret(4);
+        b.extend_to(6);
+        b.apply(&KeyInput::DeleteWordBackward);
+        assert_eq!(b.text(), "one o three");
+        assert_eq!(b.caret(), 4);
+    }
+
+    #[test]
+    fn word_delete_multibyte() {
+        let mut b = EditBuffer::from_text("naïve 🦀🦀");
+        b.delete_word_backward(); // the crab pair is one punctuation run
+        assert_eq!(b.text(), "naïve ");
+        b.delete_word_backward();
+        assert_eq!(b.text(), "");
+    }
+
+    #[test]
+    fn word_range_prefers_the_word_next_to_the_click() {
+        let b = EditBuffer::from_text("hello, world  x");
+        // Inside a word.
+        assert_eq!(b.word_range_at(2), (0, 5));
+        // Just past the word's last letter (clicked its right half).
+        assert_eq!(b.word_range_at(5), (0, 5));
+        // Between ',' and ' ': punctuation beats space.
+        assert_eq!(b.word_range_at(6), (5, 6));
+        // Inside a run of spaces.
+        assert_eq!(b.word_range_at(13), (12, 14));
+        // Multibyte word; an index inside a char snaps down to its boundary.
+        let m = EditBuffer::from_text("über 日本語");
+        assert_eq!(m.word_range_at(1), (0, "über".len()));
+        assert_eq!(m.word_range_at(7), ("über ".len(), m.text().len()));
+        // Between two line breaks there is nothing to select.
+        let n = EditBuffer::from_text("a\n\nb");
+        assert_eq!(n.word_range_at(2), (2, 2));
+    }
+
+    #[test]
+    fn select_word_and_line() {
+        let mut b = EditBuffer::from_text("first line\nsecond line here");
+        b.place_caret(14);
+        b.apply(&KeyInput::SelectWord);
+        assert_eq!(b.selected_text().as_deref(), Some("second"));
+        b.apply(&KeyInput::SelectLine);
+        assert_eq!(b.selected_text().as_deref(), Some("second line here"));
+        b.place_caret(3);
+        b.select_line();
+        assert_eq!(b.selected_text().as_deref(), Some("first line"));
+        // Selecting doesn't record an edit, but ends a typing group.
+        let mut t = EditBuffer::new();
+        typed(&mut t, "ab");
+        t.select_word();
+        typed(&mut t, "c");
+        assert_eq!(t.text(), "c");
+        t.undo();
+        assert_eq!(t.text(), "ab");
+        assert_eq!(t.selection(), Some((0, 2)));
+    }
+
+    #[test]
+    fn text_editor_treats_select_line_as_select_all() {
+        struct St {
+            b: EditBuffer,
+        }
+        let theme = Theme::light();
+        let mut st = St {
+            b: EditBuffer::from_text("a\nb"),
+        };
+        let mut cx = Cx::new(&theme);
+        let field = text_editor(&mut cx, &theme, &st.b, |s: &mut St| &mut s.b);
+        let mut handlers = cx.into_handlers();
+        st.b.place_caret(0);
+        assert!(handlers.dispatch_key(field.focus.unwrap(), &KeyInput::SelectLine, &mut st));
+        assert_eq!(st.b.selection(), Some((0, 3)));
     }
 }
