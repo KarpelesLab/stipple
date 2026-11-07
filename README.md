@@ -1,5 +1,10 @@
 # Stipple
 
+[![CI](https://github.com/KarpelesLab/stipple/actions/workflows/ci.yml/badge.svg)](https://github.com/KarpelesLab/stipple/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/stipple.svg)](https://crates.io/crates/stipple)
+[![docs.rs](https://img.shields.io/docsrs/stipple)](https://docs.rs/stipple)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A cross-platform UI library and toolkit in Rust.
 
 Stipple draws **beautiful, fully themeable, pixel-identical** interfaces on Linux,
