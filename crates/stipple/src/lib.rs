@@ -1188,6 +1188,7 @@ impl<S> App<S> {
             } = app;
             let pane = &mut panes[idx];
             let scale = window.scale_factor();
+            pane.scale = scale;
             let scene = pane.build_frame(state, theme, font.as_ref());
 
             // Push the freshly-built accessibility tree to the OS bridge so a

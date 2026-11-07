@@ -1,6 +1,6 @@
 //! UIKit: real, offscreen `UIControl`s rendered through their layers.
 
-use super::objc::{CgRect, Id, class, msg, with_pool};
+use super::objc::{CgRect, CgSize, Id, class, msg, with_pool};
 use super::{NativeControl, NativeDeco, SystemLook, unpremultiply};
 use crate::geometry::PhysicalSize;
 use crate::render::{Color, Pixmap};
@@ -24,6 +24,19 @@ unsafe extern "C" {
     fn CGContextRelease(ctx: *mut c_void);
     fn CGContextTranslateCTM(ctx: *mut c_void, x: f64, y: f64);
     fn CGContextScaleCTM(ctx: *mut c_void, x: f64, y: f64);
+}
+
+#[link(name = "UIKit", kind = "framework")]
+unsafe extern "C" {
+    fn UIGraphicsBeginImageContextWithOptions(size: CgSize, opaque: bool, scale: f64);
+    fn UIGraphicsGetCurrentContext() -> *mut c_void;
+    fn UIGraphicsEndImageContext();
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGBitmapContextGetData(ctx: *mut c_void) -> *mut c_void;
+    fn CGBitmapContextGetBytesPerRow(ctx: *mut c_void) -> usize;
 }
 
 pub const AVAILABLE: bool = true;
@@ -52,12 +65,27 @@ pub fn supports(control: NativeControl) -> bool {
 pub fn size_hint(control: NativeControl) -> (Option<f64>, Option<f64>) {
     match control {
         NativeControl::Button { .. } => (None, Some(44.0)),
-        NativeControl::Switch { .. } => (Some(51.0), Some(31.0)),
+        NativeControl::Switch { .. } => switch_size(),
         NativeControl::Slider { .. } => (Some(200.0), Some(31.0)),
         NativeControl::Progress { .. } => (Some(200.0), Some(4.0)),
         NativeControl::TextField => (None, Some(34.0)),
         NativeControl::Checkbox { .. } | NativeControl::Radio { .. } => (None, None),
     }
+}
+
+/// The switch's size varies between iOS versions, so ask UIKit for it.
+fn switch_size() -> (Option<f64>, Option<f64>) {
+    static SIZE: std::sync::OnceLock<CgSize> = std::sync::OnceLock::new();
+    let size = SIZE.get_or_init(|| {
+        with_pool(|| unsafe {
+            let alloc: Id = msg!(class("UISwitch"), "alloc", () -> Id);
+            let view: Id = msg!(alloc, "init", () -> Id);
+            let size: CgSize = msg!(view, "intrinsicContentSize", () -> CgSize);
+            msg!(view, "release", () -> ());
+            size
+        })
+    });
+    (Some(size.width), Some(size.height))
 }
 
 pub fn draws_focus(_control: NativeControl) -> bool {
@@ -127,6 +155,63 @@ unsafe fn make_view(deco: NativeDeco, frame: CgRect) -> Id {
     }
 }
 
+/// Snapshot `view` with `drawViewHierarchyInRect:afterScreenUpdates:`, returning
+/// straight RGBA, or `None` when there's no window yet or the snapshot fails.
+unsafe fn snapshot_in_window(
+    view: Id,
+    frame: CgRect,
+    w: usize,
+    h: usize,
+    scale: f64,
+) -> Option<Vec<u8>> {
+    unsafe {
+        let app: Id = msg!(class("UIApplication"), "sharedApplication", () -> Id);
+        let window: Id = msg!(app, "keyWindow", () -> Id);
+        if window.is_null() {
+            return None;
+        }
+        let index = 0_i64;
+        msg!(window, "insertSubview:atIndex:", (view: Id, index: i64) -> ());
+        let logical = CgSize {
+            width: frame.width,
+            height: frame.height,
+        };
+        UIGraphicsBeginImageContextWithOptions(logical, false, scale);
+        let updates = true;
+        let ok: bool = msg!(
+            view,
+            "drawViewHierarchyInRect:afterScreenUpdates:",
+            (frame: CgRect, updates: bool) -> bool
+        );
+        let ctx = UIGraphicsGetCurrentContext();
+        let data = if ctx.is_null() {
+            std::ptr::null_mut()
+        } else {
+            CGBitmapContextGetData(ctx)
+        };
+        // The context's row size can exceed w * 4 and its channels are BGRA.
+        let row = if ctx.is_null() {
+            0
+        } else {
+            CGBitmapContextGetBytesPerRow(ctx)
+        };
+        let out = (ok && !data.is_null() && row >= w * 4).then(|| {
+            let src = std::slice::from_raw_parts(data as *const u8, row * h);
+            let mut px = Vec::with_capacity(w * h * 4);
+            for line in src.chunks_exact(row) {
+                for p in line[..w * 4].as_chunks::<4>().0 {
+                    px.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
+                }
+            }
+            unpremultiply(&mut px);
+            px
+        });
+        UIGraphicsEndImageContext();
+        msg!(view, "removeFromSuperview", () -> ());
+        out
+    }
+}
+
 pub fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Pixmap> {
     with_pool(|| unsafe {
         let frame = CgRect {
@@ -140,6 +225,13 @@ pub fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Pixmap
             return None;
         }
         let (w, h) = (size.width as usize, size.height as usize);
+        // Current UIKit controls have parts a layer render can't capture (a
+        // switch's knob, a slider's thumb), so prefer a snapshot through the
+        // window, tucked behind the app's content while it's taken.
+        if let Some(px) = snapshot_in_window(view, frame, w, h, scale) {
+            msg!(view, "release", () -> ());
+            return Some(Pixmap::from_rgba8(size, px));
+        }
         let mut px = vec![0u8; w * h * 4];
         let space = CGColorSpaceCreateDeviceRGB();
         let ctx = CGBitmapContextCreate(

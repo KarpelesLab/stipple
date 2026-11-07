@@ -907,6 +907,7 @@ pub fn progress_bar(theme: &Theme, fraction: f64) -> Element {
         .radius(4.0)
         .width(200.0)
         .height(8.0)
+        .align(Align::Start, Align::Stretch)
 }
 
 /// A simple busy indicator: a primary-colored ring. Static for now; wire it to

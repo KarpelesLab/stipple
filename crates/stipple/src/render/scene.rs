@@ -184,6 +184,19 @@ impl Scene {
         self.stack.iter().all(|f| f.nodes.is_empty())
     }
 
+    /// Stroke the outline of a rectangle with rounded corners.
+    pub fn stroke_round_rect(&mut self, rect: Rect, radius: f64, color: Color, width: f64) {
+        let path = round_rect_path(rect, radius);
+        let stroke = Stroke::solid(width as f32, Rgba::from(color));
+        self.emit(Node::Path(PathNode::new(path).with_stroke(stroke)));
+        self.commands.push(DrawCmd::Rect {
+            rect,
+            color,
+            radius,
+            border: width,
+        });
+    }
+
     /// Fill an axis-aligned rectangle with a solid color.
     pub fn fill_rect(&mut self, rect: Rect, color: Color) {
         let path = rect_path(rect);

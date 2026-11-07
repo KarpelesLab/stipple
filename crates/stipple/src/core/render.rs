@@ -488,7 +488,11 @@ fn paint_decoration(deco: &BoxStyle, bounds: Rect, scene: &mut Scene) {
         }
     }
     if let Some((color, width)) = deco.border {
-        scene.stroke_rect(bounds, color, width);
+        if deco.radius > 0.0 {
+            scene.stroke_round_rect(bounds, deco.radius, color, width);
+        } else {
+            scene.stroke_rect(bounds, color, width);
+        }
     }
 }
 

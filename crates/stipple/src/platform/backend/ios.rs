@@ -17,10 +17,10 @@
 use std::cell::RefCell;
 use std::ffi::{CString, c_void};
 
-use crate::geometry::{PhysicalSize, ScaleFactor};
+use crate::geometry::{PhysicalSize, Point, ScaleFactor};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
-use crate::platform::event::{Event, WindowId};
+use crate::platform::event::{ButtonState, Event, PointerButton, WindowId};
 use crate::platform::window::{Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
@@ -39,6 +39,14 @@ struct CgPoint {
 struct CgSize {
     width: f64,
     height: f64,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct EdgeInsets {
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -138,6 +146,21 @@ unsafe fn msg_rect(obj: Id, s: Sel) -> CgRect {
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     unsafe { f(obj, s) }
 }
+unsafe fn msg_f64(obj: Id, s: Sel) -> f64 {
+    let f: unsafe extern "C" fn(Id, Sel) -> f64 =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s) }
+}
+unsafe fn msg_insets(obj: Id, s: Sel) -> EdgeInsets {
+    let f: unsafe extern "C" fn(Id, Sel) -> EdgeInsets =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s) }
+}
+unsafe fn msg_void_rect(obj: Id, s: Sel, a: CgRect) {
+    let f: unsafe extern "C" fn(Id, Sel, CgRect) =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s, a) }
+}
 unsafe fn msg_alloc_init_frame(cls: Class, frame: CgRect) -> Id {
     unsafe {
         let alloc = msg_id(cls, sel("alloc"));
@@ -169,6 +192,8 @@ struct IosCtx {
     view: Id,
     window: Id,
     size: PhysicalSize,
+    /// Physical pixels per logical pixel: `UIScreen.scale`.
+    scale: f64,
     /// Raw pointer to the (type-erased) handler. `UIApplicationMain` never
     /// returns, so the handler in `run`'s frame lives for the process lifetime.
     handler: *mut DynHandler,
@@ -210,17 +235,16 @@ extern "C" fn draw_rect(_this: Id, _cmd: Sel, _rect: CgRect) {
                 false,
                 0,
             );
+            // The context is in points; the framebuffer is in pixels.
+            let (width, height) = (c.w as f64 / c.scale, c.h as f64 / c.scale);
             let rect = CgRect {
                 origin: CgPoint { x: 0.0, y: 0.0 },
-                size: CgSize {
-                    width: c.w as f64,
-                    height: c.h as f64,
-                },
+                size: CgSize { width, height },
             };
             // The UIView draw context draws CGImages bottom-up; flip the CTM so
             // our top-row-first framebuffer lands upright (as in the macОS view).
             CGContextSaveGState(cg);
-            CGContextTranslateCTM(cg, 0.0, c.h as f64);
+            CGContextTranslateCTM(cg, 0.0, height);
             CGContextScaleCTM(cg, 1.0, -1.0);
             CGContextDrawImage(cg, rect, image);
             CGContextRestoreGState(cg);
@@ -236,24 +260,51 @@ extern "C" fn draw_rect(_this: Id, _cmd: Sel, _rect: CgRect) {
 extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) -> bool {
     unsafe {
         let bounds = msg_rect(msg_id(class("UIScreen"), sel("mainScreen")), sel("bounds"));
+        let scale = msg_f64(msg_id(class("UIScreen"), sel("mainScreen")), sel("scale"));
         let window = msg_alloc_init_frame(class("UIWindow"), bounds);
+        // The root view fills the screen behind the status bar and home indicator;
+        // our view sits inside the safe area on top of it.
+        let root = msg_alloc_init_frame(class("UIView"), bounds);
+        let background = msg_id(class("UIColor"), sel("systemBackgroundColor"));
+        msg_void_id(root, sel("setBackgroundColor:"), background);
         let view = msg_alloc_init_frame(register_view_class(), bounds);
+        msg_void_id(root, sel("addSubview:"), view);
         let vc = msg_id(msg_id(class("UIViewController"), sel("alloc")), sel("init"));
-        msg_void_id(vc, sel("setView:"), view);
+        msg_void_id(vc, sel("setView:"), root);
         msg_void_id(window, sel("setRootViewController:"), vc);
 
         CTX.with(|c| {
             let mut c = c.borrow_mut();
             c.view = view;
             c.window = window;
+            c.scale = scale;
         });
 
-        // Draw the first frame through the Stipple handler, then show the window.
-        let win = IosWindow {
-            size: CTX.with(|c| c.borrow().size),
-        };
-        call_handler(Event::RedrawRequested, &win);
+        // Show the window first: the safe area is only known once it's visible,
+        // and OS-drawn controls are captured through it.
         msg_void(window, sel("makeKeyAndVisible"));
+        let safe = msg_insets(window, sel("safeAreaInsets"));
+        let frame = CgRect {
+            origin: CgPoint {
+                x: bounds.origin.x + safe.left,
+                y: bounds.origin.y + safe.top,
+            },
+            size: CgSize {
+                width: bounds.size.width - safe.left - safe.right,
+                height: bounds.size.height - safe.top - safe.bottom,
+            },
+        };
+        msg_void_rect(view, sel("setFrame:"), frame);
+
+        let size = PhysicalSize::new(
+            (frame.size.width * scale).round() as u32,
+            (frame.size.height * scale).round() as u32,
+        );
+        CTX.with(|c| c.borrow_mut().size = size);
+        let win = IosWindow { size };
+        // The app starts with its requested size; on iOS the screen decides.
+        call_handler(Event::Resized(size), &win);
+        call_handler(Event::RedrawRequested, &win);
         msg_void_bool(view, sel("setNeedsDisplay"), true);
 
         // Runtime marker for CI: confirms the UIKit backend booted, built the
@@ -269,6 +320,54 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
         let _ = std::fs::write(std::env::temp_dir().join("stipple-ios.txt"), &marker);
     }
     true
+}
+
+/// Forward one touch as a pointer event, at its position in `view`.
+unsafe fn touch_position(view: Id, touches: Id) -> Point {
+    unsafe {
+        let touch = msg_id(touches, sel("anyObject"));
+        let f: unsafe extern "C" fn(Id, Sel, Id) -> CgPoint =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let p = f(touch, sel("locationInView:"), view);
+        Point::new(p.x, p.y)
+    }
+}
+
+fn current_window() -> IosWindow {
+    IosWindow {
+        size: CTX.with(|c| c.borrow().size),
+    }
+}
+
+extern "C" fn touches_began(this: Id, _cmd: Sel, touches: Id, _event: Id) {
+    let position = unsafe { touch_position(this, touches) };
+    let win = current_window();
+    call_handler(Event::PointerMoved { position }, &win);
+    call_handler(
+        Event::PointerButton {
+            button: PointerButton::Left,
+            state: ButtonState::Pressed,
+            position,
+        },
+        &win,
+    );
+}
+
+extern "C" fn touches_moved(this: Id, _cmd: Sel, touches: Id, _event: Id) {
+    let position = unsafe { touch_position(this, touches) };
+    call_handler(Event::PointerMoved { position }, &current_window());
+}
+
+extern "C" fn touches_ended(this: Id, _cmd: Sel, touches: Id, _event: Id) {
+    let position = unsafe { touch_position(this, touches) };
+    call_handler(
+        Event::PointerButton {
+            button: PointerButton::Left,
+            state: ButtonState::Released,
+            position,
+        },
+        &current_window(),
+    );
 }
 
 /// Invoke the stashed Rust handler (if any).
@@ -299,6 +398,16 @@ fn register_view_class() -> Class {
             draw_rect as *const c_void,
             draw_types.as_ptr(),
         );
+        let touch_types = c"v@:@@";
+        let touches: [(&str, extern "C" fn(Id, Sel, Id, Id)); 4] = [
+            ("touchesBegan:withEvent:", touches_began),
+            ("touchesMoved:withEvent:", touches_moved),
+            ("touchesEnded:withEvent:", touches_ended),
+            ("touchesCancelled:withEvent:", touches_ended),
+        ];
+        for (name, imp) in touches {
+            class_addMethod(cls, sel(name), imp as *const c_void, touch_types.as_ptr());
+        }
         objc_registerClassPair(cls);
         cls
     }
@@ -336,7 +445,7 @@ impl Window for IosWindow {
         self.size
     }
     fn scale_factor(&self) -> ScaleFactor {
-        ScaleFactor::IDENTITY
+        ScaleFactor::new(CTX.with(|c| c.borrow().scale))
     }
     fn request_redraw(&self) {
         CTX.with(|c| {

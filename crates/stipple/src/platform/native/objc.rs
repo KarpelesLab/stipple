@@ -14,7 +14,6 @@ unsafe extern "C" {
     fn objc_autoreleasePoolPop(pool: *mut c_void);
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct CgSize {

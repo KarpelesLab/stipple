@@ -74,14 +74,27 @@ impl Font {
             "C:\\Windows\\Fonts\\segoeui.ttf",
             "C:\\Windows\\Fonts\\arial.ttf",
         ];
-        for path in CANDIDATES {
+        // Faces consulted for glyphs the main font lacks, such as the checkbox's
+        // check mark, which Liberation Sans doesn't have.
+        const FALLBACKS: &[&str] = &[
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/System/Library/Fonts/Apple Symbols.ttf",
+            "C:\\Windows\\Fonts\\seguisym.ttf",
+        ];
+        let mut font = CANDIDATES.iter().find_map(|path| {
+            let bytes = std::fs::read(path).ok()?;
+            Font::from_bytes(bytes).ok()
+        })?;
+        for path in FALLBACKS {
             if let Ok(bytes) = std::fs::read(path)
-                && let Ok(font) = Font::from_bytes(bytes)
+                && let Ok(face) = parse_face(bytes)
             {
-                return Some(font);
+                font.chain = font.chain.push_fallback(face);
             }
         }
-        None
+        Some(font)
     }
 
     /// Distance from the top of the text box to the baseline, in logical

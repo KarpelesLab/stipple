@@ -49,11 +49,26 @@ pub fn size_hint(control: NativeControl) -> (Option<f64>, Option<f64>) {
     match control {
         NativeControl::Button { .. } => (None, Some(28.0)),
         NativeControl::Checkbox { .. } | NativeControl::Radio { .. } => (Some(18.0), Some(18.0)),
-        NativeControl::Switch { .. } => (Some(40.0), Some(24.0)),
+        NativeControl::Switch { .. } => switch_size(),
         NativeControl::Slider { .. } => (Some(160.0), Some(24.0)),
         NativeControl::Progress { .. } => (Some(200.0), Some(12.0)),
         NativeControl::TextField => (None, Some(24.0)),
     }
+}
+
+/// The switch's size varies between macOS versions, so ask AppKit for it.
+fn switch_size() -> (Option<f64>, Option<f64>) {
+    static SIZE: std::sync::OnceLock<CgSize> = std::sync::OnceLock::new();
+    let size = SIZE.get_or_init(|| {
+        with_pool(|| unsafe {
+            let alloc: Id = msg!(class("NSSwitch"), "alloc", () -> Id);
+            let view: Id = msg!(alloc, "init", () -> Id);
+            let size: CgSize = msg!(view, "intrinsicContentSize", () -> CgSize);
+            msg!(view, "release", () -> ());
+            size
+        })
+    });
+    (Some(size.width), Some(size.height))
 }
 
 pub fn draws_focus(_control: NativeControl) -> bool {
