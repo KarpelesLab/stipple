@@ -23,6 +23,8 @@ pub mod a11y;
 /// Platform-neutral accessibility tree handed to each backend's OS bridge.
 pub mod access;
 pub mod backend;
+/// The system clipboard (plain text) on Windows, macOS and iOS.
+pub mod clipboard;
 /// Native file dialogs (open/save/folder) backed by each OS's picker.
 pub mod dialog;
 mod error;

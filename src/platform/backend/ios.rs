@@ -523,6 +523,12 @@ impl Window for IosWindow {
         });
     }
     fn set_title(&self, _title: &str) {}
+    fn clipboard(&self) -> Option<String> {
+        crate::platform::clipboard::text()
+    }
+    fn set_clipboard(&self, text: &str) {
+        crate::platform::clipboard::set_text(text);
+    }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(IosSurface { size: self.size })
     }

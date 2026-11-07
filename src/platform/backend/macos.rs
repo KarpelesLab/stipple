@@ -637,6 +637,12 @@ impl Window for MacWindow {
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(MacSurface { size: self.size })
     }
+    fn clipboard(&self) -> Option<String> {
+        crate::platform::clipboard::text()
+    }
+    fn set_clipboard(&self, text: &str) {
+        crate::platform::clipboard::set_text(text);
+    }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         // Stash the tree; AppKit pulls `accessibilityChildren` lazily, so we just
         // keep the latest one. Adopt the root's name as the view's label too.

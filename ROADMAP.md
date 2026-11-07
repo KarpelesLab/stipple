@@ -834,8 +834,15 @@ Most input only works on X11 today.
 - ⬜ Right-to-left and bidirectional text, from `oxideav-scribe`'s bidi support.
 
 #### 7d — OS integration
-- ⬜ System clipboard on Wayland, Windows, macOS, iOS, Android and the web.
-- ⬜ File dialogs on Windows, macOS and the web.
+- ✅ System clipboard on Windows (`CF_UNICODETEXT`), macOS (`NSPasteboard`) and
+  iOS (`UIPasteboard`), in `stipple::platform::clipboard` and behind
+  `Window::clipboard`; CI round-trips text on Windows and macOS and reads it back
+  with `Get-Clipboard` / `pbpaste`.
+- ⬜ System clipboard on Wayland (`wl_data_device`), Android and the web.
+- ✅ File dialogs on Windows (`IFileOpenDialog` / `IFileSaveDialog` over COM) and
+  macOS (`NSOpenPanel` / `NSSavePanel`). Build-checked only: CI can't drive a
+  modal dialog.
+- ⬜ File dialogs on the web.
 - ⬜ Menus: the macOS menu bar first, then window and context menus.
 - ⬜ Window control: minimum and maximum size, maximize, fullscreen, the window icon.
 - ⬜ Mouse cursor shapes: text I-beam, resize arrows, pointer.

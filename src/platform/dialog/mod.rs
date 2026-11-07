@@ -8,9 +8,13 @@
 //! - **Linux**: `org.freedesktop.portal.FileChooser` over D-Bus
 //!   (`xdg-desktop-portal`), driven by the hand-written client in [`crate::platform::a11y`].
 //!   Works inside sandboxes and across desktops without linking GTK/Qt.
-//! - **Other platforms**: not implemented yet. The plan is the native panels
-//!   (`NSOpenPanel`/`NSSavePanel`, `IFileOpenDialog`, `<input type=file>`); until
-//!   then these calls return `None`, as if the user cancelled.
+//! - **Windows**: the shell's `IFileOpenDialog` / `IFileSaveDialog` (COM, with
+//!   hand-written vtables), `FOS_PICKFOLDERS` for folders. The dialog is modal
+//!   to the thread's active window.
+//! - **macOS**: `NSOpenPanel` / `NSSavePanel`, run with `runModal`. Call these
+//!   from the main thread (the event handler runs there).
+//! - **iOS, Android, web**: not implemented; these calls return `None`, as if
+//!   the user cancelled.
 //!
 //! All three return `None` when the user cancels (or no backend is available).
 //! These calls block until the user dismisses the dialog.
@@ -86,13 +90,22 @@ mod backend {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+#[path = "windows.rs"]
+mod backend;
+
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+#[path = "macos.rs"]
+mod backend;
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod backend {
     use super::{Op, PathBuf};
 
-    // macOS (NSOpenPanel/NSSavePanel), Windows (IFileOpenDialog), and web
-    // (<input type=file>) panels are wired through their respective backends;
-    // until then these targets report "cancelled".
+    // iOS, Android and the web (`<input type=file>`) have no picker wired up
+    // yet; report "cancelled".
     pub(super) fn file_chooser(_op: Op, _title: &str) -> Option<PathBuf> {
         None
     }

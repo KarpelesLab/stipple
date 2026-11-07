@@ -38,7 +38,17 @@ fn main() {
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
-    // macOS/Windows/web wire their native panels through the platform backend;
-    // this demo's mock-portal verification path is Linux-only.
-    println!("filedialog: native panels are wired per-OS; nothing to run here");
+    // Elsewhere there's no mock to serve: open the real native dialog
+    // (`open`, `save` or `folder`, default `open`) and print what was chosen.
+    use stipple::platform::dialog::{self, FileDialog};
+    let mode = std::env::args().nth(1).unwrap_or_default();
+    let picked = match mode.as_str() {
+        "save" => dialog::save_file(&FileDialog::new()),
+        "folder" => dialog::pick_folder(&FileDialog::new()),
+        _ => dialog::open_file(&FileDialog::new().with_title("Pick a file")),
+    };
+    match picked {
+        Some(path) => println!("PICKED: {}", path.display()),
+        None => println!("no file chosen (cancelled, or no native dialog here)"),
+    }
 }

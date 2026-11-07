@@ -1037,6 +1037,17 @@ jobs:
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
 
+      - name: Round-trip text through the system clipboard
+        shell: bash
+        run: |
+          cargo build --release -p clipboarddemo
+          # Set CF_UNICODETEXT through stipple::platform::clipboard, read it back.
+          timeout 30 ./target/release/clipboarddemo.exe --roundtrip | tee clipboard.log
+          grep -q 'clipboard roundtrip: ok' clipboard.log
+          # ...and another process sees it on the OS clipboard.
+          powershell -NoProfile -Command Get-Clipboard | tee os-clipboard.txt
+          grep -q 'stipple clipboard .* round-trip' os-clipboard.txt
+
       - name: Screenshot the Stipple window and the native gallery
         shell: powershell
         run: |
@@ -1413,6 +1424,16 @@ jobs:
           perl -e 'alarm 30; exec @ARGV' ./target/release/asyncdemo --selftest | tee async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
+
+      - name: Round-trip text through the system clipboard
+        run: |
+          cargo build --release -p clipboarddemo
+          # Set NSPasteboard's string through stipple::platform::clipboard, read it back.
+          perl -e 'alarm 30; exec @ARGV' ./target/release/clipboarddemo --roundtrip | tee clipboard.log
+          grep -q 'clipboard roundtrip: ok' clipboard.log
+          # ...and another process sees it on the general pasteboard.
+          pbpaste | tee os-clipboard.txt
+          grep -q 'stipple clipboard .* round-trip' os-clipboard.txt
 
       - name: Screenshot the native gallery
         env:

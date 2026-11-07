@@ -462,6 +462,12 @@ impl Window for WinWindow {
         unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
     }
     fn set_title(&self, _title: &str) {}
+    fn clipboard(&self) -> Option<String> {
+        crate::platform::clipboard::text()
+    }
+    fn set_clipboard(&self, text: &str) {
+        crate::platform::clipboard::set_text(text);
+    }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(WinSurface {
             hwnd: self.hwnd,

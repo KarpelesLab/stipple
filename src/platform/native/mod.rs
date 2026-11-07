@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[allow(unsafe_code)]
-mod objc;
+pub(crate) mod objc;
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]

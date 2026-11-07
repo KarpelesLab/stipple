@@ -1,4 +1,5 @@
-//! The small part of the Objective-C runtime the native renderers use.
+//! The small part of the Objective-C runtime the native renderers use (also
+//! shared by the clipboard and file-dialog shims).
 
 use std::ffi::{CString, c_void};
 
@@ -49,14 +50,30 @@ macro_rules! msg {
         f($obj, $crate::platform::native::objc::sel($sel) $(, $arg)*)
     }};
 }
-pub(super) use msg;
+pub(crate) use msg;
 
-/// `[NSString stringWithUTF8String:s]`.
-#[cfg(target_os = "macos")]
+/// `[NSString stringWithUTF8String:s]`. Interior NULs end the string.
 pub fn nsstring(s: &str) -> Id {
+    let s = s.split('\0').next().unwrap_or("");
     let c = CString::new(s).expect("string");
     let p = c.as_ptr();
     unsafe { msg!(class("NSString"), "stringWithUTF8String:", (p: *const std::ffi::c_char) -> Id) }
+}
+
+/// Copy an `NSString` into a Rust `String` (via `UTF8String`); `None` for nil.
+/// The bytes are copied out before returning, so the result outlives any
+/// enclosing autorelease pool.
+pub fn rust_string(ns: Id) -> Option<String> {
+    if ns.is_null() {
+        return None;
+    }
+    unsafe {
+        let p = msg!(ns, "UTF8String", () -> *const std::ffi::c_char);
+        if p.is_null() {
+            return None;
+        }
+        Some(std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned())
+    }
 }
 
 /// Run `f` inside an autorelease pool, for calls made outside the event loop.

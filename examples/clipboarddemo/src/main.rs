@@ -3,6 +3,11 @@
 //! pastes (Ctrl+V) — doubling the text to "ClipClip" — then screenshots before
 //! and after to confirm the paste changed the field. The copied text is also
 //! pushed to the OS clipboard (verified separately via xclip).
+//!
+//! `clipboarddemo --roundtrip` skips the window: it writes a string to the
+//! system clipboard with `stipple::platform::clipboard`, reads it back, and
+//! prints the result (exiting non-zero on a mismatch). CI runs it on Windows and
+//! macOS, and cross-checks with the OS's own `Get-Clipboard` / `pbpaste`.
 
 use stipple::prelude::*;
 use stipple::widgets::EditBuffer;
@@ -25,7 +30,26 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .align(Align::Start, Align::Stretch)
 }
 
+/// Set the system clipboard, read it back, and report.
+fn roundtrip() {
+    let sent = "stipple clipboard \u{2713} round-trip";
+    let set = stipple::platform::clipboard::set_text(sent);
+    let got = stipple::platform::clipboard::text();
+    println!("clipboard set: {set}");
+    println!("clipboard read: {got:?}");
+    if got.as_deref() == Some(sent) {
+        println!("clipboard roundtrip: ok");
+    } else {
+        eprintln!("clipboard roundtrip: mismatch (sent {sent:?})");
+        std::process::exit(1);
+    }
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--roundtrip") {
+        roundtrip();
+        return;
+    }
     let mut app = App::new(
         State {
             buffer: EditBuffer::from_text("Clip"),

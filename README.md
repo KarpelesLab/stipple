@@ -163,7 +163,7 @@ cargo run -p overlaydemo   # dropdown menu + modal dialog
 cargo run -p tabsdemo      # tabs + right-click context menu
 cargo run -p hoverdemo     # hover highlighting
 cargo run -p multiwindow   # two OS windows sharing one state
-cargo run -p filedialog    # native file dialog (XDG portal on Linux)
+cargo run -p filedialog    # native file dialog (portal, IFileDialog, NSOpenPanel)
 cargo run -p themegallery  # one card under four themes (writes .raw files)
 cargo run -p material3demo # Material 3 baseline + dynamic-color themes
 ```

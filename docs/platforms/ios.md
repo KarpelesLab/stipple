@@ -75,4 +75,6 @@ with `Font::from_bytes` to be safe.
 
 ## Known gaps
 
-- No keyboard input, clipboard, file dialogs or accessibility yet.
+- No keyboard input, file dialogs or accessibility yet.
+- The clipboard (`UIPasteboard`) is wired up but untested, and without keyboard
+  input nothing triggers copy or paste yet.
