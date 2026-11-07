@@ -814,6 +814,10 @@ nothing to drive them and background work couldn't update the UI.
 - ✅ Animated widgets: a turning spinner, and hover and press highlights that
   fade.
 - ⬜ Theme changes that cross-fade, and frames on Android and the web.
+- ⬜ macOS CI animates at only ~15 fps (10–12 frames during asyncdemo's 600 ms
+  load, against ~36 on X11 and ~18 on Wayland): find out whether
+  `CVDisplayLink` is ticking or the 30 Hz fallback timer is, and what each
+  frame costs.
 - **Exit criteria:** an example that loads data on a background thread shows a
   live spinner, then the result, on every platform. `asyncdemo --selftest`
   checks it in CI on the four desktops; iOS is unverified, Android and the web
