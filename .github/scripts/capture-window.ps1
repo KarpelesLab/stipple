@@ -18,7 +18,8 @@ public static class Win {
 }
 "@
 [Win]::SetProcessDPIAware() | Out-Null
-$hwnd = [Win]::FindWindowW($null, "Stipple")
+# PowerShell turns $null into "" for a string parameter; this stays a real null.
+$hwnd = [Win]::FindWindowW([NullString]::Value, "Stipple")
 if ($hwnd -eq [IntPtr]::Zero) { throw "the Stipple window has no handle" }
 [Win]::SetForegroundWindow($hwnd) | Out-Null
 Start-Sleep -Seconds 1
