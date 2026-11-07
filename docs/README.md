@@ -22,6 +22,7 @@ How to build, package and run on each platform, and what works there today.
 | Window and rendering | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Pointer input | ✅ | ✅ | ✅ | ✅ touch | ❌ | ✅ |
 | Keyboard input | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
+| Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ❌ | ❌ |
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ❌ | ❌ |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
@@ -31,12 +32,14 @@ How to build, package and run on each platform, and what works there today.
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
+³ Implemented, but not yet run in CI on iOS.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
 
 ## Topics
 
+- [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

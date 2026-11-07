@@ -105,6 +105,18 @@ jobs:
           echo "pixels changed by the click: $diff"
           [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 100 ]
 
+      - name: Timers and background work wake the event loop
+        env:
+          DISPLAY: ":99"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          cargo build --release -p asyncdemo
+          # The app quits itself once a 100ms timer has fired ten times and a
+          # background thread's result has arrived, with no input at all.
+          timeout 20 ./target/release/asyncdemo --selftest | tee visual_output/async.log
+          grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' visual_output/async.log
+          grep -q 'asyncdemo: event loop exited' visual_output/async.log
+
       - name: Stop the app and Xvfb
         if: always()
         run: |
@@ -811,6 +823,12 @@ jobs:
           kill "$WIN_PID" 2>/dev/null || true
           sleep 1
 
+          # --- wakeups: timers and a background thread, with no input. ---
+          cargo build --release -p asyncdemo
+          timeout 20 ./target/release/asyncdemo --selftest | tee visual_output/wl-async.log
+          grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' visual_output/wl-async.log
+          grep -q 'asyncdemo: event loop exited' visual_output/wl-async.log
+
           # --- scale: with the output at 2x, the buffer must follow it. ---
           export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
           swaymsg output HEADLESS-1 scale 2
@@ -1010,6 +1028,14 @@ jobs:
           # completion — its line appears whether WARP grants the shared handle or
           # declines it; absence would mean the COM call crashed.
           grep -q "D3D11 shared handle" d3ddemo.log
+
+      - name: Timers and background work wake the event loop
+        shell: bash
+        run: |
+          cargo build --release -p asyncdemo
+          timeout 30 ./target/release/asyncdemo.exe --selftest | tee async.log
+          grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
+          grep -q 'asyncdemo: event loop exited' async.log
 
       - name: Screenshot the Stipple window and the native gallery
         shell: powershell
@@ -1379,6 +1405,14 @@ jobs:
       - name: Stop the app
         if: always()
         run: '[ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true'
+
+      - name: Timers and background work wake the event loop
+        run: |
+          cargo build --release -p asyncdemo
+          # macOS has no `timeout`; perl's alarm stands in for it.
+          perl -e 'alarm 30; exec @ARGV' ./target/release/asyncdemo --selftest | tee async.log
+          grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
+          grep -q 'asyncdemo: event loop exited' async.log
 
       - name: Screenshot the native gallery
         env:

@@ -40,8 +40,8 @@ pub mod style;
 pub mod widgets;
 
 use crate::core::{
-    ActionId, Anchor, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers, KeyInput,
-    LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_focusables,
+    ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
+    KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_focusables,
     collect_viewports, context_at, drag_at, find_action, find_focus, find_text_pos, focus_at,
     hit_test, layout, measure, paint, paint_focus, paint_hover, text_pos_at, viewport_at,
 };
@@ -84,6 +84,8 @@ pub struct App<S> {
     // placeholder — the CPU analog of a GPU backend sampling an imported
     // (dma-buf / IOSurface / shared-handle) content texture into the rect.
     viewport_content: HashMap<ViewportId, Pixmap>,
+    /// Updates and timers from outside widget handlers, applied between events.
+    handle: AppHandle<S>,
     // Sink for input that lands in an embedded viewport (pointer/keys/wheel),
     // forwarded with viewport-local coordinates to the content process. `None`
     // = viewports are display-only and input routes to the Stipple chrome.
@@ -155,6 +157,8 @@ fn merge_regions(base: Damage, extra: Vec<Rect>) -> Damage {
 /// each maintains its own input focus and damage tracking independently.
 struct Pane<S> {
     view: ViewFn<S>,
+    /// The app's handle, given to each frame's [`Cx`].
+    handle: AppHandle<S>,
     attrs: WindowAttributes,
     scale: ScaleFactor,
     // Optional GPU (or other) rasterizer used in place of the software renderer
@@ -212,9 +216,10 @@ impl<S> std::fmt::Debug for App<S> {
 
 impl<S> Pane<S> {
     /// Create a pane for `view` with default window attributes.
-    fn new(view: ViewFn<S>) -> Self {
+    fn new(view: ViewFn<S>, handle: AppHandle<S>) -> Self {
         Self {
             view,
+            handle,
             attrs: WindowAttributes::new(),
             scale: ScaleFactor::IDENTITY,
             frame_renderer: None,
@@ -243,14 +248,22 @@ impl<S> Pane<S> {
 impl<S> App<S> {
     /// Create an app from initial `state` and a primary-window `build` closure.
     pub fn new(state: S, build: impl FnMut(&S, &mut Cx<'_, S>) -> Element + 'static) -> Self {
+        let handle = AppHandle::new();
         Self {
             state,
             theme: Theme::light(),
             font: None,
-            panes: vec![Pane::new(Box::new(build))],
+            panes: vec![Pane::new(Box::new(build), handle.clone())],
             viewport_content: HashMap::new(),
             viewport_input: None,
+            handle,
         }
+    }
+
+    /// A handle for changing the state from timers and other threads, once the
+    /// app runs. See [`AppHandle`].
+    pub fn handle(&self) -> AppHandle<S> {
+        self.handle.clone()
     }
 
     /// The primary window's pane (index 0), which the builder methods and the
@@ -269,7 +282,7 @@ impl<S> App<S> {
         attrs: WindowAttributes,
         view: impl FnMut(&S, &mut Cx<'_, S>) -> Element + 'static,
     ) {
-        let mut pane = Pane::new(Box::new(view));
+        let mut pane = Pane::new(Box::new(view), self.handle.clone());
         pane.attrs = attrs;
         self.panes.push(pane);
     }
@@ -496,7 +509,7 @@ impl<S> Pane<S> {
     /// the painted [`Scene`].
     fn build_frame(&mut self, state: &S, theme: &Theme, font: Option<&Font>) -> Scene {
         let theme = *theme; // Theme is Copy; avoids borrowing through `theme` in `cx`.
-        let mut cx = Cx::new(&theme);
+        let mut cx = Cx::with_handle(&theme, self.handle.clone());
         cx.set_memo_cache(std::mem::take(&mut self.memo_cache));
         let element = (self.view)(state, &mut cx);
         self.memo_cache = cx.take_memo_cache();
@@ -1461,6 +1474,22 @@ impl<S> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                Event::Wake => {
+                    // Apply updates and due timers from the handle, then re-render
+                    // if anything ran. The loop wakes again at the next timer.
+                    let (ran, next) = self.handle.pump(&mut self.state, std::time::Instant::now());
+                    crate::platform::wake::set_deadline(next);
+                    if self.handle.exit_requested() {
+                        return ControlFlow::Exit;
+                    }
+                    if ran {
+                        for pane in &mut self.panes {
+                            pane.dirty = true;
+                        }
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::CloseRequested => {
                     // Close just this window; end the loop only when the last
                     // window goes away.
@@ -1524,7 +1553,7 @@ pub mod prelude {
     pub use crate::anim::{Easing, Spring, Tween};
     pub use crate::core::ViewportId;
     pub use crate::core::{
-        Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, View,
+        Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, TimerId, View,
     };
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::render::{Color, Font, Pixmap};
@@ -1536,6 +1565,7 @@ pub mod prelude {
         progress_bar, radio, row, scroll, setting_row, slider, spacer, spinner, swatch, switch,
         tabs, text_area, text_editor, text_field, tooltip, viewport,
     };
+    pub use std::time::Duration;
 }
 
 #[cfg(test)]

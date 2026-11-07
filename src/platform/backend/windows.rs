@@ -51,6 +51,14 @@ const WM_MBUTTONDOWN: u32 = 0x0207;
 const WM_MBUTTONUP: u32 = 0x0208;
 const WM_GETOBJECT: u32 = 0x003D;
 const WM_DPICHANGED: u32 = 0x02E0;
+const WM_QUIT: u32 = 0x0012;
+/// Posted by [`crate::platform::wake`] to end the message wait.
+const WM_APP_WAKE: u32 = 0x8000 + 1;
+const PM_REMOVE: u32 = 0x0001;
+const QS_ALLINPUT: u32 = 0x04FF;
+/// Also return for input already in the queue but not yet looked at.
+const MWMO_INPUTAVAILABLE: u32 = 0x0004;
+const INFINITE: u32 = u32::MAX;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
 /// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`.
@@ -186,7 +194,15 @@ unsafe extern "system" {
     fn ShowWindow(hwnd: Hwnd, cmd: i32) -> i32;
     fn UpdateWindow(hwnd: Hwnd) -> i32;
     fn DefWindowProcW(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult;
-    fn GetMessageW(msg: *mut Msg, hwnd: Hwnd, min: u32, max: u32) -> i32;
+    fn PeekMessageW(msg: *mut Msg, hwnd: Hwnd, min: u32, max: u32, remove: u32) -> i32;
+    fn PostMessageW(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> i32;
+    fn MsgWaitForMultipleObjectsEx(
+        count: u32,
+        handles: *const Handle,
+        timeout_ms: u32,
+        wake_mask: u32,
+        flags: u32,
+    ) -> u32;
     fn TranslateMessage(msg: *const Msg) -> i32;
     fn DispatchMessageW(msg: *const Msg) -> Lresult;
     fn PostQuitMessage(code: i32);
@@ -592,25 +608,54 @@ where
     // Message loop. The WndProc translates native messages into Stipple events
     // and queues them (it can't see the generic `handler`); we drain and
     // dispatch the queue after each message.
+    //
+    // Between messages, wait for input or a wakeup (timers, other threads). A
+    // wake from another thread posts a message, which ends the wait.
+    let target = hwnd as usize;
+    crate::platform::wake::install(
+        std::sync::Arc::new(move || unsafe {
+            PostMessageW(target as Hwnd, WM_APP_WAKE, 0, 0);
+        }),
+        None,
+    );
     let mut msg: Msg = unsafe { std::mem::zeroed() };
-    loop {
-        let r = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
-        if r <= 0 {
-            // 0 = WM_QUIT, -1 = error.
-            break;
-        }
+    'outer: loop {
+        let timeout = match crate::platform::wake::timeout(std::time::Instant::now()) {
+            // Round up, so we don't wake a hair early and spin.
+            Some(t) => t.as_micros().div_ceil(1000).min(INFINITE as u128 - 1) as u32,
+            None => INFINITE,
+        };
         unsafe {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+            MsgWaitForMultipleObjectsEx(
+                0,
+                std::ptr::null(),
+                timeout,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            )
+        };
+        while unsafe { PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, PM_REMOVE) } != 0 {
+            if msg.message == WM_QUIT {
+                break 'outer;
+            }
+            unsafe {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            let events: Vec<Event> = CTX.with(|c| std::mem::take(&mut c.borrow_mut().queue));
+            for event in events {
+                if let Event::Resized(size) = event {
+                    win.size = size;
+                }
+                if handler(event, &win) == ControlFlow::Exit {
+                    unsafe { DestroyWindow(hwnd) };
+                }
+            }
         }
-        let events: Vec<Event> = CTX.with(|c| std::mem::take(&mut c.borrow_mut().queue));
-        for event in events {
-            if let Event::Resized(size) = event {
-                win.size = size;
-            }
-            if handler(event, &win) == ControlFlow::Exit {
-                unsafe { DestroyWindow(hwnd) };
-            }
+        if crate::platform::wake::take(std::time::Instant::now())
+            && handler(Event::Wake, &win) == ControlFlow::Exit
+        {
+            unsafe { DestroyWindow(hwnd) };
         }
     }
     Ok(())

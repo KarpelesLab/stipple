@@ -28,6 +28,7 @@ pub mod a11y;
 mod clipboard;
 mod diff;
 mod element;
+mod handle;
 mod render;
 pub mod runtime;
 
@@ -35,6 +36,9 @@ pub use a11y::{AccessNode, Role, accessibility_tree};
 pub use clipboard::{clipboard_text, set_clipboard_text};
 pub use diff::{Damage, diff_trees};
 pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverride};
+#[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
+pub use handle::runtime;
+pub use handle::{AppHandle, TimerId};
 pub use render::caret_index_at;
 pub use render::{
     apply_scroll, layout, mark_native_states, measure, paint, paint_focus, paint_hover,

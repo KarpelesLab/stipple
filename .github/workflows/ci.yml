@@ -22,8 +22,12 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: clippy (tokio feature)
+        run: cargo clippy -p stipple --all-targets --features tokio -- -D warnings
       - name: test
         run: cargo test --workspace
+      - name: test (tokio feature)
+        run: cargo test -p stipple --features tokio
 
   msrv:
     name: MSRV 1.88 (workspace)

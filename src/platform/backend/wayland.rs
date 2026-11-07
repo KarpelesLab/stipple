@@ -875,7 +875,19 @@ where
     // Toplevel sizes are in surface units; the buffer is that times the scale.
     let mut logical = size;
     let mut pending_size: Option<PhysicalSize> = None;
+    // Between messages, wait on the connection and on wakeups (timers, other
+    // threads) together.
+    crate::platform::wake::install_unix();
+    let fd = shared.lock().unwrap().stream.as_raw_fd();
     loop {
+        if !crate::platform::wake::wait_readable(fd) {
+            if crate::platform::wake::take(std::time::Instant::now())
+                && handler(Event::Wake, &win) == ControlFlow::Exit
+            {
+                break;
+            }
+            continue;
+        }
         let (object, opcode, args) = {
             let mut conn = shared.lock().unwrap();
             conn.recv().map_err(os)?

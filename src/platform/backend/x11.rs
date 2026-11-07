@@ -1256,9 +1256,23 @@ where
     // The live set of windows, keyed by XID via linear scan (tiny N).
     let mut windows: Vec<X11Window> = vec![initial];
 
-    // Event loop. Events are 32 bytes each.
+    // Event loop. Events are 32 bytes each. Between events, wait on the
+    // connection and on wakeups (timers, other threads) together.
+    crate::platform::wake::install_unix();
+    let fd = {
+        use std::os::fd::AsRawFd;
+        shared.lock().unwrap().stream.as_raw_fd()
+    };
     let mut buf = [0u8; 32];
     loop {
+        if !crate::platform::wake::wait_readable(fd) {
+            if crate::platform::wake::take(std::time::Instant::now())
+                && handler(Event::Wake, &windows[0]) == ControlFlow::Exit
+            {
+                break;
+            }
+            continue;
+        }
         {
             let mut conn = shared.lock().unwrap();
             conn.stream.read_exact(&mut buf).map_err(os)?;

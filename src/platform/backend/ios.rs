@@ -323,6 +323,24 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
         // The app starts with its requested size; on iOS the screen decides.
         call_handler(Event::Resized(size), &win);
         call_handler(Event::RedrawRequested, &win);
+
+        // UIKit owns the run loop, so wakeups and timers go through the main
+        // dispatch queue, which it drains.
+        crate::platform::wake::install(
+            std::sync::Arc::new(|| {
+                dispatch_async_f(main_queue(), std::ptr::null_mut(), on_wake);
+            }),
+            Some(std::sync::Arc::new(|at: std::time::Instant| {
+                let delay = at.saturating_duration_since(std::time::Instant::now());
+                let ns = delay.as_nanos().min(i64::MAX as u128) as i64;
+                dispatch_after_f(
+                    dispatch_time(DISPATCH_TIME_NOW, ns),
+                    main_queue(),
+                    std::ptr::null_mut(),
+                    on_wake,
+                );
+            })),
+        );
         msg_void_bool(view, sel("setNeedsDisplay"), true);
 
         // Runtime marker for CI: confirms the UIKit backend booted, built the
@@ -386,6 +404,37 @@ extern "C" fn touches_ended(this: Id, _cmd: Sel, touches: Id, _event: Id) {
         },
         &current_window(),
     );
+}
+
+// libdispatch, part of libSystem.
+const DISPATCH_TIME_NOW: u64 = 0;
+unsafe extern "C" {
+    static _dispatch_main_q: u8;
+    fn dispatch_async_f(
+        queue: *const c_void,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+    fn dispatch_after_f(
+        when: u64,
+        queue: *const c_void,
+        context: *mut c_void,
+        work: extern "C" fn(*mut c_void),
+    );
+    fn dispatch_time(when: u64, delta_ns: i64) -> u64;
+}
+
+/// `dispatch_get_main_queue()`, which is a macro over this symbol.
+fn main_queue() -> *const c_void {
+    (&raw const _dispatch_main_q).cast()
+}
+
+/// Runs on the main queue: deliver a wake if one is due. A timer that was
+/// rescheduled may still fire here early, which `take` sees and ignores.
+extern "C" fn on_wake(_context: *mut c_void) {
+    if crate::platform::wake::take(std::time::Instant::now()) {
+        call_handler(Event::Wake, &current_window());
+    }
 }
 
 /// Invoke the stashed Rust handler (if any).

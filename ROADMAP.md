@@ -801,12 +801,15 @@ tracks what works on each platform today.
 Today `ControlFlow` only waits for OS events, so `Tween` and `Spring` have nothing
 to drive them (the spinner is static) and background work can't update the UI.
 
-- ⬜ Settle the open questions in §6 on threading and async first.
-- ⬜ Timers: run a closure after a delay or on an interval.
+- ✅ Settle threading and async (§6): one UI thread, an `AppHandle`, optional tokio.
+- ✅ Timers: `AppHandle::after`, `every`, `cancel`.
+- ✅ `AppHandle::update` from any thread, waking the loop on X11, Wayland,
+  Windows, macOS and iOS; `AppHandle::spawn` for futures with the `tokio`
+  feature. `examples/asyncdemo --selftest` checks it in CI on the four desktops.
+- ⬜ Wakeups on Android and the web.
 - ⬜ A frame clock driven by the display (`CVDisplayLink`, `CADisplayLink`,
   `wl_surface.frame`, DWM), so animations tick at the refresh rate and stop
   when idle.
-- ⬜ A handle other threads can use to send messages into the app and wake it.
 - ⬜ Animated widgets: a turning spinner, and transitions on hover, press and
   theme changes.
 - **Exit criteria:** an example that loads data on a background thread shows a
@@ -888,10 +891,18 @@ reactive/declarative public API; self-drawn widgets, with `Theme::native()` as
 the opt-in exception where the OS draws a control's chrome; a single crate, with
 optional parts behind features; platform order desktop-trio → mobile → web.
 
-**Still open (to settle at the start of Phase 7a):**
-- Threading model: single-threaded UI + render thread vs. fully async event loop.
+**Locked: threading and async (November 2026).** The UI runs on one thread, the
+main thread, which stays the OS's event loop: macOS and iOS require it. Changes
+from elsewhere go through an `AppHandle`: closures over the state, queued from
+any thread and run on the UI thread between events, so the state needs no locks.
+Each backend's wait also wakes for the handle and for timers. Futures run on
+tokio, behind an optional `tokio` feature, on tokio's own threads, with their
+output applied through the handle; tokio never owns the main thread. Other
+runtimes post through the handle the same way. See [`docs/async.md`](docs/async.md).
+
+**Still open:**
 - State/reactivity primitives: signals vs. message/`update`-reducer vs. hybrid.
+  (Updates stay closures over the state for now.)
 - Styling authoring: pure-Rust builder API only, or an optional declarative
   style/theme description format.
-- Async integration (timers, IO, futures) and how it drives re-renders.
 ```

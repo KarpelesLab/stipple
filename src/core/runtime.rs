@@ -14,6 +14,7 @@
 //! and the IR remains diff-friendly for a future reconciler.
 
 use crate::core::element::{BoxStyle, Element};
+use crate::core::handle::AppHandle;
 use crate::geometry::{Point, Rect};
 use crate::render::Color;
 use crate::style::Theme;
@@ -177,12 +178,20 @@ pub struct Cx<'a, S> {
     /// touched this frame (so stale entries can be evicted afterward).
     memo: HashMap<u64, Element>,
     memo_used: HashSet<u64>,
+    /// The running app's handle, for timers and background work.
+    handle: AppHandle<S>,
 }
 
 impl<'a, S> Cx<'a, S> {
-    /// Create a context borrowing `theme`.
+    /// Create a context borrowing `theme`, with a handle not attached to any app.
     pub fn new(theme: &'a Theme) -> Self {
+        Self::with_handle(theme, AppHandle::new())
+    }
+
+    /// Create a context for the app that `handle` belongs to.
+    pub fn with_handle(theme: &'a Theme, handle: AppHandle<S>) -> Self {
         Self {
+            handle,
             theme,
             taps: Vec::new(),
             keys: Vec::new(),
@@ -194,6 +203,12 @@ impl<'a, S> Cx<'a, S> {
             memo: HashMap::new(),
             memo_used: HashSet::new(),
         }
+    }
+
+    /// A handle to the running app, to change its state from a timer or another
+    /// thread. Clone it into a handler to start background work from there.
+    pub fn handle(&self) -> AppHandle<S> {
+        self.handle.clone()
     }
 
     /// The active theme.

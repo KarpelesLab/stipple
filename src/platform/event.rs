@@ -83,6 +83,9 @@ pub enum Event {
     ScaleFactorChanged(ScaleFactor),
     /// The user requested the window be closed (title-bar button, ⌘W, …).
     CloseRequested,
+    /// The loop was woken by [`wake::wake`](crate::platform::wake::wake) or by
+    /// the deadline set with [`wake::set_deadline`](crate::platform::wake::set_deadline).
+    Wake,
     /// Keyboard focus entered (`true`) or left (`false`) the window.
     FocusChanged(bool),
 

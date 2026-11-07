@@ -214,6 +214,49 @@ fn map_keycode(kc: u16) -> Option<KeyCode> {
     })
 }
 
+/// Post an application-defined event, ending the main loop's wait. Safe from any
+/// thread.
+fn post_wake_event() {
+    const APPLICATION_DEFINED: u64 = 15;
+    unsafe {
+        let make: unsafe extern "C" fn(
+            Id,
+            Sel,
+            u64,
+            CgPoint,
+            u64,
+            f64,
+            i64,
+            Id,
+            i16,
+            i64,
+            i64,
+        ) -> Id = std::mem::transmute(objc_msgSend as *const c_void);
+        let event = make(
+            class("NSEvent"),
+            sel(
+                "otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:",
+            ),
+            APPLICATION_DEFINED,
+            CgPoint { x: 0.0, y: 0.0 },
+            0,
+            0.0,
+            0,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+        );
+        if event.is_null() {
+            return;
+        }
+        let app = msg_id(class("NSApplication"), sel("sharedApplication"));
+        let post: unsafe extern "C" fn(Id, Sel, Id, bool) =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        post(app, sel("postEvent:atStart:"), event, false);
+    }
+}
+
 /// Translate an `NSEvent` into a Stipple event. `view_h` is the content height,
 /// used to flip the y axis (Cocoa's window origin is bottom-left).
 unsafe fn translate_event(etype: u64, ev: Id, view_h: f64) -> Option<Event> {
@@ -772,6 +815,9 @@ where
             std::mem::transmute(objc_msgSend as *const c_void);
         let pool_cls = class("NSAutoreleasePool");
         let mut last = win.size;
+        // Other threads end the wait by posting an application-defined event,
+        // which AppKit allows from any thread.
+        crate::platform::wake::install(std::sync::Arc::new(post_wake_event), None);
         loop {
             // Drain autoreleased objects (the dequeued NSEvent, NSStrings, etc.)
             // each iteration. This hand-rolled loop stands in for
@@ -780,7 +826,17 @@ where
             let pool = msg_id(msg_id(pool_cls, sel("alloc")), sel("init"));
 
             let mut exit = false;
-            let ev = next(app, next_sel, u64::MAX, distant_future, mode, true);
+            // Wait for an event, or until the next timer is due.
+            let until = match crate::platform::wake::timeout(std::time::Instant::now()) {
+                Some(t) => {
+                    let secs = t.as_secs_f64();
+                    let f: unsafe extern "C" fn(Id, Sel, f64) -> Id =
+                        std::mem::transmute(objc_msgSend as *const c_void);
+                    f(class("NSDate"), sel("dateWithTimeIntervalSinceNow:"), secs)
+                }
+                None => distant_future,
+            };
+            let ev = next(app, next_sel, u64::MAX, until, mode, true);
             if !ev.is_null() {
                 let etype = msg_u64(ev, sel("type"));
                 // Positions stay in points, which are logical pixels.
@@ -795,6 +851,13 @@ where
                 if !exit {
                     msg_void_id(app, sel("sendEvent:"), ev);
                 }
+            }
+
+            if !exit
+                && crate::platform::wake::take(std::time::Instant::now())
+                && handler(Event::Wake, &win) == ControlFlow::Exit
+            {
+                exit = true;
             }
 
             // The window delegate's `windowWillClose:` sets this when the user

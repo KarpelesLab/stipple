@@ -44,6 +44,8 @@ pub mod shm;
 /// Hand-written UI Automation provider (Windows accessibility bridge).
 #[cfg(target_os = "windows")]
 pub mod uia;
+/// Waking the event loop from timers and other threads.
+pub mod wake;
 mod window;
 
 pub use access::{A11yNode, A11yRole};

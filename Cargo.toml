@@ -19,11 +19,19 @@ gl = ["gpu"]  # EGL + GLES2
 vk = ["gpu"]  # Vulkan (links libvulkan)
 d3d = ["gpu"] # Direct3D 11, Windows-only
 mtl = ["gpu"] # Metal, macOS-only
+# `AppHandle::spawn`: run futures on a background tokio runtime and apply their
+# output to the state. Not available on wasm32, where tokio has no threads.
+tokio = ["dep:tokio"]
 
 [dependencies]
 oxideav-core.workspace = true
 oxideav-raster.workspace = true
 oxideav-scribe.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Only the multi-threaded scheduler; apps enable the drivers they use (net, time,
+# fs...) in their own tokio dependency, and the runtime turns those on.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread"], optional = true }
 
 [lints]
 workspace = true
