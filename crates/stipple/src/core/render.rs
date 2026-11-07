@@ -27,7 +27,13 @@ const VIEWPORT_PLACEHOLDER: Color = Color::rgb(0x20, 0x24, 0x2c);
 /// Natural (desired) size of `el` given the `avail` space and active `font`.
 pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
     let pad = el.layout.padding;
-    let inner = avail.deflate(pad);
+    // A fixed size is the space the content actually gets, so wrapped text inside
+    // a `.width(360.0)` panel must measure against 360, not the parent's width.
+    let outer = Size::new(
+        el.layout.size.width.unwrap_or(avail.width),
+        el.layout.size.height.unwrap_or(avail.height),
+    );
+    let inner = outer.deflate(pad);
 
     let content = match &el.kind {
         // A viewport sizes purely to its width/height overrides (or grow); it
@@ -440,6 +446,23 @@ mod tests {
     use super::*;
     use crate::core::element::BoxStyle;
     use crate::render::Color;
+
+    /// Wrapped text inside a fixed-width box wraps to that box, so the box's
+    /// measured height must count every wrapped line.
+    #[test]
+    fn fixed_width_constrains_wrapped_text_height() {
+        let Some(font) = crate::render::Font::system_default() else {
+            return; // no system font available on this host
+        };
+        let text = "several words that need to wrap inside a rather narrow fixed width box";
+        let para = || Element::text(text, 14.0, Color::rgb(0, 0, 0)).wrap();
+        let boxed = Element::stack(Axis::Vertical, vec![para()]).width(120.0);
+        let wide = Size::new(4000.0, 4000.0);
+        let lines = font.wrap(text, 14.0, 120.0).len();
+        assert!(lines > 1);
+        let h = measure(&boxed, wide, Some(&font)).height;
+        assert_eq!(h, font.line_height(14.0) * lines as f64);
+    }
 
     #[test]
     fn measure_sums_children_with_gap_and_padding() {

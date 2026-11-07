@@ -264,6 +264,7 @@ struct MacCtx {
     w: usize,
     h: usize,
     view: Id,
+    window: Id,
     /// Accessible label exposed to NSAccessibility (the window title).
     a11y_label: String,
     /// The current accessibility tree (pushed each frame by the App). The view's
@@ -572,7 +573,12 @@ impl Window for MacWindow {
             }
         });
     }
-    fn set_title(&self, _title: &str) {}
+    fn set_title(&self, title: &str) {
+        let window: Id = CTX.with(|c| c.borrow().window);
+        if !window.is_null() {
+            unsafe { msg_void_id(window, sel("setTitle:"), nsstring(title)) };
+        }
+    }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(MacSurface { size: self.size })
     }
@@ -669,6 +675,7 @@ where
             init(alloc, sel("initWithFrame:"), content)
         };
         msg_void_id(window, sel("setContentView:"), view);
+        msg_void_id(window, sel("setTitle:"), nsstring(&attrs.title));
         // The view doubles as the window delegate so `windowWillClose:` can flag
         // the event loop to exit. Keep the window object alive on close (we hold
         // the only reference) so the loop can tear down cleanly without a
@@ -678,6 +685,7 @@ where
         CTX.with(|c| {
             let mut c = c.borrow_mut();
             c.view = view;
+            c.window = window;
             // Expose the window title as the view's accessible label.
             c.a11y_label = attrs.title.clone();
         });
@@ -698,6 +706,13 @@ where
                 f(view, sel("isAccessibilityElement"))
             };
             println!("Cocoa a11y: element={is_el} role={role} label={label}");
+            // CI captures just this window with `screencapture -l <number>`.
+            let number: i64 = {
+                let f: unsafe extern "C" fn(Id, Sel) -> i64 =
+                    std::mem::transmute(objc_msgSend as *const c_void);
+                f(window, sel("windowNumber"))
+            };
+            println!("Cocoa window number: {number}");
             // Walk the vended element tree the same way an assistive client would
             // — `-accessibilityChildren` recursively, reading each element's role +
             // label through real objc dispatch. Proves the *full* tree is exposed,

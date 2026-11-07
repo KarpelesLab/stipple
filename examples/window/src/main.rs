@@ -23,9 +23,9 @@ fn view(_state: &Demo, cx: &mut Cx<Demo>) -> Element {
                  paragraph across multiple lines to fit the panel width.",
             ),
             divider(&theme),
-            setting_row(&theme, Color::rgb(0xef, 0x68, 0x68)),
-            setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99)),
-            setting_row(&theme, Color::rgb(0xf5, 0x9e, 0x0b)),
+            setting_row(&theme, Color::rgb(0xef, 0x68, 0x68), "Edit"),
+            setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99), "Edit"),
+            setting_row(&theme, Color::rgb(0xf5, 0x9e, 0x0b), "Edit"),
             button_labeled(&theme, "OK"),
         ],
     )

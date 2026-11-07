@@ -838,7 +838,7 @@ where
     ));
 
     let shared: Shared = Arc::new(Mutex::new(conn));
-    let win = WaylandWindow {
+    let mut win = WaylandWindow {
         conn: shared.clone(),
         surface,
         shm,
@@ -852,6 +852,7 @@ where
     let mut pointer: Option<u32> = None;
     let mut pointer_pos = Point::new(0.0, 0.0);
     let mut keymap: Option<std::collections::HashMap<u32, String>> = None;
+    let mut pending_size: Option<PhysicalSize> = None;
     loop {
         let (object, opcode, args) = {
             let mut conn = shared.lock().unwrap();
@@ -944,6 +945,13 @@ where
                 arg_u32(&mut a, serial);
                 let _ = conn.send(xdg_surface, XDG_SURFACE_ACK_CONFIGURE, &a);
             }
+            // Apply the size from the toplevel.configure this one completes.
+            if let Some(size) = pending_size.take().filter(|s| *s != win.size) {
+                win.size = size;
+                if handler(Event::Resized(size), &win) == ControlFlow::Exit {
+                    break;
+                }
+            }
             // Paint the frame for this configure.
             if handler(Event::RedrawRequested, &win) == ControlFlow::Exit {
                 break;
@@ -953,6 +961,9 @@ where
             let w = i32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let h = i32::from_le_bytes([args[4], args[5], args[6], args[7]]);
             dbg(format_args!("toplevel configure {w}x{h}"));
+            if w > 0 && h > 0 {
+                pending_size = Some(PhysicalSize::new(w as u32, h as u32));
+            }
         } else if object == toplevel && opcode == XDG_TOPLEVEL_CLOSE {
             handler(Event::CloseRequested, &win);
             break;

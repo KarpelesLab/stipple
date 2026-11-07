@@ -41,8 +41,8 @@ mod app {
             vec![
                 label(&theme, "Stipple on Android"),
                 divider(&theme),
-                setting_row(&theme, Color::rgb(0xef, 0x68, 0x68)),
-                setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99)),
+                setting_row(&theme, Color::rgb(0xef, 0x68, 0x68), "Edit"),
+                setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99), "Edit"),
                 button_labeled(&theme, "OK"),
             ],
         )

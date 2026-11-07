@@ -20,9 +20,9 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
         vec![
             label(&theme, "GPU present"),
             divider(&theme),
-            setting_row(&theme, Color::rgb(0xef, 0x68, 0x68)),
-            setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99)),
-            setting_row(&theme, Color::rgb(0xf5, 0x9e, 0x0b)),
+            setting_row(&theme, Color::rgb(0xef, 0x68, 0x68), "Edit"),
+            setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99), "Edit"),
+            setting_row(&theme, Color::rgb(0xf5, 0x9e, 0x0b), "Edit"),
         ],
     )
     .width(360.0);

@@ -728,11 +728,11 @@ pub fn swatch(color: Color, size: f64, radius: f64) -> Element {
 
 /// A horizontal row with a leading swatch, a flexible spacer, and a trailing
 /// button — a compact "setting row" used to show real composition.
-pub fn setting_row(theme: &Theme, accent: Color) -> Element {
+pub fn setting_row(theme: &Theme, accent: Color, action: impl Into<String>) -> Element {
     row(vec![
         swatch(accent, 24.0, theme.radius / 2.0),
         spacer(),
-        button(theme),
+        button_variant(theme, action, Variant::Secondary),
     ])
     .gap(theme.spacing.md)
     .align(Align::Start, Align::Center)
@@ -958,15 +958,16 @@ mod tests {
 
     #[test]
     fn setting_row_paints_swatch_and_button() {
-        // Two filled leaves (swatch + button); the spacer is empty.
+        // Swatch fill, plus the button's fill and border; the spacer is empty
+        // and the label needs a font.
         let theme = Theme::light();
         let scene = render_view(
-            &setting_row(&theme, Color::rgb(200, 80, 80)),
+            &setting_row(&theme, Color::rgb(200, 80, 80), "Edit"),
             Size::new(300.0, 40.0),
             &theme,
             None,
         );
-        assert_eq!(scene.len(), 2);
+        assert_eq!(scene.len(), 3);
     }
 
     #[test]

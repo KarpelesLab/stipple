@@ -64,8 +64,8 @@ jobs:
           sleep 4
           echo "=== window tree ==="
           xwininfo -root -tree -display :99 | head -40 || true
-          # Capture the whole virtual root (our window maps at the top-left).
-          import -window root visual_output/stipple-x11.png
+          # Our window maps at the top-left of the root; capture just its area.
+          import -window root -crop 640x480+0+0 +repage visual_output/stipple-x11.png
           echo "=== capture ==="; identify visual_output/stipple-x11.png
           echo "=== app.log ==="; cat visual_output/app.log || true
 
@@ -962,19 +962,38 @@ jobs:
           # declines it; absence would mean the COM call crashed.
           grep -q "D3D11 shared handle" d3ddemo.log
 
-      - name: Launch the Stipple window and screenshot the desktop
+      - name: Launch the Stipple window and screenshot it
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path visual_output | Out-Null
-          $proc = Start-Process -FilePath ".\target\release\window.exe" -PassThru
+          $proc = Start-Process -FilePath ".\target\release\window.exe" -WindowStyle Hidden -PassThru
           Start-Sleep -Seconds 5
-          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
-          $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+          Add-Type -AssemblyName System.Drawing
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public struct RECT { public int Left, Top, Right, Bottom; }
+          public static class Win {
+            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+            [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+            // The extended frame bounds exclude the invisible resize borders.
+            [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
+          }
+          "@
+          [Win]::SetProcessDPIAware() | Out-Null
+          $proc.Refresh()
+          $hwnd = $proc.MainWindowHandle
+          if ($hwnd -eq [IntPtr]::Zero) { throw "the Stipple window has no handle" }
+          [Win]::SetForegroundWindow($hwnd) | Out-Null
+          Start-Sleep -Seconds 1
+          $r = New-Object RECT
+          [Win]::DwmGetWindowAttribute($hwnd, 9, [ref]$r, 16) | Out-Null
+          $w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top
+          $bmp = New-Object System.Drawing.Bitmap($w, $h)
           $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-          $gfx.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $gfx.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
           $bmp.Save("$PWD\visual_output\stipple-windows.png")
-          Write-Host "Saved screenshot ($($bounds.Width)x$($bounds.Height))"
+          Write-Host "Saved screenshot (${w}x${h})"
           Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 
       - name: Upload screenshot
@@ -1315,9 +1334,12 @@ jobs:
           ./target/release/window > visual_output/macos.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 5
-          screencapture -x visual_output/stipple-macos.png
-          echo "Captured:"; (sips -g pixelWidth -g pixelHeight visual_output/stipple-macos.png || true)
           echo "=== macos.log ==="; cat visual_output/macos.log || true
+          # Capture just the window (-l), without its drop shadow (-o).
+          win=$(sed -n 's/^Cocoa window number: //p' visual_output/macos.log)
+          [ -n "$win" ]
+          screencapture -x -o -l "$win" visual_output/stipple-macos.png
+          echo "Captured:"; (sips -g pixelWidth -g pixelHeight visual_output/stipple-macos.png || true)
           # The custom NSView vends NSAccessibility info via real objc dispatch:
           # an accessible AXGroup labelled with the window title ("Stipple").
           grep -q "Cocoa a11y: element=true role=AXGroup label=Stipple" visual_output/macos.log
@@ -1623,3 +1645,46 @@ jobs:
             adb logcat -d > logcat.txt || true
             grep "Stipple Android: window" logcat.txt || true
             grep -q "Stipple Android: window [0-9]*x[0-9]* presented=true" logcat.txt
+
+  # After a fully green push to master, commit the fresh screenshots so the README
+  # always shows what the code renders today. Pushes made with GITHUB_TOKEN don't
+  # trigger workflows, so this can't loop, and git only sees a change when pixels
+  # really changed. Listed images must be deterministic (no clocks or desktops).
+  commit-screenshots:
+    name: Commit screenshots
+    runs-on: ubuntu-latest
+    needs:
+      - visual-x11
+      - visual-wayland
+      - visual-windows
+      - visual-macos
+      - visual-web
+      - visual-gpu
+      - visual-themes
+      - visual-material3
+      - interaction-x11
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Copy the screenshots into docs/
+        run: |
+          for name in stipple-x11 stipple-wayland stipple-wayland-input stipple-windows \
+                      stipple-macos stipple-web stipple-gpu stipple-themes \
+                      stipple-material3 stipple-x11-clicks stipple-x11-textinput; do
+            found=$(find artifacts -name "$name.png" | head -n 1)
+            if [ -n "$found" ]; then cp "$found" "docs/screenshots/$name.png"; else echo "missing: $name"; fi
+          done
+      - name: Commit and push
+        run: |
+          git add docs/screenshots
+          if git diff --cached --quiet; then echo "No visual changes."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: update screenshots from CI"
+          git pull --rebase origin master
+          git push origin HEAD:master
