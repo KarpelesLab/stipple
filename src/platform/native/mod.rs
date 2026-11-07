@@ -15,6 +15,7 @@
 use crate::geometry::PhysicalSize;
 use crate::render::{Color, Pixmap};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -85,6 +86,43 @@ pub struct SystemLook {
 /// Read the system's light/dark mode and accent color.
 pub fn system_look() -> SystemLook {
     os::system_look()
+}
+
+/// Start following appearance changes where the OS doesn't announce them to the
+/// window: on Linux, a thread listens for the desktop portal's `SettingChanged`
+/// signal. Elsewhere the backends hear about changes themselves, so this does
+/// nothing. Safe to call more than once.
+pub fn watch() {
+    #[cfg(target_os = "linux")]
+    os::watch();
+}
+
+static CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// Record that the system appearance changed and wake the event loop, which
+/// then delivers [`Event::ThemeChanged`](crate::platform::Event::ThemeChanged).
+/// Safe from any thread.
+#[cfg_attr(
+    not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+    allow(dead_code)
+)]
+pub(crate) fn note_changed() {
+    CHANGED.store(true, Ordering::Release);
+    crate::platform::wake::wake();
+}
+
+/// Whether the appearance changed since the last call.
+pub(crate) fn take_changed() -> bool {
+    CHANGED.swap(false, Ordering::AcqRel)
+}
+
+/// Forget every bitmap the OS drew, so controls are redrawn in the new look.
+pub fn clear_cache() {
+    if let Some(cache) = CACHE.get()
+        && let Ok(mut cache) = cache.lock()
+    {
+        cache.clear();
+    }
 }
 
 /// Whether this OS can draw `control` (Windows has no switch; iOS has no

@@ -2,7 +2,8 @@
 //! CI focuses it, selects all (Ctrl+A), copies (Ctrl+C), moves to the end, and
 //! pastes (Ctrl+V) — doubling the text to "ClipClip" — then screenshots before
 //! and after to confirm the paste changed the field. The copied text is also
-//! pushed to the OS clipboard (verified separately via xclip).
+//! pushed to the OS clipboard (verified separately via xclip). Under sway, CI
+//! copies out of the field and pastes into it with `wl-copy` / `wl-paste`.
 //!
 //! `clipboarddemo --roundtrip` skips the window: it writes a string to the
 //! system clipboard with `stipple::platform::clipboard`, reads it back, and

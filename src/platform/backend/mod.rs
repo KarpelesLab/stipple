@@ -41,6 +41,24 @@ pub mod ios;
 #[cfg(target_os = "android")]
 pub mod android;
 
+/// Deliver [`Event::ThemeChanged`] ahead of the wake that follows an appearance
+/// change, which the OS reports through a notification, a window message or (on
+/// Linux) a D-Bus signal heard on another thread.
+fn with_theme_changes<H>(mut handler: H) -> impl FnMut(Event, &dyn Window) -> ControlFlow
+where
+    H: FnMut(Event, &dyn Window) -> ControlFlow,
+{
+    move |event, window| {
+        if matches!(event, Event::Wake)
+            && crate::platform::native::take_changed()
+            && handler(Event::ThemeChanged, window) == ControlFlow::Exit
+        {
+            return ControlFlow::Exit;
+        }
+        handler(event, window)
+    }
+}
+
 /// Run `handler` against the best available native backend, falling back to a
 /// one-shot [`headless`] present when no display is reachable.
 ///
@@ -53,10 +71,11 @@ pub mod android;
     not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
     allow(unused_mut)
 )]
-pub fn run<H>(attrs: WindowAttributes, mut handler: H)
+pub fn run<H>(attrs: WindowAttributes, handler: H)
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {
+    let mut handler = with_theme_changes(handler);
     // iOS hands control to UIApplicationMain (which never returns), so it owns
     // the handler outright rather than falling through to headless.
     #[cfg(target_os = "ios")]

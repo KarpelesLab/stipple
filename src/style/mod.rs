@@ -104,6 +104,10 @@ pub struct Theme {
     pub font_size: f64,
     /// Whether widgets ask the OS to draw their chrome. See [`Theme::native`].
     pub native: bool,
+    /// Whether the `App` rebuilds this theme with [`Theme::native`] when the
+    /// system's light/dark mode or accent color changes. Set by
+    /// [`Theme::native`]; clear it to keep a customized native theme as it is.
+    pub follows_system: bool,
 }
 
 /// Derive the hover/active/ring tints from a `primary` accent.
@@ -122,7 +126,9 @@ impl Theme {
     /// color and uses the platform's metrics.
     ///
     /// Unlike the other themes, this one is deliberately not pixel-identical
-    /// across platforms. Colors are read once, when this is called.
+    /// across platforms. Colors are read when this is called, and an `App`
+    /// running this theme calls it again when the system's look changes (see
+    /// [`Theme::follows_system`]).
     pub fn native() -> Self {
         Self::native_for(native::system_look())
     }
@@ -170,6 +176,7 @@ impl Theme {
         theme.palette.border = color(border);
         theme.radius = metrics.0;
         theme.native = native::available();
+        theme.follows_system = true;
         theme.with_font_size(metrics.1)
     }
 
@@ -215,6 +222,7 @@ impl Theme {
             radius: 8.0,
             font_size: 14.0,
             native: false,
+            follows_system: false,
         }
     }
 
@@ -245,6 +253,7 @@ impl Theme {
             radius: 8.0,
             font_size: 14.0,
             native: false,
+            follows_system: false,
         }
     }
 
@@ -508,6 +517,7 @@ impl Theme {
             radius: 12.0,
             font_size: 14.0,
             native: false,
+            follows_system: false,
         }
     }
 }
@@ -532,6 +542,8 @@ mod tests {
         assert_eq!(dark.palette.primary, accent);
         let light = Theme::native_for(native::SystemLook::default());
         assert!(!light.is_dark());
+        assert!(light.follows_system && dark.follows_system);
+        assert!(!Theme::light().follows_system);
     }
 
     #[test]

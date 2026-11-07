@@ -10,8 +10,8 @@ let app = App::new(state, view).theme(Theme::native());
 
 ## What it does
 
-- **Follows the system's settings**: dark mode and accent color, read once when
-  `Theme::native()` is called.
+- **Follows the system's settings**: dark mode and accent color, read when
+  `Theme::native()` is called and again whenever they change while the app runs.
 - **Uses the platform's metrics**: font size, corner radius, and the colors of
   window backgrounds, surfaces and separators.
 - **Has the OS draw the controls**, on Windows, macOS and iOS.
@@ -55,8 +55,23 @@ follows the system's dark mode and accent color, and uses libadwaita's colors.
   background.
 - **Other variants**: `Variant::Ghost` and `Variant::Danger` buttons have no OS
   equivalent and stay self-drawn.
-- **Settings changes**: switching dark mode while the app runs isn't picked up;
-  call `Theme::native()` again to rebuild the theme.
+
+## Following changes
+
+When the user switches dark mode or the accent color, an `App` running
+`Theme::native()` rebuilds it, drops the OS-drawn bitmaps it cached, switches the
+title bar, and repaints. The backends hear about it from:
+
+| Platform | Source |
+|---|---|
+| Windows | `WM_SETTINGCHANGE` (`ImmersiveColorSet`), `WM_DWMCOLORIZATIONCOLORCHANGED`, `WM_THEMECHANGED` |
+| macOS | `AppleInterfaceThemeChangedNotification` and `AppleColorPreferencesChangedNotification` (distributed), `NSSystemColorsDidChangeNotification` |
+| Linux | the desktop portal's `SettingChanged` signal for `color-scheme` and `accent-color`, heard on a thread of its own |
+
+iOS doesn't report changes yet. The platform layer delivers
+`Event::ThemeChanged` either way. A theme you customized after building it with
+`Theme::native()` is replaced on a change; set `theme.follows_system = false` to
+keep it.
 
 ## Using it in your own widgets
 

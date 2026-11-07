@@ -14,7 +14,7 @@
 //! keysyms and to find the Alt/Super modifier bits for `wl_keyboard.modifiers`;
 //! falls back to a layout-independent evdev table if none) and **pointer**
 //! (motion, buttons and `axis` scrolling via `wl_pointer`, coordinates from
-//! `wl_fixed`).
+//! `wl_fixed`). The clipboard goes through `wl_data_device` (`wayland/clipboard.rs`).
 //! The FFI footprint — `memfd_create`/`mmap`, `sendmsg`/`recvmsg` for fd
 //! passing — is the reason for the module-level `allow(unsafe_code)`.
 //!
@@ -25,6 +25,9 @@
 
 #![allow(unsafe_code)]
 
+mod clipboard;
+
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
@@ -617,9 +620,13 @@ fn read_keymap(fd: i32, size: usize) -> Option<XkbKeymap> {
 struct WlConn {
     stream: UnixStream,
     next_id: u32,
-    /// A file descriptor received with the most recent message (e.g. the
-    /// `wl_keyboard.keymap` fd), taken by the handler that expects it.
-    pending_fd: Option<i32>,
+    /// File descriptors received with messages (the `wl_keyboard.keymap` fd, a
+    /// `wl_data_source.send` fd), in arrival order, taken by the handler of the
+    /// message that carries each.
+    fds: VecDeque<i32>,
+    /// Messages read while a paste waited on its pipe, for the event loop.
+    queue: VecDeque<(u32, u16, Vec<u8>)>,
+    clip: clipboard::Clipboard,
     /// Buffer pixels per surface unit: the scale of the output we're on.
     buffer_scale: u32,
 }
@@ -642,7 +649,9 @@ impl WlConn {
         Ok(Self {
             stream,
             next_id: 2,
-            pending_fd: None,
+            fds: VecDeque::new(),
+            queue: VecDeque::new(),
+            clip: clipboard::Clipboard::default(),
             buffer_scale: 1,
         })
     }
@@ -676,8 +685,8 @@ impl WlConn {
         sendmsg_fd(self.stream.as_raw_fd(), &msg, fd)
     }
 
-    /// Fill `buf` exactly via `recvmsg`, stashing any `SCM_RIGHTS` file
-    /// descriptor that arrives with it in `self.pending_fd`. Used instead of
+    /// Fill `buf` exactly via `recvmsg`, queueing any `SCM_RIGHTS` file
+    /// descriptors that arrive with it in `self.fds`. Used instead of
     /// `read_exact` so the `wl_keyboard.keymap` fd isn't silently dropped.
     fn recv_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
         let sock = self.stream.as_raw_fd();
@@ -705,13 +714,19 @@ impl WlConn {
                 ));
             }
             got += n as usize;
-            // Extract a single SCM_RIGHTS fd if the kernel attached one.
+            // Collect the SCM_RIGHTS fds if the kernel attached any.
             if msg.msg_controllen >= core::mem::size_of::<Cmsghdr>() {
                 let cmsg = control.as_ptr() as *const Cmsghdr;
-                let (level, ty) = unsafe { ((*cmsg).cmsg_level, (*cmsg).cmsg_type) };
+                let (len, level, ty) =
+                    unsafe { ((*cmsg).cmsg_len, (*cmsg).cmsg_level, (*cmsg).cmsg_type) };
                 if level == SOL_SOCKET && ty == SCM_RIGHTS {
-                    let fd = unsafe { (control.as_ptr().add(16) as *const i32).read_unaligned() };
-                    self.pending_fd = Some(fd);
+                    let count = (len.min(msg.msg_controllen).saturating_sub(16)) / 4;
+                    for i in 0..count {
+                        let fd = unsafe {
+                            (control.as_ptr().add(16 + i * 4) as *const i32).read_unaligned()
+                        };
+                        self.fds.push_back(fd);
+                    }
                 }
             }
         }
@@ -719,7 +734,7 @@ impl WlConn {
     }
 
     /// Read exactly one message: returns `(object, opcode, args)`. Any attached
-    /// fd lands in `self.pending_fd`.
+    /// fd lands in `self.fds`.
     fn recv(&mut self) -> io::Result<(u32, u16, Vec<u8>)> {
         let mut header = [0u8; 8];
         self.recv_exact(&mut header)?;
@@ -898,6 +913,12 @@ impl Window for WaylandWindow {
     }
     fn request_redraw(&self) {}
     fn set_title(&self, _title: &str) {}
+    fn clipboard(&self) -> Option<String> {
+        clipboard::text(&mut self.conn.lock().unwrap())
+    }
+    fn set_clipboard(&self, text: &str) {
+        clipboard::set_text(&mut self.conn.lock().unwrap(), text);
+    }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(WaylandSurface {
             conn: self.conn.clone(),
@@ -1008,6 +1029,7 @@ where
     let mut wm_base_name = None;
     let mut seat_name = None;
     let mut seat_version = 1;
+    let mut data_manager = None;
     let mut output_names = Vec::new();
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
@@ -1026,6 +1048,9 @@ where
                         seat_version = version.clamp(1, WL_SEAT_VERSION);
                     }
                     "wl_output" => output_names.push(name),
+                    "wl_data_device_manager" => {
+                        data_manager = Some((name, version.clamp(1, clipboard::MANAGER_VERSION)));
+                    }
                     _ => {}
                 }
             }
@@ -1078,6 +1103,11 @@ where
     // error, so we wait until one is advertised.
     let seat = seat_name.map(|name| bind(&mut conn, name, "wl_seat", seat_version));
     dbg(format_args!("seat={seat:?} v{seat_version}"));
+    // The clipboard goes through the seat's data device.
+    if let (Some(seat), Some((name, version))) = (seat, data_manager) {
+        let manager = bind(&mut conn, name, "wl_data_device_manager", version);
+        clipboard::setup(&mut conn, manager, seat);
+    }
 
     // Surface → xdg_surface → xdg_toplevel.
     let surface = conn.new_id();
@@ -1124,6 +1154,9 @@ where
     // them; `pointer_pos` tracks the latest cursor position for button events,
     // and `keymap` decodes keycodes to characters once the compositor sends it.
     let mut keyboard: Option<u32> = None;
+    // Keyboards we dropped: a keymap still in flight for one carries an fd that
+    // must be taken off the queue (and closed), or the next keymap would get it.
+    let mut old_keyboards: Vec<u32> = Vec::new();
     let mut pointer: Option<u32> = None;
     let mut pointer_pos = Point::new(0.0, 0.0);
     let mut keymap: Option<XkbKeymap> = None;
@@ -1139,7 +1172,9 @@ where
     crate::platform::wake::install_unix();
     let fd = shared.lock().unwrap().stream.as_raw_fd();
     loop {
-        if !crate::platform::wake::wait_readable(fd) {
+        // Messages a paste read while it waited come first.
+        let queued = shared.lock().unwrap().queue.pop_front();
+        if queued.is_none() && !crate::platform::wake::wait_readable(fd) {
             if crate::platform::wake::take(std::time::Instant::now())
                 && handler(Event::Wake, &win) == ControlFlow::Exit
             {
@@ -1149,7 +1184,14 @@ where
         }
         let (object, opcode, args) = {
             let mut conn = shared.lock().unwrap();
-            conn.recv().map_err(os)?
+            let message = match queued {
+                Some(message) => message,
+                None => conn.recv().map_err(os)?,
+            };
+            if clipboard::handle(&mut conn, message.0, message.1, &message.2) {
+                continue;
+            }
+            message
         };
         // Moving to another output, or an output's scale changing, means rendering
         // at a new resolution.
@@ -1197,7 +1239,8 @@ where
                         dbg(format_args!("keyboard={kbd} (caps={caps})"));
                     }
                 }
-            } else if keyboard.take().is_some() {
+            } else if let Some(old) = keyboard.take() {
+                old_keyboards.push(old);
                 // The keyboard went away (e.g. a virtual keyboard was destroyed).
                 // The compositor makes the wl_keyboard inert on capability loss,
                 // so we simply drop our reference (and its keymap) and acquire a
@@ -1236,6 +1279,8 @@ where
             }
         } else if Some(object) == pointer && opcode == WL_POINTER_BUTTON {
             // serial, time, button(evdev), state(0 released / 1 pressed).
+            shared.lock().unwrap().clip.serial =
+                u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let button = u32::from_le_bytes([args[8], args[9], args[10], args[11]]);
             let pressed = u32::from_le_bytes([args[12], args[13], args[14], args[15]]) == 1;
             if let Some(button) = pointer_button(button) {
@@ -1312,11 +1357,17 @@ where
         } else if object == toplevel && opcode == XDG_TOPLEVEL_CLOSE {
             handler(Event::CloseRequested, &win);
             break;
+        } else if old_keyboards.contains(&object) {
+            if opcode == WL_KEYBOARD_KEYMAP
+                && let Some(fd) = shared.lock().unwrap().fds.pop_front()
+            {
+                unsafe { close(fd) };
+            }
         } else if Some(object) == keyboard && opcode == WL_KEYBOARD_KEYMAP {
             // format(4), [fd via ancillary], size(4). Format 1 = XKB_V1 text.
             let format = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let size = u32::from_le_bytes([args[4], args[5], args[6], args[7]]) as usize;
-            let fd = shared.lock().unwrap().pending_fd.take();
+            let fd = shared.lock().unwrap().fds.pop_front();
             if let (1, Some(fd)) = (format, fd) {
                 keymap = read_keymap(fd, size);
                 dbg(format_args!(
@@ -1327,7 +1378,10 @@ where
                 unsafe { close(fd) };
             }
         } else if Some(object) == keyboard && opcode == WL_KEYBOARD_KEY {
-            // serial(4), time(4), key(4 evdev), state(4: 1 = pressed).
+            // serial(4), time(4), key(4 evdev), state(4: 1 = pressed). A copy
+            // cites the serial of the key that made it.
+            shared.lock().unwrap().clip.serial =
+                u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let key = u32::from_le_bytes([args[8], args[9], args[10], args[11]]);
             let pressed = u32::from_le_bytes([args[12], args[13], args[14], args[15]]) == 1;
             // Prefer the compositor's keymap (xkb keycode = evdev + 8); fall back

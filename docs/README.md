@@ -28,7 +28,8 @@ How to build, package and run on each platform, and what works there today.
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ❌ | ❌ |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| System clipboard | X11 only | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ❌ | ❌ |
+| Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ❌ | ❌ |
+| System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ❌ | ❌ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ❌ |
 | Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ❌ |
 
@@ -40,6 +41,10 @@ that these backends report modifier keys.
 ⁵ Implemented, but a modal dialog can't be driven headlessly, so CI only builds it.
 ⁶ CI drives these with scripted input on X11 only; on Wayland, Windows and macOS
 they're implemented and unit-tested but not yet exercised end to end.
+⁷ Implemented, but CI can't switch the system's appearance, so it's untested end
+to end. Linux needs the desktop portal (its `SettingChanged` signal).
+⁸ Wayland copies and pastes, and CI round-trips text with `wl-copy`/`wl-paste`.
+X11 serves copies to other apps, but pastes only text copied in the app.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.

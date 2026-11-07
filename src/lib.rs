@@ -1227,6 +1227,10 @@ impl<S> App<S> {
             }
         }
 
+        // A native theme follows the system's look while the app runs.
+        if self.theme.follows_system {
+            crate::platform::native::watch();
+        }
         // Title bars match the content under every theme.
         let dark = self.theme.is_dark();
         let background = self.theme.palette.background;
@@ -1547,6 +1551,26 @@ impl<S> App<S> {
                         }
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
+                    ControlFlow::Wait
+                }
+                Event::ThemeChanged => {
+                    // The system's look changed: forget the controls the OS drew
+                    // in the old one, follow it if the theme is native, and
+                    // repaint.
+                    crate::platform::native::clear_cache();
+                    if self.theme.follows_system {
+                        self.theme = Theme::native();
+                        let dark = self.theme.is_dark();
+                        for pane in &mut self.panes {
+                            pane.attrs.dark = Some(dark);
+                            pane.attrs.background = Some(self.theme.palette.background);
+                        }
+                        window.set_dark(dark);
+                    }
+                    for pane in &mut self.panes {
+                        pane.dirty = true;
+                    }
+                    present(&mut self, &mut surfaces, idx, window, true);
                     ControlFlow::Wait
                 }
                 Event::CloseRequested => {

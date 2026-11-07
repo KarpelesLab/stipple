@@ -30,6 +30,29 @@ pub fn system_look() -> SystemLook {
     }
     look
 }
+/// Listen for the portal's `SettingChanged` on a thread of its own, with its own
+/// bus connection, and flag appearance changes for the event loop.
+pub fn watch() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let spawned = std::thread::Builder::new()
+            .name("stipple-appearance".into())
+            .spawn(|| {
+                let Ok(mut bus) = DBus::connect_session() else {
+                    return;
+                };
+                let _ = bus.watch_portal_settings(|namespace, key| {
+                    if namespace == "org.freedesktop.appearance"
+                        && matches!(key, "color-scheme" | "accent-color")
+                    {
+                        super::note_changed();
+                    }
+                });
+            });
+        drop(spawned);
+    });
+}
+
 pub fn supports(_control: NativeControl) -> bool {
     false
 }

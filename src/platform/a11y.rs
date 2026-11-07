@@ -223,6 +223,27 @@ impl DBus {
         Some([channel(0), channel(1), channel(2)])
     }
 
+    /// Call `on_change(namespace, key)` for each `SettingChanged` signal the XDG
+    /// portal's `Settings` interface emits, until the connection drops.
+    pub fn watch_portal_settings(
+        &mut self,
+        mut on_change: impl FnMut(&str, &str),
+    ) -> Result<(), String> {
+        self.add_match(
+            "type='signal',interface='org.freedesktop.portal.Settings',member='SettingChanged'",
+        )?;
+        loop {
+            let m = self.read_message()?;
+            if m.mtype == 4
+                && m.interface == "org.freedesktop.portal.Settings"
+                && m.member == "SettingChanged"
+                && let Some((namespace, key)) = setting_changed_key(&m.body)
+            {
+                on_change(&namespace, &key);
+            }
+        }
+    }
+
     /// Install a match rule (`org.freedesktop.DBus.AddMatch`) so the bus routes
     /// matching broadcast signals to us.
     fn add_match(&mut self, rule: &str) -> Result<(), String> {
@@ -1102,6 +1123,14 @@ fn read_u32(buf: &[u8], off: &mut usize) -> Result<u32, String> {
 
 // ---- demarshalling ---------------------------------------------------------
 
+/// The namespace and key of a portal `SettingChanged` body (`ssv`).
+fn setting_changed_key(body: &[u8]) -> Option<(String, String)> {
+    let mut off = 0;
+    let namespace = read_string(body, &mut off).ok()?;
+    let key = read_string(body, &mut off).ok()?;
+    Some((namespace, key))
+}
+
 /// Split a marshalled VARIANT into its signature and the value's offset.
 fn variant_header(buf: &[u8]) -> Option<(String, usize)> {
     let len = *buf.first()? as usize;
@@ -1199,6 +1228,19 @@ fn parse_fields(fields: &[u8]) -> Message {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_key_of_a_setting_changed_signal() {
+        let mut body = Vec::new();
+        put_string(&mut body, "org.freedesktop.appearance");
+        put_string(&mut body, "color-scheme");
+        put_variant_i32(&mut body, 1);
+        assert_eq!(
+            setting_changed_key(&body),
+            Some(("org.freedesktop.appearance".into(), "color-scheme".into()))
+        );
+        assert_eq!(setting_changed_key(&body[..6]), None);
+    }
 
     #[test]
     fn atspi_path_index_round_trip() {

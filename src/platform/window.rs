@@ -101,6 +101,11 @@ pub trait Window {
     /// Set the system clipboard's text. Default: a no-op.
     fn set_clipboard(&self, _text: &str) {}
 
+    /// Make the title bar dark or light, to match content whose theme changed
+    /// (see [`WindowAttributes::dark`]). Default: a no-op. Honored on Windows
+    /// and macOS.
+    fn set_dark(&self, _dark: bool) {}
+
     /// Open a new top-level sibling window sharing this window's event loop /
     /// connection, returning its [`WindowId`]. Default: `None` — the backend is
     /// single-window. Backends that support multiple native windows (X11)

@@ -869,13 +869,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install sway, grim, wtype, seatd, ImageMagick, a font
+      - name: Install sway, grim, wtype, wl-clipboard, seatd, ImageMagick, a font
         run: |
           sudo apt-get update
-          sudo apt-get install -y sway grim wtype seatd imagemagick fonts-dejavu-core
+          sudo apt-get install -y sway grim wtype wl-clipboard seatd imagemagick fonts-dejavu-core
 
-      - name: Build the window + textinput examples
-        run: cargo build --release -p window -p textinput
+      - name: Build the window, textinput and clipboard examples
+        run: cargo build --release -p window -p textinput -p clipboarddemo
 
       - name: Run under headless sway and screenshot with grim
         run: |
@@ -939,6 +939,30 @@ jobs:
           grim visual_output/stipple-wayland-input.png || echo "grim failed"
           echo "=== wtype.log ==="; cat visual_output/wtype.log || true
           kill "$TXT_PID" 2>/dev/null || true
+          sleep 1
+
+          # --- clipboard: copy out of the app, paste into it, copy back out.
+          # wl-copy / wl-paste reach the selection through the compositor, so
+          # each direction crosses wl_data_device. ---
+          ./target/release/clipboarddemo > visual_output/wl-clipboard.log 2>&1 &
+          CLIP_PID=$!
+          sleep 4
+          # Focus the field ("Clip"), select all, copy: the app owns the selection.
+          wtype -d 120 -k Tab -M ctrl -k a -k c -m ctrl 2>> visual_output/wtype.log; sleep 1
+          out=$(timeout 10 wl-paste -n || true)
+          echo "after copy, wl-paste = '$out'"
+          [ "$out" = "Clip" ]
+          # Another client takes the selection; paste it after "Clip", then copy
+          # the whole field again.
+          wl-copy "Paste"
+          sleep 1
+          wtype -s 500 -d 120 -k End -M ctrl -k v -m ctrl -M ctrl -k a -k c -m ctrl \
+            2>> visual_output/wtype.log; sleep 1
+          out=$(timeout 10 wl-paste -n || true)
+          echo "after paste + copy, wl-paste = '$out'"
+          kill "$CLIP_PID" 2>/dev/null || true
+          echo "=== wl-clipboard.log ==="; cat visual_output/wl-clipboard.log || true
+          [ "$out" = "ClipPaste" ]
 
           echo "=== seatd.log ==="; cat seatd.log || true
           echo "=== sway.log ==="; cat sway.log || true

@@ -443,6 +443,63 @@ extern "C" fn window_will_close(_this: Id, _cmd: Sel, _notification: Id) {
     CTX.with(|c| c.borrow_mut().should_close = true);
 }
 
+/// `stippleAppearanceChanged:` — the view observes the system's appearance and
+/// accent-color notifications; the next wake reports the change to the App.
+extern "C" fn appearance_changed(_this: Id, _cmd: Sel, _notification: Id) {
+    crate::platform::native::note_changed();
+}
+
+/// Have `view` hear about dark mode and accent changes: dark mode and accent
+/// changes are distributed notifications (they come from System Settings), and
+/// AppKit posts `NSSystemColorsDidChangeNotification` once its colors follow.
+///
+/// # Safety
+/// `view` must be a live `StippleView`, which stays alive for the process.
+unsafe fn observe_appearance(view: Id) {
+    let add: unsafe extern "C" fn(Id, Sel, Id, Sel, Id, Id) =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    let selector = sel("stippleAppearanceChanged:");
+    let observe = sel("addObserver:selector:name:object:");
+    unsafe {
+        let distributed = msg_id(
+            class("NSDistributedNotificationCenter"),
+            sel("defaultCenter"),
+        );
+        for name in [
+            "AppleInterfaceThemeChangedNotification",
+            "AppleColorPreferencesChangedNotification",
+        ] {
+            add(
+                distributed,
+                observe,
+                view,
+                selector,
+                nsstring(name),
+                std::ptr::null_mut(),
+            );
+        }
+        let local = msg_id(class("NSNotificationCenter"), sel("defaultCenter"));
+        let name = nsstring("NSSystemColorsDidChangeNotification");
+        add(local, observe, view, selector, name, std::ptr::null_mut());
+    }
+}
+
+/// Give `window` the dark or light appearance, which its title bar follows.
+///
+/// # Safety
+/// `window` must be a live `NSWindow`.
+unsafe fn set_window_dark(window: Id, dark: bool) {
+    let name = nsstring(if dark {
+        "NSAppearanceNameDarkAqua"
+    } else {
+        "NSAppearanceNameAqua"
+    });
+    unsafe {
+        let appearance = msg_id_id(class("NSAppearance"), sel("appearanceNamed:"), name);
+        msg_void_id(window, sel("setAppearance:"), appearance);
+    }
+}
+
 // ---- NSAccessibility ----------------------------------------------------
 //
 // Stipple draws every control itself, so to AppKit the window is one opaque view.
@@ -606,6 +663,13 @@ fn register_view_class() -> Class {
             window_will_close as *const c_void,
             close_types.as_ptr(),
         );
+        // Notification observer: also v@:@.
+        class_addMethod(
+            cls,
+            sel("stippleAppearanceChanged:"),
+            appearance_changed as *const c_void,
+            close_types.as_ptr(),
+        );
         // NSAccessibility overrides: BOOL (c@:) and id (@@:) returns.
         let bool_types = c"c@:";
         let id_types = c"@@:";
@@ -675,6 +739,12 @@ impl Window for MacWindow {
     }
     fn set_clipboard(&self, text: &str) {
         crate::platform::clipboard::set_text(text);
+    }
+    fn set_dark(&self, dark: bool) {
+        let window: Id = CTX.with(|c| c.borrow().window);
+        if !window.is_null() {
+            unsafe { set_window_dark(window, dark) };
+        }
     }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         // Stash the tree; AppKit pulls `accessibilityChildren` lazily, so we just
@@ -772,14 +842,9 @@ where
         msg_void_id(window, sel("setTitle:"), nsstring(&attrs.title));
         if let Some(dark) = attrs.dark {
             // A window's appearance sets its title bar to match the content.
-            let name = nsstring(if dark {
-                "NSAppearanceNameDarkAqua"
-            } else {
-                "NSAppearanceNameAqua"
-            });
-            let appearance = msg_id_id(class("NSAppearance"), sel("appearanceNamed:"), name);
-            msg_void_id(window, sel("setAppearance:"), appearance);
+            set_window_dark(window, dark);
         }
+        observe_appearance(view);
         // The view doubles as the window delegate so `windowWillClose:` can flag
         // the event loop to exit. Keep the window object alive on close (we hold
         // the only reference) so the loop can tear down cleanly without a

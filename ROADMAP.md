@@ -839,7 +839,10 @@ Most input only works on X11 today.
   iOS (`UIPasteboard`), in `stipple::platform::clipboard` and behind
   `Window::clipboard`; CI round-trips text on Windows and macOS and reads it back
   with `Get-Clipboard` / `pbpaste`.
-- ⬜ System clipboard on Wayland (`wl_data_device`), Android and the web.
+- ✅ System clipboard on Wayland (`wl_data_device`: a `wl_data_source` serves
+  copies, pastes read a `wl_data_offer` through a pipe without blocking the
+  loop); CI round-trips text with `wl-copy` / `wl-paste` under sway.
+- ⬜ System clipboard on Android and the web.
 - ✅ File dialogs on Windows (`IFileOpenDialog` / `IFileSaveDialog` over COM) and
   macOS (`NSOpenPanel` / `NSSavePanel`). Build-checked only: CI can't drive a
   modal dialog.
@@ -847,7 +850,11 @@ Most input only works on X11 today.
 - ⬜ Menus: the macOS menu bar first, then window and context menus.
 - ⬜ Window control: minimum and maximum size, maximize, fullscreen, the window icon.
 - ⬜ Mouse cursor shapes: text I-beam, resize arrows, pointer.
-- ⬜ Following dark mode and accent changes while the app runs.
+- ✅ Following dark mode and accent changes while the app runs:
+  `Event::ThemeChanged` from `WM_SETTINGCHANGE` on Windows, the appearance
+  notifications on macOS and the portal's `SettingChanged` on Linux; the App
+  rebuilds `Theme::native()`, drops cached OS-drawn bitmaps, switches the title
+  bar and repaints. Not exercised in CI. iOS doesn't report changes yet.
 - ⬜ Drag and drop, notifications, system tray, opening URLs.
 
 #### 7e — Widgets and layout

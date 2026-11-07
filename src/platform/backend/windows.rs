@@ -58,6 +58,9 @@ const WM_RBUTTONUP: u32 = 0x0205;
 const WM_MBUTTONDOWN: u32 = 0x0207;
 const WM_MBUTTONUP: u32 = 0x0208;
 const WM_GETOBJECT: u32 = 0x003D;
+const WM_SETTINGCHANGE: u32 = 0x001A;
+const WM_THEMECHANGED: u32 = 0x031A;
+const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
 const WM_DPICHANGED: u32 = 0x02E0;
 const WM_QUIT: u32 = 0x0012;
 /// Posted by [`crate::platform::wake`] to end the message wait.
@@ -69,6 +72,9 @@ const MWMO_INPUTAVAILABLE: u32 = 0x0004;
 const INFINITE: u32 = u32::MAX;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
+const SWP_NOSIZE: u32 = 0x0001;
+const SWP_NOMOVE: u32 = 0x0002;
+const SWP_FRAMECHANGED: u32 = 0x0020;
 /// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`.
 const PER_MONITOR_AWARE_V2: isize = -4;
 /// `lParam` value identifying UIA's request for our root fragment provider.
@@ -318,6 +324,41 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Whether a `WM_SETTINGCHANGE` `lParam` (a NUL-terminated UTF-16 string, or
+/// null) is `name`.
+///
+/// # Safety
+/// `lp` must be null or point to a NUL-terminated UTF-16 string.
+unsafe fn names_setting(lp: Lparam, name: &str) -> bool {
+    let p = lp as *const u16;
+    if p.is_null() {
+        return false;
+    }
+    let mut want = name.encode_utf16();
+    let mut i = 0;
+    loop {
+        let c = unsafe { *p.add(i) };
+        match want.next() {
+            Some(w) if w == c => i += 1,
+            Some(_) => return false,
+            None => return c == 0,
+        }
+    }
+}
+
+/// Ask the desktop window manager for a dark or light title bar.
+fn set_dark_title(hwnd: Hwnd, dark: bool) {
+    let value = dark as i32;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &value as *const i32 as *const c_void,
+            4,
+        );
+    }
+}
+
 unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult {
     match msg {
         WM_PAINT => {
@@ -479,6 +520,14 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             }
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
+        // Dark mode and the accent color: `ImmersiveColorSet` names the setting
+        // that changed; the colorization message follows accent changes.
+        WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOLORIZATIONCOLORCHANGED => {
+            if msg != WM_SETTINGCHANGE || unsafe { names_setting(lp, "ImmersiveColorSet") } {
+                crate::platform::native::note_changed();
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+        }
         WM_CLOSE => {
             push_event(Event::CloseRequested);
             0
@@ -516,6 +565,21 @@ impl Window for WinWindow {
     }
     fn set_clipboard(&self, text: &str) {
         crate::platform::clipboard::set_text(text);
+    }
+    fn set_dark(&self, dark: bool) {
+        set_dark_title(self.hwnd, dark);
+        // Have the frame repaint now rather than at the next activation.
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+            )
+        };
     }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(WinSurface {
@@ -626,16 +690,8 @@ where
     // The window may have opened on a display with a different DPI to the system's.
     CTX.with(|c| c.borrow_mut().dpi = unsafe { GetDpiForWindow(hwnd) });
     if let Some(dark) = attrs.dark {
-        // Ask the desktop window manager for a title bar matching the content.
-        let value = dark as i32;
-        unsafe {
-            DwmSetWindowAttribute(
-                hwnd,
-                DWMWA_USE_IMMERSIVE_DARK_MODE,
-                &value as *const i32 as *const c_void,
-                4,
-            );
-        }
+        // A title bar matching the content.
+        set_dark_title(hwnd, dark);
     }
 
     // Use the actual client area for the framebuffer size.

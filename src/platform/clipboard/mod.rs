@@ -13,9 +13,9 @@
 //!   (`NSPasteboardTypeString`).
 //! - **iOS**: `UIPasteboard.generalPasteboard`'s `string`.
 //! - **Elsewhere**: these return `None` / `false`. On Linux the clipboard
-//!   belongs to the display connection, so the X11 backend implements it on its
-//!   window (the `CLIPBOARD` selection); Wayland, Android and the web don't
-//!   have it yet.
+//!   belongs to the display connection, so the backends implement it on their
+//!   window: Wayland through `wl_data_device`, X11 through the `CLIPBOARD`
+//!   selection. Android and the web don't have it yet.
 //!
 //! [`Window::clipboard`]: crate::platform::Window::clipboard
 //! [`Window::set_clipboard`]: crate::platform::Window::set_clipboard

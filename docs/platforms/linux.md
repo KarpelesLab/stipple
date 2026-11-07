@@ -33,9 +33,21 @@ and load it with `Font::from_bytes`.
 `Theme::native()` reads `color-scheme` and `accent-color` from the XDG desktop
 portal's settings (GNOME, KDE and others provide it). A `GTK_THEME` ending in
 `:dark` also selects dark mode. With no portal, the theme is light. The portal
-call gives up after 250 ms, so a missing portal can't stall startup.
+call gives up after 250 ms, so a missing portal can't stall startup. With
+`Theme::native()`, a thread listens for the portal's `SettingChanged` signal, so
+switching dark mode or the accent color restyles the app while it runs.
 
 Controls stay self-drawn: Linux has no platform UI framework to draw them.
+
+## Clipboard
+
+- **Wayland**: copy and paste go through `wl_data_device`, offering and accepting
+  `text/plain;charset=utf-8`, `UTF8_STRING` and `text/plain`. A paste reads the
+  selection through a pipe and gives up after a second; the compositor's events
+  are queued meanwhile, so the window keeps answering. Only the window with
+  keyboard focus sees the selection, as the protocol requires.
+- **X11**: copying takes the `CLIPBOARD` selection and serves it to other apps.
+  Pasting text copied in another app isn't wired up yet.
 
 ## File dialogs
 
@@ -50,7 +62,7 @@ work in Flatpak and Snap sandboxes and show the desktop's own picker. They need
 
 ## Known gaps
 
-- The system clipboard works on X11 only; Wayland copy and paste stay in the app.
+- On X11, pasting text another app copied isn't wired up yet.
 - On Wayland, typed text comes from a simple reading of the compositor's keymap:
   Shift and Caps Lock pick the second level, but AltGr levels and dead keys
   aren't applied yet.

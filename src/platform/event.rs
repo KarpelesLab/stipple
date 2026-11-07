@@ -105,6 +105,9 @@ pub enum Event {
     Wake,
     /// Keyboard focus entered (`true`) or left (`false`) the window.
     FocusChanged(bool),
+    /// The system's light/dark mode or accent color changed. Read the new look
+    /// with [`Theme::native`](crate::style::Theme::native).
+    ThemeChanged,
 
     /// The pointer moved to `position` (logical pixels, window-relative).
     PointerMoved { position: Point },
