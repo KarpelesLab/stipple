@@ -1,6 +1,6 @@
 [package]
 name = "stipple"
-description = "Stipple: a cross-platform, self-drawn UI toolkit in Rust. Umbrella crate — App builder, prelude, and re-exports."
+description = "Stipple: a cross-platform, self-drawn UI toolkit in Rust."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,15 +8,20 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# The raw GPU backends (`stipple::gpu`). Off by default.
+gpu = []
+# Each backend links system libraries, so each is opt-in. Without one, its entry
+# points return an error.
+gl = ["gpu"]  # EGL + GLES2
+vk = ["gpu"]  # Vulkan (links libvulkan)
+d3d = ["gpu"] # Direct3D 11, Windows-only
+mtl = ["gpu"] # Metal, macOS-only
+
 [dependencies]
-stipple-geometry.workspace = true
-stipple-render.workspace = true
-stipple-platform.workspace = true
-stipple-layout.workspace = true
-stipple-core.workspace = true
-stipple-anim.workspace = true
-stipple-style.workspace = true
-stipple-widgets.workspace = true
+oxideav-core.workspace = true
+oxideav-raster.workspace = true
+oxideav-scribe.workspace = true
 
 [lints]
 workspace = true

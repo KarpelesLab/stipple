@@ -1,6 +1,6 @@
 [package]
 name = "uiademo"
-description = "Stipple example: exercise the hand-written UI Automation provider in stipple-platform (the Windows accessibility bridge) and print what it returns."
+description = "Stipple example: exercise the hand-written UI Automation provider in stipple::platform (the Windows accessibility bridge) and print what it returns."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-stipple-platform.workspace = true
+stipple.workspace = true
 
 [lints]
 workspace = true

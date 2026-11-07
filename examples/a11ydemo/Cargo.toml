@@ -1,6 +1,6 @@
 [package]
 name = "a11ydemo"
-description = "Stipple example: connect to D-Bus with the hand-written client in stipple-platform (the AT-SPI accessibility bridge foundation) and print the unique name."
+description = "Stipple example: connect to D-Bus with the hand-written client in stipple::platform (the AT-SPI accessibility bridge foundation) and print the unique name."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,7 +11,6 @@ publish = false
 
 [dependencies]
 stipple.workspace = true
-stipple-platform.workspace = true
 
 [lints]
 workspace = true

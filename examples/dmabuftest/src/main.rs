@@ -4,7 +4,7 @@
 //! process. Runs surfaceless (no window), so it's safe to run on a GPU box.
 //!
 //! Run on real GPU hardware:
-//!   cargo run -p dmabuftest --features stipple-gpu/gl
+//!   cargo run -p dmabuftest --features stipple::gpu/gl
 //!
 //! Exit codes (so CI can tell a real failure from "no GPU here"):
 //!   0 = self-test passed (dma-buf export+import works)
@@ -36,7 +36,7 @@ fn main() -> ExitCode {
 #[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     // 1) What EGL extensions does this device advertise?
-    let exts = match stipple_gpu::dmabuf_extensions() {
+    let exts = match stipple::gpu::dmabuf_extensions() {
         Ok(s) => s,
         Err(e) => {
             println!("EGL unavailable: {e}");
@@ -67,13 +67,13 @@ fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         };
-        return match stipple_gpu::dmabuf_self_test_on_device(fd) {
+        return match stipple::gpu::dmabuf_self_test_on_device(fd) {
             Ok(pixels) => {
                 println!("imported {} bytes on device; corners present", pixels.len());
                 // Also exercise the export-only descriptor path — the exact data
                 // fed to DRI3 PixmapFromBuffers for a zero-copy present. Best
                 // effort: a failure here doesn't fail the round-trip probe.
-                match stipple_gpu::export_dmabuf_on_device(fd, 256, 256) {
+                match stipple::gpu::export_dmabuf_on_device(fd, 256, 256) {
                     Ok(d) => println!(
                         "dmabuf export: fd={} {}x{} stride={} offset={} \
                          modifier={:#x} fourcc={:#x} bpp={}",
@@ -93,7 +93,7 @@ fn main() -> ExitCode {
     }
 
     // 2) Export a GPU texture as a dma-buf and re-import it; verify the pixels.
-    match stipple_gpu::dmabuf_export_import_self_test() {
+    match stipple::gpu::dmabuf_export_import_self_test() {
         Ok(pixels) => {
             println!(
                 "imported {} bytes; corners present (red/green/blue/white)",

@@ -1,6 +1,6 @@
 [package]
 name = "gpuwindow"
-description = "Stipple example: a real window whose frames are rendered on the GPU (stipple-gpu) and presented through the platform Surface."
+description = "Stipple example: a real window whose frames are rendered on the GPU (stipple::gpu) and presented through the platform Surface."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,8 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-stipple.workspace = true
-stipple-gpu.workspace = true
+stipple = { workspace = true, features = ["gpu"] }
 
 [lints]
 workspace = true

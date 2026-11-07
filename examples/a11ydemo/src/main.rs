@@ -1,4 +1,4 @@
-//! Exercises the hand-written D-Bus client in `stipple_platform::a11y` (no
+//! Exercises the hand-written D-Bus client in `stipple::platform::a11y` (no
 //! `zbus`/`dbus` crate) — the foundation of the AT-SPI accessibility bridge.
 //!
 //! - no args: connect to the session bus and the AT-SPI bus, print our unique
@@ -39,8 +39,8 @@ fn main() {
     #[cfg(target_os = "linux")]
     {
         use stipple::core::AccessNode;
+        use stipple::platform::a11y::{AtspiTree, DBus};
         use stipple::prelude::*;
-        use stipple_platform::a11y::{AtspiTree, DBus};
         let serve = std::env::args().nth(1).as_deref() == Some("serve");
 
         if serve {

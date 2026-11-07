@@ -5,7 +5,7 @@
 //! Android calls `ANativeActivity_onCreate`; we register an
 //! `onNativeWindowCreated` callback, and when the surface arrives we build a
 //! Stipple `App`, render one frame, and blit it to the window with
-//! `stipple_platform::backend::android::present_to_native_window`. A marker file
+//! `stipple::platform::backend::android::present_to_native_window`. A marker file
 //! in the app's data dir lets CI confirm the frame was presented on the
 //! emulator.
 //!
@@ -15,10 +15,10 @@
 #[cfg(target_os = "android")]
 mod app {
     use std::ffi::{CString, c_char, c_void};
-    use stipple::prelude::*;
-    use stipple_platform::backend::android::{
+    use stipple::platform::backend::android::{
         ANativeActivity, ANativeWindow_getHeight, ANativeWindow_getWidth, present_to_native_window,
     };
+    use stipple::prelude::*;
 
     // ANDROID_LOG_INFO. `__android_log_write` is the non-variadic logcat writer.
     const ANDROID_LOG_INFO: i32 = 4;

@@ -1,10 +1,10 @@
 //! Opens a real native window, but renders each frame's `Scene` **on the GPU**
-//! (`stipple_gpu::render_scene`: rounded-rect SDF + a glyph atlas) and presents
+//! (`stipple::gpu::render_scene`: rounded-rect SDF + a glyph atlas) and presents
 //! the read-back `Pixmap` through the platform [`Surface`] — i.e. the GPU render
 //! path wired into the live on-screen present loop via [`App::render_with`],
 //! without stipple itself depending on any GPU crate.
 //!
-//! Built with `--features stipple-gpu/gl`, the CI visual job launches this under
+//! Built with `--features stipple::gpu/gl`, the CI visual job launches this under
 //! Xvfb + Mesa (the EGL context is surfaceless, so it renders headlessly) and
 //! screenshots the window to confirm GPU-rendered frames reach the screen. If
 //! the GPU path is unavailable it transparently falls back to software, so the
@@ -48,7 +48,7 @@ fn main() {
     // `Clone`, so the GPU renderer loads its own copy of the system font.
     if let Some(gpu_font) = Font::system_default() {
         app = app.render_with(move |scene: &Scene, bg, scale| {
-            stipple_gpu::render_scene(scene, bg, &gpu_font).unwrap_or_else(|e| {
+            stipple::gpu::render_scene(scene, bg, &gpu_font).unwrap_or_else(|e| {
                 eprintln!("GPU render unavailable ({e}); using software");
                 SoftwareRenderer::new()
                     .with_background(bg)

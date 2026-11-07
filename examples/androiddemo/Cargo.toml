@@ -17,7 +17,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 stipple.workspace = true
-stipple-platform.workspace = true
 
 [lints]
 workspace = true

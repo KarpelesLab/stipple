@@ -94,23 +94,26 @@ violet-accent dark, high-contrast), montaged in CI:
   NSAccessibility (macOS) and UI Automation (Windows), each over a hand-written
   bridge (D-Bus wire protocol, `objc_msgSend`, COM vtables).
 - **No** `winit` / `wgpu` / `taffy` / `lyon` / GTK / Qt / `zbus` / `windows` /
-  `objc`. OS interfaces are hand-written per platform in `stipple-platform`.
+  `objc`. OS interfaces are hand-written per platform in `stipple::platform`.
 
-## Workspace layout
+## Layout
 
-| Crate | Role |
+Stipple is one crate, `stipple`, with these modules:
+
+| Module | Role |
 |---|---|
-| `stipple-geometry` | Logical-pixel math (Point, Size, Rect, Insets, Affine) |
-| `stipple-render` | Scene → oxideav `VectorFrame` → raster → `Surface`; fonts |
-| `stipple-platform` | Per-OS windowing, input, clipboard, file dialogs, accessibility bridges, shared memory + sandbox |
-| `stipple-layout` | Flex/box layout solver |
-| `stipple-core` | Reactive runtime: `View`, `Element` IR, reconcile, events, a11y tree |
-| `stipple-anim` | Easing, tweens, springs |
-| `stipple-style` | Design tokens and themes (incl. Material 3) |
-| `stipple-widgets` | Standard widget library |
-| `stipple-gpu` | Raw GPU backends (GLES2, Vulkan, Metal, D3D11), feature-gated; dma-buf / shared-texture export |
-| `stipple-web` | wasm32 target: renders into a framebuffer a `<canvas>` blits (no wasm-bindgen) |
-| `stipple` | Umbrella crate: `App`, prelude, re-exports |
+| `stipple::geometry` | Logical-pixel math (Point, Size, Rect, Insets, Affine) |
+| `stipple::render` | Scene → oxideav `VectorFrame` → raster → `Surface`; fonts |
+| `stipple::platform` | Per-OS windowing, input, clipboard, file dialogs, accessibility bridges, shared memory + sandbox |
+| `stipple::layout` | Flex/box layout solver |
+| `stipple::core` | Reactive runtime: `View`, `Element` IR, reconcile, events, a11y tree |
+| `stipple::anim` | Easing, tweens, springs |
+| `stipple::style` | Design tokens and themes (incl. Material 3) |
+| `stipple::widgets` | Standard widget library |
+| `stipple::gpu` | Raw GPU backends, behind the `gpu` feature; dma-buf / shared-texture export. `gl`, `vk`, `d3d` and `mtl` enable GLES2, Vulkan, Direct3D 11 and Metal |
+
+`App` and the prelude live at the crate root. `crates/stipple-web` stays a
+separate, unpublished package because it builds the `wasm32` `cdylib`.
 
 Widgets available in the prelude: `panel`, `row`, `column`, `spacer`,
 `divider`, `label`, `heading`, `paragraph`, `button`, `button_labeled`,
@@ -141,7 +144,7 @@ cargo run -p material3demo # Material 3 baseline + dynamic-color themes
 Each opens a real native window via `App::run` (Wayland, then X11, on Linux;
 Win32; Cocoa), or falls back to a one-shot headless render where no display is
 available. Platform and subsystem probes live alongside them:
-`gpuwindow` / `gpudemo` (GLES, `--features stipple-gpu/gl`), `d3ddemo`,
+`gpuwindow` / `gpudemo` (GLES, `--features stipple/gl`), `d3ddemo`,
 `metaldemo`, `dmabuftest`, `dri3probe`, `viewportdemo`, `contentproc`
 (sandboxed content process composited over shared memory), `a11ydemo` and
 `uiademo` (accessibility bridges), and `androiddemo` (a `NativeActivity`

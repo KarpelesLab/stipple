@@ -1,8 +1,8 @@
 //! Renders a Stipple frame on the CPU, routes it through the GPU
-//! ([`stipple_gpu::present_offscreen`] — EGL + GLES2 upload → draw → read back),
+//! ([`stipple::gpu::present_offscreen`] — EGL + GLES2 upload → draw → read back),
 //! and writes the read-back RGBA to `gpu-out.raw`.
 //!
-//! The CI GPU job builds this with `--features stipple-gpu/gl`, runs it against
+//! The CI GPU job builds this with `--features stipple::gpu/gl`, runs it against
 //! Mesa's software GL, and converts the raw output to a PNG screenshot. Without
 //! the `gl` feature, `present_offscreen` returns an error and the demo exits
 //! non-zero.
@@ -40,7 +40,7 @@ fn main() {
     }
     let cpu = app.render_once();
 
-    match stipple_gpu::present_offscreen(&cpu) {
+    match stipple::gpu::present_offscreen(&cpu) {
         Ok(out) => {
             std::fs::write("gpu-out.raw", out.as_bytes()).expect("write raw");
             println!(
@@ -104,7 +104,7 @@ fn main() {
         .map(|(pm, dst)| (pm, *dst, Color::rgb(0xec, 0xee, 0xf2)))
         .collect();
 
-    match stipple_gpu::render_offscreen(size, Color::rgb(0x14, 0x15, 0x18), &rects, &texts) {
+    match stipple::gpu::render_offscreen(size, Color::rgb(0x14, 0x15, 0x18), &rects, &texts) {
         Ok(out) => {
             std::fs::write("gpu-rects.raw", out.as_bytes()).expect("write raw");
             println!(
@@ -126,7 +126,7 @@ fn main() {
         let theme = Theme::dark();
         let element = view(&(), &mut Cx::new(&theme));
         let scene = stipple::core::render_view(&element, Size::new(W, H), &theme, Some(&font));
-        match stipple_gpu::render_scene(&scene, theme.palette.background, &font) {
+        match stipple::gpu::render_scene(&scene, theme.palette.background, &font) {
             Ok(out) => {
                 std::fs::write("gpu-scene.raw", out.as_bytes()).expect("write raw");
                 println!(
@@ -145,29 +145,29 @@ fn main() {
     // Vulkan FFI foundation: enumerate physical devices and create a logical
     // device + graphics queue (non-fatal — only built with the `vk` feature).
     // Under Mesa lavapipe this lists "llvmpipe".
-    match stipple_gpu::vulkan_devices() {
+    match stipple::gpu::vulkan_devices() {
         Ok(devs) => println!("Vulkan devices: {devs:?}"),
         Err(e) => println!("Vulkan unavailable: {e}"),
     }
-    match stipple_gpu::vulkan_init_device() {
+    match stipple::gpu::vulkan_init_device() {
         Ok(summary) => println!("Vulkan init: {summary}"),
         Err(e) => println!("Vulkan init unavailable: {e}"),
     }
-    match stipple_gpu::vulkan_init_image(W as u32, H as u32) {
+    match stipple::gpu::vulkan_init_image(W as u32, H as u32) {
         Ok(summary) => println!("Vulkan image: {summary}"),
         Err(e) => println!("Vulkan image unavailable: {e}"),
     }
-    match stipple_gpu::vulkan_init_framebuffer(W as u32, H as u32) {
+    match stipple::gpu::vulkan_init_framebuffer(W as u32, H as u32) {
         Ok(summary) => println!("Vulkan framebuffer: {summary}"),
         Err(e) => println!("Vulkan framebuffer unavailable: {e}"),
     }
-    match stipple_gpu::vulkan_clear(W as u32, H as u32) {
+    match stipple::gpu::vulkan_clear(W as u32, H as u32) {
         Ok(summary) => println!("Vulkan clear: {summary}"),
         Err(e) => println!("Vulkan clear unavailable: {e}"),
     }
     // The Vulkan capstone: a GPU-rendered frame read back to the CPU and written
     // out, so CI can convert it to a real screenshot.
-    match stipple_gpu::vulkan_render_clear(W as u32, H as u32) {
+    match stipple::gpu::vulkan_render_clear(W as u32, H as u32) {
         Ok(pixels) => {
             std::fs::write("gpu-vk.raw", &pixels).expect("write raw");
             println!("Vulkan readback: {} bytes ({W}x{H})", pixels.len());
@@ -176,7 +176,7 @@ fn main() {
     }
     // The full Vulkan pipeline: a triangle drawn by real SPIR-V shaders, read
     // back so CI can confirm the GPU actually rasterized green geometry.
-    match stipple_gpu::vulkan_render_triangle(W as u32, H as u32) {
+    match stipple::gpu::vulkan_render_triangle(W as u32, H as u32) {
         Ok(pixels) => {
             std::fs::write("gpu-vk-tri.raw", &pixels).expect("write raw");
             println!("Vulkan triangle: {} bytes ({W}x{H})", pixels.len());

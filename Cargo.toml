@@ -14,15 +14,6 @@ authors = ["Karpelès Lab Inc."]
 
 [workspace.dependencies]
 # --- Stipple internal crates ---
-stipple-geometry = { version = "0.0.1", path = "crates/stipple-geometry" }
-stipple-render = { version = "0.0.1", path = "crates/stipple-render" }
-stipple-platform = { version = "0.0.1", path = "crates/stipple-platform" }
-stipple-layout = { version = "0.0.1", path = "crates/stipple-layout" }
-stipple-core = { version = "0.0.1", path = "crates/stipple-core" }
-stipple-anim = { version = "0.0.1", path = "crates/stipple-anim" }
-stipple-style = { version = "0.0.1", path = "crates/stipple-style" }
-stipple-widgets = { version = "0.0.1", path = "crates/stipple-widgets" }
-stipple-gpu = { version = "0.0.1", path = "crates/stipple-gpu" }
 stipple = { version = "0.0.1", path = "crates/stipple" }
 
 # --- oxideav media stack (the one sanctioned heavy dependency) ---

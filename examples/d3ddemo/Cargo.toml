@@ -1,6 +1,6 @@
 [package]
 name = "d3ddemo"
-description = "Stipple example: exercise the raw Direct3D 11 (WARP) backend in stipple-gpu and print what it created."
+description = "Stipple example: exercise the raw Direct3D 11 (WARP) backend in stipple::gpu and print what it created."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,7 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-stipple-gpu.workspace = true
+stipple = { workspace = true, features = ["gpu"] }
 
 [lints]
 workspace = true

@@ -10,8 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-stipple-platform.workspace = true
-stipple-gpu.workspace = true
+stipple = { workspace = true, features = ["gpu"] }
 
 [lints]
 workspace = true

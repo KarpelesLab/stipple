@@ -26,32 +26,33 @@
 //! assert_eq!(frame.size().width, 360);
 //! ```
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)] // `platform` and `gpu` opt in where they talk to the OS
 
-// Re-export the layer crates for direct access.
-pub use stipple_anim as anim;
-pub use stipple_core as core;
-pub use stipple_geometry as geometry;
-pub use stipple_layout as layout;
-pub use stipple_platform as platform;
-pub use stipple_render as render;
-pub use stipple_style as style;
-pub use stipple_widgets as widgets;
+pub mod anim;
+pub mod core;
+pub mod geometry;
+#[cfg(feature = "gpu")]
+pub mod gpu;
+pub mod layout;
+pub mod platform;
+pub mod render;
+pub mod style;
+pub mod widgets;
 
-use std::collections::HashMap;
-use stipple_core::{
+use crate::core::{
     ActionId, Anchor, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers, KeyInput,
     LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_focusables,
     collect_viewports, context_at, drag_at, find_action, find_focus, find_text_pos, focus_at,
     hit_test, layout, measure, paint, paint_focus, paint_hover, text_pos_at, viewport_at,
 };
-use stipple_geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
-use stipple_platform::{
+use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
+use crate::platform::{
     ButtonState, ControlFlow, Event, KeyCode, Modifiers, PointerButton, WindowAttributes, WindowId,
     backend,
 };
-use stipple_render::{Color, Font, Pixmap, Scene, SoftwareRenderer, Surface};
-use stipple_style::Theme;
+use crate::render::{Color, Font, Pixmap, Scene, SoftwareRenderer, Surface};
+use crate::style::Theme;
+use std::collections::HashMap;
 
 /// A Stipple application.
 ///
@@ -158,7 +159,7 @@ struct Pane<S> {
     scale: ScaleFactor,
     // Optional GPU (or other) rasterizer used in place of the software renderer
     // to turn each frame's `Scene` into the `Pixmap` that is presented. Lets a
-    // GPU backend (stipple-gpu) drive on-screen present through the `Surface` seam
+    // GPU backend (stipple::gpu) drive on-screen present through the `Surface` seam
     // without stipple depending on it. `None` = software rasterization.
     frame_renderer: Option<FrameRenderer>,
     // Retained from the last frame build, for routing pointer events.
@@ -185,7 +186,7 @@ struct Pane<S> {
     memo_cache: std::collections::HashMap<u64, Element>,
     // Per-container scroll offsets (vertical, logical px), adjusted by wheel
     // events and re-applied + clamped each frame by `apply_scroll`.
-    scroll_offsets: std::collections::HashMap<stipple_core::ScrollId, f64>,
+    scroll_offsets: std::collections::HashMap<crate::core::ScrollId, f64>,
     // Last pointer position, so a `Scroll` event (which carries only a delta)
     // can find the scroll container under the cursor.
     last_pointer: Point,
@@ -281,7 +282,7 @@ impl<S> App<S> {
     }
 
     /// Route frame rasterization through a custom renderer — e.g. a GPU backend
-    /// (`stipple-gpu`) that turns each frame's [`Scene`] into a [`Pixmap`] on the
+    /// (`stipple::gpu`) that turns each frame's [`Scene`] into a [`Pixmap`] on the
     /// GPU, which is then presented through the platform [`Surface`]. This wires
     /// GPU rendering into the live present path without stipple depending on any
     /// GPU crate. Without it, frames are rasterized on the CPU.
@@ -546,7 +547,7 @@ impl<S> Pane<S> {
         self.overlay_active = !overlays.is_empty();
         // Apply (and clamp) scroll-container offsets to the laid-out tree before
         // painting, so the retained tree matches what's drawn for event routing.
-        stipple_core::apply_scroll(&mut tree, &mut self.scroll_offsets);
+        crate::core::apply_scroll(&mut tree, &mut self.scroll_offsets);
         let mut scene = Scene::new(size);
         paint(&tree, &mut scene, font);
         // Lighten the hovered tappable element with the theme's overlay.
@@ -590,7 +591,7 @@ impl<S> Pane<S> {
 
         let damage = match (&self.presented, &self.tree) {
             (Some(old), Some(new)) if !overlay_changed && old.bounds == new.bounds => {
-                let base = stipple_core::diff_trees(old, new);
+                let base = crate::core::diff_trees(old, new);
                 match self.overlay_damage_rects(old, new, hover_changed, focus_changed) {
                     Some(rects) => merge_regions(base, rects),
                     None => Damage::Full, // a referenced node vanished; repaint all
@@ -657,12 +658,12 @@ impl<S> Pane<S> {
         (pixmap, damage)
     }
 
-    /// Build the [accessibility tree](stipple_core::accessibility_tree) for the
+    /// Build the [accessibility tree](crate::core::accessibility_tree) for the
     /// current frame, or `None` until one has been built.
-    fn accessibility_tree(&self) -> Option<stipple_core::AccessNode> {
+    fn accessibility_tree(&self) -> Option<crate::core::AccessNode> {
         self.tree
             .as_ref()
-            .map(|t| stipple_core::accessibility_tree(t, self.focused))
+            .map(|t| crate::core::accessibility_tree(t, self.focused))
     }
 
     fn ensure_tree(&mut self, state: &S, theme: &Theme, font: Option<&Font>) {
@@ -892,7 +893,7 @@ impl<S> Pane<S> {
         let Some(id) = self
             .tree
             .as_ref()
-            .and_then(|t| stipple_core::scroll_at(t, self.last_pointer))
+            .and_then(|t| crate::core::scroll_at(t, self.last_pointer))
         else {
             return false;
         };
@@ -937,11 +938,11 @@ impl<S> App<S> {
         self.panes[0].focused
     }
 
-    /// Build the [accessibility tree](stipple_core::accessibility_tree) for the
+    /// Build the [accessibility tree](crate::core::accessibility_tree) for the
     /// primary window's current frame — the semantic view a platform AT backend
     /// would expose. Returns `None` until a frame has been built (call
     /// [`render_once`](App::render_once) or any event-routing method first).
-    pub fn accessibility_tree(&self) -> Option<stipple_core::AccessNode> {
+    pub fn accessibility_tree(&self) -> Option<crate::core::AccessNode> {
         self.panes[0].accessibility_tree()
     }
 
@@ -1128,9 +1129,9 @@ impl<S> App<S> {
     pub fn run(mut self) {
         // Map the semantic accessibility tree into the platform-neutral mirror the
         // backend's OS bridge consumes (NSAccessibility / UIA / AT-SPI).
-        fn to_platform_a11y(node: &stipple_core::AccessNode) -> stipple_platform::A11yNode {
-            use stipple_core::Role;
-            use stipple_platform::A11yRole;
+        fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platform::A11yNode {
+            use crate::core::Role;
+            use crate::platform::A11yRole;
             let role = match node.role {
                 Role::Window => A11yRole::Window,
                 Role::Group => A11yRole::Group,
@@ -1138,7 +1139,7 @@ impl<S> App<S> {
                 Role::TextField => A11yRole::TextField,
                 Role::Text => A11yRole::Text,
             };
-            stipple_platform::A11yNode {
+            crate::platform::A11yNode {
                 role,
                 name: node.name.clone(),
                 bounds: (
@@ -1168,7 +1169,7 @@ impl<S> App<S> {
         let present = |app: &mut Self,
                        surfaces: &mut [Option<Box<dyn Surface>>],
                        idx: usize,
-                       window: &dyn stipple_platform::Window,
+                       window: &dyn crate::platform::Window,
                        force: bool| {
             let App {
                 state,
@@ -1412,14 +1413,14 @@ impl<S> App<S> {
                         if input == KeyInput::Paste
                             && let Some(text) = window.clipboard()
                         {
-                            stipple_core::set_clipboard_text(&text);
+                            crate::core::set_clipboard_text(&text);
                         }
                         let writes_clipboard = matches!(input, KeyInput::Copy | KeyInput::Cut);
                         if self.pane_press_key(idx, input) {
                             present(&mut self, &mut surfaces, idx, window, false);
                         }
                         if writes_clipboard {
-                            window.set_clipboard(&stipple_core::clipboard_text());
+                            window.set_clipboard(&crate::core::clipboard_text());
                         }
                     }
                     ControlFlow::Wait
@@ -1494,16 +1495,16 @@ fn map_key(code: KeyCode, modifiers: Modifiers) -> Option<KeyInput> {
 /// The common imports for building a Stipple app.
 pub mod prelude {
     pub use crate::App;
-    pub use stipple_anim::{Easing, Spring, Tween};
-    pub use stipple_core::ViewportId;
-    pub use stipple_core::{
+    pub use crate::anim::{Easing, Spring, Tween};
+    pub use crate::core::ViewportId;
+    pub use crate::core::{
         Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, View,
     };
-    pub use stipple_geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
-    pub use stipple_render::{Color, Font, Pixmap};
-    pub use stipple_style::Theme;
-    pub use stipple_style::{Palette, Spacing, Typography};
-    pub use stipple_widgets::{
+    pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
+    pub use crate::render::{Color, Font, Pixmap};
+    pub use crate::style::Theme;
+    pub use crate::style::{Palette, Spacing, Typography};
+    pub use crate::widgets::{
         EditBuffer, Variant, button, button_labeled, button_variant, checkbox, column, divider,
         edit_string, heading, label, menu, menu_item, open_dialog, open_menu, panel, paragraph,
         progress_bar, radio, row, scroll, setting_row, slider, spacer, spinner, swatch, switch,
@@ -1514,7 +1515,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stipple_widgets::{button, column};
+    use crate::widgets::{button, column};
 
     struct Counter {
         n: i64,
@@ -1562,15 +1563,15 @@ mod tests {
         let mut app = counter_app();
         assert_eq!(
             app.render_once().size(),
-            stipple_geometry::PhysicalSize::new(200, 80)
+            crate::geometry::PhysicalSize::new(200, 80)
         );
     }
 
     #[test]
     fn input_forwards_to_a_viewport_sink_in_local_coords() {
+        use crate::core::{ViewportEvent, ViewportId, collect_viewports};
         use std::cell::RefCell;
         use std::rc::Rc;
-        use stipple_core::{ViewportEvent, ViewportId, collect_viewports};
 
         let vid = ViewportId(7);
         let log: Rc<RefCell<Vec<(ViewportId, ViewportEvent)>>> = Rc::new(RefCell::new(Vec::new()));
@@ -1616,16 +1617,16 @@ mod tests {
 
     #[test]
     fn viewport_content_is_composited_over_the_placeholder() {
-        use stipple_core::ViewportId;
-        use stipple_geometry::PhysicalSize;
-        use stipple_render::Color;
-        use stipple_widgets::viewport;
+        use crate::core::ViewportId;
+        use crate::geometry::PhysicalSize;
+        use crate::render::Color;
+        use crate::widgets::viewport;
 
         let vid = ViewportId(1);
         // A 100×60 window holding a 40×30 viewport inset at (10,10) by a 10px pad.
         let mut app = App::new((), move |_s: &(), _cx: &mut Cx<()>| {
             column(vec![viewport(&Theme::light(), vid, 40.0, 30.0)])
-                .padding(stipple_geometry::Insets::uniform(10.0))
+                .padding(crate::geometry::Insets::uniform(10.0))
         })
         .logical_size(Size::new(100.0, 60.0));
 
@@ -1665,8 +1666,8 @@ mod tests {
     /// recolors the *bottom* box. The layout never moves, so a state change
     /// should damage just the bottom box — not the whole window.
     fn damage_app() -> App<bool> {
-        use stipple_core::BoxStyle;
-        use stipple_render::Color;
+        use crate::core::BoxStyle;
+        use crate::render::Color;
         App::new(false, |flipped: &bool, cx: &mut Cx<bool>| {
             let bottom = if *flipped {
                 Color::rgb(200, 0, 0)
@@ -1767,8 +1768,8 @@ mod tests {
     fn form_app() -> App<Form> {
         App::new(Form::default(), |state: &Form, cx: &mut Cx<Form>| {
             let theme = *cx.theme();
-            stipple_widgets::text_field(cx, &theme, &state.name, |s: &mut Form, k| {
-                stipple_widgets::edit_string(&mut s.name, k)
+            crate::widgets::text_field(cx, &theme, &state.name, |s: &mut Form, k| {
+                crate::widgets::edit_string(&mut s.name, k)
             })
             .width(300.0)
             .height(100.0)
@@ -1804,7 +1805,7 @@ mod tests {
         let mut app = App::new(Toggles::default(), |s: &Toggles, cx: &mut Cx<Toggles>| {
             let theme = *cx.theme();
             // A checkbox filling the window for a predictable hit point.
-            stipple_widgets::checkbox(cx, &theme, s.on, |t: &mut Toggles| t.on = !t.on)
+            crate::widgets::checkbox(cx, &theme, s.on, |t: &mut Toggles| t.on = !t.on)
                 .width(100.0)
                 .height(100.0)
         })
@@ -1826,7 +1827,7 @@ mod tests {
     fn slider_drag_sets_value_from_position() {
         let mut app = App::new(Volume::default(), |s: &Volume, cx: &mut Cx<Volume>| {
             let theme = *cx.theme();
-            stipple_widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
+            crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
                 .width(200.0)
         })
         .logical_size(Size::new(200.0, 40.0));
@@ -1856,13 +1857,13 @@ mod tests {
 
     #[test]
     fn accessibility_tree_reflects_focus() {
-        use stipple_core::Role;
+        use crate::core::Role;
         // A container root holding a field — the realistic shape (the root is
         // the Window, the field a nested TextField).
         let mut app = App::new(Form::default(), |state: &Form, cx: &mut Cx<Form>| {
             let theme = *cx.theme();
-            let field = stipple_widgets::text_field(cx, &theme, &state.name, |s: &mut Form, k| {
-                stipple_widgets::edit_string(&mut s.name, k)
+            let field = crate::widgets::text_field(cx, &theme, &state.name, |s: &mut Form, k| {
+                crate::widgets::edit_string(&mut s.name, k)
             });
             column(vec![field])
         })

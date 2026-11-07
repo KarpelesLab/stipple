@@ -568,7 +568,7 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
-  # Render a real window whose frames are produced on the GPU (stipple-gpu) and
+  # Render a real window whose frames are produced on the GPU (stipple::gpu) and
   # presented through the X11 Surface — the GPU render path wired into the live
   # on-screen present loop. Runs under Xvfb + Mesa (surfaceless EGL).
   visual-gpu-window:
@@ -586,7 +586,7 @@ jobs:
             libegl-dev libgles-dev libegl-mesa0 libgl1-mesa-dri libgbm-dev
 
       - name: Build the GPU window example (GLES backend)
-        run: cargo build --release -p gpuwindow --features stipple-gpu/gl
+        run: cargo build --release -p gpuwindow --features stipple/gl
 
       - name: Start Xvfb
         run: |
@@ -649,7 +649,7 @@ jobs:
           sudo apt-get install -y libegl-dev libgles-dev libegl-mesa0 libgl1-mesa-dri libgbm-dev
 
       - name: Build the dma-buf spike (GLES backend)
-        run: cargo build --release -p dmabuftest --features stipple-gpu/gl
+        run: cargo build --release -p dmabuftest --features stipple/gl
 
       - name: Run the export/import self-test
         env:
@@ -932,7 +932,7 @@ jobs:
       - name: Exercise the raw Direct3D 11 (WARP) backend
         shell: bash
         run: |
-          cargo run --release -p d3ddemo --features stipple-gpu/d3d | tee d3ddemo.log
+          cargo run --release -p d3ddemo --features stipple/d3d | tee d3ddemo.log
           # WARP is always available on the runner, so a device must come up.
           grep -q "D3D11 device: WARP device" d3ddemo.log
 
@@ -1169,7 +1169,7 @@ jobs:
           path: visual_output/*.png
           if-no-files-found: warn
 
-  # Route a Stipple frame through the GPU (stipple-gpu: EGL + GLES2) on Mesa's
+  # Route a Stipple frame through the GPU (stipple::gpu: EGL + GLES2) on Mesa's
   # software GL and screenshot the read-back, proving the GPU present path.
   visual-gpu:
     name: Visual test (GPU / GLES via Mesa)
@@ -1188,7 +1188,7 @@ jobs:
             imagemagick fonts-dejavu-core
 
       - name: Build gpudemo with the GL + Vulkan features
-        run: cargo build --release -p gpudemo --features stipple-gpu/gl,stipple-gpu/vk
+        run: cargo build --release -p gpudemo --features stipple/gl,stipple/vk
 
       - name: Render through the GPU and convert the readback to PNG
         env:
@@ -1294,7 +1294,7 @@ jobs:
 
       - name: Exercise the raw Metal backend
         run: |
-          cargo run --release -p metaldemo --features stipple-gpu/mtl | tee metaldemo.log
+          cargo run --release -p metaldemo --features stipple/mtl | tee metaldemo.log
           # A Metal device is always available on the macOS runner.
           grep -q "Metal device: " metaldemo.log
           # ...and a GPU-rendered frame must read back as the cleared stipple blue

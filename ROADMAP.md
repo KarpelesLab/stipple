@@ -15,20 +15,24 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 
 ## 0. Implementation status
 
+> The toolkit was merged from 11 crates into the single `stipple` crate (only
+> `stipple-web` stays separate), so `stipple::core` was once `stipple-core`, and
+> so on. Entries below describe the work as it landed.
+
 > Living checklist — updated as work lands. ✅ done · 🚧 in progress · ⬜ not started.
 
 - ✅ **Workspace + 10 crates** scaffolded (edition 2024, rust 1.88 — floor set
   by the oxideav stack via `oxideav-png` → `compcol`), CI (lint +
-  MSRV), `stipple-geometry`.
-- ✅ **Rendering seam** (`stipple-render`): `Scene` → oxideav `VectorFrame` →
+  MSRV), `stipple::geometry`.
+- ✅ **Rendering seam** (`stipple::render`): `Scene` → oxideav `VectorFrame` →
   `oxideav-raster` → `Pixmap`; `Surface` GPU-ready boundary.
 - ✅ **Software rasterization** path verified end to end (off-screen PNGs).
-- ✅ **Layout** (`stipple-layout`): flex/box solver. **Paint**: `Element` IR +
+- ✅ **Layout** (`stipple::layout`): flex/box solver. **Paint**: `Element` IR +
   measure/layout/paint passes.
-- ✅ **Reactivity MVP** (`stipple-core`): retained `LayoutNode` tree, `hit_test`,
+- ✅ **Reactivity MVP** (`stipple::core`): retained `LayoutNode` tree, `hit_test`,
   `Cx` handler registry, `on_tap` dispatch → state mutation (the `clickdemo`
   example drives clicks through the real path).
-- ✅ **Theming** (`stipple-style`) and **animation primitives** (`stipple-anim`).
+- ✅ **Theming** (`stipple::style`) and **animation primitives** (`stipple::anim`).
 - ✅ **Text rendering** via `oxideav-scribe`: `Font` (load + measure), glyph
   shaping → scene nodes with per-run color; `Text` element threaded through
   layout (intrinsic sizing) and paint; `label`/`button_labeled` widgets.
@@ -108,7 +112,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 - ✅ **Hover highlight**: the App tracks the hovered tappable element and
   overlays a translucent highlight matching its shape, re-presenting on change
   (CI-verified — `xdotool` hovers one of two buttons, which lights up).
-- ✅ **GPU present path (Phase 6 seam)**: `stipple-gpu` routes the software
+- ✅ **GPU present path (Phase 6 seam)**: `stipple::gpu` routes the software
   `Pixmap` through raw EGL + OpenGL ES 2 (texture upload → fullscreen-quad
   shader → offscreen FBO → readback). **CI-verified** on Mesa software GL
   (`docs/screenshots/stipple-gpu.png`). v1 composites the CPU frame on the GPU;
@@ -121,19 +125,19 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   and hover overlay read theme tokens. **CI-verified**: the `themegallery`
   example renders one card under four themes, montaged into
   `docs/screenshots/stipple-themes.png`.
-- ✅ **Frame reconciliation (damage diffing)**: `stipple-core::diff_trees`
+- ✅ **Frame reconciliation (damage diffing)**: `stipple::core::diff_trees`
   compares the previously-presented `LayoutNode` tree against the freshly built
   one and returns a `Damage` region (changed rectangles, coalesced). The `App`
   retains the on-screen frame as a baseline and limits each present to the
   damaged region via the `Surface` damage seam — a state change repaints only
   what moved (expose/resize still force a full present). Unit-tested in
-  `stipple-core` (localized/full/none cases) and `stipple` (incremental App frames).
+  `stipple::core` (localized/full/none cases) and `stipple` (incremental App frames).
 - ✅ **Area-based partial rasterization**: damage diffing chose *what* to
   present, but the renderer could still only paint the whole canvas and any
   hover/focus change forced `Damage::Full` — so a pointer move crossing a
   tappable re-ran a full tree rebuild, full-window CPU rasterize, and full
   upload (multi-second pointer lag). Two new seams close the gap.
-  `stipple-render`: `SoftwareRenderer::render_region` rasterizes only a logical
+  `stipple::render`: `SoftwareRenderer::render_region` rasterizes only a logical
   sub-rect (via the frame's view box) into a caller-sized buffer, and
   `Pixmap::blit` composites it into a retained full-window pixmap — a region
   render is pixel-identical to the full render within that rect. `stipple`:
@@ -174,7 +178,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   dropped by one line height. Editable fields stay single-line (caret/selection
   math unchanged). **CI-verified** — the `window` example's two-line caption
   (`docs/screenshots/stipple-x11.png`).
-- ✅ **Pointer-drag text selection**: `stipple-core::caret_index_at` resolves a
+- ✅ **Pointer-drag text selection**: `stipple::core::caret_index_at` resolves a
   pointer x to the nearest caret byte index (prefix-measured); a `TextPosId` /
   `on_text_pos` handler routes presses (place caret) and drags (extend
   selection) through `text_pos_at`/`find_text_pos`. `EditBuffer` gains
@@ -218,7 +222,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   (`Stipple Android: window 320x640 presented=true`). Both mobile backends thus
   render on a real device surface — iOS on the simulator, Android on the
   emulator. (Touch input + the full lifecycle event loop are follow-up depth.)
-- ✅ **a11y foundation**: `stipple-core::a11y::accessibility_tree` builds a pruned
+- ✅ **a11y foundation**: `stipple::core::a11y::accessibility_tree` builds a pruned
   semantic `AccessNode` tree (Window/Group/Button/TextField/Text roles, names,
   focus) from the layout tree; `App::accessibility_tree()` exposes it.
   Unit-tested. On **Linux** the tree is wired to the OS accessibility API:
@@ -273,7 +277,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   AT-SPI `children-changed` — on each tree swap, and mapping bounds to screen
   coordinates.)
 - ✅ **GPU-native drawing**: a live stipple `Scene` renders entirely on the GPU.
-  The `Scene` records structured `DrawCmd`s; `stipple-gpu::render_scene` turns box
+  The `Scene` records structured `DrawCmd`s; `stipple::gpu::render_scene` turns box
   primitives (sharp/rounded fills + stroked borders) into geometry shaded by a
   rounded-rect signed-distance-field GLES2 shader, and composites each text run
   as an alpha-blended glyph-coverage mask (not by compositing a whole CPU
@@ -308,7 +312,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   Finally, GPU rendering is **wired into the live on-screen present path**:
   `App::render_with` swaps the software rasterizer for any
   `Scene → Pixmap` renderer, and the `gpuwindow` example drives a real X11 window
-  whose every frame is produced by `stipple-gpu::render_scene` (GLES SDF + glyph
+  whose every frame is produced by `stipple::gpu::render_scene` (GLES SDF + glyph
   atlas) and presented through the platform `Surface`. **CI-verified** under
   Xvfb + Mesa: the window paints a full GPU-rendered frame with no software
   fallback (`docs/screenshots/stipple-gpu-window.png`). (A zero-copy swapchain
@@ -339,7 +343,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   switches the body on a tab click and opens a context menu on right-click.
 - ✅ **Clipboard**: copy/cut/paste in text fields via `Ctrl`/`Cmd`+`C`/`X`/`V`
   (`map_key` → `KeyInput::Copy`/`Cut`/`Paste`, handled by `EditBuffer`). An
-  in-process mirror (`stipple-core::clipboard`) makes copy/paste work in-app and
+  in-process mirror (`stipple::core::clipboard`) makes copy/paste work in-app and
   headless; the app syncs it with the OS clipboard around each op through the
   `Window::clipboard`/`set_clipboard` seam. The X11 backend implements that seam
   by owning the `CLIPBOARD` selection and answering `SelectionRequest`
@@ -376,7 +380,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   (macOS) / shared D3D handle (Windows), and Stipple imports it as a texture and
   composites it into a viewport element — so chrome (menus, tabs, dropdowns)
   draws over/around the page and input is routed by Stipple and forwarded to the
-  content process. **Phase A (done):** `stipple-gpu` can export a GL texture as a
+  content process. **Phase A (done):** `stipple::gpu` can export a GL texture as a
   `dma-buf` and re-import it (`EGL_MESA_image_dma_buf_export` /
   `EGL_EXT_image_dma_buf_import`), proving the zero-copy handoff; the
   `dmabuftest` spike self-tests the round-trip (surfaceless, run on a GPU box;
@@ -399,7 +403,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   fd** as ancillary data (received via `scm`, handling the fd-bearing reply
   arriving split from its data); binding our GPU/EGL context to that exact
   device is what lets the server import the dma-bufs we render. Request encoding
-  unit-tested; hardware-gated (Xvfb has no DRM). **B.3** `stipple-gpu` EGL-via-GBM
+  unit-tested; hardware-gated (Xvfb has no DRM). **B.3** `stipple::gpu` EGL-via-GBM
   — `gbm_create_device(drm_fd)` → `eglGetPlatformDisplay(EGL_PLATFORM_GBM)` →
   shared context, so we render on the **same GPU the X server uses**;
   `dmabuf_self_test_on_device(drm_fd)` runs the export/import/sample round-trip
@@ -409,7 +413,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   `dri3_open_drm_fd()` → GBM-bind EGL to that fd → dma-buf round-trip, proving
   on real GPU + X hardware that the server's GPU can export and re-import the
   buffers the compositor will hand it (`cargo run -p dri3probe
-  --features stipple-gpu/gl`).
+  --features stipple/gl`).
   **Phase C (UI integration — done):** the toolkit-side compositor surface is
   wired and CI-verified on the software path (no GPU needed, so it runs under
   Xvfb). A **viewport element** (`Element::viewport(ViewportId)` /
@@ -527,7 +531,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
    behind a stable `Surface` abstraction — without wgpu, using raw
    Metal / Vulkan / D3D12 / WebGPU.
 6. **Portability is a layering discipline.** All OS-specific code lives behind
-   `stipple-platform`. The rest of the stack is `#![forbid]`-clean of platform
+   `stipple::platform`. The rest of the stack is `#![forbid]`-clean of platform
    `cfg`s and is tested headlessly with golden images.
 
 ### Non-negotiable dependency policy
@@ -547,43 +551,43 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 
 ## 2. Architecture
 
-Layered, bottom-up. Each layer is a crate (or a small crate group) in a single
-Cargo workspace. Stipple targets **edition 2024, rust 1.88** (the floor imposed
+Layered, bottom-up. Each layer is a module of the single `stipple` crate (only
+`stipple-web`, the wasm `cdylib`, is a separate package). Stipple targets **edition 2024, rust 1.88** (the floor imposed
 by the oxideav dependency chain), `version = 0.0.x`,
 pure-Rust. (oxideav itself is edition 2021 / rust 1.80; Stipple consumes it as a
 dependency but builds on the newer toolchain.)
 
 ```
                  ┌─────────────────────────────────────────┐
-   app facade    │  stipple  (umbrella: App, prelude, re-exports)
+   app facade    │  stipple  (crate root: App, prelude)
                  └─────────────────────────────────────────┘
-   widgets       │  stipple-widgets   Text Button TextField Stack Row Column …
-   styling       │  stipple-style     design tokens, themes, typography scales
-   animation     │  stipple-anim      clock, easing, springs, transitions
+   widgets       │  stipple::widgets  Text Button TextField Stack Row Column …
+   styling       │  stipple::style    design tokens, themes, typography scales
+   animation     │  stipple::anim     clock, easing, springs, transitions
                  ├─────────────────────────────────────────┤
-   runtime       │  stipple-core      View trait · element tree · reconcile ·
+   runtime       │  stipple::core     View trait · element tree · reconcile ·
                  │                  state/signals · events · focus · hit-test
-   layout        │  stipple-layout    fl/box layout solver, intrinsic sizing
+   layout        │  stipple::layout   fl/box layout solver, intrinsic sizing
                  ├─────────────────────────────────────────┤
-   rendering     │  stipple-render    Scene builder → oxideav VectorFrame ·
+   rendering     │  stipple::render   Scene builder → oxideav VectorFrame ·
                  │                  Surface trait · software backend · text run
                  │                  shaping bridge · damage/dirty regions ·
                  │                  layer + glyph caches
-   platform      │  stipple-platform  windows · event loop · input · IME ·
+   platform      │  stipple::platform windows · event loop · input · IME ·
                  │                  clipboard · DPI · vsync · a11y bridge
-   geometry      │  stipple-geometry  Point Size Rect Insets Affine (logical px)
+   geometry      │  stipple::geometry Point Size Rect Insets Affine (logical px)
                  └─────────────────────────────────────────┘
                        ↑ depends on oxideav-{core,raster,scribe,svg,png,…}
 ```
 
 ### Layer responsibilities
 
-- **`stipple-geometry`** — Logical-pixel math: `Point`, `Size`, `Rect`, `Insets`,
+- **`stipple::geometry`** — Logical-pixel math: `Point`, `Size`, `Rect`, `Insets`,
   `Affine`. Thin ergonomic layer; converts to/from `oxideav-core`'s
   `Transform2D` and physical pixels at the render boundary. Handles the
   logical↔physical DPI scale factor.
 
-- **`stipple-render`** — The seam between the toolkit and oxideav. Builds a
+- **`stipple::render`** — The seam between the toolkit and oxideav. Builds a
   `Scene` (an `oxideav_core::VectorFrame`) from draw commands; shapes text runs
   through `oxideav-scribe` (`shape` → `PositionedGlyph` →
   `shape_to_paths` → `Node`s); rasterizes via
@@ -598,38 +602,38 @@ dependency but builds on the newer toolchain.)
   }
   ```
 
-- **`stipple-platform`** — The only crate with per-OS code, selected by `cfg`.
+- **`stipple::platform`** — The only module with per-OS code, selected by `cfg`.
   Exposes `EventLoop`, `Window`, an input event stream, IME, clipboard, DPI,
   vsync/frame callbacks, lifecycle, and a `Surface` factory. Backends added in
   roadmap order: `linux` (Wayland `wl_shm` first, X11 MIT-SHM fallback),
   `macos` (AppKit), `windows` (Win32), then `android` (NDK), `ios` (UIKit),
   `web` (canvas).
 
-- **`stipple-layout`** — Self-contained flex/box layout solver over the element
+- **`stipple::layout`** — Self-contained flex/box layout solver over the element
   tree: main/cross axis, flex grow/shrink/basis, alignment, gap, padding,
-  min/max, and **intrinsic sizing** driven by `stipple-render` text measurement.
+  min/max, and **intrinsic sizing** driven by `stipple::render` text measurement.
   No `taffy`.
 
-- **`stipple-core`** — The reactive runtime ("the Compose/SwiftUI engine"):
+- **`stipple::core`** — The reactive runtime ("the Compose/SwiftUI engine"):
   the `View` trait, building an element tree, diff/reconcile against the prior
   tree, fine-grained state (signals/state cells), effect scheduling, event
   dispatch + bubbling, focus management, and hit-testing. Drives layout and
   render each frame.
 
-- **`stipple-anim`** — Frame clock (fed by platform vsync), easing curves,
+- **`stipple::anim`** — Frame clock (fed by platform vsync), easing curves,
   spring physics, and value transitions wired into the reactive runtime.
 
-- **`stipple-style`** — Design tokens, theme definitions (light/dark + custom),
+- **`stipple::style`** — Design tokens, theme definitions (light/dark + custom),
   color systems, typography scales, spacing, elevation/shadow, animation
   defaults. The single source of "the look."
 
-- **`stipple-widgets`** — The standard library drawn on top of everything:
+- **`stipple::widgets`** — The standard library drawn on top of everything:
   layout (`Row`, `Column`, `Stack`, `Grid`, `Scroll`), content (`Text`,
   `Image`, `Icon` via `oxideav-svg`), input (`Button`, `TextField`, `Checkbox`,
   `Radio`, `Switch`, `Slider`, `Dropdown`), structure (`List`/virtualized,
   `Table`, `Tabs`), overlay (`Menu`, `Popover`, `Tooltip`, `Dialog`).
 
-- **`stipple`** — Umbrella crate: `App` builder, prelude, re-exports, examples
+- **`stipple`** (crate root) — `App` builder, prelude, examples
   entry point.
 
 - **`stipple-a11y`** (lands in Phase 3) — Backend-agnostic accessibility tree
@@ -673,7 +677,7 @@ abstraction is frozen at the end of Phase 2.
 
 - Cargo workspace scaffold, CI (fmt/clippy/test on Linux), license, oxideav
   dependency wiring (path deps now, versioned later).
-- `stipple-geometry` core types + `Transform2D` interop.
+- `stipple::geometry` core types + `Transform2D` interop.
 - **Spike 1 — present path (Linux):** open a Wayland window, allocate a
   `wl_shm` buffer, render a solid `VectorFrame` rect via `oxideav-raster`, blit,
   present, handle resize + close. The "hello rectangle."
@@ -685,35 +689,35 @@ abstraction is frozen at the end of Phase 2.
 ### Phase 1 — Single-platform vertical slice (Linux)
 *Goal: a real, themeable, animated app on one platform — the full stack thin.*
 
-- `stipple-platform` Linux backend: Wayland (primary) + X11 (fallback) — window,
+- `stipple::platform` Linux backend: Wayland (primary) + X11 (fallback) — window,
   resize, mouse, keyboard, scroll, DPI/scale, frame callbacks (vsync), basic
   clipboard, basic IME.
-- `stipple-render`: `Scene` builder, software `Surface`, text-run shaping bridge,
+- `stipple::render`: `Scene` builder, software `Surface`, text-run shaping bridge,
   double buffering, damage tracking.
-- `stipple-core` MVP: `View` trait, element tree, reconcile, signals/state, event
+- `stipple::core` MVP: `View` trait, element tree, reconcile, signals/state, event
   dispatch, hit-testing, focus.
-- `stipple-layout`: flex subset (row/column/grow/align/gap/padding) + text
+- `stipple::layout`: flex subset (row/column/grow/align/gap/padding) + text
   intrinsic sizing.
-- `stipple-widgets` MVP: `Row`/`Column`/`Stack`, `Text`, `Button`, basic
+- `stipple::widgets` MVP: `Row`/`Column`/`Stack`, `Text`, `Button`, basic
   `TextField`, `Image`, `Scroll`.
-- `stipple-style` MVP theme + `stipple-anim` clock/tween/spring.
+- `stipple::style` MVP theme + `stipple::anim` clock/tween/spring.
 - **Exit criteria:** demo apps (counter, todo, settings panel) run on Linux,
   themeable (light/dark), with at least one animated transition.
 
 ### Phase 2 — Desktop breadth (macOS, Windows)
 *Goal: identical apps on all three desktops; freeze the platform/Surface API.*
 
-- `stipple-platform` macOS: `NSWindow`/`NSView`, `CVDisplayLink` vsync, blit via
+- `stipple::platform` macOS: `NSWindow`/`NSView`, `CVDisplayLink` vsync, blit via
   `CGImage`/`IOSurface`, IME via `NSTextInputClient`, clipboard, per-display
   scale.
-- `stipple-platform` Windows: `HWND`, `WM_PAINT` + GDI/DXGI blit, raw input, IME
+- `stipple::platform` Windows: `HWND`, `WM_PAINT` + GDI/DXGI blit, raw input, IME
   via TSF/IMM, clipboard, per-monitor-v2 DPI.
 - Cross-platform **golden-image conformance suite** (headless render + pixel
   diff) so "pixel-identical" is enforced in CI.
 - Multi-window; native menus, file dialogs, and message boxes (thin OS shims);
   HiDPI correctness on all three.
 - **Exit criteria:** the Phase 1 demos run unmodified on Linux/macOS/Windows
-  with matching golden images. `stipple-platform` and `Surface` APIs frozen.
+  with matching golden images. `stipple::platform` and `Surface` APIs frozen.
 
 ### Phase 3 — Toolkit maturity
 *Goal: a toolkit you'd actually ship a product with.*
@@ -737,9 +741,9 @@ abstraction is frozen at the end of Phase 2.
 
 - Touch & gesture model, on-screen keyboard, safe areas, density scaling,
   app lifecycle (suspend/resume), back-navigation.
-- `stipple-platform` Android: NDK `NativeActivity`/`GameActivity`,
+- `stipple::platform` Android: NDK `NativeActivity`/`GameActivity`,
   `ANativeWindow` buffer blit, input/IME via minimal JNI, density.
-- `stipple-platform` iOS: UIKit, `CADisplayLink`, `CALayer`/`CGImage` present,
+- `stipple::platform` iOS: UIKit, `CADisplayLink`, `CALayer`/`CGImage` present,
   `UITextInput` IME, touch, lifecycle.
 - **Exit criteria:** a demo app runs on Android + iOS hardware/simulators with
   the same `view` code.
@@ -780,10 +784,10 @@ abstraction is frozen at the end of Phase 2.
 | Risk | Mitigation |
 |---|---|
 | CPU rasterization too slow for large/animated/4K UIs | Damage tracking + layer/glyph caching in Phase 1; GPU `Surface` (Phase 6) behind the same trait. |
-| Per-OS windowing/IME is a deep, hand-written surface | Confine to `stipple-platform`; freeze the trait after Phase 2; ship one OS fully before porting. |
+| Per-OS windowing/IME is a deep, hand-written surface | Confine to `stipple::platform`; freeze the trait after Phase 2; ship one OS fully before porting. |
 | Reactive runtime + Rust ownership friction | Prototype the `View`/state model in Phase 1 against real demos before widening the widget set. |
 | Accessibility is hard when self-drawing everything | Dedicated `stipple-a11y` semantics tree + native bridges in Phase 3, designed in from the element tree. |
-| oxideav API churn | Pin via path deps now; track upstream; the `stipple-render` seam isolates oxideav from the rest. |
+| oxideav API churn | Pin via path deps now; track upstream; the `stipple::render` seam isolates oxideav from the rest. |
 | Web with "minimal deps" constraint | Accept a thin, hand-audited JS-interop shim as the one web exception. |
 
 ---
@@ -797,7 +801,6 @@ window/input/clipboard/IME/a11y); platform order desktop-trio → mobile → web
 **Still open (revisit before/within Phase 1):**
 - Threading model: single-threaded UI + render thread vs. fully async event loop.
 - State/reactivity primitives: signals vs. message/`update`-reducer vs. hybrid.
-- Whether layout folds into `stipple-core` or stays a separate crate.
 - Styling authoring: pure-Rust builder API only, or an optional declarative
   style/theme description format.
 - Async integration (timers, IO, futures) and how it drives re-renders.

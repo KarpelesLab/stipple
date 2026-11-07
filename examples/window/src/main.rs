@@ -1,7 +1,7 @@
 //! Opens a real native window and runs the Stipple event loop.
 //!
 //! On Linux with `$DISPLAY` set this uses the native X11 backend
-//! (`stipple_platform::backend::x11`); otherwise it falls back to a one-shot
+//! (`stipple::platform::backend::x11`); otherwise it falls back to a one-shot
 //! headless present. Used by the visual-test CI job: the runner starts an Xvfb
 //! display, launches this binary, and screenshots the root window to confirm
 //! the X11 backend actually paints.
