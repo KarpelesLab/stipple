@@ -10,16 +10,20 @@
 //! is a convenience that probes common OS font locations (handy for examples
 //! and tests, not meant for shipping apps).
 
-use crate::geometry::{Point, Size};
+use crate::geometry::{Point, ScaleFactor, Size};
 use crate::render::Color;
 use crate::render::scene::Scene;
+use crate::render::software::SoftwareRenderer;
 use core::fmt;
 use oxideav_core::{Group, Node, Paint, Transform2D};
 use oxideav_scribe::{Face, FaceChain, Shaper};
+use std::sync::OnceLock;
 
 /// A loaded, shapeable font face.
 pub struct Font {
     chain: FaceChain,
+    /// Capital-letter height per em, measured once on first use.
+    cap_height: OnceLock<f64>,
 }
 
 impl fmt::Debug for Font {
@@ -49,6 +53,7 @@ impl Font {
         let face = parse_face(bytes)?;
         Ok(Self {
             chain: FaceChain::new(face),
+            cap_height: OnceLock::new(),
         })
     }
 
@@ -101,6 +106,47 @@ impl Font {
     /// pixels, at `size_px`.
     pub fn ascent(&self, size_px: f64) -> f64 {
         self.chain.primary().ascent_px(size_px as f32) as f64
+    }
+
+    /// Distance from the top of a line to its baseline at `size_px`, placing
+    /// capital letters at the line's vertical center.
+    ///
+    /// Fonts disagree about what "ascent" means and where line spacing goes, so a
+    /// box's metrics alone leave text visibly high or low in a button. Measuring
+    /// the capitals centers text the same way under any font.
+    pub fn baseline(&self, size_px: f64) -> f64 {
+        let cap = *self.cap_height.get_or_init(|| self.measure_cap_height());
+        (self.line_height(size_px) + cap * size_px) / 2.0
+    }
+
+    /// Rasterize an "H" at a large size and measure its height, per em.
+    fn measure_cap_height(&self) -> f64 {
+        const EM: f64 = 128.0;
+        let side = (EM * 2.0) as u32;
+        let mut scene = Scene::new(Size::new(side as f64, side as f64));
+        let glyphs = Shaper::shape_to_paths(self.chain(), "H", EM as f32);
+        let run = glyphs
+            .into_iter()
+            .map(|(_, node, transform)| {
+                let glyph = Group::new()
+                    .with_transform(transform)
+                    .with_child(recolor(node, Color::WHITE));
+                Node::Group(glyph)
+            })
+            .collect();
+        let placed = Group::new()
+            .with_transform(Transform2D::translate(8.0, EM as f32 * 1.5))
+            .with_children(run);
+        scene.push_node(Node::Group(placed));
+        let pixmap = SoftwareRenderer::new().render(scene, ScaleFactor::IDENTITY);
+        let inked = |y: u32| (0..side).any(|x| pixmap.pixel(x, y).is_some_and(|p| p[3] > 127));
+        let top = (0..side).find(|y| inked(*y));
+        let bottom = (0..side).rev().find(|y| inked(*y));
+        match (top, bottom) {
+            (Some(top), Some(bottom)) => (bottom - top + 1) as f64 / EM,
+            // A font without an "H": its ascent is the closest thing it reports.
+            _ => self.ascent(1.0),
+        }
     }
 
     /// Full line height (ascent + descent + line gap) at `size_px`.
@@ -221,7 +267,7 @@ impl Scene {
         // uses the glyph nodes pushed below).
         self.record_text(text, origin, size_px, color);
         let line_height = font.line_height(size_px);
-        let ascent = font.ascent(size_px);
+        let first_baseline = font.baseline(size_px);
         for (i, line) in text.split('\n').enumerate() {
             if line.is_empty() {
                 continue;
@@ -237,9 +283,9 @@ impl Scene {
                     .with_child(recolor(node, color));
                 run.push(Node::Group(glyph));
             }
-            // Pen starts at origin.x; the baseline drops by the ascent plus this
-            // line's offset so the text box top aligns to origin.y.
-            let baseline = (origin.y + i as f64 * line_height + ascent) as f32;
+            // Pen starts at origin.x; the baseline is measured from the top of this
+            // line of the text box.
+            let baseline = (origin.y + i as f64 * line_height + first_baseline) as f32;
             let placed = Group::new()
                 .with_transform(Transform2D::translate(origin.x as f32, baseline))
                 .with_children(run);
@@ -253,6 +299,30 @@ mod tests {
     use super::*;
     use crate::geometry::{Rect, ScaleFactor};
     use crate::render::SoftwareRenderer;
+
+    /// Capitals sit at the center of the line, under whichever font this host has.
+    #[test]
+    fn capitals_are_centered_in_the_line() {
+        let Some(font) = Font::system_default() else {
+            return;
+        };
+        for size in [14.0, 28.0] {
+            let mut scene = Scene::new(Size::new(200.0, 60.0));
+            let white = Color::rgb(255, 255, 255);
+            scene.fill_text(&font, "HEH", Point::new(0.0, 10.0), size, white);
+            let px = crate::render::software::SoftwareRenderer::new()
+                .render(scene, crate::geometry::ScaleFactor::IDENTITY);
+            let inked = |y: u32| (0..200).any(|x| px.pixel(x, y).is_some_and(|p| p[3] > 127));
+            let top = (0..60).find(|y| inked(*y)).unwrap() as f64;
+            let bottom = (0..60).rev().find(|y| inked(*y)).unwrap() as f64 + 1.0;
+            let center = (top + bottom) / 2.0 - 10.0;
+            let want = font.line_height(size) / 2.0;
+            assert!(
+                (center - want).abs() <= 1.0,
+                "{center} vs {want} at {size}px"
+            );
+        }
+    }
 
     #[test]
     fn measure_is_monotonic_in_length() {

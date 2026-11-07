@@ -42,14 +42,15 @@ jobs:
       - name: Install Xvfb, ImageMagick, x11-utils, and a font
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb imagemagick x11-utils fonts-dejavu-core
+          sudo apt-get install -y xvfb imagemagick x11-utils x11-xserver-utils xdotool fonts-dejavu-core
 
       - name: Build the window example
         run: cargo build --release -p window
 
       - name: Start Xvfb
         run: |
-          Xvfb :99 -screen 0 1024x768x24 &
+          # -noreset keeps the Xft.dpi set below, once xrdb disconnects.
+          Xvfb :99 -noreset -screen 0 1024x768x24 &
           echo "XVFB_PID=$!" >> "$GITHUB_ENV"
           sleep 2
 
@@ -79,6 +80,30 @@ jobs:
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root -crop 360x340+0+0 +repage visual_output/stipple-x11-native.png
+
+      - name: Render at 2x from Xft.dpi, and hit-test at that scale
+        env:
+          DISPLAY: ":99"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          sleep 1
+          printf 'Xft.dpi: 192\n' | xrdb -nocpp -merge
+          ./target/release/nativegallery > visual_output/native-2x.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          import -window root -crop 720x680+0+0 +repage visual_output/hidpi-before.png
+          # At 2x the content must reach beyond the 1x window's 360x340 area.
+          corner=$(convert visual_output/hidpi-before.png -format '%[fx:p{700,20}.intensity]' info:)
+          echo "brightness past the 1x window's edge: $corner"
+          awk "BEGIN{exit !($corner > 0.5)}"
+          # Click "Large" at its physical position. If positions weren't scaled to
+          # logical pixels this would land on empty space and change nothing.
+          xdotool mousemove 216 370 click 1
+          sleep 1
+          import -window root -crop 720x680+0+0 +repage visual_output/stipple-x11-2x.png
+          diff=$(compare -metric AE visual_output/hidpi-before.png visual_output/stipple-x11-2x.png null: 2>&1 || true)
+          echo "pixels changed by the click: $diff"
+          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 100 ]
 
       - name: Stop the app and Xvfb
         if: always()
@@ -784,6 +809,19 @@ jobs:
           sleep 5
           grim visual_output/stipple-wayland.png || echo "grim failed"
           kill "$WIN_PID" 2>/dev/null || true
+          sleep 1
+
+          # --- scale: with the output at 2x, the buffer must follow it. ---
+          export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
+          swaymsg output HEADLESS-1 scale 2
+          sleep 1
+          ./target/release/window > visual_output/wl-2x.log 2>&1 &
+          WIN_PID=$!
+          sleep 5
+          grim visual_output/stipple-wayland-2x.png || echo "grim failed"
+          kill "$WIN_PID" 2>/dev/null || true
+          grep -q "buffer scale 2" visual_output/wl-2x.log
+          swaymsg output HEADLESS-1 scale 1
           sleep 1
 
           # --- input: type into the textinput field via wtype (virtual

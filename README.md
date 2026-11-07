@@ -7,9 +7,10 @@
 
 A cross-platform UI library and toolkit in Rust.
 
-Stipple draws **beautiful, fully themeable, pixel-identical** interfaces on Linux,
-macOS, Windows, Android, iOS, and the web — staying **as close to the OS as
-possible** while depending on **as little third-party code as possible**.
+Stipple draws **beautiful, fully themeable** interfaces on Linux, macOS, Windows,
+Android, iOS, and the web — **pixel-identical** across platforms under its own
+themes, or **native** under `Theme::native()` — while depending on **as little
+third-party code as possible**.
 
 It builds on the pure-Rust [`oxideav`](https://github.com/OxideAV) media stack
 for all 2D content rendering (scene graph, CPU rasterizer, font shaping, image
@@ -72,6 +73,25 @@ wl"):
 |---|---|---|---|
 | ![clicks](./docs/screenshots/stipple-x11-clicks.png) | ![typing](./docs/screenshots/stipple-x11-textinput.png) | ![mac clicks](./docs/screenshots/stipple-macos-clicks.png) | ![wl type](./docs/screenshots/stipple-wayland-input.png) |
 
+## Native look
+
+`Theme::native()` follows the system's light/dark mode and accent color, and on
+Windows, macOS and iOS has the OS's own UI framework draw the controls: `uxtheme`,
+AppKit and UIKit, each rendering a control's chrome into a bitmap. Stipple keeps
+layout, input, the caret and the labels. Linux has no native framework and Android's
+needs the JVM, so controls stay self-drawn there, in the system's colors.
+
+| Windows | macOS | iOS | Linux |
+|---|---|---|---|
+| ![Windows](./docs/screenshots/stipple-windows-native.png) | ![macOS](./docs/screenshots/stipple-macos-native.png) | ![iOS](./docs/screenshots/stipple-ios-native.png) | ![Linux](./docs/screenshots/stipple-x11-native.png) |
+
+Windows has no switch and iOS has no checkbox or radio button, so those stay
+self-drawn. The GPU backends can't draw these bitmaps yet, so `App::render_with`
+skips the controls' chrome under this theme.
+
+These screenshots, and the others on this page, are committed by CI after each
+green push to `master`.
+
 ## Themeable by design
 
 Every widget reads its colors and metrics from a [`Theme`] — a semantic
@@ -94,7 +114,9 @@ violet-accent dark, high-contrast), montaged in CI:
   Vulkan, Metal, Direct3D 11, and WebGPU backends. No wgpu.
 - **Reactive / declarative** API: UI is a function of state. Frames are
   damage-diffed and only changed regions are re-rasterized and presented.
-- **Self-drawn widgets**: one theme engine, identical on every platform.
+- **Self-drawn widgets**: one theme engine, identical on every platform, unless
+  `Theme::native()` asks the OS to draw them.
+- **High-DPI**: renders at the display's scale on every desktop backend and iOS.
 - **Accessible**: the semantic tree is exposed to AT-SPI (Linux),
   NSAccessibility (macOS) and UI Automation (Windows), each over a hand-written
   bridge (D-Bus wire protocol, `objc_msgSend`, COM vtables).

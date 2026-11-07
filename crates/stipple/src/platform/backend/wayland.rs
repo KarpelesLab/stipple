@@ -129,6 +129,9 @@ const WL_SHM_POOL_CREATE_BUFFER: u16 = 0;
 const WL_SURFACE_ATTACH: u16 = 1;
 const WL_SURFACE_DAMAGE: u16 = 2;
 const WL_SURFACE_COMMIT: u16 = 6;
+const WL_SURFACE_SET_BUFFER_SCALE: u16 = 8;
+const WL_SURFACE_ENTER: u16 = 0;
+const WL_OUTPUT_SCALE: u16 = 3;
 const WL_SEAT_GET_KEYBOARD: u16 = 1;
 const XDG_WM_BASE_PONG: u16 = 3;
 const XDG_WM_BASE_GET_XDG_SURFACE: u16 = 2;
@@ -369,6 +372,8 @@ struct WlConn {
     /// A file descriptor received with the most recent message (e.g. the
     /// `wl_keyboard.keymap` fd), taken by the handler that expects it.
     pending_fd: Option<i32>,
+    /// Buffer pixels per surface unit: the scale of the output we're on.
+    buffer_scale: u32,
 }
 
 impl WlConn {
@@ -390,6 +395,7 @@ impl WlConn {
             stream,
             next_id: 2,
             pending_fd: None,
+            buffer_scale: 1,
         })
     }
 
@@ -640,7 +646,7 @@ impl Window for WaylandWindow {
         self.size
     }
     fn scale_factor(&self) -> ScaleFactor {
-        ScaleFactor::IDENTITY
+        ScaleFactor::new(self.conn.lock().unwrap().buffer_scale as f64)
     }
     fn request_redraw(&self) {}
     fn set_title(&self, _title: &str) {}
@@ -702,16 +708,21 @@ impl Surface for WaylandSurface {
 
         let surface = self.surface;
         // attach(buffer, 0, 0); damage(0, 0, w, h); commit.
+        let scale = conn.buffer_scale.max(1);
+        let mut a = Vec::new();
+        arg_u32(&mut a, scale);
+        let _ = conn.send(surface, WL_SURFACE_SET_BUFFER_SCALE, &a);
         let mut a = Vec::new();
         arg_u32(&mut a, buffer);
         arg_u32(&mut a, 0);
         arg_u32(&mut a, 0);
         let _ = conn.send(surface, WL_SURFACE_ATTACH, &a);
+        // Damage is in surface units, which the scale divides the buffer into.
         let mut a = Vec::new();
         arg_u32(&mut a, 0);
         arg_u32(&mut a, 0);
-        arg_u32(&mut a, size.width);
-        arg_u32(&mut a, size.height);
+        arg_u32(&mut a, size.width / scale);
+        arg_u32(&mut a, size.height / scale);
         let _ = conn.send(surface, WL_SURFACE_DAMAGE, &a);
         let _ = conn.send(surface, WL_SURFACE_COMMIT, &[]);
         let _ = conn.stream.flush();
@@ -748,6 +759,7 @@ where
     let mut shm_name = None;
     let mut wm_base_name = None;
     let mut seat_name = None;
+    let mut output_names = Vec::new();
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -758,6 +770,7 @@ where
                     "wl_shm" => shm_name = Some(name),
                     "xdg_wm_base" => wm_base_name = Some(name),
                     "wl_seat" => seat_name = Some(name),
+                    "wl_output" => output_names.push(name),
                     _ => {}
                 }
             }
@@ -796,6 +809,13 @@ where
         "xdg_wm_base",
         1,
     );
+
+    // Outputs report their scale; the surface's `enter` says which one we're on.
+    let mut outputs: Vec<(u32, u32)> = output_names
+        .into_iter()
+        .map(|name| (bind(&mut conn, name, "wl_output", 2), 1))
+        .collect();
+    let mut current_output: Option<u32> = None;
 
     // Optional seat. The keyboard is created lazily from its `capabilities`
     // event — calling get_keyboard on a seat that never had the keyboard
@@ -852,12 +872,46 @@ where
     let mut pointer: Option<u32> = None;
     let mut pointer_pos = Point::new(0.0, 0.0);
     let mut keymap: Option<std::collections::HashMap<u32, String>> = None;
+    // Toplevel sizes are in surface units; the buffer is that times the scale.
+    let mut logical = size;
     let mut pending_size: Option<PhysicalSize> = None;
     loop {
         let (object, opcode, args) = {
             let mut conn = shared.lock().unwrap();
             conn.recv().map_err(os)?
         };
+        // Moving to another output, or an output's scale changing, means rendering
+        // at a new resolution.
+        let moved = object == surface && opcode == WL_SURFACE_ENTER;
+        let rescaled = opcode == WL_OUTPUT_SCALE && outputs.iter().any(|(id, _)| *id == object);
+        if moved || rescaled {
+            let value = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
+            if moved {
+                current_output = Some(value);
+            } else if let Some(entry) = outputs.iter_mut().find(|(id, _)| *id == object) {
+                entry.1 = value.max(1);
+            }
+            let scale = outputs
+                .iter()
+                .find(|(id, _)| Some(*id) == current_output)
+                .map_or(1, |(_, scale)| *scale);
+            let changed = {
+                let mut conn = shared.lock().unwrap();
+                let changed = conn.buffer_scale != scale;
+                conn.buffer_scale = scale;
+                changed
+            };
+            if changed {
+                dbg(format_args!("buffer scale {scale}"));
+                win.size = PhysicalSize::new(logical.width * scale, logical.height * scale);
+                if handler(Event::Resized(win.size), &win) == ControlFlow::Exit
+                    || handler(Event::RedrawRequested, &win) == ControlFlow::Exit
+                {
+                    break;
+                }
+            }
+            continue;
+        }
         if Some(object) == seat && opcode == WL_SEAT_CAPABILITIES {
             let caps = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             dbg(format_args!("seat capabilities: {caps}"));
@@ -946,9 +1000,11 @@ where
                 let _ = conn.send(xdg_surface, XDG_SURFACE_ACK_CONFIGURE, &a);
             }
             // Apply the size from the toplevel.configure this one completes.
-            if let Some(size) = pending_size.take().filter(|s| *s != win.size) {
-                win.size = size;
-                if handler(Event::Resized(size), &win) == ControlFlow::Exit {
+            if let Some(size) = pending_size.take().filter(|s| *s != logical) {
+                logical = size;
+                let scale = shared.lock().unwrap().buffer_scale;
+                win.size = PhysicalSize::new(size.width * scale, size.height * scale);
+                if handler(Event::Resized(win.size), &win) == ControlFlow::Exit {
                     break;
                 }
             }

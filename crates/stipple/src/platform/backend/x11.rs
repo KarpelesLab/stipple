@@ -47,6 +47,7 @@ const OP_CREATE_WINDOW: u8 = 1;
 const OP_DESTROY_WINDOW: u8 = 4;
 const OP_MAP_WINDOW: u8 = 8;
 const OP_INTERN_ATOM: u8 = 16;
+const OP_GET_PROPERTY: u8 = 20;
 const OP_CHANGE_PROPERTY: u8 = 18;
 const OP_SET_SELECTION_OWNER: u8 = 22;
 const OP_SEND_EVENT: u8 = 25;
@@ -811,6 +812,8 @@ fn parse_xauth_cookie(data: &[u8]) -> Option<Vec<u8>> {
 struct Conn {
     stream: UnixStream,
     setup: Setup,
+    /// Physical pixels per logical pixel, from `Xft.dpi`.
+    scale: f64,
     next_id: u32,
     id_step: u32,
     /// The text we currently own on the `CLIPBOARD` selection. Served to other
@@ -881,6 +884,7 @@ impl Conn {
         Ok(Self {
             stream,
             setup,
+            scale: 1.0,
             next_id: 0,
             id_step: id_step.max(1),
             clipboard_text: String::new(),
@@ -973,8 +977,7 @@ impl Window for X11Window {
         self.size
     }
     fn scale_factor(&self) -> ScaleFactor {
-        // X11 DPI handling (Xft.dpi / RandR) is a follow-up; assume 1×.
-        ScaleFactor::IDENTITY
+        ScaleFactor::new(self.conn.lock().unwrap().scale)
     }
     fn request_redraw(&self) {
         // Driven by Expose; an explicit invalidate would need a SendEvent.
@@ -1126,7 +1129,7 @@ fn create_window(
     reg: Registry,
     use_shm: bool,
 ) -> Result<X11Window, PlatformError> {
-    let size = ScaleFactor::IDENTITY.to_physical(attrs.logical_size);
+    let size = ScaleFactor::new(conn.scale).to_physical(attrs.logical_size);
     let (w, h) = (size.width.max(1) as u16, size.height.max(1) as u16);
     let window = conn.new_id();
     let gc = conn.new_id();
@@ -1238,6 +1241,7 @@ where
     conn.atom_clipboard = intern_atom(&mut conn, b"CLIPBOARD").map_err(os)?;
     conn.atom_utf8 = intern_atom(&mut conn, b"UTF8_STRING").map_err(os)?;
     conn.atom_targets = intern_atom(&mut conn, b"TARGETS").map_err(os)?;
+    conn.scale = read_xft_scale(&mut conn).map_err(os)?;
     let wm_delete = conn.atom_wm_delete;
 
     // Wrap the connection for sharing, then create the first window against it
@@ -1286,9 +1290,10 @@ where
             }
             X_MOTION_NOTIFY => {
                 let (x, y) = event_xy(&buf);
+                let scale = win.scale_factor().get();
                 handler(
                     Event::PointerMoved {
-                        position: Point::new(x, y),
+                        position: Point::new(x / scale, y / scale),
                     },
                     win,
                 )
@@ -1321,11 +1326,12 @@ where
                         3 => PointerButton::Right,
                         n => PointerButton::Other(n as u16),
                     };
+                    let scale = win.scale_factor().get();
                     handler(
                         Event::PointerButton {
                             button,
                             state,
-                            position: Point::new(x, y),
+                            position: Point::new(x / scale, y / scale),
                         },
                         win,
                     )
@@ -1519,6 +1525,39 @@ fn event_xy(buf: &[u8; 32]) -> (f64, f64) {
     (x, y)
 }
 
+/// The display's scale, from `Xft.dpi` in the root window's `RESOURCE_MANAGER`
+/// property: the setting desktops and toolkits use for it on X11. 96 DPI is 1x.
+fn read_xft_scale(conn: &mut Conn) -> io::Result<f64> {
+    const RESOURCE_MANAGER: u32 = 23; // a predefined atom
+    const MAX_WORDS: u32 = 64 * 1024;
+    let mut req = vec![OP_GET_PROPERTY, 0 /* don't delete */, 0, 0];
+    req.extend_from_slice(&conn.setup.root.to_le_bytes());
+    req.extend_from_slice(&RESOURCE_MANAGER.to_le_bytes());
+    req.extend_from_slice(&0u32.to_le_bytes()); // any type
+    req.extend_from_slice(&0u32.to_le_bytes()); // offset
+    req.extend_from_slice(&MAX_WORDS.to_le_bytes());
+    conn.send(&finish(req))?;
+    let mut reply = [0u8; 32];
+    conn.stream.read_exact(&mut reply)?;
+    let words = rd_u32(&reply, 4).unwrap_or(0) as usize;
+    let mut value = vec![0u8; words * 4];
+    conn.stream.read_exact(&mut value)?;
+    if reply[0] != 1 {
+        return Ok(1.0); // an error packet, not a reply
+    }
+    Ok(parse_xft_scale(&String::from_utf8_lossy(&value)).unwrap_or(1.0))
+}
+
+fn parse_xft_scale(resources: &str) -> Option<f64> {
+    let dpi: f64 = resources
+        .lines()
+        .find_map(|line| line.strip_prefix("Xft.dpi:"))?
+        .trim_matches(|c: char| c.is_whitespace() || c == '\0')
+        .parse()
+        .ok()?;
+    (dpi > 0.0).then_some(dpi / 96.0)
+}
+
 fn intern_atom(conn: &mut Conn, name: &[u8]) -> io::Result<u32> {
     let mut req = vec![OP_INTERN_ATOM, 0 /* only-if-exists = false */, 0, 0];
     req.extend_from_slice(&(name.len() as u16).to_le_bytes());
@@ -1617,6 +1656,15 @@ fn serve_selection_request(conn: &mut Conn, ev: &[u8; 32]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_xft_dpi_from_resources() {
+        let res = "Xft.antialias:\t1\nXft.dpi:\t192\nXft.hinting:\t1\n";
+        assert_eq!(parse_xft_scale(res), Some(2.0));
+        assert_eq!(parse_xft_scale("Xft.dpi: 144\n"), Some(1.5));
+        assert_eq!(parse_xft_scale("Xft.antialias:\t1\n"), None);
+        assert_eq!(parse_xft_scale("Xft.dpi:\tbogus\n"), None);
+    }
 
     #[test]
     fn dri3_open_request_is_well_formed() {
