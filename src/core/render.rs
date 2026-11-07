@@ -338,7 +338,7 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
         scroll: el.scroll,
         clip: el.clip,
         cursor: el.cursor,
-        semantics: el.semantics,
+        semantics: el.semantics.clone(),
         children: Vec::new(),
     };
 
@@ -519,11 +519,19 @@ pub fn paint_focus(
     if !os_focus {
         scene.stroke_rect(node.bounds, ring, 2.0);
     }
-    // A list, table or tree takes focus as a whole: no caret.
-    if node
+    // Only text entry shows a caret: not a focusable that also takes taps (a
+    // select's button), nor a list, table or tree taking focus as a whole.
+    let entry = node
         .semantics
-        .is_some_and(|s| s.role != crate::core::a11y::Role::TextField)
-    {
+        .as_ref()
+        .and_then(|s| s.role)
+        .is_none_or(|r| {
+            matches!(
+                r,
+                crate::core::a11y::Role::TextField | crate::core::a11y::Role::SpinButton
+            )
+        });
+    if node.action.is_some() || !entry {
         return;
     }
 

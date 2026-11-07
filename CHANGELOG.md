@@ -35,18 +35,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The spinner turns, and hover and press highlights fade in and out.
 - `asyncdemo` shows a spinner while its background work runs; its `--selftest`
   checks the spinner animated and then stopped.
+- Widgets: `select` (a dropdown list, with keyboard navigation), `number_input`
+  (steppers, min/max/step), `split_pane` (a draggable divider), `toolbar`, and
+  `toasts` (with auto-dismiss on a timer). See `docs/widgets.md` and
+  `examples/widgetsdemo`.
+- Accessibility roles `ComboBox`, `SpinButton`, `Splitter`, `Toolbar`,
+  `Separator` and `Alert`, and `Element::a11y_label` to name an element that
+  has no text (an icon button).
+- `Element::on_drag_motion`: drags that receive the pointer position, the press
+  origin, and the element's and its parent's bounds.
+- `Anchor::Below` (an overlay dropped under an element) and `Anchor::Aligned`
+  (an overlay against the window's edges).
 
 ### Changed
 
 - `core::Role` and `platform::A11yRole` have new variants; `AccessNode` has
   `selected` and `expanded`; `Element` and `LayoutNode` have a `semantics`
-  field.
+  field (`Semantics`: role, label, selected, expanded).
 - `spinner` takes the `Cx`: `spinner(cx, &theme)`.
 
 ### Fixed
 
 - Pointer hit-testing respects clipping, so content scrolled out of a scroll
   container can't be clicked where it isn't drawn.
+- A press on an overlay's dismiss area no longer reaches the text fields,
+  sliders or focusables underneath it.
 
 ## [0.0.2](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.1...stipple-v0.0.2) - 2026-11-07
 

@@ -31,6 +31,8 @@ Stipple still does layout, input, the caret and selection, and the labels.
 | `slider` | ✅ | ✅ | ✅ |
 | `progress_bar` | ✅ | ✅ | ✅ |
 | `text_field`, `text_editor`, `text_area` frames | ✅ | ✅ | ✅ |
+| `select` button (as a push button) | ✅ | ✅ | ✅ |
+| `number_input` field frame | ✅ | ✅ | ✅ |
 
 ¹ The platform has no such control.
 

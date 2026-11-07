@@ -36,6 +36,10 @@ fn atspi_role(role: stipple::core::Role) -> u32 {
         Role::List | Role::Table | Role::Row | Role::Tree => 54,
         Role::ListItem | Role::Cell | Role::TreeItem => 29,
         Role::ColumnHeader => 44,
+        // As in the platform bridges: the closest of the roles above.
+        Role::ComboBox => 44,
+        Role::SpinButton => 80,
+        Role::Splitter | Role::Toolbar | Role::Separator | Role::Alert => 54,
     }
 }
 

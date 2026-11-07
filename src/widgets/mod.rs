@@ -15,6 +15,18 @@
 
 #![forbid(unsafe_code)]
 
+mod number;
+mod select;
+mod split;
+mod toast;
+mod toolbar;
+
+pub use number::{NumberInput, number_input};
+pub use select::{Select, select};
+pub use split::{SplitPane, split_pane};
+pub use toast::{Toast, ToastId, ToastKind, Toasts, toasts};
+pub use toolbar::{tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar};
+
 use crate::core::{
     Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Track, ViewportId,
 };

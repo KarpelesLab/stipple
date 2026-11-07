@@ -42,7 +42,7 @@ pub mod widgets;
 use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
     KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_focusables,
-    collect_viewports, context_at, drag_at, find_action, find_focus, find_text_pos, focus_at,
+    collect_viewports, context_at, drag_hit_at, find_action, find_focus, find_text_pos, focus_at,
     hit_test, layout, measure, paint, paint_focus, paint_hover, text_pos_at, viewport_at,
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
@@ -213,7 +213,8 @@ struct Pane<S> {
     pressed: Option<ActionId>,
     focused: Option<FocusId>,
     hovered: Option<ActionId>,
-    dragging: Option<(DragId, Rect)>,
+    // The latched drag: its id, its and its parent's bounds, and the press point.
+    dragging: Option<(DragId, Rect, Rect, Point)>,
     // The text element currently being selected by a pointer drag.
     text_selecting: Option<TextPosId>,
     // Consecutive presses on text, for double-click (word) and triple-click
@@ -245,8 +246,6 @@ struct Pane<S> {
     // Scroll requests from handlers (`Cx::scroll_requests`), applied to
     // `scroll_offsets` before the next build.
     scroll_requests: crate::core::ScrollRequests,
-    // Where the press that latched the current drag landed.
-    drag_origin: Option<Point>,
     // Last pointer position, so a `Scroll` event (which carries only a delta)
     // can find the scroll container under the cursor.
     last_pointer: Point,
@@ -300,7 +299,6 @@ impl<S> Pane<S> {
             memo_cache: std::collections::HashMap::new(),
             scroll_offsets: std::collections::HashMap::new(),
             scroll_requests: crate::core::ScrollRequests::default(),
-            drag_origin: None,
             last_pointer: Point::new(0.0, 0.0),
             overlay_active: false,
             painted_overlay_active: false,
@@ -650,13 +648,45 @@ impl<S> Pane<S> {
                     catcher.cursor = Some(CursorIcon::Default);
                     roots.push(layout(&catcher, win, font));
                 }
-                let m = measure(&spec.content, size, font);
+                let mut m = measure(&spec.content, size, font);
                 let origin = match spec.anchor {
                     Anchor::At(p) => p,
                     Anchor::Center => Point::new(
                         ((size.width - m.width) / 2.0).max(0.0),
                         ((size.height - m.height) / 2.0).max(0.0),
                     ),
+                    Anchor::Below(id) => match find_action(&roots[0], id) {
+                        Some(node) => {
+                            let b = node.bounds;
+                            m.width = m.width.max(b.width());
+                            let below = b.max_y() + 2.0;
+                            let y = if below + m.height > size.height
+                                && b.min_y() - 2.0 - m.height >= 0.0
+                            {
+                                b.min_y() - 2.0 - m.height
+                            } else {
+                                below
+                            };
+                            let x = b.min_x().min(size.width - m.width).max(0.0);
+                            Point::new(x, y)
+                        }
+                        None => Point::new(0.0, 0.0),
+                    },
+                    Anchor::Aligned {
+                        horizontal,
+                        vertical,
+                        margin,
+                    } => {
+                        let place = |align, free: f64| match align {
+                            crate::core::Align::Center => (free / 2.0).max(0.0),
+                            crate::core::Align::End => (free - margin).max(0.0),
+                            crate::core::Align::Start | crate::core::Align::Stretch => margin,
+                        };
+                        Point::new(
+                            place(horizontal, size.width - m.width),
+                            place(vertical, size.height - m.height),
+                        )
+                    }
                 };
                 let bounds = Rect::from_xywh(origin.x, origin.y, m.width, m.height);
                 roots.push(layout(&spec.content, bounds, font));
@@ -818,10 +848,18 @@ impl<S> Pane<S> {
     /// element's tap handler. Returns `true` if a tap handler ran.
     fn click_at(&mut self, state: &mut S, theme: &Theme, font: Option<&Font>, pos: Point) -> bool {
         self.ensure_tree(state, theme, font);
+        let overlays = self.overlay_active;
+        let focused = self.focused;
         let (hit, foc) = self
             .tree
             .as_ref()
-            .map(|t| (hit_test(t, pos), focus_at(t, pos)))
+            .map(|t| {
+                // A press inside an overlay (or on its dismiss catcher) leaves
+                // focus where it was unless it lands on a focusable there.
+                let (layer, main) = press_layer(t, overlays, pos);
+                let foc = focus_at(layer, pos);
+                (hit_test(t, pos), if main { foc } else { foc.or(focused) })
+            })
             .unwrap_or((None, None));
 
         // Clicking moves focus (to the focusable under the cursor, or away).
@@ -933,19 +971,24 @@ impl<S> Pane<S> {
     ) -> bool {
         self.ensure_tree(state, theme, font);
         if self.dragging.is_none() {
-            self.dragging = self.tree.as_ref().and_then(|t| drag_at(t, pos));
-            self.drag_origin = Some(pos);
+            let overlays = self.overlay_active;
+            self.dragging = self
+                .tree
+                .as_ref()
+                .and_then(|t| drag_hit_at(press_layer(t, overlays, pos).0, pos))
+                .map(|(id, bounds, parent)| (id, bounds, parent, pos));
         }
-        let Some((id, bounds)) = self.dragging else {
+        let Some((id, bounds, parent, origin)) = self.dragging else {
             return false;
         };
-        let fraction = if bounds.width() > 0.0 {
-            ((pos.x - bounds.min_x()) / bounds.width()).clamp(0.0, 1.0)
-        } else {
-            0.0
+        let motion = crate::core::DragMotion {
+            position: pos,
+            origin,
+            bounds,
+            parent,
         };
-        crate::core::set_pointer_position(pos, self.drag_origin);
-        let ran = self.handlers.dispatch_drag(id, fraction, state);
+        crate::core::set_pointer_position(pos, Some(origin));
+        let ran = self.handlers.dispatch_drag_motion(id, &motion, state);
         if ran {
             self.dirty = true;
         }
@@ -955,7 +998,6 @@ impl<S> Pane<S> {
     /// End the current drag (pointer released).
     fn end_drag(&mut self) {
         self.dragging = None;
-        self.drag_origin = None;
     }
 
     /// Begin a pointer text interaction at `pos` (logical pixels) pressed at
@@ -974,7 +1016,9 @@ impl<S> Pane<S> {
         now: std::time::Instant,
     ) -> bool {
         self.ensure_tree(state, theme, font);
+        let overlays = self.overlay_active;
         let Some((id, index, foc)) = self.tree.as_ref().and_then(|t| {
+            let t = press_layer(t, overlays, pos).0;
             let (id, node) = text_pos_at(t, pos)?;
             let index = caret_index_at(node, pos, font)?;
             Some((id, index, focus_at(t, pos)))
@@ -1085,6 +1129,26 @@ impl<S> Pane<S> {
             self.dirty = true;
         }
         moved
+    }
+}
+
+/// The part of `tree` a press at `pos` reaches, and whether it is the main tree.
+/// With overlays up, the root holds the main tree then each overlay's layers
+/// (a dismiss catcher or modal scrim, then its content); only the topmost layer
+/// under the pointer is reachable, so a catcher blocks the tree below it.
+fn press_layer(tree: &LayoutNode, overlays: bool, pos: Point) -> (&LayoutNode, bool) {
+    if !overlays {
+        return (tree, true);
+    }
+    match tree
+        .children
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, layer)| layer.bounds.contains(pos))
+    {
+        Some((i, layer)) => (layer, i == 0),
+        None => (tree, true),
     }
 }
 
@@ -1331,6 +1395,11 @@ impl<S> App<S> {
                 Role::ColumnHeader => A11yRole::ColumnHeader,
                 Role::Tree => A11yRole::Tree,
                 Role::TreeItem => A11yRole::TreeItem,
+                // The OS bridges don't have these roles yet; report the
+                // closest one they do.
+                Role::ComboBox => A11yRole::Button,
+                Role::SpinButton => A11yRole::TextField,
+                Role::Splitter | Role::Toolbar | Role::Separator | Role::Alert => A11yRole::Group,
             };
             crate::platform::A11yNode {
                 role,
@@ -1798,6 +1867,10 @@ pub mod prelude {
         edit_string, grid, heading, label, menu, menu_item, open_dialog, open_menu, panel,
         paragraph, progress_bar, radio, row, scroll, setting_row, slider, spacer, spinner, swatch,
         switch, tabs, text_area, text_editor, text_field, tooltip, viewport,
+    };
+    pub use crate::widgets::{
+        NumberInput, Select, SplitPane, ToastKind, Toasts, number_input, select, split_pane,
+        toasts, tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar,
     };
     pub use crate::widgets::{image, svg};
     pub use std::time::Duration;

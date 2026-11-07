@@ -13,8 +13,10 @@
 //! descendants as their `name`, and purely decorative containers (no name, no
 //! children) are dropped, so the tree stays small and meaningful.
 //!
-//! Widgets whose semantics can't be inferred (lists, tables, trees and their
-//! rows and cells) declare them with [`Element::role`](crate::core::Element::role),
+//! Widgets whose semantics can't be inferred (lists, tables, trees, a select,
+//! a toolbar) declare them with [`Element::role`](crate::core::Element::role),
+//! [`a11y_label`](crate::core::Element::a11y_label) (a name for an element
+//! with no text, such as an icon button),
 //! [`selected`](crate::core::Element::selected) and
 //! [`expanded`](crate::core::Element::expanded); a declared role wins over the
 //! inferred one.
@@ -35,7 +37,8 @@ pub enum Role {
     TextField,
     /// A run of static text.
     Text,
-    /// A list of selectable items.
+    /// A list of selectable items (also the open list of a
+    /// [`ComboBox`](Role::ComboBox)).
     List,
     /// One item of a [`Role::List`].
     ListItem,
@@ -51,14 +54,51 @@ pub enum Role {
     Tree,
     /// One item of a [`Role::Tree`].
     TreeItem,
+    /// A button that opens a [`List`](Role::List) to pick one value from (a
+    /// select). Named by its current value.
+    ComboBox,
+    /// A numeric field with increment and decrement steps.
+    SpinButton,
+    /// A draggable divider between two resizable panes.
+    Splitter,
+    /// A row of command buttons.
+    Toolbar,
+    /// A visual divider between groups (in a toolbar or menu).
+    Separator,
+    /// A transient notification (a toast): screen readers announce it.
+    Alert,
 }
 
-/// Semantics an element declares for assistive technologies, overriding the
-/// inferred role. Set via [`Element::role`](crate::core::Element::role) and
-/// friends.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Role {
+    /// Containers expose their children; the other roles take their name from
+    /// their text and absorb their descendants.
+    fn is_container(self) -> bool {
+        matches!(
+            self,
+            Role::Window
+                | Role::Group
+                | Role::List
+                | Role::Table
+                | Role::Row
+                | Role::Tree
+                | Role::Toolbar
+                | Role::Alert
+        )
+    }
+}
+
+/// Semantics an element declares for assistive technologies: a role overriding
+/// the inferred one, a name overriding its text, and item state. Set via
+/// [`Element::role`](crate::core::Element::role),
+/// [`a11y_label`](crate::core::Element::a11y_label),
+/// [`selected`](crate::core::Element::selected) and
+/// [`expanded`](crate::core::Element::expanded).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Semantics {
-    pub role: Role,
+    /// The role to report, instead of the inferred one.
+    pub role: Option<Role>,
+    /// The name to report, instead of the element's text.
+    pub label: Option<String>,
     /// Whether this item is selected (list items, rows, tree items).
     pub selected: bool,
     /// For an expandable item, whether it is expanded; `None` if it can't
@@ -67,12 +107,11 @@ pub struct Semantics {
 }
 
 impl Semantics {
-    /// Semantics with `role`, not selected, not expandable.
+    /// Semantics with `role`, no name override, not selected, not expandable.
     pub fn new(role: Role) -> Self {
         Self {
-            role,
-            selected: false,
-            expanded: None,
+            role: Some(role),
+            ..Self::default()
         }
     }
 }
@@ -121,8 +160,8 @@ fn own_text(node: &LayoutNode) -> Option<&LayoutNode> {
 
 /// Infer a node's role from its interaction handles and content.
 fn role_of(node: &LayoutNode) -> Role {
-    if let Some(sem) = node.semantics {
-        sem.role
+    if let Some(role) = node.semantics.as_ref().and_then(|s| s.role) {
+        role
     } else if node.action.is_some() {
         Role::Button
     } else if node.focus.is_some() {
@@ -138,30 +177,26 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
     let role = if is_root { Role::Window } else { role_of(node) };
     // Interactive/text roles take their name from their text and absorb their
     // descendants; containers recurse and expose their meaningful children.
-    let (name, children) = match role {
-        Role::Button
-        | Role::TextField
-        | Role::Text
-        | Role::ListItem
-        | Role::Cell
-        | Role::ColumnHeader
-        | Role::TreeItem => (text_of(node), Vec::new()),
-        Role::Window | Role::Group | Role::List | Role::Table | Role::Row | Role::Tree => (
-            String::new(),
+    let label = node.semantics.as_ref().and_then(|s| s.label.clone());
+    let (name, children) = if role.is_container() {
+        (
+            label.unwrap_or_default(),
             node.children
                 .iter()
                 .map(|c| build(c, focused, false))
                 .filter(|a| !a.is_prunable())
                 .collect(),
-        ),
+        )
+    } else {
+        (label.unwrap_or_else(|| text_of(node)), Vec::new())
     };
     AccessNode {
         role,
         name,
         bounds: node.bounds,
         focused: node.focus.is_some() && node.focus == focused,
-        selected: node.semantics.is_some_and(|s| s.selected),
-        expanded: node.semantics.and_then(|s| s.expanded),
+        selected: node.semantics.as_ref().is_some_and(|s| s.selected),
+        expanded: node.semantics.as_ref().and_then(|s| s.expanded),
         children,
     }
 }

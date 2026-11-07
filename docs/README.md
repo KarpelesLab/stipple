@@ -65,6 +65,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 
 - [Layout](layout.md): stacks, wrapping, grids, and min/max sizes
 - [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
+- [Widgets](widgets.md): select, number input, split pane, toolbar and toasts
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click

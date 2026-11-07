@@ -873,7 +873,9 @@ Most input only works on X11 today.
   cover fit; `Pixmap::decode` through the `oxideav-image` registry (PNG, JPEG,
   GIF, WebP, BMP); `Svg` parsed by `oxideav-svg` and rasterized at the physical
   size shown; `VideoFrame` ⇄ `Pixmap` interop; `imagedemo` + `visual-image` CI.
-- ⬜ Select / dropdown, number input, split pane, toolbar, toast.
+- ✅ Select / dropdown, number input, split pane, toolbar and toasts, with
+  keyboard control and accessibility roles; see [docs/widgets.md](docs/widgets.md)
+  and `examples/widgetsdemo`.
 - ✅ Table, tree and data grid: `table(...)` with sortable headers (▲/▼),
   drag-to-resize columns, single/multi row selection (Shift/Ctrl+click,
   Shift+arrows) and striped rows; `tree(...)` with disclosure triangles,

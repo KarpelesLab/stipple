@@ -7,7 +7,7 @@
 
 use crate::core::a11y::{Role, Semantics};
 use crate::core::runtime::{
-    ActionId, ContextId, Cx, DragId, FocusId, KeyInput, ScrollId, TextPosId, ViewportId,
+    ActionId, ContextId, Cx, DragId, DragMotion, FocusId, KeyInput, ScrollId, TextPosId, ViewportId,
 };
 use crate::geometry::Insets;
 use crate::layout::{Axis, Track};
@@ -162,9 +162,11 @@ pub struct Element {
     /// handlers: the I-beam over editable text, the pointing hand over taps
     /// and drags, else whatever its parent shows. Set via [`Element::cursor`].
     pub cursor: Option<CursorIcon>,
-    /// Declared accessibility semantics (role, selected, expanded), overriding
-    /// the role inferred from the element's handlers. Set via
-    /// [`Element::role`].
+    /// Declared accessibility semantics: a role overriding the one inferred
+    /// from the element's handlers (a combo box, a table row), a name for an
+    /// element with no text (an icon button), and item state. Set via
+    /// [`Element::role`], [`Element::a11y_label`], [`Element::selected`] and
+    /// [`Element::expanded`].
     pub semantics: Option<Semantics>,
     pub kind: ElementKind,
 }
@@ -378,6 +380,20 @@ impl Element {
         self
     }
 
+    /// Make this element respond to pointer drags, receiving the full
+    /// [`DragMotion`] (pointer position, press origin, and the element's and its
+    /// parent's bounds at the press) on press and while dragging, for drags
+    /// that aren't a fraction across the element: a split pane's divider, a
+    /// vertical slider. Shares [`DragId`]s with [`on_drag`](Element::on_drag).
+    pub fn on_drag_motion<S>(
+        mut self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&mut S, &DragMotion) + 'static,
+    ) -> Self {
+        self.drag = Some(cx.register_drag_motion(handler));
+        self
+    }
+
     /// Resolve pointer presses/drags on this element to a byte index in its
     /// text. The `handler` receives the resolved index and an `extend` flag
     /// (`false` = initial press / place caret, `true` = drag / extend
@@ -523,6 +539,20 @@ impl Element {
         self
     }
 
+    /// Report this element to assistive technologies as `role` (a list, a table
+    /// row, a combo box…), instead of the role inferred from its handlers.
+    pub fn role(mut self, role: Role) -> Self {
+        self.semantics.get_or_insert_with(Semantics::default).role = Some(role);
+        self
+    }
+
+    /// Give this element an accessible name, instead of the text it contains
+    /// (for an icon-only button, or a container such as a notification).
+    pub fn a11y_label(mut self, label: impl Into<String>) -> Self {
+        self.semantics.get_or_insert_with(Semantics::default).label = Some(label.into());
+        self
+    }
+
     /// Enable wrapping. On a text element the text word-wraps to the element's
     /// content width across as many lines as needed. On a stack (row or
     /// column), children that don't fit the main axis flow onto new lines, with
@@ -550,29 +580,21 @@ impl Element {
         self
     }
 
-    /// Declare this element's accessibility role (a list, a table row, a tree
-    /// item…), overriding the one inferred from its handlers.
-    pub fn role(mut self, role: Role) -> Self {
-        let sem = self.semantics.get_or_insert(Semantics::new(role));
-        sem.role = role;
-        self
-    }
-
     /// Mark this element selected (or not) for assistive technologies. Implies
     /// [`Role::ListItem`] if no role was declared.
     pub fn selected(mut self, selected: bool) -> Self {
-        self.semantics
-            .get_or_insert(Semantics::new(Role::ListItem))
-            .selected = selected;
+        let sem = self.semantics.get_or_insert_with(Semantics::default);
+        sem.role.get_or_insert(Role::ListItem);
+        sem.selected = selected;
         self
     }
 
     /// Mark this expandable element expanded or collapsed for assistive
     /// technologies. Implies [`Role::TreeItem`] if no role was declared.
     pub fn expanded(mut self, expanded: bool) -> Self {
-        self.semantics
-            .get_or_insert(Semantics::new(Role::TreeItem))
-            .expanded = Some(expanded);
+        let sem = self.semantics.get_or_insert_with(Semantics::default);
+        sem.role.get_or_insert(Role::TreeItem);
+        sem.expanded = Some(expanded);
         self
     }
 

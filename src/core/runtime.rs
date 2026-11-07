@@ -13,7 +13,8 @@
 //! addressed by [`ActionId`] / [`FocusId`]) so `Element` stays `Clone`/`Debug`
 //! and the IR remains diff-friendly for a future reconciler.
 
-use crate::core::element::{BoxStyle, Element};
+use crate::core::a11y::Semantics;
+use crate::core::element::{Align, BoxStyle, Element};
 use crate::core::handle::AppHandle;
 use crate::geometry::{Point, Rect};
 use crate::platform::CursorIcon;
@@ -25,9 +26,48 @@ use std::collections::{HashMap, HashSet};
 type TapFn<S> = Box<dyn FnMut(&mut S)>;
 /// A boxed keyboard handler: receives the [`KeyInput`] for the focused element.
 type KeyFn<S> = Box<dyn FnMut(&mut S, &KeyInput)>;
-/// A boxed drag handler: receives the pointer position as a fraction (0..=1)
-/// along the element's width.
-type DragFn<S> = Box<dyn FnMut(&mut S, f64)>;
+/// A boxed drag handler: receives the [`DragMotion`] (fraction handlers
+/// registered with [`Cx::register_drag`] read [`DragMotion::fraction_x`]).
+type DragFn<S> = Box<dyn FnMut(&mut S, &DragMotion)>;
+
+/// A pointer drag in progress, delivered to handlers registered with
+/// [`Element::on_drag_motion`](crate::core::Element::on_drag_motion) on the
+/// press and on every move until release. Positions are window logical pixels;
+/// both rectangles are as laid out when the press landed, so they don't move
+/// under the pointer while the drag reshapes the UI.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DragMotion {
+    /// Where the pointer is now.
+    pub position: Point,
+    /// Where the press landed.
+    pub origin: Point,
+    /// The dragged element's bounds at the press.
+    pub bounds: Rect,
+    /// The bounds of the dragged element's parent at the press (the track a
+    /// divider or thumb moves along); the element's own bounds at the root.
+    pub parent: Rect,
+}
+
+impl DragMotion {
+    /// The pointer's x position as a fraction (0..=1) across the element's
+    /// press-time bounds: what [`Element::on_drag`](crate::core::Element::on_drag)
+    /// handlers receive.
+    pub fn fraction_x(&self) -> f64 {
+        if self.bounds.width() > 0.0 {
+            ((self.position.x - self.bounds.min_x()) / self.bounds.width()).clamp(0.0, 1.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// How far the pointer has moved since the press.
+    pub fn delta(&self) -> (f64, f64) {
+        (
+            self.position.x - self.origin.x,
+            self.position.y - self.origin.y,
+        )
+    }
+}
 /// A boxed text-pointer handler: receives a resolved byte index into the
 /// element's text and whether the gesture *extends* a selection (drag) or
 /// *places* the caret (initial press).
@@ -103,6 +143,19 @@ pub enum Anchor {
     At(Point),
     /// Center the overlay in the window (e.g. a modal dialog).
     Center,
+    /// Drop the overlay just below the element carrying this tap action (a
+    /// select's option list under its button), at least as wide as it. It
+    /// flips above when there's no room below, and is kept inside the window.
+    /// Falls back to the window's top-left when no such element is laid out.
+    Below(ActionId),
+    /// Place the overlay against the window's edges: `horizontal` and
+    /// `vertical` pick start, center or end (`Stretch` counts as start), inset
+    /// by `margin` logical pixels (e.g. toasts in the bottom-right corner).
+    Aligned {
+        horizontal: Align,
+        vertical: Align,
+        margin: f64,
+    },
 }
 
 /// A floating layer drawn above the main tree — a menu, popover, tooltip, or
@@ -319,7 +372,16 @@ impl<'a, S> Cx<'a, S> {
 
     /// Register a drag handler, returning its [`DragId`]. The handler receives
     /// the pointer's fractional x position (0..=1) across the element.
-    pub fn register_drag(&mut self, handler: impl FnMut(&mut S, f64) + 'static) -> DragId {
+    pub fn register_drag(&mut self, mut handler: impl FnMut(&mut S, f64) + 'static) -> DragId {
+        self.register_drag_motion(move |s, m| handler(s, m.fraction_x()))
+    }
+
+    /// Register a drag handler that receives the full [`DragMotion`], returning
+    /// its [`DragId`].
+    pub fn register_drag_motion(
+        &mut self,
+        handler: impl FnMut(&mut S, &DragMotion) + 'static,
+    ) -> DragId {
         let id = DragId(self.drags.len() as u32);
         self.drags.push(Box::new(handler));
         id
@@ -483,8 +545,23 @@ impl<S> Handlers<S> {
     /// Invoke the drag handler for `id` with `fraction` (0..=1 across the
     /// element width). Returns `true` if one existed and ran.
     pub fn dispatch_drag(&mut self, id: DragId, fraction: f64, state: &mut S) -> bool {
+        // A unit-wide element, so `fraction_x` is `fraction` again.
+        let unit = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
+        let at = Point::new(fraction, 0.0);
+        let motion = DragMotion {
+            position: at,
+            origin: at,
+            bounds: unit,
+            parent: unit,
+        };
+        self.dispatch_drag_motion(id, &motion, state)
+    }
+
+    /// Invoke the drag handler for `id` with `motion`. Returns `true` if one
+    /// existed and ran.
+    pub fn dispatch_drag_motion(&mut self, id: DragId, motion: &DragMotion, state: &mut S) -> bool {
         if let Some(handler) = self.drags.get_mut(id.0 as usize) {
-            handler(state, fraction);
+            handler(state, motion);
             true
         } else {
             false
@@ -627,8 +704,11 @@ pub struct LayoutNode {
     ///
     /// [`Element::cursor`]: crate::core::Element::cursor
     pub cursor: Option<CursorIcon>,
-    /// Declared accessibility semantics, copied from the element.
-    pub semantics: Option<crate::core::a11y::Semantics>,
+    /// Declared accessibility semantics (role, name, item state), copied from
+    /// the element. See [`Element::role`].
+    ///
+    /// [`Element::role`]: crate::core::Element::role
+    pub semantics: Option<Semantics>,
     pub children: Vec<LayoutNode>,
 }
 
@@ -785,6 +865,23 @@ pub fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
         Some(id) if node.bounds.contains(point) => Some((id, node.bounds)),
         _ => None,
     }
+}
+
+/// Like [`drag_at`], but also returns the bounds of the draggable's parent
+/// (its own bounds when it is `node` itself), for [`DragMotion::parent`].
+pub fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rect)> {
+    fn walk(node: &LayoutNode, parent: Rect, point: Point) -> Option<(DragId, Rect, Rect)> {
+        for child in node.children.iter().rev() {
+            if let Some(hit) = walk(child, node.bounds, point) {
+                return Some(hit);
+            }
+        }
+        match node.drag {
+            Some(id) if node.bounds.contains(point) => Some((id, node.bounds, parent)),
+            _ => None,
+        }
+    }
+    walk(node, node.bounds, point)
 }
 
 /// Find the [`ScrollId`] of the top-most scroll container containing `point`
