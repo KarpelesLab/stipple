@@ -15,9 +15,10 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 
 ## 0. Implementation status
 
-> The toolkit was merged from 11 crates into the single `stipple` crate (only
-> `stipple-web` stays separate), so `stipple::core` was once `stipple-core`, and
-> so on. Entries below describe the work as it landed.
+> The toolkit was merged from 11 crates into the single `stipple` crate, so
+> `stipple::core` was once `stipple-core`, and so on; the wasm target that was
+> `stipple-web` is now `examples/webdemo`. Entries below describe the work as it
+> landed.
 
 > Living checklist — updated as work lands. ✅ done · 🚧 in progress · ⬜ not started.
 
@@ -551,8 +552,8 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 
 ## 2. Architecture
 
-Layered, bottom-up. Each layer is a module of the single `stipple` crate (only
-`stipple-web`, the wasm `cdylib`, is a separate package). Stipple targets **edition 2024, rust 1.88** (the floor imposed
+Layered, bottom-up. Each layer is a module of the single `stipple` crate, at the
+repository root. Stipple targets **edition 2024, rust 1.88** (the floor imposed
 by the oxideav dependency chain), `version = 0.0.x`,
 pure-Rust. (oxideav itself is edition 2021 / rust 1.80; Stipple consumes it as a
 dependency but builds on the newer toolchain.)

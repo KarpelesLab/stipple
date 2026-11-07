@@ -1,6 +1,6 @@
 [package]
-name = "stipple-web"
-description = "Stipple web target: a wasm module that renders a Stipple UI and exposes the RGBA framebuffer for a <canvas> to blit (no wasm-bindgen)."
+name = "webdemo"
+description = "Stipple example: a wasm module that renders a Stipple UI into a framebuffer a <canvas> blits (no wasm-bindgen)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

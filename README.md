@@ -123,7 +123,7 @@ violet-accent dark, high-contrast), montaged in CI:
 - **No** `winit` / `wgpu` / `taffy` / `lyon` / GTK / Qt / `zbus` / `windows` /
   `objc`. OS interfaces are hand-written per platform in `stipple::platform`.
 
-## Layout
+## Modules
 
 Stipple is one crate, `stipple`, with these modules:
 
@@ -139,8 +139,8 @@ Stipple is one crate, `stipple`, with these modules:
 | `stipple::widgets` | Standard widget library |
 | `stipple::gpu` | Raw GPU backends, behind the `gpu` feature; dma-buf / shared-texture export. `gl`, `vk`, `d3d` and `mtl` enable GLES2, Vulkan, Direct3D 11 and Metal |
 
-`App` and the prelude live at the crate root. `crates/stipple-web` stays a
-separate, unpublished package because it builds the `wasm32` `cdylib`.
+`App` and the prelude live at the crate root. The repository root is the
+`stipple` crate; `examples/` holds the demo apps, and `docs/` the guides.
 
 Widgets available in the prelude: `panel`, `row`, `column`, `spacer`,
 `divider`, `label`, `heading`, `paragraph`, `button`, `button_labeled`,
@@ -174,9 +174,9 @@ available. Platform and subsystem probes live alongside them:
 `gpuwindow` / `gpudemo` (GLES, `--features stipple/gl`), `d3ddemo`,
 `metaldemo`, `dmabuftest`, `dri3probe`, `viewportdemo`, `contentproc`
 (sandboxed content process composited over shared memory), `a11ydemo` and
-`uiademo` (accessibility bridges), and `androiddemo` (a `NativeActivity`
-cdylib). The web target lives in `crates/stipple-web` (built for `wasm32`; see
-the `Visual` workflow).
+`uiademo` (accessibility bridges), `androiddemo` (a `NativeActivity` cdylib),
+and `webdemo` (a `wasm32` module for a `<canvas>`). See [`docs/`](./docs/README.md)
+for how to build and package each platform.
 
 ## Status & MSRV
 

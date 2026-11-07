@@ -9,19 +9,19 @@
     </style>
   </head>
   <body>
-    <canvas id="forma" width="640" height="360"></canvas>
+    <canvas id="stipple" width="640" height="360"></canvas>
     <script type="module">
       // Hand-written glue: instantiate the wasm, load a font, render, and wire
       // canvas events to the module. No wasm-bindgen.
-      const canvas = document.getElementById("forma");
+      const canvas = document.getElementById("stipple");
       const ctx = canvas.getContext("2d");
       const W = canvas.width, H = canvas.height;
 
       const { instance } = await WebAssembly.instantiateStreaming(
-        fetch("forma_web.wasm"),
+        fetch("webdemo.wasm"),
         {},
       ).catch(async () => {
-        const bytes = await (await fetch("forma_web.wasm")).arrayBuffer();
+        const bytes = await (await fetch("webdemo.wasm")).arrayBuffer();
         return WebAssembly.instantiate(bytes, {});
       });
       const e = instance.exports;
@@ -29,16 +29,16 @@
       // Load a font (served alongside) so text renders; shapes-only if absent.
       try {
         const font = new Uint8Array(await (await fetch("font.ttf")).arrayBuffer());
-        const p = e.forma_alloc(font.length);
+        const p = e.stipple_alloc(font.length);
         new Uint8Array(e.memory.buffer, p, font.length).set(font);
-        e.forma_set_font(p, font.length);
+        e.stipple_set_font(p, font.length);
       } catch (_) { /* no font available */ }
 
-      e.forma_init(W, H);
+      e.stipple_init(W, H);
 
       function redraw() {
-        const ptr = e.forma_frame_ptr(), len = e.forma_frame_len();
-        const w = e.forma_width(), h = e.forma_height();
+        const ptr = e.stipple_frame_ptr(), len = e.stipple_frame_len();
+        const w = e.stipple_width(), h = e.stipple_height();
         const src = new Uint8ClampedArray(e.memory.buffer, ptr, len).slice();
         canvas.width = w; canvas.height = h;
         ctx.putImageData(new ImageData(src, w, h), 0, 0);
@@ -49,8 +49,8 @@
         const r = canvas.getBoundingClientRect();
         return [ev.clientX - r.left, ev.clientY - r.top];
       };
-      canvas.addEventListener("mousedown", (ev) => { const [x, y] = at(ev); e.forma_click(x, y); redraw(); });
-      canvas.addEventListener("mousemove", (ev) => { const [x, y] = at(ev); e.forma_pointer_move(x, y); redraw(); });
+      canvas.addEventListener("mousedown", (ev) => { const [x, y] = at(ev); e.stipple_click(x, y); redraw(); });
+      canvas.addEventListener("mousemove", (ev) => { const [x, y] = at(ev); e.stipple_pointer_move(x, y); redraw(); });
 
       // Self-drive for CI: dispatch two real click events at the canvas center,
       // so the screenshot shows the counter at 2 (verifies the event wiring).

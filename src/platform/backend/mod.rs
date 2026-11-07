@@ -1,22 +1,21 @@
 //! Backend selection.
 //!
 //! Each supported OS gets a module here that implements [`Window`](crate::platform::Window)
-//! and an event loop against that platform's lowest idiomatic interface. Only
-//! one backend is active per build, chosen by `cfg`. Today only the
-//! [`headless`] backend is implemented; the native backends are the subject of
-//! roadmap Phases 1–4:
+//! and an event loop against that platform's lowest idiomatic interface, written
+//! by hand with no windowing crates:
 //!
-//! - **`linux`** — Wayland (`wl_shm`) primary, X11 (MIT-SHM) fallback.
-//! - **`macos`** — AppKit (`NSWindow`/`NSView`, `CVDisplayLink`).
-//! - **`windows`** — Win32 (`HWND`, GDI/DXGI blit).
-//! - **`android`** — NDK `NativeActivity` / `ANativeWindow`.
-//! - **`ios`** — UIKit (`CADisplayLink`, `CALayer`).
-//! - **`web`** — `<canvas>` + `putImageData`.
+//! - **Linux**: [`wayland`] (`wl_shm`), then [`x11`] (MIT-SHM), over their wire
+//!   protocols.
+//! - **Windows**: Win32 (`HWND`, GDI blit).
+//! - **macOS**: AppKit (`NSWindow`/`NSView`).
+//! - **iOS**: UIKit (`UIApplicationMain`, `UIView`).
+//! - **Android**: NDK `NativeActivity` / `ANativeWindow`.
 //!
-//! [`headless`] is always available so the rest of the stack builds, runs, and
-//! is golden-image testable on any target. On Linux a native [`x11`] backend is
-//! also available; [`run`] selects it when `$DISPLAY` is set and falls back to
-//! headless otherwise.
+//! [`headless`] is always available, so the rest of the stack builds, runs and is
+//! golden-image testable on any target. [`run`] picks the native backend for the
+//! target; on Linux it tries Wayland, then X11, then headless. The web has no
+//! backend here: a `wasm32` module renders frames that a page blits to a
+//! `<canvas>` (see `docs/platforms/web.md`).
 
 use crate::platform::ControlFlow;
 use crate::platform::event::Event;

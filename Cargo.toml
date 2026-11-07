@@ -1,6 +1,36 @@
+[package]
+name = "stipple"
+description = "Stipple: a cross-platform, self-drawn UI toolkit in Rust."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+# Keep the published crate to the library: no examples, screenshots or web glue.
+include = ["src/**/*", "tests/**/*", "Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE"]
+
+[features]
+# The raw GPU backends (`stipple::gpu`). Off by default.
+gpu = []
+# Each backend links system libraries, so each is opt-in. Without one, its entry
+# points return an error.
+gl = ["gpu"]  # EGL + GLES2
+vk = ["gpu"]  # Vulkan (links libvulkan)
+d3d = ["gpu"] # Direct3D 11, Windows-only
+mtl = ["gpu"] # Metal, macOS-only
+
+[dependencies]
+oxideav-core.workspace = true
+oxideav-raster.workspace = true
+oxideav-scribe.workspace = true
+
+[lints]
+workspace = true
+
 [workspace]
 resolver = "3"
-members = ["crates/*", "examples/*"]
+members = ["examples/*"]
 
 [workspace.package]
 version = "0.0.2"
@@ -13,8 +43,8 @@ repository = "https://github.com/KarpelesLab/stipple"
 authors = ["Karpelès Lab Inc."]
 
 [workspace.dependencies]
-# --- Stipple internal crates ---
-stipple = { version = "0.0.2", path = "crates/stipple" }
+# Examples and the web target depend on the library at the repository root.
+stipple = { version = "0.0.2", path = "." }
 
 # --- oxideav media stack (the one sanctioned heavy dependency) ---
 # Pure-Rust content rendering: scene graph, CPU rasterizer, font shaping,

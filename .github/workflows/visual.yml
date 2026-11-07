@@ -1114,22 +1114,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build the wasm module
-        run: cargo build -p stipple-web --target wasm32-unknown-unknown --release
+        run: cargo build -p webdemo --target wasm32-unknown-unknown --release
 
       - name: Install a font
         run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
 
       - name: Assemble the web bundle
         run: |
-          mkdir -p web visual_output
-          cp crates/stipple-web/web/index.html web/
-          cp target/wasm32-unknown-unknown/release/stipple_web.wasm web/
-          cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf web/font.ttf
-          ls -l web/
+          mkdir -p site visual_output
+          cp examples/webdemo/index.html site/
+          cp target/wasm32-unknown-unknown/release/webdemo.wasm site/
+          cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf site/font.ttf
+          ls -l site/
 
       - name: Serve + screenshot with headless Chrome
         run: |
-          python3 -m http.server 8000 --directory web &
+          python3 -m http.server 8000 --directory site &
           echo "SRV_PID=$!" >> "$GITHUB_ENV"
           sleep 2
           # virtual-time-budget lets the wasm load, the font fetch, and the
@@ -1138,7 +1138,12 @@ jobs:
             --window-size=700,420 --virtual-time-budget=15000 \
             --screenshot="$PWD/visual_output/stipple-web.png" \
             http://localhost:8000/index.html
-          echo "Captured:"; identify visual_output/stipple-web.png || true
+          echo "Captured:"; identify visual_output/stipple-web.png
+          # A blank canvas means the page never ran the wasm (as after the crate
+          # rename, when it still fetched forma_web.wasm), so require real content.
+          colors=$(convert visual_output/stipple-web.png -format '%k' info:)
+          echo "distinct colors: $colors"
+          [ "$colors" -gt 20 ]
 
       - name: Stop server
         if: always()
@@ -1166,7 +1171,7 @@ jobs:
       - name: Serve + render the WebGPU triangle with headless Chrome
         run: |
           mkdir -p visual_output
-          python3 -m http.server 8000 --directory crates/stipple-web/web &
+          python3 -m http.server 8000 --directory examples/webdemo &
           echo "SRV_PID=$!" >> "$GITHUB_ENV"
           sleep 2
           # The page reads the rendered pixel back in JS and logs it, so the check
@@ -1717,12 +1722,29 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:
       contents: write
+    # One publisher at a time, so two runs never push screenshots at once.
+    concurrency:
+      group: commit-screenshots
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: master
+          fetch-depth: 0
+      - name: Skip if newer code has landed
+        id: fresh
+        run: |
+          # Commits after this run's, other than screenshot updates, mean a newer
+          # run will publish; publishing ours would put older images over newer.
+          newer=$(git log --format='%an' "$GITHUB_SHA..origin/master" | grep -vc '^github-actions\[bot\]$' || true)
+          echo "newer code commits: $newer"
+          echo "publish=$([ "$newer" = 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
+        if: steps.fresh.outputs.publish == 'true'
         with:
           path: artifacts
       - name: Copy the screenshots into docs/
+        if: steps.fresh.outputs.publish == 'true'
         run: |
           for name in stipple-x11 stipple-wayland stipple-wayland-input stipple-windows \
                       stipple-macos stipple-web stipple-gpu stipple-themes \
@@ -1733,11 +1755,13 @@ jobs:
             if [ -n "$found" ]; then cp "$found" "docs/screenshots/$name.png"; else echo "missing: $name"; fi
           done
       - name: Commit and push
+        if: steps.fresh.outputs.publish == 'true'
         run: |
           git add docs/screenshots
           if git diff --cached --quiet; then echo "No visual changes."; exit 0; fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "docs: update screenshots from CI"
-          git pull --rebase origin master
-          git push origin HEAD:master
+          # Starting from master's tip, the push only fails if someone pushed in the
+          # meantime; that push brings its own run, which will publish instead.
+          git push origin HEAD:master || echo "master moved; the newer run will publish."

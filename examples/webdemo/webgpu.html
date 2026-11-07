@@ -2,7 +2,7 @@
 <!--
   Standalone WebGPU triangle — the browser GPU backend for Forma's "GPU-native
   drawing" track. No wgpu/bindgen: hand-written WGSL + the WebGPU JS API (the one
-  sanctioned web exception in ROADMAP.md §1). Renders a forma-green triangle on a
+  sanctioned web exception in ROADMAP.md §1). Renders a stipple-green triangle on a
   dark clear into an *offscreen* texture, copies it back to the CPU, and prints
   the center pixel via console.log — so CI checks the actual rendered pixel
   deterministically (no flaky canvas-composite-vs-screenshot timing). The frame
@@ -11,7 +11,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>forma webgpu</title>
+    <title>stipple webgpu</title>
     <style>
       html, body { margin: 0; padding: 0; background: #141518; }
       #c { display: block; }
