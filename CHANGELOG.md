@@ -18,6 +18,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on X11, Wayland, Windows and macOS
 - mouse cursor shapes (`CursorIcon`, `Element::cursor`): I-beam over text
   inputs, pointing hand over tap and drag targets, resize arrows and more
+- Virtualized lists (`virtual_list`), tables (`table`: sortable, resizable
+  columns, multi-selection, striped rows) and trees (`tree`), building only the
+  rows on screen; see `docs/lists-and-tables.md` and `examples/tabledemo`.
+- Accessibility roles for lists, tables, rows, cells, column headers, trees and
+  tree items, with selected/expanded state; `Element::role`, `.selected()`,
+  `.expanded()`.
+- `Cx::scroll_offset` and `Cx::scroll_requests`, so a view can read a scroll
+  container's offset and a handler can scroll it.
+- `stipple::core::pointer()`: the pointer position, drag origin and the modifier
+  keys held at the last button press (for Shift/Ctrl+click).
+
+### Changed
+
+- `core::Role` and `platform::A11yRole` have new variants; `AccessNode` has
+  `selected` and `expanded`; `Element` and `LayoutNode` have a `semantics`
+  field.
+
+### Fixed
+
+- Pointer hit-testing respects clipping, so content scrolled out of a scroll
+  container can't be clicked where it isn't drawn.
 
 ## [0.0.2](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.1...stipple-v0.0.2) - 2026-11-07
 

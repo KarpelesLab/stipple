@@ -33,6 +33,7 @@ mod event;
 mod input;
 /// OS-drawn controls and system appearance for the native theme.
 pub mod native;
+mod pointer;
 /// seccomp-BPF syscall sandbox for the content process (the hardening layer of
 /// the Stipple-as-compositor content path).
 #[cfg(target_os = "linux")]
@@ -55,6 +56,7 @@ mod window;
 pub use access::{A11yNode, A11yRole};
 pub use error::PlatformError;
 pub use event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, ScrollDelta, WindowId};
+pub use pointer::{pointer_modifiers, set_pointer_modifiers};
 pub use window::{CursorIcon, Window, WindowAttributes, WindowRequest};
 
 /// What a window should do after the application handles an event.

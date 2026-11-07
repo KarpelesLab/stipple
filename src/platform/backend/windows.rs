@@ -705,6 +705,7 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
                 WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => ButtonState::Pressed,
                 _ => ButtonState::Released,
             };
+            crate::platform::set_pointer_modifiers(modifiers());
             push_event(Event::PointerButton {
                 button,
                 state,

@@ -1540,6 +1540,7 @@ where
                 } else {
                     ButtonState::Released
                 };
+                crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
                 if handler(
                     Event::PointerButton {
                         button,

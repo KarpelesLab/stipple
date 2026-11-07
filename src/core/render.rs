@@ -338,6 +338,7 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
         scroll: el.scroll,
         clip: el.clip,
         cursor: el.cursor,
+        semantics: el.semantics,
         children: Vec::new(),
     };
 
@@ -517,6 +518,13 @@ pub fn paint_focus(
         .is_some_and(|n| crate::platform::native::draws_focus(n.control));
     if !os_focus {
         scene.stroke_rect(node.bounds, ring, 2.0);
+    }
+    // A list, table or tree takes focus as a whole: no caret.
+    if node
+        .semantics
+        .is_some_and(|s| s.role != crate::core::a11y::Role::TextField)
+    {
+        return;
     }
 
     let Some(leaf) = first_text(node) else { return };

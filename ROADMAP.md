@@ -870,11 +870,20 @@ Most input only works on X11 today.
   GIF, WebP, BMP); `Svg` parsed by `oxideav-svg` and rasterized at the physical
   size shown; `VideoFrame` ⇄ `Pixmap` interop; `imagedemo` + `visual-image` CI.
 - ⬜ Select / dropdown, number input, split pane, toolbar, toast.
-- ⬜ Table, tree and data grid.
+- ✅ Table, tree and data grid: `table(...)` with sortable headers (▲/▼),
+  drag-to-resize columns, single/multi row selection (Shift/Ctrl+click,
+  Shift+arrows) and striped rows; `tree(...)` with disclosure triangles,
+  indentation and Left/Right collapse/expand; list, table, row, cell, tree and
+  tree-item accessibility roles; see
+  [docs/lists-and-tables.md](docs/lists-and-tables.md), `tabledemo` +
+  `visual-table` CI.
 - ✅ Grid layout (fixed, `fr` and auto tracks, gaps, spans), wrapping stacks,
   and minimum / maximum size constraints (with opt-in `shrink`); see
   [docs/layout.md](docs/layout.md) and `examples/layoutdemo`.
-- ⬜ Virtualized lists, so 10,000 rows don't build 10,000 elements.
+- ✅ Virtualized lists, so 10,000 rows don't build 10,000 elements:
+  `virtual_list(...)` builds only the rows in and around the viewport (fixed or
+  per-row heights) while the scroll extent covers them all; keyboard navigation
+  scrolls the cursor into view (`Cx::scroll_offset` / `Cx::scroll_requests`).
 
 #### 7f — Platform completeness
 - ⬜ Android: high-DPI, and the native theme's system colors.

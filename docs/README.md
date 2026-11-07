@@ -59,6 +59,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 ## Topics
 
 - [Layout](layout.md): stacks, wrapping, grids, and min/max sizes
+- [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls

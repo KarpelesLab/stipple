@@ -235,6 +235,11 @@ struct Pane<S> {
     // Per-container scroll offsets (vertical, logical px), adjusted by wheel
     // events and re-applied + clamped each frame by `apply_scroll`.
     scroll_offsets: std::collections::HashMap<crate::core::ScrollId, f64>,
+    // Scroll requests from handlers (`Cx::scroll_requests`), applied to
+    // `scroll_offsets` before the next build.
+    scroll_requests: crate::core::ScrollRequests,
+    // Where the press that latched the current drag landed.
+    drag_origin: Option<Point>,
     // Last pointer position, so a `Scroll` event (which carries only a delta)
     // can find the scroll container under the cursor.
     last_pointer: Point,
@@ -284,6 +289,8 @@ impl<S> Pane<S> {
             painted_focused: None,
             memo_cache: std::collections::HashMap::new(),
             scroll_offsets: std::collections::HashMap::new(),
+            scroll_requests: crate::core::ScrollRequests::default(),
+            drag_origin: None,
             last_pointer: Point::new(0.0, 0.0),
             overlay_active: false,
             painted_overlay_active: false,
@@ -590,6 +597,10 @@ impl<S> Pane<S> {
         let theme = *theme; // Theme is Copy; avoids borrowing through `theme` in `cx`.
         let mut cx = Cx::with_handle(&theme, self.handle.clone());
         cx.set_memo_cache(std::mem::take(&mut self.memo_cache));
+        for (id, offset) in self.scroll_requests.take() {
+            self.scroll_offsets.insert(id, offset.max(0.0));
+        }
+        cx.set_scroll_state(self.scroll_offsets.clone(), self.scroll_requests.clone());
         let element = (self.view)(state, &mut cx);
         self.memo_cache = cx.take_memo_cache();
         let overlays = cx.take_overlays();
@@ -787,6 +798,7 @@ impl<S> Pane<S> {
         }
         match hit {
             Some(id) => {
+                crate::core::set_pointer_position(pos, None);
                 let ran = self.handlers.dispatch(id, state);
                 if ran {
                     self.dirty = true;
@@ -889,6 +901,7 @@ impl<S> Pane<S> {
         self.ensure_tree(state, theme, font);
         if self.dragging.is_none() {
             self.dragging = self.tree.as_ref().and_then(|t| drag_at(t, pos));
+            self.drag_origin = Some(pos);
         }
         let Some((id, bounds)) = self.dragging else {
             return false;
@@ -898,6 +911,7 @@ impl<S> Pane<S> {
         } else {
             0.0
         };
+        crate::core::set_pointer_position(pos, self.drag_origin);
         let ran = self.handlers.dispatch_drag(id, fraction, state);
         if ran {
             self.dirty = true;
@@ -908,6 +922,7 @@ impl<S> Pane<S> {
     /// End the current drag (pointer released).
     fn end_drag(&mut self) {
         self.dragging = None;
+        self.drag_origin = None;
     }
 
     /// Begin a pointer text interaction at `pos` (logical pixels) pressed at
@@ -1006,6 +1021,8 @@ impl<S> Pane<S> {
     /// Update the hovered element to whatever tappable sits under `pos`.
     /// Returns `true` if the hovered element changed (the UI should repaint).
     fn hover_at(&mut self, state: &S, theme: &Theme, font: Option<&Font>, pos: Point) -> bool {
+        // The wheel targets the container under the pointer.
+        self.last_pointer = pos;
         self.ensure_tree(state, theme, font);
         let now = self.tree.as_ref().and_then(|t| hit_test(t, pos));
         let changed = now != self.hovered;
@@ -1266,6 +1283,14 @@ impl<S> App<S> {
                 Role::Button => A11yRole::Button,
                 Role::TextField => A11yRole::TextField,
                 Role::Text => A11yRole::Text,
+                Role::List => A11yRole::List,
+                Role::ListItem => A11yRole::ListItem,
+                Role::Table => A11yRole::Table,
+                Role::Row => A11yRole::Row,
+                Role::Cell => A11yRole::Cell,
+                Role::ColumnHeader => A11yRole::ColumnHeader,
+                Role::Tree => A11yRole::Tree,
+                Role::TreeItem => A11yRole::TreeItem,
             };
             crate::platform::A11yNode {
                 role,
@@ -1728,6 +1753,10 @@ pub mod prelude {
     pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg};
     pub use crate::style::Theme;
     pub use crate::style::{Palette, Spacing, Typography};
+    pub use crate::widgets::{
+        Column, ListState, SelectionMode, SortOrder, TableSpec, TableState, TreeModel, TreeSpec,
+        TreeState, VirtualList, table, tree, virtual_list,
+    };
     pub use crate::widgets::{
         EditBuffer, Variant, button, button_labeled, button_variant, checkbox, column, divider,
         edit_string, grid, heading, label, menu, menu_item, open_dialog, open_menu, panel,

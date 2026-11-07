@@ -412,6 +412,9 @@ fn post_wake_event() {
 unsafe fn translate_event(etype: u64, ev: Id, view_h: f64) -> Option<Event> {
     let pointer = |button: PointerButton, state: ButtonState| {
         let p = unsafe { msg_point(ev, sel("locationInWindow")) };
+        crate::platform::set_pointer_modifiers(input::mac_modifiers(unsafe {
+            msg_u64(ev, sel("modifierFlags"))
+        }));
         Event::PointerButton {
             button,
             state,
@@ -638,6 +641,12 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
         Button => "AXButton",
         TextField => "AXTextField",
         Text => "AXStaticText",
+        List => "AXList",
+        Cell => "AXCell",
+        Table => "AXTable",
+        ListItem | Row | TreeItem => "AXRow",
+        ColumnHeader => "AXButton",
+        Tree => "AXOutline",
     }
 }
 

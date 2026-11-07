@@ -5,6 +5,7 @@
 //! between widgets and rendering is what lets the (future) reactive runtime
 //! diff one tree against the next.
 
+use crate::core::a11y::{Role, Semantics};
 use crate::core::runtime::{
     ActionId, ContextId, Cx, DragId, FocusId, KeyInput, ScrollId, TextPosId, ViewportId,
 };
@@ -161,6 +162,10 @@ pub struct Element {
     /// handlers: the I-beam over editable text, the pointing hand over taps
     /// and drags, else whatever its parent shows. Set via [`Element::cursor`].
     pub cursor: Option<CursorIcon>,
+    /// Declared accessibility semantics (role, selected, expanded), overriding
+    /// the role inferred from the element's handlers. Set via
+    /// [`Element::role`].
+    pub semantics: Option<Semantics>,
     pub kind: ElementKind,
 }
 
@@ -182,6 +187,7 @@ impl Element {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             kind: ElementKind::Leaf,
         }
     }
@@ -203,6 +209,7 @@ impl Element {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             kind: ElementKind::Text {
                 text: text.into(),
                 size,
@@ -234,6 +241,7 @@ impl Element {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             kind: ElementKind::Viewport { id },
         }
     }
@@ -257,6 +265,7 @@ impl Element {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             kind: ElementKind::Image {
                 source: source.into(),
                 fit: ImageFit::default(),
@@ -281,6 +290,7 @@ impl Element {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             kind: ElementKind::Stack {
                 axis,
                 gap: 0.0,
@@ -537,6 +547,32 @@ impl Element {
     pub fn scrollable(mut self, id: ScrollId) -> Self {
         self.scroll = Some(id);
         self.clip = true;
+        self
+    }
+
+    /// Declare this element's accessibility role (a list, a table row, a tree
+    /// item…), overriding the one inferred from its handlers.
+    pub fn role(mut self, role: Role) -> Self {
+        let sem = self.semantics.get_or_insert(Semantics::new(role));
+        sem.role = role;
+        self
+    }
+
+    /// Mark this element selected (or not) for assistive technologies. Implies
+    /// [`Role::ListItem`] if no role was declared.
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.semantics
+            .get_or_insert(Semantics::new(Role::ListItem))
+            .selected = selected;
+        self
+    }
+
+    /// Mark this expandable element expanded or collapsed for assistive
+    /// technologies. Implies [`Role::TreeItem`] if no role was declared.
+    pub fn expanded(mut self, expanded: bool) -> Self {
+        self.semantics
+            .get_or_insert(Semantics::new(Role::TreeItem))
+            .expanded = Some(expanded);
         self
     }
 

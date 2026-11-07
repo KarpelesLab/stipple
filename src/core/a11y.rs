@@ -13,8 +13,11 @@
 //! descendants as their `name`, and purely decorative containers (no name, no
 //! children) are dropped, so the tree stays small and meaningful.
 //!
-//! This is the data model only; wiring it to each OS accessibility API is
-//! future work (ROADMAP.md).
+//! Widgets whose semantics can't be inferred (lists, tables, trees and their
+//! rows and cells) declare them with [`Element::role`](crate::core::Element::role),
+//! [`selected`](crate::core::Element::selected) and
+//! [`expanded`](crate::core::Element::expanded); a declared role wins over the
+//! inferred one.
 
 use crate::core::runtime::{FocusId, LayoutNode, NodeContent, first_text};
 use crate::geometry::Rect;
@@ -32,6 +35,46 @@ pub enum Role {
     TextField,
     /// A run of static text.
     Text,
+    /// A list of selectable items.
+    List,
+    /// One item of a [`Role::List`].
+    ListItem,
+    /// A table / data grid: rows of cells under column headers.
+    Table,
+    /// One row of a [`Role::Table`], holding [`Role::Cell`]s (or headers).
+    Row,
+    /// One cell of a table row.
+    Cell,
+    /// A column header of a table (often clickable to sort).
+    ColumnHeader,
+    /// A tree of expandable items.
+    Tree,
+    /// One item of a [`Role::Tree`].
+    TreeItem,
+}
+
+/// Semantics an element declares for assistive technologies, overriding the
+/// inferred role. Set via [`Element::role`](crate::core::Element::role) and
+/// friends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Semantics {
+    pub role: Role,
+    /// Whether this item is selected (list items, rows, tree items).
+    pub selected: bool,
+    /// For an expandable item, whether it is expanded; `None` if it can't
+    /// expand.
+    pub expanded: Option<bool>,
+}
+
+impl Semantics {
+    /// Semantics with `role`, not selected, not expandable.
+    pub fn new(role: Role) -> Self {
+        Self {
+            role,
+            selected: false,
+            expanded: None,
+        }
+    }
 }
 
 /// A node in the accessibility tree.
@@ -43,20 +86,44 @@ pub struct AccessNode {
     pub bounds: Rect,
     /// Whether this node currently holds keyboard focus.
     pub focused: bool,
+    /// Whether this item is selected (see [`Semantics::selected`]).
+    pub selected: bool,
+    /// Whether this item is expanded, if it can expand.
+    pub expanded: Option<bool>,
     pub children: Vec<AccessNode>,
 }
 
 /// The accessible text at or under `node` (a control's label / a field's value).
 fn text_of(node: &LayoutNode) -> String {
-    match first_text(node).map(|n| &n.content) {
+    let found = if node.semantics.is_some() {
+        own_text(node)
+    } else {
+        first_text(node)
+    };
+    match found.map(|n| &n.content) {
         Some(NodeContent::Text { text, .. }) => text.clone(),
         _ => String::new(),
     }
 }
 
+/// The first text under `node`, skipping descendants that are controls of their
+/// own (a tree item's disclosure toggle, a checkbox in a row), so an item is
+/// named by its label rather than by a glyph.
+fn own_text(node: &LayoutNode) -> Option<&LayoutNode> {
+    if matches!(node.content, NodeContent::Text { .. }) {
+        return Some(node);
+    }
+    node.children
+        .iter()
+        .filter(|c| c.action.is_none())
+        .find_map(own_text)
+}
+
 /// Infer a node's role from its interaction handles and content.
 fn role_of(node: &LayoutNode) -> Role {
-    if node.action.is_some() {
+    if let Some(sem) = node.semantics {
+        sem.role
+    } else if node.action.is_some() {
         Role::Button
     } else if node.focus.is_some() {
         Role::TextField
@@ -72,8 +139,14 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
     // Interactive/text roles take their name from their text and absorb their
     // descendants; containers recurse and expose their meaningful children.
     let (name, children) = match role {
-        Role::Button | Role::TextField | Role::Text => (text_of(node), Vec::new()),
-        Role::Window | Role::Group => (
+        Role::Button
+        | Role::TextField
+        | Role::Text
+        | Role::ListItem
+        | Role::Cell
+        | Role::ColumnHeader
+        | Role::TreeItem => (text_of(node), Vec::new()),
+        Role::Window | Role::Group | Role::List | Role::Table | Role::Row | Role::Tree => (
             String::new(),
             node.children
                 .iter()
@@ -87,6 +160,8 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         name,
         bounds: node.bounds,
         focused: node.focus.is_some() && node.focus == focused,
+        selected: node.semantics.is_some_and(|s| s.selected),
+        expanded: node.semantics.and_then(|s| s.expanded),
         children,
     }
 }

@@ -65,6 +65,27 @@ pub struct ContextId(pub(crate) u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ScrollId(pub(crate) u32);
 
+/// A cloneable handle for asking the app to move scroll containers, from an
+/// event handler (which only sees the state). Get one from
+/// [`Cx::scroll_requests`]; requests apply before the next frame is built, so
+/// [`Cx::scroll_offset`] reads them back. Used by the virtualized list to keep
+/// the keyboard cursor in view.
+#[derive(Clone, Debug, Default)]
+pub struct ScrollRequests(std::rc::Rc<std::cell::RefCell<Vec<(ScrollId, f64)>>>);
+
+impl ScrollRequests {
+    /// Ask for container `id` to scroll to `offset` logical pixels from the top
+    /// (clamped to its content when applied).
+    pub fn scroll_to(&self, id: ScrollId, offset: f64) {
+        self.0.borrow_mut().push((id, offset));
+    }
+
+    /// Take the pending requests, oldest first.
+    pub fn take(&self) -> Vec<(ScrollId, f64)> {
+        std::mem::take(&mut self.0.borrow_mut())
+    }
+}
+
 /// A **caller-chosen** handle to an embedded-content viewport — a rectangle the
 /// app fills with externally-rendered pixels (a browser page, video frame, or a
 /// sandboxed content process's GPU surface). Unlike the auto-registered handler
@@ -203,6 +224,10 @@ pub struct Cx<'a, S> {
     /// touched this frame (so stale entries can be evicted afterward).
     memo: HashMap<u64, Element>,
     memo_used: HashSet<u64>,
+    /// Scroll offsets as of this build (seeded by the app), and the queue
+    /// handlers push scroll requests onto.
+    scroll_offsets: HashMap<ScrollId, f64>,
+    scroll_requests: ScrollRequests,
     /// The running app's handle, for timers and background work.
     handle: AppHandle<S>,
 }
@@ -227,6 +252,8 @@ impl<'a, S> Cx<'a, S> {
             overlays: Vec::new(),
             memo: HashMap::new(),
             memo_used: HashSet::new(),
+            scroll_offsets: HashMap::new(),
+            scroll_requests: ScrollRequests::default(),
         }
     }
 
@@ -292,6 +319,31 @@ impl<'a, S> Cx<'a, S> {
         let id = ScrollId(self.next_scroll);
         self.next_scroll += 1;
         id
+    }
+
+    /// The current offset of scroll container `id` (logical pixels from the
+    /// top; 0 if it hasn't scrolled). Not yet clamped to the content, so a
+    /// widget that depends on it clamps it itself. A widget that builds only
+    /// what is visible (see [`virtual_list`](crate::widgets::virtual_list))
+    /// reads it right after [`register_scroll`](Cx::register_scroll).
+    pub fn scroll_offset(&self, id: ScrollId) -> f64 {
+        self.scroll_offsets
+            .get(&id)
+            .copied()
+            .unwrap_or(0.0)
+            .max(0.0)
+    }
+
+    /// A handle for handlers to move scroll containers (see [`ScrollRequests`]).
+    pub fn scroll_requests(&self) -> ScrollRequests {
+        self.scroll_requests.clone()
+    }
+
+    /// Seed this frame's scroll offsets and the request queue (the app does
+    /// this before each build).
+    pub fn set_scroll_state(&mut self, offsets: HashMap<ScrollId, f64>, requests: ScrollRequests) {
+        self.scroll_offsets = offsets;
+        self.scroll_requests = requests;
     }
 
     /// Declare a floating overlay layer (menu/popover/tooltip/dialog) drawn above
@@ -541,6 +593,8 @@ pub struct LayoutNode {
     ///
     /// [`Element::cursor`]: crate::core::Element::cursor
     pub cursor: Option<CursorIcon>,
+    /// Declared accessibility semantics, copied from the element.
+    pub semantics: Option<crate::core::a11y::Semantics>,
     pub children: Vec<LayoutNode>,
 }
 
@@ -564,9 +618,17 @@ impl LayoutNode {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             children,
         }
     }
+}
+
+/// Whether `point` falls outside a clipping node, where nothing under it is
+/// drawn — so nothing under it can be hit (a scrolled-away row of a scroll
+/// container, say, lying under a header).
+fn clipped_out(node: &LayoutNode, point: Point) -> bool {
+    node.clip && !node.bounds.contains(point)
 }
 
 /// Find the [`ActionId`] of the top-most tappable node containing `point`.
@@ -574,6 +636,9 @@ impl LayoutNode {
 /// Children are painted after (on top of) their parent, so they are tested
 /// first, last-to-first, mirroring paint order.
 pub fn hit_test(node: &LayoutNode, point: Point) -> Option<ActionId> {
+    if clipped_out(node, point) {
+        return None;
+    }
     for child in node.children.iter().rev() {
         if let Some(id) = hit_test(child, point) {
             return Some(id);
@@ -620,6 +685,9 @@ pub fn cursor_at(node: &LayoutNode, point: Point) -> CursorIcon {
 /// Find the [`ContextId`] of the top-most node with a secondary-click handler
 /// containing `point` (mirrors [`hit_test`], for right-clicks).
 pub fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
+    if clipped_out(node, point) {
+        return None;
+    }
     for child in node.children.iter().rev() {
         if let Some(id) = context_at(child, point) {
             return Some(id);
@@ -636,6 +704,9 @@ pub fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
 /// [`TextPosId`] and the node (so the caller can resolve a byte index from the
 /// node's text and bounds).
 pub fn text_pos_at(node: &LayoutNode, point: Point) -> Option<(TextPosId, &LayoutNode)> {
+    if clipped_out(node, point) {
+        return None;
+    }
     for child in node.children.iter().rev() {
         if let Some(hit) = text_pos_at(child, point) {
             return Some(hit);
@@ -650,6 +721,9 @@ pub fn text_pos_at(node: &LayoutNode, point: Point) -> Option<(TextPosId, &Layou
 /// Find the [`FocusId`] of the top-most focusable node containing `point`
 /// (used for click-to-focus).
 pub fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
+    if clipped_out(node, point) {
+        return None;
+    }
     for child in node.children.iter().rev() {
         if let Some(id) = focus_at(child, point) {
             return Some(id);
@@ -665,6 +739,9 @@ pub fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
 /// Find the top-most draggable node containing `point`, returning its
 /// [`DragId`] and bounds (so the caller can compute the drag fraction).
 pub fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
+    if clipped_out(node, point) {
+        return None;
+    }
     for child in node.children.iter().rev() {
         if let Some(hit) = drag_at(child, point) {
             return Some(hit);
@@ -679,6 +756,9 @@ pub fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
 /// Find the [`ScrollId`] of the top-most scroll container containing `point`
 /// (the wheel target). Children are tested first so a nested scroll area wins.
 pub fn scroll_at(node: &LayoutNode, point: Point) -> Option<ScrollId> {
+    if clipped_out(node, point) {
+        return None;
+    }
     for child in node.children.iter().rev() {
         if let Some(id) = scroll_at(child, point) {
             return Some(id);
@@ -750,6 +830,9 @@ pub fn collect_viewports(node: &LayoutNode, out: &mut Vec<(ViewportId, Rect)>) {
 /// [`ViewportId`] and bounds (so the app can forward the event with
 /// viewport-local coordinates). Children are tested first, mirroring paint order.
 pub fn viewport_at(node: &LayoutNode, point: Point) -> Option<(ViewportId, Rect)> {
+    if clipped_out(node, point) {
+        return None;
+    }
     for child in node.children.iter().rev() {
         if let Some(hit) = viewport_at(child, point) {
             return Some(hit);
@@ -792,6 +875,7 @@ mod tests {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             children: Vec::new(),
         }
     }
@@ -879,6 +963,7 @@ mod tests {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),
@@ -940,6 +1025,30 @@ mod tests {
             cursor_at(&root, Point::new(90.0, 90.0)),
             CursorIcon::Default
         );
+    }
+
+    #[test]
+    fn clipped_children_cannot_be_hit_outside_the_clip() {
+        // A row scrolled up out of its clipping container, over a header.
+        let mut row = leaf(
+            Rect::from_xywh(0.0, 0.0, 100.0, 40.0),
+            Some(ActionId(1)),
+            None,
+        );
+        row.drag = Some(DragId(0));
+        let mut body = leaf(Rect::from_xywh(0.0, 20.0, 100.0, 80.0), None, None);
+        body.clip = true;
+        body.children = vec![row];
+        let header = leaf(
+            Rect::from_xywh(0.0, 0.0, 100.0, 20.0),
+            Some(ActionId(0)),
+            None,
+        );
+        let root =
+            LayoutNode::container(Rect::from_xywh(0.0, 0.0, 100.0, 100.0), vec![header, body]);
+        assert_eq!(hit_test(&root, Point::new(10.0, 10.0)), Some(ActionId(0)));
+        assert_eq!(hit_test(&root, Point::new(10.0, 30.0)), Some(ActionId(1)));
+        assert!(drag_at(&root, Point::new(10.0, 10.0)).is_none());
     }
 
     #[test]

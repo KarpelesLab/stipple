@@ -181,6 +181,7 @@ mod tests {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             children,
         }
     }
@@ -206,6 +207,7 @@ mod tests {
             scroll: None,
             clip: false,
             cursor: None,
+            semantics: None,
             children: Vec::new(),
         }
     }

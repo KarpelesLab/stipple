@@ -32,6 +32,10 @@ fn atspi_role(role: stipple::core::Role) -> u32 {
         Role::Button => 44,    // ATSPI_ROLE_PUSH_BUTTON
         Role::TextField => 80, // ATSPI_ROLE_ENTRY
         Role::Text => 29,      // ATSPI_ROLE_LABEL
+        // Lists, tables and trees map to the closest roles above for now.
+        Role::List | Role::Table | Role::Row | Role::Tree => 54,
+        Role::ListItem | Role::Cell | Role::TreeItem => 29,
+        Role::ColumnHeader => 44,
     }
 }
 

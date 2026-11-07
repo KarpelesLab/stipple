@@ -309,6 +309,81 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
+  # Virtualized table and tree: the tabledemo shows a 10,000-row table (only
+  # the visible rows are built) next to a tree. Screenshot it, check the table
+  # body holds rendered text, then wheel-scroll the table and click a header to
+  # sort: each must change the frame (new rows built as they scroll in).
+  visual-table:
+    name: Visual test (Table / X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, ImageMagick, xdotool, x11-utils, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick xdotool x11-utils fonts-dejavu-core
+
+      - name: Build the table demo
+        run: cargo build --release -p tabledemo
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 -noreset &
+          echo "XVFB_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Screenshot, scroll and sort the table
+        env:
+          DISPLAY: ":99"
+        run: |
+          mkdir -p visual_output
+          ./target/release/tabledemo > visual_output/table.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          # The window (900x560) sits at the root top-left.
+          import -window root -crop 900x560+0+0 +repage visual_output/stipple-table.png
+          # The table body: rows of text, a selection tint, stripes.
+          body_colors=$(convert visual_output/stipple-table.png -crop 420x300+20+110 +repage \
+            -format '%k' info:)
+          echo "distinct colors in the table body: $body_colors"
+          [ "$body_colors" -gt 20 ]
+          # Wheel over the table body (X11 button 5 = down), several notches.
+          xdotool mousemove 250 300
+          sleep 0.5
+          for _ in 1 2 3 4 5 6 7 8; do xdotool click 5; sleep 0.1; done
+          xdotool mousemove 252 302
+          sleep 1
+          import -window root -crop 900x560+0+0 +repage visual_output/table-scrolled.png
+          diff=$(compare -metric AE visual_output/stipple-table.png visual_output/table-scrolled.png null: 2>&1 || true)
+          echo "pixels changed by scrolling: $diff"
+          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 2000 ]
+          # Sort by size (click its header), then compare again.
+          xdotool mousemove 410 85 click 1
+          xdotool mousemove 412 87
+          sleep 1
+          import -window root -crop 900x560+0+0 +repage visual_output/table-sorted.png
+          echo "=== table.log ==="; cat visual_output/table.log || true
+          diff=$(compare -metric AE visual_output/table-scrolled.png visual_output/table-sorted.png null: 2>&1 || true)
+          echo "pixels changed by sorting: $diff"
+          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 2000 ]
+
+      - name: Stop the app and Xvfb
+        if: always()
+        run: |
+          [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      - name: Upload screenshots + log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-table-screenshot
+          path: visual_output/*
+          if-no-files-found: warn
+
   # Scroll containers: a tall list clipped to a fixed-height viewport, wheel-
   # scrolled with xdotool. Screenshot before/after and assert the visible frame
   # changed (content moved) — proving offset + clip work end to end.

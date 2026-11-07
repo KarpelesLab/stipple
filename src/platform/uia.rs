@@ -39,6 +39,13 @@ const UIA_EditControlTypeId: i32 = 50004;
 const UIA_TextControlTypeId: i32 = 50020;
 const UIA_GroupControlTypeId: i32 = 50026;
 const UIA_WindowControlTypeId: i32 = 50032;
+const UIA_ListItemControlTypeId: i32 = 50007;
+const UIA_ListControlTypeId: i32 = 50008;
+const UIA_TreeControlTypeId: i32 = 50023;
+const UIA_TreeItemControlTypeId: i32 = 50024;
+const UIA_DataGridControlTypeId: i32 = 50028;
+const UIA_DataItemControlTypeId: i32 = 50029;
+const UIA_HeaderItemControlTypeId: i32 = 50035;
 
 // NavigateDirection.
 const NavigateDirection_Parent: i32 = 0;
@@ -156,6 +163,15 @@ fn control_type(role: A11yRole) -> i32 {
         A11yRole::Button => UIA_ButtonControlTypeId,
         A11yRole::TextField => UIA_EditControlTypeId,
         A11yRole::Text => UIA_TextControlTypeId,
+        A11yRole::List => UIA_ListControlTypeId,
+        A11yRole::ListItem => UIA_ListItemControlTypeId,
+        A11yRole::Table => UIA_DataGridControlTypeId,
+        A11yRole::Row => UIA_DataItemControlTypeId,
+        // A grid cell is exposed as text inside its data item.
+        A11yRole::Cell => UIA_TextControlTypeId,
+        A11yRole::ColumnHeader => UIA_HeaderItemControlTypeId,
+        A11yRole::Tree => UIA_TreeControlTypeId,
+        A11yRole::TreeItem => UIA_TreeItemControlTypeId,
     }
 }
 

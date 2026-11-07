@@ -24,6 +24,22 @@ pub enum A11yRole {
     TextField,
     /// A run of static text.
     Text,
+    /// A list of selectable items.
+    List,
+    /// One item of a list.
+    ListItem,
+    /// A table / data grid.
+    Table,
+    /// One row of a table.
+    Row,
+    /// One cell of a table row.
+    Cell,
+    /// A table column header.
+    ColumnHeader,
+    /// A tree of expandable items.
+    Tree,
+    /// One item of a tree.
+    TreeItem,
 }
 
 /// A node in the platform-neutral accessibility tree.

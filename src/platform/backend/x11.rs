@@ -1605,6 +1605,15 @@ where
                         n => PointerButton::Other(n as u16),
                     };
                     let scale = win.scale_factor().get();
+                    // The button event's modifier mask (same layout as a key
+                    // event's), for Shift/Ctrl+click.
+                    let mask = rd_u16(&buf, 28).unwrap_or(0);
+                    crate::platform::set_pointer_modifiers(Modifiers {
+                        shift: mask & 0x0001 != 0,
+                        ctrl: mask & 0x0004 != 0,
+                        alt: mask & 0x0008 != 0,
+                        meta: mask & 0x0040 != 0,
+                    });
                     handler(
                         Event::PointerButton {
                             button,
