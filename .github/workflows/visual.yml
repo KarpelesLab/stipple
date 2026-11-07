@@ -966,7 +966,7 @@ jobs:
         shell: powershell
         run: |
           New-Item -ItemType Directory -Force -Path visual_output | Out-Null
-          $proc = Start-Process -FilePath ".\target\release\window.exe" -WindowStyle Hidden -PassThru
+          $proc = Start-Process -FilePath ".\target\release\window.exe" -PassThru
           Start-Sleep -Seconds 5
           Add-Type -AssemblyName System.Drawing
           Add-Type @"
@@ -974,6 +974,7 @@ jobs:
           using System.Runtime.InteropServices;
           public struct RECT { public int Left, Top, Right, Bottom; }
           public static class Win {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
             [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
             [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
             // The extended frame bounds exclude the invisible resize borders.
@@ -981,8 +982,7 @@ jobs:
           }
           "@
           [Win]::SetProcessDPIAware() | Out-Null
-          $proc.Refresh()
-          $hwnd = $proc.MainWindowHandle
+          $hwnd = [Win]::FindWindowW($null, "Stipple")
           if ($hwnd -eq [IntPtr]::Zero) { throw "the Stipple window has no handle" }
           [Win]::SetForegroundWindow($hwnd) | Out-Null
           Start-Sleep -Seconds 1
