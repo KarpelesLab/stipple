@@ -7,11 +7,13 @@
 //! time via the frame's view box (see [`Scene::into_vector_frame`]).
 
 use crate::geometry::{Point, Rect, Size};
-use crate::render::Color;
 use crate::render::convert::to_ox_point;
+use crate::render::{Color, Pixmap};
 use oxideav_core::{
-    Group, Node, Paint, Path, PathNode, Point as OxPoint, Rgba, Stroke, VectorFrame, ViewBox,
+    Group, ImageRef, Node, Paint, Path, PathNode, Point as OxPoint, Rect as OxRect, Rgba, Stroke,
+    Transform2D, VectorFrame, VideoFrame, VideoPlane, ViewBox,
 };
+use std::sync::Arc;
 
 /// Control-point offset for approximating a quarter circle with a cubic
 /// Bézier (the standard `4/3·(√2 − 1)` "kappa" constant).
@@ -52,6 +54,8 @@ pub enum DrawCmd {
     /// imported (dma-buf / `IOSurface` / shared-handle) texture into this rect.
     /// See [`Scene::fill_viewport`].
     Viewport { rect: Rect, id: u64 },
+    /// A bitmap drawn into `rect`: an OS-drawn control under the native theme.
+    Image { rect: Rect, image: Arc<Pixmap> },
 }
 
 /// A clip region under construction: the primitives emitted while it is open,
@@ -72,6 +76,9 @@ pub struct Scene {
     // in a clipped `Group` and folds it into the frame below.
     stack: Vec<ClipFrame>,
     commands: Vec<DrawCmd>,
+    /// Physical pixels per logical pixel of the frame this scene is for, so
+    /// bitmaps can be produced at the resolution they'll be shown at.
+    scale: f64,
 }
 
 impl Scene {
@@ -84,7 +91,41 @@ impl Scene {
                 nodes: Vec::new(),
             }],
             commands: Vec::new(),
+            scale: 1.0,
         }
+    }
+
+    /// Set the physical-per-logical pixel scale this scene will be shown at.
+    pub fn set_scale(&mut self, scale: f64) {
+        self.scale = scale;
+    }
+
+    /// The physical-per-logical pixel scale this scene will be shown at.
+    pub fn scale(&self) -> f64 {
+        self.scale
+    }
+
+    /// Draw `image` (straight-alpha RGBA) into `rect`.
+    pub fn draw_image(&mut self, rect: Rect, image: Arc<Pixmap>) {
+        let size = image.size();
+        let frame = VideoFrame {
+            pts: None,
+            planes: vec![VideoPlane {
+                stride: size.width as usize * 4,
+                data: image.as_bytes().to_vec(),
+            }],
+        };
+        self.emit(Node::Image(ImageRef {
+            frame: Box::new(frame),
+            bounds: OxRect {
+                x: rect.min_x() as f32,
+                y: rect.min_y() as f32,
+                width: rect.width() as f32,
+                height: rect.height() as f32,
+            },
+            transform: Transform2D::identity(),
+        }));
+        self.commands.push(DrawCmd::Image { rect, image });
     }
 
     /// Emit a node into the current (innermost) clip frame.
@@ -323,6 +364,36 @@ fn round_rect_path(rect: Rect, radius: f64) -> Path {
 mod tests {
     use super::*;
     use crate::geometry::Point;
+
+    /// An image lands where it's placed, keeps its colors, and blends its alpha
+    /// over what's underneath (the path OS-drawn controls take).
+    #[test]
+    fn draw_image_composites_straight_alpha() {
+        use crate::geometry::{PhysicalSize, ScaleFactor};
+        use crate::render::software::SoftwareRenderer;
+
+        let size = PhysicalSize::new(4, 4);
+        let mut data = Vec::new();
+        for _ in 0..8 {
+            data.extend_from_slice(&[200, 100, 50, 255]); // top half: opaque
+        }
+        for _ in 0..8 {
+            data.extend_from_slice(&[200, 100, 50, 0]); // bottom half: clear
+        }
+        let image = Arc::new(Pixmap::from_rgba8(size, data));
+        let mut scene = Scene::new(Size::new(8.0, 8.0));
+        scene.fill_rect(Rect::from_xywh(0.0, 0.0, 8.0, 8.0), Color::rgb(0, 0, 255));
+        scene.draw_image(Rect::from_xywh(2.0, 2.0, 4.0, 4.0), image);
+        assert!(matches!(
+            scene.commands().last(),
+            Some(DrawCmd::Image { .. })
+        ));
+
+        let out = SoftwareRenderer::new().render(scene, ScaleFactor::IDENTITY);
+        assert_eq!(out.pixel(0, 0), Some([0, 0, 255, 255]), "outside the image");
+        assert_eq!(out.pixel(3, 2), Some([200, 100, 50, 255]), "opaque part");
+        assert_eq!(out.pixel(3, 5), Some([0, 0, 255, 255]), "clear part");
+    }
 
     #[test]
     fn scene_lowers_to_frame_with_viewbox() {

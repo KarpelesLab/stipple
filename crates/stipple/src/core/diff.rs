@@ -98,6 +98,7 @@ pub fn diff_trees(old: &LayoutNode, new: &LayoutNode) -> Damage {
 fn visuals_equal(a: &LayoutNode, b: &LayoutNode) -> bool {
     a.bounds == b.bounds
         && a.decoration == b.decoration
+        && a.native == b.native
         && a.content == b.content
         && a.caret == b.caret
         && a.selection == b.selection
@@ -176,6 +177,7 @@ mod tests {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             children,
@@ -199,6 +201,7 @@ mod tests {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             children: Vec::new(),

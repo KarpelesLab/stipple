@@ -127,6 +127,12 @@ unsafe fn msg_void(obj: Id, s: Sel) {
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     unsafe { f(obj, s) }
 }
+unsafe fn msg_id_id(obj: Id, s: Sel, a: Id) -> Id {
+    let f: unsafe extern "C" fn(Id, Sel, Id) -> Id =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s, a) }
+}
+
 unsafe fn msg_void_id(obj: Id, s: Sel, a: Id) {
     let f: unsafe extern "C" fn(Id, Sel, Id) =
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
@@ -676,6 +682,16 @@ where
         };
         msg_void_id(window, sel("setContentView:"), view);
         msg_void_id(window, sel("setTitle:"), nsstring(&attrs.title));
+        if let Some(dark) = attrs.dark {
+            // A window's appearance sets its title bar to match the content.
+            let name = nsstring(if dark {
+                "NSAppearanceNameDarkAqua"
+            } else {
+                "NSAppearanceNameAqua"
+            });
+            let appearance = msg_id_id(class("NSAppearance"), sel("appearanceNamed:"), name);
+            msg_void_id(window, sel("setAppearance:"), appearance);
+        }
         // The view doubles as the window delegate so `windowWillClose:` can flag
         // the event loop to exit. Keep the window object alive on close (we hold
         // the only reference) so the loop can tear down cleanly without a

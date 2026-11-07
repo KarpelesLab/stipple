@@ -548,7 +548,9 @@ impl<S> Pane<S> {
         // Apply (and clamp) scroll-container offsets to the laid-out tree before
         // painting, so the retained tree matches what's drawn for event routing.
         crate::core::apply_scroll(&mut tree, &mut self.scroll_offsets);
+        crate::core::mark_native_states(&mut tree, self.hovered, self.pressed, self.focused);
         let mut scene = Scene::new(size);
+        scene.set_scale(self.scale.get());
         paint(&tree, &mut scene, font);
         // Lighten the hovered tappable element with the theme's overlay.
         if let Some(hid) = self.hovered {
@@ -1153,6 +1155,11 @@ impl<S> App<S> {
             }
         }
 
+        // Title bars match the content under every theme.
+        let dark = self.theme.is_dark();
+        for pane in &mut self.panes {
+            pane.attrs.dark.get_or_insert(dark);
+        }
         let primary_attrs = self.panes[0].attrs.clone();
         // Per-pane surfaces, created lazily on first present, parallel to panes.
         let mut surfaces: Vec<Option<Box<dyn Surface>>> =
@@ -1314,6 +1321,18 @@ impl<S> App<S> {
                         .tree
                         .as_ref()
                         .and_then(|t| hit_test(t, position));
+                    let pressed_native = self.panes[idx].pressed.is_some_and(|id| {
+                        self.panes[idx]
+                            .tree
+                            .as_ref()
+                            .and_then(|t| find_action(t, id))
+                            .is_some_and(|n| n.native.is_some())
+                    });
+                    if pressed_native {
+                        // The OS draws a pressed look, so repaint for it.
+                        self.panes[idx].dirty = true;
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
                     // Editable text under the cursor starts a click/drag
                     // selection; otherwise latch a drag if a draggable sits there.
                     if self.pane_text_press_at(idx, position)
@@ -1363,6 +1382,10 @@ impl<S> App<S> {
                         self.panes[idx].end_drag();
                     } else {
                         let down = self.panes[idx].pressed.take();
+                        if down.is_some() {
+                            // Clear an OS-drawn control's pressed look on release.
+                            self.panes[idx].dirty = true;
+                        }
                         let up = self.panes[idx]
                             .tree
                             .as_ref()

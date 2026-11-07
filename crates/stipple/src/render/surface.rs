@@ -5,7 +5,7 @@ use crate::geometry::{PhysicalSize, Rect};
 ///
 /// This is the payload handed to a [`Surface`] for display. It is what the
 /// software backend produces today; a future GPU backend may bypass it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pixmap {
     size: PhysicalSize,
     data: Vec<u8>,

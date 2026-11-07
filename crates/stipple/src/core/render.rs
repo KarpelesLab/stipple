@@ -15,8 +15,9 @@ use crate::core::element::{Align, BoxStyle, Element, ElementKind};
 use crate::core::runtime::{
     ActionId, FocusId, LayoutNode, NodeContent, ScrollId, find_action, find_focus, first_text,
 };
-use crate::geometry::{Point, Rect, Size, Vec2};
+use crate::geometry::{PhysicalSize, Point, Rect, Size, Vec2};
 use crate::layout::{Axis, FlexItem, solve_main_axis};
+use crate::platform::native::NativeState;
 use crate::render::{Color, Font, Scene};
 
 /// Neutral fill painted into an embedded-content viewport before its content is
@@ -109,6 +110,7 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
         selection: el.selection,
         text_pos: el.text_pos,
         wrap: el.wrap,
+        native: el.native,
         scroll: el.scroll,
         clip: el.clip,
         children: Vec::new(),
@@ -212,7 +214,12 @@ pub fn paint_focus(
     let Some(node) = find_focus(tree, focused) else {
         return;
     };
-    scene.stroke_rect(node.bounds, ring, 2.0);
+    let os_focus = node
+        .native
+        .is_some_and(|n| crate::platform::native::draws_focus(n.control));
+    if !os_focus {
+        scene.stroke_rect(node.bounds, ring, 2.0);
+    }
 
     let Some(leaf) = first_text(node) else { return };
     let NodeContent::Text { text, size, .. } = &leaf.content else {
@@ -321,6 +328,10 @@ pub fn caret_index_at(node: &LayoutNode, point: Point, font: Option<&Font>) -> O
 /// element, matching its corner radius. No-op if `hovered` isn't in the tree.
 pub fn paint_hover(tree: &LayoutNode, hovered: ActionId, scene: &mut Scene, highlight: Color) {
     if let Some(node) = find_action(tree, hovered) {
+        // An OS-drawn control shows hover itself (see `mark_native_states`).
+        if node.native.is_some() {
+            return;
+        }
         if node.decoration.radius > 0.0 {
             scene.fill_round_rect(node.bounds, node.decoration.radius, highlight);
         } else {
@@ -329,9 +340,49 @@ pub fn paint_hover(tree: &LayoutNode, hovered: ActionId, scene: &mut Scene, high
     }
 }
 
+/// Tell each OS-drawn control which interaction state to draw itself in.
+pub fn mark_native_states(
+    node: &mut LayoutNode,
+    hovered: Option<ActionId>,
+    pressed: Option<ActionId>,
+    focused: Option<FocusId>,
+) {
+    if let Some(native) = &mut node.native {
+        native.state = NativeState {
+            hovered: node.action.is_some() && node.action == hovered,
+            pressed: node.action.is_some() && node.action == pressed,
+            focused: node.focus.is_some() && node.focus == focused,
+        };
+    }
+    for child in &mut node.children {
+        mark_native_states(child, hovered, pressed, focused);
+    }
+}
+
+/// Have the OS draw `node`'s chrome. Returns `false` if it can't.
+fn paint_native(node: &LayoutNode, scene: &mut Scene) -> bool {
+    let Some(deco) = node.native else {
+        return false;
+    };
+    let scale = scene.scale();
+    let size = PhysicalSize::new(
+        (node.bounds.width() * scale).round() as u32,
+        (node.bounds.height() * scale).round() as u32,
+    );
+    match crate::platform::native::render(deco, size, scale) {
+        Some(image) => {
+            scene.draw_image(node.bounds, image);
+            true
+        }
+        None => false,
+    }
+}
+
 /// Paint a laid-out tree into `scene`, parents before children.
 pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
-    paint_decoration(&node.decoration, node.bounds, scene);
+    if !paint_native(node, scene) {
+        paint_decoration(&node.decoration, node.bounds, scene);
+    }
     match &node.content {
         NodeContent::Text { text, size, color } => {
             if let Some(f) = font {

@@ -17,10 +17,33 @@
 
 use crate::core::{Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, ViewportId};
 use crate::geometry::{Insets, Point};
+use crate::platform::native::{self, NativeControl};
 use crate::render::Color;
 use crate::style::Theme;
 
 /// A vertical container.
+/// Apply the size the OS gives `control`.
+fn native_size(mut el: Element, control: NativeControl) -> Element {
+    let (width, height) = native::size_hint(control);
+    if let Some(width) = width {
+        el = el.width(width);
+    }
+    if let Some(height) = height {
+        el = el.height(height);
+    }
+    el
+}
+
+impl Element {
+    /// Under the native theme, have the OS draw this text field's frame.
+    fn native_text_frame(self, theme: &Theme) -> Self {
+        match theme.native_deco(NativeControl::TextField) {
+            Some(deco) => self.native(deco),
+            None => self,
+        }
+    }
+}
+
 pub fn column(children: Vec<Element>) -> Element {
     Element::stack(Axis::Vertical, children)
 }
@@ -119,6 +142,32 @@ pub enum Variant {
 /// A text button styled per [`Variant`], reading colors from the theme.
 pub fn button_variant(theme: &Theme, label: impl Into<String>, variant: Variant) -> Element {
     let p = &theme.palette;
+    // The OS's primary and regular buttons; it has no equivalent of the others.
+    let control = match variant {
+        Variant::Primary => Some(NativeControl::Button { primary: true }),
+        Variant::Secondary => Some(NativeControl::Button { primary: false }),
+        Variant::Ghost | Variant::Danger => None,
+    };
+    if let Some(control) = control
+        && let Some(deco) = theme.native_deco(control)
+    {
+        let ink = if matches!(variant, Variant::Primary) && native::primary_label_is_on_accent() {
+            p.on_primary
+        } else {
+            p.text
+        };
+        let el = Element::stack(
+            Axis::Horizontal,
+            vec![Element::text(label, theme.typography.body, ink)],
+        )
+        .fill(p.surface)
+        .border(p.border, 1.0)
+        .radius(theme.radius)
+        .padding(Insets::symmetric(theme.spacing.lg, 0.0))
+        .align(Align::Center, Align::Center)
+        .native(deco);
+        return native_size(el, control);
+    }
     let (fill, ink, border): (Option<Color>, Color, Option<Color>) = match variant {
         Variant::Primary => (Some(p.primary), p.on_primary, None),
         Variant::Secondary => (Some(p.surface), p.text, Some(p.border)),
@@ -515,6 +564,7 @@ pub fn text_field<S>(
     .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
     .align(Align::Start, Align::Center)
     .width(200.0)
+    .native_text_frame(theme)
     .on_key(cx, on_key)
 }
 
@@ -560,6 +610,7 @@ pub fn text_editor<S>(
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
         .align(Align::Start, Align::Center)
         .width(200.0)
+        .native_text_frame(theme)
         .on_key(cx, move |s, k| field(s).apply(k))
         .on_text_pos(cx, move |s, index, extend| {
             let b = field(s);
@@ -598,6 +649,7 @@ pub fn text_area<S>(
         .align(Align::Start, Align::Start)
         .width(280.0)
         .height(120.0)
+        .native_text_frame(theme)
         .on_key(cx, move |s, k| field(s).apply(k))
         .on_text_pos(cx, move |s, index, extend| {
             let b = field(s);
@@ -617,6 +669,11 @@ pub fn checkbox<S>(
     checked: bool,
     on_toggle: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let control = NativeControl::Checkbox { checked };
+    if let Some(deco) = theme.native_deco(control) {
+        return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
+            .on_tap(cx, on_toggle);
+    }
     let mark = if checked {
         vec![Element::text(
             "✓",
@@ -649,6 +706,11 @@ pub fn switch<S>(
     on: bool,
     on_toggle: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let control = NativeControl::Switch { on };
+    if let Some(deco) = theme.native_deco(control) {
+        return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
+            .on_tap(cx, on_toggle);
+    }
     let knob = Element::boxed(BoxStyle {
         fill: Some(Color::WHITE),
         radius: 8.0,
@@ -685,6 +747,13 @@ pub fn slider<S>(
     on_change: impl FnMut(&mut S, f64) + 'static,
 ) -> Element {
     let v = value.clamp(0.0, 1.0);
+    let control = NativeControl::Slider {
+        value: (v * 1000.0).round() as u16,
+    };
+    if let Some(deco) = theme.native_deco(control) {
+        return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
+            .on_drag(cx, on_change);
+    }
     let knob = Element::boxed(BoxStyle {
         fill: Some(theme.palette.primary),
         radius: 8.0,
@@ -747,6 +816,11 @@ pub fn radio<S>(
     selected: bool,
     on_select: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let control = NativeControl::Radio { selected };
+    if let Some(deco) = theme.native_deco(control) {
+        return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
+            .on_tap(cx, on_select);
+    }
     let dot = if selected {
         vec![
             Element::boxed(BoxStyle {
@@ -816,6 +890,12 @@ pub fn tabs<S>(
 /// Default width 200 px; override with `.width(..)`.
 pub fn progress_bar(theme: &Theme, fraction: f64) -> Element {
     let f = fraction.clamp(0.0, 1.0);
+    let control = NativeControl::Progress {
+        value: (f * 1000.0).round() as u16,
+    };
+    if let Some(deco) = theme.native_deco(control) {
+        return native_size(Element::boxed(BoxStyle::default()).native(deco), control);
+    }
     let fill = Element::boxed(BoxStyle {
         fill: Some(theme.palette.primary),
         radius: 4.0,

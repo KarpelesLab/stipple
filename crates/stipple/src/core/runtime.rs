@@ -479,6 +479,10 @@ pub struct LayoutNode {
     pub text_pos: Option<TextPosId>,
     /// When `true`, the text content word-wraps to `bounds.width` when painted.
     pub wrap: bool,
+    /// When set, the OS draws this node's chrome. See [`Element::native`].
+    ///
+    /// [`Element::native`]: crate::core::Element
+    pub native: Option<crate::platform::native::NativeDeco>,
     /// Scroll container handle: wheel events over this node adjust the app's
     /// offset for `id`, and its children are laid out at natural size + shifted.
     pub scroll: Option<ScrollId>,
@@ -504,6 +508,7 @@ impl LayoutNode {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             children,
@@ -699,6 +704,7 @@ mod tests {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             children: Vec::new(),
@@ -784,6 +790,7 @@ mod tests {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             children: vec![

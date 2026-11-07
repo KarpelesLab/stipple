@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::platform::native;
 use crate::render::Color;
 
 /// Semantic colors. Names describe *role*, not hue, so light/dark/custom themes
@@ -101,6 +102,8 @@ pub struct Theme {
     pub radius: f64,
     /// Base font size in logical pixels (mirrors `typography.body`).
     pub font_size: f64,
+    /// Whether widgets ask the OS to draw their chrome. See [`Theme::native`].
+    pub native: bool,
 }
 
 /// Derive the hover/active/ring tints from a `primary` accent.
@@ -113,6 +116,78 @@ fn states(primary: Color, dark: bool) -> (Color, Color) {
 }
 
 impl Theme {
+    /// The platform's own look. On Windows, macOS and iOS the OS's UI framework
+    /// draws the controls; elsewhere (Linux has no native framework) they stay
+    /// self-drawn. Everywhere, it follows the system's light/dark mode and accent
+    /// color and uses the platform's metrics.
+    ///
+    /// Unlike the other themes, this one is deliberately not pixel-identical
+    /// across platforms. Colors are read once, when this is called.
+    pub fn native() -> Self {
+        Self::native_for(native::system_look())
+    }
+
+    fn native_for(look: native::SystemLook) -> Self {
+        let base = if look.dark {
+            Self::dark()
+        } else {
+            Self::light()
+        };
+        let mut theme = match look.accent {
+            Some(accent) => base.with_accent(accent),
+            None => base,
+        };
+        // Window background, control surface, and separator of each platform.
+        #[cfg(target_os = "windows")]
+        let (metrics, light, dark) = (
+            (4.0, 14.0),
+            (0xf3f3f3, 0xfbfbfb, 0xd0d0d0),
+            (0x202020, 0x2d2d2d, 0x434343),
+        );
+        #[cfg(target_os = "macos")]
+        let (metrics, light, dark) = (
+            (6.0, 13.0),
+            (0xececec, 0xffffff, 0xd0d0d0),
+            (0x1e1e1e, 0x2d2d2d, 0x3d3d3d),
+        );
+        #[cfg(target_os = "ios")]
+        let (metrics, light, dark) = (
+            (10.0, 17.0),
+            (0xf2f2f7, 0xffffff, 0xc6c6c8),
+            (0x000000, 0x1c1c1e, 0x38383a),
+        );
+        // GNOME's libadwaita colors, the closest thing Linux has to a default.
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios")))]
+        let (metrics, light, dark) = (
+            (6.0, 14.0),
+            (0xfafafb, 0xffffff, 0xd9d9dc),
+            (0x222226, 0x2e2e32, 0x3f3f43),
+        );
+        let (background, surface, border) = if look.dark { dark } else { light };
+        let color = |hex: u32| Color::rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+        theme.palette.background = color(background);
+        theme.palette.surface = color(surface);
+        theme.palette.border = color(border);
+        theme.radius = metrics.0;
+        theme.native = native::available();
+        theme.with_font_size(metrics.1)
+    }
+
+    /// Whether this theme's background is dark, so windows can match it.
+    pub fn is_dark(&self) -> bool {
+        self.palette.background.luminance() < 0.5
+    }
+
+    /// How the OS should draw `control` under this theme, or `None` if the widget
+    /// should draw itself.
+    pub fn native_deco(&self, control: native::NativeControl) -> Option<native::NativeDeco> {
+        (self.native && native::supports(control)).then(|| native::NativeDeco {
+            control,
+            dark: self.is_dark(),
+            state: native::NativeState::default(),
+        })
+    }
+
     /// The default light theme.
     pub fn light() -> Self {
         let primary = Color::rgb(0x3b, 0x82, 0xf6);
@@ -139,6 +214,7 @@ impl Theme {
             spacing: Spacing::default(),
             radius: 8.0,
             font_size: 14.0,
+            native: false,
         }
     }
 
@@ -168,6 +244,7 @@ impl Theme {
             spacing: Spacing::default(),
             radius: 8.0,
             font_size: 14.0,
+            native: false,
         }
     }
 
@@ -430,6 +507,7 @@ impl Theme {
             // M3 medium components (cards) use a 12dp corner radius.
             radius: 12.0,
             font_size: 14.0,
+            native: false,
         }
     }
 }
@@ -442,6 +520,32 @@ fn with_alpha(c: Color, a: u8) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_theme_follows_the_system_look() {
+        let accent = Color::rgb(10, 20, 200);
+        let dark = Theme::native_for(native::SystemLook {
+            dark: true,
+            accent: Some(accent),
+        });
+        assert!(dark.is_dark());
+        assert_eq!(dark.palette.primary, accent);
+        let light = Theme::native_for(native::SystemLook::default());
+        assert!(!light.is_dark());
+    }
+
+    #[test]
+    fn only_the_native_theme_asks_the_os_to_draw() {
+        let control = native::NativeControl::TextField;
+        assert_eq!(Theme::light().native_deco(control), None);
+        assert_eq!(Theme::dark().native_deco(control), None);
+        assert_eq!(
+            Theme::native_for(native::SystemLook::default())
+                .native_deco(control)
+                .is_some(),
+            native::available() && native::supports(control)
+        );
+    }
 
     #[test]
     fn themes_differ_in_palette_not_metrics() {

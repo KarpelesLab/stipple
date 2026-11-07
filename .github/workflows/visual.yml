@@ -69,6 +69,17 @@ jobs:
           echo "=== capture ==="; identify visual_output/stipple-x11.png
           echo "=== app.log ==="; cat visual_output/app.log || true
 
+      - name: Screenshot the native gallery
+        env:
+          DISPLAY: ":99"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          cargo build --release -p nativegallery
+          ./target/release/nativegallery > visual_output/native.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          import -window root -crop 360x340+0+0 +repage visual_output/stipple-x11-native.png
+
       - name: Stop the app and Xvfb
         if: always()
         run: |
@@ -962,39 +973,12 @@ jobs:
           # declines it; absence would mean the COM call crashed.
           grep -q "D3D11 shared handle" d3ddemo.log
 
-      - name: Launch the Stipple window and screenshot it
+      - name: Screenshot the Stipple window and the native gallery
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Force -Path visual_output | Out-Null
-          $proc = Start-Process -FilePath ".\target\release\window.exe" -PassThru
-          Start-Sleep -Seconds 5
-          Add-Type -AssemblyName System.Drawing
-          Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          public struct RECT { public int Left, Top, Right, Bottom; }
-          public static class Win {
-            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
-            [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-            [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-            // The extended frame bounds exclude the invisible resize borders.
-            [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
-          }
-          "@
-          [Win]::SetProcessDPIAware() | Out-Null
-          $hwnd = [Win]::FindWindowW($null, "Stipple")
-          if ($hwnd -eq [IntPtr]::Zero) { throw "the Stipple window has no handle" }
-          [Win]::SetForegroundWindow($hwnd) | Out-Null
-          Start-Sleep -Seconds 1
-          $r = New-Object RECT
-          [Win]::DwmGetWindowAttribute($hwnd, 9, [ref]$r, 16) | Out-Null
-          $w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top
-          $bmp = New-Object System.Drawing.Bitmap($w, $h)
-          $gfx = [System.Drawing.Graphics]::FromImage($bmp)
-          $gfx.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
-          $bmp.Save("$PWD\visual_output\stipple-windows.png")
-          Write-Host "Saved screenshot (${w}x${h})"
-          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          cargo build --release -p nativegallery
+          .github\scripts\capture-window.ps1 .\target\release\window.exe visual_output\stipple-windows.png
+          .github\scripts\capture-window.ps1 .\target\release\nativegallery.exe visual_output\stipple-windows-native.png
 
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
@@ -1353,6 +1337,20 @@ jobs:
         if: always()
         run: '[ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true'
 
+      - name: Screenshot the native gallery
+        env:
+          STIPPLE_COCOA_A11Y: "1"
+        run: |
+          cargo build --release -p nativegallery
+          ./target/release/nativegallery > visual_output/native.log 2>&1 &
+          PID=$!
+          sleep 5
+          cat visual_output/native.log
+          win=$(sed -n 's/^Cocoa window number: //p' visual_output/native.log)
+          [ -n "$win" ]
+          screencapture -x -o -l "$win" visual_output/stipple-macos-native.png
+          kill "$PID" 2>/dev/null || true
+
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()
@@ -1553,9 +1551,22 @@ jobs:
           echo "data container: $DATA"
           ls -la "$DATA/tmp" || true
           cat "$DATA/tmp/stipple-ios.txt" || true
+          echo "DEV=$DEV" >> "$GITHUB_ENV"
           # The native UIKit backend booted via UIApplicationMain, created the
           # window, and the Stipple handler rendered a non-empty frame.
           grep -qE "Stipple iOS: window shown, framebuffer [1-9][0-9]*x[1-9][0-9]*" "$DATA/tmp/stipple-ios.txt"
+
+      - name: Screenshot the native gallery
+        run: |
+          cargo build --release -p nativegallery --target aarch64-apple-ios-sim
+          cp target/aarch64-apple-ios-sim/release/nativegallery Stipple.app/window
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          xcrun simctl install "$DEV" Stipple.app
+          # A fixed status bar keeps the screenshot unchanged between runs.
+          xcrun simctl status_bar "$DEV" override --time 9:41 --batteryState charged --batteryLevel 100 || true
+          xcrun simctl launch "$DEV" com.karpeleslab.stipple
+          sleep 10
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-native.png
 
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4
@@ -1658,6 +1669,7 @@ jobs:
       - visual-wayland
       - visual-windows
       - visual-macos
+      - visual-ios
       - visual-web
       - visual-gpu
       - visual-themes
@@ -1675,7 +1687,9 @@ jobs:
         run: |
           for name in stipple-x11 stipple-wayland stipple-wayland-input stipple-windows \
                       stipple-macos stipple-web stipple-gpu stipple-themes \
-                      stipple-material3 stipple-x11-clicks stipple-x11-textinput; do
+                      stipple-material3 stipple-x11-clicks stipple-x11-textinput \
+                      stipple-windows-native stipple-macos-native stipple-ios-native \
+                      stipple-x11-native; do
             found=$(find artifacts -name "$name.png" | head -n 1)
             if [ -n "$found" ]; then cp "$found" "docs/screenshots/$name.png"; else echo "missing: $name"; fi
           done

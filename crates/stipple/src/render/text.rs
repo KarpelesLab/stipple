@@ -67,6 +67,7 @@ impl Font {
             "/usr/share/fonts/TTF/DejaVuSans.ttf",
             "/usr/share/fonts/noto/NotoSans-Regular.ttf",
             // macOS.
+            "/System/Library/Fonts/SFNS.ttf",
             "/System/Library/Fonts/Helvetica.ttc",
             "/Library/Fonts/Arial.ttf",
             // Windows.

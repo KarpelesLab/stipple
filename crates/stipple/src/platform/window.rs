@@ -14,6 +14,9 @@ pub struct WindowAttributes {
     /// window manager place the window (and, with no WM, the server uses 0,0).
     /// Used to lay multiple windows out side by side.
     pub position: Option<(i32, i32)>,
+    /// Whether the window's title bar should be dark, to match its content.
+    /// `None` leaves it to the OS. Honored on Windows and macOS.
+    pub dark: Option<bool>,
 }
 
 impl Default for WindowAttributes {
@@ -23,6 +26,7 @@ impl Default for WindowAttributes {
             logical_size: Size::new(800.0, 600.0),
             resizable: true,
             position: None,
+            dark: None,
         }
     }
 }

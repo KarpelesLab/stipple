@@ -10,6 +10,7 @@ use crate::core::runtime::{
 };
 use crate::geometry::Insets;
 use crate::layout::Axis;
+use crate::platform::native::NativeDeco;
 use crate::render::Color;
 
 /// Alignment of children along an axis.
@@ -121,6 +122,9 @@ pub struct Element {
     /// When `true`, children are clipped to this element's painted bounds. Set
     /// implicitly by [`Element::scrollable`] and via [`Element::clip`].
     pub clip: bool,
+    /// When set, the OS draws this element's chrome instead of `decoration`,
+    /// which remains the fallback. See [`crate::platform::native`].
+    pub native: Option<NativeDeco>,
     pub kind: ElementKind,
 }
 
@@ -138,6 +142,7 @@ impl Element {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             kind: ElementKind::Leaf,
@@ -157,6 +162,7 @@ impl Element {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             kind: ElementKind::Text {
@@ -186,6 +192,7 @@ impl Element {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             kind: ElementKind::Viewport { id },
@@ -205,6 +212,7 @@ impl Element {
             selection: None,
             text_pos: None,
             wrap: false,
+            native: None,
             scroll: None,
             clip: false,
             kind: ElementKind::Stack {
@@ -338,6 +346,13 @@ impl Element {
     /// focus overlay highlights it. An empty or reversed range is ignored.
     pub fn selection(mut self, range: Option<(usize, usize)>) -> Self {
         self.selection = range.filter(|(s, e)| e > s);
+        self
+    }
+
+    /// Have the OS draw this element's chrome. The element's own decoration stays
+    /// as the fallback for when the OS can't. See [`crate::platform::native`].
+    pub fn native(mut self, deco: NativeDeco) -> Self {
+        self.native = Some(deco);
         self
     }
 

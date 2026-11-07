@@ -27,6 +27,8 @@ pub mod backend;
 pub mod dialog;
 mod error;
 mod event;
+/// OS-drawn controls and system appearance for the native theme.
+pub mod native;
 /// seccomp-BPF syscall sandbox for the content process (the hardening layer of
 /// the Stipple-as-compositor content path).
 #[cfg(target_os = "linux")]

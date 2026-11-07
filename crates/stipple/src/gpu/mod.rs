@@ -567,6 +567,9 @@ pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pix
             }
             // Clip regions are honored by the CPU rasterizer (nested clipped
             // groups); the GPU path's scissor support is a follow-up.
+            // The GPU backends can't draw bitmaps yet, so OS-drawn controls are
+            // skipped here and their labels sit on the background.
+            DrawCmd::Image { .. } => {}
             DrawCmd::PushClip(_) | DrawCmd::PopClip => {}
         }
     }

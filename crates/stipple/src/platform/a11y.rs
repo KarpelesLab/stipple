@@ -175,6 +175,54 @@ impl DBus {
         }
     }
 
+    /// Read a value from the XDG portal's `Settings` interface as its marshalled
+    /// variant, or `None` if there's no portal or no such setting. A portal that
+    /// isn't answering must not hold up window creation, so the read times out.
+    fn portal_setting(&mut self, namespace: &str, key: &str) -> Option<Vec<u8>> {
+        let _ = self
+            .stream
+            .set_read_timeout(Some(std::time::Duration::from_millis(250)));
+        let mut body = Vec::new();
+        put_string(&mut body, namespace);
+        put_string(&mut body, key);
+        let reply = self.call_with_body(
+            "org.freedesktop.portal.Desktop",
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.Settings",
+            "ReadOne",
+            "ss",
+            &body,
+        );
+        let _ = self.stream.set_read_timeout(None);
+        reply.ok()
+    }
+
+    /// Read a `u32` portal setting.
+    pub fn portal_setting_u32(&mut self, namespace: &str, key: &str) -> Option<u32> {
+        let reply = self.portal_setting(namespace, key)?;
+        let (sig, off) = variant_header(&reply)?;
+        let mut off = off;
+        (sig == "u")
+            .then(|| read_u32(&reply, &mut off).ok())
+            .flatten()
+    }
+
+    /// Read an RGB portal setting: three doubles, the `(ddd)` the spec defines.
+    pub fn portal_setting_rgb(&mut self, namespace: &str, key: &str) -> Option<[f64; 3]> {
+        let reply = self.portal_setting(namespace, key)?;
+        let (sig, off) = variant_header(&reply)?;
+        if sig != "(ddd)" {
+            return None;
+        }
+        let start = off.next_multiple_of(8);
+        let bytes = reply.get(start..start + 24)?;
+        let channel = |i: usize| {
+            let b: [u8; 8] = bytes[i * 8..i * 8 + 8].try_into().unwrap();
+            f64::from_le_bytes(b)
+        };
+        Some([channel(0), channel(1), channel(2)])
+    }
+
     /// Install a match rule (`org.freedesktop.DBus.AddMatch`) so the bus routes
     /// matching broadcast signals to us.
     fn add_match(&mut self, rule: &str) -> Result<(), String> {
@@ -1053,6 +1101,13 @@ fn read_u32(buf: &[u8], off: &mut usize) -> Result<u32, String> {
 }
 
 // ---- demarshalling ---------------------------------------------------------
+
+/// Split a marshalled VARIANT into its signature and the value's offset.
+fn variant_header(buf: &[u8]) -> Option<(String, usize)> {
+    let len = *buf.first()? as usize;
+    let sig = std::str::from_utf8(buf.get(1..1 + len)?).ok()?.to_string();
+    Some((sig, 1 + len + 1))
+}
 
 /// Read a D-Bus STRING at `*off` in `buf` (u32 length + bytes + NUL), advancing.
 fn read_string(buf: &[u8], off: &mut usize) -> Result<String, String> {

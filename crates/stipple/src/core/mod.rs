@@ -36,7 +36,9 @@ pub use clipboard::{clipboard_text, set_clipboard_text};
 pub use diff::{Damage, diff_trees};
 pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverride};
 pub use render::caret_index_at;
-pub use render::{apply_scroll, layout, measure, paint, paint_focus, paint_hover};
+pub use render::{
+    apply_scroll, layout, mark_native_states, measure, paint, paint_focus, paint_hover,
+};
 pub use runtime::{
     ActionId, Anchor, ContextId, Cx, DragId, FocusId, Handlers, KeyInput, LayoutNode, NodeContent,
     OverlaySpec, ScrollId, TextPosId, ViewportEvent, ViewportId, collect_focusables,

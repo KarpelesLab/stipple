@@ -148,6 +148,13 @@ unsafe extern "system" {
     fn UiaReturnRawElementProvider(hwnd: Hwnd, wp: Wparam, lp: Lparam, el: *mut c_void) -> Lresult;
 }
 
+const DWMWA_USE_IMMERSIVE_DARK_MODE: u32 = 20;
+
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    fn DwmSetWindowAttribute(hwnd: Hwnd, attr: u32, value: *const c_void, size: u32) -> i32;
+}
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn RegisterClassW(class: *const WndClassW) -> u16;
@@ -500,6 +507,18 @@ where
     };
     if hwnd.is_null() {
         return Err(PlatformError::Os("CreateWindowExW failed".into()));
+    }
+    if let Some(dark) = attrs.dark {
+        // Ask the desktop window manager for a title bar matching the content.
+        let value = dark as i32;
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &value as *const i32 as *const c_void,
+                4,
+            );
+        }
     }
 
     // Use the actual client area for the framebuffer size.
