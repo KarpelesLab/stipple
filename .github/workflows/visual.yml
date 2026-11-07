@@ -1366,9 +1366,14 @@ jobs:
 
       - name: Expose a Stipple UI's accessibility tree over AT-SPI and query it
         run: |
-          dbus-run-session -- bash -ec '
+          # The script goes through a quoted heredoc (not `bash -c '...'`) so an
+          # apostrophe in a comment or a quoted grep pattern can't end it early.
+          cat > a11y-query.sh <<'EOF'
+            set -euo pipefail
             ./target/release/a11ydemo serve > serve.log 2>&1 &
             SRV=$!
+            # If any check fails, show what the server logged.
+            trap 'echo "----- serve.log"; cat serve.log' ERR
             sleep 2
             cat serve.log
             # We must own the well-known name (RequestName -> 1 = primary owner).
@@ -1430,7 +1435,8 @@ jobs:
               /org/stippleui/a11y org.freedesktop.DBus.Introspectable.Introspect | tee introspect.log
             grep -q "org.a11y.atspi.Accessible" introspect.log
             kill $SRV 2>/dev/null || true
-          '
+          EOF
+          dbus-run-session -- bash a11y-query.sh
 
   # Native file dialog over the xdg-desktop-portal FileChooser. No real portal
   # backend exists headlessly, so the demo ships a mock portal (owns

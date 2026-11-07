@@ -292,7 +292,10 @@ unsafe fn sibling(p: *mut Provider, offset: isize) -> *mut Provider {
             return core::ptr::null_mut();
         }
         let siblings: &[*mut Provider] = &(*parent).children;
-        siblings.get(i as usize).copied().unwrap_or(core::ptr::null_mut())
+        siblings
+            .get(i as usize)
+            .copied()
+            .unwrap_or(core::ptr::null_mut())
     }
 }
 
@@ -469,8 +472,7 @@ impl UiaTree {
             })
             .collect();
 
-        let ptrs: Vec<*mut Provider> =
-            nodes.iter_mut().map(|p| p as *mut Provider).collect();
+        let ptrs: Vec<*mut Provider> = nodes.iter_mut().map(|p| p as *mut Provider).collect();
         let root_ptr = ptrs[0];
         for (i, (_, parent, sib)) in flat.iter().enumerate() {
             let p = ptrs[i];

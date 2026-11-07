@@ -145,12 +145,7 @@ unsafe extern "system" {
 unsafe extern "system" {
     /// Package a UIA provider as the `WM_GETOBJECT` reply (handles the COM
     /// marshalling and `AddRef`), returning the `LRESULT` to pass back.
-    fn UiaReturnRawElementProvider(
-        hwnd: Hwnd,
-        wp: Wparam,
-        lp: Lparam,
-        el: *mut c_void,
-    ) -> Lresult;
+    fn UiaReturnRawElementProvider(hwnd: Hwnd, wp: Wparam, lp: Lparam, el: *mut c_void) -> Lresult;
 }
 
 #[link(name = "user32")]
