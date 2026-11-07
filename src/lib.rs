@@ -2127,6 +2127,11 @@ mod tests {
         );
         assert!(bound.height() <= 40.0, "hover damage taller than the box");
 
+        // Let the fade-in settle first: mid-fade, the first fade-out frame can
+        // land on the very alpha just painted, so nothing would change.
+        std::thread::sleep(crate::core::highlight::HOVER_FADE * 2);
+        let _ = app.render_frame();
+
         // Moving the hover off any tappable clears the highlight, damaging the
         // box it just left — again localized, not full.
         assert!(app.hover_at(Point::new(100.0, 60.0)));

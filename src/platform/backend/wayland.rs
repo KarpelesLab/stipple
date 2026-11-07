@@ -1684,6 +1684,10 @@ where
                 u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let key = u32::from_le_bytes([args[8], args[9], args[10], args[11]]);
             let pressed = u32::from_le_bytes([args[12], args[13], args[14], args[15]]) == 1;
+            dbg(format_args!(
+                "raw key {key} pressed={pressed} sym={:?}",
+                keymap.as_ref().and_then(|m| m.sym(key + 8, mods_mask))
+            ));
             // Prefer the compositor's keymap (xkb keycode = evdev + 8); fall back
             // to the layout-independent evdev table when none was parsed.
             let modifiers = wl_modifiers(mods_mask, keymap.as_ref());
@@ -1703,6 +1707,9 @@ where
                 |i: usize| u32::from_le_bytes([args[i], args[i + 1], args[i + 2], args[i + 3]]);
             mods_mask = word(4) | word(8) | word(12);
             dbg(format_args!("modifiers {mods_mask:#x}"));
+        } else if Some(object) == keyboard {
+            // enter (1) / leave (2) / repeat_info (5).
+            dbg(format_args!("keyboard event {opcode}"));
         } else if object == WL_DISPLAY && opcode == WL_DISPLAY_ERROR {
             return Err(PlatformError::Os("wl_display error".into()));
         }

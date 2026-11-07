@@ -154,7 +154,7 @@ jobs:
         run: |
           kill "$APP_PID" 2>/dev/null || true
           cargo build --release -p widgetsdemo
-          ./target/release/widgetsdemo > visual_output/widgets.log 2>&1 &
+          STIPPLE_X11_DEBUG=1 ./target/release/widgetsdemo > visual_output/widgets.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root -crop 720x480+0+0 +repage visual_output/stipple-x11-widgets.png
@@ -167,6 +167,7 @@ jobs:
           convert visual_output/stipple-x11-widgets-open.png -crop 160x150+124+150 +repage visual_output/widgets-after.png
           diff=$(compare -metric AE visual_output/widgets-before.png visual_output/widgets-after.png null: 2>&1 || true)
           echo "pixels changed under the select: $diff"
+          grep -v present visual_output/widgets.log | tail -20 || true
           [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 500 ]
 
       - name: Stop the app and Xvfb

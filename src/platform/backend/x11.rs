@@ -1598,6 +1598,7 @@ where
                 } else {
                     ButtonState::Released
                 };
+                dbg(format_args!("button {detail} {state:?} at {x},{y}"));
                 // Buttons 4/5 are the vertical wheel, 6/7 the horizontal one.
                 if let Some(delta) = wheel_button_delta(detail) {
                     if code == X_BUTTON_PRESS {
