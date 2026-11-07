@@ -25,6 +25,7 @@ How to build, package and run on each platform, and what works there today.
 | Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ❌ | ❌ |
 | Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ❌ | ❌ |
 | Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ❌ | ❌ |
+| Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ❌ | ❌ |
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ❌ | ❌ |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
@@ -52,6 +53,10 @@ X11 serves copies to other apps, but pastes only text copied in the app.
 needs `xdg-toplevel-icon-v1` and cursor shapes `cursor-shape-v1`; without them
 the compositor's defaults stay.
 ¹⁰ Implemented, but CI only builds it.
+¹¹ CI checks that `asyncdemo`'s spinner animates and then stops. X11 paces
+frames with a timer at the RandR refresh rate; Wayland, Windows and macOS use
+frame callbacks, `DwmFlush` and `CVDisplayLink`, which CI exercises but can't
+time precisely.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -61,6 +66,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Layout](layout.md): stacks, wrapping, grids, and min/max sizes
 - [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
+- [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop

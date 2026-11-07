@@ -133,6 +133,7 @@ jobs:
           timeout 20 ./target/release/asyncdemo --selftest | tee visual_output/async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' visual_output/async.log
           grep -q 'asyncdemo: event loop exited' visual_output/async.log
+          grep -q 'asyncdemo: spinner ok' visual_output/async.log
 
       - name: Screenshot the layout demo (grid, wrap, min/max)
         env:
@@ -1004,6 +1005,7 @@ jobs:
           timeout 20 ./target/release/asyncdemo --selftest | tee visual_output/wl-async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' visual_output/wl-async.log
           grep -q 'asyncdemo: event loop exited' visual_output/wl-async.log
+          grep -q 'asyncdemo: spinner ok' visual_output/wl-async.log
 
           # --- scale: with the output at 2x, the buffer must follow it. ---
           export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
@@ -1236,6 +1238,7 @@ jobs:
           timeout 30 ./target/release/asyncdemo.exe --selftest | tee async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
+          grep -q 'asyncdemo: spinner ok' async.log
 
       - name: Round-trip text through the system clipboard
         shell: bash
@@ -1624,6 +1627,7 @@ jobs:
           perl -e 'alarm 30; exec @ARGV' ./target/release/asyncdemo --selftest | tee async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
+          grep -q 'asyncdemo: spinner ok' async.log
 
       - name: Round-trip text through the system clipboard
         run: |

@@ -1187,10 +1187,53 @@ impl Surface for WaylandSurface {
         arg_u32(&mut a, size.width / scale);
         arg_u32(&mut a, size.height / scale);
         let _ = conn.send(surface, WL_SURFACE_DAMAGE, &a);
+        request_frame_callback(&mut conn, surface);
         let _ = conn.send(surface, WL_SURFACE_COMMIT, &[]);
         let _ = conn.stream.flush();
         dbg(format_args!("present {}x{}", size.width, size.height));
     }
+}
+
+/// `wl_surface.frame`: a `wl_callback` that fires when the compositor wants the
+/// next frame.
+const WL_SURFACE_FRAME: u16 = 3;
+
+/// The outstanding frame callback's object id, or 0 for none.
+static FRAME_CALLBACK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// If an animation wants a frame, ask the compositor for a frame callback with
+/// the commit that's about to go out, so the next frame is paced by its repaint
+/// (and stops while the window is hidden). Call just before `commit`.
+fn request_frame_callback(conn: &mut WlConn, surface: u32) {
+    use std::sync::atomic::Ordering;
+    if !crate::platform::frame::wanted() {
+        return;
+    }
+    if FRAME_CALLBACK.load(Ordering::Acquire) == 0 {
+        let callback = conn.new_id();
+        let mut a = Vec::new();
+        arg_u32(&mut a, callback);
+        if conn.send(surface, WL_SURFACE_FRAME, &a).is_err() {
+            return;
+        }
+        FRAME_CALLBACK.store(callback, Ordering::Release);
+    }
+    crate::platform::frame::claim();
+}
+
+/// Whether `(object, opcode)` is the outstanding frame callback firing; if so,
+/// deliver the frame.
+fn frame_callback_done(object: u32, opcode: u16) -> bool {
+    use std::sync::atomic::Ordering;
+    let ours = object != 0
+        && opcode == WL_CALLBACK_DONE
+        && FRAME_CALLBACK
+            .compare_exchange(object, 0, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+    if ours {
+        crate::platform::frame::tick();
+    }
+    ours
 }
 
 // ---- Run loop ---------------------------------------------------------------
@@ -1428,6 +1471,11 @@ where
             }
             message
         };
+        // The compositor is ready for the next animation frame: it arrives as
+        // a wake once this loop goes back to waiting.
+        if frame_callback_done(object, opcode) {
+            continue;
+        }
         // Moving to another output, or an output's scale changing, means rendering
         // at a new resolution.
         let moved = object == surface && opcode == WL_SURFACE_ENTER;

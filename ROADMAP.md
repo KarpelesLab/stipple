@@ -798,8 +798,8 @@ the quickest visible win. [`docs/README.md`](docs/README.md#what-works-where)
 tracks what works on each platform today.
 
 #### 7a — An event loop that can wake itself
-Today `ControlFlow` only waits for OS events, so `Tween` and `Spring` have nothing
-to drive them (the spinner is static) and background work can't update the UI.
+`ControlFlow` used to wait only for OS events, so `Tween` and `Spring` had
+nothing to drive them and background work couldn't update the UI.
 
 - ✅ Settle threading and async (§6): one UI thread, an `AppHandle`, optional tokio.
 - ✅ Timers: `AppHandle::after`, `every`, `cancel`.
@@ -807,13 +807,17 @@ to drive them (the spinner is static) and background work can't update the UI.
   Windows, macOS and iOS; `AppHandle::spawn` for futures with the `tokio`
   feature. `examples/asyncdemo --selftest` checks it in CI on the four desktops.
 - ⬜ Wakeups on Android and the web.
-- ⬜ A frame clock driven by the display (`CVDisplayLink`, `CADisplayLink`,
-  `wl_surface.frame`, DWM), so animations tick at the refresh rate and stop
-  when idle.
-- ⬜ Animated widgets: a turning spinner, and transitions on hover, press and
-  theme changes.
+- ✅ A frame clock driven by the display (`CVDisplayLink`, `CADisplayLink`,
+  `wl_surface.frame`, `DwmFlush`; a RandR-rate timer on X11), so animations
+  tick at the refresh rate and stop when idle. `Cx::request_frame` and
+  `Cx::frame_time`; see [`docs/animation.md`](docs/animation.md).
+- ✅ Animated widgets: a turning spinner, and hover and press highlights that
+  fade.
+- ⬜ Theme changes that cross-fade, and frames on Android and the web.
 - **Exit criteria:** an example that loads data on a background thread shows a
-  live spinner, then the result, on every platform.
+  live spinner, then the result, on every platform. `asyncdemo --selftest`
+  checks it in CI on the four desktops; iOS is unverified, Android and the web
+  wait on wakeups.
 
 #### 7b — Input parity
 Most input only works on X11 today.

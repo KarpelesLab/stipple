@@ -29,6 +29,8 @@ pub mod clipboard;
 pub mod dialog;
 mod error;
 mod event;
+/// The display-driven frame clock that paces animations.
+pub mod frame;
 /// Key and scroll translation tables shared by the native backends.
 mod input;
 /// OS-drawn controls and system appearance for the native theme.

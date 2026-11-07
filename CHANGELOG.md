@@ -28,12 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   container's offset and a handler can scroll it.
 - `stipple::core::pointer()`: the pointer position, drag origin and the modifier
   keys held at the last button press (for Shift/Ctrl+click).
+- A display-driven frame clock: `Cx::request_frame` and `Cx::frame_time` animate
+  at the refresh rate (`wl_surface.frame`, `DwmFlush`, `CVDisplayLink`,
+  `CADisplayLink`, a RandR-rate timer on X11) and stop when idle.
+  `App::animating` reports whether a frame asked for another.
+- The spinner turns, and hover and press highlights fade in and out.
+- `asyncdemo` shows a spinner while its background work runs; its `--selftest`
+  checks the spinner animated and then stopped.
 
 ### Changed
 
 - `core::Role` and `platform::A11yRole` have new variants; `AccessNode` has
   `selected` and `expanded`; `Element` and `LayoutNode` have a `semantics`
   field.
+- `spinner` takes the `Cx`: `spinner(cx, &theme)`.
 
 ### Fixed
 

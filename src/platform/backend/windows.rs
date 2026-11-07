@@ -26,6 +26,9 @@ use crate::platform::input;
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
+/// Pacing animation frames by the compositor (`DwmFlush`).
+mod vsync;
+
 // ---- Win32 type aliases -----------------------------------------------------
 
 type Handle = *mut c_void;
@@ -1033,6 +1036,8 @@ where
         }),
         None,
     );
+    // Animation frames are paced by DWM's composition, on a thread of their own.
+    vsync::install();
     let mut msg: Msg = unsafe { std::mem::zeroed() };
     'outer: loop {
         let timeout = match crate::platform::wake::timeout(std::time::Instant::now()) {

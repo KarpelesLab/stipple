@@ -41,6 +41,9 @@ use crate::platform::event::{
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
+/// The monitor refresh rate, which paces animation frames.
+mod refresh;
+
 // ---- X11 protocol constants -------------------------------------------------
 
 const OP_CREATE_WINDOW: u8 = 1;
@@ -1512,6 +1515,11 @@ where
     conn.atom_fullscreen = intern_atom(&mut conn, b"_NET_WM_STATE_FULLSCREEN").map_err(os)?;
     conn.atom_net_wm_icon = intern_atom(&mut conn, b"_NET_WM_ICON").map_err(os)?;
     conn.scale = read_xft_scale(&mut conn).map_err(os)?;
+    // Animation frames come from a timer at the monitor's refresh rate.
+    if let Some(interval) = refresh::interval(&mut conn) {
+        dbg(format_args!("refresh interval {interval:?}"));
+        crate::platform::frame::set_interval(interval);
+    }
     let wm_delete = conn.atom_wm_delete;
 
     // Wrap the connection for sharing, then create the first window against it

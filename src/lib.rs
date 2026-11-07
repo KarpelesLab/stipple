@@ -228,7 +228,14 @@ struct Pane<S> {
     // so a partial repaint can re-rasterize just the damaged rects into it and
     // present those, instead of rebuilding the whole frame's pixels.
     last_pixmap: Option<Pixmap>,
-    painted_hovered: Option<ActionId>,
+    // The hover/press highlights, fading between states, and the overlay alpha
+    // each highlighted element was given in the frame just built and in the one
+    // on screen (for damage).
+    highlights: crate::core::highlight::Highlights,
+    highlight_alphas: Vec<(ActionId, u8)>,
+    painted_highlights: Vec<(ActionId, u8)>,
+    // Whether the frame just built asked for another (something animates).
+    animating: bool,
     painted_focused: Option<FocusId>,
     // Cross-frame memo cache for `Cx::memo` (static subtree reuse).
     memo_cache: std::collections::HashMap<u64, Element>,
@@ -285,7 +292,10 @@ impl<S> Pane<S> {
             dirty: true,
             presented: None,
             last_pixmap: None,
-            painted_hovered: None,
+            highlights: Default::default(),
+            highlight_alphas: Vec::new(),
+            painted_highlights: Vec::new(),
+            animating: false,
             painted_focused: None,
             memo_cache: std::collections::HashMap::new(),
             scroll_offsets: std::collections::HashMap::new(),
@@ -602,6 +612,9 @@ impl<S> Pane<S> {
         }
         cx.set_scroll_state(self.scroll_offsets.clone(), self.scroll_requests.clone());
         let element = (self.view)(state, &mut cx);
+        // The animation timeline, or `None` where there's no clock.
+        let now = crate::platform::frame::now().map(|_| cx.frame_time());
+        let frame_requested = cx.frame_requested();
         self.memo_cache = cx.take_memo_cache();
         let overlays = cx.take_overlays();
         self.handlers = cx.into_handlers();
@@ -658,9 +671,23 @@ impl<S> Pane<S> {
         let mut scene = Scene::new(size);
         scene.set_scale(self.scale.get());
         paint(&tree, &mut scene, font);
-        // Lighten the hovered tappable element with the theme's overlay.
-        if let Some(hid) = self.hovered {
-            paint_hover(&tree, hid, &mut scene, theme.palette.hover_overlay);
+        // Lighten the hovered tappable element with the theme's overlay, twice
+        // over while pressed, fading between states.
+        self.highlights.update(self.hovered, self.pressed, now);
+        let overlay = theme.palette.hover_overlay;
+        self.highlight_alphas = self
+            .highlights
+            .levels(now)
+            .into_iter()
+            .map(|(id, level)| (id, (overlay.a as f64 * level).round().min(255.0) as u8))
+            .filter(|(_, a)| *a > 0)
+            .collect();
+        for &(id, a) in &self.highlight_alphas {
+            paint_hover(&tree, id, &mut scene, Color { a, ..overlay });
+        }
+        self.animating = frame_requested || self.highlights.animating(now);
+        if self.animating {
+            crate::platform::frame::request();
         }
         // Overlay a focus ring + caret on the focused element.
         if let Some(fid) = self.focused {
@@ -694,7 +721,7 @@ impl<S> Pane<S> {
         // Floating overlays paint above the tree and can't be localized by the
         // diff, so any frame with overlays (or that just had them) is full.
         let overlay_changed = self.overlay_active || self.painted_overlay_active;
-        let hover_changed = self.hovered != self.painted_hovered;
+        let hover_changed = self.highlight_alphas != self.painted_highlights;
         let focus_changed = self.focused != self.painted_focused;
 
         let damage = match (&self.presented, &self.tree) {
@@ -708,7 +735,7 @@ impl<S> Pane<S> {
             _ => Damage::Full,
         };
         self.presented = self.tree.clone();
-        self.painted_hovered = self.hovered;
+        self.painted_highlights = self.highlight_alphas.clone();
         self.painted_focused = self.focused;
         self.painted_overlay_active = self.overlay_active;
         damage
@@ -728,11 +755,17 @@ impl<S> Pane<S> {
     ) -> Option<Vec<Rect>> {
         let mut rects = Vec::new();
         if hover_changed {
-            if let Some(id) = self.painted_hovered {
-                rects.push(find_action(old, id)?.bounds);
+            // Every element whose highlight changed, where it was and where it is.
+            let (was, is) = (&self.painted_highlights, &self.highlight_alphas);
+            for &(id, a) in was {
+                if !is.contains(&(id, a)) {
+                    rects.push(find_action(old, id)?.bounds);
+                }
             }
-            if let Some(id) = self.hovered {
-                rects.push(find_action(new, id)?.bounds);
+            for &(id, a) in is {
+                if !was.contains(&(id, a)) {
+                    rects.push(find_action(new, id)?.bounds);
+                }
             }
         }
         if focus_changed {
@@ -1076,6 +1109,13 @@ impl<S> App<S> {
     /// window — used for tests, thumbnails, and golden-image comparisons.
     pub fn render_once(&mut self) -> Pixmap {
         self.render_frame().0
+    }
+
+    /// Whether the primary window's last frame asked for another: something on
+    /// it animates (a spinner, a fading highlight). An idle app returns `false`
+    /// and gets no frames.
+    pub fn animating(&self) -> bool {
+        self.panes[0].animating
     }
 
     /// The primary window's currently focused element, if any.
@@ -1486,15 +1526,9 @@ impl<S> App<S> {
                         .tree
                         .as_ref()
                         .and_then(|t| hit_test(t, position));
-                    let pressed_native = self.panes[idx].pressed.is_some_and(|id| {
-                        self.panes[idx]
-                            .tree
-                            .as_ref()
-                            .and_then(|t| find_action(t, id))
-                            .is_some_and(|n| n.native.is_some())
-                    });
-                    if pressed_native {
-                        // The OS draws a pressed look, so repaint for it.
+                    if self.panes[idx].pressed.is_some() {
+                        // Repaint for the pressed look: the press highlight, or
+                        // the OS's own for an OS-drawn control.
                         self.panes[idx].dirty = true;
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
@@ -1550,15 +1584,16 @@ impl<S> App<S> {
                         self.panes[idx].end_drag();
                     } else {
                         let down = self.panes[idx].pressed.take();
-                        if down.is_some() {
-                            // Clear an OS-drawn control's pressed look on release.
-                            self.panes[idx].dirty = true;
-                        }
                         let up = self.panes[idx]
                             .tree
                             .as_ref()
                             .and_then(|t| hit_test(t, position));
-                        if down.is_some() && down == up && self.pane_click_at(idx, position) {
+                        if down.is_some() && down == up {
+                            self.pane_click_at(idx, position);
+                        }
+                        if down.is_some() {
+                            // Clear the pressed look, whether or not it clicked.
+                            self.panes[idx].dirty = true;
                             present(&mut self, &mut surfaces, idx, window, false);
                         }
                     }
@@ -1634,9 +1669,10 @@ impl<S> App<S> {
                     if self.handle.exit_requested() {
                         return ControlFlow::Exit;
                     }
-                    if ran {
+                    // A frame for an animation (or a fade) re-renders too.
+                    if ran || self.panes[idx].animating {
                         for pane in &mut self.panes {
-                            pane.dirty = true;
+                            pane.dirty |= ran || pane.animating;
                         }
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
@@ -1948,6 +1984,24 @@ mod tests {
             ])
         })
         .logical_size(Size::new(200.0, 80.0))
+    }
+
+    #[test]
+    fn a_spinner_animates_and_a_static_view_idles() {
+        let mut busy = App::new((), |_: &(), cx: &mut Cx<()>| {
+            let theme = *cx.theme();
+            crate::widgets::spinner(cx, &theme)
+        });
+        let _ = busy.render_frame();
+        assert!(busy.animating(), "a spinner keeps asking for frames");
+
+        let mut still = damage_app();
+        let _ = still.render_frame();
+        assert!(!still.animating(), "nothing moves, so no frames");
+        // A hover starts a fade, which animates until it settles.
+        assert!(still.hover_at(Point::new(100.0, 20.0)));
+        let _ = still.render_frame();
+        assert!(still.animating(), "the hover highlight fades in");
     }
 
     #[test]

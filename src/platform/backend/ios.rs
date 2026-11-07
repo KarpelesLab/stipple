@@ -24,6 +24,9 @@ use crate::platform::event::{ButtonState, Event, PointerButton, WindowId};
 use crate::platform::window::{Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
+/// Pacing animation frames by the screen (`CADisplayLink`).
+mod display_link;
+
 type Id = *mut c_void;
 type Sel = *mut c_void;
 type Class = *mut c_void;
@@ -341,6 +344,8 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
                 );
             })),
         );
+        // Animation frames are paced by the screen, through a CADisplayLink.
+        display_link::install();
         msg_void_bool(view, sel("setNeedsDisplay"), true);
 
         // Runtime marker for CI: confirms the UIKit backend booted, built the

@@ -25,6 +25,9 @@ use crate::platform::input;
 use crate::platform::window::{CursorIcon, Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
+/// Pacing animation frames by the display (`CVDisplayLink`).
+mod display_link;
+
 // ---- Objective-C runtime + framework FFI ------------------------------------
 
 type Id = *mut c_void;
@@ -1113,6 +1116,8 @@ where
         // Other threads end the wait by posting an application-defined event,
         // which AppKit allows from any thread.
         crate::platform::wake::install(std::sync::Arc::new(post_wake_event), None);
+        // Animation frames are paced by the display, through a CVDisplayLink.
+        display_link::install();
         loop {
             // Drain autoreleased objects (the dequeued NSEvent, NSStrings, etc.)
             // each iteration. This hand-rolled loop stands in for

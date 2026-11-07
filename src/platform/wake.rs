@@ -107,13 +107,28 @@ pub fn deadline() -> Option<Instant> {
 /// Whether the loop should deliver a wake now: a pending [`wake`], or a deadline
 /// that has passed. Consumes both.
 pub fn take(now: Instant) -> bool {
-    GLOBAL.take(now)
+    let woken = GLOBAL.take(now);
+    // Both run: a frame that's due is consumed even when a wake came too.
+    let frame = super::frame::take_due(now);
+    woken || frame
 }
 
 /// How long the loop may sleep before the deadline, or `None` to sleep until an
 /// event. Zero when a wake is already pending.
 pub fn timeout(now: Instant) -> Option<std::time::Duration> {
-    GLOBAL.timeout(now)
+    let frame = super::frame::deadline().map(|at| at.saturating_duration_since(now));
+    match (GLOBAL.timeout(now), frame) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Have a backend whose loop can't take a timeout wake at `at` (see
+/// [`install`]). Backends that wait with [`timeout`] need nothing.
+pub(crate) fn schedule(at: Instant) {
+    if let Some(schedule) = GLOBAL.hooks().and_then(|h| h.schedule) {
+        schedule(at);
+    }
 }
 
 /// Install the running backend's way of interrupting its wait. `schedule` is for

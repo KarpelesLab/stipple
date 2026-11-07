@@ -104,12 +104,12 @@ no timers uses no CPU, and one with a timer sleeps until it's due:
 
 CI runs `asyncdemo --selftest` on X11, Wayland, Windows and macOS: it quits itself
 once a 100 ms timer has fired ten times and a background thread's result has
-arrived, with no input.
+arrived, with no input. It also checks that the spinner shown while the work runs
+was animated at the display's rate, and that frames stopped once it was gone.
 
 ## Not yet
 
-- Timers aren't synchronized with the display's refresh, so an animation driven
-  by a 16 ms timer can drift against vsync. A display-driven frame clock is
-  planned (Phase 7a in the [roadmap](../ROADMAP.md)).
+- Timers aren't synchronized with the display's refresh. For animation, use the
+  frame clock instead: see [Animation](animation.md).
 - With several windows, an update re-renders the window the wake arrived for;
   the others repaint on their next event.

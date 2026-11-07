@@ -230,6 +230,16 @@ pub struct Cx<'a, S> {
     scroll_requests: ScrollRequests,
     /// The running app's handle, for timers and background work.
     handle: AppHandle<S>,
+    /// The frame's time on the animation timeline, and whether the view asked
+    /// for another frame. See [`Cx::frame_time`] and [`Cx::request_frame`].
+    frame: FrameInfo,
+}
+
+/// Per-build animation bookkeeping for a [`Cx`].
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameInfo {
+    time: std::time::Duration,
+    requested: bool,
 }
 
 impl<'a, S> Cx<'a, S> {
@@ -254,7 +264,31 @@ impl<'a, S> Cx<'a, S> {
             memo_used: HashSet::new(),
             scroll_offsets: HashMap::new(),
             scroll_requests: ScrollRequests::default(),
+            frame: FrameInfo {
+                time: crate::platform::frame::elapsed().unwrap_or_default(),
+                requested: false,
+            },
         }
+    }
+
+    /// The time of the frame being built, on the app's animation timeline (it
+    /// starts when the first frame is built). The same for the whole build, so
+    /// every animated widget in a frame agrees. Zero on targets without a clock
+    /// (the web, for now), where nothing animates.
+    pub fn frame_time(&self) -> std::time::Duration {
+        self.frame.time
+    }
+
+    /// Ask for another frame at the display's next refresh, to animate. Call it
+    /// in every build that still has motion to show; once builds stop asking,
+    /// frames stop and an idle app uses no CPU. See `docs/animation.md`.
+    pub fn request_frame(&mut self) {
+        self.frame.requested = true;
+    }
+
+    /// Whether this build called [`request_frame`](Self::request_frame).
+    pub fn frame_requested(&self) -> bool {
+        self.frame.requested
     }
 
     /// A handle to the running app, to change its state from a timer or another

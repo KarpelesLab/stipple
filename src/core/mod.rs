@@ -29,6 +29,7 @@ mod clipboard;
 mod diff;
 mod element;
 mod handle;
+pub(crate) mod highlight;
 mod pointer;
 mod render;
 pub mod runtime;

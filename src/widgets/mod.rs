@@ -1309,17 +1309,8 @@ pub fn progress_bar(theme: &Theme, fraction: f64) -> Element {
         .align(Align::Start, Align::Stretch)
 }
 
-/// A simple busy indicator: a primary-colored ring. Static for now; wire it to
-/// the animation clock for a spin later.
-pub fn spinner(theme: &Theme) -> Element {
-    Element::boxed(BoxStyle {
-        fill: None,
-        radius: 11.0,
-        border: Some((theme.palette.primary, 3.0)),
-    })
-    .width(22.0)
-    .height(22.0)
-}
+mod spinner;
+pub use spinner::spinner;
 
 /// A tappable menu row showing `text`, running `on_select` when clicked. Stretch
 /// it across a [`menu`] panel (the panel stretches its children).
