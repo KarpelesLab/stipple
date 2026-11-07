@@ -205,7 +205,7 @@ jobs:
           # The visible frame must have changed (the list scrolled within its clip).
           diff=$(compare -metric AE visual_output/scroll-before.png visual_output/scroll-after.png null: 2>&1 || true)
           echo "changed pixels: $diff"
-          [ "${diff%%[.e]*}" -gt 2000 ]
+          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 2000 ]
 
       - name: Stop the app and Xvfb
         if: always()
@@ -273,10 +273,10 @@ jobs:
           # The dropdown must have changed the frame...
           menudiff=$(compare -metric AE visual_output/overlay-base.png visual_output/overlay-menu.png null: 2>&1 || true)
           echo "menu changed pixels: $menudiff"
-          [ "${menudiff%%[.e]*}" -gt 1500 ]
+          [ "$(echo "$menudiff" | awk '{printf "%d", $1}')" -gt 1500 ]
           # ...and the modal's scrim must darken the whole frame.
-          mb=$(convert visual_output/overlay-base.png -colorspace Gray -format "%[fx:mean]" info:)
-          mdg=$(convert visual_output/overlay-dialog.png -colorspace Gray -format "%[fx:mean]" info:)
+          mb=$(convert visual_output/overlay-base.png -alpha off -colorspace Gray -format "%[fx:mean]" info:)
+          mdg=$(convert visual_output/overlay-dialog.png -alpha off -colorspace Gray -format "%[fx:mean]" info:)
           echo "mean brightness base=$mb dialog=$mdg"
           awk "BEGIN{exit !($mdg < $mb)}"
 
@@ -343,7 +343,7 @@ jobs:
           # failed paste only nudges the caret (<20), so 60 cleanly separates.
           diff=$(compare -metric AE visual_output/clip-before.png visual_output/clip-after.png null: 2>&1 || true)
           echo "changed pixels: $diff"
-          [ "${diff%%[.e]*}" -gt 60 ]
+          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 60 ]
           # The copy must have populated the X11 CLIPBOARD selection with "Clip"
           # (the X11 backend owns the selection and serves SelectionRequest).
           sel=$(xclip -o -selection clipboard 2>/dev/null || true)
@@ -485,7 +485,7 @@ jobs:
           convert visual_output/calc-after.png -crop 268x76+16+16 +repage visual_output/disp-after.png
           diff=$(compare -metric AE visual_output/disp-before.png visual_output/disp-after.png null: 2>&1 || true)
           echo "display changed pixels: $diff"
-          [ "${diff%%[.e]*}" -gt 40 ]
+          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 40 ]
 
       - name: Stop the app and Xvfb
         if: always()
@@ -551,8 +551,8 @@ jobs:
           echo "context-menu changed pixels: $mn"
           # Switching tabs recolors a big swatch (large change); opening the menu
           # paints a panel of items over the body (also large).
-          [ "${sw%%[.e]*}" -gt 500 ]
-          [ "${mn%%[.e]*}" -gt 500 ]
+          [ "$(echo "$sw" | awk '{printf "%d", $1}')" -gt 500 ]
+          [ "$(echo "$mn" | awk '{printf "%d", $1}')" -gt 500 ]
 
       - name: Stop the app and Xvfb
         if: always()
@@ -1014,15 +1014,15 @@ jobs:
           identify visual_output/stipple-material3.png
           # The baseline light (m0) and dark (m1) schemes must clearly differ in
           # brightness (M3 surfaces invert between modes).
-          ml=$(convert m0.png -colorspace Gray -format "%[fx:mean]" info:)
-          md=$(convert m1.png -colorspace Gray -format "%[fx:mean]" info:)
+          ml=$(convert m0.png -alpha off -colorspace Gray -format "%[fx:mean]" info:)
+          md=$(convert m1.png -alpha off -colorspace Gray -format "%[fx:mean]" info:)
           echo "mean brightness light=$ml dark=$md"
           awk "BEGIN{exit !($ml > 0.7 && $md < 0.3)}"
           # ...and the two seed-recolored schemes (m2 teal, m3 orange) must differ
           # from each other and from the baselines — dynamic color really recolors.
           d=$(compare -metric AE m2.png m3.png null: 2>&1 || true)
           echo "teal-vs-orange differing pixels: $d"
-          [ "${d%%[.e]*}" -gt 2000 ]
+          [ "$(echo "$d" | awk '{printf "%d", $1}')" -gt 2000 ]
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()
