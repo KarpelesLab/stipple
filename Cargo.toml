@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "examples/*"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 # Floor is set by the oxideav stack: oxideav-scribe → oxideav-png → compcol
 # requires rustc 1.88. (We'd happily target 1.86 otherwise.)
@@ -14,7 +14,7 @@ authors = ["Karpelès Lab Inc."]
 
 [workspace.dependencies]
 # --- Stipple internal crates ---
-stipple = { version = "0.0.1", path = "crates/stipple" }
+stipple = { version = "0.0.2", path = "crates/stipple" }
 
 # --- oxideav media stack (the one sanctioned heavy dependency) ---
 # Pure-Rust content rendering: scene graph, CPU rasterizer, font shaping,
