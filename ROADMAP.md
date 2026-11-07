@@ -1,8 +1,9 @@
 # Stipple — Roadmap
 
 A cross-platform UI library and toolkit in Rust. Stipple draws **beautiful, fully
-themeable, pixel-identical** interfaces on Linux, macOS, Windows, Android, iOS,
-and the web, while staying **as close to the OS as possible** and depending on
+themeable** interfaces on Linux, macOS, Windows, Android, iOS, and the web:
+pixel-identical across platforms under its own themes, or native under
+`Theme::native()`. It stays **as close to the OS as possible** and depends on
 **as little third-party code as possible**.
 
 Stipple does not reinvent 2D content rendering — it builds on the
@@ -510,6 +511,27 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   CI-verified to the limit of each environment, with the GPU on-window present
   runtime-validated by `dri3probe` on real GPU hardware.
 
+### Platform fidelity (November 2026)
+
+- ✅ **Single crate**: the 11 crates merged into `stipple`, at the repository
+  root; the wasm target became `examples/webdemo`.
+- ✅ **Native theme** (`Theme::native()`): follows the system's dark mode and
+  accent color everywhere (the XDG portal on Linux) and uses each platform's
+  metrics. On Windows (`uxtheme`), macOS (offscreen AppKit controls) and iOS
+  (offscreen UIKit controls) the OS draws buttons, checkboxes, radio buttons,
+  switches, sliders, progress bars and text-field frames into cached bitmaps.
+  `examples/nativegallery` shows them, and CI screenshots it per platform.
+- ✅ **High-DPI** on Windows (per-monitor v2), macOS (`backingScaleFactor`), iOS
+  (`UIScreen.scale`), X11 (`Xft.dpi`) and Wayland (output scale). X11 and Wayland
+  run at 2x in CI; Windows and macOS await a real high-DPI display.
+- ✅ **iOS** runs full-screen in the safe area, with touch input.
+- ✅ **Title bars** match the content's light or dark on Windows and macOS.
+- ✅ **Text** centers capitals in the line, whatever the font's metrics claim.
+- ✅ **Published screenshots**: CI commits fresh, deterministic screenshots to
+  `docs/screenshots/` after a green push to `master`.
+- ✅ **Docs**: `docs/` holds a guide per platform, plus the native theme,
+  high-DPI and CI.
+
 ---
 
 ## 1. Guiding principles
@@ -767,6 +789,71 @@ abstraction is frozen at the end of Phase 2.
 - **Exit criteria:** GPU backend is a drop-in `Surface` with measurable
   frame-time wins; software path stays the default/fallback.
 
+### Phase 7 — App-ready parity
+*Goal: everything a real app needs, on every platform. Rendering, the native look
+and platform plumbing are in place; this is the breadth an app depends on.*
+
+The order matters: 7a is an architecture decision the rest builds on, and 7b is
+the quickest visible win. [`docs/README.md`](docs/README.md#what-works-where)
+tracks what works on each platform today.
+
+#### 7a — An event loop that can wake itself
+Today `ControlFlow` only waits for OS events, so `Tween` and `Spring` have nothing
+to drive them (the spinner is static) and background work can't update the UI.
+
+- ⬜ Settle the open questions in §6 on threading and async first.
+- ⬜ Timers: run a closure after a delay or on an interval.
+- ⬜ A frame clock driven by the display (`CVDisplayLink`, `CADisplayLink`,
+  `wl_surface.frame`, DWM), so animations tick at the refresh rate and stop
+  when idle.
+- ⬜ A handle other threads can use to send messages into the app and wake it.
+- ⬜ Animated widgets: a turning spinner, and transitions on hover, press and
+  theme changes.
+- **Exit criteria:** an example that loads data on a background thread shows a
+  live spinner, then the result, on every platform.
+
+#### 7b — Input parity
+Most input only works on X11 today.
+
+- ⬜ Scroll wheel and trackpad scrolling on Wayland, Windows and macOS.
+- ⬜ Modifier keys on every backend, so Ctrl/Cmd shortcuts and Shift-selection
+  work beyond X11.
+- ⬜ A full key list: PageUp/PageDown, F-keys, and keys for shortcuts.
+- ⬜ iOS keyboard (`UIKeyInput`) and Android touch and keyboard (`AInputQueue`).
+- **Exit criteria:** the same scripted input test passes on every desktop backend.
+
+#### 7c — Text input
+- ⬜ Input methods (IME) for Chinese, Japanese and Korean: `text-input-v3` on
+  Wayland, XIM or IBus on X11, `NSTextInputClient` on macOS, IMM32 / TSF on
+  Windows, and the mobile soft keyboards.
+- ⬜ Dead keys and compose sequences.
+- ⬜ Undo and redo, word-wise movement and deletion, double-click to select a word.
+- ⬜ Right-to-left and bidirectional text, from `oxideav-scribe`'s bidi support.
+
+#### 7d — OS integration
+- ⬜ System clipboard on Wayland, Windows, macOS, iOS, Android and the web.
+- ⬜ File dialogs on Windows, macOS and the web.
+- ⬜ Menus: the macOS menu bar first, then window and context menus.
+- ⬜ Window control: minimum and maximum size, maximize, fullscreen, the window icon.
+- ⬜ Mouse cursor shapes: text I-beam, resize arrows, pointer.
+- ⬜ Following dark mode and accent changes while the app runs.
+- ⬜ Drag and drop, notifications, system tray, opening URLs.
+
+#### 7e — Widgets and layout
+- ⬜ Image and SVG widgets (`Scene` can already draw images; `oxideav-svg` is a
+  dependency).
+- ⬜ Select / dropdown, number input, split pane, toolbar, toast.
+- ⬜ Table, tree and data grid.
+- ⬜ Grid layout, wrapping, and minimum / maximum size constraints.
+- ⬜ Virtualized lists, so 10,000 rows don't build 10,000 elements.
+
+#### 7f — Platform completeness
+- ⬜ Android: high-DPI, and the native theme's system colors.
+- ⬜ Accessibility on iOS (UIAccessibility), Android and the web (ARIA).
+- ⬜ Images on the GPU path, so OS-drawn controls render under `App::render_with`.
+- ⬜ The web's exports in the library, so a web app doesn't copy the page glue;
+  high-DPI on the web.
+
 ---
 
 ## 4. Cross-cutting tracks (continuous)
@@ -774,7 +861,7 @@ abstraction is frozen at the end of Phase 2.
 - **Testing:** golden-image rendering tests, layout solver unit tests, input/
   event simulation, per-platform smoke tests in CI.
 - **Docs & examples:** an examples gallery that doubles as the conformance
-  corpus; rustdoc; architecture notes.
+  corpus; rustdoc; platform and topic guides in [`docs/`](docs/README.md).
 - **Tooling (stretch):** a UI inspector/devtools overlay; hot-reload of `view`.
 - **Packaging:** app bundling per platform (`.app`, MSIX, APK, IPA, wasm).
 
@@ -787,7 +874,8 @@ abstraction is frozen at the end of Phase 2.
 | CPU rasterization too slow for large/animated/4K UIs | Damage tracking + layer/glyph caching in Phase 1; GPU `Surface` (Phase 6) behind the same trait. |
 | Per-OS windowing/IME is a deep, hand-written surface | Confine to `stipple::platform`; freeze the trait after Phase 2; ship one OS fully before porting. |
 | Reactive runtime + Rust ownership friction | Prototype the `View`/state model in Phase 1 against real demos before widening the widget set. |
-| Accessibility is hard when self-drawing everything | Dedicated `stipple-a11y` semantics tree + native bridges in Phase 3, designed in from the element tree. |
+| Accessibility is hard when self-drawing everything | A semantics tree built from the element tree, with hand-written bridges to AT-SPI, UI Automation and NSAccessibility. Mobile and web bridges remain (Phase 7f). |
+| The native theme leans on OS internals | Windows' dark control themes (`DarkMode_*`) are undocumented, and AppKit and UIKit restyle controls between releases. Controls are drawn by the OS at run time, so they follow its current look; the self-drawn decoration stays as the fallback; CI screenshots each platform. |
 | oxideav API churn | Pin via path deps now; track upstream; the `stipple::render` seam isolates oxideav from the rest. |
 | Web with "minimal deps" constraint | Accept a thin, hand-audited JS-interop shim as the one web exception. |
 
@@ -795,11 +883,12 @@ abstraction is frozen at the end of Phase 2.
 
 ## 6. Decisions locked / still open
 
-**Locked (this session):** software-first rendering with a GPU-ready `Surface`
-seam; reactive/declarative public API; self-drawn widgets (OS provides only
-window/input/clipboard/IME/a11y); platform order desktop-trio → mobile → web.
+**Locked:** software-first rendering with a GPU-ready `Surface` seam;
+reactive/declarative public API; self-drawn widgets, with `Theme::native()` as
+the opt-in exception where the OS draws a control's chrome; a single crate, with
+optional parts behind features; platform order desktop-trio → mobile → web.
 
-**Still open (revisit before/within Phase 1):**
+**Still open (to settle at the start of Phase 7a):**
 - Threading model: single-threaded UI + render thread vs. fully async event loop.
 - State/reactivity primitives: signals vs. message/`update`-reducer vs. hybrid.
 - Styling authoring: pure-Rust builder API only, or an optional declarative
