@@ -6,8 +6,9 @@
 //!
 //! Scope (v1): register a window class, create + show a top-level window, and
 //! present the software [`Pixmap`] by blitting a top-down 32-bit DIB with
-//! `StretchDIBits` on `WM_PAINT`. Input (mouse/keyboard) and live resize are
-//! follow-ups; the first milestone is a CI-screenshotable window.
+//! `StretchDIBits` on `WM_PAINT`. Input: mouse buttons, motion and the wheel
+//! (`WM_MOUSEWHEEL`/`WM_MOUSEHWHEEL`), keys with their modifiers (`GetKeyState`)
+//! and typed text from `WM_CHAR`.
 //!
 //! **Verification:** build-checked on the `windows-latest` CI runner via the
 //! workspace build matrix; runtime-screenshotted by the Visual workflow's
@@ -20,7 +21,8 @@ use std::ffi::c_void;
 use crate::geometry::{PhysicalSize, ScaleFactor};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
-use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, WindowId};
+use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, WindowId};
+use crate::platform::input;
 use crate::platform::window::{Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
@@ -41,7 +43,13 @@ const WM_SIZE: u32 = 0x0005;
 const WM_PAINT: u32 = 0x000F;
 const WM_CLOSE: u32 = 0x0010;
 const WM_KEYDOWN: u32 = 0x0100;
+const WM_KEYUP: u32 = 0x0101;
 const WM_CHAR: u32 = 0x0102;
+/// F10 and keys pressed with Alt arrive as "system" keys.
+const WM_SYSKEYDOWN: u32 = 0x0104;
+const WM_SYSKEYUP: u32 = 0x0105;
+const WM_MOUSEWHEEL: u32 = 0x020A;
+const WM_MOUSEHWHEEL: u32 = 0x020E;
 const WM_MOUSEMOVE: u32 = 0x0200;
 const WM_LBUTTONDOWN: u32 = 0x0201;
 const WM_LBUTTONUP: u32 = 0x0202;
@@ -66,14 +74,11 @@ const PER_MONITOR_AWARE_V2: isize = -4;
 /// `lParam` value identifying UIA's request for our root fragment provider.
 const UIA_ROOT_OBJECT_ID: i32 = -25;
 
-const VK_BACK: usize = 0x08;
-const VK_TAB: usize = 0x09;
-const VK_RETURN: usize = 0x0D;
-const VK_ESCAPE: usize = 0x1B;
-const VK_LEFT: usize = 0x25;
-const VK_UP: usize = 0x26;
-const VK_RIGHT: usize = 0x27;
-const VK_DOWN: usize = 0x28;
+const VK_SHIFT: i32 = 0x10;
+const VK_CONTROL: i32 = 0x11;
+const VK_MENU: i32 = 0x12;
+const VK_LWIN: i32 = 0x5B;
+const VK_RWIN: i32 = 0x5C;
 const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 const SRCCOPY: u32 = 0x00CC_0020;
@@ -211,6 +216,7 @@ unsafe extern "system" {
     fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: i32) -> i32;
     fn BeginPaint(hwnd: Hwnd, ps: *mut PaintStruct) -> Handle;
     fn EndPaint(hwnd: Hwnd, ps: *const PaintStruct) -> i32;
+    fn GetKeyState(vk: i32) -> i16;
 }
 
 #[link(name = "gdi32")]
@@ -272,17 +278,35 @@ fn mouse_xy(lp: Lparam) -> crate::geometry::Point {
     crate::geometry::Point::new(x / scale, y / scale)
 }
 
-fn map_vk(vk: usize) -> Option<KeyCode> {
-    Some(match vk {
-        VK_BACK => KeyCode::Backspace,
-        VK_TAB => KeyCode::Tab,
-        VK_RETURN => KeyCode::Enter,
-        VK_ESCAPE => KeyCode::Escape,
-        VK_LEFT => KeyCode::ArrowLeft,
-        VK_RIGHT => KeyCode::ArrowRight,
-        VK_UP => KeyCode::ArrowUp,
-        VK_DOWN => KeyCode::ArrowDown,
-        _ => return None,
+/// The modifier keys held when the message being handled was posted
+/// (`GetKeyState` follows the message queue, not the live keyboard).
+fn modifiers() -> Modifiers {
+    // The high bit (a negative SHORT) means the key is down.
+    let down = |vk| unsafe { GetKeyState(vk) } < 0;
+    Modifiers {
+        shift: down(VK_SHIFT),
+        ctrl: down(VK_CONTROL),
+        alt: down(VK_MENU),
+        meta: down(VK_LWIN) || down(VK_RWIN),
+    }
+}
+
+/// The key event for a `WM_(SYS)KEYDOWN`/`UP`: a named key, or — with Ctrl or
+/// the Windows key held — a letter/digit shortcut such as Ctrl+C, whose
+/// `WM_CHAR` is only a control code. Ctrl+Alt is AltGr, which types text.
+fn key_event(vk: usize, state: ButtonState) -> Option<Event> {
+    let modifiers = modifiers();
+    let shortcut = (modifiers.ctrl && !modifiers.alt) || modifiers.meta;
+    let code = input::win32_vk(vk).or_else(|| {
+        shortcut
+            .then(|| input::win32_shortcut_char(vk, modifiers.shift))
+            .flatten()
+            .map(KeyCode::Char)
+    })?;
+    Some(Event::Key {
+        code,
+        state,
+        modifiers,
     })
 }
 
@@ -393,19 +417,44 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             });
             0
         }
-        WM_KEYDOWN => {
-            if let Some(code) = map_vk(wp) {
-                push_event(Event::Key {
-                    code,
-                    state: ButtonState::Pressed,
-                    modifiers: Default::default(),
-                });
+        WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
+            // The pointer position (in screen coordinates here) isn't needed:
+            // the app scrolls whatever is under the last `WM_MOUSEMOVE`.
+            push_event(Event::Scroll {
+                delta: input::win32_wheel(wp, msg == WM_MOUSEHWHEEL),
+            });
+            0
+        }
+        WM_KEYDOWN | WM_KEYUP => {
+            let state = if msg == WM_KEYDOWN {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            };
+            if let Some(ev) = key_event(wp, state) {
+                push_event(ev);
             }
             0
         }
+        WM_SYSKEYDOWN | WM_SYSKEYUP => {
+            let state = if msg == WM_SYSKEYDOWN {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            };
+            if let Some(ev) = key_event(wp, state) {
+                push_event(ev);
+            }
+            // Let Windows handle Alt+F4, Alt+Space and friends as well.
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+        }
         WM_CHAR => {
-            // wParam is a UTF-16 code unit; emit printable characters as text.
+            // wParam is a UTF-16 code unit; emit printable characters as text,
+            // unless the key went out as a shortcut from WM_KEYDOWN.
+            let m = modifiers();
+            let shortcut = (m.ctrl && !m.alt) || m.meta;
             if wp >= 0x20
+                && !shortcut
                 && let Some(ch) = char::from_u32(wp as u32)
             {
                 push_event(Event::Text(ch.to_string()));

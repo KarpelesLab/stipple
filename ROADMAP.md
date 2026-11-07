@@ -818,10 +818,10 @@ to drive them (the spinner is static) and background work can't update the UI.
 #### 7b — Input parity
 Most input only works on X11 today.
 
-- ⬜ Scroll wheel and trackpad scrolling on Wayland, Windows and macOS.
-- ⬜ Modifier keys on every backend, so Ctrl/Cmd shortcuts and Shift-selection
-  work beyond X11.
-- ⬜ A full key list: PageUp/PageDown, F-keys, and keys for shortcuts.
+- ✅ Scroll wheel and trackpad scrolling on Wayland, Windows and macOS.
+- ✅ Modifier keys on every desktop backend, so Ctrl/Cmd shortcuts and
+  Shift-selection work beyond X11.
+- ✅ A full key list: PageUp/PageDown, Insert, F1–F12, and keys for shortcuts.
 - ⬜ iOS keyboard (`UIKeyInput`) and Android touch and keyboard (`AInputQueue`).
 - **Exit criteria:** the same scripted input test passes on every desktop backend.
 

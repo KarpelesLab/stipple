@@ -21,6 +21,7 @@ use crate::geometry::{PhysicalSize, Point, ScaleFactor};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, WindowId};
+use crate::platform::input;
 use crate::platform::window::{Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
@@ -168,6 +169,13 @@ unsafe fn msg_u16(obj: Id, s: Sel) -> u16 {
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     unsafe { f(obj, s) }
 }
+/// A `BOOL` getter. `BOOL` is `bool` on arm64 and `signed char` on x86_64;
+/// both come back in the low byte of the return register, read here as `i8`.
+unsafe fn msg_bool(obj: Id, s: Sel) -> bool {
+    let f: unsafe extern "C" fn(Id, Sel) -> i8 =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s) != 0 }
+}
 // NSPoint / NSRect are 2 / 4 doubles. On arm64 (macos-latest) these are
 // returned through plain `objc_msgSend` (no `_stret`), so the transmute is ABI-
 // correct there.
@@ -198,20 +206,61 @@ const NS_RIGHT_MOUSE_UP: u64 = 4;
 const NS_MOUSE_MOVED: u64 = 5;
 const NS_LEFT_MOUSE_DRAGGED: u64 = 6;
 const NS_KEY_DOWN: u64 = 10;
+const NS_KEY_UP: u64 = 11;
+const NS_SCROLL_WHEEL: u64 = 22;
 
-// macOS virtual key codes for editing/navigation keys.
-fn map_keycode(kc: u16) -> Option<KeyCode> {
-    Some(match kc {
-        36 => KeyCode::Enter,
-        48 => KeyCode::Tab,
-        51 => KeyCode::Backspace,
-        53 => KeyCode::Escape,
-        123 => KeyCode::ArrowLeft,
-        124 => KeyCode::ArrowRight,
-        125 => KeyCode::ArrowDown,
-        126 => KeyCode::ArrowUp,
-        _ => return None,
-    })
+/// The string an `NSString`-returning getter gives, or `None` if it's nil.
+unsafe fn event_string(ev: Id, getter: &str) -> Option<String> {
+    let chars = unsafe { msg_id(ev, sel(getter)) };
+    if chars.is_null() {
+        return None;
+    }
+    let utf8 = unsafe { msg_id(chars, sel("UTF8String")) } as *const i8;
+    if utf8.is_null() {
+        return None;
+    }
+    let s = unsafe { std::ffi::CStr::from_ptr(utf8) };
+    Some(s.to_string_lossy().into_owned())
+}
+
+/// Translate a key-down or key-up `NSEvent`. Named keys (by virtual key code)
+/// become [`Event::Key`]; with Command or Control held, a printable key becomes
+/// a [`KeyCode::Char`] shortcut (from `charactersIgnoringModifiers`, which
+/// keeps Shift); otherwise a key-down's `characters` are the typed text.
+unsafe fn key_event(ev: Id, state: ButtonState) -> Option<Event> {
+    let modifiers = input::mac_modifiers(unsafe { msg_u64(ev, sel("modifierFlags")) });
+    let kc = unsafe { msg_u16(ev, sel("keyCode")) };
+    if let Some(code) = input::mac_keycode(kc) {
+        return Some(Event::Key {
+            code,
+            state,
+            modifiers,
+        });
+    }
+    if modifiers.meta || modifiers.ctrl {
+        let s = unsafe { event_string(ev, "charactersIgnoringModifiers") }?;
+        let mut chars = s.chars();
+        let c = chars.next().filter(|c| !c.is_control())?;
+        if chars.next().is_some() || input::mac_is_function_key(&s) {
+            return None;
+        }
+        return Some(Event::Key {
+            code: KeyCode::Char(c),
+            state,
+            modifiers,
+        });
+    }
+    if state != ButtonState::Pressed {
+        return None;
+    }
+    // Otherwise deliver the typed characters as text. Unmapped function keys
+    // (F13, Page Up on old layouts, …) report private-use code points.
+    let s = unsafe { event_string(ev, "characters") }?;
+    if s.chars().all(|c| c.is_control()) || input::mac_is_function_key(&s) {
+        None
+    } else {
+        Some(Event::Text(s))
+    }
 }
 
 /// Post an application-defined event, ending the main loop's wait. Safe from any
@@ -279,32 +328,16 @@ unsafe fn translate_event(etype: u64, ev: Id, view_h: f64) -> Option<Event> {
                 position: Point::new(p.x, view_h - p.y),
             })
         }
-        NS_KEY_DOWN => {
-            let kc = unsafe { msg_u16(ev, sel("keyCode")) };
-            if let Some(code) = map_keycode(kc) {
-                return Some(Event::Key {
-                    code,
-                    state: ButtonState::Pressed,
-                    modifiers: Default::default(),
-                });
-            }
-            // Otherwise deliver the typed characters as text.
-            let chars = unsafe { msg_id(ev, sel("characters")) };
-            if chars.is_null() {
-                return None;
-            }
-            let utf8 = unsafe { msg_id(chars, sel("UTF8String")) } as *const i8;
-            if utf8.is_null() {
-                return None;
-            }
-            let s = unsafe { std::ffi::CStr::from_ptr(utf8) }
-                .to_string_lossy()
-                .into_owned();
-            if s.chars().all(|c| c.is_control()) {
-                None
-            } else {
-                Some(Event::Text(s))
-            }
+        NS_KEY_DOWN => unsafe { key_event(ev, ButtonState::Pressed) },
+        NS_KEY_UP => unsafe { key_event(ev, ButtonState::Released) },
+        NS_SCROLL_WHEEL => {
+            // CGFloat deltas: points for trackpads (precise), lines for wheels.
+            let dx = unsafe { msg_f64(ev, sel("scrollingDeltaX")) };
+            let dy = unsafe { msg_f64(ev, sel("scrollingDeltaY")) };
+            let precise = unsafe { msg_bool(ev, sel("hasPreciseScrollingDeltas")) };
+            let delta = input::mac_scroll(dx, dy, precise);
+            // Momentum and phase-end events can carry no movement.
+            (delta.dx != 0.0 || delta.dy != 0.0).then_some(Event::Scroll { delta })
         }
         _ => None,
     }
@@ -752,6 +785,9 @@ where
         // the only reference) so the loop can tear down cleanly without a
         // use-after-free on `view`/`window`.
         msg_void_bool(window, sel("setReleasedWhenClosed:"), false);
+        // Deliver NSMouseMoved, not just drags: hover, and the wheel's target
+        // (the app scrolls what's under the last pointer position), need it.
+        msg_void_bool(window, sel("setAcceptsMouseMovedEvents:"), true);
         msg_void_id(window, sel("setDelegate:"), view);
         // The window is laid out in points; the framebuffer is in physical pixels.
         let scale = msg_f64(window, sel("backingScaleFactor"));

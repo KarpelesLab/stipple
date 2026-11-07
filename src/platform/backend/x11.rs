@@ -1320,16 +1320,10 @@ where
                 } else {
                     ButtonState::Released
                 };
-                // Buttons 4/5 are the scroll wheel.
-                if detail == 4 || detail == 5 {
+                // Buttons 4/5 are the vertical wheel, 6/7 the horizontal one.
+                if let Some(delta) = wheel_button_delta(detail) {
                     if code == X_BUTTON_PRESS {
-                        let dy = if detail == 4 { -40.0 } else { 40.0 };
-                        handler(
-                            Event::Scroll {
-                                delta: ScrollDelta { dx: 0.0, dy },
-                            },
-                            win,
-                        )
+                        handler(Event::Scroll { delta }, win)
                     } else {
                         ControlFlow::Wait
                     }
@@ -1468,6 +1462,36 @@ fn fetch_keymap(conn: &mut Conn) -> io::Result<Keymap> {
     Ok(Keymap { syms, per, min })
 }
 
+/// F1 … F12, indexed from F1.
+const FUNCTION_KEYS: [KeyCode; 12] = [
+    KeyCode::F1,
+    KeyCode::F2,
+    KeyCode::F3,
+    KeyCode::F4,
+    KeyCode::F5,
+    KeyCode::F6,
+    KeyCode::F7,
+    KeyCode::F8,
+    KeyCode::F9,
+    KeyCode::F10,
+    KeyCode::F11,
+    KeyCode::F12,
+];
+
+/// The scroll delta for a core-protocol wheel "button": 4/5 scroll up/down, 6/7
+/// left/right, one line per click. `None` for real buttons.
+fn wheel_button_delta(detail: u8) -> Option<ScrollDelta> {
+    let line = crate::platform::input::LINE_PX;
+    let (dx, dy) = match detail {
+        4 => (0.0, -line),
+        5 => (0.0, line),
+        6 => (-line, 0.0),
+        7 => (line, 0.0),
+        _ => return None,
+    };
+    Some(ScrollDelta { dx, dy })
+}
+
 /// Translate an X11 keysym into a Stipple event: editing/navigation keys become
 /// [`Event::Key`] (carrying `modifiers`); printable Latin-1 / Unicode keysyms
 /// become [`Event::Text`] (on press only).
@@ -1483,7 +1507,12 @@ fn keysym_to_event(ks: u32, state: ButtonState, modifiers: Modifiers) -> Option<
         0xff54 => Some(KeyCode::ArrowDown),
         0xff50 => Some(KeyCode::Home),
         0xff57 => Some(KeyCode::End),
+        0xff55 => Some(KeyCode::PageUp),   // XK_Prior
+        0xff56 => Some(KeyCode::PageDown), // XK_Next
+        0xff63 => Some(KeyCode::Insert),
         0xffff => Some(KeyCode::Delete),
+        // XK_F1 … XK_F12 are consecutive.
+        0xffbe..=0xffc9 => Some(FUNCTION_KEYS[(ks - 0xffbe) as usize]),
         _ => None,
     };
     if let Some(code) = code {
@@ -1901,5 +1930,60 @@ mod tests {
         assert_eq!(req[30], 0); // send-event
         assert_eq!(rd_u32(&req, 32), Some(0xcc)); // shmseg
         assert_eq!(rd_u32(&req, 36), Some(0)); // offset
+    }
+
+    #[test]
+    fn keysyms_map_navigation_and_function_keys() {
+        let key = |ks| match keysym_to_event(ks, ButtonState::Pressed, Modifiers::default()) {
+            Some(Event::Key { code, .. }) => Some(code),
+            _ => None,
+        };
+        assert_eq!(key(0xff51), Some(KeyCode::ArrowLeft)); // unchanged
+        assert_eq!(key(0xff50), Some(KeyCode::Home));
+        assert_eq!(key(0xff55), Some(KeyCode::PageUp));
+        assert_eq!(key(0xff56), Some(KeyCode::PageDown));
+        assert_eq!(key(0xff63), Some(KeyCode::Insert));
+        assert_eq!(key(0xffbe), Some(KeyCode::F1));
+        assert_eq!(key(0xffc3), Some(KeyCode::F6));
+        assert_eq!(key(0xffc9), Some(KeyCode::F12));
+        assert_eq!(key(0xffca), None); // F13
+        // Ctrl turns a printable key into a shortcut; without it, it's text.
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            keysym_to_event(0x63, ButtonState::Pressed, ctrl),
+            Some(Event::Key {
+                code: KeyCode::Char('c'),
+                state: ButtonState::Pressed,
+                modifiers: ctrl,
+            })
+        );
+        assert_eq!(
+            keysym_to_event(0x63, ButtonState::Pressed, Modifiers::default()),
+            Some(Event::Text("c".into()))
+        );
+    }
+
+    #[test]
+    fn wheel_buttons_scroll_a_line() {
+        assert_eq!(
+            wheel_button_delta(4),
+            Some(ScrollDelta { dx: 0.0, dy: -40.0 })
+        );
+        assert_eq!(
+            wheel_button_delta(5),
+            Some(ScrollDelta { dx: 0.0, dy: 40.0 })
+        );
+        assert_eq!(
+            wheel_button_delta(6),
+            Some(ScrollDelta { dx: -40.0, dy: 0.0 })
+        );
+        assert_eq!(
+            wheel_button_delta(7),
+            Some(ScrollDelta { dx: 40.0, dy: 0.0 })
+        );
+        assert_eq!(wheel_button_delta(1), None);
     }
 }

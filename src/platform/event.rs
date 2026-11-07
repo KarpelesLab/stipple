@@ -55,7 +55,22 @@ pub enum KeyCode {
     ArrowDown,
     Home,
     End,
+    PageUp,
+    PageDown,
+    Insert,
     Delete,
+    F1,
+    F2,
+    F3,
+    F4,
+    F5,
+    F6,
+    F7,
+    F8,
+    F9,
+    F10,
+    F11,
+    F12,
     /// A printable character key, identified by its base character.
     Char(char),
     /// Anything not yet mapped, carrying the backend's raw scancode.
@@ -63,7 +78,9 @@ pub enum KeyCode {
 }
 
 /// A scroll delta in logical pixels (precise/trackpad) — line-based wheels are
-/// normalized to an approximate pixel delta by the backend.
+/// normalized to an approximate pixel delta by the backend (40 px per notch).
+/// Positive `dy` scrolls down (towards the end of the content), positive `dx`
+/// to the right.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollDelta {
     pub dx: f64,

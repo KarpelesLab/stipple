@@ -11,8 +11,10 @@
 //! presentation (window create + paint + close), and `wl_seat` input —
 //! **keyboard** (decodes the compositor's `wl_keyboard.keymap`, received as an
 //! fd via `recvmsg`/`SCM_RIGHTS`, by parsing the XKB_V1 text to map keycodes to
-//! keysyms; falls back to a layout-independent evdev table if none) and
-//! **pointer** (motion + buttons via `wl_pointer`, coordinates from `wl_fixed`).
+//! keysyms and to find the Alt/Super modifier bits for `wl_keyboard.modifiers`;
+//! falls back to a layout-independent evdev table if none) and **pointer**
+//! (motion, buttons and `axis` scrolling via `wl_pointer`, coordinates from
+//! `wl_fixed`).
 //! The FFI footprint — `memfd_create`/`mmap`, `sendmsg`/`recvmsg` for fd
 //! passing — is the reason for the module-level `allow(unsafe_code)`.
 //!
@@ -31,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use crate::geometry::{PhysicalSize, Point, ScaleFactor};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
-use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers};
+use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, ScrollDelta};
 use crate::platform::window::{Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
@@ -153,9 +155,17 @@ const WL_SEAT_CAP_KEYBOARD: u32 = 2;
 const WL_SEAT_GET_POINTER: u16 = 0;
 const WL_KEYBOARD_KEYMAP: u16 = 0;
 const WL_KEYBOARD_KEY: u16 = 3;
+const WL_KEYBOARD_MODIFIERS: u16 = 4;
 const WL_POINTER_ENTER: u16 = 0;
 const WL_POINTER_MOTION: u16 = 2;
 const WL_POINTER_BUTTON: u16 = 3;
+const WL_POINTER_AXIS: u16 = 4;
+/// Since `wl_seat` v5: a wheel's notch count, sent before its `axis` event.
+const WL_POINTER_AXIS_DISCRETE: u16 = 8;
+/// The highest `wl_seat` version we speak. v5 adds `axis_discrete`; the other
+/// events it adds (`frame`, `axis_source`, `axis_stop`, `repeat_info`, `name`)
+/// are ignored. v8 would replace `axis_discrete` with `axis_value120`.
+const WL_SEAT_VERSION: u32 = 5;
 
 // `wl_shm` pixel format: 32-bit little-endian XRGB → bytes `[B, G, R, X]`.
 const WL_SHM_FORMAT_XRGB8888: u32 = 1;
@@ -179,9 +189,10 @@ fn os(e: io::Error) -> PlatformError {
 ///
 /// Editing/navigation keys have layout-independent evdev codes, so they map
 /// directly. Printable keys use a best-effort US-QWERTY table for [`Event::Text`]
-/// (full layout/IME handling needs an xkb keymap, a follow-up); shift is not yet
-/// tracked, so text is lower-case.
-fn evdev_to_event(code: u32, pressed: bool) -> Option<Event> {
+/// (full layout handling needs the compositor's xkb keymap, preferred when it
+/// was received); Shift upper-cases letters, and with Ctrl/logo held a printable
+/// key becomes a [`KeyCode::Char`] shortcut, as on X11.
+fn evdev_to_event(code: u32, pressed: bool, modifiers: Modifiers) -> Option<Event> {
     let state = if pressed {
         ButtonState::Pressed
     } else {
@@ -199,20 +210,23 @@ fn evdev_to_event(code: u32, pressed: bool) -> Option<Event> {
         108 => Some(KeyCode::ArrowDown),
         102 => Some(KeyCode::Home),
         107 => Some(KeyCode::End),
+        104 => Some(KeyCode::PageUp),
+        109 => Some(KeyCode::PageDown),
+        110 => Some(KeyCode::Insert),
         1 => Some(KeyCode::Escape),
+        59..=68 => Some(FUNCTION_KEYS[(code - 59) as usize]), // F1 … F10
+        87 => Some(KeyCode::F11),
+        88 => Some(KeyCode::F12),
         _ => None,
     };
     if let Some(code) = key {
         return Some(Event::Key {
             code,
             state,
-            modifiers: Modifiers::default(),
+            modifiers,
         });
     }
-    if !pressed {
-        return None;
-    }
-    // Printable keys → text (US QWERTY, lower-case; press only).
+    // Printable keys (US QWERTY).
     let ch = match code {
         16..=25 => Some(b"qwertyuiop"[(code - 16) as usize]),
         30..=38 => Some(b"asdfghjkl"[(code - 30) as usize]),
@@ -222,12 +236,66 @@ fn evdev_to_event(code: u32, pressed: bool) -> Option<Event> {
         57 => Some(b' '),
         _ => None,
     };
-    ch.map(|b| Event::Text((b as char).to_string()))
+    let c = ch? as char;
+    let c = if modifiers.shift {
+        c.to_ascii_uppercase()
+    } else {
+        c
+    };
+    char_event(c, state, modifiers)
+}
+
+/// F1 … F12, indexed from F1.
+const FUNCTION_KEYS: [KeyCode; 12] = [
+    KeyCode::F1,
+    KeyCode::F2,
+    KeyCode::F3,
+    KeyCode::F4,
+    KeyCode::F5,
+    KeyCode::F6,
+    KeyCode::F7,
+    KeyCode::F8,
+    KeyCode::F9,
+    KeyCode::F10,
+    KeyCode::F11,
+    KeyCode::F12,
+];
+
+/// The event for a printable character: a [`KeyCode::Char`] shortcut while
+/// Ctrl or the logo key is held (press and release), otherwise [`Event::Text`]
+/// on press only.
+fn char_event(c: char, state: ButtonState, modifiers: Modifiers) -> Option<Event> {
+    if modifiers.ctrl || modifiers.meta {
+        return Some(Event::Key {
+            code: KeyCode::Char(c),
+            state,
+            modifiers,
+        });
+    }
+    (state == ButtonState::Pressed).then(|| Event::Text(c.to_string()))
 }
 
 /// Convert a `wl_fixed` (signed 24.8 fixed-point) to logical pixels.
 fn fixed_to_f64(raw: u32) -> f64 {
     (raw as i32) as f64 / 256.0
+}
+
+/// The scroll delta for a `wl_pointer.axis` event: `axis` 0 is vertical, 1
+/// horizontal, and `value` (a `wl_fixed`) is in surface pixels, positive down
+/// or right. A wheel also sends `axis_discrete` with its notch count first;
+/// then the delta is one line per notch, as on the other backends, rather than
+/// the compositor's per-notch distance (often 10 or 15 px).
+fn axis_delta(axis: u32, value: u32, discrete: i32) -> Option<ScrollDelta> {
+    let px = if discrete != 0 {
+        f64::from(discrete) * crate::platform::input::LINE_PX
+    } else {
+        fixed_to_f64(value)
+    };
+    match axis {
+        0 => Some(ScrollDelta { dx: 0.0, dy: px }),
+        1 => Some(ScrollDelta { dx: px, dy: 0.0 }),
+        _ => None,
+    }
 }
 
 /// Translate an evdev pointer button code into a Stipple [`PointerButton`].
@@ -243,6 +311,57 @@ fn pointer_button(code: u32) -> Option<crate::platform::event::PointerButton> {
 
 // ---- xkb keymap (text format) -----------------------------------------------
 
+/// `wl_keyboard.modifiers` bits for xkb's fixed real modifiers (Shift, Lock,
+/// Control); Alt and the logo key are whichever of Mod1…Mod5 the keymap binds
+/// them to.
+const XKB_SHIFT: u32 = 1 << 0;
+const XKB_LOCK: u32 = 1 << 1;
+const XKB_CONTROL: u32 = 1 << 2;
+/// The usual bindings, used when the keymap doesn't say: Alt on Mod1, the logo
+/// key on Mod4.
+const XKB_MOD1: u32 = 1 << 3;
+const XKB_MOD4: u32 = 1 << 6;
+
+/// What we read from the compositor's XKB_V1 keymap.
+#[derive(Debug)]
+struct XkbKeymap {
+    /// xkb keycode (evdev + 8) → keysym names at shift levels 1 and 2.
+    keys: std::collections::HashMap<u32, (String, Option<String>)>,
+    /// The modifier bits that mean Alt and the logo (Super) key.
+    alt_mask: u32,
+    meta_mask: u32,
+}
+
+impl XkbKeymap {
+    /// The keysym name for `keycode` under the given modifier state: the
+    /// level-2 symbol when Shift (or Caps Lock, for letters) selects it, else
+    /// level 1.
+    fn sym(&self, keycode: u32, mask: u32) -> Option<&str> {
+        let (base, shifted) = self.keys.get(&keycode)?;
+        let letter = base.chars().count() == 1 && base.chars().all(char::is_alphabetic);
+        let shift = mask & XKB_SHIFT != 0;
+        let caps = mask & XKB_LOCK != 0 && letter;
+        match shifted {
+            // Named keys (Tab → ISO_Left_Tab, …) stay themselves: Shift is
+            // reported through the modifiers instead.
+            Some(s) if shift != caps && keysym_name_to_key(base).is_none() => Some(s),
+            _ => Some(base),
+        }
+    }
+}
+
+/// Translate a `wl_keyboard.modifiers` state (depressed | latched | locked)
+/// into [`Modifiers`].
+fn wl_modifiers(mask: u32, keymap: Option<&XkbKeymap>) -> Modifiers {
+    let (alt, meta) = keymap.map_or((XKB_MOD1, XKB_MOD4), |k| (k.alt_mask, k.meta_mask));
+    Modifiers {
+        shift: mask & XKB_SHIFT != 0,
+        ctrl: mask & XKB_CONTROL != 0,
+        alt: mask & alt != 0,
+        meta: mask & meta != 0,
+    }
+}
+
 /// The substring of `s` between the first `a` and the next `b`.
 fn between(s: &str, a: char, b: char) -> Option<&str> {
     let start = s.find(a)? + 1;
@@ -250,27 +369,91 @@ fn between(s: &str, a: char, b: char) -> Option<&str> {
     Some(&s[start..end])
 }
 
-/// Parse an XKB_V1 keymap into a map from xkb keycode (evdev + 8) to its
-/// level-0 keysym name. We read just two forms: keycode definitions
-/// `<NAME> = N;` and per-key symbols `key <NAME> { [ sym0, ... ] };`.
-fn parse_xkb(text: &str) -> std::collections::HashMap<u32, String> {
+/// The symbol list in a `key` line: the `[ a, A ]` after `{` or after
+/// `symbols[Group1]=`, never an `actions[…]` list. `None` if the line has none.
+fn symbol_list(t: &str) -> Option<Vec<&str>> {
+    let from = match t.find("symbols[") {
+        Some(i) => i + t[i..].find(']')? + 1,
+        None => 0,
+    };
+    let lb = t[from..].find('[')? + from;
+    // `actions[` / `vmods[`-style subscripts aren't symbol lists.
+    if from == 0
+        && t[..lb]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    let inner = &t[lb + 1..];
+    let inner = &inner[..inner.find(']')?];
+    Some(inner.split(',').map(str::trim).collect())
+}
+
+/// Parse an XKB_V1 keymap. We read keycode definitions `<NAME> = N;`, per-key
+/// symbols (`key <NAME> { [ sym1, sym2 ] };`, or the multi-line form with a
+/// `symbols[Group1]= [ … ]` line), and `modifier_map ModN { … };` to learn
+/// which modifier bits Alt and Super use.
+fn parse_xkb(text: &str) -> XkbKeymap {
     use std::collections::HashMap;
     let mut codes: HashMap<&str, u32> = HashMap::new();
-    let mut syms: HashMap<&str, String> = HashMap::new();
+    let mut syms: HashMap<&str, (String, Option<String>)> = HashMap::new();
+    // (modifier bit, members: `<KEY>` names or keysym names)
+    let mut mod_maps: Vec<(u32, Vec<&str>)> = Vec::new();
+    // A multi-line `key <NAME> {` block whose symbols are still to come.
+    let mut open_key: Option<&str> = None;
+    let mut record = |name, list: Vec<&str>| {
+        let level = |i: usize| {
+            list.get(i)
+                .copied()
+                .filter(|s| !s.is_empty() && *s != "NoSymbol")
+                .map(str::to_string)
+        };
+        if let Some(base) = level(0) {
+            syms.insert(name, (base, level(1)));
+        }
+    };
     for line in text.lines() {
         let t = line.trim();
-        if let Some(rest) = t.strip_prefix("key <") {
-            // key <NAME> { [ sym0, sym1 ] };
-            if let Some(end) = rest.find('>')
-                && let Some(lb) = t.find('[')
-            {
+        // `key <NAME>`, with any run of spaces (xkbcomp pads short names).
+        let key_line = t
+            .strip_prefix("key ")
+            .and_then(|r| r.trim_start().strip_prefix('<'));
+        if let Some(rest) = key_line {
+            // key <NAME> { [ sym1, sym2 ] };
+            open_key = None;
+            if let Some(end) = rest.find('>') {
                 let name = &rest[..end];
-                let inner = &t[lb + 1..];
-                let stop = inner.find([',', ']']).unwrap_or(inner.len());
-                let sym = inner[..stop].trim();
-                if !sym.is_empty() {
-                    syms.insert(name, sym.to_string());
+                match symbol_list(t) {
+                    Some(list) => record(name, list),
+                    None if !t.ends_with("};") => open_key = Some(name),
+                    None => {}
                 }
+            }
+        } else if let Some(name) = open_key {
+            if t.starts_with('}') {
+                open_key = None;
+            } else if (t.starts_with("symbols[") || t.starts_with('['))
+                && let Some(list) = symbol_list(t)
+            {
+                // Only the first group's symbols.
+                record(name, list);
+                open_key = None;
+            }
+        } else if let Some(rest) = t.strip_prefix("modifier_map ") {
+            // modifier_map Mod1 { <LALT>, <META> };
+            let modifier = rest.split_whitespace().next().unwrap_or("");
+            let bit = match modifier {
+                "Mod1" => 3,
+                "Mod2" => 4,
+                "Mod3" => 5,
+                "Mod4" => 6,
+                "Mod5" => 7,
+                _ => continue, // Shift/Lock/Control have fixed bits
+            };
+            if let Some(members) = between(t, '{', '}') {
+                mod_maps.push((1 << bit, members.split(',').map(str::trim).collect()));
             }
         } else if t.starts_with('<') && t.contains('=') {
             // <NAME> = N;
@@ -284,69 +467,134 @@ fn parse_xkb(text: &str) -> std::collections::HashMap<u32, String> {
             }
         }
     }
-    codes
+    // Which modifier bits hold Alt/Meta and Super keys.
+    let (mut alt_mask, mut meta_mask) = (0, 0);
+    for (bit, members) in &mod_maps {
+        for member in members {
+            let sym = match member.strip_prefix('<').and_then(|m| m.strip_suffix('>')) {
+                Some(key) => syms.get(key).map_or("", |(base, _)| base.as_str()),
+                None => member,
+            };
+            if sym.starts_with("Alt_") || sym.starts_with("Meta_") {
+                alt_mask |= bit;
+            } else if sym.starts_with("Super_") {
+                meta_mask |= bit;
+            }
+        }
+    }
+    let keys = codes
         .into_iter()
         .filter_map(|(name, code)| syms.get(name).map(|s| (code, s.clone())))
-        .collect()
+        .collect();
+    XkbKeymap {
+        keys,
+        alt_mask: if alt_mask == 0 { XKB_MOD1 } else { alt_mask },
+        meta_mask: if meta_mask == 0 { XKB_MOD4 } else { meta_mask },
+    }
 }
 
-/// Translate an xkb level-0 keysym name into a Stipple event (editing/navigation
-/// keys → [`Event::Key`], printable keysyms → [`Event::Text`] on press).
-fn keysym_name_to_event(name: &str, pressed: bool) -> Option<Event> {
+/// The named key an xkb keysym name stands for, if it isn't printable.
+fn keysym_name_to_key(name: &str) -> Option<KeyCode> {
+    Some(match name {
+        "Tab" | "ISO_Left_Tab" => KeyCode::Tab,
+        "Return" | "KP_Enter" => KeyCode::Enter,
+        "BackSpace" => KeyCode::Backspace,
+        "Delete" => KeyCode::Delete,
+        "Left" => KeyCode::ArrowLeft,
+        "Right" => KeyCode::ArrowRight,
+        "Up" => KeyCode::ArrowUp,
+        "Down" => KeyCode::ArrowDown,
+        "Home" => KeyCode::Home,
+        "End" => KeyCode::End,
+        "Prior" | "Page_Up" => KeyCode::PageUp,
+        "Next" | "Page_Down" => KeyCode::PageDown,
+        "Insert" => KeyCode::Insert,
+        "Escape" => KeyCode::Escape,
+        "F1" => KeyCode::F1,
+        "F2" => KeyCode::F2,
+        "F3" => KeyCode::F3,
+        "F4" => KeyCode::F4,
+        "F5" => KeyCode::F5,
+        "F6" => KeyCode::F6,
+        "F7" => KeyCode::F7,
+        "F8" => KeyCode::F8,
+        "F9" => KeyCode::F9,
+        "F10" => KeyCode::F10,
+        "F11" => KeyCode::F11,
+        "F12" => KeyCode::F12,
+        _ => return None,
+    })
+}
+
+/// Translate an xkb keysym name into a Stipple event (editing/navigation keys →
+/// [`Event::Key`], printable keysyms → [`Event::Text`] on press, or a
+/// [`KeyCode::Char`] shortcut with Ctrl/logo held).
+fn keysym_name_to_event(name: &str, pressed: bool, modifiers: Modifiers) -> Option<Event> {
     let state = if pressed {
         ButtonState::Pressed
     } else {
         ButtonState::Released
     };
-    let code = match name {
-        "Tab" => Some(KeyCode::Tab),
-        "Return" | "KP_Enter" => Some(KeyCode::Enter),
-        "BackSpace" => Some(KeyCode::Backspace),
-        "Delete" => Some(KeyCode::Delete),
-        "Left" => Some(KeyCode::ArrowLeft),
-        "Right" => Some(KeyCode::ArrowRight),
-        "Up" => Some(KeyCode::ArrowUp),
-        "Down" => Some(KeyCode::ArrowDown),
-        "Home" => Some(KeyCode::Home),
-        "End" => Some(KeyCode::End),
-        "Escape" => Some(KeyCode::Escape),
-        _ => None,
-    };
-    if let Some(code) = code {
+    if let Some(code) = keysym_name_to_key(name) {
         return Some(Event::Key {
             code,
             state,
-            modifiers: Modifiers::default(),
+            modifiers,
         });
     }
-    if !pressed {
-        return None;
-    }
-    // Printable: a one-character keysym name is the character itself; otherwise
-    // a few common named punctuation keysyms.
+    // Printable: a one-character keysym name is the character itself, `UXXXX`
+    // a Unicode code point; otherwise the common named ASCII punctuation.
     let ch = if name.chars().count() == 1 {
         name.chars().next()
+    } else if let Some(hex) = name.strip_prefix('U')
+        && hex.len() >= 4
+        && let Ok(cp) = u32::from_str_radix(hex, 16)
+    {
+        char::from_u32(cp)
     } else {
         match name {
             "space" => Some(' '),
             "exclam" => Some('!'),
-            "question" => Some('?'),
+            "quotedbl" => Some('"'),
+            "numbersign" => Some('#'),
+            "dollar" => Some('$'),
+            "percent" => Some('%'),
+            "ampersand" => Some('&'),
+            "apostrophe" => Some('\''),
+            "parenleft" => Some('('),
+            "parenright" => Some(')'),
+            "asterisk" => Some('*'),
+            "plus" => Some('+'),
             "comma" => Some(','),
-            "period" => Some('.'),
             "minus" => Some('-'),
-            "underscore" => Some('_'),
+            "period" => Some('.'),
             "slash" => Some('/'),
             "colon" => Some(':'),
             "semicolon" => Some(';'),
+            "less" => Some('<'),
+            "equal" => Some('='),
+            "greater" => Some('>'),
+            "question" => Some('?'),
+            "at" => Some('@'),
+            "bracketleft" => Some('['),
+            "backslash" => Some('\\'),
+            "bracketright" => Some(']'),
+            "asciicircum" => Some('^'),
+            "underscore" => Some('_'),
+            "grave" => Some('`'),
+            "braceleft" => Some('{'),
+            "bar" => Some('|'),
+            "braceright" => Some('}'),
+            "asciitilde" => Some('~'),
             _ => None,
         }
     };
-    ch.map(|c| Event::Text(c.to_string()))
+    char_event(ch?, state, modifiers)
 }
 
 /// Map a keymap `fd` of `size` bytes (the `wl_keyboard.keymap` payload) and
 /// parse it. Closes the fd; returns `None` on failure.
-fn read_keymap(fd: i32, size: usize) -> Option<std::collections::HashMap<u32, String>> {
+fn read_keymap(fd: i32, size: usize) -> Option<XkbKeymap> {
     if size == 0 {
         unsafe { close(fd) };
         return None;
@@ -759,17 +1007,24 @@ where
     let mut shm_name = None;
     let mut wm_base_name = None;
     let mut seat_name = None;
+    let mut seat_version = 1;
     let mut output_names = Vec::new();
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
             let name = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
-            if let Some((iface, _)) = read_str(&args, 4) {
+            if let Some((iface, next)) = read_str(&args, 4) {
+                let version = args
+                    .get(next..next + 4)
+                    .map_or(1, |v| u32::from_le_bytes([v[0], v[1], v[2], v[3]]));
                 match iface.as_str() {
                     "wl_compositor" => compositor_name = Some(name),
                     "wl_shm" => shm_name = Some(name),
                     "xdg_wm_base" => wm_base_name = Some(name),
-                    "wl_seat" => seat_name = Some(name),
+                    "wl_seat" => {
+                        seat_name = Some(name);
+                        seat_version = version.clamp(1, WL_SEAT_VERSION);
+                    }
                     "wl_output" => output_names.push(name),
                     _ => {}
                 }
@@ -821,8 +1076,8 @@ where
     // event — calling get_keyboard on a seat that never had the keyboard
     // capability (e.g. a headless compositor with no devices) is a protocol
     // error, so we wait until one is advertised.
-    let seat = seat_name.map(|name| bind(&mut conn, name, "wl_seat", 1));
-    dbg(format_args!("seat={seat:?}"));
+    let seat = seat_name.map(|name| bind(&mut conn, name, "wl_seat", seat_version));
+    dbg(format_args!("seat={seat:?} v{seat_version}"));
 
     // Surface → xdg_surface → xdg_toplevel.
     let surface = conn.new_id();
@@ -871,7 +1126,11 @@ where
     let mut keyboard: Option<u32> = None;
     let mut pointer: Option<u32> = None;
     let mut pointer_pos = Point::new(0.0, 0.0);
-    let mut keymap: Option<std::collections::HashMap<u32, String>> = None;
+    let mut keymap: Option<XkbKeymap> = None;
+    // The keyboard's modifier state (depressed | latched | locked xkb bits).
+    let mut mods_mask = 0u32;
+    // Wheel notches from `axis_discrete`, per axis, for the `axis` that follows.
+    let mut discrete = [0i32; 2];
     // Toplevel sizes are in surface units; the buffer is that times the scale.
     let mut logical = size;
     let mut pending_size: Option<PhysicalSize> = None;
@@ -945,6 +1204,7 @@ where
                 // fresh one if the capability returns — sending an explicit
                 // release races the compositor's own teardown and can error.
                 keymap = None;
+                mods_mask = 0;
                 dbg(format_args!("keyboard dropped (caps={caps})"));
             }
             if pointer.is_none() && caps & WL_SEAT_CAP_POINTER != 0 {
@@ -996,6 +1256,23 @@ where
                     break;
                 }
             }
+        } else if Some(object) == pointer && opcode == WL_POINTER_AXIS_DISCRETE {
+            // axis(4), discrete(4: signed notches).
+            let axis = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
+            let steps = i32::from_le_bytes([args[4], args[5], args[6], args[7]]);
+            if let Some(slot) = discrete.get_mut(axis as usize) {
+                *slot = steps;
+            }
+        } else if Some(object) == pointer && opcode == WL_POINTER_AXIS {
+            // time(4), axis(4: 0 vertical, 1 horizontal), value(wl_fixed).
+            let axis = u32::from_le_bytes([args[4], args[5], args[6], args[7]]);
+            let value = u32::from_le_bytes([args[8], args[9], args[10], args[11]]);
+            let steps = discrete.get_mut(axis as usize).map_or(0, std::mem::take);
+            if let Some(delta) = axis_delta(axis, value, steps)
+                && handler(Event::Scroll { delta }, &win) == ControlFlow::Exit
+            {
+                break;
+            }
         } else if object == wm_base && opcode == XDG_WM_BASE_PING {
             let serial = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let mut a = Vec::new();
@@ -1044,7 +1321,7 @@ where
                 keymap = read_keymap(fd, size);
                 dbg(format_args!(
                     "keymap parsed: {} keys",
-                    keymap.as_ref().map(|m| m.len()).unwrap_or(0)
+                    keymap.as_ref().map(|m| m.keys.len()).unwrap_or(0)
                 ));
             } else if let Some(fd) = fd {
                 unsafe { close(fd) };
@@ -1055,9 +1332,10 @@ where
             let pressed = u32::from_le_bytes([args[12], args[13], args[14], args[15]]) == 1;
             // Prefer the compositor's keymap (xkb keycode = evdev + 8); fall back
             // to the layout-independent evdev table when none was parsed.
-            let ev = match keymap.as_ref().and_then(|m| m.get(&(key + 8))) {
-                Some(sym) => keysym_name_to_event(sym, pressed),
-                None => evdev_to_event(key, pressed),
+            let modifiers = wl_modifiers(mods_mask, keymap.as_ref());
+            let ev = match keymap.as_ref().and_then(|m| m.sym(key + 8, mods_mask)) {
+                Some(sym) => keysym_name_to_event(sym, pressed, modifiers),
+                None => evdev_to_event(key, pressed, modifiers),
             };
             if let Some(ev) = ev {
                 dbg(format_args!("key {key} pressed={pressed} -> {ev:?}"));
@@ -1065,6 +1343,12 @@ where
                     break;
                 }
             }
+        } else if Some(object) == keyboard && opcode == WL_KEYBOARD_MODIFIERS {
+            // serial, mods_depressed, mods_latched, mods_locked, group.
+            let word =
+                |i: usize| u32::from_le_bytes([args[i], args[i + 1], args[i + 2], args[i + 3]]);
+            mods_mask = word(4) | word(8) | word(12);
+            dbg(format_args!("modifiers {mods_mask:#x}"));
         } else if object == WL_DISPLAY && opcode == WL_DISPLAY_ERROR {
             return Err(PlatformError::Os("wl_display error".into()));
         }
@@ -1135,6 +1419,8 @@ mod tests {
 
     #[test]
     fn evdev_maps_editing_keys_and_us_text() {
+        let none = Modifiers::default();
+        let evdev_to_event = |code, pressed| evdev_to_event(code, pressed, none);
         // Layout-independent editing/navigation keys.
         assert!(matches!(
             evdev_to_event(15, true),
@@ -1167,6 +1453,50 @@ mod tests {
     }
 
     #[test]
+    fn evdev_maps_new_keys_and_modifiers() {
+        let key = |code| match evdev_to_event(code, true, Modifiers::default()) {
+            Some(Event::Key { code, .. }) => Some(code),
+            _ => None,
+        };
+        assert_eq!(key(104), Some(KeyCode::PageUp));
+        assert_eq!(key(109), Some(KeyCode::PageDown));
+        assert_eq!(key(110), Some(KeyCode::Insert));
+        assert_eq!(key(59), Some(KeyCode::F1));
+        assert_eq!(key(68), Some(KeyCode::F10));
+        assert_eq!(key(87), Some(KeyCode::F11));
+        assert_eq!(key(88), Some(KeyCode::F12));
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            evdev_to_event(30, true, shift),
+            Some(Event::Text("A".into()))
+        );
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            evdev_to_event(46, true, ctrl), // KEY_C
+            Some(Event::Key {
+                code: KeyCode::Char('c'),
+                state: ButtonState::Pressed,
+                modifiers: ctrl,
+            })
+        );
+        // Shift-selection needs the modifiers on named keys too.
+        assert_eq!(
+            evdev_to_event(105, true, shift),
+            Some(Event::Key {
+                code: KeyCode::ArrowLeft,
+                state: ButtonState::Pressed,
+                modifiers: shift,
+            })
+        );
+    }
+
+    #[test]
     fn parse_xkb_maps_keycodes_to_keysyms() {
         let keymap = "\
 xkb_keymap {
@@ -1182,9 +1512,14 @@ xkb_symbols \"x\" {
 };
 };";
         let map = parse_xkb(keymap);
-        assert_eq!(map.get(&38).map(String::as_str), Some("a"));
-        assert_eq!(map.get(&65).map(String::as_str), Some("space"));
-        assert_eq!(map.get(&23).map(String::as_str), Some("Tab"));
+        assert_eq!(map.sym(38, 0), Some("a"));
+        assert_eq!(map.sym(38, XKB_SHIFT), Some("A"));
+        assert_eq!(map.sym(65, 0), Some("space"));
+        assert_eq!(map.sym(23, 0), Some("Tab"));
+        // No modifier_map: Alt and the logo key default to Mod1 and Mod4.
+        assert_eq!((map.alt_mask, map.meta_mask), (XKB_MOD1, XKB_MOD4));
+        let none = Modifiers::default();
+        let keysym_name_to_event = |name, pressed| keysym_name_to_event(name, pressed, none);
         // keysym names decode to events.
         assert_eq!(
             keysym_name_to_event("a", true),
@@ -1202,6 +1537,130 @@ xkb_symbols \"x\" {
             })
         ));
         assert_eq!(keysym_name_to_event("a", false), None); // text on press only
+    }
+
+    #[test]
+    fn parse_xkb_reads_levels_blocks_and_modifier_maps() {
+        // The shape xkbcommon serializes: multi-line blocks for keys with an
+        // explicit type, and modifier_map lines naming keys.
+        let keymap = "\
+xkb_keymap {
+xkb_keycodes \"x\" {
+    <TAB>  = 23;
+    <AC01> = 38;
+    <AE01> = 10;
+    <LALT> = 64;
+    <LWIN> = 133;
+    <PGUP> = 112;
+    <FK05> = 71;
+};
+xkb_symbols \"x\" {
+    key <TAB>  {
+        type= \"TWO_LEVEL\",
+        symbols[Group1]= [             Tab,    ISO_Left_Tab ]
+    };
+    key  <AC01> {	[               a,               A ] };
+    key <AE01> {	[               1,          exclam ] };
+    key <LALT> {	[           Alt_L,          Meta_L ] };
+    key <LWIN> {
+        actions[Group1]= [ SetMods(modifiers=Mod4) ],
+        symbols[Group1]= [ Super_L ]
+    };
+    key <PGUP> {	[           Prior ] };
+    key <FK05> {	[              F5,              F5 ] };
+    modifier_map Mod1 { <LALT> };
+    modifier_map Mod4 { <LWIN> };
+};
+};";
+        let map = parse_xkb(keymap);
+        // Shift picks level 2 for printable keys, but Tab stays Tab.
+        assert_eq!(map.sym(23, XKB_SHIFT), Some("Tab"));
+        assert_eq!(map.sym(10, XKB_SHIFT), Some("exclam"));
+        assert_eq!(map.sym(10, XKB_LOCK), Some("1")); // Caps Lock: letters only
+        assert_eq!(map.sym(38, XKB_LOCK), Some("A"));
+        assert_eq!(map.sym(38, XKB_LOCK | XKB_SHIFT), Some("a"));
+        assert_eq!(map.sym(133, 0), Some("Super_L")); // not the actions list
+        assert_eq!(map.sym(112, 0), Some("Prior"));
+        assert_eq!((map.alt_mask, map.meta_mask), (XKB_MOD1, XKB_MOD4));
+
+        // A keymap that puts the logo key on Mod3.
+        let moved = keymap.replace("modifier_map Mod4", "modifier_map Mod3");
+        let moved = parse_xkb(&moved);
+        assert_eq!(moved.meta_mask, 1 << 5);
+        assert!(wl_modifiers(1 << 5, Some(&moved)).meta);
+        assert!(!wl_modifiers(XKB_MOD4, Some(&moved)).meta);
+
+        // wl_keyboard.modifiers bits → Modifiers.
+        assert_eq!(
+            wl_modifiers(XKB_SHIFT | XKB_CONTROL | XKB_MOD1 | XKB_MOD4, Some(&map)),
+            Modifiers {
+                shift: true,
+                ctrl: true,
+                alt: true,
+                meta: true,
+            }
+        );
+        assert_eq!(
+            wl_modifiers(XKB_LOCK | (1 << 4), None),
+            Modifiers::default()
+        );
+
+        // Named keys, and Ctrl+printable as a shortcut.
+        let ctrl = Modifiers {
+            ctrl: true,
+            ..Modifiers::default()
+        };
+        assert!(matches!(
+            keysym_name_to_event("Prior", true, ctrl),
+            Some(Event::Key {
+                code: KeyCode::PageUp,
+                modifiers,
+                ..
+            }) if modifiers == ctrl
+        ));
+        assert!(matches!(
+            keysym_name_to_event("F5", true, Modifiers::default()),
+            Some(Event::Key {
+                code: KeyCode::F5,
+                ..
+            })
+        ));
+        assert_eq!(
+            keysym_name_to_event("v", true, ctrl),
+            Some(Event::Key {
+                code: KeyCode::Char('v'),
+                state: ButtonState::Pressed,
+                modifiers: ctrl,
+            })
+        );
+        assert_eq!(
+            keysym_name_to_event("exclam", true, Modifiers::default()),
+            Some(Event::Text("!".into()))
+        );
+        assert_eq!(
+            keysym_name_to_event("U20AC", true, Modifiers::default()),
+            Some(Event::Text("\u{20ac}".into()))
+        );
+    }
+
+    #[test]
+    fn pointer_axis_deltas() {
+        // A touchpad: no discrete steps, the value is in pixels (+ = down).
+        assert_eq!(
+            axis_delta(0, (7 * 256) as u32, 0),
+            Some(ScrollDelta { dx: 0.0, dy: 7.0 })
+        );
+        // A wheel notch up: one line, whatever distance the compositor sent.
+        assert_eq!(
+            axis_delta(0, (-15i32 * 256) as u32, -1),
+            Some(ScrollDelta { dx: 0.0, dy: -40.0 })
+        );
+        // Horizontal.
+        assert_eq!(
+            axis_delta(1, (15 * 256) as u32, 1),
+            Some(ScrollDelta { dx: 40.0, dy: 0.0 })
+        );
+        assert_eq!(axis_delta(2, 0, 0), None);
     }
 
     #[test]

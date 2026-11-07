@@ -29,6 +29,8 @@ pub mod clipboard;
 pub mod dialog;
 mod error;
 mod event;
+/// Key and scroll translation tables shared by the native backends.
+mod input;
 /// OS-drawn controls and system appearance for the native theme.
 pub mod native;
 /// seccomp-BPF syscall sandbox for the content process (the hardening layer of

@@ -42,7 +42,8 @@ see it, and the window number, which `screencapture -l` takes.
 ## Known gaps
 
 - There's no app menu, so the menu bar shows the executable's name and no menus.
-- The system clipboard (`NSPasteboard`) works, but Cmd+C/X/V don't reach it
-  until the backend reports modifier keys.
-- File dialogs (`NSOpenPanel` / `NSSavePanel`) are implemented but not exercised
-  in CI, since a modal dialog can't be driven headlessly.
+- The system clipboard (`NSPasteboard`) works with Cmd+C/X/V; file dialogs
+  (`NSOpenPanel` / `NSSavePanel`) are implemented but not exercised in CI, since
+  a modal dialog can't be driven headlessly.
+- Scrolling, modifier keys and Command shortcuts are in place, but CI doesn't
+  drive them with scripted input yet.

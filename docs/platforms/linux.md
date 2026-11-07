@@ -51,3 +51,6 @@ work in Flatpak and Snap sandboxes and show the desktop's own picker. They need
 ## Known gaps
 
 - The system clipboard works on X11 only; Wayland copy and paste stay in the app.
+- On Wayland, typed text comes from a simple reading of the compositor's keymap:
+  Shift and Caps Lock pick the second level, but AltGr levels and dead keys
+  aren't applied yet.

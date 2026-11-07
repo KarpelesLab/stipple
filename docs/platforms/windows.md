@@ -41,7 +41,8 @@ Symbol for symbols such as the checkbox's check mark.
 
 ## Known gaps
 
-- The system clipboard (`CF_UNICODETEXT`) works, but Ctrl+C/X/V don't reach it
-  until the backend reports modifier keys.
-- File dialogs (`IFileOpenDialog` / `IFileSaveDialog`) are implemented but not
-  exercised in CI, since a modal dialog can't be driven headlessly.
+- The system clipboard (`CF_UNICODETEXT`) works with Ctrl+C/X/V; file dialogs
+  (`IFileOpenDialog` / `IFileSaveDialog`) are implemented but not exercised in
+  CI, since a modal dialog can't be driven headlessly.
+- Ctrl and Windows-key shortcuts are recognised on letters and digits only, so
+  punctuation shortcuts such as Ctrl+= don't reach the app yet.
