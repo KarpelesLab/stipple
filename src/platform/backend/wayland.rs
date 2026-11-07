@@ -27,17 +27,18 @@
 
 mod clipboard;
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 
-use crate::geometry::{PhysicalSize, Point, ScaleFactor};
+use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, ScrollDelta};
-use crate::platform::window::{Window, WindowAttributes};
+use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
 use core::ffi::{c_char, c_void};
@@ -143,6 +144,21 @@ const XDG_WM_BASE_GET_XDG_SURFACE: u16 = 2;
 const XDG_SURFACE_GET_TOPLEVEL: u16 = 1;
 const XDG_SURFACE_ACK_CONFIGURE: u16 = 4;
 const XDG_TOPLEVEL_SET_TITLE: u16 = 2;
+const XDG_TOPLEVEL_SET_MAX_SIZE: u16 = 7;
+const XDG_TOPLEVEL_SET_MIN_SIZE: u16 = 8;
+const XDG_TOPLEVEL_SET_MAXIMIZED: u16 = 9;
+const XDG_TOPLEVEL_UNSET_MAXIMIZED: u16 = 10;
+const XDG_TOPLEVEL_SET_FULLSCREEN: u16 = 11;
+const XDG_TOPLEVEL_UNSET_FULLSCREEN: u16 = 12;
+// cursor-shape-v1: `wp_cursor_shape_manager_v1.get_pointer` and
+// `wp_cursor_shape_device_v1.set_shape`.
+const CURSOR_SHAPE_GET_POINTER: u16 = 1;
+const CURSOR_SHAPE_SET_SHAPE: u16 = 1;
+// xdg-toplevel-icon-v1: the manager's `create_icon` / `set_icon` and the
+// icon's `add_buffer`.
+const TOPLEVEL_ICON_CREATE_ICON: u16 = 1;
+const TOPLEVEL_ICON_SET_ICON: u16 = 2;
+const TOPLEVEL_ICON_ADD_BUFFER: u16 = 2;
 
 // Event opcodes (server → client) for the objects we track.
 const WL_DISPLAY_ERROR: u16 = 0;
@@ -172,6 +188,49 @@ const WL_SEAT_VERSION: u32 = 5;
 
 // `wl_shm` pixel format: 32-bit little-endian XRGB → bytes `[B, G, R, X]`.
 const WL_SHM_FORMAT_XRGB8888: u32 = 1;
+// The same with premultiplied alpha → bytes `[B, G, R, A]`.
+const WL_SHM_FORMAT_ARGB8888: u32 = 0;
+
+/// The largest icon we hand the compositor (it scales down from there).
+const MAX_ICON: u32 = 256;
+
+/// The `wp_cursor_shape_device_v1.shape` value for each [`CursorIcon`].
+fn cursor_shape(icon: CursorIcon) -> u32 {
+    match icon {
+        CursorIcon::Default => 1,
+        CursorIcon::Pointer => 4,
+        CursorIcon::Crosshair => 8,
+        CursorIcon::Text => 9,
+        CursorIcon::Move => 13,
+        CursorIcon::NotAllowed => 15,
+        CursorIcon::Grab => 16,
+        CursorIcon::Grabbing => 17,
+        CursorIcon::EwResize => 26,
+        CursorIcon::NsResize => 27,
+        CursorIcon::NeswResize => 28,
+        CursorIcon::NwseResize => 29,
+    }
+}
+
+/// An icon as a square `wl_shm` ARGB8888 image (premultiplied `[B, G, R, A]`),
+/// centered on a transparent square if it isn't one: xdg-toplevel-icon needs
+/// square buffers. Returns the side length and the bytes.
+fn icon_argb(icon: &Pixmap) -> (u32, Vec<u8>) {
+    let icon = fit_icon(icon, MAX_ICON);
+    let size = icon.size();
+    let side = size.width.max(size.height).max(1);
+    let (ox, oy) = ((side - size.width) / 2, (side - size.height) / 2);
+    let mut out = vec![0u8; (side * side * 4) as usize];
+    for y in 0..size.height {
+        for x in 0..size.width {
+            let [r, g, b, a] = icon.pixel(x, y).unwrap_or_default();
+            let pre = |c: u8| ((c as u32 * a as u32 + 127) / 255) as u8;
+            let o = (((y + oy) * side + x + ox) * 4) as usize;
+            out[o..o + 4].copy_from_slice(&[pre(b), pre(g), pre(r), a]);
+        }
+    }
+    (side, out)
+}
 
 /// Whether a Wayland compositor is reachable (cheap check of `$WAYLAND_DISPLAY`).
 pub fn available() -> bool {
@@ -629,6 +688,13 @@ struct WlConn {
     clip: clipboard::Clipboard,
     /// Buffer pixels per surface unit: the scale of the output we're on.
     buffer_scale: u32,
+    /// The `wp_cursor_shape_device_v1` for our pointer, when the compositor
+    /// supports cursor-shape-v1.
+    cursor_device: Option<u32>,
+    /// The serial of the pointer's last `enter`, which `set_shape` must quote.
+    enter_serial: Option<u32>,
+    /// The cursor the app asked for, re-applied on each `enter`.
+    cursor: CursorIcon,
 }
 
 impl WlConn {
@@ -653,7 +719,22 @@ impl WlConn {
             queue: VecDeque::new(),
             clip: clipboard::Clipboard::default(),
             buffer_scale: 1,
+            cursor_device: None,
+            enter_serial: None,
+            cursor: CursorIcon::Default,
         })
+    }
+
+    /// Show the current cursor shape, if the compositor supports
+    /// cursor-shape-v1 and the pointer has entered our surface.
+    fn apply_cursor(&mut self) {
+        if let (Some(device), Some(serial)) = (self.cursor_device, self.enter_serial) {
+            let mut a = Vec::new();
+            arg_u32(&mut a, serial);
+            arg_u32(&mut a, cursor_shape(self.cursor));
+            let _ = self.send(device, CURSOR_SHAPE_SET_SHAPE, &a);
+            let _ = self.stream.flush();
+        }
     }
 
     /// Allocate the next client object id.
@@ -826,9 +907,14 @@ impl Drop for ShmBuffer {
 }
 
 /// Create a `memfd` of `bytes`, map it, and make a `wl_shm` pool + buffer of
-/// `size` over it (XRGB8888). Sends `create_pool` (with the fd) and
+/// `size` over it in `format`. Sends `create_pool` (with the fd) and
 /// `create_buffer`.
-fn make_shm(conn: &mut WlConn, shm: u32, size: PhysicalSize) -> Result<ShmBuffer, PlatformError> {
+fn make_shm(
+    conn: &mut WlConn,
+    shm: u32,
+    size: PhysicalSize,
+    format: u32,
+) -> Result<ShmBuffer, PlatformError> {
     let stride = size.width as usize * 4;
     let bytes = stride * size.height as usize;
     let name = c"stipple-wl";
@@ -869,7 +955,7 @@ fn make_shm(conn: &mut WlConn, shm: u32, size: PhysicalSize) -> Result<ShmBuffer
     arg_u32(&mut a, size.width);
     arg_u32(&mut a, size.height);
     arg_u32(&mut a, stride as u32);
-    arg_u32(&mut a, WL_SHM_FORMAT_XRGB8888);
+    arg_u32(&mut a, format);
     conn.send(pool, WL_SHM_POOL_CREATE_BUFFER, &a).map_err(os)?;
 
     Ok(ShmBuffer {
@@ -890,6 +976,76 @@ struct WaylandWindow {
     surface: u32,
     shm: u32,
     size: PhysicalSize,
+    toplevel: u32,
+    /// The `xdg_toplevel_icon_manager_v1`, when the compositor has one.
+    icon_manager: Option<u32>,
+    /// The icon's pixels, which must stay mapped while the compositor uses them.
+    icon: RefCell<Option<ShmBuffer>>,
+}
+
+impl WaylandWindow {
+    /// Send a toplevel request, then commit so it applies (xdg-shell state is
+    /// double-buffered).
+    fn toplevel_request(&self, opcode: u16, args: &[u8]) {
+        let mut conn = self.conn.lock().unwrap();
+        let _ = conn.send(self.toplevel, opcode, args);
+        let _ = conn.send(self.surface, WL_SURFACE_COMMIT, &[]);
+        let _ = conn.stream.flush();
+    }
+}
+
+/// The arguments of `xdg_toplevel.set_min_size` / `set_max_size`: a size in
+/// surface coordinates (logical pixels), 0 for "no limit".
+fn size_args(size: Option<Size>) -> Vec<u8> {
+    let (w, h) = size.map_or((0, 0), |s| {
+        (
+            s.width.round().max(1.0) as u32,
+            s.height.round().max(1.0) as u32,
+        )
+    });
+    let mut a = Vec::new();
+    arg_u32(&mut a, w);
+    arg_u32(&mut a, h);
+    a
+}
+
+/// Set (or clear) the toplevel's icon through xdg-toplevel-icon-v1, returning
+/// the buffer holding its pixels.
+fn set_toplevel_icon(
+    conn: &mut WlConn,
+    shm: u32,
+    manager: u32,
+    toplevel: u32,
+    icon: Option<&Pixmap>,
+) -> Option<ShmBuffer> {
+    let mut a = Vec::new();
+    let Some(icon) = icon else {
+        arg_u32(&mut a, toplevel);
+        arg_u32(&mut a, 0); // null icon: back to the default
+        let _ = conn.send(manager, TOPLEVEL_ICON_SET_ICON, &a);
+        return None;
+    };
+    let (side, bytes) = icon_argb(icon);
+    let mut buf = make_shm(
+        conn,
+        shm,
+        PhysicalSize::new(side, side),
+        WL_SHM_FORMAT_ARGB8888,
+    )
+    .ok()?;
+    buf.bytes()[..bytes.len()].copy_from_slice(&bytes);
+    let id = conn.new_id();
+    arg_u32(&mut a, id);
+    conn.send(manager, TOPLEVEL_ICON_CREATE_ICON, &a).ok()?;
+    let mut a = Vec::new();
+    arg_u32(&mut a, buf.buffer);
+    arg_u32(&mut a, 1); // scale
+    conn.send(id, TOPLEVEL_ICON_ADD_BUFFER, &a).ok()?;
+    let mut a = Vec::new();
+    arg_u32(&mut a, toplevel);
+    arg_u32(&mut a, id);
+    conn.send(manager, TOPLEVEL_ICON_SET_ICON, &a).ok()?;
+    Some(buf)
 }
 
 impl std::fmt::Debug for WaylandWindow {
@@ -918,6 +1074,44 @@ impl Window for WaylandWindow {
     }
     fn set_clipboard(&self, text: &str) {
         clipboard::set_text(&mut self.conn.lock().unwrap(), text);
+    }
+    fn set_cursor(&self, cursor: CursorIcon) {
+        let mut conn = self.conn.lock().unwrap();
+        conn.cursor = cursor;
+        conn.apply_cursor();
+    }
+    fn set_min_size(&self, size: Option<Size>) {
+        self.toplevel_request(XDG_TOPLEVEL_SET_MIN_SIZE, &size_args(size));
+    }
+    fn set_max_size(&self, size: Option<Size>) {
+        self.toplevel_request(XDG_TOPLEVEL_SET_MAX_SIZE, &size_args(size));
+    }
+    fn set_maximized(&self, maximized: bool) {
+        let opcode = if maximized {
+            XDG_TOPLEVEL_SET_MAXIMIZED
+        } else {
+            XDG_TOPLEVEL_UNSET_MAXIMIZED
+        };
+        self.toplevel_request(opcode, &[]);
+    }
+    fn set_fullscreen(&self, fullscreen: bool) {
+        if fullscreen {
+            // A null output lets the compositor pick.
+            self.toplevel_request(XDG_TOPLEVEL_SET_FULLSCREEN, &0u32.to_le_bytes());
+        } else {
+            self.toplevel_request(XDG_TOPLEVEL_UNSET_FULLSCREEN, &[]);
+        }
+    }
+    fn set_icon(&self, icon: Option<&Pixmap>) {
+        let Some(manager) = self.icon_manager else {
+            return;
+        };
+        let mut conn = self.conn.lock().unwrap();
+        let buf = set_toplevel_icon(&mut conn, self.shm, manager, self.toplevel, icon);
+        // The icon is double-buffered toplevel state: commit to apply it.
+        let _ = conn.send(self.surface, WL_SURFACE_COMMIT, &[]);
+        let _ = conn.stream.flush();
+        *self.icon.borrow_mut() = buf;
     }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(WaylandSurface {
@@ -965,7 +1159,7 @@ impl Surface for WaylandSurface {
         let mut conn = self.conn.lock().unwrap();
         // (Re)create the shm buffer if missing or the size changed.
         if self.buffer.as_ref().map(|b| b.size) != Some(size) {
-            self.buffer = make_shm(&mut conn, self.shm, size).ok();
+            self.buffer = make_shm(&mut conn, self.shm, size, WL_SHM_FORMAT_XRGB8888).ok();
         }
         let Some(buf) = self.buffer.as_mut() else {
             return;
@@ -1031,6 +1225,8 @@ where
     let mut seat_version = 1;
     let mut data_manager = None;
     let mut output_names = Vec::new();
+    let mut cursor_shape_name = None;
+    let mut icon_manager_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1051,6 +1247,8 @@ where
                     "wl_data_device_manager" => {
                         data_manager = Some((name, version.clamp(1, clipboard::MANAGER_VERSION)));
                     }
+                    "wp_cursor_shape_manager_v1" => cursor_shape_name = Some(name),
+                    "xdg_toplevel_icon_manager_v1" => icon_manager_name = Some(name),
                     _ => {}
                 }
             }
@@ -1102,6 +1300,11 @@ where
     // capability (e.g. a headless compositor with no devices) is a protocol
     // error, so we wait until one is advertised.
     let seat = seat_name.map(|name| bind(&mut conn, name, "wl_seat", seat_version));
+    // Optional protocols: cursor shapes, and the toplevel icon.
+    let cursor_shape_manager =
+        cursor_shape_name.map(|name| bind(&mut conn, name, "wp_cursor_shape_manager_v1", 1));
+    let icon_manager =
+        icon_manager_name.map(|name| bind(&mut conn, name, "xdg_toplevel_icon_manager_v1", 1));
     dbg(format_args!("seat={seat:?} v{seat_version}"));
     // The clipboard goes through the seat's data device.
     if let (Some(seat), Some((name, version))) = (seat, data_manager) {
@@ -1134,6 +1337,35 @@ where
     conn.send(toplevel, XDG_TOPLEVEL_SET_TITLE, &a)
         .map_err(os)?;
 
+    // Size limits and initial state, applied by the initial commit below.
+    let (min, max) = if attrs.resizable {
+        (attrs.min_size, attrs.max_size)
+    } else {
+        (Some(attrs.logical_size), Some(attrs.logical_size))
+    };
+    if min.is_some() {
+        conn.send(toplevel, XDG_TOPLEVEL_SET_MIN_SIZE, &size_args(min))
+            .map_err(os)?;
+    }
+    if max.is_some() {
+        conn.send(toplevel, XDG_TOPLEVEL_SET_MAX_SIZE, &size_args(max))
+            .map_err(os)?;
+    }
+    if attrs.maximized {
+        conn.send(toplevel, XDG_TOPLEVEL_SET_MAXIMIZED, &[])
+            .map_err(os)?;
+    }
+    if attrs.fullscreen {
+        conn.send(toplevel, XDG_TOPLEVEL_SET_FULLSCREEN, &0u32.to_le_bytes())
+            .map_err(os)?;
+    }
+    let icon = match (icon_manager, attrs.icon.as_ref()) {
+        (Some(manager), Some(icon)) => {
+            set_toplevel_icon(&mut conn, shm, manager, toplevel, Some(icon))
+        }
+        _ => None,
+    };
+
     // Initial commit: the compositor responds with an xdg_surface.configure.
     conn.send(surface, WL_SURFACE_COMMIT, &[]).map_err(os)?;
     conn.stream.flush().map_err(os)?;
@@ -1148,6 +1380,9 @@ where
         surface,
         shm,
         size,
+        toplevel,
+        icon_manager,
+        icon: RefCell::new(icon),
     };
 
     // Event loop. The keyboard/pointer are created when the seat advertises
@@ -1257,6 +1492,15 @@ where
                 if conn.send(seat.unwrap(), WL_SEAT_GET_POINTER, &a).is_ok() {
                     pointer = Some(ptr);
                     dbg(format_args!("pointer={ptr} (caps={caps})"));
+                    if let Some(manager) = cursor_shape_manager {
+                        let device = conn.new_id();
+                        let mut a = Vec::new();
+                        arg_u32(&mut a, device);
+                        arg_u32(&mut a, ptr);
+                        if conn.send(manager, CURSOR_SHAPE_GET_POINTER, &a).is_ok() {
+                            conn.cursor_device = Some(device);
+                        }
+                    }
                 }
             }
         } else if Some(object) == pointer
@@ -1265,6 +1509,13 @@ where
             // enter: serial, surface, x, y. motion: time, x, y. Both end in two
             // wl_fixed coordinates.
             let n = args.len();
+            if opcode == WL_POINTER_ENTER {
+                // The compositor resets the cursor on enter; set ours again.
+                let serial = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
+                let mut conn = shared.lock().unwrap();
+                conn.enter_serial = Some(serial);
+                conn.apply_cursor();
+            }
             let x = u32::from_le_bytes([args[n - 8], args[n - 7], args[n - 6], args[n - 5]]);
             let y = u32::from_le_bytes([args[n - 4], args[n - 3], args[n - 2], args[n - 1]]);
             pointer_pos = Point::new(fixed_to_f64(x), fixed_to_f64(y));
@@ -1462,6 +1713,30 @@ mod tests {
         let version =
             u32::from_le_bytes([args[next], args[next + 1], args[next + 2], args[next + 3]]);
         assert_eq!((name, iface.as_str(), version), (42, "xdg_wm_base", 3));
+    }
+
+    #[test]
+    fn icon_is_square_premultiplied_argb() {
+        let mut icon = Pixmap::new(PhysicalSize::new(2, 1));
+        icon.as_bytes_mut()
+            .copy_from_slice(&[255, 0, 0, 255, 0, 255, 0, 128]);
+        let (side, bytes) = icon_argb(&icon);
+        assert_eq!(side, 2);
+        // The 2x1 icon fills row 0 of the 2x2 square (premultiplied BGRA);
+        // row 1 is transparent padding.
+        assert_eq!(&bytes[..8], &[0, 0, 255, 255, 0, 128, 0, 128]);
+        assert_eq!(&bytes[8..], &[0; 8]);
+    }
+
+    #[test]
+    fn cursor_shapes_and_size_args() {
+        assert_eq!(cursor_shape(CursorIcon::Text), 9);
+        assert_eq!(cursor_shape(CursorIcon::NwseResize), 29);
+        assert_eq!(size_args(None), vec![0; 8]);
+        assert_eq!(
+            size_args(Some(Size::new(320.0, 240.0))),
+            [320u32.to_le_bytes(), 240u32.to_le_bytes()].concat()
+        );
     }
 
     #[test]

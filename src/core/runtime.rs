@@ -16,6 +16,7 @@
 use crate::core::element::{BoxStyle, Element};
 use crate::core::handle::AppHandle;
 use crate::geometry::{Point, Rect};
+use crate::platform::CursorIcon;
 use crate::render::Color;
 use crate::style::Theme;
 use std::collections::{HashMap, HashSet};
@@ -535,6 +536,11 @@ pub struct LayoutNode {
     /// When `true`, children are clipped to this node's `bounds` when painted
     /// (set for scroll containers and overlay panels).
     pub clip: bool,
+    /// The cursor this element asked for (see [`Element::cursor`]); `None`
+    /// picks one from its handlers in [`cursor_at`].
+    ///
+    /// [`Element::cursor`]: crate::core::Element::cursor
+    pub cursor: Option<CursorIcon>,
     pub children: Vec<LayoutNode>,
 }
 
@@ -557,6 +563,7 @@ impl LayoutNode {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             children,
         }
     }
@@ -577,6 +584,37 @@ pub fn hit_test(node: &LayoutNode, point: Point) -> Option<ActionId> {
     } else {
         None
     }
+}
+
+/// The cursor to show with the pointer at `point`: that of the top-most node
+/// under it that has one. A node's own [`cursor`](LayoutNode::cursor) wins;
+/// otherwise editable text shows the I-beam and tap or drag targets the
+/// pointing hand. Elsewhere it is [`CursorIcon::Default`].
+pub fn cursor_at(node: &LayoutNode, point: Point) -> CursorIcon {
+    fn find(node: &LayoutNode, point: Point) -> Option<CursorIcon> {
+        let inside = node.bounds.contains(point);
+        // A clipped node hides its children outside its bounds; an unclipped
+        // one may have children that overflow it.
+        if node.clip && !inside {
+            return None;
+        }
+        for child in node.children.iter().rev() {
+            if let Some(c) = find(child, point) {
+                return Some(c);
+            }
+        }
+        if !inside {
+            return None;
+        }
+        node.cursor.or(if node.text_pos.is_some() {
+            Some(CursorIcon::Text)
+        } else if node.action.is_some() || node.drag.is_some() {
+            Some(CursorIcon::Pointer)
+        } else {
+            None
+        })
+    }
+    find(node, point).unwrap_or_default()
 }
 
 /// Find the [`ContextId`] of the top-most node with a secondary-click handler
@@ -753,6 +791,7 @@ mod tests {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             children: Vec::new(),
         }
     }
@@ -839,6 +878,7 @@ mod tests {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),
@@ -858,6 +898,48 @@ mod tests {
         let mut focusables = Vec::new();
         collect_focusables(&root, &mut focusables);
         assert_eq!(focusables, vec![FocusId(0), FocusId(1)]);
+    }
+
+    #[test]
+    fn cursor_follows_handlers_and_explicit_choice() {
+        let mut button = leaf(
+            Rect::from_xywh(0.0, 0.0, 50.0, 20.0),
+            Some(ActionId(0)),
+            None,
+        );
+        // A label inside the button picks no cursor of its own.
+        button
+            .children
+            .push(leaf(Rect::from_xywh(5.0, 5.0, 20.0, 10.0), None, None));
+        let mut field = leaf(
+            Rect::from_xywh(0.0, 30.0, 50.0, 20.0),
+            None,
+            Some(FocusId(0)),
+        );
+        field.text_pos = Some(TextPosId(0));
+        let mut splitter = leaf(
+            Rect::from_xywh(60.0, 0.0, 4.0, 50.0),
+            Some(ActionId(1)),
+            None,
+        );
+        splitter.cursor = Some(CursorIcon::EwResize);
+        let root = LayoutNode::container(
+            Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
+            vec![button, field, splitter],
+        );
+        assert_eq!(
+            cursor_at(&root, Point::new(10.0, 10.0)),
+            CursorIcon::Pointer
+        );
+        assert_eq!(cursor_at(&root, Point::new(10.0, 40.0)), CursorIcon::Text);
+        assert_eq!(
+            cursor_at(&root, Point::new(61.0, 10.0)),
+            CursorIcon::EwResize
+        );
+        assert_eq!(
+            cursor_at(&root, Point::new(90.0, 90.0)),
+            CursorIcon::Default
+        );
     }
 
     #[test]

@@ -848,8 +848,15 @@ Most input only works on X11 today.
   modal dialog.
 - ⬜ File dialogs on the web.
 - ⬜ Menus: the macOS menu bar first, then window and context menus.
-- ⬜ Window control: minimum and maximum size, maximize, fullscreen, the window icon.
-- ⬜ Mouse cursor shapes: text I-beam, resize arrows, pointer.
+- ✅ Window control: minimum and maximum size, maximize, fullscreen and the
+  window icon, as `App` / `WindowAttributes` options and at run time through
+  `AppHandle::window`, on X11, Wayland, Windows and macOS (the Dock icon there).
+  CI reads the X11 hints and icon back with `xprop`. See
+  [docs/windows-and-cursors.md](docs/windows-and-cursors.md).
+- ✅ Mouse cursor shapes (`CursorIcon`): text inputs show the I-beam, tap and
+  drag targets the pointing hand, and `.cursor(...)` picks any other (resize
+  arrows, not-allowed, grab, crosshair, move) on X11, Wayland
+  (`cursor-shape-v1`), Windows and macOS. CI checks the cursor changes on X11.
 - ✅ Following dark mode and accent changes while the app runs:
   `Event::ThemeChanged` from `WM_SETTINGCHANGE` on Windows, the appearance
   notifications on macOS and the portal's `SettingChanged` on Linux; the App

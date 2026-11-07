@@ -32,6 +32,9 @@ How to build, package and run on each platform, and what works there today.
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ❌ | ❌ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ❌ |
 | Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ❌ |
+| Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ❌ |
+| Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
+| Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ❌ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -45,6 +48,10 @@ they're implemented and unit-tested but not yet exercised end to end.
 to end. Linux needs the desktop portal (its `SettingChanged` signal).
 ⁸ Wayland copies and pastes, and CI round-trips text with `wl-copy`/`wl-paste`.
 X11 serves copies to other apps, but pastes only text copied in the app.
+⁹ CI checks the size hints, icon and cursor changes on X11. On Wayland the icon
+needs `xdg-toplevel-icon-v1` and cursor shapes `cursor-shape-v1`; without them
+the compositor's defaults stay.
+¹⁰ Implemented, but CI only builds it.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -56,5 +63,6 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop
+- [Window control and cursors](windows-and-cursors.md): size limits, maximize, fullscreen, the icon, and cursor shapes
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

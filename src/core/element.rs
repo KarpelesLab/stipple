@@ -10,6 +10,7 @@ use crate::core::runtime::{
 };
 use crate::geometry::Insets;
 use crate::layout::{Axis, Track};
+use crate::platform::CursorIcon;
 use crate::platform::native::NativeDeco;
 use crate::render::{Color, ImageFit, ImageSource};
 
@@ -156,6 +157,10 @@ pub struct Element {
     /// When set, the OS draws this element's chrome instead of `decoration`,
     /// which remains the fallback. See [`crate::platform::native`].
     pub native: Option<NativeDeco>,
+    /// The mouse cursor shown over this element. `None` picks one from its
+    /// handlers: the I-beam over editable text, the pointing hand over taps
+    /// and drags, else whatever its parent shows. Set via [`Element::cursor`].
+    pub cursor: Option<CursorIcon>,
     pub kind: ElementKind,
 }
 
@@ -176,6 +181,7 @@ impl Element {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             kind: ElementKind::Leaf,
         }
     }
@@ -196,6 +202,7 @@ impl Element {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             kind: ElementKind::Text {
                 text: text.into(),
                 size,
@@ -226,6 +233,7 @@ impl Element {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             kind: ElementKind::Viewport { id },
         }
     }
@@ -248,6 +256,7 @@ impl Element {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             kind: ElementKind::Image {
                 source: source.into(),
                 fit: ImageFit::default(),
@@ -271,6 +280,7 @@ impl Element {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             kind: ElementKind::Stack {
                 axis,
                 gap: 0.0,
@@ -493,6 +503,13 @@ impl Element {
     /// as the fallback for when the OS can't. See [`crate::platform::native`].
     pub fn native(mut self, deco: NativeDeco) -> Self {
         self.native = Some(deco);
+        self
+    }
+
+    /// Show `icon` as the mouse cursor while the pointer is over this element
+    /// (and over children that don't pick their own).
+    pub fn cursor(mut self, icon: CursorIcon) -> Self {
+        self.cursor = Some(icon);
         self
     }
 

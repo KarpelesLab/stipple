@@ -949,6 +949,7 @@ pub fn text_field<S>(
     .align(Align::Start, Align::Center)
     .width(200.0)
     .native_text_frame(theme)
+    .cursor(crate::platform::CursorIcon::Text)
     .on_key(cx, on_key)
 }
 

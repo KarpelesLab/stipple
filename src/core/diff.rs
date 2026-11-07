@@ -180,6 +180,7 @@ mod tests {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             children,
         }
     }
@@ -204,6 +205,7 @@ mod tests {
             native: None,
             scroll: None,
             clip: false,
+            cursor: None,
             children: Vec::new(),
         }
     }

@@ -17,12 +17,12 @@
 use std::cell::RefCell;
 use std::ffi::{CString, c_void};
 
-use crate::geometry::{PhysicalSize, Point, ScaleFactor};
+use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, WindowId};
 use crate::platform::input;
-use crate::platform::window::{Window, WindowAttributes};
+use crate::platform::window::{CursorIcon, Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
 // ---- Objective-C runtime + framework FFI ------------------------------------
@@ -63,8 +63,15 @@ unsafe extern "C" {
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {}
 
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFDataCreate(allocator: *const c_void, bytes: *const u8, length: isize) -> *mut c_void;
+    fn CFRelease(cf: *const c_void);
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
+    fn CGDataProviderCreateWithCFData(data: *mut c_void) -> *mut c_void;
     fn CGColorSpaceCreateDeviceRGB() -> *mut c_void;
     fn CGColorSpaceRelease(space: *mut c_void);
     fn CGDataProviderCreateWithData(
@@ -100,6 +107,10 @@ const NS_WINDOW_STYLE_TITLED: u64 = 1;
 const NS_WINDOW_STYLE_CLOSABLE: u64 = 2;
 const NS_WINDOW_STYLE_RESIZABLE: u64 = 8;
 const NS_BACKING_BUFFERED: u64 = 2;
+/// `NSWindowStyleMaskFullScreen`: set while the window is fullscreen.
+const NS_WINDOW_STYLE_FULLSCREEN: u64 = 1 << 14;
+/// `NSWindowCollectionBehaviorFullScreenPrimary`: the window can go fullscreen.
+const NS_COLLECTION_FULLSCREEN_PRIMARY: u64 = 1 << 7;
 // kCGImageAlphaLast | kCGBitmapByteOrder32Big — interprets the buffer bytes as
 // R,G,B,A in memory with *straight* (non-premultiplied) alpha, matching the
 // stipple::render Pixmap convention (see `crate::render::surface`).
@@ -188,6 +199,96 @@ unsafe fn msg_rect(obj: Id, s: Sel) -> CgRect {
     let f: unsafe extern "C" fn(Id, Sel) -> CgRect =
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     unsafe { f(obj, s) }
+}
+
+unsafe fn msg_void_size(obj: Id, s: Sel, a: CgSize) {
+    let f: unsafe extern "C" fn(Id, Sel, CgSize) =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s, a) }
+}
+unsafe fn msg_void_u64(obj: Id, s: Sel, a: u64) {
+    let f: unsafe extern "C" fn(Id, Sel, u64) =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s, a) }
+}
+/// `-respondsToSelector:` (a `BOOL`, read as in [`msg_bool`]).
+unsafe fn responds_to(obj: Id, s: Sel) -> bool {
+    let f: unsafe extern "C" fn(Id, Sel, Sel) -> i8 =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, sel("respondsToSelector:"), s) != 0 }
+}
+
+/// The `NSCursor` for `icon`. AppKit has no public diagonal-resize or move
+/// cursors; the private ones (also used by WebKit and winit) are taken when
+/// present, else the nearest public cursor.
+fn ns_cursor(icon: CursorIcon) -> Id {
+    let (name, fallback) = match icon {
+        CursorIcon::Default => ("arrowCursor", "arrowCursor"),
+        CursorIcon::Text => ("IBeamCursor", "IBeamCursor"),
+        CursorIcon::Pointer => ("pointingHandCursor", "pointingHandCursor"),
+        CursorIcon::Crosshair => ("crosshairCursor", "crosshairCursor"),
+        CursorIcon::NotAllowed => ("operationNotAllowedCursor", "operationNotAllowedCursor"),
+        CursorIcon::Grab => ("openHandCursor", "openHandCursor"),
+        CursorIcon::Grabbing => ("closedHandCursor", "closedHandCursor"),
+        CursorIcon::Move => ("_moveCursor", "openHandCursor"),
+        CursorIcon::EwResize => ("resizeLeftRightCursor", "resizeLeftRightCursor"),
+        CursorIcon::NsResize => ("resizeUpDownCursor", "resizeUpDownCursor"),
+        CursorIcon::NwseResize => ("_windowResizeNorthWestSouthEastCursor", "crosshairCursor"),
+        CursorIcon::NeswResize => ("_windowResizeNorthEastSouthWestCursor", "crosshairCursor"),
+    };
+    let cls = class("NSCursor");
+    let s = sel(name);
+    let s = if unsafe { responds_to(cls, s) } {
+        s
+    } else {
+        sel(fallback)
+    };
+    unsafe { msg_id(cls, s) }
+}
+
+/// An `NSImage` of a straight-alpha RGBA image (+1 retained), via a `CGImage`
+/// over a copy of the pixels.
+unsafe fn ns_image(icon: &Pixmap) -> Id {
+    let size = icon.size();
+    let (w, h) = (size.width as usize, size.height as usize);
+    let bytes = icon.as_bytes();
+    unsafe {
+        let data = CFDataCreate(std::ptr::null(), bytes.as_ptr(), bytes.len() as isize);
+        let provider = CGDataProviderCreateWithCFData(data);
+        CFRelease(data);
+        let space = CGColorSpaceCreateDeviceRGB();
+        let image = CGImageCreate(
+            w,
+            h,
+            8,
+            32,
+            w * 4,
+            space,
+            CG_BITMAP_RGBA8,
+            provider,
+            std::ptr::null(),
+            true,
+            0,
+        );
+        CGColorSpaceRelease(space);
+        CGDataProviderRelease(provider);
+        if image.is_null() {
+            return std::ptr::null_mut();
+        }
+        let init: unsafe extern "C" fn(Id, Sel, *mut c_void, CgSize) -> Id =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let ns = init(
+            msg_id(class("NSImage"), sel("alloc")),
+            sel("initWithCGImage:size:"),
+            image,
+            CgSize {
+                width: w as f64,
+                height: h as f64,
+            },
+        );
+        CGImageRelease(image);
+        ns
+    }
 }
 
 /// `[NSString stringWithUTF8String:s]` — an autoreleased NSString.
@@ -362,6 +463,9 @@ struct MacCtx {
     /// Set by the window delegate's `windowWillClose:` so the event loop can
     /// break instead of spinning on a closed window.
     should_close: bool,
+    /// The cursor the app asked for, set again on each mouse move over the
+    /// view (AppKit resets it at the window's edges and title bar).
+    cursor: CursorIcon,
 }
 
 // Cocoa is single-threaded (main thread); the backend runs there.
@@ -757,6 +861,64 @@ impl Window for MacWindow {
             c.a11y_tree = Some(root.clone());
         });
     }
+    fn set_cursor(&self, cursor: CursorIcon) {
+        CTX.with(|c| c.borrow_mut().cursor = cursor);
+        unsafe { msg_void(ns_cursor(cursor), sel("set")) };
+    }
+    fn set_min_size(&self, size: Option<Size>) {
+        set_content_limit(sel("setContentMinSize:"), size, 0.0);
+    }
+    fn set_max_size(&self, size: Option<Size>) {
+        set_content_limit(sel("setContentMaxSize:"), size, f32::MAX as f64);
+    }
+    fn set_maximized(&self, maximized: bool) {
+        let window: Id = CTX.with(|c| c.borrow().window);
+        if !window.is_null() && unsafe { msg_bool(window, sel("isZoomed")) } != maximized {
+            unsafe { msg_void_id(window, sel("zoom:"), std::ptr::null_mut()) };
+        }
+    }
+    fn set_fullscreen(&self, fullscreen: bool) {
+        let window: Id = CTX.with(|c| c.borrow().window);
+        if window.is_null() {
+            return;
+        }
+        let now = unsafe { msg_u64(window, sel("styleMask")) } & NS_WINDOW_STYLE_FULLSCREEN != 0;
+        if now != fullscreen {
+            unsafe { msg_void_id(window, sel("toggleFullScreen:"), std::ptr::null_mut()) };
+        }
+    }
+    fn set_icon(&self, icon: Option<&Pixmap>) {
+        // macOS has no per-window icons; this is the app's Dock icon. `nil`
+        // restores the bundle's icon.
+        unsafe {
+            let image = icon.map_or(std::ptr::null_mut(), |i| ns_image(i));
+            let app = msg_id(class("NSApplication"), sel("sharedApplication"));
+            msg_void_id(app, sel("setApplicationIconImage:"), image);
+            if !image.is_null() {
+                msg_void(image, sel("release"));
+            }
+        }
+    }
+}
+
+/// Set the window's content min or max size (in points); `None` resets it to
+/// `unbounded`.
+fn set_content_limit(setter: Sel, size: Option<Size>, unbounded: f64) {
+    let window: Id = CTX.with(|c| c.borrow().window);
+    if window.is_null() {
+        return;
+    }
+    let size = size.map_or(
+        CgSize {
+            width: unbounded,
+            height: unbounded,
+        },
+        |s| CgSize {
+            width: s.width,
+            height: s.height,
+        },
+    );
+    unsafe { msg_void_size(window, setter, size) };
 }
 
 #[derive(Debug)]
@@ -867,6 +1029,16 @@ where
         });
 
         let mut win = MacWindow { size };
+        msg_void_u64(
+            window,
+            sel("setCollectionBehavior:"),
+            NS_COLLECTION_FULLSCREEN_PRIMARY,
+        );
+        win.set_min_size(attrs.min_size);
+        win.set_max_size(attrs.max_size);
+        if attrs.icon.is_some() {
+            win.set_icon(attrs.icon.as_ref());
+        }
         handler(Event::RedrawRequested, &win); // populate the framebuffer + a11y tree
 
         // Self-check the NSAccessibility wiring (real objc dispatch) for CI:
@@ -911,6 +1083,13 @@ where
         msg_void_bool(app, sel("activateIgnoringOtherApps:"), true);
         // Needed for nextEventMatchingMask to dequeue events.
         msg_void(app, sel("finishLaunching"));
+        // Zoom and fullscreen act on a window that is on screen.
+        if attrs.maximized {
+            win.set_maximized(true);
+        }
+        if attrs.fullscreen {
+            win.set_fullscreen(true);
+        }
 
         // Manual event loop: pull each NSEvent, translate it to a Stipple event
         // for the handler, then forward it to AppKit (drawing, window controls).
@@ -957,6 +1136,18 @@ where
                 // exiting on this event.
                 if !exit {
                     msg_void_id(app, sel("sendEvent:"), ev);
+                }
+                // Keep the app's cursor over the content: AppKit resets it at
+                // the window's edges and title bar.
+                if !exit && etype == NS_MOUSE_MOVED {
+                    let p = msg_point(ev, sel("locationInWindow"));
+                    let b = msg_rect(view, sel("bounds"));
+                    let over =
+                        p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height;
+                    let cursor = CTX.with(|c| c.borrow().cursor);
+                    if over && cursor != CursorIcon::Default {
+                        msg_void(ns_cursor(cursor), sel("set"));
+                    }
                 }
             }
 

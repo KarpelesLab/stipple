@@ -3,6 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::platform::WindowRequest;
 use crate::platform::wake;
 
 type Update<S> = Box<dyn FnOnce(&mut S) + Send>;
@@ -25,6 +26,8 @@ struct Shared<S> {
     timers: Vec<Timer<S>>,
     next_id: u64,
     exit: bool,
+    /// Window changes queued by [`AppHandle::window`].
+    window: Vec<WindowRequest>,
 }
 
 /// A handle to a running app, for changing its state from outside a widget
@@ -82,6 +85,7 @@ impl<S> AppHandle<S> {
                 timers: Vec::new(),
                 next_id: 1,
                 exit: false,
+                window: Vec::new(),
             })),
         }
     }
@@ -144,6 +148,30 @@ impl<S> AppHandle<S> {
     pub fn exit(&self) {
         self.with(|s| s.exit = true);
         wake::wake();
+    }
+
+    /// Change the primary window while the app runs: maximize it, make it
+    /// fullscreen, change its size limits or icon. Applied on the UI thread
+    /// between events; a no-op on backends without that control.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// # use stipple::platform::WindowRequest;
+    /// # struct State;
+    /// # fn view(_: &State, cx: &mut Cx<State>) -> Element {
+    /// let handle = cx.handle();
+    /// button_labeled(cx.theme(), "Fullscreen")
+    ///     .on_tap(cx, move |_| handle.window(WindowRequest::Fullscreen(true)))
+    /// # }
+    /// ```
+    pub fn window(&self, request: WindowRequest) {
+        self.with(|s| s.window.push(request));
+        wake::wake();
+    }
+
+    /// Take the window changes queued by [`window`](Self::window).
+    pub(crate) fn take_window_requests(&self) -> Vec<WindowRequest> {
+        self.with(|s| std::mem::take(&mut s.window))
     }
 
     /// Apply queued updates and due timers to `state`, as of `now`. Returns

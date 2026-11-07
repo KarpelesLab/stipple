@@ -337,6 +337,7 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
         native: el.native,
         scroll: el.scroll,
         clip: el.clip,
+        cursor: el.cursor,
         children: Vec::new(),
     };
 

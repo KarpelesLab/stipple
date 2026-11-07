@@ -341,6 +341,9 @@ mod tests {
             queue: Default::default(),
             clip: Clipboard::default(),
             buffer_scale: 1,
+            cursor_device: None,
+            enter_serial: None,
+            cursor: Default::default(),
         };
         (conn, theirs)
     }

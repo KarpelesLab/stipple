@@ -55,7 +55,7 @@ mod window;
 pub use access::{A11yNode, A11yRole};
 pub use error::PlatformError;
 pub use event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, ScrollDelta, WindowId};
-pub use window::{Window, WindowAttributes};
+pub use window::{CursorIcon, Window, WindowAttributes, WindowRequest};
 
 /// What a window should do after the application handles an event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

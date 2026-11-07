@@ -25,35 +25,39 @@
 
 #![allow(unsafe_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::{self, Read, Write};
 use std::os::fd::RawFd;
 use std::os::unix::net::UnixStream;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use crate::geometry::{PhysicalSize, Point, ScaleFactor};
+use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{
     ButtonState, Event, KeyCode, Modifiers, PointerButton, ScrollDelta, WindowId,
 };
-use crate::platform::window::{Window, WindowAttributes};
+use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
 // ---- X11 protocol constants -------------------------------------------------
 
 const OP_CREATE_WINDOW: u8 = 1;
+const OP_CHANGE_WINDOW_ATTRIBUTES: u8 = 2;
 const OP_DESTROY_WINDOW: u8 = 4;
 const OP_MAP_WINDOW: u8 = 8;
 const OP_INTERN_ATOM: u8 = 16;
 const OP_GET_PROPERTY: u8 = 20;
 const OP_CHANGE_PROPERTY: u8 = 18;
+const OP_DELETE_PROPERTY: u8 = 19;
 const OP_SET_SELECTION_OWNER: u8 = 22;
 const OP_SEND_EVENT: u8 = 25;
 const OP_GET_INPUT_FOCUS: u8 = 43;
 const OP_QUERY_EXTENSION: u8 = 98;
 const OP_SET_INPUT_FOCUS: u8 = 42;
+const OP_OPEN_FONT: u8 = 45;
+const OP_CREATE_GLYPH_CURSOR: u8 = 94;
 const OP_CREATE_GC: u8 = 55;
 const OP_PUT_IMAGE: u8 = 72;
 const OP_GET_KEYBOARD_MAPPING: u8 = 101;
@@ -77,9 +81,14 @@ const EV_BUTTON_RELEASE: u32 = 0x0000_0008;
 const EV_POINTER_MOTION: u32 = 0x0000_0040;
 const EV_STRUCTURE_NOTIFY: u32 = 0x0002_0000;
 
-// Value-mask bits for CreateWindow.
+// Value-mask bits for CreateWindow / ChangeWindowAttributes.
 const CW_BACK_PIXEL: u32 = 0x0000_0002;
 const CW_EVENT_MASK: u32 = 0x0000_0800;
+const CW_CURSOR: u32 = 0x0000_4000;
+
+// The root-window event mask a window manager listens on for client requests
+// such as `_NET_WM_STATE` changes (SubstructureNotify | SubstructureRedirect).
+const EV_SUBSTRUCTURE: u32 = 0x0018_0000;
 
 // Event codes (low 7 bits of the first byte).
 const X_EXPOSE: u8 = 12;
@@ -96,6 +105,37 @@ const X_CLIENT_MESSAGE: u8 = 33;
 // Predefined atoms (X11 protocol appendix): STRING type and the ATOM type.
 const ATOM_STRING: u32 = 31;
 const ATOM_ATOM: u32 = 4;
+const ATOM_CARDINAL: u32 = 6;
+const ATOM_WM_NORMAL_HINTS: u32 = 40;
+const ATOM_WM_SIZE_HINTS: u32 = 41;
+
+// WM_SIZE_HINTS flags (ICCCM 4.1.2.3).
+const P_MIN_SIZE: u32 = 16;
+const P_MAX_SIZE: u32 = 32;
+
+/// `_NET_WM_ICON` is sent in one `ChangeProperty`, whose length (without
+/// BIG-REQUESTS) is capped at 65535 words, so larger icons are scaled to this.
+const MAX_ICON: u32 = 128;
+
+/// The glyph in the core `cursor` font for each [`CursorIcon`] (from
+/// `X11/cursorfont.h`; the mask is the next glyph).
+/// These are the classic X shapes, not the desktop cursor theme.
+fn cursor_glyph(icon: CursorIcon) -> u16 {
+    match icon {
+        CursorIcon::Default => 68,    // XC_left_ptr
+        CursorIcon::Text => 152,      // XC_xterm
+        CursorIcon::Pointer => 60,    // XC_hand2
+        CursorIcon::Crosshair => 34,  // XC_crosshair
+        CursorIcon::NotAllowed => 24, // XC_circle
+        CursorIcon::Grab => 58,       // XC_hand1
+        CursorIcon::Grabbing => 52,   // XC_fleur
+        CursorIcon::Move => 52,       // XC_fleur
+        CursorIcon::EwResize => 108,  // XC_sb_h_double_arrow
+        CursorIcon::NsResize => 116,  // XC_sb_v_double_arrow
+        CursorIcon::NwseResize => 14, // XC_bottom_right_corner
+        CursorIcon::NeswResize => 12, // XC_bottom_left_corner
+    }
+}
 
 /// Whether an X11 display is reachable (cheap check of `$DISPLAY`).
 pub fn available() -> bool {
@@ -827,6 +867,16 @@ struct Conn {
     /// ones opened later) registers the close protocol the same way.
     atom_wm_protocols: u32,
     atom_wm_delete: u32,
+    /// EWMH atoms for window state and the icon (0 until set).
+    atom_net_wm_state: u32,
+    atom_max_vert: u32,
+    atom_max_horz: u32,
+    atom_fullscreen: u32,
+    atom_net_wm_icon: u32,
+    /// The core `cursor` font, opened on first use (0 until then).
+    cursor_font: u32,
+    /// Cursors created so far, by glyph.
+    cursors: Vec<(u16, u32)>,
 }
 
 impl Conn {
@@ -893,6 +943,13 @@ impl Conn {
             atom_targets: 0,
             atom_wm_protocols: 0,
             atom_wm_delete: 0,
+            atom_net_wm_state: 0,
+            atom_max_vert: 0,
+            atom_max_horz: 0,
+            atom_fullscreen: 0,
+            atom_net_wm_icon: 0,
+            cursor_font: 0,
+            cursors: Vec::new(),
         })
     }
 
@@ -959,6 +1016,9 @@ struct X11Window {
     // every window but normally points at empty queues (drained each iteration),
     // so there is no retained reference cycle through the loop's live set.
     reg: Registry,
+    /// The minimum and maximum inner size, in logical pixels, last given to
+    /// the window manager in `WM_NORMAL_HINTS`.
+    limits: Cell<(Option<Size>, Option<Size>)>,
 }
 
 impl std::fmt::Debug for Conn {
@@ -1029,6 +1089,185 @@ impl Window for X11Window {
     fn close_window(&self) {
         self.reg.borrow_mut().closed.push(self.window);
     }
+    fn set_cursor(&self, cursor: CursorIcon) {
+        let mut conn = self.conn.lock().unwrap();
+        let _ = set_cursor(&mut conn, self.window, cursor);
+    }
+    fn set_min_size(&self, size: Option<Size>) {
+        let (_, max) = self.limits.get();
+        self.limits.set((size, max));
+        let mut conn = self.conn.lock().unwrap();
+        let _ = set_size_hints(&mut conn, self.window, size, max);
+    }
+    fn set_max_size(&self, size: Option<Size>) {
+        let (min, _) = self.limits.get();
+        self.limits.set((min, size));
+        let mut conn = self.conn.lock().unwrap();
+        let _ = set_size_hints(&mut conn, self.window, min, size);
+    }
+    fn set_maximized(&self, maximized: bool) {
+        let mut conn = self.conn.lock().unwrap();
+        let (vert, horz) = (conn.atom_max_vert, conn.atom_max_horz);
+        let _ = send_wm_state(&mut conn, self.window, maximized, vert, horz);
+    }
+    fn set_fullscreen(&self, fullscreen: bool) {
+        let mut conn = self.conn.lock().unwrap();
+        let full = conn.atom_fullscreen;
+        let _ = send_wm_state(&mut conn, self.window, fullscreen, full, 0);
+    }
+    fn set_icon(&self, icon: Option<&Pixmap>) {
+        let mut conn = self.conn.lock().unwrap();
+        let _ = set_icon(&mut conn, self.window, icon);
+    }
+}
+
+/// Tell the window manager the inner size limits (`WM_NORMAL_HINTS`), given in
+/// logical pixels and sent in physical ones.
+fn set_size_hints(
+    conn: &mut Conn,
+    window: u32,
+    min: Option<Size>,
+    max: Option<Size>,
+) -> io::Result<()> {
+    let hints = size_hints(ScaleFactor::new(conn.scale), min, max);
+    set_property32(
+        conn,
+        window,
+        ATOM_WM_NORMAL_HINTS,
+        ATOM_WM_SIZE_HINTS,
+        &hints,
+    )
+}
+
+/// The 18 `WM_SIZE_HINTS` words for these limits: flags, x, y, width, height
+/// (obsolete), min w/h, max w/h, resize increments, aspect ratios, base size and
+/// gravity.
+fn size_hints(scale: ScaleFactor, min: Option<Size>, max: Option<Size>) -> [u32; 18] {
+    let mut hints = [0u32; 18];
+    let px = |s: Size| {
+        let p = scale.to_physical(s);
+        (p.width.max(1), p.height.max(1))
+    };
+    if let Some(min) = min {
+        hints[0] |= P_MIN_SIZE;
+        (hints[5], hints[6]) = px(min);
+    }
+    if let Some(max) = max {
+        hints[0] |= P_MAX_SIZE;
+        (hints[7], hints[8]) = px(max);
+    }
+    hints
+}
+
+/// Ask the window manager to add or remove up to two `_NET_WM_STATE` atoms,
+/// with the EWMH client message to the root window.
+fn send_wm_state(conn: &mut Conn, window: u32, add: bool, a: u32, b: u32) -> io::Result<()> {
+    let (root, state) = (conn.setup.root, conn.atom_net_wm_state);
+    if state == 0 || a == 0 {
+        return Ok(());
+    }
+    let req = wm_state_message(root, window, state, add, a, b);
+    conn.send(&req)
+}
+
+/// A `SendEvent` of a `_NET_WM_STATE` `ClientMessage` (EWMH: data is action,
+/// first property, second property, source indication = 1 for applications).
+fn wm_state_message(root: u32, window: u32, state: u32, add: bool, a: u32, b: u32) -> Vec<u8> {
+    let mut req = vec![OP_SEND_EVENT, 0 /* propagate */, 0, 0];
+    req.extend_from_slice(&root.to_le_bytes());
+    req.extend_from_slice(&EV_SUBSTRUCTURE.to_le_bytes());
+    // The 32-byte event.
+    req.extend_from_slice(&[X_CLIENT_MESSAGE, 32, 0, 0]);
+    req.extend_from_slice(&window.to_le_bytes());
+    req.extend_from_slice(&state.to_le_bytes());
+    for word in [add as u32, a, b, 1, 0] {
+        req.extend_from_slice(&word.to_le_bytes());
+    }
+    finish(req)
+}
+
+/// Set (or, with `None`, remove) `_NET_WM_ICON`: width, height, then one
+/// `0xAARRGGBB` word per pixel, rows top first.
+fn set_icon(conn: &mut Conn, window: u32, icon: Option<&Pixmap>) -> io::Result<()> {
+    let prop = conn.atom_net_wm_icon;
+    if prop == 0 {
+        return Ok(());
+    }
+    match icon {
+        Some(icon) => set_property32(conn, window, prop, ATOM_CARDINAL, &icon_words(icon)),
+        None => {
+            let mut req = vec![OP_DELETE_PROPERTY, 0, 0, 0];
+            req.extend_from_slice(&window.to_le_bytes());
+            req.extend_from_slice(&prop.to_le_bytes());
+            conn.send(&finish(req))
+        }
+    }
+}
+
+/// The `_NET_WM_ICON` words for `icon`, scaled down to [`MAX_ICON`] if needed.
+fn icon_words(icon: &Pixmap) -> Vec<u32> {
+    let icon = fit_icon(icon, MAX_ICON);
+    let size = icon.size();
+    let mut words = Vec::with_capacity(2 + size.pixel_count() as usize);
+    words.push(size.width);
+    words.push(size.height);
+    words.extend(
+        icon.as_bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| u32::from_be_bytes([p[3], p[0], p[1], p[2]])),
+    );
+    words
+}
+
+/// Show `icon` over `window`, creating its cursor from the core cursor font
+/// the first time it's used.
+fn set_cursor(conn: &mut Conn, window: u32, icon: CursorIcon) -> io::Result<()> {
+    dbg(format_args!("cursor {icon:?} on window={window:#x}"));
+    let glyph = cursor_glyph(icon);
+    let cursor = match conn.cursors.iter().find(|(g, _)| *g == glyph) {
+        Some(&(_, id)) => id,
+        None => {
+            if conn.cursor_font == 0 {
+                let font = conn.new_id();
+                let name = b"cursor";
+                let mut req = vec![OP_OPEN_FONT, 0, 0, 0];
+                req.extend_from_slice(&font.to_le_bytes());
+                req.extend_from_slice(&(name.len() as u16).to_le_bytes());
+                req.extend_from_slice(&0u16.to_le_bytes());
+                req.extend_from_slice(name);
+                pad4(&mut req);
+                conn.send(&finish(req))?;
+                conn.cursor_font = font;
+            }
+            let id = conn.new_id();
+            let font = conn.cursor_font;
+            conn.send(&glyph_cursor_request(id, font, glyph))?;
+            conn.cursors.push((glyph, id));
+            id
+        }
+    };
+    let mut req = vec![OP_CHANGE_WINDOW_ATTRIBUTES, 0, 0, 0];
+    req.extend_from_slice(&window.to_le_bytes());
+    req.extend_from_slice(&CW_CURSOR.to_le_bytes());
+    req.extend_from_slice(&cursor.to_le_bytes());
+    conn.send(&finish(req))
+}
+
+/// `CreateGlyphCursor` for `glyph` of the cursor font (mask = `glyph + 1`),
+/// black on white.
+fn glyph_cursor_request(id: u32, font: u32, glyph: u16) -> Vec<u8> {
+    let mut req = vec![OP_CREATE_GLYPH_CURSOR, 0, 0, 0];
+    req.extend_from_slice(&id.to_le_bytes());
+    req.extend_from_slice(&font.to_le_bytes()); // source font
+    req.extend_from_slice(&font.to_le_bytes()); // mask font
+    req.extend_from_slice(&glyph.to_le_bytes());
+    req.extend_from_slice(&(glyph + 1).to_le_bytes());
+    for c in [0u16, 0, 0, 0xffff, 0xffff, 0xffff] {
+        req.extend_from_slice(&c.to_le_bytes());
+    }
+    finish(req)
 }
 
 struct X11Surface {
@@ -1173,6 +1412,31 @@ fn create_window(
     let (wm_protocols, wm_delete) = (conn.atom_wm_protocols, conn.atom_wm_delete);
     set_property_atoms(conn, window, wm_protocols, &[wm_delete]).map_err(os)?;
 
+    // Size limits, initial state and icon, all read by the window manager when
+    // the window maps. A fixed-size window has its size as both limits.
+    let limits = if attrs.resizable {
+        (attrs.min_size, attrs.max_size)
+    } else {
+        (Some(attrs.logical_size), Some(attrs.logical_size))
+    };
+    if limits != (None, None) {
+        set_size_hints(conn, window, limits.0, limits.1).map_err(os)?;
+    }
+    let mut states = Vec::new();
+    if attrs.maximized {
+        states.extend([conn.atom_max_vert, conn.atom_max_horz]);
+    }
+    if attrs.fullscreen {
+        states.push(conn.atom_fullscreen);
+    }
+    if !states.is_empty() {
+        let prop = conn.atom_net_wm_state;
+        set_property_atoms(conn, window, prop, &states).map_err(os)?;
+    }
+    if attrs.icon.is_some() {
+        set_icon(conn, window, attrs.icon.as_ref()).map_err(os)?;
+    }
+
     // Set up MIT-SHM presentation before mapping (its handshake needs replies
     // that must not interleave with window events). Falls back to PutImage when
     // unavailable. Siblings opened mid-loop pass `use_shm = false`: the first
@@ -1210,6 +1474,7 @@ fn create_window(
         size,
         shm: RefCell::new(shm),
         reg,
+        limits: Cell::new(limits),
     })
 }
 
@@ -1241,6 +1506,11 @@ where
     conn.atom_clipboard = intern_atom(&mut conn, b"CLIPBOARD").map_err(os)?;
     conn.atom_utf8 = intern_atom(&mut conn, b"UTF8_STRING").map_err(os)?;
     conn.atom_targets = intern_atom(&mut conn, b"TARGETS").map_err(os)?;
+    conn.atom_net_wm_state = intern_atom(&mut conn, b"_NET_WM_STATE").map_err(os)?;
+    conn.atom_max_vert = intern_atom(&mut conn, b"_NET_WM_STATE_MAXIMIZED_VERT").map_err(os)?;
+    conn.atom_max_horz = intern_atom(&mut conn, b"_NET_WM_STATE_MAXIMIZED_HORZ").map_err(os)?;
+    conn.atom_fullscreen = intern_atom(&mut conn, b"_NET_WM_STATE_FULLSCREEN").map_err(os)?;
+    conn.atom_net_wm_icon = intern_atom(&mut conn, b"_NET_WM_ICON").map_err(os)?;
     conn.scale = read_xft_scale(&mut conn).map_err(os)?;
     let wm_delete = conn.atom_wm_delete;
 
@@ -1634,17 +1904,33 @@ fn set_property_str(
 }
 
 fn set_property_atoms(conn: &mut Conn, window: u32, prop: u32, atoms: &[u32]) -> io::Result<()> {
+    set_property32(conn, window, prop, ATOM_ATOM, atoms)
+}
+
+/// Replace `prop` on `window` with a list of 32-bit `values` of type `ty`.
+fn set_property32(
+    conn: &mut Conn,
+    window: u32,
+    prop: u32,
+    ty: u32,
+    values: &[u32],
+) -> io::Result<()> {
+    conn.send(&finish(property32_request(window, prop, ty, values)))
+}
+
+/// A format-32 `ChangeProperty` (mode Replace), before [`finish`].
+fn property32_request(window: u32, prop: u32, ty: u32, values: &[u32]) -> Vec<u8> {
     let mut req = vec![OP_CHANGE_PROPERTY, 0, 0, 0];
     req.extend_from_slice(&window.to_le_bytes());
     req.extend_from_slice(&prop.to_le_bytes());
-    req.extend_from_slice(&ATOM_ATOM.to_le_bytes()); // type ATOM
+    req.extend_from_slice(&ty.to_le_bytes());
     req.push(32); // format
     req.extend_from_slice(&[0, 0, 0]);
-    req.extend_from_slice(&(atoms.len() as u32).to_le_bytes());
-    for a in atoms {
-        req.extend_from_slice(&a.to_le_bytes());
+    req.extend_from_slice(&(values.len() as u32).to_le_bytes());
+    for v in values {
+        req.extend_from_slice(&v.to_le_bytes());
     }
-    conn.send(&finish(req))
+    req
 }
 
 /// Answer a `SelectionRequest`: fill the requestor's property with our clipboard
@@ -1964,6 +2250,56 @@ mod tests {
             keysym_to_event(0x63, ButtonState::Pressed, Modifiers::default()),
             Some(Event::Text("c".into()))
         );
+    }
+
+    #[test]
+    fn size_hints_carry_min_and_max_in_physical_pixels() {
+        let hints = size_hints(
+            ScaleFactor::new(2.0),
+            Some(Size::new(100.0, 50.0)),
+            Some(Size::new(400.0, 300.0)),
+        );
+        assert_eq!(hints[0], P_MIN_SIZE | P_MAX_SIZE);
+        assert_eq!(&hints[5..9], &[200, 100, 800, 600]);
+        assert_eq!(size_hints(ScaleFactor::IDENTITY, None, None), [0; 18]);
+    }
+
+    #[test]
+    fn icon_words_are_argb_after_the_size() {
+        let mut icon = Pixmap::new(PhysicalSize::new(2, 1));
+        icon.as_bytes_mut()
+            .copy_from_slice(&[0x11, 0x22, 0x33, 0x44, 0xaa, 0xbb, 0xcc, 0xff]);
+        assert_eq!(icon_words(&icon), vec![2, 1, 0x4411_2233, 0xffaa_bbcc]);
+        // Large icons are scaled to fit one request.
+        let big = icon_words(&Pixmap::new(PhysicalSize::new(512, 256)));
+        assert_eq!(&big[..2], &[MAX_ICON, MAX_ICON / 2]);
+    }
+
+    #[test]
+    fn wm_state_message_is_a_root_client_message() {
+        let req = wm_state_message(0x100, 0x200, 7, true, 8, 9);
+        assert_eq!(req.len(), 44); // 12-byte header + 32-byte event
+        assert_eq!(u16::from_le_bytes([req[2], req[3]]), 11);
+        assert_eq!(u32::from_le_bytes(req[4..8].try_into().unwrap()), 0x100);
+        assert_eq!(
+            u32::from_le_bytes(req[8..12].try_into().unwrap()),
+            EV_SUBSTRUCTURE
+        );
+        assert_eq!(&req[12..14], &[X_CLIENT_MESSAGE, 32]);
+        let word = |i: usize| u32::from_le_bytes(req[i..i + 4].try_into().unwrap());
+        assert_eq!((word(16), word(20)), (0x200, 7));
+        assert_eq!((word(24), word(28), word(32), word(36)), (1, 8, 9, 1));
+    }
+
+    #[test]
+    fn glyph_cursor_request_is_eight_words() {
+        let req = glyph_cursor_request(5, 6, 152);
+        assert_eq!(req.len(), 32);
+        assert_eq!(u16::from_le_bytes([req[2], req[3]]), 8);
+        assert_eq!(u16::from_le_bytes([req[16], req[17]]), 152);
+        assert_eq!(u16::from_le_bytes([req[18], req[19]]), 153);
+        let prop = property32_request(1, 2, 3, &[4, 5]);
+        assert_eq!(prop.len(), 24 + 8);
     }
 
     #[test]

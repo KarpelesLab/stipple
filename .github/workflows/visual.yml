@@ -70,6 +70,23 @@ jobs:
           echo "=== capture ==="; identify visual_output/stipple-x11.png
           echo "=== app.log ==="; cat visual_output/app.log || true
 
+      - name: Window hints, icon and cursor
+        env:
+          DISPLAY: ":99"
+        run: |
+          # The example sets a 400x320 minimum size and a 64x64 icon.
+          xprop -name Stipple WM_NORMAL_HINTS | tee visual_output/hints.txt
+          grep -q 'minimum size: 400 by 320' visual_output/hints.txt
+          # Into a file first: `head` closing a pipe would fail the step.
+          xprop -name Stipple _NET_WM_ICON > visual_output/icon.txt
+          head -1 visual_output/icon.txt
+          grep -qE 'Icon \(64 x 64\)|= 64, 64' visual_output/icon.txt
+          # Hovering the OK button switches to the pointing hand, and back.
+          xdotool mousemove 320 366; sleep 0.5; xdotool mousemove 600 20; sleep 0.5
+          grep 'cursor' visual_output/app.log
+          grep -q 'cursor Pointer' visual_output/app.log
+          grep -q 'cursor Default' visual_output/app.log
+
       - name: Screenshot the native gallery
         env:
           DISPLAY: ":99"

@@ -47,8 +47,8 @@ use crate::core::{
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::{
-    ButtonState, ControlFlow, Event, KeyCode, Modifiers, PointerButton, WindowAttributes, WindowId,
-    backend,
+    ButtonState, ControlFlow, CursorIcon, Event, KeyCode, Modifiers, PointerButton,
+    WindowAttributes, WindowId, backend,
 };
 use crate::render::{Color, Font, Pixmap, Scene, SoftwareRenderer, Surface};
 use crate::style::Theme;
@@ -246,6 +246,8 @@ struct Pane<S> {
     // content was last pressed), so keyboard input forwards to it until focus
     // moves elsewhere. `None` = the Stipple chrome owns keyboard focus.
     input_viewport: Option<ViewportId>,
+    // The cursor last set on the window, so it is only changed on a change.
+    cursor: CursorIcon,
 }
 
 impl<S> std::fmt::Debug for App<S> {
@@ -286,6 +288,7 @@ impl<S> Pane<S> {
             overlay_active: false,
             painted_overlay_active: false,
             input_viewport: None,
+            cursor: CursorIcon::Default,
         }
     }
 }
@@ -361,6 +364,37 @@ impl<S> App<S> {
     /// Set the initial logical window size.
     pub fn logical_size(mut self, size: Size) -> Self {
         self.primary().attrs.logical_size = size;
+        self
+    }
+
+    /// Set the smallest logical size the user can resize the window to.
+    pub fn min_size(mut self, size: Size) -> Self {
+        self.primary().attrs.min_size = Some(size);
+        self
+    }
+
+    /// Set the largest logical size the user can resize the window to.
+    pub fn max_size(mut self, size: Size) -> Self {
+        self.primary().attrs.max_size = Some(size);
+        self
+    }
+
+    /// Open the window maximized.
+    pub fn maximized(mut self, maximized: bool) -> Self {
+        self.primary().attrs.maximized = maximized;
+        self
+    }
+
+    /// Open the window fullscreen.
+    pub fn fullscreen(mut self, fullscreen: bool) -> Self {
+        self.primary().attrs.fullscreen = fullscreen;
+        self
+    }
+
+    /// Set the window icon from a straight-alpha RGBA image (on macOS, the
+    /// application's Dock icon). See [`WindowAttributes::icon`].
+    pub fn icon(mut self, icon: Pixmap) -> Self {
+        self.primary().attrs.icon = Some(icon);
         self
     }
 
@@ -587,6 +621,9 @@ impl<S> Pane<S> {
                     .width(size.width)
                     .height(size.height);
                     catcher.action = spec.dismiss;
+                    // The plain arrow over the scrim, not the tap target's hand
+                    // or whatever lies beneath.
+                    catcher.cursor = Some(CursorIcon::Default);
                     roots.push(layout(&catcher, win, font));
                 }
                 let m = measure(&spec.content, size, font);
@@ -947,6 +984,23 @@ impl<S> Pane<S> {
     /// End the current pointer text selection (pointer released).
     fn end_text_select(&mut self) {
         self.text_selecting = None;
+    }
+
+    /// The cursor the window should show with the pointer at `pos`, if it
+    /// differs from the one last set. Kept as is during a drag or text
+    /// selection, which latch the cursor they started with.
+    fn cursor_change(&mut self, pos: Point) -> Option<CursorIcon> {
+        if self.dragging.is_some() || self.text_selecting.is_some() {
+            return None;
+        }
+        let now = self
+            .tree
+            .as_ref()
+            .map_or(CursorIcon::Default, |t| crate::core::cursor_at(t, pos));
+        (now != self.cursor).then(|| {
+            self.cursor = now;
+            now
+        })
     }
 
     /// Update the hovered element to whatever tappable sits under `pos`.
@@ -1357,6 +1411,13 @@ impl<S> App<S> {
                 }
             }
             let idx = id_to_pane.get(&wid).copied().unwrap_or(0);
+            // Window changes queued through `AppHandle::window` go to the
+            // primary window (its events, including the wake they cause).
+            if idx == 0 {
+                for request in self.handle.take_window_requests() {
+                    request.apply(window);
+                }
+            }
             match event {
                 Event::RedrawRequested => {
                     present(&mut self, &mut surfaces, idx, window, true);
@@ -1423,6 +1484,9 @@ impl<S> App<S> {
                 }
                 Event::PointerMoved { position } => {
                     self.panes[idx].last_pointer = position;
+                    if let Some(cursor) = self.panes[idx].cursor_change(position) {
+                        window.set_cursor(cursor);
+                    }
                     // Forward moves over a viewport to its content, unless a Stipple
                     // drag/selection latched on a press outside it is in progress.
                     if self.panes[idx].text_selecting.is_none()
@@ -1660,6 +1724,7 @@ pub mod prelude {
         Track, View,
     };
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
+    pub use crate::platform::{CursorIcon, WindowRequest};
     pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg};
     pub use crate::style::Theme;
     pub use crate::style::{Palette, Spacing, Typography};

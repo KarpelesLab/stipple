@@ -18,12 +18,12 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 
-use crate::geometry::{PhysicalSize, ScaleFactor};
+use crate::geometry::{PhysicalSize, ScaleFactor, Size};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, WindowId};
 use crate::platform::input;
-use crate::platform::window::{Window, WindowAttributes};
+use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
 // ---- Win32 type aliases -----------------------------------------------------
@@ -38,6 +38,20 @@ type WndProc = unsafe extern "system" fn(Hwnd, u32, Wparam, Lparam) -> Lresult;
 const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 const CW_USEDEFAULT: i32 = -2147483648; // 0x80000000
 const SW_SHOW: i32 = 5;
+const SW_MAXIMIZE: i32 = 3;
+const SW_RESTORE: i32 = 9;
+const WM_SETCURSOR: u32 = 0x0020;
+const WM_GETMINMAXINFO: u32 = 0x0024;
+const WM_SETICON: u32 = 0x0080;
+/// `WM_SETCURSOR`'s hit-test code for the client area.
+const HTCLIENT: u16 = 1;
+const ICON_SMALL: usize = 0;
+const ICON_BIG: usize = 1;
+const GWL_STYLE: i32 = -16;
+const SWP_NOMOVE: u32 = 0x0002;
+const SWP_FRAMECHANGED: u32 = 0x0020;
+const SWP_NOOWNERZORDER: u32 = 0x0200;
+const MONITOR_DEFAULTTONEAREST: u32 = 2;
 const WM_DESTROY: u32 = 0x0002;
 const WM_SIZE: u32 = 0x0005;
 const WM_PAINT: u32 = 0x000F;
@@ -73,8 +87,6 @@ const INFINITE: u32 = u32::MAX;
 const SWP_NOZORDER: u32 = 0x0004;
 const SWP_NOACTIVATE: u32 = 0x0010;
 const SWP_NOSIZE: u32 = 0x0001;
-const SWP_NOMOVE: u32 = 0x0002;
-const SWP_FRAMECHANGED: u32 = 0x0020;
 /// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`.
 const PER_MONITOR_AWARE_V2: isize = -4;
 /// `lParam` value identifying UIA's request for our root fragment provider.
@@ -89,6 +101,23 @@ const BI_RGB: u32 = 0;
 const DIB_RGB_COLORS: u32 = 0;
 const SRCCOPY: u32 = 0x00CC_0020;
 const IDC_ARROW: usize = 32512;
+
+/// The system cursor (`IDC_*` resource id) for each [`CursorIcon`]. Windows
+/// has no grab cursors; the hand and the four-way arrow stand in.
+fn cursor_id(icon: CursorIcon) -> usize {
+    match icon {
+        CursorIcon::Default => IDC_ARROW,
+        CursorIcon::Text => 32513,                        // IDC_IBEAM
+        CursorIcon::Crosshair => 32515,                   // IDC_CROSS
+        CursorIcon::NwseResize => 32642,                  // IDC_SIZENWSE
+        CursorIcon::NeswResize => 32643,                  // IDC_SIZENESW
+        CursorIcon::EwResize => 32644,                    // IDC_SIZEWE
+        CursorIcon::NsResize => 32645,                    // IDC_SIZENS
+        CursorIcon::Move | CursorIcon::Grabbing => 32646, // IDC_SIZEALL
+        CursorIcon::NotAllowed => 32648,                  // IDC_NO
+        CursorIcon::Pointer | CursorIcon::Grab => 32649,  // IDC_HAND
+    }
+}
 
 #[repr(C)]
 struct WndClassW {
@@ -127,6 +156,25 @@ struct Rect {
     top: i32,
     right: i32,
     bottom: i32,
+}
+
+/// `MINMAXINFO`, filled in on `WM_GETMINMAXINFO`.
+#[repr(C)]
+struct MinMaxInfo {
+    reserved: Point,
+    max_size: Point,
+    max_position: Point,
+    min_track_size: Point,
+    max_track_size: Point,
+}
+
+/// `MONITORINFO`.
+#[repr(C)]
+struct MonitorInfo {
+    cb_size: u32,
+    rc_monitor: Rect,
+    rc_work: Rect,
+    flags: u32,
 }
 
 #[repr(C)]
@@ -223,6 +271,30 @@ unsafe extern "system" {
     fn BeginPaint(hwnd: Hwnd, ps: *mut PaintStruct) -> Handle;
     fn EndPaint(hwnd: Hwnd, ps: *const PaintStruct) -> i32;
     fn GetKeyState(vk: i32) -> i16;
+    fn SetCursor(cursor: Handle) -> Handle;
+    fn SendMessageW(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult;
+    fn CreateIcon(
+        instance: Handle,
+        width: i32,
+        height: i32,
+        planes: u8,
+        bits_per_pixel: u8,
+        and_bits: *const u8,
+        xor_bits: *const u8,
+    ) -> Handle;
+    fn DestroyIcon(icon: Handle) -> i32;
+    fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
+    fn SetWindowLongW(hwnd: Hwnd, index: i32, value: i32) -> i32;
+    fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
+    fn MonitorFromWindow(hwnd: Hwnd, flags: u32) -> Handle;
+    fn GetMonitorInfoW(monitor: Handle, info: *mut MonitorInfo) -> i32;
+    fn AdjustWindowRectExForDpi(
+        rect: *mut Rect,
+        style: u32,
+        menu: i32,
+        ex_style: u32,
+        dpi: u32,
+    ) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -260,6 +332,15 @@ struct WinCtx {
     uia: Option<crate::platform::uia::UiaTree>,
     /// The window's DPI. 0 until the window exists, which reads as 96 (1x).
     dpi: u32,
+    /// The cursor shown over the client area (`WM_SETCURSOR`).
+    cursor: CursorIcon,
+    /// Inner size limits in logical pixels, applied on `WM_GETMINMAXINFO`.
+    min_size: Option<Size>,
+    max_size: Option<Size>,
+    /// While fullscreen: the style and window rectangle to restore.
+    restore: Option<(i32, [i32; 4])>,
+    /// The `HICON` set with `WM_SETICON`, destroyed when replaced.
+    icon: usize,
 }
 
 /// Physical pixels per logical pixel for the window's current display.
@@ -359,8 +440,181 @@ fn set_dark_title(hwnd: Hwnd, dark: bool) {
     }
 }
 
+/// The window size (frame included) for an inner size in logical pixels, at
+/// the window's DPI and with its current style.
+fn outer_size(hwnd: Hwnd, size: Size) -> Point {
+    let dpi = match unsafe { GetDpiForWindow(hwnd) } {
+        0 => 96,
+        dpi => dpi,
+    };
+    let inner = ScaleFactor::new(dpi as f64 / 96.0).to_physical(size);
+    let mut r = Rect {
+        left: 0,
+        top: 0,
+        right: inner.width as i32,
+        bottom: inner.height as i32,
+    };
+    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32;
+    unsafe { AdjustWindowRectExForDpi(&mut r, style, 0, 0, dpi) };
+    Point {
+        x: r.right - r.left,
+        y: r.bottom - r.top,
+    }
+}
+
+/// Re-apply the size limits by "resizing" to the current size: Windows clamps
+/// the new size through `WM_GETMINMAXINFO`.
+fn reapply_limits(hwnd: Hwnd) {
+    let mut r = Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    unsafe {
+        GetWindowRect(hwnd, &mut r);
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            r.right - r.left,
+            r.bottom - r.top,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Make the window borderless and cover its monitor, or put back the style and
+/// rectangle it had before.
+fn set_fullscreen(hwnd: Hwnd, fullscreen: bool) {
+    let saved = CTX.with(|c| c.borrow().restore);
+    match (fullscreen, saved) {
+        (true, None) => {
+            let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) };
+            let mut r = Rect {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            let mut info = MonitorInfo {
+                cb_size: core::mem::size_of::<MonitorInfo>() as u32,
+                rc_monitor: Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
+                rc_work: Rect {
+                    left: 0,
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                },
+                flags: 0,
+            };
+            let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+            if unsafe { GetWindowRect(hwnd, &mut r) } == 0
+                || unsafe { GetMonitorInfoW(monitor, &mut info) } == 0
+            {
+                return;
+            }
+            CTX.with(|c| {
+                c.borrow_mut().restore = Some((style, [r.left, r.top, r.right, r.bottom]));
+            });
+            let m = info.rc_monitor;
+            unsafe {
+                SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_OVERLAPPEDWINDOW as i32));
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(), // HWND_TOP
+                    m.left,
+                    m.top,
+                    m.right - m.left,
+                    m.bottom - m.top,
+                    SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                );
+            }
+        }
+        (false, Some((style, [left, top, right, bottom]))) => {
+            CTX.with(|c| c.borrow_mut().restore = None);
+            unsafe {
+                SetWindowLongW(hwnd, GWL_STYLE, style);
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    left,
+                    top,
+                    right - left,
+                    bottom - top,
+                    SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// An `HICON` from a straight-alpha RGBA image: 32-bit BGRA color bits, rows
+/// top first, plus a 1-bit AND mask (set where fully transparent) with rows
+/// padded to 16 bits.
+fn create_icon(icon: &crate::render::Pixmap) -> Handle {
+    let icon = fit_icon(icon, 256);
+    let size = icon.size();
+    let (w, h) = (size.width as usize, size.height as usize);
+    let (bgra, mask) = icon_bits(icon.as_bytes(), w, h);
+    unsafe {
+        CreateIcon(
+            GetModuleHandleW(std::ptr::null()),
+            w as i32,
+            h as i32,
+            1,
+            32,
+            mask.as_ptr(),
+            bgra.as_ptr(),
+        )
+    }
+}
+
+/// The color (BGRA) and AND-mask bytes for [`create_icon`].
+fn icon_bits(rgba: &[u8], w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
+    let stride = w.div_ceil(16) * 2;
+    let mut mask = vec![0u8; stride * h];
+    let mut bgra = Vec::with_capacity(rgba.len());
+    for (i, p) in rgba.as_chunks::<4>().0.iter().enumerate() {
+        bgra.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
+        if p[3] == 0 {
+            let (x, y) = (i % w, i / w);
+            mask[y * stride + x / 8] |= 0x80 >> (x % 8);
+        }
+    }
+    (bgra, mask)
+}
+
 unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult {
     match msg {
+        WM_SETCURSOR if (lp & 0xffff) as u16 == HTCLIENT => {
+            let id = CTX.with(|c| cursor_id(c.borrow().cursor));
+            unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), id)) };
+            1
+        }
+        WM_GETMINMAXINFO => {
+            let (min, max, fullscreen) = CTX.with(|c| {
+                let c = c.borrow();
+                (c.min_size, c.max_size, c.restore.is_some())
+            });
+            let info = unsafe { &mut *(lp as *mut MinMaxInfo) };
+            if let Some(min) = min {
+                info.min_track_size = outer_size(hwnd, min);
+            }
+            // A fullscreen window covers the monitor whatever its maximum.
+            if let Some(max) = max.filter(|_| !fullscreen) {
+                info.max_track_size = outer_size(hwnd, max);
+                info.max_size = outer_size(hwnd, max);
+            }
+            0
+        }
         WM_PAINT => {
             let mut ps: PaintStruct = unsafe { std::mem::zeroed() };
             let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
@@ -592,6 +846,38 @@ impl Window for WinWindow {
         let tree = crate::platform::uia::UiaTree::build(root);
         CTX.with(|c| c.borrow_mut().uia = Some(tree));
     }
+    fn set_cursor(&self, cursor: CursorIcon) {
+        CTX.with(|c| c.borrow_mut().cursor = cursor);
+        // The pointer is over the client area (we got here from a mouse move),
+        // so show it now rather than on the next `WM_SETCURSOR`.
+        unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), cursor_id(cursor))) };
+    }
+    fn set_min_size(&self, size: Option<Size>) {
+        CTX.with(|c| c.borrow_mut().min_size = size);
+        reapply_limits(self.hwnd);
+    }
+    fn set_max_size(&self, size: Option<Size>) {
+        CTX.with(|c| c.borrow_mut().max_size = size);
+        reapply_limits(self.hwnd);
+    }
+    fn set_maximized(&self, maximized: bool) {
+        let cmd = if maximized { SW_MAXIMIZE } else { SW_RESTORE };
+        unsafe { ShowWindow(self.hwnd, cmd) };
+    }
+    fn set_fullscreen(&self, fullscreen: bool) {
+        set_fullscreen(self.hwnd, fullscreen);
+    }
+    fn set_icon(&self, icon: Option<&crate::render::Pixmap>) {
+        let new = icon.map_or(std::ptr::null_mut(), create_icon);
+        unsafe {
+            SendMessageW(self.hwnd, WM_SETICON, ICON_BIG, new as Lparam);
+            SendMessageW(self.hwnd, WM_SETICON, ICON_SMALL, new as Lparam);
+        }
+        let old = CTX.with(|c| std::mem::replace(&mut c.borrow_mut().icon, new as usize));
+        if old != 0 {
+            unsafe { DestroyIcon(old as Handle) };
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -650,6 +936,12 @@ where
 
     let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
     let cursor = unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) };
+    // Size limits, read on `WM_GETMINMAXINFO` (first sent while creating).
+    CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        c.min_size = attrs.min_size;
+        c.max_size = attrs.max_size;
+    });
 
     let class = WndClassW {
         style: 0,
@@ -707,13 +999,24 @@ where
         (rect.bottom - rect.top).max(1) as u32,
     );
     let mut win = WinWindow { hwnd, size: client };
+    if let Some(icon) = attrs.icon.as_ref() {
+        win.set_icon(Some(icon));
+    }
 
     // Render the initial frame into the thread-local framebuffer.
     handler(Event::RedrawRequested, &win);
 
+    let show = if attrs.maximized {
+        SW_MAXIMIZE
+    } else {
+        SW_SHOW
+    };
     unsafe {
-        ShowWindow(hwnd, SW_SHOW);
+        ShowWindow(hwnd, show);
         UpdateWindow(hwnd);
+    }
+    if attrs.fullscreen {
+        set_fullscreen(hwnd, true);
     }
 
     // Message loop. The WndProc translates native messages into Stipple events
