@@ -50,6 +50,11 @@ const WM_RBUTTONUP: u32 = 0x0205;
 const WM_MBUTTONDOWN: u32 = 0x0207;
 const WM_MBUTTONUP: u32 = 0x0208;
 const WM_GETOBJECT: u32 = 0x003D;
+const WM_DPICHANGED: u32 = 0x02E0;
+const SWP_NOZORDER: u32 = 0x0004;
+const SWP_NOACTIVATE: u32 = 0x0010;
+/// `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2`.
+const PER_MONITOR_AWARE_V2: isize = -4;
 /// `lParam` value identifying UIA's request for our root fragment provider.
 const UIA_ROOT_OBJECT_ID: i32 = -25;
 
@@ -174,6 +179,10 @@ unsafe extern "system" {
         instance: Handle,
         param: *mut c_void,
     ) -> Hwnd;
+    fn SetProcessDpiAwarenessContext(context: isize) -> i32;
+    fn GetDpiForSystem() -> u32;
+    fn GetDpiForWindow(hwnd: Hwnd) -> u32;
+    fn SetWindowPos(hwnd: Hwnd, after: Hwnd, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
     fn ShowWindow(hwnd: Hwnd, cmd: i32) -> i32;
     fn UpdateWindow(hwnd: Hwnd) -> i32;
     fn DefWindowProcW(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult;
@@ -221,6 +230,16 @@ struct WinCtx {
     /// The current UIA provider tree, vended from `WM_GETOBJECT`. Rebuilt each
     /// time the App pushes a new accessibility tree.
     uia: Option<crate::platform::uia::UiaTree>,
+    /// The window's DPI. 0 until the window exists, which reads as 96 (1x).
+    dpi: u32,
+}
+
+/// Physical pixels per logical pixel for the window's current display.
+fn current_scale() -> f64 {
+    CTX.with(|c| match c.borrow().dpi {
+        0 => 1.0,
+        dpi => dpi as f64 / 96.0,
+    })
 }
 
 fn push_event(ev: Event) {
@@ -232,7 +251,9 @@ fn push_event(ev: Event) {
 fn mouse_xy(lp: Lparam) -> crate::geometry::Point {
     let x = (lp & 0xffff) as u16 as i16 as f64;
     let y = ((lp >> 16) & 0xffff) as u16 as i16 as f64;
-    crate::geometry::Point::new(x, y)
+    // Windows reports physical pixels under per-monitor DPI awareness.
+    let scale = current_scale();
+    crate::geometry::Point::new(x / scale, y / scale)
 }
 
 fn map_vk(vk: usize) -> Option<KeyCode> {
@@ -310,6 +331,25 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             let h = ((lp >> 16) & 0xffff) as u32;
             if w > 0 && h > 0 {
                 push_event(Event::Resized(PhysicalSize::new(w, h)));
+            }
+            0
+        }
+        WM_DPICHANGED => {
+            // wParam's low word is the new DPI; lParam is the suggested window
+            // rectangle. Moving there sends the WM_SIZE that re-renders.
+            let dpi = (wp & 0xffff) as u32;
+            CTX.with(|c| c.borrow_mut().dpi = dpi);
+            let r = unsafe { &*(lp as *const Rect) };
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    r.left,
+                    r.top,
+                    r.right - r.left,
+                    r.bottom - r.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
             }
             0
         }
@@ -400,7 +440,7 @@ impl Window for WinWindow {
         self.size
     }
     fn scale_factor(&self) -> ScaleFactor {
-        ScaleFactor::IDENTITY
+        ScaleFactor::new(current_scale())
     }
     fn request_redraw(&self) {
         unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
@@ -467,7 +507,11 @@ where
 {
     let class_name = wide("StippleWindowClass");
     let title = wide(&attrs.title);
-    let size = ScaleFactor::IDENTITY.to_physical(attrs.logical_size);
+    // Without this, Windows renders us at 96 DPI and stretches the blurry result.
+    // It fails harmlessly if the app's manifest already set an awareness.
+    unsafe { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) };
+    let system_dpi = unsafe { GetDpiForSystem() };
+    let size = ScaleFactor::new(system_dpi as f64 / 96.0).to_physical(attrs.logical_size);
 
     let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
     let cursor = unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) };
@@ -508,6 +552,8 @@ where
     if hwnd.is_null() {
         return Err(PlatformError::Os("CreateWindowExW failed".into()));
     }
+    // The window may have opened on a display with a different DPI to the system's.
+    CTX.with(|c| c.borrow_mut().dpi = unsafe { GetDpiForWindow(hwnd) });
     if let Some(dark) = attrs.dark {
         // Ask the desktop window manager for a title bar matching the content.
         let value = dark as i32;
@@ -533,7 +579,7 @@ where
         (rect.right - rect.left).max(1) as u32,
         (rect.bottom - rect.top).max(1) as u32,
     );
-    let win = WinWindow { hwnd, size: client };
+    let mut win = WinWindow { hwnd, size: client };
 
     // Render the initial frame into the thread-local framebuffer.
     handler(Event::RedrawRequested, &win);
@@ -559,6 +605,9 @@ where
         }
         let events: Vec<Event> = CTX.with(|c| std::mem::take(&mut c.borrow_mut().queue));
         for event in events {
+            if let Event::Resized(size) = event {
+                win.size = size;
+            }
             if handler(event, &win) == ControlFlow::Exit {
                 unsafe { DestroyWindow(hwnd) };
             }

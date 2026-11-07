@@ -127,6 +127,11 @@ unsafe fn msg_void(obj: Id, s: Sel) {
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     unsafe { f(obj, s) }
 }
+unsafe fn msg_f64(obj: Id, s: Sel) -> f64 {
+    let f: unsafe extern "C" fn(Id, Sel) -> f64 =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s) }
+}
 unsafe fn msg_id_id(obj: Id, s: Sel, a: Id) -> Id {
     let f: unsafe extern "C" fn(Id, Sel, Id) -> Id =
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
@@ -271,6 +276,8 @@ struct MacCtx {
     h: usize,
     view: Id,
     window: Id,
+    /// Physical pixels per point: the window's `backingScaleFactor`.
+    scale: f64,
     /// Accessible label exposed to NSAccessibility (the window title).
     a11y_label: String,
     /// The current accessibility tree (pushed each frame by the App). The view's
@@ -325,19 +332,18 @@ extern "C" fn draw_rect(_this: Id, _cmd: Sel, _dirty: CgRect) {
                 false,
                 0,
             );
+            // The context is in points; the framebuffer is in physical pixels.
+            let (width, height) = (c.w as f64 / c.scale, c.h as f64 / c.scale);
             let rect = CgRect {
                 origin: CgPoint { x: 0.0, y: 0.0 },
-                size: CgSize {
-                    width: c.w as f64,
-                    height: c.h as f64,
-                },
+                size: CgSize { width, height },
             };
             // The view is `isFlipped` (top-left origin), but CGContextDrawImage
             // interprets image data as Y=0-at-bottom, so without compensation
             // the framebuffer lands upside down. Flip the CTM around the draw —
             // the same fix the x11anywhere macOS backend uses.
             CGContextSaveGState(cg);
-            CGContextTranslateCTM(cg, 0.0, c.h as f64);
+            CGContextTranslateCTM(cg, 0.0, height);
             CGContextScaleCTM(cg, 1.0, -1.0);
             CGContextDrawImage(cg, rect, image);
             CGContextRestoreGState(cg);
@@ -569,7 +575,7 @@ impl Window for MacWindow {
         self.size
     }
     fn scale_factor(&self) -> ScaleFactor {
-        ScaleFactor::IDENTITY
+        ScaleFactor::new(CTX.with(|c| c.borrow().scale))
     }
     fn request_redraw(&self) {
         CTX.with(|c| {
@@ -698,10 +704,14 @@ where
         // use-after-free on `view`/`window`.
         msg_void_bool(window, sel("setReleasedWhenClosed:"), false);
         msg_void_id(window, sel("setDelegate:"), view);
+        // The window is laid out in points; the framebuffer is in physical pixels.
+        let scale = msg_f64(window, sel("backingScaleFactor"));
+        let size = ScaleFactor::new(scale).to_physical(attrs.logical_size);
         CTX.with(|c| {
             let mut c = c.borrow_mut();
             c.view = view;
             c.window = window;
+            c.scale = scale;
             // Expose the window title as the view's accessible label.
             c.a11y_label = attrs.title.clone();
         });
@@ -773,7 +783,9 @@ where
             let ev = next(app, next_sel, u64::MAX, distant_future, mode, true);
             if !ev.is_null() {
                 let etype = msg_u64(ev, sel("type"));
-                if let Some(event) = translate_event(etype, ev, last.height as f64)
+                // Positions stay in points, which are logical pixels.
+                let view_h = msg_rect(view, sel("bounds")).size.height;
+                if let Some(event) = translate_event(etype, ev, view_h)
                     && handler(event, &win) == ControlFlow::Exit
                 {
                     exit = true;
@@ -798,12 +810,18 @@ where
             }
 
             // Detect live-resize by polling the view bounds.
+            // The scale changes when the window moves to a display of another
+            // density, which also changes the physical size.
             let b = msg_rect(view, sel("bounds"));
-            let now =
-                PhysicalSize::new(b.size.width.max(1.0) as u32, b.size.height.max(1.0) as u32);
-            if now != last {
+            let scale = msg_f64(window, sel("backingScaleFactor"));
+            let now = PhysicalSize::new(
+                (b.size.width.max(1.0) * scale).round() as u32,
+                (b.size.height.max(1.0) * scale).round() as u32,
+            );
+            if now != last || scale != CTX.with(|c| c.borrow().scale) {
                 last = now;
                 win.size = now;
+                CTX.with(|c| c.borrow_mut().scale = scale);
                 handler(Event::Resized(now), &win);
             }
 
