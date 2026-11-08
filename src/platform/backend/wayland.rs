@@ -864,6 +864,62 @@ fn arg_str(buf: &mut Vec<u8>, s: &str) {
     }
 }
 
+/// Deliver drag-and-drop messages from the data device to the app, answering
+/// the drag source after each enter and move with what the app said through
+/// `set_drop_accepted`.
+fn deliver_dnd(
+    shared: &Shared,
+    win: &WaylandWindow,
+    messages: Vec<clipboard::DndMessage>,
+    handler: &mut dyn FnMut(Event, &dyn Window) -> ControlFlow,
+) -> ControlFlow {
+    use clipboard::DndMessage;
+    for message in messages {
+        let flow = match message {
+            DndMessage::Enter { x, y, offer } => {
+                let position = Point::new(x, y);
+                win.drop_accepted.set(false);
+                dbg(format_args!("dnd: enter at {position:?} {offer:?}"));
+                let flow = handler(Event::DragEnter { position, offer }, win);
+                clipboard::answer_drag(&mut shared.lock().unwrap(), win.drop_accepted.get());
+                flow
+            }
+            DndMessage::Motion { x, y } => {
+                let position = Point::new(x, y);
+                let was = win.drop_accepted.get();
+                let flow = handler(Event::DragOver { position }, win);
+                if win.drop_accepted.get() != was {
+                    clipboard::answer_drag(&mut shared.lock().unwrap(), win.drop_accepted.get());
+                }
+                flow
+            }
+            DndMessage::Leave => {
+                dbg(format_args!("dnd: leave"));
+                handler(Event::DragLeave, win)
+            }
+            DndMessage::Drop { x, y } => {
+                let data =
+                    clipboard::take_drop(&mut shared.lock().unwrap(), win.drop_accepted.get());
+                dbg(format_args!("dnd: drop {data:?}"));
+                match data {
+                    Some(data) => handler(
+                        Event::Drop {
+                            position: Point::new(x, y),
+                            data,
+                        },
+                        win,
+                    ),
+                    None => handler(Event::DragLeave, win),
+                }
+            }
+        };
+        if flow == ControlFlow::Exit {
+            return flow;
+        }
+    }
+    ControlFlow::Wait
+}
+
 /// Read a length-prefixed string from an event arg block at `off`, returning the
 /// text (without the trailing NUL) and the next offset (the string bytes are
 /// padded to a 4-byte boundary).
@@ -998,6 +1054,9 @@ struct WaylandWindow {
     icon_manager: Option<u32>,
     /// The icon's pixels, which must stay mapped while the compositor uses them.
     icon: RefCell<Option<ShmBuffer>>,
+    /// Whether the app takes the drag over the surface (see
+    /// `set_drop_accepted`).
+    drop_accepted: std::cell::Cell<bool>,
 }
 
 impl WaylandWindow {
@@ -1091,6 +1150,9 @@ impl Window for WaylandWindow {
     fn set_title(&self, _title: &str) {}
     fn clipboard(&self) -> Option<String> {
         clipboard::text(&mut self.conn.lock().unwrap())
+    }
+    fn set_drop_accepted(&self, accepted: bool) {
+        self.drop_accepted.set(accepted);
     }
     fn set_clipboard(&self, text: &str) {
         clipboard::set_text(&mut self.conn.lock().unwrap(), text);
@@ -1377,7 +1439,7 @@ where
     // The clipboard goes through the seat's data device.
     if let (Some(seat), Some((name, version))) = (seat, data_manager) {
         let manager = bind(&mut conn, name, "wl_data_device_manager", version);
-        clipboard::setup(&mut conn, manager, seat);
+        clipboard::setup(&mut conn, manager, version, seat);
     }
     // Input methods go through the seat's text input.
     if let (Some(seat), Some(name)) = (seat, text_input_name) {
@@ -1456,6 +1518,7 @@ where
         toplevel,
         icon_manager,
         icon: RefCell::new(icon),
+        drop_accepted: std::cell::Cell::new(false),
     };
 
     // Event loop. The keyboard/pointer are created when the seat advertises
@@ -1499,6 +1562,11 @@ where
                 None => conn.recv().map_err(os)?,
             };
             if clipboard::handle(&mut conn, message.0, message.1, &message.2) {
+                let dnd = std::mem::take(&mut conn.clip.dnd);
+                drop(conn);
+                if deliver_dnd(&shared, &win, dnd, &mut handler) == ControlFlow::Exit {
+                    break;
+                }
                 continue;
             }
             message
