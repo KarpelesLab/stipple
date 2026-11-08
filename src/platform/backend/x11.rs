@@ -1872,6 +1872,9 @@ fn keysym_to_event(ks: u32, state: ButtonState, modifiers: Modifiers) -> Option<
         0xffff => Some(KeyCode::Delete),
         // XK_F1 … XK_F12 are consecutive.
         0xffbe..=0xffc9 => Some(FUNCTION_KEYS[(ks - 0xffbe) as usize]),
+        // XK_Alt_L / XK_Alt_R, and XK_Meta_L / XK_Meta_R that Shift+Alt gives.
+        0xffe7..=0xffea => Some(KeyCode::Alt),
+        0xff67 => Some(KeyCode::ContextMenu), // XK_Menu
         _ => None,
     };
     if let Some(code) = code {
@@ -1888,9 +1891,10 @@ fn keysym_to_event(ks: u32, state: ButtonState, modifiers: Modifiers) -> Option<
     // 0x0100_0000 | codepoint, and the legacy keysyms (Latin-2, Greek,
     // Cyrillic, …) go through the keysym table.
     let c = crate::platform::compose::keysym_to_char(ks)?;
-    // With Ctrl/Meta held, a printable key is a shortcut (Ctrl+C, Ctrl+V, …),
-    // not text input — deliver it as a `Key` so the app can map it.
-    if modifiers.ctrl || modifiers.meta {
+    // With Ctrl/Meta/Alt held, a printable key is a shortcut (Ctrl+C, Alt+F,
+    // …), not text input — deliver it as a `Key` so the app can map it. AltGr
+    // is a different modifier (Mod5), so it still types.
+    if modifiers.ctrl || modifiers.meta || modifiers.alt {
         return Some(Event::Key {
             code: KeyCode::Char(c),
             state,

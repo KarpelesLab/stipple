@@ -41,7 +41,7 @@ pub struct Modifiers {
 /// This is deliberately a coarse subset for the scaffold; full physical/logical
 /// key mapping (à la the W3C UI Events `code`/`key` split) lands with real
 /// keyboard input in Phase 1.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum KeyCode {
     Enter,
@@ -71,6 +71,12 @@ pub enum KeyCode {
     F10,
     F11,
     F12,
+    /// Either Alt key (Option on macOS), pressed or released on its own. A
+    /// press and release with no other key in between focuses an in-window
+    /// menu bar.
+    Alt,
+    /// The context-menu ("Menu" / "Apps") key.
+    ContextMenu,
     /// A printable character key, identified by its base character.
     Char(char),
     /// Anything not yet mapped, carrying the backend's raw scancode.
@@ -134,6 +140,9 @@ pub enum Event {
     /// text to show at the caret, text to commit, or text to delete around the
     /// caret. See `docs/ime.md`.
     Ime(Ime),
+    /// The user picked the item with this id from the native menu bar (see
+    /// [`Window::set_menu_bar`](crate::platform::Window::set_menu_bar)).
+    MenuCommand(u32),
 }
 
 /// An update from an input method (Chinese, Japanese and Korean IMEs, and dead

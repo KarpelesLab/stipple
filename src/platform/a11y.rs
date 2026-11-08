@@ -674,6 +674,9 @@ fn role_name(role: u32) -> &'static str {
         44 => "push button",
         80 => "entry",
         29 => "label",
+        33 => "menu",
+        34 => "menu bar",
+        35 => "menu item",
         _ => "unknown",
     }
 }

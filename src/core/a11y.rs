@@ -67,6 +67,14 @@ pub enum Role {
     Separator,
     /// A transient notification (a toast): screen readers announce it.
     Alert,
+    /// A menu bar: a row of menu titles.
+    MenuBar,
+    /// An open menu (a dropdown, submenu or context menu) of
+    /// [`MenuItem`](Role::MenuItem)s.
+    Menu,
+    /// One command of a [`Menu`](Role::Menu), or a title in a
+    /// [`MenuBar`](Role::MenuBar).
+    MenuItem,
 }
 
 impl Role {
@@ -83,6 +91,8 @@ impl Role {
                 | Role::Tree
                 | Role::Toolbar
                 | Role::Alert
+                | Role::MenuBar
+                | Role::Menu
         )
     }
 }

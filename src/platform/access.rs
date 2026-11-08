@@ -40,6 +40,12 @@ pub enum A11yRole {
     Tree,
     /// One item of a tree.
     TreeItem,
+    /// A menu bar.
+    MenuBar,
+    /// An open menu.
+    Menu,
+    /// One item of a menu or menu bar.
+    MenuItem,
 }
 
 /// A node in the platform-neutral accessibility tree.

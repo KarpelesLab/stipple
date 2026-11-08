@@ -23,6 +23,7 @@ use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, WindowId};
 use crate::platform::input;
+use crate::platform::menu::{NativeMenuBar, NativeMenuItem};
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
@@ -81,6 +82,13 @@ const WM_THEMECHANGED: u32 = 0x031A;
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
 const WM_DPICHANGED: u32 = 0x02E0;
 const WM_QUIT: u32 = 0x0012;
+/// A menu item was picked (`HIWORD(wParam)` 0, `lParam` 0 for menus).
+const WM_COMMAND: u32 = 0x0111;
+const MF_STRING: u32 = 0x0000;
+const MF_GRAYED: u32 = 0x0001;
+const MF_CHECKED: u32 = 0x0008;
+const MF_POPUP: u32 = 0x0010;
+const MF_SEPARATOR: u32 = 0x0800;
 /// Posted by [`crate::platform::wake`] to end the message wait.
 const WM_APP_WAKE: u32 = 0x8000 + 1;
 const PM_REMOVE: u32 = 0x0001;
@@ -290,6 +298,12 @@ unsafe extern "system" {
     fn GetWindowLongW(hwnd: Hwnd, index: i32) -> i32;
     fn SetWindowLongW(hwnd: Hwnd, index: i32, value: i32) -> i32;
     fn GetWindowRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
+    fn CreateMenu() -> Handle;
+    fn CreatePopupMenu() -> Handle;
+    fn AppendMenuW(menu: Handle, flags: u32, id: usize, text: *const u16) -> i32;
+    fn SetMenu(hwnd: Hwnd, menu: Handle) -> i32;
+    fn DestroyMenu(menu: Handle) -> i32;
+    fn DrawMenuBar(hwnd: Hwnd) -> i32;
     fn MonitorFromWindow(hwnd: Hwnd, flags: u32) -> Handle;
     fn GetMonitorInfoW(monitor: Handle, info: *mut MonitorInfo) -> i32;
     fn AdjustWindowRectExForDpi(
@@ -350,6 +364,8 @@ struct WinCtx {
     ime_area: Option<Rect>,
     /// Pairs up `WM_CHAR`'s surrogates.
     utf16: input::Utf16Joiner,
+    /// The window's menu bar (`HMENU`), destroyed when replaced.
+    menu: usize,
 }
 
 /// Physical pixels per logical pixel for the window's current display.
@@ -387,12 +403,13 @@ fn modifiers() -> Modifiers {
     }
 }
 
-/// The key event for a `WM_(SYS)KEYDOWN`/`UP`: a named key, or — with Ctrl or
-/// the Windows key held — a letter/digit shortcut such as Ctrl+C, whose
-/// `WM_CHAR` is only a control code. Ctrl+Alt is AltGr, which types text.
+/// The key event for a `WM_(SYS)KEYDOWN`/`UP`: a named key, or — with Ctrl,
+/// Alt or the Windows key held — a letter/digit shortcut such as Ctrl+C, whose
+/// `WM_CHAR` is only a control code (Alt+F arrives as `WM_SYSCHAR`). Ctrl+Alt
+/// is AltGr, which types text.
 fn key_event(vk: usize, state: ButtonState) -> Option<Event> {
     let modifiers = modifiers();
-    let shortcut = (modifiers.ctrl && !modifiers.alt) || modifiers.meta;
+    let shortcut = modifiers.ctrl != modifiers.alt || modifiers.meta;
     let code = input::win32_vk(vk).or_else(|| {
         shortcut
             .then(|| input::win32_shortcut_char(vk, modifiers.shift))
@@ -412,6 +429,97 @@ thread_local! {
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Append `items` to the menu `menu`: `&` mnemonics pass through, and a
+/// shortcut shows right-aligned after a tab.
+fn fill_menu(menu: Handle, items: &[NativeMenuItem]) {
+    for item in items {
+        match item {
+            NativeMenuItem::Action {
+                id,
+                label,
+                shortcut,
+                enabled,
+                checked,
+            } => {
+                let mut text = label.clone();
+                if let Some(s) = shortcut {
+                    text.push('\t');
+                    text.push_str(&s.label_for(false));
+                }
+                let mut flags = MF_STRING;
+                if !enabled {
+                    flags |= MF_GRAYED;
+                }
+                if *checked == Some(true) {
+                    flags |= MF_CHECKED;
+                }
+                let text = wide(&text);
+                unsafe { AppendMenuW(menu, flags, *id as usize, text.as_ptr()) };
+            }
+            NativeMenuItem::Separator => unsafe {
+                AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+            },
+            NativeMenuItem::Submenu(sub) => {
+                let popup = unsafe { CreatePopupMenu() };
+                fill_menu(popup, &sub.items);
+                let text = wide(&sub.label);
+                unsafe { AppendMenuW(menu, MF_POPUP, popup as usize, text.as_ptr()) };
+            }
+        }
+    }
+}
+
+/// Give `hwnd` a menu bar for `bar`, replacing the previous one. The first one
+/// grows the window by the bar's height, so the client area keeps its size.
+fn set_menu_bar(hwnd: Hwnd, bar: &NativeMenuBar) {
+    let menu = unsafe { CreateMenu() };
+    for m in &bar.menus {
+        let popup = unsafe { CreatePopupMenu() };
+        fill_menu(popup, &m.items);
+        let text = wide(&m.label);
+        unsafe { AppendMenuW(menu, MF_POPUP, popup as usize, text.as_ptr()) };
+    }
+    let client = |hwnd| {
+        let mut r = Rect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe { GetClientRect(hwnd, &mut r) };
+        r.bottom - r.top
+    };
+    let before = client(hwnd);
+    unsafe { SetMenu(hwnd, menu) };
+    let old = CTX.with(|c| std::mem::replace(&mut c.borrow_mut().menu, menu as usize));
+    if old != 0 {
+        // Destroys its submenus too.
+        unsafe { DestroyMenu(old as Handle) };
+    } else {
+        let lost = before - client(hwnd);
+        let mut w = Rect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if lost > 0 && unsafe { GetWindowRect(hwnd, &mut w) } != 0 {
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    0,
+                    0,
+                    w.right - w.left,
+                    w.bottom - w.top + lost,
+                    SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            };
+        }
+    }
+    unsafe { DrawMenuBar(hwnd) };
 }
 
 /// Whether a `WM_SETTINGCHANGE` `lParam` (a NUL-terminated UTF-16 string, or
@@ -812,6 +920,12 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             }
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
+        // A pick from the menu bar. (Accelerator tables aren't used: the App
+        // matches shortcuts from the key events, as on every platform.)
+        WM_COMMAND if (wp >> 16) & 0xffff == 0 && lp == 0 => {
+            push_event(Event::MenuCommand((wp & 0xffff) as u32));
+            0
+        }
         WM_CLOSE => {
             push_event(Event::CloseRequested);
             0
@@ -899,6 +1013,10 @@ impl Window for WinWindow {
     }
     fn set_fullscreen(&self, fullscreen: bool) {
         set_fullscreen(self.hwnd, fullscreen);
+    }
+    fn set_menu_bar(&self, menu: &NativeMenuBar) -> bool {
+        set_menu_bar(self.hwnd, menu);
+        true
     }
     fn set_icon(&self, icon: Option<&crate::render::Pixmap>) {
         let new = icon.map_or(std::ptr::null_mut(), create_icon);

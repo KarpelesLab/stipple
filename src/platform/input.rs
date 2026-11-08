@@ -31,9 +31,11 @@ pub(crate) fn win32_vk(vk: usize) -> Option<KeyCode> {
         0x26 => KeyCode::ArrowUp,   // VK_UP
         0x27 => KeyCode::ArrowRight,
         0x28 => KeyCode::ArrowDown,
-        0x2D => KeyCode::Insert, // VK_INSERT
-        0x2E => KeyCode::Delete, // VK_DELETE
-        0x70 => KeyCode::F1,     // VK_F1 … VK_F12 are consecutive
+        0x2D => KeyCode::Insert,      // VK_INSERT
+        0x2E => KeyCode::Delete,      // VK_DELETE
+        0x12 => KeyCode::Alt,         // VK_MENU
+        0x5D => KeyCode::ContextMenu, // VK_APPS
+        0x70 => KeyCode::F1,          // VK_F1 … VK_F12 are consecutive
         0x71 => KeyCode::F2,
         0x72 => KeyCode::F3,
         0x73 => KeyCode::F4,
@@ -284,9 +286,75 @@ pub(crate) fn css_cursor(icon: CursorIcon) -> &'static str {
     }
 }
 
+/// An `NSMenuItem` key equivalent for `shortcut`: the `keyEquivalent` string
+/// and its `keyEquivalentModifierMask`. `None` for keys a menu can't show.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn mac_key_equivalent(shortcut: &crate::platform::Shortcut) -> Option<(String, u64)> {
+    let function = |n: u32| char::from_u32(0xF704 + n).map(String::from);
+    let key = match shortcut.key {
+        KeyCode::Char(c) => c.to_lowercase().collect(),
+        KeyCode::Space => " ".into(),
+        KeyCode::Enter => "\r".into(),
+        KeyCode::Escape => "\u{1b}".into(),
+        KeyCode::Backspace => "\u{8}".into(),
+        KeyCode::Tab => "\t".into(),
+        KeyCode::ArrowUp => "\u{F700}".into(),
+        KeyCode::ArrowDown => "\u{F701}".into(),
+        KeyCode::ArrowLeft => "\u{F702}".into(),
+        KeyCode::ArrowRight => "\u{F703}".into(),
+        KeyCode::Insert => "\u{F727}".into(),
+        KeyCode::Delete => "\u{F728}".into(),
+        KeyCode::Home => "\u{F729}".into(),
+        KeyCode::End => "\u{F72B}".into(),
+        KeyCode::PageUp => "\u{F72C}".into(),
+        KeyCode::PageDown => "\u{F72D}".into(),
+        KeyCode::F1 => function(0)?,
+        KeyCode::F2 => function(1)?,
+        KeyCode::F3 => function(2)?,
+        KeyCode::F4 => function(3)?,
+        KeyCode::F5 => function(4)?,
+        KeyCode::F6 => function(5)?,
+        KeyCode::F7 => function(6)?,
+        KeyCode::F8 => function(7)?,
+        KeyCode::F9 => function(8)?,
+        KeyCode::F10 => function(9)?,
+        KeyCode::F11 => function(10)?,
+        KeyCode::F12 => function(11)?,
+        KeyCode::Alt | KeyCode::ContextMenu | KeyCode::Unidentified(_) => return None,
+    };
+    let mut mask = 0;
+    if shortcut.shift {
+        mask |= 1 << 17; // NSEventModifierFlagShift
+    }
+    if shortcut.ctrl {
+        mask |= 1 << 18; // NSEventModifierFlagControl
+    }
+    if shortcut.alt {
+        mask |= 1 << 19; // NSEventModifierFlagOption
+    }
+    if shortcut.command {
+        mask |= 1 << 20; // NSEventModifierFlagCommand
+    }
+    Some((key, mask))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mac_key_equivalents() {
+        use crate::platform::Shortcut;
+        assert_eq!(
+            mac_key_equivalent(&Shortcut::cmd('S').shift()),
+            Some(("s".to_string(), (1 << 20) | (1 << 17)))
+        );
+        assert_eq!(
+            mac_key_equivalent(&Shortcut::key(KeyCode::F5)),
+            Some(("\u{F708}".to_string(), 0))
+        );
+        assert_eq!(mac_key_equivalent(&Shortcut::key(KeyCode::Alt)), None);
+    }
 
     #[test]
     fn win32_virtual_keys() {

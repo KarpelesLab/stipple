@@ -368,6 +368,32 @@ impl Element {
         self
     }
 
+    /// Give this element a context menu, opened at the pointer by a
+    /// right-click on it, or by the Menu key or Shift+F10 while the pointer is
+    /// over it. Picking an item runs its action against the app state. Stipple
+    /// draws the menu as an overlay on every platform.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// struct Notes { pinned: bool }
+    /// fn view(s: &Notes, cx: &mut Cx<Notes>) -> Element {
+    ///     let theme = *cx.theme();
+    ///     label(&theme, "Right-click me").context_menu(
+    ///         cx,
+    ///         Menu::new("")
+    ///             .item(MenuItem::new("Pin", |n: &mut Notes| n.pinned = true).enabled(!s.pinned))
+    ///             .item(MenuItem::new("Unpin", |n: &mut Notes| n.pinned = false).enabled(s.pinned)),
+    ///     )
+    /// }
+    /// # let theme = Theme::light();
+    /// # let mut cx = Cx::new(&theme);
+    /// # assert!(view(&Notes { pinned: false }, &mut cx).context.is_some());
+    /// ```
+    pub fn context_menu<S>(mut self, cx: &mut Cx<'_, S>, menu: crate::core::menu::Menu<S>) -> Self {
+        self.context = Some(cx.register_context_menu(menu));
+        self
+    }
+
     /// Make this element focusable and route keyboard input to `handler`.
     /// The handler receives a [`KeyInput`] (committed text or an editing key)
     /// while this element holds focus. Registers in `cx` and stamps the

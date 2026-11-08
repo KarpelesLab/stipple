@@ -280,6 +280,8 @@ fn evdev_to_event(code: u32, pressed: bool, modifiers: Modifiers) -> Option<Even
         59..=68 => Some(FUNCTION_KEYS[(code - 59) as usize]), // F1 … F10
         87 => Some(KeyCode::F11),
         88 => Some(KeyCode::F12),
+        56 => Some(KeyCode::Alt), // KEY_LEFTALT (right Alt is often AltGr)
+        127 => Some(KeyCode::ContextMenu), // KEY_COMPOSE, the Menu key
         _ => None,
     };
     if let Some(code) = key {
@@ -325,10 +327,10 @@ const FUNCTION_KEYS: [KeyCode; 12] = [
 ];
 
 /// The event for a printable character: a [`KeyCode::Char`] shortcut while
-/// Ctrl or the logo key is held (press and release), otherwise [`Event::Text`]
-/// on press only.
+/// Ctrl, Alt or the logo key is held (press and release), otherwise
+/// [`Event::Text`] on press only. AltGr is another modifier, so it still types.
 fn char_event(c: char, state: ButtonState, modifiers: Modifiers) -> Option<Event> {
-    if modifiers.ctrl || modifiers.meta {
+    if modifiers.ctrl || modifiers.meta || modifiers.alt {
         return Some(Event::Key {
             code: KeyCode::Char(c),
             state,
@@ -625,6 +627,8 @@ fn keysym_name_to_key(name: &str) -> Option<KeyCode> {
         "F10" => KeyCode::F10,
         "F11" => KeyCode::F11,
         "F12" => KeyCode::F12,
+        "Alt_L" | "Alt_R" | "Meta_L" | "Meta_R" => KeyCode::Alt,
+        "Menu" => KeyCode::ContextMenu,
         _ => return None,
     })
 }

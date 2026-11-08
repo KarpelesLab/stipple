@@ -148,6 +148,15 @@ pub enum Anchor {
     /// flips above when there's no room below, and is kept inside the window.
     /// Falls back to the window's top-left when no such element is laid out.
     Below(ActionId),
+    /// Place the overlay's top-left at a window point (a context menu at the
+    /// pointer), moved left or up as needed to keep it inside the window.
+    Popup(Point),
+    /// Place the overlay to the right of the element carrying this tap action,
+    /// top-aligned with it (a submenu beside its item), or to its left when
+    /// there's no room on the right. Kept inside the window. Falls back to the
+    /// window's top-left when no such element is laid out (in the main tree or
+    /// an earlier overlay).
+    RightOf(ActionId),
     /// Place the overlay against the window's edges: `horizontal` and
     /// `vertical` pick start, center or end (`Stretch` counts as start), inset
     /// by `margin` logical pixels (e.g. toasts in the bottom-right corner).
@@ -287,6 +296,9 @@ pub struct Cx<'a, S> {
     next_scroll: u32,
     /// Floating layers (menus/dialogs/…) declared this frame via [`Cx::overlay`].
     overlays: Vec<OverlaySpec>,
+    /// Context menus attached this frame with
+    /// [`Element::context_menu`](crate::core::Element::context_menu).
+    context_menus: Vec<(ContextId, crate::core::menu::Menu<S>)>,
     /// Cross-frame cache for [`Cx::memo`]: cached subtrees by key, plus the keys
     /// touched this frame (so stale entries can be evicted afterward).
     memo: HashMap<u64, Element>,
@@ -327,6 +339,7 @@ impl<'a, S> Cx<'a, S> {
             contexts: Vec::new(),
             next_scroll: 0,
             overlays: Vec::new(),
+            context_menus: Vec::new(),
             memo: HashMap::new(),
             memo_used: HashSet::new(),
             scroll_offsets: HashMap::new(),
@@ -420,6 +433,22 @@ impl<'a, S> Cx<'a, S> {
         let id = ContextId(self.contexts.len() as u32);
         self.contexts.push(Box::new(handler));
         id
+    }
+
+    /// Register `menu` as the context menu of an element, returning the
+    /// [`ContextId`] to stamp on it. The app opens it on a right-click (or the
+    /// Menu key) over the element. Prefer
+    /// [`Element::context_menu`](crate::core::Element::context_menu).
+    pub fn register_context_menu(&mut self, menu: crate::core::menu::Menu<S>) -> ContextId {
+        let id = self.register_context(|_, _| {});
+        self.context_menus.push((id, menu));
+        id
+    }
+
+    /// Take the context menus registered this frame (the app keeps the one
+    /// that is open). Call before [`into_handlers`](Cx::into_handlers).
+    pub fn take_context_menus(&mut self) -> Vec<(ContextId, crate::core::menu::Menu<S>)> {
+        std::mem::take(&mut self.context_menus)
     }
 
     /// Register a scroll container, returning a stable [`ScrollId`]. The app

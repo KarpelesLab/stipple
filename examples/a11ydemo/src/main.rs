@@ -40,6 +40,9 @@ fn atspi_role(role: stipple::core::Role) -> u32 {
         Role::ComboBox => 44,
         Role::SpinButton => 80,
         Role::Splitter | Role::Toolbar | Role::Separator | Role::Alert => 54,
+        Role::Menu => 33,     // ATSPI_ROLE_MENU
+        Role::MenuBar => 34,  // ATSPI_ROLE_MENU_BAR
+        Role::MenuItem => 35, // ATSPI_ROLE_MENU_ITEM
     }
 }
 

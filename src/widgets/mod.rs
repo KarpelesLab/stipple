@@ -15,6 +15,9 @@
 
 #![forbid(unsafe_code)]
 
+pub(crate) mod menus;
+#[cfg(test)]
+mod menus_tests;
 mod number;
 mod preedit;
 mod select;

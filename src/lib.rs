@@ -91,7 +91,20 @@ pub struct App<S> {
     // forwarded with viewport-local coordinates to the content process. `None`
     // = viewports are display-only and input routes to the Stipple chrome.
     viewport_input: Option<ViewportInputFn>,
+    // The menu bar, as a function of the state (see [`App::menu`]).
+    menu: Option<MenuFn<S>>,
+    // Draw the menu bar in the window even where a native one exists.
+    menu_in_window: bool,
+    // The menu bar last handed to the native backend, so it's only rebuilt on
+    // a change; and whether the backend turned out to have none.
+    native_menu: Option<crate::platform::NativeMenuBar>,
+    native_menu_unsupported: bool,
+    // Alt went down with no other key since: its release focuses the menu bar.
+    alt_armed: bool,
 }
+
+/// A menu bar declared as a function of the app state (see [`App::menu`]).
+pub type MenuFn<S> = std::rc::Rc<dyn Fn(&S) -> crate::core::MenuBar<S>>;
 
 /// A sink for input forwarded to an embedded viewport's content: receives the
 /// target [`ViewportId`] and a [`ViewportEvent`] (pointer/keys/wheel) in
@@ -266,6 +279,15 @@ struct Pane<S> {
     // The element showing input-method composition text, so it can be told to
     // drop it when focus moves away mid-composition.
     preedit_owner: Option<FocusId>,
+    // The menus Stipple draws for this window: which is open and highlighted.
+    menu_ui: std::rc::Rc<std::cell::RefCell<crate::widgets::menus::MenuUi>>,
+    // The menu bar to draw at the top of the window (the primary window, where
+    // the platform shows no native one).
+    menu_bar: Option<MenuFn<S>>,
+    // The elements with a context menu in the frame just built.
+    context_menu_ids: Vec<crate::core::ContextId>,
+    // The dismiss actions of the overlays' press-outside catchers.
+    catchers: Vec<ActionId>,
 }
 
 impl<S> std::fmt::Debug for App<S> {
@@ -278,7 +300,7 @@ impl<S> std::fmt::Debug for App<S> {
     }
 }
 
-impl<S> Pane<S> {
+impl<S: 'static> Pane<S> {
     /// Create a pane for `view` with default window attributes.
     fn new(view: ViewFn<S>, handle: AppHandle<S>) -> Self {
         Self {
@@ -313,11 +335,15 @@ impl<S> Pane<S> {
             painted_overlay_active: false,
             input_viewport: None,
             cursor: CursorIcon::Default,
+            menu_ui: Default::default(),
+            menu_bar: None,
+            context_menu_ids: Vec::new(),
+            catchers: Vec::new(),
         }
     }
 }
 
-impl<S> App<S> {
+impl<S: 'static> App<S> {
     /// Create an app from initial `state` and a primary-window `build` closure.
     pub fn new(state: S, build: impl FnMut(&S, &mut Cx<'_, S>) -> Element + 'static) -> Self {
         let handle = AppHandle::new();
@@ -329,6 +355,11 @@ impl<S> App<S> {
             viewport_content: HashMap::new(),
             viewport_input: None,
             handle,
+            menu: None,
+            menu_in_window: false,
+            native_menu: None,
+            native_menu_unsupported: false,
+            alt_armed: false,
         }
     }
 
@@ -419,6 +450,47 @@ impl<S> App<S> {
     /// application's Dock icon). See [`WindowAttributes::icon`].
     pub fn icon(mut self, icon: Pixmap) -> Self {
         self.primary().attrs.icon = Some(icon);
+        self
+    }
+
+    /// Declare the application's menu bar, as a function of the state: it is
+    /// rebuilt as the state changes, so labels and enabled and checked states
+    /// follow it. Picking an item (or pressing its shortcut, from any window)
+    /// runs its action against the state.
+    ///
+    /// macOS shows it as the native menu bar, with the standard application
+    /// menu (About, Hide, Quit) in front; Windows as the window's native menu
+    /// bar; elsewhere Stipple draws it across the top of the primary window.
+    /// See `docs/menus.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// struct Doc { dirty: bool }
+    /// let app = App::new(Doc { dirty: true }, |_: &Doc, cx: &mut Cx<Doc>| {
+    ///     let theme = *cx.theme();
+    ///     label(&theme, "Hello")
+    /// })
+    /// .menu(|doc: &Doc| {
+    ///     MenuBar::new().menu(
+    ///         Menu::new("&File").item(
+    ///             MenuItem::new("&Save", |d: &mut Doc| d.dirty = false)
+    ///                 .shortcut(Shortcut::cmd('s'))
+    ///                 .enabled(doc.dirty),
+    ///         ),
+    ///     )
+    /// });
+    /// ```
+    pub fn menu(mut self, menu: impl Fn(&S) -> crate::core::MenuBar<S> + 'static) -> Self {
+        let menu: MenuFn<S> = std::rc::Rc::new(menu);
+        self.panes[0].menu_bar = Some(menu.clone());
+        self.menu = Some(menu);
+        self
+    }
+
+    /// Draw the menu bar in the window, as on Linux, even on macOS and Windows
+    /// where the platform would show a native one.
+    pub fn menu_bar_in_window(mut self, in_window: bool) -> Self {
+        self.menu_in_window = in_window;
         self
     }
 
@@ -551,7 +623,7 @@ impl<S> App<S> {
     }
 }
 
-impl<S> Pane<S> {
+impl<S: 'static> Pane<S> {
     /// Rasterize a built `scene` into a `Pixmap` — through the custom
     /// [`render_with`](App::render_with) renderer if set, else the software path.
     fn rasterize(&mut self, scene: Scene, theme: &Theme, scale: ScaleFactor) -> Pixmap {
@@ -618,7 +690,27 @@ impl<S> Pane<S> {
             self.scroll_offsets.insert(id, offset.max(0.0));
         }
         cx.set_scroll_state(self.scroll_offsets.clone(), self.scroll_requests.clone());
-        let element = (self.view)(state, &mut cx);
+        let mut element = (self.view)(state, &mut cx);
+        // The menus Stipple draws: the menu bar above the view, and the open
+        // bar menu or context menu as overlays above everything else.
+        match self.menu_bar.clone() {
+            Some(menu) => {
+                let bar = menu(state);
+                element =
+                    crate::widgets::menus::with_bar(&mut cx, &theme, &bar, &self.menu_ui, element);
+            }
+            None => {
+                let mut ui = self.menu_ui.borrow_mut();
+                if matches!(ui.root, Some(crate::widgets::menus::MenuRoot::Bar(_)))
+                    || ui.bar_focus.is_some()
+                {
+                    ui.close();
+                }
+            }
+        }
+        let context_menus = cx.take_context_menus();
+        self.context_menu_ids = context_menus.iter().map(|(id, _)| *id).collect();
+        crate::widgets::menus::context(&mut cx, &theme, context_menus, &self.menu_ui);
         // The animation timeline, or `None` where there's no clock.
         let now = crate::platform::frame::now().map(|_| cx.frame_time());
         let frame_requested = cx.frame_requested();
@@ -664,6 +756,37 @@ impl<S> Pane<S> {
                         ((size.width - m.width) / 2.0).max(0.0),
                         ((size.height - m.height) / 2.0).max(0.0),
                     ),
+                    Anchor::Popup(p) => {
+                        // Flip left or up when the menu would cross the edge.
+                        let x = if p.x + m.width > size.width && p.x - m.width >= 0.0 {
+                            p.x - m.width
+                        } else {
+                            p.x.min(size.width - m.width)
+                        };
+                        let y = if p.y + m.height > size.height && p.y - m.height >= 0.0 {
+                            p.y - m.height
+                        } else {
+                            p.y.min(size.height - m.height)
+                        };
+                        Point::new(x.max(0.0), y.max(0.0))
+                    }
+                    Anchor::RightOf(id) => match roots.iter().find_map(|r| find_action(r, id)) {
+                        Some(node) => {
+                            let b = node.bounds;
+                            // Line the first row up with the item: back off the
+                            // panel's padding.
+                            let inset = 4.0;
+                            let x =
+                                if b.max_x() + m.width > size.width && b.min_x() - m.width >= 0.0 {
+                                    b.min_x() - m.width
+                                } else {
+                                    b.max_x().min(size.width - m.width)
+                                };
+                            let y = (b.min_y() - inset).min(size.height - m.height);
+                            Point::new(x.max(0.0), y.max(0.0))
+                        }
+                        None => Point::new(0.0, 0.0),
+                    },
                     Anchor::Below(id) => match find_action(&roots[0], id) {
                         Some(node) => {
                             let b = node.bounds;
@@ -703,16 +826,25 @@ impl<S> Pane<S> {
             LayoutNode::container(win, roots)
         };
         self.overlay_active = !overlays.is_empty();
+        self.catchers = overlays
+            .iter()
+            .filter(|o| o.modal || o.dismiss.is_some())
+            .filter_map(|o| o.dismiss)
+            .collect();
+        // A press-outside catcher covers the window: it takes clicks but
+        // shows no hover or press highlight.
+        let lit = |id: Option<ActionId>| id.filter(|id| !self.catchers.contains(id));
+        let (hovered, pressed) = (lit(self.hovered), lit(self.pressed));
         // Apply (and clamp) scroll-container offsets to the laid-out tree before
         // painting, so the retained tree matches what's drawn for event routing.
         crate::core::apply_scroll(&mut tree, &mut self.scroll_offsets);
-        crate::core::mark_native_states(&mut tree, self.hovered, self.pressed, self.focused);
+        crate::core::mark_native_states(&mut tree, hovered, pressed, self.focused);
         let mut scene = Scene::new(size);
         scene.set_scale(self.scale.get());
         paint(&tree, &mut scene, font);
         // Lighten the hovered tappable element with the theme's overlay, twice
         // over while pressed, fading between states.
-        self.highlights.update(self.hovered, self.pressed, now);
+        self.highlights.update(hovered, pressed, now);
         let overlay = theme.palette.hover_overlay;
         self.highlight_alphas = self
             .highlights
@@ -858,6 +990,13 @@ impl<S> Pane<S> {
     /// element's tap handler. Returns `true` if a tap handler ran.
     fn click_at(&mut self, state: &mut S, theme: &Theme, font: Option<&Font>, pos: Point) -> bool {
         self.ensure_tree(state, theme, font);
+        // With a bar menu open, a click on another title switches menus (and on
+        // its own title closes it) instead of landing on the dismiss catcher.
+        if let Some(index) = self.menu_title_at(pos) {
+            self.menu_ui.borrow_mut().toggle_bar(index);
+            self.dirty = true;
+            return true;
+        }
         let overlays = self.overlay_active;
         let focused = self.focused;
         let (hit, foc) = self
@@ -868,7 +1007,10 @@ impl<S> Pane<S> {
                 // focus where it was unless it lands on a focusable there.
                 let (layer, main) = press_layer(t, overlays, pos);
                 let foc = focus_at(layer, pos);
-                (hit_test(t, pos), if main { foc } else { foc.or(focused) })
+                (
+                    hit_test(layer, pos),
+                    if main { foc } else { foc.or(focused) },
+                )
             })
             .unwrap_or((None, None));
 
@@ -901,14 +1043,99 @@ impl<S> Pane<S> {
         pos: Point,
     ) -> bool {
         self.ensure_tree(state, theme, font);
-        let Some(id) = self.tree.as_ref().and_then(|t| context_at(t, pos)) else {
+        let Some(tree) = self.tree.as_ref() else {
             return false;
         };
-        let ran = self.handlers.dispatch_context(id, pos, state);
-        if ran {
+        // A right-click inside a menu or dialog looks there; one on a
+        // non-modal overlay's catcher (outside an open menu) closes the menu
+        // and looks in the main tree; a modal scrim blocks it.
+        let (layer, main) = press_layer(tree, self.overlay_active, pos);
+        let catcher = !main && layer.bounds == tree.bounds;
+        let target = match (catcher, layer.decoration.fill) {
+            (true, Some(_)) => None,
+            (true, None) => tree.children.first(),
+            (false, _) => Some(layer),
+        };
+        let id = target.and_then(|t| context_at(t, pos));
+        let closed = catcher && self.menu_ui.borrow().root.is_some();
+        if closed {
+            self.menu_ui.borrow_mut().close();
             self.dirty = true;
         }
-        ran
+        let Some(id) = id else {
+            return closed;
+        };
+        if self.context_menu_ids.contains(&id) {
+            self.menu_ui.borrow_mut().open_context(id, pos, false);
+        }
+        self.handlers.dispatch_context(id, pos, state);
+        self.dirty = true;
+        true
+    }
+
+    /// Open the context menu of the element under the pointer (or of the
+    /// focused element, below it) from the keyboard: the Menu key or
+    /// Shift+F10. Returns whether one opened.
+    fn context_by_key(&mut self, state: &mut S, theme: &Theme, font: Option<&Font>) -> bool {
+        self.ensure_tree(state, theme, font);
+        let Some(tree) = self.tree.as_ref() else {
+            return false;
+        };
+        let main = if self.overlay_active {
+            match tree.children.first() {
+                Some(main) => main,
+                None => return false,
+            }
+        } else {
+            tree
+        };
+        let pos = self.last_pointer;
+        let hit = context_at(main, pos).map(|id| (id, pos)).or_else(|| {
+            let node = find_focus(main, self.focused?)?;
+            Some((
+                node.context?,
+                Point::new(node.bounds.min_x(), node.bounds.max_y()),
+            ))
+        });
+        let Some((id, at)) = hit else {
+            return false;
+        };
+        if self.context_menu_ids.contains(&id) {
+            self.menu_ui.borrow_mut().open_context(id, at, true);
+        }
+        self.handlers.dispatch_context(id, at, state);
+        self.dirty = true;
+        true
+    }
+
+    /// The tap target at `pos`: in the topmost layer there, so a press inside
+    /// an overlay never falls through to its catcher or the tree below.
+    fn tap_at(&self, pos: Point) -> Option<ActionId> {
+        let tree = self.tree.as_ref()?;
+        hit_test(press_layer(tree, self.overlay_active, pos).0, pos)
+    }
+
+    /// With a bar menu open, the menu bar title under `pos`, if any.
+    fn menu_title_at(&self, pos: Point) -> Option<usize> {
+        let ui = self.menu_ui.borrow();
+        if !matches!(ui.root, Some(crate::widgets::menus::MenuRoot::Bar(_))) {
+            return None;
+        }
+        let tree = self.tree.as_ref()?;
+        ui.title_actions()
+            .position(|id| find_action(tree, id).is_some_and(|n| n.bounds.contains(pos)))
+    }
+
+    /// Whether the focused element edits text, so editing shortcuts (Ctrl+C,
+    /// Ctrl+Z…) go to it before the menu bar's.
+    fn focused_is_editable(&self) -> bool {
+        fn edits(n: &LayoutNode) -> bool {
+            n.text_pos.is_some() || n.children.iter().any(edits)
+        }
+        match (self.focused, self.tree.as_ref()) {
+            (Some(id), Some(tree)) => find_focus(tree, id).is_some_and(edits),
+            _ => false,
+        }
     }
 
     /// Deliver committed `text` to the focused element. Returns `true` if a
@@ -1141,10 +1368,27 @@ impl<S> Pane<S> {
         // The wheel targets the container under the pointer.
         self.last_pointer = pos;
         self.ensure_tree(state, theme, font);
-        let now = self.tree.as_ref().and_then(|t| hit_test(t, pos));
+        let now = self.tap_at(pos);
         let changed = now != self.hovered;
         self.hovered = now;
-        changed
+        // An open menu follows the pointer: rows highlight (opening their
+        // submenus), and bar titles switch menus.
+        let mut menu_changed = false;
+        if changed && let Some(id) = now {
+            menu_changed |= self.menu_ui.borrow_mut().hover(id);
+        }
+        let title = self.menu_title_at(pos);
+        if let Some(index) = title {
+            let mut ui = self.menu_ui.borrow_mut();
+            if ui.root != Some(crate::widgets::menus::MenuRoot::Bar(index)) {
+                ui.open_bar(index, false);
+                menu_changed = true;
+            }
+        }
+        if menu_changed {
+            self.dirty = true;
+        }
+        changed || menu_changed
     }
 
     /// Scroll the container under the last pointer position by `dy` logical
@@ -1192,7 +1436,7 @@ fn press_layer(tree: &LayoutNode, overlays: bool, pos: Point) -> (&LayoutNode, b
     }
 }
 
-impl<S> App<S> {
+impl<S: 'static> App<S> {
     /// Build, paint, and rasterize the primary window's next frame, returning
     /// the [`Pixmap`] and the [`Damage`] (changed region, logical pixels)
     /// relative to the previously returned frame. The first call reports
@@ -1447,6 +1691,9 @@ impl<S> App<S> {
                 Role::ColumnHeader => A11yRole::ColumnHeader,
                 Role::Tree => A11yRole::Tree,
                 Role::TreeItem => A11yRole::TreeItem,
+                Role::MenuBar => A11yRole::MenuBar,
+                Role::Menu => A11yRole::Menu,
+                Role::MenuItem => A11yRole::MenuItem,
                 // The OS bridges don't have these roles yet; report the
                 // closest one they do.
                 Role::ComboBox => A11yRole::Button,
@@ -1496,6 +1743,9 @@ impl<S> App<S> {
                        idx: usize,
                        window: &dyn crate::platform::Window,
                        force: bool| {
+            if idx == 0 {
+                app.sync_menu_bar(window);
+            }
             let App {
                 state,
                 theme,
@@ -1638,6 +1888,7 @@ impl<S> App<S> {
                     state: ButtonState::Pressed,
                     position,
                 } => {
+                    self.alt_armed = false;
                     // A press inside a viewport forwards to its content (button 0)
                     // and grabs key focus; a press elsewhere drops that focus.
                     if self.try_forward_pointer(idx, position, PointerKind::Down(0)) {
@@ -1645,10 +1896,7 @@ impl<S> App<S> {
                         return ControlFlow::Wait;
                     }
                     self.panes[idx].input_viewport = None;
-                    self.panes[idx].pressed = self.panes[idx]
-                        .tree
-                        .as_ref()
-                        .and_then(|t| hit_test(t, position));
+                    self.panes[idx].pressed = self.panes[idx].tap_at(position);
                     if self.panes[idx].pressed.is_some() {
                         // Repaint for the pressed look: the press highlight, or
                         // the OS's own for an OS-drawn control.
@@ -1707,10 +1955,7 @@ impl<S> App<S> {
                         self.panes[idx].end_drag();
                     } else {
                         let down = self.panes[idx].pressed.take();
-                        let up = self.panes[idx]
-                            .tree
-                            .as_ref()
-                            .and_then(|t| hit_test(t, position));
+                        let up = self.panes[idx].tap_at(position);
                         if down.is_some() && down == up {
                             self.pane_click_at(idx, position);
                         }
@@ -1723,6 +1968,11 @@ impl<S> App<S> {
                     ControlFlow::Wait
                 }
                 Event::Text(text) => {
+                    // An open menu takes typed letters as mnemonics.
+                    if self.menu_text(idx, &text) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                        return ControlFlow::Wait;
+                    }
                     // A viewport with input focus consumes typed text.
                     if self.try_forward_key(idx, KeyInput::Text(text.clone())) {
                         present(&mut self, &mut surfaces, idx, window, false);
@@ -1756,11 +2006,21 @@ impl<S> App<S> {
                     ControlFlow::Wait
                 }
                 Event::Key {
-                    code: KeyCode::Tab,
-                    state: ButtonState::Pressed,
+                    code: KeyCode::Alt,
+                    state: ButtonState::Released,
                     ..
                 } => {
-                    if self.pane_focus_next(idx) {
+                    if self.alt_release(idx) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::Key {
+                    code: KeyCode::Tab,
+                    state: ButtonState::Pressed,
+                    modifiers,
+                } => {
+                    if self.menu_key(idx, KeyCode::Tab, modifiers) || self.pane_focus_next(idx) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -1770,6 +2030,12 @@ impl<S> App<S> {
                     state: ButtonState::Pressed,
                     modifiers,
                 } => {
+                    // Menus first: an open menu, the menu bar's keys, context
+                    // menu keys and shortcuts.
+                    if self.menu_key(idx, code, modifiers) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                        return ControlFlow::Wait;
+                    }
                     if let Some(input) = map_key(code, modifiers) {
                         // A viewport with input focus consumes editing/navigation
                         // keys too (no clipboard sync — that's the content's job).
@@ -1845,6 +2111,16 @@ impl<S> App<S> {
                     present(&mut self, &mut surfaces, idx, window, true);
                     ControlFlow::Wait
                 }
+                Event::MenuCommand(id) => {
+                    if self.run_menu_command(id) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::FocusChanged(_) => {
+                    self.alt_armed = false;
+                    ControlFlow::Wait
+                }
                 Event::CloseRequested => {
                     // Close just this window; end the loop only when the last
                     // window goes away.
@@ -1861,6 +2137,242 @@ impl<S> App<S> {
             }
         });
     }
+}
+
+impl<S: 'static> App<S> {
+    /// Route a key press through the menus: an open menu or a focused menu bar
+    /// takes every key; then the menu bar's own keys (F10, Alt+letter), the
+    /// context-menu keys (Menu, Shift+F10) and the menu bar's shortcuts. Alt on
+    /// its own only arms [`alt_release`](Self::alt_release). Returns whether
+    /// the key was used.
+    fn menu_key(&mut self, idx: usize, code: KeyCode, mods: Modifiers) -> bool {
+        if code == KeyCode::Alt {
+            let pane = &self.panes[idx];
+            self.alt_armed = pane.menu_bar.is_some() || pane.menu_ui.borrow().is_active();
+            return false;
+        }
+        self.alt_armed = false;
+        if let Some(used) = self.menu_nav(idx, menu_key_of(code)) {
+            return used;
+        }
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            menu,
+            ..
+        } = self;
+        let font = font.as_ref();
+        let pane = &mut panes[idx];
+        let plain = !(mods.shift || mods.ctrl || mods.alt || mods.meta);
+        let has_bar = pane.menu_bar.is_some();
+        if code == KeyCode::F10 && plain && has_bar && pane.menu_ui.borrow_mut().focus_bar() {
+            pane.dirty = true;
+            return true;
+        }
+        let shift_only = mods.shift && !(mods.ctrl || mods.alt || mods.meta);
+        if (code == KeyCode::ContextMenu || (code == KeyCode::F10 && shift_only))
+            && pane.context_by_key(state, theme, font)
+        {
+            return true;
+        }
+        if has_bar
+            && mods.alt
+            && !(mods.ctrl || mods.meta)
+            && let KeyCode::Char(c) = code
+            && pane.menu_ui.borrow_mut().open_by_mnemonic(c)
+        {
+            pane.dirty = true;
+            return true;
+        }
+        // Shortcuts, unless the key edits the focused text (Ctrl+C in a field
+        // copies its selection rather than running Edit > Copy).
+        let Some(menu) = menu.clone() else {
+            return false;
+        };
+        if pane.focused_is_editable() && map_key(code, mods).is_some() {
+            return false;
+        }
+        let bar = menu(state);
+        match bar.find_shortcut(code, mods) {
+            Some(item) => {
+                item.activate(state);
+                for pane in panes.iter_mut() {
+                    pane.dirty = true;
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Typed text while a menu is open: its first character is a mnemonic.
+    fn menu_text(&mut self, idx: usize, text: &str) -> bool {
+        let key = text
+            .chars()
+            .next()
+            .and_then(|c| c.to_lowercase().next())
+            .map(crate::widgets::menus::MenuKey::Char);
+        self.alt_armed = false;
+        self.menu_nav(idx, key).unwrap_or(false)
+    }
+
+    /// Hand `key` to pane `idx`'s open menu or focused menu bar. `None` when no
+    /// menu is active there; otherwise whether the key was used (keys menus
+    /// don't navigate with are swallowed while one is open).
+    fn menu_nav(
+        &mut self,
+        idx: usize,
+        key: Option<crate::widgets::menus::MenuKey>,
+    ) -> Option<bool> {
+        use crate::widgets::menus::KeyResult;
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            ..
+        } = self;
+        let pane = &mut panes[idx];
+        if !pane.menu_ui.borrow().is_active() {
+            return None;
+        }
+        pane.ensure_tree(state, theme, font.as_ref());
+        let result = match key {
+            Some(key) => pane.menu_ui.borrow_mut().handle_key(key),
+            None => KeyResult::Handled,
+        };
+        match result {
+            KeyResult::Ignored => return Some(false),
+            KeyResult::Handled => pane.dirty = true,
+            KeyResult::Activate(id) => {
+                pane.handlers.dispatch(id, state);
+                for pane in panes.iter_mut() {
+                    pane.dirty = true;
+                }
+            }
+        }
+        Some(true)
+    }
+
+    /// Alt was released: if nothing else was pressed since it went down, focus
+    /// the menu bar (or leave the menus). Returns whether anything changed.
+    fn alt_release(&mut self, idx: usize) -> bool {
+        if !std::mem::take(&mut self.alt_armed) {
+            return false;
+        }
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            ..
+        } = self;
+        let pane = &mut panes[idx];
+        pane.ensure_tree(state, theme, font.as_ref());
+        let changed = {
+            let mut ui = pane.menu_ui.borrow_mut();
+            if ui.is_active() {
+                ui.close();
+                true
+            } else {
+                ui.focus_bar()
+            }
+        };
+        pane.dirty |= changed;
+        changed
+    }
+
+    /// Run the menu bar command with native id `id` (from
+    /// [`Event::MenuCommand`]). Returns whether it ran.
+    fn run_menu_command(&mut self, id: u32) -> bool {
+        let Some(menu) = self.menu.clone() else {
+            return false;
+        };
+        let ran = menu(&self.state).activate(id, &mut self.state);
+        if ran {
+            for pane in &mut self.panes {
+                pane.dirty = true;
+            }
+        }
+        ran
+    }
+
+    /// Hand the menu bar to `window` as a native one when it changed. Where
+    /// the platform shows it, the primary window stops drawing its own.
+    fn sync_menu_bar(&mut self, window: &dyn crate::platform::Window) {
+        if self.menu_in_window || self.native_menu_unsupported {
+            return;
+        }
+        let Some(menu) = self.menu.clone() else {
+            return;
+        };
+        let native = menu(&self.state).to_native(&self.panes[0].attrs.title);
+        if self.native_menu.as_ref() == Some(&native) {
+            return;
+        }
+        let shown = window.set_menu_bar(&native);
+        self.native_menu = Some(native);
+        self.native_menu_unsupported = !shown;
+        let pane = &mut self.panes[0];
+        if shown && pane.menu_bar.is_some() {
+            pane.menu_bar = None;
+            pane.dirty = true;
+        }
+    }
+
+    /// Press `code` with `modifiers` in the primary window, as a key event
+    /// from the platform would: menus and shortcuts first, then the focused
+    /// element (Tab moves focus). For tests and scripted input. Returns whether
+    /// anything handled it.
+    pub fn press_key_code(&mut self, code: KeyCode, modifiers: Modifiers) -> bool {
+        if self.menu_key(0, code, modifiers) {
+            return true;
+        }
+        if code == KeyCode::Tab {
+            return self.pane_focus_next(0);
+        }
+        map_key(code, modifiers).is_some_and(|input| self.pane_press_key(0, input))
+    }
+
+    /// Release `code` in the primary window: Alt released on its own focuses
+    /// the menu bar. Returns whether anything changed.
+    pub fn release_key_code(&mut self, code: KeyCode) -> bool {
+        code == KeyCode::Alt && self.alt_release(0)
+    }
+
+    /// Route a secondary (right) click at `pos` in the primary window: it opens
+    /// the context menu of the element there. Returns whether anything
+    /// handled it.
+    pub fn right_click_at(&mut self, pos: Point) -> bool {
+        self.pane_context_at(0, pos)
+    }
+
+    /// Run the menu bar command with native id `id`, as a pick from a native
+    /// menu bar does (see [`MenuBar::commands`](crate::core::MenuBar::commands)).
+    pub fn menu_command(&mut self, id: u32) -> bool {
+        self.run_menu_command(id)
+    }
+}
+
+/// The menu navigation key for `code`, if menus use it.
+fn menu_key_of(code: KeyCode) -> Option<crate::widgets::menus::MenuKey> {
+    use crate::widgets::menus::MenuKey;
+    Some(match code {
+        KeyCode::ArrowUp => MenuKey::Up,
+        KeyCode::ArrowDown => MenuKey::Down,
+        KeyCode::ArrowLeft => MenuKey::Left,
+        KeyCode::ArrowRight => MenuKey::Right,
+        KeyCode::Home => MenuKey::Home,
+        KeyCode::End => MenuKey::End,
+        KeyCode::Enter => MenuKey::Enter,
+        KeyCode::Escape => MenuKey::Escape,
+        KeyCode::Tab => MenuKey::Tab,
+        KeyCode::Space => MenuKey::Char(' '),
+        KeyCode::Char(c) => MenuKey::Char(c.to_lowercase().next()?),
+        _ => return None,
+    })
 }
 
 /// Translate a platform [`KeyCode`] (plus active `modifiers`) into a core
@@ -1931,8 +2443,10 @@ pub mod prelude {
         Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, TimerId,
         Track, View,
     };
+    pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut};
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::platform::{CursorIcon, WindowRequest};
+    pub use crate::platform::{KeyCode, Modifiers};
     pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg, TextDirection};
     pub use crate::style::Theme;
     pub use crate::style::{Palette, Spacing, Typography};

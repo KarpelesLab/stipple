@@ -275,6 +275,14 @@ pub trait Window {
     /// no-op. Implemented with `text-input-v3` on Wayland, IMM32 on Windows and
     /// `NSTextInputClient` on macOS.
     fn set_ime(&self, _state: Option<&ImeState>) {}
+    /// Show `menu` as the window's (on macOS, the application's) native menu
+    /// bar, replacing any earlier one. Picking an item delivers
+    /// [`Event::MenuCommand`](crate::platform::Event::MenuCommand) with its id.
+    /// Returns whether the platform shows it; if not (the default, and on
+    /// Linux, which has no native menu bar) the app draws one in the window.
+    fn set_menu_bar(&self, _menu: &crate::platform::menu::NativeMenuBar) -> bool {
+        false
+    }
 }
 
 /// Scale `icon` down (by area averaging) so neither side exceeds `max` pixels,
