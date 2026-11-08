@@ -42,6 +42,7 @@ public class OleDrop : IOleDropSource {
     static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hwnd, ref POINT p);
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
@@ -92,6 +93,19 @@ public class OleDrop : IOleDropSource {
         });
         mover.IsBackground = true;
         mover.Start();
+        // Report progress while DoDragDrop runs, to tell a loop that never
+        // turns (no QueryContinueDrag calls) from a target that never answers.
+        var watch = new System.Threading.Thread(() => {
+            for (int i = 1; ; i++) {
+                System.Threading.Thread.Sleep(1000);
+                POINT c;
+                GetCursorPos(out c);
+                Console.WriteLine("ole-drop: " + i + " s: " + src.calls + " QueryContinueDrag calls, feedback "
+                    + src.LastFeedback + ", cursor " + c.X + "," + c.Y);
+            }
+        });
+        watch.IsBackground = true;
+        watch.Start();
         DataObject data = files != null && files.Length > 0
             ? new DataObject(DataFormats.FileDrop, files)
             : new DataObject(DataFormats.UnicodeText, text);

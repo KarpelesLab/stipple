@@ -139,8 +139,9 @@ are only build-checked. Composing input methods (`UITextInput`) aren't
 supported yet.
 ²⁸ XDND on X11 and `wl_data_device` on Wayland, OLE `IDropTarget` (and
 `WM_DROPFILES`) on Windows, `NSDraggingDestination` on macOS. CI drops files and
-text on `dropdemo` with an XDND source on X11 and real OLE `DoDragDrop` on
-Windows, and drives the view's dragging methods with a stand-in drag on macOS.
+text on `dropdemo` with an XDND source on X11 and drives the view's dragging
+methods with a stand-in drag on macOS. Windows is build-checked: CI's real OLE
+`DoDragDrop` doesn't complete on the runner yet.
 Wayland is unit-tested against a scripted compositor only. See
 [drag-and-drop.md](drag-and-drop.md).
 ²⁹ Shared code, so the same everywhere; unit-tested, and CI drags a chip in

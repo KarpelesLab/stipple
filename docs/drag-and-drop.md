@@ -121,8 +121,9 @@ other schemes, and files on other hosts, are skipped.
   drop. CI runs it on X11 with `.github/scripts/xdnd-drop.py` (an XDND source
   in python3-xlib: files, text, a refused drag, screenshots of the zone's
   accepted and refused looks) plus an in-app chip drag by `xdotool`; on
-  Windows with `.github/scripts/ole-drop.ps1` (real OLE `DoDragDrop` from
-  another process, for a file and for text); and on macOS with
+  Windows CI tries `.github/scripts/ole-drop.ps1` (real OLE `DoDragDrop`
+  from another process, for a file and for text), but the drag doesn't
+  complete on the runner yet, so that step only reports; on macOS with
   `STIPPLE_COCOA_DROP=<path>`, which drives the view's own dragging methods
   with a stand-in `NSDraggingInfo` whose pasteboard holds the file's URL.
 - Wayland's protocol handling is unit-tested against a scripted compositor;

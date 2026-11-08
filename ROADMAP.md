@@ -984,9 +984,10 @@ Most input only works on X11 today.
   like pointer events, a `DropState` views read through `Cx::drop_state`
   (over, accepted, position, an eased level) to animate the drop zone, and
   `Element::drag_source` for drags inside the app. CI drops on `dropdemo` with
-  an XDND source on X11 and real OLE `DoDragDrop` on Windows, drives the view's
-  dragging methods with a stand-in drag on macOS, and drags a chip in-app on
-  X11; Wayland is unit-tested only. See
+  an XDND source on X11, drives the view's dragging methods with a stand-in
+  drag on macOS, and drags a chip in-app on X11. Windows is build-checked: CI
+  tries a real OLE `DoDragDrop` from another process, but it doesn't complete
+  on the runner yet. Wayland is unit-tested only. See
   [docs/drag-and-drop.md](docs/drag-and-drop.md).
 - ⬜ Dragging out of the app (a drag source for other applications).
 - ✅ Opening URLs and files in their default apps (`platform::open_url`,
