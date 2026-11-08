@@ -27,6 +27,7 @@ use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
 /// Pacing animation frames by the compositor (`DwmFlush`).
+mod ime;
 mod vsync;
 
 // ---- Win32 type aliases -----------------------------------------------------
@@ -344,6 +345,11 @@ struct WinCtx {
     restore: Option<(i32, [i32; 4])>,
     /// The `HICON` set with `WM_SETICON`, destroyed when replaced.
     icon: usize,
+    /// While a text field has focus: its caret, in client physical pixels,
+    /// where the IME's windows go. `None` while the IME is off.
+    ime_area: Option<Rect>,
+    /// Pairs up `WM_CHAR`'s surrogates.
+    utf16: input::Utf16Joiner,
 }
 
 /// Physical pixels per logical pixel for the window's current display.
@@ -748,16 +754,36 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         WM_CHAR => {
-            // wParam is a UTF-16 code unit; emit printable characters as text,
-            // unless the key went out as a shortcut from WM_KEYDOWN.
+            // wParam is a UTF-16 code unit (a character beyond the BMP comes
+            // as two); emit printable characters as text, unless the key went
+            // out as a shortcut from WM_KEYDOWN. A dead key followed by a
+            // letter arrives here already composed, from TranslateMessage.
             let m = modifiers();
             let shortcut = (m.ctrl && !m.alt) || m.meta;
-            if wp >= 0x20
+            let ch = CTX.with(|c| c.borrow_mut().utf16.push(wp as u16));
+            if let Some(ch) = ch
+                && !ch.is_control()
                 && !shortcut
-                && let Some(ch) = char::from_u32(wp as u32)
             {
                 push_event(Event::Text(ch.to_string()));
             }
+            0
+        }
+        // Input methods: we draw the composition inline, so the IME's own
+        // composition window stays hidden (see `ime`).
+        ime::WM_IME_SETCONTEXT => unsafe {
+            DefWindowProcW(hwnd, msg, wp, lp & !ime::ISC_SHOWUICOMPOSITIONWINDOW)
+        },
+        ime::WM_IME_STARTCOMPOSITION => {
+            ime::place_windows(hwnd);
+            0
+        }
+        ime::WM_IME_COMPOSITION => {
+            ime::composition(hwnd, lp);
+            0
+        }
+        ime::WM_IME_ENDCOMPOSITION => {
+            ime::end_composition();
             0
         }
         WM_GETOBJECT => {
@@ -849,6 +875,9 @@ impl Window for WinWindow {
         // Rebuild the UIA provider tree; `WM_GETOBJECT` hands its root to UIA.
         let tree = crate::platform::uia::UiaTree::build(root);
         CTX.with(|c| c.borrow_mut().uia = Some(tree));
+    }
+    fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
+        ime::set_state(self.hwnd, state);
     }
     fn set_cursor(&self, cursor: CursorIcon) {
         CTX.with(|c| c.borrow_mut().cursor = cursor);

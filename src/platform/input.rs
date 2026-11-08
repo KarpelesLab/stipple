@@ -79,6 +79,51 @@ pub(crate) fn win32_wheel(wp: usize, horizontal: bool) -> ScrollDelta {
     }
 }
 
+/// The byte offset in `s` of UTF-16 code-unit index `units`, as IMM32 and
+/// AppKit count positions in composition strings. An index inside a surrogate
+/// pair, or past the end, rounds up to the next char boundary.
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
+pub(crate) fn utf16_to_byte(s: &str, units: usize) -> usize {
+    let mut seen = 0;
+    for (i, c) in s.char_indices() {
+        if seen >= units {
+            return i;
+        }
+        seen += c.len_utf16();
+    }
+    s.len()
+}
+
+/// Joins the UTF-16 code units of `WM_CHAR`, which delivers a character
+/// outside the Basic Multilingual Plane (an emoji, a rare CJK ideograph) as two
+/// messages, one per surrogate.
+#[derive(Debug, Default)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) struct Utf16Joiner {
+    high: Option<u16>,
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+impl Utf16Joiner {
+    /// Feed one code unit; returns the character once it's complete.
+    pub(crate) fn push(&mut self, unit: u16) -> Option<char> {
+        match unit {
+            0xD800..=0xDBFF => {
+                self.high = Some(unit);
+                None
+            }
+            0xDC00..=0xDFFF => {
+                let high = self.high.take()?;
+                char::decode_utf16([high, unit]).next()?.ok()
+            }
+            _ => {
+                self.high = None;
+                char::from_u32(unit as u32)
+            }
+        }
+    }
+}
+
 // ---- AppKit -----------------------------------------------------------------
 
 /// Translate a macOS virtual key code (`-[NSEvent keyCode]`, the `kVK_*`
@@ -282,6 +327,25 @@ mod tests {
             win32_wheel(((-30i16) as u16 as usize) << 16, false).dy,
             10.0
         );
+    }
+
+    #[test]
+    fn utf16_positions_and_surrogates() {
+        // "a" (1 unit), "日" (1 unit, 3 bytes), "😀" (2 units, 4 bytes).
+        let s = "a日😀b";
+        assert_eq!(utf16_to_byte(s, 0), 0);
+        assert_eq!(utf16_to_byte(s, 1), 1);
+        assert_eq!(utf16_to_byte(s, 2), 4);
+        assert_eq!(utf16_to_byte(s, 3), 8); // inside the pair: rounds up
+        assert_eq!(utf16_to_byte(s, 4), 8);
+        assert_eq!(utf16_to_byte(s, 5), 9);
+        assert_eq!(utf16_to_byte(s, 99), 9);
+        let mut j = Utf16Joiner::default();
+        assert_eq!(j.push(0x61), Some('a'));
+        assert_eq!(j.push(0xD83D), None);
+        assert_eq!(j.push(0xDE00), Some('😀'));
+        // A lone low surrogate is dropped.
+        assert_eq!(j.push(0xDE00), None);
     }
 
     #[test]
