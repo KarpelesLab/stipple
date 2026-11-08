@@ -1,6 +1,6 @@
 [package]
 name = "bididemo"
-description = "Stipple example: right-to-left and bidirectional text (Hebrew, Arabic, mixed) in labels, a wrapped paragraph and editors."
+description = "Stipple example: right-to-left and bidirectional text (Hebrew, Arabic, mixed) in labels, a wrapped paragraph and editors, and a mirrored right-to-left UI (--mirror)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -349,7 +349,7 @@ jobs:
   # right-to-left rows are inked on the right and blank on the left (and the
   # left-to-right row the other way round), then click into the mixed editor
   # and Shift+Right across the direction change: the frame must change (caret
-  # and selection drawn).
+  # and selection drawn). Then the mirrored UI (bididemo --mirror): see below.
   visual-bidi:
     name: Visual test (Bidi text / X11)
     runs-on: ubuntu-latest
@@ -408,6 +408,51 @@ jobs:
           # Newer ImageMagick prints "4588 (0.0149)"; keep the leading count.
           diff_px=${diff_px%% *}
           [ "${diff_px%%.*}" -gt 100 ]
+
+      # The same demo with --mirror: a right-to-left UI (Theme::with_layout_
+      # direction). Rows 0-2 (a Latin heading, a checkbox + label, a switch +
+      # label) must be inked on the right only; the progress bar (row 3) and the
+      # selected first tab (row 5) must show the primary color at their right
+      # ends, not their left. Then a click near the right end of the slider
+      # (row 4) must set a low value, moving the knob to the right end.
+      - name: Launch the mirrored UI, check it, drag its slider
+        env:
+          DISPLAY: ":99"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          sleep 1
+          ./target/release/bididemo --mirror-check | tee visual_output/bidi-mirror-check.log
+          grep -q 'bididemo mirror: ok' visual_output/bidi-mirror-check.log
+          ./target/release/bididemo --mirror > visual_output/bidi-mirror.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          import -window root visual_output/root3.png
+          convert visual_output/root3.png -crop 640x480+0+0 +repage visual_output/stipple-x11-bidi-mirror.png
+          shot=visual_output/stipple-x11-bidi-mirror.png
+          region() { convert "$1" -crop "200x28+$2+$((24 + 36 * $3))" +repage -format '%k' info:; }
+          pixel() { convert "$1" -format "%[pixel:p{$2,$3}]" info:; }
+          for k in 0 1 2; do
+            echo "mirrored row $k: left=$(region $shot 24 $k) right=$(region $shot 416 $k)"
+            [ "$(region $shot 24 $k)" -eq 1 ]
+            [ "$(region $shot 416 $k)" -gt 2 ]
+          done
+          bar_r=$(pixel $shot 612 146); bar_l=$(pixel $shot 28 146)
+          tab_r=$(pixel $shot 612 218); tab_l=$(pixel $shot 28 218)
+          echo "bar right=$bar_r left=$bar_l; tab right=$tab_r left=$tab_l"
+          [ "$bar_r" = "$tab_r" ]
+          [ "$bar_l" != "$bar_r" ]
+          [ "$tab_l" != "$tab_r" ]
+          # The slider's right end (x 480..600, short of its rounded cap, around
+          # the track's middle) is plain track until the knob moves there.
+          knob() { convert "$1" -crop "120x6+480+179" +repage -format '%k' info:; }
+          echo "slider right end before: $(knob $shot) colors"
+          [ "$(knob $shot)" -eq 1 ]
+          xdotool mousemove 580 182 click 1
+          sleep 1
+          import -window root visual_output/root4.png
+          convert visual_output/root4.png -crop 640x480+0+0 +repage visual_output/stipple-x11-bidi-mirror-drag.png
+          echo "slider right end after: $(knob visual_output/stipple-x11-bidi-mirror-drag.png) colors"
+          [ "$(knob visual_output/stipple-x11-bidi-mirror-drag.png)" -gt 1 ]
 
       - name: Stop the app and Xvfb
         if: always()
@@ -1533,6 +1578,22 @@ jobs:
           .github\scripts\capture-window.ps1 .\target\release\window.exe visual_output\stipple-windows.png
           .github\scripts\capture-window.ps1 .\target\release\nativegallery.exe visual_output\stipple-windows-native.png
 
+      # A mirrored (right-to-left) UI: bididemo --mirror-check renders it off
+      # screen with the system font and checks it is laid out from the right
+      # (the same checks the X11 job makes on its screenshot); then a real
+      # window of it is screenshotted.
+      - name: Check the mirrored UI
+        shell: bash
+        run: |
+          cargo build --release -p bididemo
+          timeout 60 ./target/release/bididemo.exe --mirror-check | tee bidi-mirror.log
+          grep -q 'bididemo mirror: ok' bidi-mirror.log
+
+      - name: Screenshot the mirrored UI
+        shell: powershell
+        run: |
+          .github\scripts\capture-window.ps1 .\target\release\bididemo.exe visual_output\stipple-windows-bidi-mirror.png -Title "Stipple - mirrored UI" -Arguments "--mirror"
+
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()
@@ -2020,6 +2081,27 @@ jobs:
           screencapture -x -o -l "$win" visual_output/stipple-macos-native.png
           kill "$PID" 2>/dev/null || true
 
+      # A mirrored (right-to-left) UI: bididemo --mirror-check renders it off
+      # screen with the system font and checks it is laid out from the right
+      # (the same checks the X11 job makes on its screenshot); then a real
+      # window of it is screenshotted.
+      - name: Check and screenshot the mirrored UI
+        env:
+          # Prints the window number screencapture needs.
+          STIPPLE_COCOA_A11Y: "1"
+        run: |
+          cargo build --release -p bididemo
+          perl -e 'alarm 60; exec @ARGV' ./target/release/bididemo --mirror-check | tee bidi-mirror.log
+          grep -q 'bididemo mirror: ok' bidi-mirror.log
+          ./target/release/bididemo --mirror > visual_output/bidi-mirror.log 2>&1 &
+          PID=$!
+          sleep 5
+          cat visual_output/bidi-mirror.log
+          win=$(sed -n 's/^Cocoa window number: //p' visual_output/bidi-mirror.log)
+          [ -n "$win" ]
+          screencapture -x -o -l "$win" visual_output/stipple-macos-bidi-mirror.png
+          kill "$PID" 2>/dev/null || true
+
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()
@@ -2342,7 +2424,7 @@ jobs:
                       stipple-macos stipple-web stipple-gpu stipple-themes \
                       stipple-material3 stipple-x11-clicks stipple-x11-textinput \
                       stipple-windows-native stipple-macos-native stipple-ios-native \
-                      stipple-x11-native stipple-x11-bidi; do
+                      stipple-x11-native stipple-x11-bidi stipple-x11-bidi-mirror; do
             found=$(find artifacts -name "$name.png" | head -n 1)
             if [ -n "$found" ]; then cp "$found" "docs/screenshots/$name.png"; else echo "missing: $name"; fi
           done

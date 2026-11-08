@@ -1,8 +1,13 @@
 # Launch a Stipple example, screenshot just its window, and stop it.
-param([string]$Exe, [string]$Out)
+# -Arguments are passed to the example; -Title is its window title.
+param([string]$Exe, [string]$Out, [string]$Title = "Stipple", [string]$Arguments = "")
 
 New-Item -ItemType Directory -Force -Path (Split-Path $Out) | Out-Null
-$proc = Start-Process -FilePath $Exe -PassThru
+if ($Arguments) {
+  $proc = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
+} else {
+  $proc = Start-Process -FilePath $Exe -PassThru
+}
 Start-Sleep -Seconds 5
 Add-Type -AssemblyName System.Drawing
 Add-Type @"
@@ -19,8 +24,8 @@ public static class Win {
 "@
 [Win]::SetProcessDPIAware() | Out-Null
 # PowerShell turns $null into "" for a string parameter; this stays a real null.
-$hwnd = [Win]::FindWindowW([NullString]::Value, "Stipple")
-if ($hwnd -eq [IntPtr]::Zero) { throw "the Stipple window has no handle" }
+$hwnd = [Win]::FindWindowW([NullString]::Value, $Title)
+if ($hwnd -eq [IntPtr]::Zero) { throw "no window titled '$Title'" }
 [Win]::SetForegroundWindow($hwnd) | Out-Null
 Start-Sleep -Seconds 1
 $r = New-Object RECT
