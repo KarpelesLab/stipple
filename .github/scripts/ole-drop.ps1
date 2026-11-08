@@ -48,7 +48,7 @@ public class OleDrop : IOleDropSource {
     const uint MOUSEEVENTF_MOVE = 1, MOUSEEVENTF_LEFTDOWN = 2, MOUSEEVENTF_LEFTUP = 4;
 
     int calls;
-    POINT origin;
+    public POINT origin;
     public uint LastFeedback;
 
     // Called on every pass of DoDragDrop's loop (on mouse and key

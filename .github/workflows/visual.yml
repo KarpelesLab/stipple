@@ -1710,6 +1710,7 @@ jobs:
               -RedirectStandardOutput "visual_output\ole-$Name.log" `
               -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                 '.github\scripts\ole-drop.ps1', '-Title', '"Stipple drop demo"') + $DropArgs)
+            $null = $p.Handle  # keeps the exit code readable after it exits
             if (-not $p.WaitForExit(45000)) {
               Stop-Process -Id $p.Id -Force
               Write-Host "=== ole-drop ($Name) timed out ==="
