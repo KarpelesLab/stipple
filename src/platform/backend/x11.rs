@@ -42,6 +42,8 @@ use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
 /// The monitor refresh rate, which paces animation frames.
+/// Receiving drops (XDND).
+mod dnd;
 mod refresh;
 
 // ---- X11 protocol constants -------------------------------------------------
@@ -103,6 +105,7 @@ const X_KEY_RELEASE: u8 = 3;
 const X_CONFIGURE_NOTIFY: u8 = 22;
 const X_SELECTION_CLEAR: u8 = 29;
 const X_SELECTION_REQUEST: u8 = 30;
+const X_SELECTION_NOTIFY: u8 = 31;
 const X_CLIENT_MESSAGE: u8 = 33;
 /// Sent to every client when the keyboard mapping changes (a layout switch,
 /// `xmodmap`, or `xdotool` borrowing a spare keycode for a keysym).
@@ -879,6 +882,8 @@ struct Conn {
     atom_max_horz: u32,
     atom_fullscreen: u32,
     atom_net_wm_icon: u32,
+    /// The XDND atoms (0 until set).
+    xdnd: dnd::Atoms,
     /// The core `cursor` font, opened on first use (0 until then).
     cursor_font: u32,
     /// Cursors created so far, by glyph.
@@ -954,6 +959,7 @@ impl Conn {
             atom_max_horz: 0,
             atom_fullscreen: 0,
             atom_net_wm_icon: 0,
+            xdnd: dnd::Atoms::default(),
             cursor_font: 0,
             cursors: Vec::new(),
         })
@@ -1025,6 +1031,9 @@ struct X11Window {
     /// The minimum and maximum inner size, in logical pixels, last given to
     /// the window manager in `WM_NORMAL_HINTS`.
     limits: Cell<(Option<Size>, Option<Size>)>,
+    /// Whether the app takes the drag over the window, as last told through
+    /// `set_drop_accepted` (XDND answers the source with it).
+    drop_accepted: Cell<bool>,
 }
 
 impl std::fmt::Debug for Conn {
@@ -1123,6 +1132,9 @@ impl Window for X11Window {
         let mut conn = self.conn.lock().unwrap();
         let full = conn.atom_fullscreen;
         let _ = send_wm_state(&mut conn, self.window, fullscreen, full, 0);
+    }
+    fn set_drop_accepted(&self, accepted: bool) {
+        self.drop_accepted.set(accepted);
     }
     fn set_icon(&self, icon: Option<&Pixmap>) {
         let mut conn = self.conn.lock().unwrap();
@@ -1445,6 +1457,11 @@ fn create_window(
     if attrs.icon.is_some() {
         set_icon(conn, window, attrs.icon.as_ref()).map_err(os)?;
     }
+    // Take drops from other applications.
+    if conn.xdnd.aware != 0 {
+        let aware = conn.xdnd.aware;
+        set_property_atoms(conn, window, aware, &[dnd::VERSION]).map_err(os)?;
+    }
 
     // Set up MIT-SHM presentation before mapping (its handshake needs replies
     // that must not interleave with window events). Falls back to PutImage when
@@ -1484,6 +1501,7 @@ fn create_window(
         shm: RefCell::new(shm),
         reg,
         limits: Cell::new(limits),
+        drop_accepted: Cell::new(false),
     })
 }
 
@@ -1522,6 +1540,11 @@ where
     conn.atom_max_horz = intern_atom(&mut conn, b"_NET_WM_STATE_MAXIMIZED_HORZ").map_err(os)?;
     conn.atom_fullscreen = intern_atom(&mut conn, b"_NET_WM_STATE_FULLSCREEN").map_err(os)?;
     conn.atom_net_wm_icon = intern_atom(&mut conn, b"_NET_WM_ICON").map_err(os)?;
+    conn.xdnd = dnd::Atoms::intern(&mut conn).map_err(os)?;
+    let mut xdnd = dnd::Xdnd {
+        atoms: conn.xdnd,
+        ..Default::default()
+    };
     conn.scale = read_xft_scale(&mut conn).map_err(os)?;
     // Animation frames come from a timer at the monitor's refresh rate.
     if let Some(interval) = refresh::interval(&mut conn) {
@@ -1592,8 +1615,12 @@ where
             ));
             continue;
         }
-        // Route the event to the window it names (falling back to the first).
-        let xid = event_window(&buf);
+        // Route the event to the window it names (falling back to the first);
+        // a drop's data comes back to the window it was dropped on.
+        let xid = match buf[0] & 0x7f {
+            X_SELECTION_NOTIFY => xdnd.converting_window().unwrap_or(0),
+            _ => event_window(&buf),
+        };
         let idx = windows.iter().position(|w| w.window == xid).unwrap_or(0);
         let win = &windows[idx];
         let flow = match buf[0] & 0x7f {
@@ -1693,6 +1720,12 @@ where
                         None => ControlFlow::Wait,
                     },
                 }
+            }
+            X_CLIENT_MESSAGE if xdnd.atoms.is_xdnd(rd_u32(&buf, 8).unwrap_or(0)) => {
+                xdnd.client_message(&shared, &mut backlog, &buf, win, &mut handler)
+            }
+            X_SELECTION_NOTIFY => {
+                xdnd.selection_notify(&shared, &mut backlog, &buf, win, &mut handler)
             }
             X_CLIENT_MESSAGE => {
                 // data starts at byte 12; first 32-bit word is the protocol atom.
