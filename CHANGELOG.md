@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.2...stipple-v0.0.3) - 2026-11-08
+
+### Fixed
+
+- fix wrapped-text sizing, Wayland resize and the macOS title; publish screenshots
+
+### Other
+
+- *(windows)* report the OLE drop without failing the job, with progress lines
+- a click that only moves focus repaints; touchdemo waits for the keyboard
+- *(windows)* fix the OLE drop script's compile and exit code
+- *(windows)* drive the OLE drag with synthesized mouse input
+- a click or tap on a plain text field focuses it
+- *(windows)* keep the OLE drag loop turning and bound it in time
+- *(web)* the two-app screenshot is for the record; the selftest checks it renders
+- *(ios)* print the input part of the app's debug log and upload the logs
+- give the emulator 90 s to type a word
+- chain the iOS self-test's steps; log the app's debug output in CI
+- real-time multi-app web screenshot; timestamped debug logs and a patient widgets check
+- cache shaped runs per font, by text and size
+- *(scroll)* wait for wheel scrolling to settle before the mouse-drag check
+- drag and drop
+- drag and drop on X11 (XDND), Windows (OLE) and macOS (dragging methods)
+- windows, macos: receive drops
+- receive drops through wl_data_device
+- receive drops over XDND; dropdemo example and an XDND source script
+- drag-and-drop events, drop targets with readable drag-over state, in-app drags
+- touch scrolling and the iOS keyboard
+- android, ios: report every finger, and the iOS keyboard (UIKeyInput)
+- Event::Touch for every finger, and drag-to-scroll with fling in the toolkit
+- tray icons, notifications and opening URLs
+- traydemo, and CI checks for the tray, notifications and open_url
+- os integration: open_url, notifications and tray icons
+- mirrored right-to-left layouts
+- a mirrored UI (--mirror), checked in CI on X11, Windows and macOS
+- mirrored right-to-left layouts (LayoutDirection)
+- *(menus)* native context menus, mnemonic underlines, how menus are tested
+- *(menus)* drive the native menus on Windows and macOS, check Alt cues on X11
+- native context menus on macOS and Windows, underlined mnemonics
+- a looser spinner frame count, for slow headless Chrome in CI
+- web accessibility, input methods, theme and several apps
+- webdemo, ci(web): check IME, ARIA, the color scheme and a second app
+- ARIA overlay, IME and dead keys, prefers-color-scheme, several apps per page
+- checkbox and switch roles, a checked state, and every role in the platform tree
+- Phase 8, a rich animated reactive UI
+- update screenshots from CI
+- *(web)* run the selftest in real time and read its report from the server log
+- *(web)* a 60 s virtual-time budget for the selftest
+- poll the connection even when a wake is due
+- *(menus)* open File with Alt+F, since the runner's xdotool sends F10 with Alt held
+- update screenshots from CI
+- report web selftest errors, parse newer compare output, log App presses and presents
+- a real NativeActivity backend
+- menudemo, a Menus X11 visual check and docs/menus.md
+- a declarative menu model, native menu bars on macOS and Windows, a drawn one elsewhere, and context menus
+- docs, ci: input methods, dead keys and compose
+- NSTextInputClient on the view for input methods and dead keys
+- IMM32 input methods with inline composition
+- preedit and commit events, inline composition, and compose sequences on X11 and Wayland
+- bididemo, visual-bidi CI job and docs for bidirectional text
+- right-to-left and bidirectional layout and editing
+- update screenshots from CI
+- the web backend, and what works where
+- a real backend, with exports in the library
+- update screenshots from CI
+- ask only for more frames than the timer builds
+- *(x11)* diagnose the widgets demo by its own pid
+- understand keysyms named by value; asyncdemo: start the selftest's work once the loop runs
+- fix a timing-dependent hover test, relax the spinner frame count, log input
+- select, number input, split pane, toolbar and toast
+- display-driven frame clock and a turning spinner
+- virtualized lists, table and tree
+- size limits, maximize, fullscreen, icon and cursor shapes
+- wayland clipboard, and following theme changes live
+- update screenshots from CI
+- image and svg
+- grid, wrapping and min/max constraints
+- scroll, modifiers and more keys on Wayland, Windows and macOS
+- text editing: undo/redo, word movement, double-click selection
+- clipboard and file dialogs on Windows and macOS
+- update screenshots from CI
+- add AppHandle: timers and background work wake the event loop
+- update screenshots from CI
+- *(web)* install ImageMagick for the canvas check
+- record platform-fidelity work; plan Phase 7, app-ready parity
+- update screenshots from CI
+- make the repository root the stipple crate; the wasm target is an example
+- add platform guides, the native theme, high-DPI and CI
+- make the repository root the stipple crate; the wasm target is an example
+- run full-screen, and fill the safe area with the theme's background
+- update screenshots from CI
+- render at the display's scale; center text in its line
+- render at full resolution on high-DPI macOS and Windows
+- fill the screen at full resolution, add touch input; fix self-drawn widgets
+- update screenshots from CI
+- *(windows)* pass a real null class name to FindWindowW
+- add Theme::native: OS-drawn controls on Windows, macOS and iOS
+- *(windows)* find the window by title; a hidden start hid the app too
+- remove stray empty .log files and ignore *.log
+- *(readme)* add CI, crates.io, docs.rs and license badges
+- fix intra-doc links left over from the crate merge
+
 ### Added
 
 - Native context menus on macOS (`NSMenu`) and Windows (`TrackPopupMenuEx`):
