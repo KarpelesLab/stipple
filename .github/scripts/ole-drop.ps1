@@ -4,8 +4,8 @@
 #   powershell -File ole-drop.ps1 -Title "Stipple drop demo" -Text "hello"
 #
 # Runs DoDragDrop with our own IDropSource: it puts the cursor over the
-# window's client area at (-X, -Y), nudges it a few times so the target sees
-# DragEnter and DragOver, then answers DRAGDROP_S_DROP. The target's
+# window's client area at (-X, -Y), holds the left button and moves the mouse
+# with synthesized input so the target sees DragEnter and DragOver, then drops. The target's
 # IDropTarget receives the drop exactly as from Explorer. Prints the effect
 # the target chose; exits 1 when it refused (effect none) or on error.
 # Windows PowerShell (5.1) runs scripts in an STA, which OLE needs.
@@ -44,6 +44,8 @@ public class OleDrop : IOleDropSource {
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
+    const uint MOUSEEVENTF_MOVE = 1, MOUSEEVENTF_LEFTDOWN = 2, MOUSEEVENTF_LEFTUP = 4;
 
     int calls;
     POINT origin;
@@ -53,12 +55,10 @@ public class OleDrop : IOleDropSource {
     // messages): move along, then drop.
     public int QueryContinueDrag(int esc, uint keys) {
         calls++;
-        if (calls < 12) {
-            SetCursorPos(origin.X + calls, origin.Y);
-            System.Threading.Thread.Sleep(30);
-            return 0; // S_OK: keep dragging
-        }
-        return 0x00040100; // DRAGDROP_S_DROP
+        if (esc != 0) return 0x00040101; // DRAGDROP_S_CANCEL
+        // Drop once the button is up (MK_LBUTTON clear) or after enough moves.
+        if ((keys & 1) == 0 || calls >= 12) return 0x00040100; // DRAGDROP_S_DROP
+        return 0; // S_OK: keep dragging
     }
 
     public int GiveFeedback(uint effect) {
@@ -77,21 +77,26 @@ public class OleDrop : IOleDropSource {
         ClientToScreen(hwnd, ref p);
         var src = new OleDrop { origin = p };
         SetCursorPos(p.X, p.Y);
-        // DoDragDrop only consults the source when a mouse or key message
-        // arrives, and nothing moves the mouse on a CI desktop: nudge the
-        // cursor from another thread so its loop keeps turning.
-        var jiggle = new System.Threading.Thread(() => {
-            for (int i = 0; i < 400; i++) {
-                System.Threading.Thread.Sleep(50);
-                SetCursorPos(src.origin.X + src.calls + (i & 1), src.origin.Y);
+        // DoDragDrop runs on real input: hold the left button (as a user who
+        // started a drag would), and from another thread move the mouse a
+        // little at a time, then let go. Each mouse message turns its loop,
+        // which asks QueryContinueDrag below; the button's release ends the
+        // drag with a drop even if the source hasn't said so yet.
+        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+        var mover = new System.Threading.Thread(() => {
+            for (int i = 0; i < 20; i++) {
+                System.Threading.Thread.Sleep(60);
+                mouse_event(MOUSEEVENTF_MOVE, (i & 1) == 0 ? 2 : -1, 0, 0, UIntPtr.Zero);
             }
+            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
         });
-        jiggle.IsBackground = true;
-        jiggle.Start();
+        mover.IsBackground = true;
+        mover.Start();
         DataObject data = files != null && files.Length > 0
             ? new DataObject(DataFormats.FileDrop, files)
             : new DataObject(DataFormats.UnicodeText, text);
         uint effect;
+        Console.WriteLine("ole-drop: dragging from " + p.X + "," + p.Y);
         hr = DoDragDrop(data, src, 1 | 2 | 4, out effect);
         Console.WriteLine("ole-drop: DoDragDrop 0x" + hr.ToString("x") + " effect " + effect
             + " (last feedback " + src.LastFeedback + ", " + src.calls + " passes)");
