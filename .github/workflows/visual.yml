@@ -1742,6 +1742,10 @@ jobs:
           # nested AXStaticText descendants — proving the whole hierarchy is exposed.
           grep -q "Cocoa a11y: children=1" visual_output/macos.log
           grep -q "role=AXStaticText label=Welcome to Stipple" visual_output/macos.log
+          # The view is an NSTextInputClient with an input context, and marked
+          # text then an insert (as an IME sends them) become preedit and commit.
+          grep -q "Cocoa ime: conforms=true context=true marked=true" visual_output/macos.log
+          grep -qF 'Ime(Preedit { text: "にほん", cursor: Some((9, 9)) }), Ime(Commit("日本"))' visual_output/macos.log
 
       - name: Stop the app
         if: always()

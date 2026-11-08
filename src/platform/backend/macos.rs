@@ -27,6 +27,7 @@ use crate::render::{Pixmap, Surface};
 
 /// Pacing animation frames by the display (`CVDisplayLink`).
 mod display_link;
+mod text_input;
 
 // ---- Objective-C runtime + framework FFI ------------------------------------
 
@@ -472,6 +473,14 @@ struct MacCtx {
     /// The cursor the app asked for, set again on each mouse move over the
     /// view (AppKit resets it at the window's edges and title bar).
     cursor: CursorIcon,
+    /// The focused text field, for the input method (see `text_input`).
+    ime: Option<crate::platform::ImeState>,
+    /// The input method's marked (composition) text.
+    marked: String,
+    /// Events the `NSTextInputClient` callbacks produced during a key-down.
+    ime_events: Vec<Event>,
+    /// Whether the key-down being interpreted was a command, not text.
+    ime_command: bool,
 }
 
 // Cocoa is single-threaded (main thread); the backend runs there.
@@ -813,6 +822,7 @@ fn register_view_class() -> Class {
             acc_children as *const c_void,
             id_types.as_ptr(),
         );
+        text_input::add_methods(cls);
         objc_registerClassPair(cls);
         cls
     }
@@ -824,6 +834,9 @@ struct MacWindow {
 }
 
 impl Window for MacWindow {
+    fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
+        text_input::set_state(state);
+    }
     fn id(&self) -> WindowId {
         WindowId(1)
     }
@@ -1028,6 +1041,8 @@ where
         // (the app scrolls what's under the last pointer position), need it.
         msg_void_bool(window, sel("setAcceptsMouseMovedEvents:"), true);
         msg_void_id(window, sel("setDelegate:"), view);
+        // The view takes key events, so its input context is the active one.
+        msg_id_id(window, sel("makeFirstResponder:"), view);
         // The window is laid out in points; the framebuffer is in physical pixels.
         let scale = msg_f64(window, sel("backingScaleFactor"));
         let size = ScaleFactor::new(scale).to_physical(attrs.logical_size);
@@ -1084,6 +1099,7 @@ where
                 msg_u64(children, sel("count"))
             };
             println!("Cocoa a11y: children={n}");
+            println!("Cocoa ime: {}", text_input::self_check(view));
             for i in 0..n {
                 let child = msg_id_u64(children, sel("objectAtIndex:"), i);
                 dump_ax(child, 1);
@@ -1141,15 +1157,28 @@ where
                 let etype = msg_u64(ev, sel("type"));
                 // Positions stay in points, which are logical pixels.
                 let view_h = msg_rect(view, sel("bounds")).size.height;
-                if let Some(event) = translate_event(etype, ev, view_h)
-                    && handler(event, &win) == ControlFlow::Exit
-                {
-                    exit = true;
-                }
-                // Forward to AppKit (drawing, window controls) unless we're
-                // exiting on this event.
-                if !exit {
-                    msg_void_id(app, sel("sendEvent:"), ev);
+                // With a text field focused, key-downs go through the input
+                // method instead (and not on to AppKit: we've handled them).
+                let ime = if etype == NS_KEY_DOWN {
+                    text_input::key_down(view, ev)
+                } else {
+                    None
+                };
+                if let Some(events) = ime {
+                    exit = events
+                        .into_iter()
+                        .any(|event| handler(event, &win) == ControlFlow::Exit);
+                } else {
+                    if let Some(event) = translate_event(etype, ev, view_h)
+                        && handler(event, &win) == ControlFlow::Exit
+                    {
+                        exit = true;
+                    }
+                    // Forward to AppKit (drawing, window controls) unless we're
+                    // exiting on this event.
+                    if !exit {
+                        msg_void_id(app, sel("sendEvent:"), ev);
+                    }
                 }
                 // Keep the app's cursor over the content: AppKit resets it at
                 // the window's edges and title bar.
