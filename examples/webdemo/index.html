@@ -18,12 +18,16 @@
       import { start } from "./stipple.js";
 
       const selftest = location.hash === "#selftest";
+      // CI reads the report from the server's request log: a GET of
+      // `selftest-report?<report>` (a 404, but logged).
+      const send = (text) => fetch(`selftest-report?${encodeURIComponent(text)}`).catch(() => {});
       // A failure (a wasm trap, a rejected promise) goes into the report, so
       // CI shows why the selftest stopped instead of an empty report.
       const fail = (what) => {
         const report = document.getElementById("report");
         report.textContent += `SELFTEST: FAILED (${what})\n`;
         console.log(`selftest error: ${what}`);
+        send(report.textContent);
       };
       if (selftest) {
         window.addEventListener("error", (ev) => fail(ev.message || ev.error));
@@ -132,6 +136,7 @@
           .map(([k, c]) => `${c.ok ? "ok    " : "FAILED"} ${k}: ${c.detail}`).join("\n");
         console.log(report);
         document.getElementById("report").textContent = report;
+        send(report);
         document.title = `selftest ${ok ? "ok" : "FAILED"}`;
       }
 

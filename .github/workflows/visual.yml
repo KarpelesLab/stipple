@@ -1623,25 +1623,33 @@ jobs:
 
       - name: Serve, run the selftest, and screenshot with headless Chrome
         run: |
-          python3 -m http.server 8000 --directory site &
+          python3 -m http.server 8000 --directory site > server.log 2>&1 &
           echo "SRV_PID=$!" >> "$GITHUB_ENV"
           sleep 2
           chrome() {
-            # A generous budget: on a slow runner the selftest outlasted 20 s of
-            # virtual time, leaving an empty report. Idle time passes instantly.
-            timeout 240 google-chrome --headless=new --no-sandbox --disable-gpu \
-              --hide-scrollbars --window-size=700,420 --virtual-time-budget=60000 "$@"
+            timeout 120 google-chrome --headless=new --no-sandbox --disable-gpu \
+              --hide-scrollbars --window-size=700,420 "$@"
           }
-          # The selftest at a pixel ratio of 2, so HiDPI is checked too. It
-          # writes its report into the page, which --dump-dom prints.
-          chrome --force-device-scale-factor=2 --dump-dom \
-            "http://localhost:8000/index.html#selftest" > dom.html || true
-          sed -n '/<pre id="report">/,/<\/pre>/p' dom.html | tee visual_output/web-selftest.txt
-          grep -q "SELFTEST: ok" dom.html
+          # The selftest, at a pixel ratio of 2 so HiDPI is checked too, in real
+          # time: under --virtual-time-budget its animation frames could stall
+          # and the report never came. The page sends the report as a GET of
+          # selftest-report?<report>, which the server's log records.
+          chrome --force-device-scale-factor=2 --remote-debugging-port=9222 \
+            "http://localhost:8000/index.html#selftest" > chrome.log 2>&1 &
+          CHROME=$!
+          for i in $(seq 1 90); do
+            grep -q "GET /selftest-report?" server.log && break
+            sleep 1
+          done
+          kill "$CHROME" 2>/dev/null || true
+          line=$(grep -o "GET /selftest-report?[^ ]*" server.log | head -1)
+          python3 -c 'import sys, urllib.parse; print(urllib.parse.unquote(sys.argv[1].partition("?")[2]))' \
+            "$line" | tee visual_output/web-selftest.txt
+          grep -q "SELFTEST: ok" visual_output/web-selftest.txt
           # The screenshot, after the selftest's clicks (counter at 2, a file
           # opened). A blank canvas means the page never ran the wasm, so
           # require real content.
-          chrome --screenshot="$PWD/visual_output/stipple-web.png" \
+          chrome --virtual-time-budget=20000 --screenshot="$PWD/visual_output/stipple-web.png" \
             "http://localhost:8000/index.html#selftest"
           echo "Captured:"; identify visual_output/stipple-web.png
           colors=$(convert visual_output/stipple-web.png -format '%k' info:)
