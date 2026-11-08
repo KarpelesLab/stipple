@@ -1627,8 +1627,10 @@ jobs:
           echo "SRV_PID=$!" >> "$GITHUB_ENV"
           sleep 2
           chrome() {
-            timeout 120 google-chrome --headless=new --no-sandbox --disable-gpu \
-              --hide-scrollbars --window-size=700,420 --virtual-time-budget=20000 "$@"
+            # A generous budget: on a slow runner the selftest outlasted 20 s of
+            # virtual time, leaving an empty report. Idle time passes instantly.
+            timeout 240 google-chrome --headless=new --no-sandbox --disable-gpu \
+              --hide-scrollbars --window-size=700,420 --virtual-time-budget=60000 "$@"
           }
           # The selftest at a pixel ratio of 2, so HiDPI is checked too. It
           # writes its report into the page, which --dump-dom prints.
