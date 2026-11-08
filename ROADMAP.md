@@ -974,6 +974,56 @@ Most input only works on X11 today.
 - ⬜ The web: IME and dead keys, following `prefers-color-scheme`, and more
   than one app per page.
 
+### Phase 8 — A rich, animated, reactive UI
+*Goal: interfaces that respond to everything the user does, with motion, and
+without hand-written frame bookkeeping in every view. Example: a drop area that
+grows and glows while a file is dragged over it, tints red when the payload
+isn't accepted, and springs back when the drag leaves or the file lands.*
+
+Today a view can animate, but only by sampling `Tween` / `Spring` at
+`Cx::frame_time()` itself and calling `Cx::request_frame()`; only hover and
+press highlights animate on their own. Phase 8 makes motion and state-driven
+styling part of the toolkit.
+
+- ⬜ Interaction states as values a view can read and style from: hovered,
+  pressed, focused, focus-visible, disabled, selected, dragged, and drag-over
+  (with whether the payload is accepted), per element, through `Cx` and as
+  per-state style overrides (`.hovered(|e| …)`, `.drag_over(|e| …)`).
+- ⬜ Implicit transitions: an element's animatable properties (colors, opacity,
+  corner radius, border, shadow, padding, size, transform) declare a
+  `Transition` (duration and easing, or a spring), and changing them between
+  builds animates instead of jumping. The App keeps the in-flight values by
+  element identity and asks for frames only while something moves.
+- ⬜ Transforms and opacity in the scene: scale, rotate and translate about an
+  origin, and group opacity, for any element and its subtree, with hit-testing
+  that follows the transform.
+- ⬜ Enter and exit transitions for keyed elements (fade, slide, scale), so
+  appearing and disappearing items animate; exiting elements stay drawn until
+  their transition ends.
+- ⬜ Layout animations: when an element's position or size changes because the
+  layout did (a list reordering, a panel opening), it moves there smoothly.
+- ⬜ Interruptible, velocity-preserving animations: a new target mid-flight
+  continues from the current value and speed; gestures (drags, flings, touch
+  scrolling) can drive an animation directly and hand off to a spring on
+  release.
+- ⬜ Keyframes and sequences/staggers for richer effects (a shake on invalid
+  input, a pulsing drop target, staggered list entrance).
+- ⬜ Finer-grained reactivity: derived/memoized values and subtrees that rebuild
+  only when their inputs change, so large animated UIs stay cheap; damage
+  limited to what actually moved.
+- ⬜ Theme changes that cross-fade (also listed under 7a).
+- ⬜ Respect the OS reduced-motion setting (Windows, macOS, GNOME/portal,
+  iOS, Android, `prefers-reduced-motion` on the web): transitions shorten to
+  cross-fades or snap.
+- ⬜ Built-in widgets use all of this: drop areas, buttons, switches,
+  checkboxes, tabs, menus, toasts, dialogs and disclosure triangles animate by
+  default under every theme (and natively-matched curves under
+  `Theme::native()`).
+- **Exit criteria:** a showcase example (drop area, animated list, interactive
+  controls) whose animations are unit-tested at fixed frame times, with CI
+  screenshots of mid-transition frames on the desktops and the web, and no CPU
+  use once everything is at rest.
+
 ---
 
 ## 4. Cross-cutting tracks (continuous)
