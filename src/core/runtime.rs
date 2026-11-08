@@ -17,7 +17,7 @@ use crate::core::a11y::Semantics;
 use crate::core::element::{Align, BoxStyle, Element};
 use crate::core::handle::AppHandle;
 use crate::geometry::{Point, Rect};
-use crate::platform::CursorIcon;
+use crate::platform::{CursorIcon, DragOffer, DropData};
 use crate::render::Color;
 use crate::style::Theme;
 use std::collections::{HashMap, HashSet};
@@ -93,6 +93,21 @@ type TextPosFn<S> = Box<dyn FnMut(&mut S, usize, bool)>;
 /// A boxed secondary-click (context) handler: receives the click position in
 /// logical pixels, so it can open a context menu there.
 type ContextFn<S> = Box<dyn FnMut(&mut S, Point)>;
+/// A boxed drop handler: receives the dropped data and the drop position.
+type DropFn<S> = Box<dyn FnMut(&mut S, &DropData, Point)>;
+/// A boxed drag-hover handler: told when a drag starts (`true`) and stops
+/// (`false`) hovering its drop target.
+type DropHoverFn<S> = Box<dyn FnMut(&mut S, bool)>;
+/// A boxed drag-source handler: returns the payload of an in-app drag starting
+/// on its element (`None` declines the drag).
+type DragSourceFn<S> = Box<dyn FnMut(&mut S) -> Option<DropData>>;
+
+/// A registered drop target: what it accepts and its handlers.
+struct DropTarget<S> {
+    accepts: DragOffer,
+    on_drop: DropFn<S>,
+    on_hover: Option<DropHoverFn<S>>,
+}
 
 /// An opaque handle to a registered tap handler, stamped onto the element that
 /// owns it and resolved against the [`Cx`] tap table on dispatch.
@@ -116,6 +131,17 @@ pub struct TextPosId(pub(crate) u32);
 /// handler, resolved against the [`Cx`] context table on a right-click.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ContextId(pub(crate) u32);
+
+/// An opaque handle to an element registered as a drop target (see
+/// [`Element::on_drop`](crate::core::Element::on_drop)), resolved against the
+/// [`Cx`] drop table while a drag hovers it and when it is dropped on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DropId(pub(crate) u32);
+
+/// An opaque handle to an element that starts in-app drags (see
+/// [`Element::drag_source`](crate::core::Element::drag_source)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DragSourceId(pub(crate) u32);
 
 /// An opaque handle to a scroll container. The app keeps a scroll offset per id
 /// (adjusted by wheel events) and re-applies it each frame; the id is stable as
@@ -309,6 +335,12 @@ pub struct Cx<'a, S> {
     drags: Vec<DragFn<S>>,
     text_pos: Vec<TextPosFn<S>>,
     contexts: Vec<ContextFn<S>>,
+    drops: Vec<DropTarget<S>>,
+    drag_sources: Vec<DragSourceFn<S>>,
+    /// The drag-over state of drop targets as of this build (seeded by the
+    /// app), and the targets whose view read theirs.
+    drop_states: HashMap<DropId, crate::core::dnd::DropState>,
+    drop_queried: Vec<DropId>,
     /// Next scroll-container id to hand out (scroll offsets live in the app, not
     /// here, so we only need a stable per-frame counter).
     next_scroll: u32,
@@ -355,6 +387,10 @@ impl<'a, S> Cx<'a, S> {
             drags: Vec::new(),
             text_pos: Vec::new(),
             contexts: Vec::new(),
+            drops: Vec::new(),
+            drag_sources: Vec::new(),
+            drop_states: HashMap::new(),
+            drop_queried: Vec::new(),
             next_scroll: 0,
             overlays: Vec::new(),
             context_menus: Vec::new(),
@@ -450,6 +486,90 @@ impl<'a, S> Cx<'a, S> {
     pub fn register_context(&mut self, handler: impl FnMut(&mut S, Point) + 'static) -> ContextId {
         let id = ContextId(self.contexts.len() as u32);
         self.contexts.push(Box::new(handler));
+        id
+    }
+
+    /// Register a drop target accepting the kinds in `accepts`, returning its
+    /// [`DropId`]. `handler` receives the dropped data and the drop position
+    /// in logical pixels. Prefer [`Element::on_drop`](crate::core::Element::on_drop).
+    pub fn register_drop(
+        &mut self,
+        accepts: DragOffer,
+        handler: impl FnMut(&mut S, &DropData, Point) + 'static,
+    ) -> DropId {
+        let id = DropId(self.drops.len() as u32);
+        self.drops.push(DropTarget {
+            accepts,
+            on_drop: Box::new(handler),
+            on_hover: None,
+        });
+        id
+    }
+
+    /// Tell drop target `id` when an acceptable drag starts (`true`) and stops
+    /// (`false`) hovering it, replacing any earlier hover handler. Prefer
+    /// [`Element::on_drop_hover`](crate::core::Element::on_drop_hover).
+    pub fn set_drop_hover(&mut self, id: DropId, handler: impl FnMut(&mut S, bool) + 'static) {
+        if let Some(target) = self.drops.get_mut(id.0 as usize) {
+            target.on_hover = Some(Box::new(handler));
+        }
+    }
+
+    /// What a drag is doing to drop target `id` in this frame: whether it is
+    /// over it, whether the target accepts it, the pointer within it, and an
+    /// eased `level` to animate with. Register the target first (its id is
+    /// stable across builds as long as the view registers drop targets in the
+    /// same order), read its state, build the element from it and stamp the
+    /// id with [`Element::drop_target`](crate::core::Element::drop_target).
+    /// The app then leaves the drawing of the drag-over look to the view (it
+    /// paints its own highlight only on targets whose state isn't read), and
+    /// rebuilds on every change. See `docs/drag-and-drop.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// struct St { dropped: usize }
+    /// fn view(_: &St, cx: &mut Cx<St>) -> Element {
+    ///     let theme = *cx.theme();
+    ///     let zone = cx.register_drop(DragOffer::FILES, |s: &mut St, _, _| s.dropped += 1);
+    ///     let drag = cx.drop_state(zone);
+    ///     let grow = 8.0 * drag.level;
+    ///     label(&theme, "Drop here")
+    ///         .padding(Insets::uniform(16.0 + grow))
+    ///         .drop_target(zone)
+    /// }
+    /// # let theme = Theme::light();
+    /// # let mut cx = Cx::new(&theme);
+    /// # assert!(view(&St { dropped: 0 }, &mut cx).drop.is_some());
+    /// ```
+    pub fn drop_state(&mut self, id: DropId) -> crate::core::dnd::DropState {
+        if !self.drop_queried.contains(&id) {
+            self.drop_queried.push(id);
+        }
+        self.drop_states.get(&id).copied().unwrap_or_default()
+    }
+
+    /// Seed this frame's drop-target states (the app does this before each
+    /// build).
+    pub fn set_drop_states(&mut self, states: HashMap<DropId, crate::core::dnd::DropState>) {
+        self.drop_states = states;
+    }
+
+    /// The drop targets whose state the view read this build. Call before
+    /// [`into_handlers`](Cx::into_handlers).
+    pub fn take_drop_queried(&mut self) -> Vec<DropId> {
+        std::mem::take(&mut self.drop_queried)
+    }
+
+    /// Register a drag source, returning its [`DragSourceId`]. `handler` runs
+    /// when a press on the element moves far enough to start a drag, and
+    /// returns its payload (`None` declines). Prefer
+    /// [`Element::drag_source`](crate::core::Element::drag_source).
+    pub fn register_drag_source(
+        &mut self,
+        handler: impl FnMut(&mut S) -> Option<DropData> + 'static,
+    ) -> DragSourceId {
+        let id = DragSourceId(self.drag_sources.len() as u32);
+        self.drag_sources.push(Box::new(handler));
         id
     }
 
@@ -556,6 +676,8 @@ impl<'a, S> Cx<'a, S> {
             drags: self.drags,
             text_pos: self.text_pos,
             contexts: self.contexts,
+            drops: self.drops,
+            drag_sources: self.drag_sources,
         }
     }
 }
@@ -579,6 +701,8 @@ pub struct Handlers<S> {
     drags: Vec<DragFn<S>>,
     text_pos: Vec<TextPosFn<S>>,
     contexts: Vec<ContextFn<S>>,
+    drops: Vec<DropTarget<S>>,
+    drag_sources: Vec<DragSourceFn<S>>,
 }
 
 impl<S> Handlers<S> {
@@ -657,6 +781,52 @@ impl<S> Handlers<S> {
         }
     }
 
+    /// Whether drop target `id` exists and accepts something `offer` carries.
+    pub fn drop_accepts(&self, id: DropId, offer: DragOffer) -> bool {
+        self.drops
+            .get(id.0 as usize)
+            .is_some_and(|t| t.accepts.accepts(offer))
+    }
+
+    /// Invoke drop target `id`'s drop handler. Returns `true` if it ran.
+    pub fn dispatch_drop(
+        &mut self,
+        id: DropId,
+        data: &DropData,
+        pos: Point,
+        state: &mut S,
+    ) -> bool {
+        match self.drops.get_mut(id.0 as usize) {
+            Some(target) => {
+                (target.on_drop)(state, data, pos);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Tell drop target `id` a drag started (`true`) or stopped (`false`)
+    /// hovering it. Returns `true` if it has a hover handler, which ran.
+    pub fn dispatch_drop_hover(&mut self, id: DropId, hovering: bool, state: &mut S) -> bool {
+        match self
+            .drops
+            .get_mut(id.0 as usize)
+            .and_then(|t| t.on_hover.as_mut())
+        {
+            Some(handler) => {
+                handler(state, hovering);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Ask drag source `id` for its payload. `None` if it declined or doesn't
+    /// exist.
+    pub fn dispatch_drag_source(&mut self, id: DragSourceId, state: &mut S) -> Option<DropData> {
+        self.drag_sources.get_mut(id.0 as usize)?(state)
+    }
+
     /// Total number of registered handlers (taps + keys + drags + text-pointer
     /// + context).
     pub fn len(&self) -> usize {
@@ -684,6 +854,8 @@ impl<S> Default for Handlers<S> {
             drags: Vec::new(),
             text_pos: Vec::new(),
             contexts: Vec::new(),
+            drops: Vec::new(),
+            drag_sources: Vec::new(),
         }
     }
 }
@@ -746,6 +918,11 @@ pub struct LayoutNode {
     /// Secondary-click (context) handle: this element opens a context menu on
     /// right-click.
     pub context: Option<ContextId>,
+    /// Drop-target handle: drags from other apps (and in-app drags) can be
+    /// dropped here.
+    pub drop: Option<DropId>,
+    /// Drag-source handle: a press-and-move here starts an in-app drag.
+    pub drag_source: Option<DragSourceId>,
     /// Caret byte index for an editable text leaf (drawn by the focus overlay).
     pub caret: Option<usize>,
     /// Selected byte range `[start, end)` for an editable text leaf (the focus
@@ -799,6 +976,8 @@ impl LayoutNode {
             focus: None,
             drag: None,
             context: None,
+            drop: None,
+            drag_source: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -888,6 +1067,48 @@ pub fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
         node.context
     } else {
         None
+    }
+}
+
+/// Find the top-most drop target containing `point`, returning its
+/// [`DropId`] and bounds (mirrors [`hit_test`], for drags). Whether it takes
+/// the drag is up to its handler ([`Handlers::drop_accepts`]).
+pub fn drop_at(node: &LayoutNode, point: Point) -> Option<(DropId, Rect)> {
+    if clipped_out(node, point) {
+        return None;
+    }
+    for child in node.children.iter().rev() {
+        if let Some(hit) = drop_at(child, point) {
+            return Some(hit);
+        }
+    }
+    match node.drop {
+        Some(id) if node.bounds.contains(point) => Some((id, node.bounds)),
+        _ => None,
+    }
+}
+
+/// Find the node carrying drop target `id`, if present.
+pub fn find_drop(node: &LayoutNode, id: DropId) -> Option<&LayoutNode> {
+    if node.drop == Some(id) {
+        return Some(node);
+    }
+    node.children.iter().find_map(|c| find_drop(c, id))
+}
+
+/// Find the [`DragSourceId`] of the top-most drag source containing `point`.
+pub fn drag_source_at(node: &LayoutNode, point: Point) -> Option<DragSourceId> {
+    if clipped_out(node, point) {
+        return None;
+    }
+    for child in node.children.iter().rev() {
+        if let Some(id) = drag_source_at(child, point) {
+            return Some(id);
+        }
+    }
+    match node.drag_source {
+        Some(id) if node.bounds.contains(point) => Some(id),
+        _ => None,
     }
 }
 
@@ -1095,6 +1316,8 @@ mod tests {
             focus,
             drag: None,
             context: None,
+            drop: None,
+            drag_source: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -1185,6 +1408,8 @@ mod tests {
             focus: None,
             drag: None,
             context: None,
+            drop: None,
+            drag_source: None,
             caret: None,
             selection: None,
             preedit: None,

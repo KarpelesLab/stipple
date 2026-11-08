@@ -308,6 +308,13 @@ pub trait Window {
     /// its on-screen keyboard (and hide it again). The app calls this after
     /// each frame it presents. Default: a no-op. Honored on Android.
     fn set_text_input_active(&self, _active: bool) {}
+    /// Whether the window takes the drag that is over it, at the position of
+    /// the last [`Event::DragEnter`](crate::platform::Event::DragEnter) or
+    /// [`Event::DragOver`](crate::platform::Event::DragOver). Call it while
+    /// handling those; the backend reports the answer to the drag source (the
+    /// cursor shows a copy or a "no" sign) and refuses a drop it declined.
+    /// Default: a no-op (backends without drops).
+    fn set_drop_accepted(&self, _accepted: bool) {}
 }
 
 /// Scale `icon` down (by area averaging) so neither side exceeds `max` pixels,

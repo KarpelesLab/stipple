@@ -27,6 +27,7 @@
 pub mod a11y;
 mod clipboard;
 mod diff;
+mod dnd;
 mod element;
 mod handle;
 pub(crate) mod highlight;
@@ -40,6 +41,8 @@ pub(crate) mod touch;
 pub use a11y::{AccessNode, Role, Semantics, accessibility_tree};
 pub use clipboard::{clipboard_text, set_clipboard_text};
 pub use diff::{Damage, diff_trees};
+pub(crate) use dnd::DropFades;
+pub use dnd::{DROP_FADE, DropState};
 pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverride};
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use handle::runtime;
@@ -54,11 +57,11 @@ pub use render::{
     paint_hover,
 };
 pub use runtime::{
-    ActionId, Anchor, ContextId, Cx, DragId, DragMotion, FocusId, Handlers, KeyInput, LayoutNode,
-    NodeContent, OverlaySpec, ScrollId, ScrollRequests, TextPosId, ViewportEvent, ViewportId,
-    collect_focusables, collect_viewports, context_at, cursor_at, drag_at, drag_hit_at,
-    find_action, find_focus, find_scroll, find_text_pos, first_text, focus_at, hit_test, scroll_at,
-    text_pos_at, viewport_at,
+    ActionId, Anchor, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, Handlers,
+    KeyInput, LayoutNode, NodeContent, OverlaySpec, ScrollId, ScrollRequests, TextPosId,
+    ViewportEvent, ViewportId, collect_focusables, collect_viewports, context_at, cursor_at,
+    drag_at, drag_hit_at, drag_source_at, drop_at, find_action, find_drop, find_focus, find_scroll,
+    find_text_pos, first_text, focus_at, hit_test, scroll_at, text_pos_at, viewport_at,
 };
 
 // The font type lives in stipple::render; re-export so callers of the layout/paint

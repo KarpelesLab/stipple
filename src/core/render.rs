@@ -372,6 +372,8 @@ pub fn layout_with_direction(
         focus: el.focus,
         drag: el.drag,
         context: el.context,
+        drop: el.drop,
+        drag_source: el.drag_source,
         caret: el.caret,
         selection: el.selection,
         preedit: el.preedit,

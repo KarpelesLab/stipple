@@ -29,6 +29,7 @@
 #![deny(unsafe_code)] // `platform` and `gpu` opt in where they talk to the OS
 
 pub mod anim;
+mod app_dnd;
 pub mod core;
 pub mod geometry;
 #[cfg(feature = "gpu")]
@@ -304,6 +305,8 @@ struct Pane<S> {
     context_menus: Vec<(crate::core::ContextId, crate::core::Menu<S>)>,
     // The dismiss actions of the overlays' press-outside catchers.
     catchers: Vec<ActionId>,
+    // Drag and drop: the drag over the window, its target, and in-app drags.
+    dnd: app_dnd::DndState,
 }
 
 impl<S> std::fmt::Debug for App<S> {
@@ -357,6 +360,7 @@ impl<S: 'static> Pane<S> {
             menu_bar: None,
             context_menus: Vec::new(),
             catchers: Vec::new(),
+            dnd: Default::default(),
         }
     }
 }
@@ -738,6 +742,10 @@ impl<S: 'static> Pane<S> {
             self.scroll_offsets.insert(id, offset.max(0.0));
         }
         cx.set_scroll_state(self.scroll_offsets.clone(), self.scroll_requests.clone());
+        // Drop targets' drag-over states, eased to this frame's time.
+        let drop_now = crate::platform::frame::now().map(|_| cx.frame_time());
+        self.dnd.fades.update(self.dnd.over, drop_now);
+        cx.set_drop_states(self.dnd.fades.states(drop_now).into_iter().collect());
         let mut element = (self.view)(state, &mut cx);
         // The menus Stipple draws: the menu bar above the view, and the open
         // bar menu or context menu as overlays above everything else.
@@ -763,6 +771,7 @@ impl<S: 'static> Pane<S> {
         let frame_requested = cx.frame_requested();
         self.memo_cache = cx.take_memo_cache();
         let overlays = cx.take_overlays();
+        self.dnd.queried = cx.take_drop_queried();
         self.handlers = cx.into_handlers();
 
         let size = self.attrs.logical_size;
@@ -924,7 +933,16 @@ impl<S: 'static> Pane<S> {
         for &(id, a) in &self.highlight_alphas {
             paint_hover(&tree, id, &mut scene, Color { a, ..overlay });
         }
-        self.animating = frame_requested || self.highlights.animating(now) || self.touch.flinging();
+        // The drop target under an acceptable drag, unless its view draws its
+        // own drag-over look from its `DropState`.
+        self.dnd.highlight = self.dnd.target.filter(|id| !self.dnd.queried.contains(id));
+        if let Some(id) = self.dnd.highlight {
+            app_dnd::paint_drop_target(&tree, id, &mut scene, &theme);
+        }
+        self.animating = frame_requested
+            || self.highlights.animating(now)
+            || self.dnd.fades.animating(drop_now)
+            || self.touch.flinging();
         if self.animating {
             crate::platform::frame::request();
         }
@@ -963,9 +981,13 @@ impl<S: 'static> Pane<S> {
         let overlay_changed = self.overlay_active || self.painted_overlay_active;
         let hover_changed = self.highlight_alphas != self.painted_highlights;
         let focus_changed = self.focused != self.painted_focused;
+        // The drop-target highlight is rare and short-lived: repaint it whole.
+        let drop_changed = self.dnd.highlight != self.dnd.painted;
 
         let damage = match (&self.presented, &self.tree) {
-            (Some(old), Some(new)) if !overlay_changed && old.bounds == new.bounds => {
+            (Some(old), Some(new))
+                if !overlay_changed && !drop_changed && old.bounds == new.bounds =>
+            {
                 let base = crate::core::diff_trees(old, new);
                 match self.overlay_damage_rects(old, new, hover_changed, focus_changed) {
                     Some(rects) => merge_regions(base, rects),
@@ -977,6 +999,7 @@ impl<S: 'static> Pane<S> {
         self.presented = self.tree.clone();
         self.painted_highlights = self.highlight_alphas.clone();
         self.painted_focused = self.focused;
+        self.dnd.painted = self.dnd.highlight;
         self.painted_overlay_active = self.overlay_active;
         damage
     }
@@ -1822,9 +1845,12 @@ impl<S: 'static> App<S> {
             redraw = true;
         }
         // Editable text under the cursor starts a click/drag selection;
-        // otherwise latch a drag if a draggable sits there.
+        // otherwise latch a drag if a draggable sits there, or else a drag
+        // source.
         if self.pane_text_press_at(idx, position) || self.pane_drag_at_point(idx, position) {
             redraw = true;
+        } else {
+            self.panes[idx].source_press(position);
         }
         // A finger on a slider drags the slider, not the list around it.
         if self.panes[idx].dragging.is_some() {
@@ -1837,10 +1863,13 @@ impl<S: 'static> App<S> {
     /// continue a selection or drag, or update the hover. Returns whether to
     /// repaint.
     fn pane_pointer_move(&mut self, idx: usize, position: Point) -> bool {
+        self.panes[idx].last_pointer = position;
         if self.panes[idx].text_selecting.is_some() {
             self.pane_text_drag_at(idx, position)
         } else if self.panes[idx].dragging.is_some() {
             self.pane_drag_at_point(idx, position)
+        } else if self.pane_source_move(idx, position) {
+            true
         } else {
             self.pane_hover_at(idx, position)
         }
@@ -1850,6 +1879,10 @@ impl<S: 'static> App<S> {
     /// selection or drag, or click what was pressed if it's still under the
     /// pointer. Returns whether to repaint.
     fn pane_pointer_up(&mut self, idx: usize, position: Point) -> bool {
+        // Drop an in-app drag first.
+        if self.pane_source_release(idx, position) {
+            return true;
+        }
         if self.panes[idx].text_selecting.is_some() {
             self.panes[idx].end_text_select();
             false
@@ -2220,8 +2253,7 @@ impl<S: 'static> App<S> {
                     }
                     // Forward moves over a viewport to its content, unless a Stipple
                     // drag/selection latched on a press outside it is in progress.
-                    if self.panes[idx].text_selecting.is_none()
-                        && self.panes[idx].dragging.is_none()
+                    if !self.panes[idx].pointer_latched()
                         && self.try_forward_pointer(idx, position, PointerKind::Move)
                     {
                         present(&mut self, &mut surfaces, idx, window, false);
@@ -2238,7 +2270,9 @@ impl<S: 'static> App<S> {
                     position,
                 } => {
                     // Release inside a viewport forwards to its content (button 0).
-                    if self.try_forward_pointer(idx, position, PointerKind::Up(0)) {
+                    if !self.panes[idx].dnd.dragging_internally()
+                        && self.try_forward_pointer(idx, position, PointerKind::Up(0))
+                    {
                         present(&mut self, &mut surfaces, idx, window, false);
                         return ControlFlow::Wait;
                     }
@@ -2303,6 +2337,42 @@ impl<S: 'static> App<S> {
                     if self.menu_key(idx, KeyCode::Tab, modifiers) || self.pane_focus_next(idx) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
+                    ControlFlow::Wait
+                }
+                Event::Key {
+                    code: KeyCode::Escape,
+                    state: ButtonState::Pressed,
+                    ..
+                } if self.panes[idx].dnd.dragging_internally() => {
+                    // Escape cancels an in-app drag.
+                    self.pane_source_cancel(idx);
+                    present(&mut self, &mut surfaces, idx, window, false);
+                    ControlFlow::Wait
+                }
+                Event::DragEnter { position, offer } => {
+                    let accepted = self.pane_drag_enter(idx, position, offer);
+                    app_dbg(format_args!(
+                        "drag enter at {position:?} {offer:?}: accepted {accepted}"
+                    ));
+                    window.set_drop_accepted(accepted);
+                    present(&mut self, &mut surfaces, idx, window, false);
+                    ControlFlow::Wait
+                }
+                Event::DragOver { position } => {
+                    let accepted = self.pane_drag_over(idx, position);
+                    window.set_drop_accepted(accepted);
+                    present(&mut self, &mut surfaces, idx, window, false);
+                    ControlFlow::Wait
+                }
+                Event::DragLeave => {
+                    self.pane_drag_leave(idx);
+                    present(&mut self, &mut surfaces, idx, window, false);
+                    ControlFlow::Wait
+                }
+                Event::Drop { position, data } => {
+                    let taken = self.pane_drop(idx, position, &data);
+                    app_dbg(format_args!("drop at {position:?}: taken {taken}"));
+                    present(&mut self, &mut surfaces, idx, window, false);
                     ControlFlow::Wait
                 }
                 Event::Key {
@@ -2852,10 +2922,11 @@ pub mod prelude {
         Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
         OverlaySpec, TimerId, Track, View,
     };
+    pub use crate::core::{DROP_FADE, DropState};
     pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::platform::Notification;
-    pub use crate::platform::{CursorIcon, WindowRequest};
+    pub use crate::platform::{CursorIcon, DragOffer, DropData, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
     pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg, TextDirection};
     pub use crate::style::Theme;

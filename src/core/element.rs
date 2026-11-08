@@ -7,7 +7,8 @@
 
 use crate::core::a11y::{Role, Semantics};
 use crate::core::runtime::{
-    ActionId, ContextId, Cx, DragId, DragMotion, FocusId, KeyInput, ScrollId, TextPosId, ViewportId,
+    ActionId, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, KeyInput, ScrollId,
+    TextPosId, ViewportId,
 };
 use crate::geometry::Insets;
 use crate::layout::{Axis, LayoutDirection, Track};
@@ -139,6 +140,12 @@ pub struct Element {
     /// Secondary-click (context) handle: this element opens a context menu on
     /// right-click. Set via [`Element::on_context`].
     pub context: Option<ContextId>,
+    /// Drop-target handle: drags from other applications (and in-app drags)
+    /// can be dropped on this element. Set via [`Element::on_drop`].
+    pub drop: Option<DropId>,
+    /// Drag-source handle: pressing on this element and moving starts an
+    /// in-app drag. Set via [`Element::drag_source`].
+    pub drag_source: Option<DragSourceId>,
     /// Caret position as a byte index into this element's text, for an editable
     /// text leaf. `None` for non-editable text and non-text elements. Set via
     /// [`Element::caret`]; the focus overlay draws the caret bar there.
@@ -196,6 +203,8 @@ impl Element {
             focus: None,
             drag: None,
             context: None,
+            drop: None,
+            drag_source: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -220,6 +229,8 @@ impl Element {
             focus: None,
             drag: None,
             context: None,
+            drop: None,
+            drag_source: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -256,6 +267,8 @@ impl Element {
             focus: None,
             drag: None,
             context: None,
+            drop: None,
+            drag_source: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -282,6 +295,8 @@ impl Element {
             focus: None,
             drag: None,
             context: None,
+            drop: None,
+            drag_source: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -309,6 +324,8 @@ impl Element {
             focus: None,
             drag: None,
             context: None,
+            drop: None,
+            drag_source: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -405,6 +422,87 @@ impl Element {
     /// ```
     pub fn context_menu<S>(mut self, cx: &mut Cx<'_, S>, menu: crate::core::menu::Menu<S>) -> Self {
         self.context = Some(cx.register_context_menu(menu));
+        self
+    }
+
+    /// Make this element a drop target for files and text dragged from other
+    /// applications (and for in-app drags). `handler` runs against the app
+    /// state with the dropped [`DropData`](crate::platform::DropData) and the
+    /// drop position in logical pixels. While an acceptable drag hovers the
+    /// element, the app highlights it; [`on_drop_hover`](Element::on_drop_hover)
+    /// tells the state too. See `docs/drag-and-drop.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// struct Files { names: Vec<String> }
+    /// fn view(_: &Files, cx: &mut Cx<Files>) -> Element {
+    ///     let theme = *cx.theme();
+    ///     label(&theme, "Drop files here").on_drop(cx, |s: &mut Files, data, _at| {
+    ///         if let DropData::Files(paths) = data {
+    ///             s.names.extend(paths.iter().map(|p| p.display().to_string()));
+    ///         }
+    ///     })
+    /// }
+    /// # let theme = Theme::light();
+    /// # let mut cx = Cx::new(&theme);
+    /// # assert!(view(&Files { names: vec![] }, &mut cx).drop.is_some());
+    /// ```
+    pub fn on_drop<S>(
+        self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&mut S, &crate::platform::DropData, crate::geometry::Point) + 'static,
+    ) -> Self {
+        self.on_drop_of(cx, crate::platform::DragOffer::ANY, handler)
+    }
+
+    /// Like [`on_drop`](Element::on_drop), but only for drags carrying a kind
+    /// in `accepts` (say [`DragOffer::FILES`](crate::platform::DragOffer::FILES)):
+    /// other drags over it are refused (the cursor says so, and the target's
+    /// [`DropState::accepted`](crate::core::DropState::accepted) is `false`).
+    pub fn on_drop_of<S>(
+        mut self,
+        cx: &mut Cx<'_, S>,
+        accepts: crate::platform::DragOffer,
+        handler: impl FnMut(&mut S, &crate::platform::DropData, crate::geometry::Point) + 'static,
+    ) -> Self {
+        self.drop = Some(cx.register_drop(accepts, handler));
+        self
+    }
+
+    /// Make this element the drop target registered as `id` with
+    /// [`Cx::register_drop`] (to read its [`Cx::drop_state`] while building
+    /// the element).
+    pub fn drop_target(mut self, id: DropId) -> Self {
+        self.drop = Some(id);
+        self
+    }
+
+    /// Tell the state when an acceptable drag starts (`true`) and stops
+    /// (`false`) hovering this drop target, to restyle it while it does. Call
+    /// after [`on_drop`](Element::on_drop); without a drop target it does
+    /// nothing.
+    pub fn on_drop_hover<S>(
+        self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&mut S, bool) + 'static,
+    ) -> Self {
+        if let Some(id) = self.drop {
+            cx.set_drop_hover(id, handler);
+        }
+        self
+    }
+
+    /// Let this element be dragged inside the app: pressing on it and moving
+    /// a few pixels starts a drag, `handler` supplies its payload (usually a
+    /// [`DropData::Internal`](crate::platform::DropData::Internal) naming the
+    /// item; `None` cancels), and releasing over a drop target that accepts it
+    /// drops it there. A press that becomes a drag doesn't tap.
+    pub fn drag_source<S>(
+        mut self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&mut S) -> Option<crate::platform::DropData> + 'static,
+    ) -> Self {
+        self.drag_source = Some(cx.register_drag_source(handler));
         self
     }
 

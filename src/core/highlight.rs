@@ -18,15 +18,15 @@ pub const PRESS_FADE: Duration = Duration::from_millis(60);
 
 /// One highlight level, easing from `from` to `to` starting at `start`.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Channel {
+pub(crate) struct Channel {
     from: f64,
-    to: f64,
+    pub(crate) to: f64,
     start: Duration,
     length: Duration,
 }
 
 impl Channel {
-    const OFF: Channel = Channel {
+    pub(crate) const OFF: Channel = Channel {
         from: 0.0,
         to: 0.0,
         start: Duration::ZERO,
@@ -40,7 +40,7 @@ impl Channel {
             .saturating_add(crate::platform::frame::interval())
     }
 
-    fn level(&self, now: Duration) -> f64 {
+    pub(crate) fn level(&self, now: Duration) -> f64 {
         let t = self.progress(now).as_secs_f64();
         Tween::new(
             self.from,
@@ -51,13 +51,13 @@ impl Channel {
         .sample(t)
     }
 
-    fn settled(&self, now: Duration) -> bool {
+    pub(crate) fn settled(&self, now: Duration) -> bool {
         self.length.is_zero() || self.progress(now) >= self.length
     }
 
     /// Head for `to` from wherever the level is now. With no clock (`now` is
     /// `None`) the change is immediate.
-    fn retarget(&mut self, to: f64, length: Duration, now: Option<Duration>) {
+    pub(crate) fn retarget(&mut self, to: f64, length: Duration, now: Option<Duration>) {
         if self.to == to {
             return;
         }

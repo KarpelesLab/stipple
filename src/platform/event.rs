@@ -181,6 +181,185 @@ pub enum Event {
     /// [`Window::set_tray`](crate::platform::Window::set_tray)); its menu
     /// items arrive as [`MenuCommand`](Event::MenuCommand)s instead.
     TrayActivated,
+
+    /// A drag from another application entered the window at `position`
+    /// (logical pixels), carrying the kinds of data in `offer`. Answer with
+    /// [`Window::set_drop_accepted`](crate::platform::Window::set_drop_accepted)
+    /// while handling it, and again on each [`DragOver`](Event::DragOver).
+    /// See `docs/drag-and-drop.md`.
+    DragEnter { position: Point, offer: DragOffer },
+    /// The drag moved to `position` within the window.
+    DragOver { position: Point },
+    /// The drag left the window, or was cancelled, without dropping.
+    DragLeave,
+    /// The user dropped `data` at `position`. Ends the drag (no
+    /// [`DragLeave`](Event::DragLeave) follows).
+    Drop { position: Point, data: DropData },
+}
+
+/// The kinds of data a drag carries, known as soon as it enters a window
+/// (before the data itself, which some platforms only hand over on drop). Also
+/// the filter of what a drop target accepts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct DragOffer {
+    /// One or more files (or folders), as paths.
+    pub files: bool,
+    /// Plain text.
+    pub text: bool,
+    /// An in-app drag's own payload ([`DropData::Internal`]); never from
+    /// another application.
+    pub internal: bool,
+}
+
+impl DragOffer {
+    /// Files only.
+    pub const FILES: DragOffer = DragOffer {
+        files: true,
+        text: false,
+        internal: false,
+    };
+    /// Text only.
+    pub const TEXT: DragOffer = DragOffer {
+        files: false,
+        text: true,
+        internal: false,
+    };
+    /// In-app payloads only.
+    pub const INTERNAL: DragOffer = DragOffer {
+        files: false,
+        text: false,
+        internal: true,
+    };
+    /// Every kind.
+    pub const ANY: DragOffer = DragOffer {
+        files: true,
+        text: true,
+        internal: true,
+    };
+
+    /// Whether a target accepting `self` takes something `offer` carries.
+    pub fn accepts(self, offer: DragOffer) -> bool {
+        (self.files && offer.files)
+            || (self.text && offer.text)
+            || (self.internal && offer.internal)
+    }
+
+    /// Whether the drag carries nothing Stipple understands.
+    pub fn is_empty(self) -> bool {
+        !(self.files || self.text || self.internal)
+    }
+
+    /// The kinds in either.
+    pub fn union(self, other: DragOffer) -> DragOffer {
+        DragOffer {
+            files: self.files || other.files,
+            text: self.text || other.text,
+            internal: self.internal || other.internal,
+        }
+    }
+}
+
+/// Data dropped onto a window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DropData {
+    /// Files or folders, as local paths.
+    Files(Vec<std::path::PathBuf>),
+    /// Plain text.
+    Text(String),
+    /// The payload of a drag started inside the app (see
+    /// [`Element::drag_source`](crate::core::Element::drag_source)): a string
+    /// the app chose, such as an item's id.
+    Internal(String),
+}
+
+impl DropData {
+    /// The kind of data this is, as a one-kind [`DragOffer`].
+    pub fn kind(&self) -> DragOffer {
+        match self {
+            DropData::Files(_) => DragOffer::FILES,
+            DropData::Text(_) => DragOffer::TEXT,
+            DropData::Internal(_) => DragOffer::INTERNAL,
+        }
+    }
+}
+
+/// Parse a `text/uri-list` (RFC 2483), as X11 and Wayland drags carry files:
+/// one URI per line, `#` comments skipped, `file:` URIs percent-decoded to
+/// paths and other schemes skipped.
+pub fn parse_uri_list(list: &str) -> Vec<std::path::PathBuf> {
+    list.lines()
+        .map(|l| l.trim_matches(|c: char| c.is_whitespace() || c == '\0'))
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(file_uri_to_path)
+        .collect()
+}
+
+/// The path of a `file:` URI (`file:///p`, `file://localhost/p` or `file:/p`),
+/// percent-decoded. `None` for other schemes and remote hosts.
+pub fn file_uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
+    let rest = uri.strip_prefix("file:")?;
+    let path = match rest.strip_prefix("//") {
+        Some(after) => {
+            // An authority: empty or localhost means this machine.
+            let slash = after.find('/')?;
+            let host = &after[..slash];
+            if !(host.is_empty() || host.eq_ignore_ascii_case("localhost")) {
+                return None;
+            }
+            &after[slash..]
+        }
+        None => rest,
+    };
+    let bytes = path.as_bytes();
+    let hex = |b: Option<&u8>| b.and_then(|&b| (b as char).to_digit(16)).map(|d| d as u8);
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match (bytes[i], hex(bytes.get(i + 1)), hex(bytes.get(i + 2))) {
+            (b'%', Some(h), Some(l)) => {
+                out.push(h << 4 | l);
+                i += 3;
+            }
+            (b, _, _) => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok().map(std::path::PathBuf::from)
+}
+
+#[cfg(test)]
+mod dnd_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn uri_list_parses_file_uris() {
+        let list = "# comment\r\nfile:///tmp/a%20b.txt\r\nhttp://example.com/x\r\n\
+                    file://localhost/etc/hosts\nfile:/x/y\nfile://remote/z\n\0";
+        assert_eq!(
+            parse_uri_list(list),
+            vec![
+                PathBuf::from("/tmp/a b.txt"),
+                PathBuf::from("/etc/hosts"),
+                PathBuf::from("/x/y"),
+            ]
+        );
+    }
+
+    #[test]
+    fn offers_filter_kinds() {
+        assert!(DragOffer::ANY.accepts(DragOffer::FILES));
+        assert!(!DragOffer::TEXT.accepts(DragOffer::FILES));
+        assert!(
+            DragOffer::FILES
+                .union(DragOffer::TEXT)
+                .accepts(DragOffer::TEXT)
+        );
+        assert!(DragOffer::default().is_empty());
+        assert_eq!(DropData::Text("x".into()).kind(), DragOffer::TEXT);
+    }
 }
 
 /// An update from an input method (Chinese, Japanese and Korean IMEs, and dead

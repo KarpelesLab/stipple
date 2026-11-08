@@ -72,8 +72,8 @@ mod window;
 pub use access::{A11yNode, A11yRole};
 pub use error::PlatformError;
 pub use event::{
-    ButtonState, Event, Ime, KeyCode, Modifiers, PointerButton, ScrollDelta, Touch, TouchPhase,
-    WindowId,
+    ButtonState, DragOffer, DropData, Event, Ime, KeyCode, Modifiers, PointerButton, ScrollDelta,
+    Touch, TouchPhase, WindowId, file_uri_to_path, parse_uri_list,
 };
 pub use menu::{
     MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, Shortcut, TRAY_ID_BASE,
