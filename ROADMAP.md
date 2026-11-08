@@ -806,22 +806,29 @@ nothing to drive them and background work couldn't update the UI.
 - ✅ `AppHandle::update` from any thread, waking the loop on X11, Wayland,
   Windows, macOS and iOS; `AppHandle::spawn` for futures with the `tokio`
   feature. `examples/asyncdemo --selftest` checks it in CI on the four desktops.
-- ⬜ Wakeups on Android and the web.
+- ✅ Wakeups and timers on the web: one `setTimeout` at the earliest deadline
+  calls back into the module, and `AppHandle::update` arms it at zero delay.
+  Timers there run on `stipple::platform::time::Instant`, read from
+  `performance.now()` (std's `Instant` panics on `wasm32-unknown-unknown`).
+- ⬜ Wakeups on Android.
 - ✅ A frame clock driven by the display (`CVDisplayLink`, `CADisplayLink`,
   `wl_surface.frame`, `DwmFlush`; a RandR-rate timer on X11), so animations
   tick at the refresh rate and stop when idle. `Cx::request_frame` and
   `Cx::frame_time`; see [`docs/animation.md`](docs/animation.md).
 - ✅ Animated widgets: a turning spinner, and hover and press highlights that
   fade.
-- ⬜ Theme changes that cross-fade, and frames on Android and the web.
+- ✅ Frames on the web: `requestAnimationFrame` is the frame clock's display
+  source, requested only while something animates.
+- ⬜ Theme changes that cross-fade, and frames on Android.
 - ⬜ macOS CI animates at only ~15 fps (10–12 frames during asyncdemo's 600 ms
   load, against ~36 on X11 and ~18 on Wayland): find out whether
   `CVDisplayLink` is ticking or the 30 Hz fallback timer is, and what each
   frame costs.
 - **Exit criteria:** an example that loads data on a background thread shows a
   live spinner, then the result, on every platform. `asyncdemo --selftest`
-  checks it in CI on the four desktops; iOS is unverified, Android and the web
-  wait on wakeups.
+  checks it in CI on the four desktops; iOS is unverified, and Android waits on
+  wakeups. The web has no threads, so `webdemo` loads on a timer instead: its
+  selftest checks in headless Chrome that the spinner animates, then stops.
 
 #### 7b — Input parity
 Most input only works on X11 today.
@@ -830,6 +837,10 @@ Most input only works on X11 today.
 - ✅ Modifier keys on every desktop backend, so Ctrl/Cmd shortcuts and
   Shift-selection work beyond X11.
 - ✅ A full key list: PageUp/PageDown, Insert, F1–F12, and keys for shortcuts.
+- ✅ The web: pointer events (captured during a press), `keydown` keys and
+  modifiers, wheel scrolling in pixels, lines or pages, and cursor shapes as the
+  canvas's `style.cursor`. `webdemo`'s selftest clicks, types and uses Ctrl
+  shortcuts through DOM events in CI.
 - ⬜ iOS keyboard (`UIKeyInput`) and Android touch and keyboard (`AInputQueue`).
 - **Exit criteria:** the same scripted input test passes on every desktop backend.
 
@@ -850,11 +861,19 @@ Most input only works on X11 today.
 - ✅ System clipboard on Wayland (`wl_data_device`: a `wl_data_source` serves
   copies, pastes read a `wl_data_offer` through a pipe without blocking the
   loop); CI round-trips text with `wl-copy` / `wl-paste` under sway.
-- ⬜ System clipboard on Android and the web.
+- ✅ System clipboard on the web, through the `paste`, `copy` and `cut` events
+  and `navigator.clipboard.writeText`; Ctrl/Cmd+V arrives with the pasted text.
+  CI round-trips text with synthetic clipboard events.
+- ⬜ System clipboard on Android.
 - ✅ File dialogs on Windows (`IFileOpenDialog` / `IFileSaveDialog` over COM) and
   macOS (`NSOpenPanel` / `NSSavePanel`). Build-checked only: CI can't drive a
   modal dialog.
-- ⬜ File dialogs on the web.
+- ✅ File dialogs on the web, through new contents-based calls that work
+  everywhere: `dialog::open_file_contents` (an `<input type=file>`; the callback
+  runs later, from the event loop, and updates the state through the
+  `AppHandle`) and `dialog::save_file_contents` (a download). The path-based
+  calls return `None` there. CI checks both with the picker and the download
+  stood in for.
 - ⬜ Menus: the macOS menu bar first, then window and context menus.
 - ✅ Window control: minimum and maximum size, maximize, fullscreen and the
   window icon, as `App` / `WindowAttributes` options and at run time through
@@ -899,8 +918,15 @@ Most input only works on X11 today.
 - ⬜ Android: high-DPI, and the native theme's system colors.
 - ⬜ Accessibility on iOS (UIAccessibility), Android and the web (ARIA).
 - ⬜ Images on the GPU path, so OS-drawn controls render under `App::render_with`.
-- ⬜ The web's exports in the library, so a web app doesn't copy the page glue;
-  high-DPI on the web.
+- ✅ The web's exports in the library: `stipple::web_app!(app)` generates them,
+  and `web/stipple.js` is the whole page side, so a web app provides only its
+  `App`. `App::run` on the web keeps the handler and returns; the page drives
+  it from DOM events.
+- ✅ High-DPI on the web: `devicePixelRatio` is the scale factor, the canvas's
+  backing store is its CSS size times it, and size and ratio changes re-render.
+  CI runs the web selftest at a ratio of 2.
+- ⬜ The web: IME and dead keys, following `prefers-color-scheme`, and more
+  than one app per page.
 
 ---
 

@@ -100,7 +100,8 @@ no timers uses no CPU, and one with a timer sleeps until it's due:
 | Windows | `MsgWaitForMultipleObjectsEx` | a posted window message |
 | macOS | `nextEventMatchingMask:untilDate:` | a posted application-defined `NSEvent` |
 | iOS | UIKit's run loop | `dispatch_async_f` / `dispatch_after_f` on the main queue |
-| Android, web | not yet: updates queue until the next input | — |
+| Web | a `setTimeout` at the next deadline, which calls into the module | a zero-delay `setTimeout` (the page has one thread) |
+| Android | not yet: updates queue until the next input | — |
 
 CI runs `asyncdemo --selftest` on X11, Wayland, Windows and macOS: it quits itself
 once a 100 ms timer has fired ten times and a background thread's result has

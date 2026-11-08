@@ -60,7 +60,8 @@ On X11 and Wayland the window manager or compositor has the last word: without
 one (a bare Xvfb), maximize and fullscreen do nothing. A window that isn't
 `resizable` gets its size as both limits on X11 and Wayland. macOS has no
 per-window icons, so the icon replaces the app's Dock icon while it runs. iOS,
-Android and the web ignore these settings.
+Android and the web ignore these settings (the web shows cursor shapes, though,
+through the canvas's `style.cursor`).
 
 ## Cursors
 

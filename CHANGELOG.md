@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The web catches up with the desktops: `stipple::web_app!(app)` generates a
+  web app's exports and `web/stipple.js` is its whole page side, so an app no
+  longer copies the glue. Timers and `AppHandle::update` wake the app through
+  `setTimeout`, `requestAnimationFrame` drives animations (and stops when
+  idle), `devicePixelRatio` sets the scale, the canvas follows resizes, and
+  keys, modifiers, the wheel, cursor shapes and the clipboard (through paste
+  and copy events) work. See `docs/platforms/web.md`.
+- `dialog::open_file_contents` and `dialog::save_file_contents`: open a file's
+  name and bytes through a callback, and save bytes, on every platform, the web
+  included (an `<input type=file>` and a download). `FileDialog` gains
+  `file_name` and `accept`.
+- `stipple::platform::time::Instant`: std's `Instant` natively, and a
+  `performance.now()` clock on the web, where std's panics.
+- `webdemo` shows a spinner, timers, a text editor and file buttons, and its
+  `index.html#selftest` checks them in headless Chrome in CI.
+
 - System clipboard on Wayland, through `wl_data_device`.
 - Following dark mode and accent-color changes while the app runs, on Windows,
   macOS and Linux: `Event::ThemeChanged`, `Window::set_dark` and
@@ -48,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (an overlay against the window's edges).
 
 ### Changed
+
+- `App::run` requires `S: 'static` (the web keeps the app after `run` returns).
+- `webdemo` no longer defines the `stipple_*` exports; `stipple::web_app!` does,
+  with a different set (see `docs/platforms/web.md`).
 
 - `core::Role` and `platform::A11yRole` have new variants; `AccessNode` has
   `selected` and `expanded`; `Element` and `LayoutNode` have a `semantics`

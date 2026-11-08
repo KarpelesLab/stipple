@@ -51,7 +51,8 @@ in tests.
 | Windows | a thread waiting on `DwmFlush`, DWM's composition pass |
 | macOS | a `CVDisplayLink`, stopped while nothing animates |
 | iOS | a `CADisplayLink`, paused while nothing animates |
-| Android, web | not yet: nothing animates there |
+| Web | `requestAnimationFrame`, requested only while something animates |
+| Android | not yet: nothing animates there |
 
 A frame that's asked for always arrives: if the display source doesn't deliver
 within two refresh intervals (a hidden window, say), a timer does.
@@ -62,5 +63,3 @@ within two refresh intervals (a hidden window, say), a timer does.
 - Theme changes (light to dark) switch at once rather than cross-fading.
 - With several windows, frames re-render the window the wake arrived for, so
   animations in other windows advance on their next event.
-- On the web there's no clock yet, so `frame_time()` stays at zero and the
-  spinner shows a still arc.

@@ -20,9 +20,10 @@ pixels from the left arrives at x = 100.
 | iOS | `UIScreen.scale` | — |
 | X11 | `Xft.dpi` / 96, from `RESOURCE_MANAGER` | ❌ read at startup |
 | Wayland | The scale of the output the window is on | ✅ |
-| Android, web | Not yet: always 1x | — |
+| Web | `devicePixelRatio`; the canvas's backing store is its CSS size times the ratio | ✅ on resize, zoom, or moving to another screen |
+| Android | Not yet: always 1x | — |
 
 CI runs X11 at 2x (setting `Xft.dpi`) and Wayland at 2x (`swaymsg output … scale 2`),
 and clicks a control at its physical position to check that positions arrive in
-logical pixels. Windows and macOS runners are 1x, so their high-DPI paths haven't
+logical pixels. The web's selftest runs in headless Chrome at a pixel ratio of 2. Windows and macOS runners are 1x, so their high-DPI paths haven't
 been seen on a real high-DPI display yet.

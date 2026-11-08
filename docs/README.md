@@ -20,22 +20,22 @@ How to build, package and run on each platform, and what works there today.
 | | Linux | Windows | macOS | iOS | Android | Web |
 |---|---|---|---|---|---|---|
 | Window and rendering | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Pointer input | ✅ | ✅ | ✅ | ✅ touch | ❌ | ✅ |
-| Keyboard input | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ |
-| Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ❌ | ❌ |
-| Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ❌ | ❌ |
-| Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ❌ | ❌ |
-| Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ❌ | ❌ |
-| High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ❌ | ❌ |
+| Pointer input | ✅ | ✅ | ✅ | ✅ touch | ❌ | ✅ ¹² |
+| Keyboard input | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ ¹² |
+| Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ❌ | ✅ ⁶ |
+| Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ❌ | ✅ ¹² |
+| Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ❌ | ✅ ¹² |
+| Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ❌ | ✅ ¹² |
+| High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ❌ | ✅ ¹² |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ❌ | ❌ |
-| System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ❌ | ❌ |
-| File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ❌ |
+| System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ❌ | ✅ ¹³ |
+| File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
 | Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ❌ |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
-| Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ❌ |
+| Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ✅ ¹² |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -43,8 +43,8 @@ How to build, package and run on each platform, and what works there today.
 ⁴ CI round-trips text through the OS clipboard, and Ctrl/Cmd+C/X/V reach it now
 that these backends report modifier keys.
 ⁵ Implemented, but a modal dialog can't be driven headlessly, so CI only builds it.
-⁶ CI drives these with scripted input on X11 only; on Wayland, Windows and macOS
-they're implemented and unit-tested but not yet exercised end to end.
+⁶ CI drives these with scripted input on X11 only; on Wayland, Windows, macOS and
+the web they're implemented and unit-tested but not yet exercised end to end.
 ⁷ Implemented, but CI can't switch the system's appearance, so it's untested end
 to end. Linux needs the desktop portal (its `SettingChanged` signal).
 ⁸ Wayland copies and pastes, and CI round-trips text with `wl-copy`/`wl-paste`.
@@ -57,6 +57,16 @@ the compositor's defaults stay.
 frames with a timer at the RandR refresh rate; Wayland, Windows and macOS use
 frame callbacks, `DwmFlush` and `CVDisplayLink`, which CI exercises but can't
 time precisely.
+¹² CI drives `webdemo` with scripted DOM events in headless Chrome, at a pixel
+ratio of 2, and checks what the app saw: clicks, the cursor, typing and Ctrl
+shortcuts, timers, the spinner animating and then stopping, and resizing.
+¹³ Through the browser's `paste`, `copy` and `cut` events (and
+`navigator.clipboard.writeText`): Ctrl/Cmd+V pastes, but the app can't read the
+clipboard on its own. CI round-trips text with synthetic clipboard events.
+¹⁴ `open_file_contents` (an `<input type=file>`, answered asynchronously) and
+`save_file_contents` (a download). `open_file` and friends return `None`, since
+a page never sees paths. CI checks both with the picker and download stood in
+for. See [the web page](platforms/web.md#file-dialogs).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.

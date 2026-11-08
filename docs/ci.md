@@ -6,7 +6,8 @@ Three workflows run on every push and pull request:
   the 1.88 minimum Rust version; and cross-compiling for Android and iOS.
 - **Visual**: builds the examples on each platform, runs them in real windows,
   screenshots them, and checks what it can see: that a click changed the
-  screen, that text was typed, that the web canvas isn't blank, that an
+  screen, that text was typed, that the web demo's scripted selftest passes in
+  headless Chrome, that an
   accessibility tree reached the OS. Linux runs under Xvfb (X11) and headless
   sway (Wayland); iOS and Android under their simulator and emulator.
 - **Release-plz**: on `master`, opens release pull requests and publishes to
