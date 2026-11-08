@@ -1083,7 +1083,8 @@ impl<S: 'static> Pane<S> {
 
     /// Route a completed click at `pos` (logical pixels): update keyboard focus
     /// to the focusable under the cursor (if any), then dispatch the hit
-    /// element's tap handler. Returns `true` if a tap handler ran.
+    /// element's tap handler. Returns `true` if a tap handler ran or focus
+    /// moved (either needs a repaint).
     fn click_at(&mut self, state: &mut S, theme: &Theme, font: Option<&Font>, pos: Point) -> bool {
         self.ensure_tree(state, theme, font);
         // With a bar menu open, a click on another title switches menus (and on
@@ -1111,11 +1112,12 @@ impl<S: 'static> Pane<S> {
             .unwrap_or((None, None));
 
         // Clicking moves focus (to the focusable under the cursor, or away).
-        if foc != self.focused {
+        let refocused = foc != self.focused;
+        if refocused {
             self.focused = foc;
             self.dirty = true;
         }
-        match hit {
+        let ran = match hit {
             Some(id) => {
                 crate::core::set_pointer_position(pos, None);
                 let ran = self.handlers.dispatch(id, state);
@@ -1125,7 +1127,9 @@ impl<S: 'static> Pane<S> {
                 ran
             }
             None => false,
-        }
+        };
+        // A focus change repaints too (the focus ring, the keyboard).
+        ran || refocused
     }
 
     /// Route a secondary (right) click at `pos` to the context handler under the

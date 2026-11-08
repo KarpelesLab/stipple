@@ -108,22 +108,36 @@ fn main() {
 #[cfg(target_os = "ios")]
 mod selftest {
     use super::*;
+    use std::collections::VecDeque;
     use stipple::platform::TouchPhase;
     use stipple::platform::backend::ios::simulate;
 
-    type Step = Box<dyn FnOnce(&mut State) + Send>;
+    enum Step {
+        /// Run once.
+        Do(Box<dyn FnOnce(&mut State) + Send>),
+        /// Wait until this holds, checking every 250 ms, at most this many
+        /// more times (then go on, and let the later checks report it).
+        Until(fn() -> bool, u32),
+    }
 
     /// Run `steps` one after another, each `ms` after the previous one ran
     /// (not after launch): a slow first frame then delays the whole sequence
     /// instead of making every step due at once, ahead of the touches and
     /// typing the earlier steps queued.
-    fn chain(handle: &AppHandle<State>, mut steps: std::collections::VecDeque<(u64, Step)>) {
+    fn chain(handle: &AppHandle<State>, mut steps: VecDeque<(u64, Step)>) {
         let Some((ms, step)) = steps.pop_front() else {
             return;
         };
         let next = handle.clone();
         handle.after(Duration::from_millis(ms), move |s| {
-            step(s);
+            match step {
+                Step::Do(f) => f(s),
+                Step::Until(cond, left) => {
+                    if !cond() && left > 0 {
+                        steps.push_front((250, Step::Until(cond, left - 1)));
+                    }
+                }
+            }
             chain(&next, steps);
         });
     }
@@ -133,11 +147,16 @@ mod selftest {
         simulate::touch(1, TouchPhase::Ended, Point::new(x, y));
     }
 
+    fn holds_keyboard() -> bool {
+        simulate::keyboard_status().contains("first_responder=true")
+    }
+
     pub fn schedule(handle: &AppHandle<State>) {
         let _ = std::fs::remove_file(std::env::temp_dir().join("touchdemo.log"));
         log("touchdemo: selftest starting");
-        let mut steps: std::collections::VecDeque<(u64, Step)> = Default::default();
-        let mut at = |ms: u64, f: Step| steps.push_back((ms, f));
+        let mut steps: VecDeque<(u64, Step)> = VecDeque::new();
+        let mut at =
+            |ms: u64, f: Box<dyn FnOnce(&mut State) + Send>| steps.push_back((ms, Step::Do(f)));
         // Tap the text field: it takes focus, and the view the keyboard.
         at(
             1500,
@@ -149,10 +168,11 @@ mod selftest {
                 tap(120.0, PAD + FIELD_H / 2.0);
             }),
         );
+        steps.push_back((250, Step::Until(holds_keyboard, 40)));
         // Type through UIKeyInput: "Hi!", then delete the "!".
-        at(
-            1000,
-            Box::new(|_| {
+        steps.push_back((
+            0,
+            Step::Do(Box::new(|_| {
                 log(&format!(
                     "touchdemo: keyboard focused {}",
                     simulate::keyboard_status()
@@ -160,17 +180,19 @@ mod selftest {
                 simulate::insert_text("Hi");
                 simulate::insert_text("!");
                 simulate::delete_backward();
-            }),
-        );
+            })),
+        ));
+        let mut at =
+            |ms: u64, f: Box<dyn FnOnce(&mut State) + Send>| steps.push_back((ms, Step::Do(f)));
         // Drag the list up 300 points with a second finger id, a move every
         // 16 ms, so it scrolls and then flings.
-        let (x, y0, y1, steps_n) = (120.0, 450.0, 150.0, 10u64);
+        let (x, y0, y1, moves) = (120.0, 450.0, 150.0, 10u64);
         at(
             1000,
             Box::new(move |_| simulate::touch(2, TouchPhase::Started, Point::new(x, y0))),
         );
-        for i in 1..=steps_n {
-            let y = y0 + (y1 - y0) * i as f64 / steps_n as f64;
+        for i in 1..=moves {
+            let y = y0 + (y1 - y0) * i as f64 / moves as f64;
             at(
                 16,
                 Box::new(move |_| simulate::touch(2, TouchPhase::Moved, Point::new(x, y))),
@@ -182,9 +204,10 @@ mod selftest {
         );
         // Tap beside the label, on nothing focusable: focus and the keyboard go.
         at(2500, Box::new(|_| tap(300.0, PAD + FIELD_H + 12.0 + 8.0)));
-        at(
-            1000,
-            Box::new(|s| {
+        steps.push_back((250, Step::Until(|| !holds_keyboard(), 40)));
+        steps.push_back((
+            0,
+            Step::Do(Box::new(|s| {
                 let keyboard = simulate::keyboard_status();
                 log(&format!("touchdemo: keyboard after {keyboard}"));
                 let offset = f64::from_bits(OFFSET.load(Ordering::Relaxed));
@@ -210,8 +233,8 @@ mod selftest {
                         failures.join("; ")
                     ));
                 }
-            }),
-        );
+            })),
+        ));
         chain(handle, steps);
     }
 }

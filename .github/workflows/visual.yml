@@ -2641,7 +2641,7 @@ jobs:
             --stderr="$PWD/visual_output/touchdemo-stderr.log" "$DEV" com.karpeleslab.stipple
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"
-          for _ in $(seq 1 30); do
+          for _ in $(seq 1 90); do
             grep -q "touchdemo: selftest" "$LOG" 2>/dev/null && grep -qE "selftest (passed|FAILED)" "$LOG" && break
             sleep 1
           done
