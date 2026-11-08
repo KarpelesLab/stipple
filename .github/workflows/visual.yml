@@ -591,13 +591,23 @@ jobs:
           [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 2000 ]
           # A mouse drag over the list doesn't scroll it: dragging to scroll is
           # for fingers (touch scrolling), the mouse keeps the wheel.
+          # Let the wheel scrolling finish first (a slow runner can still be
+          # working through the notches): wait until two frames match.
+          cp visual_output/scroll-after.png visual_output/scroll-settled.png
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 1
+            import -window root visual_output/scroll-now.png
+            same=$(compare -metric AE visual_output/scroll-settled.png visual_output/scroll-now.png null: 2>&1 || true)
+            mv visual_output/scroll-now.png visual_output/scroll-settled.png
+            [ "$(echo "$same" | awk '{printf "%d", $1}')" -eq 0 ] && break
+          done
           xdotool mousemove 210 300 mousedown 1
           sleep 0.2
           for y in 280 260 240 220 200 180; do xdotool mousemove 210 $y; sleep 0.05; done
           xdotool mouseup 1
           sleep 1
           import -window root visual_output/scroll-dragged.png
-          diff=$(compare -metric AE visual_output/scroll-after.png visual_output/scroll-dragged.png null: 2>&1 || true)
+          diff=$(compare -metric AE visual_output/scroll-settled.png visual_output/scroll-dragged.png null: 2>&1 || true)
           echo "changed pixels after a mouse drag: $diff"
           [ "$(echo "$diff" | awk '{printf "%d", $1}')" -lt 200 ]
 
