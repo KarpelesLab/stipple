@@ -672,6 +672,16 @@ jobs:
           import -window root visual_output/menu-base.png
           ae() { compare -metric AE "$1" "$2" null: 2>&1 | awk '{printf "%d", $1}'; }
 
+          # Holding Alt underlines the bar's mnemonics (and nothing else);
+          # releasing it alone puts the keyboard on the bar, Escape leaves it.
+          xdotool keydown alt
+          sleep 1
+          import -window root visual_output/menu-cues.png
+          xdotool keyup alt
+          sleep 0.5
+          xdotool key Escape
+          sleep 0.5
+
           # Alt+F opens File from the keyboard. (Not F10: the runner's xdotool
           # sends F10 with Alt held, from a level of the key that needs it.)
           xdotool key alt+f
@@ -699,19 +709,24 @@ jobs:
           import -window root visual_output/menu-click.png
           echo "=== menu.log ==="; grep -v "x11: present" visual_output/menu.log | uniq -c | tail -60 || true
 
+          cues=$(ae visual_output/menu-base.png visual_output/menu-cues.png)
           file=$(ae visual_output/menu-base.png visual_output/menu-file.png)
           closed=$(ae visual_output/menu-base.png visual_output/menu-closed.png)
           shortcut=$(ae visual_output/menu-closed.png visual_output/menu-shortcut.png)
           context=$(ae visual_output/menu-shortcut.png visual_output/menu-context.png)
           picked=$(ae visual_output/menu-shortcut.png visual_output/menu-picked.png)
           click=$(ae visual_output/menu-picked.png visual_output/menu-click.png)
-          echo "file=$file closed=$closed shortcut=$shortcut context=$context picked=$picked click=$click"
+          echo "cues=$cues file=$file closed=$closed shortcut=$shortcut context=$context picked=$picked click=$click"
+          [ "$cues" -gt 20 ] && [ "$cues" -lt 2000 ]  # underlines under F, E, V, H only
           [ "$file" -gt 5000 ]      # the File dropdown appeared
           [ "$closed" -lt 200 ]     # and Escape closed it again
           [ "$shortcut" -gt 1000 ]  # the shortcut added the chips
           [ "$context" -gt 5000 ]   # the context menu appeared
           [ "$picked" -gt 1000 ]    # picking Clear removed the chips
           [ "$click" -gt 5000 ]     # the click opened File
+          # The demo logs each command once: the shortcut ran twice, Clear once.
+          [ "$(grep -c '^menudemo: Added item' visual_output/menu.log)" -eq 2 ]
+          [ "$(grep -c '^menudemo: Cleared' visual_output/menu.log)" -eq 1 ]
 
       - name: Stop the app and Xvfb
         if: always()
@@ -1501,6 +1516,16 @@ jobs:
           powershell -NoProfile -Command Get-Clipboard | tee os-clipboard.txt
           grep -q 'stipple clipboard .* round-trip' os-clipboard.txt
 
+      - name: Drive the native menu bar and context menu
+        shell: powershell
+        run: |
+          cargo build --release -p menudemo
+          # Reads the HMENU back (GetMenu/GetMenuStringW), picks with
+          # WM_COMMAND, Alt+E then a mnemonic, and Ctrl+D, opens the native
+          # context menu (#32768) with a right-click and picks from it, and
+          # checks menudemo's log saw each command exactly once.
+          .github\scripts\menu-windows.ps1 .\target\release\menudemo.exe visual_output
+
       - name: Screenshot the Stipple window and the native gallery
         shell: powershell
         run: |
@@ -1938,6 +1963,48 @@ jobs:
           # ...and another process sees it on the general pasteboard.
           pbpaste | tee os-clipboard.txt
           grep -q 'stipple clipboard .* round-trip' os-clipboard.txt
+
+      - name: Drive the native menu bar and context menu
+        run: |
+          cargo build --release -p menudemo
+          mkdir -p visual_output
+          # In-process (System Events needs an accessibility grant the runner
+          # may lack): print the NSMenu bar, pick Edit > Add Item through
+          # performActionForItemAtIndex:, post Cmd+D, right-click the canvas
+          # (the native context menu reports itself and picks its first
+          # item), Cmd+C with no field focused (the menu's Copy Summary), then
+          # Tab into the note field and Cmd+C again (the field copies; the
+          # menu item must not run a second time).
+          STIPPLE_COCOA_MENU_SELFTEST='perform=Edit/Add Item;key=cmd+d;right=320,300;key=cmd+c;key=tab;key=cmd+c' \
+            perl -e 'alarm 60; exec @ARGV' ./target/release/menudemo > visual_output/menu-macos.log 2>&1 || true
+          echo "=== menu-macos.log ==="; cat visual_output/menu-macos.log
+          log=visual_output/menu-macos.log
+          grep -q 'Cocoa menu selftest: done' $log
+          # The application menu first, then the app's, with key equivalents.
+          grep -q '^Cocoa menu: Stipple Menus: About Stipple Menus' $log
+          grep -q '^Cocoa menu: File: New \[n\], Save \[s\] (off),' $log
+          grep -q '^Cocoa menu: Edit: Add Item \[d\]' $log
+          # The pick, the shortcut and the context menu each ran Add Item once.
+          grep -q '^menudemo: Added item 1 ' $log
+          grep -q '^menudemo: Added item 2 ' $log
+          grep -q '^Cocoa context menu: open: Add Item \[d\], Clear, -, Color >' $log
+          grep -q '^menudemo: Added item 3 ' $log
+          [ "$(grep -c '^menudemo: Added item' $log)" -eq 3 ]
+          # Cmd+C ran the menu item once: not again from the focused field,
+          # nor from AppKit matching the item's key equivalent (which the
+          # backend leaves to the app, and reports).
+          [ "$(grep -c '^menudemo: Copied the summary' $log)" -eq 1 ]
+          grep 'key equivalent .* left to the app' $log \
+            || echo "note: AppKit matched no key equivalent (app not active?)"
+          # osascript can drive the real menu bar where System Events is
+          # allowed; report, but don't require it.
+          ./target/release/menudemo > visual_output/menu-osascript.log 2>&1 &
+          PID=$!
+          sleep 4
+          perl -e 'alarm 20; exec @ARGV' osascript -e 'tell application "System Events" to tell process "menudemo" to click menu item "Add Item" of menu "Edit" of menu bar 1' \
+            && sleep 1 && grep '^menudemo:' visual_output/menu-osascript.log \
+            || echo "System Events unavailable here (no accessibility permission)"
+          kill "$PID" 2>/dev/null || true
 
       - name: Screenshot the native gallery
         env:

@@ -5,15 +5,18 @@
 //! menu in front), on Windows the window's native menu bar, and on Linux a bar
 //! Stipple draws across the top of the window: click a title, or press Alt or
 //! F10 and use the arrow keys, Enter and Escape, or Alt plus an underlined
-//! letter. Shortcuts (Ctrl+D adds an item, Ctrl+S saves…) work everywhere.
-//! Right-click the canvas, or press the Menu key or Shift+F10 over it, for its
-//! context menu.
+//! letter. Shortcuts (Ctrl+D adds an item, Ctrl+S saves…) work everywhere;
+//! Ctrl+C copies a summary, except in the note field, which copies its own
+//! selection. Right-click the canvas, or press the Menu key or Shift+F10 over
+//! it, for its context menu: the system's own on macOS and Windows.
 //!
-//! Pass `dark` for the dark theme. CI (X11/Xvfb) opens the File menu from the
-//! keyboard and with a click, adds items with the shortcut, opens the context
-//! menu with a right-click and picks from it, screenshotting each step.
+//! Each command logs a `menudemo: …` line. Pass `dark` for the dark theme. CI
+//! drives the drawn menus on X11 (`xdotool`), the native ones on Windows
+//! (`.github/scripts/menu-windows.ps1`) and on macOS (the
+//! `STIPPLE_COCOA_MENU_SELFTEST` self-test), and checks the log.
 
 use stipple::prelude::*;
+use stipple::widgets::{EditBuffer, text_editor};
 
 const W: f64 = 640.0;
 const H: f64 = 420.0;
@@ -34,6 +37,7 @@ struct State {
     zoom: usize,
     grid: bool,
     status: String,
+    note: EditBuffer,
 }
 
 impl State {
@@ -46,7 +50,14 @@ impl State {
             zoom: 0,
             grid: true,
             status: "Ready".into(),
+            note: EditBuffer::from_text("A note"),
         }
+    }
+
+    /// Show `status`, and log it (CI reads the log to see what ran).
+    fn say(&mut self, status: impl Into<String>) {
+        self.status = status.into();
+        println!("menudemo: {} ({} items)", self.status, self.items.len());
     }
 
     fn dirty(&self) -> bool {
@@ -56,12 +67,12 @@ impl State {
     fn add(&mut self) {
         self.items.push(format!("Item {}", self.next));
         self.next += 1;
-        self.status = format!("Added item {}", self.next - 1);
+        self.say(format!("Added item {}", self.next - 1));
     }
 
     fn clear(&mut self) {
         self.items.clear();
-        self.status = "Cleared".into();
+        self.say("Cleared");
     }
 }
 
@@ -74,7 +85,7 @@ fn color_menu(state: &State) -> Menu<State> {
             menu.item(
                 MenuItem::new(*name, move |s: &mut State| {
                     s.color = i;
-                    s.status = format!("Color: {}", COLORS[i].0.trim_start_matches('&'));
+                    s.say(format!("Color: {}", COLORS[i].0.trim_start_matches('&')));
                 })
                 .checked(state.color == i),
             )
@@ -90,7 +101,7 @@ fn menu_bar(state: &State, handle: &AppHandle<State>) -> MenuBar<State> {
             menu.item(
                 MenuItem::new(format!("{pct}%"), move |s: &mut State| {
                     s.zoom = i;
-                    s.status = format!("Zoom {}%", ZOOMS[i]);
+                    s.say(format!("Zoom {}%", ZOOMS[i]));
                 })
                 .checked(state.zoom == i),
             )
@@ -102,14 +113,14 @@ fn menu_bar(state: &State, handle: &AppHandle<State>) -> MenuBar<State> {
                     MenuItem::new("&New", |s: &mut State| {
                         s.clear();
                         s.saved = 0;
-                        s.status = "New document".into();
+                        s.say("New document");
                     })
                     .shortcut(Shortcut::cmd('n')),
                 )
                 .item(
                     MenuItem::new("&Save", |s: &mut State| {
                         s.saved = s.items.len();
-                        s.status = format!("Saved {} items", s.saved);
+                        s.say(format!("Saved {} items", s.saved));
                     })
                     .shortcut(Shortcut::cmd('s'))
                     .enabled(state.dirty()),
@@ -117,10 +128,10 @@ fn menu_bar(state: &State, handle: &AppHandle<State>) -> MenuBar<State> {
                 .submenu(
                     Menu::new("Open &Recent")
                         .item(MenuItem::new("notes.txt", |s: &mut State| {
-                            s.status = "Opened notes.txt".into()
+                            s.say("Opened notes.txt")
                         }))
                         .item(MenuItem::new("todo.txt", |s: &mut State| {
-                            s.status = "Opened todo.txt".into()
+                            s.say("Opened todo.txt")
                         })),
                 )
                 .separator()
@@ -135,7 +146,7 @@ fn menu_bar(state: &State, handle: &AppHandle<State>) -> MenuBar<State> {
                 .item(
                     MenuItem::new("&Remove Last", |s: &mut State| {
                         s.items.pop();
-                        s.status = "Removed the last item".into();
+                        s.say("Removed the last item");
                     })
                     .shortcut(Shortcut::key(KeyCode::Delete))
                     .enabled(!state.items.is_empty()),
@@ -144,6 +155,17 @@ fn menu_bar(state: &State, handle: &AppHandle<State>) -> MenuBar<State> {
                     MenuItem::new("C&lear", State::clear)
                         .shortcut(Shortcut::cmd_key(KeyCode::Delete))
                         .enabled(!state.items.is_empty()),
+                )
+                .separator()
+                .item(
+                    // Ctrl+C / ⌘C: in the note field, the field copies its
+                    // selection instead.
+                    MenuItem::new("&Copy Summary", |s: &mut State| {
+                        let summary = format!("{} items", s.items.len());
+                        stipple::core::set_clipboard_text(&summary);
+                        s.say("Copied the summary");
+                    })
+                    .shortcut(Shortcut::cmd('c')),
                 ),
         )
         .menu(
@@ -151,7 +173,7 @@ fn menu_bar(state: &State, handle: &AppHandle<State>) -> MenuBar<State> {
                 .item(
                     MenuItem::new("Show &Grid", |s: &mut State| {
                         s.grid = !s.grid;
-                        s.status = format!("Grid {}", if s.grid { "on" } else { "off" });
+                        s.say(format!("Grid {}", if s.grid { "on" } else { "off" }));
                     })
                     .shortcut(Shortcut::cmd('g'))
                     .checked(state.grid),
@@ -162,7 +184,7 @@ fn menu_bar(state: &State, handle: &AppHandle<State>) -> MenuBar<State> {
         )
         .menu(
             Menu::new("&Help").item(MenuItem::new("&About Menus", |s: &mut State| {
-                s.status = "Stipple menus demo".into()
+                s.say("Stipple menus demo")
             })),
         )
 }
@@ -222,6 +244,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             &theme,
             "Use the menu bar or its shortcuts, or right-click the canvas.",
         ),
+        text_editor(cx, &theme, &state.note, |s: &mut State| &mut s.note).width(240.0),
         canvas,
     ])
     .gap(theme.spacing.md)
@@ -322,5 +345,29 @@ mod tests {
         assert_eq!(app.state().status, "Saved 1 items");
         assert!(app.press_key_code(KeyCode::Char('g'), cmd));
         assert!(!app.state().grid);
+    }
+
+    #[test]
+    fn the_copy_shortcut_goes_to_a_focused_field() {
+        let mut app = build();
+        app.render_once();
+        let cmd = Modifiers {
+            ctrl: !cfg!(target_os = "macos"),
+            meta: cfg!(target_os = "macos"),
+            ..Modifiers::default()
+        };
+        assert!(app.press_key_code(KeyCode::Char('c'), cmd));
+        assert_eq!(app.state().status, "Copied the summary");
+        // Tab focuses the note: Ctrl+C (⌘C) copies from it, not the menu.
+        app.press_key_code(KeyCode::Tab, Modifiers::default());
+        app.render_once();
+        app.press_key_code(KeyCode::Char('d'), cmd);
+        assert_eq!(
+            app.state().status,
+            "Added item 1",
+            "other shortcuts still work"
+        );
+        app.press_key_code(KeyCode::Char('c'), cmd);
+        assert_eq!(app.state().status, "Added item 1");
     }
 }
