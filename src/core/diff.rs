@@ -194,6 +194,7 @@ mod tests {
                 text: text.into(),
                 size: 14.0,
                 color: Color::BLACK,
+                direction: Default::default(),
             },
             action: None,
             focus: None,

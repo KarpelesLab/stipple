@@ -23,6 +23,7 @@
 
 #![forbid(unsafe_code)]
 
+pub(crate) mod bidi;
 mod color;
 mod convert;
 mod image;
@@ -31,12 +32,13 @@ mod software;
 mod surface;
 mod text;
 
+pub use bidi::TextDirection;
 pub use color::Color;
 pub use image::{ImageError, ImageFit, ImageSource, Svg, image_formats};
 pub use scene::{DrawCmd, Scene};
 pub use software::SoftwareRenderer;
 pub use surface::{Pixmap, Surface};
-pub use text::{Font, FontError};
+pub use text::{Font, FontError, TextLayout};
 
 /// Low-level conversions to `oxideav-core` coordinate types. Exposed for
 /// crates that build scene-graph nodes directly (e.g. the future text-run

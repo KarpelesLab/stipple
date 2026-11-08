@@ -644,11 +644,13 @@ pub enum NodeContent {
     /// Decoration only (the common case).
     #[default]
     None,
-    /// A single line of text, painted at the node's bounds origin.
+    /// Text, painted from the node's bounds origin (right-to-left paragraphs
+    /// against its right edge).
     Text {
         text: String,
         size: f64,
         color: Color,
+        direction: crate::render::TextDirection,
     },
     /// An embedded-content viewport: the node's bounds reserve an area the
     /// compositor fills with externally-rendered pixels for this

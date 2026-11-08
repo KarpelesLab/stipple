@@ -13,7 +13,7 @@ use crate::geometry::Insets;
 use crate::layout::{Axis, Track};
 use crate::platform::CursorIcon;
 use crate::platform::native::NativeDeco;
-use crate::render::{Color, ImageFit, ImageSource};
+use crate::render::{Color, ImageFit, ImageSource, TextDirection};
 
 /// Alignment of children along an axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -77,6 +77,9 @@ pub enum ElementKind {
         text: String,
         size: f64,
         color: Color,
+        /// The paragraph direction for bidirectional text. Set via
+        /// [`Element::direction`].
+        direction: TextDirection,
     },
     /// A linear container that lays children along `axis`.
     Stack {
@@ -216,6 +219,7 @@ impl Element {
                 text: text.into(),
                 size,
                 color,
+                direction: TextDirection::Auto,
             },
         }
     }
@@ -560,6 +564,27 @@ impl Element {
     /// grow apply per line, and cross-axis alignment within each line.
     pub fn wrap(mut self) -> Self {
         self.wrap = true;
+        self
+    }
+
+    /// Set the paragraph direction of this text, or of every text element
+    /// inside this container. The default, [`TextDirection::Auto`], takes each
+    /// paragraph's direction from its first strong character. Right-to-left
+    /// paragraphs line up against the right edge of the text's box.
+    /// See `docs/bidi.md` in the repository.
+    pub fn direction(mut self, dir: TextDirection) -> Self {
+        fn set(el: &mut Element, dir: TextDirection) {
+            match &mut el.kind {
+                ElementKind::Text { direction, .. } => *direction = dir,
+                ElementKind::Stack { children, .. } | ElementKind::Grid { children, .. } => {
+                    for c in children {
+                        set(c, dir);
+                    }
+                }
+                _ => {}
+            }
+        }
+        set(&mut self, dir);
         self
     }
 

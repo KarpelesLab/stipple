@@ -22,7 +22,7 @@ use crate::layout::{
     solve_tracks, span_extent,
 };
 use crate::platform::native::NativeState;
-use crate::render::{Color, Font, Scene};
+use crate::render::{Color, Font, Scene, TextDirection, TextLayout};
 
 /// Neutral fill painted into an embedded-content viewport before its content is
 /// composited in, so the reserved area reads as a defined surface (a dark slate
@@ -309,10 +309,16 @@ fn align_in(align: Align, natural: f64, slot: f64, min: f64, max: f64) -> (f64, 
 /// absolute bounds, decorations, text content, and action handles.
 pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
     let content = match &el.kind {
-        ElementKind::Text { text, size, color } => NodeContent::Text {
+        ElementKind::Text {
+            text,
+            size,
+            color,
+            direction,
+        } => NodeContent::Text {
             text: text.clone(),
             size: *size,
             color: *color,
+            direction: *direction,
         },
         ElementKind::Viewport { id } => NodeContent::Viewport(*id),
         ElementKind::Image { source, fit } => NodeContent::Image {
@@ -536,106 +542,78 @@ pub fn paint_focus(
     }
 
     let Some(leaf) = first_text(node) else { return };
-    let NodeContent::Text { text, size, .. } = &leaf.content else {
+    let NodeContent::Text {
+        text,
+        size,
+        direction,
+        ..
+    } = &leaf.content
+    else {
         return;
     };
     let bounds = leaf.bounds;
-    let size = *size;
-    let line_h = font.map(|f| f.line_height(size)).unwrap_or(size);
-    // Width of a text slice (0 without a font).
-    let width = |slice: &str| font.map(|f| f.measure(slice, size).width).unwrap_or(0.0);
-    // Map a byte index to its (x, line) on screen.
-    let pos = |i: usize| -> (f64, usize) {
-        let i = i.min(text.len());
-        let ls = text[..i].rfind('\n').map(|n| n + 1).unwrap_or(0);
-        let line = text[..ls].bytes().filter(|&b| b == b'\n').count();
-        (bounds.min_x() + width(&text[ls..i]), line)
+    let Some(font) = font else {
+        // No font, no geometry: a caret bar at the start of the box.
+        let h = *size;
+        scene.fill_rect(
+            Rect::from_xywh(bounds.min_x(), bounds.min_y(), 2.0, h),
+            caret,
+        );
+        return;
     };
+    let layout = text_layout(font, text, *size, *direction, leaf.wrap, bounds.width());
+    let origin = bounds.origin;
 
-    // Selection highlight, drawn as one rectangle per spanned line (under the
-    // caret; translucent so the text reads through).
-    if let Some((s, e)) = leaf.selection
-        && e > s
-    {
-        let mut ls = 0usize;
-        let mut line = 0usize;
-        loop {
-            let le = text[ls..].find('\n').map(|n| ls + n).unwrap_or(text.len());
-            // Intersect [s, e) with this line, including the trailing '\n' when
-            // the selection continues onto the next line.
-            let nl = if le < text.len() { 1 } else { 0 };
-            let sel_s = s.max(ls);
-            let sel_e = e.min(le + nl);
-            if sel_e > sel_s && sel_s <= le {
-                let x0 = bounds.min_x() + width(&text[ls..sel_s.min(le)]);
-                let x1 = bounds.min_x() + width(&text[ls..sel_e.min(le)]);
-                let extra = if sel_e > le { 6.0 } else { 0.0 }; // hint the newline
-                let y = bounds.min_y() + line as f64 * line_h;
-                scene.fill_rect(Rect::from_xywh(x0, y, (x1 - x0) + extra, line_h), selection);
-            }
-            if le >= text.len() {
-                break;
-            }
-            ls = le + 1;
-            line += 1;
+    // Selection highlight: in mixed-direction text one logical range can be
+    // several rectangles on a line (under the caret; translucent so the text
+    // reads through).
+    if let Some((s, e)) = leaf.selection {
+        for rect in layout.selection_rects(s, e) {
+            scene.fill_rect(rect.translate(Vec2::new(origin.x, origin.y)), selection);
         }
     }
 
-    // Caret bar on its line (or end of text when unset).
-    let (cx, cline) = pos(leaf.caret.unwrap_or(text.len()));
-    let cx = (cx + 1.0).min(bounds.max_x().max(bounds.min_x() + 1.0));
-    let cy = bounds.min_y() + cline as f64 * line_h;
-    scene.fill_rect(Rect::from_xywh(cx, cy, 2.0, line_h), caret);
+    // Caret bar on its line (or end of text when unset), kept inside the box.
+    let line_h = font.line_height(*size);
+    let at = layout.caret_position(leaf.caret.unwrap_or(text.len()));
+    let cx = (origin.x + at.x).clamp(bounds.min_x(), (bounds.max_x() - 1.0).max(bounds.min_x()));
+    scene.fill_rect(Rect::from_xywh(cx, origin.y + at.y, 2.0, line_h), caret);
+}
+
+/// The layout a text node is painted with: wrapped to its box when `wrap` is
+/// set, with right-to-left paragraphs aligned to the box's right edge.
+fn text_layout<'a>(
+    font: &'a Font,
+    text: &'a str,
+    size: f64,
+    direction: TextDirection,
+    wrap: bool,
+    width: f64,
+) -> TextLayout<'a> {
+    font.layout(text, size, direction, wrap.then_some(width))
+        .with_align_width(width)
 }
 
 /// Resolve a pointer position (logical pixels, absolute) to the nearest caret
 /// byte index within `node`'s first text leaf. The `y` picks the line and the
-/// `x` the column within it; returns the boundary whose x is closest. Returns
-/// `None` if `node` has no text or no `font`.
+/// `x` the nearer edge of the character under it, in visual order, so clicks
+/// land correctly in right-to-left and mixed-direction text. Returns `None` if
+/// `node` has no text or no `font`.
 pub fn caret_index_at(node: &LayoutNode, point: Point, font: Option<&Font>) -> Option<usize> {
     let leaf = first_text(node)?;
-    let NodeContent::Text { text, size, .. } = &leaf.content else {
+    let NodeContent::Text {
+        text,
+        size,
+        direction,
+        ..
+    } = &leaf.content
+    else {
         return None;
     };
     let font = font?;
-    let line_h = font.line_height(*size).max(1.0);
-    let line = ((point.y - leaf.bounds.min_y()) / line_h).floor().max(0.0) as usize;
-
-    // Byte range [ls, le) of the chosen line (clamped to the last line if
-    // `line` overruns the line count).
-    let (mut ls, mut le) = (0usize, text.len());
-    let mut start = 0usize;
-    for (i, part) in text.split('\n').enumerate() {
-        let end = start + part.len();
-        ls = start;
-        le = end;
-        if i == line {
-            break;
-        }
-        start = end + 1; // skip the '\n'
-    }
-
-    let local = point.x - leaf.bounds.min_x();
-    if local <= 0.0 {
-        return Some(ls);
-    }
-    // Pick the char boundary in [ls, le] whose x is nearest the pointer.
-    let line_text = &text[ls..le];
-    let mut best = ls;
-    let mut best_dist = f64::INFINITY;
-    for (off, _) in line_text
-        .char_indices()
-        .map(|(i, _)| (i, ()))
-        .chain(std::iter::once((line_text.len(), ())))
-    {
-        let w = font.measure(&line_text[..off], *size).width;
-        let d = (w - local).abs();
-        if d < best_dist {
-            best_dist = d;
-            best = ls + off;
-        }
-    }
-    Some(best)
+    let b = leaf.bounds;
+    let layout = text_layout(font, text, *size, *direction, leaf.wrap, b.width());
+    Some(layout.index_at(Point::new(point.x - b.min_x(), point.y - b.min_y())))
 }
 
 /// Overlay a `highlight` (typically translucent) on the hovered tappable
@@ -698,15 +676,20 @@ pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
         paint_decoration(&node.decoration, node.bounds, scene);
     }
     match &node.content {
-        NodeContent::Text { text, size, color } => {
-            if let Some(f) = font {
-                if node.wrap {
-                    // Wrap to the laid-out width; fill_text renders the joined lines.
-                    let wrapped = f.wrap(text, *size, node.bounds.width()).join("\n");
-                    scene.fill_text(f, &wrapped, node.bounds.origin, *size, *color);
-                } else {
-                    scene.fill_text(f, text, node.bounds.origin, *size, *color);
-                }
+        NodeContent::Text {
+            text,
+            size,
+            color,
+            direction,
+        } => {
+            if let Some(f) = font
+                && !text.is_empty()
+            {
+                // Wrapped to the laid-out width when `wrap` is set; right-to-left
+                // paragraphs line up against the right edge of the box.
+                let w = node.bounds.width();
+                let layout = text_layout(f, text, *size, *direction, node.wrap, w);
+                scene.fill_layout(&layout, node.bounds.origin, *color);
             }
         }
         // Reserve the embedded-content area: paint a placeholder and record the

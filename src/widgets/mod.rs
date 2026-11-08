@@ -32,7 +32,7 @@ use crate::core::{
 };
 use crate::geometry::{Insets, Point};
 use crate::platform::native::{self, NativeControl};
-use crate::render::{Color, ImageSource, Svg};
+use crate::render::{Color, ImageSource, Svg, TextDirection};
 use crate::style::Theme;
 use std::sync::Arc;
 
@@ -298,6 +298,9 @@ pub struct EditBuffer {
     /// `None` when nothing is selected.
     anchor: Option<usize>,
     history: History,
+    /// The paragraph direction, for drawing and for which way Left and Right
+    /// move the caret.
+    direction: TextDirection,
 }
 
 impl PartialEq for EditBuffer {
@@ -399,7 +402,28 @@ impl EditBuffer {
             caret,
             anchor: None,
             history: History::default(),
+            direction: TextDirection::Auto,
         }
+    }
+
+    /// This buffer with its paragraph direction set (see
+    /// [`set_direction`](Self::set_direction)).
+    pub fn with_direction(mut self, direction: TextDirection) -> Self {
+        self.direction = direction;
+        self
+    }
+
+    /// Set the paragraph direction: [`TextDirection::Auto`] (the default) takes
+    /// each line's direction from its first strong character. [`text_editor`]
+    /// and [`text_area`] draw the text with it, and Left and Right move the
+    /// caret visually along the line it gives.
+    pub fn set_direction(&mut self, direction: TextDirection) {
+        self.direction = direction;
+    }
+
+    /// The paragraph direction.
+    pub fn direction(&self) -> TextDirection {
+        self.direction
     }
 
     /// The current text.
@@ -690,26 +714,61 @@ impl EditBuffer {
         self.seal();
     }
 
-    /// Move the caret one character left, collapsing any selection to its start.
+    /// Move the caret one character left on screen, collapsing any selection
+    /// to its start (its end on a right-to-left line).
+    ///
+    /// The movement is visual: inside right-to-left text, Left moves forward
+    /// through the text. See [`visual_neighbor`](Self::visual_neighbor).
     pub fn move_left(&mut self) {
-        if let Some((s, _)) = self.selection() {
-            self.caret = s;
-        } else if let Some(prev) = self.prev_boundary(self.caret) {
-            self.caret = prev;
+        self.move_visually(false);
+    }
+
+    /// Move the caret one character right on screen, collapsing any selection
+    /// to its end (its start on a right-to-left line).
+    pub fn move_right(&mut self) {
+        self.move_visually(true);
+    }
+
+    fn move_visually(&mut self, right: bool) {
+        if let Some((s, e)) = self.selection() {
+            let rtl = self.line_is_rtl(self.caret);
+            self.caret = if right != rtl { e } else { s };
+        } else if let Some(next) = self.visual_neighbor(self.caret, right) {
+            self.caret = next;
         }
         self.anchor = None;
         self.seal();
     }
 
-    /// Move the caret one character right, collapsing any selection to its end.
-    pub fn move_right(&mut self) {
-        if let Some((_, e)) = self.selection() {
-            self.caret = e;
-        } else if let Some(next) = self.next_boundary(self.caret) {
-            self.caret = next;
+    /// Whether the line holding byte `i` runs right to left.
+    fn line_is_rtl(&self, i: usize) -> bool {
+        let line = &self.text[self.line_start(i)..self.line_end(i)];
+        self.direction.is_rtl_for(line)
+    }
+
+    /// The caret position one character left (`right == false`) or right of
+    /// byte `i` on screen, or `None` when there's nowhere to go.
+    ///
+    /// Each line is run through the Unicode Bidirectional Algorithm and the
+    /// caret steps between the visual edges of its characters, so it moves
+    /// left to right across mixed text even where the logical order jumps.
+    /// At the start or end of a line it crosses to the previous or next line.
+    pub fn visual_neighbor(&self, i: usize, right: bool) -> Option<usize> {
+        let (ls, le) = (self.line_start(i), self.line_end(i));
+        let line = &self.text[ls..le];
+        if let Some(b) = crate::render::bidi::visual_step_in(line, i - ls, self.direction, right) {
+            return Some(ls + b);
         }
-        self.anchor = None;
-        self.seal();
+        // At the line's visual edge: Right goes forward in a left-to-right
+        // line and back in a right-to-left one, onto the neighboring line.
+        let forward = right != self.direction.is_rtl_for(line);
+        if forward && i == le {
+            self.next_boundary(i)
+        } else if !forward && i == ls {
+            self.prev_boundary(i)
+        } else {
+            None
+        }
     }
 
     /// Move the caret to the start of the current line, clearing the selection.
@@ -791,19 +850,19 @@ impl EditBuffer {
         self.seal();
     }
 
-    /// Extend the selection one character left.
+    /// Extend the selection one character left on screen.
     pub fn select_left(&mut self) {
         self.extend(|b| {
-            if let Some(prev) = b.prev_boundary(b.caret) {
+            if let Some(prev) = b.visual_neighbor(b.caret, false) {
                 b.caret = prev;
             }
         });
     }
 
-    /// Extend the selection one character right.
+    /// Extend the selection one character right on screen.
     pub fn select_right(&mut self) {
         self.extend(|b| {
-            if let Some(next) = b.next_boundary(b.caret) {
+            if let Some(next) = b.visual_neighbor(b.caret, true) {
                 b.caret = next;
             }
         });
@@ -1007,7 +1066,10 @@ pub fn text_editor<S>(
     } else {
         buffer.text().to_string()
     };
+    // The text fills the field so right-to-left lines can sit at its right edge.
     let text = Element::text(shown, theme.font_size, theme.palette.text)
+        .direction(buffer.direction())
+        .grow(1.0)
         .caret(buffer.caret())
         .selection(buffer.selection());
     Element::stack(Axis::Horizontal, vec![text])
@@ -1049,7 +1111,10 @@ pub fn text_area<S>(
     } else {
         buffer.text().to_string()
     };
+    // The text fills the field so right-to-left lines can sit at its right edge.
     let text = Element::text(shown, theme.font_size, theme.palette.text)
+        .direction(buffer.direction())
+        .grow(1.0)
         .caret(buffer.caret())
         .selection(buffer.selection());
     Element::stack(Axis::Horizontal, vec![text])
@@ -1969,5 +2034,70 @@ mod tests {
         st.b.place_caret(0);
         assert!(handlers.dispatch_key(field.focus.unwrap(), &KeyInput::SelectLine, &mut st));
         assert_eq!(st.b.selection(), Some((0, 3)));
+    }
+
+    #[test]
+    fn arrows_move_visually_through_right_to_left_text() {
+        // "abc אבג": a0 b1 c2 ' '3, then א at byte 4, ב 6, ג 8; 10 bytes.
+        let mut b = EditBuffer::from_text("abc אבג");
+        b.place_caret(3);
+        b.move_right(); // after the space: the Hebrew's visual left end...
+        assert_eq!(b.caret(), 4 + 6, "...which is the end of the text");
+        b.move_right();
+        assert_eq!(b.caret(), 8, "then back through it, to before ג");
+        b.move_right();
+        b.move_right();
+        assert_eq!(b.caret(), 4, "the visual right end is before א");
+        b.move_right();
+        assert_eq!(b.caret(), 4, "and that's the end of the line");
+        b.move_left();
+        assert_eq!(b.caret(), 6);
+
+        // A right-to-left line: Left moves forward through the text.
+        let mut h = EditBuffer::from_text("שלום");
+        h.place_caret(0);
+        h.move_left();
+        assert_eq!(h.caret(), 2);
+        h.move_right();
+        assert_eq!(h.caret(), 0);
+        // Shift+Left extends forward too, and the selection stays logical.
+        h.select_left();
+        h.select_left();
+        assert_eq!(h.selection(), Some((0, 4)));
+        // Left collapses a right-to-left selection to its far (logical) end.
+        h.move_left();
+        assert_eq!(h.caret(), 4);
+    }
+
+    #[test]
+    fn deletion_stays_logical_in_mixed_text() {
+        let mut b = EditBuffer::from_text("abc אבג");
+        b.backspace();
+        assert_eq!(
+            b.text(),
+            "abc אב",
+            "Backspace removes the last letter typed"
+        );
+        b.place_caret(4);
+        b.delete();
+        assert_eq!(b.text(), "abc ב");
+    }
+
+    #[test]
+    fn direction_can_be_forced() {
+        let mut b = EditBuffer::from_text("abc").with_direction(TextDirection::Rtl);
+        assert_eq!(b.direction(), TextDirection::Rtl);
+        // Latin letters keep their order inside a right-to-left line: the
+        // caret before "a" is at the line's visual left edge.
+        b.place_caret(0);
+        b.move_left();
+        assert_eq!(b.caret(), 0);
+        b.move_right();
+        assert_eq!(b.caret(), 1);
+        // At the end of a left-to-right line, Right goes on to the next line.
+        let mut m = EditBuffer::from_text("ab\nאב");
+        m.place_caret(2);
+        m.move_right();
+        assert_eq!(m.caret(), 3);
     }
 }

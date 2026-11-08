@@ -1870,7 +1870,7 @@ pub mod prelude {
     };
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::platform::{CursorIcon, WindowRequest};
-    pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg};
+    pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg, TextDirection};
     pub use crate::style::Theme;
     pub use crate::style::{Palette, Spacing, Typography};
     pub use crate::widgets::{
