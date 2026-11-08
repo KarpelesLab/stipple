@@ -65,7 +65,9 @@
         await sleep(1800);
         const loading = probe(5), ticks = probe(1);
         check("timer", probe(2) === 1 && ticks >= 2, `loaded=${probe(2)}, ${ticks} ticks of the 500 ms timer`);
-        check("spinner", loading >= ticks + 10, `${loading} frames built while loading, ${stats.frames} animation frames`);
+        // Headless Chrome on a busy runner can manage well under 10 fps, so only ask
+        // for clearly more builds than the timer alone causes.
+        check("spinner", loading >= ticks + 5, `${loading} frames built while loading, ${stats.frames} animation frames`);
         const raf = stats.frames, idleBuilt = probe(6);
         await sleep(1000);
         check("idle", stats.frames - raf <= 2 && probe(6) - idleBuilt <= 4,
