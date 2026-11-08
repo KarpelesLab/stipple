@@ -35,6 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Font::layout` / `TextLayout` (caret positions, hit-testing, selection
   rectangles) and `Scene::fill_layout`. See `docs/bidi.md` and
   `examples/bididemo`.
+- Menus: `App::menu` declares a menu bar (`MenuBar`, `Menu`, `MenuItem`) as a
+  function of the state, with shortcuts (`Shortcut`), enabled and checked
+  states, separators and submenus; `Element::context_menu` attaches a context
+  menu. macOS shows a native `NSMenu` menu bar with the standard application
+  menu, Windows a native `HMENU`, and Linux a menu bar drawn in the window with
+  keyboard navigation. See `docs/menus.md` and `examples/menudemo`.
+- `Role::MenuBar`, `Role::Menu` and `Role::MenuItem`, mapped by the
+  accessibility bridges; `KeyCode::Alt`, `KeyCode::ContextMenu`,
+  `Event::MenuCommand`, `Window::set_menu_bar`, `Anchor::Popup` and
+  `Anchor::RightOf`; `App::press_key_code`, `App::release_key_code`,
+  `App::right_click_at` and `App::menu_command` for scripted input.
 - System clipboard on Wayland, through `wl_data_device`.
 - Following dark mode and accent-color changes while the app runs, on Windows,
   macOS and Linux: `Event::ThemeChanged`, `Window::set_dark` and
@@ -97,6 +108,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `spinner` takes the `Cx`: `spinner(cx, &theme)`.
 - `KeyInput` has `Preedit` and `DeleteSurrounding` variants; `Element` and
   `LayoutNode` have a `preedit` field.
+- Alt+letter now arrives as a `KeyCode::Char` shortcut on X11, Wayland and
+  Windows instead of typing the letter. AltGr still types.
+- `App` methods now need the state type to be `'static`.
 
 ### Fixed
 
@@ -108,6 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keymap read at startup.
 - Windows delivers characters outside the Basic Multilingual Plane (emoji, rare
   CJK ideographs), which `WM_CHAR` sends as two surrogates.
+- A press inside an overlay (a gap in a select's list) no longer falls through
+  to its press-outside catcher and closes it, and hovering outside an open
+  overlay no longer tints the whole window.
 
 ## [0.0.2](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.1...stipple-v0.0.2) - 2026-11-07
 

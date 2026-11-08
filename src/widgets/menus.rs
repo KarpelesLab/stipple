@@ -555,11 +555,16 @@ fn panel<S: 'static>(
             Element::text(text.clone(), theme.typography.body, ink).grow(1.0),
         ];
         if let Some(s) = item.get_shortcut() {
-            cells.push(Element::text(
-                s.label(),
-                theme.typography.body,
-                p.text_muted,
-            ));
+            // Keep shortcuts clear of the labels.
+            let text = Element::text(s.label(), theme.typography.body, p.text_muted);
+            cells.push(
+                Element::stack(Axis::Horizontal, vec![text]).padding(Insets::new(
+                    0.0,
+                    0.0,
+                    0.0,
+                    theme.spacing.lg,
+                )),
+            );
         }
         let submenu = item.get_submenu().is_some();
         cells.push(

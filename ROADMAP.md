@@ -890,7 +890,19 @@ Most input only works on X11 today.
   `AppHandle`) and `dialog::save_file_contents` (a download). The path-based
   calls return `None` there. CI checks both with the picker and the download
   stood in for.
-- ⬜ Menus: the macOS menu bar first, then window and context menus.
+- ✅ Menus: a declarative `MenuBar` / `Menu` / `MenuItem` model (`App::menu`,
+  rebuilt from the state) with shortcuts (`Shortcut::cmd`, Cmd on macOS and
+  Ctrl elsewhere), enabled and checked states, separators and submenus; a
+  native `NSMenu` menu bar on macOS (standard application menu, key
+  equivalents, `validateMenuItem:`) and `HMENU` on Windows (`WM_COMMAND`), and a
+  menu bar Stipple draws elsewhere, with keyboard navigation (Alt, F10, arrows,
+  Enter, Escape, mnemonics); context menus (`Element::context_menu`) on
+  right-click, the Menu key or Shift+F10, drawn as overlays everywhere; the
+  `MenuBar`, `Menu` and `MenuItem` roles. CI drives the drawn bar, a shortcut and
+  a context menu on X11; the macOS and Windows menu bars are build-checked only.
+  See [docs/menus.md](docs/menus.md).
+- ⬜ Native context-menu popups on macOS and Windows; underlined mnemonics in
+  the drawn menus.
 - ✅ Window control: minimum and maximum size, maximize, fullscreen and the
   window icon, as `App` / `WindowAttributes` options and at run time through
   `AppHandle::window`, on X11, Wayland, Windows and macOS (the Dock icon there).

@@ -39,6 +39,8 @@ How to build, package and run on each platform, and what works there today.
 | Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
 | Input methods (CJK IME) | Wayland ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ❌ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ❌ |
+| Menu bar | drawn ¹⁸ | native ¹⁰ | native ¹⁰ | ❌ | ❌ | ❌ |
+| Context menus and shortcuts | ✅ ¹⁸ | ✅ ¹⁰ | ✅ ¹⁰ | ❌ | ❌ | ❌ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -78,6 +80,9 @@ a real input method, so only the protocol wiring is tested. X11 has no IME
 support yet (XIM or IBus). See [ime.md](ime.md).
 ¹⁷ From the locale's Compose file, on X11 and Wayland. CI types dead keys and a
 compose sequence with `xdotool` (X11) and `wtype` (sway).
+¹⁸ Linux has no system menu bar, so Stipple draws one in the window. CI opens it
+from the keyboard and with a click, uses a shortcut, and picks from a context
+menu on X11.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -87,6 +92,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Layout](layout.md): stacks, wrapping, grids, and min/max sizes
 - [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
 - [Widgets](widgets.md): select, number input, split pane, toolbar and toasts
+- [Menus](menus.md): the menu bar, shortcuts and context menus
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click

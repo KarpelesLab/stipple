@@ -137,4 +137,5 @@ the stepper buttons, the split divider, toolbars and toasts.
 Set a role or name on your own elements with `.role(Role::…)` and
 `.a11y_label("…")`. The OS bridges (AT-SPI, UI Automation, NSAccessibility)
 don't have these roles yet, so they report the closest role they do have:
-a button, a text field, or a group.
+a button, a text field, or a group. Menus (see [menus.md](menus.md)) report
+`MenuBar`, `Menu` and `MenuItem`, which the bridges do map.

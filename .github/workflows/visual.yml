@@ -630,6 +630,100 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
+  # Menus: the menu bar Stipple draws on Linux, opened from the keyboard (F10,
+  # Down) and with a click, its shortcuts (Ctrl+D), and a context menu opened
+  # with a right-click and picked from with the keyboard. Each step is a
+  # screenshot diff against the previous state.
+  visual-menu:
+    name: Visual test (Menus / X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, ImageMagick, xdotool, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
+
+      - name: Build the menu demo
+        run: cargo build --release -p menudemo
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          echo "XVFB_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Open the menu bar, use a shortcut, open and pick from a context menu
+        env:
+          DISPLAY: ":99"
+        run: |
+          mkdir -p visual_output
+          ./target/release/menudemo > visual_output/menu.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          # Keep the pointer off the window's controls (and give it focus).
+          xdotool mousemove 500 500
+          sleep 0.5
+          import -window root visual_output/menu-base.png
+          ae() { compare -metric AE "$1" "$2" null: 2>&1 | awk '{printf "%d", $1}'; }
+
+          # F10 puts the keyboard on the menu bar, Down opens File.
+          xdotool key F10 Down
+          sleep 1
+          import -window root visual_output/menu-file.png
+          # Escape steps back to the bar, then leaves it.
+          xdotool key Escape Escape
+          sleep 1
+          import -window root visual_output/menu-closed.png
+          # Ctrl+D (Edit > Add Item) twice: two chips on the canvas.
+          xdotool key ctrl+d ctrl+d
+          sleep 1
+          import -window root visual_output/menu-shortcut.png
+          # Right-click the canvas: its context menu.
+          xdotool mousemove 320 300 click 3
+          sleep 1
+          import -window root visual_output/menu-context.png
+          # Down, Down, Enter picks "Clear": the chips go.
+          xdotool key Down Down Return
+          sleep 1
+          import -window root visual_output/menu-picked.png
+          # A click on the File title opens it too.
+          xdotool mousemove 24 14 click 1
+          sleep 1
+          import -window root visual_output/menu-click.png
+          echo "=== menu.log ==="; cat visual_output/menu.log || true
+
+          file=$(ae visual_output/menu-base.png visual_output/menu-file.png)
+          closed=$(ae visual_output/menu-base.png visual_output/menu-closed.png)
+          shortcut=$(ae visual_output/menu-closed.png visual_output/menu-shortcut.png)
+          context=$(ae visual_output/menu-shortcut.png visual_output/menu-context.png)
+          picked=$(ae visual_output/menu-shortcut.png visual_output/menu-picked.png)
+          click=$(ae visual_output/menu-picked.png visual_output/menu-click.png)
+          echo "file=$file closed=$closed shortcut=$shortcut context=$context picked=$picked click=$click"
+          [ "$file" -gt 5000 ]      # the File dropdown appeared
+          [ "$closed" -lt 200 ]     # and Escape closed it again
+          [ "$shortcut" -gt 1000 ]  # the shortcut added the chips
+          [ "$context" -gt 5000 ]   # the context menu appeared
+          [ "$picked" -gt 1000 ]    # picking Clear removed the chips
+          [ "$click" -gt 5000 ]     # the click opened File
+
+      - name: Stop the app and Xvfb
+        if: always()
+        run: |
+          [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      - name: Upload screenshots + log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-menu-screenshot
+          path: visual_output/*
+          if-no-files-found: warn
+
   # Clipboard: copy a field's text and paste it back, doubling it. Verifies the
   # in-app copy/paste path (Ctrl+A/C/V) via a before/after screenshot diff, and
   # the OS round-trip by reading the X11 CLIPBOARD selection back with xclip.
