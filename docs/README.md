@@ -20,20 +20,20 @@ How to build, package and run on each platform, and what works there today.
 | | Linux | Windows | macOS | iOS | Android | Web |
 |---|---|---|---|---|---|---|
 | Window and rendering | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Pointer input | ✅ | ✅ | ✅ | ✅ touch | ❌ | ✅ ¹² |
-| Keyboard input | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ ¹² |
-| Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ❌ | ✅ ⁶ |
-| Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ❌ | ✅ ¹² |
-| Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ❌ | ✅ ¹² |
-| Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ❌ | ✅ ¹² |
-| High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ❌ | ✅ ¹² |
+| Pointer input | ✅ | ✅ | ✅ | ✅ touch | ✅ touch, mouse ¹⁹ | ✅ ¹² |
+| Keyboard input | ✅ | ✅ | ✅ | ❌ | ✅ ¹⁹ | ✅ ¹² |
+| Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | mouse wheel ¹⁰ | ✅ ⁶ |
+| Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ✅ ¹⁰ | ✅ ¹² |
+| Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
+| Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
+| High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ✅ ¹⁹ | ✅ ¹² |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
-| System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ❌ | ❌ |
-| System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ❌ | ✅ ¹³ |
+| System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ✅ ²⁰ | ❌ |
+| Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ✅ ²⁰ | ❌ |
+| System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
 | Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ❌ |
-| Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ❌ |
+| Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ✅ ¹² |
 | Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
@@ -73,7 +73,7 @@ clipboard on its own. CI round-trips text with synthetic clipboard events.
 a page never sees paths. CI checks both with the picker and download stood in
 for. See [the web page](platforms/web.md#file-dialogs).
 ¹⁵ Laid out by the shared CPU text path, so the same everywhere; CI screenshots
-`bididemo` on X11. Editing it needs keyboard input, so not on iOS and Android
+`bididemo` on X11. Editing it needs keyboard input, so not on iOS
 yet. See [bidi.md](bidi.md).
 ¹⁶ Implemented (`text-input-v3`, IMM32, `NSTextInputClient`), but CI can't run
 a real input method, so only the protocol wiring is tested. X11 has no IME
@@ -83,6 +83,13 @@ compose sequence with `xdotool` (X11) and `wtype` (sway).
 ¹⁸ Linux has no system menu bar, so Stipple draws one in the window. CI opens it
 from the keyboard and with a click, uses a shortcut, and picks from a context
 menu on X11.
+¹⁹ CI runs `androiddemo` on an API 34 emulator (at its 2.625x density) and
+checks that a frame is presented, its timer ticks while the spinner turns, a tap
+lands on the button, and Tab plus `adb shell input text` type into the field.
+The soft keyboard shows for a focused text input and types through key events.
+²⁰ Implemented and tried by hand on an emulator (night mode switched with
+`adb shell cmd uimode night yes`, the clipboard read and written over JNI), but
+not checked in CI. The accent color needs Android 12.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.

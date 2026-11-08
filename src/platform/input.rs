@@ -338,6 +338,106 @@ pub(crate) fn mac_key_equivalent(shortcut: &crate::platform::Shortcut) -> Option
     Some((key, mask))
 }
 
+// ---- Android ----------------------------------------------------------------
+
+/// Translate an Android key code (`AKeyEvent_getKeyCode`, the `AKEYCODE_*`
+/// constants) into a named [`KeyCode`]. Keys that type a character are read
+/// through the device's key character map instead.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn android_keycode(kc: i32) -> Option<KeyCode> {
+    Some(match kc {
+        19 => KeyCode::ArrowUp, // AKEYCODE_DPAD_UP
+        20 => KeyCode::ArrowDown,
+        21 => KeyCode::ArrowLeft,
+        22 => KeyCode::ArrowRight,
+        61 => KeyCode::Tab,
+        66 | 160 => KeyCode::Enter, // ENTER, NUMPAD_ENTER
+        67 => KeyCode::Backspace,   // AKEYCODE_DEL
+        92 => KeyCode::PageUp,
+        93 => KeyCode::PageDown,
+        111 => KeyCode::Escape,
+        112 => KeyCode::Delete, // AKEYCODE_FORWARD_DEL
+        122 => KeyCode::Home,   // AKEYCODE_MOVE_HOME
+        123 => KeyCode::End,
+        124 => KeyCode::Insert,
+        // AKEYCODE_F1 … AKEYCODE_F12 are consecutive.
+        131..=142 => ANDROID_FUNCTION_KEYS[(kc - 131) as usize],
+        _ => return None,
+    })
+}
+
+const ANDROID_FUNCTION_KEYS: [KeyCode; 12] = [
+    KeyCode::F1,
+    KeyCode::F2,
+    KeyCode::F3,
+    KeyCode::F4,
+    KeyCode::F5,
+    KeyCode::F6,
+    KeyCode::F7,
+    KeyCode::F8,
+    KeyCode::F9,
+    KeyCode::F10,
+    KeyCode::F11,
+    KeyCode::F12,
+];
+
+/// Decode an Android meta state (`AKeyEvent_getMetaState`).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn android_modifiers(meta: i32) -> Modifiers {
+    Modifiers {
+        shift: meta & 0x1 != 0,    // AMETA_SHIFT_ON
+        alt: meta & 0x2 != 0,      // AMETA_ALT_ON
+        ctrl: meta & 0x1000 != 0,  // AMETA_CTRL_ON
+        meta: meta & 0x10000 != 0, // AMETA_META_ON
+    }
+}
+
+/// The character a key types on a US layout, for when the device's key
+/// character map can't be read.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn android_ascii(kc: i32, shift: bool) -> Option<char> {
+    const SHIFTED_DIGITS: &[u8; 10] = b")!@#$%^&*(";
+    let pick = |plain: u8, shifted: u8| Some(if shift { shifted } else { plain } as char);
+    match kc {
+        7..=16 => {
+            let i = (kc - 7) as usize;
+            pick(b'0' + i as u8, SHIFTED_DIGITS[i])
+        }
+        29..=54 => {
+            let c = b'a' + (kc - 29) as u8;
+            pick(c, c.to_ascii_uppercase())
+        }
+        17 => Some('*'),
+        18 => Some('#'),
+        55 => pick(b',', b'<'),
+        56 => pick(b'.', b'>'),
+        62 => Some(' '),
+        68 => pick(b'`', b'~'),
+        69 => pick(b'-', b'_'),
+        70 => pick(b'=', b'+'),
+        71 => pick(b'[', b'{'),
+        72 => pick(b']', b'}'),
+        73 => pick(b'\\', b'|'),
+        74 => pick(b';', b':'),
+        75 => pick(b'\'', b'"'),
+        76 => pick(b'/', b'?'),
+        77 => Some('@'),
+        81 => Some('+'),
+        _ => None,
+    }
+}
+
+/// The scroll delta for an `AMOTION_EVENT_ACTION_SCROLL`, from its
+/// `AXIS_HSCROLL` / `AXIS_VSCROLL` values: notches, with a positive vertical
+/// value meaning the wheel turned up (away from the user).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn android_scroll(h: f32, v: f32) -> ScrollDelta {
+    ScrollDelta {
+        dx: f64::from(h) * LINE_PX,
+        dy: -f64::from(v) * LINE_PX,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,6 +540,34 @@ mod tests {
         assert_eq!(mac_modifiers((1 << 16) | 0x100), Modifiers::default());
         assert!(mac_is_function_key("\u{F729}")); // NSHomeFunctionKey
         assert!(!mac_is_function_key("a"));
+    }
+
+    #[test]
+    fn android_keys_and_meta() {
+        assert_eq!(android_keycode(67), Some(KeyCode::Backspace));
+        assert_eq!(android_keycode(112), Some(KeyCode::Delete));
+        assert_eq!(android_keycode(21), Some(KeyCode::ArrowLeft));
+        assert_eq!(android_keycode(160), Some(KeyCode::Enter));
+        assert_eq!(android_keycode(131), Some(KeyCode::F1));
+        assert_eq!(android_keycode(142), Some(KeyCode::F12));
+        assert_eq!(android_keycode(29), None); // 'a' types a character
+        assert_eq!(android_keycode(4), None); // Back stays with the system
+        assert_eq!(
+            android_modifiers(0x1 | 0x1000),
+            Modifiers {
+                shift: true,
+                ctrl: true,
+                ..Modifiers::default()
+            }
+        );
+        assert!(android_modifiers(0x10000).meta);
+        assert_eq!(android_ascii(29, false), Some('a'));
+        assert_eq!(android_ascii(54, true), Some('Z'));
+        assert_eq!(android_ascii(8, true), Some('!'));
+        assert_eq!(android_ascii(73, false), Some('\\'));
+        assert_eq!(android_ascii(62, true), Some(' '));
+        assert_eq!(android_ascii(66, false), None);
+        assert_eq!(android_scroll(0.0, 1.0), ScrollDelta { dx: 0.0, dy: -40.0 });
     }
 
     #[test]

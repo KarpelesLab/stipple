@@ -46,6 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Event::MenuCommand`, `Window::set_menu_bar`, `Anchor::Popup` and
   `Anchor::RightOf`; `App::press_key_code`, `App::release_key_code`,
   `App::right_click_at` and `App::menu_command` for scripted input.
+- A real Android backend: `android::start` runs the app's `main` on a UI thread
+  from `ANativeActivity_onCreate`, and `App::run` drives it from an `ALooper`
+  through the whole `NativeActivity` lifecycle (window created, resized and
+  destroyed, focus, pause and resume, configuration changes, destroy). Touch
+  and mouse input, hardware keys and the soft keyboard, `AppHandle` wakeups and
+  timers, `AChoreographer` frames, the screen density as the scale factor,
+  night mode and the Android 12 accent color (followed live), system bars in the
+  app's colors, fullscreen, and the clipboard through JNI. `androiddemo` is now
+  a full app, and CI drives it on an emulator (tap, typing, timers) and uploads
+  screenshots. See `docs/platforms/android.md`.
+- `Window::set_text_input_active`, which the app calls with whether a text
+  input has focus, so touch platforms can show their on-screen keyboard.
+
 - System clipboard on Wayland, through `wl_data_device`.
 - Following dark mode and accent-color changes while the app runs, on Windows,
   macOS and Linux: `Event::ThemeChanged`, `Window::set_dark` and

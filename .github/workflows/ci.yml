@@ -40,9 +40,9 @@ jobs:
         run: cargo check --workspace
 
   # Verify the stack is mobile-portable: it cross-compiles for Android and iOS
-  # (the platform layer falls through to the headless backend there until the
-  # native ANativeWindow / UIKit backends land). oxideav is pure Rust, so no NDK
-  # is required for the build.
+  # with their native backends (NativeActivity, UIKit). Building the library
+  # needs no NDK: nothing links until an app's cdylib does. The emulator and
+  # simulator runs are in visual.yml.
   mobile:
     name: Cross-compile (${{ matrix.target }})
     runs-on: ${{ matrix.os }}

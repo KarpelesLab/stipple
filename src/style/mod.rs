@@ -162,8 +162,20 @@ impl Theme {
             (0xf2f2f7, 0xffffff, 0xc6c6c8),
             (0x000000, 0x1c1c1e, 0x38383a),
         );
+        // Material 3's baseline surface, surface-container and outline-variant.
+        #[cfg(target_os = "android")]
+        let (metrics, light, dark) = (
+            (12.0, 16.0),
+            (0xfef7ff, 0xf3edf7, 0xcac4d0),
+            (0x141218, 0x211f26, 0x49454f),
+        );
         // GNOME's libadwaita colors, the closest thing Linux has to a default.
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios")))]
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        )))]
         let (metrics, light, dark) = (
             (6.0, 14.0),
             (0xfafafb, 0xffffff, 0xd9d9dc),

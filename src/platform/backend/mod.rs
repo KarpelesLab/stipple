@@ -70,11 +70,16 @@ where
 /// returning [`ControlFlow::Exit`] tears the loop down.
 ///
 /// On the web this returns at once: the page keeps calling the handler.
-// `mut` is used by the native desktop backends (they take `&mut handler`); on
-// targets with no native backend (e.g. Android/web) the handler is moved
-// straight into the headless fallback, so the `mut` is unused there.
+// `mut` is used by the native backends that can fail over (they take
+// `&mut handler`); on targets with no such backend the handler is moved
+// straight to its only backend, so the `mut` is unused there.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    not(any(
+        target_os = "linux",
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "android"
+    )),
     allow(unused_mut)
 )]
 pub fn run<H>(attrs: WindowAttributes, handler: H)
@@ -137,6 +142,17 @@ where
                 Err(err) => {
                     eprintln!(
                         "stipple: macOS backend unavailable ({err}); falling back to headless"
+                    );
+                }
+            }
+        }
+        #[cfg(target_os = "android")]
+        {
+            match android::run(attrs.clone(), &mut handler) {
+                Ok(()) => return,
+                Err(err) => {
+                    eprintln!(
+                        "stipple: Android backend unavailable ({err}); falling back to headless"
                     );
                 }
             }

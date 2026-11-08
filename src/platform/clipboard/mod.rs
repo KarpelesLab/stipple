@@ -12,6 +12,9 @@
 //! - **macOS**: `NSPasteboard.generalPasteboard`, type `public.utf8-plain-text`
 //!   (`NSPasteboardTypeString`).
 //! - **iOS**: `UIPasteboard.generalPasteboard`'s `string`.
+//! - **Android**: `ClipboardManager`, over JNI through the activity's
+//!   `JavaVM`: `getPrimaryClip()` coerced to text, and
+//!   `setPrimaryClip(ClipData.newPlainText(..))`. Needs a running activity.
 //! - **Web**: [`set_text`] calls `navigator.clipboard.writeText` and also hands
 //!   the text to the `copy` / `cut` event that follows Ctrl/Cmd+C or X. The
 //!   browser only lets a page read the clipboard from a `paste` event, so
@@ -20,7 +23,7 @@
 //! - **Elsewhere**: these return `None` / `false`. On Linux the clipboard
 //!   belongs to the display connection, so the backends implement it on their
 //!   window: Wayland through `wl_data_device`, X11 through the `CLIPBOARD`
-//!   selection. Android doesn't have it yet.
+//!   selection.
 //!
 //! [`Window::clipboard`]: crate::platform::Window::clipboard
 //! [`Window::set_clipboard`]: crate::platform::Window::set_clipboard
@@ -53,11 +56,22 @@ mod os {
     }
 }
 
+#[cfg(target_os = "android")]
+mod os {
+    pub fn text() -> Option<String> {
+        crate::platform::backend::android::clipboard_text()
+    }
+    pub fn set_text(text: &str) -> bool {
+        crate::platform::backend::android::set_clipboard_text(text)
+    }
+}
+
 #[cfg(not(any(
     target_os = "windows",
     target_os = "macos",
     target_os = "ios",
-    target_arch = "wasm32"
+    target_arch = "wasm32",
+    target_os = "android"
 )))]
 mod os {
     pub fn text() -> Option<String> {

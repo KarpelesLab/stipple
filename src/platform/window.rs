@@ -283,6 +283,10 @@ pub trait Window {
     fn set_menu_bar(&self, _menu: &crate::platform::menu::NativeMenuBar) -> bool {
         false
     }
+    /// Whether a text input has keyboard focus, so a touch platform can show
+    /// its on-screen keyboard (and hide it again). The app calls this after
+    /// each frame it presents. Default: a no-op. Honored on Android.
+    fn set_text_input_active(&self, _active: bool) {}
 }
 
 /// Scale `icon` down (by area averaging) so neither side exceeds `max` pixels,

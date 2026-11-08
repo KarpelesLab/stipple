@@ -1,4 +1,4 @@
-//! Platforms whose native controls aren't drawn yet: Android and the web.
+//! Platforms whose native controls aren't drawn yet: the web.
 
 use super::{NativeControl, NativeDeco, SystemLook};
 use crate::geometry::PhysicalSize;

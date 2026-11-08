@@ -1,97 +1,113 @@
-//! A `NativeActivity` entry point that renders a Stipple frame onto Android's
-//! `ANativeWindow` surface — the runtime half of the Android backend, built as a
-//! cdylib (`libstipple_android.so`) that an APK loads via its NativeActivity.
+//! A Stipple app on Android: a `NativeActivity` that runs a full `App`, with
+//! touch, the keyboard, timers and an animated spinner. It builds as a cdylib
+//! (`libstipple_android.so`) that an APK loads through its NativeActivity.
 //!
-//! Android calls `ANativeActivity_onCreate`; we register an
-//! `onNativeWindowCreated` callback, and when the surface arrives we build a
-//! Stipple `App`, render one frame, and blit it to the window with
-//! `stipple::platform::backend::android::present_to_native_window`. A marker file
-//! in the app's data dir lets CI confirm the frame was presented on the
-//! emulator.
+//! Android calls `ANativeActivity_onCreate`, which hands the activity to
+//! `stipple::platform::backend::android::start`. That runs `main` on the UI
+//! thread, where the `App` runs as on any other platform. Its `println!`s go
+//! to logcat, under the `stipple` tag; CI reads them back:
+//!
+//! - `androiddemo: tick N` once a second, from an `AppHandle::every` timer, so
+//!   the loop wakes for timers;
+//! - `androiddemo: tapped N` when the button in the middle of the screen is
+//!   tapped (`adb shell input tap`);
+//! - `androiddemo: text "..."` as the field takes keys (`adb shell input text`,
+//!   after Tab moves focus to it).
 //!
 //! Non-Android builds compile to an empty cdylib so `cargo build --workspace`
 //! works everywhere.
 
 #[cfg(target_os = "android")]
 mod app {
-    use std::ffi::{CString, c_char, c_void};
-    use stipple::platform::backend::android::{
-        ANativeActivity, ANativeWindow_getHeight, ANativeWindow_getWidth, present_to_native_window,
-    };
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use stipple::platform::backend::android::{self, ANativeActivity};
     use stipple::prelude::*;
 
-    // ANDROID_LOG_INFO. `__android_log_write` is the non-variadic logcat writer.
-    const ANDROID_LOG_INFO: i32 = 4;
-    #[link(name = "log")]
-    unsafe extern "C" {
-        fn __android_log_write(prio: i32, tag: *const c_char, text: *const c_char) -> i32;
+    struct State {
+        taps: u32,
+        ticks: u32,
+        name: String,
     }
 
-    /// Emit `msg` to logcat under the `stipple` tag (CI greps `adb logcat` for it).
-    fn logcat(msg: &str) {
-        if let (Ok(tag), Ok(text)) = (CString::new("stipple"), CString::new(msg)) {
-            unsafe { __android_log_write(ANDROID_LOG_INFO, tag.as_ptr(), text.as_ptr()) };
-        }
-    }
+    /// Frames built, to show the spinner is driven by the display.
+    static FRAMES: AtomicU32 = AtomicU32::new(0);
 
-    fn view(_state: &(), cx: &mut Cx<()>) -> Element {
+    fn view(state: &State, cx: &mut Cx<State>) -> Element {
+        FRAMES.fetch_add(1, Ordering::Relaxed);
         let theme = *cx.theme();
-        let card = panel(
-            &theme,
-            vec![
-                label(&theme, "Stipple on Android"),
-                divider(&theme),
-                setting_row(&theme, Color::rgb(0xef, 0x68, 0x68), "Edit"),
-                setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99), "Edit"),
-                button_labeled(&theme, "OK"),
-            ],
-        )
-        .width(360.0);
-        column(vec![card])
+        let field = text_field(cx, &theme, &state.name, |s: &mut State, key| {
+            edit_string(&mut s.name, key);
+            println!("androiddemo: text {:?}", s.name);
+        });
+        let top = column(vec![
+            heading(&theme, "Stipple on Android"),
+            label(&theme, "Type your name:"),
+            field,
+            row(vec![
+                spinner(cx, &theme),
+                label(&theme, format!("Running for {} s", state.ticks)),
+            ])
+            .gap(theme.spacing.sm)
+            .align(Align::Start, Align::Center),
+        ])
+        .gap(theme.spacing.md);
+        // The button takes the space the rest leaves, so it covers the middle
+        // of the screen and CI can tap it at the screen's center.
+        let tap = button_labeled(&theme, "Tap me")
+            .width(280.0)
             .grow(1.0)
+            .on_tap(cx, |s: &mut State| {
+                s.taps += 1;
+                println!("androiddemo: tapped {}", s.taps);
+            });
+        let greeting = if state.name.is_empty() {
+            format!("Tapped {} times", state.taps)
+        } else {
+            format!("Hello, {}! Tapped {} times", state.name, state.taps)
+        };
+        column(vec![top, tap, label(&theme, greeting)])
+            .gap(theme.spacing.lg)
             .align(Align::Center, Align::Center)
+            .padding(Insets::uniform(theme.spacing.lg))
+            .grow(1.0)
     }
 
-    /// Render a Stipple frame at the surface size and blit it to the window.
-    unsafe extern "C" fn on_window_created(_activity: *mut ANativeActivity, window: *mut c_void) {
-        unsafe {
-            let w = ANativeWindow_getWidth(window).max(1) as f64;
-            let h = ANativeWindow_getHeight(window).max(1) as f64;
-            let mut app = App::new((), view)
-                .theme(Theme::dark())
-                .logical_size(Size::new(w, h));
-            if let Some(font) = Font::system_default() {
-                app = app.font(font);
-            }
-            let pixmap = app.render_once();
-            let ok = present_to_native_window(window, &pixmap);
-
-            // Emit a marker to logcat so CI can confirm the frame was presented.
-            logcat(&format!(
-                "Stipple Android: window {}x{} presented={}",
-                pixmap.size().width,
-                pixmap.size().height,
-                ok
-            ));
+    fn main() {
+        let theme = Theme::native();
+        println!(
+            "androiddemo: starting, dark={} background={:?}",
+            theme.is_dark(),
+            theme.palette.background
+        );
+        let state = State {
+            taps: 0,
+            ticks: 0,
+            name: String::new(),
+        };
+        let mut app = App::new(state, view).theme(theme);
+        if let Some(font) = Font::system_default() {
+            app = app.font(font);
         }
+        app.handle().every(Duration::from_secs(1), |s: &mut State| {
+            s.ticks += 1;
+            println!(
+                "androiddemo: tick {} ({} frames)",
+                s.ticks,
+                FRAMES.load(Ordering::Relaxed)
+            );
+        });
+        app.run();
+        println!("androiddemo: event loop exited");
     }
 
-    /// The symbol the Android runtime resolves to start a NativeActivity. We only
-    /// wire the window-created callback; the rest stay at their defaults.
+    /// The symbol Android resolves to start a NativeActivity.
     #[unsafe(no_mangle)]
     pub unsafe extern "C" fn ANativeActivity_onCreate(
         activity: *mut ANativeActivity,
-        _saved_state: *mut c_void,
-        _saved_state_size: usize,
+        saved_state: *mut c_void,
+        saved_state_size: usize,
     ) {
-        unsafe {
-            if activity.is_null() {
-                return;
-            }
-            let cb = (*activity).callbacks;
-            if !cb.is_null() {
-                (*cb).on_native_window_created = Some(on_window_created);
-            }
-        }
+        unsafe { android::start(activity, saved_state, saved_state_size, main) };
     }
 }

@@ -23,7 +23,7 @@ pub mod a11y;
 /// Platform-neutral accessibility tree handed to each backend's OS bridge.
 pub mod access;
 pub mod backend;
-/// The system clipboard (plain text) on Windows, macOS and iOS.
+/// The system clipboard (plain text) on Windows, macOS, iOS and Android.
 pub mod clipboard;
 /// Dead keys and compose sequences from the libX11 Compose file (X11 and
 /// Wayland, where composing is the client's job).

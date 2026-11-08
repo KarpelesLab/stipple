@@ -5,7 +5,7 @@
 //! bitmap, which the scene then draws as an image. Stipple keeps layout, input,
 //! the caret and the labels. Linux has no native framework, and Android's needs
 //! the JVM, so there [`Theme::native`] stays self-drawn and only follows the
-//! system's colors.
+//! system's colors (on Android, its night mode and accent color).
 //!
 //! Bitmaps are cached by control, state and size, so a control only reaches the
 //! OS when it actually changes.
@@ -37,11 +37,15 @@ mod os;
 #[cfg(target_os = "linux")]
 #[path = "linux.rs"]
 mod os;
+#[cfg(target_os = "android")]
+#[path = "android.rs"]
+mod os;
 #[cfg(not(any(
     target_os = "windows",
     target_os = "macos",
     target_os = "ios",
-    target_os = "linux"
+    target_os = "linux",
+    target_os = "android"
 )))]
 #[path = "fallback.rs"]
 mod os;
@@ -103,7 +107,12 @@ static CHANGED: AtomicBool = AtomicBool::new(false);
 /// then delivers [`Event::ThemeChanged`](crate::platform::Event::ThemeChanged).
 /// Safe from any thread.
 #[cfg_attr(
-    not(any(target_os = "windows", target_os = "macos", target_os = "linux")),
+    not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "linux",
+        target_os = "android"
+    )),
     allow(dead_code)
 )]
 pub(crate) fn note_changed() {

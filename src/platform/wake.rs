@@ -133,8 +133,6 @@ pub(crate) fn schedule(at: Instant) {
 
 /// Install the running backend's way of interrupting its wait. `schedule` is for
 /// backends whose loop can't take a timeout, and arranges a wakeup at a deadline.
-// Android's loop doesn't wake on demand yet.
-#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn install(
     signal: Arc<dyn Fn() + Send + Sync>,
     schedule: Option<Arc<dyn Fn(Instant) + Send + Sync>>,

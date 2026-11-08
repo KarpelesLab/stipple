@@ -9,8 +9,8 @@
 //!
 //! - A *display source* ticks at the refresh: `wl_surface.frame` on Wayland, a
 //!   `DwmFlush` thread on Windows, `CVDisplayLink` on macOS, `CADisplayLink` on
-//!   iOS, `requestAnimationFrame` on the web. It calls [`tick`] from whatever
-//!   thread it runs on.
+//!   iOS, `AChoreographer` on Android, `requestAnimationFrame` on the web. It
+//!   calls [`tick`] from whatever thread it runs on.
 //! - Otherwise a timer at the refresh [`interval`](set_interval) stands in (X11).
 //!
 //! A source that has been asked for a frame is trusted to deliver it, but if it
@@ -78,7 +78,6 @@ impl Clock {
     }
 
     /// A display source ticked. Returns whether a frame was wanted.
-    #[cfg_attr(target_os = "android", allow(dead_code))]
     fn tick(&mut self, now: Instant) -> bool {
         if self.wanted.is_none() {
             self.claimed = false;
@@ -149,7 +148,6 @@ pub fn wanted() -> bool {
 /// For a display source: the display is ready for a frame. Safe from any
 /// thread. Wakes the loop if a frame was wanted, and returns whether one was.
 /// A source that keeps ticking with nothing wanted should call [`idle`].
-#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn tick() -> bool {
     let Some(now) = now() else {
         return false;
@@ -189,6 +187,7 @@ pub(crate) fn claim() {
         target_os = "windows",
         target_os = "macos",
         target_os = "ios",
+        target_os = "android",
         target_arch = "wasm32"
     )),
     allow(dead_code)

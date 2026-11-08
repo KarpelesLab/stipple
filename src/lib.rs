@@ -1765,6 +1765,13 @@ impl<S: 'static> App<S> {
             // screen reader sees the current element hierarchy and focus.
             if let Some(tree) = pane.accessibility_tree() {
                 window.set_accessibility_tree(&to_platform_a11y(&tree));
+                // A focused text input asks for the on-screen keyboard.
+                fn typing(node: &crate::core::AccessNode) -> bool {
+                    use crate::core::Role;
+                    (node.focused && matches!(node.role, Role::TextField | Role::SpinButton))
+                        || node.children.iter().any(typing)
+                }
+                window.set_text_input_active(typing(&tree));
             }
 
             let damage = pane.take_damage();

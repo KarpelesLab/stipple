@@ -82,6 +82,10 @@ impl Font {
             // Windows.
             "C:\\Windows\\Fonts\\segoeui.ttf",
             "C:\\Windows\\Fonts\\arial.ttf",
+            // Android.
+            "/system/fonts/Roboto-Regular.ttf",
+            "/system/fonts/NotoSans-Regular.ttf",
+            "/system/fonts/DroidSans.ttf",
         ];
         // Faces consulted for glyphs the main font lacks, such as the checkbox's
         // check mark, which Liberation Sans doesn't have.
@@ -91,6 +95,7 @@ impl Font {
             "/usr/share/fonts/TTF/DejaVuSans.ttf",
             "/System/Library/Fonts/Apple Symbols.ttf",
             "C:\\Windows\\Fonts\\seguisym.ttf",
+            "/system/fonts/NotoSansSymbols-Regular-Subsetted.ttf",
         ];
         let mut font = CANDIDATES.iter().find_map(|path| {
             let bytes = std::fs::read(path).ok()?;

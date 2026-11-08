@@ -1,6 +1,6 @@
 [package]
 name = "androiddemo"
-description = "Stipple example: a NativeActivity entry point that renders a Stipple frame to the Android ANativeWindow surface (built as a cdylib for the APK)."
+description = "Stipple example: an Android app in a NativeActivity, with touch, keys, timers and animation (built as a cdylib for the APK)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

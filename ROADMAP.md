@@ -810,7 +810,9 @@ nothing to drive them and background work couldn't update the UI.
   calls back into the module, and `AppHandle::update` arms it at zero delay.
   Timers there run on `stipple::platform::time::Instant`, read from
   `performance.now()` (std's `Instant` panics on `wasm32-unknown-unknown`).
-- ⬜ Wakeups on Android.
+- ✅ Wakeups on Android: the `NativeActivity` backend's `ALooper` wakes with
+  `ALooper_wake` and times out at the next timer. CI's emulator run checks
+  `androiddemo`'s once-a-second timer ticks.
 - ✅ A frame clock driven by the display (`CVDisplayLink`, `CADisplayLink`,
   `wl_surface.frame`, `DwmFlush`; a RandR-rate timer on X11), so animations
   tick at the refresh rate and stop when idle. `Cx::request_frame` and
@@ -819,16 +821,20 @@ nothing to drive them and background work couldn't update the UI.
   fade.
 - ✅ Frames on the web: `requestAnimationFrame` is the frame clock's display
   source, requested only while something animates.
-- ⬜ Theme changes that cross-fade, and frames on Android.
+- ✅ Frames on Android, from `AChoreographer` (resolved at run time, as it's
+  newer than API 21). CI's emulator run shows `androiddemo`'s spinner building
+  frames between timer ticks; the rate isn't checked.
+- ⬜ Theme changes that cross-fade.
 - ⬜ macOS CI animates at only ~15 fps (10–12 frames during asyncdemo's 600 ms
   load, against ~36 on X11 and ~18 on Wayland): find out whether
   `CVDisplayLink` is ticking or the 30 Hz fallback timer is, and what each
   frame costs.
 - **Exit criteria:** an example that loads data on a background thread shows a
   live spinner, then the result, on every platform. `asyncdemo --selftest`
-  checks it in CI on the four desktops; iOS is unverified, and Android waits on
-  wakeups. The web has no threads, so `webdemo` loads on a timer instead: its
-  selftest checks in headless Chrome that the spinner animates, then stops.
+  checks it in CI on the four desktops; iOS is unverified, Android's emulator
+  run covers the timer and the spinner (not the background thread). The web has
+  no threads, so `webdemo` loads on a timer instead: its selftest checks in
+  headless Chrome that the spinner animates, then stops.
 
 #### 7b — Input parity
 Most input only works on X11 today.
@@ -841,7 +847,14 @@ Most input only works on X11 today.
   modifiers, wheel scrolling in pixels, lines or pages, and cursor shapes as the
   canvas's `style.cursor`. `webdemo`'s selftest clicks, types and uses Ctrl
   shortcuts through DOM events in CI.
-- ⬜ iOS keyboard (`UIKeyInput`) and Android touch and keyboard (`AInputQueue`).
+- ✅ Android touch and keyboard (`AInputQueue`): the first finger as the
+  pointer, the mouse's buttons, hover and wheel, named keys and modifiers, and
+  typed characters through the keyboard's `KeyCharacterMap` (JNI). The soft
+  keyboard shows while a text input has focus (`Window::set_text_input_active`).
+  CI taps and types (Tab, `adb shell input text`) on the emulator; the mouse and
+  shortcuts are only build-checked.
+- ⬜ Touch scrolling (a finger drag scrolls) and multi-touch on Android and iOS.
+- ⬜ iOS keyboard (`UIKeyInput`).
 - **Exit criteria:** the same scripted input test passes on every desktop backend.
 
 #### 7c — Text input
@@ -880,7 +893,8 @@ Most input only works on X11 today.
 - ✅ System clipboard on the web, through the `paste`, `copy` and `cut` events
   and `navigator.clipboard.writeText`; Ctrl/Cmd+V arrives with the pasted text.
   CI round-trips text with synthetic clipboard events.
-- ⬜ System clipboard on Android.
+- ✅ System clipboard on Android: `ClipboardManager` over hand-written JNI
+  through the activity's `JavaVM`. Tried by hand on an emulator, not in CI.
 - ✅ File dialogs on Windows (`IFileOpenDialog` / `IFileSaveDialog` over COM) and
   macOS (`NSOpenPanel` / `NSSavePanel`). Build-checked only: CI can't drive a
   modal dialog.
@@ -943,7 +957,11 @@ Most input only works on X11 today.
   scrolls the cursor into view (`Cx::scroll_offset` / `Cx::scroll_requests`).
 
 #### 7f — Platform completeness
-- ⬜ Android: high-DPI, and the native theme's system colors.
+- ✅ Android: high-DPI (the density over 160 dpi; CI's emulator runs at
+  2.625x), and the native theme's system colors: night mode, followed live on
+  configuration changes, and the Android 12 wallpaper accent, read from
+  `Resources` over JNI. The system bars take the app's background. Dark mode
+  and the accent were tried by hand on an emulator, not in CI.
 - ⬜ Accessibility on iOS (UIAccessibility), Android and the web (ARIA).
 - ⬜ Images on the GPU path, so OS-drawn controls render under `App::render_with`.
 - ✅ The web's exports in the library: `stipple::web_app!(app)` generates them,

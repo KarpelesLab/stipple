@@ -178,7 +178,7 @@ available. Platform and subsystem probes live alongside them:
 `gpuwindow` / `gpudemo` (GLES, `--features stipple/gl`), `d3ddemo`,
 `metaldemo`, `dmabuftest`, `dri3probe`, `viewportdemo`, `contentproc`
 (sandboxed content process composited over shared memory), `a11ydemo` and
-`uiademo` (accessibility bridges), `androiddemo` (a `NativeActivity` cdylib),
+`uiademo` (accessibility bridges), `androiddemo` (an Android app as a `NativeActivity` cdylib),
 and `webdemo` (a `wasm32` module for a `<canvas>`). See [`docs/`](./docs/README.md)
 for how to build and package each platform.
 
@@ -193,8 +193,8 @@ Working today, each verified in CI on its platform:
   word wrapping, clipboard, overlays, multi-window, and the widgets above.
 - Native backends: **X11** (with MIT-SHM present), **Wayland**, **Win32**,
   **Cocoa**, plus **web** (wasm + canvas), an **iOS UIKit** backend (run on the
-  simulator), and an **Android** `ANativeWindow` present path (run on the
-  emulator).
+  simulator), and an **Android** `NativeActivity` backend with touch, keys,
+  timers and display-paced frames (driven on the emulator).
 - **GPU**: GLES2 scene rendering in a live window, and off-screen Vulkan,
   Metal, D3D11 and WebGPU pipelines.
 - **Accessibility**: the full element tree on all three desktops.

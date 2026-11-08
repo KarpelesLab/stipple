@@ -2143,10 +2143,10 @@ jobs:
           path: visual_output/*.png
           if-no-files-found: warn
 
-  # Run the native Android backend on an emulator: build the cdylib, package a
-  # debug APK by hand (aapt + zipalign + apksigner — no Gradle), install it, and
-  # confirm via logcat that the NativeActivity presented a Stipple frame to the
-  # ANativeWindow surface.
+  # Run the native Android backend on an emulator: build androiddemo, package a
+  # debug APK by hand (aapt + zipalign + apksigner, no Gradle), install it, and
+  # drive it with adb: a frame reaches the window, the timer wakes the loop, a
+  # tap and typed keys register. Screenshots are uploaded as an artifact.
   visual-android:
     name: Visual test (Android emulator)
     runs-on: ubuntu-latest
@@ -2162,43 +2162,7 @@ jobs:
           java-version: "17"
 
       - name: Build the cdylib and assemble a signed debug APK
-        run: |
-          set -x
-          NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
-          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          export CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER="$TC/x86_64-linux-android21-clang"
-          cargo build -p androiddemo --target x86_64-linux-android --release
-
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          JAR=$(ls "$ANDROID_HOME"/platforms/*/android.jar | sort -V | tail -1)
-          echo "build-tools=$BT android.jar=$JAR ndk=$NDK"
-
-          cat > AndroidManifest.xml <<'MAN'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.karpeleslab.stipple">
-            <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
-            <application android:label="Stipple" android:hasCode="false" android:debuggable="true">
-              <activity android:name="android.app.NativeActivity" android:exported="true">
-                <meta-data android:name="android.app.lib_name" android:value="stipple_android"/>
-                <intent-filter>
-                  <action android:name="android.intent.action.MAIN"/>
-                  <category android:name="android.intent.category.LAUNCHER"/>
-                </intent-filter>
-              </activity>
-            </application>
-          </manifest>
-          MAN
-
-          mkdir -p lib/x86_64
-          cp target/x86_64-linux-android/release/libstipple_android.so lib/x86_64/
-          "$BT/aapt" package -f -M AndroidManifest.xml -I "$JAR" -F base.apk
-          "$BT/aapt" add base.apk lib/x86_64/libstipple_android.so
-          keytool -genkeypair -keystore debug.ks -storepass android -keypass android \
-            -alias d -dname "CN=stipple" -keyalg RSA -keysize 2048 -validity 10000
-          "$BT/zipalign" -f -p 4 base.apk aligned.apk
-          "$BT/apksigner" sign --ks debug.ks --ks-pass pass:android --key-pass pass:android \
-            --out stipple.apk aligned.apk
-          echo "APK built:"; ls -l stipple.apk
+        run: bash examples/androiddemo/build-apk.sh x86_64 stipple.apk
 
       - name: Enable KVM
         run: |
@@ -2207,7 +2171,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Launch on emulator and check logcat
+      - name: Run on the emulator (touch, keys, timers) and screenshot
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -2215,14 +2179,15 @@ jobs:
           target: google_apis
           force-avd-creation: true
           disable-animations: true
-          script: |
-            adb install -r stipple.apk
-            adb logcat -c
-            adb shell am start -n com.karpeleslab.stipple/android.app.NativeActivity
-            sleep 15
-            adb logcat -d > logcat.txt || true
-            grep "Stipple Android: window" logcat.txt || true
-            grep -q "Stipple Android: window [0-9]*x[0-9]* presented=true" logcat.txt
+          script: bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-android-screenshot
+          path: visual_output/*.png
+          if-no-files-found: warn
 
   # After a fully green push to master, commit the fresh screenshots so the README
   # always shows what the code renders today. Pushes made with GITHUB_TOKEN don't
