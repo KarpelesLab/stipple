@@ -93,6 +93,37 @@ pub struct ScrollDelta {
     pub dy: f64,
 }
 
+/// Where a touch is in its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TouchPhase {
+    /// The finger went down.
+    Started,
+    /// The finger moved (or another finger did: backends may report every
+    /// finger still down on each move).
+    Moved,
+    /// The finger lifted.
+    Ended,
+    /// The system took the touch away (a gesture of its own, an incoming call):
+    /// whatever it started should be undone rather than completed.
+    Cancelled,
+}
+
+/// One finger on a touch screen.
+///
+/// Every finger is reported, each with an `id` that stays the same from
+/// [`Started`](TouchPhase::Started) until it ends. The first finger down is
+/// also the pointer: backends follow each of its touch events with the
+/// matching [`Event::PointerMoved`] / [`Event::PointerButton`], so widgets
+/// that only know the pointer keep working on touch screens.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Touch {
+    /// Identifies the finger while it's down; ids may be reused afterwards.
+    pub id: u64,
+    pub phase: TouchPhase,
+    /// Logical pixels, window-relative.
+    pub position: Point,
+}
+
 /// An event delivered to the application for a specific window.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -127,6 +158,9 @@ pub enum Event {
     },
     /// A scroll/wheel gesture.
     Scroll { delta: ScrollDelta },
+    /// A finger on a touch screen started, moved, lifted or was cancelled.
+    /// Sent before the pointer events the first finger also produces.
+    Touch(Touch),
 
     /// A key changed state.
     Key {

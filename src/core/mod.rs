@@ -35,6 +35,7 @@ pub mod menu;
 mod pointer;
 mod render;
 pub mod runtime;
+pub(crate) mod touch;
 
 pub use a11y::{AccessNode, Role, Semantics, accessibility_tree};
 pub use clipboard::{clipboard_text, set_clipboard_text};

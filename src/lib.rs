@@ -274,6 +274,10 @@ struct Pane<S> {
     // Last pointer position, so a `Scroll` event (which carries only a delta)
     // can find the scroll container under the cursor.
     last_pointer: Point,
+    // Touch scrolling: a finger dragged in a scroll container, and its fling.
+    touch: crate::core::touch::TouchScroll,
+    // The origin of the touch scroller's clock.
+    touch_epoch: crate::platform::time::Instant,
     // Whether the frame just built / on screen has overlay layers — overlays
     // can't be localized by the tree diff, so their presence forces full damage.
     overlay_active: bool,
@@ -343,6 +347,8 @@ impl<S: 'static> Pane<S> {
             scroll_offsets: std::collections::HashMap::new(),
             scroll_requests: crate::core::ScrollRequests::default(),
             last_pointer: Point::new(0.0, 0.0),
+            touch: Default::default(),
+            touch_epoch: crate::platform::time::Instant::now(),
             overlay_active: false,
             painted_overlay_active: false,
             input_viewport: None,
@@ -918,7 +924,7 @@ impl<S: 'static> Pane<S> {
         for &(id, a) in &self.highlight_alphas {
             paint_hover(&tree, id, &mut scene, Color { a, ..overlay });
         }
-        self.animating = frame_requested || self.highlights.animating(now);
+        self.animating = frame_requested || self.highlights.animating(now) || self.touch.flinging();
         if self.animating {
             crate::platform::frame::request();
         }
@@ -1481,6 +1487,52 @@ impl<S: 'static> Pane<S> {
         }
         moved
     }
+
+    /// Scroll container `id` by `dy` logical pixels, clamped to its content.
+    /// Returns whether it moved and whether the clamp stopped it short (it
+    /// reached an end).
+    fn scroll_container_by(
+        &mut self,
+        state: &S,
+        theme: &Theme,
+        font: Option<&Font>,
+        id: crate::core::ScrollId,
+        dy: f64,
+    ) -> (bool, bool) {
+        self.ensure_tree(state, theme, font);
+        let Some(node) = self
+            .tree
+            .as_ref()
+            .and_then(|t| crate::core::find_scroll(t, id))
+        else {
+            return (false, true);
+        };
+        // The tree was laid out at the current offset, which shifted the
+        // content up by it (see `apply_scroll`).
+        let off = self.scroll_offsets.get(&id).copied().unwrap_or(0.0);
+        let top = node.bounds.min_y();
+        let bottom = node
+            .children
+            .iter()
+            .map(|c| c.bounds.max_y())
+            .fold(top, f64::max);
+        let max = (bottom + off - top - node.bounds.height()).max(0.0);
+        let wanted = off + dy;
+        let new = wanted.clamp(0.0, max);
+        let moved = (new - off).abs() > f64::EPSILON;
+        if moved {
+            self.scroll_offsets.insert(id, new);
+            self.dirty = true;
+        }
+        (moved, (new - wanted).abs() > f64::EPSILON)
+    }
+
+    /// Seconds on the touch scroller's clock.
+    fn touch_now(&self) -> f64 {
+        crate::platform::time::Instant::now()
+            .saturating_duration_since(self.touch_epoch)
+            .as_secs_f64()
+    }
 }
 
 /// The part of `tree` a press at `pos` reaches, and whether it is the main tree.
@@ -1602,6 +1654,37 @@ impl<S: 'static> App<S> {
         self.pane_scroll_by(0, dy)
     }
 
+    /// Deliver a finger to the primary window the way a touch-screen backend
+    /// does for the first finger: the [`Touch`](crate::platform::Touch), then
+    /// the pointer press, move or release it maps to. Returns whether anything
+    /// changed. A drag in a scroll container scrolls it; see
+    /// [`advance_fling`](Self::advance_fling) for what follows a quick release.
+    pub fn touch(&mut self, touch: crate::platform::Touch) -> bool {
+        use crate::platform::TouchPhase;
+        let position = touch.position;
+        let mut changed = self.pane_touch(0, touch);
+        changed |= match touch.phase {
+            TouchPhase::Started => {
+                self.panes[0].last_pointer = position;
+                !self.panes[0].touch.swallows_press() && self.pane_pointer_down(0, position)
+            }
+            TouchPhase::Moved => {
+                self.panes[0].last_pointer = position;
+                !self.panes[0].touch.holds_moves() && self.pane_pointer_move(0, position)
+            }
+            TouchPhase::Ended => self.pane_pointer_up(0, position),
+            // Released far away, so the press doesn't click.
+            TouchPhase::Cancelled => self.pane_pointer_up(0, Point::new(-1.0e9, -1.0e9)),
+        };
+        changed
+    }
+
+    /// Advance a touch fling in the primary window by one frame (the loop does
+    /// this on every frame while one runs). Returns whether it scrolled.
+    pub fn advance_fling(&mut self) -> bool {
+        self.pane_fling(0)
+    }
+
     // --- Per-pane event routing (by window index) --------------------------
     // The live multi-window loop routes each event to the pane that owns the
     // window it arrived on; the public methods above are these against pane 0.
@@ -1720,6 +1803,143 @@ impl<S: 'static> App<S> {
             ..
         } = self;
         panes[idx].scroll_by(state, theme, font.as_ref(), dy)
+    }
+
+    /// The left button, or the first finger, went down at `position` (outside
+    /// any embedded viewport). Returns whether to repaint.
+    fn pane_pointer_down(&mut self, idx: usize, position: Point) -> bool {
+        self.panes[idx].input_viewport = None;
+        self.panes[idx].pressed = self.panes[idx].tap_at(position);
+        app_dbg(format_args!(
+            "press at {position:?}: target {:?}",
+            self.panes[idx].pressed
+        ));
+        let mut redraw = false;
+        if self.panes[idx].pressed.is_some() {
+            // Repaint for the pressed look: the press highlight, or the OS's
+            // own for an OS-drawn control.
+            self.panes[idx].dirty = true;
+            redraw = true;
+        }
+        // Editable text under the cursor starts a click/drag selection;
+        // otherwise latch a drag if a draggable sits there.
+        if self.pane_text_press_at(idx, position) || self.pane_drag_at_point(idx, position) {
+            redraw = true;
+        }
+        // A finger on a slider drags the slider, not the list around it.
+        if self.panes[idx].dragging.is_some() {
+            self.panes[idx].touch.yield_to_widget();
+        }
+        redraw
+    }
+
+    /// The pointer moved to `position` (outside any embedded viewport):
+    /// continue a selection or drag, or update the hover. Returns whether to
+    /// repaint.
+    fn pane_pointer_move(&mut self, idx: usize, position: Point) -> bool {
+        if self.panes[idx].text_selecting.is_some() {
+            self.pane_text_drag_at(idx, position)
+        } else if self.panes[idx].dragging.is_some() {
+            self.pane_drag_at_point(idx, position)
+        } else {
+            self.pane_hover_at(idx, position)
+        }
+    }
+
+    /// The left button, or the first finger, lifted at `position`: end a
+    /// selection or drag, or click what was pressed if it's still under the
+    /// pointer. Returns whether to repaint.
+    fn pane_pointer_up(&mut self, idx: usize, position: Point) -> bool {
+        if self.panes[idx].text_selecting.is_some() {
+            self.panes[idx].end_text_select();
+            false
+        } else if self.panes[idx].dragging.is_some() {
+            self.panes[idx].end_drag();
+            false
+        } else {
+            let down = self.panes[idx].pressed.take();
+            let up = self.panes[idx].tap_at(position);
+            app_dbg(format_args!(
+                "release at {position:?}: pressed {down:?}, here {up:?}"
+            ));
+            if down.is_some() && down == up {
+                self.pane_click_at(idx, position);
+            }
+            if down.is_some() {
+                // Clear the pressed look, whether or not it clicked.
+                self.panes[idx].dirty = true;
+            }
+            down.is_some()
+        }
+    }
+
+    /// A finger touched, moved or lifted: drive touch scrolling. Returns
+    /// whether to repaint.
+    fn pane_touch(&mut self, idx: usize, touch: crate::platform::Touch) -> bool {
+        use crate::core::touch::TouchAction;
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            ..
+        } = self;
+        let pane = &mut panes[idx];
+        if touch.phase == crate::platform::TouchPhase::Started {
+            pane.ensure_tree(state, theme, font.as_ref());
+        }
+        let now = pane.touch_now();
+        let tree = pane.tree.as_ref();
+        let action = pane.touch.touch(&touch, now, |p| {
+            tree.and_then(|t| crate::core::scroll_at(t, p))
+        });
+        app_dbg(format_args!("touch {touch:?}: {action:?}"));
+        if pane.touch.flinging() && !pane.animating {
+            // The finger lifted while moving: frames drive the fling, through
+            // `pane_fling`.
+            pane.animating = true;
+            crate::platform::frame::request();
+        }
+        match action {
+            TouchAction::None => false,
+            TouchAction::Begin { target, dy } => {
+                // The press becomes a scroll: it no longer clicks or selects.
+                pane.pressed = None;
+                if pane.text_selecting.is_some() {
+                    pane.end_text_select();
+                }
+                pane.dirty = true;
+                pane.scroll_container_by(state, theme, font.as_ref(), target, dy);
+                true
+            }
+            TouchAction::Scroll { target, dy } => {
+                pane.scroll_container_by(state, theme, font.as_ref(), target, dy)
+                    .0
+            }
+            TouchAction::End => false,
+        }
+    }
+
+    /// Advance a running fling by a frame. Returns whether it scrolled.
+    fn pane_fling(&mut self, idx: usize) -> bool {
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            ..
+        } = self;
+        let pane = &mut panes[idx];
+        let now = pane.touch_now();
+        let Some((target, dy)) = pane.touch.tick(now) else {
+            return false;
+        };
+        let (moved, clamped) = pane.scroll_container_by(state, theme, font.as_ref(), target, dy);
+        if clamped {
+            // It reached the end of the content.
+            pane.touch.stop_fling();
+        }
+        moved
     }
 
     /// Run the app against the platform backend ([`backend::run`]): native X11
@@ -1973,29 +2193,17 @@ impl<S: 'static> App<S> {
                     position,
                 } => {
                     self.alt_armed = false;
+                    // A finger that lands on a fling only stops it.
+                    if self.panes[idx].touch.swallows_press() {
+                        return ControlFlow::Wait;
+                    }
                     // A press inside a viewport forwards to its content (button 0)
                     // and grabs key focus; a press elsewhere drops that focus.
                     if self.try_forward_pointer(idx, position, PointerKind::Down(0)) {
                         present(&mut self, &mut surfaces, idx, window, false);
                         return ControlFlow::Wait;
                     }
-                    self.panes[idx].input_viewport = None;
-                    self.panes[idx].pressed = self.panes[idx].tap_at(position);
-                    app_dbg(format_args!(
-                        "press at {position:?}: target {:?}",
-                        self.panes[idx].pressed
-                    ));
-                    if self.panes[idx].pressed.is_some() {
-                        // Repaint for the pressed look: the press highlight, or
-                        // the OS's own for an OS-drawn control.
-                        self.panes[idx].dirty = true;
-                        present(&mut self, &mut surfaces, idx, window, false);
-                    }
-                    // Editable text under the cursor starts a click/drag
-                    // selection; otherwise latch a drag if a draggable sits there.
-                    if self.pane_text_press_at(idx, position)
-                        || self.pane_drag_at_point(idx, position)
-                    {
+                    if self.pane_pointer_down(idx, position) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -2004,6 +2212,11 @@ impl<S: 'static> App<S> {
                     self.panes[idx].last_pointer = position;
                     if let Some(cursor) = self.panes[idx].cursor_change(position) {
                         window.set_cursor(cursor);
+                    }
+                    // A finger scrolling a list (or about to) doesn't move
+                    // anything else.
+                    if self.panes[idx].touch.holds_moves() {
+                        return ControlFlow::Wait;
                     }
                     // Forward moves over a viewport to its content, unless a Stipple
                     // drag/selection latched on a press outside it is in progress.
@@ -2014,15 +2227,7 @@ impl<S: 'static> App<S> {
                         present(&mut self, &mut surfaces, idx, window, false);
                         return ControlFlow::Wait;
                     }
-                    if self.panes[idx].text_selecting.is_some() {
-                        if self.pane_text_drag_at(idx, position) {
-                            present(&mut self, &mut surfaces, idx, window, false);
-                        }
-                    } else if self.panes[idx].dragging.is_some() {
-                        if self.pane_drag_at_point(idx, position) {
-                            present(&mut self, &mut surfaces, idx, window, false);
-                        }
-                    } else if self.pane_hover_at(idx, position) {
+                    if self.pane_pointer_move(idx, position) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -2037,24 +2242,8 @@ impl<S: 'static> App<S> {
                         present(&mut self, &mut surfaces, idx, window, false);
                         return ControlFlow::Wait;
                     }
-                    if self.panes[idx].text_selecting.is_some() {
-                        self.panes[idx].end_text_select();
-                    } else if self.panes[idx].dragging.is_some() {
-                        self.panes[idx].end_drag();
-                    } else {
-                        let down = self.panes[idx].pressed.take();
-                        let up = self.panes[idx].tap_at(position);
-                        app_dbg(format_args!(
-                            "release at {position:?}: pressed {down:?}, here {up:?}"
-                        ));
-                        if down.is_some() && down == up {
-                            self.pane_click_at(idx, position);
-                        }
-                        if down.is_some() {
-                            // Clear the pressed look, whether or not it clicked.
-                            self.panes[idx].dirty = true;
-                            present(&mut self, &mut surfaces, idx, window, false);
-                        }
+                    if self.pane_pointer_up(idx, position) {
+                        present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
                 }
@@ -2163,7 +2352,15 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                Event::Touch(touch) => {
+                    if self.pane_touch(idx, touch) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::Wake => {
+                    // A fling scrolls on with every frame.
+                    let flung = self.pane_fling(idx);
                     // Apply updates and due timers from the handle, then re-render
                     // if anything ran. The loop wakes again at the next timer.
                     let (ran, next) = self
@@ -2178,7 +2375,7 @@ impl<S: 'static> App<S> {
                         app_dbg(format_args!("wake with nothing to do"));
                     }
                     // A frame for an animation (or a fade) re-renders too.
-                    if ran || self.panes[idx].animating {
+                    if ran || flung || self.panes[idx].animating {
                         for pane in &mut self.panes {
                             pane.dirty |= ran || pane.animating;
                         }
@@ -3199,6 +3396,127 @@ mod tests {
             map_key_for(KeyCode::Backspace, ctrl, true),
             Some(KeyInput::Backspace)
         );
+    }
+
+    /// A 200×200 window filled by a scroll container of 20 buttons, each 50
+    /// tall: 1000 px of content, so it scrolls up to 800. Tapping row `i`
+    /// records `i`.
+    fn list_app() -> App<Vec<usize>> {
+        App::new(Vec::new(), |_: &Vec<usize>, cx: &mut Cx<Vec<usize>>| {
+            let theme = *cx.theme();
+            let rows = (0..20)
+                .map(|i| {
+                    button(&theme)
+                        .width(200.0)
+                        .height(50.0)
+                        .on_tap(cx, move |s: &mut Vec<usize>| s.push(i))
+                })
+                .collect();
+            crate::widgets::scroll(cx, 200.0, column(rows))
+        })
+        .logical_size(Size::new(200.0, 200.0))
+    }
+
+    fn finger(phase: crate::platform::TouchPhase, y: f64) -> crate::platform::Touch {
+        crate::platform::Touch {
+            id: 1,
+            phase,
+            position: Point::new(100.0, y),
+        }
+    }
+
+    fn list_offset(app: &App<Vec<usize>>) -> f64 {
+        app.panes[0].scroll_offsets.values().copied().sum()
+    }
+
+    /// Drag the finger from `from` to `to` in five moves, `pause` apart.
+    fn swipe(app: &mut App<Vec<usize>>, from: f64, to: f64, pause: std::time::Duration) {
+        use crate::platform::TouchPhase;
+        app.touch(finger(TouchPhase::Started, from));
+        for i in 1..=5 {
+            std::thread::sleep(pause);
+            app.touch(finger(
+                TouchPhase::Moved,
+                from + (to - from) * i as f64 / 5.0,
+            ));
+        }
+        app.touch(finger(TouchPhase::Ended, to));
+    }
+
+    #[test]
+    fn a_tap_on_a_touch_screen_still_clicks() {
+        use crate::platform::TouchPhase;
+        let mut app = list_app();
+        app.render_once();
+        app.touch(finger(TouchPhase::Started, 75.0));
+        // A jitter within the slop.
+        app.touch(finger(TouchPhase::Moved, 79.0));
+        app.touch(finger(TouchPhase::Ended, 79.0));
+        assert_eq!(app.state(), &[1]);
+        assert_eq!(list_offset(&app), 0.0);
+    }
+
+    #[test]
+    fn a_finger_drag_scrolls_the_list_without_clicking() {
+        let mut app = list_app();
+        app.render_once();
+        // Up 100 px, slowly enough not to fling.
+        swipe(&mut app, 150.0, 50.0, std::time::Duration::ZERO);
+        assert!(app.state().is_empty(), "the pressed row didn't click");
+        assert_eq!(list_offset(&app), 100.0 - crate::core::touch::SLOP);
+        assert!(!app.advance_fling());
+        // The rows moved with the content: what's under y=25 is now row 2.
+        app.render_once();
+        app.click_at(Point::new(100.0, 25.0));
+        assert_eq!(app.state(), &[2]);
+        // Dragging down past the top stops at the top.
+        swipe(&mut app, 20.0, 190.0, std::time::Duration::ZERO);
+        assert_eq!(list_offset(&app), 0.0);
+        // The mouse wheel still scrolls as before.
+        app.hover_at(Point::new(100.0, 100.0));
+        assert!(app.scroll_by(40.0));
+        app.render_once();
+        assert_eq!(list_offset(&app), 40.0);
+    }
+
+    #[test]
+    fn a_quick_swipe_flings_to_the_end_and_a_touch_stops_it() {
+        use crate::platform::TouchPhase;
+        let ms = std::time::Duration::from_millis;
+        let mut app = list_app();
+        app.render_once();
+        // 150 px in about 50 ms: a fling at a few thousand px/s.
+        swipe(&mut app, 180.0, 30.0, ms(10));
+        let after_drag = list_offset(&app);
+        assert!(app.panes[0].touch.flinging());
+        assert!(app.panes[0].animating, "a fling asks for frames");
+        std::thread::sleep(ms(16));
+        assert!(app.advance_fling());
+        assert!(list_offset(&app) > after_drag, "it keeps going");
+        // A finger on the list catches it, and doesn't click the row.
+        app.touch(finger(TouchPhase::Started, 100.0));
+        assert!(!app.panes[0].touch.flinging());
+        app.touch(finger(TouchPhase::Ended, 100.0));
+        assert!(app.state().is_empty());
+
+        // From near the end, a fling stops at the end.
+        app.panes[0]
+            .scroll_offsets
+            .iter_mut()
+            .for_each(|(_, o)| *o = 700.0);
+        app.panes[0].dirty = true;
+        app.render_once();
+        swipe(&mut app, 180.0, 30.0, ms(10));
+        for _ in 0..200 {
+            if !app.panes[0].touch.flinging() {
+                break;
+            }
+            std::thread::sleep(ms(5));
+            app.advance_fling();
+        }
+        assert!(!app.panes[0].touch.flinging(), "the end stops it");
+        assert_eq!(list_offset(&app), 800.0);
+        assert!(app.state().is_empty());
     }
 
     #[test]
