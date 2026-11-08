@@ -18,6 +18,17 @@
       import { start } from "./stipple.js";
 
       const selftest = location.hash === "#selftest";
+      // A failure (a wasm trap, a rejected promise) goes into the report, so
+      // CI shows why the selftest stopped instead of an empty report.
+      const fail = (what) => {
+        const report = document.getElementById("report");
+        report.textContent += `SELFTEST: FAILED (${what})\n`;
+        console.log(`selftest error: ${what}`);
+      };
+      if (selftest) {
+        window.addEventListener("error", (ev) => fail(ev.message || ev.error));
+        window.addEventListener("unhandledrejection", (ev) => fail(ev.reason?.stack || ev.reason));
+      }
       // Where the selftest clicks, in CSS pixels (the demo's layout is fixed).
       const BUTTONS = { notes: 120, notesY: 58, counter: 85, open: 205, save: 287, y: 109 };
       const saved = [];
@@ -29,7 +40,7 @@
           saveFile: (name, blob) => saved.push([name, blob.size]),
         }),
       });
-      if (selftest) runSelftest(app);
+      if (selftest) runSelftest(app).catch((err) => fail(err?.stack || err));
 
       // Drive the demo with DOM events, as a user would, and report what the
       // app saw (through `webdemo_probe`). CI loads `index.html#selftest` in

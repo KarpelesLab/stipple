@@ -1779,8 +1779,10 @@ impl<S: 'static> App<S> {
             // Nothing changed since the last present: render nothing, upload
             // nothing. (Skips the whole rasterize, not just the upload.)
             if !force && damage.is_empty() {
+                app_dbg(format_args!("present: no damage"));
                 return;
             }
+            app_dbg(format_args!("present: {damage:?}"));
 
             let phys_size = window.inner_size();
             let surface = surfaces[idx].get_or_insert_with(|| window.create_surface());
@@ -1904,6 +1906,10 @@ impl<S: 'static> App<S> {
                     }
                     self.panes[idx].input_viewport = None;
                     self.panes[idx].pressed = self.panes[idx].tap_at(position);
+                    app_dbg(format_args!(
+                        "press at {position:?}: target {:?}",
+                        self.panes[idx].pressed
+                    ));
                     if self.panes[idx].pressed.is_some() {
                         // Repaint for the pressed look: the press highlight, or
                         // the OS's own for an OS-drawn control.
@@ -1963,6 +1969,9 @@ impl<S: 'static> App<S> {
                     } else {
                         let down = self.panes[idx].pressed.take();
                         let up = self.panes[idx].tap_at(position);
+                        app_dbg(format_args!(
+                            "release at {position:?}: pressed {down:?}, here {up:?}"
+                        ));
                         if down.is_some() && down == up {
                             self.pane_click_at(idx, position);
                         }
@@ -2473,6 +2482,16 @@ pub mod prelude {
     };
     pub use crate::widgets::{image, svg};
     pub use std::time::Duration;
+}
+
+/// A diagnostic line on stderr when `STIPPLE_APP_DEBUG` is set: what a press,
+/// a release and each present did (CI turns it on to explain a missed click).
+fn app_dbg(args: std::fmt::Arguments<'_>) {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    if *ON.get_or_init(|| std::env::var_os("STIPPLE_APP_DEBUG").is_some()) {
+        eprintln!("stipple app: {args}");
+    }
 }
 
 #[cfg(test)]

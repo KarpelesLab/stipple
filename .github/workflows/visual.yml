@@ -154,7 +154,7 @@ jobs:
         run: |
           kill "$APP_PID" 2>/dev/null || true
           cargo build --release -p widgetsdemo
-          STIPPLE_X11_DEBUG=1 ./target/release/widgetsdemo > visual_output/widgets.log 2>&1 &
+          STIPPLE_X11_DEBUG=1 STIPPLE_APP_DEBUG=1 ./target/release/widgetsdemo > visual_output/widgets.log 2>&1 &
           WPID=$!
           echo "APP_PID=$WPID" >> "$GITHUB_ENV"
           sleep 4
@@ -175,7 +175,7 @@ jobs:
             else
               wait "$WPID" || echo "app exited with status $?"
             fi
-            uniq -c visual_output/widgets.log | tail -8
+            uniq -c visual_output/widgets.log | tail -30
             sudo apt-get install -y gdb > /dev/null 2>&1 || true
             sudo gdb -p "$WPID" -batch -ex "thread apply all bt 30" 2>&1 | grep -E '^(#|Thread)' | head -80 || true
             exit 1
@@ -405,6 +405,8 @@ jobs:
           diff_px=$(compare -metric AE visual_output/stipple-x11-bidi.png \
             visual_output/stipple-x11-bidi-select.png null: 2>&1 || true)
           echo "pixels changed by the selection: $diff_px"
+          # Newer ImageMagick prints "4588 (0.0149)"; keep the leading count.
+          diff_px=${diff_px%% *}
           [ "${diff_px%%.*}" -gt 100 ]
 
       - name: Stop the app and Xvfb
@@ -661,7 +663,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/menudemo > visual_output/menu.log 2>&1 &
+          STIPPLE_X11_DEBUG=1 STIPPLE_APP_DEBUG=1 ./target/release/menudemo > visual_output/menu.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           # Keep the pointer off the window's controls (and give it focus).
@@ -694,7 +696,7 @@ jobs:
           xdotool mousemove 24 14 click 1
           sleep 1
           import -window root visual_output/menu-click.png
-          echo "=== menu.log ==="; cat visual_output/menu.log || true
+          echo "=== menu.log ==="; grep -v "x11: present" visual_output/menu.log | uniq -c | tail -60 || true
 
           file=$(ae visual_output/menu-base.png visual_output/menu-file.png)
           closed=$(ae visual_output/menu-base.png visual_output/menu-closed.png)
