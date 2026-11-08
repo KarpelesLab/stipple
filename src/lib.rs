@@ -2098,6 +2098,10 @@ impl<S: 'static> App<S> {
                     if self.handle.exit_requested() {
                         return ControlFlow::Exit;
                     }
+                    if !ran && !self.panes[idx].animating {
+                        // Repeated, this means a deadline that keeps coming due.
+                        app_dbg(format_args!("wake with nothing to do"));
+                    }
                     // A frame for an animation (or a fade) re-renders too.
                     if ran || self.panes[idx].animating {
                         for pane in &mut self.panes {

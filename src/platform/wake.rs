@@ -204,9 +204,8 @@ mod unix {
         loop {
             let now = Instant::now();
             let timeout = super::timeout(now);
-            if timeout == Some(std::time::Duration::ZERO) {
-                return false;
-            }
+            // A due wake still polls (without waiting), so a deadline that is
+            // always due can't starve the connection: its events come first.
             let ms = match timeout {
                 // Round up, so we don't wake a hair early and spin.
                 Some(t) => t.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32,
