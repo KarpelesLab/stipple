@@ -2244,6 +2244,134 @@ jobs:
             kill $SRV 2>/dev/null || true
           '
 
+  # Tray icon, notifications and opening URLs (ROADMAP 7d) on Linux. A mock
+  # desktop on a private session bus (.github/scripts/mock-desktop.py) owns
+  # org.freedesktop.Notifications, the portal's OpenURI and the
+  # StatusNotifierWatcher: it logs the Notify and OpenURI calls, then acts as a
+  # tray host — reads the item's properties, fetches its dbusmenu layout,
+  # clicks "Ping" and activates the icon — and traydemo must see both. A file:
+  # URL goes to xdg-open, stood in for by a script that logs it.
+  os-integration-linux:
+    name: OS integration (tray, notifications, URLs / Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, D-Bus, python3-dbus and a font
+        run: sudo apt-get update && sudo apt-get install -y xvfb dbus python3-dbus python3-gi fonts-dejavu-core
+
+      - name: Build the tray demo
+        run: cargo build --release -p traydemo
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 2
+
+      - name: Tray, notification and open_url against a mock desktop
+        env:
+          DISPLAY: ":99"
+          OUT_DIR: visual_output
+        run: dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/traydemo
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-os-integration-linux
+          path: visual_output/*
+          if-no-files-found: warn
+
+  # The same on Windows: the tray icon is added with Shell_NotifyIconW, a
+  # notification shows as a balloon on it, and open_url goes through
+  # ShellExecuteW to a `stipple-selftest:` URL protocol registered in HKCU whose
+  # handler writes the URL to a file. open_path of a .txt should start the
+  # text editor (checked, but only warned about: it depends on the image's
+  # file associations).
+  os-integration-windows:
+    name: OS integration (tray, notifications, URLs / Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the tray demo
+        run: cargo build --release -p traydemo
+
+      - name: Register a stipple-selftest URL protocol that logs its URL
+        shell: powershell
+        run: |
+          $log = Join-Path $env:GITHUB_WORKSPACE 'url.log'
+          $key = 'HKCU:\Software\Classes\stipple-selftest'
+          New-Item -Path "$key\shell\open\command" -Force | Out-Null
+          Set-ItemProperty -Path $key -Name '(default)' -Value 'URL:Stipple selftest'
+          Set-ItemProperty -Path $key -Name 'URL Protocol' -Value ''
+          Set-ItemProperty -Path "$key\shell\open\command" -Name '(default)' -Value "cmd.exe /c echo %1> `"$log`""
+          Get-ItemProperty -Path "$key\shell\open\command"
+
+      - name: Tray icon, notification balloon and open_url
+        shell: bash
+        env:
+          STIPPLE_DEBUG_SHELL: "1"
+          STIPPLE_SELFTEST_URL: "stipple-selftest:hello/world"
+        run: |
+          echo "hello from stipple" > stipple-note.txt
+          export STIPPLE_SELFTEST_FILE="$(cygpath -w "$PWD/stipple-note.txt")"
+          timeout 60 ./target/release/traydemo.exe --selftest 2>&1 | tee tray.log
+          # Shell_NotifyIconW(NIM_ADD) took the icon, and the balloon went on it.
+          grep -q "traydemo: tray shown=true" tray.log
+          grep -q "Shell_NotifyIcon added=true" tray.log
+          grep -q "notification balloon on uID 1 shown=true" tray.log
+          grep -q "traydemo: notify -> Ok" tray.log
+          grep -q "traydemo: open_url(stipple-selftest:hello/world) -> Ok" tray.log
+          grep -q "traydemo: open_path(.*) -> Ok" tray.log
+          grep -q "traydemo: event loop exited" tray.log
+          # The protocol's handler ran with our URL.
+          for _ in $(seq 20); do [ -s url.log ] && break; sleep 0.5; done
+          echo "url.log:"; cat url.log
+          grep -q "stipple-selftest:hello/world" url.log
+          # The .txt opened in the default editor.
+          powershell -NoProfile -Command "Get-Process | Where-Object { \$_.MainWindowTitle -like '*stipple-note*' } | Format-Table -AutoSize ProcessName,MainWindowTitle" | tee editors.txt
+          grep -q stipple-note editors.txt || echo "::warning::open_path didn't show an editor with stipple-note.txt"
+          powershell -NoProfile -Command "Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process" || true
+
+  # And on macOS: an NSStatusItem with an NSMenu, a notification through
+  # osascript, and open_url of a file: URL to a .txt, which must start
+  # TextEdit.
+  os-integration-macos:
+    name: OS integration (status item, notifications, URLs / macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the tray demo
+        run: cargo build --release -p traydemo
+
+      - name: Status item, notification and open_url
+        env:
+          STIPPLE_DEBUG_SHELL: "1"
+          STIPPLE_SELFTEST_URL: "file:///tmp/stipple-note.txt"
+        run: |
+          echo "hello from stipple" > /tmp/stipple-note.txt
+          # macOS has no `timeout`; perl's alarm stands in for it.
+          perl -e 'alarm 60; exec @ARGV' ./target/release/traydemo --selftest 2>&1 | tee tray.log
+          grep -q "traydemo: tray shown=true" tray.log
+          grep -q "NSStatusItem button=" tray.log
+          grep -q "NSStatusItem button=.* in a window=true" tray.log \
+            || echo "::warning::the status item's button isn't in a window"
+          grep -q "traydemo: notify -> Ok" tray.log
+          grep -q "traydemo: open_url(file:///tmp/stipple-note.txt) -> Ok" tray.log
+          grep -q "traydemo: event loop exited" tray.log
+          # NSWorkspace handed the .txt to TextEdit.
+          for _ in $(seq 30); do pgrep -x TextEdit && break; sleep 0.5; done
+          pgrep -x TextEdit
+          kill $(pgrep -x TextEdit) 2>/dev/null || true
+
   # Run the native iOS UIKit backend on a booted simulator and confirm it boots,
   # builds the window, and renders a frame — a real runtime check of the backend
   # the cross-compile job only build-verifies.
