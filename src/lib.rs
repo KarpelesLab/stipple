@@ -236,6 +236,10 @@ struct Pane<S> {
     tree: Option<LayoutNode>,
     handlers: Handlers<S>,
     pressed: Option<ActionId>,
+    // Where a press that hit no tap target went down, so its release can
+    // still move focus (to a plain text field, say, or away). Cleared when
+    // the press becomes a drag, a selection or a touch scroll.
+    press_focus: Option<Point>,
     focused: Option<FocusId>,
     hovered: Option<ActionId>,
     // The latched drag: its id, its and its parent's bounds, the press point, and
@@ -331,6 +335,7 @@ impl<S: 'static> Pane<S> {
             tree: None,
             handlers: Handlers::default(),
             pressed: None,
+            press_focus: None,
             focused: None,
             hovered: None,
             dragging: None,
@@ -1847,10 +1852,14 @@ impl<S: 'static> App<S> {
         // Editable text under the cursor starts a click/drag selection;
         // otherwise latch a drag if a draggable sits there, or else a drag
         // source.
+        self.panes[idx].press_focus = None;
         if self.pane_text_press_at(idx, position) || self.pane_drag_at_point(idx, position) {
             redraw = true;
         } else {
             self.panes[idx].source_press(position);
+            if self.panes[idx].pressed.is_none() {
+                self.panes[idx].press_focus = Some(position);
+            }
         }
         // A finger on a slider drags the slider, not the list around it.
         if self.panes[idx].dragging.is_some() {
@@ -1892,11 +1901,16 @@ impl<S: 'static> App<S> {
         } else {
             let down = self.panes[idx].pressed.take();
             let up = self.panes[idx].tap_at(position);
+            let press_focus = self.panes[idx].press_focus.take();
             app_dbg(format_args!(
                 "release at {position:?}: pressed {down:?}, here {up:?}"
             ));
             if down.is_some() && down == up {
                 self.pane_click_at(idx, position);
+            } else if down.is_none() && up.is_none() && press_focus.is_some() {
+                // A press and release off any tap target still moves focus,
+                // as a click does.
+                return self.pane_click_at(idx, position);
             }
             if down.is_some() {
                 // Clear the pressed look, whether or not it clicked.
@@ -1936,8 +1950,10 @@ impl<S: 'static> App<S> {
         match action {
             TouchAction::None => false,
             TouchAction::Begin { target, dy } => {
-                // The press becomes a scroll: it no longer clicks or selects.
+                // The press becomes a scroll: it no longer clicks, focuses or
+                // selects.
                 pane.pressed = None;
+                pane.press_focus = None;
                 if pane.text_selecting.is_some() {
                     pane.end_text_select();
                 }
@@ -3271,6 +3287,26 @@ mod tests {
         // Backspace removes the last character.
         assert!(app.press_key(KeyInput::Backspace));
         assert_eq!(app.state().name, "Ad");
+    }
+
+    #[test]
+    fn a_press_and_release_on_a_plain_field_focuses_it() {
+        use crate::platform::{Touch, TouchPhase};
+        // A plain `text_field` has no tap handler or text position: the
+        // release itself has to move focus (it used to take Tab).
+        let mut app = form_app();
+        app.render_once();
+        let at = Point::new(150.0, 50.0);
+        for phase in [TouchPhase::Started, TouchPhase::Ended] {
+            app.touch(Touch {
+                id: 1,
+                phase,
+                position: at,
+            });
+        }
+        assert!(app.focused().is_some(), "the press focused the field");
+        assert!(app.type_text("Hi"));
+        assert_eq!(app.state().name, "Hi");
     }
 
     #[derive(Default)]

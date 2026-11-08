@@ -1126,8 +1126,20 @@ pub fn text_pos_at(node: &LayoutNode, point: Point) -> Option<(TextPosId, &Layou
     }
     match node.text_pos {
         Some(id) if node.bounds.contains(point) => Some((id, node)),
+        // A press anywhere in a text field reaches its text, which can be
+        // narrower than the field (or empty, and zero-width): the caret goes
+        // to the nearest position.
+        _ if node.focus.is_some() && node.bounds.contains(point) => first_text_pos(node),
         _ => None,
     }
+}
+
+/// The first node with a [`TextPosId`] in `node`'s subtree, depth-first.
+fn first_text_pos(node: &LayoutNode) -> Option<(TextPosId, &LayoutNode)> {
+    if let Some(id) = node.text_pos {
+        return Some((id, node));
+    }
+    node.children.iter().find_map(first_text_pos)
 }
 
 /// Find the [`FocusId`] of the top-most focusable node containing `point`
