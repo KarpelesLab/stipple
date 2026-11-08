@@ -23,6 +23,9 @@
 //! | `open_file(id, ptr, len)` | an `<input type=file>` (`accept` = the string); the file comes back through `stipple_file` |
 //! | `save_file(name, name_len, data, data_len)` | a download of a `Blob` |
 //! | `log(level, ptr, len)` | `console.log` / `console.error` (panics land here) |
+//! | `set_a11y(ptr, len)` | the ARIA overlay, from the accessibility tree as JSON (see [`aria_json`](crate::platform::access::aria_json)) |
+//! | `set_ime(active, x, y, w, h)` | moves the hidden `<textarea>` that takes composition to the caret (CSS pixels) |
+//! | `set_text_input(active)` | the textarea's `inputmode`, which shows or hides a touch keyboard |
 //!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
@@ -34,10 +37,13 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
+use crate::platform::access::{A11yNode, aria_json};
+use crate::platform::event::Ime;
 use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, WindowId};
 use crate::platform::input::{css_cursor, web_key, web_modifiers, web_wheel};
+use crate::platform::native::SystemLook;
 use crate::platform::time::Instant;
-use crate::platform::window::{CursorIcon, Window, WindowAttributes};
+use crate::platform::window::{CursorIcon, ImeState, Window, WindowAttributes};
 use crate::platform::{ControlFlow, frame, wake};
 use crate::render::{Font, Pixmap, Surface};
 
@@ -54,6 +60,9 @@ mod js {
         pub fn open_file(id: u32, accept: *const u8, accept_len: usize);
         pub fn save_file(name: *const u8, name_len: usize, data: *const u8, data_len: usize);
         pub fn log(level: u32, ptr: *const u8, len: usize);
+        pub fn set_a11y(ptr: *const u8, len: usize);
+        pub fn set_ime(active: u32, x: f64, y: f64, width: f64, height: f64);
+        pub fn set_text_input(active: u32);
     }
 }
 
@@ -104,6 +113,10 @@ struct Host {
     pasted: RefCell<Option<String>>,
     cursor: Cell<CursorIcon>,
     font: RefCell<Option<Font>>,
+    /// The accessibility tree last sent to the page, so an unchanged one isn't
+    /// sent again.
+    a11y: RefCell<Option<A11yNode>>,
+    text_input: Cell<bool>,
 }
 
 thread_local! {
@@ -117,6 +130,8 @@ thread_local! {
             pasted: RefCell::new(None),
             cursor: Cell::new(CursorIcon::Default),
             font: RefCell::new(None),
+            a11y: RefCell::new(None),
+            text_input: Cell::new(false),
         }
     };
 }
@@ -226,6 +241,37 @@ impl Window for WebWindow {
         if HOST.with(|h| h.cursor.replace(cursor)) != cursor {
             let css = css_cursor(cursor);
             unsafe { js::set_cursor(css.as_ptr(), css.len()) }
+        }
+    }
+
+    fn set_accessibility_tree(&self, root: &A11yNode) {
+        let changed = HOST.with(|h| {
+            let mut sent = h.a11y.borrow_mut();
+            if sent.as_ref() == Some(root) {
+                return false;
+            }
+            *sent = Some(root.clone());
+            true
+        });
+        if changed {
+            let json = aria_json(root);
+            unsafe { js::set_a11y(json.as_ptr(), json.len()) }
+        }
+    }
+
+    fn set_ime(&self, state: Option<&ImeState>) {
+        match state {
+            Some(s) => {
+                let r = s.cursor_area;
+                unsafe { js::set_ime(1, r.min_x(), r.min_y(), r.width(), r.height()) }
+            }
+            None => unsafe { js::set_ime(0, 0.0, 0.0, 0.0, 0.0) },
+        }
+    }
+
+    fn set_text_input_active(&self, active: bool) {
+        if HOST.with(|h| h.text_input.replace(active)) != active {
+            unsafe { js::set_text_input(u32::from(active)) }
         }
     }
 }
@@ -460,6 +506,38 @@ pub fn paste(text: String) {
             ..Default::default()
         },
     });
+}
+
+/// Composition from the page's hidden textarea: `kind` 0 is the preedit so
+/// far (`compositionupdate`; empty ends it), 1 commits `text`
+/// (`compositionend`, or an `input` event that typed text no `keydown`
+/// carried, such as a character composed with a dead key).
+#[doc(hidden)]
+pub fn ime(kind: u32, text: String) {
+    let event = if kind == 0 {
+        let end = text.len();
+        Ime::Preedit {
+            text,
+            cursor: Some((end, end)),
+        }
+    } else {
+        Ime::Commit(text)
+    };
+    deliver(Event::Ime(event));
+}
+
+/// The page's `prefers-color-scheme` (`dark`) and accent color (`0xRRGGBB`,
+/// or negative for none). Called before `start`, and again when the scheme
+/// changes, which a running app sees as [`Event::ThemeChanged`].
+#[doc(hidden)]
+pub fn color_scheme(dark: bool, accent: i32) {
+    let accent = u32::try_from(accent)
+        .ok()
+        .map(|c| crate::render::Color::rgb((c >> 16) as u8, (c >> 8) as u8, c as u8));
+    let changed = crate::platform::native::set_web_look(SystemLook { dark, accent });
+    if changed && HOST.with(|h| h.handler.borrow().is_some()) {
+        deliver(Event::ThemeChanged);
+    }
 }
 
 /// The canvas gained or lost keyboard focus.

@@ -101,6 +101,13 @@ pub fn watch() {
     os::watch();
 }
 
+/// The page's light/dark mode and accent, from `prefers-color-scheme` (see
+/// `web/stipple.js`). Returns whether the look changed.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn set_web_look(look: SystemLook) -> bool {
+    os::set_look(look)
+}
+
 static CHANGED: AtomicBool = AtomicBool::new(false);
 
 /// Record that the system appearance changed and wake the event loop, which

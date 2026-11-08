@@ -85,6 +85,18 @@ macro_rules! web_app {
                 glue::paste(unsafe { glue::take_string(ptr, len) });
             }
 
+            /// # Safety
+            /// `ptr`/`len` come from one `stipple_alloc(len)`.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_ime(kind: u32, ptr: *mut u8, len: usize) {
+                glue::ime(kind, unsafe { glue::take_string(ptr, len) });
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_color_scheme(dark: u32, accent: i32) {
+                glue::color_scheme(dark != 0, accent);
+            }
+
             #[unsafe(no_mangle)]
             pub extern "C" fn stipple_focus(focused: u32) {
                 glue::focus(focused != 0);
