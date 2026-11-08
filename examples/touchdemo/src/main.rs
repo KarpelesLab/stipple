@@ -111,8 +111,21 @@ mod selftest {
     use stipple::platform::TouchPhase;
     use stipple::platform::backend::ios::simulate;
 
-    fn at(ms: u64, handle: &AppHandle<State>, f: impl FnOnce(&mut State) + Send + 'static) {
-        handle.after(Duration::from_millis(ms), f);
+    type Step = Box<dyn FnOnce(&mut State) + Send>;
+
+    /// Run `steps` one after another, each `ms` after the previous one ran
+    /// (not after launch): a slow first frame then delays the whole sequence
+    /// instead of making every step due at once, ahead of the touches and
+    /// typing the earlier steps queued.
+    fn chain(handle: &AppHandle<State>, mut steps: std::collections::VecDeque<(u64, Step)>) {
+        let Some((ms, step)) = steps.pop_front() else {
+            return;
+        };
+        let next = handle.clone();
+        handle.after(Duration::from_millis(ms), move |s| {
+            step(s);
+            chain(&next, steps);
+        });
     }
 
     fn tap(x: f64, y: f64) {
@@ -123,67 +136,82 @@ mod selftest {
     pub fn schedule(handle: &AppHandle<State>) {
         let _ = std::fs::remove_file(std::env::temp_dir().join("touchdemo.log"));
         log("touchdemo: selftest starting");
+        let mut steps: std::collections::VecDeque<(u64, Step)> = Default::default();
+        let mut at = |ms: u64, f: Step| steps.push_back((ms, f));
         // Tap the text field: it takes focus, and the view the keyboard.
-        at(1500, handle, |_| {
-            log(&format!(
-                "touchdemo: keyboard before {}",
-                simulate::keyboard_status()
-            ));
-            tap(120.0, PAD + FIELD_H / 2.0);
-        });
-        // Type through UIKeyInput: "Hi!", then delete the "!".
-        at(2500, handle, |_| {
-            log(&format!(
-                "touchdemo: keyboard focused {}",
-                simulate::keyboard_status()
-            ));
-            simulate::insert_text("Hi");
-            simulate::insert_text("!");
-            simulate::delete_backward();
-        });
-        // Drag the list up 300 points in 160 ms with a second finger id, one
-        // move per frame, so it scrolls and then flings.
-        let (x, y0, y1, steps) = (120.0, 450.0, 150.0, 10u64);
-        at(3500, handle, move |_| {
-            simulate::touch(2, TouchPhase::Started, Point::new(x, y0));
-        });
-        for i in 1..=steps {
-            let y = y0 + (y1 - y0) * i as f64 / steps as f64;
-            at(3500 + 16 * i, handle, move |_| {
-                simulate::touch(2, TouchPhase::Moved, Point::new(x, y));
-            });
-        }
-        at(3500 + 16 * steps + 8, handle, move |_| {
-            simulate::touch(2, TouchPhase::Ended, Point::new(x, y1));
-        });
-        // Tap beside the label, on nothing focusable: focus and the keyboard go.
-        at(6000, handle, |_| tap(300.0, PAD + FIELD_H + 12.0 + 8.0));
-        at(7000, handle, |s| {
-            let keyboard = simulate::keyboard_status();
-            log(&format!("touchdemo: keyboard after {keyboard}"));
-            let offset = f64::from_bits(OFFSET.load(Ordering::Relaxed));
-            let mut failures = Vec::new();
-            if s.name != "Hi" {
-                failures.push(format!("text {:?}, not \"Hi\"", s.name));
-            }
-            // 300 points less the slop, then the fling's run.
-            if offset < 250.0 {
-                failures.push(format!("scrolled only {offset:.0}"));
-            }
-            if !s.tapped.is_empty() {
-                failures.push(format!("rows tapped {:?}", s.tapped));
-            }
-            if !keyboard.contains("first_responder=false") {
-                failures.push("the keyboard stayed".into());
-            }
-            if failures.is_empty() {
-                log(&format!("touchdemo: selftest passed (offset {offset:.0})"));
-            } else {
+        at(
+            1500,
+            Box::new(|_| {
                 log(&format!(
-                    "touchdemo: selftest FAILED: {}",
-                    failures.join("; ")
+                    "touchdemo: keyboard before {}",
+                    simulate::keyboard_status()
                 ));
-            }
-        });
+                tap(120.0, PAD + FIELD_H / 2.0);
+            }),
+        );
+        // Type through UIKeyInput: "Hi!", then delete the "!".
+        at(
+            1000,
+            Box::new(|_| {
+                log(&format!(
+                    "touchdemo: keyboard focused {}",
+                    simulate::keyboard_status()
+                ));
+                simulate::insert_text("Hi");
+                simulate::insert_text("!");
+                simulate::delete_backward();
+            }),
+        );
+        // Drag the list up 300 points with a second finger id, a move every
+        // 16 ms, so it scrolls and then flings.
+        let (x, y0, y1, steps_n) = (120.0, 450.0, 150.0, 10u64);
+        at(
+            1000,
+            Box::new(move |_| simulate::touch(2, TouchPhase::Started, Point::new(x, y0))),
+        );
+        for i in 1..=steps_n {
+            let y = y0 + (y1 - y0) * i as f64 / steps_n as f64;
+            at(
+                16,
+                Box::new(move |_| simulate::touch(2, TouchPhase::Moved, Point::new(x, y))),
+            );
+        }
+        at(
+            8,
+            Box::new(move |_| simulate::touch(2, TouchPhase::Ended, Point::new(x, y1))),
+        );
+        // Tap beside the label, on nothing focusable: focus and the keyboard go.
+        at(2500, Box::new(|_| tap(300.0, PAD + FIELD_H + 12.0 + 8.0)));
+        at(
+            1000,
+            Box::new(|s| {
+                let keyboard = simulate::keyboard_status();
+                log(&format!("touchdemo: keyboard after {keyboard}"));
+                let offset = f64::from_bits(OFFSET.load(Ordering::Relaxed));
+                let mut failures = Vec::new();
+                if s.name != "Hi" {
+                    failures.push(format!("text {:?}, not \"Hi\"", s.name));
+                }
+                // 300 points less the slop, then the fling's run.
+                if offset < 250.0 {
+                    failures.push(format!("scrolled only {offset:.0}"));
+                }
+                if !s.tapped.is_empty() {
+                    failures.push(format!("rows tapped {:?}", s.tapped));
+                }
+                if !keyboard.contains("first_responder=false") {
+                    failures.push("the keyboard stayed".into());
+                }
+                if failures.is_empty() {
+                    log(&format!("touchdemo: selftest passed (offset {offset:.0})"));
+                } else {
+                    log(&format!(
+                        "touchdemo: selftest FAILED: {}",
+                        failures.join("; ")
+                    ));
+                }
+            }),
+        );
+        chain(handle, steps);
     }
 }

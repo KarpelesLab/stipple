@@ -2622,7 +2622,8 @@ jobs:
           cp target/aarch64-apple-ios-sim/release/touchdemo Stipple.app/window
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
           xcrun simctl install "$DEV" Stipple.app
-          SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 xcrun simctl launch "$DEV" com.karpeleslab.stipple
+          SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 SIMCTL_CHILD_STIPPLE_APP_DEBUG=1 xcrun simctl launch \
+            --stderr="$PWD/visual_output/touchdemo-stderr.log" "$DEV" com.karpeleslab.stipple
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"
           for _ in $(seq 1 30); do
@@ -2631,6 +2632,7 @@ jobs:
           done
           xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-touch.png || true
           echo "=== touchdemo.log ==="; cat "$LOG" || true
+          echo "=== app debug (last 40) ==="; tail -40 visual_output/touchdemo-stderr.log || true
           # The view adopts UIKeyInput and takes the keyboard while the field
           # has focus...
           grep -q "touchdemo: keyboard focused key_input=true can_become=true first_responder=true" "$LOG"
