@@ -162,12 +162,18 @@ jobs:
           # Click the size select (SELECT_AT in the demo, pinned by its test):
           # its option list must drop over the form below it.
           xdotool mousemove 200 127 click 1
-          sleep 2
-          import -window root -crop 720x480+0+0 +repage visual_output/stipple-x11-widgets-open.png
           convert visual_output/stipple-x11-widgets.png -crop 160x150+124+150 +repage visual_output/widgets-before.png
-          convert visual_output/stipple-x11-widgets-open.png -crop 160x150+124+150 +repage visual_output/widgets-after.png
-          diff=$(compare -metric AE visual_output/widgets-before.png visual_output/widgets-after.png null: 2>&1 || true)
-          echo "pixels changed under the select: $diff"
+          # Up to 10 s for the list to show (a slow runner can take a while).
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 1
+            import -window root -crop 720x480+0+0 +repage visual_output/stipple-x11-widgets-open.png
+            convert visual_output/stipple-x11-widgets-open.png -crop 160x150+124+150 +repage visual_output/widgets-after.png
+            diff=$(compare -metric AE visual_output/widgets-before.png visual_output/widgets-after.png null: 2>&1 || true)
+            echo "after ${i} s, pixels changed under the select: $diff"
+            [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 500 ] && break
+          done
+          # Where the time went (timestamps in ms).
+          grep -v "x11: present" visual_output/widgets.log | tail -25
           if [ "$(echo "$diff" | awk '{printf "%d", $1}')" -le 500 ]; then
             # Diagnose a stall: is the app alive and busy, and where is it?
             if ps -o pid,stat,pcpu,etime,cmd -p "$WPID"; then
@@ -1903,7 +1909,8 @@ jobs:
             --screenshot="$PWD/visual_output/stipple-web.png" "http://localhost:8000/index.html#selftest"
           shot visual_output/stipple-web.png
           # Two apps on one page, each its own instance of the module.
-          chrome --force-dark-mode --virtual-time-budget=8000 --window-size=900,420 \
+          # Real time (--timeout): the simulated clock never settled on this page.
+          chrome --force-dark-mode --timeout=8000 --window-size=900,420 \
             --screenshot="$PWD/visual_output/stipple-web-multi.png" "http://localhost:8000/multi.html"
           shot visual_output/stipple-web-multi.png
 

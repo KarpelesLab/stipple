@@ -156,7 +156,13 @@ pub fn available() -> bool {
 /// trace the live socket path (which CI exercises) without spamming normal use.
 fn dbg(args: std::fmt::Arguments<'_>) {
     if std::env::var_os("STIPPLE_X11_DEBUG").is_some() {
-        eprintln!("stipple x11: {args}");
+        // Milliseconds since the first line, to line up with the app's.
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let ms = START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_millis();
+        eprintln!("stipple x11: [{ms} ms] {args}");
     }
 }
 

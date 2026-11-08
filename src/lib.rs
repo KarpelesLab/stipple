@@ -2069,6 +2069,7 @@ impl<S: 'static> App<S> {
                        idx: usize,
                        window: &dyn crate::platform::Window,
                        force: bool| {
+            app_dbg(format_args!("present: start"));
             if idx == 0 {
                 app.sync_menu_bar(window);
                 app.sync_tray(window);
@@ -2087,6 +2088,7 @@ impl<S: 'static> App<S> {
             pane.scale = scale;
             pane.drop_stale_preedit(state);
             let scene = pane.build_frame(state, theme, font.as_ref());
+            app_dbg(format_args!("present: built"));
             pane.sync_ime(window, font.as_ref());
 
             // Push the freshly-built accessibility tree to the OS bridge so a
@@ -2955,7 +2957,13 @@ fn app_dbg(args: std::fmt::Arguments<'_>) {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     if *ON.get_or_init(|| std::env::var_os("STIPPLE_APP_DEBUG").is_some()) {
-        eprintln!("stipple app: {args}");
+        // Milliseconds since the first line, to see where time goes.
+        static START: OnceLock<std::time::Instant> = OnceLock::new();
+        let ms = START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_millis();
+        eprintln!("stipple app: [{ms} ms] {args}");
     }
 }
 
