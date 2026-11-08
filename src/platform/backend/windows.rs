@@ -27,10 +27,12 @@ use crate::platform::menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
-/// Pacing animation frames by the compositor (`DwmFlush`).
+/// Receiving drops (OLE `IDropTarget`, `WM_DROPFILES`).
+mod dnd;
 mod ime;
 /// The notification-area icon and notification balloons.
 mod tray;
+/// Pacing animation frames by the compositor (`DwmFlush`).
 mod vsync;
 
 pub(crate) use tray::notify;
@@ -387,6 +389,10 @@ struct WinCtx {
     menu: usize,
     /// The tray icon's menu and icon.
     tray: tray::TrayState,
+    /// Whether the app takes the drag over the window (its last
+    /// `set_drop_accepted`), and where the drag last was.
+    drop_accepted: bool,
+    drag_last: Option<crate::geometry::Point>,
 }
 
 /// Physical pixels per logical pixel for the window's current display.
@@ -993,6 +999,10 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             tray::callback(hwnd, wp, lp);
             0
         }
+        dnd::WM_DROPFILES => {
+            dnd::drop_files(wp as *mut c_void);
+            0
+        }
         WM_CLOSE => {
             push_event(Event::CloseRequested);
             0
@@ -1060,6 +1070,9 @@ impl Window for WinWindow {
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         ime::set_state(self.hwnd, state);
+    }
+    fn set_drop_accepted(&self, accepted: bool) {
+        CTX.with(|c| c.borrow_mut().drop_accepted = accepted);
     }
     fn set_cursor(&self, cursor: CursorIcon) {
         CTX.with(|c| c.borrow_mut().cursor = cursor);
@@ -1226,6 +1239,10 @@ where
         (rect.bottom - rect.top).max(1) as u32,
     );
     let mut win = WinWindow { hwnd, size: client };
+    // Take drops from other applications.
+    if !dnd::register(hwnd) {
+        eprintln!("stipple: RegisterDragDrop failed; only WM_DROPFILES drops work");
+    }
     if let Some(icon) = attrs.icon.as_ref() {
         win.set_icon(Some(icon));
     }

@@ -30,6 +30,8 @@ use crate::render::{Pixmap, Surface};
 
 /// Pacing animation frames by the display (`CVDisplayLink`).
 mod display_link;
+/// Receiving drops (`NSDraggingDestination`).
+mod dnd;
 /// The CI self-test of the menus (`STIPPLE_COCOA_MENU_SELFTEST`).
 mod menu_check;
 mod text_input;
@@ -504,6 +506,10 @@ struct MacCtx {
     context_pick: Option<i64>,
     /// The tray icon's `NSStatusItem` (retained), or null.
     status_item: Id,
+    /// Whether the app takes the drag over the view (its last
+    /// `set_drop_accepted`), and where the drag last was.
+    drop_accepted: bool,
+    drag_last: Option<Point>,
 }
 
 // Cocoa is single-threaded (main thread); the backend runs there.
@@ -1290,6 +1296,7 @@ fn register_view_class() -> Class {
             id_types.as_ptr(),
         );
         text_input::add_methods(cls);
+        dnd::add_methods(cls);
         objc_registerClassPair(cls);
         cls
     }
@@ -1301,6 +1308,9 @@ struct MacWindow {
 }
 
 impl Window for MacWindow {
+    fn set_drop_accepted(&self, accepted: bool) {
+        CTX.with(|c| c.borrow_mut().drop_accepted = accepted);
+    }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         text_input::set_state(state);
     }
@@ -1503,6 +1513,8 @@ where
             init(alloc, sel("initWithFrame:"), content)
         };
         msg_void_id(window, sel("setContentView:"), view);
+        // Take drops of files and text from other applications.
+        dnd::register(view);
         msg_void_id(window, sel("setTitle:"), nsstring(&attrs.title));
         if let Some(dark) = attrs.dark {
             // A window's appearance sets its title bar to match the content.
@@ -1607,6 +1619,7 @@ where
             std::mem::transmute(objc_msgSend as *const c_void);
         let pool_cls = class("NSAutoreleasePool");
         let mut last = win.size;
+        let mut self_drop = std::env::var("STIPPLE_COCOA_DROP").ok();
         // Other threads end the wait by posting an application-defined event,
         // which AppKit allows from any thread.
         crate::platform::wake::install(std::sync::Arc::new(post_wake_event), None);
@@ -1631,6 +1644,12 @@ where
                 None => distant_future,
             };
             let ev = next(app, next_sel, u64::MAX, until, mode, true);
+            // The drop self-test (`STIPPLE_COCOA_DROP=<path>`), once the loop
+            // runs.
+            if let Some(path) = self_drop.take() {
+                let at = Point::new(100.0, 150.0);
+                println!("Cocoa drop: {}", dnd::self_drop(view, &path, at));
+            }
             if !ev.is_null() && menu_check::step_event(ev) {
                 // A step of the menu self-test, not for the app.
             } else if !ev.is_null() {
@@ -1681,6 +1700,14 @@ where
                 }
             }
 
+            // Deliver what AppKit raised meanwhile (menu picks, drags), which
+            // may have come while waiting, with no event to show for it.
+            let pending = CTX.with(|c| std::mem::take(&mut c.borrow_mut().pending));
+            for event in pending {
+                if !exit && handler(event, &win) == ControlFlow::Exit {
+                    exit = true;
+                }
+            }
             if !exit
                 && crate::platform::wake::take(std::time::Instant::now())
                 && handler(Event::Wake, &win) == ControlFlow::Exit
