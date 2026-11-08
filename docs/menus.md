@@ -154,6 +154,11 @@ it as an overlay, like a select's list. It moves left or up if it would cross
 the window's edge, and the same keys and mouse moves work in it as in the menu
 bar's menus.
 
+## Tray menus
+
+The same `Menu` and `MenuItem`s make the tray icon's menu, declared with
+`App::tray`; see [os-integration.md](os-integration.md).
+
 ## Accessibility
 
 Menus report the `MenuBar`, `Menu` and `MenuItem` roles (and `Separator` for

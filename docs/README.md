@@ -42,6 +42,9 @@ How to build, package and run on each platform, and what works there today.
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
 | Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
+| Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ³ | ✅ ¹⁰ | ✅ ¹⁰ |
+| Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ❌ | ❌ | ✅ ¹⁰ |
+| Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -114,6 +117,15 @@ field included) and picks from a native context menu. See [menus.md](menus.md).
 mirrored `bididemo --mirror` rendering on X11, Windows and macOS, screenshots its
 window on all three, and drags its slider on X11; on iOS, Android and the web it
 is only unit-tested. See [bidi.md](bidi.md#mirrored-layouts).
+²⁶ CI runs `traydemo --selftest`: on Linux against a mock desktop on D-Bus that
+receives the notification and the portal's `OpenURI`, and plays the tray host,
+clicking a `StatusNotifierItem` menu item and the icon; on Windows it checks
+`Shell_NotifyIconW` accepted the icon and the balloon and `ShellExecuteW`
+reached a URL protocol; on macOS that the `NSStatusItem` exists, `osascript`'s
+notification ran and a `.txt` opened in TextEdit. Real tray hosts, and clicks on
+the Windows and macOS icons, aren't exercised. macOS notifications go through
+`osascript`, as the frameworks need an app bundle. See
+[os-integration.md](os-integration.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -124,6 +136,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
 - [Widgets](widgets.md): select, number input, split pane, toolbar and toasts
 - [Menus](menus.md): the menu bar, shortcuts and context menus
+- [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click

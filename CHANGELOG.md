@@ -22,6 +22,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `menudemo` logs each command it runs and has a note field and an Edit >
   Copy Summary item on Ctrl+C / ⌘C.
 
+- Tray icons, notifications and opening URLs. `App::tray` declares a tray
+  icon (`Tray`: tooltip, icon, a `Menu`, a click action) as a function of the
+  state: a notification-area icon on Windows, an `NSStatusItem` on macOS, and a
+  `StatusNotifierItem` with a dbusmenu menu over D-Bus on Linux; picks arrive
+  as `Event::MenuCommand`, clicks as the new `Event::TrayActivated`, and
+  backends implement `Window::set_tray`. `platform::notify` (and
+  `AppHandle::notify`) shows a desktop notification, and `platform::open_url` /
+  `open_path` (and `AppHandle::open_url`) open a URL or file in its default app,
+  through the XDG portal or `xdg-open`, `ShellExecuteW`, `NSWorkspace`,
+  `UIApplication`, an Android intent or `window.open`. `web/stipple.js` gains
+  the `open_url` and `notify` imports (and `openUrl` / `notify` options). See
+  `docs/os-integration.md` and `examples/traydemo`, which CI runs on Linux
+  (against a mock desktop on D-Bus), Windows and macOS.
 - The web catches up with the desktops: `stipple::web_app!(app)` generates a
   web app's exports and `web/stipple.js` is its whole page side, so an app no
   longer copies the glue. Timers and `AppHandle::update` wake the app through

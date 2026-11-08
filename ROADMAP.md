@@ -957,7 +957,31 @@ Most input only works on X11 today.
   notifications on macOS and the portal's `SettingChanged` on Linux; the App
   rebuilds `Theme::native()`, drops cached OS-drawn bitmaps, switches the title
   bar and repaints. Not exercised in CI. iOS doesn't report changes yet.
-- ⬜ Drag and drop, notifications, system tray, opening URLs.
+- ⬜ Drag and drop.
+- ✅ Opening URLs and files in their default apps (`platform::open_url`,
+  `open_path`): the XDG portal's `OpenURI` over D-Bus with `xdg-open` as the
+  fallback on Linux, `ShellExecuteW`, `NSWorkspace`, `UIApplication`, an
+  `ACTION_VIEW` intent over JNI on Android, and `window.open` on the web. CI
+  checks Linux (portal and `xdg-open`, against a mock), Windows (an HKCU URL
+  protocol) and macOS (a `.txt` opens TextEdit); iOS, Android and the web are
+  build-checked only.
+- ✅ Notifications (`platform::notify`, `AppHandle::notify`):
+  `org.freedesktop.Notifications` on Linux, a `Shell_NotifyIconW` balloon (a
+  toast on Windows 10 and 11), `osascript` on macOS (the notification
+  frameworks need an app bundle) and the web's `Notification` API. CI checks
+  the Linux call reaches a mock server, and that Windows and macOS accept it; no
+  popup is looked at. Clicks and actions on notifications, and iOS and Android,
+  are still to do.
+- ✅ Tray icons: a declarative `Tray` (`App::tray`, rebuilt from the state)
+  with a tooltip, an icon, a menu from the menu model and a click action;
+  `Shell_NotifyIconW` with a popup `HMENU` on Windows, an `NSStatusItem` with an
+  `NSMenu` on macOS, and a hand-written `StatusNotifierItem` plus
+  `com.canonical.dbusmenu` service on Linux. Picks arrive as
+  `Event::MenuCommand`, clicks as `Event::TrayActivated`. CI drives the Linux
+  item end to end through a mock tray host (properties, menu layout, a menu
+  click and an activation reach the app); on Windows and macOS it checks the
+  icon is created, but the menus and clicks are build-checked only. No XEmbed
+  tray on Linux. See [docs/os-integration.md](docs/os-integration.md).
 
 #### 7e — Widgets and layout
 - ✅ Image and SVG widgets: `image(...)` / `svg(...)` with fill / contain /

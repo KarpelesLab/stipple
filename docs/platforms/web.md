@@ -245,9 +245,10 @@ The module exports:
 
 It imports, from the module `"stipple"`: `now`, `present`, `schedule`,
 `request_frame`, `set_cursor`, `set_title`, `clipboard_write`, `open_file`,
-`save_file`, `log` (panics are printed to the console), `set_a11y` (the
-accessibility tree as JSON), `set_ime` (the caret rect, or none) and
-`set_text_input`. See `src/platform/backend/web.rs`.
+`save_file`, `open_url` (`window.open`, for `platform::open_url`), `notify`
+(the `Notification` API, for `platform::notify`), `log` (panics are printed to
+the console), `set_a11y` (the accessibility tree as JSON), `set_ime` (the caret
+rect, or none) and `set_text_input`. See `src/platform/backend/web.rs`.
 
 `std::time::Instant::now` panics on `wasm32-unknown-unknown`, so Stipple's
 timers and frame clock use `stipple::platform::time::Instant`, which is std's
