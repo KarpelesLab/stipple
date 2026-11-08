@@ -6,9 +6,9 @@
 //!
 //! There's one event loop per process, so this state is global.
 
+use crate::platform::time::Instant;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 /// The wake state. The process has one ([`GLOBAL`]); tests make their own.
 struct State {
@@ -133,8 +133,8 @@ pub(crate) fn schedule(at: Instant) {
 
 /// Install the running backend's way of interrupting its wait. `schedule` is for
 /// backends whose loop can't take a timeout, and arranges a wakeup at a deadline.
-// Android's and the web's loops don't wake on demand yet.
-#[cfg_attr(any(target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+// Android's loop doesn't wake on demand yet.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn install(
     signal: Arc<dyn Fn() + Send + Sync>,
     schedule: Option<Arc<dyn Fn(Instant) + Send + Sync>>,

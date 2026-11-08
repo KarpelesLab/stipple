@@ -233,7 +233,7 @@ mod tests {
     use super::*;
     use crate::App;
     use crate::geometry::Size;
-    use std::time::Instant;
+    use crate::platform::time::Instant;
 
     #[test]
     fn push_and_dismiss() {

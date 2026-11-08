@@ -9,7 +9,8 @@
 //!
 //! - A *display source* ticks at the refresh: `wl_surface.frame` on Wayland, a
 //!   `DwmFlush` thread on Windows, `CVDisplayLink` on macOS, `CADisplayLink` on
-//!   iOS. It calls [`tick`] from whatever thread it runs on.
+//!   iOS, `requestAnimationFrame` on the web. It calls [`tick`] from whatever
+//!   thread it runs on.
 //! - Otherwise a timer at the refresh [`interval`](set_interval) stands in (X11).
 //!
 //! A source that has been asked for a frame is trusted to deliver it, but if it
@@ -19,8 +20,9 @@
 //! There is one event loop per process, so this state is global, like
 //! [`wake`](super::wake).
 
+use crate::platform::time::Instant;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The refresh interval assumed until a backend reports the display's: 60 Hz.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_nanos(16_666_667);
@@ -76,7 +78,7 @@ impl Clock {
     }
 
     /// A display source ticked. Returns whether a frame was wanted.
-    #[cfg_attr(any(target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     fn tick(&mut self, now: Instant) -> bool {
         if self.wanted.is_none() {
             self.claimed = false;
@@ -147,7 +149,7 @@ pub fn wanted() -> bool {
 /// For a display source: the display is ready for a frame. Safe from any
 /// thread. Wakes the loop if a frame was wanted, and returns whether one was.
 /// A source that keeps ticking with nothing wanted should call [`idle`].
-#[cfg_attr(any(target_os = "android", target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn tick() -> bool {
     let Some(now) = now() else {
         return false;
@@ -183,7 +185,12 @@ pub(crate) fn claim() {
 /// the next refresh, and `disarm`, if given, stops it after it has gone
 /// [`idle`]. Both are called on the UI thread.
 #[cfg_attr(
-    not(any(target_os = "windows", target_os = "macos", target_os = "ios")),
+    not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_arch = "wasm32"
+    )),
     allow(dead_code)
 )]
 pub(crate) fn install(
@@ -231,17 +238,11 @@ pub(crate) fn take_due(now: Instant) -> bool {
     due
 }
 
-/// The current time, or `None` on targets without a clock (`wasm32`, where
-/// `Instant::now` panics).
+/// The current time. Always `Some` now that the web has a clock
+/// ([`time::Instant`](super::time::Instant)); kept an `Option` for targets
+/// that may lack one.
 pub(crate) fn now() -> Option<Instant> {
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        Some(Instant::now())
-    }
+    Some(Instant::now())
 }
 
 /// Time since the frame clock started (the first call), the timeline animations

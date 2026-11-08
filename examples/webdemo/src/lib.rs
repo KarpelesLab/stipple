@@ -1,150 +1,137 @@
-//! Stipple on the web: a wasm module exposing a small C ABI that a hand-written
-//! JS shim drives — no `wasm-bindgen`, no JS framework (workspace policy in
-//! `ROADMAP.md` §1).
+//! Stipple on the web: an ordinary [`App`], made a web app by
+//! [`stipple::web_app!`]. The library provides the exports, and
+//! `web/stipple.js` (in the repository) the page side; no `wasm-bindgen`.
 //!
-//! The module holds a persistent [`App`] so state survives across events. JS:
-//! 1. `stipple_alloc(len)` → write font bytes into wasm memory → `stipple_set_font`,
-//! 2. `stipple_init(w, h)` to build + render the app,
-//! 3. forwards canvas events via `stipple_click` / `stipple_pointer_move` /
-//!    `stipple_text`, each of which re-renders,
-//! 4. reads the RGBA frame via `stipple_frame_ptr`/`_len`/`_width`/`_height` and
-//!    blits it with `putImageData` (a `Pixmap` is straight RGBA8 = `ImageData`).
+//! It shows what the web backend does: a click counter, a spinner that turns
+//! (driven by `requestAnimationFrame`) while a timer "loads" data, a repeating
+//! timer, a text editor with clipboard support, and opening and saving a file.
 //!
-//! Built for `wasm32-unknown-unknown`; the `Visual` workflow screenshots it in
-//! headless Chrome after the page synthesizes clicks.
+//! `index.html#selftest` drives it with scripted DOM events and reports what
+//! it saw (see the page). CI runs that in headless Chrome. The page reads the
+//! state through [`webdemo_probe`].
 
-use std::cell::RefCell;
+use std::cell::Cell;
 
+use stipple::platform::dialog::{self, FileDialog};
 use stipple::prelude::*;
 
-/// App state: a click counter (the whole canvas is the button).
-#[derive(Default)]
-struct State {
+#[derive(Debug, Default)]
+pub struct State {
     clicks: u32,
+    ticks: u32,
+    loaded: bool,
+    notes: EditBuffer,
+    file: Option<(String, usize)>,
 }
-
-type WebApp = App<State>;
 
 thread_local! {
-    static FONT: RefCell<Option<Font>> = const { RefCell::new(None) };
-    static APP: RefCell<Option<WebApp>> = const { RefCell::new(None) };
-    static FRAME: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
-    static SIZE: RefCell<(u32, u32)> = const { RefCell::new((0, 0)) };
+    /// Frames built while loading, and after (the selftest's spinner check).
+    static FRAMES_LOADING: Cell<u32> = const { Cell::new(0) };
+    static FRAMES_IDLE: Cell<u32> = const { Cell::new(0) };
+    /// The state, mirrored for [`webdemo_probe`].
+    static PROBE: Cell<[u32; 5]> = const { Cell::new([0; 5]) };
 }
 
-fn build(state: &State, cx: &mut Cx<State>) -> Element {
+fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let theme = *cx.theme();
-    Element::stack(
-        Axis::Horizontal,
-        vec![Element::text(
-            format!("Clicks: {}", state.clicks),
-            48.0,
-            theme.palette.on_primary,
-        )],
-    )
-    .fill(theme.palette.primary)
-    .align(Align::Center, Align::Center)
-    .on_tap(cx, |s: &mut State| s.clicks += 1)
-}
-
-fn render_into(app: &mut WebApp) {
-    let pixmap = app.render_once();
-    let size = pixmap.size();
-    FRAME.with(|c| *c.borrow_mut() = pixmap.as_bytes().to_vec());
-    SIZE.with(|c| *c.borrow_mut() = (size.width, size.height));
-}
-
-fn with_app(f: impl FnOnce(&mut WebApp)) {
-    APP.with(|c| {
-        if let Some(app) = c.borrow_mut().as_mut() {
-            f(app);
-        }
+    let handle = cx.handle();
+    let counter = if state.loaded {
+        &FRAMES_IDLE
+    } else {
+        &FRAMES_LOADING
+    };
+    counter.with(|c| c.set(c.get() + 1));
+    PROBE.with(|p| {
+        p.set([
+            state.clicks,
+            state.ticks,
+            u32::from(state.loaded),
+            state.file.as_ref().map_or(0, |f| f.1 as u32),
+            state.notes.text().len() as u32,
+        ])
     });
+
+    let status = if state.loaded {
+        label(&theme, "Loaded.")
+    } else {
+        row(vec![spinner(cx, &theme), label(&theme, "Loading…")])
+            .gap(theme.spacing.sm)
+            .align(Align::Start, Align::Center)
+    };
+    let notes = text_editor(cx, &theme, &state.notes, |s: &mut State| &mut s.notes)
+        .width(420.0)
+        .height(44.0);
+    let open = button_labeled(&theme, "Open…").on_tap(cx, move |_: &mut State| {
+        let handle = handle.clone();
+        dialog::open_file_contents(&FileDialog::new().with_accept(".txt,text/*"), move |file| {
+            if let Some(file) = file {
+                let text = String::from_utf8_lossy(&file.bytes).into_owned();
+                handle.update(move |s: &mut State| {
+                    s.file = Some((file.name, file.bytes.len()));
+                    s.notes = EditBuffer::from_text(text.lines().next().unwrap_or(""));
+                });
+            }
+        });
+    });
+    let save = button_labeled(&theme, "Save").on_tap(cx, |s: &mut State| {
+        let opts = FileDialog::new().with_file_name("notes.txt");
+        dialog::save_file_contents(&opts, s.notes.text().as_bytes());
+    });
+    let file = match &state.file {
+        Some((name, len)) => format!("Opened {name} ({len} bytes)"),
+        None => "No file opened".to_string(),
+    };
+    column(vec![
+        text_field_row(&theme, notes),
+        row(vec![
+            button_labeled(&theme, format!("Clicked {} times", state.clicks))
+                .on_tap(cx, |s: &mut State| s.clicks += 1),
+            open,
+            save,
+        ])
+        .gap(theme.spacing.sm),
+        status,
+        label(&theme, format!("Ticks: {}", state.ticks)),
+        label(&theme, file),
+    ])
+    .gap(theme.spacing.md)
+    .padding(Insets::uniform(theme.spacing.lg))
 }
 
-/// Allocate `len` bytes in wasm memory for JS to write into (e.g. font bytes).
-#[unsafe(no_mangle)]
-pub extern "C" fn stipple_alloc(len: usize) -> *mut u8 {
-    let mut buf = vec![0u8; len];
-    let ptr = buf.as_mut_ptr();
-    std::mem::forget(buf);
-    ptr
+fn text_field_row(theme: &Theme, field: Element) -> Element {
+    column(vec![label(theme, "Notes (type, copy, paste):"), field]).gap(theme.spacing.xs)
 }
 
-/// Adopt `len` font bytes previously written at `ptr` (from [`stipple_alloc`]).
-///
-/// # Safety
-/// `ptr`/`len` must come from a single `stipple_alloc(len)` call.
+/// The app. `web_app!` runs it in the page; natively it renders headless.
+pub fn app() -> App<State> {
+    let app = App::new(State::default(), view)
+        .title("Stipple on the web")
+        .theme(Theme::dark());
+    let handle = app.handle();
+    // Pretend to load something for 1.5 s, while the spinner turns.
+    handle.after(Duration::from_millis(1500), |s: &mut State| s.loaded = true);
+    // Tick twice a second for 2.5 s, then stop (so the app goes idle, and the
+    // screenshot CI takes is the same every time).
+    let ticker = handle.every(Duration::from_millis(500), |s: &mut State| s.ticks += 1);
+    let stop = handle.clone();
+    handle.after(Duration::from_millis(2600), move |_: &mut State| {
+        stop.cancel(ticker)
+    });
+    app
+}
+
+stipple::web_app!(app);
+
+/// The state for the page's selftest: 0 clicks, 1 timer ticks, 2 loaded, 3 the
+/// opened file's size, 4 the notes' length, 5 frames built while loading, 6
+/// frames built since.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn stipple_set_font(ptr: *mut u8, len: usize) {
-    let bytes = unsafe { Vec::from_raw_parts(ptr, len, len) };
-    if let Ok(font) = Font::from_bytes(bytes) {
-        FONT.with(|c| *c.borrow_mut() = Some(font));
+pub extern "C" fn webdemo_probe(what: u32) -> u32 {
+    match what {
+        5 => FRAMES_LOADING.with(Cell::get),
+        6 => FRAMES_IDLE.with(Cell::get),
+        i => PROBE.with(|p| p.get().get(i as usize).copied().unwrap_or(0)),
     }
-}
-
-/// Build the app at `width` × `height` logical pixels and render the first frame.
-#[unsafe(no_mangle)]
-pub extern "C" fn stipple_init(width: u32, height: u32) {
-    let mut app = App::new(State::default(), build)
-        .theme(Theme::dark())
-        .logical_size(Size::new(width.max(1) as f64, height.max(1) as f64));
-    if let Some(font) = FONT.with(|c| c.borrow_mut().take()) {
-        app = app.font(font);
-    }
-    render_into(&mut app);
-    APP.with(|c| *c.borrow_mut() = Some(app));
-}
-
-/// Deliver a click at `(x, y)` logical pixels and re-render.
-#[unsafe(no_mangle)]
-pub extern "C" fn stipple_click(x: f64, y: f64) {
-    with_app(|app| {
-        app.click_at(Point::new(x, y));
-        render_into(app);
-    });
-}
-
-/// Update the hovered element for pointer `(x, y)` and re-render if it changed.
-#[unsafe(no_mangle)]
-pub extern "C" fn stipple_pointer_move(x: f64, y: f64) {
-    with_app(|app| {
-        if app.hover_at(Point::new(x, y)) {
-            render_into(app);
-        }
-    });
-}
-
-/// Deliver committed text (UTF-8 bytes at `ptr`) to the focused element.
-///
-/// # Safety
-/// `ptr`/`len` must reference `len` valid bytes (e.g. from [`stipple_alloc`]).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn stipple_text(ptr: *const u8, len: usize) {
-    let s = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let text = String::from_utf8_lossy(s).into_owned();
-    with_app(|app| {
-        if app.type_text(&text) {
-            render_into(app);
-        }
-    });
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn stipple_frame_ptr() -> *const u8 {
-    FRAME.with(|c| c.borrow().as_ptr())
-}
-#[unsafe(no_mangle)]
-pub extern "C" fn stipple_frame_len() -> usize {
-    FRAME.with(|c| c.borrow().len())
-}
-#[unsafe(no_mangle)]
-pub extern "C" fn stipple_width() -> u32 {
-    SIZE.with(|c| c.borrow().0)
-}
-#[unsafe(no_mangle)]
-pub extern "C" fn stipple_height() -> u32 {
-    SIZE.with(|c| c.borrow().1)
 }
 
 #[cfg(test)]
@@ -152,12 +139,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn init_and_click_update_state() {
-        stipple_init(200, 120);
-        assert_eq!((stipple_width(), stipple_height()), (200, 120));
-        assert_eq!(stipple_frame_len(), 200 * 120 * 4);
-        // Whole canvas is the button; a click increments the counter.
-        stipple_click(100.0, 60.0);
-        APP.with(|c| assert_eq!(c.borrow().as_ref().unwrap().state().clicks, 1));
+    fn renders_and_counts_clicks() {
+        let mut app = app().logical_size(Size::new(480.0, 320.0));
+        let frame = app.render_once();
+        assert_eq!((frame.size().width, frame.size().height), (480, 320));
+        assert_eq!(webdemo_probe(0), 0);
     }
 }

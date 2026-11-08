@@ -13,9 +13,9 @@
 //!
 //! [`headless`] is always available, so the rest of the stack builds, runs and is
 //! golden-image testable on any target. [`run`] picks the native backend for the
-//! target; on Linux it tries Wayland, then X11, then headless. The web has no
-//! backend here: a `wasm32` module renders frames that a page blits to a
-//! `<canvas>` (see `docs/platforms/web.md`).
+//! target; on Linux it tries Wayland, then X11, then headless. On the web
+//! (`web`) a `wasm32` module renders frames that a page script blits to a
+//! `<canvas>`, and the page drives the loop (see `docs/platforms/web.md`).
 
 use crate::platform::ControlFlow;
 use crate::platform::event::Event;
@@ -41,6 +41,10 @@ pub mod ios;
 #[cfg(target_os = "android")]
 pub mod android;
 
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)]
+pub mod web;
+
 /// Deliver [`Event::ThemeChanged`] ahead of the wake that follows an appearance
 /// change, which the OS reports through a notification, a window message or (on
 /// Linux) a D-Bus signal heard on another thread.
@@ -64,6 +68,8 @@ where
 ///
 /// The handler receives platform-neutral [`Event`]s and the live [`Window`];
 /// returning [`ControlFlow::Exit`] tears the loop down.
+///
+/// On the web this returns at once: the page keeps calling the handler.
 // `mut` is used by the native desktop backends (they take `&mut handler`); on
 // targets with no native backend (e.g. Android/web) the handler is moved
 // straight into the headless fallback, so the `mut` is unused there.
@@ -73,16 +79,21 @@ where
 )]
 pub fn run<H>(attrs: WindowAttributes, handler: H)
 where
-    H: FnMut(Event, &dyn Window) -> ControlFlow,
+    H: FnMut(Event, &dyn Window) -> ControlFlow + 'static,
 {
     let mut handler = with_theme_changes(handler);
+    // The page drives the web's loop, so the handler outlives this call.
+    #[cfg(target_arch = "wasm32")]
+    {
+        web::run(attrs, handler);
+    }
     // iOS hands control to UIApplicationMain (which never returns), so it owns
     // the handler outright rather than falling through to headless.
     #[cfg(target_os = "ios")]
     {
         let _ = ios::run(attrs, handler);
     }
-    #[cfg(not(target_os = "ios"))]
+    #[cfg(not(any(target_os = "ios", target_arch = "wasm32")))]
     {
         #[cfg(target_os = "linux")]
         {

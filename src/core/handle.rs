@@ -1,7 +1,8 @@
 //! [`AppHandle`]: changing app state from timers and other threads.
 
+use crate::platform::time::Instant;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::platform::WindowRequest;
 use crate::platform::wake;

@@ -1377,8 +1377,12 @@ jobs:
           path: visual_output/*.png
           if-no-files-found: warn
 
-  # Build the web (wasm) target and screenshot it rendering in headless Chrome,
-  # proving the canvas present path (putImageData of the RGBA framebuffer).
+  # Build the web (wasm) target, run its selftest in headless Chrome and
+  # screenshot it. The selftest (examples/webdemo/index.html#selftest) drives
+  # the demo with DOM events through web/stipple.js and checks HiDPI, timers,
+  # the requestAnimationFrame-driven spinner (and that frames stop when idle),
+  # clicks and the cursor, typing, copy and paste, opening and saving a file,
+  # and resizing.
   visual-web:
     name: Visual test (Web / wasm)
     runs-on: ubuntu-latest
@@ -1398,25 +1402,32 @@ jobs:
       - name: Assemble the web bundle
         run: |
           mkdir -p site visual_output
-          cp examples/webdemo/index.html site/
+          cp examples/webdemo/index.html web/stipple.js site/
           cp target/wasm32-unknown-unknown/release/webdemo.wasm site/
           cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf site/font.ttf
           ls -l site/
 
-      - name: Serve + screenshot with headless Chrome
+      - name: Serve, run the selftest, and screenshot with headless Chrome
         run: |
           python3 -m http.server 8000 --directory site &
           echo "SRV_PID=$!" >> "$GITHUB_ENV"
           sleep 2
-          # virtual-time-budget lets the wasm load, the font fetch, and the
-          # self-driven clicks run before the screenshot is taken.
-          google-chrome --headless=new --no-sandbox --disable-gpu --hide-scrollbars \
-            --window-size=700,420 --virtual-time-budget=15000 \
-            --screenshot="$PWD/visual_output/stipple-web.png" \
-            http://localhost:8000/index.html
+          chrome() {
+            timeout 120 google-chrome --headless=new --no-sandbox --disable-gpu \
+              --hide-scrollbars --window-size=700,420 --virtual-time-budget=20000 "$@"
+          }
+          # The selftest at a pixel ratio of 2, so HiDPI is checked too. It
+          # writes its report into the page, which --dump-dom prints.
+          chrome --force-device-scale-factor=2 --dump-dom \
+            "http://localhost:8000/index.html#selftest" > dom.html || true
+          sed -n '/<pre id="report">/,/<\/pre>/p' dom.html | tee visual_output/web-selftest.txt
+          grep -q "SELFTEST: ok" dom.html
+          # The screenshot, after the selftest's clicks (counter at 2, a file
+          # opened). A blank canvas means the page never ran the wasm, so
+          # require real content.
+          chrome --screenshot="$PWD/visual_output/stipple-web.png" \
+            "http://localhost:8000/index.html#selftest"
           echo "Captured:"; identify visual_output/stipple-web.png
-          # A blank canvas means the page never ran the wasm (as after the crate
-          # rename, when it still fetched forma_web.wasm), so require real content.
           colors=$(convert visual_output/stipple-web.png -format '%k' info:)
           echo "distinct colors: $colors"
           [ "$colors" -gt 20 ]
@@ -1430,7 +1441,9 @@ jobs:
         if: always()
         with:
           name: stipple-web-screenshot
-          path: visual_output/*.png
+          path: |
+            visual_output/*.png
+            visual_output/web-selftest.txt
           if-no-files-found: warn
 
   # Draw a WebGPU triangle (hand-written WGSL, no wgpu) in headless Chrome on

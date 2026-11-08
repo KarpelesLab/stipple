@@ -12,13 +12,20 @@
 //! - **macOS**: `NSPasteboard.generalPasteboard`, type `public.utf8-plain-text`
 //!   (`NSPasteboardTypeString`).
 //! - **iOS**: `UIPasteboard.generalPasteboard`'s `string`.
+//! - **Web**: [`set_text`] calls `navigator.clipboard.writeText` and also hands
+//!   the text to the `copy` / `cut` event that follows Ctrl/Cmd+C or X. The
+//!   browser only lets a page read the clipboard from a `paste` event, so
+//!   [`text`] returns what the last one carried; Ctrl/Cmd+V reaches the app
+//!   through that event, with the text.
 //! - **Elsewhere**: these return `None` / `false`. On Linux the clipboard
 //!   belongs to the display connection, so the backends implement it on their
 //!   window: Wayland through `wl_data_device`, X11 through the `CLIPBOARD`
-//!   selection. Android and the web don't have it yet.
+//!   selection. Android doesn't have it yet.
 //!
 //! [`Window::clipboard`]: crate::platform::Window::clipboard
 //! [`Window::set_clipboard`]: crate::platform::Window::set_clipboard
+//! [`text`]: crate::platform::clipboard::text
+//! [`set_text`]: crate::platform::clipboard::set_text
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
@@ -35,7 +42,23 @@ mod os;
 #[path = "ios.rs"]
 mod os;
 
-#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios")))]
+#[cfg(target_arch = "wasm32")]
+mod os {
+    pub fn text() -> Option<String> {
+        crate::platform::backend::web::clipboard_read()
+    }
+    pub fn set_text(text: &str) -> bool {
+        crate::platform::backend::web::clipboard_write(text);
+        true
+    }
+}
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "ios",
+    target_arch = "wasm32"
+)))]
 mod os {
     pub fn text() -> Option<String> {
         None

@@ -48,6 +48,8 @@ pub mod scm;
 /// content process's pixels shared with the UI process, the dual of GPU dma-buf).
 #[cfg(target_os = "linux")]
 pub mod shm;
+/// A monotonic clock that also works on the web.
+pub mod time;
 /// Hand-written UI Automation provider (Windows accessibility bridge).
 #[cfg(target_os = "windows")]
 pub mod uia;

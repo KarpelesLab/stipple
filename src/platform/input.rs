@@ -6,6 +6,7 @@
 //! these functions.
 
 use crate::platform::event::{KeyCode, Modifiers, ScrollDelta};
+use crate::platform::window::CursorIcon;
 
 /// Logical pixels scrolled per wheel notch ("line"). Every backend uses the
 /// same value, so a mouse wheel scrolls the same distance everywhere.
@@ -147,6 +148,97 @@ pub(crate) fn mac_is_function_key(s: &str) -> bool {
     s.chars().any(|c| ('\u{F700}'..='\u{F8FF}').contains(&c))
 }
 
+// ---- Web --------------------------------------------------------------------
+
+/// Translate a DOM `KeyboardEvent.key` into a [`KeyCode`]. Named keys map to
+/// their variants, a single character to [`KeyCode::Char`]; modifier keys on
+/// their own and anything else unknown return `None`.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn web_key(key: &str) -> Option<KeyCode> {
+    Some(match key {
+        "Enter" => KeyCode::Enter,
+        "Escape" | "Esc" => KeyCode::Escape,
+        "Backspace" => KeyCode::Backspace,
+        "Tab" => KeyCode::Tab,
+        " " | "Spacebar" => KeyCode::Space,
+        "ArrowLeft" | "Left" => KeyCode::ArrowLeft,
+        "ArrowRight" | "Right" => KeyCode::ArrowRight,
+        "ArrowUp" | "Up" => KeyCode::ArrowUp,
+        "ArrowDown" | "Down" => KeyCode::ArrowDown,
+        "Home" => KeyCode::Home,
+        "End" => KeyCode::End,
+        "PageUp" => KeyCode::PageUp,
+        "PageDown" => KeyCode::PageDown,
+        "Insert" => KeyCode::Insert,
+        "Delete" | "Del" => KeyCode::Delete,
+        "F1" => KeyCode::F1,
+        "F2" => KeyCode::F2,
+        "F3" => KeyCode::F3,
+        "F4" => KeyCode::F4,
+        "F5" => KeyCode::F5,
+        "F6" => KeyCode::F6,
+        "F7" => KeyCode::F7,
+        "F8" => KeyCode::F8,
+        "F9" => KeyCode::F9,
+        "F10" => KeyCode::F10,
+        "F11" => KeyCode::F11,
+        "F12" => KeyCode::F12,
+        _ => {
+            let mut chars = key.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => KeyCode::Char(c),
+                _ => return None,
+            }
+        }
+    })
+}
+
+/// The modifier bits the web glue packs: 1 Shift, 2 Ctrl, 4 Alt, 8 Meta.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn web_modifiers(bits: u32) -> Modifiers {
+    Modifiers {
+        shift: bits & 1 != 0,
+        ctrl: bits & 2 != 0,
+        alt: bits & 4 != 0,
+        meta: bits & 8 != 0,
+    }
+}
+
+/// The scroll delta for a DOM `WheelEvent`: `mode` is its `deltaMode` (0
+/// pixels, 1 lines, 2 pages, a page being `page` logical pixels). The DOM's
+/// deltas already grow downwards and to the right, as Stipple's do.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn web_wheel(dx: f64, dy: f64, mode: u32, page: f64) -> ScrollDelta {
+    let unit = match mode {
+        1 => LINE_PX,
+        2 => page.max(LINE_PX),
+        _ => 1.0,
+    };
+    ScrollDelta {
+        dx: dx * unit,
+        dy: dy * unit,
+    }
+}
+
+/// The CSS `cursor` value for a [`CursorIcon`].
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn css_cursor(icon: CursorIcon) -> &'static str {
+    match icon {
+        CursorIcon::Default => "default",
+        CursorIcon::Text => "text",
+        CursorIcon::Pointer => "pointer",
+        CursorIcon::Crosshair => "crosshair",
+        CursorIcon::NotAllowed => "not-allowed",
+        CursorIcon::Grab => "grab",
+        CursorIcon::Grabbing => "grabbing",
+        CursorIcon::Move => "move",
+        CursorIcon::EwResize => "ew-resize",
+        CursorIcon::NsResize => "ns-resize",
+        CursorIcon::NwseResize => "nwse-resize",
+        CursorIcon::NeswResize => "nesw-resize",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +326,36 @@ mod tests {
             mac_scroll(2.0, 0.0, false),
             ScrollDelta { dx: -80.0, dy: 0.0 }
         );
+    }
+
+    #[test]
+    fn web_keys_wheel_and_cursors() {
+        assert_eq!(web_key("ArrowLeft"), Some(KeyCode::ArrowLeft));
+        assert_eq!(web_key("PageDown"), Some(KeyCode::PageDown));
+        assert_eq!(web_key("F12"), Some(KeyCode::F12));
+        assert_eq!(web_key(" "), Some(KeyCode::Space));
+        assert_eq!(web_key("a"), Some(KeyCode::Char('a')));
+        assert_eq!(web_key("\u{e9}"), Some(KeyCode::Char('\u{e9}')));
+        assert_eq!(web_key("Shift"), None);
+        assert_eq!(web_key("Dead"), None);
+        assert_eq!(
+            web_modifiers(2 | 8),
+            Modifiers {
+                ctrl: true,
+                meta: true,
+                ..Modifiers::default()
+            }
+        );
+        assert_eq!(
+            web_wheel(0.0, 3.0, 1, 300.0),
+            ScrollDelta { dx: 0.0, dy: 120.0 }
+        );
+        assert_eq!(
+            web_wheel(0.0, -53.0, 0, 300.0),
+            ScrollDelta { dx: 0.0, dy: -53.0 }
+        );
+        assert_eq!(web_wheel(0.0, 1.0, 2, 300.0).dy, 300.0);
+        assert_eq!(css_cursor(CursorIcon::Text), "text");
+        assert_eq!(css_cursor(CursorIcon::NeswResize), "nesw-resize");
     }
 }

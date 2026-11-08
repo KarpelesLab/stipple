@@ -2,65 +2,128 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Forma on the web</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Stipple on the web</title>
     <style>
-      html, body { margin: 0; background: #0a0b0d; }
-      canvas { display: block; }
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0b0d; }
+      canvas { display: block; width: 100vw; height: 100vh; }
+      #report { display: none; }
     </style>
   </head>
   <body>
-    <canvas id="stipple" width="640" height="360"></canvas>
+    <canvas id="app"></canvas>
+    <pre id="report"></pre>
     <script type="module">
-      // Hand-written glue: instantiate the wasm, load a font, render, and wire
-      // canvas events to the module. No wasm-bindgen.
-      const canvas = document.getElementById("stipple");
-      const ctx = canvas.getContext("2d");
-      const W = canvas.width, H = canvas.height;
+      // The whole page side is web/stipple.js, served next to this file.
+      import { start } from "./stipple.js";
 
-      const { instance } = await WebAssembly.instantiateStreaming(
-        fetch("webdemo.wasm"),
-        {},
-      ).catch(async () => {
-        const bytes = await (await fetch("webdemo.wasm")).arrayBuffer();
-        return WebAssembly.instantiate(bytes, {});
+      const selftest = location.hash === "#selftest";
+      // Where the selftest clicks, in CSS pixels (the demo's layout is fixed).
+      const BUTTONS = { notes: 120, notesY: 58, counter: 85, open: 205, save: 287, y: 109 };
+      const saved = [];
+      const app = await start(document.getElementById("app"), "webdemo.wasm", {
+        font: "font.ttf",
+        // The selftest stands in for the file picker and the download.
+        ...(selftest && {
+          pickFile: async () => new File(["hello from a file\nsecond line\n"], "hello.txt"),
+          saveFile: (name, blob) => saved.push([name, blob.size]),
+        }),
       });
-      const e = instance.exports;
+      if (selftest) runSelftest(app);
 
-      // Load a font (served alongside) so text renders; shapes-only if absent.
-      try {
-        const font = new Uint8Array(await (await fetch("font.ttf")).arrayBuffer());
-        const p = e.stipple_alloc(font.length);
-        new Uint8Array(e.memory.buffer, p, font.length).set(font);
-        e.stipple_set_font(p, font.length);
-      } catch (_) { /* no font available */ }
+      // Drive the demo with DOM events, as a user would, and report what the
+      // app saw (through `webdemo_probe`). CI loads `index.html#selftest` in
+      // headless Chrome and reads the report from the DOM.
+      async function runSelftest({ exports: e, stats, canvas }) {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const probe = (i) => e.webdemo_probe(i);
+        const checks = {};
+        const check = (name, ok, detail) => { checks[name] = { ok: !!ok, detail }; };
 
-      e.stipple_init(W, H);
+        // HiDPI: the backing store is the CSS size times the pixel ratio.
+        const dpr = window.devicePixelRatio;
+        check("hidpi", canvas.width === Math.round(canvas.clientWidth * dpr),
+          `${canvas.width}x${canvas.height} px for ${canvas.clientWidth}x${canvas.clientHeight} CSS px at ${dpr}x`);
 
-      function redraw() {
-        const ptr = e.stipple_frame_ptr(), len = e.stipple_frame_len();
-        const w = e.stipple_width(), h = e.stipple_height();
-        const src = new Uint8ClampedArray(e.memory.buffer, ptr, len).slice();
-        canvas.width = w; canvas.height = h;
-        ctx.putImageData(new ImageData(src, w, h), 0, 0);
+        // Timers and the frame clock: the spinner turns at the display's rate
+        // while the 1.5 s `after` timer runs, then frames stop.
+        await sleep(1800);
+        const loading = probe(5), ticks = probe(1);
+        check("timer", probe(2) === 1 && ticks >= 2, `loaded=${probe(2)}, ${ticks} ticks of the 500 ms timer`);
+        check("spinner", loading >= ticks + 10, `${loading} frames built while loading, ${stats.frames} animation frames`);
+        const raf = stats.frames, idleBuilt = probe(6);
+        await sleep(1000);
+        check("idle", stats.frames - raf <= 2 && probe(6) - idleBuilt <= 4,
+          `${stats.frames - raf} animation frames and ${probe(6) - idleBuilt} builds in 1 s idle`);
+
+        const r = canvas.getBoundingClientRect();
+        const pointer = (type, x, y) => canvas.dispatchEvent(new PointerEvent(type, {
+          clientX: r.left + x, clientY: r.top + y, button: 0, buttons: type === "pointerup" ? 0 : 1,
+          pointerId: 1, pointerType: "mouse", bubbles: true,
+        }));
+        const click = async (x, y) => {
+          pointer("pointermove", x, y); pointer("pointerdown", x, y); pointer("pointerup", x, y);
+          await sleep(50);
+        };
+        const key = (k, opts = {}) => {
+          canvas.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...opts }));
+        };
+        const clip = (type, text) => {
+          const data = new DataTransfer();
+          if (text !== undefined) data.setData("text/plain", text);
+          canvas.dispatchEvent(new ClipboardEvent(type, { clipboardData: data, bubbles: true, cancelable: true }));
+          return data.getData("text/plain");
+        };
+
+        // Pointer: click the counter twice; the cursor turns to a hand over it.
+        await click(BUTTONS.counter, BUTTONS.y);
+        await click(BUTTONS.counter, BUTTONS.y);
+        check("click", probe(0) === 2, `clicks=${probe(0)}, cursor=${canvas.style.cursor}`);
+        check("cursor", canvas.style.cursor === "pointer", canvas.style.cursor);
+
+        // Keyboard: focus the notes, type, select all and copy.
+        await click(BUTTONS.notes, BUTTONS.notesY);
+        for (const k of "abc") key(k);
+        key("Backspace");
+        key("d");
+        key("a", { ctrlKey: true });
+        key("c", { ctrlKey: true });
+        const copied = clip("copy");
+        check("typing+copy", copied === "abd", `copied "${copied}"`);
+
+        // Paste replaces the selection.
+        clip("paste", "pasted!");
+        await sleep(50);
+        check("paste", probe(4) === 7, `notes length ${probe(4)}`);
+
+        // Files: open (async, back through the wake path) and save.
+        await click(BUTTONS.open, BUTTONS.y);
+        await sleep(200);
+        check("open", probe(3) === 30, `opened ${probe(3)} bytes`);
+        await click(BUTTONS.save, BUTTONS.y);
+        check("save", saved.length === 1 && saved[0][0] === "notes.txt",
+          JSON.stringify(saved));
+
+        // Wheel and resize don't throw, and resize re-renders at the new size.
+        canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));
+        const presents = stats.presents;
+        canvas.style.width = "600px";
+        // ResizeObserver reports at the next rendering step.
+        const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
+        for (let i = 0; i < 100 && canvas.width !== Math.round(600 * dpr); i++) await nextFrame();
+        check("resize", canvas.width === Math.round(600 * dpr) && stats.presents > presents,
+          `${canvas.width} px wide after resizing to 600 CSS px`);
+        canvas.style.width = "";
+        await sleep(200);
+
+        const ok = Object.values(checks).every((c) => c.ok);
+        const report = `SELFTEST: ${ok ? "ok" : "FAILED"}\n` + Object.entries(checks)
+          .map(([k, c]) => `${c.ok ? "ok    " : "FAILED"} ${k}: ${c.detail}`).join("\n");
+        console.log(report);
+        document.getElementById("report").textContent = report;
+        document.title = `selftest ${ok ? "ok" : "FAILED"}`;
       }
-      redraw();
 
-      const at = (ev) => {
-        const r = canvas.getBoundingClientRect();
-        return [ev.clientX - r.left, ev.clientY - r.top];
-      };
-      canvas.addEventListener("mousedown", (ev) => { const [x, y] = at(ev); e.stipple_click(x, y); redraw(); });
-      canvas.addEventListener("mousemove", (ev) => { const [x, y] = at(ev); e.stipple_pointer_move(x, y); redraw(); });
-
-      // Self-drive for CI: dispatch two real click events at the canvas center,
-      // so the screenshot shows the counter at 2 (verifies the event wiring).
-      setTimeout(() => {
-        const r = canvas.getBoundingClientRect();
-        const opts = { clientX: r.left + W / 2, clientY: r.top + H / 2, bubbles: true };
-        canvas.dispatchEvent(new MouseEvent("mousedown", opts));
-        canvas.dispatchEvent(new MouseEvent("mousedown", opts));
-        document.title = "Forma clicked";
-      }, 400);
     </script>
   </body>
 </html>

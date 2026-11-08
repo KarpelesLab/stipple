@@ -37,6 +37,7 @@ pub mod layout;
 pub mod platform;
 pub mod render;
 pub mod style;
+mod web_app;
 pub mod widgets;
 
 use crate::core::{
@@ -132,13 +133,13 @@ const MULTI_CLICK_SLOP: f64 = 4.0;
 /// a fourth press starts over at 1.
 #[derive(Clone, Copy, Debug, Default)]
 struct ClickCounter {
-    last: Option<(std::time::Instant, Point)>,
+    last: Option<(crate::platform::time::Instant, Point)>,
     count: u32,
 }
 
 impl ClickCounter {
     /// Register a press at `pos` at time `now`, returning its click count.
-    fn press(&mut self, now: std::time::Instant, pos: Point) -> u32 {
+    fn press(&mut self, now: crate::platform::time::Instant, pos: Point) -> u32 {
         let repeat = self.last.is_some_and(|(t, p)| {
             now.saturating_duration_since(t) <= MULTI_CLICK_TIME
                 && (pos.x - p.x).abs() <= MULTI_CLICK_SLOP
@@ -1013,7 +1014,7 @@ impl<S> Pane<S> {
         theme: &Theme,
         font: Option<&Font>,
         pos: Point,
-        now: std::time::Instant,
+        now: crate::platform::time::Instant,
     ) -> bool {
         self.ensure_tree(state, theme, font);
         let overlays = self.overlay_active;
@@ -1329,7 +1330,13 @@ impl<S> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].text_press_at(state, theme, font.as_ref(), pos, std::time::Instant::now())
+        panes[idx].text_press_at(
+            state,
+            theme,
+            font.as_ref(),
+            pos,
+            crate::platform::time::Instant::now(),
+        )
     }
 
     fn pane_text_drag_at(&mut self, idx: usize, pos: Point) -> bool {
@@ -1375,7 +1382,13 @@ impl<S> App<S> {
     /// its own pane onto the shared state, and events are routed to the window
     /// they arrived on. Backends without multi-window show only the primary
     /// window. The loop ends when the last window closes.
-    pub fn run(mut self) {
+    ///
+    /// On the web this returns once the first frame is up, and the page drives
+    /// the app from then on (see [`web_app!`]).
+    pub fn run(mut self)
+    where
+        S: 'static,
+    {
         // Map the semantic accessibility tree into the platform-neutral mirror the
         // backend's OS bridge consumes (NSAccessibility / UIA / AT-SPI).
         fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platform::A11yNode {
@@ -1528,7 +1541,7 @@ impl<S> App<S> {
             }
         };
 
-        backend::run(primary_attrs, |event, window| {
+        backend::run(primary_attrs, move |event, window| {
             let wid = window.id();
             // On the first event we learn the primary window's id; register it
             // and ask the backend to open the remaining panes as OS windows.
@@ -1733,7 +1746,9 @@ impl<S> App<S> {
                 Event::Wake => {
                     // Apply updates and due timers from the handle, then re-render
                     // if anything ran. The loop wakes again at the next timer.
-                    let (ran, next) = self.handle.pump(&mut self.state, std::time::Instant::now());
+                    let (ran, next) = self
+                        .handle
+                        .pump(&mut self.state, crate::platform::time::Instant::now());
                     crate::platform::wake::set_deadline(next);
                     if self.handle.exit_requested() {
                         return ControlFlow::Exit;
@@ -2354,7 +2369,8 @@ mod tests {
 
     #[test]
     fn click_counter_counts_nearby_quick_presses() {
-        use std::time::{Duration, Instant};
+        use crate::platform::time::Instant;
+        use std::time::Duration;
         let t0 = Instant::now();
         let p = Point::new(10.0, 10.0);
         let mut c = ClickCounter::default();
@@ -2389,7 +2405,8 @@ mod tests {
 
     #[test]
     fn double_click_selects_word_and_triple_click_selects_all() {
-        use std::time::{Duration, Instant};
+        use crate::platform::time::Instant;
+        use std::time::Duration;
         let Some(font) = Font::system_default() else {
             eprintln!("skipping: no system font found");
             return;
