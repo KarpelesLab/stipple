@@ -46,6 +46,8 @@ How to build, package and run on each platform, and what works there today.
 | Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ³ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ❌ | ❌ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
+| Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ❌ | ❌ | ❌ |
+| Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -135,6 +137,14 @@ gives it back after), and drags the list with a synthetic finger fed to the
 backend's touch path, past `UITouch`. Hardware keyboard keys (`pressesBegan:`)
 are only build-checked. Composing input methods (`UITextInput`) aren't
 supported yet.
+²⁸ XDND on X11 and `wl_data_device` on Wayland, OLE `IDropTarget` (and
+`WM_DROPFILES`) on Windows, `NSDraggingDestination` on macOS. CI drops files and
+text on `dropdemo` with an XDND source on X11 and real OLE `DoDragDrop` on
+Windows, and drives the view's dragging methods with a stand-in drag on macOS.
+Wayland is unit-tested against a scripted compositor only. See
+[drag-and-drop.md](drag-and-drop.md).
+²⁹ Shared code, so the same everywhere; unit-tested, and CI drags a chip in
+`dropdemo` with `xdotool` on X11.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -146,6 +156,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Widgets](widgets.md): select, number input, split pane, toolbar and toasts
 - [Menus](menus.md): the menu bar, shortcuts and context menus
 - [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
+- [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, and in-app drags
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click

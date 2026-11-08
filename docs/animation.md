@@ -41,6 +41,9 @@ in tests.
   done goes back to idle on its own.
 - Hover and press highlights fade in and out (120 ms, 60 ms in for a press)
   rather than switching. A pressed element shows the hover highlight twice over.
+- A drop target's `DropState::level` eases in over 180 ms when a drag enters
+  it and out when it leaves or drops, for a view to animate its drop zone
+  with; see [drag-and-drop.md](drag-and-drop.md).
 
 ## Where frames come from
 

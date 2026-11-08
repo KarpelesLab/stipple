@@ -976,7 +976,19 @@ Most input only works on X11 today.
   notifications on macOS and the portal's `SettingChanged` on Linux; the App
   rebuilds `Theme::native()`, drops cached OS-drawn bitmaps, switches the title
   bar and repaints. Not exercised in CI. iOS doesn't report changes yet.
-- ⬜ Drag and drop.
+- ✅ Drag and drop: drops of files and text from other applications over XDND
+  (X11, by hand on the wire), `wl_data_device` (Wayland), an OLE
+  `IDropTarget` with a hand-written vtable plus `WM_DROPFILES` (Windows) and
+  `NSDraggingDestination` (macOS), as `Event::DragEnter` / `DragOver` /
+  `DragLeave` / `Drop`; `Element::on_drop` / `on_drop_of` targets hit-tested
+  like pointer events, a `DropState` views read through `Cx::drop_state`
+  (over, accepted, position, an eased level) to animate the drop zone, and
+  `Element::drag_source` for drags inside the app. CI drops on `dropdemo` with
+  an XDND source on X11 and real OLE `DoDragDrop` on Windows, drives the view's
+  dragging methods with a stand-in drag on macOS, and drags a chip in-app on
+  X11; Wayland is unit-tested only. See
+  [docs/drag-and-drop.md](docs/drag-and-drop.md).
+- ⬜ Dragging out of the app (a drag source for other applications).
 - ✅ Opening URLs and files in their default apps (`platform::open_url`,
   `open_path`): the XDG portal's `OpenURI` over D-Bus with `xdg-open` as the
   fallback on Linux, `ShellExecuteW`, `NSWorkspace`, `UIApplication`, an
@@ -1077,6 +1089,8 @@ styling part of the toolkit.
   pressed, focused, focus-visible, disabled, selected, dragged, and drag-over
   (with whether the payload is accepted), per element, through `Cx` and as
   per-state style overrides (`.hovered(|e| …)`, `.drag_over(|e| …)`).
+  (A start: drop targets already expose `Cx::drop_state` — over, accepted,
+  position and an eased level — which `dropdemo` animates by hand.)
 - ⬜ Implicit transitions: an element's animatable properties (colors, opacity,
   corner radius, border, shadow, padding, size, transform) declare a
   `Transition` (duration and easing, or a spring), and changing them between

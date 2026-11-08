@@ -5,7 +5,8 @@
 //! `$DISPLAY`, creates a top-level window, and presents the software [`Pixmap`].
 //!
 //! Scope: window creation, resize, close, pointer (move + buttons + wheel),
-//! and keyboard — `GetKeyboardMapping` resolves keycodes to keysyms, which
+//! keyboard, and drops from other applications (XDND, see `dnd`) —
+//! `GetKeyboardMapping` resolves keycodes to keysyms, which
 //! become [`Event::Text`] (Latin-1 + Unicode) or editing [`Event::Key`]s.
 //!
 //! Presentation has two paths: when the server advertises the **MIT-SHM**

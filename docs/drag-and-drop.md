@@ -1,0 +1,138 @@
+# Drag and drop
+
+An element can be a drop target for files and text dragged from other
+applications (Finder, Explorer, a file manager, a browser), and for items
+dragged inside the app. While a drag hovers a target, the view can read what
+the drag is doing to it and animate. The `dropdemo` example shows all of it:
+
+```sh
+cargo run -p dropdemo
+```
+
+## Drop targets
+
+`Element::on_drop` makes an element take drops. The handler runs against the
+state with the `DropData` and the drop position in logical pixels:
+
+```rust
+label(&theme, "Drop files here").on_drop(cx, |s: &mut State, data, at| {
+    match data {
+        DropData::Files(paths) => s.files.extend(paths.iter().cloned()),
+        DropData::Text(text) => s.notes.push(text.clone()),
+        DropData::Internal(id) => s.move_item(id, at),
+    }
+})
+```
+
+`on_drop` takes every kind of data. `on_drop_of(cx, DragOffer::FILES, ...)`
+takes only the kinds you name; a drag carrying anything else is refused (the
+cursor shows "no", and a drop does nothing). `DragOffer` has `FILES`, `TEXT`,
+`INTERNAL` and `ANY`, or build one from its three flags.
+
+Drops are hit-tested like taps: the top-most drop target under the pointer is
+the one the drag is over. A target the app doesn't style itself gets a
+highlight (the theme's hover overlay and a focus-colored border) while an
+acceptable drag is over it.
+
+## Animating a drop zone
+
+To style the target from the drag, register it first, read its `DropState`,
+build the element from it, and stamp the id on it:
+
+```rust
+let zone = cx.register_drop(DragOffer::FILES, |s: &mut State, data, _| s.add(data));
+let drag = cx.drop_state(zone);
+let glow = if drag.accepted { theme.palette.primary } else { theme.palette.danger };
+column(vec![label(&theme, if drag.over { "Release to drop" } else { "Drop files" })])
+    .padding(Insets::uniform(16.0 + 8.0 * drag.level))   // grows
+    .fill(theme.palette.surface.mix(glow, 0.25 * drag.level)) // glows, or tints red
+    .border(theme.palette.border.mix(glow, drag.level), 1.0 + 3.0 * drag.level)
+    .drop_target(zone)
+```
+
+`DropState` has:
+
+- `over`: a drag is over the target now.
+- `accepted`: the target takes what the drag carries. It keeps its value while
+  the level eases out, so a fading tint keeps its color.
+- `position`: the pointer within the target (from its top-left corner) while
+  the drag is over it.
+- `level`: eases from 0 to 1 over `DROP_FADE` (180 ms) when a drag enters, and
+  back to 0 when it leaves or drops. Drive a grow, a glow or a tint with it.
+
+The app rebuilds the view when a drag enters, leaves or drops, on each move
+over a target whose view reads its state (so `position` stays current), and on
+every frame while a level eases; then it goes idle again. A target whose state
+the view reads doesn't get the app's highlight: it draws its own.
+
+Drop target ids are handed out in registration order, like scroll ids, so the
+state follows the target as long as the view registers its drop targets in the
+same order each time. For motion of your own, a `Spring` stepped by
+`cx.frame_time()` with `cx.request_frame()` while it moves works as in
+[animation.md](animation.md); `dropdemo`'s first zone grows on one, with a
+little overshoot.
+
+`Element::on_drop_hover(cx, |s, hovering| ...)` also tells the state when an
+acceptable drag starts and stops hovering a target.
+
+## Dragging inside the app
+
+`Element::drag_source` lets an element be dragged: pressing on it and moving
+4 px starts a drag whose payload the handler returns, usually
+`DropData::Internal` naming the item (`None` declines). The drag hovers and
+drops on drop targets exactly like one from another app, so reordering a list
+is a drop target per row that accepts `DragOffer::INTERNAL`. A press that
+becomes a drag doesn't tap; Escape cancels it.
+
+```rust
+row_label.drag_source(cx, move |_| Some(DropData::Internal(item.id.clone())))
+```
+
+## Platforms
+
+The platform layer reports drags from other applications as
+`Event::DragEnter { position, offer }`, `DragOver { position }`, `DragLeave`
+and `Drop { position, data }`. The app answers each enter and move through
+`Window::set_drop_accepted`, which the backend passes on to the source.
+
+| Platform | Protocol | Files | Text |
+|---|---|---|---|
+| X11 | XDND v5, by hand on the wire | `text/uri-list` | `UTF8_STRING`, `text/plain` |
+| Wayland | `wl_data_device` / `wl_data_offer` (copy action from v3) | `text/uri-list` | `text/plain;charset=utf-8` and friends |
+| Windows | OLE `IDropTarget` (hand-written COM vtable); `WM_DROPFILES` too | `CF_HDROP` | `CF_UNICODETEXT` |
+| macOS | `NSDraggingDestination` on the view | `public.file-url` (resolved through `NSURL`) | `public.utf8-plain-text` |
+| iOS, Android, web | not yet | | |
+
+On Windows and macOS the OS asks for the answer inside its own callback, where
+the app can't run, so the backend answers with the app's verdict from the
+previous move (a drag first entering is answered "copy" if it carries files or
+text). The cursor's badge can trail by one move; the drop itself always goes
+where the app says.
+
+`file:` URIs are percent-decoded to paths (`stipple::platform::parse_uri_list`);
+other schemes, and files on other hosts, are skipped.
+
+## Testing
+
+- `App::drag_enter`, `drag_over`, `drag_leave` and `drop_data` feed drags to an
+  app in tests, and `pointer_press` / `pointer_drag_to` / `pointer_release`
+  drive in-app drags; `App::render_frame` builds the frame.
+- `dropdemo --expect N` exits once N drops have landed, printing a line per
+  drop. CI runs it on X11 with `.github/scripts/xdnd-drop.py` (an XDND source
+  in python3-xlib: files, text, a refused drag, screenshots of the zone's
+  accepted and refused looks) plus an in-app chip drag by `xdotool`; on
+  Windows with `.github/scripts/ole-drop.ps1` (real OLE `DoDragDrop` from
+  another process, for a file and for text); and on macOS with
+  `STIPPLE_COCOA_DROP=<path>`, which drives the view's own dragging methods
+  with a stand-in `NSDraggingInfo` whose pasteboard holds the file's URL.
+- Wayland's protocol handling is unit-tested against a scripted compositor;
+  CI doesn't drag on Wayland.
+
+## Not yet
+
+- Dragging out of the app to other applications. The pieces are in place
+  (`DropData` for the payload, `Element::drag_source` to start it); a backend
+  needs to become a drag source (`XdndSelection` owner, `wl_data_source` with
+  `start_drag`, `DoDragDrop`, `beginDraggingSession`).
+- A drag image following the pointer during in-app drags.
+- Drops on iOS, Android and the web.

@@ -50,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `backend::ios::simulate` drives the view for simulator self-tests.
 - `touchdemo`: a text field over a list a finger scrolls, with a self-test the
   iOS simulator job runs; `androiddemo` gains a list the emulator job swipes.
+- Drag and drop. Files and text dropped from other applications arrive as
+  `Event::DragEnter` / `DragOver` / `DragLeave` / `Drop` (`DragOffer`,
+  `DropData`) over XDND on X11, `wl_data_device` on Wayland, OLE
+  `IDropTarget` and `WM_DROPFILES` on Windows and `NSDraggingDestination` on
+  macOS. `Element::on_drop` and `on_drop_of` make drop targets; views read a
+  target's `DropState` (over, accepted, pointer position and an eased level)
+  with `Cx::register_drop` + `Cx::drop_state` + `Element::drop_target` to
+  animate it, or get the app's highlight; `Element::drag_source` drags items
+  inside the app. `examples/dropdemo` shows an animated drop zone. See
+  `docs/drag-and-drop.md`.
 - The web catches up with the desktops: `stipple::web_app!(app)` generates a
   web app's exports and `web/stipple.js` is its whole page side, so an app no
   longer copies the glue. Timers and `AppHandle::update` wake the app through
