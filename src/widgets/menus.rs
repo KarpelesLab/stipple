@@ -16,6 +16,7 @@ use crate::core::{
     ActionId, Align, Anchor, Axis, BoxStyle, ContextId, Cx, Element, OverlaySpec, Role,
 };
 use crate::geometry::{Insets, Point};
+use crate::platform::menu::{mnemonic_at, mnemonic_range};
 use crate::style::Theme;
 
 /// What a drawn menu was opened from.
@@ -146,6 +147,10 @@ pub(crate) struct MenuUi {
     /// Highlight the first item once the root menu's items are known (it was
     /// opened from the keyboard).
     first_pending: bool,
+    /// Underline the mnemonics (keyboard cues): the keyboard is driving the
+    /// menus, or Alt is held. Windows' convention: menus opened with the mouse
+    /// don't show them.
+    pub cues: bool,
     /// The bar titles' tap actions and keys, from the last build.
     titles: Vec<(ActionId, Option<char>, Option<char>)>,
     /// The open menus' rows: each row's tap action and its path.
@@ -166,6 +171,7 @@ impl MenuUi {
         self.levels.clear();
         self.bar_focus = None;
         self.first_pending = false;
+        self.cues = false;
     }
 
     /// Open the menu bar's menu `index`, highlighting its first item if
@@ -175,6 +181,7 @@ impl MenuUi {
         self.levels = vec![None];
         self.bar_focus = None;
         self.first_pending = keyboard;
+        self.cues = keyboard;
     }
 
     /// Open the context menu `id` at `at`, highlighting its first item if
@@ -184,6 +191,7 @@ impl MenuUi {
         self.levels = vec![None];
         self.bar_focus = None;
         self.first_pending = keyboard;
+        self.cues = keyboard;
     }
 
     /// A click on bar title `index`: open its menu, or close it if it's open.
@@ -203,6 +211,7 @@ impl MenuUi {
         }
         self.close();
         self.bar_focus = Some(0);
+        self.cues = true;
         true
     }
 
@@ -266,6 +275,10 @@ impl MenuUi {
 
     /// Handle a key while a menu is open or the keyboard is on the menu bar.
     pub fn handle_key(&mut self, key: MenuKey) -> KeyResult {
+        if self.is_active() {
+            // The keyboard is driving the menus: show their mnemonics.
+            self.cues = true;
+        }
         let Some(root) = self.root else {
             let Some(i) = self.bar_focus else {
                 return KeyResult::Ignored;
@@ -333,6 +346,7 @@ impl MenuUi {
                 MenuRoot::Bar(b) => {
                     self.close();
                     self.bar_focus = Some(b);
+                    self.cues = true;
                 }
                 MenuRoot::Context { .. } => self.close(),
             },
@@ -376,9 +390,9 @@ pub(crate) fn with_bar<S: 'static>(
     content: Element,
 ) -> Element {
     let p = &theme.palette;
-    let (root, focus) = {
+    let (root, focus, cues) = {
         let u = ui.borrow();
-        (u.root, u.bar_focus)
+        (u.root, u.bar_focus, u.cues)
     };
     let mut titles = Vec::with_capacity(bar.menus.len());
     let mut keys = Vec::with_capacity(bar.menus.len());
@@ -389,7 +403,7 @@ pub(crate) fn with_bar<S: 'static>(
         let ui2 = ui.clone();
         let mut title = Element::stack(
             Axis::Horizontal,
-            vec![Element::text(text.clone(), theme.typography.body, p.text)],
+            vec![label_text(&menu.label, cues, theme.typography.body, p.text)],
         )
         .padding(Insets::symmetric(theme.spacing.sm + 2.0, theme.spacing.xs))
         .radius(theme.radius / 2.0)
@@ -440,7 +454,7 @@ pub(crate) fn with_bar<S: 'static>(
 pub(crate) fn context<S: 'static>(
     cx: &mut Cx<S>,
     theme: &Theme,
-    menus: Vec<(ContextId, Menu<S>)>,
+    menus: &[(ContextId, Menu<S>)],
     ui: &Rc<RefCell<MenuUi>>,
 ) {
     let root = ui.borrow().root;
@@ -513,6 +527,17 @@ fn popups<S: 'static>(
     }
 }
 
+/// A menu label's text, its `&` mnemonic underlined when `cues` are on.
+fn label_text(label: &str, cues: bool, size: f64, color: crate::render::Color) -> Element {
+    let (text, at) = mnemonic_at(label);
+    let underline = if cues {
+        mnemonic_range(&text, at)
+    } else {
+        None
+    };
+    Element::text(text, size, color).underline(underline)
+}
+
 /// One open menu: a panel of rows. Returns it and each item's row tap action
 /// (`None` for separators and disabled commands).
 fn panel<S: 'static>(
@@ -524,6 +549,7 @@ fn panel<S: 'static>(
     ui: &Rc<RefCell<MenuUi>>,
 ) -> (Element, Vec<Option<ActionId>>) {
     let p = &theme.palette;
+    let cues = ui.borrow().cues;
     let row_height = (theme.typography.body * 1.4 + 2.0 * theme.spacing.xs).round();
     let mut rows = Vec::with_capacity(menu.items.len());
     let mut ids = Vec::with_capacity(menu.items.len());
@@ -552,7 +578,7 @@ fn panel<S: 'static>(
         };
         let mut cells = vec![
             Element::text(mark, theme.typography.body, p.primary).width(18.0),
-            Element::text(text.clone(), theme.typography.body, ink).grow(1.0),
+            label_text(item.label(), cues, theme.typography.body, ink).grow(1.0),
         ];
         if let Some(s) = item.get_shortcut() {
             // Keep shortcuts clear of the labels.

@@ -314,11 +314,13 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
             size,
             color,
             direction,
+            underline,
         } => NodeContent::Text {
             text: text.clone(),
             size: *size,
             color: *color,
             direction: *direction,
+            underline: *underline,
         },
         ElementKind::Viewport { id } => NodeContent::Viewport(*id),
         ElementKind::Image { source, fit } => NodeContent::Image {
@@ -682,6 +684,7 @@ pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
             size,
             color,
             direction,
+            underline,
         } => {
             if let Some(f) = font
                 && !text.is_empty()
@@ -691,6 +694,21 @@ pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
                 let w = node.bounds.width();
                 let layout = text_layout(f, text, *size, *direction, node.wrap, w);
                 scene.fill_layout(&layout, node.bounds.origin, *color);
+                if let Some((start, end)) = *underline {
+                    // Just under the baseline, as thick as the strokes.
+                    let o = node.bounds.origin;
+                    let thick = (size / 14.0).max(1.0);
+                    let below = f.baseline(*size) + (size / 10.0).max(1.0);
+                    for r in layout.selection_rects(start, end.min(text.len())) {
+                        let at = Rect::from_xywh(
+                            o.x + r.min_x(),
+                            o.y + r.min_y() + below,
+                            r.width(),
+                            thick,
+                        );
+                        scene.fill_rect(at, *color);
+                    }
+                }
             }
         }
         // Reserve the embedded-content area: paint a placeholder and record the

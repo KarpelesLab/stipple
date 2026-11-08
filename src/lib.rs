@@ -99,6 +99,8 @@ pub struct App<S> {
     // a change; and whether the backend turned out to have none.
     native_menu: Option<crate::platform::NativeMenuBar>,
     native_menu_unsupported: bool,
+    // The backend has no native context menus: draw them.
+    native_popup_unsupported: bool,
     // Alt went down with no other key since: its release focuses the menu bar.
     alt_armed: bool,
 }
@@ -284,8 +286,9 @@ struct Pane<S> {
     // The menu bar to draw at the top of the window (the primary window, where
     // the platform shows no native one).
     menu_bar: Option<MenuFn<S>>,
-    // The elements with a context menu in the frame just built.
-    context_menu_ids: Vec<crate::core::ContextId>,
+    // The elements with a context menu in the frame just built, and their
+    // menus.
+    context_menus: Vec<(crate::core::ContextId, crate::core::Menu<S>)>,
     // The dismiss actions of the overlays' press-outside catchers.
     catchers: Vec<ActionId>,
 }
@@ -337,7 +340,7 @@ impl<S: 'static> Pane<S> {
             cursor: CursorIcon::Default,
             menu_ui: Default::default(),
             menu_bar: None,
-            context_menu_ids: Vec::new(),
+            context_menus: Vec::new(),
             catchers: Vec::new(),
         }
     }
@@ -359,6 +362,7 @@ impl<S: 'static> App<S> {
             menu_in_window: false,
             native_menu: None,
             native_menu_unsupported: false,
+            native_popup_unsupported: false,
             alt_armed: false,
         }
     }
@@ -487,8 +491,10 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Draw the menu bar in the window, as on Linux, even on macOS and Windows
-    /// where the platform would show a native one.
+    /// Draw the menus in the window, as on Linux, even on macOS and Windows
+    /// where the platform would show native ones: the menu bar, and the
+    /// context menus (which are otherwise the system's popup menus there).
+    /// For menus in a custom theme's colors.
     pub fn menu_bar_in_window(mut self, in_window: bool) -> Self {
         self.menu_in_window = in_window;
         self
@@ -708,9 +714,8 @@ impl<S: 'static> Pane<S> {
                 }
             }
         }
-        let context_menus = cx.take_context_menus();
-        self.context_menu_ids = context_menus.iter().map(|(id, _)| *id).collect();
-        crate::widgets::menus::context(&mut cx, &theme, context_menus, &self.menu_ui);
+        self.context_menus = cx.take_context_menus();
+        crate::widgets::menus::context(&mut cx, &theme, &self.context_menus, &self.menu_ui);
         // The animation timeline, or `None` where there's no clock.
         let now = crate::platform::frame::now().map(|_| cx.frame_time());
         let frame_requested = cx.frame_requested();
@@ -1065,7 +1070,7 @@ impl<S: 'static> Pane<S> {
         let Some(id) = id else {
             return closed;
         };
-        if self.context_menu_ids.contains(&id) {
+        if self.context_menus.iter().any(|(m, _)| *m == id) {
             self.menu_ui.borrow_mut().open_context(id, pos, false);
         }
         self.handlers.dispatch_context(id, pos, state);
@@ -1100,7 +1105,7 @@ impl<S: 'static> Pane<S> {
         let Some((id, at)) = hit else {
             return false;
         };
-        if self.context_menu_ids.contains(&id) {
+        if self.context_menus.iter().any(|(m, _)| *m == id) {
             self.menu_ui.borrow_mut().open_context(id, at, true);
         }
         self.handlers.dispatch_context(id, at, state);
@@ -1752,6 +1757,7 @@ impl<S: 'static> App<S> {
             if idx == 0 {
                 app.sync_menu_bar(window);
             }
+            app.native_context_menu(idx, window);
             let App {
                 state,
                 theme,
@@ -2145,6 +2151,13 @@ impl<S: 'static> App<S> {
                 }
                 Event::FocusChanged(_) => {
                     self.alt_armed = false;
+                    // Alt+Tab away leaves no underlines behind.
+                    let pane = &mut self.panes[idx];
+                    let mut ui = pane.menu_ui.borrow_mut();
+                    if ui.cues && !ui.is_active() {
+                        ui.cues = false;
+                        pane.dirty = true;
+                    }
                     ControlFlow::Wait
                 }
                 Event::CloseRequested => {
@@ -2173,9 +2186,14 @@ impl<S: 'static> App<S> {
     /// the key was used.
     fn menu_key(&mut self, idx: usize, code: KeyCode, mods: Modifiers) -> bool {
         if code == KeyCode::Alt {
-            let pane = &self.panes[idx];
+            let pane = &mut self.panes[idx];
             self.alt_armed = pane.menu_bar.is_some() || pane.menu_ui.borrow().is_active();
-            return false;
+            // Holding Alt shows the drawn menu bar's mnemonics.
+            let mut ui = pane.menu_ui.borrow_mut();
+            let show = pane.menu_bar.is_some() && !ui.cues;
+            ui.cues |= show;
+            pane.dirty |= show;
+            return show;
         }
         self.alt_armed = false;
         if let Some(used) = self.menu_nav(idx, menu_key_of(code)) {
@@ -2286,7 +2304,14 @@ impl<S: 'static> App<S> {
     /// the menu bar (or leave the menus). Returns whether anything changed.
     fn alt_release(&mut self, idx: usize) -> bool {
         if !std::mem::take(&mut self.alt_armed) {
-            return false;
+            // Alt went with another key: hide the cues it showed, unless the
+            // keyboard went on into the menus.
+            let pane = &mut self.panes[idx];
+            let mut ui = pane.menu_ui.borrow_mut();
+            let hide = ui.cues && !ui.is_active();
+            ui.cues &= !hide;
+            pane.dirty |= hide;
+            return hide;
         }
         let App {
             state,
@@ -2345,6 +2370,46 @@ impl<S: 'static> App<S> {
         if shown && pane.menu_bar.is_some() {
             pane.menu_bar = None;
             pane.dirty = true;
+        }
+    }
+
+    /// A context menu just opened in pane `idx`: show it as the platform's
+    /// own popup menu where there is one (and the menus aren't drawn in the
+    /// window by choice), and run what was picked. The drawn menu stays open
+    /// where the platform has none.
+    fn native_context_menu(&mut self, idx: usize, window: &dyn crate::platform::Window) {
+        use crate::platform::MenuPopup;
+        use crate::widgets::menus::MenuRoot;
+        if self.menu_in_window || self.native_popup_unsupported {
+            return;
+        }
+        let pane = &mut self.panes[idx];
+        let Some(MenuRoot::Context { id, at }) = pane.menu_ui.borrow().root else {
+            return;
+        };
+        let Some((_, menu)) = pane.context_menus.iter().find(|(m, _)| *m == id) else {
+            return;
+        };
+        let native = menu.to_native();
+        let keyboard = pane.menu_ui.borrow().cues;
+        // Not drawn meanwhile (and the next frame shows it closed).
+        pane.menu_ui.borrow_mut().close();
+        pane.dirty = true;
+        match window.popup_menu(&native, at) {
+            MenuPopup::Unsupported => {
+                self.native_popup_unsupported = true;
+                pane.menu_ui.borrow_mut().open_context(id, at, keyboard);
+            }
+            MenuPopup::Dismissed => {}
+            MenuPopup::Picked(cmd) => {
+                let action = menu.command(cmd).and_then(|item| item.action());
+                if let Some(action) = action {
+                    (action.borrow_mut())(&mut self.state);
+                    for pane in &mut self.panes {
+                        pane.dirty = true;
+                    }
+                }
+            }
         }
     }
 

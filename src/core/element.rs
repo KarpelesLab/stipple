@@ -80,6 +80,9 @@ pub enum ElementKind {
         /// The paragraph direction for bidirectional text. Set via
         /// [`Element::direction`].
         direction: TextDirection,
+        /// A byte range `[start, end)` of the text drawn underlined (a menu
+        /// mnemonic). Set via [`Element::underline`].
+        underline: Option<(usize, usize)>,
     },
     /// A linear container that lays children along `axis`.
     Stack {
@@ -226,6 +229,7 @@ impl Element {
                 size,
                 color,
                 direction: TextDirection::Auto,
+                underline: None,
             },
         }
     }
@@ -628,6 +632,16 @@ impl Element {
             }
         }
         set(&mut self, dir);
+        self
+    }
+
+    /// Underline the byte range `[start, end)` of this text element, in its
+    /// color (the drawn menus mark mnemonics this way). An empty range, or
+    /// `None`, draws no underline; no effect on other elements.
+    pub fn underline(mut self, range: Option<(usize, usize)>) -> Self {
+        if let ElementKind::Text { underline, .. } = &mut self.kind {
+            *underline = range.filter(|(s, e)| e > s);
+        }
         self
     }
 

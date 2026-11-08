@@ -22,12 +22,14 @@ use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, WindowId};
 use crate::platform::input;
-use crate::platform::menu::{NativeMenuBar, NativeMenuItem, mnemonic};
+use crate::platform::menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, mnemonic};
 use crate::platform::window::{CursorIcon, Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
 /// Pacing animation frames by the display (`CVDisplayLink`).
 mod display_link;
+/// The CI self-test of the menus (`STIPPLE_COCOA_MENU_SELFTEST`).
+mod menu_check;
 mod text_input;
 
 // ---- Objective-C runtime + framework FFI ------------------------------------
@@ -490,12 +492,14 @@ struct MacCtx {
     /// The target of the menu bar's items (a `StippleMenuTarget`), created
     /// with the first menu bar.
     menu_target: Id,
-    /// Each menu bar command's (enabled, checked) state by tag, for
-    /// `validateMenuItem:`.
-    menu_states: std::collections::HashMap<i64, (bool, Option<bool>)>,
+    /// Each menu bar command's state by tag, for `validateMenuItem:`, and its
+    /// shortcut, to tell AppKit's key-equivalent matches the app already saw.
+    menu_states: std::collections::HashMap<i64, MenuState>,
     /// Events raised inside AppKit callbacks (a menu pick), delivered to the
     /// handler once `sendEvent:` returns.
     pending: Vec<Event>,
+    /// The tag of the item picked from the context menu being shown.
+    context_pick: Option<i64>,
 }
 
 // Cocoa is single-threaded (main thread); the backend runs there.
@@ -781,6 +785,14 @@ fn nsstring_to_string(s: Id) -> String {
 
 // ---- The menu bar ------------------------------------------------------------
 
+/// A menu bar command's state, as AppKit asks for it.
+#[derive(Clone, Copy, Debug)]
+struct MenuState {
+    enabled: bool,
+    checked: Option<bool>,
+    shortcut: Option<crate::platform::Shortcut>,
+}
+
 /// The tag of the application menu's Quit item, which ends the event loop.
 const MENU_QUIT_TAG: i64 = -1;
 
@@ -793,20 +805,41 @@ extern "C" fn menu_action(_this: Id, _cmd: Sel, sender: Id) {
         return;
     }
     // The App matches shortcuts itself, from the key event the loop hands it
-    // before AppKit sees it (as on every platform). When AppKit then matches
-    // the same key to this item's key equivalent, it's a repeat: drop it.
+    // before AppKit sees it (as on every platform), and gives the editing
+    // keys to a focused text field instead. When AppKit then matches the same
+    // key to this item's key equivalent, it's a repeat: drop it. (Comparing
+    // the App's own match, not the strings: ⌘⌫'s equivalent is "\u{8}" but
+    // the key types "\u{7f}".) A match the App couldn't make (a layout whose
+    // letters aren't Latin) goes through.
     unsafe {
         let app = msg_id(class("NSApplication"), sel("sharedApplication"));
         let ev = msg_id(app, sel("currentEvent"));
         if !ev.is_null() && msg_u64(ev, sel("type")) == NS_KEY_DOWN {
-            let key = nsstring_to_string(msg_id(sender, sel("keyEquivalent")));
-            let typed = event_string(ev, "charactersIgnoringModifiers").unwrap_or_default();
-            if !key.is_empty() && key.to_lowercase() == typed.to_lowercase() {
+            let shortcut = CTX.with(|c| c.borrow().menu_states.get(&tag).and_then(|s| s.shortcut));
+            if let (
+                Some(Event::Key {
+                    code, modifiers, ..
+                }),
+                Some(shortcut),
+            ) = (key_event(ev, ButtonState::Pressed), shortcut)
+                && shortcut.matches(code, modifiers)
+            {
+                let key = nsstring_to_string(msg_id(sender, sel("keyEquivalent")));
+                menu_check::note(format_args!(
+                    "key equivalent {key:?} of tag {tag} left to the app"
+                ));
                 return;
             }
         }
     }
     CTX.with(|c| c.borrow_mut().pending.push(Event::MenuCommand(tag as u32)));
+}
+
+/// `stippleContextAction:` — an item of the context menu being shown was
+/// picked: remember it for [`popup_menu`].
+extern "C" fn context_action(_this: Id, _cmd: Sel, sender: Id) {
+    let tag = unsafe { msg_i64(sender, sel("tag")) };
+    CTX.with(|c| c.borrow_mut().context_pick = Some(tag));
 }
 
 /// `validateMenuItem:` — AppKit asks before showing (or key-matching) an item
@@ -817,7 +850,10 @@ extern "C" fn validate_menu_item(_this: Id, _cmd: Sel, item: Id) -> bool {
         return true;
     }
     let state = CTX.with(|c| c.borrow().menu_states.get(&tag).copied());
-    let Some((enabled, checked)) = state else {
+    let Some(MenuState {
+        enabled, checked, ..
+    }) = state
+    else {
         return false;
     };
     let on = i64::from(checked == Some(true)); // NSControlStateValueOn = 1
@@ -848,6 +884,18 @@ fn menu_target() -> Id {
                 sel("validateMenuItem:"),
                 validate_menu_item as *const c_void,
                 c"c@:@".as_ptr(),
+            );
+            class_addMethod(
+                cls,
+                sel("stippleContextAction:"),
+                context_action as *const c_void,
+                c"v@:@".as_ptr(),
+            );
+            class_addMethod(
+                cls,
+                sel("menuWillOpen:"),
+                menu_check::menu_will_open as *const c_void,
+                c"v@:@".as_ptr(),
             );
             objc_registerClassPair(cls);
         }
@@ -905,9 +953,18 @@ unsafe fn add_submenu(menu: Id, title: &str, submenu: Id) {
     }
 }
 
-/// Fill `menu` with `items`, targeting the menu target and recording each
-/// command's state for validation.
-unsafe fn fill_menu(menu: Id, items: &[NativeMenuItem], target: Id) {
+/// Fill `menu` with `items`, targeting the menu target. A menu bar's
+/// commands record their state for validation; a context menu's (`context`)
+/// are enabled or not up front, as it doesn't validate.
+unsafe fn fill_menu(menu: Id, items: &[NativeMenuItem], target: Id, context: bool) {
+    if context {
+        unsafe { msg_void_bool(menu, sel("setAutoenablesItems:"), false) };
+    }
+    let action = sel(if context {
+        "stippleContextAction:"
+    } else {
+        "stippleMenuAction:"
+    });
     for item in items {
         match item {
             NativeMenuItem::Action {
@@ -923,20 +980,25 @@ unsafe fn fill_menu(menu: Id, items: &[NativeMenuItem], target: Id) {
                     .unwrap_or_default();
                 let tag = i64::from(*id);
                 unsafe {
-                    let it = menu_item(
-                        &mnemonic(label).0,
-                        Some(sel("stippleMenuAction:")),
-                        &key,
-                        mask,
-                    );
+                    let it = menu_item(&mnemonic(label).0, Some(action), &key, mask);
                     msg_void_id(it, sel("setTarget:"), target);
                     msg_void_i64(it, sel("setTag:"), tag);
                     msg_void_i64(it, sel("setState:"), i64::from(*checked == Some(true)));
+                    if context {
+                        msg_void_bool(it, sel("setEnabled:"), *enabled);
+                    }
                     add_item(menu, it);
                 }
-                CTX.with(|c| {
-                    c.borrow_mut().menu_states.insert(tag, (*enabled, *checked));
-                });
+                if !context {
+                    CTX.with(|c| {
+                        let state = MenuState {
+                            enabled: *enabled,
+                            checked: *checked,
+                            shortcut: *shortcut,
+                        };
+                        c.borrow_mut().menu_states.insert(tag, state);
+                    });
+                }
             }
             NativeMenuItem::Separator => unsafe {
                 let sep = msg_id(class("NSMenuItem"), sel("separatorItem"));
@@ -945,10 +1007,42 @@ unsafe fn fill_menu(menu: Id, items: &[NativeMenuItem], target: Id) {
             NativeMenuItem::Submenu(sub) => unsafe {
                 let title = mnemonic(&sub.label).0;
                 let m = ns_menu(&title);
-                fill_menu(m, &sub.items, target);
+                fill_menu(m, &sub.items, target, context);
                 add_submenu(menu, &title, m);
             },
         }
+    }
+}
+
+/// Show `menu` as a context menu at `at` (points from the content view's
+/// top-left; the view is flipped) and wait while AppKit tracks it.
+unsafe fn popup_menu(menu: &NativeMenu, at: Point) -> MenuPopup {
+    let view = CTX.with(|c| c.borrow().view);
+    if view.is_null() {
+        return MenuPopup::Unsupported;
+    }
+    let target = menu_target();
+    CTX.with(|c| c.borrow_mut().context_pick = None);
+    unsafe {
+        let m = ns_menu("");
+        fill_menu(m, &menu.items, target, true);
+        menu_check::watch(m, target);
+        let pop: unsafe extern "C" fn(Id, Sel, Id, CgPoint, Id) -> i8 =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        pop(
+            m,
+            sel("popUpMenuPositioningItem:atLocation:inView:"),
+            std::ptr::null_mut(),
+            CgPoint { x: at.x, y: at.y },
+            view,
+        );
+        msg_void(m, sel("release"));
+    }
+    let picked = CTX.with(|c| c.borrow_mut().context_pick.take());
+    menu_check::popup_closed(picked);
+    match picked {
+        Some(tag) if tag > 0 => MenuPopup::Picked(tag as u32),
+        _ => MenuPopup::Dismissed,
     }
 }
 
@@ -1004,7 +1098,7 @@ unsafe fn install_menu_bar(bar: &NativeMenuBar) {
         for menu in &bar.menus {
             let title = mnemonic(&menu.label).0;
             let m = ns_menu(&title);
-            fill_menu(m, &menu.items, target);
+            fill_menu(m, &menu.items, target, false);
             add_submenu(main, &title, m);
         }
         let app = msg_id(class("NSApplication"), sel("sharedApplication"));
@@ -1171,6 +1265,9 @@ impl Window for MacWindow {
     fn set_menu_bar(&self, menu: &NativeMenuBar) -> bool {
         unsafe { install_menu_bar(menu) };
         true
+    }
+    fn popup_menu(&self, menu: &NativeMenu, at: Point) -> MenuPopup {
+        unsafe { popup_menu(menu, at) }
     }
     fn set_icon(&self, icon: Option<&Pixmap>) {
         // macOS has no per-window icons; this is the app's Dock icon. `nil`
@@ -1371,6 +1468,7 @@ where
         msg_void_bool(app, sel("activateIgnoringOtherApps:"), true);
         // Needed for nextEventMatchingMask to dequeue events.
         msg_void(app, sel("finishLaunching"));
+        menu_check::start(window, view);
         // Zoom and fullscreen act on a window that is on screen.
         if attrs.maximized {
             win.set_maximized(true);
@@ -1413,7 +1511,9 @@ where
                 None => distant_future,
             };
             let ev = next(app, next_sel, u64::MAX, until, mode, true);
-            if !ev.is_null() {
+            if !ev.is_null() && menu_check::step_event(ev) {
+                // A step of the menu self-test, not for the app.
+            } else if !ev.is_null() {
                 let etype = msg_u64(ev, sel("type"));
                 // Positions stay in points, which are logical pixels.
                 let view_h = msg_rect(view, sel("bounds")).size.height;
@@ -1440,13 +1540,6 @@ where
                         msg_void_id(app, sel("sendEvent:"), ev);
                     }
                 }
-                // Deliver what AppKit raised while handling it (menu picks).
-                let pending = CTX.with(|c| std::mem::take(&mut c.borrow_mut().pending));
-                for event in pending {
-                    if !exit && handler(event, &win) == ControlFlow::Exit {
-                        exit = true;
-                    }
-                }
                 // Keep the app's cursor over the content: AppKit resets it at
                 // the window's edges and title bar.
                 if !exit && etype == NS_MOUSE_MOVED {
@@ -1458,6 +1551,13 @@ where
                     if over && cursor != CursorIcon::Default {
                         msg_void(ns_cursor(cursor), sel("set"));
                     }
+                }
+            }
+            // Deliver what AppKit raised while handling the event (menu picks).
+            let pending = CTX.with(|c| std::mem::take(&mut c.borrow_mut().pending));
+            for event in pending {
+                if !exit && handler(event, &win) == ControlFlow::Exit {
+                    exit = true;
                 }
             }
 

@@ -283,6 +283,19 @@ pub trait Window {
     fn set_menu_bar(&self, _menu: &crate::platform::menu::NativeMenuBar) -> bool {
         false
     }
+    /// Show `menu` as a native context menu at `at` (logical pixels in the
+    /// window's content) and wait until it closes. Returns what was picked,
+    /// or [`MenuPopup::Unsupported`](crate::platform::menu::MenuPopup) (the
+    /// default) where the platform has none, and the app draws the menu
+    /// itself. Implemented with `TrackPopupMenuEx` on Windows and `NSMenu`
+    /// on macOS.
+    fn popup_menu(
+        &self,
+        _menu: &crate::platform::menu::NativeMenu,
+        _at: crate::geometry::Point,
+    ) -> crate::platform::menu::MenuPopup {
+        crate::platform::menu::MenuPopup::Unsupported
+    }
     /// Whether a text input has keyboard focus, so a touch platform can show
     /// its on-screen keyboard (and hide it again). The app calls this after
     /// each frame it presents. Default: a no-op. Honored on Android.

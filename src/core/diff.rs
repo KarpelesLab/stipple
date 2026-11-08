@@ -197,6 +197,7 @@ mod tests {
                 size: 14.0,
                 color: Color::BLACK,
                 direction: Default::default(),
+                underline: None,
             },
             action: None,
             focus: None,

@@ -694,6 +694,10 @@ pub enum NodeContent {
         size: f64,
         color: Color,
         direction: crate::render::TextDirection,
+        /// A byte range drawn underlined (see [`Element::underline`]).
+        ///
+        /// [`Element::underline`]: crate::core::Element::underline
+        underline: Option<(usize, usize)>,
     },
     /// An embedded-content viewport: the node's bounds reserve an area the
     /// compositor fills with externally-rendered pixels for this

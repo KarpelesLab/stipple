@@ -23,7 +23,7 @@ use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, WindowId};
 use crate::platform::input;
-use crate::platform::menu::{NativeMenuBar, NativeMenuItem};
+use crate::platform::menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem};
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
@@ -89,6 +89,11 @@ const MF_GRAYED: u32 = 0x0001;
 const MF_CHECKED: u32 = 0x0008;
 const MF_POPUP: u32 = 0x0010;
 const MF_SEPARATOR: u32 = 0x0800;
+/// `TrackPopupMenuEx`: return the picked id (0 for none) instead of posting
+/// `WM_COMMAND`, and send no `WM_INITMENU*`/`WM_MENUSELECT` notifications.
+const TPM_RETURNCMD: u32 = 0x0100;
+const TPM_NONOTIFY: u32 = 0x0080;
+const WM_NULL: u32 = 0x0000;
 /// Posted by [`crate::platform::wake`] to end the message wait.
 const WM_APP_WAKE: u32 = 0x8000 + 1;
 const PM_REMOVE: u32 = 0x0001;
@@ -304,6 +309,16 @@ unsafe extern "system" {
     fn SetMenu(hwnd: Hwnd, menu: Handle) -> i32;
     fn DestroyMenu(menu: Handle) -> i32;
     fn DrawMenuBar(hwnd: Hwnd) -> i32;
+    fn TrackPopupMenuEx(
+        menu: Handle,
+        flags: u32,
+        x: i32,
+        y: i32,
+        hwnd: Hwnd,
+        params: *const c_void,
+    ) -> i32;
+    fn ClientToScreen(hwnd: Hwnd, point: *mut Point) -> i32;
+    fn SetForegroundWindow(hwnd: Hwnd) -> i32;
     fn MonitorFromWindow(hwnd: Hwnd, flags: u32) -> Handle;
     fn GetMonitorInfoW(monitor: Handle, info: *mut MonitorInfo) -> i32;
     fn AdjustWindowRectExForDpi(
@@ -468,6 +483,45 @@ fn fill_menu(menu: Handle, items: &[NativeMenuItem]) {
                 unsafe { AppendMenuW(menu, MF_POPUP, popup as usize, text.as_ptr()) };
             }
         }
+    }
+}
+
+/// Show `menu` as a context menu at `at` (logical client coordinates) and
+/// wait for it to close. `TrackPopupMenuEx` runs its own modal loop; the
+/// window keeps painting meanwhile, and input it gets is queued as usual.
+fn popup_menu(hwnd: Hwnd, menu: &NativeMenu, at: crate::geometry::Point) -> MenuPopup {
+    let popup = unsafe { CreatePopupMenu() };
+    if popup.is_null() {
+        return MenuPopup::Unsupported;
+    }
+    fill_menu(popup, &menu.items);
+    let scale = current_scale();
+    let mut p = Point {
+        x: (at.x * scale).round() as i32,
+        y: (at.y * scale).round() as i32,
+    };
+    let picked = unsafe {
+        ClientToScreen(hwnd, &mut p);
+        // The menu only closes on a click elsewhere if its owner is the
+        // foreground window, and needs a message after it to settle (see
+        // `TrackPopupMenu`'s remarks).
+        SetForegroundWindow(hwnd);
+        let id = TrackPopupMenuEx(
+            popup,
+            TPM_RETURNCMD | TPM_NONOTIFY,
+            p.x,
+            p.y,
+            hwnd,
+            std::ptr::null(),
+        );
+        PostMessageW(hwnd, WM_NULL, 0, 0);
+        DestroyMenu(popup);
+        id
+    };
+    if picked > 0 {
+        MenuPopup::Picked(picked as u32)
+    } else {
+        MenuPopup::Dismissed
     }
 }
 
@@ -1017,6 +1071,9 @@ impl Window for WinWindow {
     fn set_menu_bar(&self, menu: &NativeMenuBar) -> bool {
         set_menu_bar(self.hwnd, menu);
         true
+    }
+    fn popup_menu(&self, menu: &NativeMenu, at: crate::geometry::Point) -> MenuPopup {
+        popup_menu(self.hwnd, menu, at)
     }
     fn set_icon(&self, icon: Option<&crate::render::Pixmap>) {
         let new = icon.map_or(std::ptr::null_mut(), create_icon);

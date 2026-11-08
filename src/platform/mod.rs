@@ -71,7 +71,7 @@ pub use error::PlatformError;
 pub use event::{
     ButtonState, Event, Ime, KeyCode, Modifiers, PointerButton, ScrollDelta, WindowId,
 };
-pub use menu::{NativeMenu, NativeMenuBar, NativeMenuItem, Shortcut};
+pub use menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, Shortcut};
 pub use pointer::{pointer_modifiers, set_pointer_modifiers};
 pub use window::{CursorIcon, ImeState, Window, WindowAttributes, WindowRequest};
 

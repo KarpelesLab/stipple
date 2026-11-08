@@ -217,9 +217,23 @@ fn key_name(key: KeyCode, mac: bool) -> String {
 /// assert_eq!(mnemonic("Fish && Chips"), ("Fish & Chips".to_string(), None));
 /// ```
 pub fn mnemonic(label: &str) -> (String, Option<char>) {
+    let (text, at) = mnemonic_at(label);
+    let key = at.and_then(|i| text[i..].chars().next()?.to_lowercase().next());
+    (text, key)
+}
+
+/// [`mnemonic`], with where the mnemonic sits: the byte range of its
+/// character in the text to show, for underlining it.
+///
+/// ```
+/// use stipple::platform::menu::mnemonic_at;
+/// assert_eq!(mnemonic_at("Save &As…"), ("Save As…".to_string(), Some(5)));
+/// assert_eq!(mnemonic_at("A && B"), ("A & B".to_string(), None));
+/// ```
+pub fn mnemonic_at(label: &str) -> (String, Option<usize>) {
     let mut text = String::with_capacity(label.len());
-    let mut key = None;
-    let mut chars = label.chars().peekable();
+    let mut at = None;
+    let mut chars = label.chars();
     while let Some(c) = chars.next() {
         if c != '&' {
             text.push(c);
@@ -228,15 +242,23 @@ pub fn mnemonic(label: &str) -> (String, Option<char>) {
         match chars.next() {
             Some('&') => text.push('&'),
             Some(next) => {
-                if key.is_none() {
-                    key = next.to_lowercase().next();
+                if at.is_none() {
+                    at = Some(text.len());
                 }
                 text.push(next);
             }
             None => {}
         }
     }
-    (text, key)
+    (text, at)
+}
+
+/// The byte range `[start, end)` of the mnemonic character [`mnemonic_at`]
+/// found, for [`Element::underline`](crate::core::Element::underline).
+pub fn mnemonic_range(text: &str, at: Option<usize>) -> Option<(usize, usize)> {
+    let i = at?;
+    let c = text.get(i..)?.chars().next()?;
+    Some((i, i + c.len_utf8()))
 }
 
 /// One entry of a [`NativeMenu`].
@@ -273,6 +295,18 @@ pub struct NativeMenuBar {
     /// Hide, Quit).
     pub app_name: String,
     pub menus: Vec<NativeMenu>,
+}
+
+/// What came of showing a native context menu with
+/// [`Window::popup_menu`](crate::platform::Window::popup_menu).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuPopup {
+    /// The platform has no native popup menus: draw one instead.
+    Unsupported,
+    /// The menu closed without a pick.
+    Dismissed,
+    /// The command with this id (as in [`NativeMenuItem::Action`]) was picked.
+    Picked(u32),
 }
 
 #[cfg(test)]

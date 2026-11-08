@@ -295,3 +295,97 @@ fn a_context_menu_near_the_edge_stays_inside_the_window() {
     assert!(menu.bounds.max_x() <= 240.0 + 0.5, "{:?}", menu.bounds);
     assert!(menu.bounds.min_x() >= 0.0);
 }
+
+/// The labels drawn with an underline, as `text:underlined`.
+fn underlined(app: &App<Doc>) -> Vec<String> {
+    fn walk(node: &crate::core::LayoutNode, out: &mut Vec<String>) {
+        if let crate::core::NodeContent::Text {
+            text,
+            underline: Some((s, e)),
+            ..
+        } = &node.content
+        {
+            out.push(format!("{text}:{}", &text[*s..*e]));
+        }
+        for child in &node.children {
+            walk(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(tree) = app.panes[0].tree.as_ref() {
+        walk(tree, &mut out);
+    }
+    out
+}
+
+#[test]
+fn mnemonics_are_underlined_while_the_keyboard_drives_the_menus() {
+    let mut app = app();
+    app.render_once();
+    assert!(underlined(&app).is_empty(), "no cues to start with");
+
+    // Holding Alt shows them on the bar; releasing it alone keeps them, on
+    // the focused bar.
+    assert!(app.press_key_code(KeyCode::Alt, Modifiers::default()));
+    app.render_once();
+    assert_eq!(underlined(&app), vec!["File:F", "View:V", "Edit:E"]);
+    app.release_key_code(KeyCode::Alt);
+    app.render_once();
+    assert_eq!(underlined(&app).len(), 3);
+    // Down opens File from the keyboard: its items show theirs too.
+    app.press_key_code(KeyCode::ArrowDown, Modifiers::default());
+    app.render_once();
+    let shown = underlined(&app);
+    assert!(shown.contains(&"New:N".to_string()), "{shown:?}");
+    assert!(shown.contains(&"Recent:R".to_string()), "{shown:?}");
+    // Escape twice leaves the bar, and the cues go.
+    app.press_key_code(KeyCode::Escape, Modifiers::default());
+    app.press_key_code(KeyCode::Escape, Modifiers::default());
+    app.render_once();
+    assert!(underlined(&app).is_empty());
+
+    // A menu opened with the mouse shows none...
+    click_on(&mut app, Role::MenuItem, "File");
+    assert!(underlined(&app).is_empty());
+    // ...until the keyboard is used in it.
+    app.press_key_code(KeyCode::ArrowDown, Modifiers::default());
+    app.render_once();
+    assert!(!underlined(&app).is_empty());
+    app.press_key_code(KeyCode::Escape, Modifiers::default());
+    app.press_key_code(KeyCode::Escape, Modifiers::default());
+
+    // Alt used with another key hides them again on release.
+    app.press_key_code(KeyCode::Alt, Modifiers::default());
+    let alt = Modifiers {
+        alt: true,
+        ..Modifiers::default()
+    };
+    app.press_key_code(KeyCode::Char('x'), alt);
+    app.release_key_code(KeyCode::Alt);
+    app.render_once();
+    assert!(underlined(&app).is_empty());
+}
+
+#[test]
+fn an_underline_is_painted_under_the_mnemonic() {
+    use crate::geometry::Rect;
+    use crate::render::{Color, Font};
+    let Some(font) = Font::system_default() else {
+        return;
+    };
+    let paint = |underline| {
+        let el = crate::core::Element::text("File", 20.0, Color::BLACK).underline(underline);
+        let tree = crate::core::layout(&el, Rect::from_xywh(0.0, 0.0, 100.0, 40.0), Some(&font));
+        let mut scene = crate::render::Scene::new(Size::new(100.0, 40.0));
+        crate::core::paint(&tree, &mut scene, Some(&font));
+        crate::render::SoftwareRenderer::new().render(scene, crate::geometry::ScaleFactor::IDENTITY)
+    };
+    let plain = paint(None);
+    let marked = paint(Some((0, 1)));
+    let differs = |x0: u32, x1: u32| {
+        (x0..x1).any(|x| (0..40).any(|y| plain.pixel(x, y) != marked.pixel(x, y)))
+    };
+    let f_width = font.measure("F", 20.0).width as u32;
+    assert!(differs(0, f_width), "an underline under the F");
+    assert!(!differs(f_width + 2, 100), "and nowhere else");
+}

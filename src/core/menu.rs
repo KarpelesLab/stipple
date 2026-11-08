@@ -286,6 +286,28 @@ impl<S> Menu<S> {
         })
     }
 
+    /// Every command of this menu and its submenus with its id, depth-first
+    /// from 1: the ids [`to_native`](Menu::to_native) gives them, as a native
+    /// context menu reports its pick.
+    pub fn commands(&self) -> Vec<(u32, &MenuItem<S>)> {
+        let mut out = Vec::new();
+        self.number(&mut 1, &mut out);
+        out
+    }
+
+    /// The command with id `id` (see [`commands`](Menu::commands)).
+    pub fn command(&self, id: u32) -> Option<&MenuItem<S>> {
+        self.commands()
+            .into_iter()
+            .find_map(|(i, item)| (i == id).then_some(item))
+    }
+
+    /// The platform-neutral description of this menu, for a native context
+    /// menu, its commands numbered as in [`commands`](Menu::commands).
+    pub fn to_native(&self) -> NativeMenu {
+        self.native_from(&mut 1)
+    }
+
     /// Visit every command depth-first, numbering them from `*next`.
     fn number<'a>(&'a self, next: &mut u32, out: &mut Vec<(u32, &'a MenuItem<S>)>) {
         for item in &self.items {
@@ -300,7 +322,7 @@ impl<S> Menu<S> {
         }
     }
 
-    fn to_native(&self, next: &mut u32) -> NativeMenu {
+    fn native_from(&self, next: &mut u32) -> NativeMenu {
         let items = self
             .items
             .iter()
@@ -323,7 +345,7 @@ impl<S> Menu<S> {
                     }
                 }
                 ItemKind::Separator => NativeMenuItem::Separator,
-                ItemKind::Submenu(menu) => NativeMenuItem::Submenu(menu.to_native(next)),
+                ItemKind::Submenu(menu) => NativeMenuItem::Submenu(menu.native_from(next)),
             })
             .collect();
         NativeMenu {
@@ -409,7 +431,11 @@ impl<S> MenuBar<S> {
         let mut next = 1;
         NativeMenuBar {
             app_name: app_name.to_string(),
-            menus: self.menus.iter().map(|m| m.to_native(&mut next)).collect(),
+            menus: self
+                .menus
+                .iter()
+                .map(|m| m.native_from(&mut next))
+                .collect(),
         }
     }
 }
@@ -488,6 +514,24 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn a_menu_numbers_its_own_commands() {
+        let b = bar();
+        let file = &b.menus()[0];
+        let native = file.to_native();
+        assert_eq!(native.label, "&File");
+        match &native.items[2] {
+            NativeMenuItem::Submenu(m) => match &m.items[0] {
+                NativeMenuItem::Action { id, .. } => assert_eq!(*id, 2),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(file.command(2).map(|i| i.label()), Some("one"));
+        assert_eq!(file.command(4).map(|i| i.label()), Some("&Quit"));
+        assert!(file.command(5).is_none());
     }
 
     #[test]
