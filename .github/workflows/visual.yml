@@ -2632,7 +2632,9 @@ jobs:
           done
           xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-touch.png || true
           echo "=== touchdemo.log ==="; cat "$LOG" || true
-          echo "=== app debug (last 40) ==="; tail -40 visual_output/touchdemo-stderr.log || true
+          echo "=== app debug: input ==="
+          grep -E "touch|press|release|wake|Text|Key" visual_output/touchdemo-stderr.log | head -60 || true
+          echo "=== app debug (last 20) ==="; tail -20 visual_output/touchdemo-stderr.log || true
           # The view adopts UIKeyInput and takes the keyboard while the field
           # has focus...
           grep -q "touchdemo: keyboard focused key_input=true can_become=true first_responder=true" "$LOG"
@@ -2647,7 +2649,9 @@ jobs:
         if: always()
         with:
           name: stipple-ios-screenshot
-          path: visual_output/*.png
+          path: |
+            visual_output/*.png
+            visual_output/*.log
           if-no-files-found: warn
 
   # Run the native Android backend on an emulator: build androiddemo, package a
