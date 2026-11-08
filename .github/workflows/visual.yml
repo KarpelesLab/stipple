@@ -1595,8 +1595,11 @@ jobs:
   # screenshot it. The selftest (examples/webdemo/index.html#selftest) drives
   # the demo with DOM events through web/stipple.js and checks HiDPI, timers,
   # the requestAnimationFrame-driven spinner (and that frames stop when idle),
-  # clicks and the cursor, typing, copy and paste, opening and saving a file,
-  # and resizing.
+  # clicks and the cursor, typing, copy and paste, input-method composition and
+  # dead keys, the ARIA overlay (roles, names, a click on an element activating
+  # it), the theme following prefers-color-scheme (run once dark, once light),
+  # a second app instance on the same page, opening and saving a file, and
+  # resizing. multi.html (two apps side by side) is screenshotted too.
   visual-web:
     name: Visual test (Web / wasm)
     runs-on: ubuntu-latest
@@ -1616,7 +1619,7 @@ jobs:
       - name: Assemble the web bundle
         run: |
           mkdir -p site visual_output
-          cp examples/webdemo/index.html web/stipple.js site/
+          cp examples/webdemo/index.html examples/webdemo/multi.html web/stipple.js site/
           cp target/wasm32-unknown-unknown/release/webdemo.wasm site/
           cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf site/font.ttf
           ls -l site/
@@ -1633,28 +1636,48 @@ jobs:
           # The selftest, at a pixel ratio of 2 so HiDPI is checked too, in real
           # time: under --virtual-time-budget its animation frames could stall
           # and the report never came. The page sends the report as a GET of
-          # selftest-report?<report>, which the server's log records.
-          chrome --force-device-scale-factor=2 --remote-debugging-port=9222 \
-            "http://localhost:8000/index.html#selftest" > chrome.log 2>&1 &
-          CHROME=$!
-          for i in $(seq 1 90); do
-            grep -q "GET /selftest-report?" server.log && break
-            sleep 1
-          done
-          kill "$CHROME" 2>/dev/null || true
-          line=$(grep -o "GET /selftest-report?[^ ]*" server.log | head -1)
-          python3 -c 'import sys, urllib.parse; print(urllib.parse.unquote(sys.argv[1].partition("?")[2]))' \
-            "$line" | tee visual_output/web-selftest.txt
-          grep -q "SELFTEST: ok" visual_output/web-selftest.txt
-          # The screenshot, after the selftest's clicks (counter at 2, a file
-          # opened). A blank canvas means the page never ran the wasm, so
-          # require real content.
-          chrome --virtual-time-budget=20000 --screenshot="$PWD/visual_output/stipple-web.png" \
-            "http://localhost:8000/index.html#selftest"
-          echo "Captured:"; identify visual_output/stipple-web.png
-          colors=$(convert visual_output/stipple-web.png -format '%k' info:)
-          echo "distinct colors: $colors"
-          [ "$colors" -gt 20 ]
+          # selftest-report?<report>, which the server's log records; run N
+          # waits for the Nth report. $1 is the run, $2 the report file, the
+          # rest extra Chrome flags.
+          selftest() {
+            local n=$1 out=$2; shift 2
+            chrome --force-device-scale-factor=2 --remote-debugging-port=$((9221 + n)) "$@" \
+              "http://localhost:8000/index.html#selftest" > "chrome-$n.log" 2>&1 &
+            local pid=$!
+            for i in $(seq 1 90); do
+              [ "$(grep -c "GET /selftest-report?" server.log)" -ge "$n" ] && break
+              sleep 1
+            done
+            kill "$pid" 2>/dev/null || true
+            local line
+            line=$(grep -o "GET /selftest-report?[^ ]*" server.log | sed -n "${n}p")
+            python3 -c 'import sys, urllib.parse; print(urllib.parse.unquote(sys.argv[1].partition("?")[2]))' \
+              "$line" | tee "$out"
+            grep -q "SELFTEST: ok" "$out" || { echo "--- chrome log"; tail -20 "chrome-$n.log"; return 1; }
+          }
+          # With a dark color scheme (--force-dark-mode makes
+          # prefers-color-scheme: dark), then the default light one: the
+          # native theme must follow each.
+          selftest 1 visual_output/web-selftest.txt --force-dark-mode
+          grep -q "color-scheme: prefers-color-scheme: dark, theme dark" visual_output/web-selftest.txt
+          selftest 2 visual_output/web-selftest-light.txt
+          grep -q "color-scheme: prefers-color-scheme: light, theme light" visual_output/web-selftest-light.txt
+          # The screenshot, after the selftest's clicks (counter at 3, a file
+          # opened, the box checked). A blank canvas means the page never ran
+          # the wasm, so require real content.
+          shot() {
+            echo "Captured:"; identify "$1"
+            colors=$(convert "$1" -format '%k' info:)
+            echo "distinct colors: $colors"
+            [ "$colors" -gt 20 ]
+          }
+          chrome --force-dark-mode --virtual-time-budget=20000 \
+            --screenshot="$PWD/visual_output/stipple-web.png" "http://localhost:8000/index.html#selftest"
+          shot visual_output/stipple-web.png
+          # Two apps on one page, each its own instance of the module.
+          chrome --force-dark-mode --virtual-time-budget=8000 --window-size=900,420 \
+            --screenshot="$PWD/visual_output/stipple-web-multi.png" "http://localhost:8000/multi.html"
+          shot visual_output/stipple-web-multi.png
 
       - name: Stop server
         if: always()
@@ -1667,7 +1690,7 @@ jobs:
           name: stipple-web-screenshot
           path: |
             visual_output/*.png
-            visual_output/web-selftest.txt
+            visual_output/web-selftest*.txt
           if-no-files-found: warn
 
   # Draw a WebGPU triangle (hand-written WGSL, no wgpu) in headless Chrome on

@@ -4,7 +4,10 @@
 //!
 //! It shows what the web backend does: a click counter, a spinner that turns
 //! (driven by `requestAnimationFrame`) while a timer "loads" data, a repeating
-//! timer, a text editor with clipboard support, and opening and saving a file.
+//! timer, a text editor with clipboard support (and input methods), opening
+//! and saving a file, and a checkbox. Its theme follows the page's
+//! `prefers-color-scheme`, and screen readers see it through the ARIA overlay
+//! `web/stipple.js` keeps.
 //!
 //! `index.html#selftest` drives it with scripted DOM events and reports what
 //! it saw (see the page). CI runs that in headless Chrome. The page reads the
@@ -22,6 +25,7 @@ pub struct State {
     loaded: bool,
     notes: EditBuffer,
     file: Option<(String, usize)>,
+    checked: bool,
 }
 
 thread_local! {
@@ -29,7 +33,7 @@ thread_local! {
     static FRAMES_LOADING: Cell<u32> = const { Cell::new(0) };
     static FRAMES_IDLE: Cell<u32> = const { Cell::new(0) };
     /// The state, mirrored for [`webdemo_probe`].
-    static PROBE: Cell<[u32; 5]> = const { Cell::new([0; 5]) };
+    static PROBE: Cell<[u32; 7]> = const { Cell::new([0; 7]) };
 }
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
@@ -48,6 +52,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             u32::from(state.loaded),
             state.file.as_ref().map_or(0, |f| f.1 as u32),
             state.notes.text().len() as u32,
+            u32::from(theme.is_dark()),
+            u32::from(state.checked),
         ])
     });
 
@@ -93,6 +99,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         status,
         label(&theme, format!("Ticks: {}", state.ticks)),
         label(&theme, file),
+        row(vec![
+            checkbox(cx, &theme, state.checked, |s: &mut State| {
+                s.checked = !s.checked
+            }),
+            label(&theme, "A checkbox"),
+        ])
+        .gap(theme.spacing.sm)
+        .align(Align::Start, Align::Center),
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(theme.spacing.lg))
@@ -106,7 +120,8 @@ fn text_field_row(theme: &Theme, field: Element) -> Element {
 pub fn app() -> App<State> {
     let app = App::new(State::default(), view)
         .title("Stipple on the web")
-        .theme(Theme::dark());
+        // The page's prefers-color-scheme, followed as it changes.
+        .theme(Theme::native());
     let handle = app.handle();
     // Pretend to load something for 1.5 s, while the spinner turns.
     handle.after(Duration::from_millis(1500), |s: &mut State| s.loaded = true);
@@ -123,13 +138,15 @@ pub fn app() -> App<State> {
 stipple::web_app!(app);
 
 /// The state for the page's selftest: 0 clicks, 1 timer ticks, 2 loaded, 3 the
-/// opened file's size, 4 the notes' length, 5 frames built while loading, 6
-/// frames built since.
+/// opened file's size, 4 the notes' length in bytes, 5 frames built while
+/// loading, 6 frames built since, 7 whether the theme is dark, 8 whether the
+/// checkbox is checked.
 #[unsafe(no_mangle)]
 pub extern "C" fn webdemo_probe(what: u32) -> u32 {
     match what {
         5 => FRAMES_LOADING.with(Cell::get),
         6 => FRAMES_IDLE.with(Cell::get),
+        7 | 8 => PROBE.with(|p| p.get()[what as usize - 2]),
         i => PROBE.with(|p| p.get().get(i as usize).copied().unwrap_or(0)),
     }
 }

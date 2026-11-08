@@ -49,7 +49,7 @@
       // Drive the demo with DOM events, as a user would, and report what the
       // app saw (through `webdemo_probe`). CI loads `index.html#selftest` in
       // headless Chrome and reads the report from the DOM.
-      async function runSelftest({ exports: e, stats, canvas }) {
+      async function runSelftest({ exports: e, stats, canvas, overlay, input, colorScheme }) {
         const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
         const probe = (i) => e.webdemo_probe(i);
         const checks = {};
@@ -71,17 +71,23 @@
         check("idle", stats.frames - raf <= 2 && probe(6) - idleBuilt <= 4,
           `${stats.frames - raf} animation frames and ${probe(6) - idleBuilt} builds in 1 s idle`);
 
-        const r = canvas.getBoundingClientRect();
-        const pointer = (type, x, y) => canvas.dispatchEvent(new PointerEvent(type, {
-          clientX: r.left + x, clientY: r.top + y, button: 0, buttons: type === "pointerup" ? 0 : 1,
-          pointerId: 1, pointerType: "mouse", bubbles: true,
-        }));
-        const click = async (x, y) => {
-          pointer("pointermove", x, y); pointer("pointerdown", x, y); pointer("pointerup", x, y);
+        const pointerOn = (cv, type, x, y) => {
+          const r = cv.getBoundingClientRect();
+          cv.dispatchEvent(new PointerEvent(type, {
+            clientX: r.left + x, clientY: r.top + y, button: 0, buttons: type === "pointerup" ? 0 : 1,
+            pointerId: 1, pointerType: "mouse", bubbles: true,
+          }));
+        };
+        const clickOn = async (cv, x, y) => {
+          for (const type of ["pointermove", "pointerdown", "pointerup"]) pointerOn(cv, type, x, y);
           await sleep(50);
         };
+        const click = (x, y) => clickOn(canvas, x, y);
+        // Keys go where the browser would send them: the focused element (the
+        // overlay's textarea while the app has focus).
         const key = (k, opts = {}) => {
-          canvas.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...opts }));
+          (document.activeElement ?? document.body).dispatchEvent(
+            new KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...opts }));
         };
         const clip = (type, text) => {
           const data = new DataTransfer();
@@ -96,8 +102,14 @@
         check("click", probe(0) === 2, `clicks=${probe(0)}, cursor=${canvas.style.cursor}`);
         check("cursor", canvas.style.cursor === "pointer", canvas.style.cursor);
 
-        // Keyboard: focus the notes, type, select all and copy.
+        // Keyboard: focus the notes, type, select all and copy. Clicking the
+        // canvas gives keyboard focus to the overlay's textarea, which the
+        // focused field's ARIA element names.
         await click(BUTTONS.notes, BUTTONS.notesY);
+        const field = overlay.querySelector("[role=textbox]");
+        check("focus", document.activeElement === input && field
+          && input.getAttribute("aria-labelledby") === field.id,
+          `focused <${document.activeElement?.tagName?.toLowerCase()}>, labelled by ${input.getAttribute("aria-labelledby")}`);
         for (const k of "abc") key(k);
         key("Backspace");
         key("d");
@@ -111,6 +123,29 @@
         await sleep(50);
         check("paste", probe(4) === 7, `notes length ${probe(4)}`);
 
+        // Input methods: composition in the textarea shows a preedit (not yet
+        // text), and the end commits it.
+        const compose = (type, data) =>
+          input.dispatchEvent(new CompositionEvent(type, { data, bubbles: true }));
+        const before = probe(4);
+        compose("compositionstart", "");
+        compose("compositionupdate", "にほん");
+        await sleep(50);
+        const during = probe(4);
+        compose("compositionupdate", "日本");
+        compose("compositionend", "日本");
+        await sleep(50);
+        check("ime", during === before && probe(4) === before + 6,
+          `${before} bytes, ${during} while composing, ${probe(4)} after committing 日本`);
+        // A dead key: its keydown is left alone, and the composed character
+        // arrives as an input event, typed once.
+        key("Dead");
+        input.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "é", bubbles: true }));
+        await sleep(50);
+        check("dead-key", probe(4) === before + 8, `${probe(4)} bytes after Dead + "é"`);
+        const copiedAll = (key("a", { ctrlKey: true }), key("c", { ctrlKey: true }), clip("copy"));
+        check("ime-text", copiedAll === "pasted!日本é", `notes "${copiedAll}"`);
+
         // Files: open (async, back through the wake path) and save.
         await click(BUTTONS.open, BUTTONS.y);
         await sleep(200);
@@ -118,6 +153,66 @@
         await click(BUTTONS.save, BUTTONS.y);
         check("save", saved.length === 1 && saved[0][0] === "notes.txt",
           JSON.stringify(saved));
+
+        // Accessibility: the overlay mirrors the tree as ARIA elements; a
+        // screen reader's "activate" (a click on the element) taps the node.
+        const roles = [...overlay.querySelectorAll("[role]")]
+          .map((el) => `${el.getAttribute("role")}:${el.textContent}`);
+        const counterEl = [...overlay.querySelectorAll("[role=button]")]
+          .find((el) => el.textContent.startsWith("Clicked"));
+        const box = overlay.querySelector("[role=checkbox]");
+        check("aria-tree", counterEl && box && box.getAttribute("aria-checked") === "false"
+          && overlay.querySelector("[role=textbox]") && roles.includes("button:Save"),
+          roles.join(", "));
+        const clicks = probe(0);
+        counterEl?.click();
+        await sleep(50);
+        check("aria-activate", probe(0) === clicks + 1 && counterEl?.textContent === `Clicked ${clicks + 1} times`,
+          `clicks ${clicks} -> ${probe(0)}, button now "${counterEl?.textContent}"`);
+        box?.click();
+        await sleep(50);
+        check("aria-checked", probe(8) === 1 && box?.getAttribute("aria-checked") === "true",
+          `checked=${probe(8)}, aria-checked=${box?.getAttribute("aria-checked")}`);
+
+        // prefers-color-scheme: the native theme follows it, and a change (as
+        // the media query's change event reports it) re-themes the running app.
+        const prefersDark = matchMedia("(prefers-color-scheme: dark)").matches ? 1 : 0;
+        const accent = CSS.supports("color", "AccentColor") ? (() => {
+          const d = document.createElement("div");
+          d.style.cssText = "display:none;color:AccentColor";
+          document.body.append(d);
+          const c = getComputedStyle(d).color;
+          d.remove();
+          return c;
+        })() : "none";
+        check("color-scheme", probe(7) === prefersDark,
+          `prefers-color-scheme: ${prefersDark ? "dark" : "light"}, theme ${probe(7) ? "dark" : "light"}, AccentColor ${accent}`);
+        e.stipple_color_scheme(1 - prefersDark, -1);
+        await sleep(50);
+        const flipped = probe(7);
+        colorScheme();
+        await sleep(50);
+        check("theme-change", flipped === 1 - prefersDark && probe(7) === prefersDark,
+          `theme ${flipped ? "dark" : "light"} after the scheme flipped, ${probe(7) ? "dark" : "light"} after it flipped back`);
+
+        // Two apps on one page: a second canvas runs its own instance, which
+        // renders and counts its own clicks.
+        const second = document.createElement("canvas");
+        second.style.cssText = "position:fixed;right:0;bottom:0;width:320px;height:200px";
+        document.body.append(second);
+        const app2 = await start(second, "webdemo.wasm", { font: "font.ttf", title: false });
+        await sleep(100);
+        const clicks1 = probe(0);
+        await clickOn(second, BUTTONS.counter, BUTTONS.y);
+        const px = second.getContext("2d").getImageData(0, 0, second.width, second.height).data;
+        const colors = new Set();
+        for (let i = 0; i < px.length; i += 16) colors.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
+        const p2 = (i) => app2.exports.webdemo_probe(i);
+        check("two-apps", app2.stats.presents > 0 && colors.size > 10 && p2(0) === 1 && probe(0) === clicks1
+          && app2.overlay !== overlay && app2.overlay.querySelector("[role=button]"),
+          `second app: ${app2.stats.presents} presents, ${colors.size} colors, ${p2(0)} clicks; first app still ${probe(0)}`);
+        second.remove();
+        app2.overlay.remove();
 
         // Wheel and resize don't throw, and resize re-renders at the new size.
         canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));

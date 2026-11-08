@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Two Stipple apps on one page</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0b0d; }
+      main { display: flex; gap: 8px; height: 100%; }
+      canvas { display: block; flex: 1; min-width: 0; height: 100%; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <canvas id="left" aria-label="Left app"></canvas>
+      <canvas id="right" aria-label="Right app"></canvas>
+    </main>
+    <script type="module">
+      // Each start() runs its own instance of the module, with its own memory
+      // and state; the module is fetched and compiled once.
+      import { start } from "./stipple.js";
+      const options = { font: "font.ttf", title: false };
+      await Promise.all([
+        start(document.getElementById("left"), "webdemo.wasm", options),
+        start(document.getElementById("right"), "webdemo.wasm", options),
+      ]);
+      document.title = "Two Stipple apps: running";
+    </script>
+  </body>
+</html>
