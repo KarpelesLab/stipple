@@ -104,6 +104,9 @@ const X_CONFIGURE_NOTIFY: u8 = 22;
 const X_SELECTION_CLEAR: u8 = 29;
 const X_SELECTION_REQUEST: u8 = 30;
 const X_CLIENT_MESSAGE: u8 = 33;
+/// Sent to every client when the keyboard mapping changes (a layout switch,
+/// `xmodmap`, or `xdotool` borrowing a spare keycode for a keysym).
+const X_MAPPING_NOTIFY: u8 = 34;
 
 // Predefined atoms (X11 protocol appendix): STRING type and the ATOM type.
 const ATOM_STRING: u32 = 31;
@@ -1494,7 +1497,9 @@ where
 
     // Fetch the keyboard mapping up front (no window yet, so the reply is the
     // next message and won't interleave with events).
-    let keymap = fetch_keymap(&mut conn).map_err(os)?;
+    let mut keymap = fetch_keymap(&mut conn).map_err(os)?;
+    // Dead keys and compose sequences, from the locale's Compose file.
+    let mut compose = crate::platform::compose::ComposeState::default();
     dbg(format_args!(
         "keymap: {} keysyms, {}/keycode",
         keymap.syms.len(),
@@ -1542,18 +1547,36 @@ where
         shared.lock().unwrap().stream.as_raw_fd()
     };
     let mut buf = [0u8; 32];
+    // Events read while waiting for a reply (the keymap after a mapping
+    // change), handled before reading more.
+    let mut backlog: std::collections::VecDeque<[u8; 32]> = std::collections::VecDeque::new();
     loop {
-        if !crate::platform::wake::wait_readable(fd) {
-            if crate::platform::wake::take(std::time::Instant::now())
-                && handler(Event::Wake, &windows[0]) == ControlFlow::Exit
-            {
-                break;
+        if let Some(event) = backlog.pop_front() {
+            buf = event;
+        } else {
+            if !crate::platform::wake::wait_readable(fd) {
+                if crate::platform::wake::take(std::time::Instant::now())
+                    && handler(Event::Wake, &windows[0]) == ControlFlow::Exit
+                {
+                    break;
+                }
+                continue;
             }
-            continue;
-        }
-        {
             let mut conn = shared.lock().unwrap();
             conn.stream.read_exact(&mut buf).map_err(os)?;
+        }
+        // The keyboard mapping changed: fetch it again. The reply may come
+        // after other events, which wait in the backlog.
+        if buf[0] & 0x7f == X_MAPPING_NOTIFY && buf[4] == 1 {
+            let mut conn = shared.lock().unwrap();
+            match refetch_keymap(&mut conn, &mut backlog) {
+                Ok(map) => {
+                    dbg(format_args!("keymap changed: {} keysyms", map.syms.len()));
+                    keymap = map;
+                }
+                Err(e) => dbg(format_args!("keymap refetch failed: {e}")),
+            }
+            continue;
         }
         // An error reply (first byte 0) is not an event; log and skip it.
         if buf[0] == 0 {
@@ -1652,9 +1675,20 @@ where
                     meta: mask & 0x0040 != 0,
                 };
                 let ks = keymap.keysym(keycode, modifiers.shift);
-                match keysym_to_event(ks, state, modifiers) {
-                    Some(ev) => handler(ev, win),
-                    None => ControlFlow::Wait,
+                dbg(format_args!("key {keycode} {state:?} keysym {ks:#x}"));
+                let shortcut = modifiers.ctrl || modifiers.meta;
+                let composed = (state == ButtonState::Pressed)
+                    .then(|| crate::platform::compose::feed_event(&mut compose, ks, shortcut))
+                    .flatten();
+                match composed {
+                    Some(ime) => {
+                        dbg(format_args!("compose: keysym {ks:#x} -> {ime:?}"));
+                        handler(Event::Ime(ime), win)
+                    }
+                    None => match keysym_to_event(ks, state, modifiers) {
+                        Some(ev) => handler(ev, win),
+                        None => ControlFlow::Wait,
+                    },
                 }
             }
             X_CLIENT_MESSAGE => {
@@ -1729,16 +1763,53 @@ impl Keymap {
     }
 }
 
-fn fetch_keymap(conn: &mut Conn) -> io::Result<Keymap> {
+/// Send `GetKeyboardMapping` for every keycode.
+fn request_keymap(conn: &mut Conn) -> io::Result<()> {
     let min = conn.setup.min_keycode;
     let max = conn.setup.max_keycode;
     let count = max.saturating_sub(min).saturating_add(1);
-    let mut req = vec![OP_GET_KEYBOARD_MAPPING, 0, 0, 0, min, count, 0, 0];
-    conn.send(&finish(std::mem::take(&mut req)))?;
+    conn.send(&finish(vec![
+        OP_GET_KEYBOARD_MAPPING,
+        0,
+        0,
+        0,
+        min,
+        count,
+        0,
+        0,
+    ]))
+}
+
+fn fetch_keymap(conn: &mut Conn) -> io::Result<Keymap> {
+    request_keymap(conn)?;
     let mut reply = [0u8; 32];
     conn.stream.read_exact(&mut reply)?;
+    read_keymap_body(conn, &reply)
+}
+
+/// Fetch the keymap again from inside the event loop, where events may arrive
+/// before the reply: those go to `backlog`.
+fn refetch_keymap(
+    conn: &mut Conn,
+    backlog: &mut std::collections::VecDeque<[u8; 32]>,
+) -> io::Result<Keymap> {
+    request_keymap(conn)?;
+    loop {
+        let mut packet = [0u8; 32];
+        conn.stream.read_exact(&mut packet)?;
+        match packet[0] {
+            1 => return read_keymap_body(conn, &packet),
+            0 => return Err(io::Error::other("GetKeyboardMapping failed")),
+            _ => backlog.push_back(packet),
+        }
+    }
+}
+
+/// Read the keysyms that follow a `GetKeyboardMapping` reply header.
+fn read_keymap_body(conn: &mut Conn, reply: &[u8; 32]) -> io::Result<Keymap> {
+    let min = conn.setup.min_keycode;
     let per = reply[1] as usize;
-    let len_words = rd_u32(&reply, 4).unwrap_or(0) as usize; // = count * per
+    let len_words = rd_u32(reply, 4).unwrap_or(0) as usize; // = count * per
     let mut body = vec![0u8; len_words * 4];
     conn.stream.read_exact(&mut body)?;
     let syms = body
@@ -1813,16 +1884,10 @@ fn keysym_to_event(ks: u32, state: ButtonState, modifiers: Modifiers) -> Option<
     if state != ButtonState::Pressed {
         return None;
     }
-    // Latin-1 keysyms map directly to codepoints; the Unicode plane is
-    // 0x0100_0000 | codepoint.
-    let cp = if (0x20..=0x7e).contains(&ks) || (0xa0..=0xff).contains(&ks) {
-        ks
-    } else if ks & 0xff00_0000 == 0x0100_0000 {
-        ks & 0x00ff_ffff
-    } else {
-        return None;
-    };
-    let c = char::from_u32(cp)?;
+    // Latin-1 keysyms map directly to codepoints, the Unicode plane is
+    // 0x0100_0000 | codepoint, and the legacy keysyms (Latin-2, Greek,
+    // Cyrillic, …) go through the keysym table.
+    let c = crate::platform::compose::keysym_to_char(ks)?;
     // With Ctrl/Meta held, a printable key is a shortcut (Ctrl+C, Ctrl+V, …),
     // not text input — deliver it as a `Key` so the app can map it.
     if modifiers.ctrl || modifiers.meta {

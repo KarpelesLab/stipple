@@ -230,6 +230,20 @@ pub enum KeyInput {
     Redo,
     Enter,
     Escape,
+    /// Input-method composition (preedit) text to show at the caret, not yet
+    /// part of the text; `cursor` is the byte range within it the IME
+    /// highlights. Empty `text` ends the composition. A following
+    /// [`Text`](KeyInput::Text) commits the final text in its place.
+    Preedit {
+        text: String,
+        cursor: Option<(usize, usize)>,
+    },
+    /// Delete `before` bytes before the caret and `after` bytes after it, as an
+    /// input method asks (Wayland's `delete_surrounding_text`).
+    DeleteSurrounding {
+        before: usize,
+        after: usize,
+    },
 }
 
 /// A platform-neutral input event forwarded to an embedded
@@ -686,6 +700,9 @@ pub struct LayoutNode {
     /// Selected byte range `[start, end)` for an editable text leaf (the focus
     /// overlay highlights it).
     pub selection: Option<(usize, usize)>,
+    /// Byte range of input-method composition (preedit) text inside an editable
+    /// text leaf (the focus overlay underlines it).
+    pub preedit: Option<(usize, usize)>,
     /// Text-pointer handle: this element resolves pointer presses/drags to a
     /// byte index in its text (click-to-position / drag-to-select).
     pub text_pos: Option<TextPosId>,
@@ -728,6 +745,7 @@ impl LayoutNode {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -1002,6 +1020,7 @@ mod tests {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -1090,6 +1109,7 @@ mod tests {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,

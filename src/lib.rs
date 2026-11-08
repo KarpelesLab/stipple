@@ -48,7 +48,7 @@ use crate::core::{
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::{
-    ButtonState, ControlFlow, CursorIcon, Event, KeyCode, Modifiers, PointerButton,
+    ButtonState, ControlFlow, CursorIcon, Event, Ime, KeyCode, Modifiers, PointerButton,
     WindowAttributes, WindowId, backend,
 };
 use crate::render::{Color, Font, Pixmap, Scene, SoftwareRenderer, Surface};
@@ -260,6 +260,12 @@ struct Pane<S> {
     input_viewport: Option<ViewportId>,
     // The cursor last set on the window, so it is only changed on a change.
     cursor: CursorIcon,
+    // What the window's input method was last told (`None`: disabled), so
+    // `Window::set_ime` is only called on a change.
+    ime_sent: Option<crate::platform::ImeState>,
+    // The element showing input-method composition text, so it can be told to
+    // drop it when focus moves away mid-composition.
+    preedit_owner: Option<FocusId>,
 }
 
 impl<S> std::fmt::Debug for App<S> {
@@ -297,6 +303,8 @@ impl<S> Pane<S> {
             painted_highlights: Vec::new(),
             animating: false,
             painted_focused: None,
+            ime_sent: None,
+            preedit_owner: None,
             memo_cache: std::collections::HashMap::new(),
             scroll_offsets: std::collections::HashMap::new(),
             scroll_requests: crate::core::ScrollRequests::default(),
@@ -731,6 +739,7 @@ impl<S> Pane<S> {
                 theme.palette.text,
                 theme.palette.selection,
             );
+            crate::core::paint_preedit(&tree, fid, &mut scene, font, theme.palette.text);
         }
         self.tree = Some(tree);
         self.dirty = false;
@@ -933,6 +942,36 @@ impl<S> Pane<S> {
             self.dirty = true;
         }
         ran
+    }
+
+    /// If focus left the element showing composition text, tell it to drop
+    /// the preedit (the input method is disabled with the focus change, and
+    /// may never end the composition itself).
+    fn drop_stale_preedit(&mut self, state: &mut S) {
+        if let Some(owner) = self.preedit_owner
+            && Some(owner) != self.focused
+        {
+            let clear = KeyInput::Preedit {
+                text: String::new(),
+                cursor: None,
+            };
+            self.handlers.dispatch_key(owner, &clear, state);
+            self.preedit_owner = None;
+            self.dirty = true;
+        }
+    }
+
+    /// Tell the window's input method about the focused text field (or that
+    /// there is none), when that changed since the last frame.
+    fn sync_ime(&mut self, window: &dyn crate::platform::Window, font: Option<&Font>) {
+        let ime = match (&self.tree, self.input_viewport) {
+            (Some(tree), None) => crate::core::ime_state(tree, self.focused, font),
+            _ => None,
+        };
+        if ime != self.ime_sent {
+            window.set_ime(ime.as_ref());
+            self.ime_sent = ime;
+        }
     }
 
     /// Move focus to the next focusable element in tree order (wrapping),
@@ -1468,7 +1507,9 @@ impl<S> App<S> {
             let pane = &mut panes[idx];
             let scale = window.scale_factor();
             pane.scale = scale;
+            pane.drop_stale_preedit(state);
             let scene = pane.build_frame(state, theme, font.as_ref());
+            pane.sync_ime(window, font.as_ref());
 
             // Push the freshly-built accessibility tree to the OS bridge so a
             // screen reader sees the current element hierarchy and focus.
@@ -1688,6 +1729,28 @@ impl<S> App<S> {
                         return ControlFlow::Wait;
                     }
                     if self.pane_type_text(idx, &text) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::Ime(ime) => {
+                    let input = match ime {
+                        Ime::Preedit { text, cursor } => KeyInput::Preedit { text, cursor },
+                        Ime::Commit(text) => KeyInput::Text(text),
+                        Ime::DeleteSurrounding { before, after } => {
+                            KeyInput::DeleteSurrounding { before, after }
+                        }
+                    };
+                    if self.try_forward_key(idx, input.clone()) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                        return ControlFlow::Wait;
+                    }
+                    let composing =
+                        matches!(&input, KeyInput::Preedit { text, .. } if !text.is_empty());
+                    let ran = self.pane_press_key(idx, input);
+                    let pane = &mut self.panes[idx];
+                    pane.preedit_owner = if composing && ran { pane.focused } else { None };
+                    if ran {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -2401,6 +2464,76 @@ mod tests {
     #[derive(Default)]
     struct Editor {
         buf: crate::widgets::EditBuffer,
+    }
+
+    /// A window that records what the App tells its input method.
+    struct ImeWindow(std::cell::RefCell<Vec<Option<crate::platform::ImeState>>>);
+
+    impl crate::platform::Window for ImeWindow {
+        fn id(&self) -> WindowId {
+            WindowId(1)
+        }
+        fn inner_size(&self) -> PhysicalSize {
+            PhysicalSize::new(300, 100)
+        }
+        fn scale_factor(&self) -> ScaleFactor {
+            ScaleFactor::IDENTITY
+        }
+        fn request_redraw(&self) {}
+        fn set_title(&self, _title: &str) {}
+        fn create_surface(&self) -> Box<dyn Surface> {
+            unimplemented!("not presented in this test")
+        }
+        fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
+            self.0.borrow_mut().push(state.cloned());
+        }
+    }
+
+    #[derive(Default)]
+    struct TwoFields {
+        a: crate::widgets::EditBuffer,
+        b: crate::widgets::EditBuffer,
+    }
+
+    #[test]
+    fn ime_follows_text_focus_and_drops_a_stale_preedit() {
+        let mut app = App::new(
+            TwoFields::default(),
+            |s: &TwoFields, cx: &mut Cx<TwoFields>| {
+                let theme = *cx.theme();
+                let a = crate::widgets::text_editor(cx, &theme, &s.a, |s: &mut TwoFields| &mut s.a);
+                let b = crate::widgets::text_editor(cx, &theme, &s.b, |s: &mut TwoFields| &mut s.b);
+                column(vec![a, b])
+            },
+        )
+        .logical_size(Size::new(300.0, 100.0));
+        let window = ImeWindow(Default::default());
+        app.render_once();
+        app.panes[0].sync_ime(&window, None);
+        // Nothing focused: the IME stays off, and isn't told again.
+        assert!(window.0.borrow().is_empty());
+
+        // Focusing a field enables it.
+        assert!(app.focus_next());
+        app.render_once();
+        app.panes[0].sync_ime(&window, None);
+        assert_eq!(window.0.borrow().len(), 1);
+        assert!(window.0.borrow()[0].is_some());
+
+        // Composition shows in the first field, then focus moves on.
+        let preedit = KeyInput::Preedit {
+            text: "か".into(),
+            cursor: Some((3, 3)),
+        };
+        assert!(app.press_key(preedit));
+        app.panes[0].preedit_owner = app.panes[0].focused;
+        assert_eq!(app.state().a.preedit(), Some("か"));
+        assert!(app.focus_next());
+        let App { state, panes, .. } = &mut app;
+        panes[0].drop_stale_preedit(state);
+        assert_eq!(app.state().a.preedit(), None);
+        assert_eq!(app.state().a.text(), "");
+        assert_eq!(app.panes[0].preedit_owner, None);
     }
 
     #[test]

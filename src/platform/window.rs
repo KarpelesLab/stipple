@@ -1,4 +1,4 @@
-use crate::geometry::{PhysicalSize, ScaleFactor, Size};
+use crate::geometry::{PhysicalSize, Rect, ScaleFactor, Size};
 use crate::platform::event::WindowId;
 use crate::render::{Color, Pixmap, Surface};
 
@@ -35,6 +35,23 @@ pub enum CursorIcon {
     NwseResize,
     /// Resize along the top-right to bottom-left diagonal.
     NeswResize,
+}
+
+/// What the input method needs to know about the focused text field, passed to
+/// [`Window::set_ime`] while one has keyboard focus.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImeState {
+    /// The caret (or, while composing, the start of the composition), in
+    /// window-relative logical pixels. The IME puts its candidate window next
+    /// to it.
+    pub cursor_area: Rect,
+    /// The field's text around the caret, without the preedit.
+    pub surrounding: String,
+    /// The caret, as a byte index into `surrounding`.
+    pub cursor: usize,
+    /// The other end of the selection (equal to `cursor` when nothing is
+    /// selected), as a byte index into `surrounding`.
+    pub anchor: usize,
 }
 
 /// A change to a running window, queued from anywhere with
@@ -251,6 +268,13 @@ pub trait Window {
     /// Set or clear the window icon (on macOS, the application's Dock icon).
     /// Default: a no-op.
     fn set_icon(&self, _icon: Option<&Pixmap>) {}
+
+    /// Enable the input method for a focused text field (`Some`), telling it
+    /// where the caret is, or disable it (`None`) when focus leaves text entry.
+    /// The App calls this after a frame when the state changed. Default: a
+    /// no-op. Implemented with `text-input-v3` on Wayland, IMM32 on Windows and
+    /// `NSTextInputClient` on macOS.
+    fn set_ime(&self, _state: Option<&ImeState>) {}
 }
 
 /// Scale `icon` down (by area averaging) so neither side exceeds `max` pixels,

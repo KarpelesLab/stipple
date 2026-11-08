@@ -144,6 +144,10 @@ pub struct Element {
     /// editable text leaf. `None` when there is no selection. Set via
     /// [`Element::selection`]; the focus overlay highlights it.
     pub selection: Option<(usize, usize)>,
+    /// Byte range `[start, end)` of input-method composition (preedit) text
+    /// shown inside this element's text, which the focus overlay underlines.
+    /// Set via [`Element::preedit`].
+    pub preedit: Option<(usize, usize)>,
     /// Text-pointer handle: pointer presses/drags on this element resolve to a
     /// byte index in its text. Set via [`Element::on_text_pos`].
     pub text_pos: Option<TextPosId>,
@@ -186,6 +190,7 @@ impl Element {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -208,6 +213,7 @@ impl Element {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -241,6 +247,7 @@ impl Element {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -265,6 +272,7 @@ impl Element {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -290,6 +298,7 @@ impl Element {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -526,6 +535,14 @@ impl Element {
     /// focus overlay highlights it. An empty or reversed range is ignored.
     pub fn selection(mut self, range: Option<(usize, usize)>) -> Self {
         self.selection = range.filter(|(s, e)| e > s);
+        self
+    }
+
+    /// Mark the byte range `[start, end)` of this text element that is
+    /// input-method composition (preedit) text, so the focus overlay underlines
+    /// it. An empty range is ignored.
+    pub fn preedit(mut self, range: Option<(usize, usize)>) -> Self {
+        self.preedit = range.filter(|(s, e)| e > s);
         self
     }
 

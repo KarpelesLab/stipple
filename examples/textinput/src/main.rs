@@ -13,7 +13,28 @@ struct Form {
     buffer: EditBuffer,
 }
 
+/// Print the text and composition when they change, with
+/// `STIPPLE_TEXTINPUT_ECHO` set, so CI can check what dead keys and compose
+/// sequences typed.
+fn echo(buffer: &EditBuffer) {
+    use std::sync::Mutex;
+    static LAST: Mutex<Option<(String, Option<String>)>> = Mutex::new(None);
+    if std::env::var_os("STIPPLE_TEXTINPUT_ECHO").is_none() {
+        return;
+    }
+    let now = (
+        buffer.text().to_string(),
+        buffer.preedit().map(str::to_string),
+    );
+    let mut last = LAST.lock().unwrap();
+    if last.as_ref() != Some(&now) {
+        println!("textinput: text={:?} preedit={:?}", now.0, now.1);
+        *last = Some(now);
+    }
+}
+
 fn view(state: &Form, cx: &mut Cx<Form>) -> Element {
+    echo(&state.buffer);
     let theme = *cx.theme();
     let field = text_editor(cx, &theme, &state.buffer, |s: &mut Form| &mut s.buffer)
         .width(560.0)

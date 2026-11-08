@@ -26,6 +26,7 @@
 #![allow(unsafe_code)]
 
 mod clipboard;
+mod text_input;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -644,54 +645,23 @@ fn keysym_name_to_event(name: &str, pressed: bool, modifiers: Modifiers) -> Opti
             modifiers,
         });
     }
-    // Printable: a one-character keysym name is the character itself, `UXXXX`
-    // a Unicode code point; otherwise the common named ASCII punctuation.
-    let ch = if name.chars().count() == 1 {
-        name.chars().next()
-    } else if let Some(hex) = name.strip_prefix('U')
-        && hex.len() >= 4
-        && let Ok(cp) = u32::from_str_radix(hex, 16)
-    {
-        char::from_u32(cp)
-    } else {
-        match name {
-            "space" => Some(' '),
-            "exclam" => Some('!'),
-            "quotedbl" => Some('"'),
-            "numbersign" => Some('#'),
-            "dollar" => Some('$'),
-            "percent" => Some('%'),
-            "ampersand" => Some('&'),
-            "apostrophe" => Some('\''),
-            "parenleft" => Some('('),
-            "parenright" => Some(')'),
-            "asterisk" => Some('*'),
-            "plus" => Some('+'),
-            "comma" => Some(','),
-            "minus" => Some('-'),
-            "period" => Some('.'),
-            "slash" => Some('/'),
-            "colon" => Some(':'),
-            "semicolon" => Some(';'),
-            "less" => Some('<'),
-            "equal" => Some('='),
-            "greater" => Some('>'),
-            "question" => Some('?'),
-            "at" => Some('@'),
-            "bracketleft" => Some('['),
-            "backslash" => Some('\\'),
-            "bracketright" => Some(']'),
-            "asciicircum" => Some('^'),
-            "underscore" => Some('_'),
-            "grave" => Some('`'),
-            "braceleft" => Some('{'),
-            "bar" => Some('|'),
-            "braceright" => Some('}'),
-            "asciitilde" => Some('~'),
-            _ => None,
-        }
-    };
+    // Printable: a one-character keysym name is the character itself; other
+    // names (`space`, `eacute`, `Cyrillic_a`, `UXXXX`, …) go through the
+    // keysym table.
+    let ch = crate::platform::compose::keysym_to_char(keysym_value(name)?);
     char_event(ch?, state, modifiers)
+}
+
+/// The keysym value of a keysym name as [`XkbKeymap::sym`] gives it: a
+/// one-character name is that character's keysym, anything else a name from
+/// the keysym table (`dead_acute`, `eacute`, `UXXXX`, …).
+fn keysym_value(name: &str) -> Option<u32> {
+    let mut chars = name.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if (c as u32) < 0x100 => Some(c as u32),
+        (Some(c), None) => Some(0x0100_0000 + c as u32),
+        _ => crate::platform::compose::keysym_from_name(name),
+    }
 }
 
 /// Map a keymap `fd` of `size` bytes (the `wl_keyboard.keymap` payload) and
@@ -735,6 +705,8 @@ struct WlConn {
     enter_serial: Option<u32>,
     /// The cursor the app asked for, re-applied on each `enter`.
     cursor: CursorIcon,
+    /// The seat's `zwp_text_input_v3`, when the compositor offers it.
+    text_input: text_input::TextInput,
 }
 
 impl WlConn {
@@ -762,6 +734,7 @@ impl WlConn {
             cursor_device: None,
             enter_serial: None,
             cursor: CursorIcon::Default,
+            text_input: text_input::TextInput::default(),
         })
     }
 
@@ -1115,6 +1088,9 @@ impl Window for WaylandWindow {
     fn set_clipboard(&self, text: &str) {
         clipboard::set_text(&mut self.conn.lock().unwrap(), text);
     }
+    fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
+        text_input::set_state(&mut self.conn.lock().unwrap(), state);
+    }
     fn set_cursor(&self, cursor: CursorIcon) {
         let mut conn = self.conn.lock().unwrap();
         conn.cursor = cursor;
@@ -1310,6 +1286,7 @@ where
     let mut output_names = Vec::new();
     let mut cursor_shape_name = None;
     let mut icon_manager_name = None;
+    let mut text_input_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1332,6 +1309,7 @@ where
                     }
                     "wp_cursor_shape_manager_v1" => cursor_shape_name = Some(name),
                     "xdg_toplevel_icon_manager_v1" => icon_manager_name = Some(name),
+                    text_input::MANAGER => text_input_name = Some(name),
                     _ => {}
                 }
             }
@@ -1393,6 +1371,11 @@ where
     if let (Some(seat), Some((name, version))) = (seat, data_manager) {
         let manager = bind(&mut conn, name, "wl_data_device_manager", version);
         clipboard::setup(&mut conn, manager, seat);
+    }
+    // Input methods go through the seat's text input.
+    if let (Some(seat), Some(name)) = (seat, text_input_name) {
+        let manager = bind(&mut conn, name, text_input::MANAGER, 1);
+        text_input::setup(&mut conn, manager, seat);
     }
 
     // Surface → xdg_surface → xdg_toplevel.
@@ -1480,6 +1463,8 @@ where
     let mut keymap: Option<XkbKeymap> = None;
     // The keyboard's modifier state (depressed | latched | locked xkb bits).
     let mut mods_mask = 0u32;
+    // Dead keys and compose sequences: the client's job on Wayland.
+    let mut compose = crate::platform::compose::ComposeState::default();
     // Wheel notches from `axis_discrete`, per axis, for the `axis` that follows.
     let mut discrete = [0i32; 2];
     // Toplevel sizes are in surface units; the buffer is that times the scale.
@@ -1511,6 +1496,17 @@ where
             }
             message
         };
+        // Input-method updates for the focused text field.
+        let ime = text_input::handle(&mut shared.lock().unwrap(), object, opcode, &args, surface);
+        if let Some(events) = ime {
+            if events
+                .into_iter()
+                .any(|ime| handler(Event::Ime(ime), &win) == ControlFlow::Exit)
+            {
+                break;
+            }
+            continue;
+        }
         // The compositor is ready for the next animation frame: it arrives as
         // a wake once this loop goes back to waiting.
         if frame_callback_done(object, opcode) {
@@ -1731,9 +1727,16 @@ where
             // Prefer the compositor's keymap (xkb keycode = evdev + 8); fall back
             // to the layout-independent evdev table when none was parsed.
             let modifiers = wl_modifiers(mods_mask, keymap.as_ref());
-            let ev = match keymap.as_ref().and_then(|m| m.sym(key + 8, mods_mask)) {
-                Some(sym) => keysym_name_to_event(sym, pressed, modifiers),
-                None => evdev_to_event(key, pressed, modifiers),
+            let sym = keymap.as_ref().and_then(|m| m.sym(key + 8, mods_mask));
+            let shortcut = modifiers.ctrl || modifiers.meta;
+            let composed = sym
+                .filter(|_| pressed)
+                .and_then(keysym_value)
+                .and_then(|ks| crate::platform::compose::feed_event(&mut compose, ks, shortcut));
+            let ev = match (composed, sym) {
+                (Some(ime), _) => Some(Event::Ime(ime)),
+                (None, Some(sym)) => keysym_name_to_event(sym, pressed, modifiers),
+                (None, None) => evdev_to_event(key, pressed, modifiers),
             };
             if let Some(ev) = ev {
                 dbg(format_args!("key {key} pressed={pressed} -> {ev:?}"));
@@ -2085,6 +2088,25 @@ xkb_symbols \"x\" {
             keysym_name_to_event("U20AC", true, Modifiers::default()),
             Some(Event::Text("\u{20ac}".into()))
         );
+        // Named Latin-1 and other legacy keysyms type their character too.
+        assert_eq!(
+            keysym_name_to_event("eacute", true, Modifiers::default()),
+            Some(Event::Text("é".into()))
+        );
+        assert_eq!(
+            keysym_name_to_event("Cyrillic_a", true, Modifiers::default()),
+            Some(Event::Text("а".into()))
+        );
+        // Dead keys type nothing by themselves: compose handles them.
+        assert_eq!(
+            keysym_name_to_event("dead_acute", true, Modifiers::default()),
+            None
+        );
+        // The values the compose table matches on.
+        assert_eq!(keysym_value("dead_acute"), Some(0xfe51));
+        assert_eq!(keysym_value("é"), Some(0xe9));
+        assert_eq!(keysym_value("€"), Some(0x0100_20ac));
+        assert_eq!(keysym_value("Multi_key"), Some(0xff20));
     }
 
     #[test]

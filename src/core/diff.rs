@@ -102,6 +102,7 @@ fn visuals_equal(a: &LayoutNode, b: &LayoutNode) -> bool {
         && a.content == b.content
         && a.caret == b.caret
         && a.selection == b.selection
+        && a.preedit == b.preedit
 }
 
 fn diff_node(old: &LayoutNode, new: &LayoutNode, out: &mut Vec<Rect>) {
@@ -175,6 +176,7 @@ mod tests {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -202,6 +204,7 @@ mod tests {
             context: None,
             caret: None,
             selection: None,
+            preedit: None,
             text_pos: None,
             wrap: false,
             native: None,

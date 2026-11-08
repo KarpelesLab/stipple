@@ -130,4 +130,31 @@ pub enum Event {
     },
     /// Committed text from the keyboard or IME (already composed).
     Text(String),
+    /// An input method (IME) or compose-sequence update: composition (preedit)
+    /// text to show at the caret, text to commit, or text to delete around the
+    /// caret. See `docs/ime.md`.
+    Ime(Ime),
+}
+
+/// An update from an input method (Chinese, Japanese and Korean IMEs, and dead
+/// keys and compose sequences, which Stipple runs as a tiny input method on
+/// X11 and Wayland).
+///
+/// While the user composes, the IME sends [`Preedit`](Ime::Preedit) text, which
+/// the focused text field shows underlined at the caret without making it part
+/// of its text; [`Commit`](Ime::Commit) replaces the preedit with final text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ime {
+    /// The composition in progress. An empty `text` ends it. `cursor` is the
+    /// byte range within `text` the IME highlights (equal ends for a plain
+    /// caret); `None` hides the caret.
+    Preedit {
+        text: String,
+        cursor: Option<(usize, usize)>,
+    },
+    /// Final text: clears the preedit and inserts `text` at the caret.
+    Commit(String),
+    /// Delete `before` bytes before the caret and `after` bytes after it (the
+    /// preedit not counted), as Wayland's `text-input-v3` asks some IMEs to.
+    DeleteSurrounding { before: usize, after: usize },
 }

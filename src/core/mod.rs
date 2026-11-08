@@ -30,6 +30,7 @@ mod diff;
 mod element;
 mod handle;
 pub(crate) mod highlight;
+mod ime;
 mod pointer;
 mod render;
 pub mod runtime;
@@ -41,6 +42,7 @@ pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverri
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use handle::runtime;
 pub use handle::{AppHandle, TimerId};
+pub use ime::{ime_state, paint_preedit};
 pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};
 pub use render::caret_index_at;

@@ -344,6 +344,7 @@ mod tests {
             cursor_device: None,
             enter_serial: None,
             cursor: Default::default(),
+            text_input: Default::default(),
         };
         (conn, theirs)
     }

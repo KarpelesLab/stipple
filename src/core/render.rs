@@ -338,6 +338,7 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
         context: el.context,
         caret: el.caret,
         selection: el.selection,
+        preedit: el.preedit,
         text_pos: el.text_pos,
         wrap: el.wrap,
         native: el.native,

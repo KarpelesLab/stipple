@@ -25,6 +25,10 @@ pub mod access;
 pub mod backend;
 /// The system clipboard (plain text) on Windows, macOS and iOS.
 pub mod clipboard;
+/// Dead keys and compose sequences from the libX11 Compose file (X11 and
+/// Wayland, where composing is the client's job).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) mod compose;
 /// Native file dialogs (open/save/folder) backed by each OS's picker.
 pub mod dialog;
 mod error;
@@ -33,6 +37,9 @@ mod event;
 pub mod frame;
 /// Key and scroll translation tables shared by the native backends.
 mod input;
+/// X11 keysym names and their Unicode characters (generated table).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod keysyms;
 /// OS-drawn controls and system appearance for the native theme.
 pub mod native;
 mod pointer;
@@ -59,9 +66,11 @@ mod window;
 
 pub use access::{A11yNode, A11yRole};
 pub use error::PlatformError;
-pub use event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, ScrollDelta, WindowId};
+pub use event::{
+    ButtonState, Event, Ime, KeyCode, Modifiers, PointerButton, ScrollDelta, WindowId,
+};
 pub use pointer::{pointer_modifiers, set_pointer_modifiers};
-pub use window::{CursorIcon, Window, WindowAttributes, WindowRequest};
+pub use window::{CursorIcon, ImeState, Window, WindowAttributes, WindowRequest};
 
 /// What a window should do after the application handles an event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

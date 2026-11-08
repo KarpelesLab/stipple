@@ -16,12 +16,14 @@
 #![forbid(unsafe_code)]
 
 mod number;
+mod preedit;
 mod select;
 mod split;
 mod toast;
 mod toolbar;
 
 pub use number::{NumberInput, number_input};
+pub use preedit::DisplayText;
 pub use select::{Select, select};
 pub use split::{SplitPane, split_pane};
 pub use toast::{Toast, ToastId, ToastKind, Toasts, toasts};
@@ -301,11 +303,16 @@ pub struct EditBuffer {
     /// The paragraph direction, for drawing and for which way Left and Right
     /// move the caret.
     direction: TextDirection,
+    /// Input-method composition shown at the caret (not part of `text`).
+    preedit: Option<preedit::Preedit>,
 }
 
 impl PartialEq for EditBuffer {
     fn eq(&self, other: &Self) -> bool {
-        self.text == other.text && self.caret == other.caret && self.anchor == other.anchor
+        self.text == other.text
+            && self.caret == other.caret
+            && self.anchor == other.anchor
+            && self.preedit == other.preedit
     }
 }
 
@@ -403,6 +410,7 @@ impl EditBuffer {
             anchor: None,
             history: History::default(),
             direction: TextDirection::Auto,
+            preedit: None,
         }
     }
 
@@ -918,7 +926,11 @@ impl EditBuffer {
     /// caret. Enter/Escape are ignored (single-line).
     pub fn apply(&mut self, input: &KeyInput) {
         match input {
-            KeyInput::Text(t) => self.insert(t),
+            KeyInput::Text(t) => self.commit_text(t),
+            KeyInput::Preedit { text, cursor } => self.set_preedit(text, *cursor),
+            KeyInput::DeleteSurrounding { before, after } => {
+                self.delete_surrounding(*before, *after)
+            }
             KeyInput::Backspace => self.backspace(),
             KeyInput::Delete => self.delete(),
             KeyInput::Left => self.move_left(),
@@ -1059,19 +1071,14 @@ pub fn text_editor<S>(
     buffer: &EditBuffer,
     field: impl Fn(&mut S) -> &mut EditBuffer + Copy + 'static,
 ) -> Element {
-    // A leading space keeps an empty field from collapsing to zero height; the
-    // caret then sits at index 0 of that placeholder.
-    let shown = if buffer.is_empty() {
-        String::from(" ")
-    } else {
-        buffer.text().to_string()
-    };
+    let shown = buffer.display();
     // The text fills the field so right-to-left lines can sit at its right edge.
-    let text = Element::text(shown, theme.font_size, theme.palette.text)
+    let text = Element::text(placeholder(shown.text), theme.font_size, theme.palette.text)
         .direction(buffer.direction())
         .grow(1.0)
-        .caret(buffer.caret())
-        .selection(buffer.selection());
+        .caret(shown.caret)
+        .selection(shown.selection)
+        .preedit(shown.preedit);
     Element::stack(Axis::Horizontal, vec![text])
         .fill(theme.palette.surface)
         .radius(theme.radius)
@@ -1087,12 +1094,23 @@ pub fn text_editor<S>(
         })
         .on_text_pos(cx, move |s, index, extend| {
             let b = field(s);
+            let index = b.display_to_text(index);
             if extend {
                 b.extend_to(index);
             } else {
                 b.place_caret(index);
             }
         })
+}
+
+/// The text a field shows: a lone space for an empty one, which keeps it from
+/// collapsing to zero height (the caret then sits at index 0 of it).
+fn placeholder(text: String) -> String {
+    if text.is_empty() {
+        String::from(" ")
+    } else {
+        text
+    }
 }
 
 /// A multi-line editable text area backed by an [`EditBuffer`]: the same
@@ -1106,17 +1124,14 @@ pub fn text_area<S>(
     buffer: &EditBuffer,
     field: impl Fn(&mut S) -> &mut EditBuffer + Copy + 'static,
 ) -> Element {
-    let shown = if buffer.is_empty() {
-        String::from(" ")
-    } else {
-        buffer.text().to_string()
-    };
+    let shown = buffer.display();
     // The text fills the field so right-to-left lines can sit at its right edge.
-    let text = Element::text(shown, theme.font_size, theme.palette.text)
+    let text = Element::text(placeholder(shown.text), theme.font_size, theme.palette.text)
         .direction(buffer.direction())
         .grow(1.0)
-        .caret(buffer.caret())
-        .selection(buffer.selection());
+        .caret(shown.caret)
+        .selection(shown.selection)
+        .preedit(shown.preedit);
     Element::stack(Axis::Horizontal, vec![text])
         .fill(theme.palette.surface)
         .radius(theme.radius)
@@ -1129,6 +1144,7 @@ pub fn text_area<S>(
         .on_key(cx, move |s, k| field(s).apply(k))
         .on_text_pos(cx, move |s, index, extend| {
             let b = field(s);
+            let index = b.display_to_text(index);
             if extend {
                 b.extend_to(index);
             } else {
