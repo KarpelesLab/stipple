@@ -343,6 +343,84 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
+  # Right-to-left and bidirectional text: bididemo shows Hebrew, Arabic and
+  # mixed lines (DejaVu Sans has both scripts, Arabic with its presentation
+  # forms), a wrapped right-to-left paragraph and two editors. Check that the
+  # right-to-left rows are inked on the right and blank on the left (and the
+  # left-to-right row the other way round), then click into the mixed editor
+  # and Shift+Right across the direction change: the frame must change (caret
+  # and selection drawn).
+  visual-bidi:
+    name: Visual test (Bidi text / X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, ImageMagick, xdotool, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
+
+      - name: Build the bidi demo
+        run: cargo build --release -p bididemo
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 -noreset &
+          echo "XVFB_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Launch the bidi demo, check the rows, select across runs
+        env:
+          DISPLAY: ":99"
+        run: |
+          mkdir -p visual_output
+          ./target/release/bididemo > visual_output/bidi.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          import -window root visual_output/root.png
+          # The window (640x480) sits at the root top-left.
+          convert visual_output/root.png -crop 640x480+0+0 +repage visual_output/stipple-x11-bidi.png
+          # Row k spans y = 24 + 36k, 28 high; left region x 24..224, right
+          # 416..616 (the demo's unit test pins these).
+          region() { convert visual_output/stipple-x11-bidi.png -crop "200x28+$1+$((24 + 36 * $2))" +repage -format '%k' info:; }
+          echo "row 1 (LTR): left=$(region 24 1) right=$(region 416 1)"
+          [ "$(region 24 1)" -gt 2 ]
+          [ "$(region 416 1)" -eq 1 ]
+          for k in 2 3 4; do
+            echo "row $k (RTL): left=$(region 24 $k) right=$(region 416 $k)"
+            [ "$(region 24 $k)" -eq 1 ]
+            [ "$(region 416 $k)" -gt 2 ]
+          done
+          # Click at the start of the mixed editor, then select rightwards across
+          # "abc " into the Hebrew; the caret and highlight must appear.
+          xdotool mousemove 34 257 click 1
+          sleep 0.5
+          for i in 1 2 3 4 5 6; do xdotool key shift+Right; sleep 0.1; done
+          sleep 1
+          import -window root visual_output/root2.png
+          convert visual_output/root2.png -crop 640x480+0+0 +repage visual_output/stipple-x11-bidi-select.png
+          diff_px=$(compare -metric AE visual_output/stipple-x11-bidi.png \
+            visual_output/stipple-x11-bidi-select.png null: 2>&1 || true)
+          echo "pixels changed by the selection: $diff_px"
+          [ "${diff_px%%.*}" -gt 100 ]
+
+      - name: Stop the app and Xvfb
+        if: always()
+        run: |
+          [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      - name: Upload screenshots + log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-bidi-screenshot
+          path: visual_output/*
+          if-no-files-found: warn
+
   # Virtualized table and tree: the tabledemo shows a 10,000-row table (only
   # the visible rows are built) next to a tree. Screenshot it, check the table
   # body holds rendered text, then wheel-scroll the table and click a header to
@@ -2026,6 +2104,7 @@ jobs:
       - visual-gpu
       - visual-themes
       - visual-material3
+      - visual-bidi
       - interaction-x11
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:
@@ -2058,7 +2137,7 @@ jobs:
                       stipple-macos stipple-web stipple-gpu stipple-themes \
                       stipple-material3 stipple-x11-clicks stipple-x11-textinput \
                       stipple-windows-native stipple-macos-native stipple-ios-native \
-                      stipple-x11-native; do
+                      stipple-x11-native stipple-x11-bidi; do
             found=$(find artifacts -name "$name.png" | head -n 1)
             if [ -n "$found" ]; then cp "$found" "docs/screenshots/$name.png"; else echo "missing: $name"; fi
           done

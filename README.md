@@ -169,6 +169,7 @@ cargo run -p filedialog    # native file dialog (portal, IFileDialog, NSOpenPane
 cargo run -p themegallery  # one card under four themes (writes .raw files)
 cargo run -p material3demo # Material 3 baseline + dynamic-color themes
 cargo run -p imagedemo     # PNG and SVG images, and the fit modes
+cargo run -p bididemo      # Hebrew, Arabic and mixed right-to-left text
 ```
 
 Each opens a real native window via `App::run` (Wayland, then X11, on Linux;

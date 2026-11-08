@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `webdemo` shows a spinner, timers, a text editor and file buttons, and its
   `index.html#selftest` checks them in headless Chrome in CI.
 
+- Right-to-left and bidirectional text, through `oxideav-scribe`'s Unicode
+  Bidirectional Algorithm: labels, paragraphs and editors lay out Hebrew,
+  Arabic and mixed lines in visual order, with the paragraph direction detected
+  from the first strong character or set with `Element::direction` /
+  `TextDirection`; right-to-left paragraphs align right and wrap correctly.
+  In `EditBuffer`, Left and Right move visually, selections in mixed text show
+  as several rectangles, and clicks map to logical positions. New
+  `Font::layout` / `TextLayout` (caret positions, hit-testing, selection
+  rectangles) and `Scene::fill_layout`. See `docs/bidi.md` and
+  `examples/bididemo`.
 - System clipboard on Wayland, through `wl_data_device`.
 - Following dark mode and accent-color changes while the app runs, on Windows,
   macOS and Linux: `Event::ThemeChanged`, `Window::set_dark` and

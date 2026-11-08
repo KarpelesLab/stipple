@@ -21,6 +21,10 @@ following each platform.
 | Undo | Ctrl+Z | Cmd+Z |
 | Redo | Ctrl+Y or Ctrl+Shift+Z | Cmd+Shift+Z |
 
+Left and Right move the caret visually, so in right-to-left text Left moves
+forward through the text; word movement, Home and End follow the text's logical
+order. See [Right-to-left and bidirectional text](bidi.md).
+
 A word is a run of letters and digits (in any script) and underscores; a run of
 punctuation counts as a word of its own, and whitespace separates words. Moving
 right stops at the end of a word, moving left at its start.

@@ -851,7 +851,13 @@ Most input only works on X11 today.
 - ⬜ Dead keys and compose sequences.
 - ✅ Undo and redo, word-wise movement and deletion, double-click to select a word
   (triple-click selects the line). See [docs/text-editing.md](docs/text-editing.md).
-- ⬜ Right-to-left and bidirectional text, from `oxideav-scribe`'s bidi support.
+- ✅ Right-to-left and bidirectional text, from `oxideav-scribe`'s bidi support:
+  UAX #9 per paragraph (auto-detected or `Element::direction`), runs shaped in
+  logical order and placed in visual order, Arabic joining, right-aligned and
+  wrapped right-to-left paragraphs, visual caret movement, multi-rectangle
+  selections and hit-testing in mixed text. CI screenshots `bididemo` on X11.
+  See [docs/bidi.md](docs/bidi.md).
+- ⬜ Mirrored layouts for right-to-left UIs (row order, start/end alignment).
 
 #### 7d — OS integration
 - ✅ System clipboard on Windows (`CF_UNICODETEXT`), macOS (`NSPasteboard`) and

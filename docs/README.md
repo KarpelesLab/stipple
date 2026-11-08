@@ -36,6 +36,7 @@ How to build, package and run on each platform, and what works there today.
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ✅ ¹² |
+| Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -67,6 +68,9 @@ clipboard on its own. CI round-trips text with synthetic clipboard events.
 `save_file_contents` (a download). `open_file` and friends return `None`, since
 a page never sees paths. CI checks both with the picker and download stood in
 for. See [the web page](platforms/web.md#file-dialogs).
+¹⁵ Laid out by the shared CPU text path, so the same everywhere; CI screenshots
+`bididemo` on X11. Editing it needs keyboard input, so not on iOS and Android
+yet. See [bidi.md](bidi.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -79,6 +83,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
+- [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, and editing them
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop
 - [Window control and cursors](windows-and-cursors.md): size limits, maximize, fullscreen, the icon, and cursor shapes
