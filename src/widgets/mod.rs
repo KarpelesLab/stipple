@@ -33,7 +33,7 @@ pub use toast::{Toast, ToastId, ToastKind, Toasts, toasts};
 pub use toolbar::{tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar};
 
 use crate::core::{
-    Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Track, ViewportId,
+    Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Role, Track, ViewportId,
 };
 use crate::geometry::{Insets, Point};
 use crate::platform::native::{self, NativeControl};
@@ -1167,7 +1167,8 @@ pub fn checkbox<S>(
     let control = NativeControl::Checkbox { checked };
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
-            .on_tap(cx, on_toggle);
+            .on_tap(cx, on_toggle)
+            .checked(checked);
     }
     let mark = if checked {
         vec![Element::text(
@@ -1190,6 +1191,9 @@ pub fn checkbox<S>(
         .height(22.0)
         .align(Align::Center, Align::Center)
         .on_tap(cx, on_toggle)
+        .checked(checked)
+        // Not named by its check mark; the label next to it names it.
+        .a11y_label("")
 }
 
 /// An on/off switch: a pill track with a knob that sits right when `on`
@@ -1204,7 +1208,9 @@ pub fn switch<S>(
     let control = NativeControl::Switch { on };
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
-            .on_tap(cx, on_toggle);
+            .on_tap(cx, on_toggle)
+            .role(Role::Switch)
+            .checked(on);
     }
     let knob = Element::boxed(BoxStyle {
         fill: Some(Color::WHITE),
@@ -1230,6 +1236,8 @@ pub fn switch<S>(
         .padding(Insets::uniform(3.0))
         .align(Align::Start, Align::Center)
         .on_tap(cx, on_toggle)
+        .role(Role::Switch)
+        .checked(on)
 }
 
 /// A horizontal slider with `value` in 0..=1. Dragging anywhere on the track

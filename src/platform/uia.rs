@@ -178,6 +178,12 @@ fn control_type(role: A11yRole) -> i32 {
         A11yRole::MenuBar => UIA_MenuBarControlTypeId,
         A11yRole::Menu => UIA_MenuControlTypeId,
         A11yRole::MenuItem => UIA_MenuItemControlTypeId,
+        // Not named to UIA yet: the closest control type above.
+        A11yRole::ComboBox | A11yRole::CheckBox | A11yRole::Switch => UIA_ButtonControlTypeId,
+        A11yRole::SpinButton => UIA_EditControlTypeId,
+        A11yRole::Splitter | A11yRole::Toolbar | A11yRole::Separator | A11yRole::Alert => {
+            UIA_GroupControlTypeId
+        }
     }
 }
 
@@ -566,18 +572,11 @@ unsafe fn dump(p: *mut c_void, depth: usize) {
 pub fn selftest(name: &str) -> Result<(), String> {
     fn leaf(role: A11yRole, name: &str, focused: bool) -> A11yNode {
         A11yNode {
-            role,
-            name: name.to_string(),
-            bounds: (0.0, 0.0, 0.0, 0.0),
             focused,
-            children: Vec::new(),
+            ..A11yNode::new(role, name, (0.0, 0.0, 0.0, 0.0))
         }
     }
     let root = A11yNode {
-        role: A11yRole::Window,
-        name: name.to_string(),
-        bounds: (0.0, 0.0, 360.0, 240.0),
-        focused: false,
         children: vec![
             leaf(A11yRole::Text, "Welcome to Stipple", false),
             leaf(A11yRole::TextField, "Name", true),
@@ -586,6 +585,7 @@ pub fn selftest(name: &str) -> Result<(), String> {
                 ..leaf(A11yRole::Group, "", false)
             },
         ],
+        ..A11yNode::new(A11yRole::Window, name, (0.0, 0.0, 360.0, 240.0))
     };
     let tree = UiaTree::build(&root);
     let p = tree.root_provider();

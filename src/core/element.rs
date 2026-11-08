@@ -666,6 +666,15 @@ impl Element {
         self
     }
 
+    /// Mark this element checked (on) or not for assistive technologies.
+    /// Implies [`Role::CheckBox`] if no role was declared.
+    pub fn checked(mut self, checked: bool) -> Self {
+        let sem = self.semantics.get_or_insert_with(Semantics::default);
+        sem.role.get_or_insert(Role::CheckBox);
+        sem.checked = Some(checked);
+        self
+    }
+
     /// How an image element places its image in its box. No effect on other
     /// elements.
     pub fn fit(mut self, mode: ImageFit) -> Self {

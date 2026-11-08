@@ -677,6 +677,10 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
         MenuBar => "AXMenuBar",
         Menu => "AXMenu",
         MenuItem => "AXMenuItem",
+        // Not named to NSAccessibility yet: the closest role above.
+        ComboBox | CheckBox | Switch => "AXButton",
+        SpinButton => "AXTextField",
+        Splitter | Toolbar | Separator | Alert => "AXGroup",
     }
 }
 

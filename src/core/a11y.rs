@@ -17,8 +17,9 @@
 //! a toolbar) declare them with [`Element::role`](crate::core::Element::role),
 //! [`a11y_label`](crate::core::Element::a11y_label) (a name for an element
 //! with no text, such as an icon button),
-//! [`selected`](crate::core::Element::selected) and
-//! [`expanded`](crate::core::Element::expanded); a declared role wins over the
+//! [`selected`](crate::core::Element::selected),
+//! [`expanded`](crate::core::Element::expanded) and
+//! [`checked`](crate::core::Element::checked); a declared role wins over the
 //! inferred one.
 
 use crate::core::runtime::{FocusId, LayoutNode, NodeContent, first_text};
@@ -59,6 +60,10 @@ pub enum Role {
     ComboBox,
     /// A numeric field with increment and decrement steps.
     SpinButton,
+    /// A box that is checked or not (see [`Semantics::checked`]).
+    CheckBox,
+    /// An on/off switch (see [`Semantics::checked`]).
+    Switch,
     /// A draggable divider between two resizable panes.
     Splitter,
     /// A row of command buttons.
@@ -101,8 +106,9 @@ impl Role {
 /// the inferred one, a name overriding its text, and item state. Set via
 /// [`Element::role`](crate::core::Element::role),
 /// [`a11y_label`](crate::core::Element::a11y_label),
-/// [`selected`](crate::core::Element::selected) and
-/// [`expanded`](crate::core::Element::expanded).
+/// [`selected`](crate::core::Element::selected),
+/// [`expanded`](crate::core::Element::expanded) and
+/// [`checked`](crate::core::Element::checked).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Semantics {
     /// The role to report, instead of the inferred one.
@@ -114,6 +120,9 @@ pub struct Semantics {
     /// For an expandable item, whether it is expanded; `None` if it can't
     /// expand.
     pub expanded: Option<bool>,
+    /// For a checkbox or switch, whether it is checked (on); `None` if it
+    /// can't be checked.
+    pub checked: Option<bool>,
 }
 
 impl Semantics {
@@ -139,6 +148,8 @@ pub struct AccessNode {
     pub selected: bool,
     /// Whether this item is expanded, if it can expand.
     pub expanded: Option<bool>,
+    /// Whether this checkbox or switch is checked, if it can be.
+    pub checked: Option<bool>,
     pub children: Vec<AccessNode>,
 }
 
@@ -207,6 +218,7 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         focused: node.focus.is_some() && node.focus == focused,
         selected: node.semantics.as_ref().is_some_and(|s| s.selected),
         expanded: node.semantics.as_ref().and_then(|s| s.expanded),
+        checked: node.semantics.as_ref().and_then(|s| s.checked),
         children,
     }
 }

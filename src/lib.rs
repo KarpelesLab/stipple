@@ -1694,11 +1694,14 @@ impl<S: 'static> App<S> {
                 Role::MenuBar => A11yRole::MenuBar,
                 Role::Menu => A11yRole::Menu,
                 Role::MenuItem => A11yRole::MenuItem,
-                // The OS bridges don't have these roles yet; report the
-                // closest one they do.
-                Role::ComboBox => A11yRole::Button,
-                Role::SpinButton => A11yRole::TextField,
-                Role::Splitter | Role::Toolbar | Role::Separator | Role::Alert => A11yRole::Group,
+                Role::ComboBox => A11yRole::ComboBox,
+                Role::SpinButton => A11yRole::SpinButton,
+                Role::CheckBox => A11yRole::CheckBox,
+                Role::Switch => A11yRole::Switch,
+                Role::Splitter => A11yRole::Splitter,
+                Role::Toolbar => A11yRole::Toolbar,
+                Role::Separator => A11yRole::Separator,
+                Role::Alert => A11yRole::Alert,
             };
             crate::platform::A11yNode {
                 role,
@@ -1710,6 +1713,9 @@ impl<S: 'static> App<S> {
                     node.bounds.height(),
                 ),
                 focused: node.focused,
+                selected: node.selected,
+                expanded: node.expanded,
+                checked: node.checked,
                 children: node.children.iter().map(to_platform_a11y).collect(),
             }
         }
