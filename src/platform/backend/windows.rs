@@ -23,13 +23,17 @@ use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, WindowId};
 use crate::platform::input;
-use crate::platform::menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem};
+use crate::platform::menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray};
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
 /// Pacing animation frames by the compositor (`DwmFlush`).
 mod ime;
+/// The notification-area icon and notification balloons.
+mod tray;
 mod vsync;
+
+pub(crate) use tray::notify;
 
 // ---- Win32 type aliases -----------------------------------------------------
 
@@ -381,6 +385,8 @@ struct WinCtx {
     utf16: input::Utf16Joiner,
     /// The window's menu bar (`HMENU`), destroyed when replaced.
     menu: usize,
+    /// The tray icon's menu and icon.
+    tray: tray::TrayState,
 }
 
 /// Physical pixels per logical pixel for the window's current display.
@@ -764,6 +770,9 @@ fn icon_bits(rgba: &[u8], w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
 }
 
 unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult {
+    if tray::taskbar_created(hwnd, msg) {
+        return 0;
+    }
     match msg {
         WM_SETCURSOR if (lp & 0xffff) as u16 == HTCLIENT => {
             let id = CTX.with(|c| cursor_id(c.borrow().cursor));
@@ -980,11 +989,16 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             push_event(Event::MenuCommand((wp & 0xffff) as u32));
             0
         }
+        tray::WM_APP_TRAY => {
+            tray::callback(hwnd, wp, lp);
+            0
+        }
         WM_CLOSE => {
             push_event(Event::CloseRequested);
             0
         }
         WM_DESTROY => {
+            tray::remove_all(hwnd);
             unsafe { PostQuitMessage(0) };
             0
         }
@@ -1075,12 +1089,16 @@ impl Window for WinWindow {
     fn popup_menu(&self, menu: &NativeMenu, at: crate::geometry::Point) -> MenuPopup {
         popup_menu(self.hwnd, menu, at)
     }
+    fn set_tray(&self, tray: Option<&NativeTray>) -> bool {
+        tray::set_tray(self.hwnd, tray)
+    }
     fn set_icon(&self, icon: Option<&crate::render::Pixmap>) {
         let new = icon.map_or(std::ptr::null_mut(), create_icon);
         unsafe {
             SendMessageW(self.hwnd, WM_SETICON, ICON_BIG, new as Lparam);
             SendMessageW(self.hwnd, WM_SETICON, ICON_SMALL, new as Lparam);
         }
+        tray::set_app_icon(new);
         let old = CTX.with(|c| std::mem::replace(&mut c.borrow_mut().icon, new as usize));
         if old != 0 {
             unsafe { DestroyIcon(old as Handle) };
@@ -1187,6 +1205,7 @@ where
     if hwnd.is_null() {
         return Err(PlatformError::Os("CreateWindowExW failed".into()));
     }
+    tray::install(hwnd);
     // The window may have opened on a display with a different DPI to the system's.
     CTX.with(|c| c.borrow_mut().dpi = unsafe { GetDpiForWindow(hwnd) });
     if let Some(dark) = attrs.dark {

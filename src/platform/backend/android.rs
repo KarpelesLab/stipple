@@ -786,6 +786,11 @@ pub(crate) fn set_clipboard_text(text: &str) -> bool {
         .is_some()
 }
 
+/// Open `url` in the app that handles it, through an `ACTION_VIEW` intent.
+pub(crate) fn open_url(url: &str) -> bool {
+    with_activity(|a| unsafe { jni::open_url(a.vm, a.clazz, url) }.then_some(())).is_some()
+}
+
 // ---- The frame clock: AChoreographer -----------------------------------------
 
 /// Animation frames from `AChoreographer`, resolved at run time: it appeared

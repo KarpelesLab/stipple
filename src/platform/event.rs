@@ -143,6 +143,10 @@ pub enum Event {
     /// The user picked the item with this id from the native menu bar (see
     /// [`Window::set_menu_bar`](crate::platform::Window::set_menu_bar)).
     MenuCommand(u32),
+    /// The user clicked the tray icon (see
+    /// [`Window::set_tray`](crate::platform::Window::set_tray)); its menu
+    /// items arrive as [`MenuCommand`](Event::MenuCommand)s instead.
+    TrayActivated,
 }
 
 /// An update from an input method (Chinese, Japanese and Korean IMEs, and dead

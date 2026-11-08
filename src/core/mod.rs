@@ -44,7 +44,7 @@ pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverri
 pub use handle::runtime;
 pub use handle::{AppHandle, TimerId};
 pub use ime::{ime_state, paint_preedit};
-pub use menu::{Menu, MenuBar, MenuItem, Shortcut};
+pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
 pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};
 pub use render::caret_index_at;

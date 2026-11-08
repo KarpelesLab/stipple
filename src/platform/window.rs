@@ -296,6 +296,14 @@ pub trait Window {
     ) -> crate::platform::menu::MenuPopup {
         crate::platform::menu::MenuPopup::Unsupported
     }
+    /// Show `tray` as the application's tray icon, replacing any earlier one,
+    /// or remove it (`None`). Picking one of its menu items delivers
+    /// [`Event::MenuCommand`](crate::platform::Event::MenuCommand) and clicking
+    /// the icon [`Event::TrayActivated`](crate::platform::Event::TrayActivated).
+    /// Returns whether the platform shows it. Default: `false`.
+    fn set_tray(&self, _tray: Option<&crate::platform::menu::NativeTray>) -> bool {
+        false
+    }
     /// Whether a text input has keyboard focus, so a touch platform can show
     /// its on-screen keyboard (and hide it again). The app calls this after
     /// each frame it presents. Default: a no-op. Honored on Android.

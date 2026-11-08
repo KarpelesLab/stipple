@@ -170,6 +170,30 @@ impl<S> AppHandle<S> {
         wake::wake();
     }
 
+    /// Open `url` in the user's default app for it (a browser for `https:`, the
+    /// file's app for `file:`). See
+    /// [`platform::open_url`](crate::platform::open_url).
+    pub fn open_url(&self, url: &str) -> Result<(), crate::platform::PlatformError> {
+        crate::platform::open_url(url)
+    }
+
+    /// Show a desktop notification. See
+    /// [`platform::notify`](crate::platform::notify).
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// # struct State;
+    /// # fn f(handle: AppHandle<State>) {
+    /// let _ = handle.notify(&Notification::new("Export finished").body("report.pdf"));
+    /// # }
+    /// ```
+    pub fn notify(
+        &self,
+        notification: &crate::platform::Notification,
+    ) -> Result<(), crate::platform::PlatformError> {
+        crate::platform::notify(notification)
+    }
+
     /// Take the window changes queued by [`window`](Self::window).
     pub(crate) fn take_window_requests(&self) -> Vec<WindowRequest> {
         self.with(|s| std::mem::take(&mut s.window))

@@ -1,6 +1,7 @@
 //! Just enough hand-written JNI to reach the few Java APIs the NDK doesn't
 //! cover: the clipboard (`ClipboardManager`), the character a key types
-//! (`KeyCharacterMap`) and the system accent color (`Resources.getColor`).
+//! (`KeyCharacterMap`), the system accent color (`Resources.getColor`) and
+//! opening URLs (`Intent.ACTION_VIEW`).
 //!
 //! `JavaVM` and `JNIEnv` are pointers to function tables whose layout is fixed
 //! by the JNI specification, so each function is read from its index in the
@@ -37,6 +38,7 @@ const FIND_CLASS: usize = 6;
 const EXCEPTION_CLEAR: usize = 17;
 const PUSH_LOCAL_FRAME: usize = 19;
 const POP_LOCAL_FRAME: usize = 20;
+const NEW_OBJECT_A: usize = 30;
 const GET_OBJECT_CLASS: usize = 31;
 const GET_METHOD_ID: usize = 33;
 const CALL_OBJECT_METHOD_A: usize = 36;
@@ -569,5 +571,43 @@ pub(super) unsafe fn accent_color(vm: *mut c_void, context: JObject, dark: bool)
             )?;
             Some(color as u32)
         })
+    }
+}
+
+/// Open `url` with whatever handles it: `startActivity(new
+/// Intent(ACTION_VIEW, Uri.parse(url)))`, in a new task. `false` when no
+/// activity can (`ActivityNotFoundException`) or the URL doesn't parse.
+pub(super) unsafe fn open_url(vm: *mut c_void, activity: JObject, url: &str) -> bool {
+    unsafe {
+        with_env(vm, |jni| {
+            let s = jni.string(url)?;
+            let uri = jni.call_static_object(
+                c"android/net/Uri",
+                c"parse",
+                c"(Ljava/lang/String;)Landroid/net/Uri;",
+                &[JValue { l: s }],
+            )?;
+            let action = jni.string("android.intent.action.VIEW")?;
+            let class = jni.find_class(c"android/content/Intent")?;
+            let init = jni.method(class, c"<init>", c"(Ljava/lang/String;Landroid/net/Uri;)V")?;
+            let new_object: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> JObject =
+                std::mem::transmute(jni.f(NEW_OBJECT_A));
+            let args = [JValue { l: action }, JValue { l: uri }];
+            let intent = jni.ok(new_object(jni.0, class, init, args.as_ptr()))?;
+            // FLAG_ACTIVITY_NEW_TASK.
+            jni.call_object(
+                intent,
+                c"addFlags",
+                c"(I)Landroid/content/Intent;",
+                &[JValue { i: 0x1000_0000 }],
+            )?;
+            jni.call_void(
+                activity,
+                c"startActivity",
+                c"(Landroid/content/Intent;)V",
+                &[JValue { l: intent }],
+            )
+        })
+        .is_some()
     }
 }

@@ -1039,6 +1039,9 @@ impl Window for X11Window {
     fn id(&self) -> WindowId {
         WindowId(self.window as u64)
     }
+    fn set_tray(&self, tray: Option<&crate::platform::NativeTray>) -> bool {
+        crate::platform::shell::sni::set_tray(tray)
+    }
     fn inner_size(&self) -> PhysicalSize {
         self.size
     }

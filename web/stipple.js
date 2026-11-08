@@ -32,6 +32,9 @@
 //   pickFile  async (accept) => File | null, in place of the <input type=file>
 //             picker (tests use it).
 //   saveFile  (name, blob) => void, in place of downloading the blob.
+//   openUrl   (url) => void, in place of window.open (stipple::platform::open_url).
+//   notify    (title, body) => void, in place of the Notification API
+//             (stipple::platform::notify).
 //
 // Returns { exports, stats, canvas, overlay, input, colorScheme }: `stats`
 // counts presents, animation frames, timer wakes and accessibility-tree
@@ -242,6 +245,16 @@ export async function start(canvas, wasmUrl, options = {}) {
     }
   };
 
+  const openUrl = options.openUrl ?? ((url) => window.open(url, "_blank", "noopener"));
+  const notify = options.notify ?? ((title, body) => {
+    if (typeof Notification === "undefined") return console.warn("no Notification API");
+    const show = () => new Notification(title, { body });
+    if (Notification.permission === "granted") return show();
+    if (Notification.permission !== "denied") {
+      Notification.requestPermission().then((p) => { if (p === "granted") show(); });
+    }
+  });
+
   const imports = {
     stipple: {
       now: () => performance.now(),
@@ -314,6 +327,8 @@ export async function start(canvas, wasmUrl, options = {}) {
         // A touch keyboard only while a text field has focus.
         input.setAttribute("inputmode", active ? "text" : "none");
       },
+      open_url(ptr, len) { openUrl(str(ptr, len)); },
+      notify(tp, tl, bp, bl) { notify(str(tp, tl), str(bp, bl)); },
     },
   };
 

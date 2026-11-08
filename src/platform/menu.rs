@@ -309,6 +309,25 @@ pub enum MenuPopup {
     Picked(u32),
 }
 
+/// The first id of a tray menu's commands (see [`NativeTray`]). Menu bar ids
+/// stay below it, so one [`Event::MenuCommand`](crate::platform::Event::MenuCommand)
+/// stream serves both.
+pub const TRAY_ID_BASE: u32 = 0x8000;
+
+/// A tray icon (a status item on macOS, a notification-area icon on Windows, a
+/// `StatusNotifierItem` on Linux), for
+/// [`Window::set_tray`](crate::platform::Window::set_tray).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeTray {
+    /// Shown on hover (and as the item's title where a host has no icon).
+    pub tooltip: String,
+    /// The icon, straight RGBA. `None` shows a plain placeholder.
+    pub icon: Option<crate::render::Pixmap>,
+    /// The menu shown on a right-click (on macOS, any click). Command ids
+    /// start at [`TRAY_ID_BASE`]; shortcuts are ignored.
+    pub menu: Vec<NativeMenuItem>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

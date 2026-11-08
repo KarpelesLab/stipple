@@ -47,17 +47,26 @@ pub mod web;
 
 /// Deliver [`Event::ThemeChanged`] ahead of the wake that follows an appearance
 /// change, which the OS reports through a notification, a window message or (on
-/// Linux) a D-Bus signal heard on another thread.
+/// Linux) a D-Bus signal heard on another thread, and the events
+/// [`shell::post`](crate::platform::shell) queued from other threads (tray
+/// picks on Linux).
 fn with_theme_changes<H>(mut handler: H) -> impl FnMut(Event, &dyn Window) -> ControlFlow
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {
     move |event, window| {
-        if matches!(event, Event::Wake)
-            && crate::platform::native::take_changed()
-            && handler(Event::ThemeChanged, window) == ControlFlow::Exit
-        {
-            return ControlFlow::Exit;
+        if matches!(event, Event::Wake) {
+            if crate::platform::native::take_changed()
+                && handler(Event::ThemeChanged, window) == ControlFlow::Exit
+            {
+                return ControlFlow::Exit;
+            }
+            // Tray picks heard on another thread (Linux's D-Bus service).
+            for posted in crate::platform::shell::take_posted() {
+                if handler(posted, window) == ControlFlow::Exit {
+                    return ControlFlow::Exit;
+                }
+            }
         }
         handler(event, window)
     }

@@ -53,6 +53,9 @@ pub mod sandbox;
 /// DRI3/Present GPU buffers and the browser content-process IPC.
 #[cfg(target_os = "linux")]
 pub mod scm;
+/// Opening URLs and files in the default app, notifications, and the plumbing
+/// behind tray icons.
+pub mod shell;
 /// `memfd`-backed shared-memory buffers — the CPU side of the content path (a
 /// content process's pixels shared with the UI process, the dual of GPU dma-buf).
 #[cfg(target_os = "linux")]
@@ -71,8 +74,11 @@ pub use error::PlatformError;
 pub use event::{
     ButtonState, Event, Ime, KeyCode, Modifiers, PointerButton, ScrollDelta, WindowId,
 };
-pub use menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, Shortcut};
+pub use menu::{
+    MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, Shortcut, TRAY_ID_BASE,
+};
 pub use pointer::{pointer_modifiers, set_pointer_modifiers};
+pub use shell::{Notification, notify, open_path, open_url};
 pub use window::{CursorIcon, ImeState, Window, WindowAttributes, WindowRequest};
 
 /// What a window should do after the application handles an event.

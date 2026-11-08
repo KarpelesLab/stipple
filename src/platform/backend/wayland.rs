@@ -1078,6 +1078,9 @@ impl Window for WaylandWindow {
     fn id(&self) -> crate::platform::WindowId {
         crate::platform::WindowId(self.surface as u64)
     }
+    fn set_tray(&self, tray: Option<&crate::platform::NativeTray>) -> bool {
+        crate::platform::shell::sni::set_tray(tray)
+    }
     fn inner_size(&self) -> PhysicalSize {
         self.size
     }

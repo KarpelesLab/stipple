@@ -26,6 +26,8 @@
 //! | `set_a11y(ptr, len)` | the ARIA overlay, from the accessibility tree as JSON (see [`aria_json`](crate::platform::access::aria_json)) |
 //! | `set_ime(active, x, y, w, h)` | moves the hidden `<textarea>` that takes composition to the caret (CSS pixels) |
 //! | `set_text_input(active)` | the textarea's `inputmode`, which shows or hides a touch keyboard |
+//! | `open_url(ptr, len)` | `window.open(url, "_blank", "noopener")` |
+//! | `notify(title, title_len, body, body_len)` | a `Notification`, asking for permission first if needed |
 //!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
@@ -63,6 +65,8 @@ mod js {
         pub fn set_a11y(ptr: *const u8, len: usize);
         pub fn set_ime(active: u32, x: f64, y: f64, width: f64, height: f64);
         pub fn set_text_input(active: u32);
+        pub fn open_url(ptr: *const u8, len: usize);
+        pub fn notify(title: *const u8, title_len: usize, body: *const u8, body_len: usize);
     }
 }
 
@@ -95,6 +99,16 @@ pub(crate) fn open_file(id: u32, accept: &str) {
 /// Offer `data` as a download named `name`.
 pub(crate) fn save_file(name: &str, data: &[u8]) {
     unsafe { js::save_file(name.as_ptr(), name.len(), data.as_ptr(), data.len()) }
+}
+
+/// Open `url` in a new tab (browsers allow it from a user gesture).
+pub(crate) fn open_url(url: &str) {
+    unsafe { js::open_url(url.as_ptr(), url.len()) }
+}
+
+/// Show a notification through the `Notification` API.
+pub(crate) fn notify(title: &str, body: &str) {
+    unsafe { js::notify(title.as_ptr(), title.len(), body.as_ptr(), body.len()) }
 }
 
 type Handler = Box<dyn FnMut(Event, &dyn Window) -> ControlFlow>;

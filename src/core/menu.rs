@@ -448,9 +448,172 @@ impl<S> std::fmt::Debug for MenuBar<S> {
     }
 }
 
+/// The app's tray icon: a status item in macOS's menu bar, a notification-area
+/// icon on Windows, a `StatusNotifierItem` on Linux. Declare it with
+/// [`App::tray`](crate::App::tray).
+///
+/// ```
+/// use stipple::core::{Menu, MenuItem, Tray};
+/// struct State { muted: bool, shown: bool }
+/// fn tray(s: &State) -> Tray<State> {
+///     Tray::new("My App")
+///         .menu(
+///             Menu::new("")
+///                 .item(MenuItem::new("&Mute", |s: &mut State| s.muted = !s.muted).checked(s.muted))
+///                 .separator()
+///                 .item(MenuItem::new("&Quit", |_: &mut State| {})),
+///         )
+///         .on_activate(|s: &mut State| s.shown = true)
+/// }
+/// let mut s = State { muted: false, shown: false };
+/// let t = tray(&s);
+/// assert!(t.activate_command(stipple::platform::TRAY_ID_BASE, &mut s));
+/// assert!(s.muted);
+/// ```
+pub struct Tray<S> {
+    tooltip: String,
+    icon: Option<crate::render::Pixmap>,
+    menu: Option<Menu<S>>,
+    on_activate: Option<MenuAction<S>>,
+}
+
+impl<S> Tray<S> {
+    /// A tray icon with `tooltip`, shown on hover (and, on macOS, as the
+    /// item's title when it has no icon).
+    pub fn new(tooltip: impl Into<String>) -> Self {
+        Self {
+            tooltip: tooltip.into(),
+            icon: None,
+            menu: None,
+            on_activate: None,
+        }
+    }
+
+    /// The icon (straight RGBA, ideally square; it's scaled down to fit).
+    pub fn icon(mut self, icon: crate::render::Pixmap) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// The menu a right-click opens (on macOS, any click). Its title isn't
+    /// shown, and shortcuts don't apply.
+    pub fn menu(mut self, menu: Menu<S>) -> Self {
+        self.menu = Some(menu);
+        self
+    }
+
+    /// Run `action` when the icon is clicked (a left click on Windows, the
+    /// host's "activate" on Linux; on macOS only when there's no menu).
+    pub fn on_activate(mut self, action: impl FnMut(&mut S) + 'static) -> Self {
+        self.on_activate = Some(Rc::new(RefCell::new(action)));
+        self
+    }
+
+    /// The description handed to the platform: command ids start at
+    /// [`TRAY_ID_BASE`](crate::platform::TRAY_ID_BASE), shortcuts dropped.
+    pub fn to_native(&self) -> crate::platform::NativeTray {
+        fn strip(items: &mut [NativeMenuItem]) {
+            for item in items {
+                match item {
+                    NativeMenuItem::Action { shortcut, .. } => *shortcut = None,
+                    NativeMenuItem::Submenu(m) => strip(&mut m.items),
+                    NativeMenuItem::Separator => {}
+                }
+            }
+        }
+        let mut items = match &self.menu {
+            Some(menu) => {
+                let mut next = crate::platform::TRAY_ID_BASE;
+                menu.native_from(&mut next).items
+            }
+            None => Vec::new(),
+        };
+        strip(&mut items);
+        crate::platform::NativeTray {
+            tooltip: self.tooltip.clone(),
+            icon: self.icon.clone(),
+            menu: items,
+        }
+    }
+
+    /// Run the menu command with native id `id` (from
+    /// [`TRAY_ID_BASE`](crate::platform::TRAY_ID_BASE)) if it exists and is
+    /// enabled. Returns whether it ran.
+    pub fn activate_command(&self, id: u32, state: &mut S) -> bool {
+        let Some(menu) = &self.menu else {
+            return false;
+        };
+        let mut out = Vec::new();
+        let mut next = crate::platform::TRAY_ID_BASE;
+        menu.number(&mut next, &mut out);
+        out.into_iter()
+            .find(|(i, _)| *i == id)
+            .is_some_and(|(_, item)| item.activate(state))
+    }
+
+    /// Run the click action, if there is one. Returns whether it ran.
+    pub fn activate(&self, state: &mut S) -> bool {
+        match &self.on_activate {
+            Some(action) => {
+                (action.borrow_mut())(state);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+impl<S> std::fmt::Debug for Tray<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tray")
+            .field("tooltip", &self.tooltip)
+            .field("icon", &self.icon.as_ref().map(|i| i.size()))
+            .field("menu", &self.menu)
+            .field("on_activate", &self.on_activate.is_some())
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tray_numbers_from_the_tray_base_without_shortcuts() {
+        let base = crate::platform::TRAY_ID_BASE;
+        let tray = Tray::new("T")
+            .menu(
+                Menu::new("")
+                    .item(
+                        MenuItem::new("a", |s: &mut Vec<&str>| s.push("a"))
+                            .shortcut(Shortcut::cmd('a')),
+                    )
+                    .submenu(
+                        Menu::new("More").item(MenuItem::new("b", |s: &mut Vec<&str>| s.push("b"))),
+                    ),
+            )
+            .on_activate(|s: &mut Vec<&str>| s.push("click"));
+        let native = tray.to_native();
+        assert_eq!(native.tooltip, "T");
+        match &native.menu[0] {
+            NativeMenuItem::Action { id, shortcut, .. } => {
+                assert_eq!((*id, *shortcut), (base, None))
+            }
+            other => panic!("{other:?}"),
+        }
+        match &native.menu[1] {
+            NativeMenuItem::Submenu(m) => match &m.items[0] {
+                NativeMenuItem::Action { id, .. } => assert_eq!(*id, base + 1),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        }
+        let mut log = Vec::new();
+        assert!(tray.activate_command(base + 1, &mut log));
+        assert!(!tray.activate_command(1, &mut log));
+        assert!(tray.activate(&mut log));
+        assert_eq!(log, vec!["b", "click"]);
+    }
 
     fn bar() -> MenuBar<Vec<&'static str>> {
         MenuBar::new()

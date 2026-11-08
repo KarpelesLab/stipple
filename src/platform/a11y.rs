@@ -92,6 +92,43 @@ impl DBus {
         &self.unique_name
     }
 
+    /// Send a method call without waiting for its reply, returning its serial:
+    /// for a connection that also serves calls, whose read loop then sees the
+    /// reply (`reply_serial`) among the other messages.
+    pub(crate) fn send_call(
+        &mut self,
+        destination: &str,
+        path: &str,
+        interface: &str,
+        member: &str,
+        signature: &str,
+        body: &[u8],
+    ) -> Result<u32, String> {
+        self.serial += 1;
+        let serial = self.serial;
+        let mut fields = Vec::new();
+        put_field(&mut fields, 1, b'o', path);
+        put_field(&mut fields, 6, b's', destination);
+        put_field(&mut fields, 2, b's', interface);
+        put_field(&mut fields, 3, b's', member);
+        if !signature.is_empty() {
+            put_field_sig(&mut fields, 8, signature);
+        }
+        let msg = build_message(1, serial, &fields, body);
+        self.stream.write_all(&msg).map_err(io)?;
+        Ok(serial)
+    }
+
+    /// The connection's socket, to wait on it with `poll`.
+    pub(crate) fn raw_fd(&self) -> std::os::fd::RawFd {
+        std::os::fd::AsRawFd::as_raw_fd(&self.stream)
+    }
+
+    /// Bound how long a read (a call's reply) may block; `None` blocks.
+    pub(crate) fn set_read_timeout(&self, timeout: Option<std::time::Duration>) {
+        let _ = self.stream.set_read_timeout(timeout);
+    }
+
     /// Ask the session bus's accessibility broker (`org.a11y.Bus`) for the
     /// address of the separate **AT-SPI** bus that screen readers listen on.
     /// Activates `at-spi-bus-launcher` on demand.
@@ -144,7 +181,7 @@ impl DBus {
 
     /// Send a method call carrying a typed `body` (marshalled by the caller, its
     /// D-Bus `signature` declared in the header) and return the reply body.
-    fn call_with_body(
+    pub(crate) fn call_with_body(
         &mut self,
         destination: &str,
         path: &str,
@@ -246,7 +283,7 @@ impl DBus {
 
     /// Install a match rule (`org.freedesktop.DBus.AddMatch`) so the bus routes
     /// matching broadcast signals to us.
-    fn add_match(&mut self, rule: &str) -> Result<(), String> {
+    pub(crate) fn add_match(&mut self, rule: &str) -> Result<(), String> {
         let mut body = Vec::new();
         put_string(&mut body, rule);
         self.call_with_body(
@@ -261,7 +298,7 @@ impl DBus {
     }
 
     /// Emit a D-Bus signal (message type 4) with a marshalled `body`.
-    fn emit_signal(
+    pub(crate) fn emit_signal(
         &mut self,
         path: &str,
         interface: &str,
@@ -459,7 +496,12 @@ impl DBus {
     }
 
     /// Send a `METHOD_RETURN` for `req` with optional `signature`/`body`.
-    fn send_return(&mut self, req: &Message, signature: &str, body: &[u8]) -> Result<(), String> {
+    pub(crate) fn send_return(
+        &mut self,
+        req: &Message,
+        signature: &str,
+        body: &[u8],
+    ) -> Result<(), String> {
         self.serial += 1;
         let mut fields = Vec::new();
         put_field_u32(&mut fields, 5, req.serial); // REPLY_SERIAL
@@ -474,7 +516,7 @@ impl DBus {
     }
 
     /// Send an `ERROR` reply for `req` naming `error_name`.
-    fn send_error(&mut self, req: &Message, error_name: &str) -> Result<(), String> {
+    pub(crate) fn send_error(&mut self, req: &Message, error_name: &str) -> Result<(), String> {
         self.serial += 1;
         let mut fields = Vec::new();
         put_field_u32(&mut fields, 5, req.serial); // REPLY_SERIAL
@@ -513,7 +555,7 @@ impl DBus {
     }
 
     /// Read one full D-Bus message (header fields + body). Little-endian only.
-    fn read_message(&mut self) -> Result<Message, String> {
+    pub(crate) fn read_message(&mut self) -> Result<Message, String> {
         // Fixed part of the header is 12 bytes, then the header-fields array
         // length (another u32).
         let mut fixed = [0u8; 16];
@@ -683,15 +725,15 @@ fn role_name(role: u32) -> &'static str {
 
 /// A received D-Bus message: header metadata plus the raw body bytes.
 #[derive(Debug, Default)]
-struct Message {
-    mtype: u8,
-    serial: u32,
-    reply_serial: u32,
-    path: String,
-    interface: String,
-    member: String,
-    sender: String,
-    body: Vec<u8>,
+pub(crate) struct Message {
+    pub(crate) mtype: u8,
+    pub(crate) serial: u32,
+    pub(crate) reply_serial: u32,
+    pub(crate) path: String,
+    pub(crate) interface: String,
+    pub(crate) member: String,
+    pub(crate) sender: String,
+    pub(crate) body: Vec<u8>,
 }
 
 /// Map `unix:path=/x` or `unix:abstract=/x` (with optional trailing `,guid=…`)
@@ -735,14 +777,14 @@ fn read_line(stream: &mut UnixStream) -> Result<String, String> {
 
 // ---- marshalling -----------------------------------------------------------
 
-fn align(buf: &mut Vec<u8>, n: usize) {
+pub(crate) fn align(buf: &mut Vec<u8>, n: usize) {
     while !buf.len().is_multiple_of(n) {
         buf.push(0);
     }
 }
 
 /// Append a D-Bus STRING/OBJECT_PATH value: a u32 length, the bytes, and a NUL.
-fn put_string(buf: &mut Vec<u8>, s: &str) {
+pub(crate) fn put_string(buf: &mut Vec<u8>, s: &str) {
     align(buf, 4);
     buf.extend_from_slice(&(s.len() as u32).to_le_bytes());
     buf.extend_from_slice(s.as_bytes());
@@ -965,7 +1007,7 @@ fn read_results_uris(buf: &[u8], off: &mut usize) -> Result<Option<String>, Stri
 }
 
 /// Advance `*off` to the next multiple of `n`.
-fn align_to(off: &mut usize, n: usize) {
+pub(crate) fn align_to(off: &mut usize, n: usize) {
     while !off.is_multiple_of(n) {
         *off += 1;
     }
@@ -985,7 +1027,12 @@ fn type_align(c: u8) -> usize {
 /// signature index `*si` and the data offset `*off`. Handles the full D-Bus
 /// type grammar (basics, strings, variants, arrays, structs, dict entries) so
 /// unknown result keys can be stepped over.
-fn skip_value(buf: &[u8], off: &mut usize, sig: &[u8], si: &mut usize) -> Result<(), String> {
+pub(crate) fn skip_value(
+    buf: &[u8],
+    off: &mut usize,
+    sig: &[u8],
+    si: &mut usize,
+) -> Result<(), String> {
     let t = *sig.get(*si).ok_or("signature underrun")?;
     *si += 1;
     match t {
@@ -1112,7 +1159,7 @@ fn put_variant_i32(buf: &mut Vec<u8>, v: i32) {
 }
 
 /// Read a u32 at `*off` in `buf` (4-aligned), advancing `*off`.
-fn read_u32(buf: &[u8], off: &mut usize) -> Result<u32, String> {
+pub(crate) fn read_u32(buf: &[u8], off: &mut usize) -> Result<u32, String> {
     while !off.is_multiple_of(4) {
         *off += 1;
     }
@@ -1142,7 +1189,7 @@ fn variant_header(buf: &[u8]) -> Option<(String, usize)> {
 }
 
 /// Read a D-Bus STRING at `*off` in `buf` (u32 length + bytes + NUL), advancing.
-fn read_string(buf: &[u8], off: &mut usize) -> Result<String, String> {
+pub(crate) fn read_string(buf: &[u8], off: &mut usize) -> Result<String, String> {
     while !off.is_multiple_of(4) {
         *off += 1;
     }

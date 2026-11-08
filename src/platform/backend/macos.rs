@@ -22,7 +22,9 @@ use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, WindowId};
 use crate::platform::input;
-use crate::platform::menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, mnemonic};
+use crate::platform::menu::{
+    MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, TRAY_ID_BASE, mnemonic,
+};
 use crate::platform::window::{CursorIcon, Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
@@ -500,6 +502,8 @@ struct MacCtx {
     pending: Vec<Event>,
     /// The tag of the item picked from the context menu being shown.
     context_pick: Option<i64>,
+    /// The tray icon's `NSStatusItem` (retained), or null.
+    status_item: Id,
 }
 
 // Cocoa is single-threaded (main thread); the backend runs there.
@@ -897,6 +901,12 @@ fn menu_target() -> Id {
                 menu_check::menu_will_open as *const c_void,
                 c"v@:@".as_ptr(),
             );
+            class_addMethod(
+                cls,
+                sel("stippleTrayAction:"),
+                tray_action as *const c_void,
+                c"v@:@".as_ptr(),
+            );
             objc_registerClassPair(cls);
         }
         let target = msg_id(msg_id(cls, sel("alloc")), sel("init"));
@@ -1046,12 +1056,119 @@ unsafe fn popup_menu(menu: &NativeMenu, at: Point) -> MenuPopup {
     }
 }
 
+// ---- The tray icon: NSStatusItem ----------------------------------------------
+
+/// `stippleTrayAction:` — the status item, which has no menu, was clicked.
+extern "C" fn tray_action(_this: Id, _cmd: Sel, _sender: Id) {
+    CTX.with(|c| c.borrow_mut().pending.push(Event::TrayActivated));
+}
+
+/// Show `tray` as an `NSStatusItem` in the menu bar's status area, or remove
+/// it. A click opens its menu (or, without one, reports
+/// [`Event::TrayActivated`]).
+unsafe fn set_status_item(tray: Option<&NativeTray>) -> bool {
+    unsafe {
+        let bar = msg_id(class("NSStatusBar"), sel("systemStatusBar"));
+        let existing = CTX.with(|c| c.borrow().status_item);
+        CTX.with(|c| {
+            c.borrow_mut()
+                .menu_states
+                .retain(|&tag, _| tag < i64::from(TRAY_ID_BASE))
+        });
+        let Some(tray) = tray else {
+            if !existing.is_null() {
+                msg_void_id(bar, sel("removeStatusItem:"), existing);
+                msg_void(existing, sel("release"));
+                CTX.with(|c| c.borrow_mut().status_item = std::ptr::null_mut());
+            }
+            return false;
+        };
+        if bar.is_null() {
+            return false;
+        }
+        let item = if existing.is_null() {
+            // NSVariableStatusItemLength.
+            let with_length: unsafe extern "C" fn(Id, Sel, f64) -> Id =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            let item = with_length(bar, sel("statusItemWithLength:"), -1.0);
+            if item.is_null() {
+                return false;
+            }
+            msg_id(item, sel("retain"));
+            CTX.with(|c| c.borrow_mut().status_item = item);
+            item
+        } else {
+            existing
+        };
+        let button = msg_id(item, sel("button"));
+        if button.is_null() {
+            return false;
+        }
+        match &tray.icon {
+            Some(icon) => {
+                let image = ns_image(icon);
+                if !image.is_null() {
+                    // The status bar is 22 points tall; icons are 18.
+                    msg_void_size(
+                        image,
+                        sel("setSize:"),
+                        CgSize {
+                            width: 18.0,
+                            height: 18.0,
+                        },
+                    );
+                    msg_void_id(button, sel("setImage:"), image);
+                    msg_void(image, sel("release"));
+                }
+                msg_void_id(button, sel("setTitle:"), nsstring(""));
+            }
+            None => {
+                msg_void_id(button, sel("setImage:"), std::ptr::null_mut());
+                let title = if tray.tooltip.is_empty() {
+                    "\u{25CF}"
+                } else {
+                    &tray.tooltip
+                };
+                msg_void_id(button, sel("setTitle:"), nsstring(title));
+            }
+        }
+        msg_void_id(button, sel("setToolTip:"), nsstring(&tray.tooltip));
+        let target = menu_target();
+        if tray.menu.is_empty() {
+            msg_void_id(item, sel("setMenu:"), std::ptr::null_mut());
+            msg_void_id(button, sel("setTarget:"), target);
+            let action: unsafe extern "C" fn(Id, Sel, Sel) =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            action(button, sel("setAction:"), sel("stippleTrayAction:"));
+        } else {
+            let menu = ns_menu("");
+            fill_menu(menu, &tray.menu, target, false);
+            msg_void_id(item, sel("setMenu:"), menu);
+            msg_void(menu, sel("release"));
+        }
+        if std::env::var_os("STIPPLE_DEBUG_SHELL").is_some() {
+            let window = msg_id(button, sel("window"));
+            eprintln!(
+                "stipple shell: NSStatusItem button={:?} in a window={}",
+                button,
+                !window.is_null()
+            );
+        }
+        true
+    }
+}
+
 /// Install `bar` as the application's main menu: the standard application
 /// menu (About, Hide, Hide Others, Show All, Quit) followed by the app's
 /// menus.
 unsafe fn install_menu_bar(bar: &NativeMenuBar) {
     let target = menu_target();
-    CTX.with(|c| c.borrow_mut().menu_states.clear());
+    // Keep the tray menu's states.
+    CTX.with(|c| {
+        c.borrow_mut()
+            .menu_states
+            .retain(|&tag, _| tag >= i64::from(TRAY_ID_BASE))
+    });
     let name = &bar.app_name;
     const CMD: u64 = 1 << 20;
     const OPTION: u64 = 1 << 19;
@@ -1268,6 +1385,9 @@ impl Window for MacWindow {
     }
     fn popup_menu(&self, menu: &NativeMenu, at: Point) -> MenuPopup {
         unsafe { popup_menu(menu, at) }
+    }
+    fn set_tray(&self, tray: Option<&NativeTray>) -> bool {
+        unsafe { set_status_item(tray) }
     }
     fn set_icon(&self, icon: Option<&Pixmap>) {
         // macOS has no per-window icons; this is the app's Dock icon. `nil`

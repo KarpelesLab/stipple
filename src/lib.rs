@@ -104,7 +104,14 @@ pub struct App<S> {
     native_popup_unsupported: bool,
     // Alt went down with no other key since: its release focuses the menu bar.
     alt_armed: bool,
+    // The tray icon, as a function of the state (see [`App::tray`]), and what
+    // was last handed to the backend.
+    tray: Option<TrayFn<S>>,
+    native_tray: Option<crate::platform::NativeTray>,
 }
+
+/// A tray icon declared as a function of the app state (see [`App::tray`]).
+pub type TrayFn<S> = std::rc::Rc<dyn Fn(&S) -> crate::core::Tray<S>>;
 
 /// A menu bar declared as a function of the app state (see [`App::menu`]).
 pub type MenuFn<S> = std::rc::Rc<dyn Fn(&S) -> crate::core::MenuBar<S>>;
@@ -366,6 +373,8 @@ impl<S: 'static> App<S> {
             native_menu_unsupported: false,
             native_popup_unsupported: false,
             alt_armed: false,
+            tray: None,
+            native_tray: None,
         }
     }
 
@@ -490,6 +499,31 @@ impl<S: 'static> App<S> {
         let menu: MenuFn<S> = std::rc::Rc::new(menu);
         self.panes[0].menu_bar = Some(menu.clone());
         self.menu = Some(menu);
+        self
+    }
+
+    /// Give the app a tray icon: a status item on macOS, a notification-area
+    /// icon on Windows, a `StatusNotifierItem` on Linux (which needs a desktop
+    /// that hosts one). Like [`menu`](App::menu), `tray` is a function of the
+    /// state, called again as it changes; its menu's picks and its click
+    /// action run against the state. Not shown on iOS, Android or the web.
+    /// See `docs/os-integration.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// struct State { muted: bool }
+    /// let app = App::new(State { muted: false }, |_: &State, cx: &mut Cx<State>| {
+    ///     let theme = *cx.theme();
+    ///     label(&theme, "Hello")
+    /// })
+    /// .tray(|s: &State| {
+    ///     Tray::new("My App").menu(
+    ///         Menu::new("").item(MenuItem::new("&Mute", |s: &mut State| s.muted = !s.muted).checked(s.muted)),
+    ///     )
+    /// });
+    /// ```
+    pub fn tray(mut self, tray: impl Fn(&S) -> crate::core::Tray<S> + 'static) -> Self {
+        self.tray = Some(std::rc::Rc::new(tray));
         self
     }
 
@@ -1784,6 +1818,7 @@ impl<S: 'static> App<S> {
                        force: bool| {
             if idx == 0 {
                 app.sync_menu_bar(window);
+                app.sync_tray(window);
             }
             app.native_context_menu(idx, window);
             let App {
@@ -2172,6 +2207,12 @@ impl<S: 'static> App<S> {
                     present(&mut self, &mut surfaces, idx, window, true);
                     ControlFlow::Wait
                 }
+                Event::TrayActivated => {
+                    if self.run_tray_activate() {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::MenuCommand(id) => {
                     if self.run_menu_command(id) {
                         present(&mut self, &mut surfaces, idx, window, false);
@@ -2367,16 +2408,52 @@ impl<S: 'static> App<S> {
     /// Run the menu bar command with native id `id` (from
     /// [`Event::MenuCommand`]). Returns whether it ran.
     fn run_menu_command(&mut self, id: u32) -> bool {
-        let Some(menu) = self.menu.clone() else {
-            return false;
+        let ran = if id >= crate::platform::TRAY_ID_BASE {
+            let Some(tray) = self.tray.clone() else {
+                return false;
+            };
+            tray(&self.state).activate_command(id, &mut self.state)
+        } else {
+            let Some(menu) = self.menu.clone() else {
+                return false;
+            };
+            menu(&self.state).activate(id, &mut self.state)
         };
-        let ran = menu(&self.state).activate(id, &mut self.state);
         if ran {
             for pane in &mut self.panes {
                 pane.dirty = true;
             }
         }
         ran
+    }
+
+    /// Run the tray icon's click action ([`Event::TrayActivated`]). Returns
+    /// whether it ran.
+    fn run_tray_activate(&mut self) -> bool {
+        let Some(tray) = self.tray.clone() else {
+            return false;
+        };
+        let ran = tray(&self.state).activate(&mut self.state);
+        if ran {
+            for pane in &mut self.panes {
+                pane.dirty = true;
+            }
+        }
+        ran
+    }
+
+    /// Hand the tray icon to `window` when it changed.
+    fn sync_tray(&mut self, window: &dyn crate::platform::Window) {
+        let Some(tray) = self.tray.clone() else {
+            return;
+        };
+        let native = tray(&self.state).to_native();
+        if self.native_tray.as_ref() == Some(&native) {
+            return;
+        }
+        let shown = window.set_tray(Some(&native));
+        crate::platform::shell::set_tray_shown(shown);
+        self.native_tray = Some(native);
     }
 
     /// Hand the menu bar to `window` as a native one when it changed. Where
@@ -2474,6 +2551,17 @@ impl<S: 'static> App<S> {
     pub fn menu_command(&mut self, id: u32) -> bool {
         self.run_menu_command(id)
     }
+
+    /// Click the tray icon, as [`Event::TrayActivated`] does. Returns whether
+    /// a click action ran.
+    pub fn tray_activate(&mut self) -> bool {
+        self.run_tray_activate()
+    }
+
+    /// The tray icon as it's handed to the platform, if the app has one.
+    pub fn native_tray(&self) -> Option<crate::platform::NativeTray> {
+        self.tray.as_ref().map(|t| t(&self.state).to_native())
+    }
 }
 
 /// The menu navigation key for `code`, if menus use it. In a mirrored (`rtl`)
@@ -2567,8 +2655,9 @@ pub mod prelude {
         Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
         OverlaySpec, TimerId, Track, View,
     };
-    pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut};
+    pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
+    pub use crate::platform::Notification;
     pub use crate::platform::{CursorIcon, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
     pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg, TextDirection};
