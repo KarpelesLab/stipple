@@ -163,6 +163,7 @@ pub fn split_pane<S>(
     second: Element,
 ) -> Element {
     let p = &theme.palette;
+    let rtl = theme.is_rtl();
     let f = state.fraction;
     let tracks = vec![Track::fr(f), Track::px(HANDLE), Track::fr(1.0 - f)];
     let pane = |content: Element| {
@@ -191,7 +192,7 @@ pub fn split_pane<S>(
         .align(Align::Start, Align::Center)
         .role(Role::Splitter)
         .on_key(cx, move |s: &mut S, k| {
-            field(s).apply(k);
+            field(s).apply(&super::logical_key(rtl, k));
         })
         .on_drag_motion(cx, move |s: &mut S, m| field(s).drag(m));
     let children = vec![pane(first), handle, pane(second)];

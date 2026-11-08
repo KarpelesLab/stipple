@@ -67,6 +67,24 @@ impl DragMotion {
             self.position.y - self.origin.y,
         )
     }
+
+    /// This motion reflected left to right about the middle of
+    /// [`parent`](Self::parent): every x measured from the other side. The
+    /// `App` hands this to the handlers of an element laid out right to left,
+    /// so a handler written for a left-to-right layout works in a mirrored
+    /// one unchanged: [`fraction_x`](Self::fraction_x) counts from the right
+    /// edge, and dragging left is a positive x [`delta`](Self::delta).
+    pub fn mirrored(&self) -> DragMotion {
+        let axis = self.parent.min_x() + self.parent.max_x();
+        let point = |p: Point| Point::new(axis - p.x, p.y);
+        let rect = |r: Rect| Rect::from_xywh(axis - r.max_x(), r.min_y(), r.width(), r.height());
+        DragMotion {
+            position: point(self.position),
+            origin: point(self.origin),
+            bounds: rect(self.bounds),
+            parent: rect(self.parent),
+        }
+    }
 }
 /// A boxed text-pointer handler: receives a resolved byte index into the
 /// element's text and whether the gesture *extends* a selection (drag) or
@@ -761,6 +779,11 @@ pub struct LayoutNode {
     ///
     /// [`Element::role`]: crate::core::Element::role
     pub semantics: Option<Semantics>,
+    /// Whether this node was laid out right to left (its effective
+    /// [`LayoutDirection`](crate::layout::LayoutDirection)): its children are
+    /// mirrored, `Auto` text in it lines up on the right, and a drag on it
+    /// reports mirrored x positions.
+    pub rtl: bool,
     pub children: Vec<LayoutNode>,
 }
 
@@ -786,6 +809,7 @@ impl LayoutNode {
             clip: false,
             cursor: None,
             semantics: None,
+            rtl: false,
             children,
         }
     }
@@ -921,16 +945,17 @@ pub fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
 }
 
 /// Like [`drag_at`], but also returns the bounds of the draggable's parent
-/// (its own bounds when it is `node` itself), for [`DragMotion::parent`].
-pub fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rect)> {
-    fn walk(node: &LayoutNode, parent: Rect, point: Point) -> Option<(DragId, Rect, Rect)> {
+/// (its own bounds when it is `node` itself), for [`DragMotion::parent`],
+/// and whether the draggable was laid out right to left ([`LayoutNode::rtl`]).
+pub fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
+    fn walk(node: &LayoutNode, parent: Rect, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
         for child in node.children.iter().rev() {
             if let Some(hit) = walk(child, node.bounds, point) {
                 return Some(hit);
             }
         }
         match node.drag {
-            Some(id) if node.bounds.contains(point) => Some((id, node.bounds, parent)),
+            Some(id) if node.bounds.contains(point) => Some((id, node.bounds, parent, node.rtl)),
             _ => None,
         }
     }
@@ -1042,6 +1067,25 @@ pub fn collect_focusables(node: &LayoutNode, out: &mut Vec<FocusId>) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_mirrored_drag_reads_from_the_right() {
+        let motion = DragMotion {
+            position: Point::new(130.0, 7.0),
+            origin: Point::new(120.0, 5.0),
+            bounds: Rect::from_xywh(100.0, 0.0, 100.0, 20.0),
+            parent: Rect::from_xywh(50.0, 0.0, 200.0, 20.0),
+        };
+        assert!((motion.fraction_x() - 0.3).abs() < 1e-9);
+        let m = motion.mirrored();
+        assert!((m.fraction_x() - 0.7).abs() < 1e-9);
+        // Moving right is moving towards the start: a negative x delta.
+        assert_eq!(m.delta(), (-10.0, 2.0));
+        // The parent stays put; the element is reflected inside it.
+        assert_eq!(m.parent, motion.parent);
+        assert_eq!(m.bounds, Rect::from_xywh(100.0, 0.0, 100.0, 20.0));
+        assert_eq!(m.mirrored(), motion);
+    }
+
     fn leaf(bounds: Rect, action: Option<ActionId>, focus: Option<FocusId>) -> LayoutNode {
         LayoutNode {
             bounds,
@@ -1061,6 +1105,7 @@ mod tests {
             clip: false,
             cursor: None,
             semantics: None,
+            rtl: false,
             children: Vec::new(),
         }
     }
@@ -1150,6 +1195,7 @@ mod tests {
             clip: false,
             cursor: None,
             semantics: None,
+            rtl: false,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),

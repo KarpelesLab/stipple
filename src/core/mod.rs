@@ -49,7 +49,8 @@ pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};
 pub use render::caret_index_at;
 pub use render::{
-    apply_scroll, layout, mark_native_states, measure, paint, paint_focus, paint_hover,
+    apply_scroll, layout, layout_with_direction, mark_native_states, measure, paint, paint_focus,
+    paint_hover,
 };
 pub use runtime::{
     ActionId, Anchor, ContextId, Cx, DragId, DragMotion, FocusId, Handlers, KeyInput, LayoutNode,
@@ -64,7 +65,7 @@ pub use runtime::{
 pub use crate::render::Font;
 
 // Re-export the layout axis and grid tracks so widget crates speak one vocabulary.
-pub use crate::layout::{Axis, Track};
+pub use crate::layout::{Axis, LayoutDirection, Track};
 
 use crate::geometry::{Rect, Size};
 use crate::render::Scene;
@@ -93,10 +94,11 @@ impl View for Element {
 /// [`hit_test`] directly to route events).
 pub fn render_view(view: &impl View, size: Size, theme: &Theme, font: Option<&Font>) -> Scene {
     let element = view.build(theme);
-    let tree = layout(
+    let tree = layout_with_direction(
         &element,
         Rect::from_xywh(0.0, 0.0, size.width, size.height),
         font,
+        theme.layout_direction,
     );
     let mut scene = Scene::new(size);
     paint(&tree, &mut scene, font);

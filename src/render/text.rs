@@ -11,9 +11,11 @@
 //! and tests, not meant for shipping apps).
 
 use crate::geometry::{Point, Rect, ScaleFactor, Size};
+use crate::layout::LayoutDirection;
 use crate::render::Color;
 use crate::render::bidi::{
-    ParagraphLevels, TextDirection, VisualChar, boundary_carets, caret_boundary, visual_order,
+    ParagraphLevels, TextDirection, VisualChar, boundary_carets, caret_boundary, has_strong,
+    visual_order,
 };
 use crate::render::scene::Scene;
 use crate::render::software::SoftwareRenderer;
@@ -255,10 +257,34 @@ impl Font {
         direction: TextDirection,
         max_width: Option<f64>,
     ) -> TextLayout<'a> {
+        self.layout_in(text, size_px, direction, max_width, LayoutDirection::Ltr)
+    }
+
+    /// [`layout`](Self::layout) for text inside a UI laid out in `ui`
+    /// direction. Left to right it is the same as `layout`. Right to left,
+    /// with [`TextDirection::Auto`]: a paragraph with no strong character (an
+    /// empty field, a number) runs right to left instead of left to right,
+    /// and every line lines up against the right edge of the alignment width,
+    /// whatever its own direction. An explicit `Ltr` or `Rtl` direction is
+    /// laid out as `layout` would.
+    pub fn layout_in<'a>(
+        &'a self,
+        text: &'a str,
+        size_px: f64,
+        direction: TextDirection,
+        max_width: Option<f64>,
+        ui: LayoutDirection,
+    ) -> TextLayout<'a> {
+        let start_right = ui.is_rtl() && direction == TextDirection::Auto;
         let mut lines = Vec::new();
         let mut start = 0usize;
         for para in text.split('\n') {
-            let levels = ParagraphLevels::new(para, direction);
+            let para_dir = if start_right && !has_strong(para) {
+                TextDirection::Rtl
+            } else {
+                direction
+            };
+            let levels = ParagraphLevels::new(para, para_dir);
             // Byte offset of each char, plus the end.
             let offsets: Vec<usize> = para
                 .char_indices()
@@ -295,6 +321,7 @@ impl Font {
             lines,
             width,
             align_width: width,
+            start_right,
         }
     }
 
@@ -431,6 +458,8 @@ pub struct TextLayout<'a> {
     lines: Vec<LayoutLine>,
     width: f64,
     align_width: f64,
+    /// Line every line up against the right edge (text in a right-to-left UI).
+    start_right: bool,
 }
 
 /// One display line of a [`TextLayout`].
@@ -508,7 +537,7 @@ impl TextLayout<'_> {
     /// The left edge of a line within the box: right-to-left lines sit against
     /// the right edge of the alignment width.
     fn line_x(&self, line: &LayoutLine) -> f64 {
-        if line.rtl {
+        if line.rtl || self.start_right {
             self.align_width - line.width
         } else {
             0.0
@@ -1047,6 +1076,51 @@ mod tests {
             .layout("", 16.0, TextDirection::Rtl, None)
             .with_align_width(120.0);
         assert_eq!(empty.caret_position(0).x, 120.0);
+    }
+
+    #[test]
+    fn text_in_a_mirrored_ui_starts_on_the_right() {
+        let Some(font) = hebrew_font() else { return };
+        let rtl_ui = LayoutDirection::Rtl;
+        // No strong character: right to left in a mirrored UI, left to right
+        // otherwise. The caret of an empty field sits at the right edge.
+        for neutral in ["", " ", "123", "(42)"] {
+            let mirrored = font
+                .layout_in(neutral, 16.0, TextDirection::Auto, None, rtl_ui)
+                .with_align_width(120.0);
+            assert!(mirrored.line_is_rtl(0), "{neutral:?}");
+            let plain = font.layout(neutral, 16.0, TextDirection::Auto, None);
+            assert!(!plain.line_is_rtl(0), "{neutral:?}");
+        }
+        let empty = font
+            .layout_in("", 16.0, TextDirection::Auto, None, rtl_ui)
+            .with_align_width(120.0);
+        assert_eq!(empty.caret_position(0).x, 120.0);
+        // Latin text keeps its left-to-right reading order but lines up right;
+        // each line of a multi-line text decides its own direction.
+        let text = "abc\n12";
+        let layout = font
+            .layout_in(text, 16.0, TextDirection::Auto, None, rtl_ui)
+            .with_align_width(300.0);
+        assert!(!layout.line_is_rtl(0) && layout.line_is_rtl(1));
+        let w = font.measure("abc", 16.0).width;
+        assert!((layout.caret_position(0).x - (300.0 - w)).abs() < 0.01);
+        assert!((layout.caret_position(3).x - 300.0).abs() < 0.01);
+        // An explicit direction is laid out as `layout` would.
+        let forced = font
+            .layout_in("abc", 16.0, TextDirection::Ltr, None, rtl_ui)
+            .with_align_width(300.0);
+        assert!(forced.caret_position(0).x.abs() < 0.01);
+        // Left to right, `layout_in` is `layout`.
+        let a = font.layout_in(
+            "abc אבג",
+            16.0,
+            TextDirection::Auto,
+            None,
+            LayoutDirection::Ltr,
+        );
+        let b = font.layout("abc אבג", 16.0, TextDirection::Auto, None);
+        assert_eq!(a.caret_position(5), b.caret_position(5));
     }
 
     #[test]

@@ -184,6 +184,7 @@ mod tests {
             clip: false,
             cursor: None,
             semantics: None,
+            rtl: false,
             children,
         }
     }
@@ -213,6 +214,7 @@ mod tests {
             clip: false,
             cursor: None,
             semantics: None,
+            rtl: false,
             children: Vec::new(),
         }
     }

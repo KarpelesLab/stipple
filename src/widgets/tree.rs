@@ -278,6 +278,7 @@ pub fn tree<S: 'static>(
     mut label: impl FnMut(&mut Cx<S>, &TreeRow) -> Element,
 ) -> Element {
     let p = &theme.palette;
+    let rtl = theme.is_rtl();
     let flat: Rc<[Flat]> = flatten(model, state).into();
     let rows = Rows::new(flat.len(), RowHeight::Fixed(spec.row_height));
     let window = Window::new(cx, rows, spec.height, spec.overscan);
@@ -297,7 +298,13 @@ pub fn tree<S: 'static>(
             .height(spec.row_height)
             .align(Align::Center, Align::Center);
         if node.has_children {
-            let mark = if node.expanded { "▼" } else { "►" };
+            // A collapsed node's triangle points into the row: left when the
+            // tree is mirrored.
+            let mark = match (node.expanded, theme.is_rtl()) {
+                (true, _) => "▼",
+                (false, false) => "►",
+                (false, true) => "◄",
+            };
             disclosure = Element::stack(
                 Axis::Horizontal,
                 vec![Element::text(mark, theme.typography.caption, p.text_muted)],
@@ -348,7 +355,7 @@ pub fn tree<S: 'static>(
     frame(theme, vec![body])
         .role(Role::Tree)
         .on_key(cx, move |s: &mut S, key| {
-            if let Some(to) = handle_key(field(s), &flat, key) {
+            if let Some(to) = handle_key(field(s), &flat, &super::logical_key(rtl, key)) {
                 window.reveal(to);
             }
         })
@@ -487,5 +494,42 @@ mod tests {
         assert_eq!(selected(&mut app), "Node 1012");
         assert!(app.click_at(triangle));
         assert_eq!(selected(&mut app), "Node 1");
+    }
+
+    #[test]
+    fn a_mirrored_tree_puts_its_triangles_on_the_right_and_swaps_the_arrows() {
+        use crate::layout::LayoutDirection;
+        let mut app =
+            app().theme(crate::style::Theme::light().with_layout_direction(LayoutDirection::Rtl));
+        app.render_once();
+        // The 300-wide tree hugs the right edge of the 320-wide window; its
+        // triangle is mirrored from 9..25 to the right end of the row.
+        let triangle = Point::new(320.0 - (1.0 + 4.0 + 4.0 + 8.0), 1.0 + 24.0 + 12.0);
+        assert!(app.click_at(triangle)); // expand node 1
+        app.render_once();
+        let a = app.accessibility_tree().unwrap();
+        assert_eq!(items(&a)[1].expanded, Some(true));
+        let tree = app.panes[0].tree.clone().unwrap();
+        fn marks(n: &crate::core::LayoutNode, out: &mut Vec<String>) {
+            if let crate::core::NodeContent::Text { text, .. } = &n.content
+                && (text == "◄" || text == "►" || text == "▼")
+            {
+                out.push(text.clone());
+            }
+            n.children.iter().for_each(|c| marks(c, out));
+        }
+        let mut found = Vec::new();
+        marks(&tree, &mut found);
+        assert!(found.contains(&"◄".to_string()) && !found.contains(&"►".to_string()));
+        // Left expands and goes in; Right goes out and collapses.
+        assert!(app.click_at(Point::new(150.0, 1.0 + 12.0)));
+        app.press_key(KeyInput::Left);
+        app.render_once();
+        let a = app.accessibility_tree().unwrap();
+        assert_eq!(items(&a)[0].expanded, Some(true));
+        app.press_key(KeyInput::Left);
+        assert_eq!(selected(&mut app), "Node 1000");
+        app.press_key(KeyInput::Right);
+        assert_eq!(selected(&mut app), "Node 0");
     }
 }

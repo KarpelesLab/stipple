@@ -104,6 +104,18 @@ pub fn grid(columns: Vec<Track>, children: Vec<Element>) -> Element {
     Element::grid(columns, children)
 }
 
+/// `key` as a widget laid out left to right should read it: in a mirrored UI
+/// (`rtl`) Left and Right swap, so they still point towards the end and the
+/// start of the layout: Left expands a node in a right-to-left tree, and a
+/// split divider still moves the way the arrow points.
+pub(crate) fn logical_key(rtl: bool, key: &KeyInput) -> KeyInput {
+    match key {
+        KeyInput::Left if rtl => KeyInput::Right,
+        KeyInput::Right if rtl => KeyInput::Left,
+        _ => key.clone(),
+    }
+}
+
 /// A flexible gap that pushes siblings apart (grow = 1).
 pub fn spacer() -> Element {
     Element::stack(Axis::Horizontal, Vec::new()).grow(1.0)

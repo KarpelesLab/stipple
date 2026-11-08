@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+use crate::layout::LayoutDirection;
 use crate::platform::native;
 use crate::render::Color;
 
@@ -108,6 +109,10 @@ pub struct Theme {
     /// system's light/dark mode or accent color changes. Set by
     /// [`Theme::native`]; clear it to keep a customized native theme as it is.
     pub follows_system: bool,
+    /// The direction the UI reads in. Left to right by default;
+    /// [`LayoutDirection::Rtl`] mirrors the whole UI for Arabic, Hebrew and
+    /// other right-to-left languages (see [`Theme::with_layout_direction`]).
+    pub layout_direction: LayoutDirection,
 }
 
 /// Derive the hover/active/ring tints from a `primary` accent.
@@ -198,8 +203,15 @@ impl Theme {
     }
 
     /// How the OS should draw `control` under this theme, or `None` if the widget
-    /// should draw itself.
+    /// should draw itself. In a mirrored theme, controls with a direction (a
+    /// switch, a slider, a progress bar) draw themselves, since the OS would
+    /// draw them left to right.
     pub fn native_deco(&self, control: native::NativeControl) -> Option<native::NativeDeco> {
+        use native::NativeControl::{Progress, Slider, Switch};
+        let directional = matches!(control, Switch { .. } | Slider { .. } | Progress { .. });
+        if self.is_rtl() && directional {
+            return None;
+        }
         (self.native && native::supports(control)).then(|| native::NativeDeco {
             control,
             dark: self.is_dark(),
@@ -235,6 +247,7 @@ impl Theme {
             font_size: 14.0,
             native: false,
             follows_system: false,
+            layout_direction: LayoutDirection::Ltr,
         }
     }
 
@@ -266,6 +279,7 @@ impl Theme {
             font_size: 14.0,
             native: false,
             follows_system: false,
+            layout_direction: LayoutDirection::Ltr,
         }
     }
 
@@ -283,6 +297,27 @@ impl Theme {
         let a = self.palette.selection.a;
         self.palette.selection = Color::rgba(accent.r, accent.g, accent.b, a);
         self
+    }
+
+    /// Set the direction the UI reads in. With [`LayoutDirection::Rtl`] the
+    /// `App` lays the view and its overlays out mirrored: rows run right to
+    /// left, start alignment is the right edge, grid columns count from the
+    /// right, `Auto` text lines up on the right, sliders and progress bars
+    /// fill from the right, checkboxes sit right of their labels, tree
+    /// disclosure triangles point left, Left and Right swap in trees, split
+    /// panes and menus, and popups open leftwards.
+    /// [`LayoutDirection::from_env`] picks the direction from the locale;
+    /// [`Element::layout_direction`](crate::core::Element::layout_direction)
+    /// overrides it for a subtree. See `docs/bidi.md` in the repository.
+    pub fn with_layout_direction(mut self, direction: LayoutDirection) -> Self {
+        self.layout_direction = direction;
+        self
+    }
+
+    /// Whether the UI is mirrored (its [`layout_direction`](Self::layout_direction)
+    /// is right to left).
+    pub fn is_rtl(&self) -> bool {
+        self.layout_direction.is_rtl()
     }
 
     /// Set the default corner radius.
@@ -530,6 +565,7 @@ impl Theme {
             font_size: 14.0,
             native: false,
             follows_system: false,
+            layout_direction: LayoutDirection::Ltr,
         }
     }
 }

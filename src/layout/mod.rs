@@ -46,6 +46,65 @@ impl Axis {
     }
 }
 
+/// Which way a UI reads: the direction rows run and the side "start" is on.
+///
+/// Under [`LayoutDirection::Rtl`] a layout is mirrored: rows run right to
+/// left, [`Align::Start`](crate::core::Align::Start) on a horizontal axis is
+/// the right edge, grid columns count from the right, and padding's `left`
+/// inset lands on the right. Vertical layout doesn't change. See
+/// `docs/bidi.md` in the repository.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutDirection {
+    /// Left to right (the default).
+    #[default]
+    Ltr,
+    /// Right to left: the layout is mirrored.
+    Rtl,
+}
+
+impl LayoutDirection {
+    /// Whether this is [`LayoutDirection::Rtl`].
+    #[inline]
+    pub fn is_rtl(self) -> bool {
+        self == LayoutDirection::Rtl
+    }
+
+    /// The direction a UI in `language` reads in, from a BCP 47 or POSIX
+    /// locale tag such as `"he"`, `"ar-EG"`, `"fa_IR.UTF-8"` or `"en_US"`:
+    /// right to left for Arabic, Hebrew, Persian, Urdu, Yiddish, Pashto,
+    /// Sindhi, Dhivehi, Uyghur, Kurdish and a few others, left to right for
+    /// everything else (including an empty tag).
+    pub fn for_language(language: &str) -> Self {
+        let primary = language
+            .split(['-', '_', '.', '@'])
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        const RTL: &[&str] = &[
+            "ar", "arc", "ckb", "dv", "fa", "he", "iw", "ji", "ks", "ku", "nqo", "ps", "sd", "syr",
+            "ug", "ur", "yi",
+        ];
+        if RTL.contains(&primary.as_str()) {
+            LayoutDirection::Rtl
+        } else {
+            LayoutDirection::Ltr
+        }
+    }
+
+    /// The direction of the locale named by the POSIX environment variables
+    /// (`LC_ALL`, then `LC_MESSAGES`, then `LANG`; the first one set and
+    /// non-empty wins), via [`for_language`](Self::for_language). Left to
+    /// right when none is set, which is usual for GUI apps on Windows and
+    /// macOS, where the environment doesn't carry the UI language.
+    pub fn from_env() -> Self {
+        ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok())
+            .find(|v| !v.is_empty())
+            .map_or(LayoutDirection::Ltr, |v| Self::for_language(&v))
+    }
+}
+
 /// The size range a parent offers a child: every laid-out size must satisfy
 /// `min <= size <= max` component-wise.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -174,6 +233,28 @@ pub struct Span {
     pub offset: f64,
     /// Length along the main axis.
     pub length: f64,
+}
+
+impl Span {
+    /// This span seen from the other end of a container `extent` long: the
+    /// same length, at the same distance from the far edge. Mirroring twice
+    /// gives the span back.
+    #[inline]
+    pub fn mirrored(self, extent: f64) -> Span {
+        Span {
+            offset: extent - self.offset - self.length,
+            length: self.length,
+        }
+    }
+}
+
+/// Mirror `spans` laid out in a container `extent` long (see
+/// [`Span::mirrored`]): what a right-to-left layout does to a row's items or a
+/// grid's columns. The slice keeps its order, so item `k` keeps index `k`.
+pub fn mirror_spans(spans: &mut [Span], extent: f64) {
+    for s in spans {
+        *s = s.mirrored(extent);
+    }
 }
 
 /// Lay items out along a single axis within `available` main-axis space,
@@ -821,5 +902,77 @@ mod tests {
         let (cells, rows) = place_cells(3, &[(1, 2), (1, 1), (2, 1), (1, 1), (5, 1)]);
         assert_eq!(cells, vec![(0, 0), (0, 1), (1, 1), (2, 0), (3, 0)]);
         assert_eq!(rows, 4);
+    }
+
+    #[test]
+    fn mirrored_spans_reverse_a_row_from_the_far_edge() {
+        // 40 and 60 wide, 10 apart, in 200: left to right they sit at 0 and 50.
+        let mut spans =
+            solve_main_axis(200.0, 10.0, &[FlexItem::fixed(40.0), FlexItem::fixed(60.0)]);
+        mirror_spans(&mut spans, 200.0);
+        // Right to left the first item hugs the right edge, the second is left
+        // of it, and the gap between them is kept.
+        assert_eq!(
+            spans,
+            vec![
+                Span {
+                    offset: 160.0,
+                    length: 40.0
+                },
+                Span {
+                    offset: 90.0,
+                    length: 60.0
+                },
+            ]
+        );
+        // Mirroring is its own inverse.
+        mirror_spans(&mut spans, 200.0);
+        assert_eq!(spans[0].offset, 0.0);
+        assert_eq!(spans[1].offset, 50.0);
+    }
+
+    #[test]
+    fn mirrored_tracks_count_columns_from_the_right() {
+        let mut cols = solve_tracks(
+            &[Track::px(50.0), Track::fr(1.0), Track::px(30.0)],
+            Some(200.0),
+            10.0,
+            &[],
+        );
+        mirror_spans(&mut cols, 200.0);
+        // Column 0 is now rightmost, column 2 leftmost; the fr column keeps its
+        // width (100) between them.
+        assert_eq!(cols[0].offset, 150.0);
+        assert_eq!(cols[1].offset, 40.0);
+        assert_eq!(cols[1].length, 100.0);
+        assert_eq!(cols[2].offset, 0.0);
+    }
+
+    #[test]
+    fn layout_direction_from_language_tags() {
+        for tag in [
+            "he",
+            "he-IL",
+            "ar_EG.UTF-8",
+            "fa",
+            "UR",
+            "yi",
+            "ckb-IQ",
+            "ps@latin",
+        ] {
+            assert_eq!(
+                LayoutDirection::for_language(tag),
+                LayoutDirection::Rtl,
+                "{tag}"
+            );
+        }
+        for tag in ["", "C", "POSIX", "en_US.UTF-8", "fr-CA", "ja", "hi", "heb"] {
+            assert_eq!(
+                LayoutDirection::for_language(tag),
+                LayoutDirection::Ltr,
+                "{tag}"
+            );
+        }
+        assert!(LayoutDirection::Rtl.is_rtl() && !LayoutDirection::default().is_rtl());
     }
 }

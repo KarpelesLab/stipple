@@ -18,8 +18,8 @@ use crate::core::runtime::{
 };
 use crate::geometry::{PhysicalSize, Point, Rect, Size, Vec2};
 use crate::layout::{
-    Axis, FlexItem, Span, Track, TrackItem, break_lines, clamp_len, place_cells, solve_main_axis,
-    solve_tracks, span_extent,
+    Axis, FlexItem, LayoutDirection, Span, Track, TrackItem, break_lines, clamp_len, place_cells,
+    solve_main_axis, solve_tracks, span_extent,
 };
 use crate::platform::native::NativeState;
 use crate::render::{Color, Font, Scene, TextDirection, TextLayout};
@@ -306,8 +306,38 @@ fn align_in(align: Align, natural: f64, slot: f64, min: f64, max: f64) -> (f64, 
 }
 
 /// Lay `el` out within `bounds`, producing a retained [`LayoutNode`] tree with
-/// absolute bounds, decorations, text content, and action handles.
+/// absolute bounds, decorations, text content, and action handles. The tree is
+/// laid out left to right, except where an element sets
+/// [`Element::layout_direction`]; see [`layout_with_direction`].
 pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
+    layout_with_direction(el, bounds, font, LayoutDirection::Ltr)
+}
+
+/// [`layout`] with the root inheriting `direction` (an element's own
+/// [`Element::layout_direction`] still wins, for it and its subtree).
+///
+/// A right-to-left element places its children as a left-to-right one would,
+/// then reflects each child's box about the middle of its own: rows run right
+/// to left, horizontal `Start` alignment is the right edge, grid columns count
+/// from the right, and the left padding inset ends up on the right. Children
+/// then lay out their own children the same way, so a whole subtree mirrors.
+/// Glyphs, images and vertical positions are never flipped.
+pub fn layout_with_direction(
+    el: &Element,
+    bounds: Rect,
+    font: Option<&Font>,
+    direction: LayoutDirection,
+) -> LayoutNode {
+    let dir = el.layout_direction.unwrap_or(direction);
+    // Place a child at `rect`, as computed left to right within `bounds`.
+    let place = |child: &Element, rect: Rect| {
+        let rect = if dir.is_rtl() {
+            mirror_x(rect, bounds)
+        } else {
+            rect
+        };
+        layout_with_direction(child, rect, font, dir)
+    };
     let content = match &el.kind {
         ElementKind::Text {
             text,
@@ -326,7 +356,11 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
         ElementKind::Image { source, fit } => NodeContent::Image {
             source: source.clone(),
             fit: *fit,
-            padding: el.layout.padding,
+            padding: if dir.is_rtl() {
+                el.layout.padding.mirrored()
+            } else {
+                el.layout.padding
+            },
         },
         _ => NodeContent::None,
     };
@@ -348,6 +382,7 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
         clip: el.clip,
         cursor: el.cursor,
         semantics: el.semantics.clone(),
+        rtl: dir.is_rtl(),
         children: Vec::new(),
     };
 
@@ -400,7 +435,7 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
                 max.height,
             );
             let rect = Rect::from_xywh(inner.min_x() + cx + dx, inner.min_y() + cy + dy, w, h);
-            node.children.push(layout(child, rect, font));
+            node.children.push(place(child, rect));
         }
         return node;
     }
@@ -499,7 +534,7 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
                 cross_cursor + cross_off,
                 cross_len,
             );
-            node.children.push(layout(child, child_bounds, font));
+            node.children.push(place(child, child_bounds));
         }
         cross_cursor += line_cross + *gap;
     }
@@ -564,7 +599,15 @@ pub fn paint_focus(
         );
         return;
     };
-    let layout = text_layout(font, text, *size, *direction, leaf.wrap, bounds.width());
+    let layout = text_layout(
+        font,
+        text,
+        *size,
+        *direction,
+        leaf.wrap,
+        bounds.width(),
+        leaf.rtl,
+    );
     let origin = bounds.origin;
 
     // Selection highlight: in mixed-direction text one logical range can be
@@ -584,7 +627,8 @@ pub fn paint_focus(
 }
 
 /// The layout a text node is painted with: wrapped to its box when `wrap` is
-/// set, with right-to-left paragraphs aligned to the box's right edge.
+/// set, with right-to-left paragraphs aligned to the box's right edge. In a
+/// right-to-left layout (`rtl`), `Auto` text lines up on the right too.
 fn text_layout<'a>(
     font: &'a Font,
     text: &'a str,
@@ -592,8 +636,14 @@ fn text_layout<'a>(
     direction: TextDirection,
     wrap: bool,
     width: f64,
+    rtl: bool,
 ) -> TextLayout<'a> {
-    font.layout(text, size, direction, wrap.then_some(width))
+    let ui = if rtl {
+        LayoutDirection::Rtl
+    } else {
+        LayoutDirection::Ltr
+    };
+    font.layout_in(text, size, direction, wrap.then_some(width), ui)
         .with_align_width(width)
 }
 
@@ -615,7 +665,15 @@ pub fn caret_index_at(node: &LayoutNode, point: Point, font: Option<&Font>) -> O
     };
     let font = font?;
     let b = leaf.bounds;
-    let layout = text_layout(font, text, *size, *direction, leaf.wrap, b.width());
+    let layout = text_layout(
+        font,
+        text,
+        *size,
+        *direction,
+        leaf.wrap,
+        b.width(),
+        leaf.rtl,
+    );
     Some(layout.index_at(Point::new(point.x - b.min_x(), point.y - b.min_y())))
 }
 
@@ -692,7 +750,7 @@ pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
                 // Wrapped to the laid-out width when `wrap` is set; right-to-left
                 // paragraphs line up against the right edge of the box.
                 let w = node.bounds.width();
-                let layout = text_layout(f, text, *size, *direction, node.wrap, w);
+                let layout = text_layout(f, text, *size, *direction, node.wrap, w, node.rtl);
                 scene.fill_layout(&layout, node.bounds.origin, *color);
                 if let Some((start, end)) = *underline {
                     // Just under the baseline, as thick as the strokes.
@@ -776,6 +834,22 @@ fn translate(node: &mut LayoutNode, dy: f64) {
     for child in &mut node.children {
         translate(child, dy);
     }
+}
+
+/// `rect` reflected left to right within `within`: the same size, as far from
+/// `within`'s right edge as it was from its left.
+fn mirror_x(rect: Rect, within: Rect) -> Rect {
+    let span = Span {
+        offset: rect.min_x() - within.min_x(),
+        length: rect.width(),
+    }
+    .mirrored(within.width());
+    Rect::from_xywh(
+        within.min_x() + span.offset,
+        rect.min_y(),
+        span.length,
+        rect.height(),
+    )
 }
 
 fn child_rect(
@@ -1333,5 +1407,248 @@ mod tests {
             })
             .collect();
         assert_eq!(rects, vec![Rect::from_xywh(5.0, 15.0, 40.0, 20.0)]);
+    }
+
+    fn rtl(el: &Element, bounds: Rect) -> LayoutNode {
+        layout_with_direction(el, bounds, None, LayoutDirection::Rtl)
+    }
+
+    #[test]
+    fn rtl_row_runs_right_to_left_from_the_start_padding() {
+        use crate::geometry::Insets;
+        // Padding left 5, right 15: right to left the 5 is the start side, so
+        // it lands on the right.
+        let row = Element::stack(Axis::Horizontal, vec![block(40.0, 10.0), block(60.0, 10.0)])
+            .gap(10.0)
+            .padding(Insets::new(0.0, 15.0, 0.0, 5.0));
+        let ltr = layout(&row, Rect::from_xywh(0.0, 0.0, 200.0, 10.0), None);
+        assert_eq!(
+            rects(&ltr),
+            vec![
+                Rect::from_xywh(5.0, 0.0, 40.0, 10.0),
+                Rect::from_xywh(55.0, 0.0, 60.0, 10.0)
+            ]
+        );
+        assert!(!ltr.rtl && ltr.children.iter().all(|c| !c.rtl));
+        // Mirrored inside a box that doesn't start at zero.
+        let tree = rtl(&row, Rect::from_xywh(100.0, 0.0, 200.0, 10.0));
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(255.0, 0.0, 40.0, 10.0),
+                Rect::from_xywh(185.0, 0.0, 60.0, 10.0)
+            ]
+        );
+        assert!(tree.rtl && tree.children.iter().all(|c| c.rtl));
+    }
+
+    #[test]
+    fn rtl_flips_start_and_end_alignment() {
+        // Main axis: End packs a row against the left edge.
+        let row = Element::stack(Axis::Horizontal, vec![block(40.0, 10.0), block(20.0, 10.0)])
+            .align(Align::End, Align::Start);
+        let tree = rtl(&row, Rect::from_xywh(0.0, 0.0, 200.0, 10.0));
+        assert_eq!(rects(&tree)[1], Rect::from_xywh(0.0, 0.0, 20.0, 10.0));
+        assert_eq!(rects(&tree)[0], Rect::from_xywh(20.0, 0.0, 40.0, 10.0));
+        // Cross axis of a column: Start is the right edge; vertical order stays.
+        let col = Element::stack(Axis::Vertical, vec![block(40.0, 10.0), block(20.0, 10.0)])
+            .align(Align::Start, Align::Start);
+        let tree = rtl(&col, Rect::from_xywh(0.0, 0.0, 100.0, 50.0));
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(60.0, 0.0, 40.0, 10.0),
+                Rect::from_xywh(80.0, 10.0, 20.0, 10.0)
+            ]
+        );
+        // Center stays centered.
+        let centered = col.clone().align(Align::Start, Align::Center);
+        assert_eq!(
+            rects(&rtl(&centered, Rect::from_xywh(0.0, 0.0, 100.0, 50.0)))[0],
+            Rect::from_xywh(30.0, 0.0, 40.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn rtl_grow_and_wrap_mirror_per_line() {
+        // A growing child keeps its width, from the right.
+        let row = Element::stack(
+            Axis::Horizontal,
+            vec![
+                block(40.0, 10.0),
+                Element::boxed(BoxStyle::default()).grow(1.0),
+            ],
+        );
+        let tree = rtl(&row, Rect::from_xywh(0.0, 0.0, 200.0, 10.0));
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(160.0, 0.0, 40.0, 10.0),
+                Rect::from_xywh(0.0, 0.0, 160.0, 0.0)
+            ]
+        );
+        // Three 40-wide items in 100: two per line, each line from the right.
+        let wrapped = Element::stack(
+            Axis::Horizontal,
+            vec![block(40.0, 10.0), block(40.0, 10.0), block(40.0, 10.0)],
+        )
+        .wrap()
+        .gap(10.0);
+        let tree = rtl(&wrapped, Rect::from_xywh(0.0, 0.0, 100.0, 100.0));
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(60.0, 0.0, 40.0, 10.0),
+                Rect::from_xywh(10.0, 0.0, 40.0, 10.0),
+                Rect::from_xywh(60.0, 20.0, 40.0, 10.0)
+            ]
+        );
+    }
+
+    #[test]
+    fn rtl_grid_counts_columns_from_the_right() {
+        let g = Element::grid(
+            vec![Track::px(50.0), Track::fr(1.0), Track::px(30.0)],
+            vec![
+                cell(0.0, 10.0),
+                cell(0.0, 10.0),
+                cell(0.0, 10.0),
+                cell(0.0, 10.0).span(2, 1),
+            ],
+        )
+        .gap(10.0);
+        let tree = rtl(&g, Rect::from_xywh(0.0, 0.0, 200.0, 100.0));
+        let r = rects(&tree);
+        assert_eq!(r[0], Rect::from_xywh(150.0, 0.0, 50.0, 10.0));
+        assert_eq!(r[1], Rect::from_xywh(40.0, 0.0, 100.0, 10.0));
+        assert_eq!(r[2], Rect::from_xywh(0.0, 0.0, 30.0, 10.0));
+        // The spanning cell covers the two rightmost columns of the next row.
+        assert_eq!(r[3], Rect::from_xywh(40.0, 20.0, 160.0, 10.0));
+    }
+
+    #[test]
+    fn layout_direction_is_inherited_and_overridable() {
+        // An inner row forced left to right sits where the mirrored parent
+        // puts it but keeps its own children in left-to-right order.
+        let inner = Element::stack(Axis::Horizontal, vec![block(10.0, 10.0), block(20.0, 10.0)])
+            .layout_direction(LayoutDirection::Ltr);
+        let outer = Element::stack(Axis::Horizontal, vec![block(50.0, 10.0), inner]);
+        let tree = rtl(&outer, Rect::from_xywh(0.0, 0.0, 200.0, 10.0));
+        let inner = &tree.children[1];
+        assert_eq!(inner.bounds, Rect::from_xywh(120.0, 0.0, 30.0, 10.0));
+        assert!(!inner.rtl);
+        assert_eq!(
+            rects(inner),
+            vec![
+                Rect::from_xywh(120.0, 0.0, 10.0, 10.0),
+                Rect::from_xywh(130.0, 0.0, 20.0, 10.0)
+            ]
+        );
+        // And the other way: a mirrored subtree inside a left-to-right tree.
+        let sub = Element::stack(Axis::Horizontal, vec![block(10.0, 10.0)])
+            .width(100.0)
+            .layout_direction(LayoutDirection::Rtl);
+        let tree = layout(
+            &Element::stack(Axis::Horizontal, vec![sub]),
+            Rect::from_xywh(0.0, 0.0, 300.0, 10.0),
+            None,
+        );
+        assert_eq!(
+            tree.children[0].children[0].bounds,
+            Rect::from_xywh(90.0, 0.0, 10.0, 10.0)
+        );
+    }
+
+    #[test]
+    fn ltr_layout_is_unchanged_by_the_direction_plumbing() {
+        use crate::geometry::Insets;
+        let el = Element::grid(
+            vec![Track::Auto, Track::fr(1.0)],
+            vec![
+                block(30.0, 10.0),
+                Element::stack(
+                    Axis::Horizontal,
+                    vec![
+                        block(10.0, 10.0),
+                        Element::boxed(BoxStyle::default()).grow(1.0),
+                    ],
+                )
+                .padding(Insets::new(1.0, 2.0, 3.0, 4.0)),
+            ],
+        )
+        .padding(Insets::new(0.0, 0.0, 0.0, 7.0));
+        let b = Rect::from_xywh(3.0, 4.0, 150.0, 60.0);
+        fn all(node: &LayoutNode, out: &mut Vec<(Rect, bool)>) {
+            out.push((node.bounds, node.rtl));
+            for c in &node.children {
+                all(c, out);
+            }
+        }
+        let (mut a, mut d) = (Vec::new(), Vec::new());
+        all(&layout(&el, b, None), &mut a);
+        all(
+            &layout_with_direction(&el, b, None, LayoutDirection::Ltr),
+            &mut d,
+        );
+        assert_eq!(a, d);
+        assert!(a.iter().all(|(_, rtl)| !rtl));
+        // Left padding 7: the first column starts at x = 3 + 7.
+        assert_eq!(a[1].0.min_x(), 10.0);
+    }
+
+    #[test]
+    fn rtl_images_swap_their_side_padding() {
+        use crate::geometry::{Insets, PhysicalSize};
+        use crate::render::Pixmap;
+        let pm = std::sync::Arc::new(Pixmap::new(PhysicalSize::new(40, 20)));
+        let el = Element::image(&pm).padding(Insets::new(0.0, 0.0, 0.0, 10.0));
+        let tree = rtl(&el, Rect::from_xywh(0.0, 0.0, 50.0, 20.0));
+        match &tree.content {
+            NodeContent::Image { padding, .. } => {
+                assert_eq!((padding.left, padding.right), (0.0, 10.0));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn rtl_auto_text_lines_up_on_the_right() {
+        let Some(font) = crate::render::Font::system_default() else {
+            return;
+        };
+        let el = Element::text("abc", 16.0, Color::BLACK).width(200.0);
+        let b = Rect::from_xywh(0.0, 0.0, 200.0, 20.0);
+        let w = font.measure("abc", 16.0).width;
+        let caret_x = |tree: &LayoutNode, i: usize| {
+            text_layout(
+                &font,
+                "abc",
+                16.0,
+                TextDirection::Auto,
+                false,
+                200.0,
+                tree.rtl,
+            )
+            .caret_position(i)
+            .x
+        };
+        let ltr = layout(&el, b, Some(&font));
+        assert!(caret_x(&ltr, 0).abs() < 0.01);
+        let mirrored = layout_with_direction(&el, b, Some(&font), LayoutDirection::Rtl);
+        assert!(mirrored.rtl);
+        // Still a left-to-right paragraph ("abc" reads left to right), but
+        // against the right edge.
+        assert!((caret_x(&mirrored, 0) - (200.0 - w)).abs() < 0.01);
+        assert!((caret_x(&mirrored, 3) - 200.0).abs() < 0.01);
+        // A click right of the text lands at its end.
+        let hit = caret_index_at(&mirrored, Point::new(199.0, 5.0), Some(&font));
+        assert_eq!(hit, Some(3));
+        // An explicit left-to-right direction keeps its side.
+        let forced = el.clone().direction(TextDirection::Ltr);
+        let forced = layout_with_direction(&forced, b, Some(&font), LayoutDirection::Rtl);
+        assert_eq!(
+            caret_index_at(&forced, Point::new(1.0, 5.0), Some(&font)),
+            Some(0)
+        );
     }
 }

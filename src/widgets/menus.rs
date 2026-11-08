@@ -595,7 +595,12 @@ fn panel<S: 'static>(
         let submenu = item.get_submenu().is_some();
         cells.push(
             Element::text(
-                if submenu { "\u{25B8}" } else { "" },
+                match (submenu, theme.is_rtl()) {
+                    (false, _) => "",
+                    // Submenus open leftwards in a mirrored UI.
+                    (true, true) => "\u{25C2}",
+                    (true, false) => "\u{25B8}",
+                },
                 theme.typography.body,
                 p.text_muted,
             )

@@ -58,4 +58,16 @@ impl Insets {
     pub fn vertical(self) -> f64 {
         self.top + self.bottom
     }
+
+    /// These insets with `left` and `right` swapped, as a right-to-left
+    /// layout applies them.
+    #[inline]
+    pub const fn mirrored(self) -> Self {
+        Self {
+            top: self.top,
+            right: self.left,
+            bottom: self.bottom,
+            left: self.right,
+        }
+    }
 }

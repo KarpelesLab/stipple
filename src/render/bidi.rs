@@ -55,6 +55,14 @@ impl TextDirection {
     }
 }
 
+/// Whether `para` has a strong character (bidi class L, R or AL), the kind
+/// that decides an `Auto` paragraph's direction. Spaces, digits and
+/// punctuation alone don't.
+pub(crate) fn has_strong(para: &str) -> bool {
+    para.chars()
+        .any(|c| matches!(bidi_class(c), BidiClass::L | BidiClass::R | BidiClass::AL))
+}
+
 /// Whether `para` needs the bidi algorithm at all: true for a right-to-left
 /// paragraph or one with a character that can start a right-to-left run.
 /// Plain left-to-right text (all of Latin, Greek, Cyrillic, CJK) skips it.

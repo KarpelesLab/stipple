@@ -10,7 +10,7 @@ use crate::core::runtime::{
     ActionId, ContextId, Cx, DragId, DragMotion, FocusId, KeyInput, ScrollId, TextPosId, ViewportId,
 };
 use crate::geometry::Insets;
-use crate::layout::{Axis, Track};
+use crate::layout::{Axis, LayoutDirection, Track};
 use crate::platform::CursorIcon;
 use crate::platform::native::NativeDeco;
 use crate::render::{Color, ImageFit, ImageSource, TextDirection};
@@ -178,6 +178,11 @@ pub struct Element {
     /// [`Element::role`], [`Element::a11y_label`], [`Element::selected`] and
     /// [`Element::expanded`].
     pub semantics: Option<Semantics>,
+    /// The direction this element lays its children out in, or `None` to
+    /// inherit its parent's (the root inherits the theme's
+    /// [`layout_direction`](crate::style::Theme::layout_direction)). Set via
+    /// [`Element::layout_direction`].
+    pub layout_direction: Option<LayoutDirection>,
     pub kind: ElementKind,
 }
 
@@ -201,6 +206,7 @@ impl Element {
             clip: false,
             cursor: None,
             semantics: None,
+            layout_direction: None,
             kind: ElementKind::Leaf,
         }
     }
@@ -224,6 +230,7 @@ impl Element {
             clip: false,
             cursor: None,
             semantics: None,
+            layout_direction: None,
             kind: ElementKind::Text {
                 text: text.into(),
                 size,
@@ -259,6 +266,7 @@ impl Element {
             clip: false,
             cursor: None,
             semantics: None,
+            layout_direction: None,
             kind: ElementKind::Viewport { id },
         }
     }
@@ -284,6 +292,7 @@ impl Element {
             clip: false,
             cursor: None,
             semantics: None,
+            layout_direction: None,
             kind: ElementKind::Image {
                 source: source.into(),
                 fit: ImageFit::default(),
@@ -310,6 +319,7 @@ impl Element {
             clip: false,
             cursor: None,
             semantics: None,
+            layout_direction: None,
             kind: ElementKind::Stack {
                 axis,
                 gap: 0.0,
@@ -642,6 +652,22 @@ impl Element {
         if let ElementKind::Text { underline, .. } = &mut self.kind {
             *underline = range.filter(|(s, e)| e > s);
         }
+        self
+    }
+
+    /// Lay this element and everything inside it out in `dir`, instead of the
+    /// direction inherited from its parent (ultimately the theme's
+    /// [`layout_direction`](crate::style::Theme::layout_direction)).
+    ///
+    /// Right to left mirrors the subtree: rows run right to left, horizontal
+    /// `Align::Start` is the right edge, grid columns count from the right,
+    /// and padding's `left` inset is on the right. Text whose direction is
+    /// [`TextDirection::Auto`] lines up against the right edge. Set
+    /// [`LayoutDirection::Ltr`] on a part of a mirrored UI that must not flip
+    /// (a media transport bar, a chart, a phone number).
+    /// See `docs/bidi.md` in the repository.
+    pub fn layout_direction(mut self, dir: LayoutDirection) -> Self {
+        self.layout_direction = Some(dir);
         self
     }
 

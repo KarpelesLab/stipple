@@ -44,7 +44,8 @@ use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
     KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_focusables,
     collect_viewports, context_at, drag_hit_at, find_action, find_focus, find_text_pos, focus_at,
-    hit_test, layout, measure, paint, paint_focus, paint_hover, text_pos_at, viewport_at,
+    hit_test, layout_with_direction, measure, paint, paint_focus, paint_hover, text_pos_at,
+    viewport_at,
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::{
@@ -229,8 +230,9 @@ struct Pane<S> {
     pressed: Option<ActionId>,
     focused: Option<FocusId>,
     hovered: Option<ActionId>,
-    // The latched drag: its id, its and its parent's bounds, and the press point.
-    dragging: Option<(DragId, Rect, Rect, Point)>,
+    // The latched drag: its id, its and its parent's bounds, the press point, and
+    // whether it was laid out right to left.
+    dragging: Option<(DragId, Rect, Rect, Point, bool)>,
     // The text element currently being selected by a pointer drag.
     text_selecting: Option<TextPosId>,
     // Consecutive presses on text, for double-click (word) and triple-click
@@ -725,7 +727,10 @@ impl<S: 'static> Pane<S> {
 
         let size = self.attrs.logical_size;
         let win = Rect::from_xywh(0.0, 0.0, size.width, size.height);
-        let main = layout(&element, win, font);
+        // A right-to-left theme mirrors the view and its overlays.
+        let dir = theme.layout_direction;
+        let rtl = dir.is_rtl();
+        let main = layout_with_direction(&element, win, font, dir);
 
         // Compose the main tree with any floating overlay layers under one
         // routable/paintable root: each overlay (with a scrim behind a modal
@@ -752,9 +757,21 @@ impl<S: 'static> Pane<S> {
                     // The plain arrow over the scrim, not the tap target's hand
                     // or whatever lies beneath.
                     catcher.cursor = Some(CursorIcon::Default);
-                    roots.push(layout(&catcher, win, font));
+                    roots.push(layout_with_direction(&catcher, win, font, dir));
                 }
                 let mut m = measure(&spec.content, size, font);
+                // Right to left, popups are placed in a mirrored frame (x from
+                // the window's right edge): a menu opens leftwards from the
+                // pointer, a submenu left of its item, a dropdown lines up with
+                // its button's right edge. `At` and `Center` stay as they are.
+                let flip_x = |x: f64| if rtl { size.width - x } else { x };
+                let flip = |r: Rect| {
+                    if rtl {
+                        Rect::from_xywh(size.width - r.max_x(), r.min_y(), r.width(), r.height())
+                    } else {
+                        r
+                    }
+                };
                 let origin = match spec.anchor {
                     Anchor::At(p) => p,
                     Anchor::Center => Point::new(
@@ -762,6 +779,7 @@ impl<S: 'static> Pane<S> {
                         ((size.height - m.height) / 2.0).max(0.0),
                     ),
                     Anchor::Popup(p) => {
+                        let p = Point::new(flip_x(p.x), p.y);
                         // Flip left or up when the menu would cross the edge.
                         let x = if p.x + m.width > size.width && p.x - m.width >= 0.0 {
                             p.x - m.width
@@ -777,7 +795,7 @@ impl<S: 'static> Pane<S> {
                     }
                     Anchor::RightOf(id) => match roots.iter().find_map(|r| find_action(r, id)) {
                         Some(node) => {
-                            let b = node.bounds;
+                            let b = flip(node.bounds);
                             // Line the first row up with the item: back off the
                             // panel's padding.
                             let inset = 4.0;
@@ -794,7 +812,7 @@ impl<S: 'static> Pane<S> {
                     },
                     Anchor::Below(id) => match find_action(&roots[0], id) {
                         Some(node) => {
-                            let b = node.bounds;
+                            let b = flip(node.bounds);
                             m.width = m.width.max(b.width());
                             let below = b.max_y() + 2.0;
                             let y = if below + m.height > size.height
@@ -825,8 +843,13 @@ impl<S: 'static> Pane<S> {
                         )
                     }
                 };
+                let origin = match spec.anchor {
+                    Anchor::At(_) | Anchor::Center => origin,
+                    _ if rtl => Point::new(size.width - origin.x - m.width, origin.y),
+                    _ => origin,
+                };
                 let bounds = Rect::from_xywh(origin.x, origin.y, m.width, m.height);
-                roots.push(layout(&spec.content, bounds, font));
+                roots.push(layout_with_direction(&spec.content, bounds, font, dir));
             }
             LayoutNode::container(win, roots)
         };
@@ -1248,17 +1271,22 @@ impl<S: 'static> Pane<S> {
                 .tree
                 .as_ref()
                 .and_then(|t| drag_hit_at(press_layer(t, overlays, pos).0, pos))
-                .map(|(id, bounds, parent)| (id, bounds, parent, pos));
+                .map(|(id, bounds, parent, rtl)| (id, bounds, parent, pos, rtl));
         }
-        let Some((id, bounds, parent, origin)) = self.dragging else {
+        let Some((id, bounds, parent, origin, rtl)) = self.dragging else {
             return false;
         };
-        let motion = crate::core::DragMotion {
+        let mut motion = crate::core::DragMotion {
             position: pos,
             origin,
             bounds,
             parent,
         };
+        // A mirrored element's handler sees the drag as it would left to
+        // right: a slider fills from the right, a divider follows the pointer.
+        if rtl {
+            motion = motion.mirrored();
+        }
         crate::core::set_pointer_position(pos, Some(origin));
         let ran = self.handlers.dispatch_drag_motion(id, &motion, state);
         if ran {
@@ -2129,7 +2157,8 @@ impl<S: 'static> App<S> {
                     // repaint.
                     crate::platform::native::clear_cache();
                     if self.theme.follows_system {
-                        self.theme = Theme::native();
+                        self.theme =
+                            Theme::native().with_layout_direction(self.theme.layout_direction);
                         let dark = self.theme.is_dark();
                         for pane in &mut self.panes {
                             pane.attrs.dark = Some(dark);
@@ -2196,7 +2225,7 @@ impl<S: 'static> App<S> {
             return show;
         }
         self.alt_armed = false;
-        if let Some(used) = self.menu_nav(idx, menu_key_of(code)) {
+        if let Some(used) = self.menu_nav(idx, menu_key_of(code, self.theme.is_rtl())) {
             return used;
         }
         let App {
@@ -2447,12 +2476,16 @@ impl<S: 'static> App<S> {
     }
 }
 
-/// The menu navigation key for `code`, if menus use it.
-fn menu_key_of(code: KeyCode) -> Option<crate::widgets::menus::MenuKey> {
+/// The menu navigation key for `code`, if menus use it. In a mirrored (`rtl`)
+/// UI the menu bar runs right to left and submenus open leftwards, so Left and
+/// Right swap.
+fn menu_key_of(code: KeyCode, rtl: bool) -> Option<crate::widgets::menus::MenuKey> {
     use crate::widgets::menus::MenuKey;
     Some(match code {
         KeyCode::ArrowUp => MenuKey::Up,
         KeyCode::ArrowDown => MenuKey::Down,
+        KeyCode::ArrowLeft if rtl => MenuKey::Right,
+        KeyCode::ArrowRight if rtl => MenuKey::Left,
         KeyCode::ArrowLeft => MenuKey::Left,
         KeyCode::ArrowRight => MenuKey::Right,
         KeyCode::Home => MenuKey::Home,
@@ -2531,8 +2564,8 @@ pub mod prelude {
     pub use crate::anim::{Easing, Spring, Tween};
     pub use crate::core::ViewportId;
     pub use crate::core::{
-        Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, TimerId,
-        Track, View,
+        Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
+        OverlaySpec, TimerId, Track, View,
     };
     pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut};
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
@@ -2922,6 +2955,40 @@ mod tests {
         // Drag to x=50 -> 0.25.
         app.drag_at_point(Point::new(50.0, 20.0));
         assert!((app.state().level - 0.25).abs() < 1e-9);
+        app.end_drag();
+    }
+
+    #[test]
+    fn a_mirrored_slider_fills_and_drags_from_the_right() {
+        use crate::layout::LayoutDirection;
+        let mut app = App::new(Volume { level: 0.25 }, |s: &Volume, cx: &mut Cx<Volume>| {
+            let theme = *cx.theme();
+            crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
+                .width(200.0)
+        })
+        .theme(Theme::light().with_layout_direction(LayoutDirection::Rtl))
+        .logical_size(Size::new(200.0, 40.0));
+        app.render_once();
+        // The knob (the slider's 16-wide child) sits a quarter of the way in
+        // from the right: 3px padding, then 0.25 of the 178px of travel.
+        let tree = app.panes[0].tree.clone().unwrap();
+        let slider = &tree;
+        assert!(slider.rtl);
+        let knob = slider
+            .children
+            .iter()
+            .find(|c| c.bounds.width() == 16.0)
+            .unwrap()
+            .bounds;
+        assert!(
+            (knob.max_x() - (200.0 - 3.0 - 0.25 * 178.0)).abs() < 1e-9,
+            "{knob:?}"
+        );
+        // A press near the right end is near 0; near the left end, near 1.
+        app.drag_at_point(Point::new(150.0, 20.0));
+        assert!((app.state().level - 0.25).abs() < 1e-9);
+        app.drag_at_point(Point::new(20.0, 20.0));
+        assert!((app.state().level - 0.9).abs() < 1e-9);
         app.end_drag();
     }
 

@@ -389,3 +389,66 @@ fn an_underline_is_painted_under_the_mnemonic() {
     assert!(differs(0, f_width), "an underline under the F");
     assert!(!differs(f_width + 2, 100), "and nowhere else");
 }
+
+#[test]
+fn a_mirrored_ui_mirrors_the_bar_its_menus_and_their_keys() {
+    use crate::layout::LayoutDirection;
+    use crate::style::Theme;
+    let mut app = app().theme(Theme::light().with_layout_direction(LayoutDirection::Rtl));
+    app.render_once();
+    // The bar runs right to left: File is rightmost.
+    let file = find(&app, Role::MenuItem, "File");
+    let view = find(&app, Role::MenuItem, "View");
+    assert!(file.bounds.min_x() > view.bounds.max_x() - 1.0);
+    assert!(file.bounds.max_x() > 390.0, "{:?}", file.bounds);
+    // File's menu lines up with the title's right edge.
+    click_on(&mut app, Role::MenuItem, "File");
+    let menu = find(&app, Role::Menu, "File");
+    assert!(
+        (menu.bounds.max_x() - file.bounds.max_x()).abs() < 0.5,
+        "{:?} under {:?}",
+        menu.bounds,
+        file.bounds
+    );
+    // A submenu opens on the left of its item.
+    let recent = find(&app, Role::MenuItem, "Recent");
+    app.hover_at(recent.bounds.center());
+    app.render_once();
+    let sub = find(&app, Role::Menu, "Recent");
+    assert!(
+        sub.bounds.max_x() <= recent.bounds.min_x() + 1.0,
+        "{:?} beside {:?}",
+        sub.bounds,
+        recent.bounds
+    );
+    let none = Modifiers::default();
+    for _ in 0..3 {
+        app.press_key_code(KeyCode::Escape, none);
+    }
+    app.render_once();
+    assert!(nodes(&app, Role::Menu).is_empty());
+
+    // On the bar, Left goes to the next menu (View, on File's left).
+    app.press_key_code(KeyCode::F10, none);
+    app.press_key_code(KeyCode::ArrowDown, none);
+    app.render_once();
+    find(&app, Role::Menu, "File");
+    app.press_key_code(KeyCode::ArrowLeft, none);
+    app.render_once();
+    find(&app, Role::Menu, "View");
+    app.press_key_code(KeyCode::ArrowRight, none);
+    app.render_once();
+    find(&app, Role::Menu, "File");
+    for _ in 0..3 {
+        app.press_key_code(KeyCode::Escape, none);
+    }
+    app.render_once();
+
+    // A context menu opens leftwards from the pointer.
+    let body = find(&app, Role::Text, "Body");
+    let at = Point::new(body.bounds.max_x() - 30.0, body.bounds.center().y);
+    assert!(app.right_click_at(at));
+    app.render_once();
+    let menu = &nodes(&app, Role::Menu)[0];
+    assert_eq!((menu.bounds.max_x(), menu.bounds.min_y()), (at.x, at.y));
+}
