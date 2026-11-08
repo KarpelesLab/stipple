@@ -72,6 +72,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   origin, and the element's and its parent's bounds.
 - `Anchor::Below` (an overlay dropped under an element) and `Anchor::Aligned`
   (an overlay against the window's edges).
+- Input methods (IME) for Chinese, Japanese and Korean: `Event::Ime` (preedit,
+  commit, delete-surrounding), shown inline and underlined in `text_editor` and
+  `text_area` without entering the undo history until committed;
+  `Window::set_ime` passes the caret rectangle and surrounding text to
+  `zwp_text_input_v3` on Wayland, IMM32 on Windows and `NSTextInputClient` on
+  macOS. See `docs/ime.md`.
+- Dead keys and compose sequences on X11 and Wayland, from the libX11 Compose
+  file for the locale (`XCOMPOSEFILE`, `~/.XCompose`), with the pending
+  sequence shown as preedit. Both backends also type legacy keysyms such as
+  `eacute` or `Cyrillic_a`.
+- `EditBuffer::set_preedit`, `preedit`, `clear_preedit`, `delete_surrounding`,
+  `display` and `display_to_text`; `Element::preedit`.
 
 ### Changed
 
@@ -83,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `selected` and `expanded`; `Element` and `LayoutNode` have a `semantics`
   field (`Semantics`: role, label, selected, expanded).
 - `spinner` takes the `Cx`: `spinner(cx, &theme)`.
+- `KeyInput` has `Preedit` and `DeleteSurrounding` variants; `Element` and
+  `LayoutNode` have a `preedit` field.
 
 ### Fixed
 
@@ -90,6 +104,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   container can't be clicked where it isn't drawn.
 - A press on an overlay's dismiss area no longer reaches the text fields,
   sliders or focusables underneath it.
+- X11 follows keyboard mapping changes (`MappingNotify`) instead of keeping the
+  keymap read at startup.
+- Windows delivers characters outside the Basic Multilingual Plane (emoji, rare
+  CJK ideographs), which `WM_CHAR` sends as two surrogates.
 
 ## [0.0.2](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.1...stipple-v0.0.2) - 2026-11-07
 

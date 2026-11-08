@@ -8,7 +8,7 @@
 //! take effect together on `done`. Without an input method running, nothing
 //! comes back and keys arrive through `wl_keyboard` as usual.
 
-use super::{WlConn, arg_str, arg_u32, read_str};
+use super::{WlConn, arg_str, arg_u32, dbg, read_str};
 use crate::platform::ImeState;
 use crate::platform::event::Ime;
 use std::io::Write;
@@ -64,6 +64,7 @@ pub(super) fn setup(conn: &mut WlConn, manager: u32, seat: u32) {
     arg_u32(&mut a, seat);
     if conn.send(manager, MANAGER_GET_TEXT_INPUT, &a).is_ok() {
         conn.text_input.object = Some(id);
+        dbg(format_args!("text-input: bound (object {id})"));
     }
 }
 
@@ -132,12 +133,16 @@ fn apply(conn: &mut WlConn) {
             arg_u32(&mut a, r.height().round().max(1.0) as i32 as u32);
             let _ = conn.send(object, SET_CURSOR_RECTANGLE, &a);
             let _ = conn.send(object, COMMIT, &[]);
+            if !conn.text_input.enabled {
+                dbg(format_args!("text-input: enabled"));
+            }
             conn.text_input.enabled = true;
         }
         _ if ti.enabled => {
             let _ = conn.send(object, DISABLE, &[]);
             let _ = conn.send(object, COMMIT, &[]);
             conn.text_input.enabled = false;
+            dbg(format_args!("text-input: disabled"));
         }
         _ => {}
     }
@@ -162,6 +167,7 @@ pub(super) fn handle(
     let mut out = Vec::new();
     match opcode {
         ENTER if word(0) == surface => {
+            dbg(format_args!("text-input: enter"));
             conn.text_input.entered = true;
             conn.text_input.enabled = false;
             apply(conn);

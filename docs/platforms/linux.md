@@ -59,10 +59,14 @@ work in Flatpak and Snap sandboxes and show the desktop's own picker. They need
 
 - `STIPPLE_WAYLAND_DEBUG=1` logs Wayland events, sizes and buffer scales.
 - `STIPPLE_X11_DEBUG=1` logs X11 events.
+- `STIPPLE_COMPOSE_DEBUG=1` reports the Compose table when it loads.
 
 ## Known gaps
 
 - On X11, pasting text another app copied isn't wired up yet.
-- On Wayland, typed text comes from a simple reading of the compositor's keymap:
-  Shift and Caps Lock pick the second level, but AltGr levels and dead keys
-  aren't applied yet.
+- Typed text comes from a simple reading of the keymap: Shift (and Caps Lock, on
+  Wayland) pick the second level, but AltGr levels aren't applied yet. Dead keys
+  and compose sequences work, from the locale's Compose file (see
+  [ime.md](../ime.md)).
+- Input methods (fcitx5, IBus) are wired up on Wayland through `text-input-v3`
+  (not yet tried with a real IME in CI), but not yet on X11.

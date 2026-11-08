@@ -845,10 +845,20 @@ Most input only works on X11 today.
 - **Exit criteria:** the same scripted input test passes on every desktop backend.
 
 #### 7c — Text input
-- ⬜ Input methods (IME) for Chinese, Japanese and Korean: `text-input-v3` on
-  Wayland, XIM or IBus on X11, `NSTextInputClient` on macOS, IMM32 / TSF on
-  Windows, and the mobile soft keyboards.
-- ⬜ Dead keys and compose sequences.
+- ✅ Input methods (IME) for Chinese, Japanese and Korean: a platform-neutral
+  preedit / commit model (`Event::Ime`), the composition drawn inline and
+  underlined in text fields, and `Window::set_ime` reporting the caret
+  rectangle; `text-input-v3` on Wayland, IMM32 on Windows and
+  `NSTextInputClient` on macOS. Unit-tested, and the macOS protocol is driven
+  through objc dispatch in CI, but no real IME runs in CI, so the Wayland,
+  Windows and macOS paths are only build-checked end to end. See
+  [docs/ime.md](docs/ime.md).
+- ⬜ IME on X11 (XIM or IBus), TSF on Windows, and the mobile soft keyboards.
+- ✅ Dead keys and compose sequences: X11 and Wayland parse the locale's libX11
+  Compose file (`XCOMPOSEFILE`, `~/.XCompose`, includes) by hand and show the
+  pending sequence as preedit; Windows gets them from `TranslateMessage` and
+  macOS from `NSTextInputClient`. CI types dead keys and a compose sequence on
+  X11 (`xdotool`) and Wayland (`wtype` under sway).
 - ✅ Undo and redo, word-wise movement and deletion, double-click to select a word
   (triple-click selects the line). See [docs/text-editing.md](docs/text-editing.md).
 - ✅ Right-to-left and bidirectional text, from `oxideav-scribe`'s bidi support:

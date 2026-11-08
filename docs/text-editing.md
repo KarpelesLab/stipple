@@ -56,3 +56,10 @@ system's double-click setting yet.
 The app delivers double- and triple-clicks to the focused element as
 `KeyInput::SelectWord` and `KeyInput::SelectLine`, so a custom key handler can
 handle them too.
+
+## Input methods
+
+Chinese, Japanese and Korean input methods, dead keys and compose sequences show
+their composition at the caret, underlined, until it is committed; the
+composition isn't part of the text or the undo history until then. See
+[ime.md](ime.md).

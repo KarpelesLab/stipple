@@ -1149,6 +1149,22 @@ jobs:
           kill "$TXT_PID" 2>/dev/null || true
           sleep 1
 
+          # --- dead keys: composing is the client's job on Wayland, from the
+          # locale's Compose file. wtype's keymap names the dead key by value.
+          # The app also binds sway's zwp_text_input_v3 (no input method runs
+          # here, so nothing comes back through it). ---
+          LANG=C.UTF-8 STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+            > visual_output/wl-compose.log 2>&1 &
+          TXT_PID=$!
+          sleep 4
+          wtype -s 500 -d 120 -k Tab -k dead_acute -k e 2>> visual_output/wtype.log; sleep 2
+          kill "$TXT_PID" 2>/dev/null || true
+          sleep 1
+          echo "=== wl-compose.log ==="; grep -v "present\|frame" visual_output/wl-compose.log | tail -40 || true
+          grep -q 'textinput: text="é" preedit=None' visual_output/wl-compose.log
+          grep -q 'text-input: bound' visual_output/wl-compose.log
+          grep 'text-input:' visual_output/wl-compose.log || true
+
           # --- clipboard: copy out of the app, paste into it, copy back out.
           # wl-copy / wl-paste reach the selection through the compositor, so
           # each direction crosses wl_data_device. ---
@@ -1255,6 +1271,29 @@ jobs:
           import -window root visual_output/text-selected.png
           echo "=== textinput.log ==="; cat visual_output/textinput.log || true
           kill "$APP_PID" 2>/dev/null || true
+
+          # --- dead keys and compose sequences, from the locale's Compose
+          # file: dead_acute e -> é, Multi_key o c -> ©. Xvfb's keymap has
+          # neither keysym, so xdotool borrows a spare keycode for each, which
+          # the app sees as a MappingNotify. The pending sequence shows as an
+          # underlined preedit, screenshotted mid-sequence. ---
+          LANG=C.UTF-8 STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+            > visual_output/compose.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          COMPOSE_PID=$!
+          sleep 3
+          xdotool key Tab; sleep 0.5
+          xdotool key dead_acute; sleep 0.3
+          xdotool key e; sleep 0.3
+          xdotool key Multi_key; sleep 0.3
+          xdotool key o; sleep 1
+          import -window root visual_output/text-compose-preedit.png
+          xdotool key c; sleep 1
+          kill "$COMPOSE_PID" 2>/dev/null || true
+          echo "=== compose.log ==="; cat visual_output/compose.log || true
+          grep -q 'textinput: text="" preedit=Some("´")' visual_output/compose.log
+          grep -q 'textinput: text="é" preedit=Some("·o")' visual_output/compose.log
+          grep -q 'textinput: text="é©" preedit=None' visual_output/compose.log
 
           # --- hover: move the cursor onto the right button ---
           ./target/release/hoverdemo > visual_output/hoverdemo.log 2>&1 &
