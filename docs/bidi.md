@@ -93,13 +93,104 @@ text.
 `Font::layout(text, size, direction, max_width)` returns a `TextLayout`, the
 same layout the widgets use. Draw it with `Scene::fill_layout`, and use
 `caret_position`, `index_at` and `selection_rects` for a custom editor.
-`Scene::fill_text` lays text out with `TextDirection::Auto`.
+`Scene::fill_text` lays text out with `TextDirection::Auto`. In a mirrored
+layout, use `Font::layout_in(.., LayoutDirection::Rtl)` to get the same
+alignment the widgets get (see below).
+
+## Mirrored layouts
+
+An app in Arabic, Hebrew or another right-to-left language usually wants the
+whole UI mirrored, not only its text: the first item of a row on the right,
+checkboxes right of their labels, sliders filling from the right. Set the
+theme's layout direction:
+
+```rust
+use stipple::prelude::*;
+
+let app = App::new(state, view)
+    .theme(Theme::light().with_layout_direction(LayoutDirection::Rtl));
+```
+
+![bididemo --mirror on X11](screenshots/stipple-x11-bidi-mirror.png)
+
+The default is left to right. Stipple doesn't mirror on its own, since a UI
+whose strings aren't translated shouldn't flip. To follow the locale, pick the
+direction from it: `LayoutDirection::from_env()` reads `LC_ALL`, `LC_MESSAGES`
+and `LANG`, and `LayoutDirection::for_language("ar-EG")` maps a language tag
+(Arabic, Hebrew, Persian, Urdu, Yiddish, Pashto, Sindhi, Kurdish, Uyghur,
+Dhivehi and a few more read right to left). On Windows and macOS the
+environment usually doesn't carry the UI language, so pass the language your
+app is showing.
+
+`Element::layout_direction(dir)` sets the direction of one element and
+everything inside it, and is inherited down the tree. Use
+`LayoutDirection::Ltr` for a part of a mirrored UI that must keep its
+orientation (media transport buttons, a chart, a phone number), or
+`LayoutDirection::Rtl` for a mirrored panel in a left-to-right app.
+
+### What mirrors
+
+A right-to-left element lays its children out as it would left to right, then
+reflects each child's box about its own middle. So in a right-to-left
+subtree:
+
+- Rows run right to left, wrapped rows too (each line starts on the right).
+- `Align::Start` on a horizontal axis is the right edge and `Align::End` the
+  left one: a row's main-axis alignment, a column's cross-axis alignment, and
+  a grid cell's horizontal alignment. Vertical alignment doesn't change.
+- Grid columns count from the right: column 0 is the rightmost.
+- Padding's `left` inset is the start side, so it lands on the right (and
+  `right` on the left). `Insets` keeps `left` and `right` names; read them as
+  start and end.
+- Text with `TextDirection::Auto` lines up against the right edge, whatever its
+  own direction: a stretched Latin label, a text field's contents and its
+  caret all start on the right. A paragraph with no strong character (an empty
+  field, a number) gets a right-to-left base direction. Each paragraph's
+  reading order is still detected from its characters, so "abc" still reads
+  left to right. Text with an explicit `Ltr` or `Rtl` keeps its own side.
+- Glyphs, images and anything drawn with a fixed orientation are never
+  flipped. An image's left and right padding swap.
+
+Widgets follow:
+
+- `checkbox`, `radio` and `switch` sit right of a label that comes after them
+  in a row; a switch's knob is on the left when on.
+- `slider` and `progress_bar` fill from the right, and dragging a slider
+  measures from the right edge.
+- `tabs` and `toolbar`s start on the right; `split_pane`'s first pane is the
+  right one.
+- `tree` indents from the right and its collapsed triangles point left (◄).
+- Menus Stipple draws: the menu bar starts on the right, a menu lines up with
+  its title's right edge, submenus open to the left of their item (their
+  arrows point left), and context menus open leftwards from the pointer.
+  `select` dropdowns line up with the button's right edge, and toasts placed
+  with `Align::Start` / `Align::End` swap sides. Overlays placed with
+  `Anchor::At` (exact coordinates) and `Anchor::Center` stay where they are.
+- Left and Right swap in a `tree` (Left expands, Right collapses), a
+  `split_pane` (the divider moves the way the arrow points) and menus (Left
+  goes to the next menu on the bar and into a submenu). Text editing keys
+  don't change: Left and Right already move visually in text.
+- Under `Theme::native`, switches, sliders and progress bars draw themselves
+  in a mirrored UI, since the OS would draw them left to right. Other native
+  controls are symmetric.
+
+Drag handlers on a mirrored element get a mirrored `DragMotion`
+(`DragMotion::mirrored`): x is measured from the right of the parent, so
+`fraction_x` counts from the right edge and dragging left is a positive x
+delta. A handler written for a left-to-right layout works unchanged. Pointer
+positions given to tap and context handlers are real window positions.
+
+Stipple has no scroll bars to move: scroll containers scroll vertically and
+show no bar. Layouts built from absolute positions (`Anchor::At`, custom
+drawing) aren't mirrored; compute those from the window's right edge.
+
+`LayoutNode::rtl` says whether a laid-out node was mirrored, and
+`stipple::core::layout_with_direction` lays a tree out with a root direction
+(`layout` is left to right). The `bididemo --mirror` example shows a
+mirrored UI; CI checks it on X11, Windows and macOS.
 
 ## Not done yet
 
-- Mirroring layouts: Stipple doesn't yet flip row order or start/end alignment
-  for a right-to-left UI. An app can reverse its own rows and pick
-  `Align::End` for now.
 - The GPU renderer (`stipple::gpu`) draws text character by character from an
   atlas and ignores bidi; the CPU renderer, which every backend uses by
   default, is bidi-aware.

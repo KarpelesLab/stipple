@@ -100,6 +100,16 @@ cells. Content measures against the bounded space, so a paragraph with
 `.max_width(260.0)` wraps at 260 even in a wider container. When a minimum is
 larger than the maximum, the minimum wins, as in CSS.
 
+## Right-to-left layouts
+
+`Theme::with_layout_direction(LayoutDirection::Rtl)`, or
+`.layout_direction(..)` on an element and its subtree, mirrors everything above
+horizontally: rows run right to left, `Align::Start` on a horizontal axis is
+the right edge, grid columns count from the right, and the `left` padding inset
+lands on the right. Vertical layout doesn't change, and neither does the
+source order of children (focus order follows it). See
+[bidi.md](bidi.md#mirrored-layouts).
+
 ## Input, focus and accessibility
 
 Every container produces ordinary `LayoutNode` children in source order, so

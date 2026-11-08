@@ -37,6 +37,7 @@ How to build, package and run on each platform, and what works there today.
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ✅ ¹² |
 | Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
+| Mirrored right-to-left layouts | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ |
 | Input methods (CJK IME) | Wayland ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
@@ -109,6 +110,10 @@ from it with `WM_COMMAND` and from the keyboard, uses a shortcut, and picks
 from a native context menu; on macOS an in-process self-test prints the menu
 bar, picks from it, posts shortcuts (checking each runs once, ⌘C in a text
 field included) and picks from a native context menu. See [menus.md](menus.md).
+²⁵ Done by the shared layout pass, so the same everywhere. CI checks the
+mirrored `bididemo --mirror` rendering on X11, Windows and macOS, screenshots its
+window on all three, and drags its slider on X11; on iOS, Android and the web it
+is only unit-tested. See [bidi.md](bidi.md#mirrored-layouts).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -122,7 +127,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
-- [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, and editing them
+- [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop

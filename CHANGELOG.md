@@ -63,6 +63,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Font::layout` / `TextLayout` (caret positions, hit-testing, selection
   rectangles) and `Scene::fill_layout`. See `docs/bidi.md` and
   `examples/bididemo`.
+- Mirrored layouts for right-to-left UIs: `Theme::with_layout_direction`
+  (`LayoutDirection::Ltr` by default, `LayoutDirection::from_env` and
+  `for_language` to follow a locale) and `Element::layout_direction` for a
+  subtree. Right to left, rows run from the right, horizontal `Align::Start`
+  is the right edge, grid columns count from the right, the `left` padding
+  inset lands on the right, and `Auto` text lines up on the right
+  (`Font::layout_in`). Sliders and progress bars fill from the right and drags
+  on mirrored elements are mirrored (`DragMotion::mirrored`); tree triangles
+  and submenu arrows point left; Left/Right swap in trees, split panes and
+  menus; popups, submenus, dropdowns and toasts open from the right. New
+  `layout_with_direction`, `LayoutNode::rtl`, `Span::mirrored`,
+  `mirror_spans` and `Insets::mirrored`. `drag_hit_at` also returns whether
+  the element was mirrored. `bididemo --mirror` shows a mirrored UI, checked in
+  CI on X11, Windows and macOS. See `docs/bidi.md`.
 - Menus: `App::menu` declares a menu bar (`MenuBar`, `Menu`, `MenuItem`) as a
   function of the state, with shortcuts (`Shortcut`), enabled and checked
   states, separators and submenus; `Element::context_menu` attaches a context

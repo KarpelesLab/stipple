@@ -880,7 +880,18 @@ Most input only works on X11 today.
   wrapped right-to-left paragraphs, visual caret movement, multi-rectangle
   selections and hit-testing in mixed text. CI screenshots `bididemo` on X11.
   See [docs/bidi.md](docs/bidi.md).
-- ⬜ Mirrored layouts for right-to-left UIs (row order, start/end alignment).
+- ✅ Mirrored layouts for right-to-left UIs: `Theme::with_layout_direction`
+  (left to right by default; `LayoutDirection::from_env` / `for_language` pick
+  it from a locale) and `Element::layout_direction` for a subtree. Rows run
+  right to left, horizontal start/end alignment and grid columns flip, the
+  left padding inset is the start side, `Auto` text lines up on the right,
+  sliders and progress bars fill from the right (drags are mirrored), tree
+  triangles and submenu arrows point left, Left/Right swap in trees, split
+  panes and menus, and popups open leftwards. Unit-tested (layout, text,
+  drags, menus, tree); CI checks `bididemo --mirror` on X11 (screenshot regions
+  and a slider click), and its off-screen `--mirror-check` plus a window
+  screenshot on Windows and macOS. Only unit-tested on iOS, Android and the
+  web. See [docs/bidi.md](docs/bidi.md#mirrored-layouts).
 
 #### 7d — OS integration
 - ✅ System clipboard on Windows (`CF_UNICODETEXT`), macOS (`NSPasteboard`) and
