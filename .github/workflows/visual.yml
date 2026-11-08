@@ -672,8 +672,9 @@ jobs:
           import -window root visual_output/menu-base.png
           ae() { compare -metric AE "$1" "$2" null: 2>&1 | awk '{printf "%d", $1}'; }
 
-          # F10 puts the keyboard on the menu bar, Down opens File.
-          xdotool key F10 Down
+          # Alt+F opens File from the keyboard. (Not F10: the runner's xdotool
+          # sends F10 with Alt held, from a level of the key that needs it.)
+          xdotool key alt+f
           sleep 1
           import -window root visual_output/menu-file.png
           # Escape steps back to the bar, then leaves it.
