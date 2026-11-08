@@ -57,8 +57,23 @@ doesn't apply: the screen decides.
 
 ## Input
 
-Touches arrive as left-button presses, moves and releases at the touch's
-position. There's no keyboard input yet, so text fields can't be typed into.
+Every finger arrives as an `Event::Touch` (its id, phase and position; the
+view takes multiple touches). The first finger down is also the pointer: a
+left-button press, moves and a release at its position, then `PointerLeft`, so
+a lifted finger leaves no hover behind.
+
+A finger dragged in a scroll container scrolls it, and flings it on if it lifts
+while moving; taps still click, since a press only becomes a scroll past 8
+logical pixels. See [Android](android.md#how-it-works), which shares the toolkit
+side.
+
+**The keyboard.** The view adopts `UIKeyInput`: while a text input has focus it
+becomes first responder, which brings up the on-screen keyboard, and it resigns
+when focus leaves. `insertText:` types (a newline is Enter) and
+`deleteBackward` is Backspace. A hardware keyboard types the same way; its
+arrows, Home/End, Page Up/Down, Escape, Tab, Delete, F-keys and Ctrl/Cmd
+shortcuts arrive as key events through `pressesBegan:withEvent:`, with their
+modifiers.
 
 ## OS-drawn controls
 
@@ -75,6 +90,26 @@ with `Font::from_bytes` to be safe.
 
 ## Known gaps
 
-- No keyboard input, file dialogs or accessibility yet.
-- The clipboard (`UIPasteboard`) is wired up but untested, and without keyboard
-  input nothing triggers copy or paste yet.
+- No composing input methods: the view is `UIKeyInput`, not `UITextInput`, so
+  marked text (Chinese, Japanese) and autocorrection don't reach the app, and
+  the keyboard doesn't push the content up, so it can cover a field near the
+  bottom of the screen.
+- Hardware keyboard keys only reach the app while a text input has focus (the
+  view is first responder only then); they're build-checked, not run in CI.
+- No file dialogs or accessibility yet.
+- The clipboard (`UIPasteboard`) is wired up but untested; Cmd+C/V from a
+  hardware keyboard reach it.
+
+## Testing on the simulator
+
+A simulator can't script touches or typing, so `examples/touchdemo` drives
+itself when launched with `TOUCHDEMO_SELFTEST` set:
+
+```sh
+SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 xcrun simctl launch booted com.example.your-app
+```
+
+It uses `stipple::platform::backend::ios::simulate`, which sends `insertText:`
+and `deleteBackward` to the view through objc dispatch, feeds synthetic touches
+to the backend's touch path, and reads the view's keyboard state, then logs to
+`touchdemo.log` in the app's tmp directory. CI runs it.

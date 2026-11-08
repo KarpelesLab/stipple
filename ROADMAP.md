@@ -853,8 +853,26 @@ Most input only works on X11 today.
   keyboard shows while a text input has focus (`Window::set_text_input_active`).
   CI taps and types (Tab, `adb shell input text`) on the emulator; the mouse and
   shortcuts are only build-checked.
-- ⬜ Touch scrolling (a finger drag scrolls) and multi-touch on Android and iOS.
-- ⬜ iOS keyboard (`UIKeyInput`).
+- ✅ Touch scrolling and multi-touch events on Android and iOS: every finger is
+  an `Event::Touch` (id, phase, position), and the first is still the pointer.
+  In the toolkit a finger drag in a scroll container scrolls it past an 8 px
+  slop (taps still click; the press is cancelled once it scrolls), flings with
+  an exponential slow-down, stops at the content's ends, and a touch stops a
+  fling. Mice and wheels are unchanged. The gesture's state machine and the app
+  wiring are unit-tested with synthetic touches; CI swipes `androiddemo`'s list
+  with `adb shell input swipe` on the emulator (it scrolls, no row is tapped)
+  and checks on X11 that a mouse drag still doesn't scroll. On iOS the
+  `touchdemo` self-test drives a synthetic finger through the backend's touch
+  path (not real `UITouch`es). No pinch or two-finger gestures yet, and
+  scrolling is vertical only.
+- ✅ iOS keyboard (`UIKeyInput`): the view becomes first responder while a text
+  input has focus (`Window::set_text_input_active`), `insertText:` types and
+  `deleteBackward` deletes; hardware keys the text system doesn't type (arrows,
+  Escape, Tab, F-keys, Ctrl/Cmd shortcuts) arrive through `pressesBegan:`.
+  `touchdemo`'s self-test sends `insertText:`/`deleteBackward` by objc dispatch
+  on the simulator in CI and checks the field and the first-responder state;
+  hardware keys are build-checked only. `UITextInput` (marked text) is still
+  to do.
 - **Exit criteria:** the same scripted input test passes on every desktop backend.
 
 #### 7c — Text input
@@ -866,7 +884,8 @@ Most input only works on X11 today.
   through objc dispatch in CI, but no real IME runs in CI, so the Wayland,
   Windows and macOS paths are only build-checked end to end. See
   [docs/ime.md](docs/ime.md).
-- ⬜ IME on X11 (XIM or IBus), TSF on Windows, and the mobile soft keyboards.
+- ⬜ IME on X11 (XIM or IBus), TSF on Windows, and composing input on the
+  mobile soft keyboards (`UITextInput`, an Android `InputConnection`).
 - ✅ Dead keys and compose sequences: X11 and Wayland parse the locale's libX11
   Compose file (`XCOMPOSEFILE`, `~/.XCompose`, includes) by hand and show the
   pending sequence as preedit; Windows gets them from `TranslateMessage` and

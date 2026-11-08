@@ -35,6 +35,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `open_url` and `notify` imports (and `openUrl` / `notify` options). See
   `docs/os-integration.md` and `examples/traydemo`, which CI runs on Linux
   (against a mock desktop on D-Bus), Windows and macOS.
+
+- Touch scrolling on Android and iOS: a finger dragged in a scroll container
+  scrolls it once past an 8 px slop (taps still click, and the press is
+  cancelled when it scrolls), flings on when it lifts while moving, stops at
+  the ends, and a touch stops a fling. Every finger is reported as the new
+  `Event::Touch` (`Touch { id, phase, position }`, `TouchPhase`); the first is
+  still the pointer, so mice, wheels and existing widgets are unchanged.
+  `App::touch` and `App::advance_fling` drive it in tests.
+- The iOS keyboard: the view adopts `UIKeyInput` and becomes first responder
+  (showing the on-screen keyboard) while a text input has focus;
+  `insertText:` types, `deleteBackward` deletes, and a hardware keyboard's
+  arrows, Escape, Tab, F-keys and Ctrl/Cmd shortcuts arrive as key events.
+  `backend::ios::simulate` drives the view for simulator self-tests.
+- `touchdemo`: a text field over a list a finger scrolls, with a self-test the
+  iOS simulator job runs; `androiddemo` gains a list the emulator job swipes.
 - The web catches up with the desktops: `stipple::web_app!(app)` generates a
   web app's exports and `web/stipple.js` is its whole page side, so an app no
   longer copies the glue. Timers and `AppHandle::update` wake the app through

@@ -52,9 +52,17 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
   the soft keyboard is up); the rest of the window, and the status and
   navigation bars, take the app's background color, with dark or light bar
   icons to match.
-- **Touch and mouse.** The first finger down is the pointer, until it lifts; a
-  tap is a press and release, and lifting a finger leaves no hover behind. A
-  mouse adds its right and middle buttons, hover and the wheel.
+- **Touch and mouse.** Every finger arrives as an `Event::Touch` (its id,
+  phase and position). The first finger down is also the pointer, until it
+  lifts; a tap is a press and release, and lifting a finger leaves no hover
+  behind. A mouse adds its right and middle buttons, hover and the wheel.
+- **Touch scrolling.** A finger dragged in a scroll container scrolls it, and
+  keeps it going (a fling that slows down, and stops at the end of the content)
+  if it lifts while moving. A press only becomes a scroll once the finger has
+  moved 8 logical pixels, mostly vertically, so taps still click; once it
+  scrolls, the pressed button lets go and doesn't click. A finger on a slider
+  drags the slider, and a finger that lands on a fling stops it. This lives in
+  the toolkit, so it works the same on iOS; desktop mice keep the wheel.
 - **Keys.** Named keys (arrows, Enter, Backspace, Delete, Home/End, PageUp/Down,
   Tab, Escape, F1–F12) become `Event::Key`, with Shift, Ctrl, Alt and Meta.
   Other keys go through the keyboard's own `KeyCharacterMap` (over JNI), so any
@@ -143,8 +151,9 @@ Two manifest settings matter:
 
 [`examples/androiddemo/test-on-device.sh`](../../examples/androiddemo/test-on-device.sh)
 installs the APK on whatever device `adb` talks to (`ANDROID_SERIAL` picks
-one), checks a frame is presented and the timer ticks, taps the button, types
-into the field, and saves screenshots. CI runs it on an API 34 x86_64 emulator
+one), checks a frame is presented and the timer ticks, taps the button, swipes the
+list (it must scroll, without tapping a row), types into the field, and saves
+screenshots. CI runs it on an API 34 x86_64 emulator
 (the `visual-android` job). By hand:
 
 ```sh
@@ -157,9 +166,14 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
 
 ## Known gaps
 
-- **No touch scrolling.** A finger drag moves the pointer (sliders, selection,
-  drags) but doesn't scroll a scroll container; the mouse wheel does.
-- **Only the first finger** is followed; there are no multi-touch gestures.
+- **No multi-touch gestures.** Every finger is reported as an `Event::Touch`,
+  but nothing recognizes pinches or two-finger pans yet, and scroll containers
+  only scroll vertically.
+- **A slow app loses quick swipes' moves.** On a busy UI thread (the emulator's
+  software rendering takes a few hundred milliseconds a frame), Android can fold
+  a quick swipe's moves into its release; the list then scrolls the whole way
+  at once, without a fling. Fling speed is measured when events arrive, not
+  from their timestamps.
 - **Text the soft keyboard can't send as keys** (emoji, input methods that
   compose, such as Chinese or Japanese) doesn't arrive: a `NativeActivity` has
   no `InputConnection`, and the NDK can't read the text of a multi-character key

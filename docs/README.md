@@ -21,9 +21,10 @@ How to build, package and run on each platform, and what works there today.
 |---|---|---|---|---|---|---|
 | Window and rendering | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Pointer input | ✅ | ✅ | ✅ | ✅ touch | ✅ touch, mouse ¹⁹ | ✅ ¹² |
-| Keyboard input | ✅ | ✅ | ✅ | ❌ | ✅ ¹⁹ | ✅ ¹² |
+| Keyboard input | ✅ | ✅ | ✅ | ✅ ²⁷ | ✅ ¹⁹ | ✅ ¹² |
 | Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | mouse wheel ¹⁰ | ✅ ⁶ |
-| Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | ✅ ¹⁰ | ✅ ¹² |
+| Touch scrolling (drag, fling) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ❌ |
+| Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹² |
 | Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ✅ ¹⁹ | ✅ ¹² |
@@ -77,8 +78,7 @@ clipboard on its own. CI round-trips text with synthetic clipboard events.
 a page never sees paths. CI checks both with the picker and download stood in
 for. See [the web page](platforms/web.md#file-dialogs).
 ¹⁵ Laid out by the shared CPU text path, so the same everywhere; CI screenshots
-`bididemo` on X11. Editing it needs keyboard input, so not on iOS
-yet. See [bidi.md](bidi.md).
+`bididemo` on X11. See [bidi.md](bidi.md).
 ¹⁶ Implemented (`text-input-v3`, IMM32, `NSTextInputClient`), but CI can't run
 a real input method, so only the protocol wiring is tested. X11 has no IME
 support yet (XIM or IBus). See [ime.md](ime.md).
@@ -90,7 +90,9 @@ keyboard and with a click, checks Alt underlines the mnemonics, uses a
 shortcut, and picks from a context menu on X11.
 ¹⁹ CI runs `androiddemo` on an API 34 emulator (at its 2.625x density) and
 checks that a frame is presented, its timer ticks while the spinner turns, a tap
-lands on the button, and Tab plus `adb shell input text` type into the field.
+lands on the button, `adb shell input swipe` scrolls a list without tapping
+its rows (a tap there still taps one), and Tab plus `adb shell input text`
+type into the field.
 The soft keyboard shows for a focused text input and types through key events.
 ²⁰ Implemented and tried by hand on an emulator (night mode switched with
 `adb shell cmd uimode night yes`, the clipboard read and written over JNI), but
@@ -126,6 +128,13 @@ notification ran and a `.txt` opened in TextEdit. Real tray hosts, and clicks on
 the Windows and macOS icons, aren't exercised. macOS notifications go through
 `osascript`, as the frameworks need an app bundle. See
 [os-integration.md](os-integration.md).
+²⁷ CI runs `touchdemo`'s self-test on the simulator, which can't script
+touches or typing: it types through the view's `UIKeyInput` methods sent by
+objc dispatch (the view takes the keyboard while the field has focus and
+gives it back after), and drags the list with a synthetic finger fed to the
+backend's touch path, past `UITouch`. Hardware keyboard keys (`pressesBegan:`)
+are only build-checked. Composing input methods (`UITextInput`) aren't
+supported yet.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
