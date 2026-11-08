@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.2...stipple-v0.0.3) - 2026-11-08
+
+### Fixed
+
+- fix wrapped-text sizing, Wayland resize and the macOS title; publish screenshots
+
+### Other
+
+- bididemo, visual-bidi CI job and docs for bidirectional text
+- right-to-left and bidirectional layout and editing
+- update screenshots from CI
+- the web backend, and what works where
+- a real backend, with exports in the library
+- update screenshots from CI
+- ask only for more frames than the timer builds
+- *(x11)* diagnose the widgets demo by its own pid
+- understand keysyms named by value; asyncdemo: start the selftest's work once the loop runs
+- fix a timing-dependent hover test, relax the spinner frame count, log input
+- select, number input, split pane, toolbar and toast
+- display-driven frame clock and a turning spinner
+- virtualized lists, table and tree
+- size limits, maximize, fullscreen, icon and cursor shapes
+- wayland clipboard, and following theme changes live
+- update screenshots from CI
+- image and svg
+- grid, wrapping and min/max constraints
+- scroll, modifiers and more keys on Wayland, Windows and macOS
+- text editing: undo/redo, word movement, double-click selection
+- clipboard and file dialogs on Windows and macOS
+- update screenshots from CI
+- add AppHandle: timers and background work wake the event loop
+- update screenshots from CI
+- *(web)* install ImageMagick for the canvas check
+- record platform-fidelity work; plan Phase 7, app-ready parity
+- update screenshots from CI
+- make the repository root the stipple crate; the wasm target is an example
+- add platform guides, the native theme, high-DPI and CI
+- make the repository root the stipple crate; the wasm target is an example
+- run full-screen, and fill the safe area with the theme's background
+- update screenshots from CI
+- render at the display's scale; center text in its line
+- render at full resolution on high-DPI macOS and Windows
+- fill the screen at full resolution, add touch input; fix self-drawn widgets
+- update screenshots from CI
+- *(windows)* pass a real null class name to FindWindowW
+- add Theme::native: OS-drawn controls on Windows, macOS and iOS
+- *(windows)* find the window by title; a hidden start hid the app too
+- remove stray empty .log files and ignore *.log
+- *(readme)* add CI, crates.io, docs.rs and license badges
+- fix intra-doc links left over from the crate merge
+
 ### Added
 
 - The web catches up with the desktops: `stipple::web_app!(app)` generates a
