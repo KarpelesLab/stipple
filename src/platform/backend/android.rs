@@ -96,6 +96,7 @@ const AMOTION_EVENT_ACTION_DOWN: i32 = 0;
 const AMOTION_EVENT_ACTION_UP: i32 = 1;
 const AMOTION_EVENT_ACTION_MOVE: i32 = 2;
 const AMOTION_EVENT_ACTION_CANCEL: i32 = 3;
+const AMOTION_EVENT_ACTION_POINTER_DOWN: i32 = 5;
 const AMOTION_EVENT_ACTION_POINTER_UP: i32 = 6;
 const AMOTION_EVENT_ACTION_HOVER_MOVE: i32 = 7;
 const AMOTION_EVENT_ACTION_SCROLL: i32 = 8;
@@ -1367,15 +1368,16 @@ impl Loop<'_> {
         true
     }
 
-    /// A touch, mouse or stylus event. The first finger down is the pointer
-    /// until it lifts; other fingers are ignored.
+    /// A touch, mouse or stylus event. Every finger is reported as a
+    /// [`Touch`](crate::platform::Touch); the first finger down is also the
+    /// pointer until it lifts.
     fn motion(&mut self, event: *mut c_void) -> bool {
         let raw = unsafe { AMotionEvent_getAction(event) };
         let action = raw & AMOTION_EVENT_ACTION_MASK;
         let index = ((raw >> 8) & 0xff) as usize;
+        let view = self.view.clone();
         let at = |i: usize| unsafe {
-            self.view
-                .to_logical(AMotionEvent_getX(event, i), AMotionEvent_getY(event, i))
+            view.to_logical(AMotionEvent_getX(event, i), AMotionEvent_getY(event, i))
         };
         let mouse = unsafe { AMotionEvent_getToolType(event, 0) } == AMOTION_EVENT_TOOL_TYPE_MOUSE;
         crate::platform::set_pointer_modifiers(input::android_modifiers(unsafe {
@@ -1385,6 +1387,17 @@ impl Loop<'_> {
             let n = unsafe { AMotionEvent_getPointerCount(event) };
             (0..n).find(|&i| unsafe { AMotionEvent_getPointerId(event, i) } == id)
         };
+        // Fingers and styluses first report their touches, ahead of the
+        // pointer events the first finger also makes.
+        if !mouse {
+            let n = unsafe { AMotionEvent_getPointerCount(event) };
+            let pointers: Vec<(i32, Point)> = (0..n)
+                .map(|i| (unsafe { AMotionEvent_getPointerId(event, i) }, at(i)))
+                .collect();
+            for touch in input::android_touches(action, index, &pointers) {
+                self.deliver(Event::Touch(touch));
+            }
+        }
         match action {
             AMOTION_EVENT_ACTION_DOWN => {
                 let buttons = unsafe { AMotionEvent_getButtonState(event) };
@@ -1441,6 +1454,8 @@ impl Loop<'_> {
             AMOTION_EVENT_ACTION_HOVER_MOVE | AMOTION_EVENT_ACTION_HOVER_ENTER => {
                 self.deliver(Event::PointerMoved { position: at(0) });
             }
+            // Another finger: reported as a touch above, not the pointer.
+            AMOTION_EVENT_ACTION_POINTER_DOWN => {}
             AMOTION_EVENT_ACTION_HOVER_EXIT => self.deliver(Event::PointerLeft),
             AMOTION_EVENT_ACTION_SCROLL => {
                 let (h, v) = unsafe {

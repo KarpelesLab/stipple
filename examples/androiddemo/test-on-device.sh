@@ -6,8 +6,10 @@
 #
 # 1. a frame reaches the window, and the app's timer ticks (loop wakeups);
 # 2. a tap on the button in the middle of the screen registers (touch);
-# 3. Tab moves focus to the text field and `input text` types into it (keys);
-# 4. screenshots of each state land in the screenshot directory.
+# 3. a swipe over the list scrolls it without tapping a row, and a tap there
+#    still taps one (touch scrolling);
+# 4. Tab moves focus to the text field and `input text` types into it (keys);
+# 5. screenshots of each state land in the screenshot directory.
 set -euo pipefail
 
 apk="${1:?usage: test-on-device.sh app.apk [screenshot-dir]}"
@@ -47,6 +49,29 @@ size="$(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tai
 read -r width height <<< "$size"
 adb shell input tap $((width / 2)) $((height / 2))
 wait_for "androiddemo: tapped 1" 30
+
+# A finger drag over the list at the bottom of the screen scrolls it (and
+# flings it on), and doesn't tap the row it started on. It runs before typing,
+# while no soft keyboard covers the list. The swipe takes a second: an emulator
+# renders slowly enough that a quicker one's moves get folded into its release.
+adb exec-out screencap -p > "$shots/android-before-swipe.png"
+adb shell input swipe $((width / 2)) $((height * 86 / 100)) $((width / 2)) $((height * 70 / 100)) 1000
+if ! wait_for "androiddemo: scrolled to [1-9][0-9]*" 20; then
+  echo "the swipe didn't scroll the list; the app's log:" >&2
+  log | tail -20 >&2
+  exit 1
+fi
+sleep 2
+adb exec-out screencap -p > "$shots/android-swiped.png"
+if log | grep -q "androiddemo: row [0-9]* tapped"; then
+  echo "the swipe tapped a row:" >&2
+  log | grep "androiddemo: row" >&2
+  exit 1
+fi
+log | grep "androiddemo: scrolled to" | tail -3
+# ...while a tap on the list still taps a row.
+adb shell input tap $((width / 2)) $((height * 78 / 100))
+wait_for "androiddemo: row [0-9]+ tapped" 20
 
 adb shell input keyevent KEYCODE_TAB
 sleep 1

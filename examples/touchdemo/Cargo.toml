@@ -1,0 +1,16 @@
+[package]
+name = "touchdemo"
+description = "Stipple example: a text field and a list a finger drag scrolls, with a self-test for the iOS simulator."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true

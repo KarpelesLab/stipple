@@ -589,6 +589,17 @@ jobs:
           diff=$(compare -metric AE visual_output/scroll-before.png visual_output/scroll-after.png null: 2>&1 || true)
           echo "changed pixels: $diff"
           [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 2000 ]
+          # A mouse drag over the list doesn't scroll it: dragging to scroll is
+          # for fingers (touch scrolling), the mouse keeps the wheel.
+          xdotool mousemove 210 300 mousedown 1
+          sleep 0.2
+          for y in 280 260 240 220 200 180; do xdotool mousemove 210 $y; sleep 0.05; done
+          xdotool mouseup 1
+          sleep 1
+          import -window root visual_output/scroll-dragged.png
+          diff=$(compare -metric AE visual_output/scroll-after.png visual_output/scroll-dragged.png null: 2>&1 || true)
+          echo "changed pixels after a mouse drag: $diff"
+          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -lt 200 ]
 
       - name: Stop the app and Xvfb
         if: always()
@@ -2447,6 +2458,35 @@ jobs:
           xcrun simctl launch "$DEV" com.karpeleslab.stipple
           sleep 10
           xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-native.png
+
+      # The simulator can't script touches or typing, so touchdemo drives
+      # itself (TOUCHDEMO_SELFTEST): it taps its text field, types through the
+      # view's UIKeyInput methods (insertText:, deleteBackward) sent by objc
+      # dispatch, drags its list with a synthetic finger through the backend's
+      # touch path, and taps away. It logs to its tmp dir, read back here.
+      - name: Touch scrolling and the keyboard (touchdemo self-test)
+        run: |
+          cargo build --release -p touchdemo --target aarch64-apple-ios-sim
+          cp target/aarch64-apple-ios-sim/release/touchdemo Stipple.app/window
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          xcrun simctl install "$DEV" Stipple.app
+          SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 xcrun simctl launch "$DEV" com.karpeleslab.stipple
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/touchdemo.log"
+          for _ in $(seq 1 30); do
+            grep -q "touchdemo: selftest" "$LOG" 2>/dev/null && grep -qE "selftest (passed|FAILED)" "$LOG" && break
+            sleep 1
+          done
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-touch.png || true
+          echo "=== touchdemo.log ==="; cat "$LOG" || true
+          # The view adopts UIKeyInput and takes the keyboard while the field
+          # has focus...
+          grep -q "touchdemo: keyboard focused key_input=true can_become=true first_responder=true" "$LOG"
+          # ...typed text and Backspace reach the field...
+          grep -qF 'touchdemo: text "Hi"' "$LOG"
+          # ...the drag scrolled the list, and the keyboard went with focus.
+          grep -qE "touchdemo: scrolled to [1-9][0-9]*" "$LOG"
+          grep -q "touchdemo: selftest passed" "$LOG"
 
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4

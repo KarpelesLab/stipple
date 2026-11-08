@@ -12,7 +12,10 @@
 //! - `androiddemo: tapped N` when the button in the middle of the screen is
 //!   tapped (`adb shell input tap`);
 //! - `androiddemo: text "..."` as the field takes keys (`adb shell input text`,
-//!   after Tab moves focus to it).
+//!   after Tab moves focus to it);
+//! - `androiddemo: scrolled to N` as a finger drag (`adb shell input swipe`)
+//!   scrolls the list at the bottom of the screen, and `androiddemo: row N
+//!   tapped` if one of its rows is tapped (a swipe must not tap one).
 //!
 //! Non-Android builds compile to an empty cdylib so `cargo build --workspace`
 //! works everywhere.
@@ -20,7 +23,7 @@
 #[cfg(target_os = "android")]
 mod app {
     use std::ffi::c_void;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
     use stipple::platform::backend::android::{self, ANativeActivity};
     use stipple::prelude::*;
 
@@ -32,6 +35,8 @@ mod app {
 
     /// Frames built, to show the spinner is driven by the display.
     static FRAMES: AtomicU32 = AtomicU32::new(0);
+    /// The list's scroll offset in the frame last built (`f64` bits).
+    static OFFSET: AtomicU64 = AtomicU64::new(0);
 
     fn view(state: &State, cx: &mut Cx<State>) -> Element {
         FRAMES.fetch_add(1, Ordering::Relaxed);
@@ -66,7 +71,27 @@ mod app {
         } else {
             format!("Hello, {}! Tapped {} times", state.name, state.taps)
         };
-        column(vec![top, tap, label(&theme, greeting)])
+        // A list of rows at the bottom of the screen, which a finger drag
+        // scrolls. Built as `scroll` builds it, to read its offset.
+        let rows = (0..30)
+            .map(|i| {
+                button_labeled(&theme, format!("Row {i}"))
+                    .width(280.0)
+                    .on_tap(cx, move |_: &mut State| {
+                        println!("androiddemo: row {i} tapped")
+                    })
+            })
+            .collect();
+        let id = cx.register_scroll();
+        let offset = cx.scroll_offset(id);
+        if OFFSET.swap(offset.to_bits(), Ordering::Relaxed) != offset.to_bits() {
+            println!("androiddemo: scrolled to {offset:.0}");
+        }
+        let list = Element::stack(Axis::Vertical, vec![column(rows).gap(theme.spacing.sm)])
+            .height(240.0)
+            .scrollable(id)
+            .align(Align::Start, Align::Center);
+        column(vec![top, tap, label(&theme, greeting), list])
             .gap(theme.spacing.lg)
             .align(Align::Center, Align::Center)
             .padding(Insets::uniform(theme.spacing.lg))

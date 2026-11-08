@@ -10,8 +10,14 @@
 //! returns, so the Rust handler (which outlives the call) is reached through a
 //! stashed raw pointer.
 //!
+//! Touches arrive as [`Event::Touch`] for every finger, the first also as the
+//! pointer. The view adopts `UIKeyInput` and holds the keyboard (first
+//! responder) while a text input has focus.
+//!
 //! **Verification:** build-checked for `aarch64-apple-ios` by the `mobile`
-//! cross-compile CI job; a simulator run + screenshot is a follow-up.
+//! cross-compile CI job; the `visual-ios` job runs it on a simulator, where
+//! `touchdemo`'s self-test drives the keyboard methods and synthetic touches
+//! through [`simulate`].
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
@@ -20,7 +26,10 @@ use std::ffi::{CString, c_void};
 use crate::geometry::{PhysicalSize, Point, ScaleFactor};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
-use crate::platform::event::{ButtonState, Event, PointerButton, WindowId};
+use crate::platform::event::{
+    ButtonState, Event, KeyCode, Modifiers, PointerButton, Touch, TouchPhase, WindowId,
+};
+use crate::platform::input;
 use crate::platform::window::{Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
@@ -66,6 +75,16 @@ unsafe extern "C" {
     fn objc_allocateClassPair(superclass: Class, name: *const i8, extra: usize) -> Class;
     fn objc_registerClassPair(cls: Class);
     fn class_addMethod(cls: Class, name: Sel, imp: *const c_void, types: *const i8) -> bool;
+    fn class_addProtocol(cls: Class, protocol: *mut c_void) -> bool;
+    fn objc_getProtocol(name: *const i8) -> *mut c_void;
+    fn objc_msgSendSuper();
+}
+
+/// `struct objc_super`, for messaging a method's UIKit implementation.
+#[repr(C)]
+struct ObjcSuper {
+    receiver: Id,
+    super_class: Class,
 }
 
 #[link(name = "UIKit", kind = "framework")]
@@ -149,6 +168,21 @@ unsafe fn msg_rect(obj: Id, s: Sel) -> CgRect {
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     unsafe { f(obj, s) }
 }
+unsafe fn msg_bool(obj: Id, s: Sel) -> bool {
+    let f: unsafe extern "C" fn(Id, Sel) -> i8 =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s) != 0 }
+}
+unsafe fn msg_usize(obj: Id, s: Sel) -> usize {
+    let f: unsafe extern "C" fn(Id, Sel) -> usize =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s) }
+}
+unsafe fn msg_id_usize(obj: Id, s: Sel, a: usize) -> Id {
+    let f: unsafe extern "C" fn(Id, Sel, usize) -> Id =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe { f(obj, s, a) }
+}
 unsafe fn msg_f64(obj: Id, s: Sel) -> f64 {
     let f: unsafe extern "C" fn(Id, Sel) -> f64 =
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
@@ -183,6 +217,36 @@ fn nsstring(s: &str) -> Id {
     }
 }
 
+/// An `NSString`'s text (empty for `nil`).
+unsafe fn string_of(s: Id) -> String {
+    if s.is_null() {
+        return String::new();
+    }
+    unsafe {
+        let f: unsafe extern "C" fn(Id, Sel) -> *const std::ffi::c_char =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let p = f(s, sel("UTF8String"));
+        if p.is_null() {
+            String::new()
+        } else {
+            std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
+    }
+}
+
+/// The objects of an `NSSet`.
+unsafe fn set_objects(set: Id) -> Vec<Id> {
+    if set.is_null() {
+        return Vec::new();
+    }
+    unsafe {
+        let all = msg_id(set, sel("allObjects"));
+        (0..msg_usize(all, sel("count")))
+            .map(|i| msg_id_usize(all, sel("objectAtIndex:"), i))
+            .collect()
+    }
+}
+
 // ---- Shared state -----------------------------------------------------------
 
 type DynHandler = *mut dyn FnMut(Event, &dyn Window) -> ControlFlow;
@@ -202,6 +266,11 @@ struct IosCtx {
     /// Raw pointer to the (type-erased) handler. `UIApplicationMain` never
     /// returns, so the handler in `run`'s frame lives for the process lifetime.
     handler: *mut DynHandler,
+    /// The touch that is also the pointer: the first finger down, until it
+    /// lifts.
+    primary: Option<u64>,
+    /// Whether a text input has focus, so the view holds the keyboard.
+    text_input: bool,
 }
 
 thread_local! {
@@ -289,6 +358,8 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
         };
         msg_void_id(root, sel("setBackgroundColor:"), background);
         let view = msg_alloc_init_frame(register_view_class(), bounds);
+        // Every finger, not just the first.
+        msg_void_bool(view, sel("setMultipleTouchEnabled:"), true);
         msg_void_id(root, sel("addSubview:"), view);
         let vc = msg_id(msg_id(class("UIViewController"), sel("alloc")), sel("init"));
         msg_void_id(vc, sel("setView:"), root);
@@ -363,14 +434,20 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
     true
 }
 
-/// Forward one touch as a pointer event, at its position in `view`.
-unsafe fn touch_position(view: Id, touches: Id) -> Point {
+/// Each touch in `touches` (an `NSSet` of `UITouch`): its id (the `UITouch`,
+/// which stays the same object while the finger is down) and its position in
+/// `view`.
+unsafe fn touches_in(view: Id, touches: Id) -> Vec<(u64, Point)> {
     unsafe {
-        let touch = msg_id(touches, sel("anyObject"));
-        let f: unsafe extern "C" fn(Id, Sel, Id) -> CgPoint =
+        let location: unsafe extern "C" fn(Id, Sel, Id) -> CgPoint =
             std::mem::transmute(objc_msgSend as *const c_void);
-        let p = f(touch, sel("locationInView:"), view);
-        Point::new(p.x, p.y)
+        set_objects(touches)
+            .into_iter()
+            .map(|touch| {
+                let p = location(touch, sel("locationInView:"), view);
+                (touch as u64, Point::new(p.x, p.y))
+            })
+            .collect()
     }
 }
 
@@ -380,35 +457,262 @@ fn current_window() -> IosWindow {
     }
 }
 
-extern "C" fn touches_began(this: Id, _cmd: Sel, touches: Id, _event: Id) {
-    let position = unsafe { touch_position(this, touches) };
+/// Deliver touches that changed: each as an [`Event::Touch`], then the
+/// pointer events of the first finger, which is also the pointer.
+fn touch_input(phase: TouchPhase, touches: &[(u64, Point)]) {
     let win = current_window();
-    call_handler(Event::PointerMoved { position }, &win);
-    call_handler(
-        Event::PointerButton {
-            button: PointerButton::Left,
-            state: ButtonState::Pressed,
-            position,
-        },
-        &win,
-    );
+    for &(id, position) in touches {
+        call_handler(
+            Event::Touch(Touch {
+                id,
+                phase,
+                position,
+            }),
+            &win,
+        );
+    }
+    let primary = CTX.with(|c| c.borrow().primary);
+    let pressed = |position| Event::PointerButton {
+        button: PointerButton::Left,
+        state: ButtonState::Pressed,
+        position,
+    };
+    let released = |position| Event::PointerButton {
+        button: PointerButton::Left,
+        state: ButtonState::Released,
+        position,
+    };
+    match phase {
+        TouchPhase::Started => {
+            if let (None, Some(&(id, position))) = (primary, touches.first()) {
+                CTX.with(|c| c.borrow_mut().primary = Some(id));
+                call_handler(Event::PointerMoved { position }, &win);
+                call_handler(pressed(position), &win);
+            }
+        }
+        TouchPhase::Moved => {
+            if let Some(&(_, position)) = touches.iter().find(|t| Some(t.0) == primary) {
+                call_handler(Event::PointerMoved { position }, &win);
+            }
+        }
+        TouchPhase::Ended | TouchPhase::Cancelled => {
+            if let Some(&(_, position)) = touches.iter().find(|t| Some(t.0) == primary) {
+                CTX.with(|c| c.borrow_mut().primary = None);
+                // A cancelled touch is released far away, so it doesn't click.
+                let at = if phase == TouchPhase::Cancelled {
+                    Point::new(-1.0e9, -1.0e9)
+                } else {
+                    position
+                };
+                call_handler(released(at), &win);
+                // A finger that lifts leaves no hover behind.
+                call_handler(Event::PointerLeft, &win);
+            }
+        }
+    }
+}
+
+extern "C" fn touches_began(this: Id, _cmd: Sel, touches: Id, _event: Id) {
+    touch_input(TouchPhase::Started, &unsafe { touches_in(this, touches) });
 }
 
 extern "C" fn touches_moved(this: Id, _cmd: Sel, touches: Id, _event: Id) {
-    let position = unsafe { touch_position(this, touches) };
-    call_handler(Event::PointerMoved { position }, &current_window());
+    touch_input(TouchPhase::Moved, &unsafe { touches_in(this, touches) });
 }
 
 extern "C" fn touches_ended(this: Id, _cmd: Sel, touches: Id, _event: Id) {
-    let position = unsafe { touch_position(this, touches) };
-    call_handler(
-        Event::PointerButton {
-            button: PointerButton::Left,
-            state: ButtonState::Released,
-            position,
-        },
-        &current_window(),
-    );
+    touch_input(TouchPhase::Ended, &unsafe { touches_in(this, touches) });
+}
+
+extern "C" fn touches_cancelled(this: Id, _cmd: Sel, touches: Id, _event: Id) {
+    touch_input(TouchPhase::Cancelled, &unsafe { touches_in(this, touches) });
+}
+
+// ---- The keyboard (UIKeyInput) ------------------------------------------------
+
+/// `canBecomeFirstResponder`: the view takes the keyboard while a text input
+/// has focus.
+extern "C" fn can_become_first_responder(_this: Id, _cmd: Sel) -> bool {
+    true
+}
+
+/// `hasText`: always, so Backspace on an empty-looking field still reaches the
+/// app (UIKit only sends `deleteBackward` when there's text).
+extern "C" fn has_text(_this: Id, _cmd: Sel) -> bool {
+    true
+}
+
+/// `insertText:`, from the on-screen keyboard (and a hardware one): the text
+/// to type. Return arrives as a newline and becomes the Enter key.
+extern "C" fn insert_text(_this: Id, _cmd: Sel, text: Id) {
+    let text = unsafe { string_of(text) };
+    let win = current_window();
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            key_tap(KeyCode::Enter, Modifiers::default(), &win);
+        }
+        if !line.is_empty() {
+            call_handler(Event::Text(line.to_string()), &win);
+        }
+    }
+}
+
+/// `deleteBackward`: the keyboard's delete key.
+extern "C" fn delete_backward(_this: Id, _cmd: Sel) {
+    key_tap(KeyCode::Backspace, Modifiers::default(), &current_window());
+}
+
+fn key_tap(code: KeyCode, modifiers: Modifiers, win: &IosWindow) {
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        call_handler(
+            Event::Key {
+                code,
+                state,
+                modifiers,
+            },
+            win,
+        );
+    }
+}
+
+/// `pressesBegan:withEvent:` and friends, from a hardware keyboard while the
+/// view is first responder. Keys the text system doesn't type (arrows,
+/// Home/End, Escape, Tab, F-keys, shortcuts) become [`Event::Key`]; the rest go
+/// on to UIKit, which types them through `insertText:` / `deleteBackward`.
+unsafe fn presses(this: Id, cmd: Sel, presses: Id, event: Id, state: ButtonState) {
+    let win = current_window();
+    let mut to_uikit = false;
+    for press in unsafe { set_objects(presses) } {
+        let key = unsafe { msg_id(press, sel("key")) };
+        if key.is_null() {
+            to_uikit = true;
+            continue;
+        }
+        let usage = unsafe { msg_usize(key, sel("keyCode")) } as isize;
+        let modifiers = input::ios_modifiers(unsafe { msg_usize(key, sel("modifierFlags")) });
+        let chars = unsafe { string_of(msg_id(key, sel("charactersIgnoringModifiers"))) };
+        match input::ios_key(usage, &chars, modifiers) {
+            Some(code) => call_handler(
+                Event::Key {
+                    code,
+                    state,
+                    modifiers,
+                },
+                &win,
+            ),
+            None => to_uikit = true,
+        }
+    }
+    if to_uikit {
+        unsafe {
+            let sup = ObjcSuper {
+                receiver: this,
+                super_class: class("UIView"),
+            };
+            let f: unsafe extern "C" fn(*const ObjcSuper, Sel, Id, Id) =
+                std::mem::transmute(objc_msgSendSuper as *const c_void);
+            f(&sup, cmd, presses, event);
+        }
+    }
+}
+
+extern "C" fn presses_began(this: Id, cmd: Sel, set: Id, event: Id) {
+    unsafe { presses(this, cmd, set, event, ButtonState::Pressed) }
+}
+
+extern "C" fn presses_ended(this: Id, cmd: Sel, set: Id, event: Id) {
+    unsafe { presses(this, cmd, set, event, ButtonState::Released) }
+}
+
+/// Hold the keyboard (become first responder) while a text input has focus,
+/// and let it go when focus leaves.
+fn set_text_input(active: bool) {
+    let (view, was) = CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        let was = c.text_input;
+        c.text_input = active;
+        (c.view, was)
+    });
+    if view.is_null() || was == active {
+        return;
+    }
+    unsafe {
+        if active {
+            msg_bool(view, sel("becomeFirstResponder"));
+        } else {
+            msg_bool(view, sel("resignFirstResponder"));
+        }
+    }
+}
+
+/// Drive the view the way UIKit does, for self-tests on a simulator, which
+/// can't script touches or the keyboard: a touch through the same path as
+/// `touchesBegan:withEvent:` and friends, and text and Backspace through
+/// `insertText:` and `deleteBackward` messages sent to the view. Each runs on
+/// the main queue after the current event, so they can be called from an app's
+/// callbacks; they run in the order they're called.
+pub mod simulate {
+    use super::*;
+
+    /// Run `f` on the main queue, after whatever is running now.
+    fn later(f: impl FnOnce() + 'static) {
+        extern "C" fn trampoline(context: *mut c_void) {
+            let f = unsafe { Box::from_raw(context.cast::<Box<dyn FnOnce()>>()) };
+            f();
+        }
+        let f: Box<Box<dyn FnOnce()>> = Box::new(Box::new(f));
+        unsafe { dispatch_async_f(main_queue(), Box::into_raw(f).cast(), trampoline) };
+    }
+
+    /// A finger `id` at `position` (logical pixels, in the app's content).
+    pub fn touch(id: u64, phase: TouchPhase, position: Point) {
+        later(move || touch_input(phase, &[(id, position)]));
+    }
+
+    /// Type `text`, as `[view insertText:text]`.
+    pub fn insert_text(text: &str) {
+        let text = text.to_string();
+        later(move || {
+            let view = CTX.with(|c| c.borrow().view);
+            if !view.is_null() {
+                unsafe { msg_void_id(view, sel("insertText:"), nsstring(&text)) };
+            }
+        });
+    }
+
+    /// Press the keyboard's delete key, as `[view deleteBackward]`.
+    pub fn delete_backward() {
+        later(|| {
+            let view = CTX.with(|c| c.borrow().view);
+            if !view.is_null() {
+                unsafe { msg_void(view, sel("deleteBackward")) };
+            }
+        });
+    }
+
+    /// The view's keyboard state, read through objc dispatch: whether it
+    /// conforms to `UIKeyInput`, can become and is first responder (holding
+    /// the keyboard), and has text.
+    pub fn keyboard_status() -> String {
+        let view = CTX.with(|c| c.borrow().view);
+        if view.is_null() {
+            return "no view".into();
+        }
+        unsafe {
+            let protocol = objc_getProtocol(c"UIKeyInput".as_ptr());
+            let conforms = {
+                let f: unsafe extern "C" fn(Id, Sel, *mut c_void) -> i8 =
+                    std::mem::transmute(objc_msgSend as *const c_void);
+                !protocol.is_null() && f(view, sel("conformsToProtocol:"), protocol) != 0
+            };
+            format!(
+                "key_input={conforms} can_become={} first_responder={} has_text={}",
+                msg_bool(view, sel("canBecomeFirstResponder")),
+                msg_bool(view, sel("isFirstResponder")),
+                msg_bool(view, sel("hasText")),
+            )
+        }
+    }
 }
 
 // libdispatch, part of libSystem.
@@ -471,14 +775,41 @@ fn register_view_class() -> Class {
             draw_types.as_ptr(),
         );
         let touch_types = c"v@:@@";
-        let touches: [(&str, extern "C" fn(Id, Sel, Id, Id)); 4] = [
+        let touches: [(&str, extern "C" fn(Id, Sel, Id, Id)); 7] = [
             ("touchesBegan:withEvent:", touches_began),
             ("touchesMoved:withEvent:", touches_moved),
             ("touchesEnded:withEvent:", touches_ended),
-            ("touchesCancelled:withEvent:", touches_ended),
+            ("touchesCancelled:withEvent:", touches_cancelled),
+            ("pressesBegan:withEvent:", presses_began),
+            ("pressesEnded:withEvent:", presses_ended),
+            ("pressesCancelled:withEvent:", presses_ended),
         ];
         for (name, imp) in touches {
             class_addMethod(cls, sel(name), imp as *const c_void, touch_types.as_ptr());
+        }
+        // The keyboard: UIKeyInput, so the view can hold it as first responder.
+        let flags: [(&str, extern "C" fn(Id, Sel) -> bool); 2] = [
+            ("canBecomeFirstResponder", can_become_first_responder),
+            ("hasText", has_text),
+        ];
+        for (name, imp) in flags {
+            class_addMethod(cls, sel(name), imp as *const c_void, c"B@:".as_ptr());
+        }
+        class_addMethod(
+            cls,
+            sel("insertText:"),
+            insert_text as *const c_void,
+            c"v@:@".as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("deleteBackward"),
+            delete_backward as *const c_void,
+            c"v@:".as_ptr(),
+        );
+        let key_input = objc_getProtocol(c"UIKeyInput".as_ptr());
+        if !key_input.is_null() {
+            class_addProtocol(cls, key_input);
         }
         objc_registerClassPair(cls);
         cls
@@ -533,6 +864,9 @@ impl Window for IosWindow {
     }
     fn set_clipboard(&self, text: &str) {
         crate::platform::clipboard::set_text(text);
+    }
+    fn set_text_input_active(&self, active: bool) {
+        set_text_input(active);
     }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(IosSurface { size: self.size })

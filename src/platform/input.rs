@@ -5,7 +5,8 @@
 //! every host. Each backend reads the raw values from the OS and hands them to
 //! these functions.
 
-use crate::platform::event::{KeyCode, Modifiers, ScrollDelta};
+use crate::geometry::Point;
+use crate::platform::event::{KeyCode, Modifiers, ScrollDelta, Touch, TouchPhase};
 use crate::platform::window::CursorIcon;
 
 /// Logical pixels scrolled per wheel notch ("line"). Every backend uses the
@@ -438,9 +439,185 @@ pub(crate) fn android_scroll(h: f32, v: f32) -> ScrollDelta {
     }
 }
 
+/// The touches an `AMotionEvent` from a finger or stylus reports, from its
+/// masked action, the action's pointer index, and every pointer's id and
+/// position: the finger that went down or lifted, every finger on a move
+/// (Android doesn't say which moved), and all of them on a cancel.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn android_touches(action: i32, index: usize, pointers: &[(i32, Point)]) -> Vec<Touch> {
+    const DOWN: i32 = 0;
+    const UP: i32 = 1;
+    const MOVE: i32 = 2;
+    const CANCEL: i32 = 3;
+    const POINTER_DOWN: i32 = 5;
+    const POINTER_UP: i32 = 6;
+    let touch = |&(id, position): &(i32, Point), phase| Touch {
+        id: id as u64,
+        phase,
+        position,
+    };
+    match action {
+        DOWN | POINTER_DOWN | UP | POINTER_UP => {
+            let phase = if matches!(action, DOWN | POINTER_DOWN) {
+                TouchPhase::Started
+            } else {
+                TouchPhase::Ended
+            };
+            pointers
+                .get(index)
+                .map(|p| touch(p, phase))
+                .into_iter()
+                .collect()
+        }
+        MOVE => pointers
+            .iter()
+            .map(|p| touch(p, TouchPhase::Moved))
+            .collect(),
+        CANCEL => pointers
+            .iter()
+            .map(|p| touch(p, TouchPhase::Cancelled))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+// ---- iOS ---------------------------------------------------------------------
+
+/// The modifiers held, from a `UIKey`'s `modifierFlags`
+/// (`UIKeyModifierFlags`, the same bits as AppKit's).
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) fn ios_modifiers(flags: usize) -> Modifiers {
+    Modifiers {
+        shift: flags & (1 << 17) != 0,
+        ctrl: flags & (1 << 18) != 0,
+        alt: flags & (1 << 19) != 0,
+        meta: flags & (1 << 20) != 0,
+    }
+}
+
+/// The key a hardware keyboard press (`UIPress.key`) should send as
+/// [`Event::Key`](crate::platform::Event::Key), from its HID usage
+/// (`keyCode`), `charactersIgnoringModifiers` and modifiers; `None` leaves the
+/// press to UIKit's text system, which types it through `UIKeyInput`
+/// (`insertText:` for characters, Return and Space, `deleteBackward` for
+/// Backspace).
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) fn ios_key(usage: isize, chars: &str, modifiers: Modifiers) -> Option<KeyCode> {
+    const F_KEYS: [KeyCode; 12] = [
+        KeyCode::F1,
+        KeyCode::F2,
+        KeyCode::F3,
+        KeyCode::F4,
+        KeyCode::F5,
+        KeyCode::F6,
+        KeyCode::F7,
+        KeyCode::F8,
+        KeyCode::F9,
+        KeyCode::F10,
+        KeyCode::F11,
+        KeyCode::F12,
+    ];
+    let shortcut = modifiers.ctrl || modifiers.meta;
+    let named = match usage {
+        0x28 => KeyCode::Enter,
+        0x29 => KeyCode::Escape,
+        0x2A => KeyCode::Backspace,
+        0x2B => KeyCode::Tab,
+        0x2C => KeyCode::Space,
+        0x3A..=0x45 => F_KEYS[(usage - 0x3A) as usize],
+        0x49 => KeyCode::Insert,
+        0x4A => KeyCode::Home,
+        0x4B => KeyCode::PageUp,
+        0x4C => KeyCode::Delete,
+        0x4D => KeyCode::End,
+        0x4E => KeyCode::PageDown,
+        0x4F => KeyCode::ArrowRight,
+        0x50 => KeyCode::ArrowLeft,
+        0x51 => KeyCode::ArrowDown,
+        0x52 => KeyCode::ArrowUp,
+        // Shortcuts: a character key with Ctrl or Command.
+        _ if shortcut => {
+            let c = chars.chars().next()?;
+            return (!c.is_control()).then(|| KeyCode::Char(c.to_ascii_lowercase()));
+        }
+        _ => return None,
+    };
+    // What the text system types (Return, Space, Backspace) goes through it,
+    // unless a shortcut modifier is held.
+    let typed = matches!(named, KeyCode::Enter | KeyCode::Space | KeyCode::Backspace);
+    (!typed || shortcut).then_some(named)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ios_hardware_keys() {
+        let none = Modifiers::default();
+        let cmd = ios_modifiers(1 << 20);
+        assert!(cmd.meta && !cmd.ctrl && !cmd.shift && !cmd.alt);
+        let shift = ios_modifiers(1 << 17);
+        assert!(shift.shift);
+        assert_eq!(ios_key(0x50, "", none), Some(KeyCode::ArrowLeft));
+        assert_eq!(ios_key(0x50, "", shift), Some(KeyCode::ArrowLeft));
+        assert_eq!(ios_key(0x2B, "\t", none), Some(KeyCode::Tab));
+        assert_eq!(ios_key(0x29, "", none), Some(KeyCode::Escape));
+        assert_eq!(ios_key(0x3A, "", none), Some(KeyCode::F1));
+        assert_eq!(ios_key(0x45, "", none), Some(KeyCode::F12));
+        assert_eq!(ios_key(0x4C, "", none), Some(KeyCode::Delete));
+        // Typing goes through UIKeyInput.
+        assert_eq!(ios_key(0x04, "a", none), None);
+        assert_eq!(ios_key(0x04, "A", shift), None);
+        assert_eq!(ios_key(0x28, "\r", none), None);
+        assert_eq!(ios_key(0x2A, "", none), None);
+        assert_eq!(ios_key(0x2C, " ", none), None);
+        // ...except with a shortcut modifier.
+        assert_eq!(ios_key(0x06, "c", cmd), Some(KeyCode::Char('c')));
+        assert_eq!(ios_key(0x19, "V", cmd), Some(KeyCode::Char('v')));
+        assert_eq!(ios_key(0x2A, "", cmd), Some(KeyCode::Backspace));
+        // Modifier keys alone send nothing.
+        assert_eq!(ios_key(0xE1, "", shift), None);
+    }
+
+    #[test]
+    fn android_touches_follow_each_finger() {
+        let a = (4, Point::new(10.0, 20.0));
+        let b = (7, Point::new(30.0, 40.0));
+        let t = |id, phase, p: Point| Touch {
+            id,
+            phase,
+            position: p,
+        };
+        assert_eq!(
+            android_touches(0, 0, &[a]),
+            [t(4, TouchPhase::Started, a.1)]
+        );
+        // A second finger: only it starts.
+        assert_eq!(
+            android_touches(5, 1, &[a, b]),
+            [t(7, TouchPhase::Started, b.1)]
+        );
+        assert_eq!(
+            android_touches(2, 0, &[a, b]),
+            [t(4, TouchPhase::Moved, a.1), t(7, TouchPhase::Moved, b.1)]
+        );
+        assert_eq!(
+            android_touches(6, 0, &[a, b]),
+            [t(4, TouchPhase::Ended, a.1)]
+        );
+        assert_eq!(android_touches(1, 0, &[b]), [t(7, TouchPhase::Ended, b.1)]);
+        assert_eq!(
+            android_touches(3, 0, &[a, b]),
+            [
+                t(4, TouchPhase::Cancelled, a.1),
+                t(7, TouchPhase::Cancelled, b.1)
+            ]
+        );
+        // Hover and scroll aren't touches.
+        assert!(android_touches(7, 0, &[a]).is_empty());
+        assert!(android_touches(8, 0, &[a]).is_empty());
+    }
 
     #[test]
     fn mac_key_equivalents() {
