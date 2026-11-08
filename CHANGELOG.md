@@ -24,6 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `performance.now()` clock on the web, where std's panics.
 - `webdemo` shows a spinner, timers, a text editor and file buttons, and its
   `index.html#selftest` checks them in headless Chrome in CI.
+- Accessibility on the web: `web/stipple.js` mirrors the accessibility tree as
+  ARIA elements in an invisible overlay over the canvas; clicking one (a
+  screen reader's "activate") taps its node, and focus is kept in step both
+  ways.
+- Input methods and dead keys on the web, through a hidden `<textarea>` at the
+  caret: composition events become `Ime::Preedit` and `Ime::Commit`.
+- `Theme::native()` on the web follows `prefers-color-scheme` (live, as
+  `Event::ThemeChanged`) and the CSS `AccentColor` where the browser has one.
+- Several apps on one page: each `start` call in `web/stipple.js` runs its own
+  instance of the module (compiled once); `start` takes `label` and
+  `title: false`. `examples/webdemo/multi.html` runs two.
+- `Role::CheckBox`, `Role::Switch` and `Element::checked`: checkboxes and
+  switches report their state to assistive technologies (`AccessNode::checked`).
+  The platform tree (`A11yNode`) carries `selected`, `expanded` and `checked`
+  and names every role; the desktop bridges report the new ones as before.
 
 - Right-to-left and bidirectional text, through `oxideav-scribe`'s Unicode
   Bidirectional Algorithm: labels, paragraphs and editors lay out Hebrew,

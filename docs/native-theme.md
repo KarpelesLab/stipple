@@ -49,6 +49,9 @@ How each platform draws them, and its quirks, is in the platform guides:
 Linux has no platform UI framework, and Android's widgets need its Java framework,
 so there `Theme::native()` keeps Stipple's self-drawn controls. On Linux it still
 follows the system's dark mode and accent color, and uses libadwaita's colors.
+On the web it follows the page's `prefers-color-scheme` and, where the browser
+exposes one, the CSS `AccentColor` (see [the web page](platforms/web.md#theme)),
+with the same colors as on Linux.
 
 ## Limits
 
@@ -69,6 +72,7 @@ title bar, and repaints. The backends hear about it from:
 | Windows | `WM_SETTINGCHANGE` (`ImmersiveColorSet`), `WM_DWMCOLORIZATIONCOLORCHANGED`, `WM_THEMECHANGED` |
 | macOS | `AppleInterfaceThemeChangedNotification` and `AppleColorPreferencesChangedNotification` (distributed), `NSSystemColorsDidChangeNotification` |
 | Linux | the desktop portal's `SettingChanged` signal for `color-scheme` and `accent-color`, heard on a thread of its own |
+| Web | the `change` event of `matchMedia("(prefers-color-scheme: dark)")` |
 
 iOS doesn't report changes yet. The platform layer delivers
 `Event::ThemeChanged` either way. A theme you customized after building it with

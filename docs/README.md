@@ -28,17 +28,17 @@ How to build, package and run on each platform, and what works there today.
 | Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ✅ ¹⁹ | ✅ ¹² |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
-| System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ✅ ²⁰ | ❌ |
-| Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ✅ ²⁰ | ❌ |
+| System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ✅ ²⁰ | ✅ ²¹ |
+| Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ✅ ²⁰ | ✅ ²¹ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
-| Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ❌ |
+| Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ✅ ¹² |
 | Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
-| Input methods (CJK IME) | Wayland ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ❌ |
-| Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ❌ |
+| Input methods (CJK IME) | Wayland ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
+| Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Menu bar | drawn ¹⁸ | native ¹⁰ | native ¹⁰ | ❌ | ❌ | ❌ |
 | Context menus and shortcuts | ✅ ¹⁸ | ✅ ¹⁰ | ✅ ¹⁰ | ❌ | ❌ | ❌ |
 
@@ -90,6 +90,18 @@ The soft keyboard shows for a focused text input and types through key events.
 ²⁰ Implemented and tried by hand on an emulator (night mode switched with
 `adb shell cmd uimode night yes`, the clipboard read and written over JNI), but
 not checked in CI. The accent color needs Android 12.
+²¹ `prefers-color-scheme`, and its `change` event; the accent is the CSS
+`AccentColor`, where the browser has one (Chrome reports its own default blue,
+not the OS's). CI runs `webdemo`'s selftest with a dark and a light scheme and
+checks the theme follows; a live switch is checked by handing the app a new
+scheme the way the `change` listener does, since headless Chrome can't flip it.
+²² An invisible overlay of ARIA elements mirrors the accessibility tree over the
+canvas. CI checks the roles and names, that a click on an element (what a
+screen reader's "activate" does) taps the node, and `aria-checked`. Not yet
+tried with a real screen reader. See [the web page](platforms/web.md#accessibility).
+²³ Through a hidden `<textarea>` at the caret: composition events and `input`
+events. CI checks them with synthetic events in headless Chrome; no real input
+method was run.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.

@@ -45,7 +45,8 @@ underlines it.
 | X11 | Not yet (XIM / IBus) | Stipple, from the Compose file |
 | Windows | IMM32 | `TranslateMessage` (`WM_CHAR`) |
 | macOS | `NSTextInputClient` | `NSTextInputClient` |
-| iOS, Android, web | Not yet | Not yet |
+| Web | composition events on a hidden `<textarea>` | the browser (composition or `input` events) |
+| iOS, Android | Not yet | Not yet |
 
 **Wayland.** Stipple binds `zwp_text_input_manager_v3` and creates a text input
 for the seat. While a text field has focus (and the compositor has sent
@@ -124,4 +125,4 @@ paths are built and unit-tested but not exercised end to end.
 - Per-segment styling of the preedit (IMEs mark the segment being converted;
   Stipple shows the highlighted range as the selection and underlines all of
   it).
-- Soft keyboards on iOS and Android, and IME on the web.
+- Soft keyboards on iOS and Android.

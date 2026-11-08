@@ -962,7 +962,16 @@ Most input only works on X11 today.
   configuration changes, and the Android 12 wallpaper accent, read from
   `Resources` over JNI. The system bars take the app's background. Dark mode
   and the accent were tried by hand on an emulator, not in CI.
-- ⬜ Accessibility on iOS (UIAccessibility), Android and the web (ARIA).
+- ⬜ Accessibility on iOS (UIAccessibility) and Android.
+- ✅ Accessibility on the web (ARIA): `web/stipple.js` mirrors the
+  accessibility tree in an invisible overlay of ARIA elements over the canvas
+  (roles, names, `aria-selected` / `aria-expanded` / `aria-checked`), updated
+  only where the tree changed; a click on an element (a screen reader's
+  "activate") taps its node, and focus follows the app's and, for text fields,
+  the screen reader's. The tree gained checkbox and switch roles and a
+  `checked` state (`Element::checked`). CI's web selftest checks the roles and
+  names, activation and `aria-checked` in headless Chrome; not yet tried with a
+  real screen reader.
 - ⬜ Images on the GPU path, so OS-drawn controls render under `App::render_with`.
 - ✅ The web's exports in the library: `stipple::web_app!(app)` generates them,
   and `web/stipple.js` is the whole page side, so a web app provides only its
@@ -971,8 +980,18 @@ Most input only works on X11 today.
 - ✅ High-DPI on the web: `devicePixelRatio` is the scale factor, the canvas's
   backing store is its CSS size times it, and size and ratio changes re-render.
   CI runs the web selftest at a ratio of 2.
-- ⬜ The web: IME and dead keys, following `prefers-color-scheme`, and more
-  than one app per page.
+- ✅ The web: IME and dead keys, following `prefers-color-scheme`, and more
+  than one app per page. Keyboard focus is a hidden `<textarea>` placed at the
+  caret: composition events become `Ime::Preedit` / `Ime::Commit`, and `input`
+  events carry dead-key characters, while `keydown` keeps named keys and
+  shortcuts. `Theme::native()` follows `prefers-color-scheme` and its `change`
+  event (`Event::ThemeChanged`), with the CSS `AccentColor` where the browser
+  has one. Each `start` instantiates the module afresh, so canvases run apps
+  side by side (`examples/webdemo/multi.html`). CI's selftest checks
+  composition and a dead key with synthetic events, runs once with a dark and
+  once with a light scheme (a live switch is simulated through the same export
+  the `change` listener calls), and starts a second app on the page; no real
+  IME was run.
 
 ### Phase 8 — A rich, animated, reactive UI
 *Goal: interfaces that respond to everything the user does, with motion, and
@@ -1044,7 +1063,7 @@ styling part of the toolkit.
 | CPU rasterization too slow for large/animated/4K UIs | Damage tracking + layer/glyph caching in Phase 1; GPU `Surface` (Phase 6) behind the same trait. |
 | Per-OS windowing/IME is a deep, hand-written surface | Confine to `stipple::platform`; freeze the trait after Phase 2; ship one OS fully before porting. |
 | Reactive runtime + Rust ownership friction | Prototype the `View`/state model in Phase 1 against real demos before widening the widget set. |
-| Accessibility is hard when self-drawing everything | A semantics tree built from the element tree, with hand-written bridges to AT-SPI, UI Automation and NSAccessibility. Mobile and web bridges remain (Phase 7f). |
+| Accessibility is hard when self-drawing everything | A semantics tree built from the element tree, with hand-written bridges to AT-SPI, UI Automation, NSAccessibility and ARIA (the web). Mobile bridges remain (Phase 7f). |
 | The native theme leans on OS internals | Windows' dark control themes (`DarkMode_*`) are undocumented, and AppKit and UIKit restyle controls between releases. Controls are drawn by the OS at run time, so they follow its current look; the self-drawn decoration stays as the fallback; CI screenshots each platform. |
 | oxideav API churn | Pin via path deps now; track upstream; the `stipple::render` seam isolates oxideav from the rest. |
 | Web with "minimal deps" constraint | Accept a thin, hand-audited JS-interop shim as the one web exception. |
