@@ -76,7 +76,8 @@ wait_for "androiddemo: row [0-9]+ tapped" 20
 adb shell input keyevent KEYCODE_TAB
 sleep 1
 adb shell input text "Stipple"
-wait_for 'androiddemo: text "Stipple"' 30
+# Each key rebuilds the frame, which the emulator's software rendering makes slow.
+wait_for 'androiddemo: text "Stipple"' 90
 sleep 2
 adb exec-out screencap -p > "$shots/android-typed.png"
 
