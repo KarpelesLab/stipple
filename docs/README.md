@@ -39,8 +39,8 @@ How to build, package and run on each platform, and what works there today.
 | Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
 | Input methods (CJK IME) | Wayland ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
-| Menu bar | drawn ¹⁸ | native ¹⁰ | native ¹⁰ | ❌ | ❌ | ❌ |
-| Context menus and shortcuts | ✅ ¹⁸ | ✅ ¹⁰ | ✅ ¹⁰ | ❌ | ❌ | ❌ |
+| Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
+| Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -80,9 +80,10 @@ a real input method, so only the protocol wiring is tested. X11 has no IME
 support yet (XIM or IBus). See [ime.md](ime.md).
 ¹⁷ From the locale's Compose file, on X11 and Wayland. CI types dead keys and a
 compose sequence with `xdotool` (X11) and `wtype` (sway).
-¹⁸ Linux has no system menu bar, so Stipple draws one in the window. CI opens it
-from the keyboard and with a click, uses a shortcut, and picks from a context
-menu on X11.
+¹⁸ Linux has no system menu bar, so Stipple draws one in the window, with
+mnemonics underlined while the keyboard drives it. CI opens it from the
+keyboard and with a click, checks Alt underlines the mnemonics, uses a
+shortcut, and picks from a context menu on X11.
 ¹⁹ CI runs `androiddemo` on an API 34 emulator (at its 2.625x density) and
 checks that a frame is presented, its timer ticks while the spinner turns, a tap
 lands on the button, and Tab plus `adb shell input text` type into the field.
@@ -102,6 +103,12 @@ tried with a real screen reader. See [the web page](platforms/web.md#accessibili
 ²³ Through a hidden `<textarea>` at the caret: composition events and `input`
 events. CI checks them with synthetic events in headless Chrome; no real input
 method was run.
+²⁴ The `HMENU` / `NSMenu` menu bar, and context menus as native popups
+(`TrackPopupMenuEx`, `NSMenu`). On Windows, CI reads the menu bar back, picks
+from it with `WM_COMMAND` and from the keyboard, uses a shortcut, and picks
+from a native context menu; on macOS an in-process self-test prints the menu
+bar, picks from it, posts shortcuts (checking each runs once, ⌘C in a text
+field included) and picks from a native context menu. See [menus.md](menus.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.

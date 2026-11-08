@@ -913,10 +913,25 @@ Most input only works on X11 today.
   Enter, Escape, mnemonics); context menus (`Element::context_menu`) on
   right-click, the Menu key or Shift+F10, drawn as overlays everywhere; the
   `MenuBar`, `Menu` and `MenuItem` roles. CI drives the drawn bar, a shortcut and
-  a context menu on X11; the macOS and Windows menu bars are build-checked only.
-  See [docs/menus.md](docs/menus.md).
-- ⬜ Native context-menu popups on macOS and Windows; underlined mnemonics in
-  the drawn menus.
+  a context menu on X11. See [docs/menus.md](docs/menus.md).
+- ✅ Native context-menu popups on macOS (`NSMenu`
+  `popUpMenuPositioningItem:atLocation:inView:`) and Windows
+  (`TrackPopupMenuEx`), from the same model (`Window::popup_menu`); drawn on
+  Linux, and everywhere with `menu_bar_in_window(true)`. Mnemonics underlined in
+  the drawn menus while the keyboard drives them (Alt held, F10, Alt+letter, a
+  key in an open menu), as on Windows (`Element::underline`), passed through to
+  Win32 menus as `&`. Shortcuts run once on macOS: AppKit's key-equivalent
+  match is dropped when Stipple's own matching took the key, so ⌘C in a text
+  field doesn't also run the menu item. Runtime-tested in CI: on Windows,
+  PowerShell reads the `HMENU` back, picks with `WM_COMMAND` and Alt+E plus a
+  mnemonic, presses Ctrl+D, and opens and picks from the native context menu
+  (`#32768`); on macOS, an in-process self-test (`STIPPLE_COCOA_MENU_SELFTEST`)
+  prints the `NSMenu` bar, picks with `performActionForItemAtIndex:`, posts ⌘D
+  and ⌘C (with and without a focused field) and opens and picks from the native
+  context menu, each checked to run once (`osascript` System Events is tried
+  but not required, for want of an accessibility grant); on X11, CI checks Alt
+  underlines the mnemonics. Not verified: how the native popups behave with a
+  real mouse and keyboard (CI posts events or messages).
 - ✅ Window control: minimum and maximum size, maximize, fullscreen and the
   window icon, as `App` / `WindowAttributes` options and at run time through
   `AppHandle::window`, on X11, Wayland, Windows and macOS (the Dock icon there).

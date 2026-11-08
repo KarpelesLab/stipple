@@ -41,7 +41,7 @@ see it, and the window number, which `screencapture -l` takes.
 
 ## Known gaps
 
-- There's no app menu, so the menu bar shows the executable's name and no menus.
+- Without `App::menu`, the menu bar shows the executable's name and no menus.
 - The system clipboard (`NSPasteboard`) works with Cmd+C/X/V; file dialogs
   (`NSOpenPanel` / `NSSavePanel`) are implemented but not exercised in CI, since
   a modal dialog can't be driven headlessly.

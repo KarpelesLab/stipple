@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Native context menus on macOS (`NSMenu`) and Windows (`TrackPopupMenuEx`):
+  `Element::context_menu` shows the system's popup there, through the new
+  `Window::popup_menu` and `Menu::to_native` / `Menu::commands`; Linux, and
+  `menu_bar_in_window(true)`, keep the drawn one.
+- The drawn menus underline mnemonics while the keyboard drives them (Alt held,
+  F10, Alt+letter, a key in an open menu), as Windows does, through the new
+  `Element::underline` and `menu::mnemonic_at`.
+- CI drives the native menus: on Windows from PowerShell (the `HMENU` read back,
+  `WM_COMMAND`, Alt+E plus a mnemonic, Ctrl+D, the native context menu), on
+  macOS through an in-process self-test (`STIPPLE_COCOA_MENU_SELFTEST`).
+- `menudemo` logs each command it runs and has a note field and an Edit >
+  Copy Summary item on Ctrl+C / ⌘C.
+
 - The web catches up with the desktops: `stipple::web_app!(app)` generates a
   web app's exports and `web/stipple.js` is its whole page side, so an app no
   longer copies the glue. Timers and `AppHandle::update` wake the app through
@@ -142,6 +155,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On macOS, a shortcut whose key AppKit and Stipple read differently (⌘⌫, whose
+  key equivalent is a backspace while the key types a delete) no longer runs
+  twice: the backend now drops AppKit's key-equivalent pick whenever Stipple's
+  own matching took the key, instead of comparing the characters.
 - Pointer hit-testing respects clipping, so content scrolled out of a scroll
   container can't be clicked where it isn't drawn.
 - A press on an overlay's dismiss area no longer reaches the text fields,
