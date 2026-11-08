@@ -868,6 +868,98 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
+  # Drag and drop: an XDND source (.github/scripts/xdnd-drop.py, python3-xlib)
+  # drops files and text on dropdemo's zone, gets refused by its "files only"
+  # zone, and xdotool drags a chip onto the zone inside the app. dropdemo
+  # exits once three drops have landed; screenshots catch the zone's animated
+  # drag-over look (accepted, then refused).
+  visual-dnd:
+    name: Visual test (Drag and drop / X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, ImageMagick, xdotool, python3-xlib, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick xdotool python3-xlib fonts-dejavu-core
+
+      - name: Build the drop demo
+        run: cargo build --release -p dropdemo
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          echo "XVFB_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Drop files and text over XDND, and drag a chip inside the app
+        env:
+          DISPLAY: ":99"
+          STIPPLE_APP_DEBUG: "1"
+        run: |
+          mkdir -p visual_output
+          ./target/release/dropdemo --expect 3 --timeout 60 > visual_output/drop.log 2>&1 &
+          APP=$!
+          echo "APP_PID=$APP" >> "$GITHUB_ENV"
+          sleep 3
+          wid=$(xdotool search --name "Stipple drop demo" | head -1)
+          echo "window: $wid"
+          [ -n "$wid" ]
+          import -window "$wid" visual_output/drop-idle.png
+          # Files onto the first zone, lingering so a screenshot sees it glow.
+          python3 .github/scripts/xdnd-drop.py "$wid" files /tmp/a.txt "/tmp/b c.txt" \
+            --at 100 150 --hover 1.5 &
+          SRC=$!
+          sleep 1.1
+          import -window "$wid" visual_output/drop-hover.png
+          wait $SRC
+          # Text onto the same zone.
+          python3 .github/scripts/xdnd-drop.py "$wid" text "hello world" --at 100 150
+          # Text over the files-only zone: refused (it tints red meanwhile).
+          python3 .github/scripts/xdnd-drop.py "$wid" text nope --at 400 150 \
+            --expect refuse --hover 1.5 &
+          SRC=$!
+          sleep 1.1
+          import -window "$wid" visual_output/drop-refused.png
+          wait $SRC
+          # Drag "Chip 1" onto the first zone inside the app.
+          xdotool mousemove --window "$wid" 50 290 mousedown 1 sleep 0.2 \
+            mousemove --window "$wid" 60 260 sleep 0.2 \
+            mousemove --window "$wid" 100 150 sleep 0.2 mouseup 1
+          status=0
+          wait $APP || status=$?
+          echo "=== drop.log ==="; grep -v "present\|damage" visual_output/drop.log || true
+          [ "$status" = 0 ]
+          grep -qF 'dropdemo: drop files ["/tmp/a.txt", "/tmp/b c.txt"]' visual_output/drop.log
+          grep -qF 'dropdemo: drop text "hello world"' visual_output/drop.log
+          grep -qF 'dropdemo: drop internal "chip-1"' visual_output/drop.log
+          grep -q 'dropdemo: selftest ok (3 drops)' visual_output/drop.log
+          # The refused drag never dropped.
+          ! grep -q 'drop text "nope"' visual_output/drop.log
+          # The zone looked different while a drag was over it, both ways.
+          for shot in hover refused; do
+            diff=$(compare -metric AE visual_output/drop-idle.png "visual_output/drop-$shot.png" null: 2>&1 || true)
+            echo "$shot: $diff pixels changed"
+            [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 1000 ]
+          done
+
+      - name: Stop the app and Xvfb
+        if: always()
+        run: |
+          [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      - name: Upload screenshots + log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-dnd-screenshot
+          path: visual_output/*
+          if-no-files-found: warn
+
   # True OS multi-window: the multiwindow example opens two real top-level X11
   # windows (one parent App, two panes over shared state) side by side, a red
   # one at x=0 and a blue one at x=340. Screenshot the root and confirm BOTH
@@ -1582,6 +1674,35 @@ jobs:
           # checks menudemo's log saw each command exactly once.
           .github\scripts\menu-windows.ps1 .\target\release\menudemo.exe visual_output
 
+      - name: Drop a file and text through OLE drag and drop
+        shell: powershell
+        run: |
+          cargo build --release -p dropdemo
+          New-Item -ItemType Directory -Force visual_output | Out-Null
+          $file = Join-Path $env:RUNNER_TEMP 'dropped.txt'
+          Set-Content -Path $file -Value 'hello'
+          $app = Start-Process -FilePath .\target\release\dropdemo.exe `
+            -ArgumentList '--expect', '2', '--timeout', '60' -PassThru `
+            -RedirectStandardOutput visual_output\drop.log `
+            -RedirectStandardError visual_output\drop-err.log
+          Start-Sleep -Seconds 4
+          # Real OLE DoDragDrop from another process, onto the first zone.
+          powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\ole-drop.ps1 `
+            -Title 'Stipple drop demo' -Files $file
+          $filesCode = $LASTEXITCODE
+          Start-Sleep -Seconds 1
+          powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\ole-drop.ps1 `
+            -Title 'Stipple drop demo' -Text 'hello from OLE'
+          $textCode = $LASTEXITCODE
+          if (-not $app.WaitForExit(30000)) { Stop-Process -Id $app.Id -Force }
+          Write-Host '=== drop.log ==='; Get-Content visual_output\drop.log
+          Write-Host '=== drop-err.log ==='; Get-Content visual_output\drop-err.log
+          if ($filesCode -ne 0 -or $textCode -ne 0) { throw "ole-drop: files=$filesCode text=$textCode" }
+          $log = Get-Content -Raw visual_output\drop.log
+          if ($log -notmatch 'dropdemo: drop files \[.*dropped\.txt') { throw 'the file drop did not land' }
+          if ($log -notmatch 'dropdemo: drop text "hello from OLE"') { throw 'the text drop did not land' }
+          if ($log -notmatch 'dropdemo: selftest ok') { throw 'dropdemo did not finish' }
+
       - name: Screenshot the Stipple window and the native gallery
         shell: powershell
         run: |
@@ -2016,6 +2137,20 @@ jobs:
       - name: Stop the app
         if: always()
         run: '[ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true'
+
+      - name: Drop a file through the view's dragging methods
+        env:
+          STIPPLE_COCOA_DROP: /tmp/stipple-dropped.txt
+        run: |
+          cargo build --release -p dropdemo
+          echo hello > /tmp/stipple-dropped.txt
+          # CI can't drag in Finder: the backend calls the view's own
+          # NSDraggingDestination methods with a stand-in NSDraggingInfo whose
+          # pasteboard holds the file's URL, through real objc dispatch.
+          perl -e 'alarm 60; exec @ARGV' ./target/release/dropdemo --expect 1 --timeout 30 | tee drop.log
+          grep -q "Cocoa drop: wrote=true ops=\[1, 1, 1\] prepared=true performed=true" drop.log
+          grep -q 'dropdemo: drop files \[".*stipple-dropped.txt"\]' drop.log
+          grep -q 'dropdemo: selftest ok' drop.log
 
       - name: Timers and background work wake the event loop
         run: |
