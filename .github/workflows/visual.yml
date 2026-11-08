@@ -1692,24 +1692,36 @@ jobs:
 
       - name: Drop a file and text through OLE drag and drop
         shell: powershell
+        timeout-minutes: 8
         run: |
           cargo build --release -p dropdemo
           New-Item -ItemType Directory -Force visual_output | Out-Null
           $file = Join-Path $env:RUNNER_TEMP 'dropped.txt'
           Set-Content -Path $file -Value 'hello'
           $app = Start-Process -FilePath .\target\release\dropdemo.exe `
-            -ArgumentList '--expect', '2', '--timeout', '60' -PassThru `
+            -ArgumentList '--expect', '2', '--timeout', '90' -PassThru `
             -RedirectStandardOutput visual_output\drop.log `
             -RedirectStandardError visual_output\drop-err.log
           Start-Sleep -Seconds 4
-          # Real OLE DoDragDrop from another process, onto the first zone.
-          powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\ole-drop.ps1 `
-            -Title 'Stipple drop demo' -Files $file
-          $filesCode = $LASTEXITCODE
+          # Real OLE DoDragDrop from another process, onto the first zone; at
+          # most 45 s each, so a stuck drag fails with its output, not a hang.
+          function OleDrop([string[]]$DropArgs, [string]$Name) {
+            $p = Start-Process -FilePath powershell -PassThru -NoNewWindow `
+              -RedirectStandardOutput "visual_output\ole-$Name.log" `
+              -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                '.github\scripts\ole-drop.ps1', '-Title', '"Stipple drop demo"') + $DropArgs)
+            if (-not $p.WaitForExit(45000)) {
+              Stop-Process -Id $p.Id -Force
+              Write-Host "=== ole-drop ($Name) timed out ==="
+              Get-Content "visual_output\ole-$Name.log" | Write-Host
+              return 124
+            }
+            Get-Content "visual_output\ole-$Name.log" | Write-Host
+            return $p.ExitCode
+          }
+          $filesCode = OleDrop @('-Files', "`"$file`"") 'files'
           Start-Sleep -Seconds 1
-          powershell -NoProfile -ExecutionPolicy Bypass -File .github\scripts\ole-drop.ps1 `
-            -Title 'Stipple drop demo' -Text 'hello from OLE'
-          $textCode = $LASTEXITCODE
+          $textCode = OleDrop @('-Text', '"hello from OLE"') 'text'
           if (-not $app.WaitForExit(30000)) { Stop-Process -Id $app.Id -Force }
           Write-Host '=== drop.log ==='; Get-Content visual_output\drop.log
           Write-Host '=== drop-err.log ==='; Get-Content visual_output\drop-err.log

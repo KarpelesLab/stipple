@@ -49,8 +49,8 @@ public class OleDrop : IOleDropSource {
     POINT origin;
     public uint LastFeedback;
 
-    // Called on every pass of DoDragDrop's loop (mouse messages and its
-    // timer): move along, then drop.
+    // Called on every pass of DoDragDrop's loop (on mouse and key
+    // messages): move along, then drop.
     public int QueryContinueDrag(int esc, uint keys) {
         calls++;
         if (calls < 12) {
@@ -77,6 +77,17 @@ public class OleDrop : IOleDropSource {
         ClientToScreen(hwnd, ref p);
         var src = new OleDrop { origin = p };
         SetCursorPos(p.X, p.Y);
+        // DoDragDrop only consults the source when a mouse or key message
+        // arrives, and nothing moves the mouse on a CI desktop: nudge the
+        // cursor from another thread so its loop keeps turning.
+        var jiggle = new System.Threading.Thread(() => {
+            for (int i = 0; i < 400; i++) {
+                System.Threading.Thread.Sleep(50);
+                SetCursorPos(src.origin.X + src.calls + (i & 1), src.origin.Y);
+            }
+        });
+        jiggle.IsBackground = true;
+        jiggle.Start();
         DataObject data = files != null && files.Length > 0
             ? new DataObject(DataFormats.FileDrop, files)
             : new DataObject(DataFormats.UnicodeText, text);
