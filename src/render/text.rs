@@ -30,6 +30,36 @@ pub struct Font {
     chain: FaceChain,
     /// Capital-letter height per em, measured once on first use.
     cap_height: OnceLock<f64>,
+    /// Shaped runs by (text, size): views rebuild every frame and measure the
+    /// same strings several times per layout, and shaping is the costly part.
+    shapes: ShapeCache,
+}
+
+/// Shaped glyph runs keyed by text and size (in 1/64 px). Cleared wholesale
+/// when it grows past [`ShapeCache::MAX`], which a UI's working set of strings
+/// stays well under.
+#[derive(Default)]
+struct ShapeCache(std::sync::Mutex<std::collections::HashMap<(String, u32), Vec<PositionedGlyph>>>);
+
+impl ShapeCache {
+    const MAX: usize = 4096;
+
+    fn shape(&self, chain: &FaceChain, text: &str, size_px: f64) -> Vec<PositionedGlyph> {
+        let key = (text.to_string(), (size_px * 64.0).round() as u32);
+        if let Ok(map) = self.0.lock()
+            && let Some(glyphs) = map.get(&key)
+        {
+            return glyphs.clone();
+        }
+        let glyphs = chain.shape(text, size_px as f32).unwrap_or_default();
+        if let Ok(mut map) = self.0.lock() {
+            if map.len() >= Self::MAX {
+                map.clear();
+            }
+            map.insert(key, glyphs.clone());
+        }
+        glyphs
+    }
 }
 
 impl fmt::Debug for Font {
@@ -60,6 +90,7 @@ impl Font {
         Ok(Self {
             chain: FaceChain::new(face),
             cap_height: OnceLock::new(),
+            shapes: ShapeCache::default(),
         })
     }
 
@@ -108,6 +139,7 @@ impl Font {
                 && let Ok(face) = parse_face(bytes)
             {
                 font.chain = font.chain.push_fallback(face);
+                font.shapes = ShapeCache::default(); // glyphs may change
             }
         }
         Some(font)
@@ -167,10 +199,11 @@ impl Font {
 
     /// Summed advance width of a single line (no newlines) at `size_px`.
     fn line_width(&self, line: &str, size_px: f64) -> f64 {
-        match self.chain.shape(line, size_px as f32) {
-            Ok(glyphs) => glyphs.iter().map(|g| g.x_advance).sum::<f32>() as f64,
-            Err(_) => 0.0,
-        }
+        self.shapes
+            .shape(&self.chain, line, size_px)
+            .iter()
+            .map(|g| g.x_advance)
+            .sum::<f32>() as f64
     }
 
     /// Measure the rendered size of `text` at `size_px`: the widest line's
@@ -363,10 +396,7 @@ impl Font {
             } else {
                 para[bytes.clone()].to_string()
             };
-            let mut glyphs = self
-                .chain
-                .shape(&shaped, size_px as f32)
-                .unwrap_or_default();
+            let mut glyphs = self.shapes.shape(&self.chain, &shaped, size_px);
             if rtl {
                 glyphs.reverse();
             }
