@@ -884,8 +884,33 @@ Most input only works on X11 today.
   through objc dispatch in CI, but no real IME runs in CI, so the Wayland,
   Windows and macOS paths are only build-checked end to end. See
   [docs/ime.md](docs/ime.md).
-- ⬜ IME on X11 (XIM or IBus), TSF on Windows, and composing input on the
-  mobile soft keyboards (`UITextInput`, an Android `InputConnection`).
+- ⬜ IME on X11: XIM over the wire (the `_XIM_PROTOCOL` client messages, no
+  libX11), and/or IBus and Fcitx over the existing hand-written D-Bus client,
+  feeding the same `Event::Ime` preedit / commit model and placing the
+  candidate window from `Window::set_ime`. Today X11 users can't type CJK at
+  all.
+- ⬜ TSF on Windows, next to IMM32: modern IMEs (the Microsoft Japanese and
+  Chinese IMEs' newer modes, handwriting, voice typing, the touch keyboard's
+  suggestions) talk TSF, and IMM32 only reaches them through its compatibility
+  layer. Hand-written `ITfThreadMgr` / `ITfContext` / `ITextStoreACP` COM
+  vtables, like the UI Automation bridge.
+- ⬜ iOS composition: `UITextInput` on the view (marked text, `selectedTextRange`,
+  `firstRectForRange:` for the candidate bar, `caretRectForPosition:`), so the
+  Japanese, Chinese and Korean keyboards compose instead of committing raw kana
+  or jamo, and autocorrect, dictation and QuickType have a document to read.
+- ⬜ Android composition: the soft keyboard shows and hides with focus, but it
+  types only through key events, so emoji and composing keyboards (Chinese,
+  Japanese, Korean, Gboard's suggestions) deliver nothing. Implement an
+  `InputConnection` (over JNI, from a small `View` subclass, as `NativeActivity`
+  gives none) for `setComposingText` / `commitText` / `deleteSurroundingText`,
+  feeding `Event::Ime`, and map the editor action (Done / Next) to keys.
+- ⬜ Dead keys and compose on mobile hardware keyboards (iOS and Android).
+- ⬜ IME verification with a real input method: no real IME runs in CI, so the
+  Wayland, Windows and macOS paths are checked only as protocol wiring. Run one
+  in CI where it can be scripted (IBus or Fcitx with a Japanese engine under
+  Xvfb / sway; the Microsoft IME on the Windows runner), and keep a manual
+  checklist per platform (Japanese, Chinese pinyin, Korean, the candidate window
+  following the caret, cancelling and re-converting) until each is covered.
 - ✅ Dead keys and compose sequences: X11 and Wayland parse the locale's libX11
   Compose file (`XCOMPOSEFILE`, `~/.XCompose`, includes) by hand and show the
   pending sequence as preedit; Windows gets them from `TranslateMessage` and
@@ -1045,6 +1070,53 @@ Most input only works on X11 today.
   `Resources` over JNI. The system bars take the app's background. Dark mode
   and the accent were tried by hand on an emulator, not in CI.
 - ⬜ Accessibility on iOS (UIAccessibility) and Android.
+  - iOS: the view as a `UIAccessibilityContainer` exposing one
+    `UIAccessibilityElement` per node (label, value, traits, frame, activate),
+    with layout and screen-changed notifications so VoiceOver follows updates.
+  - Android: an `AccessibilityNodeProvider` over JNI (virtual view ids per
+    node, actions for click, focus, scroll and text), so TalkBack can read and
+    drive the tree.
+  - Checked with VoiceOver and TalkBack on real devices, not just in CI.
+- ⬜ Mobile app lifecycle for apps: an event for going to the background and
+  coming back (iOS `sceneDidEnterBackground` / `WillEnterForeground`, Android
+  `onPause` / `onResume`, which the backend handles internally but doesn't
+  report), so apps can save state and stop timers and animations; frames stop
+  while in the background; memory warnings (`didReceiveMemoryWarning`,
+  `onTrimMemory`); and saving and restoring state across process death on
+  Android (`onSaveInstanceState`).
+- ⬜ Back navigation: Android's Back button and predictive back gesture, and
+  iOS's edge swipe where an app wants it, delivered as an event a view can
+  handle (closing a menu, a dialog, then a screen) before the activity
+  finishes.
+- ⬜ Mobile gestures: pinch and two-finger pan, long press (opening the context
+  menu, as right-click does on desktop), horizontal touch scrolling, and touch
+  scrolling in mobile browsers on the web.
+- ⬜ Mobile text editing UI: touch caret placement and selection handles,
+  the system's edit menu (cut / copy / paste / select all; `UIEditMenuInteraction`
+  on iOS, the floating action mode on Android), and keeping the focused field
+  above the on-screen keyboard: on iOS the keyboard can cover a field today
+  (follow the keyboard frame notifications); Android already shrinks the
+  content, but nothing scrolls the focused field into view.
+- ⬜ File pickers on mobile: `UIDocumentPickerViewController` on iOS and the
+  Storage Access Framework (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`)
+  on Android, returning contents or a handle rather than a path, as the web's
+  `open_file_contents` does.
+- ⬜ Menus on mobile: `Element::context_menu` on long press, as `UIMenu` /
+  `UIContextMenuInteraction` on iOS and a `PopupMenu` (or the drawn menu) on
+  Android; the app's menu bar shown as a drawn menu or omitted.
+- ⬜ Notifications on iOS (`UNUserNotificationCenter`, with the permission
+  prompt) and Android (`NotificationManager` and a channel, with the
+  `POST_NOTIFICATIONS` permission on API 33+).
+- ⬜ Drag and drop from other apps on mobile: `UIDropInteraction` on iOS
+  (iPad split view) and `View.OnDragListener` on Android, feeding the existing
+  `DragEnter` / `Drop` events.
+- ⬜ iOS: following appearance changes live (`traitCollectionDidChange:` →
+  `Event::ThemeChanged`), and trackpad / mouse scrolling on iPad
+  (`UIPanGestureRecognizer` with indirect scroll input).
+- ⬜ Mobile CI depth: run the iOS features that are only implemented (timers,
+  clipboard, opening URLs) on the simulator, with real `UITouch`es rather than
+  the synthetic touch path, and try both platforms on physical devices before
+  calling them supported.
 - ✅ Accessibility on the web (ARIA): `web/stipple.js` mirrors the
   accessibility tree in an invisible overlay of ARIA elements over the canvas
   (roles, names, `aria-selected` / `aria-expanded` / `aria-checked`), updated
