@@ -16,7 +16,9 @@ use crate::geometry::{Insets, Transform};
 use crate::layout::{Axis, LayoutDirection, Track};
 use crate::platform::CursorIcon;
 use crate::platform::native::NativeDeco;
-use crate::render::{Color, ImageFit, ImageSource, TextDirection};
+use crate::render::{
+    Color, Decoration, Font, FontWeight, ImageFit, ImageSource, TextDirection, UnderlineStyle,
+};
 
 /// Alignment of children along an axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -69,6 +71,37 @@ pub struct BoxStyle {
     pub border: Option<(Color, f64)>,
 }
 
+/// How a text element's glyphs are drawn, beyond its size and color: its
+/// font, weight and slant (each `None` inherits the app's font), and the
+/// lines drawn along it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TextStyle {
+    /// The font; `None` uses the app's [`App::font`](crate::App::font).
+    pub font: Option<Font>,
+    /// A weight overriding the font's.
+    pub weight: Option<FontWeight>,
+    /// A slant overriding the font's.
+    pub italic: Option<bool>,
+    /// Underline, strikethrough and overline.
+    pub decoration: Decoration,
+}
+
+impl TextStyle {
+    /// The font this style draws with, given the app's `base` font: its own
+    /// font (else `base`) in its weight and slant. `None` without either.
+    pub fn resolve(&self, base: Option<&Font>) -> Option<Font> {
+        let font = self.font.as_ref().or(base)?;
+        let mut style = font.style();
+        if let Some(w) = self.weight {
+            style.weight = w;
+        }
+        if let Some(i) = self.italic {
+            style.italic = i;
+        }
+        Some(font.styled(style))
+    }
+}
+
 /// What an element arranges; all kinds share [`Element::decoration`].
 #[derive(Clone, Debug, PartialEq)]
 pub enum ElementKind {
@@ -86,6 +119,10 @@ pub enum ElementKind {
         /// A byte range `[start, end)` of the text drawn underlined (a menu
         /// mnemonic). Set via [`Element::underline`].
         underline: Option<(usize, usize)>,
+        /// Font, weight, slant and decoration lines. Set via
+        /// [`Element::font`], [`Element::bold`], [`Element::decorate`] and
+        /// friends.
+        style: TextStyle,
     },
     /// A linear container that lays children along `axis`.
     Stack {
@@ -270,6 +307,7 @@ impl Element {
                 color,
                 direction: TextDirection::Auto,
                 underline: None,
+                style: TextStyle::default(),
             },
         }
     }
@@ -779,6 +817,81 @@ impl Element {
         }
         set(&mut self, dir);
         self
+    }
+
+    /// Apply `f` to the [`TextStyle`] of this text element, or of every text
+    /// element inside this container.
+    fn text_style(mut self, f: &dyn Fn(&mut TextStyle)) -> Self {
+        fn set(el: &mut Element, f: &dyn Fn(&mut TextStyle)) {
+            match &mut el.kind {
+                ElementKind::Text { style, .. } => f(style),
+                ElementKind::Stack { children, .. } | ElementKind::Grid { children, .. } => {
+                    for c in children {
+                        set(c, f);
+                    }
+                }
+                _ => {}
+            }
+        }
+        set(&mut self, f);
+        self
+    }
+
+    /// Draw this text, or the text inside this container that has no font
+    /// of its own, with `font` instead of the app's. `font`'s weight and slant
+    /// apply unless [`weight`](Self::weight) or [`italic`](Self::italic)
+    /// override them.
+    pub fn font(self, font: Font) -> Self {
+        self.text_style(&|s| {
+            if s.font.is_none() {
+                s.font = Some(font.clone());
+            }
+        })
+    }
+
+    /// Draw this text (or the text inside this container that sets no weight
+    /// of its own) at `weight`: the family's face for it, or a synthesized
+    /// bold when it has none.
+    pub fn weight(self, weight: FontWeight) -> Self {
+        self.text_style(&|s| {
+            s.weight.get_or_insert(weight);
+        })
+    }
+
+    /// [`weight`](Self::weight) bold.
+    pub fn bold(self) -> Self {
+        self.weight(FontWeight::BOLD)
+    }
+
+    /// Draw this text (or the text inside this container that sets no slant
+    /// of its own) italic: the family's italic face, or a synthesized oblique.
+    pub fn italic(self) -> Self {
+        self.text_style(&|s| {
+            s.italic.get_or_insert(true);
+        })
+    }
+
+    /// Draw `decoration`'s lines (underline style, strikethrough, overline,
+    /// their color) along this text, or the text inside this container that
+    /// has none of its own. Positions and thickness come from the font's
+    /// [metrics](crate::render::Font::metrics).
+    pub fn decorate(self, decoration: Decoration) -> Self {
+        self.text_style(&|s| {
+            if s.decoration.is_none() {
+                s.decoration = decoration;
+            }
+        })
+    }
+
+    /// Strike this text through ([`decorate`](Self::decorate)).
+    pub fn strikethrough(self) -> Self {
+        self.decorate(Decoration::strikethrough())
+    }
+
+    /// Underline all of this text in `style` ([`decorate`](Self::decorate));
+    /// [`underline`](Self::underline) marks a byte range instead.
+    pub fn underline_style(self, style: UnderlineStyle) -> Self {
+        self.decorate(Decoration::underline(style))
     }
 
     /// Underline the byte range `[start, end)` of this text element, in its

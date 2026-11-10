@@ -26,6 +26,8 @@
 pub(crate) mod bidi;
 mod color;
 mod convert;
+mod decoration;
+pub(crate) mod font;
 mod image;
 mod scene;
 mod software;
@@ -34,6 +36,8 @@ mod text;
 
 pub use bidi::TextDirection;
 pub use color::Color;
+pub use decoration::{Decoration, UnderlineStyle};
+pub use font::{FontFamilyInfo, FontId, FontMetrics, FontStyle, FontWeight};
 pub use image::{ImageError, ImageFit, ImageSource, Svg, image_formats};
 pub use scene::{DrawCmd, Scene};
 pub use software::SoftwareRenderer;

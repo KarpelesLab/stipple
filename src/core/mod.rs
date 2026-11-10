@@ -47,7 +47,7 @@ pub use crossfade::THEME_FADE;
 pub use diff::{Damage, diff_trees};
 pub(crate) use dnd::DropFades;
 pub use dnd::{DROP_FADE, DropState};
-pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverride};
+pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverride, TextStyle};
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use handle::runtime;
 pub use handle::{AppHandle, TimerId};

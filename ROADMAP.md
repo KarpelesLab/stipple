@@ -754,6 +754,12 @@ abstraction is frozen at the end of Phase 2.
   NSAccessibility bridges; keyboard navigation + focus traversal.
 - Styling depth: full theming/token system, transitions, gesture recognizers.
 - i18n: RTL layout, locale-aware formatting, font fallback chains.
+- ✅ **Fonts and decorations**: system fonts by family name (font directories
+  read by hand; fontconfig's configuration and aliases on Linux), `Font` as a
+  cheap handle over a family with real or synthesized bold and italic,
+  per-element fonts, public fallback chains, terminal-grade `FontMetrics`, and
+  text decorations (five underline styles, strikethrough, overline, their own
+  color). See [`docs/fonts.md`](docs/fonts.md).
 - Performance: render thread, layer caching, partial repaint, glyph atlas.
 - **Exit criteria:** a non-trivial reference application (e.g., a file/media
   browser using oxideav decoders) ships on all three desktops, accessible and

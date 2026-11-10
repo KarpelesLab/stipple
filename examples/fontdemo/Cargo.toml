@@ -1,0 +1,16 @@
+[package]
+name = "fontdemo"
+description = "Stipple example: system fonts by family name, bold and italic faces (real or synthesized), a fallback chain, terminal metrics, and text decorations (underline styles, strikethrough, overline, colors)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true

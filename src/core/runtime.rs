@@ -980,6 +980,8 @@ pub enum NodeContent {
         ///
         /// [`Element::underline`]: crate::core::Element::underline
         underline: Option<(usize, usize)>,
+        /// Font, weight, slant and decoration lines.
+        style: crate::core::TextStyle,
     },
     /// An embedded-content viewport: the node's bounds reserve an area the
     /// compositor fills with externally-rendered pixels for this

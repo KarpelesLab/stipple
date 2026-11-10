@@ -41,6 +41,8 @@ How to build, package and run on each platform, and what works there today.
 | Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ✅ ¹² |
 | Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
 | Mirrored right-to-left layouts | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ |
+| System fonts by family name | ✅ ³⁴ | ✅ ³⁴ | ✅ ³⁴ | ✅ ¹⁰ | ✅ ¹⁰ | — ³⁴ |
+| Bold, italic, per-element fonts, fallbacks, text decorations | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ |
 | Input methods (CJK IME) | ✅ ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
@@ -168,6 +170,15 @@ in-app drag of files or text leaves the window. CI drags `dropdemo`'s chips
 out onto an XDND target on X11 and checks the file's URI list and the text
 arrive. Wayland is unit-tested against a scripted compositor only; Windows and
 macOS are build-checked only. See [drag-and-drop.md](drag-and-drop.md).
+³⁴ Found by reading the font directories by hand, no font library: on Linux
+the directories and aliases in fontconfig's configuration, the Windows Fonts
+folders, `/System/Library/Fonts` and `/Library/Fonts` on macOS and iOS,
+`/system/fonts` on Android. CI lists the families and runs `fontdemo --check`
+on X11, Windows and macOS. A web page has no system fonts: the app loads its
+own with `Font::from_bytes`. See [fonts.md](fonts.md).
+³⁵ Shared code (the CPU text path), so the same everywhere. CI screenshots
+`fontdemo` on X11 and checks its rendering off screen on X11, Windows and
+macOS; elsewhere it is unit-tested. See [fonts.md](fonts.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -185,6 +196,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
   theme cross-fades and reduced motion
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
+- [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls

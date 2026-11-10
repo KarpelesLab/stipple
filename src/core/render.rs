@@ -75,7 +75,9 @@ pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
                 _ => natural,
             }
         }
-        ElementKind::Text { text, size, .. } => match font {
+        ElementKind::Text {
+            text, size, style, ..
+        } => match style.resolve(font).as_ref() {
             // Wrapping text takes the available width and grows in height.
             Some(f) if el.wrap && inner.width.is_finite() => {
                 let lines = f.wrap(text, *size, inner.width);
@@ -345,12 +347,14 @@ pub fn layout_with_direction(
             color,
             direction,
             underline,
+            style,
         } => NodeContent::Text {
             text: text.clone(),
             size: *size,
             color: *color,
             direction: *direction,
             underline: *underline,
+            style: style.clone(),
         },
         ElementKind::Viewport { id } => NodeContent::Viewport(*id),
         ElementKind::Image { source, fit } => NodeContent::Image {
@@ -610,13 +614,15 @@ fn paint_focus_node(
         text,
         size,
         direction,
+        style,
         ..
     } = &leaf.content
     else {
         return;
     };
     let bounds = leaf.bounds;
-    let Some(font) = font else {
+    let styled = style.resolve(font);
+    let Some(font) = styled.as_ref() else {
         // No font, no geometry: a caret bar at the start of the box.
         let h = *size;
         scene.fill_rect(
@@ -684,12 +690,14 @@ pub fn caret_index_at(node: &LayoutNode, point: Point, font: Option<&Font>) -> O
         text,
         size,
         direction,
+        style,
         ..
     } = &leaf.content
     else {
         return None;
     };
-    let font = font?;
+    let styled = style.resolve(font)?;
+    let font = &styled;
     let b = leaf.bounds;
     let layout = text_layout(
         font,
@@ -797,8 +805,9 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
             color,
             direction,
             underline,
+            style,
         } => {
-            if let Some(f) = font
+            if let Some(f) = style.resolve(font).as_ref()
                 && !text.is_empty()
             {
                 // Wrapped to the laid-out width when `wrap` is set; right-to-left
@@ -806,6 +815,7 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
                 let w = node.bounds.width();
                 let layout = text_layout(f, text, *size, *direction, node.wrap, w, node.rtl);
                 scene.fill_layout(&layout, node.bounds.origin, *color);
+                scene.decorate_layout(&layout, node.bounds.origin, &style.decoration, *color);
                 if let Some((start, end)) = *underline {
                     // Just under the baseline, as thick as the strokes.
                     let o = node.bounds.origin;
@@ -1955,5 +1965,108 @@ mod tests {
             Some([0, 0, 0, 255]),
             "not where laid out"
         );
+    }
+
+    // --- Per-element fonts and decorations ---------------------------------
+
+    /// Pixels brighter than mid-gray in `out`.
+    fn lit(out: &crate::render::Pixmap) -> usize {
+        let s = out.size();
+        (0..s.height)
+            .flat_map(|y| (0..s.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| out.pixel(x, y).unwrap()[0] > 128)
+            .count()
+    }
+
+    #[test]
+    fn text_elements_draw_in_their_own_weight_and_font() {
+        let Some(font) = Font::system_default() else {
+            return;
+        };
+        let word = || Element::text("Heavy", 20.0, Color::WHITE);
+        let plain = render_el(&word(), 200.0, 40.0, Some(&font));
+        let bold = render_el(&word().bold(), 200.0, 40.0, Some(&font));
+        assert!(lit(&bold) > lit(&plain) * 11 / 10);
+        // A bold element also measures with the bold face (wider or equal).
+        let (pw, bw) = (
+            measure(&word(), Size::new(500.0, 50.0), Some(&font)).width,
+            measure(&word().bold(), Size::new(500.0, 50.0), Some(&font)).width,
+        );
+        assert!(bw >= pw);
+        // An element's own font replaces the app's, also without an app font.
+        let own = render_el(&word().font(font.bold()), 200.0, 40.0, None);
+        assert_eq!(lit(&own), lit(&bold));
+        assert_eq!(lit(&render_el(&word(), 200.0, 40.0, None)), 0);
+    }
+
+    #[test]
+    fn container_text_styles_fill_in_what_children_leave_unset() {
+        use crate::render::FontWeight;
+        let Some(font) = Font::system_default() else {
+            return;
+        };
+        let el = Element::stack(
+            Axis::Vertical,
+            vec![
+                Element::text("a", 12.0, Color::WHITE),
+                Element::text("b", 12.0, Color::WHITE).weight(FontWeight::LIGHT),
+            ],
+        )
+        .bold()
+        .italic()
+        .font(font.clone())
+        .strikethrough();
+        let ElementKind::Stack { children, .. } = &el.kind else {
+            unreachable!()
+        };
+        let style = |i: usize| match &children[i].kind {
+            ElementKind::Text { style, .. } => style.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(style(0).weight, Some(FontWeight::BOLD));
+        assert_eq!(style(1).weight, Some(FontWeight::LIGHT), "the child's own");
+        assert_eq!(style(0).italic, Some(true));
+        assert_eq!(style(1).font.as_ref(), Some(&font));
+        assert!(style(0).decoration.strikethrough);
+        let resolved = style(0).resolve(None).unwrap();
+        assert_eq!(resolved, font.styled(crate::render::FontStyle::BOLD_ITALIC));
+    }
+
+    #[test]
+    fn decorated_text_draws_its_lines_across_the_text() {
+        let Some(font) = Font::system_default() else {
+            return;
+        };
+        // White text with a red underline and strikethrough over black.
+        let deco = crate::render::Decoration::underline(crate::render::UnderlineStyle::Single)
+            .with_strikethrough()
+            .with_color(RED);
+        let el = Element::text("Lined text", 20.0, Color::WHITE).decorate(deco);
+        let out = render_el(&el, 200.0, 40.0, Some(&font));
+        let width = font.measure("Lined text", 20.0).width as u32;
+        let red_rows: Vec<u32> = (0..40)
+            .filter(|&y| {
+                (2..width - 2).all(|x| {
+                    let [r, g, b, _] = out.pixel(x, y).unwrap();
+                    r > 200 && g < 60 && b < 60
+                })
+            })
+            .collect();
+        // Two lines: the underline below the baseline, the strikethrough
+        // above it.
+        let baseline = font.baseline(20.0);
+        let m = font.metrics(20.0);
+        assert!(red_rows.len() >= 2, "{red_rows:?}");
+        let (top, bottom) = (red_rows[0] as f64, *red_rows.last().unwrap() as f64);
+        assert!(
+            (top - (baseline + m.strikeout_position)).abs() <= 1.5,
+            "{red_rows:?}"
+        );
+        assert!(
+            (bottom - (baseline + m.underline_position)).abs() <= 1.5,
+            "{red_rows:?}"
+        );
+        // Nothing red past the text's end.
+        assert!((width + 4..200).all(|x| out.pixel(x, bottom as u32).unwrap()[0] < 50));
     }
 }

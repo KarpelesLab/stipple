@@ -3233,6 +3233,7 @@ pub mod prelude {
     pub use crate::platform::{CursorIcon, DragOffer, DropData, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
     pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg, TextDirection};
+    pub use crate::render::{Decoration, FontStyle, FontWeight, UnderlineStyle};
     pub use crate::style::Theme;
     pub use crate::style::{Palette, Spacing, Typography};
     pub use crate::widgets::{

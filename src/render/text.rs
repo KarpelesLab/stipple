@@ -17,29 +17,52 @@ use crate::render::bidi::{
     ParagraphLevels, TextDirection, VisualChar, boundary_carets, caret_boundary, has_strong,
     visual_order,
 };
+use crate::render::font::{FaceSource, Family, FontStyle, FontWeight, Synthesis, Variant};
 use crate::render::scene::Scene;
 use crate::render::software::SoftwareRenderer;
 use core::fmt;
 use core::ops::Range;
-use oxideav_core::{Group, Node, Paint, Transform2D};
+use oxideav_core::{Group, LineJoin, Node, Paint, Stroke, Transform2D};
 use oxideav_scribe::{Face, FaceChain, PositionedGlyph, Shaper};
-use std::sync::OnceLock;
+use std::sync::Arc;
 
-/// A loaded, shapeable font face.
+/// A shapeable font: a family (its regular, bold, italic … faces) drawn in
+/// one [`FontStyle`], with the fonts it falls back to for characters it
+/// lacks.
+///
+/// Cloning is cheap (a handle): give every element or glyph run its own
+/// copy. Two fonts are equal when they draw the same faces in the same style.
+/// See [`Font::from_family`] for system fonts by name, [`Font::styled`] for
+/// other weights and slants, and [`Font::with_fallback`] for fallbacks.
+#[derive(Clone)]
 pub struct Font {
-    chain: FaceChain,
-    /// Capital-letter height per em, measured once on first use.
-    cap_height: OnceLock<f64>,
-    /// Shaped runs by (text, size): views rebuild every frame and measure the
-    /// same strings several times per layout, and shaping is the costly part.
-    shapes: ShapeCache,
+    pub(crate) family: Arc<Family>,
+    pub(crate) style: FontStyle,
+    pub(crate) variant: Arc<Variant>,
 }
 
-/// Shaped glyph runs keyed by text and size (in 1/64 px). Cleared wholesale
-/// when it grows past [`ShapeCache::MAX`], which a UI's working set of strings
+impl PartialEq for Font {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.variant, &other.variant)
+    }
+}
+
+impl Eq for Font {}
+
+impl core::hash::Hash for Font {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.variant.id.hash(state);
+    }
+}
+
+/// Shaped glyph runs keyed by text and size (in 1/64 px), one cache per font
+/// variant (so per family, style and fallback chain). Cleared wholesale when
+/// it grows past [`ShapeCache::MAX`], which a UI's working set of strings
 /// stays well under.
 #[derive(Default)]
-struct ShapeCache(std::sync::Mutex<std::collections::HashMap<(String, u32), Vec<PositionedGlyph>>>);
+pub(crate) struct ShapeCache(
+    std::sync::Mutex<std::collections::HashMap<(String, u32), Vec<PositionedGlyph>>>,
+);
 
 impl ShapeCache {
     const MAX: usize = 4096;
@@ -65,7 +88,9 @@ impl ShapeCache {
 impl fmt::Debug for Font {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Font")
-            .field("units_per_em", &self.chain.primary().units_per_em())
+            .field("family", &self.family_name())
+            .field("style", &self.style)
+            .field("faces", &self.variant.chain.len())
             .finish()
     }
 }
@@ -73,6 +98,12 @@ impl fmt::Debug for Font {
 /// Error loading a [`Font`].
 #[derive(Debug)]
 pub struct FontError(String);
+
+impl FontError {
+    pub(crate) fn new(msg: impl Into<String>) -> Self {
+        Self(msg.into())
+    }
+}
 
 impl fmt::Display for FontError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -83,22 +114,26 @@ impl fmt::Display for FontError {
 impl std::error::Error for FontError {}
 
 impl Font {
-    /// Load a font from `sfnt` bytes (TrueType, OpenType/CFF, or TrueType
-    /// Collection — the first face of a collection is used).
+    /// Load a font from `sfnt` bytes (TrueType, or a TrueType Collection —
+    /// whose faces all join the family, the first drawing by default).
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, FontError> {
-        let face = parse_face(bytes)?;
-        Ok(Self {
-            chain: FaceChain::new(face),
-            cap_height: OnceLock::new(),
-            shapes: ShapeCache::default(),
-        })
+        let faces = FaceSource::from_bytes(bytes)?;
+        let first = faces[0].info.clone();
+        let style = FontStyle {
+            weight: FontWeight(first.weight),
+            italic: first.italic,
+        };
+        let name = Some(first.family).filter(|n| !n.is_empty());
+        Font::from_sources(name, faces, style)
     }
 
-    /// Probe common operating-system font directories and load the first
-    /// usable sans-serif face. Returns `None` if none is found.
+    /// Probe common operating-system font locations and load the first
+    /// usable sans-serif face, with a symbol fallback. Returns `None` if none
+    /// is found.
     ///
-    /// Intended for examples and tests; shipping apps should bundle or
-    /// explicitly locate their fonts and use [`Font::from_bytes`].
+    /// Intended for examples and tests; apps should use
+    /// [`Font::from_family`] (a family the user picked, or a generic one such
+    /// as `"sans-serif"`), or bundle their fonts and use [`Font::from_bytes`].
     pub fn system_default() -> Option<Self> {
         const CANDIDATES: &[&str] = &[
             // Linux (Liberation / DejaVu / Noto are near-ubiquitous).
@@ -130,25 +165,20 @@ impl Font {
             "C:\\Windows\\Fonts\\seguisym.ttf",
             "/system/fonts/NotoSansSymbols-Regular-Subsetted.ttf",
         ];
-        let mut font = CANDIDATES.iter().find_map(|path| {
-            let bytes = std::fs::read(path).ok()?;
-            Font::from_bytes(bytes).ok()
-        })?;
-        for path in FALLBACKS {
-            if let Ok(bytes) = std::fs::read(path)
-                && let Ok(face) = parse_face(bytes)
-            {
-                font.chain = font.chain.push_fallback(face);
-                font.shapes = ShapeCache::default(); // glyphs may change
-            }
-        }
-        Some(font)
+        let font = CANDIDATES
+            .iter()
+            .find_map(|path| Font::from_file(path).ok())?;
+        let fallbacks: Vec<Font> = FALLBACKS
+            .iter()
+            .filter_map(|path| Font::from_file(path).ok())
+            .collect();
+        Some(font.with_fallbacks(&fallbacks))
     }
 
     /// Distance from the top of the text box to the baseline, in logical
     /// pixels, at `size_px`.
     pub fn ascent(&self, size_px: f64) -> f64 {
-        self.chain.primary().ascent_px(size_px as f32) as f64
+        self.variant.chain.primary().ascent_px(size_px as f32) as f64
     }
 
     /// Distance from the top of a line to its baseline at `size_px`, placing
@@ -158,16 +188,31 @@ impl Font {
     /// box's metrics alone leave text visibly high or low in a button. Measuring
     /// the capitals centers text the same way under any font.
     pub fn baseline(&self, size_px: f64) -> f64 {
-        let cap = *self.cap_height.get_or_init(|| self.measure_cap_height());
-        (self.line_height(size_px) + cap * size_px) / 2.0
+        (self.line_height(size_px) + self.cap_height_em() * size_px) / 2.0
     }
 
-    /// Rasterize an "H" at a large size and measure its height, per em.
-    fn measure_cap_height(&self) -> f64 {
+    /// The measured height of a capital "H", per em.
+    pub(crate) fn cap_height_em(&self) -> f64 {
+        *self
+            .variant
+            .cap_height
+            .get_or_init(|| self.measure_ink_height("H"))
+    }
+
+    /// The measured height of an "x", per em.
+    pub(crate) fn x_height_em(&self) -> f64 {
+        *self
+            .variant
+            .x_height
+            .get_or_init(|| self.measure_ink_height("x"))
+    }
+
+    /// Rasterize `text` at a large size and measure its inked height, per em.
+    fn measure_ink_height(&self, text: &str) -> f64 {
         const EM: f64 = 128.0;
         let side = (EM * 2.0) as u32;
         let mut scene = Scene::new(Size::new(side as f64, side as f64));
-        let glyphs = Shaper::shape_to_paths(self.chain(), "H", EM as f32);
+        let glyphs = Shaper::shape_to_paths(self.chain(), text, EM as f32);
         let run = glyphs
             .into_iter()
             .map(|(_, node, transform)| {
@@ -187,20 +232,22 @@ impl Font {
         let bottom = (0..side).rev().find(|y| inked(*y));
         match (top, bottom) {
             (Some(top), Some(bottom)) => (bottom - top + 1) as f64 / EM,
-            // A font without an "H": its ascent is the closest thing it reports.
+            // A font without the letter: its ascent is the closest thing it
+            // reports.
             _ => self.ascent(1.0),
         }
     }
 
     /// Full line height (ascent + descent + line gap) at `size_px`.
     pub fn line_height(&self, size_px: f64) -> f64 {
-        self.chain.primary().line_height_px(size_px as f32) as f64
+        self.variant.chain.primary().line_height_px(size_px as f32) as f64
     }
 
     /// Summed advance width of a single line (no newlines) at `size_px`.
     fn line_width(&self, line: &str, size_px: f64) -> f64 {
-        self.shapes
-            .shape(&self.chain, line, size_px)
+        self.variant
+            .shapes
+            .shape(&self.variant.chain, line, size_px)
             .iter()
             .map(|g| g.x_advance)
             .sum::<f32>() as f64
@@ -396,7 +443,10 @@ impl Font {
             } else {
                 para[bytes.clone()].to_string()
             };
-            let mut glyphs = self.shapes.shape(&self.chain, &shaped, size_px);
+            let mut glyphs = self
+                .variant
+                .shapes
+                .shape(&self.variant.chain, &shaped, size_px);
             if rtl {
                 glyphs.reverse();
             }
@@ -426,34 +476,36 @@ impl Font {
             .collect()
     }
 
+    /// The shaping chain: the primary face of this style, then fallbacks.
     pub(crate) fn chain(&self) -> &FaceChain {
-        &self.chain
+        &self.variant.chain
     }
-}
-
-fn parse_face(bytes: Vec<u8>) -> Result<Face, FontError> {
-    let result = match bytes.first_chunk::<4>() {
-        Some(b"OTTO") => Face::from_otf_bytes(bytes),
-        Some(b"ttcf") => Face::from_ttc_bytes(bytes, 0),
-        _ => Face::from_ttf_bytes(bytes),
-    };
-    result.map_err(|e| FontError(format!("{e:?}")))
 }
 
 /// Recolor an outline glyph to `color`, recursing into groups (the shaper
 /// wraps each glyph's path in a cache-keyed `Group`). Non-outline leaves (e.g.
 /// color-bitmap emoji `Node::Image`) are left untouched.
 fn recolor(node: Node, color: Color) -> Node {
+    embolden(node, color, 0.0)
+}
+
+/// [`recolor`], and with `stroke` > 0 also outline each glyph path that wide
+/// in the same color: synthetic bold.
+fn embolden(node: Node, color: Color, stroke: f32) -> Node {
     match node {
         Node::Path(mut path) => {
-            path.fill = Some(Paint::Solid(color.to_oxideav()));
+            let paint = Paint::Solid(color.to_oxideav());
+            if stroke > 0.0 {
+                path.stroke = Some(Stroke::new(stroke, paint.clone()).with_join(LineJoin::Round));
+            }
+            path.fill = Some(paint);
             Node::Path(path)
         }
         Node::Group(mut group) => {
             group.children = group
                 .children
                 .into_iter()
-                .map(|c| recolor(c, color))
+                .map(|c| embolden(c, color, stroke))
                 .collect();
             Node::Group(group)
         }
@@ -461,14 +513,26 @@ fn recolor(node: Node, color: Color) -> Node {
     }
 }
 
-/// A key for the rasterizer's glyph bitmap cache: one face, glyph and size.
-fn glyph_cache_key(face: &Face, glyph_id: u16, size_px: f64) -> u64 {
+/// The horizontal shear of a synthesized oblique: about 12 degrees, as
+/// renderers conventionally slant a face that has no italic.
+const OBLIQUE_SHEAR: f32 = 0.2126;
+
+/// How wide synthetic bold strokes a glyph's outline at `size_px`: each side
+/// grows by half of it.
+fn bold_stroke(size_px: f64) -> f32 {
+    (size_px / 30.0).max(0.5) as f32
+}
+
+/// A key for the rasterizer's glyph bitmap cache: one face, glyph, size and
+/// synthesis.
+fn glyph_cache_key(face: &Face, glyph_id: u16, size_px: f64, synth: Synthesis) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    b"stipple.glyph.v1".hash(&mut h);
+    b"stipple.glyph.v2".hash(&mut h);
     face.stable_id().hash(&mut h);
     glyph_id.hash(&mut h);
     ((size_px * 256.0).round() as u32).hash(&mut h);
+    synth.hash(&mut h);
     h.finish()
 }
 
@@ -781,6 +845,38 @@ impl TextLayout<'_> {
 }
 
 impl Scene {
+    /// Draw `decoration`'s lines under, through or over every line of
+    /// `layout`, placed as [`fill_layout`](Self::fill_layout) draws them at
+    /// `origin`, using the layout's font metrics. `text_color` colors lines
+    /// the decoration gives no color of its own.
+    pub fn decorate_layout(
+        &mut self,
+        layout: &TextLayout<'_>,
+        origin: Point,
+        decoration: &crate::render::Decoration,
+        text_color: Color,
+    ) {
+        if decoration.is_none() || layout.size <= 0.0 {
+            return;
+        }
+        let metrics = layout.font.metrics(layout.size);
+        let first_baseline = layout.font.baseline(layout.size);
+        for (i, line) in layout.lines.iter().enumerate() {
+            if line.runs.is_empty() {
+                continue;
+            }
+            let x = origin.x + layout.line_x(line);
+            let y = origin.y + i as f64 * layout.line_height + first_baseline;
+            self.draw_decoration(
+                &metrics,
+                Point::new(x, y),
+                line.width,
+                decoration,
+                text_color,
+            );
+        }
+    }
+
     /// Shape and paint `text` with `font` at `origin` (the top-left of the text
     /// box, logical pixels), `size_px`, and `color`. Newlines (`\n`) start a new
     /// line, each dropped by one `line_height` from the last.
@@ -837,19 +933,37 @@ impl Scene {
                 for g in &run.glyphs {
                     let x = pen + g.x_offset;
                     pen += g.x_advance;
-                    let face = font.chain.face(g.face_idx);
+                    let face = font.chain().face(g.face_idx);
                     let Some(node) = face.glyph_node(g.glyph_id, size as f32) else {
                         continue;
                     };
+                    let synth = font
+                        .variant
+                        .synth
+                        .get(g.face_idx as usize)
+                        .copied()
+                        .unwrap_or_default();
+                    let stroke = if synth.bold { bold_stroke(size) } else { 0.0 };
                     // Wrapped in a cache-keyed group so the rasterizer reuses
                     // the glyph's bitmap wherever it's drawn.
                     let cached = Group {
-                        cache_key: Some(glyph_cache_key(face, g.glyph_id, size)),
-                        children: vec![recolor(node, color)],
+                        cache_key: Some(glyph_cache_key(face, g.glyph_id, size, synth)),
+                        children: vec![embolden(node, color, stroke)],
                         ..Group::default()
                     };
+                    // A synthesized oblique leans the glyph about its baseline
+                    // point (y grows downward, so up is negative y).
+                    let shear = if synth.oblique { -OBLIQUE_SHEAR } else { 0.0 };
+                    let place = Transform2D {
+                        a: 1.0,
+                        b: 0.0,
+                        c: shear,
+                        d: 1.0,
+                        e: x,
+                        f: g.y_offset,
+                    };
                     let glyph = Group::new()
-                        .with_transform(Transform2D::translate(x, g.y_offset))
+                        .with_transform(place)
                         .with_child(Node::Group(cached));
                     glyphs.push(Node::Group(glyph));
                 }
@@ -1208,5 +1322,195 @@ mod tests {
         let run = &layout.lines[0].runs[0];
         assert!(run.rtl);
         assert_eq!(run.shaped, "א)ב(");
+    }
+
+    /// Render `text` white on black with `font` and return the pixmap.
+    fn ink(font: &Font, text: &str, size: f64) -> crate::render::Pixmap {
+        let mut scene = Scene::new(Size::new(200.0, 60.0));
+        scene.fill_text(font, text, Point::new(10.0, 5.0), size, Color::WHITE);
+        SoftwareRenderer::new()
+            .with_background(Color::BLACK)
+            .render(scene, ScaleFactor::IDENTITY)
+    }
+
+    fn inked(px: &crate::render::Pixmap) -> usize {
+        let s = px.size();
+        (0..s.height)
+            .flat_map(|y| (0..s.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| px.pixel(x, y).is_some_and(|p| p[0] > 127))
+            .count()
+    }
+
+    /// The first font of `families` this host has.
+    fn any_family(families: &[&str]) -> Option<Font> {
+        families
+            .iter()
+            .find_map(|f| Font::from_family(f, FontStyle::NORMAL).ok())
+    }
+
+    #[test]
+    fn styled_variants_are_shared_and_distinct() {
+        let Some(font) = Font::system_default() else {
+            return;
+        };
+        let bold = font.bold();
+        assert_eq!(bold, font.bold(), "built once, then shared");
+        assert_ne!(bold, font);
+        assert_ne!(bold.id(), font.id());
+        assert_eq!(bold.style().weight, FontWeight::BOLD);
+        assert_eq!(bold.styled(font.style()), font);
+        // Each variant shapes into its own cache: the same text measured in
+        // both styles keeps both results.
+        let (a, b) = (
+            font.measure("Wide text", 20.0),
+            bold.measure("Wide text", 20.0),
+        );
+        assert_eq!(a, font.measure("Wide text", 20.0));
+        assert_eq!(b, bold.measure("Wide text", 20.0));
+    }
+
+    #[test]
+    fn a_single_face_synthesizes_bold_and_oblique() {
+        let Some(path) = [
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/liberation-fonts/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        ]
+        .into_iter()
+        .find(|p| std::path::Path::new(p).exists()) else {
+            return;
+        };
+        let regular = Font::from_file(path).unwrap();
+        assert_eq!(regular.style(), FontStyle::NORMAL);
+        assert_eq!(regular.is_synthesized(), (false, false));
+        let bold = regular.bold();
+        let oblique = regular.italic();
+        assert_eq!(bold.is_synthesized(), (true, false));
+        assert_eq!(oblique.is_synthesized(), (false, true));
+        // Emboldening adds ink; metrics (and so layout) stay the same.
+        let (r, b) = (ink(&regular, "HHH", 32.0), ink(&bold, "HHH", 32.0));
+        assert!(
+            inked(&b) > inked(&r) * 11 / 10,
+            "{} vs {}",
+            inked(&b),
+            inked(&r)
+        );
+        assert_eq!(regular.measure("HHH", 32.0), bold.measure("HHH", 32.0));
+        // The oblique leans right: an "l"'s top sits right of its foot.
+        let o = ink(&oblique, "l", 40.0);
+        let left_at = |y: u32| (0..200).find(|&x| o.pixel(x, y).is_some_and(|p| p[0] > 127));
+        let rows: Vec<u32> = (0..60).filter(|&y| left_at(y).is_some()).collect();
+        let (top, foot) = (rows[0], *rows.last().unwrap());
+        assert!(left_at(top).unwrap() >= left_at(foot).unwrap() + 4);
+    }
+
+    #[test]
+    fn a_family_uses_its_real_bold_face() {
+        let Some(font) = any_family(&["DejaVu Sans", "Liberation Sans", "Noto Sans", "Arial"])
+        else {
+            return;
+        };
+        if !font.available_styles().contains(&FontStyle::BOLD) {
+            return;
+        }
+        assert_eq!(font.bold().is_synthesized(), (false, false));
+        // A real bold face has its own (wider) advances.
+        assert!(font.bold().measure("mmmm", 20.0).width > font.measure("mmmm", 20.0).width);
+    }
+
+    #[test]
+    fn monospace_metrics_suit_a_terminal() {
+        let Some(mono) = any_family(&["DejaVu Sans Mono", "Liberation Mono", "monospace"]) else {
+            return;
+        };
+        let m = mono.metrics(16.0);
+        assert!(m.monospace && mono.is_monospace());
+        let cell = mono.advance_of('M', 16.0);
+        for c in ['i', 'W', '0', ' ', '_'] {
+            assert!((mono.advance_of(c, 16.0) - cell).abs() < 0.01, "{c:?}");
+        }
+        assert!(m.max_advance >= cell);
+        assert!(m.ascent > 0.0 && m.descent > 0.0);
+        assert!((m.ascent + m.descent + m.line_gap - m.line_height).abs() < 0.01);
+        // Underline below the baseline, inside the descent; strikeout above
+        // it, below the x-height.
+        assert!(m.underline_position > 0.0 && m.underline_position < m.descent);
+        assert!(m.underline_thickness > 0.0 && m.strikeout_thickness > 0.0);
+        assert!(m.strikeout_position < 0.0 && -m.strikeout_position < m.x_height);
+        assert!(m.x_height < m.cap_height && m.cap_height < m.ascent);
+        // Metrics scale with the size.
+        let m2 = mono.metrics(32.0);
+        assert!((m2.underline_position - 2.0 * m.underline_position).abs() < 0.01);
+    }
+
+    /// The faces of `families` (that this host has) that draw `c` while
+    /// `primary` doesn't.
+    fn fallbacks_for(primary: &Font, c: char, families: &[&str]) -> Vec<Font> {
+        let has = |f: &Font| {
+            f.chain()
+                .shape(&c.to_string(), 16.0)
+                .is_ok_and(|g| g.first().is_some_and(|g| g.glyph_id != 0))
+        };
+        if has(primary) {
+            return Vec::new();
+        }
+        families
+            .iter()
+            .filter_map(|f| Font::from_family(f, FontStyle::NORMAL).ok())
+            .filter(|f| has(f))
+            .collect()
+    }
+
+    #[test]
+    fn fallbacks_are_consulted_in_order() {
+        let Some(primary) = any_family(&["Liberation Sans", "Arial"]) else {
+            return;
+        };
+        let check = '\u{2713}';
+        let found = fallbacks_for(
+            &primary,
+            check,
+            &[
+                "DejaVu Sans",
+                "DejaVu Sans Mono",
+                "DejaVu Serif",
+                "FreeSerif",
+                "Symbola",
+            ],
+        );
+        let [a, b, ..] = found.as_slice() else {
+            return;
+        };
+        let face_of = |font: &Font| {
+            let g = font.chain().shape(&check.to_string(), 16.0).unwrap()[0];
+            assert_ne!(g.glyph_id, 0);
+            (g.face_idx, font.chain().face(g.face_idx).stable_id())
+        };
+        let primary_id = |f: &Font| f.chain().primary().stable_id();
+        let ab = primary.with_fallback(a).with_fallback(b);
+        assert_eq!(face_of(&ab), (1, primary_id(a)));
+        let ba = primary.with_fallbacks(&[b.clone(), a.clone()]);
+        assert_eq!(face_of(&ba), (2 - 1, primary_id(b)));
+        assert_eq!(ab.fallbacks().len(), 2);
+        // Latin text stays with the primary face.
+        let g = ab.chain().shape("A", 16.0).unwrap()[0];
+        assert_eq!(g.face_idx, 0);
+        // A bold request takes each fallback's bold face, where it has one.
+        let bold = ab.bold();
+        let idx = bold.chain().shape(&check.to_string(), 16.0).unwrap()[0].face_idx;
+        let a_has_bold = a
+            .available_styles()
+            .iter()
+            .any(|s| s.weight.0 >= 600 && !s.italic);
+        assert_eq!(bold.variant.synth[idx as usize].bold, !a_has_bold);
+        if a_has_bold {
+            assert_ne!(
+                bold.chain().face(idx).stable_id(),
+                ab.chain().face(1).stable_id(),
+                "the fallback's bold face"
+            );
+        }
     }
 }

@@ -32,9 +32,14 @@ fn entry_leaf(tree: &LayoutNode, focused: FocusId) -> Option<&LayoutNode> {
 /// Where byte `i` of a text leaf sits: its x and the top of its line, and the
 /// line height. Lines break at `\n`, as the caret drawing does.
 fn position(leaf: &LayoutNode, font: Option<&Font>, i: usize) -> Option<(f64, f64, f64)> {
-    let NodeContent::Text { text, size, .. } = &leaf.content else {
+    let NodeContent::Text {
+        text, size, style, ..
+    } = &leaf.content
+    else {
         return None;
     };
+    let styled = style.resolve(font);
+    let font = styled.as_ref();
     let line_h = font.map(|f| f.line_height(*size)).unwrap_or(*size);
     let mut i = i.min(text.len());
     while !text.is_char_boundary(i) {

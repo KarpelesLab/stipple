@@ -261,6 +261,7 @@ mod tests {
                 color: Color::BLACK,
                 direction: Default::default(),
                 underline: None,
+                style: Default::default(),
             },
             action: None,
             focus: None,
