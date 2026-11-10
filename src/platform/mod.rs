@@ -64,6 +64,10 @@ pub mod shell;
 /// content process's pixels shared with the UI process, the dual of GPU dma-buf).
 #[cfg(target_os = "linux")]
 pub mod shm;
+/// The text store behind the Windows Text Services Framework bridge, without
+/// the COM (unit-tested everywhere).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) mod text_store;
 /// A monotonic clock that also works on the web.
 pub mod time;
 /// Hand-written UI Automation provider (Windows accessibility bridge).

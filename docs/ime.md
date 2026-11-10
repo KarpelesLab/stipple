@@ -56,7 +56,7 @@ still reach the element's `on_raw_key` handler. See [keyboard.md](keyboard.md).
 |---|---|---|
 | Wayland | `zwp_text_input_v3`, when the compositor offers it | Stipple, from the Compose file |
 | X11 | XIM (IBus, Fcitx, uim… started with XIM support) | Stipple, from the Compose file (or the input method, while one is running) |
-| Windows | IMM32 | `TranslateMessage` (`WM_CHAR`) |
+| Windows | TSF (Text Services Framework), IMM32 as the fallback | `TranslateMessage` (`WM_CHAR`) |
 | macOS | `NSTextInputClient` | `NSTextInputClient` |
 | Web | composition events on a hidden `<textarea>` | the browser (composition or `input` events) |
 | iOS, Android | Not yet | Not yet |
@@ -121,12 +121,70 @@ connection (no libX11 or IBus library): `src/platform/backend/x11/xim.rs`.
 `STIPPLE_X11_DEBUG=1` logs the XIM messages and what it decided
 (`xim: ready`, `xim: commit "…"`, `xim: off (…)`).
 
-**Windows.** IMM32: `WM_IME_COMPOSITION` gives the composition string, with its
-caret, and the result string. The IME's own composition window is hidden
+**Windows.** Stipple is a Text Services Framework client, with IMM32 as the
+fallback. Modern input methods are TSF text services (the Microsoft Japanese,
+Chinese and Korean IMEs, handwriting, voice typing, the touch keyboard's
+suggestions) and IMM32 reaches them only through a compatibility layer. All
+of it is hand-written COM, like the UI Automation bridge
+(`src/platform/backend/windows/tsf/`).
+
+- *Activation.* The first time a window reports its IME state, the UI thread
+  is made a single-threaded apartment, and a thread manager
+  (`CLSID_TF_ThreadMgr`) is created and activated (`ITfThreadMgr::Activate`).
+  If that fails, or `STIPPLE_TSF=0` is set, IMM32 is used as before.
+- *Documents.* Each window gets a document manager with one context, over
+  Stipple's text store. While a text field (or an `ime_input` element) has
+  focus, `ITfThreadMgr::AssociateFocus` ties the window to it, so TSF puts
+  its focus there whenever the window has the keyboard; otherwise the window
+  is tied to an empty document manager, which leaves input methods nothing to
+  compose into (they're off, as on the other platforms).
+- *The text store* (`ITextStoreACP`) holds the field's text and selection
+  from `Window::set_ime`, in UTF-16 offsets. `GetTextExt` answers with the
+  caret rectangle (the composition's start while composing) in screen
+  coordinates, which is where candidate windows go; `GetScreenExt` and
+  `GetWnd` give the window. Embedded objects, attributes and
+  `GetACPFromPoint` aren't offered.
+- *Locks.* `RequestLock` grants a lock at once when none is held, whether
+  asked synchronously or not. While one is held, a synchronous request is
+  refused (`TS_E_SYNCHRONOUS`) and an asynchronous one is queued
+  (`TS_S_ASYNC`) and granted as soon as the holder releases it, still inside
+  the outer call. Nothing waits, so the message loop never blocks. Changes the
+  App makes are told to TSF (`OnTextChange`, `OnSelectionChange`,
+  `OnLayoutChange`) only while no lock is held; a report that comes during a
+  lock waits for its release.
+- *Compositions.* The context owner's composition sink
+  (`ITfContextOwnerCompositionSink`) hears a composition start, change range
+  and end; the text the input method writes goes through `SetText` and
+  `InsertTextAtSelection`. After each lock Stipple compares the document with
+  what the field holds: the composition becomes `Ime::Preedit`, and text
+  changed outside it (a commit, the end of a composition, a voice-typing
+  insertion, a correction of the word before the caret, reconversion taking a
+  word back into a composition) becomes `Ime::DeleteSurrounding` and
+  `Ime::Commit` around the caret. The App's next report is checked against the
+  text it should then have: a report from before it handled the events is
+  ignored, and anything else is a change the App made itself, which replaces
+  the document (ending any composition with
+  `ITfContextOwnerCompositionServices::TerminateComposition`, uncommitted).
+- *Display attributes.* An `ITfTextEditSink` on the context reads, at the end
+  of each edit session, the composition's `GUID_PROP_ATTRIBUTE` runs and
+  resolves them through the category and display attribute managers. The
+  clause being converted (`TF_ATTR_TARGET_CONVERTED` /
+  `TF_ATTR_TARGET_NOTCONVERTED`) is the preedit's highlighted range;
+  without one, the input method's selection inside the composition is, or a
+  caret at its end. The field draws its own underline, so the attributes'
+  colours and line styles aren't used.
+- *Keys* reach text services through the hooks TSF installs on activation;
+  the message loop is unchanged, and keys no input method takes arrive as
+  `WM_KEYDOWN` / `WM_CHAR` as before.
+
+`STIPPLE_DEBUG_TSF=1` logs activation, focus, compositions and the events
+sent (`stipple-tsf: …`).
+
+The IMM32 fallback: `WM_IME_COMPOSITION` gives the composition string, with
+its caret, and the result string. The IME's own composition window is hidden
 because the field draws the preedit; the candidate list is placed under the
 caret with `ImmSetCandidateWindow`. While no text field has focus the window
-has no input context, so the IME stays off. TSF (the Text Services Framework)
-would add reconversion and richer IME features and is not used yet.
+has no input context, so the IME stays off.
 
 **macOS.** The view is an `NSTextInputClient`. While a text field has focus,
 key-downs go through `interpretKeyEvents:`, and the input context answers with
@@ -194,9 +252,21 @@ mid-session and the app must notice and fall back to its own compose. The
 same runs were checked by hand with IBus 1.5.33 and Mozc, including a stopped
 server. Fcitx and uim haven't been tried.
 
-Elsewhere real IMEs can't be driven headlessly, so on Wayland, Windows and
-macOS the input-method paths are built and unit-tested but not exercised end
-to end.
+On Windows, CI runs `examples/textinput` with `STIPPLE_TSF_SELFTEST=1`
+(`.github/scripts/tsf-windows.sh`): TSF must activate, the window must be
+tied to its document when Tab focuses the field, and the app then plays an
+input method through the real TSF manager: edit sessions
+(`ITfContext::RequestEditSession`) start a composition at the selection
+(`ITfContextComposition::StartComposition`), write `にほん` and then `日本`
+into it (`ITfRange::SetText`) and end it. TSF locks Stipple's store, writes
+through `ITextStoreACP` and calls the composition sink, and the field must
+show each preedit and then the commit (screenshotted mid-way). With
+`STIPPLE_TSF=0` TSF must stay off. No real IME is installed on the runner, so
+what an input method does on its own (keys, candidates, display attributes,
+reconversion) isn't exercised; the IMM32 fallback is build-checked only.
+
+Elsewhere real IMEs can't be driven headlessly, so on Wayland and macOS the
+input-method paths are built and unit-tested but not exercised end to end.
 
 ## Not yet
 

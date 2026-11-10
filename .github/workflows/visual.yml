@@ -2368,6 +2368,21 @@ jobs:
           timeout 30 ./target/release/clipboarddemo.exe --read | tee -a read.log
           grep -q 'html=".*<i>from powershell</i>' read.log
 
+      # TSF: the thread manager activates, the field's window is tied to its
+      # document, and a composition driven through the real TSF manager (the
+      # app playing the input method: edit sessions, StartComposition,
+      # SetText, EndComposition) reaches the field as preedit and commit,
+      # through our ITextStoreACP and composition sink. No real IME runs:
+      # none can be installed and scripted on the runner. STIPPLE_TSF=0 must
+      # keep TSF off (IMM32).
+      - name: Compose through the Text Services Framework
+        shell: bash
+        env:
+          OUT_DIR: visual_output
+        run: |
+          cargo build --release -p textinput
+          timeout 120 bash .github/scripts/tsf-windows.sh target/release/textinput.exe
+
       - name: Drive the native menu bar and context menu
         shell: powershell
         run: |

@@ -914,7 +914,7 @@ Most input only works on X11 today.
 - ✅ Input methods (IME) for Chinese, Japanese and Korean: a platform-neutral
   preedit / commit model (`Event::Ime`), the composition drawn inline and
   underlined in text fields, and `Window::set_ime` reporting the caret
-  rectangle; `text-input-v3` on Wayland, IMM32 on Windows and
+  rectangle; `text-input-v3` on Wayland, IMM32 (now TSF, below) on Windows and
   `NSTextInputClient` on macOS. Unit-tested, and the macOS protocol is driven
   through objc dispatch in CI, but no real IME runs in CI, so the Wayland,
   Windows and macOS paths are only build-checked end to end. See
@@ -938,11 +938,31 @@ Most input only works on X11 today.
   CI as an informational check. Not tried: Fcitx, uim, kinput2. Not done: a
   server started after the app, status callbacks, timing out asynchronous
   keys a stopped server never answers. See [docs/ime.md](docs/ime.md).
-- ⬜ TSF on Windows, next to IMM32: modern IMEs (the Microsoft Japanese and
+- ✅ TSF on Windows, next to IMM32: modern IMEs (the Microsoft Japanese and
   Chinese IMEs' newer modes, handwriting, voice typing, the touch keyboard's
   suggestions) talk TSF, and IMM32 only reaches them through its compatibility
-  layer. Hand-written `ITfThreadMgr` / `ITfContext` / `ITextStoreACP` COM
-  vtables, like the UI Automation bridge.
+  layer. Stipple is now a TSF client with hand-written COM vtables, in
+  `windows/tsf/`: `ITfThreadMgr` activation (IMM32 when that fails, or with
+  `STIPPLE_TSF=0`), a document manager and context per window tied to it with
+  `AssociateFocus` while a text field or `ime_input` element has focus (an
+  empty one otherwise), and an `ITextStoreACP` over the field's text,
+  selection and caret rectangle, with `ITfContextOwnerCompositionSink` for
+  compositions and an `ITfTextEditSink` reading display attributes (the target
+  clause is the preedit's highlight). Locks are granted at once, queued while
+  another is held or refused when synchronous, never waited for. The store's
+  logic (ACP offsets, selection, inserts and replacements, the composition
+  state machine, mapping the document onto preedit / commit /
+  delete-surrounding, the App's reports) is platform-neutral in
+  `platform/text_store.rs` and unit-tested on Linux. CI activates TSF on the
+  Windows runner and drives a composition through the real TSF manager, the
+  app playing the input method (edit sessions, `StartComposition`, `SetText`,
+  `EndComposition`): the field must show the preedit `にほん`, then `日本`,
+  then the commit. No real IME runs there, so how the Microsoft IMEs behave
+  against the store is unverified, as are the display attributes and the
+  IMM32 fallback (build-checked). Not done: `GetACPFromPoint` (handwriting
+  aims by point), text attributes and input scopes (`RequestSupportedAttrs`
+  offers none), the keystroke manager (keys reach text services through TSF's
+  own hooks). See [docs/ime.md](docs/ime.md).
 - ⬜ iOS composition: `UITextInput` on the view (marked text, `selectedTextRange`,
   `firstRectForRange:` for the candidate bar, `caretRectForPosition:`), so the
   Japanese, Chinese and Korean keyboards compose instead of committing raw kana

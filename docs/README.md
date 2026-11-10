@@ -49,7 +49,7 @@ How to build, package and run on each platform, and what works there today.
 | System fonts by family name | ✅ ³⁴ | ✅ ³⁴ | ✅ ³⁴ | ✅ ¹⁰ | ✅ ¹⁰ | — ³⁴ |
 | Bold, italic, per-element fonts, fallbacks, text decorations | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ |
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
-| Input methods (CJK IME) | ✅ ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
+| Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ❌ | ❌ | ✅ ⁴³ |
 | Raw keys (`on_raw_key`): physical key, left/right modifiers, repeat flag | ✅ ⁴² | ✅ ¹⁰ | ✅ ¹⁰ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
@@ -108,9 +108,9 @@ a page never sees paths. CI checks both with the picker and download stood in
 for. See [the web page](platforms/web.md#file-dialogs).
 ¹⁵ Laid out by the shared CPU text path, so the same everywhere; CI screenshots
 `bididemo` on X11. See [bidi.md](bidi.md).
-¹⁶ Implemented (XIM on X11, `text-input-v3` on Wayland, IMM32,
-`NSTextInputClient`). X11's XIM client runs against a real input method in CI
-(IBus with `--xim`: a dead key's preedit and commit, Japanese through Mozc as
+¹⁶ Implemented (XIM on X11, `text-input-v3` on Wayland, TSF with IMM32 as
+the fallback on Windows (see ⁴⁸), `NSTextInputClient`). X11's XIM client
+runs against a real input method in CI (IBus with `--xim`: a dead key's preedit and commit, Japanese through Mozc as
 an informational check, and falling back when the server quits); elsewhere CI
 can't run one, so only the protocol wiring is tested. See [ime.md](ime.md).
 ¹⁷ From the locale's Compose file, on X11 and Wayland. CI types dead keys and a
@@ -269,6 +269,13 @@ and opacity, all on the GPU, read back and presented as a bitmap. CI renders
 test scenes and an app both ways under Mesa's llvmpipe and compares them with
 the software renderer, and screenshots `gpuwindow` under Xvfb. Vulkan, Direct3D
 11, Metal and WebGPU only draw a test triangle so far. See [gpu.md](gpu.md).
+⁴⁸ Through the Text Services Framework (a hand-written `ITextStoreACP` text
+store, composition sink and display attributes), with IMM32 when TSF can't
+be activated or `STIPPLE_TSF=0`. The text store's logic is unit-tested; CI
+activates TSF on the Windows runner and drives a composition through the real
+TSF manager (the app playing the input method), checking the preedit and the
+commit reach the field. No real IME runs in CI. See
+[ime.md](ime.md#per-platform).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.

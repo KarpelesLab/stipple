@@ -61,7 +61,7 @@ unsafe extern "system" {
 }
 
 /// The caret rectangle in client-area physical pixels.
-fn caret_rect(state: &ImeState) -> Rect {
+pub(super) fn caret_rect(state: &ImeState) -> Rect {
     let s = current_scale();
     let r = state.cursor_area;
     Rect {

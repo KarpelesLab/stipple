@@ -37,6 +37,7 @@ mod attention;
 mod dnd;
 /// Resize increments (`WM_SIZING`) and UTF-16 titles.
 mod geometry;
+/// Input methods through IMM32, the fallback for TSF.
 mod ime;
 /// Raw key events (`Event::RawKey`).
 mod keys;
@@ -44,6 +45,8 @@ mod keys;
 mod pointer;
 /// The notification-area icon and notification balloons.
 mod tray;
+/// Input methods through the Text Services Framework.
+mod tsf;
 /// Pacing animation frames by the compositor (`DwmFlush`).
 mod vsync;
 
@@ -1369,6 +1372,7 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
         }
         attention::WM_QUERYENDSESSION => attention::query_end_session(hwnd),
         WM_DESTROY => {
+            tsf::forget(hwnd);
             // The loop ends when the last window is gone; if others stay,
             // the tray icon moves to one of them.
             if tray::owner() == Some(hwnd) {
@@ -1548,7 +1552,11 @@ impl Window for WinWindow {
         with_win(self.hwnd, |w| w.uia = Some(tree));
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
-        with_current(self.hwnd, || ime::set_state(self.hwnd, state));
+        with_current(self.hwnd, || {
+            if !tsf::set_state(self.hwnd, state) {
+                ime::set_state(self.hwnd, state);
+            }
+        });
     }
     fn set_drop_accepted(&self, accepted: bool) {
         CTX.with(|c| c.borrow_mut().drop_accepted = accepted);
