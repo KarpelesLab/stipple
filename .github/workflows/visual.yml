@@ -712,6 +712,91 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
+  # Enter, exit and layout animations: listmotion --demo removes, adds and
+  # reverses rows on its own 1.5 s in, with the motion slowed 6x. Screenshots
+  # every 0.25 s must catch it moving (consecutive frames differ) and a frame
+  # mid-flight (unlike both the first and the settled one), then it must come
+  # to rest and stop using the CPU.
+  visual-listmotion:
+    name: Visual test (List motion / X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, ImageMagick, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick fonts-dejavu-core
+
+      - name: Build listmotion
+        run: cargo build --release -p listmotion
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          echo "XVFB_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Screenshot the list mid-flight, then at rest
+        env:
+          DISPLAY: ":99"
+        run: |
+          mkdir -p visual_output
+          ./target/release/listmotion --demo > visual_output/listmotion.log 2>&1 &
+          APP=$!
+          echo "APP_PID=$APP" >> "$GITHUB_ENV"
+          ae() { compare -metric AE "$1" "$2" null: 2>&1 | awk '{printf "%d", $1}'; }
+          shot() { import -window root -crop 440x580+0+0 +repage "visual_output/$1.png"; }
+          sleep 1
+          shot first
+          # The scramble fires 1.5 s after start; the motion takes ~3 s.
+          for i in $(seq -w 1 14); do sleep 0.25; shot "t$i"; done
+          # Then wait for two identical frames: at rest.
+          prev=visual_output/t14.png
+          for _ in $(seq 1 20); do
+            sleep 1
+            shot rest
+            [ "$(ae "$prev" visual_output/rest.png)" -eq 0 ] && break
+            cp visual_output/rest.png visual_output/rest-prev.png
+            prev=visual_output/rest-prev.png
+          done
+          echo "=== listmotion.log ==="; cat visual_output/listmotion.log || true
+          moving=0; best=""; best_score=0; last=visual_output/first.png
+          for f in visual_output/t*.png; do
+            step=$(ae "$last" "$f"); last=$f
+            [ "$step" -gt 2000 ] && moving=$((moving + 1))
+            a=$(ae visual_output/first.png "$f"); b=$(ae visual_output/rest.png "$f")
+            score=$(( a < b ? a : b ))
+            echo "$f: step $step, from first $a, from rest $b"
+            if [ "$score" -gt "$best_score" ]; then best_score=$score; best=$f; fi
+          done
+          echo "frames that moved: $moving; most mid-flight: $best ($best_score)"
+          [ "$moving" -ge 3 ]
+          [ "$best_score" -gt 5000 ]
+          cp "$best" visual_output/stipple-x11-listmotion.png
+          # At rest, frames stop: the app uses (next to) no CPU.
+          u1=$(awk '{print $14+$15}' "/proc/$APP/stat"); sleep 3
+          u2=$(awk '{print $14+$15}' "/proc/$APP/stat")
+          echo "CPU ticks at rest over 3 s: $((u2 - u1))"
+          [ $((u2 - u1)) -le 3 ]
+          [ "$(ae visual_output/first.png visual_output/rest.png)" -gt 2000 ]
+
+      - name: Stop the app and Xvfb
+        if: always()
+        run: |
+          [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      - name: Upload screenshots + log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-x11-listmotion
+          path: visual_output/*
+          if-no-files-found: warn
+
   # Overlays: a dropdown menu and a modal dialog drawn above the main tree.
   # xdotool opens each; the dropdown must change the frame, and the modal must
   # darken it (the scrim) — proving the overlay layer + hit-routing work.

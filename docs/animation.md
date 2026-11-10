@@ -150,7 +150,7 @@ solution rather than an Euler step, so any frame interval is stable.
 an invalid code, a pulsing drop target, a staggered list entrance and an
 interruptible spring; `motiondemo --selftest` checks them at fixed times.
 Most of the time you don't need any of this: style an element for its states
-and give it a transition, below.
+and give it a transition, or an enter, exit or layout animation, below.
 
 ## Interaction states
 
@@ -267,6 +267,85 @@ The app keeps the in-flight values by element identity (above), asks for a
 frame while any of them moves and stops when all are at rest, so a UI full of
 transitions uses no CPU when nothing changes. It counts each change from one
 frame before the build that saw it, so the change already shows on that frame.
+
+## Enter, exit and layout animations
+
+Elements can also animate as they come and go, and as the layout moves them:
+
+```rust
+use stipple::prelude::*;
+
+let rows = state.items.iter().map(|item| {
+    label(&theme, &item.name)
+        .key(item.id)
+        // Fades in, sliding from the left, when added.
+        .enter(Effect::fade().and(Effect::slide(-40.0, 0.0)))
+        // Fades out, shrinking a little, when removed.
+        .exit(Effect::fade().and(Effect::scale(0.8)))
+        // Glides to its new place when the list reorders.
+        .animate_position(Transition::spring(SpringParams::SMOOTH))
+});
+column(rows.collect())
+```
+
+- An `Effect` is how the element looks while it isn't there: an opacity and a
+  transform, and the `Transition` to move between that and its own look.
+  `Effect::fade()`, `Effect::slide(dx, dy)` and `Effect::scale(s)` are the
+  presets (200 ms, easing out), `.and(other)` combines two (opacities
+  multiply, offsets add, scales multiply), `Effect::custom(opacity,
+  transform)` makes your own (a rotation, an origin of your choosing) and
+  `.transition(t)` sets the motion, a tween or a spring.
+- `.enter(effect)` plays when the element appears: it wasn't in the last
+  frame. The window's first frame shows everything as it is.
+- `.exit(effect)` plays when it goes away: the view stops building it. The app
+  keeps drawing it, as it was last drawn, under its old parent at its old
+  place (a *ghost*), until the effect ends. A ghost has no handlers, takes no
+  hover, clicks or focus, isn't in the accessibility tree, and takes no room
+  in the layout: its siblings close up at once, or glide up if they animate
+  their layout. If the view builds the element again before it's gone, it
+  turns round and comes back from where it is.
+- `.appear(effect)` is both.
+- `.animate_layout(t)` animates the element from where it was drawn to where
+  the layout puts it now, whenever that changes: a list reorders, a row is
+  inserted above, a panel opens. The element stays laid out at its new place
+  and is drawn moved back (and, for a size change, scaled), and that moves to
+  nothing (FLIP). `.animate_position(t)` moves it without scaling: a new size
+  applies at once, which suits rows with text.
+
+Key the elements that use them (`.key(id)`): an element is "the same one"
+across frames by its key, so a keyed row that moves in the list is recognized
+as moved, not as one removed and another added. (Unkeyed elements are
+identified by their position in the tree, which a reorder changes.)
+
+Positions are measured from the nearest ancestor that animates its own layout
+(whose motion then carries its children: they don't move twice), else from the
+content of the nearest scroll container, else from the window. So scrolling
+doesn't animate anything, a parent and its child each animate only their own
+change, and resizing the window snaps instead of animating.
+
+Everything runs on the laid-out tree, after layout and scrolling, as a
+transform and a group opacity on top of the element's own ones (its
+`.transform` and `.opacity`, and their transitions): hit-testing follows where
+the element is drawn, as for any transform. Each animation is an `Animated`
+value, so a change mid-flight (a second reorder, a removal undone) carries on
+from the current place and speed; under reduced motion they all snap, and a
+removed element disappears at once. The app asks for frames only while
+something enters, leaves or moves.
+
+A few things to know:
+
+- A ghost is drawn at its old place in the tree's order (over the siblings
+  before it, under those after it), and an element sliding past others is
+  drawn at its new place in that order, which may be beneath them.
+- A size change scales the element and its content (text included) from the
+  old size; when that looks wrong, use `animate_position`.
+- When an element with its own rotation is resized by its layout animation
+  unevenly, the scale is applied as if before the rotation.
+
+[`examples/listmotion`](../examples/listmotion) shows a list whose rows enter,
+leave and glide when it's shuffled, sorted or pushed down by a panel;
+`listmotion --selftest` drives it off-screen, and CI screenshots
+`listmotion --demo` on X11 mid-flight.
 
 ## What animates already
 

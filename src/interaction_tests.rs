@@ -200,3 +200,57 @@ fn keys_are_on_the_laid_out_tree() {
         "plain elements carry none"
     );
 }
+
+#[test]
+fn a_leaving_element_stays_drawn_but_clicks_go_through_it() {
+    use crate::core::Effect;
+    #[derive(Default)]
+    struct S {
+        items: Vec<u32>,
+        tapped: Vec<u32>,
+    }
+    let slow = Transition::tween(Duration::from_secs(5), Easing::Linear);
+    let mut app = App::new(
+        S {
+            items: vec![1, 2, 3],
+            tapped: Vec::new(),
+        },
+        move |s: &S, cx: &mut Cx<S>| {
+            let rows = s
+                .items
+                .iter()
+                .map(|&id| {
+                    tile()
+                        .key(id)
+                        .exit(Effect::fade().transition(slow))
+                        .animate_position(slow)
+                        .on_tap(cx, move |s: &mut S| {
+                            s.tapped.push(id);
+                            s.items.retain(|&i| i != id);
+                        })
+                })
+                .collect();
+            Element::stack(Axis::Vertical, rows)
+        },
+    )
+    .logical_size(Size::new(200.0, 200.0));
+    let _ = app.render_frame();
+    assert!(!app.animating());
+    // Tapping the first removes it.
+    assert!(app.click_at(Point::new(10.0, 10.0)));
+    let _ = app.render_frame();
+    assert!(app.animating(), "leaving: frames");
+    let root = tree(&app);
+    assert_eq!(root.children.len(), 3, "the ghost, 2 and 3");
+    assert!(root.children[0].ghost);
+    // The ghost is drawn where 1 was, but it can't be tapped.
+    let _ = app.click_at(Point::new(10.0, 10.0));
+    assert_eq!(app.state().tapped, vec![1], "nothing there to tap");
+    // 2 is laid out there now, but drawn where it was, sliding up (slowly).
+    assert!(app.click_at(Point::new(10.0, 52.0)));
+    assert_eq!(app.state().tapped, vec![1, 2]);
+    let _ = app.render_frame();
+    let a11y = crate::core::a11y::accessibility_tree(tree(&app), None);
+    let buttons = a11y.descendants().len() - 1;
+    assert_eq!(buttons, 1, "only 3 is left to read: {a11y:?}");
+}

@@ -8,6 +8,7 @@
 use crate::core::a11y::{Role, Semantics};
 use crate::core::canvas::{CanvasId, CanvasPainter};
 use crate::core::interact::{ElementKey, Interaction, Reactive, StylePatch};
+use crate::core::presence::{Effect, PresenceSpec};
 use crate::core::runtime::{
     ActionId, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, KeyInput, ScrollId,
     TextPosId, ViewportId,
@@ -1284,6 +1285,92 @@ impl Element {
         self.reactive_mut()
             .transitions
             .push((Some(prop), transition));
+        self
+    }
+
+    // --- enter, exit and layout animations ---
+
+    fn presence_mut(&mut self) -> &mut PresenceSpec {
+        self.reactive_mut()
+            .presence
+            .get_or_insert_with(Default::default)
+    }
+
+    /// When the element appears (it wasn't in the last frame), animate it in
+    /// from `effect`'s look: [`Effect::fade`], [`Effect::slide`],
+    /// [`Effect::scale`], a combination ([`Effect::and`]) or your own. Not on
+    /// the window's first frame, which shows everything as it is. Give the
+    /// element a [`key`](Element::key), so that it is recognized as the same
+    /// one from frame to frame wherever it is.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let row = label(&theme, "New message")
+    ///     .key(42)
+    ///     .enter(Effect::fade().and(Effect::slide(0.0, -12.0)))
+    ///     .exit(Effect::fade().and(Effect::scale(0.9)));
+    /// # let _ = row;
+    /// ```
+    pub fn enter(mut self, effect: Effect) -> Self {
+        self.presence_mut().enter = Some(effect);
+        self
+    }
+
+    /// When the element goes away (the view stops building it), keep drawing
+    /// it, where it was, as it animates out to `effect`'s look; then drop it.
+    /// Meanwhile it can't be clicked, focused or read by a screen reader, and
+    /// takes no room in the layout. If the view builds it again before it's
+    /// gone, it turns round and comes back from where it is. Key the element
+    /// (see [`enter`](Element::enter)).
+    pub fn exit(mut self, effect: Effect) -> Self {
+        self.presence_mut().exit = Some(effect);
+        self
+    }
+
+    /// [`enter`](Element::enter) and [`exit`](Element::exit) with the same
+    /// effect.
+    pub fn appear(self, effect: Effect) -> Self {
+        self.enter(effect).exit(effect)
+    }
+
+    /// When the layout moves or resizes the element (a list reorders, a
+    /// panel opens above it), animate it from where it was drawn to its new
+    /// place with `transition`, instead of jumping. A size change scales the
+    /// element (and its content) from its old size; use
+    /// [`animate_position`](Element::animate_position) to only move it.
+    /// Scrolling and resizing the window don't animate. Key the element (see
+    /// [`enter`](Element::enter)).
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let items = [3, 1, 2];
+    /// let list = column(
+    ///     items
+    ///         .iter()
+    ///         .map(|id| {
+    ///             label(&theme, &format!("Item {id}"))
+    ///                 .key(*id)
+    ///                 .animate_position(Transition::spring(SpringParams::SMOOTH))
+    ///         })
+    ///         .collect(),
+    /// );
+    /// # let _ = list;
+    /// ```
+    pub fn animate_layout(mut self, transition: impl Into<Transition>) -> Self {
+        let spec = self.presence_mut();
+        spec.layout = Some(transition.into());
+        spec.layout_size = true;
+        self
+    }
+
+    /// Like [`animate_layout`](Element::animate_layout), but only the
+    /// position animates: a new size applies at once.
+    pub fn animate_position(mut self, transition: impl Into<Transition>) -> Self {
+        let spec = self.presence_mut();
+        spec.layout = Some(transition.into());
+        spec.layout_size = false;
         self
     }
 }

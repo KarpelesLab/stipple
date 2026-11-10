@@ -33,6 +33,7 @@ How to build, package and run on each platform, and what works there today.
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ✅ ²⁰ | ✅ ²¹ |
 | Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ✅ ²⁰ | ✅ ²¹ |
 | Theme changes cross-fade | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³¹ |
+| Enter, exit and layout animations | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ |
 | Reduced motion (OS setting) | ✅ ³² | ✅ ³² | ✅ ³² | ✅ ³ | ✅ ³² | ✅ ³¹ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
@@ -255,6 +256,12 @@ and `xdotool` under Xvfb; Wayland with `swaymsg` under sway (titles and
 windows: Wayland lets no app place its windows, and has no resize
 increments); Windows and macOS through what the backend reads back from the
 OS. See [windows-and-cursors.md](windows-and-cursors.md#several-windows).
+⁴⁶ Shared code on the laid-out tree (`Element::enter` / `exit` /
+`animate_layout`), unit-tested at fixed frame times; CI runs
+`listmotion --selftest` off-screen, and on X11 under Xvfb screenshots
+`listmotion --demo` mid-flight, then checks it comes to rest and stops using
+the CPU. Elsewhere it runs on each platform's frame clock but isn't run in CI.
+See [animation.md](animation.md#enter-exit-and-layout-animations).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -270,7 +277,8 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, in-app drags, and dragging files and text out to other apps
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades,
-  theme cross-fades and reduced motion
+  interaction states, transitions, enter/exit and layout animations, theme
+  cross-fades and reduced motion
 - [Custom painting](canvas.md): `Element::canvas`, invalidating parts of it from any thread, paths, bitmaps and glyph runs
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click

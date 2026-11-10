@@ -403,6 +403,7 @@ pub fn layout_with_direction(
         transform: el.transform,
         opacity: el.opacity,
         key: el.reactive.as_ref().and_then(|r| r.id),
+        ghost: false,
         children: Vec::new(),
     };
 

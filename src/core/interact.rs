@@ -24,6 +24,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::core::element::{Element, ElementKind};
+use crate::core::presence::PresenceSpec;
 use crate::core::runtime::{ActionId, DragId, DragSourceId, DropId, FocusId, LayoutNode};
 use crate::core::transition::{AnimProp, Transition, Transitions};
 use crate::geometry::{Insets, Point, Transform};
@@ -303,6 +304,8 @@ pub struct Reactive {
     pub(crate) disabled: bool,
     pub(crate) overrides: Vec<(Interaction, StylePatch)>,
     pub(crate) transitions: Vec<(Option<AnimProp>, Transition)>,
+    /// Its enter, exit and layout animations.
+    pub(crate) presence: Option<Box<PresenceSpec>>,
 }
 
 /// What the app knows about input, to work out elements' states.
@@ -347,7 +350,7 @@ pub(crate) fn collect(tree: &LayoutNode, inputs: &Inputs) -> HashMap<ElementKey,
             p.and_then(|p| {
                 node.children
                     .iter()
-                    .rposition(|c| c.to_local(p).is_some_and(|q| c.bounds.contains(q)))
+                    .rposition(|c| !c.ghost && c.to_local(p).is_some_and(|q| c.bounds.contains(q)))
             })
         };
         let (hover_child, press_child) = (top(pointer), top(press));
@@ -373,6 +376,9 @@ pub(crate) fn collect(tree: &LayoutNode, inputs: &Inputs) -> HashMap<ElementKey,
             };
         }
         for (i, child) in node.children.iter().enumerate() {
+            if child.ghost {
+                continue; // Drawn while it leaves, and nothing else.
+            }
             within |= walk(
                 child,
                 inputs,
@@ -434,6 +440,11 @@ pub(crate) struct Resolver<'a> {
     /// targets their own drag-over look (the app doesn't add its highlight).
     pub styled_actions: Vec<ActionId>,
     pub styled_drops: Vec<DropId>,
+    /// The elements with enter, exit or layout animations, by identity.
+    pub presence: HashMap<ElementKey, PresenceSpec>,
+    /// Elements to give an identity on the laid-out tree even without
+    /// states: the parents of elements leaving.
+    pub anchors: std::collections::HashSet<ElementKey>,
 }
 
 impl Resolver<'_> {
@@ -474,11 +485,24 @@ impl Resolver<'_> {
             if !re.transitions.is_empty() {
                 self.transitions.animate(id, el, &re.transitions);
             }
+            if let Some(spec) = &re.presence {
+                self.presence.insert(id, (**spec).clone());
+            }
             el.reactive = Some(re);
         }
         if let Some(children) = el.children_mut() {
+            let mut exits = false;
             for (i, child) in children.iter_mut().enumerate() {
                 self.resolve(child, ElementKey::child(id, i));
+                exits |= child
+                    .reactive
+                    .as_ref()
+                    .is_some_and(|r| r.presence.as_ref().is_some_and(|p| p.exit.is_some()));
+            }
+            // A child that leaves is drawn under its parent while it does:
+            // the parent needs an identity to be found by.
+            if exits || self.anchors.contains(&id) {
+                el.reactive.get_or_insert_with(Default::default).id = Some(id);
             }
         }
     }
@@ -499,6 +523,8 @@ mod tests {
             watch: Watch::default(),
             styled_actions: Vec::new(),
             styled_drops: Vec::new(),
+            presence: HashMap::new(),
+            anchors: Default::default(),
         };
         r.resolve(el, ElementKey::root(0));
         let watch = std::mem::take(&mut r.watch);

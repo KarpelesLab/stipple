@@ -40,6 +40,7 @@ pub mod keys;
 pub mod menu;
 mod pointer;
 mod pointer_events;
+pub(crate) mod presence;
 mod render;
 pub mod runtime;
 pub(crate) mod touch;
@@ -76,6 +77,7 @@ pub use pointer_events::{PointerButtons, PointerEvent, PointerEventKind, Pointer
 pub(crate) use pointer_events::{
     PointerHandlers, WheelTarget, pointer_at, pointer_local, wheel_target_at,
 };
+pub use presence::Effect;
 pub use render::caret_index_at;
 pub use render::{
     apply_scroll, layout, layout_with_direction, mark_native_states, measure, paint, paint_focus,

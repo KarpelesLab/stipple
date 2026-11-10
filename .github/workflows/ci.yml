@@ -30,6 +30,8 @@ jobs:
         run: cargo test -p stipple --features tokio
       - name: motiondemo selftest (animations at fixed times, off-screen)
         run: cargo run -p motiondemo -- --selftest
+      - name: listmotion selftest (enter, exit and layout animations, off-screen)
+        run: cargo run -p listmotion -- --selftest
 
   msrv:
     name: MSRV 1.88 (workspace)

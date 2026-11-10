@@ -166,6 +166,7 @@ cargo run -p tabsdemo      # tabs + right-click context menu
 cargo run -p hoverdemo     # hover highlighting
 cargo run -p pointerdemo   # every pointer and wheel event a custom element gets
 cargo run -p motiondemo    # shake, pulse, staggered list, interruptible spring
+cargo run -p listmotion    # rows that fade in and out and glide when reordered
 cargo run -p multiwindow   # two OS windows sharing one state
 cargo run -p filedialog    # native file dialog (portal, IFileDialog, NSOpenPanel)
 cargo run -p themegallery  # one card under four themes (writes .raw files)

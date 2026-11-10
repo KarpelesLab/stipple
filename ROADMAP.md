@@ -1356,11 +1356,38 @@ styling part of the toolkit.
   content (moved only), the IME preedit underline and caret rect, skew/3D, and
   transformed bounds in the accessibility tree. See
   [docs/transforms.md](docs/transforms.md).
-- ⬜ Enter and exit transitions for keyed elements (fade, slide, scale), so
+- ✅ Enter and exit transitions for keyed elements (fade, slide, scale), so
   appearing and disappearing items animate; exiting elements stay drawn until
   their transition ends.
-- ⬜ Layout animations: when an element's position or size changes because the
+  *`.enter(Effect)` / `.exit(Effect)` / `.appear(Effect)`; `Effect::fade`,
+  `slide`, `scale`, `custom(opacity, transform)`, combined with `.and` and
+  timed with `.transition(Transition)`. Enter plays when an element appears
+  after the window's first frame. An element that leaves is kept as a ghost
+  (the last drawn copy, without handlers, keys or semantics: no hover, clicks,
+  focus or accessibility node, and no room in the layout) under its old
+  parent at its old index and place until its exit ends; built again
+  meanwhile, it turns round from where it is. Applied on the laid-out tree as
+  a transform and opacity around the element's own (`src/core/presence.rs`),
+  on `Animated` values, so reduced motion snaps (no ghost at all).
+  Unit-tested at fixed frame times (mid-way, ghost drawn then dropped, coming
+  back, reduced motion) and through `App` (clicks pass the ghost);
+  `examples/listmotion --selftest` in CI, and on X11 CI screenshots
+  `listmotion --demo` mid-flight and checks it then rests with no CPU use.
+  See [docs/animation.md](docs/animation.md#enter-exit-and-layout-animations).*
+- ✅ Layout animations: when an element's position or size changes because the
   layout did (a list reordering, a panel opening), it moves there smoothly.
+  *`.animate_layout(Transition)` (position and size, the size by scaling) and
+  `.animate_position(Transition)` (position only), FLIP-style: each frame
+  compares the element's laid-out box with the last one's and draws it
+  translated (and scaled) back to where it was, animating to none.
+  Measured from the nearest layout-animated ancestor, else the scroll
+  container's content, else the window, so nested elements don't move twice,
+  scrolling doesn't animate and a window resize snaps. Retargets mid-flight
+  from the current place and velocity. Unit-tested (reorder mid-flight,
+  retarget, size, scroll and resize, reduced motion); `listmotion` shows it.
+  Not covered: a moving element is drawn in its new tree order (it can pass
+  under its siblings), and a size change scales content rather than
+  re-laying it out.*
 - ✅ Interruptible, velocity-preserving animations: a new target mid-flight
   continues from the current value and speed; gestures (drags, flings, touch
   scrolling) can drive an animation directly and hand off to a spring on

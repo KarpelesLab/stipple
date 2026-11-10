@@ -403,6 +403,8 @@ struct Pane<S> {
     // the keyboard, and the tappable elements and drop targets that draw
     // their own hover and drag-over looks.
     transitions: crate::core::transition::Transitions,
+    // Enter, exit and layout animations, and the elements leaving.
+    presence: crate::core::presence::Presence,
     watch: crate::core::interact::Watch,
     pointer_in: bool,
     press_at: Option<Point>,
@@ -486,6 +488,7 @@ impl<S: 'static> Pane<S> {
             dnd: Default::default(),
             pointer: Default::default(),
             transitions: Default::default(),
+            presence: Default::default(),
             watch: Default::default(),
             pointer_in: false,
             press_at: None,
@@ -1068,6 +1071,8 @@ impl<S: 'static> Pane<S> {
             watch: Default::default(),
             styled_actions: Vec::new(),
             styled_drops: Vec::new(),
+            presence: Default::default(),
+            anchors: self.presence.anchors(),
         };
         resolver.resolve(&mut element, crate::core::ElementKey::root(0));
         for (i, spec) in overlays.iter_mut().enumerate() {
@@ -1076,6 +1081,7 @@ impl<S: 'static> Pane<S> {
         let mut watch = std::mem::take(&mut resolver.watch);
         self.styled_actions = std::mem::take(&mut resolver.styled_actions);
         self.styled_drops = std::mem::take(&mut resolver.styled_drops);
+        let presence = std::mem::take(&mut resolver.presence);
         for (key, states) in queried {
             watch.add(key, crate::core::Interaction::DYNAMIC, states);
         }
@@ -1223,6 +1229,12 @@ impl<S: 'static> Pane<S> {
         // Apply (and clamp) scroll-container offsets to the laid-out tree before
         // painting, so the retained tree matches what's drawn for event routing.
         crate::core::apply_scroll(&mut tree, &mut self.scroll_offsets);
+        // Elements entering, leaving (drawn from the last frame's tree while
+        // they do) and moving to where the layout put them.
+        let old = self.tree.as_ref();
+        let offsets = &self.scroll_offsets;
+        self.presence
+            .update(&mut tree, &presence, old, offsets, now, size);
         crate::core::mark_native_states(&mut tree, hovered, pressed, self.focused);
         // Lighten the hovered tappable element with the theme's overlay, twice
         // over while pressed, fading between states.
@@ -1248,6 +1260,7 @@ impl<S: 'static> Pane<S> {
             || self.dnd.fades.animating(drop_now)
             || self.crossfade.active()
             || self.transitions.animating()
+            || self.presence.animating()
             || self.touch.flinging();
         if self.animating {
             crate::platform::frame::request();
@@ -3812,7 +3825,7 @@ pub mod prelude {
         Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
         OverlaySpec, TimerId, Track, View,
     };
-    pub use crate::core::{AnimProp, ElementKey, Interaction, Transition};
+    pub use crate::core::{AnimProp, Effect, ElementKey, Interaction, Transition};
     pub use crate::core::{CanvasId, ViewportId};
     pub use crate::core::{DROP_FADE, DropState};
     pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};

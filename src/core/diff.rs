@@ -249,6 +249,7 @@ mod tests {
             transform: None,
             opacity: 1.0,
             key: None,
+            ghost: false,
             children,
         }
     }
@@ -287,6 +288,7 @@ mod tests {
             transform: None,
             opacity: 1.0,
             key: None,
+            ghost: false,
             children: Vec::new(),
         }
     }

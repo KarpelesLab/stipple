@@ -189,7 +189,7 @@ fn own_text(node: &LayoutNode) -> Option<&LayoutNode> {
     }
     node.children
         .iter()
-        .filter(|c| c.action.is_none())
+        .filter(|c| c.action.is_none() && !c.ghost)
         .find_map(own_text)
 }
 
@@ -218,6 +218,7 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
             label.unwrap_or_default(),
             node.children
                 .iter()
+                .filter(|c| !c.ghost)
                 .map(|c| build(c, focused, false))
                 .filter(|a| !a.is_prunable())
                 .collect(),

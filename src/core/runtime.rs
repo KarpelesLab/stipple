@@ -1254,6 +1254,10 @@ pub struct LayoutNode {
     /// (see [`Element::key`](crate::core::Element::key)): what the app finds
     /// it by to work out its [`Interaction`](crate::core::Interaction).
     pub key: Option<crate::core::ElementKey>,
+    /// A copy of an element that has left, drawn while its
+    /// [exit](crate::core::Element::exit) effect runs: stripped of handlers,
+    /// identity and semantics, and skipped by hover and accessibility.
+    pub ghost: bool,
     pub children: Vec<LayoutNode>,
 }
 
@@ -1287,6 +1291,7 @@ impl LayoutNode {
             transform: None,
             opacity: 1.0,
             key: None,
+            ghost: false,
             children,
         }
     }
@@ -1763,6 +1768,7 @@ mod tests {
             transform: None,
             opacity: 1.0,
             key: None,
+            ghost: false,
             children: Vec::new(),
         }
     }
@@ -1860,6 +1866,7 @@ mod tests {
             transform: None,
             opacity: 1.0,
             key: None,
+            ghost: false,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),
