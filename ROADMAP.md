@@ -957,11 +957,13 @@ Most input only works on X11 today.
   Windows runner and drives a composition through the real TSF manager, the
   app playing the input method (edit sessions, `StartComposition`, `SetText`,
   `EndComposition`): the field must show the preedit `にほん`, then `日本`,
-  then the commit. (Its first run activated TSF and tied the window to its
-  document, but `ITfContextComposition::StartComposition` refused the app's
-  composition with `E_FAIL`; the self-test now tries the owner's
-  composition services and other ranges, logging each, and falls back to a
-  plain `InsertTextAtSelection` with a CI warning.) A failure in the TSF path
+  then the commit. (CI found an app can only start a composition through
+  the owner's `ITfContextOwnerCompositionServices`, not
+  `ITfContextComposition`, and that an empty field reported its layout
+  placeholder `" "` as its text until a composition started, which read as
+  the App changing the text under it and ended the composition; both are
+  fixed, and the App's echo of a composition shown as text counts as in
+  step.) A failure in the TSF path
   (a panic in a store call, `AssociateFocus` failing) switches TSF off for
   the run and hands input to IMM32. No real IME runs there, so how the
   Microsoft IMEs behave

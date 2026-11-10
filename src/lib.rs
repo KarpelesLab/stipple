@@ -4680,6 +4680,36 @@ mod tests {
         b: crate::widgets::EditBuffer,
     }
 
+    /// An empty field reports no text, before and during a composition: an
+    /// input method that holds the document (TSF) must not see the field
+    /// change under its composition when the App echoes the preedit.
+    #[test]
+    fn an_empty_field_reports_the_same_text_while_composing() {
+        let mut app = App::new(Editor::default(), |s: &Editor, cx: &mut Cx<Editor>| {
+            let theme = *cx.theme();
+            crate::widgets::text_editor(cx, &theme, &s.buf, |s: &mut Editor| &mut s.buf)
+        })
+        .logical_size(Size::new(300.0, 100.0));
+        let window = ImeWindow(Default::default());
+        assert!(app.focus_next());
+        app.render_once();
+        app.panes[0].sync_ime(&window, None);
+        assert!(app.press_key(KeyInput::Preedit {
+            text: "にほん".into(),
+            cursor: Some((9, 9)),
+        }));
+        app.render_once();
+        app.panes[0].sync_ime(&window, None);
+        let sent = window.0.borrow();
+        let before = sent.first().cloned().flatten().expect("the IME is on");
+        assert_eq!((before.surrounding.as_str(), before.cursor), ("", 0));
+        // Anything sent during the composition says the same.
+        for s in sent.iter().skip(1) {
+            let s = s.as_ref().expect("still on");
+            assert_eq!((s.surrounding.as_str(), s.cursor, s.anchor), ("", 0, 0));
+        }
+    }
+
     #[test]
     fn ime_follows_text_focus_and_drops_a_stale_preedit() {
         let mut app = App::new(

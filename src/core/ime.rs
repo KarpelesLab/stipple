@@ -121,6 +121,11 @@ pub fn ime_state(
             t.push_str(&text[e..]);
             (t, s, s)
         }
+        // An empty field shows a lone space, to keep its height, with the
+        // caret before it: that is no text. (Without this the input method
+        // would see " " until a composition starts and "" while it runs,
+        // which reads as the App changing the text under it.)
+        _ if text == " " && caret == 0 && leaf.selection.is_none() => (String::new(), 0, 0),
         _ => {
             let anchor = match leaf.selection {
                 Some((a, b)) if b == caret => a,

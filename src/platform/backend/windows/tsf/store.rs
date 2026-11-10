@@ -309,6 +309,16 @@ impl Store {
             Sync::InStep | Sync::Stale => {}
             Sync::Selection => self.selection_changed(),
             Sync::Changed { composing } => {
+                let what = if composing {
+                    ", ending the composition"
+                } else {
+                    ""
+                };
+                super::debug(format_args!(
+                    "the App's field changed{what}: {:?}, caret {}",
+                    String::from_utf16_lossy(&app.text),
+                    app.caret
+                ));
                 if composing {
                     self.terminate();
                 }

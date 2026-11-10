@@ -287,19 +287,20 @@ On Windows, CI runs `examples/textinput` with `STIPPLE_TSF_SELFTEST=1`
 tied to its document when Tab focuses the field, and the app then plays an
 input method through the real TSF manager: edit sessions
 (`ITfContext::RequestEditSession`) start a composition at the selection
-(`ITfContextComposition::StartComposition`), write `にほん` and then `日本`
-into it (`ITfRange::SetText`) and end it. TSF locks Stipple's store, writes
+(`ITfContextOwnerCompositionServices::StartComposition`), write `にほん` and
+then `日本` into it (`ITfRange::SetText`) and end it. TSF locks Stipple's store, writes
 through `ITextStoreACP` and calls the composition sink, and the field must
 show each preedit and then the commit (screenshotted mid-way). Starting the
 composition is tried through `ITfContextOwnerCompositionServices` and
 `ITfContextComposition`, over the selection and over the insertion point, with
-and without a composition sink, each attempt's `HRESULT` logged; the first CI
-run found `ITfContextComposition` refusing the app's composition (`E_FAIL`).
-If every way is refused, the self-test inserts `日本` with
-`ITfInsertAtSelection` instead, CI warns, and only the commit through the
-store is checked. With `STIPPLE_TSF=0` TSF must stay off. No real IME is installed on the runner, so
-what an input method does on its own (keys, candidates, display attributes,
-reconversion) isn't exercised; the IMM32 fallback is build-checked only.
+and without a composition sink, each attempt's `HRESULT` logged. On the
+runner `ITfContextComposition` refused the app (`E_FAIL`) and the owner's
+`ITfContextOwnerCompositionServices` worked; CI requires that path, the
+composition lasting through all three steps, and the commit. (If every way
+were refused the self-test would insert `日本` with `ITfInsertAtSelection`,
+and CI fails.) With `STIPPLE_TSF=0` TSF must stay off. No real IME is
+installed on the runner, so what an input method does on its own (keys,
+candidates, display attributes, reconversion) isn't exercised; the IMM32 fallback is build-checked only.
 
 Elsewhere real IMEs can't be driven headlessly, so on Wayland, macOS and
 iOS the input-method paths are built and unit-tested (and driven through

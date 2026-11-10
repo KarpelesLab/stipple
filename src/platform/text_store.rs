@@ -532,6 +532,13 @@ impl TextStore {
         if self.history.contains(app) {
             return Sync::Stale;
         }
+        // While composing, a field that shows the composition as its text
+        // (one that doesn't mark it as preedit) is reporting what the input
+        // method wrote: not a change of its own.
+        if self.composition.is_some() && app.text == self.text {
+            self.history.clear();
+            return Sync::InStep;
+        }
         Sync::Changed {
             composing: self.composition.is_some(),
         }
@@ -940,6 +947,32 @@ mod tests {
         write(&mut s, |s| {
             assert_eq!(s.selection().unwrap().start, 0);
         });
+    }
+
+    #[test]
+    fn the_apps_echo_of_a_composition_keeps_it() {
+        let mut s = store("", 0);
+        write(&mut s, |s| {
+            s.start_composition(Some((0, 0)));
+            s.set_text(0, 0, &u("にほん")).unwrap();
+        });
+        assert_eq!(s.flush().len(), 1);
+        // The field's report during the composition: its text without the
+        // preedit, the caret at the preedit's start.
+        assert_eq!(s.sync(&AppText::from_state("", 0, 0)), Sync::InStep);
+        // Or with the composition shown as text, by a field that doesn't
+        // mark its preedit.
+        assert_eq!(s.sync(&AppText::from_state("にほん", 9, 9)), Sync::InStep);
+        assert!(s.composing());
+        // The composition carries on.
+        write(&mut s, |s| s.set_text(0, 3, &u("日本")).unwrap());
+        assert_eq!(
+            s.flush(),
+            vec![Ime::Preedit {
+                text: "日本".into(),
+                cursor: Some((6, 6))
+            }]
+        );
     }
 
     #[test]

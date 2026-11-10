@@ -51,11 +51,9 @@ STIPPLE_TSF_SELFTEST=1 STIPPLE_TEXTINPUT_ECHO=1 "$app" > "$log" 2>&1 &
 pid=$!
 trap 'kill $pid 2>/dev/null || true' EXIT
 post_tab
-wait_for 'tsf selftest: step 2' "$log" "$pid"
-if grep -qF 'preedit=Some("日本")' "$log"; then
-  powershell -NoProfile -ExecutionPolicy Bypass -File .github/scripts/post-key.ps1 -Title "$title" \
-    -Screenshot "$out/stipple-windows-tsf-preedit.png" || true
-fi
+wait_for 'preedit=Some("日本")' "$log" "$pid"
+powershell -NoProfile -ExecutionPolicy Bypass -File .github/scripts/post-key.ps1 -Title "$title" \
+  -Screenshot "$out/stipple-windows-tsf-preedit.png" || true
 wait_for 'tsf selftest: done' "$log" "$pid"
 # The self-test closes the window a second later.
 for _ in $(seq 100); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
@@ -63,20 +61,20 @@ cat "$log"
 check 'stipple-tsf: active (client id' "$log"
 check 'stipple-tsf: focus' "$log"
 check 'stipple-tsf: AdviseSink' "$log"
-if grep -qF 'tsf selftest: composition unavailable' "$log"; then
-  # TSF wouldn't let the app start a composition (every way is logged
-  # above): the text still has to arrive through the store, as a commit.
-  echo "::warning::TSF refused the self-test's compositions; checked a plain insertion only"
-  check 'InsertTextAtSelection("日本")=0x0' "$log"
-  check 'textinput: text="日本" preedit=None' "$log"
-else
-  check 'stipple-tsf: composition started' "$log"
-  check 'textinput: text="" preedit=Some("にほん")' "$log"
-  check 'textinput: text="" preedit=Some("日本")' "$log"
-  check 'stipple-tsf: composition ended' "$log"
-  check 'textinput: text="日本" preedit=None' "$log"
-  for step in 1 2 3; do check "tsf selftest: step $step: hr=0x0 session=0x0" "$log"; done
-fi
+check 'StartComposition via owner services' "$log"
+check 'stipple-tsf: composition started' "$log"
+check 'textinput: text="" preedit=Some("にほん")' "$log"
+check 'textinput: text="" preedit=Some("日本")' "$log"
+check 'stipple-tsf: composition ended' "$log"
+check 'textinput: text="日本" preedit=None' "$log"
+for step in 1 2 3; do check "tsf selftest: step $step: hr=0x0 session=0x0" "$log"; done
+# The composition must last until the self-test ends it.
+for bad in 'composition terminated by TSF' 'composition unavailable' 'ending the composition'; do
+  if grep -qF "$bad" "$log"; then
+    echo "::error::$bad"
+    exit 1
+  fi
+done
 if grep -qF 'switching to IMM32' "$log"; then
   echo "::error::the TSF path failed and fell back to IMM32"
   exit 1
