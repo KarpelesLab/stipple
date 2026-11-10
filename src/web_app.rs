@@ -79,6 +79,22 @@ macro_rules! web_app {
             }
 
             /// # Safety
+            /// Each pointer/length pair comes from one `stipple_alloc`.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_key_raw(
+                key: *mut u8,
+                key_len: usize,
+                code: *mut u8,
+                code_len: usize,
+                mods: u32,
+                flags: u32,
+            ) -> u32 {
+                let key = unsafe { glue::take_string(key, key_len) };
+                let code = unsafe { glue::take_string(code, code_len) };
+                u32::from(glue::key_raw(&key, &code, mods, flags))
+            }
+
+            /// # Safety
             /// `ptr`/`len` come from one `stipple_alloc(len)`.
             #[unsafe(no_mangle)]
             pub unsafe extern "C" fn stipple_paste(ptr: *mut u8, len: usize) {

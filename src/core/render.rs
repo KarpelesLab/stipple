@@ -391,6 +391,7 @@ pub fn layout_with_direction(
         caret: el.caret,
         selection: el.selection,
         preedit: el.preedit,
+        keyboard: el.keyboard.clone(),
         text_pos: el.text_pos,
         wrap: el.wrap,
         native: el.native,

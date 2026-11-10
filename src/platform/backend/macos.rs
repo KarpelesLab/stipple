@@ -32,6 +32,8 @@ use crate::render::{Pixmap, Surface};
 mod display_link;
 /// Receiving drops (`NSDraggingDestination`).
 mod dnd;
+/// Raw key events (`Event::RawKey`).
+mod keys;
 /// Close and quit requests, focus, attention, the Dock badge and the beep.
 mod lifecycle;
 /// The CI self-test of the menus (`STIPPLE_COCOA_MENU_SELFTEST`).
@@ -516,6 +518,8 @@ struct MacCtx {
     ime_events: Vec<Event>,
     /// Whether the key-down being interpreted was a command, not text.
     ime_command: bool,
+    /// Which Option keys act as Meta for the focused element.
+    option_as_meta: crate::platform::OptionAsMeta,
     /// The target of the menu bar's items (a `StippleMenuTarget`), created
     /// with the first menu bar.
     menu_target: Id,
@@ -1377,6 +1381,9 @@ impl Window for MacWindow {
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         text_input::set_state(state);
     }
+    fn set_option_as_meta(&self, option: crate::platform::OptionAsMeta) {
+        CTX.with(|c| c.borrow_mut().option_as_meta = option);
+    }
     fn id(&self) -> WindowId {
         WindowId(1)
     }
@@ -1750,19 +1757,57 @@ where
                 let etype = msg_u64(ev, sel("type"));
                 // Positions stay in points, which are logical pixels.
                 let view_h = msg_rect(view, sel("bounds")).size.height;
+                // Every key and modifier change is a raw key first (see
+                // `keys`), after the input method had its look.
+                let raw = match etype {
+                    NS_KEY_DOWN | NS_KEY_UP | keys::NS_FLAGS_CHANGED => keys::raw_event(etype, ev),
+                    _ => None,
+                };
                 // With a text field focused, key-downs go through the input
-                // method instead (and not on to AppKit: we've handled them).
-                let ime = if etype == NS_KEY_DOWN {
+                // method instead (and not on to AppKit: we've handled them),
+                // unless an Option key held acts as Meta.
+                let ime = if etype == NS_KEY_DOWN && !raw.as_ref().is_some_and(keys::option_is_meta)
+                {
                     text_input::key_down(view, ev)
                 } else {
                     None
                 };
-                if let Some(events) = ime {
+                if let Some((events, command)) = ime {
                     exit = events
                         .into_iter()
                         .any(|event| handler(event, &win) == ControlFlow::Exit);
+                    // Not text: the key itself, raw first.
+                    if command && !exit {
+                        let used = match raw {
+                            Some(key) => {
+                                let (used, flow) =
+                                    crate::platform::key::deliver_raw(key, |e| handler(e, &win));
+                                exit |= flow == ControlFlow::Exit;
+                                used
+                            }
+                            None => false,
+                        };
+                        if !used
+                            && !exit
+                            && let Some(key) = key_event(ev, ButtonState::Pressed)
+                        {
+                            exit = handler(key, &win) == ControlFlow::Exit;
+                        }
+                    }
                 } else {
-                    if let Some(event) = translate_event(etype, ev, view_h)
+                    // A raw key the app used goes no further: neither the
+                    // usual translation nor AppKit (modifier changes still go
+                    // to AppKit, which tracks them).
+                    let mut used = false;
+                    if let Some(key) = raw {
+                        let (u, flow) =
+                            crate::platform::key::deliver_raw(key, |e| handler(e, &win));
+                        used = u;
+                        exit |= flow == ControlFlow::Exit;
+                    }
+                    if !used
+                        && !exit
+                        && let Some(event) = translate_event(etype, ev, view_h)
                         && handler(event, &win) == ControlFlow::Exit
                     {
                         exit = true;
@@ -1777,7 +1822,7 @@ where
                     }
                     // Forward to AppKit (drawing, window controls) unless we're
                     // exiting on this event.
-                    if !exit {
+                    if !exit && !(used && etype != keys::NS_FLAGS_CHANGED) {
                         msg_void_id(app, sel("sendEvent:"), ev);
                     }
                 }

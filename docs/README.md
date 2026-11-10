@@ -47,6 +47,9 @@ How to build, package and run on each platform, and what works there today.
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Input methods (CJK IME) | ✅ ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
+| Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ❌ | ❌ | ✅ ⁴³ |
+| Raw keys (`on_raw_key`): physical key, left/right modifiers, repeat flag | ✅ ⁴² | ✅ ¹⁰ | ✅ ¹⁰ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
+| Key repeat | ✅ ⁴² | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
 | Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
 | Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ³ | ✅ ¹⁰ | ✅ ¹⁰ |
@@ -223,6 +226,16 @@ App level. CI runs `canvasdemo --selftest` on X11, Wayland, Windows and macOS:
 a background thread changes rows of a glyph grid at the refresh rate, and the
 app checks with `RasterStats` that only those rows were rasterized. Seen
 passing locally on X11 (Xvfb, at 1x, 1.5x and 2x). See [canvas.md](canvas.md).
+⁴² CI types F-keys, Ctrl+letters, Tab and a held key into `rawkeys` with
+`xdotool` on X11 and `wtype` under sway, and checks each key's logical and
+physical identity, modifiers, sides and repeat flag, and that a menu shortcut
+beats the raw handler. X11 repeats without fake releases (XKB detectable
+auto-repeat); Wayland repeats on the client, from `wl_keyboard.repeat_info`.
+The order keys go through the App is unit-tested. See
+[keyboard.md](keyboard.md).
+⁴³ The App part (which element the IME follows, and its caret rectangle) is
+unit-tested; from there it is the text fields' IME path (see ¹⁶). See
+[ime.md](ime.md#elements-that-arent-text-fields).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -244,6 +257,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough
 - [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
+- [The keyboard](keyboard.md): raw keys for terminals and games, keeping Tab, key repeat, Option as Meta
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop

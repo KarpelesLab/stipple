@@ -11,11 +11,11 @@
 //! from [`Window::set_ime`](crate::platform::Window::set_ime).
 
 use super::{
-    CTX, CgPoint, CgRect, Class, Id, Sel, class, class_addMethod, key_event, msg_id, msg_id_id,
-    msg_void, msg_void_id, nsstring_to_string, objc_msgSend, responds_to, sel,
+    CTX, CgPoint, CgRect, Class, Id, Sel, class, class_addMethod, msg_id, msg_id_id, msg_void,
+    msg_void_id, nsstring_to_string, objc_msgSend, responds_to, sel,
 };
 use crate::platform::ImeState;
-use crate::platform::event::{ButtonState, Event, Ime};
+use crate::platform::event::{Event, Ime};
 use crate::platform::input;
 use std::ffi::c_void;
 
@@ -281,12 +281,14 @@ pub(super) unsafe fn add_methods(cls: Class) {
 }
 
 /// Run a key-down through the input context when a text field has focus,
-/// returning the events it produced, or `None` to take the plain key path
-/// (no text field, or a Command/Control shortcut).
+/// returning the events it produced and whether the input context passed the
+/// key on as a command (not text: the caller then sends it as a key), or
+/// `None` to take the plain key path (no text field, or a Command/Control
+/// shortcut).
 ///
 /// # Safety
 /// `view` must be the live `StippleView` and `ev` a key-down `NSEvent`.
-pub(super) unsafe fn key_down(view: Id, ev: Id) -> Option<Vec<Event>> {
+pub(super) unsafe fn key_down(view: Id, ev: Id) -> Option<(Vec<Event>, bool)> {
     let (active, composing) = CTX.with(|c| {
         let c = c.borrow();
         (c.ime.is_some(), !c.marked.is_empty())
@@ -308,14 +310,11 @@ pub(super) unsafe fn key_down(view: Id, ev: Id) -> Option<Vec<Event>> {
         let events = msg_id_id(class("NSArray"), sel("arrayWithObject:"), ev);
         msg_void_id(view, sel("interpretKeyEvents:"), events);
     }
-    let (mut events, command) = CTX.with(|c| {
+    let (events, command) = CTX.with(|c| {
         let mut c = c.borrow_mut();
         (std::mem::take(&mut c.ime_events), c.ime_command)
     });
-    if command && let Some(key) = unsafe { key_event(ev, ButtonState::Pressed) } {
-        events.push(key);
-    }
-    Some(events)
+    Some((events, command))
 }
 
 /// Record the focused field (or none). Losing it mid-composition drops the

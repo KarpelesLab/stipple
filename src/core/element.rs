@@ -210,6 +210,12 @@ pub struct Element {
     /// shown inside this element's text, which the focus overlay underlines.
     /// Set via [`Element::preedit`].
     pub preedit: Option<(usize, usize)>,
+    /// How this element takes the keyboard beyond [`on_key`](Element::on_key):
+    /// a raw key handler, keeping Tab, input-method support and Option as
+    /// Meta. Set via [`Element::on_raw_key`], [`Element::captures_tab`],
+    /// [`Element::ime_input`], [`Element::ime_cursor_area`] and
+    /// [`Element::option_as_meta`]. `None` for most elements.
+    pub keyboard: Option<Box<crate::core::keys::KeyConfig>>,
     /// Text-pointer handle: pointer presses/drags on this element resolve to a
     /// byte index in its text. Set via [`Element::on_text_pos`].
     pub text_pos: Option<TextPosId>,
@@ -275,6 +281,7 @@ impl Element {
             caret: None,
             selection: None,
             preedit: None,
+            keyboard: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -305,6 +312,7 @@ impl Element {
             caret: None,
             selection: None,
             preedit: None,
+            keyboard: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -348,6 +356,7 @@ impl Element {
             caret: None,
             selection: None,
             preedit: None,
+            keyboard: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -380,6 +389,7 @@ impl Element {
             caret: None,
             selection: None,
             preedit: None,
+            keyboard: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -413,6 +423,7 @@ impl Element {
             caret: None,
             selection: None,
             preedit: None,
+            keyboard: None,
             text_pos: None,
             wrap: false,
             native: None,

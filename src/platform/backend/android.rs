@@ -183,6 +183,8 @@ unsafe extern "C" {
     fn AKeyEvent_getAction(event: *const c_void) -> i32;
     fn AKeyEvent_getKeyCode(event: *const c_void) -> i32;
     fn AKeyEvent_getMetaState(event: *const c_void) -> i32;
+    fn AKeyEvent_getScanCode(event: *const c_void) -> i32;
+    fn AKeyEvent_getRepeatCount(event: *const c_void) -> i32;
     fn AMotionEvent_getAction(event: *const c_void) -> i32;
     fn AMotionEvent_getMetaState(event: *const c_void) -> i32;
     fn AMotionEvent_getButtonState(event: *const c_void) -> i32;
@@ -1356,6 +1358,9 @@ impl Loop<'_> {
             _ => return false,
         };
         let modifiers = input::android_modifiers(meta);
+        if self.raw_key(event, code, meta, device, state) {
+            return true;
+        }
         if let Some(code) = input::android_keycode(code) {
             self.deliver(Event::Key {
                 code,
@@ -1383,6 +1388,60 @@ impl Loop<'_> {
             self.deliver(Event::Text(c.to_string()));
         }
         true
+    }
+
+    /// Deliver a key as a raw key first. Returns whether the app used it.
+    fn raw_key(
+        &mut self,
+        event: *mut c_void,
+        code: i32,
+        meta: i32,
+        device: i32,
+        state: ButtonState,
+    ) -> bool {
+        use crate::platform::key::{KeyEvent, PhysicalKey, deliver_raw};
+        if self.exiting {
+            return false;
+        }
+        let (scan, repeats) = unsafe {
+            (
+                AKeyEvent_getScanCode(event),
+                AKeyEvent_getRepeatCount(event),
+            )
+        };
+        let modifiers = input::android_modifiers(meta);
+        let physical = PhysicalKey::from_evdev(scan.max(0) as u32);
+        let pressed = state == ButtonState::Pressed;
+        let vm = unsafe { (*self.instance.activity).vm };
+        let printable = |c: Option<char>| c.filter(|c| !c.is_control()).map(String::from);
+        // The character with Shift only (AMETA_SHIFT_ON, _LEFT_ON, _RIGHT_ON),
+        // and with every modifier but Ctrl and Meta.
+        let shifted = printable(
+            unsafe { jni::unicode_char(vm, device, code, meta & (0x1 | 0x40 | 0x80)) }
+                .or_else(|| input::android_ascii(code, modifiers.shift)),
+        );
+        let named = input::android_named(code);
+        let logical = input::raw_logical(named, physical, shifted.as_deref(), code as u32);
+        let mut ev = KeyEvent::new(state, logical, physical);
+        ev.modifiers = modifiers;
+        ev.sides = input::android_sides(meta);
+        ev.repeat = pressed && repeats > 0;
+        ev.scancode = code as u32;
+        if pressed && named.is_none() {
+            let typing = meta & !(AMETA_CTRL_MASK | AMETA_META_MASK);
+            ev.text = printable(unsafe { jni::unicode_char(vm, device, code, typing) })
+                .or_else(|| shifted.clone());
+            ev.text_ignoring_modifiers = shifted;
+        } else if pressed && named == Some(crate::platform::event::KeyCode::Space) {
+            ev.text = Some(" ".into());
+            ev.text_ignoring_modifiers = Some(" ".into());
+        }
+        let (used, flow) = deliver_raw(ev, |e| (self.handler)(e, &self.window));
+        if flow == ControlFlow::Exit {
+            self.exiting = true;
+            unsafe { ANativeActivity_finish(self.instance.activity) };
+        }
+        used
     }
 
     /// A touch, mouse or stylus event. Every finger is reported as a

@@ -146,7 +146,7 @@ pub(crate) fn install(
     }
 }
 
-/// A self-pipe for Unix backends: [`wake`] writes a byte, and [`wait_readable`]
+/// A self-pipe for Unix backends: [`wake`] writes a byte, and [`wait_readable_until`]
 /// polls it alongside the display connection.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
@@ -198,13 +198,8 @@ mod unix {
     }
 
     /// Block until `fd` is readable (`true`), or until a wake or the deadline is
-    /// due (`false`).
-    pub(crate) fn wait_readable(fd: i32) -> bool {
-        wait_readable_until(fd, None)
-    }
-
-    /// [`wait_readable`], also returning `false` at `until` (a backend's own
-    /// deadline, such as an input method's timeout).
+    /// due (`false`), or until `until` (a backend's own deadline, such as an
+    /// input method's timeout or a key repeat).
     pub(crate) fn wait_readable_until(fd: i32, until: Option<Instant>) -> bool {
         let pipe = pipe();
         loop {
@@ -260,7 +255,7 @@ mod unix {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) use unix::{install as install_unix, wait_readable, wait_readable_until};
+pub(crate) use unix::{install as install_unix, wait_readable_until};
 
 #[cfg(test)]
 mod tests {

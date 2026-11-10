@@ -32,6 +32,8 @@ mod attention;
 /// Receiving drops (OLE `IDropTarget`, `WM_DROPFILES`).
 mod dnd;
 mod ime;
+/// Raw key events (`Event::RawKey`).
+mod keys;
 /// `WM_MOUSELEAVE` and the double-click settings.
 mod pointer;
 /// The notification-area icon and notification balloons.
@@ -404,6 +406,9 @@ struct WinCtx {
     ime_area: Option<Rect>,
     /// Pairs up `WM_CHAR`'s surrogates.
     utf16: input::Utf16Joiner,
+    /// The app consumed the last key press as a raw key: the `WM_CHAR`s
+    /// `TranslateMessage` posted for it are dropped.
+    drop_chars: bool,
     /// The window's menu bar (`HMENU`), destroyed when replaced.
     menu: usize,
     /// The tray icon's menu and icon.
@@ -470,6 +475,17 @@ fn key_event(vk: usize, state: ButtonState) -> Option<Event> {
         state,
         modifiers,
     })
+}
+
+/// Queue the raw key event for a key message, ahead of its [`Event::Key`].
+/// A new key press also ends the dropping of the previous one's characters.
+fn push_raw_key(vk: usize, lp: Lparam, state: ButtonState) {
+    if state == ButtonState::Pressed {
+        CTX.with(|c| c.borrow_mut().drop_chars = false);
+    }
+    if let Some(ev) = keys::raw_event(vk, lp, state, modifiers()) {
+        push_event(ev);
+    }
 }
 
 thread_local! {
@@ -965,6 +981,7 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             } else {
                 ButtonState::Released
             };
+            push_raw_key(wp, lp, state);
             if let Some(ev) = key_event(wp, state) {
                 push_event(ev);
             }
@@ -976,6 +993,7 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             } else {
                 ButtonState::Released
             };
+            push_raw_key(wp, lp, state);
             if let Some(ev) = key_event(wp, state) {
                 push_event(ev);
             }
@@ -990,6 +1008,10 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             let m = modifiers();
             let shortcut = (m.ctrl && !m.alt) || m.meta;
             let ch = CTX.with(|c| c.borrow_mut().utf16.push(wp as u16));
+            // The key that typed it was consumed as a raw key.
+            if CTX.with(|c| c.borrow().drop_chars) {
+                return 0;
+            }
             if let Some(ch) = ch
                 && !ch.is_control()
                 && !shortcut
@@ -1407,11 +1429,31 @@ where
                 DispatchMessageW(&msg);
             }
             let events: Vec<Event> = CTX.with(|c| std::mem::take(&mut c.borrow_mut().queue));
+            // After a raw key the handler consumed, the events the same key
+            // produced are skipped.
+            let mut skip = false;
             for event in events {
-                if let Event::Resized(size) = event {
-                    win.size = size;
-                }
-                if handler(event, &win) == ControlFlow::Exit {
+                let flow = match event {
+                    Event::RawKey(key) => {
+                        let pressed = key.is_press();
+                        let (used, flow) =
+                            crate::platform::key::deliver_raw(key, |e| handler(e, &win));
+                        skip = used;
+                        if pressed && used {
+                            CTX.with(|c| c.borrow_mut().drop_chars = true);
+                        }
+                        flow
+                    }
+                    Event::Key { .. } | Event::Text(_) if skip => ControlFlow::Wait,
+                    event => {
+                        skip = false;
+                        if let Event::Resized(size) = event {
+                            win.size = size;
+                        }
+                        handler(event, &win)
+                    }
+                };
+                if flow == ControlFlow::Exit {
                     unsafe { DestroyWindow(hwnd) };
                 }
             }

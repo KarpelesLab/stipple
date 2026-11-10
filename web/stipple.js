@@ -488,11 +488,28 @@ export async function start(canvas, wasmUrl, options = {}) {
   // Keys, while the app has focus. Keys an input method or a dead key takes
   // (`isComposing`, `Process`, `Dead`) are left to the textarea, whose
   // composition and `input` events below carry the text instead.
+  // Every key goes first to `stipple_key_raw` (an element taking raw keys
+  // may use it, which ends it here).
+  const rawKey = (ev, release) => {
+    if (!e.stipple_key_raw) return false;
+    const [kp, kn] = passStr(ev.key);
+    const [cp, cn] = passStr(ev.code ?? "");
+    const flags = (release ? 1 : 0) | (ev.repeat ? 2 : 0);
+    return e.stipple_key_raw(kp, kn, cp, cn, mods(ev), flags) !== 0;
+  };
   overlay.addEventListener("keydown", (ev) => {
     if (ev.isComposing || ev.keyCode === 229 || ev.key === "Dead" || ev.key === "Process"
       || ev.key === "Unidentified") return;
+    if (rawKey(ev, false)) {
+      ev.preventDefault();
+      return;
+    }
     const [p, n] = passStr(ev.key);
     if (e.stipple_key(p, n, mods(ev))) ev.preventDefault();
+  });
+  overlay.addEventListener("keyup", (ev) => {
+    if (ev.isComposing || ev.keyCode === 229 || ev.key === "Dead" || ev.key === "Process") return;
+    if (rawKey(ev, true)) ev.preventDefault();
   });
   const ime = (kind, text) => {
     const [p, n] = passStr(text ?? "");

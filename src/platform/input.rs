@@ -7,8 +7,9 @@
 
 use crate::geometry::Point;
 use crate::platform::event::{
-    KeyCode, Modifiers, PointerButton, ScrollDelta, ScrollPhase, Touch, TouchPhase,
+    ButtonState, KeyCode, Modifiers, PointerButton, ScrollDelta, ScrollPhase, Touch, TouchPhase,
 };
+use crate::platform::key::{ModifierSides, PhysicalKey};
 use crate::platform::window::CursorIcon;
 
 /// Logical pixels scrolled per wheel notch ("line"). Every backend uses the
@@ -385,7 +386,7 @@ pub(crate) fn mac_key_equivalent(shortcut: &crate::platform::Shortcut) -> Option
         KeyCode::F10 => function(9)?,
         KeyCode::F11 => function(10)?,
         KeyCode::F12 => function(11)?,
-        KeyCode::Alt | KeyCode::ContextMenu | KeyCode::Unidentified(_) => return None,
+        _ => return None,
     };
     let mut mask = 0;
     if shortcut.shift {
@@ -623,6 +624,225 @@ pub(crate) fn ios_key(usage: isize, chars: &str, modifiers: Modifiers) -> Option
     // unless a shortcut modifier is held.
     let typed = matches!(named, KeyCode::Enter | KeyCode::Space | KeyCode::Backspace);
     (!typed || shortcut).then_some(named)
+}
+
+// ---- Raw key events (shared) --------------------------------------------------
+
+/// The named key at a physical position (HID usage), for keys every layout
+/// agrees on: modifiers, locks, function and editing keys. `None` for keys
+/// whose meaning comes from the layout.
+#[allow(dead_code)]
+pub(crate) fn hid_named(usage: u16) -> Option<KeyCode> {
+    const F_KEYS: [KeyCode; 12] = [
+        KeyCode::F1,
+        KeyCode::F2,
+        KeyCode::F3,
+        KeyCode::F4,
+        KeyCode::F5,
+        KeyCode::F6,
+        KeyCode::F7,
+        KeyCode::F8,
+        KeyCode::F9,
+        KeyCode::F10,
+        KeyCode::F11,
+        KeyCode::F12,
+    ];
+    Some(match usage {
+        0x28 | 0x58 => KeyCode::Enter,
+        0x29 => KeyCode::Escape,
+        0x2a => KeyCode::Backspace,
+        0x2b => KeyCode::Tab,
+        0x2c => KeyCode::Space,
+        0x39 => KeyCode::CapsLock,
+        0x3a..=0x45 => F_KEYS[(usage - 0x3a) as usize],
+        0x46 => KeyCode::PrintScreen,
+        0x47 => KeyCode::ScrollLock,
+        0x48 => KeyCode::Pause,
+        0x49 => KeyCode::Insert,
+        0x4a => KeyCode::Home,
+        0x4b => KeyCode::PageUp,
+        0x4c => KeyCode::Delete,
+        0x4d => KeyCode::End,
+        0x4e => KeyCode::PageDown,
+        0x4f => KeyCode::ArrowRight,
+        0x50 => KeyCode::ArrowLeft,
+        0x51 => KeyCode::ArrowDown,
+        0x52 => KeyCode::ArrowUp,
+        0x53 => KeyCode::NumLock,
+        0x65 => KeyCode::ContextMenu,
+        0xe0 | 0xe4 => KeyCode::Control,
+        0xe1 | 0xe5 => KeyCode::Shift,
+        0xe2 | 0xe6 => KeyCode::Alt,
+        0xe3 | 0xe7 => KeyCode::Meta,
+        _ => return None,
+    })
+}
+
+/// The logical key of a raw key event: a named key from the platform's own
+/// mapping (`named`), else from the physical key, else the character the key
+/// gives with Shift as held (`shifted`), else unidentified with `scancode`.
+#[allow(dead_code)]
+pub(crate) fn raw_logical(
+    named: Option<KeyCode>,
+    physical: PhysicalKey,
+    shifted: Option<&str>,
+    scancode: u32,
+) -> KeyCode {
+    if let Some(code) = named.or_else(|| hid_named(physical.0)) {
+        return code;
+    }
+    let mut chars = shifted.unwrap_or("").chars();
+    match (chars.next(), chars.next()) {
+        (Some(' '), None) => KeyCode::Space,
+        (Some(c), None) if !c.is_control() && !('\u{F700}'..='\u{F8FF}').contains(&c) => {
+            KeyCode::Char(c)
+        }
+        _ => KeyCode::Unidentified(scancode),
+    }
+}
+
+/// Left/right modifiers from AppKit's device-dependent `modifierFlags` bits.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn mac_sides(flags: u64) -> ModifierSides {
+    let pairs = [
+        (0x0001, ModifierSides::LEFT_CTRL),
+        (0x0002, ModifierSides::LEFT_SHIFT),
+        (0x0004, ModifierSides::RIGHT_SHIFT),
+        (0x0008, ModifierSides::LEFT_META),
+        (0x0010, ModifierSides::RIGHT_META),
+        (0x0020, ModifierSides::LEFT_ALT),
+        (0x0040, ModifierSides::RIGHT_ALT),
+        (0x2000, ModifierSides::RIGHT_CTRL),
+    ];
+    ModifierSides(
+        pairs
+            .iter()
+            .filter(|(flag, _)| flags & flag != 0)
+            .fold(0, |bits, (_, side)| bits | side),
+    )
+}
+
+/// An `NSEventTypeFlagsChanged` for the modifier key `kc`: whether it went
+/// down or up, read from its own device-dependent bit in `flags` (Caps Lock
+/// from its lock bit). `None` for a key that isn't a modifier.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn mac_flags_changed(kc: u16, flags: u64) -> Option<ButtonState> {
+    let bit: u64 = match kc {
+        0x3b => 0x0001,  // Control
+        0x38 => 0x0002,  // Shift
+        0x3c => 0x0004,  // Right Shift
+        0x37 => 0x0008,  // Command
+        0x36 => 0x0010,  // Right Command
+        0x3a => 0x0020,  // Option
+        0x3d => 0x0040,  // Right Option
+        0x3e => 0x2000,  // Right Control
+        0x39 => 1 << 16, // Caps Lock
+        _ => return None,
+    };
+    Some(if flags & bit != 0 {
+        ButtonState::Pressed
+    } else {
+        ButtonState::Released
+    })
+}
+
+/// A web key's text: `key` when it is one printable character, unless Ctrl
+/// or Meta is held (Ctrl+Alt is AltGr on Windows, which types).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn web_text(key: &str, modifiers: Modifiers) -> Option<String> {
+    let command = (modifiers.ctrl && !modifiers.alt) || modifiers.meta;
+    let mut chars = key.chars();
+    match (chars.next(), chars.next()) {
+        (Some(c), None) if !command && !c.is_control() => Some(c.to_string()),
+        _ => None,
+    }
+}
+
+/// A web key's text with only Shift applied, from its `code` where that
+/// fixes it (letters, and digits without Shift), else its text.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn web_text_ignoring_modifiers(
+    code: &str,
+    shift: bool,
+    text: Option<&str>,
+) -> Option<String> {
+    if let Some(l) = code.strip_prefix("Key")
+        && l.len() == 1
+        && l.as_bytes()[0].is_ascii_uppercase()
+    {
+        return Some(if shift {
+            l.to_string()
+        } else {
+            l.to_ascii_lowercase()
+        });
+    }
+    if let Some(d) = code.strip_prefix("Digit")
+        && d.len() == 1
+        && !shift
+    {
+        return Some(d.to_string());
+    }
+    if code == "Space" {
+        return Some(" ".into());
+    }
+    text.map(str::to_string)
+}
+
+/// Left/right modifiers from an Android meta state.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn android_sides(meta: i32) -> ModifierSides {
+    let pairs = [
+        (0x10, ModifierSides::LEFT_ALT),
+        (0x20, ModifierSides::RIGHT_ALT),
+        (0x40, ModifierSides::LEFT_SHIFT),
+        (0x80, ModifierSides::RIGHT_SHIFT),
+        (0x2000, ModifierSides::LEFT_CTRL),
+        (0x4000, ModifierSides::RIGHT_CTRL),
+        (0x20000, ModifierSides::LEFT_META),
+        (0x40000, ModifierSides::RIGHT_META),
+    ];
+    ModifierSides(
+        pairs
+            .iter()
+            .filter(|(flag, _)| meta & flag != 0)
+            .fold(0, |bits, (_, side)| bits | side),
+    )
+}
+
+/// The named key for an Android key code, modifiers and locks included.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn android_named(kc: i32) -> Option<KeyCode> {
+    android_keycode(kc).or(match kc {
+        59 | 60 => Some(KeyCode::Shift),
+        113 | 114 => Some(KeyCode::Control),
+        57 | 58 => Some(KeyCode::Alt),
+        117 | 118 => Some(KeyCode::Meta),
+        115 => Some(KeyCode::CapsLock),
+        143 => Some(KeyCode::NumLock),
+        116 => Some(KeyCode::ScrollLock),
+        120 => Some(KeyCode::PrintScreen),
+        121 => Some(KeyCode::Pause),
+        62 => Some(KeyCode::Space),
+        _ => None,
+    })
+}
+
+/// The named key for a Win32 virtual key, modifiers and locks included.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn win32_named(vk: usize) -> Option<KeyCode> {
+    win32_vk(vk).or(match vk {
+        0x10 | 0xA0 | 0xA1 => Some(KeyCode::Shift),
+        0x11 | 0xA2 | 0xA3 => Some(KeyCode::Control),
+        0xA4 | 0xA5 => Some(KeyCode::Alt),
+        0x5B | 0x5C => Some(KeyCode::Meta),
+        0x14 => Some(KeyCode::CapsLock),
+        0x90 => Some(KeyCode::NumLock),
+        0x91 => Some(KeyCode::ScrollLock),
+        0x2C => Some(KeyCode::PrintScreen),
+        0x13 => Some(KeyCode::Pause),
+        0x20 => Some(KeyCode::Space),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -885,5 +1105,60 @@ mod tests {
         assert_eq!(web_button(4), PointerButton::Forward);
         assert_eq!(css_cursor(CursorIcon::Text), "text");
         assert_eq!(css_cursor(CursorIcon::NeswResize), "nesw-resize");
+    }
+
+    #[test]
+    fn raw_key_helpers() {
+        let p = |n| PhysicalKey::from_name(n).unwrap();
+        assert_eq!(raw_logical(None, p("ShiftRight"), None, 0), KeyCode::Shift);
+        assert_eq!(
+            raw_logical(None, p("KeyA"), Some("q"), 0),
+            KeyCode::Char('q')
+        );
+        assert_eq!(raw_logical(None, p("Space"), Some(" "), 0), KeyCode::Space);
+        assert_eq!(
+            raw_logical(None, PhysicalKey(0), Some("\u{F704}"), 7),
+            KeyCode::Unidentified(7)
+        );
+        assert_eq!(
+            raw_logical(Some(KeyCode::Home), p("Numpad7"), Some("7"), 0),
+            KeyCode::Home
+        );
+        // macOS.
+        let s = mac_sides(0x20 | 0x2000 | (1 << 19));
+        assert!(s.left_alt() && s.right_ctrl() && !s.right_alt());
+        assert_eq!(mac_flags_changed(0x3d, 0x40), Some(ButtonState::Pressed));
+        assert_eq!(mac_flags_changed(0x3d, 0x20), Some(ButtonState::Released));
+        assert_eq!(mac_flags_changed(0x39, 1 << 16), Some(ButtonState::Pressed));
+        assert_eq!(mac_flags_changed(0x00, 0), None);
+        // Web.
+        let none = Modifiers::default();
+        let ctrl = Modifiers { ctrl: true, ..none };
+        let altgr = Modifiers {
+            ctrl: true,
+            alt: true,
+            ..none
+        };
+        assert_eq!(web_text("a", none).as_deref(), Some("a"));
+        assert_eq!(web_text("a", ctrl), None);
+        assert_eq!(web_text("@", altgr).as_deref(), Some("@"));
+        assert_eq!(web_text("Enter", none), None);
+        let ign = web_text_ignoring_modifiers;
+        assert_eq!(ign("KeyB", false, Some("\u{222b}")).as_deref(), Some("b"));
+        assert_eq!(ign("KeyB", true, None).as_deref(), Some("B"));
+        assert_eq!(ign("Digit1", false, Some("\u{a1}")).as_deref(), Some("1"));
+        assert_eq!(ign("Digit1", true, Some("!")).as_deref(), Some("!"));
+        // Android.
+        let s = android_sides(0x20 | 0x40);
+        assert!(s.right_alt() && s.left_shift() && !s.left_alt());
+        assert_eq!(android_named(60), Some(KeyCode::Shift));
+        assert_eq!(android_named(62), Some(KeyCode::Space));
+        assert_eq!(android_named(29), None);
+        // Win32.
+        assert_eq!(win32_named(0x12), Some(KeyCode::Alt));
+        assert_eq!(win32_named(0xA5), Some(KeyCode::Alt));
+        assert_eq!(win32_named(0x10), Some(KeyCode::Shift));
+        assert_eq!(win32_named(0x5B), Some(KeyCode::Meta));
+        assert_eq!(win32_named(0x41), None);
     }
 }

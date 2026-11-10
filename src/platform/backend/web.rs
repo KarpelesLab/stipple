@@ -565,6 +565,72 @@ pub fn paste(text: String) {
     });
 }
 
+thread_local! {
+    /// Left/right modifiers, from the modifier keys' own key events.
+    static SIDES: Cell<crate::platform::key::SideTracker> =
+        Cell::new(crate::platform::key::SideTracker::default());
+}
+
+/// A `keydown` or `keyup` as a raw key: `KeyboardEvent.key` and `.code`, the
+/// modifiers packed as for [`key`], and `flags` 1 for a release, 2 for a
+/// repeat. Returns whether the app used it; the page then calls
+/// `preventDefault` and skips [`key`].
+#[doc(hidden)]
+pub fn key_raw(key: &str, code: &str, mods: u32, flags: u32) -> bool {
+    use crate::platform::input;
+    use crate::platform::key::{KeyEvent, PhysicalKey};
+    let modifiers = web_modifiers(mods);
+    let state = if flags & 1 != 0 {
+        ButtonState::Released
+    } else {
+        ButtonState::Pressed
+    };
+    let physical = PhysicalKey::from_name(code).unwrap_or_default();
+    let pressed = state == ButtonState::Pressed;
+    let text = input::web_text(key, modifiers).filter(|_| pressed);
+    let ignoring = input::web_text_ignoring_modifiers(code, modifiers.shift, text.as_deref())
+        .filter(|_| pressed);
+    let named = match key {
+        "Shift" => Some(KeyCode::Shift),
+        "Control" => Some(KeyCode::Control),
+        "Alt" => Some(KeyCode::Alt),
+        "Meta" | "OS" => Some(KeyCode::Meta),
+        "AltGraph" => Some(KeyCode::AltGraph),
+        "CapsLock" => Some(KeyCode::CapsLock),
+        "NumLock" => Some(KeyCode::NumLock),
+        "ScrollLock" => Some(KeyCode::ScrollLock),
+        "PrintScreen" => Some(KeyCode::PrintScreen),
+        "Pause" => Some(KeyCode::Pause),
+        "ContextMenu" => Some(KeyCode::ContextMenu),
+        _ => web_key(key).filter(|k| !matches!(k, KeyCode::Char(_))),
+    };
+    // The character with Shift as held but without Ctrl/Alt: `key` unless
+    // a command modifier changed it (`code` then knows letters and digits).
+    let shifted = match (&text, modifiers.ctrl || modifiers.alt || modifiers.meta) {
+        (Some(t), false) => Some(t.clone()),
+        _ => input::web_text_ignoring_modifiers(code, modifiers.shift, None)
+            .or_else(|| input::web_text(key, crate::platform::Modifiers::default())),
+    };
+    let logical = input::raw_logical(named, physical, shifted.as_deref(), 0);
+    let mut ev = KeyEvent::new(state, logical, physical);
+    ev.modifiers = modifiers;
+    ev.sides = SIDES.with(|s| {
+        let mut t = s.get();
+        let sides = t.update(physical, state, modifiers);
+        s.set(t);
+        sides
+    });
+    ev.repeat = pressed && flags & 2 != 0;
+    ev.text = text;
+    ev.text_ignoring_modifiers = ignoring;
+    ev.scancode = u32::from(physical.0);
+    crate::platform::key::deliver_raw(ev, |e| {
+        deliver(e);
+        ControlFlow::Wait
+    })
+    .0
+}
+
 /// Composition from the page's hidden textarea: `kind` 0 is the preedit so
 /// far (`compositionupdate`; empty ends it), 1 commits `text`
 /// (`compositionend`, or an `input` event that typed text no `keydown`
@@ -611,6 +677,14 @@ pub fn reduced_motion(reduced: bool) {
 /// The canvas gained or lost keyboard focus.
 #[doc(hidden)]
 pub fn focus(focused: bool) {
+    if !focused {
+        // Modifier releases go to whatever has focus now.
+        SIDES.with(|s| {
+            let mut t = s.get();
+            t.clear();
+            s.set(t);
+        });
+    }
     deliver(Event::FocusChanged(focused));
 }
 

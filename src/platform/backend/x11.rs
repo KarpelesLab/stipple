@@ -48,6 +48,8 @@ mod ctext;
 /// The monitor refresh rate, which paces animation frames.
 /// Receiving drops (XDND).
 mod dnd;
+/// Raw key events: physical keys, key text, sides and repeats.
+mod keys;
 mod pointer;
 mod refresh;
 /// The CLIPBOARD and PRIMARY selections.
@@ -1633,6 +1635,10 @@ where
     // The input method server, if there is one (before any window exists, as
     // finding it reads replies directly).
     let mut xim = xim::Xim::connect(&mut conn);
+    // Key repeats without the fake releases between them, and what raw key
+    // events need to know between keys.
+    let xkb = keys::init_xkb(&mut conn).unwrap_or(None);
+    let mut key_tracker = keys::KeyTracker::new(xkb.is_some_and(|x| x.detectable_repeat));
 
     // Wrap the connection for sharing, then create the first window against it
     // exactly as `open_window` creates later siblings.
@@ -1703,7 +1709,9 @@ where
         }
         // The keyboard mapping changed: fetch it again. The reply may come
         // after other events, which wait in the backlog.
-        if buf[0] & 0x7f == X_MAPPING_NOTIFY && buf[4] == 1 {
+        if (buf[0] & 0x7f == X_MAPPING_NOTIFY && buf[4] == 1)
+            || xkb.is_some_and(|x| x.mapping_changed(&buf))
+        {
             let mut conn = shared.lock().unwrap();
             match refetch_keymap(&mut conn, &mut backlog) {
                 Ok(map) => {
@@ -1746,6 +1754,9 @@ where
         }
         let idx = windows.iter().position(|w| w.window == xid).unwrap_or(0);
         let win = &windows[idx];
+        // Whether a key from the server is a repeat (keys an input method
+        // sends back, flagged as sent, were noted on their way to it).
+        let repeat = matches!(buf[0], X_KEY_PRESS | X_KEY_RELEASE) && key_tracker.observe(&buf);
         let flow = match buf[0] & 0x7f {
             _ if xim.as_ref().is_some_and(|x| x.claims(&buf)) => {
                 let outputs = xim
@@ -1848,10 +1859,21 @@ where
                         dbg(format_args!("compose: keysym {ks:#x} -> {ime:?}"));
                         handler(Event::Ime(ime), win)
                     }
-                    None => match keysym_to_event(ks, state, modifiers) {
-                        Some(ev) => handler(ev, win),
-                        None => ControlFlow::Wait,
-                    },
+                    None => {
+                        // Every key goes out raw first; the app may take it.
+                        let raw = key_tracker.event(&keymap, &buf, repeat);
+                        let (used, flow) =
+                            crate::platform::key::deliver_raw(raw, |e| handler(e, win));
+                        if used || flow == ControlFlow::Exit {
+                            dbg(format_args!("key {keycode}: taken raw"));
+                            flow
+                        } else {
+                            match keysym_to_event(ks, state, modifiers) {
+                                Some(ev) => handler(ev, win),
+                                None => ControlFlow::Wait,
+                            }
+                        }
+                    }
                 }
             }
             X_CLIENT_MESSAGE if xdnd.atoms.is_xdnd(rd_u32(&buf, 8).unwrap_or(0)) => {
@@ -1946,6 +1968,15 @@ struct Keymap {
 }
 
 impl Keymap {
+    /// The keysym in column `col` of `keycode`'s row, 0 if none.
+    fn keysym_column(&self, keycode: u8, col: usize) -> u32 {
+        if keycode < self.min || col >= self.per {
+            return 0;
+        }
+        let i = (keycode - self.min) as usize * self.per + col;
+        self.syms.get(i).copied().unwrap_or(0)
+    }
+
     fn keysym(&self, keycode: u8, shift: bool) -> u32 {
         if keycode < self.min || self.per == 0 {
             return 0;

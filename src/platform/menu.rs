@@ -202,6 +202,15 @@ fn key_name(key: KeyCode, mac: bool) -> String {
         KeyCode::F12 => "F12".into(),
         KeyCode::Alt => named("Alt", "\u{2325}"),
         KeyCode::ContextMenu => "Menu".into(),
+        KeyCode::Shift => named("Shift", "\u{21e7}"),
+        KeyCode::Control => named("Ctrl", "\u{2303}"),
+        KeyCode::Meta => named("Super", "\u{2318}"),
+        KeyCode::AltGraph => "AltGr".into(),
+        KeyCode::CapsLock => "CapsLock".into(),
+        KeyCode::NumLock => "NumLock".into(),
+        KeyCode::ScrollLock => "ScrollLock".into(),
+        KeyCode::PrintScreen => "PrintScreen".into(),
+        KeyCode::Pause => "Pause".into(),
         KeyCode::Unidentified(_) => "?".into(),
     }
 }

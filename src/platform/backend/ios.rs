@@ -592,6 +592,12 @@ unsafe fn presses(this: Id, cmd: Sel, presses: Id, event: Id, state: ButtonState
         let usage = unsafe { msg_usize(key, sel("keyCode")) } as isize;
         let modifiers = input::ios_modifiers(unsafe { msg_usize(key, sel("modifierFlags")) });
         let chars = unsafe { string_of(msg_id(key, sel("charactersIgnoringModifiers"))) };
+        // Raw first: a key the app uses goes neither on as a `Key` nor to
+        // UIKit's text system.
+        let typed = unsafe { string_of(msg_id(key, sel("characters"))) };
+        if raw_key(usage, state, modifiers, &typed, &chars, &win) {
+            continue;
+        }
         match input::ios_key(usage, &chars, modifiers) {
             Some(code) => call_handler(
                 Event::Key {
@@ -615,6 +621,55 @@ unsafe fn presses(this: Id, cmd: Sel, presses: Id, event: Id, state: ButtonState
             f(&sup, cmd, presses, event);
         }
     }
+}
+
+thread_local! {
+    /// Left/right modifiers, from the modifier keys' own presses.
+    static SIDES: std::cell::Cell<crate::platform::key::SideTracker> =
+        std::cell::Cell::new(crate::platform::key::SideTracker::default());
+}
+
+/// Deliver a hardware key press or release (`UIKey`, whose `keyCode` is the
+/// HID usage) as a raw key. Returns whether the app used it.
+fn raw_key(
+    usage: isize,
+    state: ButtonState,
+    modifiers: Modifiers,
+    typed: &str,
+    ignoring: &str,
+    win: &IosWindow,
+) -> bool {
+    use crate::platform::key::{KeyEvent, PhysicalKey, deliver_raw, key_text};
+    let physical = PhysicalKey(u16::try_from(usage).unwrap_or(0));
+    let pressed = state == ButtonState::Pressed;
+    let logical = input::raw_logical(None, physical, Some(ignoring), usage as u32);
+    let mut ev = KeyEvent::new(state, logical, physical);
+    ev.modifiers = modifiers;
+    ev.sides = SIDES.with(|s| {
+        let mut t = s.get();
+        let sides = t.update(physical, state, modifiers);
+        s.set(t);
+        sides
+    });
+    if pressed {
+        ev.text_ignoring_modifiers = key_text(ignoring);
+        ev.text = if modifiers.ctrl || modifiers.meta {
+            ev.text_ignoring_modifiers.clone()
+        } else {
+            key_text(typed)
+        };
+    }
+    ev.scancode = usage as u32;
+    let ptr = CTX.with(|c| c.borrow().handler);
+    if ptr.is_null() {
+        return false;
+    }
+    deliver_raw(ev, |e| unsafe {
+        let fat = *ptr;
+        let handler: &mut dyn FnMut(Event, &dyn Window) -> ControlFlow = &mut *fat;
+        handler(e, win)
+    })
+    .0
 }
 
 extern "C" fn presses_began(this: Id, cmd: Sel, set: Id, event: Id) {

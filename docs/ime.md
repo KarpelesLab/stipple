@@ -37,6 +37,19 @@ and preedit ranges within it (`display_to_text` maps a click back). Mark the
 preedit range on the text element with `Element::preedit` and the focus overlay
 underlines it.
 
+## Elements that aren't text fields
+
+A terminal or a custom editor can take input-method text too. Give it
+`Element::ime_input(true)`, or `Element::ime_cursor_area(rect)` with its caret
+relative to its top-left. While it has focus, the App calls `set_ime` with an
+`ImeState` whose `cursor_area` is that rectangle in window coordinates (the
+element's whole box without one) and with no surrounding text. The IME then
+works as it does for a text field: the element's `on_key` handler gets
+`KeyInput::Preedit` to draw at its caret and `KeyInput::Text` for commits, and
+an empty preedit if focus leaves mid-composition. A viewport element with
+`ime_input` gets the same while it holds input focus. Keys the IME doesn't use
+still reach the element's `on_raw_key` handler. See [keyboard.md](keyboard.md).
+
 ## Per platform
 
 | | Input methods | Dead keys and compose |
@@ -151,7 +164,9 @@ Set `STIPPLE_COMPOSE_DEBUG=1` to print the table size and locale when it loads.
 
 ## Testing
 
-Unit tests cover the Compose parser and state machine
+Unit tests cover the IME state an element with `ime_input` reports (its
+caret rectangle, and the IME switching off when it loses focus), the Compose
+parser and state machine
 (`src/platform/compose.rs`, including the system's real `en_US.UTF-8` file when
 present), the preedit in `EditBuffer` (`src/widgets/preedit.rs`), the IME
 state the App reports and the stale-preedit cleanup, the `text-input-v3` wire

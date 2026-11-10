@@ -26,6 +26,9 @@ use std::collections::{HashMap, HashSet};
 type TapFn<S> = Box<dyn FnMut(&mut S)>;
 /// A boxed keyboard handler: receives the [`KeyInput`] for the focused element.
 type KeyFn<S> = Box<dyn FnMut(&mut S, &KeyInput)>;
+/// A boxed raw key handler (see
+/// [`Element::on_raw_key`](crate::core::Element::on_raw_key)).
+type RawKeyFn<S> = Box<dyn FnMut(&mut S, &crate::platform::KeyEvent) -> crate::core::keys::Handled>;
 /// A boxed drag handler: receives the [`DragMotion`] (fraction handlers
 /// registered with [`Cx::register_drag`] read [`DragMotion::fraction_x`]).
 type DragFn<S> = Box<dyn FnMut(&mut S, &DragMotion)>;
@@ -332,6 +335,7 @@ pub struct Cx<'a, S> {
     theme: &'a Theme,
     taps: Vec<TapFn<S>>,
     keys: Vec<KeyFn<S>>,
+    raw_keys: Vec<RawKeyFn<S>>,
     drags: Vec<DragFn<S>>,
     text_pos: Vec<TextPosFn<S>>,
     contexts: Vec<ContextFn<S>>,
@@ -393,6 +397,7 @@ impl<'a, S> Cx<'a, S> {
             theme,
             taps: Vec::new(),
             keys: Vec::new(),
+            raw_keys: Vec::new(),
             drags: Vec::new(),
             text_pos: Vec::new(),
             contexts: Vec::new(),
@@ -495,6 +500,18 @@ impl<'a, S> Cx<'a, S> {
     pub fn register_key(&mut self, handler: impl FnMut(&mut S, &KeyInput) + 'static) -> FocusId {
         let id = FocusId(self.keys.len() as u32);
         self.keys.push(Box::new(handler));
+        id
+    }
+
+    /// Register a raw key handler (see
+    /// [`Element::on_raw_key`](crate::core::Element::on_raw_key)), returning
+    /// its [`RawKeyId`](crate::core::keys::RawKeyId).
+    pub fn register_raw_key(
+        &mut self,
+        handler: impl FnMut(&mut S, &crate::platform::KeyEvent) -> crate::core::keys::Handled + 'static,
+    ) -> crate::core::keys::RawKeyId {
+        let id = crate::core::keys::RawKeyId(self.raw_keys.len() as u32);
+        self.raw_keys.push(Box::new(handler));
         id
     }
 
@@ -790,6 +807,7 @@ impl<'a, S> Cx<'a, S> {
         Handlers {
             taps: self.taps,
             keys: self.keys,
+            raw_keys: self.raw_keys,
             drags: self.drags,
             text_pos: self.text_pos,
             contexts: self.contexts,
@@ -845,6 +863,7 @@ impl<S> core::fmt::Debug for Cx<'_, S> {
 pub struct Handlers<S> {
     taps: Vec<TapFn<S>>,
     keys: Vec<KeyFn<S>>,
+    raw_keys: Vec<RawKeyFn<S>>,
     drags: Vec<DragFn<S>>,
     text_pos: Vec<TextPosFn<S>>,
     contexts: Vec<ContextFn<S>>,
@@ -873,6 +892,18 @@ impl<S> Handlers<S> {
         } else {
             false
         }
+    }
+
+    /// Invoke raw key handler `id` with `event`. `None` if there is no such
+    /// handler.
+    pub fn dispatch_raw_key(
+        &mut self,
+        id: crate::core::keys::RawKeyId,
+        event: &crate::platform::KeyEvent,
+        state: &mut S,
+    ) -> Option<crate::core::keys::Handled> {
+        let handler = self.raw_keys.get_mut(id.0 as usize)?;
+        Some(handler(state, event))
     }
 
     /// Invoke the drag handler for `id` with `fraction` (0..=1 across the
@@ -1005,6 +1036,7 @@ impl<S> Default for Handlers<S> {
         Self {
             taps: Vec::new(),
             keys: Vec::new(),
+            raw_keys: Vec::new(),
             drags: Vec::new(),
             text_pos: Vec::new(),
             contexts: Vec::new(),
@@ -1099,6 +1131,9 @@ pub struct LayoutNode {
     /// Byte range of input-method composition (preedit) text inside an editable
     /// text leaf (the focus overlay underlines it).
     pub preedit: Option<(usize, usize)>,
+    /// The element's keyboard settings (raw key handler, Tab, IME, Option as
+    /// Meta), copied from [`Element::keyboard`](crate::core::Element::keyboard).
+    pub keyboard: Option<Box<crate::core::keys::KeyConfig>>,
     /// Text-pointer handle: this element resolves pointer presses/drags to a
     /// byte index in its text (click-to-position / drag-to-select).
     pub text_pos: Option<TextPosId>,
@@ -1166,6 +1201,7 @@ impl LayoutNode {
             caret: None,
             selection: None,
             preedit: None,
+            keyboard: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -1641,6 +1677,7 @@ mod tests {
             caret: None,
             selection: None,
             preedit: None,
+            keyboard: None,
             text_pos: None,
             wrap: false,
             native: None,
@@ -1737,6 +1774,7 @@ mod tests {
             caret: None,
             selection: None,
             preedit: None,
+            keyboard: None,
             text_pos: None,
             wrap: false,
             native: None,

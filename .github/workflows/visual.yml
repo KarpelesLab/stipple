@@ -1550,8 +1550,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y sway grim wtype wl-clipboard seatd imagemagick fonts-dejavu-core
 
-      - name: Build the window, textinput and clipboard examples
-        run: cargo build --release -p window -p textinput -p clipboarddemo
+      - name: Build the window, textinput, clipboard and rawkeys examples
+        run: cargo build --release -p window -p textinput -p clipboarddemo -p rawkeys
 
       - name: Run under headless sway and screenshot with grim
         run: |
@@ -1641,6 +1641,23 @@ jobs:
           grep -q 'textinput: text="é" preedit=None' visual_output/wl-compose.log
           grep -q 'text-input: bound' visual_output/wl-compose.log
           grep 'text-input:' visual_output/wl-compose.log || true
+
+          # --- raw keys and client-side key repeat: the compositor doesn't
+          # repeat keys, the client does from wl_keyboard.repeat_info. wtype
+          # presses b, holds it 1.5 s (past sway's 600 ms delay) and lets go. ---
+          ./target/release/rawkeys > visual_output/wl-rawkeys.log 2>&1 &
+          RAW_PID=$!
+          sleep 4
+          wtype -s 500 -d 120 -k Tab -k F5 -M ctrl -k d -m ctrl -k Tab \
+            -P b -s 1500 -p b 2>> visual_output/wtype.log; sleep 2
+          kill "$RAW_PID" 2>/dev/null || true
+          echo "=== wl-rawkeys.log ==="; grep -v "present\|frame" visual_output/wl-rawkeys.log | tail -60 || true
+          grep -q "repeat info:" visual_output/wl-rawkeys.log
+          grep -q "rawkeys: Pressed F5 phys=F5 " visual_output/wl-rawkeys.log
+          grep -q "rawkeys: Pressed Char('d') phys=KeyD mods=ctrl+ " visual_output/wl-rawkeys.log
+          grep -q "rawkeys: Pressed Tab phys=Tab " visual_output/wl-rawkeys.log
+          [ "$(grep -c "rawkeys: Pressed Char('b') .*repeat=true" visual_output/wl-rawkeys.log)" -ge 2 ]
+          [ "$(grep -c "rawkeys: Released Char('b')" visual_output/wl-rawkeys.log)" = 1 ]
 
           # --- clipboard: copy out of the app, paste into it, copy back out.
           # wl-copy / wl-paste reach the selection through the compositor, so
@@ -1738,9 +1755,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
 
-      - name: Build the clickdemo + textinput + hoverdemo + textarea + pointerdemo examples
+      - name: Build the clickdemo + textinput + hoverdemo + textarea + pointerdemo + rawkeys examples
         # Release so per-event re-rasterization keeps up with input.
-        run: cargo build --release -p clickdemo -p textinput -p hoverdemo -p textarea -p pointerdemo
+        run: cargo build --release -p clickdemo -p textinput -p hoverdemo -p textarea -p pointerdemo -p rawkeys
 
       - name: Click + type, screenshotting the results
         env:
@@ -1810,6 +1827,43 @@ jobs:
           grep -q 'textinput: text="" preedit=Some("´")' visual_output/compose.log
           grep -q 'textinput: text="é" preedit=Some("·o")' visual_output/compose.log
           grep -q 'textinput: text="é©" preedit=None' visual_output/compose.log
+
+          # --- raw keys: an element with `on_raw_key` (a terminal's keyboard)
+          # gets F-keys, Ctrl+letters and Tab with their physical keys, before
+          # the toolkit maps them; the menu's Ctrl+T shortcut still wins; a
+          # held key repeats (XKB detectable auto-repeat: no fake releases). ---
+          ./target/release/rawkeys > visual_output/rawkeys.log 2>&1 &
+          RAW_PID=$!
+          sleep 3
+          xdotool key Tab; sleep 0.5   # focus the element (no raw handler yet)
+          xdotool key F1 F5 F12; sleep 0.3
+          xdotool key ctrl+d ctrl+r ctrl+c; sleep 0.3
+          xdotool key Tab shift+Tab; sleep 0.3
+          xdotool key ctrl+t; sleep 0.3
+          xdotool key a shift+a Escape Prior; sleep 0.3
+          xdotool keydown b; sleep 1.2; xdotool keyup b; sleep 2
+          import -window root visual_output/rawkeys.png
+          kill "$RAW_PID" 2>/dev/null || true
+          echo "=== rawkeys.log ==="; cat visual_output/rawkeys.log || true
+          grep -q "rawkeys: Pressed F1 phys=F1 " visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed F12 phys=F12 " visual_output/rawkeys.log
+          grep -q "rawkeys: Released F5 phys=F5 " visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed Char('d') phys=KeyD mods=ctrl+ " visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed Char('r') phys=KeyR mods=ctrl+ " visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed Char('c') phys=KeyC mods=ctrl+ " visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed Control phys=ControlLeft .* loc=Left" visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed Tab phys=Tab mods=- " visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed Tab phys=Tab mods=shift+ sides=0x02" visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed Char('A') phys=KeyA mods=shift+ .*text=Some(\"A\")" visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed Escape" visual_output/rawkeys.log
+          grep -q "rawkeys: Pressed PageUp" visual_output/rawkeys.log
+          # Ctrl+T ran the menu command and never reached the element.
+          grep -q "rawkeys: menu new tab" visual_output/rawkeys.log
+          if grep -q "rawkeys: Pressed Char('t')" visual_output/rawkeys.log; then exit 1; fi
+          # Holding b: one press, repeats, one release.
+          [ "$(grep -c "Pressed Char('b') .*repeat=false" visual_output/rawkeys.log)" = 1 ]
+          [ "$(grep -c "Pressed Char('b') .*repeat=true" visual_output/rawkeys.log)" -ge 2 ]
+          [ "$(grep -c "Released Char('b')" visual_output/rawkeys.log)" = 1 ]
 
           # --- hover: move the cursor onto the right button ---
           ./target/release/hoverdemo > visual_output/hoverdemo.log 2>&1 &

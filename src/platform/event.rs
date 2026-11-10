@@ -44,11 +44,11 @@ pub struct Modifiers {
     pub meta: bool,
 }
 
-/// A small, platform-neutral key identity.
-///
-/// This is deliberately a coarse subset for the scaffold; full physical/logical
-/// key mapping (à la the W3C UI Events `code`/`key` split) lands with real
-/// keyboard input in Phase 1.
+/// A platform-neutral key identity: the key's meaning under the current
+/// layout (W3C UI Events' `key`). [`Event::Key`] carries it for keys that
+/// aren't plain typing; [`Event::RawKey`]'s [`KeyEvent`](crate::platform::KeyEvent)
+/// carries it for every key, with the physical key
+/// ([`PhysicalKey`](crate::platform::PhysicalKey)) beside it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum KeyCode {
@@ -85,6 +85,20 @@ pub enum KeyCode {
     Alt,
     /// The context-menu ("Menu" / "Apps") key.
     ContextMenu,
+    /// Either Shift key on its own (only in [`Event::RawKey`]).
+    Shift,
+    /// Either Control key on its own (only in [`Event::RawKey`]).
+    Control,
+    /// Either logo key (Command, Windows, Super) on its own (only in
+    /// [`Event::RawKey`]).
+    Meta,
+    /// AltGr (ISO Level 3 Shift) on its own (only in [`Event::RawKey`]).
+    AltGraph,
+    CapsLock,
+    NumLock,
+    ScrollLock,
+    PrintScreen,
+    Pause,
     /// A printable character key, identified by its base character.
     Char(char),
     /// Anything not yet mapped, carrying the backend's raw scancode.
@@ -261,6 +275,13 @@ pub enum Event {
         state: ButtonState,
         modifiers: Modifiers,
     },
+    /// Every key press (repeats included) and release, with its physical key,
+    /// text, left/right modifiers and repeat flag. Sent before the backend's
+    /// own translation of the key into [`Key`](Event::Key) / [`Text`](Event::Text),
+    /// which it skips if the handler calls
+    /// [`consume_key`](crate::platform::consume_key). Keys an input method or
+    /// a dead-key sequence takes aren't sent. See `docs/keyboard.md`.
+    RawKey(crate::platform::KeyEvent),
     /// Committed text from the keyboard or IME (already composed).
     Text(String),
     /// An input method (IME) or compose-sequence update: composition (preedit)

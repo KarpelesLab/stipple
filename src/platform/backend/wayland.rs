@@ -30,6 +30,8 @@ mod attention;
 mod clipboard;
 /// Server-side decorations, or a title bar and borders drawn by Stipple.
 mod decor;
+/// Raw key events and client-side key repeat.
+mod keys;
 mod pointer;
 mod text_input;
 
@@ -182,15 +184,18 @@ const WL_SEAT_GET_POINTER: u16 = 0;
 const WL_KEYBOARD_KEYMAP: u16 = 0;
 const WL_KEYBOARD_KEY: u16 = 3;
 const WL_KEYBOARD_MODIFIERS: u16 = 4;
+const WL_KEYBOARD_LEAVE: u16 = 2;
+const WL_KEYBOARD_REPEAT_INFO: u16 = 5;
 const WL_POINTER_ENTER: u16 = 0;
 const WL_POINTER_MOTION: u16 = 2;
 const WL_POINTER_BUTTON: u16 = 3;
 const WL_POINTER_AXIS: u16 = 4;
 /// Since `wl_seat` v5: a wheel's notch count, sent before its `axis` event.
 const WL_POINTER_AXIS_DISCRETE: u16 = 8;
-/// The highest `wl_seat` version we speak. v5 adds `axis_discrete`; the other
-/// events it adds (`frame`, `axis_source`, `axis_stop`, `repeat_info`, `name`)
-/// are ignored. v8 would replace `axis_discrete` with `axis_value120`.
+/// The highest `wl_seat` version we speak. v5 adds `axis_discrete`; v4's
+/// `repeat_info` drives client-side key repeat; the other events (`frame`,
+/// `axis_source`, `axis_stop`, `name`) are ignored. v8 would replace
+/// `axis_discrete` with `axis_value120`.
 const WL_SEAT_VERSION: u32 = 5;
 
 // `wl_shm` pixel format: 32-bit little-endian XRGB → bytes `[B, G, R, X]`.
@@ -1633,8 +1638,9 @@ where
     let mut keymap: Option<XkbKeymap> = None;
     // The keyboard's modifier state (depressed | latched | locked xkb bits).
     let mut mods_mask = 0u32;
-    // Dead keys and compose sequences: the client's job on Wayland.
-    let mut compose = crate::platform::compose::ComposeState::default();
+    // Dead keys and compose sequences, raw keys and key repeat: the client's
+    // job on Wayland.
+    let mut keys = keys::Keys::default();
     // Wheel notches and the scroll source, for the `axis` events that follow.
     let mut axes = pointer::Axes::default();
     // Toplevel sizes are in surface units; the buffer is that times the scale.
@@ -1651,7 +1657,24 @@ where
     loop {
         // Messages a paste read while it waited come first.
         let queued = shared.lock().unwrap().queue.pop_front();
-        if queued.is_none() && !crate::platform::wake::wait_readable(fd) {
+        if queued.is_none()
+            && !crate::platform::wake::wait_readable_until(fd, keys.repeat.deadline())
+        {
+            // A held key repeats.
+            let now = std::time::Instant::now();
+            if let Some(key) = keys.repeat.due(now) {
+                dbg(format_args!("repeat key {key}"));
+                let flow = keys.key(
+                    keymap.as_ref(),
+                    mods_mask,
+                    (key, keys::Stroke::Repeat),
+                    now,
+                    &mut |e| handler(e, &win),
+                );
+                if flow == ControlFlow::Exit {
+                    break;
+                }
+            }
             if crate::platform::wake::take(std::time::Instant::now())
                 && handler(Event::Wake, &win) == ControlFlow::Exit
             {
@@ -1756,6 +1779,7 @@ where
                 // release races the compositor's own teardown and can error.
                 keymap = None;
                 mods_mask = 0;
+                keys.reset();
                 dbg(format_args!("keyboard dropped (caps={caps})"));
             }
             if pointer.is_none() && caps & WL_SEAT_CAP_POINTER != 0 {
@@ -1965,6 +1989,10 @@ where
             };
             if let Some(focused) = focus {
                 dbg(format_args!("focus {focused}"));
+                // A held key stops repeating when the window loses focus.
+                if !focused {
+                    keys.reset();
+                }
                 if handler(Event::FocusChanged(focused), &win) == ControlFlow::Exit {
                     break;
                 }
@@ -2006,24 +2034,20 @@ where
                 keymap.as_ref().and_then(|m| m.sym(key + 8, mods_mask))
             ));
             // Prefer the compositor's keymap (xkb keycode = evdev + 8); fall back
-            // to the layout-independent evdev table when none was parsed.
-            let modifiers = wl_modifiers(mods_mask, keymap.as_ref());
-            let sym = keymap.as_ref().and_then(|m| m.sym(key + 8, mods_mask));
-            let shortcut = modifiers.ctrl || modifiers.meta;
-            let composed = sym
-                .filter(|_| pressed)
-                .and_then(keysym_value)
-                .and_then(|ks| crate::platform::compose::feed_event(&mut compose, ks, shortcut));
-            let ev = match (composed, sym) {
-                (Some(ime), _) => Some(Event::Ime(ime)),
-                (None, Some(sym)) => keysym_name_to_event(sym, pressed, modifiers),
-                (None, None) => evdev_to_event(key, pressed, modifiers),
+            // to the layout-independent evdev table when none was parsed. The
+            // key goes out raw first, then through compose or as itself.
+            let now = std::time::Instant::now();
+            let stroke = if pressed {
+                keys::Stroke::Press
+            } else {
+                keys::Stroke::Release
             };
-            if let Some(ev) = ev {
-                dbg(format_args!("key {key} pressed={pressed} -> {ev:?}"));
-                if handler(ev, &win) == ControlFlow::Exit {
-                    break;
-                }
+            let flow = keys.key(keymap.as_ref(), mods_mask, (key, stroke), now, &mut |e| {
+                dbg(format_args!("key {key} pressed={pressed} -> {e:?}"));
+                handler(e, &win)
+            });
+            if flow == ControlFlow::Exit {
+                break;
             }
         } else if Some(object) == keyboard && opcode == WL_KEYBOARD_MODIFIERS {
             // serial, mods_depressed, mods_latched, mods_locked, group.
@@ -2031,10 +2055,23 @@ where
                 |i: usize| u32::from_le_bytes([args[i], args[i + 1], args[i + 2], args[i + 3]]);
             mods_mask = word(4) | word(8) | word(12);
             dbg(format_args!("modifiers {mods_mask:#x}"));
+        } else if Some(object) == keyboard && opcode == WL_KEYBOARD_LEAVE {
+            // Focus left the surface: keys held now are released elsewhere.
+            keys.reset();
+            dbg(format_args!("keyboard leave"));
+        } else if Some(object) == keyboard && opcode == WL_KEYBOARD_REPEAT_INFO {
+            // rate (keys per second, 0 = off), delay (ms).
+            let word =
+                |i: usize| i32::from_le_bytes([args[i], args[i + 1], args[i + 2], args[i + 3]]);
+            keys.repeat.set_info(word(0), word(4));
+            dbg(format_args!(
+                "repeat info: {}/s after {} ms",
+                word(0),
+                word(4)
+            ));
         } else if Some(object) == keyboard {
-            // enter (1) / leave (2) / repeat_info (5). The window's focus is
-            // its toplevel's `activated` state, which a seat without a
-            // keyboard has too.
+            // enter (1). The window's focus is its toplevel's `activated`
+            // state, which a seat without a keyboard has too.
             dbg(format_args!("keyboard event {opcode}"));
         } else if object == WL_DISPLAY && opcode == WL_DISPLAY_ERROR {
             return Err(PlatformError::Os("wl_display error".into()));

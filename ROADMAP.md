@@ -947,6 +947,24 @@ Most input only works on X11 today.
   it has proven stable, and keep a manual checklist per platform (Japanese,
   Chinese pinyin, Korean, the candidate window following the caret, cancelling
   and re-converting) until each is covered.
+- ✅ Raw keys for app-handled input (`Element::on_raw_key`): every press,
+  repeat and release with the logical key, the physical key (a USB HID usage
+  with its W3C `code` name, from evdev codes, Windows scan codes, macOS key
+  codes, `KeyboardEvent.code`), keypad location, left/right modifiers, the
+  typed text and the text with only Shift (`charactersIgnoringModifiers`), and
+  a repeat flag, on every backend (`Event::RawKey` underneath). The focused
+  element's handler runs after open menus and menu shortcuts and before Tab
+  traversal, the menu bar's keys and the `KeyInput` mapping; `captures_tab`
+  keeps Tab, and `option_as_meta` makes left/right Option a Meta key on
+  macOS. X11 asks XKB for detectable auto-repeat; Wayland repeats keys on the
+  client from `wl_keyboard.repeat_info`, on the loop's deadline. Precedence is
+  unit-tested at App level; **CI-verified** on X11 (`xdotool`: F-keys,
+  Ctrl+letters, Tab, a held key) and Wayland (`wtype` under sway, a held key
+  repeating). Windows, macOS, web, iOS and Android are build-checked. See
+  [docs/keyboard.md](docs/keyboard.md).
+- ✅ Input methods for elements that aren't text fields (`Element::ime_input`,
+  `ime_cursor_area`): a terminal gets preedit and commits through `on_key` and
+  places the candidate window at its cursor, on every platform with an IME.
 - ✅ Dead keys and compose sequences: X11 and Wayland parse the locale's libX11
   Compose file (`XCOMPOSEFILE`, `~/.XCompose`, includes) by hand and show the
   pending sequence as preedit; Windows gets them from `TranslateMessage` and

@@ -37,6 +37,8 @@ mod event;
 pub mod frame;
 /// Key and scroll translation tables shared by the native backends.
 mod input;
+/// Raw key events: physical keys, key text, left/right modifiers, repeat.
+mod key;
 /// X11 keysym names and their Unicode characters (generated table).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod keysyms;
@@ -76,6 +78,7 @@ pub use event::{
     SCROLL_LINE_PX, ScrollDelta, ScrollPhase, ScrollUnit, Touch, TouchPhase, WindowId,
     file_uri_to_path, parse_uri_list, path_to_file_uri, uri_list,
 };
+pub use key::{KeyEvent, KeyLocation, ModifierSides, OptionAsMeta, PhysicalKey, consume_key};
 pub use menu::{
     MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, Shortcut, TRAY_ID_BASE,
 };

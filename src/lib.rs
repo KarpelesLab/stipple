@@ -31,6 +31,7 @@
 pub mod anim;
 mod app_clipboard;
 mod app_dnd;
+mod app_keys;
 mod app_lifecycle;
 mod app_pointer;
 #[cfg(test)]
@@ -344,6 +345,8 @@ struct Pane<S> {
     // The element showing input-method composition text, so it can be told to
     // drop it when focus moves away mid-composition.
     preedit_owner: Option<FocusId>,
+    // Which Option keys the window was last told act as Meta.
+    option_sent: crate::platform::OptionAsMeta,
     // The menus Stipple draws for this window: which is open and highlighted.
     menu_ui: std::rc::Rc<std::cell::RefCell<crate::widgets::menus::MenuUi>>,
     // The menu bar to draw at the top of the window (the primary window, where
@@ -421,6 +424,7 @@ impl<S: 'static> Pane<S> {
             painted_focused: None,
             ime_sent: None,
             preedit_owner: None,
+            option_sent: Default::default(),
             memo_cache: std::collections::HashMap::new(),
             scroll_offsets: std::collections::HashMap::new(),
             scroll_requests: crate::core::ScrollRequests::default(),
@@ -1699,7 +1703,9 @@ impl<S: 'static> Pane<S> {
         let ime = match (&self.tree, self.input_viewport) {
             (Some(tree), None) => crate::core::ime_state(tree, self.focused, font),
             _ => None,
-        };
+        }
+        // An element that isn't a text field but opted into the IME.
+        .or_else(|| self.custom_ime());
         if ime != self.ime_sent {
             window.set_ime(ime.as_ref());
             self.ime_sent = ime;
@@ -2585,6 +2591,7 @@ impl<S: 'static> App<S> {
                     }
                     // A text field's selection is the primary selection.
                     clipboard.sync_primary(pane.tree.as_ref(), pane.focused, Some(window));
+                    pane.sync_option_as_meta(window);
 
                     // Push the freshly-built accessibility tree to the OS bridge
                     // so a screen reader sees the current element hierarchy and
@@ -2771,6 +2778,19 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                Event::RawKey(key) => {
+                    // The focused element's raw key handler, after the menus'
+                    // claim (see `app_keys`). Consumed keys aren't translated
+                    // into `Key`/`Text` by the backend.
+                    let outcome = self.raw_key(idx, &key);
+                    if outcome.consumed {
+                        crate::platform::consume_key();
+                    }
+                    if outcome.ran {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 // A middle click on editable text pastes the primary selection
                 // there (X11/Wayland's select-and-middle-click).
                 Event::PointerButton {
@@ -2834,7 +2854,7 @@ impl<S: 'static> App<S> {
                     state: ButtonState::Pressed,
                     modifiers,
                 } => {
-                    if self.menu_key(idx, KeyCode::Tab, modifiers) || self.pane_focus_next(idx) {
+                    if self.menu_key(idx, KeyCode::Tab, modifiers) || self.tab_key(idx, modifiers) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -3451,6 +3471,7 @@ fn map_key_for(code: KeyCode, modifiers: Modifiers, mac: bool) -> Option<KeyInpu
 pub mod prelude {
     pub use crate::anim::SpringParams;
     pub use crate::anim::{Easing, Spring, Tween};
+    pub use crate::core::Handled;
     pub use crate::core::{
         Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
         OverlaySpec, TimerId, Track, View,
@@ -3466,6 +3487,7 @@ pub mod prelude {
     pub use crate::platform::PointerButton;
     pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
+    pub use crate::platform::{KeyEvent, OptionAsMeta, PhysicalKey};
     pub use crate::render::{
         Canvas, Color, Font, GlyphRun, ImageFit, Path, Pixmap, StrokeStyle, Svg, TextDirection,
     };

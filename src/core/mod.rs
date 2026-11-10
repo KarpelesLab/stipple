@@ -35,6 +35,8 @@ mod handle;
 pub(crate) mod highlight;
 mod ime;
 pub(crate) mod interact;
+/// Raw keys, keeping Tab, IME for custom elements and Option as Meta.
+pub mod keys;
 pub mod menu;
 mod pointer;
 mod pointer_events;
@@ -65,6 +67,7 @@ pub use handle::runtime;
 pub use handle::{AppHandle, TimerId};
 pub use ime::{ime_state, paint_preedit};
 pub use interact::{ElementKey, Interaction, Reactive};
+pub use keys::{Handled, KeyConfig, RawKeyId};
 pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
 pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};

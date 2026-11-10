@@ -384,6 +384,12 @@ pub trait Window {
     /// no-op. Implemented with `text-input-v3` on Wayland, IMM32 on Windows and
     /// `NSTextInputClient` on macOS.
     fn set_ime(&self, _state: Option<&ImeState>) {}
+    /// Which Option keys act as Meta for the focused element (see
+    /// [`OptionAsMeta`](crate::platform::OptionAsMeta)): with one held, a
+    /// key's text isn't composed by the layout and the key skips the input
+    /// method. The App calls this after a frame when it changed. Default: a
+    /// no-op (only macOS composes with Option).
+    fn set_option_as_meta(&self, _option: crate::platform::OptionAsMeta) {}
     /// Show `menu` as the window's (on macOS, the application's) native menu
     /// bar, replacing any earlier one. Picking an item delivers
     /// [`Event::MenuCommand`](crate::platform::Event::MenuCommand) with its id.
