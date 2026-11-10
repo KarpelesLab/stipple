@@ -36,8 +36,10 @@ pub(crate) struct DndState {
     pub(crate) queried: Vec<DropId>,
     /// A press on a drag source, not yet moved far enough to drag.
     press: Option<(DragSourceId, Point)>,
-    /// The payload of the in-app drag in progress.
+    /// The payload of the in-app drag in progress, and the drag source it
+    /// started on.
     internal: Option<DropData>,
+    pub(crate) source: Option<DragSourceId>,
 }
 
 impl DndState {
@@ -239,7 +241,9 @@ impl<S: 'static> Pane<S> {
         };
         // The press became a drag: it no longer taps or drags its element.
         self.pressed = None;
+        self.press_at = None;
         self.dragging = None;
+        self.dnd.source = Some(id);
         self.dirty = true;
         self.dnd.offer = Some(data.kind());
         self.dnd.internal = Some(data);
@@ -257,6 +261,7 @@ impl<S: 'static> Pane<S> {
         pos: Point,
     ) -> bool {
         self.dnd.press = None;
+        self.dnd.source = None;
         match self.dnd.internal.take() {
             Some(data) => {
                 self.drop_data(state, theme, font, pos, &data);
@@ -270,6 +275,7 @@ impl<S: 'static> Pane<S> {
     /// one.
     pub(crate) fn source_cancel(&mut self, state: &mut S) -> bool {
         self.dnd.press = None;
+        self.dnd.source = None;
         if self.dnd.internal.take().is_some() {
             self.drag_leave(state);
             true

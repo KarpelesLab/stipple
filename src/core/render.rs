@@ -387,6 +387,7 @@ pub fn layout_with_direction(
         rtl: dir.is_rtl(),
         transform: el.transform,
         opacity: el.opacity,
+        key: el.reactive.as_ref().and_then(|r| r.id),
         children: Vec::new(),
     };
 

@@ -36,8 +36,34 @@ acceptable drag is over it.
 
 ## Animating a drop zone
 
-To style the target from the drag, register it first, read its `DropState`,
-build the element from it, and stamp the id on it:
+The simplest way to style a target for the drag is per-state overrides with a
+transition (see [animation.md](animation.md)):
+
+```rust
+column(vec![label(&theme, "Drop files")])
+    .padding(Insets::uniform(16.0))
+    .fill(theme.palette.surface)
+    .border(theme.palette.border, 1.0)
+    // Grows and glows while a drag it takes is over it, tints red for one it
+    // doesn't, and springs back when the drag leaves or drops.
+    .drag_over(|e| e.padding(Insets::uniform(24.0))
+        .fill(theme.palette.surface.mix(theme.palette.primary, 0.25))
+        .border(theme.palette.primary, 4.0))
+    .drag_refused(|e| e.fill(theme.palette.surface.mix(theme.palette.danger, 0.25))
+        .border(theme.palette.danger, 4.0))
+    .transition(Transition::spring(SpringParams::new(180.0, 0.45)))
+    .on_drop_of(cx, DragOffer::FILES, |s: &mut State, data, _| s.add(data))
+```
+
+`.drag_over` holds while a drag the target accepts is over it (or over a drop
+target inside it), `.drag_refused` while one it refuses is. A target with
+either draws its own look, so the app doesn't add its highlight, and the app
+rebuilds only when a drag enters, leaves or changes verdict. `.dragged(f)`
+styles a `drag_source` while it is being dragged.
+
+To build the target from the drag instead (different words, the pointer
+position), register it first, read its `DropState`, build the element from it,
+and stamp the id on it:
 
 ```rust
 let zone = cx.register_drop(DragOffer::FILES, |s: &mut State, data, _| s.add(data));
@@ -67,10 +93,9 @@ the view reads doesn't get the app's highlight: it draws its own.
 
 Drop target ids are handed out in registration order, like scroll ids, so the
 state follows the target as long as the view registers its drop targets in the
-same order each time. For motion of your own, a `Spring` stepped by
-`cx.frame_time()` with `cx.request_frame()` while it moves works as in
-[animation.md](animation.md); `dropdemo`'s first zone grows on one, with a
-little overshoot.
+same order each time. `dropdemo` uses both: its zones' words come from
+`DropState`, their look from `.drag_over` / `.drag_refused` with a transition
+(a spring with a little overshoot on the first zone, an ease on the second).
 
 `Element::on_drop_hover(cx, |s, hovering| ...)` also tells the state when an
 acceptable drag starts and stops hovering a target.

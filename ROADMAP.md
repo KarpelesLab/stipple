@@ -1158,17 +1158,36 @@ Today a view can animate, but only by sampling `Tween` / `Spring` at
 press highlights animate on their own. Phase 8 makes motion and state-driven
 styling part of the toolkit.
 
-- ⬜ Interaction states as values a view can read and style from: hovered,
+- ✅ Interaction states as values a view can read and style from: hovered,
   pressed, focused, focus-visible, disabled, selected, dragged, and drag-over
   (with whether the payload is accepted), per element, through `Cx` and as
   per-state style overrides (`.hovered(|e| …)`, `.drag_over(|e| …)`).
-  (A start: drop targets already expose `Cx::drop_state` — over, accepted,
-  position and an eased level — which `dropdemo` animates by hand.)
-- ⬜ Implicit transitions: an element's animatable properties (colors, opacity,
+  *`Interaction` (a set of states); `Cx::interaction(key)` for keyed elements;
+  `.hovered` / `.pressed` / `.focused` / `.focus_visible` / `.dragged` /
+  `.drag_over` / `.drag_refused` and `.when(states, f)` overrides (fill,
+  radius, border, padding, fixed size, text color, cursor, opacity,
+  transform), resolved when the
+  tree is lowered for layout; `Element::key` for identity (else the tree
+  path); `.disabled(bool)` (look only: handlers still run) and `.selected`.
+  States come from the frame on screen and are recomputed on pointer, button,
+  focus and drag events; the app rebuilds only when a state some element (or
+  the view, through `Cx`) uses changed. Focus and drag states count elements
+  inside; `focused` is focus-within. Desktop backends don't report the pointer
+  leaving the window yet, so hover sticks there. See `docs/animation.md`.*
+- ✅ Implicit transitions: an element's animatable properties (colors, opacity,
   corner radius, border, shadow, padding, size, transform) declare a
   `Transition` (duration and easing, or a spring), and changing them between
   builds animates instead of jumping. The App keeps the in-flight values by
   element identity and asks for frames only while something moves.
+  *`.transition(Transition::ease / tween / spring)` and
+  `.transition_for(AnimProp, …)`; `AnimProp` covers fill, border (color and
+  width), radius, padding, fixed width/height (between fixed sizes only), text
+  color, opacity and transform; fills and borders fade in and out. Retargeting
+  continues from the current value and velocity (each property is an
+  `anim::Animated`, a `Transition` wraps a `Motion`, so reduced motion applies). Unit-tested at
+  fixed frame times; `dropdemo`'s zones use `.drag_over` + transitions. No
+  shadows yet (the scene has none); a property is added by an `AnimProp`
+  variant in `src/core/transition.rs`.*
 - ✅ Transforms and opacity in the scene: scale, rotate and translate about an
   origin, and group opacity, for any element and its subtree, with hit-testing
   that follows the transform. `Element::transform(Transform)` and

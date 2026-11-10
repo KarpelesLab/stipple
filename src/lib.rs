@@ -34,6 +34,8 @@ pub mod core;
 pub mod geometry;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+#[cfg(test)]
+mod interaction_tests;
 pub mod layout;
 pub mod platform;
 pub mod render;
@@ -342,6 +344,19 @@ struct Pane<S> {
     catchers: Vec<ActionId>,
     // Drag and drop: the drag over the window, its target, and in-app drags.
     dnd: app_dnd::DndState,
+    // Interaction states and implicit transitions: the in-flight property
+    // values by element identity, the elements whose look (or view) depends
+    // on which states, whether the pointer is in the window, where the
+    // primary press went down while it is down, whether focus last moved by
+    // the keyboard, and the tappable elements and drop targets that draw
+    // their own hover and drag-over looks.
+    transitions: crate::core::transition::Transitions,
+    watch: crate::core::interact::Watch,
+    pointer_in: bool,
+    press_at: Option<Point>,
+    focus_visible: bool,
+    styled_actions: Vec<ActionId>,
+    styled_drops: Vec<crate::core::DropId>,
 }
 
 impl<S> std::fmt::Debug for App<S> {
@@ -399,6 +414,13 @@ impl<S: 'static> Pane<S> {
             context_menus: Vec::new(),
             catchers: Vec::new(),
             dnd: Default::default(),
+            transitions: Default::default(),
+            watch: Default::default(),
+            pointer_in: false,
+            press_at: None,
+            focus_visible: false,
+            styled_actions: Vec::new(),
+            styled_drops: Vec::new(),
         }
     }
 }
@@ -840,6 +862,9 @@ impl<S: 'static> Pane<S> {
         let drop_now = crate::platform::frame::now().map(|_| cx.frame_time());
         self.dnd.fades.update(self.dnd.over, drop_now);
         cx.set_drop_states(self.dnd.fades.states(drop_now).into_iter().collect());
+        // Keyed elements' interaction states, from where they were on screen.
+        let states = self.interactions();
+        cx.set_interactions(states.clone());
         let mut element = (self.view)(state, &mut cx);
         // The menus Stipple draws: the menu bar above the view, and the open
         // bar menu or context menu as overlays above everything else.
@@ -874,9 +899,33 @@ impl<S: 'static> Pane<S> {
         self.built_theme = Some(theme);
         self.crossfade.advance(now);
         self.memo_cache = cx.take_memo_cache();
-        let overlays = cx.take_overlays();
+        let mut overlays = cx.take_overlays();
         self.dnd.queried = cx.take_drop_queried();
+        let queried = cx.take_interaction_queried();
         self.handlers = cx.into_handlers();
+
+        // Lower the tree: give elements their identities, apply the overrides
+        // of the states they're in, and animate what changed.
+        self.transitions.begin(now);
+        let mut resolver = crate::core::interact::Resolver {
+            states: &states,
+            transitions: &mut self.transitions,
+            watch: Default::default(),
+            styled_actions: Vec::new(),
+            styled_drops: Vec::new(),
+        };
+        resolver.resolve(&mut element, crate::core::ElementKey::root(0));
+        for (i, spec) in overlays.iter_mut().enumerate() {
+            resolver.resolve(&mut spec.content, crate::core::ElementKey::root(i + 1));
+        }
+        let mut watch = std::mem::take(&mut resolver.watch);
+        self.styled_actions = std::mem::take(&mut resolver.styled_actions);
+        self.styled_drops = std::mem::take(&mut resolver.styled_drops);
+        for (key, states) in queried {
+            watch.add(key, crate::core::Interaction::DYNAMIC, states);
+        }
+        self.watch = watch;
+        self.transitions.end();
 
         let size = self.attrs.logical_size;
         let win = Rect::from_xywh(0.0, 0.0, size.width, size.height);
@@ -1025,7 +1074,9 @@ impl<S: 'static> Pane<S> {
         paint(&tree, &mut scene, font);
         // Lighten the hovered tappable element with the theme's overlay, twice
         // over while pressed, fading between states.
-        self.highlights.update(hovered, pressed, now);
+        // (Not on elements that style their own hover and press looks.)
+        let own = |id: Option<ActionId>| id.filter(|id| !self.styled_actions.contains(id));
+        self.highlights.update(own(hovered), own(pressed), now);
         let overlay = theme.palette.hover_overlay;
         self.highlight_alphas = self
             .highlights
@@ -1039,7 +1090,10 @@ impl<S: 'static> Pane<S> {
         }
         // The drop target under an acceptable drag, unless its view draws its
         // own drag-over look from its `DropState`.
-        self.dnd.highlight = self.dnd.target.filter(|id| !self.dnd.queried.contains(id));
+        self.dnd.highlight = self
+            .dnd
+            .target
+            .filter(|id| !self.dnd.queried.contains(id) && !self.styled_drops.contains(id));
         if let Some(id) = self.dnd.highlight {
             app_dnd::paint_drop_target(&tree, id, &mut scene, &theme);
         }
@@ -1047,6 +1101,7 @@ impl<S: 'static> Pane<S> {
             || self.highlights.animating(now)
             || self.dnd.fades.animating(drop_now)
             || self.crossfade.active()
+            || self.transitions.animating()
             || self.touch.flinging();
         if self.animating {
             crate::platform::frame::request();
@@ -1195,6 +1250,34 @@ impl<S: 'static> Pane<S> {
         }
     }
 
+    /// Each identified element's interaction states in the frame on screen.
+    fn interactions(&self) -> HashMap<crate::core::ElementKey, crate::core::Interaction> {
+        let Some(tree) = self.tree.as_ref() else {
+            return HashMap::new();
+        };
+        let inputs = crate::core::interact::Inputs {
+            pointer: self.pointer_in.then_some(self.last_pointer),
+            press: self.press_at,
+            focused: self.focused,
+            focus_visible: self.focus_visible,
+            drag_source: self.dnd.source,
+            drag: self.dragging.map(|d| d.0),
+            drop_over: self.dnd.over.map(|(id, accepted, _)| (id, accepted)),
+        };
+        crate::core::interact::collect(tree, &inputs)
+    }
+
+    /// After input: if an interaction state that an element's look or the
+    /// view depends on changed, mark the window for a rebuild. Returns
+    /// whether it did.
+    fn refresh_interactions(&mut self) -> bool {
+        if self.watch.is_empty() || !self.watch.changed(&self.interactions()) {
+            return false;
+        }
+        self.dirty = true;
+        true
+    }
+
     /// Route a completed click at `pos` (logical pixels): update keyboard focus
     /// to the focusable under the cursor (if any), then dispatch the hit
     /// element's tap handler. Returns `true` if a tap handler ran or focus
@@ -1229,6 +1312,7 @@ impl<S: 'static> Pane<S> {
         let refocused = foc != self.focused;
         if refocused {
             self.focused = foc;
+            self.focus_visible = false;
             self.dirty = true;
         }
         let ran = match hit {
@@ -1435,8 +1519,9 @@ impl<S: 'static> Pane<S> {
             },
             None => order[0],
         };
-        let changed = self.focused != Some(next);
+        let changed = self.focused != Some(next) || !self.focus_visible;
         self.focused = Some(next);
+        self.focus_visible = true;
         self.dirty = true;
         changed
     }
@@ -1525,6 +1610,7 @@ impl<S: 'static> Pane<S> {
         };
         if foc != self.focused {
             self.focused = foc;
+            self.focus_visible = false;
         }
         self.text_selecting = Some(id);
         self.handlers.dispatch_text_pos(id, index, false, state);
@@ -1595,6 +1681,7 @@ impl<S: 'static> Pane<S> {
     fn hover_at(&mut self, state: &S, theme: &Theme, font: Option<&Font>, pos: Point) -> bool {
         // The wheel targets the container under the pointer.
         self.last_pointer = pos;
+        self.pointer_in = true;
         self.ensure_tree(state, theme, font);
         let now = self.tap_at(pos);
         let changed = now != self.hovered;
@@ -1853,7 +1940,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].click_at(state, theme, font.as_ref(), pos)
+        panes[idx].click_at(state, theme, font.as_ref(), pos) | panes[idx].refresh_interactions()
     }
 
     fn pane_context_at(&mut self, idx: usize, pos: Point) -> bool {
@@ -1897,7 +1984,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].focus_next(state, theme, font.as_ref())
+        panes[idx].focus_next(state, theme, font.as_ref()) | panes[idx].refresh_interactions()
     }
 
     fn pane_drag_at_point(&mut self, idx: usize, pos: Point) -> bool {
@@ -1947,7 +2034,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].hover_at(state, theme, font.as_ref(), pos)
+        panes[idx].hover_at(state, theme, font.as_ref(), pos) | panes[idx].refresh_interactions()
     }
 
     fn pane_scroll_by(&mut self, idx: usize, dy: f64) -> bool {
@@ -1964,7 +2051,15 @@ impl<S: 'static> App<S> {
     /// The left button, or the first finger, went down at `position` (outside
     /// any embedded viewport). Returns whether to repaint.
     fn pane_pointer_down(&mut self, idx: usize, position: Point) -> bool {
+        let redraw = self.pointer_down_inner(idx, position);
+        redraw | self.panes[idx].refresh_interactions()
+    }
+
+    fn pointer_down_inner(&mut self, idx: usize, position: Point) -> bool {
         self.panes[idx].input_viewport = None;
+        self.panes[idx].pointer_in = true;
+        self.panes[idx].last_pointer = position;
+        self.panes[idx].press_at = Some(position);
         self.panes[idx].pressed = self.panes[idx].tap_at(position);
         app_dbg(format_args!(
             "press at {position:?}: target {:?}",
@@ -2000,6 +2095,12 @@ impl<S: 'static> App<S> {
     /// continue a selection or drag, or update the hover. Returns whether to
     /// repaint.
     fn pane_pointer_move(&mut self, idx: usize, position: Point) -> bool {
+        self.panes[idx].pointer_in = true;
+        let redraw = self.pointer_move_inner(idx, position);
+        redraw | self.panes[idx].refresh_interactions()
+    }
+
+    fn pointer_move_inner(&mut self, idx: usize, position: Point) -> bool {
         self.panes[idx].last_pointer = position;
         if self.panes[idx].text_selecting.is_some() {
             self.pane_text_drag_at(idx, position)
@@ -2016,6 +2117,12 @@ impl<S: 'static> App<S> {
     /// selection or drag, or click what was pressed if it's still under the
     /// pointer. Returns whether to repaint.
     fn pane_pointer_up(&mut self, idx: usize, position: Point) -> bool {
+        self.panes[idx].press_at = None;
+        let redraw = self.pointer_up_inner(idx, position);
+        redraw | self.panes[idx].refresh_interactions()
+    }
+
+    fn pointer_up_inner(&mut self, idx: usize, position: Point) -> bool {
         // Drop an in-app drag first.
         if self.pane_source_release(idx, position) {
             return true;
@@ -2082,6 +2189,7 @@ impl<S: 'static> App<S> {
                 // selects.
                 pane.pressed = None;
                 pane.press_focus = None;
+                pane.press_at = None;
                 if pane.text_selecting.is_some() {
                     pane.end_text_select();
                 }
@@ -2436,6 +2544,18 @@ impl<S: 'static> App<S> {
                     }
                     if self.pane_pointer_move(idx, position) {
                         present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::PointerLeft => {
+                    // Nothing is hovered any more (unless a press holds the
+                    // pointer).
+                    let pane = &mut self.panes[idx];
+                    if !pane.pointer_latched() && pane.press_at.is_none() {
+                        pane.pointer_in = false;
+                        if pane.refresh_interactions() {
+                            present(&mut self, &mut surfaces, idx, window, false);
+                        }
                     }
                     ControlFlow::Wait
                 }
@@ -3093,12 +3213,14 @@ fn map_key_for(code: KeyCode, modifiers: Modifiers, mac: bool) -> Option<KeyInpu
 /// The common imports for building a Stipple app.
 pub mod prelude {
     pub use crate::App;
+    pub use crate::anim::SpringParams;
     pub use crate::anim::{Easing, Spring, Tween};
     pub use crate::core::ViewportId;
     pub use crate::core::{
         Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
         OverlaySpec, TimerId, Track, View,
     };
+    pub use crate::core::{AnimProp, ElementKey, Interaction, Transition};
     pub use crate::core::{DROP_FADE, DropState};
     pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};
     pub use crate::geometry::Transform;

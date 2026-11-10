@@ -33,11 +33,13 @@ mod element;
 mod handle;
 pub(crate) mod highlight;
 mod ime;
+pub(crate) mod interact;
 pub mod menu;
 mod pointer;
 mod render;
 pub mod runtime;
 pub(crate) mod touch;
+pub(crate) mod transition;
 
 pub use a11y::{AccessNode, Role, Semantics, accessibility_tree};
 pub use clipboard::{clipboard_text, set_clipboard_text};
@@ -50,6 +52,7 @@ pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverri
 pub use handle::runtime;
 pub use handle::{AppHandle, TimerId};
 pub use ime::{ime_state, paint_preedit};
+pub use interact::{ElementKey, Interaction, Reactive};
 pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
 pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};
@@ -66,6 +69,7 @@ pub use runtime::{
     find_text_pos, first_text, focus_at, hit_test, local_point, node_to_window, scroll_at,
     text_pos_at, viewport_at,
 };
+pub use transition::{AnimProp, Transition};
 
 // The font type lives in stipple::render; re-export so callers of the layout/paint
 // passes have one import path for the active font.

@@ -6,10 +6,12 @@
 //! diff one tree against the next.
 
 use crate::core::a11y::{Role, Semantics};
+use crate::core::interact::{ElementKey, Interaction, Reactive, StylePatch};
 use crate::core::runtime::{
     ActionId, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, KeyInput, ScrollId,
     TextPosId, ViewportId,
 };
+use crate::core::transition::{AnimProp, Transition};
 use crate::geometry::{Insets, Transform};
 use crate::layout::{Axis, LayoutDirection, Track};
 use crate::platform::CursorIcon;
@@ -198,6 +200,12 @@ pub struct Element {
     /// drawn together, then blended at this opacity. Set via
     /// [`Element::opacity`].
     pub opacity: f32,
+    /// Interaction-state styling and motion: the element's
+    /// [`key`](Element::key), per-state overrides
+    /// ([`hovered`](Element::hovered), [`drag_over`](Element::drag_over)…),
+    /// [`disabled`](Element::disabled) and [`transition`](Element::transition)s.
+    /// `None` for an element using none of them.
+    pub reactive: Option<Box<Reactive>>,
     pub kind: ElementKind,
 }
 
@@ -226,6 +234,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            reactive: None,
             kind: ElementKind::Leaf,
         }
     }
@@ -254,6 +263,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            reactive: None,
             kind: ElementKind::Text {
                 text: text.into(),
                 size,
@@ -294,6 +304,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            reactive: None,
             kind: ElementKind::Viewport { id },
         }
     }
@@ -324,6 +335,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            reactive: None,
             kind: ElementKind::Image {
                 source: source.into(),
                 fit: ImageFit::default(),
@@ -355,6 +367,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            reactive: None,
             kind: ElementKind::Stack {
                 axis,
                 gap: 0.0,
@@ -907,6 +920,159 @@ impl Element {
             ElementKind::Grid { align, .. } => *align = (main, cross),
             _ => {}
         }
+        self
+    }
+
+    // --- interaction states and transitions ---
+
+    /// The element's children, for a container.
+    pub(crate) fn children_mut(&mut self) -> Option<&mut Vec<Element>> {
+        match &mut self.kind {
+            ElementKind::Stack { children, .. } | ElementKind::Grid { children, .. } => {
+                Some(children)
+            }
+            _ => None,
+        }
+    }
+
+    fn reactive_mut(&mut self) -> &mut Reactive {
+        self.reactive.get_or_insert_with(Default::default)
+    }
+
+    /// Identify this element by `key` across builds (a string, a number, an
+    /// item id, or a tuple of them), for [`Cx::interaction`] to find it and
+    /// for its states and transitions to follow it when it moves in the tree.
+    /// Keys are window-wide: give each keyed element its own. An element
+    /// without one is identified by its position below its nearest keyed
+    /// ancestor, which suits elements that stay put.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// fn view(_: &(), cx: &mut Cx<()>) -> Element {
+    ///     let theme = *cx.theme();
+    ///     let hot = cx.interaction("save").hovered();
+    ///     label(&theme, if hot { "Save now" } else { "Save" }).key("save")
+    /// }
+    /// # let theme = Theme::light();
+    /// # let mut cx = Cx::new(&theme);
+    /// # let _ = view(&(), &mut cx);
+    /// ```
+    pub fn key(mut self, key: impl std::hash::Hash) -> Self {
+        self.reactive_mut().key = Some(ElementKey::new(key));
+        self
+    }
+
+    /// While the element is in every state of `states`, restyle it with
+    /// `style`, which gets the element (without its children) and returns it
+    /// restyled. What it changes among the fill, radius, border, padding,
+    /// fixed width and height, text color, cursor, opacity and transform applies; anything else
+    /// it does is ignored. Overrides apply in the order they're given, after
+    /// the element's own style, so a later one wins. With a
+    /// [`transition`](Element::transition) the change animates.
+    ///
+    /// The app rebuilds when one of these states changes for an element that
+    /// has an override for it, and only then. [`hovered`](Element::hovered),
+    /// [`drag_over`](Element::drag_over) and friends are shorthands.
+    pub fn when(mut self, states: Interaction, style: impl FnOnce(Element) -> Element) -> Self {
+        let children = self.children_mut().map(std::mem::take);
+        let probe = self.clone();
+        if let (Some(children), Some(slot)) = (children, self.children_mut()) {
+            *slot = children;
+        }
+        let patch = StylePatch::diff(&probe, &style(probe.clone()));
+        self.reactive_mut().overrides.push((states, patch));
+        self
+    }
+
+    /// Restyle while the pointer is over the element. A tappable element
+    /// styled this way doesn't get the theme's hover highlight on top.
+    /// See [`when`](Element::when).
+    pub fn hovered(self, style: impl FnOnce(Element) -> Element) -> Self {
+        self.when(Interaction::HOVERED, style)
+    }
+
+    /// Restyle while the element is pressed (and the pointer is still over
+    /// it). See [`when`](Element::when).
+    pub fn pressed(self, style: impl FnOnce(Element) -> Element) -> Self {
+        self.when(Interaction::PRESSED, style)
+    }
+
+    /// Restyle while the element, or one inside it, has keyboard focus. See
+    /// [`when`](Element::when).
+    pub fn focused(self, style: impl FnOnce(Element) -> Element) -> Self {
+        self.when(Interaction::FOCUSED, style)
+    }
+
+    /// Restyle while the element has keyboard focus that came from the
+    /// keyboard (where a focus ring belongs). See [`when`](Element::when).
+    pub fn focus_visible(self, style: impl FnOnce(Element) -> Element) -> Self {
+        self.when(Interaction::FOCUS_VISIBLE, style)
+    }
+
+    /// Restyle while the element is being dragged. See [`when`](Element::when).
+    pub fn dragged(self, style: impl FnOnce(Element) -> Element) -> Self {
+        self.when(Interaction::DRAGGED, style)
+    }
+
+    /// Restyle while a drag the element's drop target accepts is over it. The
+    /// app then leaves the drag-over look to the element. See
+    /// [`when`](Element::when) and `docs/drag-and-drop.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// fn view(_: &(), cx: &mut Cx<()>) -> Element {
+    ///     let theme = *cx.theme();
+    ///     label(&theme, "Drop files here")
+    ///         .padding(Insets::uniform(16.0))
+    ///         .fill(theme.palette.surface)
+    ///         .drag_over(|e| e.padding(Insets::uniform(24.0)).fill(theme.palette.primary))
+    ///         .drag_refused(|e| e.fill(theme.palette.danger))
+    ///         .transition(Transition::spring(SpringParams::new(300.0, 0.6)))
+    ///         .on_drop_of(cx, DragOffer::FILES, |_, _, _| {})
+    /// }
+    /// # let theme = Theme::light();
+    /// # let mut cx = Cx::new(&theme);
+    /// # let _ = view(&(), &mut cx);
+    /// ```
+    pub fn drag_over(self, style: impl FnOnce(Element) -> Element) -> Self {
+        self.when(Interaction::DRAG_OVER, style)
+    }
+
+    /// Restyle while a drag the element's drop target refuses is over it. See
+    /// [`drag_over`](Element::drag_over).
+    pub fn drag_refused(self, style: impl FnOnce(Element) -> Element) -> Self {
+        self.when(Interaction::DRAG_REFUSED, style)
+    }
+
+    /// Mark the element disabled, for overrides on
+    /// [`Interaction::DISABLED`] to style it. It changes only the look: the
+    /// element's handlers still run, so a disabled control leaves them off.
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        if disabled || self.reactive.is_some() {
+            self.reactive_mut().disabled = disabled;
+        }
+        self
+    }
+
+    /// Animate changes to the element's animatable properties ([`AnimProp`]:
+    /// fill, border, radius, padding, fixed size, text color, opacity, transform) between builds
+    /// with `transition`, instead of switching. Changes from a per-state
+    /// override, from the view's own state, or both, all animate. The element
+    /// is matched across builds by its [`key`](Element::key), or its place in
+    /// the tree; the app keeps asking for frames until it comes to rest.
+    /// See `docs/animation.md`.
+    pub fn transition(mut self, transition: Transition) -> Self {
+        self.reactive_mut().transitions.push((None, transition));
+        self
+    }
+
+    /// Animate changes to one property with `transition`, overriding
+    /// [`transition`](Element::transition) for it ([`Transition::instant`]
+    /// switches it at once).
+    pub fn transition_for(mut self, prop: AnimProp, transition: Transition) -> Self {
+        self.reactive_mut()
+            .transitions
+            .push((Some(prop), transition));
         self
     }
 }

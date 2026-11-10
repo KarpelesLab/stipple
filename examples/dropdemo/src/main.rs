@@ -1,10 +1,13 @@
 //! Drag and drop: a drop zone that takes files and text dragged from other
 //! applications, and chips you can drag onto it inside the app.
 //!
-//! The zone animates from its [`DropState`]: when a drag enters it grows on a
-//! spring and glows, tinted red when it won't take what is dragged (the zone
-//! refuses text dropped on its "files only" half), and it eases back on leave
-//! or drop. Each drop prints a line:
+//! The zones style their drag-over look with per-state overrides
+//! (`.drag_over(...)`, `.drag_refused(...)`) and let a `Transition` animate
+//! between looks: when a drag enters, a zone grows and glows, tinted red when
+//! it won't take what is dragged (the "files only" zone refuses text), and it
+//! goes back when the drag leaves or drops. The first zone moves on a spring
+//! (it overshoots a little), the second eases. Neither keeps any animation
+//! state of its own. Each drop prints a line:
 //!
 //! ```text
 //! dropdemo: drop files ["/tmp/a.txt"] at (120, 80)
@@ -16,25 +19,16 @@
 //! `dropdemo: selftest ok`, or fails after 30 s (`--timeout SECS`). CI drives
 //! it that way with an XDND source on X11 and an OLE drag on Windows.
 
-use std::cell::RefCell;
 use std::time::Instant;
 use stipple::prelude::*;
 
 struct State {
     drops: Vec<String>,
-    /// The zone's grow, on a spring, and the frame time it was last stepped.
-    grow: RefCell<(Spring, Duration)>,
 }
 
-/// One half of the drop zone: `accepts` decides what it takes, and `grow`
-/// (0 to 1, or the eased drag level when `None`) how much it has grown.
-/// Returns the zone and its drag state.
-fn zone(
-    cx: &mut Cx<State>,
-    title: &str,
-    accepts: DragOffer,
-    grow: Option<f64>,
-) -> (Element, DropState) {
+/// One drop zone: `accepts` decides what it takes, and `motion` how it moves
+/// between its resting and drag-over looks.
+fn zone(cx: &mut Cx<State>, title: &str, accepts: DragOffer, motion: Transition) -> Element {
     let theme = *cx.theme();
     let id = cx.register_drop(accepts, |s: &mut State, data, at| {
         let line = match data {
@@ -45,16 +39,8 @@ fn zone(
         println!("dropdemo: drop {line} at ({:.0}, {:.0})", at.x, at.y);
         s.drops.push(line);
     });
+    // The words follow the drag (and the pointer); the look is the overrides'.
     let drag = cx.drop_state(id);
-    let grow = grow.unwrap_or(drag.level);
-    // Glow toward the accent, or toward red when the drag is refused.
-    let glow = if drag.accepted {
-        theme.palette.primary
-    } else {
-        theme.palette.danger
-    };
-    let fill = theme.palette.surface.mix(glow, 0.25 * drag.level);
-    let border = theme.palette.border.mix(glow, drag.level);
     let hint = match (drag.over, drag.accepted) {
         (true, true) => "Release to drop".to_string(),
         (true, false) => "Can't drop that here".to_string(),
@@ -64,40 +50,44 @@ fn zone(
         .position
         .map(|p| format!("({:.0}, {:.0})", p.x, p.y))
         .unwrap_or_default();
-    let element = column(vec![label(&theme, hint), label(&theme, pos)])
+    let pad = theme.spacing.lg;
+    let p = theme.palette;
+    // Grown and glowing toward `glow`: the accent, or red when refused.
+    let hot = move |e: Element, glow: Color| {
+        e.padding(Insets::uniform(pad + 10.0))
+            .fill(p.surface.mix(glow, 0.25))
+            .border(glow, 4.0)
+            .radius(12.0)
+    };
+    column(vec![label(&theme, hint), label(&theme, pos)])
         .gap(theme.spacing.sm)
         .align(Align::Center, Align::Center)
-        .padding(Insets::uniform(theme.spacing.lg + 10.0 * grow))
-        .fill(fill)
-        .border(border, 1.0 + 3.0 * drag.level)
-        .radius(8.0 + 4.0 * grow)
+        .padding(Insets::uniform(pad))
+        .fill(p.surface)
+        .border(p.border, 1.0)
+        .radius(8.0)
+        .drag_over(move |e| hot(e, p.primary))
+        .drag_refused(move |e| hot(e, p.danger))
+        .transition(motion)
         .grow(1.0)
-        .drop_target(id);
-    (element, drag)
+        .drop_target(id)
 }
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let theme = *cx.theme();
-    // The first zone grows on a spring, stepped to this frame; it overshoots
-    // a little on enter. Its target follows whether a drag is over the zone.
-    let now = cx.frame_time();
-    let mut grow = state.grow.borrow_mut();
-    let (spring, last) = &mut *grow;
-    let dt = now.saturating_sub(*last).as_secs_f64().min(0.05);
-    *last = now;
-    spring.step(dt);
-    let (any, over) = zone(
+    // The first zone springs, with a little overshoot; the second eases.
+    let any = zone(
         cx,
         "Drop files or text here",
         DragOffer::ANY,
-        Some(spring.position),
+        Transition::spring(SpringParams::new(180.0, 0.45)),
     );
-    spring.target = if over.over { 1.0 } else { 0.0 };
-    if !spring.is_at_rest() {
-        cx.request_frame();
-    }
-    // The second grows with the eased level alone.
-    let (files, _) = zone(cx, "Files only", DragOffer::FILES, None);
+    let files = zone(
+        cx,
+        "Files only",
+        DragOffer::FILES,
+        Transition::ease(DROP_FADE),
+    );
 
     let chips: Vec<Element> = (1..=3)
         .map(|n| {
@@ -145,13 +135,7 @@ fn main() {
     let timeout = arg("--timeout")
         .and_then(|n| n.parse().ok())
         .unwrap_or(30u64);
-    let mut spring = Spring::new(0.0, 0.0);
-    spring.damping = 0.45;
-    spring.stiffness = 180.0;
-    let state = State {
-        drops: Vec::new(),
-        grow: RefCell::new((spring, Duration::ZERO)),
-    };
+    let state = State { drops: Vec::new() };
     let mut app = App::new(state, view)
         .title("Stipple drop demo")
         .logical_size(Size::new(520.0, 360.0));

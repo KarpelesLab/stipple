@@ -246,6 +246,7 @@ mod tests {
             rtl: false,
             transform: None,
             opacity: 1.0,
+            key: None,
             children,
         }
     }
@@ -280,6 +281,7 @@ mod tests {
             rtl: false,
             transform: None,
             opacity: 1.0,
+            key: None,
             children: Vec::new(),
         }
     }

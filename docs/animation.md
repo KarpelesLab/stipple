@@ -149,6 +149,124 @@ solution rather than an Euler step, so any frame interval is stable.
 [`examples/motiondemo`](../examples/motiondemo) shows a field that shakes on
 an invalid code, a pulsing drop target, a staggered list entrance and an
 interruptible spring; `motiondemo --selftest` checks them at fixed times.
+Most of the time you don't need any of this: style an element for its states
+and give it a transition, below.
+
+## Interaction states
+
+Every element can be styled for what the user is doing to it. Each state has
+an override that restyles the element while it holds:
+
+```rust
+use stipple::prelude::*;
+
+let card = column(vec![label(&theme, "Open")])
+    .padding(Insets::uniform(12.0))
+    .fill(theme.palette.surface)
+    .radius(6.0)
+    .hovered(|e| e.fill(theme.palette.surface.mix(theme.palette.primary, 0.1)))
+    .pressed(|e| e.fill(theme.palette.surface.mix(theme.palette.primary, 0.2)))
+    .focus_visible(|e| e.border(theme.palette.focus_ring, 2.0))
+    .on_tap(cx, |s: &mut State| s.open());
+```
+
+| Override | While |
+|---|---|
+| `.hovered(f)` | the pointer is over the element (or something inside it) and nothing drawn above covers it |
+| `.pressed(f)` | the primary button (or a finger) went down on it and is still down, over it |
+| `.focused(f)` | it, or an element inside it, has keyboard focus |
+| `.focus_visible(f)` | focused, and focus got there from the keyboard (Tab), not a click |
+| `.dragged(f)` | it is being dragged: an in-app drag from its `drag_source`, or an `on_drag` slider-style drag |
+| `.drag_over(f)` | a drag its drop target accepts is over it |
+| `.drag_refused(f)` | a drag its drop target refuses is over it |
+| `.when(Interaction::DISABLED, f)` | the view marked it `.disabled(true)` |
+| `.when(Interaction::SELECTED, f)` | the view marked it `.selected(true)` |
+
+`.when(states, f)` takes any set (`Interaction::HOVERED | Interaction::PRESSED`
+waits for both). The closure gets the element without its children and returns
+it restyled; what it changes among the fill, radius, border, padding, fixed
+width and height, text color, cursor, opacity and transform is applied while
+the state holds,
+on top of the element's own style, in the order the overrides were given.
+Overrides are resolved when the built tree is lowered for layout, so the
+layout, the damage tracking and transitions see ordinary styles.
+
+The app rebuilds after an event only when it changes a state some element has
+an override for: moving the pointer over an element without a `.hovered` costs
+nothing. A tappable element with its own `.hovered` or `.pressed` doesn't get
+the theme's hover highlight, and a drop target with its own `.drag_over` or
+`.drag_refused` doesn't get the app's drag-over highlight.
+
+### Reading states in the view
+
+To build from a state rather than restyle (different text, a different child),
+give the element a key and ask the `Cx`:
+
+```rust
+let states = cx.interaction("save");
+let text = if states.pressed() { "Saving…" } else { "Save" };
+button_labeled(&theme, cx, text, |s: &mut State| s.save()).key("save")
+```
+
+`Cx::interaction(key)` returns an `Interaction` (`hovered()`, `pressed()`,
+`focused()`, `focus_visible()`, `dragged()`, `drag_hover()` and
+`drag_accepted()`). The view is rebuilt whenever one of them changes for a key
+it read.
+
+### Element identity
+
+States and transitions belong to an element across builds, though the view
+builds a new tree each time. An element keyed with `.key(k)` (any `Hash`
+value: a string, an item id, a tuple) is that element wherever it is; keys are
+window-wide, so give each its own. An element without a key is identified by
+its position: the path of child indices from the root, or from its nearest
+keyed ancestor. That suits elements that stay put; key the items of a list that
+reorders, so their state follows them. `Cx::interaction` needs a key.
+
+States come from where elements were in the frame on screen, worked out again
+on each pointer, button, focus and drag event. On platforms that report the
+pointer leaving the window (the web, iOS, Android), nothing is hovered after
+it leaves; the desktop backends don't report that yet, so the last element
+stays hovered.
+
+## Transitions
+
+Give an element a `Transition` and changes to its animatable properties
+animate instead of jumping, whatever changed them: a state override, the app's
+state, or both.
+
+```rust
+label(&theme, "Drop files here")
+    .padding(Insets::uniform(16.0))
+    .fill(theme.palette.surface)
+    .drag_over(|e| e.padding(Insets::uniform(24.0)).fill(theme.palette.primary))
+    // Grows with a little overshoot.
+    .transition(Transition::spring(SpringParams::new(180.0, 0.45)))
+```
+
+- A `Transition` wraps an `anim::Motion`: `Transition::ease(duration)`
+  (ease-out), `Transition::tween(duration, easing)` or
+  `Transition::spring(SpringParams::BOUNCY)` (any `SpringParams`);
+  `Transition::default()` is a 150 ms ease-out and `Transition::instant()`
+  switches. `From<Motion>` and `From<SpringParams>` convert.
+- The animatable properties are `AnimProp::Fill`, `Border` (color and width),
+  `Radius`, `Padding`, `Width` and `Height` (between two fixed sizes; to or from
+  "sized by content" they switch), `TextColor`, `Opacity` and `Transform`
+  (part by part, as `Transform::lerp`; no transform is the identity). A fill
+  or border that appears or goes away fades in from, or out to, transparent
+  (colors blend in premultiplied sRGB, so the hue holds).
+- `.transition(t)` animates them all; `.transition_for(AnimProp::Fill, t)`
+  gives one property its own (later calls win).
+- Each property is an `Animated` value, so a change mid-flight heads for the
+  new value from wherever it is now, keeping its velocity: reversing a hover
+  is smooth. Reduced motion applies as it does to every `Animated`.
+- The first build an element appears in shows it as it is; only later changes
+  animate.
+
+The app keeps the in-flight values by element identity (above), asks for a
+frame while any of them moves and stops when all are at rest, so a UI full of
+transitions uses no CPU when nothing changes. It counts each change from one
+frame before the build that saw it, so the change already shows on that frame.
 
 ## What animates already
 
@@ -159,7 +277,8 @@ interruptible spring; `motiondemo --selftest` checks them at fixed times.
   rather than switching. A pressed element shows the hover highlight twice over.
 - A drop target's `DropState::level` eases in over 180 ms when a drag enters
   it and out when it leaves or drops, for a view to animate its drop zone
-  with; see [drag-and-drop.md](drag-and-drop.md).
+  with by hand; `.drag_over` with a transition usually does it for you. See
+  [drag-and-drop.md](drag-and-drop.md).
 - A theme change cross-fades the window from the old frame to the new one over
   200 ms (`stipple::core::THEME_FADE`): the OS switching to dark mode under
   `Theme::native()`, or the app switching themes through `App::theme_with`.
@@ -226,6 +345,8 @@ What the toolkit does under reduced motion:
   `Tween` or `Spring` you sample yourself doesn't know about it; use
   `motion_duration` as above.
 - Hover and press highlights and drop targets' `DropState::level` switch at once.
+- Element transitions (`Element::transition`) run on `Animated`, so they
+  shorten or jump the same way.
 - Theme changes switch without a cross-fade.
 - A touch scroll stops where the finger lifts, without a fling.
 - The spinner keeps turning, since it's what shows that something is happening,

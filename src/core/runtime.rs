@@ -341,6 +341,10 @@ pub struct Cx<'a, S> {
     /// app), and the targets whose view read theirs.
     drop_states: HashMap<DropId, crate::core::dnd::DropState>,
     drop_queried: Vec<DropId>,
+    /// Keyed elements' interaction states as of this build (seeded by the
+    /// app), and the keys the view read.
+    interactions: HashMap<crate::core::ElementKey, crate::core::Interaction>,
+    interaction_queried: Vec<crate::core::ElementKey>,
     /// Next scroll-container id to hand out (scroll offsets live in the app, not
     /// here, so we only need a stable per-frame counter).
     next_scroll: u32,
@@ -391,6 +395,8 @@ impl<'a, S> Cx<'a, S> {
             drag_sources: Vec::new(),
             drop_states: HashMap::new(),
             drop_queried: Vec::new(),
+            interactions: HashMap::new(),
+            interaction_queried: Vec::new(),
             next_scroll: 0,
             overlays: Vec::new(),
             context_menus: Vec::new(),
@@ -567,6 +573,54 @@ impl<'a, S> Cx<'a, S> {
     /// [`into_handlers`](Cx::into_handlers).
     pub fn take_drop_queried(&mut self) -> Vec<DropId> {
         std::mem::take(&mut self.drop_queried)
+    }
+
+    /// The interaction states of the element keyed `key` (see
+    /// [`Element::key`](crate::core::Element::key)) as of this frame: whether
+    /// it is hovered, pressed, focused (and focus-visible), dragged, or
+    /// dragged over (accepted or refused). They come from where the element
+    /// was in the frame on screen, so build it with the same key each time.
+    /// The app rebuilds when any of them changes for an element whose states
+    /// the view read. `DISABLED` and `SELECTED` are the view's own to set and
+    /// aren't reported here. See `docs/animation.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// fn view(_: &(), cx: &mut Cx<()>) -> Element {
+    ///     let theme = *cx.theme();
+    ///     let states = cx.interaction("card");
+    ///     let text = if states.pressed() { "Let go to open" } else { "Open" };
+    ///     label(&theme, text).key("card").on_tap(cx, |_| {})
+    /// }
+    /// # let theme = Theme::light();
+    /// # let mut cx = Cx::new(&theme);
+    /// # let _ = view(&(), &mut cx);
+    /// ```
+    pub fn interaction(&mut self, key: impl std::hash::Hash) -> crate::core::Interaction {
+        let key = crate::core::ElementKey::new(key);
+        if !self.interaction_queried.contains(&key) {
+            self.interaction_queried.push(key);
+        }
+        self.interactions.get(&key).copied().unwrap_or_default()
+    }
+
+    /// Seed this frame's interaction states (the app does this before each
+    /// build).
+    pub(crate) fn set_interactions(
+        &mut self,
+        states: HashMap<crate::core::ElementKey, crate::core::Interaction>,
+    ) {
+        self.interactions = states;
+    }
+
+    /// The keys whose states the view read this build, with those states.
+    pub(crate) fn take_interaction_queried(
+        &mut self,
+    ) -> Vec<(crate::core::ElementKey, crate::core::Interaction)> {
+        let keys = std::mem::take(&mut self.interaction_queried);
+        keys.into_iter()
+            .map(|k| (k, self.interactions.get(&k).copied().unwrap_or_default()))
+            .collect()
     }
 
     /// Register a drag source, returning its [`DragSourceId`]. `handler` runs
@@ -1011,6 +1065,10 @@ pub struct LayoutNode {
     ///
     /// [`Element::opacity`]: crate::core::Element::opacity
     pub opacity: f32,
+    /// The element's identity, if it uses interaction states or transitions
+    /// (see [`Element::key`](crate::core::Element::key)): what the app finds
+    /// it by to work out its [`Interaction`](crate::core::Interaction).
+    pub key: Option<crate::core::ElementKey>,
     pub children: Vec<LayoutNode>,
 }
 
@@ -1041,6 +1099,7 @@ impl LayoutNode {
             rtl: false,
             transform: None,
             opacity: 1.0,
+            key: None,
             children,
         }
     }
@@ -1514,6 +1573,7 @@ mod tests {
             rtl: false,
             transform: None,
             opacity: 1.0,
+            key: None,
             children: Vec::new(),
         }
     }
@@ -1608,6 +1668,7 @@ mod tests {
             rtl: false,
             transform: None,
             opacity: 1.0,
+            key: None,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),
