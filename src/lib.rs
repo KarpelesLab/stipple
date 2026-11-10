@@ -75,8 +75,12 @@ use std::collections::HashMap;
 pub struct App<S> {
     // Global application state, shared by every window's view.
     state: S,
-    // Shared presentation settings used by all windows.
+    // Shared presentation settings used by all windows. `theme` is the one
+    // views see: `base_theme` (set with `App::theme`, and refreshed from the
+    // system while it follows it), passed through `theme_fn` if there is one.
     theme: Theme,
+    base_theme: Theme,
+    theme_fn: Option<ThemeFn<S>>,
     font: Option<Font>,
     // One [`Pane`] per OS window. There is always at least one (the primary,
     // index 0); additional windows are added via [`App::open_window`].
@@ -110,6 +114,10 @@ pub struct App<S> {
     tray: Option<TrayFn<S>>,
     native_tray: Option<crate::platform::NativeTray>,
 }
+
+/// The active theme as a function of the app state and the theme set with
+/// [`App::theme`] (see [`App::theme_with`]).
+pub type ThemeFn<S> = std::rc::Rc<dyn Fn(&S, &Theme) -> Theme>;
 
 /// A tray icon declared as a function of the app state (see [`App::tray`]).
 pub type TrayFn<S> = std::rc::Rc<dyn Fn(&S) -> crate::core::Tray<S>>;
@@ -286,6 +294,10 @@ struct Pane<S> {
     painted_highlights: Vec<(ActionId, u8)>,
     // Whether the frame just built asked for another (something animates).
     animating: bool,
+    // The theme the last frame was built with, and the cross-fade from the
+    // frame on screen when it changes.
+    built_theme: Option<Theme>,
+    crossfade: crate::core::crossfade::CrossFade,
     painted_focused: Option<FocusId>,
     // Cross-frame memo cache for `Cx::memo` (static subtree reuse).
     memo_cache: std::collections::HashMap<u64, Element>,
@@ -367,6 +379,8 @@ impl<S: 'static> Pane<S> {
             highlight_alphas: Vec::new(),
             painted_highlights: Vec::new(),
             animating: false,
+            built_theme: None,
+            crossfade: Default::default(),
             painted_focused: None,
             ime_sent: None,
             preedit_owner: None,
@@ -396,6 +410,8 @@ impl<S: 'static> App<S> {
         Self {
             state,
             theme: Theme::light(),
+            base_theme: Theme::light(),
+            theme_fn: None,
             font: None,
             panes: vec![Pane::new(Box::new(build), handle.clone())],
             viewport_content: HashMap::new(),
@@ -570,10 +586,55 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Set the active theme.
+    /// Set the active theme. Changing themes while the app runs (the system's
+    /// look with [`Theme::native`], or [`theme_with`](Self::theme_with))
+    /// cross-fades the window over [`THEME_FADE`](crate::core::THEME_FADE).
     pub fn theme(mut self, theme: Theme) -> Self {
-        self.theme = theme;
+        self.base_theme = theme;
+        self.refresh_theme();
         self
+    }
+
+    /// Derive the active theme from the state, for an app that switches
+    /// themes itself (a dark-mode toggle, say). `theme` gets the state and the
+    /// theme set with [`theme`](Self::theme) (kept up to date with the system
+    /// when that's [`Theme::native`]), and runs before every build; when the
+    /// theme it returns changes, the window cross-fades to it.
+    ///
+    /// ```no_run
+    /// use stipple::prelude::*;
+    ///
+    /// struct State {
+    ///     dark: Option<bool>, // None: follow the system
+    /// }
+    ///
+    /// fn view(state: &State, cx: &mut Cx<State>) -> Element {
+    ///     let theme = *cx.theme();
+    ///     button_labeled(&theme, "Toggle dark mode")
+    ///         .on_tap(cx, |s: &mut State| s.dark = Some(!s.dark.unwrap_or(false)))
+    /// }
+    ///
+    /// App::new(State { dark: None }, view)
+    ///     .theme(Theme::native())
+    ///     .theme_with(|state: &State, system: &Theme| match state.dark {
+    ///         Some(true) => Theme::dark(),
+    ///         Some(false) => Theme::light(),
+    ///         None => *system,
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn theme_with(mut self, theme: impl Fn(&S, &Theme) -> Theme + 'static) -> Self {
+        self.theme_fn = Some(std::rc::Rc::new(theme));
+        self.refresh_theme();
+        self
+    }
+
+    /// Recompute the theme views see from the base theme and the state.
+    fn refresh_theme(&mut self) {
+        self.theme = match &self.theme_fn {
+            Some(f) => f(&self.state, &self.base_theme),
+            None => self.base_theme,
+        };
     }
 
     /// Override the DPI scale used for off-screen rendering (default 1×).
@@ -802,6 +863,16 @@ impl<S: 'static> Pane<S> {
         // The animation timeline, or `None` where there's no clock.
         let now = crate::platform::frame::now().map(|_| cx.frame_time());
         let frame_requested = cx.frame_requested();
+        // A new theme cross-fades from the frame on screen (which the next
+        // present replaces whole).
+        if self.built_theme.is_some_and(|built| built != theme)
+            && let Some(shown) = self.last_pixmap.take()
+        {
+            let length = crate::anim::motion_duration(crate::core::THEME_FADE);
+            self.crossfade.start(shown, now, length);
+        }
+        self.built_theme = Some(theme);
+        self.crossfade.advance(now);
         self.memo_cache = cx.take_memo_cache();
         let overlays = cx.take_overlays();
         self.dnd.queried = cx.take_drop_queried();
@@ -975,6 +1046,7 @@ impl<S: 'static> Pane<S> {
         self.animating = frame_requested
             || self.highlights.animating(now)
             || self.dnd.fades.animating(drop_now)
+            || self.crossfade.active()
             || self.touch.flinging();
         if self.animating {
             crate::platform::frame::request();
@@ -1099,8 +1171,14 @@ impl<S: 'static> Pane<S> {
         let scale = self.scale;
         let mut pixmap = self.rasterize(scene, theme, scale);
         self.composite_viewports(&mut pixmap, content, scale);
-        let damage = self.take_damage();
-        (pixmap, damage)
+        let mut damage = self.take_damage();
+        // Mid-fade, the frame is the blend, and all of it changes.
+        if self.crossfade.needs_full() {
+            damage = Damage::Full;
+        }
+        let shown = self.crossfade.compose(&pixmap);
+        self.last_pixmap = Some(pixmap.clone());
+        (shown.unwrap_or(pixmap), damage)
     }
 
     /// Build the [accessibility tree](crate::core::accessibility_tree) for the
@@ -1638,6 +1716,7 @@ impl<S: 'static> App<S> {
     /// relative to the previously returned frame. The first call reports
     /// [`Damage::Full`].
     pub fn render_frame(&mut self) -> (Pixmap, Damage) {
+        self.refresh_theme();
         let App {
             state,
             theme,
@@ -2105,10 +2184,11 @@ impl<S: 'static> App<S> {
             }
         }
 
-        // A native theme follows the system's look while the app runs.
-        if self.theme.follows_system {
-            crate::platform::native::watch();
-        }
+        // A native theme follows the system's look while the app runs, and
+        // every app follows the system's animation setting (reduced motion).
+        crate::anim::set_system_motion_scale(crate::platform::native::motion_scale());
+        crate::platform::native::watch();
+        self.refresh_theme();
         // Title bars match the content under every theme.
         let dark = self.theme.is_dark();
         let background = self.theme.palette.background;
@@ -2135,6 +2215,18 @@ impl<S: 'static> App<S> {
                        window: &dyn crate::platform::Window,
                        force: bool| {
             app_dbg(format_args!("present: start"));
+            // The theme may follow the state (`App::theme_with`); the title
+            // bar follows a switch between light and dark.
+            let was_dark = app.theme.is_dark();
+            app.refresh_theme();
+            let dark = app.theme.is_dark();
+            if dark != was_dark {
+                for pane in &mut app.panes {
+                    pane.attrs.dark = Some(dark);
+                    pane.attrs.background = Some(app.theme.palette.background);
+                }
+                window.set_dark(dark);
+            }
             if idx == 0 {
                 app.sync_menu_bar(window);
                 app.sync_tray(window);
@@ -2170,10 +2262,13 @@ impl<S: 'static> App<S> {
             }
 
             let damage = pane.take_damage();
+            // A theme cross-fade presents the whole window each frame, but
+            // only re-rasterizes what changed underneath.
+            let fading = pane.crossfade.needs_full();
 
             // Nothing changed since the last present: render nothing, upload
             // nothing. (Skips the whole rasterize, not just the upload.)
-            if !force && damage.is_empty() {
+            if !force && damage.is_empty() && !fading {
                 app_dbg(format_args!("present: no damage"));
                 return;
             }
@@ -2188,15 +2283,20 @@ impl<S: 'static> App<S> {
             // retained pixmap and upload those. Requires the software path, a
             // localizable (non-forced, region) damage, and a retained pixmap
             // matching the current surface size.
+            // Mid-fade, an unchanged view needs no rasterizing at all.
             let can_partial = !force
                 && pane.frame_renderer.is_none()
                 && !pane.has_viewports()
-                && matches!(damage, Damage::Regions(_))
+                && (matches!(damage, Damage::Regions(_)) || (fading && damage.is_empty()))
                 && pane.last_pixmap.as_ref().map(Pixmap::size) == Some(phys_size);
 
             if can_partial {
-                let regions = damage.to_physical(scale, bounds);
-                if regions.is_empty() {
+                let regions = if damage.is_empty() {
+                    Vec::new()
+                } else {
+                    damage.to_physical(scale, bounds)
+                };
+                if regions.is_empty() && !fading {
                     return; // damage fell entirely outside the surface
                 }
                 let s = scale.get();
@@ -2220,18 +2320,26 @@ impl<S: 'static> App<S> {
                         renderer.render_region(scene.clone(), view, PhysicalSize::new(pw, ph));
                     pixmap.blit(&sub, r.min_x() as u32, r.min_y() as u32);
                 }
-                surface.present(pixmap, &regions);
+                match pane.crossfade.compose(pixmap) {
+                    // The blend changes everywhere: present all of it.
+                    Some(blend) => surface.present(&blend, &[]),
+                    None if fading => surface.present(pixmap, &[]),
+                    None => surface.present(pixmap, &regions),
+                }
             } else {
                 // Full render: forced (expose/resize), GPU path, first frame, a
                 // size change, or unlocalizable (`Damage::Full`) damage.
                 let mut pixmap = pane.rasterize(scene, theme, scale);
                 pane.composite_viewports(&mut pixmap, viewport_content, scale);
-                let regions = if force {
+                let regions = if force || fading {
                     Vec::new()
                 } else {
                     damage.to_physical(scale, bounds)
                 };
-                surface.present(&pixmap, &regions);
+                // Mid-fade, show the blend; keep the frame itself, which the
+                // fade and later partial repaints build on.
+                let shown = pane.crossfade.compose(&pixmap);
+                surface.present(shown.as_ref().unwrap_or(&pixmap), &regions);
                 pane.last_pixmap = Some(pixmap);
             }
         };
@@ -2525,9 +2633,11 @@ impl<S: 'static> App<S> {
                     // in the old one, follow it if the theme is native, and
                     // repaint.
                     crate::platform::native::clear_cache();
-                    if self.theme.follows_system {
-                        self.theme =
-                            Theme::native().with_layout_direction(self.theme.layout_direction);
+                    crate::anim::set_system_motion_scale(crate::platform::native::motion_scale());
+                    if self.base_theme.follows_system {
+                        self.base_theme =
+                            Theme::native().with_layout_direction(self.base_theme.layout_direction);
+                        self.refresh_theme();
                         let dark = self.theme.is_dark();
                         for pane in &mut self.panes {
                             pane.attrs.dark = Some(dark);
@@ -3232,6 +3342,64 @@ mod tests {
         assert!(still.hover_at(Point::new(100.0, 20.0)));
         let _ = still.render_frame();
         assert!(still.animating(), "the hover highlight fades in");
+    }
+
+    /// A tap area that toggles dark mode, through `App::theme_with`.
+    fn theme_toggle_app() -> App<bool> {
+        App::new(false, |_: &bool, cx: &mut Cx<bool>| {
+            Element::boxed(crate::core::BoxStyle {
+                fill: None,
+                radius: 0.0,
+                border: None,
+            })
+            .width(200.0)
+            .height(40.0)
+            .on_tap(cx, |dark: &mut bool| *dark = !*dark)
+        })
+        .theme_with(|dark: &bool, base: &Theme| if *dark { Theme::dark() } else { *base })
+        .logical_size(Size::new(200.0, 80.0))
+    }
+
+    #[test]
+    fn a_theme_change_cross_fades_from_the_old_frame() {
+        let mut app = theme_toggle_app();
+        let light = Theme::light().palette.background;
+        let dark = Theme::dark().palette.background;
+        let (before, _) = app.render_frame();
+        assert_eq!(
+            before.pixel(150, 70),
+            Some([light.r, light.g, light.b, 255])
+        );
+        assert!(app.click_at(Point::new(100.0, 20.0)));
+        let (mid, damage) = app.render_frame();
+        assert_eq!(damage, Damage::Full, "a fade repaints everything");
+        assert!(app.animating(), "the fade asks for frames");
+        let px = mid.pixel(150, 70).unwrap();
+        for (c, (from, to)) in [(light.r, dark.r), (light.g, dark.g), (light.b, dark.b)]
+            .into_iter()
+            .enumerate()
+        {
+            assert!(px[c] < from && px[c] > to, "between the themes: {px:?}");
+        }
+        // Once the fade is through, the new theme shows and frames stop.
+        std::thread::sleep(crate::core::THEME_FADE + std::time::Duration::from_millis(20));
+        let (after, _) = app.render_frame();
+        assert_eq!(after.pixel(150, 70), Some([dark.r, dark.g, dark.b, 255]));
+        let _ = app.render_frame();
+        assert!(!app.animating());
+    }
+
+    #[test]
+    fn under_reduced_motion_a_theme_change_snaps() {
+        crate::anim::set_reduced_motion(Some(true));
+        let mut app = theme_toggle_app();
+        let dark = Theme::dark().palette.background;
+        let _ = app.render_frame();
+        assert!(app.click_at(Point::new(100.0, 20.0)));
+        let (frame, _) = app.render_frame();
+        assert_eq!(frame.pixel(150, 70), Some([dark.r, dark.g, dark.b, 255]));
+        assert!(!app.animating(), "no fade, no frames");
+        crate::anim::set_reduced_motion(None);
     }
 
     #[test]

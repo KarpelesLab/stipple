@@ -30,6 +30,49 @@ pub fn system_look() -> SystemLook {
     }
     look
 }
+/// The desktop's animation setting, as a duration scale: GNOME's
+/// `enable-animations` (0 when off) or KDE's `AnimationDurationFactor`, both
+/// read through the portal; without a portal, GTK's own `settings.ini`.
+pub fn motion_scale() -> f64 {
+    if let Ok(mut bus) = DBus::connect_session() {
+        if let Some(on) =
+            bus.portal_setting_bool("org.gnome.desktop.interface", "enable-animations")
+        {
+            return if on { 1.0 } else { 0.0 };
+        }
+        if let Some(factor) =
+            bus.portal_setting_f64("org.kde.kdeglobals.KDE", "AnimationDurationFactor")
+        {
+            return factor;
+        }
+    }
+    gtk_settings_animations().map_or(1.0, |on| if on { 1.0 } else { 0.0 })
+}
+
+/// `gtk-enable-animations` from the user's GTK 4 or GTK 3 `settings.ini`.
+fn gtk_settings_animations() -> Option<bool> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".config")))?;
+    ["gtk-4.0", "gtk-3.0"].iter().find_map(|dir| {
+        let text = std::fs::read_to_string(config.join(dir).join("settings.ini")).ok()?;
+        parse_gtk_enable_animations(&text)
+    })
+}
+
+/// The `gtk-enable-animations` key of a GTK `settings.ini`.
+fn parse_gtk_enable_animations(text: &str) -> Option<bool> {
+    text.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "gtk-enable-animations").then_some(())?;
+        match value.trim().to_ascii_lowercase().as_str() {
+            "0" | "false" | "no" => Some(false),
+            "1" | "true" | "yes" => Some(true),
+            _ => None,
+        }
+    })
+}
+
 /// Listen for the portal's `SettingChanged` on a thread of its own, with its own
 /// bus connection, and flag appearance changes for the event loop.
 pub fn watch() {
@@ -42,9 +85,13 @@ pub fn watch() {
                     return;
                 };
                 let _ = bus.watch_portal_settings(|namespace, key| {
-                    if namespace == "org.freedesktop.appearance"
-                        && matches!(key, "color-scheme" | "accent-color")
-                    {
+                    let look = namespace == "org.freedesktop.appearance"
+                        && matches!(key, "color-scheme" | "accent-color");
+                    let motion = (namespace, key)
+                        == ("org.gnome.desktop.interface", "enable-animations")
+                        || (namespace, key)
+                            == ("org.kde.kdeglobals.KDE", "AnimationDurationFactor");
+                    if look || motion {
                         super::note_changed();
                     }
                 });
@@ -64,4 +111,19 @@ pub fn draws_focus(_control: NativeControl) -> bool {
 }
 pub fn render(_deco: NativeDeco, _size: PhysicalSize, _scale: f64) -> Option<Pixmap> {
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_gtk_enable_animations as parse;
+
+    #[test]
+    fn reads_gtk_enable_animations() {
+        assert_eq!(
+            parse("[Settings]\ngtk-enable-animations = 0\n"),
+            Some(false)
+        );
+        assert_eq!(parse("[Settings]\ngtk-enable-animations=true"), Some(true));
+        assert_eq!(parse("[Settings]\ngtk-theme-name=Adwaita"), None);
+    }
 }

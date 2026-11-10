@@ -31,6 +31,8 @@ How to build, package and run on each platform, and what works there today.
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ✅ ²⁰ | ✅ ²¹ |
 | Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ✅ ²⁰ | ✅ ²¹ |
+| Theme changes cross-fade | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³¹ |
+| Reduced motion (OS setting) | ✅ ³² | ✅ ³² | ✅ ³² | ✅ ³ | ✅ ³² | ✅ ³¹ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
 | Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ARIA ²² |
@@ -146,6 +148,17 @@ Wayland is unit-tested against a scripted compositor only. See
 [drag-and-drop.md](drag-and-drop.md).
 ²⁹ Shared code, so the same everywhere; unit-tested, and CI drags a chip in
 `dropdemo` with `xdotool` on X11.
+³⁰ Shared code (the App blends the presented frames), unit-tested at fixed
+frame times; on the desktops and mobile it's only seen when the system's
+appearance or the app's `App::theme_with` theme changes, which CI doesn't do.
+³¹ CI's headless Chrome runs `webdemo`'s selftest with and without
+`--force-prefers-reduced-motion`, and checks that the app sees the setting and
+that a theme change cross-fades (animation frames) or snaps (none).
+³² Read from the OS (see [animation.md](animation.md#reduced-motion)), but CI
+can't switch the setting, so only the shared part (highlights, drop fades,
+flings and theme fades snapping) is unit-tested; the reading itself is
+build-checked. Linux needs a desktop portal (GNOME or KDE) or GTK's
+`settings.ini`.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -159,7 +172,8 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
 - [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, and in-app drags
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
-- [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
+- [Animation](animation.md): the display-driven frame clock, the spinner and hover fades,
+  theme cross-fades and reduced motion
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts

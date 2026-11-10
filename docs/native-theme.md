@@ -65,7 +65,8 @@ with the same colors as on Linux.
 
 When the user switches dark mode or the accent color, an `App` running
 `Theme::native()` rebuilds it, drops the OS-drawn bitmaps it cached, switches the
-title bar, and repaints. The backends hear about it from:
+title bar, and cross-fades to the new look (see
+[animation.md](animation.md#theme-changes)). The backends hear about it from:
 
 | Platform | Source |
 |---|---|
@@ -74,7 +75,7 @@ title bar, and repaints. The backends hear about it from:
 | Linux | the desktop portal's `SettingChanged` signal for `color-scheme` and `accent-color`, heard on a thread of its own |
 | Web | the `change` event of `matchMedia("(prefers-color-scheme: dark)")` |
 
-iOS doesn't report changes yet. The platform layer delivers
+iOS doesn't report appearance changes yet (only the reduced-motion setting). The platform layer delivers
 `Event::ThemeChanged` either way. A theme you customized after building it with
 `Theme::native()` is replaced on a change; set `theme.follows_system = false` to
 keep it.

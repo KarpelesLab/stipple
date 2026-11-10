@@ -420,6 +420,15 @@ impl<'a, S> Cx<'a, S> {
         self.frame.requested = true;
     }
 
+    /// Whether motion is reduced: the OS asks for it, or the app said so with
+    /// [`anim::set_reduced_motion`](crate::anim::set_reduced_motion). Snap or
+    /// cross-fade instead of moving things; durations scaled with
+    /// [`anim::motion_duration`](crate::anim::motion_duration) are already
+    /// zero.
+    pub fn reduced_motion(&self) -> bool {
+        crate::anim::reduced_motion()
+    }
+
     /// Whether this build called [`request_frame`](Self::request_frame).
     pub fn frame_requested(&self) -> bool {
         self.frame.requested

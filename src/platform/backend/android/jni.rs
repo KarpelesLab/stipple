@@ -1,7 +1,8 @@
 //! Just enough hand-written JNI to reach the few Java APIs the NDK doesn't
 //! cover: the clipboard (`ClipboardManager`), the character a key types
-//! (`KeyCharacterMap`), the system accent color (`Resources.getColor`) and
-//! opening URLs (`Intent.ACTION_VIEW`).
+//! (`KeyCharacterMap`), the system accent color (`Resources.getColor`), the
+//! animator duration scale (`Settings.Global`) and opening URLs
+//! (`Intent.ACTION_VIEW`).
 //!
 //! `JavaVM` and `JNIEnv` are pointers to function tables whose layout is fixed
 //! by the JNI specification, so each function is read from its index in the
@@ -22,6 +23,7 @@ type Env = *mut c_void;
 #[derive(Clone, Copy)]
 union JValue {
     i: i32,
+    f: f32,
     l: JObject,
 }
 
@@ -49,6 +51,7 @@ const GET_FIELD_ID: usize = 94;
 const GET_INT_FIELD: usize = 100;
 const GET_STATIC_METHOD_ID: usize = 113;
 const CALL_STATIC_OBJECT_METHOD_A: usize = 116;
+const CALL_STATIC_FLOAT_METHOD_A: usize = 137;
 const NEW_STRING_UTF: usize = 167;
 const GET_STRING_UTF_CHARS: usize = 169;
 const RELEASE_STRING_UTF_CHARS: usize = 170;
@@ -292,6 +295,23 @@ impl Jni {
         }
     }
 
+    fn call_static_float(
+        &self,
+        class: &CStr,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<f32> {
+        let class = self.find_class(class)?;
+        let m = self.static_method(class, name, sig)?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> f32 =
+                std::mem::transmute(self.f(CALL_STATIC_FLOAT_METHOD_A));
+            let r = f(self.0, class, m, args.as_ptr());
+            (!self.clear()).then_some(r)
+        }
+    }
+
     /// A Java string from `s`. JNI's "modified UTF-8" differs from UTF-8 only
     /// for NUL and characters beyond the BMP; NULs end the string here.
     fn string(&self, s: &str) -> Option<JObject> {
@@ -438,6 +458,33 @@ pub(super) unsafe fn configuration(vm: *mut c_void, context: JObject) -> Option<
             let dpi = jni.int_field(config, c"densityDpi")?;
             let ui_mode = jni.int_field(config, c"uiMode")?;
             Some((dpi, ui_mode & NIGHT_MASK == NIGHT_YES))
+        })
+    }
+}
+
+/// The system's animator duration scale, `Settings.Global.ANIMATOR_DURATION_SCALE`
+/// (developer options, and *Remove animations* in the accessibility settings,
+/// which sets it to 0). 1 when unset.
+pub(super) unsafe fn animator_duration_scale(vm: *mut c_void, context: JObject) -> Option<f32> {
+    unsafe {
+        with_env(vm, |jni| {
+            let resolver = jni.call_object(
+                context,
+                c"getContentResolver",
+                c"()Landroid/content/ContentResolver;",
+                &[],
+            )?;
+            let name = jni.string("animator_duration_scale")?;
+            jni.call_static_float(
+                c"android/provider/Settings$Global",
+                c"getFloat",
+                c"(Landroid/content/ContentResolver;Ljava/lang/String;F)F",
+                &[
+                    JValue { l: resolver },
+                    JValue { l: name },
+                    JValue { f: 1.0 },
+                ],
+            )
         })
     }
 }

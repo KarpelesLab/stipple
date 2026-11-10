@@ -824,7 +824,7 @@ nothing to drive them and background work couldn't update the UI.
 - ✅ Frames on Android, from `AChoreographer` (resolved at run time, as it's
   newer than API 21). CI's emulator run shows `androiddemo`'s spinner building
   frames between timer ticks; the rate isn't checked.
-- ⬜ Theme changes that cross-fade.
+- ✅ Theme changes that cross-fade, over 200 ms (see Phase 8).
 - ⬜ macOS CI animates at only ~15 fps (10–12 frames during asyncdemo's 600 ms
   load, against ~36 on X11 and ~18 on Wayland): find out whether
   `CVDisplayLink` is ticking or the 30 Hz fallback timer is, and what each
@@ -1214,10 +1214,35 @@ styling part of the toolkit.
 - ⬜ Finer-grained reactivity: derived/memoized values and subtrees that rebuild
   only when their inputs change, so large animated UIs stay cheap; damage
   limited to what actually moved.
-- ⬜ Theme changes that cross-fade (also listed under 7a).
-- ⬜ Respect the OS reduced-motion setting (Windows, macOS, GNOME/portal,
-  iOS, Android, `prefers-reduced-motion` on the web): transitions shorten to
-  cross-fades or snap.
+- ✅ Theme changes that cross-fade (also listed under 7a): when the theme views
+  see changes (the system's look under `Theme::native()`, or the new
+  `App::theme_with` deriving it from the state), the App blends the new frame
+  over the one that was on screen for 200 ms (`core::THEME_FADE`), asking for
+  frames only meanwhile and re-blending without rasterizing when the view is
+  unchanged. It works on finished pixels, so a GPU renderer set with
+  `App::render_with` fades too. Unit-tested at fixed frame times (the blend,
+  restarts, resizes) and through `App::render_frame`; `webdemo`'s selftest
+  checks in headless Chrome that a scheme change animates. Seen nowhere else
+  in CI, which can't switch the system's look.
+- ✅ Respect the OS reduced-motion setting: Windows (`SPI_GETCLIENTAREAANIMATION`,
+  followed through `WM_SETTINGCHANGE`), macOS (`NSWorkspace`'s
+  `accessibilityDisplayShouldReduceMotion` and its change notification), iOS
+  (`UIAccessibilityIsReduceMotionEnabled` and its notification), Android
+  (`animator_duration_scale` over JNI, read again on resume), Linux (GNOME's
+  `enable-animations` or KDE's `AnimationDurationFactor` through the desktop
+  portal, followed through `SettingChanged`; GTK's `settings.ini` without a
+  portal) and the web (`prefers-reduced-motion` and its `change` event).
+  `anim::motion_scale()` / `anim::motion_duration()` scale durations (0 when
+  reduced, Android's own scale otherwise), `anim::reduced_motion()` and
+  `Cx::reduced_motion()` ask, and `anim::set_reduced_motion` overrides it for
+  apps and tests. `Animated`/`Motion` honor it centrally (tweens scale,
+  springs, flings and played effects snap). Under it, highlight and drop fades
+  and theme changes snap,
+  touch scrolling doesn't fling, and the spinner turns at half speed. CI checks
+  the web in headless Chrome with `--force-prefers-reduced-motion` (the app sees
+  it and a theme change snaps); the shared behavior is unit-tested; the
+  desktop and mobile readers are only build-checked, as CI can't switch the
+  setting.
 - ⬜ Built-in widgets use all of this: drop areas, buttons, switches,
   checkboxes, tabs, menus, toasts, dialogs and disclosure triangles animate by
   default under every theme (and natively-matched curves under

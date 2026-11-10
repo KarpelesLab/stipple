@@ -254,6 +254,17 @@ impl<T: Animatable> Animated<T> {
         self.gesture = None;
         self.target = target;
         self.start = secs(now);
+        // Reduced motion (see `motion_scale`): tweens scale (to nothing when
+        // reduced), and springs jump.
+        let scale = super::motion_scale();
+        let motion = match motion {
+            Motion::Tween { duration, easing } => Motion::Tween {
+                duration: duration * scale,
+                easing,
+            },
+            Motion::Spring(_) if scale == 0.0 => Motion::Instant,
+            other => other,
+        };
         self.anim = match motion {
             Motion::Instant => Arc::new(Still(target)),
             Motion::Spring(p) => Arc::new(Spring::with_velocity(value, velocity, target, p)),
@@ -277,12 +288,17 @@ impl<T: Animatable> Animated<T> {
     /// Play `anim` from `now` (its local time 0 is `now`), replacing whatever
     /// was running — a [`shake`](super::shake), a [`pulse`](super::pulse),
     /// keyframes. It starts from its own first value; the target becomes its
-    /// end value (its start value if it never ends).
+    /// end value (its start value if it never ends). Under
+    /// [reduced motion](super::reduced_motion) it jumps straight there.
     pub fn play(&mut self, anim: impl Animation<Value = T> + Send + Sync + 'static, now: Duration) {
         self.gesture = None;
         self.target = anim.sample(anim.duration().unwrap_or(0.0));
         self.start = secs(now);
-        self.anim = Arc::new(anim);
+        self.anim = if super::reduced_motion() {
+            Arc::new(Still(self.target))
+        } else {
+            Arc::new(anim)
+        };
     }
 
     /// Let a gesture set the value directly (a drag, a touch scroll): the
@@ -349,8 +365,15 @@ impl<T: Animatable> Animated<T> {
 
     /// End a gesture (or interrupt the animation) with a friction glide that
     /// keeps the current velocity and decays at `rate` per second (see
-    /// [`Decay::NORMAL`]). Returns where it will come to rest.
+    /// [`Decay::NORMAL`]). Returns where it will come to rest. Under
+    /// [reduced motion](super::reduced_motion) there's no glide: it stops
+    /// where it is.
     pub fn fling(&mut self, rate: f64, now: Duration) -> T {
+        if super::reduced_motion() {
+            let here = self.value(now);
+            self.set(here);
+            return here;
+        }
         let decay = Decay::new(self.value(now), self.velocity(now), rate);
         let rest = decay.target();
         self.play(decay, now);
@@ -378,6 +401,29 @@ mod tests {
         assert_eq!(a.value(at), before.0);
         let dv = a.velocity(at).minus(before.1).norm();
         assert!(dv < 1e-6, "velocity jumped by {dv}");
+    }
+
+    #[test]
+    fn reduced_motion_snaps_tweens_springs_flings_and_effects() {
+        crate::anim::set_reduced_motion(Some(true));
+        let mut x = Animated::new(0.0);
+        x.tween_to(10.0, 0.3, Easing::EaseOut, ms(0));
+        assert_eq!(x.value(ms(0)), 10.0);
+        assert!(!x.is_animating(ms(0)));
+        x.spring_to(-5.0, SpringParams::SNAPPY, ms(10));
+        assert_eq!(x.value(ms(10)), -5.0);
+        assert!(!x.is_animating(ms(10)));
+        x.drag_to(0.0, ms(20));
+        x.drag_to(50.0, ms(40));
+        assert_eq!(
+            x.fling(Decay::<f64>::NORMAL, ms(40)),
+            50.0,
+            "stops where it is"
+        );
+        assert!(!x.is_animating(ms(40)));
+        x.play(crate::anim::shake(8.0, 0.4), ms(50));
+        assert!(!x.is_animating(ms(50)));
+        crate::anim::set_reduced_motion(None);
     }
 
     #[test]

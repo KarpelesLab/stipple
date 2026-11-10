@@ -244,6 +244,28 @@ impl DBus {
             .flatten()
     }
 
+    /// Read a boolean portal setting (GSettings keys such as GNOME's
+    /// `enable-animations`).
+    pub fn portal_setting_bool(&mut self, namespace: &str, key: &str) -> Option<bool> {
+        let reply = self.portal_setting(namespace, key)?;
+        let (sig, mut off) = variant_header(&reply)?;
+        (sig == "b")
+            .then(|| read_u32(&reply, &mut off).ok().map(|v| v != 0))
+            .flatten()
+    }
+
+    /// Read a double portal setting (KDE's `AnimationDurationFactor`).
+    pub fn portal_setting_f64(&mut self, namespace: &str, key: &str) -> Option<f64> {
+        let reply = self.portal_setting(namespace, key)?;
+        let (sig, off) = variant_header(&reply)?;
+        if sig != "d" {
+            return None;
+        }
+        let start = off.next_multiple_of(8);
+        let bytes: [u8; 8] = reply.get(start..start + 8)?.try_into().ok()?;
+        Some(f64::from_le_bytes(bytes))
+    }
+
     /// Read an RGB portal setting: three doubles, the `(ddd)` the spec defines.
     pub fn portal_setting_rgb(&mut self, namespace: &str, key: &str) -> Option<[f64; 3]> {
         let reply = self.portal_setting(namespace, key)?;

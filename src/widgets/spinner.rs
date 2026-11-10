@@ -23,10 +23,18 @@ const SWEEP: f64 = 100.0;
 /// A busy indicator: an arc in the theme's primary color, turning once a second
 /// around a faint ring. It asks for a frame each time it's built, so it turns
 /// at the display's refresh rate for as long as it's on screen, and the app
-/// goes back to idle once it's gone.
+/// goes back to idle once it's gone. Under
+/// [reduced motion](crate::anim::reduced_motion) it turns at half the speed.
 pub fn spinner<S>(cx: &mut Cx<S>, theme: &Theme) -> Element {
     cx.request_frame();
-    let turns = cx.frame_time().as_secs_f64() / PERIOD_SECS;
+    // It shows that something is happening, so it keeps turning under
+    // reduced motion, at half the speed (as Bootstrap's spinners do).
+    let period = if crate::anim::reduced_motion() {
+        PERIOD_SECS * 2.0
+    } else {
+        PERIOD_SECS
+    };
+    let turns = cx.frame_time().as_secs_f64() / period;
     let step = ((turns.fract() * STEPS as f64) as u32).min(STEPS - 1);
     match frame(theme.palette.primary, step) {
         Some(doc) => Element::image(&doc).width(SIZE).height(SIZE),

@@ -1,6 +1,7 @@
 //! Android's controls live in its Java framework, so they stay self-drawn here.
 //! The look follows the configuration's night mode and, on Android 12 and
-//! later, the wallpaper's accent color (see the Android backend).
+//! later, the wallpaper's accent color (see the Android backend). Motion
+//! follows the animator duration scale (*Remove animations* sets it to 0).
 
 use super::{NativeControl, NativeDeco, SystemLook};
 use crate::geometry::PhysicalSize;
@@ -11,6 +12,9 @@ pub const PRIMARY_LABEL_ON_ACCENT: bool = true;
 
 pub fn system_look() -> SystemLook {
     crate::platform::backend::android::system_look()
+}
+pub fn motion_scale() -> f64 {
+    crate::platform::backend::android::motion_scale()
 }
 pub fn supports(_control: NativeControl) -> bool {
     false

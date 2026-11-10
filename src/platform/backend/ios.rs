@@ -361,6 +361,7 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
         // Every finger, not just the first.
         msg_void_bool(view, sel("setMultipleTouchEnabled:"), true);
         msg_void_id(root, sel("addSubview:"), view);
+        observe_reduce_motion(view);
         let vc = msg_id(msg_id(class("UIViewController"), sel("alloc")), sel("init"));
         msg_void_id(vc, sel("setView:"), root);
         msg_void_id(window, sel("setRootViewController:"), vc);
@@ -759,6 +760,36 @@ fn call_handler(event: Event, win: &dyn Window) {
     }
 }
 
+/// `stippleMotionChanged:` — *Reduce Motion* was switched; the next wake
+/// reports it to the App, which reads the setting again.
+extern "C" fn motion_changed(_this: Id, _cmd: Sel, _notification: Id) {
+    crate::platform::native::note_changed();
+}
+
+/// Have `view` hear `UIAccessibilityReduceMotionStatusDidChangeNotification`.
+///
+/// # Safety
+/// `view` must be a live `StippleUIView`, which stays alive for the process.
+unsafe fn observe_reduce_motion(view: Id) {
+    #[link(name = "UIKit", kind = "framework")]
+    unsafe extern "C" {
+        static UIAccessibilityReduceMotionStatusDidChangeNotification: Id;
+    }
+    let add: unsafe extern "C" fn(Id, Sel, Id, Sel, Id, Id) =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe {
+        let center = msg_id(class("NSNotificationCenter"), sel("defaultCenter"));
+        add(
+            center,
+            sel("addObserver:selector:name:object:"),
+            view,
+            sel("stippleMotionChanged:"),
+            UIAccessibilityReduceMotionStatusDidChangeNotification,
+            std::ptr::null_mut(),
+        );
+    }
+}
+
 fn register_view_class() -> Class {
     let name = c"StippleUIView";
     unsafe {
@@ -799,6 +830,12 @@ fn register_view_class() -> Class {
             cls,
             sel("insertText:"),
             insert_text as *const c_void,
+            c"v@:@".as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("stippleMotionChanged:"),
+            motion_changed as *const c_void,
             c"v@:@".as_ptr(),
         );
         class_addMethod(

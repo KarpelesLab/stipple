@@ -362,6 +362,11 @@ export async function start(canvas, wasmUrl, options = {}) {
   const scheme = () => e.stipple_color_scheme?.(dark?.matches ? 1 : 0, accent());
   scheme();
   dark?.addEventListener?.("change", scheme);
+  // prefers-reduced-motion, likewise: animations snap while it's `reduce`.
+  const still = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  const motion = () => e.stipple_reduced_motion?.(still?.matches ? 1 : 0);
+  motion();
+  still?.addEventListener?.("change", motion);
 
   // A canvas that CSS doesn't size would grow with its backing store at a
   // pixel ratio above 1, so pin it at its current size.

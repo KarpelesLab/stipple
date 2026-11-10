@@ -16,7 +16,7 @@ use crate::core::runtime::DropId;
 use crate::geometry::Point;
 
 /// How long a drop target's [`level`](DropState::level) takes to ease in or
-/// out.
+/// out (no time at all under [reduced motion](crate::anim::reduced_motion)).
 pub const DROP_FADE: Duration = Duration::from_millis(180);
 
 /// What a drag is doing to one drop target, as of the frame being built. See

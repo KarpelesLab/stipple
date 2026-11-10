@@ -73,6 +73,11 @@ unsafe extern "system" {
     fn DwmGetColorizationColor(color: *mut u32, opaque: *mut i32) -> i32;
 }
 
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn SystemParametersInfoW(action: u32, param: u32, data: *mut c_void, ini: u32) -> i32;
+}
+
 #[link(name = "advapi32")]
 unsafe extern "system" {
     fn RegGetValueW(
@@ -130,6 +135,24 @@ pub fn system_look() -> SystemLook {
         dark: status == 0 && light == 0,
         accent,
     }
+}
+
+/// `SPI_GETCLIENTAREAANIMATION`: *Settings › Accessibility › Visual effects ›
+/// Animation effects*, which `WM_SETTINGCHANGE` reports as
+/// `SPI_SETCLIENTAREAANIMATION` when it changes.
+const SPI_GETCLIENTAREAANIMATION: u32 = 0x1042;
+
+pub fn motion_scale() -> f64 {
+    let mut on: i32 = 1;
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            &mut on as *mut i32 as *mut c_void,
+            0,
+        )
+    };
+    if ok != 0 && on == 0 { 0.0 } else { 1.0 }
 }
 
 pub fn supports(control: NativeControl) -> bool {

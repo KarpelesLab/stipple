@@ -207,6 +207,10 @@ Safari; Chrome reports its own default blue rather than the OS's accent).
 Otherwise the theme keeps Stipple's. The colors and metrics are the ones
 `Theme::native()` uses on Linux; there are no OS-drawn controls on the web.
 
+`prefers-reduced-motion` reaches the app the same way (see
+[reduced motion](../animation.md#reduced-motion)): while it's `reduce`, fades
+and theme changes snap.
+
 ### Several apps on a page
 
 Each `start` call instantiates the module afresh, with its own memory, so the
@@ -238,6 +242,7 @@ The module exports:
 | `stipple_paste(ptr, len)` | `paste` |
 | `stipple_ime(kind, ptr, len)` | composition: 0 the preedit, 1 committed text |
 | `stipple_color_scheme(dark, accent)` | `prefers-color-scheme`, and the accent as `0xRRGGBB` (negative for none): before `stipple_start`, and on changes |
+| `stipple_reduced_motion(reduce)` | `prefers-reduced-motion: reduce`: before `stipple_start`, and on changes |
 | `stipple_focus(focused)` | focus entering and leaving the app |
 | `stipple_wake()` | the timer |
 | `stipple_frame()` | `requestAnimationFrame` |

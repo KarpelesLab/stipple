@@ -41,6 +41,16 @@ pub fn system_look() -> SystemLook {
     })
 }
 
+/// *Reduce motion* (System Settings › Accessibility › Display), which
+/// `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification` announces.
+pub fn motion_scale() -> f64 {
+    with_pool(|| unsafe {
+        let workspace: Id = msg!(class("NSWorkspace"), "sharedWorkspace", () -> Id);
+        let reduce: bool = msg!(workspace, "accessibilityDisplayShouldReduceMotion", () -> bool);
+        if reduce { 0.0 } else { 1.0 }
+    })
+}
+
 pub fn supports(_control: NativeControl) -> bool {
     true
 }

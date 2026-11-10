@@ -9,6 +9,9 @@
 //! `prefers-color-scheme`, and screen readers see it through the ARIA overlay
 //! `web/stipple.js` keeps.
 //!
+//! A theme change (the page's color scheme flipping) cross-fades, and snaps
+//! under `prefers-reduced-motion: reduce`.
+//!
 //! `index.html#selftest` drives it with scripted DOM events and reports what
 //! it saw (see the page). CI runs that in headless Chrome. The page reads the
 //! state through [`webdemo_probe`].
@@ -33,7 +36,7 @@ thread_local! {
     static FRAMES_LOADING: Cell<u32> = const { Cell::new(0) };
     static FRAMES_IDLE: Cell<u32> = const { Cell::new(0) };
     /// The state, mirrored for [`webdemo_probe`].
-    static PROBE: Cell<[u32; 7]> = const { Cell::new([0; 7]) };
+    static PROBE: Cell<[u32; 8]> = const { Cell::new([0; 8]) };
 }
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
@@ -54,6 +57,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             state.notes.text().len() as u32,
             u32::from(theme.is_dark()),
             u32::from(state.checked),
+            u32::from(cx.reduced_motion()),
         ])
     });
 
@@ -140,13 +144,13 @@ stipple::web_app!(app);
 /// The state for the page's selftest: 0 clicks, 1 timer ticks, 2 loaded, 3 the
 /// opened file's size, 4 the notes' length in bytes, 5 frames built while
 /// loading, 6 frames built since, 7 whether the theme is dark, 8 whether the
-/// checkbox is checked.
+/// checkbox is checked, 9 whether motion is reduced (`prefers-reduced-motion`).
 #[unsafe(no_mangle)]
 pub extern "C" fn webdemo_probe(what: u32) -> u32 {
     match what {
         5 => FRAMES_LOADING.with(Cell::get),
         6 => FRAMES_IDLE.with(Cell::get),
-        7 | 8 => PROBE.with(|p| p.get()[what as usize - 2]),
+        7..=9 => PROBE.with(|p| p.get()[what as usize - 2]),
         i => PROBE.with(|p| p.get().get(i as usize).copied().unwrap_or(0)),
     }
 }

@@ -26,6 +26,7 @@
 
 pub mod a11y;
 mod clipboard;
+pub(crate) mod crossfade;
 mod diff;
 mod dnd;
 mod element;
@@ -40,6 +41,7 @@ pub(crate) mod touch;
 
 pub use a11y::{AccessNode, Role, Semantics, accessibility_tree};
 pub use clipboard::{clipboard_text, set_clipboard_text};
+pub use crossfade::THEME_FADE;
 pub use diff::{Damage, diff_trees};
 pub(crate) use dnd::DropFades;
 pub use dnd::{DROP_FADE, DropState};

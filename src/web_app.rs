@@ -98,6 +98,11 @@ macro_rules! web_app {
             }
 
             #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_reduced_motion(reduced: u32) {
+                glue::reduced_motion(reduced != 0);
+            }
+
+            #[unsafe(no_mangle)]
             pub extern "C" fn stipple_focus(focused: u32) {
                 glue::focus(focused != 0);
             }

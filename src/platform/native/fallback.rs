@@ -3,7 +3,8 @@
 //! The web's look is the page's: `web/stipple.js` reads
 //! `prefers-color-scheme` (and the CSS `AccentColor`, where the browser
 //! exposes it) and hands it over through `stipple_color_scheme`, which lands
-//! in [`set_look`].
+//! in [`set_look`]. Its `prefers-reduced-motion` arrives the same way, through
+//! `stipple_reduced_motion` and [`set_reduced_motion`].
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -17,6 +18,21 @@ pub const PRIMARY_LABEL_ON_ACCENT: bool = true;
 static DARK: AtomicBool = AtomicBool::new(false);
 /// The accent as `0x01RRGGBB`, or 0 for none.
 static ACCENT: AtomicU32 = AtomicU32::new(0);
+static REDUCED_MOTION: AtomicBool = AtomicBool::new(false);
+
+pub fn motion_scale() -> f64 {
+    if REDUCED_MOTION.load(Ordering::Relaxed) {
+        0.0
+    } else {
+        1.0
+    }
+}
+
+/// Record the page's `prefers-reduced-motion`. Returns whether it changed.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn set_reduced_motion(reduced: bool) -> bool {
+    REDUCED_MOTION.swap(reduced, Ordering::Relaxed) != reduced
+}
 
 pub fn system_look() -> SystemLook {
     let accent = ACCENT.load(Ordering::Relaxed);

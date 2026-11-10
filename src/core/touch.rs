@@ -12,7 +12,9 @@
 //! scrolls, the press is cancelled (the app clears the pressed button and any
 //! text selection the press started) and the finger's pointer events stop
 //! reaching widgets until it lifts. A finger that lands on a fling stops it,
-//! and that touch doesn't click either.
+//! and that touch doesn't click either. Under
+//! [reduced motion](crate::anim::reduced_motion) there's no fling: the content
+//! stops where the finger lifts.
 
 use crate::geometry::Point;
 use crate::platform::{Touch, TouchPhase};
@@ -176,7 +178,8 @@ impl TouchScroll {
             (State::Dragging { id, target, last_y }, TouchPhase::Ended) if id == touch.id => {
                 self.sample(now, p.y);
                 let velocity = self.release_velocity(now);
-                self.state = if velocity.abs() >= MIN_FLING {
+                // Under reduced motion the content stops with the finger.
+                self.state = if velocity.abs() >= MIN_FLING && !crate::anim::reduced_motion() {
                     State::Flinging {
                         target,
                         velocity: velocity.clamp(-MAX_FLING, MAX_FLING),
@@ -479,6 +482,17 @@ mod tests {
         // v * DECAY is how far an exponential decay travels in total.
         assert!(total > 500.0 && total < 3000.0 * DECAY, "flung {total}");
         assert!(!s.flinging());
+    }
+
+    #[test]
+    fn under_reduced_motion_a_quick_release_stops_with_the_finger() {
+        crate::anim::set_reduced_motion(Some(true));
+        let mut s = TouchScroll::default();
+        let (_, end) = drag(&mut s, 500.0, 200.0, 6, 1.0 / 60.0);
+        let a = s.touch(&touch(1, TouchPhase::Ended, 50.0, 200.0), end, over_list);
+        assert_eq!(a, TouchAction::End);
+        assert!(!s.flinging(), "no fling");
+        crate::anim::set_reduced_motion(None);
     }
 
     #[test]

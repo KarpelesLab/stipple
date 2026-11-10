@@ -3,7 +3,8 @@
 //! The app paints a translucent overlay on the hovered tappable element, and a
 //! stronger one while it's pressed. [`Highlights`] eases each element's overlay
 //! toward its target with a [`Tween`], keyed by [`ActionId`], and reports when
-//! everything has settled so the app stops asking for frames.
+//! everything has settled so the app stops asking for frames. Under reduced
+//! motion the highlights switch without fading.
 
 use std::time::Duration;
 
@@ -55,12 +56,15 @@ impl Channel {
         self.length.is_zero() || self.progress(now) >= self.length
     }
 
-    /// Head for `to` from wherever the level is now. With no clock (`now` is
-    /// `None`) the change is immediate.
+    /// Head for `to` from wherever the level is now, over `length` scaled by
+    /// the [reduced-motion setting](crate::anim::motion_duration). With no
+    /// clock (`now` is `None`) or under reduced motion the change is immediate.
     pub(crate) fn retarget(&mut self, to: f64, length: Duration, now: Option<Duration>) {
         if self.to == to {
             return;
         }
+        let length = crate::anim::motion_duration(length);
+        let now = now.filter(|_| !length.is_zero());
         match now {
             Some(now) => {
                 *self = Channel {
@@ -213,6 +217,20 @@ mod tests {
         h.update(Some(a), None, Some(t2));
         let after = level(&h, a, t2 + 10 * MS);
         assert!(after < 2.0 && after > 1.0, "{after}");
+    }
+
+    #[test]
+    fn reduced_motion_switches_without_fading() {
+        let a = ActionId(0);
+        let mut h = Highlights::default();
+        let t0 = Duration::from_secs(1);
+        crate::anim::set_reduced_motion(Some(true));
+        h.update(Some(a), Some(a), Some(t0));
+        assert_eq!(level(&h, a, t0), 2.0, "at full strength at once");
+        assert!(!h.animating(Some(t0)), "and no frames asked for");
+        h.update(None, None, Some(t0 + MS));
+        assert!(h.entries.is_empty(), "gone at once");
+        crate::anim::set_reduced_motion(None);
     }
 
     #[test]

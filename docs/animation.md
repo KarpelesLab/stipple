@@ -160,6 +160,80 @@ interruptible spring; `motiondemo --selftest` checks them at fixed times.
 - A drop target's `DropState::level` eases in over 180 ms when a drag enters
   it and out when it leaves or drops, for a view to animate its drop zone
   with; see [drag-and-drop.md](drag-and-drop.md).
+- A theme change cross-fades the window from the old frame to the new one over
+  200 ms (`stipple::core::THEME_FADE`): the OS switching to dark mode under
+  `Theme::native()`, or the app switching themes through `App::theme_with`.
+- A touch fling glides to a stop after the finger lifts.
+
+## Theme changes
+
+`App::theme_with` derives the theme from the state, for an app with its own
+dark-mode switch; it gets the state and the theme set with `App::theme` (which
+follows the system under `Theme::native()`):
+
+```rust
+App::new(State::default(), view)
+    .theme(Theme::native())
+    .theme_with(|state: &State, system: &Theme| match state.dark {
+        Some(true) => Theme::dark(),
+        Some(false) => Theme::light(),
+        None => *system,
+    })
+```
+
+Whenever the theme views see changes, the App keeps the frame that was on
+screen and, for the next 200 ms, presents the new frame blended over it, asking
+for frames only while the fade runs. It blends finished pixels, so it works the
+same with the software renderer and a GPU one set with `App::render_with`. A
+frame whose view didn't change underneath is only re-blended, not rasterized
+again; resizing the window mid-fade ends it.
+
+## Reduced motion
+
+Every platform has a setting for less motion, and Stipple reads it when the app
+starts and again when the OS reports a change:
+
+| Platform | Setting | Change heard from |
+|---|---|---|
+| Windows | *Animation effects* off (`SPI_GETCLIENTAREAANIMATION`) | `WM_SETTINGCHANGE` with `SPI_SETCLIENTAREAANIMATION` |
+| macOS | *Reduce motion* (`NSWorkspace.accessibilityDisplayShouldReduceMotion`) | `NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification` |
+| iOS | *Reduce Motion* (`UIAccessibilityIsReduceMotionEnabled`) | `UIAccessibilityReduceMotionStatusDidChangeNotification` |
+| Android | *Remove animations* (`Settings.Global` `animator_duration_scale` at 0, read over JNI) | read again whenever the activity resumes |
+| Linux | GNOME's `enable-animations` or KDE's `AnimationDurationFactor`, through the desktop portal; without a portal, `gtk-enable-animations` in GTK's `settings.ini` | the portal's `SettingChanged` signal |
+| Web | `prefers-reduced-motion: reduce` | the media query's `change` event |
+
+`stipple::anim::motion_scale()` turns it into a factor for durations: 0 under
+reduced motion, otherwise 1 (on Android, the animator duration scale itself,
+so 0.5× or 2× in the developer options apply too). `anim::motion_duration(d)`
+applies it, and `anim::reduced_motion()` (or `Cx::reduced_motion()`) asks the
+question directly. Anything that starts a transition should scale its length
+with `motion_duration`, so it snaps when motion is reduced, and swap movement
+(a slide, a zoom) for a cross-fade or a jump:
+
+```rust
+use std::time::Duration;
+use stipple::anim::{motion_duration, Easing, Tween};
+
+let length = motion_duration(Duration::from_millis(250)).as_secs_f64();
+let fade = Tween::new(0.0, 1.0, length, Easing::EaseOut); // ends at once when 0
+```
+
+What the toolkit does under reduced motion:
+
+- `Animated<T>` (and so `Cx::animate`) applies the scale itself: tweens
+  shorten (to nothing), springs jump to their target, `fling` stops where the
+  value is, and `play` (a shake, a pulse, keyframes) jumps to the end. A plain
+  `Tween` or `Spring` you sample yourself doesn't know about it; use
+  `motion_duration` as above.
+- Hover and press highlights and drop targets' `DropState::level` switch at once.
+- Theme changes switch without a cross-fade.
+- A touch scroll stops where the finger lifts, without a fling.
+- The spinner keeps turning, since it's what shows that something is happening,
+  but at half the speed (as Bootstrap's spinners do).
+
+`anim::set_reduced_motion(Some(true))` (or `Some(false)`) overrides the system
+for the calling thread, which is the UI thread: an app's own "reduce motion"
+option, or a test that needs one or the other. `None` follows the system again.
 
 ## Moving, scaling, turning and fading
 
@@ -186,6 +260,6 @@ within two refresh intervals (a hidden window, say), a timer does.
 
 ## Not yet
 
-- Theme changes (light to dark) switch at once rather than cross-fading.
+- There's no smooth (animated) scrolling to snap; wheel scrolling jumps.
 - With several windows, frames re-render the window the wake arrived for, so
   animations in other windows advance on their next event.

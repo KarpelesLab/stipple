@@ -776,6 +776,12 @@ pub(crate) fn system_look() -> crate::platform::native::SystemLook {
     .unwrap_or_default()
 }
 
+/// The animator duration scale (0 under *Remove animations*), for
+/// [`native::motion_scale`](crate::platform::native::motion_scale).
+pub(crate) fn motion_scale() -> f64 {
+    with_activity(|a| unsafe { jni::animator_duration_scale(a.vm, a.clazz) }).map_or(1.0, f64::from)
+}
+
 /// The clipboard's text, through `ClipboardManager` over JNI.
 pub(crate) fn clipboard_text() -> Option<String> {
     with_activity(|a| unsafe { jni::clipboard_text(a.vm, a.clazz) })
@@ -1270,7 +1276,14 @@ impl Loop<'_> {
                     crate::platform::native::note_changed();
                 }
             }
-            Command::Resume | Command::Start => self.view.redraw.set(true),
+            Command::Resume | Command::Start => {
+                self.view.redraw.set(true);
+                // The animation setting changes no configuration, so look
+                // again whenever the app comes back (from the settings, say).
+                if crate::anim::set_system_motion_scale(motion_scale()) {
+                    crate::platform::native::note_changed();
+                }
+            }
             Command::Pause | Command::Stop => {}
             Command::LowMemory => crate::platform::native::clear_cache(),
             Command::Destroy => {

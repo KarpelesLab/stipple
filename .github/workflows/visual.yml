@@ -1849,7 +1849,8 @@ jobs:
   # clicks and the cursor, typing, copy and paste, input-method composition and
   # dead keys, the ARIA overlay (roles, names, a click on an element activating
   # it), the theme following prefers-color-scheme (run once dark, once light),
-  # a second app instance on the same page, opening and saving a file, and
+  # prefers-reduced-motion (a third run with it forced: a theme change snaps
+  # instead of cross-fading), a second app instance on the same page, opening and saving a file, and
   # resizing. multi.html (two apps side by side) is screenshotted too.
   visual-web:
     name: Visual test (Web / wasm)
@@ -1913,6 +1914,12 @@ jobs:
           grep -q "color-scheme: prefers-color-scheme: dark, theme dark" visual_output/web-selftest.txt
           selftest 2 visual_output/web-selftest-light.txt
           grep -q "color-scheme: prefers-color-scheme: light, theme light" visual_output/web-selftest-light.txt
+          grep -q "reduced-motion: prefers-reduced-motion: no-preference, app animates" visual_output/web-selftest-light.txt
+          # Under prefers-reduced-motion: reduce, the app reduces motion and a
+          # theme change snaps instead of cross-fading (no animation frames).
+          selftest 3 visual_output/web-selftest-reduced.txt --force-prefers-reduced-motion
+          grep -q "reduced-motion: prefers-reduced-motion: reduce, app reduces" visual_output/web-selftest-reduced.txt
+          grep -q "theme-fade: 0 animation frames" visual_output/web-selftest-reduced.txt
           # The screenshot, after the selftest's clicks (counter at 3, a file
           # opened, the box checked). A blank canvas means the page never ran
           # the wasm, so require real content.

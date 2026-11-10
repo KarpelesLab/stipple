@@ -92,9 +92,18 @@ pub fn system_look() -> SystemLook {
     os::system_look()
 }
 
+/// The system's animation setting as a scale for durations: 0 when it asks
+/// for reduced motion (or has animations off), 1 normally, and on Android
+/// its animator duration scale. Read through
+/// [`anim::motion_scale`](crate::anim::motion_scale), which the `App` keeps
+/// up to date.
+pub fn motion_scale() -> f64 {
+    os::motion_scale()
+}
+
 /// Start following appearance changes where the OS doesn't announce them to the
 /// window: on Linux, a thread listens for the desktop portal's `SettingChanged`
-/// signal. Elsewhere the backends hear about changes themselves, so this does
+/// signal (the color scheme, the accent, and the animation setting). Elsewhere the backends hear about changes themselves, so this does
 /// nothing. Safe to call more than once.
 pub fn watch() {
     #[cfg(target_os = "linux")]
@@ -108,6 +117,13 @@ pub(crate) fn set_web_look(look: SystemLook) -> bool {
     os::set_look(look)
 }
 
+/// The page's `prefers-reduced-motion` (see `web/stipple.js`). Returns whether
+/// it changed.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn set_web_reduced_motion(reduced: bool) -> bool {
+    os::set_reduced_motion(reduced)
+}
+
 static CHANGED: AtomicBool = AtomicBool::new(false);
 
 /// Record that the system appearance changed and wake the event loop, which
@@ -117,6 +133,7 @@ static CHANGED: AtomicBool = AtomicBool::new(false);
     not(any(
         target_os = "windows",
         target_os = "macos",
+        target_os = "ios",
         target_os = "linux",
         target_os = "android"
     )),

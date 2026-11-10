@@ -189,11 +189,20 @@
         })() : "none";
         check("color-scheme", probe(7) === prefersDark,
           `prefers-color-scheme: ${prefersDark ? "dark" : "light"}, theme ${probe(7) ? "dark" : "light"}, AccentColor ${accent}`);
+        // prefers-reduced-motion reaches the app, and decides whether a theme
+        // change cross-fades (animation frames for 200 ms) or snaps (none).
+        const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches ? 1 : 0;
+        check("reduced-motion", probe(9) === reduce,
+          `prefers-reduced-motion: ${reduce ? "reduce" : "no-preference"}, app ${probe(9) ? "reduces" : "animates"}`);
+        const framesBefore = stats.frames;
         e.stipple_color_scheme(1 - prefersDark, -1);
-        await sleep(50);
+        await sleep(400);
+        const fadeFrames = stats.frames - framesBefore;
         const flipped = probe(7);
+        check("theme-fade", reduce ? fadeFrames === 0 : fadeFrames >= 1,
+          `${fadeFrames} animation frames after the theme changed (${reduce ? "snaps" : "cross-fades"})`);
         colorScheme();
-        await sleep(50);
+        await sleep(400);
         check("theme-change", flipped === 1 - prefersDark && probe(7) === prefersDark,
           `theme ${flipped ? "dark" : "light"} after the scheme flipped, ${probe(7) ? "dark" : "light"} after it flipped back`);
 

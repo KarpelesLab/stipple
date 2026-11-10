@@ -600,6 +600,8 @@ extern "C" fn appearance_changed(_this: Id, _cmd: Sel, _notification: Id) {
 /// Have `view` hear about dark mode and accent changes: dark mode and accent
 /// changes are distributed notifications (they come from System Settings), and
 /// AppKit posts `NSSystemColorsDidChangeNotification` once its colors follow.
+/// Reduce motion is an accessibility display option, which `NSWorkspace`
+/// announces.
 ///
 /// # Safety
 /// `view` must be a live `StippleView`, which stays alive for the process.
@@ -629,6 +631,21 @@ unsafe fn observe_appearance(view: Id) {
         let local = msg_id(class("NSNotificationCenter"), sel("defaultCenter"));
         let name = nsstring("NSSystemColorsDidChangeNotification");
         add(local, observe, view, selector, name, std::ptr::null_mut());
+        // Reduce motion, posted on the workspace's own center.
+        #[link(name = "AppKit", kind = "framework")]
+        unsafe extern "C" {
+            static NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification: Id;
+        }
+        let workspace = msg_id(class("NSWorkspace"), sel("sharedWorkspace"));
+        let center = msg_id(workspace, sel("notificationCenter"));
+        add(
+            center,
+            observe,
+            view,
+            selector,
+            NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification,
+            std::ptr::null_mut(),
+        );
     }
 }
 

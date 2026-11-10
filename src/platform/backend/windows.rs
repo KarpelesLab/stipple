@@ -982,9 +982,14 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         // Dark mode and the accent color: `ImmersiveColorSet` names the setting
-        // that changed; the colorization message follows accent changes.
+        // that changed; the colorization message follows accent changes. The
+        // animation setting (reduced motion) comes with its SPI code.
         WM_SETTINGCHANGE | WM_THEMECHANGED | WM_DWMCOLORIZATIONCOLORCHANGED => {
-            if msg != WM_SETTINGCHANGE || unsafe { names_setting(lp, "ImmersiveColorSet") } {
+            // SPI_SETCLIENTAREAANIMATION: the animation effects setting.
+            if msg != WM_SETTINGCHANGE
+                || wp == 0x1043
+                || unsafe { names_setting(lp, "ImmersiveColorSet") }
+            {
                 crate::platform::native::note_changed();
             }
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }

@@ -15,12 +15,16 @@
 //! - Effects: [`shake`], [`pulse`], [`entrance`].
 //! - Interruption: [`Animated`] holds a value that retargets, takes gestures,
 //!   and hands off between motions keeping its value and velocity.
+//! - Reduced motion: [`motion_scale`] and [`motion_duration`] follow the OS's
+//!   setting; [`Animated`] applies them itself (tweens shorten, springs and
+//!   decays snap), and anything else that starts a transition should too.
 
 #![forbid(unsafe_code)]
 
 mod animated;
 mod easing;
 mod keyframes;
+mod motion;
 mod spring;
 mod timeline;
 mod value;
@@ -28,6 +32,10 @@ mod value;
 pub use animated::{Animated, Motion};
 pub use easing::CubicBezier;
 pub use keyframes::{Keyframes, entrance, pulse, shake};
+pub(crate) use motion::set_system_motion_scale;
+pub use motion::{
+    motion_duration, motion_scale, reduced_motion, set_reduced_motion, system_motion_scale,
+};
 pub use spring::{REST_EPSILON, SpringParams};
 pub use timeline::{
     Animation, AnimationExt, BoxedAnimation, Decay, Delay, Repeat, Sequence, Still, stagger,

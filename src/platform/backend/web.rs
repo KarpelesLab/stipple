@@ -554,6 +554,17 @@ pub fn color_scheme(dark: bool, accent: i32) {
     }
 }
 
+/// The page's `prefers-reduced-motion: reduce`. Called before `start`, and
+/// again when it changes, which a running app sees as
+/// [`Event::ThemeChanged`] (it reads the setting again then).
+#[doc(hidden)]
+pub fn reduced_motion(reduced: bool) {
+    let changed = crate::platform::native::set_web_reduced_motion(reduced);
+    if changed && HOST.with(|h| h.handler.borrow().is_some()) {
+        deliver(Event::ThemeChanged);
+    }
+}
+
 /// The canvas gained or lost keyboard focus.
 #[doc(hidden)]
 pub fn focus(focused: bool) {

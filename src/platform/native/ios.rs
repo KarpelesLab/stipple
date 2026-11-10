@@ -33,6 +33,11 @@ unsafe extern "C" {
     fn UIGraphicsEndImageContext();
 }
 
+#[link(name = "UIKit", kind = "framework")]
+unsafe extern "C" {
+    fn UIAccessibilityIsReduceMotionEnabled() -> bool;
+}
+
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
     fn CGBitmapContextGetData(ctx: *mut c_void) -> *mut c_void;
@@ -52,6 +57,16 @@ pub fn system_look() -> SystemLook {
             accent: Some(Color::rgb(0, 122, 255)), // iOS's systemBlue tint
         }
     })
+}
+
+/// *Reduce Motion* (Settings › Accessibility › Motion), which
+/// `UIAccessibilityReduceMotionStatusDidChangeNotification` announces.
+pub fn motion_scale() -> f64 {
+    if unsafe { UIAccessibilityIsReduceMotionEnabled() } {
+        0.0
+    } else {
+        1.0
+    }
 }
 
 pub fn supports(control: NativeControl) -> bool {
