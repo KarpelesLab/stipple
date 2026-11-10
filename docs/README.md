@@ -232,9 +232,10 @@ a background thread changes rows of a glyph grid at the refresh rate, and the
 app checks with `RasterStats` that only those rows were rasterized. Seen
 passing locally on X11 (Xvfb, at 1x, 1.5x and 2x). See [canvas.md](canvas.md).
 ⁴² CI types F-keys, Ctrl+letters, Tab and a held key into `rawkeys` with
-`xdotool` on X11 and `wtype` under sway, and checks each key's logical and
-physical identity, modifiers, sides and repeat flag, and that a menu shortcut
-beats the raw handler. X11 repeats without fake releases (XKB detectable
+`xdotool` on X11 and `wtype` under sway, and checks each key's logical
+identity, modifiers and repeat flag, and on X11 its physical key and sides and
+that a menu shortcut beats the raw handler (`wtype`'s virtual keycodes aren't
+positions, so Wayland's physical keys are only unit-tested). X11 repeats without fake releases (XKB detectable
 auto-repeat); Wayland repeats on the client, from `wl_keyboard.repeat_info`.
 The order keys go through the App is unit-tested. See
 [keyboard.md](keyboard.md).

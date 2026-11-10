@@ -390,6 +390,12 @@ struct XkbKeymap {
     /// The modifier bits that mean Alt and the logo (Super) key.
     alt_mask: u32,
     meta_mask: u32,
+    /// Whether the keycodes are evdev codes plus 8, as a real keyboard's
+    /// are (the keymap names its keys the way xkb's `evdev` keycodes do).
+    /// Virtual keyboards such as `wtype`'s number their own keys
+    /// (`<K1> = 9`, …) in the order they first type them, so the codes say
+    /// nothing about where a key is.
+    evdev_keycodes: bool,
 }
 
 impl XkbKeymap {
@@ -582,6 +588,16 @@ fn parse_xkb(text: &str) -> XkbKeymap {
             }
         }
     }
+    // Keys every PC keyboard has, at their evdev codes plus 8.
+    let evdev_keycodes = [
+        ("ESC", 9),
+        ("AE01", 10),
+        ("TAB", 23),
+        ("AC01", 38),
+        ("SPCE", 65),
+    ]
+    .iter()
+    .any(|(name, code)| codes.get(name) == Some(code));
     let keys = codes
         .into_iter()
         .filter_map(|(name, code)| syms.get(name).map(|s| (code, s.clone())))
@@ -590,6 +606,7 @@ fn parse_xkb(text: &str) -> XkbKeymap {
         keys,
         alt_mask: if alt_mask == 0 { XKB_MOD1 } else { alt_mask },
         meta_mask: if meta_mask == 0 { XKB_MOD4 } else { meta_mask },
+        evdev_keycodes,
     }
 }
 
@@ -653,13 +670,15 @@ fn keysym_name_to_event(name: &str, pressed: bool, modifiers: Modifiers) -> Opti
 
 /// The keysym value of a keysym name as [`XkbKeymap::sym`] gives it: a
 /// one-character name is that character's keysym, anything else a name from
-/// the keysym table (`dead_acute`, `eacute`, `UXXXX`, …).
+/// the keysym table (`dead_acute`, `eacute`, `UXXXX`, …) or a key that types
+/// nothing (`F5`, `Left`, `Shift_L`).
 fn keysym_value(name: &str) -> Option<u32> {
     let mut chars = name.chars();
     match (chars.next(), chars.next()) {
         (Some(c), None) if (c as u32) < 0x100 => Some(c as u32),
         (Some(c), None) => Some(0x0100_0000 + c as u32),
-        _ => crate::platform::compose::keysym_from_name(name),
+        _ => crate::platform::compose::keysym_from_name(name)
+            .or_else(|| crate::platform::key::keysym_named(name)),
     }
 }
 
@@ -2537,6 +2556,8 @@ xkb_symbols \"x\" {
         assert_eq!(map.sym(23, 0), Some("Tab"));
         // No modifier_map: Alt and the logo key default to Mod1 and Mod4.
         assert_eq!((map.alt_mask, map.meta_mask), (XKB_MOD1, XKB_MOD4));
+        // Standard key names at evdev codes: a real keyboard's keymap.
+        assert!(map.evdev_keycodes);
         let none = Modifiers::default();
         let keysym_name_to_event = |name, pressed| keysym_name_to_event(name, pressed, none);
         // keysym names decode to events.

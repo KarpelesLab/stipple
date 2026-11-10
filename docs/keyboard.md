@@ -148,9 +148,13 @@ an app make the same choice itself.
   the modifier keys' own events. A Stipple client that initializes XKB also
   selects `XkbNewKeyboardNotify` and `XkbMapNotify` events to keep refreshing
   its keymap. `STIPPLE_X11_NO_XKB_REPEAT=1` leaves XKB off.
-- **Wayland.** The physical key is the evdev code. The text comes from the
-  compositor's xkb keymap (Shift and Caps Lock levels). Sides are tracked
-  from the modifier keys' own events.
+- **Wayland.** The physical key is the evdev code, when the compositor's
+  keymap uses xkb's evdev keycodes, as a real keyboard's does. A virtual
+  keyboard such as `wtype`'s numbers its own keycodes in the order it first
+  types the keys, so there the physical key is unidentified
+  (`PhysicalKey::UNIDENTIFIED`) rather than wrong. The logical key and the
+  text come from the keymap's symbols (Shift and Caps Lock levels). Sides are
+  tracked from the modifier keys' own events.
 - **Windows.** The physical key comes from the scan code and the extended-key
   flag. Sides come from `GetKeyState(VK_LSHIFT…)`. The text comes from
   `ToUnicode` with flag 4, which leaves a pending dead key alone (Windows 10
@@ -197,7 +201,9 @@ arrives: each key's logical and physical identity, modifiers and sides, that
 Ctrl+T runs the menu command instead of reaching the element, and one press,
 then repeats, then one release for the held key. Under sway, `wtype` does the
 same with F5, Ctrl+D and Tab, and holds a key past the repeat delay. The job
-checks that `repeat_info` arrived and the repeats came. Windows, macOS, the
+checks the logical keys and modifiers (wtype's keycodes aren't positions, so
+the physical keys are unidentified there), that `repeat_info` arrived, and one
+press, then repeats, then one release for the held key. Windows, macOS, the
 web, iOS and Android are build-checked, with their pure mapping code
 unit-tested on Linux.
 

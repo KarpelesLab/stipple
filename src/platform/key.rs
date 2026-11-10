@@ -796,6 +796,79 @@ pub(crate) fn keysym_logical(ks: u32) -> KeyCode {
     }
 }
 
+/// The value of a keysym name that types no character (function, cursor,
+/// keypad and modifier keys), which the character keysym table doesn't
+/// have: what an xkb keymap's symbols name them (`F5`, `Left`, `Shift_L`,
+/// `KP_End`).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn keysym_named(name: &str) -> Option<u32> {
+    if let Some(n) = name.strip_prefix('F').and_then(|n| n.parse::<u32>().ok())
+        && (1..=35).contains(&n)
+    {
+        return Some(0xffbe + n - 1);
+    }
+    if let Some(d) = name.strip_prefix("KP_").and_then(|d| d.parse::<u32>().ok())
+        && d <= 9
+    {
+        return Some(0xffb0 + d);
+    }
+    Some(match name {
+        "Home" => 0xff50,
+        "Left" => 0xff51,
+        "Up" => 0xff52,
+        "Right" => 0xff53,
+        "Down" => 0xff54,
+        "Prior" | "Page_Up" => 0xff55,
+        "Next" | "Page_Down" => 0xff56,
+        "End" => 0xff57,
+        "Begin" => 0xff58,
+        "Print" => 0xff61,
+        "Insert" => 0xff63,
+        "Menu" => 0xff67,
+        "Pause" => 0xff13,
+        "Scroll_Lock" => 0xff14,
+        "Num_Lock" => 0xff7f,
+        "Mode_switch" => 0xff7e,
+        "ISO_Left_Tab" => 0xfe20,
+        "ISO_Level3_Shift" => 0xfe03,
+        "Shift_L" => 0xffe1,
+        "Shift_R" => 0xffe2,
+        "Control_L" => 0xffe3,
+        "Control_R" => 0xffe4,
+        "Caps_Lock" => 0xffe5,
+        "Meta_L" => 0xffe7,
+        "Meta_R" => 0xffe8,
+        "Alt_L" => 0xffe9,
+        "Alt_R" => 0xffea,
+        "Super_L" => 0xffeb,
+        "Super_R" => 0xffec,
+        "Hyper_L" => 0xffed,
+        "Hyper_R" => 0xffee,
+        "KP_Space" => 0xff80,
+        "KP_Tab" => 0xff89,
+        "KP_Enter" => 0xff8d,
+        "KP_Home" => 0xff95,
+        "KP_Left" => 0xff96,
+        "KP_Up" => 0xff97,
+        "KP_Right" => 0xff98,
+        "KP_Down" => 0xff99,
+        "KP_Prior" | "KP_Page_Up" => 0xff9a,
+        "KP_Next" | "KP_Page_Down" => 0xff9b,
+        "KP_End" => 0xff9c,
+        "KP_Begin" => 0xff9d,
+        "KP_Insert" => 0xff9e,
+        "KP_Delete" => 0xff9f,
+        "KP_Multiply" => 0xffaa,
+        "KP_Add" => 0xffab,
+        "KP_Separator" => 0xffac,
+        "KP_Subtract" => 0xffad,
+        "KP_Decimal" => 0xffae,
+        "KP_Divide" => 0xffaf,
+        "KP_Equal" => 0xffbd,
+        _ => return None,
+    })
+}
+
 /// The text an X11 keysym types (for [`KeyEvent::text`]): a printable
 /// character's, including the keypad's.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -983,6 +1056,17 @@ mod tests {
         assert_eq!(keysym_logical(0xffe1), KeyCode::Shift);
         assert_eq!(keysym_logical(0xffe9), KeyCode::Alt);
         assert_eq!(keysym_logical(0xfe03), KeyCode::AltGraph);
+        assert_eq!(keysym_named("F5"), Some(0xffc2));
+        assert_eq!(keysym_named("F35"), Some(0xffe0));
+        assert_eq!(keysym_named("KP_7"), Some(0xffb7));
+        assert_eq!(keysym_named("Shift_R"), Some(0xffe2));
+        assert_eq!(keysym_named("Page_Down"), Some(0xff56));
+        assert_eq!(keysym_named("F0"), None);
+        assert_eq!(keysym_named("a"), None);
+        assert_eq!(
+            keysym_logical(keysym_named("Left").unwrap()),
+            KeyCode::ArrowLeft
+        );
         assert_eq!(keysym_text(0xffb1).as_deref(), Some("1"));
         assert_eq!(keysym_text(0x20).as_deref(), Some(" "));
         assert_eq!(keysym_text(0xe9).as_deref(), Some("é"));

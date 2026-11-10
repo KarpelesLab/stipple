@@ -64,7 +64,12 @@ impl Keys {
         } else {
             ButtonState::Released
         };
-        let physical = PhysicalKey::from_evdev(key);
+        // A virtual keyboard's codes aren't positions: say so rather than
+        // name the wrong key.
+        let physical = match keymap {
+            Some(m) if !m.evdev_keycodes => PhysicalKey::UNIDENTIFIED,
+            _ => PhysicalKey::from_evdev(key),
+        };
         let logical = match ks {
             Some(ks) => keysym_logical(ks),
             // No keymap: the layout-independent table's idea of the key.
@@ -220,5 +225,74 @@ mod tests {
         assert!(keys.repeat.deadline().is_some());
         keys.reset();
         assert_eq!(keys.repeat.deadline(), None);
+    }
+
+    /// The keymap `wtype -k Tab -k F5 -M ctrl -k d -m ctrl -k Tab -P b`
+    /// uploads: its own keycodes, in the order the keys are first typed, and
+    /// keysyms by value.
+    const WTYPE_KEYMAP: &str = "\
+xkb_keymap {
+xkb_keycodes \"(unnamed)\" {
+minimum = 8;
+maximum = 13;
+<K1> = 9;
+<K2> = 10;
+<K3> = 11;
+<K4> = 12;
+};
+xkb_types \"(unnamed)\" { include \"complete\" };
+xkb_compatibility \"(unnamed)\" { include \"complete\" };
+xkb_symbols \"(unnamed)\" {
+key <K1> {[0xff09]};
+key <K2> {[0xffc2]};
+key <K3> {[0x64]};
+key <K4> {[0x62]};
+};
+};";
+
+    #[test]
+    fn a_virtual_keyboard_types_every_key_with_unknown_positions() {
+        let map = super::super::parse_xkb(WTYPE_KEYMAP);
+        assert!(!map.evdev_keycodes);
+        let mut keys = Keys::default();
+        let t0 = Instant::now();
+        let ctrl = super::super::XKB_CONTROL;
+        let mut raw = Vec::new();
+        let strokes = [
+            (1, 0),    // Tab
+            (2, 0),    // F5
+            (3, ctrl), // Ctrl+d
+            (1, 0),    // Tab
+            (4, 0),    // b
+        ];
+        for (key, mods) in strokes {
+            for stroke in [Stroke::Press, Stroke::Release] {
+                keys.key(Some(&map), mods, (key, stroke), t0, &mut |e| {
+                    if let Event::RawKey(k) = e {
+                        raw.push(k);
+                    }
+                    ControlFlow::Wait
+                });
+            }
+        }
+        let pressed: Vec<_> = raw
+            .iter()
+            .filter(|k| k.is_press())
+            .map(|k| (k.logical, k.modifiers.ctrl))
+            .collect();
+        assert_eq!(
+            pressed,
+            [
+                (KeyCode::Tab, false),
+                (KeyCode::F5, false),
+                (KeyCode::Char('d'), true),
+                (KeyCode::Tab, false),
+                (KeyCode::Char('b'), false),
+            ]
+        );
+        assert_eq!(raw.len(), 10);
+        // wtype's key 1 isn't Escape, and its key 4 isn't the 3 key.
+        assert!(raw.iter().all(|k| k.physical == PhysicalKey::UNIDENTIFIED));
+        assert_eq!(raw[0].scancode, 9);
     }
 }

@@ -1756,18 +1756,27 @@ jobs:
 
           # --- raw keys and client-side key repeat: the compositor doesn't
           # repeat keys, the client does from wl_keyboard.repeat_info. wtype
-          # presses b, holds it 1.5 s (past sway's 600 ms delay) and lets go. ---
+          # presses b, holds it 1.5 s (past sway's 600 ms delay) and lets go.
+          # wtype's virtual keyboard numbers its own keycodes (<K1> = Tab,
+          # <K2> = F5, … in the order it first types them), so they say
+          # nothing about where a key is: the backend reports the physical key
+          # as unknown ("phys=?") and we check the logical keys, modifiers and
+          # repeats. (The first Tab only focuses the element.) ---
           ./target/release/rawkeys > visual_output/wl-rawkeys.log 2>&1 &
           RAW_PID=$!
           sleep 4
           wtype -s 500 -d 120 -k Tab -k F5 -M ctrl -k d -m ctrl -k Tab \
             -P b -s 1500 -p b 2>> visual_output/wtype.log; sleep 2
           kill "$RAW_PID" 2>/dev/null || true
-          echo "=== wl-rawkeys.log ==="; grep -v "present\|frame" visual_output/wl-rawkeys.log | tail -60 || true
+          echo "=== wl-rawkeys.log (repeats left out) ==="
+          grep -v "present\|frame\|repeat key\|repeat=true\|repeat: true" visual_output/wl-rawkeys.log || true
+          echo "repeats: $(grep -c "rawkeys: Pressed Char('b') .*repeat=true" visual_output/wl-rawkeys.log)"
           grep -q "repeat info:" visual_output/wl-rawkeys.log
-          grep -q "rawkeys: Pressed F5 phys=F5 " visual_output/wl-rawkeys.log
-          grep -q "rawkeys: Pressed Char('d') phys=KeyD mods=ctrl+ " visual_output/wl-rawkeys.log
-          grep -q "rawkeys: Pressed Tab phys=Tab " visual_output/wl-rawkeys.log
+          grep -q "rawkeys: Pressed F5 phys=? mods=- " visual_output/wl-rawkeys.log
+          grep -q "rawkeys: Released F5 " visual_output/wl-rawkeys.log
+          grep -q "rawkeys: Pressed Char('d') phys=? mods=ctrl+ " visual_output/wl-rawkeys.log
+          grep -q "rawkeys: Pressed Tab phys=? mods=- " visual_output/wl-rawkeys.log
+          [ "$(grep -c "rawkeys: Pressed Char('b') .*repeat=false" visual_output/wl-rawkeys.log)" = 1 ]
           [ "$(grep -c "rawkeys: Pressed Char('b') .*repeat=true" visual_output/wl-rawkeys.log)" -ge 2 ]
           [ "$(grep -c "rawkeys: Released Char('b')" visual_output/wl-rawkeys.log)" = 1 ]
 
