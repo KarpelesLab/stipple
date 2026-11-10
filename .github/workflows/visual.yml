@@ -3688,6 +3688,7 @@ jobs:
       - visual-material3
       - visual-bidi
       - visual-fonts
+      - visual-sessions
       - interaction-x11
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     permissions:
@@ -3721,7 +3722,7 @@ jobs:
                       stipple-material3 stipple-x11-clicks stipple-x11-textinput \
                       stipple-windows-native stipple-macos-native stipple-ios-native \
                       stipple-x11-native stipple-x11-bidi stipple-x11-bidi-mirror \
-                      stipple-x11-fonts; do
+                      stipple-x11-fonts stipple-x11-sessions stipple-x11-sessions-alert-dark; do
             found=$(find artifacts -name "$name.png" | head -n 1)
             if [ -n "$found" ]; then cp "$found" "docs/screenshots/$name.png"; else echo "missing: $name"; fi
           done
