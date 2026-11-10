@@ -4,10 +4,13 @@
 //!
 //! Two paths share the seam: [`present_offscreen`] composites a finished CPU
 //! [`Pixmap`] on the GPU (a pass-through shader), while [`render_scene`] renders
-//! a live stipple [`Scene`] **GPU-natively** — box primitives via a rounded-rect
-//! SDF shader and text from a packed per-glyph atlas. Both read back to a
-//! `Pixmap`, the GPU half of the [`Surface`](crate::render::Surface) seam.
-//! Productionizing this onto Vulkan/Metal/D3D/WebGPU is future work. The EGL
+//! a live stipple [`Scene`] **GPU-natively**: boxes, paths (stencil-and-cover),
+//! images and glyphs (textures cached by identity), clips, and layers with
+//! transforms and group opacity, matching the software renderer to within a
+//! small tolerance (see [`render_scene_scaled`] and `docs/gpu.md`). Both read
+//! back to a `Pixmap`, the GPU half of the [`Surface`](crate::render::Surface)
+//! seam. The scene lowering (`ops`) is backend-neutral; executing it on
+//! Vulkan/Metal/D3D/WebGPU is future work. The EGL
 //! context is **surfaceless**, so it runs headlessly under Mesa's software GL in
 //! CI.
 //!
@@ -16,8 +19,12 @@
 
 #![allow(unsafe_code)] // raw GPU FFI
 
-use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
-use crate::render::{Color, DrawCmd, Font, Pixmap, Scene, SoftwareRenderer};
+use crate::geometry::{PhysicalSize, Rect, ScaleFactor};
+use crate::render::{Color, Font, Pixmap, Scene};
+
+// The scene lowering is backend-neutral; only the GL backend executes it yet.
+#[cfg_attr(not(all(target_os = "linux", feature = "gl")), allow(dead_code))]
+mod ops;
 
 #[cfg(all(target_os = "linux", feature = "gl"))]
 mod gl;
@@ -439,188 +446,46 @@ pub fn render_offscreen(
     }
 }
 
-/// A bucket key for the glyph cache: a character at a quantized size.
-fn size_key(size: f64) -> u32 {
-    (size * 4.0).round() as u32
-}
-
-/// A packed glyph-coverage atlas. Each unique `(char, size)` is rasterized once
-/// (white-on-black coverage) and shelf-packed into a single-row texture, so
-/// repeated glyphs in a scene reuse one slot — a per-glyph cache rather than
-/// re-rasterizing whole text runs.
-struct GlyphAtlas {
-    // Read by the GL renderer; on targets/builds without it this is unused.
-    #[cfg_attr(not(all(target_os = "linux", feature = "gl")), allow(dead_code))]
-    atlas: Pixmap,
-    /// Pixel rectangle of each `(char, size_key)` within the atlas.
-    uvs: std::collections::BTreeMap<(char, u32), Rect>,
-}
-
-impl GlyphAtlas {
-    /// Rasterize and pack every unique non-space glyph in `wanted`.
-    fn build(font: &Font, wanted: &[(char, f64)]) -> Self {
-        use std::collections::BTreeMap;
-        let mut keys: BTreeMap<(char, u32), f64> = BTreeMap::new();
-        for (ch, size) in wanted {
-            if !ch.is_whitespace() {
-                keys.insert((*ch, size_key(*size)), *size);
-            }
-        }
-        let cells: Vec<((char, u32), Pixmap)> = keys
-            .iter()
-            .map(|((ch, sk), size)| {
-                let s = ch.to_string();
-                let cw = font.measure(&s, *size).width.ceil().max(1.0);
-                let ch_h = font.line_height(*size).ceil().max(1.0);
-                let mut sc = Scene::new(Size::new(cw, ch_h));
-                sc.fill_text(font, &s, Point::new(0.0, 0.0), *size, Color::WHITE);
-                let pm = SoftwareRenderer::new()
-                    .with_background(Color::BLACK)
-                    .render(sc, ScaleFactor::IDENTITY);
-                ((*ch, *sk), pm)
-            })
-            .collect();
-
-        let total_w: u32 = cells
-            .iter()
-            .map(|(_, pm)| pm.size().width)
-            .sum::<u32>()
-            .max(1);
-        let height: u32 = cells
-            .iter()
-            .map(|(_, pm)| pm.size().height)
-            .max()
-            .unwrap_or(1)
-            .max(1);
-        let mut atlas = Pixmap::new(PhysicalSize::new(total_w, height));
-        let astride = atlas.stride();
-        let mut uvs = std::collections::BTreeMap::new();
-        let mut x = 0u32;
-        for (key, pm) in &cells {
-            let (pw, ph) = (pm.size().width, pm.size().height);
-            let pstride = pm.stride();
-            for row in 0..ph as usize {
-                let s = &pm.as_bytes()[row * pstride..row * pstride + pw as usize * 4];
-                let off = row * astride + x as usize * 4;
-                atlas.as_bytes_mut()[off..off + pw as usize * 4].copy_from_slice(s);
-            }
-            uvs.insert(*key, Rect::from_xywh(x as f64, 0.0, pw as f64, ph as f64));
-            x += pw;
-        }
-        GlyphAtlas { atlas, uvs }
-    }
-
-    fn uv(&self, ch: char, size: f64) -> Option<Rect> {
-        self.uvs.get(&(ch, size_key(size))).copied()
-    }
-}
-
-/// Render a live stipple [`Scene`] **GPU-natively**: box primitives become
-/// SDF-shaded geometry, and text is drawn from a packed **glyph atlas** — each
-/// unique glyph rasterized once (via `font`) into one shared texture the GPU
-/// samples per glyph — so any stipple UI renders through the GPU. `background`
-/// clears the target. Errors if the `gl` feature is off or no GL/EGL device is
-/// available.
+/// Render a live stipple [`Scene`] **GPU-natively** at `scale` (physical
+/// pixels per logical pixel) on a target cleared to `background`, returning
+/// the rendered frame. This is what a renderer set with
+/// [`App::render_with`](crate::App::render_with) calls.
 ///
-/// Layers ([`Scene::push_layer`]: transforms and group opacity) aren't drawn
-/// natively yet: a scene with any [effects](Scene::has_effects) is rasterized
-/// on the CPU and the result composited through the GPU, so it still looks
-/// right.
-pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pixmap, String> {
-    if scene.has_effects() {
-        let cpu = SoftwareRenderer::new()
-            .with_background(background)
-            .render(scene.clone(), ScaleFactor::IDENTITY);
-        return present_offscreen(&cpu);
-    }
-    let ls = scene.logical_size();
-    let size = ScaleFactor::IDENTITY.to_physical(ls);
-    let mut rects: Vec<(Rect, Color, f32, f32)> = Vec::new();
-
-    // Gather every glyph the scene needs, then pack them once.
-    let mut wanted: Vec<(char, f64)> = Vec::new();
-    for cmd in scene.commands() {
-        if let DrawCmd::Text { text, size: px, .. } = cmd {
-            wanted.extend(text.chars().map(|c| (c, *px)));
-        }
-    }
-    let atlas = GlyphAtlas::build(font, &wanted);
-
-    // Build per-glyph (src, dst, color) quads from the cached slots.
-    let mut glyphs: Vec<(Rect, Rect, Color)> = Vec::new();
-    for cmd in scene.commands() {
-        match cmd {
-            DrawCmd::Rect {
-                rect,
-                color,
-                radius,
-                border,
-            } => rects.push((*rect, *color, *radius as f32, *border as f32)),
-            DrawCmd::Text {
-                text,
-                origin,
-                size: px,
-                color,
-            } => {
-                for (i, ch) in text.char_indices() {
-                    if let Some(src) = atlas.uv(ch, *px) {
-                        let x = origin.x + font.measure(&text[..i], *px).width;
-                        let dst = Rect::from_xywh(x, origin.y, src.width(), src.height());
-                        glyphs.push((src, dst, *color));
-                    }
-                }
-            }
-            // An embedded-content viewport: draw a neutral placeholder rect so
-            // the reserved area is visible. Sampling the imported content
-            // texture (dma-buf) into this rect is the hardware-gated follow-up.
-            DrawCmd::Viewport { rect, .. } => {
-                rects.push((*rect, Color::rgb(0x20, 0x24, 0x2c), 0.0, 0.0))
-            }
-            // Clip regions are honored by the CPU rasterizer (nested clipped
-            // groups); the GPU path's scissor support is a follow-up.
-            // The GPU backends can't draw bitmaps yet, so OS-drawn controls are
-            // skipped here and their labels sit on the background.
-            DrawCmd::Image { .. } => {}
-            DrawCmd::PushClip(_) | DrawCmd::PopClip => {}
-            // Only identity layers get here (see `has_effects` above), and
-            // those change nothing.
-            DrawCmd::PushLayer { .. } | DrawCmd::PopLayer => {}
-        }
-    }
-
+/// Everything a scene holds is drawn on the GPU (see `docs/gpu.md`): boxes
+/// through an analytic-coverage shader, paths (fills, strokes, dashes) by
+/// stencil-and-cover with 16x supersampled coverage, bitmaps (OS-drawn
+/// controls under the native theme, decoded images, SVG rasters) as textured
+/// quads whose textures are cached by the image's identity, text from its own
+/// glyph outlines (each glyph rasterized once on the CPU and kept), canvases,
+/// clips, and layers with transforms and group opacity (offscreen targets,
+/// composited once). Only gradients, soft masks and concave clips are
+/// rasterized on the CPU, and only for their own bounds. The output stays
+/// within a small tolerance of [`SoftwareRenderer`](crate::render::SoftwareRenderer).
+///
+/// The GL context and caches are kept per thread, from frame to frame.
+/// Errors if the `gl` feature is off or no GL/EGL device is available.
+pub fn render_scene_scaled(
+    scene: &Scene,
+    background: Color,
+    scale: ScaleFactor,
+) -> Result<Pixmap, String> {
     #[cfg(all(target_os = "linux", feature = "gl"))]
     {
-        gl::render_scene_gl(size, background, &rects, &[], Some((&atlas.atlas, &glyphs)))
+        gl::render_scene_native(scene, background, scale)
     }
     #[cfg(not(all(target_os = "linux", feature = "gl")))]
     {
-        let _ = (size, background, glyphs);
+        let _ = (scene, background, scale);
         Err("stipple::gpu: built without the `gl` feature (Linux-only GLES backend)".to_string())
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn glyph_atlas_dedups_and_packs() {
-        let Some(font) = Font::system_default() else {
-            eprintln!("skipping: no system font found");
-            return;
-        };
-        // "hello" has 4 distinct glyphs (h, e, l, o); 'l' must pack once.
-        let wanted: Vec<(char, f64)> = "hello".chars().map(|c| (c, 16.0)).collect();
-        let atlas = GlyphAtlas::build(&font, &wanted);
-        assert_eq!(atlas.uvs.len(), 4, "repeated 'l' should share one slot");
-        for ch in ['h', 'e', 'l', 'o'] {
-            assert!(atlas.uv(ch, 16.0).is_some(), "missing glyph {ch}");
-        }
-        // Whitespace is not packed; a different size buckets separately.
-        let ws: Vec<(char, f64)> = vec![(' ', 16.0), ('a', 16.0), ('a', 24.0)];
-        let atlas2 = GlyphAtlas::build(&font, &ws);
-        assert_eq!(atlas2.uvs.len(), 2, "space dropped; 'a' at two sizes kept");
-        // The atlas is at least as wide as the widest single glyph.
-        assert!(atlas2.atlas.size().width >= 1);
-    }
+/// [`render_scene_scaled`] at scale 1. `font` is no longer used: text is
+/// drawn from the scene's own glyphs, whatever font set them.
+pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pixmap, String> {
+    let _ = font;
+    render_scene_scaled(scene, background, ScaleFactor::IDENTITY)
 }
+
+#[cfg(all(test, target_os = "linux", feature = "gl"))]
+mod compare;

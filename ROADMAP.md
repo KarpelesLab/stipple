@@ -1281,7 +1281,32 @@ Most input only works on X11 today.
   `checked` state (`Element::checked`). CI's web selftest checks the roles and
   names, activation and `aria-checked` in headless Chrome; not yet tried with a
   real screen reader.
-- ⬜ Images on the GPU path, so OS-drawn controls render under `App::render_with`.
+- ✅ Images on the GPU path, so OS-drawn controls render under `App::render_with`;
+  and with them the rest of the scene, so the GL scene renderer no longer falls
+  back to the CPU for transforms, opacity, paths or canvases.
+  `stipple::gpu::render_scene_scaled(scene, background, scale)` walks the
+  scene's node tree in paint order into device-space operations
+  (`src/gpu/ops.rs`, backend-neutral) that GLES2 executes on a persistent
+  context: upright boxes through an analytic-coverage shader; every other fill
+  and stroke flattened and stroked as `oxideav-raster` does, then filled by
+  stencil-and-cover with 4×4 supersampled coverage; bitmaps as textured quads
+  whose textures are cached by the image's `Arc` (uploaded once, freed when
+  the image is dropped or unused for 120 frames; images stay `Pixmap`s, so the
+  oxideav conversions are unchanged); text from the scene's own glyph outlines,
+  each glyph rasterized once per size, color, transform and sub-pixel position
+  and kept across frames; layers with group opacity in pooled offscreen
+  targets; clips as scissors or stencil polygons; canvases painted for the
+  part on screen. Only gradients, soft masks and concave clips are rasterized
+  on the CPU, for their own bounds. The scale is now honored (it rendered at
+  1x before), and text follows the scene's fonts and bidi. Unit tests render
+  boxes, paths, images, clips, layers, text, a canvas and an app (through
+  `App::render_with`) both ways at scales 1–2 and compare them: under 0.25 of
+  255 mean difference per channel on Mesa's llvmpipe and on an NVIDIA GPU;
+  CI's GPU job runs them on llvmpipe (`STIPPLE_REQUIRE_GPU`). Linux has no
+  OS-drawn controls, so those are covered as ordinary images. Not done: the
+  other GPU backends (Vulkan, D3D11, Metal, WebGPU) executing the same
+  operations, presenting without the read-back, and a glyph atlas. See
+  [docs/gpu.md](docs/gpu.md).
 - ✅ The web's exports in the library: `stipple::web_app!(app)` generates them,
   and `web/stipple.js` is the whole page side, so a web app provides only its
   `App`. `App::run` on the web keeps the handler and returns; the page drives
@@ -1351,8 +1376,7 @@ styling part of the toolkit.
   pointer query maps through the inverse transforms, handlers get positions in
   the element's own space, the hover/focus/drop overlays and damage follow the
   transform, and text renders from outlines under scale and rotation.
-  `transformdemo` shows it. Not covered: native layers in the GPU scene
-  renderer (it falls back to the CPU raster), transformed embedded-viewport
+  `transformdemo` shows it. Not covered: transformed embedded-viewport
   content (moved only), the IME preedit underline and caret rect, skew/3D, and
   transformed bounds in the accessibility tree. See
   [docs/transforms.md](docs/transforms.md).

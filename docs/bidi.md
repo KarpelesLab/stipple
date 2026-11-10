@@ -191,9 +191,6 @@ mirrored UI; CI checks it on X11, Windows and macOS.
 
 ## Not done yet
 
-- The GPU renderer (`stipple::gpu`) draws text character by character from an
-  atlas and ignores bidi; the CPU renderer, which every backend uses by
-  default, is bidi-aware.
 - scribe's shaper doesn't report which characters each glyph came from, so in a
   run where glyphs and characters don't match one to one (a ligature such as
   lam-alef, or an Indic cluster) caret positions are measured from shaped

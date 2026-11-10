@@ -120,13 +120,17 @@ fn main() {
     }
 
     // The capstone: render the *actual* widget-tree Scene (the same `view`)
-    // GPU-natively via render_scene — boxes + text straight from the Scene's
-    // recorded draw commands, no hand-built rectangles.
+    // GPU-natively via render_scene_scaled — boxes, glyphs, clips and layers
+    // straight from the Scene, no hand-built rectangles.
     if let Some(font) = Font::system_default() {
         let theme = Theme::dark();
         let element = view(&(), &mut Cx::new(&theme));
         let scene = stipple::core::render_view(&element, Size::new(W, H), &theme, Some(&font));
-        match stipple::gpu::render_scene(&scene, theme.palette.background, &font) {
+        match stipple::gpu::render_scene_scaled(
+            &scene,
+            theme.palette.background,
+            stipple::geometry::ScaleFactor::IDENTITY,
+        ) {
             Ok(out) => {
                 std::fs::write("gpu-scene.raw", out.as_bytes()).expect("write raw");
                 println!(

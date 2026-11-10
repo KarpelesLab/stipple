@@ -302,7 +302,7 @@ mod tests {
             Color::WHITE,
             2.0,
         );
-        assert!(scene.has_effects(), "the GPU path can't draw paths yet");
+        assert!(scene.has_effects(), "no DrawCmd describes a path");
         let out = raster(scene);
         assert_eq!(out.pixel(5, 9), Some([255, 255, 255, 255]));
         assert_eq!(out.pixel(5, 10), Some([255, 255, 255, 255]));

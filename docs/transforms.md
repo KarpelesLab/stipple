@@ -95,9 +95,6 @@ repaints the subtree where it was and where it is now.
 
 ## Not covered yet
 
-- The GPU scene renderer (`stipple::gpu::render_scene`, experimental) doesn't
-  draw layers natively: a scene with any transform or translucent layer is
-  rasterized on the CPU and only composited on the GPU.
 - Embedded-content viewports: the placeholder transforms, but registered
   content is blitted unscaled and unrotated at the moved top-left corner.
 - The input method's composition underline (preedit) and the caret position

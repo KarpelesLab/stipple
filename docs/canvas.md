@@ -126,10 +126,12 @@ changing a few rows per tick; with `--selftest` it checks that the pixels
 rasterized add up to the invalidated rows and not to whole frames. CI runs it on
 X11, Wayland, Windows and macOS.
 
-A custom renderer set with `App::render_with` (the GPU path) gets the scene, but
-the structured `DrawCmd`s don't describe paths or canvases: `Scene::has_effects`
-returns `true` for such a scene, and `stipple::gpu::render_scene` rasterizes it
-on the CPU.
+A custom renderer set with `App::render_with` gets the scene. The structured
+`DrawCmd`s don't describe paths or canvases (`Scene::has_effects` returns `true`
+for such a scene), but `stipple::gpu::render_scene_scaled` walks the scene's
+nodes instead: it runs a canvas's paint callback for the part on screen and
+draws what it painted on the GPU like the rest of the scene (see
+[gpu.md](gpu.md)).
 
 ## Viewport content from another thread
 

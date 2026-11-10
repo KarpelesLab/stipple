@@ -90,6 +90,7 @@ Decoding inside the view would decode, and repaint, every frame.
 
 ## Limits
 
-- The GPU path (`App::render_with`, `stipple::gpu`) doesn't draw images yet;
-  they render on the CPU path. See ROADMAP Phase 7f.
+- On the GPU path (`App::render_with` with `stipple::gpu`), each bitmap is a
+  texture cached by its `Arc`, so keeping the `Arc` also saves the upload. See
+  [gpu.md](gpu.md).
 - Animated GIF / APNG / WebP show their first frame.

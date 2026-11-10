@@ -6,6 +6,11 @@ use crate::geometry::{PhysicalSize, Rect};
 use crate::render::{Color, Pixmap};
 use core::ffi::{c_char, c_void};
 
+mod scene;
+#[cfg(test)]
+pub(crate) use scene::last_uploads;
+pub(crate) use scene::render as render_scene_native;
+
 // ---- EGL / GL scalar types --------------------------------------------------
 
 type EGLDisplay = *mut c_void;
@@ -978,8 +983,8 @@ unsafe fn export_dmabuf_current(
 
         // A solid stipple-blue source texture of the requested size.
         let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
-        for px in pixels.chunks_exact_mut(4) {
-            px.copy_from_slice(&[0x60, 0x9c, 0xff, 0xff]);
+        for px in pixels.as_chunks_mut::<4>().0 {
+            *px = [0x60, 0x9c, 0xff, 0xff];
         }
         let mut tex: GLuint = 0;
         glGenTextures(1, &mut tex);
@@ -1293,7 +1298,9 @@ unsafe fn dmabuf_roundtrip(dpy: EGLDisplay) -> Result<Vec<u8>, String> {
         let want = [[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
         for w3 in want {
             let found = pix
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|p| p[0] == w3[0] && p[1] == w3[1] && p[2] == w3[2]);
             if !found {
                 return Err(format!(

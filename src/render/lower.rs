@@ -66,7 +66,7 @@ pub(crate) fn placeholder(index: usize, bounds: Rect) -> Node {
     })
 }
 
-fn deferred_index(img: &ImageRef) -> Option<usize> {
+pub(crate) fn deferred_index(img: &ImageRef) -> Option<usize> {
     let pts = img.frame.pts?;
     (img.frame.planes.is_empty() && pts & TAG_MASK == TAG).then_some((pts & !TAG_MASK) as usize)
 }
@@ -81,14 +81,14 @@ fn ox_rect(r: Rect) -> OxRect {
 }
 
 /// An axis-aligned box as `[x0, y0, x1, y1]`.
-type Bounds = [f32; 4];
+pub(crate) type Bounds = [f32; 4];
 
 fn intersects(a: &Bounds, b: &Bounds) -> bool {
     a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
 }
 
 /// The box around `b` mapped by `t`.
-fn map_bounds(t: &Transform2D, b: Bounds) -> Bounds {
+pub(crate) fn map_bounds(t: &Transform2D, b: Bounds) -> Bounds {
     if t.b == 0.0 && t.c == 0.0 {
         let (x0, x1) = (t.a * b[0] + t.e, t.a * b[2] + t.e);
         let (y0, y1) = (t.d * b[1] + t.f, t.d * b[3] + t.f);
@@ -113,7 +113,7 @@ fn map_bounds(t: &Transform2D, b: Bounds) -> Bounds {
 
 /// The box around every point and control point of `path` (curves stay
 /// inside their control points; an arc is padded by its radius).
-fn path_bounds(path: &Path) -> Option<Bounds> {
+pub(crate) fn path_bounds(path: &Path) -> Option<Bounds> {
     let mut b = [
         f32::INFINITY,
         f32::INFINITY,
@@ -150,7 +150,7 @@ fn path_bounds(path: &Path) -> Option<Bounds> {
 
 /// Whether `path` is an upright rectangle: a move, three lines along the
 /// axes and a close (what [`Scene::push_clip`] makes).
-fn is_rect(path: &Path) -> bool {
+pub(crate) fn is_rect(path: &Path) -> bool {
     let [
         PathCommand::MoveTo(a),
         PathCommand::LineTo(b),
@@ -167,7 +167,7 @@ fn is_rect(path: &Path) -> bool {
 }
 
 /// The inverse of `t`, if it has one.
-fn invert(t: &Transform2D) -> Option<Transform2D> {
+pub(crate) fn invert(t: &Transform2D) -> Option<Transform2D> {
     let det = t.a * t.d - t.b * t.c;
     if det == 0.0 || !det.is_finite() {
         return None;
@@ -396,13 +396,7 @@ impl Lower<'_> {
             _ => bounds,
         };
         let origin = bounds.origin;
-        let mut scene = Scene::new(bounds.size);
-        scene.set_scale(scale);
-        {
-            let dirty = dirty.translate(Vec2::new(-origin.x, -origin.y));
-            let mut canvas = Canvas::new(&mut scene, dirty);
-            paint(&mut canvas);
-        }
+        let scene = paint_canvas(bounds, paint, scale, dirty);
         let shift = Transform2D::translate(origin.x as f32, origin.y as f32);
         let inner = scene.lower_root(self.view, &local.compose(&shift));
         if inner.is_empty() {
@@ -422,9 +416,24 @@ impl Lower<'_> {
     }
 }
 
+/// Run a canvas's `paint` callback for the part `dirty` of `bounds` (both in
+/// the coordinates the canvas sits in), at `scale` physical pixels per logical
+/// pixel: the scene it drew, in the canvas's own coordinates.
+pub(crate) fn paint_canvas(bounds: Rect, paint: &CanvasPaint, scale: f64, dirty: Rect) -> Scene {
+    let origin = bounds.origin;
+    let mut scene = Scene::new(bounds.size);
+    scene.set_scale(scale);
+    {
+        let dirty = dirty.translate(Vec2::new(-origin.x, -origin.y));
+        let mut canvas = Canvas::new(&mut scene, dirty);
+        paint(&mut canvas);
+    }
+    scene
+}
+
 /// The box around everything in `nodes` (in their coordinates), or `None` if
 /// some of it has no known bound.
-fn subtree_bounds(nodes: &[Node]) -> Option<Bounds> {
+pub(crate) fn subtree_bounds(nodes: &[Node]) -> Option<Bounds> {
     let mut out = [
         f32::INFINITY,
         f32::INFINITY,

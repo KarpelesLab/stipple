@@ -66,6 +66,7 @@ How to build, package and run on each platform, and what works there today.
 | Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
+| Scenes rendered on the GPU (`stipple::gpu`, experimental) | GLES2 ⁴⁷ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Message boxes | drawn ⁴⁴ | native ⁴⁴ | native ⁴⁴ | native ³ | drawn ⁴⁴ | native ¹⁰ |
 | Secure password entry | IME off | IME off | `EnableSecureEventInput` ¹⁰ | IME off | IME off | IME off |
 
@@ -262,6 +263,12 @@ OS. See [windows-and-cursors.md](windows-and-cursors.md#several-windows).
 `listmotion --demo` mid-flight, then checks it comes to rest and stops using
 the CPU. Elsewhere it runs on each platform's frame clock but isn't run in CI.
 See [animation.md](animation.md#enter-exit-and-layout-animations).
+⁴⁷ Behind the `gl` feature, through `App::render_with`: boxes, paths, images
+(textures cached per image), text, clips, canvases and layers with transforms
+and opacity, all on the GPU, read back and presented as a bitmap. CI renders
+test scenes and an app both ways under Mesa's llvmpipe and compares them with
+the software renderer, and screenshots `gpuwindow` under Xvfb. Vulkan, Direct3D
+11, Metal and WebGPU only draw a test triangle so far. See [gpu.md](gpu.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -291,5 +298,6 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop
 - [Windows and cursors](windows-and-cursors.md): several windows opened and closed at run time, titles, position, size and state, size limits, maximize, fullscreen, the icon, and cursor shapes
 - [Closing, quitting, focus and attention](window-lifecycle.md): asking before a window closes or the app quits, window focus, attention requests, the bell, and Wayland title bars
+- [Rendering on the GPU](gpu.md): `stipple::gpu` under `App::render_with`, what it draws how, and how close it is to the software renderer
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

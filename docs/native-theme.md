@@ -55,9 +55,11 @@ with the same colors as on Linux.
 
 ## Limits
 
-- **GPU rendering**: the GPU backends can't draw bitmaps yet, so under
-  `App::render_with` the controls' chrome is missing and their labels sit on the
-  background.
+- **GPU rendering**: the OS draws the controls into bitmaps, which the GPU
+  renderer (`stipple::gpu::render_scene_scaled` under `App::render_with`)
+  draws as textures, uploaded once per bitmap; only its GL backend (Linux)
+  renders scenes yet, and Linux has no OS-drawn controls, so this combination
+  is tested with ordinary images. See [gpu.md](gpu.md).
 - **Other variants**: `Variant::Ghost` and `Variant::Danger` buttons have no OS
   equivalent and stay self-drawn.
 

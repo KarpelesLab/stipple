@@ -2774,6 +2774,24 @@ jobs:
           echo "Vulkan triangle center pixel: $tript"
           echo "$tript" | grep -q "52,211,153"
 
+      # The GL scene renderer (boxes, paths, images with their texture cache,
+      # text, clips, layers, canvases, a whole app through App::render_with)
+      # against the software renderer, pixel by pixel, on llvmpipe. Required:
+      # with STIPPLE_REQUIRE_GPU the tests fail instead of skipping when EGL
+      # can't start.
+      - name: GPU scene renderer matches the software renderer (llvmpipe)
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          STIPPLE_REQUIRE_GPU: "1"
+          STIPPLE_GPU_DUMP: ${{ github.workspace }}/gpu-compare
+        run: |
+          mkdir -p gpu-compare visual_output
+          cargo test -p stipple --features gl --lib gpu:: -- --nocapture --test-threads 1
+          for f in gpu-compare/*.ppm; do
+            convert "$f" "visual_output/gpu-compare-$(basename "${f%.ppm}").png"
+          done
+
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()

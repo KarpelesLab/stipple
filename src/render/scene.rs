@@ -263,7 +263,8 @@ impl Scene {
     /// (a [`DrawCmd::PushLayer`] with a non-identity transform or an opacity
     /// below 1), or the scene holds something the [`DrawCmd`]s don't describe
     /// (a [path](Scene::fill_path), a [canvas](Scene::draw_canvas)). Backends
-    /// that draw from the commands fall back on this.
+    /// that draw from the commands fall back on this. (`stipple::gpu`'s scene
+    /// renderer walks the scene's nodes instead, and draws all of these.)
     pub fn has_effects(&self) -> bool {
         self.uncommanded
             || self.commands.iter().any(|c| {
@@ -456,6 +457,20 @@ impl Scene {
         }
     }
 
+    /// Call `f` with the scene's root nodes (any clips or layers left open
+    /// closed) and its deferred bitmaps and canvases: for a backend that walks
+    /// the node tree itself instead of lowering it (`stipple::gpu`).
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    pub(crate) fn with_root<R>(&self, f: impl FnOnce(&[Node], &[Deferred]) -> R) -> R {
+        if self.stack.len() > 1 {
+            let mut closed = self.clone();
+            closed.close_all();
+            f(&closed.stack[0].nodes, &closed.deferred)
+        } else {
+            f(&self.stack[0].nodes, &self.deferred)
+        }
+    }
+
     /// Shared lowering: close any open clips, lower the root nodes for `view`
     /// (culling what can't touch it only when `cull`), and attach `view` as
     /// the frame's view box.
@@ -508,7 +523,7 @@ pub(crate) fn rect_path(rect: Rect) -> Path {
     p
 }
 
-fn round_rect_path(rect: Rect, radius: f64) -> Path {
+pub(crate) fn round_rect_path(rect: Rect, radius: f64) -> Path {
     let r = radius.max(0.0).min(rect.width().min(rect.height()) / 2.0);
     if r <= 0.0 {
         return rect_path(rect);
