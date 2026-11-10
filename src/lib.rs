@@ -32,6 +32,8 @@ pub mod anim;
 mod app_dnd;
 mod app_lifecycle;
 mod app_pointer;
+#[cfg(test)]
+mod canvas_tests;
 pub mod core;
 pub mod geometry;
 #[cfg(feature = "gpu")]
@@ -282,6 +284,12 @@ struct Pane<S> {
     clicks: ClickCounter,
     // Set when state/focus/hover changed so the next build rebuilds the tree.
     dirty: bool,
+    // Canvas invalidations and viewports whose content changed, not yet
+    // presented; and whether the next present may skip rebuilding the view
+    // because only those changed.
+    canvas_pending: Vec<crate::core::CanvasInvalidation>,
+    viewports_pending: Vec<ViewportId>,
+    repaint_only: bool,
     // The tree + overlay state that is currently on screen, used as the diff
     // baseline so a present can be limited to the region that actually changed.
     presented: Option<LayoutNode>,
@@ -396,6 +404,9 @@ impl<S: 'static> Pane<S> {
             text_selecting: None,
             clicks: ClickCounter::default(),
             dirty: true,
+            canvas_pending: Vec::new(),
+            viewports_pending: Vec::new(),
+            repaint_only: false,
             presented: None,
             last_pixmap: None,
             highlights: Default::default(),
@@ -695,10 +706,15 @@ impl<S: 'static> App<S> {
     /// placeholder. This is the CPU content path; a GPU backend imports a shared
     /// texture (dma-buf / `IOSurface` / shared handle) into the same rect
     /// instead. Marks every window dirty so the change is presented next frame.
+    ///
+    /// While the app runs, use
+    /// [`AppHandle::set_viewport_content`](crate::core::AppHandle::set_viewport_content)
+    /// (from any thread): only the viewport's area is presented.
     pub fn set_viewport_content(&mut self, id: ViewportId, content: Pixmap) {
         self.viewport_content.insert(id, content);
         for pane in &mut self.panes {
             pane.dirty = true;
+            pane.viewports_pending.push(id);
         }
     }
 
@@ -708,8 +724,37 @@ impl<S: 'static> App<S> {
         if self.viewport_content.remove(&id).is_some() {
             for pane in &mut self.panes {
                 pane.dirty = true;
+                pane.viewports_pending.push(id);
             }
         }
+    }
+
+    /// Take the canvas invalidations and viewport content queued on the
+    /// [`AppHandle`] and hand them to every window. Returns whether there
+    /// were any.
+    fn pump_content(&mut self) -> bool {
+        let canvases = self.handle.take_canvas_invalidations();
+        let viewports = self.handle.take_viewport_content();
+        if canvases.is_empty() && viewports.is_empty() {
+            return false;
+        }
+        for (id, content) in viewports {
+            match content {
+                Some(content) => {
+                    self.viewport_content.insert(id, content);
+                }
+                None => {
+                    self.viewport_content.remove(&id);
+                }
+            }
+            for pane in &mut self.panes {
+                pane.viewports_pending.push(id);
+            }
+        }
+        for pane in &mut self.panes {
+            pane.canvas_pending.extend(canvases.iter().copied());
+        }
+        true
     }
 
     /// Forward input that lands in an embedded [`viewport`](Element::viewport) to
@@ -844,19 +889,6 @@ impl<S: 'static> Pane<S> {
                 pixmap.blit(src, x, y);
             }
         }
-    }
-
-    /// Whether the laid-out tree contains any embedded-content viewport. Content
-    /// is composited post-rasterize (not via the area-repaint sub-renderer), so a
-    /// frame with a viewport opts out of partial repaint to avoid a damaged rect
-    /// over the viewport erasing its content back to the placeholder.
-    fn has_viewports(&self) -> bool {
-        let Some(tree) = self.tree.as_ref() else {
-            return false;
-        };
-        let mut views = Vec::new();
-        collect_viewports(tree, &mut views);
-        !views.is_empty()
     }
 
     /// Build the element tree for the current state, lay it out to fill the
@@ -1082,9 +1114,6 @@ impl<S: 'static> Pane<S> {
         // painting, so the retained tree matches what's drawn for event routing.
         crate::core::apply_scroll(&mut tree, &mut self.scroll_offsets);
         crate::core::mark_native_states(&mut tree, hovered, pressed, self.focused);
-        let mut scene = Scene::new(size);
-        scene.set_scale(self.scale.get());
-        paint(&tree, &mut scene, font);
         // Lighten the hovered tappable element with the theme's overlay, twice
         // over while pressed, fading between states.
         // (Not on elements that style their own hover and press looks.)
@@ -1098,18 +1127,12 @@ impl<S: 'static> Pane<S> {
             .map(|(id, level)| (id, (overlay.a as f64 * level).round().min(255.0) as u8))
             .filter(|(_, a)| *a > 0)
             .collect();
-        for &(id, a) in &self.highlight_alphas {
-            paint_hover(&tree, id, &mut scene, Color { a, ..overlay });
-        }
         // The drop target under an acceptable drag, unless its view draws its
         // own drag-over look from its `DropState`.
         self.dnd.highlight = self
             .dnd
             .target
             .filter(|id| !self.dnd.queried.contains(id) && !self.styled_drops.contains(id));
-        if let Some(id) = self.dnd.highlight {
-            app_dnd::paint_drop_target(&tree, id, &mut scene, &theme);
-        }
         self.animating = frame_requested
             || self.highlights.animating(now)
             || self.dnd.fades.animating(drop_now)
@@ -1119,10 +1142,31 @@ impl<S: 'static> Pane<S> {
         if self.animating {
             crate::platform::frame::request();
         }
+        self.tree = Some(tree);
+        self.dirty = false;
+        self.paint_scene(&theme, font)
+    }
+
+    /// Paint the laid-out tree (`self.tree`) with what is drawn over it: the
+    /// hover and press highlights, the drop target, the focus ring and caret.
+    fn paint_scene(&self, theme: &Theme, font: Option<&Font>) -> Scene {
+        let mut scene = Scene::new(self.attrs.logical_size);
+        scene.set_scale(self.scale.get());
+        let Some(tree) = self.tree.as_ref() else {
+            return scene;
+        };
+        paint(tree, &mut scene, font);
+        let overlay = theme.palette.hover_overlay;
+        for &(id, a) in &self.highlight_alphas {
+            paint_hover(tree, id, &mut scene, Color { a, ..overlay });
+        }
+        if let Some(id) = self.dnd.highlight {
+            app_dnd::paint_drop_target(tree, id, &mut scene, theme);
+        }
         // Overlay a focus ring + caret on the focused element.
         if let Some(fid) = self.focused {
             paint_focus(
-                &tree,
+                tree,
                 fid,
                 &mut scene,
                 font,
@@ -1130,11 +1174,151 @@ impl<S: 'static> Pane<S> {
                 theme.palette.text,
                 theme.palette.selection,
             );
-            crate::core::paint_preedit(&tree, fid, &mut scene, font, theme.palette.text);
+            crate::core::paint_preedit(tree, fid, &mut scene, font, theme.palette.text);
         }
-        self.tree = Some(tree);
-        self.dirty = false;
         scene
+    }
+
+    /// Where the canvas invalidations and viewport content changes not yet
+    /// presented are drawn in the window (logical pixels), and forget them.
+    fn take_content_damage(&mut self) -> Vec<Rect> {
+        let canvases = std::mem::take(&mut self.canvas_pending);
+        let viewports = std::mem::take(&mut self.viewports_pending);
+        let Some(tree) = self.tree.as_ref() else {
+            return Vec::new();
+        };
+        let mut rects = crate::core::invalidated_rects(tree, &canvases);
+        for id in viewports {
+            rects.extend(drawn_bounds(tree, &|n| viewport_is(n, id), 0.0));
+        }
+        rects
+    }
+
+    /// When only canvases or viewport content changed since the frame on
+    /// screen (nothing asked for a rebuild), the frame painted again from the
+    /// tree on screen, and the damage: just those areas. `None` when the view
+    /// has to be rebuilt (or `force`d presents want a whole new frame).
+    fn repaint(
+        &mut self,
+        theme: &Theme,
+        font: Option<&Font>,
+        force: bool,
+    ) -> Option<(Scene, Damage)> {
+        let repaint_only = std::mem::take(&mut self.repaint_only);
+        if !repaint_only
+            || force
+            || self.dirty
+            || self.animating
+            || self.tree.is_none()
+            || self.presented.is_none()
+            || self.built_theme != Some(*theme)
+        {
+            return None;
+        }
+        let rects = self.take_content_damage();
+        let damage = if rects.is_empty() {
+            Damage::None
+        } else {
+            Damage::Regions(crate::core::coalesce(rects))
+        };
+        Some((self.paint_scene(theme, font), damage))
+    }
+
+    /// Rasterize `scene` and present it on `surface` (`phys_size` physical
+    /// pixels): only the `damage`d area when the frame on screen can be
+    /// patched (the software path, an unchanged size, localized damage), the
+    /// whole frame otherwise. `force` presents the whole frame regardless —
+    /// for expose and resize, where the window's pixels were lost.
+    #[allow(clippy::too_many_arguments)]
+    fn present_scene(
+        &mut self,
+        scene: Scene,
+        damage: Damage,
+        theme: &Theme,
+        viewport_content: &HashMap<ViewportId, Pixmap>,
+        surface: &mut dyn Surface,
+        phys_size: PhysicalSize,
+        force: bool,
+    ) {
+        let scale = self.scale;
+        // A theme cross-fade presents the whole window each frame, but
+        // only re-rasterizes what changed underneath.
+        let fading = self.crossfade.needs_full();
+
+        // Nothing changed since the last present: render nothing, upload
+        // nothing. (Skips the whole rasterize, not just the upload.)
+        if !force && damage.is_empty() && !fading {
+            app_dbg(format_args!("present: no damage"));
+            return;
+        }
+        app_dbg(format_args!("present: {damage:?}"));
+
+        surface.resize(phys_size);
+        let bounds = Rect::from_xywh(0.0, 0.0, phys_size.width as f64, phys_size.height as f64);
+
+        // Area repaint: re-rasterize only the damaged rects into the
+        // retained pixmap and upload those. Requires the software path, a
+        // localizable (non-forced, region) damage, and a retained pixmap
+        // matching the current surface size.
+        // Mid-fade, an unchanged view needs no rasterizing at all.
+        let can_partial = !force
+            && self.frame_renderer.is_none()
+            && (matches!(damage, Damage::Regions(_)) || (fading && damage.is_empty()))
+            && self.last_pixmap.as_ref().map(Pixmap::size) == Some(phys_size);
+
+        if can_partial {
+            let regions = if damage.is_empty() {
+                Vec::new()
+            } else {
+                damage.to_physical(scale, bounds)
+            };
+            if regions.is_empty() && !fading {
+                return; // damage fell entirely outside the surface
+            }
+            let s = scale.get();
+            let renderer = SoftwareRenderer::new().with_background(theme.palette.background);
+            let mut pixmap = self.last_pixmap.take().expect("checked by can_partial");
+            for r in &regions {
+                let (pw, ph) = (r.width() as u32, r.height() as u32);
+                if pw == 0 || ph == 0 {
+                    continue;
+                }
+                // `regions` are integer device-pixel rects; the matching
+                // logical view is exactly that rect divided by the scale, so
+                // the sub-render lands 1:1 on the destination pixels.
+                let view =
+                    Rect::from_xywh(r.min_x() / s, r.min_y() / s, r.width() / s, r.height() / s);
+                let sub = renderer.render_area(&scene, view, PhysicalSize::new(pw, ph));
+                pixmap.blit(&sub, r.min_x() as u32, r.min_y() as u32);
+            }
+            // The area renders drew placeholders where viewports are: put
+            // their content back over them (unchanged pixels elsewhere).
+            if !regions.is_empty() {
+                self.composite_viewports(&mut pixmap, viewport_content, scale);
+            }
+            match self.crossfade.compose(&pixmap) {
+                // The blend changes everywhere: present all of it.
+                Some(blend) => surface.present(&blend, &[]),
+                None if fading => surface.present(&pixmap, &[]),
+                None => surface.present(&pixmap, &regions),
+            }
+            self.last_pixmap = Some(pixmap);
+        } else {
+            // Full render: forced (expose/resize), GPU path, first frame, a
+            // size change, or unlocalizable (`Damage::Full`) damage.
+            let mut pixmap = self.rasterize(scene, theme, scale);
+            self.composite_viewports(&mut pixmap, viewport_content, scale);
+            let regions = if force || fading {
+                Vec::new()
+            } else {
+                damage.to_physical(scale, bounds)
+            };
+            // Mid-fade, show the blend; keep the frame itself, which the
+            // fade and later partial repaints build on.
+            let shown = self.crossfade.compose(&pixmap);
+            surface.present(shown.as_ref().unwrap_or(&pixmap), &regions);
+            self.last_pixmap = Some(pixmap);
+        }
     }
 
     /// Compute the [`Damage`] of the frame just built (in `self.tree`) relative
@@ -1169,6 +1353,10 @@ impl<S: 'static> Pane<S> {
             }
             _ => Damage::Full,
         };
+        // Canvases invalidated and viewport content changed since the last
+        // present: the tree diff can't see those.
+        let content = self.take_content_damage();
+        let damage = merge_regions(damage, content);
         self.presented = self.tree.clone();
         self.painted_highlights = self.highlight_alphas.clone();
         self.painted_focused = self.focused;
@@ -1817,6 +2005,7 @@ impl<S: 'static> App<S> {
     /// [`Damage::Full`].
     pub fn render_frame(&mut self) -> (Pixmap, Damage) {
         self.refresh_theme();
+        self.pump_content();
         let App {
             state,
             theme,
@@ -2364,112 +2553,54 @@ impl<S: 'static> App<S> {
             let pane = &mut panes[idx];
             let scale = window.scale_factor();
             pane.scale = scale;
-            pane.drop_stale_preedit(state);
-            let scene = pane.build_frame(state, theme, font.as_ref());
-            app_dbg(format_args!("present: built"));
-            pane.sync_ime(window, font.as_ref());
-            // The view may have changed the cursor under a pointer at rest (a
-            // terminal hiding it while the user types).
-            if pane.pointer_in
-                && let Some(cursor) = pane.cursor_change(pane.last_pointer)
-            {
-                window.set_cursor(cursor);
-            }
-
-            // Push the freshly-built accessibility tree to the OS bridge so a
-            // screen reader sees the current element hierarchy and focus.
-            if let Some(tree) = pane.accessibility_tree() {
-                window.set_accessibility_tree(&to_platform_a11y(&tree));
-                // A focused text input asks for the on-screen keyboard.
-                fn typing(node: &crate::core::AccessNode) -> bool {
-                    use crate::core::Role;
-                    (node.focused && matches!(node.role, Role::TextField | Role::SpinButton))
-                        || node.children.iter().any(typing)
+            // Only canvases or viewport content changed: paint the tree on
+            // screen again, without rebuilding the view.
+            let (scene, damage) = match pane.repaint(theme, font.as_ref(), force) {
+                Some(frame) => {
+                    app_dbg(format_args!("present: repainted"));
+                    frame
                 }
-                window.set_text_input_active(typing(&tree));
-            }
+                None => {
+                    pane.drop_stale_preedit(state);
+                    let scene = pane.build_frame(state, theme, font.as_ref());
+                    app_dbg(format_args!("present: built"));
+                    pane.sync_ime(window, font.as_ref());
+                    // The view may have changed the cursor under a pointer at
+                    // rest (a terminal hiding it while the user types).
+                    if pane.pointer_in
+                        && let Some(cursor) = pane.cursor_change(pane.last_pointer)
+                    {
+                        window.set_cursor(cursor);
+                    }
 
-            let damage = pane.take_damage();
-            // A theme cross-fade presents the whole window each frame, but
-            // only re-rasterizes what changed underneath.
-            let fading = pane.crossfade.needs_full();
-
-            // Nothing changed since the last present: render nothing, upload
-            // nothing. (Skips the whole rasterize, not just the upload.)
-            if !force && damage.is_empty() && !fading {
-                app_dbg(format_args!("present: no damage"));
-                return;
-            }
-            app_dbg(format_args!("present: {damage:?}"));
-
+                    // Push the freshly-built accessibility tree to the OS bridge
+                    // so a screen reader sees the current element hierarchy and
+                    // focus.
+                    if let Some(tree) = pane.accessibility_tree() {
+                        window.set_accessibility_tree(&to_platform_a11y(&tree));
+                        // A focused text input asks for the on-screen keyboard.
+                        fn typing(node: &crate::core::AccessNode) -> bool {
+                            use crate::core::Role;
+                            (node.focused
+                                && matches!(node.role, Role::TextField | Role::SpinButton))
+                                || node.children.iter().any(typing)
+                        }
+                        window.set_text_input_active(typing(&tree));
+                    }
+                    (scene, pane.take_damage())
+                }
+            };
             let phys_size = window.inner_size();
             let surface = surfaces[idx].get_or_insert_with(|| window.create_surface());
-            surface.resize(phys_size);
-            let bounds = Rect::from_xywh(0.0, 0.0, phys_size.width as f64, phys_size.height as f64);
-
-            // Area repaint: re-rasterize only the damaged rects into the
-            // retained pixmap and upload those. Requires the software path, a
-            // localizable (non-forced, region) damage, and a retained pixmap
-            // matching the current surface size.
-            // Mid-fade, an unchanged view needs no rasterizing at all.
-            let can_partial = !force
-                && pane.frame_renderer.is_none()
-                && !pane.has_viewports()
-                && (matches!(damage, Damage::Regions(_)) || (fading && damage.is_empty()))
-                && pane.last_pixmap.as_ref().map(Pixmap::size) == Some(phys_size);
-
-            if can_partial {
-                let regions = if damage.is_empty() {
-                    Vec::new()
-                } else {
-                    damage.to_physical(scale, bounds)
-                };
-                if regions.is_empty() && !fading {
-                    return; // damage fell entirely outside the surface
-                }
-                let s = scale.get();
-                let renderer = SoftwareRenderer::new().with_background(theme.palette.background);
-                let pixmap = pane.last_pixmap.as_mut().expect("checked by can_partial");
-                for r in &regions {
-                    let (pw, ph) = (r.width() as u32, r.height() as u32);
-                    if pw == 0 || ph == 0 {
-                        continue;
-                    }
-                    // `regions` are integer device-pixel rects; the matching
-                    // logical view is exactly that rect divided by the scale, so
-                    // the sub-render lands 1:1 on the destination pixels.
-                    let view = Rect::from_xywh(
-                        r.min_x() / s,
-                        r.min_y() / s,
-                        r.width() / s,
-                        r.height() / s,
-                    );
-                    let sub =
-                        renderer.render_region(scene.clone(), view, PhysicalSize::new(pw, ph));
-                    pixmap.blit(&sub, r.min_x() as u32, r.min_y() as u32);
-                }
-                match pane.crossfade.compose(pixmap) {
-                    // The blend changes everywhere: present all of it.
-                    Some(blend) => surface.present(&blend, &[]),
-                    None if fading => surface.present(pixmap, &[]),
-                    None => surface.present(pixmap, &regions),
-                }
-            } else {
-                // Full render: forced (expose/resize), GPU path, first frame, a
-                // size change, or unlocalizable (`Damage::Full`) damage.
-                let mut pixmap = pane.rasterize(scene, theme, scale);
-                pane.composite_viewports(&mut pixmap, viewport_content, scale);
-                let regions = if force || fading {
-                    Vec::new()
-                } else {
-                    damage.to_physical(scale, bounds)
-                };
-                // Mid-fade, show the blend; keep the frame itself, which the
-                // fade and later partial repaints build on.
-                let shown = pane.crossfade.compose(&pixmap);
-                surface.present(shown.as_ref().unwrap_or(&pixmap), &regions);
-                pane.last_pixmap = Some(pixmap);
-            }
+            pane.present_scene(
+                scene,
+                damage,
+                theme,
+                viewport_content,
+                surface.as_mut(),
+                phys_size,
+                force,
+            );
         };
 
         backend::run(primary_attrs, move |event, window| {
@@ -2779,6 +2910,8 @@ impl<S: 'static> App<S> {
                     if self.handle.exit_requested() {
                         return ControlFlow::Exit;
                     }
+                    // Canvases to repaint and viewport content to show.
+                    let content = self.pump_content();
                     if !ran && !self.panes[idx].animating {
                         // Repeated, this means a deadline that keeps coming due.
                         app_dbg(format_args!("wake with nothing to do"));
@@ -2788,6 +2921,11 @@ impl<S: 'static> App<S> {
                         for pane in &mut self.panes {
                             pane.dirty |= ran || pane.animating;
                         }
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    } else if content {
+                        // Only canvases or viewport content changed: no
+                        // rebuild, just those areas.
+                        self.panes[idx].repaint_only = true;
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -3277,12 +3415,12 @@ fn map_key_for(code: KeyCode, modifiers: Modifiers, mac: bool) -> Option<KeyInpu
 pub mod prelude {
     pub use crate::anim::SpringParams;
     pub use crate::anim::{Easing, Spring, Tween};
-    pub use crate::core::ViewportId;
     pub use crate::core::{
         Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
         OverlaySpec, TimerId, Track, View,
     };
     pub use crate::core::{AnimProp, ElementKey, Interaction, Transition};
+    pub use crate::core::{CanvasId, ViewportId};
     pub use crate::core::{DROP_FADE, DropState};
     pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};
     pub use crate::core::{PointerEvent, PointerEventKind, WheelEvent};
@@ -3292,7 +3430,9 @@ pub mod prelude {
     pub use crate::platform::PointerButton;
     pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
-    pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg, TextDirection};
+    pub use crate::render::{
+        Canvas, Color, Font, GlyphRun, ImageFit, Path, Pixmap, StrokeStyle, Svg, TextDirection,
+    };
     pub use crate::render::{Decoration, FontStyle, FontWeight, UnderlineStyle};
     pub use crate::style::Theme;
     pub use crate::style::{Palette, Spacing, Typography};

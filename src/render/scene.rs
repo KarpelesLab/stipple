@@ -7,11 +7,13 @@
 //! time via the frame's view box (see [`Scene::into_vector_frame`]).
 
 use crate::geometry::{Affine, Point, Rect, Size};
+use crate::render::canvas::CanvasPaint;
 use crate::render::convert::{to_ox_point, to_transform2d};
+use crate::render::lower::{Deferred, Lower, placeholder};
 use crate::render::{Color, Pixmap};
 use oxideav_core::{
-    Group, ImageRef, Node, Paint, Path, PathNode, Point as OxPoint, Rect as OxRect, Rgba, Stroke,
-    Transform2D, VectorFrame, ViewBox,
+    Group, Node, Paint, Path, PathNode, Point as OxPoint, Rgba, Stroke, Transform2D, VectorFrame,
+    ViewBox,
 };
 use std::sync::Arc;
 
@@ -107,6 +109,14 @@ pub struct Scene {
     /// Physical pixels per logical pixel of the frame this scene is for, so
     /// bitmaps can be produced at the resolution they'll be shown at.
     scale: f64,
+    /// Bitmaps and canvases, drawn as placeholders and turned into nodes only
+    /// when the scene is lowered (see `render::lower`).
+    deferred: Vec<Deferred>,
+    /// Primitives emitted so far (a measure of rasterizing cost).
+    primitives: usize,
+    /// Whether something was drawn that [`DrawCmd`]s don't describe (a path,
+    /// a canvas), so a backend drawing from the commands must fall back.
+    uncommanded: bool,
 }
 
 impl Scene {
@@ -117,6 +127,9 @@ impl Scene {
             stack: vec![ClipFrame::base()],
             commands: Vec::new(),
             scale: 1.0,
+            deferred: Vec::new(),
+            primitives: 0,
+            uncommanded: false,
         }
     }
 
@@ -131,24 +144,63 @@ impl Scene {
     }
 
     /// Draw `image` (straight-alpha RGBA) into `rect`.
+    ///
+    /// The pixels aren't copied here: the scene keeps the `Arc`, and only
+    /// the part of the image inside the area being rasterized is copied for
+    /// the rasterizer. So a bitmap that doesn't change (a terminal's inline
+    /// image) costs nothing to draw again until its pixels are rasterized.
     pub fn draw_image(&mut self, rect: Rect, image: Arc<Pixmap>) {
-        self.emit(Node::Image(ImageRef {
-            frame: Box::new(image.to_video_frame()),
-            bounds: OxRect {
-                x: rect.min_x() as f32,
-                y: rect.min_y() as f32,
-                width: rect.width() as f32,
-                height: rect.height() as f32,
-            },
-            transform: Transform2D::identity(),
-        }));
+        let index = self.deferred.len();
+        self.deferred.push(Deferred::Image(image.clone()));
+        self.emit(placeholder(index, rect));
         self.commands.push(DrawCmd::Image { rect, image });
+    }
+
+    /// Reserve `bounds` for a custom-paint canvas: `paint` draws it, in the
+    /// canvas's own coordinates (see [`Canvas`](crate::render::Canvas)),
+    /// clipped to `bounds`.
+    ///
+    /// `paint` doesn't run now: it runs when the scene is rasterized, once
+    /// for each area being rasterized that crosses `bounds`, asked to paint
+    /// just that part. An area repaint of two rows of a terminal runs it for
+    /// those two rows.
+    pub fn draw_canvas(&mut self, bounds: Rect, paint: &CanvasPaint) {
+        if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
+            return;
+        }
+        let index = self.deferred.len();
+        self.deferred.push(Deferred::Canvas {
+            bounds,
+            paint: paint.clone(),
+            scale: self.scale,
+        });
+        self.emit_uncommanded(placeholder(index, bounds));
     }
 
     /// Emit a node into the current (innermost) clip frame.
     fn emit(&mut self, node: Node) {
+        self.primitives += 1;
         // The stack always has at least the base frame.
         self.stack.last_mut().unwrap().nodes.push(node);
+    }
+
+    /// Emit a node that no [`DrawCmd`] describes.
+    pub(crate) fn emit_uncommanded(&mut self, node: Node) {
+        self.uncommanded = true;
+        self.emit(node);
+    }
+
+    /// Primitives drawn so far (each glyph, rect, path, bitmap and canvas
+    /// counts one): a rough measure of the cost of rasterizing the scene.
+    pub fn primitive_count(&self) -> usize {
+        self.primitives
+    }
+
+    /// Whether the scene holds a [canvas](Scene::draw_canvas).
+    pub(crate) fn has_canvas(&self) -> bool {
+        self.deferred
+            .iter()
+            .any(|d| matches!(d, Deferred::Canvas { .. }))
     }
 
     /// Begin clipping subsequently-emitted primitives to `rect`; nests until the
@@ -209,12 +261,15 @@ impl Scene {
 
     /// Whether any layer pushed so far moves things or makes them translucent
     /// (a [`DrawCmd::PushLayer`] with a non-identity transform or an opacity
-    /// below 1). Backends that can't draw layers natively fall back on this.
+    /// below 1), or the scene holds something the [`DrawCmd`]s don't describe
+    /// (a [path](Scene::fill_path), a [canvas](Scene::draw_canvas)). Backends
+    /// that draw from the commands fall back on this.
     pub fn has_effects(&self) -> bool {
-        self.commands.iter().any(|c| {
-            matches!(c, DrawCmd::PushLayer { transform, opacity }
+        self.uncommanded
+            || self.commands.iter().any(|c| {
+                matches!(c, DrawCmd::PushLayer { transform, opacity }
                 if !transform.is_identity() || *opacity < 1.0)
-        })
+            })
     }
 
     /// Pop the innermost frame and fold its nodes, as one group carrying its
@@ -347,21 +402,31 @@ impl Scene {
     /// renderer was constructed with — that mapping *is* the DPI scale.
     pub fn into_vector_frame(self) -> VectorFrame {
         let size = self.logical_size;
-        self.into_vector_frame_view(Rect::from_xywh(0.0, 0.0, size.width, size.height))
+        self.into_vector_frame_view(Rect::from_xywh(0.0, 0.0, size.width, size.height), false)
     }
 
     /// Lower to a frame whose view box is `view` — a logical-pixel sub-rect of
     /// the scene. A renderer sized to that region's physical pixels then
     /// rasterizes only the region; content outside it is clipped by the canvas
-    /// bounds. Used for area-limited repaints (see `SoftwareRenderer::render_region`).
+    /// bounds — and anything that can't touch the region is dropped before
+    /// it gets to the rasterizer. Used for area-limited repaints (see
+    /// `SoftwareRenderer::render_region`).
     pub fn into_vector_frame_region(self, view: Rect) -> VectorFrame {
-        self.into_vector_frame_view(view)
+        self.into_vector_frame_view(view, true)
     }
 
-    /// Shared lowering: close any open clips, wrap the root nodes in a group,
-    /// and attach `view` as the frame's view box.
-    fn into_vector_frame_view(mut self, view: Rect) -> VectorFrame {
-        // Defensively close any clip regions or layers the caller left open.
+    /// Lower to a frame for `view` without consuming the scene: what an area
+    /// repaint uses, so the scene needn't be cloned per area. Only what can
+    /// touch `view` is kept (see [`into_vector_frame_region`]).
+    ///
+    /// [`into_vector_frame_region`]: Scene::into_vector_frame_region
+    pub fn vector_frame_region(&self, view: Rect) -> VectorFrame {
+        let root = self.lower_root(Some(Lower::view_of(view)), &Transform2D::identity());
+        frame_for(view, root)
+    }
+
+    /// Close any clips or layers the caller left open.
+    fn close_all(&mut self) {
         while self.stack.len() > 1 {
             if self.stack.last().is_some_and(|f| f.layer) {
                 self.pop_layer();
@@ -369,23 +434,58 @@ impl Scene {
                 self.pop_clip();
             }
         }
-        let (w, h) = (view.width() as f32, view.height() as f32);
-        let root = Group {
-            children: self.stack.pop().unwrap().nodes,
-            ..Group::new()
+    }
+
+    /// The root nodes, lowered for `view` (root coordinates, `None` for all
+    /// of it) with the root drawn through `t`: what can't touch `view`
+    /// dropped, bitmaps and canvases made into nodes.
+    pub(crate) fn lower_root(&self, view: Option<[f32; 4]>, t: &Transform2D) -> Vec<Node> {
+        let lower = |s: &Scene| {
+            Lower {
+                deferred: &s.deferred,
+                view,
+            }
+            .nodes(&s.stack[0].nodes, t)
         };
-        VectorFrame::new(w, h)
-            .with_view_box(ViewBox {
-                min_x: view.min_x() as f32,
-                min_y: view.min_y() as f32,
-                width: w,
-                height: h,
-            })
-            .with_root(root)
+        if self.stack.len() > 1 {
+            let mut closed = self.clone();
+            closed.close_all();
+            lower(&closed)
+        } else {
+            lower(self)
+        }
+    }
+
+    /// Shared lowering: close any open clips, lower the root nodes for `view`
+    /// (culling what can't touch it only when `cull`), and attach `view` as
+    /// the frame's view box.
+    fn into_vector_frame_view(mut self, view: Rect, cull: bool) -> VectorFrame {
+        // Defensively close any clip regions or layers the caller left open.
+        self.close_all();
+        let cull = cull.then(|| Lower::view_of(view));
+        let root = self.lower_root(cull, &Transform2D::identity());
+        frame_for(view, root)
     }
 }
 
-fn rect_path(rect: Rect) -> Path {
+/// A frame whose view box is `view`, drawing `root`.
+fn frame_for(view: Rect, root: Vec<Node>) -> VectorFrame {
+    let (w, h) = (view.width() as f32, view.height() as f32);
+    let root = Group {
+        children: root,
+        ..Group::new()
+    };
+    VectorFrame::new(w, h)
+        .with_view_box(ViewBox {
+            min_x: view.min_x() as f32,
+            min_y: view.min_y() as f32,
+            width: w,
+            height: h,
+        })
+        .with_root(root)
+}
+
+pub(crate) fn rect_path(rect: Rect) -> Path {
     let (x0, y0, x1, y1) = (rect.min_x(), rect.min_y(), rect.max_x(), rect.max_y());
     let mut p = Path::new();
     p.move_to(OxPoint {

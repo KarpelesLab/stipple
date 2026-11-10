@@ -4,8 +4,12 @@ use crate::platform::time::Instant;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::core::canvas::{CanvasId, CanvasInvalidation};
+use crate::core::runtime::ViewportId;
+use crate::geometry::Rect;
 use crate::platform::wake;
 use crate::platform::{UserAttention, WindowId, WindowRequest};
+use crate::render::Pixmap;
 
 type Update<S> = Box<dyn FnOnce(&mut S) + Send>;
 type Tick<S> = Box<dyn FnMut(&mut S) + Send>;
@@ -31,6 +35,11 @@ struct Shared<S> {
     window: Vec<WindowRequest>,
     /// Windows to close without asking, queued by [`AppHandle::close_window`].
     close: Vec<WindowId>,
+    /// Canvas areas to repaint, queued by [`AppHandle::invalidate_canvas`].
+    canvases: Vec<CanvasInvalidation>,
+    /// Viewport content queued by [`AppHandle::set_viewport_content`]
+    /// (`None` clears it).
+    viewports: Vec<(ViewportId, Option<Pixmap>)>,
 }
 
 /// A handle to a running app, for changing its state from outside a widget
@@ -90,6 +99,8 @@ impl<S> AppHandle<S> {
                 exit: false,
                 window: Vec::new(),
                 close: Vec::new(),
+                canvases: Vec::new(),
+                viewports: Vec::new(),
             })),
         }
     }
@@ -231,6 +242,68 @@ impl<S> AppHandle<S> {
     /// Take the windows queued by [`close_window`](Self::close_window).
     pub(crate) fn take_close_requests(&self) -> Vec<WindowId> {
         self.with(|s| std::mem::take(&mut s.close))
+    }
+
+    /// Repaint all of [canvas](crate::core::Element::canvas) `id`, without
+    /// rebuilding the view: its paint callback runs again and only its area
+    /// is re-rasterized and presented. Safe from any thread; repaints
+    /// queued before the app gets to them are coalesced.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// # use std::sync::{Arc, Mutex};
+    /// # struct State;
+    /// # fn f(handle: AppHandle<State>, lines: Arc<Mutex<Vec<String>>>) {
+    /// std::thread::spawn(move || {
+    ///     lines.lock().unwrap().push("new output".into());
+    ///     handle.invalidate_canvas(CanvasId(1));
+    /// });
+    /// # }
+    /// ```
+    pub fn invalidate_canvas(&self, id: CanvasId) {
+        self.with(|s| s.canvases.push((id, None)));
+        wake::wake();
+    }
+
+    /// Repaint the part `rect` (in the canvas's own coordinates) of
+    /// [canvas](crate::core::Element::canvas) `id`, without rebuilding the
+    /// view: only that area of the window is re-rasterized and presented, and
+    /// the canvas's paint callback is asked for just that area. A terminal
+    /// passes the rows that changed. Safe from any thread.
+    pub fn invalidate_canvas_rect(&self, id: CanvasId, rect: Rect) {
+        self.with(|s| s.canvases.push((id, Some(rect))));
+        wake::wake();
+    }
+
+    /// Set (or replace) the externally-rendered content of the embedded
+    /// [viewport](crate::core::Element::viewport) `id` while the app runs,
+    /// from any thread: what a background renderer calls with each new frame.
+    /// The content should be sized to the viewport's physical extent; it is
+    /// composited over the viewport's placeholder and only the viewport's
+    /// area is presented. See
+    /// [`App::set_viewport_content`](crate::App::set_viewport_content).
+    pub fn set_viewport_content(&self, id: ViewportId, content: Pixmap) {
+        self.with(|s| s.viewports.push((id, Some(content))));
+        wake::wake();
+    }
+
+    /// Remove the content of viewport `id` while the app runs, reverting it
+    /// to its placeholder.
+    pub fn clear_viewport_content(&self, id: ViewportId) {
+        self.with(|s| s.viewports.push((id, None)));
+        wake::wake();
+    }
+
+    /// Take the canvas repaints queued by
+    /// [`invalidate_canvas`](Self::invalidate_canvas).
+    pub(crate) fn take_canvas_invalidations(&self) -> Vec<CanvasInvalidation> {
+        self.with(|s| std::mem::take(&mut s.canvases))
+    }
+
+    /// Take the viewport content queued by
+    /// [`set_viewport_content`](Self::set_viewport_content).
+    pub(crate) fn take_viewport_content(&self) -> Vec<(ViewportId, Option<Pixmap>)> {
+        self.with(|s| std::mem::take(&mut s.viewports))
     }
 
     /// Take the window changes queued by [`window`](Self::window).

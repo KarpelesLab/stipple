@@ -24,23 +24,30 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod bidi;
+mod canvas;
 mod color;
 mod convert;
 mod decoration;
 pub(crate) mod font;
+mod glyphs;
 mod image;
+mod lower;
+mod path;
 mod scene;
 mod software;
 mod surface;
 mod text;
 
 pub use bidi::TextDirection;
+pub use canvas::{Canvas, CanvasPaint};
 pub use color::Color;
 pub use decoration::{Decoration, UnderlineStyle};
 pub use font::{FontFamilyInfo, FontId, FontMetrics, FontStyle, FontWeight};
+pub use glyphs::GlyphRun;
 pub use image::{ImageError, ImageFit, ImageSource, Svg, image_formats};
+pub use path::{LineCap, LineJoin, Path, StrokeStyle};
 pub use scene::{DrawCmd, Scene};
-pub use software::SoftwareRenderer;
+pub use software::{RasterStats, SoftwareRenderer};
 pub use surface::{Pixmap, Surface};
 pub use text::{Font, FontError, TextLayout};
 

@@ -180,7 +180,7 @@ fn subtree_extent(node: &LayoutNode, outer: Affine) -> Rect {
 /// Merge rectangles that overlap or touch into fewer, larger ones. A small
 /// fixed-point loop keeps the region list short without a full rectangle-set
 /// algorithm — over-merging only enlarges the repaint, which is always safe.
-fn coalesce(mut rects: Vec<Rect>) -> Vec<Rect> {
+pub(crate) fn coalesce(mut rects: Vec<Rect>) -> Vec<Rect> {
     let mut merged = true;
     while merged {
         merged = false;

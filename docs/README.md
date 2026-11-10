@@ -44,6 +44,7 @@ How to build, package and run on each platform, and what works there today.
 | Mirrored right-to-left layouts | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ |
 | System fonts by family name | ✅ ³⁴ | ✅ ³⁴ | ✅ ³⁴ | ✅ ¹⁰ | ✅ ¹⁰ | — ³⁴ |
 | Bold, italic, per-element fonts, fallbacks, text decorations | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ |
+| Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Input methods (CJK IME) | ✅ ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
@@ -211,6 +212,11 @@ macOS badge; the rest is build-checked (Wayland's requests are unit-tested).
 otherwise Stipple draws a title bar with move, maximize, minimize, close, the
 window menu and edge resizing. CI checks sway's server-side decorations and
 that Weston gets a decorated buffer; the pointer handling is unit-tested.
+⁴¹ Shared code (painting, invalidation, area rasterizing), unit-tested at the
+App level. CI runs `canvasdemo --selftest` on X11, Wayland, Windows and macOS:
+a background thread changes rows of a glyph grid at the refresh rate, and the
+app checks with `RasterStats` that only those rows were rasterized. Seen
+passing locally on X11 (Xvfb, at 1x, 1.5x and 2x). See [canvas.md](canvas.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -226,6 +232,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades,
   theme cross-fades and reduced motion
+- [Custom painting](canvas.md): `Element::canvas`, invalidating parts of it from any thread, paths, bitmaps and glyph runs
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough

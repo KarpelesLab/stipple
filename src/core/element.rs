@@ -6,6 +6,7 @@
 //! diff one tree against the next.
 
 use crate::core::a11y::{Role, Semantics};
+use crate::core::canvas::{CanvasId, CanvasPainter};
 use crate::core::interact::{ElementKey, Interaction, Reactive, StylePatch};
 use crate::core::runtime::{
     ActionId, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, KeyInput, ScrollId,
@@ -154,6 +155,14 @@ pub enum ElementKind {
     /// [`width`](Element::width)/[`height`](Element::height) override scales
     /// the other axis to keep the aspect ratio.
     Image { source: ImageSource, fit: ImageFit },
+    /// A custom-paint leaf: `paint` draws it (see [`Element::canvas`]).
+    /// Sizes like a viewport, to its overrides or grow. `revision` repaints
+    /// it whole when it changes between builds.
+    Canvas {
+        id: CanvasId,
+        paint: CanvasPainter,
+        revision: u64,
+    },
 }
 
 /// A node in the element tree: layout properties, decoration, an optional

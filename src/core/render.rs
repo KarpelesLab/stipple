@@ -57,7 +57,7 @@ pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
     let content = match &el.kind {
         // A viewport sizes purely to its width/height overrides (or grow); it
         // has no intrinsic content size.
-        ElementKind::Leaf | ElementKind::Viewport { .. } => Size::ZERO,
+        ElementKind::Leaf | ElementKind::Viewport { .. } | ElementKind::Canvas { .. } => Size::ZERO,
         ElementKind::Image { source, .. } => {
             // The natural size, unless one axis is fixed: then the other follows
             // the image's aspect ratio.
@@ -357,6 +357,15 @@ pub fn layout_with_direction(
             style: style.clone(),
         },
         ElementKind::Viewport { id } => NodeContent::Viewport(*id),
+        ElementKind::Canvas {
+            id,
+            paint,
+            revision,
+        } => NodeContent::Canvas {
+            id: *id,
+            paint: paint.clone(),
+            revision: *revision,
+        },
         ElementKind::Image { source, fit } => NodeContent::Image {
             source: source.clone(),
             fit: *fit,
@@ -846,6 +855,8 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
         } => {
             scene.draw_image_source(node.bounds.inset(*padding), source, *fit);
         }
+        // The app draws it, when it is rasterized (see `Scene::draw_canvas`).
+        NodeContent::Canvas { paint, .. } => scene.draw_canvas(node.bounds, &paint.0),
         NodeContent::None => {}
     }
     // Clip children to this node's bounds (scroll containers, overlay panels)

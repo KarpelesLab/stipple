@@ -1058,6 +1058,14 @@ pub enum NodeContent {
         fit: crate::render::ImageFit,
         padding: crate::geometry::Insets,
     },
+    /// A custom-paint canvas: the node's bounds are painted by `paint` (see
+    /// [`Element::canvas`](crate::core::Element::canvas)). Compares by id and
+    /// revision only, so it is damaged by invalidation, not by a rebuild.
+    Canvas {
+        id: crate::core::CanvasId,
+        paint: crate::core::CanvasPainter,
+        revision: u64,
+    },
 }
 
 /// A laid-out, retained node: absolute bounds, paint decoration, optional text

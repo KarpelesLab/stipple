@@ -135,6 +135,18 @@ jobs:
           grep -q 'asyncdemo: event loop exited' visual_output/async.log
           grep -q 'asyncdemo: spinner ok' visual_output/async.log
 
+      - name: A canvas repaints only the rows it invalidates
+        env:
+          DISPLAY: ":99"
+        run: |
+          cargo build --release -p canvasdemo
+          # A background thread changes a few rows of a 120x36 glyph grid at
+          # the refresh rate and invalidates just those; the app checks with
+          # RasterStats that what was rasterized adds up to those rows.
+          timeout 30 ./target/release/canvasdemo --selftest | tee visual_output/canvas.log
+          grep -q 'canvasdemo: selftest ok' visual_output/canvas.log
+          grep -q 'canvasdemo: event loop exited' visual_output/canvas.log
+
       - name: Screenshot the layout demo (grid, wrap, min/max)
         env:
           DISPLAY: ":99"
@@ -1505,6 +1517,11 @@ jobs:
           grep -q 'asyncdemo: event loop exited' visual_output/wl-async.log
           grep -q 'asyncdemo: spinner ok' visual_output/wl-async.log
 
+          # --- canvas: only the invalidated rows are re-rasterized. ---
+          cargo build --release -p canvasdemo
+          timeout 30 ./target/release/canvasdemo --selftest | tee visual_output/wl-canvas.log
+          grep -q 'canvasdemo: selftest ok' visual_output/wl-canvas.log
+
           # --- scale: with the output at 2x, the buffer must follow it. ---
           export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
           swaymsg output HEADLESS-1 scale 2
@@ -1912,6 +1929,13 @@ jobs:
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
           grep -q 'asyncdemo: spinner ok' async.log
+
+      - name: A canvas repaints only the rows it invalidates
+        shell: bash
+        run: |
+          cargo build --release -p canvasdemo
+          timeout 30 ./target/release/canvasdemo.exe --selftest | tee canvas.log
+          grep -q 'canvasdemo: selftest ok' canvas.log
 
       - name: Round-trip text through the system clipboard
         shell: bash
@@ -2460,6 +2484,12 @@ jobs:
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
           grep -q 'asyncdemo: spinner ok' async.log
+
+      - name: A canvas repaints only the rows it invalidates
+        run: |
+          cargo build --release -p canvasdemo
+          perl -e 'alarm 30; exec @ARGV' ./target/release/canvasdemo --selftest | tee canvas.log
+          grep -q 'canvasdemo: selftest ok' canvas.log
 
       - name: Round-trip text through the system clipboard
         run: |

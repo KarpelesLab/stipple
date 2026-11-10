@@ -480,18 +480,35 @@ impl Font {
     pub(crate) fn chain(&self) -> &FaceChain {
         &self.variant.chain
     }
+
+    /// `text` shaped as one left-to-right run at `size_px`, through the
+    /// shaping cache (for [glyph runs](crate::render::GlyphRun)).
+    pub(crate) fn shaped(&self, text: &str, size_px: f64) -> Vec<PositionedGlyph> {
+        self.variant
+            .shapes
+            .shape(&self.variant.chain, text, size_px)
+    }
+
+    /// What is synthesized for face `face_idx` of the shaping chain.
+    pub(crate) fn synthesis(&self, face_idx: u16) -> crate::render::font::Synthesis {
+        self.variant
+            .synth
+            .get(face_idx as usize)
+            .copied()
+            .unwrap_or_default()
+    }
 }
 
 /// Recolor an outline glyph to `color`, recursing into groups (the shaper
 /// wraps each glyph's path in a cache-keyed `Group`). Non-outline leaves (e.g.
 /// color-bitmap emoji `Node::Image`) are left untouched.
-fn recolor(node: Node, color: Color) -> Node {
+pub(crate) fn recolor(node: Node, color: Color) -> Node {
     embolden(node, color, 0.0)
 }
 
 /// [`recolor`], and with `stroke` > 0 also outline each glyph path that wide
 /// in the same color: synthetic bold.
-fn embolden(node: Node, color: Color, stroke: f32) -> Node {
+pub(crate) fn embolden(node: Node, color: Color, stroke: f32) -> Node {
     match node {
         Node::Path(mut path) => {
             let paint = Paint::Solid(color.to_oxideav());
@@ -515,11 +532,11 @@ fn embolden(node: Node, color: Color, stroke: f32) -> Node {
 
 /// The horizontal shear of a synthesized oblique: about 12 degrees, as
 /// renderers conventionally slant a face that has no italic.
-const OBLIQUE_SHEAR: f32 = 0.2126;
+pub(crate) const OBLIQUE_SHEAR: f32 = 0.2126;
 
 /// How wide synthetic bold strokes a glyph's outline at `size_px`: each side
 /// grows by half of it.
-fn bold_stroke(size_px: f64) -> f32 {
+pub(crate) fn bold_stroke(size_px: f64) -> f32 {
     (size_px / 30.0).max(0.5) as f32
 }
 

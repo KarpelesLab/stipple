@@ -760,7 +760,19 @@ abstraction is frozen at the end of Phase 2.
   per-element fonts, public fallback chains, terminal-grade `FontMetrics`, and
   text decorations (five underline styles, strikethrough, overline, their own
   color). See [`docs/fonts.md`](docs/fonts.md).
-- Performance: render thread, layer caching, partial repaint, glyph atlas.
+- ✅ **Custom painting with partial invalidation**: `Element::canvas(id, paint)`,
+  a leaf whose callback draws into a `Canvas` (a `Scene` in local
+  coordinates) when it is rasterized, asked for just the area being
+  rasterized. `AppHandle::invalidate_canvas` / `invalidate_canvas_rect`
+  repaint it, or a rectangle of it, from any thread without rebuilding the
+  view; `AppHandle::set_viewport_content` does the same for viewports.
+  Paths (Béziers, dashes, caps, joins), bitmaps drawn without copying, and
+  `GlyphRun`s placed cluster by cluster with a font, color and decoration per
+  run. Area renders drop what can't touch the area, and heavy full frames are
+  rasterized in bands; `RasterStats` counts the pixels. `canvasdemo
+  --selftest` checks in CI that only invalidated rows are rasterized. See
+  [`docs/canvas.md`](docs/canvas.md).
+- Performance: render thread, layer caching, glyph atlas.
 - **Exit criteria:** a non-trivial reference application (e.g., a file/media
   browser using oxideav decoders) ships on all three desktops, accessible and
   localized.

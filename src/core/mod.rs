@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 pub mod a11y;
+mod canvas;
 mod clipboard;
 pub(crate) mod crossfade;
 mod diff;
@@ -43,8 +44,11 @@ pub(crate) mod touch;
 pub(crate) mod transition;
 
 pub use a11y::{AccessNode, Role, Semantics, accessibility_tree};
+pub use canvas::{CanvasId, CanvasPainter};
+pub(crate) use canvas::{CanvasInvalidation, invalidated_rects};
 pub use clipboard::{clipboard_text, set_clipboard_text};
 pub use crossfade::THEME_FADE;
+pub(crate) use diff::coalesce;
 pub use diff::{Damage, diff_trees};
 pub(crate) use dnd::DropFades;
 pub use dnd::{DROP_FADE, DropState};
