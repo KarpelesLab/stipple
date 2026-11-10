@@ -11,6 +11,8 @@
 //! carries files or text. The data is read on `Drop`: `CF_HDROP` (files, via
 //! `DragQueryFileW`), else `CF_UNICODETEXT`.
 
+pub(super) mod drag_out;
+
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 

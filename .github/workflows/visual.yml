@@ -886,9 +886,12 @@ jobs:
 
   # Drag and drop: an XDND source (.github/scripts/xdnd-drop.py, python3-xlib)
   # drops files and text on dropdemo's zone, gets refused by its "files only"
-  # zone, and xdotool drags a chip onto the zone inside the app. dropdemo
-  # exits once three drops have landed; screenshots catch the zone's animated
-  # drag-over look (accepted, then refused).
+  # zone, and xdotool drags a chip onto the zone inside the app. Dragging out:
+  # xdotool drags the "File" and "Text" chips out of the window onto an XDND
+  # target (.github/scripts/xdnd-target.py), which must receive the URI list
+  # and the text; Escape cancels one, and one comes back onto the app's own
+  # zone. dropdemo exits once four drops have landed; screenshots catch the
+  # zone's animated drag-over look (accepted, then refused).
   visual-dnd:
     name: Visual test (Drag and drop / X11)
     runs-on: ubuntu-latest
@@ -911,13 +914,13 @@ jobs:
           echo "XVFB_PID=$!" >> "$GITHUB_ENV"
           sleep 2
 
-      - name: Drop files and text over XDND, and drag a chip inside the app
+      - name: Drop files and text over XDND, drag chips inside and out of the app
         env:
           DISPLAY: ":99"
           STIPPLE_APP_DEBUG: "1"
         run: |
           mkdir -p visual_output
-          ./target/release/dropdemo --expect 3 --timeout 60 > visual_output/drop.log 2>&1 &
+          ./target/release/dropdemo --expect 4 --timeout 90 > visual_output/drop.log 2>&1 &
           APP=$!
           echo "APP_PID=$APP" >> "$GITHUB_ENV"
           sleep 3
@@ -941,6 +944,44 @@ jobs:
           sleep 1.1
           import -window "$wid" visual_output/drop-refused.png
           wait $SRC
+          # Drag the "File" and "Text" chips out of the window onto an XDND
+          # target beside it (.github/scripts/xdnd-target.py), which prints
+          # what arrives. Then drag "File" out and back onto the app's own
+          # zone, and press Escape on a drag out: neither reaches the target.
+          python3 .github/scripts/xdnd-target.py --at 600 100 --count 2 \
+            --timeout 30 > visual_output/drag-out.log 2>&1 &
+          TGT=$!
+          sleep 1
+          xdotool mousemove --window "$wid" 278 300 mousedown 1 sleep 0.2 \
+            mousemove --window "$wid" 285 290 sleep 0.2 \
+            mousemove 560 200 sleep 0.2 mousemove 700 200 sleep 0.3 \
+            mousemove 710 210 sleep 0.3 mouseup 1
+          sleep 0.5
+          import -window root visual_output/drag-out-screen.png
+          xdotool mousemove --window "$wid" 354 300 mousedown 1 sleep 0.2 \
+            mousemove --window "$wid" 360 290 sleep 0.2 \
+            mousemove 560 200 sleep 0.2 mousemove 700 250 sleep 0.3 \
+            key Escape sleep 0.2 mouseup 1
+          sleep 0.5
+          xdotool mousemove --window "$wid" 354 300 mousedown 1 sleep 0.2 \
+            mousemove --window "$wid" 360 290 sleep 0.2 \
+            mousemove 560 200 sleep 0.2 mousemove 700 250 sleep 0.3 \
+            mousemove 705 255 sleep 0.3 mouseup 1
+          tstatus=0
+          wait $TGT || tstatus=$?
+          echo "=== drag-out.log ==="; cat visual_output/drag-out.log
+          [ "$tstatus" = 0 ]
+          grep -q "dropped text/uri-list 'file://.*/stipple-dropdemo.txt" visual_output/drag-out.log
+          grep -qF "dropped UTF8_STRING 'Hello from Stipple'" visual_output/drag-out.log
+          # The Escape left the target without dropping.
+          grep -q "xdnd-target: leave" visual_output/drag-out.log
+          # Out and back in: the app's own zone takes the file as a drop
+          # from another application.
+          xdotool mousemove --window "$wid" 278 300 mousedown 1 sleep 0.2 \
+            mousemove --window "$wid" 285 290 sleep 0.2 \
+            mousemove 560 200 sleep 0.2 mousemove 100 150 sleep 0.3 \
+            mousemove 105 155 sleep 0.3 mouseup 1
+          sleep 0.5
           # Drag "Chip 1" onto the first zone inside the app.
           xdotool mousemove --window "$wid" 50 290 mousedown 1 sleep 0.2 \
             mousemove --window "$wid" 60 260 sleep 0.2 \
@@ -952,7 +993,8 @@ jobs:
           grep -qF 'dropdemo: drop files ["/tmp/a.txt", "/tmp/b c.txt"]' visual_output/drop.log
           grep -qF 'dropdemo: drop text "hello world"' visual_output/drop.log
           grep -qF 'dropdemo: drop internal "chip-1"' visual_output/drop.log
-          grep -q 'dropdemo: selftest ok (3 drops)' visual_output/drop.log
+          grep -q 'dropdemo: drop files \[".*/stipple-dropdemo.txt"\]' visual_output/drop.log
+          grep -q 'dropdemo: selftest ok (4 drops)' visual_output/drop.log
           # The refused drag never dropped.
           ! grep -q 'drop text "nope"' visual_output/drop.log
           # The zone looked different while a drag was over it, both ways.

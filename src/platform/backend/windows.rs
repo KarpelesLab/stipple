@@ -294,6 +294,8 @@ unsafe extern "system" {
     fn BeginPaint(hwnd: Hwnd, ps: *mut PaintStruct) -> Handle;
     fn EndPaint(hwnd: Hwnd, ps: *const PaintStruct) -> i32;
     fn GetKeyState(vk: i32) -> i16;
+    fn SetCapture(hwnd: Hwnd) -> Hwnd;
+    fn ReleaseCapture() -> i32;
     fn SetCursor(cursor: Handle) -> Handle;
     fn SendMessageW(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult;
     fn CreateIcon(
@@ -393,6 +395,9 @@ struct WinCtx {
     /// `set_drop_accepted`), and where the drag last was.
     drop_accepted: bool,
     drag_last: Option<crate::geometry::Point>,
+    /// A drag out of the app the app started with `Window::start_drag`, for
+    /// the message loop to run (see `dnd::drag_out`).
+    drag_out: Option<crate::platform::DropData>,
 }
 
 /// Physical pixels per logical pixel for the window's current display.
@@ -892,6 +897,17 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
                 _ => ButtonState::Released,
             };
             crate::platform::set_pointer_modifiers(modifiers());
+            // Keep the moves coming while the left button is down, even
+            // outside the window: drags (and drags out of the app) need them.
+            match msg {
+                WM_LBUTTONDOWN => unsafe {
+                    SetCapture(hwnd);
+                },
+                WM_LBUTTONUP => unsafe {
+                    ReleaseCapture();
+                },
+                _ => {}
+            }
             push_event(Event::PointerButton {
                 button,
                 state,
@@ -1078,6 +1094,15 @@ impl Window for WinWindow {
     }
     fn set_drop_accepted(&self, accepted: bool) {
         CTX.with(|c| c.borrow_mut().drop_accepted = accepted);
+    }
+    fn start_drag(&self, data: &crate::platform::DropData) -> bool {
+        // `DoDragDrop` runs its own modal loop, so the message loop starts it
+        // once the handler returns.
+        if !data.can_leave_app() {
+            return false;
+        }
+        CTX.with(|c| c.borrow_mut().drag_out = Some(data.clone()));
+        true
     }
     fn set_cursor(&self, cursor: CursorIcon) {
         CTX.with(|c| c.borrow_mut().cursor = cursor);
@@ -1315,6 +1340,14 @@ where
                 if handler(event, &win) == ControlFlow::Exit {
                     unsafe { DestroyWindow(hwnd) };
                 }
+            }
+            // A drag the app handed out runs here, outside the handler. What
+            // it did to our own window waits in the queue; a message gets
+            // the loop to deliver it.
+            if let Some(data) = CTX.with(|c| c.borrow_mut().drag_out.take()) {
+                unsafe { ReleaseCapture() };
+                let _dropped = dnd::drag_out::run(&data);
+                unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
             }
         }
         if crate::platform::wake::take(std::time::Instant::now())

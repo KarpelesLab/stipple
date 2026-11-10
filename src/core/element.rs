@@ -528,6 +528,13 @@ impl Element {
     /// [`DropData::Internal`](crate::platform::DropData::Internal) naming the
     /// item; `None` cancels), and releasing over a drop target that accepts it
     /// drops it there. A press that becomes a drag doesn't tap.
+    ///
+    /// A [`DropData::Files`](crate::platform::DropData::Files) or
+    /// [`DropData::Text`](crate::platform::DropData::Text) payload can also
+    /// leave the app: dragged out of the window, it becomes a drag other
+    /// applications can drop (see
+    /// [`Window::start_drag`](crate::platform::Window::start_drag) and
+    /// `docs/drag-and-drop.md`). An `Internal` one stays in the app.
     pub fn drag_source<S>(
         mut self,
         cx: &mut Cx<'_, S>,

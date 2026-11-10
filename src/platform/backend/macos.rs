@@ -510,6 +510,9 @@ struct MacCtx {
     /// `set_drop_accepted`), and where the drag last was.
     drop_accepted: bool,
     drag_last: Option<Point>,
+    /// A drag out of the app the app started with `Window::start_drag`, for
+    /// the event loop to begin with the event it is handling.
+    drag_out: Option<crate::platform::DropData>,
 }
 
 // Cocoa is single-threaded (main thread); the backend runs there.
@@ -1328,6 +1331,15 @@ impl Window for MacWindow {
     fn set_drop_accepted(&self, accepted: bool) {
         CTX.with(|c| c.borrow_mut().drop_accepted = accepted);
     }
+    fn start_drag(&self, data: &crate::platform::DropData) -> bool {
+        // A dragging session begins from an event: the loop begins it with
+        // the mouse-dragged event being handled, once the handler returns.
+        if !data.can_leave_app() {
+            return false;
+        }
+        CTX.with(|c| c.borrow_mut().drag_out = Some(data.clone()));
+        true
+    }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         text_input::set_state(state);
     }
@@ -1689,6 +1701,14 @@ where
                         && handler(event, &win) == ControlFlow::Exit
                     {
                         exit = true;
+                    }
+                    // The app handed a drag out of the window: AppKit runs
+                    // it from here.
+                    if let Some(data) = CTX.with(|c| c.borrow_mut().drag_out.take())
+                        && !exit
+                        && etype == NS_LEFT_MOUSE_DRAGGED
+                    {
+                        dnd::drag_out::begin(view, ev, &data);
                     }
                     // Forward to AppKit (drawing, window controls) unless we're
                     // exiting on this event.

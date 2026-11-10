@@ -2,7 +2,8 @@
 
 An element can be a drop target for files and text dragged from other
 applications (Finder, Explorer, a file manager, a browser), and for items
-dragged inside the app. While a drag hovers a target, the view can read what
+dragged inside the app. Files and text dragged from an element can leave the
+window and drop in other applications. While a drag hovers a target, the view can read what
 the drag is doing to it and animate. The `dropdemo` example shows all of it:
 
 ```sh
@@ -113,6 +114,44 @@ becomes a drag doesn't tap; Escape cancels it.
 row_label.drag_source(cx, move |_| Some(DropData::Internal(item.id.clone())))
 ```
 
+## Dragging out of the app
+
+The same `drag_source` drags files and text into other applications. There is
+nothing else to call: return `DropData::Files` or `DropData::Text` as the
+payload, and the drag works in the app as above while the pointer stays in
+the window; once the pointer leaves the window with the button still down,
+the drag becomes the platform's, and any application that takes files or
+text (a file manager, an editor, a browser, a terminal) can drop it.
+
+```rust
+attachment.drag_source(cx, move |_| Some(DropData::Files(vec![path.clone()])))
+quote.drag_source(cx, move |s| Some(DropData::Text(s.quote.clone())))
+```
+
+- `DropData::Internal` never leaves the app (`DropData::can_leave_app`): it
+  means nothing anywhere else. A drag of one past the window's edge stays an
+  in-app drag, and dropping it outside does nothing.
+- Once out, the platform owns the drag: its cursor, Escape to cancel, the
+  target's verdict. In-app targets stop hovering. If the pointer comes back
+  over the window, the drag arrives like one from another application:
+  targets get `DropData::Files` or `DropData::Text`, not your own payload.
+- Leaving offers a copy. The app isn't told whether, or where, it dropped.
+- The platform gets the drag through `Window::start_drag`, which the App calls
+  for you; a backend that can't take it returns `false`, and the drag stays
+  in the app.
+
+| Platform | How | Files | Text |
+|---|---|---|---|
+| X11 | XDND v5 source, by hand on the wire: owns `XdndSelection`, grabs the pointer and keyboard, finds the `XdndAware` window under the pointer, `XdndEnter` / `Position` / `Leave` / `Drop`, serves `SelectionRequest`s, waits for `XdndFinished` | `text/uri-list` | `UTF8_STRING`, `text/plain;charset=utf-8`, `text/plain`, `STRING` |
+| Wayland | a `wl_data_source` handed to `wl_data_device.start_drag` with the press's serial (copy action from v3); `send` is served from memory; `cancelled` / `dnd_finished` end it | `text/uri-list` | `text/plain;charset=utf-8` and friends |
+| Windows | OLE `DoDragDrop` with hand-written `IDataObject` and `IDropSource` vtables, run by the message loop after the handler returns | `CF_HDROP` | `CF_UNICODETEXT` |
+| macOS | `beginDraggingSessionWithItems:event:source:` on the view, which is the `NSDraggingSource` | an `NSURL` per file, with its Finder icon | `NSString` |
+| iOS, Android, web | not yet: the drag stays in the app | | |
+
+Each platform shows its own drag feedback (X11: the core "fleur" cursor over
+a target that accepts, a "no" circle elsewhere; macOS: the file's icon), not
+an image of the element.
+
 ## Platforms
 
 The platform layer reports drags from other applications as
@@ -145,20 +184,36 @@ other schemes, and files on other hosts, are skipped.
 - `dropdemo --expect N` exits once N drops have landed, printing a line per
   drop. CI runs it on X11 with `.github/scripts/xdnd-drop.py` (an XDND source
   in python3-xlib: files, text, a refused drag, screenshots of the zone's
-  accepted and refused looks) plus an in-app chip drag by `xdotool`; on
+  accepted and refused looks) plus an in-app chip drag by `xdotool`. For
+  dragging out, `xdotool` drags dropdemo's "File" and "Text" chips out of the
+  window onto `.github/scripts/xdnd-target.py` (an XDND target in
+  python3-xlib, beside the app), which must receive the file's URI list and
+  the text; another drag out is cancelled with Escape (the target sees a
+  leave, no drop), and one goes out and back onto the app's own zone, which
+  takes it as a drop of files. On
   Windows CI tries `.github/scripts/ole-drop.ps1` (real OLE `DoDragDrop`
   from another process, for a file and for text), but the drag doesn't
   complete on the runner yet, so that step only reports; on macOS with
   `STIPPLE_COCOA_DROP=<path>`, which drives the view's own dragging methods
   with a stand-in `NSDraggingInfo` whose pasteboard holds the file's URL.
-- Wayland's protocol handling is unit-tested against a scripted compositor;
-  CI doesn't drag on Wayland.
+- Wayland's protocol handling is unit-tested against a scripted compositor
+  (drops, and the drag-out source: `start_drag`, `send`, `dnd_finished`); CI
+  doesn't drag on Wayland. The X11 source's state machine and messages are
+  unit-tested too, and the App's hand-off (`Window::start_drag`) against a
+  stand-in window.
+- Dragging out on Wayland, Windows and macOS is build-checked only: CI can't
+  drive a compositor's drag, OLE's modal drag loop or an `NSDraggingSession`
+  with a real pointer.
 
 ## Not yet
 
-- Dragging out of the app to other applications. The pieces are in place
-  (`DropData` for the payload, `Element::drag_source` to start it); a backend
-  needs to become a drag source (`XdndSelection` owner, `wl_data_source` with
-  `start_drag`, `DoDragDrop`, `beginDraggingSession`).
+- Telling the app how a drag out ended (dropped, where, or cancelled), and a
+  move action (delete the source's copy).
+- `XdndProxy` and large (`INCR`) transfers on X11, and other formats than
+  files and plain text (images, rich text, a file's contents) anywhere.
+- On Windows the app's handler doesn't run while `DoDragDrop`'s modal loop
+  does, so a drag out that comes back over the window shows no drop-target
+  feedback; its events (and a drop, which lands) are delivered when the drag
+  ends.
 - A drag image following the pointer during in-app drags.
 - Drops on iOS, Android and the web.

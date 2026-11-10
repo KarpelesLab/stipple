@@ -281,6 +281,51 @@ impl DropData {
             DropData::Internal(_) => DragOffer::INTERNAL,
         }
     }
+
+    /// Whether this can be dragged out of the app to other applications:
+    /// files and text can, an [`Internal`](DropData::Internal) payload can't
+    /// (it means nothing outside the app). See
+    /// [`Window::start_drag`](crate::platform::Window::start_drag).
+    pub fn can_leave_app(&self) -> bool {
+        !matches!(self, DropData::Internal(_))
+    }
+}
+
+/// `paths` as a `text/uri-list` (RFC 2483): one percent-encoded `file://`
+/// URI per line, each ending in CRLF. What X11 and Wayland drags carry files
+/// as; [`parse_uri_list`] reads it back.
+pub fn uri_list(paths: &[std::path::PathBuf]) -> String {
+    paths.iter().map(|p| path_to_file_uri(p) + "\r\n").collect()
+}
+
+/// The `file://` URI of an absolute local path, percent-encoding every byte
+/// outside RFC 3986's unreserved set and `/` (Windows paths get forward
+/// slashes and a leading `/`: `file:///C:/x`).
+pub fn path_to_file_uri(path: &std::path::Path) -> String {
+    #[cfg(unix)]
+    let bytes = {
+        use std::os::unix::ffi::OsStrExt;
+        path.as_os_str().as_bytes().to_vec()
+    };
+    #[cfg(not(unix))]
+    let bytes = {
+        let s = path.to_string_lossy().replace('\\', "/");
+        let s = if s.starts_with('/') {
+            s
+        } else {
+            format!("/{s}")
+        };
+        s.into_bytes()
+    };
+    let mut uri = String::from("file://");
+    for b in bytes {
+        if b.is_ascii_alphanumeric() || b"-._~/".contains(&b) || (cfg!(not(unix)) && b == b':') {
+            uri.push(b as char);
+        } else {
+            uri.push_str(&format!("%{b:02X}"));
+        }
+    }
+    uri
 }
 
 /// Parse a `text/uri-list` (RFC 2483), as X11 and Wayland drags carry files:
@@ -329,10 +374,74 @@ pub fn file_uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
     String::from_utf8(out).ok().map(std::path::PathBuf::from)
 }
 
+/// A `CF_HDROP` block as Windows drags carry files: a `DROPFILES` header
+/// (20 bytes: the offset of the list, a point, the non-client flag and
+/// "wide"), then each path in UTF-16 with a terminating NUL, then one more
+/// NUL. `paths` are UTF-16 code units, without NULs.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn hdrop_bytes(paths: &[Vec<u16>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&20u32.to_le_bytes()); // pFiles
+    out.extend_from_slice(&[0; 12]); // pt, fNC
+    out.extend_from_slice(&1u32.to_le_bytes()); // fWide
+    for unit in paths
+        .iter()
+        .flat_map(|p| p.iter().copied().chain([0]))
+        .chain([0])
+    {
+        out.extend_from_slice(&unit.to_le_bytes());
+    }
+    out
+}
+
+/// `text` as `CF_UNICODETEXT`: UTF-16 with a terminating NUL.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) fn unicode_text_bytes(text: &str) -> Vec<u8> {
+    text.encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
 #[cfg(test)]
 mod dnd_tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn uri_lists_encode_and_round_trip() {
+        let paths = vec![
+            PathBuf::from("/tmp/a b.txt"),
+            PathBuf::from("/tmp/h\u{e9}llo%#?.txt"),
+        ];
+        let list = uri_list(&paths);
+        assert_eq!(
+            list,
+            "file:///tmp/a%20b.txt\r\nfile:///tmp/h%C3%A9llo%25%23%3F.txt\r\n"
+        );
+        assert_eq!(parse_uri_list(&list), paths);
+        assert!(DropData::Files(paths).can_leave_app());
+        assert!(DropData::Text("x".into()).can_leave_app());
+        assert!(!DropData::Internal("x".into()).can_leave_app());
+    }
+
+    #[test]
+    fn windows_formats_are_laid_out() {
+        let wide = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        let block = hdrop_bytes(&[wide("C:\\a"), wide("D:\\\u{e9}")]);
+        assert_eq!(&block[..4], &20u32.to_le_bytes());
+        assert_eq!(&block[16..20], &1u32.to_le_bytes());
+        let units: Vec<u16> = block[20..]
+            .chunks(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let mut want = wide("C:\\a");
+        want.push(0);
+        want.extend(wide("D:\\\u{e9}"));
+        want.extend([0, 0]);
+        assert_eq!(units, want);
+        assert_eq!(unicode_text_bytes("h\u{e9}"), vec![b'h', 0, 0xe9, 0, 0, 0]);
+    }
 
     #[test]
     fn uri_list_parses_file_uris() {

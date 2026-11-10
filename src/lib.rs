@@ -2542,7 +2542,11 @@ impl<S: 'static> App<S> {
                         present(&mut self, &mut surfaces, idx, window, false);
                         return ControlFlow::Wait;
                     }
-                    if self.pane_pointer_move(idx, position) {
+                    let moved = self.pane_pointer_move(idx, position);
+                    // Files or text dragged out of the window go on as a
+                    // drag other applications can take.
+                    let out = self.pane_drag_out(idx, position, window);
+                    if moved || out {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait

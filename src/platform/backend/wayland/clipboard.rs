@@ -22,6 +22,8 @@
 //! `set_actions` copy) or refuses. On a drop the offer is read like a paste
 //! (`text/uri-list` for files), then `finish`ed and destroyed.
 
+pub(super) mod drag_out;
+
 use super::{WL_DISPLAY, WlConn, arg_str, arg_u32, close, read_str};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -95,6 +97,10 @@ pub(super) struct Clipboard {
     device: u32,
     /// The serial of the latest input event, which `set_selection` must cite.
     pub(super) serial: u32,
+    /// The serial of the pointer button press, which `start_drag` must cite.
+    pub(super) press_serial: Option<u32>,
+    /// The drag out of the app in progress (see [`drag_out`]).
+    drag_out: Option<drag_out::DragOut>,
     /// Our `wl_data_source` while we own the selection.
     source: Option<u32>,
     /// The text `source` serves.
@@ -180,10 +186,13 @@ fn word(args: &[u8], i: usize) -> u32 {
 
 /// Handle a clipboard event. Returns whether it was one.
 pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8]) -> bool {
-    let clip = &mut conn.clip;
-    if clip.device == 0 {
+    if conn.clip.device == 0 {
         return false;
     }
+    if drag_out::handle(conn, object, opcode, args) {
+        return true;
+    }
+    let clip = &mut conn.clip;
     if object == clip.device {
         match opcode {
             DEVICE_DATA_OFFER => clip.offers.push((word(args, 0), Vec::new())),
@@ -245,7 +254,7 @@ pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8]) -
                 // send(mime, fd): the fd travels alongside the message.
                 if let Some(fd) = conn.fds.pop_front() {
                     if ours {
-                        serve(fd, conn.clip.text.clone());
+                        serve(fd, conn.clip.text.clone().into_bytes());
                     } else {
                         unsafe { close(fd) };
                     }
@@ -281,13 +290,14 @@ fn destroy_offers_except(conn: &mut WlConn, keep: Option<u32>) {
     }
 }
 
-/// Write `text` into a pasting client's fd, then close it, off the event loop.
-fn serve(fd: i32, text: String) {
+/// Write `bytes` into a reading client's fd, then close it, off the event
+/// loop.
+fn serve(fd: i32, bytes: Vec<u8>) {
     // SAFETY: the fd was passed to us with `send` and nothing else owns it.
     let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
     std::thread::spawn(move || {
         // A reader that went away gives EPIPE (Rust ignores SIGPIPE); nothing to do.
-        let _ = file.write_all(text.as_bytes());
+        let _ = file.write_all(&bytes);
     });
 }
 
@@ -361,7 +371,13 @@ pub(super) fn take_drop(conn: &mut WlConn, accepted: bool) -> Option<crate::plat
         .find(|(id, _)| *id == offer)
         .and_then(|(_, m)| drag_kind(m).1)
         .filter(|_| accepted);
+    // Our own drag out, come back: one seat drags one thing at a time, so
+    // it is ours, read from memory.
+    let own = conn.clip.drag_out.as_ref().map(|d| d.data.clone());
     let data = mime.and_then(|mime| {
+        if own.is_some() {
+            return own;
+        }
         let bytes = receive(conn, offer, mime)?;
         let text = String::from_utf8_lossy(&bytes).into_owned();
         if mime == URI_LIST {
@@ -466,7 +482,7 @@ fn read_pipe(conn: &mut WlConn, mut reader: std::fs::File) -> Option<Vec<u8>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     #[test]
@@ -486,7 +502,7 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     /// A connection whose other end plays the compositor.
-    fn conn_pair() -> (WlConn, UnixStream) {
+    pub(super) fn conn_pair() -> (WlConn, UnixStream) {
         let (ours, theirs) = UnixStream::pair().unwrap();
         let conn = WlConn {
             stream: ours,
@@ -504,7 +520,7 @@ mod tests {
     }
 
     /// Encode an event as the compositor would.
-    fn message(object: u32, opcode: u16, args: &[u8]) -> Vec<u8> {
+    pub(super) fn message(object: u32, opcode: u16, args: &[u8]) -> Vec<u8> {
         let mut m = object.to_le_bytes().to_vec();
         m.extend_from_slice(&((((8 + args.len()) as u32) << 16) | opcode as u32).to_le_bytes());
         m.extend_from_slice(args);
@@ -512,7 +528,7 @@ mod tests {
     }
 
     /// Read one request's header and arguments, plus any fd passed with it.
-    fn read_request(sock: &UnixStream) -> (u32, u16, Vec<u8>, Vec<i32>) {
+    pub(super) fn read_request(sock: &UnixStream) -> (u32, u16, Vec<u8>, Vec<i32>) {
         let mut fds = Vec::new();
         let mut header = [0u8; 8];
         let n = crate::platform::scm::recv_with_fds(sock, &mut header, &mut fds, 4).unwrap();
@@ -693,7 +709,7 @@ mod tests {
     fn serves_text_into_the_fd_and_closes_it() {
         let mut ends = [0i32; 2];
         assert_eq!(unsafe { pipe2(ends.as_mut_ptr(), O_CLOEXEC) }, 0);
-        serve(ends[1], "hello \u{2713}".to_string());
+        serve(ends[1], "hello \u{2713}".as_bytes().to_vec());
         let mut reader = unsafe { std::fs::File::from_raw_fd(ends[0]) };
         let mut got = String::new();
         reader.read_to_string(&mut got).unwrap();

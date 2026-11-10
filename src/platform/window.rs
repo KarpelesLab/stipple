@@ -315,6 +315,19 @@ pub trait Window {
     /// cursor shows a copy or a "no" sign) and refuses a drop it declined.
     /// Default: a no-op (backends without drops).
     fn set_drop_accepted(&self, _accepted: bool) {}
+    /// Carry `data` (files or text) out of the window as a drag other
+    /// applications can drop: the App calls this when an in-app drag from an
+    /// [`Element::drag_source`](crate::core::Element::drag_source) leaves the
+    /// window with the button still down. From then on the platform runs the
+    /// drag (the pointer, the cursor, Escape) until it drops or is cancelled;
+    /// if it comes back over the window it arrives like any drag from another
+    /// application. Returns whether the platform took it; if not (the
+    /// default), the drag stays in the app. Implemented with XDND on X11,
+    /// `wl_data_source` on Wayland, OLE `DoDragDrop` on Windows and an
+    /// `NSDraggingSession` on macOS. See `docs/drag-and-drop.md`.
+    fn start_drag(&self, _data: &crate::platform::DropData) -> bool {
+        false
+    }
 }
 
 /// Scale `icon` down (by area averaging) so neither side exceeds `max` pixels,

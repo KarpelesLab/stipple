@@ -8,6 +8,8 @@
 //! otherwise), read the property back when `SelectionNotify` arrives, deliver
 //! [`Event::Drop`] and send `XdndFinished`. See freedesktop.org's XDND spec.
 
+pub(super) mod source;
+
 use std::collections::VecDeque;
 use std::io::{self, Read};
 
@@ -44,6 +46,7 @@ pub(super) struct Atoms {
     utf8: u32,
     /// The property on our window the dropped data is converted into.
     property: u32,
+    targets: u32,
 }
 
 impl Atoms {
@@ -65,6 +68,7 @@ impl Atoms {
             text_plain: atom(b"text/plain")?,
             utf8: atom(b"UTF8_STRING")?,
             property: atom(b"STIPPLE_XDND")?,
+            targets: atom(b"TARGETS")?,
         })
     }
 

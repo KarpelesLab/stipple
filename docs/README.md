@@ -50,6 +50,7 @@ How to build, package and run on each platform, and what works there today.
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ❌ | ❌ | ❌ |
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
+| Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | ❌ | ❌ | ❌ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -159,6 +160,12 @@ can't switch the setting, so only the shared part (highlights, drop fades,
 flings and theme fades snapping) is unit-tested; the reading itself is
 build-checked. Linux needs a desktop portal (GNOME or KDE) or GTK's
 `settings.ini`.
+³³ An XDND source on X11 and `wl_data_source` / `start_drag` on Wayland, OLE
+`DoDragDrop` on Windows, an `NSDraggingSession` on macOS, started when an
+in-app drag of files or text leaves the window. CI drags `dropdemo`'s chips
+out onto an XDND target on X11 and checks the file's URI list and the text
+arrive. Wayland is unit-tested against a scripted compositor only; Windows and
+macOS are build-checked only. See [drag-and-drop.md](drag-and-drop.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -170,7 +177,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Widgets](widgets.md): select, number input, split pane, toolbar and toasts
 - [Menus](menus.md): the menu bar, shortcuts and context menus
 - [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
-- [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, and in-app drags
+- [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, in-app drags, and dragging files and text out to other apps
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades,
   theme cross-fades and reduced motion

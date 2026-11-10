@@ -1,5 +1,7 @@
 //! Drag and drop: a drop zone that takes files and text dragged from other
-//! applications, and chips you can drag onto it inside the app.
+//! applications, and chips you can drag onto it inside the app. The "File"
+//! and "Text" chips can also be dragged out of the window, into other
+//! applications.
 //!
 //! The zones style their drag-over look with per-state overrides
 //! (`.drag_over(...)`, `.drag_refused(...)`) and let a `Transition` animate
@@ -24,6 +26,8 @@ use stipple::prelude::*;
 
 struct State {
     drops: Vec<String>,
+    /// The file the "File" chip drags.
+    file: std::path::PathBuf,
 }
 
 /// One drop zone: `accepts` decides what it takes, and `motion` how it moves
@@ -89,18 +93,33 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         Transition::ease(DROP_FADE),
     );
 
-    let chips: Vec<Element> = (1..=3)
+    // A fixed width keeps the chips where CI's scripted drags expect them.
+    let chip = |text: String| {
+        column(vec![label(&theme, text)])
+            .align(Align::Center, Align::Center)
+            .width(68.0)
+            .padding(Insets::uniform(theme.spacing.sm))
+            .fill(theme.palette.surface)
+            .border(theme.palette.border, 1.0)
+            .radius(12.0)
+            .cursor(CursorIcon::Grab)
+    };
+    let mut chips: Vec<Element> = (1..=3)
         .map(|n| {
             let name = format!("chip-{n}");
-            column(vec![label(&theme, format!("Chip {n}"))])
-                .padding(Insets::uniform(theme.spacing.sm))
-                .fill(theme.palette.surface)
-                .border(theme.palette.border, 1.0)
-                .radius(12.0)
-                .cursor(CursorIcon::Grab)
+            chip(format!("Chip {n}"))
                 .drag_source(cx, move |_| Some(DropData::Internal(name.clone())))
         })
         .collect();
+    // A file and some text: these drop in the app too, and dragged out of
+    // the window they go to other applications.
+    let file = state.file.clone();
+    chips.push(
+        chip("File".into()).drag_source(cx, move |_| Some(DropData::Files(vec![file.clone()]))),
+    );
+    chips.push(
+        chip("Text".into()).drag_source(cx, |_| Some(DropData::Text("Hello from Stipple".into()))),
+    );
     let last = state
         .drops
         .last()
@@ -135,7 +154,13 @@ fn main() {
     let timeout = arg("--timeout")
         .and_then(|n| n.parse().ok())
         .unwrap_or(30u64);
-    let state = State { drops: Vec::new() };
+    // A file to drag out of the app.
+    let file = std::env::temp_dir().join("stipple-dropdemo.txt");
+    let _ = std::fs::write(&file, "Dragged out of the Stipple drop demo.\n");
+    let state = State {
+        drops: Vec::new(),
+        file,
+    };
     let mut app = App::new(state, view)
         .title("Stipple drop demo")
         .logical_size(Size::new(520.0, 360.0));

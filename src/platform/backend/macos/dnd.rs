@@ -11,6 +11,8 @@
 //! `public.file-url` (resolved through `NSURL`, so Finder's file-reference
 //! URLs become paths), else `public.utf8-plain-text`.
 
+pub(super) mod drag_out;
+
 use super::{
     CTX, CgPoint, Class, Id, Sel, class, class_addMethod, msg_id, msg_id_id, msg_id_u64, msg_u64,
     msg_void_id, nsstring, nsstring_to_string, objc_allocateClassPair, objc_getClass, objc_msgSend,
@@ -59,6 +61,8 @@ pub(super) unsafe fn add_methods(cls: Class) {
             perform_drag as *const c_void,
             c"c@:@".as_ptr(),
         );
+        // And drag out of the view, as the dragging source.
+        drag_out::add_methods(cls);
     }
 }
 

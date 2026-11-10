@@ -1154,6 +1154,9 @@ impl Window for WaylandWindow {
     fn set_drop_accepted(&self, accepted: bool) {
         self.drop_accepted.set(accepted);
     }
+    fn start_drag(&self, data: &crate::platform::DropData) -> bool {
+        clipboard::drag_out::start(&mut self.conn.lock().unwrap(), self.surface, data)
+    }
     fn set_clipboard(&self, text: &str) {
         clipboard::set_text(&mut self.conn.lock().unwrap(), text);
     }
@@ -1689,10 +1692,19 @@ where
             }
         } else if Some(object) == pointer && opcode == WL_POINTER_BUTTON {
             // serial, time, button(evdev), state(0 released / 1 pressed).
-            shared.lock().unwrap().clip.serial =
-                u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
+            let serial = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let button = u32::from_le_bytes([args[8], args[9], args[10], args[11]]);
             let pressed = u32::from_le_bytes([args[12], args[13], args[14], args[15]]) == 1;
+            {
+                let mut conn = shared.lock().unwrap();
+                conn.clip.serial = serial;
+                // A drag out of the app cites the press that began it; a
+                // new press means the last one is over.
+                conn.clip.press_serial = pressed.then_some(serial);
+                if pressed {
+                    clipboard::drag_out::end(&mut conn);
+                }
+            }
             if let Some(button) = pointer_button(button) {
                 let state = if pressed {
                     ButtonState::Pressed

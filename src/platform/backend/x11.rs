@@ -1019,6 +1019,9 @@ struct WindowReg {
     opened: Vec<X11Window>,
     /// XIDs of windows the app asked to close.
     closed: Vec<u32>,
+    /// A drag out of a window (its XID) the app started with
+    /// [`Window::start_drag`], for the loop to run.
+    drag_out: Option<(u32, crate::platform::DropData)>,
 }
 
 type Registry = Rc<RefCell<WindowReg>>;
@@ -1143,6 +1146,15 @@ impl Window for X11Window {
     fn set_drop_accepted(&self, accepted: bool) {
         self.drop_accepted.set(accepted);
     }
+    fn start_drag(&self, data: &crate::platform::DropData) -> bool {
+        // The loop takes it from here once the handler returns (see
+        // `dnd::source`).
+        if !data.can_leave_app() {
+            return false;
+        }
+        self.reg.borrow_mut().drag_out = Some((self.window, data.clone()));
+        true
+    }
     fn set_icon(&self, icon: Option<&Pixmap>) {
         let mut conn = self.conn.lock().unwrap();
         let _ = set_icon(&mut conn, self.window, icon);
@@ -1253,8 +1265,19 @@ fn icon_words(icon: &Pixmap) -> Vec<u32> {
 /// the first time it's used.
 fn set_cursor(conn: &mut Conn, window: u32, icon: CursorIcon) -> io::Result<()> {
     dbg(format_args!("cursor {icon:?} on window={window:#x}"));
+    let cursor = cursor_id(conn, icon)?;
+    let mut req = vec![OP_CHANGE_WINDOW_ATTRIBUTES, 0, 0, 0];
+    req.extend_from_slice(&window.to_le_bytes());
+    req.extend_from_slice(&CW_CURSOR.to_le_bytes());
+    req.extend_from_slice(&cursor.to_le_bytes());
+    conn.send(&finish(req))
+}
+
+/// The cursor for `icon`, created from the core cursor font the first time
+/// it's used.
+fn cursor_id(conn: &mut Conn, icon: CursorIcon) -> io::Result<u32> {
     let glyph = cursor_glyph(icon);
-    let cursor = match conn.cursors.iter().find(|(g, _)| *g == glyph) {
+    Ok(match conn.cursors.iter().find(|(g, _)| *g == glyph) {
         Some(&(_, id)) => id,
         None => {
             if conn.cursor_font == 0 {
@@ -1275,12 +1298,7 @@ fn set_cursor(conn: &mut Conn, window: u32, icon: CursorIcon) -> io::Result<()> 
             conn.cursors.push((glyph, id));
             id
         }
-    };
-    let mut req = vec![OP_CHANGE_WINDOW_ATTRIBUTES, 0, 0, 0];
-    req.extend_from_slice(&window.to_le_bytes());
-    req.extend_from_slice(&CW_CURSOR.to_le_bytes());
-    req.extend_from_slice(&cursor.to_le_bytes());
-    conn.send(&finish(req))
+    })
 }
 
 /// `CreateGlyphCursor` for `glyph` of the cursor font (mask = `glyph + 1`),
@@ -1580,6 +1598,8 @@ where
         shared.lock().unwrap().stream.as_raw_fd()
     };
     let mut buf = [0u8; 32];
+    // The drag out of the app in progress, if any.
+    let mut drag_out: Option<dnd::source::Source> = None;
     // Events read while waiting for a reply (the keymap after a mapping
     // change), handled before reading more.
     let mut backlog: std::collections::VecDeque<[u8; 32]> = std::collections::VecDeque::new();
@@ -1628,6 +1648,17 @@ where
             X_SELECTION_NOTIFY => xdnd.converting_window().unwrap_or(0),
             _ => event_window(&buf),
         };
+        // A drag out of the app owns the pointer and keyboard while it
+        // runs, and hears the target's answers.
+        if let Some(source) = drag_out.as_mut() {
+            let escape = buf[0] & 0x7f == X_KEY_PRESS && keymap.keysym(buf[1], false) == 0xff1b;
+            if source.event(&shared, &mut backlog, &buf, escape) {
+                if source.is_over() {
+                    drag_out = None;
+                }
+                continue;
+            }
+        }
         let idx = windows.iter().position(|w| w.window == xid).unwrap_or(0);
         let win = &windows[idx];
         let flow = match buf[0] & 0x7f {
@@ -1750,9 +1781,11 @@ where
                 ControlFlow::Wait
             }
             X_SELECTION_CLEAR => {
-                // We lost ownership of the selection; drop our copy.
+                // We lost ownership of the clipboard; drop our copy.
                 let mut conn = shared.lock().unwrap();
-                conn.clipboard_text.clear();
+                if rd_u32(&buf, 12) == Some(conn.atom_clipboard) {
+                    conn.clipboard_text.clear();
+                }
                 ControlFlow::Wait
             }
             _ => ControlFlow::Wait, // errors, replies, unhandled events
@@ -1763,6 +1796,12 @@ where
         // Adopt windows opened during this iteration, and destroy closed ones.
         {
             let mut r = reg.borrow_mut();
+            // A drag the app handed over: run it (it replaces one waiting
+            // for its target to finish).
+            if let Some((window, data)) = r.drag_out.take() {
+                drag_out =
+                    dnd::source::Source::start(&shared, xdnd.atoms, window, data, &mut backlog);
+            }
             windows.append(&mut r.opened);
             for xid in r.closed.drain(..) {
                 if let Some(pos) = windows.iter().position(|w| w.window == xid) {

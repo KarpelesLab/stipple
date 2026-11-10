@@ -1014,7 +1014,23 @@ Most input only works on X11 today.
   tries a real OLE `DoDragDrop` from another process, but it doesn't complete
   on the runner yet. Wayland is unit-tested only. See
   [docs/drag-and-drop.md](docs/drag-and-drop.md).
-- ⬜ Dragging out of the app (a drag source for other applications).
+- ✅ Dragging out of the app: an `Element::drag_source` whose payload is
+  `DropData::Files` or `DropData::Text` becomes a drag for other applications
+  when the pointer leaves the window (`Window::start_drag`, called by the App;
+  `Internal` payloads stay in the app). An XDND v5 source by hand on the wire
+  on X11 (`XdndSelection` owner, pointer and keyboard grab, `XdndAware` window
+  search, `XdndEnter` / `Position` / `Leave` / `Drop`, `SelectionRequest`s
+  served, `XdndStatus` / `XdndFinished`, Escape cancels); a `wl_data_source`
+  with `start_drag` on Wayland; OLE `DoDragDrop` with hand-written
+  `IDataObject` (`CF_HDROP`, `CF_UNICODETEXT`) and `IDropSource` on Windows
+  (and the left button now captures the mouse, so moves outside the window
+  arrive); `beginDraggingSessionWithItems:event:source:` with `NSURL` /
+  `NSString` items on macOS. CI drags dropdemo's file and text chips out onto
+  an XDND target script on X11 and checks the URI list and the text arrive,
+  that Escape cancels, and that a drag out and back drops on the app's own
+  zone. Wayland is unit-tested against a scripted compositor; Windows and
+  macOS are build-checked only. The app isn't told how a drag out ended. See
+  [docs/drag-and-drop.md](docs/drag-and-drop.md).
 - ✅ Opening URLs and files in their default apps (`platform::open_url`,
   `open_path`): the XDG portal's `OpenURI` over D-Bus with `xdg-open` as the
   fallback on Linux, `ShellExecuteW`, `NSWorkspace`, `UIApplication`, an

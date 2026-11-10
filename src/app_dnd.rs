@@ -3,11 +3,13 @@
 //! drags started inside the app on an
 //! [`Element::drag_source`](crate::core::Element::drag_source), both routed to
 //! the [`Element::on_drop`](crate::core::Element::on_drop) target under the
-//! pointer. See `docs/drag-and-drop.md`.
+//! pointer. An in-app drag of files or text that leaves the window becomes a
+//! drag for other applications ([`Window::start_drag`]). See
+//! `docs/drag-and-drop.md`.
 
 use crate::core::{DragSourceId, DropId, Font, LayoutNode, drag_source_at, drop_at, find_drop};
 use crate::geometry::{Point, Rect};
-use crate::platform::{DragOffer, DropData};
+use crate::platform::{DragOffer, DropData, Window};
 use crate::render::{Color, Scene};
 use crate::style::Theme;
 use crate::{App, Pane};
@@ -271,6 +273,30 @@ impl<S: 'static> Pane<S> {
         }
     }
 
+    /// The payload of the in-app drag in progress if the pointer, at `pos`,
+    /// has left the window and the payload can leave the app with it (files
+    /// or text; see [`DropData::can_leave_app`]).
+    pub(crate) fn leaving_payload(&self, pos: Point) -> Option<&DropData> {
+        let size = self.attrs.logical_size;
+        let outside = pos.x < 0.0 || pos.y < 0.0 || pos.x >= size.width || pos.y >= size.height;
+        self.dnd
+            .internal
+            .as_ref()
+            .filter(|data| outside && data.can_leave_app())
+    }
+
+    /// The in-app drag became the platform's: end it here, like a drag that
+    /// left the window (targets stop hovering). If it comes back over the
+    /// window it arrives like any drag from another application.
+    pub(crate) fn handed_off(&mut self, state: &mut S) {
+        self.dnd.press = None;
+        self.dnd.source = None;
+        self.dirty = true;
+        if self.dnd.internal.take().is_some() {
+            self.drag_leave(state);
+        }
+    }
+
     /// Cancel an in-app drag in progress (Escape). Returns whether there was
     /// one.
     pub(crate) fn source_cancel(&mut self, state: &mut S) -> bool {
@@ -386,6 +412,23 @@ impl<S: 'static> App<S> {
     pub(crate) fn pane_source_cancel(&mut self, idx: usize) -> bool {
         let App { state, panes, .. } = self;
         panes[idx].source_cancel(state)
+    }
+
+    /// The pointer, dragging in window `idx`, is at `pos`: if an in-app drag
+    /// of files or text has left the window, hand it to `window` as a drag
+    /// other applications can take ([`Window::start_drag`]). Returns whether
+    /// it did; where the platform can't, the drag stays in the app.
+    pub(crate) fn pane_drag_out(&mut self, idx: usize, pos: Point, window: &dyn Window) -> bool {
+        let Some(data) = self.panes[idx].leaving_payload(pos) else {
+            return false;
+        };
+        if !window.start_drag(data) {
+            return false;
+        }
+        crate::app_dbg(format_args!("drag out at {pos:?}: {data:?}"));
+        let App { state, panes, .. } = self;
+        panes[idx].handed_off(state);
+        true
     }
 
     /// Press the left button at `pos` in the primary window as the event loop
@@ -525,6 +568,106 @@ mod tests {
         app.pointer_press(Point::new(20.0, 20.0));
         app.pointer_release(Point::new(20.0, 20.0));
         assert_eq!(app.state().taps, 1);
+    }
+
+    /// A window that records the drags handed to it, and takes them when
+    /// `takes` is set.
+    struct DragWindow {
+        takes: bool,
+        started: std::cell::RefCell<Vec<DropData>>,
+    }
+
+    impl crate::platform::Window for DragWindow {
+        fn id(&self) -> crate::platform::WindowId {
+            crate::platform::WindowId(1)
+        }
+        fn inner_size(&self) -> crate::geometry::PhysicalSize {
+            crate::geometry::PhysicalSize::new(200, 80)
+        }
+        fn scale_factor(&self) -> crate::geometry::ScaleFactor {
+            crate::geometry::ScaleFactor::IDENTITY
+        }
+        fn request_redraw(&self) {}
+        fn set_title(&self, _title: &str) {}
+        fn create_surface(&self) -> Box<dyn crate::render::Surface> {
+            unreachable!()
+        }
+        fn start_drag(&self, data: &DropData) -> bool {
+            self.started.borrow_mut().push(data.clone());
+            self.takes
+        }
+    }
+
+    /// One draggable item (y 0..40) carrying `payload`, over a zone taking
+    /// everything (y 40..80).
+    fn source_app(payload: DropData) -> App<St> {
+        App::new(St::default(), move |_: &St, cx: &mut Cx<St>| {
+            let payload = payload.clone();
+            let item = block().drag_source(cx, move |_| Some(payload.clone()));
+            let zone = cx.register_drop(DragOffer::ANY, |s: &mut St, data, _| match data {
+                DropData::Files(f) => s.files.extend(f.iter().cloned()),
+                DropData::Text(t) | DropData::Internal(t) => s.moved.push(t.clone()),
+            });
+            cx.set_drop_hover(zone, |s: &mut St, on| s.hovering = on);
+            column(vec![item, block().drop_target(zone)])
+        })
+        .logical_size(Size::new(200.0, 80.0))
+    }
+
+    #[test]
+    fn files_dragged_out_of_the_window_go_to_the_platform() {
+        let file = DropData::Files(vec![PathBuf::from("/tmp/out.txt")]);
+        let mut app = source_app(file.clone());
+        let _ = app.render_frame();
+        let window = DragWindow {
+            takes: true,
+            started: Default::default(),
+        };
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(20.0, 50.0));
+        assert!(app.state().hovering, "an in-app drag while inside");
+        // Still inside: nothing for the platform.
+        assert!(!app.pane_drag_out(0, Point::new(20.0, 50.0), &window));
+        // Out past the right edge: the platform takes over.
+        app.pointer_drag_to(Point::new(260.0, 50.0));
+        assert!(app.pane_drag_out(0, Point::new(260.0, 50.0), &window));
+        assert_eq!(*window.started.borrow(), vec![file]);
+        assert!(!app.state().hovering, "targets stop hovering");
+        assert!(!app.panes[0].dnd.dragging_internally());
+        assert_eq!(app.panes[0].dnd.source, None, "no longer styled as dragged");
+        // The release (if the platform passes it on) drops nothing in-app.
+        app.pointer_release(Point::new(20.0, 50.0));
+        assert!(app.state().files.is_empty());
+    }
+
+    #[test]
+    fn internal_payloads_and_refusing_platforms_keep_the_drag_in_the_app() {
+        let mut app = source_app(DropData::Internal("item".into()));
+        let _ = app.render_frame();
+        let window = DragWindow {
+            takes: true,
+            started: Default::default(),
+        };
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(20.0, -30.0));
+        assert!(!app.pane_drag_out(0, Point::new(20.0, -30.0), &window));
+        assert!(window.started.borrow().is_empty(), "internal stays");
+        app.pointer_release(Point::new(20.0, 60.0));
+        assert_eq!(app.state().moved, vec!["item".to_string()]);
+
+        // Text over a platform without drags out: still dropped in-app.
+        let mut app = source_app(DropData::Text("hi".into()));
+        let _ = app.render_frame();
+        let window = DragWindow {
+            takes: false,
+            started: Default::default(),
+        };
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(-5.0, 30.0));
+        assert!(!app.pane_drag_out(0, Point::new(-5.0, 30.0), &window));
+        assert_eq!(window.started.borrow().len(), 1, "asked");
+        app.pointer_release(Point::new(20.0, 60.0));
+        assert_eq!(app.state().moved, vec!["hi".to_string()]);
     }
 
     #[test]
