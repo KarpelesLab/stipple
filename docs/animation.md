@@ -45,6 +45,13 @@ in tests.
   it and out when it leaves or drops, for a view to animate its drop zone
   with; see [drag-and-drop.md](drag-and-drop.md).
 
+## Moving, scaling, turning and fading
+
+`Element::transform` draws an element and its subtree translated, scaled and
+rotated about an origin, and `Element::opacity` fades it as a group, without
+changing layout; pointer input follows. Sample a `Tween` or `Spring` into them
+each frame to animate. See [transforms.md](transforms.md).
+
 ## Where frames come from
 
 | Platform | Frames paced by |

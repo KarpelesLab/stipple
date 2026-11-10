@@ -1169,9 +1169,19 @@ styling part of the toolkit.
   `Transition` (duration and easing, or a spring), and changing them between
   builds animates instead of jumping. The App keeps the in-flight values by
   element identity and asks for frames only while something moves.
-- ⬜ Transforms and opacity in the scene: scale, rotate and translate about an
+- ✅ Transforms and opacity in the scene: scale, rotate and translate about an
   origin, and group opacity, for any element and its subtree, with hit-testing
-  that follows the transform.
+  that follows the transform. `Element::transform(Transform)` and
+  `Element::opacity(f32)` lower to `Scene::push_layer` (an oxideav group with
+  a transform and an offscreen-composited opacity on the CPU path); every
+  pointer query maps through the inverse transforms, handlers get positions in
+  the element's own space, the hover/focus/drop overlays and damage follow the
+  transform, and text renders from outlines under scale and rotation.
+  `transformdemo` shows it. Not covered: native layers in the GPU scene
+  renderer (it falls back to the CPU raster), transformed embedded-viewport
+  content (moved only), the IME preedit underline and caret rect, skew/3D, and
+  transformed bounds in the accessibility tree. See
+  [docs/transforms.md](docs/transforms.md).
 - ⬜ Enter and exit transitions for keyed elements (fade, slide, scale), so
   appearing and disappearing items animate; exiting elements stay drawn until
   their transition ends.

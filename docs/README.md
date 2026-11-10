@@ -160,6 +160,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, and in-app drags
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades
+- [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files

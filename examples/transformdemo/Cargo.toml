@@ -1,0 +1,16 @@
+[package]
+name = "transformdemo"
+description = "Stipple example: elements scaled, rotated, moved and faded as groups, still clickable where they are drawn."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true
