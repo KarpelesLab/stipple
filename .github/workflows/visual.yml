@@ -1770,7 +1770,12 @@ jobs:
           dbus-run-session -- bash -ex <<'EOF'
           ibus-daemon --xim --panel=disable --emoji-extension=disable -v \
             > visual_output/ibus.log 2>&1 &
-          sleep 4
+          # IBus registers its XIM server a few seconds after starting (more
+          # on a busy runner); the app only looks once, at startup.
+          for i in $(seq 60); do
+            xprop -root XIM_SERVERS 2>/dev/null | grep -q '@server=ibus' && break
+            sleep 0.5
+          done
           xprop -root XIM_SERVERS | tee -a visual_output/ibus.log
 
           # --- IBus's keyboard engine: dead_acute e -> é, through XIM ---
