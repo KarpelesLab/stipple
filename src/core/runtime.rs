@@ -682,6 +682,35 @@ impl<'a, S> Cx<'a, S> {
     }
 }
 
+/// Driving animations from a build: sample at the frame time, and ask for the
+/// next frame only while something still moves.
+impl<S> Cx<'_, S> {
+    /// The value of `anim` at this frame, asking for another frame while it's
+    /// still moving. See `docs/animation.md`.
+    pub fn animate<T: crate::anim::Animatable>(&mut self, anim: &crate::anim::Animated<T>) -> T {
+        let now = self.frame_time();
+        if anim.is_animating(now) {
+            self.request_frame();
+        }
+        anim.value(now)
+    }
+
+    /// Sample `anim`, started at `started` on the frame timeline (a
+    /// `frame_time()` or `anim::now()` taken when it began), asking for
+    /// another frame until it finishes.
+    pub fn play<A: crate::anim::Animation>(
+        &mut self,
+        anim: &A,
+        started: std::time::Duration,
+    ) -> A::Value {
+        let t = self.frame_time().as_secs_f64() - started.as_secs_f64();
+        if !anim.is_finished(t) {
+            self.request_frame();
+        }
+        anim.sample(t)
+    }
+}
+
 impl<S> core::fmt::Debug for Cx<'_, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Cx")

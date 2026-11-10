@@ -1187,12 +1187,30 @@ styling part of the toolkit.
   their transition ends.
 - ⬜ Layout animations: when an element's position or size changes because the
   layout did (a list reordering, a panel opening), it moves there smoothly.
-- ⬜ Interruptible, velocity-preserving animations: a new target mid-flight
+- ✅ Interruptible, velocity-preserving animations: a new target mid-flight
   continues from the current value and speed; gestures (drags, flings, touch
   scrolling) can drive an animation directly and hand off to a spring on
-  release.
-- ⬜ Keyframes and sequences/staggers for richer effects (a shake on invalid
-  input, a pulsing drop target, staggered list entrance).
+  release. `anim::Animated<T>` retargets (`animate_to` / `spring_to` /
+  `tween_to`) from the current value and velocity — springs take it as is,
+  tweens blend it in with a correction that fades out — and takes gestures
+  (`drag_to`, then `release` / `release_with_velocity` into a spring or
+  tween, or `fling` into a friction `Decay`). Generic over the
+  `Animatable` trait (`f64`, `Color` in premultiplied sRGB, `Point`,
+  `Vec2`, `Size`, `Rect`, `Insets`, `[f64; N]`, tuples; open to other
+  types); `Tween` and `Spring` are generic too, `Spring` in closed form with
+  `SpringParams` presets. `Cx::animate` reads one at the frame time and asks
+  for frames only while it moves. Not yet wired into touch scrolling or the
+  built-in widgets.
+- ✅ Keyframes and sequences/staggers for richer effects (a shake on invalid
+  input, a pulsing drop target, staggered list entrance). Every animation is a
+  pure `Animation` (`sample(t)`, `velocity(t)`, `is_finished(t)`):
+  `Keyframes` with per-segment easing, `.delay`, `.repeat(n)` /
+  `.repeat_forever()` / `.alternate()`, `.then` sequences, tuples as
+  parallel groups, `stagger` / `stagger_within`, CSS `cubic-bezier` easing
+  with named curves, and the `shake`, `pulse` and `entrance` effects.
+  `Cx::play` drives one from a start time. `examples/motiondemo` shows them,
+  checked at fixed times by `--selftest`; see
+  [docs/animation.md](docs/animation.md).
 - ⬜ Finer-grained reactivity: derived/memoized values and subtrees that rebuild
   only when their inputs change, so large animated UIs stay cheap; damage
   limited to what actually moved.
