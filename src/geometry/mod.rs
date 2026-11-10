@@ -18,6 +18,7 @@ mod physical;
 mod point;
 mod rect;
 mod size;
+mod transform;
 mod vec2;
 
 pub use affine::Affine;
@@ -26,4 +27,5 @@ pub use physical::{PhysicalSize, ScaleFactor};
 pub use point::Point;
 pub use rect::Rect;
 pub use size::Size;
+pub use transform::Transform;
 pub use vec2::Vec2;

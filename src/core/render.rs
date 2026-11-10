@@ -14,9 +14,9 @@
 
 use crate::core::element::{Align, BoxStyle, Element, ElementKind};
 use crate::core::runtime::{
-    ActionId, FocusId, LayoutNode, NodeContent, ScrollId, find_action, find_focus, first_text,
+    ActionId, FocusId, LayoutNode, NodeContent, ScrollId, first_text, node_to_window,
 };
-use crate::geometry::{PhysicalSize, Point, Rect, Size, Vec2};
+use crate::geometry::{Affine, PhysicalSize, Point, Rect, Size, Vec2};
 use crate::layout::{
     Axis, FlexItem, LayoutDirection, Span, Track, TrackItem, break_lines, clamp_len, place_cells,
     solve_main_axis, solve_tracks, span_extent,
@@ -385,6 +385,8 @@ pub fn layout_with_direction(
         cursor: el.cursor,
         semantics: el.semantics.clone(),
         rtl: dir.is_rtl(),
+        transform: el.transform,
+        opacity: el.opacity,
         children: Vec::new(),
     };
 
@@ -556,9 +558,30 @@ pub fn paint_focus(
     caret: Color,
     selection: Color,
 ) {
-    let Some(node) = find_focus(tree, focused) else {
+    let Some((node, to_window, opacity)) = node_to_window(tree, &|n| n.focus == Some(focused))
+    else {
         return;
     };
+    // Drawn where the node is drawn, if it's transformed or translucent.
+    let layer = !to_window.is_identity() || opacity < 1.0;
+    if layer {
+        scene.push_layer(to_window, opacity);
+    }
+    paint_focus_node(node, scene, font, ring, caret, selection);
+    if layer {
+        scene.pop_layer();
+    }
+}
+
+/// [`paint_focus`] for the focused `node`, in its layout coordinates.
+fn paint_focus_node(
+    node: &LayoutNode,
+    scene: &mut Scene,
+    font: Option<&Font>,
+    ring: Color,
+    caret: Color,
+    selection: Color,
+) {
     let os_focus = node
         .native
         .is_some_and(|n| crate::platform::native::draws_focus(n.control));
@@ -682,15 +705,23 @@ pub fn caret_index_at(node: &LayoutNode, point: Point, font: Option<&Font>) -> O
 /// Overlay a `highlight` (typically translucent) on the hovered tappable
 /// element, matching its corner radius. No-op if `hovered` isn't in the tree.
 pub fn paint_hover(tree: &LayoutNode, hovered: ActionId, scene: &mut Scene, highlight: Color) {
-    if let Some(node) = find_action(tree, hovered) {
+    if let Some((node, to_window, opacity)) = node_to_window(tree, &|n| n.action == Some(hovered)) {
         // An OS-drawn control shows hover itself (see `mark_native_states`).
-        if node.native.is_some() {
+        if node.native.is_some() || opacity <= 0.0 {
             return;
+        }
+        // Drawn where the node is drawn, if it's transformed or translucent.
+        let layer = !to_window.is_identity() || opacity < 1.0;
+        if layer {
+            scene.push_layer(to_window, opacity);
         }
         if node.decoration.radius > 0.0 {
             scene.fill_round_rect(node.bounds, node.decoration.radius, highlight);
         } else {
             scene.fill_rect(node.bounds, highlight);
+        }
+        if layer {
+            scene.pop_layer();
         }
     }
 }
@@ -734,7 +765,27 @@ fn paint_native(node: &LayoutNode, scene: &mut Scene) -> bool {
 }
 
 /// Paint a laid-out tree into `scene`, parents before children.
+///
+/// A node with a [transform](LayoutNode::transform) or a group
+/// [opacity](LayoutNode::opacity) below 1 is painted, with its subtree, inside
+/// a [`Scene::push_layer`] — so it is drawn moved and composited as a group.
+/// A fully transparent node isn't painted at all.
 pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
+    let affine = node.affine();
+    let translucent = node.opacity < 1.0;
+    if node.opacity <= 0.0 {
+        return;
+    }
+    if affine.is_none() && !translucent {
+        return paint_node(node, scene, font);
+    }
+    scene.push_layer(affine.unwrap_or(Affine::IDENTITY), node.opacity);
+    paint_node(node, scene, font);
+    scene.pop_layer();
+}
+
+/// [`paint`] for one node and its subtree, inside whatever layer it needs.
+fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
     if !paint_native(node, scene) {
         paint_decoration(&node.decoration, node.bounds, scene);
     }
@@ -1651,6 +1702,257 @@ mod tests {
         assert_eq!(
             caret_index_at(&forced, Point::new(1.0, 5.0), Some(&font)),
             Some(0)
+        );
+    }
+
+    // --- Transforms and group opacity -------------------------------------
+
+    use crate::geometry::{ScaleFactor, Transform};
+    use crate::render::SoftwareRenderer;
+
+    const RED: Color = Color::rgb(255, 0, 0);
+
+    /// Lay `el` out over a black `w`×`h` window and render it at 1x.
+    fn render_el(el: &Element, w: f64, h: f64, font: Option<&Font>) -> crate::render::Pixmap {
+        let tree = layout(el, Rect::from_xywh(0.0, 0.0, w, h), font);
+        let mut scene = Scene::new(Size::new(w, h));
+        paint(&tree, &mut scene, font);
+        SoftwareRenderer::new()
+            .with_background(Color::BLACK)
+            .render(scene, ScaleFactor::IDENTITY)
+    }
+
+    /// A 100×100 window centering an 80×20 bar (drawn at (10, 40)).
+    fn centered(bar: Element) -> Element {
+        Element::stack(Axis::Vertical, vec![bar])
+            .align(Align::Center, Align::Center)
+            .width(100.0)
+            .height(100.0)
+    }
+
+    fn tappable_bar() -> Element {
+        let mut bar = block(80.0, 20.0).fill(RED);
+        bar.action = Some(ActionId(1));
+        bar
+    }
+
+    #[test]
+    fn a_rotated_element_is_drawn_and_hit_where_it_turned_to() {
+        use crate::core::runtime::hit_test;
+        let el = centered(tappable_bar().transform(Transform::IDENTITY.rotate_degrees(90.0)));
+        // Turned about its center (50, 50): now upright, over (40..60, 10..90).
+        let out = render_el(&el, 100.0, 100.0, None);
+        assert_eq!(out.pixel(50, 15), Some([255, 0, 0, 255]));
+        assert_eq!(out.pixel(50, 85), Some([255, 0, 0, 255]));
+        assert_eq!(out.pixel(15, 50), Some([0, 0, 0, 255]));
+
+        let tree = layout(&el, Rect::from_xywh(0.0, 0.0, 100.0, 100.0), None);
+        assert_eq!(hit_test(&tree, Point::new(50.0, 15.0)), Some(ActionId(1)));
+        assert_eq!(
+            hit_test(&tree, Point::new(15.0, 50.0)),
+            None,
+            "where it was laid out"
+        );
+    }
+
+    #[test]
+    fn a_scaled_element_is_hit_where_it_is_drawn() {
+        use crate::core::runtime::{cursor_at, hit_test};
+        use crate::platform::CursorIcon;
+        // Half size about its center: drawn over (30..70, 45..55).
+        let el = centered(tappable_bar().transform(Transform::IDENTITY.scale(0.5)));
+        let tree = layout(&el, Rect::from_xywh(0.0, 0.0, 100.0, 100.0), None);
+        assert_eq!(hit_test(&tree, Point::new(35.0, 50.0)), Some(ActionId(1)));
+        assert_eq!(hit_test(&tree, Point::new(20.0, 50.0)), None);
+        assert_eq!(hit_test(&tree, Point::new(50.0, 42.0)), None);
+        assert_eq!(
+            cursor_at(&tree, Point::new(35.0, 50.0)),
+            CursorIcon::Pointer
+        );
+        assert_eq!(
+            cursor_at(&tree, Point::new(20.0, 50.0)),
+            CursorIcon::Default
+        );
+
+        let out = render_el(&el, 100.0, 100.0, None);
+        assert_eq!(out.pixel(35, 50), Some([255, 0, 0, 255]));
+        assert_eq!(out.pixel(20, 50), Some([0, 0, 0, 255]));
+
+        // Scaled to nothing, it can't be hit at all.
+        let gone = centered(tappable_bar().transform(Transform::IDENTITY.scale(0.0)));
+        let tree = layout(&gone, Rect::from_xywh(0.0, 0.0, 100.0, 100.0), None);
+        assert_eq!(hit_test(&tree, Point::new(50.0, 50.0)), None);
+    }
+
+    #[test]
+    fn a_transformed_parent_carries_its_children_and_their_clip() {
+        use crate::core::runtime::{hit_test, local_point};
+        // A clipping 40×40 panel at (0, 0) holding a tappable child that
+        // overflows it; the panel is moved 50 px right and 50 px down.
+        let mut child = block(80.0, 20.0);
+        child.action = Some(ActionId(2));
+        let panel = Element::stack(Axis::Vertical, vec![child])
+            .width(40.0)
+            .height(40.0)
+            .clip()
+            .transform(Transform::IDENTITY.translate(50.0, 50.0));
+        let root = Element::stack(Axis::Vertical, vec![panel]);
+        let tree = layout(&root, Rect::from_xywh(0.0, 0.0, 100.0, 100.0), None);
+        assert_eq!(hit_test(&tree, Point::new(60.0, 60.0)), Some(ActionId(2)));
+        assert_eq!(
+            hit_test(&tree, Point::new(10.0, 10.0)),
+            None,
+            "the old place"
+        );
+        // Past the moved clip, the overflowing child isn't there to hit.
+        assert_eq!(hit_test(&tree, Point::new(95.0, 60.0)), None);
+        // A point read in the child's own layout space.
+        assert_eq!(
+            local_point(
+                &tree,
+                &|n| n.action == Some(ActionId(2)),
+                Point::new(60.0, 60.0)
+            ),
+            Some(Point::new(10.0, 10.0))
+        );
+    }
+
+    #[test]
+    fn nested_transforms_compose() {
+        use crate::core::runtime::{hit_test, node_to_window};
+        // A parent turned 180° about its center holding a child scaled 2×
+        // about its top-left corner.
+        let mut child =
+            block(10.0, 10.0).transform(Transform::IDENTITY.scale(2.0).origin(0.0, 0.0));
+        child.action = Some(ActionId(3));
+        let parent = Element::stack(Axis::Vertical, vec![child])
+            .width(100.0)
+            .height(100.0)
+            .transform(Transform::IDENTITY.rotate_degrees(180.0));
+        let tree = layout(&parent, Rect::from_xywh(0.0, 0.0, 100.0, 100.0), None);
+        // The child covers (0..20, 0..20) in the parent, so (80..100, 80..100)
+        // once the parent is turned over.
+        assert_eq!(hit_test(&tree, Point::new(85.0, 85.0)), Some(ActionId(3)));
+        assert_eq!(hit_test(&tree, Point::new(5.0, 5.0)), None);
+        let (_, m, _) = node_to_window(&tree, &|n| n.action == Some(ActionId(3))).unwrap();
+        let r = m.map_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
+        assert!((r.min_x() - 80.0).abs() < 1e-9 && (r.max_y() - 100.0).abs() < 1e-9);
+    }
+
+    /// Group opacity composites the subtree as one: where two children overlap
+    /// (the second pulled over the first by a transform) the overlap is the
+    /// same color as the rest — no seam — and a parent's own fill doesn't show
+    /// through its child.
+    #[test]
+    fn group_opacity_shows_no_overlap_seam() {
+        let a = block(30.0, 20.0).fill(RED);
+        let b = block(30.0, 20.0)
+            .fill(RED)
+            .transform(Transform::IDENTITY.translate(-15.0, 0.0));
+        let group = Element::stack(Axis::Horizontal, vec![a, b]).opacity(0.5);
+        let out = render_el(&group, 100.0, 20.0, None);
+        let alone = out.pixel(5, 10).unwrap();
+        let overlap = out.pixel(20, 10).unwrap();
+        assert_eq!(alone, overlap, "no seam where the children overlap");
+        assert!(
+            (120..=136).contains(&alone[0]),
+            "half red over black: {alone:?}"
+        );
+        assert_eq!(out.pixel(50, 10), Some([0, 0, 0, 255]), "nothing past them");
+
+        // A white panel with a red child, at half opacity: inside the child it
+        // is half red over black, not red over half-white.
+        let panel = Element::stack(Axis::Vertical, vec![block(20.0, 20.0).fill(RED)])
+            .padding(crate::geometry::Insets::uniform(10.0))
+            .fill(Color::WHITE)
+            .opacity(0.5);
+        let out = render_el(&panel, 100.0, 100.0, None);
+        let [r, g, b, _] = out.pixel(20, 20).unwrap();
+        assert!(
+            (120..=136).contains(&r) && g < 4 && b < 4,
+            "{:?}",
+            (r, g, b)
+        );
+        let [r, g, _, _] = out.pixel(5, 5).unwrap();
+        assert!(
+            (120..=136).contains(&r) && (120..=136).contains(&g),
+            "half white"
+        );
+
+        // Fully transparent: not painted at all.
+        let gone = Element::stack(Axis::Vertical, vec![block(20.0, 20.0).fill(RED)]).opacity(0.0);
+        let out = render_el(&gone, 40.0, 40.0, None);
+        assert_eq!(out.pixel(10, 10), Some([0, 0, 0, 255]));
+    }
+
+    /// Text scales and turns with its element: scaled glyphs are drawn larger
+    /// (from their outlines, not stretched bitmaps), and turned text runs down.
+    #[test]
+    fn text_scales_and_rotates_with_its_element() {
+        let Some(font) = Font::system_default() else {
+            eprintln!("skipping: no system font found");
+            return;
+        };
+        // The size of the box around the ink, and how many pixels are inked.
+        let ink = |el: &Element| {
+            let out = render_el(el, 200.0, 200.0, Some(&font));
+            let (mut x0, mut y0, mut x1, mut y1, mut n) = (u32::MAX, u32::MAX, 0, 0, 0u32);
+            for y in 0..200 {
+                for x in 0..200 {
+                    if out.pixel(x, y).unwrap()[0] > 128 {
+                        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                        n += 1;
+                    }
+                }
+            }
+            (x1.saturating_sub(x0), y1.saturating_sub(y0), n)
+        };
+        let word = |t: Transform| {
+            let text = Element::text("Wide", 16.0, Color::WHITE).transform(t);
+            Element::stack(Axis::Vertical, vec![text])
+                .align(Align::Center, Align::Center)
+                .width(200.0)
+                .height(200.0)
+        };
+        let (w1, h1, n1) = ink(&word(Transform::IDENTITY));
+        let (w2, h2, n2) = ink(&word(Transform::IDENTITY.scale(2.0)));
+        assert!(w1 > h1 && n1 > 0, "the word is wider than tall");
+        assert!((w2 as f64 / w1 as f64 - 2.0).abs() < 0.25, "{w1} -> {w2}");
+        assert!((h2 as f64 / h1 as f64 - 2.0).abs() < 0.35, "{h1} -> {h2}");
+        assert!(n2 > n1 * 3, "about four times the ink: {n1} -> {n2}");
+        let (w3, h3, _) = ink(&word(Transform::IDENTITY.rotate_degrees(90.0)));
+        assert!(h3 > w3, "turned on its side: {w3}x{h3}");
+        assert!(
+            w3.abs_diff(h1) <= 2 && h3.abs_diff(w1) <= 2,
+            "{w1}x{h1} -> {w3}x{h3}"
+        );
+    }
+
+    #[test]
+    fn focus_and_hover_overlays_follow_the_transform() {
+        let mut bar = tappable_bar().transform(Transform::IDENTITY.rotate_degrees(90.0));
+        bar.focus = Some(FocusId(1));
+        let el = centered(bar);
+        let tree = layout(&el, Rect::from_xywh(0.0, 0.0, 100.0, 100.0), None);
+        let mut scene = Scene::new(Size::new(100.0, 100.0));
+        paint_hover(&tree, ActionId(1), &mut scene, Color::WHITE);
+        paint_focus(
+            &tree,
+            FocusId(1),
+            &mut scene,
+            None,
+            Color::WHITE,
+            Color::WHITE,
+            Color::WHITE,
+        );
+        let out = SoftwareRenderer::new()
+            .with_background(Color::BLACK)
+            .render(scene, ScaleFactor::IDENTITY);
+        assert_eq!(out.pixel(50, 15), Some([255, 255, 255, 255]), "upright");
+        assert_eq!(
+            out.pixel(15, 50),
+            Some([0, 0, 0, 255]),
+            "not where laid out"
         );
     }
 }

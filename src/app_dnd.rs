@@ -62,6 +62,21 @@ pub(crate) fn paint_drop_target(tree: &LayoutNode, id: DropId, scene: &mut Scene
     let Some(node) = find_drop(tree, id) else {
         return;
     };
+    // Drawn where the target is drawn, if it's transformed.
+    let to_window = crate::core::node_to_window(tree, &|n| n.drop == Some(id))
+        .map_or(crate::geometry::Affine::IDENTITY, |(_, m, _)| m);
+    let layer = !to_window.is_identity();
+    if layer {
+        scene.push_layer(to_window, 1.0);
+    }
+    paint_drop_target_at(node, scene, theme);
+    if layer {
+        scene.pop_layer();
+    }
+}
+
+/// [`paint_drop_target`] for the target `node`, in its layout coordinates.
+fn paint_drop_target_at(node: &LayoutNode, scene: &mut Scene, theme: &Theme) {
     let fill = theme.palette.hover_overlay;
     let ring = theme.palette.focus_ring;
     let b = node.bounds;
@@ -99,9 +114,11 @@ impl<S: 'static> Pane<S> {
         let over = self
             .tree
             .as_ref()
-            .and_then(|t| drop_at(t, pos))
-            .map(|(id, b)| {
-                let local = Point::new(pos.x - b.min_x(), pos.y - b.min_y());
+            .and_then(|t| drop_at(t, pos).map(|hit| (t, hit)))
+            .map(|(t, (id, b))| {
+                // Through any transform on the way to the target.
+                let at = crate::core::local_point(t, &|n| n.drop == Some(id), pos).unwrap_or(pos);
+                let local = Point::new(at.x - b.min_x(), at.y - b.min_y());
                 (id, self.handlers.drop_accepts(id, offer), local)
             });
         let target = over.filter(|o| o.1).map(|o| o.0);

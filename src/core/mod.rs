@@ -61,7 +61,8 @@ pub use runtime::{
     KeyInput, LayoutNode, NodeContent, OverlaySpec, ScrollId, ScrollRequests, TextPosId,
     ViewportEvent, ViewportId, collect_focusables, collect_viewports, context_at, cursor_at,
     drag_at, drag_hit_at, drag_source_at, drop_at, find_action, find_drop, find_focus, find_scroll,
-    find_text_pos, first_text, focus_at, hit_test, scroll_at, text_pos_at, viewport_at,
+    find_text_pos, first_text, focus_at, hit_test, local_point, node_to_window, scroll_at,
+    text_pos_at, viewport_at,
 };
 
 // The font type lives in stipple::render; re-export so callers of the layout/paint

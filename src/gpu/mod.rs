@@ -521,7 +521,18 @@ impl GlyphAtlas {
 /// samples per glyph — so any stipple UI renders through the GPU. `background`
 /// clears the target. Errors if the `gl` feature is off or no GL/EGL device is
 /// available.
+///
+/// Layers ([`Scene::push_layer`]: transforms and group opacity) aren't drawn
+/// natively yet: a scene with any [effects](Scene::has_effects) is rasterized
+/// on the CPU and the result composited through the GPU, so it still looks
+/// right.
 pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pixmap, String> {
+    if scene.has_effects() {
+        let cpu = SoftwareRenderer::new()
+            .with_background(background)
+            .render(scene.clone(), ScaleFactor::IDENTITY);
+        return present_offscreen(&cpu);
+    }
     let ls = scene.logical_size();
     let size = ScaleFactor::IDENTITY.to_physical(ls);
     let mut rects: Vec<(Rect, Color, f32, f32)> = Vec::new();
@@ -571,6 +582,9 @@ pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pix
             // skipped here and their labels sit on the background.
             DrawCmd::Image { .. } => {}
             DrawCmd::PushClip(_) | DrawCmd::PopClip => {}
+            // Only identity layers get here (see `has_effects` above), and
+            // those change nothing.
+            DrawCmd::PushLayer { .. } | DrawCmd::PopLayer => {}
         }
     }
 

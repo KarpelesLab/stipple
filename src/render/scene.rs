@@ -6,8 +6,8 @@
 //! works entirely in **logical pixels** — DPI scaling is applied at raster
 //! time via the frame's view box (see [`Scene::into_vector_frame`]).
 
-use crate::geometry::{Point, Rect, Size};
-use crate::render::convert::to_ox_point;
+use crate::geometry::{Affine, Point, Rect, Size};
+use crate::render::convert::{to_ox_point, to_transform2d};
 use crate::render::{Color, Pixmap};
 use oxideav_core::{
     Group, ImageRef, Node, Paint, Path, PathNode, Point as OxPoint, Rect as OxRect, Rgba, Stroke,
@@ -47,6 +47,16 @@ pub enum DrawCmd {
     PushClip(Rect),
     /// End the innermost clip region opened by [`PushClip`](DrawCmd::PushClip).
     PopClip,
+    /// Begin a layer: subsequent primitives (until the matching [`PopLayer`])
+    /// are drawn through `transform` (logical pixels in, logical pixels out,
+    /// composed with any enclosing layer's) and composited **as a group** at
+    /// `opacity` — rendered together at full opacity, then blended once, so
+    /// overlapping primitives inside don't show through each other.
+    ///
+    /// [`PopLayer`]: DrawCmd::PopLayer
+    PushLayer { transform: Affine, opacity: f32 },
+    /// End the innermost layer opened by [`PushLayer`](DrawCmd::PushLayer).
+    PopLayer,
     /// A reserved area for **embedded content** (a browser page, video, or any
     /// externally-rendered surface), identified by `id`. The compositor draws
     /// the content here: the CPU path blits the registered content [`Pixmap`]
@@ -58,13 +68,31 @@ pub enum DrawCmd {
     Image { rect: Rect, image: Arc<Pixmap> },
 }
 
-/// A clip region under construction: the primitives emitted while it is open,
-/// plus the optional clip path applied to them when it closes. The scene keeps a
-/// stack of these so [`Scene::push_clip`]/[`Scene::pop_clip`] can nest.
+/// A clip region or layer under construction: the primitives emitted while it
+/// is open, plus the clip path, transform and opacity applied to them as a
+/// group when it closes. The scene keeps a stack of these so
+/// [`Scene::push_clip`]/[`Scene::pop_clip`] and
+/// [`Scene::push_layer`]/[`Scene::pop_layer`] can nest.
 #[derive(Clone, Debug)]
 struct ClipFrame {
     clip: Option<Path>,
+    /// `true` for a [`Scene::push_layer`] frame, `false` for a clip (or the base).
+    layer: bool,
+    transform: Transform2D,
+    opacity: f32,
     nodes: Vec<Node>,
+}
+
+impl ClipFrame {
+    fn base() -> Self {
+        Self {
+            clip: None,
+            layer: false,
+            transform: Transform2D::identity(),
+            opacity: 1.0,
+            nodes: Vec::new(),
+        }
+    }
 }
 
 /// A builder of vector draw primitives in logical-pixel space.
@@ -86,10 +114,7 @@ impl Scene {
     pub fn new(logical_size: Size) -> Self {
         Self {
             logical_size,
-            stack: vec![ClipFrame {
-                clip: None,
-                nodes: Vec::new(),
-            }],
+            stack: vec![ClipFrame::base()],
             commands: Vec::new(),
             scale: 1.0,
         }
@@ -132,25 +157,78 @@ impl Scene {
     pub fn push_clip(&mut self, rect: Rect) {
         self.stack.push(ClipFrame {
             clip: Some(rect_path(rect)),
-            nodes: Vec::new(),
+            ..ClipFrame::base()
         });
         self.commands.push(DrawCmd::PushClip(rect));
     }
 
     /// End the innermost clip region opened by [`push_clip`](Scene::push_clip),
-    /// folding its primitives into a clipped group. A no-op if none is open.
+    /// folding its primitives into a clipped group. A no-op if none is open
+    /// (or the innermost open region is a layer).
     pub fn pop_clip(&mut self) {
-        if self.stack.len() <= 1 {
+        if self.stack.len() <= 1 || self.stack.last().is_some_and(|f| f.layer) {
             return; // unbalanced pop — ignore rather than drop the base frame
         }
+        self.close_frame();
+        self.commands.push(DrawCmd::PopClip);
+    }
+
+    /// Begin a layer: primitives emitted until the matching
+    /// [`pop_layer`](Scene::pop_layer) are drawn through `transform` (mapping
+    /// logical pixels to logical pixels, inside any enclosing layer's) and
+    /// composited as a group at `opacity` (`0.0..=1.0`): the layer's content
+    /// is rendered at full opacity on its own, then blended once, so
+    /// overlapping primitives inside it don't show through each other. Layers
+    /// and clips nest freely; a clip opened inside a layer is transformed with
+    /// it.
+    pub fn push_layer(&mut self, transform: Affine, opacity: f32) {
+        let opacity = if opacity.is_nan() {
+            1.0
+        } else {
+            opacity.clamp(0.0, 1.0)
+        };
+        self.stack.push(ClipFrame {
+            layer: true,
+            transform: to_transform2d(transform),
+            opacity,
+            ..ClipFrame::base()
+        });
+        self.commands
+            .push(DrawCmd::PushLayer { transform, opacity });
+    }
+
+    /// End the innermost layer opened by [`push_layer`](Scene::push_layer). A
+    /// no-op if none is open (or the innermost open region is a clip).
+    pub fn pop_layer(&mut self) {
+        if self.stack.len() <= 1 || self.stack.last().is_some_and(|f| !f.layer) {
+            return;
+        }
+        self.close_frame();
+        self.commands.push(DrawCmd::PopLayer);
+    }
+
+    /// Whether any layer pushed so far moves things or makes them translucent
+    /// (a [`DrawCmd::PushLayer`] with a non-identity transform or an opacity
+    /// below 1). Backends that can't draw layers natively fall back on this.
+    pub fn has_effects(&self) -> bool {
+        self.commands.iter().any(|c| {
+            matches!(c, DrawCmd::PushLayer { transform, opacity }
+                if !transform.is_identity() || *opacity < 1.0)
+        })
+    }
+
+    /// Pop the innermost frame and fold its nodes, as one group carrying its
+    /// clip, transform and opacity, into the frame below.
+    fn close_frame(&mut self) {
         let frame = self.stack.pop().unwrap();
         let group = Group {
             children: frame.nodes,
             clip: frame.clip,
+            transform: frame.transform,
+            opacity: frame.opacity,
             ..Group::new()
         };
         self.emit(Node::Group(group));
-        self.commands.push(DrawCmd::PopClip);
     }
 
     /// The structured draw commands recorded by the typed helpers (for a GPU
@@ -283,9 +361,13 @@ impl Scene {
     /// Shared lowering: close any open clips, wrap the root nodes in a group,
     /// and attach `view` as the frame's view box.
     fn into_vector_frame_view(mut self, view: Rect) -> VectorFrame {
-        // Defensively close any clip regions the caller left open.
+        // Defensively close any clip regions or layers the caller left open.
         while self.stack.len() > 1 {
-            self.pop_clip();
+            if self.stack.last().is_some_and(|f| f.layer) {
+                self.pop_layer();
+            } else {
+                self.pop_clip();
+            }
         }
         let (w, h) = (view.width() as f32, view.height() as f32);
         let root = Group {
@@ -450,6 +532,123 @@ mod tests {
         };
         assert!(clipped.clip.is_some(), "nested group carries the clip path");
         assert_eq!(clipped.children.len(), 2, "two clipped rects");
+    }
+
+    /// Render `scene` at 1x over an opaque black background.
+    fn raster(scene: Scene) -> crate::render::Pixmap {
+        use crate::geometry::ScaleFactor;
+        use crate::render::software::SoftwareRenderer;
+        SoftwareRenderer::new()
+            .with_background(Color::BLACK)
+            .render(scene, ScaleFactor::IDENTITY)
+    }
+
+    const RED: Color = Color::rgb(255, 0, 0);
+
+    #[test]
+    fn a_layer_translates_what_it_holds() {
+        use crate::geometry::Vec2;
+        let mut scene = Scene::new(Size::new(40.0, 40.0));
+        scene.push_layer(Affine::translate(Vec2::new(20.0, 20.0)), 1.0);
+        scene.fill_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), RED);
+        scene.pop_layer();
+        assert!(scene.has_effects());
+        let out = raster(scene);
+        assert_eq!(out.pixel(25, 25), Some([255, 0, 0, 255]));
+        assert_eq!(out.pixel(5, 5), Some([0, 0, 0, 255]));
+    }
+
+    #[test]
+    fn a_layer_rotates_about_a_point() {
+        use crate::geometry::Vec2;
+        // A horizontal bar through the middle, turned 90° about the center,
+        // stands upright.
+        let about = Affine::translate(Vec2::new(-20.0, -20.0))
+            .then(Affine::rotate(std::f64::consts::FRAC_PI_2))
+            .then(Affine::translate(Vec2::new(20.0, 20.0)));
+        let mut scene = Scene::new(Size::new(40.0, 40.0));
+        scene.push_layer(about, 1.0);
+        scene.fill_rect(Rect::from_xywh(10.0, 18.0, 20.0, 4.0), RED);
+        scene.pop_layer();
+        let out = raster(scene);
+        assert_eq!(out.pixel(20, 12), Some([255, 0, 0, 255]), "now vertical");
+        assert_eq!(out.pixel(20, 27), Some([255, 0, 0, 255]), "now vertical");
+        assert_eq!(
+            out.pixel(12, 20),
+            Some([0, 0, 0, 255]),
+            "no longer horizontal"
+        );
+    }
+
+    #[test]
+    fn nested_layers_compose_inner_first() {
+        use crate::geometry::Vec2;
+        let mut scene = Scene::new(Size::new(40.0, 40.0));
+        scene.push_layer(Affine::translate(Vec2::new(20.0, 0.0)), 1.0);
+        scene.push_layer(Affine::scale(2.0, 2.0), 1.0);
+        // (1, 1, 2, 2) → scaled to (2, 2, 4, 4) → moved to (22, 2, 4, 4).
+        scene.fill_rect(Rect::from_xywh(1.0, 1.0, 2.0, 2.0), RED);
+        scene.pop_layer();
+        scene.pop_layer();
+        let out = raster(scene);
+        assert_eq!(out.pixel(23, 3), Some([255, 0, 0, 255]));
+        assert_eq!(out.pixel(25, 5), Some([255, 0, 0, 255]));
+        assert_eq!(out.pixel(1, 1), Some([0, 0, 0, 255]));
+        assert_eq!(out.pixel(27, 7), Some([0, 0, 0, 255]));
+    }
+
+    /// Two overlapping opaque children at 50% group opacity read as one
+    /// half-transparent shape: the overlap is no darker than the rest.
+    #[test]
+    fn layer_opacity_composites_as_a_group() {
+        let mut scene = Scene::new(Size::new(40.0, 20.0));
+        scene.push_layer(Affine::IDENTITY, 0.5);
+        scene.fill_rect(Rect::from_xywh(0.0, 0.0, 25.0, 20.0), RED);
+        scene.fill_rect(Rect::from_xywh(15.0, 0.0, 25.0, 20.0), RED);
+        scene.pop_layer();
+        assert!(scene.has_effects());
+        let out = raster(scene);
+        let alone = out.pixel(5, 10).unwrap();
+        let overlap = out.pixel(20, 10).unwrap();
+        assert_eq!(alone, overlap, "no seam where the children overlap");
+        assert!(
+            (120..=136).contains(&alone[0]),
+            "half red over black: {alone:?}"
+        );
+    }
+
+    #[test]
+    fn a_clip_inside_a_layer_moves_with_it() {
+        use crate::geometry::Vec2;
+        let mut scene = Scene::new(Size::new(40.0, 40.0));
+        scene.push_layer(Affine::translate(Vec2::new(20.0, 0.0)), 1.0);
+        scene.push_clip(Rect::from_xywh(0.0, 0.0, 10.0, 10.0));
+        scene.fill_rect(Rect::from_xywh(0.0, 0.0, 40.0, 40.0), RED);
+        scene.pop_clip();
+        scene.pop_layer();
+        let out = raster(scene);
+        assert_eq!(
+            out.pixel(25, 5),
+            Some([255, 0, 0, 255]),
+            "inside the moved clip"
+        );
+        assert_eq!(out.pixel(5, 5), Some([0, 0, 0, 255]), "where the clip was");
+        assert_eq!(out.pixel(25, 15), Some([0, 0, 0, 255]), "below the clip");
+    }
+
+    #[test]
+    fn mismatched_pops_are_ignored_and_open_layers_close() {
+        let mut scene = Scene::new(Size::new(10.0, 10.0));
+        scene.push_layer(Affine::IDENTITY, 0.5);
+        scene.pop_clip(); // not a clip: ignored
+        scene.fill_rect(Rect::from_xywh(0.0, 0.0, 10.0, 10.0), RED);
+        assert_eq!(scene.commands().len(), 2, "the stray pop records nothing");
+        let frame = scene.into_vector_frame();
+        let Node::Group(g) = &frame.root.children[0] else {
+            panic!("the open layer closes into a group");
+        };
+        assert_eq!(g.opacity, 0.5);
+        assert_eq!(g.children.len(), 1);
     }
 
     #[test]

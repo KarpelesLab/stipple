@@ -198,6 +198,25 @@ fn inflate(r: Rect, m: f64) -> Rect {
     )
 }
 
+/// Where the first node `is` matches is drawn, in window coordinates: its
+/// bounds grown by `margin`, through every transform on the way to it (the box
+/// around the result, a pixel wider for anti-aliasing when transformed).
+/// `None` if no node matches.
+fn drawn_bounds(tree: &LayoutNode, is: &dyn Fn(&LayoutNode) -> bool, margin: f64) -> Option<Rect> {
+    let (node, to_window, _) = crate::core::node_to_window(tree, is)?;
+    let r = inflate(node.bounds, margin);
+    Some(if to_window.is_identity() {
+        r
+    } else {
+        inflate(to_window.map_rect(r), 1.0)
+    })
+}
+
+/// Whether `node` is embedded-content viewport `id`.
+fn viewport_is(node: &LayoutNode, id: ViewportId) -> bool {
+    matches!(node.content, crate::core::NodeContent::Viewport(v) if v == id)
+}
+
 /// Fold `extra` damage rects into `base`. [`Damage::Full`] absorbs everything;
 /// otherwise the rects extend (or become) the region list. An empty `extra`
 /// leaves `base` unchanged.
@@ -629,7 +648,9 @@ impl<S: 'static> App<S> {
         let Some((id, bounds)) = viewport_at(tree, pos) else {
             return false;
         };
-        let local = Point::new(pos.x - bounds.min_x(), pos.y - bounds.min_y());
+        // Through any transform on the way to it.
+        let at = crate::core::local_point(tree, &|n| viewport_is(n, id), pos).unwrap_or(pos);
+        let local = Point::new(at.x - bounds.min_x(), at.y - bounds.min_y());
         let event = match kind {
             PointerKind::Down(button) => {
                 self.panes[idx].input_viewport = Some(id);
@@ -657,7 +678,9 @@ impl<S: 'static> App<S> {
         let Some((id, bounds)) = viewport_at(tree, pos) else {
             return false;
         };
-        let local = Point::new(pos.x - bounds.min_x(), pos.y - bounds.min_y());
+        // Through any transform on the way to it.
+        let at = crate::core::local_point(tree, &|n| viewport_is(n, id), pos).unwrap_or(pos);
+        let local = Point::new(at.x - bounds.min_x(), at.y - bounds.min_y());
         if let Some(sink) = self.viewport_input.as_mut() {
             sink(id, ViewportEvent::Wheel { local, delta_y: dy });
         }
@@ -716,8 +739,13 @@ impl<S: 'static> Pane<S> {
         let s = scale.get();
         for (id, bounds) in views {
             if let Some(src) = content.get(&id) {
-                let x = (bounds.min_x() * s).round() as u32;
-                let y = (bounds.min_y() * s).round() as u32;
+                // A viewport moved by a transform has its content moved with
+                // it; scaled, rotated or faded content isn't (yet) — it's
+                // blitted unscaled at the moved top-left.
+                let at = crate::core::node_to_window(tree, &|n| viewport_is(n, id))
+                    .map_or(bounds.origin, |(_, m, _)| m.apply(bounds.origin));
+                let x = (at.x * s).round().max(0.0) as u32;
+                let y = (at.y * s).round().max(0.0) as u32;
                 pixmap.blit(src, x, y);
             }
         }
@@ -1027,12 +1055,12 @@ impl<S: 'static> Pane<S> {
             let (was, is) = (&self.painted_highlights, &self.highlight_alphas);
             for &(id, a) in was {
                 if !is.contains(&(id, a)) {
-                    rects.push(find_action(old, id)?.bounds);
+                    rects.push(drawn_bounds(old, &|n| n.action == Some(id), 0.0)?);
                 }
             }
             for &(id, a) in is {
                 if !was.contains(&(id, a)) {
-                    rects.push(find_action(new, id)?.bounds);
+                    rects.push(drawn_bounds(new, &|n| n.action == Some(id), 0.0)?);
                 }
             }
         }
@@ -1040,10 +1068,18 @@ impl<S: 'static> Pane<S> {
             // The focus ring is a 2px stroke centered on the bounds, so inflate
             // to cover the half that sits outside (plus a safety margin).
             if let Some(id) = self.painted_focused {
-                rects.push(inflate(find_focus(old, id)?.bounds, FOCUS_RING_MARGIN));
+                rects.push(drawn_bounds(
+                    old,
+                    &|n| n.focus == Some(id),
+                    FOCUS_RING_MARGIN,
+                )?);
             }
             if let Some(id) = self.focused {
-                rects.push(inflate(find_focus(new, id)?.bounds, FOCUS_RING_MARGIN));
+                rects.push(drawn_bounds(
+                    new,
+                    &|n| n.focus == Some(id),
+                    FOCUS_RING_MARGIN,
+                )?);
             }
         }
         Some(rects)
@@ -1222,8 +1258,10 @@ impl<S: 'static> Pane<S> {
             return None;
         }
         let tree = self.tree.as_ref()?;
-        ui.title_actions()
-            .position(|id| find_action(tree, id).is_some_and(|n| n.bounds.contains(pos)))
+        ui.title_actions().position(|id| {
+            let at = crate::core::local_point(tree, &|n| n.action == Some(id), pos);
+            find_action(tree, id).is_some_and(|n| at.is_some_and(|p| n.bounds.contains(p)))
+        })
     }
 
     /// Whether the focused element edits text, so editing shortcuts (Ctrl+C,
@@ -1348,9 +1386,17 @@ impl<S: 'static> Pane<S> {
         let Some((id, bounds, parent, origin, rtl)) = self.dragging else {
             return false;
         };
+        // The draggable's bounds are in its layout space: read the pointer
+        // there too, through any transform on the way to it.
+        let local = |p: Point| {
+            self.tree
+                .as_ref()
+                .and_then(|t| crate::core::local_point(t, &|n| n.drag == Some(id), p))
+                .unwrap_or(p)
+        };
         let mut motion = crate::core::DragMotion {
-            position: pos,
-            origin,
+            position: local(pos),
+            origin: local(origin),
             bounds,
             parent,
         };
@@ -1392,7 +1438,8 @@ impl<S: 'static> Pane<S> {
         let Some((id, index, foc)) = self.tree.as_ref().and_then(|t| {
             let t = press_layer(t, overlays, pos).0;
             let (id, node) = text_pos_at(t, pos)?;
-            let index = caret_index_at(node, pos, font)?;
+            let at = crate::core::local_point(t, &|n| n.text_pos == Some(id), pos).unwrap_or(pos);
+            let index = caret_index_at(node, at, font)?;
             Some((id, index, focus_at(t, pos)))
         }) else {
             self.clicks.reset();
@@ -1430,12 +1477,10 @@ impl<S: 'static> Pane<S> {
             return false;
         };
         self.ensure_tree(state, theme, font);
-        let Some(index) = self
-            .tree
-            .as_ref()
-            .and_then(|t| find_text_pos(t, id))
-            .and_then(|node| caret_index_at(node, pos, font))
-        else {
+        let Some(index) = self.tree.as_ref().and_then(|t| {
+            let at = crate::core::local_point(t, &|n| n.text_pos == Some(id), pos);
+            caret_index_at(find_text_pos(t, id)?, at.unwrap_or(pos), font)
+        }) else {
             return false;
         };
         let ran = self.handlers.dispatch_text_pos(id, index, true, state);
@@ -2946,6 +2991,7 @@ pub mod prelude {
     };
     pub use crate::core::{DROP_FADE, DropState};
     pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};
+    pub use crate::geometry::Transform;
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::platform::Notification;
     pub use crate::platform::{CursorIcon, DragOffer, DropData, WindowRequest};
@@ -3802,5 +3848,105 @@ mod tests {
         press(&mut app, t0 + Duration::from_millis(2000));
         press(&mut app, t0 + Duration::from_millis(2600));
         assert_eq!(app.state().buf.selection(), None);
+    }
+
+    // --- Transforms and group opacity -------------------------------------
+
+    #[test]
+    fn a_scaled_button_is_clicked_where_it_is_drawn() {
+        use crate::geometry::Transform;
+        let mut app = App::new(
+            Counter { n: 0 },
+            |_state: &Counter, cx: &mut Cx<Counter>| {
+                let theme = *cx.theme();
+                column(vec![
+                    button(&theme)
+                        .width(200.0)
+                        .height(80.0)
+                        .transform(Transform::IDENTITY.scale(0.5))
+                        .on_tap(cx, |s: &mut Counter| s.n += 1),
+                ])
+            },
+        )
+        .logical_size(Size::new(200.0, 80.0));
+        // Drawn over (50..150, 20..60): its laid-out corner misses.
+        assert!(!app.click_at(Point::new(20.0, 10.0)));
+        assert_eq!(app.state().n, 0);
+        assert!(app.click_at(Point::new(60.0, 30.0)));
+        assert_eq!(app.state().n, 1);
+    }
+
+    #[test]
+    fn a_turned_slider_drags_in_its_own_direction() {
+        use crate::geometry::Transform;
+        // Turned half a turn, the slider's left end is on the right.
+        let mut app = App::new(Volume::default(), |s: &Volume, cx: &mut Cx<Volume>| {
+            let theme = *cx.theme();
+            crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
+                .width(200.0)
+                .transform(Transform::IDENTITY.rotate_degrees(180.0))
+        })
+        .logical_size(Size::new(200.0, 40.0));
+        // The slider's middle, which a half turn about it leaves in place.
+        let _ = app.render_frame();
+        let tree = app.panes[0].tree.as_ref().unwrap();
+        let (slider, _, _) = crate::core::node_to_window(tree, &|n| n.drag.is_some()).unwrap();
+        let mid_y = slider.bounds.center().y;
+        // Pressed at x = 150 on screen: x = 50 of the slider, a quarter in.
+        app.drag_at_point(Point::new(150.0, mid_y));
+        assert!(
+            (app.state().level - 0.25).abs() < 1e-9,
+            "got {}",
+            app.state().level
+        );
+        app.drag_at_point(Point::new(20.0, mid_y));
+        assert!(
+            (app.state().level - 0.9).abs() < 1e-9,
+            "got {}",
+            app.state().level
+        );
+        app.end_drag();
+    }
+
+    /// Growing a box with a transform damages where it is drawn now, which
+    /// reaches past its laid-out bounds, and not the whole window.
+    #[test]
+    fn a_transform_change_damages_the_drawn_area() {
+        use crate::core::BoxStyle;
+        use crate::geometry::Transform;
+        use crate::render::Color;
+        let mut app = App::new(false, |grown: &bool, cx: &mut Cx<bool>| {
+            let scale = if *grown { 1.5 } else { 1.0 };
+            column(vec![
+                Element::boxed(BoxStyle::default())
+                    .width(300.0)
+                    .height(40.0)
+                    .on_tap(cx, |g: &mut bool| *g = !*g),
+                Element::boxed(BoxStyle {
+                    fill: Some(Color::rgb(0, 0, 200)),
+                    radius: 0.0,
+                    border: None,
+                })
+                .width(40.0)
+                .height(40.0)
+                .transform(Transform::IDENTITY.scale(scale)),
+            ])
+        })
+        .logical_size(Size::new(300.0, 120.0));
+        let _ = app.render_frame();
+        let _ = app.render_frame();
+        app.click_at(Point::new(250.0, 20.0));
+        // Hover and focus aside, the box grew about its center (20, 60) to
+        // cover (−10..50, 30..90).
+        app.hover_at(Point::new(-100.0, -100.0));
+        let (_, damage) = app.render_frame();
+        let Damage::Regions(_) = &damage else {
+            panic!("expected localized damage, got {damage:?}");
+        };
+        let b = damage.bounding().unwrap();
+        assert!(
+            b.max_y() >= 90.0 && b.min_x() <= 0.0,
+            "covers the grown box: {b:?}"
+        );
     }
 }

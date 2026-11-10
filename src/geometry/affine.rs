@@ -1,4 +1,4 @@
-use crate::geometry::{Point, Vec2};
+use crate::geometry::{Point, Rect, Vec2};
 
 /// A 2D affine transform stored as six coefficients `[a, b, c, d, e, f]`,
 /// row-major, mapping a point `(x, y)` to:
@@ -72,6 +72,32 @@ impl Affine {
         Point::new(a * p.x + c * p.y + e, b * p.x + d * p.y + f)
     }
 
+    /// The smallest axis-aligned rectangle holding `rect` once transformed
+    /// (the box around its four mapped corners).
+    pub fn map_rect(self, rect: Rect) -> Rect {
+        let corners = [
+            Point::new(rect.min_x(), rect.min_y()),
+            Point::new(rect.max_x(), rect.min_y()),
+            Point::new(rect.max_x(), rect.max_y()),
+            Point::new(rect.min_x(), rect.max_y()),
+        ]
+        .map(|p| self.apply(p));
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for p in corners {
+            x0 = x0.min(p.x);
+            y0 = y0.min(p.y);
+            x1 = x1.max(p.x);
+            y1 = y1.max(p.y);
+        }
+        Rect::from_points(Point::new(x0, y0), Point::new(x1, y1))
+    }
+
+    /// Whether this is the identity transform.
+    #[inline]
+    pub fn is_identity(self) -> bool {
+        self == Self::IDENTITY
+    }
+
     /// The determinant of the linear (2×2) part.
     #[inline]
     pub fn determinant(self) -> f64 {
@@ -115,6 +141,14 @@ mod tests {
         let p = Point::new(7.0, 9.0);
         let back = t.inverse().unwrap().apply(t.apply(p));
         assert!((back.x - p.x).abs() < 1e-9 && (back.y - p.y).abs() < 1e-9);
+    }
+
+    #[test]
+    fn map_rect_bounds_the_rotated_corners() {
+        let r = Rect::from_xywh(-1.0, -1.0, 2.0, 2.0);
+        let b = Affine::rotate(std::f64::consts::FRAC_PI_4).map_rect(r);
+        let h = 2f64.sqrt();
+        assert!((b.min_x() + h).abs() < 1e-9 && (b.max_y() - h).abs() < 1e-9);
     }
 
     #[test]

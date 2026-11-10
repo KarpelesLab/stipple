@@ -9,12 +9,18 @@
 //! child *count* differs contributes its whole subtree (covering inserts and
 //! removals). Matching children are compared pairwise.
 //!
+//! Regions are where things are *drawn*: a node under a
+//! [transform](LayoutNode::transform) contributes the box around its
+//! transformed bounds, and a node whose transform (as resolved against its
+//! box, so including a box change that moves its origin) or group opacity
+//! changed contributes the drawn extent of its whole subtree, old and new.
+//!
 //! Damage is always **conservative**: over-reporting a region is merely a
 //! larger repaint, while under-reporting would leave stale pixels on screen, so
 //! every ambiguous case widens the region rather than narrowing it.
 
 use crate::core::runtime::LayoutNode;
-use crate::geometry::{Rect, ScaleFactor};
+use crate::geometry::{Affine, Rect, ScaleFactor};
 
 /// What changed between two frames, in **logical** pixels.
 #[derive(Clone, Debug, PartialEq)]
@@ -82,7 +88,7 @@ impl Damage {
 /// should be treated as [`Damage::Full`] by the caller.
 pub fn diff_trees(old: &LayoutNode, new: &LayoutNode) -> Damage {
     let mut regions = Vec::new();
-    diff_node(old, new, &mut regions);
+    diff_node(old, new, Affine::IDENTITY, Affine::IDENTITY, &mut regions);
     if regions.is_empty() {
         Damage::None
     } else {
@@ -105,19 +111,70 @@ fn visuals_equal(a: &LayoutNode, b: &LayoutNode) -> bool {
         && a.preedit == b.preedit
 }
 
-fn diff_node(old: &LayoutNode, new: &LayoutNode, out: &mut Vec<Rect>) {
+/// `outer_old` / `outer_new` map the parents' layout coordinates to the
+/// window in each frame (the identity where nothing is transformed).
+fn diff_node(
+    old: &LayoutNode,
+    new: &LayoutNode,
+    outer_old: Affine,
+    outer_new: Affine,
+    out: &mut Vec<Rect>,
+) {
+    let (mo, mn) = (to_window(old, outer_old), to_window(new, outer_new));
+    if mo != mn || old.opacity != new.opacity {
+        // Moved, scaled, turned or faded as a whole: everything it draws,
+        // where it was and where it is.
+        out.push(subtree_extent(old, outer_old));
+        out.push(subtree_extent(new, outer_new));
+        return;
+    }
     if !visuals_equal(old, new) {
-        out.push(old.bounds.union(new.bounds));
+        out.push(drawn(mo, old.bounds).union(drawn(mn, new.bounds)));
     }
     if old.children.len() != new.children.len() {
         // Structural change: a child was inserted or removed. We can't align
         // the lists cheaply, so repaint the whole subtree (both extents).
-        out.push(old.bounds.union(new.bounds));
+        out.push(drawn(mo, old.bounds).union(drawn(mn, new.bounds)));
         return;
     }
     for (o, n) in old.children.iter().zip(&new.children) {
-        diff_node(o, n, out);
+        diff_node(o, n, mo, mn, out);
     }
+}
+
+/// The matrix mapping `node`'s layout coordinates to the window, given the
+/// one for its parent's.
+fn to_window(node: &LayoutNode, outer: Affine) -> Affine {
+    match node.affine() {
+        Some(a) => a.then(outer),
+        None => outer,
+    }
+}
+
+/// Where `rect` (in layout coordinates mapped by `m`) is drawn: itself when
+/// untransformed, else the box around it, a pixel wider for anti-aliasing.
+fn drawn(m: Affine, rect: Rect) -> Rect {
+    if m.is_identity() {
+        rect
+    } else {
+        let r = m.map_rect(rect);
+        Rect::from_xywh(
+            r.min_x() - 1.0,
+            r.min_y() - 1.0,
+            r.width() + 2.0,
+            r.height() + 2.0,
+        )
+    }
+}
+
+/// The box around everything `node`'s subtree draws (each node's drawn
+/// bounds), given the matrix for its parent's coordinates.
+fn subtree_extent(node: &LayoutNode, outer: Affine) -> Rect {
+    let m = to_window(node, outer);
+    node.children
+        .iter()
+        .map(|c| subtree_extent(c, m))
+        .fold(drawn(m, node.bounds), Rect::union)
 }
 
 /// Merge rectangles that overlap or touch into fewer, larger ones. A small
@@ -187,6 +244,8 @@ mod tests {
             cursor: None,
             semantics: None,
             rtl: false,
+            transform: None,
+            opacity: 1.0,
             children,
         }
     }
@@ -219,6 +278,8 @@ mod tests {
             cursor: None,
             semantics: None,
             rtl: false,
+            transform: None,
+            opacity: 1.0,
             children: Vec::new(),
         }
     }
@@ -404,6 +465,62 @@ mod tests {
         assert_eq!(
             diff_trees(&a, &root(vec![img(&b_pm)])),
             Damage::Regions(vec![Rect::from_xywh(10.0, 10.0, 16.0, 16.0)])
+        );
+    }
+
+    /// A box in the corner holding a child, for the transform tests.
+    fn boxed_child() -> LayoutNode {
+        node(
+            Rect::from_xywh(20.0, 20.0, 20.0, 20.0),
+            Some(Color::WHITE),
+            vec![node(
+                Rect::from_xywh(25.0, 25.0, 10.0, 10.0),
+                Some(Color::BLACK),
+                Vec::new(),
+            )],
+        )
+    }
+
+    #[test]
+    fn a_transform_change_damages_where_it_was_and_is_drawn() {
+        use crate::geometry::Transform;
+        let a = root(vec![boxed_child()]);
+        let mut b = a.clone();
+        // Doubled about its center: (20, 20, 20, 20) draws over (10, 10, 40, 40).
+        b.children[0].transform = Some(Transform::IDENTITY.scale(2.0));
+        let bound = diff_trees(&a, &b).bounding().unwrap();
+        assert!(bound.min_x() <= 10.0 && bound.min_y() <= 10.0, "{bound:?}");
+        assert!(bound.max_x() >= 50.0 && bound.max_y() >= 50.0, "{bound:?}");
+        assert!(bound.max_x() < 100.0, "stays local: {bound:?}");
+    }
+
+    #[test]
+    fn a_change_inside_a_transformed_node_damages_its_drawn_place() {
+        use crate::geometry::Transform;
+        let mut a = root(vec![boxed_child()]);
+        // Moved 100 px right: its child is drawn at (125, 25).
+        a.children[0].transform = Some(Transform::IDENTITY.translate(100.0, 0.0));
+        let mut b = a.clone();
+        b.children[0].children[0].decoration.fill = Some(Color::rgb(255, 0, 0));
+        let bound = diff_trees(&a, &b).bounding().unwrap();
+        assert!(
+            bound.min_x() <= 125.0 && bound.max_x() >= 135.0,
+            "{bound:?}"
+        );
+        assert!(
+            bound.min_x() > 100.0,
+            "not where it was laid out: {bound:?}"
+        );
+    }
+
+    #[test]
+    fn an_opacity_change_damages_the_subtree() {
+        let a = root(vec![boxed_child()]);
+        let mut b = a.clone();
+        b.children[0].opacity = 0.5;
+        assert_eq!(
+            diff_trees(&a, &b),
+            Damage::Regions(vec![Rect::from_xywh(20.0, 20.0, 20.0, 20.0)])
         );
     }
 }

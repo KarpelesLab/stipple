@@ -10,7 +10,7 @@ use crate::core::runtime::{
     ActionId, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, KeyInput, ScrollId,
     TextPosId, ViewportId,
 };
-use crate::geometry::Insets;
+use crate::geometry::{Insets, Transform};
 use crate::layout::{Axis, LayoutDirection, Track};
 use crate::platform::CursorIcon;
 use crate::platform::native::NativeDeco;
@@ -190,6 +190,14 @@ pub struct Element {
     /// [`layout_direction`](crate::style::Theme::layout_direction)). Set via
     /// [`Element::layout_direction`].
     pub layout_direction: Option<LayoutDirection>,
+    /// How this element and its subtree are moved, scaled and rotated where
+    /// they're drawn, after layout (it never affects layout). `None` draws
+    /// them where they were laid out. Set via [`Element::transform`].
+    pub transform: Option<Transform>,
+    /// Group opacity of this element and its subtree, `0.0..=1.0`: they are
+    /// drawn together, then blended at this opacity. Set via
+    /// [`Element::opacity`].
+    pub opacity: f32,
     pub kind: ElementKind,
 }
 
@@ -216,6 +224,8 @@ impl Element {
             cursor: None,
             semantics: None,
             layout_direction: None,
+            transform: None,
+            opacity: 1.0,
             kind: ElementKind::Leaf,
         }
     }
@@ -242,6 +252,8 @@ impl Element {
             cursor: None,
             semantics: None,
             layout_direction: None,
+            transform: None,
+            opacity: 1.0,
             kind: ElementKind::Text {
                 text: text.into(),
                 size,
@@ -280,6 +292,8 @@ impl Element {
             cursor: None,
             semantics: None,
             layout_direction: None,
+            transform: None,
+            opacity: 1.0,
             kind: ElementKind::Viewport { id },
         }
     }
@@ -308,6 +322,8 @@ impl Element {
             cursor: None,
             semantics: None,
             layout_direction: None,
+            transform: None,
+            opacity: 1.0,
             kind: ElementKind::Image {
                 source: source.into(),
                 fit: ImageFit::default(),
@@ -337,6 +353,8 @@ impl Element {
             cursor: None,
             semantics: None,
             layout_direction: None,
+            transform: None,
+            opacity: 1.0,
             kind: ElementKind::Stack {
                 axis,
                 gap: 0.0,
@@ -766,6 +784,40 @@ impl Element {
     /// See `docs/bidi.md` in the repository.
     pub fn layout_direction(mut self, dir: LayoutDirection) -> Self {
         self.layout_direction = Some(dir);
+        self
+    }
+
+    /// Draw this element and its subtree through `transform` — moved, scaled
+    /// and rotated about an origin within the element's box (its center by
+    /// default) — without changing layout: siblings stay where they were.
+    /// Pointer input follows the transform, so a scaled-up button is pressed
+    /// where it's drawn. Text scales and rotates with everything else.
+    ///
+    /// ```
+    /// use stipple::core::Element;
+    /// use stipple::geometry::Transform;
+    /// use stipple::render::Color;
+    /// let badge = Element::text("New", 12.0, Color::WHITE)
+    ///     .transform(Transform::IDENTITY.rotate_degrees(-8.0).scale(1.2));
+    /// ```
+    ///
+    /// See `docs/transforms.md` in the repository.
+    pub fn transform(mut self, transform: Transform) -> Self {
+        self.transform = (!transform.is_identity()).then_some(transform);
+        self
+    }
+
+    /// Draw this element and its subtree at `opacity` (`0.0` invisible, `1.0`
+    /// opaque) **as a group**: the subtree is drawn on its own first and then
+    /// blended once, so where children overlap they don't show through each
+    /// other. A fully transparent element still takes pointer input, like
+    /// CSS's `opacity: 0`.
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = if opacity.is_nan() {
+            1.0
+        } else {
+            opacity.clamp(0.0, 1.0)
+        };
         self
     }
 

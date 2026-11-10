@@ -16,7 +16,7 @@
 use crate::core::a11y::Semantics;
 use crate::core::element::{Align, BoxStyle, Element};
 use crate::core::handle::AppHandle;
-use crate::geometry::{Point, Rect};
+use crate::geometry::{Affine, Point, Rect};
 use crate::platform::{CursorIcon, DragOffer, DropData};
 use crate::render::Color;
 use crate::style::Theme;
@@ -961,6 +961,18 @@ pub struct LayoutNode {
     /// mirrored, `Auto` text in it lines up on the right, and a drag on it
     /// reports mirrored x positions.
     pub rtl: bool,
+    /// How this node and its subtree are drawn moved, scaled or rotated (see
+    /// [`Element::transform`]). `bounds` stay the laid-out box; the transform
+    /// is resolved against them by [`LayoutNode::affine`], so scrolling a
+    /// transformed node keeps its origin in place. Pointer queries map points
+    /// through its inverse.
+    ///
+    /// [`Element::transform`]: crate::core::Element::transform
+    pub transform: Option<crate::geometry::Transform>,
+    /// Group opacity of this node and its subtree (see [`Element::opacity`]).
+    ///
+    /// [`Element::opacity`]: crate::core::Element::opacity
+    pub opacity: f32,
     pub children: Vec<LayoutNode>,
 }
 
@@ -989,9 +1001,95 @@ impl LayoutNode {
             cursor: None,
             semantics: None,
             rtl: false,
+            transform: None,
+            opacity: 1.0,
             children,
         }
     }
+}
+
+impl LayoutNode {
+    /// The matrix mapping this node's layout coordinates (its `bounds` and its
+    /// subtree's) to where they are drawn in its parent's coordinates, or
+    /// `None` when it has no transform.
+    pub fn affine(&self) -> Option<Affine> {
+        self.transform.map(|t| t.to_affine(self.bounds))
+    }
+
+    /// `point`, given in the parent's coordinates, in this node's layout
+    /// coordinates (through the inverse of its transform), or `None` when the
+    /// transform is singular (scaled to nothing, so nothing in it can be hit).
+    pub fn to_local(&self, point: Point) -> Option<Point> {
+        match self.affine() {
+            None => Some(point),
+            Some(a) => a.inverse().map(|inv| inv.apply(point)),
+        }
+    }
+}
+
+/// `point` (in window coordinates) in the layout coordinates of the first node
+/// of `root`'s tree, depth-first, that `is` matches: through the inverse of
+/// every transform from the root down to and including that node's own. With
+/// no transforms on the way it is `point` itself; `None` if no node matches or
+/// a transform on the way is singular.
+///
+/// Pointer handling uses it to read a pointer against a node found earlier
+/// (a drag's draggable, a text field being selected in), where the node's
+/// `bounds` are in its layout space.
+pub fn local_point(
+    root: &LayoutNode,
+    is: &dyn Fn(&LayoutNode) -> bool,
+    point: Point,
+) -> Option<Point> {
+    fn walk(
+        node: &LayoutNode,
+        is: &dyn Fn(&LayoutNode) -> bool,
+        point: Point,
+    ) -> Option<Option<Point>> {
+        let local = node.to_local(point);
+        if is(node) {
+            return Some(local);
+        }
+        node.children.iter().find_map(|c| match local {
+            Some(p) => walk(c, is, p),
+            // Under a singular transform: still find the node, but it has no
+            // local point.
+            None => walk(c, is, point).map(|_| None),
+        })
+    }
+    walk(root, is, point).flatten()
+}
+
+/// The matrix mapping the layout coordinates of the first node `is` matches
+/// (depth-first) to window coordinates — the product of the transforms from
+/// the root down to and including that node's own — together with the node
+/// and the product of the group opacities on the way. `None` if no node
+/// matches. The matrix is the identity where nothing is transformed.
+///
+/// Overlays painted outside the tree (the hover highlight, the focus ring)
+/// use it to draw where the node is drawn, and damage tracking to know where
+/// that is.
+pub fn node_to_window<'a>(
+    root: &'a LayoutNode,
+    is: &dyn Fn(&LayoutNode) -> bool,
+) -> Option<(&'a LayoutNode, Affine, f32)> {
+    fn walk<'a>(
+        node: &'a LayoutNode,
+        is: &dyn Fn(&LayoutNode) -> bool,
+        outer: Affine,
+        opacity: f32,
+    ) -> Option<(&'a LayoutNode, Affine, f32)> {
+        let m = match node.affine() {
+            Some(a) => a.then(outer),
+            None => outer,
+        };
+        let opacity = opacity * node.opacity;
+        if is(node) {
+            return Some((node, m, opacity));
+        }
+        node.children.iter().find_map(|c| walk(c, is, m, opacity))
+    }
+    walk(root, is, Affine::IDENTITY, 1.0)
 }
 
 /// Whether `point` falls outside a clipping node, where nothing under it is
@@ -1005,7 +1103,16 @@ fn clipped_out(node: &LayoutNode, point: Point) -> bool {
 ///
 /// Children are painted after (on top of) their parent, so they are tested
 /// first, last-to-first, mirroring paint order.
+///
+/// `point` is in window coordinates, and a node under a
+/// [transform](LayoutNode::transform) is hit where it is drawn — as in every
+/// `*_at` query here. Bounds those return ([`drag_at`], [`drop_at`],
+/// [`viewport_at`]) are layout bounds: read a pointer against them with
+/// [`local_point`].
 pub fn hit_test(node: &LayoutNode, point: Point) -> Option<ActionId> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1027,6 +1134,7 @@ pub fn hit_test(node: &LayoutNode, point: Point) -> Option<ActionId> {
 /// pointing hand. Elsewhere it is [`CursorIcon::Default`].
 pub fn cursor_at(node: &LayoutNode, point: Point) -> CursorIcon {
     fn find(node: &LayoutNode, point: Point) -> Option<CursorIcon> {
+        let point = node.to_local(point)?;
         let inside = node.bounds.contains(point);
         // A clipped node hides its children outside its bounds; an unclipped
         // one may have children that overflow it.
@@ -1055,6 +1163,9 @@ pub fn cursor_at(node: &LayoutNode, point: Point) -> CursorIcon {
 /// Find the [`ContextId`] of the top-most node with a secondary-click handler
 /// containing `point` (mirrors [`hit_test`], for right-clicks).
 pub fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1074,6 +1185,9 @@ pub fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
 /// [`DropId`] and bounds (mirrors [`hit_test`], for drags). Whether it takes
 /// the drag is up to its handler ([`Handlers::drop_accepts`]).
 pub fn drop_at(node: &LayoutNode, point: Point) -> Option<(DropId, Rect)> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1098,6 +1212,9 @@ pub fn find_drop(node: &LayoutNode, id: DropId) -> Option<&LayoutNode> {
 
 /// Find the [`DragSourceId`] of the top-most drag source containing `point`.
 pub fn drag_source_at(node: &LayoutNode, point: Point) -> Option<DragSourceId> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1116,6 +1233,9 @@ pub fn drag_source_at(node: &LayoutNode, point: Point) -> Option<DragSourceId> {
 /// [`TextPosId`] and the node (so the caller can resolve a byte index from the
 /// node's text and bounds).
 pub fn text_pos_at(node: &LayoutNode, point: Point) -> Option<(TextPosId, &LayoutNode)> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1145,6 +1265,9 @@ fn first_text_pos(node: &LayoutNode) -> Option<(TextPosId, &LayoutNode)> {
 /// Find the [`FocusId`] of the top-most focusable node containing `point`
 /// (used for click-to-focus).
 pub fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1163,6 +1286,9 @@ pub fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
 /// Find the top-most draggable node containing `point`, returning its
 /// [`DragId`] and bounds (so the caller can compute the drag fraction).
 pub fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1182,6 +1308,7 @@ pub fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
 /// and whether the draggable was laid out right to left ([`LayoutNode::rtl`]).
 pub fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
     fn walk(node: &LayoutNode, parent: Rect, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
+        let point = node.to_local(point)?;
         for child in node.children.iter().rev() {
             if let Some(hit) = walk(child, node.bounds, point) {
                 return Some(hit);
@@ -1198,6 +1325,9 @@ pub fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rec
 /// Find the [`ScrollId`] of the top-most scroll container containing `point`
 /// (the wheel target). Children are tested first so a nested scroll area wins.
 pub fn scroll_at(node: &LayoutNode, point: Point) -> Option<ScrollId> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1272,6 +1402,9 @@ pub fn collect_viewports(node: &LayoutNode, out: &mut Vec<(ViewportId, Rect)>) {
 /// [`ViewportId`] and bounds (so the app can forward the event with
 /// viewport-local coordinates). Children are tested first, mirroring paint order.
 pub fn viewport_at(node: &LayoutNode, point: Point) -> Option<(ViewportId, Rect)> {
+    // A transformed node is hit where it's drawn: read the point in its
+    // layout space (and its subtree's).
+    let point = node.to_local(point)?;
     if clipped_out(node, point) {
         return None;
     }
@@ -1341,6 +1474,8 @@ mod tests {
             cursor: None,
             semantics: None,
             rtl: false,
+            transform: None,
+            opacity: 1.0,
             children: Vec::new(),
         }
     }
@@ -1433,6 +1568,8 @@ mod tests {
             cursor: None,
             semantics: None,
             rtl: false,
+            transform: None,
+            opacity: 1.0,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),
