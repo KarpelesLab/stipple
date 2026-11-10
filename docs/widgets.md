@@ -238,9 +238,10 @@ timings and curves in the theme's motion tokens (`theme.motion`, a
 | `tabs` | the selected cell's fill and text color fade between tabs | `state` |
 | `tab_bar` | the accent strip slides out of the tab selected before and into the new one; the list of every tab grows in | `indicator`, `popup` |
 | `select` | the list grows and slides in from the button as it fades in | `popup`, `popup_scale`, `popup_offset` |
-| Drawn menus (the in-window menu bar, submenus and context menus) | each menu grows in from its corner | `popup` |
-| `toasts` | a new toast slides in from the window's edge; a dismissed one slides back out and fades before it goes | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` |
-| The drawn message box (`AppHandle::message`) | it fades in as it scales into place | `dialog`, `dialog_scale` |
+| Drawn menus (the in-window menu bar, submenus and context menus), `open_menu` | each menu grows in from its corner | `popup` |
+| `tooltip` | it fades in | `popup` |
+| `toasts` | a new toast slides in from the window's edge; a dismissed one slides back out and fades before it goes; the others glide to their new places | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` |
+| The drawn message box (`AppHandle::message`), `open_dialog` | it fades in as it scales into place | `dialog`, `dialog_scale` |
 | `tree` | a disclosure triangle turns as its node expands or collapses | `disclosure` |
 | Drop targets (`on_drop`) | the app's "drop here" highlight fades in and out with the target's drag-over level | `DROP_FADE` |
 
@@ -285,13 +286,17 @@ it's built; restyle one with `.fill(…)` and give it its own `.hovered` and
 its edge can land just outside it, as with CSS's `:active` scale. Set
 `press_scale` to 1 if that matters.
 
-Not animated yet: lists, menus and the message box closing (they vanish at
-once; only toasts animate out so far), `open_menu`, `open_dialog` and `tooltip` (they keep no state to know
-when they opened; they'll use the enter and exit transitions planned for the
-core), the segmented `tabs` (its fills cross-fade, but nothing slides), the
-modal scrim behind the message box, and the toasts below a dismissed one,
-which drop into its place at once. Controls the OS draws under
-`Theme::native()` switch between the OS's pictures of their states.
+The stateful widgets remember when something opened in their state; the
+stateless `open_menu`, `open_dialog` and `tooltip` come in through the
+core's enter animations (`Element::enter`, see
+[animation.md](animation.md#enter-exit-and-layout-animations)).
+
+Not animated yet: lists, menus, tooltips and dialogs closing (they vanish at
+once; only toasts animate out so far, since an overlay's exit would need the
+overlay kept after the view stops declaring it), the segmented `tabs` (its
+fills cross-fade, but nothing slides), and the modal scrim behind a dialog.
+Controls the OS draws under `Theme::native()` switch between the OS's
+pictures of their states.
 
 ## Accessibility
 

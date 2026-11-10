@@ -305,8 +305,8 @@ events arrived and no frame was built in between; the memory warning is
 posted in-process. See
 [window-lifecycle.md](window-lifecycle.md#going-to-the-background-mobile).
 ⁵⁴ Shared code: buttons, switches, checkboxes, radios, tabs, the tab bar,
-selects, drawn menus, toasts, the drawn message box, tree disclosure
-triangles and the app's drop-target highlight, with the theme's motion tokens
+selects, menus, tooltips, toasts, dialogs, tree disclosure triangles and the
+app's drop-target highlight, with the theme's motion tokens
 (`Theme::native()` picks Fluent, AppKit, UIKit, Material or libadwaita
 timings). Unit-tested at fixed frame times; under Xvfb, `widgetsdemo`,
 `sessionsdemo`, `material3demo` and `themegallery` were checked to draw

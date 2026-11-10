@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
-use crate::core::{Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, OverlaySpec, Role};
+use crate::core::{
+    Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, OverlaySpec, Role, Transition,
+};
 use crate::geometry::{Insets, Transform};
 use crate::style::Theme;
 
@@ -184,7 +186,11 @@ pub fn toasts<S>(
         .zip(entering)
         .map(|(t, since)| {
             let p = motion::progress(cx, m.toast_enter, since);
-            let card = toast_card(cx, theme, t, Some(field));
+            // Keyed, the cards above glide up when one comes in below them
+            // (and down when one has left).
+            let card = toast_card(cx, theme, t, Some(field))
+                .key(("stipple-toast", t.id.0))
+                .animate_position(Transition(m.toast_enter));
             let offset = (-edge * m.toast_offset, 0.0);
             motion::enter(card, p, m.toast_scale, offset, (0.5, 0.5))
         })

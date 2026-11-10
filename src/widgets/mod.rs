@@ -47,8 +47,8 @@ pub use toast::{Toast, ToastId, ToastKind, Toasts, toasts};
 pub use toolbar::{tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar};
 
 use crate::core::{
-    Align, Anchor, AnimProp, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Role, Track,
-    Transition, ViewportId,
+    Align, Anchor, AnimProp, Axis, BoxStyle, Cx, Effect, Element, KeyInput, OverlaySpec, Role,
+    Track, Transition, ViewportId,
 };
 use crate::geometry::{Insets, Point, Transform};
 use crate::platform::native::{self, NativeControl};
@@ -1516,7 +1516,8 @@ pub fn open_menu<S>(
     items: Vec<Element>,
     on_dismiss: impl FnMut(&mut S) + 'static,
 ) {
-    let content = menu(theme, items);
+    // It grows in from its corner as it opens.
+    let content = menu(theme, items).enter(motion::popup_effect(&theme.motion, (0.0, 0.0)));
     let dismiss = cx.register(on_dismiss);
     cx.overlay(OverlaySpec {
         content,
@@ -1548,7 +1549,8 @@ pub fn open_dialog<S>(
                 .align(Align::End, Align::Center),
         ],
     )
-    .width(340.0);
+    .width(340.0)
+    .enter(motion::dialog_effect(&theme.motion));
     cx.overlay(OverlaySpec {
         content,
         anchor: Anchor::Center,
@@ -1571,6 +1573,8 @@ pub fn tooltip(theme: &Theme, text: impl Into<String>) -> Element {
     .fill(theme.palette.text)
     .radius(theme.radius / 2.0)
     .padding(Insets::symmetric(theme.spacing.sm, theme.spacing.xs))
+    // It fades in when it shows.
+    .enter(Effect::custom(0.0, Transform::IDENTITY).transition(Transition(theme.motion.popup)))
 }
 
 #[cfg(test)]

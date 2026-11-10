@@ -1546,19 +1546,21 @@ styling part of the toolkit.
   their sources documented. Buttons fade their hover/press looks and shrink
   slightly (standard only); switches slide their thumb and fade the track;
   check marks and radio dots pop in; segmented `tabs` cross-fade; the tab
-  bar's accent strip slides between tabs; select lists, drawn menus and the
-  tab bar's list grow in; toasts slide in and fade back out (kept drawn
-  while leaving); the drawn message box scales in; tree disclosure triangles
+  bar's accent strip slides between tabs; select lists, drawn menus,
+  `open_menu` and the tab bar's list grow in; tooltips fade in; toasts slide
+  in, fade back out (kept drawn while leaving) and glide into place; the
+  drawn message box and `open_dialog` scale in; tree disclosure triangles
   turn; the app's drop-target highlight fades with the drag-over level. All
   through state overrides + transitions, `Animated`, transforms and opacity,
-  so reduced motion snaps them. Nothing changes at rest (layouts and pixels
+  and the core's enter and layout animations for the stateless popups and
+  the toasts, so reduced motion snaps them. Nothing changes at rest (layouts and pixels
   are identical; checked under Xvfb against the previous build for
   `widgetsdemo`, `sessionsdemo`, `material3demo` and `themegallery`) and
   what's open in a widget's first build doesn't animate in. Unit-tested at
-  fixed frame times (`widgets::motion_tests`). Not yet: popups, menus and the
-  message box closing, `open_menu`/`open_dialog`/`tooltip` (stateless, so
-  they wait for the enter/exit transitions above), toasts below a dismissed
-  one moving into its place (layout animations), and OS-drawn controls under
+  fixed frame times (`widgets::motion_tests`). Not yet: popups, menus,
+  tooltips and dialogs closing (an overlay's exit needs the overlay kept
+  after the view stops declaring it, which the core's ghosts don't do yet),
+  a sliding indicator for the segmented `tabs`, and OS-drawn controls under
   `Theme::native()`. See [docs/widgets.md](docs/widgets.md#motion).*
 - **Exit criteria:** a showcase example (drop area, animated list, interactive
   controls) whose animations are unit-tested at fixed frame times, with CI

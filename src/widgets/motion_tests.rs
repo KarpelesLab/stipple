@@ -75,6 +75,8 @@ impl Rig {
             watch: Default::default(),
             styled_actions: Vec::new(),
             styled_drops: Vec::new(),
+            presence: HashMap::new(),
+            anchors: Default::default(),
         };
         r.resolve(&mut el, ElementKey::root(0));
         for (i, o) in overlays.iter_mut().enumerate() {
@@ -439,4 +441,60 @@ fn the_tab_indicator_slides_to_the_new_tab() {
     let mut after = Vec::new();
     moved(&mut el, &mut after);
     assert!(!moving && after.is_empty(), "{after:?}");
+}
+
+/// `open_menu` and `open_dialog` keep no state, so the core's enter
+/// animations bring them in: shown after the first frame, they animate, then
+/// rest. (Wall-clock frames, through an `App`.)
+#[test]
+fn stateless_popups_come_in_through_the_core() {
+    use crate::App;
+    use crate::geometry::{Point, Size};
+    #[derive(Default)]
+    struct Pop {
+        menu: bool,
+        dialog: bool,
+    }
+    let mut app = App::new(Pop::default(), |s: &Pop, cx: &mut Cx<Pop>| {
+        let t = theme();
+        if s.menu {
+            let item = menu_item(cx, &t, "Cut", |_: &mut Pop| {});
+            open_menu(cx, &t, Point::new(10.0, 10.0), vec![item], |s: &mut Pop| {
+                s.menu = false
+            });
+        }
+        if s.dialog {
+            open_dialog(
+                cx,
+                &t,
+                "Sure?",
+                label(&t, "Really"),
+                vec![],
+                |s: &mut Pop| s.dialog = false,
+            );
+        }
+        column(vec![
+            button_labeled(&t, "Menu").on_tap(cx, |s: &mut Pop| s.menu = true),
+            button_labeled(&t, "Dialog").on_tap(cx, |s: &mut Pop| s.dialog = true),
+        ])
+    })
+    .logical_size(Size::new(400.0, 300.0));
+    crate::anim::set_reduced_motion(Some(false));
+    let _ = app.render_frame();
+    assert!(!app.animating());
+    assert!(app.click_at(Point::new(20.0, 15.0)), "opens the menu");
+    let _ = app.render_frame();
+    assert!(app.state().menu);
+    // The menu is the window's top layer (over its press-outside catcher),
+    // fading in.
+    let layer = |app: &App<Pop>| {
+        let tree = app.panes[0].tree.as_ref().unwrap();
+        tree.children.last().unwrap().opacity
+    };
+    assert!(layer(&app) < 1.0, "the menu comes in: {}", layer(&app));
+    std::thread::sleep(Duration::from_millis(400));
+    let _ = app.render_frame();
+    assert_eq!(layer(&app), 1.0);
+    let _ = app.render_frame();
+    assert!(!app.animating(), "then rests");
 }

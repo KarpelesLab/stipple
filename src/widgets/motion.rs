@@ -14,7 +14,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 
 use crate::anim::{Animated, Motion};
-use crate::core::{Cx, Element};
+use crate::core::{Cx, Effect, Element, Transition};
 use crate::geometry::Transform;
 use crate::render::Color;
 use crate::style::MotionTokens;
@@ -143,6 +143,22 @@ pub(crate) fn popup(el: Element, m: &MotionTokens, p: f64, origin: (f64, f64)) -
 /// The drawn message box opening at progress `p`.
 pub(crate) fn dialog(el: Element, m: &MotionTokens, p: f64) -> Element {
     enter(el, p, m.dialog_scale, (0.0, 0.0), (0.5, 0.5))
+}
+
+/// A popup's entrance as an [`Effect`], for the popups that keep no state
+/// (the core's enter animations know when they appeared): fading in as it
+/// grows from the theme's popup scale about `origin` and slides into place.
+pub(crate) fn popup_effect(m: &MotionTokens, origin: (f64, f64)) -> Effect {
+    let t = Transform::IDENTITY
+        .scale(m.popup_scale)
+        .translate(0.0, -m.popup_offset)
+        .origin(origin.0, origin.1);
+    Effect::custom(0.0, t).transition(Transition(m.popup))
+}
+
+/// The dialog's entrance as an [`Effect`].
+pub(crate) fn dialog_effect(m: &MotionTokens) -> Effect {
+    Effect::custom(0.0, Transform::IDENTITY.scale(m.dialog_scale)).transition(Transition(m.dialog))
 }
 
 /// `overlay` composited `times` over `base` (`None`: nothing under it, so
