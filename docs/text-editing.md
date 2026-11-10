@@ -57,6 +57,55 @@ The app delivers double- and triple-clicks to the focused element as
 `KeyInput::SelectWord` and `KeyInput::SelectLine`, so a custom key handler can
 handle them too.
 
+## The clipboard
+
+Ctrl/Cmd+C, X and V go through an in-process mirror
+(`stipple::core::clipboard_text`), which the app syncs with the system
+clipboard around each copy and paste, so copying and pasting work inside the
+app even where the system clipboard isn't wired up (and headlessly). On X11 the
+system answers a paste later when another application owns the clipboard: the
+paste then lands when the content arrives (`Event::Clipboard`), if the same
+field still has focus.
+
+**The primary selection.** Whatever text is selected in the focused field
+becomes the primary selection, and a middle click on editable text puts the
+caret there and inserts it, as on Linux desktops. On X11 and Wayland it is the
+system's `PRIMARY` selection, shared with other applications; elsewhere the app
+keeps it in process (`stipple::core::primary_text`). `App::paste_primary_at`
+does the middle click's paste from code and tests.
+
+**Rich content.** `stipple::platform::clipboard::ClipboardContent` holds plain
+text, HTML and an image (a `Pixmap`) at once. A handler that isn't a text
+field, a terminal say, writes one with `stipple::core::write_clipboard` and
+asks for one with `stipple::core::request_clipboard`; the app hands the answer
+to the function set with `App::on_clipboard`:
+
+```rust,ignore
+use stipple::core::{request_clipboard, write_clipboard};
+use stipple::platform::clipboard::{ClipboardContent, ClipboardFormats, ClipboardKind};
+
+// Copy as text and HTML.
+write_clipboard(
+    ClipboardKind::Clipboard,
+    ClipboardContent::text("ls -l").with_html("<pre>ls -l</pre>"),
+);
+// Middle click in the terminal: paste the primary selection.
+request_clipboard(ClipboardKind::Primary, ClipboardFormats::TEXT);
+
+let app = App::new(state, view).on_clipboard(|state, _kind, content| {
+    if let Some(text) = content.and_then(|c| c.text) {
+        state.pty_write(&text);
+    }
+});
+```
+
+On X11 and Wayland the types are MIME types (`text/plain;charset=utf-8`,
+`UTF8_STRING`, `text/html`, `image/png`); on Windows `CF_UNICODETEXT`,
+`HTML Format` (`CF_HTML`), `CF_DIBV5` and `PNG`; on macOS `public.utf8-plain-text`,
+`public.html` and `public.png`. The web takes text and HTML, iOS and Android
+text only. `stipple::platform::clipboard::format` has the encoders (`CF_HTML`,
+DIB, PNG).
+
 ## Input methods
 
 Chinese, Japanese and Korean input methods, dead keys and compose sequences show

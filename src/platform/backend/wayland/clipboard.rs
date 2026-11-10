@@ -1,8 +1,10 @@
 //! The system clipboard on Wayland: `wl_data_device_manager`, `wl_data_device`,
-//! `wl_data_source` and `wl_data_offer`, for plain text.
+//! `wl_data_source` and `wl_data_offer`, for text, HTML and images. The primary
+//! selection works the same way through its own protocol (see [`primary`]).
 //!
-//! - **Copying** creates a `wl_data_source` offering the text types and makes it
-//!   the selection, using the serial of the input event that triggered the copy.
+//! - **Copying** creates a `wl_data_source` offering the content's types (the
+//!   text types, `text/html`, `image/png`) and makes it the selection, using
+//!   the serial of the input event that triggered the copy.
 //!   When another client pastes, the compositor sends `send(mime, fd)`; a short
 //!   thread writes the text into that fd, so a slow reader can't stall the loop.
 //! - **Pasting** reads the current selection's `wl_data_offer`: we create a pipe,
@@ -23,8 +25,11 @@
 //! (`text/uri-list` for files), then `finish`ed and destroyed.
 
 pub(super) mod drag_out;
+pub(super) mod primary;
 
 use super::{WL_DISPLAY, WlConn, arg_str, arg_u32, close, read_str};
+use crate::platform::clipboard::format::{self, Payload, TEXT_MIMES};
+use crate::platform::clipboard::{ClipboardContent, ClipboardFormats};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::time::{Duration, Instant};
@@ -63,15 +68,6 @@ const DISPLAY_DELETE_ID: u16 = 1;
 /// drag-and-drop actions, which we ignore.
 pub(super) const MANAGER_VERSION: u32 = 3;
 
-/// The text types we offer, and accept in this order of preference.
-const TEXT_MIMES: [&str; 5] = [
-    "text/plain;charset=utf-8",
-    "UTF8_STRING",
-    "text/plain",
-    "TEXT",
-    "STRING",
-];
-
 /// How long a paste waits for the source to finish writing.
 const READ_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -103,8 +99,8 @@ pub(super) struct Clipboard {
     drag_out: Option<drag_out::DragOut>,
     /// Our `wl_data_source` while we own the selection.
     source: Option<u32>,
-    /// The text `source` serves.
-    text: String,
+    /// What `source` serves.
+    payload: Payload,
     /// Sources we destroyed whose ids the server hasn't released yet: a `send`
     /// for one may still be in flight, and its fd must be closed.
     dead_sources: Vec<u32>,
@@ -120,6 +116,8 @@ pub(super) struct Clipboard {
     drag_at: (f64, f64),
     /// Drag-and-drop messages for the event loop to deliver.
     pub(super) dnd: Vec<DndMessage>,
+    /// The primary selection.
+    pub(super) primary: primary::Primary,
 }
 
 /// A drag-and-drop message from the data device, in surface coordinates.
@@ -186,6 +184,9 @@ fn word(args: &[u8], i: usize) -> u32 {
 
 /// Handle a clipboard event. Returns whether it was one.
 pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8]) -> bool {
+    if primary::handle(conn, object, opcode, args) {
+        return true;
+    }
     if conn.clip.device == 0 {
         return false;
     }
@@ -253,10 +254,12 @@ pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8]) -
             SOURCE_SEND => {
                 // send(mime, fd): the fd travels alongside the message.
                 if let Some(fd) = conn.fds.pop_front() {
-                    if ours {
-                        serve(fd, conn.clip.text.clone().into_bytes());
-                    } else {
-                        unsafe { close(fd) };
+                    let mime = read_str(args, 0).map(|(m, _)| m).unwrap_or_default();
+                    match conn.clip.payload.bytes(&mime).filter(|_| ours) {
+                        Some(bytes) => serve(fd, bytes),
+                        None => {
+                            unsafe { close(fd) };
+                        }
                     }
                 }
             }
@@ -265,7 +268,7 @@ pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8]) -
                 let _ = conn.send(object, SOURCE_DESTROY, &[]);
                 conn.clip.dead_sources.push(object);
                 conn.clip.source = None;
-                conn.clip.text.clear();
+                conn.clip.payload = Payload::default();
             }
             _ => {}
         }
@@ -274,6 +277,7 @@ pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8]) -
     if object == WL_DISPLAY && opcode == DISPLAY_DELETE_ID {
         let id = word(args, 0);
         conn.clip.dead_sources.retain(|&s| s != id);
+        conn.clip.primary.released(id);
         return true;
     }
     false
@@ -302,11 +306,18 @@ fn serve(fd: i32, bytes: Vec<u8>) {
 }
 
 /// Make `text` the selection.
-pub(super) fn set_text(conn: &mut WlConn, text: &str) {
+#[cfg(test)]
+fn set_text(conn: &mut WlConn, text: &str) {
+    set(conn, &ClipboardContent::text(text));
+}
+
+/// Make `content` the selection.
+pub(super) fn set(conn: &mut WlConn, content: &ClipboardContent) {
     let (manager, device) = (conn.clip.manager, conn.clip.device);
     if device == 0 {
         return;
     }
+    let payload = Payload::new(content.clone());
     if let Some(old) = conn.clip.source.take() {
         let _ = conn.send(old, SOURCE_DESTROY, &[]);
         conn.clip.dead_sources.push(old);
@@ -317,7 +328,7 @@ pub(super) fn set_text(conn: &mut WlConn, text: &str) {
     if conn.send(manager, MANAGER_CREATE_DATA_SOURCE, &a).is_err() {
         return;
     }
-    for mime in TEXT_MIMES {
+    for mime in payload.mimes() {
         let mut a = Vec::new();
         arg_str(&mut a, mime);
         let _ = conn.send(source, SOURCE_OFFER, &a);
@@ -328,7 +339,7 @@ pub(super) fn set_text(conn: &mut WlConn, text: &str) {
     let _ = conn.send(device, DEVICE_SET_SELECTION, &a);
     let _ = conn.stream.flush();
     conn.clip.source = Some(source);
-    conn.clip.text = text.to_string();
+    conn.clip.payload = payload;
 }
 
 /// Answer the drag over our surface: take it (as a copy) or refuse it.
@@ -378,7 +389,7 @@ pub(super) fn take_drop(conn: &mut WlConn, accepted: bool) -> Option<crate::plat
         if own.is_some() {
             return own;
         }
-        let bytes = receive(conn, offer, mime)?;
+        let bytes = receive(conn, offer, OFFER_RECEIVE, mime)?;
         let text = String::from_utf8_lossy(&bytes).into_owned();
         if mime == URI_LIST {
             let files = crate::platform::parse_uri_list(&text);
@@ -396,8 +407,9 @@ pub(super) fn take_drop(conn: &mut WlConn, accepted: bool) -> Option<crate::plat
     data
 }
 
-/// Ask `offer` for `mime` through a pipe and read it all.
-fn receive(conn: &mut WlConn, offer: u32, mime: &str) -> Option<Vec<u8>> {
+/// Ask `offer` for `mime` through a pipe (its `receive` request is `opcode`)
+/// and read it all.
+fn receive(conn: &mut WlConn, offer: u32, opcode: u16, mime: &str) -> Option<Vec<u8>> {
     let mut ends = [0i32; 2];
     if unsafe { pipe2(ends.as_mut_ptr(), O_CLOEXEC) } < 0 {
         return None;
@@ -411,7 +423,7 @@ fn receive(conn: &mut WlConn, offer: u32, mime: &str) -> Option<Vec<u8>> {
     };
     let mut a = Vec::new();
     arg_str(&mut a, mime);
-    let sent = conn.send_with_fd(offer, OFFER_RECEIVE, &a, writer.as_raw_fd());
+    let sent = conn.send_with_fd(offer, opcode, &a, writer.as_raw_fd());
     let _ = conn.stream.flush();
     // Our copy of the write end must close, or the read never sees end-of-file.
     drop(writer);
@@ -421,18 +433,38 @@ fn receive(conn: &mut WlConn, offer: u32, mime: &str) -> Option<Vec<u8>> {
 
 /// Read the selection's text, if it has any.
 pub(super) fn text(conn: &mut WlConn) -> Option<String> {
+    read(conn, ClipboardFormats::TEXT).and_then(|c| c.text)
+}
+
+/// Read the selection in `formats`.
+pub(super) fn read(conn: &mut WlConn, formats: ClipboardFormats) -> Option<ClipboardContent> {
     if conn.clip.source.is_some() {
-        return Some(conn.clip.text.clone());
+        return Some(conn.clip.payload.content.clone().only(formats)).filter(|c| !c.is_empty());
     }
     let offer = conn.clip.selection?;
-    let mime = conn
+    let mimes = conn
         .clip
         .offers
         .iter()
         .find(|(id, _)| *id == offer)
-        .and_then(|(_, mimes)| pick_mime(mimes))?;
-    let bytes = receive(conn, offer, mime)?;
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+        .map(|(_, mimes)| format::pick(mimes, formats))?;
+    read_offer(conn, offer, OFFER_RECEIVE, &mimes)
+}
+
+/// Read each of `mimes` from `offer` into one content.
+fn read_offer(
+    conn: &mut WlConn,
+    offer: u32,
+    opcode: u16,
+    mimes: &[&str],
+) -> Option<ClipboardContent> {
+    let mut content = ClipboardContent::default();
+    for mime in mimes {
+        if let Some(bytes) = receive(conn, offer, opcode, mime) {
+            format::decode_into(&mut content, mime, &bytes);
+        }
+    }
+    (!content.is_empty()).then_some(content)
 }
 
 /// Read `reader` to end-of-file, queueing the compositor's messages meanwhile.

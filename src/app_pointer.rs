@@ -184,8 +184,14 @@ impl<S: 'static> App<S> {
                     );
                 }
                 // The app presses with the left button and opens context
-                // menus with the right one; nothing else.
-                out.done = !matches!(button, PointerButton::Left | PointerButton::Right);
+                // menus with the right one; the middle one pastes the primary
+                // selection into editable text, unless an `on_pointer`
+                // element took it. Nothing else.
+                out.done = match button {
+                    PointerButton::Left | PointerButton::Right => false,
+                    PointerButton::Middle => target.is_some(),
+                    _ => true,
+                };
             }
             Event::PointerButton {
                 button,

@@ -353,6 +353,8 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   `Ctrl`/`Meta`+printable as an `Event::Key` shortcut rather than text.
   **CI-verified** (X11): the field text doubles after copy+paste, and `xclip`
   reads the copied text back off the OS `CLIPBOARD` selection.
+  Pasting other applications' selections, the primary selection and rich
+  formats followed (see 7d).
 - ✅ **Native file dialogs**: `stipple::platform::dialog` (`open_file`/`save_file`/
   `pick_folder`) backed by each OS's own picker. On Linux it drives
   `org.freedesktop.portal.FileChooser` over the hand-written D-Bus client (the
@@ -982,6 +984,23 @@ Most input only works on X11 today.
 - ✅ System clipboard on the web, through the `paste`, `copy` and `cut` events
   and `navigator.clipboard.writeText`; Ctrl/Cmd+V arrives with the pasted text.
   CI round-trips text with synthetic clipboard events.
+- ✅ Rich clipboard: `ClipboardContent` (text, HTML, an image as a `Pixmap`)
+  through `Window::read_clipboard` / `write_clipboard` and
+  `platform::clipboard::{read, write}`: MIME types on X11 and Wayland,
+  `CF_HTML` / `CF_DIBV5` / `PNG` on Windows, `public.html` / `public.png` on
+  macOS, HTML on the web. Handlers use `core::write_clipboard` /
+  `request_clipboard` and `App::on_clipboard`. CI checks X11 (`xclip`), Wayland
+  (`wl-clipboard` under sway), Windows (.NET `Clipboard`, `Set-Clipboard
+  -AsHtml`) and macOS (`osascript`).
+- ✅ X11 paste from other applications: asynchronous `ConvertSelection`
+  (`TARGETS`, then each format; `UTF8_STRING`/`STRING` fallback), `INCR` both
+  ways, a two-second timeout, delivered as `Event::Clipboard`. CI pastes from
+  `xclip`, including a large `INCR` transfer.
+- ✅ Primary selection on X11 (`PRIMARY`) and Wayland
+  (`zwp_primary_selection_device_manager_v1`): a field's selection becomes it,
+  a middle click on editable text pastes it (`App::paste_primary_at`);
+  in-process elsewhere. CI-verified with `xclip` (including the middle click)
+  and `wl-paste --primary`.
 - ✅ System clipboard on Android: `ClipboardManager` over hand-written JNI
   through the activity's `JavaVM`. Tried by hand on an emulator, not in CI.
 - ✅ File dialogs on Windows (`IFileOpenDialog` / `IFileSaveDialog` over COM) and

@@ -46,7 +46,14 @@ pub(crate) mod transition;
 pub use a11y::{AccessNode, Role, Semantics, accessibility_tree};
 pub use canvas::{CanvasId, CanvasPainter};
 pub(crate) use canvas::{CanvasInvalidation, invalidated_rects};
-pub use clipboard::{clipboard_text, set_clipboard_text};
+pub(crate) use clipboard::{
+    ClipboardRequest, mirror as clipboard_mirror, selection_text,
+    take_requests as take_clipboard_requests, write_queued as clipboard_write_queued,
+};
+pub use clipboard::{
+    clipboard_text, primary_text, request_clipboard, set_clipboard_text, set_primary_text,
+    write_clipboard,
+};
 pub use crossfade::THEME_FADE;
 pub(crate) use diff::coalesce;
 pub use diff::{Damage, diff_trees};

@@ -105,7 +105,11 @@ reaches the app through that event, carrying the text, rather than as a key.
 Copy and cut write with `navigator.clipboard.writeText` and also fill the `copy`
 / `cut` event that follows the key, which works without a secure context.
 `stipple::platform::clipboard::text()` returns what the last paste carried, and
-`set_text` writes as copying does.
+`set_text` writes as copying does. HTML goes along: `clipboard::write` with HTML
+uses `navigator.clipboard.write` (a `ClipboardItem` with `text/plain` and
+`text/html`) and fills the `copy` event's `text/html`, and `clipboard::read`
+returns the HTML the last paste carried (passed in through `stipple_paste_html`).
+Images aren't supported.
 
 ### File dialogs
 
@@ -249,7 +253,8 @@ The module exports:
 | `stipple_file(id, …)`, `stipple_file_cancel(id)` | a picked file, or a cancelled picker |
 
 It imports, from the module `"stipple"`: `now`, `present`, `schedule`,
-`request_frame`, `set_cursor`, `set_title`, `clipboard_write`, `open_file`,
+`request_frame`, `set_cursor`, `set_title`, `clipboard_write`,
+`clipboard_write_html` (the HTML for the next `clipboard_write`), `open_file`,
 `save_file`, `open_url` (`window.open`, for `platform::open_url`), `notify`
 (the `Notification` API, for `platform::notify`), `log` (panics are printed to
 the console), `set_a11y` (the accessibility tree as JSON), `set_ime` (the caret

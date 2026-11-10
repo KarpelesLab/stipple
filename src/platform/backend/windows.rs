@@ -1104,6 +1104,28 @@ impl Window for WinWindow {
     fn set_clipboard(&self, text: &str) {
         crate::platform::clipboard::set_text(text);
     }
+    fn read_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        formats: crate::platform::clipboard::ClipboardFormats,
+    ) -> crate::platform::clipboard::ClipboardRead {
+        // Text, HTML and images; no primary selection here.
+        use crate::platform::clipboard::{ClipboardKind, ClipboardRead, read};
+        ClipboardRead::Ready(
+            (kind == ClipboardKind::Clipboard)
+                .then(|| read(formats))
+                .flatten(),
+        )
+    }
+    fn write_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        content: &crate::platform::clipboard::ClipboardContent,
+    ) {
+        if kind == crate::platform::clipboard::ClipboardKind::Clipboard {
+            crate::platform::clipboard::write(content);
+        }
+    }
     fn set_dark(&self, dark: bool) {
         set_dark_title(self.hwnd, dark);
         // Have the frame repaint now rather than at the next activation.

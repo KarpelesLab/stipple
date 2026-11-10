@@ -19,7 +19,8 @@
 //! | `request_frame()` | `requestAnimationFrame`, which calls `stipple_frame` |
 //! | `set_cursor(ptr, len)` | the canvas's `style.cursor` |
 //! | `set_title(ptr, len)` | `document.title` |
-//! | `clipboard_write(ptr, len)` | `navigator.clipboard.writeText`, and the text a `copy` / `cut` event hands over |
+//! | `clipboard_write(ptr, len)` | `navigator.clipboard.writeText` (or `write`, with the HTML), and the text a `copy` / `cut` event hands over |
+//! | `clipboard_write_html(ptr, len)` | the HTML (empty: none) that goes with the next `clipboard_write` |
 //! | `open_file(id, ptr, len)` | an `<input type=file>` (`accept` = the string); the file comes back through `stipple_file` |
 //! | `save_file(name, name_len, data, data_len)` | a download of a `Blob` |
 //! | `log(level, ptr, len)` | `console.log` / `console.error` (panics land here) |
@@ -59,6 +60,7 @@ mod js {
         pub fn set_cursor(ptr: *const u8, len: usize);
         pub fn set_title(ptr: *const u8, len: usize);
         pub fn clipboard_write(ptr: *const u8, len: usize);
+        pub fn clipboard_write_html(ptr: *const u8, len: usize);
         pub fn open_file(id: u32, accept: *const u8, accept_len: usize);
         pub fn save_file(name: *const u8, name_len: usize, data: *const u8, data_len: usize);
         pub fn log(level: u32, ptr: *const u8, len: usize);
@@ -80,15 +82,25 @@ pub(crate) fn log(msg: &str, error: bool) {
     unsafe { js::log(u32::from(error), msg.as_ptr(), msg.len()) }
 }
 
-/// Put `text` on the system clipboard (best effort: the browser may refuse
-/// outside a user gesture, but a `copy` event still picks it up).
-pub(crate) fn clipboard_write(text: &str) {
-    unsafe { js::clipboard_write(text.as_ptr(), text.len()) }
+/// Put `text`, and `html` if given, on the system clipboard (best effort: the
+/// browser may refuse outside a user gesture, but a `copy` event still picks
+/// it up).
+pub(crate) fn clipboard_write(text: &str, html: Option<&str>) {
+    let html = html.unwrap_or("");
+    unsafe {
+        js::clipboard_write_html(html.as_ptr(), html.len());
+        js::clipboard_write(text.as_ptr(), text.len());
+    }
 }
 
 /// The text the last `paste` event carried.
 pub(crate) fn clipboard_read() -> Option<String> {
     HOST.with(|h| h.pasted.borrow().clone())
+}
+
+/// The HTML the last `paste` event carried.
+pub(crate) fn clipboard_read_html() -> Option<String> {
+    HOST.with(|h| h.pasted_html.borrow().clone())
 }
 
 /// Show the browser's file picker for request `id`, filtered by `accept`.
@@ -125,6 +137,7 @@ struct Host {
     /// `devicePixelRatio`.
     scale: Cell<f64>,
     pasted: RefCell<Option<String>>,
+    pasted_html: RefCell<Option<String>>,
     cursor: Cell<CursorIcon>,
     font: RefCell<Option<Font>>,
     /// The accessibility tree last sent to the page, so an unchanged one isn't
@@ -142,6 +155,7 @@ thread_local! {
             css: Cell::new((0.0, 0.0)),
             scale: Cell::new(1.0),
             pasted: RefCell::new(None),
+            pasted_html: RefCell::new(None),
             cursor: Cell::new(CursorIcon::Default),
             font: RefCell::new(None),
             a11y: RefCell::new(None),
@@ -248,7 +262,30 @@ impl Window for WebWindow {
     }
 
     fn set_clipboard(&self, text: &str) {
-        clipboard_write(text);
+        clipboard_write(text, None);
+    }
+
+    fn read_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        formats: crate::platform::clipboard::ClipboardFormats,
+    ) -> crate::platform::clipboard::ClipboardRead {
+        use crate::platform::clipboard::{ClipboardKind, ClipboardRead, read};
+        ClipboardRead::Ready(
+            (kind == ClipboardKind::Clipboard)
+                .then(|| read(formats))
+                .flatten(),
+        )
+    }
+
+    fn write_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        content: &crate::platform::clipboard::ClipboardContent,
+    ) {
+        if kind == crate::platform::clipboard::ClipboardKind::Clipboard {
+            crate::platform::clipboard::write(content);
+        }
     }
 
     fn set_cursor(&self, cursor: CursorIcon) {
@@ -504,6 +541,13 @@ pub fn key(key: &str, mods: u32) -> bool {
                 | KeyCode::F12
         ),
     }
+}
+
+/// The HTML a `paste` event carries (empty: none), passed just before
+/// [`paste`].
+#[doc(hidden)]
+pub fn paste_html(html: String) {
+    HOST.with(|h| *h.pasted_html.borrow_mut() = Some(html).filter(|h| !h.is_empty()));
 }
 
 /// A `paste` event carrying `text`: delivered as Ctrl+V, with the text as the

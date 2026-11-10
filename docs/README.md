@@ -64,14 +64,19 @@ How to build, package and run on each platform, and what works there today.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
 ³ Implemented, but not yet run in CI on iOS.
 ⁴ CI round-trips text through the OS clipboard, and Ctrl/Cmd+C/X/V reach it now
-that these backends report modifier keys.
+that these backends report modifier keys. HTML and images too (`CF_HTML`,
+`CF_DIBV5` and `PNG` on Windows; `public.html` and `public.png` on macOS),
+cross-checked with .NET's `Clipboard` / `Set-Clipboard -AsHtml` and
+`osascript`. No primary selection.
 ⁵ Implemented, but a modal dialog can't be driven headlessly, so CI only builds it.
 ⁶ CI drives these with scripted input on X11 only; on Wayland, Windows, macOS and
 the web they're implemented and unit-tested but not yet exercised end to end.
 ⁷ Implemented, but CI can't switch the system's appearance, so it's untested end
 to end. Linux needs the desktop portal (its `SettingChanged` signal).
-⁸ Wayland copies and pastes, and CI round-trips text with `wl-copy`/`wl-paste`.
-X11 serves copies to other apps, but pastes only text copied in the app.
+⁸ Text, HTML and PNG images both ways, plus the primary selection (select,
+middle-click). CI checks each against `xclip` on X11 (including `INCR`
+transfers both ways and a middle-click paste) and `wl-copy`/`wl-paste` under
+sway (without a pointer there, so the middle click itself is X11-only).
 ⁹ CI checks the size hints, icon and cursor changes on X11. On Wayland the icon
 needs `xdg-toplevel-icon-v1` and cursor shapes `cursor-shape-v1`; without them
 the compositor's defaults stay.
@@ -85,7 +90,8 @@ ratio of 2, and checks what the app saw: clicks, the cursor, typing and Ctrl
 shortcuts, timers, the spinner animating and then stopping, and resizing.
 ¹³ Through the browser's `paste`, `copy` and `cut` events (and
 `navigator.clipboard.writeText`): Ctrl/Cmd+V pastes, but the app can't read the
-clipboard on its own. CI round-trips text with synthetic clipboard events.
+clipboard on its own. CI round-trips text with synthetic clipboard events. HTML
+goes along both ways (build-checked); images aren't supported.
 ¹⁴ `open_file_contents` (an `<input type=file>`, answered asynchronously) and
 `save_file_contents` (a download). `open_file` and friends return `None`, since
 a page never sees paths. CI checks both with the picker and download stood in

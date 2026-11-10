@@ -88,6 +88,13 @@ macro_rules! web_app {
             /// # Safety
             /// `ptr`/`len` come from one `stipple_alloc(len)`.
             #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_paste_html(ptr: *mut u8, len: usize) {
+                glue::paste_html(unsafe { glue::take_string(ptr, len) });
+            }
+
+            /// # Safety
+            /// `ptr`/`len` come from one `stipple_alloc(len)`.
+            #[unsafe(no_mangle)]
             pub unsafe extern "C" fn stipple_ime(kind: u32, ptr: *mut u8, len: usize) {
                 glue::ime(kind, unsafe { glue::take_string(ptr, len) });
             }

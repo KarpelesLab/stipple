@@ -50,6 +50,8 @@ mod ctext;
 mod dnd;
 mod pointer;
 mod refresh;
+/// The CLIPBOARD and PRIMARY selections.
+mod selection;
 mod xim;
 
 // ---- X11 protocol constants -------------------------------------------------
@@ -62,7 +64,6 @@ const OP_INTERN_ATOM: u8 = 16;
 const OP_GET_PROPERTY: u8 = 20;
 const OP_CHANGE_PROPERTY: u8 = 18;
 const OP_DELETE_PROPERTY: u8 = 19;
-const OP_SET_SELECTION_OWNER: u8 = 22;
 const OP_SEND_EVENT: u8 = 25;
 const OP_GET_INPUT_FOCUS: u8 = 43;
 const OP_QUERY_EXTENSION: u8 = 98;
@@ -109,6 +110,7 @@ const X_MOTION_NOTIFY: u8 = 6;
 const X_KEY_PRESS: u8 = 2;
 const X_KEY_RELEASE: u8 = 3;
 const X_CONFIGURE_NOTIFY: u8 = 22;
+const X_PROPERTY_NOTIFY: u8 = 28;
 const X_SELECTION_CLEAR: u8 = 29;
 const X_SELECTION_REQUEST: u8 = 30;
 const X_SELECTION_NOTIFY: u8 = 31;
@@ -879,13 +881,9 @@ struct Conn {
     scale: f64,
     next_id: u32,
     id_step: u32,
-    /// The text we currently own on the `CLIPBOARD` selection. Served to other
-    /// clients in response to `SelectionRequest`; updated by `set_clipboard`.
-    clipboard_text: String,
-    /// Atoms interned once at startup for the clipboard protocol (0 until set).
-    atom_clipboard: u32,
-    atom_utf8: u32,
-    atom_targets: u32,
+    /// The `CLIPBOARD` and `PRIMARY` selections: what we own, and the reads
+    /// in progress (its atoms are 0 until interned).
+    sel: selection::Selections,
     /// WM_PROTOCOLS / WM_DELETE_WINDOW, interned once so every window (including
     /// ones opened later) registers the close protocol the same way.
     atom_wm_protocols: u32,
@@ -966,10 +964,7 @@ impl Conn {
             scale: 1.0,
             next_id: 0,
             id_step: id_step.max(1),
-            clipboard_text: String::new(),
-            atom_clipboard: 0,
-            atom_utf8: 0,
-            atom_targets: 0,
+            sel: selection::Selections::default(),
             atom_wm_protocols: 0,
             atom_wm_delete: 0,
             atom_net_wm_state: 0,
@@ -1098,19 +1093,30 @@ impl Window for X11Window {
         self.reg.borrow_mut().ime.push((self.window, spot));
     }
     fn set_clipboard(&self, text: &str) {
-        // Become the owner of the CLIPBOARD selection and remember the text;
-        // the event loop serves it to requestors via SelectionRequest.
-        let mut conn = self.conn.lock().unwrap();
-        conn.clipboard_text = text.to_string();
-        let selection = conn.atom_clipboard;
-        if selection == 0 {
-            return;
-        }
-        let mut req = vec![OP_SET_SELECTION_OWNER, 0, 0, 0];
-        req.extend_from_slice(&self.window.to_le_bytes()); // owner
-        req.extend_from_slice(&selection.to_le_bytes()); // CLIPBOARD
-        req.extend_from_slice(&0u32.to_le_bytes()); // time = CurrentTime
-        let _ = conn.send(&finish(req));
+        let content = crate::platform::clipboard::ClipboardContent::text(text);
+        self.write_clipboard(
+            crate::platform::clipboard::ClipboardKind::Clipboard,
+            &content,
+        );
+    }
+    fn read_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        formats: crate::platform::clipboard::ClipboardFormats,
+    ) -> crate::platform::clipboard::ClipboardRead {
+        // Another client's selection arrives later, as Event::Clipboard.
+        selection::read(&mut self.conn.lock().unwrap(), self.window, kind, formats)
+    }
+    fn write_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        content: &crate::platform::clipboard::ClipboardContent,
+    ) {
+        // Own the selection; the loop serves it on SelectionRequest.
+        selection::write(&mut self.conn.lock().unwrap(), self.window, kind, content);
+    }
+    fn has_primary_selection(&self) -> bool {
+        true
     }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(X11Surface {
@@ -1483,7 +1489,8 @@ fn create_window(
         | pointer::EV_ENTER_WINDOW
         | pointer::EV_LEAVE_WINDOW
         | EV_STRUCTURE_NOTIFY
-        | attention::EV_FOCUS_CHANGE;
+        | attention::EV_FOCUS_CHANGE
+        | selection::EV_PROPERTY_CHANGE;
     req.extend_from_slice(&mask.to_le_bytes());
     conn.send(&finish(req)).map_err(os)?;
 
@@ -1603,9 +1610,7 @@ where
     // on them.
     conn.atom_wm_protocols = intern_atom(&mut conn, b"WM_PROTOCOLS").map_err(os)?;
     conn.atom_wm_delete = intern_atom(&mut conn, b"WM_DELETE_WINDOW").map_err(os)?;
-    conn.atom_clipboard = intern_atom(&mut conn, b"CLIPBOARD").map_err(os)?;
-    conn.atom_utf8 = intern_atom(&mut conn, b"UTF8_STRING").map_err(os)?;
-    conn.atom_targets = intern_atom(&mut conn, b"TARGETS").map_err(os)?;
+    conn.sel.atoms = selection::Atoms::intern(&mut conn).map_err(os)?;
     conn.atom_net_wm_state = intern_atom(&mut conn, b"_NET_WM_STATE").map_err(os)?;
     conn.atom_max_vert = intern_atom(&mut conn, b"_NET_WM_STATE_MAXIMIZED_VERT").map_err(os)?;
     conn.atom_max_horz = intern_atom(&mut conn, b"_NET_WM_STATE_MAXIMIZED_HORZ").map_err(os)?;
@@ -1671,11 +1676,21 @@ where
         } else {
             reg.borrow_mut().ime.clear();
         }
+        // Clipboard reads whose owner went silent.
+        let expired = selection::expire(&mut shared.lock().unwrap());
+        if selection::deliver(expired, &windows, &mut handler) == ControlFlow::Exit {
+            break;
+        }
         if let Some(event) = backlog.pop_front() {
             buf = event;
         } else {
             let xim_deadline = xim.as_ref().and_then(|x| x.deadline());
-            if !crate::platform::wake::wait_readable_until(fd, xim_deadline) {
+            let sel_deadline = shared.lock().unwrap().sel.reader.deadline();
+            let deadline = match (xim_deadline, sel_deadline) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            if !crate::platform::wake::wait_readable_until(fd, deadline) {
                 if crate::platform::wake::take(std::time::Instant::now())
                     && handler(Event::Wake, &windows[0]) == ControlFlow::Exit
                 {
@@ -1712,8 +1727,10 @@ where
         }
         // Route the event to the window it names (falling back to the first);
         // a drop's data comes back to the window it was dropped on.
+        let xdnd_notify = buf[0] & 0x7f == X_SELECTION_NOTIFY
+            && rd_u32(&buf, 12) == Some(xdnd.atoms.selection_atom());
         let xid = match buf[0] & 0x7f {
-            X_SELECTION_NOTIFY => xdnd.converting_window().unwrap_or(0),
+            X_SELECTION_NOTIFY if xdnd_notify => xdnd.converting_window().unwrap_or(0),
             _ => event_window(&buf),
         };
         // A drag out of the app owns the pointer and keyboard while it
@@ -1840,8 +1857,20 @@ where
             X_CLIENT_MESSAGE if xdnd.atoms.is_xdnd(rd_u32(&buf, 8).unwrap_or(0)) => {
                 xdnd.client_message(&shared, &mut backlog, &buf, win, &mut handler)
             }
-            X_SELECTION_NOTIFY => {
+            X_SELECTION_NOTIFY if xdnd_notify => {
                 xdnd.selection_notify(&shared, &mut backlog, &buf, win, &mut handler)
+            }
+            X_SELECTION_NOTIFY => {
+                // An answer to a clipboard read.
+                let events =
+                    selection::selection_notify(&mut shared.lock().unwrap(), &mut backlog, &buf);
+                selection::deliver(events, &windows, &mut handler)
+            }
+            X_PROPERTY_NOTIFY => {
+                // A chunk of an INCR transfer, in or out.
+                let events =
+                    selection::property_notify(&mut shared.lock().unwrap(), &mut backlog, &buf);
+                selection::deliver(events, &windows, &mut handler)
             }
             X_CLIENT_MESSAGE => {
                 // data starts at byte 12; first 32-bit word is the protocol atom.
@@ -1866,17 +1895,13 @@ where
                 }
             }
             X_SELECTION_REQUEST => {
-                // Another client wants our CLIPBOARD text. Serve it, then notify.
-                let mut conn = shared.lock().unwrap();
-                let _ = serve_selection_request(&mut conn, &buf);
+                // Another client wants a selection we own. Serve it, then notify.
+                selection::selection_request(&mut shared.lock().unwrap(), &buf);
                 ControlFlow::Wait
             }
             X_SELECTION_CLEAR => {
-                // We lost ownership of the clipboard; drop our copy.
-                let mut conn = shared.lock().unwrap();
-                if rd_u32(&buf, 12) == Some(conn.atom_clipboard) {
-                    conn.clipboard_text.clear();
-                }
+                // We lost a selection; drop our copy.
+                selection::selection_clear(&mut shared.lock().unwrap(), &buf);
                 ControlFlow::Wait
             }
             _ => ControlFlow::Wait, // errors, replies, unhandled events
@@ -1898,6 +1923,7 @@ where
                 if let Some(pos) = windows.iter().position(|w| w.window == xid) {
                     windows.remove(pos);
                     let mut conn = shared.lock().unwrap();
+                    conn.sel.forget_window(xid);
                     let mut req = vec![OP_DESTROY_WINDOW, 0, 0, 0];
                     req.extend_from_slice(&xid.to_le_bytes());
                     let _ = conn.send(&finish(req));
@@ -2185,55 +2211,6 @@ fn property32_request(window: u32, prop: u32, ty: u32, values: &[u32]) -> Vec<u8
     req
 }
 
-/// Answer a `SelectionRequest`: fill the requestor's property with our clipboard
-/// text (or the supported target list) and send back a `SelectionNotify`.
-fn serve_selection_request(conn: &mut Conn, ev: &[u8; 32]) -> io::Result<()> {
-    // SelectionRequest event fields: time@4, owner@8, requestor@12,
-    // selection@16, target@20, property@24.
-    let time = rd_u32(ev, 4).unwrap_or(0);
-    let requestor = rd_u32(ev, 12).unwrap_or(0);
-    let selection = rd_u32(ev, 16).unwrap_or(0);
-    let target = rd_u32(ev, 20).unwrap_or(0);
-    // An obsolete requestor may send property=None; reply into the target atom.
-    let mut property = rd_u32(ev, 24).unwrap_or(0);
-    if property == 0 {
-        property = target;
-    }
-
-    // Only the CLIPBOARD selection is served. Decide whether we can satisfy the
-    // requested target; on success the reply carries `property`, else `None`.
-    let utf8 = conn.atom_utf8;
-    let targets = conn.atom_targets;
-    let satisfied = if selection != conn.atom_clipboard {
-        false
-    } else if target == targets {
-        // Advertise the targets we support, as a list of ATOMs.
-        let list = [targets, utf8, ATOM_STRING];
-        set_property_atoms(conn, requestor, property, &list).is_ok()
-    } else if target == utf8 || target == ATOM_STRING {
-        let text = conn.clipboard_text.clone();
-        set_property_str(conn, requestor, property, target, text.as_bytes()).is_ok()
-    } else {
-        false
-    };
-    let reply_prop = if satisfied { property } else { 0 };
-
-    // Build a SelectionNotify event (type 31) and SendEvent it to the requestor.
-    let mut notify = [0u8; 32];
-    notify[0] = 31; // SelectionNotify
-    notify[4..8].copy_from_slice(&time.to_le_bytes());
-    notify[8..12].copy_from_slice(&requestor.to_le_bytes());
-    notify[12..16].copy_from_slice(&selection.to_le_bytes());
-    notify[16..20].copy_from_slice(&target.to_le_bytes());
-    notify[20..24].copy_from_slice(&reply_prop.to_le_bytes());
-
-    let mut req = vec![OP_SEND_EVENT, 0 /* propagate = false */, 0, 0];
-    req.extend_from_slice(&requestor.to_le_bytes()); // destination
-    req.extend_from_slice(&0u32.to_le_bytes()); // event-mask: deliver to creator
-    req.extend_from_slice(&notify);
-    conn.send(&finish(req))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2330,28 +2307,6 @@ mod tests {
         assert_eq!(rd_u32(&req, 4).unwrap(), 0x0020_0001); // drawable
         assert_eq!(rd_u32(&req, 8).unwrap(), 0x0060_0002); // fence
         assert_eq!(req[12], 1); // initially_triggered
-    }
-
-    #[test]
-    fn selection_notify_send_event_is_well_formed() {
-        // A SendEvent carrying a SelectionNotify is 44 bytes (11 words): 12-byte
-        // header (opcode, propagate, length, destination, mask) + 32-byte event.
-        let mut conn_ev = [0u8; 32];
-        conn_ev[0] = X_SELECTION_REQUEST;
-        conn_ev[12..16].copy_from_slice(&0xCAFEu32.to_le_bytes()); // requestor@12
-        // (No live socket here; just assert the encoder shape via a hand build.)
-        let requestor = rd_u32(&conn_ev, 12).unwrap();
-        let mut notify = [0u8; 32];
-        notify[0] = 31;
-        let mut req = vec![OP_SEND_EVENT, 0, 0, 0];
-        req.extend_from_slice(&requestor.to_le_bytes());
-        req.extend_from_slice(&0u32.to_le_bytes());
-        req.extend_from_slice(&notify);
-        let req = finish(req);
-        assert_eq!(req[0], OP_SEND_EVENT);
-        assert_eq!(req.len(), 44);
-        assert_eq!(u16::from_le_bytes([req[2], req[3]]), 11); // length in words
-        assert_eq!(rd_u32(&req, 4).unwrap(), 0xCAFE); // destination
     }
 
     #[test]

@@ -41,13 +41,26 @@ Controls stay self-drawn: Linux has no platform UI framework to draw them.
 
 ## Clipboard
 
+Both backends carry text, HTML (`text/html`) and images (`image/png` written;
+PNG, BMP, JPEG, GIF and WebP read), and the **primary selection**: a text
+field's selection becomes it, and a middle click on editable text pastes it at
+the click (see [text-editing.md](../text-editing.md#the-clipboard)).
+
 - **Wayland**: copy and paste go through `wl_data_device`, offering and accepting
-  `text/plain;charset=utf-8`, `UTF8_STRING` and `text/plain`. A paste reads the
-  selection through a pipe and gives up after a second; the compositor's events
-  are queued meanwhile, so the window keeps answering. Only the window with
-  keyboard focus sees the selection, as the protocol requires.
-- **X11**: copying takes the `CLIPBOARD` selection and serves it to other apps.
-  Pasting text copied in another app isn't wired up yet.
+  `text/plain;charset=utf-8`, `UTF8_STRING`, `text/plain` and the rich types. A
+  paste reads the selection through a pipe and gives up after a second; the
+  compositor's events are queued meanwhile, so the window keeps answering. Only
+  the window with keyboard focus sees the selection, as the protocol requires.
+  The primary selection uses `zwp_primary_selection_device_manager_v1` when the
+  compositor has it (sway, KWin, Mutter do).
+- **X11**: copying owns the `CLIPBOARD` (or `PRIMARY`) selection and answers
+  `SelectionRequest` for `TARGETS`, the text types (`UTF8_STRING`, `STRING`,
+  …), `text/html` and `image/png`. Pasting sends `ConvertSelection` (`TARGETS`
+  first, then the best type per format; `UTF8_STRING`, then `STRING`, for an
+  owner without `TARGETS`) and never blocks the loop: the answer comes back as
+  `SelectionNotify` and reaches the app as `Event::Clipboard`, which the `App`
+  pastes. Data bigger than one request travels `INCR`, in both directions. A
+  read whose owner stays silent ends after two seconds.
 
 ## File dialogs
 
@@ -63,7 +76,6 @@ work in Flatpak and Snap sandboxes and show the desktop's own picker. They need
 
 ## Known gaps
 
-- On X11, pasting text another app copied isn't wired up yet.
 - Typed text comes from a simple reading of the keymap: Shift (and Caps Lock, on
   Wayland) pick the second level, but AltGr levels aren't applied yet. Dead keys
   and compose sequences work, from the locale's Compose file (see

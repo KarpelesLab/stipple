@@ -269,6 +269,48 @@ pub trait Window {
     /// Set the system clipboard's text. Default: a no-op.
     fn set_clipboard(&self, _text: &str) {}
 
+    /// Read the clipboard or the primary selection in the representations
+    /// `formats` asks for. A backend whose owner answers later (X11, when
+    /// another client owns the selection) returns
+    /// [`ClipboardRead::Pending`] and delivers the content as
+    /// [`Event::Clipboard`](crate::platform::Event::Clipboard), to this window,
+    /// within a couple of seconds (with `None` when it timed out). Default: the
+    /// clipboard's text through [`Window::clipboard`], and no primary
+    /// selection.
+    fn read_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        formats: crate::platform::clipboard::ClipboardFormats,
+    ) -> crate::platform::clipboard::ClipboardRead {
+        use crate::platform::clipboard::{ClipboardContent, ClipboardKind, ClipboardRead};
+        let text = (kind == ClipboardKind::Clipboard && formats.text)
+            .then(|| self.clipboard())
+            .flatten();
+        ClipboardRead::Ready(text.map(ClipboardContent::text))
+    }
+
+    /// Put `content` on the clipboard or the primary selection, every
+    /// representation it has. Default: the clipboard's text through
+    /// [`Window::set_clipboard`], and no primary selection.
+    fn write_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        content: &crate::platform::clipboard::ClipboardContent,
+    ) {
+        if kind == crate::platform::clipboard::ClipboardKind::Clipboard
+            && let Some(text) = &content.text
+        {
+            self.set_clipboard(text);
+        }
+    }
+
+    /// Whether [`ClipboardKind::Primary`](crate::platform::clipboard::ClipboardKind::Primary)
+    /// reaches a system-wide selection. Default: `false` (the `App` then keeps
+    /// it in process).
+    fn has_primary_selection(&self) -> bool {
+        false
+    }
+
     /// Make the title bar dark or light, to match content whose theme changed
     /// (see [`WindowAttributes::dark`]). Default: a no-op. Honored on Windows
     /// and macOS.

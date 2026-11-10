@@ -72,6 +72,11 @@ impl Atoms {
         })
     }
 
+    /// The `XdndSelection` atom (drops are converted from it).
+    pub(super) fn selection_atom(&self) -> u32 {
+        self.selection
+    }
+
     /// Whether `ty` is one of the messages a drag source sends a target.
     pub(super) fn is_xdnd(&self, ty: u32) -> bool {
         ty != 0 && [self.enter, self.position, self.leave, self.drop].contains(&ty)
@@ -188,7 +193,7 @@ fn round_trip(
 
 /// Read `prop` of `window` (any type), optionally deleting it. Returns its
 /// type and bytes.
-fn get_property(
+pub(super) fn get_property(
     conn: &mut Conn,
     window: u32,
     prop: u32,

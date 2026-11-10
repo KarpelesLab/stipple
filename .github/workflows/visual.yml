@@ -898,6 +898,10 @@ jobs:
   # Clipboard: copy a field's text and paste it back, doubling it. Verifies the
   # in-app copy/paste path (Ctrl+A/C/V) via a before/after screenshot diff, and
   # the OS round-trip by reading the X11 CLIPBOARD selection back with xclip.
+  # Then, against xclip: pasting another client's CLIPBOARD (also a large one,
+  # which arrives INCR), the field's selection as PRIMARY and a middle click
+  # pasting another client's PRIMARY, and text + HTML + a PNG image copied out
+  # (the PNG goes INCR) and pasted in.
   visual-clipboard:
     name: Visual test (Clipboard / X11)
     runs-on: ubuntu-latest
@@ -950,6 +954,75 @@ jobs:
           sel=$(xclip -o -selection clipboard 2>/dev/null || true)
           echo "X11 CLIPBOARD = '$sel'"
           [ "$sel" = "Clip" ]
+
+      - name: Paste from other clients, and PRIMARY
+        env:
+          DISPLAY: ":99"
+        run: |
+          log=visual_output/clipboard.log
+          # Ctrl+V reads another client's CLIPBOARD (asynchronously).
+          printf 'from xclip' | xclip -selection clipboard
+          sleep 0.5
+          xdotool key ctrl+a ctrl+v
+          sleep 1
+          grep -qx 'field: from xclip' "$log"
+          # Selecting text makes it the PRIMARY selection.
+          xdotool key ctrl+a
+          sleep 0.5
+          primary=$(xclip -o -selection primary)
+          echo "X11 PRIMARY = '$primary'"
+          [ "$primary" = "from xclip" ]
+          # A middle click on the field pastes another client's PRIMARY there.
+          printf 'MIDDLE' | xclip -selection primary
+          sleep 0.5
+          wid=$(xdotool search --name "Stipple Clipboard" | head -1)
+          xdotool mousemove --window "$wid" 45 115 click 2
+          sleep 1
+          grep -q '^field: .*MIDDLE' "$log"
+          # A paste larger than one request comes in INCR chunks.
+          head -c 300000 /dev/urandom | base64 -w0 > visual_output/big.txt
+          xclip -selection clipboard < visual_output/big.txt
+          sleep 0.5
+          xdotool key ctrl+a ctrl+v
+          sleep 2
+          grep -q "^field: $(head -c 64 visual_output/big.txt)" "$log"
+          echo "pasted $(wc -c < visual_output/big.txt) bytes"
+
+      - name: Copy text + HTML + an image out, and paste them in
+        env:
+          DISPLAY: ":99"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          ./target/release/clipboarddemo --copy-rich > visual_output/rich.log 2>&1 &
+          rich=$!
+          sleep 3
+          xdotool key Tab ctrl+c     # this field's copy is text + HTML + PNG
+          sleep 1
+          xclip -o -selection clipboard -t TARGETS | tee visual_output/targets.txt
+          grep -qx 'text/html' visual_output/targets.txt
+          grep -qx 'image/png' visual_output/targets.txt
+          grep -qx 'UTF8_STRING' visual_output/targets.txt
+          [ "$(xclip -o -selection clipboard)" = "stipple rich clipboard" ]
+          [ "$(xclip -o -selection clipboard -t text/html)" = "<b>stipple</b> rich <i>clipboard</i>" ]
+          # The image is ~470 KB of PNG: served INCR.
+          xclip -o -selection clipboard -t image/png > visual_output/copied.png
+          identify visual_output/copied.png | tee /dev/stderr | grep -q 'PNG 400x300'
+          kill "$rich"
+          # Paste the image back in from xclip (INCR the other way)...
+          xclip -selection clipboard -t image/png -i visual_output/copied.png
+          sleep 0.5
+          timeout 20 ./target/release/clipboarddemo --paste-rich | tee visual_output/paste-rich.log
+          grep -q "^pasted Clipboard: .*image=400x300" visual_output/paste-rich.log
+          # ...and HTML.
+          printf '<p>pasted <b>html</b></p>' | xclip -selection clipboard -t text/html
+          sleep 0.5
+          timeout 20 ./target/release/clipboarddemo --paste-rich | tee -a visual_output/paste-rich.log
+          grep -q "^pasted Clipboard: .*html=\"<p>pasted <b>html</b></p>\"" visual_output/paste-rich.log
+          # The app reads another client's PRIMARY too.
+          printf 'primary text' | xclip -selection primary
+          sleep 0.5
+          timeout 20 ./target/release/clipboarddemo --paste-primary | tee -a visual_output/paste-rich.log
+          grep -q '^pasted Primary: text="primary text"' visual_output/paste-rich.log
 
       - name: Stop the app and Xvfb
         if: always()
@@ -1588,9 +1661,48 @@ jobs:
             2>> visual_output/wtype.log; sleep 1
           out=$(timeout 10 wl-paste -n || true)
           echo "after paste + copy, wl-paste = '$out'"
+          # The selected field text is also the primary selection
+          # (zwp_primary_selection_device_manager_v1).
+          primary=$(timeout 10 wl-paste --primary -n || true)
+          echo "primary selection = '$primary'"
           kill "$CLIP_PID" 2>/dev/null || true
           echo "=== wl-clipboard.log ==="; cat visual_output/wl-clipboard.log || true
           [ "$out" = "ClipPaste" ]
+          [ "$primary" = "ClipPaste" ]
+
+          # --- rich clipboard: a field whose copy is text + HTML + a PNG. ---
+          ./target/release/clipboarddemo --copy-rich > visual_output/wl-rich.log 2>&1 &
+          CLIP_PID=$!
+          sleep 4
+          wtype -s 500 -d 120 -k Tab -M ctrl -k c -m ctrl 2>> visual_output/wtype.log; sleep 1
+          timeout 10 wl-paste --list-types | tee visual_output/wl-types.txt
+          grep -qx 'text/html' visual_output/wl-types.txt
+          grep -qx 'image/png' visual_output/wl-types.txt
+          [ "$(timeout 10 wl-paste -n -t text/html)" = "<b>stipple</b> rich <i>clipboard</i>" ]
+          timeout 10 wl-paste -t image/png > visual_output/wl-copied.png
+          identify visual_output/wl-copied.png | tee /dev/stderr | grep -q 'PNG 400x300'
+          kill "$CLIP_PID" 2>/dev/null || true
+          # Paste an image and the primary selection in. The app asks every
+          # second until it has keyboard focus (and so the selection); wtype's
+          # key gives it a keyboard.
+          wl-copy -t image/png < visual_output/wl-copied.png
+          sleep 1
+          ./target/release/clipboarddemo --paste-rich > visual_output/wl-paste-rich.log 2>&1 &
+          CLIP_PID=$!
+          sleep 3
+          wtype -s 500 -k Tab 2>> visual_output/wtype.log
+          timeout 15 tail --pid="$CLIP_PID" -f /dev/null || kill "$CLIP_PID" 2>/dev/null || true
+          cat visual_output/wl-paste-rich.log
+          grep -q '^pasted Clipboard: .*image=400x300' visual_output/wl-paste-rich.log
+          wl-copy --primary "wl primary"
+          sleep 1
+          ./target/release/clipboarddemo --paste-primary > visual_output/wl-paste-primary.log 2>&1 &
+          CLIP_PID=$!
+          sleep 3
+          wtype -s 500 -k Tab 2>> visual_output/wtype.log
+          timeout 15 tail --pid="$CLIP_PID" -f /dev/null || kill "$CLIP_PID" 2>/dev/null || true
+          cat visual_output/wl-paste-primary.log
+          grep -q '^pasted Primary: text="wl primary"' visual_output/wl-paste-primary.log
 
           echo "=== seatd.log ==="; cat seatd.log || true
           echo "=== sway.log ==="; cat sway.log || true
@@ -1947,6 +2059,38 @@ jobs:
           # ...and another process sees it on the OS clipboard.
           powershell -NoProfile -Command Get-Clipboard | tee os-clipboard.txt
           grep -q 'stipple clipboard .* round-trip' os-clipboard.txt
+
+      - name: Round-trip HTML and an image through the system clipboard
+        shell: bash
+        run: |
+          # CF_UNICODETEXT + "HTML Format" (CF_HTML) + CF_DIBV5 + "PNG", read back.
+          timeout 30 ./target/release/clipboarddemo.exe --roundtrip-rich | tee rich.log
+          grep -q 'rich roundtrip: ok' rich.log
+          # Another process sees each format (.NET decodes CF_HTML and the bitmap).
+          powershell -NoProfile -STA -Command '
+            Add-Type -AssemblyName System.Windows.Forms
+            $d = [System.Windows.Forms.Clipboard]::GetDataObject()
+            "formats: " + ($d.GetFormats() -join ",")
+            [System.Windows.Forms.Clipboard]::GetText([System.Windows.Forms.TextDataFormat]::Html)
+            $i = [System.Windows.Forms.Clipboard]::GetImage()
+            "image: $($i.Width)x$($i.Height)"' | tee os-rich.txt
+          grep -q 'HTML Format' os-rich.txt
+          grep -q 'PNG' os-rich.txt
+          grep -q 'StartFragment:' os-rich.txt
+          grep -q '<b>stipple</b> rich <i>clipboard</i>' os-rich.txt
+          grep -q 'image: 400x300' os-rich.txt
+          # ...and the app reads what another process put there: a bitmap
+          # (Windows synthesizes the DIBs from it), then HTML.
+          powershell -NoProfile -STA -Command '
+            Add-Type -AssemblyName System.Windows.Forms
+            Add-Type -AssemblyName System.Drawing
+            $b = New-Object System.Drawing.Bitmap 32,16
+            [System.Windows.Forms.Clipboard]::SetImage($b)'
+          timeout 30 ./target/release/clipboarddemo.exe --read | tee read.log
+          grep -q 'image=32x16' read.log
+          powershell -NoProfile -Command 'Set-Clipboard -Value "<i>from powershell</i>" -AsHtml'
+          timeout 30 ./target/release/clipboarddemo.exe --read | tee -a read.log
+          grep -q 'html=".*<i>from powershell</i>' read.log
 
       - name: Drive the native menu bar and context menu
         shell: powershell
@@ -2500,6 +2644,23 @@ jobs:
           # ...and another process sees it on the general pasteboard.
           pbpaste | tee os-clipboard.txt
           grep -q 'stipple clipboard .* round-trip' os-clipboard.txt
+
+      - name: Round-trip HTML and an image through the system clipboard
+        run: |
+          # public.utf8-plain-text + public.html + public.png, read back.
+          perl -e 'alarm 30; exec @ARGV' ./target/release/clipboarddemo --roundtrip-rich | tee rich.log
+          grep -q 'rich roundtrip: ok' rich.log
+          # Another process sees each type.
+          osascript -e 'clipboard info' | tee os-rich.txt
+          grep -q 'HTML' os-rich.txt
+          grep -q 'PNGf' os-rich.txt
+          # ...and the app reads a PNG another process put there.
+          png="$PWD/docs/screenshots/stipple-gpu.png"
+          osascript -e "set the clipboard to (read (POSIX file \"$png\") as «class PNGf»)"
+          w=$(sips -g pixelWidth "$png" | awk '/pixelWidth/ {print $2}')
+          h=$(sips -g pixelHeight "$png" | awk '/pixelHeight/ {print $2}')
+          perl -e 'alarm 30; exec @ARGV' ./target/release/clipboarddemo --read | tee read.log
+          grep -q "image=${w}x${h}" read.log
 
       - name: Drive the native menu bar and context menu
         run: |

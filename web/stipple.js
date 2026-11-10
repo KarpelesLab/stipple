@@ -85,6 +85,7 @@ export async function start(canvas, wasmUrl, options = {}) {
   let timer = null;
   let framePending = false;
   let pendingCopy = null;
+  let pendingHtml = null;
 
   const str = (ptr, len) => dec.decode(new Uint8Array(e.memory.buffer, ptr, len));
   // Copy bytes into memory the module allocates; the export that receives
@@ -298,8 +299,19 @@ export async function start(canvas, wasmUrl, options = {}) {
         pendingCopy = str(ptr, len);
         // Needs a secure context and a user gesture; the copy event below
         // covers Ctrl/Cmd+C and X either way.
-        try { navigator.clipboard?.writeText(pendingCopy)?.catch(() => {}); } catch (_) {}
+        try {
+          if (pendingHtml !== null && typeof ClipboardItem !== "undefined") {
+            const blob = (s, type) => new Blob([s], { type });
+            navigator.clipboard?.write([new ClipboardItem({
+              "text/plain": blob(pendingCopy, "text/plain"),
+              "text/html": blob(pendingHtml, "text/html"),
+            })])?.catch(() => {});
+          } else {
+            navigator.clipboard?.writeText(pendingCopy)?.catch(() => {});
+          }
+        } catch (_) {}
       },
+      clipboard_write_html(ptr, len) { pendingHtml = len ? str(ptr, len) : null; },
       open_file(id, ptr, len) {
         Promise.resolve(pickFile(str(ptr, len))).then(async (file) => {
           if (!file) return e.stipple_file_cancel(id);
@@ -513,13 +525,19 @@ export async function start(canvas, wasmUrl, options = {}) {
     const text = ev.clipboardData?.getData("text/plain");
     if (text == null) return;
     ev.preventDefault();
+    if (e.stipple_paste_html) {
+      const [hp, hn] = passStr(ev.clipboardData?.getData("text/html") ?? "");
+      e.stipple_paste_html(hp, hn);
+    }
     const [p, n] = passStr(text);
     e.stipple_paste(p, n);
   });
   const copy = (ev) => {
     if (!focused() || pendingCopy === null) return;
     ev.clipboardData?.setData("text/plain", pendingCopy);
+    if (pendingHtml !== null) ev.clipboardData?.setData("text/html", pendingHtml);
     pendingCopy = null;
+    pendingHtml = null;
     ev.preventDefault();
   };
   document.addEventListener("copy", copy);

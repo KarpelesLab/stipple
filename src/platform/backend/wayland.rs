@@ -1177,7 +1177,35 @@ impl Window for WaylandWindow {
         clipboard::drag_out::start(&mut self.conn.lock().unwrap(), self.surface, data)
     }
     fn set_clipboard(&self, text: &str) {
-        clipboard::set_text(&mut self.conn.lock().unwrap(), text);
+        let content = crate::platform::clipboard::ClipboardContent::text(text);
+        clipboard::set(&mut self.conn.lock().unwrap(), &content);
+    }
+    fn read_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        formats: crate::platform::clipboard::ClipboardFormats,
+    ) -> crate::platform::clipboard::ClipboardRead {
+        use crate::platform::clipboard::{ClipboardKind, ClipboardRead};
+        let mut conn = self.conn.lock().unwrap();
+        ClipboardRead::Ready(match kind {
+            ClipboardKind::Clipboard => clipboard::read(&mut conn, formats),
+            ClipboardKind::Primary => clipboard::primary::read(&mut conn, formats),
+        })
+    }
+    fn write_clipboard(
+        &self,
+        kind: crate::platform::clipboard::ClipboardKind,
+        content: &crate::platform::clipboard::ClipboardContent,
+    ) {
+        use crate::platform::clipboard::ClipboardKind;
+        let mut conn = self.conn.lock().unwrap();
+        match kind {
+            ClipboardKind::Clipboard => clipboard::set(&mut conn, content),
+            ClipboardKind::Primary => clipboard::primary::set(&mut conn, content),
+        }
+    }
+    fn has_primary_selection(&self) -> bool {
+        self.conn.lock().unwrap().clip.primary.available()
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         text_input::set_state(&mut self.conn.lock().unwrap(), state);
@@ -1403,6 +1431,7 @@ where
     let mut decoration_name = None;
     let mut activation_name = None;
     let mut bell_name = None;
+    let mut primary_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1429,6 +1458,7 @@ where
                     decor::MANAGER => decoration_name = Some(name),
                     attention::ACTIVATION => activation_name = Some(name),
                     attention::SYSTEM_BELL => bell_name = Some(name),
+                    clipboard::primary::MANAGER => primary_name = Some(name),
                     _ => {}
                 }
             }
@@ -1490,6 +1520,11 @@ where
     if let (Some(seat), Some((name, version))) = (seat, data_manager) {
         let manager = bind(&mut conn, name, "wl_data_device_manager", version);
         clipboard::setup(&mut conn, manager, version, seat);
+    }
+    // ...and the primary selection through its own device.
+    if let (Some(seat), Some(name)) = (seat, primary_name) {
+        let manager = bind(&mut conn, name, clipboard::primary::MANAGER, 1);
+        clipboard::primary::setup(&mut conn, manager, seat);
     }
     // Input methods go through the seat's text input.
     if let (Some(seat), Some(name)) = (seat, text_input_name) {

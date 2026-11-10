@@ -29,6 +29,7 @@
 #![deny(unsafe_code)] // `platform` and `gpu` opt in where they talk to the OS
 
 pub mod anim;
+mod app_clipboard;
 mod app_dnd;
 mod app_lifecycle;
 mod app_pointer;
@@ -125,6 +126,8 @@ pub struct App<S> {
     native_tray: Option<crate::platform::NativeTray>,
     // Close/quit confirmation and window focus hooks (see `app_lifecycle`).
     lifecycle: app_lifecycle::Lifecycle<S>,
+    // Pending clipboard reads, the primary selection, and `on_clipboard`.
+    clipboard: app_clipboard::ClipboardState<S>,
 }
 
 /// The active theme as a function of the app state and the theme set with
@@ -470,6 +473,7 @@ impl<S: 'static> App<S> {
             tray: None,
             native_tray: None,
             lifecycle: Default::default(),
+            clipboard: Default::default(),
         }
     }
 
@@ -2004,6 +2008,7 @@ impl<S: 'static> App<S> {
     /// relative to the previously returned frame. The first call reports
     /// [`Damage::Full`].
     pub fn render_frame(&mut self) -> (Pixmap, Damage) {
+        self.run_clipboard_requests(None);
         self.refresh_theme();
         self.pump_content();
         let App {
@@ -2012,9 +2017,12 @@ impl<S: 'static> App<S> {
             font,
             panes,
             viewport_content,
+            clipboard,
             ..
         } = self;
-        panes[0].render_frame(state, theme, font.as_ref(), viewport_content)
+        let frame = panes[0].render_frame(state, theme, font.as_ref(), viewport_content);
+        clipboard.sync_primary(panes[0].tree.as_ref(), panes[0].focused, None);
+        frame
     }
 
     /// Render a single frame off-screen and return it as a [`Pixmap`]. Needs no
@@ -2525,6 +2533,8 @@ impl<S: 'static> App<S> {
                        window: &dyn crate::platform::Window,
                        force: bool| {
             app_dbg(format_args!("present: start"));
+            // Clipboard writes and reads handlers queued.
+            app.run_clipboard_requests(Some(window));
             // The theme may follow the state (`App::theme_with`); the title
             // bar follows a switch between light and dark.
             let was_dark = app.theme.is_dark();
@@ -2548,6 +2558,7 @@ impl<S: 'static> App<S> {
                 font,
                 panes,
                 viewport_content,
+                clipboard,
                 ..
             } = app;
             let pane = &mut panes[idx];
@@ -2572,6 +2583,8 @@ impl<S: 'static> App<S> {
                     {
                         window.set_cursor(cursor);
                     }
+                    // A text field's selection is the primary selection.
+                    clipboard.sync_primary(pane.tree.as_ref(), pane.focused, Some(window));
 
                     // Push the freshly-built accessibility tree to the OS bridge
                     // so a screen reader sees the current element hierarchy and
@@ -2752,6 +2765,22 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                Event::Clipboard { kind, content } => {
+                    if self.clipboard_event(kind, content) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                // A middle click on editable text pastes the primary selection
+                // there (X11/Wayland's select-and-middle-click).
+                Event::PointerButton {
+                    button: PointerButton::Middle,
+                    state: ButtonState::Pressed,
+                    position,
+                } if self.pane_paste_primary_at(idx, position, Some(window)) => {
+                    present(&mut self, &mut surfaces, idx, window, false);
+                    ControlFlow::Wait
+                }
                 Event::Text(text) => {
                     // An open menu takes typed letters as mnemonics.
                     if self.menu_text(idx, &text) {
@@ -2868,17 +2897,24 @@ impl<S: 'static> App<S> {
                         // and push the mirror to the OS after a copy/cut, so
                         // editing interoperates with other apps (the mirror alone
                         // covers the in-app case + headless).
-                        if input == KeyInput::Paste
-                            && let Some(text) = window.clipboard()
-                        {
-                            crate::core::set_clipboard_text(&text);
+                        // (On X11 the owner may answer later: the paste then
+                        // happens on `Event::Clipboard`.)
+                        if input == KeyInput::Paste && !self.clipboard_before_paste(idx, window) {
+                            return ControlFlow::Wait;
                         }
                         let writes_clipboard = matches!(input, KeyInput::Copy | KeyInput::Cut);
-                        if self.pane_press_key(idx, input) {
-                            present(&mut self, &mut surfaces, idx, window, false);
+                        let changed = self.pane_press_key(idx, input);
+                        // (Unless the handler put richer content there itself,
+                        // which the present below hands over.)
+                        if writes_clipboard && !crate::core::clipboard_write_queued() {
+                            let text = crate::core::clipboard_text();
+                            window.write_clipboard(
+                                crate::platform::clipboard::ClipboardKind::Clipboard,
+                                &crate::platform::clipboard::ClipboardContent::text(text),
+                            );
                         }
-                        if writes_clipboard {
-                            window.set_clipboard(&crate::core::clipboard_text());
+                        if changed {
+                            present(&mut self, &mut surfaces, idx, window, false);
                         }
                     }
                     ControlFlow::Wait

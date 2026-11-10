@@ -288,6 +288,14 @@ pub enum Event {
     /// The user dropped `data` at `position`. Ends the drag (no
     /// [`DragLeave`](Event::DragLeave) follows).
     Drop { position: Point, data: DropData },
+    /// The answer to a [`Window::read_clipboard`](crate::platform::Window::read_clipboard)
+    /// that returned [`ClipboardRead::Pending`](crate::platform::clipboard::ClipboardRead::Pending):
+    /// the content (`None` when the owner refused, had none of the formats
+    /// asked for, or didn't answer in time).
+    Clipboard {
+        kind: crate::platform::clipboard::ClipboardKind,
+        content: Option<crate::platform::clipboard::ClipboardContent>,
+    },
 }
 
 /// The kinds of data a drag carries, known as soon as it enters a window
