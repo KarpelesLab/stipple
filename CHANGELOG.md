@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.4...stipple-v0.0.5) - 2026-11-10
+
+### Added
+
+- *(input)* raw pointer and wheel events for custom elements
+- *(text)* system fonts by name, bold/italic, per-element fonts, fallbacks, metrics and decorations
+
+### Other
+
+- update screenshots from CI
+
 ## [0.0.4](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.3...stipple-v0.0.4) - 2026-11-10
 
 ### Added
