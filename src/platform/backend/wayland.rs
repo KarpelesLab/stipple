@@ -1094,6 +1094,9 @@ struct WaylandWindow {
     /// on, which `output` names), shared with its surface.
     scale: Rc<Cell<u32>>,
     output: Cell<Option<u32>>,
+    /// Whether its `xdg_surface` has had its first configure: attaching a
+    /// buffer before that is a protocol error, so presents wait for it.
+    configured: Rc<Cell<bool>>,
     /// The icon's pixels, which must stay mapped while the compositor uses them.
     icon: RefCell<Option<ShmBuffer>>,
     /// Whether the app takes the drag over the surface (see
@@ -1131,6 +1134,7 @@ impl WaylandWindow {
             state: Cell::new((false, false)),
             scale: Rc::new(Cell::new(scale)),
             output: Cell::new(None),
+            configured: Rc::new(Cell::new(false)),
             icon: RefCell::new(icon),
             drop_accepted: Cell::new(false),
         }
@@ -1408,6 +1412,7 @@ impl Window for WaylandWindow {
             shm: self.shm,
             size: self.size.get(),
             scale: self.scale.clone(),
+            configured: self.configured.clone(),
             buffer: None,
         })
     }
@@ -1422,6 +1427,8 @@ struct WaylandSurface {
     size: PhysicalSize,
     /// Its window's buffer scale.
     scale: Rc<Cell<u32>>,
+    /// Whether its window has been configured (no buffer before that).
+    configured: Rc<Cell<bool>>,
     buffer: Option<ShmBuffer>,
 }
 
@@ -1447,6 +1454,10 @@ impl Surface for WaylandSurface {
     fn present(&mut self, pixmap: &Pixmap, _damage: &[crate::geometry::Rect]) {
         let size = pixmap.size();
         if size.width == 0 || size.height == 0 {
+            return;
+        }
+        // Before the first configure; the configure's redraw paints it.
+        if !self.configured.get() {
             return;
         }
         let mut conn = self.conn.lock().unwrap();
@@ -2095,6 +2106,7 @@ where
                 arg_u32(&mut a, first_word);
                 let _ = conn.send(win.xdg_surface, XDG_SURFACE_ACK_CONFIGURE, &a);
             }
+            win.configured.set(true);
             // Apply the size from the toplevel.configure this one completes:
             // the window's, of which the content is what our title bar (if
             // any) leaves.
