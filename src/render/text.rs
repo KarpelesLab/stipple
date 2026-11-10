@@ -1451,9 +1451,18 @@ mod tests {
         assert!(m.max_advance >= cell);
         assert!(m.ascent > 0.0 && m.descent > 0.0);
         assert!((m.ascent + m.descent + m.line_gap - m.line_height).abs() < 0.01);
-        // Underline below the baseline, inside the descent; strikeout above
-        // it, below the x-height.
-        assert!(m.underline_position > 0.0 && m.underline_position < m.descent);
+        // Underline centred below the baseline (its top edge may touch or
+        // cross it for fonts with a thick, high underline), inside the
+        // descent; strikeout above it, below the x-height.
+        let underline_center = m.underline_position + m.underline_thickness / 2.0;
+        assert!(
+            underline_center > 0.0 && m.underline_position < m.descent,
+            "underline {} (thickness {}), descent {}, family {:?}",
+            m.underline_position,
+            m.underline_thickness,
+            m.descent,
+            mono.family_name()
+        );
         assert!(m.underline_thickness > 0.0 && m.strikeout_thickness > 0.0);
         assert!(m.strikeout_position < 0.0 && -m.strikeout_position < m.x_height);
         assert!(m.x_height < m.cap_height && m.cap_height < m.ascent);
