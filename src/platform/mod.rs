@@ -89,7 +89,9 @@ pub use pointer::{
 };
 pub use secure::{secure_input, set_secure_input};
 pub use shell::{Notification, notify, open_path, open_url};
-pub use window::{CursorIcon, ImeState, UserAttention, Window, WindowAttributes, WindowRequest};
+pub use window::{
+    CursorIcon, ImeState, UserAttention, Window, WindowAttributes, WindowInfo, WindowRequest,
+};
 #[cfg_attr(
     not(any(target_os = "windows", target_os = "macos")),
     allow(unused_imports)

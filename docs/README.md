@@ -39,6 +39,9 @@ How to build, package and run on each platform, and what works there today.
 | Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
+| Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
+| Window titles at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | ❌ |
+| Window position, size, resize increments, state | X11 ⁴⁵, Wayland: size and state | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | ❌ |
 | Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ✅ ¹² |
 | Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
 | Mirrored right-to-left layouts | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ |
@@ -245,6 +248,12 @@ panel drawn in the window in the theme on Linux and Android. CI answers the
 native one with an in-process self-test on Windows and macOS (screenshotting
 it), and drives the drawn one with `xdotool` on X11. See
 [os-integration.md](os-integration.md#message-boxes).
+⁴⁵ CI's `multiwindow --selftest` retitles, moves and resizes windows and opens
+and closes one while the app runs. X11 is checked from outside with `xprop`
+and `xdotool` under Xvfb; Wayland with `swaymsg` under sway (titles and
+windows: Wayland lets no app place its windows, and has no resize
+increments); Windows and macOS through what the backend reads back from the
+OS. See [windows-and-cursors.md](windows-and-cursors.md#several-windows).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -271,7 +280,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop
-- [Window control and cursors](windows-and-cursors.md): size limits, maximize, fullscreen, the icon, and cursor shapes
+- [Windows and cursors](windows-and-cursors.md): several windows opened and closed at run time, titles, position, size and state, size limits, maximize, fullscreen, the icon, and cursor shapes
 - [Closing, quitting, focus and attention](window-lifecycle.md): asking before a window closes or the app quits, window focus, attention requests, the bell, and Wayland title bars
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

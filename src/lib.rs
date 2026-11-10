@@ -50,6 +50,8 @@ pub mod render;
 pub mod style;
 mod web_app;
 pub mod widgets;
+#[cfg(test)]
+mod window_tests;
 
 pub use app_lifecycle::CloseResponse;
 
@@ -129,7 +131,17 @@ pub struct App<S> {
     lifecycle: app_lifecycle::Lifecycle<S>,
     // Pending clipboard reads, the primary selection, and `on_clipboard`.
     clipboard: app_clipboard::ClipboardState<S>,
+    // Runtime windows: whether closing the last one ends the loop, what to
+    // tell the state when a window moves or changes state, and the windows
+    // asked to close that haven't yet (each closes on its own next event).
+    exit_on_last_closed: bool,
+    on_window_change: Option<WindowChangeFn<S>>,
+    closing: Vec<WindowId>,
 }
+
+/// Called when a window moves, resizes or changes state (see
+/// [`App::on_window_change`]).
+pub type WindowChangeFn<S> = Box<dyn FnMut(&mut S, WindowId, &crate::platform::WindowInfo)>;
 
 /// The active theme as a function of the app state and the theme set with
 /// [`App::theme`] (see [`App::theme_with`]).
@@ -259,6 +271,21 @@ fn merge_regions(base: Damage, extra: Vec<Rect>) -> Damage {
 /// each maintains its own input focus and damage tracking independently.
 struct Pane<S> {
     view: ViewFn<S>,
+    /// The app's id for this window, and the backend's once it's open.
+    id: WindowId,
+    native: Option<WindowId>,
+    /// What the backend last reported of the window, and whether the view
+    /// read it (so a change rebuilds it).
+    info: crate::platform::WindowInfo,
+    info_read: bool,
+    /// The title the view gave the window last build (`Cx::window_title`),
+    /// and the one last sent to the window from it.
+    built_title: Option<String>,
+    view_title: Option<String>,
+    /// How many frames were built, to see whether an event changed anything.
+    builds: u64,
+    /// Whether the window's title bar was last made dark.
+    dark_sent: Option<bool>,
     /// The app's handle, given to each frame's [`Cx`].
     handle: AppHandle<S>,
     attrs: WindowAttributes,
@@ -382,9 +409,8 @@ struct Pane<S> {
     focus_visible: bool,
     styled_actions: Vec<ActionId>,
     styled_drops: Vec<crate::core::DropId>,
-    // The platform window showing this pane, once open, and whether it has
+    // Whether the window has
     // keyboard focus (see `Cx::window_focused`).
-    window_id: Option<WindowId>,
     window_focused: bool,
 }
 
@@ -400,9 +426,17 @@ impl<S> std::fmt::Debug for App<S> {
 
 impl<S: 'static> Pane<S> {
     /// Create a pane for `view` with default window attributes.
-    fn new(view: ViewFn<S>, handle: AppHandle<S>) -> Self {
+    fn new(id: WindowId, view: ViewFn<S>, handle: AppHandle<S>) -> Self {
         Self {
             view,
+            id,
+            native: None,
+            info: Default::default(),
+            info_read: false,
+            built_title: None,
+            view_title: None,
+            builds: 0,
+            dark_sent: None,
             handle,
             attrs: WindowAttributes::new(),
             scale: ScaleFactor::IDENTITY,
@@ -458,7 +492,6 @@ impl<S: 'static> Pane<S> {
             focus_visible: false,
             styled_actions: Vec::new(),
             styled_drops: Vec::new(),
-            window_id: None,
             window_focused: true,
         }
     }
@@ -475,7 +508,7 @@ impl<S: 'static> App<S> {
             theme_fn: None,
             font: None,
             panes: vec![{
-                let mut pane = Pane::new(Box::new(build), handle.clone());
+                let mut pane = Pane::new(WindowId::PRIMARY, Box::new(build), handle.clone());
                 pane.primary = true;
                 pane
             }],
@@ -492,6 +525,9 @@ impl<S: 'static> App<S> {
             native_tray: None,
             lifecycle: Default::default(),
             clipboard: Default::default(),
+            exit_on_last_closed: true,
+            on_window_change: None,
+            closing: Vec::new(),
         }
     }
 
@@ -508,18 +544,46 @@ impl<S: 'static> App<S> {
     }
 
     /// Register an additional OS window with its own `view` onto the shared
-    /// state. Stipple drives every registered window once [`App::run`] starts.
+    /// state, returning its id. Stipple opens every registered window once
+    /// [`App::run`] starts. To open one while the app runs, use
+    /// [`AppHandle::open_window`].
     ///
-    /// Note: true OS multi-window presentation is wired per backend (X11 first);
-    /// on backends that don't yet support it only the primary window is shown.
+    /// Backends with a single window (iOS, Android, the web) show only the
+    /// primary one.
     pub fn open_window(
         &mut self,
         attrs: WindowAttributes,
         view: impl FnMut(&S, &mut Cx<'_, S>) -> Element + 'static,
-    ) {
-        let mut pane = Pane::new(Box::new(view), self.handle.clone());
+    ) -> WindowId {
+        let id = self.handle.next_window_id();
+        let mut pane = Pane::new(id, Box::new(view), self.handle.clone());
         pane.attrs = attrs;
         self.panes.push(pane);
+        id
+    }
+
+    /// Whether closing the last window ends the app (the default). With
+    /// `false` the app keeps running with no window on screen (the last one
+    /// is hidden rather than destroyed), say for a tray icon or for the
+    /// macOS habit of staying open; [`AppHandle::open_window`] opens new
+    /// windows and [`AppHandle::exit`] ends it.
+    pub fn exit_on_last_window_closed(mut self, exit: bool) -> Self {
+        self.exit_on_last_closed = exit;
+        self
+    }
+
+    /// Call `f` with the window's id and what is now known of it whenever a
+    /// window moves, resizes, or is maximized, minimized, restored or made
+    /// fullscreen (see [`WindowInfo`](crate::platform::WindowInfo)). It may
+    /// change the state, and every window re-renders. Views can instead read
+    /// [`Cx::window_info`], and anything else
+    /// [`AppHandle::window_info`].
+    pub fn on_window_change(
+        mut self,
+        f: impl FnMut(&mut S, WindowId, &crate::platform::WindowInfo) + 'static,
+    ) -> Self {
+        self.on_window_change = Some(Box::new(f));
+        self
     }
 
     /// Set the font used to render text. Without one, text elements are laid
@@ -921,7 +985,6 @@ impl<S: 'static> Pane<S> {
         let mut cx = Cx::with_handle(&theme, self.handle.clone());
         cx.set_window_size(self.attrs.logical_size);
         cx.set_memo_cache(std::mem::take(&mut self.memo_cache));
-        cx.set_window(self.window_id, self.window_focused);
         for (id, offset) in self.scroll_requests.take() {
             self.scroll_offsets.insert(id, offset.max(0.0));
         }
@@ -933,7 +996,11 @@ impl<S: 'static> Pane<S> {
         // Keyed elements' interaction states, from where they were on screen.
         let states = self.interactions();
         cx.set_interactions(states.clone());
+        cx.set_window(self.id, self.info, self.window_focused);
         let mut element = (self.view)(state, &mut cx);
+        self.info_read = cx.window_info_read();
+        self.built_title = cx.take_window_title();
+        self.builds += 1;
         // The menus Stipple draws: the menu bar above the view, and the open
         // bar menu or context menu as overlays above everything else.
         match self.menu_bar.clone() {
@@ -1734,6 +1801,21 @@ impl<S: 'static> Pane<S> {
 
     /// Tell the window's input method about the focused text field (or that
     /// there is none), when that changed since the last frame.
+    /// Retitle the window when the title the view gives it changed.
+    /// Returns whether it did (a title bar Stipple draws then needs the whole
+    /// window presented).
+    fn sync_title(&mut self, window: &dyn crate::platform::Window) -> bool {
+        if let Some(title) = self.built_title.take()
+            && self.view_title.as_ref() != Some(&title)
+        {
+            window.set_title(&title);
+            self.attrs.title = title.clone();
+            self.view_title = Some(title);
+            return true;
+        }
+        false
+    }
+
     fn sync_ime(&mut self, window: &dyn crate::platform::Window, font: Option<&Font>) {
         let ime = match (&self.tree, self.input_viewport) {
             (Some(tree), None) => crate::core::ime_state(tree, self.focused, font),
@@ -2516,10 +2598,23 @@ impl<S: 'static> App<S> {
     ///
     /// On the web this returns once the first frame is up, and the page drives
     /// the app from then on (see [`web_app!`]).
-    pub fn run(mut self)
+    pub fn run(self)
     where
         S: 'static,
     {
+        let (attrs, handler) = self.into_handler();
+        backend::run(attrs, handler);
+    }
+
+    /// The primary window's attributes and the event handler [`run`](Self::run)
+    /// gives the backend: everything the app does with the events of its
+    /// windows. Tests drive it with windows of their own.
+    fn into_handler(
+        mut self,
+    ) -> (
+        WindowAttributes,
+        impl FnMut(Event, &dyn crate::platform::Window) -> ControlFlow + 'static,
+    ) {
         // Map the semantic accessibility tree into the platform-neutral mirror the
         // backend's OS bridge consumes (NSAccessibility / UIA / AT-SPI).
         fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platform::A11yNode {
@@ -2588,11 +2683,11 @@ impl<S: 'static> App<S> {
         // Per-pane surfaces, created lazily on first present, parallel to panes.
         let mut surfaces: Vec<Option<Box<dyn Surface>>> =
             (0..self.panes.len()).map(|_| None).collect();
-        // native window id -> pane index, filled as windows are created.
-        let mut id_to_pane: std::collections::HashMap<WindowId, usize> =
-            std::collections::HashMap::new();
-        let mut open_count = 0usize;
-        let mut opened_extras = false;
+        // The windows the app's views show, opened on the first event; and
+        // the last window, hidden instead of closed when the app keeps
+        // running with none (see `exit_on_last_window_closed`).
+        let mut started = false;
+        let mut host: Option<WindowId> = None;
 
         // `force` presents the whole frame regardless of computed damage — used
         // for expose/resize, where the window's pixels were lost and a partial
@@ -2615,6 +2710,10 @@ impl<S: 'static> App<S> {
                     pane.attrs.dark = Some(dark);
                     pane.attrs.background = Some(app.theme.palette.background);
                 }
+            }
+            // Each window's title bar follows, as the window comes up.
+            if app.panes[idx].dark_sent != Some(dark) {
+                app.panes[idx].dark_sent = Some(dark);
                 window.set_dark(dark);
             }
             if idx == 0 {
@@ -2636,6 +2735,9 @@ impl<S: 'static> App<S> {
             pane.scale = scale;
             // Only canvases or viewport content changed: paint the tree on
             // screen again, without rebuilding the view.
+            // A new title shows in the title bar Stipple may draw around the
+            // content (Wayland without server-side decorations).
+            let mut retitled = false;
             let (scene, damage) = match pane.repaint(theme, font.as_ref(), force) {
                 Some(frame) => {
                     app_dbg(format_args!("present: repainted"));
@@ -2646,6 +2748,7 @@ impl<S: 'static> App<S> {
                     let scene = pane.build_frame(state, theme, font.as_ref());
                     app_dbg(format_args!("present: built"));
                     pane.sync_ime(window, font.as_ref());
+                    retitled = pane.sync_title(window);
                     // The view may have changed the cursor under a pointer at
                     // rest (a terminal hiding it while the user types).
                     if pane.pointer_in
@@ -2686,62 +2789,87 @@ impl<S: 'static> App<S> {
                 viewport_content,
                 surface.as_mut(),
                 phys_size,
-                force,
+                force || retitled,
             );
         };
 
         // Native message boxes can show from now on.
         crate::platform::dialog::set_event_loop_running(true);
-        backend::run(primary_attrs, move |event, window| {
+        let handler = move |event: Event, window: &dyn crate::platform::Window| {
             let wid = window.id();
             // On the first event we learn the primary window's id; register it
             // and ask the backend to open the remaining panes as OS windows.
-            if !opened_extras {
-                opened_extras = true;
-                id_to_pane.insert(wid, 0);
-                self.panes[0].window_id = Some(wid);
-                open_count = 1;
-                for idx in 1..self.panes.len() {
-                    let attrs = self.panes[idx].attrs.clone();
-                    if let Some(id) = window.open_window(attrs) {
-                        id_to_pane.insert(id, idx);
-                        self.panes[idx].window_id = Some(id);
-                        open_count += 1;
+            if !started {
+                started = true;
+                self.start_windows(window, &mut surfaces);
+            }
+            // Woken: run the state's updates and due timers. Multi-window
+            // backends wake every window in turn; the first one runs them, and
+            // each brings its own window up to date.
+            let mut ran = false;
+            if matches!(event, Event::Wake) {
+                let (did, next) = self
+                    .handle
+                    .pump(&mut self.state, crate::platform::time::Instant::now());
+                crate::platform::wake::set_deadline(next);
+                if self.handle.exit_requested() {
+                    return ControlFlow::Exit;
+                }
+                // Canvases to repaint and viewport content to show.
+                self.pump_content();
+                if did {
+                    ran = true;
+                    for pane in &mut self.panes {
+                        pane.dirty = true;
                     }
                 }
             }
-            let idx = id_to_pane.get(&wid).copied().unwrap_or(0);
-            // Windows the app closes itself (`AppHandle::close_window`), without
-            // asking again.
-            for id in self.handle.take_close_requests() {
-                if id_to_pane.remove(&id).is_some() {
-                    open_count = open_count.saturating_sub(1);
-                    if open_count == 0 {
-                        return ControlFlow::Exit;
-                    }
-                    window.close_window_id(id);
-                }
+            // Windows opened and closed through the handle: opened from
+            // whichever window hears of it first, closed by their own next
+            // event (the request wakes them all).
+            self.open_requested(window, &mut surfaces);
+            self.closing.extend(self.handle.take_closes());
+            let Some(idx) = self.pane_of(wid) else {
+                // The hidden last window (see `exit_on_last_window_closed`),
+                // or one on its way out.
+                return ControlFlow::Wait;
+            };
+            let id = self.panes[idx].id;
+            // Window changes queued through `AppHandle::window` and
+            // `window_to` go to their window, on its next event.
+            let mut retitled = false;
+            for request in self.handle.take_window_requests(id) {
+                retitled |= matches!(request, crate::platform::WindowRequest::Title(_));
+                request.apply(window);
             }
-            if !id_to_pane.contains_key(&wid) {
-                return ControlFlow::Wait; // this window is closing
+            if retitled {
+                // A title bar Stipple draws shows the new title.
+                present(&mut self, &mut surfaces, idx, window, true);
             }
-            // Window changes queued through `AppHandle::window` go to the
-            // primary window (its events, including the wake they cause).
-            if idx == 0 {
-                for request in self.handle.take_window_requests() {
-                    request.apply(window);
-                }
+            if self.closing.contains(&id) {
+                return self.close_pane(idx, window, &mut surfaces, &mut host);
             }
+            // An input event that rebuilt this window may have changed the
+            // state the other windows show, too.
+            let builds = self.panes[idx].builds;
+            let is_input = !matches!(
+                event,
+                Event::Wake
+                    | Event::RedrawRequested
+                    | Event::Resized(_)
+                    | Event::ScaleFactorChanged(_)
+                    | Event::WindowChanged
+                    | Event::ThemeChanged
+            );
             // Pointer buttons, moves and wheels reach `on_pointer` and
             // `on_wheel` handlers first.
-            let input = self.pane_pointer_input(idx, &event, crate::platform::time::Instant::now());
-            if input.redraw {
+            let pointer =
+                self.pane_pointer_input(idx, &event, crate::platform::time::Instant::now());
+            if pointer.redraw {
                 present(&mut self, &mut surfaces, idx, window, false);
             }
-            if input.done {
-                return ControlFlow::Wait;
-            }
-            match event {
+            let flow = match event {
+                _ if pointer.done => ControlFlow::Wait,
                 Event::RedrawRequested => {
                     present(&mut self, &mut surfaces, idx, window, true);
                     ControlFlow::Wait
@@ -3026,26 +3154,20 @@ impl<S: 'static> App<S> {
                 Event::Wake => {
                     // A fling scrolls on with every frame.
                     let flung = self.pane_fling(idx);
-                    // Apply updates and due timers from the handle, then re-render
-                    // if anything ran. The loop wakes again at the next timer.
-                    let (ran, next) = self
-                        .handle
-                        .pump(&mut self.state, crate::platform::time::Instant::now());
-                    crate::platform::wake::set_deadline(next);
-                    if self.handle.exit_requested() {
-                        return ControlFlow::Exit;
-                    }
-                    // Canvases to repaint and viewport content to show.
-                    let content = self.pump_content();
-                    if !ran && !self.panes[idx].animating {
+                    // Updates and timers ran above (the loop wakes again at
+                    // the next timer); re-render if they did, or if this
+                    // window changed since it last presented (another
+                    // window's event changed the state).
+                    let pane = &mut self.panes[idx];
+                    let content =
+                        !pane.canvas_pending.is_empty() || !pane.viewports_pending.is_empty();
+                    if !ran && !pane.animating && !pane.dirty {
                         // Repeated, this means a deadline that keeps coming due.
                         app_dbg(format_args!("wake with nothing to do"));
                     }
                     // A frame for an animation (or a fade) re-renders too.
-                    if ran || flung || self.panes[idx].animating {
-                        for pane in &mut self.panes {
-                            pane.dirty |= ran || pane.animating;
-                        }
+                    pane.dirty |= pane.animating;
+                    if ran || flung || pane.dirty {
                         present(&mut self, &mut surfaces, idx, window, false);
                     } else if content {
                         // Only canvases or viewport content changed: no
@@ -3070,7 +3192,6 @@ impl<S: 'static> App<S> {
                             pane.attrs.dark = Some(dark);
                             pane.attrs.background = Some(self.theme.palette.background);
                         }
-                        window.set_dark(dark);
                     }
                     for pane in &mut self.panes {
                         pane.dirty = true;
@@ -3100,14 +3221,13 @@ impl<S: 'static> App<S> {
                         pane.dirty = true;
                     }
                     drop(ui);
-                    if self.window_focus_changed(idx, wid, focused) {
+                    if self.window_focus_changed(idx, id, focused) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
                 }
                 Event::QuitRequested => {
-                    let open: Vec<(usize, WindowId)> =
-                        id_to_pane.iter().map(|(&id, &idx)| (idx, id)).collect();
+                    let open: Vec<WindowId> = self.panes.iter().map(|p| p.id).collect();
                     if self.ask_quit(&open) {
                         ControlFlow::Exit
                     } else {
@@ -3115,26 +3235,173 @@ impl<S: 'static> App<S> {
                         ControlFlow::Wait
                     }
                 }
-                Event::CloseRequested if !self.ask_close(idx, wid) => {
+                Event::CloseRequested if !self.ask_close(id) => {
                     // The app keeps the window (it may ask the user first).
                     present(&mut self, &mut surfaces, idx, window, false);
                     ControlFlow::Wait
                 }
                 Event::CloseRequested => {
                     // Close just this window; end the loop only when the last
-                    // window goes away.
-                    id_to_pane.remove(&wid);
-                    open_count = open_count.saturating_sub(1);
-                    if open_count == 0 {
-                        ControlFlow::Exit
-                    } else {
-                        window.close_window();
-                        ControlFlow::Wait
-                    }
+                    // window goes away (unless the app keeps running).
+                    return self.close_pane(idx, window, &mut surfaces, &mut host);
                 }
                 _ => ControlFlow::Wait,
+            };
+            if flow == ControlFlow::Exit {
+                return flow;
             }
-        });
+            let Some(idx) = self.pane_of(wid) else {
+                return flow;
+            };
+            // Keep up with where the window is and what state it is in.
+            let info = window.info();
+            if info != self.panes[idx].info {
+                let pane = &mut self.panes[idx];
+                pane.info = info;
+                self.handle.set_window_info(id, Some(info));
+                let mut redraw = pane.info_read;
+                if let Some(f) = self.on_window_change.as_mut() {
+                    f(&mut self.state, id, &info);
+                    for pane in &mut self.panes {
+                        pane.dirty = true;
+                    }
+                    redraw = true;
+                    if self.panes.len() > 1 {
+                        crate::platform::wake::wake();
+                    }
+                }
+                if redraw {
+                    self.panes[idx].dirty = true;
+                    present(&mut self, &mut surfaces, idx, window, false);
+                }
+            }
+            // An input event that changed this window may have changed what
+            // the others show: bring them up to date on their wake.
+            if is_input && self.panes[idx].builds != builds && self.panes.len() > 1 {
+                for (j, pane) in self.panes.iter_mut().enumerate() {
+                    pane.dirty |= j != idx;
+                }
+                crate::platform::wake::wake();
+            }
+            flow
+        };
+        (primary_attrs, handler)
+    }
+
+    /// Open the windows registered before [`run`](Self::run) (from the first
+    /// event, on the primary `window`). Backends with a single window can't
+    /// open them: those are dropped.
+    fn start_windows(
+        &mut self,
+        window: &dyn crate::platform::Window,
+        surfaces: &mut Vec<Option<Box<dyn Surface>>>,
+    ) {
+        let scale = window.scale_factor();
+        self.panes[0].native = Some(window.id());
+        let mut idx = 1;
+        while idx < self.panes.len() {
+            let attrs = self.panes[idx].attrs.clone();
+            match window.open_window(attrs) {
+                Some(native) => {
+                    self.panes[idx].native = Some(native);
+                    idx += 1;
+                }
+                None => {
+                    app_dbg(format_args!("the backend has a single window"));
+                    self.panes.remove(idx);
+                    surfaces.remove(idx);
+                }
+            }
+        }
+        for pane in &mut self.panes {
+            pane.dark_sent = pane.attrs.dark;
+            pane.info = provisional_info(&pane.attrs, scale);
+            self.handle.set_window_info(pane.id, Some(pane.info));
+        }
+    }
+
+    /// Open the windows [`AppHandle::open_window`] asked for, from `window`.
+    fn open_requested(
+        &mut self,
+        window: &dyn crate::platform::Window,
+        surfaces: &mut Vec<Option<Box<dyn Surface>>>,
+    ) {
+        for request in self.handle.take_opens() {
+            let mut attrs = request.attrs;
+            attrs.dark.get_or_insert(self.theme.is_dark());
+            attrs
+                .background
+                .get_or_insert(self.theme.palette.background);
+            let Some(native) = window.open_window(attrs.clone()) else {
+                app_dbg(format_args!("the backend has a single window"));
+                continue;
+            };
+            let mut pane = Pane::new(request.id, request.view, self.handle.clone());
+            pane.native = Some(native);
+            pane.dark_sent = attrs.dark;
+            pane.info = provisional_info(&attrs, window.scale_factor());
+            pane.attrs = attrs;
+            self.handle.set_window_info(pane.id, Some(pane.info));
+            self.panes.push(pane);
+            surfaces.push(None);
+        }
+        // Forget closes for windows that aren't open.
+        let panes = &self.panes;
+        self.closing.retain(|id| panes.iter().any(|p| p.id == *id));
+    }
+
+    /// The pane showing the backend's window `native`.
+    fn pane_of(&self, native: WindowId) -> Option<usize> {
+        self.panes.iter().position(|p| p.native == Some(native))
+    }
+
+    /// Close pane `idx`, shown in `window`. Closing the last one ends the
+    /// loop, or hides that window (`host`) when the app keeps running with
+    /// none.
+    fn close_pane(
+        &mut self,
+        idx: usize,
+        window: &dyn crate::platform::Window,
+        surfaces: &mut Vec<Option<Box<dyn Surface>>>,
+        host: &mut Option<WindowId>,
+    ) -> ControlFlow {
+        let id = self.panes[idx].id;
+        let last = self.panes.len() == 1;
+        self.panes.remove(idx);
+        surfaces.remove(idx);
+        if let Some(first) = self.panes.first_mut() {
+            first.primary = true;
+        }
+        self.closing.retain(|c| *c != id);
+        self.handle.set_window_info(id, None);
+        let open: Vec<WindowId> = self.panes.iter().map(|p| p.id).collect();
+        self.handle.drop_window_requests(&open);
+        if last {
+            if self.exit_on_last_closed {
+                return ControlFlow::Exit;
+            }
+            if host.is_none() {
+                window.set_visible(false);
+                *host = Some(window.id());
+                return ControlFlow::Wait;
+            }
+        }
+        window.close_window();
+        ControlFlow::Wait
+    }
+}
+
+/// What a window just opened with `attrs` will be, until the backend says.
+fn provisional_info(attrs: &WindowAttributes, scale: ScaleFactor) -> crate::platform::WindowInfo {
+    crate::platform::WindowInfo {
+        position: attrs.position.map(|(x, y)| Point::new(x as f64, y as f64)),
+        inner_size: attrs.logical_size,
+        outer_size: attrs.logical_size,
+        scale,
+        maximized: attrs.maximized,
+        minimized: false,
+        fullscreen: attrs.fullscreen,
+        work_area: None,
     }
 }
 
@@ -3558,6 +3825,7 @@ pub mod prelude {
     pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
     pub use crate::platform::{KeyEvent, OptionAsMeta, PhysicalKey};
+    pub use crate::platform::{WindowAttributes, WindowId, WindowInfo};
     pub use crate::render::{
         Canvas, Color, Font, GlyphRun, ImageFit, Path, Pixmap, StrokeStyle, Svg, TextDirection,
     };

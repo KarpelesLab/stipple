@@ -1176,6 +1176,9 @@ jobs:
   # windows (one parent App, two panes over shared state) side by side, a red
   # one at x=0 and a blue one at x=340. Screenshot the root and confirm BOTH
   # painted — the left region is red-dominant and the right region blue-dominant.
+  # Then its self-test changes them while it runs: titles from the state and
+  # from requests (read back with xprop), a window moved and resized and resize
+  # increments (xdotool, WM_NORMAL_HINTS), and a third window opened and closed.
   visual-multiwindow:
     name: Visual test (Multi-window / X11)
     runs-on: ubuntu-latest
@@ -1184,10 +1187,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Xvfb, ImageMagick, a font
+      - name: Install Xvfb, ImageMagick, xdotool, x11-utils, a font
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb imagemagick fonts-dejavu-core
+          sudo apt-get install -y xvfb imagemagick xdotool x11-utils fonts-dejavu-core
 
       - name: Build the multi-window demo
         run: cargo build --release -p multiwindow
@@ -1223,6 +1226,16 @@ jobs:
           # A must be red-dominant and B blue-dominant — proving both windows
           # exist, side by side, each painting its own pane.
           awk "BEGIN{exit !($ar > $ab && $bb > $br)}"
+
+      - name: Titles, geometry and windows opened and closed at run time
+        env:
+          DISPLAY: ":99"
+          OUT_DIR: visual_output
+        run: |
+          # The screenshot's app has windows of the same names: stop it first.
+          kill "$APP_PID" 2>/dev/null || true
+          sleep 1
+          timeout 60 bash .github/scripts/runtime-windows.sh target/release/multiwindow x11
 
       - name: Stop the app and Xvfb
         if: always()
@@ -1649,8 +1662,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y sway grim wtype wl-clipboard seatd imagemagick fonts-dejavu-core
 
-      - name: Build the window, textinput, clipboard and rawkeys examples
-        run: cargo build --release -p window -p textinput -p clipboarddemo -p rawkeys
+      - name: Build the window, textinput, clipboard, rawkeys and multi-window examples
+        run: cargo build --release -p window -p textinput -p clipboarddemo -p rawkeys -p multiwindow
 
       - name: Run under headless sway and screenshot with grim
         run: |
@@ -1819,6 +1832,12 @@ jobs:
           timeout 15 tail --pid="$CLIP_PID" -f /dev/null || kill "$CLIP_PID" 2>/dev/null || true
           cat visual_output/wl-paste-primary.log
           grep -q '^pasted Primary: text="wl primary"' visual_output/wl-paste-primary.log
+
+          # --- several windows: titles from the state and from requests, and
+          # a third toplevel opened and closed while the app runs, as sway's
+          # tree shows them. ---
+          OUT_DIR=visual_output timeout 60 \
+            bash .github/scripts/runtime-windows.sh target/release/multiwindow wayland
 
           echo "=== seatd.log ==="; cat seatd.log || true
           echo "=== sway.log ==="; cat sway.log || true
@@ -2193,6 +2212,16 @@ jobs:
           timeout 30 ./target/release/asyncdemo.exe --selftest | tee async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
+
+      - name: Titles, geometry and windows opened and closed at run time
+        shell: bash
+        env:
+          OUT_DIR: visual_output
+        run: |
+          # Titles (GetWindowTextW), frames (GetWindowRect / GetClientRect)
+          # and resize increments are read back from Win32 in the debug lines.
+          cargo build --release -p multiwindow
+          timeout 60 bash .github/scripts/runtime-windows.sh target/release/multiwindow.exe log
           grep -q 'asyncdemo: spinner ok' async.log
 
       - name: A canvas repaints only the rows it invalidates
@@ -2745,6 +2774,16 @@ jobs:
           # The custom NSView vends NSAccessibility info via real objc dispatch:
           # an accessible AXGroup labelled with the window title ("Stipple").
           grep -q "Cocoa a11y: element=true role=AXGroup label=Stipple" visual_output/macos.log
+
+      - name: Titles, geometry and windows opened and closed at run time
+        env:
+          OUT_DIR: visual_output
+        run: |
+          # Titles, frames and contentResizeIncrements are read back from
+          # AppKit in the debug lines. macOS has no `timeout`; perl's alarm
+          # stands in for it.
+          cargo build --release -p multiwindow
+          perl -e 'alarm 60; exec @ARGV' bash .github/scripts/runtime-windows.sh target/release/multiwindow log
           # ...and the *full* element tree (not just the root) is vended: the view
           # has children, and a recursive walk over -accessibilityChildren reaches
           # nested AXStaticText descendants — proving the whole hierarchy is exposed.

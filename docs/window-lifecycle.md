@@ -37,8 +37,11 @@ The hook may change the state (the view is rebuilt), so cancelling usually
 shows a confirmation. When the user confirms, or a check made in the
 background comes back, close the window yourself with
 `AppHandle::close_window(id)`, which doesn't ask again. Closing the last
-window ends the app, as when the user closes it. The id is also what the view
-reads with `Cx::window_id()`.
+window ends the app, as when the user closes it (unless
+`App::exit_on_last_window_closed(false)`). The id is the app's own for the
+window: `WindowId::PRIMARY` for the first, what `App::open_window` /
+`AppHandle::open_window` returned for the others, and what the view reads
+with `Cx::window_id()` (see [windows-and-cursors.md](windows-and-cursors.md#several-windows)).
 
 ## Asking before the app quits
 

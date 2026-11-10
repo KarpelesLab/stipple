@@ -2,7 +2,7 @@
 //! `WM_SETFOCUS`/`WM_KILLFOCUS`, `WM_QUERYENDSESSION`, `FlashWindowEx` and
 //! `MessageBeep`.
 
-use super::{Hwnd, Lresult, PostMessageW, WM_NULL, push_event};
+use super::{Hwnd, Lresult, PostMessageW, WM_NULL, push_event_to};
 use crate::platform::UserAttention;
 use crate::platform::event::Event;
 
@@ -38,7 +38,7 @@ unsafe extern "system" {
 /// even when it came with a message sent from another thread (which the loop
 /// doesn't see).
 fn post(hwnd: Hwnd, event: Event) {
-    push_event(event);
+    push_event_to(hwnd, event);
     unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
 }
 

@@ -1,4 +1,4 @@
-use crate::geometry::{PhysicalSize, Rect, ScaleFactor, Size};
+use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::event::WindowId;
 use crate::render::{Color, Pixmap, Surface};
 
@@ -59,9 +59,11 @@ pub struct ImeState {
 }
 
 /// A change to a running window, queued from anywhere with
-/// [`AppHandle::window`](crate::core::AppHandle::window) and applied to the
-/// primary window on the UI thread.
+/// [`AppHandle::window`](crate::core::AppHandle::window) (the primary window)
+/// or [`AppHandle::window_to`](crate::core::AppHandle::window_to) (any window)
+/// and applied on the UI thread.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum WindowRequest {
     /// Maximize (`true`) or restore (`false`) the window.
     Maximized(bool),
@@ -73,6 +75,20 @@ pub enum WindowRequest {
     MaxSize(Option<Size>),
     /// Set or clear the window icon.
     Icon(Option<Pixmap>),
+    /// Change the title.
+    Title(String),
+    /// Move the window's outer top-left corner (its frame, where the system
+    /// draws one) to this point, in logical pixels of the desktop. Wayland
+    /// lets no client place its windows, so it is a no-op there.
+    Position(Point),
+    /// Resize the content area to this size, in logical pixels.
+    InnerSize(Size),
+    /// Make the user's resizing snap to whole steps of this size (in logical
+    /// pixels) above the minimum size, such as a terminal's character cell;
+    /// `None` resizes freely. Not available on Wayland.
+    ResizeIncrements(Option<Size>),
+    /// Minimize (`true`) or restore (`false`) the window.
+    Minimized(bool),
     /// Ask for the user's attention (`Some`), or withdraw the request
     /// (`None`). See [`Window::request_attention`].
     Attention(Option<UserAttention>),
@@ -108,7 +124,67 @@ impl WindowRequest {
             WindowRequest::Attention(kind) => window.request_attention(*kind),
             WindowRequest::Beep => window.beep(),
             WindowRequest::Badge(label) => window.set_badge(label.as_deref()),
+            WindowRequest::Title(title) => window.set_title(title),
+            WindowRequest::Position(at) => window.set_position(*at),
+            WindowRequest::InnerSize(size) => window.set_inner_size(*size),
+            WindowRequest::ResizeIncrements(step) => window.set_resize_increments(*step),
+            WindowRequest::Minimized(on) => window.set_minimized(*on),
         }
+    }
+}
+
+/// Where a window is and what state it is in, as last reported by the system.
+/// Read it with [`Window::info`], from a view with
+/// [`Cx::window_info`](crate::core::Cx::window_info) or from anywhere with
+/// [`AppHandle::window_info`](crate::core::AppHandle::window_info).
+///
+/// Sizes and positions are in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowInfo {
+    /// The outer (frame) top-left corner on the desktop, or `None` where the
+    /// system doesn't tell (Wayland, which hides window positions from
+    /// clients).
+    pub position: Option<Point>,
+    /// The content area's size.
+    pub inner_size: Size,
+    /// The size with the frame (title bar and borders) the system draws, or
+    /// the inner size where that frame is unknown.
+    pub outer_size: Size,
+    /// The scale factor (physical pixels per logical pixel).
+    pub scale: ScaleFactor,
+    /// Whether the window is maximized.
+    pub maximized: bool,
+    /// Whether the window is minimized (iconified, hidden in the Dock or
+    /// taskbar).
+    pub minimized: bool,
+    /// Whether the window is fullscreen.
+    pub fullscreen: bool,
+    /// The work area (the monitor without its panels, docks and task bars)
+    /// of the monitor the window is on, in desktop coordinates, or `None`
+    /// where unknown.
+    pub work_area: Option<Rect>,
+}
+
+impl WindowInfo {
+    /// What is known of a window from its size and scale alone.
+    pub fn from_size(inner: PhysicalSize, scale: ScaleFactor) -> Self {
+        let size = scale.to_logical(inner);
+        Self {
+            position: None,
+            inner_size: size,
+            outer_size: size,
+            scale,
+            maximized: false,
+            minimized: false,
+            fullscreen: false,
+            work_area: None,
+        }
+    }
+}
+
+impl Default for WindowInfo {
+    fn default() -> Self {
+        Self::from_size(PhysicalSize::new(0, 0), ScaleFactor::IDENTITY)
     }
 }
 
@@ -146,6 +222,13 @@ pub struct WindowAttributes {
     /// on Wayland (server-side through xdg-decoration, else drawn by
     /// Stipple), X11 (`_MOTIF_WM_HINTS`) and Windows; macOS keeps its title bar.
     pub decorations: bool,
+    /// Snap the user's resizing to whole steps of this size, in logical
+    /// pixels (see [`WindowRequest::ResizeIncrements`]).
+    pub resize_increments: Option<Size>,
+    /// Whether a window opened while the app runs takes keyboard focus (and
+    /// comes to the front). `true` by default; the window manager may still
+    /// decide otherwise.
+    pub focus: bool,
 }
 
 impl Default for WindowAttributes {
@@ -163,6 +246,8 @@ impl Default for WindowAttributes {
             fullscreen: false,
             icon: None,
             decorations: true,
+            resize_increments: None,
+            focus: true,
         }
     }
 }
@@ -226,6 +311,19 @@ impl WindowAttributes {
     /// Give the window a title bar and borders (the default), or not.
     pub fn with_decorations(mut self, decorations: bool) -> Self {
         self.decorations = decorations;
+        self
+    }
+
+    /// Snap the user's resizing to whole steps of `step` logical pixels.
+    pub fn with_resize_increments(mut self, step: Size) -> Self {
+        self.resize_increments = Some(step);
+        self
+    }
+
+    /// Whether the window takes keyboard focus when it opens while the app
+    /// runs (`true` by default).
+    pub fn with_focus(mut self, focus: bool) -> Self {
+        self.focus = focus;
         self
     }
 }
@@ -318,9 +416,13 @@ pub trait Window {
 
     /// Open a new top-level sibling window sharing this window's event loop /
     /// connection, returning its [`WindowId`]. Default: `None` — the backend is
-    /// single-window. Backends that support multiple native windows (X11)
+    /// single-window. Multi-window backends (X11, Wayland, Windows, macOS)
     /// override this; the new window's events arrive through the same handler,
-    /// distinguished by [`Window::id`].
+    /// distinguished by [`Window::id`]. It takes focus if
+    /// [`WindowAttributes::focus`] says so.
+    ///
+    /// A multi-window backend delivers [`Event::Wake`](crate::platform::Event::Wake)
+    /// to every open window in turn, so the app can bring each one up to date.
     fn open_window(&self, _attrs: WindowAttributes) -> Option<WindowId> {
         None
     }
@@ -330,15 +432,6 @@ pub trait Window {
     /// handler returns [`ControlFlow::Exit`](crate::platform::ControlFlow)). Multi-window
     /// backends destroy just this window and keep running while others remain.
     fn close_window(&self) {}
-
-    /// Close the sibling window `id` (opened with [`open_window`](Self::open_window)
-    /// on the same loop), as [`close_window`](Self::close_window) would from
-    /// its own events. Default: closes `self` when `id` is this window's.
-    fn close_window_id(&self, id: WindowId) {
-        if id == self.id() {
-            self.close_window();
-        }
-    }
 
     /// Ask for the user's attention without stealing focus (`Some`), or
     /// withdraw the request (`None`): `_NET_WM_STATE_DEMANDS_ATTENTION` and
@@ -357,6 +450,35 @@ pub trait Window {
     /// remove it (`None`): the Dock tile's badge on macOS. Default: a no-op
     /// (the other platforms have no badge Stipple sets yet).
     fn set_badge(&self, _label: Option<&str>) {}
+    /// Show (`true`) or hide (`false`) the window without closing it.
+    /// Default: a no-op. The app hides its last window instead of closing it
+    /// when it should keep running with none (see
+    /// [`App::exit_on_last_window_closed`](crate::App::exit_on_last_window_closed)).
+    fn set_visible(&self, _visible: bool) {}
+
+    /// Where the window is and what state it is in (see [`WindowInfo`]).
+    /// Must be cheap: the app reads it after every event, and backends answer
+    /// from what the system last told them. Backends deliver
+    /// [`Event::WindowChanged`](crate::platform::Event::WindowChanged) when it
+    /// changes for any reason other than a resize. Default: the size and scale
+    /// only.
+    fn info(&self) -> WindowInfo {
+        WindowInfo::from_size(self.inner_size(), self.scale_factor())
+    }
+
+    /// Move the window's outer top-left corner to `position` (logical pixels
+    /// on the desktop). Default: a no-op, as on Wayland.
+    fn set_position(&self, _position: Point) {}
+
+    /// Resize the content area to `size` logical pixels. Default: a no-op.
+    fn set_inner_size(&self, _size: Size) {}
+
+    /// Snap the user's resizing to whole steps of `step` logical pixels, or
+    /// resize freely (`None`). Default: a no-op, as on Wayland.
+    fn set_resize_increments(&self, _step: Option<Size>) {}
+
+    /// Minimize or restore the window. Default: a no-op.
+    fn set_minimized(&self, _minimized: bool) {}
 
     /// Show `cursor` while the pointer is over this window's content. Default:
     /// a no-op (the platform's arrow stays).
@@ -462,6 +584,17 @@ pub(crate) fn set_app_confirms_quit(on: bool) {
 #[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 pub(crate) fn app_confirms_quit() -> bool {
     QUIT_CONFIRMED_BY_APP.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// With `STIPPLE_DEBUG_WINDOWS` set, print a line about a window change as the
+/// system reports it back (`stipple-window: title 0x1234 "Hello"`), for tests
+/// that check titles, geometry and windows opening and closing on each
+/// platform. Backends call it after reading the value back from the OS.
+#[allow(dead_code)]
+pub(crate) fn debug_window(args: std::fmt::Arguments<'_>) {
+    if std::env::var_os("STIPPLE_DEBUG_WINDOWS").is_some() {
+        eprintln!("stipple-window: {args}");
+    }
 }
 
 /// Scale `icon` down (by area averaging) so neither side exceeds `max` pixels,

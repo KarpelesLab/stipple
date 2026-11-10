@@ -331,6 +331,7 @@ mod tests {
             text_input: Default::default(),
             pointer: None,
             decor: Default::default(),
+            decors: Vec::new(),
             attention: Default::default(),
         };
         const MANAGER_ID: u32 = 5;

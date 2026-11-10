@@ -77,8 +77,9 @@ pub(super) unsafe fn register(view: Id) {
     }
 }
 
-fn queue(event: Event) {
-    CTX.with(|c| c.borrow_mut().pending.push(event));
+/// Queue `event` for the window whose content view is `view`.
+fn queue(view: Id, event: Event) {
+    CTX.with(|c| c.borrow_mut().window_pending.push((view, event)));
 }
 
 /// The drag's position in the (flipped) view, in points.
@@ -137,7 +138,7 @@ extern "C" fn dragging_entered(this: Id, _cmd: Sel, info: Id) -> u64 {
     // Until the app answers, take anything we can read.
     CTX.with(|c| c.borrow_mut().drop_accepted = !offer.is_empty());
     let position = unsafe { location(this, info) };
-    queue(Event::DragEnter { position, offer });
+    queue(this, Event::DragEnter { position, offer });
     operation()
 }
 
@@ -151,14 +152,14 @@ extern "C" fn dragging_updated(this: Id, _cmd: Sel, info: Id) -> u64 {
         moved
     });
     if moved {
-        queue(Event::DragOver { position });
+        queue(this, Event::DragOver { position });
     }
     operation()
 }
 
-extern "C" fn dragging_exited(_this: Id, _cmd: Sel, _info: Id) {
+extern "C" fn dragging_exited(this: Id, _cmd: Sel, _info: Id) {
     CTX.with(|c| c.borrow_mut().drag_last = None);
-    queue(Event::DragLeave);
+    queue(this, Event::DragLeave);
 }
 
 extern "C" fn prepare_for_drag(_this: Id, _cmd: Sel, _info: Id) -> i8 {
@@ -171,10 +172,13 @@ extern "C" fn perform_drag(this: Id, _cmd: Sel, info: Id) -> i8 {
     let pb = unsafe { msg_id(info, sel("draggingPasteboard")) };
     let data = unsafe { read_files(pb).or_else(|| read_text(pb)) };
     let ok = data.is_some() && operation() != DRAG_OPERATION_NONE;
-    queue(match data {
-        Some(data) => Event::Drop { position, data },
-        None => Event::DragLeave,
-    });
+    queue(
+        this,
+        match data {
+            Some(data) => Event::Drop { position, data },
+            None => Event::DragLeave,
+        },
+    );
     ok as i8
 }
 

@@ -34,12 +34,15 @@ mod decor;
 mod keys;
 mod pointer;
 mod text_input;
+/// Several windows: creating, destroying and configuring toplevels.
+mod toplevel;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
@@ -138,7 +141,6 @@ const WL_DISPLAY: u32 = 1;
 const WL_DISPLAY_GET_REGISTRY: u16 = 1;
 const WL_DISPLAY_SYNC: u16 = 0;
 const WL_REGISTRY_BIND: u16 = 0;
-const WL_COMPOSITOR_CREATE_SURFACE: u16 = 0;
 const WL_SHM_CREATE_POOL: u16 = 0;
 const WL_SHM_POOL_CREATE_BUFFER: u16 = 0;
 const WL_SURFACE_ATTACH: u16 = 1;
@@ -149,8 +151,6 @@ const WL_SURFACE_ENTER: u16 = 0;
 const WL_OUTPUT_SCALE: u16 = 3;
 const WL_SEAT_GET_KEYBOARD: u16 = 1;
 const XDG_WM_BASE_PONG: u16 = 3;
-const XDG_WM_BASE_GET_XDG_SURFACE: u16 = 2;
-const XDG_SURFACE_GET_TOPLEVEL: u16 = 1;
 const XDG_SURFACE_ACK_CONFIGURE: u16 = 4;
 const XDG_TOPLEVEL_SET_TITLE: u16 = 2;
 const XDG_TOPLEVEL_SET_MAX_SIZE: u16 = 7;
@@ -692,8 +692,10 @@ struct WlConn {
     text_input: text_input::TextInput,
     /// The seat's `wl_pointer`, once it has one (to hide the cursor).
     pointer: Option<u32>,
-    /// The window's decorations.
+    /// The decorations of the window in use (see `toplevel::use_decor`),
+    /// and the other windows'.
     decor: decor::Decor,
+    decors: Vec<decor::Decor>,
     /// Activation (attention) requests and the bell.
     attention: attention::Attention,
 }
@@ -726,6 +728,7 @@ impl WlConn {
             pointer: None,
             text_input: text_input::TextInput::default(),
             decor: decor::Decor::default(),
+            decors: Vec::new(),
             attention: attention::Attention::default(),
         })
     }
@@ -1053,11 +1056,28 @@ type Shared = Arc<Mutex<WlConn>>;
 struct WaylandWindow {
     conn: Shared,
     surface: u32,
+    xdg_surface: u32,
     shm: u32,
-    size: PhysicalSize,
     toplevel: u32,
     /// The `xdg_toplevel_icon_manager_v1`, when the compositor has one.
     icon_manager: Option<u32>,
+    /// What new windows are made from, and where they wait for the loop.
+    globals: toplevel::Globals,
+    reg: Rc<RefCell<toplevel::Reg>>,
+    /// The buffer size of the content, and the content's size in surface
+    /// units (logical pixels), which the scale multiplies.
+    size: Cell<PhysicalSize>,
+    logical: Cell<PhysicalSize>,
+    /// The window size the last `xdg_toplevel.configure` asked for (title
+    /// bar included), applied with its `xdg_surface.configure`; and the
+    /// maximized and fullscreen states, as asked and as applied.
+    pending_size: Cell<Option<PhysicalSize>>,
+    pending_state: Cell<(bool, bool)>,
+    state: Cell<(bool, bool)>,
+    /// Buffer pixels per surface unit (the scale of the output the window is
+    /// on, which `output` names), shared with its surface.
+    scale: Rc<Cell<u32>>,
+    output: Cell<Option<u32>>,
     /// The icon's pixels, which must stay mapped while the compositor uses them.
     icon: RefCell<Option<ShmBuffer>>,
     /// Whether the app takes the drag over the surface (see
@@ -1066,6 +1086,58 @@ struct WaylandWindow {
 }
 
 impl WaylandWindow {
+    /// The window for `objects`, `logical` surface units at `scale`.
+    fn new(
+        conn: Shared,
+        objects: toplevel::Objects,
+        globals: toplevel::Globals,
+        reg: Rc<RefCell<toplevel::Reg>>,
+        logical: PhysicalSize,
+        scale: u32,
+        icon: Option<ShmBuffer>,
+    ) -> Self {
+        Self {
+            conn,
+            surface: objects.surface,
+            xdg_surface: objects.xdg_surface,
+            shm: globals.shm,
+            toplevel: objects.toplevel,
+            icon_manager: globals.icon_manager,
+            globals,
+            reg,
+            size: Cell::new(PhysicalSize::new(
+                logical.width * scale,
+                logical.height * scale,
+            )),
+            logical: Cell::new(logical),
+            pending_size: Cell::new(None),
+            pending_state: Cell::new((false, false)),
+            state: Cell::new((false, false)),
+            scale: Rc::new(Cell::new(scale)),
+            output: Cell::new(None),
+            icon: RefCell::new(icon),
+            drop_accepted: Cell::new(false),
+        }
+    }
+
+    fn objects(&self) -> toplevel::Objects {
+        toplevel::Objects {
+            surface: self.surface,
+            xdg_surface: self.xdg_surface,
+            toplevel: self.toplevel,
+        }
+    }
+
+    /// Take a new content size (logical) at the current scale.
+    fn set_logical(&self, logical: PhysicalSize) {
+        let scale = self.scale.get();
+        self.logical.set(logical);
+        self.size.set(PhysicalSize::new(
+            logical.width * scale,
+            logical.height * scale,
+        ));
+    }
+
     /// Send a toplevel request, then commit so it applies (xdg-shell state is
     /// double-buffered).
     fn toplevel_request(&self, opcode: u16, args: &[u8]) {
@@ -1134,7 +1206,7 @@ impl std::fmt::Debug for WaylandWindow {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WaylandWindow")
             .field("surface", &self.surface)
-            .field("size", &self.size)
+            .field("size", &self.size.get())
             .finish()
     }
 }
@@ -1147,17 +1219,65 @@ impl Window for WaylandWindow {
         crate::platform::shell::sni::set_tray(tray)
     }
     fn inner_size(&self) -> PhysicalSize {
-        self.size
+        self.size.get()
     }
     fn scale_factor(&self) -> ScaleFactor {
-        ScaleFactor::new(self.conn.lock().unwrap().buffer_scale as f64)
+        ScaleFactor::new(self.scale.get() as f64)
     }
     fn request_redraw(&self) {}
     fn set_title(&self, title: &str) {
-        self.conn.lock().unwrap().decor.title = title.to_string();
+        // The title bar Stipple draws (if it does) shows it from the next
+        // frame on.
+        {
+            let mut conn = self.conn.lock().unwrap();
+            toplevel::use_decor(&mut conn, self.toplevel);
+            conn.decor.title = title.to_string();
+        }
         let mut a = Vec::new();
         arg_str(&mut a, title);
         self.toplevel_request(XDG_TOPLEVEL_SET_TITLE, &a);
+        crate::platform::window::debug_window(format_args!("title {:#x} {title:?}", self.surface));
+    }
+    fn open_window(&self, attrs: WindowAttributes) -> Option<crate::platform::WindowId> {
+        // Another toplevel on the same connection, adopted by the loop once
+        // the handler returns. Wayland leaves focus to the compositor.
+        let (objects, icon) = {
+            let mut conn = self.conn.lock().unwrap();
+            toplevel::create(&mut conn, self.globals, &attrs).ok()?
+        };
+        let logical = ScaleFactor::IDENTITY.to_physical(attrs.logical_size);
+        let win = WaylandWindow::new(
+            self.conn.clone(),
+            objects,
+            self.globals,
+            self.reg.clone(),
+            PhysicalSize::new(logical.width.max(1), logical.height.max(1)),
+            self.scale.get(),
+            icon,
+        );
+        let id = win.id();
+        self.reg.borrow_mut().opened.push(win);
+        Some(id)
+    }
+    fn close_window(&self) {
+        self.reg.borrow_mut().closed.push(self.surface);
+    }
+    fn set_visible(&self, visible: bool) {
+        toplevel::set_visible(&mut self.conn.lock().unwrap(), self.surface, visible);
+    }
+    fn info(&self) -> crate::platform::WindowInfo {
+        let mut info = crate::platform::WindowInfo::from_size(self.size.get(), self.scale_factor());
+        (info.maximized, info.fullscreen) = self.state.get();
+        info
+    }
+    fn set_inner_size(&self, size: Size) {
+        self.reg.borrow_mut().resized.push((self.surface, size));
+    }
+    fn set_minimized(&self, minimized: bool) {
+        // There's no request to bring a window back: the user does.
+        if minimized {
+            self.toplevel_request(toplevel::XDG_TOPLEVEL_SET_MINIMIZED, &[]);
+        }
     }
     fn request_attention(&self, kind: Option<crate::platform::UserAttention>) {
         // Nothing to withdraw: the compositor drops it on activation.
@@ -1222,11 +1342,19 @@ impl Window for WaylandWindow {
     }
     fn set_min_size(&self, size: Option<Size>) {
         // The compositor's limits are the window's, title bar included.
-        let (min, _) = self.conn.lock().unwrap().decor.set_limits(Some(size), None);
+        let (min, _) = {
+            let mut conn = self.conn.lock().unwrap();
+            toplevel::use_decor(&mut conn, self.toplevel);
+            conn.decor.set_limits(Some(size), None)
+        };
         self.toplevel_request(XDG_TOPLEVEL_SET_MIN_SIZE, &size_args(min));
     }
     fn set_max_size(&self, size: Option<Size>) {
-        let (_, max) = self.conn.lock().unwrap().decor.set_limits(None, Some(size));
+        let (_, max) = {
+            let mut conn = self.conn.lock().unwrap();
+            toplevel::use_decor(&mut conn, self.toplevel);
+            conn.decor.set_limits(None, Some(size))
+        };
         self.toplevel_request(XDG_TOPLEVEL_SET_MAX_SIZE, &size_args(max));
     }
     fn set_maximized(&self, maximized: bool) {
@@ -1260,8 +1388,10 @@ impl Window for WaylandWindow {
         Box::new(WaylandSurface {
             conn: self.conn.clone(),
             surface: self.surface,
+            toplevel: self.toplevel,
             shm: self.shm,
-            size: self.size,
+            size: self.size.get(),
+            scale: self.scale.clone(),
             buffer: None,
         })
     }
@@ -1270,8 +1400,12 @@ impl Window for WaylandWindow {
 struct WaylandSurface {
     conn: Shared,
     surface: u32,
+    /// Its window's toplevel, whose decorations frame it.
+    toplevel: u32,
     shm: u32,
     size: PhysicalSize,
+    /// Its window's buffer scale.
+    scale: Rc<Cell<u32>>,
     buffer: Option<ShmBuffer>,
 }
 
@@ -1300,7 +1434,8 @@ impl Surface for WaylandSurface {
             return;
         }
         let mut conn = self.conn.lock().unwrap();
-        let scale = conn.buffer_scale.max(1);
+        let scale = self.scale.get().max(1);
+        toplevel::use_decor(&mut conn, self.toplevel);
         // Decorations Stipple draws go around the content, in an ARGB buffer
         // (the resize margin is transparent).
         let content = size;
@@ -1508,7 +1643,6 @@ where
         .into_iter()
         .map(|name| (bind(&mut conn, name, "wl_output", 2), 1))
         .collect();
-    let mut current_output: Option<u32> = None;
 
     // Optional seat. The keyboard is created lazily from its `capabilities`
     // event — calling get_keyboard on a seat that never had the keyboard
@@ -1541,90 +1675,36 @@ where
     let bell = bell_name.map(|name| bind(&mut conn, name, attention::SYSTEM_BELL, 1));
     attention::setup(&mut conn, activation, bell);
 
-    // Surface → xdg_surface → xdg_toplevel.
-    let surface = conn.new_id();
-    let mut a = Vec::new();
-    arg_u32(&mut a, surface);
-    conn.send(compositor, WL_COMPOSITOR_CREATE_SURFACE, &a)
-        .map_err(os)?;
-
-    let xdg_surface = conn.new_id();
-    let mut a = Vec::new();
-    arg_u32(&mut a, xdg_surface);
-    arg_u32(&mut a, surface);
-    conn.send(wm_base, XDG_WM_BASE_GET_XDG_SURFACE, &a)
-        .map_err(os)?;
-
-    let toplevel = conn.new_id();
-    let mut a = Vec::new();
-    arg_u32(&mut a, toplevel);
-    conn.send(xdg_surface, XDG_SURFACE_GET_TOPLEVEL, &a)
-        .map_err(os)?;
-
-    let mut a = Vec::new();
-    arg_str(&mut a, &attrs.title);
-    conn.send(toplevel, XDG_TOPLEVEL_SET_TITLE, &a)
-        .map_err(os)?;
-    // Server-side decorations where offered, else our own.
-    decor::setup(
-        &mut conn,
+    // The first window; `open_window` makes more the same way.
+    let globals = toplevel::Globals {
+        compositor,
+        wm_base,
+        shm,
+        icon_manager,
         decoration_manager,
-        xdg_surface,
-        toplevel,
         seat,
-        &attrs,
-    );
-
-    // Size limits and initial state, applied by the initial commit below.
-    // They're the window's: the title bar we draw counts.
-    let (min, max) = if attrs.resizable {
-        (attrs.min_size, attrs.max_size)
-    } else {
-        (Some(attrs.logical_size), Some(attrs.logical_size))
     };
-    let (min, max) = conn.decor.set_limits(Some(min), Some(max));
-    if min.is_some() {
-        conn.send(toplevel, XDG_TOPLEVEL_SET_MIN_SIZE, &size_args(min))
-            .map_err(os)?;
-    }
-    if max.is_some() {
-        conn.send(toplevel, XDG_TOPLEVEL_SET_MAX_SIZE, &size_args(max))
-            .map_err(os)?;
-    }
-    if attrs.maximized {
-        conn.send(toplevel, XDG_TOPLEVEL_SET_MAXIMIZED, &[])
-            .map_err(os)?;
-    }
-    if attrs.fullscreen {
-        conn.send(toplevel, XDG_TOPLEVEL_SET_FULLSCREEN, &0u32.to_le_bytes())
-            .map_err(os)?;
-    }
-    let icon = match (icon_manager, attrs.icon.as_ref()) {
-        (Some(manager), Some(icon)) => {
-            set_toplevel_icon(&mut conn, shm, manager, toplevel, Some(icon))
-        }
-        _ => None,
-    };
-
-    // Initial commit: the compositor responds with an xdg_surface.configure.
-    conn.send(surface, WL_SURFACE_COMMIT, &[]).map_err(os)?;
-    conn.stream.flush().map_err(os)?;
+    let (objects, icon) = toplevel::create(&mut conn, globals, &attrs).map_err(os)?;
     dbg(format_args!(
-        "window: surface={surface} xdg={xdg_surface} toplevel={toplevel} size={}x{}",
-        size.width, size.height
+        "window: surface={} xdg={} toplevel={} size={}x{}",
+        objects.surface, objects.xdg_surface, objects.toplevel, size.width, size.height
     ));
 
     let shared: Shared = Arc::new(Mutex::new(conn));
-    let mut win = WaylandWindow {
-        conn: shared.clone(),
-        surface,
-        shm,
+    let reg: Rc<RefCell<toplevel::Reg>> = Default::default();
+    let mut windows = vec![WaylandWindow::new(
+        shared.clone(),
+        objects,
+        globals,
+        reg.clone(),
         size,
-        toplevel,
-        icon_manager,
-        icon: RefCell::new(icon),
-        drop_accepted: std::cell::Cell::new(false),
-    };
+        1,
+        icon,
+    )];
+    // The windows the pointer, the keyboard and a drag are over (surfaces).
+    let mut pointer_focus = objects.surface;
+    let mut keyboard_focus = objects.surface;
+    let mut drag_focus = objects.surface;
 
     // Event loop. The keyboard/pointer are created when the seat advertises
     // them; `pointer_pos` tracks the latest cursor position for button events,
@@ -1643,18 +1723,21 @@ where
     let mut keys = keys::Keys::default();
     // Wheel notches and the scroll source, for the `axis` events that follow.
     let mut axes = pointer::Axes::default();
-    // Toplevel sizes are in surface units; the buffer is that times the scale.
-    let mut logical = size;
-    let mut pending_size: Option<PhysicalSize> = None;
     // Between messages, wait on the connection and on wakeups (timers, other
     // threads) together.
     crate::platform::wake::install_unix();
     let fd = shared.lock().unwrap().stream.as_raw_fd();
     // Unfocused until the compositor activates the toplevel.
-    if handler(Event::FocusChanged(false), &win) == ControlFlow::Exit {
+    if handler(Event::FocusChanged(false), &windows[0]) == ControlFlow::Exit {
         return Ok(());
     }
     loop {
+        // Windows opened, closed or resized by the last handler call.
+        if settle(&shared, &reg, &mut windows, &mut handler) == ControlFlow::Exit
+            || windows.is_empty()
+        {
+            break;
+        }
         // Messages a paste read while it waited come first.
         let queued = shared.lock().unwrap().queue.pop_front();
         if queued.is_none()
@@ -1669,14 +1752,17 @@ where
                     mods_mask,
                     (key, keys::Stroke::Repeat),
                     now,
-                    &mut |e| handler(e, &win),
+                    &mut |e| handler(e, find(&windows, keyboard_focus)),
                 );
                 if flow == ControlFlow::Exit {
                     break;
                 }
             }
+            // Every window hears the wake, to bring itself up to date.
             if crate::platform::wake::take(std::time::Instant::now())
-                && handler(Event::Wake, &win) == ControlFlow::Exit
+                && windows
+                    .iter()
+                    .any(|w| handler(Event::Wake, w) == ControlFlow::Exit)
             {
                 break;
             }
@@ -1688,22 +1774,43 @@ where
                 Some(message) => message,
                 None => conn.recv().map_err(os)?,
             };
+            // A drag entering names the surface it's over.
+            if message.1 == WL_DATA_DEVICE_ENTER
+                && conn.clip.device != 0
+                && message.0 == conn.clip.device
+                && let Some(s) = message.2.get(4..8)
+            {
+                drag_focus = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+            }
             if clipboard::handle(&mut conn, message.0, message.1, &message.2) {
                 let dnd = std::mem::take(&mut conn.clip.dnd);
                 drop(conn);
-                if deliver_dnd(&shared, &win, dnd, &mut handler) == ControlFlow::Exit {
+                let win = find(&windows, drag_focus);
+                if deliver_dnd(&shared, win, dnd, &mut handler) == ControlFlow::Exit {
                     break;
                 }
                 continue;
             }
             message
         };
+        let first_word = args
+            .get(0..4)
+            .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        let ours = |surface: u32| windows.iter().any(|w| w.surface == surface);
         // Input-method updates for the focused text field.
-        let ime = text_input::handle(&mut shared.lock().unwrap(), object, opcode, &args, surface);
+        let ime_surface = if ours(first_word) { first_word } else { 0 };
+        let ime = text_input::handle(
+            &mut shared.lock().unwrap(),
+            object,
+            opcode,
+            &args,
+            ime_surface,
+        );
         if let Some(events) = ime {
+            let win = find(&windows, keyboard_focus);
             if events
                 .into_iter()
-                .any(|ime| handler(Event::Ime(ime), &win) == ControlFlow::Exit)
+                .any(|ime| handler(Event::Ime(ime), win) == ControlFlow::Exit)
             {
                 break;
             }
@@ -1717,7 +1824,8 @@ where
         // Decoration modes and activation tokens.
         {
             let mut conn = shared.lock().unwrap();
-            if decor::handle(&mut conn, object, opcode, &args)
+            if (toplevel::use_decor_of(&mut conn, object)
+                && decor::handle(&mut conn, object, opcode, &args))
                 || attention::handle(&mut conn, object, opcode, &args)
             {
                 let _ = conn.stream.flush();
@@ -1726,32 +1834,30 @@ where
         }
         // Moving to another output, or an output's scale changing, means rendering
         // at a new resolution.
-        let moved = object == surface && opcode == WL_SURFACE_ENTER;
+        let entered = opcode == WL_SURFACE_ENTER && ours(object);
         let rescaled = opcode == WL_OUTPUT_SCALE && outputs.iter().any(|(id, _)| *id == object);
-        if moved || rescaled {
-            let value = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
-            if moved {
-                current_output = Some(value);
+        if entered || rescaled {
+            if entered {
+                find(&windows, object).output.set(Some(first_word));
             } else if let Some(entry) = outputs.iter_mut().find(|(id, _)| *id == object) {
-                entry.1 = value.max(1);
+                entry.1 = first_word.max(1);
             }
-            let scale = outputs
-                .iter()
-                .find(|(id, _)| Some(*id) == current_output)
-                .map_or(1, |(_, scale)| *scale);
-            let changed = {
-                let mut conn = shared.lock().unwrap();
-                let changed = conn.buffer_scale != scale;
-                conn.buffer_scale = scale;
-                changed
-            };
-            if changed {
+            for win in &windows {
+                let scale = outputs
+                    .iter()
+                    .find(|(id, _)| Some(*id) == win.output.get())
+                    .map_or(1, |(_, scale)| *scale);
+                if win.scale.get() == scale {
+                    continue;
+                }
                 dbg(format_args!("buffer scale {scale}"));
-                win.size = PhysicalSize::new(logical.width * scale, logical.height * scale);
-                if handler(Event::Resized(win.size), &win) == ControlFlow::Exit
-                    || handler(Event::RedrawRequested, &win) == ControlFlow::Exit
+                shared.lock().unwrap().buffer_scale = scale;
+                win.scale.set(scale);
+                win.set_logical(win.logical.get());
+                if handler(Event::Resized(win.size.get()), win) == ControlFlow::Exit
+                    || handler(Event::RedrawRequested, win) == ControlFlow::Exit
                 {
-                    break;
+                    return Ok(());
                 }
             }
             continue;
@@ -1808,9 +1914,13 @@ where
             // wl_fixed coordinates.
             let n = args.len();
             if opcode == WL_POINTER_ENTER {
+                if let Some(s) = args.get(4..8) {
+                    pointer_focus = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+                }
                 // The compositor resets the cursor on enter; set ours again.
                 let serial = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
                 let mut conn = shared.lock().unwrap();
+                toplevel::use_decor(&mut conn, find(&windows, pointer_focus).toplevel);
                 conn.enter_serial = Some(serial);
                 conn.apply_cursor();
             }
@@ -1819,9 +1929,11 @@ where
             pointer_pos = Point::new(fixed_to_f64(x), fixed_to_f64(y));
             crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
             // Over decorations Stipple draws, the pointer is theirs.
+            let win = find(&windows, pointer_focus);
             let motion = {
                 let mut conn = shared.lock().unwrap();
-                let motion = conn.decor.motion(pointer_pos, logical);
+                toplevel::use_decor(&mut conn, win.toplevel);
+                let motion = conn.decor.motion(pointer_pos, win.logical.get());
                 conn.apply_cursor();
                 motion
             };
@@ -1837,7 +1949,7 @@ where
             }
             if events
                 .into_iter()
-                .any(|event| handler(event, &win) == ControlFlow::Exit)
+                .any(|event| handler(event, win) == ControlFlow::Exit)
             {
                 break;
             }
@@ -1858,8 +1970,11 @@ where
             }
             // A press on the decorations moves, resizes or clicks their
             // buttons; one on the content is the app's.
+            let win = find(&windows, pointer_focus);
             let press = {
                 let mut conn = shared.lock().unwrap();
+                toplevel::use_decor(&mut conn, win.toplevel);
+                let logical = win.logical.get();
                 let press = decor::button(&mut conn, pointer_pos, logical, button, pressed, serial);
                 let _ = conn.stream.flush();
                 press
@@ -1867,13 +1982,13 @@ where
             let position = match press {
                 decor::Press::Forward(position) => position,
                 decor::Press::Close => {
-                    if handler(Event::CloseRequested, &win) == ControlFlow::Exit {
+                    if handler(Event::CloseRequested, win) == ControlFlow::Exit {
                         break;
                     }
                     continue;
                 }
                 decor::Press::Redraw => {
-                    if handler(Event::RedrawRequested, &win) == ControlFlow::Exit {
+                    if handler(Event::RedrawRequested, win) == ControlFlow::Exit {
                         break;
                     }
                     continue;
@@ -1892,16 +2007,21 @@ where
                     state,
                     position,
                 },
-                &win,
+                win,
             ) == ControlFlow::Exit
             {
                 break;
             }
         } else if Some(object) == pointer && opcode == pointer::WL_POINTER_LEAVE {
             dbg(format_args!("pointer left"));
-            let redraw = shared.lock().unwrap().decor.leave();
-            if handler(Event::PointerLeft, &win) == ControlFlow::Exit
-                || (redraw && handler(Event::RedrawRequested, &win) == ControlFlow::Exit)
+            let win = find(&windows, pointer_focus);
+            let redraw = {
+                let mut conn = shared.lock().unwrap();
+                toplevel::use_decor(&mut conn, win.toplevel);
+                conn.decor.leave()
+            };
+            if handler(Event::PointerLeft, win) == ControlFlow::Exit
+                || (redraw && handler(Event::RedrawRequested, win) == ControlFlow::Exit)
             {
                 break;
             }
@@ -1928,9 +2048,14 @@ where
             };
             crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
             // The wheel over the decorations Stipple draws isn't the app's.
-            let on_decor = shared.lock().unwrap().decor.pointer_on_decorations();
+            let win = find(&windows, pointer_focus);
+            let on_decor = {
+                let mut conn = shared.lock().unwrap();
+                toplevel::use_decor(&mut conn, win.toplevel);
+                conn.decor.pointer_on_decorations()
+            };
             if let Some(delta) = delta.filter(|_| !on_decor)
-                && handler(Event::Scroll { delta }, &win) == ControlFlow::Exit
+                && handler(Event::Scroll { delta }, win) == ControlFlow::Exit
             {
                 break;
             }
@@ -1941,50 +2066,67 @@ where
             let mut conn = shared.lock().unwrap();
             let _ = conn.send(wm_base, XDG_WM_BASE_PONG, &a);
             let _ = conn.stream.flush();
-        } else if object == xdg_surface && opcode == XDG_SURFACE_CONFIGURE {
-            let serial = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
+        } else if let Some(win) = windows
+            .iter()
+            .find(|w| w.xdg_surface == object && opcode == XDG_SURFACE_CONFIGURE)
+        {
             {
                 let mut conn = shared.lock().unwrap();
                 let mut a = Vec::new();
-                arg_u32(&mut a, serial);
-                let _ = conn.send(xdg_surface, XDG_SURFACE_ACK_CONFIGURE, &a);
+                arg_u32(&mut a, first_word);
+                let _ = conn.send(win.xdg_surface, XDG_SURFACE_ACK_CONFIGURE, &a);
             }
             // Apply the size from the toplevel.configure this one completes:
             // the window's, of which the content is what our title bar (if
             // any) leaves.
-            let content = pending_size
-                .take()
-                .map(|window| shared.lock().unwrap().decor.content_size(window));
-            if let Some(size) = content.filter(|s| *s != logical) {
-                logical = size;
-                let scale = shared.lock().unwrap().buffer_scale;
-                win.size = PhysicalSize::new(size.width * scale, size.height * scale);
-                if handler(Event::Resized(win.size), &win) == ControlFlow::Exit {
+            let content = win.pending_size.take().map(|window| {
+                let mut conn = shared.lock().unwrap();
+                toplevel::use_decor(&mut conn, win.toplevel);
+                conn.decor.content_size(window)
+            });
+            if let Some(size) = content.filter(|s| *s != win.logical.get()) {
+                win.set_logical(size);
+                if handler(Event::Resized(win.size.get()), win) == ControlFlow::Exit {
+                    break;
+                }
+            }
+            let state = win.pending_state.get();
+            if state != win.state.get() {
+                win.state.set(state);
+                crate::platform::window::debug_window(format_args!(
+                    "state {:#x} maximized={} minimized=false fullscreen={}",
+                    win.surface, state.0, state.1
+                ));
+                if handler(Event::WindowChanged, win) == ControlFlow::Exit {
                     break;
                 }
             }
             // Paint the frame for this configure.
-            if handler(Event::RedrawRequested, &win) == ControlFlow::Exit {
+            if handler(Event::RedrawRequested, win) == ControlFlow::Exit {
                 break;
             }
-        } else if object == toplevel && opcode == XDG_TOPLEVEL_CONFIGURE {
+        } else if let Some(win) = windows
+            .iter()
+            .find(|w| w.toplevel == object && opcode == XDG_TOPLEVEL_CONFIGURE)
+        {
             // width, height, states[]: a 0 size means "client picks".
-            let w = i32::from_le_bytes([args[0], args[1], args[2], args[3]]);
-            let h = i32::from_le_bytes([args[4], args[5], args[6], args[7]]);
-            dbg(format_args!("toplevel configure {w}x{h}"));
+            let configure = toplevel::parse_configure(&args);
+            dbg(format_args!("toplevel configure {configure:?}"));
+            win.pending_state
+                .set((configure.maximized, configure.fullscreen));
             let states = decor::configure_states(&args);
             let focus = {
                 let mut conn = shared.lock().unwrap();
+                toplevel::use_decor(&mut conn, win.toplevel);
                 // Whether the window is active (`activated`) is its focus.
                 let focus = conn.decor.set_states(&states);
-                pending_size = if w > 0 && h > 0 {
-                    Some(PhysicalSize::new(w as u32, h as u32))
-                } else {
+                win.pending_size.set(Some(configure.size.unwrap_or_else(|| {
                     // The client picks: keep the content's size (the title
                     // bar may have come or gone).
                     let title = conn.decor.title_height() as u32;
-                    Some(PhysicalSize::new(logical.width, logical.height + title))
-                };
+                    let logical = win.logical.get();
+                    PhysicalSize::new(logical.width, logical.height + title)
+                })));
                 focus
             };
             if let Some(focused) = focus {
@@ -1993,13 +2135,16 @@ where
                 if !focused {
                     keys.reset();
                 }
-                if handler(Event::FocusChanged(focused), &win) == ControlFlow::Exit {
+                if handler(Event::FocusChanged(focused), win) == ControlFlow::Exit {
                     break;
                 }
             }
-        } else if object == toplevel && opcode == XDG_TOPLEVEL_CLOSE {
+        } else if let Some(win) = windows
+            .iter()
+            .find(|w| w.toplevel == object && opcode == XDG_TOPLEVEL_CLOSE)
+        {
             // The app may keep the window (and ask the user first).
-            if handler(Event::CloseRequested, &win) == ControlFlow::Exit {
+            if handler(Event::CloseRequested, win) == ControlFlow::Exit {
                 break;
             }
         } else if old_keyboards.contains(&object) {
@@ -2044,7 +2189,7 @@ where
             };
             let flow = keys.key(keymap.as_ref(), mods_mask, (key, stroke), now, &mut |e| {
                 dbg(format_args!("key {key} pressed={pressed} -> {e:?}"));
-                handler(e, &win)
+                handler(e, find(&windows, keyboard_focus))
             });
             if flow == ControlFlow::Exit {
                 break;
@@ -2070,14 +2215,87 @@ where
                 word(4)
             ));
         } else if Some(object) == keyboard {
-            // enter (1). The window's focus is its toplevel's `activated`
-            // state, which a seat without a keyboard has too.
+            // enter (1): serial, surface, keys. Keys go to that window; the
+            // window's focus is its toplevel's `activated` state, which a seat
+            // without a keyboard has too.
+            if opcode == WL_KEYBOARD_ENTER
+                && let Some(s) = args.get(4..8)
+            {
+                keyboard_focus = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+            }
             dbg(format_args!("keyboard event {opcode}"));
         } else if object == WL_DISPLAY && opcode == WL_DISPLAY_ERROR {
             return Err(PlatformError::Os("wl_display error".into()));
         }
     }
     Ok(())
+}
+
+/// `wl_keyboard.enter` and `wl_data_device.enter`.
+const WL_KEYBOARD_ENTER: u16 = 1;
+const WL_DATA_DEVICE_ENTER: u16 = 1;
+
+/// The window with this surface, or else the first.
+fn find(windows: &[WaylandWindow], surface: u32) -> &WaylandWindow {
+    windows
+        .iter()
+        .find(|w| w.surface == surface)
+        .unwrap_or(&windows[0])
+}
+
+/// Take up what the handler asked of the windows: adopt the ones it opened
+/// (unfocused until the compositor activates them), destroy the ones it
+/// closed, and resize the ones it resized (where the compositor leaves the
+/// size to the window).
+fn settle<H>(
+    shared: &Shared,
+    reg: &Rc<RefCell<toplevel::Reg>>,
+    windows: &mut Vec<WaylandWindow>,
+    handler: &mut H,
+) -> ControlFlow
+where
+    H: FnMut(Event, &dyn Window) -> ControlFlow,
+{
+    let (opened, closed, resized) = {
+        let mut r = reg.borrow_mut();
+        (
+            std::mem::take(&mut r.opened),
+            std::mem::take(&mut r.closed),
+            std::mem::take(&mut r.resized),
+        )
+    };
+    for win in opened {
+        windows.push(win);
+        let win = windows.last().expect("just pushed");
+        if handler(Event::FocusChanged(false), win) == ControlFlow::Exit {
+            return ControlFlow::Exit;
+        }
+    }
+    for surface in closed {
+        if let Some(pos) = windows.iter().position(|w| w.surface == surface) {
+            let win = windows.remove(pos);
+            toplevel::destroy(&mut shared.lock().unwrap(), win.objects());
+        }
+    }
+    for (surface, size) in resized {
+        let Some(win) = windows.iter().find(|w| w.surface == surface) else {
+            continue;
+        };
+        if win.state.get() != (false, false) {
+            continue; // maximized or fullscreen: the compositor's size holds
+        }
+        let logical = PhysicalSize::new(
+            size.width.round().max(1.0) as u32,
+            size.height.round().max(1.0) as u32,
+        );
+        win.set_logical(logical);
+        if handler(Event::Resized(win.size.get()), win) == ControlFlow::Exit
+            || handler(Event::RedrawRequested, win) == ControlFlow::Exit
+        {
+            return ControlFlow::Exit;
+        }
+    }
+    ControlFlow::Wait
 }
 
 #[cfg(test)]

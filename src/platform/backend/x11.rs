@@ -48,6 +48,8 @@ mod ctext;
 /// The monitor refresh rate, which paces animation frames.
 /// Receiving drops (XDND).
 mod dnd;
+/// Titles, position, size and window state.
+mod geometry;
 /// Raw key events: physical keys, key text, sides and repeats.
 mod keys;
 mod pointer;
@@ -900,6 +902,8 @@ struct Conn {
     xdnd: dnd::Atoms,
     /// The attention and decoration atoms (0 until set).
     attention: attention::Atoms,
+    /// The atoms for titles, geometry and state (0 until set).
+    geo: geometry::Atoms,
     /// The core `cursor` font, opened on first use (0 until then).
     cursor_font: u32,
     /// Cursors created so far, by glyph.
@@ -976,6 +980,7 @@ impl Conn {
             atom_net_wm_icon: 0,
             xdnd: dnd::Atoms::default(),
             attention: attention::Atoms::default(),
+            geo: geometry::Atoms::default(),
             cursor_font: 0,
             cursors: Vec::new(),
             blank_cursor: 0,
@@ -1044,7 +1049,8 @@ struct X11Window {
     conn: SharedConn,
     window: u32,
     gc: u32,
-    size: PhysicalSize,
+    /// Where the window is, its size and state, as the server last said.
+    geo: Cell<geometry::Geometry>,
     // Set up once before mapping; moved into the surface on `create_surface`.
     shm: RefCell<Option<ShmState>>,
     // Shared with the event loop so opening/closing siblings reaches it. Held by
@@ -1054,6 +1060,8 @@ struct X11Window {
     /// The minimum and maximum inner size, in logical pixels, last given to
     /// the window manager in `WM_NORMAL_HINTS`.
     limits: Cell<(Option<Size>, Option<Size>)>,
+    /// The resize increments, in logical pixels, also in `WM_NORMAL_HINTS`.
+    increments: Cell<Option<Size>>,
     /// Whether the app takes the drag over the window, as last told through
     /// `set_drop_accepted` (XDND answers the source with it).
     drop_accepted: Cell<bool>,
@@ -1075,7 +1083,7 @@ impl Window for X11Window {
         crate::platform::shell::sni::set_tray(tray)
     }
     fn inner_size(&self) -> PhysicalSize {
-        self.size
+        self.geo.get().size
     }
     fn scale_factor(&self) -> ScaleFactor {
         ScaleFactor::new(self.conn.lock().unwrap().scale)
@@ -1083,7 +1091,41 @@ impl Window for X11Window {
     fn request_redraw(&self) {
         // Driven by Expose; an explicit invalidate would need a SendEvent.
     }
-    fn set_title(&self, _title: &str) {}
+    fn set_title(&self, title: &str) {
+        let mut conn = self.conn.lock().unwrap();
+        let _ = geometry::set_title(&mut conn, self.window, title);
+    }
+    fn set_visible(&self, visible: bool) {
+        let mut conn = self.conn.lock().unwrap();
+        let _ = conn.send(&geometry::map_request(self.window, visible));
+    }
+    fn info(&self) -> crate::platform::WindowInfo {
+        self.geo.get().info(self.scale_factor())
+    }
+    fn set_position(&self, position: Point) {
+        let s = self.scale_factor().get();
+        let at = (
+            (position.x * s).round() as i32,
+            (position.y * s).round() as i32,
+        );
+        let mut conn = self.conn.lock().unwrap();
+        let _ = conn.send(&geometry::configure_request(self.window, Some(at), None));
+    }
+    fn set_inner_size(&self, size: Size) {
+        let size = self.scale_factor().to_physical(size);
+        let mut conn = self.conn.lock().unwrap();
+        let _ = conn.send(&geometry::configure_request(self.window, None, Some(size)));
+    }
+    fn set_resize_increments(&self, step: Option<Size>) {
+        self.increments.set(step);
+        let (min, max) = self.limits.get();
+        let mut conn = self.conn.lock().unwrap();
+        let _ = set_size_hints(&mut conn, self.window, min, max, step);
+    }
+    fn set_minimized(&self, minimized: bool) {
+        let mut conn = self.conn.lock().unwrap();
+        let _ = geometry::set_minimized(&mut conn, self.window, minimized);
+    }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         // The input method places its candidate window at the caret's bottom
         // left, in window pixels.
@@ -1125,7 +1167,7 @@ impl Window for X11Window {
             conn: self.conn.clone(),
             window: self.window,
             gc: self.gc,
-            size: self.size,
+            size: self.geo.get().size,
             shm: self.shm.borrow_mut().take(),
         })
     }
@@ -1151,10 +1193,6 @@ impl Window for X11Window {
     fn close_window(&self) {
         self.reg.borrow_mut().closed.push(self.window);
     }
-    fn close_window_id(&self, id: WindowId) {
-        // Siblings share the loop, which destroys any of them by XID.
-        self.reg.borrow_mut().closed.push(id.0 as u32);
-    }
     fn request_attention(&self, kind: Option<crate::platform::UserAttention>) {
         let mut conn = self.conn.lock().unwrap();
         let _ = attention::set_urgent(&mut conn, self.window, kind);
@@ -1170,13 +1208,13 @@ impl Window for X11Window {
         let (_, max) = self.limits.get();
         self.limits.set((size, max));
         let mut conn = self.conn.lock().unwrap();
-        let _ = set_size_hints(&mut conn, self.window, size, max);
+        let _ = set_size_hints(&mut conn, self.window, size, max, self.increments.get());
     }
     fn set_max_size(&self, size: Option<Size>) {
         let (min, _) = self.limits.get();
         self.limits.set((min, size));
         let mut conn = self.conn.lock().unwrap();
-        let _ = set_size_hints(&mut conn, self.window, min, size);
+        let _ = set_size_hints(&mut conn, self.window, min, size, self.increments.get());
     }
     fn set_maximized(&self, maximized: bool) {
         let mut conn = self.conn.lock().unwrap();
@@ -1213,8 +1251,9 @@ fn set_size_hints(
     window: u32,
     min: Option<Size>,
     max: Option<Size>,
+    increments: Option<Size>,
 ) -> io::Result<()> {
-    let hints = size_hints(ScaleFactor::new(conn.scale), min, max);
+    let hints = size_hints(ScaleFactor::new(conn.scale), min, max, increments);
     set_property32(
         conn,
         window,
@@ -1227,7 +1266,12 @@ fn set_size_hints(
 /// The 18 `WM_SIZE_HINTS` words for these limits: flags, x, y, width, height
 /// (obsolete), min w/h, max w/h, resize increments, aspect ratios, base size and
 /// gravity.
-fn size_hints(scale: ScaleFactor, min: Option<Size>, max: Option<Size>) -> [u32; 18] {
+fn size_hints(
+    scale: ScaleFactor,
+    min: Option<Size>,
+    max: Option<Size>,
+    increments: Option<Size>,
+) -> [u32; 18] {
     let mut hints = [0u32; 18];
     let px = |s: Size| {
         let p = scale.to_physical(s);
@@ -1240,6 +1284,11 @@ fn size_hints(scale: ScaleFactor, min: Option<Size>, max: Option<Size>) -> [u32;
     if let Some(max) = max {
         hints[0] |= P_MAX_SIZE;
         (hints[7], hints[8]) = px(max);
+    }
+    // Steps count from the minimum size (the base size, when none is given).
+    if let Some(step) = increments {
+        hints[0] |= geometry::P_RESIZE_INC;
+        (hints[9], hints[10]) = px(step);
     }
     hints
 }
@@ -1503,8 +1552,8 @@ fn create_window(
     req.extend_from_slice(&0u32.to_le_bytes()); // value-mask: none
     conn.send(&finish(req)).map_err(os)?;
 
-    // Title via WM_NAME (atom 39 = WM_NAME, predefined; type STRING = 31).
-    set_property_str(conn, window, 39, 31, attrs.title.as_bytes()).map_err(os)?;
+    // The title, in WM_NAME and _NET_WM_NAME.
+    geometry::set_title(conn, window, &attrs.title).map_err(os)?;
 
     // WM_PROTOCOLS / WM_DELETE_WINDOW so the close button delivers an event.
     let (wm_protocols, wm_delete) = (conn.atom_wm_protocols, conn.atom_wm_delete);
@@ -1517,8 +1566,25 @@ fn create_window(
     } else {
         (Some(attrs.logical_size), Some(attrs.logical_size))
     };
-    if limits != (None, None) {
-        set_size_hints(conn, window, limits.0, limits.1).map_err(os)?;
+    if limits != (None, None) || attrs.resize_increments.is_some() || attrs.position.is_some() {
+        let scale = ScaleFactor::new(conn.scale);
+        let mut hints = size_hints(scale, limits.0, limits.1, attrs.resize_increments);
+        // An asked-for position: the window manager places the window there.
+        if attrs.position.is_some() {
+            hints[0] |= geometry::US_POSITION;
+            (hints[1], hints[2]) = (x as u32, y as u32);
+        }
+        set_property32(
+            conn,
+            window,
+            ATOM_WM_NORMAL_HINTS,
+            ATOM_WM_SIZE_HINTS,
+            &hints,
+        )
+        .map_err(os)?;
+    }
+    if !attrs.focus {
+        geometry::no_focus_on_map(conn, window).map_err(os)?;
     }
     let mut states = Vec::new();
     if attrs.maximized {
@@ -1563,10 +1629,13 @@ fn create_window(
     // Grab keyboard focus so key events arrive even with no window manager
     // (e.g. under Xvfb in CI). revert-to = PointerRoot (1), time = 0
     // (CurrentTime). Pointer events are delivered regardless of focus.
-    let mut req = vec![OP_SET_INPUT_FOCUS, 1, 0, 0];
-    req.extend_from_slice(&window.to_le_bytes());
-    req.extend_from_slice(&0u32.to_le_bytes());
-    conn.send(&finish(req)).map_err(os)?;
+    if attrs.focus {
+        let mut req = vec![OP_SET_INPUT_FOCUS, 1, 0, 0];
+        req.extend_from_slice(&window.to_le_bytes());
+        req.extend_from_slice(&0u32.to_le_bytes());
+        conn.send(&finish(req)).map_err(os)?;
+    }
+    crate::platform::window::debug_window(format_args!("opened {window:#x} {:?}", attrs.title));
 
     dbg(format_args!(
         "mapped window={window:#x} gc={gc:#x} size={}x{}",
@@ -1577,10 +1646,11 @@ fn create_window(
         conn: shared,
         window,
         gc,
-        size,
+        geo: Cell::new(geometry::Geometry::new((x, y), size)),
         shm: RefCell::new(shm),
         reg,
         limits: Cell::new(limits),
+        increments: Cell::new(attrs.resize_increments),
         drop_accepted: Cell::new(false),
     })
 }
@@ -1620,6 +1690,7 @@ where
     conn.atom_net_wm_icon = intern_atom(&mut conn, b"_NET_WM_ICON").map_err(os)?;
     conn.xdnd = dnd::Atoms::intern(&mut conn).map_err(os)?;
     conn.attention = attention::Atoms::intern(&mut conn).map_err(os)?;
+    conn.geo = geometry::Atoms::intern(&mut conn).map_err(os)?;
     let mut xdnd = dnd::Xdnd {
         atoms: conn.xdnd,
         ..Default::default()
@@ -1697,9 +1768,17 @@ where
                 (a, b) => a.or(b),
             };
             if !crate::platform::wake::wait_readable_until(fd, deadline) {
+                // Every window hears the wake, to bring itself up to date.
                 if crate::platform::wake::take(std::time::Instant::now())
-                    && handler(Event::Wake, &windows[0]) == ControlFlow::Exit
+                    && windows
+                        .iter()
+                        .any(|w| handler(Event::Wake, w) == ControlFlow::Exit)
                 {
+                    break;
+                }
+                // Windows opened or closed on the wake.
+                adopt_and_close(&reg, &mut windows, &shared);
+                if windows.is_empty() {
                     break;
                 }
                 continue;
@@ -1778,9 +1857,50 @@ where
                 handler(Event::RedrawRequested, win)
             }
             X_CONFIGURE_NOTIFY => {
-                let nw = u16::from_le_bytes([buf[20], buf[21]]) as u32;
-                let nh = u16::from_le_bytes([buf[22], buf[23]]) as u32;
-                handler(Event::Resized(PhysicalSize::new(nw, nh)), win)
+                let mut geo = win.geo.get();
+                let before = geo.size;
+                let moved = geo.configure(&buf);
+                win.geo.set(geo);
+                let mut flow = ControlFlow::Wait;
+                if geo.size != before || !moved {
+                    flow = handler(Event::Resized(geo.size), win);
+                }
+                if moved && flow == ControlFlow::Wait {
+                    flow = handler(Event::WindowChanged, win);
+                }
+                flow
+            }
+            geometry::X_REPARENT_NOTIFY => {
+                let mut geo = win.geo.get();
+                geo.reparent(&buf, shared.lock().unwrap().setup.root);
+                win.geo.set(geo);
+                ControlFlow::Wait
+            }
+            X_PROPERTY_NOTIFY => {
+                // A chunk of an INCR transfer, in or out.
+                let events =
+                    selection::property_notify(&mut shared.lock().unwrap(), &mut backlog, &buf);
+                let flow = selection::deliver(events, &windows, &mut handler);
+                if flow == ControlFlow::Exit {
+                    break;
+                }
+                // The window's state or frame.
+                let mut conn = shared.lock().unwrap();
+                let mut geo = win.geo.get();
+                let changed = geometry::watches(&conn, rd_u32(&buf, 8).unwrap_or(0))
+                    && geometry::refresh(&mut conn, &mut backlog, win.window, &mut geo)
+                        .unwrap_or(false);
+                drop(conn);
+                win.geo.set(geo);
+                if changed {
+                    crate::platform::window::debug_window(format_args!(
+                        "state {:#x} maximized={} minimized={} fullscreen={}",
+                        win.window, geo.maximized, geo.minimized, geo.fullscreen
+                    ));
+                    handler(Event::WindowChanged, win)
+                } else {
+                    ControlFlow::Wait
+                }
             }
             // The pointer entering reads as a move; leaving (not into a
             // child window) clears the hover.
@@ -1888,12 +2008,6 @@ where
                     selection::selection_notify(&mut shared.lock().unwrap(), &mut backlog, &buf);
                 selection::deliver(events, &windows, &mut handler)
             }
-            X_PROPERTY_NOTIFY => {
-                // A chunk of an INCR transfer, in or out.
-                let events =
-                    selection::property_notify(&mut shared.lock().unwrap(), &mut backlog, &buf);
-                selection::deliver(events, &windows, &mut handler)
-            }
             X_CLIENT_MESSAGE => {
                 // data starts at byte 12; first 32-bit word is the protocol atom.
                 let atom = rd_u32(&buf, 12).unwrap_or(0);
@@ -1940,23 +2054,31 @@ where
                 drag_out =
                     dnd::source::Source::start(&shared, xdnd.atoms, window, data, &mut backlog);
             }
-            windows.append(&mut r.opened);
-            for xid in r.closed.drain(..) {
-                if let Some(pos) = windows.iter().position(|w| w.window == xid) {
-                    windows.remove(pos);
-                    let mut conn = shared.lock().unwrap();
-                    conn.sel.forget_window(xid);
-                    let mut req = vec![OP_DESTROY_WINDOW, 0, 0, 0];
-                    req.extend_from_slice(&xid.to_le_bytes());
-                    let _ = conn.send(&finish(req));
-                }
-            }
         }
+        adopt_and_close(&reg, &mut windows, &shared);
         if windows.is_empty() {
             break; // every window closed
         }
     }
     Ok(())
+}
+
+/// Take the windows opened since the last call into the live set, and destroy
+/// the ones the app closed.
+fn adopt_and_close(reg: &Registry, windows: &mut Vec<X11Window>, shared: &SharedConn) {
+    let mut r = reg.borrow_mut();
+    windows.append(&mut r.opened);
+    for xid in r.closed.drain(..) {
+        if let Some(pos) = windows.iter().position(|w| w.window == xid) {
+            windows.remove(pos);
+            let mut conn = shared.lock().unwrap();
+            conn.sel.forget_window(xid);
+            let mut req = vec![OP_DESTROY_WINDOW, 0, 0, 0];
+            req.extend_from_slice(&xid.to_le_bytes());
+            let _ = conn.send(&finish(req));
+            crate::platform::window::debug_window(format_args!("closed {xid:#x}"));
+        }
+    }
 }
 
 /// The keyboard mapping (keycode → keysyms) fetched via `GetKeyboardMapping`,
@@ -2128,7 +2250,8 @@ fn event_window(buf: &[u8; 32]) -> u32 {
         X_EXPOSE | X_CLIENT_MESSAGE | attention::X_FOCUS_IN | attention::X_FOCUS_OUT => {
             rd_u32(buf, 4).unwrap_or(0)
         }
-        X_CONFIGURE_NOTIFY => rd_u32(buf, 8).unwrap_or(0),
+        X_CONFIGURE_NOTIFY | geometry::X_REPARENT_NOTIFY => rd_u32(buf, 8).unwrap_or(0),
+        X_PROPERTY_NOTIFY => rd_u32(buf, 4).unwrap_or(0),
         X_MOTION_NOTIFY
         | X_BUTTON_PRESS
         | X_BUTTON_RELEASE
@@ -2496,10 +2619,20 @@ mod tests {
             ScaleFactor::new(2.0),
             Some(Size::new(100.0, 50.0)),
             Some(Size::new(400.0, 300.0)),
+            None,
         );
         assert_eq!(hints[0], P_MIN_SIZE | P_MAX_SIZE);
         assert_eq!(&hints[5..9], &[200, 100, 800, 600]);
-        assert_eq!(size_hints(ScaleFactor::IDENTITY, None, None), [0; 18]);
+        assert_eq!(size_hints(ScaleFactor::IDENTITY, None, None, None), [0; 18]);
+        // Resize increments: PResizeInc, the step in physical pixels.
+        let hints = size_hints(
+            ScaleFactor::new(2.0),
+            None,
+            None,
+            Some(Size::new(8.0, 17.0)),
+        );
+        assert_eq!(hints[0], geometry::P_RESIZE_INC);
+        assert_eq!(&hints[9..11], &[16, 34]);
     }
 
     #[test]

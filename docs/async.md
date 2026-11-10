@@ -103,6 +103,11 @@ no timers uses no CPU, and one with a timer sleeps until it's due:
 | Web | a `setTimeout` at the next deadline, which calls into the module | a zero-delay `setTimeout` (the page has one thread) |
 | Android | not yet: updates queue until the next input | — |
 
+With several windows, the backend wakes each open window in turn: the first
+runs the updates and timers, and every window whose view changed re-renders.
+An event in one window that changes the state wakes the others too, so all of
+them show the same state (see [windows-and-cursors.md](windows-and-cursors.md#several-windows)).
+
 CI runs `asyncdemo --selftest` on X11, Wayland, Windows and macOS: it quits itself
 once a 100 ms timer has fired ten times and a background thread's result has
 arrived, with no input. It also checks that the spinner shown while the work runs
@@ -112,5 +117,3 @@ was animated at the display's rate, and that frames stopped once it was gone.
 
 - Timers aren't synchronized with the display's refresh. For animation, use the
   frame clock instead: see [Animation](animation.md).
-- With several windows, an update re-renders the window the wake arrived for;
-  the others repaint on their next event.

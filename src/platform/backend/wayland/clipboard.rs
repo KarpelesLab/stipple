@@ -90,7 +90,7 @@ unsafe extern "C" {
 pub(super) struct Clipboard {
     manager: u32,
     /// Our `wl_data_device`; 0 without a seat or a data-device manager.
-    device: u32,
+    pub(super) device: u32,
     /// The serial of the latest input event, which `set_selection` must cite.
     pub(super) serial: u32,
     /// The serial of the pointer button press, which `start_drag` must cite.
@@ -549,6 +549,7 @@ pub(super) mod tests {
             text_input: Default::default(),
             pointer: None,
             decor: Default::default(),
+            decors: Vec::new(),
             attention: Default::default(),
         };
         (conn, theirs)

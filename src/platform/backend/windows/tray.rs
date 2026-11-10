@@ -130,6 +130,33 @@ pub(super) fn install(hwnd: Hwnd) {
     );
 }
 
+/// The window that owns the icons, if it is still open.
+pub(super) fn owner() -> Option<Hwnd> {
+    match MAIN_HWND.load(Ordering::Acquire) {
+        0 => None,
+        hwnd => Some(hwnd as Hwnd),
+    }
+}
+
+/// The window that owned the icons closed while others stay open: make `hwnd`
+/// their owner, and show the tray icon on it again.
+pub(super) fn rehome(hwnd: Hwnd) {
+    if MAIN_HWND.load(Ordering::Acquire) != 0 {
+        return;
+    }
+    MAIN_HWND.store(hwnd as usize, Ordering::Release);
+    let tray = CTX.with(|c| c.borrow().tray.tray.clone());
+    if let Some(tray) = tray {
+        set_tray(hwnd, Some(&tray));
+    }
+}
+
+/// Whether `icon` is the one notifications borrow (so a closing window must
+/// not destroy it).
+pub(super) fn is_app_icon(icon: usize) -> bool {
+    icon != 0 && APP_ICON.load(Ordering::Acquire) == icon
+}
+
 /// The window's icon changed.
 pub(super) fn set_app_icon(icon: Handle) {
     APP_ICON.store(icon as usize, Ordering::Release);
@@ -163,6 +190,8 @@ fn fallback_icon() -> Handle {
 
 /// Show, update or remove (`None`) the tray icon. Returns whether it's shown.
 pub(super) fn set_tray(hwnd: Hwnd, tray: Option<&NativeTray>) -> bool {
+    // The icons stay with the window that owns them.
+    let hwnd = owner().unwrap_or(hwnd);
     let Some(tray) = tray else {
         if TRAY_UP.swap(false, Ordering::AcqRel) {
             unsafe { Shell_NotifyIconW(NIM_DELETE, &data(hwnd, TRAY_UID)) };

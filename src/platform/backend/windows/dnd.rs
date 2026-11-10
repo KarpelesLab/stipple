@@ -16,7 +16,7 @@ pub(super) mod drag_out;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use super::{CTX, Hwnd, current_scale, push_event};
+use super::{CTX, Hwnd, current_scale, push_event, with_current};
 use crate::geometry::Point;
 use crate::platform::event::{DragOffer, DropData, Event};
 
@@ -253,9 +253,11 @@ unsafe extern "system" fn drag_enter(
     let offer = offer_of(data);
     // Until the app answers, take anything we can read.
     CTX.with(|c| c.borrow_mut().drop_accepted = !offer.is_empty());
-    push_event(Event::DragEnter {
-        position: client_point(hwnd, pt),
-        offer,
+    with_current(hwnd, || {
+        push_event(Event::DragEnter {
+            position: client_point(hwnd, pt),
+            offer,
+        })
     });
     if !effect_out.is_null() {
         unsafe { *effect_out = effect(*effect_out) };
@@ -270,7 +272,7 @@ unsafe extern "system" fn drag_over(
     effect_out: *mut u32,
 ) -> Hresult {
     let hwnd = unsafe { (*this).hwnd };
-    let position = client_point(hwnd, pt);
+    let position = with_current(hwnd, || client_point(hwnd, pt));
     // OLE repeats DragOver while the pointer rests; only moves are news.
     let moved = CTX.with(|c| {
         let mut c = c.borrow_mut();
@@ -279,7 +281,7 @@ unsafe extern "system" fn drag_over(
         moved
     });
     if moved {
-        push_event(Event::DragOver { position });
+        with_current(hwnd, || push_event(Event::DragOver { position }));
     }
     if !effect_out.is_null() {
         unsafe { *effect_out = effect(*effect_out) };
@@ -287,9 +289,10 @@ unsafe extern "system" fn drag_over(
     S_OK
 }
 
-unsafe extern "system" fn drag_leave(_this: *mut DropTarget) -> Hresult {
+unsafe extern "system" fn drag_leave(this: *mut DropTarget) -> Hresult {
+    let hwnd = unsafe { (*this).hwnd };
     CTX.with(|c| c.borrow_mut().drag_last = None);
-    push_event(Event::DragLeave);
+    with_current(hwnd, || push_event(Event::DragLeave));
     S_OK
 }
 
@@ -302,7 +305,7 @@ unsafe extern "system" fn drop(
 ) -> Hresult {
     let hwnd = unsafe { (*this).hwnd };
     CTX.with(|c| c.borrow_mut().drag_last = None);
-    let position = client_point(hwnd, pt);
+    let position = with_current(hwnd, || client_point(hwnd, pt));
     let dropped = read_files(data).or_else(|| read_text(data));
     let answer = match &dropped {
         Some(_) if !effect_out.is_null() => effect(unsafe { *effect_out }),
@@ -311,9 +314,11 @@ unsafe extern "system" fn drop(
     if !effect_out.is_null() {
         unsafe { *effect_out = answer };
     }
-    push_event(match dropped {
-        Some(data) => Event::Drop { position, data },
-        None => Event::DragLeave,
+    with_current(hwnd, || {
+        push_event(match dropped {
+            Some(data) => Event::Drop { position, data },
+            None => Event::DragLeave,
+        })
     });
     S_OK
 }

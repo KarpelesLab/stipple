@@ -7,8 +7,19 @@
 use crate::geometry::{PhysicalSize, Point, ScaleFactor};
 
 /// Opaque, process-unique identifier for a window.
+///
+/// The app hands these out for the windows it opens (see
+/// [`App::open_window`](crate::App::open_window) and
+/// [`AppHandle::open_window`](crate::core::AppHandle::open_window));
+/// [`WindowId::PRIMARY`] is the window [`App::new`](crate::App::new) describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WindowId(pub(crate) u64);
+
+impl WindowId {
+    /// The app's first window: the one [`App::new`](crate::App::new)'s view
+    /// draws.
+    pub const PRIMARY: WindowId = WindowId(0);
+}
 
 /// Whether a button or key is being pressed or released.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,6 +258,10 @@ pub enum Event {
     /// The loop was woken by [`wake::wake`](crate::platform::wake::wake) or by
     /// the deadline set with [`wake::set_deadline`](crate::platform::wake::set_deadline).
     Wake,
+    /// The window moved, or was maximized, minimized, restored or made
+    /// fullscreen: anything [`Window::info`](crate::platform::Window::info)
+    /// reports other than a resize, which comes as [`Resized`](Event::Resized).
+    WindowChanged,
     /// Keyboard focus entered (`true`) or left (`false`) the window.
     FocusChanged(bool),
     /// The system's light/dark mode or accent color changed. Read the new look

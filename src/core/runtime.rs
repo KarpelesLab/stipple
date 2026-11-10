@@ -371,10 +371,13 @@ pub struct Cx<'a, S> {
     /// The frame's time on the animation timeline, and whether the view asked
     /// for another frame. See [`Cx::frame_time`] and [`Cx::request_frame`].
     frame: FrameInfo,
-    /// The window being built for: its id once the platform opened it, and
-    /// whether it has keyboard focus. See [`Cx::window_focused`].
-    window_id: Option<crate::platform::WindowId>,
+    /// The window being built, what is known of it, whether the view read
+    /// that, whether it has keyboard focus, and the title the view gave it.
+    window: crate::platform::WindowId,
+    window_info: crate::platform::WindowInfo,
+    window_info_read: bool,
     window_focused: bool,
+    window_title: Option<String>,
     /// The window's size in logical pixels; zero when unknown.
     window_size: Size,
 }
@@ -421,10 +424,77 @@ impl<'a, S> Cx<'a, S> {
                 time: crate::platform::frame::elapsed().unwrap_or_default(),
                 requested: false,
             },
-            window_id: None,
+            window: crate::platform::WindowId::PRIMARY,
+            window_info: Default::default(),
+            window_info_read: false,
             window_focused: true,
+            window_title: None,
             window_size: Size::new(0.0, 0.0),
         }
+    }
+
+    /// Tell the view which window it builds, what is known of it, and
+    /// whether it has keyboard focus.
+    pub(crate) fn set_window(
+        &mut self,
+        id: crate::platform::WindowId,
+        info: crate::platform::WindowInfo,
+        focused: bool,
+    ) {
+        self.window = id;
+        self.window_info = info;
+        self.window_focused = focused;
+    }
+
+    /// The window this view is being built for: [`WindowId::PRIMARY`]
+    /// for the app's first window, or the id
+    /// [`App::open_window`](crate::App::open_window) /
+    /// [`AppHandle::open_window`] returned. Lets one view function show
+    /// different content in different windows. It is the id
+    /// [`App::on_close_requested`](crate::App::on_close_requested) and
+    /// [`App::on_window_focus`](crate::App::on_window_focus) are given, and
+    /// [`AppHandle::close_window`] takes.
+    ///
+    /// [`WindowId::PRIMARY`]: crate::platform::WindowId::PRIMARY
+    pub fn window_id(&self) -> crate::platform::WindowId {
+        self.window
+    }
+
+    /// Where the window being built is and what state it is in (its size,
+    /// position, maximized or fullscreen...). A view that reads it is built
+    /// again when it changes.
+    pub fn window_info(&mut self) -> crate::platform::WindowInfo {
+        self.window_info_read = true;
+        self.window_info
+    }
+
+    /// Whether the view read [`window_info`](Self::window_info) this build.
+    pub fn window_info_read(&self) -> bool {
+        self.window_info_read
+    }
+
+    /// Set the title of the window being built, as a function of the state:
+    /// the app retitles the window whenever the title a build gives differs
+    /// from the last one. A view that never calls this leaves the title to
+    /// [`WindowAttributes::title`](crate::platform::WindowAttributes::title)
+    /// and [`WindowRequest::Title`](crate::platform::WindowRequest::Title).
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// # struct State { file: String, dirty: bool }
+    /// fn view(s: &State, cx: &mut Cx<State>) -> Element {
+    ///     cx.window_title(format!("{}{} — Editor", s.file, if s.dirty { "*" } else { "" }));
+    ///     // ...
+    /// #   spacer()
+    /// }
+    /// ```
+    pub fn window_title(&mut self, title: impl Into<String>) {
+        self.window_title = Some(title.into());
+    }
+
+    /// Take the title the view set with [`window_title`](Self::window_title).
+    pub fn take_window_title(&mut self) -> Option<String> {
+        self.window_title.take()
     }
 
     /// Whether the window being built has keyboard focus (it is the active
@@ -434,21 +504,6 @@ impl<'a, S> Cx<'a, S> {
     /// also [`App::on_window_focus`](crate::App::on_window_focus).
     pub fn window_focused(&self) -> bool {
         self.window_focused
-    }
-
-    /// The platform id of the window being built, once it is open: the id
-    /// [`App::on_close_requested`](crate::App::on_close_requested) and
-    /// [`App::on_window_focus`](crate::App::on_window_focus) are given, and
-    /// [`AppHandle::close_window`] takes. `None` before the window opens (and
-    /// in headless renders).
-    pub fn window_id(&self) -> Option<crate::platform::WindowId> {
-        self.window_id
-    }
-
-    /// Set the window this build is for (see [`window_focused`](Self::window_focused)).
-    pub(crate) fn set_window(&mut self, id: Option<crate::platform::WindowId>, focused: bool) {
-        self.window_id = id;
-        self.window_focused = focused;
     }
 
     /// The size of the window being built for, in logical pixels: what a

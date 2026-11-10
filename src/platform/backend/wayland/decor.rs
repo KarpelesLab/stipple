@@ -146,6 +146,30 @@ pub(super) struct Decor {
     font: Option<Option<Font>>,
 }
 
+/// `zxdg_toplevel_decoration_v1.destroy`.
+const DECORATION_DESTROY: u16 = 0;
+
+impl Decor {
+    /// The toplevel these decorations are for (each window has its own; the
+    /// connection holds the one in use, see `toplevel::use_decor`).
+    pub(super) fn toplevel(&self) -> u32 {
+        self.toplevel
+    }
+
+    /// The `zxdg_toplevel_decoration_v1`, if any.
+    pub(super) fn object(&self) -> Option<u32> {
+        self.object
+    }
+}
+
+/// Destroy the decorations in use (before their toplevel, as xdg-decoration
+/// requires).
+pub(super) fn destroy(conn: &mut WlConn) {
+    if let Some(object) = conn.decor.object.take() {
+        let _ = conn.send(object, DECORATION_DESTROY, &[]);
+    }
+}
+
 /// Set up decorations for a new toplevel: ask a decoration manager for
 /// server-side ones, or draw them ourselves if there is none.
 pub(super) fn setup(

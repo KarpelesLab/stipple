@@ -6,10 +6,13 @@ use std::time::Duration;
 
 use crate::core::canvas::{CanvasId, CanvasInvalidation};
 use crate::core::runtime::ViewportId;
+use crate::core::{Cx, Element};
 use crate::geometry::Rect;
 use crate::platform::wake;
 use crate::platform::{UserAttention, WindowId, WindowRequest};
+use crate::platform::{WindowAttributes, WindowInfo};
 use crate::render::Pixmap;
+use std::collections::HashMap;
 
 type Update<S> = Box<dyn FnOnce(&mut S) + Send>;
 type Tick<S> = Box<dyn FnMut(&mut S) + Send>;
@@ -70,6 +73,17 @@ pub(crate) struct AlertView {
     pub input: Option<AlertInput>,
 }
 
+/// A window's view, as [`AppHandle::open_window`] takes it: like
+/// [`ViewFn`](crate::ViewFn), but able to cross threads.
+pub type SendViewFn<S> = Box<dyn FnMut(&S, &mut Cx<'_, S>) -> Element + Send>;
+
+/// A window [`AppHandle::open_window`] asked for, waiting for the UI thread.
+pub(crate) struct OpenRequest<S> {
+    pub(crate) id: WindowId,
+    pub(crate) attrs: WindowAttributes,
+    pub(crate) view: SendViewFn<S>,
+}
+
 /// Identifies a timer, to [`cancel`](AppHandle::cancel) it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TimerId(u64);
@@ -87,10 +101,6 @@ struct Shared<S> {
     timers: Vec<Timer<S>>,
     next_id: u64,
     exit: bool,
-    /// Window changes queued by [`AppHandle::window`].
-    window: Vec<WindowRequest>,
-    /// Windows to close without asking, queued by [`AppHandle::close_window`].
-    close: Vec<WindowId>,
     /// Canvas areas to repaint, queued by [`AppHandle::invalidate_canvas`].
     canvases: Vec<CanvasInvalidation>,
     /// Viewport content queued by [`AppHandle::set_viewport_content`]
@@ -99,6 +109,17 @@ struct Shared<S> {
     /// Message boxes asked for, and those drawn in the window.
     asked: Vec<Asked<S>>,
     drawn: Vec<Drawn<S>>,
+    /// Window changes queued by [`AppHandle::window`] and
+    /// [`AppHandle::window_to`], with the window they are for.
+    window: Vec<(WindowId, WindowRequest)>,
+    /// Windows to open and close, queued by [`AppHandle::open_window`] and
+    /// [`AppHandle::close_window`].
+    opens: Vec<OpenRequest<S>>,
+    closes: Vec<WindowId>,
+    /// The next [`WindowId`] to hand out ([`WindowId::PRIMARY`] is 0).
+    next_window: u64,
+    /// What the app last learned of each open window.
+    info: HashMap<WindowId, WindowInfo>,
 }
 
 /// A handle to a running app, for changing its state from outside a widget
@@ -157,11 +178,14 @@ impl<S> AppHandle<S> {
                 next_id: 1,
                 exit: false,
                 window: Vec::new(),
-                close: Vec::new(),
                 canvases: Vec::new(),
                 viewports: Vec::new(),
                 asked: Vec::new(),
                 drawn: Vec::new(),
+                opens: Vec::new(),
+                closes: Vec::new(),
+                next_window: 1,
+                info: HashMap::new(),
             })),
         }
     }
@@ -226,9 +250,10 @@ impl<S> AppHandle<S> {
         wake::wake();
     }
 
-    /// Change the primary window while the app runs: maximize it, make it
-    /// fullscreen, change its size limits or icon. Applied on the UI thread
-    /// between events; a no-op on backends without that control.
+    /// Change the primary window while the app runs: retitle, move or resize
+    /// it, maximize it, make it fullscreen, change its size limits or icon.
+    /// Applied on the UI thread between events; a no-op on backends without
+    /// that control. Use [`window_to`](Self::window_to) for other windows.
     ///
     /// ```no_run
     /// # use stipple::prelude::*;
@@ -241,19 +266,83 @@ impl<S> AppHandle<S> {
     /// # }
     /// ```
     pub fn window(&self, request: WindowRequest) {
-        self.with(|s| s.window.push(request));
+        self.window_to(WindowId::PRIMARY, request);
+    }
+
+    /// Change window `id` while the app runs (see [`window`](Self::window)).
+    /// Requests for a window that has closed are dropped.
+    pub fn window_to(&self, id: WindowId, request: WindowRequest) {
+        self.with(|s| s.window.push((id, request)));
         wake::wake();
+    }
+
+    /// Open another window while the app runs, showing `view` onto the shared
+    /// state, and return its id. Callable from any thread; the window opens
+    /// on the UI thread at the next turn of the event loop. Inside the view,
+    /// [`Cx::window_id`](crate::core::Cx::window_id) tells which window is
+    /// being built, so one view function can serve several windows.
+    ///
+    /// Backends with one window (iOS, Android, the web) ignore it.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// # use stipple::platform::WindowAttributes;
+    /// # struct State;
+    /// # fn editor(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+    /// # fn f(handle: AppHandle<State>) {
+    /// let id = handle.open_window(WindowAttributes::new().with_title("Untitled"), editor);
+    /// // ...later
+    /// handle.close_window(id);
+    /// # }
+    /// ```
+    pub fn open_window(
+        &self,
+        attrs: WindowAttributes,
+        view: impl FnMut(&S, &mut Cx<'_, S>) -> Element + Send + 'static,
+    ) -> WindowId {
+        let id = self.with(|s| {
+            let id = WindowId(s.next_window);
+            s.next_window += 1;
+            s.opens.push(OpenRequest {
+                id,
+                attrs,
+                view: Box::new(view),
+            });
+            id
+        });
+        wake::wake();
+        id
     }
 
     /// Close window `id` without asking
     /// [`App::on_close_requested`](crate::App::on_close_requested): what an
-    /// app calls once the user confirmed a close it cancelled earlier.
-    /// Closing the last window ends the app, as when the user closes it.
-    /// The id is the one the close hook was given (or
-    /// [`Cx::window_id`](crate::core::Cx::window_id)).
+    /// app calls once the user confirmed a close it cancelled earlier, or to
+    /// close a window it opened. The id is the one
+    /// [`App::open_window`](crate::App::open_window) / [`open_window`](Self::open_window)
+    /// returned, the close hook was given, or
+    /// [`Cx::window_id`](crate::core::Cx::window_id) says. Closing the last
+    /// window ends the app unless
+    /// [`App::exit_on_last_window_closed`](crate::App::exit_on_last_window_closed)
+    /// says otherwise. Does nothing if it already closed.
     pub fn close_window(&self, id: WindowId) {
-        self.with(|s| s.close.push(id));
+        self.with(|s| s.closes.push(id));
         wake::wake();
+    }
+
+    /// Where window `id` is and what state it is in, as of the last event
+    /// the app handled for it; `None` once it has closed (or before it
+    /// opened).
+    pub fn window_info(&self, id: WindowId) -> Option<WindowInfo> {
+        self.with(|s| s.info.get(&id).copied())
+    }
+
+    /// The ids of the open windows, in the order they opened.
+    pub fn windows(&self) -> Vec<WindowId> {
+        self.with(|s| {
+            let mut ids: Vec<WindowId> = s.info.keys().copied().collect();
+            ids.sort_by_key(|id| id.0);
+            ids
+        })
     }
 
     /// Ask for the user's attention without stealing focus: flash the taskbar
@@ -298,11 +387,6 @@ impl<S> AppHandle<S> {
         notification: &crate::platform::Notification,
     ) -> Result<(), crate::platform::PlatformError> {
         crate::platform::notify(notification)
-    }
-
-    /// Take the windows queued by [`close_window`](Self::close_window).
-    pub(crate) fn take_close_requests(&self) -> Vec<WindowId> {
-        self.with(|s| std::mem::take(&mut s.close))
     }
 
     /// Repaint all of [canvas](crate::core::Element::canvas) `id`, without
@@ -502,9 +586,51 @@ impl<S> AppHandle<S> {
         (d.answer)(state, response);
     }
 
-    /// Take the window changes queued by [`window`](Self::window).
-    pub(crate) fn take_window_requests(&self) -> Vec<WindowRequest> {
-        self.with(|s| std::mem::take(&mut s.window))
+    /// Take the window changes queued for window `id`.
+    pub(crate) fn take_window_requests(&self, id: WindowId) -> Vec<WindowRequest> {
+        self.with(|s| {
+            let (mine, rest) = std::mem::take(&mut s.window)
+                .into_iter()
+                .partition(|(to, _)| *to == id);
+            s.window = rest;
+            mine.into_iter().map(|(_, r)| r).collect()
+        })
+    }
+
+    /// Drop queued changes for windows that aren't open (any more).
+    pub(crate) fn drop_window_requests(&self, open: &[WindowId]) {
+        self.with(|s| s.window.retain(|(to, _)| open.contains(to)));
+    }
+
+    /// A new window id, for a window the app opens itself.
+    pub(crate) fn next_window_id(&self) -> WindowId {
+        self.with(|s| {
+            let id = WindowId(s.next_window);
+            s.next_window += 1;
+            id
+        })
+    }
+
+    /// Take the windows queued to open.
+    pub(crate) fn take_opens(&self) -> Vec<OpenRequest<S>> {
+        self.with(|s| std::mem::take(&mut s.opens))
+    }
+
+    /// Take the windows queued to close.
+    pub(crate) fn take_closes(&self) -> Vec<WindowId> {
+        self.with(|s| std::mem::take(&mut s.closes))
+    }
+
+    /// Record what is known of window `id` (`None`: it closed).
+    pub(crate) fn set_window_info(&self, id: WindowId, info: Option<WindowInfo>) {
+        self.with(|s| match info {
+            Some(info) => {
+                s.info.insert(id, info);
+            }
+            None => {
+                s.info.remove(&id);
+            }
+        });
     }
 
     /// Apply queued updates and due timers to `state`, as of `now`. Returns
@@ -653,6 +779,52 @@ mod tests {
         assert_eq!(n, 1);
         h.pump(&mut n, Instant::now());
         assert_eq!(n, 11);
+    }
+
+    #[test]
+    fn window_requests_go_to_their_window() {
+        let h = AppHandle::<u32>::new();
+        let other = h.open_window(WindowAttributes::new(), |_, _| crate::widgets::spacer());
+        assert_ne!(other, WindowId::PRIMARY);
+        h.window(WindowRequest::Title("main".into()));
+        h.window_to(other, WindowRequest::Title("other".into()));
+        h.window_to(WindowId(99), WindowRequest::Maximized(true));
+        assert_eq!(
+            h.take_window_requests(other),
+            [WindowRequest::Title("other".into())]
+        );
+        h.drop_window_requests(&[WindowId::PRIMARY]);
+        assert_eq!(
+            h.take_window_requests(WindowId::PRIMARY),
+            [WindowRequest::Title("main".into())]
+        );
+        let opens = h.take_opens();
+        assert_eq!(opens.len(), 1);
+        assert_eq!(opens[0].id, other);
+        assert!(h.take_window_requests(WindowId(99)).is_empty(), "dropped");
+        // Ids keep counting up, from any thread.
+        let remote = h.clone();
+        let third = std::thread::spawn(move || {
+            remote.open_window(WindowAttributes::new(), |_, _| crate::widgets::spacer())
+        })
+        .join()
+        .unwrap();
+        assert!(third.0 > other.0);
+        h.close_window(third);
+        assert_eq!(h.take_closes(), [third]);
+    }
+
+    #[test]
+    fn window_info_is_kept_per_open_window() {
+        let h = AppHandle::<u32>::new();
+        assert_eq!(h.window_info(WindowId::PRIMARY), None);
+        let info = WindowInfo::default();
+        h.set_window_info(WindowId::PRIMARY, Some(info));
+        h.set_window_info(WindowId(3), Some(info));
+        assert_eq!(h.window_info(WindowId::PRIMARY), Some(info));
+        assert_eq!(h.windows(), [WindowId::PRIMARY, WindowId(3)]);
+        h.set_window_info(WindowId(3), None);
+        assert_eq!(h.windows(), [WindowId::PRIMARY]);
     }
 
     #[test]

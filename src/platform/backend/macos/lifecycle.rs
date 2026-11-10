@@ -35,35 +35,28 @@ fn post(event: Event) {
     CTX.with(|c| c.borrow_mut().pending.push(event));
 }
 
-/// `windowShouldClose:` — the close button or ⌘W. The window stays; the app
-/// decides (and the loop ends if it closes).
-extern "C" fn window_should_close(_this: Id, _cmd: Sel, _sender: Id) -> bool {
-    post(Event::CloseRequested);
-    false
+/// Queue `event` for the window whose content view (and delegate) is `view`.
+fn post_to(view: Id, event: Event) {
+    CTX.with(|c| c.borrow_mut().window_pending.push((view, event)));
 }
 
-/// `windowDidBecomeKey:` / `windowDidResignKey:`.
-extern "C" fn window_did_become_key(_this: Id, _cmd: Sel, _notification: Id) {
-    post(Event::FocusChanged(true));
+/// `windowDidBecomeKey:` / `windowDidResignKey:`, for the window whose
+/// delegate (its view) heard it. (`windowShouldClose:` is in `geometry`.)
+extern "C" fn window_did_become_key(this: Id, _cmd: Sel, _notification: Id) {
+    post_to(this, Event::FocusChanged(true));
 }
 
-extern "C" fn window_did_resign_key(_this: Id, _cmd: Sel, _notification: Id) {
-    post(Event::FocusChanged(false));
+extern "C" fn window_did_resign_key(this: Id, _cmd: Sel, _notification: Id) {
+    post_to(this, Event::FocusChanged(false));
 }
 
-/// Add the window delegate methods to the view class (the view is the
+/// Add the focus delegate methods to the view class (the view is the
 /// window's delegate).
 ///
 /// # Safety
 /// `cls` must be a class being built (allocated, not yet registered).
 pub(super) unsafe fn add_window_methods(cls: Class) {
     unsafe {
-        class_addMethod(
-            cls,
-            sel("windowShouldClose:"),
-            window_should_close as *const c_void,
-            c"c@:@".as_ptr(),
-        );
         class_addMethod(
             cls,
             sel("windowDidBecomeKey:"),
@@ -179,7 +172,12 @@ pub(super) unsafe fn self_test(window: Id) {
         let tile = msg_id(shared_app(), sel("dockTile"));
         let label = super::nsstring_to_string(msg_id(tile, sel("badgeLabel")));
         set_badge(None);
-        let pending = CTX.with(|c| c.borrow().pending.clone());
+        // The close request is the window's, the quit the app's.
+        let pending: Vec<Event> = CTX.with(|c| {
+            let c = c.borrow();
+            let window = c.window_pending.iter().map(|(_, e)| e.clone());
+            window.chain(c.pending.iter().cloned()).collect()
+        });
         println!("Cocoa lifecycle: badge={label:?} pending={pending:?}");
     }
 }

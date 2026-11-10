@@ -373,10 +373,25 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   ending when the last window closes. The X11 backend drives multiple top-level
   windows on one connection (a shared `WindowReg` adopts windows opened mid-loop
   via the new `Window::open_window`/`close_window` seam; events route by XID),
-  and `WindowAttributes::with_position` lays them out. Other backends keep the
-  single-window default until they adopt the seam. **CI-verified** (X11): the
+  and `WindowAttributes::with_position` lays them out. **CI-verified** (X11): the
   multiwindow example opens a red and a blue window side by side and the root
   screenshot confirms both painted, each its own color.
+- ✅ **Runtime windows, titles and geometry** (#18–#20): Wayland (one
+  `xdg_toplevel` each), Windows (`CreateWindowExW`) and macOS (another
+  `NSWindow`) drive several windows like X11. `AppHandle::open_window(attrs,
+  view) -> WindowId` / `close_window(id)` open and close them from any thread
+  while the app runs; `Cx::window_id` lets one view serve many windows;
+  `App::exit_on_last_window_closed(false)` keeps the app running with none;
+  `WindowAttributes::with_focus`. Backends wake every window, and an event
+  that changes the state in one window re-renders the others. Titles: real on
+  every desktop backend (`_NET_WM_NAME` + `WM_NAME`, `xdg_toplevel.set_title`,
+  `SetWindowTextW`), declarative with `Cx::window_title` or through
+  `WindowRequest::Title`. Geometry: `WindowRequest::{Position, InnerSize,
+  ResizeIncrements, Minimized}`, `WindowInfo` (position, inner/outer size,
+  scale, maximized/minimized/fullscreen, work area) from `Cx::window_info`,
+  `AppHandle::window_info` and `App::on_window_change`, with
+  `Event::WindowChanged`. **CI-verified** on X11 (xprop/xdotool) and Wayland
+  (swaymsg); the Windows and macOS jobs check values read back from the OS.
 - ✅ **Embedded GPU content (browser viewport)**: toward using Stipple as a web
   browser's UI, the chosen model is **Stipple-as-compositor with shared GPU
   textures** (the Chromium model): a separate, sandboxed content process renders

@@ -50,12 +50,6 @@ impl<S> Lifecycle<S> {
     }
 }
 
-/// The id a window is known by before (or without) a platform window: the
-/// headless helpers use it.
-fn pane_id(id: Option<WindowId>, idx: usize) -> WindowId {
-    id.unwrap_or(WindowId(idx as u64))
-}
-
 impl<S: 'static> App<S> {
     /// Decide whether a window the user asked to close (its close button,
     /// Alt+F4, ⌘W, the window manager) closes. `hook` gets the state and the
@@ -127,13 +121,13 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Ask the close hook whether pane `idx` (window `id`) closes. A hook
+    /// Ask the close hook whether window `id` closes. A hook
     /// that ran may have changed the state: every pane rebuilds.
-    pub(crate) fn ask_close(&mut self, idx: usize, id: WindowId) -> bool {
+    pub(crate) fn ask_close(&mut self, id: WindowId) -> bool {
         let Some(hook) = self.lifecycle.close.as_mut() else {
             return true;
         };
-        let answer = hook(&mut self.state, pane_id(Some(id), idx));
+        let answer = hook(&mut self.state, id);
         for pane in &mut self.panes {
             pane.dirty = true;
         }
@@ -141,8 +135,8 @@ impl<S: 'static> App<S> {
     }
 
     /// Ask whether the app quits: the quit hook, or else the close hook for
-    /// each open window (the panes in `open`).
-    pub(crate) fn ask_quit(&mut self, open: &[(usize, WindowId)]) -> bool {
+    /// each open window (`open`).
+    pub(crate) fn ask_quit(&mut self, open: &[WindowId]) -> bool {
         if let Some(hook) = self.lifecycle.quit.as_mut() {
             let answer = hook(&mut self.state);
             for pane in &mut self.panes {
@@ -152,8 +146,8 @@ impl<S: 'static> App<S> {
         }
         // Every window is asked, so each can show what it has to.
         let mut quit = true;
-        for &(idx, id) in open {
-            quit &= self.ask_close(idx, id);
+        for &id in open {
+            quit &= self.ask_close(id);
         }
         quit
     }
@@ -181,23 +175,21 @@ impl<S: 'static> App<S> {
     /// Ask to close the primary window, as its close button would, without a
     /// running backend (for tests). Returns whether it would close.
     pub fn request_close(&mut self) -> bool {
-        let id = pane_id(self.panes[0].window_id, 0);
-        self.ask_close(0, id)
+        let id = self.panes[0].id;
+        self.ask_close(id)
     }
 
     /// Ask the app to quit, as ⌘Q would, without a running backend (for
     /// tests). Returns whether it would quit.
     pub fn request_quit(&mut self) -> bool {
-        let open: Vec<(usize, WindowId)> = (0..self.panes.len())
-            .map(|idx| (idx, pane_id(self.panes[idx].window_id, idx)))
-            .collect();
+        let open: Vec<WindowId> = self.panes.iter().map(|p| p.id).collect();
         self.ask_quit(&open)
     }
 
     /// Give the primary window keyboard focus, or take it away, as the
     /// platform would (for tests). Returns whether that changed anything.
     pub fn set_window_focused(&mut self, focused: bool) -> bool {
-        let id = pane_id(self.panes[0].window_id, 0);
+        let id = self.panes[0].id;
         self.window_focus_changed(0, id, focused)
     }
 

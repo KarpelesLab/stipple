@@ -7,15 +7,20 @@
 //! An `NSWindow` hosts a custom `NSView` whose `drawRect:` blits the software
 //! [`Pixmap`] as a `CGImage`. A manual `nextEventMatchingMask:` loop translates
 //! `NSEvent`s into Stipple pointer/keyboard events (y-flipped to top-left origin)
-//! and polls the view bounds for live resize.
+//! for the window each belongs to, and polls the views' bounds for live resize.
+//! The app opens more windows with `Window::open_window`; each is an
+//! `NSWindow` with its own `StippleView`, which is also its delegate (close
+//! requests, moves, zoom, miniaturize and fullscreen; see `geometry`). A wake
+//! is delivered to every open window, and the loop ends when the last closes.
 //!
 //! **Verification:** build-checked on the `macos-latest` CI runner via the
 //! build matrix; runtime-screenshotted by the Visual workflow's macOS job
 //! (`screencapture`).
 #![allow(unsafe_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::{CString, c_void};
+use std::rc::Rc;
 
 use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
 use crate::platform::ControlFlow;
@@ -25,13 +30,15 @@ use crate::platform::input;
 use crate::platform::menu::{
     MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, TRAY_ID_BASE, mnemonic,
 };
-use crate::platform::window::{CursorIcon, Window, WindowAttributes};
+use crate::platform::window::{CursorIcon, Window, WindowAttributes, WindowInfo, debug_window};
 use crate::render::{Pixmap, Surface};
 
 /// Pacing animation frames by the display (`CVDisplayLink`).
 mod display_link;
 /// Receiving drops (`NSDraggingDestination`).
 mod dnd;
+/// Window geometry and state, and the window delegate.
+mod geometry;
 /// Raw key events (`Event::RawKey`).
 mod keys;
 /// Close and quit requests, focus, attention, the Dock badge and the beep.
@@ -492,25 +499,14 @@ unsafe fn translate_event(etype: u64, ev: Id, view_h: f64) -> Option<Event> {
 
 #[derive(Default)]
 struct MacCtx {
-    fb: Vec<u8>, // straight RGBA8, top row first
-    w: usize,
-    h: usize,
+    /// The active window (the one the last event came from) and its view:
+    /// the input method composes into it.
     view: Id,
     window: Id,
-    /// Physical pixels per point: the window's `backingScaleFactor`.
-    scale: f64,
-    /// Accessible label exposed to NSAccessibility (the window title).
-    a11y_label: String,
-    /// The current accessibility tree (pushed each frame by the App). The view's
-    /// `accessibilityChildren` builds native elements from this on demand.
-    a11y_tree: Option<crate::platform::access::A11yNode>,
-    /// Set by the window delegate's `windowWillClose:` so the event loop can
-    /// break instead of spinning on a closed window.
+    /// Set by Quit (and the menu self-test) to end the event loop.
     should_close: bool,
-    /// The cursor the app asked for, set again on each mouse move over the
-    /// view (AppKit resets it at the window's edges and title bar).
-    cursor: CursorIcon,
-    /// The focused text field, for the input method (see `text_input`).
+    /// The active window's focused text field, for the input method (see
+    /// `text_input`).
     ime: Option<crate::platform::ImeState>,
     /// The input method's marked (composition) text.
     marked: String,
@@ -529,6 +525,9 @@ struct MacCtx {
     /// Events raised inside AppKit callbacks (a menu pick), delivered to the
     /// handler once `sendEvent:` returns.
     pending: Vec<Event>,
+    /// Events for one window raised inside AppKit callbacks (a drop, a close
+    /// request, a move), by its content view.
+    window_pending: Vec<(Id, Event)>,
     /// The tag of the item picked from the context menu being shown.
     context_pick: Option<i64>,
     /// The tray icon's `NSStatusItem` (retained), or null.
@@ -548,10 +547,14 @@ thread_local! {
 }
 
 /// `drawRect:` implementation for our NSView subclass: blit the framebuffer.
-extern "C" fn draw_rect(_this: Id, _cmd: Sel, _dirty: CgRect) {
-    CTX.with(|c| {
-        let c = c.borrow();
-        if c.fb.is_empty() {
+extern "C" fn draw_rect(this: Id, _cmd: Sel, _dirty: CgRect) {
+    let Some(win) = window_for_view(this) else {
+        return;
+    };
+    let scale = win.scale.get();
+    {
+        let c = win.fb.borrow();
+        if c.px.is_empty() {
             return;
         }
         unsafe {
@@ -569,8 +572,8 @@ extern "C" fn draw_rect(_this: Id, _cmd: Sel, _dirty: CgRect) {
             let space = CGColorSpaceCreateDeviceRGB();
             let provider = CGDataProviderCreateWithData(
                 std::ptr::null_mut(),
-                c.fb.as_ptr() as *const c_void,
-                c.fb.len(),
+                c.px.as_ptr() as *const c_void,
+                c.px.len(),
                 std::ptr::null(),
             );
             let image = CGImageCreate(
@@ -587,7 +590,7 @@ extern "C" fn draw_rect(_this: Id, _cmd: Sel, _dirty: CgRect) {
                 0,
             );
             // The context is in points; the framebuffer is in physical pixels.
-            let (width, height) = (c.w as f64 / c.scale, c.h as f64 / c.scale);
+            let (width, height) = (c.w as f64 / scale, c.h as f64 / scale);
             let rect = CgRect {
                 origin: CgPoint { x: 0.0, y: 0.0 },
                 size: CgSize { width, height },
@@ -605,20 +608,13 @@ extern "C" fn draw_rect(_this: Id, _cmd: Sel, _dirty: CgRect) {
             CGDataProviderRelease(provider);
             CGColorSpaceRelease(space);
         }
-    });
+    }
 }
 
 /// `isFlipped` => YES, so the view's coordinate origin is top-left and our
 /// top-row-first framebuffer draws upright.
 extern "C" fn is_flipped(_this: Id, _cmd: Sel) -> bool {
     true
-}
-
-/// `windowWillClose:` — the view doubles as the window's delegate. Flag the
-/// close so `run`'s event loop exits instead of spinning forever on a window
-/// the user already dismissed.
-extern "C" fn window_will_close(_this: Id, _cmd: Sel, _notification: Id) {
-    CTX.with(|c| c.borrow_mut().should_close = true);
 }
 
 /// `stippleAppearanceChanged:` — the view observes the system's appearance and
@@ -715,8 +711,9 @@ extern "C" fn acc_role(_this: Id, _cmd: Sel) -> Id {
 }
 
 /// `accessibilityLabel` => the window's accessible label.
-extern "C" fn acc_label(_this: Id, _cmd: Sel) -> Id {
-    CTX.with(|c| nsstring(&c.borrow().a11y_label))
+extern "C" fn acc_label(this: Id, _cmd: Sel) -> Id {
+    let label = window_for_view(this).map(|w| w.a11y_label.borrow().clone());
+    nsstring(label.as_deref().unwrap_or(""))
 }
 
 /// Map a neutral [`A11yRole`](crate::platform::access::A11yRole) to its `NSAccessibility`
@@ -812,9 +809,12 @@ unsafe fn dump_ax(el: Id, depth: usize) {
 /// AppKit exposes the full Stipple element tree to assistive technologies. The
 /// root node maps to the view itself (an `AXGroup`), so we vend *its* children.
 extern "C" fn acc_children(this: Id, _cmd: Sel) -> Id {
-    CTX.with(|c| {
-        let c = c.borrow();
-        let Some(root) = c.a11y_tree.as_ref() else {
+    let Some(win) = window_for_view(this) else {
+        return std::ptr::null_mut();
+    };
+    {
+        let tree = win.a11y_tree.borrow();
+        let Some(root) = tree.as_ref() else {
             return std::ptr::null_mut();
         };
         unsafe {
@@ -825,7 +825,7 @@ extern "C" fn acc_children(this: Id, _cmd: Sel) -> Id {
             }
             arr
         }
-    })
+    }
 }
 
 /// Copy an `NSString` out to a Rust `String` (via `-UTF8String`).
@@ -1085,8 +1085,7 @@ unsafe fn fill_menu(menu: Id, items: &[NativeMenuItem], target: Id, context: boo
 
 /// Show `menu` as a context menu at `at` (points from the content view's
 /// top-left; the view is flipped) and wait while AppKit tracks it.
-unsafe fn popup_menu(menu: &NativeMenu, at: Point) -> MenuPopup {
-    let view = CTX.with(|c| c.borrow().view);
+unsafe fn popup_menu(view: Id, menu: &NativeMenu, at: Point) -> MenuPopup {
     if view.is_null() {
         return MenuPopup::Unsupported;
     }
@@ -1306,15 +1305,10 @@ fn register_view_class() -> Class {
             is_flipped as *const c_void,
             flip_types.as_ptr(),
         );
-        // Window delegate method: void return, takes the notification id (v@:@).
+        // The window delegate's methods (closing, moves, state changes).
+        geometry::add_methods(cls);
+        // Notification observer: void return, takes the notification (v@:@).
         let close_types = c"v@:@";
-        class_addMethod(
-            cls,
-            sel("windowWillClose:"),
-            window_will_close as *const c_void,
-            close_types.as_ptr(),
-        );
-        // Notification observer: also v@:@.
         class_addMethod(
             cls,
             sel("stippleAppearanceChanged:"),
@@ -1356,9 +1350,93 @@ fn register_view_class() -> Class {
     }
 }
 
-#[derive(Debug)]
+/// A window's framebuffer: straight RGBA8, top row first, in physical pixels.
+#[derive(Default)]
+struct Framebuffer {
+    px: Vec<u8>,
+    w: usize,
+    h: usize,
+}
+
+/// One `NSWindow` and its `StippleView`, with what the backend keeps for it.
+/// Lives in [`WINDOWS`] while open; the view (which is also the window's
+/// delegate) finds it again from AppKit's callbacks.
 struct MacWindow {
-    size: PhysicalSize,
+    /// Our id for it (`WindowId`), counting from 1.
+    id: u64,
+    window: Id,
+    view: Id,
+    /// The content's size in physical pixels, and the scale.
+    size: Cell<PhysicalSize>,
+    scale: Cell<f64>,
+    fb: RefCell<Framebuffer>,
+    /// Accessible label exposed to NSAccessibility (the window title).
+    a11y_label: RefCell<String>,
+    /// The current accessibility tree (pushed each frame by the App). The view's
+    /// `accessibilityChildren` builds native elements from this on demand.
+    a11y_tree: RefCell<Option<crate::platform::access::A11yNode>>,
+    /// The cursor the app asked for, set again on each mouse move over the
+    /// view (AppKit resets it at the window's edges and title bar).
+    cursor: Cell<CursorIcon>,
+    /// The focused text field, for the input method (see `text_input`).
+    ime: RefCell<Option<crate::platform::ImeState>>,
+    /// Geometry and state as AppKit last reported them (see `geometry`).
+    info: Cell<WindowInfo>,
+    /// The app closed it (or AppKit did): drop it once the handler returns.
+    closing: Cell<bool>,
+}
+
+// Cocoa is single-threaded (main thread); the backend runs there.
+thread_local! {
+    /// The open windows, in the order they opened.
+    static WINDOWS: RefCell<Vec<Rc<MacWindow>>> = const { RefCell::new(Vec::new()) };
+    /// The next window's id.
+    static NEXT_ID: Cell<u64> = const { Cell::new(1) };
+    /// The view that observes appearance changes (the first one), kept alive
+    /// for the process.
+    static OBSERVER: Cell<Id> = const { Cell::new(std::ptr::null_mut()) };
+}
+
+/// The open window whose content view is `view`.
+fn window_for_view(view: Id) -> Option<Rc<MacWindow>> {
+    WINDOWS.with(|w| w.borrow().iter().find(|w| w.view == view).cloned())
+}
+
+/// The open window that is `window`.
+fn window_for_ns(window: Id) -> Option<Rc<MacWindow>> {
+    WINDOWS.with(|w| w.borrow().iter().find(|w| w.window == window).cloned())
+}
+
+/// Every open window (a snapshot: the handler may open or close some).
+fn all_windows() -> Vec<Rc<MacWindow>> {
+    WINDOWS.with(|w| w.borrow().clone())
+}
+
+/// The window the last event came from (whose view the input method and
+/// context menus use), else the first open one.
+fn active_window() -> Option<Rc<MacWindow>> {
+    let view = CTX.with(|c| c.borrow().view);
+    window_for_view(view).or_else(|| all_windows().into_iter().next())
+}
+
+/// Make `w` the window the input method follows: its view takes the key
+/// events, and its focused field is the one composed into.
+fn activate(w: &MacWindow) {
+    CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.view != w.view {
+            c.view = w.view;
+            c.window = w.window;
+            c.ime = w.ime.borrow().clone();
+            c.marked.clear();
+        }
+    });
+}
+
+impl MacWindow {
+    fn wid(&self) -> WindowId {
+        WindowId(self.id)
+    }
 }
 
 impl Window for MacWindow {
@@ -1384,36 +1462,37 @@ impl Window for MacWindow {
         true
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
-        text_input::set_state(state);
+        *self.ime.borrow_mut() = state.cloned();
+        // Only the active window's field is the input method's.
+        if CTX.with(|c| c.borrow().view) == self.view {
+            text_input::set_state(state);
+        }
     }
     fn set_option_as_meta(&self, option: crate::platform::OptionAsMeta) {
         CTX.with(|c| c.borrow_mut().option_as_meta = option);
     }
     fn id(&self) -> WindowId {
-        WindowId(1)
+        self.wid()
     }
     fn inner_size(&self) -> PhysicalSize {
-        self.size
+        self.size.get()
     }
     fn scale_factor(&self) -> ScaleFactor {
-        ScaleFactor::new(CTX.with(|c| c.borrow().scale))
+        ScaleFactor::new(self.scale.get())
     }
     fn request_redraw(&self) {
-        CTX.with(|c| {
-            let view = c.borrow().view;
-            if !view.is_null() {
-                unsafe { msg_void_bool(view, sel("setNeedsDisplay:"), true) };
-            }
-        });
+        unsafe { msg_void_bool(self.view, sel("setNeedsDisplay:"), true) };
     }
     fn set_title(&self, title: &str) {
-        let window: Id = CTX.with(|c| c.borrow().window);
-        if !window.is_null() {
-            unsafe { msg_void_id(window, sel("setTitle:"), nsstring(title)) };
-        }
+        unsafe { msg_void_id(self.window, sel("setTitle:"), nsstring(title)) };
+        *self.a11y_label.borrow_mut() = title.to_string();
+        debug_window(format_args!("title {:#x} {:?}", self.id, self.title()));
     }
     fn create_surface(&self) -> Box<dyn Surface> {
-        Box::new(MacSurface { size: self.size })
+        Box::new(MacSurface {
+            size: self.size.get(),
+            view: self.view,
+        })
     }
     fn clipboard(&self) -> Option<String> {
         crate::platform::clipboard::text()
@@ -1444,49 +1523,44 @@ impl Window for MacWindow {
         }
     }
     fn set_dark(&self, dark: bool) {
-        let window: Id = CTX.with(|c| c.borrow().window);
-        if !window.is_null() {
-            unsafe { set_window_dark(window, dark) };
-        }
+        unsafe { set_window_dark(self.window, dark) };
     }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         // Stash the tree; AppKit pulls `accessibilityChildren` lazily, so we just
         // keep the latest one. Adopt the root's name as the view's label too.
-        CTX.with(|c| {
-            let mut c = c.borrow_mut();
-            if !root.name.is_empty() {
-                c.a11y_label = root.name.clone();
-            }
-            c.a11y_tree = Some(root.clone());
-        });
+        if !root.name.is_empty() {
+            *self.a11y_label.borrow_mut() = root.name.clone();
+        }
+        *self.a11y_tree.borrow_mut() = Some(root.clone());
     }
     fn set_cursor(&self, cursor: CursorIcon) {
-        CTX.with(|c| c.borrow_mut().cursor = cursor);
+        self.cursor.set(cursor);
         pointer::set_hidden(cursor == CursorIcon::Hidden);
         if cursor != CursorIcon::Hidden {
             unsafe { msg_void(ns_cursor(cursor), sel("set")) };
         }
     }
     fn set_min_size(&self, size: Option<Size>) {
-        set_content_limit(sel("setContentMinSize:"), size, 0.0);
+        set_content_limit(self.window, sel("setContentMinSize:"), size, 0.0);
     }
     fn set_max_size(&self, size: Option<Size>) {
-        set_content_limit(sel("setContentMaxSize:"), size, f32::MAX as f64);
+        set_content_limit(
+            self.window,
+            sel("setContentMaxSize:"),
+            size,
+            f32::MAX as f64,
+        );
     }
     fn set_maximized(&self, maximized: bool) {
-        let window: Id = CTX.with(|c| c.borrow().window);
-        if !window.is_null() && unsafe { msg_bool(window, sel("isZoomed")) } != maximized {
-            unsafe { msg_void_id(window, sel("zoom:"), std::ptr::null_mut()) };
+        if unsafe { msg_bool(self.window, sel("isZoomed")) } != maximized {
+            unsafe { msg_void_id(self.window, sel("zoom:"), std::ptr::null_mut()) };
         }
     }
     fn set_fullscreen(&self, fullscreen: bool) {
-        let window: Id = CTX.with(|c| c.borrow().window);
-        if window.is_null() {
-            return;
-        }
-        let now = unsafe { msg_u64(window, sel("styleMask")) } & NS_WINDOW_STYLE_FULLSCREEN != 0;
+        let now =
+            unsafe { msg_u64(self.window, sel("styleMask")) } & NS_WINDOW_STYLE_FULLSCREEN != 0;
         if now != fullscreen {
-            unsafe { msg_void_id(window, sel("toggleFullScreen:"), std::ptr::null_mut()) };
+            unsafe { msg_void_id(self.window, sel("toggleFullScreen:"), std::ptr::null_mut()) };
         }
     }
     fn set_menu_bar(&self, menu: &NativeMenuBar) -> bool {
@@ -1494,7 +1568,7 @@ impl Window for MacWindow {
         true
     }
     fn popup_menu(&self, menu: &NativeMenu, at: Point) -> MenuPopup {
-        unsafe { popup_menu(menu, at) }
+        unsafe { popup_menu(self.view, menu, at) }
     }
     fn set_tray(&self, tray: Option<&NativeTray>) -> bool {
         unsafe { set_status_item(tray) }
@@ -1511,15 +1585,71 @@ impl Window for MacWindow {
             }
         }
     }
+    fn open_window(&self, attrs: WindowAttributes) -> Option<WindowId> {
+        let w = unsafe { create_window(&attrs) }.ok()?;
+        unsafe {
+            // Placed where asked, else down and to the right of this one.
+            let at = match attrs.position {
+                Some((x, y)) => Some(Point::new(x as f64, y as f64)),
+                None => self
+                    .info
+                    .get()
+                    .position
+                    .map(|p| Point::new(p.x + 24.0, p.y + 24.0)),
+            };
+            match at {
+                Some(p) => w.move_to(p),
+                None => msg_void_id(w.window, sel("center"), std::ptr::null_mut()),
+            }
+            if attrs.focus {
+                msg_void_id(w.window, sel("makeKeyAndOrderFront:"), std::ptr::null_mut());
+            } else {
+                msg_void_id(w.window, sel("orderFront:"), std::ptr::null_mut());
+            }
+        }
+        unsafe { finish_window(&w, &attrs) };
+        // Its first frame comes once the handler returns.
+        CTX.with(|c| {
+            c.borrow_mut()
+                .window_pending
+                .push((w.view, Event::RedrawRequested))
+        });
+        Some(w.wid())
+    }
+    fn close_window(&self) {
+        self.closing.set(true);
+    }
+    fn set_visible(&self, visible: bool) {
+        let s = if visible { "orderFront:" } else { "orderOut:" };
+        unsafe { msg_void_id(self.window, sel(s), std::ptr::null_mut()) };
+    }
+    fn info(&self) -> WindowInfo {
+        self.info.get()
+    }
+    fn set_position(&self, position: Point) {
+        self.move_to(position);
+        self.debug_frame();
+    }
+    fn set_inner_size(&self, size: Size) {
+        self.resize_content(size);
+        self.debug_frame();
+    }
+    fn set_resize_increments(&self, step: Option<Size>) {
+        self.resize_increments(step);
+    }
+    fn set_minimized(&self, minimized: bool) {
+        let s = if minimized {
+            "miniaturize:"
+        } else {
+            "deminiaturize:"
+        };
+        unsafe { msg_void_id(self.window, sel(s), std::ptr::null_mut()) };
+    }
 }
 
 /// Set the window's content min or max size (in points); `None` resets it to
 /// `unbounded`.
-fn set_content_limit(setter: Sel, size: Option<Size>, unbounded: f64) {
-    let window: Id = CTX.with(|c| c.borrow().window);
-    if window.is_null() {
-        return;
-    }
+fn set_content_limit(window: Id, setter: Sel, size: Option<Size>, unbounded: f64) {
     let size = size.map_or(
         CgSize {
             width: unbounded,
@@ -1536,6 +1666,8 @@ fn set_content_limit(setter: Sel, size: Option<Size>, unbounded: f64) {
 #[derive(Debug)]
 struct MacSurface {
     size: PhysicalSize,
+    /// The content view of the window it presents into.
+    view: Id,
 }
 
 impl Surface for MacSurface {
@@ -1546,48 +1678,44 @@ impl Surface for MacSurface {
         self.size
     }
     fn present(&mut self, pixmap: &Pixmap, _damage: &[crate::geometry::Rect]) {
+        let Some(w) = window_for_view(self.view) else {
+            return;
+        };
         let size = pixmap.size();
-        CTX.with(|c| {
-            let mut c = c.borrow_mut();
+        {
+            let mut fb = w.fb.borrow_mut();
             // Reuse the buffer's capacity instead of reallocating every frame.
-            c.fb.clear();
-            c.fb.extend_from_slice(pixmap.as_bytes());
-            c.w = size.width as usize;
-            c.h = size.height as usize;
-            if !c.view.is_null() {
-                unsafe { msg_void_bool(c.view, sel("setNeedsDisplay:"), true) };
-            }
-        });
+            fb.px.clear();
+            fb.px.extend_from_slice(pixmap.as_bytes());
+            fb.w = size.width as usize;
+            fb.h = size.height as usize;
+        }
+        unsafe { msg_void_bool(self.view, sel("setNeedsDisplay:"), true) };
     }
 }
 
-/// Create an NSWindow with our drawing view, render the initial frame, and run
-/// a hand-rolled Cocoa event loop: each iteration dequeues one `NSEvent`,
-/// translates it to a Stipple event for the handler, then forwards it to AppKit.
-/// The loop exits when the handler returns [`ControlFlow::Exit`] or the user
-/// closes the window (via the `windowWillClose:` delegate).
-pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
-where
-    H: FnMut(Event, &dyn Window) -> ControlFlow,
-{
-    let size = ScaleFactor::IDENTITY.to_physical(attrs.logical_size);
-    unsafe {
-        let app = msg_id(class("NSApplication"), sel("sharedApplication"));
-        if app.is_null() {
-            return Err(PlatformError::Os("NSApplication unavailable".into()));
-        }
-        msg_void_i64(app, sel("setActivationPolicy:"), ACTIVATION_REGULAR);
-        // Quitting from the Dock or by logging out asks the app first.
-        lifecycle::install_app_delegate(app);
+/// `NSWindowStyleMaskMiniaturizable`.
+const NS_WINDOW_STYLE_MINIATURIZABLE: u64 = 4;
 
+/// Create an `NSWindow` with a `StippleView` for `attrs`, not yet on screen,
+/// and add it to [`WINDOWS`].
+///
+/// # Safety
+/// Main thread, with `NSApplication` set up.
+unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, PlatformError> {
+    unsafe {
         let content = CgRect {
             origin: CgPoint { x: 0.0, y: 0.0 },
             size: CgSize {
-                width: size.width as f64,
-                height: size.height as f64,
+                width: attrs.logical_size.width.max(1.0),
+                height: attrs.logical_size.height.max(1.0),
             },
         };
-
+        let mut style =
+            NS_WINDOW_STYLE_TITLED | NS_WINDOW_STYLE_CLOSABLE | NS_WINDOW_STYLE_MINIATURIZABLE;
+        if attrs.resizable {
+            style |= NS_WINDOW_STYLE_RESIZABLE;
+        }
         // window = [[NSWindow alloc] initWithContentRect:styleMask:backing:defer:]
         let window: Id = {
             let alloc = msg_id(class("NSWindow"), sel("alloc"));
@@ -1597,7 +1725,7 @@ where
                 alloc,
                 sel("initWithContentRect:styleMask:backing:defer:"),
                 content,
-                NS_WINDOW_STYLE_TITLED | NS_WINDOW_STYLE_CLOSABLE | NS_WINDOW_STYLE_RESIZABLE,
+                style,
                 NS_BACKING_BUFFERED,
                 false,
             )
@@ -1625,42 +1753,191 @@ where
             // A window's appearance sets its title bar to match the content.
             set_window_dark(window, dark);
         }
-        observe_appearance(view);
-        // The view doubles as the window delegate so `windowWillClose:` can flag
-        // the event loop to exit. Keep the window object alive on close (we hold
-        // the only reference) so the loop can tear down cleanly without a
-        // use-after-free on `view`/`window`.
+        // One view hears the system's appearance changes for the app; it is
+        // kept alive (an extra retain) after its window closes.
+        if OBSERVER.with(|o| o.get().is_null()) {
+            observe_appearance(view);
+            msg_id(view, sel("retain"));
+            OBSERVER.with(|o| o.set(view));
+        }
+        // We close and release windows ourselves (see `close_windows`), so
+        // closing must not free them under us.
         msg_void_bool(window, sel("setReleasedWhenClosed:"), false);
         // Deliver NSMouseMoved, not just drags: hover, and the wheel's target
         // (the app scrolls what's under the last pointer position), need it.
         msg_void_bool(window, sel("setAcceptsMouseMovedEvents:"), true);
+        // The view is the window's delegate: closing, moves and state changes
+        // (see `geometry`).
         msg_void_id(window, sel("setDelegate:"), view);
         // The view takes key events, so its input context is the active one.
         msg_id_id(window, sel("makeFirstResponder:"), view);
-        // The window is laid out in points; the framebuffer is in physical pixels.
-        let scale = msg_f64(window, sel("backingScaleFactor"));
-        let size = ScaleFactor::new(scale).to_physical(attrs.logical_size);
-        CTX.with(|c| {
-            let mut c = c.borrow_mut();
-            c.view = view;
-            c.window = window;
-            c.scale = scale;
-            // Expose the window title as the view's accessible label.
-            c.a11y_label = attrs.title.clone();
-        });
-
-        let mut win = MacWindow { size };
         msg_void_u64(
             window,
             sel("setCollectionBehavior:"),
             NS_COLLECTION_FULLSCREEN_PRIMARY,
         );
-        win.set_min_size(attrs.min_size);
-        win.set_max_size(attrs.max_size);
+        // The window is laid out in points; the framebuffer is in physical pixels.
+        let scale = msg_f64(window, sel("backingScaleFactor"));
+        let size = ScaleFactor::new(scale).to_physical(attrs.logical_size);
+        let id = NEXT_ID.with(|n| {
+            let id = n.get();
+            n.set(id + 1);
+            id
+        });
+        let w = Rc::new(MacWindow {
+            id,
+            window,
+            view,
+            size: Cell::new(size),
+            scale: Cell::new(scale),
+            fb: RefCell::new(Framebuffer::default()),
+            a11y_label: RefCell::new(attrs.title.clone()),
+            a11y_tree: RefCell::new(None),
+            cursor: Cell::new(CursorIcon::Default),
+            ime: RefCell::new(None),
+            info: Cell::new(WindowInfo::from_size(size, ScaleFactor::new(scale))),
+            closing: Cell::new(false),
+        });
+        w.set_min_size(attrs.min_size);
+        w.set_max_size(attrs.max_size);
         if attrs.icon.is_some() {
-            win.set_icon(attrs.icon.as_ref());
+            w.set_icon(attrs.icon.as_ref());
         }
-        handler(Event::RedrawRequested, &win); // populate the framebuffer + a11y tree
+        if attrs.resize_increments.is_some() {
+            w.resize_increments(attrs.resize_increments);
+        }
+        WINDOWS.with(|ws| ws.borrow_mut().push(w.clone()));
+        if CTX.with(|c| c.borrow().view.is_null()) {
+            activate(&w);
+        }
+        Ok(w)
+    }
+}
+
+/// The last steps for a window on screen: zoom and fullscreen (which act on a
+/// window that is shown), then its starting geometry, without reporting what
+/// AppKit said while it was being set up.
+///
+/// # Safety
+/// `w` must be a window from [`create_window`].
+unsafe fn finish_window(w: &MacWindow, attrs: &WindowAttributes) {
+    if attrs.maximized {
+        w.set_maximized(true);
+    }
+    if attrs.fullscreen {
+        w.set_fullscreen(true);
+    }
+    CTX.with(|c| {
+        c.borrow_mut()
+            .window_pending
+            .retain(|(view, e)| *view != w.view || *e != Event::WindowChanged)
+    });
+    w.info.set(unsafe { geometry::read_info(w.window, w.view) });
+    debug_window(format_args!("opened {:#x} {:?}", w.id, w.title()));
+}
+
+/// Close and forget the windows the app (or AppKit) closed.
+///
+/// # Safety
+/// Main thread, outside AppKit callbacks for these windows.
+unsafe fn close_windows() {
+    let closed: Vec<Rc<MacWindow>> = WINDOWS.with(|ws| {
+        let mut ws = ws.borrow_mut();
+        let (closed, open) = std::mem::take(&mut *ws)
+            .into_iter()
+            .partition(|w| w.closing.get());
+        *ws = open;
+        closed
+    });
+    for w in closed {
+        unsafe {
+            // No more callbacks into a window we no longer know.
+            msg_void_id(w.window, sel("setDelegate:"), std::ptr::null_mut());
+            msg_void_id(w.window, sel("orderOut:"), std::ptr::null_mut());
+            msg_void(w.window, sel("close"));
+            msg_void(w.window, sel("release"));
+            // The window held the view; this drops our own reference.
+            msg_void(w.view, sel("release"));
+        }
+        CTX.with(|c| {
+            let mut c = c.borrow_mut();
+            c.window_pending.retain(|(view, _)| *view != w.view);
+            if c.view == w.view {
+                c.view = std::ptr::null_mut();
+                c.window = std::ptr::null_mut();
+                c.ime = None;
+                c.marked.clear();
+            }
+        });
+        debug_window(format_args!("closed {:#x}", w.id));
+    }
+    // The input method follows another window.
+    if CTX.with(|c| c.borrow().view.is_null())
+        && let Some(w) = all_windows().into_iter().next()
+    {
+        activate(&w);
+    }
+}
+
+/// Deliver the events AppKit raised inside its callbacks: a window's (drops,
+/// close requests, moves, a new window's first frame) to that window, and the
+/// app's (menu and tray picks) to the active one. Returns whether the handler
+/// asked to exit.
+fn deliver_pending<H>(handler: &mut H) -> bool
+where
+    H: FnMut(Event, &dyn Window) -> ControlFlow,
+{
+    loop {
+        let (windowed, app) = CTX.with(|c| {
+            let mut c = c.borrow_mut();
+            (
+                std::mem::take(&mut c.window_pending),
+                std::mem::take(&mut c.pending),
+            )
+        });
+        if windowed.is_empty() && app.is_empty() {
+            return false;
+        }
+        for (view, event) in windowed {
+            if let Some(w) = window_for_view(view)
+                && !w.closing.get()
+                && handler(event, &*w) == ControlFlow::Exit
+            {
+                return true;
+            }
+        }
+        for event in app {
+            if let Some(w) = active_window()
+                && handler(event, &*w) == ControlFlow::Exit
+            {
+                return true;
+            }
+        }
+    }
+}
+
+/// Create the first NSWindow with our drawing view, render the initial frame,
+/// and run a hand-rolled Cocoa event loop: each iteration dequeues one
+/// `NSEvent`, translates it to a Stipple event for the handler against the
+/// window it belongs to, then forwards it to AppKit. More windows open with
+/// [`Window::open_window`]. The loop exits when the handler returns
+/// [`ControlFlow::Exit`], the last window closes, or the app quits.
+pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
+where
+    H: FnMut(Event, &dyn Window) -> ControlFlow,
+{
+    unsafe {
+        let app = msg_id(class("NSApplication"), sel("sharedApplication"));
+        if app.is_null() {
+            return Err(PlatformError::Os("NSApplication unavailable".into()));
+        }
+        msg_void_i64(app, sel("setActivationPolicy:"), ACTIVATION_REGULAR);
+        // Quitting from the Dock or by logging out asks the app first.
+        lifecycle::install_app_delegate(app);
+
+        let primary = create_window(&attrs)?;
+        let (window, view) = (primary.window, primary.view);
+        handler(Event::RedrawRequested, &*primary); // populate the framebuffer + a11y tree
 
         // Self-check the NSAccessibility wiring (real objc dispatch) for CI:
         // cross-process AX reads need TCC approval the runner won't grant, so we
@@ -1700,31 +1977,28 @@ where
             }
         }
 
-        msg_void_id(window, sel("center"), std::ptr::null_mut());
+        match attrs.position {
+            Some((x, y)) => primary.move_to(Point::new(x as f64, y as f64)),
+            None => msg_void_id(window, sel("center"), std::ptr::null_mut()),
+        }
         msg_void_id(window, sel("makeKeyAndOrderFront:"), std::ptr::null_mut());
         msg_void_bool(app, sel("activateIgnoringOtherApps:"), true);
         // Needed for nextEventMatchingMask to dequeue events.
         msg_void(app, sel("finishLaunching"));
         menu_check::start(window, view);
         lifecycle::self_test(window);
-        // Zoom and fullscreen act on a window that is on screen.
-        if attrs.maximized {
-            win.set_maximized(true);
-        }
-        if attrs.fullscreen {
-            win.set_fullscreen(true);
-        }
+        finish_window(&primary, &attrs);
+        drop(primary);
 
         // Manual event loop: pull each NSEvent, translate it to a Stipple event
         // for the handler, then forward it to AppKit (drawing, window controls).
-        // Poll the content view's bounds for live-resize.
+        // Poll the content views' bounds for live-resize.
         let distant_future = msg_id(class("NSDate"), sel("distantFuture"));
         let mode = nsstring("kCFRunLoopDefaultMode");
         let next_sel = sel("nextEventMatchingMask:untilDate:inMode:dequeue:");
         let next: unsafe extern "C" fn(Id, Sel, u64, Id, Id, bool) -> Id =
             std::mem::transmute(objc_msgSend as *const c_void);
         let pool_cls = class("NSAutoreleasePool");
-        let mut last = win.size;
         let mut self_drop = std::env::var("STIPPLE_COCOA_DROP").ok();
         // Other threads end the wait by posting an application-defined event,
         // which AppKit allows from any thread.
@@ -1760,151 +2034,182 @@ where
                 // A step of the menu self-test, not for the app.
             } else if !ev.is_null() {
                 let etype = msg_u64(ev, sel("type"));
-                // Positions stay in points, which are logical pixels.
-                let view_h = msg_rect(view, sel("bounds")).size.height;
-                // Every key and modifier change is a raw key first (see
-                // `keys`), after the input method had its look.
-                let raw = match etype {
-                    NS_KEY_DOWN | NS_KEY_UP | keys::NS_FLAGS_CHANGED => keys::raw_event(etype, ev),
-                    _ => None,
-                };
-                // With a text field focused, key-downs go through the input
-                // method instead (and not on to AppKit: we've handled them),
-                // unless an Option key held acts as Meta.
-                let ime = if etype == NS_KEY_DOWN && !raw.as_ref().is_some_and(keys::option_is_meta)
-                {
-                    text_input::key_down(view, ev)
+                // The window the event is for; one without goes to the active
+                // window, and one for a window that isn't ours (the status
+                // item's, a menu's) only to AppKit.
+                let ns_window = msg_id(ev, sel("window"));
+                let target = if ns_window.is_null() {
+                    active_window()
                 } else {
-                    None
+                    let w = window_for_ns(ns_window);
+                    if let Some(w) = &w {
+                        activate(w);
+                    }
+                    w
                 };
-                if let Some((events, command)) = ime {
-                    exit = events
-                        .into_iter()
-                        .any(|event| handler(event, &win) == ControlFlow::Exit);
-                    // Not text: the key itself, raw first.
-                    if command && !exit {
-                        let used = match raw {
-                            Some(key) => {
-                                let (used, flow) =
-                                    crate::platform::key::deliver_raw(key, |e| handler(e, &win));
-                                exit |= flow == ControlFlow::Exit;
-                                used
+                if let Some(win) = target.filter(|w| !w.closing.get()) {
+                    let view = win.view;
+                    // Positions stay in points, which are logical pixels.
+                    let view_h = msg_rect(view, sel("bounds")).size.height;
+                    // Every key and modifier change is a raw key first (see
+                    // `keys`), after the input method had its look.
+                    let raw = match etype {
+                        NS_KEY_DOWN | NS_KEY_UP | keys::NS_FLAGS_CHANGED => {
+                            keys::raw_event(etype, ev)
+                        }
+                        _ => None,
+                    };
+                    // With a text field focused, key-downs go through the input
+                    // method instead (and not on to AppKit: we've handled them),
+                    // unless an Option key held acts as Meta.
+                    let ime = if etype == NS_KEY_DOWN
+                        && !raw.as_ref().is_some_and(keys::option_is_meta)
+                    {
+                        text_input::key_down(view, ev)
+                    } else {
+                        None
+                    };
+                    if let Some((events, command)) = ime {
+                        exit = events
+                            .into_iter()
+                            .any(|event| handler(event, &*win) == ControlFlow::Exit);
+                        // Not text: the key itself, raw first.
+                        if command && !exit {
+                            let used = match raw {
+                                Some(key) => {
+                                    let (used, flow) =
+                                        crate::platform::key::deliver_raw(key, |e| {
+                                            handler(e, &*win)
+                                        });
+                                    exit |= flow == ControlFlow::Exit;
+                                    used
+                                }
+                                None => false,
+                            };
+                            if !used
+                                && !exit
+                                && let Some(key) = key_event(ev, ButtonState::Pressed)
+                            {
+                                exit = handler(key, &*win) == ControlFlow::Exit;
                             }
-                            None => false,
-                        };
+                        }
+                    } else {
+                        // A raw key the app used goes no further: neither the
+                        // usual translation nor AppKit (modifier changes still
+                        // go to AppKit, which tracks them).
+                        let mut used = false;
+                        if let Some(key) = raw {
+                            let (u, flow) =
+                                crate::platform::key::deliver_raw(key, |e| handler(e, &*win));
+                            used = u;
+                            exit |= flow == ControlFlow::Exit;
+                        }
                         if !used
                             && !exit
-                            && let Some(key) = key_event(ev, ButtonState::Pressed)
+                            && let Some(event) = translate_event(etype, ev, view_h)
+                            && handler(event, &*win) == ControlFlow::Exit
                         {
-                            exit = handler(key, &win) == ControlFlow::Exit;
+                            exit = true;
+                        }
+                        // The app handed a drag out of the window: AppKit runs
+                        // it from here.
+                        if let Some(data) = CTX.with(|c| c.borrow_mut().drag_out.take())
+                            && !exit
+                            && etype == NS_LEFT_MOUSE_DRAGGED
+                        {
+                            dnd::drag_out::begin(view, ev, &data);
+                        }
+                        // Forward to AppKit (drawing, window controls) unless
+                        // we're exiting on this event.
+                        if !exit && !(used && etype != keys::NS_FLAGS_CHANGED) {
+                            msg_void_id(app, sel("sendEvent:"), ev);
                         }
                     }
+                    // Keep the app's cursor over the content: AppKit resets it
+                    // at the window's edges and title bar.
+                    if !exit && etype == NS_MOUSE_MOVED {
+                        let p = msg_point(ev, sel("locationInWindow"));
+                        let b = msg_rect(view, sel("bounds"));
+                        let over =
+                            p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height;
+                        let cursor = win.cursor.get();
+                        // A hidden cursor shows over the title bar and edges.
+                        pointer::set_hidden(over && cursor == CursorIcon::Hidden);
+                        if over && !matches!(cursor, CursorIcon::Default | CursorIcon::Hidden) {
+                            msg_void(ns_cursor(cursor), sel("set"));
+                        }
+                    }
+                    // Nor does it stay hidden outside the window.
+                    if etype == pointer::NS_MOUSE_EXITED {
+                        pointer::set_hidden(false);
+                    }
                 } else {
-                    // A raw key the app used goes no further: neither the
-                    // usual translation nor AppKit (modifier changes still go
-                    // to AppKit, which tracks them).
-                    let mut used = false;
-                    if let Some(key) = raw {
-                        let (u, flow) =
-                            crate::platform::key::deliver_raw(key, |e| handler(e, &win));
-                        used = u;
-                        exit |= flow == ControlFlow::Exit;
-                    }
-                    if !used
-                        && !exit
-                        && let Some(event) = translate_event(etype, ev, view_h)
-                        && handler(event, &win) == ControlFlow::Exit
-                    {
+                    msg_void_id(app, sel("sendEvent:"), ev);
+                }
+            }
+            // Deliver what AppKit raised while handling the event (menu picks,
+            // drags, close and quit requests, focus, moves), which may also
+            // have come while waiting, with no event to show for it.
+            if !exit {
+                exit = deliver_pending(&mut handler);
+            }
+            // A wake reaches every window in turn, so each can catch up.
+            if !exit && crate::platform::wake::take(std::time::Instant::now()) {
+                for w in all_windows() {
+                    if !w.closing.get() && handler(Event::Wake, &*w) == ControlFlow::Exit {
                         exit = true;
-                    }
-                    // The app handed a drag out of the window: AppKit runs
-                    // it from here.
-                    if let Some(data) = CTX.with(|c| c.borrow_mut().drag_out.take())
-                        && !exit
-                        && etype == NS_LEFT_MOUSE_DRAGGED
-                    {
-                        dnd::drag_out::begin(view, ev, &data);
-                    }
-                    // Forward to AppKit (drawing, window controls) unless we're
-                    // exiting on this event.
-                    if !exit && !(used && etype != keys::NS_FLAGS_CHANGED) {
-                        msg_void_id(app, sel("sendEvent:"), ev);
+                        break;
                     }
                 }
-                // Keep the app's cursor over the content: AppKit resets it at
-                // the window's edges and title bar.
-                if !exit && etype == NS_MOUSE_MOVED {
-                    let p = msg_point(ev, sel("locationInWindow"));
-                    let b = msg_rect(view, sel("bounds"));
-                    let over =
-                        p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height;
-                    let cursor = CTX.with(|c| c.borrow().cursor);
-                    // A hidden cursor shows over the title bar and edges.
-                    pointer::set_hidden(over && cursor == CursorIcon::Hidden);
-                    if over && !matches!(cursor, CursorIcon::Default | CursorIcon::Hidden) {
-                        msg_void(ns_cursor(cursor), sel("set"));
-                    }
-                }
-                // Nor does it stay hidden outside the window.
-                if etype == pointer::NS_MOUSE_EXITED {
-                    pointer::set_hidden(false);
-                }
-            }
-            // Deliver what AppKit raised while handling the event (menu picks).
-            let pending = CTX.with(|c| std::mem::take(&mut c.borrow_mut().pending));
-            for event in pending {
-                if !exit && handler(event, &win) == ControlFlow::Exit {
-                    exit = true;
+                if !exit {
+                    exit = deliver_pending(&mut handler);
                 }
             }
 
-            // Deliver what AppKit raised meanwhile (menu picks, drags), which
-            // may have come while waiting, with no event to show for it.
-            let pending = CTX.with(|c| std::mem::take(&mut c.borrow_mut().pending));
-            for event in pending {
-                if !exit && handler(event, &win) == ControlFlow::Exit {
-                    exit = true;
-                }
-            }
-            if !exit
-                && crate::platform::wake::take(std::time::Instant::now())
-                && handler(Event::Wake, &win) == ControlFlow::Exit
-            {
-                exit = true;
-            }
-
-            // The window delegate's `windowWillClose:` sets this when the user
-            // closes the window. Check before touching `view` below: the window
-            // is ordered out and we must not keep polling it.
+            // Quit (the application menu's item, or the menu self-test).
             if CTX.with(|c| c.borrow().should_close) {
                 exit = true;
             }
-
+            if !exit {
+                close_windows();
+                exit = WINDOWS.with(|ws| ws.borrow().is_empty());
+            }
             if exit {
-                // The app closed the window (or quit): take it off screen.
-                msg_void_id(window, sel("orderOut:"), std::ptr::null_mut());
+                // The app closed its windows (or quit): take them off screen.
+                for w in all_windows() {
+                    msg_void_id(w.window, sel("orderOut:"), std::ptr::null_mut());
+                }
                 msg_void(pool, sel("drain"));
                 break;
             }
 
-            // Detect live-resize by polling the view bounds.
-            // The scale changes when the window moves to a display of another
-            // density, which also changes the physical size.
-            let b = msg_rect(view, sel("bounds"));
-            let scale = msg_f64(window, sel("backingScaleFactor"));
-            let now = PhysicalSize::new(
-                (b.size.width.max(1.0) * scale).round() as u32,
-                (b.size.height.max(1.0) * scale).round() as u32,
-            );
-            if now != last || scale != CTX.with(|c| c.borrow().scale) {
-                last = now;
-                win.size = now;
-                CTX.with(|c| c.borrow_mut().scale = scale);
-                handler(Event::Resized(now), &win);
+            // Detect live-resize by polling each view's bounds. The scale
+            // changes when the window moves to a display of another density,
+            // which also changes the physical size.
+            for w in all_windows() {
+                let b = msg_rect(w.view, sel("bounds"));
+                let scale = msg_f64(w.window, sel("backingScaleFactor"));
+                let now = PhysicalSize::new(
+                    (b.size.width.max(1.0) * scale).round() as u32,
+                    (b.size.height.max(1.0) * scale).round() as u32,
+                );
+                if now != w.size.get() || scale != w.scale.get() {
+                    w.size.set(now);
+                    w.scale.set(scale);
+                    w.refresh_info();
+                    if handler(Event::Resized(now), &*w) == ControlFlow::Exit {
+                        exit = true;
+                        break;
+                    }
+                }
             }
 
             msg_void(pool, sel("drain"));
+            if exit {
+                break;
+            }
         }
+        WINDOWS.with(|ws| ws.borrow_mut().clear());
     }
     Ok(())
 }

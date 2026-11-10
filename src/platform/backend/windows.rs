@@ -16,7 +16,9 @@
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::geometry::{PhysicalSize, ScaleFactor, Size};
 use crate::platform::ControlFlow;
@@ -24,13 +26,17 @@ use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, WindowId};
 use crate::platform::input;
 use crate::platform::menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray};
-use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
+use crate::platform::window::{
+    CursorIcon, Window, WindowAttributes, WindowInfo, debug_window, fit_icon,
+};
 use crate::render::{Pixmap, Surface};
 
 /// Focus, session end, attention requests and the beep.
 mod attention;
 /// Receiving drops (OLE `IDropTarget`, `WM_DROPFILES`).
 mod dnd;
+/// Resize increments (`WM_SIZING`) and UTF-16 titles.
+mod geometry;
 mod ime;
 /// Raw key events (`Event::RawKey`).
 mod keys;
@@ -42,6 +48,8 @@ mod tray;
 mod vsync;
 
 pub(crate) use tray::notify;
+
+use geometry::{from_wide, wide};
 
 // ---- Win32 type aliases -----------------------------------------------------
 
@@ -60,6 +68,17 @@ const CW_USEDEFAULT: i32 = -2147483648; // 0x80000000
 const SW_SHOW: i32 = 5;
 const SW_MAXIMIZE: i32 = 3;
 const SW_RESTORE: i32 = 9;
+const SW_HIDE: i32 = 0;
+const SW_SHOWNOACTIVATE: i32 = 4;
+const SW_MINIMIZE: i32 = 6;
+/// The resizable border and the maximize button, dropped for fixed-size
+/// windows.
+const WS_THICKFRAME: u32 = 0x0004_0000;
+const WS_MAXIMIZEBOX: u32 = 0x0001_0000;
+const WM_MOVE: u32 = 0x0003;
+const WM_NCDESTROY: u32 = 0x0082;
+/// The user is dragging a window edge (`lParam`: the window rectangle).
+const WM_SIZING: u32 = 0x0214;
 const WM_SETCURSOR: u32 = 0x0020;
 const WM_GETMINMAXINFO: u32 = 0x0024;
 const WM_SETICON: u32 = 0x0080;
@@ -293,6 +312,11 @@ unsafe extern "system" {
     fn GetDpiForWindow(hwnd: Hwnd) -> u32;
     fn SetWindowPos(hwnd: Hwnd, after: Hwnd, x: i32, y: i32, w: i32, h: i32, flags: u32) -> i32;
     fn ShowWindow(hwnd: Hwnd, cmd: i32) -> i32;
+    fn SetWindowTextW(hwnd: Hwnd, text: *const u16) -> i32;
+    fn GetWindowTextW(hwnd: Hwnd, text: *mut u16, max: i32) -> i32;
+    fn GetWindowTextLengthW(hwnd: Hwnd) -> i32;
+    fn IsZoomed(hwnd: Hwnd) -> i32;
+    fn IsIconic(hwnd: Hwnd) -> i32;
     fn UpdateWindow(hwnd: Hwnd) -> i32;
     fn DefWindowProcW(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult;
     fn PeekMessageW(msg: *mut Msg, hwnd: Hwnd, min: u32, max: u32, remove: u32) -> i32;
@@ -306,7 +330,6 @@ unsafe extern "system" {
     ) -> u32;
     fn TranslateMessage(msg: *const Msg) -> i32;
     fn DispatchMessageW(msg: *const Msg) -> Lresult;
-    fn PostQuitMessage(code: i32);
     fn DestroyWindow(hwnd: Hwnd) -> i32;
     fn GetClientRect(hwnd: Hwnd, rect: *mut Rect) -> i32;
     fn InvalidateRect(hwnd: Hwnd, rect: *const Rect, erase: i32) -> i32;
@@ -377,61 +400,260 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-/// Per-thread window state shared between the message loop, the [`WndProc`]
+/// One window's state, shared between the message loop, the [`WndProc`]
 /// (which blits on `WM_PAINT`), and the [`Surface`] (which updates the buffer).
 #[derive(Default)]
-struct WinCtx {
+struct PerWin {
     /// Top-down BGRA framebuffer for the current frame.
     fb: Vec<u8>,
     fb_w: i32,
     fb_h: i32,
-    /// Events pushed by the [`WndProc`], drained by the message loop.
-    queue: Vec<Event>,
     /// The current UIA provider tree, vended from `WM_GETOBJECT`. Rebuilt each
     /// time the App pushes a new accessibility tree.
     uia: Option<crate::platform::uia::UiaTree>,
     /// The window's DPI. 0 until the window exists, which reads as 96 (1x).
     dpi: u32,
-    /// The cursor shown over the client area (`WM_SETCURSOR`).
-    cursor: CursorIcon,
+    /// The client area, in physical pixels.
+    size: PhysicalSize,
     /// Inner size limits in logical pixels, applied on `WM_GETMINMAXINFO`.
     min_size: Option<Size>,
     max_size: Option<Size>,
+    /// Resizing snaps to whole steps of this (logical) size (`WM_SIZING`).
+    increments: Option<Size>,
     /// While fullscreen: the style and window rectangle to restore.
     restore: Option<(i32, [i32; 4])>,
     /// The `HICON` set with `WM_SETICON`, destroyed when replaced.
     icon: usize,
+    /// The window's menu bar (`HMENU`), destroyed when replaced.
+    menu: usize,
+    /// Where the window is and its state, as last reported (`WM_MOVE`,
+    /// `WM_SIZE`).
+    info: Option<WindowInfo>,
+}
+
+/// Per-thread state shared between the message loop, the [`WndProc`] and the
+/// windows.
+#[derive(Default)]
+struct WinCtx {
+    /// Every open window's state, by `HWND`.
+    wins: HashMap<usize, PerWin>,
+    /// The limits, increments and DPI of the window being created, for the
+    /// messages it gets before `CreateWindowExW` returns its handle.
+    pending: (Option<Size>, Option<Size>, Option<Size>, u32),
+    /// The window whose message is being handled: events go to it.
+    current: usize,
+    /// Events pushed by the [`WndProc`] for a window, drained by the loop.
+    queue: Vec<(usize, Event)>,
+    /// Windows opened and closed from the handler, for the loop to adopt and
+    /// destroy once it returns.
+    opened: Vec<usize>,
+    closed: Vec<usize>,
+    /// The cursor shown over the client area (`WM_SETCURSOR`).
+    cursor: CursorIcon,
     /// While a text field has focus: its caret, in client physical pixels,
     /// where the IME's windows go. `None` while the IME is off.
     ime_area: Option<Rect>,
     /// Pairs up `WM_CHAR`'s surrogates.
     utf16: input::Utf16Joiner,
     /// The app consumed the last key press as a raw key: the `WM_CHAR`s
-    /// `TranslateMessage` posted for it are dropped.
+    /// `TranslateMessage` posted for it are dropped. (Keys go to one window
+    /// at a time, so this is shared.)
     drop_chars: bool,
-    /// The window's menu bar (`HMENU`), destroyed when replaced.
-    menu: usize,
     /// The tray icon's menu and icon.
     tray: tray::TrayState,
     /// Whether the app takes the drag over the window (its last
     /// `set_drop_accepted`), and where the drag last was.
     drop_accepted: bool,
     drag_last: Option<crate::geometry::Point>,
-    /// A drag out of the app the app started with `Window::start_drag`, for
-    /// the message loop to run (see `dnd::drag_out`).
-    drag_out: Option<crate::platform::DropData>,
+    /// A drag out of the app the app started with `Window::start_drag` from
+    /// a window, for the message loop to run (see `dnd::drag_out`).
+    drag_out: Option<(usize, crate::platform::DropData)>,
 }
 
-/// Physical pixels per logical pixel for the window's current display.
-fn current_scale() -> f64 {
-    CTX.with(|c| match c.borrow().dpi {
-        0 => 1.0,
-        dpi => dpi as f64 / 96.0,
+/// The window [`crate::platform::wake`] posts to (any open one).
+static WAKE_TARGET: AtomicUsize = AtomicUsize::new(0);
+
+/// Run `f` on `hwnd`'s state, creating it (from the pending window's limits)
+/// if it's new.
+fn with_win<R>(hwnd: Hwnd, f: impl FnOnce(&mut PerWin) -> R) -> R {
+    CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        let c = &mut *c;
+        let (min_size, max_size, increments, dpi) = c.pending;
+        let w = c.wins.entry(hwnd as usize).or_insert_with(|| PerWin {
+            min_size,
+            max_size,
+            increments,
+            dpi,
+            ..Default::default()
+        });
+        f(w)
     })
 }
 
+/// Read `hwnd`'s state, if it has any.
+fn read_win<R>(hwnd: Hwnd, f: impl FnOnce(&PerWin) -> R) -> Option<R> {
+    CTX.with(|c| c.borrow().wins.get(&(hwnd as usize)).map(f))
+}
+
+/// Physical pixels per logical pixel for `hwnd`'s current display.
+fn scale_of(hwnd: Hwnd) -> f64 {
+    match read_win(hwnd, |w| w.dpi).unwrap_or(0) {
+        0 => 1.0,
+        dpi => dpi as f64 / 96.0,
+    }
+}
+
+/// Physical pixels per logical pixel for the display of the window whose
+/// message is being handled.
+fn current_scale() -> f64 {
+    let hwnd = CTX.with(|c| c.borrow().current);
+    scale_of(hwnd as Hwnd)
+}
+
+/// Run `f` with `hwnd` as the window events go to.
+fn with_current<R>(hwnd: Hwnd, f: impl FnOnce() -> R) -> R {
+    let prev = CTX.with(|c| std::mem::replace(&mut c.borrow_mut().current, hwnd as usize));
+    let r = f();
+    CTX.with(|c| c.borrow_mut().current = prev);
+    r
+}
+
+/// Queue `ev` for the window whose message is being handled.
 fn push_event(ev: Event) {
-    CTX.with(|c| c.borrow_mut().queue.push(ev));
+    CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        let hwnd = c.current;
+        c.queue.push((hwnd, ev));
+    });
+}
+
+/// Queue `ev` for `hwnd`.
+fn push_event_to(hwnd: Hwnd, ev: Event) {
+    CTX.with(|c| c.borrow_mut().queue.push((hwnd as usize, ev)));
+}
+
+fn zero_rect() -> Rect {
+    Rect {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    }
+}
+
+/// The window's rectangle on the desktop (frame included) and its client
+/// area's size, in physical pixels.
+fn window_rects(hwnd: Hwnd) -> (Rect, Rect) {
+    let (mut outer, mut client) = (zero_rect(), zero_rect());
+    unsafe {
+        GetWindowRect(hwnd, &mut outer);
+        GetClientRect(hwnd, &mut client);
+    }
+    (outer, client)
+}
+
+/// The work area of `hwnd`'s monitor, in physical desktop pixels.
+fn work_area(hwnd: Hwnd) -> Option<Rect> {
+    let mut info = MonitorInfo {
+        cb_size: core::mem::size_of::<MonitorInfo>() as u32,
+        rc_monitor: zero_rect(),
+        rc_work: zero_rect(),
+        flags: 0,
+    };
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    (unsafe { GetMonitorInfoW(monitor, &mut info) } != 0).then_some(info.rc_work)
+}
+
+/// Where `hwnd` is and its state, read from the system. While minimized, the
+/// position and sizes are the ones it had before (`prev`).
+fn read_info(hwnd: Hwnd, prev: Option<WindowInfo>) -> WindowInfo {
+    let scale = scale_of(hwnd);
+    let logical = |v: i32| v as f64 / scale;
+    let (outer, client) = window_rects(hwnd);
+    let minimized = unsafe { IsIconic(hwnd) } != 0;
+    let maximized = unsafe { IsZoomed(hwnd) } != 0;
+    let fullscreen = read_win(hwnd, |w| w.restore.is_some()).unwrap_or(false);
+    let work_area = work_area(hwnd).map(|r| {
+        crate::geometry::Rect::from_xywh(
+            logical(r.left),
+            logical(r.top),
+            logical(r.right - r.left),
+            logical(r.bottom - r.top),
+        )
+    });
+    let mut info = WindowInfo {
+        position: Some(crate::geometry::Point::new(
+            logical(outer.left),
+            logical(outer.top),
+        )),
+        inner_size: Size::new(
+            logical(client.right - client.left),
+            logical(client.bottom - client.top),
+        ),
+        outer_size: Size::new(
+            logical(outer.right - outer.left),
+            logical(outer.bottom - outer.top),
+        ),
+        scale: ScaleFactor::new(scale),
+        maximized,
+        minimized,
+        fullscreen,
+        work_area,
+    };
+    if minimized && let Some(prev) = prev {
+        info.position = prev.position;
+        info.inner_size = prev.inner_size;
+        info.outer_size = prev.outer_size;
+    }
+    info
+}
+
+/// Read `hwnd`'s position and state again after a move or resize, and tell
+/// the app with [`Event::WindowChanged`] when anything but its size changed.
+fn refresh_info(hwnd: Hwnd) {
+    let prev = read_win(hwnd, |w| w.info).flatten();
+    let now = read_info(hwnd, prev);
+    with_win(hwnd, |w| w.info = Some(now));
+    let Some(prev) = prev else {
+        return;
+    };
+    if prev.position != now.position
+        || prev.maximized != now.maximized
+        || prev.minimized != now.minimized
+        || prev.fullscreen != now.fullscreen
+        || prev.work_area != now.work_area
+    {
+        push_event_to(hwnd, Event::WindowChanged);
+        debug_window(format_args!(
+            "state {:#x} maximized={} minimized={} fullscreen={}",
+            hwnd as u64, now.maximized, now.minimized, now.fullscreen
+        ));
+    }
+}
+
+/// The window's title, read back from the system.
+fn window_text(hwnd: Hwnd) -> String {
+    let len = unsafe { GetWindowTextLengthW(hwnd) }.max(0) as usize;
+    let mut buf = vec![0u16; len + 1];
+    let n = unsafe { GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32) };
+    from_wide(&buf[..n.max(0) as usize])
+}
+
+/// With `STIPPLE_DEBUG_WINDOWS`, report the window's position and client
+/// size as the system has them.
+fn debug_frame(hwnd: Hwnd) {
+    let (outer, client) = window_rects(hwnd);
+    let scale = scale_of(hwnd);
+    let l = |v: i32| (v as f64 / scale).round() as i64;
+    debug_window(format_args!(
+        "frame {:#x} pos={},{} inner={}x{}",
+        hwnd as u64,
+        l(outer.left),
+        l(outer.top),
+        l(client.right - client.left),
+        l(client.bottom - client.top)
+    ));
 }
 
 /// Extract the signed `(x, y)` from a mouse-message `lParam` (LOWORD/HIWORD).
@@ -490,10 +712,6 @@ fn push_raw_key(vk: usize, lp: Lparam, state: ButtonState) {
 
 thread_local! {
     static CTX: RefCell<WinCtx> = RefCell::new(WinCtx::default());
-}
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 /// Append `items` to the menu `menu`: `&` mnemonics pass through, and a
@@ -597,7 +815,7 @@ fn set_menu_bar(hwnd: Hwnd, bar: &NativeMenuBar) {
     };
     let before = client(hwnd);
     unsafe { SetMenu(hwnd, menu) };
-    let old = CTX.with(|c| std::mem::replace(&mut c.borrow_mut().menu, menu as usize));
+    let old = with_win(hwnd, |w| std::mem::replace(&mut w.menu, menu as usize));
     if old != 0 {
         // Destroys its submenus too.
         unsafe { DestroyMenu(old as Handle) };
@@ -676,7 +894,8 @@ fn outer_size(hwnd: Hwnd, size: Size) -> Point {
         bottom: inner.height as i32,
     };
     let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32;
-    unsafe { AdjustWindowRectExForDpi(&mut r, style, 0, 0, dpi) };
+    let menu = read_win(hwnd, |w| w.menu != 0).unwrap_or(false) as i32;
+    unsafe { AdjustWindowRectExForDpi(&mut r, style, menu, 0, dpi) };
     Point {
         x: r.right - r.left,
         y: r.bottom - r.top,
@@ -709,7 +928,7 @@ fn reapply_limits(hwnd: Hwnd) {
 /// Make the window borderless and cover its monitor, or put back the style and
 /// rectangle it had before.
 fn set_fullscreen(hwnd: Hwnd, fullscreen: bool) {
-    let saved = CTX.with(|c| c.borrow().restore);
+    let saved = read_win(hwnd, |w| w.restore).flatten();
     match (fullscreen, saved) {
         (true, None) => {
             let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) };
@@ -741,8 +960,8 @@ fn set_fullscreen(hwnd: Hwnd, fullscreen: bool) {
             {
                 return;
             }
-            CTX.with(|c| {
-                c.borrow_mut().restore = Some((style, [r.left, r.top, r.right, r.bottom]));
+            with_win(hwnd, |w| {
+                w.restore = Some((style, [r.left, r.top, r.right, r.bottom]));
             });
             let m = info.rc_monitor;
             unsafe {
@@ -759,7 +978,7 @@ fn set_fullscreen(hwnd: Hwnd, fullscreen: bool) {
             }
         }
         (false, Some((style, [left, top, right, bottom]))) => {
-            CTX.with(|c| c.borrow_mut().restore = None);
+            with_win(hwnd, |w| w.restore = None);
             unsafe {
                 SetWindowLongW(hwnd, GWL_STYLE, style);
                 SetWindowPos(
@@ -814,6 +1033,56 @@ fn icon_bits(rgba: &[u8], w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
 }
 
 unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult {
+    // Events the message produces go to this window.
+    with_current(hwnd, || unsafe { handle_message(hwnd, msg, wp, lp) })
+}
+
+/// Snap a `WM_SIZING` rectangle to the window's resize increments.
+fn snap_sizing(hwnd: Hwnd, edge: u32, rect: &mut Rect) {
+    let Some((step, min)) = read_win(hwnd, |w| w.increments.map(|s| (s, w.min_size))).flatten()
+    else {
+        return;
+    };
+    let scale = scale_of(hwnd);
+    let px = |v: f64| (v * scale).round() as i32;
+    let (outer, client) = window_rects(hwnd);
+    let frame = (
+        (outer.right - outer.left) - (client.right - client.left),
+        (outer.bottom - outer.top) - (client.bottom - client.top),
+    );
+    let base = min.map_or((0, 0), |m| (px(m.width), px(m.height)));
+    let [left, top, right, bottom] = geometry::snap_sizing(
+        edge,
+        [rect.left, rect.top, rect.right, rect.bottom],
+        frame,
+        base,
+        (px(step.width), px(step.height)),
+    );
+    *rect = Rect {
+        left,
+        top,
+        right,
+        bottom,
+    };
+}
+
+/// Clean up after a destroyed window: its menu, icon and state.
+fn forget_window(hwnd: Hwnd) {
+    let gone = CTX.with(|c| c.borrow_mut().wins.remove(&(hwnd as usize)));
+    if let Some(w) = gone {
+        unsafe {
+            if w.menu != 0 {
+                DestroyMenu(w.menu as Handle);
+            }
+            // The notifications may still borrow the icon.
+            if w.icon != 0 && !tray::is_app_icon(w.icon) {
+                DestroyIcon(w.icon as Handle);
+            }
+        }
+    }
+}
+
+unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult {
     if tray::taskbar_created(hwnd, msg) {
         return 0;
     }
@@ -824,10 +1093,8 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             1
         }
         WM_GETMINMAXINFO => {
-            let (min, max, fullscreen) = CTX.with(|c| {
-                let c = c.borrow();
-                (c.min_size, c.max_size, c.restore.is_some())
-            });
+            let (min, max, fullscreen) =
+                with_win(hwnd, |w| (w.min_size, w.max_size, w.restore.is_some()));
             let info = unsafe { &mut *(lp as *mut MinMaxInfo) };
             if let Some(min) = min {
                 info.min_track_size = outer_size(hwnd, min);
@@ -844,6 +1111,9 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
             CTX.with(|c| {
                 let c = c.borrow();
+                let Some(c) = c.wins.get(&(hwnd as usize)) else {
+                    return;
+                };
                 if !c.fb.is_empty() {
                     let bmi = BitmapInfo {
                         header: BitmapInfoHeader {
@@ -889,15 +1159,26 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             let w = (lp & 0xffff) as u32;
             let h = ((lp >> 16) & 0xffff) as u32;
             if w > 0 && h > 0 {
-                push_event(Event::Resized(PhysicalSize::new(w, h)));
+                let size = PhysicalSize::new(w, h);
+                with_win(hwnd, |win| win.size = size);
+                push_event(Event::Resized(size));
             }
+            refresh_info(hwnd);
             0
+        }
+        WM_MOVE => {
+            refresh_info(hwnd);
+            0
+        }
+        WM_SIZING => {
+            snap_sizing(hwnd, wp as u32, unsafe { &mut *(lp as *mut Rect) });
+            1
         }
         WM_DPICHANGED => {
             // wParam's low word is the new DPI; lParam is the suggested window
             // rectangle. Moving there sends the WM_SIZE that re-renders.
             let dpi = (wp & 0xffff) as u32;
-            CTX.with(|c| c.borrow_mut().dpi = dpi);
+            with_win(hwnd, |w| w.dpi = dpi);
             let r = unsafe { &*(lp as *const Rect) };
             unsafe {
                 SetWindowPos(
@@ -1042,13 +1323,9 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             // back the live provider tree; other object ids fall through to the
             // default (e.g. legacy MSAA, which we don't serve).
             if lp as i32 == UIA_ROOT_OBJECT_ID {
-                let root = CTX.with(|c| {
-                    c.borrow()
-                        .uia
-                        .as_ref()
-                        .map(|t| t.root_provider())
-                        .unwrap_or(std::ptr::null_mut())
-                });
+                let root = read_win(hwnd, |w| w.uia.as_ref().map(|t| t.root_provider()))
+                    .flatten()
+                    .unwrap_or(std::ptr::null_mut());
                 if !root.is_null() {
                     return unsafe { UiaReturnRawElementProvider(hwnd, wp, lp, root) };
                 }
@@ -1092,9 +1369,16 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
         }
         attention::WM_QUERYENDSESSION => attention::query_end_session(hwnd),
         WM_DESTROY => {
-            tray::remove_all(hwnd);
-            unsafe { PostQuitMessage(0) };
+            // The loop ends when the last window is gone; if others stay,
+            // the tray icon moves to one of them.
+            if tray::owner() == Some(hwnd) {
+                tray::remove_all(hwnd);
+            }
             0
+        }
+        WM_NCDESTROY => {
+            forget_window(hwnd);
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
     }
@@ -1103,7 +1387,20 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
 #[derive(Debug)]
 struct WinWindow {
     hwnd: Hwnd,
-    size: PhysicalSize,
+}
+
+/// Give `hwnd` the icon `icon` (or none), replacing the one it had.
+fn set_window_icon(hwnd: Hwnd, icon: Option<&crate::render::Pixmap>) {
+    let new = icon.map_or(std::ptr::null_mut(), create_icon);
+    unsafe {
+        SendMessageW(hwnd, WM_SETICON, ICON_BIG, new as Lparam);
+        SendMessageW(hwnd, WM_SETICON, ICON_SMALL, new as Lparam);
+    }
+    tray::set_app_icon(new);
+    let old = with_win(hwnd, |w| std::mem::replace(&mut w.icon, new as usize));
+    if old != 0 {
+        unsafe { DestroyIcon(old as Handle) };
+    }
 }
 
 impl Window for WinWindow {
@@ -1111,15 +1408,91 @@ impl Window for WinWindow {
         WindowId(self.hwnd as u64)
     }
     fn inner_size(&self) -> PhysicalSize {
-        self.size
+        read_win(self.hwnd, |w| w.size).unwrap_or_default()
     }
     fn scale_factor(&self) -> ScaleFactor {
-        ScaleFactor::new(current_scale())
+        ScaleFactor::new(scale_of(self.hwnd))
     }
     fn request_redraw(&self) {
         unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
     }
-    fn set_title(&self, _title: &str) {}
+    fn set_title(&self, title: &str) {
+        let text = wide(title);
+        unsafe { SetWindowTextW(self.hwnd, text.as_ptr()) };
+        debug_window(format_args!(
+            "title {:#x} {:?}",
+            self.hwnd as u64,
+            window_text(self.hwnd)
+        ));
+    }
+    fn open_window(&self, attrs: WindowAttributes) -> Option<WindowId> {
+        let hwnd = create_window(&attrs).ok()?;
+        show_window(hwnd, &attrs, attrs.focus);
+        // The loop adopts it once the handler returns, then draws it.
+        CTX.with(|c| c.borrow_mut().opened.push(hwnd as usize));
+        push_event_to(hwnd, Event::RedrawRequested);
+        Some(WindowId(hwnd as u64))
+    }
+    fn close_window(&self) {
+        CTX.with(|c| c.borrow_mut().closed.push(self.hwnd as usize));
+    }
+    fn set_visible(&self, visible: bool) {
+        let cmd = if visible { SW_SHOW } else { SW_HIDE };
+        unsafe { ShowWindow(self.hwnd, cmd) };
+    }
+    fn info(&self) -> WindowInfo {
+        match read_win(self.hwnd, |w| w.info).flatten() {
+            Some(info) => info,
+            None => read_info(self.hwnd, None),
+        }
+    }
+    fn set_position(&self, position: crate::geometry::Point) {
+        let scale = scale_of(self.hwnd);
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                std::ptr::null_mut(),
+                (position.x * scale).round() as i32,
+                (position.y * scale).round() as i32,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        debug_frame(self.hwnd);
+    }
+    fn set_inner_size(&self, size: Size) {
+        let outer = outer_size(self.hwnd, size);
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                std::ptr::null_mut(),
+                0,
+                0,
+                outer.x,
+                outer.y,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        debug_frame(self.hwnd);
+    }
+    fn set_resize_increments(&self, step: Option<Size>) {
+        let step = step.filter(|s| s.width > 0.0 && s.height > 0.0);
+        with_win(self.hwnd, |w| w.increments = step);
+        match step {
+            Some(s) => debug_window(format_args!(
+                "increments {:#x} {}x{}",
+                self.hwnd as u64,
+                s.width.round() as i64,
+                s.height.round() as i64
+            )),
+            None => debug_window(format_args!("increments {:#x} none", self.hwnd as u64)),
+        }
+    }
+    fn set_minimized(&self, minimized: bool) {
+        let cmd = if minimized { SW_MINIMIZE } else { SW_RESTORE };
+        unsafe { ShowWindow(self.hwnd, cmd) };
+    }
     fn clipboard(&self) -> Option<String> {
         crate::platform::clipboard::text()
     }
@@ -1166,16 +1539,16 @@ impl Window for WinWindow {
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(WinSurface {
             hwnd: self.hwnd,
-            size: self.size,
+            size: self.inner_size(),
         })
     }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         // Rebuild the UIA provider tree; `WM_GETOBJECT` hands its root to UIA.
         let tree = crate::platform::uia::UiaTree::build(root);
-        CTX.with(|c| c.borrow_mut().uia = Some(tree));
+        with_win(self.hwnd, |w| w.uia = Some(tree));
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
-        ime::set_state(self.hwnd, state);
+        with_current(self.hwnd, || ime::set_state(self.hwnd, state));
     }
     fn set_drop_accepted(&self, accepted: bool) {
         CTX.with(|c| c.borrow_mut().drop_accepted = accepted);
@@ -1186,7 +1559,7 @@ impl Window for WinWindow {
         if !data.can_leave_app() {
             return false;
         }
-        CTX.with(|c| c.borrow_mut().drag_out = Some(data.clone()));
+        CTX.with(|c| c.borrow_mut().drag_out = Some((self.hwnd as usize, data.clone())));
         true
     }
     fn set_cursor(&self, cursor: CursorIcon) {
@@ -1196,11 +1569,11 @@ impl Window for WinWindow {
         unsafe { SetCursor(load_cursor(cursor)) };
     }
     fn set_min_size(&self, size: Option<Size>) {
-        CTX.with(|c| c.borrow_mut().min_size = size);
+        with_win(self.hwnd, |w| w.min_size = size);
         reapply_limits(self.hwnd);
     }
     fn set_max_size(&self, size: Option<Size>) {
-        CTX.with(|c| c.borrow_mut().max_size = size);
+        with_win(self.hwnd, |w| w.max_size = size);
         reapply_limits(self.hwnd);
     }
     fn set_maximized(&self, maximized: bool) {
@@ -1215,7 +1588,7 @@ impl Window for WinWindow {
         true
     }
     fn popup_menu(&self, menu: &NativeMenu, at: crate::geometry::Point) -> MenuPopup {
-        popup_menu(self.hwnd, menu, at)
+        with_current(self.hwnd, || popup_menu(self.hwnd, menu, at))
     }
     fn set_tray(&self, tray: Option<&NativeTray>) -> bool {
         tray::set_tray(self.hwnd, tray)
@@ -1227,16 +1600,7 @@ impl Window for WinWindow {
         attention::beep();
     }
     fn set_icon(&self, icon: Option<&crate::render::Pixmap>) {
-        let new = icon.map_or(std::ptr::null_mut(), create_icon);
-        unsafe {
-            SendMessageW(self.hwnd, WM_SETICON, ICON_BIG, new as Lparam);
-            SendMessageW(self.hwnd, WM_SETICON, ICON_SMALL, new as Lparam);
-        }
-        tray::set_app_icon(new);
-        let old = CTX.with(|c| std::mem::replace(&mut c.borrow_mut().icon, new as usize));
-        if old != 0 {
-            unsafe { DestroyIcon(old as Handle) };
-        }
+        set_window_icon(self.hwnd, icon);
     }
 }
 
@@ -1269,117 +1633,144 @@ impl Surface for WinSurface {
             d[2] = s[0];
             d[3] = s[3];
         }
-        CTX.with(|c| {
-            let mut c = c.borrow_mut();
-            c.fb = fb;
-            c.fb_w = size.width as i32;
-            c.fb_h = size.height as i32;
+        with_win(self.hwnd, |w| {
+            w.fb = fb;
+            w.fb_w = size.width as i32;
+            w.fb_h = size.height as i32;
         });
         unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
     }
 }
 
-/// Create a window, render the initial frame, and pump the Win32 message loop
-/// until `WM_QUIT`. `handler` is invoked for [`Event::RedrawRequested`] (to
-/// produce the frame) and [`Event::CloseRequested`].
-pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
-where
-    H: FnMut(Event, &dyn Window) -> ControlFlow,
-{
-    let class_name = wide("StippleWindowClass");
-    let title = wide(&attrs.title);
-    // Without this, Windows renders us at 96 DPI and stretches the blurry result.
-    // It fails harmlessly if the app's manifest already set an awareness.
-    unsafe { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) };
-    let system_dpi = unsafe { GetDpiForSystem() };
-    pointer::read_double_click(system_dpi);
-    let size = ScaleFactor::new(system_dpi as f64 / 96.0).to_physical(attrs.logical_size);
+const CLASS_NAME: &str = "StippleWindowClass";
 
-    let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
-    let cursor = unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) };
-    // Size limits, read on `WM_GETMINMAXINFO` (first sent while creating).
-    CTX.with(|c| {
-        let mut c = c.borrow_mut();
-        c.min_size = attrs.min_size;
-        c.max_size = attrs.max_size;
-    });
-
+/// Register the window class every Stipple window uses.
+fn register_class() -> Result<(), PlatformError> {
+    let class_name = wide(CLASS_NAME);
     let class = WndClassW {
         style: 0,
         lpfn_wnd_proc: Some(wnd_proc),
         cb_cls_extra: 0,
         cb_wnd_extra: 0,
-        h_instance: hinstance,
+        h_instance: unsafe { GetModuleHandleW(std::ptr::null()) },
         h_icon: std::ptr::null_mut(),
-        h_cursor: cursor,
+        h_cursor: unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) },
         hbr_background: std::ptr::null_mut(),
         lpsz_menu_name: std::ptr::null(),
         lpsz_class_name: class_name.as_ptr(),
     };
-    let atom = unsafe { RegisterClassW(&class) };
-    if atom == 0 {
+    if unsafe { RegisterClassW(&class) } == 0 {
         return Err(PlatformError::Os("RegisterClassW failed".into()));
     }
+    Ok(())
+}
 
+/// Create (but don't show) a top-level window for `attrs`: its title, inner
+/// size, position, size limits, resize increments, title-bar color and icon.
+fn create_window(attrs: &WindowAttributes) -> Result<Hwnd, PlatformError> {
+    let class_name = wide(CLASS_NAME);
+    let title = wide(&attrs.title);
+    let system_dpi = unsafe { GetDpiForSystem() };
+    let scale = ScaleFactor::new(system_dpi as f64 / 96.0);
+    let size = scale.to_physical(attrs.logical_size);
+    let mut style = if attrs.decorations {
+        WS_OVERLAPPEDWINDOW
+    } else {
+        WS_POPUP_RESIZABLE
+    };
+    let (mut min, mut max) = (attrs.min_size, attrs.max_size);
+    if !attrs.resizable {
+        // No resizing border or maximize button, and the size as both limits.
+        style &= !(WS_THICKFRAME | WS_MAXIMIZEBOX);
+        (min, max) = (Some(attrs.logical_size), Some(attrs.logical_size));
+    }
+    let (x, y) = match attrs.position {
+        Some((x, y)) => (
+            (x as f64 * scale.get()).round() as i32,
+            (y as f64 * scale.get()).round() as i32,
+        ),
+        None => (CW_USEDEFAULT, CW_USEDEFAULT),
+    };
+    // Size limits, read on `WM_GETMINMAXINFO` (first sent while creating).
+    let increments = attrs.resize_increments;
+    CTX.with(|c| c.borrow_mut().pending = (min, max, increments, system_dpi));
     let hwnd = unsafe {
         CreateWindowExW(
             0,
             class_name.as_ptr(),
             title.as_ptr(),
-            if attrs.decorations {
-                WS_OVERLAPPEDWINDOW
-            } else {
-                WS_POPUP_RESIZABLE
-            },
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
+            style,
+            x,
+            y,
             size.width as i32,
             size.height as i32,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            hinstance,
+            GetModuleHandleW(std::ptr::null()),
             std::ptr::null_mut(),
         )
     };
+    CTX.with(|c| c.borrow_mut().pending = (None, None, None, 0));
     if hwnd.is_null() {
         return Err(PlatformError::Os("CreateWindowExW failed".into()));
     }
-    tray::install(hwnd);
-    // The window may have opened on a display with a different DPI to the system's.
-    CTX.with(|c| c.borrow_mut().dpi = unsafe { GetDpiForWindow(hwnd) });
+    // The window may have opened on a display with a different DPI to the
+    // system's.
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    with_win(hwnd, |w| {
+        w.dpi = dpi;
+        w.min_size = min;
+        w.max_size = max;
+        w.increments = increments;
+    });
     if let Some(dark) = attrs.dark {
         // A title bar matching the content.
         set_dark_title(hwnd, dark);
     }
-
-    // Use the actual client area for the framebuffer size.
-    let mut rect = Rect {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
+    // `CreateWindowExW` sizes the whole window: make the client area the
+    // size asked for.
+    let outer = outer_size(hwnd, attrs.logical_size);
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            outer.x,
+            outer.y,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
     };
-    unsafe { GetClientRect(hwnd, &mut rect) };
+    let (_, client) = window_rects(hwnd);
     let client = PhysicalSize::new(
-        (rect.right - rect.left).max(1) as u32,
-        (rect.bottom - rect.top).max(1) as u32,
+        (client.right - client.left).max(1) as u32,
+        (client.bottom - client.top).max(1) as u32,
     );
-    let mut win = WinWindow { hwnd, size: client };
+    with_win(hwnd, |w| w.size = client);
     // Take drops from other applications.
     if !dnd::register(hwnd) {
         eprintln!("stipple: RegisterDragDrop failed; only WM_DROPFILES drops work");
     }
     if let Some(icon) = attrs.icon.as_ref() {
-        win.set_icon(Some(icon));
+        set_window_icon(hwnd, Some(icon));
     }
+    debug_window(format_args!(
+        "opened {:#x} {:?}",
+        hwnd as u64,
+        window_text(hwnd)
+    ));
+    Ok(hwnd)
+}
 
-    // Render the initial frame into the thread-local framebuffer.
-    handler(Event::RedrawRequested, &win);
-
+/// Show a window made by [`create_window`], maximized or fullscreen if
+/// `attrs` say so, and activate it if `focus`.
+fn show_window(hwnd: Hwnd, attrs: &WindowAttributes, focus: bool) {
     let show = if attrs.maximized {
         SW_MAXIMIZE
-    } else {
+    } else if focus {
         SW_SHOW
+    } else {
+        SW_SHOWNOACTIVATE
     };
     unsafe {
         ShowWindow(hwnd, show);
@@ -1388,24 +1779,143 @@ where
     if attrs.fullscreen {
         set_fullscreen(hwnd, true);
     }
+    if focus {
+        unsafe { SetForegroundWindow(hwnd) };
+    }
+    refresh_info(hwnd);
+}
+
+/// Adopt the windows the handler opened and destroy the ones it closed.
+fn settle(windows: &mut Vec<WinWindow>) {
+    let (opened, closed) = CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        (std::mem::take(&mut c.opened), std::mem::take(&mut c.closed))
+    });
+    for hwnd in opened {
+        if !windows.iter().any(|w| w.hwnd as usize == hwnd) {
+            windows.push(WinWindow { hwnd: hwnd as Hwnd });
+        }
+    }
+    for hwnd in closed {
+        if let Some(pos) = windows.iter().position(|w| w.hwnd as usize == hwnd) {
+            windows.remove(pos);
+            unsafe { DestroyWindow(hwnd as Hwnd) };
+            debug_window(format_args!("closed {:#x}", hwnd as u64));
+        }
+    }
+    if let Some(first) = windows.first() {
+        // Wakes and the tray icon need a window that is still open.
+        let target = WAKE_TARGET.load(Ordering::Acquire);
+        if !windows.iter().any(|w| w.hwnd as usize == target) {
+            WAKE_TARGET.store(first.hwnd as usize, Ordering::Release);
+        }
+        if tray::owner().is_none() {
+            tray::rehome(first.hwnd);
+        }
+    }
+}
+
+/// Deliver the queued events, each to its window, until the queue is empty
+/// (handling them may queue more). Returns `Exit` if the handler did.
+fn deliver_queued<H>(windows: &mut Vec<WinWindow>, handler: &mut H) -> ControlFlow
+where
+    H: FnMut(Event, &dyn Window) -> ControlFlow,
+{
+    // Bounded, in case handling events keeps making more; what's left waits
+    // for the next message, which we post.
+    for _ in 0..8 {
+        settle(windows);
+        let events: Vec<(usize, Event)> = CTX.with(|c| std::mem::take(&mut c.borrow_mut().queue));
+        if events.is_empty() {
+            return ControlFlow::Wait;
+        }
+        // After a raw key the handler consumed, the events the same key
+        // produced are skipped.
+        let mut skip = false;
+        for (hwnd, event) in events {
+            settle(windows);
+            // Events from outside any window's messages go to the first.
+            let target = match windows.iter().find(|w| w.hwnd as usize == hwnd) {
+                Some(w) => Some(w),
+                None if hwnd == 0 => windows.first(),
+                None => None, // closed meanwhile
+            };
+            let Some(w) = target else {
+                continue;
+            };
+            let flow = match event {
+                Event::RawKey(key) => {
+                    let pressed = key.is_press();
+                    let (used, flow) = crate::platform::key::deliver_raw(key, |e| handler(e, w));
+                    skip = used;
+                    if pressed && used {
+                        CTX.with(|c| c.borrow_mut().drop_chars = true);
+                    }
+                    flow
+                }
+                Event::Key { .. } | Event::Text(_) if skip => ControlFlow::Wait,
+                event => {
+                    skip = false;
+                    handler(event, w)
+                }
+            };
+            if flow == ControlFlow::Exit {
+                return ControlFlow::Exit;
+            }
+        }
+    }
+    settle(windows);
+    let pending = CTX.with(|c| !c.borrow().queue.is_empty());
+    if pending && let Some(w) = windows.first() {
+        unsafe { PostMessageW(w.hwnd, WM_NULL, 0, 0) };
+    }
+    ControlFlow::Wait
+}
+
+/// Create a window, render the initial frame, and pump the Win32 message loop
+/// until the last window closes or the handler returns `Exit`. More windows
+/// open with [`Window::open_window`]; each one's events reach `handler` with
+/// that window, and [`Event::Wake`] goes to every window in turn.
+pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
+where
+    H: FnMut(Event, &dyn Window) -> ControlFlow,
+{
+    // Without this, Windows renders us at 96 DPI and stretches the blurry result.
+    // It fails harmlessly if the app's manifest already set an awareness.
+    unsafe { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) };
+    pointer::read_double_click(unsafe { GetDpiForSystem() });
+    register_class()?;
+    let hwnd = create_window(&attrs)?;
+    tray::install(hwnd);
+    let mut windows = vec![WinWindow { hwnd }];
+
+    // Render the initial frame into the window's framebuffer.
+    handler(Event::RedrawRequested, &windows[0]);
+    show_window(hwnd, &attrs, attrs.focus);
 
     // Message loop. The WndProc translates native messages into Stipple events
-    // and queues them (it can't see the generic `handler`); we drain and
-    // dispatch the queue after each message.
+    // and queues them for their window (it can't see the generic `handler`);
+    // we drain and dispatch the queue after each message.
     //
     // Between messages, wait for input or a wakeup (timers, other threads). A
-    // wake from another thread posts a message, which ends the wait.
-    let target = hwnd as usize;
+    // wake from another thread posts a message to an open window, which ends
+    // the wait.
+    WAKE_TARGET.store(hwnd as usize, Ordering::Release);
     crate::platform::wake::install(
-        std::sync::Arc::new(move || unsafe {
-            PostMessageW(target as Hwnd, WM_APP_WAKE, 0, 0);
+        std::sync::Arc::new(|| unsafe {
+            PostMessageW(
+                WAKE_TARGET.load(Ordering::Acquire) as Hwnd,
+                WM_APP_WAKE,
+                0,
+                0,
+            );
         }),
         None,
     );
     // Animation frames are paced by DWM's composition, on a thread of their own.
     vsync::install();
     let mut msg: Msg = unsafe { std::mem::zeroed() };
-    'outer: loop {
+    'outer: while !windows.is_empty() {
         let timeout = match crate::platform::wake::timeout(std::time::Instant::now()) {
             // Round up, so we don't wake a hair early and spin.
             Some(t) => t.as_micros().div_ceil(1000).min(INFINITE as u128 - 1) as u32,
@@ -1428,49 +1938,41 @@ where
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
-            let events: Vec<Event> = CTX.with(|c| std::mem::take(&mut c.borrow_mut().queue));
-            // After a raw key the handler consumed, the events the same key
-            // produced are skipped.
-            let mut skip = false;
-            for event in events {
-                let flow = match event {
-                    Event::RawKey(key) => {
-                        let pressed = key.is_press();
-                        let (used, flow) =
-                            crate::platform::key::deliver_raw(key, |e| handler(e, &win));
-                        skip = used;
-                        if pressed && used {
-                            CTX.with(|c| c.borrow_mut().drop_chars = true);
-                        }
-                        flow
-                    }
-                    Event::Key { .. } | Event::Text(_) if skip => ControlFlow::Wait,
-                    event => {
-                        skip = false;
-                        if let Event::Resized(size) = event {
-                            win.size = size;
-                        }
-                        handler(event, &win)
-                    }
-                };
-                if flow == ControlFlow::Exit {
-                    unsafe { DestroyWindow(hwnd) };
-                }
+            if deliver_queued(&mut windows, &mut handler) == ControlFlow::Exit {
+                break 'outer;
             }
             // A drag the app handed out runs here, outside the handler. What
             // it did to our own window waits in the queue; a message gets
             // the loop to deliver it.
-            if let Some(data) = CTX.with(|c| c.borrow_mut().drag_out.take()) {
+            if let Some((owner, data)) = CTX.with(|c| c.borrow_mut().drag_out.take()) {
                 unsafe { ReleaseCapture() };
                 let _dropped = dnd::drag_out::run(&data);
-                unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
+                unsafe { PostMessageW(owner as Hwnd, WM_NULL, 0, 0) };
+            }
+            if windows.is_empty() {
+                break 'outer;
             }
         }
-        if crate::platform::wake::take(std::time::Instant::now())
-            && handler(Event::Wake, &win) == ControlFlow::Exit
-        {
-            unsafe { DestroyWindow(hwnd) };
+        if crate::platform::wake::take(std::time::Instant::now()) {
+            // Every window hears the wake, so each can catch up.
+            let ids: Vec<usize> = windows.iter().map(|w| w.hwnd as usize).collect();
+            for id in ids {
+                settle(&mut windows);
+                if let Some(w) = windows.iter().find(|w| w.hwnd as usize == id)
+                    && handler(Event::Wake, w) == ControlFlow::Exit
+                {
+                    break 'outer;
+                }
+            }
+            if deliver_queued(&mut windows, &mut handler) == ControlFlow::Exit {
+                break 'outer;
+            }
         }
+    }
+    // The loop ended: close whatever is still open.
+    for w in windows.drain(..) {
+        unsafe { DestroyWindow(w.hwnd) };
+        debug_window(format_args!("closed {:#x}", w.hwnd as u64));
     }
     Ok(())
 }
