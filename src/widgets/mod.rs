@@ -22,6 +22,9 @@ mod color_picker;
 pub(crate) mod menus;
 #[cfg(test)]
 mod menus_tests;
+mod motion;
+#[cfg(test)]
+mod motion_tests;
 mod number;
 mod password;
 mod preedit;
@@ -44,9 +47,10 @@ pub use toast::{Toast, ToastId, ToastKind, Toasts, toasts};
 pub use toolbar::{tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar};
 
 use crate::core::{
-    Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Role, Track, ViewportId,
+    Align, Anchor, AnimProp, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Role, Track,
+    Transition, ViewportId,
 };
-use crate::geometry::{Insets, Point};
+use crate::geometry::{Insets, Point, Transform};
 use crate::platform::native::{self, NativeControl};
 use crate::render::{Color, ImageSource, Svg, TextDirection};
 use crate::style::Theme;
@@ -282,7 +286,24 @@ pub fn button_variant(theme: &Theme, label: impl Into<String>, variant: Variant)
     if let Some(border) = border {
         el = el.border(border, 1.0);
     }
-    el
+    pressable(el, theme, fill)
+}
+
+/// Give a self-drawn button its hover and press looks, animated with the
+/// theme's motion: the hover overlay composited over its `fill` (twice over
+/// while pressed, as the app's own highlight shows it) and, while pressed, a
+/// shrink to [`MotionTokens::press_scale`](crate::style::MotionTokens::press_scale).
+/// The looks are worked out from the variant's colors: a button given another
+/// fill afterwards should get its own `.hovered` and `.pressed` too.
+fn pressable(el: Element, theme: &Theme, fill: Option<Color>) -> Element {
+    let m = theme.motion;
+    let overlay = theme.palette.hover_overlay;
+    let (hover, press) = (motion::lit(fill, overlay, 1), motion::lit(fill, overlay, 2));
+    let scale = m.press_scale;
+    el.hovered(move |e| e.fill(hover))
+        .pressed(move |e| e.fill(press).transform(Transform::IDENTITY.scale(scale)))
+        .transition_for(AnimProp::Fill, Transition(m.state))
+        .transition_for(AnimProp::Transform, Transition(m.press))
 }
 
 /// A primary button with a centered text `label` (shorthand for
@@ -1193,21 +1214,25 @@ pub fn checkbox<S>(
             .on_tap(cx, on_toggle)
             .checked(checked);
     }
+    // The mark is always there, faded out and shrunk while unchecked, so it
+    // pops in (and out) on the theme's toggle motion.
+    let m = theme.motion;
+    let mark = Element::text("✓", theme.font_size, theme.palette.on_primary);
     let mark = if checked {
-        vec![Element::text(
-            "✓",
-            theme.font_size,
-            theme.palette.on_primary,
-        )]
+        mark
     } else {
-        Vec::new()
+        mark.opacity(0.0).transform(Transform::IDENTITY.scale(0.4))
     };
-    Element::stack(Axis::Horizontal, mark)
+    let mark = mark
+        .transition_for(AnimProp::Opacity, Transition(m.toggle))
+        .transition_for(AnimProp::Transform, Transition(m.toggle));
+    Element::stack(Axis::Horizontal, vec![mark])
         .fill(if checked {
             theme.palette.primary
         } else {
             theme.palette.surface
         })
+        .transition_for(AnimProp::Fill, Transition(m.state))
         .border(theme.palette.border, 1.0)
         .radius(theme.radius / 2.0)
         .width(22.0)
@@ -1242,17 +1267,20 @@ pub fn switch<S>(
     })
     .width(16.0)
     .height(16.0);
-    let children = if on {
-        vec![spacer(), knob]
-    } else {
-        vec![knob, spacer()]
-    };
-    Element::stack(Axis::Horizontal, children)
+    // The knob sits after a lead that is as wide as its travel when on (40
+    // wide, less 3 of padding a side and the knob's 16) and empty when off,
+    // so the lead's width slides it over on the theme's toggle motion.
+    let m = theme.motion;
+    let lead = Element::stack(Axis::Horizontal, Vec::new())
+        .width(if on { 18.0 } else { 0.0 })
+        .transition_for(AnimProp::Width, Transition(m.toggle));
+    Element::stack(Axis::Horizontal, vec![lead, knob])
         .fill(if on {
             theme.palette.primary
         } else {
             theme.palette.border
         })
+        .transition_for(AnimProp::Fill, Transition(m.state))
         .radius(11.0)
         .width(40.0)
         .height(22.0)
@@ -1347,20 +1375,25 @@ pub fn radio<S>(
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
             .on_tap(cx, on_select);
     }
+    // Like the checkbox's mark, the dot is always there, faded out and
+    // shrunk while unselected.
+    let m = theme.motion;
+    let dot = Element::boxed(BoxStyle {
+        fill: Some(theme.palette.primary),
+        radius: 5.0,
+        border: None,
+    })
+    .width(10.0)
+    .height(10.0);
     let dot = if selected {
-        vec![
-            Element::boxed(BoxStyle {
-                fill: Some(theme.palette.primary),
-                radius: 5.0,
-                border: None,
-            })
-            .width(10.0)
-            .height(10.0),
-        ]
+        dot
     } else {
-        Vec::new()
+        dot.opacity(0.0).transform(Transform::IDENTITY.scale(0.2))
     };
-    Element::stack(Axis::Horizontal, dot)
+    let dot = dot
+        .transition_for(AnimProp::Opacity, Transition(m.toggle))
+        .transition_for(AnimProp::Transform, Transition(m.toggle));
+    Element::stack(Axis::Horizontal, vec![dot])
         .fill(theme.palette.surface)
         .border(theme.palette.border, 1.0)
         .radius(11.0) // half the size → a circle
@@ -1394,11 +1427,16 @@ pub fn tabs<S>(
             (p.surface, p.text)
         };
         let on = on_select.clone();
+        let state = Transition(theme.motion.state);
         let cell = Element::stack(
             Axis::Horizontal,
-            vec![Element::text(*text, theme.typography.body, ink)],
+            vec![
+                Element::text(*text, theme.typography.body, ink)
+                    .transition_for(AnimProp::TextColor, state),
+            ],
         )
         .fill(fill)
+        .transition_for(AnimProp::Fill, state)
         .border(p.border, 1.0)
         .radius(theme.radius)
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))

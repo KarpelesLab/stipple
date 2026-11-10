@@ -14,6 +14,9 @@ let app = App::new(state, view).theme(Theme::native());
   `Theme::native()` is called and again whenever they change while the app runs.
 - **Uses the platform's metrics**: font size, corner radius, and the colors of
   window backgrounds, surfaces and separators.
+- **Moves like the platform**: the self-drawn widgets animate with the
+  platform's durations and curves (Fluent, AppKit, UIKit, Material 3 or
+  libadwaita; see [widgets.md](widgets.md#motion)).
 - **Has the OS draw the controls**, on Windows, macOS and iOS.
 
 ## OS-drawn controls

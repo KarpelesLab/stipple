@@ -197,6 +197,9 @@ fn too_many_tabs_scroll_and_list() {
     let list = named(&app, "All tabs");
     assert!(app.click_at(list.center()));
     assert!(app.state().bar.is_list_open());
+    // Let the list finish growing in before aiming at an item.
+    app.render_once();
+    std::thread::sleep(std::time::Duration::from_millis(300));
     app.render_once();
     let last = named(&app, "Doc 11");
     assert!(app.click_at(last.center()));

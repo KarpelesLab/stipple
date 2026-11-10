@@ -14,6 +14,9 @@ use crate::layout::LayoutDirection;
 use crate::platform::native;
 use crate::render::Color;
 
+mod motion;
+pub use motion::MotionTokens;
+
 /// Semantic colors. Names describe *role*, not hue, so light/dark/custom themes
 /// can supply different values for the same role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +116,10 @@ pub struct Theme {
     /// [`LayoutDirection::Rtl`] mirrors the whole UI for Arabic, Hebrew and
     /// other right-to-left languages (see [`Theme::with_layout_direction`]).
     pub layout_direction: LayoutDirection,
+    /// How the built-in widgets animate: durations and curves for hover and
+    /// press looks, toggles, tab indicators, popups, dialogs, toasts and
+    /// disclosure triangles. See [`MotionTokens`].
+    pub motion: MotionTokens,
 }
 
 /// Derive the hover/active/ring tints from a `primary` accent.
@@ -194,6 +201,7 @@ impl Theme {
         theme.radius = metrics.0;
         theme.native = native::available();
         theme.follows_system = true;
+        theme.motion = MotionTokens::native();
         theme.with_font_size(metrics.1)
     }
 
@@ -248,6 +256,7 @@ impl Theme {
             native: false,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
+            motion: MotionTokens::standard(),
         }
     }
 
@@ -280,6 +289,7 @@ impl Theme {
             native: false,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
+            motion: MotionTokens::standard(),
         }
     }
 
@@ -318,6 +328,12 @@ impl Theme {
     /// is right to left).
     pub fn is_rtl(&self) -> bool {
         self.layout_direction.is_rtl()
+    }
+
+    /// Set how the built-in widgets animate (see [`MotionTokens`]).
+    pub fn with_motion(mut self, motion: MotionTokens) -> Self {
+        self.motion = motion;
+        self
     }
 
     /// Set the default corner radius.
@@ -566,6 +582,7 @@ impl Theme {
             native: false,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
+            motion: MotionTokens::material(),
         }
     }
 }

@@ -6,6 +6,7 @@ use crate::geometry::Insets;
 use crate::platform::native::NativeControl;
 use crate::style::Theme;
 
+use super::motion::{self, Memo, Shown};
 use super::{native_size, scroll};
 
 /// Lists longer than this scroll.
@@ -31,6 +32,8 @@ pub struct Select {
     selected: Option<usize>,
     open: bool,
     highlighted: usize,
+    /// When the list opened, for its entrance.
+    shown: Memo<Shown>,
 }
 
 impl Select {
@@ -40,6 +43,7 @@ impl Select {
             selected,
             open: false,
             highlighted: selected.unwrap_or(0),
+            shown: Memo::default(),
         }
     }
 
@@ -190,8 +194,12 @@ pub fn select<S, T: AsRef<str>>(
     let labels: Vec<String> = options.iter().map(|o| o.as_ref().to_string()).collect();
     let tap = cx.register(move |s: &mut S| field(s).toggle());
 
-    if state.open && !labels.is_empty() {
+    let open = state.open && !labels.is_empty();
+    let opened = state.shown.with(|s| s.track(open, cx.frame_time()));
+    if open {
+        let t = motion::progress(cx, theme.motion.popup, opened);
         let list = option_list(cx, theme, &labels, state, field);
+        let list = motion::popup(list, &theme.motion, t, (0.5, 0.0));
         let dismiss = cx.register(move |s: &mut S| field(s).close());
         cx.overlay(OverlaySpec {
             content: list,

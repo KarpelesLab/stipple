@@ -224,6 +224,75 @@ the stepper buttons, the split divider, toolbars, toasts, the tab bar and
 the color picker. The password field's frame is the OS's text field frame
 there.
 
+## Motion
+
+The built-in widgets animate by default, under every theme, with the
+timings and curves in the theme's motion tokens (`theme.motion`, a
+`MotionTokens`):
+
+| Widget | What moves | Token |
+|---|---|---|
+| `button_variant` / `button_labeled` | the hover and press looks fade in and out (the hover overlay over the button's color, twice over while pressed); a pressed button shrinks a little | `state`, `press`, `press_scale` |
+| `switch` | the thumb slides over; the track's color fades | `toggle`, `state` |
+| `checkbox`, `radio` | the check mark or dot pops in (and out) as it grows and fades; the box's color fades | `toggle`, `state` |
+| `tabs` | the selected cell's fill and text color fade between tabs | `state` |
+| `tab_bar` | the accent strip slides out of the tab selected before and into the new one; the list of every tab grows in | `indicator`, `popup` |
+| `select` | the list grows and slides in from the button as it fades in | `popup`, `popup_scale`, `popup_offset` |
+| Drawn menus (the in-window menu bar, submenus and context menus) | each menu grows in from its corner | `popup` |
+| `toasts` | a new toast slides in from the window's edge; a dismissed one slides back out and fades before it goes | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` |
+| The drawn message box (`AppHandle::message`) | it fades in as it scales into place | `dialog`, `dialog_scale` |
+| `tree` | a disclosure triangle turns as its node expands or collapses | `disclosure` |
+| Drop targets (`on_drop`) | the app's "drop here" highlight fades in and out with the target's drag-over level | `DROP_FADE` |
+
+What's already showing when a widget is first built doesn't animate in: an
+app that starts with a select's list open, or with toasts up, shows them at
+rest. Nothing animates at rest either, and every widget is laid out and drawn
+exactly as before: the motion only shows while something changes, and an idle
+app asks for no frames.
+
+Each theme has its own motion. `Theme::light()`, `dark()` and their variants
+use `MotionTokens::standard()`: quick ease-out color changes, a 0.97 press
+scale, springy toggles, popups that grow from 96%. The Material 3 themes use
+`MotionTokens::material()`. `Theme::native()` takes the platform's:
+
+| Platform | Preset | Where the numbers come from |
+|---|---|---|
+| Windows | `fluent()` | WinUI's control animation durations (83, 167 and 250 ms) along its fast-out-slow-in spline (`0,0 0,1`); `ContentDialog` opens from 105% |
+| macOS | `macos()` | `NSAnimationContext`'s default 0.25 s along Core Animation's default timing function; menus appear at once, as `NSMenu`s do |
+| iOS | `ios()` | SwiftUI's `.snappy` and `.smooth` springs; alerts shrink into place from 115%, as `UIAlertController`'s do |
+| Android | `material()` | the Material 3 motion tokens and Jetpack Compose's components: 120 ms menus from 80% scale, a 250 ms tab indicator, snackbars that fade in over 150 ms and out over 75 ms |
+| Linux | `adwaita()` | Adwaita's `200ms $ease-out-quad` transitions; GTK 4's popovers appear at once |
+
+None of them scale buttons but the standard one, as none of those platforms'
+buttons do. Change the motion with `Theme::with_motion`, starting from a
+preset:
+
+```rust
+let theme = Theme::light().with_motion(MotionTokens {
+    press_scale: 1.0, // no shrink
+    ..MotionTokens::standard()
+});
+```
+
+`MotionTokens::instant()` turns the widgets' motion off. The OS's
+reduced-motion setting does too, for every theme (see
+[animation.md](animation.md#reduced-motion)): the tokens are `anim::Motion`s,
+so tweens shorten to nothing and springs jump.
+
+A button's hover and press looks are worked out from its variant's color when
+it's built; restyle one with `.fill(…)` and give it its own `.hovered` and
+`.pressed` too. While a button is shrunk under the pointer, a release right on
+its edge can land just outside it, as with CSS's `:active` scale. Set
+`press_scale` to 1 if that matters.
+
+Not animated yet: lists, menus and the message box closing (they vanish at
+once; only toasts animate out so far), `open_menu`, `open_dialog` and `tooltip` (they keep no state to know
+when they opened; they'll use the enter and exit transitions planned for the
+core), the segmented `tabs` (its fills cross-fade, but nothing slides), the
+modal scrim behind the message box, and the toasts below a dismissed one,
+which drop into its place at once. Controls the OS draws under
+`Theme::native()` switch between the OS's pictures of their states.
+
 ## Accessibility
 
 | Widget | Role | Name |

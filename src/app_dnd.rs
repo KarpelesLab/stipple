@@ -28,10 +28,11 @@ pub(crate) struct DndState {
     pub(crate) over: Option<(DropId, bool, Point)>,
     /// The drop target under the drag, if it accepts it.
     pub(crate) target: Option<DropId>,
-    /// The target the app highlighted in the frame just built, and in the one
-    /// on screen (for damage).
-    pub(crate) highlight: Option<DropId>,
-    pub(crate) painted: Option<DropId>,
+    /// The targets the app highlighted in the frame just built, each with
+    /// its drag-over level (the highlight fades in and out with it), and the
+    /// ones on screen (for damage).
+    pub(crate) highlight: Vec<(DropId, f64)>,
+    pub(crate) painted: Vec<(DropId, f64)>,
     /// The drop targets' easing drag-over levels.
     pub(crate) fades: crate::core::DropFades,
     /// The drop targets whose view read their state in the last build.
@@ -61,22 +62,45 @@ impl<S> Pane<S> {
 }
 
 /// Paint the hover highlight of drop target `id`: the theme's hover overlay
-/// with a focus-colored border, so the target reads as "drop here".
-pub(crate) fn paint_drop_target(tree: &LayoutNode, id: DropId, scene: &mut Scene, theme: &Theme) {
+/// with a focus-colored border, so the target reads as "drop here", at
+/// `level` (0 to 1) of its full strength.
+pub(crate) fn paint_drop_target(
+    tree: &LayoutNode,
+    id: DropId,
+    scene: &mut Scene,
+    theme: &Theme,
+    level: f64,
+) {
     let Some(node) = find_drop(tree, id) else {
         return;
     };
     // Drawn where the target is drawn, if it's transformed.
     let to_window = crate::core::node_to_window(tree, &|n| n.drop == Some(id))
         .map_or(crate::geometry::Affine::IDENTITY, |(_, m, _)| m);
-    let layer = !to_window.is_identity();
+    let level = level.clamp(0.0, 1.0);
+    let layer = !to_window.is_identity() || level < 1.0;
     if layer {
-        scene.push_layer(to_window, 1.0);
+        scene.push_layer(to_window, level as f32);
     }
     paint_drop_target_at(node, scene, theme);
     if layer {
         scene.pop_layer();
     }
+}
+
+/// The drop targets the app highlights, from the targets' drag-over `states`:
+/// the ones that take the drag over them (or that just left, while their
+/// level eases out) and draw no look of their own (`unstyled`), each with its
+/// level.
+pub(crate) fn highlighted(
+    states: &[(DropId, crate::core::DropState)],
+    unstyled: impl Fn(DropId) -> bool,
+) -> Vec<(DropId, f64)> {
+    states
+        .iter()
+        .filter(|(id, s)| s.accepted && s.level > 0.0 && unstyled(*id))
+        .map(|(id, s)| (*id, s.level))
+        .collect()
 }
 
 /// [`paint_drop_target`] for the target `node`, in its layout coordinates.
@@ -684,6 +708,10 @@ mod tests {
         assert_eq!(damage, crate::core::Damage::Full);
         assert_ne!(before.as_bytes(), during.as_bytes(), "highlighted");
         app.drag_leave();
+        // It fades out with the target's drag-over level, then it's gone.
+        let _ = app.render_frame();
+        assert!(app.animating(), "fading out");
+        std::thread::sleep(crate::core::DROP_FADE * 2);
         let (after, _) = app.render_frame();
         assert_eq!(before.as_bytes(), after.as_bytes(), "highlight gone");
     }

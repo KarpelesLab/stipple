@@ -154,7 +154,8 @@ fn a_drop_target_styles_its_drag_over_look() {
     let _ = app.render_frame();
     assert_eq!(fill(&app, 0), Some(RED));
     assert_eq!(
-        app.panes[0].dnd.highlight, None,
+        app.panes[0].dnd.highlight,
+        Vec::new(),
         "its own look, not the app's"
     );
     app.drag_leave();

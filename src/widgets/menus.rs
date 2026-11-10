@@ -157,6 +157,9 @@ pub(crate) struct MenuUi {
     rows: Vec<(ActionId, Vec<usize>)>,
     /// The open root menu's structure.
     shape: Option<Shape>,
+    /// When each open level's menu opened (with what it was opened from: the
+    /// root, and the path of items to it), for its entrance.
+    opened: Vec<(MenuRoot, Vec<usize>, std::time::Duration)>,
 }
 
 impl MenuUi {
@@ -169,6 +172,7 @@ impl MenuUi {
     pub fn close(&mut self) {
         self.root = None;
         self.levels.clear();
+        self.opened.clear();
         self.bar_focus = None;
         self.first_pending = false;
         self.cues = false;
@@ -497,8 +501,28 @@ fn popups<S: 'static>(
     let mut current = menu;
     let mut path: Vec<usize> = Vec::new();
     let mut anchor = anchor;
+    let root = ui.borrow().root;
+    let now = cx.frame_time();
+    // Grow from the corner nearest the anchor: the start edge's top.
+    let origin = (if theme.is_rtl() { 1.0 } else { 0.0 }, 0.0);
     for (level, highlight) in levels.iter().enumerate() {
         let (panel, row_ids) = panel(cx, theme, current, &path, *highlight, ui);
+        // A level opens when what it's opened from changes.
+        let opened = root.map(|root| {
+            let mut u = ui.borrow_mut();
+            u.opened.truncate(level + 1);
+            match u.opened.get(level) {
+                Some((r, p, at)) if *r == root && *p == path => *at,
+                _ => {
+                    let at = super::motion::start_of(now);
+                    u.opened.truncate(level);
+                    u.opened.push((root, path.clone(), at));
+                    at
+                }
+            }
+        });
+        let t = super::motion::progress(cx, theme.motion.popup, opened);
+        let panel = super::motion::popup(panel, &theme.motion, t, origin);
         cx.overlay(OverlaySpec {
             content: panel,
             anchor,

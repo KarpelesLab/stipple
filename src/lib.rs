@@ -1250,12 +1250,11 @@ impl<S: 'static> Pane<S> {
             .map(|(id, level)| (id, (overlay.a as f64 * level).round().min(255.0) as u8))
             .filter(|(_, a)| *a > 0)
             .collect();
-        // The drop target under an acceptable drag, unless its view draws its
-        // own drag-over look from its `DropState`.
-        self.dnd.highlight = self
-            .dnd
-            .target
-            .filter(|id| !self.dnd.queried.contains(id) && !self.styled_drops.contains(id));
+        // The drop targets an acceptable drag is over or just left, fading
+        // with their drag-over level, unless their view draws its own look.
+        self.dnd.highlight = crate::app_dnd::highlighted(&self.dnd.fades.states(drop_now), |id| {
+            !self.dnd.queried.contains(&id) && !self.styled_drops.contains(&id)
+        });
         self.animating = frame_requested
             || self.highlights.animating(now)
             || self.dnd.fades.animating(drop_now)
@@ -1284,8 +1283,8 @@ impl<S: 'static> Pane<S> {
         for &(id, a) in &self.highlight_alphas {
             paint_hover(tree, id, &mut scene, Color { a, ..overlay });
         }
-        if let Some(id) = self.dnd.highlight {
-            app_dnd::paint_drop_target(tree, id, &mut scene, theme);
+        for &(id, level) in &self.dnd.highlight {
+            app_dnd::paint_drop_target(tree, id, &mut scene, theme, level);
         }
         // Overlay a focus ring + caret on the focused element.
         if let Some(fid) = self.focused {
@@ -1484,7 +1483,7 @@ impl<S: 'static> Pane<S> {
         self.presented = self.tree.clone();
         self.painted_highlights = self.highlight_alphas.clone();
         self.painted_focused = self.focused;
-        self.dnd.painted = self.dnd.highlight;
+        self.dnd.painted = self.dnd.highlight.clone();
         self.painted_overlay_active = self.overlay_active;
         damage
     }
@@ -3858,7 +3857,7 @@ pub mod prelude {
     };
     pub use crate::render::{Decoration, FontStyle, FontWeight, UnderlineStyle};
     pub use crate::style::Theme;
-    pub use crate::style::{Palette, Spacing, Typography};
+    pub use crate::style::{MotionTokens, Palette, Spacing, Typography};
     pub use crate::widgets::{
         ColorPicker, PasswordField, Tab, TabBar, TabBarState, TabIndicator, color_button,
         color_picker, password_field, tab_bar,

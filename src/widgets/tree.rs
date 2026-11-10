@@ -9,11 +9,14 @@
 
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::time::Duration;
 
+use crate::anim::{Animated, Motion};
 use crate::core::{Align, Axis, Cx, Element, KeyInput, Role};
-use crate::geometry::Insets;
+use crate::geometry::{Insets, Transform};
 use crate::style::Theme;
 
+use super::motion::Memo;
 use super::virtual_list::{DEFAULT_OVERSCAN, RowHeight, Rows, Window, frame, row_fill};
 
 /// Where a [`tree`] gets its nodes. Nodes are identified by a `u64` the model
@@ -36,6 +39,9 @@ pub trait TreeModel {
 pub struct TreeState {
     expanded: HashSet<u64>,
     selected: Option<u64>,
+    /// The disclosure triangles of the rows last built: by node, whether it
+    /// was expanded and its turn (0 pointing into the row, 1 down).
+    turns: Memo<Vec<(u64, bool, Animated<f64>)>>,
 }
 
 impl TreeState {
@@ -232,6 +238,36 @@ impl TreeSpec {
     }
 }
 
+/// Node `id`'s disclosure turn (0 collapsed, 1 expanded) at `now`, and
+/// whether it's still turning, heading for `expanded` with `motion`. A row
+/// seen for the first time is at rest.
+pub(super) fn turn_of(
+    turns: &mut Vec<(u64, bool, Animated<f64>)>,
+    id: u64,
+    expanded: bool,
+    motion: Motion,
+    now: Duration,
+) -> (f64, bool) {
+    let target = if expanded { 1.0 } else { 0.0 };
+    let i = match turns.iter().position(|(n, _, _)| *n == id) {
+        Some(i) => i,
+        None => {
+            turns.push((id, expanded, Animated::new(target)));
+            turns.len() - 1
+        }
+    };
+    let (_, was, turn) = &mut turns[i];
+    if *was != expanded {
+        *was = expanded;
+        turn.animate_to(target, motion, super::motion::start_of(now));
+    }
+    if turn.is_animating(now) {
+        (turn.value(now), true)
+    } else {
+        (target, false)
+    }
+}
+
 /// A virtualized tree over `model`: each visible node is a row indented by its
 /// depth, with a disclosure triangle (tap to expand or collapse) when it has
 /// children, and the content `label` builds for it. Only the rows in the
@@ -282,6 +318,11 @@ pub fn tree<S: 'static>(
     let flat: Rc<[Flat]> = flatten(model, state).into();
     let rows = Rows::new(flat.len(), RowHeight::Fixed(spec.row_height));
     let window = Window::new(cx, rows, spec.height, spec.overscan);
+    let now = cx.frame_time();
+    // Forget the triangles of rows no longer built.
+    state
+        .turns
+        .with(|turns| turns.retain(|(id, _, _)| window.range.clone().any(|i| flat[i].id == *id)));
     let mut built = Vec::with_capacity(window.range.len());
     for index in window.range.clone() {
         let node = flat[index];
@@ -299,20 +340,31 @@ pub fn tree<S: 'static>(
             .align(Align::Center, Align::Center);
         if node.has_children {
             // A collapsed node's triangle points into the row: left when the
-            // tree is mirrored.
-            let mark = match (node.expanded, theme.is_rtl()) {
-                (true, _) => "▼",
-                (false, false) => "►",
-                (false, true) => "◄",
+            // tree is mirrored. Expanding or collapsing turns it on the
+            // theme's disclosure motion: the collapsed glyph, rotated.
+            let turn = state
+                .turns
+                .with(|turns| turn_of(turns, node.id, node.expanded, theme.motion.disclosure, now));
+            let (moving, at) = (turn.1, turn.0);
+            if moving {
+                cx.request_frame();
+            }
+            let collapsed = if rtl { "◄" } else { "►" };
+            let mark = if moving {
+                // ► turns clockwise to point down, ◄ counter-clockwise.
+                let degrees = 90.0 * at * if rtl { -1.0 } else { 1.0 };
+                Element::text(collapsed, theme.typography.caption, p.text_muted)
+                    .transform(Transform::IDENTITY.rotate_degrees(degrees))
+            } else if node.expanded {
+                Element::text("▼", theme.typography.caption, p.text_muted)
+            } else {
+                Element::text(collapsed, theme.typography.caption, p.text_muted)
             };
-            disclosure = Element::stack(
-                Axis::Horizontal,
-                vec![Element::text(mark, theme.typography.caption, p.text_muted)],
-            )
-            .width(16.0)
-            .height(spec.row_height)
-            .align(Align::Center, Align::Center)
-            .role(Role::Button);
+            disclosure = Element::stack(Axis::Horizontal, vec![mark])
+                .width(16.0)
+                .height(spec.row_height)
+                .align(Align::Center, Align::Center)
+                .role(Role::Button);
             let flat = flat.clone();
             disclosure = disclosure.on_tap(cx, move |s: &mut S| {
                 let st = field(s);

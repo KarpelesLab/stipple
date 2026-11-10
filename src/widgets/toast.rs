@@ -4,8 +4,10 @@
 use std::time::Duration;
 
 use crate::core::{Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, OverlaySpec, Role};
-use crate::geometry::Insets;
+use crate::geometry::{Insets, Transform};
 use crate::style::Theme;
+
+use super::motion::{self, Memo};
 
 /// At most this many toasts show at once (the newest); the rest wait.
 const MAX_SHOWN: usize = 4;
@@ -53,7 +55,23 @@ pub struct Toast {
 pub struct Toasts {
     items: Vec<Toast>,
     next: u64,
+    /// What the view showed last, for the toasts' entrances and exits.
+    motion: Memo<Shelf>,
 }
+
+/// The toasts a [`toasts`] view showed in its last build, and when each came
+/// in, plus the ones on their way out.
+#[derive(Clone, Debug, Default)]
+struct Shelf {
+    built: bool,
+    /// Shown, in order, with when they came in (`None`: there from the
+    /// start, so at rest).
+    shown: Vec<(Toast, Option<Duration>)>,
+    leaving: Vec<Leaving>,
+}
+
+/// A toast on its way out: where it was in the stack, and since when.
+type Leaving = (Toast, usize, Duration);
 
 impl Toasts {
     /// No toasts.
@@ -149,14 +167,35 @@ pub fn toasts<S>(
     state: &Toasts,
     field: impl Fn(&mut S) -> &mut Toasts + Copy + 'static,
 ) {
-    if state.is_empty() {
+    let shown = &state.items[state.items.len().saturating_sub(MAX_SHOWN)..];
+    let now = cx.frame_time();
+    let m = theme.motion;
+    // Which toasts came in since the last build (and when), and which went.
+    let (entering, leaving) = state
+        .motion
+        .with(|shelf| shelf.update(shown, now, m.toast_exit));
+    if shown.is_empty() && leaving.is_empty() {
         return;
     }
-    let shown = &state.items[state.items.len().saturating_sub(MAX_SHOWN)..];
-    let cards = shown
+    // Toasts slide in from the window's edge, the one they're stacked at.
+    let edge = if theme.is_rtl() { -1.0 } else { 1.0 };
+    let mut cards: Vec<Element> = shown
         .iter()
-        .map(|t| toast_card(cx, theme, t, field))
+        .zip(entering)
+        .map(|(t, since)| {
+            let p = motion::progress(cx, m.toast_enter, since);
+            let card = toast_card(cx, theme, t, Some(field));
+            let offset = (-edge * m.toast_offset, 0.0);
+            motion::enter(card, p, m.toast_scale, offset, (0.5, 0.5))
+        })
         .collect();
+    // The leaving ones fade and slide back out where they were, without
+    // their button or their alert role.
+    for (t, at, since) in leaving {
+        let p = motion::progress(cx, m.toast_exit, Some(since));
+        let card = toast_card(cx, theme, &t, false.then_some(field));
+        cards.insert(at.min(cards.len()), exit(card, &m, p, edge));
+    }
     let content = Element::stack(Axis::Vertical, cards)
         .gap(theme.spacing.sm)
         .align(Align::Start, Align::Stretch)
@@ -173,12 +212,58 @@ pub fn toasts<S>(
     });
 }
 
-fn toast_card<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    toast: &Toast,
-    field: impl Fn(&mut S) -> &mut Toasts + Copy + 'static,
-) -> Element {
+impl Shelf {
+    /// Note the toasts `shown` in the build at `now`: returns when each came
+    /// in (`None`: at rest), and the ones still leaving (on `exit`).
+    fn update(
+        &mut self,
+        shown: &[Toast],
+        now: Duration,
+        exit: crate::anim::Motion,
+    ) -> (Vec<Option<Duration>>, Vec<Leaving>) {
+        // Toasts there in the first build don't come in: they're there.
+        let new = self.built.then(|| motion::start_of(now));
+        let entering: Vec<Option<Duration>> = shown
+            .iter()
+            .map(|t| {
+                self.shown
+                    .iter()
+                    .find(|(s, _)| s.id == t.id)
+                    .map_or(new, |(_, since)| *since)
+            })
+            .collect();
+        for (i, (t, _)) in self.shown.iter().enumerate() {
+            if !shown.iter().any(|s| s.id == t.id) {
+                self.leaving.push((t.clone(), i, motion::start_of(now)));
+            }
+        }
+        self.built = true;
+        self.shown = shown
+            .iter()
+            .cloned()
+            .zip(entering.iter().copied())
+            .collect();
+        self.leaving
+            .retain(|(_, _, since)| motion::progress_at(exit, *since, now).1);
+        (entering, self.leaving.clone())
+    }
+}
+
+/// A toast's card leaving at progress `p`: fading, sliding back toward the
+/// `edge` (+1 right, -1 left) and scaling to the theme's toast scale.
+fn exit(card: Element, m: &crate::style::MotionTokens, p: f64, edge: f64) -> Element {
+    let t = Transform::IDENTITY
+        .scale(1.0 + (m.toast_scale - 1.0) * p)
+        .translate(edge * m.toast_offset * p, 0.0);
+    card.opacity((1.0 - p).clamp(0.0, 1.0) as f32).transform(t)
+}
+
+/// One toast's card; with `field`, live (its × dismisses it, and assistive
+/// technologies hear it as an alert), else a picture of one leaving.
+fn toast_card<S, F>(cx: &mut Cx<S>, theme: &Theme, toast: &Toast, field: Option<F>) -> Element
+where
+    F: Fn(&mut S) -> &mut Toasts + Copy + 'static,
+{
     let p = &theme.palette;
     let accent = match toast.kind {
         ToastKind::Info => p.primary,
@@ -197,7 +282,7 @@ fn toast_card<S>(
         .grow(1.0)
         .shrink(1.0);
     let id = toast.id;
-    let close = Element::stack(
+    let mut close = Element::stack(
         Axis::Horizontal,
         vec![Element::text(
             "\u{00D7}",
@@ -208,24 +293,29 @@ fn toast_card<S>(
     .radius(theme.radius / 2.0)
     .align(Align::Center, Align::Center)
     .min_width(24.0)
-    .min_height(24.0)
-    .a11y_label("Dismiss")
-    .on_tap(cx, move |s: &mut S| {
-        field(s).dismiss(id);
-    });
+    .min_height(24.0);
+    let live = field.is_some();
+    if let Some(field) = field {
+        close = close.a11y_label("Dismiss").on_tap(cx, move |s: &mut S| {
+            field(s).dismiss(id);
+        });
+    }
     let message = Element::stack(Axis::Horizontal, vec![message])
         .align(Align::Start, Align::Center)
         .grow(1.0)
         .shrink(1.0);
-    Element::stack(Axis::Horizontal, vec![bar, message, close])
+    let card = Element::stack(Axis::Horizontal, vec![bar, message, close])
         .fill(p.surface)
         .border(p.border, 1.0)
         .radius(theme.radius)
         .padding(Insets::uniform(theme.spacing.md))
         .gap(theme.spacing.md)
-        .align(Align::Start, Align::Stretch)
-        .role(Role::Alert)
-        .a11y_label(toast.message.clone())
+        .align(Align::Start, Align::Stretch);
+    if live {
+        card.role(Role::Alert).a11y_label(toast.message.clone())
+    } else {
+        card
+    }
 }
 
 #[cfg(test)]

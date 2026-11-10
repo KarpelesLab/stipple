@@ -356,12 +356,55 @@ leave and glide when it's shuffled, sorted or pushed down by a panel;
   rather than switching. A pressed element shows the hover highlight twice over.
 - A drop target's `DropState::level` eases in over 180 ms when a drag enters
   it and out when it leaves or drops, for a view to animate its drop zone
-  with by hand; `.drag_over` with a transition usually does it for you. See
+  with by hand; `.drag_over` with a transition usually does it for you. A
+  target that styles itself neither way gets the app's "drop here"
+  highlight, which fades in and out with that level. See
   [drag-and-drop.md](drag-and-drop.md).
+- The built-in widgets: buttons' hover and press looks (and a slight press
+  scale), switches' thumbs and tracks, check marks and radio dots, tab
+  fills and the tab bar's sliding indicator, select lists and drawn menus
+  opening, toasts coming and going, the drawn message box opening and tree
+  disclosure triangles turning. They're built from the pieces on this page
+  (state overrides with transitions, `Animated` values, transforms and
+  opacity), with durations and curves from the theme's motion tokens,
+  below.
 - A theme change cross-fades the window from the old frame to the new one over
   200 ms (`stipple::core::THEME_FADE`): the OS switching to dark mode under
   `Theme::native()`, or the app switching themes through `App::theme_with`.
 - A touch fling glides to a stop after the finger lifts.
+
+## Motion tokens
+
+A theme's `motion` field (`MotionTokens`) says how its widgets move: each
+token is an `anim::Motion` (a tween with its easing, or a spring), plus the
+scales and offsets entrances start from:
+
+| Token | Used for |
+|---|---|
+| `state` | color changes: hover and press looks, a switch's track, a checkbox's box, segmented tabs |
+| `press`, `press_scale` | a pressed button shrinking (`press_scale` 1: it doesn't) |
+| `toggle` | a switch's thumb, a check mark, a radio dot |
+| `indicator` | the tab bar's accent strip sliding to the selected tab |
+| `popup`, `popup_scale`, `popup_offset` | select lists, drawn menus and the tab bar's list opening |
+| `dialog`, `dialog_scale` | the drawn message box opening |
+| `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` | toasts coming and going |
+| `disclosure` | tree disclosure triangles turning |
+
+`MotionTokens::standard()` is Stipple's own (the light and dark themes),
+`material()` Material 3's (the Material themes, and Android), and
+`Theme::native()` picks the platform's: `fluent()` on Windows, `macos()`,
+`ios()`, and `adwaita()` on Linux. [widgets.md](widgets.md#motion) lists
+what each widget does and where each preset's numbers come from;
+`Theme::with_motion` sets your own, and `MotionTokens::instant()` turns the
+widgets' motion off.
+
+Your own elements can follow the theme too:
+
+```rust
+let m = theme.motion;
+card.hovered(|e| e.fill(highlight))
+    .transition(Transition(m.state))
+```
 
 ## Theme changes
 
@@ -426,6 +469,8 @@ What the toolkit does under reduced motion:
 - Hover and press highlights and drop targets' `DropState::level` switch at once.
 - Element transitions (`Element::transition`) run on `Animated`, so they
   shorten or jump the same way.
+- The built-in widgets' motion (it runs on `Animated` too) snaps: switches
+  flip, lists and toasts appear and go at once, under every theme's tokens.
 - Theme changes switch without a cross-fade.
 - A touch scroll stops where the finger lifts, without a fling.
 - The spinner keeps turning, since it's what shows that something is happening,

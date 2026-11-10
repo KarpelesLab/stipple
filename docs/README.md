@@ -35,6 +35,7 @@ How to build, package and run on each platform, and what works there today.
 | Theme changes cross-fade | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³¹ |
 | Enter, exit and layout animations | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ |
 | Reduced motion (OS setting) | ✅ ³² | ✅ ³² | ✅ ³² | ✅ ³ | ✅ ³² | ✅ ³¹ |
+| Built-in widgets animate by default (per-theme motion) | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
 | Accessibility | AT-SPI | UI Automation | NSAccessibility | UIAccessibility ⁴⁹ | ❌ | ARIA ²² |
@@ -303,6 +304,16 @@ background on the simulator (launching another app) and back, and checks the
 events arrived and no frame was built in between; the memory warning is
 posted in-process. See
 [window-lifecycle.md](window-lifecycle.md#going-to-the-background-mobile).
+⁵⁴ Shared code: buttons, switches, checkboxes, radios, tabs, the tab bar,
+selects, drawn menus, toasts, the drawn message box, tree disclosure
+triangles and the app's drop-target highlight, with the theme's motion tokens
+(`Theme::native()` picks Fluent, AppKit, UIKit, Material or libadwaita
+timings). Unit-tested at fixed frame times; under Xvfb, `widgetsdemo`,
+`sessionsdemo`, `material3demo` and `themegallery` were checked to draw
+pixel-identical frames at rest. Controls the OS draws under `Theme::native()`
+(buttons, checkboxes, radios and switches on Windows, macOS and iOS) switch
+between the OS's pictures of their states without these animations. See
+[widgets.md](widgets.md#motion).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -318,8 +329,8 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, in-app drags, and dragging files and text out to other apps
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades,
-  interaction states, transitions, enter/exit and layout animations, theme
-  cross-fades and reduced motion
+  interaction states, transitions, enter/exit and layout animations, the
+  built-in widgets' motion, theme cross-fades and reduced motion
 - [Custom painting](canvas.md): `Element::canvas`, invalidating parts of it from any thread, paths, bitmaps and glyph runs
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click

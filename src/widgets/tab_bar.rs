@@ -17,6 +17,9 @@ use crate::platform::{DragOffer, DropData, PointerButton};
 use crate::render::Color;
 use crate::style::Theme;
 
+use super::motion::{self, Shown};
+use std::time::Duration;
+
 /// A tab never gets narrower than this (logical pixels); past that, the bar
 /// scrolls.
 pub const TAB_MIN_WIDTH: f64 = 110.0;
@@ -209,6 +212,13 @@ pub struct TabBarState {
     /// Tabs sliding into place after a reorder: by tab id, the offset from
     /// their slot, springing to zero.
     slides: Vec<(u64, Animated<f64>)>,
+    /// The selected tab's id when the bar was last built, and the indicator
+    /// sliding from the tab selected before (its id) to the one selected now
+    /// (its id), since when.
+    seen_selected_id: Cell<Option<u64>>,
+    indicator: Cell<Option<(u64, u64, Duration)>>,
+    /// When the list of every tab opened, for its entrance.
+    list_shown: Cell<Shown>,
 }
 
 impl TabBarState {
@@ -466,6 +476,30 @@ pub fn tab_bar<S: 'static>(
         .map(|t| (t.label.clone(), t.color))
         .collect();
     let rtl = theme.layout_direction.is_rtl();
+    // The indicator (the selected tab's top strip) slides over from the tab
+    // selected before.
+    let now = cx.frame_time();
+    let sel_id = ids.get(selected).copied();
+    if let (Some(was), Some(id)) = (state.seen_selected_id.get(), sel_id)
+        && was != id
+    {
+        state.indicator.set(Some((was, id, motion::start_of(now))));
+    }
+    state.seen_selected_id.set(sel_id);
+    let slide = state.indicator.get().and_then(|(from, to, at)| {
+        let t = motion::progress(cx, theme.motion.indicator, Some(at));
+        if t >= 1.0 || Some(to) != sel_id {
+            state.indicator.set(None);
+            return None;
+        }
+        // Toward the new tab, in tab widths (+1: it's after the old one).
+        let pos = |id: u64| ids.iter().position(|i| *i == id);
+        let dir = match (pos(from), pos(to)) {
+            (Some(a), Some(b)) if a > b => -1.0,
+            _ => 1.0,
+        };
+        Some((from, to, t, dir))
+    });
     let bar_bg = p.background.mix(p.border, 0.35);
     let quick = Transition::ease(std::time::Duration::from_millis(120));
 
@@ -548,12 +582,32 @@ pub fn tab_bar<S: 'static>(
             None if is_sel => p.primary,
             None => Color::TRANSPARENT,
         };
-        let top = Element::boxed(BoxStyle {
+        let mut top = Element::boxed(BoxStyle {
             fill: Some(strip_color),
             radius: 0.0,
             border: None,
         })
         .height(3.0);
+        // The accent strip slides out of the tab selected before and into
+        // the selected one (clipped to each tab). Tabs with their own color
+        // keep their own strips.
+        if let Some((from, to, t, dir)) = slide
+            && tab.color.is_none()
+        {
+            let w = fit.tab_width.unwrap_or(TAB_MIN_WIDTH) + 2.0;
+            let mirror = if rtl { -1.0 } else { 1.0 };
+            let dx = if tab.id == to {
+                Some(-dir * w * (1.0 - t))
+            } else if tab.id == from {
+                top.decoration.fill = Some(p.primary);
+                Some(dir * w * t)
+            } else {
+                None
+            };
+            if let Some(dx) = dx {
+                top = top.transform(Transform::IDENTITY.translate(dx * mirror, 0.0));
+            }
+        }
 
         let on_select = bar.on_select.clone();
         let hover = p.hover_overlay;
@@ -663,11 +717,15 @@ pub fn tab_bar<S: 'static>(
             st.list_open = !st.list_open;
         })
         .expanded(state.list_open);
+        let mut shown = state.list_shown.get();
+        let opened = shown.track(state.list_open, now);
+        state.list_shown.set(shown);
         if state.list_open
             && let Some(tap) = list.action
         {
             let on_select = bar.on_select.clone();
-            list_overlay(cx, theme, tap, &entries, selected, on_select, field);
+            let t = motion::progress(cx, theme.motion.popup, opened);
+            list_overlay(cx, theme, (tap, t), &entries, selected, on_select, field);
         }
         row.push(list);
     }
@@ -712,16 +770,18 @@ pub fn tab_bar<S: 'static>(
         .role(Role::TabList)
 }
 
-/// The list of every tab, dropped below the ▾ button (`tap`).
+/// The list of every tab, dropped below the ▾ button (`below`: its tap
+/// action, and how far the list has opened, 0 to 1).
 fn list_overlay<S: 'static>(
     cx: &mut Cx<S>,
     theme: &Theme,
-    tap: crate::core::ActionId,
+    below: (crate::core::ActionId, f64),
     entries: &[(String, Option<Color>)],
     selected: usize,
     on_select: Option<IndexFn<S>>,
     field: impl Fn(&mut S) -> &mut TabBarState + Copy + 'static,
 ) {
+    let (tap, t) = below;
     let p = theme.palette;
     let items = entries
         .iter()
@@ -770,6 +830,7 @@ fn list_overlay<S: 'static>(
         .min_width(180.0)
         .role(Role::Menu);
     let dismiss = cx.register(move |s: &mut S| field(s).list_open = false);
+    let content = motion::popup(content, &theme.motion, t, (0.5, 0.0));
     cx.overlay(OverlaySpec {
         content,
         anchor: Anchor::Below(tap),

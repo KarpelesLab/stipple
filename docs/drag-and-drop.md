@@ -33,7 +33,9 @@ cursor shows "no", and a drop does nothing). `DragOffer` has `FILES`, `TEXT`,
 Drops are hit-tested like taps: the top-most drop target under the pointer is
 the one the drag is over. A target the app doesn't style itself gets a
 highlight (the theme's hover overlay and a focus-colored border) while an
-acceptable drag is over it.
+acceptable drag is over it. It fades in when the drag enters and out when it
+leaves or drops, with the target's drag-over `level` (below), and switches
+at once under reduced motion.
 
 ## Animating a drop zone
 

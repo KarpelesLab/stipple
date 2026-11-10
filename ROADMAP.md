@@ -1490,8 +1490,8 @@ styling part of the toolkit.
   `Vec2`, `Size`, `Rect`, `Insets`, `[f64; N]`, tuples; open to other
   types); `Tween` and `Spring` are generic too, `Spring` in closed form with
   `SpringParams` presets. `Cx::animate` reads one at the frame time and asks
-  for frames only while it moves. Not yet wired into touch scrolling or the
-  built-in widgets.
+  for frames only while it moves. Not yet wired into touch scrolling; the
+  built-in widgets use it (below).
 - ✅ Keyframes and sequences/staggers for richer effects (a shake on invalid
   input, a pulsing drop target, staggered list entrance). Every animation is a
   pure `Animation` (`sample(t)`, `velocity(t)`, `is_finished(t)`):
@@ -1534,10 +1534,32 @@ styling part of the toolkit.
   it and a theme change snaps); the shared behavior is unit-tested; the
   desktop and mobile readers are only build-checked, as CI can't switch the
   setting.
-- ⬜ Built-in widgets use all of this: drop areas, buttons, switches,
+- ✅ Built-in widgets use all of this: drop areas, buttons, switches,
   checkboxes, tabs, menus, toasts, dialogs and disclosure triangles animate by
   default under every theme (and natively-matched curves under
   `Theme::native()`).
+  *Per-theme motion tokens (`Theme::motion`, a `MotionTokens`: `state`,
+  `press`/`press_scale`, `toggle`, `indicator`, `popup`, `dialog`, `toast_*`,
+  `disclosure`), with presets `standard()` (the light/dark themes),
+  `material()` (Material 3 themes, Android), `fluent()` (Windows), `macos()`,
+  `ios()` and `adwaita()` (Linux) that `Theme::native()` picks per platform,
+  their sources documented. Buttons fade their hover/press looks and shrink
+  slightly (standard only); switches slide their thumb and fade the track;
+  check marks and radio dots pop in; segmented `tabs` cross-fade; the tab
+  bar's accent strip slides between tabs; select lists, drawn menus and the
+  tab bar's list grow in; toasts slide in and fade back out (kept drawn
+  while leaving); the drawn message box scales in; tree disclosure triangles
+  turn; the app's drop-target highlight fades with the drag-over level. All
+  through state overrides + transitions, `Animated`, transforms and opacity,
+  so reduced motion snaps them. Nothing changes at rest (layouts and pixels
+  are identical; checked under Xvfb against the previous build for
+  `widgetsdemo`, `sessionsdemo`, `material3demo` and `themegallery`) and
+  what's open in a widget's first build doesn't animate in. Unit-tested at
+  fixed frame times (`widgets::motion_tests`). Not yet: popups, menus and the
+  message box closing, `open_menu`/`open_dialog`/`tooltip` (stateless, so
+  they wait for the enter/exit transitions above), toasts below a dismissed
+  one moving into its place (layout animations), and OS-drawn controls under
+  `Theme::native()`. See [docs/widgets.md](docs/widgets.md#motion).*
 - **Exit criteria:** a showcase example (drop area, animated list, interactive
   controls) whose animations are unit-tested at fixed frame times, with CI
   screenshots of mid-transition frames on the desktops and the web, and no CPU

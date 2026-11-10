@@ -530,6 +530,13 @@ impl<'a, S> Cx<'a, S> {
         self.frame.time
     }
 
+    /// Build as if at `time` on the animation timeline (tests check
+    /// animations at fixed frame times).
+    #[cfg(test)]
+    pub(crate) fn set_frame_time(&mut self, time: std::time::Duration) {
+        self.frame.time = time;
+    }
+
     /// Ask for another frame at the display's next refresh, to animate. Call it
     /// in every build that still has motion to show; once builds stop asking,
     /// frames stop and an idle app uses no CPU. See `docs/animation.md`.
