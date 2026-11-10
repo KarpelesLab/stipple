@@ -51,7 +51,7 @@ resolver = "3"
 members = ["examples/*"]
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 # Floor is set by the oxideav stack: oxideav-scribe → oxideav-png → compcol
 # requires rustc 1.88. (We'd happily target 1.86 otherwise.)
@@ -62,7 +62,7 @@ authors = ["Karpelès Lab Inc."]
 
 [workspace.dependencies]
 # Examples and the web target depend on the library at the repository root.
-stipple = { version = "0.0.3", path = "." }
+stipple = { version = "0.0.4", path = "." }
 
 # --- oxideav media stack (the one sanctioned heavy dependency) ---
 # Pure-Rust content rendering: scene graph, CPU rasterizer, font shaping,

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.4](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.3...stipple-v0.0.4) - 2026-11-10
+
+### Added
+
+- *(core)* interaction states, per-state overrides and implicit transitions
+- *(anim)* interruptible animations, keyframes, staggers and effects
+- transforms and group opacity for any element and its subtree
+
+### Other
+
+- Reduced motion from the OS, and theme changes that cross-fade
+- transforms are Animatable; CI runs motiondemo's selftest
+- transforms guide and transformdemo; mark the Phase 8 item done
+- update screenshots from CI
+- *(roadmap)* spell out the IME and mobile gaps
+- update screenshots from CI
+
 ## [0.0.3](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.2...stipple-v0.0.3) - 2026-11-08
 
 ### Fixed
