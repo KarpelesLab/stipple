@@ -1506,7 +1506,7 @@ impl Loop<'_> {
             if self.run_commands() {
                 return false;
             }
-            for edit in ime::finish_composing_for_key() {
+            for edit in ime::key_typed() {
                 self.deliver(Event::Ime(edit));
             }
         }

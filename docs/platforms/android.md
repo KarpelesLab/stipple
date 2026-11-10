@@ -125,9 +125,16 @@ suggestions and autocorrect work as in any Android app:
 - `setComposingText` is the preedit (`Ime::Preedit`), `commitText` and
   `finishComposingText` commit (`Ime::Commit`), `deleteSurroundingText` (and
   its code-point variant) is `Ime::DeleteSurrounding`. `setComposingRegion`,
-  which keyboards send when the caret comes back to a word, takes the word out
-  of the text and composes it again at the caret (it must touch the caret).
-  `setSelection` moves the caret with arrow keys.
+  which keyboards send to compose an existing word again (when the caret
+  comes back to it, or after keys typed on a hardware keyboard), is declined:
+  Stipple only composes new text at the caret, and turning the word back into
+  a preedit would change the app's text under it. `setSelection` moves the
+  caret with arrow keys.
+- Keys typed on a hardware keyboard (or with `adb shell input`) arrive as keys
+  whether or not an input method is connected. A key typed while the input
+  method composes commits the composition first, and until the field reports
+  its text again, caret positions the input method sends are ignored (they
+  were computed from text the key has changed).
 - `getTextBeforeCursor`, `getTextAfterCursor`, `getSelectedText` and
   `getCursorCapsMode` read the field's text (`ImeState`, with the composition
   inserted at the caret), in UTF-16 units as Java counts them. The backend

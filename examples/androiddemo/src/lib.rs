@@ -58,13 +58,16 @@ mod app {
         let theme = *cx.theme();
         let field = text_editor(cx, &theme, &state.name, |s: &mut State| &mut s.name);
         let name = state.name.text();
+        // What the field shows: its text, and a word the keyboard is still
+        // composing (typed at the end here).
+        let shown = format!("{name}{}", state.name.preedit().unwrap_or_default());
         let mut last = TEXT.lock().unwrap();
-        if *last != name {
-            name.clone_into(&mut last);
-            println!("androiddemo: text {name:?}");
+        if *last != shown {
+            shown.clone_into(&mut last);
+            println!("androiddemo: text {shown:?}");
             // Typed through key events: now try the input method's way, a
             // few frames on, once the backend has passed the field's text on.
-            if name == "Stipple" && !SELF_TEST.swap(true, Ordering::Relaxed) {
+            if shown == "Stipple" && !SELF_TEST.swap(true, Ordering::Relaxed) {
                 SELF_TEST_AT.store(FRAMES.load(Ordering::Relaxed) + 3, Ordering::Relaxed);
             }
         }

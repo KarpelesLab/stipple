@@ -56,16 +56,11 @@ pub(super) fn set_text_input(active: bool) -> bool {
     TEXT_INPUT.swap(active, Ordering::AcqRel) != active
 }
 
-/// A key is about to reach the field: end the composition, if there is
-/// one, returning the edit that does (already counted as handled), and have
-/// the input method hear of it.
-pub(super) fn finish_composing_for_key() -> Vec<crate::platform::event::Ime> {
-    let mut ed = editor();
-    let edits = ed.finish_composing();
-    for _ in &edits {
-        ed.handled();
-    }
-    drop(ed);
+/// A key is about to reach the field (see [`Editor::key_typed`]): returns
+/// the edit that ends a composition first, and has the input method hear of
+/// it.
+pub(super) fn key_typed() -> Vec<crate::platform::event::Ime> {
+    let edits = editor().key_typed();
     if !edits.is_empty() {
         let current = super::CURRENT
             .lock()
@@ -382,8 +377,10 @@ pub(super) unsafe extern "C" fn set_composing_region(
     start: i32,
     end: i32,
 ) -> u8 {
-    send(editor().set_composing_region(start.max(0) as usize, end.max(0) as usize));
-    1
+    let (edits, applied) =
+        editor().set_composing_region(start.max(0) as usize, end.max(0) as usize);
+    send(edits);
+    u8::from(applied)
 }
 
 pub(super) unsafe extern "C" fn set_selection(

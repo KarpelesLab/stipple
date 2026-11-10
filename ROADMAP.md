@@ -994,7 +994,9 @@ Most input only works on X11 today.
   instructions) and loaded with `InMemoryDexClassLoader` (`DexClassLoader`
   from a file before Android 8). `setComposingText` / `commitText` /
   `finishComposingText` / `deleteSurroundingText[InCodePoints]` /
-  `setComposingRegion` / `setSelection` feed `Event::Ime` (and arrow keys),
+  `setSelection` feed `Event::Ime` (and arrow keys); `setComposingRegion`
+  (composing an existing word again) is declined, as Stipple only composes
+  new text at the caret,
   `getTextBefore/AfterCursor` / `getSelectedText` / `getCursorCapsMode` answer
   in UTF-16 from the field's `ImeState`, the editor action maps to Enter (Done,
   Go, Send…), Tab (Next) and Shift+Tab (Previous), the context menu actions to
@@ -1003,7 +1005,11 @@ Most input only works on X11 today.
   unit-tested on the host. **Verified on an API 34 emulator** (locally, and in
   the `visual-android` CI steps added with this change, which hadn't run on CI
   yet when it landed): Gboard connects (`inputType 0x4001`, action Done), keys
-  typed while it composes a word (`setComposingRegion`) keep the text, and the
+  typed with `adb shell input text` reach the field with or without an input
+  method connected (CI's first run never saw "Stipple" arrive; the likely
+  cause, not reproduced locally, is that Gboard re-composed each word
+  through `setComposingRegion` and kept the typed text as a preedit, so that
+  call is now declined), and the
   app-side self-test drives the real Java `InputConnection` (compose にほ,
   commit 日本🎉, delete the emoji's two UTF-16 units, compose and finish), the
   field ending as `Stipple日本!`. Not tried with a person typing on a real

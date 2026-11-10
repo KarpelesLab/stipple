@@ -40,7 +40,10 @@ wait_for() {
     sleep 1
   done
   echo "timed out waiting for: $pattern" >&2
-  log | tail -40 >&2
+  # The timer ticks every second: leave its lines out, so the rest shows.
+  log | grep -v "androiddemo: tick" | tail -60 >&2
+  adb exec-out screencap -p > "$shots/android-timeout.png" || true
+  adb logcat -d | grep -E "onStartInput|ImeTracker" | tail -10 >&2 || true
   return 1
 }
 

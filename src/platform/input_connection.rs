@@ -45,6 +45,10 @@ pub(crate) struct Editor {
     composing: String,
     /// Edits sent to the field and not yet handled by it.
     in_flight: u32,
+    /// Keys went to the field since it last said what it holds, so the text
+    /// here may be behind it: a caret position the input method computed from
+    /// it can't be trusted until the next [`sync`](Self::sync).
+    stale: bool,
     /// Whether a text field has focus.
     focused: bool,
 }
@@ -102,6 +106,7 @@ impl Editor {
         anchor: 0,
         composing: String::new(),
         in_flight: 0,
+        stale: false,
         focused: false,
     };
 
@@ -203,6 +208,19 @@ impl Editor {
         self.in_flight = self.in_flight.saturating_sub(1);
     }
 
+    /// A key (typed, not from the input method) is about to reach the field:
+    /// end the composition first, as Android's own fields do, and distrust
+    /// positions until the field reports its text again. Returns the edit
+    /// that ends the composition, already counted as handled.
+    pub(crate) fn key_typed(&mut self) -> Vec<Ime> {
+        let edits = self.finish_composing();
+        self.in_flight = self.in_flight.saturating_sub(edits.len() as u32);
+        if self.focused {
+            self.stale = true;
+        }
+        edits
+    }
+
     /// Replace the selection (or the composition) with `text`, the caret
     /// after it.
     fn replace(&mut self, text: &str) {
@@ -278,26 +296,17 @@ impl Editor {
         self.delete_bytes(b, a)
     }
 
-    /// `setComposingRegion`: make the text from `start` to `end` (UTF-16
-    /// units into the editable) the composition, as an input method does when
-    /// the caret comes back to a word. Stipple composes only at the caret, so
-    /// the region is taken out of the text and handed back as the preedit;
-    /// that needs the region to touch the caret. An empty region just ends the
-    /// composition.
-    pub(crate) fn set_composing_region(&mut self, start: usize, end: usize) -> Vec<Ime> {
-        let mut out = self.finish_composing();
-        let (start, end) = (start.min(end), start.max(end));
-        if start == end || self.cursor != self.anchor {
-            return out;
-        }
-        let (s, e) = (byte_at(&self.text, start), byte_at(&self.text, end));
-        if !(s <= self.cursor && self.cursor <= e) {
-            return out;
-        }
-        let word = self.text[s..e].to_string();
-        out.extend(self.delete_bytes(self.cursor - s, e - self.cursor));
-        out.extend(self.set_composing(&word));
-        out
+    /// `setComposingRegion`, which an input method sends to compose an
+    /// existing word again (when the caret comes back to it, or after keys
+    /// typed on a hardware keyboard): declined. Stipple composes only new
+    /// text at the caret, so it could only do it by taking the word out of
+    /// the field's text and handing it back as a preedit, and the app would
+    /// see its text change under it (a greeting losing the name typed, a
+    /// keyboard extending the "composition" with every key so the text never
+    /// arrives). A composition in progress is committed. Returns the edits
+    /// and `false`, the answer the input method gets.
+    pub(crate) fn set_composing_region(&mut self, _start: usize, _end: usize) -> (Vec<Ime>, bool) {
+        (self.finish_composing(), false)
     }
 
     /// `setSelection`: how far (in characters, negative for left) the caret
@@ -307,7 +316,7 @@ impl Editor {
     /// plain caret or a composition is in progress, which arrows can't
     /// reproduce faithfully.
     pub(crate) fn set_selection(&mut self, start: usize, end: usize) -> Option<(i64, usize)> {
-        if self.cursor != self.anchor || self.is_composing() {
+        if self.cursor != self.anchor || self.is_composing() || self.stale {
             return None;
         }
         let (start, end) = (start.min(end), start.max(end));
@@ -338,6 +347,7 @@ impl Editor {
         if self.in_flight > 0 {
             return Sync::Unchanged;
         }
+        self.stale = false;
         // A field that gains focus is new to the input method; one whose text
         // changed under it (a key typed, the app's own edit) only needs to
         // hear where the selection is now, as Android's own fields do.
@@ -462,26 +472,35 @@ mod tests {
     }
 
     #[test]
-    fn a_composing_region_around_the_caret_becomes_the_preedit() {
+    fn a_composing_region_is_declined_and_the_text_stays() {
         let mut e = editor("one two", 7);
-        assert_eq!(
-            e.set_composing_region(4, 7),
-            [
-                Ime::DeleteSurrounding {
-                    before: 3,
-                    after: 0
-                },
-                Ime::Preedit {
-                    text: "two".into(),
-                    cursor: Some((3, 3))
-                }
-            ]
-        );
+        assert_eq!(e.set_composing_region(4, 7), (vec![], false));
         assert_eq!(e.editable(), "one two");
-        assert_eq!(e.composing16(), (4, 7));
-        // A region away from the caret can't be composed at it.
-        let mut e = editor("one two", 7);
-        assert_eq!(e.set_composing_region(0, 3), []);
+        assert_eq!(e.composing16(), (-1, -1));
+        e.set_composing("x");
+        assert_eq!(
+            e.set_composing_region(0, 3),
+            (vec![Ime::Commit("x".into())], false),
+            "a composition in progress becomes text"
+        );
+    }
+
+    #[test]
+    fn typed_keys_end_the_composition_and_hold_positions_until_synced() {
+        let mut e = editor("ab", 2);
+        e.set_composing("c");
+        e.handled();
+        assert_eq!(e.key_typed(), [Ime::Commit("c".into())]);
+        assert_eq!(e.editable(), "abc");
+        // The field took a key the editor hasn't seen: a caret position
+        // computed from the old text isn't trusted.
+        assert_eq!(e.set_selection(0, 0), None);
+        assert_eq!(e.sync(Some(&state("abcd", 4))), Sync::Selection);
+        assert_eq!(e.set_selection(0, 0), Some((-4, 0)));
+        // Without a field, keys don't make anything stale.
+        let mut e = Editor::default();
+        assert_eq!(e.key_typed(), []);
+        assert!(!e.stale);
     }
 
     #[test]
