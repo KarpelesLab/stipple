@@ -2,11 +2,12 @@
 //! closes or the app quits ([`App::on_close_requested`],
 //! [`App::on_quit_requested`]) and following which window has keyboard focus
 //! ([`App::on_window_focus`], [`Cx::window_focused`](crate::core::Cx::window_focused)),
-//! and a mobile app going to the background and coming back
-//! ([`App::on_lifecycle`]). See `docs/windows-and-cursors.md` and
+//! and on mobile going back ([`App::on_back`]) and to the background and
+//! back ([`App::on_lifecycle`]). See `docs/windows-and-cursors.md` and
 //! `docs/window-lifecycle.md`.
 
 use crate::App;
+use crate::core::Handled;
 use crate::platform::{Lifecycle, WindowId};
 
 /// The answer to a close or quit request (see [`App::on_close_requested`] and
@@ -27,6 +28,7 @@ type CloseFn<S> = Box<dyn FnMut(&mut S, WindowId) -> CloseResponse>;
 type QuitFn<S> = Box<dyn FnMut(&mut S) -> CloseResponse>;
 type FocusFn<S> = Box<dyn FnMut(&mut S, WindowId, bool)>;
 type LifecycleFn<S> = Box<dyn FnMut(&mut S, Lifecycle)>;
+type BackFn<S> = Box<dyn FnMut(&mut S) -> Handled>;
 
 /// The app's lifecycle hooks.
 pub(crate) struct Hooks<S> {
@@ -34,6 +36,7 @@ pub(crate) struct Hooks<S> {
     quit: Option<QuitFn<S>>,
     focus: Option<FocusFn<S>>,
     lifecycle: Option<LifecycleFn<S>>,
+    back: Option<BackFn<S>>,
     /// Whether the app is in the background (between
     /// [`Lifecycle::Background`] and [`Lifecycle::Foreground`]).
     pub(crate) background: bool,
@@ -46,6 +49,7 @@ impl<S> Default for Hooks<S> {
             quit: None,
             focus: None,
             lifecycle: None,
+            back: None,
             background: false,
         }
     }
@@ -198,6 +202,60 @@ impl<S: 'static> App<S> {
         !background && (ran || was)
     }
 
+    /// Go back when the user asks to (Android's Back button or gesture):
+    /// `hook` closes whatever is on top (a dialog, a screen) and answers
+    /// [`Handled::Yes`], or answers [`Handled::No`] when there is nothing to
+    /// go back from, and the system does its default (on Android, the
+    /// activity finishes, or its task moves to the back).
+    ///
+    /// An open menu closes first, without asking the hook. Without a hook,
+    /// Back closes menus and otherwise leaves the app. Raw backend users get
+    /// [`Event::BackRequested`](crate::platform::Event::BackRequested) and
+    /// answer with [`handle_back`](crate::platform::handle_back).
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// struct State { screens: Vec<&'static str> }
+    /// # fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+    /// App::new(State { screens: vec!["home"] }, view)
+    ///     .on_back(|s| {
+    ///         if s.screens.len() > 1 {
+    ///             s.screens.pop();
+    ///             Handled::Yes
+    ///         } else {
+    ///             Handled::No
+    ///         }
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn on_back(mut self, hook: impl FnMut(&mut S) -> Handled + 'static) -> Self {
+        self.lifecycle.back = Some(Box::new(hook));
+        self
+    }
+
+    /// The user asked to go back from pane `idx`: close an open menu, or ask
+    /// the back hook. Returns whether the app went back.
+    pub(crate) fn go_back(&mut self, idx: usize) -> bool {
+        use crate::widgets::menus::MenuKey;
+        if idx < self.panes.len() && self.menu_nav(idx, Some(MenuKey::Escape)) == Some(true) {
+            return true;
+        }
+        let Some(hook) = self.lifecycle.back.as_mut() else {
+            return false;
+        };
+        let handled = hook(&mut self.state) == Handled::Yes;
+        for pane in &mut self.panes {
+            pane.dirty = true;
+        }
+        handled
+    }
+
+    /// Ask the app to go back, as Android's Back button would, without a
+    /// running backend (for tests). Returns whether it went back.
+    pub fn request_back(&mut self) -> bool {
+        self.go_back(0)
+    }
+
     /// Whether the app is in the background (see [`on_lifecycle`](Self::on_lifecycle)).
     pub(crate) fn in_background(&self) -> bool {
         self.lifecycle.background
@@ -301,6 +359,28 @@ mod tests {
 
     fn view(_: &State, _: &mut Cx<State>) -> Element {
         spacer()
+    }
+
+    #[test]
+    fn back_asks_the_hook_until_there_is_nothing_to_close() {
+        let mut app = App::new(State::default(), view);
+        assert!(!app.request_back(), "without a hook, back leaves the app");
+
+        let screens = Rc::new(Cell::new(2));
+        let left = screens.clone();
+        let mut app = App::new(State::default(), view).on_back(move |_| {
+            if left.get() == 0 {
+                return crate::core::Handled::No;
+            }
+            left.set(left.get() - 1);
+            crate::core::Handled::Yes
+        });
+        app.render_frame();
+        assert!(app.request_back());
+        assert!(app.panes[0].dirty, "going back rebuilds the view");
+        assert!(app.request_back());
+        assert!(!app.request_back(), "nothing left: the system goes back");
+        assert_eq!(screens.get(), 0);
     }
 
     #[test]

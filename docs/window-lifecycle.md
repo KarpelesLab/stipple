@@ -188,8 +188,49 @@ The hook may change the state; the view is rebuilt (when on screen).
 | | Background / Foreground | Low memory |
 |---|---|---|
 | iOS | `UIApplicationDidEnterBackgroundNotification` / `WillEnterForegroundNotification` | `UIApplicationDidReceiveMemoryWarningNotification` |
-| Android | not sent yet | not sent yet |
+| Android | `onPause` / `onResume` (after a pause) | `onLowMemory`, and `onTrimMemory` at the running-low, critical, moderate and complete levels |
 | Desktop, web | not sent | not sent |
+
+On Android, `onPause` waits until the app has handled `Background`, so a
+draft saved in the hook is written before the system can stop the process.
+
+## Going back (Android)
+
+Android's Back button (and the back gesture) asks the app to go back first:
+close what is on top, a menu, a dialog, then a screen. An open menu closes on
+its own; `App::on_back` decides the rest, answering `Handled::Yes` when it went
+back and `Handled::No` when there is nothing left to close:
+
+```rust,no_run
+use stipple::prelude::*;
+
+struct State {
+    screens: Vec<&'static str>,
+    dialog: bool,
+}
+# fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+
+App::new(State { screens: vec!["home"], dialog: false }, view)
+    .on_back(|s| {
+        if s.dialog {
+            s.dialog = false;
+        } else if s.screens.len() > 1 {
+            s.screens.pop();
+        } else {
+            return Handled::No; // the system takes over
+        }
+        Handled::Yes
+    })
+    .run();
+```
+
+Unhandled, Back does what it does in any Android app (`onBackPressed`): the
+activity finishes, or, on Android 12 and later, a task's root activity moves
+to the back. While the soft keyboard is up, the first Back only closes it.
+A raw backend handler gets `Event::BackRequested` and calls
+`stipple::platform::handle_back()` when it went back. Predictive back (the
+preview animation of Android 13 and later) isn't supported: it needs to know
+before the gesture whether the app will go back.
 
 ## Trying it
 
@@ -201,6 +242,11 @@ for attention and counts the bells in the Dock badge.
 
 ## What CI checks
 
+- **Android** (an API 34 emulator, `visual-android`): Back reaches
+  `androiddemo`, which handles one (resetting its tap count) and leaves the
+  next to the system; Home sends it to the background and `am start` brings it
+  back; `am send-trim-memory RUNNING_LOW` is a memory warning. Each is checked
+  in the app's log.
 - **X11** (Xvfb, with a script standing in for the window manager): a
   `WM_DELETE_WINDOW` the app cancels, then one it confirms, after which the app
   closes the window itself; focus moving to another window and back; the

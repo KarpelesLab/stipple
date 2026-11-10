@@ -12,7 +12,14 @@
 //! - `androiddemo: tapped N` when the button in the middle of the screen is
 //!   tapped (`adb shell input tap`);
 //! - `androiddemo: text "..."` as the field takes keys (`adb shell input text`,
-//!   after Tab moves focus to it);
+//!   after Tab moves focus to it), and the input method's edits once it reads
+//!   "Stipple", when the demo runs the backend's `InputConnection` self-test
+//!   (composing, committing an emoji, deleting around the caret);
+//! - `androiddemo: back handled` / `back not handled` for the Back button: it
+//!   resets the tap count when there is one (handled), and otherwise leaves
+//!   the app to the system;
+//! - `androiddemo: lifecycle Background` / `Foreground` / `LowMemory` as the
+//!   app goes to the background, comes back, or is asked to free memory;
 //! - `androiddemo: scrolled to N` as a finger drag (`adb shell input swipe`)
 //!   scrolls the list at the bottom of the screen, and `androiddemo: row N
 //!   tapped` if one of its rows is tapped (a swipe must not tap one).
@@ -23,15 +30,23 @@
 #[cfg(target_os = "android")]
 mod app {
     use std::ffi::c_void;
-    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use stipple::platform::backend::android::{self, ANativeActivity};
     use stipple::prelude::*;
 
     struct State {
         taps: u32,
         ticks: u32,
-        name: String,
+        name: EditBuffer,
     }
+
+    /// The field's text in the frame last built, to log its changes.
+    static TEXT: Mutex<String> = Mutex::new(String::new());
+    /// Whether the input connection self-test ran.
+    static SELF_TEST: AtomicBool = AtomicBool::new(false);
+    /// The frame to run it in.
+    static SELF_TEST_AT: AtomicU32 = AtomicU32::new(0);
 
     /// Frames built, to show the spinner is driven by the display.
     static FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -41,10 +56,22 @@ mod app {
     fn view(state: &State, cx: &mut Cx<State>) -> Element {
         FRAMES.fetch_add(1, Ordering::Relaxed);
         let theme = *cx.theme();
-        let field = text_field(cx, &theme, &state.name, |s: &mut State, key| {
-            edit_string(&mut s.name, key);
-            println!("androiddemo: text {:?}", s.name);
-        });
+        let field = text_editor(cx, &theme, &state.name, |s: &mut State| &mut s.name);
+        let name = state.name.text();
+        let mut last = TEXT.lock().unwrap();
+        if *last != name {
+            name.clone_into(&mut last);
+            println!("androiddemo: text {name:?}");
+            // Typed through key events: now try the input method's way, a
+            // few frames on, once the backend has passed the field's text on.
+            if name == "Stipple" && !SELF_TEST.swap(true, Ordering::Relaxed) {
+                SELF_TEST_AT.store(FRAMES.load(Ordering::Relaxed) + 3, Ordering::Relaxed);
+            }
+        }
+        drop(last);
+        if FRAMES.load(Ordering::Relaxed) == SELF_TEST_AT.load(Ordering::Relaxed) {
+            android::input_connection_self_test();
+        }
         let top = column(vec![
             heading(&theme, "Stipple on Android"),
             label(&theme, "Type your name:"),
@@ -66,10 +93,10 @@ mod app {
                 s.taps += 1;
                 println!("androiddemo: tapped {}", s.taps);
             });
-        let greeting = if state.name.is_empty() {
+        let greeting = if name.is_empty() {
             format!("Tapped {} times", state.taps)
         } else {
-            format!("Hello, {}! Tapped {} times", state.name, state.taps)
+            format!("Hello, {name}! Tapped {} times", state.taps)
         };
         // A list of rows at the bottom of the screen, which a finger drag
         // scrolls. Built as `scroll` builds it, to read its offset.
@@ -108,9 +135,21 @@ mod app {
         let state = State {
             taps: 0,
             ticks: 0,
-            name: String::new(),
+            name: EditBuffer::new(),
         };
-        let mut app = App::new(state, view).theme(theme);
+        let mut app = App::new(state, view)
+            .theme(theme)
+            .on_back(|s: &mut State| {
+                if s.taps > 0 {
+                    s.taps = 0;
+                    println!("androiddemo: back handled");
+                    Handled::Yes
+                } else {
+                    println!("androiddemo: back not handled");
+                    Handled::No
+                }
+            })
+            .on_lifecycle(|_: &mut State, change| println!("androiddemo: lifecycle {change:?}"));
         if let Some(font) = Font::system_default() {
             app = app.font(font);
         }

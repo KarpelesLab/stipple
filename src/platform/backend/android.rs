@@ -24,6 +24,14 @@
 //!   `ANativeWindow`'s buffer (`ANativeWindow_lock`), at the content rectangle
 //!   the system leaves free of its bars; the rest takes the background color.
 //!
+//! - **Run-time classes.** A host `View` on top of the activity, written as
+//!   a dex file at start-up (see [`classes`]), gives input methods an
+//!   `InputConnection` ([`ime`]) and accessibility services a node per element
+//!   ([`a11y`]).
+//! - **Back and the lifecycle.** The Back key is [`Event::BackRequested`]
+//!   (the system's default only when unhandled); pause, resume and memory
+//!   warnings are [`Event::Lifecycle`].
+//!
 //! The scale factor is the screen density over 160 dpi, and the native theme
 //! follows the configuration's night mode and, on Android 12 and later, the
 //! wallpaper's accent color.
@@ -46,6 +54,12 @@ use crate::platform::input;
 use crate::platform::window::{Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
+/// Accessibility: the host view's node provider (TalkBack, `uiautomator`).
+mod a11y;
+/// The Java classes defined at run time: the host view and friends.
+mod classes;
+/// The input method's `InputConnection` to the focused text field.
+mod ime;
 /// Hand-written JNI for the clipboard, key characters and the accent color.
 mod jni;
 
@@ -91,6 +105,7 @@ const AINPUT_EVENT_TYPE_KEY: i32 = 1;
 const AINPUT_EVENT_TYPE_MOTION: i32 = 2;
 const AKEY_EVENT_ACTION_DOWN: i32 = 0;
 const AKEY_EVENT_ACTION_UP: i32 = 1;
+const AKEYCODE_BACK: i32 = 4;
 const AMOTION_EVENT_ACTION_MASK: i32 = 0xff;
 const AMOTION_EVENT_ACTION_DOWN: i32 = 0;
 const AMOTION_EVENT_ACTION_UP: i32 = 1;
@@ -108,6 +123,7 @@ const AMOTION_EVENT_AXIS_VSCROLL: i32 = 9;
 const AMOTION_EVENT_AXIS_HSCROLL: i32 = 10;
 const AMOTION_EVENT_BUTTON_SECONDARY: i32 = 2;
 const AMOTION_EVENT_BUTTON_TERTIARY: i32 = 4;
+const AMOTION_EVENT_TOOL_TYPE_FINGER: i32 = 1;
 const AMOTION_EVENT_TOOL_TYPE_MOUSE: i32 = 3;
 /// Meta-state bits for Ctrl and Meta (either side), which make a key a
 /// shortcut rather than typing.
@@ -185,6 +201,7 @@ unsafe extern "C" {
     fn AKeyEvent_getMetaState(event: *const c_void) -> i32;
     fn AKeyEvent_getScanCode(event: *const c_void) -> i32;
     fn AKeyEvent_getRepeatCount(event: *const c_void) -> i32;
+    fn AKeyEvent_getFlags(event: *const c_void) -> i32;
     fn AMotionEvent_getAction(event: *const c_void) -> i32;
     fn AMotionEvent_getMetaState(event: *const c_void) -> i32;
     fn AMotionEvent_getButtonState(event: *const c_void) -> i32;
@@ -314,7 +331,7 @@ fn redirect_stdio() {
 // ---- The activity, shared with the Java main thread -------------------------
 
 /// A lifecycle event from an activity callback, handled on the UI thread.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Command {
     Start,
     Resume,
@@ -333,6 +350,11 @@ enum Command {
     ContentRect(ARect),
     ConfigChanged,
     LowMemory,
+    /// An event for the app from the main thread (an accessibility action,
+    /// a key the input method's action key stands for).
+    Deliver(Event),
+    /// An edit from the input method's connection (see [`ime`]).
+    Ime(crate::platform::event::Ime),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -377,6 +399,14 @@ struct MainRequests {
     bars: Option<(u32, bool)>,
     /// Show (`true`) or hide the soft keyboard.
     soft_input: Option<bool>,
+    /// Tell the input method the field changed.
+    ime: Option<crate::platform::input_connection::Sync>,
+    /// Tell accessibility services the tree changed.
+    a11y: a11y::Changes,
+    /// Back wasn't handled: do the system's default.
+    back: bool,
+    /// Run the input connection's self-test.
+    self_test: bool,
 }
 
 // The activity pointer is only dereferenced while the activity lives (until
@@ -457,6 +487,27 @@ static CURRENT: Mutex<Option<Arc<Instance>>> = Mutex::new(None);
 thread_local! {
     /// The activity of the UI thread [`start`] spawned, until [`run`] takes it.
     static PENDING: RefCell<Option<Arc<Instance>>> = const { RefCell::new(None) };
+}
+
+/// Queue `cmd` for the UI thread of the current activity, if one is alive.
+/// From the main thread (the run-time classes' natives).
+fn post_command(cmd: Command) {
+    let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(instance) = current {
+        instance.post(cmd, false);
+    }
+}
+
+/// Drive the text field that has focus through the host view's
+/// `InputConnection`, as an input method would (composing, committing an
+/// emoji, deleting around the caret), and log what it reads back under the
+/// `stipple` tag. For tests on a device without a composing keyboard: CI's
+/// emulator run calls it from `androiddemo`. Safe from any thread.
+pub fn input_connection_self_test() {
+    let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(instance) = current {
+        instance.request(|r| r.self_test = true);
+    }
 }
 
 /// Run `f` on the current activity, if one is alive.
@@ -566,6 +617,8 @@ pub unsafe fn start<F>(
             cb.on_low_memory = Some(on_low_memory);
         }
         (*activity).instance = Arc::into_raw(instance.clone()) as *mut c_void;
+        // The input method's connection, accessibility and memory warnings.
+        classes::install(&*activity);
     }
     *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(instance.clone());
 
@@ -618,6 +671,7 @@ unsafe extern "C" fn on_stop(a: *mut ANativeActivity) {
 unsafe extern "C" fn on_destroy(a: *mut ANativeActivity) {
     unsafe {
         post(a, Command::Destroy, true);
+        classes::uninstall((*a).env);
         // The UI thread is done with the activity; drop the callbacks' share.
         let ptr = (*a).instance as *const Instance;
         (*a).instance = std::ptr::null_mut();
@@ -648,7 +702,29 @@ unsafe extern "C" fn on_main_request(fd: c_int, _events: c_int, data: *mut c_voi
     if let Some((argb, light)) = requests.bars {
         unsafe { jni::style_system_bars(vm, clazz, sdk, argb, light) };
     }
-    if let Some(show) = requests.soft_input {
+    // The run-time classes' work, with this (the main) thread's env.
+    let host_view = unsafe {
+        jni::with_env(vm, |env| {
+            if let Some(what) = requests.ime {
+                ime::notify(env, what);
+            }
+            a11y::announce(env, requests.a11y);
+            if requests.back {
+                // What Back does when the app doesn't handle it: finish, or
+                // (Android 12 and later, for the task's root) move to the back.
+                env.call_void(clazz, c"onBackPressed", c"()V", &[]);
+            }
+            if requests.self_test {
+                ime::self_test(env);
+            }
+            Some(requests.soft_input.map(|show| ime::soft_input(env, show)))
+        })
+    }
+    .flatten()
+    .unwrap_or(false);
+    if let Some(show) = requests.soft_input
+        && !host_view
+    {
         // InputMethodManager, for the decor view: the NDK's own call asks for
         // the activity's content view, which Android 13 and later refuse to
         // serve. The NDK's call stays as the fallback.
@@ -1109,6 +1185,17 @@ impl View {
         }
     }
 
+    /// Ask the main thread to tell the input method what changed.
+    fn request_ime(&self, what: crate::platform::input_connection::Sync) {
+        use crate::platform::input_connection::Sync;
+        self.instance.request(|r| {
+            r.ime = match (r.ime, what) {
+                (Some(Sync::Restart), _) | (_, Sync::Restart) => Some(Sync::Restart),
+                _ => Some(what),
+            }
+        });
+    }
+
     /// Fill around the content with `rgba`, and color the system bars to match.
     /// Returns whether it changed.
     fn set_background(&self, rgba: [u8; 4]) -> bool {
@@ -1150,6 +1237,23 @@ impl Window for AndroidWindow {
     }
     fn set_text_input_active(&self, active: bool) {
         self.view.text_input.set(active);
+        if ime::set_text_input(active) && active {
+            // A field (a password field, say) the input method must look at.
+            self.view
+                .request_ime(crate::platform::input_connection::Sync::Restart);
+        }
+    }
+    fn set_ime(&self, state: Option<&crate::platform::window::ImeState>) {
+        let what = ime::sync(state);
+        if what != crate::platform::input_connection::Sync::Unchanged {
+            self.view.request_ime(what);
+        }
+    }
+    fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
+        let changes = a11y::update(root, self.view.content_rect(), self.view.scale.get());
+        if changes != a11y::Changes::default() {
+            self.view.instance.request(|r| r.a11y.merge(changes));
+        }
     }
     fn set_fullscreen(&self, fullscreen: bool) {
         set_fullscreen(self.view.instance.activity, fullscreen);
@@ -1193,6 +1297,10 @@ struct Loop<'h> {
     pointer: Option<(i32, PointerButton)>,
     /// The mouse buttons held (`AMotionEvent_getButtonState` bits).
     mouse_buttons: i32,
+    /// The activity is paused (in the background).
+    background: bool,
+    /// The activity was destroyed: the loop ends.
+    ended: bool,
 }
 
 impl Loop<'_> {
@@ -1214,8 +1322,22 @@ impl Loop<'_> {
         }
     }
 
+    /// Handle the commands queued so far. Returns `true` when the loop
+    /// should end.
+    fn run_commands(&mut self) -> bool {
+        while !self.ended
+            && let Some(cmd) = self.instance.next()
+        {
+            self.ended = self.command(cmd);
+            self.instance.handled();
+        }
+        self.ended
+    }
+
     /// Handle one lifecycle command. Returns `true` when the loop should end.
     fn command(&mut self, cmd: Command) -> bool {
+        use crate::platform::event::Lifecycle;
+        let cmd_is_resume = matches!(cmd, Command::Resume);
         match cmd {
             Command::WindowCreated(w) => {
                 let window = w as *mut c_void;
@@ -1284,14 +1406,31 @@ impl Loop<'_> {
             }
             Command::Resume | Command::Start => {
                 self.view.redraw.set(true);
+                if cmd_is_resume && std::mem::take(&mut self.background) {
+                    self.deliver(Event::Lifecycle(Lifecycle::Foreground));
+                }
                 // The animation setting changes no configuration, so look
                 // again whenever the app comes back (from the settings, say).
                 if crate::anim::set_system_motion_scale(motion_scale()) {
                     crate::platform::native::note_changed();
                 }
             }
-            Command::Pause | Command::Stop => {}
-            Command::LowMemory => crate::platform::native::clear_cache(),
+            Command::Pause => {
+                if !std::mem::replace(&mut self.background, true) {
+                    // The app saves its state now: onPause waits for this.
+                    self.deliver(Event::Lifecycle(Lifecycle::Background));
+                }
+            }
+            Command::Stop => {}
+            Command::LowMemory => {
+                crate::platform::native::clear_cache();
+                self.deliver(Event::Lifecycle(Lifecycle::LowMemory));
+            }
+            Command::Deliver(event) => self.deliver(event),
+            Command::Ime(edit) => {
+                ime::handled();
+                self.deliver(Event::Ime(edit));
+            }
             Command::Destroy => {
                 let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
                 if current
@@ -1357,6 +1496,20 @@ impl Loop<'_> {
             AKEY_EVENT_ACTION_UP => ButtonState::Released,
             _ => return false,
         };
+        if code == AKEYCODE_BACK {
+            return self.back(event, state);
+        }
+        // A key typed while the input method composes: the composition
+        // becomes text first, as in Android's own fields. The input method's
+        // edits already on the way come before that.
+        if state == ButtonState::Pressed {
+            if self.run_commands() {
+                return false;
+            }
+            for edit in ime::finish_composing_for_key() {
+                self.deliver(Event::Ime(edit));
+            }
+        }
         let modifiers = input::android_modifiers(meta);
         if self.raw_key(event, code, meta, device, state) {
             return true;
@@ -1387,6 +1540,33 @@ impl Loop<'_> {
         } else if state == ButtonState::Pressed {
             self.deliver(Event::Text(c.to_string()));
         }
+        true
+    }
+
+    /// The Back key: [`Event::BackRequested`] when it's released, and the
+    /// system's default (`onBackPressed`) if the app doesn't go back. The key
+    /// is always taken, so the system doesn't act on it too.
+    fn back(&mut self, event: *mut c_void, state: ButtonState) -> bool {
+        if state != ButtonState::Released || self.exiting {
+            return true;
+        }
+        // AKEY_EVENT_FLAG_CANCELED: a back gesture the user took back.
+        const AKEY_EVENT_FLAG_CANCELED: i32 = 0x20;
+        if unsafe { AKeyEvent_getFlags(event) } & AKEY_EVENT_FLAG_CANCELED != 0 {
+            return true;
+        }
+        let (handled, flow) =
+            crate::platform::key::deliver_back(|e| (self.handler)(e, &self.window));
+        if flow == ControlFlow::Exit {
+            self.exiting = true;
+            unsafe { ANativeActivity_finish(self.instance.activity) };
+        } else if !handled {
+            self.instance.request(|r| r.back = true);
+        }
+        log(&format!(
+            "stipple: back {}",
+            if handled { "handled" } else { "not handled" }
+        ));
         true
     }
 
@@ -1455,7 +1635,20 @@ impl Loop<'_> {
         let at = |i: usize| unsafe {
             view.to_logical(AMotionEvent_getX(event, i), AMotionEvent_getY(event, i))
         };
-        let mouse = unsafe { AMotionEvent_getToolType(event, 0) } == AMOTION_EVENT_TOOL_TYPE_MOUSE;
+        let tool = unsafe { AMotionEvent_getToolType(event, 0) };
+        let mouse = tool == AMOTION_EVENT_TOOL_TYPE_MOUSE;
+        // A finger that hovers is touch exploration (TalkBack): leave it to
+        // the host view, which tells the screen reader what is under it.
+        if tool == AMOTION_EVENT_TOOL_TYPE_FINGER
+            && matches!(
+                action,
+                AMOTION_EVENT_ACTION_HOVER_ENTER
+                    | AMOTION_EVENT_ACTION_HOVER_MOVE
+                    | AMOTION_EVENT_ACTION_HOVER_EXIT
+            )
+        {
+            return false;
+        }
         crate::platform::set_pointer_modifiers(input::android_modifiers(unsafe {
             AMotionEvent_getMetaState(event)
         }));
@@ -1665,19 +1858,17 @@ where
         exiting: false,
         pointer: None,
         mouse_buttons: 0,
+        background: false,
+        ended: false,
     };
     if let Some(c) = attrs.background {
         lp.view.set_background([c.r, c.g, c.b, 255]);
     }
     instance.set_phase(Phase::Running);
 
-    'run: loop {
-        while let Some(cmd) = instance.next() {
-            let end = lp.command(cmd);
-            instance.handled();
-            if end {
-                break 'run;
-            }
+    loop {
+        if lp.run_commands() {
+            break;
         }
         if crate::platform::wake::take(Instant::now()) {
             lp.deliver(Event::Wake);

@@ -980,12 +980,30 @@ Most input only works on X11 today.
   The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only. No real keyboard composes in CI. Not done: selection rectangles,
   point-to-position hit-testing, keyboard-made selections, hardware dead keys.
   See [docs/ime.md](docs/ime.md).
-- ⬜ Android composition: the soft keyboard shows and hides with focus, but it
-  types only through key events, so emoji and composing keyboards (Chinese,
-  Japanese, Korean, Gboard's suggestions) deliver nothing. Implement an
-  `InputConnection` (over JNI, from a small `View` subclass, as `NativeActivity`
-  gives none) for `setComposingText` / `commitText` / `deleteSurroundingText`,
-  feeding `Event::Ime`, and map the editor action (Done / Next) to keys.
+- ✅ Android composition: an `InputConnection`, from a host `View` the backend
+  adds to the `NativeActivity`. With no Java toolchain, its classes are
+  assembled at run time by a hand-written dex writer (`platform::dex`: every
+  method `native` and bound with `RegisterNatives`, the constructors two
+  instructions) and loaded with `InMemoryDexClassLoader` (`DexClassLoader`
+  from a file before Android 8). `setComposingText` / `commitText` /
+  `finishComposingText` / `deleteSurroundingText[InCodePoints]` /
+  `setComposingRegion` / `setSelection` feed `Event::Ime` (and arrow keys),
+  `getTextBefore/AfterCursor` / `getSelectedText` / `getCursorCapsMode` answer
+  in UTF-16 from the field's `ImeState`, the editor action maps to Enter (Done,
+  Go, Send…), Tab (Next) and Shift+Tab (Previous), the context menu actions to
+  Ctrl+A/X/C/V; `updateSelection` and `restartInput` keep the keyboard in
+  step; password fields get a password `inputType`. The editable model is
+  unit-tested on the host. **Verified on an API 34 emulator** (locally, and in
+  the `visual-android` CI steps added with this change, which hadn't run on CI
+  yet when it landed): Gboard connects (`inputType 0x4001`, action Done), keys
+  typed while it composes a word (`setComposingRegion`) keep the text, and the
+  app-side self-test drives the real Java `InputConnection` (compose にほ,
+  commit 日本🎉, delete the emoji's two UTF-16 units, compose and finish), the
+  field ending as `Stipple日本!`. Not tried with a person typing on a real
+  composing keyboard (Japanese, Chinese, Korean); no `getExtractedText`, no
+  cursor-anchor info for the candidate bar; selection moves from a non-empty
+  selection or mid-composition are refused. See
+  [docs/platforms/android.md](docs/platforms/android.md).
 - ⬜ Dead keys and compose on mobile hardware keyboards (iOS and Android).
 - ⬜ IME verification with a real input method: X11 runs a real XIM server in
   CI (IBus started with `--xim`, with its keyboard engine and Mozc), but the
@@ -1271,10 +1289,20 @@ Most input only works on X11 today.
   its element and checks it was tapped and the label's element followed.
   The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only. Not yet tried with VoiceOver itself, on a simulator or a
   device; no adjustable or scroll actions.
-- ⬜ Accessibility on Android: an `AccessibilityNodeProvider` over JNI (virtual
-  view ids per node, actions for click, focus, scroll and text), so TalkBack
-  can read and drive the tree. Checked with TalkBack (and VoiceOver on iOS) on
-  real devices, not just in CI.
+- ✅ Accessibility on Android: the host view's `AccessibilityNodeProvider`
+  (same run-time dex) gives a virtual view per node (ids in tree order), with
+  the closest widget class name per role (`Button`, `EditText`, `TextView`,
+  `CheckBox`, `Switch`, `ListView`…), text or content description, checked /
+  selected / focused / password / editable state and screen bounds; actions:
+  accessibility focus (with its events), click, focus and select (a tap at the
+  node), scroll forward / backward (a wheel step over it) and set text (select
+  all, then the new text). Tree changes send `TYPE_WINDOW_CONTENT_CHANGED`,
+  focus moves `TYPE_VIEW_FOCUSED`; a finger's hover (TalkBack's explore by
+  touch) goes to the host view, which announces the node under it. **Verified
+  on an API 34 emulator** with `uiautomator dump` (the button, the field and
+  the list's rows with their classes and bounds; CI checks it in the
+  `visual-android` steps added with this change, not yet run on CI when it
+  landed). Not yet tried with TalkBack itself, on an emulator or a device.
 - ✅ App lifecycle for apps, cross-platform API and iOS: `Event::Lifecycle`
   with `Lifecycle::{Background, Foreground, LowMemory}`, heard by
   `App::on_lifecycle(|state, change|)`. While in the background the App asks
@@ -1288,13 +1316,29 @@ Most input only works on X11 today.
   background on the simulator by launching another app and back by launching
   it again, and checks both events and that no view was built in between; the
   memory warning is posted in-process. The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only.
-- ⬜ Mobile app lifecycle on Android: `onPause` / `onResume` and `onTrimMemory`
-  as `Event::Lifecycle`, and saving and restoring state across process death
+- ✅ Mobile app lifecycle on Android: `onPause` as `Lifecycle::Background`
+  (the callback waits until the app has handled it), `onResume` after it as
+  `Foreground`, and `onLowMemory` and `onTrimMemory` (running low, critical,
+  moderate, complete; heard through a run-time `ComponentCallbacks2`) as
+  `LowMemory`, through the shared API (frames stop in the background).
+  **Verified on an API 34 emulator** (Home and `am start`, `am
+  send-trim-memory RUNNING_LOW`; CI steps added with this change).
+- ⬜ Saving and restoring state across process death on Android
   (`onSaveInstanceState`).
-- ⬜ Back navigation: Android's Back button and predictive back gesture, and
-  iOS's edge swipe where an app wants it, delivered as an event a view can
-  handle (closing a menu, a dialog, then a screen) before the activity
-  finishes.
+- ✅ Back navigation on Android: the Back key (and the back gesture, which
+  sends it while the app doesn't opt into predictive back) arrives as
+  `Event::BackRequested`; the App closes an open menu, then asks
+  `App::on_back(|state| -> Handled)`; a raw handler answers with
+  `platform::handle_back()`. Unhandled, the system's default runs
+  (`Activity.onBackPressed`: the activity finishes, or on Android 12+ a root
+  task moves to the back). A Back that first closes the soft keyboard stays
+  with the keyboard. Unit-tested in the App; **verified on an API 34
+  emulator** (`input keyevent BACK`, handled then not; CI steps added with
+  this change).
+- ⬜ Predictive back on Android 13+ (`OnBackInvokedCallback`, with
+  `enableOnBackInvokedCallback`): it needs to know before the gesture
+  whether the app will go back, which `on_back` only answers after; and
+  iOS's edge swipe where an app wants it.
 - ⬜ Mobile gestures: pinch and two-finger pan, long press (opening the context
   menu, as right-click does on desktop), horizontal touch scrolling, and touch
   scrolling in mobile browsers on the web.
@@ -1587,7 +1631,7 @@ styling part of the toolkit.
 | CPU rasterization too slow for large/animated/4K UIs | Damage tracking + layer/glyph caching in Phase 1; GPU `Surface` (Phase 6) behind the same trait. |
 | Per-OS windowing/IME is a deep, hand-written surface | Confine to `stipple::platform`; freeze the trait after Phase 2; ship one OS fully before porting. |
 | Reactive runtime + Rust ownership friction | Prototype the `View`/state model in Phase 1 against real demos before widening the widget set. |
-| Accessibility is hard when self-drawing everything | A semantics tree built from the element tree, with hand-written bridges to AT-SPI, UI Automation, NSAccessibility, UIAccessibility (iOS) and ARIA (the web). The Android bridge remains (Phase 7f). |
+| Accessibility is hard when self-drawing everything | A semantics tree built from the element tree, with hand-written bridges to AT-SPI, UI Automation, NSAccessibility, UIAccessibility (iOS) and ARIA (the web), and an `AccessibilityNodeProvider` on Android. |
 | The native theme leans on OS internals | Windows' dark control themes (`DarkMode_*`) are undocumented, and AppKit and UIKit restyle controls between releases. Controls are drawn by the OS at run time, so they follow its current look; the self-drawn decoration stays as the fallback; CI screenshots each platform. |
 | oxideav API churn | Pin via path deps now; track upstream; the `stipple::render` seam isolates oxideav from the rest. |
 | Web with "minimal deps" constraint | Accept a thin, hand-audited JS-interop shim as the one web exception. |

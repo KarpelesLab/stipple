@@ -335,6 +335,13 @@ pub enum Event {
         kind: crate::platform::clipboard::ClipboardKind,
         content: Option<crate::platform::clipboard::ClipboardContent>,
     },
+
+    /// The user asked to go back: Android's Back button or gesture. A handler
+    /// that goes back (closes a menu, a dialog, a screen) says so with
+    /// [`handle_back`](crate::platform::handle_back) while handling it;
+    /// otherwise the system does what it does by default (on Android, the
+    /// activity finishes or its task moves to the back).
+    BackRequested,
 }
 
 /// The kinds of data a drag carries, known as soon as it enters a window

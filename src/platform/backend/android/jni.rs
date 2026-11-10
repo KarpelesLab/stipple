@@ -13,18 +13,19 @@
 use std::cell::Cell;
 use std::ffi::{CStr, c_char, c_void};
 
-type JObject = *mut c_void;
+pub(super) type JObject = *mut c_void;
 type JMethod = *mut c_void;
 /// A `JNIEnv*`.
-type Env = *mut c_void;
+pub(super) type Env = *mut c_void;
 
 /// A JNI `jvalue`: one argument of a `Call*MethodA` call.
 #[repr(C)]
 #[derive(Clone, Copy)]
-union JValue {
-    i: i32,
-    f: f32,
-    l: JObject,
+pub(super) union JValue {
+    pub(super) i: i32,
+    pub(super) f: f32,
+    pub(super) l: JObject,
+    pub(super) z: u8,
 }
 
 const JNI_OK: i32 = 0;
@@ -37,25 +38,38 @@ const VM_GET_ENV: usize = 6;
 
 // `JNINativeInterface` (the `JNIEnv` table) indices.
 const FIND_CLASS: usize = 6;
+const EXCEPTION_DESCRIBE: usize = 16;
 const EXCEPTION_CLEAR: usize = 17;
 const PUSH_LOCAL_FRAME: usize = 19;
 const POP_LOCAL_FRAME: usize = 20;
+const NEW_GLOBAL_REF: usize = 21;
+const DELETE_GLOBAL_REF: usize = 22;
 const NEW_OBJECT_A: usize = 30;
 const GET_OBJECT_CLASS: usize = 31;
 const GET_METHOD_ID: usize = 33;
 const CALL_OBJECT_METHOD_A: usize = 36;
 const CALL_BOOLEAN_METHOD_A: usize = 39;
 const CALL_INT_METHOD_A: usize = 51;
+const CALL_FLOAT_METHOD_A: usize = 57;
 const CALL_VOID_METHOD_A: usize = 63;
 const GET_FIELD_ID: usize = 94;
 const GET_INT_FIELD: usize = 100;
 const GET_STATIC_METHOD_ID: usize = 113;
 const CALL_STATIC_OBJECT_METHOD_A: usize = 116;
+const SET_INT_FIELD: usize = 109;
 const CALL_STATIC_FLOAT_METHOD_A: usize = 137;
+const NEW_STRING: usize = 163;
+const GET_STRING_LENGTH: usize = 164;
+const GET_STRING_CHARS: usize = 165;
+const RELEASE_STRING_CHARS: usize = 166;
 const NEW_STRING_UTF: usize = 167;
 const GET_STRING_UTF_CHARS: usize = 169;
 const RELEASE_STRING_UTF_CHARS: usize = 170;
+const NEW_INT_ARRAY: usize = 179;
+const GET_INT_ARRAY_REGION: usize = 203;
+const REGISTER_NATIVES: usize = 215;
 const EXCEPTION_CHECK: usize = 228;
+const NEW_DIRECT_BYTE_BUFFER: usize = 229;
 
 /// Read entry `index` of the function table behind `ptr` (a `JavaVM*` or
 /// `JNIEnv*`, each a pointer to a pointer to the table).
@@ -103,7 +117,7 @@ pub(super) unsafe fn detach(vm: *mut c_void) {
 
 /// Run `f` with an env for the calling thread, attaching it for the call if
 /// it isn't attached already, inside a local reference frame.
-unsafe fn with_env<R>(vm: *mut c_void, f: impl FnOnce(&Jni) -> Option<R>) -> Option<R> {
+pub(super) unsafe fn with_env<R>(vm: *mut c_void, f: impl FnOnce(&Jni) -> Option<R>) -> Option<R> {
     if vm.is_null() {
         return None;
     }
@@ -142,15 +156,15 @@ unsafe fn with_env<R>(vm: *mut c_void, f: impl FnOnce(&Jni) -> Option<R>) -> Opt
 
 /// A `JNIEnv*` with typed wrappers for the calls used here. Each returns
 /// `None` (with the exception cleared) when the call threw or found nothing.
-struct Jni(Env);
+pub(super) struct Jni(pub(super) Env);
 
 impl Jni {
-    unsafe fn f(&self, index: usize) -> *const c_void {
+    pub(super) unsafe fn f(&self, index: usize) -> *const c_void {
         unsafe { slot(self.0, index) }
     }
 
     /// Whether an exception is pending; clears it.
-    fn clear(&self) -> bool {
+    pub(super) fn clear(&self) -> bool {
         unsafe {
             let check: unsafe extern "C" fn(Env) -> u8 =
                 std::mem::transmute(self.f(EXCEPTION_CHECK));
@@ -163,11 +177,11 @@ impl Jni {
         }
     }
 
-    fn ok<T>(&self, value: *mut T) -> Option<*mut T> {
+    pub(super) fn ok<T>(&self, value: *mut T) -> Option<*mut T> {
         (!self.clear() && !value.is_null()).then_some(value)
     }
 
-    fn push_frame(&self) -> bool {
+    pub(super) fn push_frame(&self) -> bool {
         unsafe {
             let f: unsafe extern "C" fn(Env, i32) -> i32 =
                 std::mem::transmute(self.f(PUSH_LOCAL_FRAME));
@@ -175,7 +189,7 @@ impl Jni {
         }
     }
 
-    fn pop_frame(&self) {
+    pub(super) fn pop_frame(&self) {
         unsafe {
             let f: unsafe extern "C" fn(Env, JObject) -> JObject =
                 std::mem::transmute(self.f(POP_LOCAL_FRAME));
@@ -183,7 +197,7 @@ impl Jni {
         }
     }
 
-    fn find_class(&self, name: &CStr) -> Option<JObject> {
+    pub(super) fn find_class(&self, name: &CStr) -> Option<JObject> {
         unsafe {
             let f: unsafe extern "C" fn(Env, *const c_char) -> JObject =
                 std::mem::transmute(self.f(FIND_CLASS));
@@ -191,7 +205,7 @@ impl Jni {
         }
     }
 
-    fn class_of(&self, obj: JObject) -> Option<JObject> {
+    pub(super) fn class_of(&self, obj: JObject) -> Option<JObject> {
         unsafe {
             let f: unsafe extern "C" fn(Env, JObject) -> JObject =
                 std::mem::transmute(self.f(GET_OBJECT_CLASS));
@@ -199,7 +213,7 @@ impl Jni {
         }
     }
 
-    fn method(&self, class: JObject, name: &CStr, sig: &CStr) -> Option<JMethod> {
+    pub(super) fn method(&self, class: JObject, name: &CStr, sig: &CStr) -> Option<JMethod> {
         unsafe {
             let f: unsafe extern "C" fn(Env, JObject, *const c_char, *const c_char) -> JMethod =
                 std::mem::transmute(self.f(GET_METHOD_ID));
@@ -207,7 +221,7 @@ impl Jni {
         }
     }
 
-    fn static_method(&self, class: JObject, name: &CStr, sig: &CStr) -> Option<JMethod> {
+    pub(super) fn static_method(&self, class: JObject, name: &CStr, sig: &CStr) -> Option<JMethod> {
         unsafe {
             let f: unsafe extern "C" fn(Env, JObject, *const c_char, *const c_char) -> JMethod =
                 std::mem::transmute(self.f(GET_STATIC_METHOD_ID));
@@ -216,7 +230,7 @@ impl Jni {
     }
 
     /// Call an object-returning instance method, looked up on `obj`'s class.
-    fn call_object(
+    pub(super) fn call_object(
         &self,
         obj: JObject,
         name: &CStr,
@@ -231,7 +245,13 @@ impl Jni {
         }
     }
 
-    fn call_int(&self, obj: JObject, name: &CStr, sig: &CStr, args: &[JValue]) -> Option<i32> {
+    pub(super) fn call_int(
+        &self,
+        obj: JObject,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<i32> {
         let m = self.method(self.class_of(obj)?, name, sig)?;
         unsafe {
             let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> i32 =
@@ -241,7 +261,13 @@ impl Jni {
         }
     }
 
-    fn call_bool(&self, obj: JObject, name: &CStr, sig: &CStr, args: &[JValue]) -> Option<bool> {
+    pub(super) fn call_bool(
+        &self,
+        obj: JObject,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<bool> {
         let m = self.method(self.class_of(obj)?, name, sig)?;
         unsafe {
             let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> u8 =
@@ -252,7 +278,7 @@ impl Jni {
     }
 
     /// Read the `int` field `name` of `obj`.
-    fn int_field(&self, obj: JObject, name: &CStr) -> Option<i32> {
+    pub(super) fn int_field(&self, obj: JObject, name: &CStr) -> Option<i32> {
         let class = self.class_of(obj)?;
         unsafe {
             let get_id: unsafe extern "C" fn(
@@ -269,7 +295,13 @@ impl Jni {
         }
     }
 
-    fn call_void(&self, obj: JObject, name: &CStr, sig: &CStr, args: &[JValue]) -> Option<()> {
+    pub(super) fn call_void(
+        &self,
+        obj: JObject,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<()> {
         let m = self.method(self.class_of(obj)?, name, sig)?;
         unsafe {
             let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) =
@@ -279,7 +311,7 @@ impl Jni {
         (!self.clear()).then_some(())
     }
 
-    fn call_static_object(
+    pub(super) fn call_static_object(
         &self,
         class: &CStr,
         name: &CStr,
@@ -295,7 +327,7 @@ impl Jni {
         }
     }
 
-    fn call_static_float(
+    pub(super) fn call_static_float(
         &self,
         class: &CStr,
         name: &CStr,
@@ -314,7 +346,7 @@ impl Jni {
 
     /// A Java string from `s`. JNI's "modified UTF-8" differs from UTF-8 only
     /// for NUL and characters beyond the BMP; NULs end the string here.
-    fn string(&self, s: &str) -> Option<JObject> {
+    pub(super) fn string(&self, s: &str) -> Option<JObject> {
         let s: String = s.chars().take_while(|&c| c != '\0').collect();
         let c = std::ffi::CString::new(s).ok()?;
         unsafe {
@@ -324,7 +356,7 @@ impl Jni {
         }
     }
 
-    fn to_rust(&self, s: JObject) -> Option<String> {
+    pub(super) fn to_rust(&self, s: JObject) -> Option<String> {
         unsafe {
             let get: unsafe extern "C" fn(Env, JObject, *mut u8) -> *const c_char =
                 std::mem::transmute(self.f(GET_STRING_UTF_CHARS));
@@ -657,4 +689,247 @@ pub(super) unsafe fn open_url(vm: *mut c_void, activity: JObject, url: &str) -> 
         })
         .is_some()
     }
+}
+
+/// The calls the classes Stipple defines at run time need (see `classes`).
+impl Jni {
+    /// Whether an exception is pending: if so, it goes to logcat (with
+    /// `what`) and is cleared.
+    pub(super) fn failed(&self, what: &str) -> bool {
+        unsafe {
+            let check: unsafe extern "C" fn(Env) -> u8 =
+                std::mem::transmute(self.f(EXCEPTION_CHECK));
+            if check(self.0) == 0 {
+                return false;
+            }
+            let describe: unsafe extern "C" fn(Env) =
+                std::mem::transmute(self.f(EXCEPTION_DESCRIBE));
+            describe(self.0);
+        }
+        self.clear();
+        super::log(&format!("stipple: {what} threw"));
+        true
+    }
+
+    pub(super) fn call_float(
+        &self,
+        obj: JObject,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<f32> {
+        let m = self.method(self.class_of(obj)?, name, sig)?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> f32 =
+                std::mem::transmute(self.f(CALL_FLOAT_METHOD_A));
+            let r = f(self.0, obj, m, args.as_ptr());
+            (!self.clear()).then_some(r)
+        }
+    }
+
+    /// `new class(args)`, with the constructor of signature `sig`.
+    pub(super) fn new_object(
+        &self,
+        class: JObject,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<JObject> {
+        let init = self.method(class, c"<init>", sig)?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> JObject =
+                std::mem::transmute(self.f(NEW_OBJECT_A));
+            self.ok(f(self.0, class, init, args.as_ptr()))
+        }
+    }
+
+    /// [`new_object`](Self::new_object) of the class named `class`.
+    pub(super) fn new_named(&self, class: &CStr, sig: &CStr, args: &[JValue]) -> Option<JObject> {
+        let class = self.find_class(class)?;
+        self.new_object(class, sig, args)
+    }
+
+    /// A global reference to `obj`, which outlives the current native call.
+    pub(super) fn global(&self, obj: JObject) -> JObject {
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject) -> JObject =
+                std::mem::transmute(self.f(NEW_GLOBAL_REF));
+            f(self.0, obj)
+        }
+    }
+
+    pub(super) fn delete_global(&self, obj: JObject) {
+        if obj.is_null() {
+            return;
+        }
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject) =
+                std::mem::transmute(self.f(DELETE_GLOBAL_REF));
+            f(self.0, obj);
+        }
+    }
+
+    /// Set the `int` field `name` of `obj`.
+    pub(super) fn set_int_field(&self, obj: JObject, name: &CStr, value: i32) -> Option<()> {
+        let class = self.class_of(obj)?;
+        unsafe {
+            let get_id: unsafe extern "C" fn(
+                Env,
+                JObject,
+                *const c_char,
+                *const c_char,
+            ) -> JMethod = std::mem::transmute(self.f(GET_FIELD_ID));
+            let id = self.ok(get_id(self.0, class, name.as_ptr(), c"I".as_ptr()))?;
+            let set: unsafe extern "C" fn(Env, JObject, JMethod, i32) =
+                std::mem::transmute(self.f(SET_INT_FIELD));
+            set(self.0, obj, id, value);
+        }
+        (!self.clear()).then_some(())
+    }
+
+    /// A Java string from `s`, through UTF-16, so characters beyond the BMP
+    /// (emoji) survive, unlike [`string`](Self::string)'s modified UTF-8.
+    pub(super) fn string16(&self, s: &str) -> Option<JObject> {
+        let units: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let f: unsafe extern "C" fn(Env, *const u16, i32) -> JObject =
+                std::mem::transmute(self.f(NEW_STRING));
+            self.ok(f(self.0, units.as_ptr(), units.len() as i32))
+        }
+    }
+
+    /// A Java string's text, read as UTF-16 (see [`string16`](Self::string16)).
+    pub(super) fn to_rust16(&self, s: JObject) -> Option<String> {
+        if s.is_null() {
+            return None;
+        }
+        unsafe {
+            let len: unsafe extern "C" fn(Env, JObject) -> i32 =
+                std::mem::transmute(self.f(GET_STRING_LENGTH));
+            let n = len(self.0, s).max(0) as usize;
+            let get: unsafe extern "C" fn(Env, JObject, *mut u8) -> *const u16 =
+                std::mem::transmute(self.f(GET_STRING_CHARS));
+            let chars = get(self.0, s, std::ptr::null_mut());
+            if chars.is_null() {
+                self.clear();
+                return None;
+            }
+            let out = String::from_utf16_lossy(std::slice::from_raw_parts(chars, n));
+            let release: unsafe extern "C" fn(Env, JObject, *const u16) =
+                std::mem::transmute(self.f(RELEASE_STRING_CHARS));
+            release(self.0, s, chars);
+            Some(out)
+        }
+    }
+
+    /// A `CharSequence`'s text (`toString()`), or `None` for `null`.
+    pub(super) fn char_sequence(&self, cs: JObject) -> Option<String> {
+        if cs.is_null() {
+            return None;
+        }
+        let s = self.call_object(cs, c"toString", c"()Ljava/lang/String;", &[])?;
+        self.to_rust16(s)
+    }
+
+    /// A new `int[n]`.
+    pub(super) fn int_array(&self, n: usize) -> Option<JObject> {
+        unsafe {
+            let f: unsafe extern "C" fn(Env, i32) -> JObject =
+                std::mem::transmute(self.f(NEW_INT_ARRAY));
+            self.ok(f(self.0, n as i32))
+        }
+    }
+
+    /// The first `N` elements of an `int[]`.
+    pub(super) fn ints<const N: usize>(&self, array: JObject) -> Option<[i32; N]> {
+        let mut out = [0i32; N];
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, i32, i32, *mut i32) =
+                std::mem::transmute(self.f(GET_INT_ARRAY_REGION));
+            f(self.0, array, 0, N as i32, out.as_mut_ptr());
+        }
+        (!self.clear()).then_some(out)
+    }
+
+    /// Bind `methods` (name, JNI signature, function) as `class`'s natives.
+    pub(super) fn register_natives(
+        &self,
+        class: JObject,
+        methods: &[(std::ffi::CString, std::ffi::CString, *const c_void)],
+    ) -> bool {
+        #[repr(C)]
+        struct NativeMethod {
+            name: *const c_char,
+            signature: *const c_char,
+            func: *const c_void,
+        }
+        let table: Vec<NativeMethod> = methods
+            .iter()
+            .map(|(name, signature, func)| NativeMethod {
+                name: name.as_ptr(),
+                signature: signature.as_ptr(),
+                func: *func,
+            })
+            .collect();
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, *const NativeMethod, i32) -> i32 =
+                std::mem::transmute(self.f(REGISTER_NATIVES));
+            let r = f(self.0, class, table.as_ptr(), table.len() as i32);
+            !self.failed("RegisterNatives") && r == JNI_OK
+        }
+    }
+
+    /// A `java.nio.ByteBuffer` over `bytes`.
+    pub(super) fn direct_buffer(&self, bytes: &'static [u8]) -> Option<JObject> {
+        unsafe {
+            let f: unsafe extern "C" fn(Env, *mut c_void, i64) -> JObject =
+                std::mem::transmute(self.f(NEW_DIRECT_BYTE_BUFFER));
+            self.ok(f(self.0, bytes.as_ptr() as *mut c_void, bytes.len() as i64))
+        }
+    }
+
+    /// Pop the local frame, keeping `result` alive in the caller's frame.
+    fn pop_frame_keeping(&self, result: JObject) -> JObject {
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject) -> JObject =
+                std::mem::transmute(self.f(POP_LOCAL_FRAME));
+            f(self.0, result)
+        }
+    }
+}
+
+/// Run `f` with the env a native method was called with, inside a local
+/// reference frame, logging and clearing any exception it leaves.
+pub(super) unsafe fn in_native<R>(env: Env, f: impl FnOnce(&Jni) -> Option<R>) -> Option<R> {
+    if env.is_null() {
+        return None;
+    }
+    let jni = Jni(env);
+    if !jni.push_frame() {
+        return None;
+    }
+    let r = f(&jni);
+    jni.failed("a native method");
+    jni.pop_frame();
+    r
+}
+
+/// [`in_native`] for a native method that returns an object: the object `f`
+/// makes survives the frame. `null` when it makes none.
+pub(super) unsafe fn in_native_object(
+    env: Env,
+    f: impl FnOnce(&Jni) -> Option<JObject>,
+) -> JObject {
+    if env.is_null() {
+        return std::ptr::null_mut();
+    }
+    let jni = Jni(env);
+    if !jni.push_frame() {
+        return std::ptr::null_mut();
+    }
+    let r = f(&jni).unwrap_or(std::ptr::null_mut());
+    if jni.failed("a native method") {
+        jni.pop_frame();
+        return std::ptr::null_mut();
+    }
+    jni.pop_frame_keeping(r)
 }

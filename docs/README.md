@@ -38,7 +38,7 @@ How to build, package and run on each platform, and what works there today.
 | Built-in widgets animate by default (per-theme motion) | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
-| Accessibility | AT-SPI | UI Automation | NSAccessibility | UIAccessibility ⁴⁹ | ❌ | ARIA ²² |
+| Accessibility | AT-SPI | UI Automation | NSAccessibility | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
@@ -50,9 +50,9 @@ How to build, package and run on each platform, and what works there today.
 | System fonts by family name | ✅ ³⁴ | ✅ ³⁴ | ✅ ³⁴ | ✅ ¹⁰ | ✅ ¹⁰ | — ³⁴ |
 | Bold, italic, per-element fonts, fallbacks, text decorations | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ |
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
-| Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ✅ ⁵⁰ | ❌ | ✅ ²³ |
+| Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ✅ ⁵⁰ | ✅ ⁵⁵ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
-| Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ✅ ¹⁰ | ❌ | ✅ ⁴³ |
+| Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ⁴³ |
 | Raw keys (`on_raw_key`): physical key, left/right modifiers, repeat flag | ✅ ⁴² | ✅ ¹⁰ | ✅ ¹⁰ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Key repeat | ✅ ⁴² | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
@@ -64,7 +64,8 @@ How to build, package and run on each platform, and what works there today.
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
 | Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | ❌ | ❌ | ❌ |
 | Asking before closing and quitting | ✅ ³⁷ | ✅ ³⁷ | ✅ ³⁷ | — | — | — |
-| Background, foreground and memory warnings (`App::on_lifecycle`) | — | — | — | ✅ ⁵³ | ❌ | — |
+| Background, foreground and memory warnings (`App::on_lifecycle`) | — | — | — | ✅ ⁵³ | ✅ ⁵⁷ | — |
+| Back navigation (`App::on_back`) | — | — | — | ❌ | ✅ ⁵⁷ | — |
 | Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
@@ -314,6 +315,22 @@ pixel-identical frames at rest. Controls the OS draws under `Theme::native()`
 (buttons, checkboxes, radios and switches on Windows, macOS and iOS) switch
 between the OS's pictures of their states without these animations. See
 [widgets.md](widgets.md#motion).
+
+⁵⁵ An `InputConnection` from a host view whose Java classes the backend
+writes as a dex file at run time (no Java toolchain). On an API 34 emulator,
+Gboard connects to it, and an app-side self-test composes, commits an emoji
+and deletes around the caret through the real Java objects; not yet tried by
+a person on a composing keyboard. See [platforms/android.md](platforms/android.md#input-methods).
+
+⁵⁶ An `AccessibilityNodeProvider` with a virtual view per node (click, focus,
+scroll, set text); `uiautomator dump` on the CI emulator lists the nodes, but
+it hasn't been tried with TalkBack itself. See
+[platforms/android.md](platforms/android.md#accessibility).
+
+⁵⁷ `onPause` / `onResume` / `onTrimMemory` and the Back key, checked on the
+CI emulator (`input keyevent`, Home and `am start`, `am send-trim-memory`).
+Predictive back isn't supported. See
+[window-lifecycle.md](window-lifecycle.md#going-to-the-background-mobile).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.

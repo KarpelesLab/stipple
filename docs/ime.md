@@ -60,7 +60,7 @@ still reach the element's `on_raw_key` handler. See [keyboard.md](keyboard.md).
 | macOS | `NSTextInputClient` | `NSTextInputClient` |
 | Web | composition events on a hidden `<textarea>` | the browser (composition or `input` events) |
 | iOS | `UITextInput` on the view | the keyboard (on-screen ones compose; hardware dead keys not yet) |
-| Android | Not yet | Not yet |
+| Android | an `InputConnection` from a host view (see [platforms/android.md](platforms/android.md#input-methods)) | the keyboard (on-screen ones compose; hardware dead keys not yet) |
 
 **Wayland.** Stipple binds `zwp_text_input_manager_v3` and creates a text input
 for the seat. While a text field has focus (and the compositor has sent
@@ -304,6 +304,8 @@ their protocols on macOS and iOS) but no real input method runs.
 - Per-segment styling of the preedit (IMEs mark the segment being converted;
   Stipple shows the highlighted range as the selection and underlines all of
   it).
-- Composition on Android (an `InputConnection`).
+- On Android: `getExtractedText` and cursor-anchor info, selection moves from
+  a selection or mid-composition, hardware dead keys; and a real composing
+  keyboard driven by a person (CI runs a self-test through the connection).
 - On iOS: selection rectangles, hit-testing a point to a position, selections
   made from the keyboard, and dead keys on hardware keyboards.

@@ -3252,6 +3252,15 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                Event::BackRequested => {
+                    // Menus close first, then the app's back hook (see
+                    // `app_lifecycle`); unhandled, the system goes back.
+                    if self.go_back(idx) {
+                        crate::platform::handle_back();
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::QuitRequested => {
                     let open: Vec<WindowId> = self.panes.iter().map(|p| p.id).collect();
                     if self.ask_quit(&open) {

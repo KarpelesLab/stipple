@@ -236,6 +236,27 @@ pub(crate) fn deliver_raw(
     (CONSUMED.with(|c| c.replace(false)), flow)
 }
 
+thread_local! {
+    /// Whether the handler of an [`Event::BackRequested`] went back.
+    static BACK_HANDLED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Call while handling an [`Event::BackRequested`] to say the app went back
+/// (closed a menu, a dialog or a screen), so the system doesn't do its own
+/// default (finish the activity). Has no effect at any other time.
+pub fn handle_back() {
+    BACK_HANDLED.with(|c| c.set(true));
+}
+
+/// Hand [`Event::BackRequested`] to `handler`. Returns whether the handler
+/// went back (see [`handle_back`]) and its control flow.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn deliver_back(handler: impl FnOnce(Event) -> ControlFlow) -> (bool, ControlFlow) {
+    BACK_HANDLED.with(|c| c.set(false));
+    let flow = handler(Event::BackRequested);
+    (BACK_HANDLED.with(|c| c.replace(false)), flow)
+}
+
 // ---- Side tracking -----------------------------------------------------------
 
 /// Left/right modifier state for backends whose events only carry the
@@ -968,6 +989,20 @@ impl KeyRepeat {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn back_is_handled_only_when_the_handler_says_so() {
+        let (handled, _) = deliver_back(|e| {
+            assert_eq!(e, Event::BackRequested);
+            handle_back();
+            ControlFlow::Wait
+        });
+        assert!(handled);
+        let (handled, _) = deliver_back(|_| ControlFlow::Wait);
+        assert!(!handled, "the flag doesn't carry over");
+        handle_back(); // outside a delivery: no effect on the next one
+        assert!(!deliver_back(|_| ControlFlow::Wait).0);
+    }
 
     #[test]
     fn physical_keys_have_w3c_names() {

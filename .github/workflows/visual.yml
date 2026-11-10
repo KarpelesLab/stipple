@@ -3597,7 +3597,11 @@ jobs:
   # Run the native Android backend on an emulator: build androiddemo, package a
   # debug APK by hand (aapt + zipalign + apksigner, no Gradle), install it, and
   # drive it with adb: a frame reaches the window, the timer wakes the loop, a
-  # tap and typed keys register. Screenshots are uploaded as an artifact.
+  # tap and typed keys register, uiautomator sees the accessibility nodes, Back
+  # reaches the app (handled, then not), Home/am start/send-trim-memory give
+  # the lifecycle events, and the keyboard connects through the host view's
+  # InputConnection, which the app's self-test then composes through.
+  # Screenshots and the uiautomator dump are uploaded as an artifact.
   visual-android:
     name: Visual test (Android emulator)
     runs-on: ubuntu-latest
@@ -3615,6 +3619,20 @@ jobs:
       - name: Build the cdylib and assemble a signed debug APK
         run: bash examples/androiddemo/build-apk.sh x86_64 stipple.apk
 
+      # The backend writes its Java classes (the host view, its
+      # InputConnection, the accessibility node provider) as a dex file at run
+      # time: the SDK's dexdump must read the same bytes back.
+      - name: Check the run-time dex with dexdump
+        run: |
+          STIPPLE_DEX_OUT="$PWD/stipple-classes.dex" cargo test --lib platform::dex::
+          dexdump="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/dexdump"
+          "$dexdump" -d stipple-classes.dex > dexdump.txt
+          for class in HostView Input Nodes Callbacks; do
+            grep -q "Class descriptor  : 'Lorg/stipple/android/$class;'" dexdump.txt
+          done
+          grep -c "(PUBLIC NATIVE)" dexdump.txt
+          "$dexdump" -d stipple-classes.demo.dex > /dev/null
+
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
@@ -3622,7 +3640,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run on the emulator (touch, keys, timers) and screenshot
+      - name: Run on the emulator (touch, keys, IME, accessibility, back, lifecycle)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
@@ -3637,7 +3655,9 @@ jobs:
         if: always()
         with:
           name: stipple-android-screenshot
-          path: visual_output/*.png
+          path: |
+            visual_output/*.png
+            visual_output/*.xml
           if-no-files-found: warn
 
   # Window lifecycle on X11, with no window manager: python-xlib stands in for
