@@ -12,6 +12,14 @@ shows them all:
 cargo run -p widgetsdemo            # or: dark, material, material-dark, contrast, native
 ```
 
+The tab bar, password field and color picker are in `sessionsdemo`, a
+terminal-like app's chrome (with message boxes, see
+[os-integration.md](os-integration.md#message-boxes)):
+
+```sh
+cargo run -p sessionsdemo           # the same theme names
+```
+
 ## Select
 
 A button showing the chosen option. Clicking it opens the list of options
@@ -115,6 +123,94 @@ button_labeled(&theme, "Save").on_tap(cx, move |s: &mut App| {
 bar. At most four toasts show at once, the newest ones. Clicks outside the
 toasts reach the UI underneath.
 
+## Tab bar
+
+A document tab bar, as in a browser, an editor or a terminal. The app keeps
+the tabs; the bar reports what the user does to them.
+
+```rust
+struct App { docs: Vec<Doc>, selected: usize, bar: TabBarState }
+
+let tabs = state.docs.iter().map(|d| {
+    Tab::new(d.id, d.name.clone())          // a stable id per tab
+        .color(d.color)                      // a strip along the top and a tint
+        .indicator(d.bell.then_some(TabIndicator::Bell)) // or Dot, Count(n)
+        .context_menu(Menu::new("").item(MenuItem::new("Close Others", ...)))
+}).collect();
+let bar = TabBar::new("docs", tabs)
+    .selected(state.selected)
+    .on_select(|s: &mut App, i| s.selected = i)
+    .on_close(|s: &mut App, i| { s.docs.remove(i); })
+    .on_reorder(|s: &mut App, from, to| { let d = s.docs.remove(from); s.docs.insert(to, d); })
+    .on_new(|s: &mut App| s.docs.push(Doc::new()));
+tab_bar(cx, &theme, bar, &state.bar, |s: &mut App| &mut s.bar)
+```
+
+- Clicking a tab selects it; its × closes it. Middle-click to close and
+  double-click to rename wait on per-button pointer events.
+- With `on_reorder`, a tab drags (an in-app drag, `DropData::Internal`) onto
+  another to move there; the tabs it passes slide into their new places on a
+  spring.
+- The tabs share the bar's width, between `TAB_MIN_WIDTH` (110) and
+  `TAB_MAX_WIDTH` (220). When they don't fit, the bar shows as many as do,
+  with ‹ › arrows to scroll and a ▾ button listing every tab; a newly selected
+  tab is scrolled into view. The bar measures against the window's width
+  (`Cx::window_size`) unless given `.width(..)`.
+- Focused (Tab), ←/→ select the previous or next tab, Home/End the first or
+  last, and Delete closes the selected one.
+- Tabs fade their hover look in and out (`.hovered` with a `.transition`), as
+  do the × and the bar's buttons, and a dragged tab dims (`.dragged`).
+
+Dragging a tab out into a window of its own, and macOS's native window tabs,
+aren't done.
+
+## Password field
+
+A single-line field that shows a bullet per character.
+
+```rust
+struct App { password: PasswordField }
+let state = App { password: PasswordField::new().with_reveal_button(true) };
+// in the view:
+password_field(cx, &theme, &state.password, |s: &mut App| &mut s.password)
+// read it with state.password.text(); clear() empties it
+```
+
+- Copy and cut do nothing (even revealed); paste works. Its edits keep no undo
+  history, and word motions go to the ends.
+- It takes no input method: the IME is turned off while it has focus (it would
+  see the password, and may learn it), so typing goes straight in.
+- On macOS, secure keyboard entry (`EnableSecureEventInput`) is on while it has
+  focus, so other processes can't read the keystrokes through event taps
+  (`platform::secure_input()` tells). The other platforms have no equivalent
+  an app turns on.
+- `with_reveal_button(true)` adds an eye button that shows the text while on.
+
+## Color picker
+
+`color_picker(cx, &theme, &state.picker, field, on_change)` is an inline
+picker: a saturation/value area for the current hue, a hue strip, an alpha
+strip, a hex field and a row of swatches. `color_button(...)` is a swatch
+button that opens it in a popup below.
+
+```rust
+struct App { tint: ColorPicker, accent: Color }
+let state = App { tint: ColorPicker::new(Color::rgb(0, 0x90, 0xff)), ... };
+color_button(cx, &theme, &state.tint, |s: &mut App| &mut s.tint,
+    |s: &mut App, c| s.accent = c)
+```
+
+The picker keeps the hue, saturation and value apart, so dragging to gray and
+back keeps the hue. The hex field takes `#rgb`, `#rrggbb` and `#rrggbbaa`; the
+color follows as soon as what's typed parses. `ColorPicker::with_alpha(false)`
+drops the alpha strip and `with_swatches` replaces the swatches.
+
+`platform::dialog::pick_color(initial)` opens the platform's color dialog
+instead, where it has one: `ChooseColorW` on Windows (it blocks, like the file
+dialogs). Elsewhere it returns `None`: macOS's `NSColorPanel` is a floating
+panel rather than a dialog, and the desktop portal only picks a color off the
+screen.
+
 ## Themes and the native theme
 
 These widgets read all their colors and metrics from the theme, so they follow
@@ -122,7 +218,9 @@ every built-in theme. Under `Theme::native()` on Windows, macOS and iOS, the OS 
 the select's button bezel (as a regular push button) and the number input's
 field frame. The other parts are drawn by Stipple in the system's colors,
 because the platforms have no matching control that Stipple can draw yet:
-the stepper buttons, the split divider, toolbars and toasts.
+the stepper buttons, the split divider, toolbars, toasts, the tab bar and
+the color picker. The password field's frame is the OS's text field frame
+there.
 
 ## Accessibility
 
@@ -133,9 +231,15 @@ the stepper buttons, the split divider, toolbars and toasts.
 | Split pane divider | `Splitter` | — |
 | Toolbar | `Toolbar`, with buttons and `Separator`s | — |
 | Toast | `Alert`, with a `Dismiss` button | the message |
+| Tab bar | `TabList` of `Tab`s (the current one selected), with buttons | the tab's label |
+| Password field | `PasswordField` | its label ("Password"), never the text |
+| Color picker | `Group`; the button is a `Button`, expanded while open | "Color #rrggbb" |
+| Drawn message box | `Dialog` | its title, or else its message |
 
 Set a role or name on your own elements with `.role(Role::…)` and
 `.a11y_label("…")`. The OS bridges (AT-SPI, UI Automation, NSAccessibility)
 don't have these roles yet, so they report the closest role they do have:
 a button, a text field, or a group. Menus (see [menus.md](menus.md)) report
-`MenuBar`, `Menu` and `MenuItem`, which the bridges do map.
+`MenuBar`, `Menu` and `MenuItem`, which the bridges do map, and tabs map to
+UI Automation's `Tab`/`TabItem`, NSAccessibility's `AXTabGroup`, and ARIA's
+`tablist`/`tab`.

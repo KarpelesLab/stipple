@@ -1147,6 +1147,16 @@ Most input only works on X11 today.
   the Linux call reaches a mock server, and that Windows and macOS accept it; no
   popup is looked at. Clicks and actions on notifications, and iOS and Android,
   are still to do.
+- ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
+  question with a kind (icon), buttons, a default and a cancel button and an
+  optional (secure) text field, answered asynchronously as a state update.
+  `TaskDialogIndirect` (common controls 6 activated through shell32's
+  manifest) or `MessageBoxW` on a thread of its own on Windows, an `NSAlert`
+  sheet with a hand-built completion block on macOS, `UIAlertController` on
+  iOS, `alert`/`confirm` on the web, and a modal panel drawn in the theme on
+  Linux and Android. CI answers the native alert in-process on Windows and
+  macOS and drives the drawn one on X11. `dialog::pick_color` opens
+  `ChooseColorW` on Windows. See [docs/os-integration.md](docs/os-integration.md#message-boxes).
 - ✅ Tray icons: a declarative `Tray` (`App::tray`, rebuilt from the state)
   with a tooltip, an icon, a menu from the menu model and a click action;
   `Shell_NotifyIconW` with a popup `HMENU` on Windows, an `NSStatusItem` with an
@@ -1166,6 +1176,17 @@ Most input only works on X11 today.
 - ✅ Select / dropdown, number input, split pane, toolbar and toasts, with
   keyboard control and accessibility roles; see [docs/widgets.md](docs/widgets.md)
   and `examples/widgetsdemo`.
+- ✅ Document tab bar (`tab_bar`): closable tabs, drag to reorder (in-app
+  drags, with the shifted tabs springing into place), per-tab color and
+  indicator (dot, bell, count), a context menu per tab, a new-tab button,
+  scroll arrows and a list of every tab past what fits, keyboard navigation
+  and `TabList`/`Tab` roles, animated with state overrides and transitions.
+  Middle-click close, double-click rename and dragging a tab out into a window
+  are still to do. Password field (`password_field`: masked, no copy or cut,
+  no undo history, IME off, `EnableSecureEventInput` on macOS, a reveal
+  button, the `PasswordField` role) and color picker (`color_picker` /
+  `color_button`: HSV area, hue and alpha strips, hex field, swatches).
+  `examples/sessionsdemo` + `visual-sessions` CI.
 - ✅ Table, tree and data grid: `table(...)` with sortable headers (▲/▼),
   drag-to-resize columns, single/multi row selection (Shift/Ctrl+click,
   Shift+arrows) and striped rows; `tree(...)` with disclosure triangles,

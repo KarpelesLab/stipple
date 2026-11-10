@@ -64,6 +64,15 @@ pub enum A11yRole {
     Separator,
     /// A transient notification.
     Alert,
+    /// A row of document tabs.
+    TabList,
+    /// One tab of a tab list ([`A11yNode::selected`] says whether it is the
+    /// current one).
+    Tab,
+    /// A text field whose text is hidden.
+    PasswordField,
+    /// A modal dialog.
+    Dialog,
 }
 
 /// A node in the platform-neutral accessibility tree.
@@ -133,6 +142,11 @@ pub(crate) fn aria_role(role: A11yRole) -> &'static str {
         A11yRole::Splitter | A11yRole::Separator => "separator",
         A11yRole::Toolbar => "toolbar",
         A11yRole::Alert => "alert",
+        A11yRole::TabList => "tablist",
+        A11yRole::Tab => "tab",
+        // ARIA has no password role; the overlay's textbox stands for it.
+        A11yRole::PasswordField => "textbox",
+        A11yRole::Dialog => "alertdialog",
     }
 }
 

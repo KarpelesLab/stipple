@@ -1,4 +1,5 @@
-//! Native file dialogs.
+//! Native file dialogs, and message boxes (see [`message`] and
+//! [`AppHandle::message`](crate::core::AppHandle::message)).
 //!
 //! A tiny platform-neutral surface — [`open_file`], [`save_file`],
 //! [`pick_folder`] — backed by each OS's own dialog so apps get the system file
@@ -45,6 +46,13 @@
 //! [`FileDialog::file_name`]: crate::platform::dialog::FileDialog::file_name
 
 use std::path::PathBuf;
+
+mod message;
+pub use message::{
+    MessageBox, MessageDone, MessageInput, MessageKind, MessageResponse, message,
+    press_native_button,
+};
+pub(crate) use message::{native_allowed, set_event_loop_running};
 
 /// How a file dialog should be presented.
 #[derive(Clone, Debug, Default)]
@@ -180,6 +188,28 @@ pub fn save_file(opts: &FileDialog) -> Option<PathBuf> {
 pub fn pick_folder(opts: &FileDialog) -> Option<PathBuf> {
     let title = title_or(opts, "Select Folder");
     backend::file_chooser(Op::Folder, &title)
+}
+
+/// Let the user pick a color in the platform's color dialog, starting from
+/// `initial`; `None` if they cancelled or there's no dialog. Blocks until the
+/// dialog closes, like [`open_file`].
+///
+/// Only Windows has one (`ChooseColorW`, which keeps `initial`'s alpha);
+/// elsewhere this returns `None` at once: use the drawn
+/// [`color_picker`](crate::widgets::color_picker) or
+/// [`color_button`](crate::widgets::color_button), which work everywhere.
+/// (macOS's `NSColorPanel` is a floating panel rather than a dialog, and the
+/// desktop portal only picks a color off the screen.)
+pub fn pick_color(initial: crate::render::Color) -> Option<crate::render::Color> {
+    #[cfg(target_os = "windows")]
+    {
+        backend::pick_color(initial)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = initial;
+        None
+    }
 }
 
 fn title_or(opts: &FileDialog, default: &str) -> String {

@@ -1,0 +1,16 @@
+[package]
+name = "sessionsdemo"
+description = "Stipple example: a document tab bar, a password field, a color picker and message boxes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true

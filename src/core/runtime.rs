@@ -16,7 +16,7 @@
 use crate::core::a11y::Semantics;
 use crate::core::element::{Align, BoxStyle, Element};
 use crate::core::handle::AppHandle;
-use crate::geometry::{Affine, Point, Rect};
+use crate::geometry::{Affine, Point, Rect, Size};
 use crate::platform::{CursorIcon, DragOffer, DropData};
 use crate::render::Color;
 use crate::style::Theme;
@@ -375,6 +375,8 @@ pub struct Cx<'a, S> {
     /// whether it has keyboard focus. See [`Cx::window_focused`].
     window_id: Option<crate::platform::WindowId>,
     window_focused: bool,
+    /// The window's size in logical pixels; zero when unknown.
+    window_size: Size,
 }
 
 /// Per-build animation bookkeeping for a [`Cx`].
@@ -421,6 +423,7 @@ impl<'a, S> Cx<'a, S> {
             },
             window_id: None,
             window_focused: true,
+            window_size: Size::new(0.0, 0.0),
         }
     }
 
@@ -446,6 +449,22 @@ impl<'a, S> Cx<'a, S> {
     pub(crate) fn set_window(&mut self, id: Option<crate::platform::WindowId>, focused: bool) {
         self.window_id = id;
         self.window_focused = focused;
+    }
+
+    /// The size of the window being built for, in logical pixels: what a
+    /// widget that fits itself to the window (a [`tab_bar`] deciding how many
+    /// tabs fit) measures against. Zero outside a running app, until
+    /// [`set_window_size`](Self::set_window_size).
+    ///
+    /// [`tab_bar`]: crate::widgets::tab_bar
+    pub fn window_size(&self) -> Size {
+        self.window_size
+    }
+
+    /// Set what [`window_size`](Self::window_size) reports (the app does
+    /// this before each build).
+    pub fn set_window_size(&mut self, size: Size) {
+        self.window_size = size;
     }
 
     /// The time of the frame being built, on the app's animation timeline (it

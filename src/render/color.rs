@@ -36,6 +36,10 @@ impl Color {
     /// optional). Returns `None` on any malformed input.
     pub fn from_hex(s: &str) -> Option<Self> {
         let s = s.strip_prefix('#').unwrap_or(s);
+        // Hex digits are ASCII; anything else would also split a character.
+        if !s.is_ascii() {
+            return None;
+        }
         let h = |i: usize| u8::from_str_radix(&s[i..i + 2], 16).ok();
         let n = |i: usize| u8::from_str_radix(&s[i..i + 1], 16).ok().map(|v| v * 17);
         match s.len() {
@@ -45,6 +49,61 @@ impl Color {
             8 => Some(Self::rgba(h(0)?, h(2)?, h(4)?, h(6)?)),
             _ => None,
         }
+    }
+
+    /// `#rrggbb`, or `#rrggbbaa` when not opaque: what
+    /// [`from_hex`](Self::from_hex) reads back.
+    pub fn to_hex(self) -> String {
+        if self.a == 255 {
+            format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+        } else {
+            format!("#{:02x}{:02x}{:02x}{:02x}", self.r, self.g, self.b, self.a)
+        }
+    }
+
+    /// A color from hue (degrees, wrapped into 0..360), saturation and value
+    /// (each 0..=1), and alpha.
+    pub fn from_hsv(hue: f64, saturation: f64, value: f64, alpha: u8) -> Self {
+        let h = hue.rem_euclid(360.0) / 60.0;
+        let s = saturation.clamp(0.0, 1.0);
+        let v = value.clamp(0.0, 1.0);
+        let c = v * s;
+        let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+        let (r, g, b) = match h as u32 {
+            0 => (c, x, 0.0),
+            1 => (x, c, 0.0),
+            2 => (0.0, c, x),
+            3 => (0.0, x, c),
+            4 => (x, 0.0, c),
+            _ => (c, 0.0, x),
+        };
+        let m = v - c;
+        let to = |f: f64| ((f + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+        Self::rgba(to(r), to(g), to(b), alpha)
+    }
+
+    /// Hue (degrees, 0..360), saturation and value (each 0..=1). A gray has
+    /// hue 0, and black saturation 0.
+    pub fn to_hsv(self) -> (f64, f64, f64) {
+        let (r, g, b) = (
+            self.r as f64 / 255.0,
+            self.g as f64 / 255.0,
+            self.b as f64 / 255.0,
+        );
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let d = max - min;
+        let h = if d == 0.0 {
+            0.0
+        } else if max == r {
+            60.0 * ((g - b) / d).rem_euclid(6.0)
+        } else if max == g {
+            60.0 * ((b - r) / d + 2.0)
+        } else {
+            60.0 * ((r - g) / d + 4.0)
+        };
+        let s = if max == 0.0 { 0.0 } else { d / max };
+        (h, s, max)
     }
 
     /// Returns a copy with the alpha channel replaced.
@@ -125,6 +184,35 @@ mod tests {
         assert_eq!(Color::from_hex("#abc"), Some(Color::rgb(0xaa, 0xbb, 0xcc)));
         assert_eq!(Color::from_hex("zzz"), None);
         assert_eq!(Color::from_hex("#12345"), None);
+        // Non-ASCII is refused rather than split mid-character.
+        assert_eq!(Color::from_hex("#ééé"), None);
+        assert_eq!(Color::rgb(1, 0x22, 0xff).to_hex(), "#0122ff");
+        let c = Color::rgba(0x12, 0x34, 0x56, 0x78);
+        assert_eq!(Color::from_hex(&c.to_hex()), Some(c));
+    }
+
+    #[test]
+    fn hsv_round_trips() {
+        assert_eq!(Color::from_hsv(0.0, 1.0, 1.0, 255), Color::rgb(255, 0, 0));
+        assert_eq!(Color::from_hsv(120.0, 1.0, 1.0, 255), Color::rgb(0, 255, 0));
+        assert_eq!(
+            Color::from_hsv(600.0, 1.0, 1.0, 9),
+            Color::rgba(0, 0, 255, 9)
+        );
+        assert_eq!(
+            Color::from_hsv(42.0, 0.0, 0.5, 255),
+            Color::rgb(128, 128, 128)
+        );
+        for c in [
+            Color::rgb(0x33, 0x99, 0xcc),
+            Color::rgb(250, 10, 128),
+            Color::rgb(0, 0, 0),
+            Color::rgb(255, 255, 255),
+            Color::rgb(12, 200, 13),
+        ] {
+            let (h, s, v) = c.to_hsv();
+            assert_eq!(Color::from_hsv(h, s, v, 255), c);
+        }
     }
 
     #[test]

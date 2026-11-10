@@ -342,6 +342,13 @@ struct Pane<S> {
     // What the window's input method was last told (`None`: disabled), so
     // `Window::set_ime` is only called on a change.
     ime_sent: Option<crate::platform::ImeState>,
+    // Whether secure keyboard entry was last turned on for a focused password
+    // field.
+    secure_sent: bool,
+    // The primary window: where drawn message boxes show.
+    primary: bool,
+    // While a drawn message box is up, the focus to give back when it goes.
+    alert_return: Option<Option<FocusId>>,
     // The element showing input-method composition text, so it can be told to
     // drop it when focus moves away mid-composition.
     preedit_owner: Option<FocusId>,
@@ -423,6 +430,9 @@ impl<S: 'static> Pane<S> {
             crossfade: Default::default(),
             painted_focused: None,
             ime_sent: None,
+            secure_sent: false,
+            primary: false,
+            alert_return: None,
             preedit_owner: None,
             option_sent: Default::default(),
             memo_cache: std::collections::HashMap::new(),
@@ -464,7 +474,11 @@ impl<S: 'static> App<S> {
             base_theme: Theme::light(),
             theme_fn: None,
             font: None,
-            panes: vec![Pane::new(Box::new(build), handle.clone())],
+            panes: vec![{
+                let mut pane = Pane::new(Box::new(build), handle.clone());
+                pane.primary = true;
+                pane
+            }],
             viewport_content: HashMap::new(),
             viewport_input: None,
             handle,
@@ -905,6 +919,7 @@ impl<S: 'static> Pane<S> {
     fn build_frame(&mut self, state: &S, theme: &Theme, font: Option<&Font>) -> Scene {
         let theme = *theme; // Theme is Copy; avoids borrowing through `theme` in `cx`.
         let mut cx = Cx::with_handle(&theme, self.handle.clone());
+        cx.set_window_size(self.attrs.logical_size);
         cx.set_memo_cache(std::mem::take(&mut self.memo_cache));
         cx.set_window(self.window_id, self.window_focused);
         for (id, offset) in self.scroll_requests.take() {
@@ -938,6 +953,12 @@ impl<S: 'static> Pane<S> {
         }
         self.context_menus = cx.take_context_menus();
         crate::widgets::menus::context(&mut cx, &theme, &self.context_menus, &self.menu_ui);
+        // A message box drawn in the window, over everything else.
+        let alert_focus = if self.primary {
+            crate::widgets::alert::overlay(&mut cx, &theme, &self.handle)
+        } else {
+            None
+        };
         // The animation timeline, or `None` where there's no clock.
         let now = crate::platform::frame::now().map(|_| cx.frame_time());
         let frame_requested = cx.frame_requested();
@@ -956,6 +977,20 @@ impl<S: 'static> Pane<S> {
         self.dnd.queried = cx.take_drop_queried();
         let queried = cx.take_interaction_queried();
         self.handlers = cx.into_handlers();
+        // Focus goes into a drawn message box while it's up, and back after.
+        match alert_focus {
+            Some((first, target)) => {
+                if !self.focused.is_some_and(|f| f.0 >= first.0) {
+                    self.alert_return.get_or_insert(self.focused);
+                    self.focused = Some(target);
+                }
+            }
+            None => {
+                if let Some(back) = self.alert_return.take() {
+                    self.focused = back;
+                }
+            }
+        }
 
         // Lower the tree: give elements their identities, apply the overrides
         // of the states they're in, and animate what changed.
@@ -1710,6 +1745,16 @@ impl<S: 'static> Pane<S> {
             window.set_ime(ime.as_ref());
             self.ime_sent = ime;
         }
+        // Secure keyboard entry (macOS) while a password field has focus.
+        let secure = self.input_viewport.is_none()
+            && self
+                .tree
+                .as_ref()
+                .is_some_and(|t| crate::core::secure_focused(t, self.focused));
+        if secure != self.secure_sent {
+            crate::platform::set_secure_input(secure);
+            self.secure_sent = secure;
+        }
     }
 
     /// Move focus to the next focusable element in tree order (wrapping),
@@ -2138,6 +2183,21 @@ impl<S: 'static> App<S> {
         changed
     }
 
+    /// Run what's queued on the app's [`AppHandle`] (updates, due timers,
+    /// message boxes asked for), as the event loop does when woken. Returns
+    /// whether anything ran. For tests, which have no loop.
+    pub fn run_pending(&mut self) -> bool {
+        let (ran, _) = self
+            .handle
+            .pump(&mut self.state, crate::platform::time::Instant::now());
+        if ran {
+            for pane in &mut self.panes {
+                pane.dirty = true;
+            }
+        }
+        ran
+    }
+
     /// Advance a touch fling in the primary window by one frame (the loop does
     /// this on every frame while one runs). Returns whether it scrolled.
     pub fn advance_fling(&mut self) -> bool {
@@ -2490,6 +2550,10 @@ impl<S: 'static> App<S> {
                 Role::Toolbar => A11yRole::Toolbar,
                 Role::Separator => A11yRole::Separator,
                 Role::Alert => A11yRole::Alert,
+                Role::TabList => A11yRole::TabList,
+                Role::Tab => A11yRole::Tab,
+                Role::PasswordField => A11yRole::PasswordField,
+                Role::Dialog => A11yRole::Dialog,
             };
             crate::platform::A11yNode {
                 role,
@@ -2602,7 +2666,10 @@ impl<S: 'static> App<S> {
                         fn typing(node: &crate::core::AccessNode) -> bool {
                             use crate::core::Role;
                             (node.focused
-                                && matches!(node.role, Role::TextField | Role::SpinButton))
+                                && matches!(
+                                    node.role,
+                                    Role::TextField | Role::SpinButton | Role::PasswordField
+                                ))
                                 || node.children.iter().any(typing)
                         }
                         window.set_text_input_active(typing(&tree));
@@ -2623,6 +2690,8 @@ impl<S: 'static> App<S> {
             );
         };
 
+        // Native message boxes can show from now on.
+        crate::platform::dialog::set_event_loop_running(true);
         backend::run(primary_attrs, move |event, window| {
             let wid = window.id();
             // On the first event we learn the primary window's id; register it
@@ -3485,6 +3554,7 @@ pub mod prelude {
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::platform::Notification;
     pub use crate::platform::PointerButton;
+    pub use crate::platform::dialog::{MessageBox, MessageKind, MessageResponse};
     pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
     pub use crate::platform::{KeyEvent, OptionAsMeta, PhysicalKey};
@@ -3494,6 +3564,10 @@ pub mod prelude {
     pub use crate::render::{Decoration, FontStyle, FontWeight, UnderlineStyle};
     pub use crate::style::Theme;
     pub use crate::style::{Palette, Spacing, Typography};
+    pub use crate::widgets::{
+        ColorPicker, PasswordField, Tab, TabBar, TabBarState, TabIndicator, color_button,
+        color_picker, password_field, tab_bar,
+    };
     pub use crate::widgets::{
         Column, ListState, SelectionMode, SortOrder, TableSpec, TableState, TreeModel, TreeSpec,
         TreeState, VirtualList, table, tree, virtual_list,

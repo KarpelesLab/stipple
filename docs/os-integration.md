@@ -1,7 +1,8 @@
-# Tray icons, notifications and opening URLs
+# Tray icons, notifications, message boxes and opening URLs
 
-Three ways an app reaches past its window: a tray icon with a menu, desktop
-notifications, and handing a URL or file to the app the user picked for it.
+Four ways an app reaches past its window: a tray icon with a menu, desktop
+notifications, message boxes, and handing a URL or file to the app the user
+picked for it.
 The `traydemo` example shows all three:
 
 ```sh
@@ -68,6 +69,53 @@ executable; a toast with buttons or images would need the WinRT toast APIs and
 an AppUserModelID, which Stipple doesn't use.
 
 Clicking a notification does nothing yet, and there are no actions or icons.
+
+## Message boxes
+
+Ask the user something, and get the answer without blocking the event loop:
+
+```rust
+use stipple::platform::dialog::{MessageBox, MessageKind};
+
+handle.message(
+    MessageBox::new("Close this tab?")
+        .detail("A process is still running in it.")
+        .kind(MessageKind::Question)      // Info, Warning, Error, Question: the icon
+        .buttons(["Close", "Cancel"])     // in reading order; none means "OK"
+        .cancel(1),                       // Escape; .default_button(i) is Enter
+    |s: &mut State, r| {
+        if r.button == Some(0) { s.close_tab(); }
+    },
+);
+```
+
+`AppHandle::message` can be called from any thread. The answer runs on the UI
+thread as a state update, like `AppHandle::update`, with a `MessageResponse`:
+the button pressed (Escape counts as the cancel button) and, for a box with a
+text field (`.input(value, secure)`), what was typed. A worker thread that must
+wait for the answer (an SSH host-key prompt) sends it back over a channel from
+the closure and waits on that, not on the UI. Boxes asked for while one is up
+wait their turn.
+
+| | How |
+|---|---|
+| Windows | `TaskDialogIndirect`, with common controls 6 activated for the call (an executable without a manifest gets version 5, which has no task dialog; shell32's manifest resource asks for 6), else `MessageBoxW` when the buttons are a standard set (OK, OK/Cancel, Yes/No, Yes/No/Cancel, Retry/Cancel, Abort/Retry/Ignore). It runs on a thread of its own, owned by the active window, which it disables while it's up |
+| macOS | `NSAlert` as a sheet on the app's window, its completion handler a block built by hand; a text field is the alert's accessory view (`NSSecureTextField` when secure). With no window, `runModal`, which does block |
+| iOS | `UIAlertController`, presented from the key window's root view controller; the cancel button gets the cancel style |
+| Web | `window.alert` for one button and `window.confirm` for two; they block the page, as browsers do. More buttons are drawn |
+| Linux, Android | drawn in the window (no toolkit-free alert API exists on Linux, and the desktop portal has none; Android's `AlertDialog` needs a Java listener class) |
+
+A box drawn in the window is a panel in the theme over a scrim, in the primary
+window: an icon for its kind, the message and detail, the text field, and the
+buttons, the default one filled. The default button (or the text field) takes
+focus while it's up, and focus goes back after; Enter presses the default
+button and Escape the cancel one. Clicks outside it do nothing. It's a `Dialog`
+to assistive technologies. `.drawn(true)` draws a box even where there's a
+native alert (`STIPPLE_DRAWN_DIALOGS=1` does it for every box), and a box with
+a text field is drawn everywhere but macOS and iOS.
+
+`platform::dialog::message(&mb, done)` is the platform half on its own: it
+shows the native alert and returns `Err(done)` where there isn't one.
 
 ## The tray icon
 
@@ -146,3 +194,21 @@ the last update was shown.
 No real tray host or notification popup is looked at, and nothing clicks the
 real icons on Windows or macOS: there, the menus and click handling are
 build-checked, along with the iOS, Android and web paths.
+
+For message boxes, `sessionsdemo --alert-selftest` asks a three-button
+question as soon as it starts and presses the second button itself after
+`STIPPLE_ALERT_HOLD_MS` (through `dialog::press_native_button`:
+`TDM_CLICK_BUTTON` on the task dialog, `performClick:` on the `NSAlert`'s
+button), then prints the answer:
+
+- **Windows**: the task dialog must answer button 101 and the app get
+  `Some(1)`; PowerShell screenshots the dialog (`#32770`) while it's up.
+- **macOS**: the alert must come up as a sheet and answer 1001; the screen is
+  captured while it's up.
+- **Linux (X11)**: the drawn box is screenshotted (dark theme) and dismissed
+  with Escape by `xdotool`; the app must get the cancel button. The
+  `visual-sessions` job also closes a busy tab (a box asks first), cancels it,
+  and opens the color picker and types a password, comparing screenshots.
+
+Real key presses on the native alerts aren't sent (the self-test clicks
+programmatically), and the iOS and web alerts are build-checked only.

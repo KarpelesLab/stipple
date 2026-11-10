@@ -69,6 +69,7 @@ mod js {
         pub fn set_text_input(active: u32);
         pub fn open_url(ptr: *const u8, len: usize);
         pub fn notify(title: *const u8, title_len: usize, body: *const u8, body_len: usize);
+        pub fn message_box(confirm: u32, ptr: *const u8, len: usize) -> u32;
     }
 }
 
@@ -106,6 +107,12 @@ pub(crate) fn clipboard_read_html() -> Option<String> {
 /// Show the browser's file picker for request `id`, filtered by `accept`.
 pub(crate) fn open_file(id: u32, accept: &str) {
     unsafe { js::open_file(id, accept.as_ptr(), accept.len()) }
+}
+
+/// `window.confirm(text)` (whether OK was pressed) when `confirm`, else
+/// `window.alert(text)` (`true`).
+pub(crate) fn message_box(confirm: bool, text: &str) -> bool {
+    unsafe { js::message_box(u32::from(confirm), text.as_ptr(), text.len()) != 0 }
 }
 
 /// Offer `data` as a download named `name`.

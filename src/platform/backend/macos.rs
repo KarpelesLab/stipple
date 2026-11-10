@@ -742,6 +742,11 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
         ComboBox | CheckBox | Switch => "AXButton",
         SpinButton => "AXTextField",
         Splitter | Toolbar | Separator | Alert => "AXGroup",
+        TabList => "AXTabGroup",
+        Tab => "AXRadioButton",
+        // `AXTextField` with the `AXSecureTextField` subrole, in AppKit.
+        PasswordField => "AXTextField",
+        Dialog => "AXGroup",
     }
 }
 

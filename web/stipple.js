@@ -341,6 +341,12 @@ export async function start(canvas, wasmUrl, options = {}) {
       },
       open_url(ptr, len) { openUrl(str(ptr, len)); },
       notify(tp, tl, bp, bl) { notify(str(tp, tl), str(bp, bl)); },
+      message_box(confirm, ptr, len) {
+        const text = str(ptr, len);
+        if (confirm) return window.confirm(text) ? 1 : 0;
+        window.alert(text);
+        return 1;
+      },
     },
   };
 

@@ -80,6 +80,18 @@ pub enum Role {
     /// One command of a [`Menu`](Role::Menu), or a title in a
     /// [`MenuBar`](Role::MenuBar).
     MenuItem,
+    /// A row of document tabs (a [`tab_bar`](crate::widgets::tab_bar)) holding
+    /// [`Tab`](Role::Tab)s.
+    TabList,
+    /// One tab of a [`TabList`](Role::TabList); the selected one is
+    /// [`selected`](Semantics::selected).
+    Tab,
+    /// A text field whose text is hidden (a
+    /// [`password_field`](crate::widgets::password_field)). Its name never
+    /// carries the text.
+    PasswordField,
+    /// A modal dialog asking the user something (a drawn message box).
+    Dialog,
 }
 
 impl Role {
@@ -98,6 +110,8 @@ impl Role {
                 | Role::Alert
                 | Role::MenuBar
                 | Role::Menu
+                | Role::TabList
+                | Role::Dialog
         )
     }
 }

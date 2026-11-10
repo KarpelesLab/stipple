@@ -62,6 +62,8 @@ How to build, package and run on each platform, and what works there today.
 | Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
+| Message boxes | drawn ⁴⁴ | native ⁴⁴ | native ⁴⁴ | native ³ | drawn ⁴⁴ | native ¹⁰ |
+| Secure password entry | IME off | IME off | `EnableSecureEventInput` ¹⁰ | IME off | IME off | IME off |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -236,6 +238,13 @@ The order keys go through the App is unit-tested. See
 ⁴³ The App part (which element the IME follows, and its caret rectangle) is
 unit-tested; from there it is the text fields' IME path (see ¹⁶). See
 [ime.md](ime.md#elements-that-arent-text-fields).
+⁴⁴ `AppHandle::message` answers asynchronously everywhere: `TaskDialogIndirect`
+(or `MessageBoxW`) on a thread of its own on Windows, an `NSAlert` sheet on
+macOS, `UIAlertController` on iOS, `alert`/`confirm` on the web, and a modal
+panel drawn in the window in the theme on Linux and Android. CI answers the
+native one with an in-process self-test on Windows and macOS (screenshotting
+it), and drives the drawn one with `xdotool` on X11. See
+[os-integration.md](os-integration.md#message-boxes).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -244,7 +253,8 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 
 - [Layout](layout.md): stacks, wrapping, grids, and min/max sizes
 - [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
-- [Widgets](widgets.md): select, number input, split pane, toolbar and toasts
+- [Widgets](widgets.md): select, number input, split pane, toolbar, toasts, tab bar,
+  password field and color picker
 - [Menus](menus.md): the menu bar, shortcuts and context menus
 - [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
 - [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, in-app drags, and dragging files and text out to other apps

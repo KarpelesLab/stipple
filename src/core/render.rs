@@ -613,7 +613,9 @@ fn paint_focus_node(
         .is_none_or(|r| {
             matches!(
                 r,
-                crate::core::a11y::Role::TextField | crate::core::a11y::Role::SpinButton
+                crate::core::a11y::Role::TextField
+                    | crate::core::a11y::Role::SpinButton
+                    | crate::core::a11y::Role::PasswordField
             )
         });
     if node.action.is_some() || !entry {

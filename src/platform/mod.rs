@@ -55,6 +55,8 @@ pub mod sandbox;
 /// DRI3/Present GPU buffers and the browser content-process IPC.
 #[cfg(target_os = "linux")]
 pub mod scm;
+/// Secure keyboard entry (macOS) while a password field has focus.
+mod secure;
 /// Opening URLs and files in the default app, notifications, and the plumbing
 /// behind tray icons.
 pub mod shell;
@@ -85,6 +87,7 @@ pub use menu::{
 pub use pointer::{
     DoubleClick, double_click, pointer_modifiers, set_double_click, set_pointer_modifiers,
 };
+pub use secure::{secure_input, set_secure_input};
 pub use shell::{Notification, notify, open_path, open_url};
 pub use window::{CursorIcon, ImeState, UserAttention, Window, WindowAttributes, WindowRequest};
 #[cfg_attr(

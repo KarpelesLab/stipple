@@ -15,20 +15,31 @@
 
 #![forbid(unsafe_code)]
 
+pub(crate) mod alert;
+#[cfg(test)]
+mod alert_tests;
+mod color_picker;
 pub(crate) mod menus;
 #[cfg(test)]
 mod menus_tests;
 mod number;
+mod password;
 mod preedit;
 mod select;
 mod split;
+mod tab_bar;
+#[cfg(test)]
+mod tab_bar_tests;
 mod toast;
 mod toolbar;
 
+pub use color_picker::{ColorPicker, color_button, color_picker};
 pub use number::{NumberInput, number_input};
+pub use password::{PasswordField, password_field};
 pub use preedit::DisplayText;
 pub use select::{Select, select};
 pub use split::{SplitPane, split_pane};
+pub use tab_bar::{TAB_MAX_WIDTH, TAB_MIN_WIDTH, Tab, TabBar, TabBarState, TabIndicator, tab_bar};
 pub use toast::{Toast, ToastId, ToastKind, Toasts, toasts};
 pub use toolbar::{tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar};
 

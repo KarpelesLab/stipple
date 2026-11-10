@@ -49,6 +49,8 @@ const UIA_HeaderItemControlTypeId: i32 = 50035;
 const UIA_MenuControlTypeId: i32 = 50009;
 const UIA_MenuBarControlTypeId: i32 = 50010;
 const UIA_MenuItemControlTypeId: i32 = 50011;
+const UIA_TabControlTypeId: i32 = 50018;
+const UIA_TabItemControlTypeId: i32 = 50019;
 
 // NavigateDirection.
 const NavigateDirection_Parent: i32 = 0;
@@ -184,6 +186,11 @@ fn control_type(role: A11yRole) -> i32 {
         A11yRole::Splitter | A11yRole::Toolbar | A11yRole::Separator | A11yRole::Alert => {
             UIA_GroupControlTypeId
         }
+        A11yRole::TabList => UIA_TabControlTypeId,
+        A11yRole::Tab => UIA_TabItemControlTypeId,
+        // UIA marks a password edit with `IsPassword`, not a control type.
+        A11yRole::PasswordField => UIA_EditControlTypeId,
+        A11yRole::Dialog => UIA_WindowControlTypeId,
     }
 }
 

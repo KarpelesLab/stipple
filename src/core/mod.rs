@@ -64,8 +64,9 @@ pub use dnd::{DROP_FADE, DropState};
 pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverride, TextStyle};
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use handle::runtime;
+pub(crate) use handle::{AlertInput, AlertView};
 pub use handle::{AppHandle, TimerId};
-pub use ime::{ime_state, paint_preedit};
+pub use ime::{ime_state, paint_preedit, secure_focused};
 pub use interact::{ElementKey, Interaction, Reactive};
 pub use keys::{Handled, KeyConfig, RawKeyId};
 pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};

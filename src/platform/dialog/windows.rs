@@ -245,3 +245,55 @@ pub(super) fn file_chooser(op: Op, title: &str) -> Option<PathBuf> {
         Some(PathBuf::from(path))
     }
 }
+
+/// `CHOOSECOLORW` (natural alignment on 64-bit, as commdlg.h packs it).
+#[repr(C)]
+struct ChooseColorW {
+    size: u32,
+    owner: *mut c_void,
+    instance: *mut c_void,
+    result: u32,
+    custom: *mut u32,
+    flags: u32,
+    data: isize,
+    hook: *const c_void,
+    template: *const u16,
+}
+
+const CC_RGBINIT: u32 = 0x1;
+const CC_FULLOPEN: u32 = 0x2;
+
+#[link(name = "comdlg32")]
+unsafe extern "system" {
+    fn ChooseColorW(cc: *mut ChooseColorW) -> i32;
+}
+
+/// The common color dialog (`ChooseColorW`), modal to the active window.
+pub(super) fn pick_color(initial: crate::render::Color) -> Option<crate::render::Color> {
+    // The dialog's sixteen custom colors, kept for the process like
+    // Windows apps do.
+    static CUSTOM: std::sync::Mutex<[u32; 16]> = std::sync::Mutex::new([0x00ff_ffff; 16]);
+    let mut custom = CUSTOM.lock().unwrap_or_else(|e| e.into_inner());
+    let rgb = |c: crate::render::Color| u32::from(c.r) | u32::from(c.g) << 8 | u32::from(c.b) << 16;
+    let mut cc = ChooseColorW {
+        size: std::mem::size_of::<ChooseColorW>() as u32,
+        owner: unsafe { GetActiveWindow() },
+        instance: std::ptr::null_mut(),
+        result: rgb(initial),
+        custom: custom.as_mut_ptr(),
+        flags: CC_RGBINIT | CC_FULLOPEN,
+        data: 0,
+        hook: std::ptr::null(),
+        template: std::ptr::null(),
+    };
+    if unsafe { ChooseColorW(&mut cc) } == 0 {
+        return None;
+    }
+    let r = cc.result;
+    Some(crate::render::Color::rgba(
+        (r & 0xff) as u8,
+        ((r >> 8) & 0xff) as u8,
+        ((r >> 16) & 0xff) as u8,
+        initial.a,
+    ))
+}

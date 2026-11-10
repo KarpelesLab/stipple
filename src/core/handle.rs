@@ -13,6 +13,62 @@ use crate::render::Pixmap;
 
 type Update<S> = Box<dyn FnOnce(&mut S) + Send>;
 type Tick<S> = Box<dyn FnMut(&mut S) + Send>;
+/// What a message box's answer does to the state.
+pub(crate) type Answer<S> = Box<dyn FnOnce(&mut S, MessageResponse) + Send>;
+
+use crate::platform::dialog::{MessageBox, MessageResponse};
+use crate::widgets::{EditBuffer, PasswordField};
+
+/// A message box asked for, not shown yet.
+struct Asked<S> {
+    mb: MessageBox,
+    answer: Answer<S>,
+}
+
+/// The text field of a drawn message box.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AlertInput {
+    Plain(EditBuffer),
+    Secure(PasswordField),
+}
+
+impl AlertInput {
+    fn new(input: &crate::platform::dialog::MessageInput) -> Self {
+        if input.secure {
+            let mut p = PasswordField::new().with_reveal_button(true);
+            p.set_text(input.value.clone());
+            AlertInput::Secure(p)
+        } else {
+            let mut b = EditBuffer::from_text(input.value.clone());
+            b.select_all();
+            AlertInput::Plain(b)
+        }
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            AlertInput::Plain(b) => b.text(),
+            AlertInput::Secure(p) => p.text(),
+        }
+    }
+}
+
+/// A message box drawn in the window (where there's no native alert), up
+/// until answered.
+struct Drawn<S> {
+    id: u64,
+    mb: MessageBox,
+    input: Option<AlertInput>,
+    answer: Answer<S>,
+}
+
+/// What the view needs to draw the first drawn message box.
+#[derive(Clone, Debug)]
+pub(crate) struct AlertView {
+    pub id: u64,
+    pub mb: MessageBox,
+    pub input: Option<AlertInput>,
+}
 
 /// Identifies a timer, to [`cancel`](AppHandle::cancel) it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -40,6 +96,9 @@ struct Shared<S> {
     /// Viewport content queued by [`AppHandle::set_viewport_content`]
     /// (`None` clears it).
     viewports: Vec<(ViewportId, Option<Pixmap>)>,
+    /// Message boxes asked for, and those drawn in the window.
+    asked: Vec<Asked<S>>,
+    drawn: Vec<Drawn<S>>,
 }
 
 /// A handle to a running app, for changing its state from outside a widget
@@ -101,6 +160,8 @@ impl<S> AppHandle<S> {
                 close: Vec::new(),
                 canvases: Vec::new(),
                 viewports: Vec::new(),
+                asked: Vec::new(),
+                drawn: Vec::new(),
             })),
         }
     }
@@ -306,6 +367,141 @@ impl<S> AppHandle<S> {
         self.with(|s| std::mem::take(&mut s.viewports))
     }
 
+    /// Ask the user something with a message box, and apply the answer to
+    /// the state: `answer` runs on the UI thread with the
+    /// [`MessageResponse`] once the user presses a button, then the app
+    /// re-renders. Callable from any thread; nothing blocks.
+    ///
+    /// Where the platform has an alert (Windows, macOS, iOS, the web; see
+    /// [`dialog::message`](crate::platform::dialog::message)) it shows that.
+    /// Elsewhere (Linux, Android), or for a box marked
+    /// [`drawn`](MessageBox::drawn), it's drawn in the primary window in the
+    /// theme: a modal panel over a scrim, with the default button focused
+    /// (Enter presses it, Escape the cancel button). Boxes asked for while
+    /// one is up wait their turn.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// use stipple::platform::dialog::{MessageBox, MessageKind};
+    /// # struct State { tabs: Vec<String> }
+    /// # fn f(handle: AppHandle<State>) {
+    /// handle.message(
+    ///     MessageBox::new("Close this tab?")
+    ///         .detail("A process is still running in it.")
+    ///         .kind(MessageKind::Question)
+    ///         .buttons(["Close", "Cancel"])
+    ///         .cancel(1),
+    ///     |s: &mut State, r| {
+    ///         if r.button == Some(0) {
+    ///             s.tabs.pop();
+    ///         }
+    ///     },
+    /// );
+    /// # }
+    /// ```
+    ///
+    /// A worker thread that must wait for the answer sends it back over a
+    /// channel from `answer`, and waits on that instead of on the UI.
+    pub fn message(
+        &self,
+        mb: MessageBox,
+        answer: impl FnOnce(&mut S, MessageResponse) + Send + 'static,
+    ) {
+        self.with(|s| {
+            s.asked.push(Asked {
+                mb,
+                answer: Box::new(answer),
+            })
+        });
+        wake::wake();
+    }
+
+    /// Show the message boxes asked for: natively where possible, else queue
+    /// them to be drawn. Returns whether any is to be drawn.
+    fn start_messages(&self) -> bool
+    where
+        S: 'static,
+    {
+        let asked = self.with(|s| std::mem::take(&mut s.asked));
+        let mut drawn = false;
+        for Asked { mb, answer } in asked {
+            let answer = std::sync::Arc::new(Mutex::new(Some(answer)));
+            let native = if crate::platform::dialog::native_allowed() {
+                let handle = self.clone();
+                let a = answer.clone();
+                let done: crate::platform::dialog::MessageDone = Box::new(move |r| {
+                    handle.update(move |s| {
+                        if let Some(f) = a.lock().ok().and_then(|mut a| a.take()) {
+                            f(s, r);
+                        }
+                    })
+                });
+                crate::platform::dialog::message(&mb, done).is_ok()
+            } else {
+                false
+            };
+            if native {
+                continue;
+            }
+            let Some(answer) = answer.lock().ok().and_then(|mut a| a.take()) else {
+                continue;
+            };
+            self.with(|s| {
+                let id = s.next_id;
+                s.next_id += 1;
+                s.drawn.push(Drawn {
+                    id,
+                    input: mb.input.as_ref().map(AlertInput::new),
+                    mb,
+                    answer,
+                })
+            });
+            drawn = true;
+        }
+        drawn
+    }
+
+    /// The drawn message box up now (the first asked), to draw.
+    pub(crate) fn alert_view(&self) -> Option<AlertView> {
+        self.with(|s| {
+            s.drawn.first().map(|d| AlertView {
+                id: d.id,
+                mb: d.mb.clone(),
+                input: d.input.clone(),
+            })
+        })
+    }
+
+    /// Change drawn message box `id`'s text field.
+    pub(crate) fn alert_input(&self, id: u64, f: impl FnOnce(&mut AlertInput)) {
+        self.with(|s| {
+            if let Some(input) = s
+                .drawn
+                .iter_mut()
+                .find(|d| d.id == id)
+                .and_then(|d| d.input.as_mut())
+            {
+                f(input);
+            }
+        });
+    }
+
+    /// Answer drawn message box `id` with `button` (`None`: dismissed), and
+    /// apply the answer to `state`.
+    pub(crate) fn answer_alert(&self, id: u64, button: Option<usize>, state: &mut S) {
+        let Some(d) = self.with(|s| {
+            let i = s.drawn.iter().position(|d| d.id == id)?;
+            Some(s.drawn.remove(i))
+        }) else {
+            return;
+        };
+        let response = MessageResponse {
+            button,
+            input: d.input.as_ref().map(|i| i.text().to_string()),
+        };
+        (d.answer)(state, response);
+    }
+
     /// Take the window changes queued by [`window`](Self::window).
     pub(crate) fn take_window_requests(&self) -> Vec<WindowRequest> {
         self.with(|s| std::mem::take(&mut s.window))
@@ -313,8 +509,11 @@ impl<S> AppHandle<S> {
 
     /// Apply queued updates and due timers to `state`, as of `now`. Returns
     /// whether anything ran, and the next timer's deadline.
-    pub(crate) fn pump(&self, state: &mut S, now: Instant) -> (bool, Option<Instant>) {
-        let mut ran = false;
+    pub(crate) fn pump(&self, state: &mut S, now: Instant) -> (bool, Option<Instant>)
+    where
+        S: 'static,
+    {
+        let mut ran = self.start_messages();
         // Take the work out before running it, so closures can use the handle
         // (queue an update, start a timer) without deadlocking.
         let updates = self.with(|s| std::mem::take(&mut s.updates));

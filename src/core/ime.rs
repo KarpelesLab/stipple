@@ -18,7 +18,9 @@ fn entry_leaf(tree: &LayoutNode, focused: FocusId) -> Option<&LayoutNode> {
         .is_none_or(|r| {
             matches!(
                 r,
-                crate::core::a11y::Role::TextField | crate::core::a11y::Role::SpinButton
+                crate::core::a11y::Role::TextField
+                    | crate::core::a11y::Role::SpinButton
+                    | crate::core::a11y::Role::PasswordField
             )
         });
     if node.action.is_some() || !entry {
@@ -83,13 +85,27 @@ pub fn paint_preedit(
     }
 }
 
+/// Whether the focused element is a password field: one whose text must not
+/// go through an input method (it would see, and may learn, the password).
+pub fn secure_focused(tree: &LayoutNode, focused: Option<FocusId>) -> bool {
+    focused
+        .and_then(|f| find_focus(tree, f))
+        .and_then(|n| n.semantics.as_ref())
+        .and_then(|s| s.role)
+        == Some(crate::core::a11y::Role::PasswordField)
+}
+
 /// What the input method should know about the focused field, or `None` when
-/// the focused element doesn't take text (which disables the IME).
+/// the focused element doesn't take text (which disables the IME). A
+/// password field takes text without one, so it gets `None` too.
 pub fn ime_state(
     tree: &LayoutNode,
     focused: Option<FocusId>,
     font: Option<&Font>,
 ) -> Option<ImeState> {
+    if secure_focused(tree, focused) {
+        return None;
+    }
     let leaf = entry_leaf(tree, focused?)?;
     let NodeContent::Text { text, .. } = &leaf.content else {
         return None;

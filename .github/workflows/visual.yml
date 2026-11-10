@@ -1376,6 +1376,105 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
+  # The document tab bar, password field, color picker and the message box
+  # drawn where there's no native alert (sessionsdemo; issues #24, #26, #27).
+  # Positions are pinned by the demo's tests (CLOSE_BUILD_AT, COLOR_AT).
+  visual-sessions:
+    name: Visual test (Tab bar, password, color picker, message box / X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, ImageMagick, xdotool, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
+
+      - name: Build the sessions demo
+        run: cargo build --release -p sessionsdemo
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          echo "XVFB_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Close a busy tab (drawn message box), color popup, password
+        env:
+          DISPLAY: ":99"
+        run: |
+          mkdir -p visual_output
+          shot() { import -window root -crop 760x480+0+0 +repage "visual_output/$1.png"; }
+          changed() {
+            d=$(compare -metric AE "visual_output/$1.png" "visual_output/$2.png" null: 2>&1 || true)
+            echo "$1 -> $2: $d pixels changed"
+            [ "$(echo "$d" | awk '{printf "%d", $1}')" -gt "$3" ]
+          }
+          ./target/release/sessionsdemo > visual_output/sessions.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          shot stipple-x11-sessions
+          # The busy "build" tab's ×: a message box asks first.
+          xdotool mousemove 207 21 click 1
+          sleep 1
+          shot sessions-alert
+          changed stipple-x11-sessions sessions-alert 20000
+          # Escape cancels it: the window is back as it was.
+          xdotool key Escape
+          sleep 1
+          shot sessions-cancelled
+          changed sessions-alert sessions-cancelled 20000
+          # The color button opens the picker below it.
+          xdotool mousemove 160 197 click 1
+          sleep 1
+          shot sessions-color
+          changed sessions-cancelled sessions-color 20000
+          xdotool mousemove 700 450 click 1
+          sleep 0.5
+          # Type into the password field: bullets, not the text.
+          xdotool mousemove 300 155 click 1
+          sleep 0.3
+          xdotool type hunter2
+          sleep 1
+          shot sessions-password
+          changed sessions-cancelled sessions-password 50
+          echo "=== sessions.log ==="; cat visual_output/sessions.log || true
+          kill "$APP_PID" 2>/dev/null || true
+
+      - name: The drawn message box answers asynchronously (Escape = cancel)
+        env:
+          DISPLAY: ":99"
+          STIPPLE_ALERT_HOLD_MS: "600000"
+        run: |
+          # No native alert on Linux: the self-test's question is drawn in the
+          # window (dark theme); Escape presses its Cancel (button 2).
+          ./target/release/sessionsdemo dark --alert-selftest > visual_output/alert.log 2>&1 &
+          pid=$!
+          sleep 4
+          import -window root -crop 760x480+0+0 +repage visual_output/stipple-x11-sessions-alert-dark.png
+          xdotool key Escape
+          for _ in $(seq 20); do kill -0 $pid 2>/dev/null || break; sleep 0.5; done
+          cat visual_output/alert.log
+          grep -q "sessionsdemo: alert asked" visual_output/alert.log
+          grep -q "sessionsdemo: answered button=Some(2)" visual_output/alert.log
+          grep -q "sessionsdemo: event loop exited" visual_output/alert.log
+
+      - name: Stop the app and Xvfb
+        if: always()
+        run: |
+          [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      - name: Upload screenshots + logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-sessions-screenshot
+          path: visual_output/*
+          if-no-files-found: warn
+
   # Render a real window whose frames are produced on the GPU (stipple::gpu) and
   # presented through the X11 Surface — the GPU render path wired into the live
   # on-screen present loop. Runs under Xvfb + Mesa (surfaceless EGL).
@@ -3038,6 +3137,55 @@ jobs:
           grep -q stipple-note editors.txt || echo "::warning::open_path didn't show an editor with stipple-note.txt"
           powershell -NoProfile -Command "Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process" || true
 
+      - name: Native message box (TaskDialogIndirect), answered by the self-test
+        shell: powershell
+        env:
+          STIPPLE_DEBUG_DIALOG: "1"
+          STIPPLE_ALERT_HOLD_MS: "6000"
+        run: |
+          cargo build --release -p sessionsdemo
+          New-Item -ItemType Directory -Force -Path visual_output | Out-Null
+          $p = Start-Process -FilePath .\target\release\sessionsdemo.exe -ArgumentList '--alert-selftest' `
+            -RedirectStandardOutput visual_output\alert.log -RedirectStandardError visual_output\alert-err.log -PassThru
+          Start-Sleep -Seconds 4
+          Add-Type -AssemblyName System.Drawing
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public struct RECT { public int Left, Top, Right, Bottom; }
+          public static class Win {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
+            [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+            [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+          }
+          "@
+          [Win]::SetProcessDPIAware() | Out-Null
+          # The task dialog is a "#32770" window titled like the box.
+          $dlg = [Win]::FindWindowW('#32770', 'Stipple Sessions')
+          if ($dlg -eq [IntPtr]::Zero) { Write-Host "::warning::no task dialog window found" } else {
+            $r = New-Object RECT
+            [Win]::GetWindowRect($dlg, [ref]$r) | Out-Null
+            $w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top
+            $bmp = New-Object System.Drawing.Bitmap($w, $h)
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
+            $bmp.Save((Join-Path $PWD 'visual_output\stipple-windows-alert.png'))
+            Write-Host "Saved the alert (${w}x${h})"
+          }
+          if (-not $p.WaitForExit(30000)) { Stop-Process -Id $p.Id -Force; throw 'sessionsdemo did not exit' }
+          Get-Content visual_output\alert.log; Get-Content visual_output\alert-err.log
+          $log = (Get-Content -Raw visual_output\alert.log) + (Get-Content -Raw visual_output\alert-err.log)
+          if ($log -notmatch 'TaskDialogIndirect hr=0x0 button=101') { throw 'the task dialog did not answer button 101' }
+          if ($log -notmatch 'sessionsdemo: answered button=Some\(1\)') { throw 'the answer did not reach the app' }
+          if ($log -notmatch 'sessionsdemo: event loop exited') { throw 'the app did not exit' }
+
+      - name: Upload the alert screenshot and logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-os-integration-windows
+          path: visual_output/*
+          if-no-files-found: warn
+
   # And on macOS: an NSStatusItem with an NSMenu, a notification through
   # osascript, and open_url of a file: URL to a .txt, which must start
   # TextEdit.
@@ -3071,6 +3219,33 @@ jobs:
           for _ in $(seq 30); do pgrep -x TextEdit && break; sleep 0.5; done
           pgrep -x TextEdit
           kill $(pgrep -x TextEdit) 2>/dev/null || true
+
+      - name: Native message box (NSAlert sheet), answered by the self-test
+        env:
+          STIPPLE_DEBUG_DIALOG: "1"
+          STIPPLE_ALERT_HOLD_MS: "4000"
+        run: |
+          cargo build --release -p sessionsdemo
+          mkdir -p visual_output
+          ./target/release/sessionsdemo --alert-selftest > visual_output/alert.log 2>&1 &
+          pid=$!
+          sleep 3
+          screencapture -x visual_output/stipple-macos-alert.png || true
+          for _ in $(seq 40); do kill -0 $pid 2>/dev/null || break; sleep 0.5; done
+          kill $pid 2>/dev/null || true
+          cat visual_output/alert.log
+          grep -q "message box: NSAlert sheet" visual_output/alert.log
+          grep -q "NSAlert answered 1001 -> Some(1)" visual_output/alert.log
+          grep -q "sessionsdemo: answered button=Some(1)" visual_output/alert.log
+          grep -q "sessionsdemo: event loop exited" visual_output/alert.log
+
+      - name: Upload the alert screenshot and log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-os-integration-macos
+          path: visual_output/*
+          if-no-files-found: warn
 
   # Run the native iOS UIKit backend on a booted simulator and confirm it boots,
   # builds the window, and renders a frame — a real runtime check of the backend
