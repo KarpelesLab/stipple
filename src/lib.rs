@@ -54,6 +54,7 @@ pub mod widgets;
 mod window_tests;
 
 pub use app_lifecycle::CloseResponse;
+pub use platform::Lifecycle;
 
 use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
@@ -128,7 +129,7 @@ pub struct App<S> {
     tray: Option<TrayFn<S>>,
     native_tray: Option<crate::platform::NativeTray>,
     // Close/quit confirmation and window focus hooks (see `app_lifecycle`).
-    lifecycle: app_lifecycle::Lifecycle<S>,
+    lifecycle: app_lifecycle::Hooks<S>,
     // Pending clipboard reads, the primary selection, and `on_clipboard`.
     clipboard: app_clipboard::ClipboardState<S>,
     // Runtime windows: whether closing the last one ends the loop, what to
@@ -2873,6 +2874,7 @@ impl<S: 'static> App<S> {
                     | Event::ScaleFactorChanged(_)
                     | Event::WindowChanged
                     | Event::ThemeChanged
+                    | Event::Lifecycle(_)
             );
             // Pointer buttons, moves and wheels reach `on_pointer` and
             // `on_wheel` handlers first.
@@ -3164,6 +3166,15 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                // In the background nothing is on screen: updates and timers
+                // ran above, and the windows repaint when the app comes back.
+                Event::Wake if self.in_background() => ControlFlow::Wait,
+                Event::Lifecycle(change) => {
+                    if self.lifecycle_changed(change) {
+                        present(&mut self, &mut surfaces, idx, window, true);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::Wake => {
                     // A fling scrolls on with every frame.
                     let flung = self.pane_fling(idx);
@@ -3209,7 +3220,10 @@ impl<S: 'static> App<S> {
                     for pane in &mut self.panes {
                         pane.dirty = true;
                     }
-                    present(&mut self, &mut surfaces, idx, window, true);
+                    // In the background the new look shows on coming back.
+                    if !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, true);
+                    }
                     ControlFlow::Wait
                 }
                 Event::TrayActivated => {
@@ -3836,7 +3850,7 @@ pub mod prelude {
     pub use crate::platform::PointerButton;
     pub use crate::platform::dialog::{MessageBox, MessageKind, MessageResponse};
     pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
-    pub use crate::platform::{KeyCode, Modifiers};
+    pub use crate::platform::{KeyCode, Lifecycle, Modifiers};
     pub use crate::platform::{KeyEvent, OptionAsMeta, PhysicalKey};
     pub use crate::platform::{WindowAttributes, WindowId, WindowInfo};
     pub use crate::render::{

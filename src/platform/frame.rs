@@ -21,6 +21,7 @@
 //! [`wake`](super::wake).
 
 use crate::platform::time::Instant;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -107,6 +108,8 @@ impl Clock {
 
 static CLOCK: Mutex<Clock> = Mutex::new(Clock::new());
 static SOURCE: Mutex<Option<Source>> = Mutex::new(None);
+/// Whether frames are off: the app is in the background.
+static SUSPENDED: AtomicBool = AtomicBool::new(false);
 
 fn clock<R>(f: impl FnOnce(&mut Clock) -> R) -> R {
     let mut c = CLOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -124,6 +127,9 @@ pub fn request() {
     let Some(now) = now() else {
         return; // no clock on this target, so nothing animates
     };
+    if suspended() {
+        return; // in the background: nothing is on screen to animate
+    }
     let source = source();
     let deadline = clock(|c| {
         c.request(now);
@@ -138,6 +144,33 @@ pub fn request() {
     if let Some(at) = deadline {
         super::wake::schedule(at);
     }
+}
+
+/// Stop (`true`) or allow (`false`) frames, as the app goes to the background
+/// and comes back. While suspended, [`request`] asks for nothing, an
+/// outstanding frame is dropped and a display source is stopped; animations
+/// ask again when the app builds on its return. Call on the UI thread.
+pub(crate) fn set_suspended(suspended: bool) {
+    if SUSPENDED.swap(suspended, Ordering::AcqRel) == suspended || !suspended {
+        return;
+    }
+    clock(|c| {
+        c.wanted = None;
+        c.claimed = false;
+        c.idle = false;
+    });
+    if let Some(disarm) = source().and_then(|s| s.disarm) {
+        disarm();
+    }
+}
+
+/// Held by tests that suspend frames, which is process-wide.
+#[cfg(test)]
+pub(crate) static SUSPEND_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+/// Whether frames are suspended (the app is in the background).
+pub fn suspended() -> bool {
+    SUSPENDED.load(Ordering::Acquire)
 }
 
 /// Whether a frame has been asked for and not yet delivered.

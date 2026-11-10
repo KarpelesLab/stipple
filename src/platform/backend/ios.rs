@@ -33,8 +33,20 @@ use crate::platform::input;
 use crate::platform::window::{Window, WindowAttributes};
 use crate::render::{Pixmap, Surface};
 
+/// Accessibility: the view as a `UIAccessibilityContainer`.
+mod a11y;
+/// The accessibility tree as VoiceOver reads it (UIKit-free, tested on hosts).
+pub(crate) mod a11y_tree;
 /// Pacing animation frames by the screen (`CADisplayLink`).
 mod display_link;
+/// The document the keyboard reads (UIKit-free, tested on hosts).
+pub(crate) mod doc;
+/// Background, foreground, memory warnings and appearance changes.
+mod lifecycle;
+/// Input methods: `UITextInput` on the view.
+mod text_input;
+
+pub use a11y::AccessibilityElement;
 
 type Id = *mut c_void;
 type Sel = *mut c_void;
@@ -271,6 +283,9 @@ struct IosCtx {
     primary: Option<u64>,
     /// Whether a text input has focus, so the view holds the keyboard.
     text_input: bool,
+    /// The next frame's background (its top-left pixel) goes around the safe
+    /// area, after the theme changed look.
+    match_background: bool,
 }
 
 thread_local! {
@@ -329,6 +344,41 @@ extern "C" fn draw_rect(_this: Id, _cmd: Sel, _rect: CgRect) {
     });
 }
 
+/// `color` as a `UIColor` (the system background for none).
+unsafe fn ui_color(color: Option<crate::render::Color>) -> Id {
+    unsafe {
+        match color {
+            Some(color) => {
+                let c = |v: u8| v as f64 / 255.0;
+                let f: unsafe extern "C" fn(Id, Sel, f64, f64, f64, f64) -> Id =
+                    std::mem::transmute(objc_msgSend as *const c_void);
+                f(
+                    class("UIColor"),
+                    sel("colorWithRed:green:blue:alpha:"),
+                    c(color.r),
+                    c(color.g),
+                    c(color.b),
+                    c(color.a),
+                )
+            }
+            None => msg_id(class("UIColor"), sel("systemBackgroundColor")),
+        }
+    }
+}
+
+/// Show `color` around the safe area: the background of `window`'s root view.
+unsafe fn set_root_background(window: Id, color: Option<crate::render::Color>) {
+    if window.is_null() {
+        return;
+    }
+    unsafe {
+        let root = msg_id(msg_id(window, sel("rootViewController")), sel("view"));
+        if !root.is_null() {
+            msg_void_id(root, sel("setBackgroundColor:"), ui_color(color));
+        }
+    }
+}
+
 /// `application:didFinishLaunchingWithOptions:` — build the window + view, draw
 /// the first frame, and show it.
 extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) -> bool {
@@ -339,29 +389,17 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
         // The root view fills the screen behind the status bar and home indicator;
         // our view sits inside the safe area on top of it.
         let root = msg_alloc_init_frame(class("UIView"), bounds);
-        let background = match CTX.with(|c| c.borrow().background) {
-            Some(color) => {
-                let (r, g, b, a) = (color.r, color.g, color.b, color.a);
-                let c = |v: u8| v as f64 / 255.0;
-                let f: unsafe extern "C" fn(Id, Sel, f64, f64, f64, f64) -> Id =
-                    std::mem::transmute(objc_msgSend as *const c_void);
-                f(
-                    class("UIColor"),
-                    sel("colorWithRed:green:blue:alpha:"),
-                    c(r),
-                    c(g),
-                    c(b),
-                    c(a),
-                )
-            }
-            None => msg_id(class("UIColor"), sel("systemBackgroundColor")),
-        };
-        msg_void_id(root, sel("setBackgroundColor:"), background);
+        msg_void_id(
+            root,
+            sel("setBackgroundColor:"),
+            ui_color(CTX.with(|c| c.borrow().background)),
+        );
         let view = msg_alloc_init_frame(register_view_class(), bounds);
         // Every finger, not just the first.
         msg_void_bool(view, sel("setMultipleTouchEnabled:"), true);
         msg_void_id(root, sel("addSubview:"), view);
         observe_reduce_motion(view);
+        lifecycle::observe(view);
         let vc = msg_id(msg_id(class("UIViewController"), sel("alloc")), sel("init"));
         msg_void_id(vc, sel("setView:"), root);
         msg_void_id(window, sel("setRootViewController:"), vc);
@@ -529,38 +567,12 @@ extern "C" fn touches_cancelled(this: Id, _cmd: Sel, touches: Id, _event: Id) {
     touch_input(TouchPhase::Cancelled, &unsafe { touches_in(this, touches) });
 }
 
-// ---- The keyboard (UIKeyInput) ------------------------------------------------
+// ---- The keyboard (UIKeyInput / UITextInput, in `text_input`) ----------------
 
 /// `canBecomeFirstResponder`: the view takes the keyboard while a text input
 /// has focus.
 extern "C" fn can_become_first_responder(_this: Id, _cmd: Sel) -> bool {
     true
-}
-
-/// `hasText`: always, so Backspace on an empty-looking field still reaches the
-/// app (UIKit only sends `deleteBackward` when there's text).
-extern "C" fn has_text(_this: Id, _cmd: Sel) -> bool {
-    true
-}
-
-/// `insertText:`, from the on-screen keyboard (and a hardware one): the text
-/// to type. Return arrives as a newline and becomes the Enter key.
-extern "C" fn insert_text(_this: Id, _cmd: Sel, text: Id) {
-    let text = unsafe { string_of(text) };
-    let win = current_window();
-    for (i, line) in text.split('\n').enumerate() {
-        if i > 0 {
-            key_tap(KeyCode::Enter, Modifiers::default(), &win);
-        }
-        if !line.is_empty() {
-            call_handler(Event::Text(line.to_string()), &win);
-        }
-    }
-}
-
-/// `deleteBackward`: the keyboard's delete key.
-extern "C" fn delete_backward(_this: Id, _cmd: Sel) {
-    key_tap(KeyCode::Backspace, Modifiers::default(), &current_window());
 }
 
 fn key_tap(code: KeyCode, modifiers: Modifiers, win: &IosWindow) {
@@ -661,15 +673,18 @@ fn raw_key(
     }
     ev.scancode = usage as u32;
     let ptr = CTX.with(|c| c.borrow().handler);
-    if ptr.is_null() {
+    if ptr.is_null() || IN_HANDLER.with(|h| h.get()) {
         return false;
     }
-    deliver_raw(ev, |e| unsafe {
+    IN_HANDLER.with(|h| h.set(true));
+    let used = deliver_raw(ev, |e| unsafe {
         let fat = *ptr;
         let handler: &mut dyn FnMut(Event, &dyn Window) -> ControlFlow = &mut *fat;
         handler(e, win)
     })
-    .0
+    .0;
+    IN_HANDLER.with(|h| h.set(false));
+    used
 }
 
 extern "C" fn presses_began(this: Id, cmd: Sel, set: Id, event: Id) {
@@ -704,20 +719,134 @@ fn set_text_input(active: bool) {
 /// Drive the view the way UIKit does, for self-tests on a simulator, which
 /// can't script touches or the keyboard: a touch through the same path as
 /// `touchesBegan:withEvent:` and friends, and text and Backspace through
-/// `insertText:` and `deleteBackward` messages sent to the view. Each runs on
-/// the main queue after the current event, so they can be called from an app's
-/// callbacks; they run in the order they're called.
+/// `insertText:` and `deleteBackward` messages sent to the view, composition
+/// through its `UITextInput` methods, and VoiceOver's activation through its
+/// accessibility elements. The actions run on the main queue after the current
+/// event, so they can be called from an app's callbacks; they run in the order
+/// they're called. The readers (`*_status`, [`accessibility_elements`]) run at
+/// once.
 pub mod simulate {
     use super::*;
 
-    /// Run `f` on the main queue, after whatever is running now.
-    fn later(f: impl FnOnce() + 'static) {
-        extern "C" fn trampoline(context: *mut c_void) {
-            let f = unsafe { Box::from_raw(context.cast::<Box<dyn FnOnce()>>()) };
-            f();
+    fn view() -> Id {
+        CTX.with(|c| c.borrow().view)
+    }
+
+    /// Compose `text` as an input method does:
+    /// `[view setMarkedText:text selectedRange:selected]` (UTF-16 units
+    /// within `text`). An empty `text` ends the composition.
+    pub fn set_marked_text(text: &str, selected: (usize, usize)) {
+        let text = text.to_string();
+        later(move || {
+            let view = view();
+            if view.is_null() {
+                return;
+            }
+            let range = text_input::NsRange {
+                location: selected.0,
+                length: selected.1.saturating_sub(selected.0),
+            };
+            unsafe {
+                let f: unsafe extern "C" fn(Id, Sel, Id, text_input::NsRange) =
+                    std::mem::transmute(objc_msgSend as *const c_void);
+                f(
+                    view,
+                    sel("setMarkedText:selectedRange:"),
+                    nsstring(&text),
+                    range,
+                );
+            }
+        });
+    }
+
+    /// Commit the composition as it stands, as `[view unmarkText]`.
+    pub fn unmark_text() {
+        later(|| {
+            let view = view();
+            if !view.is_null() {
+                unsafe { msg_void(view, sel("unmarkText")) };
+            }
+        });
+    }
+
+    /// Replace UTF-16 offsets `start..end` of the document with `text`, as
+    /// autocorrect does: `[view replaceRange:withText:]`, the range made
+    /// through the view's own `UITextInput` position methods.
+    pub fn replace_range(start: usize, end: usize, text: &str) {
+        let text = text.to_string();
+        later(move || {
+            let view = view();
+            if !view.is_null() {
+                unsafe { text_input::replace(view, start, end, &text) };
+            }
+        });
+    }
+
+    /// The view's `UITextInput` state, read through objc dispatch as the
+    /// keyboard reads it: whether it conforms, the document text, the
+    /// selected range, the marked text, `firstRectForRange:` (of the marked
+    /// text, else the selection) and `caretRectForPosition:`.
+    pub fn text_input_status() -> String {
+        let view = view();
+        if view.is_null() {
+            return "no view".into();
         }
-        let f: Box<Box<dyn FnOnce()>> = Box::new(Box::new(f));
-        unsafe { dispatch_async_f(main_queue(), Box::into_raw(f).cast(), trampoline) };
+        crate::platform::native::objc::with_pool(|| unsafe { text_input::status(view) })
+    }
+
+    /// The view's accessibility elements, read through objc dispatch as
+    /// VoiceOver reads them (`accessibilityElementCount`,
+    /// `accessibilityElementAtIndex:`, then each one's label, value, traits
+    /// and `accessibilityFrame`).
+    pub fn accessibility_elements() -> Vec<AccessibilityElement> {
+        let view = view();
+        if view.is_null() {
+            return Vec::new();
+        }
+        crate::platform::native::objc::with_pool(|| unsafe { a11y::read_elements(view) })
+    }
+
+    /// Activate the element at `index`, as VoiceOver's double tap does
+    /// (`accessibilityActivate`).
+    pub fn activate_accessibility_element(index: usize) {
+        later(move || {
+            let view = view();
+            if !view.is_null() {
+                let done = unsafe { a11y::activate_at(view, index) };
+                crate::platform::window::debug_window(format_args!(
+                    "accessibilityActivate {index}: {done}"
+                ));
+            }
+        });
+    }
+
+    /// The view's frame on screen, in points (where accessibility frames are).
+    pub fn view_frame_on_screen() -> crate::geometry::Rect {
+        #[link(name = "UIKit", kind = "framework")]
+        unsafe extern "C" {
+            fn UIAccessibilityConvertFrameToScreenCoordinates(rect: CgRect, view: Id) -> CgRect;
+        }
+        let view = view();
+        if view.is_null() {
+            return crate::geometry::Rect::ZERO;
+        }
+        let r = unsafe {
+            UIAccessibilityConvertFrameToScreenCoordinates(msg_rect(view, sel("bounds")), view)
+        };
+        crate::geometry::Rect::from_xywh(r.origin.x, r.origin.y, r.size.width, r.size.height)
+    }
+
+    /// Post `UIApplicationDidReceiveMemoryWarningNotification`, as the system
+    /// does when memory runs short.
+    pub fn memory_warning() {
+        later(lifecycle::post_memory_warning);
+    }
+
+    /// Read the app's notification permission from `UNUserNotificationCenter`
+    /// (`not_determined`, `denied`, `authorized`, …); `done` is called on
+    /// another thread with the answer.
+    pub fn notification_status(done: fn(&'static str)) {
+        crate::platform::shell::ios::authorization_status(done);
     }
 
     /// A finger `id` at `position` (logical pixels, in the app's content).
@@ -771,6 +900,16 @@ pub mod simulate {
     }
 }
 
+/// Run `f` on the main queue, after whatever is running now.
+fn later(f: impl FnOnce() + 'static) {
+    extern "C" fn trampoline(context: *mut c_void) {
+        let f = unsafe { Box::from_raw(context.cast::<Box<dyn FnOnce()>>()) };
+        f();
+    }
+    let f: Box<Box<dyn FnOnce()>> = Box::new(Box::new(f));
+    unsafe { dispatch_async_f(main_queue(), Box::into_raw(f).cast(), trampoline) };
+}
+
 // libdispatch, part of libSystem.
 const DISPATCH_TIME_NOW: u64 = 0;
 unsafe extern "C" {
@@ -802,17 +941,38 @@ extern "C" fn on_wake(_context: *mut c_void) {
     }
 }
 
-/// Invoke the stashed Rust handler (if any).
+thread_local! {
+    /// Whether the handler is running. UIKit calls back into the view from
+    /// inside calls the handler makes (resigning first responder commits the
+    /// keyboard's marked text, for one); what those deliver waits here.
+    static IN_HANDLER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static DEFERRED: RefCell<std::collections::VecDeque<Event>> =
+        const { RefCell::new(std::collections::VecDeque::new()) };
+}
+
+/// Invoke the stashed Rust handler (if any). Called from inside the handler,
+/// the event is delivered once it returns.
 fn call_handler(event: Event, win: &dyn Window) {
     let ptr = CTX.with(|c| c.borrow().handler);
     if ptr.is_null() {
         return;
     }
+    if IN_HANDLER.with(|h| h.get()) {
+        DEFERRED.with(|d| d.borrow_mut().push_back(event));
+        later(|| {
+            while let Some(event) = DEFERRED.with(|d| d.borrow_mut().pop_front()) {
+                call_handler(event, &current_window());
+            }
+        });
+        return;
+    }
+    IN_HANDLER.with(|h| h.set(true));
     unsafe {
         let fat = *ptr;
         let handler: &mut dyn FnMut(Event, &dyn Window) -> ControlFlow = &mut *fat;
         let _ = handler(event, win);
     }
+    IN_HANDLER.with(|h| h.set(false));
 }
 
 /// `stippleMotionChanged:` — *Reduce Motion* was switched; the next wake
@@ -873,36 +1033,23 @@ fn register_view_class() -> Class {
         for (name, imp) in touches {
             class_addMethod(cls, sel(name), imp as *const c_void, touch_types.as_ptr());
         }
-        // The keyboard: UIKeyInput, so the view can hold it as first responder.
-        let flags: [(&str, extern "C" fn(Id, Sel) -> bool); 2] = [
-            ("canBecomeFirstResponder", can_become_first_responder),
-            ("hasText", has_text),
-        ];
-        for (name, imp) in flags {
-            class_addMethod(cls, sel(name), imp as *const c_void, c"B@:".as_ptr());
-        }
+        // The keyboard: UITextInput, so the view can hold it as first
+        // responder and input methods compose.
         class_addMethod(
             cls,
-            sel("insertText:"),
-            insert_text as *const c_void,
-            c"v@:@".as_ptr(),
+            sel("canBecomeFirstResponder"),
+            can_become_first_responder as *const c_void,
+            c"B@:".as_ptr(),
         );
+        text_input::add_methods(cls);
+        a11y::add_methods(cls);
+        lifecycle::add_methods(cls);
         class_addMethod(
             cls,
             sel("stippleMotionChanged:"),
             motion_changed as *const c_void,
             c"v@:@".as_ptr(),
         );
-        class_addMethod(
-            cls,
-            sel("deleteBackward"),
-            delete_backward as *const c_void,
-            c"v@:".as_ptr(),
-        );
-        let key_input = objc_getProtocol(c"UIKeyInput".as_ptr());
-        if !key_input.is_null() {
-            class_addProtocol(cls, key_input);
-        }
         objc_registerClassPair(cls);
         cls
     }
@@ -960,6 +1107,17 @@ impl Window for IosWindow {
     fn set_text_input_active(&self, active: bool) {
         set_text_input(active);
     }
+    fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
+        text_input::set_state(state);
+    }
+    fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
+        a11y::set_tree(root);
+    }
+    fn set_dark(&self, _dark: bool) {
+        // The theme changed look: the area around the safe area takes the
+        // new background from the next frame.
+        CTX.with(|c| c.borrow_mut().match_background = true);
+    }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(IosSurface { size: self.size })
     }
@@ -979,15 +1137,26 @@ impl Surface for IosSurface {
     }
     fn present(&mut self, pixmap: &Pixmap, _damage: &[crate::geometry::Rect]) {
         let size = pixmap.size();
-        CTX.with(|c| {
+        let (view, window, background) = CTX.with(|c| {
             let mut c = c.borrow_mut();
             c.fb = pixmap.as_bytes().to_vec();
             c.w = size.width as usize;
             c.h = size.height as usize;
-            if !c.view.is_null() {
-                unsafe { msg_void_bool(c.view, sel("setNeedsDisplay"), true) };
+            let mut background = None;
+            if std::mem::take(&mut c.match_background) && c.fb.len() >= 4 {
+                let [r, g, b, a] = [c.fb[0], c.fb[1], c.fb[2], c.fb[3]];
+                c.background = Some(crate::render::Color { r, g, b, a });
+                background = c.background;
             }
+            (c.view, c.window, background)
         });
+        // Messaged with the context released: UIKit may call the view back.
+        if background.is_some() {
+            unsafe { set_root_background(window, background) };
+        }
+        if !view.is_null() {
+            unsafe { msg_void_bool(view, sel("setNeedsDisplay"), true) };
+        }
     }
 }
 

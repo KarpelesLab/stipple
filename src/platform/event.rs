@@ -267,6 +267,9 @@ pub enum Event {
     /// The system's light/dark mode or accent color changed. Read the new look
     /// with [`Theme::native`](crate::style::Theme::native).
     ThemeChanged,
+    /// The app went to the background, came back, or the system is short of
+    /// memory (mobile platforms). See [`Lifecycle`].
+    Lifecycle(Lifecycle),
 
     /// The pointer moved to `position` (logical pixels, window-relative).
     PointerMoved { position: Point },
@@ -629,4 +632,23 @@ pub enum Ime {
     /// Delete `before` bytes before the caret and `after` bytes after it (the
     /// preedit not counted), as Wayland's `text-input-v3` asks some IMEs to.
     DeleteSurrounding { before: usize, after: usize },
+}
+
+/// A change in the app's life on a mobile platform, delivered as
+/// [`Event::Lifecycle`] and to [`App::on_lifecycle`](crate::App::on_lifecycle).
+///
+/// While in the background the app isn't on screen: the `App` stops asking
+/// for animation frames and doesn't repaint until it comes back, and the
+/// system may end the process without warning, so save what must survive on
+/// [`Background`](Lifecycle::Background).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Lifecycle {
+    /// The app left the screen (the user went home or switched apps).
+    Background,
+    /// The app is back on screen.
+    Foreground,
+    /// The system is short of memory: drop caches and anything that can be
+    /// rebuilt.
+    LowMemory,
 }

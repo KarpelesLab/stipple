@@ -3492,14 +3492,19 @@ jobs:
       # The simulator can't script touches or typing, so touchdemo drives
       # itself (TOUCHDEMO_SELFTEST): it taps its text field, types through the
       # view's UIKeyInput methods (insertText:, deleteBackward) sent by objc
-      # dispatch, drags its list with a synthetic finger through the backend's
-      # touch path, and taps away. It logs to its tmp dir, read back here.
-      - name: Touch scrolling and the keyboard (touchdemo self-test)
+      # dispatch, composes through its UITextInput methods (marked text, a
+      # commit, an autocorrect-style replaceRange:withText:), drags its list
+      # with a synthetic finger through the backend's touch path, taps away,
+      # then reads the view's accessibility elements as VoiceOver does and
+      # activates a row through one. It logs to its tmp dir, read back here.
+      - name: Touch scrolling, the keyboard, composition and accessibility (touchdemo self-test)
         run: |
           cargo build --release -p touchdemo --target aarch64-apple-ios-sim
           cp target/aarch64-apple-ios-sim/release/touchdemo Stipple.app/window
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
           xcrun simctl install "$DEV" Stipple.app
+          # Start in light mode: the next step switches to dark.
+          xcrun simctl ui "$DEV" appearance light || true
           SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 SIMCTL_CHILD_STIPPLE_APP_DEBUG=1 xcrun simctl launch \
             --stderr="$PWD/visual_output/touchdemo-stderr.log" "$DEV" com.karpeleslab.stipple
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
@@ -3520,7 +3525,64 @@ jobs:
           grep -qF 'touchdemo: text "Hi"' "$LOG"
           # ...the drag scrolled the list, and the keyboard went with focus.
           grep -qE "touchdemo: scrolled to [1-9][0-9]*" "$LOG"
+          # UITextInput: the marked text reached the field as a preedit, the
+          # commit replaced it, and replaceRange:withText: rewrote the word.
+          grep -qF 'touchdemo: preedit Some("にほん")' "$LOG"
+          grep -qF 'touchdemo: text "Hi日本"' "$LOG"
+          grep -qF 'touchdemo: text "HiJP"' "$LOG"
+          grep -q 'touchdemo: composing text_input=true doc="Hiにほん" selected=5..5 marked="にほん"' "$LOG"
+          # UIAccessibility: the elements were read, and activating one
+          # tapped its row.
+          grep -qE "touchdemo: a11y [1-9][0-9]* elements" "$LOG"
+          grep -q 'touchdemo: activating "Row' "$LOG"
+          grep -qE "touchdemo: row [0-9]+ tapped" "$LOG"
           grep -q "touchdemo: selftest passed" "$LOG"
+
+      # touchdemo's second part, driven from here: the simulator switches to
+      # dark mode (the app follows through traitCollectionDidChange:), the
+      # app goes to the background (another app launched) and comes back
+      # (launched again), building no frames while away, gets a memory
+      # warning, and sends a notification, which asks for permission (no one
+      # answers the prompt here).
+      - name: Appearance, background and notifications (touchdemo part 2)
+        run: |
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/touchdemo.log"
+          wait_for() {
+            for _ in $(seq 1 "${2:-60}"); do
+              grep -qE "$1" "$LOG" 2>/dev/null && return 0
+              sleep 1
+            done
+            echo "timed out waiting for: $1"
+            return 1
+          }
+          wait_for "touchdemo: waiting for appearance" || true
+          xcrun simctl ui "$DEV" appearance dark
+          wait_for "touchdemo: theme dark" 30 || true
+          sleep 1
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-dark.png || true
+          wait_for "touchdemo: waiting for background" 90 || true
+          xcrun simctl launch "$DEV" com.apple.Preferences || true
+          wait_for "touchdemo: lifecycle Background" 30 || true
+          sleep 3
+          xcrun simctl launch "$DEV" com.karpeleslab.stipple || true
+          wait_for "touchdemo: lifecycle Foreground" 30 || true
+          wait_for "touchdemo: phase 2 (passed|FAILED)" 60 || true
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-notification.png || true
+          xcrun simctl ui "$DEV" appearance light || true
+          echo "=== touchdemo.log (part 2) ==="; sed -n '/waiting for appearance/,$p' "$LOG" || true
+          # Dark mode reached the app as a theme change...
+          grep -q "touchdemo: theme dark" "$LOG"
+          # ...going away and back as lifecycle events, with no frames built
+          # in between...
+          grep -q "touchdemo: lifecycle Background" "$LOG"
+          grep -q "touchdemo: lifecycle Foreground" "$LOG"
+          grep -q "touchdemo: frames while away 0" "$LOG"
+          grep -q "touchdemo: lifecycle LowMemory" "$LOG"
+          # ...and the notification was handed to UNUserNotificationCenter.
+          grep -q "touchdemo: notify Ok" "$LOG"
+          grep -qE "touchdemo: notification permission [a-z_]+" "$LOG"
+          grep -q "touchdemo: phase 2 passed" "$LOG"
 
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4

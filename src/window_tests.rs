@@ -344,3 +344,36 @@ fn window_changes_reach_the_state_and_views_that_read_them() {
     run.send(100, Event::WindowChanged);
     assert_eq!(changes.borrow().len(), 1);
 }
+
+#[test]
+fn a_backgrounded_app_repaints_only_when_it_comes_back() {
+    let _lock = crate::platform::frame::SUSPEND_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    use crate::platform::Lifecycle;
+    let seen: Rc<RefCell<Vec<Lifecycle>>> = Default::default();
+    let record = seen.clone();
+    let app = App::new(doc(), titled).on_lifecycle(move |_, change| {
+        record.borrow_mut().push(change);
+    });
+    let handle = app.handle();
+    let mut run = run(app);
+    run.desk.take_log();
+    run.send(100, Event::Lifecycle(Lifecycle::Background));
+    assert!(crate::platform::frame::suspended());
+    // Updates run, but nothing is built or shown while away...
+    handle.update(|s| s.name = "b.txt".into());
+    run.wake();
+    assert!(
+        run.desk.take_log().is_empty(),
+        "no repaint in the background"
+    );
+    // ...until the app is back on screen.
+    run.send(100, Event::Lifecycle(Lifecycle::Foreground));
+    assert!(!crate::platform::frame::suspended());
+    assert_eq!(run.desk.take_log(), ["title 100 b.txt (0)"]);
+    assert_eq!(
+        *seen.borrow(),
+        [Lifecycle::Background, Lifecycle::Foreground]
+    );
+}

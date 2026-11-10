@@ -145,6 +145,52 @@ app still sees only its content: its size, and pointer positions within it.
 bar at all, on Wayland (Stipple asks for none and draws none), X11
 (`_MOTIF_WM_HINTS`) and Windows (a popup window with a sizing border).
 
+## Going to the background (mobile)
+
+On a phone the user leaves the app by going home or switching apps, and comes
+back later, or not: the system may end a backgrounded app to free memory.
+`App::on_lifecycle` hears each change as a `Lifecycle` (also delivered to the
+handler as `Event::Lifecycle`):
+
+```rust,no_run
+use stipple::prelude::*;
+
+struct State {
+    draft: String,
+    thumbnails: Vec<Pixmap>,
+}
+# fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+
+App::new(State { draft: String::new(), thumbnails: Vec::new() }, view)
+    .on_lifecycle(|s, change| match change {
+        // Save now: the process may not come back.
+        Lifecycle::Background => {
+            let _ = std::fs::write("draft.txt", &s.draft);
+        }
+        // Drop what can be rebuilt.
+        Lifecycle::LowMemory => s.thumbnails.clear(),
+        _ => {}
+    })
+    .run();
+```
+
+- `Background`: the app left the screen. From then on the App asks for no
+  animation frames (the display link stops) and doesn't build or repaint, even
+  when timers or `AppHandle` updates change the state; they still run for as
+  long as the OS lets the process run.
+- `Foreground`: back on screen. Every window rebuilds and repaints, and
+  animations ask for frames again.
+- `LowMemory`: the system is short of memory. The App drops its cached
+  OS-drawn controls; drop your own caches.
+
+The hook may change the state; the view is rebuilt (when on screen).
+
+| | Background / Foreground | Low memory |
+|---|---|---|
+| iOS | `UIApplicationDidEnterBackgroundNotification` / `WillEnterForegroundNotification` | `UIApplicationDidReceiveMemoryWarningNotification` |
+| Android | not sent yet | not sent yet |
+| Desktop, web | not sent | not sent |
+
 ## Trying it
 
 `cargo run -p lifecycle` opens a window that asks before closing while "work
@@ -175,6 +221,11 @@ for attention and counts the bells in the Dock badge.
 - **macOS**: an in-process self-test sends `performClose:` and `terminate:`
   through AppKit, which reach the app through the delegates, and sets the Dock
   badge and reads it back.
+
+- **iOS** (the simulator): `touchdemo`'s self-test is sent to the background
+  (CI launches another app) and brought back (launched again), and checks it
+  heard `Background` and `Foreground` and built no view in between; a memory
+  warning posted in-process arrives as `LowMemory`.
 
 Not checked anywhere: the system beep (nothing listens on a CI runner), the
 attention requests on Windows and macOS, and focus on Windows and macOS.

@@ -76,8 +76,10 @@ title bar, and cross-fades to the new look (see
 | macOS | `AppleInterfaceThemeChangedNotification` and `AppleColorPreferencesChangedNotification` (distributed), `NSSystemColorsDidChangeNotification` |
 | Linux | the desktop portal's `SettingChanged` signal for `color-scheme` and `accent-color`, heard on a thread of its own |
 | Web | the `change` event of `matchMedia("(prefers-color-scheme: dark)")` |
+| iOS | `traitCollectionDidChange:` on the view, when the screen's `userInterfaceStyle` changes (and on coming back to the foreground) |
+| Android | the activity's configuration changes (night mode) |
 
-iOS doesn't report appearance changes yet (only the reduced-motion setting). The platform layer delivers
+The platform layer delivers
 `Event::ThemeChanged` either way. A theme you customized after building it with
 `Theme::native()` is replaced on a change; set `theme.follows_system = false` to
 keep it.

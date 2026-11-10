@@ -5,7 +5,8 @@
 //! this mirror and hands it to a backend through
 //! [`Window::set_accessibility_tree`](crate::platform::Window::set_accessibility_tree).
 //! Each backend then exposes it to its OS accessibility API — `NSAccessibility`
-//! on macOS, UI Automation on Windows, AT-SPI on Linux — so a screen reader sees
+//! on macOS, UI Automation on Windows, AT-SPI on Linux, UIAccessibility on iOS,
+//! ARIA on the web — so a screen reader sees
 //! the *whole* element hierarchy, not just the window root.
 //!
 //! This carries the same fields `stipple::core::AccessNode` does; keep

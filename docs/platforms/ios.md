@@ -67,13 +67,73 @@ while moving; taps still click, since a press only becomes a scroll past 8
 logical pixels. See [Android](android.md#how-it-works), which shares the toolkit
 side.
 
-**The keyboard.** The view adopts `UIKeyInput`: while a text input has focus it
-becomes first responder, which brings up the on-screen keyboard, and it resigns
-when focus leaves. `insertText:` types (a newline is Enter) and
-`deleteBackward` is Backspace. A hardware keyboard types the same way; its
-arrows, Home/End, Page Up/Down, Escape, Tab, Delete, F-keys and Ctrl/Cmd
-shortcuts arrive as key events through `pressesBegan:withEvent:`, with their
-modifiers.
+**The keyboard.** The view adopts `UITextInput` (and so `UIKeyInput`): while a
+text input has focus it becomes first responder, which brings up the on-screen
+keyboard, and it resigns when focus leaves. `insertText:` types (a newline is
+Enter) and `deleteBackward` is Backspace. A hardware keyboard types the same
+way; its arrows, Home/End, Page Up/Down, Escape, Tab, Delete, F-keys and
+Ctrl/Cmd shortcuts arrive as key events through `pressesBegan:withEvent:`, with
+their modifiers.
+
+**Composing.** The Japanese, Chinese and Korean keyboards compose through
+`UITextInput`: `setMarkedText:selectedRange:` is the composition, shown
+underlined at the caret (`Event::Ime(Ime::Preedit)`), and `insertText:` or
+`unmarkText` commits it. The keyboard reads the field's text around the caret
+(`textInRange:`, `selectedTextRange`), from what the app reports with
+`Window::set_ime`, so autocorrect, QuickType and dictation have a document;
+their `replaceRange:withText:` becomes a delete around the caret
+(`Ime::DeleteSurrounding`) and a commit, and moving the caret from the
+keyboard (dragging on the space bar) becomes arrow keys. `firstRectForRange:`
+and `caretRectForPosition:` give the caret's rectangle for the candidate bar.
+Positions are UTF-16 offsets held by `UITextPosition` and `UITextRange`
+subclasses the backend builds at run time. See [ime.md](../ime.md).
+
+## Accessibility
+
+The view is a `UIAccessibilityContainer`: VoiceOver sees one
+`UIAccessibilityElement` per node of the app's accessibility tree, in reading
+order, with its label (a text field's text is its value), value (on/off,
+checked, expanded), traits (button, static text, header, selected) and frame,
+which UIKit reports in screen coordinates. Containers (groups, lists,
+toolbars) are elements VoiceOver doesn't stop on; their children are. A
+double tap (`accessibilityActivate`) taps the middle of the node, so buttons
+click and fields take focus. Elements are updated in place as the tree
+changes, and an update VoiceOver should hear posts
+`UIAccessibilityLayoutChangedNotification` (or
+`UIAccessibilityScreenChangedNotification` when a dialog opens or closes).
+The values are English words; no adjustable (swipe up/down) or scroll actions
+yet.
+
+## Appearance
+
+With `Theme::native()` the app follows light and dark mode while it runs:
+`traitCollectionDidChange:` on the view reports a change of the screen's
+`userInterfaceStyle`, which arrives as `Event::ThemeChanged`, and the App
+rebuilds the theme and repaints (the area around the safe area takes the new
+background too). The screen's traits decide rather than the view's, since
+UIKit switches a backgrounded app's traits back and forth to take its
+snapshots.
+
+## Background, foreground and memory warnings
+
+The app hears `UIApplicationDidEnterBackgroundNotification`,
+`WillEnterForegroundNotification` and `DidReceiveMemoryWarningNotification`
+(posted with or without scenes) as `Event::Lifecycle` with
+`Lifecycle::Background`, `Foreground` and `LowMemory`, which reach
+`App::on_lifecycle`. In the background the App asks for no frames (the display
+link pauses) and doesn't repaint; it rebuilds and repaints on coming back. Save
+what must survive on `Background`: iOS may end a backgrounded app without
+warning. A memory warning also drops the cached OS-drawn controls. See
+[window-lifecycle.md](../window-lifecycle.md#going-to-the-background-mobile).
+
+## Notifications
+
+`platform::notify` goes through `UNUserNotificationCenter`. The first call
+asks the user's permission (alert, sound, badge), and the notification waits
+for the answer; later calls are shown at once, or fail once permission is
+refused. A notification shows while the app is on screen too (the center's
+delegate answers `willPresentNotification:` with a banner). The bundle needs
+nothing extra in its `Info.plist`.
 
 ## OS-drawn controls
 
@@ -90,13 +150,16 @@ with `Font::from_bytes` to be safe.
 
 ## Known gaps
 
-- No composing input methods: the view is `UIKeyInput`, not `UITextInput`, so
-  marked text (Chinese, Japanese) and autocorrection don't reach the app, and
-  the keyboard doesn't push the content up, so it can cover a field near the
+- The keyboard doesn't push the content up, so it can cover a field near the
   bottom of the screen.
+- `UITextInput` knows the caret's rectangle only: `firstRectForRange:` answers
+  it for any range, `selectionRectsForRange:` is empty and a touch on the text
+  doesn't place the caret through the text system (the app does it). A
+  selection made from the keyboard (Shift with the space-bar trackpad) isn't
+  passed on.
 - Hardware keyboard keys only reach the app while a text input has focus (the
   view is first responder only then); they're build-checked, not run in CI.
-- No file dialogs or accessibility yet.
+- No file dialogs yet.
 - The clipboard (`UIPasteboard`) is wired up but untested; Cmd+C/V from a
   hardware keyboard reach it.
 
@@ -110,6 +173,16 @@ SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 xcrun simctl launch booted com.example.your-ap
 ```
 
 It uses `stipple::platform::backend::ios::simulate`, which sends `insertText:`
-and `deleteBackward` to the view through objc dispatch, feeds synthetic touches
-to the backend's touch path, and reads the view's keyboard state, then logs to
-`touchdemo.log` in the app's tmp directory. CI runs it.
+and `deleteBackward` to the view through objc dispatch, composes through its
+`UITextInput` methods (`setMarkedText:selectedRange:`, `replaceRange:withText:`)
+and reads the document back as the keyboard does, feeds synthetic touches to
+the backend's touch path, reads the accessibility elements as VoiceOver does
+(`accessibilityElementCount`, `accessibilityElementAtIndex:`, each element's
+label, value, traits and frame) and activates one, posts a memory warning, and
+reads the notification permission; it logs to `touchdemo.log` in the app's tmp
+directory. CI runs it, and drives the second half from outside: it switches
+the simulator to dark mode (`xcrun simctl ui booted appearance dark`), sends
+the app to the background by launching Settings and brings it back by
+launching it again, and checks the app followed the look, heard the lifecycle
+events and built no frames while away. Nobody answers the notification prompt
+in CI, so the notification itself isn't seen.

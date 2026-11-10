@@ -59,7 +59,8 @@ still reach the element's `on_raw_key` handler. See [keyboard.md](keyboard.md).
 | Windows | TSF (Text Services Framework), IMM32 as the fallback | `TranslateMessage` (`WM_CHAR`) |
 | macOS | `NSTextInputClient` | `NSTextInputClient` |
 | Web | composition events on a hidden `<textarea>` | the browser (composition or `input` events) |
-| iOS, Android | Not yet | Not yet |
+| iOS | `UITextInput` on the view | the keyboard (on-screen ones compose; hardware dead keys not yet) |
+| Android | Not yet | Not yet |
 
 **Wayland.** Stipple binds `zwp_text_input_manager_v3` and creates a text input
 for the seat. While a text field has focus (and the compositor has sent
@@ -193,6 +194,23 @@ key-downs go through `interpretKeyEvents:`, and the input context answers with
 the caret for the candidate window. This also gives the keyboard layout's dead
 keys (Option+E, then E).
 
+**iOS.** The view is a `UITextInput`: while a text field has focus it is first
+responder and the keyboard's document. The keyboard reads the field's text
+around the caret and the selection (`textInRange:`, `selectedTextRange`, from
+`Window::set_ime`, in UTF-16 offsets), composes with
+`setMarkedText:selectedRange:` (the preedit, at the caret) and commits with
+`insertText:` or `unmarkText`. Autocorrect, QuickType and dictation replace
+the word before the caret with `replaceRange:withText:`, which Stipple turns
+into `Ime::DeleteSurrounding` and a commit; a range that doesn't touch the
+caret is ignored. Moving the caret from the keyboard (dragging on the space
+bar) sends arrow keys. `firstRectForRange:` and `caretRectForPosition:` answer
+with the caret rectangle, in the view's coordinates. The keyboard's own edits
+show in its document at once; other changes to the field (a click moving the
+caret, the app replacing the text) are announced to it through its
+`inputDelegate` (`textDidChange:`, `selectionDidChange:`), but not while it
+composes. Positions and ranges are subclasses of `UITextPosition` and
+`UITextRange` built at run time, each offset an instance variable.
+
 ## Dead keys and compose on Linux
 
 On X11 and Wayland, turning dead keys and compose sequences into text is the
@@ -239,7 +257,14 @@ In CI, X11 types `dead_acute e` and `Multi_key o c` into `examples/textinput`
 with `xdotool` and checks the text that arrives (the example prints it with
 `STIPPLE_TEXTINPUT_ECHO=1`), screenshotting the underlined preedit mid-sequence;
 Wayland does the same with `wtype` under sway. On macOS the self-check drives
-`setMarkedText:` and `insertText:` through Objective-C dispatch.
+`setMarkedText:` and `insertText:` through Objective-C dispatch. On the iOS
+simulator `touchdemo`'s self-test does the same with the view's `UITextInput`
+methods: `setMarkedText:selectedRange:` must reach the field as a preedit, the
+document read back through `textInRange:` / `selectedTextRange` /
+`markedTextRange` must match, `firstRectForRange:` must lie in the field, and
+a committing `insertText:` and a `replaceRange:withText:` must edit the
+field's text. The document model is unit-tested on every host
+(`src/platform/backend/ios/doc.rs`).
 
 X11's XIM client runs against a real input method in CI: IBus started with
 `ibus-daemon --xim` under Xvfb, `XMODIFIERS=@im=ibus`. With IBus's keyboard
@@ -265,8 +290,9 @@ show each preedit and then the commit (screenshotted mid-way). With
 what an input method does on its own (keys, candidates, display attributes,
 reconversion) isn't exercised; the IMM32 fallback is build-checked only.
 
-Elsewhere real IMEs can't be driven headlessly, so on Wayland and macOS the
-input-method paths are built and unit-tested but not exercised end to end.
+Elsewhere real IMEs can't be driven headlessly, so on Wayland, macOS and
+iOS the input-method paths are built and unit-tested (and driven through
+their protocols on macOS and iOS) but no real input method runs.
 
 ## Not yet
 
@@ -278,4 +304,6 @@ input-method paths are built and unit-tested but not exercised end to end.
 - Per-segment styling of the preedit (IMEs mark the segment being converted;
   Stipple shows the highlighted range as the selection and underlines all of
   it).
-- Soft keyboards on iOS and Android.
+- Composition on Android (an `InputConnection`).
+- On iOS: selection rectangles, hit-testing a point to a position, selections
+  made from the keyboard, and dead keys on hardware keyboards.

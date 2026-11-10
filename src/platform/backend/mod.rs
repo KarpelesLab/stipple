@@ -37,6 +37,13 @@ pub mod macos;
 
 #[cfg(target_os = "ios")]
 pub mod ios;
+// The iOS backend's UIKit-free parts, unit-tested on every host.
+#[cfg(all(test, not(target_os = "ios")))]
+#[path = "ios/a11y_tree.rs"]
+mod ios_a11y_tree;
+#[cfg(all(test, not(target_os = "ios")))]
+#[path = "ios/doc.rs"]
+mod ios_doc;
 
 #[cfg(target_os = "android")]
 pub mod android;

@@ -31,13 +31,13 @@ How to build, package and run on each platform, and what works there today.
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ✅ ¹⁹ | ✅ ¹² |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ✅ ²⁰ | ✅ ²¹ |
-| Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ❌ | ✅ ²⁰ | ✅ ²¹ |
+| Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ✅ ⁵¹ | ✅ ²⁰ | ✅ ²¹ |
 | Theme changes cross-fade | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³¹ |
 | Enter, exit and layout animations | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ |
 | Reduced motion (OS setting) | ✅ ³² | ✅ ³² | ✅ ³² | ✅ ³ | ✅ ³² | ✅ ³¹ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
-| Accessibility | AT-SPI | UI Automation | NSAccessibility | ❌ | ❌ | ARIA ²² |
+| Accessibility | AT-SPI | UI Automation | NSAccessibility | UIAccessibility ⁴⁹ | ❌ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
@@ -49,20 +49,21 @@ How to build, package and run on each platform, and what works there today.
 | System fonts by family name | ✅ ³⁴ | ✅ ³⁴ | ✅ ³⁴ | ✅ ¹⁰ | ✅ ¹⁰ | — ³⁴ |
 | Bold, italic, per-element fonts, fallbacks, text decorations | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ |
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
-| Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
+| Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ✅ ⁵⁰ | ❌ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
-| Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ❌ | ❌ | ✅ ⁴³ |
+| Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ✅ ¹⁰ | ❌ | ✅ ⁴³ |
 | Raw keys (`on_raw_key`): physical key, left/right modifiers, repeat flag | ✅ ⁴² | ✅ ¹⁰ | ✅ ¹⁰ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Key repeat | ✅ ⁴² | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
 | Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
 | Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ³ | ✅ ¹⁰ | ✅ ¹⁰ |
-| Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ❌ | ❌ | ✅ ¹⁰ |
+| Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ❌ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ❌ | ❌ | ❌ |
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
 | Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | ❌ | ❌ | ❌ |
 | Asking before closing and quitting | ✅ ³⁷ | ✅ ³⁷ | ✅ ³⁷ | — | — | — |
+| Background, foreground and memory warnings (`App::on_lifecycle`) | — | — | — | ✅ ⁵³ | ❌ | — |
 | Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
@@ -164,8 +165,7 @@ touches or typing: it types through the view's `UIKeyInput` methods sent by
 objc dispatch (the view takes the keyboard while the field has focus and
 gives it back after), and drags the list with a synthetic finger fed to the
 backend's touch path, past `UITouch`. Hardware keyboard keys (`pressesBegan:`)
-are only build-checked. Composing input methods (`UITextInput`) aren't
-supported yet.
+are only build-checked. Composition goes through `UITextInput` (⁵⁰).
 ²⁸ XDND on X11 and `wl_data_device` on Wayland, OLE `IDropTarget` (and
 `WM_DROPFILES`) on Windows, `NSDraggingDestination` on macOS. CI drops files and
 text on `dropdemo` with an XDND source on X11 and drives the view's dragging
@@ -276,6 +276,33 @@ activates TSF on the Windows runner and drives a composition through the real
 TSF manager (the app playing the input method), checking the preedit and the
 commit reach the field. No real IME runs in CI. See
 [ime.md](ime.md#per-platform).
+⁴⁹ The view is a `UIAccessibilityContainer` with one `UIAccessibilityElement`
+per node (label, value, traits, frame in screen coordinates; a double tap
+taps the node), and posts layout and screen-changed notifications on updates.
+CI's `touchdemo` self-test on the simulator reads the elements through objc
+dispatch as VoiceOver does, checks the text field's value and frame, the
+label's static-text trait and a row's button trait, activates the row and
+checks it was tapped and the label's element followed. Not yet tried with
+VoiceOver itself. See [the iOS page](platforms/ios.md#accessibility).
+⁵⁰ `UITextInput` on the view: marked text as the preedit, commits, the field's
+text around the caret for autocorrect and dictation, `replaceRange:withText:`
+and the caret rectangle for the candidate bar. CI's `touchdemo` self-test on
+the simulator drives these methods through objc dispatch (marked text, a
+commit, a replacement) and reads the document back; no real keyboard composes
+in CI. Hardware dead keys aren't handled. See [ime.md](ime.md).
+⁵¹ `traitCollectionDidChange:`, by the screen's `userInterfaceStyle`. CI
+switches the simulator to dark mode (`xcrun simctl ui ... appearance dark`)
+while `touchdemo` runs and checks its native theme turned dark.
+⁵² `UNUserNotificationCenter`, asking for permission first. CI checks the call
+is handed over and the center reports the permission; nobody answers the
+prompt on the simulator, so a shown notification isn't seen. See
+[os-integration.md](os-integration.md#notifications).
+⁵³ `Event::Lifecycle` / `App::on_lifecycle`, from UIKit's background,
+foreground and memory-warning notifications. CI sends `touchdemo` to the
+background on the simulator (launching another app) and back, and checks the
+events arrived and no frame was built in between; the memory warning is
+posted in-process. See
+[window-lifecycle.md](window-lifecycle.md#going-to-the-background-mobile).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -304,7 +331,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop
 - [Windows and cursors](windows-and-cursors.md): several windows opened and closed at run time, titles, position, size and state, size limits, maximize, fullscreen, the icon, and cursor shapes
-- [Closing, quitting, focus and attention](window-lifecycle.md): asking before a window closes or the app quits, window focus, attention requests, the bell, and Wayland title bars
+- [Closing, quitting, focus and attention](window-lifecycle.md): asking before a window closes or the app quits, window focus, attention requests, the bell, Wayland title bars, and mobile apps going to the background
 - [Rendering on the GPU](gpu.md): `stipple::gpu` under `App::render_with`, what it draws how, and how close it is to the software renderer
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

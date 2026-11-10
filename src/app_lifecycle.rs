@@ -1,11 +1,13 @@
 //! Window and application lifecycle in the [`App`]: asking before a window
 //! closes or the app quits ([`App::on_close_requested`],
 //! [`App::on_quit_requested`]) and following which window has keyboard focus
-//! ([`App::on_window_focus`], [`Cx::window_focused`](crate::core::Cx::window_focused)).
-//! See `docs/windows-and-cursors.md`.
+//! ([`App::on_window_focus`], [`Cx::window_focused`](crate::core::Cx::window_focused)),
+//! and a mobile app going to the background and coming back
+//! ([`App::on_lifecycle`]). See `docs/windows-and-cursors.md` and
+//! `docs/window-lifecycle.md`.
 
 use crate::App;
-use crate::platform::WindowId;
+use crate::platform::{Lifecycle, WindowId};
 
 /// The answer to a close or quit request (see [`App::on_close_requested`] and
 /// [`App::on_quit_requested`]).
@@ -24,25 +26,32 @@ pub enum CloseResponse {
 type CloseFn<S> = Box<dyn FnMut(&mut S, WindowId) -> CloseResponse>;
 type QuitFn<S> = Box<dyn FnMut(&mut S) -> CloseResponse>;
 type FocusFn<S> = Box<dyn FnMut(&mut S, WindowId, bool)>;
+type LifecycleFn<S> = Box<dyn FnMut(&mut S, Lifecycle)>;
 
 /// The app's lifecycle hooks.
-pub(crate) struct Lifecycle<S> {
+pub(crate) struct Hooks<S> {
     close: Option<CloseFn<S>>,
     quit: Option<QuitFn<S>>,
     focus: Option<FocusFn<S>>,
+    lifecycle: Option<LifecycleFn<S>>,
+    /// Whether the app is in the background (between
+    /// [`Lifecycle::Background`] and [`Lifecycle::Foreground`]).
+    pub(crate) background: bool,
 }
 
-impl<S> Default for Lifecycle<S> {
+impl<S> Default for Hooks<S> {
     fn default() -> Self {
         Self {
             close: None,
             quit: None,
             focus: None,
+            lifecycle: None,
+            background: false,
         }
     }
 }
 
-impl<S> Lifecycle<S> {
+impl<S> Hooks<S> {
     /// Whether the app answers quit requests itself: with a quit hook, or
     /// with a close hook, which a quit asks for each window.
     fn confirms_quit(&self) -> bool {
@@ -119,6 +128,79 @@ impl<S: 'static> App<S> {
     pub fn on_window_focus(mut self, hook: impl FnMut(&mut S, WindowId, bool) + 'static) -> Self {
         self.lifecycle.focus = Some(Box::new(hook));
         self
+    }
+
+    /// Hear when the app goes to the background, comes back, or the system
+    /// runs short of memory ([`Lifecycle`]), on mobile platforms: iOS
+    /// (`UIApplicationDidEnterBackgroundNotification`,
+    /// `WillEnterForeground`, `DidReceiveMemoryWarning`). Desktops and the
+    /// web don't send them.
+    ///
+    /// Save what must survive on [`Lifecycle::Background`]: the system may end
+    /// a backgrounded app without warning. While in the background the app
+    /// asks for no animation frames and doesn't repaint; timers and
+    /// [`AppHandle`](crate::core::AppHandle) updates still run while the OS
+    /// lets the process run. On coming back every window rebuilds and
+    /// repaints. The hook may change the state; the view is rebuilt.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// # use stipple::platform::Lifecycle;
+    /// struct State { draft: String, cache: Vec<u8> }
+    /// # fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+    /// App::new(State { draft: String::new(), cache: Vec::new() }, view)
+    ///     .on_lifecycle(|s, change| match change {
+    ///         Lifecycle::Background => {
+    ///             let _ = std::fs::write("draft.txt", &s.draft);
+    ///         }
+    ///         Lifecycle::LowMemory => s.cache.clear(),
+    ///         _ => {}
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn on_lifecycle(mut self, hook: impl FnMut(&mut S, Lifecycle) + 'static) -> Self {
+        self.lifecycle.lifecycle = Some(Box::new(hook));
+        self
+    }
+
+    /// The app went to the background, came back or is short of memory:
+    /// stop or restart frames, and tell the hook. Returns whether the app
+    /// should repaint now (it came back, or the hook ran while on screen).
+    pub(crate) fn lifecycle_changed(&mut self, change: Lifecycle) -> bool {
+        let was = self.lifecycle.background;
+        match change {
+            Lifecycle::Background => self.lifecycle.background = true,
+            Lifecycle::Foreground => self.lifecycle.background = false,
+            _ => {}
+        }
+        let background = self.lifecycle.background;
+        if background != was {
+            crate::platform::frame::set_suspended(background);
+        }
+        // A memory warning drops the bitmaps the OS drew, which are redrawn
+        // on demand.
+        if change == Lifecycle::LowMemory {
+            crate::platform::native::clear_cache();
+        }
+        let ran = match self.lifecycle.lifecycle.as_mut() {
+            Some(hook) => {
+                hook(&mut self.state, change);
+                true
+            }
+            None => false,
+        };
+        // Back on screen, everything is shown afresh.
+        if ran || (was && !background) {
+            for pane in &mut self.panes {
+                pane.dirty = true;
+            }
+        }
+        !background && (ran || was)
+    }
+
+    /// Whether the app is in the background (see [`on_lifecycle`](Self::on_lifecycle)).
+    pub(crate) fn in_background(&self) -> bool {
+        self.lifecycle.background
     }
 
     /// Ask the close hook whether window `id` closes. A hook
@@ -214,6 +296,7 @@ mod tests {
         asked: Vec<WindowId>,
         quits: u32,
         focus: Vec<bool>,
+        changes: Vec<Lifecycle>,
     }
 
     fn view(_: &State, _: &mut Cx<State>) -> Element {
@@ -308,5 +391,46 @@ mod tests {
         assert_eq!(seen.get(), Some(false));
         assert!(app.set_window_focused(true));
         assert_eq!(app.state().focus, [false, true]);
+    }
+
+    #[test]
+    fn lifecycle_changes_reach_the_hook_and_stop_frames() {
+        let _lock = crate::platform::frame::SUSPEND_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut app =
+            App::new(State::default(), view).on_lifecycle(|s, change| s.changes.push(change));
+        app.render_frame();
+        assert!(!app.in_background());
+        assert!(
+            !app.lifecycle_changed(Lifecycle::Background),
+            "nothing to show"
+        );
+        assert!(app.in_background());
+        assert!(crate::platform::frame::suspended(), "frames stop");
+        crate::platform::frame::request();
+        assert!(!crate::platform::frame::wanted(), "no frames while away");
+        assert!(!app.lifecycle_changed(Lifecycle::LowMemory));
+        assert!(
+            app.lifecycle_changed(Lifecycle::Foreground),
+            "back: repaint"
+        );
+        assert!(!crate::platform::frame::suspended());
+        assert!(app.panes[0].dirty, "every window rebuilds");
+        assert_eq!(
+            app.state().changes,
+            [
+                Lifecycle::Background,
+                Lifecycle::LowMemory,
+                Lifecycle::Foreground
+            ]
+        );
+        // Without a hook, coming back still repaints, and a warning doesn't.
+        let mut app = App::new(State::default(), view);
+        app.render_frame();
+        assert!(!app.lifecycle_changed(Lifecycle::LowMemory));
+        assert!(!app.panes[0].dirty);
+        app.lifecycle_changed(Lifecycle::Background);
+        assert!(app.lifecycle_changed(Lifecycle::Foreground));
     }
 }

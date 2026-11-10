@@ -53,7 +53,8 @@ A notification is a title and a body. `AppHandle::notify` is the same call.
 | Windows | a balloon on the tray icon (`Shell_NotifyIconW` with `NIF_INFO`), which Windows 10 and 11 show as a toast; without a tray icon, a temporary icon is added for it and removed when the balloon goes |
 | macOS | AppleScript's `display notification`, through `osascript` |
 | Web | the `Notification` API, asking for permission first if it hasn't been granted or refused |
-| iOS, Android | not yet (`Err`) |
+| iOS | `UNUserNotificationCenter`, asking for permission first (see below) |
+| Android | not yet (`Err`) |
 
 **macOS.** The notification frameworks need an app bundle:
 `UNUserNotificationCenter` raises an exception in a bare executable (one with no
@@ -62,6 +63,15 @@ bundle identifier, which is what `cargo run` starts), and the deprecated
 process, so that's what Stipple uses for now; macOS shows the notification as
 coming from Script Editor. A bundled app should eventually use
 `UNUserNotificationCenter`, after asking for authorization.
+
+**iOS.** The first `notify` asks the user's permission
+(`requestAuthorizationWithOptions:completionHandler:`, alert, sound and badge),
+which shows the system's prompt; the notification waits for the answer and is
+shown if it's yes. Later calls go straight through (iOS answers without asking
+again), and fail with `Err` once permission is refused. Each one is a
+`UNNotificationRequest` with no trigger, so it shows at once, and a delegate
+on the center lets it show as a banner while the app is on screen too (iOS
+otherwise keeps a foreground app's notifications to itself).
 
 **Windows.** Notifications need the app's window to exist, since the icon that
 carries the balloon belongs to it. Windows names the notification after the
@@ -191,9 +201,15 @@ the last update was shown.
 - **macOS**: the `NSStatusItem` must exist, `osascript`'s notification succeed,
   and `open_url` of a `.txt` start TextEdit.
 
+On the **iOS** simulator, `touchdemo`'s self-test calls `notify`: it must hand
+the notification over (`Ok`) and the center must report the app's permission
+(`getNotificationSettingsWithCompletionHandler:`). Nobody answers the
+permission prompt there, so the notification itself isn't shown; the
+screenshot shows the prompt.
+
 No real tray host or notification popup is looked at, and nothing clicks the
 real icons on Windows or macOS: there, the menus and click handling are
-build-checked, along with the iOS, Android and web paths.
+build-checked, along with the Android and web paths and opening URLs on iOS.
 
 For message boxes, `sessionsdemo --alert-selftest` asks a three-button
 question as soon as it starts and presses the second button itself after

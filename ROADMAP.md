@@ -906,8 +906,8 @@ Most input only works on X11 today.
   Escape, Tab, F-keys, Ctrl/Cmd shortcuts) arrive through `pressesBegan:`.
   `touchdemo`'s self-test sends `insertText:`/`deleteBackward` by objc dispatch
   on the simulator in CI and checks the field and the first-responder state;
-  hardware keys are build-checked only. `UITextInput` (marked text) is still
-  to do.
+  hardware keys are build-checked only. Composition goes through
+  `UITextInput` (7c).
 - **Exit criteria:** the same scripted input test passes on every desktop backend.
 
 #### 7c — Text input
@@ -963,10 +963,23 @@ Most input only works on X11 today.
   aims by point), text attributes and input scopes (`RequestSupportedAttrs`
   offers none), the keystroke manager (keys reach text services through TSF's
   own hooks). See [docs/ime.md](docs/ime.md).
-- ⬜ iOS composition: `UITextInput` on the view (marked text, `selectedTextRange`,
-  `firstRectForRange:` for the candidate bar, `caretRectForPosition:`), so the
-  Japanese, Chinese and Korean keyboards compose instead of committing raw kana
-  or jamo, and autocorrect, dictation and QuickType have a document to read.
+- ✅ iOS composition: `UITextInput` on the view, so the Japanese, Chinese and
+  Korean keyboards compose instead of committing raw kana or jamo, and
+  autocorrect, dictation and QuickType have a document to read. The document
+  is the field's text around the caret from `Window::set_ime`, in UTF-16
+  offsets carried by `UITextPosition` / `UITextRange` subclasses built at run
+  time (an instance variable per offset); `setMarkedText:selectedRange:` is
+  `Ime::Preedit`, `insertText:` / `unmarkText` commit, `replaceRange:withText:`
+  becomes `Ime::DeleteSurrounding` plus a commit, a collapsed
+  `setSelectedTextRange:` arrow keys, and `firstRectForRange:` /
+  `caretRectForPosition:` the caret rectangle; changes the keyboard didn't
+  make are announced through its `inputDelegate`. The document model is
+  unit-tested on every host; `touchdemo`'s simulator self-test drives the
+  methods through objc dispatch (marked text reaching the field as a preedit,
+  the document and `firstRectForRange:` read back, a commit, a replacement).
+  The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only. No real keyboard composes in CI. Not done: selection rectangles,
+  point-to-position hit-testing, keyboard-made selections, hardware dead keys.
+  See [docs/ime.md](docs/ime.md).
 - ⬜ Android composition: the soft keyboard shows and hides with focus, but it
   types only through key events, so emoji and composing keyboards (Chinese,
   Japanese, Korean, Gboard's suggestions) deliver nothing. Implement an
@@ -1137,7 +1150,7 @@ Most input only works on X11 today.
   `Event::ThemeChanged` from `WM_SETTINGCHANGE` on Windows, the appearance
   notifications on macOS and the portal's `SettingChanged` on Linux; the App
   rebuilds `Theme::native()`, drops cached OS-drawn bitmaps, switches the title
-  bar and repaints. Not exercised in CI. iOS doesn't report changes yet.
+  bar and repaints. Not exercised in CI on the desktops; on iOS see 7f.
 - ✅ Drag and drop: drops of files and text from other applications over XDND
   (X11, by hand on the wire), `wl_data_device` (Wayland), an OLE
   `IDropTarget` with a hand-written vtable plus `WM_DROPFILES` (Windows) and
@@ -1180,8 +1193,8 @@ Most input only works on X11 today.
   toast on Windows 10 and 11), `osascript` on macOS (the notification
   frameworks need an app bundle) and the web's `Notification` API. CI checks
   the Linux call reaches a mock server, and that Windows and macOS accept it; no
-  popup is looked at. Clicks and actions on notifications, and iOS and Android,
-  are still to do.
+  popup is looked at. iOS: see 7f. Clicks and actions on notifications, and
+  Android, are still to do.
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
   optional (secure) text field, answered asynchronously as a state update.
@@ -1244,21 +1257,40 @@ Most input only works on X11 today.
   configuration changes, and the Android 12 wallpaper accent, read from
   `Resources` over JNI. The system bars take the app's background. Dark mode
   and the accent were tried by hand on an emulator, not in CI.
-- ⬜ Accessibility on iOS (UIAccessibility) and Android.
-  - iOS: the view as a `UIAccessibilityContainer` exposing one
-    `UIAccessibilityElement` per node (label, value, traits, frame, activate),
-    with layout and screen-changed notifications so VoiceOver follows updates.
-  - Android: an `AccessibilityNodeProvider` over JNI (virtual view ids per
-    node, actions for click, focus, scroll and text), so TalkBack can read and
-    drive the tree.
-  - Checked with VoiceOver and TalkBack on real devices, not just in CI.
-- ⬜ Mobile app lifecycle for apps: an event for going to the background and
-  coming back (iOS `sceneDidEnterBackground` / `WillEnterForeground`, Android
-  `onPause` / `onResume`, which the backend handles internally but doesn't
-  report), so apps can save state and stop timers and animations; frames stop
-  while in the background; memory warnings (`didReceiveMemoryWarning`,
-  `onTrimMemory`); and saving and restoring state across process death on
-  Android (`onSaveInstanceState`).
+- ✅ Accessibility on iOS (UIAccessibility): the view is a
+  `UIAccessibilityContainer` exposing one `UIAccessibilityElement` per node of
+  the tree (a run-time subclass whose `accessibilityActivate` taps the node),
+  with its label, value, traits and frame (`accessibilityFrameInContainerSpace`,
+  so `accessibilityFrame` is in screen coordinates). Elements are kept and
+  updated in place; `UIAccessibilityLayoutChangedNotification` follows an
+  update VoiceOver should hear, `ScreenChangedNotification` the first tree and
+  a dialog opening or closing. The tree's mapping and the notification choice
+  are unit-tested on every host; `touchdemo`'s simulator self-test reads the
+  elements through objc dispatch (the field's value and screen frame, the
+  label's static-text trait, a row's button trait), activates a row through
+  its element and checks it was tapped and the label's element followed.
+  The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only. Not yet tried with VoiceOver itself, on a simulator or a
+  device; no adjustable or scroll actions.
+- ⬜ Accessibility on Android: an `AccessibilityNodeProvider` over JNI (virtual
+  view ids per node, actions for click, focus, scroll and text), so TalkBack
+  can read and drive the tree. Checked with TalkBack (and VoiceOver on iOS) on
+  real devices, not just in CI.
+- ✅ App lifecycle for apps, cross-platform API and iOS: `Event::Lifecycle`
+  with `Lifecycle::{Background, Foreground, LowMemory}`, heard by
+  `App::on_lifecycle(|state, change|)`. While in the background the App asks
+  for no frames (the frame clock is suspended and the display link stopped)
+  and neither builds nor repaints, even when timers change the state; coming
+  back rebuilds and repaints every window; a memory warning also drops the
+  cached OS-drawn controls. On iOS from `UIApplicationDidEnterBackground` /
+  `WillEnterForeground` / `DidReceiveMemoryWarning` notifications (posted with
+  or without scenes). The App side is unit-tested (the hook, the frame clock
+  suspended, no repaint until coming back); CI sends `touchdemo` to the
+  background on the simulator by launching another app and back by launching
+  it again, and checks both events and that no view was built in between; the
+  memory warning is posted in-process. The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only.
+- ⬜ Mobile app lifecycle on Android: `onPause` / `onResume` and `onTrimMemory`
+  as `Event::Lifecycle`, and saving and restoring state across process death
+  (`onSaveInstanceState`).
 - ⬜ Back navigation: Android's Back button and predictive back gesture, and
   iOS's edge swipe where an app wants it, delivered as an event a view can
   handle (closing a menu, a dialog, then a screen) before the activity
@@ -1279,15 +1311,29 @@ Most input only works on X11 today.
 - ⬜ Menus on mobile: `Element::context_menu` on long press, as `UIMenu` /
   `UIContextMenuInteraction` on iOS and a `PopupMenu` (or the drawn menu) on
   Android; the app's menu bar shown as a drawn menu or omitted.
-- ⬜ Notifications on iOS (`UNUserNotificationCenter`, with the permission
-  prompt) and Android (`NotificationManager` and a channel, with the
+- ✅ Notifications on iOS: `platform::notify` through
+  `UNUserNotificationCenter`; the first call asks permission
+  (`requestAuthorizationWithOptions:`, with a hand-built completion block) and
+  the notification waits for the answer, later ones go straight through or
+  fail once refused; a run-time delegate shows them as banners while the app
+  is on screen. `touchdemo`'s simulator self-test checks `notify` hands the
+  notification over and the center reports the permission
+  (`getNotificationSettingsWithCompletionHandler:`); nobody answers the prompt
+  in CI, so delivery after a grant is build-checked only. The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only.
+- ⬜ Notifications on Android (`NotificationManager` and a channel, with the
   `POST_NOTIFICATIONS` permission on API 33+).
 - ⬜ Drag and drop from other apps on mobile: `UIDropInteraction` on iOS
   (iPad split view) and `View.OnDragListener` on Android, feeding the existing
   `DragEnter` / `Drop` events.
-- ⬜ iOS: following appearance changes live (`traitCollectionDidChange:` →
-  `Event::ThemeChanged`), and trackpad / mouse scrolling on iPad
-  (`UIPanGestureRecognizer` with indirect scroll input).
+- ✅ iOS: following appearance changes live: `traitCollectionDidChange:` on
+  the view, when the screen's `userInterfaceStyle` changes (the screen's
+  traits, as UIKit flips a backgrounded app's own to snapshot it), and on
+  coming back to the foreground, → `Event::ThemeChanged`; the native theme is
+  rebuilt and the area around the safe area takes the new background. CI
+  switches the simulator with `xcrun simctl ui ... appearance dark` while
+  `touchdemo` runs and checks its theme turned dark. The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only.
+- ⬜ iOS: trackpad / mouse scrolling on iPad (`UIPanGestureRecognizer` with
+  indirect scroll input).
 - ⬜ Mobile CI depth: run the iOS features that are only implemented (timers,
   clipboard, opening URLs) on the simulator, with real `UITouch`es rather than
   the synthetic touch path, and try both platforms on physical devices before
@@ -1517,7 +1563,7 @@ styling part of the toolkit.
 | CPU rasterization too slow for large/animated/4K UIs | Damage tracking + layer/glyph caching in Phase 1; GPU `Surface` (Phase 6) behind the same trait. |
 | Per-OS windowing/IME is a deep, hand-written surface | Confine to `stipple::platform`; freeze the trait after Phase 2; ship one OS fully before porting. |
 | Reactive runtime + Rust ownership friction | Prototype the `View`/state model in Phase 1 against real demos before widening the widget set. |
-| Accessibility is hard when self-drawing everything | A semantics tree built from the element tree, with hand-written bridges to AT-SPI, UI Automation, NSAccessibility and ARIA (the web). Mobile bridges remain (Phase 7f). |
+| Accessibility is hard when self-drawing everything | A semantics tree built from the element tree, with hand-written bridges to AT-SPI, UI Automation, NSAccessibility, UIAccessibility (iOS) and ARIA (the web). The Android bridge remains (Phase 7f). |
 | The native theme leans on OS internals | Windows' dark control themes (`DarkMode_*`) are undocumented, and AppKit and UIKit restyle controls between releases. Controls are drawn by the OS at run time, so they follow its current look; the self-drawn decoration stays as the fallback; CI screenshots each platform. |
 | oxideav API churn | Pin via path deps now; track upstream; the `stipple::render` seam isolates oxideav from the rest. |
 | Web with "minimal deps" constraint | Accept a thin, hand-audited JS-interop shim as the one web exception. |

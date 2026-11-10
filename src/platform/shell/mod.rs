@@ -7,7 +7,7 @@
 //! | Linux | the XDG portal's `OpenURI` over D-Bus, else `xdg-open` | `org.freedesktop.Notifications` over D-Bus | `StatusNotifierItem` + `com.canonical.dbusmenu` over D-Bus |
 //! | Windows | `ShellExecuteW` | a `Shell_NotifyIconW` balloon (a toast on Windows 10 and 11) | `Shell_NotifyIconW` + a popup `HMENU` |
 //! | macOS | `NSWorkspace openURL:` | `osascript`'s `display notification` | `NSStatusItem` + `NSMenu` |
-//! | iOS | `UIApplication openURL:` | — | — |
+//! | iOS | `UIApplication openURL:` | `UNUserNotificationCenter` (asking permission first) | — |
 //! | Android | an `ACTION_VIEW` `Intent` over JNI | — | — |
 //! | Web | `window.open` | the `Notification` API | — |
 //!
@@ -31,7 +31,7 @@ mod macos;
 
 #[cfg(target_os = "ios")]
 #[allow(unsafe_code)]
-mod ios;
+pub(crate) mod ios;
 
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
@@ -101,8 +101,10 @@ pub fn open_path(path: impl AsRef<Path>) -> Result<(), PlatformError> {
 
 /// Show `notification` as a desktop notification.
 ///
-/// Where it's delivered asynchronously (Linux, the web) `Ok` means it was
-/// handed over; a failure is reported on stderr (the console on the web).
+/// Where it's delivered asynchronously (Linux, iOS, the web) `Ok` means it
+/// was handed over; a failure is reported on stderr (the console on the web).
+/// On iOS the first call asks the user's permission, and notifications wait
+/// for the answer; once refused, `notify` fails.
 pub fn notify(notification: &Notification) -> Result<(), PlatformError> {
     os_notify(notification)
 }
@@ -188,7 +190,7 @@ use macos::{notify as os_notify, open_url as os_open_url};
 use windows::{notify as os_notify, open_url as os_open_url};
 
 #[cfg(target_os = "ios")]
-use ios::open_url as os_open_url;
+use ios::{notify as os_notify, open_url as os_open_url};
 
 #[cfg(target_os = "android")]
 fn os_open_url(url: &str) -> Result<(), PlatformError> {
@@ -227,6 +229,7 @@ fn os_open_url(_url: &str) -> Result<(), PlatformError> {
     target_os = "linux",
     target_os = "macos",
     target_os = "windows",
+    target_os = "ios",
     target_arch = "wasm32"
 )))]
 fn os_notify(_n: &Notification) -> Result<(), PlatformError> {
