@@ -30,6 +30,7 @@
 
 pub mod anim;
 mod app_dnd;
+mod app_lifecycle;
 mod app_pointer;
 pub mod core;
 pub mod geometry;
@@ -45,6 +46,8 @@ pub mod render;
 pub mod style;
 mod web_app;
 pub mod widgets;
+
+pub use app_lifecycle::CloseResponse;
 
 use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
@@ -118,6 +121,8 @@ pub struct App<S> {
     // was last handed to the backend.
     tray: Option<TrayFn<S>>,
     native_tray: Option<crate::platform::NativeTray>,
+    // Close/quit confirmation and window focus hooks (see `app_lifecycle`).
+    lifecycle: app_lifecycle::Lifecycle<S>,
 }
 
 /// The active theme as a function of the app state and the theme set with
@@ -356,6 +361,10 @@ struct Pane<S> {
     focus_visible: bool,
     styled_actions: Vec<ActionId>,
     styled_drops: Vec<crate::core::DropId>,
+    // The platform window showing this pane, once open, and whether it has
+    // keyboard focus (see `Cx::window_focused`).
+    window_id: Option<WindowId>,
+    window_focused: bool,
 }
 
 impl<S> std::fmt::Debug for App<S> {
@@ -421,6 +430,8 @@ impl<S: 'static> Pane<S> {
             focus_visible: false,
             styled_actions: Vec::new(),
             styled_drops: Vec::new(),
+            window_id: None,
+            window_focused: true,
         }
     }
 }
@@ -447,6 +458,7 @@ impl<S: 'static> App<S> {
             alt_armed: false,
             tray: None,
             native_tray: None,
+            lifecycle: Default::default(),
         }
     }
 
@@ -854,6 +866,7 @@ impl<S: 'static> Pane<S> {
         let theme = *theme; // Theme is Copy; avoids borrowing through `theme` in `cx`.
         let mut cx = Cx::with_handle(&theme, self.handle.clone());
         cx.set_memo_cache(std::mem::take(&mut self.memo_cache));
+        cx.set_window(self.window_id, self.window_focused);
         for (id, offset) in self.scroll_requests.take() {
             self.scroll_offsets.insert(id, offset.max(0.0));
         }
@@ -2466,16 +2479,32 @@ impl<S: 'static> App<S> {
             if !opened_extras {
                 opened_extras = true;
                 id_to_pane.insert(wid, 0);
+                self.panes[0].window_id = Some(wid);
                 open_count = 1;
                 for idx in 1..self.panes.len() {
                     let attrs = self.panes[idx].attrs.clone();
                     if let Some(id) = window.open_window(attrs) {
                         id_to_pane.insert(id, idx);
+                        self.panes[idx].window_id = Some(id);
                         open_count += 1;
                     }
                 }
             }
             let idx = id_to_pane.get(&wid).copied().unwrap_or(0);
+            // Windows the app closes itself (`AppHandle::close_window`), without
+            // asking again.
+            for id in self.handle.take_close_requests() {
+                if id_to_pane.remove(&id).is_some() {
+                    open_count = open_count.saturating_sub(1);
+                    if open_count == 0 {
+                        return ControlFlow::Exit;
+                    }
+                    window.close_window_id(id);
+                }
+            }
+            if !id_to_pane.contains_key(&wid) {
+                return ControlFlow::Wait; // this window is closing
+            }
             // Window changes queued through `AppHandle::window` go to the
             // primary window (its events, including the wake they cause).
             if idx == 0 {
@@ -2798,7 +2827,7 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
-                Event::FocusChanged(_) => {
+                Event::FocusChanged(focused) => {
                     self.alt_armed = false;
                     // Alt+Tab away leaves no underlines behind.
                     let pane = &mut self.panes[idx];
@@ -2807,6 +2836,25 @@ impl<S: 'static> App<S> {
                         ui.cues = false;
                         pane.dirty = true;
                     }
+                    drop(ui);
+                    if self.window_focus_changed(idx, wid, focused) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::QuitRequested => {
+                    let open: Vec<(usize, WindowId)> =
+                        id_to_pane.iter().map(|(&id, &idx)| (idx, id)).collect();
+                    if self.ask_quit(&open) {
+                        ControlFlow::Exit
+                    } else {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                        ControlFlow::Wait
+                    }
+                }
+                Event::CloseRequested if !self.ask_close(idx, wid) => {
+                    // The app keeps the window (it may ask the user first).
+                    present(&mut self, &mut surfaces, idx, window, false);
                     ControlFlow::Wait
                 }
                 Event::CloseRequested => {
@@ -3227,7 +3275,6 @@ fn map_key_for(code: KeyCode, modifiers: Modifiers, mac: bool) -> Option<KeyInpu
 
 /// The common imports for building a Stipple app.
 pub mod prelude {
-    pub use crate::App;
     pub use crate::anim::SpringParams;
     pub use crate::anim::{Easing, Spring, Tween};
     pub use crate::core::ViewportId;
@@ -3243,7 +3290,7 @@ pub mod prelude {
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::platform::Notification;
     pub use crate::platform::PointerButton;
-    pub use crate::platform::{CursorIcon, DragOffer, DropData, WindowRequest};
+    pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
     pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg, TextDirection};
     pub use crate::render::{Decoration, FontStyle, FontWeight, UnderlineStyle};
@@ -3264,6 +3311,7 @@ pub mod prelude {
         toasts, tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar,
     };
     pub use crate::widgets::{image, svg};
+    pub use crate::{App, CloseResponse};
     pub use std::time::Duration;
 }
 

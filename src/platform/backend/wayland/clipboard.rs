@@ -502,7 +502,7 @@ pub(super) mod tests {
     use std::os::unix::net::UnixStream;
 
     /// A connection whose other end plays the compositor.
-    pub(super) fn conn_pair() -> (WlConn, UnixStream) {
+    pub(in crate::platform::backend::wayland) fn conn_pair() -> (WlConn, UnixStream) {
         let (ours, theirs) = UnixStream::pair().unwrap();
         let conn = WlConn {
             stream: ours,
@@ -516,12 +516,18 @@ pub(super) mod tests {
             cursor: Default::default(),
             text_input: Default::default(),
             pointer: None,
+            decor: Default::default(),
+            attention: Default::default(),
         };
         (conn, theirs)
     }
 
     /// Encode an event as the compositor would.
-    pub(super) fn message(object: u32, opcode: u16, args: &[u8]) -> Vec<u8> {
+    pub(in crate::platform::backend::wayland) fn message(
+        object: u32,
+        opcode: u16,
+        args: &[u8],
+    ) -> Vec<u8> {
         let mut m = object.to_le_bytes().to_vec();
         m.extend_from_slice(&((((8 + args.len()) as u32) << 16) | opcode as u32).to_le_bytes());
         m.extend_from_slice(args);
@@ -529,7 +535,9 @@ pub(super) mod tests {
     }
 
     /// Read one request's header and arguments, plus any fd passed with it.
-    pub(super) fn read_request(sock: &UnixStream) -> (u32, u16, Vec<u8>, Vec<i32>) {
+    pub(in crate::platform::backend::wayland) fn read_request(
+        sock: &UnixStream,
+    ) -> (u32, u16, Vec<u8>, Vec<i32>) {
         let mut fds = Vec::new();
         let mut header = [0u8; 8];
         let n = crate::platform::scm::recv_with_fds(sock, &mut header, &mut fds, 4).unwrap();

@@ -220,7 +220,16 @@ pub enum Event {
     /// The DPI scale factor changed (e.g. the window moved to another monitor).
     ScaleFactorChanged(ScaleFactor),
     /// The user requested the window be closed (title-bar button, ⌘W, …).
+    /// The window stays open until the handler acts on it (returns
+    /// [`ControlFlow::Exit`](crate::platform::ControlFlow) or calls
+    /// [`Window::close_window`](crate::platform::Window::close_window)), so
+    /// the app can ask first.
     CloseRequested,
+    /// The user asked the whole application to quit (⌘Q or the Dock's Quit on
+    /// macOS, logging out on Windows and macOS). Returning
+    /// [`ControlFlow::Exit`](crate::platform::ControlFlow) quits; anything
+    /// else cancels.
+    QuitRequested,
     /// The loop was woken by [`wake::wake`](crate::platform::wake::wake) or by
     /// the deadline set with [`wake::set_deadline`](crate::platform::wake::set_deadline).
     Wake,

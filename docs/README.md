@@ -54,6 +54,10 @@ How to build, package and run on each platform, and what works there today.
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ❌ | ❌ | ❌ |
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
 | Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | ❌ | ❌ | ❌ |
+| Asking before closing and quitting | ✅ ³⁷ | ✅ ³⁷ | ✅ ³⁷ | — | — | — |
+| Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
+| Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
+| Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -190,6 +194,23 @@ settings), macOS (`otherMouse*`, right and other drags, a tracking area,
 scroll phases, `doubleClickInterval`), Android (each mouse button from the
 button state) and the web (chorded buttons) are unit-tested where pure and
 otherwise build-checked only. See [pointer-events.md](pointer-events.md).
+³⁷ `App::on_close_requested` / `on_quit_requested` and `AppHandle::close_window`.
+CI cancels and then confirms a close on X11 (`WM_DELETE_WINDOW`), Wayland
+(sway's `xdg_toplevel.close`) and Windows (`WM_CLOSE`, after refusing
+`WM_QUERYENDSESSION`), and on macOS sends `performClose:` and `terminate:`
+through AppKit. On X11 and Wayland CI also moves the focus away and back. See
+[window-lifecycle.md](window-lifecycle.md).
+³⁸ `WM_SETFOCUS` / `WM_KILLFOCUS` and `windowDidBecomeKey:` /
+`windowDidResignKey:`; build-checked only.
+³⁹ The urgency hint and `_NET_WM_STATE_DEMANDS_ATTENTION` and the `Bell` request
+on X11, `xdg_activation_v1` and `xdg_system_bell_v1` (where offered) on
+Wayland, `FlashWindowEx` and `MessageBeep` on Windows, `requestUserAttention:`,
+`NSBeep` and the Dock badge on macOS. CI checks the X11 urgency hint and the
+macOS badge; the rest is build-checked (Wayland's requests are unit-tested).
+⁴⁰ Server-side where the compositor offers `zxdg_decoration_manager_v1`;
+otherwise Stipple draws a title bar with move, maximize, minimize, close, the
+window menu and edge resizing. CI checks sway's server-side decorations and
+that Weston gets a decorated buffer; the pointer handling is unit-tested.
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -214,5 +235,6 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop
 - [Window control and cursors](windows-and-cursors.md): size limits, maximize, fullscreen, the icon, and cursor shapes
+- [Closing, quitting, focus and attention](window-lifecycle.md): asking before a window closes or the app quits, window focus, attention requests, the bell, and Wayland title bars
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

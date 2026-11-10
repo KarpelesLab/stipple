@@ -330,6 +330,8 @@ mod tests {
             cursor: Default::default(),
             text_input: Default::default(),
             pointer: None,
+            decor: Default::default(),
+            attention: Default::default(),
         };
         const MANAGER_ID: u32 = 5;
         const SEAT: u32 = 6;

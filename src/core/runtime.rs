@@ -367,6 +367,10 @@ pub struct Cx<'a, S> {
     /// The frame's time on the animation timeline, and whether the view asked
     /// for another frame. See [`Cx::frame_time`] and [`Cx::request_frame`].
     frame: FrameInfo,
+    /// The window being built for: its id once the platform opened it, and
+    /// whether it has keyboard focus. See [`Cx::window_focused`].
+    window_id: Option<crate::platform::WindowId>,
+    window_focused: bool,
 }
 
 /// Per-build animation bookkeeping for a [`Cx`].
@@ -410,7 +414,33 @@ impl<'a, S> Cx<'a, S> {
                 time: crate::platform::frame::elapsed().unwrap_or_default(),
                 requested: false,
             },
+            window_id: None,
+            window_focused: true,
         }
+    }
+
+    /// Whether the window being built has keyboard focus (it is the active
+    /// window). Draw a hollow caret, or dim the selection, while it hasn't.
+    /// `true` until the platform says otherwise, and always on platforms that
+    /// don't report focus. The app rebuilds the view when it changes; see
+    /// also [`App::on_window_focus`](crate::App::on_window_focus).
+    pub fn window_focused(&self) -> bool {
+        self.window_focused
+    }
+
+    /// The platform id of the window being built, once it is open: the id
+    /// [`App::on_close_requested`](crate::App::on_close_requested) and
+    /// [`App::on_window_focus`](crate::App::on_window_focus) are given, and
+    /// [`AppHandle::close_window`] takes. `None` before the window opens (and
+    /// in headless renders).
+    pub fn window_id(&self) -> Option<crate::platform::WindowId> {
+        self.window_id
+    }
+
+    /// Set the window this build is for (see [`window_focused`](Self::window_focused)).
+    pub(crate) fn set_window(&mut self, id: Option<crate::platform::WindowId>, focused: bool) {
+        self.window_id = id;
+        self.window_focused = focused;
     }
 
     /// The time of the frame being built, on the app's animation timeline (it

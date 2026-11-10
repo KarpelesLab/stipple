@@ -4,8 +4,8 @@ use crate::platform::time::Instant;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::platform::WindowRequest;
 use crate::platform::wake;
+use crate::platform::{UserAttention, WindowId, WindowRequest};
 
 type Update<S> = Box<dyn FnOnce(&mut S) + Send>;
 type Tick<S> = Box<dyn FnMut(&mut S) + Send>;
@@ -29,6 +29,8 @@ struct Shared<S> {
     exit: bool,
     /// Window changes queued by [`AppHandle::window`].
     window: Vec<WindowRequest>,
+    /// Windows to close without asking, queued by [`AppHandle::close_window`].
+    close: Vec<WindowId>,
 }
 
 /// A handle to a running app, for changing its state from outside a widget
@@ -87,6 +89,7 @@ impl<S> AppHandle<S> {
                 next_id: 1,
                 exit: false,
                 window: Vec::new(),
+                close: Vec::new(),
             })),
         }
     }
@@ -170,6 +173,37 @@ impl<S> AppHandle<S> {
         wake::wake();
     }
 
+    /// Close window `id` without asking
+    /// [`App::on_close_requested`](crate::App::on_close_requested): what an
+    /// app calls once the user confirmed a close it cancelled earlier.
+    /// Closing the last window ends the app, as when the user closes it.
+    /// The id is the one the close hook was given (or
+    /// [`Cx::window_id`](crate::core::Cx::window_id)).
+    pub fn close_window(&self, id: WindowId) {
+        self.with(|s| s.close.push(id));
+        wake::wake();
+    }
+
+    /// Ask for the user's attention without stealing focus: flash the taskbar
+    /// button, bounce the Dock icon, mark the window urgent. See
+    /// [`Window::request_attention`](crate::platform::Window::request_attention).
+    pub fn request_attention(&self, kind: UserAttention) {
+        self.window(WindowRequest::Attention(Some(kind)));
+    }
+
+    /// Sound the system beep, as a terminal's audible bell. See
+    /// [`Window::beep`](crate::platform::Window::beep).
+    pub fn beep(&self) {
+        self.window(WindowRequest::Beep);
+    }
+
+    /// Show `label` as a badge on the application's Dock icon (macOS), or
+    /// remove it with `None`. See
+    /// [`Window::set_badge`](crate::platform::Window::set_badge).
+    pub fn set_badge(&self, label: Option<&str>) {
+        self.window(WindowRequest::Badge(label.map(str::to_string)));
+    }
+
     /// Open `url` in the user's default app for it (a browser for `https:`, the
     /// file's app for `file:`). See
     /// [`platform::open_url`](crate::platform::open_url).
@@ -192,6 +226,11 @@ impl<S> AppHandle<S> {
         notification: &crate::platform::Notification,
     ) -> Result<(), crate::platform::PlatformError> {
         crate::platform::notify(notification)
+    }
+
+    /// Take the windows queued by [`close_window`](Self::close_window).
+    pub(crate) fn take_close_requests(&self) -> Vec<WindowId> {
+        self.with(|s| std::mem::take(&mut s.close))
     }
 
     /// Take the window changes queued by [`window`](Self::window).

@@ -73,6 +73,27 @@ pub enum WindowRequest {
     MaxSize(Option<Size>),
     /// Set or clear the window icon.
     Icon(Option<Pixmap>),
+    /// Ask for the user's attention (`Some`), or withdraw the request
+    /// (`None`). See [`Window::request_attention`].
+    Attention(Option<UserAttention>),
+    /// Sound the system beep. See [`Window::beep`].
+    Beep,
+    /// Show a short badge on the application's icon, or remove it. See
+    /// [`Window::set_badge`].
+    Badge(Option<String>),
+}
+
+/// How insistently [`Window::request_attention`] asks for the user's
+/// attention.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum UserAttention {
+    /// Something happened the user may want to look at: the taskbar button
+    /// flashes a few times, the Dock icon bounces once.
+    #[default]
+    Informational,
+    /// Something needs the user: the taskbar button flashes and the Dock icon
+    /// bounces until the window is activated.
+    Critical,
 }
 
 impl WindowRequest {
@@ -84,6 +105,9 @@ impl WindowRequest {
             WindowRequest::MinSize(size) => window.set_min_size(*size),
             WindowRequest::MaxSize(size) => window.set_max_size(*size),
             WindowRequest::Icon(icon) => window.set_icon(icon.as_ref()),
+            WindowRequest::Attention(kind) => window.request_attention(*kind),
+            WindowRequest::Beep => window.beep(),
+            WindowRequest::Badge(label) => window.set_badge(label.as_deref()),
         }
     }
 }
@@ -117,6 +141,11 @@ pub struct WindowAttributes {
     /// The window (or, on macOS, application) icon, as a straight-alpha RGBA
     /// image. Square images of 32 to 256 pixels work best everywhere.
     pub icon: Option<Pixmap>,
+    /// Whether the window has a title bar and borders. Turned off, the app
+    /// draws everything (and moves the window itself, if it wants). Honored
+    /// on Wayland (server-side through xdg-decoration, else drawn by
+    /// Stipple), X11 (`_MOTIF_WM_HINTS`) and Windows; macOS keeps its title bar.
+    pub decorations: bool,
 }
 
 impl Default for WindowAttributes {
@@ -133,6 +162,7 @@ impl Default for WindowAttributes {
             maximized: false,
             fullscreen: false,
             icon: None,
+            decorations: true,
         }
     }
 }
@@ -190,6 +220,12 @@ impl WindowAttributes {
     /// Set the window icon from a straight-alpha RGBA image.
     pub fn with_icon(mut self, icon: Pixmap) -> Self {
         self.icon = Some(icon);
+        self
+    }
+
+    /// Give the window a title bar and borders (the default), or not.
+    pub fn with_decorations(mut self, decorations: bool) -> Self {
+        self.decorations = decorations;
         self
     }
 }
@@ -252,6 +288,33 @@ pub trait Window {
     /// handler returns [`ControlFlow::Exit`](crate::platform::ControlFlow)). Multi-window
     /// backends destroy just this window and keep running while others remain.
     fn close_window(&self) {}
+
+    /// Close the sibling window `id` (opened with [`open_window`](Self::open_window)
+    /// on the same loop), as [`close_window`](Self::close_window) would from
+    /// its own events. Default: closes `self` when `id` is this window's.
+    fn close_window_id(&self, id: WindowId) {
+        if id == self.id() {
+            self.close_window();
+        }
+    }
+
+    /// Ask for the user's attention without stealing focus (`Some`), or
+    /// withdraw the request (`None`): `_NET_WM_STATE_DEMANDS_ATTENTION` and
+    /// the urgency hint on X11, an `xdg_activation_v1` request on Wayland,
+    /// `FlashWindowEx` on Windows and `requestUserAttention:` on macOS. The
+    /// platform drops the request once the window is activated. Default: a
+    /// no-op.
+    fn request_attention(&self, _kind: Option<UserAttention>) {}
+
+    /// Sound the system beep (an audible bell): the X11 `Bell` request,
+    /// `xdg_system_bell_v1` on Wayland where the compositor has it,
+    /// `MessageBeep` on Windows and `NSBeep` on macOS. Default: a no-op.
+    fn beep(&self) {}
+
+    /// Show `label` (a count, say) as a badge on the application's icon, or
+    /// remove it (`None`): the Dock tile's badge on macOS. Default: a no-op
+    /// (the other platforms have no badge Stipple sets yet).
+    fn set_badge(&self, _label: Option<&str>) {}
 
     /// Show `cursor` while the pointer is over this window's content. Default:
     /// a no-op (the platform's arrow stays).
@@ -332,6 +395,25 @@ pub trait Window {
     fn start_drag(&self, _data: &crate::platform::DropData) -> bool {
         false
     }
+}
+
+/// Whether the app asks before quitting (it set
+/// [`App::on_quit_requested`](crate::App::on_quit_requested)). Backends that
+/// must answer the OS on the spot (logout on Windows, `terminate:` on macOS)
+/// let the session end at once when nobody asks.
+static QUIT_CONFIRMED_BY_APP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Set whether the app answers [`Event::QuitRequested`](crate::platform::Event)
+/// itself (see [`QUIT_CONFIRMED_BY_APP`]).
+pub(crate) fn set_app_confirms_quit(on: bool) {
+    QUIT_CONFIRMED_BY_APP.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the app answers quit requests itself.
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
+pub(crate) fn app_confirms_quit() -> bool {
+    QUIT_CONFIRMED_BY_APP.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Scale `icon` down (by area averaging) so neither side exceeds `max` pixels,

@@ -27,6 +27,8 @@ use crate::platform::menu::{MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
+/// Focus, session end, attention requests and the beep.
+mod attention;
 /// Receiving drops (OLE `IDropTarget`, `WM_DROPFILES`).
 mod dnd;
 mod ime;
@@ -49,6 +51,9 @@ type Lresult = isize;
 type WndProc = unsafe extern "system" fn(Hwnd, u32, Wparam, Lparam) -> Lresult;
 
 const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
+/// An undecorated window: `WS_POPUP`, with the sizing border (`WS_THICKFRAME`)
+/// and taskbar minimize/maximize (`WS_MINIMIZEBOX | WS_MAXIMIZEBOX`).
+const WS_POPUP_RESIZABLE: u32 = 0x8000_0000 | 0x0004_0000 | 0x0002_0000 | 0x0001_0000;
 const CW_USEDEFAULT: i32 = -2147483648; // 0x80000000
 const SW_SHOW: i32 = 5;
 const SW_MAXIMIZE: i32 = 3;
@@ -1059,6 +1064,11 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             push_event(Event::CloseRequested);
             0
         }
+        attention::WM_SETFOCUS | attention::WM_KILLFOCUS => {
+            attention::focus_message(hwnd, msg);
+            0
+        }
+        attention::WM_QUERYENDSESSION => attention::query_end_session(hwnd),
         WM_DESTROY => {
             tray::remove_all(hwnd);
             unsafe { PostQuitMessage(0) };
@@ -1166,6 +1176,12 @@ impl Window for WinWindow {
     fn set_tray(&self, tray: Option<&NativeTray>) -> bool {
         tray::set_tray(self.hwnd, tray)
     }
+    fn request_attention(&self, kind: Option<crate::platform::UserAttention>) {
+        attention::flash(self.hwnd, kind);
+    }
+    fn beep(&self) {
+        attention::beep();
+    }
     fn set_icon(&self, icon: Option<&crate::render::Pixmap>) {
         let new = icon.map_or(std::ptr::null_mut(), create_icon);
         unsafe {
@@ -1266,7 +1282,11 @@ where
             0,
             class_name.as_ptr(),
             title.as_ptr(),
-            WS_OVERLAPPEDWINDOW,
+            if attrs.decorations {
+                WS_OVERLAPPEDWINDOW
+            } else {
+                WS_POPUP_RESIZABLE
+            },
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             size.width as i32,

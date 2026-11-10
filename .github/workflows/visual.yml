@@ -2992,6 +2992,263 @@ jobs:
           path: visual_output/*.png
           if-no-files-found: warn
 
+  # Window lifecycle on X11, with no window manager: python-xlib stands in for
+  # one. A close request (WM_DELETE_WINDOW) the app cancels, then confirms and
+  # closes itself (AppHandle::close_window); focus moving away and back
+  # (FocusIn/FocusOut); the bell's urgency hint (WM_HINTS), cleared on focus.
+  lifecycle-x11:
+    name: Lifecycle test (close veto, focus, attention / X11)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, ImageMagick, x11-utils, xdotool, python3-xlib, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick x11-utils xdotool python3-xlib fonts-dejavu-core
+
+      - name: Build the lifecycle example
+        run: cargo build --release -p lifecycle
+
+      - name: Cancel a close, follow focus, ring the bell, then close
+        run: |
+          Xvfb :99 -noreset -screen 0 1024x768x24 &
+          sleep 2
+          export DISPLAY=:99
+          mkdir -p visual_output
+          LOG=visual_output/lifecycle-x11.log
+          W="Stipple lifecycle"
+          ./target/release/lifecycle > "$LOG" 2>&1 &
+          APP=$!
+          sleep 4
+          # Mapping the window gave it the focus (its own SetInputFocus).
+          grep -q 'lifecycle: focus true' "$LOG"
+          # The close button: the app cancels, and the window stays.
+          python3 .github/scripts/x11-window.py close "$W"
+          sleep 1
+          grep -q 'lifecycle: close vetoed' "$LOG"
+          kill -0 "$APP"
+          xwininfo -name "$W" > /dev/null
+          import -window root -crop 420x340+0+0 +repage visual_output/lifecycle-x11-vetoed.png
+          # Another window takes the focus; a second later the bell rings and
+          # marks the window urgent.
+          python3 .github/scripts/x11-window.py focus-away 4 &
+          AWAY=$!
+          sleep 2.5
+          grep -q 'lifecycle: focus false' "$LOG"
+          grep -q 'lifecycle: bell 1' "$LOG"
+          xprop -name "$W" WM_HINTS | tee visual_output/hints-urgent.txt
+          grep -q 'urgency hint bit is set' visual_output/hints-urgent.txt
+          import -window root -crop 420x340+0+0 +repage visual_output/lifecycle-x11-unfocused.png
+          wait "$AWAY"
+          # Back to the window: focused, and no longer urgent.
+          xdotool search --name "$W" windowfocus
+          sleep 1
+          [ "$(grep -c 'lifecycle: focus true' "$LOG")" -ge 2 ]
+          xprop -name "$W" WM_HINTS | tee visual_output/hints-after.txt
+          if grep -q 'urgency hint bit is set' visual_output/hints-after.txt; then exit 1; fi
+          # Closing again confirms: the app checks, then closes the window itself.
+          python3 .github/scripts/x11-window.py close "$W"
+          timeout 10 tail --pid="$APP" -f /dev/null
+          cat "$LOG"
+          grep -q 'lifecycle: close confirmed, checking' "$LOG"
+          grep -q 'lifecycle: check done, closing' "$LOG"
+          grep -q 'lifecycle: event loop exited' "$LOG"
+
+      - name: Upload screenshots + log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-lifecycle-x11
+          path: visual_output/*
+          if-no-files-found: warn
+
+  # Window lifecycle on Wayland under headless sway, which offers
+  # xdg-decoration (so the window asks for, and gets, server-side
+  # decorations): focus from the toplevel's `activated` state, an attention
+  # request through xdg-activation, and xdg_toplevel.close cancelled, then
+  # confirmed.
+  lifecycle-wayland:
+    name: Lifecycle test (decorations, focus, close veto / Wayland sway)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install sway, grim, seatd, ImageMagick, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sway grim seatd imagemagick fonts-dejavu-core
+
+      - name: Build the lifecycle and window examples
+        run: cargo build --release -p lifecycle -p window
+
+      - name: Run under headless sway
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+          sudo seatd -g "$(id -gn)" > seatd.log 2>&1 &
+          sleep 1
+          export LIBSEAT_BACKEND=seatd
+          printf 'output HEADLESS-1 resolution 1024x768\nexec sleep 600\n' > sway.cfg
+          sway -c sway.cfg > sway.log 2>&1 &
+          sleep 6
+          export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
+          export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
+          mkdir -p visual_output
+          LOG=visual_output/lifecycle-wayland.log
+          W='[title="Stipple lifecycle"]'
+          STIPPLE_WAYLAND_DEBUG=1 ./target/release/lifecycle > "$LOG" 2>&1 &
+          APP=$!
+          sleep 4
+          # sway draws the decorations.
+          grep -q 'decorations: asking for server-side' "$LOG"
+          grep -q 'decoration mode 2' "$LOG"
+          if grep -q 'decorated' "$LOG"; then exit 1; fi
+          grep -q 'lifecycle: focus true' "$LOG"
+          # Another window takes the focus: the bell rings and asks for attention.
+          ./target/release/window > /dev/null 2>&1 &
+          OTHER=$!
+          sleep 4
+          grep -q 'lifecycle: focus false' "$LOG"
+          grep -q 'lifecycle: bell 1' "$LOG"
+          swaymsg -t get_tree > visual_output/tree.json
+          if python3 -c 'import json,sys
+          def walk(n):
+              yield n
+              for c in n.get("nodes", []) + n.get("floating_nodes", []):
+                  yield from walk(c)
+          t = json.load(open(sys.argv[1]))
+          sys.exit(0 if any(n.get("name") == "Stipple lifecycle" and n.get("urgent") for n in walk(t)) else 1)' visual_output/tree.json
+          then echo "sway marked the window urgent"
+          else echo "::warning::sway did not mark the window urgent after xdg-activation"
+          fi
+          kill "$OTHER"
+          sleep 2
+          [ "$(grep -c 'lifecycle: focus true' "$LOG")" -ge 2 ]
+          # xdg_toplevel.close: cancelled, the window stays; again: confirmed.
+          swaymsg "$W kill"
+          sleep 1
+          grep -q 'lifecycle: close vetoed' "$LOG"
+          kill -0 "$APP"
+          grim visual_output/lifecycle-wayland-vetoed.png || echo "grim failed"
+          swaymsg "$W kill"
+          timeout 10 tail --pid="$APP" -f /dev/null
+          grep -v 'present\|frame' "$LOG" | tail -40
+          grep -q 'lifecycle: close confirmed, checking' "$LOG"
+          grep -q 'lifecycle: event loop exited' "$LOG"
+
+      - name: Upload screenshots + logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-lifecycle-wayland
+          path: |
+            visual_output/*
+            sway.log
+          if-no-files-found: warn
+
+  # Client-side decorations: Weston has no xdg-decoration manager, so Stipple
+  # draws the title bar and the resize margin around the content, in an ARGB
+  # buffer with the window geometry excluding the margin.
+  decorations-weston:
+    name: Client-side decorations (Wayland / Weston)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Weston, ImageMagick, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y weston imagemagick fonts-dejavu-core
+
+      - name: Build the lifecycle example
+        run: cargo build --release -p lifecycle
+
+      - name: Run under headless Weston
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          mkdir -p visual_output
+          # --debug lets weston-screenshooter take a screenshot.
+          weston --backend=headless --socket=wayland-csd --width=1024 --height=768 \
+            --idle-time=0 --debug > weston.log 2>&1 &
+          sleep 4
+          export WAYLAND_DISPLAY=wayland-csd
+          LOG=visual_output/decorations-weston.log
+          STIPPLE_WAYLAND_DEBUG=1 ./target/release/lifecycle > "$LOG" 2>&1 &
+          APP=$!
+          sleep 5
+          grep -v 'frame' "$LOG" | head -40
+          grep -q 'decorations: client-side' "$LOG"
+          # 420x340 content, a 32 px title bar and an 8 px margin all round.
+          grep -q 'present 436x388 decorated' "$LOG"
+          (cd visual_output && timeout 10 weston-screenshooter) || echo "screenshot failed"
+          kill "$APP"
+
+      - name: Upload screenshot + logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-decorations-weston
+          path: |
+            visual_output/*
+            weston.log
+          if-no-files-found: warn
+
+  # Close and session end on Windows: WM_QUERYENDSESSION is refused while the
+  # app asks, WM_CLOSE is confirmed, and the app closes its window itself.
+  lifecycle-windows:
+    name: Lifecycle test (close veto, session end / Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the lifecycle example
+        run: cargo build --release -p lifecycle
+      - name: Refuse a logoff, then close
+        shell: powershell
+        run: .github\scripts\lifecycle-windows.ps1 .\target\release\lifecycle.exe visual_output
+      - name: Upload log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-lifecycle-windows
+          path: visual_output/*
+          if-no-files-found: warn
+
+  # Close and quit on macOS through real AppKit dispatch: `performClose:` asks
+  # the window delegate (windowShouldClose:), `terminate:` the application
+  # delegate (applicationShouldTerminate:); both reach the app, which cancels
+  # the close, then confirms on the quit and closes the window itself. The
+  # Dock badge is set and read back.
+  lifecycle-macos:
+    name: Lifecycle test (close veto, quit, badge / macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the lifecycle example
+        run: cargo build --release -p lifecycle
+      - name: Close and quit through the delegates
+        run: |
+          STIPPLE_COCOA_LIFECYCLE=1 perl -e 'alarm 30; exec @ARGV' ./target/release/lifecycle \
+            | tee lifecycle-macos.log
+          grep -q 'Cocoa lifecycle: badge="3"' lifecycle-macos.log
+          grep 'Cocoa lifecycle:' lifecycle-macos.log | grep -q 'CloseRequested'
+          grep 'Cocoa lifecycle:' lifecycle-macos.log | grep -q 'QuitRequested'
+          grep -q 'lifecycle: close vetoed' lifecycle-macos.log
+          grep -q 'lifecycle: close confirmed, checking' lifecycle-macos.log
+          grep -q 'lifecycle: event loop exited' lifecycle-macos.log
+
   # After a fully green push to master, commit the fresh screenshots so the README
   # always shows what the code renders today. Pushes made with GITHUB_TOKEN don't
   # trigger workflows, so this can't loop, and git only sees a change when pixels

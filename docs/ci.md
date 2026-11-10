@@ -9,7 +9,8 @@ Three workflows run on every push and pull request:
   screen, that text was typed, that the web demo's scripted selftest passes in
   headless Chrome, that an
   accessibility tree reached the OS. Linux runs under Xvfb (X11) and headless
-  sway (Wayland); iOS and Android under their simulator and emulator.
+  sway and Weston (Wayland); iOS and Android under their simulator and
+  emulator.
 - **Release-plz**: on `master`, opens release pull requests and publishes to
   crates.io when one is merged.
 
@@ -43,3 +44,5 @@ These cost time once already:
 - **`ubuntu-latest` now ships ImageMagick 7**: `compare -metric AE` prints
   `N (normalized)`, and `fx:mean` includes the alpha channel unless you add
   `-alpha off`.
+- **`! grep -q …` never fails a step**: bash's `set -e` ignores commands
+  negated with `!`. Write `if grep -q …; then exit 1; fi`.

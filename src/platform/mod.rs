@@ -83,7 +83,12 @@ pub use pointer::{
     DoubleClick, double_click, pointer_modifiers, set_double_click, set_pointer_modifiers,
 };
 pub use shell::{Notification, notify, open_path, open_url};
-pub use window::{CursorIcon, ImeState, Window, WindowAttributes, WindowRequest};
+pub use window::{CursorIcon, ImeState, UserAttention, Window, WindowAttributes, WindowRequest};
+#[cfg_attr(
+    not(any(target_os = "windows", target_os = "macos")),
+    allow(unused_imports)
+)]
+pub(crate) use window::{app_confirms_quit, set_app_confirms_quit};
 
 /// What a window should do after the application handles an event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

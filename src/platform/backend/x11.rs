@@ -41,6 +41,8 @@ use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, WindowId};
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
+/// Focus, attention requests, the bell and undecorated windows.
+mod attention;
 /// Input methods (XIM), and the COMPOUND_TEXT they send.
 mod ctext;
 /// The monitor refresh rate, which paces animation frames.
@@ -896,6 +898,8 @@ struct Conn {
     atom_net_wm_icon: u32,
     /// The XDND atoms (0 until set).
     xdnd: dnd::Atoms,
+    /// The attention and decoration atoms (0 until set).
+    attention: attention::Atoms,
     /// The core `cursor` font, opened on first use (0 until then).
     cursor_font: u32,
     /// Cursors created so far, by glyph.
@@ -974,6 +978,7 @@ impl Conn {
             atom_fullscreen: 0,
             atom_net_wm_icon: 0,
             xdnd: dnd::Atoms::default(),
+            attention: attention::Atoms::default(),
             cursor_font: 0,
             cursors: Vec::new(),
             blank_cursor: 0,
@@ -1137,6 +1142,17 @@ impl Window for X11Window {
     }
     fn close_window(&self) {
         self.reg.borrow_mut().closed.push(self.window);
+    }
+    fn close_window_id(&self, id: WindowId) {
+        // Siblings share the loop, which destroys any of them by XID.
+        self.reg.borrow_mut().closed.push(id.0 as u32);
+    }
+    fn request_attention(&self, kind: Option<crate::platform::UserAttention>) {
+        let mut conn = self.conn.lock().unwrap();
+        let _ = attention::set_urgent(&mut conn, self.window, kind);
+    }
+    fn beep(&self) {
+        let _ = self.conn.lock().unwrap().send(&attention::bell_request());
     }
     fn set_cursor(&self, cursor: CursorIcon) {
         let mut conn = self.conn.lock().unwrap();
@@ -1466,7 +1482,8 @@ fn create_window(
         | EV_POINTER_MOTION
         | pointer::EV_ENTER_WINDOW
         | pointer::EV_LEAVE_WINDOW
-        | EV_STRUCTURE_NOTIFY;
+        | EV_STRUCTURE_NOTIFY
+        | attention::EV_FOCUS_CHANGE;
     req.extend_from_slice(&mask.to_le_bytes());
     conn.send(&finish(req)).map_err(os)?;
 
@@ -1507,6 +1524,9 @@ fn create_window(
     }
     if attrs.icon.is_some() {
         set_icon(conn, window, attrs.icon.as_ref()).map_err(os)?;
+    }
+    if !attrs.decorations {
+        attention::set_undecorated(conn, window).map_err(os)?;
     }
     // Take drops from other applications.
     if conn.xdnd.aware != 0 {
@@ -1592,6 +1612,7 @@ where
     conn.atom_fullscreen = intern_atom(&mut conn, b"_NET_WM_STATE_FULLSCREEN").map_err(os)?;
     conn.atom_net_wm_icon = intern_atom(&mut conn, b"_NET_WM_ICON").map_err(os)?;
     conn.xdnd = dnd::Atoms::intern(&mut conn).map_err(os)?;
+    conn.attention = attention::Atoms::intern(&mut conn).map_err(os)?;
     let mut xdnd = dnd::Xdnd {
         atoms: conn.xdnd,
         ..Default::default()
@@ -1619,6 +1640,11 @@ where
 
     // The live set of windows, keyed by XID via linear scan (tiny N).
     let mut windows: Vec<X11Window> = vec![initial];
+    // Unfocused until the server says otherwise (a `FocusIn` follows the
+    // window manager, or our own `SetInputFocus`, giving it focus).
+    if handler(Event::FocusChanged(false), &windows[0]) == ControlFlow::Exit {
+        return Ok(());
+    }
 
     // Event loop. Events are 32 bytes each. Between events, wait on the
     // connection and on wakeups (timers, other threads) together.
@@ -1826,6 +1852,19 @@ where
                     ControlFlow::Wait
                 }
             }
+            attention::X_FOCUS_IN | attention::X_FOCUS_OUT => {
+                match attention::focus_change(&buf) {
+                    Some(focused) => {
+                        dbg(format_args!("focus {focused}"));
+                        if focused {
+                            // The user looked: no longer urgent.
+                            win.request_attention(None);
+                        }
+                        handler(Event::FocusChanged(focused), win)
+                    }
+                    None => ControlFlow::Wait,
+                }
+            }
             X_SELECTION_REQUEST => {
                 // Another client wants our CLIPBOARD text. Serve it, then notify.
                 let mut conn = shared.lock().unwrap();
@@ -2029,7 +2068,9 @@ fn keysym_to_event(ks: u32, state: ButtonState, modifiers: Modifiers) -> Option<
 /// events' event-window at 12). 0 for events that don't name a window.
 fn event_window(buf: &[u8; 32]) -> u32 {
     match buf[0] & 0x7f {
-        X_EXPOSE | X_CLIENT_MESSAGE => rd_u32(buf, 4).unwrap_or(0),
+        X_EXPOSE | X_CLIENT_MESSAGE | attention::X_FOCUS_IN | attention::X_FOCUS_OUT => {
+            rd_u32(buf, 4).unwrap_or(0)
+        }
         X_CONFIGURE_NOTIFY => rd_u32(buf, 8).unwrap_or(0),
         X_MOTION_NOTIFY
         | X_BUTTON_PRESS

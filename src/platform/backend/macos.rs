@@ -32,6 +32,8 @@ use crate::render::{Pixmap, Surface};
 mod display_link;
 /// Receiving drops (`NSDraggingDestination`).
 mod dnd;
+/// Close and quit requests, focus, attention, the Dock badge and the beep.
+mod lifecycle;
 /// The CI self-test of the menus (`STIPPLE_COCOA_MENU_SELFTEST`).
 mod menu_check;
 /// The pointer leaving the view, hiding the cursor, double-click time.
@@ -852,7 +854,8 @@ const MENU_QUIT_TAG: i64 = -1;
 extern "C" fn menu_action(_this: Id, _cmd: Sel, sender: Id) {
     let tag = unsafe { msg_i64(sender, sel("tag")) };
     if tag == MENU_QUIT_TAG {
-        CTX.with(|c| c.borrow_mut().should_close = true);
+        // The app may ask first (`App::on_quit_requested`).
+        CTX.with(|c| c.borrow_mut().pending.push(Event::QuitRequested));
         return;
     }
     // The App matches shortcuts itself, from the key event the loop hands it
@@ -1338,6 +1341,7 @@ fn register_view_class() -> Class {
         );
         text_input::add_methods(cls);
         dnd::add_methods(cls);
+        lifecycle::add_window_methods(cls);
         objc_registerClassPair(cls);
         cls
     }
@@ -1349,6 +1353,15 @@ struct MacWindow {
 }
 
 impl Window for MacWindow {
+    fn request_attention(&self, kind: Option<crate::platform::UserAttention>) {
+        lifecycle::request_attention(kind);
+    }
+    fn beep(&self) {
+        lifecycle::beep();
+    }
+    fn set_badge(&self, label: Option<&str>) {
+        lifecycle::set_badge(label);
+    }
     fn set_drop_accepted(&self, accepted: bool) {
         CTX.with(|c| c.borrow_mut().drop_accepted = accepted);
     }
@@ -1530,6 +1543,8 @@ where
             return Err(PlatformError::Os("NSApplication unavailable".into()));
         }
         msg_void_i64(app, sel("setActivationPolicy:"), ACTIVATION_REGULAR);
+        // Quitting from the Dock or by logging out asks the app first.
+        lifecycle::install_app_delegate(app);
 
         let content = CgRect {
             origin: CgPoint { x: 0.0, y: 0.0 },
@@ -1657,6 +1672,7 @@ where
         // Needed for nextEventMatchingMask to dequeue events.
         msg_void(app, sel("finishLaunching"));
         menu_check::start(window, view);
+        lifecycle::self_test(window);
         // Zoom and fullscreen act on a window that is on screen.
         if attrs.maximized {
             win.set_maximized(true);
@@ -1793,6 +1809,8 @@ where
             }
 
             if exit {
+                // The app closed the window (or quit): take it off screen.
+                msg_void_id(window, sel("orderOut:"), std::ptr::null_mut());
                 msg_void(pool, sel("drain"));
                 break;
             }

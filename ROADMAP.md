@@ -1014,6 +1014,23 @@ Most input only works on X11 today.
   `AppHandle::window`, on X11, Wayland, Windows and macOS (the Dock icon there).
   CI reads the X11 hints and icon back with `xprop`. See
   [docs/windows-and-cursors.md](docs/windows-and-cursors.md).
+- ✅ Window lifecycle: `App::on_close_requested` and `on_quit_requested`
+  answer `CloseResponse::Close` or `Cancel` (then `AppHandle::close_window`
+  or `exit` once the user confirms), from `WM_DELETE_WINDOW`,
+  `xdg_toplevel.close`, `WM_CLOSE` / `WM_QUERYENDSESSION` and
+  `windowShouldClose:` / `applicationShouldTerminate:` / ⌘Q. Window focus as
+  `Cx::window_focused()` and `App::on_window_focus` (X11 `FocusIn`/`FocusOut`,
+  Wayland `activated`, `WM_SETFOCUS`/`WM_KILLFOCUS`, key-window changes on
+  macOS). Attention requests, the system beep and the Dock badge
+  (`AppHandle::request_attention`, `beep`, `set_badge`). On Wayland,
+  server-side decorations through xdg-decoration, or a title bar Stipple
+  draws (move, resize, maximize, minimize, close, window menu);
+  `WindowAttributes::with_decorations(false)` turns them off. CI cancels and
+  confirms closes on X11, Wayland (sway), Windows and macOS, follows focus on
+  X11 and Wayland, reads the X11 urgency hint and the macOS badge, and checks
+  Weston gets a decorated buffer. Not yet: the Windows taskbar overlay badge
+  and the Linux launcher badge. See
+  [docs/window-lifecycle.md](docs/window-lifecycle.md).
 - ✅ Mouse cursor shapes (`CursorIcon`): text inputs show the I-beam, tap and
   drag targets the pointing hand, and `.cursor(...)` picks any other (resize
   arrows, not-allowed, grab, crosshair, move, or `Hidden`, to hide it while

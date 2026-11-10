@@ -25,7 +25,11 @@
 
 #![allow(unsafe_code)]
 
+/// Attention requests (`xdg_activation_v1`) and the bell.
+mod attention;
 mod clipboard;
+/// Server-side decorations, or a title bar and borders drawn by Stipple.
+mod decor;
 mod pointer;
 mod text_input;
 
@@ -683,6 +687,10 @@ struct WlConn {
     text_input: text_input::TextInput,
     /// The seat's `wl_pointer`, once it has one (to hide the cursor).
     pointer: Option<u32>,
+    /// The window's decorations.
+    decor: decor::Decor,
+    /// Activation (attention) requests and the bell.
+    attention: attention::Attention,
 }
 
 impl WlConn {
@@ -712,6 +720,8 @@ impl WlConn {
             cursor: CursorIcon::Default,
             pointer: None,
             text_input: text_input::TextInput::default(),
+            decor: decor::Decor::default(),
+            attention: attention::Attention::default(),
         })
     }
 
@@ -722,6 +732,7 @@ impl WlConn {
             let mut a = Vec::new();
             arg_u32(&mut a, serial);
             if self.cursor == CursorIcon::Hidden
+                && self.decor.cursor().is_none()
                 && let Some(pointer) = self.pointer
             {
                 // `wl_pointer.set_cursor` with no surface hides it (and a
@@ -732,7 +743,10 @@ impl WlConn {
                 arg_u32(&mut a, 0); // hotspot y
                 let _ = self.send(pointer, pointer::WL_POINTER_SET_CURSOR, &a);
             } else {
-                arg_u32(&mut a, cursor_shape(self.cursor));
+                // Over the decorations Stipple draws, their cursor (a resize
+                // arrow over the margin).
+                let shape = self.decor.cursor().unwrap_or(self.cursor);
+                arg_u32(&mut a, cursor_shape(shape));
                 let _ = self.send(device, CURSOR_SHAPE_SET_SHAPE, &a);
             }
             let _ = self.stream.flush();
@@ -947,6 +961,7 @@ struct ShmBuffer {
     capacity: usize,
     buffer: u32,
     size: PhysicalSize,
+    format: u32,
 }
 
 impl ShmBuffer {
@@ -1022,6 +1037,7 @@ fn make_shm(
         capacity: bytes,
         buffer,
         size,
+        format,
     })
 }
 
@@ -1132,7 +1148,25 @@ impl Window for WaylandWindow {
         ScaleFactor::new(self.conn.lock().unwrap().buffer_scale as f64)
     }
     fn request_redraw(&self) {}
-    fn set_title(&self, _title: &str) {}
+    fn set_title(&self, title: &str) {
+        self.conn.lock().unwrap().decor.title = title.to_string();
+        let mut a = Vec::new();
+        arg_str(&mut a, title);
+        self.toplevel_request(XDG_TOPLEVEL_SET_TITLE, &a);
+    }
+    fn request_attention(&self, kind: Option<crate::platform::UserAttention>) {
+        // Nothing to withdraw: the compositor drops it on activation.
+        if kind.is_some() {
+            let mut conn = self.conn.lock().unwrap();
+            attention::request(&mut conn, self.surface);
+            let _ = conn.stream.flush();
+        }
+    }
+    fn beep(&self) {
+        let mut conn = self.conn.lock().unwrap();
+        attention::ring(&mut conn, self.surface);
+        let _ = conn.stream.flush();
+    }
     fn clipboard(&self) -> Option<String> {
         clipboard::text(&mut self.conn.lock().unwrap())
     }
@@ -1154,10 +1188,13 @@ impl Window for WaylandWindow {
         conn.apply_cursor();
     }
     fn set_min_size(&self, size: Option<Size>) {
-        self.toplevel_request(XDG_TOPLEVEL_SET_MIN_SIZE, &size_args(size));
+        // The compositor's limits are the window's, title bar included.
+        let (min, _) = self.conn.lock().unwrap().decor.set_limits(Some(size), None);
+        self.toplevel_request(XDG_TOPLEVEL_SET_MIN_SIZE, &size_args(min));
     }
     fn set_max_size(&self, size: Option<Size>) {
-        self.toplevel_request(XDG_TOPLEVEL_SET_MAX_SIZE, &size_args(size));
+        let (_, max) = self.conn.lock().unwrap().decor.set_limits(None, Some(size));
+        self.toplevel_request(XDG_TOPLEVEL_SET_MAX_SIZE, &size_args(max));
     }
     fn set_maximized(&self, maximized: bool) {
         let opcode = if maximized {
@@ -1230,9 +1267,18 @@ impl Surface for WaylandSurface {
             return;
         }
         let mut conn = self.conn.lock().unwrap();
+        let scale = conn.buffer_scale.max(1);
+        // Decorations Stipple draws go around the content, in an ARGB buffer
+        // (the resize margin is transparent).
+        let content = size;
+        let framed = conn.decor.frame(pixmap, scale);
+        let (size, format) = match &framed {
+            Some((size, _)) => (*size, WL_SHM_FORMAT_ARGB8888),
+            None => (size, WL_SHM_FORMAT_XRGB8888),
+        };
         // (Re)create the shm buffer if missing or the size changed.
-        if self.buffer.as_ref().map(|b| b.size) != Some(size) {
-            self.buffer = make_shm(&mut conn, self.shm, size, WL_SHM_FORMAT_XRGB8888).ok();
+        if self.buffer.as_ref().map(|b| (b.size, b.format)) != Some((size, format)) {
+            self.buffer = make_shm(&mut conn, self.shm, size, format).ok();
         }
         let Some(buf) = self.buffer.as_mut() else {
             return;
@@ -1240,11 +1286,16 @@ impl Surface for WaylandSurface {
         let stride = size.width as usize * 4;
         let bytes = stride * size.height as usize;
         let buffer = buf.buffer;
-        rgba_to_xrgb(pixmap.as_bytes(), &mut buf.bytes()[..bytes]);
+        match &framed {
+            Some((_, argb)) => buf.bytes()[..bytes].copy_from_slice(argb),
+            None => rgba_to_xrgb(pixmap.as_bytes(), &mut buf.bytes()[..bytes]),
+        }
+        // Which part is the window proper (all of it, without decorations).
+        let logical = PhysicalSize::new(content.width / scale, content.height / scale);
+        decor::send_geometry(&mut conn, logical);
 
         let surface = self.surface;
         // attach(buffer, 0, 0); damage(0, 0, w, h); commit.
-        let scale = conn.buffer_scale.max(1);
         let mut a = Vec::new();
         arg_u32(&mut a, scale);
         let _ = conn.send(surface, WL_SURFACE_SET_BUFFER_SCALE, &a);
@@ -1263,7 +1314,12 @@ impl Surface for WaylandSurface {
         request_frame_callback(&mut conn, surface);
         let _ = conn.send(surface, WL_SURFACE_COMMIT, &[]);
         let _ = conn.stream.flush();
-        dbg(format_args!("present {}x{}", size.width, size.height));
+        dbg(format_args!(
+            "present {}x{}{}",
+            size.width,
+            size.height,
+            if framed.is_some() { " decorated" } else { "" }
+        ));
     }
 }
 
@@ -1344,6 +1400,9 @@ where
     let mut cursor_shape_name = None;
     let mut icon_manager_name = None;
     let mut text_input_name = None;
+    let mut decoration_name = None;
+    let mut activation_name = None;
+    let mut bell_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1367,6 +1426,9 @@ where
                     "wp_cursor_shape_manager_v1" => cursor_shape_name = Some(name),
                     "xdg_toplevel_icon_manager_v1" => icon_manager_name = Some(name),
                     text_input::MANAGER => text_input_name = Some(name),
+                    decor::MANAGER => decoration_name = Some(name),
+                    attention::ACTIVATION => activation_name = Some(name),
+                    attention::SYSTEM_BELL => bell_name = Some(name),
                     _ => {}
                 }
             }
@@ -1434,6 +1496,10 @@ where
         let manager = bind(&mut conn, name, text_input::MANAGER, 1);
         text_input::setup(&mut conn, manager, seat);
     }
+    let decoration_manager = decoration_name.map(|name| bind(&mut conn, name, decor::MANAGER, 1));
+    let activation = activation_name.map(|name| bind(&mut conn, name, attention::ACTIVATION, 1));
+    let bell = bell_name.map(|name| bind(&mut conn, name, attention::SYSTEM_BELL, 1));
+    attention::setup(&mut conn, activation, bell);
 
     // Surface → xdg_surface → xdg_toplevel.
     let surface = conn.new_id();
@@ -1459,13 +1525,24 @@ where
     arg_str(&mut a, &attrs.title);
     conn.send(toplevel, XDG_TOPLEVEL_SET_TITLE, &a)
         .map_err(os)?;
+    // Server-side decorations where offered, else our own.
+    decor::setup(
+        &mut conn,
+        decoration_manager,
+        xdg_surface,
+        toplevel,
+        seat,
+        &attrs,
+    );
 
     // Size limits and initial state, applied by the initial commit below.
+    // They're the window's: the title bar we draw counts.
     let (min, max) = if attrs.resizable {
         (attrs.min_size, attrs.max_size)
     } else {
         (Some(attrs.logical_size), Some(attrs.logical_size))
     };
+    let (min, max) = conn.decor.set_limits(Some(min), Some(max));
     if min.is_some() {
         conn.send(toplevel, XDG_TOPLEVEL_SET_MIN_SIZE, &size_args(min))
             .map_err(os)?;
@@ -1532,6 +1609,10 @@ where
     // threads) together.
     crate::platform::wake::install_unix();
     let fd = shared.lock().unwrap().stream.as_raw_fd();
+    // Unfocused until the compositor activates the toplevel.
+    if handler(Event::FocusChanged(false), &win) == ControlFlow::Exit {
+        return Ok(());
+    }
     loop {
         // Messages a paste read while it waited come first.
         let queued = shared.lock().unwrap().queue.pop_front();
@@ -1574,6 +1655,16 @@ where
         // a wake once this loop goes back to waiting.
         if frame_callback_done(object, opcode) {
             continue;
+        }
+        // Decoration modes and activation tokens.
+        {
+            let mut conn = shared.lock().unwrap();
+            if decor::handle(&mut conn, object, opcode, &args)
+                || attention::handle(&mut conn, object, opcode, &args)
+            {
+                let _ = conn.stream.flush();
+                continue;
+            }
         }
         // Moving to another output, or an output's scale changing, means rendering
         // at a new resolution.
@@ -1668,12 +1759,26 @@ where
             let y = u32::from_le_bytes([args[n - 4], args[n - 3], args[n - 2], args[n - 1]]);
             pointer_pos = Point::new(fixed_to_f64(x), fixed_to_f64(y));
             crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
-            if handler(
-                Event::PointerMoved {
-                    position: pointer_pos,
-                },
-                &win,
-            ) == ControlFlow::Exit
+            // Over decorations Stipple draws, the pointer is theirs.
+            let motion = {
+                let mut conn = shared.lock().unwrap();
+                let motion = conn.decor.motion(pointer_pos, logical);
+                conn.apply_cursor();
+                motion
+            };
+            let mut events = Vec::new();
+            if motion.left_content {
+                events.push(Event::PointerLeft);
+            }
+            if let Some(position) = motion.forward {
+                events.push(Event::PointerMoved { position });
+            }
+            if motion.redraw {
+                events.push(Event::RedrawRequested);
+            }
+            if events
+                .into_iter()
+                .any(|event| handler(event, &win) == ControlFlow::Exit)
             {
                 break;
             }
@@ -1692,6 +1797,30 @@ where
                     clipboard::drag_out::end(&mut conn);
                 }
             }
+            // A press on the decorations moves, resizes or clicks their
+            // buttons; one on the content is the app's.
+            let press = {
+                let mut conn = shared.lock().unwrap();
+                let press = decor::button(&mut conn, pointer_pos, logical, button, pressed, serial);
+                let _ = conn.stream.flush();
+                press
+            };
+            let position = match press {
+                decor::Press::Forward(position) => position,
+                decor::Press::Close => {
+                    if handler(Event::CloseRequested, &win) == ControlFlow::Exit {
+                        break;
+                    }
+                    continue;
+                }
+                decor::Press::Redraw => {
+                    if handler(Event::RedrawRequested, &win) == ControlFlow::Exit {
+                        break;
+                    }
+                    continue;
+                }
+                decor::Press::Done => continue,
+            };
             let state = if pressed {
                 ButtonState::Pressed
             } else {
@@ -1702,7 +1831,7 @@ where
                 Event::PointerButton {
                     button: pointer_button(button),
                     state,
-                    position: pointer_pos,
+                    position,
                 },
                 &win,
             ) == ControlFlow::Exit
@@ -1711,7 +1840,10 @@ where
             }
         } else if Some(object) == pointer && opcode == pointer::WL_POINTER_LEAVE {
             dbg(format_args!("pointer left"));
-            if handler(Event::PointerLeft, &win) == ControlFlow::Exit {
+            let redraw = shared.lock().unwrap().decor.leave();
+            if handler(Event::PointerLeft, &win) == ControlFlow::Exit
+                || (redraw && handler(Event::RedrawRequested, &win) == ControlFlow::Exit)
+            {
                 break;
             }
         } else if Some(object) == pointer && opcode == WL_POINTER_AXIS_DISCRETE {
@@ -1736,7 +1868,9 @@ where
                 axes.stop()
             };
             crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
-            if let Some(delta) = delta
+            // The wheel over the decorations Stipple draws isn't the app's.
+            let on_decor = shared.lock().unwrap().decor.pointer_on_decorations();
+            if let Some(delta) = delta.filter(|_| !on_decor)
                 && handler(Event::Scroll { delta }, &win) == ControlFlow::Exit
             {
                 break;
@@ -1756,8 +1890,13 @@ where
                 arg_u32(&mut a, serial);
                 let _ = conn.send(xdg_surface, XDG_SURFACE_ACK_CONFIGURE, &a);
             }
-            // Apply the size from the toplevel.configure this one completes.
-            if let Some(size) = pending_size.take().filter(|s| *s != logical) {
+            // Apply the size from the toplevel.configure this one completes:
+            // the window's, of which the content is what our title bar (if
+            // any) leaves.
+            let content = pending_size
+                .take()
+                .map(|window| shared.lock().unwrap().decor.content_size(window));
+            if let Some(size) = content.filter(|s| *s != logical) {
                 logical = size;
                 let scale = shared.lock().unwrap().buffer_scale;
                 win.size = PhysicalSize::new(size.width * scale, size.height * scale);
@@ -1774,12 +1913,32 @@ where
             let w = i32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let h = i32::from_le_bytes([args[4], args[5], args[6], args[7]]);
             dbg(format_args!("toplevel configure {w}x{h}"));
-            if w > 0 && h > 0 {
-                pending_size = Some(PhysicalSize::new(w as u32, h as u32));
+            let states = decor::configure_states(&args);
+            let focus = {
+                let mut conn = shared.lock().unwrap();
+                // Whether the window is active (`activated`) is its focus.
+                let focus = conn.decor.set_states(&states);
+                pending_size = if w > 0 && h > 0 {
+                    Some(PhysicalSize::new(w as u32, h as u32))
+                } else {
+                    // The client picks: keep the content's size (the title
+                    // bar may have come or gone).
+                    let title = conn.decor.title_height() as u32;
+                    Some(PhysicalSize::new(logical.width, logical.height + title))
+                };
+                focus
+            };
+            if let Some(focused) = focus {
+                dbg(format_args!("focus {focused}"));
+                if handler(Event::FocusChanged(focused), &win) == ControlFlow::Exit {
+                    break;
+                }
             }
         } else if object == toplevel && opcode == XDG_TOPLEVEL_CLOSE {
-            handler(Event::CloseRequested, &win);
-            break;
+            // The app may keep the window (and ask the user first).
+            if handler(Event::CloseRequested, &win) == ControlFlow::Exit {
+                break;
+            }
         } else if old_keyboards.contains(&object) {
             if opcode == WL_KEYBOARD_KEYMAP
                 && let Some(fd) = shared.lock().unwrap().fds.pop_front()
@@ -1838,7 +1997,9 @@ where
             mods_mask = word(4) | word(8) | word(12);
             dbg(format_args!("modifiers {mods_mask:#x}"));
         } else if Some(object) == keyboard {
-            // enter (1) / leave (2) / repeat_info (5).
+            // enter (1) / leave (2) / repeat_info (5). The window's focus is
+            // its toplevel's `activated` state, which a seat without a
+            // keyboard has too.
             dbg(format_args!("keyboard event {opcode}"));
         } else if object == WL_DISPLAY && opcode == WL_DISPLAY_ERROR {
             return Err(PlatformError::Os("wl_display error".into()));
