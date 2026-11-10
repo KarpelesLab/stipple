@@ -2,7 +2,8 @@
 //! password field and a tab color picker, and message boxes.
 //!
 //! - Tabs select on a click, close with their × (a busy one asks first, in a
-//!   message box), reorder by dragging, and have a context menu (Rename…,
+//!   message box) and on a middle click, rename on a double click, reorder
+//!   by dragging, and have a context menu (Rename…,
 //!   a color, Close Others, Close). "+" opens a new one; past what fits, ‹ ›
 //!   scroll and ▾ lists them all. With the bar focused (Tab), ←/→ move
 //!   between tabs.
@@ -159,27 +160,37 @@ fn request_close(s: &mut State, i: usize, handle: &AppHandle<State>) {
     });
 }
 
+/// Ask for session `i`'s new name, in a message box with a text field.
+fn ask_rename(s: &mut State, i: usize, handle: &AppHandle<State>) {
+    let Some(session) = s.sessions.get(i) else {
+        return;
+    };
+    let id = session.id;
+    let mb = s.message(
+        MessageBox::new("Rename tab")
+            .kind(MessageKind::Question)
+            .buttons(["Rename", "Cancel"])
+            .cancel(1)
+            .input(session.name.clone(), false),
+    );
+    handle.message(mb, move |st: &mut State, r| {
+        if let (Some(0), Some(text)) = (r.button, r.input)
+            && let Some(i) = st.index_of(id)
+            && !text.trim().is_empty()
+        {
+            st.sessions[i].name = text.trim().to_string();
+        }
+    });
+}
+
 fn tab_menu(s: &Session, handle: &AppHandle<State>) -> Menu<State> {
     let id = s.id;
-    let name = s.name.clone();
     let rename = {
         let handle = handle.clone();
         move |st: &mut State| {
-            let mb = st.message(
-                MessageBox::new("Rename tab")
-                    .kind(MessageKind::Question)
-                    .buttons(["Rename", "Cancel"])
-                    .cancel(1)
-                    .input(name.clone(), false),
-            );
-            handle.message(mb, move |st: &mut State, r| {
-                if let (Some(0), Some(text)) = (r.button, r.input)
-                    && let Some(i) = st.index_of(id)
-                    && !text.trim().is_empty()
-                {
-                    st.sessions[i].name = text.trim().to_string();
-                }
-            });
+            if let Some(i) = st.index_of(id) {
+                ask_rename(st, i, &handle);
+            }
         }
     };
     let mut colors = Menu::new("Color");
@@ -245,6 +256,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         .selected(state.selected)
         .on_select(|s: &mut State, i| s.select(i))
         .on_close(move |s: &mut State, i| request_close(s, i, &h))
+        .on_rename({
+            let h = handle.clone();
+            move |s: &mut State, i| ask_rename(s, i, &h)
+        })
         .on_reorder(|s: &mut State, from, to| {
             let moved = s.sessions.remove(from);
             s.sessions.insert(to, moved);

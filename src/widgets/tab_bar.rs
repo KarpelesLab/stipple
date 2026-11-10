@@ -11,8 +11,9 @@ use crate::core::{
     Align, Anchor, AnimProp, Axis, BoxStyle, Cx, Element, KeyInput, Menu, OverlaySpec, Role,
     Transition,
 };
+use crate::core::{PointerEvent, PointerEventKind};
 use crate::geometry::{Insets, Transform};
-use crate::platform::{DragOffer, DropData};
+use crate::platform::{DragOffer, DropData, PointerButton};
 use crate::render::Color;
 use crate::style::Theme;
 
@@ -116,6 +117,7 @@ pub struct TabBar<S> {
     on_close: Option<IndexFn<S>>,
     on_reorder: Option<ReorderFn<S>>,
     on_new: Option<NewFn<S>>,
+    on_rename: Option<IndexFn<S>>,
 }
 
 impl<S> std::fmt::Debug for TabBar<S> {
@@ -141,6 +143,7 @@ impl<S> TabBar<S> {
             on_close: None,
             on_reorder: None,
             on_new: None,
+            on_rename: None,
         }
     }
 
@@ -175,6 +178,13 @@ impl<S> TabBar<S> {
     /// tab `from` to index `to`. Without it, tabs don't drag.
     pub fn on_reorder(mut self, f: impl Fn(&mut S, usize, usize) + 'static) -> Self {
         self.on_reorder = Some(Rc::new(f));
+        self
+    }
+
+    /// Run `f` with a tab's index when it is double-clicked: the app starts
+    /// renaming it (a message box with a text field, say).
+    pub fn on_rename(mut self, f: impl Fn(&mut S, usize) + 'static) -> Self {
+        self.on_rename = Some(Rc::new(f));
         self
     }
 
@@ -420,14 +430,15 @@ fn bell(color: Color) -> Option<std::sync::Arc<crate::render::Svg>> {
 ///   button listing every tab.
 /// - Focused (Tab key), ←/→ select the previous/next tab, Home/End the
 ///   first/last, and Delete closes the selected one.
+/// - A middle click on a closable tab closes it, and a double click runs
+///   `on_rename`.
 /// - Tabs, the close buttons and the bar's buttons fade their hover and press
 ///   looks in and out.
 ///
 /// Assistive technologies see a [`Role::TabList`] of [`Role::Tab`]s, the
 /// selected one selected.
 ///
-/// Middle-click to close and double-click to rename wait on per-button
-/// pointer events (#14); dragging a tab out into a new window isn't done.
+/// Dragging a tab out into a window of its own isn't done.
 pub fn tab_bar<S: 'static>(
     cx: &mut Cx<S>,
     theme: &Theme,
@@ -597,6 +608,28 @@ pub fn tab_bar<S: 'static>(
             if dx.abs() > 0.25 {
                 el = el.transform(Transform::IDENTITY.translate(if rtl { -dx } else { dx }, 0.0));
             }
+        }
+        let (on_close, on_rename) = (bar.on_close.clone(), bar.on_rename.clone());
+        let closable = tab.closable;
+        if (closable && on_close.is_some()) || on_rename.is_some() {
+            el = el.on_pointer(cx, move |ev: &PointerEvent, s: &mut S| {
+                if ev.kind != PointerEventKind::Down {
+                    return;
+                }
+                match ev.button {
+                    Some(PointerButton::Middle) if closable => {
+                        if let Some(f) = &on_close {
+                            f(s, i);
+                        }
+                    }
+                    Some(PointerButton::Left) if ev.click_count == 2 => {
+                        if let Some(f) = &on_rename {
+                            f(s, i);
+                        }
+                    }
+                    _ => {}
+                }
+            });
         }
         if let Some(menu) = tab.menu {
             el = el.context_menu(cx, menu);

@@ -142,12 +142,14 @@ let bar = TabBar::new("docs", tabs)
     .on_select(|s: &mut App, i| s.selected = i)
     .on_close(|s: &mut App, i| { s.docs.remove(i); })
     .on_reorder(|s: &mut App, from, to| { let d = s.docs.remove(from); s.docs.insert(to, d); })
+    .on_rename(|s: &mut App, i| s.start_renaming(i))
     .on_new(|s: &mut App| s.docs.push(Doc::new()));
 tab_bar(cx, &theme, bar, &state.bar, |s: &mut App| &mut s.bar)
 ```
 
-- Clicking a tab selects it; its × closes it. Middle-click to close and
-  double-click to rename wait on per-button pointer events.
+- Clicking a tab selects it; its × or a middle click closes it, and a double
+  click runs `on_rename` (the app asks for the name: `sessionsdemo` uses a
+  message box with a text field).
 - With `on_reorder`, a tab drags (an in-app drag, `DropData::Internal`) onto
   another to move there; the tabs it passes slide into their new places on a
   spring.

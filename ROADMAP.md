@@ -1181,8 +1181,9 @@ Most input only works on X11 today.
   indicator (dot, bell, count), a context menu per tab, a new-tab button,
   scroll arrows and a list of every tab past what fits, keyboard navigation
   and `TabList`/`Tab` roles, animated with state overrides and transitions.
-  Middle-click close, double-click rename and dragging a tab out into a window
-  are still to do. Password field (`password_field`: masked, no copy or cut,
+  Middle-click to close and double-click to rename (`on_rename`) through
+  `Element::on_pointer`; dragging a tab out into a window of its own and
+  macOS's native window tabs are still to do. Password field (`password_field`: masked, no copy or cut,
   no undo history, IME off, `EnableSecureEventInput` on macOS, a reveal
   button, the `PasswordField` role) and color picker (`color_picker` /
   `color_button`: HSV area, hue and alpha strips, hex field, swatches).

@@ -73,6 +73,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
             s.docs.insert(to, d);
             s.selected = to;
         })
+        .on_rename(|s: &mut State, i| s.log.push(format!("rename {i}")))
         .on_new(|s: &mut State| {
             s.docs.push(Doc {
                 id: s.next,
@@ -227,4 +228,26 @@ fn a_right_click_opens_the_tab_menu() {
     assert!(app.click_at(item.center()));
     assert_eq!(app.state().docs.len(), 1);
     assert_eq!(app.state().docs[0].name, "Doc 1");
+}
+
+#[test]
+fn a_middle_click_closes_and_a_double_click_renames() {
+    use crate::platform::{ButtonState, Event, PointerButton};
+    let button = |button, state, at: Point| Event::PointerButton {
+        button,
+        state,
+        position: at,
+    };
+    let mut app = app(3, 600.0);
+    let tab = tabs_of(&app)[1].bounds.center();
+    app.pointer_event(button(PointerButton::Middle, ButtonState::Pressed, tab));
+    app.pointer_event(button(PointerButton::Middle, ButtonState::Released, tab));
+    assert_eq!(app.state().log, ["close 1"]);
+    app.render_once();
+    let tab = tabs_of(&app)[0].bounds.center();
+    for _ in 0..2 {
+        app.pointer_event(button(PointerButton::Left, ButtonState::Pressed, tab));
+        app.pointer_event(button(PointerButton::Left, ButtonState::Released, tab));
+    }
+    assert_eq!(app.state().log, ["close 1", "rename 0"]);
 }
