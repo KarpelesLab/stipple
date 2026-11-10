@@ -515,6 +515,7 @@ pub(super) mod tests {
             enter_serial: None,
             cursor: Default::default(),
             text_input: Default::default(),
+            pointer: None,
         };
         (conn, theirs)
     }

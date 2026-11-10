@@ -28,7 +28,7 @@ pub(super) fn interval(conn: &mut Conn) -> Option<Duration> {
 
 /// Send a request and read its reply: the 32-byte header plus any extra words.
 /// `None` for an error packet.
-fn round_trip(conn: &mut Conn, req: Vec<u8>) -> io::Result<Option<Vec<u8>>> {
+pub(super) fn round_trip(conn: &mut Conn, req: Vec<u8>) -> io::Result<Option<Vec<u8>>> {
     conn.send(&finish(req))?;
     let mut head = [0u8; 32];
     conn.stream.read_exact(&mut head)?;

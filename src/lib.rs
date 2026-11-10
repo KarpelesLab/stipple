@@ -30,6 +30,7 @@
 
 pub mod anim;
 mod app_dnd;
+mod app_pointer;
 pub mod core;
 pub mod geometry;
 #[cfg(feature = "gpu")]
@@ -38,6 +39,8 @@ pub mod gpu;
 mod interaction_tests;
 pub mod layout;
 pub mod platform;
+#[cfg(test)]
+mod pointer_tests;
 pub mod render;
 pub mod style;
 mod web_app;
@@ -153,18 +156,10 @@ pub type FrameRenderer = Box<dyn FnMut(&Scene, Color, ScaleFactor) -> Pixmap>;
 /// handlers) to an [`Element`] tree. Boxed so each window can hold its own view.
 pub type ViewFn<S> = Box<dyn FnMut(&S, &mut Cx<'_, S>) -> Element>;
 
-/// The longest gap between presses that still counts as a multi-click. 500 ms
-/// is the default double-click time on Windows, GTK and macOS; the platforms
-/// let users change it, but Stipple doesn't read that setting (yet).
-const MULTI_CLICK_TIME: std::time::Duration = std::time::Duration::from_millis(500);
-
-/// How far (logical px, on each axis) the pointer may drift between presses of
-/// a multi-click.
-const MULTI_CLICK_SLOP: f64 = 4.0;
-
-/// Counts consecutive presses at (nearly) the same spot within
-/// [`MULTI_CLICK_TIME`]: 1 for a single click, 2 for a double, 3 for a triple;
-/// a fourth press starts over at 1.
+/// Counts consecutive presses at (nearly) the same spot within the
+/// platform's double-click time and distance
+/// ([`double_click`](crate::platform::double_click)): 1 for a single click, 2
+/// for a double, 3 for a triple; a fourth press starts over at 1.
 #[derive(Clone, Copy, Debug, Default)]
 struct ClickCounter {
     last: Option<(crate::platform::time::Instant, Point)>,
@@ -174,10 +169,11 @@ struct ClickCounter {
 impl ClickCounter {
     /// Register a press at `pos` at time `now`, returning its click count.
     fn press(&mut self, now: crate::platform::time::Instant, pos: Point) -> u32 {
+        let multi = crate::platform::double_click();
         let repeat = self.last.is_some_and(|(t, p)| {
-            now.saturating_duration_since(t) <= MULTI_CLICK_TIME
-                && (pos.x - p.x).abs() <= MULTI_CLICK_SLOP
-                && (pos.y - p.y).abs() <= MULTI_CLICK_SLOP
+            now.saturating_duration_since(t) <= multi.time
+                && (pos.x - p.x).abs() <= multi.distance
+                && (pos.y - p.y).abs() <= multi.distance
         });
         self.count = if repeat && self.count < 3 {
             self.count + 1
@@ -344,6 +340,9 @@ struct Pane<S> {
     catchers: Vec<ActionId>,
     // Drag and drop: the drag over the window, its target, and in-app drags.
     dnd: app_dnd::DndState,
+    // Raw pointer events: the buttons held, the element holding the capture
+    // and the one hovered, and click counts.
+    pointer: app_pointer::PointerTrack,
     // Interaction states and implicit transitions: the in-flight property
     // values by element identity, the elements whose look (or view) depends
     // on which states, whether the pointer is in the window, where the
@@ -414,6 +413,7 @@ impl<S: 'static> Pane<S> {
             context_menus: Vec::new(),
             catchers: Vec::new(),
             dnd: Default::default(),
+            pointer: Default::default(),
             transitions: Default::default(),
             watch: Default::default(),
             pointer_in: false,
@@ -2355,6 +2355,13 @@ impl<S: 'static> App<S> {
             let scene = pane.build_frame(state, theme, font.as_ref());
             app_dbg(format_args!("present: built"));
             pane.sync_ime(window, font.as_ref());
+            // The view may have changed the cursor under a pointer at rest (a
+            // terminal hiding it while the user types).
+            if pane.pointer_in
+                && let Some(cursor) = pane.cursor_change(pane.last_pointer)
+            {
+                window.set_cursor(cursor);
+            }
 
             // Push the freshly-built accessibility tree to the OS bridge so a
             // screen reader sees the current element hierarchy and focus.
@@ -2476,6 +2483,15 @@ impl<S: 'static> App<S> {
                     request.apply(window);
                 }
             }
+            // Pointer buttons, moves and wheels reach `on_pointer` and
+            // `on_wheel` handlers first.
+            let input = self.pane_pointer_input(idx, &event, crate::platform::time::Instant::now());
+            if input.redraw {
+                present(&mut self, &mut surfaces, idx, window, false);
+            }
+            if input.done {
+                return ControlFlow::Wait;
+            }
             match event {
                 Event::RedrawRequested => {
                     present(&mut self, &mut surfaces, idx, window, true);
@@ -2554,12 +2570,8 @@ impl<S: 'static> App<S> {
                 Event::PointerLeft => {
                     // Nothing is hovered any more (unless a press holds the
                     // pointer).
-                    let pane = &mut self.panes[idx];
-                    if !pane.pointer_latched() && pane.press_at.is_none() {
-                        pane.pointer_in = false;
-                        if pane.refresh_interactions() {
-                            present(&mut self, &mut surfaces, idx, window, false);
-                        }
+                    if self.pane_pointer_left(idx) {
+                        present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
                 }
@@ -2714,9 +2726,8 @@ impl<S: 'static> App<S> {
                 Event::Scroll { delta } => {
                     // A wheel over a viewport scrolls its content, not the chrome.
                     let at = self.panes[idx].last_pointer;
-                    if self.try_forward_wheel(idx, at, delta.dy)
-                        || self.pane_scroll_by(idx, delta.dy)
-                    {
+                    let (_, dy) = delta.in_pixels();
+                    if self.try_forward_wheel(idx, at, dy) || self.pane_scroll_by(idx, dy) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -3227,9 +3238,11 @@ pub mod prelude {
     pub use crate::core::{AnimProp, ElementKey, Interaction, Transition};
     pub use crate::core::{DROP_FADE, DropState};
     pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};
+    pub use crate::core::{PointerEvent, PointerEventKind, WheelEvent};
     pub use crate::geometry::Transform;
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
     pub use crate::platform::Notification;
+    pub use crate::platform::PointerButton;
     pub use crate::platform::{CursorIcon, DragOffer, DropData, WindowRequest};
     pub use crate::platform::{KeyCode, Modifiers};
     pub use crate::render::{Color, Font, ImageFit, Pixmap, Svg, TextDirection};

@@ -26,6 +26,7 @@
 #![allow(unsafe_code)]
 
 mod clipboard;
+mod pointer;
 mod text_input;
 
 use std::cell::RefCell;
@@ -38,9 +39,10 @@ use std::sync::{Arc, Mutex};
 use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
-use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, ScrollDelta};
+use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers};
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
+use pointer::{fixed_to_f64, pointer_button};
 
 use core::ffi::{c_char, c_void};
 
@@ -210,6 +212,8 @@ fn cursor_shape(icon: CursorIcon) -> u32 {
         CursorIcon::NsResize => 27,
         CursorIcon::NeswResize => 28,
         CursorIcon::NwseResize => 29,
+        // Hidden through `wl_pointer.set_cursor` instead (see `apply_cursor`).
+        CursorIcon::Hidden => 1,
     }
 }
 
@@ -338,40 +342,6 @@ fn char_event(c: char, state: ButtonState, modifiers: Modifiers) -> Option<Event
         });
     }
     (state == ButtonState::Pressed).then(|| Event::Text(c.to_string()))
-}
-
-/// Convert a `wl_fixed` (signed 24.8 fixed-point) to logical pixels.
-fn fixed_to_f64(raw: u32) -> f64 {
-    (raw as i32) as f64 / 256.0
-}
-
-/// The scroll delta for a `wl_pointer.axis` event: `axis` 0 is vertical, 1
-/// horizontal, and `value` (a `wl_fixed`) is in surface pixels, positive down
-/// or right. A wheel also sends `axis_discrete` with its notch count first;
-/// then the delta is one line per notch, as on the other backends, rather than
-/// the compositor's per-notch distance (often 10 or 15 px).
-fn axis_delta(axis: u32, value: u32, discrete: i32) -> Option<ScrollDelta> {
-    let px = if discrete != 0 {
-        f64::from(discrete) * crate::platform::input::LINE_PX
-    } else {
-        fixed_to_f64(value)
-    };
-    match axis {
-        0 => Some(ScrollDelta { dx: 0.0, dy: px }),
-        1 => Some(ScrollDelta { dx: px, dy: 0.0 }),
-        _ => None,
-    }
-}
-
-/// Translate an evdev pointer button code into a Stipple [`PointerButton`].
-fn pointer_button(code: u32) -> Option<crate::platform::event::PointerButton> {
-    use crate::platform::event::PointerButton;
-    match code {
-        0x110 => Some(PointerButton::Left),
-        0x111 => Some(PointerButton::Right),
-        0x112 => Some(PointerButton::Middle),
-        _ => None,
-    }
 }
 
 // ---- xkb keymap (text format) -----------------------------------------------
@@ -711,6 +681,8 @@ struct WlConn {
     cursor: CursorIcon,
     /// The seat's `zwp_text_input_v3`, when the compositor offers it.
     text_input: text_input::TextInput,
+    /// The seat's `wl_pointer`, once it has one (to hide the cursor).
+    pointer: Option<u32>,
 }
 
 impl WlConn {
@@ -738,6 +710,7 @@ impl WlConn {
             cursor_device: None,
             enter_serial: None,
             cursor: CursorIcon::Default,
+            pointer: None,
             text_input: text_input::TextInput::default(),
         })
     }
@@ -748,8 +721,20 @@ impl WlConn {
         if let (Some(device), Some(serial)) = (self.cursor_device, self.enter_serial) {
             let mut a = Vec::new();
             arg_u32(&mut a, serial);
-            arg_u32(&mut a, cursor_shape(self.cursor));
-            let _ = self.send(device, CURSOR_SHAPE_SET_SHAPE, &a);
+            if self.cursor == CursorIcon::Hidden
+                && let Some(pointer) = self.pointer
+            {
+                // `wl_pointer.set_cursor` with no surface hides it (and a
+                // shape shows it again). Without cursor-shape-v1 there'd be
+                // no shape to bring it back, so it isn't hidden then.
+                arg_u32(&mut a, 0); // surface
+                arg_u32(&mut a, 0); // hotspot x
+                arg_u32(&mut a, 0); // hotspot y
+                let _ = self.send(pointer, pointer::WL_POINTER_SET_CURSOR, &a);
+            } else {
+                arg_u32(&mut a, cursor_shape(self.cursor));
+                let _ = self.send(device, CURSOR_SHAPE_SET_SHAPE, &a);
+            }
             let _ = self.stream.flush();
         }
     }
@@ -1538,8 +1523,8 @@ where
     let mut mods_mask = 0u32;
     // Dead keys and compose sequences: the client's job on Wayland.
     let mut compose = crate::platform::compose::ComposeState::default();
-    // Wheel notches from `axis_discrete`, per axis, for the `axis` that follows.
-    let mut discrete = [0i32; 2];
+    // Wheel notches and the scroll source, for the `axis` events that follow.
+    let mut axes = pointer::Axes::default();
     // Toplevel sizes are in surface units; the buffer is that times the scale.
     let mut logical = size;
     let mut pending_size: Option<PhysicalSize> = None;
@@ -1653,6 +1638,7 @@ where
                 arg_u32(&mut a, ptr);
                 if conn.send(seat.unwrap(), WL_SEAT_GET_POINTER, &a).is_ok() {
                     pointer = Some(ptr);
+                    conn.pointer = Some(ptr);
                     dbg(format_args!("pointer={ptr} (caps={caps})"));
                     if let Some(manager) = cursor_shape_manager {
                         let device = conn.new_id();
@@ -1681,6 +1667,7 @@ where
             let x = u32::from_le_bytes([args[n - 8], args[n - 7], args[n - 6], args[n - 5]]);
             let y = u32::from_le_bytes([args[n - 4], args[n - 3], args[n - 2], args[n - 1]]);
             pointer_pos = Point::new(fixed_to_f64(x), fixed_to_f64(y));
+            crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
             if handler(
                 Event::PointerMoved {
                     position: pointer_pos,
@@ -1705,38 +1692,51 @@ where
                     clipboard::drag_out::end(&mut conn);
                 }
             }
-            if let Some(button) = pointer_button(button) {
-                let state = if pressed {
-                    ButtonState::Pressed
-                } else {
-                    ButtonState::Released
-                };
-                crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
-                if handler(
-                    Event::PointerButton {
-                        button,
-                        state,
-                        position: pointer_pos,
-                    },
-                    &win,
-                ) == ControlFlow::Exit
-                {
-                    break;
-                }
+            let state = if pressed {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            };
+            crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
+            if handler(
+                Event::PointerButton {
+                    button: pointer_button(button),
+                    state,
+                    position: pointer_pos,
+                },
+                &win,
+            ) == ControlFlow::Exit
+            {
+                break;
+            }
+        } else if Some(object) == pointer && opcode == pointer::WL_POINTER_LEAVE {
+            dbg(format_args!("pointer left"));
+            if handler(Event::PointerLeft, &win) == ControlFlow::Exit {
+                break;
             }
         } else if Some(object) == pointer && opcode == WL_POINTER_AXIS_DISCRETE {
             // axis(4), discrete(4: signed notches).
             let axis = u32::from_le_bytes([args[0], args[1], args[2], args[3]]);
             let steps = i32::from_le_bytes([args[4], args[5], args[6], args[7]]);
-            if let Some(slot) = discrete.get_mut(axis as usize) {
-                *slot = steps;
-            }
-        } else if Some(object) == pointer && opcode == WL_POINTER_AXIS {
-            // time(4), axis(4: 0 vertical, 1 horizontal), value(wl_fixed).
-            let axis = u32::from_le_bytes([args[4], args[5], args[6], args[7]]);
-            let value = u32::from_le_bytes([args[8], args[9], args[10], args[11]]);
-            let steps = discrete.get_mut(axis as usize).map_or(0, std::mem::take);
-            if let Some(delta) = axis_delta(axis, value, steps)
+            axes.discrete(axis, steps);
+        } else if Some(object) == pointer && opcode == pointer::WL_POINTER_AXIS_SOURCE {
+            axes.source(u32::from_le_bytes([args[0], args[1], args[2], args[3]]));
+        } else if Some(object) == pointer && opcode == pointer::WL_POINTER_FRAME {
+            axes.frame();
+        } else if Some(object) == pointer
+            && (opcode == WL_POINTER_AXIS || opcode == pointer::WL_POINTER_AXIS_STOP)
+        {
+            // axis: time(4), axis(4: 0 vertical, 1 horizontal), value(wl_fixed).
+            // axis_stop: time(4), axis(4).
+            let delta = if opcode == WL_POINTER_AXIS {
+                let axis = u32::from_le_bytes([args[4], args[5], args[6], args[7]]);
+                let value = u32::from_le_bytes([args[8], args[9], args[10], args[11]]);
+                axes.axis(axis, value)
+            } else {
+                axes.stop()
+            };
+            crate::platform::set_pointer_modifiers(wl_modifiers(mods_mask, keymap.as_ref()));
+            if let Some(delta) = delta
                 && handler(Event::Scroll { delta }, &win) == ControlFlow::Exit
             {
                 break;
@@ -2194,37 +2194,5 @@ xkb_symbols \"x\" {
         assert_eq!(keysym_value("é"), Some(0xe9));
         assert_eq!(keysym_value("€"), Some(0x0100_20ac));
         assert_eq!(keysym_value("Multi_key"), Some(0xff20));
-    }
-
-    #[test]
-    fn pointer_axis_deltas() {
-        // A touchpad: no discrete steps, the value is in pixels (+ = down).
-        assert_eq!(
-            axis_delta(0, (7 * 256) as u32, 0),
-            Some(ScrollDelta { dx: 0.0, dy: 7.0 })
-        );
-        // A wheel notch up: one line, whatever distance the compositor sent.
-        assert_eq!(
-            axis_delta(0, (-15i32 * 256) as u32, -1),
-            Some(ScrollDelta { dx: 0.0, dy: -40.0 })
-        );
-        // Horizontal.
-        assert_eq!(
-            axis_delta(1, (15 * 256) as u32, 1),
-            Some(ScrollDelta { dx: 40.0, dy: 0.0 })
-        );
-        assert_eq!(axis_delta(2, 0, 0), None);
-    }
-
-    #[test]
-    fn fixed_point_and_pointer_buttons() {
-        use crate::platform::event::PointerButton;
-        // wl_fixed is signed 24.8: 256 → 1.0, 128 → 0.5, negatives wrap.
-        assert_eq!(fixed_to_f64(256), 1.0);
-        assert_eq!(fixed_to_f64(128), 0.5);
-        assert_eq!(fixed_to_f64((-256i32) as u32), -1.0);
-        assert_eq!(pointer_button(0x110), Some(PointerButton::Left));
-        assert_eq!(pointer_button(0x111), Some(PointerButton::Right));
-        assert_eq!(pointer_button(0x999), None);
     }
 }

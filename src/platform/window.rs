@@ -35,6 +35,10 @@ pub enum CursorIcon {
     NwseResize,
     /// Resize along the top-right to bottom-left diagonal.
     NeswResize,
+    /// No cursor: the pointer is hidden while over the element (a terminal
+    /// hiding it while the user types, a video playing). It shows again when
+    /// the pointer leaves the window, or the element asks for another cursor.
+    Hidden,
 }
 
 /// What the input method needs to know about the focused text field, passed to

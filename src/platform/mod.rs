@@ -72,13 +72,16 @@ mod window;
 pub use access::{A11yNode, A11yRole};
 pub use error::PlatformError;
 pub use event::{
-    ButtonState, DragOffer, DropData, Event, Ime, KeyCode, Modifiers, PointerButton, ScrollDelta,
-    Touch, TouchPhase, WindowId, file_uri_to_path, parse_uri_list, path_to_file_uri, uri_list,
+    ButtonState, DragOffer, DropData, Event, Ime, KeyCode, Modifiers, PointerButton,
+    SCROLL_LINE_PX, ScrollDelta, ScrollPhase, ScrollUnit, Touch, TouchPhase, WindowId,
+    file_uri_to_path, parse_uri_list, path_to_file_uri, uri_list,
 };
 pub use menu::{
     MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, Shortcut, TRAY_ID_BASE,
 };
-pub use pointer::{pointer_modifiers, set_pointer_modifiers};
+pub use pointer::{
+    DoubleClick, double_click, pointer_modifiers, set_double_click, set_pointer_modifiers,
+};
 pub use shell::{Notification, notify, open_path, open_url};
 pub use window::{CursorIcon, ImeState, Window, WindowAttributes, WindowRequest};
 

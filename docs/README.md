@@ -23,6 +23,7 @@ How to build, package and run on each platform, and what works there today.
 | Pointer input | ✅ | ✅ | ✅ | ✅ touch | ✅ touch, mouse ¹⁹ | ✅ ¹² |
 | Keyboard input | ✅ | ✅ | ✅ | ✅ ²⁷ | ✅ ¹⁹ | ✅ ¹² |
 | Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | mouse wheel ¹⁰ | ✅ ⁶ |
+| Raw pointer events (every button, click counts, lines vs pixels, pointer leaving) | ✅ ³⁶ | ✅ ³⁶ | ✅ ³⁶ | touch | ✅ mouse ³⁶ | ✅ ³⁶ |
 | Touch scrolling (drag, fling) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ❌ |
 | Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹² |
 | Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
@@ -179,6 +180,16 @@ own with `Font::from_bytes`. See [fonts.md](fonts.md).
 ³⁵ Shared code (the CPU text path), so the same everywhere. CI screenshots
 `fontdemo` on X11 and checks its rendering off screen on X11, Windows and
 macOS; elsewhere it is unit-tested. See [fonts.md](fonts.md).
+³⁶ `Element::on_pointer` and `on_wheel`: the App's routing (capture, leaves,
+click counts, wheel targets) is unit-tested, and CI checks a middle click, a
+double click, Shift+right-click, the horizontal wheel, the hidden cursor and
+the pointer leaving the window (the hover ending) with `xdotool` on X11.
+Wayland (`wl_pointer.leave`, side buttons, finger-scroll phases), Windows
+(`WM_MOUSELEAVE`, `WM_XBUTTON*`, capture for every button, the double-click
+settings), macOS (`otherMouse*`, right and other drags, a tracking area,
+scroll phases, `doubleClickInterval`), Android (each mouse button from the
+button state) and the web (chorded buttons) are unit-tested where pure and
+otherwise build-checked only. See [pointer-events.md](pointer-events.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
@@ -197,6 +208,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough
+- [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls

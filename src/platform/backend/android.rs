@@ -102,6 +102,8 @@ const AMOTION_EVENT_ACTION_HOVER_MOVE: i32 = 7;
 const AMOTION_EVENT_ACTION_SCROLL: i32 = 8;
 const AMOTION_EVENT_ACTION_HOVER_ENTER: i32 = 9;
 const AMOTION_EVENT_ACTION_HOVER_EXIT: i32 = 10;
+const AMOTION_EVENT_ACTION_BUTTON_PRESS: i32 = 11;
+const AMOTION_EVENT_ACTION_BUTTON_RELEASE: i32 = 12;
 const AMOTION_EVENT_AXIS_VSCROLL: i32 = 9;
 const AMOTION_EVENT_AXIS_HSCROLL: i32 = 10;
 const AMOTION_EVENT_BUTTON_SECONDARY: i32 = 2;
@@ -1187,6 +1189,8 @@ struct Loop<'h> {
     exiting: bool,
     /// The pointer (touch) id being followed, and the button it pressed.
     pointer: Option<(i32, PointerButton)>,
+    /// The mouse buttons held (`AMotionEvent_getButtonState` bits).
+    mouse_buttons: i32,
 }
 
 impl Loop<'_> {
@@ -1411,6 +1415,48 @@ impl Loop<'_> {
                 self.deliver(Event::Touch(touch));
             }
         }
+        // A mouse's buttons, each pressed and released on its own (the
+        // middle and side buttons too), from the changes in its button state.
+        if mouse
+            && matches!(
+                action,
+                AMOTION_EVENT_ACTION_DOWN
+                    | AMOTION_EVENT_ACTION_UP
+                    | AMOTION_EVENT_ACTION_MOVE
+                    | AMOTION_EVENT_ACTION_CANCEL
+                    | AMOTION_EVENT_ACTION_BUTTON_PRESS
+                    | AMOTION_EVENT_ACTION_BUTTON_RELEASE
+            )
+        {
+            let state = unsafe { AMotionEvent_getButtonState(event) };
+            let held = match action {
+                // A tap on a touchpad can come with no button.
+                AMOTION_EVENT_ACTION_DOWN if state == 0 => 1,
+                AMOTION_EVENT_ACTION_UP | AMOTION_EVENT_ACTION_CANCEL => 0,
+                _ => state,
+            };
+            // A cancelled press is released far away, so it doesn't click.
+            let position = if action == AMOTION_EVENT_ACTION_CANCEL {
+                Point::new(-1.0e9, -1.0e9)
+            } else {
+                at(0)
+            };
+            self.deliver(Event::PointerMoved { position });
+            let was = std::mem::replace(&mut self.mouse_buttons, held);
+            for (bits, state) in [
+                (was & !held, ButtonState::Released),
+                (held & !was, ButtonState::Pressed),
+            ] {
+                for button in input::android_buttons(bits) {
+                    self.deliver(Event::PointerButton {
+                        button,
+                        state,
+                        position,
+                    });
+                }
+            }
+            return true;
+        }
         match action {
             AMOTION_EVENT_ACTION_DOWN => {
                 let buttons = unsafe { AMotionEvent_getButtonState(event) };
@@ -1559,6 +1605,7 @@ where
         handler: &mut handler,
         exiting: false,
         pointer: None,
+        mouse_buttons: 0,
     };
     if let Some(c) = attrs.background {
         lp.view.set_background([c.r, c.g, c.b, 255]);

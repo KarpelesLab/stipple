@@ -36,6 +36,7 @@ mod ime;
 pub(crate) mod interact;
 pub mod menu;
 mod pointer;
+mod pointer_events;
 mod render;
 pub mod runtime;
 pub(crate) mod touch;
@@ -56,6 +57,10 @@ pub use interact::{ElementKey, Interaction, Reactive};
 pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
 pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};
+pub use pointer_events::{PointerButtons, PointerEvent, PointerEventKind, PointerId, WheelEvent};
+pub(crate) use pointer_events::{
+    PointerHandlers, WheelTarget, pointer_at, pointer_local, wheel_target_at,
+};
 pub use render::caret_index_at;
 pub use render::{
     apply_scroll, layout, layout_with_direction, mark_native_states, measure, paint, paint_focus,

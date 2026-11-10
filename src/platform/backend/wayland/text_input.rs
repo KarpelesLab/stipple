@@ -329,6 +329,7 @@ mod tests {
             enter_serial: None,
             cursor: Default::default(),
             text_input: Default::default(),
+            pointer: None,
         };
         const MANAGER_ID: u32 = 5;
         const SEAT: u32 = 6;

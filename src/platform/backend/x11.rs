@@ -37,9 +37,7 @@ use std::sync::{Arc, Mutex};
 use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
-use crate::platform::event::{
-    ButtonState, Event, KeyCode, Modifiers, PointerButton, ScrollDelta, WindowId,
-};
+use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, WindowId};
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
@@ -48,6 +46,7 @@ mod ctext;
 /// The monitor refresh rate, which paces animation frames.
 /// Receiving drops (XDND).
 mod dnd;
+mod pointer;
 mod refresh;
 mod xim;
 
@@ -148,6 +147,8 @@ fn cursor_glyph(icon: CursorIcon) -> u16 {
         CursorIcon::NsResize => 116,  // XC_sb_v_double_arrow
         CursorIcon::NwseResize => 14, // XC_bottom_right_corner
         CursorIcon::NeswResize => 12, // XC_bottom_left_corner
+        // Not a glyph: `cursor_id` makes a blank cursor instead.
+        CursorIcon::Hidden => 68,
     }
 }
 
@@ -899,6 +900,8 @@ struct Conn {
     cursor_font: u32,
     /// Cursors created so far, by glyph.
     cursors: Vec<(u16, u32)>,
+    /// The blank cursor for `CursorIcon::Hidden` (0 until first used).
+    blank_cursor: u32,
 }
 
 impl Conn {
@@ -973,6 +976,7 @@ impl Conn {
             xdnd: dnd::Atoms::default(),
             cursor_font: 0,
             cursors: Vec::new(),
+            blank_cursor: 0,
         })
     }
 
@@ -1293,6 +1297,9 @@ fn set_cursor(conn: &mut Conn, window: u32, icon: CursorIcon) -> io::Result<()> 
 /// The cursor for `icon`, created from the core cursor font the first time
 /// it's used.
 fn cursor_id(conn: &mut Conn, icon: CursorIcon) -> io::Result<u32> {
+    if icon == CursorIcon::Hidden {
+        return pointer::blank_cursor(conn);
+    }
     let glyph = cursor_glyph(icon);
     Ok(match conn.cursors.iter().find(|(g, _)| *g == glyph) {
         Some(&(_, id)) => id,
@@ -1457,6 +1464,8 @@ fn create_window(
         | EV_BUTTON_PRESS
         | EV_BUTTON_RELEASE
         | EV_POINTER_MOTION
+        | pointer::EV_ENTER_WINDOW
+        | pointer::EV_LEAVE_WINDOW
         | EV_STRUCTURE_NOTIFY;
     req.extend_from_slice(&mask.to_le_bytes());
     conn.send(&finish(req)).map_err(os)?;
@@ -1588,6 +1597,7 @@ where
         ..Default::default()
     };
     conn.scale = read_xft_scale(&mut conn).map_err(os)?;
+    let _ = pointer::read_double_click(&mut conn);
     // Animation frames come from a timer at the monitor's refresh rate.
     if let Some(interval) = refresh::interval(&mut conn) {
         dbg(format_args!("refresh interval {interval:?}"));
@@ -1718,15 +1728,22 @@ where
                 let nh = u16::from_le_bytes([buf[22], buf[23]]) as u32;
                 handler(Event::Resized(PhysicalSize::new(nw, nh)), win)
             }
-            X_MOTION_NOTIFY => {
+            // The pointer entering reads as a move; leaving (not into a
+            // child window) clears the hover.
+            X_MOTION_NOTIFY | pointer::X_ENTER_NOTIFY => {
                 let (x, y) = event_xy(&buf);
                 let scale = win.scale_factor().get();
+                crate::platform::set_pointer_modifiers(pointer::event_modifiers(&buf));
                 handler(
                     Event::PointerMoved {
                         position: Point::new(x / scale, y / scale),
                     },
                     win,
                 )
+            }
+            pointer::X_LEAVE_NOTIFY if pointer::leaves_window(&buf) => {
+                dbg(format_args!("pointer left (mode {})", buf[30]));
+                handler(Event::PointerLeft, win)
             }
             code @ (X_BUTTON_PRESS | X_BUTTON_RELEASE) => {
                 let detail = buf[1];
@@ -1737,30 +1754,18 @@ where
                     ButtonState::Released
                 };
                 dbg(format_args!("button {detail} {state:?} at {x},{y}"));
+                // The button event's modifier mask, for Shift/Ctrl+click.
+                crate::platform::set_pointer_modifiers(pointer::event_modifiers(&buf));
                 // Buttons 4/5 are the vertical wheel, 6/7 the horizontal one.
-                if let Some(delta) = wheel_button_delta(detail) {
+                if let Some(delta) = pointer::wheel_button_delta(detail) {
                     if code == X_BUTTON_PRESS {
                         handler(Event::Scroll { delta }, win)
                     } else {
                         ControlFlow::Wait
                     }
                 } else {
-                    let button = match detail {
-                        1 => PointerButton::Left,
-                        2 => PointerButton::Middle,
-                        3 => PointerButton::Right,
-                        n => PointerButton::Other(n as u16),
-                    };
+                    let button = pointer::button(detail);
                     let scale = win.scale_factor().get();
-                    // The button event's modifier mask (same layout as a key
-                    // event's), for Shift/Ctrl+click.
-                    let mask = rd_u16(&buf, 28).unwrap_or(0);
-                    crate::platform::set_pointer_modifiers(Modifiers {
-                        shift: mask & 0x0001 != 0,
-                        ctrl: mask & 0x0004 != 0,
-                        alt: mask & 0x0008 != 0,
-                        meta: mask & 0x0040 != 0,
-                    });
                     handler(
                         Event::PointerButton {
                             button,
@@ -1966,20 +1971,6 @@ const FUNCTION_KEYS: [KeyCode; 12] = [
     KeyCode::F12,
 ];
 
-/// The scroll delta for a core-protocol wheel "button": 4/5 scroll up/down, 6/7
-/// left/right, one line per click. `None` for real buttons.
-fn wheel_button_delta(detail: u8) -> Option<ScrollDelta> {
-    let line = crate::platform::input::LINE_PX;
-    let (dx, dy) = match detail {
-        4 => (0.0, -line),
-        5 => (0.0, line),
-        6 => (-line, 0.0),
-        7 => (line, 0.0),
-        _ => return None,
-    };
-    Some(ScrollDelta { dx, dy })
-}
-
 /// Translate an X11 keysym into a Stipple event: editing/navigation keys become
 /// [`Event::Key`] (carrying `modifiers`); printable Latin-1 / Unicode keysyms
 /// become [`Event::Text`] (on press only).
@@ -2040,9 +2031,13 @@ fn event_window(buf: &[u8; 32]) -> u32 {
     match buf[0] & 0x7f {
         X_EXPOSE | X_CLIENT_MESSAGE => rd_u32(buf, 4).unwrap_or(0),
         X_CONFIGURE_NOTIFY => rd_u32(buf, 8).unwrap_or(0),
-        X_MOTION_NOTIFY | X_BUTTON_PRESS | X_BUTTON_RELEASE | X_KEY_PRESS | X_KEY_RELEASE => {
-            rd_u32(buf, 12).unwrap_or(0)
-        }
+        X_MOTION_NOTIFY
+        | X_BUTTON_PRESS
+        | X_BUTTON_RELEASE
+        | X_KEY_PRESS
+        | X_KEY_RELEASE
+        | pointer::X_ENTER_NOTIFY
+        | pointer::X_LEAVE_NOTIFY => rd_u32(buf, 12).unwrap_or(0),
         _ => 0,
     }
 }
@@ -2516,26 +2511,5 @@ mod tests {
         assert_eq!(u16::from_le_bytes([req[18], req[19]]), 153);
         let prop = property32_request(1, 2, 3, &[4, 5]);
         assert_eq!(prop.len(), 24 + 8);
-    }
-
-    #[test]
-    fn wheel_buttons_scroll_a_line() {
-        assert_eq!(
-            wheel_button_delta(4),
-            Some(ScrollDelta { dx: 0.0, dy: -40.0 })
-        );
-        assert_eq!(
-            wheel_button_delta(5),
-            Some(ScrollDelta { dx: 0.0, dy: 40.0 })
-        );
-        assert_eq!(
-            wheel_button_delta(6),
-            Some(ScrollDelta { dx: -40.0, dy: 0.0 })
-        );
-        assert_eq!(
-            wheel_button_delta(7),
-            Some(ScrollDelta { dx: 40.0, dy: 0.0 })
-        );
-        assert_eq!(wheel_button_delta(1), None);
     }
 }

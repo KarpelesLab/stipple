@@ -20,7 +20,7 @@ use std::ffi::{CString, c_void};
 use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
-use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, WindowId};
+use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, ScrollPhase, WindowId};
 use crate::platform::input;
 use crate::platform::menu::{
     MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, TRAY_ID_BASE, mnemonic,
@@ -34,6 +34,8 @@ mod display_link;
 mod dnd;
 /// The CI self-test of the menus (`STIPPLE_COCOA_MENU_SELFTEST`).
 mod menu_check;
+/// The pointer leaving the view, hiding the cursor, double-click time.
+mod pointer;
 mod text_input;
 
 // ---- Objective-C runtime + framework FFI ------------------------------------
@@ -251,6 +253,8 @@ fn ns_cursor(icon: CursorIcon) -> Id {
         CursorIcon::NsResize => ("resizeUpDownCursor", "resizeUpDownCursor"),
         CursorIcon::NwseResize => ("_windowResizeNorthWestSouthEastCursor", "crosshairCursor"),
         CursorIcon::NeswResize => ("_windowResizeNorthEastSouthWestCursor", "crosshairCursor"),
+        // Not a cursor: `set_cursor` hides it instead.
+        CursorIcon::Hidden => ("arrowCursor", "arrowCursor"),
     };
     let cls = class("NSCursor");
     let s = sel(name);
@@ -426,38 +430,55 @@ fn post_wake_event() {
 /// Translate an `NSEvent` into a Stipple event. `view_h` is the content height,
 /// used to flip the y axis (Cocoa's window origin is bottom-left).
 unsafe fn translate_event(etype: u64, ev: Id, view_h: f64) -> Option<Event> {
-    let pointer = |button: PointerButton, state: ButtonState| {
-        let p = unsafe { msg_point(ev, sel("locationInWindow")) };
+    // Every pointer event records the modifiers held.
+    let position = || {
         crate::platform::set_pointer_modifiers(input::mac_modifiers(unsafe {
             msg_u64(ev, sel("modifierFlags"))
         }));
-        Event::PointerButton {
-            button,
-            state,
-            position: Point::new(p.x, view_h - p.y),
-        }
+        let p = unsafe { msg_point(ev, sel("locationInWindow")) };
+        Point::new(p.x, view_h - p.y)
     };
+    let pointer = |button: PointerButton, state: ButtonState| Event::PointerButton {
+        button,
+        state,
+        position: position(),
+    };
+    // `otherMouse…`: the middle and side buttons.
+    let other = || input::mac_other_button(unsafe { msg_i64(ev, sel("buttonNumber")) });
     match etype {
         NS_LEFT_MOUSE_DOWN => Some(pointer(PointerButton::Left, ButtonState::Pressed)),
         NS_LEFT_MOUSE_UP => Some(pointer(PointerButton::Left, ButtonState::Released)),
         NS_RIGHT_MOUSE_DOWN => Some(pointer(PointerButton::Right, ButtonState::Pressed)),
         NS_RIGHT_MOUSE_UP => Some(pointer(PointerButton::Right, ButtonState::Released)),
-        NS_MOUSE_MOVED | NS_LEFT_MOUSE_DRAGGED => {
-            let p = unsafe { msg_point(ev, sel("locationInWindow")) };
-            Some(Event::PointerMoved {
-                position: Point::new(p.x, view_h - p.y),
-            })
-        }
+        pointer::NS_OTHER_MOUSE_DOWN => Some(pointer(other(), ButtonState::Pressed)),
+        pointer::NS_OTHER_MOUSE_UP => Some(pointer(other(), ButtonState::Released)),
+        // AppKit sends a press's drags to the view it went down in, even
+        // outside the window: the capture.
+        NS_MOUSE_MOVED
+        | NS_LEFT_MOUSE_DRAGGED
+        | pointer::NS_RIGHT_MOUSE_DRAGGED
+        | pointer::NS_OTHER_MOUSE_DRAGGED => Some(Event::PointerMoved {
+            position: position(),
+        }),
+        pointer::NS_MOUSE_EXITED => Some(Event::PointerLeft),
         NS_KEY_DOWN => unsafe { key_event(ev, ButtonState::Pressed) },
         NS_KEY_UP => unsafe { key_event(ev, ButtonState::Released) },
         NS_SCROLL_WHEEL => {
+            let _ = position();
             // CGFloat deltas: points for trackpads (precise), lines for wheels.
             let dx = unsafe { msg_f64(ev, sel("scrollingDeltaX")) };
             let dy = unsafe { msg_f64(ev, sel("scrollingDeltaY")) };
             let precise = unsafe { msg_bool(ev, sel("hasPreciseScrollingDeltas")) };
-            let delta = input::mac_scroll(dx, dy, precise);
-            // Momentum and phase-end events can carry no movement.
-            (delta.dx != 0.0 || delta.dy != 0.0).then_some(Event::Scroll { delta })
+            let phase = unsafe { msg_u64(ev, sel("phase")) };
+            let momentum = unsafe { msg_u64(ev, sel("momentumPhase")) };
+            let delta = input::mac_scroll(dx, dy, precise)
+                .with_phase(input::mac_scroll_phase(phase, momentum));
+            // Momentum and phase-end events can carry no movement; a
+            // gesture's start and end still say so.
+            let says = delta.dx != 0.0
+                || delta.dy != 0.0
+                || matches!(delta.phase, ScrollPhase::Started | ScrollPhase::Ended);
+            says.then_some(Event::Scroll { delta })
         }
         _ => None,
     }
@@ -1394,7 +1415,10 @@ impl Window for MacWindow {
     }
     fn set_cursor(&self, cursor: CursorIcon) {
         CTX.with(|c| c.borrow_mut().cursor = cursor);
-        unsafe { msg_void(ns_cursor(cursor), sel("set")) };
+        pointer::set_hidden(cursor == CursorIcon::Hidden);
+        if cursor != CursorIcon::Hidden {
+            unsafe { msg_void(ns_cursor(cursor), sel("set")) };
+        }
     }
     fn set_min_size(&self, size: Option<Size>) {
         set_content_limit(sel("setContentMinSize:"), size, 0.0);
@@ -1544,6 +1568,9 @@ where
         msg_void_id(window, sel("setContentView:"), view);
         // Take drops of files and text from other applications.
         dnd::register(view);
+        // Hear the pointer leave the view, and the user's double-click time.
+        pointer::track_exits(view);
+        pointer::read_double_click();
         msg_void_id(window, sel("setTitle:"), nsstring(&attrs.title));
         if let Some(dark) = attrs.dark {
             // A window's appearance sets its title bar to match the content.
@@ -1724,9 +1751,15 @@ where
                     let over =
                         p.x >= 0.0 && p.y >= 0.0 && p.x < b.size.width && p.y < b.size.height;
                     let cursor = CTX.with(|c| c.borrow().cursor);
-                    if over && cursor != CursorIcon::Default {
+                    // A hidden cursor shows over the title bar and edges.
+                    pointer::set_hidden(over && cursor == CursorIcon::Hidden);
+                    if over && !matches!(cursor, CursorIcon::Default | CursorIcon::Hidden) {
                         msg_void(ns_cursor(cursor), sel("set"));
                     }
+                }
+                // Nor does it stay hidden outside the window.
+                if etype == pointer::NS_MOUSE_EXITED {
+                    pointer::set_hidden(false);
                 }
             }
             // Deliver what AppKit raised while handling the event (menu picks).

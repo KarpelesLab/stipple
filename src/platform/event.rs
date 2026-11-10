@@ -18,11 +18,19 @@ pub enum ButtonState {
 }
 
 /// A pointer (mouse / pen / single touch) button.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PointerButton {
+    /// The primary button (a finger on a touch screen).
     Left,
+    /// The secondary button.
     Right,
+    /// The middle button, or a click of the wheel.
     Middle,
+    /// The "back" side button (X11 button 8, `XBUTTON1`, AppKit button 3).
+    Back,
+    /// The "forward" side button (X11 button 9, `XBUTTON2`, AppKit button 4).
+    Forward,
+    /// Any other button, numbered as the platform numbers it.
     Other(u16),
 }
 
@@ -83,14 +91,90 @@ pub enum KeyCode {
     Unidentified(u32),
 }
 
-/// A scroll delta in logical pixels (precise/trackpad) — line-based wheels are
-/// normalized to an approximate pixel delta by the backend (40 px per notch).
-/// Positive `dy` scrolls down (towards the end of the content), positive `dx`
-/// to the right.
+/// A scroll delta: whole lines (wheel notches) or logical pixels (trackpads
+/// and other precise devices), as [`unit`](ScrollDelta::unit) says. Positive
+/// `dy` scrolls down (towards the end of the content), positive `dx` to the
+/// right. [`in_pixels`](ScrollDelta::in_pixels) converts lines at
+/// [`SCROLL_LINE_PX`] per line, as Stipple's scroll containers do.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScrollDelta {
     pub dx: f64,
     pub dy: f64,
+    /// What `dx` and `dy` count.
+    pub unit: ScrollUnit,
+    /// Where the gesture this delta belongs to is, where the platform says.
+    pub phase: ScrollPhase,
+}
+
+/// Logical pixels per line when a wheel's lines scroll pixel content (the
+/// distance one notch scrolls a Stipple scroll container).
+pub const SCROLL_LINE_PX: f64 = 40.0;
+
+impl ScrollDelta {
+    /// A wheel's delta, in lines (notches; fractions from high-resolution
+    /// wheels).
+    pub const fn lines(dx: f64, dy: f64) -> Self {
+        Self {
+            dx,
+            dy,
+            unit: ScrollUnit::Lines,
+            phase: ScrollPhase::None,
+        }
+    }
+
+    /// A precise delta in logical pixels (trackpads, smooth-scrolling mice).
+    pub const fn pixels(dx: f64, dy: f64) -> Self {
+        Self {
+            dx,
+            dy,
+            unit: ScrollUnit::Pixels,
+            phase: ScrollPhase::None,
+        }
+    }
+
+    /// This delta, part of a gesture at `phase`.
+    pub const fn with_phase(mut self, phase: ScrollPhase) -> Self {
+        self.phase = phase;
+        self
+    }
+
+    /// The delta in logical pixels: a line counts [`SCROLL_LINE_PX`].
+    pub fn in_pixels(&self) -> (f64, f64) {
+        match self.unit {
+            ScrollUnit::Pixels => (self.dx, self.dy),
+            ScrollUnit::Lines => (self.dx * SCROLL_LINE_PX, self.dy * SCROLL_LINE_PX),
+        }
+    }
+}
+
+/// What a [`ScrollDelta`] counts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ScrollUnit {
+    /// Logical pixels: a trackpad or another precise device. Accumulate them
+    /// to scroll by lines.
+    #[default]
+    Pixels,
+    /// Lines: a wheel's notches (fractional for high-resolution wheels, and
+    /// for precision touchpads on Windows).
+    Lines,
+}
+
+/// Where a scroll is in a gesture: trackpads (on macOS, and finger scrolling
+/// on Wayland) start, move and end, then may coast with momentum. Wheels, and
+/// platforms that don't say, report [`None`](ScrollPhase::None).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ScrollPhase {
+    /// Not part of a gesture the platform tracks (a wheel notch).
+    #[default]
+    None,
+    /// The fingers started scrolling.
+    Started,
+    /// The fingers scrolled on.
+    Moved,
+    /// The fingers lifted (usually with no delta). Momentum may follow.
+    Ended,
+    /// Coasting after the fingers lifted (macOS's momentum scrolling).
+    Momentum,
 }
 
 /// Where a touch is in its life.

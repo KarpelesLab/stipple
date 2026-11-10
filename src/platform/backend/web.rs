@@ -41,8 +41,8 @@ use std::sync::Arc;
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::access::{A11yNode, aria_json};
 use crate::platform::event::Ime;
-use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, WindowId};
-use crate::platform::input::{css_cursor, web_key, web_modifiers, web_wheel};
+use crate::platform::event::{ButtonState, Event, KeyCode, WindowId};
+use crate::platform::input::{css_cursor, web_button, web_key, web_modifiers, web_wheel};
 use crate::platform::native::SystemLook;
 use crate::platform::time::Instant;
 use crate::platform::window::{CursorIcon, ImeState, Window, WindowAttributes};
@@ -425,19 +425,18 @@ pub fn resize(width: f64, height: f64, scale: f64) {
 #[doc(hidden)]
 pub fn pointer(kind: u32, button: u32, x: f64, y: f64, mods: u32) {
     let position = Point::new(x, y);
-    let button = match button {
-        0 => PointerButton::Left,
-        1 => PointerButton::Middle,
-        2 => PointerButton::Right,
-        b => PointerButton::Other(b as u16),
-    };
+    let button = web_button(button);
+    // Moves record the modifiers too (and the wheel's, which the page
+    // precedes with a move).
+    if kind < 3 {
+        crate::platform::set_pointer_modifiers(web_modifiers(mods));
+    }
     let state = match kind {
         0 => return deliver(Event::PointerMoved { position }),
         1 => ButtonState::Pressed,
         2 => ButtonState::Released,
         _ => return deliver(Event::PointerLeft),
     };
-    crate::platform::set_pointer_modifiers(web_modifiers(mods));
     deliver(Event::PointerButton {
         button,
         state,

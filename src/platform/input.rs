@@ -6,12 +6,14 @@
 //! these functions.
 
 use crate::geometry::Point;
-use crate::platform::event::{KeyCode, Modifiers, ScrollDelta, Touch, TouchPhase};
+use crate::platform::event::{
+    KeyCode, Modifiers, PointerButton, ScrollDelta, ScrollPhase, Touch, TouchPhase,
+};
 use crate::platform::window::CursorIcon;
 
 /// Logical pixels scrolled per wheel notch ("line"). Every backend uses the
 /// same value, so a mouse wheel scrolls the same distance everywhere.
-pub(crate) const LINE_PX: f64 = 40.0;
+pub(crate) use crate::platform::event::SCROLL_LINE_PX as LINE_PX;
 
 // ---- Win32 ------------------------------------------------------------------
 
@@ -73,12 +75,32 @@ pub(crate) fn win32_shortcut_char(vk: usize, shift: bool) -> Option<char> {
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn win32_wheel(wp: usize, horizontal: bool) -> ScrollDelta {
     let raw = ((wp >> 16) & 0xffff) as u16 as i16;
-    let px = f64::from(raw) / 120.0 * LINE_PX;
+    let lines = f64::from(raw) / 120.0;
     if horizontal {
-        ScrollDelta { dx: px, dy: 0.0 }
+        ScrollDelta::lines(lines, 0.0)
     } else {
         // Stipple's dy grows downwards; a wheel turned up scrolls towards the top.
-        ScrollDelta { dx: 0.0, dy: -px }
+        ScrollDelta::lines(0.0, -lines)
+    }
+}
+
+/// Whether any mouse button is still down after a Win32 button message, from
+/// the `MK_*` key-state flags in its `wParam` (left, right, middle, and the
+/// two side buttons).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn win32_any_button_down(wp: usize) -> bool {
+    const MK_BUTTONS: usize = 0x0001 | 0x0002 | 0x0010 | 0x0020 | 0x0040;
+    wp & MK_BUTTONS != 0
+}
+
+/// The side button a `WM_XBUTTONDOWN` / `WM_XBUTTONUP` is about, from the
+/// high word of its `wParam` (`XBUTTON1` back, `XBUTTON2` forward).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn win32_xbutton(wp: usize) -> PointerButton {
+    match (wp >> 16) & 0xffff {
+        1 => PointerButton::Back,
+        2 => PointerButton::Forward,
+        n => PointerButton::Other(n as u16),
     }
 }
 
@@ -182,10 +204,38 @@ pub(crate) fn mac_modifiers(flags: u64) -> Modifiers {
 /// Stipple's.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn mac_scroll(dx: f64, dy: f64, precise: bool) -> ScrollDelta {
-    let unit = if precise { 1.0 } else { LINE_PX };
-    ScrollDelta {
-        dx: -dx * unit,
-        dy: -dy * unit,
+    if precise {
+        ScrollDelta::pixels(-dx, -dy)
+    } else {
+        ScrollDelta::lines(-dx, -dy)
+    }
+}
+
+/// The gesture phase of an `NSEventTypeScrollWheel` from its `phase` and
+/// `momentumPhase` (`NSEventPhase` bits: began 1, stationary 2, changed 4,
+/// ended 8, cancelled 16, may-begin 32). A wheel reports neither.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn mac_scroll_phase(phase: u64, momentum: u64) -> ScrollPhase {
+    if momentum != 0 {
+        return ScrollPhase::Momentum;
+    }
+    match phase {
+        0 => ScrollPhase::None,
+        1 | 32 => ScrollPhase::Started,
+        8 | 16 => ScrollPhase::Ended,
+        _ => ScrollPhase::Moved,
+    }
+}
+
+/// The button of an `otherMouseDown/Up/Dragged` from its `buttonNumber`
+/// (2 middle, 3 back, 4 forward).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn mac_other_button(number: i64) -> PointerButton {
+    match number {
+        2 => PointerButton::Middle,
+        3 => PointerButton::Back,
+        4 => PointerButton::Forward,
+        n => PointerButton::Other(n as u16),
     }
 }
 
@@ -257,14 +307,27 @@ pub(crate) fn web_modifiers(bits: u32) -> Modifiers {
 /// deltas already grow downwards and to the right, as Stipple's do.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn web_wheel(dx: f64, dy: f64, mode: u32, page: f64) -> ScrollDelta {
-    let unit = match mode {
-        1 => LINE_PX,
-        2 => page.max(LINE_PX),
-        _ => 1.0,
-    };
-    ScrollDelta {
-        dx: dx * unit,
-        dy: dy * unit,
+    match mode {
+        1 => ScrollDelta::lines(dx, dy),
+        2 => {
+            let page = page.max(LINE_PX);
+            ScrollDelta::pixels(dx * page, dy * page)
+        }
+        _ => ScrollDelta::pixels(dx, dy),
+    }
+}
+
+/// The button of a DOM pointer event's `button` (0 left, 1 middle, 2 right,
+/// 3 back, 4 forward).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn web_button(button: u32) -> PointerButton {
+    match button {
+        0 => PointerButton::Left,
+        1 => PointerButton::Middle,
+        2 => PointerButton::Right,
+        3 => PointerButton::Back,
+        4 => PointerButton::Forward,
+        b => PointerButton::Other(b as u16),
     }
 }
 
@@ -284,6 +347,7 @@ pub(crate) fn css_cursor(icon: CursorIcon) -> &'static str {
         CursorIcon::NsResize => "ns-resize",
         CursorIcon::NwseResize => "nwse-resize",
         CursorIcon::NeswResize => "nesw-resize",
+        CursorIcon::Hidden => "none",
     }
 }
 
@@ -433,10 +497,23 @@ pub(crate) fn android_ascii(kc: i32, shift: bool) -> Option<char> {
 /// value meaning the wheel turned up (away from the user).
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub(crate) fn android_scroll(h: f32, v: f32) -> ScrollDelta {
-    ScrollDelta {
-        dx: f64::from(h) * LINE_PX,
-        dy: -f64::from(v) * LINE_PX,
-    }
+    ScrollDelta::lines(f64::from(h), -f64::from(v))
+}
+
+/// The buttons in an `AMotionEvent_getButtonState` mask (primary 1,
+/// secondary 2, tertiary 4, back 8, forward 16), in that order.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn android_buttons(mask: i32) -> impl Iterator<Item = PointerButton> {
+    [
+        (1, PointerButton::Left),
+        (2, PointerButton::Right),
+        (4, PointerButton::Middle),
+        (8, PointerButton::Back),
+        (16, PointerButton::Forward),
+    ]
+    .into_iter()
+    .filter(move |(bit, _)| mask & bit != 0)
+    .map(|(_, b)| b)
 }
 
 /// The touches an `AMotionEvent` from a finger or stylus reports, from its
@@ -656,22 +733,29 @@ mod tests {
 
     #[test]
     fn win32_wheel_notches() {
-        // One notch up: +120 in the high word → scroll 40 px towards the top.
+        // One notch up: +120 in the high word → a line towards the top.
         let up = 120usize << 16;
-        assert_eq!(win32_wheel(up, false), ScrollDelta { dx: 0.0, dy: -40.0 });
+        assert_eq!(win32_wheel(up, false), ScrollDelta::lines(0.0, -1.0));
+        assert_eq!(win32_wheel(up, false).in_pixels(), (0.0, -40.0));
         // One notch down: -120 as a 16-bit word.
         let down = ((-120i16) as u16 as usize) << 16;
-        assert_eq!(win32_wheel(down, false), ScrollDelta { dx: 0.0, dy: 40.0 });
+        assert_eq!(win32_wheel(down, false), ScrollDelta::lines(0.0, 1.0));
         // Tilt right; low-word key flags are ignored.
-        assert_eq!(
-            win32_wheel(up | 0x0008, true),
-            ScrollDelta { dx: 40.0, dy: 0.0 }
-        );
+        assert_eq!(win32_wheel(up | 0x0008, true), ScrollDelta::lines(1.0, 0.0));
         // A precision touchpad's partial notch.
         assert_eq!(
             win32_wheel(((-30i16) as u16 as usize) << 16, false).dy,
-            10.0
+            0.25
         );
+    }
+
+    #[test]
+    fn win32_buttons() {
+        assert!(win32_any_button_down(0x0010)); // MK_MBUTTON
+        assert!(win32_any_button_down(0x0040)); // MK_XBUTTON2
+        assert!(!win32_any_button_down(0x0004 | 0x0008)); // Shift, Ctrl only
+        assert_eq!(win32_xbutton(1 << 16), PointerButton::Back);
+        assert_eq!(win32_xbutton(2 << 16 | 0x20), PointerButton::Forward);
     }
 
     #[test]
@@ -744,25 +828,33 @@ mod tests {
         assert_eq!(android_ascii(73, false), Some('\\'));
         assert_eq!(android_ascii(62, true), Some(' '));
         assert_eq!(android_ascii(66, false), None);
-        assert_eq!(android_scroll(0.0, 1.0), ScrollDelta { dx: 0.0, dy: -40.0 });
+        assert_eq!(android_scroll(0.0, 1.0), ScrollDelta::lines(0.0, -1.0));
+        let held: Vec<_> = android_buttons(1 | 4 | 16).collect();
+        assert_eq!(
+            held,
+            [
+                PointerButton::Left,
+                PointerButton::Middle,
+                PointerButton::Forward
+            ]
+        );
     }
 
     #[test]
     fn mac_scroll_units() {
         // A trackpad swipe up (content follows the fingers) scrolls down.
-        assert_eq!(
-            mac_scroll(0.0, -12.5, true),
-            ScrollDelta { dx: 0.0, dy: 12.5 }
-        );
+        assert_eq!(mac_scroll(0.0, -12.5, true), ScrollDelta::pixels(0.0, 12.5));
         // A wheel notch towards the user is one line down.
-        assert_eq!(
-            mac_scroll(0.0, -1.0, false),
-            ScrollDelta { dx: 0.0, dy: 40.0 }
-        );
-        assert_eq!(
-            mac_scroll(2.0, 0.0, false),
-            ScrollDelta { dx: -80.0, dy: 0.0 }
-        );
+        assert_eq!(mac_scroll(0.0, -1.0, false), ScrollDelta::lines(0.0, 1.0));
+        assert_eq!(mac_scroll(2.0, 0.0, false).in_pixels(), (-80.0, 0.0));
+        assert_eq!(mac_scroll_phase(0, 0), ScrollPhase::None);
+        assert_eq!(mac_scroll_phase(1, 0), ScrollPhase::Started);
+        assert_eq!(mac_scroll_phase(4, 0), ScrollPhase::Moved);
+        assert_eq!(mac_scroll_phase(8, 0), ScrollPhase::Ended);
+        assert_eq!(mac_scroll_phase(0, 4), ScrollPhase::Momentum);
+        assert_eq!(mac_other_button(2), PointerButton::Middle);
+        assert_eq!(mac_other_button(3), PointerButton::Back);
+        assert_eq!(mac_other_button(7), PointerButton::Other(7));
     }
 
     #[test]
@@ -783,15 +875,14 @@ mod tests {
                 ..Modifiers::default()
             }
         );
-        assert_eq!(
-            web_wheel(0.0, 3.0, 1, 300.0),
-            ScrollDelta { dx: 0.0, dy: 120.0 }
-        );
+        assert_eq!(web_wheel(0.0, 3.0, 1, 300.0), ScrollDelta::lines(0.0, 3.0));
         assert_eq!(
             web_wheel(0.0, -53.0, 0, 300.0),
-            ScrollDelta { dx: 0.0, dy: -53.0 }
+            ScrollDelta::pixels(0.0, -53.0)
         );
         assert_eq!(web_wheel(0.0, 1.0, 2, 300.0).dy, 300.0);
+        assert_eq!(web_button(1), PointerButton::Middle);
+        assert_eq!(web_button(4), PointerButton::Forward);
         assert_eq!(css_cursor(CursorIcon::Text), "text");
         assert_eq!(css_cursor(CursorIcon::NeswResize), "nesw-resize");
     }

@@ -415,6 +415,16 @@ export async function start(canvas, wasmUrl, options = {}) {
   canvas.addEventListener("pointermove", (ev) => {
     const [x, y] = at(ev);
     e.stipple_pointer(0, 0, x, y, mods(ev));
+    // A button pressed or released while another is down (a "chord")
+    // arrives as a move whose `button` is set.
+    if (ev.button >= 0 && ev.button <= 4) {
+      const bit = [1, 4, 2, 8, 16][ev.button];
+      e.stipple_pointer(ev.buttons & bit ? 1 : 2, ev.button, x, y, mods(ev));
+    }
+  });
+  // No middle-click autoscroll or paste over the canvas: the app gets it.
+  canvas.addEventListener("mousedown", (ev) => {
+    if (ev.button === 1) ev.preventDefault();
   });
   const release = (ev) => {
     const [x, y] = at(ev);

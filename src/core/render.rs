@@ -378,6 +378,7 @@ pub fn layout_with_direction(
         context: el.context,
         drop: el.drop,
         drag_source: el.drag_source,
+        pointer: el.pointer,
         caret: el.caret,
         selection: el.selection,
         preedit: el.preedit,

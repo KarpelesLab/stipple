@@ -30,6 +30,8 @@ use crate::render::{Pixmap, Surface};
 /// Receiving drops (OLE `IDropTarget`, `WM_DROPFILES`).
 mod dnd;
 mod ime;
+/// `WM_MOUSELEAVE` and the double-click settings.
+mod pointer;
 /// The notification-area icon and notification balloons.
 mod tray;
 /// Pacing animation frames by the compositor (`DwmFlush`).
@@ -139,7 +141,17 @@ fn cursor_id(icon: CursorIcon) -> usize {
         CursorIcon::Move | CursorIcon::Grabbing => 32646, // IDC_SIZEALL
         CursorIcon::NotAllowed => 32648,                  // IDC_NO
         CursorIcon::Pointer | CursorIcon::Grab => 32649,  // IDC_HAND
+        CursorIcon::Hidden => IDC_ARROW,                  // see `load_cursor`
     }
+}
+
+/// The `HCURSOR` to show for `icon`: none at all for
+/// [`CursorIcon::Hidden`].
+fn load_cursor(icon: CursorIcon) -> Handle {
+    if icon == CursorIcon::Hidden {
+        return std::ptr::null_mut();
+    }
+    unsafe { LoadCursorW(std::ptr::null_mut(), cursor_id(icon)) }
 }
 
 #[repr(C)]
@@ -786,8 +798,8 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
     }
     match msg {
         WM_SETCURSOR if (lp & 0xffff) as u16 == HTCLIENT => {
-            let id = CTX.with(|c| cursor_id(c.borrow().cursor));
-            unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), id)) };
+            let cursor = CTX.with(|c| c.borrow().cursor);
+            unsafe { SetCursor(load_cursor(cursor)) };
             1
         }
         WM_GETMINMAXINFO => {
@@ -880,44 +892,63 @@ unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam)
             0
         }
         WM_MOUSEMOVE => {
+            // Ask to hear when the pointer leaves the window.
+            pointer::track_leave(hwnd);
+            crate::platform::set_pointer_modifiers(modifiers());
             push_event(Event::PointerMoved {
                 position: mouse_xy(lp),
             });
             0
         }
-        WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONUP
-        | WM_MBUTTONUP => {
+        pointer::WM_MOUSELEAVE => {
+            pointer::left();
+            push_event(Event::PointerLeft);
+            0
+        }
+        WM_LBUTTONDOWN
+        | WM_RBUTTONDOWN
+        | WM_MBUTTONDOWN
+        | pointer::WM_XBUTTONDOWN
+        | WM_LBUTTONUP
+        | WM_RBUTTONUP
+        | WM_MBUTTONUP
+        | pointer::WM_XBUTTONUP => {
             let button = match msg {
                 WM_LBUTTONDOWN | WM_LBUTTONUP => PointerButton::Left,
                 WM_RBUTTONDOWN | WM_RBUTTONUP => PointerButton::Right,
-                _ => PointerButton::Middle,
+                WM_MBUTTONDOWN | WM_MBUTTONUP => PointerButton::Middle,
+                _ => input::win32_xbutton(wp),
             };
             let state = match msg {
-                WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => ButtonState::Pressed,
+                WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | pointer::WM_XBUTTONDOWN => {
+                    ButtonState::Pressed
+                }
                 _ => ButtonState::Released,
             };
             crate::platform::set_pointer_modifiers(modifiers());
-            // Keep the moves coming while the left button is down, even
-            // outside the window: drags (and drags out of the app) need them.
-            match msg {
-                WM_LBUTTONDOWN => unsafe {
-                    SetCapture(hwnd);
-                },
-                WM_LBUTTONUP => unsafe {
-                    ReleaseCapture();
-                },
-                _ => {}
+            // Keep the moves coming while any button is down, even outside
+            // the window: drags (and drags out of the app) need them, and the
+            // release.
+            if state == ButtonState::Pressed {
+                unsafe { SetCapture(hwnd) };
+            } else if !input::win32_any_button_down(wp) {
+                unsafe { ReleaseCapture() };
             }
             push_event(Event::PointerButton {
                 button,
                 state,
                 position: mouse_xy(lp),
             });
-            0
+            // The side buttons' messages want TRUE back.
+            isize::from(matches!(
+                msg,
+                pointer::WM_XBUTTONDOWN | pointer::WM_XBUTTONUP
+            ))
         }
         WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
             // The pointer position (in screen coordinates here) isn't needed:
             // the app scrolls whatever is under the last `WM_MOUSEMOVE`.
+            crate::platform::set_pointer_modifiers(modifiers());
             push_event(Event::Scroll {
                 delta: input::win32_wheel(wp, msg == WM_MOUSEHWHEEL),
             });
@@ -1108,7 +1139,7 @@ impl Window for WinWindow {
         CTX.with(|c| c.borrow_mut().cursor = cursor);
         // The pointer is over the client area (we got here from a mouse move),
         // so show it now rather than on the next `WM_SETCURSOR`.
-        unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), cursor_id(cursor))) };
+        unsafe { SetCursor(load_cursor(cursor)) };
     }
     fn set_min_size(&self, size: Option<Size>) {
         CTX.with(|c| c.borrow_mut().min_size = size);
@@ -1201,6 +1232,7 @@ where
     // It fails harmlessly if the app's manifest already set an awareness.
     unsafe { SetProcessDpiAwarenessContext(PER_MONITOR_AWARE_V2) };
     let system_dpi = unsafe { GetDpiForSystem() };
+    pointer::read_double_click(system_dpi);
     let size = ScaleFactor::new(system_dpi as f64 / 96.0).to_physical(attrs.logical_size);
 
     let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };

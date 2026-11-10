@@ -164,6 +164,7 @@ cargo run -p scrolldemo    # a clipped, wheel-scrolled list
 cargo run -p overlaydemo   # dropdown menu + modal dialog
 cargo run -p tabsdemo      # tabs + right-click context menu
 cargo run -p hoverdemo     # hover highlighting
+cargo run -p pointerdemo   # every pointer and wheel event a custom element gets
 cargo run -p motiondemo    # shake, pulse, staggered list, interruptible spring
 cargo run -p multiwindow   # two OS windows sharing one state
 cargo run -p filedialog    # native file dialog (portal, IFileDialog, NSOpenPanel)

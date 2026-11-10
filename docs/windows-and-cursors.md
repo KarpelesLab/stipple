@@ -66,8 +66,10 @@ through the canvas's `style.cursor`).
 ## Cursors
 
 `CursorIcon` names the cursor shapes: `Default`, `Text`, `Pointer`,
-`Crosshair`, `NotAllowed`, `Grab`, `Grabbing`, `Move`, and the resize arrows
-`EwResize`, `NsResize`, `NwseResize` and `NeswResize`.
+`Crosshair`, `NotAllowed`, `Grab`, `Grabbing`, `Move`, the resize arrows
+`EwResize`, `NsResize`, `NwseResize` and `NeswResize`, and `Hidden`, which
+hides the pointer over the element (a terminal hiding it while the user types,
+a playing video).
 
 Elements pick a cursor from what they do:
 
@@ -90,17 +92,24 @@ let disabled = button_labeled(&theme, "Save").cursor(CursorIcon::NotAllowed);
 ```
 
 The app sets the cursor when the pointer moves onto an element that wants a
-different one. During a drag or a text selection the cursor stays as it was
-when the drag started. The scrim behind a modal dialog shows the arrow.
+different one, and when a new frame asks for another one under a pointer at
+rest. During a drag or a text selection the cursor stays as it was when the
+drag started. The scrim behind a modal dialog shows the arrow.
+
+To hide the cursor while the user types, as terminals and editors do, keep a
+flag in the state: set it from the key handler, clear it on the next pointer
+move (an [`on_pointer`](pointer-events.md) `Move`), and pick
+`CursorIcon::Hidden` while it's set. `cargo run -p pointerdemo` does this.
 
 Each backend uses the system's own cursors:
 
 | | How | Notes |
 |---|---|---|
-| X11 | the core cursor font (`CreateGlyphCursor`) | the classic X shapes, not the desktop's cursor theme (that needs Xcursor theme files, which Stipple doesn't read) |
-| Wayland | `wp_cursor_shape_v1` | without it the compositor's default cursor stays |
-| Windows | `LoadCursorW` + `WM_SETCURSOR` | no grab cursors: grab is the hand, grabbing and move the four-way arrow |
-| macOS | `NSCursor` | diagonal resize and move use AppKit's private cursors when present, else the crosshair and the open hand |
+| X11 | the core cursor font (`CreateGlyphCursor`) | the classic X shapes, not the desktop's cursor theme (that needs Xcursor theme files, which Stipple doesn't read); `Hidden` is a blank cursor (`CreateCursor` from an empty bitmap) |
+| Wayland | `wp_cursor_shape_v1` | without it the compositor's default cursor stays, and `Hidden` doesn't hide it (`wl_pointer.set_cursor` with no surface hides it, but without cursor shapes nothing could bring it back) |
+| Windows | `LoadCursorW` + `WM_SETCURSOR` | no grab cursors: grab is the hand, grabbing and move the four-way arrow; `Hidden` sets no cursor |
+| macOS | `NSCursor` | diagonal resize and move use AppKit's private cursors when present, else the crosshair and the open hand; `Hidden` is `[NSCursor hide]`, undone over the title bar and outside the window |
+| Web | the canvas's `style.cursor` | `Hidden` is `none` |
 
 ## Trying it
 
@@ -113,5 +122,7 @@ cursor. `--maximized` and `--fullscreen` open the window that way.
 On X11 (Xvfb), CI reads the window's `WM_NORMAL_HINTS` and `_NET_WM_ICON` back
 with `xprop`, and moves the pointer over a button and off it to check that the
 cursor changes. Xvfb has no window manager, so maximize and fullscreen aren't
-checked there; they were checked by hand under xfwm4. Wayland, Windows and
-macOS are build-checked only.
+checked there; they were checked by hand under xfwm4. It also types into
+`pointerdemo` and checks the app asks for the hidden cursor and back (the
+blank cursor itself isn't looked at). Wayland, Windows and macOS are
+build-checked only.

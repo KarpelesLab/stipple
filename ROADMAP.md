@@ -1016,8 +1016,22 @@ Most input only works on X11 today.
   [docs/windows-and-cursors.md](docs/windows-and-cursors.md).
 - ✅ Mouse cursor shapes (`CursorIcon`): text inputs show the I-beam, tap and
   drag targets the pointing hand, and `.cursor(...)` picks any other (resize
-  arrows, not-allowed, grab, crosshair, move) on X11, Wayland
-  (`cursor-shape-v1`), Windows and macOS. CI checks the cursor changes on X11.
+  arrows, not-allowed, grab, crosshair, move, or `Hidden`, to hide it while
+  the user types) on X11, Wayland (`cursor-shape-v1`), Windows and macOS. CI
+  checks the cursor changes on X11.
+- ✅ Raw pointer events for custom elements (#14): `Element::on_pointer` gets
+  every button's `Down`/`Up` (middle and side buttons too), moves and a
+  `Leave`, with the buttons held, the position in the element's coordinates
+  (through transforms), the modifiers and the click count (the platform's
+  double-click time and distance where readable: Windows, macOS, XSETTINGS);
+  a press captures the pointer until the last button is up, on every backend.
+  `Element::on_wheel` gets horizontal and vertical deltas in lines or pixels,
+  with the trackpad gesture's phase (macOS, Wayland). Every desktop backend
+  reports the pointer leaving the window (`LeaveNotify`, `wl_pointer.leave`,
+  `WM_MOUSELEAVE`, a tracking area), which ends hover highlights and
+  `.hovered` looks. CI drives `pointerdemo` with `xdotool` on X11 (middle and
+  double clicks, buttons 6/7, the hidden cursor, leaving); the other backends
+  are build-checked. See [docs/pointer-events.md](docs/pointer-events.md).
 - ✅ Following dark mode and accent changes while the app runs:
   `Event::ThemeChanged` from `WM_SETTINGCHANGE` on Windows, the appearance
   notifications on macOS and the portal's `SettingChanged` on Linux; the App
@@ -1210,8 +1224,8 @@ styling part of the toolkit.
   States come from the frame on screen and are recomputed on pointer, button,
   focus and drag events; the app rebuilds only when a state some element (or
   the view, through `Cx`) uses changed. Focus and drag states count elements
-  inside; `focused` is focus-within. Desktop backends don't report the pointer
-  leaving the window yet, so hover sticks there. See `docs/animation.md`.*
+  inside; `focused` is focus-within. The pointer leaving the window (reported
+  by every backend) ends the hover. See `docs/animation.md`.*
 - ✅ Implicit transitions: an element's animatable properties (colors, opacity,
   corner radius, border, shadow, padding, size, transform) declare a
   `Transition` (duration and easing, or a spring), and changing them between

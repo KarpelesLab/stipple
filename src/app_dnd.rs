@@ -292,6 +292,8 @@ impl<S: 'static> Pane<S> {
         self.dnd.press = None;
         self.dnd.source = None;
         self.dirty = true;
+        // The system's drag has the pointer now; its release won't come here.
+        self.pointer.release_all();
         if self.dnd.internal.take().is_some() {
             self.drag_leave(state);
         }

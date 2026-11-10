@@ -337,6 +337,7 @@ pub struct Cx<'a, S> {
     contexts: Vec<ContextFn<S>>,
     drops: Vec<DropTarget<S>>,
     drag_sources: Vec<DragSourceFn<S>>,
+    pointers: crate::core::PointerHandlers<S>,
     /// The drag-over state of drop targets as of this build (seeded by the
     /// app), and the targets whose view read theirs.
     drop_states: HashMap<DropId, crate::core::dnd::DropState>,
@@ -393,6 +394,7 @@ impl<'a, S> Cx<'a, S> {
             contexts: Vec::new(),
             drops: Vec::new(),
             drag_sources: Vec::new(),
+            pointers: Default::default(),
             drop_states: HashMap::new(),
             drop_queried: Vec::new(),
             interactions: HashMap::new(),
@@ -636,6 +638,28 @@ impl<'a, S> Cx<'a, S> {
         id
     }
 
+    /// Register a pointer handler on `id` (an element's existing
+    /// [`PointerId`](crate::core::PointerId), or `None` for a new one),
+    /// returning the id. Prefer
+    /// [`Element::on_pointer`](crate::core::Element::on_pointer).
+    pub fn register_pointer(
+        &mut self,
+        id: Option<crate::core::PointerId>,
+        handler: impl FnMut(&crate::core::PointerEvent, &mut S) + 'static,
+    ) -> crate::core::PointerId {
+        self.pointers.set_pointer(id, handler)
+    }
+
+    /// Register a wheel handler on `id` (or a new id), returning the id.
+    /// Prefer [`Element::on_wheel`](crate::core::Element::on_wheel).
+    pub fn register_wheel(
+        &mut self,
+        id: Option<crate::core::PointerId>,
+        handler: impl FnMut(&crate::core::WheelEvent, &mut S) + 'static,
+    ) -> crate::core::PointerId {
+        self.pointers.set_wheel(id, handler)
+    }
+
     /// Register `menu` as the context menu of an element, returning the
     /// [`ContextId`] to stamp on it. The app opens it on a right-click (or the
     /// Menu key) over the element. Prefer
@@ -741,6 +765,7 @@ impl<'a, S> Cx<'a, S> {
             contexts: self.contexts,
             drops: self.drops,
             drag_sources: self.drag_sources,
+            pointers: self.pointers,
         }
     }
 }
@@ -795,6 +820,7 @@ pub struct Handlers<S> {
     contexts: Vec<ContextFn<S>>,
     drops: Vec<DropTarget<S>>,
     drag_sources: Vec<DragSourceFn<S>>,
+    pointers: crate::core::PointerHandlers<S>,
 }
 
 impl<S> Handlers<S> {
@@ -919,22 +945,28 @@ impl<S> Handlers<S> {
         self.drag_sources.get_mut(id.0 as usize)?(state)
     }
 
+    /// The pointer and wheel handlers.
+    pub(crate) fn pointers(&mut self) -> &mut crate::core::PointerHandlers<S> {
+        &mut self.pointers
+    }
+
+    pub(crate) fn pointers_ref(&self) -> &crate::core::PointerHandlers<S> {
+        &self.pointers
+    }
+
     /// Total number of registered handlers (taps + keys + drags + text-pointer
-    /// + context).
+    /// + context + pointer).
     pub fn len(&self) -> usize {
         self.taps.len()
             + self.keys.len()
             + self.drags.len()
             + self.text_pos.len()
             + self.contexts.len()
+            + self.pointers.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.taps.is_empty()
-            && self.keys.is_empty()
-            && self.drags.is_empty()
-            && self.text_pos.is_empty()
-            && self.contexts.is_empty()
+        self.len() == 0
     }
 }
 
@@ -948,6 +980,7 @@ impl<S> Default for Handlers<S> {
             contexts: Vec::new(),
             drops: Vec::new(),
             drag_sources: Vec::new(),
+            pointers: Default::default(),
         }
     }
 }
@@ -1017,6 +1050,9 @@ pub struct LayoutNode {
     pub drop: Option<DropId>,
     /// Drag-source handle: a press-and-move here starts an in-app drag.
     pub drag_source: Option<DragSourceId>,
+    /// Pointer and wheel handle: raw pointer events and wheel scrolls over
+    /// this node go to its handlers (see `Element::on_pointer`).
+    pub pointer: Option<crate::core::PointerId>,
     /// Caret byte index for an editable text leaf (drawn by the focus overlay).
     pub caret: Option<usize>,
     /// Selected byte range `[start, end)` for an editable text leaf (the focus
@@ -1088,6 +1124,7 @@ impl LayoutNode {
             context: None,
             drop: None,
             drag_source: None,
+            pointer: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -1194,7 +1231,7 @@ pub fn node_to_window<'a>(
 /// Whether `point` falls outside a clipping node, where nothing under it is
 /// drawn — so nothing under it can be hit (a scrolled-away row of a scroll
 /// container, say, lying under a header).
-fn clipped_out(node: &LayoutNode, point: Point) -> bool {
+pub(crate) fn clipped_out(node: &LayoutNode, point: Point) -> bool {
     node.clip && !node.bounds.contains(point)
 }
 
@@ -1562,6 +1599,7 @@ mod tests {
             context: None,
             drop: None,
             drag_source: None,
+            pointer: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -1657,6 +1695,7 @@ mod tests {
             context: None,
             drop: None,
             drag_source: None,
+            pointer: None,
             caret: None,
             selection: None,
             preedit: None,

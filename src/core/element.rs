@@ -185,6 +185,10 @@ pub struct Element {
     /// Drag-source handle: pressing on this element and moving starts an
     /// in-app drag. Set via [`Element::drag_source`].
     pub drag_source: Option<DragSourceId>,
+    /// Pointer and wheel handle: raw pointer events and wheel scrolls over
+    /// this element go to its handlers. Set via [`Element::on_pointer`] and
+    /// [`Element::on_wheel`].
+    pub pointer: Option<crate::core::PointerId>,
     /// Caret position as a byte index into this element's text, for an editable
     /// text leaf. `None` for non-editable text and non-text elements. Set via
     /// [`Element::caret`]; the focus overlay draws the caret bar there.
@@ -258,6 +262,7 @@ impl Element {
             context: None,
             drop: None,
             drag_source: None,
+            pointer: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -287,6 +292,7 @@ impl Element {
             context: None,
             drop: None,
             drag_source: None,
+            pointer: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -329,6 +335,7 @@ impl Element {
             context: None,
             drop: None,
             drag_source: None,
+            pointer: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -360,6 +367,7 @@ impl Element {
             context: None,
             drop: None,
             drag_source: None,
+            pointer: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -392,6 +400,7 @@ impl Element {
             context: None,
             drop: None,
             drag_source: None,
+            pointer: None,
             caret: None,
             selection: None,
             preedit: None,
@@ -579,6 +588,68 @@ impl Element {
         handler: impl FnMut(&mut S) -> Option<crate::platform::DropData> + 'static,
     ) -> Self {
         self.drag_source = Some(cx.register_drag_source(handler));
+        self
+    }
+
+    /// Deliver raw pointer events over this element to `handler`: every
+    /// button going [`Down`](crate::core::PointerEventKind::Down) and
+    /// [`Up`](crate::core::PointerEventKind::Up) (middle and side buttons
+    /// too), [`Move`](crate::core::PointerEventKind::Move)s, and a
+    /// [`Leave`](crate::core::PointerEventKind::Leave) when the pointer moves
+    /// off it or out of the window. Each [`PointerEvent`](crate::core::PointerEvent)
+    /// carries the button, the buttons held, the position in the element's
+    /// coordinates, the modifiers and the click count. A press captures the
+    /// pointer: the element gets the moves and the release even outside it
+    /// (and the window) until the last button is up. For custom widgets such
+    /// as a terminal's mouse reporting and selection; see
+    /// `docs/pointer-events.md`.
+    ///
+    /// The events come in addition to the app's own handling (a tap, focus
+    /// moving to a focusable element under the pointer, a context menu),
+    /// first, and to the top-most element with a pointer handler under the
+    /// pointer only.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// use stipple::core::{PointerEvent, PointerEventKind};
+    /// use stipple::platform::PointerButton;
+    /// #[derive(Default)]
+    /// struct Term { pasted: u32, selecting_words: bool }
+    /// fn view(_: &Term, cx: &mut Cx<Term>) -> Element {
+    ///     Element::boxed(BoxStyle::default()).on_pointer(cx, |ev: &PointerEvent, t: &mut Term| {
+    ///         match (ev.kind, ev.button) {
+    ///             (PointerEventKind::Down, Some(PointerButton::Middle)) => t.pasted += 1,
+    ///             (PointerEventKind::Down, Some(PointerButton::Left)) => {
+    ///                 t.selecting_words = ev.click_count == 2;
+    ///             }
+    ///             _ => {}
+    ///         }
+    ///     })
+    /// }
+    /// # let theme = Theme::light();
+    /// # let mut cx = Cx::new(&theme);
+    /// # assert!(view(&Term::default(), &mut cx).pointer.is_some());
+    /// ```
+    pub fn on_pointer<S>(
+        mut self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&crate::core::PointerEvent, &mut S) + 'static,
+    ) -> Self {
+        self.pointer = Some(cx.register_pointer(self.pointer, handler));
+        self
+    }
+
+    /// Deliver wheel and trackpad scrolls over this element to `handler`, in
+    /// lines or pixels as the device reports them, horizontal ones too, with
+    /// the gesture's phase (see [`WheelEvent`](crate::core::WheelEvent)).
+    /// The element then takes the wheel instead of a scroll container it is
+    /// in (a scroll container inside it still takes the wheel over itself).
+    pub fn on_wheel<S>(
+        mut self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&crate::core::WheelEvent, &mut S) + 'static,
+    ) -> Self {
+        self.pointer = Some(cx.register_wheel(self.pointer, handler));
         self
     }
 

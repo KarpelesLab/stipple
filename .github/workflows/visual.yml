@@ -1609,9 +1609,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
 
-      - name: Build the clickdemo + textinput + hoverdemo + textarea examples
+      - name: Build the clickdemo + textinput + hoverdemo + textarea + pointerdemo examples
         # Release so per-event re-rasterization keeps up with input.
-        run: cargo build --release -p clickdemo -p textinput -p hoverdemo -p textarea
+        run: cargo build --release -p clickdemo -p textinput -p hoverdemo -p textarea -p pointerdemo
 
       - name: Click + type, screenshotting the results
         env:
@@ -1709,6 +1709,45 @@ jobs:
           xdotool key shift+Down shift+Down; sleep 1
           import -window root visual_output/textarea-select.png
           echo "=== textarea.log ==="; cat visual_output/textarea.log || true
+
+      # Raw pointer events for custom elements (`Element::on_pointer` /
+      # `on_wheel`): the pad prints each event it gets. A middle click, a
+      # double click, Shift+right-click, the horizontal wheel (buttons 6/7),
+      # typing (which hides the cursor until the pointer moves), then the
+      # pointer leaving the window, which must end the hover.
+      - name: Pointer events (middle, double click, horizontal wheel, leave)
+        env:
+          DISPLAY: ":99"
+          STIPPLE_X11_DEBUG: "1"
+        run: |
+          # The textarea example from the last step is still up.
+          kill "$APP_PID" 2>/dev/null || true
+          ./target/release/pointerdemo > visual_output/pointer.log 2> visual_output/pointer-debug.log &
+          APP_PID=$!
+          sleep 3
+          xdotool mousemove 200 150; sleep 0.5
+          xdotool click 2; sleep 0.5
+          xdotool click --repeat 2 --delay 80 1; sleep 0.8
+          xdotool keydown shift click 3 keyup shift; sleep 0.5
+          xdotool click 6; sleep 0.3
+          xdotool click 7; sleep 0.3
+          xdotool type a; sleep 0.5
+          xdotool mousemove 210 150; sleep 0.5
+          xdotool mousemove 900 700; sleep 1
+          kill "$APP_PID" 2>/dev/null || true
+          echo "=== pointer.log ==="; cat visual_output/pointer.log
+          grep -q 'pointer Down button=Some(Middle) at=(200,150) clicks=1' visual_output/pointer.log
+          grep -q 'pointer Up button=Some(Middle)' visual_output/pointer.log
+          grep -q 'pointer Down button=Some(Left) at=(200,150) clicks=2' visual_output/pointer.log
+          grep -q 'pointer Down button=Some(Right) .* shift=true' visual_output/pointer.log
+          grep -q 'wheel dx=-1 dy=0 unit=Lines' visual_output/pointer.log
+          grep -q 'wheel dx=1 dy=0 unit=Lines' visual_output/pointer.log
+          grep -q 'cursor hidden' visual_output/pointer.log
+          grep -q 'cursor shown' visual_output/pointer.log
+          grep -q 'pointer Leave' visual_output/pointer.log
+          # The hover look came with the pointer, and ended with it outside.
+          grep -q 'hovered: true' visual_output/pointer.log
+          [ "$(grep 'hovered:' visual_output/pointer.log | tail -1)" = "hovered: false" ]
 
       - name: Install IBus (an XIM server) and Mozc
         run: sudo apt-get install -y ibus ibus-mozc dbus-x11

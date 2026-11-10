@@ -1,0 +1,16 @@
+[package]
+name = "pointerdemo"
+description = "Stipple example: prints every pointer and wheel event a custom element gets — used by CI to verify middle clicks, double clicks, horizontal scrolling and pointer-leave."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true
