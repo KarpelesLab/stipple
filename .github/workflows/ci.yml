@@ -28,6 +28,8 @@ jobs:
         run: cargo test --workspace
       - name: test (tokio feature)
         run: cargo test -p stipple --features tokio
+      - name: motiondemo selftest (animations at fixed times, off-screen)
+        run: cargo run -p motiondemo -- --selftest
 
   msrv:
     name: MSRV 1.88 (workspace)

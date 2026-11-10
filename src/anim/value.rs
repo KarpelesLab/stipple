@@ -8,7 +8,7 @@
 //! each animatable type maps to a [`Vector`]: a plain `f64` space where
 //! blending, velocities and springs are computed, and back.
 
-use crate::geometry::{Insets, Point, Rect, Size, Vec2};
+use crate::geometry::{Insets, Point, Rect, Size, Transform, Vec2};
 use crate::render::Color;
 
 /// A real vector space an [`Animatable`] value is animated in: `f64`,
@@ -181,6 +181,32 @@ impl Animatable for Vec2 {
     }
 }
 
+/// Transforms animate part by part (translate, scale, rotation in radians and
+/// origin), like [`Transform::lerp`]: a rotation from 350° to 10° turns back
+/// through 180°, not forward 20°.
+impl Animatable for Transform {
+    type Vector = [f64; 7];
+    fn to_vector(self) -> [f64; 7] {
+        [
+            self.translate.dx,
+            self.translate.dy,
+            self.scale.dx,
+            self.scale.dy,
+            self.rotate,
+            self.origin.x,
+            self.origin.y,
+        ]
+    }
+    fn from_vector([tx, ty, sx, sy, r, ox, oy]: [f64; 7]) -> Self {
+        Transform {
+            translate: Vec2::new(tx, ty),
+            scale: Vec2::new(sx, sy),
+            rotate: r,
+            origin: Point::new(ox, oy),
+        }
+    }
+}
+
 /// Sizes don't go negative: an overshooting curve stops at zero.
 impl Animatable for Size {
     type Vector = [f64; 2];
@@ -312,5 +338,22 @@ mod tests {
         assert_eq!(p, (Point::new(1.0, 2.0), 2.0));
         let i = Insets::uniform(4.0).interpolate(Insets::uniform(8.0), 0.25);
         assert_eq!(i, Insets::uniform(5.0));
+    }
+}
+
+#[cfg(test)]
+mod transform_tests {
+    use super::*;
+
+    #[test]
+    fn transforms_animate_part_by_part_like_lerp() {
+        let a = Transform::IDENTITY;
+        let b = Transform::IDENTITY
+            .scale(2.0)
+            .rotate(1.0)
+            .translate(10.0, -4.0);
+        for t in [0.0, 0.25, 0.5, 1.0] {
+            assert_eq!(a.interpolate(b, t), Transform::lerp(a, b, t));
+        }
     }
 }
