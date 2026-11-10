@@ -200,10 +200,20 @@ mod unix {
     /// Block until `fd` is readable (`true`), or until a wake or the deadline is
     /// due (`false`).
     pub(crate) fn wait_readable(fd: i32) -> bool {
+        wait_readable_until(fd, None)
+    }
+
+    /// [`wait_readable`], also returning `false` at `until` (a backend's own
+    /// deadline, such as an input method's timeout).
+    pub(crate) fn wait_readable_until(fd: i32, until: Option<Instant>) -> bool {
         let pipe = pipe();
         loop {
             let now = Instant::now();
-            let timeout = super::timeout(now);
+            let own = until.map(|at| at.saturating_duration_since(now));
+            let timeout = match (super::timeout(now), own) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
             // A due wake still polls (without waiting), so a deadline that is
             // always due can't starve the connection: its events come first.
             let ms = match timeout {
@@ -250,7 +260,7 @@ mod unix {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) use unix::{install as install_unix, wait_readable};
+pub(crate) use unix::{install as install_unix, wait_readable, wait_readable_until};
 
 #[cfg(test)]
 mod tests {

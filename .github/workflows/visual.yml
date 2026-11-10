@@ -1641,6 +1641,95 @@ jobs:
           import -window root visual_output/textarea-select.png
           echo "=== textarea.log ==="; cat visual_output/textarea.log || true
 
+      - name: Install IBus (an XIM server) and Mozc
+        run: sudo apt-get install -y ibus ibus-mozc dbus-x11
+
+      # A real input method through Stipple's hand-written XIM client: IBus
+      # serves XIM (`ibus-daemon --xim`), the app finds it through
+      # XMODIFIERS=@im=ibus and forwards keys to it. With IBus's own keyboard
+      # engine, a dead key comes back as a preedit (XIM_PREEDIT_DRAW) and then
+      # an XIM_COMMIT; with Mozc, romaji become a hiragana preedit that Space
+      # converts to kanji and Return commits, decoded from COMPOUND_TEXT.
+      # Isolated HOME and an in-memory GSettings backend keep it reproducible.
+      - name: Type through an input method (XIM, IBus + Mozc)
+        env:
+          DISPLAY: ":99"
+          STIPPLE_X11_DEBUG: "1"
+        run: |
+          mkdir -p visual_output ime-home
+          export HOME="$PWD/ime-home" XDG_CONFIG_HOME="$PWD/ime-home/.config"
+          export GSETTINGS_BACKEND=memory LANG=C.UTF-8 LC_ALL=C.UTF-8
+          dbus-run-session -- bash -ex <<'EOF'
+          ibus-daemon --xim --panel=disable --emoji-extension=disable -v \
+            > visual_output/ibus.log 2>&1 &
+          sleep 4
+          xprop -root XIM_SERVERS | tee -a visual_output/ibus.log
+
+          # --- IBus's keyboard engine: dead_acute e -> é, through XIM ---
+          # (`ibus engine NAME` can exit 1 even when it switched.)
+          ibus engine xkb:us::eng || true
+          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+            > visual_output/xim.log 2>&1 &
+          APP=$!
+          sleep 3
+          xdotool key Tab; sleep 0.5
+          xdotool key dead_acute; sleep 0.5
+          xdotool key e; sleep 0.5
+          xdotool type --delay 100 "ok"; sleep 1
+          kill "$APP" || true
+          echo "=== xim.log ==="; grep -v ' key \|xim: [<-]' visual_output/xim.log || true
+          grep -q 'xim: ready' visual_output/xim.log
+          grep -q 'xim: commit "é"' visual_output/xim.log
+          grep -q 'textinput: text="éok" preedit=None' visual_output/xim.log
+          # The preedit for the pending dead key comes from IBus (as long as
+          # its engine shows one, which recent versions do).
+          grep -q 'textinput: text="" preedit=Some("´")' visual_output/xim.log \
+            || echo "::warning::IBus showed no preedit for the dead key"
+
+          # --- Mozc: nihon, Space (convert), Return (commit) -> 日本 ---
+          # Informational: it depends on Mozc's default mode and dictionary.
+          ibus engine mozc-jp || true
+          if [ "$(ibus engine)" = mozc-jp ]; then
+            XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+              > visual_output/xim-mozc.log 2>&1 &
+            APP=$!
+            sleep 3
+            xdotool key Tab; sleep 0.5
+            # Mozc starts in direct input; Zenkaku_Hankaku turns it on.
+            xdotool key Zenkaku_Hankaku; sleep 0.5
+            xdotool type --delay 150 nihon; sleep 1
+            import -window root visual_output/xim-mozc-preedit.png
+            xdotool key space; sleep 1
+            import -window root visual_output/xim-mozc-converted.png
+            xdotool key Return; sleep 1
+            kill "$APP" || true
+            echo "=== xim-mozc.log ==="
+            grep -v ' key \|xim: [<-]' visual_output/xim-mozc.log || true
+            grep -q 'preedit=Some("にほ' visual_output/xim-mozc.log \
+              || echo "::warning::Mozc gave no hiragana preedit"
+            grep -q 'textinput: text="日本" preedit=None' visual_output/xim-mozc.log \
+              || echo "::warning::Mozc's conversion didn't commit 日本"
+          else
+            echo "::warning::IBus has no mozc-jp engine"
+          fi
+
+          # --- the server goes away: the app falls back to its own compose ---
+          ibus engine xkb:us::eng || true
+          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+            > visual_output/xim-gone.log 2>&1 &
+          APP=$!
+          sleep 3
+          xdotool key Tab; sleep 0.5
+          xdotool type --delay 100 "ab"; sleep 0.5
+          ibus exit; sleep 2
+          xdotool key dead_acute; sleep 0.3
+          xdotool key e; sleep 1
+          kill "$APP" || true
+          echo "=== xim-gone.log ==="; grep -v ' key \|xim: [<-]' visual_output/xim-gone.log || true
+          grep -q 'xim: off (the server went away)' visual_output/xim-gone.log
+          grep -q 'textinput: text="abé" preedit=None' visual_output/xim-gone.log
+          EOF
+
       - name: Stop the app and Xvfb
         if: always()
         run: |

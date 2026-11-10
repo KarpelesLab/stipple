@@ -41,7 +41,7 @@ How to build, package and run on each platform, and what works there today.
 | Mouse cursor shapes | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | — | ✅ ¹² |
 | Right-to-left and bidi text | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ | ✅ ¹⁵ |
 | Mirrored right-to-left layouts | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ |
-| Input methods (CJK IME) | Wayland ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
+| Input methods (CJK IME) | ✅ ¹⁶ | ✅ ¹⁶ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
 | Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
@@ -84,9 +84,11 @@ a page never sees paths. CI checks both with the picker and download stood in
 for. See [the web page](platforms/web.md#file-dialogs).
 ¹⁵ Laid out by the shared CPU text path, so the same everywhere; CI screenshots
 `bididemo` on X11. See [bidi.md](bidi.md).
-¹⁶ Implemented (`text-input-v3`, IMM32, `NSTextInputClient`), but CI can't run
-a real input method, so only the protocol wiring is tested. X11 has no IME
-support yet (XIM or IBus). See [ime.md](ime.md).
+¹⁶ Implemented (XIM on X11, `text-input-v3` on Wayland, IMM32,
+`NSTextInputClient`). X11's XIM client runs against a real input method in CI
+(IBus with `--xim`: a dead key's preedit and commit, Japanese through Mozc as
+an informational check, and falling back when the server quits); elsewhere CI
+can't run one, so only the protocol wiring is tested. See [ime.md](ime.md).
 ¹⁷ From the locale's Compose file, on X11 and Wayland. CI types dead keys and a
 compose sequence with `xdotool` (X11) and `wtype` (sway).
 ¹⁸ Linux has no system menu bar, so Stipple draws one in the window, with

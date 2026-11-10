@@ -5,7 +5,8 @@
 //! `$DISPLAY`, creates a top-level window, and presents the software [`Pixmap`].
 //!
 //! Scope: window creation, resize, close, pointer (move + buttons + wheel),
-//! keyboard, and drops from other applications (XDND, see `dnd`) —
+//! keyboard, input methods (an XIM client, see `xim`), and drops from other
+//! applications (XDND, see `dnd`) —
 //! `GetKeyboardMapping` resolves keycodes to keysyms, which
 //! become [`Event::Text`] (Latin-1 + Unicode) or editing [`Event::Key`]s.
 //!
@@ -42,10 +43,13 @@ use crate::platform::event::{
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
+/// Input methods (XIM), and the COMPOUND_TEXT they send.
+mod ctext;
 /// The monitor refresh rate, which paces animation frames.
 /// Receiving drops (XDND).
 mod dnd;
 mod refresh;
+mod xim;
 
 // ---- X11 protocol constants -------------------------------------------------
 
@@ -1022,6 +1026,9 @@ struct WindowReg {
     /// A drag out of a window (its XID) the app started with
     /// [`Window::start_drag`], for the loop to run.
     drag_out: Option<(u32, crate::platform::DropData)>,
+    /// `set_ime` calls for the input method: the window, and the caret spot
+    /// in window pixels while a text field has focus.
+    ime: Vec<(u32, Option<(i16, i16)>)>,
 }
 
 type Registry = Rc<RefCell<WindowReg>>;
@@ -1071,6 +1078,16 @@ impl Window for X11Window {
         // Driven by Expose; an explicit invalidate would need a SendEvent.
     }
     fn set_title(&self, _title: &str) {}
+    fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
+        // The input method places its candidate window at the caret's bottom
+        // left, in window pixels.
+        let scale = self.scale_factor().get();
+        let spot = state.map(|s| {
+            let r = s.cursor_area;
+            ((r.min_x() * scale) as i16, (r.max_y() * scale) as i16)
+        });
+        self.reg.borrow_mut().ime.push((self.window, spot));
+    }
     fn set_clipboard(&self, text: &str) {
         // Become the owner of the CLIPBOARD selection and remember the text;
         // the event loop serves it to requestors via SelectionRequest.
@@ -1577,6 +1594,9 @@ where
         crate::platform::frame::set_interval(interval);
     }
     let wm_delete = conn.atom_wm_delete;
+    // The input method server, if there is one (before any window exists, as
+    // finding it reads replies directly).
+    let mut xim = xim::Xim::connect(&mut conn);
 
     // Wrap the connection for sharing, then create the first window against it
     // exactly as `open_window` creates later siblings.
@@ -1604,10 +1624,22 @@ where
     // change), handled before reading more.
     let mut backlog: std::collections::VecDeque<[u8; 32]> = std::collections::VecDeque::new();
     loop {
+        // Tell the input method about focus and caret changes, and handle
+        // its timeouts.
+        if let Some(x) = xim.as_mut() {
+            let requests = std::mem::take(&mut reg.borrow_mut().ime);
+            let outputs = x.update(&shared, requests.into_iter());
+            if xim::deliver(outputs, &windows, &mut backlog, &mut handler) == ControlFlow::Exit {
+                break;
+            }
+        } else {
+            reg.borrow_mut().ime.clear();
+        }
         if let Some(event) = backlog.pop_front() {
             buf = event;
         } else {
-            if !crate::platform::wake::wait_readable(fd) {
+            let xim_deadline = xim.as_ref().and_then(|x| x.deadline());
+            if !crate::platform::wake::wait_readable_until(fd, xim_deadline) {
                 if crate::platform::wake::take(std::time::Instant::now())
                     && handler(Event::Wake, &windows[0]) == ControlFlow::Exit
                 {
@@ -1662,6 +1694,21 @@ where
         let idx = windows.iter().position(|w| w.window == xid).unwrap_or(0);
         let win = &windows[idx];
         let flow = match buf[0] & 0x7f {
+            _ if xim.as_ref().is_some_and(|x| x.claims(&buf)) => {
+                let outputs = xim
+                    .as_mut()
+                    .map(|x| x.event(&shared, &mut backlog, &buf))
+                    .unwrap_or_default();
+                xim::deliver(outputs, &windows, &mut backlog, &mut handler)
+            }
+            // While a text field has focus, keys go to the input method.
+            X_KEY_PRESS | X_KEY_RELEASE
+                if xim
+                    .as_mut()
+                    .is_some_and(|x| x.key(&shared, win.window, &buf)) =>
+            {
+                ControlFlow::Wait
+            }
             X_EXPOSE => {
                 dbg(format_args!("expose"));
                 handler(Event::RedrawRequested, win)

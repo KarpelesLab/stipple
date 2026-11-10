@@ -884,11 +884,25 @@ Most input only works on X11 today.
   through objc dispatch in CI, but no real IME runs in CI, so the Wayland,
   Windows and macOS paths are only build-checked end to end. See
   [docs/ime.md](docs/ime.md).
-- ⬜ IME on X11: XIM over the wire (the `_XIM_PROTOCOL` client messages, no
-  libX11), and/or IBus and Fcitx over the existing hand-written D-Bus client,
-  feeding the same `Event::Ime` preedit / commit model and placing the
-  candidate window from `Window::set_ime`. Today X11 users can't type CJK at
-  all.
+- ✅ IME on X11: an XIM client over the wire (no libX11), in
+  `x11/xim.rs`. It finds the server from `XIM_SERVERS` and `XMODIFIERS`
+  (`@im=`), connects over `_XIM_XCONNECT` (client messages, properties for
+  large messages), opens the IM, creates an on-the-spot input context
+  (`XIMPreeditCallbacks`) per window when a text field takes focus, forwards
+  keys (`XIM_FORWARD_EVENT`), and turns `XIM_COMMIT` and the preedit
+  callbacks into the same `Event::Ime` preedit / commit; `Window::set_ime`
+  drives focus and `spotLocation` (the candidate window). COMPOUND_TEXT is
+  decoded in-crate (Latin, UTF-8 segments, JIS X 0208 / KS C 5601 / GB 2312).
+  It never blocks: every wait has a deadline, and on a timeout, a setup error
+  or the server quitting it switches off and keys take the direct path
+  (keysyms, Stipple's compose). Unit-tested against byte fixtures and a
+  scripted fake server; **CI-verified with a real XIM server**: IBus
+  (`ibus-daemon --xim`) under Xvfb commits a dead-key `é` with its preedit,
+  and IBus quitting mid-session falls back to compose. Japanese through Mozc
+  (`nihon` → preedit `にほん` → `日本` committed) passes locally and runs in
+  CI as an informational check. Not tried: Fcitx, uim, kinput2. Not done: a
+  server started after the app, status callbacks, timing out asynchronous
+  keys a stopped server never answers. See [docs/ime.md](docs/ime.md).
 - ⬜ TSF on Windows, next to IMM32: modern IMEs (the Microsoft Japanese and
   Chinese IMEs' newer modes, handwriting, voice typing, the touch keyboard's
   suggestions) talk TSF, and IMM32 only reaches them through its compatibility
@@ -905,12 +919,14 @@ Most input only works on X11 today.
   gives none) for `setComposingText` / `commitText` / `deleteSurroundingText`,
   feeding `Event::Ime`, and map the editor action (Done / Next) to keys.
 - ⬜ Dead keys and compose on mobile hardware keyboards (iOS and Android).
-- ⬜ IME verification with a real input method: no real IME runs in CI, so the
+- ⬜ IME verification with a real input method: X11 runs a real XIM server in
+  CI (IBus started with `--xim`, with its keyboard engine and Mozc), but the
   Wayland, Windows and macOS paths are checked only as protocol wiring. Run one
-  in CI where it can be scripted (IBus or Fcitx with a Japanese engine under
-  Xvfb / sway; the Microsoft IME on the Windows runner), and keep a manual
-  checklist per platform (Japanese, Chinese pinyin, Korean, the candidate window
-  following the caret, cancelling and re-converting) until each is covered.
+  where it can be scripted (an input method behind `text-input-v3` under sway;
+  the Microsoft IME on the Windows runner), make X11's Mozc check required once
+  it has proven stable, and keep a manual checklist per platform (Japanese,
+  Chinese pinyin, Korean, the candidate window following the caret, cancelling
+  and re-converting) until each is covered.
 - ✅ Dead keys and compose sequences: X11 and Wayland parse the locale's libX11
   Compose file (`XCOMPOSEFILE`, `~/.XCompose`, includes) by hand and show the
   pending sequence as preedit; Windows gets them from `TranslateMessage` and
