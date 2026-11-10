@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.4...stipple-v0.0.5) - 2026-11-10
+
+### Added
+
+- *(windows)* runtime windows, titles and geometry on every desktop backend
+- *(widgets)* middle-click closes a tab, double-click renames it
+- *(widgets)* tab bar, password field, color picker and message boxes
+- *(keys)* raw key events, key repeat and IME for custom elements
+- *(clipboard)* X11 paste, primary selection, HTML and images
+- *(canvas)* custom-paint elements with partial invalidation
+- confirm close and quit, window focus, attention, Wayland decorations
+- *(input)* raw pointer and wheel events for custom elements
+- *(text)* system fonts by name, bold/italic, per-element fonts, fallbacks, metrics and decorations
+
+### Fixed
+
+- *(wayland)* name keys a virtual keymap types, and don't guess their position
+
+### Other
+
+- don't attach a buffer before the window's first configure
+- say which object and error a protocol error names
+- *(fonts)* the underline's centre, not its top, must sit below the baseline
+- Payload::is_empty is only used by the Linux backends
+- publish the sessionsdemo screenshots
+- *(x11)* wait for IBus to register its XIM server before starting the app
+- update screenshots from CI
+
 ## [0.0.4](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.3...stipple-v0.0.4) - 2026-11-10
 
 ### Added
