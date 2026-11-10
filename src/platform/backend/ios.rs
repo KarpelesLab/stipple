@@ -820,18 +820,16 @@ pub mod simulate {
         });
     }
 
-    /// The view's frame on screen, in points (where accessibility frames are).
+    /// The view's frame on screen, in points (where accessibility frames are),
+    /// converted through its window to the screen's coordinate space.
     pub fn view_frame_on_screen() -> crate::geometry::Rect {
-        #[link(name = "UIKit", kind = "framework")]
-        unsafe extern "C" {
-            fn UIAccessibilityConvertFrameToScreenCoordinates(rect: CgRect, view: Id) -> CgRect;
-        }
         let view = view();
         if view.is_null() {
             return crate::geometry::Rect::ZERO;
         }
         let r = unsafe {
-            UIAccessibilityConvertFrameToScreenCoordinates(msg_rect(view, sel("bounds")), view)
+            let b = msg_rect(view, sel("bounds"));
+            a11y::to_screen(view, (b.origin.x, b.origin.y, b.size.width, b.size.height))
         };
         crate::geometry::Rect::from_xywh(r.origin.x, r.origin.y, r.size.width, r.size.height)
     }

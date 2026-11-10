@@ -3545,6 +3545,9 @@ jobs:
       # warning, and sends a notification, which asks for permission (no one
       # answers the prompt here).
       - name: Appearance, background and notifications (touchdemo part 2)
+        # The app goes on to part 2 whatever part 1 found, so this runs (and
+        # reports) on its own.
+        if: ${{ !cancelled() }}
         run: |
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"

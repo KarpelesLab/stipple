@@ -93,8 +93,10 @@ subclasses the backend builds at run time. See [ime.md](../ime.md).
 The view is a `UIAccessibilityContainer`: VoiceOver sees one
 `UIAccessibilityElement` per node of the app's accessibility tree, in reading
 order, with its label (a text field's text is its value), value (on/off,
-checked, expanded), traits (button, static text, header, selected) and frame,
-which UIKit reports in screen coordinates. Containers (groups, lists,
+checked, expanded), traits (button, static text, header, selected) and frame
+in screen coordinates (`accessibilityFrame`, converted through the window;
+`accessibilityFrameInContainerSpace` only works while UIKit's accessibility
+runtime is loaded, so it isn't used). Containers (groups, lists,
 toolbars) are elements VoiceOver doesn't stop on; their children are. A
 double tap (`accessibilityActivate`) taps the middle of the node, so buttons
 click and fields take focus. Elements are updated in place as the tree

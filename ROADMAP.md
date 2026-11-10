@@ -986,7 +986,7 @@ Most input only works on X11 today.
   unit-tested on every host; `touchdemo`'s simulator self-test drives the
   methods through objc dispatch (marked text reaching the field as a preedit,
   the document and `firstRectForRange:` read back, a commit, a replacement).
-  The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only. No real keyboard composes in CI. Not done: selection rectangles,
+  The first `visual-ios` run passed these: the preedit `にほん` reached the field, the document, selection and `firstRectForRange:` read back right, and the commit and replacement gave `"HiJP"`. No real keyboard composes in CI. Not done: selection rectangles,
   point-to-position hit-testing, keyboard-made selections, hardware dead keys.
   See [docs/ime.md](docs/ime.md).
 - ✅ Android composition: an `InputConnection`, from a host `View` the backend
@@ -1293,8 +1293,11 @@ Most input only works on X11 today.
 - ✅ Accessibility on iOS (UIAccessibility): the view is a
   `UIAccessibilityContainer` exposing one `UIAccessibilityElement` per node of
   the tree (a run-time subclass whose `accessibilityActivate` taps the node),
-  with its label, value, traits and frame (`accessibilityFrameInContainerSpace`,
-  so `accessibilityFrame` is in screen coordinates). Elements are kept and
+  with its label, value, traits and frame (`accessibilityFrame`, the node's
+  bounds converted through the window to the screen's coordinate space, and
+  updated when the view moves; `accessibilityFrameInContainerSpace` read back
+  as a zero frame on the simulator, as UIKit only converts it while its
+  accessibility runtime is loaded). Elements are kept and
   updated in place; `UIAccessibilityLayoutChangedNotification` follows an
   update VoiceOver should hear, `ScreenChangedNotification` the first tree and
   a dialog opening or closing. The tree's mapping and the notification choice
@@ -1302,7 +1305,10 @@ Most input only works on X11 today.
   elements through objc dispatch (the field's value and screen frame, the
   label's static-text trait, a row's button trait), activates a row through
   its element and checks it was tapped and the label's element followed.
-  The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only. Not yet tried with VoiceOver itself, on a simulator or a
+  On its first CI run the labels, values and traits read back right (34
+  elements) but every frame was zero, so the frame and activation checks
+  failed; the frames are now set directly in screen coordinates, which hasn't
+  run in CI yet. Not yet tried with VoiceOver itself, on a simulator or a
   device; no adjustable or scroll actions.
 - ✅ Accessibility on Android: the host view's `AccessibilityNodeProvider`
   (same run-time dex) gives a virtual view per node (ids in tree order), with
@@ -1330,7 +1336,7 @@ Most input only works on X11 today.
   suspended, no repaint until coming back); CI sends `touchdemo` to the
   background on the simulator by launching another app and back by launching
   it again, and checks both events and that no view was built in between; the
-  memory warning is posted in-process. The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only.
+  memory warning is posted in-process. The first `visual-ios` run stopped before these steps (an accessibility check failed first); they now run on their own, but haven't been seen passing yet.
 - ✅ Mobile app lifecycle on Android: `onPause` as `Lifecycle::Background`
   (the callback waits until the app has handled it), `onResume` after it as
   `Foreground`, and `onLowMemory` and `onTrimMemory` (running low, critical,
@@ -1378,7 +1384,7 @@ Most input only works on X11 today.
   is on screen. `touchdemo`'s simulator self-test checks `notify` hands the
   notification over and the center reports the permission
   (`getNotificationSettingsWithCompletionHandler:`); nobody answers the prompt
-  in CI, so delivery after a grant is build-checked only. The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only.
+  in CI, so delivery after a grant is build-checked only. The first `visual-ios` run stopped before these steps (an accessibility check failed first); they now run on their own, but haven't been seen passing yet.
 - ⬜ Notifications on Android (`NotificationManager` and a channel, with the
   `POST_NOTIFICATIONS` permission on API 33+).
 - ⬜ Drag and drop from other apps on mobile: `UIDropInteraction` on iOS
@@ -1390,7 +1396,7 @@ Most input only works on X11 today.
   coming back to the foreground, → `Event::ThemeChanged`; the native theme is
   rebuilt and the area around the safe area takes the new background. CI
   switches the simulator with `xcrun simctl ui ... appearance dark` while
-  `touchdemo` runs and checks its theme turned dark. The `visual-ios` steps that check it were added with this change and hadn't run yet when it landed; locally it is cross-checked with `cargo clippy --target aarch64-apple-ios` only.
+  `touchdemo` runs and checks its theme turned dark. The first `visual-ios` run stopped before these steps (an accessibility check failed first); they now run on their own, but haven't been seen passing yet.
 - ⬜ iOS: trackpad / mouse scrolling on iPad (`UIPanGestureRecognizer` with
   indirect scroll input).
 - ⬜ Mobile CI depth: run the iOS features that are only implemented (timers,

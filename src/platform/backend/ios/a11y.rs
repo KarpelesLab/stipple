@@ -4,8 +4,11 @@
 //! `UIAccessibilityElement` per node of the app's accessibility tree
 //! (`accessibilityElements`, and the older `accessibilityElementCount` /
 //! `accessibilityElementAtIndex:` / `indexOfAccessibilityElement:`), each with
-//! its label, value, traits and frame (`accessibilityFrameInContainerSpace`,
-//! which UIKit turns into screen coordinates as `accessibilityFrame`). The
+//! its label, value, traits and frame (`accessibilityFrame`, in screen
+//! coordinates: the node's bounds converted through the view's window to its
+//! screen's coordinate space). `accessibilityFrameInContainerSpace` isn't
+//! used: UIKit only converts it while its accessibility runtime is loaded (a
+//! screen reader running), and reads back a zero frame otherwise. The
 //! elements are a subclass built at run time (`StippleAccessibilityElement`)
 //! whose `accessibilityActivate` (VoiceOver's double tap) taps the middle of
 //! its node, through the touch path.
@@ -47,12 +50,17 @@ const NOT_FOUND: isize = isize::MAX;
 /// The touch id accessibility taps use.
 const ACTIVATE_TOUCH: u64 = u64::MAX - 1;
 
+/// What an element last showed: its item, and the view's position on screen.
+type Shown = (Item, (f64, f64));
+
 #[derive(Default)]
 struct Elements {
     /// The tree's nodes, as last set.
     items: Vec<Item>,
     /// The elements (retained), and the item each last showed.
-    elements: Vec<(Id, Option<Item>)>,
+    /// The elements (retained), with the item each last showed and the
+    /// view's position on screen then.
+    elements: Vec<(Id, Option<Shown>)>,
 }
 
 thread_local! {
@@ -146,6 +154,12 @@ fn sync(view: Id) {
             init(alloc, sel("initWithAccessibilityContainer:"), view)
         })
         .collect();
+    // Frames are in screen coordinates, so a view that moved (rotation)
+    // updates every element.
+    let origin = {
+        let r = to_screen(view, (0.0, 0.0, 0.0, 0.0));
+        (r.origin.x, r.origin.y)
+    };
     let changed: Vec<(Id, Item)> = STATE.with(|s| {
         let mut s = s.borrow_mut();
         let s = &mut *s;
@@ -153,31 +167,56 @@ fn sync(view: Id) {
         s.elements
             .iter_mut()
             .zip(&s.items)
-            .filter(|((_, shown), item)| shown.as_ref() != Some(*item))
+            .filter(|((_, shown), item)| {
+                shown
+                    .as_ref()
+                    .is_none_or(|(i, o)| i != *item || *o != origin)
+            })
             .map(|((el, shown), item)| {
-                *shown = Some(item.clone());
+                *shown = Some((item.clone(), origin));
                 (*el, item.clone())
             })
             .collect()
     });
     for (el, item) in changed {
-        unsafe { show(el, &item) };
+        unsafe { show(el, &item, to_screen(view, item.frame)) };
     }
 }
 
-/// Set `el`'s properties from `item`.
-unsafe fn show(el: Id, item: &Item) {
+/// `(x, y, width, height)` in `view`'s coordinates, in the screen's
+/// coordinate space (`convertRect:toCoordinateSpace:` with the window's
+/// screen; the window's coordinates if it has none yet).
+pub(super) fn to_screen(view: Id, (x, y, width, height): (f64, f64, f64, f64)) -> CgRect {
+    let rect = CgRect {
+        origin: CgPoint { x, y },
+        size: CgSize { width, height },
+    };
+    unsafe {
+        let window = msg_id(view, sel("window"));
+        let screen = if window.is_null() {
+            std::ptr::null_mut()
+        } else {
+            msg_id(window, sel("screen"))
+        };
+        let convert: unsafe extern "C" fn(Id, Sel, CgRect, Id) -> CgRect =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        if screen.is_null() {
+            convert(view, sel("convertRect:toView:"), rect, std::ptr::null_mut())
+        } else {
+            let space = msg_id(screen, sel("coordinateSpace"));
+            convert(view, sel("convertRect:toCoordinateSpace:"), rect, space)
+        }
+    }
+}
+
+/// Set `el`'s properties from `item`, its frame `frame` (screen coordinates).
+unsafe fn show(el: Id, item: &Item, frame: CgRect) {
     let text = |s: &str| {
         if s.is_empty() {
             std::ptr::null_mut()
         } else {
             nsstring(s)
         }
-    };
-    let (x, y, width, height) = item.frame;
-    let frame = CgRect {
-        origin: CgPoint { x, y },
-        size: CgSize { width, height },
     };
     unsafe {
         msg_void_bool(el, sel("setIsAccessibilityElement:"), item.is_element);
@@ -190,7 +229,7 @@ unsafe fn show(el: Id, item: &Item) {
             sel("setAccessibilityTraits:"),
             uikit_traits(item.traits),
         );
-        super::msg_void_rect(el, sel("setAccessibilityFrameInContainerSpace:"), frame);
+        super::msg_void_rect(el, sel("setAccessibilityFrame:"), frame);
     }
 }
 
