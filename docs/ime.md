@@ -178,8 +178,13 @@ of it is hand-written COM, like the UI Automation bridge
   the message loop is unchanged, and keys no input method takes arrive as
   `WM_KEYDOWN` / `WM_CHAR` as before.
 
-`STIPPLE_DEBUG_TSF=1` logs activation, focus, compositions and the events
-sent (`stipple-tsf: …`).
+If anything in the TSF path fails in a way that could lose typing (a
+text store call panicking, `AssociateFocus` failing), TSF is switched off for
+the rest of the run: every window is untied from its document, the thread
+manager is deactivated, and the IMM32 path takes over from the next report.
+
+`STIPPLE_DEBUG_TSF=1` logs activation, focus, lock requests, the store's
+writes, compositions and the events sent (`stipple-tsf: …`).
 
 The IMM32 fallback: `WM_IME_COMPOSITION` gives the composition string, with
 its caret, and the result string. The IME's own composition window is hidden
@@ -285,8 +290,14 @@ input method through the real TSF manager: edit sessions
 (`ITfContextComposition::StartComposition`), write `にほん` and then `日本`
 into it (`ITfRange::SetText`) and end it. TSF locks Stipple's store, writes
 through `ITextStoreACP` and calls the composition sink, and the field must
-show each preedit and then the commit (screenshotted mid-way). With
-`STIPPLE_TSF=0` TSF must stay off. No real IME is installed on the runner, so
+show each preedit and then the commit (screenshotted mid-way). Starting the
+composition is tried through `ITfContextOwnerCompositionServices` and
+`ITfContextComposition`, over the selection and over the insertion point, with
+and without a composition sink, each attempt's `HRESULT` logged; the first CI
+run found `ITfContextComposition` refusing the app's composition (`E_FAIL`).
+If every way is refused, the self-test inserts `日本` with
+`ITfInsertAtSelection` instead, CI warns, and only the commit through the
+store is checked. With `STIPPLE_TSF=0` TSF must stay off. No real IME is installed on the runner, so
 what an input method does on its own (keys, candidates, display attributes,
 reconversion) isn't exercised; the IMM32 fallback is build-checked only.
 

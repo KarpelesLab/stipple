@@ -448,6 +448,19 @@ impl Store {
     }
 }
 
+/// Run a COM method, turning a panic (a bug: say a re-entrant call into a
+/// borrowed state) into `E_UNEXPECTED` instead of aborting the process, and
+/// switch TSF off for the thread so typing goes back to IMM32.
+fn guard(f: impl FnOnce() -> H) -> H {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(hr) => hr,
+        Err(_) => {
+            super::fail("a text store call panicked");
+            E_UNEXPECTED
+        }
+    }
+}
+
 fn hr_of(e: StoreError) -> H {
     match e {
         StoreError::NoLock => TS_E_NOLOCK,
@@ -558,102 +571,114 @@ unsafe fn store<'a>(this: P) -> &'a Store {
 // ---- ITextStoreACP ----------------------------------------------------------
 
 unsafe extern "system" fn advise_sink(this: P, iid: *const Guid, punk: P, mask: u32) -> H {
-    let s = unsafe { store(this) };
-    if iid.is_null() || punk.is_null() {
-        return E_INVALIDARG;
-    }
-    if unsafe { *iid } != IID_ITEXTSTOREACPSINK {
-        return E_INVALIDARG;
-    }
-    let Some(given) = (unsafe { Com::add_ref(punk) }) else {
-        return E_INVALIDARG;
-    };
-    let identity = |c: &Com| c.query(&IID_IUNKNOWN).map(|u| u.ptr());
-    let mut sink = s.sink.borrow_mut();
-    if let Some(old) = sink.as_ref() {
-        // The same sink again only changes what it wants to hear of.
-        if identity(old) == identity(&given) {
-            s.mask.set(mask);
-            return S_OK;
+    guard(|| {
+        let s = unsafe { store(this) };
+        if iid.is_null() || punk.is_null() {
+            return E_INVALIDARG;
         }
-        return CONNECT_E_ADVISELIMIT;
-    }
-    let Some(acp_sink) = given.query(&IID_ITEXTSTOREACPSINK) else {
-        return E_NOINTERFACE;
-    };
-    *sink = Some(acp_sink);
-    s.mask.set(mask);
-    S_OK
+        if unsafe { *iid } != IID_ITEXTSTOREACPSINK {
+            return E_INVALIDARG;
+        }
+        let Some(given) = (unsafe { Com::add_ref(punk) }) else {
+            return E_INVALIDARG;
+        };
+        let identity = |c: &Com| c.query(&IID_IUNKNOWN).map(|u| u.ptr());
+        let mut sink = s.sink.borrow_mut();
+        if let Some(old) = sink.as_ref() {
+            // The same sink again only changes what it wants to hear of.
+            if identity(old) == identity(&given) {
+                s.mask.set(mask);
+                return S_OK;
+            }
+            return CONNECT_E_ADVISELIMIT;
+        }
+        let Some(acp_sink) = given.query(&IID_ITEXTSTOREACPSINK) else {
+            return E_NOINTERFACE;
+        };
+        *sink = Some(acp_sink);
+        super::debug(format_args!("AdviseSink(mask {mask:#x})"));
+        s.mask.set(mask);
+        S_OK
+    })
 }
 
 unsafe extern "system" fn unadvise_sink(this: P, _punk: P) -> H {
-    let s = unsafe { store(this) };
-    let old = s.sink.borrow_mut().take();
-    if old.is_none() {
-        return CONNECT_E_NOCONNECTION;
-    }
-    s.mask.set(0);
-    S_OK
+    guard(|| {
+        let s = unsafe { store(this) };
+        let old = s.sink.borrow_mut().take();
+        if old.is_none() {
+            return CONNECT_E_NOCONNECTION;
+        }
+        s.mask.set(0);
+        S_OK
+    })
 }
 
 unsafe extern "system" fn request_lock(this: P, flags: u32, session: *mut H) -> H {
-    let s = unsafe { store(this) };
-    if session.is_null() {
-        return E_INVALIDARG;
-    }
-    let sink = s
-        .sink
-        .borrow()
-        .as_ref()
-        .and_then(|c| unsafe { Com::add_ref(c.ptr()) });
-    let Some(sink) = sink else {
-        return E_UNEXPECTED;
-    };
-    let grant = s.core.borrow_mut().request_lock(flags);
-    let mut now = match grant {
-        LockGrant::Refused => {
-            unsafe { *session = TS_E_SYNCHRONOUS };
-            return S_OK;
+    guard(|| {
+        let s = unsafe { store(this) };
+        if session.is_null() {
+            return E_INVALIDARG;
         }
-        LockGrant::Queued => {
-            unsafe { *session = TS_S_ASYNC };
-            return S_OK;
+        let sink = s
+            .sink
+            .borrow()
+            .as_ref()
+            .and_then(|c| unsafe { Com::add_ref(c.ptr()) });
+        let Some(sink) = sink else {
+            super::debug(format_args!("RequestLock({flags:#x}) with no sink"));
+            return E_UNEXPECTED;
+        };
+        let grant = s.core.borrow_mut().request_lock(flags);
+        super::debug(format_args!("RequestLock({flags:#x}): {grant:?}"));
+        let mut now = match grant {
+            LockGrant::Refused => {
+                unsafe { *session = TS_E_SYNCHRONOUS };
+                return S_OK;
+            }
+            LockGrant::Queued => {
+                unsafe { *session = TS_S_ASYNC };
+                return S_OK;
+            }
+            LockGrant::Now(f) => f,
+        };
+        // The store stays alive through the callbacks even if TSF lets go.
+        let this_store = this as *mut Store;
+        unsafe { add_ref(this_store) };
+        let mut first = true;
+        loop {
+            // ITextStoreACPSink::OnLockGranted: TSF runs the edit sessions now.
+            let hr =
+                unsafe { sink.call::<unsafe extern "system" fn(P, u32) -> H>(8)(sink.ptr(), now) };
+            if first {
+                unsafe { *session = hr };
+                first = false;
+            }
+            // Then the lock queued meanwhile, if any.
+            match s.core.borrow_mut().release_lock() {
+                Some(f) => now = f,
+                None => break,
+            }
         }
-        LockGrant::Now(f) => f,
-    };
-    // The store stays alive through the callbacks even if TSF lets go.
-    let this_store = this as *mut Store;
-    unsafe { add_ref(this_store) };
-    let mut first = true;
-    loop {
-        // ITextStoreACPSink::OnLockGranted: TSF runs the edit sessions now.
-        let hr = unsafe { sink.call::<unsafe extern "system" fn(P, u32) -> H>(8)(sink.ptr(), now) };
-        if first {
-            unsafe { *session = hr };
-            first = false;
-        }
-        // Then the lock queued meanwhile, if any.
-        match s.core.borrow_mut().release_lock() {
-            Some(f) => now = f,
-            None => break,
-        }
-    }
-    s.flush();
-    unsafe { release(this_store) };
-    S_OK
+        s.flush();
+        unsafe { release(this_store) };
+        S_OK
+    })
 }
 
 unsafe extern "system" fn get_status(_this: P, status: *mut TsStatus) -> H {
-    if status.is_null() {
-        return E_INVALIDARG;
-    }
-    unsafe {
-        *status = TsStatus {
-            dynamic: 0,
-            statics: TS_SS_NOHIDDENTEXT,
+    guard(|| {
+        if status.is_null() {
+            return E_INVALIDARG;
         }
-    };
-    S_OK
+        unsafe {
+            *status = TsStatus {
+                dynamic: 0,
+                statics: TS_SS_NOHIDDENTEXT,
+            }
+        };
+        S_OK
+    })
 }
 
 unsafe extern "system" fn query_insert(
@@ -664,23 +689,26 @@ unsafe extern "system" fn query_insert(
     out_start: *mut i32,
     out_end: *mut i32,
 ) -> H {
-    let s = unsafe { store(this) };
-    if out_start.is_null() || out_end.is_null() {
-        return E_INVALIDARG;
-    }
-    let (Ok(a), Ok(b)) = (pos(start), pos(end)) else {
-        return E_INVALIDARG;
-    };
-    match s.core.borrow().query_insert(a, b) {
-        Ok((a, b)) => {
-            unsafe {
-                *out_start = a as i32;
-                *out_end = b as i32;
-            }
-            S_OK
+    guard(|| {
+        let s = unsafe { store(this) };
+        if out_start.is_null() || out_end.is_null() {
+            return E_INVALIDARG;
         }
-        Err(_) => E_INVALIDARG,
-    }
+        let (Ok(a), Ok(b)) = (pos(start), pos(end)) else {
+            return E_INVALIDARG;
+        };
+        super::debug(format_args!("QueryInsert({a}..{b})"));
+        match s.core.borrow().query_insert(a, b) {
+            Ok((a, b)) => {
+                unsafe {
+                    *out_start = a as i32;
+                    *out_end = b as i32;
+                }
+                S_OK
+            }
+            Err(_) => E_INVALIDARG,
+        }
+    })
 }
 
 unsafe extern "system" fn get_selection(
@@ -690,56 +718,60 @@ unsafe extern "system" fn get_selection(
     out: *mut TsSelection,
     fetched: *mut u32,
 ) -> H {
-    let s = unsafe { store(this) };
-    if out.is_null() || fetched.is_null() {
-        return E_INVALIDARG;
-    }
-    unsafe { *fetched = 0 };
-    if index != 0 && index != TS_DEFAULT_SELECTION {
-        return E_INVALIDARG;
-    }
-    let sel = match s.core.borrow().selection() {
-        Ok(sel) => sel,
-        Err(e) => return hr_of(e),
-    };
-    if count == 0 {
-        return S_OK;
-    }
-    let Selection { start, end, active } = sel;
-    unsafe {
-        *out = TsSelection {
-            start: start as i32,
-            end: end as i32,
-            active: match active {
-                ActiveEnd::Start => TS_AE_START,
-                ActiveEnd::End => TS_AE_END,
-                ActiveEnd::None => 0,
-            },
-            interim: 0,
+    guard(|| {
+        let s = unsafe { store(this) };
+        if out.is_null() || fetched.is_null() {
+            return E_INVALIDARG;
+        }
+        unsafe { *fetched = 0 };
+        if index != 0 && index != TS_DEFAULT_SELECTION {
+            return E_INVALIDARG;
+        }
+        let sel = match s.core.borrow().selection() {
+            Ok(sel) => sel,
+            Err(e) => return hr_of(e),
         };
-        *fetched = 1;
-    }
-    S_OK
+        if count == 0 {
+            return S_OK;
+        }
+        let Selection { start, end, active } = sel;
+        unsafe {
+            *out = TsSelection {
+                start: start as i32,
+                end: end as i32,
+                active: match active {
+                    ActiveEnd::Start => TS_AE_START,
+                    ActiveEnd::End => TS_AE_END,
+                    ActiveEnd::None => 0,
+                },
+                interim: 0,
+            };
+            *fetched = 1;
+        }
+        S_OK
+    })
 }
 
 unsafe extern "system" fn set_selection(this: P, count: u32, sel: *const TsSelection) -> H {
-    let s = unsafe { store(this) };
-    if count != 1 || sel.is_null() {
-        return E_INVALIDARG;
-    }
-    let sel = unsafe { &*sel };
-    let (Ok(a), Ok(b)) = (pos(sel.start), pos(sel.end)) else {
-        return TS_E_INVALIDPOS;
-    };
-    let active = match sel.active {
-        TS_AE_START => ActiveEnd::Start,
-        TS_AE_END => ActiveEnd::End,
-        _ => ActiveEnd::None,
-    };
-    match s.core.borrow_mut().set_selection(a, b, active) {
-        Ok(()) => S_OK,
-        Err(e) => hr_of(e),
-    }
+    guard(|| {
+        let s = unsafe { store(this) };
+        if count != 1 || sel.is_null() {
+            return E_INVALIDARG;
+        }
+        let sel = unsafe { &*sel };
+        let (Ok(a), Ok(b)) = (pos(sel.start), pos(sel.end)) else {
+            return TS_E_INVALIDPOS;
+        };
+        let active = match sel.active {
+            TS_AE_START => ActiveEnd::Start,
+            TS_AE_END => ActiveEnd::End,
+            _ => ActiveEnd::None,
+        };
+        match s.core.borrow_mut().set_selection(a, b, active) {
+            Ok(()) => S_OK,
+            Err(e) => hr_of(e),
+        }
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -755,50 +787,52 @@ unsafe extern "system" fn get_text(
     runs_got: *mut u32,
     next: *mut i32,
 ) -> H {
-    let s = unsafe { store(this) };
-    if plain_got.is_null() || runs_got.is_null() || next.is_null() {
-        return E_INVALIDARG;
-    }
-    let Ok(start) = pos(start) else {
-        return TS_E_INVALIDPOS;
-    };
-    let end = if end == -1 {
-        None
-    } else {
-        match pos(end) {
-            Ok(e) => Some(e),
-            Err(e) => return e,
+    guard(|| {
+        let s = unsafe { store(this) };
+        if plain_got.is_null() || runs_got.is_null() || next.is_null() {
+            return E_INVALIDARG;
         }
-    };
-    let max = if plain.is_null() {
-        usize::MAX
-    } else {
-        plain_len as usize
-    };
-    let core = s.core.borrow();
-    let text = match core.text(start, end, max) {
-        Ok(t) => t,
-        Err(e) => return hr_of(e),
-    };
-    unsafe {
-        if !plain.is_null() {
-            std::ptr::copy_nonoverlapping(text.as_ptr(), plain, text.len());
-            *plain_got = text.len() as u32;
+        let Ok(start) = pos(start) else {
+            return TS_E_INVALIDPOS;
+        };
+        let end = if end == -1 {
+            None
         } else {
-            *plain_got = 0;
-        }
-        if !runs.is_null() && runs_len > 0 && !text.is_empty() {
-            *runs = TsRunInfo {
-                count: text.len() as u32,
-                kind: 0, // TS_RT_PLAIN
-            };
-            *runs_got = 1;
+            match pos(end) {
+                Ok(e) => Some(e),
+                Err(e) => return e,
+            }
+        };
+        let max = if plain.is_null() {
+            usize::MAX
         } else {
-            *runs_got = 0;
+            plain_len as usize
+        };
+        let core = s.core.borrow();
+        let text = match core.text(start, end, max) {
+            Ok(t) => t,
+            Err(e) => return hr_of(e),
+        };
+        unsafe {
+            if !plain.is_null() {
+                std::ptr::copy_nonoverlapping(text.as_ptr(), plain, text.len());
+                *plain_got = text.len() as u32;
+            } else {
+                *plain_got = 0;
+            }
+            if !runs.is_null() && runs_len > 0 && !text.is_empty() {
+                *runs = TsRunInfo {
+                    count: text.len() as u32,
+                    kind: 0, // TS_RT_PLAIN
+                };
+                *runs_got = 1;
+            } else {
+                *runs_got = 0;
+            }
+            *next = (start + text.len()) as i32;
         }
-        *next = (start + text.len()) as i32;
-    }
-    S_OK
+        S_OK
+    })
 }
 
 unsafe extern "system" fn set_text(
@@ -810,26 +844,34 @@ unsafe extern "system" fn set_text(
     len: u32,
     change: *mut TsTextChange,
 ) -> H {
-    let s = unsafe { store(this) };
-    let (Ok(a), Ok(b)) = (pos(start), pos(end)) else {
-        return TS_E_INVALIDPOS;
-    };
-    let with = unsafe { units(text, len) };
-    let done = s.core.borrow_mut().set_text(a, b, with);
-    match done {
-        Ok(c) => {
-            put_change(change, c);
-            S_OK
+    guard(|| {
+        let s = unsafe { store(this) };
+        let (Ok(a), Ok(b)) = (pos(start), pos(end)) else {
+            return TS_E_INVALIDPOS;
+        };
+        let with = unsafe { units(text, len) };
+        let done = s.core.borrow_mut().set_text(a, b, with);
+        super::debug(format_args!(
+            "SetText({a}..{b}, {:?}): {done:?}",
+            String::from_utf16_lossy(with)
+        ));
+        match done {
+            Ok(c) => {
+                put_change(change, c);
+                S_OK
+            }
+            Err(e) => hr_of(e),
         }
-        Err(e) => hr_of(e),
-    }
+    })
 }
 
 unsafe extern "system" fn get_formatted_text(_this: P, _s: i32, _e: i32, out: *mut P) -> H {
-    if !out.is_null() {
-        unsafe { *out = std::ptr::null_mut() };
-    }
-    E_NOTIMPL
+    guard(|| {
+        if !out.is_null() {
+            unsafe { *out = std::ptr::null_mut() };
+        }
+        E_NOTIMPL
+    })
 }
 
 unsafe extern "system" fn get_embedded(
@@ -839,10 +881,12 @@ unsafe extern "system" fn get_embedded(
     _iid: *const Guid,
     out: *mut P,
 ) -> H {
-    if !out.is_null() {
-        unsafe { *out = std::ptr::null_mut() };
-    }
-    E_NOTIMPL
+    guard(|| {
+        if !out.is_null() {
+            unsafe { *out = std::ptr::null_mut() };
+        }
+        E_NOTIMPL
+    })
 }
 
 unsafe extern "system" fn query_insert_embedded(
@@ -851,11 +895,13 @@ unsafe extern "system" fn query_insert_embedded(
     _format: P,
     insertable: *mut i32,
 ) -> H {
-    if insertable.is_null() {
-        return E_INVALIDARG;
-    }
-    unsafe { *insertable = 0 };
-    S_OK
+    guard(|| {
+        if insertable.is_null() {
+            return E_INVALIDARG;
+        }
+        unsafe { *insertable = 0 };
+        S_OK
+    })
 }
 
 unsafe extern "system" fn insert_embedded(
@@ -866,7 +912,7 @@ unsafe extern "system" fn insert_embedded(
     _data: P,
     _change: *mut TsTextChange,
 ) -> H {
-    E_NOTIMPL
+    guard(|| E_NOTIMPL)
 }
 
 unsafe extern "system" fn insert_text_at_selection(
@@ -878,30 +924,36 @@ unsafe extern "system" fn insert_text_at_selection(
     out_end: *mut i32,
     change: *mut TsTextChange,
 ) -> H {
-    let s = unsafe { store(this) };
-    let query_only = flags & TS_IAS_QUERYONLY != 0;
-    if query_only && (out_start.is_null() || out_end.is_null()) {
-        return E_INVALIDARG;
-    }
-    let with = unsafe { units(text, len) };
-    let done = s.core.borrow_mut().insert_at_selection(with, query_only);
-    match done {
-        Ok((a, b, c)) => {
-            unsafe {
-                if !out_start.is_null() {
-                    *out_start = a as i32;
-                }
-                if !out_end.is_null() {
-                    *out_end = b as i32;
-                }
-            }
-            if let Some(c) = c {
-                put_change(change, c);
-            }
-            S_OK
+    guard(|| {
+        let s = unsafe { store(this) };
+        let query_only = flags & TS_IAS_QUERYONLY != 0;
+        if query_only && (out_start.is_null() || out_end.is_null()) {
+            return E_INVALIDARG;
         }
-        Err(e) => hr_of(e),
-    }
+        let with = unsafe { units(text, len) };
+        let done = s.core.borrow_mut().insert_at_selection(with, query_only);
+        super::debug(format_args!(
+            "InsertTextAtSelection({flags:#x}, {:?}): {done:?}",
+            String::from_utf16_lossy(with)
+        ));
+        match done {
+            Ok((a, b, c)) => {
+                unsafe {
+                    if !out_start.is_null() {
+                        *out_start = a as i32;
+                    }
+                    if !out_end.is_null() {
+                        *out_end = b as i32;
+                    }
+                }
+                if let Some(c) = c {
+                    put_change(change, c);
+                }
+                S_OK
+            }
+            Err(e) => hr_of(e),
+        }
+    })
 }
 
 unsafe extern "system" fn insert_embedded_at_selection(
@@ -912,7 +964,7 @@ unsafe extern "system" fn insert_embedded_at_selection(
     _e: *mut i32,
     _change: *mut TsTextChange,
 ) -> H {
-    E_NOTIMPL
+    guard(|| E_NOTIMPL)
 }
 
 /// No attributes (fonts, reading direction, input scope) are offered: the
@@ -923,7 +975,7 @@ unsafe extern "system" fn request_supported_attrs(
     _n: u32,
     _ids: *const Guid,
 ) -> H {
-    S_OK
+    guard(|| S_OK)
 }
 
 unsafe extern "system" fn request_attrs_at_position(
@@ -933,7 +985,7 @@ unsafe extern "system" fn request_attrs_at_position(
     _ids: *const Guid,
     _flags: u32,
 ) -> H {
-    S_OK
+    guard(|| S_OK)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -948,15 +1000,17 @@ unsafe extern "system" fn find_next_attr_transition(
     found: *mut i32,
     offset: *mut i32,
 ) -> H {
-    if next.is_null() || found.is_null() || offset.is_null() {
-        return E_INVALIDARG;
-    }
-    unsafe {
-        *next = halt;
-        *found = 0;
-        *offset = 0;
-    }
-    S_OK
+    guard(|| {
+        if next.is_null() || found.is_null() || offset.is_null() {
+            return E_INVALIDARG;
+        }
+        unsafe {
+            *next = halt;
+            *found = 0;
+            *offset = 0;
+        }
+        S_OK
+    })
 }
 
 unsafe extern "system" fn retrieve_requested_attrs(
@@ -965,33 +1019,39 @@ unsafe extern "system" fn retrieve_requested_attrs(
     _vals: P,
     fetched: *mut u32,
 ) -> H {
-    if fetched.is_null() {
-        return E_INVALIDARG;
-    }
-    unsafe { *fetched = 0 };
-    S_OK
+    guard(|| {
+        if fetched.is_null() {
+            return E_INVALIDARG;
+        }
+        unsafe { *fetched = 0 };
+        S_OK
+    })
 }
 
 unsafe extern "system" fn get_end_acp(this: P, out: *mut i32) -> H {
-    let s = unsafe { store(this) };
-    if out.is_null() {
-        return E_INVALIDARG;
-    }
-    match s.core.borrow().len() {
-        Ok(n) => {
-            unsafe { *out = n as i32 };
-            S_OK
+    guard(|| {
+        let s = unsafe { store(this) };
+        if out.is_null() {
+            return E_INVALIDARG;
         }
-        Err(e) => hr_of(e),
-    }
+        match s.core.borrow().len() {
+            Ok(n) => {
+                unsafe { *out = n as i32 };
+                S_OK
+            }
+            Err(e) => hr_of(e),
+        }
+    })
 }
 
 unsafe extern "system" fn get_active_view(_this: P, view: *mut u32) -> H {
-    if view.is_null() {
-        return E_INVALIDARG;
-    }
-    unsafe { *view = 0 };
-    S_OK
+    guard(|| {
+        if view.is_null() {
+            return E_INVALIDARG;
+        }
+        unsafe { *view = 0 };
+        S_OK
+    })
 }
 
 unsafe extern "system" fn get_acp_from_point(
@@ -1001,7 +1061,7 @@ unsafe extern "system" fn get_acp_from_point(
     _flags: u32,
     _out: *mut i32,
 ) -> H {
-    E_NOTIMPL
+    guard(|| E_NOTIMPL)
 }
 
 /// Every range is placed at the caret (the composition's start while
@@ -1014,52 +1074,58 @@ unsafe extern "system" fn get_text_ext(
     rect: *mut Rect,
     clipped: *mut i32,
 ) -> H {
-    let s = unsafe { store(this) };
-    if rect.is_null() || clipped.is_null() {
-        return E_INVALIDARG;
-    }
-    if s.core.borrow().len().is_err() {
-        return TS_E_NOLOCK;
-    }
-    unsafe {
-        *rect = s.caret_on_screen();
-        *clipped = 0;
-    }
-    S_OK
+    guard(|| {
+        let s = unsafe { store(this) };
+        if rect.is_null() || clipped.is_null() {
+            return E_INVALIDARG;
+        }
+        if s.core.borrow().len().is_err() {
+            return TS_E_NOLOCK;
+        }
+        unsafe {
+            *rect = s.caret_on_screen();
+            *clipped = 0;
+        }
+        S_OK
+    })
 }
 
 unsafe extern "system" fn get_screen_ext(this: P, _view: u32, rect: *mut Rect) -> H {
-    let s = unsafe { store(this) };
-    if rect.is_null() {
-        return E_INVALIDARG;
-    }
-    let mut r = Rect {
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-    };
-    unsafe { GetClientRect(s.hwnd, &mut r) };
-    let mut p = Point { x: 0, y: 0 };
-    unsafe { ClientToScreen(s.hwnd, &mut p) };
-    unsafe {
-        *rect = Rect {
-            left: p.x,
-            top: p.y,
-            right: p.x + r.right,
-            bottom: p.y + r.bottom,
+    guard(|| {
+        let s = unsafe { store(this) };
+        if rect.is_null() {
+            return E_INVALIDARG;
         }
-    };
-    S_OK
+        let mut r = Rect {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe { GetClientRect(s.hwnd, &mut r) };
+        let mut p = Point { x: 0, y: 0 };
+        unsafe { ClientToScreen(s.hwnd, &mut p) };
+        unsafe {
+            *rect = Rect {
+                left: p.x,
+                top: p.y,
+                right: p.x + r.right,
+                bottom: p.y + r.bottom,
+            }
+        };
+        S_OK
+    })
 }
 
 unsafe extern "system" fn get_wnd(this: P, _view: u32, out: *mut Hwnd) -> H {
-    let s = unsafe { store(this) };
-    if out.is_null() {
-        return E_INVALIDARG;
-    }
-    unsafe { *out = s.hwnd };
-    S_OK
+    guard(|| {
+        let s = unsafe { store(this) };
+        if out.is_null() {
+            return E_INVALIDARG;
+        }
+        unsafe { *out = s.hwnd };
+        S_OK
+    })
 }
 
 // ---- ITfContextOwnerCompositionSink -----------------------------------------
@@ -1069,47 +1135,53 @@ unsafe fn owner_store<'a>(this: P) -> &'a Store {
 }
 
 unsafe extern "system" fn on_start_composition(this: P, view: P, ok: *mut i32) -> H {
-    let s = unsafe { owner_store(this) };
-    if ok.is_null() {
-        return E_INVALIDARG;
-    }
-    // A composition starting while we end one the App left is refused.
-    if s.terminating.get() {
-        unsafe { *ok = 0 };
-        return S_OK;
-    }
-    unsafe { *ok = 1 };
-    let view = unsafe { Com::add_ref(view) };
-    let range = view
-        .as_ref()
-        .and_then(view_range)
-        .and_then(|r| range_extent(&r));
-    *s.view.borrow_mut() = view;
-    s.core.borrow_mut().start_composition(range);
-    super::debug(format_args!("composition started at {range:?}"));
-    S_OK
+    guard(|| {
+        let s = unsafe { owner_store(this) };
+        if ok.is_null() {
+            return E_INVALIDARG;
+        }
+        // A composition starting while we end one the App left is refused.
+        if s.terminating.get() {
+            unsafe { *ok = 0 };
+            return S_OK;
+        }
+        unsafe { *ok = 1 };
+        let view = unsafe { Com::add_ref(view) };
+        let range = view
+            .as_ref()
+            .and_then(view_range)
+            .and_then(|r| range_extent(&r));
+        *s.view.borrow_mut() = view;
+        s.core.borrow_mut().start_composition(range);
+        super::debug(format_args!("composition started at {range:?}"));
+        S_OK
+    })
 }
 
 unsafe extern "system" fn on_update_composition(this: P, view: P, range: P) -> H {
-    let s = unsafe { owner_store(this) };
-    let new_range = unsafe { Com::add_ref(range) }
-        .or_else(|| unsafe { Com::add_ref(view) }.as_ref().and_then(view_range));
-    if let Some(r) = new_range.as_ref().and_then(range_extent) {
-        s.core.borrow_mut().update_composition(r);
-    }
-    S_OK
+    guard(|| {
+        let s = unsafe { owner_store(this) };
+        let new_range = unsafe { Com::add_ref(range) }
+            .or_else(|| unsafe { Com::add_ref(view) }.as_ref().and_then(view_range));
+        if let Some(r) = new_range.as_ref().and_then(range_extent) {
+            s.core.borrow_mut().update_composition(r);
+        }
+        S_OK
+    })
 }
 
 unsafe extern "system" fn on_end_composition(this: P, _view: P) -> H {
-    let s = unsafe { owner_store(this) };
-    s.view.borrow_mut().take();
-    s.core.borrow_mut().end_composition();
-    super::debug(format_args!("composition ended"));
-    // Ended outside a lock (rarely): commit now.
-    if !s.core.borrow().locked() {
-        s.flush();
-    }
-    S_OK
+    guard(|| {
+        let s = unsafe { owner_store(this) };
+        s.view.borrow_mut().take();
+        s.core.borrow_mut().end_composition();
+        super::debug(format_args!("composition ended"));
+        // Ended outside a lock (rarely): commit now.
+        if !s.core.borrow().locked() {
+            s.flush();
+        }
+        S_OK
+    })
 }
 
 // ---- ITfTextEditSink --------------------------------------------------------
@@ -1118,10 +1190,12 @@ unsafe extern "system" fn on_end_composition(this: P, _view: P) -> H {
 /// composition is and its display attributes (which clause is converting),
 /// for the flush that follows.
 unsafe extern "system" fn on_end_edit(this: P, context: P, ec: u32, _record: P) -> H {
-    let s = unsafe { &*base_of(this, std::mem::offset_of!(Store, edit)) };
-    if s.composing() {
-        let context = unsafe { Com::add_ref(context) };
-        s.read_composition(context.as_ref(), ec);
-    }
-    S_OK
+    guard(|| {
+        let s = unsafe { &*base_of(this, std::mem::offset_of!(Store, edit)) };
+        if s.composing() {
+            let context = unsafe { Com::add_ref(context) };
+            s.read_composition(context.as_ref(), ec);
+        }
+        S_OK
+    })
 }

@@ -957,7 +957,14 @@ Most input only works on X11 today.
   Windows runner and drives a composition through the real TSF manager, the
   app playing the input method (edit sessions, `StartComposition`, `SetText`,
   `EndComposition`): the field must show the preedit `にほん`, then `日本`,
-  then the commit. No real IME runs there, so how the Microsoft IMEs behave
+  then the commit. (Its first run activated TSF and tied the window to its
+  document, but `ITfContextComposition::StartComposition` refused the app's
+  composition with `E_FAIL`; the self-test now tries the owner's
+  composition services and other ranges, logging each, and falls back to a
+  plain `InsertTextAtSelection` with a CI warning.) A failure in the TSF path
+  (a panic in a store call, `AssociateFocus` failing) switches TSF off for
+  the run and hands input to IMM32. No real IME runs there, so how the
+  Microsoft IMEs behave
   against the store is unverified, as are the display attributes and the
   IMM32 fallback (build-checked). Not done: `GetACPFromPoint` (handwriting
   aims by point), text attributes and input scopes (`RequestSupportedAttrs`

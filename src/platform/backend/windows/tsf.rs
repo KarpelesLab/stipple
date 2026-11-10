@@ -96,8 +96,49 @@ pub(super) fn debug(args: std::fmt::Arguments<'_>) {
     }
 }
 
+thread_local! {
+    /// TSF went wrong on this thread: it is switched off at the next
+    /// `set_state` (not from inside a TSF callback), and IMM32 takes over.
+    static BROKEN: Cell<bool> = const { Cell::new(false) };
+    /// It has been switched off.
+    static OFF: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Something in the TSF path failed in a way that could lose typing: give
+/// up on TSF for the rest of the run.
+pub(super) fn fail(why: &str) {
+    if !BROKEN.with(|b| b.replace(true)) {
+        eprintln!("stipple-tsf: {why}; switching to IMM32");
+    }
+}
+
+/// Switch TSF off after [`fail`]: untie every window from its document and
+/// deactivate the thread manager, so input methods reach the IMM32 path
+/// through Windows' compatibility layer.
+fn shut_down() {
+    if OFF.with(|o| o.replace(true)) {
+        return;
+    }
+    let docs: Vec<(usize, Rc<Doc>)> = DOCS.with(|d| d.borrow_mut().drain().collect());
+    let t = THREAD.with(|t| t.get().cloned().flatten());
+    for (hwnd, doc) in docs {
+        if let Some(t) = &t {
+            associate(t, hwnd as Hwnd, None);
+        }
+        release_doc(doc);
+    }
+    if let Some(t) = t {
+        // ITfThreadMgr::Deactivate.
+        unsafe { t.mgr.call::<unsafe extern "system" fn(P) -> Hresult>(4)(t.mgr.ptr()) };
+    }
+    debug(format_args!("off: using IMM32"));
+}
+
 /// The thread manager, activated on first use; `None` means IMM32.
 fn thread() -> Option<Rc<Thread>> {
+    if OFF.with(|o| o.get()) {
+        return None;
+    }
     THREAD.with(|t| t.get_or_init(activate).clone())
 }
 
@@ -143,7 +184,7 @@ fn activate() -> Option<Rc<Thread>> {
 /// Tie `hwnd` to `dim` (`ITfThreadMgr::AssociateFocus`).
 fn associate(t: &Thread, hwnd: Hwnd, dim: Option<&Com>) {
     let mut prev: P = std::ptr::null_mut();
-    unsafe {
+    let hr = unsafe {
         t.mgr
             .call::<unsafe extern "system" fn(P, Hwnd, P, Out) -> Hresult>(9)(
             t.mgr.ptr(),
@@ -153,6 +194,10 @@ fn associate(t: &Thread, hwnd: Hwnd, dim: Option<&Com>) {
         )
     };
     drop(Com::from_raw(prev));
+    if hr < 0 && dim.is_some() {
+        debug(format_args!("AssociateFocus: {hr:#x}"));
+        fail("AssociateFocus failed");
+    }
 }
 
 /// A document manager with a context over a new store for `hwnd`.
@@ -229,6 +274,25 @@ fn doc(t: &Thread, hwnd: Hwnd) -> Option<Rc<Doc>> {
 /// Show input methods the focused field, or none (`Window::set_ime`).
 /// Returns `false` when TSF isn't in use, for IMM32 to handle it.
 pub(super) fn set_state(hwnd: Hwnd, state: Option<&ImeState>) -> bool {
+    if BROKEN.with(|b| b.get()) {
+        shut_down();
+        return false;
+    }
+    let handled =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| try_set_state(hwnd, state)))
+            .unwrap_or_else(|_| {
+                fail("set_ime panicked");
+                false
+            });
+    // If anything failed on the way, this report goes to IMM32 too.
+    if BROKEN.with(|b| b.get()) {
+        shut_down();
+        return false;
+    }
+    handled
+}
+
+fn try_set_state(hwnd: Hwnd, state: Option<&ImeState>) -> bool {
     let Some(t) = thread() else {
         return false;
     };
@@ -249,7 +313,7 @@ pub(super) fn set_state(hwnd: Hwnd, state: Option<&ImeState>) -> bool {
                 associate(&t, hwnd, Some(&doc.dim));
                 debug(format_args!("focus {:#x}", hwnd as usize));
             }
-            selftest::on_focus(hwnd, &doc.context, t.client);
+            selftest::on_focus(hwnd, &doc.context, t.client, &t.mgr, &doc.dim);
         }
         None => {
             if doc.focused.replace(false) {
@@ -272,6 +336,11 @@ pub(super) fn forget(hwnd: Hwnd) {
     if let Some(t) = thread() {
         associate(&t, hwnd, None);
     }
+    release_doc(doc);
+}
+
+/// Unadvise and pop a document, and let go of it.
+fn release_doc(doc: Rc<Doc>) {
     if let (Some(cookie), Some(source)) = (doc.edit_cookie, doc.context.query(&IID_ITFSOURCE)) {
         // ITfSource::UnadviseSink.
         unsafe {

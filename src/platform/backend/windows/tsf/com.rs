@@ -113,6 +113,18 @@ pub(super) const IID_ITFCONTEXTCOMPOSITION: Guid = Guid(
     0x4FC7,
     [0x9A, 0x11, 0x0E, 0xE0, 0xE2, 0x3A, 0xA3, 0x9B],
 );
+pub(super) const IID_ITFINSERTATSELECTION: Guid = Guid(
+    0x55CE_16BA,
+    0x3014,
+    0x41C1,
+    [0x9C, 0xEB, 0xFA, 0xDE, 0x14, 0x46, 0xAC, 0x6C],
+);
+pub(super) const IID_ITFCOMPOSITIONSINK: Guid = Guid(
+    0xA781_718C,
+    0x579A,
+    0x4B15,
+    [0xA2, 0x80, 0x32, 0xB8, 0x57, 0x7A, 0xCC, 0x5E],
+);
 pub(super) const IID_ITFEDITSESSION: Guid = Guid(
     0xAA80_E803,
     0x2021,
@@ -273,14 +285,20 @@ type Out = *mut *mut c_void;
 
 /// Read an interface out-parameter: `f` fills it and returns an `HRESULT`.
 pub(super) fn out(f: impl FnOnce(Out) -> Hresult) -> Option<Com> {
+    out_hr(f).1
+}
+
+/// [`out`], with the `HRESULT` (for diagnostics).
+pub(super) fn out_hr(f: impl FnOnce(Out) -> Hresult) -> (Hresult, Option<Com>) {
     let mut p = std::ptr::null_mut();
-    if f(&mut p) < 0 {
+    let hr = f(&mut p);
+    if hr < 0 {
         if !p.is_null() {
             drop(Com::from_raw(p));
         }
-        return None;
+        return (hr, None);
     }
-    Com::from_raw(p)
+    (hr, Com::from_raw(p))
 }
 
 /// `ITfRangeACP::GetExtent` of an `ITfRange`: its start and end.
