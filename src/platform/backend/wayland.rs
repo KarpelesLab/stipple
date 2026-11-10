@@ -171,6 +171,22 @@ const TOPLEVEL_ICON_ADD_BUFFER: u16 = 2;
 
 // Event opcodes (server → client) for the objects we track.
 const WL_DISPLAY_ERROR: u16 = 0;
+
+/// Describe a `wl_display.error` event (object id, code, message), for the
+/// error a protocol violation ends the connection with.
+fn display_error(args: &[u8]) -> String {
+    let word = |i: usize| {
+        args.get(i..i + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .unwrap_or(0)
+    };
+    let len = word(8) as usize;
+    let message = args
+        .get(12..12 + len.saturating_sub(1))
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default();
+    format!("object {} code {}: {message}", word(0), word(4))
+}
 const WL_REGISTRY_GLOBAL: u16 = 0;
 const WL_CALLBACK_DONE: u16 = 0;
 const XDG_WM_BASE_PING: u16 = 0;
@@ -1605,7 +1621,10 @@ where
         } else if object == sync_cb && opcode == WL_CALLBACK_DONE {
             break;
         } else if object == WL_DISPLAY && opcode == WL_DISPLAY_ERROR {
-            return Err(PlatformError::Os("wl_display error during setup".into()));
+            return Err(PlatformError::Os(format!(
+                "wl_display error during setup: {}",
+                display_error(&args)
+            )));
         }
     }
 
@@ -2225,7 +2244,10 @@ where
             }
             dbg(format_args!("keyboard event {opcode}"));
         } else if object == WL_DISPLAY && opcode == WL_DISPLAY_ERROR {
-            return Err(PlatformError::Os("wl_display error".into()));
+            return Err(PlatformError::Os(format!(
+                "wl_display error: {}",
+                display_error(&args)
+            )));
         }
     }
     Ok(())
