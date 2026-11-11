@@ -1005,8 +1005,7 @@ Most input only works on X11 today.
   Ctrl+A/X/C/V; `updateSelection` and `restartInput` keep the keyboard in
   step; password fields get a password `inputType`. The editable model is
   unit-tested on the host. **Verified on an API 34 emulator** (locally, and in
-  the `visual-android` CI steps added with this change, which hadn't run on CI
-  yet when it landed): Gboard connects (`inputType 0x4001`, action Done), keys
+  the `visual-android` CI steps, which pass since the typing fix): Gboard connects (`inputType 0x4001`, action Done), keys
   typed with `adb shell input text` reach the field with or without an input
   method connected (CI's first run never saw "Stipple" arrive; the likely
   cause, not reproduced locally, is that Gboard re-composed each word
@@ -1307,8 +1306,8 @@ Most input only works on X11 today.
   its element and checks it was tapped and the label's element followed.
   On its first CI run the labels, values and traits read back right (34
   elements) but every frame was zero, so the frame and activation checks
-  failed; the frames are now set directly in screen coordinates, which hasn't
-  run in CI yet. Not yet tried with VoiceOver itself, on a simulator or a
+  failed; the frames are now set directly in screen coordinates, and the
+  next run passed every check (frames, activation, the label following). Not yet tried with VoiceOver itself, on a simulator or a
   device; no adjustable or scroll actions.
 - ✅ Accessibility on Android: the host view's `AccessibilityNodeProvider`
   (same run-time dex) gives a virtual view per node (ids in tree order), with
@@ -1322,8 +1321,7 @@ Most input only works on X11 today.
   touch) goes to the host view, which announces the node under it. **Verified
   on an API 34 emulator** with `uiautomator dump` (the button, the field and
   the list's rows with their classes and bounds; CI checks it in the
-  `visual-android` steps added with this change, not yet run on CI when it
-  landed). Not yet tried with TalkBack itself, on an emulator or a device.
+  `visual-android` steps, which pass). Not yet tried with TalkBack itself, on an emulator or a device.
 - ✅ App lifecycle for apps, cross-platform API and iOS: `Event::Lifecycle`
   with `Lifecycle::{Background, Foreground, LowMemory}`, heard by
   `App::on_lifecycle(|state, change|)`. While in the background the App asks
@@ -1336,14 +1334,14 @@ Most input only works on X11 today.
   suspended, no repaint until coming back); CI sends `touchdemo` to the
   background on the simulator by launching another app and back by launching
   it again, and checks both events and that no view was built in between; the
-  memory warning is posted in-process. The first `visual-ios` run stopped before these steps (an accessibility check failed first); they now run on their own, but haven't been seen passing yet.
+  memory warning is posted in-process. These steps passed in CI once the accessibility fix landed.
 - ✅ Mobile app lifecycle on Android: `onPause` as `Lifecycle::Background`
   (the callback waits until the app has handled it), `onResume` after it as
   `Foreground`, and `onLowMemory` and `onTrimMemory` (running low, critical,
   moderate, complete; heard through a run-time `ComponentCallbacks2`) as
   `LowMemory`, through the shared API (frames stop in the background).
   **Verified on an API 34 emulator** (Home and `am start`, `am
-  send-trim-memory RUNNING_LOW`; CI steps added with this change).
+  send-trim-memory RUNNING_LOW`; checked in CI).
 - ⬜ Saving and restoring state across process death on Android
   (`onSaveInstanceState`).
 - ✅ Back navigation on Android: the Back key (and the back gesture, which
@@ -1384,7 +1382,7 @@ Most input only works on X11 today.
   is on screen. `touchdemo`'s simulator self-test checks `notify` hands the
   notification over and the center reports the permission
   (`getNotificationSettingsWithCompletionHandler:`); nobody answers the prompt
-  in CI, so delivery after a grant is build-checked only. The first `visual-ios` run stopped before these steps (an accessibility check failed first); they now run on their own, but haven't been seen passing yet.
+  in CI, so delivery after a grant is build-checked only. These steps passed in CI once the accessibility fix landed.
 - ⬜ Notifications on Android (`NotificationManager` and a channel, with the
   `POST_NOTIFICATIONS` permission on API 33+).
 - ⬜ Drag and drop from other apps on mobile: `UIDropInteraction` on iOS
@@ -1396,7 +1394,7 @@ Most input only works on X11 today.
   coming back to the foreground, → `Event::ThemeChanged`; the native theme is
   rebuilt and the area around the safe area takes the new background. CI
   switches the simulator with `xcrun simctl ui ... appearance dark` while
-  `touchdemo` runs and checks its theme turned dark. The first `visual-ios` run stopped before these steps (an accessibility check failed first); they now run on their own, but haven't been seen passing yet.
+  `touchdemo` runs and checks its theme turned dark. These steps passed in CI once the accessibility fix landed.
 - ⬜ iOS: trackpad / mouse scrolling on iPad (`UIPanGestureRecognizer` with
   indirect scroll input).
 - ⬜ Mobile CI depth: run the iOS features that are only implemented (timers,
