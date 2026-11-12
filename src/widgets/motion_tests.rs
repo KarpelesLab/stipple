@@ -6,8 +6,10 @@ use std::time::Duration;
 
 use crate::anim::{Easing, Motion};
 use crate::core::interact::Resolver;
+use crate::core::presence::{Presence, PresenceSpec};
 use crate::core::transition::Transitions;
-use crate::core::{Cx, Element, ElementKey, Interaction, OverlaySpec};
+use crate::core::{Cx, Element, ElementKey, Interaction, LayoutNode, OverlaySpec};
+use crate::geometry::Rect;
 use crate::style::{MotionTokens, Theme};
 
 use super::*;
@@ -32,7 +34,9 @@ fn theme() -> Theme {
         toggle: m,
         indicator: m,
         popup: m,
+        popup_exit: m,
         dialog: m,
+        dialog_exit: m,
         toast_enter: m,
         toast_exit: m,
         disclosure: m,
@@ -44,6 +48,11 @@ fn theme() -> Theme {
 struct Rig {
     transitions: Transitions,
     states: HashMap<ElementKey, Interaction>,
+    /// The enter and exit animations, and the last frame drawn (for
+    /// [`draw`](Self::draw)).
+    presence: Presence,
+    specs: HashMap<ElementKey, PresenceSpec>,
+    tree: Option<LayoutNode>,
 }
 
 impl Rig {
@@ -52,7 +61,44 @@ impl Rig {
         Self {
             transitions: Transitions::default(),
             states: HashMap::new(),
+            presence: Presence::default(),
+            specs: HashMap::new(),
+            tree: None,
         }
+    }
+
+    /// [`build`](Self::build), then lay the view out with its overlays as
+    /// the app does (each overlay at (10, 10)) and run the enter and exit
+    /// animations: the frame drawn at `now`, and whether anything leaving or
+    /// entering still moves.
+    fn draw<S>(
+        &mut self,
+        now: Duration,
+        view: impl FnOnce(&mut Cx<S>) -> Element,
+    ) -> (LayoutNode, bool) {
+        let (el, overlays, _) = self.build(now, view);
+        let specs = std::mem::take(&mut self.specs);
+        let win = Rect::from_xywh(0.0, 0.0, 400.0, 300.0);
+        let mut roots = vec![crate::core::layout(&el, win, None)];
+        for o in &overlays {
+            let m = crate::core::measure(&o.content, win.size, None);
+            let at = Rect::from_xywh(10.0, 10.0, m.width, m.height);
+            roots.push(crate::core::layout(&o.content, at, None));
+        }
+        let mut tree = LayoutNode::container(win, roots);
+        tree.key = Some(ElementKey::LAYERS);
+        let old = self.tree.take();
+        let offsets = HashMap::new();
+        self.presence.update(
+            &mut tree,
+            &specs,
+            old.as_ref(),
+            &offsets,
+            Some(now),
+            win.size,
+        );
+        self.tree = Some(tree.clone());
+        (tree, self.presence.animating())
     }
 
     /// Build `view` at `now` and lower it: what that frame draws (the tree
@@ -76,12 +122,14 @@ impl Rig {
             styled_actions: Vec::new(),
             styled_drops: Vec::new(),
             presence: HashMap::new(),
-            anchors: Default::default(),
+            anchors: self.presence.anchors(),
         };
         r.resolve(&mut el, ElementKey::root(0));
-        for (i, o) in overlays.iter_mut().enumerate() {
-            r.resolve(&mut o.content, ElementKey::root(i + 1));
+        let keys = ElementKey::layers(&overlays);
+        for (o, key) in overlays.iter_mut().zip(keys) {
+            r.resolve(&mut o.content, key);
         }
+        self.specs = std::mem::take(&mut r.presence);
         self.transitions.end();
         let moving = requested || self.transitions.animating();
         (el, overlays, moving)
@@ -497,4 +545,140 @@ fn stateless_popups_come_in_through_the_core() {
     assert_eq!(layer(&app), 1.0);
     let _ = app.render_frame();
     assert!(!app.animating(), "then rests");
+}
+
+/// The ghost (a copy drawn while it leaves) among the window's layers, if
+/// any: where it's drawn, its opacity and transform.
+fn leaving(tree: &LayoutNode) -> Option<&LayoutNode> {
+    tree.children.iter().find(|c| c.ghost)
+}
+
+#[test]
+fn a_select_list_fades_and_shrinks_out_when_it_closes() {
+    let mut rig = Rig::new();
+    let mut st = St {
+        pick: Select::new(Some(0)),
+        ..St::default()
+    };
+    st.pick.open();
+    let t0 = Duration::from_secs(10);
+    let (tree, moving) = rig.draw(t0, select_view(&st));
+    assert!(!moving && leaving(&tree).is_none(), "open, at rest");
+    let open = tree.children[1].clone();
+    // Closed: the list is kept, where it was, as it leaves on the theme's
+    // `popup_exit` (100 ms here).
+    st.pick.close();
+    let head = t0 + 500 * MS - frame();
+    let (tree, moving) = rig.draw(head + frame(), select_view(&st));
+    assert!(moving, "closing: frames");
+    let ghost = leaving(&tree).expect("drawn while it leaves");
+    assert_eq!(ghost.bounds, open.bounds);
+    assert!(ghost.action.is_none() && ghost.semantics.is_none() && ghost.key.is_none());
+    let (tree, _) = rig.draw(head + 50 * MS, select_view(&st));
+    let ghost = leaving(&tree).expect("still leaving");
+    let m = theme().motion;
+    assert!(near(f64::from(ghost.opacity), 0.5), "{}", ghost.opacity);
+    let tr = ghost.transform.expect("shrinking");
+    assert!(near(
+        tr.scale.dx,
+        m.popup_scale + (1.0 - m.popup_scale) * 0.5
+    ));
+    assert!(near(tr.translate.dy, -m.popup_offset * 0.5), "back up");
+    assert_eq!((tr.origin.x, tr.origin.y), (0.5, 0.0), "toward its button");
+    let (tree, moving) = rig.draw(head + 101 * MS, select_view(&st));
+    assert!(!moving, "gone: no more frames");
+    assert_eq!(tree.children.len(), 1, "only the view");
+}
+
+#[test]
+fn a_list_reopened_while_closing_turns_round() {
+    let mut rig = Rig::new();
+    let mut st = St::default();
+    st.pick.open();
+    let t0 = Duration::from_secs(10);
+    rig.draw(t0, select_view(&st));
+    st.pick.close();
+    let head = t0 + 500 * MS - frame();
+    rig.draw(head + frame(), select_view(&st));
+    rig.draw(head + 50 * MS, select_view(&st));
+    st.pick.open();
+    let (tree, _) = rig.draw(head + 60 * MS, select_view(&st));
+    assert!(leaving(&tree).is_none(), "back: no ghost");
+    assert_eq!(tree.children.len(), 2);
+}
+
+#[test]
+fn stateless_overlays_and_tooltips_leave_on_the_theme_motion() {
+    use crate::geometry::Point;
+    #[derive(Clone, Copy, PartialEq)]
+    enum Up {
+        Menu,
+        Dialog,
+        Tip,
+    }
+    let view = |up: Option<Up>| {
+        move |cx: &mut Cx<()>| {
+            let t = theme();
+            match up {
+                Some(Up::Menu) => {
+                    let item = menu_item(cx, &t, "Cut", |_: &mut ()| {});
+                    open_menu(cx, &t, Point::new(10.0, 10.0), vec![item], |_: &mut ()| {});
+                }
+                Some(Up::Dialog) => open_dialog(
+                    cx,
+                    &t,
+                    "Sure?",
+                    label(&t, "Really"),
+                    vec![],
+                    |_: &mut ()| {},
+                ),
+                Some(Up::Tip) => cx.overlay(OverlaySpec {
+                    content: tooltip(&t, "Bold"),
+                    anchor: crate::core::Anchor::Popup(Point::new(10.0, 10.0)),
+                    modal: false,
+                    dismiss: None,
+                }),
+                None => {}
+            }
+            column(vec![])
+        }
+    };
+    let m = theme().motion;
+    for (up, scale, dy) in [
+        (Up::Menu, m.popup_scale, -m.popup_offset),
+        (Up::Dialog, m.dialog_scale, 0.0),
+        (Up::Tip, 1.0, 0.0),
+    ] {
+        let mut rig = Rig::new();
+        let t0 = Duration::from_secs(10);
+        let (_, moving) = rig.draw(t0, view(Some(up)));
+        assert!(!moving, "there from the first frame: at rest");
+        let head = t0 + 500 * MS - frame();
+        rig.draw(head + frame(), view(None));
+        let (tree, moving) = rig.draw(head + 50 * MS, view(None));
+        assert!(moving);
+        let ghost = leaving(&tree).expect("leaving");
+        assert!(near(f64::from(ghost.opacity), 0.5), "{}", ghost.opacity);
+        let tr = ghost
+            .transform
+            .unwrap_or(crate::geometry::Transform::IDENTITY);
+        assert!(near(tr.scale.dx, scale + (1.0 - scale) * 0.5), "{tr:?}");
+        assert!(near(tr.translate.dy, dy * 0.5), "{tr:?}");
+        let (tree, moving) = rig.draw(head + 101 * MS, view(None));
+        assert!(!moving && leaving(&tree).is_none(), "then gone");
+    }
+}
+
+#[test]
+fn reduced_motion_closes_overlays_at_once() {
+    let mut rig = Rig::new();
+    let mut st = St::default();
+    st.pick.open();
+    let t0 = Duration::from_secs(10);
+    rig.draw(t0, select_view(&st));
+    crate::anim::set_reduced_motion(Some(true));
+    st.pick.close();
+    let (tree, moving) = rig.draw(t0 + 500 * MS, select_view(&st));
+    crate::anim::set_reduced_motion(Some(false));
+    assert!(!moving && leaving(&tree).is_none(), "gone at once");
 }

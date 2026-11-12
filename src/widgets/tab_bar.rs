@@ -830,7 +830,8 @@ fn list_overlay<S: 'static>(
         .min_width(180.0)
         .role(Role::Menu);
     let dismiss = cx.register(move |s: &mut S| field(s).list_open = false);
-    let content = motion::popup(content, &theme.motion, t, (0.5, 0.0));
+    let content = motion::popup(content, &theme.motion, t, (0.5, 0.0))
+        .exit(motion::popup_exit(&theme.motion, (0.5, 0.0)));
     cx.overlay(OverlaySpec {
         content,
         anchor: Anchor::Below(tap),

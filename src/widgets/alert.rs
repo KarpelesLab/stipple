@@ -222,7 +222,9 @@ pub(crate) fn overlay<S: 'static>(
         }
     });
     let t = super::motion::progress(cx, theme.motion.dialog, Some(opened));
-    let content = super::motion::dialog(content, &theme.motion, t);
+    // ...and fades back out (with its scrim) when it's answered.
+    let content = super::motion::dialog(content, &theme.motion, t)
+        .exit(super::motion::dialog_exit(&theme.motion));
     cx.overlay(OverlaySpec {
         content,
         anchor: Anchor::Center,

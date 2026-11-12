@@ -1075,14 +1075,17 @@ impl<S: 'static> Pane<S> {
             presence: Default::default(),
             anchors: self.presence.anchors(),
         };
+        // Overlays leaving are drawn under the node holding the layers.
+        let layered = resolver.anchors.contains(&crate::core::ElementKey::LAYERS);
         resolver.resolve(&mut element, crate::core::ElementKey::root(0));
-        for (i, spec) in overlays.iter_mut().enumerate() {
-            resolver.resolve(&mut spec.content, crate::core::ElementKey::root(i + 1));
+        let layer_keys = crate::core::ElementKey::layers(&overlays);
+        for (spec, key) in overlays.iter_mut().zip(&layer_keys) {
+            resolver.resolve(&mut spec.content, *key);
         }
         let mut watch = std::mem::take(&mut resolver.watch);
         self.styled_actions = std::mem::take(&mut resolver.styled_actions);
         self.styled_drops = std::mem::take(&mut resolver.styled_drops);
-        let presence = std::mem::take(&mut resolver.presence);
+        let mut presence = std::mem::take(&mut resolver.presence);
         for (key, states) in queried {
             watch.add(key, crate::core::Interaction::DYNAMIC, states);
         }
@@ -1099,7 +1102,7 @@ impl<S: 'static> Pane<S> {
         // Compose the main tree with any floating overlay layers under one
         // routable/paintable root: each overlay (with a scrim behind a modal
         // one) is a later child, so it paints on top and hit-tests first.
-        let mut tree = if overlays.is_empty() {
+        let mut tree = if overlays.is_empty() && !layered {
             main
         } else {
             let mut roots = Vec::with_capacity(overlays.len() * 2 + 1);
@@ -1121,7 +1124,12 @@ impl<S: 'static> Pane<S> {
                     // The plain arrow over the scrim, not the tap target's hand
                     // or whatever lies beneath.
                     catcher.cursor = Some(CursorIcon::Default);
-                    roots.push(layout_with_direction(&catcher, win, font, dir));
+                    let mut node = layout_with_direction(&catcher, win, font, dir);
+                    // A scrim fades out with its overlay.
+                    if spec.modal {
+                        crate::core::presence::scrim(&spec.content, &mut node, &mut presence);
+                    }
+                    roots.push(node);
                 }
                 let mut m = measure(&spec.content, size, font);
                 // Right to left, popups are placed in a mirrored frame (x from
@@ -1215,9 +1223,12 @@ impl<S: 'static> Pane<S> {
                 let bounds = Rect::from_xywh(origin.x, origin.y, m.width, m.height);
                 roots.push(layout_with_direction(&spec.content, bounds, font, dir));
             }
-            LayoutNode::container(win, roots)
+            let mut layers = LayoutNode::container(win, roots);
+            layers.key = Some(crate::core::ElementKey::LAYERS);
+            layers
         };
-        self.overlay_active = !overlays.is_empty();
+        // (Its root holds layers, some of them maybe only leaving.)
+        self.overlay_active = !overlays.is_empty() || layered;
         self.catchers = overlays
             .iter()
             .filter(|o| o.modal || o.dismiss.is_some())
@@ -2131,7 +2142,8 @@ impl<S: 'static> Pane<S> {
 /// The part of `tree` a press at `pos` reaches, and whether it is the main tree.
 /// With overlays up, the root holds the main tree then each overlay's layers
 /// (a dismiss catcher or modal scrim, then its content); only the topmost layer
-/// under the pointer is reachable, so a catcher blocks the tree below it.
+/// under the pointer is reachable, so a catcher blocks the tree below it. An
+/// overlay leaving (a ghost) is passed over.
 fn press_layer(tree: &LayoutNode, overlays: bool, pos: Point) -> (&LayoutNode, bool) {
     if !overlays {
         return (tree, true);
@@ -2141,7 +2153,7 @@ fn press_layer(tree: &LayoutNode, overlays: bool, pos: Point) -> (&LayoutNode, b
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, layer)| layer.bounds.contains(pos))
+        .find(|(_, layer)| !layer.ghost && layer.bounds.contains(pos))
     {
         Some((i, layer)) => (layer, i == 0),
         None => (tree, true),

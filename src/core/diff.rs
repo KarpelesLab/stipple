@@ -129,7 +129,7 @@ fn diff_node(
         return;
     }
     if !visuals_equal(old, new) {
-        out.push(drawn(mo, old.bounds).union(drawn(mn, new.bounds)));
+        out.push(drawn(mo, bleed(old)).union(drawn(mn, bleed(new))));
     }
     if old.children.len() != new.children.len() {
         // Structural change: a child was inserted or removed. We can't align
@@ -148,6 +148,22 @@ fn to_window(node: &LayoutNode, outer: Affine) -> Affine {
     match node.affine() {
         Some(a) => a.then(outer),
         None => outer,
+    }
+}
+
+/// What `node` paints itself over: its bounds, and a pixel around them when
+/// it has a border, whose anti-aliased edge reaches just outside.
+fn bleed(node: &LayoutNode) -> Rect {
+    let b = node.bounds;
+    if node.decoration.border.is_some() {
+        Rect::from_xywh(
+            b.min_x() - 1.0,
+            b.min_y() - 1.0,
+            b.width() + 2.0,
+            b.height() + 2.0,
+        )
+    } else {
+        b
     }
 }
 
@@ -370,6 +386,21 @@ mod tests {
         assert_eq!(
             diff_trees(&a, &b),
             Damage::Regions(vec![Rect::from_xywh(0.0, 0.0, 50.0, 50.0)])
+        );
+    }
+
+    #[test]
+    fn a_border_change_damages_its_anti_aliased_edge_too() {
+        let a = root(vec![node(
+            Rect::from_xywh(10.0, 10.0, 50.0, 50.0),
+            None,
+            vec![],
+        )]);
+        let mut b = a.clone();
+        b.children[0].decoration.border = Some((Color::BLACK, 1.0));
+        assert_eq!(
+            diff_trees(&a, &b),
+            Damage::Regions(vec![Rect::from_xywh(9.0, 9.0, 52.0, 52.0)])
         );
     }
 

@@ -311,9 +311,11 @@ posted in-process. See
 selects, menus, tooltips, toasts, dialogs, tree disclosure triangles and the
 app's drop-target highlight, with the theme's motion tokens
 (`Theme::native()` picks Fluent, AppKit, UIKit, Material or libadwaita
-timings). Unit-tested at fixed frame times; under Xvfb, `widgetsdemo`,
-`sessionsdemo`, `material3demo` and `themegallery` were checked to draw
-pixel-identical frames at rest. Controls the OS draws under `Theme::native()`
+timings); popups, menus, tooltips and dialogs animate out too, kept drawn
+(and out of reach of input) while they leave. Unit-tested at fixed frame
+times and through App-level tests; under Xvfb, `widgetsdemo`,
+`sessionsdemo`, `tabsdemo`, `bididemo`, `material3demo` and `themegallery`
+were checked to draw pixel-identical frames at rest (by hand, not in CI). Controls the OS draws under `Theme::native()`
 (buttons, checkboxes, radios and switches on Windows, macOS and iOS) switch
 between the OS's pictures of their states without these animations. See
 [widgets.md](widgets.md#motion).

@@ -120,6 +120,12 @@ pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
             }
             axis.size(main, cross)
         }
+        ElementKind::Layers { children, .. } => children
+            .iter()
+            .map(|c| measure(c, inner, font))
+            .fold(Size::ZERO, |a, m| {
+                Size::new(a.width.max(m.width), a.height.max(m.height))
+            }),
         ElementKind::Grid {
             columns,
             rows,
@@ -456,6 +462,41 @@ pub fn layout_with_direction(
                 max.height,
             );
             let rect = Rect::from_xywh(inner.min_x() + cx + dx, inner.min_y() + cy + dy, w, h);
+            node.children.push(place(child, rect));
+        }
+        return node;
+    }
+
+    if let ElementKind::Layers { align, children } = &el.kind {
+        let inner = bounds.inset(el.layout.padding);
+        node.children.reserve(children.len());
+        for child in children {
+            let (m, min, max) = (
+                measure(child, inner.size, font),
+                min_size(child),
+                max_size(child),
+            );
+            // As in a grid cell, a sized child sits per `align`; only unsized
+            // axes stretch.
+            let fixed = |a: Align, size: Option<f64>| match (a, size) {
+                (Align::Stretch, Some(_)) => Align::Start,
+                _ => a,
+            };
+            let (dx, w) = align_in(
+                fixed(align.0, child.layout.size.width),
+                m.width,
+                inner.width(),
+                min.width,
+                max.width,
+            );
+            let (dy, h) = align_in(
+                fixed(align.1, child.layout.size.height),
+                m.height,
+                inner.height(),
+                min.height,
+                max.height,
+            );
+            let rect = Rect::from_xywh(inner.min_x() + dx, inner.min_y() + dy, w, h);
             node.children.push(place(child, rect));
         }
         return node;

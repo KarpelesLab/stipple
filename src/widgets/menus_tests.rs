@@ -299,6 +299,10 @@ fn a_context_menu_near_the_edge_stays_inside_the_window() {
 /// The labels drawn with an underline, as `text:underlined`.
 fn underlined(app: &App<Doc>) -> Vec<String> {
     fn walk(node: &crate::core::LayoutNode, out: &mut Vec<String>) {
+        // (Not in a menu that's closing.)
+        if node.ghost {
+            return;
+        }
         if let crate::core::NodeContent::Text {
             text,
             underline: Some((s, e)),

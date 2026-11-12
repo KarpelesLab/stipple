@@ -522,7 +522,8 @@ fn popups<S: 'static>(
             }
         });
         let t = super::motion::progress(cx, theme.motion.popup, opened);
-        let panel = super::motion::popup(panel, &theme.motion, t, origin);
+        let panel = super::motion::popup(panel, &theme.motion, t, origin)
+            .exit(super::motion::popup_exit(&theme.motion, origin));
         cx.overlay(OverlaySpec {
             content: panel,
             anchor,

@@ -64,11 +64,19 @@ pub struct MotionTokens {
     pub popup_scale: f64,
     /// How far (logical pixels) a popup slides in from, toward its anchor.
     pub popup_offset: f64,
+    /// Popups closing (and tooltips going): they fade out as they shrink
+    /// back toward [`popup_scale`](Self::popup_scale) and
+    /// [`popup_offset`](Self::popup_offset).
+    pub popup_exit: Motion,
     /// The drawn message box opening.
     pub dialog: Motion,
     /// The scale the message box opens from (above 1 shrinks into place, as
     /// UIKit's and WinUI's alerts do).
     pub dialog_scale: f64,
+    /// The message box and dialogs closing: they fade out as they scale back
+    /// toward [`dialog_scale`](Self::dialog_scale), and a modal's scrim fades
+    /// with them.
+    pub dialog_exit: Motion,
     /// A toast coming in.
     pub toast_enter: Motion,
     /// A toast going away.
@@ -113,7 +121,8 @@ impl MotionTokens {
     /// [`Theme::dark`](super::Theme::dark) and their variants: quick
     /// ease-out color changes (150 ms, like a CSS transition), a slight press
     /// scale, springy toggles and tab indicators, popups that grow from 96%
-    /// as they fade in, and toasts that slide in on a spring.
+    /// as they fade in (and fade out quicker, 100 ms easing in, as do
+    /// dialogs over 150 ms), and toasts that slide in on a spring.
     pub const fn standard() -> Self {
         Self {
             state: ms(150, Easing::EaseOut),
@@ -124,8 +133,10 @@ impl MotionTokens {
             popup: ms(150, Easing::CSS_EASE_OUT),
             popup_scale: 0.96,
             popup_offset: 4.0,
+            popup_exit: ms(100, Easing::EaseIn),
             dialog: ms(200, Easing::CSS_EASE_OUT),
             dialog_scale: 0.95,
+            dialog_exit: ms(150, Easing::EaseIn),
             toast_enter: Motion::Spring(SpringParams::with_response(0.4, 0.85)),
             toast_exit: ms(150, Easing::EaseIn),
             toast_offset: 24.0,
@@ -146,8 +157,10 @@ impl MotionTokens {
             popup: Motion::Instant,
             popup_scale: 1.0,
             popup_offset: 0.0,
+            popup_exit: Motion::Instant,
             dialog: Motion::Instant,
             dialog_scale: 1.0,
+            dialog_exit: Motion::Instant,
             toast_enter: Motion::Instant,
             toast_exit: Motion::Instant,
             toast_offset: 0.0,
@@ -160,7 +173,8 @@ impl MotionTokens {
     /// on Android). From the M3 motion tokens (durations `short1`–`long4`,
     /// `standard` and `emphasized` easing) and Jetpack Compose's Material
     /// components: the dropdown menu opens over 120 ms from 80% scale along
-    /// `LinearOutSlowInEasing`; the tab row's indicator slides over 250 ms
+    /// `LinearOutSlowInEasing` and fades out over 75 ms; dialogs close over
+    /// 150 ms (`short3`) along emphasized-accelerate; the tab row's indicator slides over 250 ms
     /// along `FastOutSlowInEasing`; snackbars fade in over 150 ms from 80%
     /// scale and out over 75 ms. Buttons don't scale (their state layer
     /// changes).
@@ -174,9 +188,11 @@ impl MotionTokens {
             popup: ms(120, LINEAR_OUT_SLOW_IN),   // Compose DropdownMenu
             popup_scale: 0.8,
             popup_offset: 0.0,
+            popup_exit: ms(75, Easing::Linear), // Compose DropdownMenu
             dialog: ms(200, Easing::EMPHASIZED_DECELERATE),
             dialog_scale: 0.9,
-            toast_enter: ms(150, FAST_OUT_SLOW_IN), // Compose Snackbar
+            dialog_exit: ms(150, Easing::EMPHASIZED_ACCELERATE), // short3
+            toast_enter: ms(150, FAST_OUT_SLOW_IN),              // Compose Snackbar
             toast_exit: ms(75, Easing::Linear),
             toast_offset: 0.0,
             toast_scale: 0.8,
@@ -191,7 +207,8 @@ impl MotionTokens {
     /// `ControlNormalAnimationDuration` (250 ms), along
     /// `ControlFastOutSlowInKeySpline` (`0,0 0,1`). A `ContentDialog` opens
     /// from 105% scale as it fades in over 250 ms; flyouts and menus slide in
-    /// a little as they fade. Buttons don't scale.
+    /// a little as they fade, and leave along the accelerating spline over
+    /// 167 ms. Buttons don't scale.
     pub const fn fluent() -> Self {
         Self {
             state: ms(83, FLUENT_DECELERATE),
@@ -202,8 +219,10 @@ impl MotionTokens {
             popup: ms(250, FLUENT_DECELERATE),
             popup_scale: 1.0,
             popup_offset: 8.0,
+            popup_exit: ms(167, FLUENT_ACCELERATE),
             dialog: ms(250, FLUENT_DECELERATE),
             dialog_scale: 1.05,
+            dialog_exit: ms(167, FLUENT_ACCELERATE),
             toast_enter: ms(250, FLUENT_DECELERATE),
             toast_exit: ms(167, FLUENT_ACCELERATE),
             toast_offset: 32.0,
@@ -215,7 +234,8 @@ impl MotionTokens {
     /// AppKit's feel ([`Theme::native`](super::Theme::native) on macOS):
     /// `NSAnimationContext`'s default 0.25 s along Core Animation's default
     /// timing function for toggles, the segmented control and disclosure
-    /// triangles; menus appear at once, as `NSMenu`s do; the message box pops
+    /// triangles; menus appear at once and fade out as they close, as
+    /// `NSMenu`s do; the message box pops
     /// in from a little smaller, roughly like an alert panel's
     /// (`NSWindow.AnimationBehavior.alertPanel`). AppKit's buttons change
     /// their look at once and don't scale; a 100 ms fade keeps the drawn ones
@@ -230,8 +250,10 @@ impl MotionTokens {
             popup: Motion::Instant,
             popup_scale: 1.0,
             popup_offset: 0.0,
+            popup_exit: ms(200, Easing::EaseIn),
             dialog: Motion::Spring(SpringParams::with_response(0.3, 0.75)),
             dialog_scale: 0.9,
+            dialog_exit: ms(200, CA_DEFAULT),
             toast_enter: Motion::Spring(SpringParams::with_response(0.45, 0.9)),
             toast_exit: ms(250, CA_DEFAULT),
             toast_offset: 32.0,
@@ -245,7 +267,8 @@ impl MotionTokens {
     /// toggles, menus and toasts; `.smooth`: 0.5 s, no bounce, for the
     /// segmented control's thumb), a message box that shrinks into place from
     /// above full size as `UIAlertController`'s alerts do, and highlights that
-    /// fade back over 0.2 s. Buttons don't scale.
+    /// fade back over 0.2 s; popups and the message box fade out over 0.25 s
+    /// and 0.2 s along Core Animation's default curve. Buttons don't scale.
     pub const fn ios() -> Self {
         let snappy = Motion::Spring(SpringParams::with_response(0.5, 0.85));
         Self {
@@ -257,8 +280,10 @@ impl MotionTokens {
             popup: snappy,
             popup_scale: 0.9,
             popup_offset: 0.0,
+            popup_exit: ms(250, CA_DEFAULT),
             dialog: Motion::Spring(SpringParams::with_response(0.4, 1.0)),
             dialog_scale: 1.15,
+            dialog_exit: ms(200, CA_DEFAULT),
             toast_enter: snappy,
             toast_exit: ms(250, CA_DEFAULT),
             toast_offset: 32.0,
@@ -269,8 +294,9 @@ impl MotionTokens {
 
     /// GNOME's libadwaita ([`Theme::native`](super::Theme::native) on Linux):
     /// Adwaita's stylesheet gives buttons and switches
-    /// `transition: all 200ms $ease-out-quad`; GTK 4's popovers appear at
-    /// once; dialogs open on a critically damped spring and toasts slide in
+    /// `transition: all 200ms $ease-out-quad`; GTK 4's popovers appear
+    /// and go at once; dialogs open on a critically damped spring (and fade
+    /// out over 200 ms) and toasts slide in
     /// over 300 ms along `ease-out-cubic` (approximations of libadwaita's
     /// `AdwDialog` and `AdwToastOverlay` animations). Buttons don't scale.
     pub const fn adwaita() -> Self {
@@ -283,8 +309,10 @@ impl MotionTokens {
             popup: Motion::Instant,
             popup_scale: 1.0,
             popup_offset: 0.0,
+            popup_exit: Motion::Instant,
             dialog: Motion::Spring(SpringParams::with_response(0.25, 1.0)),
             dialog_scale: 0.9,
+            dialog_exit: ms(200, ADW_EASE_OUT_CUBIC),
             toast_enter: ms(300, ADW_EASE_OUT_CUBIC),
             toast_exit: ms(200, ADW_EASE_OUT_CUBIC),
             toast_offset: 24.0,
@@ -338,7 +366,9 @@ mod tests {
                 m.toggle,
                 m.indicator,
                 m.popup,
+                m.popup_exit,
                 m.dialog,
+                m.dialog_exit,
                 m.toast_enter,
                 m.toast_exit,
                 m.disclosure,

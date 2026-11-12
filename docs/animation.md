@@ -304,6 +304,17 @@ column(rows.collect())
   in the layout: its siblings close up at once, or glide up if they animate
   their layout. If the view builds the element again before it's gone, it
   turns round and comes back from where it is.
+- The content of an overlay (`cx.overlay`) can have an exit too: when the
+  view stops declaring the overlay, the app keeps drawing it where it was,
+  over the window, while it leaves. A modal overlay's scrim fades out with it
+  on the same motion. Like any ghost, a leaving overlay takes no input: a
+  click on it reaches what's beneath (the scrim stops blocking at once), the
+  keyboard can't focus into it, and screen readers no longer see it. An
+  overlay is the same one across frames by its content's key, or else by its
+  place among the overlays of its kind of `Anchor` (the first `Below`, the
+  second `At`, ...), so a dropdown closing doesn't make a toast or a tooltip
+  look like it left and came back. This is how the built-in popups, menus,
+  tooltips and dialogs close (see [widgets.md](widgets.md#motion)).
 - `.appear(effect)` is both.
 - `.animate_layout(t)` animates the element from where it was drawn to where
   the layout puts it now, whenever that changes: a list reorders, a row is
@@ -384,9 +395,11 @@ scales and offsets entrances start from:
 | `state` | color changes: hover and press looks, a switch's track, a checkbox's box, segmented tabs |
 | `press`, `press_scale` | a pressed button shrinking (`press_scale` 1: it doesn't) |
 | `toggle` | a switch's thumb, a check mark, a radio dot |
-| `indicator` | the tab bar's accent strip sliding to the selected tab |
-| `popup`, `popup_scale`, `popup_offset` | select lists, drawn menus and the tab bar's list opening |
-| `dialog`, `dialog_scale` | the drawn message box opening |
+| `indicator` | the tab bar's accent strip and the segmented tabs' fill sliding to the selected tab |
+| `popup`, `popup_scale`, `popup_offset` | select lists, drawn menus, `open_menu` and the tab bar's list opening, tooltips showing |
+| `popup_exit` | those closing: fading out as they shrink back toward `popup_scale` and `popup_offset` |
+| `dialog`, `dialog_scale` | the drawn message box and `open_dialog` opening |
+| `dialog_exit` | those closing, their scrim fading with them |
 | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` | toasts coming and going |
 | `disclosure` | tree disclosure triangles turning |
 

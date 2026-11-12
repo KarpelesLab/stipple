@@ -160,6 +160,30 @@ pub(crate) struct PresenceSpec {
     pub layout_size: bool,
 }
 
+/// Have a modal overlay's laid-out scrim `node` fade out with the overlay
+/// whose `content` it's behind, when that leaves with an effect: the scrim
+/// gets an identity next to the content's and an exit fade on the content's
+/// exit transition, added to the frame's `specs`.
+pub(crate) fn scrim(
+    content: &crate::core::Element,
+    node: &mut LayoutNode,
+    specs: &mut HashMap<ElementKey, PresenceSpec>,
+) {
+    let Some(id) = content.reactive.as_ref().and_then(|r| r.id) else {
+        return;
+    };
+    let Some(exit) = specs.get(&id).and_then(|s| s.exit) else {
+        return;
+    };
+    let key = ElementKey::child(id, usize::MAX);
+    node.key = Some(key);
+    let spec = PresenceSpec {
+        exit: Some(Effect::fade().transition(exit.transition)),
+        ..PresenceSpec::default()
+    };
+    specs.insert(key, spec);
+}
+
 /// One element's motion.
 #[derive(Clone, Debug)]
 struct Entry {
@@ -787,6 +811,81 @@ mod tests {
         let end = f.build(after(), t1 + 100 * MS - frame());
         assert_eq!(end.children.len(), 2, "gone");
         assert!(!f.animating(), "no more frames");
+    }
+
+    #[test]
+    fn a_layer_leaving_is_drawn_over_the_window_where_it_was() {
+        // The app's layers: the view, then an overlay placed at (50, 60).
+        let layers = |overlay: bool| {
+            let mut roots = vec![LayoutNode::container(
+                Rect::from_xywh(0.0, 0.0, 200.0, 200.0),
+                vec![],
+            )];
+            if overlay {
+                let mut el = item("menu").exit(Effect::scale(0.5).transition(linear()));
+                let mut r = Resolver {
+                    states: &HashMap::new(),
+                    transitions: &mut Transitions::default(),
+                    watch: Default::default(),
+                    styled_actions: Vec::new(),
+                    styled_drops: Vec::new(),
+                    presence: HashMap::new(),
+                    anchors: Default::default(),
+                };
+                r.resolve(&mut el, ElementKey::root(1));
+                let specs = std::mem::take(&mut r.presence);
+                roots.push(crate::core::layout(
+                    &el,
+                    Rect::from_xywh(50.0, 60.0, 100.0, 20.0),
+                    None,
+                ));
+                let mut tree =
+                    LayoutNode::container(Rect::from_xywh(0.0, 0.0, 200.0, 200.0), roots);
+                tree.key = Some(ElementKey::LAYERS);
+                (tree, specs)
+            } else {
+                let mut tree =
+                    LayoutNode::container(Rect::from_xywh(0.0, 0.0, 200.0, 200.0), roots);
+                tree.key = Some(ElementKey::LAYERS);
+                (tree, HashMap::new())
+            }
+        };
+        let mut p = Presence::default();
+        let offsets = HashMap::new();
+        let (mut open, specs) = layers(true);
+        p.update(&mut open, &specs, None, &offsets, Some(T0), WINDOW);
+        assert!(p.anchors().contains(&ElementKey::LAYERS), "keep the layers");
+        let t1 = T0 + 500 * MS;
+        let (mut tree, specs) = layers(false);
+        p.update(&mut tree, &specs, Some(&open), &offsets, Some(t1), WINDOW);
+        let last = tree.clone();
+        let (mut tree, specs) = layers(false);
+        p.update(
+            &mut tree,
+            &specs,
+            Some(&last),
+            &offsets,
+            Some(t1 + 50 * MS - frame()),
+            WINDOW,
+        );
+        assert_eq!(tree.children.len(), 2, "the view, and the menu leaving");
+        let ghost = &tree.children[1];
+        assert!(ghost.ghost);
+        assert_eq!(ghost.bounds.origin, Point::new(50.0, 60.0), "where it was");
+        let t = ghost.transform.expect("shrinking");
+        assert!(close(t.scale.dx, 0.75), "{t:?}");
+        let last = tree.clone();
+        let (mut tree, specs) = layers(false);
+        p.update(
+            &mut tree,
+            &specs,
+            Some(&last),
+            &offsets,
+            Some(t1 + 100 * MS),
+            WINDOW,
+        );
+        assert_eq!(tree.children.len(), 1, "gone");
+        assert!(!p.animating() && !p.anchors().contains(&ElementKey::LAYERS));
     }
 
     #[test]

@@ -1628,23 +1628,33 @@ styling part of the toolkit.
   `ios()` and `adwaita()` (Linux) that `Theme::native()` picks per platform,
   their sources documented. Buttons fade their hover/press looks and shrink
   slightly (standard only); switches slide their thumb and fade the track;
-  check marks and radio dots pop in; segmented `tabs` cross-fade; the tab
-  bar's accent strip slides between tabs; select lists, drawn menus,
-  `open_menu` and the tab bar's list grow in; tooltips fade in; toasts slide
-  in, fade back out (kept drawn while leaving) and glide into place; the
-  drawn message box and `open_dialog` scale in; tree disclosure triangles
-  turn; the app's drop-target highlight fades with the drag-over level. All
-  through state overrides + transitions, `Animated`, transforms and opacity,
-  and the core's enter and layout animations for the stateless popups and
-  the toasts, so reduced motion snaps them. Nothing changes at rest (layouts and pixels
-  are identical; checked under Xvfb against the previous build for
-  `widgetsdemo`, `sessionsdemo`, `material3demo` and `themegallery`) and
-  what's open in a widget's first build doesn't animate in. Unit-tested at
-  fixed frame times (`widgets::motion_tests`). Not yet: popups, menus,
-  tooltips and dialogs closing (an overlay's exit needs the overlay kept
-  after the view stops declaring it, which the core's ghosts don't do yet),
-  a sliding indicator for the segmented `tabs`, and OS-drawn controls under
-  `Theme::native()`. See [docs/widgets.md](docs/widgets.md#motion).*
+  check marks and radio dots pop in; segmented `tabs` slide their accent
+  fill to the new tab (a keyed, layout-animated indicator in a layer between
+  the fills and the labels, through the new `Element::layers`) and fade the
+  rest; the tab bar's accent strip slides between tabs; select lists, drawn
+  menus, `open_menu` and the tab bar's list grow in and fade/shrink back out
+  (`popup_exit`); tooltips fade in and out; toasts slide in, fade back out
+  (kept drawn while leaving) and glide into place; the drawn message box and
+  `open_dialog` scale in and back out with their scrim (`dialog_exit`); tree
+  disclosure triangles turn; the app's drop-target highlight fades with the
+  drag-over level. All through state overrides + transitions, `Animated`,
+  transforms and opacity, and the core's enter, exit and layout animations:
+  an overlay's content with an exit effect is kept as a ghost over the
+  window after the view stops declaring it (under a node holding the
+  window's layers; overlays are identified per kind of anchor, so one
+  closing doesn't rename the others), taking no clicks, focus, hover or
+  screen-reader attention while it leaves, and a modal's scrim fades with
+  it; reduced motion snaps all of it. Nothing changes at rest (layouts and
+  pixels are identical; checked under Xvfb against the previous build for
+  `widgetsdemo`, `sessionsdemo`, `tabsdemo`, `bididemo`, `material3demo` and
+  `themegallery`) and what's open in a widget's first build doesn't animate
+  in. Unit-tested at fixed frame times (`widgets::motion_tests`,
+  `core::presence`), with App-level tests that a closing select list and a
+  closing dialog's scrim let clicks through and that the sliding tab
+  indicator, presented through damage regions only, leaves no stale pixels
+  (which caught borders' anti-aliased edges missing from the damage). Not
+  yet: OS-drawn controls under `Theme::native()`, and the scrim fading in.
+  See [docs/widgets.md](docs/widgets.md#motion).*
 - **Exit criteria:** a showcase example (drop area, animated list, interactive
   controls) whose animations are unit-tested at fixed frame times, with CI
   screenshots of mid-transition frames on the desktops and the web, and no CPU

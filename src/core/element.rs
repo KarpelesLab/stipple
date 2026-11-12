@@ -146,6 +146,14 @@ pub enum ElementKind {
         align: (Align, Align),
         children: Vec<Element>,
     },
+    /// Children laid over one another in the same box, the later ones drawn
+    /// on top (and hit first): each is placed within the content box per
+    /// `align` (horizontal, vertical), `Stretch` filling it. It measures as
+    /// big as its biggest child. Built with [`Element::layers`].
+    Layers {
+        align: (Align, Align),
+        children: Vec<Element>,
+    },
     /// An embedded-content viewport: a leaf reserving a rectangle the compositor
     /// fills with externally-rendered pixels for `id`. Sizes to its
     /// [`width`](Element::width)/[`height`](Element::height) overrides (or grow),
@@ -459,6 +467,31 @@ impl Element {
                 rows: Vec::new(),
                 column_gap: 0.0,
                 row_gap: 0.0,
+                align: (Align::Stretch, Align::Stretch),
+                children,
+            },
+            ..Self::stack(Axis::Vertical, Vec::new())
+        }
+    }
+
+    /// `children` stacked over one another in the same box, each later one
+    /// drawn over (and hit before) the ones before it: a background behind
+    /// content, a badge over an icon. Each child fills the box unless it's
+    /// sized, then sits per [`align`](Element::align) (horizontal, vertical);
+    /// the box is as big as the biggest child.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let card = Element::layers(vec![
+    ///     Element::boxed(BoxStyle { fill: Some(theme.palette.primary), ..BoxStyle::default() }),
+    ///     label(&theme, "Over the fill").padding(Insets::uniform(8.0)),
+    /// ]);
+    /// # let _ = card;
+    /// ```
+    pub fn layers(children: Vec<Element>) -> Self {
+        Self {
+            kind: ElementKind::Layers {
                 align: (Align::Stretch, Align::Stretch),
                 children,
             },
@@ -899,7 +932,9 @@ impl Element {
         fn set(el: &mut Element, dir: TextDirection) {
             match &mut el.kind {
                 ElementKind::Text { direction, .. } => *direction = dir,
-                ElementKind::Stack { children, .. } | ElementKind::Grid { children, .. } => {
+                ElementKind::Stack { children, .. }
+                | ElementKind::Grid { children, .. }
+                | ElementKind::Layers { children, .. } => {
                     for c in children {
                         set(c, dir);
                     }
@@ -917,7 +952,9 @@ impl Element {
         fn set(el: &mut Element, f: &dyn Fn(&mut TextStyle)) {
             match &mut el.kind {
                 ElementKind::Text { style, .. } => f(style),
-                ElementKind::Stack { children, .. } | ElementKind::Grid { children, .. } => {
+                ElementKind::Stack { children, .. }
+                | ElementKind::Grid { children, .. }
+                | ElementKind::Layers { children, .. } => {
                     for c in children {
                         set(c, f);
                     }
@@ -1118,7 +1155,8 @@ impl Element {
     }
 
     /// A stack's (main-axis, cross-axis) alignment of its children; for a grid,
-    /// the (horizontal, vertical) alignment of each child within its cell.
+    /// the (horizontal, vertical) alignment of each child within its cell; for
+    /// [`layers`](Element::layers), of each sized child within the box.
     pub fn align(mut self, main: Align, cross: Align) -> Self {
         match &mut self.kind {
             ElementKind::Stack {
@@ -1129,7 +1167,9 @@ impl Element {
                 *main_align = main;
                 *cross_align = cross;
             }
-            ElementKind::Grid { align, .. } => *align = (main, cross),
+            ElementKind::Grid { align, .. } | ElementKind::Layers { align, .. } => {
+                *align = (main, cross)
+            }
             _ => {}
         }
         self
@@ -1140,9 +1180,9 @@ impl Element {
     /// The element's children, for a container.
     pub(crate) fn children_mut(&mut self) -> Option<&mut Vec<Element>> {
         match &mut self.kind {
-            ElementKind::Stack { children, .. } | ElementKind::Grid { children, .. } => {
-                Some(children)
-            }
+            ElementKind::Stack { children, .. }
+            | ElementKind::Grid { children, .. }
+            | ElementKind::Layers { children, .. } => Some(children),
             _ => None,
         }
     }

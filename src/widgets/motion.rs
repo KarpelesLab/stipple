@@ -161,6 +161,19 @@ pub(crate) fn dialog_effect(m: &MotionTokens) -> Effect {
     Effect::custom(0.0, Transform::IDENTITY.scale(m.dialog_scale)).transition(Transition(m.dialog))
 }
 
+/// A popup closing, as an [`Effect`] for the core's exit animations (which
+/// keep it drawn, out of reach of the pointer, the keyboard and screen
+/// readers, until it's gone): fading out as it shrinks back about `origin`
+/// toward where it opened from.
+pub(crate) fn popup_exit(m: &MotionTokens, origin: (f64, f64)) -> Effect {
+    popup_effect(m, origin).transition(Transition(m.popup_exit))
+}
+
+/// The dialog (and the drawn message box) closing, as an [`Effect`].
+pub(crate) fn dialog_exit(m: &MotionTokens) -> Effect {
+    dialog_effect(m).transition(Transition(m.dialog_exit))
+}
+
 /// `overlay` composited `times` over `base` (`None`: nothing under it, so
 /// the overlay itself, `times` as opaque).
 pub(crate) fn lit(base: Option<Color>, overlay: Color, times: u8) -> Color {

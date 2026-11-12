@@ -543,9 +543,9 @@ mod tests {
     fn count_elements(el: &Element) -> usize {
         use crate::core::ElementKind;
         1 + match &el.kind {
-            ElementKind::Stack { children, .. } | ElementKind::Grid { children, .. } => {
-                children.iter().map(count_elements).sum()
-            }
+            ElementKind::Stack { children, .. }
+            | ElementKind::Grid { children, .. }
+            | ElementKind::Layers { children, .. } => children.iter().map(count_elements).sum(),
             _ => 0,
         }
     }

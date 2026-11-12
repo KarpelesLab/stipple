@@ -211,6 +211,38 @@ impl ElementKey {
     pub(crate) fn root(layer: usize) -> Self {
         Self::child(Self(0x726f_6f74), layer)
     }
+
+    /// The node that holds the window's layers (the main tree, then each
+    /// overlay) while there are overlays, or overlays leaving: what an
+    /// overlay's ghost is drawn under.
+    pub(crate) const LAYERS: ElementKey = ElementKey(0x6c61_7965_7273);
+
+    /// The identity of each overlay in `overlays`, declared in that order
+    /// (unless its content has a [`key`](crate::core::Element::key)): the
+    /// `n`th overlay of its kind of [`Anchor`](crate::core::Anchor). So a
+    /// popup closing doesn't change who the overlays of other kinds (a
+    /// toast, a tooltip) are, and they don't look like they left.
+    pub(crate) fn layers(overlays: &[crate::core::OverlaySpec]) -> Vec<ElementKey> {
+        use crate::core::Anchor;
+        let kind = |a: &Anchor| match a {
+            Anchor::At(_) => 1,
+            Anchor::Center => 2,
+            Anchor::Below(_) => 3,
+            Anchor::Popup(_) => 4,
+            Anchor::RightOf(_) => 5,
+            Anchor::Aligned { .. } => 6,
+        };
+        let mut seen = [0usize; 7];
+        overlays
+            .iter()
+            .map(|o| {
+                let k = kind(&o.anchor);
+                let n = seen[k];
+                seen[k] += 1;
+                Self::child(Self::root(k), n)
+            })
+            .collect()
+    }
 }
 
 /// A per-state style override: the style properties a closure given to
@@ -514,6 +546,31 @@ mod tests {
     use crate::core::layout;
     use crate::geometry::Rect;
     use crate::layout::Axis;
+
+    #[test]
+    fn an_overlay_closing_does_not_rename_the_others() {
+        use crate::core::{ActionId, Align, Anchor, OverlaySpec};
+        let spec = |anchor| OverlaySpec {
+            content: Element::stack(Axis::Vertical, vec![]),
+            anchor,
+            modal: false,
+            dismiss: None,
+        };
+        let toast = || {
+            spec(Anchor::Aligned {
+                horizontal: Align::End,
+                vertical: Align::End,
+                margin: 8.0,
+            })
+        };
+        let list = || spec(Anchor::Below(ActionId(3)));
+        let both = ElementKey::layers(&[list(), toast(), list()]);
+        let after = ElementKey::layers(&[toast(), list()]);
+        assert_eq!(both[1], after[0], "the toast is the same layer");
+        assert_eq!(both[0], after[1], "the first list of its kind");
+        assert_ne!(both[0], both[2]);
+        assert!(!both.contains(&ElementKey::LAYERS) && !both.contains(&ElementKey::root(0)));
+    }
 
     fn tree(el: &mut Element, states: &HashMap<ElementKey, Interaction>) -> (LayoutNode, Watch) {
         let mut transitions = Transitions::default();

@@ -83,6 +83,24 @@ Cells stretch their child by default. A child with a fixed `.width()` or
 Children are measured at their column's width, so wrapped text in an `fr`
 column wraps there and its row is tall enough.
 
+## Layers
+
+`Element::layers(children)` stacks its children over one another in the
+same box, each later one drawn over (and hit before) the ones before it: a
+fill behind content, a badge over an icon. Each child fills the box unless
+it's sized, then sits per `.align(horizontal, vertical)`; the box is as big as
+its biggest child.
+
+```rust
+let card = Element::layers(vec![
+    Element::boxed(BoxStyle { fill: Some(theme.palette.primary), ..BoxStyle::default() }),
+    label(&theme, "Over the fill").padding(Insets::uniform(8.0)),
+]);
+```
+
+The segmented `tabs` widget uses it to slide its selection indicator under
+its labels.
+
 ## Size constraints
 
 Any element can take a fixed size and bounds:

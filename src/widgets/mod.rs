@@ -1408,6 +1408,11 @@ pub fn radio<S>(
 /// Tapping a tab runs `on_select` with that tab's index. Stateless — store the
 /// selected index in your app state and render the matching content yourself.
 ///
+/// When the selection changes, the accent fill slides (and stretches) from
+/// the old tab to the new one under the labels, on the theme's
+/// [`indicator`](crate::style::MotionTokens::indicator) motion, while the
+/// tabs' own fills and labels fade on its `state` motion.
+///
 /// `on_select` must be `Clone` because it is stamped onto every tab (each with
 /// its own index); a plain closure capturing `Copy`/`Clone` data satisfies this.
 pub fn tabs<S>(
@@ -1418,36 +1423,78 @@ pub fn tabs<S>(
     on_select: impl Fn(&mut S, usize) + Clone + 'static,
 ) -> Element {
     let p = &theme.palette;
-    let mut cells = Vec::with_capacity(labels.len());
-    for (i, text) in labels.iter().enumerate() {
-        let active = i == selected;
-        let (fill, ink) = if active {
-            (p.primary, p.on_primary)
-        } else {
-            (p.surface, p.text)
-        };
-        let on = on_select.clone();
-        let state = Transition(theme.motion.state);
-        let cell = Element::stack(
-            Axis::Horizontal,
-            vec![
-                Element::text(*text, theme.typography.body, ink)
-                    .transition_for(AnimProp::TextColor, state),
-            ],
-        )
-        .fill(fill)
-        .transition_for(AnimProp::Fill, state)
-        .border(p.border, 1.0)
-        .radius(theme.radius)
-        .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-        .align(Align::Center, Align::Center)
-        .grow(1.0)
-        .on_tap(cx, move |s: &mut S| on(s, i));
-        cells.push(cell);
-    }
-    Element::stack(Axis::Horizontal, cells)
-        .gap(theme.spacing.xs)
-        .align(Align::Start, Align::Stretch)
+    let state = Transition(theme.motion.state);
+    let pad = Insets::symmetric(theme.spacing.md, theme.spacing.sm);
+    // Three layers of the same cells: the tabs' own fills, the selection
+    // indicator over them, and the labels (which take the taps) on top. The
+    // lower two size their cells with unseen, unread copies of the labels,
+    // so all three line up. At rest this draws exactly what one row of
+    // filled cells would.
+    let cell = |content: Element| {
+        Element::stack(Axis::Horizontal, vec![content])
+            .radius(theme.radius)
+            .padding(pad)
+            .align(Align::Center, Align::Center)
+            .grow(1.0)
+    };
+    let sizer = |text: &str| {
+        Element::text(text, theme.typography.body, p.text)
+            .opacity(0.0)
+            .role(Role::Group)
+    };
+    let row = |cells: Vec<Element>| {
+        Element::stack(Axis::Horizontal, cells)
+            .gap(theme.spacing.xs)
+            .align(Align::Start, Align::Stretch)
+    };
+    let labels_row: Vec<Element> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let ink = if i == selected { p.on_primary } else { p.text };
+            let on = on_select.clone();
+            let label = Element::text(*text, theme.typography.body, ink)
+                .transition_for(AnimProp::TextColor, state);
+            cell(label).on_tap(cx, move |s: &mut S| on(s, i))
+        })
+        .collect();
+    // The indicator is one element, wherever it is: keyed (by this strip's
+    // first tap, unique in the window), the core's layout animation slides
+    // it from the tab it was on.
+    let key = (
+        "stipple-tabs-indicator",
+        labels_row.first().and_then(|c| c.action),
+    );
+    let indicator: Vec<Element> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let c = cell(sizer(text));
+            if i == selected {
+                c.fill(p.primary)
+                    .border(p.border, 1.0)
+                    .key(key)
+                    .animate_layout(Transition(theme.motion.indicator))
+            } else {
+                c
+            }
+        })
+        .collect();
+    let fills: Vec<Element> = labels
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let c = cell(sizer(text));
+            let c = if i == selected {
+                c
+            } else {
+                c.fill(p.surface).border(p.border, 1.0)
+            };
+            c.transition_for(AnimProp::Fill, state)
+                .transition_for(AnimProp::Border, state)
+        })
+        .collect();
+    Element::layers(vec![row(fills), row(indicator), row(labels_row)])
 }
 
 /// A progress bar: a track with a primary-filled portion for `fraction` (0..=1).
@@ -1508,7 +1555,12 @@ pub fn menu(theme: &Theme, items: Vec<Element>) -> Element {
 
 /// Declare a non-modal dropdown overlay anchored with its top-left at `at`,
 /// containing `items` (from [`menu_item`]). `on_dismiss` fires on a press
-/// outside the menu. Call when the menu should be open.
+/// outside the menu. Call when the menu should be open: it grows in when it
+/// opens, and when the view stops calling this it's kept drawn (taking no
+/// input) while it fades back out, on the theme's [`MotionTokens`]
+/// (`popup`, `popup_exit`).
+///
+/// [`MotionTokens`]: crate::style::MotionTokens
 pub fn open_menu<S>(
     cx: &mut Cx<S>,
     theme: &Theme,
@@ -1516,8 +1568,10 @@ pub fn open_menu<S>(
     items: Vec<Element>,
     on_dismiss: impl FnMut(&mut S) + 'static,
 ) {
-    // It grows in from its corner as it opens.
-    let content = menu(theme, items).enter(motion::popup_effect(&theme.motion, (0.0, 0.0)));
+    // It grows in from its corner as it opens, and shrinks back as it closes.
+    let content = menu(theme, items)
+        .enter(motion::popup_effect(&theme.motion, (0.0, 0.0)))
+        .exit(motion::popup_exit(&theme.motion, (0.0, 0.0)));
     let dismiss = cx.register(on_dismiss);
     cx.overlay(OverlaySpec {
         content,
@@ -1529,7 +1583,10 @@ pub fn open_menu<S>(
 
 /// Declare a modal dialog overlay: a centered panel with `title`, a `body`
 /// element, and a right-aligned row of `actions` (buttons). A dark scrim behind
-/// it blocks the tree; pressing the scrim runs `on_dismiss`.
+/// it blocks the tree; pressing the scrim runs `on_dismiss`. It scales in when
+/// it opens and back out, with its scrim, when the view stops declaring it
+/// (taking no input meanwhile), on the theme's `dialog` and `dialog_exit`
+/// motion.
 pub fn open_dialog<S>(
     cx: &mut Cx<S>,
     theme: &Theme,
@@ -1550,7 +1607,8 @@ pub fn open_dialog<S>(
         ],
     )
     .width(340.0)
-    .enter(motion::dialog_effect(&theme.motion));
+    .enter(motion::dialog_effect(&theme.motion))
+    .exit(motion::dialog_exit(&theme.motion));
     cx.overlay(OverlaySpec {
         content,
         anchor: Anchor::Center,
@@ -1561,6 +1619,7 @@ pub fn open_dialog<S>(
 
 /// A small tooltip bubble showing `text` (a dark rounded label). Show it via
 /// `cx.overlay` anchored near the hovered element (non-modal, no dismiss).
+/// It fades in when it shows and out when the view stops showing it.
 pub fn tooltip(theme: &Theme, text: impl Into<String>) -> Element {
     Element::stack(
         Axis::Horizontal,
@@ -1573,8 +1632,9 @@ pub fn tooltip(theme: &Theme, text: impl Into<String>) -> Element {
     .fill(theme.palette.text)
     .radius(theme.radius / 2.0)
     .padding(Insets::symmetric(theme.spacing.sm, theme.spacing.xs))
-    // It fades in when it shows.
-    .enter(Effect::custom(0.0, Transform::IDENTITY).transition(Transition(theme.motion.popup)))
+    // It fades in when it shows, and out when it goes.
+    .enter(Effect::fade().transition(Transition(theme.motion.popup)))
+    .exit(Effect::fade().transition(Transition(theme.motion.popup_exit)))
 }
 
 #[cfg(test)]

@@ -255,3 +255,187 @@ fn a_leaving_element_stays_drawn_but_clicks_go_through_it() {
     let buttons = a11y.descendants().len() - 1;
     assert_eq!(buttons, 1, "only 3 is left to read: {a11y:?}");
 }
+
+/// A theme whose popups and dialogs open at once and take 5 s to close, so a
+/// test sees them leaving.
+fn slow_exits() -> crate::style::Theme {
+    let slow = crate::anim::Motion::tween(5.0, Easing::Linear);
+    crate::style::Theme::light().with_motion(crate::style::MotionTokens {
+        popup: crate::anim::Motion::Instant,
+        dialog: crate::anim::Motion::Instant,
+        popup_exit: slow,
+        dialog_exit: slow,
+        ..crate::style::MotionTokens::standard()
+    })
+}
+
+/// How many ghosts (copies drawn while something leaves) `node` holds.
+fn ghosts(node: &LayoutNode) -> usize {
+    if node.ghost {
+        1
+    } else {
+        node.children.iter().map(ghosts).sum()
+    }
+}
+
+#[test]
+fn a_closing_popup_is_drawn_but_clicks_focus_and_readers_go_past_it() {
+    use crate::widgets::{Select, select};
+    #[derive(Default)]
+    struct S {
+        size: Select,
+        under: u32,
+    }
+    let theme = slow_exits();
+    let mut app = App::new(S::default(), move |s: &S, cx: &mut Cx<S>| {
+        let pick = select(cx, &theme, &["Small", "Large"], &s.size, |s: &mut S| {
+            &mut s.size
+        });
+        // A big target under where the list drops.
+        let under = Element::stack(Axis::Vertical, vec![])
+            .width(300.0)
+            .height(200.0)
+            .on_tap(cx, |s: &mut S| s.under += 1);
+        Element::stack(Axis::Vertical, vec![pick, under])
+    })
+    .theme(slow_exits())
+    .logical_size(Size::new(300.0, 300.0));
+    let _ = app.render_frame();
+    // Open the list, and find "Large" in it.
+    assert!(app.click_at(Point::new(20.0, 10.0)));
+    let _ = app.render_frame();
+    assert!(app.state().size.is_open());
+    let a11y = crate::core::a11y::accessibility_tree(tree(&app), None);
+    let large = a11y
+        .descendants()
+        .into_iter()
+        .find(|n| n.name == "Large")
+        .expect("the open list is read")
+        .bounds;
+    let at = Point::new(large.min_x() + 10.0, large.min_y() + large.height() / 2.0);
+    // Choosing it closes the list: it stays drawn while it fades out...
+    assert!(app.click_at(at));
+    let _ = app.render_frame();
+    assert!(!app.state().size.is_open());
+    assert_eq!(app.state().size.selected(), Some(1));
+    assert!(app.animating(), "leaving: frames");
+    assert_eq!(ghosts(tree(&app)), 1, "the list, leaving");
+    // ...but a click where it is goes to what's under it,
+    assert!(app.click_at(at));
+    assert_eq!(app.state().under, 1, "the click went through");
+    assert!(!app.state().size.is_open(), "not opened or chosen again");
+    // and the keyboard and screen readers don't see it.
+    let _ = app.render_frame();
+    let mut focusables = Vec::new();
+    crate::core::collect_focusables(tree(&app), &mut focusables);
+    assert_eq!(focusables.len(), 1, "only the select's button");
+    let a11y = crate::core::a11y::accessibility_tree(tree(&app), None);
+    assert!(
+        !a11y.descendants().iter().any(|n| n.name == "Small"),
+        "{a11y:?}"
+    );
+}
+
+#[test]
+fn a_closing_dialog_fades_with_its_scrim_which_no_longer_blocks() {
+    #[derive(Default)]
+    struct S {
+        open: bool,
+        under: u32,
+    }
+    let theme = slow_exits();
+    let state = S {
+        open: true,
+        under: 0,
+    };
+    let mut app = App::new(state, move |s: &S, cx: &mut Cx<S>| {
+        if s.open {
+            crate::widgets::open_dialog(
+                cx,
+                &theme,
+                "Title",
+                Element::stack(Axis::Vertical, vec![]),
+                vec![],
+                |s: &mut S| s.open = false,
+            );
+        }
+        Element::stack(Axis::Vertical, vec![])
+            .width(300.0)
+            .height(300.0)
+            .on_tap(cx, |s: &mut S| s.under += 1)
+    })
+    .theme(slow_exits())
+    .logical_size(Size::new(400.0, 400.0));
+    let _ = app.render_frame();
+    // The scrim takes the click (and dismisses the dialog).
+    assert!(app.click_at(Point::new(5.0, 5.0)));
+    assert_eq!(app.state().under, 0);
+    assert!(!app.state().open);
+    let _ = app.render_frame();
+    let root = tree(&app);
+    assert_eq!(ghosts(root), 2, "the dialog and its scrim, leaving");
+    let scrim = root.children.iter().find(|c| c.ghost).expect("a scrim");
+    assert!(scrim.decoration.fill.is_some());
+    // Leaving, the scrim lets clicks through.
+    assert!(app.click_at(Point::new(5.0, 5.0)));
+    assert_eq!(app.state().under, 1);
+}
+
+/// The segmented `tabs` view, `selected` chosen, in a dark window.
+fn tab_strip(selected: usize) -> App<usize> {
+    App::new(selected, |s: &usize, cx: &mut Cx<usize>| {
+        let t = crate::style::Theme::dark();
+        let labels = ["Profile", "Settings", "About"];
+        let strip = crate::widgets::tabs(cx, &t, &labels, *s, |s: &mut usize, i| *s = i);
+        Element::stack(Axis::Vertical, vec![strip]).padding(crate::geometry::Insets::uniform(15.0))
+    })
+    .theme(crate::style::Theme::dark())
+    .logical_size(Size::new(360.0, 100.0))
+}
+
+#[test]
+fn the_tab_indicator_slides_and_presenting_only_the_damage_leaves_nothing_stale() {
+    use crate::core::Damage;
+    let mut app = tab_strip(0);
+    let (first, _) = app.render_frame();
+    let (w, h) = (first.size().width as usize, first.size().height as usize);
+    let stride = first.stride();
+    // A window that is only ever sent the damaged parts of each frame.
+    let mut screen = first.as_bytes().to_vec();
+    // The labels (the top layer) take the taps.
+    let settings = tree(&app).children[0].children[2].children[1].bounds;
+    assert!(app.click_at(Point::new(settings.min_x() + 5.0, settings.min_y() + 5.0)));
+    assert_eq!(*app.state(), 1);
+    let full = crate::geometry::Rect::from_xywh(0.0, 0.0, w as f64, h as f64);
+    let mut slid = false;
+    for _ in 0..300 {
+        let (p, d) = app.render_frame();
+        // The indicator (the middle layer's selected cell) is drawn moved.
+        slid |= tree(&app).children[0].children[1].children[1]
+            .transform
+            .is_some();
+        let rects = match &d {
+            Damage::Full => vec![full],
+            Damage::None => vec![],
+            r => r.to_physical(crate::geometry::ScaleFactor::new(1.0), full),
+        };
+        for r in rects {
+            for y in r.min_y() as usize..r.max_y() as usize {
+                let (s, e) = (
+                    y * stride + r.min_x() as usize * 4,
+                    y * stride + r.max_x() as usize * 4,
+                );
+                screen[s..e].copy_from_slice(&p.as_bytes()[s..e]);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(5));
+        if !app.animating() {
+            break;
+        }
+    }
+    assert!(slid, "the indicator slid over");
+    assert!(!app.animating(), "then rests");
+    // At rest it's what the strip draws when it starts on that tab.
+    let rest = tab_strip(1).render_once();
+    assert!(screen == rest.as_bytes(), "stale pixels left on screen");
+}

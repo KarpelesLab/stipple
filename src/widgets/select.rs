@@ -199,7 +199,9 @@ pub fn select<S, T: AsRef<str>>(
     if open {
         let t = motion::progress(cx, theme.motion.popup, opened);
         let list = option_list(cx, theme, &labels, state, field);
-        let list = motion::popup(list, &theme.motion, t, (0.5, 0.0));
+        // It grows in from its button, and fades back out when it closes.
+        let list = motion::popup(list, &theme.motion, t, (0.5, 0.0))
+            .exit(motion::popup_exit(&theme.motion, (0.5, 0.0)));
         let dismiss = cx.register(move |s: &mut S| field(s).close());
         cx.overlay(OverlaySpec {
             content: list,
