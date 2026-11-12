@@ -84,10 +84,28 @@ wait_for "Stipple Android: window [0-9]+x[0-9]+ presented=true" 90
 wait_for "androiddemo: tick 3 " 60
 adb exec-out screencap -p > "$shots/android.png"
 
-# The button covers the middle of the screen.
 size="$(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)"
 read -r width height <<< "$size"
-adb shell input tap $((width / 2)) $((height / 2))
+# Where the "Tap me" button is, from its accessibility node: the layout
+# depends on the screen (CI's emulator is 320x640, a Pixel 6 much larger).
+wait_for "stipple: host view installed" 30
+tap_me=""
+for _ in $(seq 10); do
+  adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || true
+  tap_me="$(adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' \
+    | grep -E 'text="Tap me"' | head -1 \
+    | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' \
+    | awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')"
+  [ -n "$tap_me" ] && break
+  sleep 1
+done
+if [ -z "$tap_me" ]; then
+  echo "no \"Tap me\" node; tapping the middle of the screen" >&2
+  tap_me="$((width / 2)) $((height / 2))"
+fi
+read -r tap_x tap_y <<< "$tap_me"
+echo "android: \"Tap me\" at $tap_x,$tap_y"
+adb shell input tap "$tap_x" "$tap_y"
 wait_for "androiddemo: tapped 1" 30
 if ((sdk >= 33)); then
   # The app now has something to go back from: predictive back's callback
@@ -129,7 +147,7 @@ if ((sdk >= 34)); then
   sleep 3
   registered="$(count "stipple: back callback registered")"
   handled="$(count "androiddemo: back handled")"
-  adb shell input tap $((width / 2)) $((height / 2))
+  adb shell input tap "$tap_x" "$tap_y"
   for _ in $(seq 20); do
     (($(count "stipple: back callback registered") > registered)) && break
     sleep 1
@@ -149,7 +167,7 @@ if ((sdk >= 34)); then
   # ...while one the finger takes back to the edge goes nowhere.
   registered="$(count "stipple: back callback registered")"
   handled="$(count "androiddemo: back handled")"
-  adb shell input tap $((width / 2)) $((height / 2))
+  adb shell input tap "$tap_x" "$tap_y"
   for _ in $(seq 20); do
     (($(count "stipple: back callback registered") > registered)) && break
     sleep 1
@@ -431,10 +449,10 @@ for _ in $(seq 30); do
   sleep 1
 done
 sleep 2
-adb shell input tap $((width / 2)) $((height / 2))
+adb shell input tap "$tap_x" "$tap_y"
 wait_for "androiddemo: tapped 1" 30
 sleep 1
-adb shell input tap $((width / 2)) $((height / 2))
+adb shell input tap "$tap_x" "$tap_y"
 wait_for "androiddemo: tapped 2" 30
 # Home: the app goes to the background and saves its state.
 adb shell input keyevent KEYCODE_HOME

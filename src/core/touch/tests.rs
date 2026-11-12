@@ -706,3 +706,29 @@ fn a_finger_on_a_widget_doesnt_pinch() {
     assert_eq!(a, TouchAction::None);
     assert!(!s.pinching());
 }
+
+#[test]
+fn two_fingers_landing_on_a_fling_pinch() {
+    let mut s = TouchGestures::default();
+    let (_, end) = drag(&mut s, 500.0, 200.0, 6, 1.0 / 60.0);
+    s.touch(&touch(1, TouchPhase::Ended, 50.0, 200.0), end, over_list);
+    assert!(s.flinging());
+    // The first finger catches the fling; the second, landing next to it,
+    // still starts a pinch.
+    s.touch(
+        &touch(2, TouchPhase::Started, 40.0, 300.0),
+        end + 0.1,
+        over_photo,
+    );
+    assert!(!s.flinging());
+    let a = s.touch(
+        &touch(3, TouchPhase::Started, 80.0, 300.0),
+        end + 0.11,
+        over_photo,
+    );
+    assert!(
+        matches!(a, TouchAction::Pinch(p) if p.phase == PinchPhase::Began),
+        "{a:?}"
+    );
+    assert!(s.pinching());
+}

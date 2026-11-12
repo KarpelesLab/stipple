@@ -291,14 +291,10 @@ impl TouchGestures {
                 TouchAction::None
             }
             // A second finger: a pinch, if something under the two takes it.
+            // The first may have caught a fling (stopping it) on its way
+            // down: two fingers landing on a list still gliding pinch too.
             (
-                State::Pending {
-                    id,
-                    at,
-                    caught: false,
-                    ..
-                }
-                | State::Dragging { id, at, .. },
+                State::Pending { id, at, .. } | State::Dragging { id, at, .. },
                 TouchPhase::Started,
             ) if id != touch.id => {
                 let mid = Point::new((at.x + p.x) / 2.0, (at.y + p.y) / 2.0);
