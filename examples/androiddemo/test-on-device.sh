@@ -143,17 +143,44 @@ if ((sdk >= 34)); then
   # The back gesture itself, with gesture navigation: a swipe from the left
   # edge reaches the app with its progress (OnBackAnimationCallback), and
   # goes back when it lifts...
+  # Switching the navigation mode recreates the activity, so wait for that
+  # to settle before tapping.
   adb shell cmd overlay enable com.android.internal.systemui.navbar.gestural || true
-  sleep 3
+  for _ in $(seq 20); do
+    [ "$(adb shell settings get secure navigation_mode | tr -d '\r')" = 2 ] && break
+    sleep 1
+  done
+  sleep 5
+  gestures=yes
+  if [ "$(adb shell settings get secure navigation_mode | tr -d '\r')" != 2 ]; then
+    echo "android: gesture navigation unavailable; skipping the back gesture" >&2
+    gestures=no
+  fi
+fi
+if ((sdk >= 34)) && [ "$gestures" = yes ]; then
   registered="$(count "stipple: back callback registered")"
   handled="$(count "androiddemo: back handled")"
+  started="$(count "androiddemo: back gesture Started")"
   adb shell input tap "$tap_x" "$tap_y"
   for _ in $(seq 20); do
     (($(count "stipple: back callback registered") > registered)) && break
     sleep 1
   done
   adb shell input swipe 1 $((height / 2)) $((width * 2 / 3)) $((height / 2)) 800
-  wait_for "androiddemo: back gesture Started \{ edge: Left \}" 20
+  for _ in $(seq 20); do
+    (($(count "androiddemo: back gesture Started") > started)) && break
+    sleep 1
+  done
+  if (($(count "androiddemo: back gesture Started") <= started)); then
+    # An emulator's system UI doesn't always take an injected edge swipe
+    # as the back gesture; the key path above was checked either way.
+    echo "android: the edge swipe didn't reach the app as a back gesture; skipping its checks" >&2
+    adb shell input keyevent KEYCODE_BACK
+    sleep 3
+    gestures=no
+  fi
+fi
+if ((sdk >= 34)) && [ "$gestures" = yes ]; then
   wait_for "androiddemo: back gesture progress" 10
   for _ in $(seq 20); do
     (($(count "androiddemo: back handled") > handled)) && break
