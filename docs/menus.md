@@ -55,7 +55,7 @@ To quit from a menu, keep a clone of `App::handle()` in the closure and call
 | macOS | the system menu bar (`NSMenu`), behind the standard application menu | ✅ | native (`NSMenu`) |
 | Windows | the window's native menu bar (`HMENU`) | ✅ | native (`TrackPopupMenuEx`) |
 | Linux (X11, Wayland) | drawn by Stipple across the top of the window | ✅ | drawn by Stipple |
-| iOS, Android, web | drawn by Stipple | where keys arrive | drawn by Stipple |
+| iOS, Android, web | drawn by Stipple | where keys arrive | drawn by Stipple; a long press opens them on a touch screen |
 
 **macOS.** The menu bar belongs to the application. Stipple puts the
 standard application menu first, named after the window title: About, Hide
@@ -137,7 +137,10 @@ label(&theme, "Right-click me").context_menu(
 
 It opens at the pointer on a right-click over the element, or on the Menu key
 or Shift+F10 while the pointer is over it (or, failing that, while the element
-has focus).
+has focus). On a touch screen a long press opens it: a finger held still on
+the element for half a second (see
+[pointer-events.md](pointer-events.md#touch-gestures)); lifting that finger
+picks nothing, and a tap then picks an item.
 
 **macOS and Windows** show it as the system's own popup menu: an `NSMenu`
 (`popUpMenuPositioningItem:atLocation:inView:`) or a `TrackPopupMenuEx` menu
@@ -149,10 +152,19 @@ popup always looks like the system's, whatever the theme, the way the native
 menu bar does; for menus that match a custom theme, use
 `.menu_bar_in_window(true)`, which draws the context menus too.
 
-**Elsewhere** (Linux, and where the platform has no popup menus) Stipple draws
-it as an overlay, like a select's list. It moves left or up if it would cross
-the window's edge, and the same keys and mouse moves work in it as in the menu
+**Elsewhere** (Linux, iOS, Android and the web) Stipple draws it as an
+overlay, like a select's list. It moves left or up if it would cross the
+window's edge, and the same keys and mouse moves work in it as in the menu
 bar's menus.
+
+**On phones and tablets** the drawn menu is used on purpose rather than
+`UIMenu` / `UIContextMenuInteraction` on iOS or a `PopupMenu` on Android: it
+follows the app's theme, keeps one behavior (and one set of tests) across
+platforms, and needs no further native code. The menu bar is drawn too, across
+the top of the window as on Linux, and its menus open on a tap. Phone apps
+usually have no menu bar: leave `App::menu` out on those targets (say with
+`cfg!(any(target_os = "ios", target_os = "android"))`), or keep it for
+tablets with a keyboard, where its shortcuts work.
 
 ## Tray menus
 
@@ -189,6 +201,13 @@ roles. Native menu bars on macOS and Windows are exposed by the OS itself.
   CI checks that each ran once and ⌘C in the field didn't run the menu item.
   Steps are given in the variable, e.g.
   `perform=Edit/Add Item;key=cmd+d;right=320,300;key=tab;key=cmd+c`.
+
+- **Touch** (the App, unit-tested; and on devices): a long press opens a
+  context menu and a tap picks from it (`src/touch_tests.rs`); CI does the
+  same on the iOS simulator (`touchdemo`, through the backend's touch path),
+  on the Android emulator (`adb shell input swipe` held still, then a tap on
+  the item `uiautomator dump` finds) and in headless Chrome (synthetic
+  `TouchEvent`s on `webdemo`).
 
 ## What's not there yet
 

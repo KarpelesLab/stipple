@@ -66,6 +66,11 @@ macro_rules! web_app {
             }
 
             #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_touch(phase: u32, id: u32, x: f64, y: f64) {
+                glue::touch(phase, id, x, y);
+            }
+
+            #[unsafe(no_mangle)]
             pub extern "C" fn stipple_wheel(dx: f64, dy: f64, mode: u32) {
                 glue::wheel(dx, dy, mode);
             }

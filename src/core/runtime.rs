@@ -788,6 +788,16 @@ impl<'a, S> Cx<'a, S> {
         self.pointers.set_wheel(id, handler)
     }
 
+    /// Register a pinch handler on `id` (or a new id), returning the id.
+    /// Prefer [`Element::on_pinch`](crate::core::Element::on_pinch).
+    pub fn register_pinch(
+        &mut self,
+        id: Option<crate::core::PointerId>,
+        handler: impl FnMut(&crate::core::PinchEvent, &mut S) + 'static,
+    ) -> crate::core::PointerId {
+        self.pointers.set_pinch(id, handler)
+    }
+
     /// Register `menu` as the context menu of an element, returning the
     /// [`ContextId`] to stamp on it. The app opens it on a right-click (or the
     /// Menu key) over the element. Prefer
@@ -1227,6 +1237,10 @@ pub struct LayoutNode {
     /// Scroll container handle: wheel events over this node adjust the app's
     /// offset for `id`, and its children are laid out at natural size + shifted.
     pub scroll: Option<ScrollId>,
+    /// Whether the scroll container scrolls sideways: a horizontal stack made
+    /// [`scrollable`](crate::core::Element::scrollable) (its offset then
+    /// counts from the left, or from the right when laid out right to left).
+    pub scroll_horizontal: bool,
     /// When `true`, children are clipped to this node's `bounds` when painted
     /// (set for scroll containers and overlay panels).
     pub clip: bool,
@@ -1291,6 +1305,7 @@ impl LayoutNode {
             wrap: false,
             native: None,
             scroll: None,
+            scroll_horizontal: false,
             clip: false,
             cursor: None,
             semantics: None,
@@ -1638,6 +1653,56 @@ pub fn scroll_at(node: &LayoutNode, point: Point) -> Option<ScrollId> {
     }
 }
 
+/// The innermost vertical and horizontal scroll containers under a point
+/// (see [`scroll_targets_at`]): a drag picks the one along its direction, so a
+/// sideways strip inside a vertical list scrolls sideways and the list up and
+/// down.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ScrollTargets {
+    /// The innermost container that scrolls up and down.
+    pub vertical: Option<ScrollId>,
+    /// The innermost container that scrolls sideways.
+    pub horizontal: Option<ScrollId>,
+}
+
+impl ScrollTargets {
+    /// Whether there is no container under the point.
+    pub fn is_empty(&self) -> bool {
+        self.vertical.is_none() && self.horizontal.is_none()
+    }
+}
+
+/// The innermost vertical and horizontal scroll containers containing
+/// `point`, through transforms and clipping, in the top-most subtree that has
+/// any.
+pub fn scroll_targets_at(node: &LayoutNode, point: Point) -> ScrollTargets {
+    let mut found = ScrollTargets::default();
+    let Some(point) = node.to_local(point) else {
+        return found;
+    };
+    if clipped_out(node, point) {
+        return found;
+    }
+    for child in node.children.iter().rev() {
+        let inner = scroll_targets_at(child, point);
+        if !inner.is_empty() {
+            found = inner;
+            break;
+        }
+    }
+    if let Some(id) = node.scroll
+        && node.bounds.contains(point)
+    {
+        let slot = if node.scroll_horizontal {
+            &mut found.horizontal
+        } else {
+            &mut found.vertical
+        };
+        slot.get_or_insert(id);
+    }
+    found
+}
+
 /// Find the scroll-container node carrying `id`, if present.
 pub fn find_scroll(node: &LayoutNode, id: ScrollId) -> Option<&LayoutNode> {
     if node.scroll == Some(id) {
@@ -1768,6 +1833,7 @@ mod tests {
             wrap: false,
             native: None,
             scroll: None,
+            scroll_horizontal: false,
             clip: false,
             cursor: None,
             semantics: None,
@@ -1866,6 +1932,7 @@ mod tests {
             wrap: false,
             native: None,
             scroll: None,
+            scroll_horizontal: false,
             clip: false,
             cursor: None,
             semantics: None,

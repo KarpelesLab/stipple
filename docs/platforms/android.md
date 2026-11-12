@@ -58,13 +58,23 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
   phase and position). The first finger down is also the pointer, until it
   lifts; a tap is a press and release, and lifting a finger leaves no hover
   behind. A mouse adds its right and middle buttons, hover and the wheel.
-- **Touch scrolling.** A finger dragged in a scroll container scrolls it, and
-  keeps it going (a fling that slows down, and stops at the end of the content)
-  if it lifts while moving. A press only becomes a scroll once the finger has
-  moved 8 logical pixels, mostly vertically, so taps still click; once it
-  scrolls, the pressed button lets go and doesn't click. A finger on a slider
-  drags the slider, and a finger that lands on a fling stops it. This lives in
-  the toolkit, so it works the same on iOS; desktop mice keep the wheel.
+- **Touch gestures.** A finger dragged in a scroll container scrolls it
+  (sideways in a horizontal one), and keeps it going (a fling that slows down,
+  and stops at the end of the content) if it lifts while moving. A press only
+  becomes a scroll once the finger has moved 8 logical pixels, so taps still
+  click; once it scrolls, the pressed button lets go and doesn't click. A
+  finger on a slider drags the slider, and a finger that lands on a fling
+  stops it. A finger held still for half a second on an element with a context
+  menu opens the menu (a long press), and two fingers (`POINTER_DOWN`) pinch,
+  pan and turn an element with `on_pinch`. This lives in the toolkit, so it
+  works the same on iOS and the web; see
+  [pointer-events.md](../pointer-events.md#touch-gestures). Desktop mice keep
+  the wheel.
+- **Menus.** Context menus are drawn by Stipple, not a `PopupMenu`, and open
+  on a long press (or a mouse's right button); a tap picks an item, a tap
+  outside or Back closes the menu. An `App::menu` bar is drawn across the top
+  of the window, as on Linux, with its menus opening on a tap; leave
+  `App::menu` out on Android if a phone shouldn't show one.
 - **Keys.** Named keys (arrows, Enter, Backspace, Delete, Home/End, PageUp/Down,
   Tab, Escape, F1–F12) become `Event::Key`, with Shift, Ctrl, Alt and Meta.
   Other keys go through the keyboard's own `KeyCharacterMap` (over JNI), so any
@@ -273,7 +283,10 @@ installs the APK on whatever device `adb` talks to (`ANDROID_SERIAL` picks
 one), checks a frame is presented and the timer ticks, taps the button, reads
 the accessibility nodes with `uiautomator dump`, presses Back (handled), sends
 the app to the background and back and trims its memory, swipes the list (it
-must scroll, without tapping a row), types into the field and runs the input
+must scroll, without tapping a row), long-presses a row (`input swipe` that
+stays put for 800 ms: its context menu must open without tapping the row, and
+a tap on the item found in `uiautomator dump` picks it), swipes the strip of
+chips sideways (it must scroll), types into the field and runs the input
 connection self-test (the field must end up as `Stipple日本!`), presses Back
 until the app no longer handles it, and saves screenshots. On Android 13 and
 later it also checks predictive back (Back through the callback while the app
@@ -293,9 +306,9 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
 
 ## Known gaps
 
-- **No multi-touch gestures.** Every finger is reported as an `Event::Touch`,
-  but nothing recognizes pinches or two-finger pans yet, and scroll containers
-  only scroll vertically.
+- **Two-finger gestures aren't checked on the emulator.** `adb shell input`
+  has a single finger, so pinches are covered by the recognizer's unit tests
+  and by `touchdemo`'s iOS simulator self-test, which share the code.
 - **A slow app loses quick swipes' moves.** On a busy UI thread (the emulator's
   software rendering takes a few hundred milliseconds a frame), Android can fold
   a quick swipe's moves into its release; the list then scrolls the whole way

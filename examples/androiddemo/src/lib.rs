@@ -33,7 +33,11 @@
 //!   app goes to the background, comes back, or is asked to free memory;
 //! - `androiddemo: scrolled to N` as a finger drag (`adb shell input swipe`)
 //!   scrolls the list at the bottom of the screen, and `androiddemo: row N
-//!   tapped` if one of its rows is tapped (a swipe must not tap one).
+//!   tapped` if one of its rows is tapped (a swipe must not tap one);
+//! - `androiddemo: row N pinned` when the item of a row's context menu is
+//!   picked: a long press (`adb shell input swipe x y x y 800`) opens it;
+//! - `androiddemo: strip scrolled to N` as a sideways swipe scrolls the strip
+//!   of chips above the list.
 //!
 //! Non-Android builds compile to an empty cdylib so `cargo build --workspace`
 //! works everywhere.
@@ -66,6 +70,8 @@ mod app {
     static FRAMES: AtomicU32 = AtomicU32::new(0);
     /// The list's scroll offset in the frame last built (`f64` bits).
     static OFFSET: AtomicU64 = AtomicU64::new(0);
+    /// The strip's scroll offset in the frame last built (`f64` bits).
+    static STRIP_OFFSET: AtomicU64 = AtomicU64::new(0);
 
     fn view(state: &State, cx: &mut Cx<State>) -> Element {
         FRAMES.fetch_add(1, Ordering::Relaxed);
@@ -124,6 +130,14 @@ mod app {
                     .on_tap(cx, move |_: &mut State| {
                         println!("androiddemo: row {i} tapped")
                     })
+                    // A long press opens it.
+                    .context_menu(
+                        cx,
+                        Menu::new("").item(MenuItem::new(
+                            format!("Pin row {i}"),
+                            move |_: &mut State| println!("androiddemo: row {i} pinned"),
+                        )),
+                    )
             })
             .collect();
         let id = cx.register_scroll();
@@ -135,7 +149,19 @@ mod app {
             .height(240.0)
             .scrollable(id)
             .align(Align::Start, Align::Center);
-        column(vec![top, tap, label(&theme, greeting), list])
+        // A strip of chips a sideways swipe scrolls.
+        let chips = (0..12)
+            .map(|i| button_labeled(&theme, format!("Chip {i}")).width(90.0))
+            .collect();
+        let strip_id = cx.register_scroll();
+        let strip_offset = cx.scroll_offset(strip_id);
+        if STRIP_OFFSET.swap(strip_offset.to_bits(), Ordering::Relaxed) != strip_offset.to_bits() {
+            println!("androiddemo: strip scrolled to {strip_offset:.0}");
+        }
+        let strip = Element::stack(Axis::Horizontal, vec![row(chips).gap(theme.spacing.sm)])
+            .width(280.0)
+            .scrollable(strip_id);
+        column(vec![top, tap, label(&theme, greeting), strip, list])
             .gap(theme.spacing.lg)
             .align(Align::Center, Align::Center)
             .padding(Insets::uniform(theme.spacing.lg))

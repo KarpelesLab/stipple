@@ -399,6 +399,11 @@ export async function start(canvas, wasmUrl, options = {}) {
   if (canvas.tabIndex < 0) canvas.tabIndex = 0;
   canvas.style.outline = "none";
   canvas.style.touchAction = "none";
+  // A long press is the app's (its context menu), not the browser's callout
+  // or text selection.
+  canvas.style.webkitTouchCallout = "none";
+  canvas.style.webkitUserSelect = "none";
+  canvas.style.userSelect = "none";
   place();
 
   const size = () => {
@@ -422,7 +427,13 @@ export async function start(canvas, wasmUrl, options = {}) {
     const r = canvas.getBoundingClientRect();
     return [ev.clientX - r.left, ev.clientY - r.top];
   };
+  // Fingers come as touch events (below), each as a touch of its own; their
+  // pointer events are left out. A module without `stipple_touch` (an older
+  // build) takes touches as the mouse.
+  const fingers = !!e.stipple_touch;
+  const finger = (ev) => fingers && ev.pointerType === "touch";
   canvas.addEventListener("pointerdown", (ev) => {
+    if (finger(ev)) return;
     ev.preventDefault();
     focusQuietly(input);
     try { canvas.setPointerCapture(ev.pointerId); } catch (_) {}
@@ -431,6 +442,7 @@ export async function start(canvas, wasmUrl, options = {}) {
     e.stipple_pointer(1, ev.button, x, y, mods(ev));
   });
   canvas.addEventListener("pointermove", (ev) => {
+    if (finger(ev)) return;
     const [x, y] = at(ev);
     e.stipple_pointer(0, 0, x, y, mods(ev));
     // A button pressed or released while another is down (a "chord")
@@ -445,14 +457,35 @@ export async function start(canvas, wasmUrl, options = {}) {
     if (ev.button === 1) ev.preventDefault();
   });
   const release = (ev) => {
+    if (finger(ev)) return;
     const [x, y] = at(ev);
     e.stipple_pointer(2, ev.button < 0 ? 0 : ev.button, x, y, mods(ev));
   };
   canvas.addEventListener("pointerup", release);
   canvas.addEventListener("pointercancel", release);
   canvas.addEventListener("pointerleave", (ev) => {
+    if (finger(ev)) return;
     if (!canvas.hasPointerCapture?.(ev.pointerId)) e.stipple_pointer(3, 0, 0, 0, 0);
   });
+  // Touch events: every finger that changed, in CSS pixels relative to the
+  // canvas. The app recognizes the gestures (scrolling and flinging, long
+  // press for the context menu, pinch), the same way on every platform.
+  // Taking them (preventDefault) keeps the browser from scrolling or zooming
+  // the page and from sending the mouse events it emulates.
+  const touch = (phase) => (ev) => {
+    if (ev.cancelable) ev.preventDefault();
+    if (phase === 0) focusQuietly(input);
+    const r = canvas.getBoundingClientRect();
+    for (const t of ev.changedTouches) {
+      e.stipple_touch(phase, t.identifier >>> 0, t.clientX - r.left, t.clientY - r.top);
+    }
+  };
+  if (fingers) {
+    canvas.addEventListener("touchstart", touch(0), { passive: false });
+    canvas.addEventListener("touchmove", touch(1), { passive: false });
+    canvas.addEventListener("touchend", touch(2), { passive: false });
+    canvas.addEventListener("touchcancel", touch(3), { passive: false });
+  }
   canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
   canvas.addEventListener("wheel", (ev) => {
     ev.preventDefault();

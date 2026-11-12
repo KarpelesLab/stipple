@@ -2566,7 +2566,10 @@ jobs:
   # dead keys, the ARIA overlay (roles, names, a click on an element activating
   # it), the theme following prefers-color-scheme (run once dark, once light),
   # prefers-reduced-motion (a third run with it forced: a theme change snaps
-  # instead of cross-fading), a second app instance on the same page, opening and saving a file, and
+  # instead of cross-fading), a second app instance on the same page, touch
+  # events (a tap, and a long press opening a context menu whose item a tap
+  # picks; skipped if the browser lacks the TouchEvent constructor), opening
+  # and saving a file, and
   # resizing. multi.html (two apps side by side) is screenshotted too.
   visual-web:
     name: Visual test (Web / wasm)
@@ -3496,8 +3499,12 @@ jobs:
       # commit, an autocorrect-style replaceRange:withText:), drags its list
       # with a synthetic finger through the backend's touch path, taps away,
       # then reads the view's accessibility elements as VoiceOver does and
-      # activates a row through one. It logs to its tmp dir, read back here.
-      - name: Touch scrolling, the keyboard, composition and accessibility (touchdemo self-test)
+      # activates a row through one; then it long-presses a row (its context
+      # menu opens and its item is picked through accessibility), drags a
+      # strip sideways and pinches a box with two synthetic fingers, all
+      # through the backend's touch path. It logs to its tmp dir, read back
+      # here.
+      - name: Touch scrolling, gestures, the keyboard, composition and accessibility (touchdemo self-test)
         run: |
           cargo build --release -p touchdemo --target aarch64-apple-ios-sim
           cp target/aarch64-apple-ios-sim/release/touchdemo Stipple.app/window
@@ -3536,6 +3543,11 @@ jobs:
           grep -qE "touchdemo: a11y [1-9][0-9]* elements" "$LOG"
           grep -q 'touchdemo: activating "Row' "$LOG"
           grep -qE "touchdemo: row [0-9]+ tapped" "$LOG"
+          # Gestures: a long press opened a row's context menu (its item was
+          # picked), a sideways drag scrolled the strip, two fingers pinched.
+          grep -qE "touchdemo: row [0-9]+ pinned" "$LOG"
+          grep -qE "touchdemo: strip scrolled to [1-9][0-9]*" "$LOG"
+          grep -qE "touchdemo: pinch Ended scale 2\.[45]" "$LOG"
           grep -q "touchdemo: selftest passed" "$LOG"
 
       # touchdemo's second part, driven from here: the simulator switches to

@@ -1,12 +1,14 @@
 //! Raw pointer and wheel events for custom elements: every button, the
 //! modifiers held, click counts, moves, the pointer leaving, and wheel and
-//! trackpad deltas with their units and phase. See
-//! [`Element::on_pointer`](crate::core::Element::on_pointer) and
-//! [`Element::on_wheel`](crate::core::Element::on_wheel), and
+//! trackpad deltas with their units and phase, and two-finger pinches on
+//! touch screens. See
+//! [`Element::on_pointer`](crate::core::Element::on_pointer),
+//! [`Element::on_wheel`](crate::core::Element::on_wheel) and
+//! [`Element::on_pinch`](crate::core::Element::on_pinch), and
 //! `docs/pointer-events.md`.
 
 use crate::core::runtime::LayoutNode;
-use crate::geometry::{Point, Size};
+use crate::geometry::{Point, Size, Vec2};
 use crate::platform::{Modifiers, PointerButton, ScrollPhase, ScrollUnit};
 
 /// An opaque handle to an element with pointer or wheel handlers (see
@@ -141,10 +143,58 @@ pub struct WheelEvent {
     pub modifiers: Modifiers,
 }
 
+/// Where a [`PinchEvent`] is in its gesture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PinchPhase {
+    /// The second finger landed: the gesture starts (scale 1, no rotation or
+    /// translation yet).
+    Began,
+    /// A finger moved.
+    Changed,
+    /// A finger lifted: the gesture ends with these values.
+    Ended,
+    /// The system took the touches away (an incoming call, a system
+    /// gesture): undo what the gesture did, if that matters.
+    Cancelled,
+}
+
+/// A two-finger gesture on a touch screen over an element with an
+/// [`on_pinch`](crate::core::Element::on_pinch) handler: pinching (scale),
+/// panning with both fingers (translation) and turning (rotation), all at
+/// once and each measured from where the gesture began, so a handler applies
+/// them to the value it had at [`Began`](PinchPhase::Began).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PinchEvent {
+    /// Where the gesture is.
+    pub phase: PinchPhase,
+    /// The distance between the fingers over the distance when it began:
+    /// above 1 spreading apart (zoom in), below 1 pinching together.
+    pub scale: f64,
+    /// How far the line between the fingers turned since it began, in
+    /// radians, clockwise on screen.
+    pub rotation: f64,
+    /// How far the midpoint between the fingers moved since it began
+    /// (logical pixels): a two-finger pan.
+    pub translation: Vec2,
+    /// The midpoint between the fingers in the element's coordinates (see
+    /// [`PointerEvent::position`]): the point to zoom about.
+    pub centroid: Point,
+    /// The midpoint in window coordinates.
+    pub window_centroid: Point,
+    /// The element's laid-out size.
+    pub size: Size,
+}
+
 type PointerFn<S> = Box<dyn FnMut(&PointerEvent, &mut S)>;
 type WheelFn<S> = Box<dyn FnMut(&WheelEvent, &mut S)>;
-/// An element's pointer and wheel handlers.
-type Slot<S> = (Option<PointerFn<S>>, Option<WheelFn<S>>);
+type PinchFn<S> = Box<dyn FnMut(&PinchEvent, &mut S)>;
+
+/// An element's pointer, wheel and pinch handlers.
+struct Slot<S> {
+    pointer: Option<PointerFn<S>>,
+    wheel: Option<WheelFn<S>>,
+    pinch: Option<PinchFn<S>>,
+}
 
 /// The pointer and wheel handlers registered while building a frame, by
 /// [`PointerId`].
@@ -164,7 +214,11 @@ impl<S> PointerHandlers<S> {
         match id {
             Some(id) if (id.0 as usize) < self.slots.len() => id,
             _ => {
-                self.slots.push((None, None));
+                self.slots.push(Slot {
+                    pointer: None,
+                    wheel: None,
+                    pinch: None,
+                });
                 PointerId(self.slots.len() as u32 - 1)
             }
         }
@@ -177,7 +231,7 @@ impl<S> PointerHandlers<S> {
         handler: impl FnMut(&PointerEvent, &mut S) + 'static,
     ) -> PointerId {
         let id = self.slot(id);
-        self.slots[id.0 as usize].0 = Some(Box::new(handler));
+        self.slots[id.0 as usize].pointer = Some(Box::new(handler));
         id
     }
 
@@ -188,18 +242,40 @@ impl<S> PointerHandlers<S> {
         handler: impl FnMut(&WheelEvent, &mut S) + 'static,
     ) -> PointerId {
         let id = self.slot(id);
-        self.slots[id.0 as usize].1 = Some(Box::new(handler));
+        self.slots[id.0 as usize].wheel = Some(Box::new(handler));
+        id
+    }
+
+    /// Set the pinch handler of `id` (or of a new id), returning the id.
+    pub(crate) fn set_pinch(
+        &mut self,
+        id: Option<PointerId>,
+        handler: impl FnMut(&PinchEvent, &mut S) + 'static,
+    ) -> PointerId {
+        let id = self.slot(id);
+        self.slots[id.0 as usize].pinch = Some(Box::new(handler));
         id
     }
 
     /// Whether `id` has a pointer handler.
     pub(crate) fn has_pointer(&self, id: PointerId) -> bool {
-        self.slots.get(id.0 as usize).is_some_and(|s| s.0.is_some())
+        self.slots
+            .get(id.0 as usize)
+            .is_some_and(|s| s.pointer.is_some())
     }
 
     /// Whether `id` has a wheel handler.
     pub(crate) fn has_wheel(&self, id: PointerId) -> bool {
-        self.slots.get(id.0 as usize).is_some_and(|s| s.1.is_some())
+        self.slots
+            .get(id.0 as usize)
+            .is_some_and(|s| s.wheel.is_some())
+    }
+
+    /// Whether `id` has a pinch handler.
+    pub(crate) fn has_pinch(&self, id: PointerId) -> bool {
+        self.slots
+            .get(id.0 as usize)
+            .is_some_and(|s| s.pinch.is_some())
     }
 
     /// Run `id`'s pointer handler. Returns whether there was one.
@@ -209,7 +285,11 @@ impl<S> PointerHandlers<S> {
         ev: &PointerEvent,
         state: &mut S,
     ) -> bool {
-        match self.slots.get_mut(id.0 as usize).and_then(|s| s.0.as_mut()) {
+        match self
+            .slots
+            .get_mut(id.0 as usize)
+            .and_then(|s| s.pointer.as_mut())
+        {
             Some(handler) => {
                 handler(ev, state);
                 true
@@ -220,7 +300,26 @@ impl<S> PointerHandlers<S> {
 
     /// Run `id`'s wheel handler. Returns whether there was one.
     pub(crate) fn dispatch_wheel(&mut self, id: PointerId, ev: &WheelEvent, state: &mut S) -> bool {
-        match self.slots.get_mut(id.0 as usize).and_then(|s| s.1.as_mut()) {
+        match self
+            .slots
+            .get_mut(id.0 as usize)
+            .and_then(|s| s.wheel.as_mut())
+        {
+            Some(handler) => {
+                handler(ev, state);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Run `id`'s pinch handler. Returns whether there was one.
+    pub(crate) fn dispatch_pinch(&mut self, id: PointerId, ev: &PinchEvent, state: &mut S) -> bool {
+        match self
+            .slots
+            .get_mut(id.0 as usize)
+            .and_then(|s| s.pinch.as_mut())
+        {
             Some(handler) => {
                 handler(ev, state);
                 true

@@ -12,6 +12,9 @@
 //! A theme change (the page's color scheme flipping) cross-fades, and snaps
 //! under `prefers-reduced-motion: reduce`.
 //!
+//! The counter has a context menu (right-click, or a long press on a touch
+//! screen) that adds ten.
+//!
 //! `index.html#selftest` drives it with scripted DOM events and reports what
 //! it saw (see the page). CI runs that in headless Chrome. The page reads the
 //! state through [`webdemo_probe`].
@@ -95,7 +98,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         text_field_row(&theme, notes),
         row(vec![
             button_labeled(&theme, format!("Clicked {} times", state.clicks))
-                .on_tap(cx, |s: &mut State| s.clicks += 1),
+                .on_tap(cx, |s: &mut State| s.clicks += 1)
+                // Right-click, or a long press on a touch screen.
+                .context_menu(
+                    cx,
+                    Menu::new("").item(MenuItem::new("Add ten", |s: &mut State| s.clicks += 10)),
+                ),
             open,
             save,
         ])

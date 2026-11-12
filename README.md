@@ -192,7 +192,8 @@ Pre-alpha. The whole workspace builds on **Rust 1.88** (edition 2024).
 Working today, each verified in CI on its platform:
 
 - The reactive toolkit: layout, state, tap / keyboard / focus / drag / hover /
-  scroll / context menus, caret-aware multi-line text editing with selection,
+  scroll / context menus, touch gestures (flings, sideways strips, long press
+  for context menus, pinch), caret-aware multi-line text editing with selection,
   word wrapping, clipboard, overlays, multi-window, and the widgets above.
 - Native backends: **X11** (with MIT-SHM present), **Wayland**, **Win32**,
   **Cocoa**, plus **web** (wasm + canvas), an **iOS UIKit** backend (run on the

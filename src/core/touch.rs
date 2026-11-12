@@ -1,28 +1,55 @@
-//! Touch scrolling: a finger dragged inside a scroll container scrolls it, and
-//! keeps going (a fling) when it lifts while moving.
+//! Touch gestures: a finger dragged inside a scroll container scrolls it
+//! (up and down, or sideways in a horizontal one) and keeps going (a fling)
+//! when it lifts while moving; a finger held still opens the context menu (a
+//! long press); two fingers pinch, pan and rotate an element that takes
+//! pinches.
 //!
-//! [`TouchScroll`] is the gesture's state machine, kept free of the app so it
-//! can be fed synthetic touches in tests. The app hands it every
-//! [`Touch`](crate::platform::Touch), asks it whether the first finger's
-//! pointer events should still reach widgets, and ticks it once per frame
-//! while it flings.
+//! [`TouchGestures`] is the recognizer's state machine, kept free of the app
+//! so it can be fed synthetic touches in tests and behaves the same on every
+//! platform (iOS, Android and the web hand it the same
+//! [`Touch`](crate::platform::Touch)es). The app hands it every touch, asks it
+//! whether the first finger's pointer events should still reach widgets, ticks
+//! it once per frame while it flings, and asks it when a held finger becomes a
+//! long press.
 //!
 //! A press doesn't become a scroll until the finger has moved more than
-//! [`SLOP`] logical pixels, mostly vertically, so a tap still clicks. Once it
-//! scrolls, the press is cancelled (the app clears the pressed button and any
-//! text selection the press started) and the finger's pointer events stop
-//! reaching widgets until it lifts. A finger that lands on a fling stops it,
-//! and that touch doesn't click either. Under
+//! [`SLOP`] logical pixels; the direction it moved picks the innermost
+//! container along that axis (a sideways strip inside a vertical list), and
+//! with none that way the widget under the finger keeps it (a slider, a
+//! swipe). Once it scrolls, the press is cancelled (the app clears the pressed
+//! button and any text selection the press started) and the finger's pointer
+//! events stop reaching widgets until it lifts. A finger that lands on a
+//! fling stops it, and that touch doesn't click either. Under
 //! [reduced motion](crate::anim::reduced_motion) there's no fling: the content
 //! stops where the finger lifts.
+//!
+//! A finger that stays within the slop for [`LONG_PRESS`] seconds over an
+//! element with a context menu (or a context handler) becomes a long press:
+//! the app opens the menu where the finger is, as a right-click does, and the
+//! press no longer taps when the finger lifts. Moving past the slop first (a
+//! scroll, a drag) or a second finger landing cancels it.
+//!
+//! A second finger landing while the first is still pressing or scrolling
+//! starts a pinch when an element under the two takes pinches
+//! ([`Element::on_pinch`](crate::core::Element::on_pinch)): the press or the
+//! scroll is cancelled, and every move reports the scale (the distance
+//! between the fingers over where it started), the rotation and the
+//! centroid's translation since the pinch began. It ends when either finger
+//! lifts; the other is then ignored until it lifts too. Without such an
+//! element a second finger is ignored, and the first goes on as before.
 
-use crate::geometry::Point;
+use crate::geometry::{Point, Vec2};
 use crate::platform::{Touch, TouchPhase};
 
-use super::ScrollId;
+use super::{PinchPhase, PointerId, ScrollId, ScrollTargets};
 
-/// How far (logical pixels) a finger moves before a press becomes a scroll.
+/// How far (logical pixels) a finger moves before a press becomes a scroll
+/// (and stops being a long press).
 pub const SLOP: f64 = 8.0;
+/// How long (seconds) a finger stays down and still before it is a long press:
+/// the delay of iOS's `UILongPressGestureRecognizer`, and close to Android's
+/// long-press timeout.
+pub const LONG_PRESS: f64 = 0.5;
 /// Fling speeds below this (logical px/s) aren't worth animating.
 const MIN_FLING: f64 = 50.0;
 /// The fastest fling (logical px/s).
@@ -35,32 +62,128 @@ const DECAY: f64 = 0.325;
 /// The span of finger movement (seconds) the release velocity is measured over.
 const VELOCITY_WINDOW: f64 = 0.1;
 
+/// What is under a finger, as far as gestures go: asked when the first finger
+/// goes down (at its position) and when a second one does (at the midpoint).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TouchTargets {
+    /// The scroll containers a drag can scroll.
+    pub scroll: ScrollTargets,
+    /// Whether holding the finger opens a context menu (or runs a context
+    /// handler) here.
+    pub long_press: bool,
+    /// The element that takes pinches here.
+    pub pinch: Option<PointerId>,
+}
+
+/// A pinch's state at one touch, for the app to hand to its element as a
+/// [`PinchEvent`](crate::core::PinchEvent).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pinch {
+    /// The element taking the pinch.
+    pub target: PointerId,
+    pub phase: PinchPhase,
+    /// The midpoint between the fingers (window coordinates).
+    pub centroid: Point,
+    /// The distance between the fingers over the distance when it began.
+    pub scale: f64,
+    /// How far the line between the fingers turned since it began (radians,
+    /// clockwise on screen).
+    pub rotation: f64,
+    /// How far the centroid moved since it began (logical pixels): a
+    /// two-finger pan.
+    pub translation: Vec2,
+}
+
 /// What the app should do after a touch.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TouchAction {
     /// Nothing changes for the app.
     None,
     /// The press became a scroll: cancel the pressed widget and any selection
-    /// it started, then scroll `target` by `dy`.
-    Begin { target: ScrollId, dy: f64 },
-    /// Scroll `target` by `dy` logical pixels (positive reveals content further
-    /// down). A release that moved since the last move sends this instead of
+    /// it started, then scroll `target` by `delta`.
+    Begin { target: ScrollId, delta: f64 },
+    /// Scroll `target` by `delta` logical pixels along its axis (positive
+    /// reveals content further down, or further towards the end of a sideways
+    /// one). A release that moved since the last move sends this instead of
     /// [`End`](Self::End), and may start a fling too.
-    Scroll { target: ScrollId, dy: f64 },
+    Scroll { target: ScrollId, delta: f64 },
     /// The scrolling finger lifted. If it was moving, a fling follows: call
-    /// [`TouchScroll::tick`] every frame while [`TouchScroll::flinging`].
+    /// [`TouchGestures::tick`] every frame while [`TouchGestures::flinging`].
     End,
+    /// A pinch began, moved or ended. When it begins, cancel the first
+    /// finger's press as for [`Begin`](Self::Begin).
+    Pinch(Pinch),
+}
+
+/// The two fingers of a pinch.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pair {
+    target: PointerId,
+    a: (u64, Point),
+    b: (u64, Point),
+    /// The distance, angle and midpoint when it began.
+    distance: f64,
+    angle: f64,
+    centroid: Point,
+}
+
+impl Pair {
+    fn new(target: PointerId, a: (u64, Point), b: (u64, Point)) -> Self {
+        let mut pair = Self {
+            target,
+            a,
+            b,
+            distance: 1.0,
+            angle: 0.0,
+            centroid: Point::new(0.0, 0.0),
+        };
+        let (distance, angle, centroid) = pair.measure();
+        // Two fingers on the same spot: measure from a pixel apart.
+        pair.distance = distance.max(1.0);
+        pair.angle = angle;
+        pair.centroid = centroid;
+        pair
+    }
+
+    fn measure(&self) -> (f64, f64, Point) {
+        let (p, q) = (self.a.1, self.b.1);
+        let (dx, dy) = (q.x - p.x, q.y - p.y);
+        let centroid = Point::new((p.x + q.x) / 2.0, (p.y + q.y) / 2.0);
+        ((dx * dx + dy * dy).sqrt(), dy.atan2(dx), centroid)
+    }
+
+    fn event(&self, phase: PinchPhase) -> Pinch {
+        let (distance, angle, centroid) = self.measure();
+        let mut rotation = angle - self.angle;
+        // The shorter way round.
+        if rotation > std::f64::consts::PI {
+            rotation -= std::f64::consts::TAU;
+        } else if rotation < -std::f64::consts::PI {
+            rotation += std::f64::consts::TAU;
+        }
+        Pinch {
+            target: self.target,
+            phase,
+            centroid,
+            scale: distance.max(1.0) / self.distance,
+            rotation,
+            translation: Vec2::new(centroid.x - self.centroid.x, centroid.y - self.centroid.y),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum State {
     Idle,
-    /// The first finger is down and hasn't moved past the slop. `target` is the
-    /// scroll container under it, if any; `caught` when it landed on a fling.
+    /// The first finger is down and hasn't moved past the slop; it went down
+    /// at `start` at time `since`, and is at `at`. `caught` when it landed on
+    /// a fling.
     Pending {
         id: u64,
         start: Point,
-        target: Option<ScrollId>,
+        at: Point,
+        since: f64,
+        targets: TouchTargets,
         caught: bool,
     },
     /// The first finger is down and its gesture belongs to a widget (a slider,
@@ -68,11 +191,13 @@ enum State {
     Yielded {
         id: u64,
     },
-    /// The first finger is scrolling `target`.
+    /// The first finger is scrolling `target` (sideways when `horizontal`);
+    /// it is at `at`.
     Dragging {
         id: u64,
         target: ScrollId,
-        last_y: f64,
+        horizontal: bool,
+        at: Point,
     },
     /// The finger lifted while moving; `target` keeps scrolling at `velocity`
     /// (logical px/s, in offset terms), slowing down.
@@ -81,34 +206,75 @@ enum State {
         velocity: f64,
         last: f64,
     },
+    /// The first finger became a long press: it is spent until it lifts.
+    LongPressed {
+        id: u64,
+    },
+    /// Two fingers are pinching.
+    Pinching(Pair),
+    /// A pinch ended with finger `id` still down: it is ignored until it lifts.
+    Settling {
+        id: u64,
+    },
 }
 
-/// The touch-scrolling state machine. See the [module docs](self).
+/// The touch gesture recognizer. See the [module docs](self).
 #[derive(Clone, Debug)]
-pub struct TouchScroll {
+pub struct TouchGestures {
     state: State,
-    /// Recent finger positions while dragging: (time, y).
+    /// The first finger down, which is also the pointer until it lifts.
+    primary: Option<u64>,
+    /// Recent finger positions along the scroll axis while dragging: (time,
+    /// coordinate).
     samples: Vec<(f64, f64)>,
 }
 
-impl Default for TouchScroll {
+impl Default for TouchGestures {
     fn default() -> Self {
         Self {
             state: State::Idle,
+            primary: None,
             samples: Vec::new(),
         }
     }
 }
 
-impl TouchScroll {
-    /// Feed one touch at time `now` (seconds, any fixed origin). `target_at`
-    /// finds the scroll container under a point, asked once, when the first
-    /// finger goes down. Other fingers are ignored.
+/// The coordinate of `p` along a container's axis.
+fn along(p: Point, horizontal: bool) -> f64 {
+    if horizontal { p.x } else { p.y }
+}
+
+impl TouchGestures {
+    /// Feed one touch at time `now` (seconds, any fixed origin). `targets_at`
+    /// says what is under a point: asked when the first finger goes down, and
+    /// at the midpoint when a second one lands while the first presses or
+    /// scrolls. Further fingers are ignored.
     pub fn touch(
         &mut self,
         touch: &Touch,
         now: f64,
-        target_at: impl FnOnce(Point) -> Option<ScrollId>,
+        targets_at: impl FnOnce(Point) -> TouchTargets,
+    ) -> TouchAction {
+        match touch.phase {
+            TouchPhase::Started if self.primary.is_none() => self.primary = Some(touch.id),
+            TouchPhase::Ended | TouchPhase::Cancelled if self.primary == Some(touch.id) => {
+                self.primary = None;
+            }
+            _ => {}
+        }
+        self.recognize(touch, now, targets_at)
+    }
+
+    /// The first finger down, which is also the pointer, while it is down.
+    pub fn primary(&self) -> Option<u64> {
+        self.primary
+    }
+
+    fn recognize(
+        &mut self,
+        touch: &Touch,
+        now: f64,
+        targets_at: impl FnOnce(Point) -> TouchTargets,
     ) -> TouchAction {
         let p = touch.position;
         match (self.state, touch.phase) {
@@ -117,66 +283,164 @@ impl TouchScroll {
                 self.state = State::Pending {
                     id: touch.id,
                     start: p,
-                    target: target_at(p),
+                    at: p,
+                    since: now,
+                    targets: targets_at(p),
                     caught,
                 };
+                TouchAction::None
+            }
+            // A second finger: a pinch, if something under the two takes it.
+            (
+                State::Pending {
+                    id,
+                    at,
+                    caught: false,
+                    ..
+                }
+                | State::Dragging { id, at, .. },
+                TouchPhase::Started,
+            ) if id != touch.id => {
+                let mid = Point::new((at.x + p.x) / 2.0, (at.y + p.y) / 2.0);
+                let Some(target) = targets_at(mid).pinch else {
+                    return TouchAction::None;
+                };
+                let pair = Pair::new(target, (id, at), (touch.id, p));
+                self.state = State::Pinching(pair);
+                self.samples.clear();
+                TouchAction::Pinch(pair.event(PinchPhase::Began))
+            }
+            (State::Pinching(mut pair), TouchPhase::Moved) => {
+                if pair.a.0 == touch.id {
+                    pair.a.1 = p;
+                } else if pair.b.0 == touch.id {
+                    pair.b.1 = p;
+                } else {
+                    return TouchAction::None;
+                }
+                self.state = State::Pinching(pair);
+                TouchAction::Pinch(pair.event(PinchPhase::Changed))
+            }
+            (State::Pinching(mut pair), TouchPhase::Ended | TouchPhase::Cancelled)
+                if pair.a.0 == touch.id || pair.b.0 == touch.id =>
+            {
+                let other = if pair.a.0 == touch.id {
+                    pair.a.1 = p;
+                    pair.b.0
+                } else {
+                    pair.b.1 = p;
+                    pair.a.0
+                };
+                self.state = State::Settling { id: other };
+                let phase = if touch.phase == TouchPhase::Cancelled {
+                    PinchPhase::Cancelled
+                } else {
+                    PinchPhase::Ended
+                };
+                TouchAction::Pinch(pair.event(phase))
+            }
+            (
+                State::Settling { id } | State::LongPressed { id },
+                TouchPhase::Ended | TouchPhase::Cancelled,
+            ) if id == touch.id => {
+                self.state = State::Idle;
                 TouchAction::None
             }
             (
                 State::Pending {
                     id,
                     start,
-                    target,
+                    since,
+                    targets,
                     caught,
+                    ..
                 },
                 TouchPhase::Moved,
             ) if id == touch.id => {
+                let still = |at| State::Pending {
+                    id,
+                    start,
+                    at,
+                    since,
+                    targets,
+                    caught,
+                };
                 let (dx, dy) = (p.x - start.x, p.y - start.y);
                 if dx.abs() <= SLOP && dy.abs() <= SLOP {
+                    self.state = still(p);
                     return TouchAction::None;
                 }
+                // The direction picks the container along it.
+                let horizontal = dx.abs() > dy.abs();
+                let target = if horizontal {
+                    targets.scroll.horizontal
+                } else {
+                    targets.scroll.vertical
+                };
                 match target {
-                    // Mostly vertical: scroll, from where the finger crossed
-                    // the slop so the content doesn't jump.
-                    Some(target) if dy.abs() >= dx.abs() => {
-                        let crossed = start.y + SLOP.copysign(dy);
+                    // Scroll, from where the finger crossed the slop so the
+                    // content doesn't jump.
+                    Some(target) => {
+                        let moved = if horizontal { dx } else { dy };
+                        let crossed = along(start, horizontal) + SLOP.copysign(moved);
                         self.state = State::Dragging {
                             id,
                             target,
-                            last_y: p.y,
+                            horizontal,
+                            at: p,
                         };
                         self.samples.clear();
-                        self.samples.push((now, p.y));
+                        self.samples.push((now, along(p, horizontal)));
                         TouchAction::Begin {
                             target,
-                            dy: crossed - p.y,
+                            delta: crossed - along(p, horizontal),
                         }
                     }
-                    // A sideways drag, or nothing to scroll: the widget under
-                    // the finger has it (a caught fling's touch stays inert).
-                    _ if !caught => {
+                    // Nothing to scroll that way: the widget under the finger
+                    // has it (a caught fling's touch stays inert).
+                    None if !caught => {
                         self.state = State::Yielded { id };
                         TouchAction::None
                     }
-                    _ => TouchAction::None,
+                    None => {
+                        self.state = still(p);
+                        TouchAction::None
+                    }
                 }
             }
-            (State::Dragging { id, target, last_y }, TouchPhase::Moved) if id == touch.id => {
+            (
+                State::Dragging {
+                    id,
+                    target,
+                    horizontal,
+                    at,
+                },
+                TouchPhase::Moved,
+            ) if id == touch.id => {
                 self.state = State::Dragging {
                     id,
                     target,
-                    last_y: p.y,
+                    horizontal,
+                    at: p,
                 };
-                self.sample(now, p.y);
-                let dy = last_y - p.y;
-                if dy == 0.0 {
+                self.sample(now, along(p, horizontal));
+                let delta = along(at, horizontal) - along(p, horizontal);
+                if delta == 0.0 {
                     TouchAction::None
                 } else {
-                    TouchAction::Scroll { target, dy }
+                    TouchAction::Scroll { target, delta }
                 }
             }
-            (State::Dragging { id, target, last_y }, TouchPhase::Ended) if id == touch.id => {
-                self.sample(now, p.y);
+            (
+                State::Dragging {
+                    id,
+                    target,
+                    horizontal,
+                    at,
+                },
+                TouchPhase::Ended,
+            ) if id == touch.id => {
+                self.sample(now, along(p, horizontal));
                 let velocity = self.release_velocity(now);
                 // Under reduced motion the content stops with the finger.
                 self.state = if velocity.abs() >= MIN_FLING && !crate::anim::reduced_motion() {
@@ -190,9 +454,9 @@ impl TouchScroll {
                 };
                 self.samples.clear();
                 // A last move folded into the release still scrolls.
-                let dy = last_y - p.y;
-                if dy != 0.0 {
-                    return TouchAction::Scroll { target, dy };
+                let delta = along(at, horizontal) - along(p, horizontal);
+                if delta != 0.0 {
+                    return TouchAction::Scroll { target, delta };
                 }
                 TouchAction::End
             }
@@ -201,20 +465,24 @@ impl TouchScroll {
             // It scrolls the whole way, without a fling.
             (
                 State::Pending {
-                    id,
-                    start,
-                    target: Some(target),
-                    ..
+                    id, start, targets, ..
                 },
                 TouchPhase::Ended,
-            ) if id == touch.id
-                && (p.y - start.y).abs() > SLOP
-                && (p.y - start.y).abs() >= (p.x - start.x).abs() =>
-            {
+            ) if id == touch.id => {
                 self.state = State::Idle;
-                TouchAction::Begin {
-                    target,
-                    dy: start.y - p.y,
+                let (dx, dy) = (p.x - start.x, p.y - start.y);
+                let horizontal = dx.abs() > dy.abs();
+                let (moved, target) = if horizontal {
+                    (dx, targets.scroll.horizontal)
+                } else {
+                    (dy, targets.scroll.vertical)
+                };
+                match target {
+                    Some(target) if moved.abs() > SLOP => TouchAction::Begin {
+                        target,
+                        delta: -moved,
+                    },
+                    _ => TouchAction::None,
                 }
             }
             (
@@ -234,6 +502,36 @@ impl TouchScroll {
         }
     }
 
+    /// When (on [`touch`](Self::touch)'s clock) the finger held down becomes a
+    /// long press, if it may: it is over something with a context menu and
+    /// hasn't moved past the slop.
+    pub fn long_press_deadline(&self) -> Option<f64> {
+        match self.state {
+            State::Pending {
+                since,
+                targets,
+                caught: false,
+                ..
+            } if targets.long_press => Some(since + LONG_PRESS),
+            _ => None,
+        }
+    }
+
+    /// Whether the finger held down became a long press by `now`: then it
+    /// returns where the finger is (the app opens the context menu there and
+    /// cancels the press), and the finger is spent until it lifts.
+    pub fn long_press_due(&mut self, now: f64) -> Option<Point> {
+        let due = self.long_press_deadline()?;
+        if now < due {
+            return None;
+        }
+        let State::Pending { id, at, .. } = self.state else {
+            return None;
+        };
+        self.state = State::LongPressed { id };
+        Some(at)
+    }
+
     /// Advance a fling to `now`: how far its container scrolls this frame, or
     /// `None` when there's no fling (it stops on its own once slow enough).
     pub fn tick(&mut self, now: f64) -> Option<(ScrollId, f64)> {
@@ -248,7 +546,7 @@ impl TouchScroll {
         let dt = (now - last).max(0.0);
         let decay = (-dt / DECAY).exp();
         // The distance covered while the speed decays exponentially over dt.
-        let dy = velocity * DECAY * (1.0 - decay);
+        let delta = velocity * DECAY * (1.0 - decay);
         let velocity = velocity * decay;
         self.state = if velocity.abs() < STOP_FLING {
             State::Idle
@@ -259,7 +557,7 @@ impl TouchScroll {
                 last: now,
             }
         };
-        Some((target, dy))
+        Some((target, delta))
     }
 
     /// Stop a fling (it reached the end of its content).
@@ -270,7 +568,7 @@ impl TouchScroll {
     }
 
     /// Hand the first finger's gesture to the widget it pressed (a slider or
-    /// other draggable latched it), so it never scrolls.
+    /// other draggable latched it), so it neither scrolls nor long-presses.
     pub fn yield_to_widget(&mut self) {
         if let State::Pending { id, caught, .. } = self.state
             && !caught
@@ -290,6 +588,12 @@ impl TouchScroll {
         matches!(self.state, State::Dragging { .. })
     }
 
+    /// Whether two fingers are pinching.
+    #[cfg(test)]
+    pub fn pinching(&self) -> bool {
+        matches!(self.state, State::Pinching(_))
+    }
+
     /// Whether the first finger's press should be ignored: it landed on a
     /// fling to stop it.
     pub fn swallows_press(&self) -> bool {
@@ -298,17 +602,23 @@ impl TouchScroll {
 
     /// Whether the first finger's pointer moves should be kept from widgets:
     /// it is scrolling, or may start to (it's inside a scroll container and
-    /// hasn't left the slop), or it caught a fling.
+    /// hasn't left the slop), caught a fling, became a long press, or is part
+    /// of a pinch.
     pub fn holds_moves(&self) -> bool {
         match self.state {
-            State::Pending { target, caught, .. } => target.is_some() || caught,
-            State::Dragging { .. } => true,
+            State::Pending {
+                targets, caught, ..
+            } => !targets.scroll.is_empty() || caught,
+            State::Dragging { .. }
+            | State::LongPressed { .. }
+            | State::Pinching(_)
+            | State::Settling { .. } => true,
             _ => false,
         }
     }
 
-    fn sample(&mut self, now: f64, y: f64) {
-        self.samples.push((now, y));
+    fn sample(&mut self, now: f64, at: f64) {
+        self.samples.push((now, at));
         // Keep a little more than the window, for a release after a pause.
         let keep = now - VELOCITY_WINDOW * 2.0;
         if let Some(first) = self.samples.iter().position(|&(t, _)| t >= keep) {
@@ -317,8 +627,9 @@ impl TouchScroll {
         }
     }
 
-    /// The finger's speed at release, in offset terms (a finger moving up
-    /// scrolls towards the end: positive). Zero if it paused before lifting.
+    /// The finger's speed at release, in offset terms (a finger moving up or
+    /// left scrolls towards the end: positive). Zero if it paused before
+    /// lifting.
     fn release_velocity(&self, now: f64) -> f64 {
         let recent: Vec<_> = self
             .samples
@@ -326,7 +637,7 @@ impl TouchScroll {
             .filter(|&&(t, _)| t >= now - VELOCITY_WINDOW)
             .copied()
             .collect();
-        let (Some(&(t0, y0)), Some(&(t1, y1))) = (recent.first(), recent.last()) else {
+        let (Some(&(t0, a0)), Some(&(t1, a1))) = (recent.first(), recent.last()) else {
             return 0.0;
         };
         // Too short a span to measure: a single sample, or one burst of
@@ -334,321 +645,9 @@ impl TouchScroll {
         if t1 - t0 < 0.005 {
             return 0.0;
         }
-        (y0 - y1) / (t1 - t0)
+        (a0 - a1) / (t1 - t0)
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const LIST: ScrollId = ScrollId(7);
-
-    fn touch(id: u64, phase: TouchPhase, x: f64, y: f64) -> Touch {
-        Touch {
-            id,
-            phase,
-            position: Point::new(x, y),
-        }
-    }
-
-    fn over_list(_: Point) -> Option<ScrollId> {
-        Some(LIST)
-    }
-
-    fn nothing(_: Point) -> Option<ScrollId> {
-        None
-    }
-
-    /// Drag finger 1 from y0 to y1 in `steps` moves, `dt` seconds apart,
-    /// starting at time 0; returns the total scrolled and the end time.
-    fn drag(s: &mut TouchScroll, y0: f64, y1: f64, steps: usize, dt: f64) -> (f64, f64) {
-        assert_eq!(
-            s.touch(&touch(1, TouchPhase::Started, 50.0, y0), 0.0, over_list),
-            TouchAction::None
-        );
-        let mut scrolled = 0.0;
-        for i in 1..=steps {
-            let y = y0 + (y1 - y0) * i as f64 / steps as f64;
-            match s.touch(
-                &touch(1, TouchPhase::Moved, 50.0, y),
-                i as f64 * dt,
-                over_list,
-            ) {
-                TouchAction::Begin { target, dy } | TouchAction::Scroll { target, dy } => {
-                    assert_eq!(target, LIST);
-                    scrolled += dy;
-                }
-                TouchAction::None => {}
-                other => panic!("unexpected {other:?}"),
-            }
-        }
-        (scrolled, steps as f64 * dt)
-    }
-
-    #[test]
-    fn a_tap_stays_a_press() {
-        let mut s = TouchScroll::default();
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 100.0), 0.0, over_list);
-        assert!(!s.swallows_press());
-        assert!(s.holds_moves(), "moves wait until the slop decides");
-        // A jitter within the slop doesn't scroll.
-        let a = s.touch(&touch(1, TouchPhase::Moved, 53.0, 104.0), 0.05, over_list);
-        assert_eq!(a, TouchAction::None);
-        assert!(!s.dragging());
-        let a = s.touch(&touch(1, TouchPhase::Ended, 53.0, 104.0), 0.1, over_list);
-        assert_eq!(a, TouchAction::None);
-        assert!(!s.flinging() && !s.holds_moves());
-    }
-
-    #[test]
-    fn a_drag_past_the_slop_scrolls_without_jumping() {
-        let mut s = TouchScroll::default();
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 300.0), 0.0, over_list);
-        // Up 20 px: the press becomes a scroll of 12 (20 less the slop).
-        let a = s.touch(&touch(1, TouchPhase::Moved, 52.0, 280.0), 0.016, over_list);
-        assert_eq!(
-            a,
-            TouchAction::Begin {
-                target: LIST,
-                dy: 20.0 - SLOP
-            }
-        );
-        assert!(s.dragging() && s.holds_moves());
-        // From then on the content follows the finger exactly.
-        let a = s.touch(&touch(1, TouchPhase::Moved, 52.0, 250.0), 0.032, over_list);
-        assert_eq!(
-            a,
-            TouchAction::Scroll {
-                target: LIST,
-                dy: 30.0
-            }
-        );
-        // Back down scrolls back.
-        let a = s.touch(&touch(1, TouchPhase::Moved, 52.0, 260.0), 0.048, over_list);
-        assert_eq!(
-            a,
-            TouchAction::Scroll {
-                target: LIST,
-                dy: -10.0
-            }
-        );
-    }
-
-    #[test]
-    fn a_slow_release_doesnt_fling() {
-        let mut s = TouchScroll::default();
-        let (scrolled, end) = drag(&mut s, 400.0, 200.0, 10, 0.02);
-        assert_eq!(scrolled, 200.0 - SLOP);
-        // The finger rests, then lifts where it is.
-        s.touch(
-            &touch(1, TouchPhase::Moved, 50.0, 200.0),
-            end + 0.3,
-            over_list,
-        );
-        let a = s.touch(
-            &touch(1, TouchPhase::Ended, 50.0, 200.0),
-            end + 0.4,
-            over_list,
-        );
-        assert_eq!(a, TouchAction::End);
-        assert!(!s.flinging());
-        assert_eq!(s.tick(end + 0.5), None);
-    }
-
-    #[test]
-    fn a_quick_release_flings_and_slows_to_a_stop() {
-        let mut s = TouchScroll::default();
-        // 300 px up in 100 ms: about 3000 px/s.
-        let (_, end) = drag(&mut s, 500.0, 200.0, 6, 1.0 / 60.0);
-        let a = s.touch(&touch(1, TouchPhase::Ended, 50.0, 200.0), end, over_list);
-        assert_eq!(a, TouchAction::End);
-        assert!(s.flinging());
-        assert!(!s.holds_moves(), "the finger is gone");
-        let mut t = end;
-        let mut total = 0.0;
-        let mut last = f64::INFINITY;
-        let mut frames = 0;
-        while let Some((target, dy)) = s.tick(t + 1.0 / 60.0) {
-            t += 1.0 / 60.0;
-            assert_eq!(target, LIST);
-            assert!(dy > 0.0, "keeps going the way the finger went");
-            assert!(dy <= last, "and slows down");
-            last = dy;
-            total += dy;
-            frames += 1;
-            assert!(frames < 600, "a fling ends");
-        }
-        // v * DECAY is how far an exponential decay travels in total.
-        assert!(total > 500.0 && total < 3000.0 * DECAY, "flung {total}");
-        assert!(!s.flinging());
-    }
-
-    #[test]
-    fn under_reduced_motion_a_quick_release_stops_with_the_finger() {
-        crate::anim::set_reduced_motion(Some(true));
-        let mut s = TouchScroll::default();
-        let (_, end) = drag(&mut s, 500.0, 200.0, 6, 1.0 / 60.0);
-        let a = s.touch(&touch(1, TouchPhase::Ended, 50.0, 200.0), end, over_list);
-        assert_eq!(a, TouchAction::End);
-        assert!(!s.flinging(), "no fling");
-        crate::anim::set_reduced_motion(None);
-    }
-
-    #[test]
-    fn a_release_away_from_the_last_move_scrolls_there_then_flings() {
-        let mut s = TouchScroll::default();
-        let (_, end) = drag(&mut s, 500.0, 220.0, 6, 1.0 / 60.0);
-        let a = s.touch(
-            &touch(1, TouchPhase::Ended, 50.0, 200.0),
-            end + 0.008,
-            over_list,
-        );
-        assert_eq!(
-            a,
-            TouchAction::Scroll {
-                target: LIST,
-                dy: 20.0
-            }
-        );
-        assert!(s.flinging());
-    }
-
-    #[test]
-    fn a_release_with_its_moves_folded_in_still_scrolls() {
-        let mut s = TouchScroll::default();
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 400.0), 0.0, over_list);
-        let a = s.touch(&touch(1, TouchPhase::Ended, 52.0, 250.0), 0.3, over_list);
-        assert_eq!(
-            a,
-            TouchAction::Begin {
-                target: LIST,
-                dy: 150.0
-            }
-        );
-        assert!(!s.flinging() && !s.holds_moves());
-        // Not outside a scroll container, nor sideways.
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 400.0), 1.0, nothing);
-        let a = s.touch(&touch(1, TouchPhase::Ended, 50.0, 250.0), 1.3, nothing);
-        assert_eq!(a, TouchAction::None);
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 400.0), 2.0, over_list);
-        let a = s.touch(&touch(1, TouchPhase::Ended, 250.0, 350.0), 2.3, over_list);
-        assert_eq!(a, TouchAction::None);
-    }
-
-    #[test]
-    fn a_downward_fling_scrolls_back() {
-        let mut s = TouchScroll::default();
-        let (scrolled, end) = drag(&mut s, 200.0, 500.0, 6, 1.0 / 60.0);
-        assert!(scrolled < 0.0);
-        s.touch(&touch(1, TouchPhase::Ended, 50.0, 500.0), end, over_list);
-        let (_, dy) = s.tick(end + 0.016).expect("flinging");
-        assert!(dy < 0.0);
-    }
-
-    #[test]
-    fn a_touch_stops_a_fling_without_clicking() {
-        let mut s = TouchScroll::default();
-        let (_, end) = drag(&mut s, 500.0, 200.0, 6, 1.0 / 60.0);
-        s.touch(&touch(1, TouchPhase::Ended, 50.0, 200.0), end, over_list);
-        assert!(s.flinging());
-        s.touch(
-            &touch(2, TouchPhase::Started, 60.0, 300.0),
-            end + 0.1,
-            over_list,
-        );
-        assert!(!s.flinging());
-        assert!(s.swallows_press() && s.holds_moves());
-        assert_eq!(s.tick(end + 0.2), None);
-        // Lifting it ends the touch with nothing to click.
-        let a = s.touch(
-            &touch(2, TouchPhase::Ended, 60.0, 300.0),
-            end + 0.2,
-            over_list,
-        );
-        assert_eq!(a, TouchAction::None);
-        assert!(!s.swallows_press());
-        // ...but the touch could have scrolled again instead.
-        s.touch(
-            &touch(3, TouchPhase::Started, 60.0, 300.0),
-            end + 0.3,
-            over_list,
-        );
-        s.touch(
-            &touch(3, TouchPhase::Ended, 60.0, 300.0),
-            end + 0.4,
-            over_list,
-        );
-        let mut s2 = s.clone();
-        let (scrolled, _) = drag(&mut s2, 300.0, 250.0, 2, 0.02);
-        assert_eq!(scrolled, 50.0 - SLOP);
-    }
-
-    #[test]
-    fn sideways_or_outside_a_scroll_container_the_widget_keeps_the_finger() {
-        let mut s = TouchScroll::default();
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 100.0), 0.0, over_list);
-        let a = s.touch(&touch(1, TouchPhase::Moved, 90.0, 110.0), 0.02, over_list);
-        assert_eq!(a, TouchAction::None);
-        assert!(!s.dragging() && !s.holds_moves());
-        // Even moving vertically afterwards.
-        let a = s.touch(&touch(1, TouchPhase::Moved, 90.0, 300.0), 0.04, over_list);
-        assert_eq!(a, TouchAction::None);
-        s.touch(&touch(1, TouchPhase::Ended, 90.0, 300.0), 0.06, over_list);
-
-        // No scroll container under the finger: moves pass straight through.
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 100.0), 1.0, nothing);
-        assert!(!s.holds_moves());
-        let a = s.touch(&touch(1, TouchPhase::Moved, 50.0, 300.0), 1.02, nothing);
-        assert_eq!(a, TouchAction::None);
-    }
-
-    #[test]
-    fn a_dragging_widget_keeps_the_finger() {
-        let mut s = TouchScroll::default();
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 100.0), 0.0, over_list);
-        s.yield_to_widget();
-        assert!(!s.holds_moves());
-        let a = s.touch(&touch(1, TouchPhase::Moved, 50.0, 300.0), 0.02, over_list);
-        assert_eq!(a, TouchAction::None);
-    }
-
-    #[test]
-    fn other_fingers_are_ignored() {
-        let mut s = TouchScroll::default();
-        s.touch(&touch(1, TouchPhase::Started, 50.0, 300.0), 0.0, over_list);
-        s.touch(
-            &touch(2, TouchPhase::Started, 150.0, 300.0),
-            0.01,
-            over_list,
-        );
-        let a = s.touch(&touch(2, TouchPhase::Moved, 150.0, 100.0), 0.02, over_list);
-        assert_eq!(a, TouchAction::None);
-        let a = s.touch(&touch(2, TouchPhase::Ended, 150.0, 100.0), 0.03, over_list);
-        assert_eq!(a, TouchAction::None);
-        // The first finger still scrolls.
-        let a = s.touch(&touch(1, TouchPhase::Moved, 50.0, 250.0), 0.04, over_list);
-        assert!(matches!(a, TouchAction::Begin { .. }));
-    }
-
-    #[test]
-    fn a_cancelled_drag_ends_without_a_fling() {
-        let mut s = TouchScroll::default();
-        let (_, end) = drag(&mut s, 500.0, 200.0, 6, 1.0 / 60.0);
-        let a = s.touch(
-            &touch(1, TouchPhase::Cancelled, 50.0, 200.0),
-            end,
-            over_list,
-        );
-        assert_eq!(a, TouchAction::End);
-        assert!(!s.flinging() && !s.dragging());
-    }
-
-    #[test]
-    fn a_burst_of_events_with_no_time_between_them_doesnt_fling() {
-        let mut s = TouchScroll::default();
-        let (_, _) = drag(&mut s, 500.0, 200.0, 6, 0.0);
-        s.touch(&touch(1, TouchPhase::Ended, 50.0, 200.0), 0.0, over_list);
-        assert!(!s.flinging());
-    }
-}
+mod tests;

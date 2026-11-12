@@ -62,10 +62,21 @@ view takes multiple touches). The first finger down is also the pointer: a
 left-button press, moves and a release at its position, then `PointerLeft`, so
 a lifted finger leaves no hover behind.
 
-A finger dragged in a scroll container scrolls it, and flings it on if it lifts
-while moving; taps still click, since a press only becomes a scroll past 8
-logical pixels. See [Android](android.md#how-it-works), which shares the toolkit
-side.
+The toolkit recognizes the gestures, the same way on every platform (see
+[pointer-events.md](../pointer-events.md#touch-gestures)): a finger dragged in
+a scroll container scrolls it (sideways in a horizontal one) and flings it on
+if it lifts while moving; taps still click, since a press only becomes a
+scroll past 8 logical pixels; a finger held still for half a second on an
+element with a context menu opens it; and two fingers pinch, pan and turn an
+element with `on_pinch`.
+
+**Menus.** Context menus are drawn by Stipple and open on a long press (or a
+right-click with a pointer); they aren't `UIMenu` /
+`UIContextMenuInteraction` popups, so they look like the app's theme and work
+like everywhere else (a tap picks an item, a tap outside closes it). An app's
+`App::menu` bar is drawn across the top of the window, as on Linux, and its
+menus open on a tap; an app that doesn't want a menu bar on a phone leaves
+`App::menu` out on iOS (with `cfg!(target_os = "ios")`).
 
 **The keyboard.** The view adopts `UITextInput` (and so `UIKeyInput`): while a
 text input has focus it becomes first responder, which brings up the on-screen
@@ -178,9 +189,12 @@ It uses `stipple::platform::backend::ios::simulate`, which sends `insertText:`
 and `deleteBackward` to the view through objc dispatch, composes through its
 `UITextInput` methods (`setMarkedText:selectedRange:`, `replaceRange:withText:`)
 and reads the document back as the keyboard does, feeds synthetic touches to
-the backend's touch path, reads the accessibility elements as VoiceOver does
-(`accessibilityElementCount`, `accessibilityElementAtIndex:`, each element's
-label, value, traits and frame) and activates one, posts a memory warning, and
+the backend's touch path (a drag, a long press that opens a row's context
+menu, a sideways drag of a strip and a two-finger pinch), reads the
+accessibility elements as VoiceOver does (`accessibilityElementCount`,
+`accessibilityElementAtIndex:`, each element's label, value, traits and frame)
+and activates one (a row, then the context menu's item), posts a memory
+warning, and
 reads the notification permission; it logs to `touchdemo.log` in the app's tmp
 directory. CI runs it, and drives the second half from outside: it switches
 the simulator to dark mode (`xcrun simctl ui booted appearance dark`), sends

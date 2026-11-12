@@ -338,7 +338,10 @@ impl<S: 'static> App<S> {
                     self.pane_pointer_move(0, position)
                 }
                 Event::PointerLeft => self.pane_pointer_left(0),
-                Event::Scroll { delta } => self.pane_scroll_by(0, delta.in_pixels().1),
+                Event::Scroll { delta } => {
+                    let (dx, dy) = delta.in_pixels();
+                    self.pane_scroll_by(0, dx, dy)
+                }
                 _ => false,
             }
     }

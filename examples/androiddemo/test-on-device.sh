@@ -8,26 +8,29 @@
 # 2. a tap on the button in the middle of the screen registers (touch);
 # 3. a swipe over the list scrolls it without tapping a row, and a tap there
 #    still taps one (touch scrolling);
-# 4. the accessibility tree reaches the system: `uiautomator dump` lists the
+# 4. a long press on a row (a swipe that stays put for 800 ms) opens its
+#    context menu, whose item a tap picks, and a sideways swipe over the strip
+#    of chips scrolls it;
+# 5. the accessibility tree reaches the system: `uiautomator dump` lists the
 #    button and the list's rows as virtual views (the node provider);
-# 5. Back goes to the app first (it handles one by resetting the tap count),
+# 6. Back goes to the app first (it handles one by resetting the tap count),
 #    Home and `am start` send it to the background and back, and a memory
 #    trim reaches it (the lifecycle events);
-# 6. Tab moves focus to the text field, the input method connects to it (an
+# 7. Tab moves focus to the text field, the input method connects to it (an
 #    InputConnection with a text inputType), and `input text` types into it
 #    (keys); then the app drives the connection as a composing keyboard would
 #    (compose, commit an emoji, delete around the caret, finish), and the
 #    field must hold the result;
-# 7. a Back the app doesn't handle leaves it to the system: with predictive
+# 8. a Back the app doesn't handle leaves it to the system: with predictive
 #    back (Android 13 and later, the manifest's enableOnBackInvokedCallback),
 #    Back reaches the app through its OnBackInvokedCallback while it would go
 #    back (the tap count isn't 0), and goes straight to the system, which
 #    sends the app to the background, while it wouldn't;
-# 8. process death: with two taps counted and the field typed in, Home has
+# 9. process death: with two taps counted and the field typed in, Home has
 #    the app save its state (onSaveInstanceState), `am kill` ends the
 #    backgrounded process, and starting it again restores the count and the
 #    text from the saved Bundle;
-# 9. screenshots of each state land in the screenshot directory.
+# 10. screenshots of each state land in the screenshot directory.
 set -euo pipefail
 
 apk="${1:?usage: test-on-device.sh app.apk [screenshot-dir]}"
@@ -186,6 +189,45 @@ log | grep "androiddemo: scrolled to" | tail -3
 # ...while a tap on the list still taps a row.
 adb shell input tap $((width / 2)) $((height * 78 / 100))
 wait_for "androiddemo: row [0-9]+ tapped" 20
+
+# A long press on a row (a swipe that stays put) opens its context menu and
+# doesn't tap the row; the menu's item, found in the accessibility tree,
+# picks it.
+taps="$(log | grep -c "androiddemo: row [0-9]* tapped" || true)"
+adb shell input swipe $((width / 2)) $((height * 78 / 100)) $((width / 2)) $((height * 78 / 100)) 800
+sleep 2
+adb exec-out screencap -p > "$shots/android-context-menu.png"
+adb shell uiautomator dump /sdcard/stipple-menu.xml >/dev/null
+adb shell cat /sdcard/stipple-menu.xml > "$shots/android-menu-ui.xml"
+# The center of the first node whose text matches $1, from its bounds.
+center_of() {
+  sed 's/<node/\n<node/g' "$2" | grep -E "text=\"$1" | head -1 \
+    | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' \
+    | awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }'
+}
+item="$(center_of "Pin row [0-9]+" "$shots/android-menu-ui.xml")"
+if [ -z "$item" ]; then
+  echo "the long press opened no context menu:" >&2
+  sed 's/<node/\n<node/g' "$shots/android-menu-ui.xml" | grep -o 'text="[^"]*"' >&2
+  exit 1
+fi
+if [ "$(log | grep -c "androiddemo: row [0-9]* tapped" || true)" != "$taps" ]; then
+  echo "the long press tapped the row" >&2
+  exit 1
+fi
+read -r ix iy <<< "$item"
+adb shell input tap "$ix" "$iy"
+wait_for "androiddemo: row [0-9]+ pinned" 20
+
+# A sideways swipe over the strip of chips scrolls it.
+chip="$(center_of "Chip 1\"" "$shots/android-menu-ui.xml")"
+if [ -z "$chip" ]; then
+  echo "no chip in the accessibility tree" >&2
+  exit 1
+fi
+read -r cx cy <<< "$chip"
+adb shell input swipe $((cx + width / 4)) "$cy" $((cx - width / 4)) "$cy" 1000
+wait_for "androiddemo: strip scrolled to [1-9][0-9]*" 20
 
 adb shell input keyevent KEYCODE_TAB
 sleep 1

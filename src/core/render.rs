@@ -402,6 +402,14 @@ pub fn layout_with_direction(
         wrap: el.wrap,
         native: el.native,
         scroll: el.scroll,
+        scroll_horizontal: el.scroll.is_some()
+            && matches!(
+                el.kind,
+                ElementKind::Stack {
+                    axis: Axis::Horizontal,
+                    ..
+                }
+            ),
         clip: el.clip,
         cursor: el.cursor,
         semantics: el.semantics.clone(),
@@ -920,27 +928,20 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
 }
 
 /// Apply scroll offsets to a laid-out tree: for each scroll container, clamp its
-/// stored offset to the content overflow and shift its descendants up by that
-/// amount (so the offset is the source of truth, re-applied each frame). Returns
-/// nothing; clamps `offsets` in place so the app keeps valid values.
+/// stored offset to the content overflow and shift its descendants by that
+/// amount, up for a vertical container and sideways for a
+/// [horizontal](LayoutNode::scroll_horizontal) one (so the offset is the
+/// source of truth, re-applied each frame). Returns nothing; clamps `offsets`
+/// in place so the app keeps valid values.
 pub fn apply_scroll(node: &mut LayoutNode, offsets: &mut std::collections::HashMap<ScrollId, f64>) {
     if let Some(id) = node.scroll {
-        // Content height = furthest child extent below the viewport top; viewport
-        // height = this node's bounds height.
-        let top = node.bounds.min_y();
-        let content_bottom = node
-            .children
-            .iter()
-            .map(|c| c.bounds.max_y())
-            .fold(top, f64::max);
-        let content_h = content_bottom - top;
-        let max_off = (content_h - node.bounds.height()).max(0.0);
+        let max_off = scroll_range(node, 0.0);
         let off = offsets.entry(id).or_insert(0.0);
         *off = off.clamp(0.0, max_off);
-        let dy = *off;
-        if dy > 0.0 {
+        let shift = scroll_shift(node, *off);
+        if shift != Vec2::ZERO {
             for child in &mut node.children {
-                translate(child, -dy);
+                translate(child, shift);
             }
         }
     }
@@ -949,11 +950,58 @@ pub fn apply_scroll(node: &mut LayoutNode, offsets: &mut std::collections::HashM
     }
 }
 
-/// Shift a node and all its descendants vertically by `dy` (logical pixels).
-fn translate(node: &mut LayoutNode, dy: f64) {
-    node.bounds = node.bounds.translate(Vec2::new(0.0, dy));
+/// How far scroll container `node` can scroll (its largest offset), given its
+/// children are already shifted by offset `applied`: the content's extent
+/// past the viewport along the container's axis.
+pub(crate) fn scroll_range(node: &LayoutNode, applied: f64) -> f64 {
+    let b = node.bounds;
+    let content = if !node.scroll_horizontal {
+        // Content height = furthest child extent below the viewport top.
+        let bottom = node
+            .children
+            .iter()
+            .map(|c| c.bounds.max_y())
+            .fold(b.min_y(), f64::max);
+        bottom + applied - b.min_y()
+    } else if node.rtl {
+        // Laid out right to left, the content overflows to the left.
+        let left = node
+            .children
+            .iter()
+            .map(|c| c.bounds.min_x())
+            .fold(b.max_x(), f64::min);
+        b.max_x() - (left - applied)
+    } else {
+        let right = node
+            .children
+            .iter()
+            .map(|c| c.bounds.max_x())
+            .fold(b.min_x(), f64::max);
+        right + applied - b.min_x()
+    };
+    let viewport = if node.scroll_horizontal {
+        b.width()
+    } else {
+        b.height()
+    };
+    (content - viewport).max(0.0)
+}
+
+/// How scroll container `node`'s children move at offset `off`: up, left, or
+/// right when it is laid out right to left.
+pub(crate) fn scroll_shift(node: &LayoutNode, off: f64) -> Vec2 {
+    match (node.scroll_horizontal, node.rtl) {
+        (false, _) => Vec2::new(0.0, -off),
+        (true, false) => Vec2::new(-off, 0.0),
+        (true, true) => Vec2::new(off, 0.0),
+    }
+}
+
+/// Shift a node and all its descendants by `by` (logical pixels).
+fn translate(node: &mut LayoutNode, by: Vec2) {
+    node.bounds = node.bounds.translate(by);
     for child in &mut node.children {
-        translate(child, dy);
+        translate(child, by);
     }
 }
 

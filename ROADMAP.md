@@ -1378,9 +1378,28 @@ Most input only works on X11 today.
 - ⬜ iOS's interactive edge swipe for going back (a
   `UIScreenEdgePanGestureRecognizer` feeding `BackGesture` and `on_back`),
   for apps that want it.
-- ⬜ Mobile gestures: pinch and two-finger pan, long press (opening the context
-  menu, as right-click does on desktop), horizontal touch scrolling, and touch
-  scrolling in mobile browsers on the web.
+- ✅ Mobile gestures, recognized in the shared core (`core::touch`) from the
+  platform's touches, so iOS, Android and the web behave alike: pinch,
+  two-finger pan and rotation through `Element::on_pinch` (a `PinchEvent`
+  with phase, scale, rotation, translation and centroid, each measured from
+  the start; the first finger's press is cancelled); a long press (half a
+  second within the 8-pixel slop) opening the element's `context_menu` or
+  `on_context` handler where the finger is, cancelling the tap; horizontal
+  scroll containers (`widgets::scroll_horizontal`, or a horizontal stack made
+  `scrollable`; right-to-left ones start at the right) that a sideways drag
+  scrolls and flings, a vertical drag inside one still scrolling the list
+  around it, and a horizontal wheel scrolls too; and touch events in mobile
+  browsers (`touchstart` / `move` / `end` / `cancel` to `stipple_touch`, the
+  same path). Unit-tested with synthetic touch sequences, recognizer and App;
+  `touchdemo`'s iOS simulator self-test long-presses a row and picks its menu
+  item, drags a strip sideways and pinches with two synthetic fingers through
+  the backend's touch path; the Android emulator long-presses (`input swipe x
+  y x y 800`) and swipes sideways (no pinch: `adb` has one finger); headless
+  Chrome taps and long-presses with synthetic `TouchEvent`s. The Android
+  steps and the web selftest were run locally (API 34 emulator, headless
+  Chrome) and pass; the iOS steps are added with this change and haven't run
+  yet. Not yet tried on a real phone. See
+  [docs/pointer-events.md](docs/pointer-events.md#touch-gestures).
 - ⬜ Mobile text editing UI: touch caret placement and selection handles,
   the system's edit menu (cut / copy / paste / select all; `UIEditMenuInteraction`
   on iOS, the floating action mode on Android), and keeping the focused field
@@ -1391,9 +1410,14 @@ Most input only works on X11 today.
   Storage Access Framework (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`)
   on Android, returning contents or a handle rather than a path, as the web's
   `open_file_contents` does.
-- ⬜ Menus on mobile: `Element::context_menu` on long press, as `UIMenu` /
-  `UIContextMenuInteraction` on iOS and a `PopupMenu` (or the drawn menu) on
-  Android; the app's menu bar shown as a drawn menu or omitted.
+- ✅ Menus on mobile: `Element::context_menu` opens on a long press as the
+  menu Stipple draws, on iOS, Android and the web alike (chosen over `UIMenu`
+  / `UIContextMenuInteraction` and `PopupMenu`: it follows the theme, keeps
+  one behavior and needs no more native code); lifting the finger picks
+  nothing, a tap picks an item. The app's menu bar is the drawn in-window bar,
+  its menus opening on a tap; phone apps leave `App::menu` out (documented in
+  [docs/menus.md](docs/menus.md#context-menus)). Checked as for gestures,
+  above; the menu bar isn't run in CI on mobile.
 - ✅ Notifications on iOS: `platform::notify` through
   `UNUserNotificationCenter`; the first call asks permission
   (`requestAuthorizationWithOptions:`, with a hand-built completion block) and

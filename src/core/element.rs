@@ -518,8 +518,9 @@ impl Element {
         self
     }
 
-    /// Route secondary (right) clicks on this element to `handler`, which runs
-    /// against the app state and receives the click position in logical pixels —
+    /// Route secondary (right) clicks on this element, and long presses on a
+    /// touch screen, to `handler`, which runs against the app state and
+    /// receives the click position in logical pixels —
     /// typically used to open a context menu there via [`Cx::overlay`]. Registers
     /// the handler in `cx` and stamps its [`ContextId`].
     pub fn on_context<S>(
@@ -532,9 +533,10 @@ impl Element {
     }
 
     /// Give this element a context menu, opened at the pointer by a
-    /// right-click on it, or by the Menu key or Shift+F10 while the pointer is
-    /// over it. Picking an item runs its action against the app state. Stipple
-    /// draws the menu as an overlay on every platform.
+    /// right-click on it, by the Menu key or Shift+F10 while the pointer is
+    /// over it, or on a touch screen by a long press (a finger held still on
+    /// it for half a second). Picking an item runs its action against the app
+    /// state. Stipple draws the menu as an overlay on every platform.
     ///
     /// ```
     /// use stipple::prelude::*;
@@ -704,6 +706,42 @@ impl Element {
         handler: impl FnMut(&crate::core::WheelEvent, &mut S) + 'static,
     ) -> Self {
         self.pointer = Some(cx.register_wheel(self.pointer, handler));
+        self
+    }
+
+    /// Deliver two-finger gestures on a touch screen over this element to
+    /// `handler`: a pinch (scale), a two-finger pan (translation) and a turn
+    /// (rotation), all in one [`PinchEvent`](crate::core::PinchEvent) per
+    /// move, measured from where the gesture began, with the centroid to zoom
+    /// about. It starts when a second finger lands while the first is still
+    /// pressing (or scrolling a list) and their midpoint is over the element,
+    /// and ends when either lifts; the first finger's press is cancelled, so
+    /// it doesn't tap. Without a pinch handler a second finger is ignored.
+    /// For a photo viewer, a map, a canvas; see `docs/pointer-events.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// use stipple::core::{PinchEvent, PinchPhase};
+    /// #[derive(Default)]
+    /// struct Photo { zoom: f64, zoom_at_start: f64 }
+    /// fn view(_: &Photo, cx: &mut Cx<Photo>) -> Element {
+    ///     Element::boxed(BoxStyle::default()).on_pinch(cx, |ev: &PinchEvent, p: &mut Photo| {
+    ///         if ev.phase == PinchPhase::Began {
+    ///             p.zoom_at_start = p.zoom;
+    ///         }
+    ///         p.zoom = (p.zoom_at_start * ev.scale).clamp(0.5, 8.0);
+    ///     })
+    /// }
+    /// # let theme = Theme::light();
+    /// # let mut cx = Cx::new(&theme);
+    /// # assert!(view(&Photo::default(), &mut cx).pointer.is_some());
+    /// ```
+    pub fn on_pinch<S>(
+        mut self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&crate::core::PinchEvent, &mut S) + 'static,
+    ) -> Self {
+        self.pointer = Some(cx.register_pinch(self.pointer, handler));
         self
     }
 

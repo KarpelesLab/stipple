@@ -86,6 +86,7 @@ once with a light color scheme.
 | Rendering | `putImageData` of the frame, limited to the damaged rects |
 | High-DPI | `devicePixelRatio` is the scale factor; the canvas's backing store is its CSS size times the ratio. A `ResizeObserver` and a `resolution` media query follow size and ratio changes (`Event::Resized`, `Event::ScaleFactorChanged`) |
 | Pointer | pointer events, captured while a button is down; right-click opens context menus instead of the browser's |
+| Touch | touch events (each of `changedTouches`, by `identifier`) go through the app's gestures as on iOS and Android: touch scrolling and flings on both axes, a long press for the context menu, pinches; the first finger is also the pointer. The canvas has `touch-action: none` and no long-press callout, so the browser neither scrolls nor zooms the page under it. See [pointer-events.md](../pointer-events.md#touch-gestures) |
 | Keyboard | `keydown`'s `key` and modifiers: text, editing and navigation keys, F1–F12 and Ctrl/Cmd shortcuts. The browser keeps its own shortcuts (F5, Ctrl+R and so on) |
 | Input methods and dead keys | see below |
 | Accessibility | see below |
@@ -241,6 +242,7 @@ The module exports:
 | `stipple_start(w, h, ratio)` | building and running the app in a canvas of `w` × `h` CSS pixels |
 | `stipple_resize(w, h, ratio)` | size or pixel-ratio changes |
 | `stipple_pointer(kind, button, x, y, mods)` | moves, presses, releases and leaving the canvas |
+| `stipple_touch(phase, id, x, y)` | each finger of `touchstart` (0), `touchmove` (1), `touchend` (2), `touchcancel` (3); a page whose module lacks it takes fingers as the mouse |
 | `stipple_wheel(dx, dy, mode)` | `wheel` |
 | `stipple_key(ptr, len, mods)` | `keydown`; returns whether to `preventDefault` |
 | `stipple_paste(ptr, len)` | `paste` |

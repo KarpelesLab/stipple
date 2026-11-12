@@ -73,23 +73,26 @@ pub use keys::{Handled, KeyConfig, RawKeyId};
 pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
 pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};
-pub use pointer_events::{PointerButtons, PointerEvent, PointerEventKind, PointerId, WheelEvent};
+pub use pointer_events::{
+    PinchEvent, PinchPhase, PointerButtons, PointerEvent, PointerEventKind, PointerId, WheelEvent,
+};
 pub(crate) use pointer_events::{
     PointerHandlers, WheelTarget, pointer_at, pointer_local, wheel_target_at,
 };
 pub use presence::Effect;
 pub use render::caret_index_at;
+pub(crate) use render::scroll_range;
 pub use render::{
     apply_scroll, layout, layout_with_direction, mark_native_states, measure, paint, paint_focus,
     paint_hover,
 };
 pub use runtime::{
     ActionId, Anchor, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, Handlers,
-    KeyInput, LayoutNode, NodeContent, OverlaySpec, ScrollId, ScrollRequests, TextPosId,
-    ViewportEvent, ViewportId, collect_focusables, collect_viewports, context_at, cursor_at,
-    drag_at, drag_hit_at, drag_source_at, drop_at, find_action, find_drop, find_focus, find_scroll,
-    find_text_pos, first_text, focus_at, hit_test, local_point, node_to_window, scroll_at,
-    text_pos_at, viewport_at,
+    KeyInput, LayoutNode, NodeContent, OverlaySpec, ScrollId, ScrollRequests, ScrollTargets,
+    TextPosId, ViewportEvent, ViewportId, collect_focusables, collect_viewports, context_at,
+    cursor_at, drag_at, drag_hit_at, drag_source_at, drop_at, find_action, find_drop, find_focus,
+    find_scroll, find_text_pos, first_text, focus_at, hit_test, local_point, node_to_window,
+    scroll_at, scroll_targets_at, text_pos_at, viewport_at,
 };
 pub use transition::{AnimProp, Transition};
 

@@ -235,11 +235,15 @@ pub(crate) struct Presence {
 
 /// Where `node`'s children are laid out from, without its scrolling.
 fn content_origin(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Point {
-    let dy = node
+    let off = node
         .scroll
         .and_then(|id| offsets.get(&id).copied())
         .unwrap_or(0.0);
-    Point::new(node.bounds.origin.x, node.bounds.origin.y - dy)
+    let shift = crate::core::render::scroll_shift(node, off);
+    Point::new(
+        node.bounds.origin.x + shift.dx,
+        node.bounds.origin.y + shift.dy,
+    )
 }
 
 fn sub(a: Point, b: Point) -> Vec2 {

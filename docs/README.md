@@ -24,7 +24,8 @@ How to build, package and run on each platform, and what works there today.
 | Keyboard input | ✅ | ✅ | ✅ | ✅ ²⁷ | ✅ ¹⁹ | ✅ ¹² |
 | Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | mouse wheel ¹⁰ | ✅ ⁶ |
 | Raw pointer events (every button, click counts, lines vs pixels, pointer leaving) | ✅ ³⁶ | ✅ ³⁶ | ✅ ³⁶ | touch | ✅ mouse ³⁶ | ✅ ³⁶ |
-| Touch scrolling (drag, fling) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ❌ |
+| Touch scrolling (drag, fling, sideways strips) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ✅ ⁶⁰ |
+| Touch gestures: long press for the context menu, pinch and two-finger pan (`on_pinch`) | — | — | — | ✅ ⁶⁰ | ✅ ⁶⁰ | ✅ ⁶⁰ |
 | Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹² |
 | Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
@@ -55,8 +56,8 @@ How to build, package and run on each platform, and what works there today.
 | Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ⁴³ |
 | Raw keys (`on_raw_key`): physical key, left/right modifiers, repeat flag | ✅ ⁴² | ✅ ¹⁰ | ✅ ¹⁰ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Key repeat | ✅ ⁴² | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
-| Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | ❌ | ❌ | ❌ |
+| Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | drawn ⁶¹ | drawn ⁶¹ | drawn ⁶¹ |
+| Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | drawn, long press ⁶⁰ | drawn, long press ⁶⁰ | drawn ⁶⁰ |
 | Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ³ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ❌ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
@@ -351,6 +352,20 @@ the app again. Checked on the CI emulator: Home, `am kill`, relaunch. iOS
 not done yet. See
 [window-lifecycle.md](window-lifecycle.md#keeping-the-state-across-process-death).
 
+⁶⁰ Recognized in the shared core from the platform's touches, so the same
+everywhere, and unit-tested with synthetic touch sequences (scrolling on both
+axes, long presses, pinches). On devices: `touchdemo`'s iOS simulator
+self-test long-presses a row (its menu opens, its item is picked), drags a
+strip sideways and pinches with two synthetic fingers through the backend's
+touch path; the Android emulator long-presses a row and swipes a strip with
+`adb shell input swipe` (no pinch: `adb` has one finger); headless Chrome
+taps and long-presses `webdemo` with synthetic `TouchEvent`s. Not yet tried
+on a real phone. See [pointer-events.md](pointer-events.md#touch-gestures).
+
+⁶¹ The in-window bar Stipple draws on Linux; its menus open on a tap. Phone
+apps usually leave `App::menu` out on these targets. Not run in CI there. See
+[menus.md](menus.md#context-menus).
+
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
 
@@ -360,7 +375,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
 - [Widgets](widgets.md): select, number input, split pane, toolbar, toasts, tab bar,
   password field and color picker
-- [Menus](menus.md): the menu bar, shortcuts and context menus
+- [Menus](menus.md): the menu bar, shortcuts and context menus (long press on touch screens)
 - [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
 - [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, in-app drags, and dragging files and text out to other apps
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
@@ -371,7 +386,7 @@ Where file dialogs aren't, `open_file` and friends return `None`, as if cancelle
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough
-- [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements
+- [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements; touch gestures (scrolling, long press, pinch)
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
 - [The keyboard](keyboard.md): raw keys for terminals and games, keeping Tab, key repeat, Option as Meta
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files

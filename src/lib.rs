@@ -34,6 +34,7 @@ mod app_dnd;
 mod app_keys;
 mod app_lifecycle;
 mod app_pointer;
+mod app_touch;
 #[cfg(test)]
 mod canvas_tests;
 pub mod core;
@@ -48,6 +49,8 @@ pub mod platform;
 mod pointer_tests;
 pub mod render;
 pub mod style;
+#[cfg(test)]
+mod touch_tests;
 mod web_app;
 pub mod widgets;
 #[cfg(test)]
@@ -353,10 +356,12 @@ struct Pane<S> {
     // Last pointer position, so a `Scroll` event (which carries only a delta)
     // can find the scroll container under the cursor.
     last_pointer: Point,
-    // Touch scrolling: a finger dragged in a scroll container, and its fling.
-    touch: crate::core::touch::TouchScroll,
+    // Touch gestures: scrolling and flings, long presses and pinches.
+    touch: crate::core::touch::TouchGestures,
     // The origin of the touch scroller's clock.
     touch_epoch: crate::platform::time::Instant,
+    // The timer that wakes the loop when a held finger becomes a long press.
+    long_press_timer: Option<crate::core::TimerId>,
     // Whether the frame just built / on screen has overlay layers — overlays
     // can't be localized by the tree diff, so their presence forces full damage.
     overlay_active: bool,
@@ -478,6 +483,7 @@ impl<S: 'static> Pane<S> {
             last_pointer: Point::new(0.0, 0.0),
             touch: Default::default(),
             touch_epoch: crate::platform::time::Instant::now(),
+            long_press_timer: None,
             overlay_active: false,
             painted_overlay_active: false,
             input_viewport: None,
@@ -1682,14 +1688,7 @@ impl<S: 'static> Pane<S> {
         // A right-click inside a menu or dialog looks there; one on a
         // non-modal overlay's catcher (outside an open menu) closes the menu
         // and looks in the main tree; a modal scrim blocks it.
-        let (layer, main) = press_layer(tree, self.overlay_active, pos);
-        let catcher = !main && layer.bounds == tree.bounds;
-        let target = match (catcher, layer.decoration.fill) {
-            (true, Some(_)) => None,
-            (true, None) => tree.children.first(),
-            (false, _) => Some(layer),
-        };
-        let id = target.and_then(|t| context_at(t, pos));
+        let (id, catcher) = crate::app_touch::context_target(tree, self.overlay_active, pos);
         let closed = catcher && self.menu_ui.borrow().root.is_some();
         if closed {
             self.menu_ui.borrow_mut().close();
@@ -2068,21 +2067,55 @@ impl<S: 'static> Pane<S> {
         changed || menu_changed
     }
 
-    /// Scroll the container under the last pointer position by `dy` logical
-    /// pixels (positive = reveal content further down). Returns whether anything
-    /// scrolled (the offset is re-clamped to the content during the next build).
-    fn scroll_by(&mut self, state: &S, theme: &Theme, font: Option<&Font>, dy: f64) -> bool {
+    /// Scroll the container under the last pointer position by a wheel's
+    /// `dx` / `dy` logical pixels (positive = reveal content further right /
+    /// down): a vertical wheel scrolls the innermost vertical container under
+    /// the pointer (or a sideways one, when there is none), a mostly
+    /// horizontal one the innermost sideways container. Returns whether
+    /// anything scrolled (the offset is re-clamped to the content during the
+    /// next build).
+    fn scroll_by(
+        &mut self,
+        state: &S,
+        theme: &Theme,
+        font: Option<&Font>,
+        dx: f64,
+        dy: f64,
+    ) -> bool {
         self.ensure_tree(state, theme, font);
-        let Some(id) = self
+        let Some(targets) = self
             .tree
             .as_ref()
-            .and_then(|t| crate::core::scroll_at(t, self.last_pointer))
+            .map(|t| crate::core::scroll_targets_at(t, self.last_pointer))
         else {
             return false;
         };
+        let (id, mut delta) = if dx.abs() > dy.abs() {
+            match (targets.horizontal, targets.vertical) {
+                (Some(h), _) => (h, dx),
+                (None, Some(v)) => (v, dy),
+                (None, None) => return false,
+            }
+        } else {
+            match (targets.vertical, targets.horizontal) {
+                (Some(v), _) => (v, dy),
+                (None, Some(h)) => (h, dy),
+                (None, None) => return false,
+            }
+        };
+        // A right-to-left strip starts at the right: scrolling right goes
+        // back towards its start.
+        if self
+            .tree
+            .as_ref()
+            .and_then(|t| crate::core::find_scroll(t, id))
+            .is_some_and(|n| n.scroll_horizontal && n.rtl)
+        {
+            delta = -delta;
+        }
         let off = self.scroll_offsets.entry(id).or_insert(0.0);
         let before = *off;
-        *off = (*off + dy).max(0.0);
+        *off = (*off + delta).max(0.0);
         // A scroll always rebuilds (apply_scroll re-clamps to the content); only
         // report movement when the unclamped offset actually changed.
         let moved = (*off - before).abs() > f64::EPSILON;
@@ -2092,16 +2125,18 @@ impl<S: 'static> Pane<S> {
         moved
     }
 
-    /// Scroll container `id` by `dy` logical pixels, clamped to its content.
-    /// Returns whether it moved and whether the clamp stopped it short (it
-    /// reached an end).
+    /// Scroll container `id` by `delta` logical pixels along its axis, clamped
+    /// to its content (positive moves the content up or left, as a finger
+    /// dragging that way does: towards the end, except in a right-to-left
+    /// strip, which starts at the right). Returns whether it moved and whether
+    /// the clamp stopped it short (it reached an end).
     fn scroll_container_by(
         &mut self,
         state: &S,
         theme: &Theme,
         font: Option<&Font>,
         id: crate::core::ScrollId,
-        dy: f64,
+        delta: f64,
     ) -> (bool, bool) {
         self.ensure_tree(state, theme, font);
         let Some(node) = self
@@ -2112,16 +2147,15 @@ impl<S: 'static> Pane<S> {
             return (false, true);
         };
         // The tree was laid out at the current offset, which shifted the
-        // content up by it (see `apply_scroll`).
+        // content by it (see `apply_scroll`).
         let off = self.scroll_offsets.get(&id).copied().unwrap_or(0.0);
-        let top = node.bounds.min_y();
-        let bottom = node
-            .children
-            .iter()
-            .map(|c| c.bounds.max_y())
-            .fold(top, f64::max);
-        let max = (bottom + off - top - node.bounds.height()).max(0.0);
-        let wanted = off + dy;
+        let max = crate::core::scroll_range(node, off);
+        let delta = if node.scroll_horizontal && node.rtl {
+            -delta
+        } else {
+            delta
+        };
+        let wanted = off + delta;
         let new = wanted.clamp(0.0, max);
         let moved = (new - off).abs() > f64::EPSILON;
         if moved {
@@ -2262,32 +2296,7 @@ impl<S: 'static> App<S> {
     /// Scroll the container under the last pointer position in the primary
     /// window by `dy` logical pixels.
     pub fn scroll_by(&mut self, dy: f64) -> bool {
-        self.pane_scroll_by(0, dy)
-    }
-
-    /// Deliver a finger to the primary window the way a touch-screen backend
-    /// does for the first finger: the [`Touch`](crate::platform::Touch), then
-    /// the pointer press, move or release it maps to. Returns whether anything
-    /// changed. A drag in a scroll container scrolls it; see
-    /// [`advance_fling`](Self::advance_fling) for what follows a quick release.
-    pub fn touch(&mut self, touch: crate::platform::Touch) -> bool {
-        use crate::platform::TouchPhase;
-        let position = touch.position;
-        let mut changed = self.pane_touch(0, touch);
-        changed |= match touch.phase {
-            TouchPhase::Started => {
-                self.panes[0].last_pointer = position;
-                !self.panes[0].touch.swallows_press() && self.pane_pointer_down(0, position)
-            }
-            TouchPhase::Moved => {
-                self.panes[0].last_pointer = position;
-                !self.panes[0].touch.holds_moves() && self.pane_pointer_move(0, position)
-            }
-            TouchPhase::Ended => self.pane_pointer_up(0, position),
-            // Released far away, so the press doesn't click.
-            TouchPhase::Cancelled => self.pane_pointer_up(0, Point::new(-1.0e9, -1.0e9)),
-        };
-        changed
+        self.pane_scroll_by(0, 0.0, dy)
     }
 
     /// Run what's queued on the app's [`AppHandle`] (updates, due timers,
@@ -2303,12 +2312,6 @@ impl<S: 'static> App<S> {
             }
         }
         ran
-    }
-
-    /// Advance a touch fling in the primary window by one frame (the loop does
-    /// this on every frame while one runs). Returns whether it scrolled.
-    pub fn advance_fling(&mut self) -> bool {
-        self.pane_fling(0)
     }
 
     // --- Per-pane event routing (by window index) --------------------------
@@ -2420,7 +2423,7 @@ impl<S: 'static> App<S> {
         panes[idx].hover_at(state, theme, font.as_ref(), pos) | panes[idx].refresh_interactions()
     }
 
-    fn pane_scroll_by(&mut self, idx: usize, dy: f64) -> bool {
+    fn pane_scroll_by(&mut self, idx: usize, dx: f64, dy: f64) -> bool {
         let App {
             state,
             theme,
@@ -2428,7 +2431,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].scroll_by(state, theme, font.as_ref(), dy)
+        panes[idx].scroll_by(state, theme, font.as_ref(), dx, dy)
     }
 
     /// The left button, or the first finger, went down at `position` (outside
@@ -2536,78 +2539,6 @@ impl<S: 'static> App<S> {
             }
             down.is_some()
         }
-    }
-
-    /// A finger touched, moved or lifted: drive touch scrolling. Returns
-    /// whether to repaint.
-    fn pane_touch(&mut self, idx: usize, touch: crate::platform::Touch) -> bool {
-        use crate::core::touch::TouchAction;
-        let App {
-            state,
-            theme,
-            font,
-            panes,
-            ..
-        } = self;
-        let pane = &mut panes[idx];
-        if touch.phase == crate::platform::TouchPhase::Started {
-            pane.ensure_tree(state, theme, font.as_ref());
-        }
-        let now = pane.touch_now();
-        let tree = pane.tree.as_ref();
-        let action = pane.touch.touch(&touch, now, |p| {
-            tree.and_then(|t| crate::core::scroll_at(t, p))
-        });
-        app_dbg(format_args!("touch {touch:?}: {action:?}"));
-        if pane.touch.flinging() && !pane.animating {
-            // The finger lifted while moving: frames drive the fling, through
-            // `pane_fling`.
-            pane.animating = true;
-            crate::platform::frame::request();
-        }
-        match action {
-            TouchAction::None => false,
-            TouchAction::Begin { target, dy } => {
-                // The press becomes a scroll: it no longer clicks, focuses or
-                // selects.
-                pane.pressed = None;
-                pane.press_focus = None;
-                pane.press_at = None;
-                if pane.text_selecting.is_some() {
-                    pane.end_text_select();
-                }
-                pane.dirty = true;
-                pane.scroll_container_by(state, theme, font.as_ref(), target, dy);
-                true
-            }
-            TouchAction::Scroll { target, dy } => {
-                pane.scroll_container_by(state, theme, font.as_ref(), target, dy)
-                    .0
-            }
-            TouchAction::End => false,
-        }
-    }
-
-    /// Advance a running fling by a frame. Returns whether it scrolled.
-    fn pane_fling(&mut self, idx: usize) -> bool {
-        let App {
-            state,
-            theme,
-            font,
-            panes,
-            ..
-        } = self;
-        let pane = &mut panes[idx];
-        let now = pane.touch_now();
-        let Some((target, dy)) = pane.touch.tick(now) else {
-            return false;
-        };
-        let (moved, clamped) = pane.scroll_container_by(state, theme, font.as_ref(), target, dy);
-        if clamped {
-            // It reached the end of the content.
-            pane.touch.stop_fling();
-        }
-        moved
     }
 
     /// Run the app against the platform backend ([`backend::run`]): native X11
@@ -3170,8 +3101,8 @@ impl<S: 'static> App<S> {
                 Event::Scroll { delta } => {
                     // A wheel over a viewport scrolls its content, not the chrome.
                     let at = self.panes[idx].last_pointer;
-                    let (_, dy) = delta.in_pixels();
-                    if self.try_forward_wheel(idx, at, dy) || self.pane_scroll_by(idx, dy) {
+                    let (dx, dy) = delta.in_pixels();
+                    if self.try_forward_wheel(idx, at, dy) || self.pane_scroll_by(idx, dx, dy) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -3194,6 +3125,8 @@ impl<S: 'static> App<S> {
                 Event::Wake => {
                     // A fling scrolls on with every frame.
                     let flung = self.pane_fling(idx);
+                    // A finger held down long enough opens the context menu.
+                    let held = self.pane_long_press(idx);
                     // Updates and timers ran above (the loop wakes again at
                     // the next timer); re-render if they did, or if this
                     // window changed since it last presented (another
@@ -3207,7 +3140,7 @@ impl<S: 'static> App<S> {
                     }
                     // A frame for an animation (or a fade) re-renders too.
                     pane.dirty |= pane.animating;
-                    if ran || flung || pane.dirty {
+                    if ran || flung || held || pane.dirty {
                         present(&mut self, &mut surfaces, idx, window, false);
                     } else if content {
                         // Only canvases or viewport content changed: no
@@ -3907,8 +3840,9 @@ pub mod prelude {
     pub use crate::widgets::{
         EditBuffer, Variant, button, button_labeled, button_variant, checkbox, column, divider,
         edit_string, grid, heading, label, menu, menu_item, open_dialog, open_menu, panel,
-        paragraph, progress_bar, radio, row, scroll, setting_row, slider, spacer, spinner, swatch,
-        switch, tabs, text_area, text_editor, text_field, tooltip, viewport,
+        paragraph, progress_bar, radio, row, scroll, scroll_horizontal, setting_row, slider,
+        spacer, spinner, swatch, switch, tabs, text_area, text_editor, text_field, tooltip,
+        viewport,
     };
     pub use crate::widgets::{
         NumberInput, Select, SplitPane, ToastKind, Toasts, number_input, select, split_pane,

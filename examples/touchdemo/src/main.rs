@@ -1,12 +1,18 @@
-//! A text field above a list of rows: on a touch screen a finger drag scrolls
-//! the list (and flings it), a tap on a row taps it, and the text field brings
-//! up the keyboard. With a mouse the wheel scrolls, as everywhere.
+//! A text field above a list of rows, a sideways strip of chips and a box to
+//! pinch: on a touch screen a finger drag scrolls the list (and flings it), a
+//! sideways one the strip, a tap on a row taps it and a long press opens its
+//! context menu, two fingers pinch the box, and the text field brings up the
+//! keyboard. With a mouse the wheel scrolls, as everywhere, and a right-click
+//! opens a row's menu.
 //!
 //! It logs what happens, on stdout and, on iOS, to `touchdemo.log` in the
 //! app's tmp directory, which CI reads back from the simulator:
 //!
 //! - `touchdemo: scrolled to N` as the list's offset changes;
-//! - `touchdemo: row N tapped`;
+//! - `touchdemo: row N tapped`, and `touchdemo: row N pinned` when its
+//!   context menu's item is picked;
+//! - `touchdemo: strip scrolled to N` as the strip's offset changes;
+//! - `touchdemo: pinch <phase> scale S` as two fingers pinch the box;
 //! - `touchdemo: text "..."` and `touchdemo: preedit ...` as the field's text
 //!   and composition change;
 //! - `touchdemo: theme dark` / `light` as the system's look changes;
@@ -22,7 +28,10 @@
 //!    a committing `insertText:`, an autocorrect-style `replaceRange:withText:`),
 //!    drags the list with a synthetic finger through the backend's touch path,
 //!    taps outside the field, then reads the view's accessibility elements as
-//!    VoiceOver does and activates a row through one. It ends this part with
+//!    VoiceOver does and activates a row through one. Then it holds a finger
+//!    on a row until its context menu opens and picks the item (through its
+//!    accessibility element), drags the strip sideways, and pinches the box
+//!    with two synthetic fingers. It ends this part with
 //!    `touchdemo: selftest passed` or `touchdemo: selftest FAILED: ...`.
 //! 2. It then animates and waits for CI to switch the simulator to dark mode
 //!    (`xcrun simctl ui ... appearance dark`) and to send it to the background
@@ -32,6 +41,7 @@
 //!    `touchdemo: phase 2 passed` or `touchdemo: phase 2 FAILED: ...`.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use stipple::core::{PinchEvent, PinchPhase};
 use stipple::platform::Lifecycle;
 use stipple::prelude::*;
 use stipple::widgets::{EditBuffer, text_editor};
@@ -40,11 +50,21 @@ const ROWS: usize = 30;
 const PAD: f64 = 16.0;
 const FIELD_H: f64 = 44.0;
 const LIST_H: f64 = 400.0;
+const STRIP_H: f64 = 44.0;
+const PINCH_H: f64 = 100.0;
 
 #[derive(Default)]
 struct State {
     field: EditBuffer,
     tapped: Vec<usize>,
+    /// The rows whose context menu item was picked.
+    pinned: Vec<usize>,
+    /// The box's zoom, and what it was when the pinch began.
+    zoom: f64,
+    zoom_at_start: f64,
+    /// The pinch phases seen, and the scale when the last one ended.
+    pinch_phases: Vec<PinchPhase>,
+    pinch_scale: f64,
     /// Ask for a frame at every build (the self-test's second part).
     animate: bool,
     /// The builds counted when the app went to the background.
@@ -56,6 +76,8 @@ struct State {
 
 /// The list's scroll offset in the frame last built (`f64` bits).
 static OFFSET: AtomicU64 = AtomicU64::new(0);
+/// The strip's scroll offset in the frame last built (`f64` bits).
+static STRIP_OFFSET: AtomicU64 = AtomicU64::new(0);
 /// Views built so far.
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
 /// Whether the theme's look changed while the app ran.
@@ -121,6 +143,17 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
                     s.tapped.push(i);
                     log(&format!("touchdemo: row {i} tapped"));
                 })
+                // A long press (or a right-click) opens it.
+                .context_menu(
+                    cx,
+                    Menu::new("").item(MenuItem::new(
+                        format!("Pin row {i}"),
+                        move |s: &mut State| {
+                            s.pinned.push(i);
+                            log(&format!("touchdemo: row {i} pinned"));
+                        },
+                    )),
+                )
         })
         .collect();
     // A scroll container built by hand (as `scroll` does) to read its offset.
@@ -136,10 +169,41 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .height(LIST_H)
     .scrollable(id)
     .align(Align::Start, Align::Stretch);
+    // A sideways strip of chips, scrolled by a sideways drag.
+    let chips = (0..12)
+        .map(|i| button_labeled(&theme, format!("Chip {i}")).width(90.0))
+        .collect();
+    let strip_id = cx.register_scroll();
+    let strip_offset = cx.scroll_offset(strip_id);
+    if STRIP_OFFSET.swap(strip_offset.to_bits(), Ordering::Relaxed) != strip_offset.to_bits() {
+        log(&format!("touchdemo: strip scrolled to {strip_offset:.0}"));
+    }
+    let strip = Element::stack(Axis::Horizontal, vec![row(chips).gap(4.0)])
+        .height(STRIP_H)
+        .scrollable(strip_id);
+    // A box two fingers pinch.
+    let pinch = label(&theme, format!("Pinch me: {:.2}x", state.zoom))
+        .height(PINCH_H)
+        .on_pinch(cx, |ev: &PinchEvent, s: &mut State| {
+            if ev.phase == PinchPhase::Began {
+                s.zoom_at_start = s.zoom;
+            }
+            s.zoom = (s.zoom_at_start * ev.scale).clamp(0.25, 8.0);
+            if s.pinch_phases.last() != Some(&ev.phase) {
+                log(&format!(
+                    "touchdemo: pinch {:?} scale {:.2}",
+                    ev.phase, ev.scale
+                ));
+            }
+            s.pinch_phases.push(ev.phase);
+            s.pinch_scale = ev.scale;
+        });
     column(vec![
         field,
         label(&theme, format!("Rows tapped: {}", state.tapped.len())),
         list,
+        strip,
+        pinch,
     ])
     .gap(12.0)
     .align(Align::Start, Align::Stretch)
@@ -148,9 +212,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
 }
 
 fn main() {
-    let mut app = App::new(State::default(), view)
+    let state = State {
+        zoom: 1.0,
+        ..State::default()
+    };
+    let mut app = App::new(state, view)
         .title("Stipple Touch")
-        .logical_size(Size::new(360.0, 560.0))
+        .logical_size(Size::new(360.0, 720.0))
         // Follows the system's light and dark mode.
         .theme(Theme::native())
         .on_lifecycle(|s, change| {
@@ -200,6 +268,8 @@ mod selftest {
     static FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
     /// The row activated through its accessibility element.
     static ACTIVATED: AtomicUsize = AtomicUsize::new(usize::MAX);
+    /// Where the current synthetic gesture is (view coordinates).
+    static TOUCH_AT: Mutex<Point> = Mutex::new(Point::new(0.0, 0.0));
     /// The notification permission, as the center reported it.
     static PERMISSION: Mutex<Option<&'static str>> = Mutex::new(None);
 
@@ -275,6 +345,40 @@ mod selftest {
             .filter_map(|n| n.parse().ok())
             .collect();
         (v.len() == 4).then(|| (v[0], v[1], v[2], v[3]))
+    }
+
+    /// The index and label of an open context menu's item, read through
+    /// accessibility.
+    fn menu_item() -> Option<(usize, String)> {
+        simulate::accessibility_elements()
+            .into_iter()
+            .enumerate()
+            .find(|(_, e)| e.label.starts_with("Pin row"))
+            .map(|(i, e)| (i, e.label))
+    }
+
+    /// The middle of the first element whose label starts with `label`, in
+    /// the view's coordinates (where touches go): its accessibility frame,
+    /// which is on screen, less where the view is.
+    fn element_center(label: &str) -> Option<Point> {
+        let screen = simulate::view_frame_on_screen();
+        let e = simulate::accessibility_elements()
+            .into_iter()
+            .find(|e| e.label.starts_with(label))?;
+        let c = e.frame.center();
+        Some(Point::new(c.x - screen.min_x(), c.y - screen.min_y()))
+    }
+
+    /// The middle of a row well inside the list's visible part (it starts
+    /// about 105 points down and is 400 tall), in the view's coordinates.
+    fn visible_row() -> Option<Point> {
+        let screen = simulate::view_frame_on_screen();
+        let (top, bottom) = (screen.min_y() + 140.0, screen.min_y() + 420.0);
+        let e = simulate::accessibility_elements().into_iter().find(|e| {
+            e.label.starts_with("Row ") && e.frame.min_y() > top && e.frame.max_y() < bottom
+        })?;
+        let c = e.frame.center();
+        Some(Point::new(c.x - screen.min_x(), c.y - screen.min_y()))
     }
 
     fn document_is(text: &'static str) -> impl Fn(&State) -> bool + Send {
@@ -460,6 +564,112 @@ mod selftest {
                 elements.iter().any(|e| e.label == "Rows tapped: 1"),
                 "the label's element didn't follow the update",
             );
+        });
+
+        // A long press on a row opens its context menu (and doesn't tap the
+        // row); pick its item through its accessibility element.
+        steps.run(300, |_| {
+            let at = visible_row().unwrap_or(Point::new(120.0, 300.0));
+            log(&format!("touchdemo: long press at {at:?}"));
+            *TOUCH_AT.lock().unwrap() = at;
+            simulate::touch(3, TouchPhase::Started, at);
+        });
+        steps.run(800, |_| {
+            simulate::touch(3, TouchPhase::Ended, *TOUCH_AT.lock().unwrap())
+        });
+        steps.until(|_| menu_item().is_some());
+        steps.run(0, |s| {
+            let item = menu_item();
+            log(&format!("touchdemo: menu item {item:?}"));
+            check(item.is_some(), "the long press opened no menu");
+            check(s.tapped.len() == 1, format!("rows tapped {:?}", s.tapped));
+            if let Some((i, _)) = item {
+                simulate::activate_accessibility_element(i);
+            }
+        });
+        steps.until(|s| !s.pinned.is_empty());
+        steps.run(0, |s| {
+            check(s.pinned.len() == 1, format!("rows pinned {:?}", s.pinned));
+            check(s.tapped.len() == 1, format!("rows tapped {:?}", s.tapped));
+        });
+
+        // Drag the strip of chips sideways, 240 points left.
+        // Measured once: the chips move with the strip.
+        steps.run(300, |_| {
+            let at = element_center("Chip 1").unwrap_or(Point::new(150.0, 560.0));
+            *TOUCH_AT.lock().unwrap() = Point::new(at.x + 140.0, at.y);
+        });
+        let strip = |dx: f64| {
+            let at = *TOUCH_AT.lock().unwrap();
+            Point::new(at.x + dx, at.y)
+        };
+        steps.run(0, move |_| {
+            simulate::touch(4, TouchPhase::Started, strip(0.0))
+        });
+        for i in 1..=8u32 {
+            let dx = -240.0 * f64::from(i) / 8.0;
+            steps.run(16, move |_| {
+                simulate::touch(4, TouchPhase::Moved, strip(dx))
+            });
+        }
+        steps.run(16, move |_| {
+            simulate::touch(4, TouchPhase::Ended, strip(-240.0))
+        });
+        steps.until(|_| f64::from_bits(STRIP_OFFSET.load(Ordering::Relaxed)) >= 200.0);
+        steps.run(0, |s| {
+            let offset = f64::from_bits(STRIP_OFFSET.load(Ordering::Relaxed));
+            check(
+                offset >= 200.0,
+                format!("the strip scrolled only {offset:.0}"),
+            );
+            check(s.tapped.len() == 1, format!("rows tapped {:?}", s.tapped));
+        });
+
+        // Pinch the box: two fingers 60 points apart spread to 150.
+        let fingers = |gap: f64| {
+            let at = *TOUCH_AT.lock().unwrap();
+            (
+                Point::new(at.x - gap / 2.0, at.y),
+                Point::new(at.x + gap / 2.0, at.y),
+            )
+        };
+        steps.run(300, move |_| {
+            *TOUCH_AT.lock().unwrap() =
+                element_center("Pinch me").unwrap_or(Point::new(180.0, 650.0));
+            let (a, b) = fingers(60.0);
+            simulate::touch(5, TouchPhase::Started, a);
+            simulate::touch(6, TouchPhase::Started, b);
+        });
+        for i in 1..=6u32 {
+            let gap = 60.0 + 90.0 * f64::from(i) / 6.0;
+            steps.run(16, move |_| {
+                let (a, b) = fingers(gap);
+                simulate::touch(5, TouchPhase::Moved, a);
+                simulate::touch(6, TouchPhase::Moved, b);
+            });
+        }
+        steps.run(16, move |_| {
+            let (a, b) = fingers(150.0);
+            simulate::touch(6, TouchPhase::Ended, b);
+            simulate::touch(5, TouchPhase::Ended, a);
+        });
+        steps.until(|s| s.pinch_phases.contains(&PinchPhase::Ended));
+        steps.run(0, |s| {
+            log(&format!(
+                "touchdemo: pinched to {:.2}x ({} events)",
+                s.zoom,
+                s.pinch_phases.len()
+            ));
+            check(
+                s.pinch_phases.first() == Some(&PinchPhase::Began)
+                    && s.pinch_phases.last() == Some(&PinchPhase::Ended),
+                format!("pinch phases {:?}", s.pinch_phases),
+            );
+            check(
+                (s.pinch_scale - 2.5).abs() < 0.05,
+                format!("pinch scale {:.3}", s.pinch_scale),
+            );
+            check(s.tapped.len() == 1, format!("rows tapped {:?}", s.tapped));
             report("selftest");
         });
 

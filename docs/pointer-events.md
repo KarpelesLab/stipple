@@ -4,7 +4,9 @@ Taps, drags and text selection cover most widgets. A custom element that
 draws its own content, such as a terminal (mouse reporting, selection,
 middle-click paste), a canvas or a map, needs the raw pointer: every button,
 every move, the modifier keys, click counts and the wheel as the device
-reports it. `Element::on_pointer` and `Element::on_wheel` give it that.
+reports it. `Element::on_pointer` and `Element::on_wheel` give it that, and
+`Element::on_pinch` gives it two-finger gestures on touch screens (see
+[Touch gestures](#touch-gestures)).
 
 ```rust
 use stipple::prelude::*;
@@ -102,6 +104,82 @@ An element with `on_wheel` takes the wheel over itself instead of the scroll
 container it is in; a scroll container inside it still takes the wheel over
 itself. Scroll containers scroll a line as 40 logical pixels
 (`stipple::platform::SCROLL_LINE_PX`).
+
+## Touch gestures
+
+On a touch screen (iOS, Android, and phones' and tablets' browsers) every
+finger arrives as an `Event::Touch`, and the first one down is also the
+pointer: a left-button press, its moves and a release, which `on_pointer`
+sees like a mouse's. The App runs the touches through one gesture recognizer
+in the shared core (`core::touch`), so every platform behaves the same:
+
+- **Scrolling.** A finger dragged in a scroll container scrolls it, and
+  flings it on, slowing down, if it lifts while moving (no fling under reduced
+  motion). A press only becomes a scroll once the finger has moved 8 logical
+  pixels, so taps still tap; then the pressed widget lets go. The direction
+  the finger moved picks the innermost container along that axis: sideways
+  strips (`widgets::scroll_horizontal`, or any horizontal stack made
+  `scrollable`) scroll sideways, and inside a vertical list a vertical drag
+  still scrolls the list. With no container along the drag, the widget under
+  the finger keeps it (a slider drags). A finger landing on a fling stops it
+  without tapping.
+- **Long press.** A finger held within those 8 pixels for half a second over
+  an element with a `context_menu` (or an `on_context` handler) opens the
+  menu where the finger is, as a right-click does with a mouse. The press is
+  cancelled, so lifting the finger taps nothing (nor the menu item under it);
+  a tap then picks from the menu. Moving first, or lifting before the delay,
+  is a scroll or a tap as usual. Elsewhere, holding a button and lifting
+  still taps it, as on iOS and Android.
+- **Pinch, two-finger pan and rotation.** A second finger landing while the
+  first is still pressing (or scrolling) starts a pinch when the element
+  under the midpoint has `on_pinch`; its handler gets a `PinchEvent` for the
+  start, each move and the end:
+
+| Field | Meaning |
+|---|---|
+| `phase` | `Began` (scale 1), `Changed`, `Ended` (a finger lifted), `Cancelled` (the system took the touches) |
+| `scale` | the distance between the fingers over the distance at `Began` |
+| `rotation` | how far the line between them turned since `Began`, in radians, clockwise on screen |
+| `translation` | how far their midpoint moved since `Began` (a two-finger pan) |
+| `centroid`, `window_centroid` | the midpoint, in the element's coordinates and the window's |
+| `size` | the element's size |
+
+  Each value is measured from where the gesture began, so a handler keeps
+  what it had at `Began` and applies them to that:
+
+```rust
+use stipple::core::{PinchEvent, PinchPhase};
+Element::boxed(BoxStyle::default()).on_pinch(cx, |ev: &PinchEvent, s: &mut Photo| {
+    if ev.phase == PinchPhase::Began {
+        s.start = (s.zoom, s.pan);
+    }
+    s.zoom = (s.start.0 * ev.scale).clamp(0.5, 8.0);
+    s.pan = s.start.1 + ev.translation;
+})
+```
+
+  The first finger's press is cancelled when the pinch begins (no tap), and
+  when either finger lifts the pinch ends; the other is ignored until it
+  lifts too. Without an `on_pinch` element under them, a second finger is
+  ignored and the first goes on scrolling or pressing. Further fingers are
+  ignored.
+
+| | Fingers | Long press opens the menu | Pinch |
+|---|---|---|---|
+| iOS | `touchesBegan:` and friends (`multipleTouchEnabled`) | ✅ | ✅ |
+| Android | `AMotionEvent` pointers (`POINTER_DOWN` / `UP`) | ✅ | ✅ |
+| Web | `touchstart` / `touchmove` / `touchend` / `touchcancel` (the canvas has `touch-action: none`) | ✅ | ✅ |
+| Desktops | — (a touch screen there drives the mouse) | — | — |
+
+`App::touch` feeds the primary window a synthetic `Touch` as a touch-screen
+backend does (the touch, then the first finger's pointer events), and
+`App::advance_fling` / `App::advance_long_press` stand in for the loop's
+frames and the long-press timer; `src/touch_tests.rs` and the recognizer's
+own tests drive long presses, sideways strips and pinches through them.
+Two-finger gestures can't be scripted on a device from outside (`adb shell
+input` has one finger), so on devices CI checks them with `touchdemo`'s iOS
+simulator self-test, which feeds the backend's touch path two synthetic
+fingers.
 
 ## The pointer leaving the window
 

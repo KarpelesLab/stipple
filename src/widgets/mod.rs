@@ -148,6 +148,21 @@ pub fn scroll<S>(cx: &mut Cx<S>, height: f64, content: Element) -> Element {
         .align(Align::Start, Align::Stretch)
 }
 
+/// A fixed-width sideways scroll viewport around `content` (a strip of chips,
+/// a carousel): its children lay out left to right at their natural width and
+/// are clipped to the viewport; a horizontal wheel or trackpad swipe over it
+/// scrolls it (a vertical wheel too, when no vertical container is under the
+/// pointer), and on a touch screen a sideways finger drag scrolls and flings
+/// it. Put several elements in a [`row`] for `content`. Inside a
+/// [`scroll`] list, a drag picks the container along its direction.
+pub fn scroll_horizontal<S>(cx: &mut Cx<S>, width: f64, content: Element) -> Element {
+    let id = cx.register_scroll();
+    Element::stack(Axis::Horizontal, vec![content])
+        .width(width)
+        .scrollable(id)
+        .align(Align::Start, Align::Stretch)
+}
+
 /// An embedded-content viewport of `width`×`height` logical pixels for the
 /// given [`ViewportId`], framed with a hairline themed border. The app fills the
 /// reserved rect with externally-rendered pixels (a browser page, video, or a

@@ -42,7 +42,9 @@ use std::sync::Arc;
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::access::{A11yNode, aria_json};
 use crate::platform::event::Ime;
-use crate::platform::event::{ButtonState, Event, KeyCode, WindowId};
+use crate::platform::event::{
+    ButtonState, Event, KeyCode, PointerButton, Touch, TouchPhase, WindowId,
+};
 use crate::platform::input::{css_cursor, web_button, web_key, web_modifiers, web_wheel};
 use crate::platform::native::SystemLook;
 use crate::platform::time::Instant;
@@ -151,6 +153,8 @@ struct Host {
     /// sent again.
     a11y: RefCell<Option<A11yNode>>,
     text_input: Cell<bool>,
+    /// The first finger down, which is also the pointer until it lifts.
+    primary: Cell<Option<u64>>,
 }
 
 thread_local! {
@@ -167,6 +171,7 @@ thread_local! {
             font: RefCell::new(None),
             a11y: RefCell::new(None),
             text_input: Cell::new(false),
+            primary: Cell::new(None),
         }
     };
 }
@@ -486,6 +491,56 @@ pub fn pointer(kind: u32, button: u32, x: f64, y: f64, mods: u32) {
         state,
         position,
     });
+}
+
+/// A finger of a touch event (each of its `changedTouches`): `phase` 0 for
+/// `touchstart`, 1 `touchmove`, 2 `touchend`, 3 `touchcancel`; `id` is the
+/// `Touch.identifier`, `(x, y)` in CSS pixels. Each finger is an
+/// [`Event::Touch`] (the app's gestures: scrolling, long press, pinch); the
+/// first one down is also the pointer until it lifts, as on iOS and Android.
+#[doc(hidden)]
+pub fn touch(phase: u32, id: u32, x: f64, y: f64) {
+    let position = Point::new(x, y);
+    let id = u64::from(id);
+    let phase = match phase {
+        0 => TouchPhase::Started,
+        1 => TouchPhase::Moved,
+        2 => TouchPhase::Ended,
+        _ => TouchPhase::Cancelled,
+    };
+    deliver(Event::Touch(Touch {
+        id,
+        phase,
+        position,
+    }));
+    let primary = HOST.with(|h| h.primary.get());
+    let button = |state, position| Event::PointerButton {
+        button: PointerButton::Left,
+        state,
+        position,
+    };
+    match phase {
+        TouchPhase::Started if primary.is_none() => {
+            HOST.with(|h| h.primary.set(Some(id)));
+            crate::platform::set_pointer_modifiers(Default::default());
+            deliver(Event::PointerMoved { position });
+            deliver(button(ButtonState::Pressed, position));
+        }
+        TouchPhase::Moved if primary == Some(id) => deliver(Event::PointerMoved { position }),
+        TouchPhase::Ended | TouchPhase::Cancelled if primary == Some(id) => {
+            HOST.with(|h| h.primary.set(None));
+            // A cancelled touch is released far away, so it doesn't click.
+            let at = if phase == TouchPhase::Cancelled {
+                Point::new(-1.0e9, -1.0e9)
+            } else {
+                position
+            };
+            deliver(button(ButtonState::Released, at));
+            // A finger that lifts leaves no hover behind.
+            deliver(Event::PointerLeft);
+        }
+        _ => {}
+    }
 }
 
 /// A `wheel` event (`deltaX`, `deltaY`, `deltaMode`).

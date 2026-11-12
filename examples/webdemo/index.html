@@ -225,6 +225,46 @@
         second.remove();
         app2.overlay.remove();
 
+        // Touch: fingers come as touch events (a phone's browser), which go
+        // through the app's gestures: a tap taps, and a long press opens the
+        // counter's context menu, whose item a tap then picks.
+        if (typeof Touch === "function" && typeof TouchEvent === "function") {
+          const touchOn = (type, id, x, y) => {
+            const r = canvas.getBoundingClientRect();
+            const t = new Touch({ identifier: id, target: canvas, clientX: r.left + x, clientY: r.top + y });
+            const down = type === "touchstart" || type === "touchmove" ? [t] : [];
+            canvas.dispatchEvent(new TouchEvent(type, {
+              touches: down, targetTouches: down, changedTouches: [t], bubbles: true, cancelable: true,
+            }));
+          };
+          const tapAt = async (id, x, y) => {
+            touchOn("touchstart", id, x, y);
+            touchOn("touchend", id, x, y);
+            await sleep(100);
+          };
+          const before = probe(0);
+          await tapAt(7, BUTTONS.counter, BUTTONS.y);
+          check("touch-tap", probe(0) === before + 1, `clicks ${before} -> ${probe(0)}`);
+          // Held past the long-press delay (half a second).
+          touchOn("touchstart", 8, BUTTONS.counter, BUTTONS.y);
+          let item = null;
+          for (let i = 0; i < 40 && !item; i++) {
+            await sleep(50);
+            item = [...overlay.querySelectorAll("[role=menuitem]")].find((el) => el.textContent === "Add ten");
+          }
+          touchOn("touchend", 8, BUTTONS.counter, BUTTONS.y);
+          await sleep(100);
+          const heldClicks = probe(0);
+          if (item) {
+            const ir = item.getBoundingClientRect(), r = canvas.getBoundingClientRect();
+            await tapAt(9, ir.left + ir.width / 2 - r.left, ir.top + ir.height / 2 - r.top);
+          }
+          check("touch-long-press", item && heldClicks === before + 1 && probe(0) === before + 11,
+            `menu item ${item ? "shown" : "missing"}, clicks ${heldClicks} after the long press, ${probe(0)} after picking`);
+        } else {
+          check("touch", true, "skipped: this browser has no Touch / TouchEvent constructors");
+        }
+
         // Wheel and resize don't throw, and resize re-renders at the new size.
         canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true }));
         const presents = stats.presents;
