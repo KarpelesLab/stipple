@@ -951,7 +951,9 @@ impl Scene {
                     let x = pen + g.x_offset;
                     pen += g.x_advance;
                     let face = font.chain().face(g.face_idx);
-                    let Some(node) = face.glyph_node(g.glyph_id, size as f32) else {
+                    // Cached: building a glyph's node re-parses its font.
+                    let Some(node) = super::glyphs::outline(font, g.face_idx, g.glyph_id, size)
+                    else {
                         continue;
                     };
                     let synth = font

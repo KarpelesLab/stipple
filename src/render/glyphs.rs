@@ -153,7 +153,7 @@ type OutlineKey = (u64, u16, u32);
 static OUTLINES: Mutex<Option<HashMap<OutlineKey, Option<Node>>>> = Mutex::new(None);
 const MAX_OUTLINES: usize = 8192;
 
-fn outline(font: &Font, face_idx: u16, glyph: u16, size: f64) -> Option<Node> {
+pub(crate) fn outline(font: &Font, face_idx: u16, glyph: u16, size: f64) -> Option<Node> {
     let face = font.chain().face(face_idx);
     let key = (face.stable_id(), glyph, (size * 64.0).round() as u32);
     let mut cache = OUTLINES.lock().unwrap_or_else(|e| e.into_inner());

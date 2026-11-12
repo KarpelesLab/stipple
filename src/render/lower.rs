@@ -253,11 +253,19 @@ impl Lower<'_> {
                     return None;
                 }
                 if g.cache_key.is_some() {
-                    // A cached bitmap (a glyph): keep or drop it whole.
+                    // A glyph the GPU caches as a bitmap: keep or drop it
+                    // whole, without its key. oxideav-raster renders a keyed
+                    // group it hasn't seen into a canvas-sized buffer, keys
+                    // it by position too, and each frame gets a new
+                    // renderer, so the key only ever costs a full-canvas
+                    // allocation per glyph. Its outline fills directly.
                     if self.view.is_some() && !self.visible(subtree_bounds(&g.children), &local) {
                         return None;
                     }
-                    return Some(node.clone());
+                    return Some(Node::Group(Group {
+                        cache_key: None,
+                        ..g.clone()
+                    }));
                 }
                 let children = self.nodes(&g.children, &local);
                 if children.is_empty() && !g.children.is_empty() {
@@ -524,5 +532,38 @@ mod tests {
             }
         }
         let _ = Point::ORIGIN;
+    }
+
+    /// A glyph's cache key is for the GPU: the software rasterizer gets the
+    /// outline alone, culled or kept whole as before.
+    #[test]
+    fn lowering_drops_glyph_cache_keys() {
+        let glyph = |x: f64| {
+            let mut s = Scene::new(Size::new(100.0, 100.0));
+            s.fill_rect(Rect::from_xywh(x, 10.0, 8.0, 8.0), Color::WHITE);
+            let Some(Node::Path(p)) = s.lower_root(None, &Transform2D::identity()).pop() else {
+                panic!("a rect lowers to a path")
+            };
+            Node::Group(Group {
+                cache_key: Some(7),
+                children: vec![Node::Path(p)],
+                ..Group::default()
+            })
+        };
+        let mut scene = Scene::new(Size::new(100.0, 100.0));
+        scene.push_node(glyph(10.0));
+        scene.push_node(glyph(90.0));
+        let view = Rect::from_xywh(0.0, 0.0, 50.0, 50.0);
+        for (cull, kept) in [(None, 2), (Some(Lower::view_of(view)), 1)] {
+            let root = scene.lower_root(cull, &Transform2D::identity());
+            assert_eq!(root.len(), kept);
+            for node in &root {
+                let Node::Group(g) = node else {
+                    panic!("the glyph stays a group")
+                };
+                assert_eq!(g.cache_key, None);
+                assert_eq!(g.children.len(), 1);
+            }
+        }
     }
 }
