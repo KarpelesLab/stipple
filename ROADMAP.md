@@ -1342,8 +1342,16 @@ Most input only works on X11 today.
   `LowMemory`, through the shared API (frames stop in the background).
   **Verified on an API 34 emulator** (Home and `am start`, `am
   send-trim-memory RUNNING_LOW`; checked in CI).
-- ⬜ Saving and restoring state across process death on Android
-  (`onSaveInstanceState`).
+- ✅ Saving and restoring state across process death on Android:
+  `App::save_state(|state| -> Vec<u8>)` when Android asks
+  (`onSaveInstanceState`; `Event::SaveState` answered with
+  `platform::save_state` for a raw handler), kept by `NativeActivity` in the
+  saved `Bundle` as a byte array, and `App::restore_state(|state, bytes|)` from
+  `ANativeActivity_onCreate`'s saved state before the first frame. No serde: the
+  format is the app's. Unit-tested in the App; **verified on an API 34
+  emulator** (Home, `am kill`, relaunch: `androiddemo`'s tap count comes back;
+  CI steps added). iOS (state restoration's coder) and the web
+  (`sessionStorage`) could carry the same API; documented, not done.
 - ✅ Back navigation on Android: the Back key (and the back gesture, which
   sends it while the app doesn't opt into predictive back) arrives as
   `Event::BackRequested`; the App closes an open menu, then asks
@@ -1354,10 +1362,22 @@ Most input only works on X11 today.
   with the keyboard. Unit-tested in the App; **verified on an API 34
   emulator** (`input keyevent BACK`, handled then not; CI steps added with
   this change).
-- ⬜ Predictive back on Android 13+ (`OnBackInvokedCallback`, with
-  `enableOnBackInvokedCallback`): it needs to know before the gesture
-  whether the app will go back, which `on_back` only answers after; and
-  iOS's edge swipe where an app wants it.
+- ✅ Predictive back on Android 13+: `App::back_enabled(|state| bool)`
+  says beforehand whether the app would go back (an open menu counts; without
+  it, an `on_back` hook means yes), re-evaluated after each event; the backend
+  registers an `OnBackInvokedCallback` (a hand-written dex class, loaded on its
+  own) on the activity's `OnBackInvokedDispatcher` only while it's true, so the
+  system previews and performs its own back otherwise. On Android 14+ it's an
+  `OnBackAnimationCallback`: `App::on_back_progress` hears
+  `BackGesture::Started { edge }`, `Progressed { progress }` and `Cancelled`.
+  Opt-in with `android:enableOnBackInvokedCallback` (the demo sets it); the
+  Back key path stays for older releases and apps without the flag. Unit-tested
+  in the App; **verified on an API 34 emulator** (key Back through the
+  callback, an edge swipe with progress, a cancelled swipe, a declined Back
+  going to the system; CI steps added); API 33 build-checked only.
+- ⬜ iOS's interactive edge swipe for going back (a
+  `UIScreenEdgePanGestureRecognizer` feeding `BackGesture` and `on_back`),
+  for apps that want it.
 - ⬜ Mobile gestures: pinch and two-finger pan, long press (opening the context
   menu, as right-click does on desktop), horizontal touch scrolling, and touch
   scrolling in mobile browsers on the web.

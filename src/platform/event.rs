@@ -342,6 +342,17 @@ pub enum Event {
     /// otherwise the system does what it does by default (on Android, the
     /// activity finishes or its task moves to the back).
     BackRequested,
+    /// The back gesture's progress, on Android 14 and later while the app
+    /// takes Back (see [`set_back_enabled`](crate::platform::set_back_enabled)):
+    /// for an app that animates what going back will show.
+    BackProgress(crate::platform::BackGesture),
+    /// The system may end the process while it's in the background, and
+    /// start it again later where the user left it: the handler hands over
+    /// what to keep with [`save_state`](crate::platform::save_state), and
+    /// gets it back from
+    /// [`take_restored_state`](crate::platform::take_restored_state) on the
+    /// next start. Android sends it from `onSaveInstanceState`.
+    SaveState,
 }
 
 /// The kinds of data a drag carries, known as soon as it enters a window

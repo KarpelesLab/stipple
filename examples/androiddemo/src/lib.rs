@@ -17,7 +17,18 @@
 //!   (composing, committing an emoji, deleting around the caret);
 //! - `androiddemo: back handled` / `back not handled` for the Back button: it
 //!   resets the tap count when there is one (handled), and otherwise leaves
-//!   the app to the system;
+//!   the app to the system. With predictive back (the manifest's
+//!   `enableOnBackInvokedCallback`, Android 13 and later), the app says
+//!   beforehand that it only takes Back while the count isn't 0
+//!   (`App::back_enabled`), so the system goes back without asking it when
+//!   it is; `androiddemo: back gesture ...` logs the gesture's progress
+//!   (Android 14 and later): its start, a quarter of the way, and its
+//!   cancellation;
+//! - `androiddemo: saved taps=N` when Android asks for the state to keep
+//!   (`onSaveInstanceState`, as the app goes to the background), and
+//!   `androiddemo: restored taps=N name="..."` when it starts the app again
+//!   from it after ending the process (`App::save_state`,
+//!   `App::restore_state`);
 //! - `androiddemo: lifecycle Background` / `Foreground` / `LowMemory` as the
 //!   app goes to the background, comes back, or is asked to free memory;
 //! - `androiddemo: scrolled to N` as a finger drag (`adb shell input swipe`)
@@ -32,6 +43,7 @@ mod app {
     use std::ffi::c_void;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+    use stipple::platform::BackGesture;
     use stipple::platform::backend::android::{self, ANativeActivity};
     use stipple::prelude::*;
 
@@ -48,6 +60,8 @@ mod app {
     /// The frame to run it in.
     static SELF_TEST_AT: AtomicU32 = AtomicU32::new(0);
 
+    /// Whether the back gesture's progress passed a quarter (logged once).
+    static QUARTER: AtomicBool = AtomicBool::new(false);
     /// Frames built, to show the spinner is driven by the display.
     static FRAMES: AtomicU32 = AtomicU32::new(0);
     /// The list's scroll offset in the frame last built (`f64` bits).
@@ -142,6 +156,34 @@ mod app {
         };
         let mut app = App::new(state, view)
             .theme(theme)
+            // Back resets the count: there is something to go back from
+            // only while it isn't 0.
+            .back_enabled(|s: &State| s.taps > 0)
+            .on_back_progress(|_: &mut State, gesture| match gesture {
+                // The progress once a gesture is a quarter of the way.
+                BackGesture::Progressed { progress } => {
+                    if progress >= 0.25 && !QUARTER.swap(true, Ordering::Relaxed) {
+                        println!("androiddemo: back gesture progress {progress:.2}");
+                    }
+                }
+                _ => {
+                    QUARTER.store(false, Ordering::Relaxed);
+                    println!("androiddemo: back gesture {gesture:?}");
+                }
+            })
+            // Kept across process death: the count and the field's text,
+            // as `taps` and the text on lines of their own.
+            .save_state(|s: &State| {
+                println!("androiddemo: saved taps={}", s.taps);
+                format!("{}\n{}", s.taps, s.name.text()).into_bytes()
+            })
+            .restore_state(|s: &mut State, bytes| {
+                let text = String::from_utf8_lossy(bytes);
+                let (taps, name) = text.split_once('\n').unwrap_or((&text, ""));
+                s.taps = taps.parse().unwrap_or(0);
+                s.name = EditBuffer::from_text(name);
+                println!("androiddemo: restored taps={} name={name:?}", s.taps);
+            })
             .on_back(|s: &mut State| {
                 if s.taps > 0 {
                     s.taps = 0;

@@ -3604,6 +3604,11 @@ jobs:
   # reaches the app (handled, then not), Home/am start/send-trim-memory give
   # the lifecycle events, and the keyboard connects through the host view's
   # InputConnection, which the app's self-test then composes through.
+  # Predictive back (the manifest's enableOnBackInvokedCallback): Back reaches
+  # the app's OnBackInvokedCallback only while it would go back, an edge swipe
+  # brings its progress (and a cancelled one goes nowhere), and otherwise the
+  # system goes back by itself. Process death: the state saved on Home
+  # (onSaveInstanceState) comes back after `am kill` and a relaunch.
   # Screenshots and the uiautomator dump are uploaded as an artifact.
   visual-android:
     name: Visual test (Android emulator)
@@ -3635,6 +3640,10 @@ jobs:
           done
           grep -c "(PUBLIC NATIVE)" dexdump.txt
           "$dexdump" -d stipple-classes.demo.dex > /dev/null
+          # Predictive back's callbacks, each in a dex of its own.
+          "$dexdump" -d stipple-classes.back.dex | grep -q "Class descriptor  : 'Lorg/stipple/android/Back;'"
+          "$dexdump" -d stipple-classes.back-animation.dex \
+            | grep -q "Class descriptor  : 'Lorg/stipple/android/BackAnimation;'"
 
       - name: Enable KVM
         run: |
@@ -3643,7 +3652,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run on the emulator (touch, keys, IME, accessibility, back, lifecycle)
+      - name: Run on the emulator (touch, keys, IME, accessibility, back, lifecycle, saved state)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34

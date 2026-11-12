@@ -22,6 +22,8 @@
 pub mod a11y;
 /// Platform-neutral accessibility tree handed to each backend's OS bridge.
 pub mod access;
+/// Predictive back: whether the app would go back, and the gesture's progress.
+mod back;
 pub mod backend;
 /// The system clipboard (plain text) on Windows, macOS, iOS and Android.
 pub mod clipboard;
@@ -57,6 +59,8 @@ mod pointer;
 /// the Stipple-as-compositor content path).
 #[cfg(target_os = "linux")]
 pub mod sandbox;
+/// The app's state, kept across process death (Android's saved instance state).
+mod saved_state;
 /// File-descriptor passing over a Unix socket (`SCM_RIGHTS`) — the transport for
 /// DRI3/Present GPU buffers and the browser content-process IPC.
 #[cfg(target_os = "linux")]
@@ -84,6 +88,7 @@ pub mod wake;
 mod window;
 
 pub use access::{A11yNode, A11yRole};
+pub use back::{BackEdge, BackGesture, back_enabled, set_back_enabled};
 pub use error::PlatformError;
 pub use event::{
     ButtonState, DragOffer, DropData, Event, Ime, KeyCode, Lifecycle, Modifiers, PointerButton,
@@ -99,6 +104,7 @@ pub use menu::{
 pub use pointer::{
     DoubleClick, double_click, pointer_modifiers, set_double_click, set_pointer_modifiers,
 };
+pub use saved_state::{save_state, take_restored_state};
 pub use secure::{secure_input, set_secure_input};
 pub use shell::{Notification, notify, open_path, open_url};
 pub use window::{

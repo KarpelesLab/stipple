@@ -2733,6 +2733,8 @@ impl<S: 'static> App<S> {
                 app.sync_menu_bar(window);
                 app.sync_tray(window);
             }
+            // Whether Back would reach the app (predictive back).
+            app.sync_back();
             app.native_context_menu(idx, window);
             let App {
                 state,
@@ -2814,6 +2816,8 @@ impl<S: 'static> App<S> {
             // and ask the backend to open the remaining panes as OS windows.
             if !started {
                 started = true;
+                // A start from saved state (process death) restores it first.
+                self.restore_from_platform();
                 self.start_windows(window, &mut surfaces);
             }
             // Woken: run the state's updates and due timers. Multi-window
@@ -2874,6 +2878,7 @@ impl<S: 'static> App<S> {
                     | Event::WindowChanged
                     | Event::ThemeChanged
                     | Event::Lifecycle(_)
+                    | Event::SaveState
             );
             // Pointer buttons, moves and wheels reach `on_pointer` and
             // `on_wheel` handlers first.
@@ -3258,6 +3263,18 @@ impl<S: 'static> App<S> {
                     if self.go_back(idx) {
                         crate::platform::handle_back();
                         present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::BackProgress(gesture) => {
+                    if self.back_progress(gesture) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::SaveState => {
+                    if let Some(bytes) = self.saved_state() {
+                        crate::platform::save_state(bytes);
                     }
                     ControlFlow::Wait
                 }
@@ -3857,8 +3874,8 @@ pub mod prelude {
     pub use crate::platform::Notification;
     pub use crate::platform::PointerButton;
     pub use crate::platform::dialog::{MessageBox, MessageKind, MessageResponse};
+    pub use crate::platform::{BackGesture, KeyCode, Lifecycle, Modifiers};
     pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
-    pub use crate::platform::{KeyCode, Lifecycle, Modifiers};
     pub use crate::platform::{KeyEvent, OptionAsMeta, PhysicalKey};
     pub use crate::platform::{WindowAttributes, WindowId, WindowInfo};
     pub use crate::render::{

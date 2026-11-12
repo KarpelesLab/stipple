@@ -29,8 +29,10 @@
 //!   `InputConnection` ([`ime`]) and accessibility services a node per element
 //!   ([`a11y`]).
 //! - **Back and the lifecycle.** The Back key is [`Event::BackRequested`]
-//!   (the system's default only when unhandled); pause, resume and memory
-//!   warnings are [`Event::Lifecycle`].
+//!   (the system's default only when unhandled), and on Android 13 and later
+//!   predictive back's `OnBackInvokedCallback` (see [`back`]); pause, resume
+//!   and memory warnings are [`Event::Lifecycle`], and `onSaveInstanceState`
+//!   is [`Event::SaveState`], kept in the activity's saved `Bundle`.
 //!
 //! The scale factor is the screen density over 160 dpi, and the native theme
 //! follows the configuration's night mode and, on Android 12 and later, the
@@ -56,6 +58,8 @@ use crate::render::{Pixmap, Surface};
 
 /// Accessibility: the host view's node provider (TalkBack, `uiautomator`).
 mod a11y;
+/// Predictive back: the `OnBackInvokedCallback` (Android 13 and later).
+mod back;
 /// The Java classes defined at run time: the host view and friends.
 mod classes;
 /// The input method's `InputConnection` to the focused text field.
@@ -236,6 +240,7 @@ unsafe extern "C" {
     fn read(fd: c_int, buf: *mut c_void, n: usize) -> isize;
     fn write(fd: c_int, buf: *const c_void, n: usize) -> isize;
     fn close(fd: c_int) -> c_int;
+    fn malloc(size: usize) -> *mut c_void;
 }
 
 const O_NONBLOCK: c_int = 0o4000;
@@ -355,6 +360,10 @@ enum Command {
     Deliver(Event),
     /// An edit from the input method's connection (see [`ime`]).
     Ime(crate::platform::event::Ime),
+    /// Back, from predictive back's callback (see [`back`]).
+    Back,
+    /// `onSaveInstanceState`: ask the app for the state to keep.
+    SaveState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -390,6 +399,8 @@ struct Instance {
     main_looper: *mut c_void,
     main_pipe: (c_int, c_int),
     requests: Mutex<MainRequests>,
+    /// What the app saved for `onSaveInstanceState`.
+    saved: Mutex<Option<Vec<u8>>>,
 }
 
 /// Work the UI thread hands to the main thread.
@@ -405,6 +416,8 @@ struct MainRequests {
     a11y: a11y::Changes,
     /// Back wasn't handled: do the system's default.
     back: bool,
+    /// Register predictive back's callback (`true`), or unregister it.
+    back_callback: Option<bool>,
     /// Run the input connection's self-test.
     self_test: bool,
 }
@@ -510,6 +523,15 @@ pub fn input_connection_self_test() {
     }
 }
 
+/// The app now would (or wouldn't) go back: register or unregister
+/// predictive back's callback, on the main thread. From the UI thread.
+pub(crate) fn back_enabled_changed(enabled: bool) {
+    let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(instance) = current {
+        instance.request(|r| r.back_callback = Some(enabled));
+    }
+}
+
 /// Run `f` on the current activity, if one is alive.
 fn with_activity<R>(f: impl FnOnce(&ANativeActivity) -> Option<R>) -> Option<R> {
     let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
@@ -533,6 +555,11 @@ fn with_activity<R>(f: impl FnOnce(&ANativeActivity) -> Option<R>) -> Option<R> 
 /// }
 /// ```
 ///
+/// `saved_state` is what the app saved (on [`Event::SaveState`]) before
+/// Android ended its process, when it starts the activity again from it: it
+/// reaches the app through [`take_restored_state`](crate::platform::take_restored_state)
+/// ([`App::restore_state`](crate::App::restore_state)).
+///
 /// Android may destroy the activity and create a new one in the same process
 /// (on a configuration change the manifest doesn't declare in
 /// `android:configChanges`, for one): `App::run` then returns, and `main` runs
@@ -545,8 +572,8 @@ fn with_activity<R>(f: impl FnOnce(&ANativeActivity) -> Option<R>) -> Option<R> 
 /// `ANativeActivity_onCreate`, and this must be called from that function.
 pub unsafe fn start<F>(
     activity: *mut ANativeActivity,
-    _saved_state: *mut c_void,
-    _saved_state_size: usize,
+    saved_state: *mut c_void,
+    saved_state_size: usize,
     main: F,
 ) where
     F: FnOnce() + Send + 'static,
@@ -555,6 +582,18 @@ pub unsafe fn start<F>(
         return;
     }
     redirect_stdio();
+    // The state the app saved before the system ended it (NativeActivity
+    // keeps it in the saved Bundle as a byte array).
+    let restored = (!saved_state.is_null()).then(|| {
+        unsafe { std::slice::from_raw_parts(saved_state as *const u8, saved_state_size) }.to_vec()
+    });
+    if let Some(bytes) = &restored {
+        log(&format!(
+            "stipple: restoring {} bytes of saved state",
+            bytes.len()
+        ));
+    }
+    crate::platform::saved_state::set_restored_state(restored);
     let (mut fds, mut main_fds) = ([0 as c_int; 2], [0 as c_int; 2]);
     unsafe {
         if pipe2(fds.as_mut_ptr(), O_NONBLOCK | O_CLOEXEC) != 0 {
@@ -582,6 +621,7 @@ pub unsafe fn start<F>(
         main_looper: unsafe { ALooper_forThread() },
         main_pipe: (main_fds[0], main_fds[1]),
         requests: Mutex::new(MainRequests::default()),
+        saved: Mutex::new(None),
     });
     if !instance.main_looper.is_null() {
         unsafe {
@@ -602,6 +642,7 @@ pub unsafe fn start<F>(
             let cb = &mut *cb;
             cb.on_start = Some(on_start);
             cb.on_resume = Some(on_resume);
+            cb.on_save_instance_state = Some(on_save_instance_state);
             cb.on_pause = Some(on_pause);
             cb.on_stop = Some(on_stop);
             cb.on_destroy = Some(on_destroy);
@@ -662,6 +703,40 @@ unsafe extern "C" fn on_start(a: *mut ANativeActivity) {
 unsafe extern "C" fn on_resume(a: *mut ANativeActivity) {
     unsafe { post(a, Command::Resume, false) }
 }
+/// `onSaveInstanceState`: the app's state, as a `malloc`ed buffer that
+/// NativeActivity copies into the saved Bundle and frees (`null`: nothing).
+unsafe extern "C" fn on_save_instance_state(
+    a: *mut ANativeActivity,
+    size: *mut usize,
+) -> *mut c_void {
+    let Some(instance) = (unsafe { instance(a) }) else {
+        return std::ptr::null_mut();
+    };
+    *instance.saved.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    if !instance.post(Command::SaveState, true) {
+        return std::ptr::null_mut();
+    }
+    let Some(bytes) = instance
+        .saved
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+    else {
+        return std::ptr::null_mut();
+    };
+    unsafe {
+        let buffer = malloc(bytes.len().max(1));
+        if buffer.is_null() {
+            return std::ptr::null_mut();
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.cast::<u8>(), bytes.len());
+        if !size.is_null() {
+            *size = bytes.len();
+        }
+        log(&format!("stipple: saved {} bytes of state", bytes.len()));
+        buffer
+    }
+}
 unsafe extern "C" fn on_pause(a: *mut ANativeActivity) {
     unsafe { post(a, Command::Pause, true) }
 }
@@ -672,6 +747,7 @@ unsafe extern "C" fn on_destroy(a: *mut ANativeActivity) {
     unsafe {
         post(a, Command::Destroy, true);
         classes::uninstall((*a).env);
+        back::uninstall((*a).env);
         // The UI thread is done with the activity; drop the callbacks' share.
         let ptr = (*a).instance as *const Instance;
         (*a).instance = std::ptr::null_mut();
@@ -709,6 +785,9 @@ unsafe extern "C" fn on_main_request(fd: c_int, _events: c_int, data: *mut c_voi
                 ime::notify(env, what);
             }
             a11y::announce(env, requests.a11y);
+            if let Some(enabled) = requests.back_callback {
+                back::set(env, &*activity, enabled);
+            }
             if requests.back {
                 // What Back does when the app doesn't handle it: finish, or
                 // (Android 12 and later, for the task's root) move to the back.
@@ -1431,6 +1510,15 @@ impl Loop<'_> {
                 ime::handled();
                 self.deliver(Event::Ime(edit));
             }
+            Command::Back => self.go_back(),
+            Command::SaveState => {
+                let saved = crate::platform::saved_state::deliver_save(|e| self.deliver(e));
+                *self
+                    .instance
+                    .saved
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = saved;
+            }
             Command::Destroy => {
                 let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
                 if current
@@ -1555,6 +1643,17 @@ impl Loop<'_> {
         if unsafe { AKeyEvent_getFlags(event) } & AKEY_EVENT_FLAG_CANCELED != 0 {
             return true;
         }
+        self.go_back();
+        true
+    }
+
+    /// Back, from the key or predictive back's callback:
+    /// [`Event::BackRequested`], and the system's default (`onBackPressed`)
+    /// if the app doesn't go back.
+    fn go_back(&mut self) {
+        if self.exiting {
+            return;
+        }
         let (handled, flow) =
             crate::platform::key::deliver_back(|e| (self.handler)(e, &self.window));
         if flow == ControlFlow::Exit {
@@ -1567,7 +1666,6 @@ impl Loop<'_> {
             "stipple: back {}",
             if handled { "handled" } else { "not handled" }
         ));
-        true
     }
 
     /// Deliver a key as a raw key first. Returns whether the app used it.
@@ -1865,6 +1963,8 @@ where
         lp.view.set_background([c.r, c.g, c.b, 255]);
     }
     instance.set_phase(Phase::Running);
+    // A new activity has no back callback yet: give it the app's last word.
+    instance.request(|r| r.back_callback = Some(crate::platform::back_enabled()));
 
     loop {
         if lp.run_commands() {

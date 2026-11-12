@@ -228,9 +228,127 @@ Unhandled, Back does what it does in any Android app (`onBackPressed`): the
 activity finishes, or, on Android 12 and later, a task's root activity moves
 to the back. While the soft keyboard is up, the first Back only closes it.
 A raw backend handler gets `Event::BackRequested` and calls
-`stipple::platform::handle_back()` when it went back. Predictive back (the
-preview animation of Android 13 and later) isn't supported: it needs to know
-before the gesture whether the app will go back.
+`stipple::platform::handle_back()` when it went back.
+
+### Predictive back (Android 13 and later)
+
+Android 13 and later can preview where the back gesture leads (the home
+screen, the previous app) while the finger is still down, so they ask *before*
+the gesture whether the app will take it. `on_back` only answers after, so say
+it beforehand with `App::back_enabled`, from the same state:
+
+```rust,no_run
+use stipple::prelude::*;
+
+struct State {
+    screens: Vec<&'static str>,
+    peek: f32,
+}
+# fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+
+App::new(State { screens: vec!["home"], peek: 0.0 }, view)
+    // Something to go back from: Back is the app's.
+    .back_enabled(|s| s.screens.len() > 1)
+    .on_back(|s| {
+        s.peek = 0.0;
+        s.screens.pop();
+        Handled::Yes
+    })
+    // The gesture's progress (Android 14 and later), to animate the
+    // screen underneath into view.
+    .on_back_progress(|s, gesture| match gesture {
+        BackGesture::Progressed { progress } => s.peek = progress,
+        BackGesture::Cancelled => s.peek = 0.0,
+        BackGesture::Started { .. } => {}
+    })
+    .run();
+```
+
+The App asks the hook after each event (an open menu counts as something to
+go back from) and tells the system when the answer changes: the backend
+registers an `OnBackInvokedCallback` on the activity's
+`OnBackInvokedDispatcher` while it's `true`, and takes it away while it's
+`false`. Then:
+
+- while it's registered, Back (the key or the gesture) reaches the callback,
+  and from it `on_back`. On Android 14 and later it is an
+  `OnBackAnimationCallback`, whose gesture arrives as `BackGesture::Started`
+  (with the edge), `Progressed` (0 to 1) and either `Cancelled` or the
+  `on_back` call, through `App::on_back_progress` (`Event::BackProgress` for a
+  raw handler). A Back key press also starts and completes a "gesture";
+- while it isn't, the system goes back without asking the app, with its own
+  preview animation;
+- should `back_enabled` say `true` and `on_back` then answer `Handled::No`,
+  the system's default still runs (`onBackPressed`), without its preview.
+
+Without `back_enabled`, an app with an `on_back` hook takes every Back (no
+system preview, as before predictive back) and one without takes none. A raw
+handler says it with `stipple::platform::set_back_enabled`; until it does, it
+gets every Back.
+
+The app opts in with `android:enableOnBackInvokedCallback="true"` on the
+manifest's `<application>` (as `androiddemo` does). Without the flag, and
+before Android 13, Back stays the key event it was and every Back reaches
+`on_back`, whatever `back_enabled` says. While the soft keyboard is up, the
+first Back still only closes it (the keyboard's callback sits above the app's;
+if the app's was registered after the keyboard came up, it closes the keyboard
+itself).
+
+iOS has no system Back. Its equivalent, the interactive edge swipe of a
+`UINavigationController`, belongs to UIKit's navigation stack, which Stipple
+doesn't use; an app that wants it can recognize the swipe itself (a
+`UIScreenEdgePanGestureRecognizer` on the left edge would feed the same
+`BackGesture` and `on_back`), which isn't done yet.
+
+## Keeping the state across process death
+
+A backgrounded app may be ended by the system to free memory, and started
+again later as if it never left: the user expects the screen they were on.
+`App::save_state` turns that state into bytes when the system asks (Android's
+`onSaveInstanceState`, as the app goes to the background), and
+`App::restore_state` gets them back when the system starts the app again from
+them, before the first frame:
+
+```rust,no_run
+use stipple::prelude::*;
+
+struct State {
+    screen: u8,
+    draft: String,
+}
+# fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+
+App::new(State { screen: 0, draft: String::new() }, view)
+    .save_state(|s| {
+        let mut bytes = vec![s.screen];
+        bytes.extend_from_slice(s.draft.as_bytes());
+        bytes
+    })
+    .restore_state(|s, bytes| {
+        if let Some((&screen, draft)) = bytes.split_first() {
+            s.screen = screen;
+            s.draft = String::from_utf8_lossy(draft).into_owned();
+        }
+    })
+    .run();
+```
+
+The format is the app's: there is no serde dependency, and a few bytes by
+hand (or a line of text) is usually enough. It's for the session's state (the
+screen, a scroll position, an unsent draft), not the user's data, which
+belongs in files saved as it changes (or on `Lifecycle::Background`): the
+system only restores the state when it ended the app itself, not when the user
+closed it. Keep it to a few kilobytes. `restore_state` isn't called on a fresh
+start; ignore bytes that don't parse. A raw handler gets `Event::SaveState`
+and answers with `stipple::platform::save_state(bytes)`, and reads them back
+with `stipple::platform::take_restored_state()`.
+
+| | Saved in | Restored |
+|---|---|---|
+| Android | `onSaveInstanceState`: `NativeActivity` keeps the bytes in the activity's saved `Bundle` (as a byte array) | `ANativeActivity_onCreate`'s `savedState`, when the activity is recreated: after the process was ended in the background, or in the same process on a configuration change the manifest doesn't declare |
+| iOS | not yet: state restoration (`application:shouldSaveSecureApplicationState:`, `willEncodeRestorableStateWithCoder:` writing the bytes as `NSData`) would fit | not yet (`didDecodeRestorableStateWithCoder:`, which runs before the first frame) |
+| Web | not yet: the tab's `sessionStorage` on `pagehide` would fit | not yet: `sessionStorage` survives a reload and a discarded tab brought back |
+| Desktop | never asked: desktops don't end apps on their own | |
 
 ## Trying it
 
@@ -246,7 +364,14 @@ for attention and counts the bells in the Dock badge.
   `androiddemo`, which handles one (resetting its tap count) and leaves the
   next to the system; Home sends it to the background and `am start` brings it
   back; `am send-trim-memory RUNNING_LOW` is a memory warning. Each is checked
-  in the app's log.
+  in the app's log. With predictive back on: the callback is registered only
+  while the tap count isn't 0, `input keyevent BACK` goes through it (not the
+  key event), an edge swipe brings `Started` and the progress and goes back,
+  a swipe taken back is `Cancelled` and doesn't, and a Back while the app
+  wouldn't take it goes to the system (the app goes to the background without
+  being asked). Process death: with two taps counted, Home saves the state,
+  `am kill` ends the process, and starting it again restores the count (in
+  the log and in the accessibility tree's "Tapped 2 times").
 - **X11** (Xvfb, with a script standing in for the window manager): a
   `WM_DELETE_WINDOW` the app cancels, then one it confirms, after which the app
   closes the window itself; focus moving to another window and back; the

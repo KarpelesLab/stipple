@@ -2,13 +2,15 @@
 //! closes or the app quits ([`App::on_close_requested`],
 //! [`App::on_quit_requested`]) and following which window has keyboard focus
 //! ([`App::on_window_focus`], [`Cx::window_focused`](crate::core::Cx::window_focused)),
-//! and on mobile going back ([`App::on_back`]) and to the background and
-//! back ([`App::on_lifecycle`]). See `docs/windows-and-cursors.md` and
+//! and on mobile going back ([`App::on_back`], [`App::back_enabled`] for
+//! predictive back), to the background and back ([`App::on_lifecycle`]),
+//! and keeping the state across process death ([`App::save_state`],
+//! [`App::restore_state`]). See `docs/windows-and-cursors.md` and
 //! `docs/window-lifecycle.md`.
 
 use crate::App;
 use crate::core::Handled;
-use crate::platform::{Lifecycle, WindowId};
+use crate::platform::{BackGesture, Lifecycle, WindowId};
 
 /// The answer to a close or quit request (see [`App::on_close_requested`] and
 /// [`App::on_quit_requested`]).
@@ -29,6 +31,10 @@ type QuitFn<S> = Box<dyn FnMut(&mut S) -> CloseResponse>;
 type FocusFn<S> = Box<dyn FnMut(&mut S, WindowId, bool)>;
 type LifecycleFn<S> = Box<dyn FnMut(&mut S, Lifecycle)>;
 type BackFn<S> = Box<dyn FnMut(&mut S) -> Handled>;
+type BackEnabledFn<S> = Box<dyn Fn(&S) -> bool>;
+type BackProgressFn<S> = Box<dyn FnMut(&mut S, BackGesture)>;
+type SaveFn<S> = Box<dyn FnMut(&S) -> Vec<u8>>;
+type RestoreFn<S> = Box<dyn FnMut(&mut S, &[u8])>;
 
 /// The app's lifecycle hooks.
 pub(crate) struct Hooks<S> {
@@ -37,6 +43,10 @@ pub(crate) struct Hooks<S> {
     focus: Option<FocusFn<S>>,
     lifecycle: Option<LifecycleFn<S>>,
     back: Option<BackFn<S>>,
+    back_enabled: Option<BackEnabledFn<S>>,
+    back_progress: Option<BackProgressFn<S>>,
+    save: Option<SaveFn<S>>,
+    restore: Option<RestoreFn<S>>,
     /// Whether the app is in the background (between
     /// [`Lifecycle::Background`] and [`Lifecycle::Foreground`]).
     pub(crate) background: bool,
@@ -50,6 +60,10 @@ impl<S> Default for Hooks<S> {
             focus: None,
             lifecycle: None,
             back: None,
+            back_enabled: None,
+            back_progress: None,
+            save: None,
+            restore: None,
             background: false,
         }
     }
@@ -209,7 +223,10 @@ impl<S: 'static> App<S> {
     /// activity finishes, or its task moves to the back).
     ///
     /// An open menu closes first, without asking the hook. Without a hook,
-    /// Back closes menus and otherwise leaves the app. Raw backend users get
+    /// Back closes menus and otherwise leaves the app. On Android 13 and
+    /// later, say beforehand whether the hook would go back with
+    /// [`back_enabled`](Self::back_enabled), so the system can preview the
+    /// back gesture when it wouldn't. Raw backend users get
     /// [`Event::BackRequested`](crate::platform::Event::BackRequested) and
     /// answer with [`handle_back`](crate::platform::handle_back).
     ///
@@ -231,6 +248,173 @@ impl<S: 'static> App<S> {
     pub fn on_back(mut self, hook: impl FnMut(&mut S) -> Handled + 'static) -> Self {
         self.lifecycle.back = Some(Box::new(hook));
         self
+    }
+
+    /// Say whether the app would go back now, before the user asks: `hook`
+    /// answers from the state (a dialog or a screen is open), as
+    /// [`on_back`](Self::on_back) would act on it. Android 13 and later need
+    /// to know before the back gesture starts (with predictive back, which
+    /// the manifest turns on with `android:enableOnBackInvokedCallback`): when
+    /// the app wouldn't go back, the system previews its own animation (to the
+    /// home screen, or the previous activity) and goes back itself, without
+    /// asking the app. When it would, the gesture reaches `on_back`, and on
+    /// Android 14 and later its progress reaches
+    /// [`on_back_progress`](Self::on_back_progress).
+    ///
+    /// The hook runs after each event (keep it cheap); an open menu counts as
+    /// something to go back from. Without this hook, an app with an `on_back`
+    /// hook takes every Back (no system preview), and one without takes none.
+    /// Should the hook say yes and `on_back` then answer [`Handled::No`], the
+    /// system's default still runs, without its preview. Before Android 13,
+    /// and on other platforms, it changes nothing: every Back reaches
+    /// `on_back`.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// struct State { screens: Vec<&'static str> }
+    /// # fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+    /// App::new(State { screens: vec!["home"] }, view)
+    ///     .back_enabled(|s| s.screens.len() > 1)
+    ///     .on_back(|s| {
+    ///         s.screens.pop();
+    ///         Handled::Yes
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn back_enabled(mut self, hook: impl Fn(&S) -> bool + 'static) -> Self {
+        self.lifecycle.back_enabled = Some(Box::new(hook));
+        self
+    }
+
+    /// Hear the back gesture's progress while the app takes Back (see
+    /// [`back_enabled`](Self::back_enabled)), to animate what going back will
+    /// show: [`BackGesture::Started`], then [`BackGesture::Progressed`] from 0
+    /// to 1 as the finger moves, and either [`BackGesture::Cancelled`] or the
+    /// [`on_back`](Self::on_back) hook when it lifts. Android 14 and later
+    /// (`OnBackAnimationCallback`); elsewhere Back arrives without progress.
+    /// The hook may change the state; the view is rebuilt.
+    pub fn on_back_progress(mut self, hook: impl FnMut(&mut S, BackGesture) + 'static) -> Self {
+        self.lifecycle.back_progress = Some(Box::new(hook));
+        self
+    }
+
+    /// Whether the app would go back if the user asked now: a menu is open,
+    /// or the [`back_enabled`](Self::back_enabled) hook says so (without one,
+    /// whether there is an [`on_back`](Self::on_back) hook). What the system
+    /// is told before a back gesture.
+    pub fn wants_back(&self) -> bool {
+        if self.panes.iter().any(|p| p.menu_ui.borrow().is_active()) {
+            return true;
+        }
+        match &self.lifecycle.back_enabled {
+            Some(hook) => hook(&self.state),
+            None => self.lifecycle.back.is_some(),
+        }
+    }
+
+    /// Tell the platform whether the app would go back (see
+    /// [`wants_back`](Self::wants_back)); only changes reach the system.
+    pub(crate) fn sync_back(&self) {
+        crate::platform::set_back_enabled(self.wants_back());
+    }
+
+    /// The back gesture moved on: tell the hook. Returns whether it ran (the
+    /// view then rebuilds).
+    pub(crate) fn back_progress(&mut self, gesture: BackGesture) -> bool {
+        let Some(hook) = self.lifecycle.back_progress.as_mut() else {
+            return false;
+        };
+        hook(&mut self.state, gesture);
+        for pane in &mut self.panes {
+            pane.dirty = true;
+        }
+        true
+    }
+
+    /// Keep the state across process death: when the system may end the
+    /// app in the background (Android's `onSaveInstanceState`), `hook` turns
+    /// what the user would expect to find again (the screen they were on, a
+    /// draft, a scroll position) into bytes, in whatever format the app likes;
+    /// when the system starts the app again from them,
+    /// [`restore_state`](Self::restore_state) gets them back, before the first
+    /// frame. Return an empty vector to save nothing.
+    ///
+    /// This is for the session's state, not the user's data, which belongs
+    /// in a file saved as it changes (or on [`Lifecycle::Background`]): the
+    /// system only restores the state when it ended the app itself, not when
+    /// the user closed it. Keep it small, a few kilobytes: Android carries it
+    /// in a binder transaction, which fails past a megabyte for the whole
+    /// process.
+    ///
+    /// Android keeps the bytes in the activity's saved `Bundle` (a
+    /// `NativeActivity`'s `onSaveInstanceState`). Other platforms don't ask
+    /// yet: iOS could keep them in its state restoration archive
+    /// (`application:willEncodeRestorableStateWithCoder:`), and the web in
+    /// the tab's `sessionStorage`, which a reload or a discarded and restored
+    /// tab keeps; desktops don't end apps on their own.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// struct State { screen: u8, draft: String }
+    /// # fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+    /// App::new(State { screen: 0, draft: String::new() }, view)
+    ///     .save_state(|s| {
+    ///         let mut bytes = vec![s.screen];
+    ///         bytes.extend_from_slice(s.draft.as_bytes());
+    ///         bytes
+    ///     })
+    ///     .restore_state(|s, bytes| {
+    ///         if let Some((&screen, draft)) = bytes.split_first() {
+    ///             s.screen = screen;
+    ///             s.draft = String::from_utf8_lossy(draft).into_owned();
+    ///         }
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn save_state(mut self, hook: impl FnMut(&S) -> Vec<u8> + 'static) -> Self {
+        self.lifecycle.save = Some(Box::new(hook));
+        self
+    }
+
+    /// Take back the state [`save_state`](Self::save_state) saved, when the
+    /// system starts the app again after ending it: `hook` gets the bytes and
+    /// puts them back into the state, before the first frame. It isn't
+    /// called on a fresh start. The bytes come from an earlier run, possibly
+    /// of an older version of the app: check them, and ignore what doesn't
+    /// parse.
+    pub fn restore_state(mut self, hook: impl FnMut(&mut S, &[u8]) + 'static) -> Self {
+        self.lifecycle.restore = Some(Box::new(hook));
+        self
+    }
+
+    /// What [`save_state`](Self::save_state) would save now, as the system
+    /// asks for it (for tests, too): `None` without a hook, or when it saves
+    /// nothing.
+    pub fn saved_state(&mut self) -> Option<Vec<u8>> {
+        let hook = self.lifecycle.save.as_mut()?;
+        let bytes = hook(&self.state);
+        (!bytes.is_empty()).then_some(bytes)
+    }
+
+    /// Hand `bytes` to the [`restore_state`](Self::restore_state) hook, as
+    /// a start from saved state would (for tests, too). Returns whether there
+    /// was a hook; every window rebuilds.
+    pub fn restore_saved_state(&mut self, bytes: &[u8]) -> bool {
+        let Some(hook) = self.lifecycle.restore.as_mut() else {
+            return false;
+        };
+        hook(&mut self.state, bytes);
+        for pane in &mut self.panes {
+            pane.dirty = true;
+        }
+        true
+    }
+
+    /// At start-up: restore the state the platform was started with, if any.
+    pub(crate) fn restore_from_platform(&mut self) {
+        if let Some(bytes) = crate::platform::take_restored_state() {
+            self.restore_saved_state(&bytes);
+        }
     }
 
     /// The user asked to go back from pane `idx`: close an open menu, or ask
@@ -344,6 +528,7 @@ impl<S: 'static> App<S> {
 mod tests {
     use super::*;
     use crate::core::{Cx, Element};
+    use crate::platform::BackGesture;
     use crate::widgets::spacer;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -381,6 +566,93 @@ mod tests {
         assert!(app.request_back());
         assert!(!app.request_back(), "nothing left: the system goes back");
         assert_eq!(screens.get(), 0);
+    }
+
+    #[test]
+    fn the_system_learns_beforehand_whether_back_reaches_the_app() {
+        // No hooks: Back is the system's.
+        let app = App::new(State::default(), view);
+        assert!(!app.wants_back());
+        // An `on_back` hook alone takes every Back, as before predictive back.
+        let app = App::new(State::default(), view).on_back(|_| Handled::No);
+        assert!(app.wants_back());
+        // `back_enabled` answers from the state.
+        let mut app = App::new(State::default(), view)
+            .back_enabled(|s| s.busy)
+            .on_back(|s| {
+                s.busy = false;
+                Handled::Yes
+            });
+        app.render_frame();
+        assert!(!app.wants_back());
+        app.state.busy = true;
+        assert!(app.wants_back());
+        assert!(app.request_back());
+        assert!(!app.wants_back(), "gone back: nothing left to go back from");
+        // An open menu counts, and Back closes it without asking the hook.
+        app.panes[0].menu_ui.borrow_mut().open_context(
+            crate::core::ContextId(1),
+            crate::geometry::Point::new(0.0, 0.0),
+            false,
+        );
+        assert!(app.wants_back());
+        assert!(app.request_back());
+        assert!(!app.wants_back());
+        assert!(!app.state().busy, "the hook didn't run for the menu");
+    }
+
+    #[test]
+    fn the_back_gesture_reaches_its_hook() {
+        let gestures = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = gestures.clone();
+        let mut app = App::new(State::default(), view);
+        assert!(!app.back_progress(BackGesture::Cancelled), "no hook");
+        let mut app = App::new(State::default(), view)
+            .on_back_progress(move |_, g| seen.borrow_mut().push(g));
+        app.render_frame();
+        assert!(app.back_progress(BackGesture::Started {
+            edge: crate::platform::BackEdge::Left
+        }));
+        assert!(app.back_progress(BackGesture::Progressed { progress: 0.5 }));
+        assert!(app.panes[0].dirty, "the view follows the gesture");
+        assert!(app.back_progress(BackGesture::Cancelled));
+        assert_eq!(gestures.borrow().len(), 3);
+    }
+
+    #[test]
+    fn state_saved_comes_back_after_process_death() {
+        let mut app = App::new(State::default(), view);
+        assert_eq!(app.saved_state(), None, "no hook, nothing saved");
+        assert!(!app.restore_saved_state(b"x"));
+
+        let save = |s: &State| s.quits.to_string().into_bytes();
+        let restore = |s: &mut State, bytes: &[u8]| {
+            if let Some(n) = std::str::from_utf8(bytes).ok().and_then(|t| t.parse().ok()) {
+                s.quits = n;
+            }
+        };
+        let mut before = App::new(State::default(), view)
+            .save_state(save)
+            .restore_state(restore);
+        before.state.quits = 42;
+        let bytes = before.saved_state().expect("saved");
+        assert_eq!(bytes, b"42");
+
+        // The process ends; a new one starts from the bytes.
+        let mut after = App::new(State::default(), view)
+            .save_state(save)
+            .restore_state(restore);
+        after.render_frame();
+        assert!(after.restore_saved_state(&bytes));
+        assert_eq!(after.state().quits, 42);
+        assert!(after.panes[0].dirty, "every window rebuilds");
+        // Bytes that don't parse are the hook's to ignore.
+        assert!(after.restore_saved_state(b"garbage"));
+        assert_eq!(after.state().quits, 42);
+
+        // An empty save is no save.
+        let mut empty = App::new(State::default(), view).save_state(|_| Vec::new());
+        assert_eq!(empty.saved_state(), None);
     }
 
     #[test]

@@ -18,8 +18,16 @@
 #    (keys); then the app drives the connection as a composing keyboard would
 #    (compose, commit an emoji, delete around the caret, finish), and the
 #    field must hold the result;
-# 7. a Back the app doesn't handle leaves it to the system;
-# 8. screenshots of each state land in the screenshot directory.
+# 7. a Back the app doesn't handle leaves it to the system: with predictive
+#    back (Android 13 and later, the manifest's enableOnBackInvokedCallback),
+#    Back reaches the app through its OnBackInvokedCallback while it would go
+#    back (the tap count isn't 0), and goes straight to the system, which
+#    sends the app to the background, while it wouldn't;
+# 8. process death: with two taps counted and the field typed in, Home has
+#    the app save its state (onSaveInstanceState), `am kill` ends the
+#    backgrounded process, and starting it again restores the count and the
+#    text from the saved Bundle;
+# 9. screenshots of each state land in the screenshot directory.
 set -euo pipefail
 
 apk="${1:?usage: test-on-device.sh app.apk [screenshot-dir]}"
@@ -28,6 +36,8 @@ pkg=com.karpeleslab.stipple
 mkdir -p "$shots"
 
 log() { adb logcat -d -s stipple:I 2>/dev/null || true; }
+# How many logcat lines match $1 so far.
+count() { log | grep -cE "$1" || true; }
 
 # Wait up to $2 seconds for a logcat line matching $1.
 wait_for() {
@@ -52,6 +62,8 @@ adb install -r "$apk" || { adb uninstall "$pkg" && adb install "$apk"; }
 adb shell am force-stop "$pkg" || true
 adb logcat -c
 adb shell am start -W -n "$pkg/android.app.NativeActivity"
+sdk="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+echo "android: API $sdk"
 
 wait_for "Stipple Android: window [0-9]+x[0-9]+ presented=true" 90
 wait_for "androiddemo: tick 3 " 60
@@ -62,6 +74,11 @@ size="$(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tai
 read -r width height <<< "$size"
 adb shell input tap $((width / 2)) $((height / 2))
 wait_for "androiddemo: tapped 1" 30
+if ((sdk >= 33)); then
+  # The app now has something to go back from: predictive back's callback
+  # goes up.
+  wait_for "stipple: back callback registered" 20
+fi
 
 # Accessibility: the provider's virtual views show in the window's hierarchy.
 wait_for "stipple: host view installed" 5
@@ -81,6 +98,63 @@ echo "accessibility: $(grep -o '<node' "$shots/android-ui.xml" | wc -l) nodes"
 # Back: the app handles the first one (the tap count goes back to 0).
 adb shell input keyevent KEYCODE_BACK
 wait_for "androiddemo: back handled" 20
+if ((sdk >= 33)); then
+  # It came through the callback, not as a key event; with nothing left to
+  # go back from, the callback goes away again.
+  wait_for "stipple: back from OnBackInvokedCallback" 5
+  wait_for "stipple: back callback unregistered" 20
+  # Android 14's OnBackAnimationCallback hears a key press as a gesture too.
+  log | grep "androiddemo: back gesture" || echo "android: no back gesture progress for the key"
+fi
+if ((sdk >= 34)); then
+  # The back gesture itself, with gesture navigation: a swipe from the left
+  # edge reaches the app with its progress (OnBackAnimationCallback), and
+  # goes back when it lifts...
+  adb shell cmd overlay enable com.android.internal.systemui.navbar.gestural || true
+  sleep 3
+  registered="$(count "stipple: back callback registered")"
+  handled="$(count "androiddemo: back handled")"
+  adb shell input tap $((width / 2)) $((height / 2))
+  for _ in $(seq 20); do
+    (($(count "stipple: back callback registered") > registered)) && break
+    sleep 1
+  done
+  adb shell input swipe 1 $((height / 2)) $((width * 2 / 3)) $((height / 2)) 800
+  wait_for "androiddemo: back gesture Started \{ edge: Left \}" 20
+  wait_for "androiddemo: back gesture progress" 10
+  for _ in $(seq 20); do
+    (($(count "androiddemo: back handled") > handled)) && break
+    sleep 1
+  done
+  if (($(count "androiddemo: back handled") <= handled)); then
+    echo "the back gesture didn't go back" >&2
+    log | tail -20 >&2
+    exit 1
+  fi
+  # ...while one the finger takes back to the edge goes nowhere.
+  registered="$(count "stipple: back callback registered")"
+  handled="$(count "androiddemo: back handled")"
+  adb shell input tap $((width / 2)) $((height / 2))
+  for _ in $(seq 20); do
+    (($(count "stipple: back callback registered") > registered)) && break
+    sleep 1
+  done
+  y=$((height / 2))
+  adb shell "input motionevent DOWN 1 $y; for x in 40 80 120 160 200 240 280 320 360 400; do input motionevent MOVE \$x $y; done; sleep 0.5; for x in 360 300 240 180 120 60 20 3; do input motionevent MOVE \$x $y; done; sleep 0.5; input motionevent UP 3 $y"
+  wait_for "androiddemo: back gesture Cancelled" 20
+  sleep 1
+  if (($(count "androiddemo: back handled") > handled)); then
+    echo "a cancelled back gesture went back" >&2
+    exit 1
+  fi
+  # The count is 1 again: the Back key resets it.
+  adb shell input keyevent KEYCODE_BACK
+  for _ in $(seq 20); do
+    (($(count "androiddemo: back handled") > handled)) && break
+    sleep 1
+  done
+  echo "android: the back gesture's progress reached the app"
+fi
 # Home sends the app to the background, and starting it brings it back.
 adb shell input keyevent KEYCODE_HOME
 wait_for "androiddemo: lifecycle Background" 20
@@ -135,10 +209,80 @@ fi
 
 # A Back the app doesn't handle (the tap count is 0) goes to the system. The
 # first Back may only close the soft keyboard.
-for _ in 1 2 3; do
-  adb shell input keyevent KEYCODE_BACK
-  sleep 3
-  log | grep -q "androiddemo: back not handled" && break
+if ((sdk >= 33)); then
+  # Predictive back: the app said it wouldn't go back, so the system goes
+  # back without asking it (a root activity moves to the background).
+  backgrounds="$(count "androiddemo: lifecycle Background")"
+  for _ in 1 2 3; do
+    adb shell input keyevent KEYCODE_BACK
+    sleep 3
+    (($(count "androiddemo: lifecycle Background") > backgrounds)) && break
+  done
+  if (($(count "androiddemo: lifecycle Background") <= backgrounds)); then
+    echo "Back didn't leave the app" >&2
+    log | tail -20 >&2
+    exit 1
+  fi
+  if log | grep -q "androiddemo: back not handled"; then
+    echo "the app was asked about a Back it said it wouldn't take" >&2
+    exit 1
+  fi
+  echo "android: Back went to the system (predictive back)"
+else
+  for _ in 1 2 3; do
+    adb shell input keyevent KEYCODE_BACK
+    sleep 3
+    log | grep -q "androiddemo: back not handled" && break
+  done
+  wait_for "androiddemo: back not handled" 10
+fi
+
+# Process death. Back in the foreground (the activity Back finished starts
+# again, or one moved to the back returns), two taps (the count is 0 again).
+frames="$(count "Stipple Android: window [0-9]+x[0-9]+ presented=true")"
+adb shell am start -n "$pkg/android.app.NativeActivity" >/dev/null
+for _ in $(seq 30); do
+  (($(count "Stipple Android: window [0-9]+x[0-9]+ presented=true") > frames)) && break
+  sleep 1
 done
-wait_for "androiddemo: back not handled" 10
+sleep 2
+adb shell input tap $((width / 2)) $((height / 2))
+wait_for "androiddemo: tapped 1" 30
+sleep 1
+adb shell input tap $((width / 2)) $((height / 2))
+wait_for "androiddemo: tapped 2" 30
+# Home: the app goes to the background and saves its state.
+adb shell input keyevent KEYCODE_HOME
+wait_for "androiddemo: saved taps=2" 30
+wait_for "stipple: saved [0-9]+ bytes of state" 10
+# End the backgrounded process, as the system would to free memory.
+pid="$(adb shell pidof "$pkg" | tr -d '\r')"
+adb shell am kill "$pkg"
+sleep 2
+if adb shell pidof "$pkg" >/dev/null; then
+  # am kill only ends processes it deems safe to; a debuggable app's own
+  # user can end it too.
+  adb shell run-as "$pkg" kill -9 "$pid" || true
+  sleep 2
+fi
+if adb shell pidof "$pkg" >/dev/null; then
+  echo "the app's process didn't end" >&2
+  exit 1
+fi
+echo "android: process $pid ended"
+# Starting it again recreates the activity from the saved Bundle.
+adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
+wait_for "stipple: restoring [0-9]+ bytes of saved state" 60
+wait_for 'androiddemo: restored taps=2 ' 30
+wait_for "Stipple Android: window [0-9]+x[0-9]+ presented=true" 60
+sleep 3
+adb exec-out screencap -p > "$shots/android-restored.png"
+adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null
+adb shell cat /sdcard/stipple-ui.xml > "$shots/android-restored-ui.xml"
+if ! grep -q "Tapped 2 times" "$shots/android-restored-ui.xml"; then
+  echo "the restored app doesn't show the restored count:" >&2
+  sed 's/<node/\n<node/g' "$shots/android-restored-ui.xml" | grep -o 'text="[^"]*"' >&2
+  exit 1
+fi
+echo "android: state restored after process death"
 echo "android: all checks passed"

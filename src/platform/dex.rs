@@ -543,6 +543,34 @@ pub(crate) const CALLBACKS: Class = Class {
 /// Every class the Android backend defines, in the order it loads them.
 pub(crate) const ANDROID_CLASSES: [Class; 4] = [HOST_VIEW, INPUT, NODES, CALLBACKS];
 
+/// Predictive back on Android 13 (API 33): an `OnBackInvokedCallback` the
+/// backend registers while the app would go back. Loaded on its own, from a
+/// dex of its own, only where the interface exists.
+pub(crate) const BACK_CALLBACK: Class = Class {
+    name: "Lorg/stipple/android/Back;",
+    superclass: "Ljava/lang/Object;",
+    interfaces: &["Landroid/window/OnBackInvokedCallback;"],
+    ctor: &[],
+    natives: &[native("onBackInvoked", &[], "V")],
+};
+
+const BACK_EVENT: &str = "Landroid/window/BackEvent;";
+
+/// Predictive back on Android 14 and later (API 34): the same callback with
+/// the gesture's progress (`OnBackAnimationCallback`).
+pub(crate) const BACK_ANIMATION: Class = Class {
+    name: "Lorg/stipple/android/BackAnimation;",
+    superclass: "Ljava/lang/Object;",
+    interfaces: &["Landroid/window/OnBackAnimationCallback;"],
+    ctor: &[],
+    natives: &[
+        native("onBackInvoked", &[], "V"),
+        native("onBackStarted", &[BACK_EVENT], "V"),
+        native("onBackProgressed", &[BACK_EVENT], "V"),
+        native("onBackCancelled", &[], "V"),
+    ],
+};
+
 /// A class's binary name, as `ClassLoader.loadClass` wants it:
 /// `Lorg/x/Y;` is `org.x.Y`.
 pub(crate) fn binary_name(descriptor: &str) -> String {
@@ -734,6 +762,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_back_callbacks_build_alone() {
+        for (class, natives) in [(BACK_CALLBACK, 1), (BACK_ANIMATION, 4)] {
+            let dex = build(&[class]);
+            assert_eq!(read_u32(&dex, 96), 1, "one class");
+            assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
+            assert_eq!(class.natives.len(), natives);
+            assert!(class.natives.iter().any(|n| n.name == "onBackInvoked"));
+        }
+        assert_eq!(
+            binary_name(BACK_ANIMATION.name),
+            "org.stipple.android.BackAnimation"
+        );
+    }
+
     /// With `STIPPLE_DEX_OUT` set, write the Android backend's classes there
     /// (and the demo next to it), so `dexdump` from the Android SDK's build
     /// tools can check them; CI does.
@@ -743,6 +786,12 @@ mod tests {
             let path = std::path::PathBuf::from(path);
             std::fs::write(&path, build(&ANDROID_CLASSES)).unwrap();
             std::fs::write(path.with_extension("demo.dex"), build(DEMO)).unwrap();
+            std::fs::write(path.with_extension("back.dex"), build(&[BACK_CALLBACK])).unwrap();
+            std::fs::write(
+                path.with_extension("back-animation.dex"),
+                build(&[BACK_ANIMATION]),
+            )
+            .unwrap();
         }
     }
 }

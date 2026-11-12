@@ -76,6 +76,21 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
 - **Back.** The Back key (and gesture) is `Event::BackRequested`, handled by
   `App::on_back`; unhandled, the activity does the system's default
   (`onBackPressed`). See [window-lifecycle.md](../window-lifecycle.md#going-back-android).
+- **Predictive back.** With `android:enableOnBackInvokedCallback="true"` in
+  the manifest, on Android 13 and later, Back goes to an
+  `OnBackInvokedCallback` the backend registers on the activity's
+  `OnBackInvokedDispatcher` only while the app would go back
+  (`App::back_enabled`, or an open menu); otherwise the system goes back
+  itself, with its preview animation. On Android 14 and later the callback is
+  an `OnBackAnimationCallback`, and the gesture's progress reaches
+  `App::on_back_progress`. See
+  [window-lifecycle.md](../window-lifecycle.md#predictive-back-android-13-and-later).
+- **Saved state.** `onSaveInstanceState` asks the app for its state
+  (`App::save_state`); `NativeActivity` keeps the bytes in the saved `Bundle`
+  and hands them to `ANativeActivity_onCreate` when the activity is recreated
+  (after Android ended the process in the background), where `android::start`
+  takes them for `App::restore_state`. See
+  [window-lifecycle.md](../window-lifecycle.md#keeping-the-state-across-process-death).
 - **Background and foreground.** `onPause` / `onResume` are
   `Event::Lifecycle(Background / Foreground)`, `onLowMemory` and
   `onTrimMemory` (running low and worse) `LowMemory`, heard by
@@ -108,6 +123,12 @@ storage):
 - `org.stipple.android.Nodes`, an `AccessibilityNodeProvider`.
 - `org.stipple.android.Callbacks`, a `ComponentCallbacks2`, for
   `onTrimMemory`.
+
+On Android 13 and later one more, from a dex of its own (its interface doesn't
+exist before): `org.stipple.android.Back`, an `OnBackInvokedCallback` (API
+33), or `org.stipple.android.BackAnimation`, an `OnBackAnimationCallback`
+(API 34 and later), for predictive back. `adb logcat -s stipple` shows `back
+callback registered` / `unregistered` as the app's answer changes.
 
 Every method is `native`, bound to Rust with `RegisterNatives`; the only
 bytecode is each constructor's call to its superclass's. It runs on the main
@@ -206,6 +227,7 @@ does all of this for the demo (`build-apk.sh x86_64 stipple.apk`, or
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.example.yourapp">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <application android:label="Your App" android:hasCode="false"
+      android:enableOnBackInvokedCallback="true"
       android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
     <activity android:name="android.app.NativeActivity" android:exported="true"
         android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density">
@@ -232,7 +254,7 @@ apksigner sign --ks your.keystore --out yourapp.apk aligned.apk
 suffix. The ABI directory is `arm64-v8a` for `aarch64` and `x86_64` for the
 emulator.
 
-Two manifest settings matter:
+Three manifest settings matter:
 
 - **`configChanges`** keeps the activity across rotation, resizing, keyboard and
   dark-mode switches, which Stipple handles itself. Without it, Android
@@ -240,6 +262,9 @@ Two manifest settings matter:
   again on a new thread, losing the app's state.
 - **A `NoActionBar` theme.** The default theme reserves room for a title bar
   that a `NativeActivity` never draws, which would show as a blank band.
+- **`enableOnBackInvokedCallback`** opts into predictive back on Android 13
+  and later (see above). Without it, Back stays a key event and every Back
+  reaches the app.
 
 ## Running on an emulator
 
@@ -250,7 +275,12 @@ the accessibility nodes with `uiautomator dump`, presses Back (handled), sends
 the app to the background and back and trims its memory, swipes the list (it
 must scroll, without tapping a row), types into the field and runs the input
 connection self-test (the field must end up as `Stipple日本!`), presses Back
-until the app no longer handles it, and saves screenshots. CI runs it on an API 34 x86_64 emulator
+until the app no longer handles it, and saves screenshots. On Android 13 and
+later it also checks predictive back (Back through the callback while the app
+takes it, an edge swipe with its progress and a cancelled one on Android 14,
+the system going back by itself when the app declines), and then process
+death: two taps, Home (the state is saved), `am kill`, relaunch, and the count
+must come back. CI runs it on an API 34 x86_64 emulator
 (the `visual-android` job). By hand:
 
 ```sh
@@ -277,9 +307,9 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
   support (fullscreen landscape editing, the candidate bar's position), and a
   selection move from a selection or mid-composition is refused. Dead keys on
   hardware keyboards don't compose.
-- **No predictive back**: the back gesture's preview animation needs the app
-  to say beforehand whether it will go back.
-- **No state saved across process death** (`onSaveInstanceState`).
+- **Predictive back on Android 13 itself is untried** (CI runs API 34); its
+  callback has no progress there. While the app takes Back, the system shows
+  no preview: drawing one (from `App::on_back_progress`) is the app's job.
 - **No OS-drawn controls.** Android's widgets live in its Java framework, so
   `Theme::native()` stays self-drawn there, in the system's colors.
 - **TalkBack itself is untried**: the node provider is checked with

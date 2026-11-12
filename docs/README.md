@@ -66,6 +66,8 @@ How to build, package and run on each platform, and what works there today.
 | Asking before closing and quitting | ✅ ³⁷ | ✅ ³⁷ | ✅ ³⁷ | — | — | — |
 | Background, foreground and memory warnings (`App::on_lifecycle`) | — | — | — | ✅ ⁵³ | ✅ ⁵⁷ | — |
 | Back navigation (`App::on_back`) | — | — | — | ❌ | ✅ ⁵⁷ | — |
+| Predictive back (`App::back_enabled`, `App::on_back_progress`) | — | — | — | ❌ | ✅ ⁵⁸ | — |
+| State kept across process death (`App::save_state`) | — | — | — | ❌ | ✅ ⁵⁹ | ❌ |
 | Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
@@ -329,8 +331,23 @@ it hasn't been tried with TalkBack itself. See
 
 ⁵⁷ `onPause` / `onResume` / `onTrimMemory` and the Back key, checked on the
 CI emulator (`input keyevent`, Home and `am start`, `am send-trim-memory`).
-Predictive back isn't supported. See
-[window-lifecycle.md](window-lifecycle.md#going-to-the-background-mobile).
+See [window-lifecycle.md](window-lifecycle.md#going-to-the-background-mobile).
+
+⁵⁸ Android 13 and later, with `android:enableOnBackInvokedCallback` in the
+manifest: an `OnBackInvokedCallback` (a class the backend writes as dex at run
+time) registered only while the app would go back, and on Android 14 and later
+the gesture's progress (`OnBackAnimationCallback`). Checked on the CI emulator
+(API 34): the Back key through the callback, an edge swipe with its progress,
+a cancelled swipe, and a Back the app declined going to the system. API 33
+(no progress) is build-checked only. iOS's edge swipe isn't done. See
+[window-lifecycle.md](window-lifecycle.md#predictive-back-android-13-and-later).
+
+⁵⁹ Bytes from `App::save_state`, kept in the activity's saved `Bundle`
+(`onSaveInstanceState`) and handed to `App::restore_state` when Android starts
+the app again. Checked on the CI emulator: Home, `am kill`, relaunch. iOS
+(state restoration) and the web (`sessionStorage`) could carry the same API;
+not done yet. See
+[window-lifecycle.md](window-lifecycle.md#keeping-the-state-across-process-death).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.

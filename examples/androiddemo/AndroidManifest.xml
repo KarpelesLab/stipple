@@ -2,10 +2,14 @@
 <!-- The APK manifest for androiddemo: a NativeActivity that loads
      libstipple_android.so. configChanges keeps the activity (and the app's
      state) across rotation, resizing and dark-mode switches, which Stipple
-     handles itself. See docs/platforms/android.md for packaging. -->
+     handles itself. enableOnBackInvokedCallback opts into predictive back
+     (Android 13 and later): Back goes to the app's OnBackInvokedCallback, which
+     Stipple registers only while the app would go back. See
+     docs/platforms/android.md for packaging. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.karpeleslab.stipple">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <application android:label="Stipple" android:hasCode="false" android:debuggable="true"
+      android:enableOnBackInvokedCallback="true"
       android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
     <activity android:name="android.app.NativeActivity" android:exported="true"
         android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density">
