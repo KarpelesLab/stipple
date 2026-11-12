@@ -21,16 +21,23 @@
 #    (keys); then the app drives the connection as a composing keyboard would
 #    (compose, commit an emoji, delete around the caret, finish), and the
 #    field must hold the result;
-# 8. a Back the app doesn't handle leaves it to the system: with predictive
+# 8. Notify asks for POST_NOTIFICATIONS (answered "Don't allow" in the system's
+#    dialog, so the next one fails); once `pm grant`ed, the notification shows
+#    in `dumpsys notification`;
+# 9. Open brings up DocumentsUI's picker, where a file pushed to Downloads is
+#    picked and the app reads it; Back cancels another; Save creates
+#    stipple-saved.txt with the app's bytes; and the process killed under the
+#    picker comes back cleanly (the results fragment isn't restored);
+# 10. a Back the app doesn't handle leaves it to the system: with predictive
 #    back (Android 13 and later, the manifest's enableOnBackInvokedCallback),
 #    Back reaches the app through its OnBackInvokedCallback while it would go
 #    back (the tap count isn't 0), and goes straight to the system, which
 #    sends the app to the background, while it wouldn't;
-# 9. process death: with two taps counted and the field typed in, Home has
+# 11. process death: with two taps counted and the field typed in, Home has
 #    the app save its state (onSaveInstanceState), `am kill` ends the
 #    backgrounded process, and starting it again restores the count and the
 #    text from the saved Bundle;
-# 10. screenshots of each state land in the screenshot directory.
+# 12. screenshots of each state land in the screenshot directory.
 set -euo pipefail
 
 apk="${1:?usage: test-on-device.sh app.apk [screenshot-dir]}"
@@ -63,6 +70,11 @@ wait_for() {
 # Each build signs with a fresh debug key, so an older install has to go first.
 adb install -r "$apk" || { adb uninstall "$pkg" && adb install "$apk"; }
 adb shell am force-stop "$pkg" || true
+# Start without the notification permission, as a fresh install does, so the
+# app asks for it.
+adb shell pm revoke "$pkg" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
+adb shell pm clear-permission-flags "$pkg" android.permission.POST_NOTIFICATIONS \
+  user-set user-fixed 2>/dev/null || true
 adb logcat -c
 adb shell am start -W -n "$pkg/android.app.NativeActivity"
 sdk="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
@@ -248,6 +260,137 @@ if ! adb shell pidof "$pkg" >/dev/null || log | grep -q "panicked"; then
   adb logcat -d | tail -60 >&2
   exit 1
 fi
+
+### Notifications and the document picker, through the buttons' accessibility
+### nodes (their bounds come from a uiautomator dump).
+
+# Tap the first node in a fresh uiautomator dump matching the regex $1.
+tap_node() {
+  local b x1 y1 x2 y2
+  adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || true
+  b="$(adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' | grep -E "$1" | head -1 \
+    | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p')"
+  [ -n "$b" ] || return 1
+  read -r x1 y1 x2 y2 <<< "$b"
+  adb shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2))
+}
+# Wait up to $2 seconds for node $1 and tap it.
+tap_when() {
+  local i
+  for ((i = 0; i < ${2:-20}; i++)); do
+    tap_node "$1" && return 0
+    sleep 1
+  done
+  echo "no node matching $1 on screen:" >&2
+  adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' | grep -oE '(text|resource-id|content-desc)="[^"]+"' >&2 || true
+  adb exec-out screencap -p > "$shots/android-no-node.png" || true
+  return 1
+}
+# Wait up to $2 seconds for the resumed activity to match $1.
+wait_top() {
+  local i
+  for ((i = 0; i < ${2:-20}; i++)); do
+    adb shell dumpsys activity activities | grep -E "topResumedActivity" | grep -qE "$1" && return 0
+    sleep 1
+  done
+  echo "the top activity isn't $1:" >&2
+  adb shell dumpsys activity activities | grep -E "topResumedActivity" >&2 || true
+  return 1
+}
+
+# Notifications on Android 13+: the first asks for POST_NOTIFICATIONS (the
+# permission was revoked before launch), through the results fragment. "Don't
+# allow" drops it and makes the next one fail; once granted, one is posted.
+tap_when 'text="Notify"'
+wait_for "stipple: asking for the notification permission" 20
+wait_top "GrantPermissionsActivity" 20
+adb exec-out screencap -p > "$shots/android-permission.png"
+tap_when 'permission_deny_button'
+wait_for "stipple: notification permission Some\(false\)" 20
+wait_for 'notification "Stipple test" not shown' 10
+wait_top "$pkg" 20
+tap_when 'text="Notify"'
+wait_for "androiddemo: notify Err\(Os\(\"notifications aren't allowed\"\)\)" 20
+adb shell pm grant "$pkg" android.permission.POST_NOTIFICATIONS
+tap_when 'text="Notify"'
+wait_for "stipple: notification [0-9]+ posted" 20
+sleep 1
+if ! adb shell dumpsys notification --noredact | grep -A40 "pkg=$pkg" \
+  | grep -q "android.title=String (Stipple test)"; then
+  echo "the notification isn't in dumpsys notification:" >&2
+  adb shell dumpsys notification --noredact | grep -A20 "pkg=$pkg" >&2 || true
+  exit 1
+fi
+adb shell dumpsys notification --noredact | grep "pkg=$pkg" | head -1
+
+# The document picker (DocumentsUI, through ACTION_OPEN_DOCUMENT): pick a file
+# pushed to Downloads, and the app reads its name and contents.
+printf 'Hello from the picker\n' > "$shots/stipple-pick.txt"
+adb push "$shots/stipple-pick.txt" /sdcard/Download/stipple-pick.txt >/dev/null
+adb shell rm -f /sdcard/Download/stipple-saved.txt
+tap_when 'text="Open"'
+wait_for "stipple: document picker started" 20
+wait_top "documentsui" 30
+sleep 2
+adb exec-out screencap -p > "$shots/android-picker.png"
+# It opens on Recent files (or where it was last); go to Downloads if needed.
+if ! tap_node 'text="stipple-pick.txt"'; then
+  tap_when 'content-desc="Show roots"'
+  tap_when 'text="Downloads"'
+  tap_when 'text="stipple-pick.txt"'
+fi
+wait_for 'androiddemo: opened "stipple-pick.txt" \(22 bytes\): "Hello from the picker"' 30
+# Back out of the picker: the callback hears it was cancelled.
+wait_top "$pkg" 20
+tap_when 'text="Open"'
+wait_top "documentsui" 30
+sleep 1
+adb shell input keyevent KEYCODE_BACK
+wait_for "androiddemo: open cancelled" 20
+# Saving (ACTION_CREATE_DOCUMENT): the picker suggests the file's name, and
+# Save writes the bytes there.
+wait_top "$pkg" 20
+tap_when 'text="Save"'
+wait_top "documentsui" 30
+tap_when 'text="stipple-saved.txt"'
+tap_when 'resource-id="android:id/button1"'
+wait_for "androiddemo: saved true" 30
+saved="$(adb shell cat /sdcard/Download/stipple-saved.txt)"
+echo "saved: $saved"
+case "$saved" in
+  "Saved by androiddemo"*) ;;
+  *) echo "stipple-saved.txt holds: $saved" >&2; exit 1 ;;
+esac
+
+# The process dies while the picker is up, and Android brings the activity
+# back with its saved state: the results fragment was dropped from it, so the
+# restore doesn't trip over a class only Stipple's loader knows.
+wait_top "$pkg" 20
+tap_when 'text="Open"'
+wait_top "documentsui" 30
+sleep 1
+old_pid="$(adb shell pidof "$pkg" | tr -d '\r')"
+adb shell am kill "$pkg"
+sleep 1
+if adb shell pidof "$pkg" >/dev/null; then
+  # am kill only ends processes it deems safe to; a debuggable app's own
+  # user can end it too.
+  adb shell run-as "$pkg" kill -9 "$old_pid" || true
+  sleep 1
+fi
+adb logcat -c
+adb shell input keyevent KEYCODE_BACK
+wait_for "Stipple Android: window [0-9]+x[0-9]+ presented=true" 60
+new_pid="$(adb shell pidof "$pkg" | tr -d '\r')"
+echo "restored after process death: pid $old_pid -> $new_pid"
+if [ -z "$new_pid" ] || [ "$new_pid" = "$old_pid" ] || adb logcat -d | grep -qE "FATAL EXCEPTION|Unable to instantiate fragment"; then
+  echo "the activity didn't come back cleanly after process death:" >&2
+  adb logcat -d | grep -E "AndroidRuntime|FATAL|Fragment" | tail -30 >&2 || true
+  exit 1
+fi
+sleep 2
+# The checks below look for their own lines.
+adb logcat -c
 
 # A Back the app doesn't handle (the tap count is 0) goes to the system. The
 # first Back may only close the soft keyboard.

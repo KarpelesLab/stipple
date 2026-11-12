@@ -134,7 +134,8 @@ dialog::save_file_contents(&FileDialog::new().with_file_name("notes.txt"), bytes
 
 - `open_file_contents` opens an `<input type=file>` and returns at once; the
   callback runs once the browser has read the file, and changes the state
-  through the `AppHandle`, which re-renders. On the desktops the same call shows
+  through the `AppHandle`, which re-renders. iOS and Android answer the same
+  way (see their pages). On the desktops the same call shows
   the native dialog and runs the callback before returning. Call it from an
   input handler: browsers only open a picker in response to user input.
 - `save_file_contents` downloads the bytes as `file_name` (`download` if

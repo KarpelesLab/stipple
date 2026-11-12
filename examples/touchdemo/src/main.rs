@@ -31,7 +31,9 @@
 //!    VoiceOver does and activates a row through one. Then it holds a finger
 //!    on a row until its context menu opens and picks the item (through its
 //!    accessibility element), drags the strip sideways, and pinches the box
-//!    with two synthetic fingers. It ends this part with
+//!    with two synthetic fingers; and it opens the document picker for a file
+//!    to open, then one to save to, cancelling each (as its Cancel button
+//!    would) and checking the app's callback heard. It ends this part with
 //!    `touchdemo: selftest passed` or `touchdemo: selftest FAILED: ...`.
 //! 2. It then animates and waits for CI to switch the simulator to dark mode
 //!    (`xcrun simctl ui ... appearance dark`) and to send it to the background
@@ -255,6 +257,7 @@ mod selftest {
     use std::sync::Mutex;
     use stipple::platform::TouchPhase;
     use stipple::platform::backend::ios::simulate;
+    use stipple::platform::dialog::{self, FileDialog};
 
     enum Step {
         /// Run once.
@@ -272,6 +275,12 @@ mod selftest {
     static TOUCH_AT: Mutex<Point> = Mutex::new(Point::new(0.0, 0.0));
     /// The notification permission, as the center reported it.
     static PERMISSION: Mutex<Option<&'static str>> = Mutex::new(None);
+    /// Whether the open picker's callback got a file, once it ran.
+    static PICKED: Mutex<Option<bool>> = Mutex::new(None);
+    /// What the save picker's callback got, once it ran.
+    static SAVED: Mutex<Option<bool>> = Mutex::new(None);
+    /// The document picker's class.
+    const PICKER: &str = "UIDocumentPickerViewController";
 
     fn check(ok: bool, what: impl Into<String>) {
         if !ok {
@@ -670,6 +679,63 @@ mod selftest {
                 format!("pinch scale {:.3}", s.pinch_scale),
             );
             check(s.tapped.len() == 1, format!("rows tapped {:?}", s.tapped));
+        });
+
+        // The document pickers: each must come up, and cancelling it (as its
+        // Cancel button does; its contents run in another process, which
+        // nothing here can tap) must reach the app's callback.
+        steps.run(0, |_| {
+            dialog::open_file_contents(&FileDialog::new().with_accept(".txt,image/*"), |file| {
+                log(&format!(
+                    "touchdemo: open picker answered {:?}",
+                    file.as_ref().map(|f| &f.name)
+                ));
+                *PICKED.lock().unwrap() = Some(file.is_some());
+            });
+        });
+        steps.until(|_| simulate::presented_controller() == PICKER);
+        steps.run(600, |_| {
+            let shown = simulate::presented_controller();
+            log(&format!("touchdemo: open picker presented {shown}"));
+            check(shown == PICKER, format!("open picker: {shown:?} on top"));
+            check(
+                simulate::cancel_document_picker(),
+                "no open picker to cancel",
+            );
+        });
+        steps.until(|_| PICKED.lock().unwrap().is_some());
+        steps.run(0, |_| {
+            let picked = *PICKED.lock().unwrap();
+            check(
+                picked == Some(false),
+                format!("open picker answered {picked:?}"),
+            );
+            dialog::save_file_contents_then(
+                &FileDialog::new().with_file_name("touchdemo.txt"),
+                b"Saved by touchdemo\n",
+                |saved| {
+                    log(&format!("touchdemo: save picker answered {saved}"));
+                    *SAVED.lock().unwrap() = Some(saved);
+                },
+            );
+        });
+        steps.until(|_| simulate::presented_controller() == PICKER);
+        steps.run(600, |_| {
+            let shown = simulate::presented_controller();
+            log(&format!("touchdemo: save picker presented {shown}"));
+            check(shown == PICKER, format!("save picker: {shown:?} on top"));
+            check(
+                simulate::cancel_document_picker(),
+                "no save picker to cancel",
+            );
+        });
+        steps.until(|_| SAVED.lock().unwrap().is_some());
+        steps.run(0, |_| {
+            let saved = *SAVED.lock().unwrap();
+            check(
+                saved == Some(false),
+                format!("save picker answered {saved:?}"),
+            );
             report("selftest");
         });
 

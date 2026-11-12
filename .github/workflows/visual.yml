@@ -3502,9 +3502,10 @@ jobs:
       # activates a row through one; then it long-presses a row (its context
       # menu opens and its item is picked through accessibility), drags a
       # strip sideways and pinches a box with two synthetic fingers, all
-      # through the backend's touch path. It logs to its tmp dir, read back
+      # through the backend's touch path; then it opens the document pickers
+      # (open and export) and cancels each. It logs to its tmp dir, read back
       # here.
-      - name: Touch scrolling, gestures, the keyboard, composition and accessibility (touchdemo self-test)
+      - name: Touch scrolling, gestures, the keyboard, composition, accessibility and document pickers (touchdemo self-test)
         run: |
           cargo build --release -p touchdemo --target aarch64-apple-ios-sim
           cp target/aarch64-apple-ios-sim/release/touchdemo Stipple.app/window
@@ -3548,6 +3549,14 @@ jobs:
           grep -qE "touchdemo: row [0-9]+ pinned" "$LOG"
           grep -qE "touchdemo: strip scrolled to [1-9][0-9]*" "$LOG"
           grep -qE "touchdemo: pinch Ended scale 2\.[45]" "$LOG"
+          # The document pickers came up (UIDocumentPickerViewController, to
+          # open and to export), and cancelling each reached the callback.
+          # Picking a file can't be scripted: the picker's contents run in
+          # another process.
+          grep -q "touchdemo: open picker presented UIDocumentPickerViewController" "$LOG"
+          grep -q "touchdemo: open picker answered None" "$LOG"
+          grep -q "touchdemo: save picker presented UIDocumentPickerViewController" "$LOG"
+          grep -q "touchdemo: save picker answered false" "$LOG"
           grep -q "touchdemo: selftest passed" "$LOG"
 
       # touchdemo's second part, driven from here: the simulator switches to
@@ -3620,7 +3629,12 @@ jobs:
   # the app's OnBackInvokedCallback only while it would go back, an edge swipe
   # brings its progress (and a cancelled one goes nowhere), and otherwise the
   # system goes back by itself. Process death: the state saved on Home
-  # (onSaveInstanceState) comes back after `am kill` and a relaunch.
+  # (onSaveInstanceState) comes back after `am kill` and a relaunch. Then
+  # notifications (the POST_NOTIFICATIONS prompt refused in its dialog, then
+  # granted with pm grant, and the notification read back from dumpsys) and
+  # the Storage Access Framework picker (DocumentsUI driven through
+  # uiautomator: a file picked and read, one cancelled, one saved, and the
+  # process killed under the picker coming back cleanly).
   # Screenshots and the uiautomator dump are uploaded as an artifact.
   visual-android:
     name: Visual test (Android emulator)
@@ -3647,7 +3661,7 @@ jobs:
           STIPPLE_DEX_OUT="$PWD/stipple-classes.dex" cargo test --lib platform::dex::
           dexdump="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/dexdump"
           "$dexdump" -d stipple-classes.dex > dexdump.txt
-          for class in HostView Input Nodes Callbacks; do
+          for class in HostView Input Nodes Callbacks Results Lifecycle; do
             grep -q "Class descriptor  : 'Lorg/stipple/android/$class;'" dexdump.txt
           done
           grep -c "(PUBLIC NATIVE)" dexdump.txt
@@ -3664,7 +3678,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run on the emulator (touch, keys, IME, accessibility, back, lifecycle, saved state)
+      - name: Run on the emulator (touch, keys, IME, accessibility, back, lifecycle, saved state, notifications, document picker)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34

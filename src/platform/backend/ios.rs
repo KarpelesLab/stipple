@@ -847,6 +847,19 @@ pub mod simulate {
         crate::platform::shell::ios::authorization_status(done);
     }
 
+    /// The class name of the view controller presented on top (a document
+    /// picker is `UIDocumentPickerViewController`), or `""`.
+    pub fn presented_controller() -> String {
+        crate::platform::dialog::picker_ios::presented_class()
+    }
+
+    /// Cancel the document picker on top, as its Cancel button would: the
+    /// app's callback gets `None` (or `false`, for a save). `false` if no
+    /// picker is showing.
+    pub fn cancel_document_picker() -> bool {
+        crate::platform::dialog::picker_ios::cancel_presented()
+    }
+
     /// A finger `id` at `position` (logical pixels, in the app's content).
     pub fn touch(id: u64, phase: TouchPhase, position: Point) {
         later(move || touch_input(phase, &[(id, position)]));

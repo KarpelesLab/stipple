@@ -120,7 +120,7 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
 An input method talks to a `View` (`onCreateInputConnection`), and
 accessibility services to a view's `AccessibilityNodeProvider`; a
 `NativeActivity` has neither. Rather than ship Java, the backend assembles
-four tiny classes into a dex file at start-up (`stipple::platform::dex`, a
+six tiny classes into a dex file at start-up (`stipple::platform::dex`, a
 hand-written writer) and loads them with `InMemoryDexClassLoader` (Android 8
 and later; before, `DexClassLoader` from a file in the app's private
 storage):
@@ -133,6 +133,16 @@ storage):
 - `org.stipple.android.Nodes`, an `AccessibilityNodeProvider`.
 - `org.stipple.android.Callbacks`, a `ComponentCallbacks2`, for
   `onTrimMemory`.
+- `org.stipple.android.Results`, a headless `android.app.Fragment`, added to
+  the activity the first time it's needed: activities started for a result
+  (the document picker) and permission requests are started from it, so
+  their answers reach its `onActivityResult` / `onRequestPermissionsResult`,
+  which `NativeActivity` doesn't pass on.
+- `org.stipple.android.Lifecycle`, the application's
+  `ActivityLifecycleCallbacks`: its `onActivitySaveInstanceState` drops the
+  fragment from the activity's saved state (`android:fragments`), since after
+  process death Android would restore it through the app's class loader,
+  which doesn't have the class, and crash.
 
 On Android 13 and later one more, from a dex of its own (its interface doesn't
 exist before): `org.stipple.android.Back`, an `OnBackInvokedCallback` (API
@@ -205,6 +215,54 @@ adb shell uiautomator dump /sdcard/ui.xml && adb shell cat /sdcard/ui.xml
 ```
 
 lists the nodes; it is what CI checks.
+
+## File pickers
+
+`dialog::open_file_contents` and `dialog::save_file_contents` (or
+`save_file_contents_then`, to hear whether the bytes were written) use the
+Storage Access Framework, as Android apps are meant to: there are no paths,
+only documents an app may read or write.
+
+- **Open** starts `ACTION_OPEN_DOCUMENT` (`CATEGORY_OPENABLE`), filtered by
+  `FileDialog::accept` turned into MIME types (`".txt,image/*"` offers
+  `text/plain` and `image/*`; an extension Stipple doesn't know stands for
+  `application/octet-stream`). The picked document's `content:` URI is opened
+  with `ContentResolver.openFileDescriptor` on a thread of its own (a cloud
+  provider may download it first), read, and passed to the callback with its
+  display name.
+- **Save** starts `ACTION_CREATE_DOCUMENT` with `FileDialog::file_name` as
+  the suggested name (`Untitled` if empty) and its extension's MIME type; the
+  bytes are written to the created document.
+
+Both answer later, from the event loop, as on the web: the call returns at
+once, and the callback runs once the picker closes (with `None` / `false` if
+it was cancelled). The picker is started from the `Results` fragment (see
+[run-time classes](#run-time-classes)). If the process is killed while the
+picker is up, the activity comes back without the request; the callback is
+gone with the old process. `open_file`, `save_file` and `pick_folder` return
+`None`.
+
+CI drives DocumentsUI through `uiautomator` on its emulator: it picks a file
+pushed to Downloads and checks the app read it, backs out of another (the
+callback hears `None`), saves one and reads it back with `adb shell cat`, and
+kills the process under the picker to check the activity comes back.
+
+## Notifications
+
+`platform::notify` posts through `NotificationManager`, on a channel of the
+app's (`stipple`, made on Android 8 and later). On Android 13 and later it
+needs the `POST_NOTIFICATIONS` runtime permission, which the manifest must
+declare:
+
+```xml
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+```
+
+The first `notify` without it shows the system's prompt; the notification
+waits for the answer, and later calls fail once it's refused. See
+[os-integration.md](../os-integration.md#notifications). CI refuses the prompt
+on its emulator, checks the next `notify` fails, grants the permission with
+`adb shell pm grant` and finds the notification in `dumpsys notification`.
 
 ## Building
 
@@ -326,6 +384,8 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
 - **No OS-drawn controls.** Android's widgets live in its Java framework, so
   `Theme::native()` stays self-drawn there, in the system's colors.
 - **TalkBack itself is untried**: the node provider is checked with
-  `uiautomator`. No file dialogs.
+  `uiautomator`. The document picker answers with contents only:
+  `open_file` and friends (paths) return `None`, and there is no folder picker
+  (`ACTION_OPEN_DOCUMENT_TREE`).
 - Rendering is software only: a full-HD screen is a lot of pixels, so heavy
   animation runs below the display's rate on slower devices and emulators.

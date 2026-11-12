@@ -38,7 +38,7 @@ How to build, package and run on each platform, and what works there today.
 | Reduced motion (OS setting) | ✅ ³² | ✅ ³² | ✅ ³² | ✅ ³ | ✅ ³² | ✅ ³¹ |
 | Built-in widgets animate by default (per-theme motion) | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
-| File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ❌ | ❌ | ✅ ¹⁴ |
+| File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ✅ ⁶² | ✅ ⁶² | ✅ ¹⁴ |
 | Accessibility | AT-SPI | UI Automation | NSAccessibility | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
@@ -59,7 +59,7 @@ How to build, package and run on each platform, and what works there today.
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | drawn ⁶¹ | drawn ⁶¹ | drawn ⁶¹ |
 | Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | drawn, long press ⁶⁰ | drawn, long press ⁶⁰ | drawn ⁶⁰ |
 | Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ³ | ✅ ¹⁰ | ✅ ¹⁰ |
-| Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ❌ | ✅ ¹⁰ |
+| Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ✅ ⁶³ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ❌ | ❌ | ❌ |
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
@@ -366,8 +366,25 @@ on a real phone. See [pointer-events.md](pointer-events.md#touch-gestures).
 apps usually leave `App::menu` out on these targets. Not run in CI there. See
 [menus.md](menus.md#context-menus).
 
+⁶² `open_file_contents` and `save_file_contents` (contents, not paths, answered
+asynchronously): `UIDocumentPickerViewController` on iOS, the Storage Access
+Framework's `ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT` on Android.
+CI's Android emulator picks a file in DocumentsUI (through uiautomator) and
+reads it, cancels one, and saves one; the iOS simulator self-test checks both
+pickers come up and that cancelling reaches the app, since choosing a file
+there can't be scripted. `open_file` and friends still return `None`. See
+[ios.md](platforms/ios.md#file-pickers) and [android.md](platforms/android.md#file-pickers).
+
+⁶³ `NotificationManager` on a channel of the app's, asking for
+`POST_NOTIFICATIONS` first on Android 13 and later. CI's API 34 emulator
+refuses the prompt (then `notify` fails), grants it with `pm grant`, and finds
+the notification in `dumpsys notification`. See
+[os-integration.md](os-integration.md#notifications).
+
 Where the clipboard isn't wired up, copy and paste still work inside the app.
-Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled.
+Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
+on iOS, Android and the web, which hand out contents rather than paths, so do
+they: use `open_file_contents` and `save_file_contents` there.
 
 ## Topics
 

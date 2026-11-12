@@ -8,6 +8,8 @@
      docs/platforms/android.md for packaging. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.karpeleslab.stipple">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
+  <!-- platform::notify, on Android 13 and later. -->
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
   <application android:label="Stipple" android:hasCode="false" android:debuggable="true"
       android:enableOnBackInvokedCallback="true"
       android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">

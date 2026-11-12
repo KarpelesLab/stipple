@@ -37,7 +37,12 @@
 //! - `androiddemo: row N pinned` when the item of a row's context menu is
 //!   picked: a long press (`adb shell input swipe x y x y 800`) opens it;
 //! - `androiddemo: strip scrolled to N` as a sideways swipe scrolls the strip
-//!   of chips above the list.
+//!   of chips above the list;
+//! - `androiddemo: notify Ok(())` (or the error) when *Notify* posts a
+//!   notification, which asks for `POST_NOTIFICATIONS` first on Android 13;
+//! - `androiddemo: opened "name" (N bytes): "text"` / `open cancelled` once
+//!   *Open*'s document picker answers, and `androiddemo: saved true|false`
+//!   once *Save*'s has written `stipple-saved.txt` (or was cancelled).
 //!
 //! Non-Android builds compile to an empty cdylib so `cargo build --workspace`
 //! works everywhere.
@@ -49,6 +54,7 @@ mod app {
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
     use stipple::platform::BackGesture;
     use stipple::platform::backend::android::{self, ANativeActivity};
+    use stipple::platform::dialog::{self, FileDialog};
     use stipple::prelude::*;
 
     struct State {
@@ -105,6 +111,7 @@ mod app {
             ])
             .gap(theme.spacing.sm)
             .align(Align::Start, Align::Center),
+            platform_row(cx, &theme),
         ])
         .gap(theme.spacing.md);
         // The button takes the space the rest leaves, so it covers the middle
@@ -166,6 +173,41 @@ mod app {
             .align(Align::Center, Align::Center)
             .padding(Insets::uniform(theme.spacing.lg))
             .grow(1.0)
+    }
+
+    /// Buttons for the system's services: a notification, and the document
+    /// picker to open a text file or save one.
+    fn platform_row(cx: &mut Cx<State>, theme: &Theme) -> Element {
+        let notify = button_labeled(theme, "Notify").on_tap(cx, |_: &mut State| {
+            let sent = stipple::platform::notify(
+                &Notification::new("Stipple test").body("A notification from androiddemo"),
+            );
+            println!("androiddemo: notify {sent:?}");
+        });
+        let open = button_labeled(theme, "Open").on_tap(cx, |_: &mut State| {
+            dialog::open_file_contents(&FileDialog::new().with_accept(".txt"), |file| match file {
+                Some(f) => println!(
+                    "androiddemo: opened {:?} ({} bytes): {:?}",
+                    f.name,
+                    f.bytes.len(),
+                    String::from_utf8_lossy(&f.bytes).trim_end()
+                ),
+                None => println!("androiddemo: open cancelled"),
+            });
+            println!("androiddemo: open requested");
+        });
+        let save = button_labeled(theme, "Save").on_tap(cx, |s: &mut State| {
+            let text = format!("Saved by androiddemo after {} taps\n", s.taps);
+            dialog::save_file_contents_then(
+                &FileDialog::new().with_file_name("stipple-saved.txt"),
+                text.as_bytes(),
+                |saved| println!("androiddemo: saved {saved}"),
+            );
+            println!("androiddemo: save requested");
+        });
+        row(vec![notify, open, save])
+            .gap(theme.spacing.sm)
+            .align(Align::Start, Align::Center)
     }
 
     fn main() {

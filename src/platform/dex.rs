@@ -540,8 +540,54 @@ pub(crate) const CALLBACKS: Class = Class {
     ],
 };
 
+/// A headless `Fragment` the backend adds to its activity to hear what a
+/// `NativeActivity` doesn't pass on: the result of an activity it started
+/// for one (the document picker) and of a permission request.
+pub(crate) const RESULTS: Class = Class {
+    name: "Lorg/stipple/android/Results;",
+    superclass: "Landroid/app/Fragment;",
+    interfaces: &[],
+    ctor: &[],
+    natives: &[
+        native(
+            "onActivityResult",
+            &["I", "I", "Landroid/content/Intent;"],
+            "V",
+        ),
+        native(
+            "onRequestPermissionsResult",
+            &["I", "[Ljava/lang/String;", "[I"],
+            "V",
+        ),
+    ],
+};
+
+const ACTIVITY: &str = "Landroid/app/Activity;";
+const BUNDLE: &str = "Landroid/os/Bundle;";
+
+/// The application's activity lifecycle callbacks: only
+/// `onActivitySaveInstanceState` does anything, dropping the [`RESULTS`]
+/// fragment from the activity's saved state, since the framework couldn't
+/// load its class to restore it (it isn't in the app's class loader).
+pub(crate) const LIFECYCLE: Class = Class {
+    name: "Lorg/stipple/android/Lifecycle;",
+    superclass: "Ljava/lang/Object;",
+    interfaces: &["Landroid/app/Application$ActivityLifecycleCallbacks;"],
+    ctor: &[],
+    natives: &[
+        native("onActivityCreated", &[ACTIVITY, BUNDLE], "V"),
+        native("onActivityStarted", &[ACTIVITY], "V"),
+        native("onActivityResumed", &[ACTIVITY], "V"),
+        native("onActivityPaused", &[ACTIVITY], "V"),
+        native("onActivityStopped", &[ACTIVITY], "V"),
+        native("onActivitySaveInstanceState", &[ACTIVITY, BUNDLE], "V"),
+        native("onActivityDestroyed", &[ACTIVITY], "V"),
+    ],
+};
+
 /// Every class the Android backend defines, in the order it loads them.
-pub(crate) const ANDROID_CLASSES: [Class; 4] = [HOST_VIEW, INPUT, NODES, CALLBACKS];
+pub(crate) const ANDROID_CLASSES: [Class; 6] =
+    [HOST_VIEW, INPUT, NODES, CALLBACKS, RESULTS, LIFECYCLE];
 
 /// Predictive back on Android 13 (API 33): an `OnBackInvokedCallback` the
 /// backend registers while the app would go back. Loaded on its own, from a
@@ -751,7 +797,7 @@ mod tests {
     #[test]
     fn the_android_classes_build() {
         let dex = build(&ANDROID_CLASSES);
-        assert_eq!(read_u32(&dex, 96), 4);
+        assert_eq!(read_u32(&dex, 96), ANDROID_CLASSES.len() as u32);
         assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
         assert_eq!(binary_name(HOST_VIEW.name), "org.stipple.android.HostView");
         // Each native is a virtual method of its class, so overriding works.

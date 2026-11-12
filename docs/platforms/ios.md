@@ -148,6 +148,28 @@ refused. A notification shows while the app is on screen too (the center's
 delegate answers `willPresentNotification:` with a banner). The bundle needs
 nothing extra in its `Info.plist`.
 
+## File pickers
+
+`dialog::open_file_contents` and `dialog::save_file_contents` (or
+`save_file_contents_then`, to hear how the save went) present a
+`UIDocumentPickerViewController` from the key window's topmost view
+controller, with a delegate built at run time:
+
+- **Open** uses `initForOpeningContentTypes:asCopy:` with `asCopy`, so the
+  app gets its own copy of the document, readable without security-scoped
+  access. `FileDialog::accept` becomes `UTType`s (`.txt` through
+  `typeWithFilenameExtension:`, `image/*` as `public.image`, a full MIME type
+  through `typeWithMIMEType:`; nothing is `public.data`, any file). The copy
+  is read, passed to the callback with its name, and deleted.
+- **Save** writes the bytes to a file named `FileDialog::file_name`
+  (`Untitled` if empty) in the app's tmp directory and presents
+  `initForExportingURLs:asCopy:` for it, so the user copies it where they
+  like; the file goes once the picker closes.
+
+The call returns at once and the callback runs when the picker closes, from
+the main thread (`None` / `false` if it was cancelled). `open_file`,
+`save_file` and `pick_folder` return `None`.
+
 ## OS-drawn controls
 
 Under `Theme::native()` UIKit draws buttons, switches, sliders, progress bars
@@ -172,7 +194,10 @@ with `Font::from_bytes` to be safe.
   passed on.
 - Hardware keyboard keys only reach the app while a text input has focus (the
   view is first responder only then); they're build-checked, not run in CI.
-- No file dialogs yet.
+- File pickers answer with contents only (`open_file` and friends return
+  `None`), and there is no folder picker. Choosing a file in the picker can't
+  be scripted on the simulator (its contents run in another process), so CI
+  only checks the pickers come up and that cancelling reaches the app.
 - The clipboard (`UIPasteboard`) is wired up but untested; Cmd+C/V from a
   hardware keyboard reach it.
 
@@ -193,8 +218,9 @@ the backend's touch path (a drag, a long press that opens a row's context
 menu, a sideways drag of a strip and a two-finger pinch), reads the
 accessibility elements as VoiceOver does (`accessibilityElementCount`,
 `accessibilityElementAtIndex:`, each element's label, value, traits and frame)
-and activates one (a row, then the context menu's item), posts a memory
-warning, and
+and activates one (a row, then the context menu's item), presents the
+document pickers and cancels them (checking `presentedViewController` and the
+callbacks), posts a memory warning, and
 reads the notification permission; it logs to `touchdemo.log` in the app's tmp
 directory. CI runs it, and drives the second half from outside: it switches
 the simulator to dark mode (`xcrun simctl ui booted appearance dark`), sends

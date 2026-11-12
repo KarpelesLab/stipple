@@ -1225,8 +1225,8 @@ Most input only works on X11 today.
   toast on Windows 10 and 11), `osascript` on macOS (the notification
   frameworks need an app bundle) and the web's `Notification` API. CI checks
   the Linux call reaches a mock server, and that Windows and macOS accept it; no
-  popup is looked at. iOS: see 7f. Clicks and actions on notifications, and
-  Android, are still to do.
+  popup is looked at. iOS and Android: see 7f. Clicks and actions on
+  notifications are still to do.
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
   optional (secure) text field, answered asynchronously as a state update.
@@ -1406,10 +1406,6 @@ Most input only works on X11 today.
   above the on-screen keyboard: on iOS the keyboard can cover a field today
   (follow the keyboard frame notifications); Android already shrinks the
   content, but nothing scrolls the focused field into view.
-- ⬜ File pickers on mobile: `UIDocumentPickerViewController` on iOS and the
-  Storage Access Framework (`ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT`)
-  on Android, returning contents or a handle rather than a path, as the web's
-  `open_file_contents` does.
 - ✅ Menus on mobile: `Element::context_menu` opens on a long press as the
   menu Stipple draws, on iOS, Android and the web alike (chosen over `UIMenu`
   / `UIContextMenuInteraction` and `PopupMenu`: it follows the theme, keeps
@@ -1418,6 +1414,24 @@ Most input only works on X11 today.
   its menus opening on a tap; phone apps leave `App::menu` out (documented in
   [docs/menus.md](docs/menus.md#context-menus)). Checked as for gestures,
   above; the menu bar isn't run in CI on mobile.
+- ✅ File pickers on mobile: `dialog::open_file_contents` /
+  `save_file_contents` (and the new `save_file_contents_then`, which says
+  whether the bytes were written) answer asynchronously from the event loop,
+  as on the web. iOS presents a `UIDocumentPickerViewController`
+  (`initForOpeningContentTypes:asCopy:` with `UTType`s made from
+  `FileDialog::accept`, or `initForExportingURLs:asCopy:` for a tmp file
+  holding the bytes) with a delegate class built at run time. Android starts
+  `ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT` (MIME types from `accept`,
+  the name from `file_name`) from a headless `Fragment` defined in the
+  run-time dex, whose `onActivityResult` gets the document; it's read or
+  written through `ContentResolver.openFileDescriptor` on a worker thread. An
+  `ActivityLifecycleCallbacks` (also in the dex) drops the fragment from the
+  saved state, so the activity survives process death under the picker. The
+  `accept` mapping is unit-tested. CI's Android emulator drives DocumentsUI
+  with uiautomator: picks a file and reads it, cancels, saves and reads the
+  file back, and kills the process under the picker; the iOS simulator
+  self-test checks both pickers come up and that cancelling reaches the
+  callback (choosing a file there can't be scripted). No folder picker.
 - ✅ Notifications on iOS: `platform::notify` through
   `UNUserNotificationCenter`; the first call asks permission
   (`requestAuthorizationWithOptions:`, with a hand-built completion block) and
@@ -1427,8 +1441,14 @@ Most input only works on X11 today.
   notification over and the center reports the permission
   (`getNotificationSettingsWithCompletionHandler:`); nobody answers the prompt
   in CI, so delivery after a grant is build-checked only. These steps passed in CI once the accessibility fix landed.
-- ⬜ Notifications on Android (`NotificationManager` and a channel, with the
-  `POST_NOTIFICATIONS` permission on API 33+).
+- ✅ Notifications on Android: `platform::notify` through
+  `NotificationManager` on a channel of the app's (API 26+), with the app's
+  icon and a launch `PendingIntent`. On API 33+ the first call without
+  `POST_NOTIFICATIONS` asks (`requestPermissions` from the results fragment,
+  answered in its `onRequestPermissionsResult`) and the notification waits;
+  once refused `notify` fails. CI's API 34 emulator refuses the system prompt
+  through uiautomator, checks the next `notify` fails, `pm grant`s the
+  permission and finds the notification in `dumpsys notification`.
 - ⬜ Drag and drop from other apps on mobile: `UIDropInteraction` on iOS
   (iPad split view) and `View.OnDragListener` on Android, feeding the existing
   `DragEnter` / `Drop` events.

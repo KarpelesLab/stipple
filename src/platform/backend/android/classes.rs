@@ -1,7 +1,10 @@
 //! The Java classes a `NativeActivity` lacks, defined at run time: a `View`
 //! the backend adds to the activity (with an `InputConnection` for input
-//! methods and an `AccessibilityNodeProvider` for screen readers) and
-//! `ComponentCallbacks2` for memory warnings.
+//! methods and an `AccessibilityNodeProvider` for screen readers),
+//! `ComponentCallbacks2` for memory warnings, a headless `Fragment` that
+//! hears activity and permission results (for [`pick`](super::pick) and
+//! [`notify`](super::notify)), and `ActivityLifecycleCallbacks` that keep
+//! that fragment out of the saved state.
 //!
 //! The classes are assembled into a dex file by [`dex`](crate::platform::dex)
 //! (every method `native`, so there is no bytecode beyond the constructors),
@@ -33,7 +36,23 @@ impl Global {
 
 /// The loaded classes, as global references, in [`dex::ANDROID_CLASSES`]'
 /// order. Loaded once per process; `None` if loading failed.
-static CLASSES: OnceLock<Option<[Global; 4]>> = OnceLock::new();
+static CLASSES: OnceLock<Option<Loaded>> = OnceLock::new();
+
+/// The loaded classes, in [`dex::ANDROID_CLASSES`]' order.
+type Loaded = [Global; dex::ANDROID_CLASSES.len()];
+
+// Each class's index in [`dex::ANDROID_CLASSES`].
+const HOST_VIEW: usize = 0;
+const INPUT: usize = 1;
+const NODES: usize = 2;
+const CALLBACKS: usize = 3;
+const RESULTS: usize = 4;
+const LIFECYCLE: usize = 5;
+
+/// Loaded class `index`, if loading worked.
+fn class(index: usize) -> Option<JObject> {
+    Some((*CLASSES.get()?)?[index].get())
+}
 
 /// The running activity's host view, its accessibility node provider and its
 /// package name (all global references), while it has one.
@@ -86,12 +105,19 @@ fn function(class: &str, name: &str) -> Option<*const c_void> {
         ("Callbacks", "onTrimMemory") => on_trim_memory as *const c_void,
         ("Callbacks", "onLowMemory") => on_low_memory as *const c_void,
         ("Callbacks", "onConfigurationChanged") => on_configuration_changed as *const c_void,
+        ("Results", "onActivityResult") => super::pick::on_activity_result as *const c_void,
+        ("Results", "onRequestPermissionsResult") => {
+            super::notify::on_request_permissions_result as *const c_void
+        }
+        ("Lifecycle", "onActivitySaveInstanceState") => on_save_instance_state as *const c_void,
+        ("Lifecycle", "onActivityCreated") => on_activity_bundle as *const c_void,
+        ("Lifecycle", _) => on_activity as *const c_void,
         _ => return None,
     })
 }
 
 /// Load the classes into the process, once. On the main thread.
-fn load(jni: &Jni, activity: &ANativeActivity) -> Option<[Global; 4]> {
+fn load(jni: &Jni, activity: &ANativeActivity) -> Option<Loaded> {
     let parent = jni.call_object(
         activity.clazz,
         c"getClassLoader",
@@ -131,7 +157,7 @@ fn load(jni: &Jni, activity: &ANativeActivity) -> Option<[Global; 4]> {
         jni.failed("creating the class loader");
         return None;
     };
-    let mut out = [Global::default(); 4];
+    let mut out = [Global::default(); dex::ANDROID_CLASSES.len()];
     for (slot, class) in out.iter_mut().zip(dex::ANDROID_CLASSES) {
         let name = jni.string(&dex::binary_name(class.name))?;
         let Some(loaded) = jni.call_object(
@@ -177,8 +203,8 @@ fn load(jni: &Jni, activity: &ANativeActivity) -> Option<[Global; 4]> {
 pub(super) fn install(activity: &ANativeActivity) -> bool {
     let ok = unsafe {
         jni::in_native(activity.env, |jni| {
-            let classes = *CLASSES.get_or_init(|| load(jni, activity));
-            let [view_class, _, _, callbacks_class] = classes?;
+            let classes = (*CLASSES.get_or_init(|| load(jni, activity)))?;
+            let (view_class, callbacks_class) = (classes[HOST_VIEW], classes[CALLBACKS]);
             let view = jni.new_object(
                 view_class.get(),
                 c"(Landroid/content/Context;)V",
@@ -220,6 +246,7 @@ pub(super) fn install(activity: &ANativeActivity) -> bool {
                 c"(Landroid/content/ComponentCallbacks;)V",
                 &[JValue { l: callbacks }],
             )?;
+            register_lifecycle(jni, activity.clazz);
             let mut host = HOST.lock().unwrap_or_else(|e| e.into_inner());
             release(jni, &mut host);
             *host = Host {
@@ -245,7 +272,114 @@ fn release(jni: &Jni, host: &mut Host) {
         jni.delete_global(g.get());
     }
     *host = Host::default();
+    let mut fragment = FRAGMENT.lock().unwrap_or_else(|e| e.into_inner());
+    jni.delete_global(fragment.get());
+    *fragment = Global::default();
 }
+
+/// The activity's [`dex::RESULTS`] fragment, once added.
+static FRAGMENT: Mutex<Global> = Mutex::new(Global(0));
+
+/// The headless fragment that hears activity and permission results for the
+/// current activity, added the first time it's asked for. On the main thread
+/// (`activity` is the `NativeActivity`).
+pub(super) fn results_fragment(jni: &Jni, activity: JObject) -> Option<JObject> {
+    let have = *FRAGMENT.lock().unwrap_or_else(|e| e.into_inner());
+    if !have.is_null() {
+        return Some(have.get());
+    }
+    let fragment = jni.new_object(class(RESULTS)?, c"()V", &[])?;
+    let manager = jni.call_object(
+        activity,
+        c"getFragmentManager",
+        c"()Landroid/app/FragmentManager;",
+        &[],
+    )?;
+    let transaction = jni.call_object(
+        manager,
+        c"beginTransaction",
+        c"()Landroid/app/FragmentTransaction;",
+        &[],
+    )?;
+    let tag = jni.string("stipple-results")?;
+    jni.call_object(
+        transaction,
+        c"add",
+        c"(Landroid/app/Fragment;Ljava/lang/String;)Landroid/app/FragmentTransaction;",
+        &[JValue { l: fragment }, JValue { l: tag }],
+    )?;
+    // The state may already be saved (the activity is stopping); the
+    // fragment has no state to lose.
+    jni.call_int(transaction, c"commitAllowingStateLoss", c"()I", &[])?;
+    // Attached now, so it can start activities.
+    jni.call_bool(manager, c"executePendingTransactions", c"()Z", &[])?;
+    let global = Global(jni.global(fragment) as usize);
+    *FRAGMENT.lock().unwrap_or_else(|e| e.into_inner()) = global;
+    log("stipple: results fragment added");
+    Some(global.get())
+}
+
+/// Register the [`dex::LIFECYCLE`] callbacks with the application, once per
+/// process.
+fn register_lifecycle(jni: &Jni, activity: JObject) {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DONE.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let registered = (|| {
+        let app = jni.call_object(
+            activity,
+            c"getApplication",
+            c"()Landroid/app/Application;",
+            &[],
+        )?;
+        let callbacks = jni.new_object(class(LIFECYCLE)?, c"()V", &[])?;
+        jni.call_void(
+            app,
+            c"registerActivityLifecycleCallbacks",
+            c"(Landroid/app/Application$ActivityLifecycleCallbacks;)V",
+            &[JValue { l: callbacks }],
+        )
+    })();
+    if registered.is_some() {
+        DONE.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// `onActivitySaveInstanceState`, after the activity wrote its fragments into
+/// `state`: drop them again. The framework would restore the
+/// [`dex::RESULTS`] fragment through the app's class loader, which doesn't
+/// have the class, and crash; and whoever waited for its results is gone with
+/// the process anyway.
+unsafe extern "C" fn on_save_instance_state(
+    env: Env,
+    _this: JObject,
+    activity: JObject,
+    state: JObject,
+) {
+    let ours = host().activity;
+    if ours.is_null() || state.is_null() {
+        return;
+    }
+    unsafe {
+        jni::in_native(env, |jni| {
+            if !jni.same(activity, ours.get()) {
+                return None;
+            }
+            let key = jni.string("android:fragments")?;
+            jni.call_void(
+                state,
+                c"remove",
+                c"(Ljava/lang/String;)V",
+                &[JValue { l: key }],
+            )
+        });
+    }
+}
+
+unsafe extern "C" fn on_activity_bundle(_env: Env, _this: JObject, _a: JObject, _b: JObject) {}
+
+unsafe extern "C" fn on_activity(_env: Env, _this: JObject, _a: JObject) {}
 
 /// The activity is going away: let go of its view. On the main thread.
 pub(super) fn uninstall(env: Env) {
@@ -264,8 +398,8 @@ pub(super) fn provider(jni: &Jni) -> Option<JObject> {
         return None;
     }
     if host.provider.is_null() {
-        let [_, _, nodes, _] = (*CLASSES.get()?)?;
-        let provider = jni.new_object(nodes.get(), c"()V", &[])?;
+        let nodes = class(NODES)?;
+        let provider = jni.new_object(nodes, c"()V", &[])?;
         host.provider = Global(jni.global(provider) as usize);
     }
     Some(host.provider.get())
@@ -273,8 +407,7 @@ pub(super) fn provider(jni: &Jni) -> Option<JObject> {
 
 /// The `Input` class, for a new connection.
 pub(super) fn input_class() -> Option<JObject> {
-    let [_, input, _, _] = (*CLASSES.get()?)?;
-    Some(input.get())
+    class(INPUT)
 }
 
 /// `ComponentCallbacks2.TRIM_MEMORY_*` levels that mean memory is short:

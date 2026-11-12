@@ -54,7 +54,7 @@ A notification is a title and a body. `AppHandle::notify` is the same call.
 | macOS | AppleScript's `display notification`, through `osascript` |
 | Web | the `Notification` API, asking for permission first if it hasn't been granted or refused |
 | iOS | `UNUserNotificationCenter`, asking for permission first (see below) |
-| Android | not yet (`Err`) |
+| Android | `NotificationManager`, on a channel of the app's, asking for `POST_NOTIFICATIONS` first on Android 13 and later (see below) |
 
 **macOS.** The notification frameworks need an app bundle:
 `UNUserNotificationCenter` raises an exception in a bare executable (one with no
@@ -72,6 +72,25 @@ again), and fail with `Err` once permission is refused. Each one is a
 `UNNotificationRequest` with no trigger, so it shows at once, and a delegate
 on the center lets it show as a banner while the app is on screen too (iOS
 otherwise keeps a foreground app's notifications to itself).
+
+**Android.** Each notification is built with `Notification.Builder` and posted
+with `NotificationManager.notify`, on the channel `stipple` ("Notifications",
+default importance), made on Android 8 and later. Its icon is the app's (or
+the system's info icon when the app has none), and tapping it opens the app.
+On Android 13 and later posting needs the `POST_NOTIFICATIONS` runtime
+permission, which the manifest must declare:
+
+```xml
+<uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+```
+
+The first `notify` without it asks (the system's dialog, through
+`requestPermissions` from a headless fragment the backend adds to the
+activity, since a `NativeActivity` doesn't pass the answer on); the
+notification waits for the answer and is posted if it's yes. Once refused,
+`notify` fails with `Err` until the user allows notifications in the
+settings. On any version, `notify` fails if the user turned the app's
+notifications off.
 
 **Windows.** Notifications need the app's window to exist, since the icon that
 carries the balloon belongs to it. Windows names the notification after the

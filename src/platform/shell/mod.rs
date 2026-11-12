@@ -8,7 +8,7 @@
 //! | Windows | `ShellExecuteW` | a `Shell_NotifyIconW` balloon (a toast on Windows 10 and 11) | `Shell_NotifyIconW` + a popup `HMENU` |
 //! | macOS | `NSWorkspace openURL:` | `osascript`'s `display notification` | `NSStatusItem` + `NSMenu` |
 //! | iOS | `UIApplication openURL:` | `UNUserNotificationCenter` (asking permission first) | — |
-//! | Android | an `ACTION_VIEW` `Intent` over JNI | — | — |
+//! | Android | an `ACTION_VIEW` `Intent` over JNI | `NotificationManager` (asking for `POST_NOTIFICATIONS` first on Android 13+) | — |
 //! | Web | `window.open` | the `Notification` API | — |
 //!
 //! See `docs/os-integration.md`.
@@ -101,10 +101,12 @@ pub fn open_path(path: impl AsRef<Path>) -> Result<(), PlatformError> {
 
 /// Show `notification` as a desktop notification.
 ///
-/// Where it's delivered asynchronously (Linux, iOS, the web) `Ok` means it
-/// was handed over; a failure is reported on stderr (the console on the web).
-/// On iOS the first call asks the user's permission, and notifications wait
-/// for the answer; once refused, `notify` fails.
+/// Where it's delivered asynchronously (Linux, iOS, Android, the web) `Ok`
+/// means it was handed over; a failure is reported on stderr (the console on
+/// the web). On iOS and Android 13 and later the first call asks the user's
+/// permission, and notifications wait for the answer; once refused, `notify`
+/// fails. On Android the app's manifest must declare
+/// `android.permission.POST_NOTIFICATIONS`.
 pub fn notify(notification: &Notification) -> Result<(), PlatformError> {
     os_notify(notification)
 }
@@ -225,11 +227,15 @@ fn os_open_url(_url: &str) -> Result<(), PlatformError> {
     Err(PlatformError::NoBackend("opening URLs"))
 }
 
+#[cfg(target_os = "android")]
+use crate::platform::backend::android::notify as os_notify;
+
 #[cfg(not(any(
     target_os = "linux",
     target_os = "macos",
     target_os = "windows",
     target_os = "ios",
+    target_os = "android",
     target_arch = "wasm32"
 )))]
 fn os_notify(_n: &Notification) -> Result<(), PlatformError> {

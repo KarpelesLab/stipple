@@ -66,6 +66,12 @@ const NEW_STRING_UTF: usize = 167;
 const GET_STRING_UTF_CHARS: usize = 169;
 const RELEASE_STRING_UTF_CHARS: usize = 170;
 const NEW_INT_ARRAY: usize = 179;
+const IS_SAME_OBJECT: usize = 24;
+const GET_STATIC_FIELD_ID: usize = 144;
+const GET_STATIC_INT_FIELD: usize = 150;
+const GET_ARRAY_LENGTH: usize = 171;
+const NEW_OBJECT_ARRAY: usize = 172;
+const SET_OBJECT_ARRAY_ELEMENT: usize = 174;
 const GET_INT_ARRAY_REGION: usize = 203;
 const REGISTER_NATIVES: usize = 215;
 const EXCEPTION_CHECK: usize = 228;
@@ -884,6 +890,69 @@ impl Jni {
             let f: unsafe extern "C" fn(Env, *mut c_void, i64) -> JObject =
                 std::mem::transmute(self.f(NEW_DIRECT_BYTE_BUFFER));
             self.ok(f(self.0, bytes.as_ptr() as *mut c_void, bytes.len() as i64))
+        }
+    }
+
+    /// Whether `a` and `b` refer to the same object.
+    pub(super) fn same(&self, a: JObject, b: JObject) -> bool {
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JObject) -> u8 =
+                std::mem::transmute(self.f(IS_SAME_OBJECT));
+            f(self.0, a, b) != 0
+        }
+    }
+
+    /// The `static int` field `name` of the class named `class`.
+    pub(super) fn static_int(&self, class: &CStr, name: &CStr) -> Option<i32> {
+        let class = self.find_class(class)?;
+        unsafe {
+            let get_id: unsafe extern "C" fn(
+                Env,
+                JObject,
+                *const c_char,
+                *const c_char,
+            ) -> JMethod = std::mem::transmute(self.f(GET_STATIC_FIELD_ID));
+            let id = self.ok(get_id(self.0, class, name.as_ptr(), c"I".as_ptr()))?;
+            let get: unsafe extern "C" fn(Env, JObject, JMethod) -> i32 =
+                std::mem::transmute(self.f(GET_STATIC_INT_FIELD));
+            let v = get(self.0, class, id);
+            (!self.clear()).then_some(v)
+        }
+    }
+
+    /// A `String[]` of `items`.
+    pub(super) fn string_array(&self, items: &[&str]) -> Option<JObject> {
+        let class = self.find_class(c"java/lang/String")?;
+        unsafe {
+            let new: unsafe extern "C" fn(Env, i32, JObject, JObject) -> JObject =
+                std::mem::transmute(self.f(NEW_OBJECT_ARRAY));
+            let array = self.ok(new(self.0, items.len() as i32, class, std::ptr::null_mut()))?;
+            let set: unsafe extern "C" fn(Env, JObject, i32, JObject) =
+                std::mem::transmute(self.f(SET_OBJECT_ARRAY_ELEMENT));
+            for (i, item) in items.iter().enumerate() {
+                set(self.0, array, i as i32, self.string16(item)?);
+            }
+            (!self.clear()).then_some(array)
+        }
+    }
+
+    /// Every element of an `int[]` (none for `null`).
+    pub(super) fn int_vec(&self, array: JObject) -> Vec<i32> {
+        if array.is_null() {
+            return Vec::new();
+        }
+        unsafe {
+            let len: unsafe extern "C" fn(Env, JObject) -> i32 =
+                std::mem::transmute(self.f(GET_ARRAY_LENGTH));
+            let n = len(self.0, array).max(0) as usize;
+            let mut out = vec![0i32; n];
+            let f: unsafe extern "C" fn(Env, JObject, i32, i32, *mut i32) =
+                std::mem::transmute(self.f(GET_INT_ARRAY_REGION));
+            f(self.0, array, 0, n as i32, out.as_mut_ptr());
+            if self.clear() {
+                return Vec::new();
+            }
+            out
         }
     }
 

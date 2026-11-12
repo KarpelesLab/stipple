@@ -66,6 +66,13 @@ mod classes;
 mod ime;
 /// Hand-written JNI for the clipboard, key characters and the accent color.
 mod jni;
+/// Notifications through `NotificationManager`.
+mod notify;
+/// The Storage Access Framework's document picker.
+mod pick;
+
+pub(crate) use notify::notify;
+pub(crate) use pick::{create_document, open_document};
 
 // ---- NDK FFI ----------------------------------------------------------------
 
@@ -364,6 +371,8 @@ enum Command {
     Back,
     /// `onSaveInstanceState`: ask the app for the state to keep.
     SaveState,
+    /// The document picker's answer to request `id` (see [`pick`]).
+    Picked(u32, pick::Outcome),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -420,6 +429,30 @@ struct MainRequests {
     back_callback: Option<bool>,
     /// Run the input connection's self-test.
     self_test: bool,
+    /// Other work, run with the main thread's env and the activity.
+    jobs: Vec<MainJob>,
+}
+
+/// Work for the main thread: run with its env and the activity object.
+struct MainJob(Box<MainFn>);
+
+type MainFn = dyn FnOnce(&jni::Jni, jni::JObject) + Send;
+
+impl std::fmt::Debug for MainJob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MainJob")
+    }
+}
+
+/// Run `job` on the main thread, with its env and the activity. `false` if
+/// no activity is alive. Safe from any thread.
+fn run_on_main(job: impl FnOnce(&jni::Jni, jni::JObject) + Send + 'static) -> bool {
+    let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let Some(instance) = current else {
+        return false;
+    };
+    instance.request(|r| r.jobs.push(MainJob(Box::new(job))));
+    true
 }
 
 // The activity pointer is only dereferenced while the activity lives (until
@@ -795,6 +828,9 @@ unsafe extern "C" fn on_main_request(fd: c_int, _events: c_int, data: *mut c_voi
             }
             if requests.self_test {
                 ime::self_test(env);
+            }
+            for job in requests.jobs {
+                (job.0)(env, clazz);
             }
             Some(requests.soft_input.map(|show| ime::soft_input(env, show)))
         })
@@ -1519,6 +1555,7 @@ impl Loop<'_> {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner()) = saved;
             }
+            Command::Picked(id, outcome) => pick::deliver(id, outcome),
             Command::Destroy => {
                 let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
                 if current
