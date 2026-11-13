@@ -79,8 +79,16 @@ function FindWindow() {
     $owner = [uint32]0
     if ($h -ne [IntPtr]::Zero) { [void][U]::GetWindowThreadProcessId($h, [ref]$owner) }
     if ($h -ne [IntPtr]::Zero -and (-not $proc.Id -or $owner -eq $proc.Id)) {
-      $w = $A::FromHandle($h)
-      if ($w -ne $null -and $w.Current.Name -eq $Title) { return $w }
+      # The window's element; its name is what the app's provider reports,
+      # which needn't be the title, so it's only printed.
+      $w = $null
+      try { $w = $A::FromHandle($h) } catch { Write-Host "uia: FromHandle($h) failed: $_" }
+      if ($w -ne $null) {
+        Write-Host ("uia: window 0x{0:x} of process {1}: name=""{2}""" -f [int64]$h, $owner, $w.Current.Name)
+        return $w
+      }
+    } elseif ($i % 10 -eq 9) {
+      Write-Host ("uia: waiting for the window: FindWindow 0x{0:x}, owner {1}, started {2}" -f [int64]$h, $owner, $proc.Id)
     }
     Start-Sleep -Milliseconds 500
   }
