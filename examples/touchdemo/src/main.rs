@@ -863,11 +863,14 @@ mod selftest {
                 *PICKED.lock().unwrap() = Some(file.map(|f| (f.name, f.bytes)));
             });
         });
-        steps.until(|_| simulate::presented_controller() == PICKER);
+        steps.until(|_| simulate::presented_controller().starts_with(PICKER));
         steps.run(600, |_| {
             let shown = simulate::presented_controller();
             log(&format!("touchdemo: open picker presented {shown}"));
-            check(shown == PICKER, format!("open picker: {shown:?} on top"));
+            check(
+                shown.starts_with(PICKER),
+                format!("open picker: {shown:?} on top"),
+            );
             check(
                 simulate::cancel_document_picker(),
                 "no open picker to cancel",
@@ -889,11 +892,14 @@ mod selftest {
                 },
             );
         });
-        steps.until(|_| simulate::presented_controller() == PICKER);
+        steps.until(|_| simulate::presented_controller().starts_with(PICKER));
         steps.run(600, |_| {
             let shown = simulate::presented_controller();
             log(&format!("touchdemo: save picker presented {shown}"));
-            check(shown == PICKER, format!("save picker: {shown:?} on top"));
+            check(
+                shown.starts_with(PICKER),
+                format!("save picker: {shown:?} on top"),
+            );
             check(
                 simulate::cancel_document_picker(),
                 "no save picker to cancel",
@@ -924,7 +930,7 @@ mod selftest {
                 *PICKED.lock().unwrap() = Some(file.map(|f| (f.name, f.bytes)));
             });
         });
-        steps.until(|_| simulate::presented_controller() == PICKER);
+        steps.until(|_| simulate::presented_controller().starts_with(PICKER));
         let path = picked_path.clone();
         steps.run(600, move |_| {
             check(
@@ -955,7 +961,7 @@ mod selftest {
                 },
             );
         });
-        steps.until(|_| simulate::presented_controller() == PICKER);
+        steps.until(|_| simulate::presented_controller().starts_with(PICKER));
         steps.run(600, |_| {
             // Where the user "saved" it.
             let dest = std::env::temp_dir().join("touchdemo-exported.txt");

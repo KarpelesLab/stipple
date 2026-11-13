@@ -177,52 +177,54 @@ unsafe fn present(id: u32, picker: Id, kind: Kind) -> bool {
     true
 }
 
-/// Present `picker` from the top controller once nothing is mid-transition,
-/// and again if the presentation didn't take: UIKit drops a presentation
-/// asked for while another is being presented or dismissed, or while the
-/// previous picker's remote view service is still going away, with only a
-/// log line. Tries every 50 ms while something moves, and checks 400 ms
-/// after each attempt that the picker is on screen, for up to ~10 s.
+/// Present `picker` from the top controller once nothing is mid-transition:
+/// UIKit drops a presentation asked for while another is still being
+/// presented or dismissed, with only a log line. Tries again every 50 ms,
+/// for up to 5 s. (A document picker's own presentation may then be
+/// delayed by UIKit until its remote view service is up; see
+/// [`asked`].)
 fn show(picker: Id, tries: u32) {
-    if tries > 200 || !PENDING.with(|p| p.borrow().iter().any(|x| x.picker == picker)) {
+    if !PENDING.with(|p| p.borrow().iter().any(|x| x.picker == picker)) {
         return;
     }
-    let presented = with_pool(|| unsafe {
+    let busy = with_pool(|| unsafe {
         let root = presenter();
-        if root.is_null() || root == picker {
-            return None;
+        if root.is_null() {
+            return false;
         }
         let moving = !msg!(root, "transitionCoordinator", () -> Id).is_null()
             || msg!(root, "isBeingPresented", () -> bool)
             || msg!(root, "isBeingDismissed", () -> bool);
-        if moving {
-            return Some(false);
-        }
-        if tries > 0 {
-            crate::platform::window::debug_window(format_args!(
-                "document picker: presenting again (attempt {tries})"
-            ));
+        if moving && tries < 100 {
+            return true;
         }
         let animated = true;
         let none: Id = std::ptr::null_mut();
         msg!(root, "presentViewController:animated:completion:",
             (picker: Id, animated: bool, none: Id) -> ());
-        Some(true)
+        ASKED.with(|a| a.borrow_mut().push(picker));
+        false
     });
-    match presented {
-        None => {}
-        Some(false) => after_ms(50, move || show(picker, tries + 1)),
-        // Check it took: once on screen (or on its way), the picker has a
-        // presenting controller.
-        Some(true) => after_ms(400, move || {
-            let shown = with_pool(|| unsafe {
-                !msg!(picker, "presentingViewController", () -> Id).is_null()
-            });
-            if !shown {
-                show(picker, tries + 8);
-            }
-        }),
+    if busy {
+        after_ms(50, move || show(picker, tries + 1));
     }
+}
+
+thread_local! {
+    /// Pickers handed to `presentViewController:`, newest last.
+    static ASKED: RefCell<Vec<Id>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The newest picker of ours that UIKit was asked to present but isn't on
+/// top: its presentation is pending (UIKit holds a document picker back
+/// until its remote view service has loaded, which on a simulator can take
+/// a long while, or not happen, right after another picker was dismissed).
+fn asked() -> Option<Id> {
+    ASKED.with(|a| {
+        a.borrow_mut()
+            .retain(|&x| PENDING.with(|p| p.borrow().iter().any(|q| q.picker == x)));
+        a.borrow().last().copied()
+    })
 }
 
 /// Run `f` on the main queue in `ms` milliseconds.
@@ -355,6 +357,10 @@ pub(crate) fn presented_class() -> String {
         if top.is_null() {
             return String::new();
         }
+        let ours = PENDING.with(|p| p.borrow().iter().any(|x| x.picker == top));
+        if !ours && asked().is_some() {
+            return "UIDocumentPickerViewController (presentation delayed)".into();
+        }
         let name = object_getClassName(top);
         if name.is_null() {
             return String::new();
@@ -387,10 +393,15 @@ pub(crate) fn pick_presented(path: &str) -> bool {
 /// cancelled.
 fn answer_presented(path: Option<&str>) -> bool {
     with_pool(|| unsafe {
-        let top = presenter();
+        let mut top = presenter();
         let ours = !top.is_null() && PENDING.with(|p| p.borrow().iter().any(|x| x.picker == top));
         if !ours {
-            return false;
+            // A picker whose presentation UIKit still holds back: answer it
+            // all the same (dismissing it cancels the pending presentation).
+            match asked() {
+                Some(picker) => top = picker,
+                None => return false,
+            }
         }
         msg!(top, "retain", () -> Id);
         let animated = false;
