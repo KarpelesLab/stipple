@@ -50,6 +50,10 @@ fi
 echo "talkback: $(adb shell pm path "$talkback" | tr -d '\r') $(adb shell dumpsys package "$talkback" | grep -m1 versionName | tr -d '\r ')"
 adb install -r "$probe" >/dev/null || { adb uninstall org.stipple.a11yprobe && adb install "$probe"; }
 adb logcat -c
+# The demo asks for POST_NOTIFICATIONS on Android 13+; seen in CI, the
+# system's permission dialog stayed over the app and held TalkBack's focus.
+# Granted up front, nothing covers the app.
+adb shell pm grant "$pkg" android.permission.POST_NOTIFICATIONS 2>/dev/null || true
 adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
 sleep 3
 adb shell settings put secure enabled_accessibility_services "$services"
@@ -64,8 +68,14 @@ echo "talkback: touch exploration: $(adb shell settings get secure touch_explora
 sleep 5
 # TalkBack's first run may open its tutorial over the app: back to the app.
 echo "talkback: in front: $(adb shell dumpsys activity activities | grep -m1 -E 'mResumedActivity|topResumedActivity' | tr -d '\r')"
+if adb shell dumpsys activity activities | grep -m1 -E 'mResumedActivity|topResumedActivity' | grep -q GrantPermissionsActivity; then
+  echo "talkback: a permission dialog is in front: Back"
+  adb shell input keyevent KEYCODE_BACK
+  sleep 1
+fi
 adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
 sleep 3
+echo "talkback: in front now: $(adb shell dumpsys activity activities | grep -m1 -E 'mResumedActivity|topResumedActivity' | tr -d '\r')"
 
 # Move TalkBack's focus through the window until it is on "Tap me".
 size=$(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)
