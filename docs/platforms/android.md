@@ -214,6 +214,10 @@ touch) goes to the host view, which announces the node under it.
 adb shell uiautomator dump /sdcard/ui.xml && adb shell cat /sdcard/ui.xml
 ```
 
+CI also drives the app through an accessibility service standing in for
+TalkBack (`.github/a11y/android`); see
+[accessibility.md](../accessibility.md#android).
+
 lists the nodes; it is what CI checks.
 
 ## File pickers

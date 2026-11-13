@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The a11y probe: an accessibility service and nothing else (see
+     src/org/stipple/a11yprobe/Probe.java). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.stipple.a11yprobe">
+  <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
+  <application android:label="Stipple a11y probe">
+    <service android:name=".Probe" android:exported="true" android:label="Stipple a11y probe"
+        android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+      <intent-filter>
+        <action android:name="android.accessibilityservice.AccessibilityService"/>
+      </intent-filter>
+      <meta-data android:name="android.accessibilityservice" android:resource="@xml/probe"/>
+    </service>
+  </application>
+</manifest>

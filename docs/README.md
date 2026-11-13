@@ -39,7 +39,7 @@ How to build, package and run on each platform, and what works there today.
 | Built-in widgets animate by default (per-theme motion) | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ✅ ⁶² | ✅ ⁶² | ✅ ¹⁴ |
-| Accessibility | AT-SPI | UI Automation | NSAccessibility | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
+| Accessibility | ❌ ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
@@ -288,8 +288,11 @@ taps the node), and posts layout and screen-changed notifications on updates.
 CI's `touchdemo` self-test on the simulator reads the elements through objc
 dispatch as VoiceOver does, checks the text field's value and frame, the
 label's static-text trait and a row's button trait, activates the row and
-checks it was tapped and the label's element followed. Not yet tried with
-VoiceOver itself. See [the iOS page](platforms/ios.md#accessibility).
+checks it was tapped and the label's element followed. From another process,
+an XCUITest runner (the AX channel VoiceOver uses) reads the tree, taps a
+button at its element's frame and types into the field on the software
+keyboard (added with this change, not yet run in CI). Not yet tried with
+VoiceOver itself. See [accessibility.md](accessibility.md#ios).
 ⁵⁰ `UITextInput` on the view: marked text as the preedit, commits, the field's
 text around the caret for autocorrect and dictation, `replaceRange:withText:`
 and the caret rectangle for the candidate bar. CI's `touchdemo` self-test on
@@ -331,9 +334,12 @@ and deletes around the caret through the real Java objects; not yet tried by
 a person on a composing keyboard. See [platforms/android.md](platforms/android.md#input-methods).
 
 ⁵⁶ An `AccessibilityNodeProvider` with a virtual view per node (click, focus,
-scroll, set text); `uiautomator dump` on the CI emulator lists the nodes, but
-it hasn't been tried with TalkBack itself. See
-[platforms/android.md](platforms/android.md#accessibility).
+scroll, set text); `uiautomator dump` on the CI emulator lists the nodes, and
+an accessibility service standing in for TalkBack (enabled the way TalkBack
+is) moves accessibility focus through every node, clicks a button and sets
+the field's text, from its own process (run on a local API 34 emulator; CI
+step added). Not yet tried with TalkBack itself. See
+[accessibility.md](accessibility.md#android).
 
 ⁵⁷ `onPause` / `onResume` / `onTrimMemory` and the Back key, checked on the
 CI emulator (`input keyevent`, Home and `am start`, `am send-trim-memory`).
@@ -404,6 +410,25 @@ headless Chrome reloads `webdemo` and checks its count came back (run locally;
 CI step added). See
 [window-lifecycle.md](window-lifecycle.md#keeping-the-state-across-process-death).
 
+⁶⁶ A hand-written AT-SPI server exists (`stipple::platform::a11y`; `a11ydemo`
+serves a tree that `dbus-send` reads in CI), but X11 and Wayland windows don't
+use it and nothing registers with the AT-SPI registry, so Orca sees no Stipple
+app. See [accessibility.md](accessibility.md#linux).
+
+⁶⁷ A hand-built provider per node, hosted by the window's provider: control
+type, name, bounds in screen pixels, keyboard focus, hit testing, and the
+Invoke pattern on buttons. CI walks a running window from PowerShell's
+process with the .NET UI Automation client (the path Narrator and NVDA use),
+hit-tests it, invokes a button and reads the focus after a Tab (added with
+this change, not yet run in CI). No Value, Toggle, Scroll or Text patterns,
+and no UIA events. See [accessibility.md](accessibility.md#windows).
+
+⁶⁸ An `NSAccessibilityElement` per node, with role, label and frame in screen
+coordinates. CI reads a running app's tree from another process through the
+AX API, as VoiceOver does, when the runner grants the accessibility
+permission (added with this change, not yet run in CI). No press action yet.
+See [accessibility.md](accessibility.md#macos).
+
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
 on iOS, Android and the web, which hand out contents rather than paths, so do
@@ -426,6 +451,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough
+- [Accessibility](accessibility.md): what each platform's screen readers get, and how CI checks it from outside the app
 - [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements; touch gestures (scrolling, long press, pinch)
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
 - [The keyboard](keyboard.md): raw keys for terminals and games, keeping Tab, key repeat, Option as Meta

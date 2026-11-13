@@ -3,8 +3,8 @@
 //!
 //! The Windows visual CI job runs this and greps the output to confirm the
 //! `IRawElementProviderSimple` COM object answers UIA property queries through
-//! its vtable (a cross-process UIA client needs a live desktop UIA stack the
-//! runner doesn't reliably provide, so we self-query via real COM dispatch).
+//! its vtable, in-process. The same job also walks a running window from
+//! another process with the UI Automation client (`.github/scripts/uia-walk.ps1`).
 
 fn main() {
     #[cfg(target_os = "windows")]

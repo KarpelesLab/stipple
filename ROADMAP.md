@@ -276,8 +276,10 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   role/name/parent. **All three desktops now expose the full hierarchy** (AT-SPI,
   NSAccessibility, UIA), each hand-written with no helper crate. (Remaining a11y
   depth: raising change events to live clients — `UiaRaiseStructureChangedEvent`,
-  AT-SPI `children-changed` — on each tree swap, and mapping bounds to screen
-  coordinates.)
+  AT-SPI `children-changed` — on each tree swap. Bounds are now screen
+  coordinates on Windows and macOS. On Linux the AT-SPI server isn't connected
+  to app windows nor registered with the AT-SPI registry yet, so Orca can't
+  see Stipple apps; see the 7f items.)
 - ✅ **GPU-native drawing**: a live stipple `Scene` renders entirely on the GPU.
   The `Scene` records structured `DrawCmd`s; `stipple::gpu::render_scene` turns box
   primitives (sharp/rounded fills + stroked borders) into geometry shaded by a
@@ -1327,8 +1329,10 @@ Most input only works on X11 today.
   On its first CI run the labels, values and traits read back right (34
   elements) but every frame was zero, so the frame and activation checks
   failed; the frames are now set directly in screen coordinates, and the
-  next run passed every check (frames, activation, the label following). Not yet tried with VoiceOver itself, on a simulator or a
-  device; no adjustable or scroll actions.
+  next run passed every check (frames, activation, the label following).
+  An XCUITest runner now also drives it from outside the app (see the
+  out-of-process checks below). Not yet tried with VoiceOver itself, on a
+  simulator or a device; no adjustable or scroll actions.
 - ✅ Accessibility on Android: the host view's `AccessibilityNodeProvider`
   (same run-time dex) gives a virtual view per node (ids in tree order), with
   the closest widget class name per role (`Button`, `EditText`, `TextView`,
@@ -1341,7 +1345,9 @@ Most input only works on X11 today.
   touch) goes to the host view, which announces the node under it. **Verified
   on an API 34 emulator** with `uiautomator dump` (the button, the field and
   the list's rows with their classes and bounds; CI checks it in the
-  `visual-android` steps, which pass). Not yet tried with TalkBack itself, on an emulator or a device.
+  `visual-android` steps, which pass), and by an accessibility service
+  standing in for TalkBack (see the out-of-process checks below). Not yet
+  tried with TalkBack itself, on an emulator or a device.
 - ✅ App lifecycle for apps, cross-platform API and iOS: `Event::Lifecycle`
   with `Lifecycle::{Background, Foreground, LowMemory}`, heard by
   `App::on_lifecycle(|state, change|)`. While in the background the App asks
@@ -1529,6 +1535,73 @@ Most input only works on X11 today.
   `checked` state (`Element::checked`). CI's web selftest checks the roles and
   names, activation and `aria-checked` in headless Chrome; not yet tried with a
   real screen reader.
+- ✅ Accessibility checked from outside the app, as close to a screen reader
+  as CI gets (see [docs/accessibility.md](docs/accessibility.md), which says
+  what each check proves):
+  - **iOS**: an XCUITest bundle (an Xcode project XcodeGen generates on the
+    runner, `.github/a11y/ios`) drives `touchdemo` from the test runner's
+    process over the AX channel VoiceOver uses: reads the tree (button, static
+    text and text field counts, the whole snapshot), checks "Row 0" has a
+    frame on screen and is hittable, taps it and sees "Rows tapped" follow,
+    taps the field, types "Hi" on the software keyboard's keys and reads the
+    field's value. For it, a text field's element now adds the traits a
+    `UITextField` reports (UIKit has no public text-entry trait), so XCUITest
+    sees a `textField` and VoiceOver says "text field". Added to the
+    `visual-ios` job; not yet run in CI.
+  - **Android**: TalkBack isn't on the emulator images (it comes from the
+    Play Store), so a small accessibility service stands in for it
+    (`.github/a11y/android`, built with javac/d8/aapt, no Gradle), enabled with
+    `settings put secure enabled_accessibility_services` as TalkBack is. From
+    its own process it walks the window's nodes, moves accessibility focus
+    through every node TalkBack would stop on (checking `findFocus` and the
+    events after each), clicks "Tap me", sets the field's text, and tries a
+    scroll action. **Run on a local API 34 emulator**: 19 of 19 stops took
+    focus, the click and the text reached the app. It found two things, one
+    fixed: an empty text field read as " " (the space `text_editor` lays out
+    to keep its height; now empty), and a plain scroll container offers no
+    scroll actions (below). Added to `visual-android`.
+  - **Windows**: `.github/scripts/uia-walk.ps1` walks a running `touchdemo`
+    from PowerShell's process with the .NET UI Automation client (the path
+    Narrator and NVDA use): the control-view tree from the desktop root, the
+    button / field / label with bounds inside the window on screen, a hit
+    test, the button invoked through its Invoke pattern (the app and the tree
+    follow), and the focused element after a Tab. For it the provider tree
+    gained what an out-of-process client needs: the root is hosted by the
+    window's provider (`UiaHostProviderFromHwnd`), bounds are screen pixels
+    (they were logical client coordinates), hit testing finds the deepest
+    node, buttons have the Invoke pattern (a click at the node), keyboard
+    focusability and focus are reported, the tree is rebuilt only when it
+    changes, and a replaced tree is kept while a client holds its elements
+    (it was freed every frame under them). Added to `visual-windows`; not yet
+    run in CI.
+  - **macOS**: `axprobe` (`.github/a11y/macos/axprobe.swift`) reads a running
+    `touchdemo` through the AX API (`AXUIElementCreateApplication`) from its
+    own process, as VoiceOver does: roles, labels, frames, the focused
+    element, and an `AXPress` attempt. Reading another app needs TCC's
+    accessibility permission; the step reports `AXIsProcessTrusted`, tries
+    adding the probe to the system TCC database when refused (SIP is off on
+    GitHub's runners), and warns rather than fails if it still can't read.
+    Element frames are now in screen coordinates (they were the node's
+    logical bounds). Added to `visual-macos`; not yet run in CI.
+- ⬜ Accessibility on Linux for real: the AT-SPI server
+  (`stipple::platform::a11y`) is only used by `a11ydemo`. X11 and Wayland
+  windows ignore `Window::set_accessibility_tree`, and nothing registers with
+  the AT-SPI registry (`org.a11y.atspi.Socket.Embed` on the accessibility
+  bus), so Orca sees no Stipple app. Needed: serve the live tree from the event
+  loop on the accessibility bus, register with the registry, implement
+  `Application`, `Component` (extents, hit testing), `Action` (activate),
+  `Text`/`EditableText` and `State`, emit `children-changed` / focus events,
+  then check it from outside with a real AT-SPI client (pyatspi, as Orca uses)
+  under Xvfb and sway.
+- ⬜ Accessibility depth found by the out-of-process checks: a plain
+  scrollable container (`Element::scrollable`) is a group with no scroll
+  actions on every platform (only lists, trees and tables have them); UIA has
+  no Value, Toggle, Selection, ExpandCollapse, Scroll or Text patterns and
+  raises no events; macOS elements have no press action (VoiceOver's VO-Space
+  does nothing) and no value for fields; no platform posts announcements for
+  live regions (toasts).
+- ⬜ Try the real screen readers: VoiceOver (macOS and iOS), TalkBack,
+  Narrator / NVDA, Orca, by a person, on each platform.
 - ✅ Images on the GPU path, so OS-drawn controls render under `App::render_with`;
   and with them the rest of the scene, so the GL scene renderer no longer falls
   back to the CPU for transforms, opacity, paths or canvases.

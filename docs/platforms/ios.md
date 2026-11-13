@@ -114,8 +114,11 @@ click and fields take focus. Elements are updated in place as the tree
 changes, and an update VoiceOver should hear posts
 `UIAccessibilityLayoutChangedNotification` (or
 `UIAccessibilityScreenChangedNotification` when a dialog opens or closes).
-The values are English words; no adjustable (swipe up/down) or scroll actions
-yet.
+A text field's element adds the traits a `UITextField` reports (UIKit has
+no public text-entry trait), so VoiceOver says "text field" and XCUITest
+finds it among `textFields`. The values are English words; no adjustable
+(swipe up/down) or scroll actions yet. CI drives the app from an XCUITest
+runner, outside its process; see [accessibility.md](../accessibility.md#ios).
 
 ## Appearance
 
