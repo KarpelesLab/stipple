@@ -177,30 +177,51 @@ unsafe fn present(id: u32, picker: Id, kind: Kind) -> bool {
     true
 }
 
-/// Present `picker` from the top controller once nothing is mid-transition:
-/// UIKit drops a presentation asked for while another is still being
-/// presented or dismissed (a picker just cancelled), with only a log line.
-/// Tries again every 50 ms, for up to 5 s.
+/// Present `picker` from the top controller once nothing is mid-transition,
+/// and again if the presentation didn't take: UIKit drops a presentation
+/// asked for while another is being presented or dismissed, or while the
+/// previous picker's remote view service is still going away, with only a
+/// log line. Tries every 50 ms while something moves, and checks 400 ms
+/// after each attempt that the picker is on screen, for up to ~10 s.
 fn show(picker: Id, tries: u32) {
-    let busy = with_pool(|| unsafe {
+    if tries > 200 || !PENDING.with(|p| p.borrow().iter().any(|x| x.picker == picker)) {
+        return;
+    }
+    let presented = with_pool(|| unsafe {
         let root = presenter();
-        if root.is_null() {
-            return false;
+        if root.is_null() || root == picker {
+            return None;
         }
         let moving = !msg!(root, "transitionCoordinator", () -> Id).is_null()
             || msg!(root, "isBeingPresented", () -> bool)
             || msg!(root, "isBeingDismissed", () -> bool);
-        if moving && tries < 100 {
-            return true;
+        if moving {
+            return Some(false);
+        }
+        if tries > 0 {
+            crate::platform::window::debug_window(format_args!(
+                "document picker: presenting again (attempt {tries})"
+            ));
         }
         let animated = true;
         let none: Id = std::ptr::null_mut();
         msg!(root, "presentViewController:animated:completion:",
             (picker: Id, animated: bool, none: Id) -> ());
-        false
+        Some(true)
     });
-    if busy {
-        after_ms(50, move || show(picker, tries + 1));
+    match presented {
+        None => {}
+        Some(false) => after_ms(50, move || show(picker, tries + 1)),
+        // Check it took: once on screen (or on its way), the picker has a
+        // presenting controller.
+        Some(true) => after_ms(400, move || {
+            let shown = with_pool(|| unsafe {
+                !msg!(picker, "presentingViewController", () -> Id).is_null()
+            });
+            if !shown {
+                show(picker, tries + 8);
+            }
+        }),
     }
 }
 
