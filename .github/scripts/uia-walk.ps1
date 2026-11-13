@@ -27,6 +27,9 @@ using System.Runtime.InteropServices;
 public static class U {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  public static extern IntPtr FindWindowW(string cls, string title);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 }
 "@
 $A = [System.Windows.Automation.AutomationElement]
@@ -70,9 +73,12 @@ function Walk($root) {
 # one misbehaving provider elsewhere would break the search.
 function FindWindow() {
   for ($i = 0; $i -lt 40; $i++) {
-    $proc.Refresh()
-    $h = $proc.MainWindowHandle
-    if ($h -ne [IntPtr]::Zero) {
+    # The window by its title, made sure to be the started process's
+    # (Process.MainWindowHandle came back empty on the runner).
+    [IntPtr]$h = [U]::FindWindowW($null, $Title)
+    $owner = [uint32]0
+    if ($h -ne [IntPtr]::Zero) { [void][U]::GetWindowThreadProcessId($h, [ref]$owner) }
+    if ($h -ne [IntPtr]::Zero -and (-not $proc.Id -or $owner -eq $proc.Id)) {
       $w = $A::FromHandle($h)
       if ($w -ne $null -and $w.Current.Name -eq $Title) { return $w }
     }
