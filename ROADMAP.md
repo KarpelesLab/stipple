@@ -993,10 +993,11 @@ Most input only works on X11 today.
   fixed, and the App's echo of a composition shown as text counts as in
   step.) A failure in the TSF path
   (a panic in a store call, `AssociateFocus` failing) switches TSF off for
-  the run and hands input to IMM32. No real IME runs there, so how the
-  Microsoft IMEs behave
-  against the store is unverified, as are the display attributes and the
-  IMM32 fallback (build-checked). Not done: `GetACPFromPoint` (handwriting
+  the run and hands input to IMM32. No real IME runs there; the
+  `ime-windows` job below drives the Microsoft Japanese IME against the
+  store (preedit, conversion, commit, cancel). The other Microsoft IMEs,
+  the display attributes and the IMM32 fallback (build-checked) are
+  unverified. Not done: `GetACPFromPoint` (handwriting
   aims by point), text attributes and input scopes (`RequestSupportedAttrs`
   offers none), the keystroke manager (keys reach text services through TSF's
   own hooks). See [docs/ime.md](docs/ime.md).
@@ -1059,16 +1060,22 @@ Most input only works on X11 today.
   the field's surrounding text reaches the input method), Hangul (`gksrmf`
   composes `한` and `글` syllable by syllable, Space commits). Passed locally
   against Ubuntu 26.04's fcitx5 5.1.19 and sway 1.11 (the runner's image) in
-  a rootless container. **Windows and macOS: attempted, not yet seen
-  passing**: a non-blocking `ime-windows` job installs the ja-JP typing
-  feature if needed (`Add-WindowsCapability` / `Install-Language`), adds the
-  Microsoft Japanese IME to the user's languages, switches the app's thread
-  with `WM_INPUTLANGCHANGEREQUEST` and types with `SendInput`; a
-  non-blocking step in `interaction-macos` selects Kotoeri with a Swift
-  helper (`TISSelectInputSource`) and posts CGEvents. Whether the runner
-  images allow installing the language, posting keys (Accessibility) and
-  switching the input source is what their runs will show; each logs the
-  stage it stopped at. Until then both are protocol wiring in CI (Windows:
+  a rootless container. **Windows: passing, still non-blocking** until
+  repeated runs confirm the flakiness fix: the `ime-windows` job installs
+  the ja-JP typing feature if needed (`Add-WindowsCapability` /
+  `Install-Language`), adds the Microsoft Japanese IME to the user's
+  languages, switches the app's thread with `WM_INPUTLANGCHANGEREQUEST` and
+  types with `SendInput`. It passed about one run in six while it tapped
+  Alt to get past the foreground lock: a lone Alt release that reached the
+  window put it in system-menu mode, which ate the Tab or the IME toggle.
+  It now gets the foreground without a bare Alt release, checks for menu
+  mode before each burst of keys, waits for the app's TSF trace at each
+  stage and names the stage that failed (see docs/ime.md). **macOS:
+  attempted, not yet seen passing**: a non-blocking step in
+  `interaction-macos` selects Kotoeri with a Swift helper
+  (`TISSelectInputSource`) and posts CGEvents; whether the runner allows
+  posting keys (Accessibility) and switching the input source is what its
+  runs will show. Until then both are also protocol wiring in CI (Windows:
   the app playing the input method through the real TSF manager; macOS:
   `setMarkedText:` / `insertText:` through objc dispatch). A manual
   per-platform checklist (Japanese, pinyin, Korean, the candidate window

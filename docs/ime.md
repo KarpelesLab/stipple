@@ -335,16 +335,30 @@ languages, switches the app's thread to Japanese
 (`WM_INPUTLANGCHANGEREQUEST`), turns the IME on (`VK_IME_ON`, or `VK_KANJI`)
 until `a` becomes a preedit that Escape cancels, and types `n i h o n`,
 Space, Return with `SendInput`; the field must show the hiragana preedit,
-`日本` and the commit. On macOS a non-blocking step of the
+`日本` and the commit. It has passed on the runner, but only about one run
+in six until the script stopped tapping Alt to get past the foreground
+lock: whenever that lone Alt release reached the app's window,
+`DefWindowProc` put the window in system-menu mode (`SC_KEYMENU`, as any
+Win32 window does) and the menu loop ate the keys after it — the Tab that
+focuses the field, or `VK_IME_ON` and the probe's `a` (no run ever saw
+that `a`). It now brings the window forward with `SetForegroundWindow`,
+then `AttachThreadInput`, then Alt held with a masking key (VK 0xE8)
+before its release, then a click on the title bar, checks
+`GetGUIThreadInfo` for menu mode before each burst of keys, waits for the
+app's own trace (`stipple-tsf: focus`) to confirm the field took focus
+before switching the language, and repeats Escape when the IME's
+prediction list takes the first one (a probe composition left behind is
+how `兄本` was committed instead of `日本`). A failing run ends with
+`FAILED at <stage>` and the window's input state. On macOS a non-blocking step of the
 `interaction-macos` job (`.github/scripts/ime-macos.sh`) compiles a small
 Swift helper that enables and selects the built-in Japanese input source
 (Kotoeri, romaji typing, with live conversion off) and posts the same keys
-as CGEvents. Neither has been seen passing yet: whether the runner can
-install the Japanese IME, and whether a CLI process may post keys
-(Accessibility) and switch the input source there, is what their first runs
-will show; each logs the stage it stopped at. Until one passes, Windows and
-macOS input methods are checked only as protocol wiring (above) and by hand
-(below), and iOS by its protocol self-test.
+as CGEvents. It hasn't been seen passing yet: whether a CLI process may
+post keys (Accessibility) and switch the input source there is what its
+runs will show; it logs the stage it stopped at. Until the Windows job is
+made blocking and the macOS one passes, Windows and macOS input methods
+are also checked as protocol wiring (above) and by hand (below), and iOS
+by its protocol self-test.
 
 ## Manual checklist
 
