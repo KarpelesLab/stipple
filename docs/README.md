@@ -342,8 +342,10 @@ a person on a composing keyboard. See [platforms/android.md](platforms/android.m
 scroll, set text); `uiautomator dump` on the CI emulator lists the nodes, and
 an accessibility service standing in for TalkBack (enabled the way TalkBack
 is) moves accessibility focus through every node, clicks a button and sets
-the field's text, from its own process (run on a local API 34 emulator; CI
-step added). Not yet tried with TalkBack itself. See
+the field's text, from its own process. TalkBack itself, which the API 34
+Google APIs emulator image ships, is turned on in CI too: its focus must
+reach the button and its click the app (added with this change, reported
+without failing the job; not yet run in CI). See
 [accessibility.md](accessibility.md#android).
 
 ⁵⁷ `onPause` / `onResume` / `onTrimMemory` and the Back key, checked on the
@@ -441,15 +443,24 @@ itself, run but aren't required yet. No caret, selection or relations. See
 type, name, bounds in screen pixels, keyboard focus, hit testing, and the
 Invoke pattern on buttons. CI walks a running window from PowerShell's
 process with the .NET UI Automation client (the path Narrator and NVDA use),
-hit-tests it, invokes a button and reads the focus after a Tab (added with
-this change, not yet run in CI). No Value, Toggle, Scroll or Text patterns,
-and no UIA events. See [accessibility.md](accessibility.md#windows).
+hit-tests it, invokes a button and reads the focus after a Tab (passing in
+CI). A focus move raises UIA's focus-changed event, and a window's root is
+named by its title. NVDA itself is driven in CI: its log of what it says
+must name the window, the field Tab focuses and "Row 0" "button", and
+NVDA+Enter must press it (added with this change, reported without failing
+the workflow; not yet run in CI). Buttons don't take keyboard focus, so Tab
+can't reach them. No Value, Toggle, Scroll or Text patterns, and no
+structure or property-change events. See
+[accessibility.md](accessibility.md#windows).
 
 ⁶⁸ An `NSAccessibilityElement` per node, with role, label and frame in screen
 coordinates. CI reads a running app's tree from another process through the
-AX API, as VoiceOver does, when the runner grants the accessibility
-permission (added with this change, not yet run in CI). No press action yet.
-See [accessibility.md](accessibility.md#macos).
+AX API, as VoiceOver does (passing in CI). Buttons and the other controls a
+click activates answer `AXPress` (VoiceOver's VO-Space), checked by the same
+probe, and VoiceOver itself is driven through its AppleScript interface: it
+must speak "Row 0" as a button and press it (both added with this change,
+not yet run in CI; the VoiceOver step doesn't fail the job). See
+[accessibility.md](accessibility.md#macos).
 
 ⁶⁹ In the shared core, so the same everywhere: `Cx::memo` and `Cx::derive`,
 transition-only frames drawn from the tree on screen, and scenes culled to the

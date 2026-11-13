@@ -16,11 +16,21 @@ accessibility API. `App::accessibility_tree()` returns the tree for tests.
 | Web | an ARIA overlay | in-page, from headless Chrome |
 | Linux (X11, Wayland) | AT-SPI: an object per node, registered with the registry | yes, a pyatspi client (X11); sway and Orca not yet required |
 
-None of these has been tried with the screen readers themselves (Narrator,
-VoiceOver, TalkBack, Orca, NVDA, JAWS) by a person. What CI does instead,
-on each platform where it can, is read and drive the app from **another
-process**, through the same channel the screen reader uses. The rest of this
-page says what each check proves, and what it doesn't.
+None of these has been tried with a screen reader by a person. What CI
+does, on each platform where it can, is read and drive the app from
+**another process**, through the same channel the screen reader uses, and on
+four of them it also runs **the screen reader itself** and checks what it
+says or does:
+
+| Screen reader | CI job / step | Status |
+| --- | --- | --- |
+| NVDA (Windows) | `screen-reader-windows` | added; not yet run in CI; reports without failing the workflow |
+| VoiceOver (macOS) | `visual-macos`, *Screen reader (VoiceOver)* | added; not yet run in CI; doesn't fail the job |
+| TalkBack (Android) | `visual-android` (API 34) | added; not yet run in CI; doesn't fail the job |
+| Orca (Linux) | `a11y-dbus` (see [Linux](#linux)) | doesn't fail the job until seen passing |
+| Narrator, JAWS, VoiceOver on iOS | none | not tried |
+
+The rest of this page says what each check proves, and what it doesn't.
 
 ## Windows
 
@@ -35,7 +45,13 @@ siblings and children; the root finds the focused node and the deepest node
 under a point. Buttons, menu items, checkboxes, switches, selects, tabs and
 column headers have the Invoke pattern, which clicks the middle of the node.
 The tree is rebuilt only when it changes, and a replaced tree is kept while a
-client still holds any of its elements.
+client still holds any of its elements. When focus moves to another node
+(Tab), the window raises UIA's focus-changed event
+(`UiaRaiseAutomationEvent`, `UIA_AutomationFocusChangedEventId`) for it, if
+a client listens: screen readers follow focus through that event, and
+without it only learn of a Tab when they ask again. The root, which has no
+name of its own, leaves its name to the window's provider, so it reads as
+the window's title ("Stipple Touch window").
 
 **CI** (`visual-windows`, *Read and drive a running window through UI
 Automation*): `.github/scripts/uia-walk.ps1` starts `touchdemo` and, from
@@ -59,10 +75,42 @@ path Narrator, NVDA and JAWS use):
 
 `uiademo` still checks the providers through their vtables in-process.
 
-Not covered: no Value, Toggle, Selection, ExpandCollapse, Scroll or Text
-patterns (a field's text is its name, and can't be set through UIA); no UIA
-events (`UiaRaiseAutomationEvent`, structure and focus changes), so a screen
-reader only sees a change when it asks again.
+**NVDA** (`screen-reader-windows`): `.github/scripts/nvda-windows.ps1`
+downloads a pinned NVDA release from nvaccess.org (checked against its
+SHA-256), makes a portable copy with the launcher's
+`--create-portable-silent` (or unpacks the launcher with 7-Zip if that
+fails), and starts it with `-m` (no dialogs, sounds or start message), its
+log at debug level, and a fresh configuration: no welcome, update or usage
+dialogs, the laptop keyboard layout, Insert as the NVDA key, and a synth that
+makes no sound (`.github/a11y/windows/stippleSpy.py`, loaded from the
+configuration's scratchpad; NVDA's own "silence" synth never reports its
+speech done, which stops say all). NVDA logs everything it says as
+`Speaking [...]`, so the script reads its log while it types NVDA's
+commands (`keybd_event`, which NVDA's keyboard hook takes as typed keys):
+
+- the window brought to the front: NVDA names it "Stipple Touch";
+- Tab: the app focuses its field, raises the focus event, and NVDA says
+  "edit"; NVDA+Tab (report the focus) says it again;
+- NVDA+B (read the foreground window): NVDA reads the controls through UIA,
+  "Row 0" with its role "button" and "Rows tapped: 0";
+- NVDA+Shift+Right (next object) from the field, until NVDA's navigator says
+  "Row 0" "button";
+- NVDA+Enter (activate the navigator object): NVDA invokes the button
+  through UIA, the app logs the tap, and NVDA+B then reads "Rows tapped: 1";
+- the mouse moved over "Row 1": NVDA's mouse tracking hit-tests through UIA
+  and says what is there (reported, not required).
+
+The job uploads NVDA's whole log. It hasn't run in CI yet, and reports
+without failing the workflow until it has been seen passing.
+
+Not covered: Stipple's buttons don't take keyboard focus (only fields and
+other elements with key handlers do), so Tab can't reach them and Enter or
+Space can't press them; with NVDA they are reached with the object
+navigator, NVDA+B or the mouse, and pressed with NVDA+Enter. No Value,
+Toggle, Selection, ExpandCollapse, Scroll or Text patterns (a field's text is
+its name, and can't be set through UIA); of UIA's events only the focus
+change is raised (no structure or property changes), so a screen reader sees
+other changes only when it asks again. Narrator and JAWS aren't tried.
 
 ## macOS
 
@@ -78,7 +126,15 @@ then `AXWindows`, `AXChildren`, `AXRole`, `AXDescription`, `AXTitle`,
 `AXValue`, `AXPosition` / `AXSize`, `AXFocusedUIElement`. The step checks the
 window "Stipple Touch", an `AXButton` "Row 0", an `AXTextField` and an
 `AXStaticText` "Rows tapped: N", and that the button's frame lies inside the
-window's. It also tries `AXPress` on the button and prints the result.
+window's. Then it presses the button with `AXPress`
+(`AXUIElementPerformAction`, what VoiceOver's VO-Space sends): the button
+must list the action, the call must succeed, and the app must log the tap.
+
+The elements of the controls a click activates (buttons, menu items,
+checkboxes, switches, selects, tabs, column headers) are a run-time subclass
+of `NSAccessibilityElement` whose `accessibilityPerformPress` clicks the
+middle of the element (a pointer move, press and release queued for the
+window, delivered by the event loop), so AppKit lists `AXPress` for them.
 
 Reading another app through the AX API needs TCC's accessibility permission
 for the reading process. `axprobe` prints `AXIsProcessTrusted()`; when the API
@@ -87,10 +143,25 @@ database (GitHub's macOS runners run with SIP off) and tries again. If it is
 still refused, the step passes with a warning and the tree hasn't been read
 from outside; the in-process walk (`STIPPLE_COCOA_A11Y=1`) still runs.
 
-Not covered: elements don't implement `accessibilityPerformPress` (VoiceOver's
-VO-Space does nothing on a button), there's no `AXValue` for fields, no
-focus or layout notifications, and the elements are built again each time
-AppKit asks for them.
+**VoiceOver** (`visual-macos`, *Screen reader (VoiceOver)*):
+`.github/scripts/voiceover-macos.sh` lets AppleScript control VoiceOver as
+VoiceOver Utility's checkbox does (`SCREnableAppleScript` in VoiceOver's
+defaults, and `/private/var/db/Accessibility/.VoiceOverAppleScriptEnabled`,
+which root can write with SIP off as on GitHub's runners), grants Apple
+Events to VoiceOver in the TCC databases for the processes that may run
+`osascript` there, and turns off VoiceOver's welcome. Then it starts
+`touchdemo` and VoiceOver (`VoiceOverStarter`), and moves VoiceOver's cursor
+through the window depth first (`tell vo cursor to move right`, `move into
+item`, `move out of item`, or the VO keys through System Events if
+AppleScript refuses one), logging each phrase VoiceOver speaks (`content of
+last phrase`), until it reaches "Row 0": the phrase must say it is a button.
+`perform action` (VO-Space) must then press it: the app logs the tap. The
+step hasn't run in CI yet and doesn't fail the job (it exits 3, with a
+warning, when the runner doesn't let AppleScript control VoiceOver).
+
+Not covered: there's no `AXValue` for fields, no focus or layout
+notifications, and the elements are built again each time AppKit asks for
+them (after the tree changes or the window moves).
 
 ## iOS
 
@@ -130,9 +201,8 @@ the closest widget class (`Button`, `EditText`, `TextView`...), text, state
 actions (accessibility focus, click, focus, select, set text, and scroll on
 lists, trees and tables). See [the Android page](platforms/android.md#accessibility).
 
-**CI** (`visual-android`): the emulator images don't include TalkBack (it
-comes from the Play Store as the Android Accessibility Suite, which CI can't
-install), so a small accessibility service stands in for it:
+**CI** (`visual-android`): a small accessibility service stands in for
+TalkBack in the checks TalkBack can't be scripted for:
 `.github/a11y/android` (built with javac, d8 and aapt like the app, no
 Gradle). `test-probe.sh` installs it and turns it on with
 `settings put secure enabled_accessibility_services`, exactly how TalkBack is
@@ -156,9 +226,21 @@ system's accessibility framework. It:
 `test-on-device.sh` also reads the tree with `uiautomator dump` (another
 out-of-process client of the same framework) and taps nodes at their bounds.
 
-Not covered: TalkBack itself (its speech, its own traversal rules, explore by
-touch); `androiddemo`'s list is a plain scroll container, which the tree
-reports as a group without scroll actions.
+**TalkBack**: the Google APIs emulator images ship TalkBack from API 33 on
+(`/product/app/talkback`; the API 30 image doesn't), so on API 34
+`.github/a11y/android/test-talkback.sh` turns TalkBack on, with the probe
+service beside it; with TalkBack on, the probe only watches, logging the
+app's accessibility events. TalkBack's focus is moved with its keyboard
+commands (`input keycombination`: Alt+Right, then Alt+Shift+Right) or, if
+those don't reach the app, its swipe right, until its focus lands on "Tap
+me" (a `TYPE_VIEW_ACCESSIBILITY_FOCUSED` event with that text); then its
+click (Alt+Enter, or a double tap) must reach the app. TalkBack's speech
+isn't read (the emulator may have no voice). The check hasn't run in CI yet
+and doesn't fail the job.
+
+Not covered: TalkBack's speech, explore by touch; `androiddemo`'s list is a
+plain scroll container, which the tree reports as a group without scroll
+actions.
 
 ## Web
 

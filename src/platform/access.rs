@@ -115,6 +115,45 @@ impl A11yNode {
     pub fn count(&self) -> usize {
         1 + self.children.iter().map(A11yNode::count).sum::<usize>()
     }
+
+    /// The path (child index at each level) to the first focused node, in
+    /// depth-first order; `Some(vec![])` when it's this node.
+    pub fn focused_path(&self) -> Option<Vec<usize>> {
+        if self.focused {
+            return Some(Vec::new());
+        }
+        self.children.iter().enumerate().find_map(|(i, c)| {
+            c.focused_path().map(|mut p| {
+                p.insert(0, i);
+                p
+            })
+        })
+    }
+
+    /// The node at `path` (as [`focused_path`](Self::focused_path) gives it).
+    pub fn at_path(&self, path: &[usize]) -> Option<&A11yNode> {
+        path.iter().try_fold(self, |node, &i| node.children.get(i))
+    }
+
+    /// Where focus went, if it moved between the tree `old` (none before)
+    /// and this one: the path to the newly focused node, when there is one
+    /// and it isn't the node (same place, same role) focused before. A
+    /// screen reader follows focus through the event a backend raises for
+    /// it (UIA's focus-changed event); a tree rebuilt with focus where it was
+    /// raises none.
+    pub fn focus_moved_from(&self, old: Option<&A11yNode>) -> Option<Vec<usize>> {
+        let path = self.focused_path()?;
+        let role = self.at_path(&path).map(|n| n.role);
+        let before = old.and_then(|o| {
+            let p = o.focused_path()?;
+            let r = o.at_path(&p).map(|n| n.role);
+            Some((p, r))
+        });
+        match before {
+            Some((p, r)) if p == path && r == role => None,
+            _ => Some(path),
+        }
+    }
 }
 
 /// The ARIA role the web's bridge gives `role`; empty for none (static text,
@@ -244,6 +283,50 @@ mod tests {
         };
         // root + Title + Group + OK = 4
         assert_eq!(root.count(), 4);
+    }
+
+    #[test]
+    fn focus_moves_only_when_another_node_takes_it() {
+        let tree = |focus: Option<usize>, label: &str| A11yNode {
+            children: vec![
+                A11yNode {
+                    focused: focus == Some(0),
+                    ..leaf(A11yRole::TextField, "")
+                },
+                leaf(A11yRole::Text, label),
+                A11yNode {
+                    children: vec![A11yNode {
+                        focused: focus == Some(1),
+                        ..leaf(A11yRole::Button, "Row 0")
+                    }],
+                    ..leaf(A11yRole::Group, "")
+                },
+            ],
+            ..leaf(A11yRole::Window, "")
+        };
+        let none = tree(None, "Rows tapped: 0");
+        let field = tree(Some(0), "Rows tapped: 0");
+        let button = tree(Some(1), "Rows tapped: 0");
+        assert_eq!(none.focused_path(), None);
+        assert_eq!(button.focused_path(), Some(vec![2, 0]));
+        assert_eq!(
+            button.at_path(&[2, 0]).map(|n| n.name.as_str()),
+            Some("Row 0")
+        );
+        assert!(button.at_path(&[2, 1]).is_none());
+        // Nothing focused: nothing to report.
+        assert_eq!(none.focus_moved_from(Some(&field)), None);
+        // The first tree, focus arriving, focus moving on.
+        assert_eq!(field.focus_moved_from(None), Some(vec![0]));
+        assert_eq!(field.focus_moved_from(Some(&none)), Some(vec![0]));
+        assert_eq!(button.focus_moved_from(Some(&field)), Some(vec![2, 0]));
+        // A tree rebuilt around the same focus (another label) raises none.
+        let relabelled = tree(Some(1), "Rows tapped: 1");
+        assert_eq!(relabelled.focus_moved_from(Some(&button)), None);
+        // Another kind of node in the focused node's place is a new focus.
+        let mut swapped = button.clone();
+        swapped.children[2].children[0].role = A11yRole::CheckBox;
+        assert_eq!(swapped.focus_moved_from(Some(&button)), Some(vec![2, 0]));
     }
 
     #[test]

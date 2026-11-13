@@ -1,5 +1,6 @@
-// An accessibility service standing in for TalkBack on CI's emulator (whose
-// images don't ship TalkBack): enabled through
+// An accessibility service standing in for TalkBack on CI's emulator, in
+// checks TalkBack can't be scripted for (setting text, reading the tree, a
+// focus at every stop): enabled through
 // `settings put secure enabled_accessibility_services`, it runs in its own
 // process and reaches the Stipple app only through the system's accessibility
 // framework, as TalkBack does. Once connected it reads the active window's
@@ -8,6 +9,10 @@
 // (TalkBack's double tap), sets the text field's text, and scrolls the list.
 // Everything it sees goes to logcat under the `a11yprobe` tag, for
 // .github/a11y/android/test-probe.sh to check.
+//
+// When TalkBack itself is on too (.github/a11y/android/test-talkback.sh),
+// the probe only watches: it logs the app's accessibility events (TalkBack
+// moving its focus, clicking) and does nothing itself.
 package org.stipple.a11yprobe;
 
 import android.accessibilityservice.AccessibilityService;
@@ -15,6 +20,7 @@ import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
@@ -38,6 +44,12 @@ public class Probe extends AccessibilityService {
 
     @Override
     protected void onServiceConnected() {
+        String enabled = Settings.Secure.getString(getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+        if (enabled != null && enabled.contains("talkback")) {
+            log("watching (TalkBack is on: " + enabled + ")");
+            return;
+        }
         log("connected");
         later(2000, new Runnable() {
             public void run() {

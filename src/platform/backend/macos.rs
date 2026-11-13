@@ -33,6 +33,8 @@ use crate::platform::menu::{
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, WindowInfo, debug_window};
 use crate::render::{Pixmap, Surface};
 
+/// `AXPress` on the elements of the controls a click activates.
+mod ax_press;
 /// Pacing animation frames by the display (`CVDisplayLink`).
 mod display_link;
 /// Receiving drops (`NSDraggingDestination`).
@@ -718,15 +720,21 @@ unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id,
     }
     let make: unsafe extern "C" fn(Id, Sel, Id, CgRect, Id, Id) -> Id =
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
-    let el = unsafe {
-        make(
-            class("NSAccessibilityElement"),
-            sel("accessibilityElementWithRole:frame:label:parent:"),
-            nsstring(ax_role(node.role)),
-            frame,
-            nsstring(&node.name),
-            parent,
-        )
+    let (role, label) = (nsstring(ax_role(node.role)), nsstring(&node.name));
+    // A control a click activates answers `AXPress` (VoiceOver's VO-Space).
+    let el = if ax_press::pressable(node.role) {
+        unsafe { ax_press::new_element(role, frame, label, parent) }
+    } else {
+        unsafe {
+            make(
+                class("NSAccessibilityElement"),
+                sel("accessibilityElementWithRole:frame:label:parent:"),
+                role,
+                frame,
+                label,
+                parent,
+            )
+        }
     };
     if !node.children.is_empty() {
         let arr = unsafe { msg_id(class("NSMutableArray"), sel("array")) };

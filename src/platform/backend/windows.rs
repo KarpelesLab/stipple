@@ -1559,6 +1559,11 @@ impl Window for WinWindow {
             return;
         }
         let tree = crate::platform::uia::UiaTree::build_hosted(root, self.hwnd);
+        // Focus that moved to another node is announced (screen readers
+        // follow focus through UIA's event), once the tree is the window's.
+        let moved = read_win(self.hwnd, |w| root.focus_moved_from(w.uia_source.as_ref()))
+            .unwrap_or_else(|| root.focus_moved_from(None))
+            .map(|path| tree.provider_at(&path));
         with_win(self.hwnd, |w| {
             w.uia_source = Some(root.clone());
             if let Some(old) = w.uia.replace(tree) {
@@ -1566,6 +1571,10 @@ impl Window for WinWindow {
             }
             w.uia_retired.retain(|t| t.in_use());
         });
+        if let Some(provider) = moved {
+            // The tree is the window's current one (alive) from here on.
+            unsafe { crate::platform::uia::raise_focus_changed(provider) };
+        }
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         with_current(self.hwnd, || {

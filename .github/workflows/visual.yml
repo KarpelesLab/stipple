@@ -3239,6 +3239,34 @@ jobs:
           grep -qE 'role=AXStaticText desc="Rows tapped: [0-9]+"' $L
           # Frames are in screen coordinates: the button lies inside its window.
           grep -q 'axprobe: button "Row 0" frame inside its window=true' $L
+          # AXPress (VoiceOver's VO-Space) presses the button: AX lists the
+          # action, the call succeeds, and the app counts the tap.
+          echo "=== touchdemo log (tail) ==="; tail -n 10 visual_output/touchdemo-macos.log
+          grep -qE 'axprobe: actions of "Row 0": \[.*AXPress' $L
+          grep -q 'axprobe: AXPress "Row 0" -> AXError 0$' $L
+          grep -q '^touchdemo: row 0 tapped' visual_output/touchdemo-macos.log
+
+      # A real screen reader: VoiceOver, driven through its AppleScript
+      # interface (enabled by hand: its defaults, the
+      # .VoiceOverAppleScriptEnabled file and TCC rows for Apple Events),
+      # moves its cursor through a running touchdemo and must speak "Row 0"
+      # as a button, then presses it with VO-Space (perform action) and the
+      # app counts the tap. Reports without failing the job until it has
+      # been seen passing; see .github/scripts/voiceover-macos.sh.
+      - name: Screen reader (VoiceOver)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: bash .github/scripts/voiceover-macos.sh ./target/release/touchdemo
+
+      - name: Upload VoiceOver logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-macos-voiceover
+          path: |
+            visual_output/voiceover-*.log
+            visual_output/axprobe.log
+          if-no-files-found: warn
 
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
@@ -4088,8 +4116,8 @@ jobs:
       - name: Build the cdylib and assemble a signed debug APK
         run: bash examples/androiddemo/build-apk.sh x86_64 stipple.apk
 
-      # An accessibility service standing in for TalkBack (which the emulator
-      # images don't ship): see .github/a11y/android/Probe.java.
+      # An accessibility service standing in for TalkBack, and watching
+      # TalkBack itself: see .github/a11y/android/Probe.java.
       - name: Build the accessibility probe APK
         if: matrix.api-level == 34
         run: bash .github/a11y/android/build-probe.sh a11yprobe.apk
@@ -4141,10 +4169,14 @@ jobs:
           # Then (API 34), from another process through the accessibility
           # framework as TalkBack: the probe service reads the tree, moves
           # accessibility focus through every stop, clicks, sets the field's
-          # text (.github/a11y/android/test-probe.sh).
+          # text (.github/a11y/android/test-probe.sh). Then TalkBack itself,
+          # which this image ships: its focus moved to "Tap me" and its click
+          # (.github/a11y/android/test-talkback.sh), reported without failing
+          # the job until it has been seen passing.
           script: |
             bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi
+            if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-talkback.sh a11yprobe.apk visual_output || echo "::warning::the TalkBack check didn't pass (see its log)"; fi
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
@@ -4386,6 +4418,37 @@ jobs:
         if: always()
         with:
           name: stipple-lifecycle-windows
+          path: visual_output/*
+          if-no-files-found: warn
+
+  # A real screen reader: NVDA (a pinned release from nvaccess.org, checked
+  # against its SHA-256, run as a portable copy with a synth that makes no
+  # sound) reads and drives a running touchdemo through UI Automation; its
+  # log of what it says ("Speaking [...]") is checked: the window's name when
+  # it comes to the front, the field when Tab focuses it (UIA's focus-changed
+  # event), the whole window read with NVDA+B ("Row 0" "button"), the object
+  # navigator moved to "Row 0" and NVDA+Enter pressing it (the app counts the
+  # tap). See .github/scripts/nvda-windows.ps1 and docs/accessibility.md.
+  # Reports without failing the workflow until it has been seen passing.
+  screen-reader-windows:
+    name: Screen reader (NVDA / Windows)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build touchdemo
+        run: cargo build --release -p touchdemo
+      - name: Drive touchdemo with NVDA
+        shell: powershell
+        run: .github\scripts\nvda-windows.ps1 .\target\release\touchdemo.exe visual_output
+      - name: Upload NVDA's log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-screen-reader-windows
           path: visual_output/*
           if-no-files-found: warn
 

@@ -17,8 +17,9 @@
 //! the `UiaTree` is the sole owner. The window keeps a replaced tree for as
 //! long as a client still holds one of its nodes ([`UiaTree::in_use`]), so a
 //! client calling an element it got earlier never reaches freed memory.
-//! Signalling a change to a *live* client (`UiaRaiseStructureChangedEvent`) is
-//! follow-up depth.
+//! A focus move is signalled to live clients ([`raise_focus_changed`], which
+//! screen readers follow); structure and property changes
+//! (`UiaRaiseStructureChangedEvent`) are follow-up depth.
 //!
 //! **In a window** ([`UiaTree::build_hosted`]) the root names the window's own
 //! provider as its host (`UiaHostProviderFromHwnd`), bounds are screen pixels
@@ -46,6 +47,7 @@ const S_OK: Hresult = 0;
 const ProviderOptions_ServerSideProvider: i32 = 0x2;
 const ProviderOptions_UseComThreading: i32 = 0x20;
 const UIA_InvokePatternId: i32 = 10000;
+const UIA_AutomationFocusChangedEventId: i32 = 20005;
 const UIA_HasKeyboardFocusPropertyId: i32 = 30008;
 const UIA_IsKeyboardFocusablePropertyId: i32 = 30009;
 const UIA_IsEnabledPropertyId: i32 = 30010;
@@ -145,6 +147,8 @@ unsafe extern "system" {
 #[link(name = "uiautomationcore")]
 unsafe extern "system" {
     fn UiaHostProviderFromHwnd(hwnd: *mut c_void, provider: *mut *mut c_void) -> Hresult;
+    fn UiaRaiseAutomationEvent(provider: *mut c_void, id: i32) -> Hresult;
+    fn UiaClientsAreListening() -> i32;
 }
 
 #[link(name = "oleaut32")]
@@ -583,6 +587,10 @@ unsafe extern "system" fn get_property_value(
                 v.vt = VT_I4;
                 v.val = (*p).control_type as u32 as u64;
             }
+            // A window's root with no name of its own says nothing, so UIA
+            // asks its host, the window's own provider: the root reads as
+            // the window's title ("Stipple Touch window", not "window").
+            UIA_NamePropertyId if (*p).name.len() <= 1 && is_hosted_root(p) => {}
             UIA_NamePropertyId => {
                 v.vt = VT_BSTR;
                 v.val = SysAllocString((*p).name.as_ptr()) as u64;
@@ -614,6 +622,12 @@ unsafe extern "system" fn get_property_value(
     S_OK
 }
 
+/// Whether `p` is the root of a tree in a window, hosted by the window's
+/// own provider.
+unsafe fn is_hosted_root(p: *const Provider) -> bool {
+    unsafe { (*p).parent.is_null() && !(*p).hwnd.is_null() }
+}
+
 unsafe extern "system" fn get_host_raw_element_provider(
     this: *mut c_void,
     ret: *mut *mut c_void,
@@ -622,7 +636,7 @@ unsafe extern "system" fn get_host_raw_element_provider(
         let p = this as *mut Provider;
         // The root of a tree in a window is hosted by the window's own
         // provider, which places it in the desktop's tree; the rest have none.
-        if (*p).parent.is_null() && !(*p).hwnd.is_null() {
+        if is_hosted_root(p) {
             return UiaHostProviderFromHwnd((*p).hwnd, ret);
         }
         *ret = core::ptr::null_mut();
@@ -991,6 +1005,23 @@ impl UiaTree {
         UiaTree { nodes }
     }
 
+    /// The provider of the node at `path` (child indices from the root, as
+    /// [`A11yNode::focused_path`] gives them), or null.
+    pub fn provider_at(&self, path: &[usize]) -> *mut c_void {
+        let Some(root) = self.nodes.first() else {
+            return core::ptr::null_mut();
+        };
+        let mut p = root as *const Provider as *mut Provider;
+        for &i in path {
+            let children: &[*mut Provider] = unsafe { &(*p).children };
+            match children.get(i) {
+                Some(&c) => p = c,
+                None => return core::ptr::null_mut(),
+            }
+        }
+        p as *mut c_void
+    }
+
     /// The root `IRawElementProviderFragmentRoot*` to return from `WM_GETOBJECT`
     /// via `UiaReturnRawElementProvider`. Null only if the tree is empty.
     pub fn root_provider(&self) -> *mut c_void {
@@ -999,6 +1030,24 @@ impl UiaTree {
             .map(|p| p as *const Provider as *mut c_void)
             .unwrap_or(core::ptr::null_mut())
     }
+}
+
+/// Tell UIA's clients that keyboard focus moved to `provider` (from
+/// [`UiaTree::provider_at`] on the window's current tree), as a screen
+/// reader follows focus: NVDA and Narrator listen for
+/// `UIA_AutomationFocusChangedEventId` and speak the element it names, and
+/// otherwise only learn of a Tab when they ask again. Does nothing when no
+/// client listens. Call it on the window's thread, outside any borrow of
+/// the window's state (UIA may call the providers back from inside).
+///
+/// # Safety
+///
+/// `provider` is null or a provider of a tree that is still alive.
+pub unsafe fn raise_focus_changed(provider: *mut c_void) -> bool {
+    if provider.is_null() || unsafe { UiaClientsAreListening() } == 0 {
+        return false;
+    }
+    unsafe { UiaRaiseAutomationEvent(provider, UIA_AutomationFocusChangedEventId) == S_OK }
 }
 
 /// `QueryInterface` through `p`'s own vtable (any of its interfaces: each

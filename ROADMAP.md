@@ -1380,8 +1380,9 @@ Most input only works on X11 today.
   on an API 34 emulator** with `uiautomator dump` (the button, the field and
   the list's rows with their classes and bounds; CI checks it in the
   `visual-android` steps, which pass), and by an accessibility service
-  standing in for TalkBack (see the out-of-process checks below). Not yet
-  tried with TalkBack itself, on an emulator or a device.
+  standing in for TalkBack (see the out-of-process checks below). TalkBack
+  itself is now driven on the API 34 emulator in CI (see the screen-reader
+  item below; not yet run there); not yet tried on a device.
 - ✅ App lifecycle for apps, cross-platform API and iOS: `Event::Lifecycle`
   with `Lifecycle::{Background, Foreground, LowMemory}`, heard by
   `App::on_lifecycle(|state, change|)`. While in the background the App asks
@@ -1606,8 +1607,9 @@ Most input only works on X11 today.
     `UITextField` reports (UIKit has no public text-entry trait), so XCUITest
     sees a `textField` and VoiceOver says "text field". Added to the
     `visual-ios` job; not yet run in CI.
-  - **Android**: TalkBack isn't on the emulator images (it comes from the
-    Play Store), so a small accessibility service stands in for it
+  - **Android**: a small accessibility service stands in for TalkBack (which
+    turned out to ship on the API 33+ Google APIs images; it is now driven
+    too, below)
     (`.github/a11y/android`, built with javac/d8/aapt, no Gradle), enabled with
     `settings put secure enabled_accessibility_services` as TalkBack is. From
     its own process it walks the window's nodes, moves accessibility focus
@@ -1641,6 +1643,35 @@ Most input only works on X11 today.
     GitHub's runners), and warns rather than fails if it still can't read.
     Element frames are now in screen coordinates (they were the node's
     logical bounds). Added to `visual-macos`; not yet run in CI.
+- 🚧 Real screen readers driven in CI (see
+  [docs/accessibility.md](docs/accessibility.md)); each added, none run in CI
+  yet, and none fails its job until it has been seen passing:
+  - **NVDA** (`screen-reader-windows`, `.github/scripts/nvda-windows.ps1`): a
+    pinned release from nvaccess.org (SHA-256 checked), as a portable copy,
+    with a configuration that shows no dialogs and a synth that makes no
+    sound (`.github/a11y/windows/stippleSpy.py`, from the scratchpad, which
+    reports its speech done so say all reads on). NVDA's log of what it says
+    must name the window as it comes to the front, say "edit" when Tab
+    focuses the field, read "Row 0" "button" with NVDA+B, reach "Row 0" with
+    the object navigator and press it with NVDA+Enter (the app counts the
+    tap). For it, a focus move now raises UIA's focus-changed event (screen
+    readers follow focus through it), and the window's root, with no name of
+    its own, reads as the window's title.
+  - **VoiceOver** (`visual-macos`, `.github/scripts/voiceover-macos.sh`):
+    AppleScript control enabled by hand (VoiceOver's defaults, the
+    `.VoiceOverAppleScriptEnabled` file, TCC rows for Apple Events),
+    VoiceOver started, its cursor moved through `touchdemo` until it speaks
+    "Row 0" as a button, and `perform action` (VO-Space) must press it. For
+    it, the elements of buttons and the other controls a click activates
+    answer `AXPress` (`accessibilityPerformPress`, a click at the element);
+    `axprobe` now checks the action (required).
+  - **TalkBack** (`visual-android`, API 34,
+    `.github/a11y/android/test-talkback.sh`): the Google APIs images ship
+    TalkBack from API 33 on. It is turned on beside the probe service (which
+    then only watches the app's events); its focus, moved with its keyboard
+    commands or swipes, must reach "Tap me", and its click the app.
+  - Orca: see the Linux item below. Not tried: Narrator, JAWS, VoiceOver
+    on iOS.
 - ✅ Accessibility on Linux for real: X11 and Wayland windows hand their
   tree to `stipple::platform::atspi`, whose helper thread finds the
   accessibility bus (`$AT_SPI_BUS_ADDRESS` or `org.a11y.Bus.GetAddress`;
@@ -1661,13 +1692,17 @@ Most input only works on X11 today.
   run there too but don't fail the job until seen passing. Left: caret and
   selection (the tree doesn't carry them), relations, the X root window's
   `AT_SPI_BUS` property, joining a restarted registry again.
-- ⬜ Accessibility depth found by the out-of-process checks: a plain
-  scrollable container (`Element::scrollable`) is a group with no scroll
-  actions on every platform (only lists, trees and tables have them); UIA has
-  no Value, Toggle, Selection, ExpandCollapse, Scroll or Text patterns and
-  raises no events; macOS elements have no press action (VoiceOver's VO-Space
-  does nothing) and no value for fields; no platform posts announcements for
-  live regions (toasts).
+- ⬜ Accessibility depth found by the out-of-process checks and the screen
+  readers: a plain scrollable container (`Element::scrollable`) is a group
+  with no scroll actions on every platform (only lists, trees and tables have
+  them); UIA has no Value, Toggle, Selection, ExpandCollapse, Scroll or Text
+  patterns and raises only the focus-changed event (no structure or property
+  changes); macOS elements have no value for fields; no platform posts
+  announcements for live regions (toasts). Buttons (`on_tap` elements) don't
+  take keyboard focus, so Tab can't reach them and Enter / Space can't press
+  them: a keyboard or screen-reader user reaches them only through the
+  screen reader's own navigation (NVDA's object navigator, VoiceOver's
+  cursor) and presses them with its activate command.
 - ⬜ Try the real screen readers: VoiceOver (macOS and iOS), TalkBack,
   Narrator / NVDA, Orca, by a person, on each platform.
 - ✅ Images on the GPU path, so OS-drawn controls render under `App::render_with`;

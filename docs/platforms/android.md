@@ -413,8 +413,11 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
   no preview: drawing one (from `App::on_back_progress`) is the app's job.
 - **No OS-drawn controls.** Android's widgets live in its Java framework, so
   `Theme::native()` stays self-drawn there, in the system's colors.
-- **TalkBack itself is untried**: the node provider is checked with
-  `uiautomator`. The document picker answers with contents only:
+- **TalkBack itself hasn't been seen working yet**: the node provider is
+  checked with `uiautomator` and an accessibility service, and CI now turns
+  TalkBack on, on the API 34 emulator, and moves its focus and clicks with
+  it (see [accessibility.md](../accessibility.md#android); not yet run
+  there). The document picker answers with contents only:
   `open_file` and friends (paths) return `None`, and there is no folder picker
   (`ACTION_OPEN_DOCUMENT_TREE`).
 - Rendering is software only: a full-HD screen is a lot of pixels, so heavy
