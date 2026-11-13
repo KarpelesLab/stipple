@@ -26,6 +26,7 @@ const HOST_VIEW_ID: i32 = -1;
 
 // AccessibilityNodeInfo actions.
 const ACTION_FOCUS: i32 = 0x1;
+const ACTION_CLEAR_FOCUS: i32 = 0x2;
 const ACTION_SELECT: i32 = 0x4;
 const ACTION_CLICK: i32 = 0x10;
 const ACTION_ACCESSIBILITY_FOCUS: i32 = 0x40;
@@ -286,6 +287,15 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
             c"(Landroid/view/accessibility/AccessibilityNodeInfo;)V",
             &[JValue { l: info }],
         )?;
+        // The view takes input focus (for keys and the IME), but to
+        // TalkBack a focusable node is one item that reads out every
+        // descendant that can't act: the window would be one stop, and its
+        // labels would never get a stop of their own. The window is a
+        // container: not focusable, no focus actions.
+        set_bool(jni, info, c"setFocusable", false);
+        for a in [ACTION_FOCUS, ACTION_CLEAR_FOCUS] {
+            jni.call_void(info, c"removeAction", c"(I)V", &[JValue { i: a }]);
+        }
         let t = tree();
         let children = t
             .nodes

@@ -26,7 +26,7 @@ says or does:
 | --- | --- | --- |
 | NVDA (Windows) | `screen-reader-windows` | passing in CI; still reports without failing the workflow |
 | VoiceOver (macOS) | `visual-macos`, *Screen reader (VoiceOver)* | passing in CI; doesn't fail the job |
-| TalkBack (Android) | `visual-android` (API 34) | added; not yet run in CI; doesn't fail the job |
+| TalkBack (Android) | `visual-android` (API 34) | passes on a local API 34 emulator; not yet seen passing in CI; doesn't fail the job |
 | Orca (Linux) | `a11y-dbus` (see [Linux](#linux)) | passing in CI; doesn't fail the job yet |
 | Narrator, JAWS, VoiceOver on iOS | none | not tried |
 
@@ -232,13 +232,27 @@ out-of-process client of the same framework) and taps nodes at their bounds.
 (`/product/app/talkback`; the API 30 image doesn't), so on API 34
 `.github/a11y/android/test-talkback.sh` turns TalkBack on, with the probe
 service beside it; with TalkBack on, the probe only watches, logging the
-app's accessibility events. TalkBack's focus is moved with its keyboard
-commands (`input keycombination`: Alt+Right, then Alt+Shift+Right) or, if
-those don't reach the app, its swipe right, until its focus lands on "Tap
-me" (a `TYPE_VIEW_ACCESSIBILITY_FOCUSED` event with that text); then its
-click (Alt+Enter, or a double tap) must reach the app. TalkBack's speech
-isn't read (the emulator may have no voice). The check hasn't run in CI yet
-and doesn't fail the job.
+app's accessibility events. TalkBack only hears input that goes through the
+system's input pipeline (its keyboard interceptor and touch explorer are
+input filters there), and `adb shell input` injects past those filters: an
+`input tap` with touch exploration on is a plain tap, and `input
+keycombination` never reaches TalkBack. So the script makes a virtual
+keyboard and touch screen with the shell's `uinput` command and moves
+TalkBack's focus with its keyboard command (Alt+Right) or, if that doesn't
+reach the app, its swipe right, an item at a time, until its focus lands on
+"Tap me" (a `TYPE_VIEW_ACCESSIBILITY_FOCUSED` event with that text). On the
+way its focus must stop on a plain label ("Running for N s" and the like):
+TalkBack reads a focusable node's children that can't act as part of it, so
+the host view's node (the window) isn't focusable to accessibility, though
+the view takes input focus; when it was, the labels got no stops. Then
+TalkBack's click (Alt+Enter, or a double tap) must reach the app. The
+notification permission is granted up front to the demo and to TalkBack,
+whose dialogs otherwise come up in front of the app and hold TalkBack's
+focus. On a failure the script logs the windows, the resumed activity and
+`dumpsys accessibility` (the accessibility focused window). TalkBack's speech
+isn't read (the emulator may have no voice). The check passes on a local
+API 34 emulator, hasn't been seen passing in CI yet, and doesn't fail the
+job.
 
 Not covered: TalkBack's speech, explore by touch; `androiddemo`'s list is a
 plain scroll container, which the tree reports as a group without scroll

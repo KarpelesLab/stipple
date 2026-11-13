@@ -208,7 +208,10 @@ focus, click (a tap at the node's center), focus and select (the same tap),
 scroll forward and backward (a wheel step over it), set text (select all,
 then type). Changes to the tree send `TYPE_WINDOW_CONTENT_CHANGED`, and a
 moved focus `TYPE_VIEW_FOCUSED`. A hovering finger (TalkBack's explore by
-touch) goes to the host view, which announces the node under it.
+touch) goes to the host view, which announces the node under it. The host
+view's own node (the window) isn't focusable to accessibility, though the
+view takes input focus: TalkBack folds the text of a focusable node's
+children that can't act into that node, so its labels would get no stops.
 
 ```sh
 adb shell uiautomator dump /sdcard/ui.xml && adb shell cat /sdcard/ui.xml
@@ -413,11 +416,11 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
   no preview: drawing one (from `App::on_back_progress`) is the app's job.
 - **No OS-drawn controls.** Android's widgets live in its Java framework, so
   `Theme::native()` stays self-drawn there, in the system's colors.
-- **TalkBack itself hasn't been seen working yet**: the node provider is
-  checked with `uiautomator` and an accessibility service, and CI now turns
+- **TalkBack itself hasn't been seen working in CI yet**: the node provider
+  is checked with `uiautomator` and an accessibility service, and CI turns
   TalkBack on, on the API 34 emulator, and moves its focus and clicks with
-  it (see [accessibility.md](../accessibility.md#android); not yet run
-  there). The document picker answers with contents only:
+  it (see [accessibility.md](../accessibility.md#android); this passes on a
+  local emulator). The document picker answers with contents only:
   `open_file` and friends (paths) return `None`, and there is no folder picker
   (`ACTION_OPEN_DOCUMENT_TREE`).
 - Rendering is software only: a full-HD screen is a lot of pixels, so heavy
