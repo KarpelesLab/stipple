@@ -224,7 +224,14 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
                 .collect(),
         )
     } else {
-        (label.unwrap_or_else(|| text_of(node)), Vec::new())
+        let mut name = label.unwrap_or_else(|| text_of(node));
+        // An empty field lays out a single space to keep its line's height
+        // (`widgets::text_editor`); a screen reader should read it as empty,
+        // not as "space".
+        if role == Role::TextField && name == " " {
+            name.clear();
+        }
+        (name, Vec::new())
     };
     AccessNode {
         role,
@@ -325,6 +332,23 @@ mod tests {
         assert!(field.focused);
         // Nothing else is focused.
         assert_eq!(a.descendants().iter().filter(|n| n.focused).count(), 1);
+    }
+
+    #[test]
+    fn an_empty_text_editor_reads_as_empty() {
+        let theme = Theme::light();
+        let mut cx = Cx::<crate::widgets::EditBuffer>::new(&theme);
+        let empty = crate::widgets::EditBuffer::default();
+        let field = crate::widgets::text_editor(&mut cx, &theme, &empty, |s| s);
+        let root = Element::stack(Axis::Vertical, vec![field]);
+        let laid = layout(&root, Rect::from_xywh(0.0, 0.0, 200.0, 40.0), None);
+        let a = accessibility_tree(&laid, None);
+        let field = a
+            .descendants()
+            .into_iter()
+            .find(|n| n.role == Role::TextField)
+            .unwrap();
+        assert_eq!(field.name, "");
     }
 
     #[test]

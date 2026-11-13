@@ -411,9 +411,14 @@ struct PerWin {
     fb: Vec<u8>,
     fb_w: i32,
     fb_h: i32,
-    /// The current UIA provider tree, vended from `WM_GETOBJECT`. Rebuilt each
-    /// time the App pushes a new accessibility tree.
+    /// The current UIA provider tree, vended from `WM_GETOBJECT`. Rebuilt
+    /// when the App pushes an accessibility tree that differs from the last.
     uia: Option<crate::platform::uia::UiaTree>,
+    /// The tree `uia` was built from.
+    uia_source: Option<crate::platform::access::A11yNode>,
+    /// Replaced trees a UIA client still holds nodes of, kept until it lets
+    /// go of them all.
+    uia_retired: Vec<crate::platform::uia::UiaTree>,
     /// The window's DPI. 0 until the window exists, which reads as 96 (1x).
     dpi: u32,
     /// The client area, in physical pixels.
@@ -1547,9 +1552,20 @@ impl Window for WinWindow {
         })
     }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
-        // Rebuild the UIA provider tree; `WM_GETOBJECT` hands its root to UIA.
-        let tree = crate::platform::uia::UiaTree::build(root);
-        with_win(self.hwnd, |w| w.uia = Some(tree));
+        // Rebuild the UIA provider tree when it changed; `WM_GETOBJECT`
+        // hands its root to UIA. The one it replaces stays while a client
+        // holds any of its nodes.
+        if read_win(self.hwnd, |w| w.uia_source.as_ref() == Some(root)) == Some(true) {
+            return;
+        }
+        let tree = crate::platform::uia::UiaTree::build_hosted(root, self.hwnd);
+        with_win(self.hwnd, |w| {
+            w.uia_source = Some(root.clone());
+            if let Some(old) = w.uia.replace(tree) {
+                w.uia_retired.push(old);
+            }
+            w.uia_retired.retain(|t| t.in_use());
+        });
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         with_current(self.hwnd, || {

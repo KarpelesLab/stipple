@@ -688,17 +688,34 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
 /// constructor `+accessibilityElementWithRole:frame:label:parent:`, so no custom
 /// element class or ivars are needed.
 ///
-/// `frame` is reported in the node's logical bounds for now; mapping it to screen
-/// coordinates (which VoiceOver's cursor needs) is follow-up depth.
-unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id) -> Id {
+/// `frame` is in screen coordinates, as NSAccessibility wants it (and an
+/// assistive client reads back as `AXPosition`/`AXSize`): the node's bounds
+/// in the (flipped) `view`, converted through its window.
+unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id, view: Id) -> Id {
     let (x, y, w, h) = node.bounds;
-    let frame = CgRect {
+    let mut frame = CgRect {
         origin: CgPoint { x, y },
         size: CgSize {
             width: w,
             height: h,
         },
     };
+    let window = unsafe { msg_id(view, sel("window")) };
+    if !window.is_null() {
+        unsafe {
+            let convert: unsafe extern "C" fn(Id, Sel, CgRect, Id) -> CgRect =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            let in_window = convert(
+                view,
+                sel("convertRect:toView:"),
+                frame,
+                std::ptr::null_mut(),
+            );
+            let to_screen: unsafe extern "C" fn(Id, Sel, CgRect) -> CgRect =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            frame = to_screen(window, sel("convertRectToScreen:"), in_window);
+        }
+    }
     let make: unsafe extern "C" fn(Id, Sel, Id, CgRect, Id, Id) -> Id =
         unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     let el = unsafe {
@@ -714,7 +731,7 @@ unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id)
     if !node.children.is_empty() {
         let arr = unsafe { msg_id(class("NSMutableArray"), sel("array")) };
         for child in &node.children {
-            let ce = unsafe { build_ax_element(child, el) };
+            let ce = unsafe { build_ax_element(child, el, view) };
             unsafe { msg_void_id(arr, sel("addObject:"), ce) };
         }
         unsafe { msg_void_id(el, sel("setAccessibilityChildren:"), arr) };
@@ -756,7 +773,7 @@ extern "C" fn acc_children(this: Id, _cmd: Sel) -> Id {
         unsafe {
             let arr = msg_id(class("NSMutableArray"), sel("array"));
             for child in &root.children {
-                let el = build_ax_element(child, this);
+                let el = build_ax_element(child, this, this);
                 msg_void_id(arr, sel("addObject:"), el);
             }
             arr

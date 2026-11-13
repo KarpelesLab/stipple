@@ -11,6 +11,10 @@ pub(crate) const BUTTON: u8 = 1;
 pub(crate) const STATIC_TEXT: u8 = 2;
 pub(crate) const HEADER: u8 = 4;
 pub(crate) const SELECTED: u8 = 8;
+/// A text field: UIKit has no public trait for it, so the backend borrows
+/// the one a `UITextField` reports (the text-entry trait VoiceOver reads as
+/// "text field", and XCUITest as `.textField`).
+pub(crate) const TEXT_ENTRY: u8 = 16;
 
 /// One node, as its accessibility element shows it.
 #[derive(Clone, Debug, PartialEq)]
@@ -67,6 +71,7 @@ fn item(node: &A11yNode) -> Item {
         Button | MenuItem | ComboBox | CheckBox | Switch | Tab => BUTTON,
         Text => STATIC_TEXT,
         ColumnHeader => HEADER,
+        TextField | SpinButton | PasswordField => TEXT_ENTRY,
         _ => 0,
     };
     if node.selected && matches!(role, ListItem | Row | Cell | TreeItem | Tab) {
@@ -179,7 +184,7 @@ mod tests {
         assert_eq!(
             summary,
             [
-                (true, "", "hello", 0),
+                (true, "", "hello", TEXT_ENTRY),
                 (false, "", "", 0),
                 (true, "One", "", SELECTED),
                 (true, "Two", "", BUTTON),

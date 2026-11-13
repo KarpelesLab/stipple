@@ -11,14 +11,24 @@
 //! `UiaReturnRawElementProvider`. This is the Windows half of the cross-platform
 //! a11y bridge (AT-SPI is Linux, `NSAccessibility` is macOS).
 //!
-//! **Ownership:** a [`UiaTree`] owns every provider in a `Vec<Box<Provider>>`;
+//! **Ownership:** a [`UiaTree`] owns every provider in a `Vec<Provider>`;
 //! the providers reference each other by raw pointer (a tree, no cycles to
 //! refcount). COM `AddRef`/`Release` adjust each node's count but never free —
-//! the `UiaTree` (held by the window for its lifetime) is the sole owner. Swapping
-//! the tree on a UI change frees the old nodes; signalling that to a *live* UIA
-//! client (`UiaRaiseStructureChangedEvent`) is follow-up depth — the CI self-check
-//! drives the vtable directly, as a cross-process UIA client needs a live desktop
-//! UIA stack the runner doesn't reliably provide.
+//! the `UiaTree` is the sole owner. The window keeps a replaced tree for as
+//! long as a client still holds one of its nodes ([`UiaTree::in_use`]), so a
+//! client calling an element it got earlier never reaches freed memory.
+//! Signalling a change to a *live* client (`UiaRaiseStructureChangedEvent`) is
+//! follow-up depth.
+//!
+//! **In a window** ([`UiaTree::build_hosted`]) the root names the window's own
+//! provider as its host (`UiaHostProviderFromHwnd`), bounds are screen pixels
+//! (the node's logical bounds scaled by the window's DPI and offset by its
+//! client origin, worked out when asked, so a moved window reads true), hit
+//! testing finds the deepest node under a point, and buttons (and the other
+//! activatable roles) have the Invoke pattern, which clicks the middle of the
+//! node (a posted `WM_LBUTTONDOWN`/`UP`), as VoiceOver's activation does on
+//! iOS. CI walks a running window from another process with the
+//! `System.Windows.Automation` client (see `docs/accessibility.md`).
 
 #![allow(unsafe_code, non_snake_case, non_upper_case_globals)]
 
@@ -30,6 +40,12 @@ const S_OK: Hresult = 0;
 
 // UIA constants.
 const ProviderOptions_ServerSideProvider: i32 = 0x1;
+const UIA_InvokePatternId: i32 = 10000;
+const UIA_HasKeyboardFocusPropertyId: i32 = 30008;
+const UIA_IsKeyboardFocusablePropertyId: i32 = 30009;
+const UIA_IsEnabledPropertyId: i32 = 30010;
+const UIA_IsInvokePatternAvailablePropertyId: i32 = 30031;
+const E_FAIL: Hresult = 0x8000_4005_u32 as i32;
 const UIA_ControlTypePropertyId: i32 = 30003;
 const UIA_NamePropertyId: i32 = 30005;
 
@@ -66,6 +82,32 @@ const UiaAppendRuntimeId: i32 = 3;
 const VT_EMPTY: u16 = 0;
 const VT_I4: u16 = 3;
 const VT_BSTR: u16 = 8;
+const VT_BOOL: u16 = 11;
+/// `VARIANT_TRUE` (a `VARIANT_BOOL` of -1).
+const VARIANT_TRUE: u64 = 0xFFFF;
+
+const WM_MOUSEMOVE: u32 = 0x0200;
+const WM_LBUTTONDOWN: u32 = 0x0201;
+const WM_LBUTTONUP: u32 = 0x0202;
+const MK_LBUTTON: usize = 0x0001;
+
+#[repr(C)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn ClientToScreen(hwnd: *mut c_void, point: *mut Point) -> i32;
+    fn GetDpiForWindow(hwnd: *mut c_void) -> u32;
+    fn PostMessageW(hwnd: *mut c_void, msg: u32, wp: usize, lp: isize) -> i32;
+}
+
+#[link(name = "uiautomationcore")]
+unsafe extern "system" {
+    fn UiaHostProviderFromHwnd(hwnd: *mut c_void, provider: *mut *mut c_void) -> Hresult;
+}
 
 #[link(name = "oleaut32")]
 unsafe extern "system" {
@@ -100,8 +142,8 @@ impl Variant {
     }
 }
 
-/// `UiaRect` — the bounding rectangle UIA reports (screen coordinates in a real
-/// app; we currently report the node's logical bounds, a follow-up to map).
+/// `UiaRect` — the bounding rectangle UIA reports: screen pixels for a tree
+/// in a window, the node's logical bounds otherwise.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct UiaRect {
@@ -142,18 +184,37 @@ struct ProviderVtbl {
     get_focus: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Hresult,
 }
 
+/// `IInvokeProvider`'s vtable: `IUnknown`, then `Invoke`.
+#[repr(C)]
+struct InvokeVtbl {
+    query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> Hresult,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    invoke: unsafe extern "system" fn(*mut c_void) -> Hresult,
+}
+
 /// One provider node. The vtable pointer is first, so the object pointer *is* the
-/// interface pointer. Navigation links are raw pointers into the owning
-/// [`UiaTree`]'s boxes (stable heap addresses).
+/// interface pointer; the Invoke pattern's interface is the second field.
+/// Navigation links are raw pointers into the owning [`UiaTree`]'s buffer
+/// (stable heap addresses).
 #[repr(C)]
 struct Provider {
     vtable: *const ProviderVtbl,
+    /// The `IInvokeProvider` interface pointer is this field's address.
+    invoke_vtable: *const InvokeVtbl,
     refcount: u32,
     /// UTF-16 (NUL-terminated) accessible name, for `SysAllocString`.
     name: Vec<u16>,
     control_type: i32,
     runtime_id: i32,
-    rect: UiaRect,
+    /// Logical `(x, y, width, height)` in the window's client area.
+    bounds: (f64, f64, f64, f64),
+    /// The window the tree is in, or null (a tree outside any window).
+    hwnd: *mut c_void,
+    /// Whether it has the Invoke pattern.
+    invokable: bool,
+    /// Whether it can take keyboard focus.
+    focusable: bool,
     focused: bool,
     parent: *mut Provider,
     children: Vec<*mut Provider>,
@@ -192,6 +253,25 @@ fn control_type(role: A11yRole) -> i32 {
         A11yRole::PasswordField => UIA_EditControlTypeId,
         A11yRole::Dialog => UIA_WindowControlTypeId,
     }
+}
+
+/// The roles UIA can activate through the Invoke pattern.
+fn invokable(role: A11yRole) -> bool {
+    use A11yRole::*;
+    matches!(
+        role,
+        Button | MenuItem | ComboBox | CheckBox | Switch | Tab | ColumnHeader
+    )
+}
+
+/// The roles that take keyboard focus.
+fn focusable(role: A11yRole) -> bool {
+    use A11yRole::*;
+    invokable(role)
+        || matches!(
+            role,
+            TextField | PasswordField | SpinButton | ListItem | TreeItem | Row | Splitter
+        )
 }
 
 unsafe extern "system" fn qi(this: *mut c_void, _iid: *const u8, ppv: *mut *mut c_void) -> Hresult {
@@ -233,14 +313,112 @@ unsafe extern "system" fn get_provider_options(_this: *mut c_void, opts: *mut i3
 }
 
 unsafe extern "system" fn get_pattern_provider(
-    _this: *mut c_void,
-    _pattern: i32,
+    this: *mut c_void,
+    pattern: i32,
     ret: *mut *mut c_void,
 ) -> Hresult {
     unsafe {
-        *ret = core::ptr::null_mut(); // we implement no control patterns yet
+        let p = this as *mut Provider;
+        *ret = if pattern == UIA_InvokePatternId && (*p).invokable && !(*p).hwnd.is_null() {
+            add_ref(this);
+            &raw mut (*p).invoke_vtable as *mut c_void
+        } else {
+            core::ptr::null_mut()
+        };
     }
     S_OK
+}
+
+/// The provider an `IInvokeProvider` pointer belongs to.
+unsafe fn invoke_owner(this: *mut c_void) -> *mut Provider {
+    unsafe {
+        (this as *mut u8).sub(core::mem::offset_of!(Provider, invoke_vtable)) as *mut Provider
+    }
+}
+
+unsafe extern "system" fn invoke_qi(
+    this: *mut c_void,
+    _iid: *const u8,
+    ppv: *mut *mut c_void,
+) -> Hresult {
+    // As the provider does: every query (IUnknown, IInvokeProvider) answers
+    // with this interface.
+    unsafe {
+        *ppv = this;
+        invoke_add_ref(this);
+    }
+    S_OK
+}
+
+unsafe extern "system" fn invoke_add_ref(this: *mut c_void) -> u32 {
+    unsafe { add_ref(invoke_owner(this) as *mut c_void) }
+}
+
+unsafe extern "system" fn invoke_release(this: *mut c_void) -> u32 {
+    unsafe { release(invoke_owner(this) as *mut c_void) }
+}
+
+/// `IInvokeProvider::Invoke`: click the middle of the node, through the
+/// window's own mouse messages (posted, so the click lands after UIA's call
+/// returns).
+unsafe extern "system" fn invoke(this: *mut c_void) -> Hresult {
+    unsafe {
+        let p = invoke_owner(this);
+        let hwnd = (*p).hwnd;
+        if hwnd.is_null() {
+            return E_FAIL;
+        }
+        let scale = window_scale(hwnd);
+        let (x, y, w, h) = (*p).bounds;
+        let cx = ((x + w / 2.0) * scale).round() as i32;
+        let cy = ((y + h / 2.0) * scale).round() as i32;
+        let lp = (((cy as u32 & 0xFFFF) << 16) | (cx as u32 & 0xFFFF)) as isize;
+        PostMessageW(hwnd, WM_MOUSEMOVE, 0, lp);
+        PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lp);
+        PostMessageW(hwnd, WM_LBUTTONUP, 0, lp);
+    }
+    S_OK
+}
+
+static INVOKE_VTBL: InvokeVtbl = InvokeVtbl {
+    query_interface: invoke_qi,
+    add_ref: invoke_add_ref,
+    release: invoke_release,
+    invoke,
+};
+
+/// Physical pixels per logical pixel for `hwnd`'s display.
+fn window_scale(hwnd: *mut c_void) -> f64 {
+    match unsafe { GetDpiForWindow(hwnd) } {
+        0 => 1.0,
+        dpi => dpi as f64 / 96.0,
+    }
+}
+
+/// `p`'s bounds as UIA reports them: screen pixels in a window, its logical
+/// bounds otherwise.
+unsafe fn screen_rect(p: *const Provider) -> UiaRect {
+    unsafe {
+        let (x, y, w, h) = (*p).bounds;
+        let hwnd = (*p).hwnd;
+        if hwnd.is_null() {
+            return UiaRect {
+                left: x,
+                top: y,
+                width: w,
+                height: h,
+            };
+        }
+        let scale = window_scale(hwnd);
+        let mut origin = Point { x: 0, y: 0 };
+        ClientToScreen(hwnd, &mut origin);
+        UiaRect {
+            left: origin.x as f64 + x * scale,
+            top: origin.y as f64 + y * scale,
+            width: w * scale,
+            height: h * scale,
+        }
+    }
 }
 
 unsafe extern "system" fn get_property_value(
@@ -260,6 +438,26 @@ unsafe extern "system" fn get_property_value(
                 v.vt = VT_BSTR;
                 v.val = SysAllocString((*p).name.as_ptr()) as u64;
             }
+            UIA_HasKeyboardFocusPropertyId => {
+                v.vt = VT_BOOL;
+                v.val = if (*p).focused { VARIANT_TRUE } else { 0 };
+            }
+            UIA_IsKeyboardFocusablePropertyId => {
+                v.vt = VT_BOOL;
+                v.val = if (*p).focusable { VARIANT_TRUE } else { 0 };
+            }
+            UIA_IsEnabledPropertyId => {
+                v.vt = VT_BOOL;
+                v.val = VARIANT_TRUE;
+            }
+            UIA_IsInvokePatternAvailablePropertyId => {
+                v.vt = VT_BOOL;
+                v.val = if (*p).invokable && !(*p).hwnd.is_null() {
+                    VARIANT_TRUE
+                } else {
+                    0
+                };
+            }
             _ => {} // VT_EMPTY → "property not supported"
         }
         *ret = v;
@@ -268,11 +466,17 @@ unsafe extern "system" fn get_property_value(
 }
 
 unsafe extern "system" fn get_host_raw_element_provider(
-    _this: *mut c_void,
+    this: *mut c_void,
     ret: *mut *mut c_void,
 ) -> Hresult {
     unsafe {
-        *ret = core::ptr::null_mut(); // a server-side fragment has no host
+        let p = this as *mut Provider;
+        // The root of a tree in a window is hosted by the window's own
+        // provider, which places it in the desktop's tree; the rest have none.
+        if (*p).parent.is_null() && !(*p).hwnd.is_null() {
+            return UiaHostProviderFromHwnd((*p).hwnd, ret);
+        }
+        *ret = core::ptr::null_mut();
     }
     S_OK
 }
@@ -339,6 +543,11 @@ unsafe extern "system" fn get_runtime_id(this: *mut c_void, ret: *mut *mut c_voi
     // the host runtime id, so this need only be unique within our fragment.
     unsafe {
         let p = this as *mut Provider;
+        // A hosted root takes its window's runtime id.
+        if (*p).parent.is_null() && !(*p).hwnd.is_null() {
+            *ret = core::ptr::null_mut();
+            return S_OK;
+        }
         let sa = SafeArrayCreateVector(VT_I4, 0, 2);
         if !sa.is_null() {
             let mut idx: i32 = 0;
@@ -355,7 +564,7 @@ unsafe extern "system" fn get_runtime_id(this: *mut c_void, ret: *mut *mut c_voi
 
 unsafe extern "system" fn get_bounding_rectangle(this: *mut c_void, ret: *mut UiaRect) -> Hresult {
     unsafe {
-        *ret = (*(this as *mut Provider)).rect;
+        *ret = screen_rect(this as *const Provider);
     }
     S_OK
 }
@@ -383,14 +592,28 @@ unsafe extern "system" fn get_fragment_root(this: *mut c_void, ret: *mut *mut c_
 
 unsafe extern "system" fn element_provider_from_point(
     this: *mut c_void,
-    _x: f64,
-    _y: f64,
+    x: f64,
+    y: f64,
     ret: *mut *mut c_void,
 ) -> Hresult {
-    // Hit-testing to the deepest node under the point is follow-up; return the
-    // root, a valid (if coarse) answer.
+    // The deepest node whose bounds hold the point (screen pixels), the last
+    // child first as it paints on top; the root if none does.
+    unsafe fn hit(p: *mut Provider, x: f64, y: f64) -> Option<*mut Provider> {
+        unsafe {
+            let children: &[*mut Provider] = &(*p).children;
+            for &c in children.iter().rev() {
+                if let Some(found) = hit(c, x, y) {
+                    return Some(found);
+                }
+            }
+            let r = screen_rect(p);
+            let inside = x >= r.left && y >= r.top && x < r.left + r.width && y < r.top + r.height;
+            inside.then_some(p)
+        }
+    }
     unsafe {
-        yield_provider((*(this as *mut Provider)).root, ret);
+        let root = (*(this as *mut Provider)).root;
+        yield_provider(hit(root, x, y).unwrap_or(root), ret);
     }
     S_OK
 }
@@ -462,6 +685,23 @@ impl UiaTree {
     /// Build a provider per node in `root`'s subtree, linking parent/child/sibling
     /// pointers so UIA can navigate the whole hierarchy.
     pub fn build(root: &A11yNode) -> UiaTree {
+        Self::build_in(root, core::ptr::null_mut())
+    }
+
+    /// [`build`](Self::build) for the window `hwnd`: the root is hosted by
+    /// the window's provider, bounds are reported in screen pixels, and the
+    /// activatable nodes have the Invoke pattern.
+    pub fn build_hosted(root: &A11yNode, hwnd: *mut c_void) -> UiaTree {
+        Self::build_in(root, hwnd)
+    }
+
+    /// Whether a client still holds one of the tree's nodes (each starts
+    /// with the tree's own reference).
+    pub fn in_use(&self) -> bool {
+        self.nodes.iter().any(|p| p.refcount > 1)
+    }
+
+    fn build_in(root: &A11yNode, hwnd: *mut c_void) -> UiaTree {
         // Flatten depth-first: (node, parent flat-index, index among siblings).
         let mut flat: Vec<(&A11yNode, Option<usize>, usize)> = Vec::new();
         fn walk<'a>(
@@ -488,16 +728,15 @@ impl UiaTree {
                 name.push(0);
                 Provider {
                     vtable: &PROVIDER_VTBL,
+                    invoke_vtable: &INVOKE_VTBL,
                     refcount: 1,
                     name,
                     control_type: control_type(n.role),
                     runtime_id: i as i32 + 1,
-                    rect: UiaRect {
-                        left: n.bounds.0,
-                        top: n.bounds.1,
-                        width: n.bounds.2,
-                        height: n.bounds.3,
-                    },
+                    bounds: n.bounds,
+                    hwnd,
+                    invokable: invokable(n.role),
+                    focusable: focusable(n.role),
                     focused: n.focused,
                     parent: core::ptr::null_mut(),
                     children: Vec::new(),
@@ -571,8 +810,8 @@ unsafe fn dump(p: *mut c_void, depth: usize) {
 }
 
 /// Exercise a provider *tree* through its COM vtables (real COM dispatch) and
-/// print what it returns — the CI self-check (a cross-process UIA client needs a
-/// live desktop UIA stack the runner doesn't reliably provide). Builds a small
+/// print what it returns — the in-process CI self-check (CI also walks a live
+/// window from another process; see `docs/accessibility.md`). Builds a small
 /// representative UI rooted at a window named `name`, then verifies the root
 /// answers `ProviderOptions`/`ControlType`/`Name` and that `Navigate` walks the
 /// full descendant tree.

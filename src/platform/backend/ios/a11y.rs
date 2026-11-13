@@ -11,7 +11,9 @@
 //! screen reader running), and reads back a zero frame otherwise. The
 //! elements are a subclass built at run time (`StippleAccessibilityElement`)
 //! whose `accessibilityActivate` (VoiceOver's double tap) taps the middle of
-//! its node, through the touch path.
+//! its node, through the touch path, and whose `accessibilityTraits` adds a
+//! `UITextField`'s to a text field's (UIKit has no public text-entry trait),
+//! so VoiceOver says "text field" and XCUITest finds it among `textFields`.
 //!
 //! Elements are kept and updated in place, by position in the tree's reading
 //! order, so VoiceOver's cursor stays on its object across updates. An update
@@ -22,11 +24,12 @@
 use std::cell::RefCell;
 use std::ffi::c_void;
 
-use super::a11y_tree::{self, BUTTON, Change, HEADER, Item, SELECTED, STATIC_TEXT};
+use super::a11y_tree::{self, BUTTON, Change, HEADER, Item, SELECTED, STATIC_TEXT, TEXT_ENTRY};
 use super::{
-    CgPoint, CgRect, CgSize, Class, Id, Sel, class, class_addMethod, msg_id, msg_id_usize,
-    msg_usize, msg_void, msg_void_bool, msg_void_id, nsstring, objc_allocateClassPair,
-    objc_getClass, objc_msgSend, objc_registerClassPair, sel, string_of,
+    CgPoint, CgRect, CgSize, Class, Id, ObjcSuper, Sel, class, class_addMethod, msg_id,
+    msg_id_usize, msg_usize, msg_void, msg_void_bool, msg_void_id, nsstring,
+    objc_allocateClassPair, objc_getClass, objc_msgSend, objc_msgSendSuper, objc_registerClassPair,
+    sel, string_of,
 };
 use crate::geometry::Point;
 use crate::platform::access::A11yNode;
@@ -85,7 +88,7 @@ fn uikit_traits(bits: u8) -> u64 {
 }
 
 /// `StippleAccessibilityElement`: a `UIAccessibilityElement` that activates
-/// by tapping its node.
+/// by tapping its node, and whose traits name a text field as one.
 fn element_class() -> Class {
     let name = c"StippleAccessibilityElement";
     unsafe {
@@ -103,9 +106,59 @@ fn element_class() -> Class {
             activate as *const c_void,
             c"B@:".as_ptr(),
         );
+        class_addMethod(
+            cls,
+            sel("accessibilityTraits"),
+            traits as *const c_void,
+            c"Q@:".as_ptr(),
+        );
         objc_registerClassPair(cls);
         cls
     }
+}
+
+thread_local! {
+    /// A `UITextField` whose traits a text field's element borrows.
+    static TEXT_FIELD: std::cell::Cell<Id> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// `accessibilityTraits`: the traits set on the element, and for a text
+/// field the ones a `UITextField` has. UIKit names no public trait for text
+/// entry; a `UITextField` reports it (once the accessibility runtime is
+/// loaded, as it is while VoiceOver or a UI test runs), so it is asked each
+/// time rather than once.
+extern "C" fn traits(this: Id, cmd: Sel) -> u64 {
+    let base = unsafe {
+        let sup = ObjcSuper {
+            receiver: this,
+            super_class: class("UIAccessibilityElement"),
+        };
+        let f: unsafe extern "C" fn(*const ObjcSuper, Sel) -> u64 =
+            std::mem::transmute(objc_msgSendSuper as *const c_void);
+        f(&sup, cmd)
+    };
+    let field = STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let (_, shown) = s.elements.iter().find(|(e, _)| *e == this)?;
+        shown
+            .as_ref()
+            .map(|(item, _)| item.traits & TEXT_ENTRY != 0)
+    });
+    if field != Some(true) {
+        return base;
+    }
+    let text_field = TEXT_FIELD.with(|f| {
+        if f.get().is_null() {
+            f.set(unsafe { msg_id(msg_id(class("UITextField"), sel("alloc")), sel("init")) });
+        }
+        f.get()
+    });
+    if text_field.is_null() {
+        return base;
+    }
+    let get: unsafe extern "C" fn(Id, Sel) -> u64 =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    base | unsafe { get(text_field, sel("accessibilityTraits")) }
 }
 
 /// `accessibilityActivate`: tap the middle of the node, after this call
