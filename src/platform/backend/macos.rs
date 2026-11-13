@@ -761,23 +761,50 @@ unsafe fn dump_ax(el: Id, depth: usize) {
 /// `accessibilityChildren` => the window root's children as native elements, so
 /// AppKit exposes the full Stipple element tree to assistive technologies. The
 /// root node maps to the view itself (an `AXGroup`), so we vend *its* children.
+///
+/// The elements are kept (retained in [`MacWindow::a11y_elements`]) until the
+/// tree changes or the window moves (their frames are in screen coordinates),
+/// and the same objects are handed out on every call. An assistive app in
+/// another process gets tokens for them and asks each one its role, label and
+/// frame in later requests; AppKit doesn't keep them alive for it, so
+/// elements made afresh per call (autoreleased) were gone by then and read as
+/// nothing from outside, though fine in-process.
 extern "C" fn acc_children(this: Id, _cmd: Sel) -> Id {
     let Some(win) = window_for_view(this) else {
         return std::ptr::null_mut();
     };
-    {
-        let tree = win.a11y_tree.borrow();
-        let Some(root) = tree.as_ref() else {
-            return std::ptr::null_mut();
-        };
-        unsafe {
-            let arr = msg_id(class("NSMutableArray"), sel("array"));
-            for child in &root.children {
-                let el = build_ax_element(child, this, this);
-                msg_void_id(arr, sel("addObject:"), el);
-            }
-            arr
+    let tree = win.a11y_tree.borrow();
+    let Some(root) = tree.as_ref() else {
+        return std::ptr::null_mut();
+    };
+    unsafe {
+        let frame: unsafe extern "C" fn(Id, Sel) -> CgRect =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let r = frame(win.window, sel("frame"));
+        let at = [r.origin.x, r.origin.y, r.size.width, r.size.height];
+        let mut cache = win.a11y_elements.borrow_mut();
+        if let Some((arr, cached_at)) = *cache
+            && cached_at == at
+        {
+            return arr;
         }
+        let arr = msg_id(class("NSMutableArray"), sel("array"));
+        for child in &root.children {
+            let el = build_ax_element(child, this, this);
+            msg_void_id(arr, sel("addObject:"), el);
+        }
+        msg_id(arr, sel("retain"));
+        if let Some((old, _)) = cache.replace((arr, at)) {
+            msg_void(old, sel("release"));
+        }
+        arr
+    }
+}
+
+/// Drop the kept accessibility elements (see [`acc_children`]).
+fn clear_ax_elements(win: &MacWindow) {
+    if let Some((arr, _)) = win.a11y_elements.borrow_mut().take() {
+        unsafe { msg_void(arr, sel("release")) };
     }
 }
 
@@ -1320,6 +1347,9 @@ struct MacWindow {
     /// The current accessibility tree (pushed each frame by the App). The view's
     /// `accessibilityChildren` builds native elements from this on demand.
     a11y_tree: RefCell<Option<crate::platform::access::A11yNode>>,
+    /// The native elements vended for `a11y_tree` (a retained `NSArray`) and
+    /// the window frame they were placed for; see [`acc_children`].
+    a11y_elements: RefCell<Option<(Id, [f64; 4])>>,
     /// The cursor the app asked for, set again on each mouse move over the
     /// view (AppKit resets it at the window's edges and title bar).
     cursor: Cell<CursorIcon>,
@@ -1476,7 +1506,11 @@ impl Window for MacWindow {
         if !root.name.is_empty() {
             *self.a11y_label.borrow_mut() = root.name.clone();
         }
+        if self.a11y_tree.borrow().as_ref() == Some(root) {
+            return;
+        }
         *self.a11y_tree.borrow_mut() = Some(root.clone());
+        clear_ax_elements(self);
     }
     fn set_cursor(&self, cursor: CursorIcon) {
         self.cursor.set(cursor);
@@ -1733,6 +1767,7 @@ unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, Platf
             fb: RefCell::new(Framebuffer::default()),
             a11y_label: RefCell::new(attrs.title.clone()),
             a11y_tree: RefCell::new(None),
+            a11y_elements: RefCell::new(None),
             cursor: Cell::new(CursorIcon::Default),
             ime: RefCell::new(None),
             info: Cell::new(WindowInfo::from_size(size, ScaleFactor::new(scale))),
@@ -1790,6 +1825,7 @@ unsafe fn close_windows() {
         closed
     });
     for w in closed {
+        clear_ax_elements(&w);
         unsafe {
             // No more callbacks into a window we no longer know.
             msg_void_id(w.window, sel("setDelegate:"), std::ptr::null_mut());
