@@ -3876,10 +3876,31 @@ jobs:
   # the Storage Access Framework picker (DocumentsUI driven through
   # uiautomator: a file picked and read, one cancelled, one saved, and the
   # process killed under the picker coming back cleanly).
+  # Two fingers pinch the button through a virtual touch screen (the shell's
+  # uinput command, through the kernel and the input pipeline like a real
+  # screen), and the edge swipe goes back: the emulator gets a navigation bar
+  # (hw.mainKeys=no; the default profile's hardware keys leave SystemUI's
+  # edge handler off, so no swipe ever went back).
+  # API 34 runs everything; API 33 (OnBackInvokedCallback without progress)
+  # and API 30 (the Back key and onBackPressed, no predictive back) run the
+  # quick checks: the tap, the pinch where uinput exists (not on 30), the
+  # accessibility nodes, Back handled through the callback or the key, the
+  # edge swipe and a cancelled one, the lifecycle, and a declined Back going
+  # to the system.
   # Screenshots and the uiautomator dump are uploaded as an artifact.
   visual-android:
-    name: Visual test (Android emulator)
+    name: Visual test (Android emulator, API ${{ matrix.api-level }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api-level: 34
+            quick: "0"
+          - api-level: 33
+            quick: "1"
+          - api-level: 30
+            quick: "1"
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -3897,12 +3918,14 @@ jobs:
       # An accessibility service standing in for TalkBack (which the emulator
       # images don't ship): see .github/a11y/android/Probe.java.
       - name: Build the accessibility probe APK
+        if: matrix.api-level == 34
         run: bash .github/a11y/android/build-probe.sh a11yprobe.apk
 
       # The backend writes its Java classes (the host view, its
       # InputConnection, the accessibility node provider) as a dex file at run
       # time: the SDK's dexdump must read the same bytes back.
       - name: Check the run-time dex with dexdump
+        if: matrix.api-level == 34
         run: |
           STIPPLE_DEX_OUT="$PWD/stipple-classes.dex" cargo test --lib platform::dex::
           dexdump="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/dexdump"
@@ -3924,27 +3947,37 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run on the emulator (touch, keys, IME, accessibility, back, lifecycle, saved state, notifications, document picker)
+      - name: Run on the emulator (touch, pinch, keys, IME, accessibility, back, edge swipe, lifecycle, saved state, notifications, document picker)
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          STIPPLE_ANDROID_QUICK: ${{ matrix.quick }}
+          # The edge swipe must run, not be skipped.
+          STIPPLE_ANDROID_STRICT: "1"
         with:
-          api-level: 34
+          api-level: ${{ matrix.api-level }}
           arch: x86_64
           target: google_apis
           force-avd-creation: true
           disable-animations: true
-          # Then, from another process through the accessibility framework
-          # as TalkBack: the probe service reads the tree, moves
+          # A navigation bar instead of hardware keys, so gesture navigation
+          # (and its edge swipe) works. (The action runs each line on its own.)
+          pre-emulator-launch-script: >-
+            sed -i 's/^hw.mainKeys=.*/hw.mainKeys=no/' "${ANDROID_AVD_HOME:-$HOME/.android/avd}/test.avd/config.ini"
+            && grep -q '^hw.mainKeys=no' "${ANDROID_AVD_HOME:-$HOME/.android/avd}/test.avd/config.ini"
+            || echo 'hw.mainKeys=no' >> "${ANDROID_AVD_HOME:-$HOME/.android/avd}/test.avd/config.ini"
+          # Then (API 34), from another process through the accessibility
+          # framework as TalkBack: the probe service reads the tree, moves
           # accessibility focus through every stop, clicks, sets the field's
           # text (.github/a11y/android/test-probe.sh).
           script: |
             bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
-            bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output
+            if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: stipple-android-screenshot
+          name: stipple-android-screenshot-api${{ matrix.api-level }}
           path: |
             visual_output/*.png
             visual_output/*.xml

@@ -176,10 +176,13 @@ backend does (the touch, then the first finger's pointer events), and
 `App::advance_fling` / `App::advance_long_press` stand in for the loop's
 frames and the long-press timer; `src/touch_tests.rs` and the recognizer's
 own tests drive long presses, sideways strips and pinches through them.
-Two-finger gestures can't be scripted on a device from outside (`adb shell
-input` has one finger), so on devices CI checks them with `touchdemo`'s iOS
-simulator self-test, which feeds the backend's touch path two synthetic
-fingers.
+On devices, CI pinches `androiddemo`'s button on the Android emulator with
+two fingers: `adb shell input` has only one, so the script makes a virtual
+touch screen with the shell's `uinput` command (Android 13 and 14 have it,
+11 doesn't), whose events go through the kernel and the system's input
+pipeline as a real screen's do; the app logs the pinch's start, scale and
+end, and no tap. On iOS, `touchdemo`'s simulator self-test feeds the
+backend's touch path two synthetic fingers.
 
 ## The pointer leaving the window
 

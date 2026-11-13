@@ -342,21 +342,50 @@ Three manifest settings matter:
 
 [`examples/androiddemo/test-on-device.sh`](../../examples/androiddemo/test-on-device.sh)
 installs the APK on whatever device `adb` talks to (`ANDROID_SERIAL` picks
-one), checks a frame is presented and the timer ticks, taps the button, reads
-the accessibility nodes with `uiautomator dump`, presses Back (handled), sends
-the app to the background and back and trims its memory, swipes the list (it
-must scroll, without tapping a row), long-presses a row (`input swipe` that
-stays put for 800 ms: its context menu must open without tapping the row, and
-a tap on the item found in `uiautomator dump` picks it), swipes the strip of
-chips sideways (it must scroll), types into the field and runs the input
-connection self-test (the field must end up as `Stipple日本!`), presses Back
-until the app no longer handles it, and saves screenshots. On Android 13 and
-later it also checks predictive back (Back through the callback while the app
-takes it, an edge swipe with its progress and a cancelled one on Android 14,
-the system going back by itself when the app declines), and then process
-death: two taps, Home (the state is saved), `am kill`, relaunch, and the count
-must come back. CI runs it on an API 34 x86_64 emulator
-(the `visual-android` job). By hand:
+one), checks a frame is presented and the timer ticks, taps the button,
+pinches it with two fingers (it must hear the pinch's start, scale and end,
+and not tap), reads the accessibility nodes with `uiautomator dump`, presses
+Back (handled), swipes from the left edge (it goes back) and takes another
+swipe back to the edge (it doesn't), sends the app to the background and back
+and trims its memory, swipes the list (it must scroll, without tapping a
+row), long-presses a row (`input swipe` that stays put for 800 ms: its
+context menu must open without tapping the row, and a tap on the item found
+in `uiautomator dump` picks it), swipes the strip of chips sideways (it must
+scroll), types into the field and runs the input connection self-test (the
+field must end up as `Stipple日本!`), presses Back until the app no longer
+handles it, and saves screenshots. On Android 13 and later it also checks
+predictive back (Back and the edge swipe through the callback while the app
+takes it, with the swipe's progress and a cancelled one on Android 14, the
+system going back by itself when the app declines); before, the declined Back
+reaches the app and `onBackPressed` sends the activity away. Then process
+death: two taps, Home (the state is saved), `am kill`, relaunch, and the
+count must come back.
+
+- **The pinch.** `adb shell input` has one finger, so the script makes a
+  virtual touch screen with the shell's `uinput` command (it reads the
+  device and its events as JSON on stdin: a direct touch screen with
+  multi-touch slots the size of the display) and puts two fingers on the
+  button, spreading them from 60 to 180 px apart, then closing them again.
+  Its events go through the kernel and the system's input pipeline as a real
+  screen's do. Android 13 and 14 have `uinput`; Android 11 doesn't, and the
+  pinch is skipped there.
+- **The edge swipe needs a navigation bar.** SystemUI's back gesture runs in
+  the navigation bar's edge handler, and a device with hardware navigation
+  keys has no bar. An AVD made without a device profile (as CI's emulator
+  action makes them, 320x640) says `hw.mainKeys=yes` in its `config.ini`, so
+  the swipe never goes back there; set `hw.mainKeys=no` (or use a device
+  profile such as `pixel_6`). The script turns gesture navigation on if it's
+  off (`cmd overlay enable ...navbar.gestural`) and skips the swipe, with the
+  reason, when SystemUI's edge handler is still off;
+  `STIPPLE_ANDROID_STRICT=1` fails instead.
+- **`STIPPLE_ANDROID_QUICK=1`** runs only what differs between releases:
+  the tap and the pinch, the accessibility nodes, Back (handled, the edge
+  swipe, a cancelled one, declined), and the lifecycle.
+
+CI runs it on x86_64 emulators (the `visual-android` job): everything on
+API 34, and the quick checks on API 33 (`OnBackInvokedCallback` without
+progress) and API 30 (the Back key and `onBackPressed`), each with
+`hw.mainKeys=no`. By hand:
 
 ```sh
 avdmanager create avd -n stipple -k "system-images;android-34;google_apis;x86_64" -d pixel_6
@@ -368,9 +397,6 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
 
 ## Known gaps
 
-- **Two-finger gestures aren't checked on the emulator.** `adb shell input`
-  has a single finger, so pinches are covered by the recognizer's unit tests
-  and by `touchdemo`'s iOS simulator self-test, which share the code.
 - **A slow app loses quick swipes' moves.** On a busy UI thread (the emulator's
   software rendering takes a few hundred milliseconds a frame), Android can fold
   a quick swipe's moves into its release; the list then scrolls the whole way

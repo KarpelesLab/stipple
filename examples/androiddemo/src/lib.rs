@@ -36,6 +36,10 @@
 //!   tapped` if one of its rows is tapped (a swipe must not tap one);
 //! - `androiddemo: row N pinned` when the item of a row's context menu is
 //!   picked: a long press (`adb shell input swipe x y x y 800`) opens it;
+//! - `androiddemo: pinch Began|Changed|Ended scale S` as two fingers pinch
+//!   the button (`Element::on_pinch`), without tapping it; CI's script
+//!   touches it with two fingers on a virtual touch screen it makes with the
+//!   shell's `uinput` command, since `adb shell input` has one finger;
 //! - `androiddemo: strip scrolled to N` as a sideways swipe scrolls the strip
 //!   of chips above the list;
 //! - `androiddemo: notify Ok(())` (or the error) when *Notify* posts a
@@ -51,7 +55,8 @@
 mod app {
     use std::ffi::c_void;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+    use stipple::core::{PinchEvent, PinchPhase};
     use stipple::platform::BackGesture;
     use stipple::platform::backend::android::{self, ANativeActivity};
     use stipple::platform::dialog::{self, FileDialog};
@@ -72,6 +77,8 @@ mod app {
 
     /// Whether the back gesture's progress passed a quarter (logged once).
     static QUARTER: AtomicBool = AtomicBool::new(false);
+    /// The pinch's scale in quarters from 1, as last logged.
+    static PINCH_STEP: AtomicI64 = AtomicI64::new(0);
     /// Frames built, to show the spinner is driven by the display.
     static FRAMES: AtomicU32 = AtomicU32::new(0);
     /// The list's scroll offset in the frame last built (`f64` bits).
@@ -115,13 +122,28 @@ mod app {
         ])
         .gap(theme.spacing.md);
         // The button takes the space the rest leaves, so it covers the middle
-        // of the screen and CI can tap it at the screen's center.
+        // of the screen and CI can tap it at the screen's center. Two fingers
+        // pinch it (and don't tap it).
         let tap = button_labeled(&theme, "Tap me")
             .width(280.0)
             .grow(1.0)
             .on_tap(cx, |s: &mut State| {
                 s.taps += 1;
                 println!("androiddemo: tapped {}", s.taps);
+            })
+            .on_pinch(cx, |ev: &PinchEvent, _: &mut State| match ev.phase {
+                // Each quarter further from 1 (logged once), and the start
+                // and end.
+                PinchPhase::Changed => {
+                    let step = ((ev.scale - 1.0) * 4.0).round() as i64;
+                    if PINCH_STEP.swap(step, Ordering::Relaxed) != step {
+                        println!("androiddemo: pinch Changed scale {:.2}", ev.scale);
+                    }
+                }
+                phase => {
+                    PINCH_STEP.store(0, Ordering::Relaxed);
+                    println!("androiddemo: pinch {phase:?} scale {:.2}", ev.scale);
+                }
             });
         let greeting = if name.is_empty() {
             format!("Tapped {} times", state.taps)

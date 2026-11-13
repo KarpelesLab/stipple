@@ -5,7 +5,10 @@
 #   examples/androiddemo/test-on-device.sh stipple.apk [screenshot-dir]
 #
 # 1. a frame reaches the window, and the app's timer ticks (loop wakeups);
-# 2. a tap on the button in the middle of the screen registers (touch);
+# 2. a tap on the button in the middle of the screen registers (touch), and
+#    two fingers pinch it, spreading then closing, without tapping it (a
+#    virtual touch screen made with the shell's `uinput` command, which
+#    Android 11 doesn't have yet: `adb shell input` has one finger);
 # 3. a swipe over the list scrolls it without tapping a row, and a tap there
 #    still taps one (touch scrolling);
 # 4. a long press on a row (a swipe that stays put for 800 ms) opens its
@@ -14,8 +17,11 @@
 # 5. the accessibility tree reaches the system: `uiautomator dump` lists the
 #    button and the list's rows as virtual views (the node provider);
 # 6. Back goes to the app first (it handles one by resetting the tap count),
-#    Home and `am start` send it to the background and back, and a memory
-#    trim reaches it (the lifecycle events);
+#    on Android 13 and later through its OnBackInvokedCallback; with gesture
+#    navigation (Android 10 and later), a swipe from the left edge goes back
+#    too (on Android 14 the app hears its progress), and one the finger takes
+#    back to the edge doesn't; Home and `am start` send it to the background
+#    and back, and a memory trim reaches it (the lifecycle events);
 # 7. Tab moves focus to the text field, the input method connects to it (an
 #    InputConnection with a text inputType), and `input text` types into it
 #    (keys); then the app drives the connection as a composing keyboard would
@@ -32,17 +38,29 @@
 #    back (Android 13 and later, the manifest's enableOnBackInvokedCallback),
 #    Back reaches the app through its OnBackInvokedCallback while it would go
 #    back (the tap count isn't 0), and goes straight to the system, which
-#    sends the app to the background, while it wouldn't;
+#    sends the app to the background, while it wouldn't (before Android 13,
+#    the app hears it and declines, and the activity's onBackPressed sends
+#    it away);
 # 11. process death: with two taps counted and the field typed in, Home has
 #    the app save its state (onSaveInstanceState), `am kill` ends the
 #    backgrounded process, and starting it again restores the count and the
 #    text from the saved Bundle;
 # 12. screenshots of each state land in the screenshot directory.
+#
+# STIPPLE_ANDROID_QUICK=1 runs only what differs between Android releases
+# (1, 2, 5, 6 and 10), as CI does on its older emulators.
+#
+# The edge swipe needs a navigation bar: an emulator made without a device
+# profile has hardware keys instead (`hw.mainKeys=yes` in its config.ini),
+# so no back gesture, and the swipe is skipped. STIPPLE_ANDROID_STRICT=1 (CI,
+# which sets `hw.mainKeys=no`) fails instead.
 set -euo pipefail
 
 apk="${1:?usage: test-on-device.sh app.apk [screenshot-dir]}"
 shots="${2:-visual_output}"
 pkg=com.karpeleslab.stipple
+quick="${STIPPLE_ANDROID_QUICK:-0}"
+strict="${STIPPLE_ANDROID_STRICT:-0}"
 mkdir -p "$shots"
 
 log() { adb logcat -d -s stipple:I 2>/dev/null || true; }
@@ -113,6 +131,71 @@ if ((sdk >= 33)); then
   wait_for "stipple: back callback registered" 20
 fi
 
+# Pinch: `adb shell input` has one finger, so a virtual touch screen (made
+# with the shell's `uinput` command, which reads its device and events as
+# JSON) puts two on the button, 60 px apart, spreads them to 180 px, lifts
+# them, and then closes them from 180 px to 60 px. Its events go through the
+# kernel and the system's input pipeline as a real screen's do.
+# The uinput script for two fingers going from $1 to $2 px apart along a row
+# through the button's center, by $3 px a step, 50 ms apart.
+pinch_events() {
+  local from="$1" to="$2" by="$3" d
+  local move='{"id":1,"command":"inject","events":[3,47,0,3,53,%d,3,47,1,3,53,%d,0,0,0]}\n'
+  local delay='{"id":1,"command":"delay","duration":%d}\n'
+  printf '{"id":1,"command":"inject","events":[3,47,0,3,57,1,3,53,%d,3,54,%d,1,330,1,0,0,0]}\n' \
+    $((tap_x - from / 2)) "$tap_y"
+  printf "$delay" 100
+  printf '{"id":1,"command":"inject","events":[3,47,1,3,57,2,3,53,%d,3,54,%d,0,0,0]}\n' \
+    $((tap_x + from / 2)) "$tap_y"
+  for ((d = from + by; (by > 0 && d <= to) || (by < 0 && d >= to); d += by)); do
+    printf "$delay" 50
+    printf "$move" $((tap_x - d / 2)) $((tap_x + d / 2))
+  done
+  printf "$delay" 100
+  printf '{"id":1,"command":"inject","events":[3,47,1,3,57,-1,0,0,0]}\n'
+  printf '{"id":1,"command":"inject","events":[3,47,0,3,57,-1,1,330,0,0,0,0]}\n'
+  printf "$delay" 500
+}
+if adb shell command -v uinput >/dev/null 2>&1; then
+  taps="$(count "androiddemo: tapped")"
+  begun="$(count "androiddemo: pinch Began")"
+  abs='"info":{"value":0,"minimum":0,"maximum":%d,"fuzz":0,"flat":0,"resolution":0}'
+  {
+    # A direct touch screen (INPUT_PROP_DIRECT) with BTN_TOUCH and the
+    # multi-touch slots, mapped onto the display's pixels.
+    printf '{"id":1,"command":"register","name":"stipple-pinch","vid":6353,"pid":43981,"bus":"usb",'
+    printf '"configuration":[{"type":100,"data":[0,1,3]},{"type":101,"data":[330]},'
+    printf '{"type":103,"data":[47,53,54,57]},{"type":110,"data":[1]}],"abs_info":['
+    printf "{\"code\":47,$abs},{\"code\":53,$abs},{\"code\":54,$abs},{\"code\":57,$abs}]}\n" \
+      9 $((width - 1)) $((height - 1)) 65535
+    # The system picks up the new device.
+    printf '{"id":1,"command":"delay","duration":1500}\n'
+    pinch_events 60 180 12
+    pinch_events 180 60 -12
+  } | adb shell uinput - >/dev/null
+  for _ in $(seq 20); do
+    (($(count "androiddemo: pinch Ended") >= 2)) && break
+    sleep 1
+  done
+  log | grep -E "androiddemo: pinch (Began|Ended)" | tail -4 || true
+  ends="$(log | { grep -oE "androiddemo: pinch Ended scale [0-9.]+" || true; } | tail -2 \
+    | awk '{ print $NF }' | tr '\n' ' ')"
+  read -r spread closed <<< "$ends"
+  if (($(count "androiddemo: pinch Began") < begun + 2)) \
+    || ! awk -v s="${spread:-0}" -v c="${closed:-9}" 'BEGIN { exit !(s > 2.5 && c < 0.4) }'; then
+    echo "the pinch didn't reach the app (ended at scales: $ends):" >&2
+    log | grep -v "androiddemo: tick" | tail -20 >&2
+    exit 1
+  fi
+  if (($(count "androiddemo: tapped") != taps)); then
+    echo "the pinch tapped the button" >&2
+    exit 1
+  fi
+  echo "android: pinched to $spread and back to $closed"
+else
+  echo "android: no uinput command (Android 11 and older); skipping the pinch" >&2
+fi
+
 # Accessibility: the provider's virtual views show in the window's hierarchy.
 wait_for "stipple: host view installed" 5
 adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null
@@ -139,81 +222,109 @@ if ((sdk >= 33)); then
   # Android 14's OnBackAnimationCallback hears a key press as a gesture too.
   log | grep "androiddemo: back gesture" || echo "android: no back gesture progress for the key"
 fi
-if ((sdk >= 34)); then
-  # The back gesture itself, with gesture navigation: a swipe from the left
-  # edge reaches the app with its progress (OnBackAnimationCallback), and
-  # goes back when it lifts...
-  # Switching the navigation mode recreates the activity, so wait for that
-  # to settle before tapping.
-  adb shell cmd overlay enable com.android.internal.systemui.navbar.gestural || true
-  for _ in $(seq 20); do
-    [ "$(adb shell settings get secure navigation_mode | tr -d '\r')" = 2 ] && break
+
+# The back gesture, with gesture navigation (Android 10 and later): a swipe
+# from the left edge goes back (through the callback on Android 13, with its
+# progress on Android 14, as the Back key before), and one the finger takes
+# back to the edge goes nowhere. SystemUI's edge handler only runs with a
+# navigation bar: a device with hardware keys has none.
+gestures=no
+if ((sdk >= 29)); then
+  if [ "$(adb shell settings get secure navigation_mode | tr -d '\r')" != 2 ]; then
+    # Switching the navigation mode recreates the activity: wait for it to
+    # settle before going on.
+    adb shell cmd overlay enable com.android.internal.systemui.navbar.gestural || true
+    for _ in $(seq 20); do
+      [ "$(adb shell settings get secure navigation_mode | tr -d '\r')" = 2 ] && break
+      sleep 1
+    done
+    sleep 5
+  fi
+  for _ in $(seq 10); do
+    if adb shell dumpsys activity service com.android.systemui 2>/dev/null \
+      | grep -A1 "EdgeBackGestureHandler:" | grep -q "mIsEnabled=true"; then
+      gestures=yes
+      break
+    fi
     sleep 1
   done
-  sleep 5
-  gestures=yes
-  if [ "$(adb shell settings get secure navigation_mode | tr -d '\r')" != 2 ]; then
-    echo "android: gesture navigation unavailable; skipping the back gesture" >&2
-    gestures=no
+  if [ "$gestures" = no ]; then
+    why="no back gesture: SystemUI's edge handler isn't on (navigation_mode $(adb shell settings get secure navigation_mode | tr -d '\r'), qemu.hw.mainkeys '$(adb shell getprop qemu.hw.mainkeys | tr -d '\r')': hardware keys leave no navigation bar)"
+    if [ "$strict" = 1 ]; then
+      echo "$why" >&2
+      exit 1
+    fi
+    echo "android: $why; skipping the edge swipe" >&2
   fi
 fi
-if ((sdk >= 34)) && [ "$gestures" = yes ]; then
+# Tap the button (the app then has something to go back from), and wait for
+# predictive back's callback where there is one.
+tap_for_back() {
+  local registered
   registered="$(count "stipple: back callback registered")"
+  adb shell input tap "$tap_x" "$tap_y"
+  if ((sdk >= 33)); then
+    for _ in $(seq 20); do
+      (($(count "stipple: back callback registered") > registered)) && break
+      sleep 1
+    done
+  else
+    sleep 2
+  fi
+}
+# Wait up to 20 s for more than $2 lines matching $1.
+wait_more() {
+  local i
+  for ((i = 0; i < 20; i++)); do
+    (($(count "$1") > $2)) && return 0
+    sleep 1
+  done
+  return 1
+}
+if [ "$gestures" = yes ]; then
   handled="$(count "androiddemo: back handled")"
   started="$(count "androiddemo: back gesture Started")"
-  adb shell input tap "$tap_x" "$tap_y"
-  for _ in $(seq 20); do
-    (($(count "stipple: back callback registered") > registered)) && break
-    sleep 1
-  done
+  callback="$(count "stipple: back from OnBackInvokedCallback")"
+  tap_for_back
   adb shell input swipe 1 $((height / 2)) $((width * 2 / 3)) $((height / 2)) 800
-  for _ in $(seq 20); do
-    (($(count "androiddemo: back gesture Started") > started)) && break
-    sleep 1
-  done
-  if (($(count "androiddemo: back gesture Started") <= started)); then
-    # An emulator's system UI doesn't always take an injected edge swipe
-    # as the back gesture; the key path above was checked either way.
-    echo "android: the edge swipe didn't reach the app as a back gesture; skipping its checks" >&2
-    adb shell input keyevent KEYCODE_BACK
-    sleep 3
-    gestures=no
-  fi
-fi
-if ((sdk >= 34)) && [ "$gestures" = yes ]; then
-  wait_for "androiddemo: back gesture progress" 10
-  for _ in $(seq 20); do
-    (($(count "androiddemo: back handled") > handled)) && break
-    sleep 1
-  done
-  if (($(count "androiddemo: back handled") <= handled)); then
-    echo "the back gesture didn't go back" >&2
-    log | tail -20 >&2
+  if ! wait_more "androiddemo: back handled" "$handled"; then
+    echo "the edge swipe didn't go back:" >&2
+    log | grep -v "androiddemo: tick" | tail -20 >&2
+    adb exec-out screencap -p > "$shots/android-edge-swipe.png" || true
     exit 1
   fi
+  if ((sdk >= 33)) && (($(count "stipple: back from OnBackInvokedCallback") <= callback)); then
+    echo "the edge swipe went back without the OnBackInvokedCallback" >&2
+    exit 1
+  fi
+  if ((sdk >= 34)); then
+    # Its start and progress reached the app first.
+    if (($(count "androiddemo: back gesture Started") <= started)); then
+      echo "the edge swipe's start didn't reach the app" >&2
+      exit 1
+    fi
+    wait_for "androiddemo: back gesture progress" 10
+  fi
+  echo "android: the edge swipe went back"
   # ...while one the finger takes back to the edge goes nowhere.
-  registered="$(count "stipple: back callback registered")"
   handled="$(count "androiddemo: back handled")"
-  adb shell input tap "$tap_x" "$tap_y"
-  for _ in $(seq 20); do
-    (($(count "stipple: back callback registered") > registered)) && break
-    sleep 1
-  done
+  tap_for_back
   y=$((height / 2))
-  adb shell "input motionevent DOWN 1 $y; for x in 40 80 120 160 200 240 280 320 360 400; do input motionevent MOVE \$x $y; done; sleep 0.5; for x in 360 300 240 180 120 60 20 3; do input motionevent MOVE \$x $y; done; sleep 0.5; input motionevent UP 3 $y"
-  wait_for "androiddemo: back gesture Cancelled" 20
-  sleep 1
+  out="$(for i in 1 2 3 4 5 6 7 8; do echo $((width * i * 7 / 64)); done | tr '\n' ' ')"
+  back="$(for i in 6 4 2 1; do echo $((width * i * 7 / 64)); done | tr '\n' ' ')"
+  adb shell "input motionevent DOWN 1 $y; for x in $out; do input motionevent MOVE \$x $y; done; sleep 0.5; for x in $back 3; do input motionevent MOVE \$x $y; done; sleep 0.5; input motionevent UP 3 $y"
+  if ((sdk >= 34)); then
+    wait_for "androiddemo: back gesture Cancelled" 20
+  fi
+  sleep 3
   if (($(count "androiddemo: back handled") > handled)); then
     echo "a cancelled back gesture went back" >&2
     exit 1
   fi
   # The count is 1 again: the Back key resets it.
   adb shell input keyevent KEYCODE_BACK
-  for _ in $(seq 20); do
-    (($(count "androiddemo: back handled") > handled)) && break
-    sleep 1
-  done
-  echo "android: the back gesture's progress reached the app"
+  wait_more "androiddemo: back handled" "$handled"
+  echo "android: the cancelled edge swipe didn't go back"
 fi
 # Home sends the app to the background, and starting it brings it back.
 adb shell input keyevent KEYCODE_HOME
@@ -223,6 +334,10 @@ wait_for "androiddemo: lifecycle Foreground" 30
 adb shell am send-trim-memory "$pkg" RUNNING_LOW
 wait_for "androiddemo: lifecycle LowMemory" 20
 sleep 2
+
+# The checks from here to the declined Back are the same on every release:
+# not in quick mode. (The block isn't indented: it's most of the script.)
+if [ "$quick" != 1 ]; then
 
 # A finger drag over the list at the bottom of the screen scrolls it (and
 # flings it on), and doesn't tap the row it started on. It runs before typing,
@@ -434,6 +549,7 @@ if [ -z "$new_pid" ] || [ "$new_pid" = "$old_pid" ] || adb logcat -d | grep -qE 
   exit 1
 fi
 sleep 2
+fi
 # The checks below look for their own lines.
 adb logcat -c
 
@@ -465,10 +581,16 @@ else
     log | grep -q "androiddemo: back not handled" && break
   done
   wait_for "androiddemo: back not handled" 10
+  # The activity's onBackPressed then finishes it (or, on Android 12, moves
+  # it to the back).
+  wait_for "androiddemo: lifecycle Background" 20
+  echo "android: Back went to the system (onBackPressed)"
 fi
 
-# Process death. Back in the foreground (the activity Back finished starts
-# again, or one moved to the back returns), two taps (the count is 0 again).
+# Process death (not in quick mode; not indented, like the block above).
+# Back in the foreground (the activity Back finished starts again, or one
+# moved to the back returns), two taps (the count is 0 again).
+if [ "$quick" != 1 ]; then
 frames="$(count "Stipple Android: window [0-9]+x[0-9]+ presented=true")"
 adb shell am start -n "$pkg/android.app.NativeActivity" >/dev/null
 for _ in $(seq 30); do
@@ -515,4 +637,5 @@ if ! grep -q "Tapped 2 times" "$shots/android-restored-ui.xml"; then
   exit 1
 fi
 echo "android: state restored after process death"
+fi
 echo "android: all checks passed"

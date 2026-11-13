@@ -403,7 +403,8 @@ for attention and counts the bells in the Dock badge.
 
 ## What CI checks
 
-- **Android** (an API 34 emulator, `visual-android`): Back reaches
+- **Android** (API 34, 33 and 30 emulators, `visual-android`; 33 and 30 run
+  the release-dependent checks only): Back reaches
   `androiddemo`, which handles one (resetting its tap count) and leaves the
   next to the system; Home sends it to the background and `am start` brings it
   back; `am send-trim-memory RUNNING_LOW` is a memory warning. Each is checked
@@ -412,7 +413,13 @@ for attention and counts the bells in the Dock badge.
   key event), an edge swipe brings `Started` and the progress and goes back,
   a swipe taken back is `Cancelled` and doesn't, and a Back while the app
   wouldn't take it goes to the system (the app goes to the background without
-  being asked). Process death: with two taps counted, Home saves the state,
+  being asked). On API 33 the Back key and the edge swipe go through the
+  callback without progress; on API 30 (no predictive back) they arrive as
+  the Back key, and the declined one reaches the app, which says no, and
+  `onBackPressed` sends the activity away. The emulators get a navigation
+  bar (`hw.mainKeys=no`): with the default profile's hardware keys
+  SystemUI's edge handler is off and no swipe goes back. Process death
+  (API 34): with two taps counted, Home saves the state,
   `am kill` ends the process, and starting it again restores the count (in
   the log and in the accessibility tree's "Tapped 2 times").
 - **X11** (Xvfb, with a script standing in for the window manager): a

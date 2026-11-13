@@ -352,10 +352,11 @@ See [window-lifecycle.md](window-lifecycle.md#going-to-the-background-mobile).
 ⁵⁸ Android 13 and later, with `android:enableOnBackInvokedCallback` in the
 manifest: an `OnBackInvokedCallback` (a class the backend writes as dex at run
 time) registered only while the app would go back, and on Android 14 and later
-the gesture's progress (`OnBackAnimationCallback`). Checked on the CI emulator
-(API 34): the Back key through the callback, an edge swipe with its progress,
-a cancelled swipe, and a Back the app declined going to the system. API 33
-(no progress) is build-checked only. iOS: see ⁶⁴. See
+the gesture's progress (`OnBackAnimationCallback`). Checked on CI emulators:
+on API 34 the Back key through the callback, an edge swipe with its progress,
+a cancelled swipe, and a Back the app declined going to the system; on API 33
+the same through the callback without progress; on API 30 (no predictive
+back) the Back key, the edge swipe and `onBackPressed`. iOS: see ⁶⁴. See
 [window-lifecycle.md](window-lifecycle.md#predictive-back-android-13-and-later).
 
 ⁵⁹ Bytes from `App::save_state`, kept in the activity's saved `Bundle`
@@ -370,9 +371,10 @@ axes, long presses, pinches). On devices: `touchdemo`'s iOS simulator
 self-test long-presses a row (its menu opens, its item is picked), drags a
 strip sideways and pinches with two synthetic fingers through the backend's
 touch path; the Android emulator long-presses a row and swipes a strip with
-`adb shell input swipe` (no pinch: `adb` has one finger); headless Chrome
-taps and long-presses `webdemo` with synthetic `TouchEvent`s. Not yet tried
-on a real phone. See [pointer-events.md](pointer-events.md#touch-gestures).
+`adb shell input swipe`, and pinches a button with two fingers on a virtual
+touch screen (the shell's `uinput`, through the system's input pipeline; API
+34 and 33); headless Chrome taps and long-presses `webdemo` with synthetic
+`TouchEvent`s. Not yet tried on a real phone. See [pointer-events.md](pointer-events.md#touch-gestures).
 
 ⁶¹ The in-window bar Stipple draws on Linux; its menus open on a tap. Phone
 apps usually leave `App::menu` out on these targets. Not run in CI there. See

@@ -1436,9 +1436,15 @@ Most input only works on X11 today.
   `BackGesture::Started { edge }`, `Progressed { progress }` and `Cancelled`.
   Opt-in with `android:enableOnBackInvokedCallback` (the demo sets it); the
   Back key path stays for older releases and apps without the flag. Unit-tested
-  in the App; **verified on an API 34 emulator** (key Back through the
-  callback, an edge swipe with progress, a cancelled swipe, a declined Back
-  going to the system; CI steps added); API 33 build-checked only.
+  in the App; **verified on API 34, 33 and 30 emulators** (run locally, CI
+  matrix added): on 34 key Back through the callback, an edge swipe with
+  progress, a cancelled swipe, a declined Back going to the system; on 33
+  the same through the callback without progress; on 30 the Back key path,
+  the edge swipe as a Back key and `onBackPressed`. The edge swipe never
+  reached the app on CI before: the action's default AVD profile has
+  hardware keys (`hw.mainKeys=yes`), so no navigation bar and no SystemUI
+  edge handler; the job now sets `hw.mainKeys=no`, and the script fails
+  (`STIPPLE_ANDROID_STRICT`) rather than skipping.
 - ✅ iOS's interactive edge swipe for going back: while `back_enabled` says
   yes, a finger from the leading edge (the left, the right under a
   right-to-left theme, which the App passes on) that moves inward is the back
@@ -1472,7 +1478,10 @@ Most input only works on X11 today.
   `touchdemo`'s iOS simulator self-test long-presses a row and picks its menu
   item, drags a strip sideways and pinches with two synthetic fingers through
   the backend's touch path; the Android emulator long-presses (`input swipe x
-  y x y 800`) and swipes sideways (no pinch: `adb` has one finger); headless
+  y x y 800`), swipes sideways, and pinches with two fingers on a virtual
+  touch screen made with the shell's `uinput` command (through the kernel
+  and the input pipeline; spread to 3x and closed to 0.33x, no tap; API 34
+  and 33, Android 11 has no `uinput`); headless
   Chrome taps and long-presses with synthetic `TouchEvent`s. The Android
   steps and the web selftest were run locally (API 34 emulator, headless
   Chrome) and pass; the iOS steps are added with this change and haven't run
