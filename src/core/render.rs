@@ -14,7 +14,7 @@
 
 use crate::core::element::{Align, BoxStyle, Element, ElementKind};
 use crate::core::runtime::{
-    ActionId, FocusId, LayoutNode, NodeContent, ScrollId, first_text, node_to_window,
+    ActionId, FocusId, LayoutNode, MemoMark, NodeContent, ScrollId, first_text, node_to_window,
 };
 use crate::geometry::{Affine, PhysicalSize, Point, Rect, Size, Vec2};
 use crate::layout::{
@@ -35,6 +35,20 @@ const VIEWPORT_PLACEHOLDER: Color = Color::rgb(0x20, 0x24, 0x2c);
 /// space its content measures against is the fixed size (or `avail`), clamped
 /// to those bounds.
 pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
+    // A reused memoized subtree measured in this space before.
+    let mark = MemoMark::of(el);
+    if let Some(size) = mark.and_then(|m| m.measured(avail)) {
+        return size;
+    }
+    let size = measure_element(el, avail, font);
+    if let Some(mark) = mark {
+        mark.remember_measure(avail, size);
+    }
+    size
+}
+
+/// [`measure`], without a memoized subtree's cache.
+fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
     let pad = el.layout.padding;
     let (min, max) = (min_size(el), max_size(el));
     // A fixed size is the space the content actually gets, so wrapped text inside
@@ -331,6 +345,25 @@ pub fn layout(el: &Element, bounds: Rect, font: Option<&Font>) -> LayoutNode {
 /// then lay out their own children the same way, so a whole subtree mirrors.
 /// Glyphs, images and vertical positions are never flipped.
 pub fn layout_with_direction(
+    el: &Element,
+    bounds: Rect,
+    font: Option<&Font>,
+    direction: LayoutDirection,
+) -> LayoutNode {
+    // A reused memoized subtree laid out at this size before.
+    let mark = MemoMark::of(el);
+    if let Some(node) = mark.and_then(|m| m.laid_out(bounds, direction)) {
+        return node;
+    }
+    let node = layout_element(el, bounds, font, direction);
+    if let Some(mark) = mark {
+        mark.remember_layout(direction, &node);
+    }
+    node
+}
+
+/// [`layout_with_direction`], without a memoized subtree's cache.
+fn layout_element(
     el: &Element,
     bounds: Rect,
     font: Option<&Font>,
@@ -851,21 +884,64 @@ fn paint_native(node: &LayoutNode, scene: &mut Scene) -> bool {
 /// a [`Scene::push_layer`] — so it is drawn moved and composited as a group.
 /// A fully transparent node isn't painted at all.
 pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
+    paint_in(node, scene, font, None);
+}
+
+/// [`paint`], leaving out whatever is drawn entirely outside `visible` (in
+/// the tree's coordinates: usually the window, or the area about to be
+/// rasterized). The rows of a long list scrolled out of their container,
+/// say, aren't shaped or put in the scene at all. Under a clip (a scroll
+/// container, a clipped panel) what is outside the clip is left out too.
+/// Conservative: a subtree is kept when the box around everything it draws
+/// (through transforms, [`CULL_MARGIN`] wider for anti-aliasing and glyph
+/// overhang) meets the visible area.
+pub fn paint_visible(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible: Rect) {
+    if drawn_near(node, visible) {
+        paint_in(node, scene, font, Some(visible));
+    }
+}
+
+/// How far past its box [`paint_visible`] assumes a node may draw:
+/// anti-aliased borders, and glyphs overhanging their line box.
+pub const CULL_MARGIN: f64 = 16.0;
+
+/// Whether anything `node`'s subtree draws (in its parent's coordinates)
+/// may land in `visible`.
+fn drawn_near(node: &LayoutNode, visible: Rect) -> bool {
+    let near = |r: Rect| {
+        r.min_x() - CULL_MARGIN < visible.max_x()
+            && visible.min_x() < r.max_x() + CULL_MARGIN
+            && r.min_y() - CULL_MARGIN < visible.max_y()
+            && visible.min_y() < r.max_y() + CULL_MARGIN
+    };
+    // Its own box is the quick answer; else what its children draw outside
+    // it (overflow, transforms).
+    near(node.bounds) || near(crate::core::diff::subtree_extent(node, Affine::IDENTITY))
+}
+
+/// [`paint`], culled to `visible` (in `node`'s parent's coordinates) if set.
+fn paint_in(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible: Option<Rect>) {
     let affine = node.affine();
     let translucent = node.opacity < 1.0;
     if node.opacity <= 0.0 {
         return;
     }
     if affine.is_none() && !translucent {
-        return paint_node(node, scene, font);
+        return paint_node(node, scene, font, visible);
     }
+    // Under a transform, the visible area in the node's own coordinates (or
+    // no culling, when the transform squashes it to nothing).
+    let inner = match (visible, affine) {
+        (Some(v), Some(a)) => a.inverse().map(|inv| inv.map_rect(v)),
+        (v, _) => v,
+    };
     scene.push_layer(affine.unwrap_or(Affine::IDENTITY), node.opacity);
-    paint_node(node, scene, font);
+    paint_node(node, scene, font, inner);
     scene.pop_layer();
 }
 
 /// [`paint`] for one node and its subtree, inside whatever layer it needs.
-fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
+fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible: Option<Rect>) {
     if !paint_native(node, scene) {
         paint_decoration(&node.decoration, node.bounds, scene);
     }
@@ -922,16 +998,27 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
     }
     // Clip children to this node's bounds (scroll containers, overlay panels)
     // so overflowing content is masked to the viewport.
-    if node.clip && !node.children.is_empty() {
-        scene.push_clip(node.bounds);
+    let children = |visible: Option<Rect>, scene: &mut Scene| {
         for child in &node.children {
-            paint(child, scene, font);
+            if visible.is_none_or(|v| drawn_near(child, v)) {
+                paint_in(child, scene, font, visible);
+            }
         }
+    };
+    if node.clip && !node.children.is_empty() {
+        // Nothing outside the clip shows (when culling at all).
+        let clipped = match visible {
+            Some(v) => v.intersection(node.bounds),
+            None => None,
+        };
+        if visible.is_some() && clipped.is_none() {
+            return;
+        }
+        scene.push_clip(node.bounds);
+        children(clipped, scene);
         scene.pop_clip();
     } else {
-        for child in &node.children {
-            paint(child, scene, font);
-        }
+        children(visible, scene);
     }
 }
 
@@ -1006,7 +1093,7 @@ pub(crate) fn scroll_shift(node: &LayoutNode, off: f64) -> Vec2 {
 }
 
 /// Shift a node and all its descendants by `by` (logical pixels).
-fn translate(node: &mut LayoutNode, by: Vec2) {
+pub(crate) fn translate(node: &mut LayoutNode, by: Vec2) {
     node.bounds = node.bounds.translate(by);
     for child in &mut node.children {
         translate(child, by);

@@ -268,6 +268,14 @@ frame while any of them moves and stops when all are at rest, so a UI full of
 transitions uses no CPU when nothing changes. It counts each change from one
 frame before the build that saw it, so the change already shows on that frame.
 
+While only transitions of looks that don't move the layout are in flight
+(fills, borders, radius, text color, opacity, transforms; not padding or
+sizes), the frames between builds don't build the view: the app writes the
+in-flight values on the laid-out tree on screen and repaints just where those
+elements were and are. A view that samples an `Animated` itself
+(`Cx::animate`) is built every frame instead. See
+[performance.md](performance.md#animation-frames-without-a-build).
+
 ## Enter, exit and layout animations
 
 Elements can also animate as they come and go, and as the layout moves them:

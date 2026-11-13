@@ -338,6 +338,8 @@ pub struct Reactive {
     pub(crate) transitions: Vec<(Option<AnimProp>, Transition)>,
     /// Its enter, exit and layout animations.
     pub(crate) presence: Option<Box<PresenceSpec>>,
+    /// Set on the root of a memoized subtree ([`Cx::memo`](crate::core::Cx::memo)).
+    pub(crate) memo: Option<crate::core::runtime::MemoMark>,
 }
 
 /// What the app knows about input, to work out elements' states.
@@ -536,6 +538,10 @@ impl Resolver<'_> {
             if exits || self.anchors.contains(&id) {
                 el.reactive.get_or_insert_with(Default::default).id = Some(id);
             }
+        }
+        // A memoized subtree keeps its layout if it lowered as before.
+        if let Some(mark) = crate::core::runtime::MemoMark::of(el).cloned() {
+            mark.lowered(el);
         }
     }
 }

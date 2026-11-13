@@ -2116,13 +2116,18 @@ jobs:
           [ "$(grep -c "Released Char('b')" visual_output/rawkeys.log)" = 1 ]
 
           # --- hover: move the cursor onto the right button ---
-          ./target/release/hoverdemo > visual_output/hoverdemo.log 2>&1 &
+          STIPPLE_APP_DEBUG=1 ./target/release/hoverdemo > visual_output/hoverdemo.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 3
           xdotool mousemove 284 70  # center of the right button
           sleep 1
           import -window root visual_output/hover.png
           kill "$APP_PID" 2>/dev/null || true
+          # The highlight's fade-in frames were drawn without building the
+          # view, each damaging just the button.
+          fades=$(grep -c "present: animated without a build" visual_output/hoverdemo.log || true)
+          echo "hover fade frames without a build: $fades"
+          [ "$fades" -ge 3 ]
 
           # --- multi-line editing: type across lines (Enter = newline), then
           # navigate up and select down across lines ---

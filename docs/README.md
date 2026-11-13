@@ -51,6 +51,7 @@ How to build, package and run on each platform, and what works there today.
 | System fonts by family name | ✅ ³⁴ | ✅ ³⁴ | ✅ ³⁴ | ✅ ¹⁰ | ✅ ¹⁰ | — ³⁴ |
 | Bold, italic, per-element fonts, fallbacks, text decorations | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ |
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
+| Memoized subtrees, animation frames without a rebuild, painting only what shows | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ |
 | Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ✅ ⁵⁰ | ✅ ⁵⁵ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ⁴³ |
@@ -435,6 +436,14 @@ AX API, as VoiceOver does, when the runner grants the accessibility
 permission (added with this change, not yet run in CI). No press action yet.
 See [accessibility.md](accessibility.md#macos).
 
+⁶⁹ In the shared core, so the same everywhere: `Cx::memo` and `Cx::derive`,
+transition-only frames drawn from the tree on screen, and scenes culled to the
+window and clips. Unit- and App-tested (memo invalidation, handlers and ids
+of reused subtrees, damage of a moving element, the same pixels culled or
+not), with a benchmark of a 500-row list. On X11, CI checks that `hoverdemo`'s
+hover fade is drawn without building the view; the other backends take the
+same wake path, unchecked there. See [performance.md](performance.md).
+
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
 on iOS, Android and the web, which hand out contents rather than paths, so do
@@ -453,6 +462,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades,
   interaction states, transitions, enter/exit and layout animations, the
   built-in widgets' motion, theme cross-fades and reduced motion
+- [Performance](performance.md): memoized subtrees and derived values (`Cx::memo`, `Cx::derive`), animation frames without a rebuild, painting only what shows, and what a frame costs
 - [Custom painting](canvas.md): `Element::canvas`, invalidating parts of it from any thread, paths, bitmaps and glyph runs
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click

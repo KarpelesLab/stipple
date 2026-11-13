@@ -190,7 +190,7 @@ type WheelFn<S> = Box<dyn FnMut(&WheelEvent, &mut S)>;
 type PinchFn<S> = Box<dyn FnMut(&PinchEvent, &mut S)>;
 
 /// An element's pointer, wheel and pinch handlers.
-struct Slot<S> {
+pub(crate) struct Slot<S> {
     pointer: Option<PointerFn<S>>,
     wheel: Option<WheelFn<S>>,
     pinch: Option<PinchFn<S>>,
@@ -222,6 +222,16 @@ impl<S> PointerHandlers<S> {
                 PointerId(self.slots.len() as u32 - 1)
             }
         }
+    }
+
+    /// The handlers, by id (for a memoized subtree to carry its own over).
+    pub(crate) fn into_slots(self) -> Vec<Slot<S>> {
+        self.slots
+    }
+
+    /// Add `slot` under the next id.
+    pub(crate) fn push_slot(&mut self, slot: Slot<S>) {
+        self.slots.push(slot);
     }
 
     /// Set the pointer handler of `id` (or of a new id), returning the id.

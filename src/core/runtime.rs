@@ -20,7 +20,11 @@ use crate::geometry::{Affine, Point, Rect, Size};
 use crate::platform::{CursorIcon, DragOffer, DropData};
 use crate::render::Color;
 use crate::style::Theme;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+mod memo;
+pub use memo::MemoCache;
+pub(crate) use memo::MemoMark;
 
 /// A boxed pointer-tap handler that mutates the app state `S`.
 type TapFn<S> = Box<dyn FnMut(&mut S)>;
@@ -358,10 +362,10 @@ pub struct Cx<'a, S> {
     /// Context menus attached this frame with
     /// [`Element::context_menu`](crate::core::Element::context_menu).
     context_menus: Vec<(ContextId, crate::core::menu::Menu<S>)>,
-    /// Cross-frame cache for [`Cx::memo`]: cached subtrees by key, plus the keys
-    /// touched this frame (so stale entries can be evicted afterward).
-    memo: HashMap<u64, Element>,
-    memo_used: HashSet<u64>,
+    /// Memoized subtrees and derived values ([`Cx::memo`], [`Cx::derive`]):
+    /// the cache from the last build, what this one used, and the last
+    /// build's handlers for reused subtrees to take theirs from.
+    memo: memo::MemoFrame<S>,
     /// Scroll offsets as of this build (seeded by the app), and the queue
     /// handlers push scroll requests onto.
     scroll_offsets: HashMap<ScrollId, f64>,
@@ -387,6 +391,9 @@ pub struct Cx<'a, S> {
 struct FrameInfo {
     time: std::time::Duration,
     requested: bool,
+    /// How many times the build asked (a memoized subtree that asks is
+    /// never kept).
+    requests: u32,
 }
 
 impl<'a, S> Cx<'a, S> {
@@ -416,13 +423,13 @@ impl<'a, S> Cx<'a, S> {
             next_scroll: 0,
             overlays: Vec::new(),
             context_menus: Vec::new(),
-            memo: HashMap::new(),
-            memo_used: HashSet::new(),
+            memo: Default::default(),
             scroll_offsets: HashMap::new(),
             scroll_requests: ScrollRequests::default(),
             frame: FrameInfo {
                 time: crate::platform::frame::elapsed().unwrap_or_default(),
                 requested: false,
+                requests: 0,
             },
             window: crate::platform::WindowId::PRIMARY,
             window_info: Default::default(),
@@ -465,6 +472,7 @@ impl<'a, S> Cx<'a, S> {
     /// again when it changes.
     pub fn window_info(&mut self) -> crate::platform::WindowInfo {
         self.window_info_read = true;
+        self.memo.read_window_info(self.window_info);
         self.window_info
     }
 
@@ -542,6 +550,7 @@ impl<'a, S> Cx<'a, S> {
     /// frames stop and an idle app uses no CPU. See `docs/animation.md`.
     pub fn request_frame(&mut self) {
         self.frame.requested = true;
+        self.frame.requests += 1;
     }
 
     /// Whether motion is reduced: the OS asks for it, or the app said so with
@@ -690,7 +699,9 @@ impl<'a, S> Cx<'a, S> {
         if !self.drop_queried.contains(&id) {
             self.drop_queried.push(id);
         }
-        self.drop_states.get(&id).copied().unwrap_or_default()
+        let state = self.drop_states.get(&id).copied().unwrap_or_default();
+        self.memo.read_drop(id, state);
+        state
     }
 
     /// Seed this frame's drop-target states (the app does this before each
@@ -731,7 +742,9 @@ impl<'a, S> Cx<'a, S> {
         if !self.interaction_queried.contains(&key) {
             self.interaction_queried.push(key);
         }
-        self.interactions.get(&key).copied().unwrap_or_default()
+        let states = self.interactions.get(&key).copied().unwrap_or_default();
+        self.memo.read_interaction(key, states);
+        states
     }
 
     /// Seed this frame's interaction states (the app does this before each
@@ -829,6 +842,13 @@ impl<'a, S> Cx<'a, S> {
     /// what is visible (see [`virtual_list`](crate::widgets::virtual_list))
     /// reads it right after [`register_scroll`](Cx::register_scroll).
     pub fn scroll_offset(&self, id: ScrollId) -> f64 {
+        let offset = self.raw_scroll_offset(id);
+        self.memo.read_scroll(id, offset);
+        offset
+    }
+
+    /// [`scroll_offset`](Self::scroll_offset), not counted as read.
+    fn raw_scroll_offset(&self, id: ScrollId) -> f64 {
         self.scroll_offsets
             .get(&id)
             .copied()
@@ -859,38 +879,6 @@ impl<'a, S> Cx<'a, S> {
     /// on top). Call before [`into_handlers`](Cx::into_handlers).
     pub fn take_overlays(&mut self) -> Vec<OverlaySpec> {
         std::mem::take(&mut self.overlays)
-    }
-
-    /// Return a cached, **static** subtree for `key`, building it with `build`
-    /// only when the key is new (or after the cache was seeded from a prior
-    /// frame). On an unchanged key the `build` closure is skipped entirely — the
-    /// previous frame's [`Element`] is cloned — so unchanged branches aren't
-    /// rebuilt. `build` receives no [`Cx`], so a memoized subtree can't register
-    /// event handlers (their ids would desync); use it for display-only content
-    /// like icons, labels, or decorative panels whose look depends on `key`.
-    pub fn memo(&mut self, key: u64, build: impl FnOnce() -> Element) -> Element {
-        self.memo_used.insert(key);
-        if let Some(cached) = self.memo.get(&key) {
-            return cached.clone();
-        }
-        let element = build();
-        self.memo.insert(key, element.clone());
-        element
-    }
-
-    /// Seed the memo cache from the previous frame (see [`Cx::memo`]).
-    pub fn set_memo_cache(&mut self, cache: HashMap<u64, Element>) {
-        self.memo = cache;
-        self.memo_used.clear();
-    }
-
-    /// Take the memo cache back, dropping entries not touched this frame so it
-    /// doesn't grow without bound.
-    pub fn take_memo_cache(&mut self) -> HashMap<u64, Element> {
-        let used = std::mem::take(&mut self.memo_used);
-        let mut cache = std::mem::take(&mut self.memo);
-        cache.retain(|k, _| used.contains(k));
-        cache
     }
 
     /// Consume the context, yielding the accumulated [`Handlers`] table.
@@ -1877,44 +1865,6 @@ mod tests {
         assert!(handlers.dispatch_key(focus, &KeyInput::Text("hi".into()), &mut st));
         assert_eq!(st.s, "hi");
         assert!(!handlers.dispatch_key(FocusId(99), &KeyInput::Backspace, &mut st));
-    }
-
-    #[test]
-    fn memo_skips_rebuild_for_unchanged_keys() {
-        use std::cell::Cell;
-        let theme = Theme::light();
-        let builds = Cell::new(0);
-        let make = |cx: &mut Cx<St>, key: u64| {
-            cx.memo(key, || {
-                builds.set(builds.get() + 1);
-                Element::text("static", 14.0, Color::BLACK)
-            })
-        };
-
-        // Frame 1: builds the subtree once.
-        let mut cache = std::collections::HashMap::new();
-        let mut cx = Cx::<St>::new(&theme);
-        cx.set_memo_cache(cache);
-        let _ = make(&mut cx, 1);
-        cache = cx.take_memo_cache();
-        assert_eq!(builds.get(), 1);
-        assert!(cache.contains_key(&1));
-
-        // Frame 2: same key → the closure is skipped (cache hit).
-        let mut cx = Cx::<St>::new(&theme);
-        cx.set_memo_cache(cache);
-        let _ = make(&mut cx, 1);
-        cache = cx.take_memo_cache();
-        assert_eq!(builds.get(), 1, "unchanged key must not rebuild");
-
-        // Frame 3: a different key rebuilds, and the now-unused key 1 is evicted.
-        let mut cx = Cx::<St>::new(&theme);
-        cx.set_memo_cache(cache);
-        let _ = make(&mut cx, 2);
-        cache = cx.take_memo_cache();
-        assert_eq!(builds.get(), 2, "changed key rebuilds");
-        assert!(cache.contains_key(&2));
-        assert!(!cache.contains_key(&1), "stale key should be evicted");
     }
 
     #[test]

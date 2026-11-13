@@ -31,6 +31,7 @@
 pub mod anim;
 mod app_clipboard;
 mod app_dnd;
+mod app_frame;
 mod app_keys;
 mod app_lifecycle;
 mod app_pointer;
@@ -47,6 +48,8 @@ pub mod layout;
 pub mod platform;
 #[cfg(test)]
 mod pointer_tests;
+#[cfg(test)]
+mod reactivity_tests;
 pub mod render;
 pub mod style;
 #[cfg(test)]
@@ -63,8 +66,7 @@ use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
     KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_focusables,
     collect_viewports, context_at, drag_hit_at, find_action, find_focus, find_text_pos, focus_at,
-    hit_test, layout_with_direction, measure, paint, paint_focus, paint_hover, text_pos_at,
-    viewport_at,
+    hit_test, layout_with_direction, measure, paint_focus, paint_hover, text_pos_at, viewport_at,
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::{
@@ -338,15 +340,20 @@ struct Pane<S> {
     highlights: crate::core::highlight::Highlights,
     highlight_alphas: Vec<(ActionId, u8)>,
     painted_highlights: Vec<(ActionId, u8)>,
-    // Whether the frame just built asked for another (something animates).
+    // Whether the frame just built asked for another (something animates),
+    // whether the view itself did (`Cx::request_frame`), and whether the
+    // next present is an animation frame with nothing else changed, which
+    // may skip the rebuild (see `app_frame`).
     animating: bool,
+    view_animating: bool,
+    anim_only: bool,
     // The theme the last frame was built with, and the cross-fade from the
     // frame on screen when it changes.
     built_theme: Option<Theme>,
     crossfade: crate::core::crossfade::CrossFade,
     painted_focused: Option<FocusId>,
-    // Cross-frame memo cache for `Cx::memo` (static subtree reuse).
-    memo_cache: std::collections::HashMap<u64, Element>,
+    // What `Cx::memo` and `Cx::derive` keep from one build to the next.
+    memo_cache: crate::core::MemoCache,
     // Per-container scroll offsets (vertical, logical px), adjusted by wheel
     // events and re-applied + clamped each frame by `apply_scroll`.
     scroll_offsets: std::collections::HashMap<crate::core::ScrollId, f64>,
@@ -470,6 +477,8 @@ impl<S: 'static> Pane<S> {
             highlight_alphas: Vec::new(),
             painted_highlights: Vec::new(),
             animating: false,
+            view_animating: false,
+            anim_only: false,
             built_theme: None,
             crossfade: Default::default(),
             painted_focused: None,
@@ -479,7 +488,7 @@ impl<S: 'static> Pane<S> {
             alert_return: None,
             preedit_owner: None,
             option_sent: Default::default(),
-            memo_cache: std::collections::HashMap::new(),
+            memo_cache: Default::default(),
             scroll_offsets: std::collections::HashMap::new(),
             scroll_requests: crate::core::ScrollRequests::default(),
             last_pointer: Point::new(0.0, 0.0),
@@ -998,6 +1007,8 @@ impl<S: 'static> Pane<S> {
         let mut cx = Cx::with_handle(&theme, self.handle.clone());
         cx.set_window_size(self.attrs.logical_size);
         cx.set_memo_cache(std::mem::take(&mut self.memo_cache));
+        // Memoized subtrees that are reused carry their handlers over.
+        cx.set_previous_handlers(std::mem::take(&mut self.handlers));
         for (id, offset) in self.scroll_requests.take() {
             self.scroll_offsets.insert(id, offset.max(0.0));
         }
@@ -1258,24 +1269,13 @@ impl<S: 'static> Pane<S> {
             .update(&mut tree, &presence, old, offsets, now, size);
         crate::core::mark_native_states(&mut tree, hovered, pressed, self.focused);
         self.native_fades.update(&mut tree, &theme.motion, now);
-        // Lighten the hovered tappable element with the theme's overlay, twice
-        // over while pressed, fading between states.
-        // (Not on elements that style their own hover and press looks.)
-        let own = |id: Option<ActionId>| id.filter(|id| !self.styled_actions.contains(id));
-        self.highlights.update(own(hovered), own(pressed), now);
-        let overlay = theme.palette.hover_overlay;
-        self.highlight_alphas = self
-            .highlights
-            .levels(now)
-            .into_iter()
-            .map(|(id, level)| (id, (overlay.a as f64 * level).round().min(255.0) as u8))
-            .filter(|(_, a)| *a > 0)
-            .collect();
+        self.update_highlights(&theme, now);
         // The drop targets an acceptable drag is over or just left, fading
         // with their drag-over level, unless their view draws its own look.
         self.dnd.highlight = crate::app_dnd::highlighted(&self.dnd.fades.states(drop_now), |id| {
             !self.dnd.queried.contains(&id) && !self.styled_drops.contains(&id)
         });
+        self.view_animating = frame_requested;
         self.animating = frame_requested
             || self.highlights.animating(now)
             || self.dnd.fades.animating(drop_now)
@@ -1300,7 +1300,9 @@ impl<S: 'static> Pane<S> {
         let Some(tree) = self.tree.as_ref() else {
             return scene;
         };
-        paint(tree, &mut scene, font);
+        let size = self.attrs.logical_size;
+        let window = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+        crate::core::paint_visible(tree, &mut scene, font, window);
         let overlay = theme.palette.hover_overlay;
         for &(id, a) in &self.highlight_alphas {
             paint_hover(tree, id, &mut scene, Color { a, ..overlay });
@@ -1349,6 +1351,14 @@ impl<S: 'static> Pane<S> {
         font: Option<&Font>,
         force: bool,
     ) -> Option<(Scene, Damage)> {
+        // An animation frame: only what moves, when that's all that changed.
+        if std::mem::take(&mut self.anim_only)
+            && !force
+            && let Some(frame) = self.animation_frame(theme, font)
+        {
+            self.repaint_only = false;
+            return Some(frame);
+        }
         let repaint_only = std::mem::take(&mut self.repaint_only);
         if !repaint_only
             || force
@@ -3145,9 +3155,11 @@ impl<S: 'static> App<S> {
                         // Repeated, this means a deadline that keeps coming due.
                         app_dbg(format_args!("wake with nothing to do"));
                     }
-                    // A frame for an animation (or a fade) re-renders too.
-                    pane.dirty |= pane.animating;
-                    if ran || flung || held || pane.dirty {
+                    // A frame for an animation (or a fade) re-renders too:
+                    // when nothing else changed, maybe without a rebuild.
+                    pane.anim_only = pane.animating && !pane.dirty && !ran && !flung && !held;
+                    pane.dirty |= pane.animating && !pane.anim_only;
+                    if ran || flung || held || pane.dirty || pane.anim_only {
                         present(&mut self, &mut surfaces, idx, window, false);
                     } else if content {
                         // Only canvases or viewport content changed: no

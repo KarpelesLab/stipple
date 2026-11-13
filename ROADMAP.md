@@ -158,7 +158,9 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   so unchanged static branches aren't rebuilt. The closure gets no `Cx` (so a
   memoized subtree can't register handlers whose ids would desync); the `App`
   threads the cache across frames and evicts untouched keys. Unit-tested
-  (build-once-per-key, rebuild-on-change, eviction).
+  (build-once-per-key, rebuild-on-change, eviction). *Since replaced by
+  `cx.memo(key, deps, |cx| …)`, whose subtrees can have handlers (Phase 8,
+  finer-grained reactivity).*
 - ✅ **Caret-aware text editing**: a single-line `EditBuffer` with a
   UTF-8-boundary-safe caret (insert / backspace / delete at the caret;
   left / right / home / end motion; `apply(KeyInput)`). The `Element`/
@@ -1788,9 +1790,28 @@ styling part of the toolkit.
   `Cx::play` drives one from a start time. `examples/motiondemo` shows them,
   checked at fixed times by `--selftest`; see
   [docs/animation.md](docs/animation.md).
-- ⬜ Finer-grained reactivity: derived/memoized values and subtrees that rebuild
+- ✅ Finer-grained reactivity: derived/memoized values and subtrees that rebuild
   only when their inputs change, so large animated UIs stay cheap; damage
   limited to what actually moved.
+  *`Cx::memo(key, deps, |cx| …)` keeps a subtree while its deps hash the
+  same, with the handlers it registered carried over under the same ids
+  (reused only where its ids come out the same, so captured ids never go
+  stale), what it read through `Cx` (interaction and drop states, scroll
+  offsets, window info), the theme and window size tracked as inputs, and
+  its last layout reused while it lowers to the same elements;
+  `Cx::derive(key, deps, || value)` caches values. Frames where only
+  transitions of looks (colors, radius, opacity, transforms) or highlight
+  fades move skip the view and the layout: the in-flight values are written
+  on the tree on screen and only the moved elements' old and new extents are
+  damaged (`src/app_frame.rs`). Scenes leave out what is outside the window
+  or a clip. A frame of a 500-row list with one tile moving by a transition
+  went from ~4.4 ms to ~0.16 ms, one whose view turns a spinner itself from
+  ~5 ms to ~0.8–0.9 ms (`bench_a_large_list_with_one_moving_element`).
+  Unit- and App-tested. Not covered: built frames still walk (clone, lower,
+  diff, copy) the whole tree, a memoized subtree whose ids moved is built
+  again rather than renumbered, and enter/exit/layout animations, flings
+  and size or padding transitions still build every frame. See
+  [docs/performance.md](docs/performance.md).*
 - ✅ Theme changes that cross-fade (also listed under 7a): when the theme views
   see changes (the system's look under `Theme::native()`, or the new
   `App::theme_with` deriving it from the state), the App blends the new frame

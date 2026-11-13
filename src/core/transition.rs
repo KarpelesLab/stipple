@@ -25,6 +25,7 @@ use std::time::Duration;
 use crate::anim::{Animatable, Animated, Easing, Motion, SpringParams};
 use crate::core::element::{Element, ElementKind};
 use crate::core::interact::ElementKey;
+use crate::core::runtime::{LayoutNode, NodeContent};
 use crate::geometry::{Insets, Transform};
 use crate::render::Color;
 
@@ -353,6 +354,106 @@ impl Transitions {
     pub(crate) fn animating(&self) -> bool {
         self.now
             .is_some_and(|now| self.entries.values().any(|e| e.moving(now)))
+    }
+
+    /// Whether a property that moves things in the layout (padding, a fixed
+    /// size) was still moving at the last frame: then a frame has to be laid
+    /// out again, not just painted.
+    pub(crate) fn layout_moving(&self) -> bool {
+        self.now.is_some_and(|now| {
+            self.entries
+                .values()
+                .any(|e| moving(&e.padding, now) || moving(&e.width, now) || moving(&e.height, now))
+        })
+    }
+
+    /// Move to `now` without a build: the painted values, at `now`, of the
+    /// elements that were still moving at the last frame (the ones whose look
+    /// changed since). Only for frames where nothing else changed and no
+    /// [`layout_moving`](Self::layout_moving).
+    pub(crate) fn advance(&mut self, now: Duration) -> HashMap<ElementKey, Painted> {
+        let Some(before) = self.now.replace(now) else {
+            return HashMap::new();
+        };
+        let value = |track: &Option<Track<Color>>| match track {
+            Some(Some(anim)) => Some(anim.value(now)),
+            _ => None,
+        };
+        self.entries
+            .iter()
+            .filter(|(_, e)| e.moving(before))
+            .map(|(&id, e)| {
+                let painted = Painted {
+                    fill: value(&e.fill),
+                    border: match &e.border {
+                        Some(Some(anim)) => {
+                            let (c, w): (Color, f64) = anim.value(now);
+                            Some((c, w.max(0.0)))
+                        }
+                        _ => None,
+                    },
+                    radius: match &e.radius {
+                        Some(Some(anim)) => Some(anim.value(now).max(0.0)),
+                        _ => None,
+                    },
+                    text_color: value(&e.text_color),
+                    opacity: match &e.opacity {
+                        Some(Some(anim)) => Some(anim.value(now).clamp(0.0, 1.0) as f32),
+                        _ => None,
+                    },
+                    transform: match &e.transform {
+                        Some(Some(anim)) => Some(anim.value(now)),
+                        _ => None,
+                    },
+                };
+                (id, painted)
+            })
+            .collect()
+    }
+}
+
+/// An element's animated looks at one frame (`None`: not animating that):
+/// what a frame that is only painted, not built, writes on its laid-out node.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Painted {
+    fill: Option<Color>,
+    border: Option<(Color, f64)>,
+    radius: Option<f64>,
+    text_color: Option<Color>,
+    opacity: Option<f32>,
+    transform: Option<Transform>,
+}
+
+impl Painted {
+    /// Whether writing these on `node` moves or fades it (with everything
+    /// inside it), rather than only recoloring it.
+    pub(crate) fn moves(&self, node: &LayoutNode) -> bool {
+        self.opacity.is_some_and(|o| o != node.opacity)
+            || self
+                .transform
+                .is_some_and(|t| node.transform.unwrap_or(Transform::IDENTITY) != t)
+    }
+
+    /// Write these looks on `node`, as building would have.
+    pub(crate) fn apply(&self, node: &mut LayoutNode) {
+        if let Some(fill) = self.fill {
+            node.decoration.fill = Some(fill);
+        }
+        if let Some(border) = self.border {
+            node.decoration.border = Some(border);
+        }
+        if let Some(radius) = self.radius {
+            node.decoration.radius = radius;
+        }
+        if let (Some(c), NodeContent::Text { color, .. }) = (self.text_color, &mut node.content) {
+            *color = c;
+        }
+        if let Some(opacity) = self.opacity {
+            node.opacity = opacity;
+        }
+        if let Some(t) = self.transform {
+            node.transform = (!t.is_identity()).then_some(t);
+        }
     }
 }
 

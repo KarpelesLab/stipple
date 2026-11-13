@@ -145,7 +145,7 @@ fn diff_node(
 
 /// The matrix mapping `node`'s layout coordinates to the window, given the
 /// one for its parent's.
-fn to_window(node: &LayoutNode, outer: Affine) -> Affine {
+pub(crate) fn to_window(node: &LayoutNode, outer: Affine) -> Affine {
     match node.affine() {
         Some(a) => a.then(outer),
         None => outer,
@@ -184,9 +184,20 @@ fn drawn(m: Affine, rect: Rect) -> Rect {
     }
 }
 
+/// Where a change to `node` shows, given the matrix for its parent's
+/// coordinates: everything its subtree draws when it moved or faded as a
+/// whole (`whole`), else what it paints itself.
+pub(crate) fn changed_extent(node: &LayoutNode, outer: Affine, whole: bool) -> Rect {
+    if whole {
+        subtree_extent(node, outer)
+    } else {
+        drawn(to_window(node, outer), bleed(node))
+    }
+}
+
 /// The box around everything `node`'s subtree draws (each node's drawn
 /// bounds), given the matrix for its parent's coordinates.
-fn subtree_extent(node: &LayoutNode, outer: Affine) -> Rect {
+pub(crate) fn subtree_extent(node: &LayoutNode, outer: Affine) -> Rect {
     let m = to_window(node, outer);
     node.children
         .iter()
