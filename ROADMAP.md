@@ -1731,9 +1731,17 @@ styling part of the toolkit.
   `core::presence`), with App-level tests that a closing select list and a
   closing dialog's scrim let clicks through and that the sliding tab
   indicator, presented through damage regions only, leaves no stale pixels
-  (which caught borders' anti-aliased edges missing from the damage). Not
-  yet: OS-drawn controls under `Theme::native()`, and the scrim fading in.
-  See [docs/widgets.md](docs/widgets.md#motion).*
+  (which caught borders' anti-aliased edges missing from the damage). A
+  modal's scrim also fades in, on its dialog's enter motion (the drawn
+  message box now comes in through the core's enter animation too, keyed by
+  box, so the next one comes in as the last leaves); at rest the frames are
+  identical (checked under Xvfb against the previous build with
+  `sessionsdemo`'s message box and `overlaydemo`'s dialog open). Controls the
+  OS draws under `Theme::native()` cross-fade from the old state's picture to
+  the new one (`core::native_fade`: hover, press and focus on `state`, a
+  check, radio or switch flipping on `toggle`; slider values and dark-mode
+  switches snap), unit-tested only, as CI can't hover native controls on
+  Windows or macOS. See [docs/widgets.md](docs/widgets.md#motion).*
 - **Exit criteria:** a showcase example (drop area, animated list, interactive
   controls) whose animations are unit-tested at fixed frame times, with CI
   screenshots of mid-transition frames on the desktops and the web, and no CPU

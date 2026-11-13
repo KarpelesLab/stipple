@@ -38,6 +38,7 @@ pub(crate) mod interact;
 /// Raw keys, keeping Tab, IME for custom elements and Option as Meta.
 pub mod keys;
 pub mod menu;
+pub(crate) mod native_fade;
 mod pointer;
 mod pointer_events;
 pub(crate) mod presence;

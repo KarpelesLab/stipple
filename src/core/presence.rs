@@ -160,10 +160,11 @@ pub(crate) struct PresenceSpec {
     pub layout_size: bool,
 }
 
-/// Have a modal overlay's laid-out scrim `node` fade out with the overlay
-/// whose `content` it's behind, when that leaves with an effect: the scrim
-/// gets an identity next to the content's and an exit fade on the content's
-/// exit transition, added to the frame's `specs`.
+/// Have a modal overlay's laid-out scrim `node` fade in and out with the
+/// overlay whose `content` it's behind, when that enters or leaves with an
+/// effect: the scrim gets an identity next to the content's, and a fade on
+/// each of the content's enter and exit transitions, added to the frame's
+/// `specs`.
 pub(crate) fn scrim(
     content: &crate::core::Element,
     node: &mut LayoutNode,
@@ -172,15 +173,20 @@ pub(crate) fn scrim(
     let Some(id) = content.reactive.as_ref().and_then(|r| r.id) else {
         return;
     };
-    let Some(exit) = specs.get(&id).and_then(|s| s.exit) else {
+    let Some(own) = specs.get(&id) else {
         return;
     };
-    let key = ElementKey::child(id, usize::MAX);
-    node.key = Some(key);
+    let fade = |e: Effect| Effect::fade().transition(e.transition);
     let spec = PresenceSpec {
-        exit: Some(Effect::fade().transition(exit.transition)),
+        enter: own.enter.map(fade),
+        exit: own.exit.map(fade),
         ..PresenceSpec::default()
     };
+    if spec.enter.is_none() && spec.exit.is_none() {
+        return;
+    }
+    let key = ElementKey::child(id, usize::MAX);
+    node.key = Some(key);
     specs.insert(key, spec);
 }
 
@@ -890,6 +896,94 @@ mod tests {
         );
         assert_eq!(tree.children.len(), 1, "gone");
         assert!(!p.animating() && !p.anchors().contains(&ElementKey::LAYERS));
+    }
+
+    /// The app's layers at `now`: the view, then (when `open`) a modal
+    /// dialog's scrim, faded with the dialog, and the dialog.
+    fn modal(p: &mut Presence, open: bool, old: Option<&LayoutNode>, now: Duration) -> LayoutNode {
+        let win = Rect::from_xywh(0.0, 0.0, 200.0, 200.0);
+        let mut roots = vec![LayoutNode::container(win, vec![])];
+        let mut specs = HashMap::new();
+        if open {
+            let enter = Effect::scale(0.5).and(Effect::fade()).transition(linear());
+            let exit = enter.transition(Transition::tween(200 * MS, Easing::Linear));
+            let mut el = item("dialog").enter(enter).exit(exit);
+            let mut r = Resolver {
+                states: &HashMap::new(),
+                transitions: &mut Transitions::default(),
+                watch: Default::default(),
+                styled_actions: Vec::new(),
+                styled_drops: Vec::new(),
+                presence: HashMap::new(),
+                anchors: p.anchors(),
+            };
+            r.resolve(&mut el, ElementKey::root(1));
+            specs = std::mem::take(&mut r.presence);
+            let mut s = LayoutNode::container(win, vec![]);
+            scrim(&el, &mut s, &mut specs);
+            roots.push(s);
+            roots.push(crate::core::layout(
+                &el,
+                Rect::from_xywh(50.0, 60.0, 100.0, 20.0),
+                None,
+            ));
+        }
+        let mut tree = LayoutNode::container(win, roots);
+        tree.key = Some(ElementKey::LAYERS);
+        p.update(&mut tree, &specs, old, &HashMap::new(), Some(now), WINDOW);
+        tree
+    }
+
+    #[test]
+    fn a_modal_scrim_fades_in_and_out_with_its_dialog() {
+        let mut p = Presence::default();
+        let closed = modal(&mut p, false, None, T0);
+        // Opening: the scrim fades in on the dialog's enter transition.
+        let t1 = T0 + 500 * MS;
+        let open = modal(&mut p, true, Some(&closed), t1);
+        let first = open.children[1].opacity as f64;
+        assert!(
+            (first - frame().as_secs_f64() / 0.1).abs() < 1e-4,
+            "{first}"
+        );
+        let mid = modal(&mut p, true, Some(&open), t1 + 50 * MS - frame());
+        assert_eq!(mid.children.len(), 3);
+        assert!(
+            (mid.children[1].opacity as f64 - 0.5).abs() < 1e-4,
+            "half-way"
+        );
+        assert_eq!(mid.children[1].transform, None, "the scrim only fades");
+        assert!(mid.children[2].transform.is_some(), "the dialog scales");
+        let open = modal(&mut p, true, Some(&mid), t1 + 100 * MS - frame());
+        assert_eq!(open.children[1].opacity, 1.0, "at rest");
+        assert!(!p.animating());
+        // Closing: both leave, on the exit transition (twice as long).
+        let t2 = t1 + 500 * MS;
+        let gone = modal(&mut p, false, Some(&open), t2);
+        let mid = modal(&mut p, false, Some(&gone), t2 + 100 * MS - frame());
+        assert_eq!(mid.children.len(), 3, "the view, the scrim and the dialog");
+        assert!(mid.children[1].ghost);
+        assert!((mid.children[1].opacity as f64 - 0.5).abs() < 1e-4);
+        let end = modal(&mut p, false, Some(&mid), t2 + 200 * MS);
+        assert_eq!(end.children.len(), 1);
+        assert!(!p.animating());
+    }
+
+    #[test]
+    fn a_modal_open_from_the_first_frame_or_under_reduced_motion_does_not_fade_in() {
+        let mut p = Presence::default();
+        let open = modal(&mut p, true, None, T0);
+        assert_eq!(open.children[1].opacity, 1.0, "the first frame: at rest");
+        assert!(!p.animating());
+
+        set_reduced_motion(Some(true));
+        let mut p = Presence::default();
+        let closed = modal(&mut p, false, None, T0);
+        let open = modal(&mut p, true, Some(&closed), T0 + 500 * MS);
+        assert_eq!(open.children[1].opacity, 1.0, "snapped");
+        assert_eq!(open.children[2].opacity, 1.0);
+        assert!(!p.animating());
+        set_reduced_motion(None);
     }
 
     #[test]

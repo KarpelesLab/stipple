@@ -401,6 +401,7 @@ pub fn layout_with_direction(
         text_pos: el.text_pos,
         wrap: el.wrap,
         native: el.native,
+        native_from: None,
         scroll: el.scroll,
         scroll_horizontal: el.scroll.is_some()
             && matches!(
@@ -827,13 +828,20 @@ fn paint_native(node: &LayoutNode, scene: &mut Scene) -> bool {
         (node.bounds.width() * scale).round() as u32,
         (node.bounds.height() * scale).round() as u32,
     );
-    match crate::platform::native::render(deco, size, scale) {
-        Some(image) => {
-            scene.draw_image(node.bounds, image);
-            true
-        }
-        None => false,
+    let Some(image) = crate::platform::native::render(deco, size, scale) else {
+        return false;
+    };
+    scene.draw_image(node.bounds, image);
+    // Fading from another state's picture: that one over it, going.
+    if let Some((from, shows)) = node.native_from
+        && shows > 0.0
+        && let Some(old) = crate::platform::native::render(from, size, scale)
+    {
+        scene.push_layer(Affine::IDENTITY, shows);
+        scene.draw_image(node.bounds, old);
+        scene.pop_layer();
     }
+    true
 }
 
 /// Paint a laid-out tree into `scene`, parents before children.

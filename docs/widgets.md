@@ -241,9 +241,10 @@ timings and curves in the theme's motion tokens (`theme.motion`, a
 | Drawn menus (the in-window menu bar, submenus and context menus), `open_menu` | each menu grows in from its corner, and shrinks back and fades out as it closes | `popup`, `popup_exit` |
 | `tooltip` | it fades in, and out | `popup`, `popup_exit` |
 | `toasts` | a new toast slides in from the window's edge; a dismissed one slides back out and fades before it goes; the others glide to their new places | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` |
-| The drawn message box (`AppHandle::message`), `open_dialog` | it fades in as it scales into place; closing, it scales back as it fades out with its scrim | `dialog`, `dialog_scale`, `dialog_exit` |
+| The drawn message box (`AppHandle::message`), `open_dialog` | it fades in as it scales into place, its scrim fading in with it; closing, it scales back as it fades out with its scrim | `dialog`, `dialog_scale`, `dialog_exit` |
 | `tree` | a disclosure triangle turns as its node expands or collapses | `disclosure` |
 | Drop targets (`on_drop`) | the app's "drop here" highlight fades in and out with the target's drag-over level | `DROP_FADE` |
+| Controls the OS draws under `Theme::native()` | the OS's picture of the old state fades into the new one: hover, press and focus; a checkbox, radio or switch flipping | `state`, `toggle` |
 
 What's already showing when a widget is first built doesn't animate in: an
 app that starts with a select's list open, or with toasts up, shows them at
@@ -287,15 +288,17 @@ its edge can land just outside it, as with CSS's `:active` scale. Set
 `press_scale` to 1 if that matters.
 
 The stateful widgets remember when something opened in their state; the
-stateless `open_menu`, `open_dialog` and `tooltip` come in through the
-core's enter animations (`Element::enter`, see
+stateless `open_menu`, `open_dialog`, `tooltip` and the drawn message box come
+in through the core's enter animations (`Element::enter`, see
 [animation.md](animation.md#enter-exit-and-layout-animations)). Everything
 that closes goes out through the core's exit animations (`Element::exit` on
 the overlay's content): when the view stops declaring the overlay, the app
 keeps drawing it where it was while it leaves, and meanwhile it takes no
 clicks, focus or hover and screen readers don't see it, so a click where a
-closing list still shows reaches what's under it. A modal's scrim fades out
-with its dialog (and stops blocking at once). Reopened while it's leaving, a
+closing list still shows reaches what's under it. A modal's scrim fades in
+and out with its dialog, on the dialog's own motion (and stops blocking at
+once when it closes). Each message box is its own overlay, so the next one
+waiting comes in as the last one leaves. Reopened while it's leaving, a
 popup turns round from where it is. Switching between menu bar menus, or
 between submenus, swaps them without an exit, as native menus do.
 
@@ -308,9 +311,15 @@ come before the strip, that change snaps instead of sliding. The indicator
 is measured from the window (or the enclosing scroll content), so it also
 glides when something above moves the whole strip in the same frame.
 
-Not animated yet: controls the OS draws under `Theme::native()` switch
-between the OS's pictures of their states, and the modal scrim fades out but
-not in.
+Controls the OS draws under `Theme::native()` (see
+[native-theme.md](native-theme.md)) are still pictures, one per state, so
+they cross-fade: for a moment after a change the old state's picture is drawn
+over the new one, fading out, on the theme's `state` motion (hover, press,
+focus) or `toggle` motion (a checkbox, radio or switch flipping). A slider's
+and a progress bar's value, and a switch between light and dark, change at
+once (the first follows the pointer; the second cross-fades the whole
+window). A control is followed by its tap or focus handle. Seen only through
+unit tests: CI's Windows and macOS runs don't hover native controls.
 
 ## Accessibility
 

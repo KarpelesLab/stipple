@@ -68,7 +68,7 @@ impl Rig {
     }
 
     /// [`build`](Self::build), then lay the view out with its overlays as
-    /// the app does (each overlay at (10, 10)) and run the enter and exit
+    /// the app does (each overlay at (10, 10), behind a scrim if modal) and run the enter and exit
     /// animations: the frame drawn at `now`, and whether anything leaving or
     /// entering still moves.
     fn draw<S>(
@@ -77,10 +77,16 @@ impl Rig {
         view: impl FnOnce(&mut Cx<S>) -> Element,
     ) -> (LayoutNode, bool) {
         let (el, overlays, _) = self.build(now, view);
-        let specs = std::mem::take(&mut self.specs);
+        let mut specs = std::mem::take(&mut self.specs);
         let win = Rect::from_xywh(0.0, 0.0, 400.0, 300.0);
         let mut roots = vec![crate::core::layout(&el, win, None)];
         for o in &overlays {
+            if o.modal {
+                // The scrim, as the app lays it out (an empty box here).
+                let mut scrim = LayoutNode::container(win, vec![]);
+                crate::core::presence::scrim(&o.content, &mut scrim, &mut specs);
+                roots.push(scrim);
+            }
             let m = crate::core::measure(&o.content, win.size, None);
             let at = Rect::from_xywh(10.0, 10.0, m.width, m.height);
             roots.push(crate::core::layout(&o.content, at, None));
@@ -547,10 +553,11 @@ fn stateless_popups_come_in_through_the_core() {
     assert!(!app.animating(), "then rests");
 }
 
-/// The ghost (a copy drawn while it leaves) among the window's layers, if
-/// any: where it's drawn, its opacity and transform.
+/// The topmost ghost (a copy drawn while it leaves) among the window's
+/// layers, if any (over a leaving modal's scrim): where it's drawn, its
+/// opacity and transform.
 fn leaving(tree: &LayoutNode) -> Option<&LayoutNode> {
-    tree.children.iter().find(|c| c.ghost)
+    tree.children.iter().rev().find(|c| c.ghost)
 }
 
 #[test]
@@ -667,6 +674,50 @@ fn stateless_overlays_and_tooltips_leave_on_the_theme_motion() {
         let (tree, moving) = rig.draw(head + 101 * MS, view(None));
         assert!(!moving && leaving(&tree).is_none(), "then gone");
     }
+}
+
+#[test]
+fn a_dialog_and_its_scrim_come_in_together_on_the_theme_motion() {
+    let view = |open: bool| {
+        move |cx: &mut Cx<()>| {
+            if open {
+                let t = theme();
+                open_dialog(
+                    cx,
+                    &t,
+                    "Sure?",
+                    label(&t, "Really"),
+                    vec![],
+                    |_: &mut ()| {},
+                );
+            }
+            column(vec![])
+        }
+    };
+    let mut rig = Rig::new();
+    let t0 = Duration::from_secs(10);
+    rig.draw(t0, view(false));
+    let head = t0 + 500 * MS - frame();
+    let (tree, moving) = rig.draw(head + frame(), view(true));
+    assert!(moving, "opening: frames");
+    assert_eq!(tree.children.len(), 3, "the view, the scrim, the dialog");
+    let (tree, _) = rig.draw(head + 50 * MS, view(true));
+    let (scrim, dialog) = (&tree.children[1], &tree.children[2]);
+    assert!(near(f64::from(scrim.opacity), 0.5), "{}", scrim.opacity);
+    assert!(near(f64::from(dialog.opacity), 0.5), "{}", dialog.opacity);
+    assert_eq!(scrim.transform, None);
+    let (tree, moving) = rig.draw(head + 101 * MS, view(true));
+    assert!(!moving, "then at rest");
+    assert_eq!(tree.children[1].opacity, 1.0);
+    assert_eq!(tree.children[1].transform, None);
+    // Reduced motion: the next one is there at once.
+    let mut rig = Rig::new();
+    rig.draw(t0, view(false));
+    crate::anim::set_reduced_motion(Some(true));
+    let (tree, moving) = rig.draw(t0 + 500 * MS, view(true));
+    crate::anim::set_reduced_motion(Some(false));
+    assert!(!moving);
+    assert_eq!(tree.children[1].opacity, 1.0);
 }
 
 #[test]

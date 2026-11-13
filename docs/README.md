@@ -316,10 +316,12 @@ timings); popups, menus, tooltips and dialogs animate out too, kept drawn
 (and out of reach of input) while they leave. Unit-tested at fixed frame
 times and through App-level tests; under Xvfb, `widgetsdemo`,
 `sessionsdemo`, `tabsdemo`, `bididemo`, `material3demo` and `themegallery`
-were checked to draw pixel-identical frames at rest (by hand, not in CI). Controls the OS draws under `Theme::native()`
-(buttons, checkboxes, radios and switches on Windows, macOS and iOS) switch
-between the OS's pictures of their states without these animations. See
-[widgets.md](widgets.md#motion).
+were checked to draw pixel-identical frames at rest (by hand, not in CI). A
+modal's scrim fades in and out with its dialog (checked the same way with
+`sessionsdemo` and `overlaydemo` dialogs open). Controls the OS draws under
+`Theme::native()` (buttons, checkboxes, radios and switches on Windows, macOS
+and iOS) cross-fade between the OS's pictures of their states; that is only
+unit-tested. See [widgets.md](widgets.md#motion).
 
 ⁵⁵ An `InputConnection` from a host view whose Java classes the backend
 writes as a dex file at run time (no Java toolchain). On an API 34 emulator,

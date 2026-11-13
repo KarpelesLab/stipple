@@ -1234,6 +1234,10 @@ pub struct LayoutNode {
     ///
     /// [`Element::native`]: crate::core::Element
     pub native: Option<crate::platform::native::NativeDeco>,
+    /// While an OS-drawn control fades from one state's picture to the next:
+    /// the picture it fades from, drawn over [`native`](Self::native) with
+    /// this opacity (from 1 down to 0).
+    pub native_from: Option<(crate::platform::native::NativeDeco, f32)>,
     /// Scroll container handle: wheel events over this node adjust the app's
     /// offset for `id`, and its children are laid out at natural size + shifted.
     pub scroll: Option<ScrollId>,
@@ -1304,6 +1308,7 @@ impl LayoutNode {
             text_pos: None,
             wrap: false,
             native: None,
+            native_from: None,
             scroll: None,
             scroll_horizontal: false,
             clip: false,
@@ -1832,6 +1837,7 @@ mod tests {
             text_pos: None,
             wrap: false,
             native: None,
+            native_from: None,
             scroll: None,
             scroll_horizontal: false,
             clip: false,
@@ -1931,6 +1937,7 @@ mod tests {
             text_pos: None,
             wrap: false,
             native: None,
+            native_from: None,
             scroll: None,
             scroll_horizontal: false,
             clip: false,

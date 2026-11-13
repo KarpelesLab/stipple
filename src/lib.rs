@@ -411,6 +411,8 @@ struct Pane<S> {
     transitions: crate::core::transition::Transitions,
     // Enter, exit and layout animations, and the elements leaving.
     presence: crate::core::presence::Presence,
+    // OS-drawn controls fading between their states' pictures.
+    native_fades: crate::core::native_fade::NativeFades,
     watch: crate::core::interact::Watch,
     pointer_in: bool,
     press_at: Option<Point>,
@@ -496,6 +498,7 @@ impl<S: 'static> Pane<S> {
             pointer: Default::default(),
             transitions: Default::default(),
             presence: Default::default(),
+            native_fades: Default::default(),
             watch: Default::default(),
             pointer_in: false,
             press_at: None,
@@ -1254,6 +1257,7 @@ impl<S: 'static> Pane<S> {
         self.presence
             .update(&mut tree, &presence, old, offsets, now, size);
         crate::core::mark_native_states(&mut tree, hovered, pressed, self.focused);
+        self.native_fades.update(&mut tree, &theme.motion, now);
         // Lighten the hovered tappable element with the theme's overlay, twice
         // over while pressed, fading between states.
         // (Not on elements that style their own hover and press looks.)
@@ -1278,6 +1282,7 @@ impl<S: 'static> Pane<S> {
             || self.crossfade.active()
             || self.transitions.animating()
             || self.presence.animating()
+            || self.native_fades.animating()
             || self.touch.flinging();
         if self.animating {
             crate::platform::frame::request();

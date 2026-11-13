@@ -140,11 +140,6 @@ pub(crate) fn popup(el: Element, m: &MotionTokens, p: f64, origin: (f64, f64)) -
     enter(el, p, m.popup_scale, (0.0, m.popup_offset), origin)
 }
 
-/// The drawn message box opening at progress `p`.
-pub(crate) fn dialog(el: Element, m: &MotionTokens, p: f64) -> Element {
-    enter(el, p, m.dialog_scale, (0.0, 0.0), (0.5, 0.5))
-}
-
 /// A popup's entrance as an [`Effect`], for the popups that keep no state
 /// (the core's enter animations know when they appeared): fading in as it
 /// grows from the theme's popup scale about `origin` and slides into place.

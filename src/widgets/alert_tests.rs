@@ -173,3 +173,48 @@ fn without_an_event_loop_boxes_are_drawn() {
     app.press_key(KeyInput::Escape); // a lone OK cancels too
     assert_eq!(app.state().answers[0].button, Some(0));
 }
+
+/// The opacities of the window's layers above the view: the scrim, the box
+/// (and any leaving), as `(ghost, opacity)`.
+fn layers(app: &App<State>) -> Vec<(bool, f32)> {
+    let tree = app.panes[0].tree.as_ref().expect("a frame");
+    tree.children[1..]
+        .iter()
+        .map(|c| (c.ghost, c.opacity))
+        .collect()
+}
+
+#[test]
+fn a_box_and_its_scrim_fade_in_and_the_next_comes_in_as_it_leaves() {
+    // Five-second linear motion, so wall-clock frames land mid-way.
+    let slow = crate::anim::Motion::tween(5.0, crate::anim::Easing::Linear);
+    let theme = crate::style::Theme::light().with_motion(crate::style::MotionTokens {
+        dialog: slow,
+        dialog_exit: slow,
+        ..crate::style::MotionTokens::standard()
+    });
+    crate::anim::set_reduced_motion(Some(false));
+    let mut app = App::new(State::default(), view)
+        .theme(theme)
+        .logical_size(Size::new(520.0, 360.0));
+    app.render_once();
+    ask(&app, close_tab());
+    app.run_pending();
+    app.render_once();
+    let up = layers(&app);
+    assert_eq!(up.len(), 2, "the scrim and the box: {up:?}");
+    assert!(up.iter().all(|&(g, o)| !g && o < 0.5), "coming in: {up:?}");
+    // Answered, with another waiting: the first leaves (with its scrim) as
+    // the second comes in (with its own).
+    ask(&app, MessageBox::new("Saved").drawn(true));
+    app.run_pending();
+    assert!(app.press_key(KeyInput::Enter));
+    app.render_once();
+    let up = layers(&app);
+    assert_eq!(up.iter().filter(|l| l.0).count(), 2, "{up:?}");
+    assert_eq!(up.iter().filter(|l| !l.0).count(), 2, "{up:?}");
+    assert!(up.iter().all(|&(_, o)| o < 0.5), "{up:?}");
+    let tree = app.accessibility_tree().unwrap();
+    let dialog = find(&tree, |n| n.role == Role::Dialog).expect("the next box");
+    assert_eq!(dialog.name, "Saved");
+}

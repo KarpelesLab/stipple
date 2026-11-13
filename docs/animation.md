@@ -306,8 +306,8 @@ column(rows.collect())
   turns round and comes back from where it is.
 - The content of an overlay (`cx.overlay`) can have an exit too: when the
   view stops declaring the overlay, the app keeps drawing it where it was,
-  over the window, while it leaves. A modal overlay's scrim fades out with it
-  on the same motion. Like any ghost, a leaving overlay takes no input: a
+  over the window, while it leaves. A modal overlay's scrim fades in and out
+  with it, on its content's enter and exit motion. Like any ghost, a leaving overlay takes no input: a
   click on it reaches what's beneath (the scrim stops blocking at once), the
   keyboard can't focus into it, and screen readers no longer see it. An
   overlay is the same one across frames by its content's key, or else by its

@@ -15,13 +15,6 @@ use std::rc::Rc;
 use super::password::password_field_with;
 use super::{PasswordField, Variant, button_variant, placeholder};
 
-thread_local! {
-    /// The message box last drawn (on the UI thread, in the primary window),
-    /// and when it opened.
-    static SHOWN: std::cell::Cell<Option<(u64, std::time::Duration)>> =
-        const { std::cell::Cell::new(None) };
-}
-
 /// The panel's width, in logical pixels.
 const WIDTH: f64 = 400.0;
 
@@ -210,20 +203,12 @@ pub(crate) fn overlay<S: 'static>(
         } else {
             mb.title.clone()
         });
-    // It pops in on the theme's dialog motion, from when this box first
-    // showed.
-    let now = cx.frame_time();
-    let opened = SHOWN.with(|s| match s.get() {
-        Some((shown, at)) if shown == id => at,
-        _ => {
-            let at = super::motion::start_of(now);
-            s.set(Some((id, at)));
-            at
-        }
-    });
-    let t = super::motion::progress(cx, theme.motion.dialog, Some(opened));
-    // ...and fades back out (with its scrim) when it's answered.
-    let content = super::motion::dialog(content, &theme.motion, t)
+    // It pops in on the theme's dialog motion and fades back out when it's
+    // answered, its scrim with it. Keyed by the box, so the next one waiting
+    // comes in as this one leaves.
+    let content = content
+        .key(("stipple-message-box", id))
+        .enter(super::motion::dialog_effect(&theme.motion))
         .exit(super::motion::dialog_exit(&theme.motion));
     cx.overlay(OverlaySpec {
         content,

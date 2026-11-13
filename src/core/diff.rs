@@ -105,6 +105,7 @@ fn visuals_equal(a: &LayoutNode, b: &LayoutNode) -> bool {
     a.bounds == b.bounds
         && a.decoration == b.decoration
         && a.native == b.native
+        && a.native_from == b.native_from
         && a.content == b.content
         && a.caret == b.caret
         && a.selection == b.selection
@@ -257,6 +258,7 @@ mod tests {
             text_pos: None,
             wrap: false,
             native: None,
+            native_from: None,
             scroll: None,
             scroll_horizontal: false,
             clip: false,
@@ -297,6 +299,7 @@ mod tests {
             text_pos: None,
             wrap: false,
             native: None,
+            native_from: None,
             scroll: None,
             scroll_horizontal: false,
             clip: false,

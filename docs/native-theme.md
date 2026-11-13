@@ -40,8 +40,10 @@ Stipple still does layout, input, the caret and selection, and the labels.
 ¹ The platform has no such control.
 
 Each control is drawn in its current state, so hover, pressed and focus look the
-way the OS draws them. Bitmaps are cached by control, state and size, so the OS
-is only asked again when one of those changes.
+way the OS draws them. A change cross-fades from the old state's picture to the
+new one on the theme's motion (see [widgets.md](widgets.md#motion)). Bitmaps are
+cached by control, state and size, so the OS is only asked again when one of
+those changes.
 
 How each platform draws them, and its quirks, is in the platform guides:
 [Windows](platforms/windows.md#os-drawn-controls), [macOS](platforms/macos.md#os-drawn-controls),
