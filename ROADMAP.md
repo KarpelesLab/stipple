@@ -864,11 +864,14 @@ nothing to drive them and background work couldn't update the UI.
   newer than API 21). CI's emulator run shows `androiddemo`'s spinner building
   frames between timer ticks; the rate isn't checked.
 - ✅ Theme changes that cross-fade, over 200 ms (see Phase 8).
-- ⬜ macOS CI animates at only ~15 fps (10–12 frames during asyncdemo's 600 ms
+- ✅ macOS CI animates at only ~15 fps (10–12 frames during asyncdemo's 600 ms
   load, against ~36 on X11 and ~18 on Wayland): find out whether
   `CVDisplayLink` is ticking or the 30 Hz fallback timer is, and what each
   frame costs.
-  *Instrumented and fixed from reading the code, not yet measured on CI. The
+  **Measured on CI after the fix (run 43384432115): 36 frames over 7 ticks
+  while loading, 31 from the display link and 1 from the timer, 6.3 ms mean
+  per present, 0.16 ms per display** — on a par with X11.
+  *Instrumented and fixed from reading the code, then confirmed on CI. The
   frame itself is cheap: on X11 at 2x the same run presents a 22×22 damage
   region per frame in under 1 ms on average, and the macOS runner is 1x. What
   was slow on macOS is how frames reached the screen and how they were paced:
