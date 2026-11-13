@@ -26,7 +26,7 @@ says or does:
 | --- | --- | --- |
 | NVDA (Windows) | `screen-reader-windows` | passing in CI; still reports without failing the workflow |
 | VoiceOver (macOS) | `visual-macos`, *Screen reader (VoiceOver)* | passing in CI; doesn't fail the job |
-| TalkBack (Android) | `visual-android` (API 34) | passes on a local API 34 emulator; not yet seen passing in CI; doesn't fail the job |
+| TalkBack (Android) | `visual-android` (API 34) | passing in CI; doesn't fail the job |
 | Orca (Linux) | `a11y-dbus` (see [Linux](#linux)) | passing in CI; doesn't fail the job yet |
 | Narrator, JAWS, VoiceOver on iOS | none | not tried |
 
