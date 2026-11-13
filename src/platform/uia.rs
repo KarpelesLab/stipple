@@ -885,7 +885,9 @@ impl Drop for UiaTree {
         // No longer the window's current tree.
         if let Some(root) = self.nodes.first_mut() {
             let r = root as *mut Provider;
-            CURRENT.with(|c| c.borrow_mut().retain(|&(_, cur)| cur != r));
+            // `try_with`: a window dropped while its thread exits finds the
+            // registry already gone, which is fine.
+            let _ = CURRENT.try_with(|c| c.borrow_mut().retain(|&(_, cur)| cur != r));
         }
     }
 }
