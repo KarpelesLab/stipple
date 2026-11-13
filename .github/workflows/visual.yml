@@ -2332,6 +2332,10 @@ jobs:
           # ...and QueryInterface refuses the interfaces it doesn't implement
           # (IMarshal here), so COM and UIA never call into the wrong vtable.
           grep -q "UIA provider: QueryInterface refuses" uiademo.log
+          # ...and each of its interfaces (…Simple, …Fragment, …FragmentRoot)
+          # dispatches through a vtable of its own: the fragment interfaces
+          # derive from IUnknown, not from …Simple.
+          grep -q "UIA provider: each interface has its own vtable" uiademo.log
 
       # From outside the app, as Narrator reads it: the System.Windows.Automation
       # client walks a running touchdemo window (from its handle) through

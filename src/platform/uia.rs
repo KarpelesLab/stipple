@@ -191,11 +191,11 @@ struct UiaRect {
     height: f64,
 }
 
-/// The combined vtable for `IRawElementProviderFragmentRoot`, which inherits
-/// `…Fragment`, which inherits `…Simple`, which inherits `IUnknown`. One vtable
-/// covers every provider (the root and its descendants); only the *behaviour* of
-/// `Navigate`/`get_FragmentRoot` differs, driven by each node's links. Method
-/// order must match the COM interface declarations exactly.
+/// `IRawElementProviderSimple`'s vtable: `IUnknown`, then its four methods.
+/// The provider's own pointer is this interface. `…Fragment` and
+/// `…FragmentRoot` each derive from `IUnknown` alone (not from `…Simple`), so
+/// they are separate interfaces with vtables of their own, reached through
+/// `QueryInterface`. Method order must match the COM declarations exactly.
 #[repr(C)]
 struct ProviderVtbl {
     // IUnknown
@@ -209,7 +209,15 @@ struct ProviderVtbl {
     get_property_value: unsafe extern "system" fn(*mut c_void, i32, *mut Variant) -> Hresult,
     get_host_raw_element_provider:
         unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Hresult,
-    // IRawElementProviderFragment
+}
+
+/// `IRawElementProviderFragment`'s vtable: `IUnknown`, then its six methods.
+#[repr(C)]
+struct FragmentVtbl {
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
     navigate: unsafe extern "system" fn(*mut c_void, i32, *mut *mut c_void) -> Hresult,
     get_runtime_id: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Hresult,
     get_bounding_rectangle: unsafe extern "system" fn(*mut c_void, *mut UiaRect) -> Hresult,
@@ -217,7 +225,16 @@ struct ProviderVtbl {
         unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Hresult,
     set_focus: unsafe extern "system" fn(*mut c_void) -> Hresult,
     get_fragment_root: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Hresult,
-    // IRawElementProviderFragmentRoot
+}
+
+/// `IRawElementProviderFragmentRoot`'s vtable: `IUnknown`, then its two
+/// methods.
+#[repr(C)]
+struct RootVtbl {
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
     element_provider_from_point:
         unsafe extern "system" fn(*mut c_void, f64, f64, *mut *mut c_void) -> Hresult,
     get_focus: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Hresult,
@@ -240,6 +257,12 @@ struct InvokeVtbl {
 #[repr(C)]
 struct Provider {
     vtable: *const ProviderVtbl,
+    /// The `IRawElementProviderFragment` interface pointer is this field's
+    /// address.
+    fragment_vtable: *const FragmentVtbl,
+    /// The `IRawElementProviderFragmentRoot` interface pointer is this
+    /// field's address (answered by the root only).
+    root_vtable: *const RootVtbl,
     /// The `IInvokeProvider` interface pointer is this field's address.
     invoke_vtable: *const InvokeVtbl,
     refcount: u32,
@@ -314,41 +337,93 @@ fn focusable(role: A11yRole) -> bool {
         )
 }
 
+/// The provider a `…Fragment` interface pointer belongs to.
+unsafe fn fragment_owner(this: *mut c_void) -> *mut Provider {
+    unsafe {
+        (this as *mut u8).sub(core::mem::offset_of!(Provider, fragment_vtable)) as *mut Provider
+    }
+}
+
+/// The provider a `…FragmentRoot` interface pointer belongs to.
+unsafe fn root_owner(this: *mut c_void) -> *mut Provider {
+    unsafe { (this as *mut u8).sub(core::mem::offset_of!(Provider, root_vtable)) as *mut Provider }
+}
+
+/// `p`'s `IRawElementProviderFragment` interface.
+unsafe fn fragment_of(p: *mut Provider) -> *mut c_void {
+    unsafe { &raw mut (*p).fragment_vtable as *mut c_void }
+}
+
+/// `p`'s `IRawElementProviderFragmentRoot` interface.
+unsafe fn root_of(p: *mut Provider) -> *mut c_void {
+    unsafe { &raw mut (*p).root_vtable as *mut c_void }
+}
+
+/// `QueryInterface` for any of a provider's interfaces, given the provider:
+/// `IUnknown` and `…Simple` are the provider pointer itself, `…Fragment` and
+/// (on the root) `…FragmentRoot` their own fields. Every other interface is
+/// refused: UIA and COM probe for many (IMarshal,
+/// IRawElementProviderHwndOverride, …AdviseEvents, …Simple2, IAccessible, …)
+/// and call their methods through whatever comes back.
+unsafe fn query(p: *mut Provider, iid: *const Guid, ppv: *mut *mut c_void) -> Hresult {
+    unsafe {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+        *ppv = core::ptr::null_mut();
+        if iid.is_null() {
+            return E_NOINTERFACE;
+        }
+        let out = match *iid {
+            IID_IUnknown | IID_IRawElementProviderSimple => p as *mut c_void,
+            IID_IRawElementProviderFragment => fragment_of(p),
+            IID_IRawElementProviderFragmentRoot if (*p).parent.is_null() => root_of(p),
+            _ => return E_NOINTERFACE,
+        };
+        add_ref(p as *mut c_void);
+        *ppv = out;
+    }
+    S_OK
+}
+
 unsafe extern "system" fn qi(
     this: *mut c_void,
     iid: *const Guid,
     ppv: *mut *mut c_void,
 ) -> Hresult {
-    // The combined vtable satisfies IUnknown, IRawElementProviderSimple,
-    // …Fragment and …FragmentRoot (each a prefix of the next), and nothing
-    // else. Every other interface is refused: UIA and COM probe for many
-    // (IMarshal, IRawElementProviderHwndOverride, …AdviseEvents, …Simple2,
-    // IAccessible, …) and call their methods through whatever we hand back,
-    // so answering those with this vtable sends their calls into the wrong
-    // functions — which is what broke a cross-process client reading the
-    // desktop's top-level windows.
-    unsafe {
-        if ppv.is_null() {
-            return E_POINTER;
-        }
-        let id = if iid.is_null() { None } else { Some(*iid) };
-        let ours = matches!(
-            id,
-            Some(
-                IID_IUnknown
-                    | IID_IRawElementProviderSimple
-                    | IID_IRawElementProviderFragment
-                    | IID_IRawElementProviderFragmentRoot
-            )
-        );
-        if !ours {
-            *ppv = core::ptr::null_mut();
-            return E_NOINTERFACE;
-        }
-        *ppv = this;
-        add_ref(this);
-    }
-    S_OK
+    unsafe { query(this as *mut Provider, iid, ppv) }
+}
+
+unsafe extern "system" fn fragment_qi(
+    this: *mut c_void,
+    iid: *const Guid,
+    ppv: *mut *mut c_void,
+) -> Hresult {
+    unsafe { query(fragment_owner(this), iid, ppv) }
+}
+
+unsafe extern "system" fn fragment_add_ref(this: *mut c_void) -> u32 {
+    unsafe { add_ref(fragment_owner(this) as *mut c_void) }
+}
+
+unsafe extern "system" fn fragment_release(this: *mut c_void) -> u32 {
+    unsafe { release(fragment_owner(this) as *mut c_void) }
+}
+
+unsafe extern "system" fn root_qi(
+    this: *mut c_void,
+    iid: *const Guid,
+    ppv: *mut *mut c_void,
+) -> Hresult {
+    unsafe { query(root_owner(this), iid, ppv) }
+}
+
+unsafe extern "system" fn root_add_ref(this: *mut c_void) -> u32 {
+    unsafe { add_ref(root_owner(this) as *mut c_void) }
+}
+
+unsafe extern "system" fn root_release(this: *mut c_void) -> u32 {
+    unsafe { release(root_owner(this) as *mut c_void) }
 }
 
 unsafe extern "system" fn add_ref(this: *mut c_void) -> u32 {
@@ -555,14 +630,19 @@ unsafe extern "system" fn get_host_raw_element_provider(
     S_OK
 }
 
-/// Set `*ret` to `target` (or null), `AddRef`-ing it as COM requires of an
-/// out-parameter the caller will `Release`.
-unsafe fn yield_provider(target: *mut Provider, ret: *mut *mut c_void) {
+/// Set `*ret` to `target`'s interface picked by `iface` (or null),
+/// `AddRef`-ing it as COM requires of an out-parameter the caller will
+/// `Release`.
+unsafe fn yield_provider(
+    target: *mut Provider,
+    iface: unsafe fn(*mut Provider) -> *mut c_void,
+    ret: *mut *mut c_void,
+) {
     unsafe {
         if target.is_null() {
             *ret = core::ptr::null_mut();
         } else {
-            *ret = target as *mut c_void;
+            *ret = iface(target);
             add_ref(target as *mut c_void);
         }
     }
@@ -574,7 +654,7 @@ unsafe extern "system" fn navigate(
     ret: *mut *mut c_void,
 ) -> Hresult {
     unsafe {
-        let p = this as *mut Provider;
+        let p = fragment_owner(this);
         let children: &[*mut Provider] = &(*p).children;
         let target = match direction {
             NavigateDirection_Parent => (*p).parent,
@@ -588,7 +668,7 @@ unsafe extern "system" fn navigate(
             NavigateDirection_PreviousSibling => sibling(p, -1),
             _ => core::ptr::null_mut(),
         };
-        yield_provider(target, ret);
+        yield_provider(target, fragment_of, ret);
     }
     S_OK
 }
@@ -616,7 +696,7 @@ unsafe extern "system" fn get_runtime_id(this: *mut c_void, ret: *mut *mut c_voi
     // A 2-element SAFEARRAY<i4>: [UiaAppendRuntimeId, our unique id] — UIA prepends
     // the host runtime id, so this need only be unique within our fragment.
     unsafe {
-        let p = this as *mut Provider;
+        let p = fragment_owner(this);
         // A hosted root takes its window's runtime id.
         if (*p).parent.is_null() && !(*p).hwnd.is_null() {
             *ret = core::ptr::null_mut();
@@ -638,7 +718,7 @@ unsafe extern "system" fn get_runtime_id(this: *mut c_void, ret: *mut *mut c_voi
 
 unsafe extern "system" fn get_bounding_rectangle(this: *mut c_void, ret: *mut UiaRect) -> Hresult {
     unsafe {
-        *ret = screen_rect(this as *const Provider);
+        *ret = screen_rect(fragment_owner(this));
     }
     S_OK
 }
@@ -659,7 +739,7 @@ unsafe extern "system" fn set_focus(_this: *mut c_void) -> Hresult {
 
 unsafe extern "system" fn get_fragment_root(this: *mut c_void, ret: *mut *mut c_void) -> Hresult {
     unsafe {
-        yield_provider((*(this as *mut Provider)).root, ret);
+        yield_provider((*fragment_owner(this)).root, root_of, ret);
     }
     S_OK
 }
@@ -686,8 +766,8 @@ unsafe extern "system" fn element_provider_from_point(
         }
     }
     unsafe {
-        let root = (*(this as *mut Provider)).root;
-        yield_provider(hit(root, x, y).unwrap_or(root), ret);
+        let root = (*root_owner(this)).root;
+        yield_provider(hit(root, x, y).unwrap_or(root), fragment_of, ret);
     }
     S_OK
 }
@@ -695,8 +775,8 @@ unsafe extern "system" fn element_provider_from_point(
 unsafe extern "system" fn get_focus(this: *mut c_void, ret: *mut *mut c_void) -> Hresult {
     // Walk the fragment for the node Stipple marked focused.
     unsafe {
-        let root = (*(this as *mut Provider)).root;
-        yield_provider(find_focused(root), ret);
+        let root = (*root_owner(this)).root;
+        yield_provider(find_focused(root), fragment_of, ret);
     }
     S_OK
 }
@@ -728,12 +808,24 @@ static PROVIDER_VTBL: ProviderVtbl = ProviderVtbl {
     get_pattern_provider,
     get_property_value,
     get_host_raw_element_provider,
+};
+
+static FRAGMENT_VTBL: FragmentVtbl = FragmentVtbl {
+    query_interface: fragment_qi,
+    add_ref: fragment_add_ref,
+    release: fragment_release,
     navigate,
     get_runtime_id,
     get_bounding_rectangle,
     get_embedded_fragment_roots,
     set_focus,
     get_fragment_root,
+};
+
+static ROOT_VTBL: RootVtbl = RootVtbl {
+    query_interface: root_qi,
+    add_ref: root_add_ref,
+    release: root_release,
     element_provider_from_point,
     get_focus,
 };
@@ -802,6 +894,8 @@ impl UiaTree {
                 name.push(0);
                 Provider {
                     vtable: &PROVIDER_VTBL,
+                    fragment_vtable: &FRAGMENT_VTBL,
+                    root_vtable: &ROOT_VTBL,
                     invoke_vtable: &INVOKE_VTBL,
                     refcount: 1,
                     name,
@@ -850,45 +944,104 @@ impl UiaTree {
     }
 }
 
-/// Read a property + walk the tree through the *real* COM vtable (`Navigate` +
-/// `get_property_value`), printing each node — the CI self-check that proves the
-/// whole hierarchy, not just the root, is navigable.
-unsafe fn dump(p: *mut c_void, depth: usize) {
+/// `QueryInterface` through `p`'s own vtable (any of its interfaces: each
+/// starts with `IUnknown`), as a client does. Null if refused.
+unsafe fn query_through(p: *mut c_void, iid: &Guid) -> *mut c_void {
     unsafe {
-        let vt = &*(*(p as *mut Provider)).vtable;
-        let mut nm = Variant::empty();
-        (vt.get_property_value)(p, UIA_NamePropertyId, &mut nm);
-        let name = bstr_to_string(nm.val as *const u16);
-        if nm.val != 0 {
-            SysFreeString(nm.val as *mut u16);
+        let unknown = &**(p as *mut *const InvokeVtbl);
+        let mut out: *mut c_void = core::ptr::null_mut();
+        if (unknown.query_interface)(p, iid, &mut out) != S_OK {
+            return core::ptr::null_mut();
         }
-        let mut ct = Variant::empty();
-        (vt.get_property_value)(p, UIA_ControlTypePropertyId, &mut ct);
+        out
+    }
+}
+
+/// Release an interface pointer through its own vtable.
+unsafe fn release_through(p: *mut c_void) {
+    unsafe {
+        let unknown = &**(p as *mut *const InvokeVtbl);
+        (unknown.release)(p);
+    }
+}
+
+/// A string property of the provider behind interface `p`, read through its
+/// `…Simple` interface.
+unsafe fn name_through(p: *mut c_void, property: i32) -> String {
+    unsafe {
+        let simple = query_through(p, &IID_IRawElementProviderSimple);
+        if simple.is_null() {
+            return String::from("<no IRawElementProviderSimple>");
+        }
+        let vt = &**(simple as *mut *const ProviderVtbl);
+        let mut v = Variant::empty();
+        (vt.get_property_value)(simple, property, &mut v);
+        release_through(simple);
+        if v.vt == VT_BSTR {
+            let s = bstr_to_string(v.val as *const u16);
+            SysFreeString(v.val as *mut u16);
+            s
+        } else {
+            String::new()
+        }
+    }
+}
+
+/// An `i32` property of the provider behind interface `p`.
+unsafe fn int_through(p: *mut c_void, property: i32) -> i32 {
+    unsafe {
+        let simple = query_through(p, &IID_IRawElementProviderSimple);
+        if simple.is_null() {
+            return 0;
+        }
+        let vt = &**(simple as *mut *const ProviderVtbl);
+        let mut v = Variant::empty();
+        (vt.get_property_value)(simple, property, &mut v);
+        release_through(simple);
+        v.val as i32
+    }
+}
+
+/// `Navigate` from the fragment `frag`, through its `…Fragment` vtable.
+unsafe fn navigate_through(frag: *mut c_void, direction: i32) -> *mut c_void {
+    unsafe {
+        let vt = &**(frag as *mut *const FragmentVtbl);
+        let mut out: *mut c_void = core::ptr::null_mut();
+        (vt.navigate)(frag, direction, &mut out);
+        out
+    }
+}
+
+/// Print the fragment `frag` and its descendants, walked as a client walks
+/// them: `Navigate` (FirstChild / NextSibling) on each node's `…Fragment`
+/// interface, properties through `…Simple` from `QueryInterface` — the CI
+/// self-check that the whole hierarchy is navigable through the interfaces
+/// COM hands out, not only through our own layout.
+unsafe fn dump(frag: *mut c_void, depth: usize) {
+    unsafe {
         let indent = "  ".repeat(depth);
         println!(
             "UIA provider:{indent} controltype={} name={:?}",
-            ct.val as i32, name
+            int_through(frag, UIA_ControlTypePropertyId),
+            name_through(frag, UIA_NamePropertyId)
         );
-        // First child, then iterate next-sibling — all through Navigate.
-        let mut child: *mut c_void = core::ptr::null_mut();
-        (vt.navigate)(p, NavigateDirection_FirstChild, &mut child);
+        let mut child = navigate_through(frag, NavigateDirection_FirstChild);
         while !child.is_null() {
             dump(child, depth + 1);
-            let cvt = &*(*(child as *mut Provider)).vtable;
-            let mut next: *mut c_void = core::ptr::null_mut();
-            (cvt.navigate)(child, NavigateDirection_NextSibling, &mut next);
-            (cvt.release)(child);
+            let next = navigate_through(child, NavigateDirection_NextSibling);
+            release_through(child);
             child = next;
         }
     }
 }
 
-/// Exercise a provider *tree* through its COM vtables (real COM dispatch) and
-/// print what it returns — the in-process CI self-check (CI also walks a live
-/// window from another process; see `docs/accessibility.md`). Builds a small
-/// representative UI rooted at a window named `name`, then verifies the root
-/// answers `ProviderOptions`/`ControlType`/`Name` and that `Navigate` walks the
-/// full descendant tree.
+/// Exercise a provider *tree* through its COM interfaces (real COM dispatch,
+/// each interface through its own vtable as `QueryInterface` hands it out)
+/// and print what it returns — the in-process CI self-check (CI also walks a
+/// live window from another process; see `docs/accessibility.md`). Builds a
+/// small representative UI rooted at a window named `name`, then verifies the
+/// root answers `ProviderOptions`/`ControlType`/`Name` and that `Navigate`
+/// walks the full descendant tree.
 pub fn selftest(name: &str) -> Result<(), String> {
     fn leaf(role: A11yRole, name: &str, focused: bool) -> A11yNode {
         A11yNode {
@@ -914,62 +1067,80 @@ pub fn selftest(name: &str) -> Result<(), String> {
         let vt = &*(*(p as *mut Provider)).vtable;
         let mut opts: i32 = 0;
         (vt.get_provider_options)(p, &mut opts);
-        let mut ct = Variant::empty();
-        (vt.get_property_value)(p, UIA_ControlTypePropertyId, &mut ct);
-        let mut nm = Variant::empty();
-        (vt.get_property_value)(p, UIA_NamePropertyId, &mut nm);
-        let name_out = bstr_to_string(nm.val as *const u16);
-        if nm.val != 0 {
-            SysFreeString(nm.val as *mut u16);
-        }
         println!(
             "UIA provider: options={} controltype={} name={:?}",
-            opts, ct.val as i32, name_out
+            opts,
+            int_through(p, UIA_ControlTypePropertyId),
+            name_through(p, UIA_NamePropertyId)
         );
 
-        // The full element tree, walked via Navigate (FirstChild / NextSibling).
-        let mut child: *mut c_void = core::ptr::null_mut();
-        (vt.navigate)(p, NavigateDirection_FirstChild, &mut child);
+        // The full element tree, walked via the fragment interface's
+        // Navigate.
+        let frag = query_through(p, &IID_IRawElementProviderFragment);
+        if frag.is_null() {
+            return Err("QueryInterface refused IRawElementProviderFragment".into());
+        }
+        let mut child = navigate_through(frag, NavigateDirection_FirstChild);
         while !child.is_null() {
             dump(child, 1);
-            let cvt = &*(*(child as *mut Provider)).vtable;
-            let mut next: *mut c_void = core::ptr::null_mut();
-            (cvt.navigate)(child, NavigateDirection_NextSibling, &mut next);
-            (cvt.release)(child);
+            let next = navigate_through(child, NavigateDirection_NextSibling);
+            release_through(child);
             child = next;
         }
-
-        // Focus query: the tree reports the focused TextField ("Name").
-        let mut focus: *mut c_void = core::ptr::null_mut();
-        (vt.get_focus)(p, &mut focus);
-        if !focus.is_null() {
-            let fvt = &*(*(focus as *mut Provider)).vtable;
-            let mut fnm = Variant::empty();
-            (fvt.get_property_value)(focus, UIA_NamePropertyId, &mut fnm);
-            let fname = bstr_to_string(fnm.val as *const u16);
-            if fnm.val != 0 {
-                SysFreeString(fnm.val as *mut u16);
-            }
-            (fvt.release)(focus);
-            println!("UIA provider: focus={fname:?}");
+        // A child's parent is the root, and the root's fragment root is the
+        // root, through the interfaces they hand out.
+        let first = navigate_through(frag, NavigateDirection_FirstChild);
+        let parent = navigate_through(first, NavigateDirection_Parent);
+        if parent != frag {
+            return Err("Navigate(Parent) didn't lead back to the root's fragment".into());
         }
+        release_through(parent);
+        release_through(first);
 
-        // QueryInterface answers only the interfaces the vtable implements:
-        // the fragment root, yes; IMarshal (one of the many COM and UIA probe
-        // for), no.
-        const IID_IMarshal: Guid = Guid(0x3, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
-        let mut out: *mut c_void = core::ptr::null_mut();
-        if (vt.query_interface)(p, &IID_IRawElementProviderFragmentRoot, &mut out) != S_OK
-            || out != p
-        {
+        // Focus query, through the fragment root interface: the tree reports
+        // the focused TextField ("Name").
+        let root_iface = query_through(p, &IID_IRawElementProviderFragmentRoot);
+        if root_iface.is_null() {
             return Err("QueryInterface refused IRawElementProviderFragmentRoot".into());
         }
-        (vt.release)(out);
+        let rvt = &**(root_iface as *mut *const RootVtbl);
+        let mut focus: *mut c_void = core::ptr::null_mut();
+        (rvt.get_focus)(root_iface, &mut focus);
+        if !focus.is_null() {
+            println!(
+                "UIA provider: focus={:?}",
+                name_through(focus, UIA_NamePropertyId)
+            );
+            release_through(focus);
+        }
+        let fvt = &**(frag as *mut *const FragmentVtbl);
+        let mut froot: *mut c_void = core::ptr::null_mut();
+        (fvt.get_fragment_root)(frag, &mut froot);
+        if froot != root_iface {
+            return Err("get_FragmentRoot isn't the root's FragmentRoot interface".into());
+        }
+        release_through(froot);
+        release_through(root_iface);
+        release_through(frag);
+
+        // QueryInterface answers only the interfaces the provider implements;
+        // IMarshal (one of the many COM and UIA probe for) is refused, and a
+        // node below the root isn't a fragment root.
+        const IID_IMarshal: Guid = Guid(0x3, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
         let mut out: *mut c_void = core::ptr::null_mut();
         if (vt.query_interface)(p, &IID_IMarshal, &mut out) != E_NOINTERFACE || !out.is_null() {
             return Err("QueryInterface answered IMarshal".into());
         }
+        let frag = query_through(p, &IID_IRawElementProviderFragment);
+        let child = navigate_through(frag, NavigateDirection_FirstChild);
+        release_through(frag);
+        let child_root = query_through(child, &IID_IRawElementProviderFragmentRoot);
+        release_through(child);
+        if !child_root.is_null() {
+            return Err("a child answered IRawElementProviderFragmentRoot".into());
+        }
         println!("UIA provider: QueryInterface refuses interfaces it doesn't implement");
+        println!("UIA provider: each interface has its own vtable");
     }
     Ok(())
 }
