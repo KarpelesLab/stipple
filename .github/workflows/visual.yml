@@ -2958,6 +2958,17 @@ jobs:
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
           grep -q 'asyncdemo: spinner ok' async.log
+          # The frame rate (ROADMAP 7a): frames built during the 600 ms load
+          # (~36 at 60 Hz; this job used to get 10–12), with where they came
+          # from (CVDisplayLink or the fallback timer) and what they cost.
+          frames=$(sed -n 's/.*spinner ok (\([0-9]*\) frames.*/\1/p' async.log)
+          grep 'asyncdemo: frame clock' async.log || true
+          echo "frames while loading: $frames"
+          [ -n "$frames" ] || { echo "no frame count in the log"; exit 1; }
+          # Loose: fail only below the old rate, and flag anything under 24.
+          # (The count runs from the first frame, ~100 ms before the load.)
+          [ "$frames" -ge 10 ] || { echo "::error::asyncdemo built only $frames frames in 600 ms"; exit 1; }
+          [ "$frames" -ge 24 ] || echo "::warning::asyncdemo built only $frames frames while loading (roughly $((frames * 10 / 7)) fps over ~700 ms)"
 
       - name: A canvas repaints only the rows it invalidates
         run: |

@@ -513,8 +513,17 @@ each frame to animate. See [transforms.md](transforms.md).
 | Android | not yet: nothing animates there |
 
 A frame that's asked for always arrives: if the display source doesn't deliver
-within two refresh intervals (a hidden window, say), a timer does.
+within two refresh intervals (a hidden window, say), a timer does. A source
+that misses three frames in a row (`frame::MISS_LIMIT`; a display link that
+doesn't tick on a virtual display, say) is no longer waited for: the timer
+paces frames at the refresh interval until the source delivers one again.
 `stipple::platform::frame` holds the clock.
+
+`frame::stats()` tells where frames came from and what they cost, since the
+process started: how many the display source and the fallback timer
+delivered, how many an `App` presented and how long building, rasterizing and
+handing them to the backend took (mean and max), and, on macOS, how long
+`drawRect:` took to put them on screen. `asyncdemo --selftest` prints them.
 
 ## Not yet
 

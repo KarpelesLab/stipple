@@ -73,9 +73,10 @@ fn start_work(handle: &AppHandle<State>) {
 fn check_frames(s: &State) {
     let loading = FRAMES_LOADING.load(Ordering::Relaxed);
     let idle = FRAMES_IDLE.load(Ordering::Relaxed);
-    // At 60 Hz a 600 ms load builds ~36 frames against ~6 ticks. macOS CI
-    // manages only 10–12 (an open issue, see ROADMAP 7a), so this only asks
-    // for more frames than the timer's one per tick could build.
+    // At 60 Hz a 600 ms load builds ~36 frames against ~6 ticks. Runners
+    // vary (macOS CI used to manage only 10–12, see ROADMAP 7a), so this only
+    // asks for more frames than the timer's one per tick could build; CI
+    // reads the count from the line below.
     let animated = loading >= s.ticks_loading + 2;
     // One frame per tick, plus the one that showed the result.
     let settled = idle <= 2 * s.ticks_idle + 2;
@@ -84,6 +85,24 @@ fn check_frames(s: &State) {
         "asyncdemo: spinner {verdict} ({loading} frames over {} ticks while loading, \
          {idle} frames over {} ticks after)",
         s.ticks_loading, s.ticks_idle
+    );
+    // Where the frames came from (the display or the fallback timer) and
+    // what they cost, to explain a low count.
+    let f = stipple::platform::frame::stats();
+    let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+    println!(
+        "asyncdemo: frame clock: {} frames from the display, {} from the timer \
+         (refresh {:.1} ms); {} presents, {:.2} ms mean, {:.2} ms max; \
+         {} displays, {:.2} ms mean, {:.2} ms max",
+        f.from_display,
+        f.from_timer,
+        ms(stipple::platform::frame::interval()),
+        f.presents,
+        ms(f.present_mean()),
+        ms(f.present_max),
+        f.displays,
+        ms(f.display_mean()),
+        ms(f.display_max),
     );
     if verdict != "ok" {
         FAILED.store(true, Ordering::Relaxed);

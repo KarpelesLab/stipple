@@ -2659,6 +2659,7 @@ impl<S: 'static> App<S> {
                        window: &dyn crate::platform::Window,
                        force: bool| {
             app_dbg(format_args!("present: start"));
+            let began = crate::platform::time::Instant::now();
             // Clipboard writes and reads handlers queued.
             app.run_clipboard_requests(Some(window));
             // The theme may follow the state (`App::theme_with`); the title
@@ -2754,6 +2755,7 @@ impl<S: 'static> App<S> {
                 phys_size,
                 force || retitled,
             );
+            crate::platform::frame::note_present(began.elapsed());
         };
 
         // Native message boxes can show from now on.

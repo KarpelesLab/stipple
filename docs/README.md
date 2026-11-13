@@ -100,7 +100,8 @@ the compositor's defaults stay.
 ¹¹ CI checks that `asyncdemo`'s spinner animates and then stops. X11 paces
 frames with a timer at the RandR refresh rate; Wayland, Windows and macOS use
 frame callbacks, `DwmFlush` and `CVDisplayLink`, which CI exercises but can't
-time precisely.
+time precisely. The selftest prints where frames came from and what they
+cost; the macOS job also checks the frame count loosely.
 ¹² CI drives `webdemo` with scripted DOM events in headless Chrome, at a pixel
 ratio of 2, and checks what the app saw: clicks, the cursor, typing and Ctrl
 shortcuts, timers, the spinner animating and then stopping, and resizing.

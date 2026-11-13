@@ -47,6 +47,9 @@ mod lifecycle;
 mod menu_check;
 /// The pointer leaving the view, hiding the cursor, double-click time.
 mod pointer;
+/// Putting frames on screen: the framebuffer, damage, `drawRect:`.
+mod present;
+use present::Framebuffer;
 mod text_input;
 
 // ---- Objective-C runtime + framework FFI ------------------------------------
@@ -98,12 +101,6 @@ unsafe extern "C" {
     fn CGDataProviderCreateWithCFData(data: *mut c_void) -> *mut c_void;
     fn CGColorSpaceCreateDeviceRGB() -> *mut c_void;
     fn CGColorSpaceRelease(space: *mut c_void);
-    fn CGDataProviderCreateWithData(
-        info: *mut c_void,
-        data: *const c_void,
-        size: usize,
-        release: *const c_void,
-    ) -> *mut c_void;
     fn CGDataProviderRelease(provider: *mut c_void);
     #[allow(clippy::too_many_arguments)]
     fn CGImageCreate(
@@ -120,11 +117,6 @@ unsafe extern "C" {
         intent: i32,
     ) -> *mut c_void;
     fn CGImageRelease(image: *mut c_void);
-    fn CGContextDrawImage(ctx: *mut c_void, rect: CgRect, image: *mut c_void);
-    fn CGContextSaveGState(ctx: *mut c_void);
-    fn CGContextRestoreGState(ctx: *mut c_void);
-    fn CGContextTranslateCTM(ctx: *mut c_void, tx: f64, ty: f64);
-    fn CGContextScaleCTM(ctx: *mut c_void, sx: f64, sy: f64);
 }
 
 const NS_WINDOW_STYLE_TITLED: u64 = 1;
@@ -552,63 +544,7 @@ extern "C" fn draw_rect(this: Id, _cmd: Sel, _dirty: CgRect) {
         return;
     };
     let scale = win.scale.get();
-    {
-        let c = win.fb.borrow();
-        if c.px.is_empty() {
-            return;
-        }
-        unsafe {
-            // Current CGContext: [[NSGraphicsContext currentContext] CGContext]
-            let gctx_cls = class("NSGraphicsContext");
-            let current = msg_id(gctx_cls, sel("currentContext"));
-            if current.is_null() {
-                return;
-            }
-            let cg = msg_id(current, sel("CGContext"));
-            if cg.is_null() {
-                return;
-            }
-
-            let space = CGColorSpaceCreateDeviceRGB();
-            let provider = CGDataProviderCreateWithData(
-                std::ptr::null_mut(),
-                c.px.as_ptr() as *const c_void,
-                c.px.len(),
-                std::ptr::null(),
-            );
-            let image = CGImageCreate(
-                c.w,
-                c.h,
-                8,
-                32,
-                c.w * 4,
-                space,
-                CG_BITMAP_RGBA8,
-                provider,
-                std::ptr::null(),
-                false,
-                0,
-            );
-            // The context is in points; the framebuffer is in physical pixels.
-            let (width, height) = (c.w as f64 / scale, c.h as f64 / scale);
-            let rect = CgRect {
-                origin: CgPoint { x: 0.0, y: 0.0 },
-                size: CgSize { width, height },
-            };
-            // The view is `isFlipped` (top-left origin), but CGContextDrawImage
-            // interprets image data as Y=0-at-bottom, so without compensation
-            // the framebuffer lands upside down. Flip the CTM around the draw —
-            // the same fix the x11anywhere macOS backend uses.
-            CGContextSaveGState(cg);
-            CGContextTranslateCTM(cg, 0.0, height);
-            CGContextScaleCTM(cg, 1.0, -1.0);
-            CGContextDrawImage(cg, rect, image);
-            CGContextRestoreGState(cg);
-            CGImageRelease(image);
-            CGDataProviderRelease(provider);
-            CGColorSpaceRelease(space);
-        }
-    }
+    unsafe { win.fb.borrow().draw(scale) };
 }
 
 /// `isFlipped` => YES, so the view's coordinate origin is top-left and our
@@ -1350,14 +1286,6 @@ fn register_view_class() -> Class {
     }
 }
 
-/// A window's framebuffer: straight RGBA8, top row first, in physical pixels.
-#[derive(Default)]
-struct Framebuffer {
-    px: Vec<u8>,
-    w: usize,
-    h: usize,
-}
-
 /// One `NSWindow` and its `StippleView`, with what the backend keeps for it.
 /// Lives in [`WINDOWS`] while open; the view (which is also the window's
 /// delegate) finds it again from AppKit's callbacks.
@@ -1677,20 +1605,13 @@ impl Surface for MacSurface {
     fn size(&self) -> PhysicalSize {
         self.size
     }
-    fn present(&mut self, pixmap: &Pixmap, _damage: &[crate::geometry::Rect]) {
+    fn present(&mut self, pixmap: &Pixmap, damage: &[crate::geometry::Rect]) {
         let Some(w) = window_for_view(self.view) else {
             return;
         };
-        let size = pixmap.size();
-        {
-            let mut fb = w.fb.borrow_mut();
-            // Reuse the buffer's capacity instead of reallocating every frame.
-            fb.px.clear();
-            fb.px.extend_from_slice(pixmap.as_bytes());
-            fb.w = size.width as usize;
-            fb.h = size.height as usize;
-        }
-        unsafe { msg_void_bool(self.view, sel("setNeedsDisplay:"), true) };
+        // Only what changed is copied and redisplayed.
+        let (rects, whole) = w.fb.borrow_mut().update(pixmap, damage);
+        unsafe { present::invalidate(self.view, &rects, whole, w.scale.get()) };
     }
 }
 
@@ -1776,6 +1697,8 @@ unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, Platf
             sel("setCollectionBehavior:"),
             NS_COLLECTION_FULLSCREEN_PRIMARY,
         );
+        // Frames are drawn in sRGB (see `present`).
+        present::use_srgb(window);
         // The window is laid out in points; the framebuffer is in physical pixels.
         let scale = msg_f64(window, sel("backingScaleFactor"));
         let size = ScaleFactor::new(scale).to_physical(attrs.logical_size);

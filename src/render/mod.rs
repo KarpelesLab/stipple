@@ -35,7 +35,7 @@ pub(crate) mod lower;
 mod path;
 pub(crate) mod scene;
 mod software;
-mod surface;
+pub(crate) mod surface;
 mod text;
 
 pub use bidi::TextDirection;

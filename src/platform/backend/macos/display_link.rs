@@ -58,8 +58,11 @@ static LINK: AtomicUsize = AtomicUsize::new(0);
 static RUNNING: AtomicBool = AtomicBool::new(false);
 /// Callbacks in a row that found no frame wanted.
 static IDLE_TICKS: AtomicU32 = AtomicU32::new(0);
-/// After this many idle callbacks, the link is stopped.
-const IDLE_LIMIT: u32 = 3;
+/// After this many idle callbacks (about 200 ms at 60 Hz), the link is
+/// stopped. Not fewer: a frame that takes a few refreshes to build would
+/// otherwise stop the link between frames, and starting it again costs a
+/// refresh or more before its first callback.
+const IDLE_LIMIT: u32 = 12;
 
 extern "C" fn on_refresh(
     _link: DisplayLink,

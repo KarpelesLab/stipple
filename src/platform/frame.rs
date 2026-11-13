@@ -15,7 +15,13 @@
 //!
 //! A source that has been asked for a frame is trusted to deliver it, but if it
 //! doesn't within two intervals (a hidden window, a compositor that skipped
-//! us) the timer delivers it anyway, so a requested frame always arrives.
+//! us) the timer delivers it anyway, so a requested frame always arrives. A
+//! source that misses [`MISS_LIMIT`] frames in a row (a display link that
+//! doesn't tick, as on a virtual display) is no longer waited for: the timer
+//! paces frames at the refresh interval until the source delivers one again.
+//!
+//! [`stats`] counts where frames came from and what presenting them cost, for
+//! diagnostics (`asyncdemo --selftest` prints them).
 //!
 //! There is one event loop per process, so this state is global, like
 //! [`wake`](super::wake).
@@ -27,6 +33,51 @@ use std::time::Duration;
 
 /// The refresh interval assumed until a backend reports the display's: 60 Hz.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_nanos(16_666_667);
+
+/// How many frames in a row a display source may leave to the timer before
+/// the timer stops waiting for it.
+pub const MISS_LIMIT: u32 = 3;
+
+/// Where frames came from and what they cost, since the process started (see
+/// [`stats`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FrameStats {
+    /// Frames the display source delivered.
+    pub from_display: u64,
+    /// Frames the fallback timer delivered (no source, or one that missed).
+    pub from_timer: u64,
+    /// Frames presented by an [`App`](crate::App), and the time spent
+    /// building, rasterizing and handing them to the backend.
+    pub presents: u64,
+    pub present_time: Duration,
+    /// The longest of those.
+    pub present_max: Duration,
+    /// Times a backend put a presented frame on screen itself, after the
+    /// present (macOS's `drawRect:`), and the time that took.
+    pub displays: u64,
+    pub display_time: Duration,
+    pub display_max: Duration,
+}
+
+impl FrameStats {
+    /// The mean time per present.
+    pub fn present_mean(&self) -> Duration {
+        mean(self.present_time, self.presents)
+    }
+
+    /// The mean time per display.
+    pub fn display_mean(&self) -> Duration {
+        mean(self.display_time, self.displays)
+    }
+}
+
+fn mean(total: Duration, n: u64) -> Duration {
+    if n == 0 {
+        Duration::ZERO
+    } else {
+        total / u32::try_from(n).unwrap_or(u32::MAX)
+    }
+}
 
 /// How a display source is started and stopped. Both run on the UI thread.
 #[derive(Clone)]
@@ -47,6 +98,11 @@ struct Clock {
     interval: Duration,
     /// A source reported ticking idle, so the UI thread should stop it.
     idle: bool,
+    /// Frames in a row the source was trusted with and the timer delivered.
+    misses: u32,
+    /// The source missed [`MISS_LIMIT`] in a row: don't wait for it.
+    distrusted: bool,
+    stats: FrameStats,
 }
 
 impl Clock {
@@ -57,12 +113,32 @@ impl Clock {
             last: None,
             interval: DEFAULT_INTERVAL,
             idle: false,
+            misses: 0,
+            distrusted: false,
+            stats: FrameStats {
+                from_display: 0,
+                from_timer: 0,
+                presents: 0,
+                present_time: Duration::ZERO,
+                present_max: Duration::ZERO,
+                displays: 0,
+                display_time: Duration::ZERO,
+                display_max: Duration::ZERO,
+            },
         }
     }
 
     fn request(&mut self, now: Instant) {
         self.wanted.get_or_insert(now);
         self.idle = false;
+    }
+
+    /// A display source was asked for the outstanding frame: wait for it,
+    /// unless it has stopped delivering.
+    fn armed(&mut self) {
+        if self.wanted.is_some() && !self.distrusted {
+            self.claimed = true;
+        }
     }
 
     /// When the fallback timer must deliver the outstanding frame.
@@ -85,6 +161,10 @@ impl Clock {
             return false;
         }
         self.deliver(now);
+        self.stats.from_display += 1;
+        // It delivers: wait for it again.
+        self.misses = 0;
+        self.distrusted = false;
         true
     }
 
@@ -98,7 +178,12 @@ impl Clock {
     fn take_due(&mut self, now: Instant) -> bool {
         match self.deadline() {
             Some(at) if at <= now => {
+                if self.claimed {
+                    self.misses += 1;
+                    self.distrusted |= self.misses >= MISS_LIMIT;
+                }
                 self.deliver(now);
+                self.stats.from_timer += 1;
                 true
             }
             _ => false,
@@ -134,7 +219,7 @@ pub fn request() {
     let deadline = clock(|c| {
         c.request(now);
         if source.is_some() {
-            c.claimed = true;
+            c.armed();
         }
         c.deadline()
     });
@@ -171,6 +256,31 @@ pub(crate) static SUSPEND_TEST_LOCK: Mutex<()> = Mutex::new(());
 /// Whether frames are suspended (the app is in the background).
 pub fn suspended() -> bool {
     SUSPENDED.load(Ordering::Acquire)
+}
+
+/// Where frames came from and what presenting them cost, so far.
+pub fn stats() -> FrameStats {
+    clock(|c| c.stats)
+}
+
+/// Count a frame an app presented, which took `took`.
+pub(crate) fn note_present(took: Duration) {
+    clock(|c| {
+        c.stats.presents += 1;
+        c.stats.present_time += took;
+        c.stats.present_max = c.stats.present_max.max(took);
+    });
+}
+
+/// Count a backend putting a frame on screen after the present (macOS's
+/// `drawRect:`), which took `took`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn note_display(took: Duration) {
+    clock(|c| {
+        c.stats.displays += 1;
+        c.stats.display_time += took;
+        c.stats.display_max = c.stats.display_max.max(took);
+    });
 }
 
 /// Whether a frame has been asked for and not yet delivered.
@@ -329,6 +439,48 @@ mod tests {
             c.take_due(t0 + 80 * MS),
             "the source never came: the timer did"
         );
+    }
+
+    #[test]
+    fn a_source_that_keeps_missing_is_no_longer_waited_for() {
+        let mut c = Clock::new();
+        let iv = c.interval;
+        let mut t = Instant::now();
+        // The source never ticks: the timer delivers after two intervals...
+        for _ in 0..MISS_LIMIT {
+            c.request(t);
+            c.armed();
+            assert_eq!(c.deadline(), Some(t + iv * 2), "waiting for the source");
+            t += iv * 2;
+            assert!(c.take_due(t));
+        }
+        // ...until it stops waiting: frames come at the refresh interval.
+        c.request(t);
+        c.armed();
+        assert!(!c.claimed);
+        assert_eq!(c.deadline(), Some(t + iv), "paced from the last frame");
+        assert!(c.take_due(t + iv));
+        assert_eq!(c.stats.from_timer, u64::from(MISS_LIMIT) + 1);
+        // The source ticks again: it's trusted again.
+        c.request(t + iv);
+        assert!(c.tick(t + iv + MS));
+        assert_eq!(c.stats.from_display, 1);
+        c.request(t + iv * 2);
+        c.armed();
+        assert!(c.claimed, "waiting for the source again");
+        // An occasional miss doesn't count against it.
+        let mut c = Clock::new();
+        for i in 0..10u32 {
+            let at = t + iv * (4 * i);
+            c.request(at);
+            c.armed();
+            if i % 2 == 0 {
+                assert!(c.take_due(at + iv * 2), "missed");
+            } else {
+                assert!(c.tick(at + iv));
+            }
+        }
+        assert!(!c.distrusted);
     }
 
     #[test]

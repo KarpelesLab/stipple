@@ -864,6 +864,26 @@ nothing to drive them and background work couldn't update the UI.
   load, against ~36 on X11 and ~18 on Wayland): find out whether
   `CVDisplayLink` is ticking or the 30 Hz fallback timer is, and what each
   frame costs.
+  *Instrumented and fixed from reading the code, not yet measured on CI. The
+  frame itself is cheap: on X11 at 2x the same run presents a 22×22 damage
+  region per frame in under 1 ms on average, and the macOS runner is 1x. What
+  was slow on macOS is how frames reached the screen and how they were paced:
+  every present marked the whole view for redisplay, and `drawRect:` drew
+  the whole window from a straight-alpha RGBA image in the device color
+  space (a per-pixel premultiply, swizzle and color match in Core Graphics);
+  a display link that doesn't tick left every frame to the fallback timer,
+  two refreshes after the request (the ~30 Hz); and the link stopped after 3
+  idle callbacks, so a slow frame stopped and restarted it between frames.
+  Now presents mark only the damage (`setNeedsDisplayInRect:`), the buffer
+  is kept as sRGB BGRX (Core Graphics' native layout) in an sRGB window
+  backing store, so `drawRect:` is a copy; the frame clock stops waiting for
+  a source after three misses in a row (`frame::MISS_LIMIT`) and paces at
+  the refresh interval until it ticks again; and the link idles for ~200 ms
+  before stopping. `frame::stats()` counts frames from the display and from
+  the timer and times presents and `drawRect:`; `asyncdemo --selftest`
+  prints them, and the macOS job fails below 10 frames and warns below 24.
+  The next macOS run will tell which cause it was and whether this is
+  enough.*
 - **Exit criteria:** an example that loads data on a background thread shows a
   live spinner, then the result, on every platform. `asyncdemo --selftest`
   checks it in CI on the four desktops; iOS is unverified, Android's emulator

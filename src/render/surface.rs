@@ -90,6 +90,57 @@ impl Pixmap {
     }
 }
 
+/// The integer pixel rects of `src` that `damage` (physical pixels) covers,
+/// as `(x, y, width, height)`, rounded outwards and clipped to it; the whole
+/// pixmap when `damage` is empty.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn damage_rects(size: PhysicalSize, damage: &[Rect]) -> Vec<(u32, u32, u32, u32)> {
+    let (w, h) = (size.width, size.height);
+    if damage.is_empty() {
+        return if w > 0 && h > 0 {
+            vec![(0, 0, w, h)]
+        } else {
+            Vec::new()
+        };
+    }
+    damage
+        .iter()
+        .filter_map(|r| {
+            let x0 = (r.min_x().floor().max(0.0) as u32).min(w);
+            let y0 = (r.min_y().floor().max(0.0) as u32).min(h);
+            let x1 = (r.max_x().ceil().max(0.0) as u32).min(w);
+            let y1 = (r.max_y().ceil().max(0.0) as u32).min(h);
+            (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
+        })
+        .collect()
+}
+
+/// Copy the `rects` (from [`damage_rects`]) of `src` into `dst`, a buffer of
+/// the same size in Core Graphics' native order (`B, G, R, X`: 32-bit
+/// little-endian, alpha skipped first), resizing `dst` (to opaque black) if
+/// it's the wrong size.
+#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+pub(crate) fn copy_as_bgrx(src: &Pixmap, dst: &mut Vec<u8>, rects: &[(u32, u32, u32, u32)]) {
+    let len = src.as_bytes().len();
+    if dst.len() != len {
+        dst.clear();
+        dst.resize(len, 0);
+    }
+    let stride = src.stride();
+    let bytes = src.as_bytes();
+    for &(x, y, w, h) in rects {
+        for row in y as usize..(y + h) as usize {
+            let start = row * stride + x as usize * 4;
+            let end = start + w as usize * 4;
+            let from = bytes[start..end].as_chunks::<4>().0;
+            let to = dst[start..end].as_chunks_mut::<4>().0;
+            for (d, s) in to.iter_mut().zip(from) {
+                *d = [s[2], s[1], s[0], 0xff];
+            }
+        }
+    }
+}
+
 /// A presentable destination owned by the platform layer (a window's drawable,
 /// a canvas, a layer-backed view, …).
 ///
@@ -120,6 +171,33 @@ mod tests {
         assert_eq!(pm.pixel(1, 0), Some([10, 20, 30, 40]));
         assert_eq!(pm.pixel(2, 0), None);
         assert_eq!(pm.stride(), 8);
+    }
+
+    #[test]
+    fn damage_becomes_whole_pixels_inside_the_pixmap() {
+        let size = PhysicalSize::new(10, 8);
+        assert_eq!(damage_rects(size, &[]), [(0, 0, 10, 8)], "all of it");
+        let d = [
+            Rect::from_xywh(1.5, 2.25, 3.0, 1.5),
+            Rect::from_xywh(8.0, 6.0, 5.0, 5.0),
+            Rect::from_xywh(20.0, 0.0, 2.0, 2.0),
+        ];
+        assert_eq!(damage_rects(size, &d), [(1, 2, 4, 2), (8, 6, 2, 2)]);
+    }
+
+    #[test]
+    fn copies_damage_as_bgrx() {
+        let mut src = Pixmap::new(PhysicalSize::new(3, 2));
+        for px in src.as_bytes_mut().as_chunks_mut::<4>().0 {
+            px.copy_from_slice(&[1, 2, 3, 4]);
+        }
+        let mut dst = Vec::new();
+        copy_as_bgrx(&src, &mut dst, &[(1, 1, 2, 1)]);
+        assert_eq!(dst.len(), 24, "sized to the pixmap");
+        assert_eq!(&dst[..16], &[0; 16], "outside the damage: untouched");
+        assert_eq!(&dst[16..], &[3, 2, 1, 255, 3, 2, 1, 255]);
+        copy_as_bgrx(&src, &mut dst, &damage_rects(src.size(), &[]));
+        assert!(dst.as_chunks::<4>().0.iter().all(|p| *p == [3, 2, 1, 255]));
     }
 
     #[test]

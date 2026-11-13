@@ -12,6 +12,30 @@ which are logical pixels.
 
 > Not yet seen on a Retina display: CI runners are 1x. Reports welcome.
 
+## Presenting frames
+
+Each frame is copied into the window's buffer and only what changed is marked
+for redisplay (`setNeedsDisplayInRect:`), so the view's `drawRect:` repaints
+just that area. The buffer is kept in Core Graphics' native layout (32-bit
+little-endian, alpha skipped first) and tagged sRGB, and the window's backing
+store is sRGB too (`NSWindow.colorSpace`), so drawing it is a plain copy, not
+a per-pixel format and color conversion; the window server matches the
+colors to the display. Before this, every frame redrew the whole window from
+a straight-alpha RGBA image in the device color space.
+
+Animation frames are paced by a `CVDisplayLink`, which stops after about
+200 ms with nothing to animate. If it doesn't tick (as can happen on a
+virtual display), the frame clock stops waiting for it after three missed
+frames and paces frames with a timer at the refresh interval, instead of
+every other refresh.
+
+> Not yet measured on CI after these changes: the macOS runner used to get
+> 10–12 frames during `asyncdemo`'s 600 ms load. `asyncdemo --selftest` now
+> prints where its frames came from (the display link or the timer) and what
+> presenting and `drawRect:` cost (see
+> [animation.md](../animation.md#where-frames-come-from)); the macOS job
+> fails below 10 frames and warns below 24.
+
 ## Appearance
 
 `Theme::native()` reads dark mode from the `AppleInterfaceStyle` user default and
