@@ -1,7 +1,8 @@
 # Read a running Stipple window (touchdemo) through UI Automation from this
 # process, as Narrator and other screen readers do: the .NET
 # System.Windows.Automation client goes through UIA's cross-process channel to
-# the window's WM_GETOBJECT provider. Walks the tree from the desktop root,
+# the window's WM_GETOBJECT provider. Takes the window from its handle (as a
+# screen reader does on a focus change) and walks its tree,
 # checks the controls a screen reader would land on (with their bounds on
 # screen and a hit test at one), invokes a button through its Invoke pattern
 # and sees the app (and the tree) follow, then moves keyboard focus with Tab
@@ -64,11 +65,17 @@ function Walk($root) {
   }
   $found
 }
+# The started process's window, straight from its handle: searching the
+# desktop's children would ask every other top-level window for its name, and
+# one misbehaving provider elsewhere would break the search.
 function FindWindow() {
-  $cond = New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, $Title)
   for ($i = 0; $i -lt 40; $i++) {
-    $w = $A::RootElement.FindFirst($T::Children, $cond)
-    if ($w -ne $null) { return $w }
+    $proc.Refresh()
+    $h = $proc.MainWindowHandle
+    if ($h -ne [IntPtr]::Zero) {
+      $w = $A::FromHandle($h)
+      if ($w -ne $null -and $w.Current.Name -eq $Title) { return $w }
+    }
     Start-Sleep -Milliseconds 500
   }
   $null
@@ -79,7 +86,7 @@ function Named($elements, $type, $pattern) {
 
 try {
   $win = FindWindow
-  if ($win -eq $null) { throw "no '$Title' window under the UIA desktop root" }
+  if ($win -eq $null) { throw "no '$Title' window for process $($proc.Id) through UIA" }
   Start-Sleep -Seconds 2
   $elements = Walk $win
   Write-Host "uia: $($elements.Count) elements under '$Title'"

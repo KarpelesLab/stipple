@@ -2334,7 +2334,7 @@ jobs:
           grep -q "UIA provider: QueryInterface refuses" uiademo.log
 
       # From outside the app, as Narrator reads it: the System.Windows.Automation
-      # client walks a running touchdemo window from the desktop root through
+      # client walks a running touchdemo window (from its handle) through
       # UIA's cross-process channel, finds its button, field and label with
       # their bounds on screen, hit-tests a point, invokes the button through
       # its Invoke pattern (the app counts the tap and the tree follows), and

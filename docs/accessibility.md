@@ -42,7 +42,9 @@ Automation*): `.github/scripts/uia-walk.ps1` starts `touchdemo` and, from
 PowerShell's process, uses the .NET UI Automation client (the cross-process
 path Narrator, NVDA and JAWS use):
 
-- finds the "Stipple Touch" window under the desktop root, and walks every
+- gets the "Stipple Touch" window from its handle (`AutomationElement.FromHandle`
+  on the process's main window, so no other top-level window is asked
+  anything), and walks every
   element under it with the control-view walker, printing each one's control
   type, name, bounds, focusability and patterns;
 - finds a `Button` "Row 0", an `Edit` (the text field) and a `Text`
