@@ -1747,6 +1747,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y sway grim wtype wl-clipboard seatd imagemagick fonts-dejavu-core
 
+      - name: Install fcitx5 with Mozc, pinyin and Hangul (the input method under test)
+        run: sudo apt-get install -y fcitx5 fcitx5-mozc fcitx5-chinese-addons fcitx5-hangul dbus-x11
+
       - name: Build the window, textinput, clipboard, rawkeys and multi-window examples
         run: cargo build --release -p window -p textinput -p clipboarddemo -p rawkeys -p multiwindow
 
@@ -1940,6 +1943,40 @@ jobs:
           identify visual_output/stipple-wayland.png || true
           kill "$SWAY_PID" 2>/dev/null || true
 
+      # A real input method behind zwp_text_input_v3: fcitx5 connects to sway
+      # as an input method (input-method-v2) and sway relays it to the app's
+      # text-input-v3. wtype's keys go to fcitx5's keyboard grab while the
+      # field is enabled. Mozc: nihon, Space, Return must give a hiragana
+      # preedit, the conversion 日本 and its commit, and Escape must cancel
+      # a composition; pinyin: nihao, Space must commit 你好; Hangul: gksrmf
+      # must compose 한 and 글 syllable by syllable. Isolated HOME, its own
+      # D-Bus session. See .github/scripts/wayland-ime.sh.
+      - name: Type through a real input method (Wayland, fcitx5)
+        run: |
+          # A fresh runtime directory: the socket is sway's, not a leftover.
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt-ime"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+          export LIBSEAT_BACKEND=seatd
+          if ! pgrep -x seatd > /dev/null; then
+            sudo seatd -g "$(id -gn)" >> seatd.log 2>&1 &
+            sleep 1
+          fi
+          printf 'output HEADLESS-1 resolution 1024x768\nexec sleep 600\n' > sway-ime.cfg
+          sway -c sway-ime.cfg > sway-ime.log 2>&1 &
+          SWAY_PID=$!
+          for _ in $(seq 100); do
+            SOCK=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$' || true)
+            [ -n "$SOCK" ] && break
+            sleep 0.1
+          done
+          echo "wayland socket: '$SOCK'"
+          export WAYLAND_DISPLAY="$SOCK"
+          sleep 2
+          OUT_DIR=visual_output timeout 300 \
+            dbus-run-session -- bash .github/scripts/wayland-ime.sh target/release/textinput
+          kill "$SWAY_PID" 2>/dev/null || true
+
       - name: Upload screenshot + logs
         uses: actions/upload-artifact@v4
         if: always()
@@ -1948,6 +1985,7 @@ jobs:
           path: |
             visual_output/*
             sway.log
+            sway-ime.log
             seatd.log
           if-no-files-found: warn
 
@@ -2195,31 +2233,29 @@ jobs:
             || echo "::warning::IBus showed no preedit for the dead key"
 
           # --- Mozc: nihon, Space (convert), Return (commit) -> 日本 ---
-          # Informational: it depends on Mozc's default mode and dictionary.
+          # Required: it passed on every run since it was added (informational
+          # until then).
           ibus engine mozc-jp || true
-          if [ "$(ibus engine)" = mozc-jp ]; then
-            XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
-              > visual_output/xim-mozc.log 2>&1 &
-            APP=$!
-            sleep 3
-            xdotool key Tab; sleep 0.5
-            # Mozc starts in direct input; Zenkaku_Hankaku turns it on.
-            xdotool key Zenkaku_Hankaku; sleep 0.5
-            xdotool type --delay 150 nihon; sleep 1
-            import -window root visual_output/xim-mozc-preedit.png
-            xdotool key space; sleep 1
-            import -window root visual_output/xim-mozc-converted.png
-            xdotool key Return; sleep 1
-            kill "$APP" || true
-            echo "=== xim-mozc.log ==="
-            grep -v ' key \|xim: [<-]' visual_output/xim-mozc.log || true
-            grep -q 'preedit=Some("にほ' visual_output/xim-mozc.log \
-              || echo "::warning::Mozc gave no hiragana preedit"
-            grep -q 'textinput: text="日本" preedit=None' visual_output/xim-mozc.log \
-              || echo "::warning::Mozc's conversion didn't commit 日本"
-          else
-            echo "::warning::IBus has no mozc-jp engine"
-          fi
+          [ "$(ibus engine)" = mozc-jp ] || { echo "::error::IBus has no mozc-jp engine"; exit 1; }
+          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+            > visual_output/xim-mozc.log 2>&1 &
+          APP=$!
+          sleep 3
+          xdotool key Tab; sleep 0.5
+          # Mozc starts in direct input; Zenkaku_Hankaku turns it on.
+          xdotool key Zenkaku_Hankaku; sleep 0.5
+          xdotool type --delay 150 nihon; sleep 1
+          import -window root visual_output/xim-mozc-preedit.png
+          xdotool key space; sleep 1
+          import -window root visual_output/xim-mozc-converted.png
+          xdotool key Return; sleep 1
+          kill "$APP" || true
+          echo "=== xim-mozc.log ==="
+          grep -v ' key \|xim: [<-]' visual_output/xim-mozc.log || true
+          grep -q 'textinput: text="" preedit=Some("にほ' visual_output/xim-mozc.log
+          grep -q 'textinput: text="" preedit=Some("日本")' visual_output/xim-mozc.log
+          grep -q 'xim: commit "日本"' visual_output/xim-mozc.log
+          grep -q 'textinput: text="日本" preedit=None' visual_output/xim-mozc.log
 
           # --- the server goes away: the app falls back to its own compose ---
           ibus engine xkb:us::eng || true
@@ -2493,6 +2529,35 @@ jobs:
         with:
           name: stipple-windows-screenshot
           path: visual_output/*.png
+          if-no-files-found: warn
+
+  # The real Microsoft Japanese IME through TSF: install the ja-JP typing
+  # feature if the image lacks it, add the IME to the user's languages,
+  # switch the app's thread to Japanese, and type n i h o n, Space, Return
+  # with SendInput; the field must show the hiragana preedit, the conversion
+  # and the commit. Not yet seen passing on the runner (it may not be able to
+  # install the language), so it reports without failing the workflow; the
+  # log says which stage stopped it. See .github/scripts/ime-windows.ps1.
+  ime-windows:
+    name: IME (Microsoft Japanese IME / Windows)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the textinput example
+        run: cargo build --release -p textinput
+      - name: Type through the Microsoft Japanese IME
+        shell: powershell
+        run: .github\scripts\ime-windows.ps1 .\target\release\textinput.exe visual_output
+      - name: Upload logs and screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-windows-ime
+          path: visual_output/*
           if-no-files-found: warn
 
   # Render the same UI under several themes and montage them into one image,
@@ -2870,6 +2935,21 @@ jobs:
       - name: Stop the app
         if: always()
         run: '[ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true'
+      # macOS's own Japanese input method (Kotoeri, romaji): a Swift helper
+      # selects the input source and posts n i h o n, Space, Return as
+      # CGEvents; the field must get the preedit through setMarkedText: and
+      # 日本 through insertText:. Not yet seen passing on the runner (posting
+      # keys needs the Accessibility permission, and the input source must
+      # take), so it reports without failing the job; the log says which
+      # stage stopped it. See .github/scripts/ime-macos.sh.
+      - name: Type through the Japanese input method (Kotoeri)
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          OUT_DIR: visual_output
+        run: |
+          cargo build --release -p textinput
+          bash .github/scripts/ime-macos.sh target/release/textinput
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         if: always()

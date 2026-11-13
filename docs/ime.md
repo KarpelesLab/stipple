@@ -70,6 +70,7 @@ input method's `preedit_string`, `commit_string` and `delete_surrounding_text`
 take effect together on `done`. This needs a compositor that relays
 `text-input-v3` to an input method (sway, KWin, GNOME, Hyprland) and an input
 method that speaks `input-method-v2` or the compositor's own (fcitx5, IBus).
+CI runs fcitx5 behind sway this way (see [Testing](#testing)).
 
 **X11.** Stipple speaks XIM, the X input method protocol, over its own X
 connection (no libX11 or IBus library): `src/platform/backend/x11/xim.rs`.
@@ -276,8 +277,8 @@ X11's XIM client runs against a real input method in CI: IBus started with
 engine, `dead_acute e` must arrive as an `XIM_COMMIT` of `é` (and the pending
 dead key as IBus's preedit); then, with the Japanese Mozc engine, `nihon`,
 Space and Return must give the preedit `にほん`, the conversion `日本` and its
-commit, screenshotted mid-way (this part is informational: it depends on
-Mozc's defaults, so it warns instead of failing); finally IBus quits
+commit, screenshotted mid-way (required: it ran as an informational check
+first and passed on every run, over forty); finally IBus quits
 mid-session and the app must notice and fall back to its own compose. The
 same runs were checked by hand with IBus 1.5.33 and Mozc, including a stopped
 server. Fcitx and uim haven't been tried.
@@ -299,20 +300,86 @@ runner `ITfContextComposition` refused the app (`E_FAIL`) and the owner's
 composition lasting through all three steps, and the commit. (If every way
 were refused the self-test would insert `日本` with `ITfInsertAtSelection`,
 and CI fails.) With `STIPPLE_TSF=0` TSF must stay off. No real IME is
-installed on the runner, so what an input method does on its own (keys,
-candidates, display attributes, reconversion) isn't exercised; the IMM32 fallback is build-checked only.
+installed on the runner for this job, so what an input method does on its own (keys,
+candidates, display attributes, reconversion) isn't exercised here (the
+non-blocking attempt below tries the real one); the IMM32 fallback is build-checked only.
 
-Elsewhere real IMEs can't be driven headlessly, so on Wayland, macOS and
-iOS the input-method paths are built and unit-tested (and driven through
-their protocols on macOS and iOS) but no real input method runs.
+Wayland's `text-input-v3` runs against a real input method in CI:
+fcitx5 under headless sway (`.github/scripts/wayland-ime.sh`). fcitx5 binds
+sway's `zwp_input_method_v2` and a virtual keyboard; sway relays between it
+and the app's text input, and `wtype`'s keys reach fcitx5 through its
+keyboard grab while the field is enabled. With an isolated profile per
+engine:
+
+- *Mozc*: `nihon` must arrive as the preedit `にほｎ` and `にほん`, Space must
+  turn it into `日本` (still a preedit), Return must commit it; then `ka` and
+  Escape must cancel the preedit `か` without committing anything.
+- *Pinyin* (fcitx5-chinese-addons): `nihao` shows the syllables `ni hao` as
+  the preedit, and Space must commit `你好`. fcitx5's protocol log must show
+  the field's text and caret reaching it (`surrounding_text("你好", 6, 6)`;
+  a warning if not).
+- *Hangul* (fcitx5-hangul, dubeolsik): `gksrmf` must compose `ㅎ`, `하`, `한`,
+  commit `한` when the next syllable starts, compose `글`, and Space must
+  commit it.
+
+The same script passed locally against Ubuntu 26.04's packages (fcitx5
+5.1.19, sway 1.11) in a rootless container. Mozc refuses to run as root, so
+it must run as a normal user, as on the runner.
+
+On Windows a separate, non-blocking job (`ime-windows`,
+`.github/scripts/ime-windows.ps1`) tries the real Microsoft Japanese IME:
+it installs the ja-JP typing feature if the IME's TSF profile isn't
+registered (`Add-WindowsCapability`, then `Install-Language`, starting
+Windows Update if the image stopped it), adds the IME to the user's
+languages, switches the app's thread to Japanese
+(`WM_INPUTLANGCHANGEREQUEST`), turns the IME on (`VK_IME_ON`, or `VK_KANJI`)
+until `a` becomes a preedit that Escape cancels, and types `n i h o n`,
+Space, Return with `SendInput`; the field must show the hiragana preedit,
+`日本` and the commit. On macOS a non-blocking step of the
+`interaction-macos` job (`.github/scripts/ime-macos.sh`) compiles a small
+Swift helper that enables and selects the built-in Japanese input source
+(Kotoeri, romaji typing, with live conversion off) and posts the same keys
+as CGEvents. Neither has been seen passing yet: whether the runner can
+install the Japanese IME, and whether a CLI process may post keys
+(Accessibility) and switch the input source there, is what their first runs
+will show; each logs the stage it stopped at. Until one passes, Windows and
+macOS input methods are checked only as protocol wiring (above) and by hand
+(below), and iOS by its protocol self-test.
+
+## Manual checklist
+
+Where CI can't run a real input method, check these by hand before a
+release, on each platform (X11 with IBus or Fcitx through XIM; Wayland with
+fcitx5 or IBus under a compositor with `text-input-v3`; Windows with the
+Microsoft IMEs; macOS with the built-in input sources; the web in Chrome,
+Firefox and Safari; iOS and Android with their system keyboards). Use
+`examples/textinput` (`STIPPLE_TEXTINPUT_ECHO=1` prints the field and
+preedit) and `examples/textarea` for multi-line text.
+
+| Check | What to do | Expected |
+|---|---|---|
+| Japanese | Turn on a Japanese IME (Mozc, Microsoft IME, Kotoeri), type `nihongo`, Space, Return | `にほんご` underlined while typing, the conversion highlighted after Space, `日本語` in the field after Return, one undo step |
+| Chinese pinyin | Turn on pinyin (fcitx5 pinyin, Microsoft Pinyin, macOS Pinyin – Simplified), type `nihao`, pick a candidate with Space or a digit | the syllables as preedit, `你好` committed |
+| Korean | Turn on a Hangul IME (dubeolsik), type `gksrmf`, then Space | syllables compose in place (`ㅎ` `하` `한`), `한` commits when `글` starts, `한글 ` in the field |
+| Candidate window | During a composition, move the window, scroll the field so the caret moves, try a field near the bottom and right edges of the screen | the candidate list opens next to the caret (the composition's start), follows it, and stays on screen |
+| Cancel | Compose, then press Escape; compose, then click elsewhere in the field; compose, then Tab to another field | Escape drops the preedit and commits nothing; clicking or moving focus ends the composition (committed or dropped, as the IME does) and never leaves a stale preedit |
+| Reconvert | Select committed text (or put the caret in it) and press the IME's reconvert key (Windows: the 変換 key or Win+/; macOS: Control+Shift+R; Mozc: 変換) | the IME takes the word back as a composition with candidates, and the choice replaces it; where it isn't supported (macOS; XIM's string conversion) nothing is lost or duplicated |
+| Mixed input | Type Latin, compose, type Latin again; use Backspace mid-composition | text stays in order; Backspace edits the preedit, not the field, until it is empty |
+| Password fields | Focus a password field with an IME on | the IME is off (direct input); on macOS secure input is on |
+
+Record the platform, input method and version with any failure. CI covers:
+Japanese (Mozc) on X11 and Wayland, cancel on Wayland, pinyin and Korean on
+Wayland; the Windows and macOS rows run in CI as non-blocking attempts.
 
 ## Not yet
 
 - On X11: picking up an XIM server started after the app, XIM status
   callbacks, string conversion (`XIM_STR_CONVERSION`), and timing out
   asynchronous keys a stopped server never answers.
-- TSF on Windows; reconversion and `attributedSubstringForProposedRange:` on
-  macOS (Stipple doesn't hand the IME the field's text there).
+- Reconversion and `attributedSubstringForProposedRange:` on macOS
+  (Stipple doesn't hand the IME the field's text there).
+- A real input method passing in CI on Windows and macOS (attempted, see
+  [Testing](#testing)), and on iOS, Android and the web.
 - Per-segment styling of the preedit (IMEs mark the segment being converted;
   Stipple shows the highlighted range as the selection and underlines all of
   it).

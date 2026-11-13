@@ -938,8 +938,9 @@ Most input only works on X11 today.
   underlined in text fields, and `Window::set_ime` reporting the caret
   rectangle; `text-input-v3` on Wayland, IMM32 (now TSF, below) on Windows and
   `NSTextInputClient` on macOS. Unit-tested, and the macOS protocol is driven
-  through objc dispatch in CI, but no real IME runs in CI, so the Wayland,
-  Windows and macOS paths are only build-checked end to end. See
+  through objc dispatch in CI. Wayland runs against a real input method in
+  CI (fcitx5 under sway, below); the Windows and macOS paths are verified
+  end to end only by hand so far (CI attempts them, non-blocking). See
   [docs/ime.md](docs/ime.md).
 - ✅ IME on X11: an XIM client over the wire (no libX11), in
   `x11/xim.rs`. It finds the server from `XIM_SERVERS` and `XMODIFIERS`
@@ -956,8 +957,8 @@ Most input only works on X11 today.
   scripted fake server; **CI-verified with a real XIM server**: IBus
   (`ibus-daemon --xim`) under Xvfb commits a dead-key `é` with its preedit,
   and IBus quitting mid-session falls back to compose. Japanese through Mozc
-  (`nihon` → preedit `にほん` → `日本` committed) passes locally and runs in
-  CI as an informational check. Not tried: Fcitx, uim, kinput2. Not done: a
+  (`nihon` → preedit `にほん` → `日本` committed) is required in CI (it ran
+  as an informational check first and passed on every run). Not tried: Fcitx, uim, kinput2. Not done: a
   server started after the app, status callbacks, timing out asynchronous
   keys a stopped server never answers. See [docs/ime.md](docs/ime.md).
 - ✅ TSF on Windows, next to IMM32: modern IMEs (the Microsoft Japanese and
@@ -1041,14 +1042,35 @@ Most input only works on X11 today.
   selection or mid-composition are refused. See
   [docs/platforms/android.md](docs/platforms/android.md).
 - ⬜ Dead keys and compose on mobile hardware keyboards (iOS and Android).
-- ⬜ IME verification with a real input method: X11 runs a real XIM server in
-  CI (IBus started with `--xim`, with its keyboard engine and Mozc), but the
-  Wayland, Windows and macOS paths are checked only as protocol wiring. Run one
-  where it can be scripted (an input method behind `text-input-v3` under sway;
-  the Microsoft IME on the Windows runner), make X11's Mozc check required once
-  it has proven stable, and keep a manual checklist per platform (Japanese,
-  Chinese pinyin, Korean, the candidate window following the caret, cancelling
-  and re-converting) until each is covered.
+- 🚧 IME verification with a real input method. **X11**: IBus (`--xim`)
+  with its keyboard engine and Mozc, required in CI (Mozc was informational
+  until it had passed on every run, over forty). **Wayland: verified with a
+  real input method in CI**: fcitx5 under headless sway, binding sway's
+  `input-method-v2` and relayed to Stipple's `text-input-v3`, with `wtype`'s
+  keys going through fcitx5's keyboard grab
+  (`.github/scripts/wayland-ime.sh`): Mozc (`nihon` → preedit `にほん` →
+  Space → `日本` → Return commits it; `ka` then Escape cancels without
+  committing), pinyin (`nihao` → preedit `ni hao` → Space commits `你好`, and
+  the field's surrounding text reaches the input method), Hangul (`gksrmf`
+  composes `한` and `글` syllable by syllable, Space commits). Passed locally
+  against Ubuntu 26.04's fcitx5 5.1.19 and sway 1.11 (the runner's image) in
+  a rootless container. **Windows and macOS: attempted, not yet seen
+  passing**: a non-blocking `ime-windows` job installs the ja-JP typing
+  feature if needed (`Add-WindowsCapability` / `Install-Language`), adds the
+  Microsoft Japanese IME to the user's languages, switches the app's thread
+  with `WM_INPUTLANGCHANGEREQUEST` and types with `SendInput`; a
+  non-blocking step in `interaction-macos` selects Kotoeri with a Swift
+  helper (`TISSelectInputSource`) and posts CGEvents. Whether the runner
+  images allow installing the language, posting keys (Accessibility) and
+  switching the input source is what their runs will show; each logs the
+  stage it stopped at. Until then both are protocol wiring in CI (Windows:
+  the app playing the input method through the real TSF manager; macOS:
+  `setMarkedText:` / `insertText:` through objc dispatch). A manual
+  per-platform checklist (Japanese, pinyin, Korean, the candidate window
+  following the caret, cancel, reconvert, mixed input, password fields) is
+  in [docs/ime.md](docs/ime.md#manual-checklist). Not covered by CI:
+  candidate window placement (needs the input method's own popup),
+  reconversion, a real input method on iOS, Android and the web.
 - ✅ Raw keys for app-handled input (`Element::on_raw_key`): every press,
   repeat and release with the logical key, the physical key (a USB HID usage
   with its W3C `code` name, from evdev codes, Windows scan codes, macOS key

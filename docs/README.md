@@ -117,9 +117,12 @@ for. See [the web page](platforms/web.md#file-dialogs).
 `bididemo` on X11. See [bidi.md](bidi.md).
 ¹⁶ Implemented (XIM on X11, `text-input-v3` on Wayland, TSF with IMM32 as
 the fallback on Windows (see ⁴⁸), `NSTextInputClient`). X11's XIM client
-runs against a real input method in CI (IBus with `--xim`: a dead key's preedit and commit, Japanese through Mozc as
-an informational check, and falling back when the server quits); elsewhere CI
-can't run one, so only the protocol wiring is tested. See [ime.md](ime.md).
+runs against a real input method in CI (IBus with `--xim`: a dead key's preedit and commit, Japanese through Mozc,
+and falling back when the server quits), and so does Wayland's
+`text-input-v3` (fcitx5 under sway: Japanese through Mozc with a cancel,
+Chinese pinyin, Korean Hangul). On Windows and macOS CI tries the
+Microsoft Japanese IME and Kotoeri without failing the run (not yet seen
+passing), so there only the protocol wiring is verified. See [ime.md](ime.md).
 ¹⁷ From the locale's Compose file, on X11 and Wayland. CI types dead keys and a
 compose sequence with `xdotool` (X11) and `wtype` (sway).
 ¹⁸ Linux has no system menu bar, so Stipple draws one in the window, with
@@ -280,7 +283,8 @@ store, composition sink and display attributes), with IMM32 when TSF can't
 be activated or `STIPPLE_TSF=0`. The text store's logic is unit-tested; CI
 activates TSF on the Windows runner and drives a composition through the real
 TSF manager (the app playing the input method), checking the preedit and the
-commit reach the field. No real IME runs in CI. See
+commit reach the field. A job that tries the real Microsoft Japanese IME
+runs without failing the workflow (not yet seen passing). See
 [ime.md](ime.md#per-platform).
 ⁴⁹ The view is a `UIAccessibilityContainer` with one `UIAccessibilityElement`
 per node (label, value, traits, frame in screen coordinates; a double tap
