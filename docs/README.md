@@ -344,8 +344,8 @@ an accessibility service standing in for TalkBack (enabled the way TalkBack
 is) moves accessibility focus through every node, clicks a button and sets
 the field's text, from its own process. TalkBack itself, which the API 34
 Google APIs emulator image ships, is turned on in CI too: its focus must
-reach the button and its click the app (added with this change, reported
-without failing the job; not yet run in CI). See
+stop on the labels, reach the button and its click the app (passing in CI;
+reported without failing the job). See
 [accessibility.md](accessibility.md#android).
 
 ⁵⁷ `onPause` / `onResume` / `onTrimMemory` and the Back key, checked on the
