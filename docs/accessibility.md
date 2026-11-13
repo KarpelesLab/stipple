@@ -24,10 +24,10 @@ says or does:
 
 | Screen reader | CI job / step | Status |
 | --- | --- | --- |
-| NVDA (Windows) | `screen-reader-windows` | added; not yet run in CI; reports without failing the workflow |
-| VoiceOver (macOS) | `visual-macos`, *Screen reader (VoiceOver)* | added; not yet run in CI; doesn't fail the job |
+| NVDA (Windows) | `screen-reader-windows` | passing in CI; still reports without failing the workflow |
+| VoiceOver (macOS) | `visual-macos`, *Screen reader (VoiceOver)* | passing in CI; doesn't fail the job |
 | TalkBack (Android) | `visual-android` (API 34) | added; not yet run in CI; doesn't fail the job |
-| Orca (Linux) | `a11y-dbus` (see [Linux](#linux)) | doesn't fail the job until seen passing |
+| Orca (Linux) | `a11y-dbus` (see [Linux](#linux)) | passing in CI; doesn't fail the job yet |
 | Narrator, JAWS, VoiceOver on iOS | none | not tried |
 
 The rest of this page says what each check proves, and what it doesn't.
@@ -100,8 +100,10 @@ commands (`keybd_event`, which NVDA's keyboard hook takes as typed keys):
 - the mouse moved over "Row 1": NVDA's mouse tracking hit-tests through UIA
   and says what is there (reported, not required).
 
-The job uploads NVDA's whole log. It hasn't run in CI yet, and reports
-without failing the workflow until it has been seen passing.
+The job uploads NVDA's whole log. It passes in CI (the window's name isn't
+spoken on the foreground change alone, only with the first focus inside
+it, so that is reported, not required); it still reports without failing
+the workflow.
 
 Not covered: Stipple's buttons don't take keyboard focus (only fields and
 other elements with key handlers do), so Tab can't reach them and Enter or
@@ -156,7 +158,7 @@ item`, `move out of item`, or the VO keys through System Events if
 AppleScript refuses one), logging each phrase VoiceOver speaks (`content of
 last phrase`), until it reaches "Row 0": the phrase must say it is a button.
 `perform action` (VO-Space) must then press it: the app logs the tap. The
-step hasn't run in CI yet and doesn't fail the job (it exits 3, with a
+step passes in CI and doesn't fail the job (it exits 3, with a
 warning, when the runner doesn't let AppleScript control VoiceOver).
 
 Not covered: there's no `AXValue` for fields, no focus or layout
@@ -319,11 +321,10 @@ on), from its own process:
   text-changed event arrives and the entry reads it back.
 
 This is a required check; it passes locally under Xvfb (at-spi2-core 2.58,
-pyatspi 2.58), and was added with this change, not yet run in CI. The same walk under headless sway (`wtype` for the Tab) and
+pyatspi 2.58), and passes in CI. The same walk under headless sway (`wtype` for the Tab) and
 **Orca** itself (`.github/scripts/orca-linux.sh`: Orca runs headless with its
 debug log, which records every utterance as `SPEECH OUTPUT`, and must speak
-the entry after Tab) run in the same job but don't fail it yet: neither has
-been run outside CI, nor seen passing there.
+the entry after Tab) run in the same job and pass in CI, but don't fail it yet.
 
 `a11ydemo serve` still serves a fixed tree over the session bus for the
 `dbus-send` checks.

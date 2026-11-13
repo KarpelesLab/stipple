@@ -1648,8 +1648,11 @@ Most input only works on X11 today.
     Element frames are now in screen coordinates (they were the node's
     logical bounds). Added to `visual-macos`; not yet run in CI.
 - 🚧 Real screen readers driven in CI (see
-  [docs/accessibility.md](docs/accessibility.md)); each added, none run in CI
-  yet, and none fails its job until it has been seen passing:
+  [docs/accessibility.md](docs/accessibility.md)). NVDA, VoiceOver and Orca
+  pass in CI (NVDA after fixing its own driving: say all left the object
+  navigator on "Row 10", and NVDA names the window only with the first focus
+  inside it, which is now reported, not required); TalkBack doesn't yet (its
+  focus never reaches the app's controls). None fails its job yet:
   - **NVDA** (`screen-reader-windows`, `.github/scripts/nvda-windows.ps1`): a
     pinned release from nvaccess.org (SHA-256 checked), as a portable copy,
     with a configuration that shows no dialogs and a synth that makes no
