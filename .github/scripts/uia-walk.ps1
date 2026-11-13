@@ -75,7 +75,7 @@ function FindWindow() {
   for ($i = 0; $i -lt 40; $i++) {
     # The window by its title, made sure to be the started process's
     # (Process.MainWindowHandle came back empty on the runner).
-    [IntPtr]$h = [U]::FindWindowW($null, $Title)
+    [IntPtr]$h = [U]::FindWindowW([NullString]::Value, $Title)
     $owner = [uint32]0
     if ($h -ne [IntPtr]::Zero) { [void][U]::GetWindowThreadProcessId($h, [ref]$owner) }
     if ($h -ne [IntPtr]::Zero -and (-not $proc.Id -or $owner -eq $proc.Id)) {
