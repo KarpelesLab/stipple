@@ -286,7 +286,12 @@ if [ "$gestures" = yes ]; then
   started="$(count "androiddemo: back gesture Started")"
   callback="$(count "stipple: back from OnBackInvokedCallback")"
   tap_for_back
-  adb shell input swipe 1 $((height / 2)) $((width * 2 / 3)) $((height / 2)) 800
+  # Step by step, with a pause before lifting: seen in CI, a slow emulator
+  # delivered `input swipe`'s moves all at once, the gesture starting and
+  # going back in the same few milliseconds, with no progress in between.
+  y=$((height / 2))
+  out="$(for i in 1 2 3 4 5 6 7 8 9 10; do echo $((width * i * 2 / 30)); done | tr '\n' ' ')"
+  adb shell "input motionevent DOWN 1 $y; for x in $out; do input motionevent MOVE \$x $y; done; sleep 0.5; input motionevent UP $((width * 2 / 3)) $y"
   if ! wait_more "androiddemo: back handled" "$handled"; then
     echo "the edge swipe didn't go back:" >&2
     log | grep -v "androiddemo: tick" | tail -20 >&2
