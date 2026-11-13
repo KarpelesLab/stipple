@@ -39,7 +39,12 @@ type Hresult = i32;
 const S_OK: Hresult = 0;
 
 // UIA constants.
-const ProviderOptions_ServerSideProvider: i32 = 0x1;
+// (uiautomationcore.h: ClientSideProvider = 0x1, ServerSideProvider = 0x2,
+// UseComThreading = 0x20.) A provider served from the app's own window is
+// server-side; with COM threading, UIA calls it on the window's (STA)
+// thread, which the tree isn't safe to be read from anywhere else.
+const ProviderOptions_ServerSideProvider: i32 = 0x2;
+const ProviderOptions_UseComThreading: i32 = 0x20;
 const UIA_InvokePatternId: i32 = 10000;
 const UIA_HasKeyboardFocusPropertyId: i32 = 30008;
 const UIA_IsKeyboardFocusablePropertyId: i32 = 30009;
@@ -368,7 +373,7 @@ unsafe extern "system" fn release(this: *mut c_void) -> u32 {
 
 unsafe extern "system" fn get_provider_options(_this: *mut c_void, opts: *mut i32) -> Hresult {
     unsafe {
-        *opts = ProviderOptions_ServerSideProvider;
+        *opts = ProviderOptions_ServerSideProvider | ProviderOptions_UseComThreading;
     }
     S_OK
 }

@@ -2320,7 +2320,7 @@ jobs:
           cargo run --release -p uiademo | tee uiademo.log
           # The hand-built provider answers via its COM vtable: a server-side
           # provider (options 1) whose root is a Window control (50032), "Stipple".
-          grep -q 'UIA provider: options=1 controltype=50032 name="Stipple"' uiademo.log
+          grep -q 'UIA provider: options=34 controltype=50032 name="Stipple"' uiademo.log
           # ...and the *full* element tree (not just the root) is navigable: a walk
           # via IRawElementProviderFragment::Navigate (FirstChild/NextSibling)
           # through real COM dispatch reaches a Text child (50020) and a Button
