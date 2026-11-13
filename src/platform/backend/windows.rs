@@ -1986,6 +1986,16 @@ where
                 break 'outer;
             }
         }
+        // Sent messages (TSF's cross-process calls among them: the IME's
+        // commit after Return) run inside `PeekMessageW`/the wait, with no
+        // posted message after them. What they queued is delivered now, not
+        // with the next input.
+        if deliver_queued(&mut windows, &mut handler) == ControlFlow::Exit {
+            break 'outer;
+        }
+        if windows.is_empty() {
+            break 'outer;
+        }
         if crate::platform::wake::take(std::time::Instant::now()) {
             // Every window hears the wake, so each can catch up.
             let ids: Vec<usize> = windows.iter().map(|w| w.hwnd as usize).collect();
