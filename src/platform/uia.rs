@@ -46,6 +46,8 @@ const UIA_IsKeyboardFocusablePropertyId: i32 = 30009;
 const UIA_IsEnabledPropertyId: i32 = 30010;
 const UIA_IsInvokePatternAvailablePropertyId: i32 = 30031;
 const E_FAIL: Hresult = 0x8000_4005_u32 as i32;
+const E_NOINTERFACE: Hresult = 0x8000_4002_u32 as i32;
+const E_POINTER: Hresult = 0x8000_4003_u32 as i32;
 const UIA_ControlTypePropertyId: i32 = 30003;
 const UIA_NamePropertyId: i32 = 30005;
 
@@ -74,6 +76,37 @@ const NavigateDirection_NextSibling: i32 = 1;
 const NavigateDirection_PreviousSibling: i32 = 2;
 const NavigateDirection_FirstChild: i32 = 3;
 const NavigateDirection_LastChild: i32 = 4;
+
+/// A COM interface id.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Guid(u32, u16, u16, [u8; 8]);
+
+const IID_IUnknown: Guid = Guid(0, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
+const IID_IRawElementProviderSimple: Guid = Guid(
+    0xd6dd_68d1,
+    0x86fd,
+    0x4332,
+    [0x86, 0x66, 0x9a, 0xbe, 0xde, 0xa2, 0xd2, 0x4c],
+);
+const IID_IRawElementProviderFragment: Guid = Guid(
+    0xf706_3da8,
+    0x8359,
+    0x439c,
+    [0x92, 0x97, 0xbb, 0xc5, 0x29, 0x9a, 0x7d, 0x87],
+);
+const IID_IRawElementProviderFragmentRoot: Guid = Guid(
+    0x620c_e2a5,
+    0xab8f,
+    0x40a9,
+    [0x86, 0xcb, 0xde, 0x3c, 0x75, 0x59, 0x9b, 0x58],
+);
+const IID_IInvokeProvider: Guid = Guid(
+    0x54fc_b24b,
+    0xe18e,
+    0x47a2,
+    [0xb4, 0xd3, 0xec, 0xcb, 0xe7, 0x75, 0x99, 0xa2],
+);
 
 /// Prepended to a fragment's runtime id so UIA namespaces it under this provider.
 const UiaAppendRuntimeId: i32 = 3;
@@ -161,7 +194,8 @@ struct UiaRect {
 #[repr(C)]
 struct ProviderVtbl {
     // IUnknown
-    query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> Hresult,
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
     add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     release: unsafe extern "system" fn(*mut c_void) -> u32,
     // IRawElementProviderSimple
@@ -187,7 +221,8 @@ struct ProviderVtbl {
 /// `IInvokeProvider`'s vtable: `IUnknown`, then `Invoke`.
 #[repr(C)]
 struct InvokeVtbl {
-    query_interface: unsafe extern "system" fn(*mut c_void, *const u8, *mut *mut c_void) -> Hresult,
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
     add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     release: unsafe extern "system" fn(*mut c_void) -> u32,
     invoke: unsafe extern "system" fn(*mut c_void) -> Hresult,
@@ -274,11 +309,37 @@ fn focusable(role: A11yRole) -> bool {
         )
 }
 
-unsafe extern "system" fn qi(this: *mut c_void, _iid: *const u8, ppv: *mut *mut c_void) -> Hresult {
-    // We answer every interface query with ourselves: the combined vtable
-    // satisfies IUnknown, IRawElementProviderSimple, …Fragment, and …FragmentRoot
-    // (each a prefix of the next), which is all UIA asks of us.
+unsafe extern "system" fn qi(
+    this: *mut c_void,
+    iid: *const Guid,
+    ppv: *mut *mut c_void,
+) -> Hresult {
+    // The combined vtable satisfies IUnknown, IRawElementProviderSimple,
+    // …Fragment and …FragmentRoot (each a prefix of the next), and nothing
+    // else. Every other interface is refused: UIA and COM probe for many
+    // (IMarshal, IRawElementProviderHwndOverride, …AdviseEvents, …Simple2,
+    // IAccessible, …) and call their methods through whatever we hand back,
+    // so answering those with this vtable sends their calls into the wrong
+    // functions — which is what broke a cross-process client reading the
+    // desktop's top-level windows.
     unsafe {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+        let id = if iid.is_null() { None } else { Some(*iid) };
+        let ours = matches!(
+            id,
+            Some(
+                IID_IUnknown
+                    | IID_IRawElementProviderSimple
+                    | IID_IRawElementProviderFragment
+                    | IID_IRawElementProviderFragmentRoot
+            )
+        );
+        if !ours {
+            *ppv = core::ptr::null_mut();
+            return E_NOINTERFACE;
+        }
         *ppv = this;
         add_ref(this);
     }
@@ -338,12 +399,20 @@ unsafe fn invoke_owner(this: *mut c_void) -> *mut Provider {
 
 unsafe extern "system" fn invoke_qi(
     this: *mut c_void,
-    _iid: *const u8,
+    iid: *const Guid,
     ppv: *mut *mut c_void,
 ) -> Hresult {
-    // As the provider does: every query (IUnknown, IInvokeProvider) answers
-    // with this interface.
+    // IUnknown and IInvokeProvider answer with this interface; anything else
+    // is refused, as the provider does.
     unsafe {
+        if ppv.is_null() {
+            return E_POINTER;
+        }
+        let id = if iid.is_null() { None } else { Some(*iid) };
+        if !matches!(id, Some(IID_IUnknown | IID_IInvokeProvider)) {
+            *ppv = core::ptr::null_mut();
+            return E_NOINTERFACE;
+        }
         *ppv = this;
         invoke_add_ref(this);
     }
@@ -879,6 +948,23 @@ pub fn selftest(name: &str) -> Result<(), String> {
             (fvt.release)(focus);
             println!("UIA provider: focus={fname:?}");
         }
+
+        // QueryInterface answers only the interfaces the vtable implements:
+        // the fragment root, yes; IMarshal (one of the many COM and UIA probe
+        // for), no.
+        const IID_IMarshal: Guid = Guid(0x3, 0, 0, [0xC0, 0, 0, 0, 0, 0, 0, 0x46]);
+        let mut out: *mut c_void = core::ptr::null_mut();
+        if (vt.query_interface)(p, &IID_IRawElementProviderFragmentRoot, &mut out) != S_OK
+            || out != p
+        {
+            return Err("QueryInterface refused IRawElementProviderFragmentRoot".into());
+        }
+        (vt.release)(out);
+        let mut out: *mut c_void = core::ptr::null_mut();
+        if (vt.query_interface)(p, &IID_IMarshal, &mut out) != E_NOINTERFACE || !out.is_null() {
+            return Err("QueryInterface answered IMarshal".into());
+        }
+        println!("UIA provider: QueryInterface refuses interfaces it doesn't implement");
     }
     Ok(())
 }

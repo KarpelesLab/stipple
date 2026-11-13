@@ -2329,6 +2329,9 @@ jobs:
           grep -q 'controltype=50000 name="OK"' uiademo.log
           # ...and GetFocus reports the focused TextField.
           grep -q 'UIA provider: focus="Name"' uiademo.log
+          # ...and QueryInterface refuses the interfaces it doesn't implement
+          # (IMarshal here), so COM and UIA never call into the wrong vtable.
+          grep -q "UIA provider: QueryInterface refuses" uiademo.log
 
       # From outside the app, as Narrator reads it: the System.Windows.Automation
       # client walks a running touchdemo window from the desktop root through
