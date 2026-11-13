@@ -863,7 +863,7 @@ mod selftest {
                 *PICKED.lock().unwrap() = Some(file.map(|f| (f.name, f.bytes)));
             });
         });
-        steps.until(|_| simulate::presented_controller().starts_with(PICKER));
+        steps.until(|_| simulate::presented_controller() == PICKER);
         steps.run(600, |_| {
             let shown = simulate::presented_controller();
             log(&format!("touchdemo: open picker presented {shown}"));
@@ -892,7 +892,7 @@ mod selftest {
                 },
             );
         });
-        steps.until(|_| simulate::presented_controller().starts_with(PICKER));
+        steps.until(|_| simulate::presented_controller() == PICKER);
         steps.run(600, |_| {
             let shown = simulate::presented_controller();
             log(&format!("touchdemo: save picker presented {shown}"));
@@ -930,7 +930,7 @@ mod selftest {
                 *PICKED.lock().unwrap() = Some(file.map(|f| (f.name, f.bytes)));
             });
         });
-        steps.until(|_| simulate::presented_controller().starts_with(PICKER));
+        steps.until(|_| simulate::presented_controller() == PICKER);
         let path = picked_path.clone();
         steps.run(600, move |_| {
             check(
@@ -961,7 +961,7 @@ mod selftest {
                 },
             );
         });
-        steps.until(|_| simulate::presented_controller().starts_with(PICKER));
+        steps.until(|_| simulate::presented_controller() == PICKER);
         steps.run(600, |_| {
             // Where the user "saved" it.
             let dest = std::env::temp_dir().join("touchdemo-exported.txt");
