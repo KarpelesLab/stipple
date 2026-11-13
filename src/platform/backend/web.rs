@@ -29,6 +29,7 @@
 //! | `set_text_input(active)` | the textarea's `inputmode`, which shows or hides a touch keyboard |
 //! | `open_url(ptr, len)` | `window.open(url, "_blank", "noopener")` |
 //! | `notify(title, title_len, body, body_len)` | a `Notification`, asking for permission first if needed |
+//! | `save_state(ptr, len)` | keeps the app's saved state in the tab's `sessionStorage` (`len` 0 removes it) |
 //!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
@@ -72,6 +73,7 @@ mod js {
         pub fn open_url(ptr: *const u8, len: usize);
         pub fn notify(title: *const u8, title_len: usize, body: *const u8, body_len: usize);
         pub fn message_box(confirm: u32, ptr: *const u8, len: usize) -> u32;
+        pub fn save_state(ptr: *const u8, len: usize);
     }
 }
 
@@ -765,6 +767,25 @@ pub fn on_wake() {
 pub fn on_frame() {
     frame::tick();
     on_wake();
+}
+
+/// The state the app saved before the tab was reloaded (or discarded and
+/// brought back), from `sessionStorage`. Called before [`start`]; the app's
+/// [`restore_state`](crate::App::restore_state) gets it before the first
+/// frame.
+#[doc(hidden)]
+pub fn restore_state(bytes: Vec<u8>) {
+    crate::platform::saved_state::set_restored_state((!bytes.is_empty()).then_some(bytes));
+}
+
+/// The page is going away or out of sight (`pagehide`, or `visibilitychange`
+/// to hidden): ask the app for its state
+/// ([`Event::SaveState`](crate::platform::Event::SaveState)) and hand it to
+/// the page, which keeps it in `sessionStorage` (nothing saved removes it).
+#[doc(hidden)]
+pub fn save_state() {
+    let bytes = crate::platform::saved_state::deliver_save(deliver).unwrap_or_default();
+    unsafe { js::save_state(bytes.as_ptr(), bytes.len()) }
 }
 
 /// The file picker for request `id` returned `name` and its `bytes`, or was

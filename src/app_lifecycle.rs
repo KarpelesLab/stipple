@@ -216,7 +216,8 @@ impl<S: 'static> App<S> {
         !background && (ran || was)
     }
 
-    /// Go back when the user asks to (Android's Back button or gesture):
+    /// Go back when the user asks to (Android's Back button or gesture,
+    /// iOS's swipe from the leading edge):
     /// `hook` closes whatever is on top (a dialog, a screen) and answers
     /// [`Handled::Yes`], or answers [`Handled::No`] when there is nothing to
     /// go back from, and the system does its default (on Android, the
@@ -226,7 +227,9 @@ impl<S: 'static> App<S> {
     /// Back closes menus and otherwise leaves the app. On Android 13 and
     /// later, say beforehand whether the hook would go back with
     /// [`back_enabled`](Self::back_enabled), so the system can preview the
-    /// back gesture when it wouldn't. Raw backend users get
+    /// back gesture when it wouldn't; on iOS it decides whether the edge
+    /// swipe is the app's back gesture or its touches stay the app's. Raw
+    /// backend users get
     /// [`Event::BackRequested`](crate::platform::Event::BackRequested) and
     /// answer with [`handle_back`](crate::platform::handle_back).
     ///
@@ -265,9 +268,13 @@ impl<S: 'static> App<S> {
     /// something to go back from. Without this hook, an app with an `on_back`
     /// hook takes every Back (no system preview), and one without takes none.
     /// Should the hook say yes and `on_back` then answer [`Handled::No`], the
-    /// system's default still runs, without its preview. Before Android 13,
-    /// and on other platforms, it changes nothing: every Back reaches
-    /// `on_back`.
+    /// system's default still runs, without its preview. Before Android 13 it
+    /// changes nothing: every Back reaches `on_back`.
+    ///
+    /// On iOS, while it says yes a swipe from the screen's leading edge (the
+    /// left, or the right under a right-to-left theme) is the back gesture,
+    /// as in a `UINavigationController`; while it says no, touches at the
+    /// edge are the app's (a list or a strip there keeps its drags).
     ///
     /// ```no_run
     /// # use stipple::prelude::*;
@@ -291,7 +298,8 @@ impl<S: 'static> App<S> {
     /// show: [`BackGesture::Started`], then [`BackGesture::Progressed`] from 0
     /// to 1 as the finger moves, and either [`BackGesture::Cancelled`] or the
     /// [`on_back`](Self::on_back) hook when it lifts. Android 14 and later
-    /// (`OnBackAnimationCallback`); elsewhere Back arrives without progress.
+    /// (`OnBackAnimationCallback`) and iOS's edge swipe; elsewhere Back
+    /// arrives without progress.
     /// The hook may change the state; the view is rebuilt.
     pub fn on_back_progress(mut self, hook: impl FnMut(&mut S, BackGesture) + 'static) -> Self {
         self.lifecycle.back_progress = Some(Box::new(hook));
@@ -315,6 +323,7 @@ impl<S: 'static> App<S> {
     /// Tell the platform whether the app would go back (see
     /// [`wants_back`](Self::wants_back)); only changes reach the system.
     pub(crate) fn sync_back(&self) {
+        crate::platform::back::set_back_rtl(self.theme.is_rtl());
         crate::platform::set_back_enabled(self.wants_back());
     }
 
@@ -347,11 +356,13 @@ impl<S: 'static> App<S> {
     /// process.
     ///
     /// Android keeps the bytes in the activity's saved `Bundle` (a
-    /// `NativeActivity`'s `onSaveInstanceState`). Other platforms don't ask
-    /// yet: iOS could keep them in its state restoration archive
-    /// (`application:willEncodeRestorableStateWithCoder:`), and the web in
-    /// the tab's `sessionStorage`, which a reload or a discarded and restored
-    /// tab keeps; desktops don't end apps on their own.
+    /// `NativeActivity`'s `onSaveInstanceState`). iOS asks each time the app
+    /// goes to the background and keeps them in a file in the app's caches
+    /// until the next launch (iOS doesn't say whether the user swiped the
+    /// app away, so they come back then too). The web asks when the page
+    /// hides or unloads and keeps them in the tab's `sessionStorage`, so a
+    /// reload (or a discarded tab brought back) restores them. Desktops
+    /// don't end apps on their own, and don't ask.
     ///
     /// ```no_run
     /// # use stipple::prelude::*;

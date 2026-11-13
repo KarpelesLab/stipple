@@ -44,6 +44,12 @@ mod ios_a11y_tree;
 #[cfg(all(test, not(target_os = "ios")))]
 #[path = "ios/doc.rs"]
 mod ios_doc;
+#[cfg(all(test, not(target_os = "ios")))]
+#[path = "ios/edge_swipe.rs"]
+pub(crate) mod ios_edge_swipe;
+#[cfg(all(test, not(target_os = "ios")))]
+#[path = "ios/saved_state.rs"]
+mod ios_saved_state;
 
 #[cfg(target_os = "android")]
 pub mod android;

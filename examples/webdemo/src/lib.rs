@@ -15,8 +15,12 @@
 //! The counter has a context menu (right-click, or a long press on a touch
 //! screen) that adds ten.
 //!
+//! The click count and the checkbox survive a reload of the tab
+//! (`App::save_state`, kept in `sessionStorage`).
+//!
 //! `index.html#selftest` drives it with scripted DOM events and reports what
-//! it saw (see the page). CI runs that in headless Chrome. The page reads the
+//! it saw (see the page); `index.html#restore` clicks, reloads and checks the
+//! count came back. CI runs that in headless Chrome. The page reads the
 //! state through [`webdemo_probe`].
 
 use std::cell::Cell;
@@ -133,7 +137,20 @@ pub fn app() -> App<State> {
     let app = App::new(State::default(), view)
         .title("Stipple on the web")
         // The page's prefers-color-scheme, followed as it changes.
-        .theme(Theme::native());
+        .theme(Theme::native())
+        // The count and the box survive a reload of the tab (kept in its
+        // sessionStorage): four bytes of count, one of checkbox.
+        .save_state(|s| {
+            let mut bytes = s.clicks.to_le_bytes().to_vec();
+            bytes.push(u8::from(s.checked));
+            bytes
+        })
+        .restore_state(|s, bytes| {
+            if let Ok(&[a, b, c, d, checked]) = <&[u8; 5]>::try_from(bytes) {
+                s.clicks = u32::from_le_bytes([a, b, c, d]);
+                s.checked = checked != 0;
+            }
+        });
     let handle = app.handle();
     // Pretend to load something for 1.5 s, while the spinner turns.
     handle.after(Duration::from_millis(1500), |s: &mut State| s.loaded = true);
@@ -173,5 +190,18 @@ mod tests {
         let frame = app.render_once();
         assert_eq!((frame.size().width, frame.size().height), (480, 320));
         assert_eq!(webdemo_probe(0), 0);
+    }
+
+    #[test]
+    fn the_count_and_the_box_survive_a_reload() {
+        let mut app = app();
+        assert_eq!(app.saved_state(), Some(vec![0, 0, 0, 0, 0]));
+        assert!(app.restore_saved_state(&[7, 0, 0, 0, 1]));
+        assert_eq!(app.state().clicks, 7);
+        assert!(app.state().checked);
+        assert_eq!(app.saved_state(), Some(vec![7, 0, 0, 0, 1]));
+        // Bytes from something else are ignored.
+        app.restore_saved_state(b"junk");
+        assert_eq!(app.state().clicks, 7);
     }
 }

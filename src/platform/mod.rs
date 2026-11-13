@@ -23,7 +23,7 @@ pub mod a11y;
 /// Platform-neutral accessibility tree handed to each backend's OS bridge.
 pub mod access;
 /// Predictive back: whether the app would go back, and the gesture's progress.
-mod back;
+pub(crate) mod back;
 pub mod backend;
 /// The system clipboard (plain text) on Windows, macOS, iOS and Android.
 pub mod clipboard;

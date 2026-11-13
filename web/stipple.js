@@ -35,12 +35,16 @@
 //   openUrl   (url) => void, in place of window.open (stipple::platform::open_url).
 //   notify    (title, body) => void, in place of the Notification API
 //             (stipple::platform::notify).
+//   stateKey  the sessionStorage key the app's saved state is kept under
+//             (App::save_state / restore_state); by default one per module
+//             URL and canvas order on the page. false keeps no state.
 //
-// Returns { exports, stats, canvas, overlay, input, colorScheme }: `stats`
+// Returns { exports, stats, canvas, overlay, input, colorScheme, saveState }: `stats`
 // counts presents, animation frames, timer wakes and accessibility-tree
 // updates, for tests; `overlay` is the ARIA overlay, `input` the hidden
-// textarea, and `colorScheme()` hands the page's current color scheme to the
-// app again (it already follows changes on its own).
+// textarea, `colorScheme()` hands the page's current color scheme to the
+// app again (it already follows changes on its own), and `saveState()` saves
+// the app's state now (it already does when the page hides or unloads).
 
 const SHIFT = 1, CTRL = 2, ALT = 4, META = 8;
 
@@ -256,6 +260,12 @@ export async function start(canvas, wasmUrl, options = {}) {
     }
   });
 
+  // The app's saved state (App::save_state) lives in the tab's
+  // sessionStorage, which a reload, a discarded tab brought back and the
+  // history's back and forward keep, but a new tab doesn't.
+  const stateKey = options.stateKey === false ? null
+    : options.stateKey ?? `stipple-state:${new URL(wasmUrl, location.href).pathname}:${instances}`;
+
   const imports = {
     stipple: {
       now: () => performance.now(),
@@ -341,6 +351,18 @@ export async function start(canvas, wasmUrl, options = {}) {
       },
       open_url(ptr, len) { openUrl(str(ptr, len)); },
       notify(tp, tl, bp, bl) { notify(str(tp, tl), str(bp, bl)); },
+      save_state(ptr, len) {
+        if (!stateKey) return;
+        try {
+          if (len === 0) return sessionStorage.removeItem(stateKey);
+          const bytes = new Uint8Array(e.memory.buffer, ptr, len);
+          let bin = "";
+          for (let i = 0; i < len; i += 0x8000) {
+            bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + 0x8000, len)));
+          }
+          sessionStorage.setItem(stateKey, btoa(bin));
+        } catch (err) { console.warn("stipple: the state couldn't be saved", err); }
+      },
       message_box(confirm, ptr, len) {
         const text = str(ptr, len);
         if (confirm) return window.confirm(text) ? 1 : 0;
@@ -410,7 +432,26 @@ export async function start(canvas, wasmUrl, options = {}) {
     const r = canvas.getBoundingClientRect();
     return [r.width, r.height, window.devicePixelRatio || 1];
   };
+  // A reload: hand the app the state it saved, before its first frame.
+  if (stateKey && e.stipple_restore_state) {
+    let saved = null;
+    try { saved = sessionStorage.getItem(stateKey); } catch (_) {}
+    if (saved) {
+      try {
+        const bin = atob(saved);
+        const [p, n] = pass(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+        e.stipple_restore_state(p, n);
+      } catch (_) { /* not ours: start afresh */ }
+    }
+  }
   e.stipple_start(...size());
+  // Save it whenever the page may go: hidden (a phone's browser can discard
+  // a backgrounded tab without another event) and unloading.
+  const saveState = () => e.stipple_save_state?.();
+  window.addEventListener("pagehide", saveState);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") saveState();
+  });
 
   // Size and pixel-ratio changes (moving to another screen, zooming).
   const resize = () => { place(); e.stipple_resize(...size()); };
@@ -599,5 +640,5 @@ export async function start(canvas, wasmUrl, options = {}) {
   document.addEventListener("copy", copy);
   document.addEventListener("cut", copy);
 
-  return { exports: e, stats, canvas, overlay, input, colorScheme: scheme };
+  return { exports: e, stats, canvas, overlay, input, colorScheme: scheme, saveState };
 }

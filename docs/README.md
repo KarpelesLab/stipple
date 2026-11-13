@@ -66,9 +66,9 @@ How to build, package and run on each platform, and what works there today.
 | Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | ❌ | ❌ | ❌ |
 | Asking before closing and quitting | ✅ ³⁷ | ✅ ³⁷ | ✅ ³⁷ | — | — | — |
 | Background, foreground and memory warnings (`App::on_lifecycle`) | — | — | — | ✅ ⁵³ | ✅ ⁵⁷ | — |
-| Back navigation (`App::on_back`) | — | — | — | ❌ | ✅ ⁵⁷ | — |
-| Predictive back (`App::back_enabled`, `App::on_back_progress`) | — | — | — | ❌ | ✅ ⁵⁸ | — |
-| State kept across process death (`App::save_state`) | — | — | — | ❌ | ✅ ⁵⁹ | ❌ |
+| Back navigation (`App::on_back`) | — | — | — | ✅ edge swipe ⁶⁴ | ✅ ⁵⁷ | — |
+| Predictive back (`App::back_enabled`, `App::on_back_progress`) | — | — | — | ✅ ⁶⁴ | ✅ ⁵⁸ | — |
+| State kept across process death (`App::save_state`) | — | — | — | ✅ ⁶⁵ | ✅ ⁵⁹ | ✅ reload ⁶⁵ |
 | Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
@@ -342,14 +342,13 @@ time) registered only while the app would go back, and on Android 14 and later
 the gesture's progress (`OnBackAnimationCallback`). Checked on the CI emulator
 (API 34): the Back key through the callback, an edge swipe with its progress,
 a cancelled swipe, and a Back the app declined going to the system. API 33
-(no progress) is build-checked only. iOS's edge swipe isn't done. See
+(no progress) is build-checked only. iOS: see ⁶⁴. See
 [window-lifecycle.md](window-lifecycle.md#predictive-back-android-13-and-later).
 
 ⁵⁹ Bytes from `App::save_state`, kept in the activity's saved `Bundle`
 (`onSaveInstanceState`) and handed to `App::restore_state` when Android starts
 the app again. Checked on the CI emulator: Home, `am kill`, relaunch. iOS
-(state restoration) and the web (`sessionStorage`) could carry the same API;
-not done yet. See
+and the web: see ⁶⁵. See
 [window-lifecycle.md](window-lifecycle.md#keeping-the-state-across-process-death).
 
 ⁶⁰ Recognized in the shared core from the platform's touches, so the same
@@ -371,8 +370,10 @@ asynchronously): `UIDocumentPickerViewController` on iOS, the Storage Access
 Framework's `ACTION_OPEN_DOCUMENT` / `ACTION_CREATE_DOCUMENT` on Android.
 CI's Android emulator picks a file in DocumentsUI (through uiautomator) and
 reads it, cancels one, and saves one; the iOS simulator self-test checks both
-pickers come up and that cancelling reaches the app, since choosing a file
-there can't be scripted. `open_file` and friends still return `None`. See
+pickers come up and that cancelling reaches the app, and, since choosing a
+file there can't be scripted, hands each picker's delegate a file
+(`documentPicker:didPickDocumentsAtURLs:`) and checks the app gets its bytes,
+or the export's success. `open_file` and friends still return `None`. See
 [ios.md](platforms/ios.md#file-pickers) and [android.md](platforms/android.md#file-pickers).
 
 ⁶³ `NotificationManager` on a channel of the app's, asking for
@@ -380,6 +381,25 @@ there can't be scripted. `open_file` and friends still return `None`. See
 refuses the prompt (then `notify` fails), grants it with `pm grant`, and finds
 the notification in `dumpsys notification`. See
 [os-integration.md](os-integration.md#notifications).
+
+⁶⁴ iOS's interactive back: a swipe from the leading edge (the left, or the
+right under a right-to-left theme), recognized by the backend from the view's
+touches while `App::back_enabled` says yes, as `BackGesture` progress and then
+`on_back`; once recognized, the finger is cancelled in the app. While back is
+off the edge's touches are the app's. Unit-tested (the recognizer, and in
+front of an `App`); `touchdemo`'s simulator self-test swipes with synthetic
+touches through the backend's touch path (added with this change, not yet run
+in CI). Not tried on a device. See
+[window-lifecycle.md](window-lifecycle.md#the-back-swipe-ios).
+
+⁶⁵ iOS: a file in the app's `Library/Caches`, written when the app goes to
+the background, read (and deleted) at the next launch; CI backgrounds
+`touchdemo`, ends it with `simctl terminate` and relaunches it (added with
+this change, not yet run in CI). Web: the tab's `sessionStorage`, written on
+`pagehide` and when the page is hidden, handed to the app before it starts;
+headless Chrome reloads `webdemo` and checks its count came back (run locally;
+CI step added). See
+[window-lifecycle.md](window-lifecycle.md#keeping-the-state-across-process-death).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

@@ -16,7 +16,12 @@
 //! - `touchdemo: text "..."` and `touchdemo: preedit ...` as the field's text
 //!   and composition change;
 //! - `touchdemo: theme dark` / `light` as the system's look changes;
-//! - `touchdemo: lifecycle Background` (and `Foreground`, `LowMemory`).
+//! - `touchdemo: lifecycle Background` (and `Foreground`, `LowMemory`);
+//! - `touchdemo: back Started` / `back Cancelled` and `touchdemo: went back`
+//!   for the back swipe from the left edge, which it takes while "a screen
+//!   is open" (the self-test opens one);
+//! - `touchdemo: restored text "..."` when it starts again with the state it
+//!   saved (the field's text) after iOS ended it in the background.
 //!
 //! **Self-test (iOS).** Launched with `TOUCHDEMO_SELFTEST` set (`xcrun simctl
 //! launch` passes it on as `SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1`), the app drives
@@ -31,10 +36,17 @@
 //!    VoiceOver does and activates a row through one. Then it holds a finger
 //!    on a row until its context menu opens and picks the item (through its
 //!    accessibility element), drags the strip sideways, and pinches the box
-//!    with two synthetic fingers; and it opens the document picker for a file
-//!    to open, then one to save to, cancelling each (as its Cancel button
-//!    would) and checking the app's callback heard. It ends this part with
-//!    `touchdemo: selftest passed` or `touchdemo: selftest FAILED: ...`.
+//!    with two synthetic fingers. It swipes from the left edge over the strip:
+//!    while it has nothing to go back from the strip scrolls; with a screen
+//!    open the swipe is the back gesture (its progress, then `on_back`) and
+//!    the strip doesn't move; a short swipe taken back is cancelled. Then it
+//!    opens the document picker for a file to open, then one to save to,
+//!    cancelling each (as its Cancel button would) and checking the app's
+//!    callback heard, and opens each again and answers it as picking a file
+//!    would (handing the picker's delegate a file it wrote): the open
+//!    callback gets the file's bytes, the save callback `true`. It ends this
+//!    part with `touchdemo: selftest passed` or
+//!    `touchdemo: selftest FAILED: ...`.
 //! 2. It then animates and waits for CI to switch the simulator to dark mode
 //!    (`xcrun simctl ui ... appearance dark`) and to send it to the background
 //!    and back; on coming back it logs how many frames it built while away
@@ -74,6 +86,12 @@ struct State {
     /// The views built while in the background, counted on coming back.
     built_away: Option<usize>,
     lifecycle: Vec<Lifecycle>,
+    /// "A screen is open": there is something to go back from, so the back
+    /// swipe is the app's.
+    detail: bool,
+    /// The back gesture's steps, and how many times it went back.
+    back_gestures: Vec<BackGesture>,
+    backs: usize,
 }
 
 /// The list's scroll offset in the frame last built (`f64` bits).
@@ -200,16 +218,26 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             s.pinch_phases.push(ev.phase);
             s.pinch_scale = ev.scale;
         });
+    // Everything but the strip keeps off the screen's edges; the strip runs
+    // edge to edge, where the back swipe starts.
+    let inset = |e: Element| {
+        column(vec![e])
+            .align(Align::Start, Align::Stretch)
+            .padding(Insets::symmetric(PAD, 0.0))
+    };
     column(vec![
-        field,
-        label(&theme, format!("Rows tapped: {}", state.tapped.len())),
-        list,
+        inset(field),
+        inset(label(
+            &theme,
+            format!("Rows tapped: {}", state.tapped.len()),
+        )),
+        inset(list),
         strip,
-        pinch,
+        inset(pinch),
     ])
     .gap(12.0)
     .align(Align::Start, Align::Stretch)
-    .padding(Insets::uniform(PAD))
+    .padding(Insets::symmetric(0.0, PAD))
     .grow(1.0)
 }
 
@@ -239,6 +267,31 @@ fn main() {
                 }
                 _ => {}
             }
+        })
+        // Back (iOS's swipe from the left edge) closes "the screen", when
+        // one is open.
+        .back_enabled(|s| s.detail)
+        .on_back(|s| {
+            s.detail = false;
+            s.backs += 1;
+            log("touchdemo: went back");
+            Handled::Yes
+        })
+        .on_back_progress(|s, gesture| {
+            match gesture {
+                BackGesture::Started { edge } => log(&format!("touchdemo: back Started {edge:?}")),
+                BackGesture::Cancelled => log("touchdemo: back Cancelled"),
+                BackGesture::Progressed { .. } => {}
+            }
+            s.back_gestures.push(gesture);
+        })
+        // The field's text comes back after iOS ends the app in the
+        // background.
+        .save_state(|s| s.field.text().as_bytes().to_vec())
+        .restore_state(|s, bytes| {
+            let text = String::from_utf8_lossy(bytes).into_owned();
+            log(&format!("touchdemo: restored text {text:?}"));
+            s.field = EditBuffer::from_text(text);
         });
     if let Some(font) = Font::system_default() {
         app = app.font(font);
@@ -275,8 +328,13 @@ mod selftest {
     static TOUCH_AT: Mutex<Point> = Mutex::new(Point::new(0.0, 0.0));
     /// The notification permission, as the center reported it.
     static PERMISSION: Mutex<Option<&'static str>> = Mutex::new(None);
-    /// Whether the open picker's callback got a file, once it ran.
-    static PICKED: Mutex<Option<bool>> = Mutex::new(None);
+    /// What the open picker's callback got (the file's name and bytes),
+    /// once it ran.
+    static PICKED: Mutex<Option<Option<Picked>>> = Mutex::new(None);
+    /// A picked file's name and bytes.
+    type Picked = (String, Vec<u8>);
+    /// The strip's offset when a back swipe began (`f64` bits).
+    static STRIP_BEFORE: AtomicU64 = AtomicU64::new(0);
     /// What the save picker's callback got, once it ran.
     static SAVED: Mutex<Option<bool>> = Mutex::new(None);
     /// The document picker's class.
@@ -388,6 +446,32 @@ mod selftest {
         })?;
         let c = e.frame.center();
         Some(Point::new(c.x - screen.min_x(), c.y - screen.min_y()))
+    }
+
+    fn strip_offset() -> f64 {
+        f64::from_bits(STRIP_OFFSET.load(Ordering::Relaxed))
+    }
+
+    /// Swipe finger `id` from the left edge over the strip through each of
+    /// `xs` (16 ms apart), hold still a moment (so nothing flings), and lift.
+    fn edge_swipe(steps: &mut Steps, id: u64, xs: &'static [f64]) {
+        steps.run(300, move |_| {
+            let y = element_center("Chip").map_or(560.0, |p| p.y);
+            *TOUCH_AT.lock().unwrap() = Point::new(3.0, y);
+            STRIP_BEFORE.store(strip_offset().to_bits(), Ordering::Relaxed);
+            simulate::touch(id, TouchPhase::Started, Point::new(3.0, y));
+        });
+        let at = |x: f64| Point::new(x, TOUCH_AT.lock().unwrap().y);
+        for &x in xs {
+            steps.run(16, move |_| simulate::touch(id, TouchPhase::Moved, at(x)));
+        }
+        let last = *xs.last().unwrap_or(&3.0);
+        steps.run(150, move |_| {
+            simulate::touch(id, TouchPhase::Moved, at(last))
+        });
+        steps.run(16, move |_| {
+            simulate::touch(id, TouchPhase::Ended, at(last))
+        });
     }
 
     fn document_is(text: &'static str) -> impl Fn(&State) -> bool + Send {
@@ -681,6 +765,92 @@ mod selftest {
             check(s.tapped.len() == 1, format!("rows tapped {:?}", s.tapped));
         });
 
+        // The back swipe from the left edge. With nothing to go back from,
+        // the edge is the app's: the drag scrolls the strip back.
+        const OUT: &[f64] = &[20.0, 40.0, 60.0, 80.0, 100.0, 120.0, 140.0, 160.0];
+        edge_swipe(&mut steps, 7, OUT);
+        steps.until(|_| {
+            strip_offset() < f64::from_bits(STRIP_BEFORE.load(Ordering::Relaxed)) - 50.0
+        });
+        steps.run(300, |s| {
+            let (before, after) = (
+                f64::from_bits(STRIP_BEFORE.load(Ordering::Relaxed)),
+                strip_offset(),
+            );
+            log(&format!(
+                "touchdemo: edge drag with back off: strip {before:.0} -> {after:.0}"
+            ));
+            check(
+                after < before - 50.0,
+                format!("with back off the edge drag scrolled the strip {before:.0} -> {after:.0}"),
+            );
+            check(
+                s.back_gestures.is_empty() && s.backs == 0,
+                format!("back with back off: {:?}", s.back_gestures),
+            );
+            // "Open a screen": now there is something to go back from.
+            s.detail = true;
+        });
+        // With a screen open, the same drag is the back gesture: its
+        // progress, then on_back, and the strip stays put.
+        const FAR: &[f64] = &[20.0, 50.0, 80.0, 110.0, 140.0, 170.0, 200.0, 230.0, 260.0];
+        edge_swipe(&mut steps, 8, FAR);
+        steps.until(|s| s.backs > 0);
+        steps.run(0, |s| {
+            let (before, after) = (
+                f64::from_bits(STRIP_BEFORE.load(Ordering::Relaxed)),
+                strip_offset(),
+            );
+            let progress: Vec<f32> = s
+                .back_gestures
+                .iter()
+                .filter_map(|g| match g {
+                    BackGesture::Progressed { progress } => Some(*progress),
+                    _ => None,
+                })
+                .collect();
+            log(&format!(
+                "touchdemo: back swipe: {} progress steps, last {:?}, strip {before:.0} -> {after:.0}",
+                progress.len(),
+                progress.last()
+            ));
+            check(s.backs == 1 && !s.detail, format!("went back {} times", s.backs));
+            check(
+                s.back_gestures.first()
+                    == Some(&BackGesture::Started {
+                        edge: stipple::platform::BackEdge::Left,
+                    })
+                    && !s.back_gestures.contains(&BackGesture::Cancelled),
+                format!("back gesture {:?}", s.back_gestures.first()),
+            );
+            check(
+                progress.len() >= 3 && progress.last().is_some_and(|p| *p > 0.5),
+                format!("back progress {progress:?}"),
+            );
+            check(
+                (after - before).abs() < 20.0,
+                format!("the back swipe scrolled the strip {before:.0} -> {after:.0}"),
+            );
+            check(s.tapped.len() == 1, format!("rows tapped {:?}", s.tapped));
+            s.back_gestures.clear();
+            s.detail = true;
+        });
+        // A short swipe, taken back: cancelled, and nothing goes back.
+        const BACK: &[f64] = &[20.0, 40.0, 60.0, 50.0, 40.0, 30.0, 20.0];
+        edge_swipe(&mut steps, 9, BACK);
+        steps.until(|s| s.back_gestures.contains(&BackGesture::Cancelled));
+        steps.run(0, |s| {
+            check(
+                s.back_gestures.last() == Some(&BackGesture::Cancelled) && s.backs == 1 && s.detail,
+                format!(
+                    "a swipe taken back: {:?}, went back {} times",
+                    s.back_gestures.last(),
+                    s.backs
+                ),
+            );
+            s.detail = false;
+        });
+
         // The document pickers: each must come up, and cancelling it (as its
         // Cancel button does; its contents run in another process, which
         // nothing here can tap) must reach the app's callback.
@@ -690,7 +860,7 @@ mod selftest {
                     "touchdemo: open picker answered {:?}",
                     file.as_ref().map(|f| &f.name)
                 ));
-                *PICKED.lock().unwrap() = Some(file.is_some());
+                *PICKED.lock().unwrap() = Some(file.map(|f| (f.name, f.bytes)));
             });
         });
         steps.until(|_| simulate::presented_controller() == PICKER);
@@ -705,9 +875,9 @@ mod selftest {
         });
         steps.until(|_| PICKED.lock().unwrap().is_some());
         steps.run(0, |_| {
-            let picked = *PICKED.lock().unwrap();
+            let picked = PICKED.lock().unwrap().take();
             check(
-                picked == Some(false),
+                picked == Some(None),
                 format!("open picker answered {picked:?}"),
             );
             dialog::save_file_contents_then(
@@ -731,10 +901,75 @@ mod selftest {
         });
         steps.until(|_| SAVED.lock().unwrap().is_some());
         steps.run(0, |_| {
-            let saved = *SAVED.lock().unwrap();
+            let saved = SAVED.lock().unwrap().take();
             check(
                 saved == Some(false),
                 format!("save picker answered {saved:?}"),
+            );
+        });
+
+        // The receiving side: open each picker again and answer it as picking
+        // a file does (the picker's contents can't be tapped here), handing
+        // its delegate a file written for it, as UIKit hands over its copy.
+        let picked_path = std::env::temp_dir().join("touchdemo-picked.txt");
+        let path = picked_path.clone();
+        steps.run(0, move |_| {
+            let _ = std::fs::write(&path, b"Picked by touchdemo\n");
+            dialog::open_file_contents(&FileDialog::new().with_accept(".txt"), |file| {
+                log(&format!(
+                    "touchdemo: open picker picked {:?}",
+                    file.as_ref()
+                        .map(|f| (&f.name, String::from_utf8_lossy(&f.bytes)))
+                ));
+                *PICKED.lock().unwrap() = Some(file.map(|f| (f.name, f.bytes)));
+            });
+        });
+        steps.until(|_| simulate::presented_controller() == PICKER);
+        let path = picked_path.clone();
+        steps.run(600, move |_| {
+            check(
+                simulate::pick_document(&path.to_string_lossy()),
+                "no open picker to pick from",
+            );
+        });
+        steps.until(|_| PICKED.lock().unwrap().is_some());
+        let path = picked_path.clone();
+        steps.run(0, move |_| {
+            let picked = PICKED.lock().unwrap().take();
+            check(
+                picked
+                    == Some(Some((
+                        "touchdemo-picked.txt".to_string(),
+                        b"Picked by touchdemo\n".to_vec(),
+                    ))),
+                format!("open picker picked {picked:?}"),
+            );
+            // The copy UIKit hands over is the app's to delete, and was.
+            check(!path.exists(), "the picked copy was left behind");
+            dialog::save_file_contents_then(
+                &FileDialog::new().with_file_name("touchdemo.txt"),
+                b"Saved by touchdemo\n",
+                |saved| {
+                    log(&format!("touchdemo: save picker exported {saved}"));
+                    *SAVED.lock().unwrap() = Some(saved);
+                },
+            );
+        });
+        steps.until(|_| simulate::presented_controller() == PICKER);
+        steps.run(600, |_| {
+            // Where the user "saved" it.
+            let dest = std::env::temp_dir().join("touchdemo-exported.txt");
+            check(
+                simulate::pick_document(&dest.to_string_lossy()),
+                "no save picker to pick from",
+            );
+        });
+        steps.until(|_| SAVED.lock().unwrap().is_some());
+        steps.run(0, |_| {
+            let saved = SAVED.lock().unwrap().take();
+            check(
+                saved == Some(true),
+                format!("save picker exported {saved:?}"),
             );
             report("selftest");
         });

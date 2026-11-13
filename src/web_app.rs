@@ -164,6 +164,18 @@ macro_rules! web_app {
             pub extern "C" fn stipple_file_cancel(id: u32) {
                 glue::file_picked(id, None);
             }
+
+            /// # Safety
+            /// `ptr`/`len` come from one `stipple_alloc(len)`.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_restore_state(ptr: *mut u8, len: usize) {
+                glue::restore_state(unsafe { glue::take_bytes(ptr, len) });
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_save_state() {
+                glue::save_state();
+            }
         }
 
         // Natively there's nothing to export, but `$make` still counts as used.

@@ -139,6 +139,31 @@ what must survive on `Background`: iOS may end a backgrounded app without
 warning. A memory warning also drops the cached OS-drawn controls. See
 [window-lifecycle.md](../window-lifecycle.md#going-to-the-background-mobile).
 
+## Keeping the state across process death
+
+With `App::save_state`, going to the background also asks the app for its
+state (`Event::SaveState`) and writes the bytes to a file in the app's
+`Library/Caches` (`UIApplicationWillTerminateNotification` writes it too, for
+an app still running in the background). The next launch reads the file,
+deletes it and hands the bytes to `App::restore_state` before the first frame;
+coming back to the foreground deletes it, since what it holds is stale from
+then on. This stands in for UIKit's state restoration, which is tied to view
+controllers with restoration identifiers; as iOS doesn't tell a suspended app
+that the user swiped it away, the state comes back after that too. See
+[window-lifecycle.md](../window-lifecycle.md#keeping-the-state-across-process-death).
+
+## The back swipe
+
+While `App::back_enabled` says yes (or, without it, the app has an `on_back`
+hook), a swipe from the left edge (the right one under a right-to-left theme)
+is the back gesture of a `UINavigationController`: `on_back_progress` hears
+`BackGesture::Started`, the progress and `Cancelled`, and a swipe that goes
+far enough or is flicked calls `on_back`. The backend recognizes it from the
+view's touches (24 points from the edge, then 10 inward, mostly sideways) and
+cancels the finger in the app once it does; until then, and whenever back is
+off, the edge's touches are the app's. See
+[window-lifecycle.md](../window-lifecycle.md#the-back-swipe-ios).
+
 ## Notifications
 
 `platform::notify` goes through `UNUserNotificationCenter`. The first call
@@ -197,7 +222,11 @@ with `Font::from_bytes` to be safe.
 - File pickers answer with contents only (`open_file` and friends return
   `None`), and there is no folder picker. Choosing a file in the picker can't
   be scripted on the simulator (its contents run in another process), so CI
-  only checks the pickers come up and that cancelling reaches the app.
+  checks the pickers come up, that cancelling reaches the app, and hands the
+  delegate a picked file's URL itself (`documentPicker:didPickDocumentsAtURLs:`,
+  as UIKit does once the user picks one): the open callback gets the bytes and
+  the export says it succeeded. The picker's own copy (`asCopy`) and its
+  export of the file aren't exercised.
 - The clipboard (`UIPasteboard`) is wired up but untested; Cmd+C/V from a
   hardware keyboard reach it.
 
@@ -215,16 +244,21 @@ and `deleteBackward` to the view through objc dispatch, composes through its
 `UITextInput` methods (`setMarkedText:selectedRange:`, `replaceRange:withText:`)
 and reads the document back as the keyboard does, feeds synthetic touches to
 the backend's touch path (a drag, a long press that opens a row's context
-menu, a sideways drag of a strip and a two-finger pinch), reads the
+menu, a sideways drag of a strip, a two-finger pinch and swipes from the left
+edge, with and without something to go back from), reads the
 accessibility elements as VoiceOver does (`accessibilityElementCount`,
 `accessibilityElementAtIndex:`, each element's label, value, traits and frame)
 and activates one (a row, then the context menu's item), presents the
 document pickers and cancels them (checking `presentedViewController` and the
-callbacks), posts a memory warning, and
+callbacks), presents them again and answers them through their delegate with a
+file it wrote (`simulate::pick_document`), posts a memory warning, and
 reads the notification permission; it logs to `touchdemo.log` in the app's tmp
 directory. CI runs it, and drives the second half from outside: it switches
 the simulator to dark mode (`xcrun simctl ui booted appearance dark`), sends
 the app to the background by launching Settings and brings it back by
 launching it again, and checks the app followed the look, heard the lifecycle
 events and built no frames while away. Nobody answers the notification prompt
-in CI, so the notification itself isn't seen.
+in CI, so the notification itself isn't seen. Last, CI sends the app to the
+background once more, ends it with `xcrun simctl terminate` (as iOS ends a
+suspended app) and launches it again, and checks the field's text came back
+through `restore_state`.

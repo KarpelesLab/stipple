@@ -227,6 +227,25 @@ handling are its own; the `paste`, `copy` and `cut` listeners act only for the
 app that has focus. Pass `title: false` so the apps don't fight over
 `document.title`. See `examples/webdemo/multi.html`.
 
+### Keeping the state across a reload
+
+`App::save_state` and `App::restore_state` work as on a phone, with the tab
+standing in for the process: when the page hides (`visibilitychange`; a
+phone's browser may discard a hidden tab without another word) or goes away
+(`pagehide`, a reload or navigating elsewhere), `stipple.js` asks the app for
+its state and keeps it, base64, in the tab's `sessionStorage`. When the page
+loads again in the same tab (a reload, a discarded tab brought back, going
+back to it in the history), it hands the bytes to the app before its first
+frame. A new tab, or another browser window, starts afresh; an app that saves
+nothing removes what was kept.
+
+The key is the module's URL and the canvas's order on the page, so each of
+several apps keeps its own; `start`'s `stateKey` option names another, and
+`stateKey: false` keeps no state. `start` also returns `saveState()`, to save
+at another moment. `webdemo` keeps its click count and checkbox this way;
+`index.html#restore` checks it in CI. See
+[window-lifecycle.md](../window-lifecycle.md#keeping-the-state-across-process-death).
+
 ## How it fits together
 
 `App::run` on the web keeps the event handler and returns; from then on the
@@ -254,6 +273,8 @@ The module exports:
 | `stipple_wake()` | the timer |
 | `stipple_frame()` | `requestAnimationFrame` |
 | `stipple_file(id, …)`, `stipple_file_cancel(id)` | a picked file, or a cancelled picker |
+| `stipple_restore_state(ptr, len)` | the state saved in `sessionStorage`, before `stipple_start` |
+| `stipple_save_state()` | `pagehide` and `visibilitychange` to hidden: the app saves its state, through the `save_state` import |
 
 It imports, from the module `"stipple"`: `now`, `present`, `schedule`,
 `request_frame`, `set_cursor`, `set_title`, `clipboard_write`,
@@ -261,7 +282,8 @@ It imports, from the module `"stipple"`: `now`, `present`, `schedule`,
 `save_file`, `open_url` (`window.open`, for `platform::open_url`), `notify`
 (the `Notification` API, for `platform::notify`), `log` (panics are printed to
 the console), `set_a11y` (the accessibility tree as JSON), `set_ime` (the caret
-rect, or none) and `set_text_input`. See `src/platform/backend/web.rs`.
+rect, or none), `set_text_input` and `save_state` (the bytes to keep in
+`sessionStorage`; none removes them). See `src/platform/backend/web.rs`.
 
 `std::time::Instant::now` panics on `wasm32-unknown-unknown`, so Stipple's
 timers and frame clock use `stipple::platform::time::Instant`, which is std's

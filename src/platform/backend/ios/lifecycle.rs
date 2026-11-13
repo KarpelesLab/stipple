@@ -5,7 +5,9 @@
 //! `UIApplicationWillEnterForegroundNotification` and
 //! `UIApplicationDidReceiveMemoryWarningNotification`, which UIKit posts
 //! whether the app uses scenes or not (with scenes, once the last one goes to
-//! the background), and delivers them as [`Event::Lifecycle`].
+//! the background), and delivers them as [`Event::Lifecycle`]. Going to the
+//! background (and `UIApplicationWillTerminateNotification`) also saves the
+//! app's state (see [`saved_state`](super::saved_state)).
 //!
 //! `traitCollectionDidChange:` on the view follows light and dark mode: when
 //! the screen's `userInterfaceStyle` changes, the next wake carries
@@ -27,6 +29,7 @@ unsafe extern "C" {
     static UIApplicationDidEnterBackgroundNotification: Id;
     static UIApplicationWillEnterForegroundNotification: Id;
     static UIApplicationDidReceiveMemoryWarningNotification: Id;
+    static UIApplicationWillTerminateNotification: Id;
 }
 
 thread_local! {
@@ -75,11 +78,32 @@ fn deliver(change: Lifecycle) {
     call_handler(Event::Lifecycle(change), &current_window());
 }
 
+/// Ask the app for the state to keep, and keep it (see
+/// [`saved_state`](super::saved_state)): iOS may end the app from here on
+/// without telling it.
+fn save_state() {
+    let bytes = crate::platform::saved_state::deliver_save(|event| {
+        call_handler(event, &current_window());
+    });
+    if let Some(dir) = super::saved_state::dir() {
+        super::saved_state::store(&dir, bytes.as_deref());
+    }
+}
+
 extern "C" fn did_enter_background(_this: Id, _cmd: Sel, _notification: Id) {
     deliver(Lifecycle::Background);
+    save_state();
+}
+
+extern "C" fn will_terminate(_this: Id, _cmd: Sel, _notification: Id) {
+    save_state();
 }
 
 extern "C" fn will_enter_foreground(_this: Id, _cmd: Sel, _notification: Id) {
+    // Back on screen: the state saved on the way out is stale from now on.
+    if let Some(dir) = super::saved_state::dir() {
+        super::saved_state::store(&dir, None);
+    }
     deliver(Lifecycle::Foreground);
     // The look may have changed while the app was away.
     check_appearance();
@@ -89,13 +113,14 @@ extern "C" fn did_receive_memory_warning(_this: Id, _cmd: Sel, _notification: Id
     deliver(Lifecycle::LowMemory);
 }
 
-const OBSERVERS: [(&str, extern "C" fn(Id, Sel, Id)); 3] = [
+const OBSERVERS: [(&str, extern "C" fn(Id, Sel, Id)); 4] = [
     ("stippleDidEnterBackground:", did_enter_background),
     ("stippleWillEnterForeground:", will_enter_foreground),
     (
         "stippleDidReceiveMemoryWarning:",
         did_receive_memory_warning,
     ),
+    ("stippleWillTerminate:", will_terminate),
 ];
 
 /// Add the observer methods and `traitCollectionDidChange:` to the view class.
@@ -132,6 +157,7 @@ pub(super) unsafe fn observe(view: Id) {
             UIApplicationDidEnterBackgroundNotification,
             UIApplicationWillEnterForegroundNotification,
             UIApplicationDidReceiveMemoryWarningNotification,
+            UIApplicationWillTerminateNotification,
         ];
         for ((selector, _), name) in OBSERVERS.iter().zip(names) {
             add(

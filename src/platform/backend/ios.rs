@@ -11,8 +11,11 @@
 //! stashed raw pointer.
 //!
 //! Touches arrive as [`Event::Touch`] for every finger, the first also as the
-//! pointer. The view adopts `UIKeyInput` and holds the keyboard (first
-//! responder) while a text input has focus.
+//! pointer, unless a swipe from the leading edge becomes the back gesture
+//! ([`edge_swipe`]). The view adopts `UIKeyInput` and holds the keyboard
+//! (first responder) while a text input has focus. The app's saved state goes
+//! to a file when it goes to the background, and comes back at the next
+//! launch ([`saved_state`]).
 //!
 //! **Verification:** build-checked for `aarch64-apple-ios` by the `mobile`
 //! cross-compile CI job; the `visual-ios` job runs it on a simulator, where
@@ -41,8 +44,13 @@ pub(crate) mod a11y_tree;
 mod display_link;
 /// The document the keyboard reads (UIKit-free, tested on hosts).
 pub(crate) mod doc;
+/// The interactive back swipe from the leading edge (UIKit-free, tested on
+/// hosts).
+mod edge_swipe;
 /// Background, foreground, memory warnings and appearance changes.
 mod lifecycle;
+/// The state kept across process death (UIKit-free, tested on hosts).
+mod saved_state;
 /// Input methods: `UITextInput` on the view.
 mod text_input;
 
@@ -496,9 +504,52 @@ fn current_window() -> IosWindow {
     }
 }
 
+thread_local! {
+    static EDGE_SWIPE: RefCell<edge_swipe::EdgeSwipe> = RefCell::default();
+    static TOUCH_CLOCK: std::time::Instant = std::time::Instant::now();
+}
+
+/// Touches that changed: first past the back swipe (see [`edge_swipe`]),
+/// which may take a finger from the app, then to the app.
+fn touch_input(phase: TouchPhase, touches: &[(u64, Point)]) {
+    use edge_swipe::Out;
+    let (size, scale) = CTX.with(|c| {
+        let c = c.borrow();
+        (c.size, c.scale)
+    });
+    let cx = edge_swipe::Context {
+        width: if scale > 0.0 {
+            f64::from(size.width) / scale
+        } else {
+            0.0
+        },
+        enabled: crate::platform::back::back_enabled_said(),
+        rtl: crate::platform::back::back_rtl(),
+    };
+    let time = TOUCH_CLOCK.with(|t| t.elapsed().as_secs_f64());
+    let mut to_app = Vec::new();
+    let mut back = Vec::new();
+    for &(id, at) in touches {
+        for out in EDGE_SWIPE.with(|e| e.borrow_mut().touch(phase, id, at, time, cx)) {
+            match out {
+                Out::Touch => to_app.push((id, at)),
+                Out::CancelTouch => app_touches(TouchPhase::Cancelled, &[(id, at)]),
+                Out::Gesture(gesture) => back.push(Event::BackProgress(gesture)),
+                Out::Back => back.push(Event::BackRequested),
+            }
+        }
+    }
+    if !to_app.is_empty() {
+        app_touches(phase, &to_app);
+    }
+    for event in back {
+        call_handler(event, &current_window());
+    }
+}
+
 /// Deliver touches that changed: each as an [`Event::Touch`], then the
 /// pointer events of the first finger, which is also the pointer.
-fn touch_input(phase: TouchPhase, touches: &[(u64, Point)]) {
+fn app_touches(phase: TouchPhase, touches: &[(u64, Point)]) {
     let win = current_window();
     for &(id, position) in touches {
         call_handler(
@@ -860,6 +911,17 @@ pub mod simulate {
         crate::platform::dialog::picker_ios::cancel_presented()
     }
 
+    /// Close the document picker on top as picking the file at `path` in it
+    /// would: its delegate gets the file's URL
+    /// (`documentPicker:didPickDocumentsAtURLs:`). For a picker opening a
+    /// document, the file stands for the copy UIKit makes in the app's tmp
+    /// directory: the app's callback gets its name and bytes, and it is
+    /// deleted. For an export, it stands for where the user saved: the
+    /// callback gets `true`. `false` if no picker is showing.
+    pub fn pick_document(path: &str) -> bool {
+        crate::platform::dialog::picker_ios::pick_presented(path)
+    }
+
     /// A finger `id` at `position` (logical pixels, in the app's content).
     pub fn touch(id: u64, phase: TouchPhase, position: Point) {
         later(move || touch_input(phase, &[(id, position)]));
@@ -1193,6 +1255,11 @@ where
         c.background = attrs.background;
         c.handler = boxed;
     });
+    // A launch after the system ended the app in the background: hand its
+    // saved state to the app's first event.
+    if let Some(dir) = saved_state::dir() {
+        crate::platform::saved_state::set_restored_state(saved_state::take(&dir));
+    }
 
     register_view_class();
     register_app_delegate();

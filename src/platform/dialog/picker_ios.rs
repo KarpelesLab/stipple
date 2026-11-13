@@ -297,6 +297,22 @@ pub(crate) fn presented_class() -> String {
 /// picker of ours is on top. For self-tests, which can't tap the picker
 /// (its contents run in another process).
 pub(crate) fn cancel_presented() -> bool {
+    answer_presented(None)
+}
+
+/// Close the document picker on top as choosing `path` in it does: dismiss
+/// it and hand its delegate the file's URL
+/// (`documentPicker:didPickDocumentsAtURLs:`), as UIKit does once the user
+/// picked a document (for an open, a copy of it in the app's tmp directory,
+/// which the delegate reads and deletes) or a place to export to. `false` if
+/// no picker of ours is on top. For self-tests.
+pub(crate) fn pick_presented(path: &str) -> bool {
+    answer_presented(Some(path))
+}
+
+/// Dismiss our picker on top and tell its delegate it picked `path`, or was
+/// cancelled.
+fn answer_presented(path: Option<&str>) -> bool {
     with_pool(|| unsafe {
         let top = presenter();
         let ours = !top.is_null() && PENDING.with(|p| p.borrow().iter().any(|x| x.picker == top));
@@ -309,7 +325,16 @@ pub(crate) fn cancel_presented() -> bool {
         msg!(top, "dismissViewControllerAnimated:completion:", (animated: bool, none: Id) -> ());
         let delegate = msg!(top, "delegate", () -> Id);
         if !delegate.is_null() {
-            msg!(delegate, "documentPickerWasCancelled:", (top: Id) -> ());
+            match path {
+                Some(path) => {
+                    let s = nsstring(path);
+                    let url = msg!(class("NSURL"), "fileURLWithPath:", (s: Id) -> Id);
+                    let urls = msg!(class("NSArray"), "arrayWithObject:", (url: Id) -> Id);
+                    msg!(delegate, "documentPicker:didPickDocumentsAtURLs:",
+                        (top: Id, urls: Id) -> ());
+                }
+                None => msg!(delegate, "documentPickerWasCancelled:", (top: Id) -> ()),
+            }
         }
         msg!(top, "release", () -> ());
         true

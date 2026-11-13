@@ -18,6 +18,9 @@
       import { start } from "./stipple.js";
 
       const selftest = location.hash === "#selftest";
+      // `#restore`: click, reload the tab, and check the count came back
+      // (App::save_state, kept in sessionStorage).
+      const restore = location.hash === "#restore";
       // CI reads the report from the server's request log: a GET of
       // `selftest-report?<report>` (a 404, but logged).
       const send = (text) => fetch(`selftest-report?${encodeURIComponent(text)}`).catch(() => {});
@@ -29,7 +32,7 @@
         console.log(`selftest error: ${what}`);
         send(report.textContent);
       };
-      if (selftest) {
+      if (selftest || restore) {
         window.addEventListener("error", (ev) => fail(ev.message || ev.error));
         window.addEventListener("unhandledrejection", (ev) => fail(ev.reason?.stack || ev.reason));
       }
@@ -45,6 +48,50 @@
         }),
       });
       if (selftest) runSelftest(app).catch((err) => fail(err?.stack || err));
+      if (restore) runRestore(app).catch((err) => fail(err?.stack || err));
+
+      // The state across a reload: the first load clicks the counter three
+      // times and reloads (the page's `pagehide` saves the app's state into
+      // sessionStorage); the second checks the app started with the count.
+      async function runRestore({ exports: e, canvas }) {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const probe = (i) => e.webdemo_probe(i);
+        const MARK = "webdemo-restore";
+        const first = sessionStorage.getItem(MARK);
+        await sleep(300);
+        if (first === null) {
+          const fresh = probe(0);
+          const r = canvas.getBoundingClientRect();
+          for (let i = 0; i < 3; i++) {
+            for (const type of ["pointermove", "pointerdown", "pointerup"]) {
+              canvas.dispatchEvent(new PointerEvent(type, {
+                clientX: r.left + BUTTONS.counter, clientY: r.top + BUTTONS.y, button: 0,
+                buttons: type === "pointerup" ? 0 : 1, pointerId: 1, pointerType: "mouse", bubbles: true,
+              }));
+            }
+            await sleep(50);
+          }
+          sessionStorage.setItem(MARK, JSON.stringify({ fresh, clicks: probe(0) }));
+          location.reload();
+          return;
+        }
+        sessionStorage.removeItem(MARK);
+        const before = JSON.parse(first);
+        const key = Object.keys(sessionStorage).find((k) => k.startsWith("stipple-state:"));
+        const checks = [
+          ["fresh-start", before.fresh === 0, `${before.fresh} clicks on the first load`],
+          ["clicked", before.clicks === 3, `${before.clicks} clicks before the reload`],
+          ["saved", !!key, `sessionStorage ${key ? `${key} = ${sessionStorage.getItem(key)}` : "has no state"}`],
+          ["restored", probe(0) === before.clicks, `${probe(0)} clicks after the reload`],
+        ];
+        const ok = checks.every(([, pass]) => pass);
+        const report = `SELFTEST: ${ok ? "ok" : "FAILED"}\n` +
+          checks.map(([k, pass, detail]) => `${pass ? "ok    " : "FAILED"} ${k}: ${detail}`).join("\n");
+        console.log(report);
+        document.getElementById("report").textContent = report;
+        send(report);
+        document.title = `restore ${ok ? "ok" : "FAILED"}`;
+      }
 
       // Drive the demo with DOM events, as a user would, and report what the
       // app saw (through `webdemo_probe`). CI loads `index.html#selftest` in

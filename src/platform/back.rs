@@ -10,12 +10,14 @@
 //! [`App::back_enabled`](crate::App::back_enabled) (and its open menus) after
 //! each event. On Android 14 and later the app also hears the gesture's
 //! progress, as [`Event::BackProgress`](crate::platform::Event::BackProgress),
-//! to animate its own preview. See `docs/window-lifecycle.md`.
+//! to animate its own preview. iOS's swipe from the leading edge, which the
+//! backend recognizes itself, follows the same answer and reports the same
+//! progress. See `docs/window-lifecycle.md`.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 /// The back gesture's progress, as Android 14 and later report it
-/// (`OnBackAnimationCallback`), for an app that animates what going back
+/// (`OnBackAnimationCallback`) and iOS's edge swipe does, for an app that animates what going back
 /// will show. [`Event::BackRequested`](crate::platform::Event::BackRequested)
 /// follows a gesture that completes; a [`Cancelled`](Self::Cancelled) one
 /// goes nowhere.
@@ -71,9 +73,14 @@ static ENABLED: AtomicU8 = AtomicU8::new(UNKNOWN);
 /// Android 13, and without the manifest flag, every Back reaches the app
 /// whatever this says. Cheap to call often: only changes reach the system.
 ///
+/// On iOS, `true` makes a swipe from the screen's leading edge the back
+/// gesture (its progress, then
+/// [`Event::BackRequested`](crate::platform::Event::BackRequested)); until
+/// it is said, the edge's touches are the app's.
+///
 /// The [`App`](crate::App) calls this itself (see
 /// [`App::back_enabled`](crate::App::back_enabled)); raw backend users that
-/// never call it get every Back.
+/// never call it get every Back on Android, and no edge swipe on iOS.
 pub fn set_back_enabled(enabled: bool) {
     let new = if enabled { YES } else { NO };
     if ENABLED.swap(new, Ordering::Relaxed) != new {
@@ -86,6 +93,28 @@ pub fn set_back_enabled(enabled: bool) {
 /// it says.
 pub fn back_enabled() -> bool {
     ENABLED.load(Ordering::Relaxed) != NO
+}
+
+/// Whether the app *said* it would go back. iOS's edge swipe takes touches
+/// away from the app, so it waits for a yes rather than assuming one.
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) fn back_enabled_said() -> bool {
+    ENABLED.load(Ordering::Relaxed) == YES
+}
+
+static RTL: AtomicBool = AtomicBool::new(false);
+
+/// Tell the platform the app's layout runs right to left, so the back swipe
+/// starts at the right edge (iOS). The [`App`](crate::App) says it from its
+/// theme's layout direction.
+pub(crate) fn set_back_rtl(rtl: bool) {
+    RTL.store(rtl, Ordering::Relaxed);
+}
+
+/// Whether the back swipe starts at the right edge ([`set_back_rtl`]).
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) fn back_rtl() -> bool {
+    RTL.load(Ordering::Relaxed)
 }
 
 #[cfg(test)]

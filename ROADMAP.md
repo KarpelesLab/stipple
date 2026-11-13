@@ -1350,8 +1350,24 @@ Most input only works on X11 today.
   `ANativeActivity_onCreate`'s saved state before the first frame. No serde: the
   format is the app's. Unit-tested in the App; **verified on an API 34
   emulator** (Home, `am kill`, relaunch: `androiddemo`'s tap count comes back;
-  CI steps added). iOS (state restoration's coder) and the web
-  (`sessionStorage`) could carry the same API; documented, not done.
+  CI steps added). iOS and the web: see the next item.
+- ✅ Saved state on iOS and the web, through the same `App::save_state` /
+  `restore_state`. iOS: each `didEnterBackground` (and `willTerminate`) asks
+  the app and writes the bytes to a file in its `Library/Caches`; the next
+  launch reads and deletes it before the first frame, and coming back to the
+  foreground deletes it (stale). Chosen over UIKit's state restoration, which
+  is tied to view controllers with restoration identifiers and saves when
+  UIKit likes; unlike it, a swipe-away in the app switcher still restores (iOS
+  doesn't tell a suspended app). Web: `stipple.js` asks on `pagehide` and on
+  `visibilitychange` to hidden (`stipple_save_state`, answered through a
+  `save_state` import) and keeps the bytes, base64, in the tab's
+  `sessionStorage` under a per-module, per-canvas key (`stateKey` option);
+  the next load in the tab hands them over (`stipple_restore_state`) before
+  `stipple_start`. The file handling is unit-tested on every host; headless
+  Chrome reloads `webdemo` (`index.html#restore`) and its count comes back
+  (run locally; CI step added); CI's simulator backgrounds `touchdemo`, ends
+  it with `simctl terminate` and relaunches it, checking the field's text came
+  back (added, not yet run).
 - ✅ Back navigation on Android: the Back key (and the back gesture, which
   sends it while the app doesn't opt into predictive back) arrives as
   `Event::BackRequested`; the App closes an open menu, then asks
@@ -1375,9 +1391,23 @@ Most input only works on X11 today.
   in the App; **verified on an API 34 emulator** (key Back through the
   callback, an edge swipe with progress, a cancelled swipe, a declined Back
   going to the system; CI steps added); API 33 build-checked only.
-- ⬜ iOS's interactive edge swipe for going back (a
-  `UIScreenEdgePanGestureRecognizer` feeding `BackGesture` and `on_back`),
-  for apps that want it.
+- ✅ iOS's interactive edge swipe for going back: while `back_enabled` says
+  yes, a finger from the leading edge (the left, the right under a
+  right-to-left theme, which the App passes on) that moves inward is the back
+  gesture, recognized by the backend in its touch path (a small state machine
+  kept free of UIKit) rather than by a `UIScreenEdgePanGestureRecognizer`, so
+  synthetic touches go through it too: `BackGesture::Started` / `Progressed`
+  (inward distance over the width) / `Cancelled`, and `Event::BackRequested`
+  (`on_back`) for a swipe past half way or a flick. The finger reaches the
+  app until recognized (its moves wait while undecided) and is cancelled
+  there once it is; a vertical drag, a second finger, or back being off
+  leave the edge's touches to the app. A raw handler's edge stays its own
+  until it calls `set_back_enabled(true)`. Unit-tested (the recognizer, and
+  driving an `App` with a strip at the edge); `touchdemo`'s simulator
+  self-test swipes over an edge-to-edge strip with back off (the strip
+  scrolls), on (back, the strip stays) and taken back (cancelled). The iOS
+  steps are added and haven't run yet. Edge measured from the view (the safe
+  area), so a landscape notch inset isn't covered.
 - ✅ Mobile gestures, recognized in the shared core (`core::touch`) from the
   platform's touches, so iOS, Android and the web behave alike: pinch,
   two-finger pan and rotation through `Element::on_pinch` (a `PinchEvent`
@@ -1431,7 +1461,12 @@ Most input only works on X11 today.
   with uiautomator: picks a file and reads it, cancels, saves and reads the
   file back, and kills the process under the picker; the iOS simulator
   self-test checks both pickers come up and that cancelling reaches the
-  callback (choosing a file there can't be scripted). No folder picker.
+  callback, and, since choosing a file there can't be scripted, opens each
+  again and hands its delegate a file URL itself
+  (`documentPicker:didPickDocumentsAtURLs:`, `simulate::pick_document`): the
+  open callback gets the written file's name and bytes (and the copy is
+  deleted), the export's callback `true` (added, not yet run in CI). No folder
+  picker.
 - ✅ Notifications on iOS: `platform::notify` through
   `UNUserNotificationCenter`; the first call asks permission
   (`requestAuthorizationWithOptions:`, with a hand-built completion block) and

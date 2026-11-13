@@ -2570,7 +2570,9 @@ jobs:
   # events (a tap, and a long press opening a context menu whose item a tap
   # picks; skipped if the browser lacks the TouchEvent constructor), opening
   # and saving a file, and
-  # resizing. multi.html (two apps side by side) is screenshotted too.
+  # resizing; then index.html#restore checks the app's saved state comes back
+  # from sessionStorage after a reload. multi.html (two apps side by side) is
+  # screenshotted too.
   visual-web:
     name: Visual test (Web / wasm)
     runs-on: ubuntu-latest
@@ -2609,11 +2611,11 @@ jobs:
           # and the report never came. The page sends the report as a GET of
           # selftest-report?<report>, which the server's log records; run N
           # waits for the Nth report. $1 is the run, $2 the report file, the
-          # rest extra Chrome flags.
+          # rest extra Chrome flags; $PAGE picks another page than the selftest.
           selftest() {
             local n=$1 out=$2; shift 2
             chrome --force-device-scale-factor=2 --remote-debugging-port=$((9221 + n)) "$@" \
-              "http://localhost:8000/index.html#selftest" > "chrome-$n.log" 2>&1 &
+              "http://localhost:8000/${PAGE:-index.html#selftest}" > "chrome-$n.log" 2>&1 &
             local pid=$!
             for i in $(seq 1 90); do
               [ "$(grep -c "GET /selftest-report?" server.log)" -ge "$n" ] && break
@@ -2639,6 +2641,11 @@ jobs:
           selftest 3 visual_output/web-selftest-reduced.txt --force-prefers-reduced-motion
           grep -q "reduced-motion: prefers-reduced-motion: reduce, app reduces" visual_output/web-selftest-reduced.txt
           grep -q "theme-fade: 0 animation frames" visual_output/web-selftest-reduced.txt
+          # The app's saved state across a reload of the tab: index.html#restore
+          # clicks the counter three times and reloads; pagehide keeps the
+          # state in sessionStorage, and the reloaded app starts with the count.
+          PAGE='index.html#restore' selftest 4 visual_output/web-restore.txt
+          grep -q "restored: 3 clicks after the reload" visual_output/web-restore.txt
           # The screenshot, after the selftest's clicks (counter at 3, a file
           # opened, the box checked). A blank canvas means the page never ran
           # the wasm, so require real content.
@@ -2671,6 +2678,7 @@ jobs:
           path: |
             visual_output/*.png
             visual_output/web-selftest*.txt
+            visual_output/web-restore.txt
           if-no-files-found: warn
 
   # Draw a WebGPU triangle (hand-written WGSL, no wgpu) in headless Chrome on
@@ -3502,10 +3510,14 @@ jobs:
       # activates a row through one; then it long-presses a row (its context
       # menu opens and its item is picked through accessibility), drags a
       # strip sideways and pinches a box with two synthetic fingers, all
-      # through the backend's touch path; then it opens the document pickers
-      # (open and export) and cancels each. It logs to its tmp dir, read back
-      # here.
-      - name: Touch scrolling, gestures, the keyboard, composition, accessibility and document pickers (touchdemo self-test)
+      # through the backend's touch path; it swipes from the left edge (the
+      # strip scrolls while the app has nothing to go back from; with a
+      # "screen" open the swipe is the back gesture, and a short one taken
+      # back is cancelled); then it opens the document pickers (open and
+      # export) and cancels each, then opens each again and hands its
+      # delegate a picked file (documentPicker:didPickDocumentsAtURLs:). It
+      # logs to its tmp dir, read back here.
+      - name: Touch scrolling, gestures, back swipe, the keyboard, composition, accessibility and document pickers (touchdemo self-test)
         run: |
           cargo build --release -p touchdemo --target aarch64-apple-ios-sim
           cp target/aarch64-apple-ios-sim/release/touchdemo Stipple.app/window
@@ -3557,6 +3569,17 @@ jobs:
           grep -q "touchdemo: open picker answered None" "$LOG"
           grep -q "touchdemo: save picker presented UIDocumentPickerViewController" "$LOG"
           grep -q "touchdemo: save picker answered false" "$LOG"
+          # The receiving side, through the picker's delegate: the open
+          # callback got the picked file's bytes, the export reported success.
+          grep -qF 'touchdemo: open picker picked Some(("touchdemo-picked.txt", "Picked by touchdemo\n"))' "$LOG"
+          grep -q "touchdemo: save picker exported true" "$LOG"
+          # The back swipe from the left edge: the app's drag while back is
+          # off, the back gesture (and on_back) while a screen is open, and
+          # cancelled when taken back.
+          grep -qE "touchdemo: edge drag with back off: strip [0-9]+ -> [0-9]+" "$LOG"
+          grep -q "touchdemo: back Started Left" "$LOG"
+          grep -q "touchdemo: went back" "$LOG"
+          grep -q "touchdemo: back Cancelled" "$LOG"
           grep -q "touchdemo: selftest passed" "$LOG"
 
       # touchdemo's second part, driven from here: the simulator switches to
@@ -3607,6 +3630,37 @@ jobs:
           grep -q "touchdemo: notify Ok" "$LOG"
           grep -qE "touchdemo: notification permission [a-z_]+" "$LOG"
           grep -q "touchdemo: phase 2 passed" "$LOG"
+
+      # Process death: going to the background saves the app's state (the
+      # field's text, "HiJP" after part 1) to a file in its caches; the
+      # simulator then ends the suspended app as iOS does to free memory
+      # (simctl terminate), and the next launch hands the state back.
+      - name: Saved state across process death (touchdemo)
+        if: ${{ !cancelled() }}
+        run: |
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/touchdemo.log"
+          backgrounds=$(grep -c "touchdemo: lifecycle Background" "$LOG" || true)
+          xcrun simctl launch "$DEV" com.apple.Preferences || true
+          for _ in $(seq 1 30); do
+            [ "$(grep -c "touchdemo: lifecycle Background" "$LOG")" -gt "$backgrounds" ] && break
+            sleep 1
+          done
+          sleep 2
+          ls -la "$DATA/Library/Caches" || true
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple
+          sleep 1
+          xcrun simctl launch "$DEV" com.karpeleslab.stipple
+          for _ in $(seq 1 30); do
+            grep -q "touchdemo: restored" "$LOG" && break
+            sleep 1
+          done
+          echo "=== touchdemo.log (saved state) ==="; tail -5 "$LOG" || true
+          # Restored once, after the relaunch, with part 1's text.
+          grep -qF 'touchdemo: restored text "HiJP"' "$LOG"
+          [ "$(grep -c "touchdemo: restored" "$LOG")" -eq 1 ]
+          # Read at launch, the file is gone.
+          [ ! -e "$DATA/Library/Caches/stipple-saved-state" ]
 
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4

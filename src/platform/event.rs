@@ -336,14 +336,15 @@ pub enum Event {
         content: Option<crate::platform::clipboard::ClipboardContent>,
     },
 
-    /// The user asked to go back: Android's Back button or gesture. A handler
+    /// The user asked to go back: Android's Back button or gesture, or iOS's
+    /// swipe from the leading edge (while back is enabled). A handler
     /// that goes back (closes a menu, a dialog, a screen) says so with
     /// [`handle_back`](crate::platform::handle_back) while handling it;
     /// otherwise the system does what it does by default (on Android, the
     /// activity finishes or its task moves to the back).
     BackRequested,
-    /// The back gesture's progress, on Android 14 and later while the app
-    /// takes Back (see [`set_back_enabled`](crate::platform::set_back_enabled)):
+    /// The back gesture's progress, on Android 14 and later and for iOS's
+    /// edge swipe, while the app takes Back (see [`set_back_enabled`](crate::platform::set_back_enabled)):
     /// for an app that animates what going back will show.
     BackProgress(crate::platform::BackGesture),
     /// The system may end the process while it's in the background, and
@@ -351,7 +352,9 @@ pub enum Event {
     /// what to keep with [`save_state`](crate::platform::save_state), and
     /// gets it back from
     /// [`take_restored_state`](crate::platform::take_restored_state) on the
-    /// next start. Android sends it from `onSaveInstanceState`.
+    /// next start. Android sends it from `onSaveInstanceState`, iOS each
+    /// time the app goes to the background, the web when the page hides or
+    /// unloads.
     SaveState,
 }
 

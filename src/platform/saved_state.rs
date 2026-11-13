@@ -4,7 +4,8 @@
 //!
 //! The system asks with [`Event::SaveState`](crate::platform::Event::SaveState);
 //! the handler answers with [`save_state`], bytes the backend keeps where the
-//! system keeps such things (Android's saved-instance `Bundle`). When the app
+//! system keeps such things (Android's saved-instance `Bundle`, a file in the
+//! app's caches on iOS, the tab's `sessionStorage` on the web). When the app
 //! starts again from them, [`take_restored_state`] hands them back, once. The
 //! [`App`](crate::App) does both from
 //! [`App::save_state`](crate::App::save_state) and
@@ -37,14 +38,20 @@ pub fn take_restored_state() -> Option<Vec<u8>> {
 }
 
 /// The backend was started with `bytes` (a backend's own, from the system).
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")),
+    allow(dead_code)
+)]
 pub(crate) fn set_restored_state(bytes: Option<Vec<u8>>) {
     *RESTORED.lock().unwrap_or_else(|e| e.into_inner()) = bytes;
 }
 
 /// Hand [`Event::SaveState`](crate::platform::Event::SaveState) to `handler`.
 /// Returns what it saved (see [`save_state`]).
-#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "android", target_os = "ios", target_arch = "wasm32", test)),
+    allow(dead_code)
+)]
 pub(crate) fn deliver_save(handler: impl FnOnce(crate::platform::Event)) -> Option<Vec<u8>> {
     SAVED.with(|s| s.borrow_mut().take());
     handler(crate::platform::Event::SaveState);

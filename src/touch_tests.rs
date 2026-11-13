@@ -304,3 +304,94 @@ fn a_right_to_left_strip_scrolls_towards_the_left() {
     assert_eq!(off, 100.0 - crate::core::touch::SLOP);
     assert_eq!(first_chip(&app).max_x(), 300.0 + off);
 }
+
+/// iOS's back swipe (recognized from the touches by the backend, here run on
+/// the host) in front of the `App`: the edge's drags are the app's while it
+/// has nothing to go back from, and the back gesture's once it has.
+#[cfg(not(target_os = "ios"))]
+#[test]
+fn the_ios_back_swipe_takes_the_edge_only_while_back_is_enabled() {
+    use crate::core::Handled;
+    use crate::platform::backend::ios_edge_swipe::{Context, EdgeSwipe, Out};
+    use crate::platform::{BackEdge, BackGesture};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let open = Rc::new(std::cell::Cell::new(false));
+    let gestures = Rc::new(RefCell::new(Vec::new()));
+    let (is_open, closes, seen) = (open.clone(), open.clone(), gestures.clone());
+    let mut app = app()
+        .back_enabled(move |_| is_open.get())
+        .on_back(move |_| {
+            closes.set(false);
+            Handled::Yes
+        })
+        .on_back_progress(move |_, g| seen.borrow_mut().push(g));
+    app.render_once();
+    let mut swipe = EdgeSwipe::default();
+    let backs = std::cell::Cell::new(0);
+    // A drag from the left edge across the strip (y 0..40), as the backend
+    // would deliver it.
+    let mut drag = |app: &mut App<Log>, xs: &[f64]| {
+        let cx = Context {
+            width: 300.0,
+            enabled: app.wants_back(),
+            rtl: false,
+        };
+        let mut time = 0.0;
+        let mut feed = |app: &mut App<Log>, phase, x: f64, time: f64| {
+            let at = Point::new(x, 20.0);
+            for out in swipe.touch(phase, 1, at, time, cx) {
+                match out {
+                    Out::Touch => _ = app.touch(finger(1, phase, x, 20.0)),
+                    Out::CancelTouch => _ = app.touch(finger(1, TouchPhase::Cancelled, x, 20.0)),
+                    Out::Gesture(g) => _ = app.back_progress(g),
+                    Out::Back => {
+                        backs.set(backs.get() + 1);
+                        app.request_back();
+                    }
+                }
+            }
+        };
+        feed(app, TouchPhase::Started, 3.0, time);
+        for &x in xs {
+            time += 0.016;
+            feed(app, TouchPhase::Moved, x, time);
+        }
+        let last = *xs.last().unwrap();
+        feed(app, TouchPhase::Moved, last, time + 0.2);
+        feed(app, TouchPhase::Ended, last, time + 0.21);
+        app.render_once();
+    };
+
+    // Back is off: the strip scrolls, from 100 back towards the start.
+    app.panes[0].scroll_offsets.insert(STRIP, 100.0);
+    drag(&mut app, &[20.0, 40.0, 60.0, 80.0]);
+    assert_eq!(
+        offset(&app, STRIP),
+        100.0 - (80.0 - 3.0 - crate::core::touch::SLOP)
+    );
+    assert!(gestures.borrow().is_empty());
+    assert_eq!(backs.get(), 0);
+
+    // A screen is open: the same drag, further, goes back, and the strip
+    // stays where it was.
+    open.set(true);
+    let before = offset(&app, STRIP);
+    drag(&mut app, &[20.0, 60.0, 100.0, 140.0, 180.0, 220.0]);
+    assert_eq!(backs.get(), 1);
+    assert!(!open.get(), "on_back closed the screen");
+    assert_eq!(offset(&app, STRIP), before, "the strip didn't move");
+    assert_eq!(
+        gestures.borrow().first(),
+        Some(&BackGesture::Started {
+            edge: BackEdge::Left
+        })
+    );
+    assert!(app.state().tapped.is_empty(), "no chip tapped");
+
+    // Nothing left to go back from: the edge is the app's again.
+    drag(&mut app, &[20.0, 40.0, 60.0, 80.0]);
+    assert_eq!(backs.get(), 1);
+    assert!(offset(&app, STRIP) < before);
+}

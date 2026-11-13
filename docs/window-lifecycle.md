@@ -294,11 +294,38 @@ first Back still only closes it (the keyboard's callback sits above the app's;
 if the app's was registered after the keyboard came up, it closes the keyboard
 itself).
 
-iOS has no system Back. Its equivalent, the interactive edge swipe of a
-`UINavigationController`, belongs to UIKit's navigation stack, which Stipple
-doesn't use; an app that wants it can recognize the swipe itself (a
-`UIScreenEdgePanGestureRecognizer` on the left edge would feed the same
-`BackGesture` and `on_back`), which isn't done yet.
+### The back swipe (iOS)
+
+iOS has no system Back. Its equivalent is the interactive swipe from the
+screen's leading edge of a `UINavigationController`, which belongs to UIKit's
+navigation stack, which Stipple doesn't use; so the backend recognizes the
+swipe itself and feeds the same hooks: while `back_enabled` says yes, a finger
+that starts at the left edge (the right edge when the theme's layout is
+right-to-left) and moves inward is the back gesture.
+
+- It arrives as `BackGesture::Started { edge }`, then `Progressed` as the
+  finger moves (the distance over the view's width, 0 to 1), as on Android
+  14, through `on_back_progress`.
+- Lifting past half way, or flicking inward, goes back: `on_back` runs (a raw
+  handler gets `Event::BackRequested`). Taking it back, or lifting early and
+  slowly, is `BackGesture::Cancelled`.
+- Until it is recognized (24 points from the edge, then 10 inward and mostly
+  sideways), the finger is the app's as usual: a tap at the edge taps, and a
+  drag up or down scrolls. Once it is, the app's touch is cancelled, as
+  UIKit's own edge-pan recognizer does.
+- While `back_enabled` says no (and with neither hook) the edge is the app's
+  alone. Without `back_enabled`, an app with an `on_back` hook takes the edge
+  always, as it takes every Back on Android: give it `back_enabled` so a list
+  or a strip at the edge keeps its sideways drags while there is nothing to go
+  back from. A raw handler turns it on with
+  `stipple::platform::set_back_enabled(true)`; until it does, it's off.
+
+The swipe is recognized from the view's touches rather than by a
+`UIScreenEdgePanGestureRecognizer`: the decision is made on the same path as
+every touch, so it works the same for the synthetic touches a self-test sends
+and is unit-tested on every host. The edge is the view's, which is the safe
+area's: in landscape on a phone with a notch, a finger starting in the inset
+beside the view isn't seen.
 
 ## Keeping the state across process death
 
@@ -346,9 +373,25 @@ with `stipple::platform::take_restored_state()`.
 | | Saved in | Restored |
 |---|---|---|
 | Android | `onSaveInstanceState`: `NativeActivity` keeps the bytes in the activity's saved `Bundle` (as a byte array) | `ANativeActivity_onCreate`'s `savedState`, when the activity is recreated: after the process was ended in the background, or in the same process on a configuration change the manifest doesn't declare |
-| iOS | not yet: state restoration (`application:shouldSaveSecureApplicationState:`, `willEncodeRestorableStateWithCoder:` writing the bytes as `NSData`) would fit | not yet (`didDecodeRestorableStateWithCoder:`, which runs before the first frame) |
-| Web | not yet: the tab's `sessionStorage` on `pagehide` would fit | not yet: `sessionStorage` survives a reload and a discarded tab brought back |
+| iOS | a file in the app's `Library/Caches`, written on `UIApplicationDidEnterBackgroundNotification` (and `WillTerminateNotification`); coming back to the foreground deletes it | at the next launch, which reads the file and deletes it |
+| Web | the tab's `sessionStorage` (base64), on `pagehide` and when the page is hidden (`visibilitychange`) | when the page loads again in the same tab: a reload, a discarded tab brought back, going back to it in the tab's history |
 | Desktop | never asked: desktops don't end apps on their own | |
+
+On iOS the system suspends a backgrounded app and later ends it without a
+word, so the state is saved on the way out, every time the app goes to the
+background. UIKit's state restoration (`application:shouldSaveSecureApplicationState:`
+and the restorable-state coder) wasn't used: it is built around view
+controllers with restoration identifiers (and scenes' user activities), saves
+when UIKit chooses, and gives a self-test nothing to check. One difference: iOS
+doesn't tell a suspended app that the user swiped it away in the app switcher,
+so the state comes back then too, where UIKit's restoration would have dropped
+it. A crash on screen doesn't bring back an old state (the file goes when the
+app comes back to the foreground).
+
+On the web, `web/stipple.js` keeps the bytes under a key made of the module's
+URL and the canvas's order on the page (`start`'s `stateKey` option names
+another, or `false` keeps none); a new tab starts afresh.
+
 
 ## Trying it
 
@@ -396,7 +439,20 @@ for attention and counts the bells in the Dock badge.
 - **iOS** (the simulator): `touchdemo`'s self-test is sent to the background
   (CI launches another app) and brought back (launched again), and checks it
   heard `Background` and `Foreground` and built no view in between; a memory
-  warning posted in-process arrives as `LowMemory`.
+  warning posted in-process arrives as `LowMemory`. The back swipe, with
+  synthetic touches through the backend's touch path: from the left edge
+  over a strip while the app has nothing to go back from, the strip scrolls;
+  with a "screen" open the same swipe brings `Started` and the progress, then
+  `on_back`, and the strip doesn't move; a short swipe taken back is
+  `Cancelled`. Process death: after the self-test, CI sends the app to the
+  background, ends it with `xcrun simctl terminate` and launches it again,
+  and the field's text comes back through `restore_state`. These steps are
+  added with this change and haven't run yet; the recognizer and the saved
+  state's file are unit-tested on every host, as is the swipe in front of an
+  `App`.
+- **Web** (headless Chrome): `webdemo`'s `index.html#restore` clicks its
+  counter three times and reloads the tab; the reloaded app starts with the
+  count, from `sessionStorage`.
 
 Not checked anywhere: the system beep (nothing listens on a CI runner), the
 attention requests on Windows and macOS, and focus on Windows and macOS.
