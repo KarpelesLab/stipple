@@ -655,7 +655,14 @@ unsafe extern "system" fn navigate(
 ) -> Hresult {
     unsafe {
         let p = fragment_owner(this);
-        let children: &[*mut Provider] = &(*p).children;
+        // A window's root answers with its current tree's children: a client
+        // keeps the root it got first while the app rebuilds the tree.
+        let live = if (*p).parent.is_null() {
+            live_root(p)
+        } else {
+            p
+        };
+        let children: &[*mut Provider] = &(*live).children;
         let target = match direction {
             NavigateDirection_Parent => (*p).parent,
             NavigateDirection_FirstChild => {
@@ -766,7 +773,7 @@ unsafe extern "system" fn element_provider_from_point(
         }
     }
     unsafe {
-        let root = (*root_owner(this)).root;
+        let root = live_root((*root_owner(this)).root);
         yield_provider(hit(root, x, y).unwrap_or(root), fragment_of, ret);
     }
     S_OK
@@ -775,7 +782,7 @@ unsafe extern "system" fn element_provider_from_point(
 unsafe extern "system" fn get_focus(this: *mut c_void, ret: *mut *mut c_void) -> Hresult {
     // Walk the fragment for the node Stipple marked focused.
     unsafe {
-        let root = (*root_owner(this)).root;
+        let root = live_root((*root_owner(this)).root);
         yield_provider(find_focused(root), fragment_of, ret);
     }
     S_OK
@@ -830,6 +837,32 @@ static ROOT_VTBL: RootVtbl = RootVtbl {
     get_focus,
 };
 
+thread_local! {
+    /// Each window's current tree root, by window handle. UIA calls the
+    /// providers on the window's thread (COM threading), where the trees
+    /// are built.
+    static CURRENT: core::cell::RefCell<Vec<(usize, *mut Provider)>> =
+        const { core::cell::RefCell::new(Vec::new()) };
+}
+
+/// The current tree's root for `root`'s window, or `root` itself (a tree
+/// outside any window, or none registered).
+unsafe fn live_root(root: *mut Provider) -> *mut Provider {
+    unsafe {
+        let hwnd = (*root).hwnd as usize;
+        if hwnd == 0 {
+            return root;
+        }
+        CURRENT.with(|c| {
+            c.borrow()
+                .iter()
+                .find(|(h, _)| *h == hwnd)
+                .map(|&(_, r)| r)
+                .unwrap_or(root)
+        })
+    }
+}
+
 /// A UIA provider tree built from an [`A11yNode`] hierarchy. Owns every provider;
 /// hand the root to UIA via [`UiaTree::root_provider`].
 pub struct UiaTree {
@@ -847,6 +880,16 @@ impl core::fmt::Debug for UiaTree {
     }
 }
 
+impl Drop for UiaTree {
+    fn drop(&mut self) {
+        // No longer the window's current tree.
+        if let Some(root) = self.nodes.first_mut() {
+            let r = root as *mut Provider;
+            CURRENT.with(|c| c.borrow_mut().retain(|&(_, cur)| cur != r));
+        }
+    }
+}
+
 impl UiaTree {
     /// Build a provider per node in `root`'s subtree, linking parent/child/sibling
     /// pointers so UIA can navigate the whole hierarchy.
@@ -857,8 +900,20 @@ impl UiaTree {
     /// [`build`](Self::build) for the window `hwnd`: the root is hosted by
     /// the window's provider, bounds are reported in screen pixels, and the
     /// activatable nodes have the Invoke pattern.
+    ///
+    /// The window's root providers handed out earlier answer with this
+    /// tree's children from now on (see [`live_root`]).
     pub fn build_hosted(root: &A11yNode, hwnd: *mut c_void) -> UiaTree {
-        Self::build_in(root, hwnd)
+        let tree = Self::build_in(root, hwnd);
+        if !hwnd.is_null() {
+            let r = tree.root_provider() as *mut Provider;
+            CURRENT.with(|c| {
+                let mut c = c.borrow_mut();
+                c.retain(|(h, _)| *h != hwnd as usize);
+                c.push((hwnd as usize, r));
+            });
+        }
+        tree
     }
 
     /// Whether a client still holds one of the tree's nodes (each starts
