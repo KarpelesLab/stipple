@@ -165,20 +165,72 @@ unsafe fn present(id: u32, picker: Id, kind: Kind) -> bool {
         return false;
     }
     unsafe {
-        let root = presenter();
-        if root.is_null() {
+        if presenter().is_null() {
             msg!(picker, "release", () -> ());
             return false;
         }
         let delegate = delegate();
         msg!(picker, "setDelegate:", (delegate: Id) -> ());
+    }
+    PENDING.with(|p| p.borrow_mut().push(Pending { id, picker, kind }));
+    show(picker, 0);
+    true
+}
+
+/// Present `picker` from the top controller once nothing is mid-transition:
+/// UIKit drops a presentation asked for while another is still being
+/// presented or dismissed (a picker just cancelled), with only a log line.
+/// Tries again every 50 ms, for up to 5 s.
+fn show(picker: Id, tries: u32) {
+    let busy = with_pool(|| unsafe {
+        let root = presenter();
+        if root.is_null() {
+            return false;
+        }
+        let moving = !msg!(root, "transitionCoordinator", () -> Id).is_null()
+            || msg!(root, "isBeingPresented", () -> bool)
+            || msg!(root, "isBeingDismissed", () -> bool);
+        if moving && tries < 100 {
+            return true;
+        }
         let animated = true;
         let none: Id = std::ptr::null_mut();
         msg!(root, "presentViewController:animated:completion:",
             (picker: Id, animated: bool, none: Id) -> ());
+        false
+    });
+    if busy {
+        after_ms(50, move || show(picker, tries + 1));
     }
-    PENDING.with(|p| p.borrow_mut().push(Pending { id, picker, kind }));
-    true
+}
+
+/// Run `f` on the main queue in `ms` milliseconds.
+fn after_ms(ms: i64, f: impl FnOnce() + 'static) {
+    extern "C" fn trampoline(context: *mut c_void) {
+        let f = unsafe { Box::from_raw(context.cast::<Box<dyn FnOnce()>>()) };
+        f();
+    }
+    // libdispatch, part of libSystem; the main queue is a macro over the
+    // symbol.
+    unsafe extern "C" {
+        static _dispatch_main_q: u8;
+        fn dispatch_time(when: u64, delta_ns: i64) -> u64;
+        fn dispatch_after_f(
+            when: u64,
+            queue: *const c_void,
+            context: *mut c_void,
+            work: extern "C" fn(*mut c_void),
+        );
+    }
+    let f: Box<Box<dyn FnOnce()>> = Box::new(Box::new(f));
+    unsafe {
+        dispatch_after_f(
+            dispatch_time(0, ms * 1_000_000),
+            (&raw const _dispatch_main_q).cast(),
+            Box::into_raw(f).cast(),
+            trampoline,
+        )
+    };
 }
 
 /// The request `picker` was shown for, no longer pending.
