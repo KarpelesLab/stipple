@@ -326,7 +326,7 @@ The same script passed locally against Ubuntu 26.04's packages (fcitx5
 5.1.19, sway 1.11) in a rootless container. Mozc refuses to run as root, so
 it must run as a normal user, as on the runner.
 
-On Windows a separate, non-blocking job (`ime-windows`,
+On Windows a separate, required job (`ime-windows`,
 `.github/scripts/ime-windows.ps1`) tries the real Microsoft Japanese IME:
 it installs the ja-JP typing feature if the IME's TSF profile isn't
 registered (`Add-WindowsCapability`, then `Install-Language`, starting
@@ -348,17 +348,20 @@ before its release, then a click on the title bar, checks
 app's own trace (`stipple-tsf: focus`) to confirm the field took focus
 before switching the language, and repeats Escape when the IME's
 prediction list takes the first one (a probe composition left behind is
-how `兄本` was committed instead of `日本`). A failing run ends with
-`FAILED at <stage>` and the window's input state. On macOS a non-blocking step of the
+how `兄本` was committed instead of `日本`). The commit after Return also
+reached the app only with the next key: TSF delivers it through sent
+messages that run inside `PeekMessageW`, and the event loop delivered its
+queue only after a posted message (fixed in the loop). A failing run ends
+with `FAILED at <stage>` and the window's input state. It has been
+required since it passed three runs in a row after those fixes. On macOS a non-blocking step of the
 `interaction-macos` job (`.github/scripts/ime-macos.sh`) compiles a small
 Swift helper that enables and selects the built-in Japanese input source
 (Kotoeri, romaji typing, with live conversion off) and posts the same keys
 as CGEvents. It hasn't been seen passing yet: whether a CLI process may
 post keys (Accessibility) and switch the input source there is what its
-runs will show; it logs the stage it stopped at. Until the Windows job is
-made blocking and the macOS one passes, Windows and macOS input methods
-are also checked as protocol wiring (above) and by hand (below), and iOS
-by its protocol self-test.
+runs will show; it logs the stage it stopped at. Until the macOS one
+passes, macOS input methods are also checked as protocol wiring (above) and
+by hand (below), and iOS by its protocol self-test.
 
 ## Manual checklist
 
@@ -383,7 +386,8 @@ preedit) and `examples/textarea` for multi-line text.
 
 Record the platform, input method and version with any failure. CI covers:
 Japanese (Mozc) on X11 and Wayland, cancel on Wayland, pinyin and Korean on
-Wayland; the Windows and macOS rows run in CI as non-blocking attempts.
+Wayland; Japanese on Windows (required); the macOS row runs in CI as a
+non-blocking attempt.
 
 ## Not yet
 
@@ -392,7 +396,7 @@ Wayland; the Windows and macOS rows run in CI as non-blocking attempts.
   asynchronous keys a stopped server never answers.
 - Reconversion and `attributedSubstringForProposedRange:` on macOS
   (Stipple doesn't hand the IME the field's text there).
-- A real input method passing in CI on Windows and macOS (attempted, see
+- A real input method required in CI on macOS (attempted, see
   [Testing](#testing)), and on iOS, Android and the web.
 - Per-segment styling of the preedit (IMEs mark the segment being converted;
   Stipple shows the highlighted range as the selection and underlines all of

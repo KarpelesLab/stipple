@@ -2548,14 +2548,15 @@ jobs:
   # switch the app's thread to Japanese, and type n i h o n, Space, Return
   # with SendInput; the field must show the hiragana preedit, the conversion
   # and the commit. It passed only about one run in six while its foreground
-  # trick left a lone Alt release that put the window in menu mode (fixed);
-  # it reports without failing the workflow until repeated runs confirm it.
+  # trick left a lone Alt release that put the window in menu mode, and the
+  # commit after Return waited for the next key (the event loop didn't
+  # deliver what TSF's sent messages queued; fixed). Required since it
+  # passed three runs in a row after those fixes.
   # A failing run says which stage stopped it ("FAILED at <stage>"). See
   # .github/scripts/ime-windows.ps1.
   ime-windows:
     name: IME (Microsoft Japanese IME / Windows)
     runs-on: windows-latest
-    continue-on-error: true
     timeout-minutes: 50
     steps:
       - uses: actions/checkout@v6

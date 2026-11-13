@@ -1060,8 +1060,8 @@ Most input only works on X11 today.
   the field's surrounding text reaches the input method), Hangul (`gksrmf`
   composes `한` and `글` syllable by syllable, Space commits). Passed locally
   against Ubuntu 26.04's fcitx5 5.1.19 and sway 1.11 (the runner's image) in
-  a rootless container. **Windows: passing, still non-blocking** until
-  repeated runs confirm the flakiness fix: the `ime-windows` job installs
+  a rootless container. **Windows: passing and required** (three
+  runs in a row after the fixes below): the `ime-windows` job installs
   the ja-JP typing feature if needed (`Add-WindowsCapability` /
   `Install-Language`), adds the Microsoft Japanese IME to the user's
   languages, switches the app's thread with `WM_INPUTLANGCHANGEREQUEST` and
@@ -1070,7 +1070,10 @@ Most input only works on X11 today.
   window put it in system-menu mode, which ate the Tab or the IME toggle.
   It now gets the foreground without a bare Alt release, checks for menu
   mode before each burst of keys, waits for the app's TSF trace at each
-  stage and names the stage that failed (see docs/ime.md). **macOS:
+  stage and names the stage that failed (see docs/ime.md). The commit after
+  Return then reached the app only with the next key, a real bug: TSF's
+  sent messages run inside `PeekMessageW`, and the loop delivered what they
+  queued only after a posted message; it now delivers before waiting. **macOS:
   attempted, not yet seen passing**: a non-blocking step in
   `interaction-macos` selects Kotoeri with a Swift helper
   (`TISSelectInputSource`) and posts CGEvents; whether the runner allows
