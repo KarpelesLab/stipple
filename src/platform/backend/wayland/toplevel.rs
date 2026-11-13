@@ -141,6 +141,8 @@ pub(super) fn create(
     conn.send(surface, WL_SURFACE_COMMIT, &[])?;
     conn.stream.flush()?;
     crate::platform::window::debug_window(format_args!("opened {surface:#x} {:?}", attrs.title));
+    let id = crate::platform::WindowId(u64::from(surface));
+    crate::platform::atspi::set_title(id, &attrs.title);
     Ok((
         Objects {
             surface,

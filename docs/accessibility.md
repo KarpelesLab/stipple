@@ -14,7 +14,7 @@ accessibility API. `App::accessibility_tree()` returns the tree for tests.
 | iOS | UIAccessibility: a `UIAccessibilityElement` per node | yes, an XCUITest runner |
 | Android | an `AccessibilityNodeProvider`, a virtual view per node | yes, an accessibility service, and `uiautomator` |
 | Web | an ARIA overlay | in-page, from headless Chrome |
-| Linux | nothing yet (see [Linux](#linux)) | no |
+| Linux (X11, Wayland) | AT-SPI: an object per node, registered with the registry | yes, a pyatspi client (X11); sway and Orca not yet required |
 
 None of these has been tried with the screen readers themselves (Narrator,
 VoiceOver, TalkBack, Orca, NVDA, JAWS) by a person. What CI does instead,
@@ -168,13 +168,87 @@ An invisible overlay of ARIA elements mirrors the tree over the canvas. The
 
 ## Linux
 
-`stipple::platform::a11y` has a hand-written D-Bus client and an AT-SPI
-server for a tree (`a11ydemo serve` exposes a Stipple UI's tree, and the
-`a11y-dbus` job reads it back with `dbus-send` on a private session bus). But
-the X11 and Wayland windows don't use it: `Window::set_accessibility_tree`
-does nothing there, and nothing registers with the AT-SPI registry
-(`org.a11y.atspi.Registry`, through `Socket.Embed`) on the accessibility bus.
-So Orca, and any other AT-SPI client, sees no Stipple app on Linux. Wiring the
-server into the event loop, registering with the registry, and implementing
-the `Component`, `Action`, `Text` and `Application` interfaces Orca needs is
-on the [roadmap](../ROADMAP.md).
+X11 and Wayland windows serve their tree over **AT-SPI**, what Orca and the
+other Linux screen readers read (`stipple::platform::atspi`, on the
+hand-written D-Bus client in `stipple::platform::a11y`; no `libatspi`, `atk`
+or `zbus`).
+
+- **Connecting.** On a window's first tree a helper thread finds the
+  accessibility bus: `$AT_SPI_BUS_ADDRESS`, or `org.a11y.Bus.GetAddress` on
+  the session bus (`$DBUS_SESSION_BUS_ADDRESS`, else `$XDG_RUNTIME_DIR/bus`),
+  which starts `at-spi-bus-launcher` when needed. With no session bus or no
+  accessibility bus it gives up quietly and the windows stop handing their
+  trees over; startup never waits for it. `NO_AT_BRIDGE=1` turns it off, as
+  for GTK. (The X root window's `AT_SPI_BUS` property isn't read.)
+- **Registering.** It calls `org.a11y.atspi.Socket.Embed` on the registry's
+  root, so the app appears among the desktop's applications. The app's root
+  (`/org/a11y/atspi/accessible/root`) has the `Application` role and
+  interface (toolkit "Stipple", its version, the id the registry sets) and
+  the windows' frames as its children; the app's name is the program's.
+- **Serving.** The thread answers calls itself, from the latest tree each
+  window handed over (a swap clones the tree into an `Arc`, and is skipped
+  when nothing changed), so the UI thread is only involved in actions. A
+  node's object path is its place in the tree (`…/w{window}_{i}_{j}`), so it
+  keeps its path across rebuilds while the tree's shape stays. Every node has
+  `Accessible` (role, name, parent, children, index in parent, state,
+  attributes, interfaces, an empty relation set) and `Component` (extents in
+  screen, window and parent coordinates, `Contains`, `GetAccessibleAtPoint`
+  to the deepest node, `GrabFocus` for fields and items). Buttons, menu
+  items, checkboxes, switches, selects, tabs, column headers and list and
+  tree items have `Action` with one "click", which clicks the middle of the
+  node on the UI thread (handed over through the loop's wake, as UIA's Invoke
+  on Windows). Labels, fields, password fields and spin buttons have `Text`
+  (the text by character, word, sentence and line); fields have
+  `EditableText` (setting, inserting or deleting text replaces the field's
+  text through the input-method path, after a click to focus it); a spin
+  button with a number has `Value`.
+- **Events.** Swapping a tree raises what changed, node by node at the same
+  place: `object:property-change:accessible-name` (and `…-role`),
+  `object:text-changed:delete`/`insert` for text, `object:state-changed` for
+  checked, selected and expanded, `object:children-changed:add`/`remove`, and
+  for the focus `object:state-changed:focused` and `focus:`. A window gaining
+  or losing the keyboard focus raises `window:activate`/`deactivate` (and its
+  frame's `active` state). New and closed windows are children added to and
+  removed from the app's root.
+
+Screen coordinates on X11 are the window content's position on the root
+window (kept up to date from `ConfigureNotify`); Wayland doesn't tell clients
+where their windows are, so there they are the window's own.
+
+**CI** (`a11y-dbus`, *Read and drive a running X11 window through AT-SPI*):
+in a private session bus (`dbus-run-session`, where `org.a11y.Bus` starts the
+accessibility bus and its registry) under Xvfb,
+`.github/scripts/atspi-linux.sh` starts `touchdemo` and
+`.github/scripts/atspi-walk.py`, a pyatspi client (the library Orca is built
+on), from its own process:
+
+- finds `touchdemo` among the registry's applications, with the application
+  role and the toolkit name "Stipple", and walks its tree, printing each
+  node's role, name, extents on screen and states;
+- finds a push button "Row 0", an entry (the text field) and a label
+  "Rows tapped: N" under a frame whose parent is the application;
+- checks the button's extents are inside the frame's on screen, and that the
+  frame's `GetAccessibleAtPoint` at its middle returns it;
+- runs the button's "click" action: the app logs the tap, a property-change
+  event arrives, and the label reads "Rows tapped: N+1";
+- presses Tab (`xdotool`) and gets `object:state-changed:focused` and
+  `focus:` for the entry, the only node whose state says focused;
+- sets the entry's text through `EditableText`: the app logs it, a
+  text-changed event arrives and the entry reads it back.
+
+This is a required check; it passes locally under Xvfb (at-spi2-core 2.58,
+pyatspi 2.58), and was added with this change, not yet run in CI. The same walk under headless sway (`wtype` for the Tab) and
+**Orca** itself (`.github/scripts/orca-linux.sh`: Orca runs headless with its
+debug log, which records every utterance as `SPEECH OUTPUT`, and must speak
+the entry after Tab) run in the same job but don't fail it yet: neither has
+been run outside CI, nor seen passing there.
+
+`a11ydemo serve` still serves a fixed tree over the session bus for the
+`dbus-send` checks.
+
+Not covered: no caret or selection (the tree doesn't carry them: a focused
+field's caret reads as the end of its text, `SetCaretOffset` and selections
+are refused), no text attributes, no relations (labels for fields), a spin
+button's `Value` has no range, and a plain scroll container has no scroll
+actions. The registry is joined once: if it restarts, the app isn't
+registered again.

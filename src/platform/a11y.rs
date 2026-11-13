@@ -9,8 +9,10 @@
 //! connects to the session bus, runs the SASL `EXTERNAL` handshake, calls
 //! `org.freedesktop.DBus.Hello` for our unique connection name, and then
 //! [`serves the whole accessibility tree`](DBus::serve_atspi_tree) over
-//! `org.a11y.atspi.Accessible` — every node a navigable D-Bus object, the
-//! Linux counterpart of the macOS `NSAccessibility` and Windows UIA bridges.
+//! `org.a11y.atspi.Accessible` — every node a navigable D-Bus object (used by
+//! `a11ydemo`). The bridge X11 and Wayland windows serve their trees through,
+//! registered with the AT-SPI registry, is `crate::platform::atspi`, built on
+//! this client.
 
 #![allow(unsafe_code)]
 
@@ -42,6 +44,18 @@ impl DBus {
             parse_unix_path(&addr).ok_or_else(|| format!("unsupported bus address: {addr}"))?;
         let stream = UnixStream::connect(&path).map_err(|e| format!("connect {path}: {e}"))?;
         Self::handshake(stream)
+    }
+
+    /// The serial of the last message sent on this connection, for a writer
+    /// that takes over sending (see [`DBus::clone_stream`]).
+    pub(crate) fn serial(&self) -> u32 {
+        self.serial
+    }
+
+    /// A second handle on the connection's socket, for a thread that writes
+    /// while another one blocks reading.
+    pub(crate) fn clone_stream(&self) -> std::io::Result<UnixStream> {
+        self.stream.try_clone()
     }
 
     /// Connect to an explicit `unix:path=…` / `unix:abstract=…` address.
@@ -814,7 +828,7 @@ pub(crate) fn put_string(buf: &mut Vec<u8>, s: &str) {
 }
 
 /// Append a header field carrying a STRING/OBJECT_PATH value (sig `s` or `o`).
-fn put_field(buf: &mut Vec<u8>, code: u8, sig: u8, value: &str) {
+pub(crate) fn put_field(buf: &mut Vec<u8>, code: u8, sig: u8, value: &str) {
     align(buf, 8);
     buf.push(code);
     // VARIANT: a one-byte signature length, the signature, a NUL, then value.
@@ -825,7 +839,7 @@ fn put_field(buf: &mut Vec<u8>, code: u8, sig: u8, value: &str) {
 }
 
 /// Append a header field carrying a UINT32 value (e.g. REPLY_SERIAL=5).
-fn put_field_u32(buf: &mut Vec<u8>, code: u8, value: u32) {
+pub(crate) fn put_field_u32(buf: &mut Vec<u8>, code: u8, value: u32) {
     align(buf, 8);
     buf.push(code);
     buf.push(1);
@@ -836,7 +850,7 @@ fn put_field_u32(buf: &mut Vec<u8>, code: u8, value: u32) {
 }
 
 /// Append a header field carrying a SIGNATURE value (e.g. SIGNATURE=8).
-fn put_field_sig(buf: &mut Vec<u8>, code: u8, sig: &str) {
+pub(crate) fn put_field_sig(buf: &mut Vec<u8>, code: u8, sig: &str) {
     align(buf, 8);
     buf.push(code);
     buf.push(1);
@@ -849,7 +863,7 @@ fn put_field_sig(buf: &mut Vec<u8>, code: u8, sig: &str) {
 
 /// Assemble a full message from a type, serial, marshalled header `fields`, and
 /// `body` (the header is padded to 8 bytes before the body).
-fn build_message(mtype: u8, serial: u32, fields: &[u8], body: &[u8]) -> Vec<u8> {
+pub(crate) fn build_message(mtype: u8, serial: u32, fields: &[u8], body: &[u8]) -> Vec<u8> {
     // Fixed header: little-endian, type, no flags, protocol version 1.
     let mut msg = vec![b'l', mtype, 0, 1];
     msg.extend_from_slice(&(body.len() as u32).to_le_bytes());

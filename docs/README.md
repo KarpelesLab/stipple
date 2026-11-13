@@ -39,7 +39,7 @@ How to build, package and run on each platform, and what works there today.
 | Built-in widgets animate by default (per-theme motion) | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ |
 | System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ✅ ⁶² | ✅ ⁶² | ✅ ¹⁴ |
-| Accessibility | ❌ ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
+| Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
 | Window icon | ✅ ⁹ | ✅ ¹⁰ | Dock icon ¹⁰ | — | — | ❌ |
 | Several windows, opened and closed at run time | ✅ ⁴⁵ | ✅ ⁴⁵ | ✅ ⁴⁵ | — | — | — |
@@ -426,10 +426,16 @@ Chrome reloads `webdemo` and checks its count came back (run locally; CI step
 added). See
 [window-lifecycle.md](window-lifecycle.md#keeping-the-state-across-process-death).
 
-⁶⁶ A hand-written AT-SPI server exists (`stipple::platform::a11y`; `a11ydemo`
-serves a tree that `dbus-send` reads in CI), but X11 and Wayland windows don't
-use it and nothing registers with the AT-SPI registry, so Orca sees no Stipple
-app. See [accessibility.md](accessibility.md#linux).
+⁶⁶ X11 and Wayland windows register with the AT-SPI registry and serve their
+tree from a helper thread (hand-written D-Bus): an object per node with
+`Accessible`, `Component` (extents, hit testing), `Action` (a click),
+`Text`, `EditableText` and `Value`, and events for name, text, state,
+children and focus changes and window activation. CI walks a running X11
+window from a pyatspi client (as Orca does), hit-tests it, runs a button's
+action, follows the focus after a Tab and edits the field (passes locally;
+added with this change, not yet run in CI); the same under sway, and Orca
+itself, run but aren't required yet. No caret, selection or relations. See
+[accessibility.md](accessibility.md#linux).
 
 ⁶⁷ A hand-built provider per node, hosted by the window's provider: control
 type, name, bounds in screen pixels, keyboard focus, hit testing, and the

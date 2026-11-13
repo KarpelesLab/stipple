@@ -1092,8 +1092,14 @@ impl Window for X11Window {
         // Driven by Expose; an explicit invalidate would need a SendEvent.
     }
     fn set_title(&self, title: &str) {
+        crate::platform::atspi::set_title(self.id(), title);
         let mut conn = self.conn.lock().unwrap();
         let _ = geometry::set_title(&mut conn, self.window, title);
+    }
+    fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
+        let origin = self.geo.get().origin;
+        let scale = self.scale_factor().get();
+        crate::platform::atspi::set_tree(self.id(), root, Some(origin), scale);
     }
     fn set_visible(&self, visible: bool) {
         let mut conn = self.conn.lock().unwrap();
@@ -1191,6 +1197,7 @@ impl Window for X11Window {
         Some(id)
     }
     fn close_window(&self) {
+        crate::platform::atspi::closed(self.id());
         self.reg.borrow_mut().closed.push(self.window);
     }
     fn request_attention(&self, kind: Option<crate::platform::UserAttention>) {
@@ -1636,6 +1643,7 @@ fn create_window(
         conn.send(&finish(req)).map_err(os)?;
     }
     crate::platform::window::debug_window(format_args!("opened {window:#x} {:?}", attrs.title));
+    crate::platform::atspi::set_title(WindowId(window as u64), &attrs.title);
 
     dbg(format_args!(
         "mapped window={window:#x} gc={gc:#x} size={}x{}",
@@ -1861,6 +1869,7 @@ where
                 let before = geo.size;
                 let moved = geo.configure(&buf);
                 win.geo.set(geo);
+                crate::platform::atspi::set_origin(win.id(), geo.origin);
                 let mut flow = ControlFlow::Wait;
                 if geo.size != before || !moved {
                     flow = handler(Event::Resized(geo.size), win);
@@ -1874,6 +1883,7 @@ where
                 let mut geo = win.geo.get();
                 geo.reparent(&buf, shared.lock().unwrap().setup.root);
                 win.geo.set(geo);
+                crate::platform::atspi::set_origin(win.id(), geo.origin);
                 ControlFlow::Wait
             }
             X_PROPERTY_NOTIFY => {

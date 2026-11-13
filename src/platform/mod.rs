@@ -22,6 +22,9 @@
 pub mod a11y;
 /// Platform-neutral accessibility tree handed to each backend's OS bridge.
 pub mod access;
+/// The AT-SPI bridge X11 and Wayland windows serve their trees through.
+#[cfg(target_os = "linux")]
+pub(crate) mod atspi;
 /// Predictive back: whether the app would go back, and the gesture's progress.
 pub(crate) mod back;
 pub mod backend;

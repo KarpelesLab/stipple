@@ -108,7 +108,11 @@ pub fn run<H>(attrs: WindowAttributes, handler: H)
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow + 'static,
 {
-    let mut handler = with_theme_changes(handler);
+    let handler = with_theme_changes(handler);
+    // Window activation and screen-reader actions for the AT-SPI bridge.
+    #[cfg(target_os = "linux")]
+    let handler = crate::platform::atspi::wrap(handler);
+    let mut handler = handler;
     // The page drives the web's loop, so the handler outlives this call.
     #[cfg(target_arch = "wasm32")]
     {

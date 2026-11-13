@@ -3250,7 +3250,9 @@ jobs:
 
   # Connect to a private session bus with the hand-written D-Bus client (the
   # AT-SPI accessibility-bridge foundation) and confirm the SASL handshake +
-  # Hello assign us a unique name. No display needed.
+  # Hello assign us a unique name; then read and drive a running app's
+  # windows through AT-SPI from outside, as Orca does (X11 under Xvfb, and
+  # Wayland under sway), and run Orca itself.
   a11y-dbus:
     name: a11y (D-Bus bridge / Linux)
     runs-on: ubuntu-latest
@@ -3346,6 +3348,70 @@ jobs:
             kill $SRV 2>/dev/null || true
           EOF
           dbus-run-session -- bash a11y-query.sh
+
+      - name: Install Xvfb, xdotool, pyatspi, Orca, sway and wtype
+        run: |
+          sudo apt-get install -y xvfb xdotool fonts-dejavu-core python3-pyatspi \
+            orca speech-dispatcher sway wtype seatd
+
+      - name: Build touchdemo
+        run: cargo build --release -p touchdemo
+
+      # From outside the app, as Orca reads it (the AT-SPI twin of the UIA walk
+      # on Windows, .github/scripts/uia-walk.ps1): in a private session bus,
+      # org.a11y.Bus starts the accessibility bus and its registry; a running
+      # touchdemo X11 window registers itself (Socket.Embed), and a pyatspi
+      # client finds the application, walks its tree (roles, names, extents on
+      # screen), hit-tests the middle of a button, runs the button's "click"
+      # action (the app counts the tap, its log and its tree follow, and a
+      # property-change event says so), then presses Tab and sees
+      # state-changed:focused and focus: for the text field.
+      - name: Read and drive a running X11 window through AT-SPI (out of process)
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          sleep 2
+          DISPLAY=:99 dbus-run-session -- \
+            bash .github/scripts/atspi-linux.sh target/release/touchdemo visual_output xdotool key Tab
+
+      # Orca itself, headless: its debug log records every utterance whether
+      # or not a synthesizer is heard. Not yet seen passing on the runner, so
+      # it doesn't fail the job.
+      - name: Orca speaks the focused control after Tab (X11)
+        continue-on-error: true
+        run: |
+          DISPLAY=:99 dbus-run-session -- bash .github/scripts/orca-linux.sh \
+            target/release/touchdemo visual_output "xdotool key Tab" "xdotool type --delay 150 hi"
+
+      # The same walk with touchdemo as a Wayland client of headless sway (the
+      # bridge doesn't depend on the backend; Wayland hides window positions,
+      # so screen coordinates are the window's). Not yet seen passing on the
+      # runner, so it doesn't fail the job.
+      - name: Read and drive a running Wayland window through AT-SPI (sway)
+        continue-on-error: true
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+          sudo seatd -g "$(id -gn)" > seatd.log 2>&1 &
+          sleep 1
+          export LIBSEAT_BACKEND=seatd
+          printf 'output HEADLESS-1 resolution 1024x768\nexec sleep 600\n' > sway.cfg
+          sway -c sway.cfg > sway.log 2>&1 &
+          sleep 6
+          export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
+          echo "wayland socket: '$WAYLAND_DISPLAY'"
+          unset DISPLAY
+          mkdir -p visual_output/wayland
+          dbus-run-session -- \
+            bash .github/scripts/atspi-linux.sh target/release/touchdemo visual_output/wayland wtype -k Tab
+
+      - name: Upload the AT-SPI logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stipple-atspi-logs
+          path: visual_output/
+          if-no-files-found: warn
 
   # Native file dialog over the xdg-desktop-portal FileChooser. No real portal
   # backend exists headlessly, so the demo ships a mock portal (owns

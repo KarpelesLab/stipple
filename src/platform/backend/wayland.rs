@@ -1264,7 +1264,13 @@ impl Window for WaylandWindow {
         ScaleFactor::new(self.scale.get() as f64)
     }
     fn request_redraw(&self) {}
+    fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
+        // Wayland hides window positions: screen coordinates are the window's.
+        let scale = self.scale_factor().get();
+        crate::platform::atspi::set_tree(self.id(), root, None, scale);
+    }
     fn set_title(&self, title: &str) {
+        crate::platform::atspi::set_title(self.id(), title);
         // The title bar Stipple draws (if it does) shows it from the next
         // frame on.
         {
@@ -1299,6 +1305,7 @@ impl Window for WaylandWindow {
         Some(id)
     }
     fn close_window(&self) {
+        crate::platform::atspi::closed(self.id());
         self.reg.borrow_mut().closed.push(self.surface);
     }
     fn set_visible(&self, visible: bool) {

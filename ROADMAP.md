@@ -1641,16 +1641,26 @@ Most input only works on X11 today.
     GitHub's runners), and warns rather than fails if it still can't read.
     Element frames are now in screen coordinates (they were the node's
     logical bounds). Added to `visual-macos`; not yet run in CI.
-- ⬜ Accessibility on Linux for real: the AT-SPI server
-  (`stipple::platform::a11y`) is only used by `a11ydemo`. X11 and Wayland
-  windows ignore `Window::set_accessibility_tree`, and nothing registers with
-  the AT-SPI registry (`org.a11y.atspi.Socket.Embed` on the accessibility
-  bus), so Orca sees no Stipple app. Needed: serve the live tree from the event
-  loop on the accessibility bus, register with the registry, implement
-  `Application`, `Component` (extents, hit testing), `Action` (activate),
-  `Text`/`EditableText` and `State`, emit `children-changed` / focus events,
-  then check it from outside with a real AT-SPI client (pyatspi, as Orca uses)
-  under Xvfb and sway.
+- ✅ Accessibility on Linux for real: X11 and Wayland windows hand their
+  tree to `stipple::platform::atspi`, whose helper thread finds the
+  accessibility bus (`$AT_SPI_BUS_ADDRESS` or `org.a11y.Bus.GetAddress`;
+  without one it quietly does nothing), registers with the registry
+  (`Socket.Embed`) and answers from the latest tree: the app's root with
+  `Application` and the frames as children, and per node `Accessible`,
+  `Component` (extents in screen/window/parent coordinates, hit testing,
+  `GrabFocus`), `Action` (a "click" at the node's middle, delivered on the UI
+  thread through the wake), `Text`, `EditableText` and `Value`. Tree swaps
+  raise name, text, state, children and focus events (`state-changed:focused`
+  and `focus:`), and window activation `window:activate`. CI's `a11y-dbus`
+  job runs `touchdemo` under Xvfb in a private session bus and checks it from
+  a pyatspi client (`.github/scripts/atspi-walk.py`): the app among the
+  registry's applications, its tree, extents and hit test, the button's
+  action reaching the app, the focus events after Tab and an edit through
+  `EditableText` (passes locally; required). The same walk under sway and
+  Orca speaking the focused entry (`orca-linux.sh`, from Orca's debug log)
+  run there too but don't fail the job until seen passing. Left: caret and
+  selection (the tree doesn't carry them), relations, the X root window's
+  `AT_SPI_BUS` property, joining a restarted registry again.
 - ⬜ Accessibility depth found by the out-of-process checks: a plain
   scrollable container (`Element::scrollable`) is a group with no scroll
   actions on every platform (only lists, trees and tables have them); UIA has
