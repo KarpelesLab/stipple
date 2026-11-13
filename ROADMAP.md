@@ -1442,8 +1442,12 @@ Most input only works on X11 today.
   simulator checks the kill still restores, in the same session, and has
   `touchdemo` (`TOUCHDEMO_CLOSE_SCENE`) destroy its session through
   `requestSceneSessionDestruction:` (UIKit's discard path): the next launch,
-  a new session, restores nothing (added, not yet run). A real swipe in the
-  app switcher isn't scripted.
+  a new session, restores nothing. In CI the iPhone simulator refuses that
+  destruction ("The current device does not support multiple scenes"), so
+  the discard path isn't verified (the step reports, doesn't fail); a real
+  swipe in the app switcher isn't scripted. Seen in CI: with scenes, UIKit
+  also posts `WillEnterForeground` at launch, which is no longer delivered
+  as `Lifecycle::Foreground`.
 - ✅ Back navigation on Android: the Back key (and the back gesture, which
   sends it while the app doesn't opt into predictive back) arrives as
   `Event::BackRequested`; the App closes an open menu, then asks

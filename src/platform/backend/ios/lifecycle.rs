@@ -98,7 +98,13 @@ fn save_state() {
     }
 }
 
+/// Whether the app went to the background since it last came back. With
+/// scenes, UIKit also posts `WillEnterForeground` once at launch, which isn't
+/// a return.
+static AWAY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 extern "C" fn did_enter_background(_this: Id, _cmd: Sel, _notification: Id) {
+    AWAY.store(true, std::sync::atomic::Ordering::Relaxed);
     deliver(Lifecycle::Background);
     save_state();
 }
@@ -108,6 +114,9 @@ extern "C" fn will_terminate(_this: Id, _cmd: Sel, _notification: Id) {
 }
 
 extern "C" fn will_enter_foreground(_this: Id, _cmd: Sel, _notification: Id) {
+    if !AWAY.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     // Back on screen: the state saved on the way out is stale from now on.
     if let Some(dir) = super::saved_state::dir() {
         super::saved_state::store(&dir, "", None);
