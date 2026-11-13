@@ -1417,8 +1417,7 @@ Most input only works on X11 today.
   launch reads and deletes it before the first frame, and coming back to the
   foreground deletes it (stale). Chosen over UIKit's state restoration, which
   is tied to view controllers with restoration identifiers and saves when
-  UIKit likes; unlike it, a swipe-away in the app switcher still restores (iOS
-  doesn't tell a suspended app). Web: `stipple.js` asks on `pagehide` and on
+  UIKit likes (a swipe-away: see the next item). Web: `stipple.js` asks on `pagehide` and on
   `visibilitychange` to hidden (`stipple_save_state`, answered through a
   `save_state` import) and keeps the bytes, base64, in the tab's
   `sessionStorage` under a per-module, per-canvas key (`stateKey` option);
@@ -1427,7 +1426,23 @@ Most input only works on X11 today.
   Chrome reloads `webdemo` (`index.html#restore`) and its count comes back
   (run locally; CI step added); CI's simulator backgrounds `touchdemo`, ends
   it with `simctl terminate` and relaunches it, checking the field's text came
-  back (added, not yet run).
+  back (passed in CI).
+- ✅ iOS saved state follows the platform's rule: a system kill restores it,
+  the user swiping the app away in the app switcher doesn't. The app adopts
+  the scene lifecycle when its `Info.plist` has a `UIApplicationSceneManifest`
+  (the app delegate answers `configurationForConnectingSceneSession:` with a
+  hand-registered `StippleSceneDelegate`, whose `scene:willConnectToSession:`
+  builds the window on the `UIWindowScene`); the file names the
+  `UISceneSession.persistentIdentifier` it was saved in, a launch restores it
+  only into that session, and `application:didDiscardSceneSessions:` deletes
+  it. Without the manifest the app runs as before, restoring after a
+  swipe-away too. The web already follows the rule (closing the tab drops its
+  `sessionStorage`). Unit-tested (the file's sessions, on every host); CI's
+  simulator checks the kill still restores, in the same session, and has
+  `touchdemo` (`TOUCHDEMO_CLOSE_SCENE`) destroy its session through
+  `requestSceneSessionDestruction:` (UIKit's discard path): the next launch,
+  a new session, restores nothing (added, not yet run). A real swipe in the
+  app switcher isn't scripted.
 - ✅ Back navigation on Android: the Back key (and the back gesture, which
   sends it while the app doesn't opt into predictive back) arrives as
   `Event::BackRequested`; the App closes an open menu, then asks

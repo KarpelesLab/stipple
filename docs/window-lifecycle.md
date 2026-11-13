@@ -373,24 +373,37 @@ with `stipple::platform::take_restored_state()`.
 | | Saved in | Restored |
 |---|---|---|
 | Android | `onSaveInstanceState`: `NativeActivity` keeps the bytes in the activity's saved `Bundle` (as a byte array) | `ANativeActivity_onCreate`'s `savedState`, when the activity is recreated: after the process was ended in the background, or in the same process on a configuration change the manifest doesn't declare |
-| iOS | a file in the app's `Library/Caches`, written on `UIApplicationDidEnterBackgroundNotification` (and `WillTerminateNotification`); coming back to the foreground deletes it | at the next launch, which reads the file and deletes it |
+| iOS | a file in the app's `Library/Caches`, under the scene's session, written on `UIApplicationDidEnterBackgroundNotification` (and `WillTerminateNotification`); coming back to the foreground deletes it, and so does UIKit discarding the session (the user swiped the app away) | at the next launch, when the scene reconnects the session that saved it (after a system kill), which reads the file and deletes it |
 | Web | the tab's `sessionStorage` (base64), on `pagehide` and when the page is hidden (`visibilitychange`) | when the page loads again in the same tab: a reload, a discarded tab brought back, going back to it in the tab's history |
 | Desktop | never asked: desktops don't end apps on their own | |
 
 On iOS the system suspends a backgrounded app and later ends it without a
 word, so the state is saved on the way out, every time the app goes to the
-background. UIKit's state restoration (`application:shouldSaveSecureApplicationState:`
-and the restorable-state coder) wasn't used: it is built around view
-controllers with restoration identifiers (and scenes' user activities), saves
-when UIKit chooses, and gives a self-test nothing to check. One difference: iOS
-doesn't tell a suspended app that the user swiped it away in the app switcher,
-so the state comes back then too, where UIKit's restoration would have dropped
-it. A crash on screen doesn't bring back an old state (the file goes when the
-app comes back to the foreground).
+background. It follows the platform's rule (Android's too): the state comes
+back after the system ended the app, not after the user closed it. The scene
+session tells the two apart. The file names the
+`UISceneSession.persistentIdentifier` it was saved in; after a system kill
+UIKit reconnects that session and the state comes back, while swiping the app
+away in the app switcher destroys it: UIKit calls
+`application:didDiscardSceneSessions:` (at the next launch, the app being gone
+by then), which deletes the file, and the launch connects a new session, which
+wouldn't take it anyway. This needs the app to use scenes: a
+`UIApplicationSceneManifest` in its `Info.plist` (see
+[platforms/ios.md](platforms/ios.md#packaging)); without one, iOS doesn't tell
+the app about a swipe-away, and the state comes back then too. UIKit's own
+state restoration (the scene's `stateRestorationActivity`, or restoration
+identifiers on view controllers) wasn't used for the bytes: UIKit writes it
+when it chooses, where the file is written before iOS may end the app, and a
+self-test can check it. A crash on screen doesn't bring back an old state (the
+file goes when the app comes back to the foreground).
 
 On the web, `web/stipple.js` keeps the bytes under a key made of the module's
 URL and the canvas's order on the page (`start`'s `stateKey` option names
-another, or `false` keeps none); a new tab starts afresh.
+another, or `false` keeps none); a new tab starts afresh. Closing the tab is
+the user closing the app, and `sessionStorage` goes with the tab, so the web
+already follows the rule above; a browser that brings a tab back (reopening a
+closed tab, restoring its session after a restart) brings its
+`sessionStorage` back with it, as it does the page's history.
 
 
 ## Trying it
@@ -453,10 +466,14 @@ for attention and counts the bells in the Dock badge.
   `on_back`, and the strip doesn't move; a short swipe taken back is
   `Cancelled`. Process death: after the self-test, CI sends the app to the
   background, ends it with `xcrun simctl terminate` and launches it again,
-  and the field's text comes back through `restore_state`. These steps are
-  added with this change and haven't run yet; the recognizer and the saved
-  state's file are unit-tested on every host, as is the swipe in front of an
-  `App`.
+  and the field's text comes back through `restore_state`, in the same scene
+  session (this passed in CI before the app used scenes; the session check
+  is new). Then it has the app type something, go to the background and
+  destroy its own scene session (`requestSceneSessionDestruction:`, the path a swipe-away in the
+  app switcher takes): the state saved on the way out is dropped when UIKit
+  discards the session, and the next launch, in a new session, restores
+  nothing (added, not yet run). The recognizer and the saved state's file
+  are unit-tested on every host, as is the swipe in front of an `App`.
 - **Web** (headless Chrome): `webdemo`'s `index.html#restore` clicks its
   counter three times and reloads the tab; the reloaded app starts with the
   count, from `sessionStorage`.

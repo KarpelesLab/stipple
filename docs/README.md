@@ -409,12 +409,21 @@ in CI). Not tried on a device. See
 [window-lifecycle.md](window-lifecycle.md#the-back-swipe-ios).
 
 ⁶⁵ iOS: a file in the app's `Library/Caches`, written when the app goes to
-the background, read (and deleted) at the next launch; CI backgrounds
-`touchdemo`, ends it with `simctl terminate` and relaunches it (added with
-this change, not yet run in CI). Web: the tab's `sessionStorage`, written on
-`pagehide` and when the page is hidden, handed to the app before it starts;
-headless Chrome reloads `webdemo` and checks its count came back (run locally;
-CI step added). See
+the background under its scene session, read (and deleted) at the next
+launch. As iOS (and Android) do, only a system kill brings it back: when the
+user swipes the app away, UIKit discards the session
+(`application:didDiscardSceneSessions:`) and the state goes, the next launch
+starting afresh in a new session. That needs the scene lifecycle (a
+`UIApplicationSceneManifest` in the `Info.plist`); without it the state comes
+back after a swipe-away too. CI backgrounds `touchdemo`, ends it with `simctl
+terminate` and relaunches it (restored: this ran in CI before scenes; the
+same-session check is new), then has it destroy its own session
+(`requestSceneSessionDestruction:`, UIKit's discard path) and checks the next
+launch restores nothing (added, not yet run). Web: the tab's `sessionStorage`,
+written on `pagehide` and when the page is hidden, handed to the app before it
+starts; closing the tab drops it (a new tab starts without it); headless
+Chrome reloads `webdemo` and checks its count came back (run locally; CI step
+added). See
 [window-lifecycle.md](window-lifecycle.md#keeping-the-state-across-process-death).
 
 ⁶⁶ A hand-written AT-SPI server exists (`stipple::platform::a11y`; `a11ydemo`

@@ -21,7 +21,16 @@
 //!   for the back swipe from the left edge, which it takes while "a screen
 //!   is open" (the self-test opens one);
 //! - `touchdemo: restored text "..."` when it starts again with the state it
-//!   saved (the field's text) after iOS ended it in the background.
+//!   saved (the field's text) after iOS ended it in the background;
+//! - `touchdemo: started in session "..."` on iOS, the scene session it runs
+//!   in (the same after a system kill, a new one after the user closed it).
+//!
+//! **Closing the scene (iOS).** Launched with `TOUCHDEMO_CLOSE_SCENE` set, it
+//! types "Not for later" into the field and waits to be sent to the
+//! background (where it saves the text); there it asks UIKit to destroy its
+//! scene session (`touchdemo: closing session Some("...")`), as the user
+//! swiping it away in the app switcher does. The state saved under the
+//! session is dropped with it, and the next launch starts afresh.
 //!
 //! **Self-test (iOS).** Launched with `TOUCHDEMO_SELFTEST` set (`xcrun simctl
 //! launch` passes it on as `SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1`), the app drives
@@ -256,6 +265,8 @@ fn main() {
             s.lifecycle.push(change);
             match change {
                 Lifecycle::Background => {
+                    #[cfg(target_os = "ios")]
+                    selftest::on_background();
                     s.builds_at_background = Some(BUILDS.load(Ordering::Relaxed));
                 }
                 Lifecycle::Foreground => {
@@ -297,8 +308,20 @@ fn main() {
         app = app.font(font);
     }
     #[cfg(target_os = "ios")]
-    if std::env::var_os("TOUCHDEMO_SELFTEST").is_some() {
-        selftest::schedule(&app.handle());
+    {
+        use stipple::platform::backend::ios::simulate;
+        // Which scene session this launch is in: the same one after a
+        // system kill, a new one after the user closed the app.
+        app.handle().after(Duration::from_millis(500), |_| {
+            let session = simulate::scene_session();
+            log(&format!("touchdemo: started in session {session:?}"));
+        });
+        if std::env::var_os("TOUCHDEMO_SELFTEST").is_some() {
+            selftest::schedule(&app.handle());
+        }
+        if std::env::var_os("TOUCHDEMO_CLOSE_SCENE").is_some() {
+            selftest::close_scene(&app.handle());
+        }
     }
     app.run();
 }
@@ -391,6 +414,33 @@ mod selftest {
         }
         fn until(&mut self, cond: impl Fn(&State) -> bool + Send + 'static) {
             self.0.push_back((250, Step::Until(Box::new(cond), 40)));
+        }
+    }
+
+    /// Close the scene's session the next time the app goes to the
+    /// background.
+    static CLOSE_ON_BACKGROUND: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// Type something to save, then, once in the background (the state
+    /// saved), close the scene's session as the user swiping the app away
+    /// does: the state goes with the session.
+    pub(super) fn close_scene(handle: &AppHandle<State>) {
+        handle.after(Duration::from_millis(1500), |s| {
+            s.field = EditBuffer::from_text("Not for later");
+            CLOSE_ON_BACKGROUND.store(true, Ordering::Relaxed);
+            log("touchdemo: waiting for background to close the session");
+        });
+    }
+
+    /// The app went to the background: close the session if asked to. UIKit
+    /// takes the request later; the state is saved first, as the app goes.
+    pub(super) fn on_background() {
+        if CLOSE_ON_BACKGROUND.swap(false, Ordering::Relaxed) {
+            let session = simulate::destroy_scene_session(|error| {
+                log(&format!("touchdemo: closing the session failed: {error}"));
+            });
+            log(&format!("touchdemo: closing session {session:?}"));
         }
     }
 

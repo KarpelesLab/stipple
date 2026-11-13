@@ -3618,6 +3618,9 @@ jobs:
             <key>CFBundleVersion</key><string>1</string>
             <key>LSRequiresIPhoneOS</key><true/>
             <key>UILaunchScreen</key><dict/>
+            <key>UIApplicationSceneManifest</key><dict>
+              <key>UIApplicationSupportsMultipleScenes</key><false/>
+            </dict>
             <key>UIDeviceFamily</key><array><integer>1</integer></array>
             <key>MinimumOSVersion</key><string>15.0</string>
           </dict></plist>
@@ -3687,7 +3690,7 @@ jobs:
           xcrun simctl install "$DEV" Stipple.app
           # Start in light mode: the next step switches to dark.
           xcrun simctl ui "$DEV" appearance light || true
-          SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 SIMCTL_CHILD_STIPPLE_APP_DEBUG=1 xcrun simctl launch \
+          SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 SIMCTL_CHILD_STIPPLE_APP_DEBUG=1 SIMCTL_CHILD_STIPPLE_DEBUG_WINDOWS=1 xcrun simctl launch \
             --stderr="$PWD/visual_output/touchdemo-stderr.log" "$DEV" com.karpeleslab.stipple
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"
@@ -3794,14 +3797,18 @@ jobs:
           grep -q "touchdemo: phase 2 passed" "$LOG"
 
       # Process death: going to the background saves the app's state (the
-      # field's text, "HiJP" after part 1) to a file in its caches; the
-      # simulator then ends the suspended app as iOS does to free memory
-      # (simctl terminate), and the next launch hands the state back.
+      # field's text, "HiJP" after part 1) to a file in its caches, under the
+      # scene's session; the simulator then ends the suspended app as iOS
+      # does to free memory (simctl terminate), and the next launch, in the
+      # same scene session, hands the state back.
       - name: Saved state across process death (touchdemo)
         if: ${{ !cancelled() }}
         run: |
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"
+          started() { grep -c "touchdemo: started in session" "$LOG" || true; }
+          last_session() { grep -o 'touchdemo: started in session "[^"]*"' "$LOG" | tail -1 | cut -d' ' -f5; }
+          before=$(last_session)
           backgrounds=$(grep -c "touchdemo: lifecycle Background" "$LOG" || true)
           xcrun simctl launch "$DEV" com.apple.Preferences || true
           for _ in $(seq 1 30); do
@@ -3812,16 +3819,102 @@ jobs:
           ls -la "$DATA/Library/Caches" || true
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple
           sleep 1
-          xcrun simctl launch "$DEV" com.karpeleslab.stipple
+          n=$(started)
+          SIMCTL_CHILD_STIPPLE_DEBUG_WINDOWS=1 xcrun simctl launch \
+            --stderr="$PWD/visual_output/touchdemo-relaunch.log" "$DEV" com.karpeleslab.stipple
           for _ in $(seq 1 30); do
-            grep -q "touchdemo: restored" "$LOG" && break
+            [ "$(started)" -gt "$n" ] && break
             sleep 1
           done
-          echo "=== touchdemo.log (saved state) ==="; tail -5 "$LOG" || true
+          after=$(last_session)
+          echo "=== touchdemo.log (saved state) ==="; tail -6 "$LOG" || true
+          echo "=== saved state, part 1 (stderr) ==="; grep "saved state:" visual_output/touchdemo-stderr.log || true
+          echo "=== saved state, relaunch (stderr) ==="; grep "saved state:" visual_output/touchdemo-relaunch.log || true
+          echo "scene session before: $before, after: $after"
+          # The app runs in a scene, and the relaunch reconnected its session.
+          [ -n "$before" ]
+          [ "$before" != '""' ]
+          [ "$after" = "$before" ]
           # Restored once, after the relaunch, with part 1's text.
           grep -qF 'touchdemo: restored text "HiJP"' "$LOG"
           [ "$(grep -c "touchdemo: restored" "$LOG")" -eq 1 ]
           # Read at launch, the file is gone.
+          [ ! -e "$DATA/Library/Caches/stipple-saved-state" ]
+
+      # The user closing the app (swiping it away in the app switcher) must
+      # not bring its state back, as on iOS (and Android) generally: UIKit
+      # destroys the scene's session, and the state saved under it goes.
+      # touchdemo (TOUCHDEMO_CLOSE_SCENE) types "Not for later"; sent to
+      # the background (the state is saved, as before a swipe-away), it asks
+      # UIKit to destroy its session (requestSceneSessionDestruction:), which
+      # takes the same path: the scene disconnects, and
+      # application:didDiscardSceneSessions: drops the state. The next launch
+      # is a new session, with nothing restored.
+      - name: Saved state dropped when the user closes the app (touchdemo)
+        if: ${{ !cancelled() }}
+        run: |
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/touchdemo.log"
+          CLOSE=visual_output/touchdemo-close.log
+          NEXT=visual_output/touchdemo-after-close.log
+          started() { grep -c "touchdemo: started in session" "$LOG" || true; }
+          last_session() { grep -o 'touchdemo: started in session "[^"]*"' "$LOG" | tail -1 | cut -d' ' -f5; }
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          sleep 1
+          n=$(started)
+          SIMCTL_CHILD_TOUCHDEMO_CLOSE_SCENE=1 SIMCTL_CHILD_STIPPLE_DEBUG_WINDOWS=1 xcrun simctl launch \
+            --stderr="$PWD/$CLOSE" "$DEV" com.karpeleslab.stipple
+          for _ in $(seq 1 30); do
+            [ "$(started)" -gt "$n" ] && break
+            sleep 1
+          done
+          closed=$(last_session)
+          for _ in $(seq 1 30); do
+            grep -q "touchdemo: waiting for background to close" "$LOG" && break
+            sleep 1
+          done
+          sleep 1
+          xcrun simctl launch "$DEV" com.apple.Preferences || true
+          for _ in $(seq 1 30); do
+            grep -q "touchdemo: closing" "$LOG" && break
+            sleep 1
+          done
+          for _ in $(seq 1 30); do
+            grep -q "saved state: sessions .* discarded" "$CLOSE" && break
+            sleep 1
+          done
+          sleep 2
+          ls -la "$DATA/Library/Caches" || true
+          ls -laR "$DATA/Library/Saved Application State" 2>/dev/null | head -20 || true
+          restored=$(grep -c "touchdemo: restored" "$LOG" || true)
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          sleep 1
+          n=$(started)
+          SIMCTL_CHILD_STIPPLE_DEBUG_WINDOWS=1 xcrun simctl launch \
+            --stderr="$PWD/$NEXT" "$DEV" com.karpeleslab.stipple
+          for _ in $(seq 1 30); do
+            [ "$(started)" -gt "$n" ] && break
+            sleep 1
+          done
+          sleep 2
+          next=$(last_session)
+          echo "=== touchdemo.log (closing) ==="; tail -8 "$LOG" || true
+          echo "=== saved state, closing (stderr) ==="; grep "saved state:" "$CLOSE" || true
+          echo "=== saved state, next launch (stderr) ==="; grep "saved state:" "$NEXT" || true
+          echo "closed session: $closed, next launch: $next"
+          # The state was there to drop: typed, then saved as the scene went.
+          grep -qF 'touchdemo: text "Not for later"' "$LOG"
+          grep -qF "touchdemo: closing session Some($closed)" "$LOG"
+          if grep "touchdemo: closing the session failed" "$LOG"; then exit 1; fi
+          grep -qE "saved state: [1-9][0-9]* bytes saved in session $closed" "$CLOSE"
+          # UIKit discarded the session (while the app ran, or at the next
+          # launch), and the next launch is a new one...
+          cat "$CLOSE" "$NEXT" | grep -qE "saved state: sessions \[.*$closed.*\] discarded"
+          [ -n "$next" ]
+          [ "$next" != "$closed" ]
+          # ...which restored nothing, and the file is gone.
+          [ "$(grep -c "touchdemo: restored" "$LOG")" -eq "$restored" ]
+          if grep "saved state: restoring" "$NEXT"; then exit 1; fi
           [ ! -e "$DATA/Library/Caches/stipple-saved-state" ]
 
       # From outside the app, the way VoiceOver reaches it: an XCUITest

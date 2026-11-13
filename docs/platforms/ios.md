@@ -30,11 +30,20 @@ binary and an `Info.plist`:
   <key>UIDeviceFamily</key><array><integer>1</integer></array>
   <key>MinimumOSVersion</key><string>15.0</string>
   <key>UILaunchScreen</key><dict/>
+  <key>UIApplicationSceneManifest</key><dict>
+    <key>UIApplicationSupportsMultipleScenes</key><false/>
+  </dict>
 </dict></plist>
 ```
 
 - **`UILaunchScreen` is required.** Without a launch screen, iOS runs the app in
   its legacy compatibility mode: letterboxed, with black bands above and below.
+- **`UIApplicationSceneManifest` opts into scenes**, which iOS asks of new
+  apps: the window lives in a `UIWindowScene` (the app delegate names
+  Stipple's scene delegate, so the manifest needs no configurations), and the
+  saved state can tell the user closing the app from the system ending it
+  (see [Keeping the state across process death](#keeping-the-state-across-process-death)).
+  Without it the app runs without scenes, as before iOS 13.
 - **`MinimumOSVersion` must be at least 15.0**: `Theme::native()` uses
   `UIButtonConfiguration`, which arrived in iOS 15.
 
@@ -147,12 +156,21 @@ warning. A memory warning also drops the cached OS-drawn controls. See
 With `App::save_state`, going to the background also asks the app for its
 state (`Event::SaveState`) and writes the bytes to a file in the app's
 `Library/Caches` (`UIApplicationWillTerminateNotification` writes it too, for
-an app still running in the background). The next launch reads the file,
-deletes it and hands the bytes to `App::restore_state` before the first frame;
-coming back to the foreground deletes it, since what it holds is stale from
-then on. This stands in for UIKit's state restoration, which is tied to view
-controllers with restoration identifiers; as iOS doesn't tell a suspended app
-that the user swiped it away, the state comes back after that too. See
+an app still running in the background), along with the scene session's
+`persistentIdentifier`. The next launch reads the file, deletes it and, if the
+scene connects in that same session, hands the bytes to `App::restore_state`
+before the first frame; coming back to the foreground deletes it, since what
+it holds is stale from then on.
+
+As with UIKit's own state restoration, only the system ending the app brings
+the state back. iOS keeps the scene session when it ends a suspended app to
+free memory, so the state comes back; when the user swipes the app away in
+the app switcher, UIKit destroys the session, calls
+`application:didDiscardSceneSessions:` (at the next launch if the app was
+gone), which deletes the file, and connects a new session, so the app starts
+afresh. That takes the `UIApplicationSceneManifest` above: an app without
+scenes isn't told about a swipe-away, and its state comes back after one too.
+See
 [window-lifecycle.md](../window-lifecycle.md#keeping-the-state-across-process-death).
 
 ## The back swipe
@@ -264,4 +282,8 @@ events and built no frames while away. Nobody answers the notification prompt
 in CI, so the notification itself isn't seen. Last, CI sends the app to the
 background once more, ends it with `xcrun simctl terminate` (as iOS ends a
 suspended app) and launches it again, and checks the field's text came back
-through `restore_state`.
+through `restore_state`, in the same scene session. Then it launches it with
+`TOUCHDEMO_CLOSE_SCENE`: the app types into its field and, once CI sends it
+to the background (saving the state), asks UIKit to destroy its scene session (`requestSceneSessionDestruction:`, which takes the
+path of a swipe-away), and CI checks the state was saved, UIKit discarded the
+session, and the next launch is a new session that restores nothing.

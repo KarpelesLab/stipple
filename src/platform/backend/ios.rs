@@ -5,7 +5,8 @@
 //! This module opts into `unsafe` for the crate.
 //!
 //! `UIApplicationMain` boots the app with a hand-built delegate class; the
-//! delegate creates a `UIWindow` hosting a custom `UIView` whose `drawRect:`
+//! delegate (or, under the scene lifecycle, the scene delegate, see [`scene`])
+//! creates a `UIWindow` hosting a custom `UIView` whose `drawRect:`
 //! blits the software [`Pixmap`] as a `CGImage`. `UIApplicationMain` never
 //! returns, so the Rust handler (which outlives the call) is reached through a
 //! stashed raw pointer.
@@ -15,7 +16,7 @@
 //! ([`edge_swipe`]). The view adopts `UIKeyInput` and holds the keyboard
 //! (first responder) while a text input has focus. The app's saved state goes
 //! to a file when it goes to the background, and comes back at the next
-//! launch ([`saved_state`]).
+//! launch in the same scene session ([`saved_state`]).
 //!
 //! **Verification:** build-checked for `aarch64-apple-ios` by the `mobile`
 //! cross-compile CI job; the `visual-ios` job runs it on a simulator, where
@@ -51,6 +52,8 @@ mod edge_swipe;
 mod lifecycle;
 /// The state kept across process death (UIKit-free, tested on hosts).
 mod saved_state;
+/// The scene the app's window lives in, and its session's saved state.
+mod scene;
 /// Input methods: `UITextInput` on the view.
 mod text_input;
 
@@ -387,13 +390,28 @@ unsafe fn set_root_background(window: Id, color: Option<crate::render::Color>) {
     }
 }
 
-/// `application:didFinishLaunchingWithOptions:` — build the window + view, draw
-/// the first frame, and show it.
+/// `application:didFinishLaunchingWithOptions:` — without scenes, build the
+/// window + view, draw the first frame, and show it. With scenes, the scene
+/// delegate does when its scene connects ([`scene`]).
 extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) -> bool {
+    if !scene::uses_scenes() {
+        unsafe {
+            let bounds = msg_rect(msg_id(class("UIScreen"), sel("mainScreen")), sel("bounds"));
+            show_window(msg_alloc_init_frame(class("UIWindow"), bounds));
+        }
+    }
+    true
+}
+
+/// Fill `window` (just created, not shown) with the root view and ours, draw
+/// the first frame, and show it.
+///
+/// # Safety
+/// `window` must be a new `UIWindow`, kept for the process.
+unsafe fn show_window(window: Id) {
     unsafe {
         let bounds = msg_rect(msg_id(class("UIScreen"), sel("mainScreen")), sel("bounds"));
         let scale = msg_f64(msg_id(class("UIScreen"), sel("mainScreen")), sel("scale"));
-        let window = msg_alloc_init_frame(class("UIWindow"), bounds);
         // The root view fills the screen behind the status bar and home indicator;
         // our view sits inside the safe area on top of it.
         let root = msg_alloc_init_frame(class("UIView"), bounds);
@@ -478,7 +496,6 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
         println!("{marker}");
         let _ = std::fs::write(std::env::temp_dir().join("stipple-ios.txt"), &marker);
     }
-    true
 }
 
 /// Each touch in `touches` (an `NSSet` of `UITouch`): its id (the `UITouch`,
@@ -891,6 +908,23 @@ pub mod simulate {
         later(lifecycle::post_memory_warning);
     }
 
+    /// The connected scene's session (`UISceneSession.persistentIdentifier`),
+    /// which the saved state belongs to; empty without scenes.
+    pub fn scene_session() -> String {
+        scene::current_session()
+    }
+
+    /// Ask UIKit to destroy the connected scene's session
+    /// (`requestSceneSessionDestruction:options:errorHandler:`), as the user
+    /// swiping the app away in the app switcher does: the scene goes to the
+    /// background and disconnects, and `application:didDiscardSceneSessions:`
+    /// drops the state saved under it. `failed` hears UIKit's error, if it
+    /// refuses (maybe on another thread). Returns the session's identifier,
+    /// or `None` without a scene.
+    pub fn destroy_scene_session(failed: fn(String)) -> Option<String> {
+        scene::request_destruction(failed)
+    }
+
     /// Read the app's notification permission from `UNUserNotificationCenter`
     /// (`not_determined`, `denied`, `authorized`, …); `done` is called on
     /// another thread with the answer.
@@ -1142,6 +1176,7 @@ fn register_app_delegate() -> Class {
             did_finish_launching as *const c_void,
             c"c@:@@".as_ptr(),
         );
+        scene::add_app_delegate_methods(cls);
         objc_registerClassPair(cls);
         cls
     }
@@ -1256,13 +1291,15 @@ where
         c.handler = boxed;
     });
     // A launch after the system ended the app in the background: hand its
-    // saved state to the app's first event.
-    if let Some(dir) = saved_state::dir() {
-        crate::platform::saved_state::set_restored_state(saved_state::take(&dir));
+    // saved state to the app's first event. With scenes, that waits for the
+    // scene to connect, which says whether it is the session that saved it.
+    if !scene::uses_scenes() {
+        scene::restore_for_session("");
     }
 
     register_view_class();
     register_app_delegate();
+    scene::register_scene_delegate();
 
     unsafe {
         let delegate_name = nsstring("StippleAppDelegate");

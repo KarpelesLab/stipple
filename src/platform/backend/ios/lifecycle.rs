@@ -7,7 +7,8 @@
 //! whether the app uses scenes or not (with scenes, once the last one goes to
 //! the background), and delivers them as [`Event::Lifecycle`]. Going to the
 //! background (and `UIApplicationWillTerminateNotification`) also saves the
-//! app's state (see [`saved_state`](super::saved_state)).
+//! app's state, under the scene's session (see
+//! [`saved_state`](super::saved_state)).
 //!
 //! `traitCollectionDidChange:` on the view follows light and dark mode: when
 //! the screen's `userInterfaceStyle` changes, the next wake carries
@@ -86,7 +87,14 @@ fn save_state() {
         call_handler(event, &current_window());
     });
     if let Some(dir) = super::saved_state::dir() {
-        super::saved_state::store(&dir, bytes.as_deref());
+        // Under the scene's session: a new session (after the user swiped
+        // the app away) won't take it.
+        let session = super::scene::current_session();
+        crate::platform::window::debug_window(format_args!(
+            "saved state: {} bytes saved in session {session:?}",
+            bytes.as_ref().map_or(0, Vec::len)
+        ));
+        super::saved_state::store(&dir, &session, bytes.as_deref());
     }
 }
 
@@ -102,7 +110,7 @@ extern "C" fn will_terminate(_this: Id, _cmd: Sel, _notification: Id) {
 extern "C" fn will_enter_foreground(_this: Id, _cmd: Sel, _notification: Id) {
     // Back on screen: the state saved on the way out is stale from now on.
     if let Some(dir) = super::saved_state::dir() {
-        super::saved_state::store(&dir, None);
+        super::saved_state::store(&dir, "", None);
     }
     deliver(Lifecycle::Foreground);
     // The look may have changed while the app was away.
