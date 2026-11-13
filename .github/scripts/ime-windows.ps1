@@ -139,7 +139,7 @@ function Front {
   if ([Ime]::GetForegroundWindow() -ne $hwnd) { Stage "warning: the window isn't in the foreground" }
 }
 
-function Send-Keys([ushort[]]$Keys, [int]$Delay = 150) {
+function Send-Keys([uint16[]]$Keys, [int]$Delay = 150) {
   foreach ($k in $Keys) {
     $n = [Ime]::Key($k)
     if ($n -ne 2) { Stage "SendInput sent $n of 2 events for VK $k (error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))" }
