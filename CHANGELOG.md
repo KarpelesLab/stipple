@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.4...stipple-v0.0.5) - 2026-11-14
+
+### Added
+
+- *(focus)* buttons and other tap-activated controls take keyboard focus
+- *(atspi)* register again when the registry or the accessibility bus restarts
+- *(atspi)* caret, selection and labelled-by relations for text fields
+- *(a11y)* X11 and Wayland windows serve their tree over AT-SPI, registered with the registry
+- *(ios)* saved state only comes back after a system kill, not a swipe-away
+- *(core)* memoized subtrees with handlers, derived values, animation frames without a rebuild
+- *(motion)* modal scrims fade in with their dialog; OS-drawn controls cross-fade
+- *(mobile)* iOS back swipe, saved state on iOS and the web, picker receive-side test
+- *(mobile)* document pickers on iOS and Android, notifications on Android
+- *(motion)* overlays animate out, and the segmented tabs slide their indicator
+- *(android)* predictive back and state saved across process death
+- *(android)* InputConnection, accessibility node provider, Back and app lifecycle
+- *(widgets)* stateless popups and toasts use the core's enter and layout animations
+- *(widgets)* built-in widgets animate by default, with per-theme motion tokens
+- *(ios)* UITextInput composition, UIAccessibility, live appearance, notifications and app lifecycle
+- *(windows)* input methods through the Text Services Framework
+- *(anim)* enter/exit transitions and layout animations for keyed elements
+- *(windows)* runtime windows, titles and geometry on every desktop backend
+- *(widgets)* middle-click closes a tab, double-click renames it
+- *(widgets)* tab bar, password field, color picker and message boxes
+- *(keys)* raw key events, key repeat and IME for custom elements
+- *(clipboard)* X11 paste, primary selection, HTML and images
+- *(canvas)* custom-paint elements with partial invalidation
+- confirm close and quit, window focus, attention, Wayland decorations
+- *(input)* raw pointer and wheel events for custom elements
+- *(text)* system fonts by name, bold/italic, per-element fonts, fallbacks, metrics and decorations
+
+### Fixed
+
+- *(ios)* drop the saved state when the app closes its own scene session
+- *(android)* don't report the host view focusable to accessibility, so TalkBack stops on labels
+- *(ios)* a scene app's launch isn't a return to the foreground
+- *(windows)* deliver events queued by sent messages before waiting again
+- *(uia)* don't panic dropping a window's provider tree while its thread exits
+- *(uia)* a window's root provider answers with the current tree; the walk hit-tests with the window in front
+- *(uia)* …Fragment and …FragmentRoot are interfaces of their own, with their own vtables
+- *(uia)* providers say they're server-side (0x2), with COM threading
+- *(ios)* a document picker whose presentation UIKit delays still counts as shown
+- *(ios)* check a document picker presentation took, and present again if not
+- *(macos/a11y)* keep the vended accessibility elements alive between requests
+- *(uia)* QueryInterface answers only the interfaces the provider implements
+- *(ios)* present a document picker once the previous one has finished leaving
+- *(a11y)* what an out-of-process screen reader needs on Windows, macOS, iOS
+- *(touch)* a pinch can start with a finger that caught a fling; androiddemo's test finds its button
+- *(ios)* accessibility frames in screen coordinates, set directly
+- *(ime)* an empty field reports no text, so TSF compositions survive the App's echo
+- *(android)* keep typed keys as text while an input method is connected
+- *(windows/tsf)* try every way to start the self-test's composition, log it, and fall back to IMM32 on failure
+- *(wayland)* name keys a virtual keymap types, and don't guess their position
+
+### Other
+
+- *(a11y-dbus)* check caret, selection, relations and a registry restart
+- *(ios)* verify swipe-away discard on an iPad simulator
+- screen-reader checks required (NVDA, VoiceOver, Orca, TalkBack, the sway AT-SPI walk)
+- update screenshots from CI
+- TalkBack's footnote says it passes in CI
+- TalkBack passes in CI
+- *(ime-windows)* required, after three passing runs in a row
+- NVDA, VoiceOver, Orca and the AT-SPI walks pass in CI
+- update screenshots from CI
+- *(android)* drive the edge swipe step by step so its progress reaches the app
+- *(talkback)* grant the demo's notification permission so its dialog doesn't hold TalkBack's focus
+- update screenshots from CI
+- *(nvda)* bring the navigator back to the focus after say-all; the window name on foreground is only reported
+- drive real screen readers in CI (NVDA, VoiceOver, TalkBack)
+- *(ime-windows)* stop the foreground trick's Alt tap from putting the window in menu mode
+- update screenshots from CI
+- *(uia)* pass a real null class to FindWindowW
+- wait for a document picker to be really on screen before accepting a delayed presentation
+- *(uia)* take the window found by title and process without requiring its UIA name to be the title, and say what it found
+- *(uia)* find touchdemo's window by title (checked to be the started process's)
+- *(roadmap)* macOS animates at full rate on CI now (36 frames during asyncdemo's load)
+- *(uia)* take the window from its handle instead of searching the desktop
+- *(ime)* Windows PowerShell 5 has no [ushort] type accelerator; use [uint16]
+- android CI: API 33 and 30 emulators, the edge swipe for real, and a two-finger pinch
+- *(ime)* real input methods on Wayland (fcitx5 under sway), attempts on Windows and macOS
+- *(a11y)* check accessibility from outside the app, as screen readers do
+- *(macos)* present only the damage, as native-layout sRGB; frame clock stats
+- androiddemo test: wait for gesture navigation to settle, and only report when the emulator doesn't take an edge swipe as back
+- pinch, long-press context menus, sideways scrolling and touch on the web
+- update screenshots from CI
+- *(text)* cache glyph outlines when painting text, and drop glyph cache keys for the software rasterizer
+- update screenshots from CI
+- *(roadmap)* the iOS and Android checks now pass in CI
+- don't count frames in the selftest; a slow runner draws few
+- update screenshots from CI
+- render whole scenes on the GPU: images, paths, layers, canvases
+- don't attach a buffer before the window's first configure
+- say which object and error a protocol error names
+- *(fonts)* the underline's centre, not its top, must sit below the baseline
+- Payload::is_empty is only used by the Linux backends
+- publish the sessionsdemo screenshots
+- *(x11)* wait for IBus to register its XIM server before starting the app
+- update screenshots from CI
+
 ## [0.0.4](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.3...stipple-v0.0.4) - 2026-11-10
 
 ### Added
