@@ -391,6 +391,14 @@ wouldn't take it anyway (an app can ask for the same thing,
 `requestSceneSessionDestruction:`, but UIKit only grants it on a device that
 supports multiple scenes, an iPad with `UIApplicationSupportsMultipleScenes`;
 an iPhone answers "The current device does not support multiple scenes").
+UIKit's identifiers don't always follow that: an iPad simulator gives the
+next launch's session the destroyed one's identifier, and reports the discard
+after the scene connected, so a discard naming the connected session also
+takes back what was restored on connecting (if the app hasn't had it yet).
+And when the app asks to destroy its own session, the backend deletes the
+file there and then and saves nothing more under that session (unless UIKit
+refuses, or the app comes back to the foreground): UIKit takes the request
+in its own time and may never report the discard.
 This needs the app to use scenes: a
 `UIApplicationSceneManifest` in its `Info.plist` (see
 [platforms/ios.md](platforms/ios.md#packaging)); without one, iOS doesn't tell
@@ -481,11 +489,14 @@ for attention and counts the bells in the Dock badge.
   (`TOUCHDEMO_TYPE` types "For later", which comes back in the same
   session), then the app types something, goes to the background and
   destroys its own scene session (`requestSceneSessionDestruction:`, the
-  path a swipe-away in the app switcher takes): the state saved on the way
-  out is dropped when UIKit discards the session
-  (`application:didDiscardSceneSessions:`, logged by the backend), and the
-  next launch, in a new session, restores nothing (added, not yet run;
-  reported, not required until it passes). A real swipe in the app switcher
+  path a swipe-away in the app switcher takes): the save as it goes is
+  declined, the file is gone while it still runs, and the next launch
+  restores nothing (reported, not required until it passes). The first run
+  failed: UIKit took the request without error but never reported a
+  discard, the next launch connected the same session identifier and
+  restored the saved state, so the backend now drops the state on the
+  request itself, and the step no longer requires a new identifier or a
+  discard (both are logged). A real swipe in the app switcher
   isn't scripted: the simulator has no way to drive it short of XCUITest. The recognizer and the saved state's file
   are unit-tested on every host, as is the swipe in front of an `App`.
 - **Web** (headless Chrome): `webdemo`'s `index.html#restore` clicks its

@@ -1444,16 +1444,25 @@ Most input only works on X11 today.
   `sessionStorage`). Unit-tested (the file's sessions, on every host); CI's
   simulator checks the kill still restores, in the same session, and has
   `touchdemo` (`TOUCHDEMO_CLOSE_SCENE`) destroy its session through
-  `requestSceneSessionDestruction:` (UIKit's discard path): the next launch,
-  a new session, restores nothing. The iPhone simulator refuses that
+  `requestSceneSessionDestruction:` (UIKit's discard path): the next launch
+  restores nothing. The iPhone simulator refuses that
   destruction ("The current device does not support multiple scenes"), so
   CI runs it on an iPad simulator booted in the same job, from a copy of the
   bundle that adds the iPad to `UIDeviceFamily` and sets
   `UIApplicationSupportsMultipleScenes` (`touchdemo`'s `TOUCHDEMO_TYPE`
-  checks the kill restores there too, in the same session); the step
-  checks `application:didDiscardSceneSessions:` dropped the state and the
-  next launch restored nothing (added, not yet run; it reports, doesn't fail,
-  until it passes). A real swipe in the app switcher isn't scripted (no
+  checks the kill restores there too, in the same session). Its first run
+  failed: UIKit took the request without error but reported no discard,
+  the next launch connected the same session identifier and restored the
+  state saved as the app went (and the launch before reported a discard
+  naming the session it had just connected). So the backend now drops the
+  state when the app asks to destroy its session and saves no more under
+  it (until UIKit refuses or the app returns to the foreground), and a
+  discard naming the connected session takes back the state restored on
+  connecting; unit-tested on every host. The step now checks the save was
+  declined, the file gone while the app ran, and nothing restored at the
+  next launch, logging (not requiring) whether the identifier changed and
+  whether UIKit discarded the session (rerun pending; it reports, doesn't
+  fail, until it passes). A real swipe in the app switcher isn't scripted (no
   XCUITest-free way to drive the switcher). Seen in CI: with scenes, UIKit
   also posts `WillEnterForeground` at launch, which is no longer delivered
   as `Lifecycle::Foreground`.

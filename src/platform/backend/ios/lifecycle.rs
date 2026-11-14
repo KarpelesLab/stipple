@@ -83,13 +83,21 @@ fn deliver(change: Lifecycle) {
 /// [`saved_state`](super::saved_state)): iOS may end the app from here on
 /// without telling it.
 fn save_state() {
+    let session = super::scene::current_session();
+    if super::saved_state::is_closing(&session) {
+        // The app asked UIKit to destroy the session: nothing is kept
+        // for it (see `saved_state::close`).
+        crate::platform::window::debug_window(format_args!(
+            "saved state: not saved, session {session:?} is closing"
+        ));
+        return;
+    }
     let bytes = crate::platform::saved_state::deliver_save(|event| {
         call_handler(event, &current_window());
     });
     if let Some(dir) = super::saved_state::dir() {
         // Under the scene's session: a new session (after the user swiped
         // the app away) won't take it.
-        let session = super::scene::current_session();
         crate::platform::window::debug_window(format_args!(
             "saved state: {} bytes saved in session {session:?}",
             bytes.as_ref().map_or(0, Vec::len)
@@ -121,6 +129,8 @@ extern "C" fn will_enter_foreground(_this: Id, _cmd: Sel, _notification: Id) {
     if let Some(dir) = super::saved_state::dir() {
         super::saved_state::store(&dir, "", None);
     }
+    // And a session the app asked to destroy lives on, after all.
+    super::saved_state::reopen(&super::scene::current_session());
     deliver(Lifecycle::Foreground);
     // The look may have changed while the app was away.
     check_appearance();

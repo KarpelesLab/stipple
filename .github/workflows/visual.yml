@@ -4117,11 +4117,18 @@ jobs:
           [ ! -e "$DATA/Library/Caches/stipple-saved-state" ]
 
       # Then the close: touchdemo (TOUCHDEMO_CLOSE_SCENE) types "Not for
-      # later" and, sent to the background (the state saved, as before a
-      # swipe-away), asks UIKit to destroy its session. UIKit discards it
-      # (application:didDiscardSceneSessions:, while the app runs or at the
-      # next launch), which deletes the state, and the next launch is a new
-      # session with nothing restored.
+      # later" and, sent to the background, asks UIKit to destroy its session
+      # (requestSceneSessionDestruction:) before the save that comes as the
+      # app goes. From the request on, the backend keeps nothing for the
+      # session: that save is declined and the file is gone before the app
+      # is even ended, so the next launch restores nothing. What this proves
+      # doesn't hang on UIKit's session identifiers: an iPad simulator's next
+      # launch connects the same identifier (the session isn't new), and
+      # application:didDiscardSceneSessions: may name the session that just
+      # connected (it did at this step's own launch, after the previous
+      # step's app was terminated on screen); both are reported, not
+      # required. The kill above checks that the same identifier does bring
+      # back state saved under it when the user didn't close the app.
       - name: Saved state dropped when the user closes the app, on an iPad (touchdemo)
         if: ${{ !cancelled() && env.IPAD != '' }}
         continue-on-error: true
@@ -4129,19 +4136,26 @@ jobs:
         run: |
           DATA=$(xcrun simctl get_app_container "$IPAD" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"
+          FILE="$DATA/Library/Caches/stipple-saved-state"
           CLOSE=visual_output/ipad-close.log
           NEXT=visual_output/ipad-after-close.log
           started() { grep -c "touchdemo: started in session" "$LOG" || true; }
           last_session() { grep -o 'touchdemo: started in session "[^"]*"' "$LOG" | tail -1 | cut -d' ' -f5; }
+          # The backend's lines after it asked UIKit to destroy the session.
+          after_request() { sed -n '/saved state: asked to destroy session/,$p' "$CLOSE"; }
+          syslog() {
+            xcrun simctl spawn "$IPAD" log show --last "$1" --style compact \
+              --predicate '(process == "window" OR eventMessage CONTAINS[c] "com.karpeleslab.stipple") AND (eventMessage CONTAINS[c] "destr" OR eventMessage CONTAINS[c] "discard" OR eventMessage CONTAINS[c] "disconnect" OR eventMessage CONTAINS[c] "invalidat")' \
+              2>/dev/null | tail -"$2" || true
+          }
           diag() {
             echo "=== touchdemo.log (iPad) ==="; cat "$LOG" || true
             echo "=== stderr, closing ==="; tail -40 "$CLOSE" || true
             echo "=== stderr, next launch ==="; tail -40 "$NEXT" || true
             ls -la "$DATA/Library/Caches" || true
             xcrun simctl io "$IPAD" screenshot visual_output/stipple-ipad-close.png || true
-            echo "=== system log (the app, scene sessions) ==="
-            xcrun simctl spawn "$IPAD" log show --last 5m --style compact \
-              --predicate 'process == "window" OR eventMessage CONTAINS[c] "com.karpeleslab.stipple" OR eventMessage CONTAINS[c] "scene session"' 2>/dev/null | tail -120 || true
+            echo "=== system log (the app's scene: destroyed, discarded, disconnected) ==="
+            syslog 5m 120
           }
           trap 'rc=$?; [ "$rc" = 0 ] || diag' EXIT
           xcrun simctl terminate "$IPAD" com.karpeleslab.stipple || true
@@ -4164,12 +4178,16 @@ jobs:
             grep -q "touchdemo: closing" "$LOG" && break
             sleep 1
           done
-          for _ in $(seq 1 30); do
-            grep -qE "saved state: (sessions .* discarded|destroying the session failed)" "$CLOSE" && break
+          # Give UIKit time to discard the session (or refuse) while the app
+          # runs; reported below, not required.
+          for _ in $(seq 1 15); do
+            after_request | grep -qE "saved state: (sessions .* discarded|destroying the session failed)" && break
             sleep 1
           done
-          sleep 2
-          ls -la "$DATA/Library/Caches" || true
+          sleep 1
+          echo "=== app caches, the app still running ==="; ls -la "$DATA/Library/Caches" || true
+          if [ -e "$FILE" ]; then file_while_running=present; else file_while_running=gone; fi
+          echo "=== system log around the request (the app's scene) ==="; syslog 2m 60
           restored=$(grep -c "touchdemo: restored" "$LOG" || true)
           xcrun simctl terminate "$IPAD" com.karpeleslab.stipple || true
           sleep 1
@@ -4186,21 +4204,36 @@ jobs:
           echo "=== saved state, closing (stderr) ==="; grep "saved state:" "$CLOSE" || true
           echo "=== saved state, next launch (stderr) ==="; grep "saved state:" "$NEXT" || true
           echo "closed session: $closed, next launch: $next"
-          # The state was there to drop: typed, then saved as the scene went.
+          if [ "$next" = "$closed" ]; then
+            echo "UIKit reconnected the same session identifier"
+          else
+            echo "UIKit connected a new session"
+          fi
+          if after_request | grep -E "saved state: sessions .* discarded"; then
+            echo "UIKit discarded the session while the app ran"
+          elif grep -E "saved state: sessions .* discarded" "$NEXT"; then
+            echo "UIKit discarded the session at the next launch"
+          else
+            echo "UIKit never said it discarded the session"
+          fi
+          echo "state file while the app still ran: $file_while_running"
+          [ -n "$closed" ]
+          [ "$closed" != '""' ]
+          # There was state to drop: typed, and the app asked for it to be
+          # saved as it went (declined, the session closing).
           grep -qF 'touchdemo: text "Not for later"' "$LOG"
           grep -qF "touchdemo: closing session Some($closed)" "$LOG"
           if grep "touchdemo: closing the session failed" "$LOG"; then exit 1; fi
-          grep -qE "saved state: [1-9][0-9]* bytes saved in session $closed" "$CLOSE"
-          # UIKit discarded the session (while the app ran, or at the next
-          # launch), and the next launch is a new one...
-          cat "$CLOSE" "$NEXT" | grep -qE "saved state: sessions \[.*$closed.*\] discarded"
-          [ -n "$next" ]
-          [ "$next" != '""' ]
-          [ "$next" != "$closed" ]
-          # ...which restored nothing, and the file is gone.
+          grep -qF "saved state: closing session $closed:" "$CLOSE"
+          after_request | grep -qF "saved state: not saved, session $closed is closing"
+          if after_request | grep -E "saved state: [0-9]+ bytes saved in session $closed"; then exit 1; fi
+          # The file was gone before the app was ended...
+          [ "$file_while_running" = gone ]
+          # ...and the next launch, whatever its session, restored nothing.
+          grep -qF "saved state: scene connected" "$NEXT"
           [ "$(grep -c "touchdemo: restored" "$LOG")" -eq "$restored" ]
           if grep "saved state: restoring" "$NEXT"; then exit 1; fi
-          [ ! -e "$DATA/Library/Caches/stipple-saved-state" ]
+          [ ! -e "$FILE" ]
 
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4

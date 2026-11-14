@@ -18,8 +18,18 @@
 //! gone by then), which deletes the state saved under it, and the launch
 //! connects a new session, which wouldn't take it anyway (see
 //! [`saved_state`](super::saved_state)).
+//!
+//! UIKit may give that new session the old one's identifier, though: an
+//! iPad simulator does, and only says the old one was discarded after the
+//! scene connected, so a discard naming the connected session also takes
+//! back the state restored on connecting, if the app hasn't had it yet. And
+//! when the app asks UIKit to destroy its own session
+//! (`requestSceneSessionDestruction:`), the state goes right then and no
+//! more is saved under it: UIKit takes the request in its own time, the app
+//! saves as the scene goes to the background, and an iPad simulator's next
+//! launch connected the same identifier again without a word of a discard.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
 
 use super::{
@@ -31,6 +41,8 @@ thread_local! {
     /// The connected scene's session (retained), and its persistent
     /// identifier; none before a scene connects, or without scenes.
     static SESSION: RefCell<Option<(Id, String)>> = const { RefCell::new(None) };
+    /// Whether the scene connected with saved state, handed to the app.
+    static RESTORED: Cell<bool> = const { Cell::new(false) };
 }
 
 fn debug(args: std::fmt::Arguments<'_>) {
@@ -90,6 +102,7 @@ pub(super) fn restore_for_session(session: &str) {
             "dropped the state saved in session {by:?}: this is session {session:?}"
         )),
     }
+    RESTORED.with(|r| r.set(bytes.is_some()));
     crate::platform::saved_state::set_restored_state(bytes);
 }
 
@@ -124,7 +137,10 @@ extern "C" fn configuration_for_connecting(
 }
 
 /// `application:didDiscardSceneSessions:`: the user closed these sessions
-/// (swiped the app away); their saved state goes.
+/// (swiped the app away); their saved state goes. UIKit may name the
+/// identifier the scene just connected with, reused for a new session
+/// after the old one was destroyed: what was restored from the old one goes
+/// too, if the app hasn't taken it yet.
 extern "C" fn did_discard_sessions(_this: Id, _cmd: Sel, _app: Id, sessions: Id) {
     let ids: Vec<String> = unsafe {
         set_objects(sessions)
@@ -132,13 +148,27 @@ extern "C" fn did_discard_sessions(_this: Id, _cmd: Sel, _app: Id, sessions: Id)
             .map(|s| string_of(msg_id(s, sel("persistentIdentifier"))))
             .collect()
     };
-    let Some(dir) = super::saved_state::dir() else {
-        return;
-    };
-    let dropped = super::saved_state::discard(&dir, &ids);
+    let dropped =
+        super::saved_state::dir().is_some_and(|dir| super::saved_state::discard(&dir, &ids));
+    let connected = current_session();
+    let named = super::saved_state::names_connected(&ids, &connected);
+    let withdrawn = named && crate::platform::saved_state::take_restored_state().is_some();
+    let restored = RESTORED.with(Cell::get);
     debug(format_args!(
-        "sessions {ids:?} discarded{}",
-        if dropped { ", their state deleted" } else { "" }
+        "sessions {ids:?} discarded{}{}",
+        if dropped { ", their state deleted" } else { "" },
+        if !named {
+            String::new()
+        } else {
+            format!(
+                "; the connected session {connected:?} has their identifier: {}",
+                match (restored, withdrawn) {
+                    (_, true) => "the state restored from it withdrawn",
+                    (true, false) => "the state restored from it already went to the app",
+                    (false, false) => "nothing was restored from it",
+                }
+            )
+        }
     ));
 }
 
@@ -148,6 +178,9 @@ extern "C" fn will_connect(_this: Id, _cmd: Sel, scene: Id, session: Id, _option
     unsafe {
         let id = string_of(msg_id(session, sel("persistentIdentifier")));
         debug(format_args!("scene connected, session {id:?}"));
+        // Connected (again): a live session, whose state is saved, even
+        // after the app asked to destroy one of this identifier.
+        super::saved_state::reopen(&id);
         let session = msg_id(session, sel("retain"));
         let old = SESSION.with(|s| s.borrow_mut().replace((session, id.clone())));
         if let Some((old, _)) = old {
@@ -225,20 +258,34 @@ pub(super) fn register_scene_delegate() -> Class {
 }
 
 /// For self-tests: ask UIKit to destroy the connected scene's session, as
-/// the user swiping the app away in the app switcher does. `failed` hears
-/// UIKit's error, if it refuses. Returns the session's identifier, or `None`
-/// without a scene.
+/// the user swiping the app away in the app switcher does. The state saved
+/// under it goes now, and no more is saved (see
+/// [`close`](super::saved_state::close)): UIKit may never say it's done.
+/// `failed` hears UIKit's error, if it refuses (the session then lives on,
+/// and saves again). Returns the session's identifier, or `None` without a
+/// scene.
 pub(super) fn request_destruction(failed: fn(String)) -> Option<String> {
     let (session, id) = SESSION.with(|s| s.borrow().clone())?;
-    *FAILED.lock().unwrap_or_else(|e| e.into_inner()) = Some(failed);
+    *FAILED.lock().unwrap_or_else(|e| e.into_inner()) = Some((failed, id.clone()));
     unsafe {
         let app = msg_id(class("UIApplication"), sel("sharedApplication"));
         // UIKit only destroys a session where the app may have several
-        // (an iPad, with `UIApplicationSupportsMultipleScenes`).
-        debug(format_args!(
-            "supportsMultipleScenes={}",
-            super::msg_bool(app, sel("supportsMultipleScenes"))
-        ));
+        // (an iPad, with `UIApplicationSupportsMultipleScenes`); elsewhere
+        // it refuses, and the state stays.
+        let multiple = super::msg_bool(app, sel("supportsMultipleScenes"));
+        debug(format_args!("supportsMultipleScenes={multiple}"));
+        if multiple {
+            let dir = super::saved_state::dir();
+            let deleted = super::saved_state::close(dir.as_deref(), &id);
+            debug(format_args!(
+                "closing session {id:?}: {}; saving nothing more for it",
+                if deleted {
+                    "deleted the state saved in it"
+                } else {
+                    "no state was saved in it"
+                }
+            ));
+        }
         let block: *mut ErrorBlock = Box::leak(Box::new(ErrorBlock {
             isa: &raw const _NSConcreteGlobalBlock,
             flags: BLOCK_IS_GLOBAL,
@@ -260,8 +307,11 @@ pub(super) fn request_destruction(failed: fn(String)) -> Option<String> {
     Some(id)
 }
 
-/// Who hears that UIKit refused to destroy the session.
-static FAILED: std::sync::Mutex<Option<fn(String)>> = std::sync::Mutex::new(None);
+/// Who hears that UIKit refused to destroy the session, and which session.
+static FAILED: std::sync::Mutex<Option<Failed>> = std::sync::Mutex::new(None);
+
+/// The callback for UIKit's refusal, and the session it was asked to destroy.
+type Failed = (fn(String), String);
 
 unsafe extern "C" {
     static _NSConcreteGlobalBlock: c_void;
@@ -294,7 +344,10 @@ unsafe extern "C" fn destruction_failed(_block: *mut ErrorBlock, error: Id) {
     let what = unsafe { string_of(msg_id(error, sel("description"))) };
     debug(format_args!("destroying the session failed: {what}"));
     // UIKit may call it on another thread: the callback is a plain `fn`.
-    if let Some(failed) = *FAILED.lock().unwrap_or_else(|e| e.into_inner()) {
+    let failed = FAILED.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some((failed, id)) = failed {
+        // The session lives on: its state is saved again.
+        super::saved_state::reopen(&id);
         failed(what);
     }
 }

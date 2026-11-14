@@ -916,11 +916,14 @@ pub mod simulate {
 
     /// Ask UIKit to destroy the connected scene's session
     /// (`requestSceneSessionDestruction:options:errorHandler:`), as the user
-    /// swiping the app away in the app switcher does: the scene goes to the
-    /// background and disconnects, and `application:didDiscardSceneSessions:`
-    /// drops the state saved under it. `failed` hears UIKit's error, if it
-    /// refuses (maybe on another thread). Returns the session's identifier,
-    /// or `None` without a scene.
+    /// swiping the app away in the app switcher does. Where UIKit takes such
+    /// requests (`supportsMultipleScenes`), the state saved under the session
+    /// is deleted right away and none is saved under it from then on, as
+    /// UIKit takes the request in its own time (and an iPad simulator's next
+    /// launch may connect a session of the same identifier). `failed` hears
+    /// UIKit's error, if it refuses (maybe on another thread); the session
+    /// then saves again. Returns the session's identifier, or `None` without
+    /// a scene.
     pub fn destroy_scene_session(failed: fn(String)) -> Option<String> {
         scene::request_destruction(failed)
     }

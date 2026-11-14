@@ -173,6 +173,14 @@ the app switcher, UIKit destroys the session, calls
 gone), which deletes the file, and connects a new session, so the app starts
 afresh. That takes the `UIApplicationSceneManifest` above: an app without
 scenes isn't told about a swipe-away, and its state comes back after one too.
+The new session may carry the old one's identifier, though (an iPad
+simulator's does), with the discard only reported after the scene connected:
+a discard naming the connected session takes back the state restored on
+connecting, if the app hasn't had it yet. An app closing its own session
+(`requestSceneSessionDestruction:`, where UIKit allows it) loses the state
+right away: the backend deletes the file and saves nothing more under that
+session (until UIKit refuses, or the app comes back to the foreground),
+rather than wait for a discard UIKit may never report.
 See
 [window-lifecycle.md](../window-lifecycle.md#keeping-the-state-across-process-death).
 
@@ -287,10 +295,17 @@ background once more, ends it with `xcrun simctl terminate` (as iOS ends a
 suspended app) and launches it again, and checks the field's text came back
 through `restore_state`, in the same scene session. Then it launches it with
 `TOUCHDEMO_CLOSE_SCENE`: the app types into its field and, once CI sends it
-to the background (saving the state), asks UIKit to destroy its scene
-session (`requestSceneSessionDestruction:`, which takes the path of a
-swipe-away), and CI checks the state was saved, UIKit discarded the session,
-and the next launch is a new session that restores nothing. UIKit only
+to the background, asks UIKit to destroy its scene session
+(`requestSceneSessionDestruction:`, which takes the path of a swipe-away)
+before the save that comes as the app goes, and CI checks that save was
+declined, the file was gone while the app still ran, and the next launch
+restored nothing. It doesn't require a new session identifier or a discard:
+the first CI run of this step saw neither after the request. UIKit took the request without
+an error and never reported the session discarded, the next launch
+connected a session of the same identifier, and (before the backend dropped
+the state on the request) restored what was saved under it; the launch
+before that reported a discard naming the session it had just connected.
+Both are reported in the log. UIKit only
 destroys a session where the app may have several scenes, so this part runs
 on an iPad simulator, from a copy of the bundle with
 `<integer>2</integer>` added to `UIDeviceFamily` and

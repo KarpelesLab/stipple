@@ -27,10 +27,11 @@
 //!
 //! **Closing the scene (iOS).** Launched with `TOUCHDEMO_CLOSE_SCENE` set, it
 //! types "Not for later" into the field and waits to be sent to the
-//! background (where it saves the text); there it asks UIKit to destroy its
-//! scene session (`touchdemo: closing session Some("...")`), as the user
-//! swiping it away in the app switcher does. The state saved under the
-//! session is dropped with it, and the next launch starts afresh. UIKit only
+//! background (where it would save the text); there it asks UIKit to destroy
+//! its scene session (`touchdemo: closing session Some("...")`), as the user
+//! swiping it away in the app switcher does. Nothing is kept for the session
+//! from then on, and the next launch starts afresh, even when UIKit hands it
+//! a session of the same identifier (as an iPad simulator does). UIKit only
 //! takes the request on a device that supports multiple scenes (an iPad, with
 //! `UIApplicationSupportsMultipleScenes` in the manifest); an iPhone refuses
 //! it (`touchdemo: closing the session failed: ...`).
@@ -442,9 +443,9 @@ mod selftest {
     static CLOSE_ON_BACKGROUND: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
 
-    /// Type something to save, then, once in the background (the state
-    /// saved), close the scene's session as the user swiping the app away
-    /// does: the state goes with the session.
+    /// Type something to save, then, once in the background, close the
+    /// scene's session as the user swiping the app away does: the state goes
+    /// with the session.
     pub(super) fn close_scene(handle: &AppHandle<State>) {
         handle.after(Duration::from_millis(1500), |s| {
             s.field = EditBuffer::from_text("Not for later");
@@ -453,8 +454,9 @@ mod selftest {
         });
     }
 
-    /// The app went to the background: close the session if asked to. UIKit
-    /// takes the request later; the state is saved first, as the app goes.
+    /// The app went to the background: close the session if asked to. The
+    /// backend then keeps none of the state it would save next, as the app
+    /// goes, whenever UIKit takes the request.
     pub(super) fn on_background() {
         if CLOSE_ON_BACKGROUND.swap(false, Ordering::Relaxed) {
             let session = simulate::destroy_scene_session(|error| {

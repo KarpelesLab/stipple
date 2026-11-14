@@ -425,9 +425,12 @@ the same job (the iPhone refuses to destroy a session: "The current device
 does not support multiple scenes"), with `UIApplicationSupportsMultipleScenes`
 in a copy of the bundle: the kill there restores in the same session, then
 `touchdemo` destroys its own session (`requestSceneSessionDestruction:`,
-UIKit's discard path), and CI checks `application:didDiscardSceneSessions:`
-dropped the state and the next launch, a new session, restores nothing (added,
-not yet run; reported, not required). A real swipe in the app switcher isn't
+UIKit's discard path), and CI checks the state was dropped (the save declined,
+the file gone) and the next launch restores nothing (reported, not required;
+its first run failed: UIKit never reported the discard and the next launch
+reconnected the same session identifier, so the backend now drops the state
+on the request itself, and a discard naming the connected session takes back
+what was restored). A real swipe in the app switcher isn't
 scripted. Web: the tab's `sessionStorage`,
 written on `pagehide` and when the page is hidden, handed to the app before it
 starts; closing the tab drops it (a new tab starts without it); headless

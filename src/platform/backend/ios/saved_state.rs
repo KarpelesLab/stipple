@@ -19,7 +19,10 @@
 //! the app); after a swipe-away the session is gone, so the next launch
 //! connects a new one and the file is dropped, and
 //! `application:didDiscardSceneSessions:` deletes it as soon as UIKit says
-//! so. That's iOS's own rule for state restoration (and Android's for saved
+//! so (and takes back what was restored, when UIKit gave the new session the
+//! discarded one's identifier). An app closing its own session
+//! (`requestSceneSessionDestruction:`) drops the state there and then, and
+//! saves no more under it ([`close`]). That's iOS's own rule for state restoration (and Android's for saved
 //! instance state): a user's quit starts afresh. An app without scenes (no
 //! `UIApplicationSceneManifest` in its `Info.plist`) saves under the empty
 //! session, and as iOS doesn't tell it about a swipe-away, its state comes
@@ -107,6 +110,55 @@ pub(crate) fn discard(dir: &Path, sessions: &[String]) -> bool {
     }
 }
 
+/// Sessions the app asked UIKit to destroy in this process (see
+/// [`close`]). Read from UIKit's error handler too, on another thread.
+static CLOSING: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn closing() -> std::sync::MutexGuard<'static, Vec<String>> {
+    CLOSING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The app asked UIKit to destroy `session` (it closed its own window, as
+/// the user swiping it away does): what was saved under it goes now, and
+/// nothing more is (see [`is_closing`]), whatever UIKit does next. UIKit
+/// takes the request in its own time and only tells the app with
+/// `application:didDiscardSceneSessions:`, maybe at a later launch, and an
+/// iPad simulator's next launch even connects a session of the same
+/// identifier, so the request itself is what drops the state. Returns
+/// whether some was deleted.
+pub(crate) fn close(dir: Option<&Path>, session: &str) -> bool {
+    if session.is_empty() {
+        return false;
+    }
+    {
+        let mut closing = closing();
+        if !closing.iter().any(|s| s == session) {
+            closing.push(session.to_string());
+        }
+    }
+    dir.is_some_and(|dir| discard(dir, &[session.to_string()]))
+}
+
+/// Whether the app asked to destroy `session`: its state isn't saved.
+pub(crate) fn is_closing(session: &str) -> bool {
+    !session.is_empty() && closing().iter().any(|s| s == session)
+}
+
+/// `session` lives on after all (UIKit refused to destroy it, it came back
+/// to the foreground, or connected again): its state is saved again.
+pub(crate) fn reopen(session: &str) {
+    closing().retain(|s| s != session);
+}
+
+/// Whether UIKit discarding `sessions` names `connected`, the session this
+/// launch connected. UIKit may give the new session the identifier of the
+/// one it destroyed (an iPad simulator does, after `simctl terminate` of the
+/// app on screen), and says so after the scene connected: whatever was
+/// restored then came from the session the user closed, and goes.
+pub(crate) fn names_connected(sessions: &[String], connected: &str) -> bool {
+    !connected.is_empty() && sessions.iter().any(|s| s == connected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +221,44 @@ mod tests {
         assert_eq!(take(&dir, "A"), None);
         assert!(!discard(&dir, &["A".into()]), "nothing left");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn closing_a_session_drops_its_state_and_saves_no_more() {
+        let dir = temp("close");
+        store(&dir, "close-A", Some(b"screen 2"));
+        // Closing another session leaves it.
+        assert!(!close(Some(&dir), "close-B"));
+        assert_eq!(stored_session(&dir).as_deref(), Some("close-A"));
+        assert!(!is_closing("close-A"));
+        // Closing its own deletes it, whether or not UIKit ever discards
+        // the session...
+        assert!(close(Some(&dir), "close-A"));
+        assert!(!dir.join(NAME).exists());
+        assert!(is_closing("close-A") && is_closing("close-B"));
+        // ...so a launch connecting the same identifier finds nothing.
+        assert_eq!(take(&dir, "close-A"), None);
+        assert!(!close(Some(&dir), "close-A"), "closing twice");
+        assert!(!close(None, "close-C"), "no directory, nothing deleted");
+        assert!(is_closing("close-C"));
+        reopen("close-A");
+        assert!(!is_closing("close-A"), "lives on: saved again");
+        assert!(is_closing("close-B"));
+        reopen("close-B");
+        reopen("close-C");
+        // Without scenes there is no session to close.
+        assert!(!close(Some(&dir), ""));
+        assert!(!is_closing(""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_discard_may_name_the_connected_session() {
+        let ids = ["A".to_string(), "B".to_string()];
+        assert!(names_connected(&ids, "B"));
+        assert!(!names_connected(&ids, "C"));
+        // Without scenes nothing is connected.
+        assert!(!names_connected(&ids, ""));
+        assert!(!names_connected(&[String::new()], ""));
     }
 }
