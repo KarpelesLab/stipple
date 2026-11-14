@@ -2205,7 +2205,9 @@ const FUNCTION_KEYS: [KeyCode; 12] = [
 fn keysym_to_event(ks: u32, state: ButtonState, modifiers: Modifiers) -> Option<Event> {
     let code = match ks {
         0xff08 => Some(KeyCode::Backspace),
-        0xff09 => Some(KeyCode::Tab),
+        // Tab, and ISO_Left_Tab, which Shift+Tab gives (the Shift stays in
+        // `modifiers`: focus goes back).
+        0xff09 | 0xfe20 => Some(KeyCode::Tab),
         0xff0d => Some(KeyCode::Enter),
         0xff1b => Some(KeyCode::Escape),
         0xff51 => Some(KeyCode::ArrowLeft),
@@ -2604,6 +2606,7 @@ mod tests {
         assert_eq!(key(0xffc3), Some(KeyCode::F6));
         assert_eq!(key(0xffc9), Some(KeyCode::F12));
         assert_eq!(key(0xffca), None); // F13
+        assert_eq!(key(0xfe20), Some(KeyCode::Tab)); // ISO_Left_Tab (Shift+Tab)
         // Ctrl turns a printable key into a shortcut; without it, it's text.
         let ctrl = Modifiers {
             ctrl: true,

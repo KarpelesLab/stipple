@@ -33,6 +33,8 @@ use crate::platform::menu::{
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, WindowInfo, debug_window};
 use crate::render::{Pixmap, Surface};
 
+/// Keyboard focus through NSAccessibility (`AXFocused`, focus changes).
+mod ax_focus;
 /// `AXPress` on the elements of the controls a click activates.
 mod ax_press;
 /// Pacing animation frames by the display (`CVDisplayLink`).
@@ -736,6 +738,7 @@ unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id,
             )
         }
     };
+    unsafe { ax_focus::mark(el, node) };
     if !node.children.is_empty() {
         let arr = unsafe { msg_id(class("NSMutableArray"), sel("array")) };
         for child in &node.children {
@@ -1330,6 +1333,12 @@ fn register_view_class() -> Class {
             acc_children as *const c_void,
             id_types.as_ptr(),
         );
+        class_addMethod(
+            cls,
+            sel("accessibilityFocusedUIElement"),
+            ax_focus::focused_ui_element as *const c_void,
+            id_types.as_ptr(),
+        );
         text_input::add_methods(cls);
         dnd::add_methods(cls);
         lifecycle::add_window_methods(cls);
@@ -1517,8 +1526,13 @@ impl Window for MacWindow {
         if self.a11y_tree.borrow().as_ref() == Some(root) {
             return;
         }
+        // Focus that moved is announced, once the tree is the view's.
+        let moved = root.focus_moved_from(self.a11y_tree.borrow().as_ref());
         *self.a11y_tree.borrow_mut() = Some(root.clone());
         clear_ax_elements(self);
+        if let Some(path) = moved {
+            ax_focus::announce(self.view, &path);
+        }
     }
     fn set_cursor(&self, cursor: CursorIcon) {
         self.cursor.set(cursor);

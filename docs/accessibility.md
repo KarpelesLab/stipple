@@ -33,6 +33,38 @@ says or does:
 
 The rest of this page says what each check proves, and what it doesn't.
 
+## Keyboard focus
+
+Text fields, and other elements with a key handler, take keyboard focus.
+So do buttons and the other controls a tap activates: an element with
+`on_tap` whose role is a button (the role a tap handler implies), checkbox,
+switch, tab, select, list or tree item, table row, cell or column header
+(`stipple::core::tab_focus`). Menu items don't: an open menu takes the
+arrow keys, Enter and Escape itself. Neither does a control inside another
+focusable element (a password field's reveal button is part of the field,
+a list's rows are part of a list that takes focus as a whole).
+
+- Tab moves focus to the next of these in the tree's order, Shift+Tab to
+  the previous one, wrapping round. While a modal overlay (a dialog, a
+  message box) is up, Tab stays in it.
+- Enter or Space presses the focused button: its `on_tap` handler runs, as
+  for a tap at its middle. Other keys don't reach it.
+- The focus ring goes round it, a little outside its edge (so it shows on a
+  button filled with the ring's color).
+- The accessibility tree says it is focused, so each platform announces the
+  move as it does for a field: UIA's focus-changed event (Windows),
+  `AXFocusedUIElementChanged` (macOS), `object:state-changed:focused` and
+  `focus:` (AT-SPI), `TYPE_VIEW_FOCUSED` (Android).
+- A click or a tap doesn't focus a button, as AppKit's buttons and the web's
+  `:focus-visible` behave: a pointer user never sees a ring left on the
+  button they clicked. A click on a button takes the focus away from a field,
+  as before; a click on a field focuses it.
+
+`App::focus_next` and `App::focus_prev` move it from tests. The App tests in
+`src/tab_focus_tests.rs` tab across a field, two buttons and a checkbox
+both ways, press with Enter and Space, check the ring's pixels, that a click
+leaves no focus on a button and that a modal dialog keeps Tab inside it.
+
 ## Windows
 
 The window answers `WM_GETOBJECT` with the root of a tree of hand-built UI
@@ -98,6 +130,10 @@ commands (`keybd_event`, which NVDA's keyboard hook takes as typed keys):
   "Row 0" "button";
 - NVDA+Enter (activate the navigator object): NVDA invokes the button
   through UIA, the app logs the tap, and NVDA+B then reads "Rows tapped: 1";
+- the keyboard alone: Tab until NVDA announces "Row 0" (the app focuses the
+  button and raises the focus event), which it must call a button; Space and
+  then Enter press it (the app logs both taps); Shift+Tab goes back to the
+  field ("edit");
 - the mouse moved over "Row 1": NVDA's mouse tracking hit-tests through UIA
   and says what is there (reported, not required).
 
@@ -105,10 +141,10 @@ The job uploads NVDA's whole log. It passes in CI (the window's name isn't
 spoken on the foreground change alone, only with the first focus inside
 it, so that is reported, not required); the job is required.
 
-Not covered: Stipple's buttons don't take keyboard focus (only fields and
-other elements with key handlers do), so Tab can't reach them and Enter or
-Space can't press them; with NVDA they are reached with the object
-navigator, NVDA+B or the mouse, and pressed with NVDA+Enter. No Value,
+The keyboard steps (Tab to the button, Space, Enter, Shift+Tab) were added
+after the rest passed and haven't been seen in CI yet.
+
+Not covered: No Value,
 Toggle, Selection, ExpandCollapse, Scroll or Text patterns (a field's text is
 its name, and can't be set through UIA); of UIA's events only the focus
 change is raised (no structure or property changes), so a screen reader sees
@@ -119,7 +155,12 @@ other changes only when it asks again. Narrator and JAWS aren't tried.
 The view is an accessible `AXGroup` whose `accessibilityChildren` are
 `NSAccessibilityElement`s built from the tree, each with its role
 (`AXButton`, `AXTextField`, `AXStaticText`...), label and frame in screen
-coordinates (the node's bounds converted through the view's window).
+coordinates (the node's bounds converted through the view's window). The
+focused node's element is `AXFocused`, the view answers
+`accessibilityFocusedUIElement` with it (what an assistive app reads as the
+application's `AXFocusedUIElement`), and when focus moves to another node
+the window posts `AXFocusedUIElementChanged` on its element, which VoiceOver
+follows.
 
 **CI** (`visual-macos`, *Accessibility from outside the app*): `axprobe`
 (`.github/a11y/macos/axprobe.swift`) reads a running `touchdemo` through the
@@ -157,12 +198,15 @@ through the window depth first (`tell vo cursor to move right`, `move into
 item`, `move out of item`, or the VO keys through System Events if
 AppleScript refuses one), logging each phrase VoiceOver speaks (`content of
 last phrase`), until it reaches "Row 0": the phrase must say it is a button.
-`perform action` (VO-Space) must then press it: the app logs the tap. The
-step passes in CI and is required (it exits 3, with a warning, when the
-runner doesn't let AppleScript control VoiceOver).
+`perform action` (VO-Space) must then press it: the app logs the tap. Then
+the keyboard alone, typed through System Events: Tab twice focuses "Row 0"
+(what VoiceOver says then is logged, not required), and Space and Return
+must each press it (the app logs the taps); these were added later and
+haven't run in CI yet. The step passes in CI and is required (it exits 3,
+with a warning, when the runner doesn't let AppleScript control VoiceOver).
 
-Not covered: there's no `AXValue` for fields, no focus or layout
-notifications, and the elements are built again each time AppKit asks for
+Not covered: there's no `AXValue` for fields, no layout notifications (the
+focus change is the only one posted), and the elements are built again each time AppKit asks for
 them (after the tree changes or the window moves).
 
 ## iOS
@@ -374,6 +418,10 @@ on), from its own process:
 - follows the entry's `labelled-by` relation to its caption "Note" (on
   Linux, `touchdemo` puts a "Note" label beside the field), and the
   caption's `label-for` back to the entry;
+- presses Tab again and gets `object:state-changed:focused` and `focus:` for
+  the push button "Row 0", whose state says focused; Space and then Enter
+  (`xdotool key space`, `Return`) press it, the app logging both taps; and
+  Shift+Tab focuses the entry again;
 - stops this session's `at-spi2-registryd` (its process found through the
   accessibility bus, never another session's), lets the bus start a new one
   (or starts it), and finds `touchdemo` among the new registry's
@@ -381,16 +429,18 @@ on), from its own process:
 
 This is a required check; it passes locally under Xvfb (at-spi2-core 2.58,
 pyatspi 2.58), and passed in CI before the caret, selection, relation and
-registry-restart checks were added (those pass locally; not yet seen in CI).
+registry-restart checks and the button's keyboard checks were added (those
+pass locally; not yet seen in CI).
 Without the re-registration the last check fails, as it should. A further
 step, *Survive the accessibility bus restarting*
 (`.github/scripts/atspi-bus-restart.sh`), kills `at-spi-bus-launcher`
 itself, asks for the bus again, and a fresh pyatspi client must find the
 app on the new bus; it passes locally and doesn't fail the job yet. The same
-walk under headless sway (`wtype` for the Tab) and **Orca** itself
+walk under headless sway (`wtype` for the keys) and **Orca** itself
 (`.github/scripts/orca-linux.sh`: Orca runs headless with its debug log,
 which records every utterance as `SPEECH OUTPUT`, and must speak the entry
-after Tab) run in the same job, pass in CI and are required too. The sway
+after Tab; then, added later and not yet run in CI, "Row 0" after another
+Tab, and Space must press it) run in the same job, pass in CI and are required too. The sway
 walk runs the new checks as well; they haven't been run under a Wayland
 compositor outside CI.
 

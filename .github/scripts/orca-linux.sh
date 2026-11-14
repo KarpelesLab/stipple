@@ -3,8 +3,10 @@
 # and check what it says: Orca logs every utterance ("SPEECH OUTPUT: '...'")
 # to its debug file whether or not a speech synthesizer can be heard. Tab
 # moves the focus into the app's text field and typing echoes into it; Orca
-# must speak the window and the focused entry. Runs inside a private session
-# bus (dbus-run-session); the display is the caller's.
+# must speak the window and the focused entry. Tab again focuses the button
+# "Row 0", which Orca must speak, and Space (TAB_COMMAND with "space" for
+# "Tab") presses it: the app logs the tap. Runs inside a private session bus
+# (dbus-run-session); the display is the caller's.
 #
 # usage: orca-linux.sh APP OUT_DIR TAB_COMMAND TYPE_COMMAND
 set -uo pipefail
@@ -28,6 +30,10 @@ $TAB
 sleep 4
 $TYPE
 sleep 4
+$TAB
+sleep 4
+${TAB/Tab/space}
+sleep 3
 kill "$ORCA_PID" "$APP_PID" 2>/dev/null
 wait 2>/dev/null
 
@@ -45,3 +51,19 @@ grep -qiE "entry|text" "$OUT/orca-speech.txt" || {
   exit 1
 }
 echo "ok: Orca spoke the focused entry"
+# Tab on to the button: Orca speaks it, and Space presses it.
+status=0
+if grep -q "Row 0" "$OUT/orca-speech.txt"; then
+  echo "ok: Orca spoke the focused button 'Row 0'"
+else
+  echo "FAILED: Orca never spoke the button 'Row 0' after Tab"
+  status=1
+fi
+if grep -q "^touchdemo: row 0 tapped" "$OUT/orca-app.log"; then
+  echo "ok: Space on the focused button pressed it: the app logged the tap"
+else
+  echo "FAILED: Space on the focused button didn't press it"
+  tail -n 20 "$OUT/orca-app.log"
+  status=1
+fi
+exit $status

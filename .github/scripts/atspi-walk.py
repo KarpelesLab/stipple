@@ -4,8 +4,9 @@ as Orca does: find the app among the registry's applications, walk its tree
 (roles, names, extents on screen), hit-test a point, run a button's action
 and see the app react (its tree and its log), then press Tab and see the
 focus event arrive for a control; type into the text field, read and move
-its caret and selection, follow its labelled-by relation to its caption; and
-finally restart the registry (at-spi2-registryd) and find the app again,
+its caret and selection, follow its labelled-by relation to its caption; Tab
+on to a button, press it with Space and Enter, and go back with Shift+Tab;
+and finally restart the registry (at-spi2-registryd) and find the app again,
 re-registered. The Linux counterpart of uia-walk.ps1.
 
 usage: atspi-walk.py APP_NAME APP_LOG TAB_COMMAND...
@@ -267,6 +268,55 @@ if field is not None:
                 targets += [rel.getTarget(i) for i in range(rel.getNTargets())]
         check(any(t is not None and t.getRole() == pyatspi.ROLE_ENTRY for t in targets),
               "...and 'Note' is the label for the entry")
+
+
+# Buttons take keyboard focus too: Tab on from the field to 'Row 0' (its
+# state-changed:focused and focus:), Space and Enter press it, Shift+Tab goes
+# back.
+def keys(name):
+    """TAB_COMMAND with another key (space, Return) instead of Tab, or Shift+Tab."""
+    if name == "shift+Tab":
+        if tab_cmd[0] == "wtype":
+            return ["wtype", "-M", "shift", "-k", "Tab", "-m", "shift"]
+        return [a.replace("Tab", "shift+Tab") for a in tab_cmd]
+    return [a.replace("Tab", name) for a in tab_cmd]
+
+
+def await_focus(cmd):
+    del events[:]
+    subprocess.run(cmd, check=False)
+    for _ in range(40):
+        pump(0.25)
+        hits = [e for e in events if e[0].startswith("object:state-changed:focused") and e[1] == 1]
+        if hits:
+            return hits[-1]
+    return None
+
+
+def taps():
+    with open(app_log) as f:
+        return sum(1 for line in f if line.startswith("touchdemo: row 0 tapped"))
+
+
+if row0 is not None and field is not None:
+    focused = await_focus(tab_cmd)
+    check(focused is not None and focused[2] == pyatspi.ROLE_PUSH_BUTTON and focused[3] == "Row 0",
+          "Tab from the field focused the push button 'Row 0' ({})".format(focused))
+    check(any(e[0] == "focus:" for e in events), "...with a focus: event")
+    check(row0.getState().contains(pyatspi.STATE_FOCUSED), "'Row 0' says it is focused")
+    for key, what in (("space", "Space"), ("Return", "Enter")):
+        before = taps()
+        subprocess.run(keys(key), check=False)
+        pressed = False
+        for _ in range(40):
+            pump(0.25)
+            if taps() > before:
+                pressed = True
+                break
+        check(pressed, "{} on the focused 'Row 0' pressed it: the app logged the tap".format(what))
+    back = await_focus(keys("shift+Tab"))
+    check(back is not None and back[2] == pyatspi.ROLE_ENTRY,
+          "Shift+Tab went back to the entry ({})".format(back))
 
 
 def a11y_bus():

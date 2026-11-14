@@ -16,14 +16,15 @@
 #   5. NVDA+Enter (activate the navigator object): NVDA invokes the button
 #      (UIA Invoke), the app logs the tap, and NVDA+B then reads
 #      "Rows tapped: 1";
-#   6. the mouse moved over "Row 1": NVDA's mouse tracking hit-tests through
+#   6. the keyboard alone: Tab from the field to "Row 0" (the app moves its
+#      focus to the button and raises UIA's focus-changed event; NVDA says
+#      "Row 0 button"), Space presses it and Enter presses it again (the app
+#      logs both taps), and Shift+Tab goes back to the field ("edit");
+#   7. the mouse moved over "Row 1": NVDA's mouse tracking hit-tests through
 #      UIA and says "Row 1" (reported, not required).
 #
 # NVDA's key here is Insert. Keys are typed with keybd_event, so they reach
 # NVDA's keyboard hook as typed keys (NVDA handles injected keys by default).
-# Stipple's buttons don't take keyboard focus (only fields and other
-# elements with key handlers do), so Tab can't reach "Row 0"; the object
-# navigator and NVDA+Enter are how an NVDA user reaches and presses it.
 param(
   [string]$Exe = ".\target\release\touchdemo.exe",
   [string]$Out = "visual_output",
@@ -218,8 +219,8 @@ function Await-Speech($from, [string[]]$all, $what, [int]$seconds = 8) {
 
 # ---- keys --------------------------------------------------------------------
 
-$VK = @{ Insert = 0x2D; Shift = 0xA0; Right = 0x27; Down = 0x28; Enter = 0x0D; Tab = 0x09; B = 0x42; Backspace = 0x08; Control = 0xA2 }
-$SCAN = @{ Insert = 0x52; Shift = 0x2A; Right = 0x4D; Down = 0x50; Enter = 0x1C; Tab = 0x0F; B = 0x30; Backspace = 0x0E; Control = 0x1D }
+$VK = @{ Insert = 0x2D; Shift = 0xA0; Right = 0x27; Down = 0x28; Enter = 0x0D; Tab = 0x09; B = 0x42; Backspace = 0x08; Control = 0xA2; Space = 0x20 }
+$SCAN = @{ Insert = 0x52; Shift = 0x2A; Right = 0x4D; Down = 0x50; Enter = 0x1C; Tab = 0x0F; B = 0x30; Backspace = 0x0E; Control = 0x1D; Space = 0x39 }
 $EXTENDED = @{ Insert = $true; Right = $true; Down = $true }
 function Key-Event($name, [bool]$up) {
   $flags = 0
@@ -378,7 +379,37 @@ try {
     }
   }
 
-  # 6. The mouse over "Row 1": NVDA's mouse tracking says what is there.
+  # 6. The keyboard alone: Tab reaches "Row 0" (from wherever focus is: the
+  # press above was a click, which leaves a button unfocused), Space and
+  # Enter press it, Shift+Tab goes back.
+  [void](Front $hwnd)
+  $onButton = $false
+  for ($i = 0; $i -lt 4 -and -not $onButton; $i++) {
+    $m = Mark
+    Chord @('Tab')
+    $hit = Await-Speech $m @("'Row 0'") "Tab to Row 0" 3
+    $onButton = $hit -ne $null
+  }
+  Check $onButton "Tab reached 'Row 0' and NVDA announced it"
+  if ($onButton) {
+    Check ($hit -match "'button'") "NVDA said the focused 'Row 0' is a button"
+    foreach ($key in @('Space', 'Enter')) {
+      $before = @(Select-String -Path $appLog -Pattern '^touchdemo: row 0 tapped').Count
+      Chord @($key)
+      $tapped = $false
+      for ($i = 0; $i -lt 20 -and -not $tapped; $i++) {
+        Start-Sleep -Milliseconds 250
+        $tapped = @(Select-String -Path $appLog -Pattern '^touchdemo: row 0 tapped').Count -gt $before
+      }
+      Check $tapped "$key on the focused 'Row 0' pressed it: the app logged the tap"
+    }
+    $m = Mark
+    Chord @('Shift', 'Tab')
+    $hit = Await-Speech $m @("'edit'") "Shift+Tab" 4
+    Check ($hit -ne $null) "Shift+Tab went back to the field ('edit')"
+  }
+
+  # 7. The mouse over "Row 1": NVDA's mouse tracking says what is there.
   Add-Type -AssemblyName UIAutomationClient
   try {
     $win = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)

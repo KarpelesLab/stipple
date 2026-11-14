@@ -121,9 +121,28 @@ struct DropTarget<S> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ActionId(pub(crate) u32);
 
-/// An opaque handle to a focusable element with a registered key handler.
+/// An opaque handle to a focusable element: one with a registered key
+/// handler, or a button (or another control a tap activates) taking keyboard
+/// focus through its tap handler (see [`tab_focus`](crate::core::tab_focus)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FocusId(pub(crate) u32);
+
+impl FocusId {
+    /// The bit that marks a button's focus, made from its [`ActionId`]: the
+    /// key handlers' ids count from 0 and never reach it.
+    const TAP: u32 = 1 << 31;
+
+    /// The focus of the control whose tap handler is `action`.
+    pub(crate) fn tap(action: ActionId) -> Self {
+        FocusId(Self::TAP | action.0)
+    }
+
+    /// Whether this is a button's focus ([`tap`](Self::tap)), with no key
+    /// handler behind it.
+    pub(crate) fn is_tap(self) -> bool {
+        self.0 & Self::TAP != 0
+    }
+}
 
 /// An opaque handle to an element with a registered drag handler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1573,7 +1592,9 @@ fn first_text_pos(node: &LayoutNode) -> Option<(TextPosId, &LayoutNode)> {
 }
 
 /// Find the [`FocusId`] of the top-most focusable node containing `point`
-/// (used for click-to-focus).
+/// (used for click-to-focus). A button's focus (see
+/// [`tab_focus`](crate::core::tab_focus)) is passed over: a click doesn't
+/// focus a button.
 pub fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
@@ -1586,7 +1607,8 @@ pub fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
             return Some(id);
         }
     }
-    if node.focus.is_some() && node.bounds.contains(point) {
+    // A button's focus (see `tab_focus`) comes from the keyboard only.
+    if node.focus.is_some_and(|f| !f.is_tap()) && node.bounds.contains(point) {
         node.focus
     } else {
         None

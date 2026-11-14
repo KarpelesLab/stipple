@@ -27,6 +27,7 @@ How to build, package and run on each platform, and what works there today.
 | Touch scrolling (drag, fling, sideways strips) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ✅ ⁶⁰ |
 | Touch gestures: long press for the context menu, pinch and two-finger pan (`on_pinch`) | — | — | — | ✅ ⁶⁰ | ✅ ⁶⁰ | ✅ ⁶⁰ |
 | Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹² |
+| Keyboard focus on buttons and toggles (Tab, Shift+Tab, Enter / Space) | ✅ ⁷⁰ | ✅ ⁷⁰ | ✅ ⁷⁰ | hardware keyboard ⁷⁰ | ✅ ⁷⁰ | ✅ ⁷⁰ |
 | Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ✅ ¹⁹ | ✅ ¹² |
@@ -457,8 +458,9 @@ hit-tests it, invokes a button and reads the focus after a Tab (passing in
 CI). A focus move raises UIA's focus-changed event, and a window's root is
 named by its title. NVDA itself is driven in CI: its log of what it says
 must name the window, the field Tab focuses and "Row 0" "button", and
-NVDA+Enter must press it (passing in CI; required). Buttons don't take keyboard focus, so Tab
-can't reach them. No Value, Toggle, Scroll or Text patterns, and no
+NVDA+Enter must press it (passing in CI; required); then Tab must reach
+"Row 0", NVDA announce it, and Space and Enter press it (added later, not
+yet run in CI). No Value, Toggle, Scroll or Text patterns, and no
 structure or property-change events. See
 [accessibility.md](accessibility.md#windows).
 
@@ -468,7 +470,9 @@ AX API, as VoiceOver does (passing in CI). Buttons and the other controls a
 click activates answer `AXPress` (VoiceOver's VO-Space), checked by the same
 probe, and VoiceOver itself is driven through its AppleScript interface: it
 must speak "Row 0" as a button and press it (both passing in CI;
-required). See
+required). The focused node is `AXFocused` and the application's
+`AXFocusedUIElement`, and a focus move posts `AXFocusedUIElementChanged`
+(added later, not yet seen in CI). See
 [accessibility.md](accessibility.md#macos).
 
 ⁶⁹ In the shared core, so the same everywhere: `Cx::memo` and `Cx::derive`,
@@ -478,6 +482,18 @@ of reused subtrees, damage of a moving element, the same pixels culled or
 not), with a benchmark of a 500-row list. On X11, CI checks that `hoverdemo`'s
 hover fade is drawn without building the view; the other backends take the
 same wake path, unchecked there. See [performance.md](performance.md).
+
+⁷⁰ In the shared core: buttons and the other controls a tap activates
+(checkboxes, switches, tabs, selects, list and tree items, rows, cells,
+column headers; not menu items) join the Tab order, Shift+Tab goes back,
+Enter or Space presses the focused one, the ring goes round it, and a click
+doesn't focus it. App-tested; on X11, CI tabs from the field to a button in
+`touchdemo` with `xdotool` and presses it with Space and Enter, and the
+AT-SPI walk sees the button's focus events (both pass locally under Xvfb).
+The focus reaches each platform's accessibility layer as a field's does;
+the NVDA, VoiceOver and Orca steps that press a button from the keyboard
+were added with it and haven't run in CI yet. Other backends build-checked.
+See [accessibility.md](accessibility.md#keyboard-focus).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

@@ -87,6 +87,28 @@ jobs:
           grep -q 'cursor Pointer' visual_output/app.log
           grep -q 'cursor Default' visual_output/app.log
 
+      # Buttons take keyboard focus: in touchdemo (a text field above rows of
+      # buttons) Tab focuses the field, Tab again "Row 0" (its focus ring is
+      # in the screenshot), Space and Enter press it (the app logs each tap),
+      # Shift+Tab goes back to the field and typing reaches it again.
+      - name: Tab to a button, press it with Space and Enter
+        env:
+          DISPLAY: ":99"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          cargo build --release -p touchdemo
+          ./target/release/touchdemo > visual_output/button-focus.log 2>&1 &
+          TOUCH_PID=$!
+          sleep 4
+          xdotool key Tab; sleep 0.5; xdotool key Tab; sleep 0.5
+          import -window root -crop 360x720+0+0 +repage visual_output/stipple-x11-button-focus.png
+          xdotool key space; sleep 0.5; xdotool key Return; sleep 0.5
+          xdotool key shift+Tab; sleep 0.5; xdotool type --delay 100 ok; sleep 1
+          kill "$TOUCH_PID" 2>/dev/null || true
+          cat visual_output/button-focus.log
+          [ "$(grep -c '^touchdemo: row 0 tapped' visual_output/button-focus.log)" -eq 2 ]
+          grep -q '^touchdemo: text "ok"' visual_output/button-focus.log
+
       - name: Screenshot the native gallery
         env:
           DISPLAY: ":99"
@@ -3397,8 +3419,10 @@ jobs:
       # the field (EditableText), reads its caret, selects "ell" and moves
       # the caret (Text.SetSelection / SetCaretOffset, with
       # text-selection-changed and text-caret-moved events), follows its
-      # labelled-by relation to its caption and back (label-for), then
-      # restarts at-spi2-registryd and finds the app registered again.
+      # labelled-by relation to its caption and back (label-for), presses Tab
+      # again for the button "Row 0", Space and Enter pressing it, and
+      # Shift+Tab back, then restarts at-spi2-registryd and finds the app
+      # registered again.
       - name: Read and drive a running X11 window through AT-SPI (out of process)
         run: |
           Xvfb :99 -screen 0 1024x768x24 &
@@ -3417,8 +3441,9 @@ jobs:
             bash .github/scripts/atspi-bus-restart.sh target/release/touchdemo visual_output
 
       # Orca itself, headless: its debug log records every utterance whether
-      # or not a synthesizer is heard. Required, after passing in every run
-      # since it landed.
+      # or not a synthesizer is heard; it must speak the field after Tab, then
+      # the button "Row 0" after another Tab, which Space presses. Required,
+      # after passing in every run since it landed.
       - name: Orca speaks the focused control after Tab (X11)
         run: |
           DISPLAY=:99 dbus-run-session -- bash .github/scripts/orca-linux.sh \
@@ -4555,7 +4580,8 @@ jobs:
   # it comes to the front, the field when Tab focuses it (UIA's focus-changed
   # event), the whole window read with NVDA+B ("Row 0" "button"), the object
   # navigator moved to "Row 0" and NVDA+Enter pressing it (the app counts the
-  # tap). See .github/scripts/nvda-windows.ps1 and docs/accessibility.md.
+  # tap), then Tab focusing "Row 0" and Space and Enter pressing it. See
+  # .github/scripts/nvda-windows.ps1 and docs/accessibility.md.
   # Required, after passing in every run since it landed.
   screen-reader-windows:
     name: Screen reader (NVDA / Windows)

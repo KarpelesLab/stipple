@@ -328,7 +328,11 @@ fn a_closing_popup_is_drawn_but_clicks_focus_and_readers_go_past_it() {
     let _ = app.render_frame();
     let mut focusables = Vec::new();
     crate::core::collect_focusables(tree(&app), &mut focusables);
-    assert_eq!(focusables.len(), 1, "only the select's button");
+    assert_eq!(
+        focusables.len(),
+        2,
+        "only the select's button and the target under it"
+    );
     let a11y = crate::core::a11y::accessibility_tree(tree(&app), None);
     assert!(
         !a11y.descendants().iter().any(|n| n.name == "Small"),

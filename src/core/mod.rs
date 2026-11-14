@@ -44,6 +44,7 @@ mod pointer_events;
 pub(crate) mod presence;
 mod render;
 pub mod runtime;
+pub mod tab_focus;
 pub(crate) mod touch;
 pub(crate) mod transition;
 
@@ -95,6 +96,7 @@ pub use runtime::{
     find_focus, find_scroll, find_text_pos, first_text, focus_at, hit_test, local_point,
     node_to_window, scroll_at, scroll_targets_at, text_pos_at, viewport_at,
 };
+pub use tab_focus::promote_tap_focus;
 pub use transition::{AnimProp, Transition};
 
 // The font type lives in stipple::render; re-export so callers of the layout/paint

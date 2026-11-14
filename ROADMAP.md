@@ -1735,11 +1735,22 @@ Most input only works on X11 today.
   them); UIA has no Value, Toggle, Selection, ExpandCollapse, Scroll or Text
   patterns and raises only the focus-changed event (no structure or property
   changes); macOS elements have no value for fields; no platform posts
-  announcements for live regions (toasts). Buttons (`on_tap` elements) don't
-  take keyboard focus, so Tab can't reach them and Enter / Space can't press
-  them: a keyboard or screen-reader user reaches them only through the
-  screen reader's own navigation (NVDA's object navigator, VoiceOver's
-  cursor) and presses them with its activate command.
+  announcements for live regions (toasts).
+- ✅ Keyboard focus for buttons and the other controls a tap activates
+  (`core::tab_focus`): an `on_tap` element whose role is a button, checkbox,
+  switch, tab, select, list or tree item, row, cell or column header (not a
+  menu item, nor a control inside another focusable) joins the Tab order in
+  tree order; Shift+Tab goes back (X11 now maps ISO_Left_Tab to Tab); a
+  modal overlay keeps Tab inside it; Enter or Space presses the focused one
+  as a tap at its middle; the focus ring stands off its edge; a click doesn't
+  focus it, so pointer users see no stray ring. Its focus id comes from its
+  tap handler's, so fields' ids don't shift. The focus reaches UIA, AT-SPI
+  and Android as a field's does; macOS now marks the focused element
+  `AXFocused`, answers `accessibilityFocusedUIElement` and posts
+  `AXFocusedUIElementChanged`. App tests; CI on X11 (`visual-x11`: Tab, Space,
+  Return, Shift+Tab into `touchdemo`; the AT-SPI walk's button focus events),
+  passing locally under Xvfb; the NVDA, VoiceOver and Orca scripts tab to
+  "Row 0" and press it with Space and Enter (not yet run in CI).
 - ⬜ Try the real screen readers: VoiceOver (macOS and iOS), TalkBack,
   Narrator / NVDA, Orca, by a person, on each platform.
 - ✅ Images on the GPU path, so OS-drawn controls render under `App::render_with`;

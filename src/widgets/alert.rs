@@ -19,14 +19,13 @@ use super::{PasswordField, Variant, button_variant, placeholder};
 const WIDTH: f64 = 400.0;
 
 /// Draw the first message box waiting on `handle` as a modal overlay, if
-/// there is one. Returns the focus ids it registered: the first, and the one
-/// that should hold focus while it's up (its text field, or else its default
-/// button).
+/// there is one. Returns the focus that should be in it while it's up (its
+/// text field, or else its default button).
 pub(crate) fn overlay<S: 'static>(
     cx: &mut Cx<S>,
     theme: &Theme,
     handle: &AppHandle<S>,
-) -> Option<(FocusId, FocusId)> {
+) -> Option<FocusId> {
     let AlertView { id, mb, input } = handle.alert_view()?;
     let p = theme.palette;
     let labels = mb.button_labels();
@@ -90,8 +89,6 @@ pub(crate) fn overlay<S: 'static>(
             .align(Align::Start, Align::Start),
     ];
 
-    // The text field registers first, so its id is the first one here.
-    let mut first = None;
     let mut target = None;
     if let Some(input) = &input {
         let h = handle.clone();
@@ -155,7 +152,6 @@ pub(crate) fn overlay<S: 'static>(
             }
         };
         let field = field.width(WIDTH - 2.0 * theme.spacing.lg);
-        first = field.focus;
         target = field.focus;
         rows.push(field);
     }
@@ -177,7 +173,6 @@ pub(crate) fn overlay<S: 'static>(
                 b = b.on_key(cx, move |s: &mut S, k| {
                     keys(s, k);
                 });
-                first = first.or(b.focus);
                 target = target.or(b.focus);
             }
             b
@@ -216,5 +211,5 @@ pub(crate) fn overlay<S: 'static>(
         modal: true,
         dismiss: None,
     });
-    Some((first?, target?))
+    target
 }

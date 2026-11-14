@@ -83,7 +83,7 @@ impl<S: 'static> App<S> {
 
     /// Tab was pressed and no menu took it: an element that captures Tab
     /// gets it (as a tab character when it's plain Tab), otherwise focus
-    /// moves on. Returns whether anything changed.
+    /// moves on (back, with Shift). Returns whether anything changed.
     pub(crate) fn tab_key(&mut self, idx: usize, modifiers: Modifiers) -> bool {
         let pane = &self.panes[idx];
         let captures = pane.input_viewport.is_none()
@@ -93,7 +93,7 @@ impl<S: 'static> App<S> {
                 .and_then(|t| focused_config(t, pane.focused))
                 .is_some_and(|k| k.captures_tab);
         if !captures {
-            return self.pane_focus_next(idx);
+            return self.pane_focus_step(idx, modifiers.shift);
         }
         match crate::core::keys::captured_tab_input(modifiers.shift) {
             Some(input) => self.pane_press_key(idx, input),

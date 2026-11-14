@@ -53,6 +53,8 @@ mod reactivity_tests;
 pub mod render;
 pub mod style;
 #[cfg(test)]
+mod tab_focus_tests;
+#[cfg(test)]
 mod touch_tests;
 mod web_app;
 pub mod widgets;
@@ -64,9 +66,9 @@ pub use platform::Lifecycle;
 
 use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
-    KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_focusables,
-    collect_viewports, context_at, drag_hit_at, find_action, find_focus, find_text_pos, focus_at,
-    hit_test, layout_with_direction, measure, paint_focus, paint_hover, text_pos_at, viewport_at,
+    KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_viewports,
+    context_at, drag_hit_at, find_action, find_focus, find_text_pos, focus_at, hit_test,
+    layout_with_direction, measure, paint_focus, paint_hover, text_pos_at, viewport_at,
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::{
@@ -220,8 +222,9 @@ impl ClickCounter {
 }
 
 /// Logical-pixel margin added around a focused element's bounds so the damage
-/// region covers the focus ring (a 2px stroke straddling the bounds).
-const FOCUS_RING_MARGIN: f64 = 2.0;
+/// region covers the focus ring (a 2px stroke straddling the bounds, or
+/// standing off a button's by `tab_focus::RING_OFFSET`).
+const FOCUS_RING_MARGIN: f64 = 2.0 + crate::core::tab_focus::RING_OFFSET;
 
 /// Grow `r` by `m` logical pixels on every side.
 fn inflate(r: Rect, m: f64) -> Rect {
@@ -389,6 +392,9 @@ struct Pane<S> {
     primary: bool,
     // While a drawn message box is up, the focus to give back when it goes.
     alert_return: Option<Option<FocusId>>,
+    // With a modal overlay up, how many of the root's layers it and those
+    // above it take, at the end: Tab stays among them (see `tab_focus`).
+    modal_layers: Option<usize>,
     // The element showing input-method composition text, so it can be told to
     // drop it when focus moves away mid-composition.
     preedit_owner: Option<FocusId>,
@@ -486,6 +492,7 @@ impl<S: 'static> Pane<S> {
             secure_sent: false,
             primary: false,
             alert_return: None,
+            modal_layers: None,
             preedit_owner: None,
             option_sent: Default::default(),
             memo_cache: Default::default(),
@@ -1068,21 +1075,6 @@ impl<S: 'static> Pane<S> {
         self.dnd.queried = cx.take_drop_queried();
         let queried = cx.take_interaction_queried();
         self.handlers = cx.into_handlers();
-        // Focus goes into a drawn message box while it's up, and back after.
-        match alert_focus {
-            Some((first, target)) => {
-                if !self.focused.is_some_and(|f| f.0 >= first.0) {
-                    self.alert_return.get_or_insert(self.focused);
-                    self.focused = Some(target);
-                }
-            }
-            None => {
-                if let Some(back) = self.alert_return.take() {
-                    self.focused = back;
-                }
-            }
-        }
-
         // Lower the tree: give elements their identities, apply the overrides
         // of the states they're in, and animate what changed.
         self.transitions.begin(now);
@@ -1122,11 +1114,13 @@ impl<S: 'static> Pane<S> {
         // Compose the main tree with any floating overlay layers under one
         // routable/paintable root: each overlay (with a scrim behind a modal
         // one) is a later child, so it paints on top and hit-tests first.
+        let mut modal_layers = None;
         let mut tree = if overlays.is_empty() && !layered {
             main
         } else {
             let mut roots = Vec::with_capacity(overlays.len() * 2 + 1);
             roots.push(main);
+            let mut modal_from = None;
             for spec in &overlays {
                 // A full-window catcher behind the overlay: a dark scrim for a
                 // modal, or an invisible click-catcher for a non-modal that wants
@@ -1241,8 +1235,12 @@ impl<S: 'static> Pane<S> {
                     _ => origin,
                 };
                 let bounds = Rect::from_xywh(origin.x, origin.y, m.width, m.height);
+                if spec.modal {
+                    modal_from = Some(roots.len());
+                }
                 roots.push(layout_with_direction(&spec.content, bounds, font, dir));
             }
+            modal_layers = modal_from.map(|i| roots.len() - i);
             let mut layers = LayoutNode::container(win, roots);
             layers.key = Some(crate::core::ElementKey::LAYERS);
             layers
@@ -1254,6 +1252,24 @@ impl<S: 'static> Pane<S> {
             .filter(|o| o.modal || o.dismiss.is_some())
             .filter_map(|o| o.dismiss)
             .collect();
+        // Buttons and the other controls a tap activates take keyboard focus.
+        crate::core::promote_tap_focus(&mut tree, &self.catchers);
+        self.modal_layers = modal_layers;
+        // Focus goes into a drawn message box while it's up, and back after.
+        match alert_focus {
+            Some(target) => {
+                let order = crate::core::tab_focus::tab_order(&tree, modal_layers);
+                if !self.focused.is_some_and(|f| order.contains(&f)) {
+                    self.alert_return.get_or_insert(self.focused);
+                    self.focused = Some(target);
+                }
+            }
+            None => {
+                if let Some(back) = self.alert_return.take() {
+                    self.focused = back;
+                }
+            }
+        }
         // A press-outside catcher covers the window: it takes clicks but
         // shows no hover or press highlight.
         let lit = |id: Option<ActionId>| id.filter(|id| !self.catchers.contains(id));
@@ -1813,6 +1829,23 @@ impl<S: 'static> Pane<S> {
     ) -> bool {
         self.ensure_tree(state, theme, font);
         let Some(id) = self.focused else { return false };
+        // A focused button: Enter or Space presses it, in its middle, as a
+        // tap there would; it takes no other keys.
+        if let Some((action, at)) = self
+            .tree
+            .as_ref()
+            .and_then(|t| crate::core::tab_focus::tap_activation(t, id))
+        {
+            if !crate::core::tab_focus::activates(&input) {
+                return false;
+            }
+            crate::core::set_pointer_position(at, None);
+            let ran = self.handlers.dispatch(action, state);
+            if ran {
+                self.dirty = true;
+            }
+            return ran;
+        }
         let ran = self.handlers.dispatch_key(id, &input, state);
         if ran {
             self.dirty = true;
@@ -1878,22 +1911,17 @@ impl<S: 'static> Pane<S> {
     }
 
     /// Move focus to the next focusable element in tree order (wrapping),
-    /// like pressing Tab. Returns `true` if focus changed.
-    fn focus_next(&mut self, state: &S, theme: &Theme, font: Option<&Font>) -> bool {
+    /// like pressing Tab, or the previous one (`back`, Shift+Tab). Returns
+    /// `true` if focus changed.
+    fn focus_step(&mut self, state: &S, theme: &Theme, font: Option<&Font>, back: bool) -> bool {
         self.ensure_tree(state, theme, font);
-        let mut order = Vec::new();
-        if let Some(t) = self.tree.as_ref() {
-            collect_focusables(t, &mut order);
-        }
-        if order.is_empty() {
+        let order = self
+            .tree
+            .as_ref()
+            .map(|t| crate::core::tab_focus::tab_order(t, self.modal_layers))
+            .unwrap_or_default();
+        let Some(next) = crate::core::tab_focus::step(&order, self.focused, back) else {
             return false;
-        }
-        let next = match self.focused {
-            Some(cur) => match order.iter().position(|f| *f == cur) {
-                Some(i) => order[(i + 1) % order.len()],
-                None => order[0],
-            },
-            None => order[0],
         };
         let changed = self.focused != Some(next) || !self.focus_visible;
         self.focused = Some(next);
@@ -2274,8 +2302,17 @@ impl<S: 'static> App<S> {
     }
 
     /// Move focus to the next focusable element in the primary window (Tab).
+    /// Buttons, checkboxes, switches, tabs and the other controls a tap
+    /// activates are focusable too (see [`core::tab_focus`]), and Enter or
+    /// Space presses the focused one.
     pub fn focus_next(&mut self) -> bool {
         self.pane_focus_next(0)
+    }
+
+    /// Move focus to the previous focusable element in the primary window
+    /// (Shift+Tab).
+    pub fn focus_prev(&mut self) -> bool {
+        self.pane_focus_step(0, true)
     }
 
     /// Begin or continue a pointer drag at `pos` in the primary window.
@@ -2378,6 +2415,10 @@ impl<S: 'static> App<S> {
     }
 
     fn pane_focus_next(&mut self, idx: usize) -> bool {
+        self.pane_focus_step(idx, false)
+    }
+
+    pub(crate) fn pane_focus_step(&mut self, idx: usize, back: bool) -> bool {
         let App {
             state,
             theme,
@@ -2385,7 +2426,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].focus_next(state, theme, font.as_ref()) | panes[idx].refresh_interactions()
+        panes[idx].focus_step(state, theme, font.as_ref(), back) | panes[idx].refresh_interactions()
     }
 
     fn pane_drag_at_point(&mut self, idx: usize, pos: Point) -> bool {

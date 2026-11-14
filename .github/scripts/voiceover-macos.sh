@@ -19,6 +19,11 @@
 # 4. Presses it (perform action, VoiceOver's VO-Space, which reaches the
 #    element's accessibilityPerformPress), and checks the app counted the
 #    tap.
+# 5. The keyboard alone (keys typed through System Events): Tab twice
+#    focuses the field, then "Row 0" (the app posts
+#    AXFocusedUIElementChanged, which VoiceOver follows: what it says then
+#    is reported, not required), and Space and Return press the button (the
+#    app logs each tap).
 #
 # Exit status: 0 when VoiceOver spoke "Row 0" as a button and the press
 # reached the app; 1 when a check failed; 3 when AppleScript couldn't
@@ -229,6 +234,33 @@ if [ "$found" = 0 ]; then
   [ "$after" -gt "$before" ]
   check $? "VO-Space (perform action) on \"Row 0\" pressed it: the app logged the tap"
 fi
+
+# The keyboard alone. Nothing in the app has focus now (the press above was
+# a click, which doesn't focus a button), so Tab goes to the field, then to
+# "Row 0".
+front
+sleep 1
+key() { # key <key code> <what>
+  osa -e "tell application \"System Events\" to key code $1" 2>&1 \
+    || echo "note: System Events couldn't type $2"
+}
+key 48 Tab
+sleep 1
+key 48 Tab
+p=$(say_now "after Tab, Tab")
+if printf '%s' "$p" | grep -q "Row 0"; then
+  echo "ok: VoiceOver followed the focus to \"Row 0\" (\"$p\")"
+else
+  echo "note (not required): VoiceOver didn't say \"Row 0\" as Tab focused it (\"$p\")"
+fi
+for k in "49 Space" "36 Return"; do
+  before=$(grep -c '^touchdemo: row 0 tapped' "$applog")
+  key ${k% *} "${k#* }"
+  sleep 1.5
+  after=$(grep -c '^touchdemo: row 0 tapped' "$applog")
+  [ "$after" -gt "$before" ]
+  check $? "${k#* } on the focused \"Row 0\" pressed it: the app logged the tap"
+done
 
 if [ ${#failures[@]} -gt 0 ]; then
   printf 'VoiceOver checks failed: %s\n' "${failures[*]}"

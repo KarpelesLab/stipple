@@ -502,6 +502,11 @@ impl Element {
     /// Route pointer taps on this element to `handler`, which runs against the
     /// app state. Registers the handler in `cx` and stamps its [`ActionId`].
     ///
+    /// A button made this way (or a checkbox, switch, tab, list item… by its
+    /// [`role`](Element::role)) also takes keyboard focus: Tab reaches it and
+    /// Enter or Space runs `handler`, as a tap would (see
+    /// [`tab_focus`](crate::core::tab_focus)).
+    ///
     /// ```
     /// # use stipple::core::{Element, BoxStyle, runtime::Cx};
     /// # use stipple::style::Theme;

@@ -686,7 +686,21 @@ fn paint_focus_node(
         .native
         .is_some_and(|n| crate::platform::native::draws_focus(n.control));
     if !os_focus {
-        scene.stroke_rect(node.bounds, ring, 2.0);
+        if crate::core::tab_focus::is_tap_focus(node) {
+            // A button's ring stands off it, following its corners, so it
+            // shows on a button filled with the ring's color too.
+            let (r, out) = (node.decoration.radius, crate::core::tab_focus::RING_OFFSET);
+            let b = node.bounds;
+            let around = Rect::from_xywh(
+                b.min_x() - out,
+                b.min_y() - out,
+                b.width() + 2.0 * out,
+                b.height() + 2.0 * out,
+            );
+            scene.stroke_round_rect(around, if r > 0.0 { r + out } else { 0.0 }, ring, 2.0);
+        } else {
+            scene.stroke_rect(node.bounds, ring, 2.0);
+        }
     }
     // Only text entry shows a caret: not a focusable that also takes taps (a
     // select's button), nor a list, table or tree taking focus as a whole.

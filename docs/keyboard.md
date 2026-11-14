@@ -69,7 +69,10 @@ For a key press in a window, in this order:
    mapped, never moves focus and never types.
 6. **The toolkit**, for keys the raw handler returned `Handled::No` for, or
    when there is no raw handler:
-   - Tab moves focus, unless the element captures Tab.
+   - Tab moves focus, unless the element captures Tab; Shift+Tab moves it
+     back. Buttons and the other controls a tap activates are in the Tab
+     order too, and Enter or Space presses the focused one (see
+     [accessibility.md](accessibility.md#keyboard-focus)).
    - F10, Alt+letter and the context-menu key open the menus.
    - Editing keys go to `on_key` as `KeyInput`s.
    - Typed characters go to `on_key` as `KeyInput::Text`.
