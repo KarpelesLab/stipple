@@ -3252,10 +3252,9 @@ jobs:
       # .VoiceOverAppleScriptEnabled file and TCC rows for Apple Events),
       # moves its cursor through a running touchdemo and must speak "Row 0"
       # as a button, then presses it with VO-Space (perform action) and the
-      # app counts the tap. Reports without failing the job until it has
-      # been seen passing; see .github/scripts/voiceover-macos.sh.
+      # app counts the tap. Required, after passing in every run since it
+      # landed; see .github/scripts/voiceover-macos.sh.
       - name: Screen reader (VoiceOver)
-        continue-on-error: true
         timeout-minutes: 15
         run: bash .github/scripts/voiceover-macos.sh ./target/release/touchdemo
 
@@ -3403,20 +3402,18 @@ jobs:
             bash .github/scripts/atspi-linux.sh target/release/touchdemo visual_output xdotool key Tab
 
       # Orca itself, headless: its debug log records every utterance whether
-      # or not a synthesizer is heard. Not yet seen passing on the runner, so
-      # it doesn't fail the job.
+      # or not a synthesizer is heard. Required, after passing in every run
+      # since it landed.
       - name: Orca speaks the focused control after Tab (X11)
-        continue-on-error: true
         run: |
           DISPLAY=:99 dbus-run-session -- bash .github/scripts/orca-linux.sh \
             target/release/touchdemo visual_output "xdotool key Tab" "xdotool type --delay 150 hi"
 
       # The same walk with touchdemo as a Wayland client of headless sway (the
       # bridge doesn't depend on the backend; Wayland hides window positions,
-      # so screen coordinates are the window's). Not yet seen passing on the
-      # runner, so it doesn't fail the job.
+      # so screen coordinates are the window's). Required, after passing in
+      # every run since it landed.
       - name: Read and drive a running Wayland window through AT-SPI (sway)
-        continue-on-error: true
         run: |
           export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt"
           mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
@@ -4176,12 +4173,12 @@ jobs:
           # accessibility focus through every stop, clicks, sets the field's
           # text (.github/a11y/android/test-probe.sh). Then TalkBack itself,
           # which this image ships: its focus moved to "Tap me" and its click
-          # (.github/a11y/android/test-talkback.sh), reported without failing
-          # the job until it has been seen passing.
+          # (.github/a11y/android/test-talkback.sh). Required, after passing
+          # in every run since TalkBack stopped skipping labels (dcba223).
           script: |
             bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi
-            if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-talkback.sh a11yprobe.apk visual_output || echo "::warning::the TalkBack check didn't pass (see its log)"; fi
+            if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-talkback.sh a11yprobe.apk visual_output; fi
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
@@ -4434,11 +4431,10 @@ jobs:
   # event), the whole window read with NVDA+B ("Row 0" "button"), the object
   # navigator moved to "Row 0" and NVDA+Enter pressing it (the app counts the
   # tap). See .github/scripts/nvda-windows.ps1 and docs/accessibility.md.
-  # Reports without failing the workflow until it has been seen passing.
+  # Required, after passing in every run since it landed.
   screen-reader-windows:
     name: Screen reader (NVDA / Windows)
     runs-on: windows-latest
-    continue-on-error: true
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6

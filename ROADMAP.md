@@ -1650,15 +1650,15 @@ Most input only works on X11 today.
     GitHub's runners), and warns rather than fails if it still can't read.
     Element frames are now in screen coordinates (they were the node's
     logical bounds). Added to `visual-macos`; not yet run in CI.
-- 🚧 Real screen readers driven in CI (see
+- ✅ Real screen readers driven in CI (see
   [docs/accessibility.md](docs/accessibility.md)). NVDA, VoiceOver, Orca and
   TalkBack pass in CI (NVDA after fixing its own driving: say all left the object
   navigator on "Row 10", and NVDA names the window only with the first focus
   inside it, which is now reported, not required; TalkBack after driving it
   through `uinput` devices, as it ignores `adb shell input`, and fixing a
   real bug it found: the host view reported itself focusable, so TalkBack
-  read the window as one item and skipped every label). None fails its job
-  yet:
+  read the window as one item and skipped every label). All four are
+  required checks, after passing in every run since they landed:
   - **NVDA** (`screen-reader-windows`, `.github/scripts/nvda-windows.ps1`): a
     pinned release from nvaccess.org (SHA-256 checked), as a portable copy,
     with a configuration that shows no dialogs and a synth that makes no
@@ -1702,7 +1702,7 @@ Most input only works on X11 today.
   action reaching the app, the focus events after Tab and an edit through
   `EditableText` (passes locally; required). The same walk under sway and
   Orca speaking the focused entry (`orca-linux.sh`, from Orca's debug log)
-  run there too but don't fail the job until seen passing. Left: caret and
+  run there too, pass in CI and are required. Left: caret and
   selection (the tree doesn't carry them), relations, the X root window's
   `AT_SPI_BUS` property, joining a restarted registry again.
 - ⬜ Accessibility depth found by the out-of-process checks and the screen

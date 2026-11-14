@@ -345,7 +345,7 @@ is) moves accessibility focus through every node, clicks a button and sets
 the field's text, from its own process. TalkBack itself, which the API 34
 Google APIs emulator image ships, is turned on in CI too: its focus must
 stop on the labels, reach the button and its click the app (passing in CI;
-reported without failing the job). See
+required). See
 [accessibility.md](accessibility.md#android).
 
 ⁵⁷ `onPause` / `onResume` / `onTrimMemory` and the Back key, checked on the
@@ -435,7 +435,7 @@ tree from a helper thread (hand-written D-Bus): an object per node with
 children and focus changes and window activation. CI walks a running X11
 window from a pyatspi client (as Orca does), hit-tests it, runs a button's
 action, follows the focus after a Tab and edits the field (passing in CI);
-the same under sway, and Orca itself, pass in CI but aren't required yet. No caret, selection or relations. See
+the same under sway, and Orca itself, pass in CI and are required. No caret, selection or relations. See
 [accessibility.md](accessibility.md#linux).
 
 ⁶⁷ A hand-built provider per node, hosted by the window's provider: control
@@ -446,8 +446,7 @@ hit-tests it, invokes a button and reads the focus after a Tab (passing in
 CI). A focus move raises UIA's focus-changed event, and a window's root is
 named by its title. NVDA itself is driven in CI: its log of what it says
 must name the window, the field Tab focuses and "Row 0" "button", and
-NVDA+Enter must press it (passing in CI; reported without failing the
-workflow). Buttons don't take keyboard focus, so Tab
+NVDA+Enter must press it (passing in CI; required). Buttons don't take keyboard focus, so Tab
 can't reach them. No Value, Toggle, Scroll or Text patterns, and no
 structure or property-change events. See
 [accessibility.md](accessibility.md#windows).
@@ -457,8 +456,8 @@ coordinates. CI reads a running app's tree from another process through the
 AX API, as VoiceOver does (passing in CI). Buttons and the other controls a
 click activates answer `AXPress` (VoiceOver's VO-Space), checked by the same
 probe, and VoiceOver itself is driven through its AppleScript interface: it
-must speak "Row 0" as a button and press it (both passing in CI; the
-VoiceOver step doesn't fail the job). See
+must speak "Row 0" as a button and press it (both passing in CI;
+required). See
 [accessibility.md](accessibility.md#macos).
 
 ⁶⁹ In the shared core, so the same everywhere: `Cx::memo` and `Cx::derive`,

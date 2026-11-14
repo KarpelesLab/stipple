@@ -14,7 +14,7 @@ accessibility API. `App::accessibility_tree()` returns the tree for tests.
 | iOS | UIAccessibility: a `UIAccessibilityElement` per node | yes, an XCUITest runner |
 | Android | an `AccessibilityNodeProvider`, a virtual view per node | yes, an accessibility service, and `uiautomator` |
 | Web | an ARIA overlay | in-page, from headless Chrome |
-| Linux (X11, Wayland) | AT-SPI: an object per node, registered with the registry | yes, a pyatspi client (X11); sway and Orca not yet required |
+| Linux (X11, Wayland) | AT-SPI: an object per node, registered with the registry | yes, a pyatspi client (X11); sway and Orca required too |
 
 None of these has been tried with a screen reader by a person. What CI
 does, on each platform where it can, is read and drive the app from
@@ -24,10 +24,10 @@ says or does:
 
 | Screen reader | CI job / step | Status |
 | --- | --- | --- |
-| NVDA (Windows) | `screen-reader-windows` | passing in CI; still reports without failing the workflow |
-| VoiceOver (macOS) | `visual-macos`, *Screen reader (VoiceOver)* | passing in CI; doesn't fail the job |
-| TalkBack (Android) | `visual-android` (API 34) | passing in CI; doesn't fail the job |
-| Orca (Linux) | `a11y-dbus` (see [Linux](#linux)) | passing in CI; doesn't fail the job yet |
+| NVDA (Windows) | `screen-reader-windows` | passing in CI; required |
+| VoiceOver (macOS) | `visual-macos`, *Screen reader (VoiceOver)* | passing in CI; required |
+| TalkBack (Android) | `visual-android` (API 34) | passing in CI; required |
+| Orca (Linux) | `a11y-dbus` (see [Linux](#linux)) | passing in CI; required |
 | Narrator, JAWS, VoiceOver on iOS | none | not tried |
 
 The rest of this page says what each check proves, and what it doesn't.
@@ -102,8 +102,7 @@ commands (`keybd_event`, which NVDA's keyboard hook takes as typed keys):
 
 The job uploads NVDA's whole log. It passes in CI (the window's name isn't
 spoken on the foreground change alone, only with the first focus inside
-it, so that is reported, not required); it still reports without failing
-the workflow.
+it, so that is reported, not required); the job is required.
 
 Not covered: Stipple's buttons don't take keyboard focus (only fields and
 other elements with key handlers do), so Tab can't reach them and Enter or
@@ -158,8 +157,8 @@ item`, `move out of item`, or the VO keys through System Events if
 AppleScript refuses one), logging each phrase VoiceOver speaks (`content of
 last phrase`), until it reaches "Row 0": the phrase must say it is a button.
 `perform action` (VO-Space) must then press it: the app logs the tap. The
-step passes in CI and doesn't fail the job (it exits 3, with a
-warning, when the runner doesn't let AppleScript control VoiceOver).
+step passes in CI and is required (it exits 3, with a warning, when the
+runner doesn't let AppleScript control VoiceOver).
 
 Not covered: there's no `AXValue` for fields, no focus or layout
 notifications, and the elements are built again each time AppKit asks for
@@ -250,9 +249,8 @@ notification permission is granted up front to the demo and to TalkBack,
 whose dialogs otherwise come up in front of the app and hold TalkBack's
 focus. On a failure the script logs the windows, the resumed activity and
 `dumpsys accessibility` (the accessibility focused window). TalkBack's speech
-isn't read (the emulator may have no voice). The check passes on a local
-API 34 emulator, hasn't been seen passing in CI yet, and doesn't fail the
-job.
+isn't read (the emulator may have no voice). The check passes in CI and is
+required.
 
 Not covered: TalkBack's speech, explore by touch; `androiddemo`'s list is a
 plain scroll container, which the tree reports as a group without scroll
@@ -338,7 +336,7 @@ This is a required check; it passes locally under Xvfb (at-spi2-core 2.58,
 pyatspi 2.58), and passes in CI. The same walk under headless sway (`wtype` for the Tab) and
 **Orca** itself (`.github/scripts/orca-linux.sh`: Orca runs headless with its
 debug log, which records every utterance as `SPEECH OUTPUT`, and must speak
-the entry after Tab) run in the same job and pass in CI, but don't fail it yet.
+the entry after Tab) run in the same job, pass in CI and are required too.
 
 `a11ydemo serve` still serves a fixed tree over the session bus for the
 `dbus-send` checks.
