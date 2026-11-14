@@ -387,7 +387,11 @@ UIKit reconnects that session and the state comes back, while swiping the app
 away in the app switcher destroys it: UIKit calls
 `application:didDiscardSceneSessions:` (at the next launch, the app being gone
 by then), which deletes the file, and the launch connects a new session, which
-wouldn't take it anyway. This needs the app to use scenes: a
+wouldn't take it anyway (an app can ask for the same thing,
+`requestSceneSessionDestruction:`, but UIKit only grants it on a device that
+supports multiple scenes, an iPad with `UIApplicationSupportsMultipleScenes`;
+an iPhone answers "The current device does not support multiple scenes").
+This needs the app to use scenes: a
 `UIApplicationSceneManifest` in its `Info.plist` (see
 [platforms/ios.md](platforms/ios.md#packaging)); without one, iOS doesn't tell
 the app about a swipe-away, and the state comes back then too. UIKit's own
@@ -468,11 +472,21 @@ for attention and counts the bells in the Dock badge.
   background, ends it with `xcrun simctl terminate` and launches it again,
   and the field's text comes back through `restore_state`, in the same scene
   session (this passed in CI before the app used scenes; the session check
-  is new). Then it has the app type something, go to the background and
-  destroy its own scene session (`requestSceneSessionDestruction:`, the path a swipe-away in the
-  app switcher takes): the state saved on the way out is dropped when UIKit
-  discards the session, and the next launch, in a new session, restores
-  nothing (added, not yet run). The recognizer and the saved state's file
+  is new). The user closing the app runs on an iPad simulator, booted in the
+  same job after the iPhone is shut down, since UIKit only destroys a session
+  where the app may have several scenes (the iPhone refuses: "The current
+  device does not support multiple scenes"); the bundle is a copy whose
+  `Info.plist` adds the iPad to `UIDeviceFamily` and sets
+  `UIApplicationSupportsMultipleScenes`. There the kill is checked again
+  (`TOUCHDEMO_TYPE` types "For later", which comes back in the same
+  session), then the app types something, goes to the background and
+  destroys its own scene session (`requestSceneSessionDestruction:`, the
+  path a swipe-away in the app switcher takes): the state saved on the way
+  out is dropped when UIKit discards the session
+  (`application:didDiscardSceneSessions:`, logged by the backend), and the
+  next launch, in a new session, restores nothing (added, not yet run;
+  reported, not required until it passes). A real swipe in the app switcher
+  isn't scripted: the simulator has no way to drive it short of XCUITest. The recognizer and the saved state's file
   are unit-tested on every host, as is the swipe in front of an `App`.
 - **Web** (headless Chrome): `webdemo`'s `index.html#restore` clicks its
   counter three times and reloads the tab; the reloaded app starts with the

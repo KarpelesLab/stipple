@@ -419,9 +419,15 @@ starting afresh in a new session. That needs the scene lifecycle (a
 `UIApplicationSceneManifest` in the `Info.plist`); without it the state comes
 back after a swipe-away too. CI backgrounds `touchdemo`, ends it with `simctl
 terminate` and relaunches it (restored: this ran in CI before scenes; the
-same-session check is new), then has it destroy its own session
-(`requestSceneSessionDestruction:`, UIKit's discard path) and checks the next
-launch restores nothing (added, not yet run). Web: the tab's `sessionStorage`,
+same-session check is new). The discard runs on an iPad simulator, booted in
+the same job (the iPhone refuses to destroy a session: "The current device
+does not support multiple scenes"), with `UIApplicationSupportsMultipleScenes`
+in a copy of the bundle: the kill there restores in the same session, then
+`touchdemo` destroys its own session (`requestSceneSessionDestruction:`,
+UIKit's discard path), and CI checks `application:didDiscardSceneSessions:`
+dropped the state and the next launch, a new session, restores nothing (added,
+not yet run; reported, not required). A real swipe in the app switcher isn't
+scripted. Web: the tab's `sessionStorage`,
 written on `pagehide` and when the page is hidden, handed to the app before it
 starts; closing the tab drops it (a new tab starts without it); headless
 Chrome reloads `webdemo` and checks its count came back (run locally; CI step

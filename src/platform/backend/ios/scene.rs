@@ -233,6 +233,12 @@ pub(super) fn request_destruction(failed: fn(String)) -> Option<String> {
     *FAILED.lock().unwrap_or_else(|e| e.into_inner()) = Some(failed);
     unsafe {
         let app = msg_id(class("UIApplication"), sel("sharedApplication"));
+        // UIKit only destroys a session where the app may have several
+        // (an iPad, with `UIApplicationSupportsMultipleScenes`).
+        debug(format_args!(
+            "supportsMultipleScenes={}",
+            super::msg_bool(app, sel("supportsMultipleScenes"))
+        ));
         let block: *mut ErrorBlock = Box::leak(Box::new(ErrorBlock {
             isa: &raw const _NSConcreteGlobalBlock,
             flags: BLOCK_IS_GLOBAL,

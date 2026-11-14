@@ -44,6 +44,9 @@ binary and an `Info.plist`:
   saved state can tell the user closing the app from the system ending it
   (see [Keeping the state across process death](#keeping-the-state-across-process-death)).
   Without it the app runs without scenes, as before iOS 13.
+  `UIApplicationSupportsMultipleScenes` can be `<true/>` for an iPad app
+  (CI runs one that way); Stipple keeps one window, which moves to the scene
+  that connected last.
 - **`MinimumOSVersion` must be at least 15.0**: `Theme::native()` uses
   `UIButtonConfiguration`, which arrived in iOS 15.
 
@@ -284,6 +287,13 @@ background once more, ends it with `xcrun simctl terminate` (as iOS ends a
 suspended app) and launches it again, and checks the field's text came back
 through `restore_state`, in the same scene session. Then it launches it with
 `TOUCHDEMO_CLOSE_SCENE`: the app types into its field and, once CI sends it
-to the background (saving the state), asks UIKit to destroy its scene session (`requestSceneSessionDestruction:`, which takes the
-path of a swipe-away), and CI checks the state was saved, UIKit discarded the
-session, and the next launch is a new session that restores nothing.
+to the background (saving the state), asks UIKit to destroy its scene
+session (`requestSceneSessionDestruction:`, which takes the path of a
+swipe-away), and CI checks the state was saved, UIKit discarded the session,
+and the next launch is a new session that restores nothing. UIKit only
+destroys a session where the app may have several scenes, so this part runs
+on an iPad simulator, from a copy of the bundle with
+`<integer>2</integer>` added to `UIDeviceFamily` and
+`UIApplicationSupportsMultipleScenes` set to `<true/>` (the iPhone simulator
+refuses: "The current device does not support multiple scenes"), after
+checking the kill restores there too (`TOUCHDEMO_TYPE`).

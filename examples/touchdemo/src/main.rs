@@ -30,7 +30,15 @@
 //! background (where it saves the text); there it asks UIKit to destroy its
 //! scene session (`touchdemo: closing session Some("...")`), as the user
 //! swiping it away in the app switcher does. The state saved under the
-//! session is dropped with it, and the next launch starts afresh.
+//! session is dropped with it, and the next launch starts afresh. UIKit only
+//! takes the request on a device that supports multiple scenes (an iPad, with
+//! `UIApplicationSupportsMultipleScenes` in the manifest); an iPhone refuses
+//! it (`touchdemo: closing the session failed: ...`).
+//!
+//! **Typing something to keep (iOS).** Launched with `TOUCHDEMO_TYPE` set,
+//! it types that text into the field (`touchdemo: typed, waiting for
+//! background`), for the state saved in the background and restored after a
+//! system kill.
 //!
 //! **Self-test (iOS).** Launched with `TOUCHDEMO_SELFTEST` set (`xcrun simctl
 //! launch` passes it on as `SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1`), the app drives
@@ -321,6 +329,8 @@ fn main() {
         }
         if std::env::var_os("TOUCHDEMO_CLOSE_SCENE").is_some() {
             selftest::close_scene(&app.handle());
+        } else if let Ok(text) = std::env::var("TOUCHDEMO_TYPE") {
+            selftest::type_text(&app.handle(), text);
         }
     }
     app.run();
@@ -442,6 +452,15 @@ mod selftest {
             });
             log(&format!("touchdemo: closing session {session:?}"));
         }
+    }
+
+    /// Type `text` into the field, to be saved when the app goes to the
+    /// background (and restored after a system kill).
+    pub(super) fn type_text(handle: &AppHandle<State>, text: String) {
+        handle.after(Duration::from_millis(1500), move |s| {
+            s.field = EditBuffer::from_text(text);
+            log("touchdemo: typed, waiting for background");
+        });
     }
 
     fn tap(x: f64, y: f64) {
