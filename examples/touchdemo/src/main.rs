@@ -172,6 +172,16 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         cx.request_frame();
     }
     let field = text_editor(cx, &theme, &state.field, |s: &mut State| &mut s.field).height(FIELD_H);
+    // On Linux the field has a caption, which a screen reader reads with it
+    // (AT-SPI's labelled-by relation, checked by the AT-SPI walk in CI). The
+    // mobile self-tests tap the field where it is without one.
+    #[cfg(target_os = "linux")]
+    let field = row(vec![
+        label(&theme, "Note").a11y_id("note-label"),
+        field.labelled_by("note-label").grow(1.0),
+    ])
+    .gap(8.0)
+    .align(Align::Start, Align::Center);
     let rows = (0..ROWS)
         .map(|i| {
             button_labeled(&theme, format!("Row {i}"))

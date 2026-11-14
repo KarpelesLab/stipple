@@ -520,3 +520,226 @@ fn actions_reach_the_window_on_a_wake() {
     // The other window's action waits for it.
     assert_eq!(take_actions(id ^ 1), vec![Event::PointerLeft]);
 }
+
+/// Window > [Text "Name" (id "name"), TextField "héllo" (labelled by "name",
+/// caret before "l", "él" selected), Button "OK"].
+fn form() -> Bridge {
+    let mut b = Bridge::new();
+    b.bus = ":1.7".into();
+    let w = b.win_mut(9);
+    w.root = Some(Arc::new(A11yNode {
+        children: vec![
+            A11yNode {
+                id: Some("name".into()),
+                ..leaf(A11yRole::Text, "Name", (0.0, 0.0, 40.0, 20.0))
+            },
+            A11yNode {
+                caret: Some(3),
+                text_selection: Some((1, 3)),
+                labelled_by: Some("name".into()),
+                ..leaf(A11yRole::TextField, "héllo", (50.0, 0.0, 100.0, 20.0))
+            },
+            leaf(A11yRole::Button, "OK", (0.0, 30.0, 40.0, 20.0)),
+        ],
+        ..leaf(A11yRole::Window, "Form", (0.0, 0.0, 200.0, 60.0))
+    }));
+    b
+}
+
+fn text_call(b: &mut Bridge, path: &str, member: &str, body: Body) -> Reply {
+    call(b, path, "org.a11y.atspi.Text", member, body)
+}
+
+fn boolean(r: Reply) -> bool {
+    read_u32(&ok(r, "b"), &mut 0).unwrap() == 1
+}
+
+#[test]
+fn caret_and_selection_read_and_set() {
+    let mut b = form();
+    let field = node_path(9, &[1]);
+    // Character offsets, from the tree's byte indices.
+    let caret = prop(&mut b, &field, "org.a11y.atspi.Text", "CaretOffset");
+    assert_eq!(read_u32(&caret, &mut 3).unwrap(), 2);
+    let n = ok(
+        text_call(&mut b, &field, "GetNSelections", Body::new()),
+        "i",
+    );
+    assert_eq!(read_u32(&n, &mut 0).unwrap(), 1);
+    let mut body = Body::new();
+    body.i32(0);
+    let sel = ok(text_call(&mut b, &field, "GetSelection", body), "ii");
+    let mut a = Args::new(&sel);
+    assert_eq!((a.i32(), a.i32()), (Some(1), Some(2)));
+    let mut body = Body::new();
+    body.i32(1);
+    let sel = ok(text_call(&mut b, &field, "GetSelection", body), "ii");
+    let mut a = Args::new(&sel);
+    assert_eq!((a.i32(), a.i32()), (Some(0), Some(0)));
+
+    // Only one selection: adding another is refused.
+    let mut body = Body::new();
+    body.i32(0).i32(1);
+    assert!(!boolean(text_call(&mut b, &field, "AddSelection", body)));
+    assert!(b.actions.is_empty());
+
+    // The field isn't focused: a click focuses it, then the field selects
+    // (byte indices into its text).
+    let mut body = Body::new();
+    body.i32(0).i32(1).i32(4);
+    assert!(boolean(text_call(&mut b, &field, "SetSelection", body)));
+    let (win, events) = b.actions.pop().unwrap();
+    assert_eq!(win, 9);
+    assert_eq!(events.len(), 4);
+    assert!(matches!(events[0], Event::PointerMoved { .. }));
+    assert_eq!(
+        events[3],
+        Event::Ime(Ime::SetSelection {
+            anchor: 1,
+            caret: 5
+        })
+    );
+
+    let mut body = Body::new();
+    body.i32(5);
+    assert!(boolean(text_call(&mut b, &field, "SetCaretOffset", body)));
+    assert_eq!(
+        b.actions.pop().unwrap().1.last(),
+        Some(&Event::Ime(Ime::SetSelection {
+            anchor: 6,
+            caret: 6
+        }))
+    );
+    // Removing the selection leaves the caret where it is.
+    let mut body = Body::new();
+    body.i32(0);
+    assert!(boolean(text_call(&mut b, &field, "RemoveSelection", body)));
+    assert_eq!(
+        b.actions.pop().unwrap().1.last(),
+        Some(&Event::Ime(Ime::SetSelection {
+            anchor: 3,
+            caret: 3
+        }))
+    );
+
+    // A label has no caret to move.
+    let label = node_path(9, &[0]);
+    let mut body = Body::new();
+    body.i32(1);
+    assert!(!boolean(text_call(&mut b, &label, "SetCaretOffset", body)));
+    let n = ok(
+        text_call(&mut b, &label, "GetNSelections", Body::new()),
+        "i",
+    );
+    assert_eq!(read_u32(&n, &mut 0).unwrap(), 0);
+    assert!(b.actions.is_empty());
+}
+
+#[test]
+fn a_focused_field_selects_without_a_click() {
+    let mut b = form();
+    let w = b.win_mut(9);
+    let mut root = (**w.root.as_ref().unwrap()).clone();
+    root.children[1].focused = true;
+    root.children[1].text_selection = None;
+    w.root = Some(Arc::new(root));
+    let field = node_path(9, &[1]);
+    let mut body = Body::new();
+    body.i32(0).i32(5);
+    assert!(boolean(text_call(&mut b, &field, "AddSelection", body)));
+    assert_eq!(
+        b.actions.pop().unwrap().1,
+        vec![Event::Ime(Ime::SetSelection {
+            anchor: 0,
+            caret: 6
+        })]
+    );
+    // Nothing selected: nothing to remove.
+    let mut body = Body::new();
+    body.i32(0);
+    assert!(!boolean(text_call(&mut b, &field, "RemoveSelection", body)));
+}
+
+/// An `a(ua(so))`: each relation's type and target paths.
+fn relation_set(body: &[u8]) -> Vec<(u32, Vec<String>)> {
+    let mut off = 0;
+    let len = read_u32(body, &mut off).unwrap() as usize;
+    crate::platform::a11y::align_to(&mut off, 8);
+    let end = off + len;
+    let mut out = Vec::new();
+    while off < end {
+        crate::platform::a11y::align_to(&mut off, 8);
+        let kind = read_u32(body, &mut off).unwrap();
+        let inner = read_u32(body, &mut off).unwrap() as usize;
+        crate::platform::a11y::align_to(&mut off, 8);
+        let stop = off + inner;
+        let mut targets = Vec::new();
+        while off < stop {
+            crate::platform::a11y::align_to(&mut off, 8);
+            let _bus = read_string(body, &mut off).unwrap();
+            targets.push(read_string(body, &mut off).unwrap());
+        }
+        out.push((kind, targets));
+    }
+    out
+}
+
+#[test]
+fn relations_link_a_field_and_its_label() {
+    let mut b = form();
+    let mut relations = |path: &str| {
+        relation_set(&ok(
+            call(
+                &mut b,
+                path,
+                "org.a11y.atspi.Accessible",
+                "GetRelationSet",
+                Body::new(),
+            ),
+            "a(ua(so))",
+        ))
+    };
+    // LABELLED_BY (2) and LABEL_FOR (1).
+    assert_eq!(
+        relations(&node_path(9, &[1])),
+        vec![(2, vec![node_path(9, &[0])])]
+    );
+    assert_eq!(
+        relations(&node_path(9, &[0])),
+        vec![(1, vec![node_path(9, &[1])])]
+    );
+    assert_eq!(relations(&node_path(9, &[2])), vec![]);
+    assert_eq!(relations(&node_path(9, &[])), vec![]);
+}
+
+#[test]
+fn a_swap_raises_caret_and_selection_events() {
+    let b = form();
+    let old = (**b.windows[0].root.as_ref().unwrap()).clone();
+    let mut new = old.clone();
+    new.children[1].caret = Some(6);
+    new.children[1].text_selection = None;
+    let got = events::diff(9, &old, &new);
+    let summary: Vec<String> = got
+        .iter()
+        .map(|s| format!("{}:{} {}", s.member, s.detail1, s.path))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            "TextCaretMoved:5 /org/a11y/atspi/accessible/w9_1",
+            "TextSelectionChanged:0 /org/a11y/atspi/accessible/w9_1",
+        ]
+    );
+    // Typing: the text changes, then the caret moves after it.
+    let mut typed = new.clone();
+    typed.children[1].name = "héllo!".into();
+    typed.children[1].caret = Some(7);
+    let got = events::diff(9, &new, &typed);
+    let members: Vec<&str> = got.iter().map(|s| s.member).collect();
+    assert_eq!(
+        members,
+        vec!["PropertyChange", "TextChanged", "TextCaretMoved"]
+    );
+    assert_eq!(got[2].detail1, 6);
+}

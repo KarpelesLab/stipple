@@ -653,6 +653,10 @@ pub enum Ime {
     /// Delete `before` bytes before the caret and `after` bytes after it (the
     /// preedit not counted), as Wayland's `text-input-v3` asks some IMEs to.
     DeleteSurrounding { before: usize, after: usize },
+    /// Select `anchor..caret` (byte indices into the field's text, the caret
+    /// being the moving end; equal for a plain caret), as an assistive
+    /// technology asks (AT-SPI's `SetCaretOffset` / `SetSelection`).
+    SetSelection { anchor: usize, caret: usize },
 }
 
 /// A change in the app's life on a mobile platform, delivered as

@@ -955,6 +955,15 @@ impl EditBuffer {
         self.seal();
     }
 
+    /// Select `anchor..caret` (byte indices, snapped to char boundaries), the
+    /// caret being the moving end; equal ends place a plain caret.
+    pub fn set_selection(&mut self, anchor: usize, caret: usize) {
+        let (anchor, caret) = (self.snap(anchor), self.snap(caret));
+        self.caret = caret;
+        self.anchor = (anchor != caret).then_some(anchor);
+        self.seal();
+    }
+
     /// Place the caret at byte index `i` (snapped to a char boundary) and clear
     /// any selection. For click-to-position from a pointer hit-test.
     pub fn place_caret(&mut self, i: usize) {
@@ -993,6 +1002,7 @@ impl EditBuffer {
             KeyInput::DeleteSurrounding { before, after } => {
                 self.delete_surrounding(*before, *after)
             }
+            KeyInput::SetSelection { anchor, caret } => self.set_selection(*anchor, *caret),
             KeyInput::Backspace => self.backspace(),
             KeyInput::Delete => self.delete(),
             KeyInput::Left => self.move_left(),

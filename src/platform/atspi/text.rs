@@ -19,6 +19,20 @@ pub(super) fn char_count(text: &str) -> i32 {
     text.chars().count() as i32
 }
 
+/// The character offset of byte index `byte` in `text` (clamped to the end).
+pub(super) fn char_offset(text: &str, byte: usize) -> i32 {
+    text.char_indices().take_while(|&(i, _)| i < byte).count() as i32
+}
+
+/// The byte index of character offset `offset` in `text` (clamped to the
+/// text: a negative offset is its start, one past the end its end).
+pub(super) fn byte_offset(text: &str, offset: i32) -> usize {
+    usize::try_from(offset)
+        .ok()
+        .and_then(|o| text.char_indices().nth(o).map(|(i, _)| i))
+        .unwrap_or(if offset < 0 { 0 } else { text.len() })
+}
+
 /// The characters `[start, end)` of `text`; an `end` of -1 (or past the end)
 /// means to the end.
 pub(super) fn slice(text: &str, start: i32, end: i32) -> String {
@@ -210,6 +224,17 @@ mod tests {
         assert_eq!(char_count("héllo"), 5);
         assert_eq!(char_at("héllo", 1), 'é' as i32);
         assert_eq!(char_at("héllo", 9), 0);
+    }
+
+    #[test]
+    fn converts_between_bytes_and_characters() {
+        assert_eq!(char_offset("héllo", 0), 0);
+        assert_eq!(char_offset("héllo", 3), 2);
+        assert_eq!(char_offset("héllo", 99), 5);
+        assert_eq!(byte_offset("héllo", 2), 3);
+        assert_eq!(byte_offset("héllo", 5), 6);
+        assert_eq!(byte_offset("héllo", 9), 6);
+        assert_eq!(byte_offset("héllo", -1), 0);
     }
 
     #[test]

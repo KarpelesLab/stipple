@@ -93,6 +93,16 @@ pub struct A11yNode {
     pub expanded: Option<bool>,
     /// Whether this checkbox or switch is checked, if it can be.
     pub checked: Option<bool>,
+    /// For an editable text field, the caret as a byte index into `name`;
+    /// `None` when the name isn't the field's text.
+    pub caret: Option<usize>,
+    /// For an editable text field, the selected byte range `[start, end)` of
+    /// `name`, if any.
+    pub text_selection: Option<(usize, usize)>,
+    /// The id other nodes' relations name this one by.
+    pub id: Option<String>,
+    /// The [`id`](Self::id) of the node that labels this one.
+    pub labelled_by: Option<String>,
     pub children: Vec<A11yNode>,
 }
 
@@ -107,6 +117,10 @@ impl A11yNode {
             selected: false,
             expanded: None,
             checked: None,
+            caret: None,
+            text_selection: None,
+            id: None,
+            labelled_by: None,
             children: Vec::new(),
         }
     }

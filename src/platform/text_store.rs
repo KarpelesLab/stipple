@@ -659,6 +659,7 @@ mod tests {
                 Ime::Preedit { text, .. } => {
                     app.2 = (!text.is_empty()).then(|| text.clone());
                 }
+                Ime::SetSelection { .. } => {}
             }
         }
     }

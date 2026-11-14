@@ -139,6 +139,9 @@ fn walk(win: u64, old: &A11yNode, new: &A11yNode, chain: &mut Vec<usize>, out: &
             }
         }
     }
+    if text_role(new.role) {
+        out.extend(caret_events(here.clone(), old, new));
+    }
     for (name, was, is) in [
         (
             "checked",
@@ -175,6 +178,32 @@ fn walk(win: u64, old: &A11yNode, new: &A11yNode, chain: &mut Vec<usize>, out: &
         chain.pop();
         out.push(children_changed(path(), "add", i, child));
     }
+}
+
+/// The caret and selection of a field, as character offsets.
+fn text_state(n: &A11yNode) -> (Option<i32>, Option<(i32, i32)>) {
+    let at = |b: usize| super::text::char_offset(&n.name, b);
+    (
+        n.caret.map(at),
+        n.text_selection.map(|(s, e)| (at(s), at(e))),
+    )
+}
+
+/// `object:text-caret-moved` (to the new offset) and
+/// `object:text-selection-changed` when a field's caret or selection moved.
+fn caret_events(path: String, old: &A11yNode, new: &A11yNode) -> Vec<Signal> {
+    let (was_caret, was_sel) = text_state(old);
+    let (caret, sel) = text_state(new);
+    let mut out = Vec::new();
+    if let Some(c) = caret
+        && was_caret != caret
+    {
+        out.push(Signal::new(path.clone(), OBJECT, "TextCaretMoved").details(c, 0));
+    }
+    if was_sel != sel {
+        out.push(Signal::new(path, OBJECT, "TextSelectionChanged"));
+    }
+    out
 }
 
 /// `object:children-changed:{add,remove}` on `parent` for the child at

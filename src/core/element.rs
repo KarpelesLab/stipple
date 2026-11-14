@@ -951,6 +951,26 @@ impl Element {
         self
     }
 
+    /// Name this element for other elements' accessibility relations: an
+    /// element whose [`labelled_by`](Element::labelled_by) is `id` is
+    /// labelled by this one. Ids are matched within a window's tree.
+    pub fn a11y_id(mut self, id: impl Into<String>) -> Self {
+        self.semantics.get_or_insert_with(Semantics::default).id = Some(id.into());
+        self
+    }
+
+    /// Say this element (a text field, a checkbox…) is labelled by the
+    /// element whose [`a11y_id`](Element::a11y_id) is `id`, usually the text
+    /// beside it. A screen reader then reads the label with the control, as
+    /// a `for` attribute does on the web (AT-SPI's labelled-by / label-for
+    /// relations).
+    pub fn labelled_by(mut self, id: impl Into<String>) -> Self {
+        self.semantics
+            .get_or_insert_with(Semantics::default)
+            .labelled_by = Some(id.into());
+        self
+    }
+
     /// Enable wrapping. On a text element the text word-wraps to the element's
     /// content width across as many lines as needed. On a stack (row or
     /// column), children that don't fit the main axis flow onto new lines, with

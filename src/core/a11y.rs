@@ -20,7 +20,10 @@
 //! [`selected`](crate::core::Element::selected),
 //! [`expanded`](crate::core::Element::expanded) and
 //! [`checked`](crate::core::Element::checked); a declared role wins over the
-//! inferred one.
+//! inferred one. A control names the element that labels it with
+//! [`labelled_by`](crate::core::Element::labelled_by) and the label's
+//! [`a11y_id`](crate::core::Element::a11y_id). A text field's node carries
+//! its caret and selection.
 
 use crate::core::runtime::{FocusId, LayoutNode, NodeContent, first_text};
 use crate::geometry::Rect;
@@ -137,6 +140,12 @@ pub struct Semantics {
     /// For a checkbox or switch, whether it is checked (on); `None` if it
     /// can't be checked.
     pub checked: Option<bool>,
+    /// An id other elements' relations name this element by (see
+    /// [`labelled_by`](Semantics::labelled_by)).
+    pub id: Option<String>,
+    /// The [`id`](Semantics::id) of the element that labels this one (a
+    /// field's caption).
+    pub labelled_by: Option<String>,
 }
 
 impl Semantics {
@@ -164,6 +173,19 @@ pub struct AccessNode {
     pub expanded: Option<bool>,
     /// Whether this checkbox or switch is checked, if it can be.
     pub checked: Option<bool>,
+    /// For an editable text field, the caret as a byte index into `name`
+    /// (`None` when the name isn't the field's text: a password field, a
+    /// field with an [`a11y_label`](crate::core::Element::a11y_label)).
+    pub caret: Option<usize>,
+    /// For an editable text field, the selected byte range `[start, end)` of
+    /// `name`, if any (see [`caret`](AccessNode::caret)).
+    pub text_selection: Option<(usize, usize)>,
+    /// The id relations name this node by
+    /// ([`Element::a11y_id`](crate::core::Element::a11y_id)).
+    pub id: Option<String>,
+    /// The id of the node that labels this one
+    /// ([`Element::labelled_by`](crate::core::Element::labelled_by)).
+    pub labelled_by: Option<String>,
     pub children: Vec<AccessNode>,
 }
 
@@ -213,6 +235,7 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
     // Interactive/text roles take their name from their text and absorb their
     // descendants; containers recurse and expose their meaningful children.
     let label = node.semantics.as_ref().and_then(|s| s.label.clone());
+    let (mut caret, mut text_selection) = (None, None);
     let (name, children) = if role.is_container() {
         (
             label.unwrap_or_default(),
@@ -224,6 +247,7 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
                 .collect(),
         )
     } else {
+        let labelled = label.is_some();
         let mut name = label.unwrap_or_else(|| text_of(node));
         // An empty field lays out a single space to keep its line's height
         // (`widgets::text_editor`); a screen reader should read it as empty,
@@ -231,8 +255,12 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         if role == Role::TextField && name == " " {
             name.clear();
         }
+        if !labelled && matches!(role, Role::TextField | Role::SpinButton) {
+            (caret, text_selection) = caret_of(node, &name);
+        }
         (name, Vec::new())
     };
+    let sem = node.semantics.as_ref();
     AccessNode {
         role,
         name,
@@ -241,8 +269,40 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         selected: node.semantics.as_ref().is_some_and(|s| s.selected),
         expanded: node.semantics.as_ref().and_then(|s| s.expanded),
         checked: node.semantics.as_ref().and_then(|s| s.checked),
+        caret,
+        text_selection,
+        id: sem.and_then(|s| s.id.clone()),
+        labelled_by: sem.and_then(|s| s.labelled_by.clone()),
         children,
     }
+}
+
+/// The caret and selection of an editable field whose name is `name`: from
+/// its editable text leaf (the one carrying a caret), as byte indices into
+/// `name`.
+fn caret_of(node: &LayoutNode, name: &str) -> (Option<usize>, Option<(usize, usize)>) {
+    let Some(leaf) = first_text(node).filter(|l| l.caret.is_some()) else {
+        return (None, None);
+    };
+    let NodeContent::Text { text, .. } = &leaf.content else {
+        return (None, None);
+    };
+    if text != name && !(name.is_empty() && text == " ") {
+        return (None, None);
+    }
+    let snap = |i: usize| {
+        let mut i = i.min(name.len());
+        while !name.is_char_boundary(i) {
+            i -= 1;
+        }
+        i
+    };
+    let caret = leaf.caret.map(snap);
+    let selection = leaf
+        .selection
+        .map(|(a, b)| (snap(a.min(b)), snap(a.max(b))))
+        .filter(|(a, b)| b > a);
+    (caret, selection)
 }
 
 impl AccessNode {

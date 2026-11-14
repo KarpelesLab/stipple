@@ -304,6 +304,12 @@ pub enum KeyInput {
         before: usize,
         after: usize,
     },
+    /// Select `anchor..caret` (byte indices into the text; equal for a plain
+    /// caret, which clears the selection), as an assistive technology asks.
+    SetSelection {
+        anchor: usize,
+        caret: usize,
+    },
 }
 
 /// A platform-neutral input event forwarded to an embedded

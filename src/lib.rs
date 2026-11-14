@@ -2634,6 +2634,10 @@ impl<S: 'static> App<S> {
                 selected: node.selected,
                 expanded: node.expanded,
                 checked: node.checked,
+                caret: node.caret,
+                text_selection: node.text_selection,
+                id: node.id.clone(),
+                labelled_by: node.labelled_by.clone(),
                 children: node.children.iter().map(to_platform_a11y).collect(),
             }
         }
@@ -2999,6 +3003,9 @@ impl<S: 'static> App<S> {
                         Ime::Commit(text) => KeyInput::Text(text),
                         Ime::DeleteSurrounding { before, after } => {
                             KeyInput::DeleteSurrounding { before, after }
+                        }
+                        Ime::SetSelection { anchor, caret } => {
+                            KeyInput::SetSelection { anchor, caret }
                         }
                     };
                     if self.try_forward_key(idx, input.clone()) {
@@ -4731,6 +4738,52 @@ mod tests {
         assert_eq!(app.state().a.preedit(), None);
         assert_eq!(app.state().a.text(), "");
         assert_eq!(app.panes[0].preedit_owner, None);
+    }
+
+    /// A screen reader's selection (AT-SPI `SetSelection`, delivered as
+    /// `Ime::SetSelection`) reaches the focused field, and the field's caret,
+    /// selection and label reach the accessibility tree.
+    #[test]
+    fn an_assistive_selection_reaches_the_field_and_the_tree() {
+        let state = Editor {
+            buf: crate::widgets::EditBuffer::from_text("héllo world"),
+        };
+        let mut app = App::new(state, |s: &Editor, cx: &mut Cx<Editor>| {
+            let theme = *cx.theme();
+            let field =
+                crate::widgets::text_editor(cx, &theme, &s.buf, |s: &mut Editor| &mut s.buf)
+                    .labelled_by("note");
+            column(vec![
+                crate::widgets::label(&theme, "Note").a11y_id("note"),
+                field,
+            ])
+        })
+        .logical_size(Size::new(300.0, 100.0));
+        assert!(app.focus_next());
+        assert!(app.press_key(KeyInput::SetSelection {
+            anchor: 1,
+            caret: 6
+        }));
+        assert_eq!(app.state().buf.selected_text().as_deref(), Some("éllo"));
+        app.render_once();
+        let tree = app.accessibility_tree().unwrap();
+        let field = tree
+            .descendants()
+            .into_iter()
+            .find(|n| n.role == crate::core::Role::TextField)
+            .unwrap();
+        assert_eq!(field.name, "héllo world");
+        assert_eq!((field.caret, field.text_selection), (Some(6), Some((1, 6))));
+        assert_eq!(field.labelled_by.as_deref(), Some("note"));
+        let label = tree.descendants().into_iter().find(|n| n.name == "Note");
+        assert_eq!(label.and_then(|l| l.id.as_deref()), Some("note"));
+        // A plain caret clears the selection.
+        assert!(app.press_key(KeyInput::SetSelection {
+            anchor: 99,
+            caret: 99
+        }));
+        assert_eq!(app.state().buf.selection(), None);
+        assert_eq!(app.state().buf.caret(), "héllo world".len());
     }
 
     #[test]

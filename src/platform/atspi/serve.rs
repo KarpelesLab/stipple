@@ -222,6 +222,40 @@ impl Node<'_> {
         ]
     }
 
+    /// The caret as a character offset, where the tree says.
+    fn caret(&self) -> Option<i32> {
+        let c = self.node.caret?;
+        Some(text::char_offset(&self.node.name, c))
+    }
+
+    /// The selection as character offsets `[start, end)`, if any.
+    fn selection(&self) -> Option<(i32, i32)> {
+        let (s, e) = self.node.text_selection?;
+        let t = &self.node.name;
+        Some((text::char_offset(t, s), text::char_offset(t, e)))
+    }
+
+    /// Select the characters `anchor..caret` of an editable field (a plain
+    /// caret when equal): focus it (a click) unless it has the focus, then
+    /// have the field select them. `None` when the tree doesn't carry the
+    /// field's caret (its name isn't its text).
+    fn select(&self, anchor: i32, caret: i32) -> Option<Vec<Event>> {
+        if !editable(self.role()) || self.node.caret.is_none() {
+            return None;
+        }
+        let t = &self.node.name;
+        let mut out = if self.node.focused {
+            Vec::new()
+        } else {
+            self.click()
+        };
+        out.push(Event::Ime(Ime::SetSelection {
+            anchor: text::byte_offset(t, anchor),
+            caret: text::byte_offset(t, caret),
+        }));
+        Some(out)
+    }
+
     /// Replace a text field's text: focus it (a click) unless it has the
     /// focus, then delete all of its text and type the new one.
     fn set_text(&self, s: &str) -> Vec<Event> {
@@ -560,9 +594,22 @@ fn node(b: &Bridge, n: &Node, m: &Message) -> (Reply, Option<Vec<Event>>) {
                     None => n.frame_index as i32,
                 });
             }),
-            "GetRelationSet" => ret("a(ua(so))", |r| {
-                r.array(8, |_| {});
-            }),
+            "GetRelationSet" => {
+                let relations = relations(n);
+                ret("a(ua(so))", |r| {
+                    r.array(8, |r| {
+                        for (kind, targets) in &relations {
+                            crate::platform::a11y::align(&mut r.0, 8);
+                            r.u32(*kind);
+                            r.array(8, |r| {
+                                for chain in targets {
+                                    r.obj(bus, &node_path(n.win.id, chain));
+                                }
+                            });
+                        }
+                    });
+                })
+            }
             "GetState" => ret("au", |r| {
                 let [lo, hi] = n.states();
                 r.array(4, |r| {
@@ -609,7 +656,7 @@ fn node(b: &Bridge, n: &Node, m: &Message) -> (Reply, Option<Vec<Event>>) {
             }
             _ => Reply::Error(UNKNOWN_METHOD),
         },
-        (TEXT, member) if text_role(n.role()) => text_call(n, member, &mut args),
+        (TEXT, member) if text_role(n.role()) => return text_call(n, member, &mut args),
         (EDITABLE_TEXT, member) if editable(n.role()) => {
             return editable_call(n, member, &mut args);
         }
@@ -657,15 +704,67 @@ fn node_property(b: &Bridge, n: &Node, iface: &str, prop: &str) -> Option<Value>
     })
 }
 
-/// Where the caret is: the tree doesn't say, so a focused field's caret is
-/// at the end of its text (where typing leaves it), and other text has none.
+/// Where the caret is: where the tree says, else (a field whose name isn't
+/// its text) a focused field's caret is at the end of its text (where typing
+/// leaves it), and other text has none.
 fn caret(n: &Node) -> Option<i32> {
     let t = n.text()?;
-    Some(if n.node.focused && editable(n.role()) {
+    Some(if let Some(c) = n.caret() {
+        c
+    } else if n.node.focused && editable(n.role()) {
         text::char_count(t)
     } else {
         0
     })
+}
+
+/// `AtspiRelationType`.
+const RELATION_LABEL_FOR: u32 = 1;
+const RELATION_LABELLED_BY: u32 = 2;
+
+/// The node's relations, each with the chains of the nodes it relates to in
+/// its window: labelled-by the nodes whose id is its `labelled_by`, and
+/// label-for the nodes naming its id.
+fn relations(n: &Node) -> Vec<(u32, Vec<Vec<usize>>)> {
+    let Some(root) = n.win.root.as_deref() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Some(id) = &n.node.labelled_by {
+        let labels = find(root, &|m| m.id.as_ref() == Some(id));
+        if !labels.is_empty() {
+            out.push((RELATION_LABELLED_BY, labels));
+        }
+    }
+    if let Some(id) = &n.node.id {
+        let fields = find(root, &|m| m.labelled_by.as_ref() == Some(id));
+        if !fields.is_empty() {
+            out.push((RELATION_LABEL_FOR, fields));
+        }
+    }
+    out
+}
+
+/// The chains of the nodes under `root` (itself included) that `pred` picks.
+fn find(root: &A11yNode, pred: &dyn Fn(&A11yNode) -> bool) -> Vec<Vec<usize>> {
+    fn go(
+        n: &A11yNode,
+        pred: &dyn Fn(&A11yNode) -> bool,
+        chain: &mut Vec<usize>,
+        out: &mut Vec<Vec<usize>>,
+    ) {
+        if pred(n) {
+            out.push(chain.clone());
+        }
+        for (i, c) in n.children.iter().enumerate() {
+            chain.push(i);
+            go(c, pred, chain, out);
+            chain.pop();
+        }
+    }
+    let mut out = Vec::new();
+    go(root, pred, &mut Vec::new(), &mut out);
+    out
 }
 
 fn component(bus: &str, n: &Node, member: &str, args: &mut Args) -> (Reply, Option<Vec<Event>>) {
@@ -766,8 +865,70 @@ fn hit(n: &A11yNode, x: f64, y: f64, chain: &mut Vec<usize>) -> bool {
     false
 }
 
-fn text_call(n: &Node, member: &str, args: &mut Args) -> Reply {
+fn text_call(n: &Node, member: &str, args: &mut Args) -> (Reply, Option<Vec<Event>>) {
     let t = n.text().unwrap_or_default();
+    let selected = n.selection();
+    // The selection calls know of one selection, number 0.
+    let answer = |events: Option<Vec<Event>>| {
+        let ok = events.is_some();
+        (
+            ret("b", |r| {
+                r.bool(ok);
+            }),
+            events,
+        )
+    };
+    match member {
+        "SetCaretOffset" => {
+            let o = args.i32().unwrap_or(0);
+            return answer(n.select(o, o));
+        }
+        "SetSelection" => {
+            let (i, s, e) = (args.i32(), args.i32(), args.i32());
+            let events = match (i, s, e) {
+                (Some(0), Some(s), Some(e)) => n.select(s, e),
+                _ => None,
+            };
+            return answer(events);
+        }
+        "AddSelection" => {
+            let (s, e) = (args.i32().unwrap_or(0), args.i32().unwrap_or(0));
+            return answer(selected.is_none().then(|| n.select(s, e)).flatten());
+        }
+        "RemoveSelection" => {
+            let events = match (args.i32(), selected, n.caret()) {
+                (Some(0), Some(_), Some(c)) => n.select(c, c),
+                _ => None,
+            };
+            return answer(events);
+        }
+        "GetNSelections" => {
+            return (
+                ret("i", |r| {
+                    r.i32(i32::from(selected.is_some()));
+                }),
+                None,
+            );
+        }
+        "GetSelection" => {
+            let (s, e) = match args.i32() {
+                Some(0) => selected.unwrap_or((0, 0)),
+                _ => (0, 0),
+            };
+            return (
+                ret("ii", |r| {
+                    r.i32(s).i32(e);
+                }),
+                None,
+            );
+        }
+        _ => {}
+    }
+    (text_read(n, t, member, args), None)
+}
+
+/// The `Text` calls that only read.
+fn text_read(n: &Node, t: &str, member: &str, args: &mut Args) -> Reply {
     let count = text::char_count(t);
     let sii = |(s, a, b): (String, i32, i32)| {
         ret("sii", move |r| {
@@ -806,19 +967,8 @@ fn text_call(n: &Node, member: &str, args: &mut Args) -> Reply {
             let (o, g) = (args.i32().unwrap_or(0), args.u32().unwrap_or(0));
             sii(text::string_at(t, o, g))
         }
-        "SetCaretOffset"
-        | "AddSelection"
-        | "RemoveSelection"
-        | "SetSelection"
-        | "ScrollSubstringTo"
-        | "ScrollSubstringToPoint" => ret("b", |r| {
+        "ScrollSubstringTo" | "ScrollSubstringToPoint" => ret("b", |r| {
             r.bool(false);
-        }),
-        "GetNSelections" => ret("i", |r| {
-            r.i32(0);
-        }),
-        "GetSelection" => ret("ii", |r| {
-            r.i32(0).i32(0);
         }),
         "GetAttributeValue" => ret("s", |r| {
             r.str("");
