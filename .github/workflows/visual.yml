@@ -3393,13 +3393,28 @@ jobs:
       # screen), hit-tests the middle of a button, runs the button's "click"
       # action (the app counts the tap, its log and its tree follow, and a
       # property-change event says so), then presses Tab and sees
-      # state-changed:focused and focus: for the text field.
+      # state-changed:focused and focus: for the text field. It types into
+      # the field (EditableText), reads its caret, selects "ell" and moves
+      # the caret (Text.SetSelection / SetCaretOffset, with
+      # text-selection-changed and text-caret-moved events), follows its
+      # labelled-by relation to its caption and back (label-for), then
+      # restarts at-spi2-registryd and finds the app registered again.
       - name: Read and drive a running X11 window through AT-SPI (out of process)
         run: |
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 2
           DISPLAY=:99 dbus-run-session -- \
             bash .github/scripts/atspi-linux.sh target/release/touchdemo visual_output xdotool key Tab
+
+      # The accessibility bus itself restarting (at-spi-bus-launcher killed,
+      # then started again on demand): the app reconnects and registers
+      # again, and a fresh pyatspi client finds it. Not yet seen passing on
+      # the runner, so it doesn't fail the job.
+      - name: Survive the accessibility bus restarting (X11)
+        continue-on-error: true
+        run: |
+          DISPLAY=:99 dbus-run-session -- \
+            bash .github/scripts/atspi-bus-restart.sh target/release/touchdemo visual_output
 
       # Orca itself, headless: its debug log records every utterance whether
       # or not a synthesizer is heard. Required, after passing in every run

@@ -3,10 +3,17 @@
 as Orca does: find the app among the registry's applications, walk its tree
 (roles, names, extents on screen), hit-test a point, run a button's action
 and see the app react (its tree and its log), then press Tab and see the
-focus event arrive for a control. The Linux counterpart of uia-walk.ps1.
+focus event arrive for a control; type into the text field, read and move
+its caret and selection, follow its labelled-by relation to its caption; and
+finally restart the registry (at-spi2-registryd) and find the app again,
+re-registered. The Linux counterpart of uia-walk.ps1.
 
 usage: atspi-walk.py APP_NAME APP_LOG TAB_COMMAND...
+       atspi-walk.py --find-only APP_NAME
+         (only find the app and its tree, as after the bus restarted)
 """
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -14,7 +21,11 @@ import time
 import pyatspi
 from gi.repository import GLib
 
-app_name, app_log, tab_cmd = sys.argv[1], sys.argv[2], sys.argv[3:]
+find_only = sys.argv[1] == "--find-only"
+if find_only:
+    app_name, app_log, tab_cmd = sys.argv[2], None, []
+else:
+    app_name, app_log, tab_cmd = sys.argv[1], sys.argv[2], sys.argv[3:]
 failures = []
 
 
@@ -100,7 +111,7 @@ def on_event(event):
 pyatspi.Registry.registerEventListener(
     on_event, "focus:", "object:state-changed:focused", "window:activate",
     "object:property-change:accessible-name", "object:children-changed",
-    "object:text-changed")
+    "object:text-changed", "object:text-caret-moved", "object:text-selection-changed")
 
 app = find_app()
 check(app is not None, "the registry lists the application '{}'".format(app_name))
@@ -125,6 +136,12 @@ count = named(elements, pyatspi.ROLE_LABEL, "Rows tapped: ")
 check(row0 is not None, "a push button named 'Row 0'")
 check(field is not None, "an entry (the text field)")
 check(count is not None, "a label 'Rows tapped: N'")
+if find_only:
+    if failures:
+        print("AT-SPI checks failed: " + "; ".join(failures), flush=True)
+        sys.exit(1)
+    print("atspi: found the app and its tree", flush=True)
+    sys.exit(0)
 
 if row0 is not None:
     fx, fy, fw, fh = extents(frame)
@@ -198,6 +215,122 @@ if field is not None:
         check(any(line.strip() == 'touchdemo: text "hello"' for line in f), "the app logged the new text")
     check(any(t.startswith("object:text-changed:insert") for t, *_ in events),
           "an object:text-changed:insert event announced the typing")
+
+
+
+def wait_for(cond, seconds=10):
+    for _ in range(int(seconds / 0.25)):
+        pump(0.25)
+        try:
+            if cond():
+                return True
+        except Exception as e:  # an object gone mid-swap: look again
+            print("atspi: retrying after {}".format(e), flush=True)
+    return False
+
+
+if field is not None:
+    # The caret, as the app's field has it: after the text just typed.
+    text = field.queryText()
+    check(wait_for(lambda: text.caretOffset == 5),
+          "the entry's caret is after 'hello' (offset 5, got {})".format(text.caretOffset))
+    check(text.getNSelections() == 0, "nothing is selected yet")
+    # A screen reader selects "ell": the field selects it, and says so.
+    del events[:]
+    check(text.setSelection(0, 1, 4), "setSelection(0, 1, 4) on the entry is accepted")
+    check(wait_for(lambda: text.getNSelections() == 1 and tuple(text.getSelection(0)) == (1, 4)),
+          "the entry now has 'ell' selected (got {} selections, {})".format(
+              text.getNSelections(), tuple(text.getSelection(0))))
+    check(text.caretOffset == 4, "the caret is at the selection's end (got {})".format(text.caretOffset))
+    check(wait_for(lambda: any(t.startswith("object:text-selection-changed") for t, *_ in events)),
+          "an object:text-selection-changed event announced it")
+    check(any(t.startswith("object:text-caret-moved") for t, *_ in events),
+          "...and an object:text-caret-moved event")
+    # Moving the caret clears the selection.
+    check(text.setCaretOffset(2), "setCaretOffset(2) is accepted")
+    check(wait_for(lambda: text.caretOffset == 2 and text.getNSelections() == 0),
+          "the caret moved to 2 and the selection went (caret {}, {} selections)".format(
+              text.caretOffset, text.getNSelections()))
+    check(field.name == "hello", "the text is still 'hello' (got '{}')".format(field.name))
+
+    # The entry's caption, through its relations.
+    labels = []
+    for rel in field.getRelationSet():
+        if rel.getRelationType() == pyatspi.RELATION_LABELLED_BY:
+            labels += [rel.getTarget(i) for i in range(rel.getNTargets())]
+    names = [l.name for l in labels if l is not None]
+    check(names == ["Note"], "the entry is labelled by 'Note' (got {})".format(names))
+    if labels and labels[0] is not None:
+        targets = []
+        for rel in labels[0].getRelationSet():
+            if rel.getRelationType() == pyatspi.RELATION_LABEL_FOR:
+                targets += [rel.getTarget(i) for i in range(rel.getNTargets())]
+        check(any(t is not None and t.getRole() == pyatspi.ROLE_ENTRY for t in targets),
+              "...and 'Note' is the label for the entry")
+
+
+def a11y_bus():
+    out = subprocess.run(["dbus-send", "--session", "--print-reply=literal", "--dest=org.a11y.Bus",
+                          "/org/a11y/bus", "org.a11y.Bus.GetAddress"],
+                         capture_output=True, text=True)
+    return out.stdout.strip()
+
+
+def registry_pid(bus):
+    """The registry's process on this session's accessibility bus (never
+    another session's), or None while it has none."""
+    out = subprocess.run(["dbus-send", "--bus=" + bus, "--print-reply=literal",
+                          "--dest=org.freedesktop.DBus", "/org/freedesktop/DBus",
+                          "org.freedesktop.DBus.GetConnectionUnixProcessID",
+                          "string:org.a11y.atspi.Registry"],
+                         capture_output=True, text=True)
+    words = out.stdout.split()
+    return int(words[-1]) if out.returncode == 0 and words else None
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+# The registry restarts (it crashed, or was updated): the app registers
+# again and a screen reader finds it as before.
+bus = a11y_bus()
+old = registry_pid(bus) if bus else None
+check(old is not None, "the registry runs on the accessibility bus {} (pid {})".format(bus, old))
+if old is not None:
+    os.kill(old, signal.SIGTERM)
+    for _ in range(40):
+        if not alive(old):
+            break
+        time.sleep(0.25)
+    check(not alive(old), "the registry stopped")
+    time.sleep(1)
+    # The accessibility bus starts it again on the next call to it (here,
+    # pyatspi's); start it by hand if that hasn't happened.
+    pyatspi.Registry.getDesktop(0).childCount
+    time.sleep(2)
+    if registry_pid(bus) is None:
+        for path in ("/usr/libexec/at-spi2-registryd", "/usr/lib/at-spi2-core/at-spi2-registryd"):
+            if os.path.exists(path):
+                print("atspi: starting {}".format(path), flush=True)
+                subprocess.Popen([path])
+                break
+        time.sleep(2)
+    new = registry_pid(bus)
+    check(new is not None and new != old, "a new registry runs (pid {})".format(new))
+again = find_app()
+check(again is not None, "after the registry restarted, it lists '{}' again".format(app_name))
+if again is not None:
+    frame = again.getChildAtIndex(0)
+    check(frame is not None and frame.getRole() == pyatspi.ROLE_FRAME,
+          "...with its frame")
+    found = walk(again, 0, [])
+    check(named(found, pyatspi.ROLE_PUSH_BUTTON, "Row 0") is not None,
+          "...and its tree ('Row 0')")
 
 if failures:
     print("AT-SPI checks failed: " + "; ".join(failures), flush=True)

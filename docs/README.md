@@ -441,7 +441,12 @@ tree from a helper thread (hand-written D-Bus): an object per node with
 children and focus changes and window activation. CI walks a running X11
 window from a pyatspi client (as Orca does), hit-tests it, runs a button's
 action, follows the focus after a Tab and edits the field (passing in CI);
-the same under sway, and Orca itself, pass in CI and are required. No caret, selection or relations. See
+the same under sway, and Orca itself, pass in CI and are required. A
+field's caret and selection can be read and set (with caret-moved and
+selection-changed events), a control declared `labelled_by` its caption has
+labelled-by / label-for relations, and the app registers again when the
+registry or the accessibility bus restarts; the walk checks these too
+(passing locally, not yet seen in CI). See
 [accessibility.md](accessibility.md#linux).
 
 ⁶⁷ A hand-built provider per node, hosted by the window's provider: control

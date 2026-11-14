@@ -1708,9 +1708,27 @@ Most input only works on X11 today.
   action reaching the app, the focus events after Tab and an edit through
   `EditableText` (passes locally; required). The same walk under sway and
   Orca speaking the focused entry (`orca-linux.sh`, from Orca's debug log)
-  run there too, pass in CI and are required. Left: caret and
-  selection (the tree doesn't carry them), relations, the X root window's
-  `AT_SPI_BUS` property, joining a restarted registry again.
+  run there too, pass in CI and are required.
+- ✅ AT-SPI bridge depth: a text field's tree node carries its caret and
+  selection (`AccessNode::caret` / `text_selection`, from the field's
+  editable text), read through `Text.CaretOffset`, `GetNSelections` and
+  `GetSelection`, and moved by `SetCaretOffset`, `SetSelection`,
+  `AddSelection` and `RemoveSelection` (delivered as the new
+  `Ime::SetSelection` → `KeyInput::SetSelection`, which `EditBuffer`
+  applies); swaps raise `object:text-caret-moved` and
+  `object:text-selection-changed`. `GetRelationSet` gives labelled-by /
+  label-for between a control and its caption, declared with the new
+  `Element::labelled_by(id)` and `Element::a11y_id(id)`. The bridge watches
+  `NameOwnerChanged` for `org.a11y.atspi.Registry` and embeds the app again
+  when the registry restarts (not twice with the same one), and reconnects
+  and re-registers when the accessibility bus itself goes away and comes
+  back. The `a11y-dbus` walks (X11 and sway, required) check the caret, a
+  selection set from outside, the relations, and that the app is found again
+  after `at-spi2-registryd` is restarted; a separate step (not failing the job
+  yet) restarts `at-spi-bus-launcher`. All pass locally under Xvfb (sway not
+  tried locally); not yet seen in CI. Left: the X root window's `AT_SPI_BUS`
+  property, controller-for / member-of relations (the tree doesn't know them),
+  relations, caret and selection on the other desktops' bridges.
 - ⬜ Accessibility depth found by the out-of-process checks and the screen
   readers: a plain scrollable container (`Element::scrollable`) is a group
   with no scroll actions on every platform (only lists, trees and tables have

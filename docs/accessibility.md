@@ -3,7 +3,8 @@
 Stipple draws every control itself, so the operating system can't see them on
 its own. Each frame, the `App` builds an accessibility tree from the layout
 (`stipple::core::a11y`: roles, names, bounds, focus, selected / checked /
-expanded state), maps it to the platform-neutral `stipple::platform::A11yNode`
+expanded state, a text field's caret and selection, and which element labels
+a field), maps it to the platform-neutral `stipple::platform::A11yNode`
 tree, and gives it to the window, whose backend exposes it to the platform's
 accessibility API. `App::accessibility_tree()` returns the tree for tests.
 
@@ -275,9 +276,17 @@ or `zbus`).
   which starts `at-spi-bus-launcher` when needed. With no session bus or no
   accessibility bus it gives up quietly and the windows stop handing their
   trees over; startup never waits for it. `NO_AT_BRIDGE=1` turns it off, as
-  for GTK. (The X root window's `AT_SPI_BUS` property isn't read.)
+  for GTK. (The X root window's `AT_SPI_BUS` property isn't read.) If the
+  accessibility bus goes away after it was reached (`at-spi-bus-launcher`
+  restarted), the thread keeps the trees, asks for the bus again (which
+  starts a new one), reconnects and registers again, waiting 1, 2, 4… up to
+  30 seconds between tries.
 - **Registering.** It calls `org.a11y.atspi.Socket.Embed` on the registry's
-  root, so the app appears among the desktop's applications. The app's root
+  root, so the app appears among the desktop's applications, and watches
+  the registry's name (`NameOwnerChanged` for `org.a11y.atspi.Registry`):
+  when `at-spi2-registryd` restarts, the app embeds itself again in the new
+  one (once: a registry started by the app's own `Embed` isn't asked twice,
+  which would list the app twice). The app's root
   (`/org/a11y/atspi/accessible/root`) has the `Application` role and
   interface (toolkit "Stipple", its version, the id the registry sets) and
   the windows' frames as its children; the app's name is the program's.
@@ -287,7 +296,7 @@ or `zbus`).
   node's object path is its place in the tree (`…/w{window}_{i}_{j}`), so it
   keeps its path across rebuilds while the tree's shape stays. Every node has
   `Accessible` (role, name, parent, children, index in parent, state,
-  attributes, interfaces, an empty relation set) and `Component` (extents in
+  attributes, interfaces, relations) and `Component` (extents in
   screen, window and parent coordinates, `Contains`, `GetAccessibleAtPoint`
   to the deepest node, `GrabFocus` for fields and items). Buttons, menu
   items, checkboxes, switches, selects, tabs, column headers and list and
@@ -298,14 +307,41 @@ or `zbus`).
   `EditableText` (setting, inserting or deleting text replaces the field's
   text through the input-method path, after a click to focus it); a spin
   button with a number has `Value`.
+- **Caret and selection.** A text field's tree node carries its caret and
+  selection (byte indices into its text, from the field's editable text,
+  as `EditBuffer` has them), so `Text.CaretOffset`, `GetNSelections` and
+  `GetSelection` read them in characters. `SetCaretOffset`, `SetSelection`,
+  `AddSelection` (when nothing is selected: a field has one selection) and
+  `RemoveSelection` move them: a click focuses the field if it hasn't the
+  focus, then the field gets `Ime::SetSelection` (`KeyInput::SetSelection`
+  for the element; `EditBuffer` selects the range, a plain caret when the
+  ends are equal). A field whose name isn't its text (one with an
+  `a11y_label`, a password field) carries no caret: its caret reads as the
+  end of its text when focused, and the calls that move it are refused.
+- **Relations.** `GetRelationSet` gives `labelled-by` on a control that
+  names its caption with `Element::labelled_by(id)` and `label-for` on the
+  caption (`Element::a11y_id(id)`), the way a `for` attribute ties a label
+  to a field on the web: `label(&theme, "Note").a11y_id("note")` beside
+  `text_editor(…).labelled_by("note")`. Ids are matched within the window's
+  tree. Nothing is inferred: a label beside a field without them isn't
+  related to it (Orca guesses one from the layout, as it does for any
+  toolkit). Only AT-SPI exposes the relation so far (not UIA's `LabeledBy`,
+  nor macOS's title element). There are no controller-for or member-of
+  relations: the tree doesn't know which list a combo box opens or which
+  radio buttons form a group.
 - **Events.** Swapping a tree raises what changed, node by node at the same
   place: `object:property-change:accessible-name` (and `…-role`),
-  `object:text-changed:delete`/`insert` for text, `object:state-changed` for
+  `object:text-changed:delete`/`insert` for text,
+  `object:text-caret-moved` (with the new offset) and
+  `object:text-selection-changed` for a field's caret and selection,
+  `object:state-changed` for
   checked, selected and expanded, `object:children-changed:add`/`remove`, and
   for the focus `object:state-changed:focused` and `focus:`. A window gaining
   or losing the keyboard focus raises `window:activate`/`deactivate` (and its
   frame's `active` state). New and closed windows are children added to and
-  removed from the app's root.
+  removed from the app's root. A swap that adds or removes nodes raises
+  `object:children-changed` on their parent for each one (removed from the
+  end first), so a client's cached child lists follow.
 
 Screen coordinates on X11 are the window content's position on the root
 window (kept up to date from `ConfigureNotify`); Wayland doesn't tell clients
@@ -330,20 +366,39 @@ on), from its own process:
 - presses Tab (`xdotool`) and gets `object:state-changed:focused` and
   `focus:` for the entry, the only node whose state says focused;
 - sets the entry's text through `EditableText`: the app logs it, a
-  text-changed event arrives and the entry reads it back.
+  text-changed event arrives and the entry reads it back;
+- reads the entry's caret after the typed text (offset 5), selects "ell"
+  (`setSelection(0, 1, 4)`): the entry reports one selection (1, 4) with the
+  caret at 4, and `text-selection-changed` and `text-caret-moved` events
+  arrive; then `setCaretOffset(2)` moves the caret and clears the selection;
+- follows the entry's `labelled-by` relation to its caption "Note" (on
+  Linux, `touchdemo` puts a "Note" label beside the field), and the
+  caption's `label-for` back to the entry;
+- stops this session's `at-spi2-registryd` (its process found through the
+  accessibility bus, never another session's), lets the bus start a new one
+  (or starts it), and finds `touchdemo` among the new registry's
+  applications again, with its frame and tree.
 
 This is a required check; it passes locally under Xvfb (at-spi2-core 2.58,
-pyatspi 2.58), and passes in CI. The same walk under headless sway (`wtype` for the Tab) and
-**Orca** itself (`.github/scripts/orca-linux.sh`: Orca runs headless with its
-debug log, which records every utterance as `SPEECH OUTPUT`, and must speak
-the entry after Tab) run in the same job, pass in CI and are required too.
+pyatspi 2.58), and passed in CI before the caret, selection, relation and
+registry-restart checks were added (those pass locally; not yet seen in CI).
+Without the re-registration the last check fails, as it should. A further
+step, *Survive the accessibility bus restarting*
+(`.github/scripts/atspi-bus-restart.sh`), kills `at-spi-bus-launcher`
+itself, asks for the bus again, and a fresh pyatspi client must find the
+app on the new bus; it passes locally and doesn't fail the job yet. The same
+walk under headless sway (`wtype` for the Tab) and **Orca** itself
+(`.github/scripts/orca-linux.sh`: Orca runs headless with its debug log,
+which records every utterance as `SPEECH OUTPUT`, and must speak the entry
+after Tab) run in the same job, pass in CI and are required too. The sway
+walk runs the new checks as well; they haven't been run under a Wayland
+compositor outside CI.
 
 `a11ydemo serve` still serves a fixed tree over the session bus for the
 `dbus-send` checks.
 
-Not covered: no caret or selection (the tree doesn't carry them: a focused
-field's caret reads as the end of its text, `SetCaretOffset` and selections
-are refused), no text attributes, no relations (labels for fields), a spin
-button's `Value` has no range, and a plain scroll container has no scroll
-actions. The registry is joined once: if it restarts, the app isn't
-registered again.
+Not covered: no text attributes, character extents are the node's box split
+evenly (not the glyphs'), only labelled-by / label-for relations (and only
+where the app declares them), a spin button's `Value` has no range, and a
+plain scroll container has no scroll actions. Other desktops' bridges don't
+expose the caret, selection or relations yet.
