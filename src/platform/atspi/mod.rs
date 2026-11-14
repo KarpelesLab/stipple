@@ -8,7 +8,10 @@
 //! to it and registers the app with the registry (`org.a11y.atspi.Socket.Embed`
 //! on `org.a11y.atspi.Registry`'s root). With no session bus or no
 //! accessibility bus it gives up quietly and the app runs as before; it never
-//! holds up startup. `NO_AT_BRIDGE=1` (GTK's switch) turns it off.
+//! holds up startup. `NO_AT_BRIDGE=1` (GTK's switch) turns it off. It watches
+//! the registry's name and embeds the app again when the registry restarts,
+//! and when the accessibility bus itself goes away it finds it again and
+//! re-registers (see [`registry`]).
 //!
 //! The thread answers the screen reader's calls itself, from the latest tree
 //! each window handed over: the app's root (`/org/a11y/atspi/accessible/root`,
@@ -21,15 +24,22 @@
 //! window and parent coordinates, hit testing), `Action` (a click at the
 //! node's middle, handed to the UI thread through the loop's wake and
 //! delivered as pointer events, as UIA's Invoke does on Windows), `Text` and
-//! `EditableText` (text fields), and `Value` (a spin button's number).
+//! `EditableText` (text fields, with their caret and selection, which a
+//! screen reader can move, delivered as
+//! [`Ime::SetSelection`](crate::platform::Ime::SetSelection)), and `Value`
+//! (a spin button's number). `GetRelationSet` gives labelled-by / label-for
+//! between a field and its caption
+//! ([`Element::labelled_by`](crate::core::Element::labelled_by)).
 //!
 //! The UI thread raises the events when it swaps a tree: names, roles,
-//! text, checked/selected/expanded states and children that changed, and
-//! the focus moving (`object:state-changed:focused` and `focus:`); a window's
-//! activation raises `window:activate` / `window:deactivate`.
+//! text, carets and selections, checked/selected/expanded states and
+//! children that changed, and the focus moving (`object:state-changed:focused`
+//! and `focus:`); a window's activation raises `window:activate` /
+//! `window:deactivate`.
 
 mod events;
 mod marshal;
+mod registry;
 mod serve;
 mod text;
 
@@ -123,7 +133,7 @@ fn debug(args: std::fmt::Arguments<'_>) {
     }
 }
 
-/// Set once the bus thread has given up (no bus, or it went away): the
+/// Set once the bus thread has given up (no accessibility bus at all): the
 /// windows stop handing their trees over.
 static STOPPED: AtomicBool = AtomicBool::new(false);
 
@@ -402,21 +412,60 @@ fn start() {
     START.call_once(|| {
         let spawned = std::thread::Builder::new()
             .name("stipple-atspi".into())
-            .spawn(|| {
-                if let Err(e) = run() {
-                    debug(format_args!("bridge stopped: {e}"));
-                }
-                STOPPED.store(true, Ordering::Relaxed);
-                *WRITER.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                let mut b = lock();
-                b.bus.clear();
-                b.windows.clear();
-                b.actions.clear();
-            });
+            .spawn(bus_thread);
         if let Err(e) = spawned {
             debug(format_args!("no bridge thread: {e}"));
         }
     });
+}
+
+/// The bus thread: connect and serve; when the accessibility bus goes away
+/// after it was reached (its launcher restarted), find it again and
+/// re-register, waiting longer between tries (up to half a minute). When no
+/// bus is there at first, give up: the app has no accessibility bus.
+fn bus_thread() {
+    let mut delay = std::time::Duration::from_secs(1);
+    let mut ever = false;
+    loop {
+        let mut connected = false;
+        if let Err(e) = run(&mut connected) {
+            debug(format_args!("bridge stopped: {e}"));
+        }
+        *WRITER.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        {
+            let mut b = lock();
+            b.bus.clear();
+            b.desktop = (String::new(), String::new());
+            b.actions.clear();
+            if !(ever || connected) {
+                STOPPED.store(true, Ordering::Relaxed);
+                b.windows.clear();
+                return;
+            }
+        }
+        if connected {
+            ever = true;
+            delay = std::time::Duration::from_secs(1);
+        }
+        debug(format_args!("reconnecting in {delay:?}"));
+        std::thread::sleep(delay);
+        delay = (delay * 2).min(std::time::Duration::from_secs(30));
+    }
+}
+
+/// Ask the registry to embed our root (`Socket.Embed`); the serial of the
+/// call, whose reply names the desktop.
+fn embed(writer: &mut Writer, name: &str) -> Result<u32, String> {
+    let mut body = Body::new();
+    body.obj(name, ROOT_PATH);
+    writer.call(
+        REGISTRY,
+        ROOT_PATH,
+        "org.a11y.atspi.Socket",
+        "Embed",
+        "(so)",
+        &body.0,
+    )
 }
 
 /// The accessibility bus's address.
@@ -444,12 +493,17 @@ fn bus_address() -> Result<String, String> {
 }
 
 /// Connect, register with the registry, then answer calls until the
-/// connection drops.
-fn run() -> Result<(), String> {
+/// connection drops; `connected` is set once the bus is reached. The
+/// registry restarting (its name changing owner) registers the app again.
+fn run(connected: &mut bool) -> Result<(), String> {
     let addr = bus_address()?;
     debug(format_args!("accessibility bus at {addr}"));
     let mut bus = DBus::connect_address(&addr)?;
+    *connected = true;
     let name = bus.unique_name().to_string();
+    if let Err(e) = bus.add_match(registry::OWNER_RULE) {
+        debug(format_args!("can't watch the registry: {e}"));
+    }
     let stream = bus.clone_stream().map_err(|e| format!("socket: {e}"))?;
     // A stuck bus mustn't stall the UI thread raising an event.
     let _ = stream.set_write_timeout(Some(std::time::Duration::from_millis(500)));
@@ -457,16 +511,8 @@ fn run() -> Result<(), String> {
         stream,
         serial: bus.serial() + 1,
     };
-    let mut body = Body::new();
-    body.obj(&name, ROOT_PATH);
-    let embed = writer.call(
-        REGISTRY,
-        ROOT_PATH,
-        "org.a11y.atspi.Socket",
-        "Embed",
-        "(so)",
-        &body.0,
-    )?;
+    let mut registration = registry::Registration::default();
+    registration.sent(embed(&mut writer, &name)?);
     lock().bus = name.clone();
     *WRITER.lock().unwrap_or_else(|e| e.into_inner()) = Some(writer);
     debug(format_args!("connected as {name}; embedding"));
@@ -486,19 +532,43 @@ fn run() -> Result<(), String> {
                     crate::platform::wake::wake();
                 }
             }
-            2 if m.reply_serial == embed => {
+            2 | 3 => {
+                let ok = m.mtype == 2;
+                let Some(again) = registration.answered(m.reply_serial, &m.sender, ok) else {
+                    continue;
+                };
                 let mut args = marshal::Args::new(&m.body);
-                if let (Some(bus), Some(path)) = (args.str(), args.str()) {
+                if !ok {
+                    debug(format_args!("Embed failed: {}", m.sender));
+                } else if let (Some(bus), Some(path)) = (args.str(), args.str()) {
                     debug(format_args!("embedded; the desktop is {bus} {path}"));
                     lock().desktop = (bus, path);
                 }
+                if again {
+                    reembed(&mut registration, &name)?;
+                }
             }
-            3 if m.reply_serial == embed => {
-                debug(format_args!("the registry refused Embed"));
+            4 => {
+                if let Some(owner) = registry::owner_change(&m) {
+                    debug(format_args!("the registry's owner is now '{owner}'"));
+                    if registration.owner_changed(&owner) {
+                        reembed(&mut registration, &name)?;
+                    }
+                }
             }
             _ => {}
         }
     }
+}
+
+/// Embed the app with the registry again (it was restarted).
+fn reembed(registration: &mut registry::Registration, name: &str) -> Result<(), String> {
+    debug(format_args!("embedding again"));
+    lock().desktop = (String::new(), String::new());
+    if let Some(w) = WRITER.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+        registration.sent(embed(w, name)?);
+    }
+    Ok(())
 }
 
 /// Send `signals` (once connected).
