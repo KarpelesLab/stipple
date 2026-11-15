@@ -33,6 +33,28 @@ jobs:
       - name: listmotion selftest (enter, exit and layout animations, off-screen)
         run: cargo run -p listmotion -- --selftest
 
+  # Gamepads on Linux: a virtual pad made through uinput
+  # (.github/scripts/uinput-gamepad.py) must show up in `gamepaddemo --list`,
+  # read through evdev. Non-blocking: runners may lack uinput.
+  gamepad-linux:
+    name: Gamepad (evdev, virtual uinput pad)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the gamepad demo
+        run: cargo build -p gamepaddemo
+      - name: List a virtual gamepad
+        run: |
+          sudo modprobe uinput || true
+          sudo python3 .github/scripts/uinput-gamepad.py 20 &
+          sleep 2
+          out=$(sudo ./target/debug/gamepaddemo --list)
+          echo "$out"
+          echo "$out" | grep -q "Stipple Virtual Pad \[1234:5678\]"
+
   msrv:
     name: MSRV 1.88 (workspace)
     runs-on: ubuntu-latest

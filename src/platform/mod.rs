@@ -43,6 +43,8 @@ mod error;
 mod event;
 /// The display-driven frame clock that paces animations.
 pub mod frame;
+/// Gamepads: connection, buttons and axes on a standard layout, rumble.
+pub mod gamepad;
 /// Key and scroll translation tables shared by the native backends.
 mod input;
 /// Android's `InputConnection` model of a Stipple text field.

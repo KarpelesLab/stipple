@@ -526,6 +526,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements; touch gestures (scrolling, long press, pinch)
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
 - [The keyboard](keyboard.md): raw keys for terminals and games, keeping Tab, key repeat, Option as Meta
+- [Gamepads](gamepads.md): connected pads, buttons and axes on a standard layout, rumble, and Linux device permissions
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files
 - [The native theme](native-theme.md): `Theme::native()` and OS-drawn controls
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop

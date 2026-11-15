@@ -363,6 +363,15 @@ export async function start(canvas, wasmUrl, options = {}) {
           sessionStorage.setItem(stateKey, btoa(bin));
         } catch (err) { console.warn("stipple: the state couldn't be saved", err); }
       },
+      gamepad_rumble(index, low, high, ms) {
+        const pad = navigator.getGamepads?.()[index];
+        const act = pad?.vibrationActuator;
+        if (!act?.playEffect) return 0;
+        act.playEffect("dual-rumble", {
+          duration: ms, strongMagnitude: low, weakMagnitude: high,
+        }).catch(() => {});
+        return 1;
+      },
       message_box(confirm, ptr, len) {
         const text = str(ptr, len);
         if (confirm) return window.confirm(text) ? 1 : 0;
@@ -639,6 +648,46 @@ export async function start(canvas, wasmUrl, options = {}) {
   };
   document.addEventListener("copy", copy);
   document.addEventListener("cut", copy);
+
+  // Gamepads: the Gamepad API has no input events, so poll
+  // `navigator.getGamepads()` each animation frame while a pad is connected,
+  // and hand the module each button and axis (standard-mapping indexes; it
+  // keeps only changes). A module without the exports skips it.
+  if (e.stipple_gamepad_connect && navigator.getGamepads) {
+    const known = new Map(); // index -> Gamepad.id
+    let polling = false;
+    const pollPads = () => {
+      polling = false;
+      let pads = [];
+      try { pads = navigator.getGamepads() || []; } catch (_) {}
+      const seen = new Set();
+      for (const pad of pads) {
+        if (!pad || !pad.connected) continue;
+        seen.add(pad.index);
+        if (known.get(pad.index) !== pad.id) {
+          known.set(pad.index, pad.id);
+          e.stipple_gamepad_connect(pad.index, ...passStr(pad.id));
+        }
+        pad.buttons.forEach((b, i) => e.stipple_gamepad_button(pad.index, i, b.value, b.pressed ? 1 : 0));
+        pad.axes.forEach((v, i) => e.stipple_gamepad_axis(pad.index, i, v));
+      }
+      for (const index of [...known.keys()]) {
+        if (!seen.has(index)) {
+          known.delete(index);
+          e.stipple_gamepad_disconnect(index);
+        }
+      }
+      if (known.size) schedulePads();
+    };
+    const schedulePads = () => {
+      if (polling) return;
+      polling = true;
+      requestAnimationFrame(pollPads);
+    };
+    window.addEventListener("gamepadconnected", schedulePads);
+    window.addEventListener("gamepaddisconnected", schedulePads);
+    schedulePads();
+  }
 
   return { exports: e, stats, canvas, overlay, input, colorScheme: scheme, saveState };
 }

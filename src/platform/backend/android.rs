@@ -207,6 +207,7 @@ unsafe extern "C" {
 
     fn AInputEvent_getType(event: *const c_void) -> i32;
     fn AInputEvent_getDeviceId(event: *const c_void) -> i32;
+    fn AInputEvent_getSource(event: *const c_void) -> i32;
     fn AKeyEvent_getAction(event: *const c_void) -> i32;
     fn AKeyEvent_getKeyCode(event: *const c_void) -> i32;
     fn AKeyEvent_getMetaState(event: *const c_void) -> i32;
@@ -1595,12 +1596,82 @@ impl Loop<'_> {
                 continue;
             }
             let handled = match unsafe { AInputEvent_getType(event) } {
+                AINPUT_EVENT_TYPE_KEY if self.gamepad_key(event) => true,
+                AINPUT_EVENT_TYPE_MOTION if self.gamepad_motion(event) => true,
                 AINPUT_EVENT_TYPE_KEY => self.key(event),
                 AINPUT_EVENT_TYPE_MOTION => self.motion(event),
                 _ => false,
             };
             unsafe { AInputQueue_finishEvent(queue, event, handled as c_int) };
         }
+    }
+
+    /// What the platform says about input device `device`, for a gamepad.
+    fn gamepad_info(&self, device: i32) -> crate::platform::gamepad::GamepadInfo {
+        use crate::platform::gamepad::GamepadInfo;
+        let vm = unsafe { (*self.instance.activity).vm };
+        match unsafe { jni::input_device(vm, device) } {
+            Some((name, vendor, product)) if vendor > 0 && product > 0 => {
+                GamepadInfo::new(name).with_ids(vendor as u16, product as u16)
+            }
+            Some((name, ..)) => GamepadInfo::new(name),
+            None => GamepadInfo::new("Gamepad"),
+        }
+    }
+
+    /// A key from a gamepad: its button goes to the gamepad. Returns whether
+    /// that's all it does; D-pad keys also go on as arrow keys.
+    fn gamepad_key(&mut self, event: *mut c_void) -> bool {
+        use crate::platform::gamepad::{Change, GamepadButton, android};
+        let source = unsafe { AInputEvent_getSource(event) };
+        if source & android::AINPUT_SOURCE_GAMEPAD != android::AINPUT_SOURCE_GAMEPAD {
+            return false;
+        }
+        let (action, code, device) = unsafe {
+            (
+                AKeyEvent_getAction(event),
+                AKeyEvent_getKeyCode(event),
+                AInputEvent_getDeviceId(event),
+            )
+        };
+        let Some(button) = android::button(code) else {
+            return false;
+        };
+        let pressed = match action {
+            AKEY_EVENT_ACTION_DOWN => true,
+            AKEY_EVENT_ACTION_UP => false,
+            _ => return true,
+        };
+        android::input(
+            device,
+            || self.gamepad_info(device),
+            &[Change::Button(button, pressed)],
+        );
+        !matches!(
+            button,
+            GamepadButton::DPadUp
+                | GamepadButton::DPadDown
+                | GamepadButton::DPadLeft
+                | GamepadButton::DPadRight
+        )
+    }
+
+    /// A joystick motion: the gamepad's sticks, triggers and hat.
+    fn gamepad_motion(&mut self, event: *mut c_void) -> bool {
+        use crate::platform::gamepad::android;
+        let source = unsafe { AInputEvent_getSource(event) };
+        if source & android::AINPUT_SOURCE_JOYSTICK != android::AINPUT_SOURCE_JOYSTICK {
+            return false;
+        }
+        if unsafe { AMotionEvent_getAction(event) } & AMOTION_EVENT_ACTION_MASK
+            != AMOTION_EVENT_ACTION_MOVE
+        {
+            return true;
+        }
+        let device = unsafe { AInputEvent_getDeviceId(event) };
+        let changes = android::motion(|axis| unsafe { AMotionEvent_getAxisValue(event, axis, 0) });
+        android::input(device, || self.gamepad_info(device), &changes);
+        true
     }
 
     /// A key. Named keys become [`Event::Key`]; keys that type a character

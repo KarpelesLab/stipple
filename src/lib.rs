@@ -32,6 +32,7 @@ pub mod anim;
 mod app_clipboard;
 mod app_dnd;
 mod app_frame;
+mod app_gamepad;
 mod app_keys;
 mod app_lifecycle;
 mod app_pointer;
@@ -64,6 +65,8 @@ mod window_tests;
 
 pub use app_lifecycle::CloseResponse;
 pub use platform::Lifecycle;
+/// Gamepads: buttons and axes on a standard layout (see [`platform::gamepad`]).
+pub use platform::gamepad;
 
 use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
@@ -148,6 +151,8 @@ pub struct App<S> {
     closing: Vec<WindowId>,
     // The game loop, if one runs on the app's frames (see `game`).
     game: Option<Box<game::Runtime<S>>>,
+    // `on_gamepad`'s hook.
+    gamepad: Option<app_gamepad::GamepadFn<S>>,
 }
 
 /// Called when a window moves, resizes or changes state (see
@@ -561,6 +566,7 @@ impl<S: 'static> App<S> {
             on_window_change: None,
             closing: Vec::new(),
             game: None,
+            gamepad: None,
         }
     }
 
@@ -3277,6 +3283,12 @@ impl<S: 'static> App<S> {
                     // In the background the new look shows on coming back.
                     if !self.in_background() {
                         present(&mut self, &mut surfaces, idx, window, true);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::Gamepad(ref pad) => {
+                    if self.run_gamepad(pad) && !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
                 }

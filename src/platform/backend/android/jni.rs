@@ -473,6 +473,30 @@ pub(super) unsafe fn unicode_char(
     }
 }
 
+/// Input device `id`'s name, vendor id and product id, from
+/// `InputDevice.getDevice(id)`.
+pub(super) unsafe fn input_device(vm: *mut c_void, id: i32) -> Option<(String, i32, i32)> {
+    unsafe {
+        with_env(vm, |jni| {
+            let device = jni.call_static_object(
+                c"android/view/InputDevice",
+                c"getDevice",
+                c"(I)Landroid/view/InputDevice;",
+                &[JValue { i: id }],
+            )?;
+            let name = jni.call_object(device, c"getName", c"()Ljava/lang/String;", &[])?;
+            let name = jni.to_rust(name)?;
+            let vendor = jni
+                .call_int(device, c"getVendorId", c"()I", &[])
+                .unwrap_or(0);
+            let product = jni
+                .call_int(device, c"getProductId", c"()I", &[])
+                .unwrap_or(0);
+            Some((name, vendor, product))
+        })
+    }
+}
+
 /// The screen density in dpi and whether night mode is on, from
 /// `context.getResources().getConfiguration()`.
 pub(super) unsafe fn configuration(vm: *mut c_void, context: JObject) -> Option<(i32, bool)> {

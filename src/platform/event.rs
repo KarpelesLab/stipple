@@ -356,6 +356,10 @@ pub enum Event {
     /// time the app goes to the background, the web when the page hides or
     /// unloads.
     SaveState,
+    /// A gamepad connected or disconnected, or one of its buttons or axes
+    /// changed (see [`gamepad`](crate::platform::gamepad)). Only sent once
+    /// gamepad support has started ([`gamepad::start`](crate::platform::gamepad::start)).
+    Gamepad(crate::platform::gamepad::GamepadEvent),
 }
 
 /// The kinds of data a drag carries, known as soon as it enters a window

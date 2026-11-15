@@ -62,7 +62,7 @@ pub mod web;
 /// change, which the OS reports through a notification, a window message or (on
 /// Linux) a D-Bus signal heard on another thread, and the events
 /// [`shell::post`](crate::platform::shell) queued from other threads (tray
-/// picks on Linux).
+/// picks on Linux), and the [`Event::Gamepad`]s waiting.
 fn with_theme_changes<H>(mut handler: H) -> impl FnMut(Event, &dyn Window) -> ControlFlow
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
@@ -77,6 +77,12 @@ where
             // Tray picks heard on another thread (Linux's D-Bus service).
             for posted in crate::platform::shell::take_posted() {
                 if handler(posted, window) == ControlFlow::Exit {
+                    return ControlFlow::Exit;
+                }
+            }
+            // Gamepad input, read on a thread, a timer or from the page.
+            for pad in crate::platform::gamepad::take_events() {
+                if handler(Event::Gamepad(pad), window) == ControlFlow::Exit {
                     return ControlFlow::Exit;
                 }
             }

@@ -30,6 +30,7 @@
 //! | `open_url(ptr, len)` | `window.open(url, "_blank", "noopener")` |
 //! | `notify(title, title_len, body, body_len)` | a `Notification`, asking for permission first if needed |
 //! | `save_state(ptr, len)` | keeps the app's saved state in the tab's `sessionStorage` (`len` 0 removes it) |
+//! | `gamepad_rumble(index, low, high, ms) -> u32` | `vibrationActuator.playEffect("dual-rumble")` on pad `index`; 0 if it has none |
 //!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
@@ -74,6 +75,7 @@ mod js {
         pub fn notify(title: *const u8, title_len: usize, body: *const u8, body_len: usize);
         pub fn message_box(confirm: u32, ptr: *const u8, len: usize) -> u32;
         pub fn save_state(ptr: *const u8, len: usize);
+        pub fn gamepad_rumble(index: u32, low: f64, high: f64, ms: f64) -> u32;
     }
 }
 
@@ -794,4 +796,33 @@ pub fn save_state() {
 pub fn file_picked(id: u32, file: Option<(String, Vec<u8>)>) {
     crate::platform::dialog::web_picked(id, file);
     drain();
+}
+
+/// Rumble the page's pad `index` (see [`gamepad::set_rumble`](crate::platform::gamepad::set_rumble)).
+pub(crate) fn gamepad_rumble(index: u32, low: f32, high: f32, ms: f64) -> bool {
+    unsafe { js::gamepad_rumble(index, low as f64, high as f64, ms) != 0 }
+}
+
+/// Pad `index` connected, with this `Gamepad.id`.
+#[doc(hidden)]
+pub fn gamepad_connect(index: u32, id: String) {
+    crate::platform::gamepad::web::connect(index, &id);
+}
+
+/// Pad `index` disconnected.
+#[doc(hidden)]
+pub fn gamepad_disconnect(index: u32) {
+    crate::platform::gamepad::web::disconnect(index);
+}
+
+/// Standard button `button` of pad `index` is at `value`.
+#[doc(hidden)]
+pub fn gamepad_button(index: u32, button: u32, value: f64, pressed: bool) {
+    crate::platform::gamepad::web::set_button(index, button, value, pressed);
+}
+
+/// Standard axis `axis` of pad `index` is at `value`.
+#[doc(hidden)]
+pub fn gamepad_axis(index: u32, axis: u32, value: f64) {
+    crate::platform::gamepad::web::set_axis(index, axis, value);
 }

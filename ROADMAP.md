@@ -2094,10 +2094,13 @@ game needs on top:
   `ClipCursor`, X11 a pointer grab and warp, Wayland
   `zwp_pointer_constraints_v1` + `zwp_relative_pointer_manager_v1`, the web's
   `requestPointerLock`), released on Escape and focus loss.
-- ⬜ Gamepads: connect and disconnect, buttons and axes on a standard layout,
+- ✅ Gamepads: connect and disconnect, buttons and axes on a standard layout,
   rumble where offered. Windows XInput, macOS and iOS `GameController`,
   Linux evdev (`/dev/input/event*`), Android `InputDevice` sources, the web's
   Gamepad API.
+  *`stipple::gamepad` (`gamepads`, `state`, `set_rumble`), `Event::Gamepad`
+  and `App::on_gamepad`; rumble on Windows, Linux (`FF_RUMBLE`) and the web.
+  See `docs/gamepads.md` and `examples/gamepaddemo`.*
 - ⬜ Touch controls for phones: a virtual stick and buttons drawn over the
   game, feeding the same actions.
 
