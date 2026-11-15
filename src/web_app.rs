@@ -4,7 +4,12 @@
 /// Stipple's repository) calls to run `$make`'s [`App`](crate::App) in a
 /// `<canvas>`.
 ///
-/// `$make` is a function (or closure) that returns the app. Call the macro
+/// `$make` is a function (or closure) that returns the app, or that runs it
+/// itself and returns nothing, such as a program's `main`: on the web,
+/// [`App::run`](crate::App::run) hands the app to the page and returns, so
+/// `stipple::web_app!(main)` makes a native program's `main` the web app as it
+/// is. The app fills the canvas, whatever
+/// [`logical_size`](crate::App::logical_size) it asked for. Call the macro
 /// once, at the top level of a `cdylib` crate built for
 /// `wasm32-unknown-unknown`; on other targets it expands to nothing, so the
 /// crate still builds and tests natively.
@@ -25,6 +30,10 @@
 /// import { start } from "./stipple.js";
 /// await start(document.getElementById("app"), "myapp.wasm", { font: "font.ttf" });
 /// ```
+///
+/// To keep the program a binary too, give the crate a library target whose
+/// root includes `main.rs` as a module, and call the macro at the bottom of
+/// `main.rs` (see `docs/platforms/web.md`).
 ///
 /// The exports, all prefixed `stipple_`, are an implementation detail shared
 /// with `stipple.js`; see `docs/platforms/web.md`.
@@ -50,6 +59,9 @@ macro_rules! web_app {
                 glue::set_font(unsafe { glue::take_bytes(ptr, len) });
             }
 
+            // `$make` may be the binary's own `main` (when the crate's binary
+            // is built for wasm32 too), which isn't recursion here.
+            #[allow(clippy::main_recursion)]
             #[unsafe(no_mangle)]
             pub extern "C" fn stipple_start(width: f64, height: f64, scale: f64) {
                 glue::start(width, height, scale, || ($make)());
@@ -211,4 +223,22 @@ macro_rules! web_app {
             let _ = $make;
         };
     };
+}
+
+/// What [`web_app!`]'s function returns: the app to run, or `()` when it ran
+/// the app itself.
+#[doc(hidden)]
+pub trait WebEntry {
+    /// Run the app, if it hasn't been.
+    fn launch(self);
+}
+
+impl<S: 'static> WebEntry for crate::App<S> {
+    fn launch(self) {
+        self.run();
+    }
+}
+
+impl WebEntry for () {
+    fn launch(self) {}
 }

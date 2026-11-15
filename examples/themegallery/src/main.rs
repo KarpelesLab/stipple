@@ -49,8 +49,9 @@ fn render(theme: Theme) -> stipple::render::Pixmap {
     app.render_once()
 }
 
-fn main() {
-    let themes: [(&str, Theme); 4] = [
+/// The themes shown, by name.
+fn themes() -> [(&'static str, Theme); 4] {
+    [
         ("light", Theme::light()),
         ("dark", Theme::dark()),
         (
@@ -60,7 +61,15 @@ fn main() {
                 .radius(14.0),
         ),
         ("high-contrast", Theme::light().high_contrast()),
-    ];
+    ]
+}
+
+fn main() {
+    if cfg!(target_arch = "wasm32") {
+        // In the browser: no files to write, so show them all at once.
+        return web_app().run();
+    }
+    let themes = themes();
     for (i, (name, theme)) in themes.iter().enumerate() {
         let pixmap = render(*theme);
         pixmap
@@ -70,3 +79,34 @@ fn main() {
     }
     println!("size {}x{}", W as u32, H as u32);
 }
+
+/// In the browser (the site's live examples): every theme at once, each card
+/// under its own theme, wrapping to the canvas's width.
+fn web_app() -> App<()> {
+    App::new((), |state: &(), cx: &mut Cx<()>| {
+        let cards = themes()
+            .into_iter()
+            .map(|(name, theme)| {
+                cx.themed(theme, |cx| {
+                    column(vec![view(state, cx), label(cx, name)])
+                        .align(Align::Center, Align::Center)
+                        .gap(theme.spacing.sm)
+                        .padding(Insets::uniform(theme.spacing.md))
+                        .width(W)
+                        .height(H)
+                        .fill(theme.palette.background)
+                })
+            })
+            .collect();
+        row(cards)
+            .wrap()
+            .grow(1.0)
+            .align(Align::Center, Align::Center)
+    })
+    .theme(Theme::dark())
+    .title("Stipple themes")
+}
+
+// In the browser, `src/web.rs` builds this file as a library and the page
+// runs `main`'s app (on the web, `App::run` hands it to the page).
+stipple::web_app!(main);

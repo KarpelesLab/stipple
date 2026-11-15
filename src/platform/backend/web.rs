@@ -161,6 +161,9 @@ struct Host {
     text_input: Cell<bool>,
     /// The first finger down, which is also the pointer until it lifts.
     primary: Cell<Option<u64>>,
+    /// Whether the page started the app ([`start`]), so its canvas sets the
+    /// size.
+    started: Cell<bool>,
 }
 
 thread_local! {
@@ -178,6 +181,7 @@ thread_local! {
             a11y: RefCell::new(None),
             text_input: Cell::new(false),
             primary: Cell::new(None),
+            started: Cell::new(false),
         }
     };
 }
@@ -442,28 +446,38 @@ pub fn set_font(bytes: Vec<u8>) {
     }
 }
 
-/// Build the app with `make` and run it in a canvas of `width` × `height` CSS
-/// pixels at `scale` (`devicePixelRatio`).
+/// The font the page loaded ([`set_font`]), which [`Font::system_default`]
+/// returns on the web.
+pub(crate) fn page_font() -> Option<Font> {
+    HOST.with(|h| h.font.borrow().clone())
+}
+
+/// Call `make`, which builds the app and runs it (or returns it to run), in a
+/// canvas of `width` × `height` CSS pixels at `scale` (`devicePixelRatio`).
 #[doc(hidden)]
-pub fn start<S: 'static>(
+pub fn start<R: crate::web_app::WebEntry>(
     width: f64,
     height: f64,
     scale: f64,
-    make: impl FnOnce() -> crate::App<S>,
+    make: impl FnOnce() -> R,
 ) {
     std::panic::set_hook(Box::new(|info| log(&format!("stipple: {info}"), true)));
     HOST.with(|h| {
         h.css.set((width.max(1.0), height.max(1.0)));
         h.scale.set(ScaleFactor::new(scale).get());
+        h.started.set(true);
     });
-    let mut app = make();
-    if matches!(app.font, crate::AppFont::System)
-        && let Some(font) = HOST.with(|h| h.font.borrow_mut().take())
-    {
-        app = app.font(font);
+    make().launch();
+}
+
+/// What [`App::run`](crate::App::run) does to an app on the web before it
+/// runs: once the page started it, it fills the canvas, whatever size the
+/// app asked for.
+pub(crate) fn adopt<S: 'static>(app: crate::App<S>) -> crate::App<S> {
+    match HOST.with(|h| h.started.get().then(|| h.css.get())) {
+        Some((w, h)) => app.logical_size(Size::new(w, h)),
+        None => app,
     }
-    app = app.logical_size(Size::new(width.max(1.0), height.max(1.0)));
-    app.run();
 }
 
 /// The canvas changed size or moved to a screen with another pixel ratio.

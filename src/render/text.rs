@@ -135,7 +135,22 @@ impl Font {
     /// its own. To choose, use [`Font::from_family`] (a family the user
     /// picked, or a generic one such as `"sans-serif"`), or bundle fonts and
     /// use [`Font::from_bytes`].
+    ///
+    /// On the web, where there are no system fonts, it's the font the page
+    /// handed the app (`stipple.js`'s `font` option), if any.
     pub fn system_default() -> Option<Self> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            crate::platform::backend::web::page_font()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self::probe_system_default()
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn probe_system_default() -> Option<Self> {
         const CANDIDATES: &[&str] = &[
             // Linux (Liberation / DejaVu / Noto are near-ubiquitous).
             "/usr/share/fonts/liberation-fonts/LiberationSans-Regular.ttf",

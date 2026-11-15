@@ -27,3 +27,7 @@ fn main() {
         .logical_size(Size::new(640.0, 320.0));
     app.run();
 }
+
+// In the browser, `src/web.rs` builds this file as a library and the page
+// runs `main`'s app (on the web, `App::run` hands it to the page).
+stipple::web_app!(main);

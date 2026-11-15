@@ -55,8 +55,9 @@ fn render(theme: Theme) -> stipple::render::Pixmap {
     app.render_once()
 }
 
-fn main() {
-    let schemes: [(&str, Theme); 4] = [
+/// The themes shown, by name.
+fn schemes() -> [(&'static str, Theme); 4] {
+    [
         ("m3-light", Theme::material3_light()),
         ("m3-dark", Theme::material3_dark()),
         // Material You: recolor the whole scheme from a single seed.
@@ -68,7 +69,15 @@ fn main() {
             "seed-orange",
             Theme::material3_from_seed(Color::rgb(0xb3, 0x5a, 0x00), true),
         ),
-    ];
+    ]
+}
+
+fn main() {
+    if cfg!(target_arch = "wasm32") {
+        // In the browser: no files to write, so show them all at once.
+        return web_app().run();
+    }
+    let schemes = schemes();
     for (i, (name, theme)) in schemes.iter().enumerate() {
         let pixmap = render(*theme);
         pixmap
@@ -78,3 +87,34 @@ fn main() {
     }
     println!("size {}x{}", W as u32, H as u32);
 }
+
+/// In the browser (the site's live examples): every scheme at once, each card
+/// under its own theme, wrapping to the canvas's width.
+fn web_app() -> App<()> {
+    App::new((), |state: &(), cx: &mut Cx<()>| {
+        let cards = schemes()
+            .into_iter()
+            .map(|(name, theme)| {
+                cx.themed(theme, |cx| {
+                    column(vec![view(state, cx), label(cx, name)])
+                        .align(Align::Center, Align::Center)
+                        .gap(theme.spacing.sm)
+                        .padding(Insets::uniform(theme.spacing.md))
+                        .width(W)
+                        .height(H)
+                        .fill(theme.palette.background)
+                })
+            })
+            .collect();
+        row(cards)
+            .wrap()
+            .grow(1.0)
+            .align(Align::Center, Align::Center)
+    })
+    .theme(Theme::dark())
+    .title("Material 3")
+}
+
+// In the browser, `src/web.rs` builds this file as a library and the page
+// runs `main`'s app (on the web, `App::run` hands it to the page).
+stipple::web_app!(main);

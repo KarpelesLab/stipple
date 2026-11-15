@@ -19,8 +19,9 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use stipple::game::{Camera2D, PixelViewport, Playback, SpriteAnimation, SpriteSheet, Tilemap};
+use stipple::platform::time::Instant;
 use stipple::prelude::*;
 use stipple::render::{ImageOptions, Scene, SoftwareRenderer};
 
@@ -642,3 +643,7 @@ fn bench() {
         );
     }
 }
+
+// In the browser, `src/web.rs` builds this file as a library and the page
+// runs `main`'s app (on the web, `App::run` hands it to the page).
+stipple::web_app!(main);

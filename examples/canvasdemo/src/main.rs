@@ -329,6 +329,22 @@ fn animate(screen: Arc<Mutex<Screen>>, handle: AppHandle<()>, selftest: bool) {
     }
 }
 
+/// What `animate` does, from a timer on the UI thread: for the web, where
+/// there are no threads.
+fn animate_on_timer(screen: Arc<Mutex<Screen>>, handle: &AppHandle<()>) {
+    let canvas = handle.clone();
+    let mut tick = 0u64;
+    handle.every(stipple::platform::frame::interval(), move |_| {
+        tick += 1;
+        for row in screen.lock().unwrap().step() {
+            canvas.invalidate_canvas_rect(GRID, row_rect(row));
+        }
+        if tick.is_multiple_of(30) {
+            canvas.invalidate_canvas(STATUS);
+        }
+    });
+}
+
 static FAILED: AtomicBool = AtomicBool::new(false);
 
 /// The selftest's verdict: what was rasterized adds up to the rows that were
@@ -431,7 +447,12 @@ fn main() {
     .logical_size(window_size());
 
     let handle = app.handle();
-    std::thread::spawn(move || animate(screen, handle, selftest));
+    if cfg!(target_arch = "wasm32") {
+        // The browser has no threads: a timer steps the screen instead.
+        animate_on_timer(screen, &handle);
+    } else {
+        std::thread::spawn(move || animate(screen, handle, selftest));
+    }
     app.run();
     if selftest {
         println!("canvasdemo: event loop exited");
@@ -440,3 +461,7 @@ fn main() {
         }
     }
 }
+
+// In the browser, `src/web.rs` builds this file as a library and the page
+// runs `main`'s app (on the web, `App::run` hands it to the page).
+stipple::web_app!(main);

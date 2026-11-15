@@ -66,6 +66,8 @@ mod tab_focus_tests;
 #[cfg(test)]
 mod touch_tests;
 mod web_app;
+#[doc(hidden)]
+pub use web_app::WebEntry;
 pub mod widgets;
 #[cfg(test)]
 mod window_tests;
@@ -2922,7 +2924,11 @@ impl<S: 'static> App<S> {
     where
         S: 'static,
     {
-        let (attrs, handler) = self.into_handler();
+        #[cfg(target_arch = "wasm32")]
+        let app = backend::web::adopt(self);
+        #[cfg(not(target_arch = "wasm32"))]
+        let app = self;
+        let (attrs, handler) = app.into_handler();
         backend::run(attrs, handler);
     }
 
