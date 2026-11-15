@@ -2619,6 +2619,45 @@ jobs:
         run: |
           .github\scripts\capture-window.ps1 .\target\release\examples\bididemo.exe visual_output\stipple-windows-bidi-mirror.png -Title "Stipple - mirrored UI" -Arguments "--mirror"
 
+      # The scene executor on Direct3D 11 (WARP on the runner, which has no
+      # GPU) against the software renderer, pixel by pixel, with the same
+      # tolerances as GLES2 and Metal (src/gpu/compare.rs); with
+      # STIPPLE_REQUIRE_GPU the tests fail instead of skipping when there's no
+      # device. Then the frame times, CPU against D3D11, for the log.
+      # Non-blocking until it has passed on the runner: the D3D11 executor was
+      # written on a Mac and only compile-checked there.
+      - name: Compare the Direct3D 11 renderer with the software one
+        continue-on-error: true
+        shell: bash
+        env:
+          STIPPLE_REQUIRE_GPU: "1"
+          STIPPLE_GPU_DUMP: visual_output/d3d-compare
+        run: |
+          mkdir -p visual_output/d3d-compare
+          cargo test --features d3d --lib -- gpu:: app_gpu --nocapture --test-threads 1
+          cargo test --release --features d3d --lib -- --ignored bench_cpu_against_gpu --nocapture
+      - name: Upload the Direct3D comparison frames
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-windows-d3d-compare
+          path: visual_output/d3d-compare/*
+          if-no-files-found: warn
+
+      # A real window drawn by Direct3D 11 and presented through its
+      # flip-model DXGI swap chain; it must not fall back to the CPU.
+      - name: Screenshot an app drawn with Direct3D 11
+        continue-on-error: true
+        shell: powershell
+        env:
+          STIPPLE_RENDERER: d3d11
+        run: |
+          cargo build --release --features d3d --example widgetsdemo
+          .github\scripts\capture-window.ps1 .\target\release\examples\widgetsdemo.exe visual_output\stipple-windows-d3d.png -Title "Stipple Widgets" -Log visual_output\d3d-window.log
+          Get-Content visual_output\d3d-window.log
+          if (-not (Select-String -Path visual_output\d3d-window.log -Pattern 'stipple: drawing with Direct3D 11' -Quiet)) { throw 'not drawn with Direct3D 11' }
+          if (Select-String -Path visual_output\d3d-window.log -Pattern 'drawing on the CPU' -Quiet) { throw 'fell back to the CPU' }
+
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()

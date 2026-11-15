@@ -23,8 +23,9 @@ pub enum Renderer {
     /// The CPU rasterizer, always.
     Software,
     /// The platform's own GPU API (Metal on macOS and iOS, OpenGL ES on
-    /// Linux), presenting straight to the window where the platform layer
-    /// can (macOS and iOS: a `CAMetalLayer`) and reading the frame back where
-    /// it can't yet.
+    /// Linux, Direct3D 11 on Windows), presenting straight to the window
+    /// where the platform layer can (macOS and iOS: a `CAMetalLayer`;
+    /// Windows: a DXGI swap chain) and reading the frame back where it can't
+    /// yet.
     Gpu,
 }

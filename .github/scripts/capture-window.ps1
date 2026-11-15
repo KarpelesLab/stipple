@@ -1,13 +1,13 @@
 # Launch a Stipple example, screenshot just its window, and stop it.
-# -Arguments are passed to the example; -Title is its window title.
-param([string]$Exe, [string]$Out, [string]$Title = "Stipple", [string]$Arguments = "")
+# -Arguments are passed to the example; -Title is its window title; -Log, if
+# given, is where its standard error goes.
+param([string]$Exe, [string]$Out, [string]$Title = "Stipple", [string]$Arguments = "", [string]$Log = "")
 
 New-Item -ItemType Directory -Force -Path (Split-Path $Out) | Out-Null
-if ($Arguments) {
-  $proc = Start-Process -FilePath $Exe -ArgumentList $Arguments -PassThru
-} else {
-  $proc = Start-Process -FilePath $Exe -PassThru
-}
+$start = @{ FilePath = $Exe; PassThru = $true }
+if ($Arguments) { $start.ArgumentList = $Arguments }
+if ($Log) { $start.RedirectStandardError = $Log }
+$proc = Start-Process @start
 Start-Sleep -Seconds 5
 Add-Type -AssemblyName System.Drawing
 Add-Type @"

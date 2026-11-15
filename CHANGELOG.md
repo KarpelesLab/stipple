@@ -83,7 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `examples/navdemo`, in the browser too.
 - Choosing the renderer: `App::renderer(Renderer::{Auto, Software, Gpu})`
   (`stipple::render::Renderer`) and the `STIPPLE_RENDERER` environment
-  override (`software`, `gpu`, `metal`, `gl`, `auto`). Frames fall back to the
+  override (`software`, `gpu`, `metal`, `gl`, `d3d11`, `auto`). Frames fall back to the
   CPU when there's no GPU backend or device, when setting it up fails, and
   when the device is lost (set up again once). `Auto` is still the CPU.
 - Metal renders whole scenes (feature `mtl`): the GLES2 executor's shaders in
@@ -93,6 +93,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GL tolerances, and a busy 2560×1600 frame takes about 1 ms instead of
   38 ms. `stipple::gpu::render_scene_scaled` now uses Metal on macOS. See
   `docs/gpu.md`.
+- Direct3D 11 renders whole scenes on Windows (feature `d3d`, #54): the
+  same shaders in HLSL, compiled at run time with `D3DCompile` from
+  `d3dcompiler_47.dll`, on a hardware device or WARP, presented through a
+  flip-model DXGI swap chain on the window (`CreateSwapChainForHwnd`,
+  resized with the window and on DPI changes, at most one frame queued).
+  A removed device falls back to the CPU as on Metal.
+  `STIPPLE_RENDERER=d3d11` (or `d3d`) picks it; `Renderer::Gpu` and
+  `render_scene_scaled` use it on Windows. CI compares it with the software
+  renderer on WARP and screenshots a window drawn with it.
 - Localization (#47). `platform::preferred_languages()` gives the user's
   languages as BCP 47 tags in order, `platform::locale()` their formatting
   conventions (the region's, with the OS's 12/24-hour clock, first weekday,

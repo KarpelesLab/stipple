@@ -6,11 +6,13 @@
 //! boxes, paths (stencil-and-cover), images and glyphs (textures cached by
 //! identity), clips, and layers with transforms and group opacity, matching the
 //! software renderer to within a small tolerance (see `docs/gpu.md`). The scene
-//! lowering (`ops`) is backend-neutral; Metal (macOS, iOS; feature `mtl`) and
+//! lowering (`ops`) is backend-neutral; Metal (macOS, iOS; feature `mtl`),
 //! OpenGL ES 2 over surfaceless EGL (Linux; feature `gl`, which also runs
-//! headlessly under Mesa's software GL in CI) execute it. Apps choose it with
+//! headlessly under Mesa's software GL in CI) and Direct3D 11 (Windows;
+//! feature `d3d`, on WARP in CI) execute it. Apps choose it with
 //! [`App::renderer`](crate::App::renderer); on macOS and iOS the frames go
-//! straight to the window's `CAMetalLayer`.
+//! straight to the window's `CAMetalLayer`, on Windows to a flip-model DXGI
+//! swap chain.
 //!
 //! [`present_offscreen`] composites a finished CPU [`Pixmap`] through GLES2.
 //! Vulkan, Direct3D 11 and Metal also have device and triangle spikes below.
@@ -22,11 +24,13 @@
 use crate::geometry::{PhysicalSize, Rect, ScaleFactor};
 use crate::render::{Color, Font, Pixmap, Scene};
 
-// The scene lowering is backend-neutral; GLES2 and Metal execute it.
+// The scene lowering is backend-neutral; GLES2, Metal and Direct3D 11
+// execute it.
 #[cfg_attr(
     not(any(
         all(target_os = "linux", feature = "gl"),
-        all(any(target_os = "macos", target_os = "ios"), feature = "mtl")
+        all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
+        all(target_os = "windows", feature = "d3d")
     )),
     allow(dead_code)
 )]
@@ -36,7 +40,8 @@ pub(crate) mod ops;
 #[cfg_attr(
     not(any(
         all(target_os = "linux", feature = "gl"),
-        all(any(target_os = "macos", target_os = "ios"), feature = "mtl")
+        all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
+        all(target_os = "windows", feature = "d3d")
     )),
     allow(dead_code)
 )]
@@ -53,6 +58,11 @@ mod vulkan;
 
 #[cfg(all(target_os = "windows", feature = "d3d"))]
 mod d3d;
+
+// The D3D11 / DXGI descriptors and helpers, unit-tested on every host.
+#[cfg(any(all(target_os = "windows", feature = "d3d"), test))]
+#[path = "d3d/abi.rs"]
+pub(crate) mod d3d_abi;
 
 #[cfg(all(target_os = "macos", feature = "mtl"))]
 mod metal;
@@ -468,7 +478,8 @@ pub fn render_offscreen(
 /// Render a live stipple [`Scene`] **GPU-natively** at `scale` (physical
 /// pixels per logical pixel) on a target cleared to `background`, returning
 /// the rendered frame, on this platform's GPU API: Metal on macOS and iOS
-/// (feature `mtl`), OpenGL ES 2 on Linux (feature `gl`). This is what
+/// (feature `mtl`), OpenGL ES 2 on Linux (feature `gl`), Direct3D 11 on
+/// Windows (feature `d3d`). This is what
 /// [`Renderer::Gpu`](crate::render::Renderer::Gpu) draws with, and it can be
 /// set as a renderer with [`App::render_with`](crate::App::render_with).
 ///
@@ -529,7 +540,8 @@ pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pix
     test,
     any(
         all(target_os = "linux", feature = "gl"),
-        all(target_os = "macos", feature = "mtl")
+        all(target_os = "macos", feature = "mtl"),
+        all(target_os = "windows", feature = "d3d")
     )
 ))]
 mod compare;

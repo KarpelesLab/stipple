@@ -9,7 +9,7 @@ features, each linking the OS's own driver through hand-written FFI:
 | `mtl` | Metal (macOS, iOS) | Renders whole scenes and presents them straight to the window through a `CAMetalLayer`; `IOSurface` export |
 | `gl` | OpenGL ES 2 over surfaceless EGL (Linux) | Renders whole scenes, read back and presented as a bitmap; `dma-buf` export and import |
 | `vk` | Vulkan (Linux) | Device setup, a clear and a shader-drawn triangle, read back |
-| `d3d` | Direct3D 11 (Windows) | A clear and a triangle on WARP, shared-handle export |
+| `d3d` | Direct3D 11 (Windows) | Renders whole scenes and presents them straight to the window through a flip-model DXGI swap chain; shared-handle export |
 | (web) | WebGPU in `web/` | A WGSL triangle in the browser |
 
 ## Choosing the renderer
@@ -23,20 +23,23 @@ let app = app.renderer(Renderer::Gpu);
 - `Renderer::Software` draws on the CPU.
 - `Renderer::Gpu` draws with the platform's GPU API: Metal on macOS and iOS
   (build with `--features stipple/mtl`), OpenGL ES 2 on Linux
-  (`--features stipple/gl`). On macOS and iOS the frame goes straight into a
-  `CAMetalLayer` over the window's view; on Linux it is read back and
-  presented as a bitmap, until 6c presents GL and Vulkan frames directly.
+  (`--features stipple/gl`), Direct3D 11 on Windows (`--features
+  stipple/d3d`). On macOS and iOS the frame goes straight into a
+  `CAMetalLayer` over the window's view, on Windows into a DXGI swap chain
+  on the window; on Linux it is read back and presented as a bitmap, until
+  6c presents GL and Vulkan frames directly.
 - `Renderer::Auto`, the default, is the CPU for now. The GPU becomes the
   default platform by platform once it has been shown to match the CPU there
   and to be faster (Phase 6h).
 
 The environment variable `STIPPLE_RENDERER` overrides the app's choice, for
 trying an app either way without rebuilding it: `software` (or `cpu`), `gpu`,
-`metal`, `gl`, or `auto`. With it set, Stipple says on stderr what it draws
+`metal`, `gl`, `d3d11` (or `d3d`), or `auto`. With it set, Stipple says on stderr what it draws
 with (`stipple: drawing with Metal`).
 
 ```sh
 STIPPLE_RENDERER=metal cargo run --release --features mtl --example widgetsdemo
+STIPPLE_RENDERER=d3d11 cargo run --release --features d3d --example widgetsdemo
 ```
 
 Frames fall back to the CPU whenever there's no GPU to draw with:
@@ -130,7 +133,7 @@ targets and both caches are kept from frame to frame.
 
 The lowering (`src/gpu/ops.rs`) is shared; each GPU API is an executor of its
 operation list (`src/gpu/renderer.rs`): GLES2 in `src/gpu/gl/scene.rs`, Metal
-in `src/gpu/metal_scene.rs`.
+in `src/gpu/metal_scene.rs`, Direct3D 11 in `src/gpu/d3d/scene.rs`.
 
 ## Metal
 
@@ -171,11 +174,50 @@ GPU to finish. In a window, `spritedemo` (2560×1504 pixels, redrawn every
 frame) runs at the display's 120 fps either way, but takes 84% of a CPU core
 on the software renderer and 4% on Metal.
 
+## Direct3D 11
+
+The Direct3D 11 executor is the Metal one translated again: the same four
+shaders in HLSL (`src/gpu/shaders/scene.hlsl`), the same premultiplied
+blending, stencil-and-cover paths at 4×4 into a scratch target, pooled layer
+targets, scissor rectangles and stencil polygons. Every target is
+`B8G8R8A8_UNORM` with a `D24_UNORM_S8_UINT` buffer beside it (D3D11 has no
+stencil-only format). It runs on a hardware device when there is one and on
+WARP, the software rasterizer every Windows ships, otherwise. All of it goes
+through hand-written COM vtables (`src/gpu/d3d/abi.rs` lists every slot it
+calls and the descriptor layouts, which are unit-tested against the SDK's
+sizes on any host).
+
+The shaders are compiled when the renderer is created, with `D3DCompile`
+from `d3dcompiler_47.dll`, loaded at run time. That DLL is part of Windows
+8.1 and later, so nothing ships with the app; checked-in DXBC would need
+Microsoft's compiler on every machine that changes a shader (it doesn't run
+off Windows, and no shader compiler is allowed as a dependency), for a
+compile that takes a few milliseconds once. Without the DLL the renderer is
+unavailable and the app draws on the CPU.
+
+A window drawn on the GPU gets a swap chain from
+`IDXGIFactory2::CreateSwapChainForHwnd`: two `B8G8R8A8_UNORM` buffers,
+flip-discard (flip-sequential before Windows 10), stretched while the window
+is resized ahead of its next frame. Its buffers are resized to each frame's
+physical size, so a resize or a move to a monitor with another DPI
+(`WM_DPICHANGED` resizes the window, and the next frame is drawn at the new
+scale) reaches the swap chain with the frame drawn for it. A frame-latency
+waitable object keeps at most one frame queued: the renderer waits on it
+before drawing, so what it draws is the next frame shown. It doesn't drive
+the frame clock: frames are still paced by the compositor (`DwmFlush`), as
+on the CPU path. While the swap chain shows the frames the window stops
+painting its bitmap; when the renderer falls back, the swap chain is
+released and the bitmap is painted again.
+
+A removed or reset device (`DXGI_ERROR_DEVICE_REMOVED` from `Present`, a
+failed `Map`, `GetDeviceRemovedReason`), or any call that fails mid-frame, is
+a lost device: that frame is drawn on the CPU and the renderer is set up
+again, once, as on Metal.
+
 ## How close it is to the software renderer
 
-Unit tests (`src/gpu/compare.rs`) draw the same scenes both ways, on GLES2
-or on Metal and compare
-them pixel by pixel: boxes, paths, images, clips, layers (translated, rotated,
+Unit tests (`src/gpu/compare.rs`) draw the same scenes both ways, on GLES2,
+Metal or Direct3D 11, and compare them pixel by pixel: boxes, paths, images, clips, layers (translated, rotated,
 scaled, translucent and nested), text, a canvas, and a whole app through
 `App::render_with`, at scales 1, 1.5 and 2. On Mesa's llvmpipe the mean
 difference per channel stays under 0.25 of 255, with no pixel off by more than
@@ -196,12 +238,16 @@ each comparison there.
 ```sh
 STIPPLE_REQUIRE_GPU=1 cargo test --features gl --lib gpu::   # Linux
 STIPPLE_REQUIRE_GPU=1 cargo test --features mtl --lib gpu::  # macOS
+STIPPLE_REQUIRE_GPU=1 cargo test --features d3d --lib gpu::  # Windows
 ```
 
 CI's GPU job runs them under Mesa's llvmpipe and screenshots `gpuwindow`
 under Xvfb; the macOS visual job runs them on the runner's Metal device,
 prints the frame times, and screenshots `widgetsdemo` with
-`STIPPLE_RENDERER=metal`. Both upload the frames.
+`STIPPLE_RENDERER=metal`; the Windows visual job runs them on WARP and
+screenshots `widgetsdemo` with `STIPPLE_RENDERER=d3d11` (both non-blocking
+until they have passed there: the executor was written and compile-checked
+on a Mac). They all upload the frames.
 
 ## Not done yet
 
@@ -209,10 +255,12 @@ The plan for hardware rendering on every platform, presented straight to the
 window, is Phase 6 in the [roadmap](../ROADMAP.md#phase-6--hardware-rendering).
 Today:
 
-- GLES2 and Metal execute the scene; Vulkan, Direct3D and WebGPU only draw
-  a test triangle.
+- GLES2, Metal and Direct3D 11 execute the scene; Vulkan and WebGPU only
+  draw a test triangle.
 - On Linux the GL frame is read back to the CPU and presented as a bitmap;
-  only Metal presents straight to the window.
+  Metal and Direct3D 11 present straight to the window.
+- Direct3D 11 is exercised by CI on WARP; it hasn't been tried on a
+  hardware GPU yet.
 - `Renderer::Auto` is still the CPU everywhere.
 - The Metal path on iOS is compile-checked; it hasn't run on a device or the
   simulator yet.

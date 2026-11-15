@@ -414,13 +414,15 @@ impl WindowAttributes {
 /// A window's GPU layer, which a GPU renderer draws frames into and presents
 /// (see [`Window::gpu_layer`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    any(not(feature = "gpu"), not(any(target_os = "macos", target_os = "ios"))),
-    allow(dead_code)
-)]
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
 pub(crate) enum GpuLayer {
     /// A `CAMetalLayer` over the content view (macOS, iOS), sized to it.
+    #[cfg_attr(not(any(target_os = "macos", target_os = "ios")), allow(dead_code))]
     Metal(*mut std::ffi::c_void),
+    /// A window (`HWND`) the renderer gives a DXGI swap chain (Windows); the
+    /// window stops painting its bitmap over it.
+    #[cfg_attr(not(all(target_os = "windows", feature = "d3d")), allow(dead_code))]
+    Hwnd(*mut std::ffi::c_void),
 }
 
 /// A live native window.

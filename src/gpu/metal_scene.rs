@@ -1416,7 +1416,9 @@ impl Executor for MetalExecutor {
         layer: &GpuLayer,
         _scale: ScaleFactor,
     ) -> Result<(), GpuError> {
-        let GpuLayer::Metal(layer) = *layer;
+        let GpuLayer::Metal(layer) = *layer else {
+            return Err(GpuError::Unavailable("not a Metal layer".into()));
+        };
         if layer.is_null() {
             return Err(GpuError::Unavailable("no Metal layer".into()));
         }

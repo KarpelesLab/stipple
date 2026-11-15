@@ -437,6 +437,9 @@ struct PerWin {
     /// Where the window is and its state, as last reported (`WM_MOVE`,
     /// `WM_SIZE`).
     info: Option<WindowInfo>,
+    /// The GPU renderer presents to the window through a DXGI swap chain
+    /// ([`Window::gpu_layer`]): `WM_PAINT` doesn't blit the bitmap over it.
+    gpu: bool,
 }
 
 /// Per-thread state shared between the message loop, the [`WndProc`] and the
@@ -1126,7 +1129,7 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
                 let Some(c) = c.wins.get(&(hwnd as usize)) else {
                     return;
                 };
-                if !c.fb.is_empty() {
+                if !c.fb.is_empty() && !c.gpu {
                     let bmi = BitmapInfo {
                         header: BitmapInfoHeader {
                             bi_size: core::mem::size_of::<BitmapInfoHeader>() as u32,
@@ -1164,6 +1167,11 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
                 }
             });
             unsafe { EndPaint(hwnd, &ps) };
+            // The swap chain shows the GPU's frames: a repaint the window
+            // asks for (`request_redraw` after a skipped frame) is drawn anew.
+            if read_win(hwnd, |w| w.gpu) == Some(true) {
+                push_event(Event::RedrawRequested);
+            }
             0
         }
         WM_SIZE => {
@@ -1583,6 +1591,19 @@ impl Window for WinWindow {
             hwnd: self.hwnd,
             size: self.inner_size(),
         })
+    }
+    #[cfg(feature = "d3d")]
+    fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        // The renderer gives the window a flip-model swap chain and sizes its
+        // buffers to each frame; from here on the bitmap isn't painted.
+        with_win(self.hwnd, |w| w.gpu = true);
+        Some(crate::platform::GpuLayer::Hwnd(self.hwnd))
+    }
+    #[cfg(feature = "d3d")]
+    fn drop_gpu_layer(&self) {
+        // The renderer (and its swap chain) is gone: paint the bitmap again.
+        with_win(self.hwnd, |w| w.gpu = false);
+        unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
     }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         // Rebuild the UIA provider tree when it changed; `WM_GETOBJECT`

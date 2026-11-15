@@ -12,121 +12,18 @@
 //! pointer, and `IUnknown::Release` is always vtable slot 2 — enough to clean up
 //! what we create without binding the full COM machinery.
 
-#![allow(unsafe_code, non_snake_case, non_upper_case_globals)]
+#![allow(unsafe_code, non_snake_case)]
 
+mod scene;
+pub(crate) use scene::D3dExecutor;
+
+use super::d3d_abi::*;
 use core::ffi::c_void;
 
-type Hresult = i32;
-const S_OK: Hresult = 0;
-// D3D_DRIVER_TYPE_WARP — the software rasterizer (no GPU required).
-const D3D_DRIVER_TYPE_WARP: u32 = 5;
-const D3D11_SDK_VERSION: u32 = 7;
-const DXGI_FORMAT_R8G8B8A8_UNORM: u32 = 28;
-const D3D11_USAGE_DEFAULT: u32 = 0;
-const D3D11_USAGE_STAGING: u32 = 3;
-const D3D11_BIND_RENDER_TARGET: u32 = 0x20;
-const D3D11_CPU_ACCESS_READ: u32 = 0x2_0000;
-const D3D11_MAP_READ: u32 = 1;
-const D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST: u32 = 4;
-
-// COM vtable slots we call by hand (method order from d3d11.h, after the 3
-// IUnknown / 7 ID3D11DeviceChild inherited entries).
-const VT_DEVICE_CREATE_TEXTURE2D: usize = 5;
-const VT_DEVICE_CREATE_RTV: usize = 9;
-const VT_DEVICE_CREATE_VERTEX_SHADER: usize = 12;
-const VT_DEVICE_CREATE_PIXEL_SHADER: usize = 15;
-const VT_CTX_PS_SET_SHADER: usize = 9;
-const VT_CTX_VS_SET_SHADER: usize = 11;
-const VT_CTX_DRAW: usize = 13;
-const VT_CTX_MAP: usize = 14;
-const VT_CTX_UNMAP: usize = 15;
-const VT_CTX_IA_SET_TOPOLOGY: usize = 24;
-const VT_CTX_OM_SET_RENDER_TARGETS: usize = 33;
-const VT_CTX_RS_SET_VIEWPORTS: usize = 44;
-const VT_CTX_COPY_RESOURCE: usize = 47;
-const VT_CTX_CLEAR_RTV: usize = 50;
-// ID3DBlob: GetBufferPointer / GetBufferSize follow the 3 IUnknown entries.
-const VT_BLOB_GET_BUFFER_POINTER: usize = 3;
-const VT_BLOB_GET_BUFFER_SIZE: usize = 4;
-
-// Texture MiscFlag: make the resource shareable across processes/devices (the
-// Windows analog of exporting a dma-buf).
-const D3D11_RESOURCE_MISC_SHARED: u32 = 0x2;
-// IDXGIResource::GetSharedHandle vtable index: IUnknown(0-2) + IDXGIObject(3-6)
-// + IDXGIDeviceSubObject::GetDevice(7) + IDXGIResource::GetSharedHandle(8).
-const VT_DXGIRESOURCE_GET_SHARED_HANDLE: usize = 8;
-
-/// A COM interface id (`GUID`).
-#[repr(C)]
-struct Guid {
-    data1: u32,
-    data2: u16,
-    data3: u16,
-    data4: [u8; 8],
-}
-
-// IID_IDXGIResource = {035f3ab4-482e-4e50-b41f-8a7f8bd8960b}.
-const IID_IDXGIRESOURCE: Guid = Guid {
-    data1: 0x035f_3ab4,
-    data2: 0x482e,
-    data3: 0x4e50,
-    data4: [0xb4, 0x1f, 0x8a, 0x7f, 0x8b, 0xd8, 0x96, 0x0b],
-};
-
-#[repr(C)]
-struct DxgiSampleDesc {
-    Count: u32,
-    Quality: u32,
-}
-
-#[repr(C)]
-struct D3d11Texture2dDesc {
-    Width: u32,
-    Height: u32,
-    MipLevels: u32,
-    ArraySize: u32,
-    Format: u32,
-    SampleDesc: DxgiSampleDesc,
-    Usage: u32,
-    BindFlags: u32,
-    CPUAccessFlags: u32,
-    MiscFlags: u32,
-}
-
-#[repr(C)]
-struct D3d11MappedSubresource {
-    pData: *mut c_void,
-    RowPitch: u32,
-    DepthPitch: u32,
-}
-
-#[repr(C)]
-struct D3d11Viewport {
-    TopLeftX: f32,
-    TopLeftY: f32,
-    Width: f32,
-    Height: f32,
-    MinDepth: f32,
-    MaxDepth: f32,
-}
-
-#[link(name = "d3dcompiler")]
-unsafe extern "system" {
-    #[allow(clippy::too_many_arguments)]
-    fn D3DCompile(
-        pSrcData: *const c_void,
-        SrcDataSize: usize,
-        pSourceName: *const i8,
-        pDefines: *const c_void,
-        pInclude: *mut c_void,
-        pEntrypoint: *const i8,
-        pTarget: *const i8,
-        Flags1: u32,
-        Flags2: u32,
-        ppCode: *mut *mut c_void,
-        ppErrorMsgs: *mut *mut c_void,
-    ) -> Hresult;
-}
+// The spike's names for the shared descriptors.
+type D3d11Texture2dDesc = Texture2dDesc;
+type D3d11MappedSubresource = MappedSubresource;
+type D3d11Viewport = Viewport;
 
 #[link(name = "d3d11")]
 unsafe extern "system" {
@@ -144,6 +41,47 @@ unsafe extern "system" {
     ) -> Hresult;
 }
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn LoadLibraryW(name: *const u16) -> *mut c_void;
+    fn GetProcAddress(module: *mut c_void, name: *const u8) -> *const c_void;
+}
+
+/// `D3DCompile`'s signature.
+type D3dCompileFn = unsafe extern "system" fn(
+    pSrcData: *const c_void,
+    SrcDataSize: usize,
+    pSourceName: *const i8,
+    pDefines: *const c_void,
+    pInclude: *mut c_void,
+    pEntrypoint: *const i8,
+    pTarget: *const i8,
+    Flags1: u32,
+    Flags2: u32,
+    ppCode: *mut *mut c_void,
+    ppErrorMsgs: *mut *mut c_void,
+) -> Hresult;
+
+/// `D3DCompile` from `d3dcompiler_47.dll`, loaded the first time it's
+/// needed. The DLL ships with Windows (8.1 and later, in System32); loading
+/// it at run time rather than linking it means a system without it gets an
+/// error, and the CPU renderer, instead of an app that can't start.
+fn d3d_compile() -> Result<D3dCompileFn, String> {
+    static ENTRY: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let entry = *ENTRY.get_or_init(|| unsafe {
+        let name: Vec<u16> = "d3dcompiler_47.dll\0".encode_utf16().collect();
+        let module = LoadLibraryW(name.as_ptr());
+        if module.is_null() {
+            return 0;
+        }
+        GetProcAddress(module, c"D3DCompile".as_ptr() as *const u8) as usize
+    });
+    if entry == 0 {
+        return Err("d3dcompiler_47.dll (D3DCompile) isn't available".into());
+    }
+    Ok(unsafe { core::mem::transmute::<usize, D3dCompileFn>(entry) })
+}
+
 /// Release a COM object via `IUnknown::Release` (vtable slot 2). No-op on null.
 unsafe fn release(obj: *mut c_void) {
     unsafe {
@@ -152,7 +90,8 @@ unsafe fn release(obj: *mut c_void) {
         }
         // obj -> *vtable -> [QueryInterface, AddRef, Release, ...]
         let vtbl = *(obj as *mut *mut usize);
-        let release_fn: extern "system" fn(*mut c_void) -> u32 = core::mem::transmute(*vtbl.add(2));
+        let release_fn: extern "system" fn(*mut c_void) -> u32 =
+            core::mem::transmute(*vtbl.add(VT_RELEASE));
         release_fn(obj);
     }
 }
@@ -391,14 +330,14 @@ pub fn export_shared_handle(width: u32, height: u32) -> Result<String, String> {
             *mut *mut c_void,
         ) -> Hresult = core::mem::transmute(vmethod(tex, 0));
         let mut res: *mut c_void = core::ptr::null_mut();
-        if query(tex, &IID_IDXGIRESOURCE, &mut res) != S_OK {
+        if query(tex, &IID_IDXGI_RESOURCE, &mut res) != S_OK {
             release(tex);
             release(ctx);
             release(device);
             return Err("QueryInterface(IDXGIResource) failed".into());
         }
         let get_handle: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Hresult =
-            core::mem::transmute(vmethod(res, VT_DXGIRESOURCE_GET_SHARED_HANDLE));
+            core::mem::transmute(vmethod(res, VT_DXGI_RESOURCE_GET_SHARED_HANDLE));
         let mut handle: *mut c_void = core::ptr::null_mut();
         let hr = get_handle(res, &mut handle);
         release(res);
@@ -449,7 +388,7 @@ pub fn render_clear(width: u32, height: u32) -> Result<Vec<u8>, String> {
 
 // HLSL for a self-contained triangle: the vertex stage builds positions from
 // SV_VertexID (no vertex/input buffers), the pixel stage paints stipple green.
-// Compiled at runtime with D3DCompile (d3dcompiler), so no offline toolchain.
+// Compiled at runtime with D3DCompile (d3dcompiler_47), so no offline toolchain.
 const TRIANGLE_HLSL: &[u8] = br#"
 float4 VSMain(uint vid : SV_VertexID) : SV_Position {
     float2 p[3] = { float2(0.0, 0.6), float2(0.6, -0.6), float2(-0.6, -0.6) };
@@ -460,36 +399,62 @@ float4 PSMain() : SV_Target {
 }
 "#;
 
-/// Compile one HLSL entry point to a bytecode blob. The caller releases the blob.
-unsafe fn compile(entry: &[u8], target: &[u8]) -> Result<*mut c_void, String> {
+/// Compile the HLSL entry point `entry` of `src` for `target` (`vs_4_0`,
+/// `ps_4_0`) to a bytecode blob, which the caller releases. The error names
+/// the entry point and carries the compiler's messages.
+unsafe fn compile_source(
+    src: &[u8],
+    entry: &core::ffi::CStr,
+    target: &core::ffi::CStr,
+    flags: u32,
+) -> Result<*mut c_void, String> {
     unsafe {
+        let d3d_compile = d3d_compile()?;
         let mut blob: *mut c_void = core::ptr::null_mut();
         let mut errors: *mut c_void = core::ptr::null_mut();
-        let hr = D3DCompile(
-            TRIANGLE_HLSL.as_ptr() as *const c_void,
-            TRIANGLE_HLSL.len(),
+        let hr = d3d_compile(
+            src.as_ptr() as *const c_void,
+            src.len(),
             core::ptr::null(),
             core::ptr::null(),
             core::ptr::null_mut(),
-            entry.as_ptr() as *const i8,
-            target.as_ptr() as *const i8,
-            0,
+            entry.as_ptr(),
+            target.as_ptr(),
+            flags,
             0,
             &mut blob,
             &mut errors,
         );
+        let mut messages = String::new();
         if !errors.is_null() {
+            let (ptr, len) = blob_bytes(errors);
+            if !ptr.is_null() {
+                let bytes = core::slice::from_raw_parts(ptr as *const u8, len);
+                messages = String::from_utf8_lossy(bytes)
+                    .trim_end_matches('\0')
+                    .trim()
+                    .to_string();
+            }
             release(errors);
         }
         if hr != S_OK || blob.is_null() {
+            release(blob);
             return Err(format!(
-                "D3DCompile failed for {} (0x{:08x})",
-                String::from_utf8_lossy(&entry[..entry.len() - 1]),
+                "D3DCompile failed for {} (0x{:08x}): {messages}",
+                entry.to_string_lossy(),
                 hr as u32
             ));
         }
         Ok(blob)
     }
+}
+
+/// Compile one entry point of the triangle spike.
+unsafe fn compile(
+    entry: &core::ffi::CStr,
+    target: &core::ffi::CStr,
+) -> Result<*mut c_void, String> {
+    unsafe { compile_source(TRIANGLE_HLSL, entry, target, 0) }
 }
 
 /// Pointer + length of a shader bytecode blob (`ID3DBlob` slots 3 and 4).
@@ -514,7 +479,7 @@ pub fn render_triangle(width: u32, height: u32) -> Result<Vec<u8>, String> {
         let (device, ctx) = create_warp()?;
 
         // Compile + create the two shaders.
-        let vs_blob = match compile(b"VSMain\0", b"vs_4_0\0") {
+        let vs_blob = match compile(c"VSMain", c"vs_4_0") {
             Ok(b) => b,
             Err(e) => {
                 release(ctx);
@@ -522,7 +487,7 @@ pub fn render_triangle(width: u32, height: u32) -> Result<Vec<u8>, String> {
                 return Err(e);
             }
         };
-        let ps_blob = match compile(b"PSMain\0", b"ps_4_0\0") {
+        let ps_blob = match compile(c"PSMain", c"ps_4_0") {
             Ok(b) => b,
             Err(e) => {
                 release(vs_blob);
@@ -612,7 +577,7 @@ pub fn render_triangle(width: u32, height: u32) -> Result<Vec<u8>, String> {
         ps_set(ctx, ps, core::ptr::null(), 0);
 
         let ia_topo: unsafe extern "system" fn(*mut c_void, u32) =
-            core::mem::transmute(vmethod(ctx, VT_CTX_IA_SET_TOPOLOGY));
+            core::mem::transmute(vmethod(ctx, VT_CTX_IA_SET_PRIMITIVE_TOPOLOGY));
         ia_topo(ctx, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         let draw: unsafe extern "system" fn(*mut c_void, u32, u32) =

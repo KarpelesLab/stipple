@@ -3,7 +3,8 @@
 //!
 //! A window that draws on the GPU presents straight into the GPU layer its
 //! backend lays over the content ([`Window::gpu_layer`]: a `CAMetalLayer` on
-//! macOS and iOS), skipping the `Pixmap` and the [`Surface`](crate::render::Surface).
+//! macOS and iOS, the window's own DXGI swap chain on Windows), skipping the
+//! `Pixmap` and the [`Surface`](crate::render::Surface).
 //! Where the backend has no GPU layer yet, the GPU draws the frame and it is
 //! read back and presented as a `Pixmap`, as [`App::render_once`](crate::App::render_once)
 //! does everywhere.
@@ -28,6 +29,7 @@ pub(crate) enum Which {
     Native,
     Metal,
     Gl,
+    D3d11,
 }
 
 /// What a window ends up drawing with.
@@ -45,6 +47,7 @@ pub(crate) fn parse(value: &str) -> Option<Want> {
         "gpu" => Some(Want::Gpu(Which::Native)),
         "metal" | "mtl" => Some(Want::Gpu(Which::Metal)),
         "gl" | "gles" | "opengl" => Some(Want::Gpu(Which::Gl)),
+        "d3d11" | "d3d" | "direct3d" => Some(Want::Gpu(Which::D3d11)),
         _ => None,
     }
 }
@@ -57,7 +60,7 @@ fn from_env() -> Option<Want> {
         let want = parse(&value);
         if want.is_none() && !value.trim().eq_ignore_ascii_case("auto") {
             eprintln!(
-                "stipple: STIPPLE_RENDERER={value:?} isn't one of software, gpu, metal, gl, auto"
+                "stipple: STIPPLE_RENDERER={value:?} isn't one of software, gpu, metal, gl, d3d11, auto"
             );
         }
         want
@@ -122,6 +125,7 @@ mod shared {
             Which::Native => None,
             Which::Metal => Some(Api::Metal),
             Which::Gl => Some(Api::Gl),
+            Which::D3d11 => Some(Api::D3d11),
         })
     }
 
@@ -355,6 +359,8 @@ mod tests {
         assert_eq!(parse("gpu"), Some(Want::Gpu(Which::Native)));
         assert_eq!(parse("metal"), Some(Want::Gpu(Which::Metal)));
         assert_eq!(parse("gl"), Some(Want::Gpu(Which::Gl)));
+        assert_eq!(parse("d3d11"), Some(Want::Gpu(Which::D3d11)));
+        assert_eq!(parse("D3D"), Some(Want::Gpu(Which::D3d11)));
         assert_eq!(parse("auto"), None);
         assert_eq!(parse("vulkan?"), None);
         assert_eq!(resolve(Renderer::Auto, None), Want::Software);

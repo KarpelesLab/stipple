@@ -20,6 +20,8 @@ pub(crate) enum Api {
     Metal,
     /// OpenGL ES 2 over EGL (Linux), feature `gl`.
     Gl,
+    /// Direct3D 11 (Windows), feature `d3d`.
+    D3d11,
 }
 
 impl Api {
@@ -27,6 +29,7 @@ impl Api {
         match self {
             Api::Metal => "Metal",
             Api::Gl => "OpenGL ES",
+            Api::D3d11 => "Direct3D 11",
         }
     }
 
@@ -39,6 +42,8 @@ impl Api {
             Some(Api::Metal)
         } else if cfg!(all(target_os = "linux", feature = "gl")) {
             Some(Api::Gl)
+        } else if cfg!(all(target_os = "windows", feature = "d3d")) {
+            Some(Api::D3d11)
         } else {
             None
         }
@@ -57,7 +62,10 @@ pub(crate) enum GpuError {
     /// Nothing went wrong, but this frame couldn't be shown (no drawable came
     /// in time): try again on the next frame.
     #[cfg_attr(
-        not(all(any(target_os = "macos", target_os = "ios"), feature = "mtl")),
+        not(any(
+            all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
+            all(target_os = "windows", feature = "d3d")
+        )),
         allow(dead_code)
     )]
     Skipped,
@@ -134,7 +142,8 @@ impl GpuRenderer {
     pub(crate) fn new(api: Option<Api>) -> Result<Self, GpuError> {
         let api = api.or_else(Api::native).ok_or_else(|| {
             GpuError::Unavailable(
-                "built without a GPU backend for this platform (features `mtl`, `gl`)".into(),
+                "built without a GPU backend for this platform (features `mtl`, `gl`, `d3d`)"
+                    .into(),
             )
         })?;
         let exec: Result<Box<dyn Executor>, GpuError> = match api {
@@ -142,6 +151,8 @@ impl GpuRenderer {
             Api::Metal => super::metal_scene::MetalExecutor::new().map(|e| Box::new(e) as _),
             #[cfg(all(target_os = "linux", feature = "gl"))]
             Api::Gl => super::gl::GlExecutor::new().map(|e| Box::new(e) as _),
+            #[cfg(all(target_os = "windows", feature = "d3d"))]
+            Api::D3d11 => super::d3d::D3dExecutor::new().map(|e| Box::new(e) as _),
             #[allow(unreachable_patterns)]
             other => Err(GpuError::Unavailable(format!(
                 "built without {} for this platform",

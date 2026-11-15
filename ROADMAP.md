@@ -865,20 +865,22 @@ off-screen and read it back.
   surface, a WebGPU canvas context) instead of taking a `Pixmap`, with resize,
   scale changes, occlusion and device loss reported back.
   *`Window::gpu_layer` / `drop_gpu_layer`: a `CAMetalLayer` over the view on
-  macOS and iOS, kept at the view's size and scale; device loss comes back
-  from the renderer. The other surfaces come with 6c–6e; occlusion isn't
-  reported yet.*
+  macOS and iOS, kept at the view's size and scale; the window itself on
+  Windows, which the renderer gives a DXGI swap chain; device loss comes
+  back from the renderer. The other surfaces come with 6c and 6e; occlusion
+  isn't reported yet.*
 - ✅ A renderer trait over the lowered operations, so each backend is an
   executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
   per-backend texture, glyph and offscreen-target caches behind it.
   *`gpu::renderer::Executor` (read back, or present to a layer) and
-  `GpuRenderer` (an executor plus the glyph cache); GLES2 and Metal.*
+  `GpuRenderer` (an executor plus the glyph cache); GLES2, Metal and
+  Direct3D 11.*
 - ✅ Choosing: `App::renderer(Renderer::{Auto, Software, Gpu})` plus an
   environment override (`STIPPLE_RENDERER=software|gpu|metal|vulkan|…`).
   `Auto` picks the platform's GPU backend when a device is available and
   falls back to software when it isn't, when creating it fails, and when the
   device is lost mid-run (rebuilding caches on a new device if one comes back).
-  *`STIPPLE_RENDERER=software|gpu|metal|gl|auto`. `Auto` stays the CPU
+  *`STIPPLE_RENDERER=software|gpu|metal|gl|d3d11|auto`. `Auto` stays the CPU
   until 6h; a lost device is set up again once, then the app stays on the
   CPU. Loss simulated in tests, on Metal and on a stand-in device.*
 - 🚧 Shaders: one small set (boxes, image/region/glyph quads, stencil fill,
@@ -887,7 +889,9 @@ off-screen and read it back.
   bytecode, with the sources next to them and a CI step that recompiles the
   bytecode and fails if it differs. No shader compiler as a dependency.
   *MSL and GLSL ES are compiled from source by the driver at run time
-  (`newLibraryWithSource:`); bytecode for SPIR-V and HLSL comes with 6c/6d.*
+  (`newLibraryWithSource:`); HLSL by `D3DCompile` from `d3dcompiler_47.dll`,
+  which ships with Windows 8.1 and later (DXBC can't be built off Windows
+  without a compiler dependency); SPIR-V bytecode comes with 6c.*
 - ⬜ Frame pacing from the swapchain (Metal's display sync, DXGI's waitable
   object, Vulkan FIFO, `wl_surface.frame`, `requestAnimationFrame`) feeding
   the existing frame clock; an idle app does no GPU work.
@@ -918,11 +922,23 @@ off-screen and read it back.
   visual jobs with each renderer, and the Android emulator's GPU.
 
 #### 6d — Direct3D 11 (Windows)
-- ⬜ The scene executor on Direct3D 11 (already the API the Windows spike
+- ✅ The scene executor on Direct3D 11 (already the API the Windows spike
   uses; Direct3D 12 only if a measurement shows D3D11 limiting) and a
   flip-model DXGI swapchain on the window, with per-monitor DPI.
-- ⬜ CI on WARP: pixel comparison and the Windows visual jobs with each
+  *`src/gpu/d3d/scene.rs`, feature `d3d`, raw COM vtables (`d3d/abi.rs`,
+  layouts unit-tested on every host). HLSL compiled with `D3DCompile` from
+  `d3dcompiler_47.dll` at run time; a hardware device, else WARP;
+  `CreateSwapChainForHwnd` flip-discard (flip-sequential before Windows 10),
+  `ResizeBuffers` on resize and DPI changes, a frame-latency waitable object
+  limiting the queue to one frame. Device removal falls back as on Metal.
+  `STIPPLE_RENDERER=d3d11`. Written on a Mac: compile-checked there, run
+  only in CI.*
+- 🚧 CI on WARP: pixel comparison and the Windows visual jobs with each
   renderer.
+  *`visual-windows` runs the `compare.rs` corpus on D3D11 with
+  `STIPPLE_REQUIRE_GPU` and screenshots `widgetsdemo` with
+  `STIPPLE_RENDERER=d3d11` (both non-blocking until they've passed there);
+  the job's other steps stay on the CPU.*
 
 #### 6e — The web
 - ⬜ The scene executor on WebGPU through the canvas's GPU context, from
