@@ -233,6 +233,24 @@ fn post(
         c"(Z)Landroid/app/Notification$Builder;",
         &[JValue { z: 1 }],
     );
+    if let Some(tag) = tag {
+        // A group of its own: with a few notifications up (two on recent
+        // releases), the system bundles an app's ungrouped ones under a
+        // summary of its own (`ranker_group`), and a tap on the collapsed
+        // bundle opens that summary's intent, the app's launch intent, so
+        // which notification it was would go unheard. Notifications in an
+        // app group (even one without a summary) aren't bundled.
+        let group = jni
+            .string16(&format!("stipple-notification:{tag}"))
+            .ok_or_else(failed)?;
+        jni.call_object(
+            builder,
+            c"setGroup",
+            c"(Ljava/lang/String;)Landroid/app/Notification$Builder;",
+            &[JValue { l: group }],
+        )
+        .ok_or_else(failed)?;
+    }
     if let Some(open) = launch_intent(jni, context, tag) {
         jni.call_object(
             builder,

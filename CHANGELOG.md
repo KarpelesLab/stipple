@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(gpu)* canvases are kept as textures on the GPU renderers and re-rasterized and uploaded only where invalidated (sub-rect uploads on Metal, Direct3D 11, Vulkan, GLES2, WebGPU and WebGL2); `gpu::stats`, `gpu::device_name`, `gpu::draw_scene_scaled` ([#54](https://github.com/KarpelesLab/stipple/pull/54))
 - *(bench)* `gallery_4k`, `sprites_10k`, `canvas_row` and `transition` scenarios, the GPU device and texture memory in the reports, hardware-GPU and memory budgets ([#54](https://github.com/KarpelesLab/stipple/pull/54))
 
+### Fixed
+
+- *(android)* a tap on a scheduled notification is heard with other notifications up: each is in a group of its own, so the system no longer bundles it under a summary whose tap opens the app without its id
+
 ## [0.0.7](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.6...stipple-v0.0.7) - 2026-11-15
 
 ### Added

@@ -93,6 +93,15 @@ wait_for() {
   log | grep -v "androiddemo: tick" | tail -60 >&2
   adb exec-out screencap -p > "$shots/android-timeout.png" || true
   adb logcat -d | grep -E "onStartInput|ImeTracker" | tail -10 >&2 || true
+  if [ -n "${verbose_waits:-}" ]; then
+    # Unfiltered: crashes, the activities started, the notification's
+    # PendingIntent (the stipple:I filter above hides them).
+    echo "--- unfiltered logcat ($verbose_waits) ---" >&2
+    adb logcat -d | grep -E "$verbose_waits" | tail -40 >&2 || true
+    echo "--- the app's notifications ---" >&2
+    adb shell dumpsys notification --noredact \
+      | grep -E "NotificationRecord\(.*pkg=$pkg|groupKey=.*$pkg|android\.title=|contentIntent=" >&2 || true
+  fi
   return 1
 }
 
@@ -780,7 +789,9 @@ fi
 # Scheduled notifications: Later schedules one ten seconds on. The app goes
 # to the background and its process ends; the alarm starts it again for the
 # APK's Alarm receiver (classes.dex), which posts the notification. A tap on
-# it starts the activity, which hears which notification it was.
+# it starts the activity, which hears which notification it was. (A timeout
+# from here on also shows these unfiltered logcat lines.)
+verbose_waits="AndroidRuntime|ActivityTaskManager|ActivityManager: (Start proc|Killing)|Tapped|NativeActivity|UnsatisfiedLink|FATAL"
 adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
 wait_top "$pkg" 30
 adb logcat -c

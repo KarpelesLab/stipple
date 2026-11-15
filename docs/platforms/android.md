@@ -381,6 +381,10 @@ too:
 (`taskAffinity=""` gives it a task of its own, out of Recents, so it never
 becomes the root of the app's task.)
 
+Each scheduled notification is in an app group of its own, so Android doesn't
+bundle it with the app's other notifications under a summary of the system's,
+whose tap would open the app without saying which notification it was.
+
 ## Permissions and the camera
 
 `platform::permission` maps each permission to the manifest's
