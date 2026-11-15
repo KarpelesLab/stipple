@@ -1520,6 +1520,15 @@ struct AndroidWindow {
     view: Rc<View>,
 }
 
+/// Have the GPU renderer let go of what it presents to `window` with.
+fn release_gpu(window: *mut c_void) {
+    crate::app_gpu::release_gpu_layer(crate::platform::GpuLayer::Android {
+        window,
+        size: (0, 0),
+        content: [0; 4],
+    });
+}
+
 impl Window for AndroidWindow {
     fn id(&self) -> WindowId {
         WindowId(1)
@@ -1590,6 +1599,21 @@ impl Window for AndroidWindow {
     fn set_orientations(&self, set: crate::platform::Orientations) {
         let value = set.android_request();
         run_on_main(move |jni, activity| screen::request_orientation(jni, activity, value));
+    }
+    fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        // The window itself: a GPU renderer makes its swapchain (or EGL
+        // surface) on it, sized to the whole window, and draws the frame at
+        // the content rectangle.
+        let window = self.view.window.get();
+        if window.is_null() {
+            return None;
+        }
+        let r = self.view.content_rect();
+        Some(crate::platform::GpuLayer::Android {
+            window,
+            size: self.view.window_size.get(),
+            content: [r.left, r.top, r.right, r.bottom],
+        })
     }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(AndroidSurface {
@@ -1676,6 +1700,7 @@ impl Loop<'_> {
                 let window = w as *mut c_void;
                 let old = self.view.window.replace(window);
                 if !old.is_null() {
+                    release_gpu(old);
                     unsafe { ANativeWindow_release(old) };
                 }
                 unsafe { ANativeWindow_setBuffersGeometry(window, 0, 0, WINDOW_FORMAT_RGBX_8888) };
@@ -1699,6 +1724,9 @@ impl Loop<'_> {
             Command::WindowDestroyed => {
                 let old = self.view.window.replace(std::ptr::null_mut());
                 if !old.is_null() {
+                    // The main thread waits for this: a swapchain or EGL
+                    // surface on the window must be gone before it returns.
+                    release_gpu(old);
                     unsafe { ANativeWindow_release(old) };
                 }
             }

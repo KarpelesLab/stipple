@@ -7,8 +7,8 @@ features, each linking the OS's own driver through hand-written FFI:
 | Feature | Backend | What it does today |
 |---|---|---|
 | `mtl` | Metal (macOS, iOS) | Renders whole scenes and presents them straight to the window through a `CAMetalLayer`; `IOSurface` export |
-| `gl` | OpenGL ES 2 over surfaceless EGL (Linux) | Renders whole scenes, read back and presented as a bitmap; `dma-buf` export and import |
-| `vk` | Vulkan (Linux) | Device setup, a clear and a shader-drawn triangle, read back |
+| `vk` | Vulkan (Linux, Android) | Renders whole scenes and presents them straight to the window through a swapchain (X11, Android); read back elsewhere |
+| `gl` | OpenGL ES 2 over EGL (Linux, Android) | Renders whole scenes and presents them straight to an EGL window surface (X11, Android) where there's no Vulkan; read back elsewhere; `dma-buf` export and import (Linux) |
 | `d3d` | Direct3D 11 (Windows) | Renders whole scenes and presents them straight to the window through a flip-model DXGI swap chain; shared-handle export |
 | `gpu` on the web | WebGPU, else WebGL2, through `web/gpu.js` | Renders whole scenes straight into the page's canvas |
 
@@ -22,25 +22,31 @@ let app = app.renderer(Renderer::Gpu);
 
 - `Renderer::Software` draws on the CPU.
 - `Renderer::Gpu` draws with the platform's GPU API: Metal on macOS and iOS
-  (build with `--features stipple/mtl`), OpenGL ES 2 on Linux
-  (`--features stipple/gl`), Direct3D 11 on Windows (`--features
-  stipple/d3d`), WebGPU or WebGL2 in a browser (`--features stipple/gpu`;
-  see [the web](#the-web)). On macOS and iOS the frame goes straight into a
-  `CAMetalLayer` over the window's view, on Windows into a DXGI swap chain
-  on the window, on the web into the canvas; on Linux it is read back and
-  presented as a bitmap, until 6c presents GL and Vulkan frames directly.
+  (build with `--features stipple/mtl`); on Linux and Android Vulkan
+  (`--features stipple/vk`), or OpenGL ES 2 where Vulkan can't be set up
+  (`--features stipple/gl`; build with both for the fallback); Direct3D 11 on
+  Windows (`--features stipple/d3d`); WebGPU or WebGL2 in a browser
+  (`--features stipple/gpu`; see [the web](#the-web)). The frame goes
+  straight to the window: into a `CAMetalLayer` over the view on macOS and
+  iOS, a Vulkan swapchain or an EGL window surface on X11 and Android, a DXGI
+  swap chain on Windows, the canvas on the web. On Wayland it is drawn on the
+  GPU, read back and presented as a bitmap (see [Wayland](#wayland) for why).
 - `Renderer::Auto`, the default, is the CPU for now. The GPU becomes the
   default platform by platform once it has been shown to match the CPU there
   and to be faster (Phase 6h).
 
 The environment variable `STIPPLE_RENDERER` overrides the app's choice, for
 trying an app either way without rebuilding it: `software` (or `cpu`), `gpu`,
-`metal`, `gl`, `d3d11` (or `d3d`), `webgpu`, `webgl2`, or `auto`. On the web
-the page's `renderer` option (or `?renderer=` in its URL) does the same. With it set, Stipple says on stderr what it draws
-with (`stipple: drawing with Metal`).
+`metal`, `vulkan` (or `vk`), `gl`, `d3d11` (or `d3d`), `webgpu`, `webgl2`, or
+`auto`. On the web the page's `renderer` option (or `?renderer=` in its URL)
+does the same. Stipple says on stderr what it draws with (`stipple: drawing
+with Vulkan`), and once a frame has gone straight to a window, that it does
+(`stipple: presenting with Vulkan straight to the window`).
 
 ```sh
 STIPPLE_RENDERER=metal cargo run --release --features mtl --example widgetsdemo
+STIPPLE_RENDERER=vulkan cargo run --release --features vk,gl --example widgetsdemo
+STIPPLE_RENDERER=gl cargo run --release --features vk,gl --example widgetsdemo
 STIPPLE_RENDERER=d3d11 cargo run --release --features d3d --example widgetsdemo
 ```
 
@@ -54,6 +60,11 @@ Frames fall back to the CPU whenever there's no GPU to draw with:
   can't be allocated). That frame is drawn on the CPU and the renderer is set
   up again on the next one; if the device is lost a second time, the app
   stays on the CPU from then on.
+
+A window the GPU can't present to (Wayland; X11 without libxcb; an EGL
+without its XCB platform) is still drawn on the GPU: the frame is read back
+and presented as a bitmap. With `Renderer::Gpu` on Linux and Android, Vulkan
+is tried first and OpenGL ES next, when both are built in.
 
 Each of these is said once on stderr. When a window falls back, its GPU layer
 is taken away and the next frame is presented whole through the window's
@@ -135,8 +146,9 @@ targets and both caches are kept from frame to frame.
 
 The lowering (`src/gpu/ops.rs`) is shared; each GPU API is an executor of its
 operation list (`src/gpu/renderer.rs`): GLES2 in `src/gpu/gl/scene.rs`, Metal
-in `src/gpu/metal_scene.rs`, Direct3D 11 in `src/gpu/d3d/scene.rs`, WebGPU
-and WebGL2 in `web/gpu.js` (fed by `src/gpu/web.rs`).
+in `src/gpu/metal_scene.rs`, Vulkan in `src/gpu/vk/`, Direct3D 11 in
+`src/gpu/d3d/scene.rs`, WebGPU and WebGL2 in `web/gpu.js` (fed by
+`src/gpu/web.rs`).
 
 ## Metal
 
@@ -303,17 +315,116 @@ CPU and about 220 ms on WebGL2, most of it moving its vertices (a 34 MB op
 buffer a frame); batching and smaller path vertices are 6f's. On SwiftShader
 the GPU path is no faster than the CPU (27 to 150 ms against 38 to 41 for
 the widget window, 63 against 56 for the sprites).
+## Vulkan
+
+The Vulkan executor (`src/gpu/vk/`, feature `vk`) runs the same operation
+list in two steps. `record.rs` turns the plan into render passes and draws
+(which pipeline, scissor, stencil reference, vertex range, push constants and
+texture), the Metal executor's clip, layer and stencil-and-cover bookkeeping
+without any Vulkan in it, so it is unit-tested on every host. `exec.rs` then
+turns that into one command buffer: the frame's new images uploaded through a
+staging buffer (textures cached by the image's identity, in shared 16 MB
+memory blocks rather than an allocation each), every vertex of the frame in
+one host-visible buffer, every uniform as push constants, one descriptor set
+per texture. Render passes load and store; a pass that starts cleared clears
+inside it; between passes one barrier makes the last pass's writes visible
+and moves images that change roles (a layer drawn, then composited) to their
+new layout. Targets are `R8G8B8A8_UNORM` (the frame, layers) and `R8_UNORM`
+(the path scratch), each with the first stencil format the device can attach
+(`S8_UINT`, else a depth-stencil one). One frame is in flight.
+
+`libvulkan` is loaded at run time (`dlopen`, then `vkGetInstanceProcAddr`),
+so a build with `vk` still starts where there's no Vulkan, and falls back to
+GLES or the CPU. The device picked is a discrete GPU, else an integrated
+one, else whatever there is (lavapipe).
+
+### The shaders
+
+The shaders are GLSL 4.50 in `src/gpu/shaders/` (`scene.vert`, `box.frag`,
+`tex.frag`, `flat.frag`, `resolve.frag`, the GLSL ES and MSL ones
+translated), with their SPIR-V checked in next to them and included with
+`include_bytes!`: no shader compiler is a dependency. `tools/shaders.sh`
+compiles them with glslang's `glslang`, at the release it pins (built without
+the optimizer, so the bytes are the same on every machine), and with
+`--check` fails if the checked-in SPIR-V differs; CI's `shaders` job builds
+that glslang and runs the check. Unit tests read the modules back and check
+their push-constant offsets and descriptor bindings against the ones the
+recorder writes.
+
+```sh
+GLSLANG=path/to/glslang tools/shaders.sh          # after editing a shader
+GLSLANG=path/to/glslang tools/shaders.sh --check  # what CI runs
+```
+
+### Presenting
+
+The frame is drawn into its offscreen target exactly as for a read-back, then
+copied into the acquired swapchain image on the GPU (`vkCmdBlitImage`, or a
+copy when the formats match): a pass more than drawing into the swapchain
+image, but one set of pipelines and one path for both. The swapchain is
+FIFO, in an 8-bit UNORM format (the frame's encoded sRGB values copied as
+they are, as the CPU frames are shown), re-made when the window's size
+changes or it is out of date.
+
+- **X11** (`VK_KHR_xcb_surface`). The backend speaks X11 over its own
+  socket and has no `xcb_connection_t`, but a window's id is the same on
+  every connection to the server: the GPU opens one of its own with libxcb
+  (`libxcb.so.1`, loaded with `dlopen` when a window is first presented to;
+  every X11 desktop has it) and makes the surface on the backend's window.
+  The driver's presentation (DRI3 and Present, or `PutImage` under a software
+  driver) goes over that connection, everything else over the backend's.
+  Without libxcb, frames are read back.
+- **Android** (`VK_KHR_android_surface`) on the activity's `ANativeWindow`,
+  sized to the whole window, the app drawn at its content rectangle and the
+  rest filled with the background. When the window goes away the backend has
+  the swapchain destroyed before it hands the window back.
+- **Wayland**: read back; see below.
+- **macOS**, for working on the executor: `vk` also builds there and runs on
+  MoltenVK (the Vulkan SDK's, or Homebrew's `molten-vk` and `vulkan-loader`),
+  presenting to the window's `CAMetalLayer` through `VK_EXT_metal_surface`.
+  Metal stays the platform's renderer. On an Apple M5 Max the benchmark of
+  [How fast](#how-fast) takes 1.3 ms a frame for the widget window (3.3 ms read back) and
+  1.4 ms for the sprites (2.5 ms), about Metal's own times.
+
+### Wayland
+
+On Wayland neither Vulkan nor GLES presents straight to the window yet.
+`VK_KHR_wayland_surface` and `wl_egl_window` both take libwayland-client's
+`wl_display` and the window's `wl_surface` proxy; the backend speaks the
+protocol itself, and its objects can't be lent to a second connection (a
+client's object ids are its own, and a subsurface must belong to the same
+client as its parent). Loading libwayland just for the surface would mean
+moving the whole backend onto it. The way that fits the backend is a
+`dma-buf`: draw into an exportable image (Vulkan's
+`VK_EXT_external_memory_dma_buf`, or GLES through GBM, as the `dma-buf` seam
+below already does) and attach it with `zwp_linux_dmabuf_v1` on the
+backend's own connection. That is planned with 6g's zero-copy work; until
+then a Wayland window's frames are drawn on the GPU, read back and presented
+through `wl_shm`.
+
+## OpenGL ES on a window
+
+Where there's no Vulkan, the GLES2 executor presents too: on the first frame
+for a window it moves its context to an EGL display on the window system
+(EGL's XCB platform, `EGL_EXT_platform_xcb` in Mesa 21 and later, on the
+GPU's own libxcb connection, on X11; the one display on Android), picks the
+first window config the window's surface takes, and from then on draws each
+frame into its offscreen target, then that target into the window surface
+as one quad flipped to the window's rows, and swaps. No read-back. Read-backs
+(tests, `render_scene_scaled`) keep working on the same context without a
+surface.
 
 ## How close it is to the software renderer
 
 Unit tests (`src/gpu/compare.rs`) draw the same scenes both ways, on GLES2,
-Metal or Direct3D 11, and compare them pixel by pixel: boxes, paths, images, clips, layers (translated, rotated,
+Vulkan, Metal or Direct3D 11, and compare them pixel by pixel: boxes, paths, images, clips, layers (translated, rotated,
 scaled, translucent and nested), text, a canvas, and a whole app through
 `App::render_with`, at scales 1, 1.5 and 2. On Mesa's llvmpipe the mean
 difference per channel stays under 0.25 of 255, with no pixel off by more than
 64 in any of them (the tests allow a mean of 0.5 to 1 and a handful of edge
 pixels). On Metal the mean stays under 0.23, with at most one such pixel in
-the corpus. Edges can differ by a shade where the two antialias differently, an
+the corpus. Vulkan through MoltenVK on the same Mac gives Metal's numbers to
+the last digit; CI runs the corpus on Vulkan under Mesa's lavapipe. Edges can differ by a shade where the two antialias differently, an
 upright clip at a fractional pixel is rounded to the nearest pixel instead of
 blended, and glyph positions are rounded to a sixteenth of a pixel.
 
@@ -326,18 +437,27 @@ The tests skip when there is no device, and fail instead when
 each comparison there.
 
 ```sh
-STIPPLE_REQUIRE_GPU=1 cargo test --features gl --lib gpu::   # Linux
+STIPPLE_REQUIRE_GPU=1 cargo test --features gl --lib gpu::   # Linux, GLES
+STIPPLE_REQUIRE_GPU=1 cargo test --features vk --lib gpu::   # Linux, Vulkan
 STIPPLE_REQUIRE_GPU=1 cargo test --features mtl --lib gpu::  # macOS
+STIPPLE_REQUIRE_GPU=1 cargo test --features vk --lib gpu::   # macOS, MoltenVK
 STIPPLE_REQUIRE_GPU=1 cargo test --features d3d --lib gpu::  # Windows
 ```
 
-CI's GPU job runs them under Mesa's llvmpipe and screenshots `gpuwindow`
-under Xvfb; the macOS visual job runs them on the runner's Metal device,
-prints the frame times, and screenshots `widgetsdemo` with
-`STIPPLE_RENDERER=metal`; the Windows visual job runs them on WARP and
-screenshots `widgetsdemo` with `STIPPLE_RENDERER=d3d11` (both non-blocking
-until they have passed there: the executor was written and compile-checked
-on a Mac). They all upload the frames.
+(With `STIPPLE_RENDERER` set, the app tests compare the GPU with itself: it
+overrides the CPU baseline's renderer too. Build with only the API to test.)
+
+CI's GPU job runs them under Mesa's llvmpipe (GLES) and lavapipe (Vulkan) and
+screenshots `gpuwindow` under Xvfb; the `visual-gpu-present` jobs screenshot
+`widgetsdemo` presented straight to an Xvfb window with each of Vulkan and
+GLES; the Android emulator run (API 34) starts the demo built with `vk` and
+checks it presents with Vulkan (those two not blocking yet); the macOS visual
+job runs the corpus on the runner's Metal device, prints the frame times, and
+screenshots `widgetsdemo` with `STIPPLE_RENDERER=metal`; the Windows visual
+job runs them on WARP and screenshots `widgetsdemo` with
+`STIPPLE_RENDERER=d3d11` (both non-blocking until they have passed there:
+the executor was written and compile-checked on a Mac). They all upload the
+frames.
 
 ## Not done yet
 
@@ -345,11 +465,13 @@ The plan for hardware rendering on every platform, presented straight to the
 window, is Phase 6 in the [roadmap](../ROADMAP.md#phase-6--hardware-rendering).
 Today:
 
-- GLES2, Metal, Direct3D 11, WebGPU and WebGL2 execute the scene; Vulkan
-  only draws a test triangle.
-- On Linux the GL frame is read back to the CPU and presented as a bitmap;
-  Metal, Direct3D 11 and the web (into the canvas) present straight to the
-  window.
+- GLES2, Vulkan, Metal, Direct3D 11, WebGPU and WebGL2 execute the scene.
+- On Wayland the GPU frame is read back and presented as a bitmap (see
+  [Wayland](#wayland)); Metal, Vulkan and GLES (X11, Android), Direct3D 11
+  and the web (into the canvas) present straight to the window.
+- The X11 and Android present paths (Vulkan and GLES) have been
+  compile-checked and run in CI only, under Mesa's software drivers and the
+  emulator; the Vulkan swapchain code has run on macOS through MoltenVK.
 - Direct3D 11 is exercised by CI on WARP; it hasn't been tried on a
   hardware GPU yet.
 - `Renderer::Auto` is still the CPU everywhere.

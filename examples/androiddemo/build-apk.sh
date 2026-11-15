@@ -19,6 +19,8 @@
 # Another example builds the same way: STIPPLE_APK_EXAMPLE names its cdylib
 # example (`cameraview_android`), and STIPPLE_APK_MANIFEST its manifest
 # (`examples/cameraview/AndroidManifest.xml`); both default to androiddemo's.
+# STIPPLE_APK_FEATURES builds it with those Cargo features (`vk`, `gl`: then
+# it draws with that GPU API, see examples/androiddemo/test-renderer.sh).
 #
 # Needs ANDROID_HOME (the SDK, with build-tools and a platform) and an NDK in
 # ANDROID_NDK_HOME (or the newest one under $ANDROID_HOME/ndk), plus the Rust
@@ -52,7 +54,9 @@ if [ ! -x "$linker" ]; then
 fi
 export "CARGO_TARGET_$(echo "$target" | tr 'a-z-' 'A-Z_')_LINKER=$linker"
 
-(cd "$root" && cargo build --example "$example" --target "$target" --release)
+features=()
+[ -n "${STIPPLE_APK_FEATURES:-}" ] && features=(--features "$STIPPLE_APK_FEATURES")
+(cd "$root" && cargo build --example "$example" --target "$target" --release ${features[@]+"${features[@]}"})
 target_dir="$(cd "$root" && cargo metadata --format-version 1 --no-deps \
   | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
 # The example `androiddemo` is libandroiddemo.so; the manifest names the

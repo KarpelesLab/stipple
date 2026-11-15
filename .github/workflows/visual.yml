@@ -1688,6 +1688,79 @@ jobs:
           path: visual_output/*
           if-no-files-found: warn
 
+  # An app drawn on the GPU and presented straight to its X11 window, once with
+  # each renderer: Vulkan (lavapipe, VK_KHR_xcb_surface) and OpenGL ES (Mesa's
+  # llvmpipe, an EGL window surface on EGL's XCB platform), both over the
+  # GPU's own libxcb connection. Each must say it presents straight to the
+  # window, not fall back to the CPU, and paint a real frame. Not blocking
+  # until it has passed on the runners a few times.
+  visual-gpu-present:
+    name: Visual test (GPU present / X11, ${{ matrix.renderer }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - renderer: vulkan
+            api: Vulkan
+          - renderer: gl
+            api: OpenGL ES
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Xvfb, Mesa (EGL, GLES, lavapipe), libxcb, ImageMagick, a font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb imagemagick x11-utils fonts-dejavu-core \
+            libegl-dev libgles-dev libegl-mesa0 libgl1-mesa-dri libgbm-dev \
+            libvulkan-dev libvulkan1 mesa-vulkan-drivers libxcb1
+
+      - name: Build the widgets demo with the GL and Vulkan features
+        run: cargo build --release --example widgetsdemo --features gl,vk
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1024x768x24 &
+          echo "XVFB_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+
+      - name: Screenshot the widgets demo drawn with ${{ matrix.api }}
+        env:
+          DISPLAY: ":99"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          STIPPLE_RENDERER: ${{ matrix.renderer }}
+        run: |
+          mkdir -p visual_output
+          ./target/release/examples/widgetsdemo > visual_output/present-${{ matrix.renderer }}.log 2>&1 &
+          echo "APP_PID=$!" >> "$GITHUB_ENV"
+          sleep 6
+          import -window root -crop 720x480+0+0 +repage visual_output/stipple-x11-${{ matrix.renderer }}.png
+          cat visual_output/present-${{ matrix.renderer }}.log
+          grep -q "stipple: drawing with ${{ matrix.api }}" visual_output/present-${{ matrix.renderer }}.log
+          grep -q "stipple: presenting with ${{ matrix.api }} straight to the window" visual_output/present-${{ matrix.renderer }}.log
+          ! grep -q "drawing on the CPU" visual_output/present-${{ matrix.renderer }}.log
+          colors=$(convert visual_output/stipple-x11-${{ matrix.renderer }}.png -format '%k' info:)
+          echo "distinct colors: $colors"
+          [ "$colors" -gt 16 ]
+
+      - name: Stop the app and Xvfb
+        if: always()
+        run: |
+          [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      - name: Upload screenshot + log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-x11-present-${{ matrix.renderer }}
+          path: visual_output/*
+          if-no-files-found: warn
+
   # Cross-process GPU surface seam (browser content path): export a GL texture as
   # a dma-buf and re-import it. Build-verified always; functionally verified only
   # where the device supports the dma-buf EGL extensions. CI runs software Mesa
@@ -3132,6 +3205,21 @@ jobs:
           cargo test --features gl --lib gpu:: -- --nocapture --test-threads 1
           for f in gpu-compare/*.png; do
             cp "$f" "visual_output/gpu-compare-$(basename "$f")"
+          done
+
+      # The same corpus on the Vulkan executor, under Mesa's lavapipe, with the
+      # same tolerances (built with only `vk`, so Vulkan is the platform's
+      # API), plus the app's fallback and device-loss tests on it.
+      - name: Vulkan scene renderer matches the software renderer (lavapipe)
+        env:
+          STIPPLE_REQUIRE_GPU: "1"
+          STIPPLE_GPU_DUMP: ${{ github.workspace }}/vk-compare
+        run: |
+          mkdir -p vk-compare visual_output
+          vulkaninfo --summary || true
+          cargo test --features vk --lib -- gpu:: app_gpu --nocapture --test-threads 1
+          for f in vk-compare/*.png; do
+            cp "$f" "visual_output/vk-compare-$(basename "$f")"
           done
 
       - name: Upload screenshot
@@ -4781,6 +4869,13 @@ jobs:
       - name: Build the cdylib and assemble a signed debug APK
         run: bash examples/androiddemo/build-apk.sh x86_64 stipple.apk
 
+      # The demo again, built with the Vulkan executor: it draws with Vulkan
+      # and presents through VK_KHR_android_surface (examples/androiddemo/
+      # test-renderer.sh, after the main run, on API 34; not blocking yet).
+      - name: Build the Vulkan APK
+        if: matrix.api-level == 34
+        run: STIPPLE_APK_FEATURES=vk bash examples/androiddemo/build-apk.sh x86_64 stipple-vk.apk
+
       # An accessibility service standing in for TalkBack, and watching
       # TalkBack itself: see .github/a11y/android/Probe.java.
       - name: Build the accessibility probe APK
@@ -4851,6 +4946,7 @@ jobs:
             bash .github/billing/android/test-billing.sh stipple.apk visual_output || echo "::warning::test-billing.sh failed (non-blocking)"
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-talkback.sh a11yprobe.apk visual_output; fi
+            if [ "${{ matrix.api-level }}" = 34 ]; then bash examples/androiddemo/test-renderer.sh stipple-vk.apk Vulkan visual_output || echo "::warning::androiddemo didn't present with Vulkan on the emulator (not blocking yet)"; fi
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4

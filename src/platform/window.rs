@@ -433,6 +433,22 @@ pub(crate) enum GpuLayer {
     /// The page's canvas, drawn into through `web/gpu.js` (the web).
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Web,
+    /// An X11 window, by its id. The backend speaks the protocol over its
+    /// own socket, so a GPU renderer presents to the window over a libxcb
+    /// connection of its own (`gpu::xcb`): a window id is the same on every
+    /// connection to the server.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    X11 { window: u32 },
+    /// The activity's `ANativeWindow` (Android): the window is `size`
+    /// pixels, and the app draws in its `content` rectangle (`[x0, y0, x1,
+    /// y1]`, clear of the system bars unless edge to edge); the rest shows
+    /// the background.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    Android {
+        window: *mut std::ffi::c_void,
+        size: (i32, i32),
+        content: [i32; 4],
+    },
 }
 
 /// A live native window.

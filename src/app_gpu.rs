@@ -42,6 +42,7 @@ pub(crate) enum Which {
     D3d11,
     WebGpu,
     WebGl2,
+    Vulkan,
 }
 
 /// What a window ends up drawing with.
@@ -62,6 +63,7 @@ pub(crate) fn parse(value: &str) -> Option<Want> {
         "d3d11" | "d3d" | "direct3d" => Some(Want::Gpu(Which::D3d11)),
         "webgpu" => Some(Want::Gpu(Which::WebGpu)),
         "webgl2" | "webgl" => Some(Want::Gpu(Which::WebGl2)),
+        "vulkan" | "vk" => Some(Want::Gpu(Which::Vulkan)),
         _ => None,
     }
 }
@@ -101,7 +103,7 @@ fn from_env() -> Option<Want> {
         let want = parse(&value);
         if want.is_none() && !value.trim().eq_ignore_ascii_case("auto") {
             say(format_args!(
-                "stipple: STIPPLE_RENDERER={value:?} isn't one of software, gpu, metal, gl, d3d11, webgpu, webgl2, auto"
+                "stipple: STIPPLE_RENDERER={value:?} isn't one of software, gpu, metal, vulkan, gl, d3d11, webgpu, webgl2, auto"
             ));
         }
         want
@@ -169,7 +171,20 @@ mod shared {
             Which::D3d11 => Some(Api::D3d11),
             Which::WebGpu => Some(Api::WebGpu),
             Which::WebGl2 => Some(Api::WebGl2),
+            Which::Vulkan => Some(Api::Vulkan),
         })
+    }
+
+    /// Let go of what the thread's renderer made to present to `layer`
+    /// (its window is going away), before the window is.
+    pub(crate) fn release(layer: &crate::platform::GpuLayer) {
+        GPU.with(|cell| {
+            if let Ok(mut gpu) = cell.try_borrow_mut()
+                && let Some(r) = gpu.renderer.as_mut()
+            {
+                r.release(layer);
+            }
+        });
     }
 
     /// Run `f` on the thread's renderer for `which`, setting it up first.
@@ -188,11 +203,7 @@ mod shared {
             if gpu.renderer.is_none() {
                 match create(which) {
                     Ok(r) => {
-                        if cfg!(target_arch = "wasm32")
-                            || std::env::var_os("STIPPLE_RENDERER").is_some()
-                        {
-                            say(format_args!("stipple: drawing with {}", r.api().name()));
-                        }
+                        say(format_args!("stipple: drawing with {}", r.api().name()));
                         gpu.renderer = Some(r);
                     }
                     // Not ready yet (a browser's GPU comes up asynchronously):
@@ -258,6 +269,17 @@ mod shared {
 
 #[cfg(all(test, feature = "gpu"))]
 pub(crate) use shared::{current, given_up, reset};
+
+/// A backend's window (and its GPU layer) is going away: the renderer lets
+/// go of the swapchain or EGL surface it made for it, now, while the native
+/// window is still valid.
+#[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
+pub(crate) fn release_gpu_layer(layer: crate::platform::GpuLayer) {
+    #[cfg(feature = "gpu")]
+    shared::release(&layer);
+    #[cfg(not(feature = "gpu"))]
+    let _ = layer;
+}
 
 /// Without a GPU backend built in there's nothing to draw with: say so once.
 #[cfg(not(feature = "gpu"))]
@@ -343,7 +365,17 @@ impl<S: 'static> Pane<S> {
                 if !g.can_present(&layer) {
                     return Ok(false);
                 }
-                g.present(&scene, background, scale, &layer).map(|()| true)
+                g.present(&scene, background, scale, &layer)
+                    .map(|()| true)
+                    .inspect(|_| {
+                        static SAID: std::sync::Once = std::sync::Once::new();
+                        SAID.call_once(|| {
+                            say(format_args!(
+                                "stipple: presenting with {} straight to the window",
+                                g.api().name()
+                            ))
+                        });
+                    })
             });
             match shown {
                 Some(Ok(true)) => {
@@ -435,6 +467,7 @@ mod tests {
         assert_eq!(parse("WebGPU"), Some(Want::Gpu(Which::WebGpu)));
         assert_eq!(parse("webgl2"), Some(Want::Gpu(Which::WebGl2)));
         assert_eq!(parse("auto"), None);
+        assert_eq!(parse("vulkan"), Some(Want::Gpu(Which::Vulkan)));
         assert_eq!(parse("vulkan?"), None);
         assert_eq!(resolve(Renderer::Auto, None), Want::Software);
         assert_eq!(resolve(Renderer::Gpu, None), Want::Gpu(Which::Native));

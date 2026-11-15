@@ -7,12 +7,13 @@
 //! identity), clips, and layers with transforms and group opacity, matching the
 //! software renderer to within a small tolerance (see `docs/gpu.md`). The scene
 //! lowering (`ops`) is backend-neutral; Metal (macOS, iOS; feature `mtl`),
-//! OpenGL ES 2 over surfaceless EGL (Linux; feature `gl`, which also runs
-//! headlessly under Mesa's software GL in CI) and Direct3D 11 (Windows;
-//! feature `d3d`, on WARP in CI) execute it. Apps choose it with
-//! [`App::renderer`](crate::App::renderer); on macOS and iOS the frames go
-//! straight to the window's `CAMetalLayer`, on Windows to a flip-model DXGI
-//! swap chain.
+//! Vulkan (Linux, Android; feature `vk`, under Mesa's lavapipe in CI),
+//! OpenGL ES 2 over EGL (Linux, Android; feature `gl`, under Mesa's llvmpipe
+//! in CI) and Direct3D 11 (Windows; feature `d3d`, on WARP in CI) execute it.
+//! Apps choose it with [`App::renderer`](crate::App::renderer); the frames go
+//! straight to the window's `CAMetalLayer` on macOS and iOS, to a Vulkan
+//! swapchain or EGL window surface on X11 and Android, and to a flip-model
+//! DXGI swap chain on Windows.
 //!
 //! [`present_offscreen`] composites a finished CPU [`Pixmap`] through GLES2.
 //! Vulkan, Direct3D 11 and Metal also have device and triangle spikes below.
@@ -24,11 +25,15 @@
 use crate::geometry::{PhysicalSize, Rect, ScaleFactor};
 use crate::render::{Color, Font, Pixmap, Scene};
 
-// The scene lowering is backend-neutral; GLES2, Metal, Direct3D 11 and the
-// web execute it.
+// The scene lowering is backend-neutral; GLES2, Vulkan, Metal, Direct3D 11
+// and the web execute it.
 #[cfg_attr(
     not(any(
-        all(target_os = "linux", feature = "gl"),
+        all(any(target_os = "linux", target_os = "android"), feature = "gl"),
+        all(
+            any(target_os = "linux", target_os = "android", target_os = "macos"),
+            feature = "vk"
+        ),
         all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
         all(target_os = "windows", feature = "d3d"),
         all(target_arch = "wasm32", feature = "gpu")
@@ -40,7 +45,11 @@ pub(crate) mod ops;
 // The renderer seam: the executors of `ops`'s list, and choosing one.
 #[cfg_attr(
     not(any(
-        all(target_os = "linux", feature = "gl"),
+        all(any(target_os = "linux", target_os = "android"), feature = "gl"),
+        all(
+            any(target_os = "linux", target_os = "android", target_os = "macos"),
+            feature = "vk"
+        ),
         all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
         all(target_os = "windows", feature = "d3d"),
         all(target_arch = "wasm32", feature = "gpu")
@@ -68,11 +77,19 @@ pub mod web_compare;
 #[cfg(all(any(target_os = "macos", target_os = "ios"), feature = "mtl"))]
 mod metal_scene;
 
-#[cfg(all(target_os = "linux", feature = "gl"))]
+#[cfg(all(any(target_os = "linux", target_os = "android"), feature = "gl"))]
 mod gl;
+
+// A libxcb connection of the GPU's own, for X11 window surfaces.
+#[cfg(all(target_os = "linux", any(feature = "gl", feature = "vk")))]
+mod xcb;
 
 #[cfg(all(target_os = "linux", feature = "vk"))]
 mod vulkan;
+
+// The Vulkan scene executor; its recording and shader checks are plain Rust,
+// built (and tested) everywhere.
+pub(crate) mod vk;
 
 #[cfg(all(target_os = "windows", feature = "d3d"))]
 mod d3d;
@@ -496,8 +513,9 @@ pub fn render_offscreen(
 /// Render a live stipple [`Scene`] **GPU-natively** at `scale` (physical
 /// pixels per logical pixel) on a target cleared to `background`, returning
 /// the rendered frame, on this platform's GPU API: Metal on macOS and iOS
-/// (feature `mtl`), OpenGL ES 2 on Linux (feature `gl`), Direct3D 11 on
-/// Windows (feature `d3d`). This is what
+/// (feature `mtl`), Vulkan or OpenGL ES 2 on Linux and Android (features
+/// `vk`, `gl`), Direct3D 11 on Windows (feature `d3d`), or the one
+/// `STIPPLE_RENDERER` names (`vulkan`, `gl`, `metal`, `d3d11`). This is what
 /// [`Renderer::Gpu`](crate::render::Renderer::Gpu) draws with, and it can be
 /// set as a renderer with [`App::render_with`](crate::App::render_with).
 ///
@@ -523,6 +541,19 @@ pub fn render_scene_scaled(
     with_default(|r| r.render(scene, background, scale)).map_err(|e| e.to_string())
 }
 
+/// The API `STIPPLE_RENDERER` names (`metal`, `vulkan`, `gl`, `d3d11`), for
+/// [`render_scene_scaled`]; `None` for the platform's own.
+fn api_from_env() -> Option<renderer::Api> {
+    let v = std::env::var("STIPPLE_RENDERER").ok()?;
+    match v.trim().to_ascii_lowercase().as_str() {
+        "metal" | "mtl" => Some(renderer::Api::Metal),
+        "vulkan" | "vk" => Some(renderer::Api::Vulkan),
+        "gl" | "gles" | "opengl" => Some(renderer::Api::Gl),
+        "d3d11" | "d3d" | "direct3d" => Some(renderer::Api::D3d11),
+        _ => None,
+    }
+}
+
 thread_local! {
     /// The calling thread's renderer for [`render_scene_scaled`].
     static DEFAULT: std::cell::RefCell<Option<renderer::GpuRenderer>> =
@@ -537,7 +568,7 @@ fn with_default<T>(
     DEFAULT.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.is_none() {
-            *slot = Some(renderer::GpuRenderer::new(None)?);
+            *slot = Some(renderer::GpuRenderer::new(api_from_env())?);
         }
         let r = f(slot.as_mut().unwrap());
         if matches!(r, Err(renderer::GpuError::Lost(_))) {
@@ -558,6 +589,7 @@ pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pix
     test,
     any(
         all(target_os = "linux", feature = "gl"),
+        all(any(target_os = "linux", target_os = "macos"), feature = "vk"),
         all(target_os = "macos", feature = "mtl"),
         all(target_os = "windows", feature = "d3d")
     )

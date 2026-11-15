@@ -498,6 +498,10 @@ mod app {
                     stipple::platform::store().finish(t);
                 }
             });
+        // Built with a GPU backend (`STIPPLE_APK_FEATURES=vk` for
+        // build-apk.sh), it draws with it, straight to the window.
+        #[cfg(any(feature = "vk", feature = "gl"))]
+        let app = app.renderer(stipple::render::Renderer::Gpu);
         // The store (Google Play, if the APK carries the Play Billing
         // Library: build-apk.sh with STIPPLE_BILLING=1): what it says about
         // two products. The app isn't in the Play Console, so a device with

@@ -2,8 +2,9 @@
 //! both ways and the frames compared pixel by pixel.
 //!
 //! They run on the platform's GPU API, with the same scenes and tolerances:
-//! Metal on macOS (feature `mtl`), GLES2 on Linux (feature `gl`; Mesa's
-//! llvmpipe does, through surfaceless EGL), Direct3D 11 on Windows (feature
+//! Metal on macOS (feature `mtl`), Vulkan on Linux (feature `vk`; Mesa's
+//! lavapipe in CI) or on macOS over MoltenVK, GLES2 on Linux (feature `gl`;
+//! Mesa's llvmpipe, through surfaceless EGL), Direct3D 11 on Windows (feature
 //! `d3d`; WARP does, on CI's runner). Without a device they're skipped,
 //! unless `STIPPLE_REQUIRE_GPU` is set (as CI's GPU jobs do), when they fail.
 //! `STIPPLE_GPU_DUMP=<dir>` writes both frames of each

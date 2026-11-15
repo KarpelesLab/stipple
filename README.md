@@ -209,8 +209,9 @@ Working today, each verified in CI on its platform:
   **Cocoa**, plus **web** (wasm + canvas), an **iOS UIKit** backend (run on the
   simulator), and an **Android** `NativeActivity` backend with touch, keys,
   timers and display-paced frames (driven on the emulator).
-- **GPU**: GLES2 scene rendering in a live window, and off-screen Vulkan,
-  Metal, D3D11 and WebGPU pipelines.
+- **GPU**: scenes drawn with Vulkan or OpenGL ES (Linux, Android) and Metal
+  (macOS, iOS), presented straight to the window; off-screen D3D11 and
+  WebGPU pipelines.
 - **Accessibility**: the full element tree on all three desktops.
 - **Compositor seams** for embedding a sandboxed content process (e.g. a
   browser engine): viewports, shared-memory and dma-buf / IOSurface / D3D

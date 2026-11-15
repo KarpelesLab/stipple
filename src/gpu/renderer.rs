@@ -18,8 +18,10 @@ use crate::render::{Color, Pixmap, Scene};
 pub(crate) enum Api {
     /// Metal (macOS, iOS), feature `mtl`.
     Metal,
-    /// OpenGL ES 2 over EGL (Linux), feature `gl`.
+    /// OpenGL ES 2 over EGL (Linux, Android), feature `gl`.
     Gl,
+    /// Vulkan (Linux, Android), feature `vk`.
+    Vulkan,
     /// Direct3D 11 (Windows), feature `d3d`.
     D3d11,
     /// WebGPU, through `web/gpu.js` (the web, feature `gpu`).
@@ -36,26 +38,46 @@ impl Api {
             Api::D3d11 => "Direct3D 11",
             Api::WebGpu => "WebGPU",
             Api::WebGl2 => "WebGL2",
+            Api::Vulkan => "Vulkan",
         }
     }
 
-    /// This platform's GPU API, when it was built in. On the web that is
-    /// WebGPU, and WebGL2 where the browser has no WebGPU (the page decides).
-    pub(crate) fn native() -> Option<Api> {
+    /// This platform's GPU APIs that were built in, the preferred first:
+    /// Metal on macOS and iOS; Vulkan, then GLES where there's no Vulkan, on
+    /// Linux and Android; Direct3D 11 on Windows; WebGPU on the web (and
+    /// WebGL2 where the browser has no WebGPU: the page decides). Vulkan
+    /// also builds on macOS, over MoltenVK, to work on its executor there.
+    pub(crate) fn native() -> Vec<Api> {
+        let mut apis = Vec::new();
         if cfg!(all(
             any(target_os = "macos", target_os = "ios"),
             feature = "mtl"
         )) {
-            Some(Api::Metal)
-        } else if cfg!(all(target_os = "linux", feature = "gl")) {
-            Some(Api::Gl)
-        } else if cfg!(all(target_os = "windows", feature = "d3d")) {
-            Some(Api::D3d11)
-        } else if cfg!(all(target_arch = "wasm32", feature = "gpu")) {
-            Some(Api::WebGpu)
-        } else {
-            None
+            apis.push(Api::Metal);
         }
+        if cfg!(all(
+            any(
+                target_os = "linux",
+                target_os = "android",
+                target_os = "macos"
+            ),
+            feature = "vk"
+        )) {
+            apis.push(Api::Vulkan);
+        }
+        if cfg!(all(
+            any(target_os = "linux", target_os = "android"),
+            feature = "gl"
+        )) {
+            apis.push(Api::Gl);
+        }
+        if cfg!(all(target_os = "windows", feature = "d3d")) {
+            apis.push(Api::D3d11);
+        }
+        if cfg!(all(target_arch = "wasm32", feature = "gpu")) {
+            apis.push(Api::WebGpu);
+        }
+        apis
     }
 }
 
@@ -73,7 +95,11 @@ pub(crate) enum GpuError {
     #[cfg_attr(
         not(any(
             all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
-            all(target_os = "windows", feature = "d3d")
+            all(target_os = "windows", feature = "d3d"),
+            all(
+                any(target_os = "linux", target_os = "android", target_os = "macos"),
+                feature = "vk"
+            )
         )),
         allow(dead_code)
     )]
@@ -123,6 +149,12 @@ pub(crate) trait Executor {
         )))
     }
 
+    /// Let go of what was made to present to `layer` (a swapchain, an EGL
+    /// window surface): its window is going away.
+    fn release(&mut self, layer: &GpuLayer) {
+        let _ = layer;
+    }
+
     /// Draw `plan` offscreen and wait for the GPU, without reading back
     /// (for timing the GPU's part of a frame).
     #[allow(dead_code)] // the comparison tests and benchmark use it
@@ -152,23 +184,39 @@ impl std::fmt::Debug for GpuRenderer {
 }
 
 impl GpuRenderer {
-    /// A renderer on `api`, or on this platform's own API for `None`.
+    /// A renderer on `api`, or on this platform's own API for `None` (the
+    /// first of [`Api::native`] that can be set up).
     pub(crate) fn new(api: Option<Api>) -> Result<Self, GpuError> {
         // On the web the page picks WebGPU or WebGL2 for `None`.
         #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
         return super::web::WebExecutor::new(api).map(|e| Self::with_executor(Box::new(e)));
         #[allow(unreachable_code)]
-        let api = api.or_else(Api::native).ok_or_else(|| {
-            GpuError::Unavailable(
-                "built without a GPU backend for this platform (features `mtl`, `gl`, `d3d`, or `gpu` on the web)"
-                    .into(),
-            )
-        })?;
-        let exec: Result<Box<dyn Executor>, GpuError> = match api {
+        let apis = api.map_or_else(Api::native, |a| vec![a]);
+        let mut why = GpuError::Unavailable(
+            "built without a GPU backend for this platform (features `mtl`, `vk`, `gl`, `d3d`, or `gpu` on the web)"
+                .into(),
+        );
+        for api in apis {
+            match Self::executor(api) {
+                Ok(exec) => return Ok(Self::with_executor(exec)),
+                Err(e) => why = e,
+            }
+        }
+        Err(why)
+    }
+
+    #[cfg_attr(all(target_arch = "wasm32", feature = "gpu"), allow(dead_code))]
+    fn executor(api: Api) -> Result<Box<dyn Executor>, GpuError> {
+        match api {
             #[cfg(all(any(target_os = "macos", target_os = "ios"), feature = "mtl"))]
             Api::Metal => super::metal_scene::MetalExecutor::new().map(|e| Box::new(e) as _),
-            #[cfg(all(target_os = "linux", feature = "gl"))]
+            #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "gl"))]
             Api::Gl => super::gl::GlExecutor::new().map(|e| Box::new(e) as _),
+            #[cfg(all(
+                any(target_os = "linux", target_os = "android", target_os = "macos"),
+                feature = "vk"
+            ))]
+            Api::Vulkan => super::vk::VkExecutor::new().map(|e| Box::new(e) as _),
             #[cfg(all(target_os = "windows", feature = "d3d"))]
             Api::D3d11 => super::d3d::D3dExecutor::new().map(|e| Box::new(e) as _),
             #[allow(unreachable_patterns)]
@@ -176,9 +224,7 @@ impl GpuRenderer {
                 "built without {} for this platform",
                 other.name()
             ))),
-        };
-        let exec = exec?;
-        Ok(Self::with_executor(exec))
+        }
     }
 
     /// A renderer on `exec`.
@@ -241,6 +287,11 @@ impl GpuRenderer {
         self.lost()?;
         let plan = self.plan(scene, background, scale);
         self.exec.present(&plan, layer, scale)
+    }
+
+    /// Let go of what presents to `layer`: its window is going away.
+    pub(crate) fn release(&mut self, layer: &GpuLayer) {
+        self.exec.release(layer);
     }
 
     /// Render `scene` offscreen and wait for the GPU, without a read-back.

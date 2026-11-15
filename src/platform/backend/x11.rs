@@ -1175,6 +1175,15 @@ impl Window for X11Window {
     fn has_primary_selection(&self) -> bool {
         true
     }
+    fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        // The window itself: a GPU renderer presents to it over its own
+        // connection (see `GpuLayer::X11`). Nothing to put over it, and
+        // nothing to take away in `drop_gpu_layer`: the surface's next
+        // present covers the window again.
+        Some(crate::platform::GpuLayer::X11 {
+            window: self.window,
+        })
+    }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(X11Surface {
             conn: self.conn.clone(),
@@ -2157,6 +2166,8 @@ fn adopt_and_close(reg: &Registry, windows: &mut Vec<X11Window>, shared: &Shared
     for xid in r.closed.drain(..) {
         if let Some(pos) = windows.iter().position(|w| w.window == xid) {
             windows.remove(pos);
+            // A swapchain or EGL surface on it goes first.
+            crate::app_gpu::release_gpu_layer(crate::platform::GpuLayer::X11 { window: xid });
             let mut conn = shared.lock().unwrap();
             conn.sel.forget_window(xid);
             let mut req = vec![OP_DESTROY_WINDOW, 0, 0, 0];

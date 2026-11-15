@@ -311,6 +311,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   copy it with Ctrl/Cmd+C or the context menu (Copy, Select All), and on a
   touch screen select a word with a long press. It shows the I-beam, becomes
   the primary selection on Linux, and reaches screen readers (AT-SPI).
+- Vulkan (#54, Phase 6c): the scene executor on Vulkan (feature `vk`, Linux
+  and Android; `libvulkan` loaded at run time), drawing everything the GLES2
+  and Metal ones do, with its shaders as GLSL and checked-in SPIR-V
+  (`tools/shaders.sh`, glslang pinned, and a CI job that fails on drift). It
+  presents straight to X11 windows (`VK_KHR_xcb_surface`, on a libxcb
+  connection of its own) and Android's (`VK_KHR_android_surface`); Wayland
+  windows get the frame read back. `STIPPLE_RENDERER=vulkan`, and
+  `Renderer::Gpu` tries Vulkan, then OpenGL ES, on Linux and Android. It also
+  builds on macOS over MoltenVK, for working on it.
+- The GLES2 executor presents straight to an EGL window surface on X11 (EGL's
+  XCB platform) and Android instead of reading back, and builds for Android.
+- CI runs the GPU corpus on Vulkan under lavapipe, screenshots `widgetsdemo`
+  presented with each of Vulkan and GLES under Xvfb, and starts androiddemo
+  built with `vk` on the emulator (`STIPPLE_APK_FEATURES=vk` for
+  `build-apk.sh`, then `test-renderer.sh`).
 
 ### Changed (breaking)
 
@@ -346,6 +361,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Font::with_system_fallbacks()` loads each system fallback when text first
   needs it rather than at once.
+- Stipple says on stderr which GPU API it draws with whenever it sets one
+  up (not only with `STIPPLE_RENDERER`), and, once, when frames go straight
+  to the window. `render_scene_scaled` uses the API `STIPPLE_RENDERER` names.
 
 ### Fixed
 

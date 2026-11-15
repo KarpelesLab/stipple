@@ -853,14 +853,14 @@ Where it stands (see the implementation status above and
 backend-independent list of draw operations (analytic boxes,
 stencil-and-cover paths, images and image regions, cached glyphs, layers,
 scissor and stencil clips, canvases). Metal executes it and presents straight
-to a `CAMetalLayer` (macOS, iOS); GLES2 executes it and the frame is read back
-and presented as a bitmap (Linux); both are pixel-compared against the CPU in
+to a `CAMetalLayer` (macOS, iOS); Vulkan and GLES2 execute it and present
+straight to the window on X11 and Android (a swapchain, an EGL window
+surface), reading back on Wayland; Direct3D 11 executes it into a
+flip-model swap chain (Windows); all are pixel-compared against the CPU in
 CI. WebGPU and WebGL2 execute it in the browser (`web/gpu.js`), straight into
 the canvas, compared with the CPU in headless Chrome. `App::renderer` /
 `STIPPLE_RENDERER` (the page's `renderer` option on the web) choose, with the
-CPU as the default and the fallback. Direct3D 11 executes it into a
-flip-model swap chain (Windows); Vulkan draws a test triangle off-screen and
-reads it back.
+CPU as the default and the fallback.
 
 #### 6a — The architecture
 - 🚧 A GPU presentation seam in the platform layer: a window can hand out a
@@ -870,8 +870,10 @@ reads it back.
   *`Window::gpu_layer` / `drop_gpu_layer`: a `CAMetalLayer` over the view on
   macOS and iOS, kept at the view's size and scale; the window itself on
   Windows, which the renderer gives a DXGI swap chain; the canvas itself on
-  the web; device loss comes back from the renderer. The other surfaces come
-  with 6c; occlusion isn't reported yet.*
+  the web; the X11 window (by id) and Android's `ANativeWindow` (with its
+  content rectangle), released through the renderer before the window goes;
+  device loss comes back from the renderer. Wayland's surface comes later
+  (see 6c); occlusion isn't reported yet.*
 - ✅ A renderer trait over the lowered operations, so each backend is an
   executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
   per-backend texture, glyph and offscreen-target caches behind it.
@@ -883,10 +885,10 @@ reads it back.
   `Auto` picks the platform's GPU backend when a device is available and
   falls back to software when it isn't, when creating it fails, and when the
   device is lost mid-run (rebuilding caches on a new device if one comes back).
-  *`STIPPLE_RENDERER=software|gpu|metal|gl|d3d11|auto`. `Auto` stays the CPU
+  *`STIPPLE_RENDERER=software|gpu|metal|vulkan|gl|d3d11|auto`. `Auto` stays the CPU
   until 6h; a lost device is set up again once, then the app stays on the
   CPU. Loss simulated in tests, on Metal and on a stand-in device.*
-- 🚧 Shaders: one small set (boxes, image/region/glyph quads, stencil fill,
+- ✅ Shaders: one small set (boxes, image/region/glyph quads, stencil fill,
   layer composite), written per API in its own language (MSL, HLSL, GLSL ES,
   WGSL) and SPIR-V for Vulkan, checked in compiled where the API needs
   bytecode, with the sources next to them and a CI step that recompiles the
@@ -894,7 +896,10 @@ reads it back.
   *MSL and GLSL ES are compiled from source by the driver at run time
   (`newLibraryWithSource:`); HLSL by `D3DCompile` from `d3dcompiler_47.dll`,
   which ships with Windows 8.1 and later (DXBC can't be built off Windows
-  without a compiler dependency); SPIR-V bytecode comes with 6c.*
+  without a compiler dependency); the Vulkan shaders are GLSL 4.50 with
+  their SPIR-V checked in (`src/gpu/shaders/`, `tools/shaders.sh` with
+  glslang pinned; CI's `shaders` job fails on drift, and unit tests check
+  their push-constant layout against the recorder's).*
 - ⬜ Frame pacing from the swapchain (Metal's display sync, DXGI's waitable
   object, Vulkan FIFO, `wl_surface.frame`, `requestAnimationFrame`) feeding
   the existing frame clock; an idle app does no GPU work.
@@ -917,12 +922,28 @@ reads it back.
   path today.
 
 #### 6c — Vulkan (Linux, Android), with GLES as the fallback
-- ⬜ The scene executor on Vulkan, presenting through `VK_KHR_wayland_surface`,
+- 🚧 The scene executor on Vulkan, presenting through `VK_KHR_wayland_surface`,
   `VK_KHR_xcb_surface` and `VK_KHR_android_surface`.
-- ⬜ GLES2/3 presenting straight to an EGL window surface (Wayland, X11,
+  *`src/gpu/vk/`, feature `vk`, `libvulkan` loaded at run time: the whole
+  operation list, recorded host-side (`record.rs`, unit-tested everywhere)
+  then encoded into one command buffer; presents through `VK_KHR_xcb_surface`
+  on a libxcb connection of its own (`dlopen`ed: the backend speaks the
+  protocol itself) and `VK_KHR_android_surface`, copying the frame into the
+  swapchain image. Run on macOS through MoltenVK (corpus, present, validation
+  layers with sync checks clean); X11 and Android compile-checked and in CI.
+  Wayland reads back: its surfaces need libwayland's proxies of the backend's
+  own objects; a `zwp_linux_dmabuf_v1` path comes with 6g (docs/gpu.md).*
+- 🚧 GLES2/3 presenting straight to an EGL window surface (Wayland, X11,
   Android) for drivers without Vulkan, instead of reading back.
-- ⬜ CI: lavapipe (Vulkan) and llvmpipe (GL) pixel comparisons, the Linux
+  *X11 (EGL's XCB platform) and Android; the context moves to the window's
+  display on the first frame. Wayland reads back, as for Vulkan.
+  Compile-checked; run in CI only.*
+- ✅ CI: lavapipe (Vulkan) and llvmpipe (GL) pixel comparisons, the Linux
   visual jobs with each renderer, and the Android emulator's GPU.
+  *The Vulkan corpus under lavapipe in `visual-gpu`; `visual-gpu-present`
+  screenshots `widgetsdemo` on Xvfb with each renderer; the API 34 emulator
+  run starts androiddemo built with `vk` (`test-renderer.sh`). The last two
+  aren't blocking yet.*
 
 #### 6d — Direct3D 11 (Windows)
 - ✅ The scene executor on Direct3D 11 (already the API the Windows spike

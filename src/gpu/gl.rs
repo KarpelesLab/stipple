@@ -1,6 +1,11 @@
-//! Raw EGL (surfaceless) + OpenGL ES 2 offscreen blitter. Linux-only.
+//! Raw EGL + OpenGL ES 2: the scene executor (`scene`), on a surfaceless
+//! context (Linux: Mesa's surfaceless platform; Android: the default display)
+//! or on a window's EGL surface, and the earlier offscreen spikes and dma-buf
+//! seam (Linux).
 #![allow(unsafe_code)]
 #![allow(non_snake_case, non_upper_case_globals)]
+// On Android only the scene executor is used.
+#![cfg_attr(target_os = "android", allow(dead_code))]
 
 use crate::geometry::{PhysicalSize, Rect};
 use crate::render::{Color, Pixmap};
@@ -39,6 +44,11 @@ const EGL_OPENGL_ES2_BIT: EGLint = 0x0004;
 const EGL_RED_SIZE: EGLint = 0x3024;
 const EGL_GREEN_SIZE: EGLint = 0x3023;
 const EGL_BLUE_SIZE: EGLint = 0x3022;
+const EGL_EXTENSIONS: EGLint = 0x3055;
+const EGL_WIDTH: EGLint = 0x3057;
+const EGL_HEIGHT: EGLint = 0x3056;
+const EGL_PLATFORM_XCB_EXT: EGLenum = 0x31DC;
+const EGL_PLATFORM_XCB_SCREEN_EXT: EGLint = 0x31DE;
 
 const GL_TEXTURE_2D: GLenum = 0x0DE1;
 const GL_TEXTURE0: GLenum = 0x84C0;
@@ -100,6 +110,15 @@ unsafe extern "C" {
     fn eglGetError() -> EGLint;
     fn eglQueryString(dpy: EGLDisplay, name: EGLint) -> *const c_char;
     fn eglGetCurrentContext() -> EGLContext;
+    fn eglDestroySurface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
+    fn eglDestroyContext(dpy: EGLDisplay, ctx: EGLContext) -> EGLBoolean;
+    fn eglSwapBuffers(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
+    fn eglQuerySurface(
+        dpy: EGLDisplay,
+        surface: EGLSurface,
+        attribute: EGLint,
+        value: *mut EGLint,
+    ) -> EGLBoolean;
     /// Resolve an EGL/GL extension entry point by name (extensions aren't
     /// guaranteed to be directly linkable symbols).
     fn eglGetProcAddress(procname: *const c_char) -> *const c_void;
@@ -108,6 +127,32 @@ unsafe extern "C" {
 // Mesa's Generic Buffer Manager — turns a DRM device fd into the `gbm_device`
 // EGL needs for a device-specific (`EGL_PLATFORM_GBM`) display, so rendered
 // buffers live on the GPU we name (the X server's, via DRI3Open).
+// Android's one display and its window surfaces.
+#[cfg(target_os = "android")]
+#[link(name = "EGL")]
+unsafe extern "C" {
+    fn eglGetDisplay(native: *mut c_void) -> EGLDisplay;
+    fn eglCreateWindowSurface(
+        dpy: EGLDisplay,
+        config: EGLConfig,
+        window: *mut c_void,
+        attrib_list: *const EGLint,
+    ) -> EGLSurface;
+}
+
+// EGL 1.5, for the XCB platform's window surfaces (Linux).
+#[cfg(target_os = "linux")]
+#[link(name = "EGL")]
+unsafe extern "C" {
+    fn eglCreatePlatformWindowSurface(
+        dpy: EGLDisplay,
+        config: EGLConfig,
+        window: *mut c_void,
+        attrib_list: *const EGLAttrib,
+    ) -> EGLSurface;
+}
+
+#[cfg(target_os = "linux")]
 #[link(name = "gbm")]
 unsafe extern "C" {
     fn gbm_create_device(fd: i32) -> *mut c_void;
@@ -249,6 +294,20 @@ unsafe fn egl_make_current() -> Result<(), String> {
 /// Like [`egl_make_current`] but returns the [`EGLDisplay`], which the dma-buf
 /// import/export path needs for `eglCreateImageKHR` / `eglExportDMABUFImageMESA`.
 /// Surfaceless (no GPU device picked explicitly — Mesa chooses).
+#[cfg(target_os = "android")]
+unsafe fn egl_init() -> Result<EGLDisplay, String> {
+    unsafe {
+        // Android has one EGL display; contexts on it can go without a
+        // surface (`EGL_KHR_surfaceless_context`).
+        let dpy = eglGetDisplay(core::ptr::null_mut());
+        if dpy.is_null() {
+            return Err("eglGetDisplay failed".into());
+        }
+        egl_finish(dpy, EGL_PBUFFER_BIT)
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 unsafe fn egl_init() -> Result<EGLDisplay, String> {
     unsafe {
         let dpy = eglGetPlatformDisplay(
@@ -268,6 +327,7 @@ unsafe fn egl_init() -> Result<EGLDisplay, String> {
 /// buffers we render/export live on *that* device. The browser compositor uses
 /// the DRM fd from X11 `DRI3Open` (the server's GPU) here, so the server can
 /// import our dma-bufs. The `gbm_device` is intentionally leaked (process-lived).
+#[cfg(target_os = "linux")]
 unsafe fn egl_init_gbm(drm_fd: i32) -> Result<EGLDisplay, String> {
     unsafe {
         let gbm = gbm_create_device(drm_fd);
@@ -854,465 +914,479 @@ pub fn render_scene_gl(
     }
 }
 
-// ---- dma-buf import/export (the cross-process zero-copy surface seam) --------
-//
-// The browser content process renders the page into a GPU texture, *exports* it
-// as a `dma-buf` (a kernel handle to GPU memory), and passes the fd to the UI
-// (Stipple) process over a socket; Stipple *imports* it as a texture and composites
-// it. Both ends use standard Mesa EGL extensions — no kernel `udmabuf` ioctls:
-//   producer: EGL_MESA_image_dma_buf_export
-//   consumer: EGL_EXT_image_dma_buf_import
-// The self-test below does both ends in one process (the fd never leaves it) to
-// prove the GPU mechanism; cross-process fd passing is the next step.
+// The dma-buf export and import (Linux: GBM and Mesa's EGL extensions).
+#[cfg(target_os = "linux")]
+pub use dmabuf::{
+    dmabuf_export_import_self_test, dmabuf_extensions, dmabuf_self_test_on_device,
+    export_dmabuf_on_device,
+};
 
-const EGL_EXTENSIONS: EGLint = 0x3055;
-const EGL_GL_TEXTURE_2D: EGLenum = 0x30B1;
-const EGL_IMAGE_PRESERVED_KHR: EGLint = 0x30D2;
-const EGL_TRUE: EGLint = 1;
-const EGL_LINUX_DMA_BUF_EXT: EGLenum = 0x3270;
-const EGL_WIDTH: EGLint = 0x3057;
-const EGL_HEIGHT: EGLint = 0x3056;
-const EGL_LINUX_DRM_FOURCC_EXT: EGLint = 0x3271;
-const EGL_DMA_BUF_PLANE0_FD_EXT: EGLint = 0x3272;
-const EGL_DMA_BUF_PLANE0_OFFSET_EXT: EGLint = 0x3273;
-const EGL_DMA_BUF_PLANE0_PITCH_EXT: EGLint = 0x3274;
-const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: EGLint = 0x3443;
-const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: EGLint = 0x3444;
-// Sentinel: "no explicit modifier" (let the driver pick). Real tiled buffers
-// report a concrete modifier that the importer must echo back.
-const DRM_FORMAT_MOD_INVALID: u64 = u64::MAX;
-// DRM fourcc for 8-bit RGBA in memory order [R,G,B,A] — matches `Pixmap`.
-const DRM_FORMAT_ABGR8888: i32 = 0x3432_4241; // 'AB24'
+#[cfg(target_os = "linux")]
+mod dmabuf {
+    use super::*;
 
-type EglClientBuffer = *mut c_void;
-type EglImage = *mut c_void;
+    // ---- dma-buf import/export (the cross-process zero-copy surface seam) --------
+    //
+    // The browser content process renders the page into a GPU texture, *exports* it
+    // as a `dma-buf` (a kernel handle to GPU memory), and passes the fd to the UI
+    // (Stipple) process over a socket; Stipple *imports* it as a texture and composites
+    // it. Both ends use standard Mesa EGL extensions — no kernel `udmabuf` ioctls:
+    //   producer: EGL_MESA_image_dma_buf_export
+    //   consumer: EGL_EXT_image_dma_buf_import
+    // The self-test below does both ends in one process (the fd never leaves it) to
+    // prove the GPU mechanism; cross-process fd passing is the next step.
 
-type PfnCreateImage = unsafe extern "C" fn(
-    EGLDisplay,
-    EGLContext,
-    EGLenum,
-    EglClientBuffer,
-    *const EGLint,
-) -> EglImage;
-type PfnDestroyImage = unsafe extern "C" fn(EGLDisplay, EglImage) -> EGLBoolean;
-type PfnExportQuery =
-    unsafe extern "C" fn(EGLDisplay, EglImage, *mut i32, *mut i32, *mut u64) -> EGLBoolean;
-type PfnExport =
-    unsafe extern "C" fn(EGLDisplay, EglImage, *mut i32, *mut EGLint, *mut EGLint) -> EGLBoolean;
-type PfnTargetTexture = unsafe extern "C" fn(GLenum, EglImage);
+    const EGL_GL_TEXTURE_2D: EGLenum = 0x30B1;
+    const EGL_IMAGE_PRESERVED_KHR: EGLint = 0x30D2;
+    const EGL_TRUE: EGLint = 1;
+    const EGL_LINUX_DMA_BUF_EXT: EGLenum = 0x3270;
+    const EGL_LINUX_DRM_FOURCC_EXT: EGLint = 0x3271;
+    const EGL_DMA_BUF_PLANE0_FD_EXT: EGLint = 0x3272;
+    const EGL_DMA_BUF_PLANE0_OFFSET_EXT: EGLint = 0x3273;
+    const EGL_DMA_BUF_PLANE0_PITCH_EXT: EGLint = 0x3274;
+    const EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT: EGLint = 0x3443;
+    const EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT: EGLint = 0x3444;
+    // Sentinel: "no explicit modifier" (let the driver pick). Real tiled buffers
+    // report a concrete modifier that the importer must echo back.
+    const DRM_FORMAT_MOD_INVALID: u64 = u64::MAX;
+    // DRM fourcc for 8-bit RGBA in memory order [R,G,B,A] — matches `Pixmap`.
+    const DRM_FORMAT_ABGR8888: i32 = 0x3432_4241; // 'AB24'
 
-/// Resolve an extension entry point by (NUL-terminated) name.
-unsafe fn load_proc<T: Copy>(name: &[u8]) -> Result<T, String> {
-    unsafe {
-        debug_assert_eq!(name.last(), Some(&0), "proc name must be NUL-terminated");
-        let p = eglGetProcAddress(name.as_ptr() as *const c_char);
-        if p.is_null() {
-            return Err(format!(
-                "missing entry point {}",
-                String::from_utf8_lossy(&name[..name.len() - 1])
-            ));
-        }
-        Ok(core::mem::transmute_copy::<*const c_void, T>(&p))
-    }
-}
+    type EglClientBuffer = *mut c_void;
+    type EglImage = *mut c_void;
 
-/// Bring up surfaceless EGL and return the device's EGL extension string — used
-/// to check for `EGL_EXT_image_dma_buf_import` / `EGL_MESA_image_dma_buf_export`
-/// before relying on them. Errors if EGL can't initialize.
-pub fn dmabuf_extensions() -> Result<String, String> {
-    unsafe {
-        let dpy = egl_init()?;
-        let s = eglQueryString(dpy, EGL_EXTENSIONS);
-        if s.is_null() {
-            return Err("eglQueryString(EGL_EXTENSIONS) returned null".into());
-        }
-        Ok(core::ffi::CStr::from_ptr(s).to_string_lossy().into_owned())
-    }
-}
+    type PfnCreateImage = unsafe extern "C" fn(
+        EGLDisplay,
+        EGLContext,
+        EGLenum,
+        EglClientBuffer,
+        *const EGLint,
+    ) -> EglImage;
+    type PfnDestroyImage = unsafe extern "C" fn(EGLDisplay, EglImage) -> EGLBoolean;
+    type PfnExportQuery =
+        unsafe extern "C" fn(EGLDisplay, EglImage, *mut i32, *mut i32, *mut u64) -> EGLBoolean;
+    type PfnExport = unsafe extern "C" fn(
+        EGLDisplay,
+        EglImage,
+        *mut i32,
+        *mut EGLint,
+        *mut EGLint,
+    ) -> EGLBoolean;
+    type PfnTargetTexture = unsafe extern "C" fn(GLenum, EglImage);
 
-/// Prove the cross-process surface mechanism end to end (in one process): upload
-/// a known 2×2 pattern to a GL texture, export it as a `dma-buf`, re-import that
-/// `dma-buf` as a second texture, read it back, and confirm the pixels survived.
-/// Returns the imported pixels (top-first RGBA) on success.
-///
-/// Runs surfaceless, so it touches no window/X server and is safe to run
-/// directly on a GPU box. Requires `EGL_MESA_image_dma_buf_export` +
-/// `EGL_EXT_image_dma_buf_import` (real Mesa/GPU drivers; may be absent on
-/// software-only Mesa).
-pub fn dmabuf_export_import_self_test() -> Result<Vec<u8>, String> {
-    unsafe { dmabuf_roundtrip(egl_init()?) }
-}
-
-/// The same export → import → sample round-trip as
-/// [`dmabuf_export_import_self_test`], but on the specific GPU named by `drm_fd`
-/// (e.g. the X server's device from `DRI3Open`) via a GBM device. Confirms that
-/// device can export a dma-buf and re-import it — the prerequisite for handing
-/// rendered frames to the X server through DRI3 + Present.
-pub fn dmabuf_self_test_on_device(drm_fd: i32) -> Result<Vec<u8>, String> {
-    unsafe { dmabuf_roundtrip(egl_init_gbm(drm_fd)?) }
-}
-
-/// Render a `w`×`h` solid frame on the GPU named by `drm_fd` (via GBM) and export
-/// it as a single-plane dma-buf, returning the [`crate::gpu::DmabufExport`] descriptor
-/// the X server needs to wrap it as a Pixmap. The fd is owned by the caller.
-pub fn export_dmabuf_on_device(
-    drm_fd: i32,
-    w: u32,
-    h: u32,
-) -> Result<crate::gpu::DmabufExport, String> {
-    unsafe { export_dmabuf_current(egl_init_gbm(drm_fd)?, w as i32, h as i32) }
-}
-
-/// Export the current context's freshly-rendered texture as a dma-buf and return
-/// its descriptor. Mirrors the producer half of [`dmabuf_roundtrip`] (texture →
-/// EGLImage → `eglExportDMABUFImageMESA`) but stops at export and hands back the
-/// fd + layout instead of re-importing. Single-plane formats only.
-unsafe fn export_dmabuf_current(
-    dpy: EGLDisplay,
-    w: i32,
-    h: i32,
-) -> Result<crate::gpu::DmabufExport, String> {
-    unsafe {
-        let ctx = eglGetCurrentContext();
-        let create_image: PfnCreateImage = load_proc(b"eglCreateImageKHR\0")?;
-        let destroy_image: PfnDestroyImage = load_proc(b"eglDestroyImageKHR\0")?;
-        let export_query: PfnExportQuery = load_proc(b"eglExportDMABUFImageQueryMESA\0")?;
-        let export: PfnExport = load_proc(b"eglExportDMABUFImageMESA\0")?;
-
-        // A solid stipple-blue source texture of the requested size.
-        let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
-        for px in pixels.as_chunks_mut::<4>().0 {
-            *px = [0x60, 0x9c, 0xff, 0xff];
-        }
-        let mut tex: GLuint = 0;
-        glGenTextures(1, &mut tex);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(
-            GL_TEXTURE_2D,
-            0,
-            GL_RGBA as GLint,
-            w,
-            h,
-            0,
-            GL_RGBA,
-            GL_UNSIGNED_BYTE,
-            pixels.as_ptr() as *const c_void,
-        );
-        glFinish(); // ensure the upload lands before the image is exported
-
-        let preserve = [EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE];
-        let img = create_image(
-            dpy,
-            ctx,
-            EGL_GL_TEXTURE_2D,
-            tex as usize as EglClientBuffer,
-            preserve.as_ptr(),
-        );
-        if img.is_null() {
-            return Err(format!(
-                "eglCreateImageKHR(GL_TEXTURE_2D) failed: {:#x}",
-                eglGetError()
-            ));
-        }
-        let (mut fourcc, mut planes, mut modifier) = (0i32, 0i32, 0u64);
-        if export_query(dpy, img, &mut fourcc, &mut planes, &mut modifier) == 0 {
-            destroy_image(dpy, img);
-            return Err(format!(
-                "eglExportDMABUFImageQueryMESA failed: {:#x}",
-                eglGetError()
-            ));
-        }
-        if planes != 1 {
-            destroy_image(dpy, img);
-            return Err(format!(
-                "unsupported multi-plane dma-buf (planes={planes}); single-plane only"
-            ));
-        }
-        let (mut fd, mut stride, mut offset) = (-1i32, 0i32, 0i32);
-        if export(dpy, img, &mut fd, &mut stride, &mut offset) == 0 || fd < 0 {
-            destroy_image(dpy, img);
-            return Err(format!(
-                "eglExportDMABUFImageMESA failed: {:#x}",
-                eglGetError()
-            ));
-        }
-        destroy_image(dpy, img);
-        Ok(crate::gpu::DmabufExport {
-            fd,
-            width: w as u32,
-            height: h as u32,
-            stride: stride as u32,
-            offset: offset as u32,
-            modifier,
-            fourcc: fourcc as u32,
-            bpp: 32,
-        })
-    }
-}
-
-/// Export a GL texture as a dma-buf, re-import it, sample it, and verify the
-/// pixels — on whatever EGL context is current (`dpy`).
-unsafe fn dmabuf_roundtrip(dpy: EGLDisplay) -> Result<Vec<u8>, String> {
-    unsafe {
-        let ctx = eglGetCurrentContext();
-
-        let create_image: PfnCreateImage = load_proc(b"eglCreateImageKHR\0")?;
-        let destroy_image: PfnDestroyImage = load_proc(b"eglDestroyImageKHR\0")?;
-        let export_query: PfnExportQuery = load_proc(b"eglExportDMABUFImageQueryMESA\0")?;
-        let export: PfnExport = load_proc(b"eglExportDMABUFImageMESA\0")?;
-        let target_texture: PfnTargetTexture = load_proc(b"glEGLImageTargetTexture2DOES\0")?;
-
-        let (w, h) = (2i32, 2i32);
-        // Source pattern: four distinct opaque colors, one per texel.
-        let src: [u8; 16] = [
-            255, 0, 0, 255, // red
-            0, 255, 0, 255, // green
-            0, 0, 255, 255, // blue
-            255, 255, 255, 255, // white
-        ];
-
-        // Producer: a normal GL texture holding the pattern.
-        let mut tex_src: GLuint = 0;
-        glGenTextures(1, &mut tex_src);
-        glBindTexture(GL_TEXTURE_2D, tex_src);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(
-            GL_TEXTURE_2D,
-            0,
-            GL_RGBA as GLint,
-            w,
-            h,
-            0,
-            GL_RGBA,
-            GL_UNSIGNED_BYTE,
-            src.as_ptr() as *const c_void,
-        );
-        glFinish(); // ensure the upload lands before the image is exported
-
-        // Wrap it in an EGLImage, then export that image as a dma-buf.
-        let preserve = [EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE];
-        let img_src = create_image(
-            dpy,
-            ctx,
-            EGL_GL_TEXTURE_2D,
-            tex_src as usize as EglClientBuffer,
-            preserve.as_ptr(),
-        );
-        if img_src.is_null() {
-            return Err(format!(
-                "eglCreateImageKHR(GL_TEXTURE_2D) failed: {:#x}",
-                eglGetError()
-            ));
-        }
-        let (mut fourcc, mut planes, mut modifier) = (0i32, 0i32, 0u64);
-        if export_query(dpy, img_src, &mut fourcc, &mut planes, &mut modifier) == 0 {
-            return Err(format!(
-                "eglExportDMABUFImageQueryMESA failed: {:#x}",
-                eglGetError()
-            ));
-        }
-        let (mut fd, mut stride, mut offset) = (-1i32, 0i32, 0i32);
-        if export(dpy, img_src, &mut fd, &mut stride, &mut offset) == 0 || fd < 0 {
-            return Err(format!(
-                "eglExportDMABUFImageMESA failed: {:#x}",
-                eglGetError()
-            ));
-        }
-
-        // Consumer: import the dma-buf as a fresh texture. In the browser this fd
-        // arrives over a socket from the content process.
-        let mut import_attribs = vec![
-            EGL_WIDTH,
-            w,
-            EGL_HEIGHT,
-            h,
-            EGL_LINUX_DRM_FOURCC_EXT,
-            if fourcc != 0 {
-                fourcc
-            } else {
-                DRM_FORMAT_ABGR8888
-            },
-            EGL_DMA_BUF_PLANE0_FD_EXT,
-            fd,
-            EGL_DMA_BUF_PLANE0_OFFSET_EXT,
-            offset,
-            EGL_DMA_BUF_PLANE0_PITCH_EXT,
-            stride,
-        ];
-        // Echo back the export's format modifier — buffers are routinely tiled,
-        // and importing such a dma-buf as LINEAR yields an invalid image (the
-        // glEGLImageTargetTexture2DOES INVALID_OPERATION we hit otherwise).
-        if modifier != DRM_FORMAT_MOD_INVALID {
-            import_attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT);
-            import_attribs.push((modifier & 0xFFFF_FFFF) as EGLint);
-            import_attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT);
-            import_attribs.push((modifier >> 32) as EGLint);
-        }
-        import_attribs.push(EGL_NONE);
-        let img_dst = create_image(
-            dpy,
-            core::ptr::null_mut(),
-            EGL_LINUX_DMA_BUF_EXT,
-            core::ptr::null_mut(),
-            import_attribs.as_ptr(),
-        );
-        if img_dst.is_null() {
-            libc_close(fd);
-            return Err(format!(
-                "eglCreateImageKHR(LINUX_DMA_BUF) failed: {:#x}",
-                eglGetError()
-            ));
-        }
-        let mut tex_dst: GLuint = 0;
-        glGenTextures(1, &mut tex_dst);
-        glBindTexture(GL_TEXTURE_2D, tex_dst);
-        // NEAREST so the 2x2 source texels map through cleanly (no blending).
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        target_texture(GL_TEXTURE_2D, img_dst);
-        let gl_err = glGetError();
-        if gl_err != 0 {
-            libc_close(fd);
-            return Err(format!(
-                "glEGLImageTargetTexture2DOES failed (GL error {gl_err:#x}); \
-                 export fourcc={fourcc:#x} planes={planes} modifier={modifier:#x} \
-                 stride={stride} offset={offset}"
-            ));
-        }
-
-        // Imported dma-buf textures are sample-only (not color-renderable), so
-        // verify the way Stipple will actually use one: SAMPLE the imported texture
-        // into a normal renderable target, then read THAT back.
-        let mut tex_out: GLuint = 0;
-        glGenTextures(1, &mut tex_out);
-        glBindTexture(GL_TEXTURE_2D, tex_out);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexImage2D(
-            GL_TEXTURE_2D,
-            0,
-            GL_RGBA as GLint,
-            w,
-            h,
-            0,
-            GL_RGBA,
-            GL_UNSIGNED_BYTE,
-            core::ptr::null(),
-        );
-        let mut fbo: GLuint = 0;
-        glGenFramebuffers(1, &mut fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glFramebufferTexture2D(
-            GL_FRAMEBUFFER,
-            GL_COLOR_ATTACHMENT0,
-            GL_TEXTURE_2D,
-            tex_out,
-            0,
-        );
-        if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE {
-            libc_close(fd);
-            return Err("FBO incomplete for output texture".into());
-        }
-        glViewport(0, 0, w, h);
-
-        // Pass-through sampler program (same as the present path).
-        let vs = compile(GL_VERTEX_SHADER, VERTEX_SRC)?;
-        let fs = compile(GL_FRAGMENT_SHADER, FRAGMENT_SRC)?;
-        let prog = glCreateProgram();
-        glAttachShader(prog, vs);
-        glAttachShader(prog, fs);
-        glLinkProgram(prog);
-        let mut linked: GLint = 0;
-        glGetProgramiv(prog, GL_LINK_STATUS, &mut linked);
-        if linked == 0 {
-            libc_close(fd);
-            return Err("self-test program link failed".into());
-        }
-        glUseProgram(prog);
-        #[rustfmt::skip]
-        let verts: [f32; 16] = [
-            -1.0, -1.0, 0.0, 1.0,
-             1.0, -1.0, 1.0, 1.0,
-            -1.0,  1.0, 0.0, 0.0,
-             1.0,  1.0, 1.0, 0.0,
-        ];
-        let mut vbo: GLuint = 0;
-        glGenBuffers(1, &mut vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(
-            GL_ARRAY_BUFFER,
-            std::mem::size_of_val(&verts) as isize,
-            verts.as_ptr() as *const c_void,
-            GL_STATIC_DRAW,
-        );
-        let stride = 4 * std::mem::size_of::<f32>() as GLsizei;
-        let pos_loc = glGetAttribLocation(prog, c"pos".as_ptr());
-        let uv_loc = glGetAttribLocation(prog, c"uv".as_ptr());
-        if pos_loc < 0 || uv_loc < 0 {
-            libc_close(fd);
-            return Err("self-test attribute location not found".into());
-        }
-        glEnableVertexAttribArray(pos_loc as GLuint);
-        glVertexAttribPointer(
-            pos_loc as GLuint,
-            2,
-            GL_FLOAT,
-            GL_FALSE,
-            stride,
-            core::ptr::null(),
-        );
-        glEnableVertexAttribArray(uv_loc as GLuint);
-        glVertexAttribPointer(
-            uv_loc as GLuint,
-            2,
-            GL_FLOAT,
-            GL_FALSE,
-            stride,
-            (2 * std::mem::size_of::<f32>()) as *const c_void,
-        );
-        // Sample the imported dma-buf texture into the output target.
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, tex_dst);
-        let tex_loc = glGetUniformLocation(prog, c"tex".as_ptr());
-        glUniform1i(tex_loc, 0);
-        glClearColor(0.0, 0.0, 0.0, 1.0);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-        glFinish();
-        let out = read_back(w, h);
-
-        destroy_image(dpy, img_dst);
-        destroy_image(dpy, img_src);
-        libc_close(fd);
-
-        // The four source colors must all be present in the imported readback
-        // (row order may flip between GL and the upload, so compare as a set).
-        let pix = out.as_bytes();
-        let want = [[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
-        for w3 in want {
-            let found = pix
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .any(|p| p[0] == w3[0] && p[1] == w3[1] && p[2] == w3[2]);
-            if !found {
+    /// Resolve an extension entry point by (NUL-terminated) name.
+    unsafe fn load_proc<T: Copy>(name: &[u8]) -> Result<T, String> {
+        unsafe {
+            debug_assert_eq!(name.last(), Some(&0), "proc name must be NUL-terminated");
+            let p = eglGetProcAddress(name.as_ptr() as *const c_char);
+            if p.is_null() {
                 return Err(format!(
-                    "imported pixels missing color {w3:?}; got {:?}",
-                    pix
+                    "missing entry point {}",
+                    String::from_utf8_lossy(&name[..name.len() - 1])
                 ));
             }
+            Ok(core::mem::transmute_copy::<*const c_void, T>(&p))
         }
-        Ok(pix.to_vec())
     }
-}
 
-unsafe extern "C" {
-    /// `close(2)` for the exported dma-buf fd (std has no stable fd-close).
-    #[link_name = "close"]
-    fn libc_close(fd: i32) -> i32;
+    /// Bring up surfaceless EGL and return the device's EGL extension string — used
+    /// to check for `EGL_EXT_image_dma_buf_import` / `EGL_MESA_image_dma_buf_export`
+    /// before relying on them. Errors if EGL can't initialize.
+    pub fn dmabuf_extensions() -> Result<String, String> {
+        unsafe {
+            let dpy = egl_init()?;
+            let s = eglQueryString(dpy, EGL_EXTENSIONS);
+            if s.is_null() {
+                return Err("eglQueryString(EGL_EXTENSIONS) returned null".into());
+            }
+            Ok(core::ffi::CStr::from_ptr(s).to_string_lossy().into_owned())
+        }
+    }
+
+    /// Prove the cross-process surface mechanism end to end (in one process): upload
+    /// a known 2×2 pattern to a GL texture, export it as a `dma-buf`, re-import that
+    /// `dma-buf` as a second texture, read it back, and confirm the pixels survived.
+    /// Returns the imported pixels (top-first RGBA) on success.
+    ///
+    /// Runs surfaceless, so it touches no window/X server and is safe to run
+    /// directly on a GPU box. Requires `EGL_MESA_image_dma_buf_export` +
+    /// `EGL_EXT_image_dma_buf_import` (real Mesa/GPU drivers; may be absent on
+    /// software-only Mesa).
+    pub fn dmabuf_export_import_self_test() -> Result<Vec<u8>, String> {
+        unsafe { dmabuf_roundtrip(egl_init()?) }
+    }
+
+    /// The same export → import → sample round-trip as
+    /// [`dmabuf_export_import_self_test`], but on the specific GPU named by `drm_fd`
+    /// (e.g. the X server's device from `DRI3Open`) via a GBM device. Confirms that
+    /// device can export a dma-buf and re-import it — the prerequisite for handing
+    /// rendered frames to the X server through DRI3 + Present.
+    pub fn dmabuf_self_test_on_device(drm_fd: i32) -> Result<Vec<u8>, String> {
+        unsafe { dmabuf_roundtrip(egl_init_gbm(drm_fd)?) }
+    }
+
+    /// Render a `w`×`h` solid frame on the GPU named by `drm_fd` (via GBM) and export
+    /// it as a single-plane dma-buf, returning the [`crate::gpu::DmabufExport`] descriptor
+    /// the X server needs to wrap it as a Pixmap. The fd is owned by the caller.
+    pub fn export_dmabuf_on_device(
+        drm_fd: i32,
+        w: u32,
+        h: u32,
+    ) -> Result<crate::gpu::DmabufExport, String> {
+        unsafe { export_dmabuf_current(egl_init_gbm(drm_fd)?, w as i32, h as i32) }
+    }
+
+    /// Export the current context's freshly-rendered texture as a dma-buf and return
+    /// its descriptor. Mirrors the producer half of [`dmabuf_roundtrip`] (texture →
+    /// EGLImage → `eglExportDMABUFImageMESA`) but stops at export and hands back the
+    /// fd + layout instead of re-importing. Single-plane formats only.
+    unsafe fn export_dmabuf_current(
+        dpy: EGLDisplay,
+        w: i32,
+        h: i32,
+    ) -> Result<crate::gpu::DmabufExport, String> {
+        unsafe {
+            let ctx = eglGetCurrentContext();
+            let create_image: PfnCreateImage = load_proc(b"eglCreateImageKHR\0")?;
+            let destroy_image: PfnDestroyImage = load_proc(b"eglDestroyImageKHR\0")?;
+            let export_query: PfnExportQuery = load_proc(b"eglExportDMABUFImageQueryMESA\0")?;
+            let export: PfnExport = load_proc(b"eglExportDMABUFImageMESA\0")?;
+
+            // A solid stipple-blue source texture of the requested size.
+            let mut pixels = vec![0u8; (w as usize) * (h as usize) * 4];
+            for px in pixels.as_chunks_mut::<4>().0 {
+                *px = [0x60, 0x9c, 0xff, 0xff];
+            }
+            let mut tex: GLuint = 0;
+            glGenTextures(1, &mut tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGBA as GLint,
+                w,
+                h,
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                pixels.as_ptr() as *const c_void,
+            );
+            glFinish(); // ensure the upload lands before the image is exported
+
+            let preserve = [EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE];
+            let img = create_image(
+                dpy,
+                ctx,
+                EGL_GL_TEXTURE_2D,
+                tex as usize as EglClientBuffer,
+                preserve.as_ptr(),
+            );
+            if img.is_null() {
+                return Err(format!(
+                    "eglCreateImageKHR(GL_TEXTURE_2D) failed: {:#x}",
+                    eglGetError()
+                ));
+            }
+            let (mut fourcc, mut planes, mut modifier) = (0i32, 0i32, 0u64);
+            if export_query(dpy, img, &mut fourcc, &mut planes, &mut modifier) == 0 {
+                destroy_image(dpy, img);
+                return Err(format!(
+                    "eglExportDMABUFImageQueryMESA failed: {:#x}",
+                    eglGetError()
+                ));
+            }
+            if planes != 1 {
+                destroy_image(dpy, img);
+                return Err(format!(
+                    "unsupported multi-plane dma-buf (planes={planes}); single-plane only"
+                ));
+            }
+            let (mut fd, mut stride, mut offset) = (-1i32, 0i32, 0i32);
+            if export(dpy, img, &mut fd, &mut stride, &mut offset) == 0 || fd < 0 {
+                destroy_image(dpy, img);
+                return Err(format!(
+                    "eglExportDMABUFImageMESA failed: {:#x}",
+                    eglGetError()
+                ));
+            }
+            destroy_image(dpy, img);
+            Ok(crate::gpu::DmabufExport {
+                fd,
+                width: w as u32,
+                height: h as u32,
+                stride: stride as u32,
+                offset: offset as u32,
+                modifier,
+                fourcc: fourcc as u32,
+                bpp: 32,
+            })
+        }
+    }
+
+    /// Export a GL texture as a dma-buf, re-import it, sample it, and verify the
+    /// pixels — on whatever EGL context is current (`dpy`).
+    unsafe fn dmabuf_roundtrip(dpy: EGLDisplay) -> Result<Vec<u8>, String> {
+        unsafe {
+            let ctx = eglGetCurrentContext();
+
+            let create_image: PfnCreateImage = load_proc(b"eglCreateImageKHR\0")?;
+            let destroy_image: PfnDestroyImage = load_proc(b"eglDestroyImageKHR\0")?;
+            let export_query: PfnExportQuery = load_proc(b"eglExportDMABUFImageQueryMESA\0")?;
+            let export: PfnExport = load_proc(b"eglExportDMABUFImageMESA\0")?;
+            let target_texture: PfnTargetTexture = load_proc(b"glEGLImageTargetTexture2DOES\0")?;
+
+            let (w, h) = (2i32, 2i32);
+            // Source pattern: four distinct opaque colors, one per texel.
+            let src: [u8; 16] = [
+                255, 0, 0, 255, // red
+                0, 255, 0, 255, // green
+                0, 0, 255, 255, // blue
+                255, 255, 255, 255, // white
+            ];
+
+            // Producer: a normal GL texture holding the pattern.
+            let mut tex_src: GLuint = 0;
+            glGenTextures(1, &mut tex_src);
+            glBindTexture(GL_TEXTURE_2D, tex_src);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGBA as GLint,
+                w,
+                h,
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                src.as_ptr() as *const c_void,
+            );
+            glFinish(); // ensure the upload lands before the image is exported
+
+            // Wrap it in an EGLImage, then export that image as a dma-buf.
+            let preserve = [EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE];
+            let img_src = create_image(
+                dpy,
+                ctx,
+                EGL_GL_TEXTURE_2D,
+                tex_src as usize as EglClientBuffer,
+                preserve.as_ptr(),
+            );
+            if img_src.is_null() {
+                return Err(format!(
+                    "eglCreateImageKHR(GL_TEXTURE_2D) failed: {:#x}",
+                    eglGetError()
+                ));
+            }
+            let (mut fourcc, mut planes, mut modifier) = (0i32, 0i32, 0u64);
+            if export_query(dpy, img_src, &mut fourcc, &mut planes, &mut modifier) == 0 {
+                return Err(format!(
+                    "eglExportDMABUFImageQueryMESA failed: {:#x}",
+                    eglGetError()
+                ));
+            }
+            let (mut fd, mut stride, mut offset) = (-1i32, 0i32, 0i32);
+            if export(dpy, img_src, &mut fd, &mut stride, &mut offset) == 0 || fd < 0 {
+                return Err(format!(
+                    "eglExportDMABUFImageMESA failed: {:#x}",
+                    eglGetError()
+                ));
+            }
+
+            // Consumer: import the dma-buf as a fresh texture. In the browser this fd
+            // arrives over a socket from the content process.
+            let mut import_attribs = vec![
+                EGL_WIDTH,
+                w,
+                EGL_HEIGHT,
+                h,
+                EGL_LINUX_DRM_FOURCC_EXT,
+                if fourcc != 0 {
+                    fourcc
+                } else {
+                    DRM_FORMAT_ABGR8888
+                },
+                EGL_DMA_BUF_PLANE0_FD_EXT,
+                fd,
+                EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+                offset,
+                EGL_DMA_BUF_PLANE0_PITCH_EXT,
+                stride,
+            ];
+            // Echo back the export's format modifier — buffers are routinely tiled,
+            // and importing such a dma-buf as LINEAR yields an invalid image (the
+            // glEGLImageTargetTexture2DOES INVALID_OPERATION we hit otherwise).
+            if modifier != DRM_FORMAT_MOD_INVALID {
+                import_attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT);
+                import_attribs.push((modifier & 0xFFFF_FFFF) as EGLint);
+                import_attribs.push(EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT);
+                import_attribs.push((modifier >> 32) as EGLint);
+            }
+            import_attribs.push(EGL_NONE);
+            let img_dst = create_image(
+                dpy,
+                core::ptr::null_mut(),
+                EGL_LINUX_DMA_BUF_EXT,
+                core::ptr::null_mut(),
+                import_attribs.as_ptr(),
+            );
+            if img_dst.is_null() {
+                libc_close(fd);
+                return Err(format!(
+                    "eglCreateImageKHR(LINUX_DMA_BUF) failed: {:#x}",
+                    eglGetError()
+                ));
+            }
+            let mut tex_dst: GLuint = 0;
+            glGenTextures(1, &mut tex_dst);
+            glBindTexture(GL_TEXTURE_2D, tex_dst);
+            // NEAREST so the 2x2 source texels map through cleanly (no blending).
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            target_texture(GL_TEXTURE_2D, img_dst);
+            let gl_err = glGetError();
+            if gl_err != 0 {
+                libc_close(fd);
+                return Err(format!(
+                    "glEGLImageTargetTexture2DOES failed (GL error {gl_err:#x}); \
+                     export fourcc={fourcc:#x} planes={planes} modifier={modifier:#x} \
+                     stride={stride} offset={offset}"
+                ));
+            }
+
+            // Imported dma-buf textures are sample-only (not color-renderable), so
+            // verify the way Stipple will actually use one: SAMPLE the imported texture
+            // into a normal renderable target, then read THAT back.
+            let mut tex_out: GLuint = 0;
+            glGenTextures(1, &mut tex_out);
+            glBindTexture(GL_TEXTURE_2D, tex_out);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glTexImage2D(
+                GL_TEXTURE_2D,
+                0,
+                GL_RGBA as GLint,
+                w,
+                h,
+                0,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                core::ptr::null(),
+            );
+            let mut fbo: GLuint = 0;
+            glGenFramebuffers(1, &mut fbo);
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+            glFramebufferTexture2D(
+                GL_FRAMEBUFFER,
+                GL_COLOR_ATTACHMENT0,
+                GL_TEXTURE_2D,
+                tex_out,
+                0,
+            );
+            if glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE {
+                libc_close(fd);
+                return Err("FBO incomplete for output texture".into());
+            }
+            glViewport(0, 0, w, h);
+
+            // Pass-through sampler program (same as the present path).
+            let vs = compile(GL_VERTEX_SHADER, VERTEX_SRC)?;
+            let fs = compile(GL_FRAGMENT_SHADER, FRAGMENT_SRC)?;
+            let prog = glCreateProgram();
+            glAttachShader(prog, vs);
+            glAttachShader(prog, fs);
+            glLinkProgram(prog);
+            let mut linked: GLint = 0;
+            glGetProgramiv(prog, GL_LINK_STATUS, &mut linked);
+            if linked == 0 {
+                libc_close(fd);
+                return Err("self-test program link failed".into());
+            }
+            glUseProgram(prog);
+            #[rustfmt::skip]
+            let verts: [f32; 16] = [
+                -1.0, -1.0, 0.0, 1.0,
+                 1.0, -1.0, 1.0, 1.0,
+                -1.0,  1.0, 0.0, 0.0,
+                 1.0,  1.0, 1.0, 0.0,
+            ];
+            let mut vbo: GLuint = 0;
+            glGenBuffers(1, &mut vbo);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glBufferData(
+                GL_ARRAY_BUFFER,
+                std::mem::size_of_val(&verts) as isize,
+                verts.as_ptr() as *const c_void,
+                GL_STATIC_DRAW,
+            );
+            let stride = 4 * std::mem::size_of::<f32>() as GLsizei;
+            let pos_loc = glGetAttribLocation(prog, c"pos".as_ptr());
+            let uv_loc = glGetAttribLocation(prog, c"uv".as_ptr());
+            if pos_loc < 0 || uv_loc < 0 {
+                libc_close(fd);
+                return Err("self-test attribute location not found".into());
+            }
+            glEnableVertexAttribArray(pos_loc as GLuint);
+            glVertexAttribPointer(
+                pos_loc as GLuint,
+                2,
+                GL_FLOAT,
+                GL_FALSE,
+                stride,
+                core::ptr::null(),
+            );
+            glEnableVertexAttribArray(uv_loc as GLuint);
+            glVertexAttribPointer(
+                uv_loc as GLuint,
+                2,
+                GL_FLOAT,
+                GL_FALSE,
+                stride,
+                (2 * std::mem::size_of::<f32>()) as *const c_void,
+            );
+            // Sample the imported dma-buf texture into the output target.
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, tex_dst);
+            let tex_loc = glGetUniformLocation(prog, c"tex".as_ptr());
+            glUniform1i(tex_loc, 0);
+            glClearColor(0.0, 0.0, 0.0, 1.0);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            glFinish();
+            let out = read_back(w, h);
+
+            destroy_image(dpy, img_dst);
+            destroy_image(dpy, img_src);
+            libc_close(fd);
+
+            // The four source colors must all be present in the imported readback
+            // (row order may flip between GL and the upload, so compare as a set).
+            let pix = out.as_bytes();
+            let want = [[255u8, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
+            for w3 in want {
+                let found = pix
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|p| p[0] == w3[0] && p[1] == w3[1] && p[2] == w3[2]);
+                if !found {
+                    return Err(format!(
+                        "imported pixels missing color {w3:?}; got {:?}",
+                        pix
+                    ));
+                }
+            }
+            Ok(pix.to_vec())
+        }
+    }
+
+    unsafe extern "C" {
+        /// `close(2)` for the exported dma-buf fd (std has no stable fd-close).
+        #[link_name = "close"]
+        fn libc_close(fd: i32) -> i32;
+    }
 }

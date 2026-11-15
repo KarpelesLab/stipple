@@ -1225,10 +1225,7 @@ impl Gpu {
             if !spv.len().is_multiple_of(4) {
                 return Err("SPIR-V length is not a multiple of 4".into());
             }
-            let words: Vec<u32> = spv
-                .chunks_exact(4)
-                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect();
+            let words = super::vk::shaders::words(spv);
             let ci = VkShaderModuleCreateInfo {
                 sType: VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                 pNext: core::ptr::null(),

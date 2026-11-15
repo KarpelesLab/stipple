@@ -18,8 +18,8 @@ include = ["src/**/*", "tests/**/*", "docs/getting-started.md", "Cargo.toml", "R
 gpu = []
 # Each backend links system libraries, so each is opt-in. Without one, its entry
 # points return an error.
-gl = ["gpu"]  # EGL + GLES2
-vk = ["gpu"]  # Vulkan (links libvulkan)
+gl = ["gpu"]  # EGL + GLES2 (Linux, Android)
+vk = ["gpu"]  # Vulkan (Linux, Android; the scene renderer loads libvulkan at run time, the spikes link it)
 d3d = ["gpu"] # Direct3D 11, Windows-only
 mtl = ["gpu"] # Metal, macOS-only
 # `AppHandle::spawn`: run futures on a background tokio runtime and apply their

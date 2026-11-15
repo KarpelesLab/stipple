@@ -78,7 +78,7 @@ How to build, package and run on each platform, and what works there today.
 | Window focus (`Cx::window_focused`) | ✅ ³⁷ | ✅ ³⁸ | ✅ ³⁸ | ❌ | ✅ | ✅ |
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
-| Scenes rendered on the GPU (`stipple::gpu`, experimental) | GLES2 ⁴⁷ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Scenes rendered on the GPU (`stipple::gpu`, experimental) | Vulkan, GLES2 ⁴⁷ | Direct3D 11 ⁴⁷ | Metal ⁴⁷ | Metal ⁴⁷ | Vulkan, GLES2 ⁴⁷ | WebGPU, WebGL2 ⁴⁷ |
 | Message boxes | drawn ⁴⁴ | native ⁴⁴ | native ⁴⁴ | native ³ | drawn ⁴⁴ | native ¹⁰ |
 | Secure password entry | IME off | IME off | `EnableSecureEventInput` ¹⁰ | IME off | IME off | IME off |
 | Sound: effects, streamed music, volume groups (`stipple::audio`) | ALSA ⁷¹ | WASAPI ⁷¹ | Core Audio ⁷¹ | Core Audio ⁷¹ | AAudio ⁷¹ | Web Audio ⁷¹ |
@@ -282,12 +282,19 @@ OS. See [windows-and-cursors.md](windows-and-cursors.md#several-windows).
 `listmotion --demo` mid-flight, then checks it comes to rest and stops using
 the CPU. Elsewhere it runs on each platform's frame clock but isn't run in CI.
 See [animation.md](animation.md#enter-exit-and-layout-animations).
-⁴⁷ Behind the `gl` feature, through `App::render_with`: boxes, paths, images
-(textures cached per image), text, clips, canvases and layers with transforms
-and opacity, all on the GPU, read back and presented as a bitmap. CI renders
-test scenes and an app both ways under Mesa's llvmpipe and compares them with
-the software renderer, and screenshots `gpuwindow` under Xvfb. Vulkan, Direct3D
-11, Metal and WebGPU only draw a test triangle so far. See [gpu.md](gpu.md).
+⁴⁷ `App::renderer(Renderer::Gpu)` or `STIPPLE_RENDERER`, behind the `vk`
+and `gl` features (Linux, Android), `mtl` (macOS, iOS), `d3d` (Windows)
+and `gpu` (the web, through `web/gpu.js`): boxes, paths,
+images (textures cached per image), text, clips, canvases and layers with
+transforms and opacity, all on the GPU. Presented straight to the window
+through a Vulkan swapchain or an EGL window surface on X11 and Android, a
+`CAMetalLayer` on macOS and iOS, a DXGI swap chain on Windows, the canvas on
+the web; on Wayland read back and presented as a bitmap. CI compares test
+scenes and an app with the software renderer under Mesa's llvmpipe (GLES)
+and lavapipe (Vulkan), on the macOS runner's Metal device, on WARP and in
+headless Chrome, and screenshots an app presented with each; the X11 and
+Android present paths have run in CI only, iOS is compile-checked. See
+[gpu.md](gpu.md).
 ⁴⁸ Through the Text Services Framework (a hand-written `ITextStoreACP` text
 store, composition sink and display attributes), with IMM32 when TSF can't
 be activated or `STIPPLE_TSF=0`. The text store's logic is unit-tested; CI

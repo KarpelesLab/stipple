@@ -1,5 +1,14 @@
 //! The GLES2 scene renderer: executes a lowered [`Plan`](crate::gpu::ops::Plan)
-//! on a persistent surfaceless context.
+//! on a persistent context, surfaceless for read-backs, or on a window's EGL
+//! surface to present.
+//!
+//! Presenting draws the frame into its offscreen target exactly as for a
+//! read-back, then draws that target into the window surface (the default
+//! framebuffer: one textured quad, flipped to the window's rows) and swaps.
+//! The window surfaces need an EGL display on the window system: X11 through
+//! EGL's XCB platform on a libxcb connection of the GPU's own (`gpu::xcb`),
+//! Android on its one display. The first frame presented moves the context
+//! there (its caches start over once).
 //!
 //! Everything is drawn in premultiplied alpha into framebuffer objects that
 //! carry a stencil buffer: boxes through an analytic-coverage shader, paths by
@@ -17,6 +26,7 @@
 use super::*;
 use crate::gpu::ops::{Clip, Op, Plan, Sample};
 use crate::gpu::renderer::{Api, Executor, GpuError};
+use crate::platform::GpuLayer;
 use oxideav_core::Transform2D;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -48,6 +58,8 @@ const GL_STREAM_DRAW: GLenum = 0x88E0;
 const GL_UNPACK_ALIGNMENT: GLenum = 0x0CF5;
 const GL_PACK_ALIGNMENT: GLenum = 0x0D05;
 const GL_CULL_FACE: GLenum = 0x0B44;
+const EGL_NO_CONTEXT: EGLContext = core::ptr::null_mut();
+const EGL_NO_SURFACE: EGLSurface = core::ptr::null_mut();
 const GL_NO_ERROR: GLenum = 0;
 
 #[link(name = "GLESv2")]
@@ -320,9 +332,45 @@ struct Level {
     undo: Vec<Undo>,
 }
 
+/// Which EGL display a context is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Native {
+    /// Offscreen only (Mesa's surfaceless platform; Android's display
+    /// without a window config).
+    Offscreen,
+    /// EGL's XCB platform, for X11 windows.
+    Xcb,
+    /// Android's display, with a window config.
+    Android,
+}
+
+impl Native {
+    fn of(layer: &GpuLayer) -> Option<Native> {
+        match layer {
+            GpuLayer::X11 { .. } => Some(Native::Xcb),
+            GpuLayer::Android { .. } => Some(Native::Android),
+            _ => None,
+        }
+    }
+}
+
+/// The key of a window's EGL surface.
+fn layer_key(layer: &GpuLayer) -> Option<usize> {
+    match *layer {
+        GpuLayer::X11 { window } => Some(window as usize),
+        GpuLayer::Android { window, .. } => Some(window as usize),
+        _ => None,
+    }
+}
+
 struct State {
     dpy: EGLDisplay,
     ctx: EGLContext,
+    native: Native,
+    /// The context's config (window-capable unless `Offscreen`).
+    config: EGLConfig,
+    /// Window surfaces made, by window.
+    windows: HashMap<usize, EGLSurface>,
     boxes: Program,
     tex: Program,
     flat: Program,
@@ -343,10 +391,96 @@ thread_local! {
 }
 
 impl State {
+    /// The offscreen context.
     unsafe fn new() -> Result<Self, String> {
         unsafe {
             let dpy = egl_init()?;
             let ctx = eglGetCurrentContext();
+            Self::build(dpy, ctx, Native::Offscreen, core::ptr::null_mut())
+        }
+    }
+
+    /// A context on the window system `layer` is on, with a config its
+    /// window surface takes, and that surface, current.
+    unsafe fn on_window(layer: &GpuLayer) -> Result<(Self, EGLSurface), String> {
+        unsafe {
+            let native = Native::of(layer).ok_or("not an EGL window")?;
+            let dpy = window_display(native)?;
+            if eglInitialize(dpy, core::ptr::null_mut(), core::ptr::null_mut()) == 0 {
+                return Err(format!("eglInitialize failed: {:#x}", eglGetError()));
+            }
+            eglBindAPI(EGL_OPENGL_ES_API);
+            let attribs: [EGLint; 11] = [
+                EGL_SURFACE_TYPE,
+                EGL_WINDOW_BIT,
+                EGL_RENDERABLE_TYPE,
+                EGL_OPENGL_ES2_BIT,
+                EGL_RED_SIZE,
+                8,
+                EGL_GREEN_SIZE,
+                8,
+                EGL_BLUE_SIZE,
+                8,
+                EGL_NONE,
+            ];
+            let mut configs = [core::ptr::null_mut(); 64];
+            let mut n: EGLint = 0;
+            if eglChooseConfig(dpy, attribs.as_ptr(), configs.as_mut_ptr(), 64, &mut n) == 0 {
+                return Err(format!("eglChooseConfig failed: {:#x}", eglGetError()));
+            }
+            // The first config the window takes (on X11, the one of the
+            // window's visual).
+            let (config, surface) = configs[..n.max(0) as usize]
+                .iter()
+                .find_map(|&c| {
+                    let s = create_window_surface(dpy, c, layer);
+                    (!s.is_null()).then_some((c, s))
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "no EGL config makes a surface on the window: {:#x}",
+                        eglGetError()
+                    )
+                })?;
+            let ctx_attribs: [EGLint; 3] = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
+            let ctx = eglCreateContext(dpy, config, core::ptr::null_mut(), ctx_attribs.as_ptr());
+            if ctx.is_null() || eglMakeCurrent(dpy, surface, surface, ctx) == 0 {
+                let e = eglGetError();
+                eglDestroySurface(dpy, surface);
+                return Err(format!("no context on the window's display: {e:#x}"));
+            }
+            match Self::build(dpy, ctx, native, config) {
+                Ok(s) => Ok((s, surface)),
+                Err(e) => {
+                    eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+                    eglDestroySurface(dpy, surface);
+                    eglDestroyContext(dpy, ctx);
+                    Err(e)
+                }
+            }
+        }
+    }
+
+    /// Let go of the context (and everything made in it) and its window
+    /// surfaces; the display stays, as other users may share it.
+    unsafe fn destroy(self) {
+        unsafe {
+            eglMakeCurrent(self.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            for &s in self.windows.values() {
+                eglDestroySurface(self.dpy, s);
+            }
+            eglDestroyContext(self.dpy, self.ctx);
+        }
+    }
+
+    /// The programs and buffers, in the current context.
+    unsafe fn build(
+        dpy: EGLDisplay,
+        ctx: EGLContext,
+        native: Native,
+        config: EGLConfig,
+    ) -> Result<Self, String> {
+        unsafe {
             let boxes = Program::new(BOX_FS, &["u_rect", "u_radius", "u_stroke", "u_color"])?;
             let tex = Program::new(
                 TEX_FS,
@@ -372,6 +506,9 @@ impl State {
             Ok(State {
                 dpy,
                 ctx,
+                native,
+                config,
+                windows: HashMap::new(),
                 boxes,
                 tex,
                 flat,
@@ -754,6 +891,114 @@ impl State {
     /// Render `plan` and read the frame back.
     unsafe fn render(&mut self, plan: &Plan) -> Result<Pixmap, String> {
         unsafe {
+            let (w, h) = self.draw(plan)?;
+            // Read back; device row 0 is GL row 0 here, so rows come out
+            // top-first. Undo the premultiplication.
+            glBindFramebuffer(GL_FRAMEBUFFER, self.frame_target.as_ref().unwrap().fbo);
+            glPixelStorei(GL_PACK_ALIGNMENT, 4);
+            let mut data = vec![0u8; w as usize * h as usize * 4];
+            glReadPixels(
+                0,
+                0,
+                w,
+                h,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                data.as_mut_ptr() as *mut c_void,
+            );
+            let err = glGetError();
+            if err != GL_NO_ERROR {
+                return Err(format!("GL error {err:#x} rendering the scene"));
+            }
+            for px in data.as_chunks_mut::<4>().0 {
+                let a = px[3];
+                if a != 0 && a != 255 {
+                    for c in &mut px[..3] {
+                        *c = ((*c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
+                    }
+                }
+            }
+            Ok(Pixmap::from_rgba8(
+                PhysicalSize::new(w as u32, h as u32),
+                data,
+            ))
+        }
+    }
+
+    /// Render `plan` into the window surface `surface` (current) at
+    /// `offset` in it, the rest the background, and swap.
+    unsafe fn present(
+        &mut self,
+        plan: &Plan,
+        surface: EGLSurface,
+        offset: (i32, i32),
+    ) -> Result<(), String> {
+        unsafe {
+            let (w, h) = self.draw(plan)?;
+            let (mut sw, mut sh) = (0, 0);
+            eglQuerySurface(self.dpy, surface, EGL_WIDTH, &mut sw);
+            eglQuerySurface(self.dpy, surface, EGL_HEIGHT, &mut sh);
+            if sw <= 0 || sh <= 0 {
+                return Ok(());
+            }
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glViewport(0, 0, sw, sh);
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_STENCIL_TEST);
+            glDisable(GL_BLEND);
+            glColorMask(1, 1, 1, 1);
+            let bg = plan.background;
+            let a = bg.a as f32 / 255.0;
+            glClearColor(
+                bg.r as f32 / 255.0 * a,
+                bg.g as f32 / 255.0 * a,
+                bg.b as f32 / 255.0 * a,
+                a,
+            );
+            glClear(GL_COLOR_BUFFER_BIT);
+            // The frame as one quad: device pixels of the window to clip
+            // space with y up (the window's rows run bottom-up), sampling the
+            // frame target, whose row 0 is device row 0.
+            let p = &self.tex;
+            glUseProgram(p.id);
+            glUniform4f(p.loc("u_xf"), 2.0 / sw as f32, -2.0 / sh as f32, -1.0, 1.0);
+            let (x0, y0) = (offset.0 as f32, offset.1 as f32);
+            let (x1, y1) = (x0 + w as f32, y0 + h as f32);
+            let (fw, fh) = (w as f32, h as f32);
+            #[rustfmt::skip]
+            let v = [
+                x0, y0, 0.0, 0.0,  x1, y0, fw, 0.0,  x0, y1, 0.0, fh,
+                x0, y1, 0.0, fh,   x1, y0, fw, 0.0,  x1, y1, fw, fh,
+            ];
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, self.frame_target.as_ref().unwrap().tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            glUniform1i(p.loc("u_tex"), 0);
+            glUniform4f(p.loc("u_rect"), 0.0, 0.0, fw, fh);
+            glUniform2f(p.loc("u_px"), 1.0, 1.0);
+            glUniform1f(p.loc("u_opacity"), 1.0);
+            glUniform1f(p.loc("u_premul"), 1.0);
+            glUniform1f(p.loc("u_aa"), 0.0);
+            glUniform4f(p.loc("u_uv"), 0.0, 0.0, 1.0, 1.0);
+            glUniform4f(p.loc("u_clamp"), 0.0, 0.0, 1.0, 1.0);
+            glUniform4f(p.loc("u_tint"), 1.0, 1.0, 1.0, 1.0);
+            self.vertices(p, &v);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            let err = glGetError();
+            if err != GL_NO_ERROR {
+                return Err(format!("GL error {err:#x} presenting the scene"));
+            }
+            if eglSwapBuffers(self.dpy, surface) == 0 {
+                return Err(format!("eglSwapBuffers failed: {:#x}", eglGetError()));
+            }
+            Ok(())
+        }
+    }
+
+    /// Draw `plan` into the frame target; returns its size.
+    unsafe fn draw(&mut self, plan: &Plan) -> Result<(i32, i32), String> {
+        unsafe {
             let (w, h) = (plan.size.width as i32, plan.size.height as i32);
             if w <= 0 || h <= 0 {
                 return Err("empty target".into());
@@ -940,38 +1185,9 @@ impl State {
                 );
             }
 
-            // Read back; device row 0 is GL row 0 here, so rows come out
-            // top-first. Undo the premultiplication.
-            glBindFramebuffer(GL_FRAMEBUFFER, self.frame_target.as_ref().unwrap().fbo);
-            glPixelStorei(GL_PACK_ALIGNMENT, 4);
-            let mut data = vec![0u8; w as usize * h as usize * 4];
-            glReadPixels(
-                0,
-                0,
-                w,
-                h,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
-                data.as_mut_ptr() as *mut c_void,
-            );
-            let err = glGetError();
             self.sweep_textures();
             self.frame += 1;
-            if err != GL_NO_ERROR {
-                return Err(format!("GL error {err:#x} rendering the scene"));
-            }
-            for px in data.as_chunks_mut::<4>().0 {
-                let a = px[3];
-                if a != 0 && a != 255 {
-                    for c in &mut px[..3] {
-                        *c = ((*c as u32 * 255 + a as u32 / 2) / a as u32).min(255) as u8;
-                    }
-                }
-            }
-            Ok(Pixmap::from_rgba8(
-                PhysicalSize::new(w as u32, h as u32),
-                data,
-            ))
+            Ok((w, h))
         }
     }
 }
@@ -1014,6 +1230,136 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> Result<T, GpuError>) -> Result<T,
     })
 }
 
+/// The EGL display of the window system `native` names.
+unsafe fn window_display(native: Native) -> Result<EGLDisplay, String> {
+    unsafe {
+        let dpy = match native {
+            #[cfg(target_os = "linux")]
+            Native::Xcb => {
+                let (conn, screen) = crate::gpu::xcb::connection()?;
+                let attribs = [
+                    EGL_PLATFORM_XCB_SCREEN_EXT as EGLAttrib,
+                    screen as EGLAttrib,
+                    EGL_NONE as EGLAttrib,
+                ];
+                eglGetPlatformDisplay(EGL_PLATFORM_XCB_EXT, conn, attribs.as_ptr())
+            }
+            #[cfg(target_os = "android")]
+            Native::Android => eglGetDisplay(core::ptr::null_mut()),
+            _ => return Err("no EGL window system here".into()),
+        };
+        if dpy.is_null() {
+            return Err(format!(
+                "no EGL display for the window: {:#x}",
+                eglGetError()
+            ));
+        }
+        Ok(dpy)
+    }
+}
+
+/// A window surface on `layer`'s window with `config`, or null.
+unsafe fn create_window_surface(
+    dpy: EGLDisplay,
+    config: EGLConfig,
+    layer: &GpuLayer,
+) -> EGLSurface {
+    unsafe {
+        match *layer {
+            #[cfg(target_os = "linux")]
+            GpuLayer::X11 { window } => {
+                // The XCB platform takes a pointer to the `xcb_window_t`.
+                let mut id = window;
+                eglCreatePlatformWindowSurface(
+                    dpy,
+                    config,
+                    (&mut id as *mut u32).cast(),
+                    core::ptr::null(),
+                )
+            }
+            #[cfg(target_os = "android")]
+            GpuLayer::Android { window, .. } => {
+                eglCreateWindowSurface(dpy, config, window, core::ptr::null())
+            }
+            _ => {
+                let _ = (dpy, config);
+                core::ptr::null_mut()
+            }
+        }
+    }
+}
+
+/// Whether EGL can make surfaces on `layer`'s window system.
+fn can_present_to(layer: &GpuLayer) -> bool {
+    match *layer {
+        #[cfg(target_os = "linux")]
+        GpuLayer::X11 { .. } => {
+            static XCB: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            *XCB.get_or_init(|| unsafe {
+                // Client extensions: EGL's XCB platform (Mesa 21 and later).
+                let s = eglQueryString(core::ptr::null_mut(), EGL_EXTENSIONS);
+                !s.is_null()
+                    && std::ffi::CStr::from_ptr(s)
+                        .to_string_lossy()
+                        .split(' ')
+                        .any(|e| e == "EGL_EXT_platform_xcb")
+            }) && crate::gpu::xcb::connection().is_ok()
+        }
+        #[cfg(target_os = "android")]
+        GpuLayer::Android { window, .. } => !window.is_null(),
+        _ => false,
+    }
+}
+
+/// Run `f` on the calling thread's GL state, current on `layer`'s window
+/// surface (moving the context to the window's display first if it isn't
+/// there).
+fn with_window<T>(
+    layer: &GpuLayer,
+    f: impl FnOnce(&mut State, EGLSurface) -> Result<T, GpuError>,
+) -> Result<T, GpuError> {
+    let key = layer_key(layer).ok_or_else(|| GpuError::Unavailable("no window".into()))?;
+    let native = Native::of(layer).ok_or_else(|| GpuError::Unavailable("no window".into()))?;
+    STATE.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        unsafe {
+            if slot.as_ref().is_none_or(|s| s.native != native) {
+                if let Some(old) = slot.take() {
+                    old.destroy();
+                }
+                let (mut state, surface) =
+                    State::on_window(layer).map_err(GpuError::Unavailable)?;
+                state.windows.insert(key, surface);
+                *slot = Some(state);
+            }
+            let state = slot.as_mut().unwrap();
+            let surface = match state.windows.get(&key) {
+                Some(&s) => s,
+                None => {
+                    let s = create_window_surface(state.dpy, state.config, layer);
+                    if s.is_null() {
+                        return Err(GpuError::Unavailable(format!(
+                            "no EGL surface on the window: {:#x}",
+                            eglGetError()
+                        )));
+                    }
+                    state.windows.insert(key, s);
+                    s
+                }
+            };
+            if eglMakeCurrent(state.dpy, surface, surface, state.ctx) == 0 {
+                let e = eglGetError();
+                // The window is gone or broken: its surface goes too.
+                state.windows.remove(&key);
+                eglMakeCurrent(state.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, state.ctx);
+                eglDestroySurface(state.dpy, surface);
+                return Err(GpuError::Lost(format!("eglMakeCurrent failed: {e:#x}")));
+            }
+            f(state, surface)
+        }
+    })
+}
+
 impl Executor for GlExecutor {
     fn api(&self) -> Api {
         Api::Gl
@@ -1021,6 +1367,42 @@ impl Executor for GlExecutor {
 
     fn read_back(&mut self, plan: &Plan) -> Result<Pixmap, GpuError> {
         with_state(|state| unsafe { state.render(plan) }.map_err(GpuError::Lost))
+    }
+
+    fn can_present(&self, layer: &GpuLayer) -> bool {
+        can_present_to(layer)
+    }
+
+    fn present(
+        &mut self,
+        plan: &Plan,
+        layer: &GpuLayer,
+        _scale: crate::geometry::ScaleFactor,
+    ) -> Result<(), GpuError> {
+        let offset = match *layer {
+            GpuLayer::Android { content, .. } => (content[0], content[1]),
+            _ => (0, 0),
+        };
+        with_window(layer, |state, surface| {
+            unsafe { state.present(plan, surface, offset) }.map_err(GpuError::Lost)
+        })
+    }
+
+    fn release(&mut self, layer: &GpuLayer) {
+        let Some(key) = layer_key(layer) else {
+            return;
+        };
+        STATE.with(|cell| {
+            if let Ok(mut slot) = cell.try_borrow_mut()
+                && let Some(state) = slot.as_mut()
+                && let Some(surface) = state.windows.remove(&key)
+            {
+                unsafe {
+                    eglMakeCurrent(state.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, state.ctx);
+                    eglDestroySurface(state.dpy, surface);
+                }
+            }
+        });
     }
 
     fn uploads(&self) -> usize {
