@@ -421,7 +421,6 @@ fn canvases_match_the_software_renderer() {
 fn an_app_renders_the_same_through_render_with() {
     use crate::prelude::*;
     fn view(_: &(), cx: &mut Cx<()>) -> Element {
-        let theme = *cx.theme();
         column(vec![
             panel(cx)
                 .children(vec![

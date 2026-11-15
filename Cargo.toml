@@ -71,12 +71,6 @@ oxideav-opus = { version = "0.0.14", optional = true }
 # fs...) in their own tokio dependency, and the runtime turns those on.
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"], optional = true }
 
-# One package, not a workspace. The empty table keeps it its own root when the
-# checkout sits inside another Cargo workspace's directory (a git worktree
-# under an older checkout, a vendored copy), which Cargo would otherwise
-# refuse to build.
-[workspace]
-
 [lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 missing_debug_implementations = "warn"

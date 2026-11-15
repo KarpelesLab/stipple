@@ -261,7 +261,7 @@ mod app {
             ticks: 0,
             name: TextInput::new(),
         };
-        let mut app = App::new(state, view)
+        let app = App::new(state, view)
             .theme(theme)
             // Back resets the count: there is something to go back from
             // only while it isn't 0.
