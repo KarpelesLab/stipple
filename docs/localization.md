@@ -177,10 +177,11 @@ let tr = match shown {
 ## Right to left
 
 The `App` mirrors the UI when the language it shows reads right to left
-(Arabic, Hebrew, Persian, Urdu…). Say which languages the app ships with
-`App::languages(["en", "fr", "he"])`: the direction then follows the language
-the user gets, so an app shipping only English stays left to right on an
-Arabic system. Without it, the direction follows the user's first language. A
+(Arabic, Hebrew, Persian, Urdu…). It only knows which language that is once
+the app says which languages it ships: `App::languages(["en", "fr", "he"])`.
+The direction then follows the language the user gets, so an app shipping
+only English stays left to right on an Arabic system. Without it, the UI is
+never mirrored, since its language is unknown. A
 theme with its own `layout_direction` keeps it (`Theme::follows_locale` is
 then off). See [bidi.md](bidi.md#mirrored-layouts).
 

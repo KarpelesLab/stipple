@@ -239,8 +239,9 @@ pub struct Theme {
     /// other right-to-left languages (see [`Theme::layout_direction`]).
     pub layout_direction: LayoutDirection,
     /// Whether the `App` sets [`layout_direction`](Self::layout_direction)
-    /// from the user's language (right to left for Arabic, Hebrew, Persian,
-    /// Urdu…; see [`App::languages`](crate::App::languages)). On in every
+    /// from the language shown (right to left for Arabic, Hebrew, Persian,
+    /// Urdu…), once the app has declared its languages with
+    /// [`App::languages`](crate::App::languages); without that, left to right. On in every
     /// preset; [`Theme::layout_direction`] turns it off.
     pub follows_locale: bool,
     /// How the built-in widgets animate: durations and curves for hover and

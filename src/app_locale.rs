@@ -39,8 +39,10 @@ impl<S: 'static> App<S> {
     /// app shipping Hebrew mirrored, and one shipping only English left to
     /// right.
     ///
-    /// Without this, the direction follows the user's first preferred
-    /// language. Either way a theme with its own
+    /// Without this, Stipple doesn't know which language the UI is written
+    /// in, so it doesn't mirror it: the layout stays left to right whatever
+    /// the user's language (an English-only app stays readable on an Arabic
+    /// system). Either way a theme with its own
     /// [`layout_direction`](crate::style::Theme::layout_direction) keeps it.
     ///
     /// ```no_run
@@ -79,12 +81,14 @@ impl<S: 'static> App<S> {
         }
         let preferred = crate::platform::preferred_languages();
         let shipped: Vec<&str> = self.locale.shipped.iter().map(String::as_str).collect();
-        let shown = if shipped.is_empty() {
-            preferred.first().map(String::as_str)
+        // An app that hasn't said which languages it ships isn't mirrored:
+        // its UI is in some language Stipple can't see.
+        let dir = if shipped.is_empty() {
+            LayoutDirection::Ltr
         } else {
-            crate::locale::negotiate(&preferred, &shipped).or(shipped.first().copied())
+            let shown = crate::locale::negotiate(&preferred, &shipped).or(shipped.first().copied());
+            LayoutDirection::for_language(shown.unwrap_or("en"))
         };
-        let dir = LayoutDirection::for_language(shown.unwrap_or("en"));
         self.locale.direction = Some(dir);
         // What a later change is told from.
         if self.locale.seen.is_none() {

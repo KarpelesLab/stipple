@@ -84,9 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message `Catalog` (`key = template` lines, plural forms, fallbacks).
   `DateTime` is a calendar date and time (`from_unix_local`, `now`). See
   `docs/localization.md` and the `localedemo` example.
-- The layout direction follows the user's language: right to left for
-  Arabic, Hebrew, Persian, Urdu… `App::languages(["en", "he"])` says which
-  languages the app ships, so an untranslated app stays left to right.
+- The layout direction follows the language shown: right to left for
+  Arabic, Hebrew, Persian, Urdu… once `App::languages(["en", "he"])` says
+  which languages the app ships. An app that doesn't declare them is never
+  mirrored, since its UI's language is unknown.
   `Theme::follows_locale`, on in every preset, is turned off by
   `Theme::layout_direction`.
 - A message box's default "OK" button and iOS's accessibility values
