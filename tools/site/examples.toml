@@ -206,7 +206,7 @@ group = "Games"
 size = [960, 540]
 
 [web.gameui]
-description = "A game's UI — title menu, settings (volume, controls, display), a HUD over the game, a pause menu and a dialogue box, all driven by the keyboard and a gamepad."
+description = "A game's UI — title menu, settings (volume, controls, display), a HUD over the game, a pause menu and a dialogue box, all driven by the keyboard and a gamepad; its title menu's Look dresses it all in painted nine-slice frames."
 title = "Game UI"
 group = "Games"
 size = [960, 540]

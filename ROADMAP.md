@@ -2339,6 +2339,19 @@ game needs on top:
   `health_bar` with a damage ghost, `counter` (pops), `minimap_slot`,
   `FloatingTexts`, `dialogue_box` + `Typewriter`. Tested at fixed frame
   times. Not covered: clicks on HUD buttons still reach `InputState`.*
+- ✅ Painted widgets: nine-slice images, and skins dressing the widgets in
+  them (#60).
+  *`render::NineSlice` (insets, atlas region, edges/center stretch, tile,
+  round or hidden, scale for pixel art and hi-DPI, nearest, tint) drawn by
+  `Scene::draw_nine_slice` as pixel-snapped image regions (software blit
+  fast paths, GPU quads; GPU-compared); `Element::background_image` (a
+  nine-slice or an `ImageFit`ted picture; padding from the insets; swapped
+  per state by overrides); `style::Skin` on `Theme::skin` /
+  `GameStyle::skin` for buttons and `menu_button` per state (`StateSkin`),
+  panels, dialogs, the pause menu, `DialogueBox`, bars (`BarSkin`, fill
+  revealed or stretched, tinted), checkboxes and switches (`ToggleSkin`);
+  `gameui`'s "Painted" look. Not skinned yet: tabs, sliders, text fields,
+  scroll bars.*
 
 #### 9f — Saving
 - ✅ Settings and save slots in the app's data directory (#49), written

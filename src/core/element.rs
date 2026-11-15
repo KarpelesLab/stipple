@@ -19,7 +19,8 @@ use crate::layout::{Axis, LayoutDirection, Track};
 use crate::platform::CursorIcon;
 use crate::platform::native::NativeDeco;
 use crate::render::{
-    Color, Decoration, Font, FontWeight, ImageFit, ImageSource, TextDirection, UnderlineStyle,
+    BackgroundImage, Color, Decoration, Font, FontWeight, ImageFit, ImageSource, TextDirection,
+    UnderlineStyle,
 };
 
 /// Alignment of children along an axis.
@@ -228,6 +229,9 @@ pub(crate) enum ElementKind {
 pub struct Element {
     pub(crate) layout: LayoutStyle,
     pub(crate) decoration: BoxStyle,
+    /// An image drawn over the fill, under the content and border: a
+    /// nine-slice frame or a picture. Set via [`Element::background_image`].
+    pub(crate) background: Option<Box<BackgroundImage>>,
     /// Handler this element routes pointer taps to, if any. Set via
     /// [`Element::on_tap`]; resolved against the [`Cx`] handler table.
     pub(crate) action: Option<ActionId>,
@@ -334,6 +338,7 @@ impl Element {
         Self {
             layout: LayoutStyle::default(),
             decoration: style,
+            background: None,
             action: None,
             focus: None,
             drag: None,
@@ -368,6 +373,7 @@ impl Element {
         Self {
             layout: LayoutStyle::default(),
             decoration: BoxStyle::default(),
+            background: None,
             action: None,
             focus: None,
             drag: None,
@@ -415,6 +421,7 @@ impl Element {
         Self {
             layout: LayoutStyle::default(),
             decoration: BoxStyle::default(),
+            background: None,
             action: None,
             focus: None,
             drag: None,
@@ -451,6 +458,7 @@ impl Element {
         Self {
             layout: LayoutStyle::default(),
             decoration: BoxStyle::default(),
+            background: None,
             action: None,
             focus: None,
             drag: None,
@@ -495,6 +503,7 @@ impl Element {
         Self {
             layout: LayoutStyle::default(),
             decoration: BoxStyle::default(),
+            background: None,
             action: None,
             focus: None,
             drag: None,
@@ -897,6 +906,50 @@ impl Element {
 
     pub fn border(mut self, color: Color, width: f64) -> Self {
         self.decoration.border = Some((color, width));
+        self
+    }
+
+    /// Draw `background` behind the element's content: a
+    /// [`NineSlice`](crate::render::NineSlice) frame stretched to its box (a
+    /// skinned panel, button, dialogue box or bar), or a plain image placed
+    /// per an [`ImageFit`] ([`BackgroundImage::image`]: a painted screen
+    /// behind a menu). It is drawn over the [`fill`](Self::fill) and under
+    /// the [`border`](Self::border), so a skinned element usually has
+    /// neither.
+    ///
+    /// The padding grows, side by side, to at least the background's
+    /// [`content_padding`](BackgroundImage::content_padding) (a nine-slice's
+    /// scaled insets), so the content stays off the frame; a
+    /// [`padding`](Self::padding) set afterwards wins. Per-state overrides
+    /// ([`hovered`](Self::hovered), [`pressed`](Self::pressed)…) can swap
+    /// it: a button skinned per state. A tappable element with a background
+    /// image doesn't get the theme's hover highlight (a rectangle over a
+    /// shaped frame): show the hover with a frame of its own.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use stipple::prelude::*;
+    /// use stipple::render::{NineSlice, Pixmap};
+    ///
+    /// fn view(_: &(), cx: &mut Cx<()>, frame: &NineSlice, lit: &NineSlice) -> Element {
+    ///     label(cx, "Start")
+    ///         .background_image(frame)
+    ///         .hovered(|e| e.background_image(lit))
+    /// }
+    /// # let px = Arc::new(Pixmap::new(PhysicalSize::new(9, 9)));
+    /// # let frame = NineSlice::new(px.clone(), Insets::uniform(3.0));
+    /// # let theme = Theme::light();
+    /// # let _ = view(&(), &mut Cx::new(&theme), &frame, &frame);
+    /// ```
+    pub fn background_image(mut self, background: impl Into<BackgroundImage>) -> Self {
+        let background = background.into();
+        let need = background.content_padding();
+        let p = &mut self.layout.padding;
+        p.top = p.top.max(need.top);
+        p.right = p.right.max(need.right);
+        p.bottom = p.bottom.max(need.bottom);
+        p.left = p.left.max(need.left);
+        self.background = Some(Box::new(background));
         self
     }
 

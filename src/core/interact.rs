@@ -253,6 +253,7 @@ pub(crate) struct StylePatch {
     fill: Option<Option<Color>>,
     radius: Option<f64>,
     border: Option<Option<(Color, f64)>>,
+    background: Option<Option<Box<crate::render::BackgroundImage>>>,
     padding: Option<Insets>,
     width: Option<Option<f64>>,
     height: Option<Option<f64>>,
@@ -279,6 +280,7 @@ impl StylePatch {
             fill: changed(before.decoration.fill, after.decoration.fill),
             radius: changed(before.decoration.radius, after.decoration.radius),
             border: changed(before.decoration.border, after.decoration.border),
+            background: (before.background != after.background).then(|| after.background.clone()),
             padding: changed(before.layout.padding, after.layout.padding),
             width: changed(before.layout.size.width, after.layout.size.width),
             height: changed(before.layout.size.height, after.layout.size.height),
@@ -298,6 +300,9 @@ impl StylePatch {
         }
         if let Some(v) = self.border {
             e.decoration.border = v;
+        }
+        if let Some(v) = &self.background {
+            e.background = v.clone();
         }
         if let Some(v) = self.padding {
             e.layout.padding = v;

@@ -112,31 +112,40 @@ impl Bar {
 pub fn stat_bar<S>(cx: &Cx<S>, bar: &Bar) -> Element {
     let theme = cx.theme();
     let p = &theme.palette;
-    let inner = (bar.width - 4.0).max(0.0);
-    let h = (bar.height - 4.0).max(0.0);
+    let skin = theme.skin.and_then(|s| s.bar.as_ref());
+    let pad = match skin {
+        Some(skin) => skin.track.content_padding(),
+        None => Insets::uniform(2.0),
+    };
+    let inner = (bar.width - pad.horizontal()).max(0.0);
+    let h = (bar.height - pad.vertical()).max(0.0);
     let filled = (inner * bar.fraction()).round();
     let radius = (theme.radius / 2.0).min(h / 2.0);
-    let strip = |color: Color, motion: Motion| {
+    let strip = |fill: Element, motion: Motion| {
         Element::stack(
             Axis::Horizontal,
-            vec![
-                Element::boxed(BoxStyle {
-                    fill: Some(color),
-                    radius,
-                    border: None,
-                })
-                .width(filled)
-                .height(h)
-                .transition_for(AnimProp::Width, Transition(motion)),
-            ],
+            vec![fill.transition_for(AnimProp::Width, Transition(motion))],
         )
         .align(Align::Start, Align::Start)
     };
+    let colored = |color: Color| {
+        Element::boxed(BoxStyle {
+            fill: Some(color),
+            radius,
+            border: None,
+        })
+        .width(filled)
+        .height(h)
+    };
     let mut layers = Vec::with_capacity(3);
     if let Some(ghost) = bar.ghost {
-        layers.push(strip(ghost, GHOST_MOTION));
+        layers.push(strip(colored(ghost), GHOST_MOTION));
     }
-    layers.push(strip(bar.color, FILL_MOTION));
+    let fill = match skin {
+        Some(skin) => skin.fill_element((inner, h), filled, bar.color),
+        None => colored(bar.color),
+    };
+    layers.push(strip(fill, FILL_MOTION));
     if bar.segments > 1 {
         // Gaps between the cells, in the track's color.
         let n = bar.segments as usize;
@@ -157,14 +166,16 @@ pub fn stat_bar<S>(cx: &Cx<S>, bar: &Bar) -> Element {
         }
         layers.push(Element::stack(Axis::Horizontal, cells));
     }
-    Element::layers(layers)
-        .width(bar.width)
-        .height(bar.height)
-        .padding(Insets::uniform(2.0))
-        .fill(p.background.mix(Color::BLACK, 0.3))
-        .border(p.border, 1.0)
-        .radius(radius + 2.0)
-        .clip()
+    let track = Element::layers(layers).width(bar.width).height(bar.height);
+    match skin {
+        Some(skin) => track.background_image(&skin.track).clip(),
+        None => track
+            .padding(pad)
+            .fill(p.background.mix(Color::BLACK, 0.3))
+            .border(p.border, 1.0)
+            .radius(radius + 2.0)
+            .clip(),
+    }
 }
 
 /// A health bar: `value` of `max` in the theme's danger color, with a ghost,
@@ -559,13 +570,21 @@ impl<'a, S: 'static> DialogueBox<'a, S> {
         );
         let panel = Element::stack(Axis::Horizontal, row)
             .gap(theme.spacing.md)
-            .padding(Insets::uniform(theme.spacing.lg))
-            .fill(Color {
-                a: 235,
-                ..p.surface
-            })
-            .border(p.primary, 2.0)
-            .radius(theme.radius)
+            .padding(Insets::uniform(theme.spacing.lg));
+        let frame = theme
+            .skin
+            .and_then(|s| s.dialogue.as_ref().or(s.panel.as_ref()));
+        let panel = match frame {
+            Some(frame) => panel.background_image(frame),
+            None => panel
+                .fill(Color {
+                    a: 235,
+                    ..p.surface
+                })
+                .border(p.primary, 2.0)
+                .radius(theme.radius),
+        };
+        let panel = panel
             .align(Align::Start, Align::Stretch)
             .min_height(96.0)
             .on_tap(cx, on_activate)

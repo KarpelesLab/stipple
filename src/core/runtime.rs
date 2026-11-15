@@ -1337,6 +1337,8 @@ pub(crate) enum NodeContent {
 pub struct LayoutNode {
     pub(crate) bounds: Rect,
     pub(crate) decoration: BoxStyle,
+    /// The element's [background image](crate::core::Element::background_image).
+    pub(crate) background: Option<Box<crate::render::BackgroundImage>>,
     pub(crate) content: NodeContent,
     pub(crate) action: Option<ActionId>,
     pub(crate) focus: Option<FocusId>,
@@ -1445,6 +1447,7 @@ impl LayoutNode {
         LayoutNode {
             bounds,
             decoration: BoxStyle::default(),
+            background: None,
             content: NodeContent::None,
             action: None,
             focus: None,
@@ -2022,6 +2025,7 @@ mod tests {
         LayoutNode {
             bounds,
             decoration: BoxStyle::default(),
+            background: None,
             content: NodeContent::None,
             action,
             focus,
@@ -2087,6 +2091,7 @@ mod tests {
         let root = LayoutNode {
             bounds: Rect::from_xywh(0.0, 0.0, 100.0, 100.0),
             decoration: BoxStyle::default(),
+            background: None,
             content: NodeContent::None,
             action: Some(ActionId(0)),
             focus: None,

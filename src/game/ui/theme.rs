@@ -3,7 +3,7 @@
 
 use crate::App;
 use crate::render::{Color, Font, FontError};
-use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Theme, Typography};
+use crate::style::{FocusLook, MotionTokens, Palette, Skin, Spacing, Theme, Typography};
 
 /// A game's look, in the few choices a game makes: its font, its colors, its
 /// corners and its focus ring. [`theme`](Self::theme) (or [`Theme::game`])
@@ -56,6 +56,10 @@ pub struct GameStyle {
     pub font_size: f64,
     /// The focus ring: bolder than a desktop app's.
     pub focus: FocusLook,
+    /// Painted frames for the buttons, panels, dialogue box, bars and
+    /// toggles, in place of the colors above; `None` draws them in the
+    /// colors. See [`Skin`].
+    pub skin: Option<&'static Skin>,
 }
 
 impl GameStyle {
@@ -75,6 +79,7 @@ impl GameStyle {
             radius: 6.0,
             font_size: 17.0,
             focus: FocusLook::BOLD,
+            skin: None,
         }
     }
 
@@ -98,6 +103,7 @@ impl GameStyle {
                 offset: 3.0,
                 glow: 0.0,
             },
+            skin: None,
         }
     }
 
@@ -180,6 +186,14 @@ impl GameStyle {
         self
     }
 
+    /// Dress the widgets in `skin`'s images: one skin re-skins every menu,
+    /// panel, bar and dialogue box of the game (see [`Skin`]; build it once
+    /// and [`leak`](Skin::leak) it).
+    pub fn skin(mut self, skin: &'static Skin) -> Self {
+        self.skin = Some(skin);
+        self
+    }
+
     /// The [`Theme`] this style makes (see [`Theme::game`]).
     pub fn theme(&self) -> Theme {
         let dark = self.background.luminance() < 0.5;
@@ -232,6 +246,7 @@ impl GameStyle {
             layout_direction: crate::layout::LayoutDirection::Ltr,
             motion: MotionTokens::standard(),
             focus: self.focus,
+            skin: self.skin,
         }
     }
 }

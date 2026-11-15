@@ -95,6 +95,67 @@ A bitmap is scaled when drawn, so it softens at high DPI unless it was decoded
 at the higher resolution. An SVG is rasterized at the physical size of its box,
 so it stays sharp at any scale; the last raster is cached.
 
+## Backgrounds and nine-slices
+
+Any element can have an image behind its content, drawn over its fill and
+under its border: `.background_image(...)`.
+
+- `BackgroundImage::image(source, fit)` places a bitmap or SVG in the box per
+  an `ImageFit`: a painted screen behind a menu. (`ImageFit::Cover` clips what
+  overflows.)
+- A `NineSlice` is a frame drawn once and stretched to any size: the bitmap
+  cut into nine by `insets` (in its pixels), the four corners drawn at their
+  own size, the edges stretched along their length, the center filling what
+  is left. Panels, buttons, text fields, dialogue boxes and bars are skinned
+  this way.
+
+```rust
+use stipple::render::{NineSlice, SliceFill};
+
+let frame = NineSlice::new(atlas.clone(), Insets::uniform(6.0))
+    .region(Rect::from_xywh(0.0, 32.0, 24.0, 24.0)) // a part of an atlas
+    .edges(SliceFill::Tile)    // or Stretch (the default), Round
+    .center(SliceFill::Hidden) // a hollow frame
+    .scale(2.0)                // logical pixels per source pixel
+    .nearest();                // hard pixels, for pixel art
+panel(cx).background_image(&frame).children(vec![...]);
+```
+
+- **Edges and center**: `SliceFill::Stretch` stretches, `Tile` repeats at the
+  slice's size from the start and cuts the last copy short, `Round` repeats a
+  whole number of copies each stretched a little to fit (CSS's `round`), and
+  `Hidden` leaves the part out.
+- **Scale**: `scale` is logical pixels per source pixel. Small pixel art
+  wants 2 or 3 with `.nearest()`; art drawn at twice the size for high-density
+  screens wants 0.5. The corners keep their size; when the box is smaller
+  than two of them they shrink together, keeping their shape.
+- **Padding**: the element's padding grows, side by side, to at least the
+  slice's scaled insets, so the content stays off the frame. `.padding(...)`
+  on the slice sets another content padding (a frame whose drawn border is
+  thinner than its cuts); `.padding(...)` on the element afterwards wins.
+- **Tint and opacity**: `.tint(color)` multiplies the pixels (one gray frame,
+  tinted per use), `.opacity(o)` fades it.
+- **Per state**: overrides swap it like any style:
+  `.hovered(|e| e.background_image(&lit))`. A tappable element with a
+  background image doesn't get the theme's hover highlight (a rectangle over
+  a shaped frame would show its corners): give it a hovered frame instead.
+  `StateSkin::apply` sets all the states at once. For the built-in widgets,
+  put the frames in a `Skin` on the theme; see
+  [games.md](games.md#skins-painted-frames).
+
+`gameui`'s "Painted" look (choose "Look" on its title menu) dresses a whole
+game UI in nine-slices drawn at start-up:
+
+<!-- live: gameui -->
+
+`Scene::draw_nine_slice(dst, &slice)` draws one directly (in a canvas, a
+game's own drawing). Each piece is an image region whose edges land on whole
+physical pixels, so the pieces meet without seams at any display scale: on the
+software renderer an unscaled or whole-number-scaled slice takes the region
+blit's fast path, and on the GPU each piece is a textured quad from the
+bitmap's one texture. A tiled edge is cut into at most 1024 pieces, a tiled
+center into about 16 000; past that the tiles grow.
+
 ## Keep the `Arc`
 
 Images compare by identity, not by pixels. Decode once and keep the `Arc` in

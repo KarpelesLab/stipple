@@ -23,6 +23,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state. `build-apk.sh` packs `examples/androiddemo/assets/`, the site serves
   and preloads each example's `assets/`, and `imagedemo` loads its PNG and
   SVG this way instead of `include_bytes!`.
+- Nine-slice images (#60): `NineSlice::new(image, insets)` with `.region`
+  (a part of an atlas), `.edges` / `.center` (`SliceFill::Stretch`, `Tile`,
+  `Round`, `Hidden`), `.scale` (pixel art, hi-DPI), `.nearest()`, `.tint`,
+  `.opacity` and `.padding`, drawn by `Scene::draw_nine_slice(dst, &slice)`:
+  corners at their size, pieces snapped to physical pixels, on the software
+  blit's fast paths and as quads on the GPU.
+- `Element::background_image(...)`: a `NineSlice` frame, or a picture placed
+  per an `ImageFit` (`BackgroundImage::image`), behind any element's content;
+  the padding grows to the frame's insets, and per-state overrides
+  (`.hovered(|e| e.background_image(&lit))`) swap it. An element with a
+  background image gets no theme hover highlight.
+- Skins (#60): `style::Skin` (buttons per state with `StateSkin`, panels,
+  the dialogue box, bars with `BarSkin`, checkboxes and switches with
+  `ToggleSkin`) on `Theme::skin` / `GameStyle::skin` dresses `button`,
+  `menu_button`, `panel`, `dialog`, `pause_menu`, `GameOverScreen`,
+  `DialogueBox`, `stat_bar` / `health_bar`, `progress_bar`, `checkbox` and
+  `switch` in its frames. `gameui` has a "Painted" look ("Look" on its title menu).
+
 - Test helpers on `App` that find elements as a screen reader knows them:
   `app.find(Role::CheckBox, "Buy milk")` (where it is, whether it's checked),
   `find_all` (every match), `find_text("1 left")` and

@@ -745,6 +745,68 @@ menu (the stick's thresholds, a held direction's repeat), the HUD letting
 presses through, the capture's flow, the typewriter's timing and the bar's
 ghost at fixed frame times are tested in `src/game/ui/tests.rs`.
 
+### Skins: painted frames
+
+A `GameStyle` recolors the widgets; a `Skin` paints them. It holds
+[nine-slice](images.md#backgrounds-and-nine-slices) frames (bitmaps whose
+corners keep their size while the rest stretches or tiles) for the widgets a
+game dresses, and a theme carrying one draws them in place of its fills and
+borders. One skin re-skins the whole game:
+
+```rust
+use stipple::render::{NineSlice, Pixmap, SliceFill};
+use stipple::style::{BarSkin, Skin, StateSkin, ToggleSkin};
+
+let atlas = Arc::new(Pixmap::decode(include_bytes!("../assets/ui.png"))?);
+// A 16×16 frame of the atlas, cut 4 pixels in, shown at 2× as hard pixels.
+let part = |x: f64, y: f64| {
+    NineSlice::new(atlas.clone(), Insets::uniform(4.0))
+        .region(Rect::from_xywh(x, y, 16.0, 16.0))
+        .scale(2.0)
+        .nearest()
+};
+let skin = Skin::new()
+    .button(
+        StateSkin::new(part(0.0, 0.0))
+            .hovered(part(16.0, 0.0))
+            .focused(part(16.0, 0.0))
+            .pressed(part(32.0, 0.0))
+            .disabled(part(48.0, 0.0)),
+    )
+    .panel(part(0.0, 16.0).edges(SliceFill::Tile))
+    .dialogue(part(16.0, 16.0))
+    .bar(BarSkin::new(part(32.0, 16.0), part(48.0, 16.0)))
+    .checkbox(ToggleSkin::new(part(0.0, 32.0), part(16.0, 32.0)))
+    .switch(ToggleSkin::new(part(32.0, 32.0), part(48.0, 32.0)).knob(part(0.0, 48.0)))
+    .leak();
+App::new(state, view).game_style(GameStyle::ember().skin(skin));
+```
+
+| Skin field | Dresses |
+|---|---|
+| `button: StateSkin` | `button` / `Button` (every variant) and `menu_button`: a frame per state, `normal`, `hovered`, `focused` (from the keyboard or a gamepad), `pressed`, `disabled`, each falling back on the one before. The press still shrinks the button. |
+| `panel` | `panel(cx)`, a `dialog`'s card, the pause menu, the game-over results, and the dialogue box when `dialogue` is unset. |
+| `dialogue` | `DialogueBox`. |
+| `bar: BarSkin` | `stat_bar`, `health_bar`, `progress_bar`: the `track` frame and the `fill` inside the track's content padding. The fill is revealed (a full-length fill cut off at the value, so its ends keep their shape), or `.stretch(true)` to the value's length; it is tinted with the bar's color (draw it in grays: one fill makes a red health bar and a gold boost bar), or `.tint(false)`. |
+| `checkbox: ToggleSkin` | The box, `off` and `on` (the `on` image shows the mark). |
+| `switch: ToggleSkin` | The track, `off` and `on`, and an optional `knob`. |
+
+A widget the skin has no frame for keeps the theme's colors. A `Theme` is a
+plain `Copy` value, so it holds the skin as `&'static Skin`: build it once
+when the game starts and `leak()` it (or keep it in a `static`), never per
+frame. `Theme::skin(skin)` puts one on any theme, so a regular app can be
+skinned too. Text keeps the palette's colors: pick a `GameStyle` whose text
+reads on the frames.
+
+Anything else takes a frame with `.background_image(&frame)`, and
+`StateSkin::apply(el)` gives any element a frame per state. Not skinned yet:
+tabs, sliders, text fields and scroll bars.
+
+`gameui`'s "Look" (on the title menu, or in Settings) switches to
+"Painted": the same screens in a skin whose frames are drawn pixel by pixel
+at start-up (`painted_skin` in `examples/gameui/main.rs`). Try it in the
+demo at the top of this section.
+
 ## Saving
 
 `stipple::game::save` keeps a game's settings and saved games, written so

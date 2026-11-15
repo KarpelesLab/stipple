@@ -9,7 +9,11 @@
 //! - the game with a HUD over it (hull and boost bars, a score that pops,
 //!   a minimap slot, floating "+10"/"-12" texts), a dialogue box typing out
 //!   the dispatcher's lines, and a pause menu over the frozen game,
-//! - a game-over screen.
+//! - a game-over screen,
+//! - and a second look, "Painted" (the title menu's "Look", or Settings →
+//!   Look): the same widgets
+//!   dressed in pixel-art frames (a [`Skin`] of [`NineSlice`]s drawn here,
+//!   pixel by pixel, at start-up) instead of the theme's colors.
 //!
 //! Everything is reachable with the keyboard (arrows, Enter, Escape) and a
 //! gamepad (d-pad or left stick, A/✕ to select, B/○ to go back, Start to
@@ -19,6 +23,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use stipple::core::CanvasId;
@@ -29,6 +34,8 @@ use stipple::game::ui::{
 use stipple::game::{Actions, Binding, Frame, GameLoop};
 use stipple::gamepad::{self, GamepadButton, GamepadEvent};
 use stipple::prelude::*;
+use stipple::render::{NineSlice, SliceFill};
+use stipple::style::{BarSkin, Skin, StateSkin, ToggleSkin};
 
 const WORLD: CanvasId = CanvasId(1);
 const WINDOW: Size = Size::new(1024.0, 640.0);
@@ -102,6 +109,8 @@ struct Game {
     capture: Option<RebindCapture<Act>>,
     pixel_scale: usize,
     language: usize,
+    /// 0: the game style's colors; 1: the painted skin.
+    look: usize,
     hull: f32,
     boost: u32,
     score: i64,
@@ -125,6 +134,7 @@ impl Game {
             capture: None,
             pixel_scale: 1,
             language: 0,
+            look: 0,
             hull: 100.0,
             boost: 5,
             score: 0,
@@ -255,7 +265,7 @@ fn view(g: &Game, cx: &mut Cx<Game>) -> Element {
         Screen::Over => 3,
     };
     page_stack(cx, 4, shown, |cx, page, visible| match page {
-        0 => title(cx),
+        0 => title(g, cx),
         1 => settings(g, cx, &theme),
         2 => play(g, cx, &theme, visible),
         _ => game_over(g, cx),
@@ -274,12 +284,18 @@ fn hints<S>(cx: &Cx<S>) -> Element {
     )
 }
 
-fn title(cx: &mut Cx<Game>) -> Element {
+fn title(g: &Game, cx: &mut Cx<Game>) -> Element {
     let handle = cx.handle();
+    let look = if g.look == 1 {
+        "Look: Painted"
+    } else {
+        "Look: Colors"
+    };
     let menu = gui::menu_list(cx)
         .children(vec![
             gui::menu_button(cx, "Start", Game::start),
             gui::menu_button(cx, "Settings", Game::open_settings),
+            gui::menu_button(cx, look, |g| g.look = 1 - g.look),
             gui::menu_button(cx, "Quit", move |_| handle.exit()),
         ])
         .width(320.0);
@@ -321,6 +337,9 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
         theme,
         "Display",
         vec![
+            gui::choice_row(cx, "Look", &["Colors", "Painted"], g.look, |g, i| {
+                g.look = i
+            }),
             gui::fullscreen_row(cx, "Fullscreen", |_, _| {}),
             gui::choice_row(
                 cx,
@@ -576,6 +595,14 @@ fn app(game: Game, style: GameStyle) -> App<Game> {
         .title("Starlit Courier")
         .logical_size(WINDOW)
         .game_style(style)
+        // The painted look: the same widgets, dressed in the skin's frames.
+        .theme_with(|g: &Game, base: &Theme| {
+            if g.look == 1 {
+                GameStyle::ember().skin(painted_skin()).theme()
+            } else {
+                *base
+            }
+        })
         .game_loop(
             GameLoop::new(update).paused_when(|g: &Game| {
                 (g.screen != Screen::Play || g.paused) && g.capture.is_none()
@@ -679,6 +706,175 @@ fn shots(dir: &str) {
     g.best = 410;
     g.played = 83.0;
     render("over", g, &[]);
+    // The painted look.
+    let mut g = Game::new();
+    g.look = 1;
+    render("title-painted", g, &[KeyInput::Down]);
+    let mut g = Game::new();
+    g.look = 1;
+    g.screen = Screen::Settings;
+    render("settings-painted", g, &[]);
+    let mut g = Game::new();
+    g.look = 1;
+    g.start();
+    g.hull = 64.0;
+    g.boost = 3;
+    render("play-painted", g, &[]);
+    let mut g = Game::new();
+    g.look = 1;
+    g.start();
+    g.dialogue = None;
+    g.paused = true;
+    render("pause-painted", g, &[KeyInput::Down]);
+}
+
+// --- The painted look ------------------------------------------------------
+
+/// The painted look's frames: small pixel-art bitmaps drawn here, one pixel
+/// at a time, sliced nine ways and shown at twice their size with hard
+/// pixels. A game would load its artist's atlas instead
+/// (`Pixmap::decode(include_bytes!("ui.png"))`) and slice regions of it.
+fn painted_skin() -> &'static Skin {
+    static SKIN: OnceLock<&'static Skin> = OnceLock::new();
+    SKIN.get_or_init(|| {
+        let wood = Colors {
+            outline: 0x1a100a,
+            light: 0x8a5a34,
+            top: 0x6b4426,
+            bottom: 0x4a2d18,
+            shadow: 0x2e1c0f,
+            trim: Some(0xd9a441),
+        };
+        let lit = Colors {
+            light: 0xb07a48,
+            top: 0x8a5a34,
+            bottom: 0x67401f,
+            trim: Some(0xffd56a),
+            ..wood
+        };
+        let pressed = Colors {
+            light: 0x2e1c0f,
+            top: 0x3e2614,
+            bottom: 0x553620,
+            shadow: 0x8a5a34,
+            ..wood
+        };
+        let panel = Colors {
+            top: 0x3a281a,
+            bottom: 0x2a1d12,
+            ..wood
+        };
+        let groove = Colors {
+            outline: 0x1a100a,
+            light: 0x0d0805,
+            top: 0x1f150d,
+            bottom: 0x2a1d12,
+            shadow: 0x5a3c22,
+            trim: None,
+        };
+        let fill = Colors {
+            outline: 0x7a7a7a,
+            light: 0xffffff,
+            top: 0xf0f0f0,
+            bottom: 0xa8a8a8,
+            shadow: 0x8c8c8c,
+            trim: None,
+        };
+        let frame = |px: Pixmap, inset: f64| {
+            NineSlice::new(Arc::new(px), Insets::uniform(inset))
+                .scale(2.0)
+                .nearest()
+        };
+        let mut check = paint(11, 11, &groove);
+        for (x, y) in [(3, 5), (4, 6), (5, 7), (6, 6), (7, 5), (8, 4), (8, 3)] {
+            set(&mut check, x, y, 0xffd56a);
+        }
+        Skin::new()
+            .button(
+                StateSkin::new(frame(paint(16, 16, &wood), 4.0))
+                    .hovered(frame(paint(16, 16, &lit), 4.0))
+                    .focused(frame(paint(16, 16, &lit), 4.0))
+                    .pressed(frame(paint(16, 16, &pressed), 4.0)),
+            )
+            .panel(frame(paint(16, 16, &panel), 4.0).edges(SliceFill::Tile))
+            .bar(BarSkin::new(
+                frame(paint(10, 8, &groove), 2.0).padding(Insets::uniform(3.0)),
+                frame(paint(6, 6, &fill), 2.0),
+            ))
+            .checkbox(ToggleSkin::new(
+                frame(paint(11, 11, &groove), 3.0),
+                frame(check, 3.0).center(SliceFill::Stretch),
+            ))
+            .switch(
+                ToggleSkin::new(
+                    frame(paint(20, 11, &groove), 4.0),
+                    frame(paint(20, 11, &panel), 4.0),
+                )
+                .knob(frame(paint(8, 8, &lit), 3.0)),
+            )
+            .leak()
+    })
+}
+
+/// A bevelled frame's colors (`0xRRGGBB`): a dark outline, a highlight on
+/// the top and left inside it, a shadow on the bottom and right, a body
+/// shading from `top` to `bottom`, and an optional trim ring.
+#[derive(Clone, Copy)]
+struct Colors {
+    outline: u32,
+    light: u32,
+    top: u32,
+    bottom: u32,
+    shadow: u32,
+    trim: Option<u32>,
+}
+
+/// A `w`×`h` bevelled frame with its corner pixels cut off, and a wood
+/// grain in the body.
+fn paint(w: u32, h: u32, c: &Colors) -> Pixmap {
+    let mut px = Pixmap::new(PhysicalSize::new(w, h));
+    for y in 0..h {
+        for x in 0..w {
+            // How deep in the frame: 0 for the outline ring.
+            let ring = x.min(y).min(w - 1 - x).min(h - 1 - y);
+            let corner = (x == 0 || x == w - 1) && (y == 0 || y == h - 1);
+            let color = match ring {
+                _ if corner => continue,
+                0 => c.outline,
+                1 if x == w - 2 || y == h - 2 => c.shadow,
+                1 => c.light,
+                2 if c.trim.is_some() => c.trim.unwrap_or_default(),
+                _ => {
+                    let body = mix(c.top, c.bottom, f64::from(y) / f64::from(h.max(2) - 1));
+                    // A grain: a darker streak every few pixels.
+                    if (x * 7 + y * 3) % 11 == 0 {
+                        mix(body, 0x000000, 0.18)
+                    } else {
+                        body
+                    }
+                }
+            };
+            set(&mut px, x, y, color);
+        }
+    }
+    px
+}
+
+fn set(px: &mut Pixmap, x: u32, y: u32, rgb: u32) {
+    let stride = px.stride();
+    let i = y as usize * stride + x as usize * 4;
+    px.as_bytes_mut()[i..i + 4].copy_from_slice(&[
+        (rgb >> 16) as u8,
+        (rgb >> 8) as u8,
+        rgb as u8,
+        255,
+    ]);
+}
+
+fn mix(a: u32, b: u32, t: f64) -> u32 {
+    let ch = |v: u32, s: u32| f64::from((v >> s) & 0xff);
+    let c = |s: u32| ((ch(a, s) * (1.0 - t) + ch(b, s) * t).round() as u32) << s;
+    c(16) | c(8) | c(0)
 }
 
 // In the browser, `web.rs` builds this file as a library and the page

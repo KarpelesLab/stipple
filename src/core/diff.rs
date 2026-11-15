@@ -105,6 +105,7 @@ pub(crate) fn diff_trees(old: &LayoutNode, new: &LayoutNode) -> Damage {
 fn visuals_equal(a: &LayoutNode, b: &LayoutNode) -> bool {
     a.bounds == b.bounds
         && a.decoration == b.decoration
+        && a.background == b.background
         && a.native == b.native
         && a.native_from == b.native_from
         && a.content == b.content
@@ -255,6 +256,7 @@ mod tests {
                 radius: 0.0,
                 border: None,
             },
+            background: None,
             content: NodeContent::None,
             action: None,
             focus: None,
@@ -292,6 +294,7 @@ mod tests {
         LayoutNode {
             bounds,
             decoration: BoxStyle::default(),
+            background: None,
             content: NodeContent::Text {
                 text: text.into(),
                 size: 14.0,

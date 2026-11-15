@@ -257,6 +257,39 @@ fn regions_match_the_software_renderer() {
     agree("regions@2", &regions(), 2.0, 1.5, 0.02);
 }
 
+/// Nine-slices: stretched, tiled and rounded edges, a hollow one, scaled
+/// pixel art, one from part of an image, tinted and faded.
+fn nine_slices() -> Scene {
+    use crate::geometry::Insets;
+    use crate::render::{NineSlice, SliceFill};
+    let image = ramp();
+    let mut s = Scene::new(Size::new(160.0, 120.0));
+    let frame = NineSlice::new(image.clone(), Insets::uniform(4.0));
+    s.draw_nine_slice(Rect::from_xywh(4.0, 4.0, 70.0, 30.0), &frame);
+    let tiled = frame.clone().edges(SliceFill::Tile).center(SliceFill::Tile);
+    s.draw_nine_slice(Rect::from_xywh(84.0, 4.0, 70.0, 30.0), &tiled);
+    let round = frame
+        .clone()
+        .edges(SliceFill::Round)
+        .center(SliceFill::Hidden);
+    s.draw_nine_slice(Rect::from_xywh(4.0, 40.0, 50.0, 35.0), &round);
+    let pixel = frame.clone().scale(2.0).nearest();
+    s.draw_nine_slice(Rect::from_xywh(60.0, 40.0, 90.0, 40.0), &pixel);
+    let part = NineSlice::new(image, Insets::uniform(2.0))
+        .region(Rect::from_xywh(8.0, 0.0, 8.0, 8.0))
+        .tint(Color::rgb(255, 180, 90))
+        .opacity(0.8);
+    s.draw_nine_slice(Rect::from_xywh(4.0, 84.0, 150.0, 30.0), &part);
+    s
+}
+
+#[test]
+fn nine_slices_match_the_software_renderer() {
+    agree("nine-slices", &nine_slices(), 1.0, 1.5, 0.02);
+    agree("nine-slices@2", &nine_slices(), 2.0, 1.5, 0.02);
+    agree("nine-slices@1.5", &nine_slices(), 1.5, 2.0, 0.03);
+}
+
 #[test]
 fn an_unchanged_image_is_uploaded_once() {
     let scene = images();

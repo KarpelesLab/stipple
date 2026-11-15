@@ -15,7 +15,9 @@ use crate::platform::native;
 use crate::render::Color;
 
 mod motion;
+mod skin;
 pub use motion::MotionTokens;
+pub use skin::{BarSkin, Skin, StateSkin, ToggleSkin};
 
 /// Chainable setters for an input struct's public fields, one per field:
 /// `fn field(mut self, field: Type) -> Self`. Used inside an `impl` block.
@@ -244,6 +246,10 @@ pub struct Theme {
     /// how far it stands off a button, and a glow around it (see
     /// [`FocusLook`]). Its color is [`Palette::focus_ring`].
     pub focus: FocusLook,
+    /// Images dressing the widgets instead of the palette's fills and
+    /// borders (a game's painted buttons and panels); `None` for none. See
+    /// [`Skin`].
+    pub skin: Option<&'static Skin>,
 }
 
 /// How the keyboard focus ring is drawn (see [`Theme::focus`]). The default,
@@ -411,6 +417,7 @@ impl Theme {
             layout_direction: LayoutDirection::Ltr,
             motion: MotionTokens::standard(),
             focus: FocusLook::STANDARD,
+            skin: None,
         }
     }
 
@@ -427,7 +434,14 @@ impl Theme {
             layout_direction: LayoutDirection::Ltr,
             motion: MotionTokens::standard(),
             focus: FocusLook::STANDARD,
+            skin: None,
         }
+    }
+
+    /// Dress the widgets in `skin`'s images (see [`Skin`]).
+    pub fn skin(mut self, skin: &'static Skin) -> Self {
+        self.skin = Some(skin);
+        self
     }
 
     /// Recolor the theme around a new `accent`: sets `primary`, derives its
@@ -761,6 +775,7 @@ impl Theme {
             layout_direction: LayoutDirection::Ltr,
             motion: MotionTokens::material(),
             focus: FocusLook::STANDARD,
+            skin: None,
         }
     }
 }

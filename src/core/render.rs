@@ -477,6 +477,7 @@ fn layout_element(
     let mut node = LayoutNode {
         bounds,
         decoration: el.decoration,
+        background: el.background.clone(),
         content,
         action: el.action,
         focus: el.focus,
@@ -980,8 +981,10 @@ pub(crate) fn paint_hover(
     if let Some((node, to_window, opacity)) = node_to_window(tree, &|n| n.action == Some(hovered)) {
         // A labeled control lights up its box, not its label.
         let node = indicator_of(node).unwrap_or(node);
-        // An OS-drawn control shows hover itself (see `mark_native_states`).
-        if node.native.is_some() || opacity <= 0.0 {
+        // An OS-drawn control shows hover itself (see `mark_native_states`),
+        // and a skinned one with its frames: a rectangle over a shaped frame
+        // would show its corners.
+        if node.native.is_some() || node.background.is_some() || opacity <= 0.0 {
             return;
         }
         // Drawn where the node is drawn, if it's transformed or translucent.
@@ -1149,7 +1152,12 @@ fn paint_in(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible: 
 /// [`paint`] for one node and its subtree, inside whatever layer it needs.
 fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible: Option<Rect>) {
     if !paint_native(node, scene) {
-        paint_decoration(&node.decoration, node.bounds, scene);
+        paint_decoration(
+            &node.decoration,
+            node.background.as_deref(),
+            node.bounds,
+            scene,
+        );
     }
     match &node.content {
         NodeContent::Text {
@@ -1358,13 +1366,22 @@ fn child_rect(
     }
 }
 
-fn paint_decoration(deco: &BoxStyle, bounds: Rect, scene: &mut Scene) {
+/// An element's box: its fill, then its background image, then its border.
+fn paint_decoration(
+    deco: &BoxStyle,
+    background: Option<&crate::render::BackgroundImage>,
+    bounds: Rect,
+    scene: &mut Scene,
+) {
     if let Some(fill) = deco.fill {
         if deco.radius > 0.0 {
             scene.fill_round_rect(bounds, deco.radius, fill);
         } else {
             scene.fill_rect(bounds, fill);
         }
+    }
+    if let Some(background) = background {
+        scene.draw_background(bounds, background);
     }
     if let Some((color, width)) = deco.border {
         if deco.radius > 0.0 {

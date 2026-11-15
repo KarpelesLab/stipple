@@ -33,7 +33,8 @@ pub fn menu_button<S>(
     let lit = states.focus_visible() || states.hovered();
     let p = &theme.palette;
     let state = Transition(theme.motion.state);
-    let (fill, ink, border) = if lit {
+    let skin = theme.skin.and_then(|s| s.button.as_ref());
+    let (fill, ink, border) = if lit && skin.is_none() {
         (p.primary, p.on_primary, p.focus_ring)
     } else {
         (p.surface.mix(p.background, 0.15), p.text, p.border)
@@ -53,7 +54,7 @@ pub fn menu_button<S>(
     } else {
         1.0
     };
-    Element::stack(
+    let el = Element::stack(
         Axis::Horizontal,
         vec![
             marker("\u{203A}"),
@@ -65,23 +66,42 @@ pub fn menu_button<S>(
             marker("\u{2039}"),
         ],
     )
-    .fill(fill)
-    .border(border, 2.0)
-    .radius(theme.radius)
     .padding(Insets::symmetric(theme.spacing.lg, theme.spacing.md))
     .gap(theme.spacing.sm)
-    .min_width(280.0)
-    .transform(Transform::IDENTITY.scale(scale))
-    .transition_for(AnimProp::Fill, state)
-    .transition_for(AnimProp::Border, state)
-    .transition_for(
-        AnimProp::Transform,
-        Transition::spring(SpringParams::SNAPPY),
-    )
-    .key(key)
-    .on_tap(cx, on_press)
-    .role(Role::Button)
-    .a11y_label(label)
+    .min_width(280.0);
+    let el = match skin {
+        // The skin's frame for the state: focused (or hovered) and pressed
+        // fall back on each other, then on the frame at rest.
+        Some(b) => {
+            let pressed = b.pressed.as_ref().filter(|_| states.pressed());
+            let lit_frame = (b.focused.as_ref().or(b.hovered.as_ref())).filter(|_| lit);
+            el.background_image(pressed.or(lit_frame).unwrap_or(&b.normal))
+        }
+        None => el.fill(fill).border(border, 2.0).radius(theme.radius),
+    };
+    el.transform(Transform::IDENTITY.scale(scale))
+        .transition_for(AnimProp::Fill, state)
+        .transition_for(AnimProp::Border, state)
+        .transition_for(
+            AnimProp::Transform,
+            Transition::spring(SpringParams::SNAPPY),
+        )
+        .key(key)
+        .on_tap(cx, on_press)
+        .role(Role::Button)
+        .a11y_label(label)
+}
+
+/// `el` as a panel: the skin's panel frame, or the surface with a
+/// `border`-colored outline `width` wide and `radius` corners.
+fn framed(theme: &Theme, el: Element, border: Color, width: f64, radius: f64) -> Element {
+    match theme.skin.and_then(|s| s.panel.as_ref()) {
+        Some(frame) => el.background_image(frame),
+        None => el
+            .fill(theme.palette.surface)
+            .border(border, width)
+            .radius(radius),
+    }
 }
 
 /// A column for [`menu_button`]s (or any controls; add them with
@@ -299,11 +319,9 @@ impl GameOverScreen {
             .collect();
         let results = Element::stack(Axis::Vertical, rows)
             .gap(theme.spacing.sm)
-            .fill(p.surface)
-            .border(p.border, 1.0)
-            .radius(theme.radius)
             .padding(Insets::uniform(theme.spacing.lg))
             .width(320.0);
+        let results = framed(theme, results, p.border, 1.0, theme.radius);
         let page = screen(
             theme,
             vec![
@@ -409,14 +427,12 @@ impl PauseMenu {
             ],
         )
         .gap(theme.spacing.lg)
-        .fill(p.surface)
-        .border(p.primary, 2.0)
-        .radius(theme.radius * 2.0)
         .padding(Insets::uniform(theme.spacing.xl))
-        .align(Align::Center, Align::Stretch)
-        .role(Role::Dialog)
-        .enter(Effect::fade().and(Effect::scale(0.9)))
-        .exit(Effect::fade().and(Effect::scale(0.95)));
+        .align(Align::Center, Align::Stretch);
+        let content = framed(theme, content, p.primary, 2.0, theme.radius * 2.0)
+            .role(Role::Dialog)
+            .enter(Effect::fade().and(Effect::scale(0.9)))
+            .exit(Effect::fade().and(Effect::scale(0.95)));
         cx.overlay(OverlaySpec {
             content,
             anchor: Anchor::Center,

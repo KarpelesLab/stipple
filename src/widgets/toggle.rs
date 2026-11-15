@@ -183,6 +183,14 @@ fn check_box(theme: &Theme, checked: bool) -> Element {
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control);
     }
+    if let Some(skin) = theme.skin.and_then(|s| s.checkbox.as_ref()) {
+        // The skin's box, its mark drawn in.
+        return Element::stack(Axis::Horizontal, Vec::new())
+            .background_image(skin.frame(checked))
+            .padding(Insets::ZERO)
+            .width(22.0)
+            .height(22.0);
+    }
     // The mark is always there, faded out and shrunk while unchecked, so it
     // pops in (and out) on the theme's toggle motion.
     let m = theme.motion;
@@ -215,11 +223,17 @@ fn switch_track(theme: &Theme, on: bool) -> Element {
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control);
     }
-    let knob = Element::boxed(BoxStyle {
-        fill: Some(Color::WHITE),
-        radius: 8.0,
-        border: None,
-    })
+    let skin = theme.skin.and_then(|s| s.switch.as_ref());
+    let knob = match skin.and_then(|s| s.knob.as_ref()) {
+        Some(knob) => Element::stack(Axis::Horizontal, Vec::new())
+            .background_image(knob)
+            .padding(Insets::ZERO),
+        None => Element::boxed(BoxStyle {
+            fill: Some(Color::WHITE),
+            radius: 8.0,
+            border: None,
+        }),
+    }
     .width(16.0)
     .height(16.0);
     // The knob sits after a lead that is as wide as its travel when on (40
@@ -229,7 +243,15 @@ fn switch_track(theme: &Theme, on: bool) -> Element {
     let lead = Element::stack(Axis::Horizontal, Vec::new())
         .width(if on { 18.0 } else { 0.0 })
         .transition_for(AnimProp::Width, Transition(m.toggle));
-    Element::stack(Axis::Horizontal, vec![lead, knob])
+    let track = Element::stack(Axis::Horizontal, vec![lead, knob]);
+    if let Some(skin) = skin {
+        return track
+            .background_image(skin.frame(on))
+            .width(40.0)
+            .height(22.0)
+            .padding(Insets::uniform(3.0));
+    }
+    track
         .fill(if on {
             theme.palette.primary
         } else {

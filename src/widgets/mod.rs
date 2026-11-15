@@ -275,6 +275,12 @@ pub fn panel<S>(cx: &Cx<S>) -> Element {
 
 /// [`panel`]'s card around `children`.
 fn panel_frame(theme: &Theme, children: Vec<Element>) -> Element {
+    if let Some(frame) = theme.skin.and_then(|s| s.panel.as_ref()) {
+        return Element::stack(Axis::Vertical, children)
+            .padding(Insets::uniform(theme.spacing.lg))
+            .background_image(frame)
+            .gap(theme.spacing.md);
+    }
     Element::stack(Axis::Vertical, children)
         .fill(theme.palette.surface)
         .radius(theme.radius)
@@ -383,6 +389,17 @@ impl Button {
             ButtonContent::Label(text) => Element::text(text, theme.typography.body, ink),
             ButtonContent::Element(el) => *el,
         };
+        if let Some(skin) = theme.skin.and_then(|s| s.button.as_ref()) {
+            // The skin's frames, per state, whatever the variant.
+            let el = Element::stack(Axis::Horizontal, vec![content(p.text)])
+                .padding(Insets::symmetric(theme.spacing.lg, theme.spacing.sm))
+                .align(Align::Center, Align::Center);
+            let (scale, press) = (theme.motion.press_scale, theme.motion.press);
+            return skin
+                .apply(el)
+                .pressed(move |e| e.transform(Transform::IDENTITY.scale(scale)))
+                .transition_for(AnimProp::Transform, Transition(press));
+        }
         // The OS's primary and regular buttons; it has no equivalent of the others.
         let control = match variant {
             Variant::Primary => Some(NativeControl::Button { primary: true }),
@@ -1367,6 +1384,10 @@ pub fn tabs<S>(
 
 /// A progress bar: a track with a primary-filled portion for `fraction` (0..=1).
 /// Default width 200 px; override with `.width(..)`.
+///
+/// Under a theme with a [`Skin::bar`](crate::style::Skin::bar), it is the
+/// skin's track and fill, 200 px wide (the fill is laid out for that width)
+/// and as tall as the track's frame plus 8.
 pub fn progress_bar<S>(cx: &Cx<S>, fraction: f64) -> Element {
     let theme = cx.theme();
     let f = fraction.clamp(0.0, 1.0);
@@ -1375,6 +1396,20 @@ pub fn progress_bar<S>(cx: &Cx<S>, fraction: f64) -> Element {
     };
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control);
+    }
+    if let Some(skin) = theme.skin.and_then(|s| s.bar.as_ref()) {
+        let pad = skin.track.content_padding();
+        let (w, h) = (200.0, 8.0 + pad.vertical());
+        let inner = ((w - pad.horizontal()).max(0.0), 8.0);
+        let filled = (inner.0 * f).round();
+        return Element::stack(
+            Axis::Horizontal,
+            vec![skin.fill_element(inner, filled, theme.palette.primary)],
+        )
+        .background_image(&skin.track)
+        .width(w)
+        .height(h)
+        .align(Align::Start, Align::Start);
     }
     let fill = Element::boxed(BoxStyle {
         fill: Some(theme.palette.primary),
