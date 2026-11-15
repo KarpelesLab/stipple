@@ -117,7 +117,9 @@ for _ in $(seq 10); do
   tap_me="$(adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' \
     | grep -E 'text="Tap me"' | head -1 \
     | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' \
-    | awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }')"
+    | awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }' || true)"
+  # (`|| true`: a dump taken before the button is in the tree matches
+  # nothing, and grep's failure would otherwise end the script here.)
   [ -n "$tap_me" ] && break
   sleep 1
 done
@@ -384,7 +386,7 @@ adb shell cat /sdcard/stipple-menu.xml > "$shots/android-menu-ui.xml"
 center_of() {
   sed 's/<node/\n<node/g' "$2" | grep -E "text=\"$1" | head -1 \
     | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' \
-    | awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }'
+    | awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }' || true
 }
 item="$(center_of "Pin row [0-9]+" "$shots/android-menu-ui.xml")"
 if [ -z "$item" ]; then
@@ -438,7 +440,7 @@ tap_node() {
   local b x1 y1 x2 y2
   adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || true
   b="$(adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' | grep -E "$1" | head -1 \
-    | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p')"
+    | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' || true)"
   [ -n "$b" ] || return 1
   read -r x1 y1 x2 y2 <<< "$b"
   adb shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2))
