@@ -1,0 +1,16 @@
+[package]
+name = "gameloop"
+description = "Stipple example: the game loop — a square moved with the arrow keys or WASD through actions, with an fps counter."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true

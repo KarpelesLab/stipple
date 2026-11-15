@@ -518,6 +518,7 @@ they: use `open_file_contents` and `save_file_contents` there.
   built-in widgets' motion, theme cross-fades and reduced motion
 - [Performance](performance.md): memoized subtrees and derived values (`Cx::memo`, `Cx::derive`), animation frames without a rebuild, painting only what shows, and what a frame costs
 - [Custom painting](canvas.md): `Element::canvas`, invalidating parts of it from any thread, paths, bitmaps and glyph runs
+- [Games](games.md): the game loop (`App::on_frame`), fixed time steps, polled input and rebindable actions
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough

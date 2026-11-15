@@ -2045,23 +2045,50 @@ saved state, and oxideav's decoders for WAV, Vorbis, MP3, FLAC and Opus. What a
 game needs on top:
 
 #### 9a — The game loop
-- ⬜ A per-frame update that runs at the display's rate while the game plays,
+- ✅ A per-frame update that runs at the display's rate while the game plays,
   with the time since the last frame, and doesn't rebuild the view (only the
   canvas repaints, and the HUD when the state it shows changed).
-- ⬜ A fixed-timestep helper (an accumulator: N updates of a fixed `dt`, then an
+  *`App::on_frame` / `App::game_loop(GameLoop)` (`src/game/`): the update
+  gets a `Frame` (time, capped `dt`, input, stats) and says what changed,
+  `frame.repaint(canvas)` or `frame.rebuild()`. It runs when the frame clock
+  delivers a frame it asked for, before the window presents; canvas-only
+  frames don't build or lay out the view (App-tested through the event
+  handler; `gameloop --selftest` presents 118 of 121 frames without a
+  build). See [docs/games.md](docs/games.md).*
+- ✅ A fixed-timestep helper (an accumulator: N updates of a fixed `dt`, then an
   interpolation factor for drawing), so physics doesn't depend on the refresh
   rate.
-- ⬜ Pausing: the loop stops when the window is hidden, minimized or the app is
+  *`game::FixedStep`: `advance(dt)` → steps, `alpha()`, a catch-up cap
+  (`max_steps`) that drops the excess. Unit-tested.*
+- ✅ Pausing: the loop stops when the window is hidden, minimized or the app is
   backgrounded, and on demand; it resumes without a giant `dt`.
-- ⬜ Frame stats a game can show (fps, update and render times).
+  *`GameLoop::paused_when(|s| …)`, every window minimized, the app in the
+  background, and optionally `pause_when_unfocused`; paused, it asks for no
+  frames. The first frame back gets one refresh interval, and presses made
+  while paused are dropped. App-tested. Not covered: a window hidden behind
+  others (occlusion) still runs.*
+- ✅ Frame stats a game can show (fps, update and render times).
+  *`Frame::stats()` → `LoopStats` (fps, frame, update and present times over
+  half a second); the render time is the process's present time, all
+  windows together.*
 
 #### 9b — Input for games
-- ⬜ Polled input state: which keys (by physical code) and mouse buttons are
+- ✅ Polled input state: which keys (by physical code) and mouse buttons are
   held, presses and releases since the last update, pointer position and
   motion, wheel; reset when the window loses focus so no key sticks.
-- ⬜ Actions: named actions bound to keys, mouse buttons, gamepad buttons and
+  *`game::InputState`, fed from every window event before it is routed, and
+  read as `Frame::input()`: held keys by physical and logical key, latched
+  edges (a tap between two frames is seen), pointer, motion, wheel; focus
+  loss releases everything. `PhysicalKey` constants for common keys.
+  Unit- and App-tested.*
+- ✅ Actions: named actions bound to keys, mouse buttons, gamepad buttons and
   axes (with dead zones), queried per update (`pressed`, `held`, `released`,
   `value`); bindings that can be listed, changed and saved.
+  *`game::Actions<A>` over a `#[non_exhaustive]` `Binding` (`Key`,
+  `MouseButton`, `KeyAxis`; gamepad variants come with the gamepad
+  backends), `axis2`, rebinding (`rebind`, `unbind`, `bound_to`,
+  `Binding::capture` for "press a key…"), and a line-per-action text form
+  (`to_text` / `load_text`). Unit-tested.*
 - ⬜ Pointer lock: relative mouse motion with the cursor hidden and held in
   place (macOS `CGAssociateMouseAndMouseCursorPosition`, Windows raw input +
   `ClipCursor`, X11 a pointer grab and warp, Wayland

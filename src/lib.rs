@@ -39,6 +39,7 @@ mod app_touch;
 #[cfg(test)]
 mod canvas_tests;
 pub mod core;
+pub mod game;
 pub mod geometry;
 #[cfg(feature = "gpu")]
 pub mod gpu;
@@ -145,6 +146,8 @@ pub struct App<S> {
     exit_on_last_closed: bool,
     on_window_change: Option<WindowChangeFn<S>>,
     closing: Vec<WindowId>,
+    // The game loop, if one runs on the app's frames (see `game`).
+    game: Option<Box<game::Runtime<S>>>,
 }
 
 /// Called when a window moves, resizes or changes state (see
@@ -557,6 +560,7 @@ impl<S: 'static> App<S> {
             exit_on_last_closed: true,
             on_window_change: None,
             closing: Vec::new(),
+            game: None,
         }
     }
 
@@ -2743,6 +2747,8 @@ impl<S: 'static> App<S> {
                        force: bool| {
             app_dbg(format_args!("present: start"));
             let began = crate::platform::time::Instant::now();
+            // The state may have paused or resumed the game loop.
+            app.game_schedule();
             // Clipboard writes and reads handlers queued.
             app.run_clipboard_requests(Some(window));
             // The theme may follow the state (`App::theme_with`); the title
@@ -2853,6 +2859,8 @@ impl<S: 'static> App<S> {
                 self.restore_from_platform();
                 self.start_windows(window, &mut surfaces);
             }
+            // The game loop's input sees every key and button first.
+            self.game_event(&event);
             // Woken: run the state's updates and due timers. Multi-window
             // backends wake every window in turn; the first one runs them, and
             // each brings its own window up to date.
@@ -2865,6 +2873,8 @@ impl<S: 'static> App<S> {
                 if self.handle.exit_requested() {
                     return ControlFlow::Exit;
                 }
+                // A frame for the game loop runs its update.
+                let did = self.game_wake() | did;
                 // Canvases to repaint and viewport content to show.
                 self.pump_content();
                 if did {
@@ -3367,6 +3377,9 @@ impl<S: 'static> App<S> {
                     present(&mut self, &mut surfaces, idx, window, false);
                 }
             }
+            // Pausing or resuming the game loop follows the state and the
+            // window (minimized, focused).
+            self.game_schedule();
             // An input event that changed this window may have changed what
             // the others show: bring them up to date on their wake.
             if is_input && self.panes[idx].builds != builds && self.panes.len() > 1 {
