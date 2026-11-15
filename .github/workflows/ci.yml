@@ -35,7 +35,7 @@ jobs:
       - name: clippy (audio feature)
         run: cargo clippy -p stipple --all-targets --features audio -- -D warnings
       - name: test (audio feature)
-        run: cargo test -p stipple --features audio audio::
+        run: "cargo test -p stipple --features audio audio::"
       - name: audiodemo selftest (no sound card, the null output)
         run: STIPPLE_AUDIO=null cargo run -p audiodemo -- --selftest --expect-backend null
       # The runners have no sound card: load ALSA's dummy driver (a card that
