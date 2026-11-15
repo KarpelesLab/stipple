@@ -590,8 +590,9 @@ adb shell pm grant "$pkg" android.permission.POST_NOTIFICATIONS
 tap_when 'text="Notify"'
 wait_for "stipple: notification [0-9]+ posted" 20
 sleep 1
-if ! adb shell dumpsys notification --noredact | grep -A40 "pkg=$pkg" \
-  | grep -q "android.title=String (Stipple test)"; then
+# (Not just after "pkg=$pkg": with several notifications up, Android
+# groups them and the group's summary comes first.)
+if ! adb shell dumpsys notification --noredact | grep -q "android.title=String (Stipple test)"; then
   echo "the notification isn't in dumpsys notification:" >&2
   adb shell dumpsys notification --noredact | grep -A20 "pkg=$pkg" >&2 || true
   exit 1
@@ -771,6 +772,11 @@ fi
 echo "android: state restored after process death"
 fi
 
+# Quick mode skipped the permission checks above, which grant it.
+if ((sdk >= 33)); then
+  adb shell pm grant "$pkg" android.permission.POST_NOTIFICATIONS
+fi
+
 # Scheduled notifications: Later schedules one ten seconds on. The app goes
 # to the background and its process ends; the alarm starts it again for the
 # APK's Alarm receiver (classes.dex), which posts the notification. A tap on
@@ -791,8 +797,9 @@ if [ -n "$pid" ] && adb shell pidof "$pkg" >/dev/null; then
 fi
 wait_for 'stipple: scheduled notification "androiddemo-later" posted' 60
 sleep 1
-if ! adb shell dumpsys notification --noredact | grep -A40 "pkg=$pkg" \
-  | grep -q "android.title=String (Scheduled from androiddemo)"; then
+# (Not just after "pkg=$pkg": with several notifications up, Android
+# groups them and the group's summary comes first.)
+if ! adb shell dumpsys notification --noredact | grep -q "android.title=String (Scheduled from androiddemo)"; then
   echo "the scheduled notification isn't in dumpsys notification:" >&2
   adb shell dumpsys notification --noredact | grep -A20 "pkg=$pkg" >&2 || true
   exit 1
