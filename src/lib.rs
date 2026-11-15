@@ -27,6 +27,13 @@
 
 #![deny(unsafe_code)] // `platform` and `gpu` opt in where they talk to the OS
 
+// docs/getting-started.md's Rust blocks run as doctests, so the tutorial
+// can't drift from the API. docs/ isn't in the published package: only
+// doctest builds read it.
+#[cfg(doctest)]
+#[doc = include_str!("../docs/getting-started.md")]
+mod getting_started {}
+
 pub mod anim;
 mod app_clipboard;
 mod app_dnd;
@@ -2477,6 +2484,13 @@ impl<S: 'static> App<S> {
 
     /// Render a single frame off-screen and return it as a [`Pixmap`]. Needs no
     /// window — used for tests, thumbnails, and golden-image comparisons.
+    ///
+    /// It draws the window as it is at that moment: right after a change
+    /// that animates (a switch's knob, a theme's cross-fade, a dialog
+    /// growing in), that's the animation's first step. For frames that show
+    /// where things end up, turn motion off first with
+    /// [`anim::set_reduced_motion(Some(true))`](crate::anim::set_reduced_motion),
+    /// or render until [`animating`](Self::animating) is `false`.
     pub fn render_once(&mut self) -> Pixmap {
         self.render_frame().0
     }

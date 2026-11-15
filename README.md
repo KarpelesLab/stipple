@@ -46,6 +46,9 @@ fn main() {
 }
 ```
 
+New to Stipple? [Getting started](./docs/getting-started.md) builds a todo
+list step by step, from `cargo new` to testing it headless.
+
 > **Status: pre-alpha.** The architecture and phased plan live in
 > [`ROADMAP.md`](./ROADMAP.md). APIs are unstable.
 
@@ -159,6 +162,7 @@ content). See [docs/widgets.md](./docs/widgets.md) for the rest.
 cargo run -p window        # a settings panel in a native window
 cargo run -p clickdemo     # a click-counting button
 cargo run -p calculator    # a four-function calculator
+cargo run -p todo          # the getting-started todo list (--selftest: drive it headless)
 cargo run -p textinput     # an editable text field (Tab to focus, then type)
 cargo run -p textarea      # multi-line editing and selection
 cargo run -p clipboarddemo # copy / cut / paste

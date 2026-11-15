@@ -4,6 +4,9 @@ Guides for building, packaging and running Stipple apps. The [README](../README.
 covers what Stipple is; the [roadmap](../ROADMAP.md) covers where it's going; API
 docs are on [docs.rs](https://docs.rs/stipple).
 
+New here? Start with [Getting started](getting-started.md): a todo list app,
+step by step, from `cargo new` to a headless test.
+
 ## Platforms
 
 How to build, package and run on each platform, and what works there today.

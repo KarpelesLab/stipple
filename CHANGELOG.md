@@ -228,6 +228,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- *(docs)* [Getting started](docs/getting-started.md): a todo list built step
+  by step, from `cargo new` to a headless test. Its Rust blocks are doctests
+  or excerpts of the new `examples/todo` (checked by that crate's tests), and
+  CI runs `todo --selftest`, which types, ticks, deletes and saves a PNG.
 - *(core)* `Element::align_self(Align)`: a child's own cross-axis alignment
   in a stack, and its vertical alignment in a grid cell (CSS's `align-self`);
   `Element::justify_self(Align)` is its horizontal alignment in a grid cell
