@@ -13,8 +13,9 @@
 [build]
 # One cargo invocation builds every web example: `args` is `arg` once per
 # example, `{artifact}` its wasm module's name (a cdylib [[example]] in
-# Cargo.toml). `out` is where the module lands.
-command = "cargo build --release --target wasm32-unknown-unknown {args}"
+# Cargo.toml). `out` is where the module lands. `--features gpu` builds the
+# WebGPU / WebGL2 renderer in, for `?renderer=gpu` (docs/gpu.md).
+command = "cargo build --release --target wasm32-unknown-unknown --features gpu {args}"
 arg = "--example {artifact}"
 out = "target/wasm32-unknown-unknown/release/examples/{artifact}.wasm"
 

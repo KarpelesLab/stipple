@@ -2803,7 +2803,7 @@ jobs:
       - name: Assemble the web bundle
         run: |
           mkdir -p site visual_output
-          cp examples/webdemo/index.html examples/webdemo/multi.html web/stipple.js site/
+          cp examples/webdemo/index.html examples/webdemo/multi.html web/stipple.js web/gpu.js site/
           cp target/wasm32-unknown-unknown/release/examples/webdemo.wasm site/
           cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf site/font.ttf
           ls -l site/
@@ -2987,6 +2987,72 @@ jobs:
         with:
           name: stipple-webgpu-screenshot
           path: visual_output/*.png
+          if-no-files-found: warn
+
+  # The web GPU renderer (web/gpu.js) against the software one: build the
+  # comparison harness (examples/webdemo/gpucompare.rs) and the web demo with
+  # the `gpu` feature, and open examples/webdemo/gpucompare.html in headless
+  # Chrome on SwiftShader. It draws the comparison corpus on WebGPU and on
+  # WebGL2 and diffs each frame with the software renderer's (the tolerances
+  # the Metal and GLES2 runs use), loses and recovers each device, times both
+  # renderers, and runs the web demo with `renderer: "gpu"` through two lost
+  # devices (back on the GPU after the first, on the CPU after the second).
+  # WebGPU on SwiftShader is flaky to bring up headlessly, so it may be
+  # missing (said in the report) and the job doesn't block the run.
+  visual-web-gpu:
+    name: Visual test (Web GPU renderer / Chrome)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the harness and the web demo with the GPU renderer
+        run: cargo build --release --target wasm32-unknown-unknown --features gpu --example gpucompare --example webdemo
+
+      - name: Install a font
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
+      - name: Compare in headless Chrome
+        run: |
+          mkdir -p site visual_output
+          cp examples/webdemo/gpucompare.html web/stipple.js web/gpu.js site/
+          cp target/wasm32-unknown-unknown/release/examples/gpucompare.wasm site/
+          cp target/wasm32-unknown-unknown/release/examples/webdemo.wasm site/
+          cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf site/font.ttf
+          python3 -m http.server 8000 --directory site > server.log 2>&1 &
+          echo "SRV_PID=$!" >> "$GITHUB_ENV"
+          sleep 2
+          timeout 300 google-chrome --headless=new --no-sandbox \
+            --enable-unsafe-webgpu --enable-features=Vulkan \
+            --use-angle=swiftshader --use-vulkan=swiftshader --enable-unsafe-swiftshader \
+            --window-size=1200,900 --remote-debugging-port=9230 \
+            "http://localhost:8000/gpucompare.html?app=webdemo.wasm&optional=webgpu&runs=5" \
+            > chrome.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 240); do
+            grep -q "GET /gpucompare-report?" server.log && break
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          line=$(grep -o "GET /gpucompare-report?[^ ]*" server.log | head -1)
+          python3 -c 'import sys, urllib.parse; print(urllib.parse.unquote(sys.argv[1].partition("?")[2]))' \
+            "$line" | tee visual_output/web-gpucompare.txt
+          grep -q "GPUCOMPARE ok" visual_output/web-gpucompare.txt || { tail -30 chrome.log; exit 1; }
+
+      - name: Stop server
+        if: always()
+        run: '[ -n "$SRV_PID" ] && kill "$SRV_PID" 2>/dev/null || true'
+
+      - name: Upload the report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-web-gpucompare
+          path: visual_output/web-gpucompare.txt
           if-no-files-found: warn
 
   # Route a Stipple frame through the GPU (stipple::gpu: EGL + GLES2) on Mesa's

@@ -5,6 +5,12 @@
     python3 tools/site/check.py target/site --links    # links only
     python3 tools/site/check.py target/site --only todo,calculator
 
+A few examples (--gpu, default GPU_EXAMPLES) run a second time with
+`?renderer=gpu` (WebGPU, else WebGL2; SwiftShader here), reported as
+NAME@gpu: they must start and draw as well, and say what drew them (a
+browser with neither API draws them on the CPU, which is a warning, not a
+failure).
+
 Links: every relative href/src in the site's pages must name a file in the
 site, and a #fragment an id in it.
 
@@ -84,13 +90,13 @@ async function one(ex) {
   const f = document.createElement("iframe");
   f.style.width = ex.size[0] + "px";
   f.style.height = ex.size[1] + "px";
-  f.src = `examples/${ex.name}.html?embed&check`;
+  f.src = `examples/${ex.name}.html?embed&check${ex.query ?? ""}`;
   document.body.append(f);
   // The page reports to the server; the server tells us when it has.
   const t0 = performance.now();
   while (performance.now() - t0 < 30000) {
     await new Promise((r) => setTimeout(r, 300));
-    const r = await fetch(`/__done?${ex.name}`);
+    const r = await fetch(`/__done?${ex.key ?? ex.name}`);
     if ((await r.text()) === "1") break;
   }
   f.remove();
@@ -118,9 +124,19 @@ def find_chrome(explicit):
     return None
 
 
-def check_examples(site, chrome, only, thumbs, timeout):
+# The examples run again on the GPU renderer: a widget gallery, themes, a
+# game's sprites, rich text, a canvas and an image viewer.
+GPU_EXAMPLES = "widgetsdemo,themegallery,spritedemo,richtext,canvasdemo,imagedemo"
+
+
+def check_examples(site, chrome, only, thumbs, timeout, gpu=()):
     meta = json.loads((site / "site.json").read_text())
     examples = [e for e in meta["web"] if not only or e["name"] in only]
+    examples += [
+        {**e, "query": "&renderer=gpu", "key": f"{e['name']}@gpu"}
+        for e in meta["web"]
+        if e["name"] in gpu and (not only or e["name"] in only)
+    ]
     reports = {}
     finished = threading.Event()
     page = CHECK_PAGE % json.dumps(examples)
@@ -174,6 +190,10 @@ def check_examples(site, chrome, only, thumbs, timeout):
         "--mute-audio",
         "--force-device-scale-factor=1",
         "--window-size=2000,1400",
+        # WebGPU and WebGL2 on SwiftShader, for the ?renderer=gpu runs.
+        "--enable-unsafe-webgpu",
+        "--use-angle=swiftshader",
+        "--enable-unsafe-swiftshader",
         f"--user-data-dir={profile}",
         "--remote-debugging-port=0",
         f"http://127.0.0.1:{port}/__check.html",
@@ -191,7 +211,7 @@ def check_examples(site, chrome, only, thumbs, timeout):
     if thumbs:
         (site / "thumbs").mkdir(exist_ok=True)
     for ex in examples:
-        name = ex["name"]
+        name = ex.get("key", ex["name"])
         r = reports.get(name)
         if r is None:
             failed.append(name)
@@ -200,12 +220,16 @@ def check_examples(site, chrome, only, thumbs, timeout):
         errors = [e for e in r["errors"] if e]
         ok = r["started"] and r["presents"] > 0 and r["colors"] > 2 and not any("panicked" in e for e in errors)
         line = f"{'ok  ' if ok else 'FAIL'} {name}: {r['presents']} frames, {r['colors']} colors"
+        if "key" in ex:
+            line += f", drawn by {r.get('renderer')}"
+            if r.get("renderer") in (None, "software"):
+                line += " (warning: no GPU renderer in this browser)"
         if errors:
             line += " | " + " | ".join(e[:300] for e in errors[:3])
         print(line)
         if not ok:
             failed.append(name)
-        if thumbs and r.get("png", "").startswith("data:image/png;base64,") and ok:
+        if thumbs and "key" not in ex and r.get("png", "").startswith("data:image/png;base64,") and ok:
             (site / "thumbs" / f"{name}.png").write_bytes(base64.b64decode(r["png"].split(",", 1)[1]))
     return failed
 
@@ -218,6 +242,8 @@ def main():
     ap.add_argument("--only", help="comma-separated examples to run")
     ap.add_argument("--no-thumbs", action="store_true", help="don't write thumbs/")
     ap.add_argument("--timeout", type=int, default=600)
+    ap.add_argument("--gpu", default=GPU_EXAMPLES,
+                    help="comma-separated examples to run again with ?renderer=gpu ('' for none)")
     a = ap.parse_args()
     ok = True
     if not a.links:
@@ -226,7 +252,8 @@ def main():
             print("no Chrome found (--chrome, or $CHROME)")
             sys.exit(2)
         only = set(a.only.split(",")) if a.only else None
-        failed = check_examples(a.site, chrome, only, not a.no_thumbs, a.timeout)
+        gpu = set(filter(None, a.gpu.split(",")))
+        failed = check_examples(a.site, chrome, only, not a.no_thumbs, a.timeout, gpu)
         print(f"examples: {len(failed)} failed" + (f" ({', '.join(failed)})" if failed else ""))
         ok = not failed
     # After the examples, which write the thumbnails the gallery shows. A

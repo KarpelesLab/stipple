@@ -173,6 +173,14 @@ path = "examples/webdemo/lib.rs"
 crate-type = ["cdylib"]
 test = true
 
+# The web GPU renderer against the software one: a wasm module that
+# examples/webdemo/gpucompare.html loads (CI runs it in headless Chrome).
+[[example]]
+name = "gpucompare"
+path = "examples/webdemo/gpucompare.rs"
+crate-type = ["cdylib"]
+required-features = ["gpu"]
+
 # Lampwick (examples/gamedemo) in the browser: lampwick.wasm, for game.html.
 # `gamedemo` is the native program, which includes lib.rs as a module.
 [[example]]

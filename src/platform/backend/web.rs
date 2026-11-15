@@ -56,6 +56,10 @@
 //! | `camera_close(id)` | stops the stream's tracks |
 //! | `camera_torch(id, on)`, `camera_zoom(id, factor)`, `camera_focus(id, x, y)` | `applyConstraints` with `torch`, `zoom`, `pointsOfInterest` |
 //!
+//! With the `gpu` feature the module also imports `gpu_init`, `gpu_texture`,
+//! `gpu_free`, `gpu_frame` and `gpu_release`, which `web/gpu.js` provides (see
+//! `src/gpu/web.rs`): the window's GPU layer is the canvas itself.
+//!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
 //! deadline; `stipple_wake` then delivers [`Event::Wake`]. The frame clock's
@@ -348,6 +352,18 @@ impl Window for WebWindow {
         Box::new(WebSurface {
             size: self.inner_size(),
         })
+    }
+
+    /// The canvas itself: `web/gpu.js` takes it for its WebGPU or WebGL2
+    /// context (handing it back to the 2D context on a CPU frame after
+    /// [`drop_gpu_layer`](Window::drop_gpu_layer)).
+    fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        cfg!(feature = "gpu").then_some(crate::platform::GpuLayer::Web)
+    }
+
+    fn drop_gpu_layer(&self) {
+        #[cfg(feature = "gpu")]
+        crate::gpu::web::release();
     }
 
     fn clipboard(&self) -> Option<String> {
@@ -893,6 +909,22 @@ pub fn locale(blob: String) {
     let changed = crate::platform::locale::set_web(&blob);
     if changed && HOST.with(|h| h.handler.borrow().is_some()) {
         deliver(Event::LocaleChanged);
+    }
+}
+
+/// The page's `renderer` option (`auto`, `software`, `gpu`, `webgpu`,
+/// `webgl2`), which overrides the app's [`App::renderer`](crate::App::renderer)
+/// as `STIPPLE_RENDERER` does natively. Called before [`start`].
+#[doc(hidden)]
+pub fn renderer(value: String) {
+    crate::app_gpu::set_page_renderer(&value);
+}
+
+/// The page wants a whole new frame (its GPU just came up).
+#[doc(hidden)]
+pub fn redraw() {
+    if HOST.with(|h| h.handler.borrow().is_some() || h.busy.get()) {
+        deliver(Event::RedrawRequested);
     }
 }
 

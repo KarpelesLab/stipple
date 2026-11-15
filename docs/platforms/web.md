@@ -103,7 +103,7 @@ Serve these files from one directory:
 
 - `examples/webdemo/index.html`, the page (and `multi.html`, two copies of
   the app side by side);
-- `web/stipple.js`;
+- `web/stipple.js` and `web/gpu.js` (which `stipple.js` imports);
 - `target/wasm32-unknown-unknown/release/examples/webdemo.wasm`;
 - `font.ttf`, the font the page loads. Without it, text doesn't render.
 
@@ -152,7 +152,7 @@ once with a light color scheme.
 
 | | How |
 |---|---|
-| Rendering | `putImageData` of the frame, limited to the damaged rects |
+| Rendering | `putImageData` of the frame, limited to the damaged rects; or on the GPU, WebGPU or WebGL2 straight into the canvas (below) |
 | High-DPI | `devicePixelRatio` is the scale factor; the canvas's backing store is its CSS size times the ratio. A `ResizeObserver` and a `resolution` media query follow size and ratio changes (`Event::Resized`, `Event::ScaleFactorChanged`) |
 | Pointer | pointer events, captured while a button is down; right-click opens context menus instead of the browser's |
 | Touch | touch events (each of `changedTouches`, by `identifier`) go through the app's gestures as on iOS and Android: touch scrolling and flings on both axes, a long press for the context menu, pinches; the first finger is also the pointer. The canvas has `touch-action: none` and no long-press callout, so the browser neither scrolls nor zooms the page under it. See [pointer-events.md](../pointer-events.md#touch-gestures) |
@@ -341,6 +341,44 @@ What should outlive the tab (settings, saved games) goes in `localStorage`
 through `stipple::game::save::SaveStore` (`SaveStore::app_data()` or
 `local_storage(prefix)`); see [games.md](../games.md#saving).
 
+### Rendering on the GPU
+
+A module built with the `gpu` feature (`--features stipple/gpu`; the site
+builds its examples with it) can draw its frames on the GPU instead of the
+CPU: [WebGPU](https://www.w3.org/TR/webgpu/) through the canvas's `"webgpu"`
+context, or WebGL2 where the browser has no WebGPU, presenting straight into
+the canvas with no read-back. The scene is lowered in the module as on every
+GPU platform (`src/gpu/ops.rs`) and handed to `web/gpu.js` as a compact op
+buffer each frame (boxes, path fills with their triangles, images by texture
+id, clips, layers); images and glyph rasters are uploaded once and kept by
+identity. `gpu.js` draws it with WGSL shaders on WebGPU and GLSL ES 3.0 on
+WebGL2, the same four the Metal executor uses. See [gpu.md](../gpu.md#the-web).
+
+What draws is the app's `App::renderer`, which the page can override as
+`STIPPLE_RENDERER` does natively, with `start`'s `renderer` option or the
+page's `?renderer=` query parameter:
+
+| `renderer` | Draws with |
+|---|---|
+| `auto` (the default) | the app's choice; `Renderer::Auto` is the CPU for now |
+| `software` | the CPU, `putImageData` |
+| `gpu` | WebGPU, else WebGL2, else the CPU |
+| `webgpu`, `webgl2` | that API, else the CPU |
+
+```js
+const app = await start(canvas, "app.wasm", { font: "font.ttf", renderer: "gpu" });
+console.log(app.renderer); // "webgpu", "webgl2" or "software", once it has drawn
+```
+
+The GPU comes up asynchronously: the app's first frame waits for it (a few
+milliseconds), then is drawn whole. A lost device (or context) is set up
+again once; when that fails, or the device is lost a second time, the app
+draws on the CPU from then on. A canvas keeps the first kind of context it
+hands out, so `stipple.js` then swaps in a fresh canvas element (the same
+attributes, style and listeners) for the 2D context; `app.canvas` is always
+the current one. A GPU canvas can't be read back after the frame is shown:
+`app.snapshot()` gives a 2D copy of the last frame.
+
 ## How it fits together
 
 `App::run` on the web keeps the event handler and returns; from then on the
@@ -371,6 +409,8 @@ The module exports:
 | `stipple_asset(id, path…, data…, status)` | a packaged file fetched for `fetch_asset` request `id` (0: a preload, before `stipple_start`), with its HTTP status (0: the fetch failed) |
 | `stipple_restore_state(ptr, len)` | the state saved in `sessionStorage`, before `stipple_start` |
 | `stipple_save_state()` | `pagehide` and `visibilitychange` to hidden: the app saves its state, through the `save_state` import |
+| `stipple_renderer(ptr, len)` | the page's `renderer` option, before `stipple_start` |
+| `stipple_redraw()` | the GPU came up: draw a whole frame |
 
 It imports, from the module `"stipple"`: `now`, `present`, `schedule`,
 `request_frame`, `set_cursor`, `pointer_lock` (`requestPointerLock`, which
@@ -385,7 +425,11 @@ keyboard attributes), `save_state` (the bytes to keep in
 under the `assets` URL, answered through `stipple_asset`), and for `stipple::game::save`'s
 `SaveStore::local_storage`: `date_now`, `storage_set`, `storage_get`,
 `storage_keys`, `storage_read` and `storage_remove` (`localStorage`, values
-kept base64). See `src/platform/backend/web.rs`.
+kept base64). See `src/platform/backend/web.rs`. With the `gpu` feature, from
+`gpu.js`: `gpu_init(want)` (set up WebGPU and/or WebGL2; "pending" until it
+has), `gpu_texture(id, ptr, w, h)` and `gpu_free(id)` (image textures),
+`gpu_frame(ptr, words)` (draw the op buffer: shown, lost, pending or failed)
+and `gpu_release()` (the app draws on the CPU again); see `src/gpu/web.rs`.
 
 `std::time::Instant::now` panics on `wasm32-unknown-unknown`, so Stipple's
 timers and frame clock use `stipple::platform::time::Instant`, which is std's

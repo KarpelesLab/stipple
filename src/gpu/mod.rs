@@ -24,13 +24,14 @@
 use crate::geometry::{PhysicalSize, Rect, ScaleFactor};
 use crate::render::{Color, Font, Pixmap, Scene};
 
-// The scene lowering is backend-neutral; GLES2, Metal and Direct3D 11
-// execute it.
+// The scene lowering is backend-neutral; GLES2, Metal, Direct3D 11 and the
+// web execute it.
 #[cfg_attr(
     not(any(
         all(target_os = "linux", feature = "gl"),
         all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
-        all(target_os = "windows", feature = "d3d")
+        all(target_os = "windows", feature = "d3d"),
+        all(target_arch = "wasm32", feature = "gpu")
     )),
     allow(dead_code)
 )]
@@ -41,11 +42,28 @@ pub(crate) mod ops;
     not(any(
         all(target_os = "linux", feature = "gl"),
         all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
-        all(target_os = "windows", feature = "d3d")
+        all(target_os = "windows", feature = "d3d"),
+        all(target_arch = "wasm32", feature = "gpu")
     )),
     allow(dead_code)
 )]
 pub(crate) mod renderer;
+
+// The web: the frame goes to `web/gpu.js` as an op buffer. Built off the web
+// too for its tests, with stand-ins for the page's functions.
+#[cfg(any(all(target_arch = "wasm32", feature = "gpu"), test))]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) mod web;
+
+// The comparison corpus: the scenes `compare` draws both ways, which the
+// web's comparison page (`examples/webdemo/gpucompare.html`) draws too.
+#[cfg(any(all(target_arch = "wasm32", feature = "gpu"), test))]
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) mod corpus;
+
+#[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+#[doc(hidden)]
+pub mod web_compare;
 
 #[cfg(all(any(target_os = "macos", target_os = "ios"), feature = "mtl"))]
 mod metal_scene;

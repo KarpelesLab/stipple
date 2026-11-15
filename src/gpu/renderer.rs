@@ -22,6 +22,10 @@ pub(crate) enum Api {
     Gl,
     /// Direct3D 11 (Windows), feature `d3d`.
     D3d11,
+    /// WebGPU, through `web/gpu.js` (the web, feature `gpu`).
+    WebGpu,
+    /// WebGL2, through `web/gpu.js` (the web, feature `gpu`).
+    WebGl2,
 }
 
 impl Api {
@@ -30,10 +34,13 @@ impl Api {
             Api::Metal => "Metal",
             Api::Gl => "OpenGL ES",
             Api::D3d11 => "Direct3D 11",
+            Api::WebGpu => "WebGPU",
+            Api::WebGl2 => "WebGL2",
         }
     }
 
-    /// This platform's GPU API, when it was built in.
+    /// This platform's GPU API, when it was built in. On the web that is
+    /// WebGPU, and WebGL2 where the browser has no WebGPU (the page decides).
     pub(crate) fn native() -> Option<Api> {
         if cfg!(all(
             any(target_os = "macos", target_os = "ios"),
@@ -44,6 +51,8 @@ impl Api {
             Some(Api::Gl)
         } else if cfg!(all(target_os = "windows", feature = "d3d")) {
             Some(Api::D3d11)
+        } else if cfg!(all(target_arch = "wasm32", feature = "gpu")) {
+            Some(Api::WebGpu)
         } else {
             None
         }
@@ -69,6 +78,10 @@ pub(crate) enum GpuError {
         allow(dead_code)
     )]
     Skipped,
+    /// The GPU isn't ready yet (a browser sets it up asynchronously): show
+    /// nothing, and wait for the platform to ask for the next frame.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Pending,
 }
 
 impl std::fmt::Display for GpuError {
@@ -77,6 +90,7 @@ impl std::fmt::Display for GpuError {
             GpuError::Unavailable(e) => write!(f, "unavailable: {e}"),
             GpuError::Lost(e) => write!(f, "device lost: {e}"),
             GpuError::Skipped => f.write_str("no drawable this frame"),
+            GpuError::Pending => f.write_str("still being set up"),
         }
     }
 }
@@ -140,9 +154,13 @@ impl std::fmt::Debug for GpuRenderer {
 impl GpuRenderer {
     /// A renderer on `api`, or on this platform's own API for `None`.
     pub(crate) fn new(api: Option<Api>) -> Result<Self, GpuError> {
+        // On the web the page picks WebGPU or WebGL2 for `None`.
+        #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+        return super::web::WebExecutor::new(api).map(|e| Self::with_executor(Box::new(e)));
+        #[allow(unreachable_code)]
         let api = api.or_else(Api::native).ok_or_else(|| {
             GpuError::Unavailable(
-                "built without a GPU backend for this platform (features `mtl`, `gl`, `d3d`)"
+                "built without a GPU backend for this platform (features `mtl`, `gl`, `d3d`, or `gpu` on the web)"
                     .into(),
             )
         })?;

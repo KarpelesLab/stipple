@@ -445,7 +445,8 @@ class Site:
             self.copy(f, f"assets/{f.name}")
         for a in sorted(self.assets):
             self.copy(ROOT / a, a)
-        self.copy(ROOT / "web/stipple.js", "stipple.js")
+        for f in ("stipple.js", "gpu.js"):
+            self.copy(ROOT / "web" / f, f)
         if self.font:
             self.copy(self.font, "font.ttf")
         else:

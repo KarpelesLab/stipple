@@ -1,0 +1,247 @@
+<!doctype html>
+<!--
+  The web GPU renderer against the software one. gpucompare.wasm (the cdylib
+  example `gpucompare`, built with `--features gpu`) holds the comparison
+  corpus the Metal and GLES2 executors are checked with (src/gpu/corpus.rs);
+  this page draws each scene on WebGPU and on WebGL2 through gpu.js into a
+  canvas, diffs the frame with the software renderer's, and times both
+  renderers. With ?app=webdemo.wasm it also runs an app with
+  `renderer: "gpu"`, loses the device twice, and checks the app comes back on
+  the GPU after the first loss and carries on on the CPU after the second.
+
+  Serve it next to gpu.js, stipple.js, gpucompare.wasm and font.ttf.
+  Parameters: api=webgpu,webgl2 (which to check), optional=webgpu (an API
+  that may be missing without failing), app=URL, bench=0 (no timing),
+  runs=N (timed frames). It reports SUMMARY lines in the page, on
+  the console, and as a GET of gpucompare-report?<report> (CI reads the
+  server's log), and sets the title to "GPUCOMPARE ok" or "GPUCOMPARE FAIL".
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>stipple gpu compare</title>
+    <style>
+      body { margin: 8px; font: 13px/1.4 system-ui, sans-serif; background: #fff; color: #111; }
+      pre { white-space: pre-wrap; }
+      .row { display: flex; gap: 8px; align-items: flex-start; margin: 4px 0; }
+      .row canvas { border: 1px solid #ccc; max-width: 320px; }
+      .fail { color: #b00; font-weight: bold; }
+      #app { width: 400px; height: 260px; display: block; }
+    </style>
+  </head>
+  <body>
+    <pre id="log"></pre>
+    <div id="rows"></div>
+    <canvas id="app"></canvas>
+    <script type="module">
+      import { gpuHost } from "./gpu.js";
+      import { start } from "./stipple.js";
+
+      const params = new URLSearchParams(location.search);
+      const apis = (params.get("api") ?? "webgpu,webgl2").split(",").filter(Boolean);
+      const runs = Number(params.get("runs") ?? 20);
+      // APIs that may be missing without failing (WebGPU on a CI runner).
+      const optional = (params.get("optional") ?? "").split(",");
+      const out = document.getElementById("log");
+      const rows = document.getElementById("rows");
+      const report = [];
+      let failed = false;
+      const say = (line, bad = false) => {
+        report.push(line);
+        console.log(line);
+        const span = document.createElement("span");
+        span.textContent = line + "\n";
+        if (bad) span.className = "fail";
+        out.append(span);
+      };
+      const fail = (line) => { failed = true; say(`FAIL ${line}`, true); };
+
+      async function compile(url) {
+        try { return await WebAssembly.compileStreaming(fetch(url)); }
+        catch (_) { return WebAssembly.compile(await (await fetch(url)).arrayBuffer()); }
+      }
+      const fontBytes = await fetch(params.get("font") ?? "font.ttf")
+        .then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null);
+      if (!fontBytes) say("no font.ttf: the text cases are left out");
+      const module = await compile(params.get("wasm") ?? "gpucompare.wasm");
+
+      // Mean absolute channel difference and the share of pixels off by more
+      // than 64 in a channel (as src/gpu/compare.rs measures).
+      const diff = (a, b) => {
+        let sum = 0, bad = 0;
+        for (let i = 0; i < a.length; i += 4) {
+          let worst = 0;
+          for (let c = 0; c < 4; c++) {
+            const d = Math.abs(a[i + c] - b[i + c]);
+            sum += d;
+            if (d > worst) worst = d;
+          }
+          if (worst > 64) bad++;
+        }
+        return { mean: sum / a.length, bad: bad / (a.length / 4) };
+      };
+      const picture = (data, w, h) => {
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        c.getContext("2d").putImageData(new ImageData(data, w, h), 0, 0);
+        return c;
+      };
+
+      for (const api of apis) {
+        const code = { webgpu: 1, webgl2: 2 }[api];
+        const canvas = document.createElement("canvas");
+        canvas.style.display = "none";
+        document.body.append(canvas);
+        let e = null;
+        const dec = new TextDecoder();
+        const text = (ptr, len) => dec.decode(new Uint8Array(e.memory.buffer, ptr, len));
+        const host = gpuHost({
+          memory: () => e.memory,
+          claim: () => canvas,
+          current: () => canvas,
+          redraw: () => {},
+          log: (m) => say(`${api}: ${m}`),
+        });
+        const own = {
+          ...host.imports,
+          now: () => performance.now(),
+          date_now: () => Date.now(),
+          log: (level, ptr, len) => say(`${api}: ${text(ptr, len)}`, level !== 0),
+        };
+        // Whatever else the module imports from "stipple" does nothing here.
+        const imports = { stipple: new Proxy(own, { get: (t, k) => t[k] ?? (() => 0) }) };
+        e = (await WebAssembly.instantiate(module, imports)).exports;
+        const got = await host.init(code);
+        if (got !== api) {
+          const line = `${api}: not available in this browser (got ${got ?? "nothing"})`;
+          if (optional.includes(api)) say(`SKIP ${line}`); else fail(line);
+          continue;
+        }
+        let count = 0;
+        if (fontBytes) {
+          const bytes = new Uint8Array(fontBytes);
+          const p = e.cmp_alloc(bytes.length);
+          new Uint8Array(e.memory.buffer, p, bytes.length).set(bytes);
+          count = e.cmp_load(p, bytes.length);
+        } else {
+          count = e.cmp_load(0, 0);
+        }
+        const answer = () => text(e.cmp_text(), e.cmp_text_len());
+        const snap = document.createElement("canvas");
+        const sctx = snap.getContext("2d", { willReadFrequently: true });
+        let worst = 0;
+        for (let i = 0; i < count; i++) {
+          const [name, mean, bad] = (e.cmp_case(i), answer()).split("\t");
+          const ptr = e.cmp_cpu(i, 0);
+          const w = e.cmp_width(), h = e.cmp_height();
+          const cpu = new Uint8ClampedArray(e.memory.buffer, ptr, w * h * 4).slice();
+          if (!e.cmp_gpu(i, 0, code)) {
+            fail(`${api} ${name}: ${answer()}`);
+            continue;
+          }
+          // In the same task as the frame: the GPU canvas still holds it.
+          snap.width = w;
+          snap.height = h;
+          sctx.drawImage(canvas, 0, 0);
+          const gpu = sctx.getImageData(0, 0, w, h).data;
+          const d = diff(gpu, cpu);
+          worst = Math.max(worst, d.mean);
+          const ok = d.mean < Number(mean) && d.bad < Number(bad);
+          const line = `${api} ${name}: mean ${d.mean.toFixed(3)} (< ${mean}), bad ${(d.bad * 100).toFixed(3)}% (< ${(bad * 100).toFixed(1)}%)`;
+          if (ok) say(`ok   ${line}`); else fail(line);
+          const row = document.createElement("div");
+          row.className = "row";
+          const label = document.createElement("span");
+          label.textContent = `${api} ${name}`;
+          row.append(label, picture(gpu, w, h), picture(cpu, w, h));
+          rows.append(row);
+        }
+        say(`SUMMARY ${api}: ${count} cases, worst mean ${worst.toFixed(3)}`);
+
+        // Losing the device: the next frame says so, and a new renderer
+        // comes up on a new device.
+        host.lose();
+        await new Promise((r) => setTimeout(r, 200));
+        const lost = e.cmp_gpu(0, 0, code) ? "drawn" : answer();
+        if (!/lost/.test(lost)) fail(`${api}: after losing the device the frame was ${lost}`);
+        e.cmp_gpu(0, 0, code); // sets up again: pending
+        const again = await host.init(code);
+        if (again !== api || !e.cmp_gpu(0, 0, code)) fail(`${api}: no renderer after a lost device (${answer()})`);
+        else say(`ok   ${api}: a lost device is set up again`);
+
+        if (params.get("bench") !== "0") {
+          for (let j = 0; j < e.cmp_bench_count(); j++) {
+            // The CPU: rasterize, and put the frame in a 2D canvas.
+            const bench = document.createElement("canvas");
+            const bctx = bench.getContext("2d");
+            const time = async (f) => {
+              await f();
+              const t0 = performance.now();
+              for (let k = 0; k < runs; k++) await f();
+              return (performance.now() - t0) / runs;
+            };
+            const cpu = await time(() => {
+              const ptr = e.cmp_cpu(j, 1);
+              const w = e.cmp_width(), h = e.cmp_height();
+              if (bench.width !== w) { bench.width = w; bench.height = h; }
+              bctx.putImageData(new ImageData(new Uint8ClampedArray(e.memory.buffer, ptr, w * h * 4), w, h), 0, 0);
+            });
+            // The GPU: lower, draw, and wait for the GPU to finish.
+            const gpu = await time(async () => {
+              e.cmp_gpu(j, 1, code);
+              await host.finish();
+            });
+            const name = ["widgets 2560x1600", "sprites 1920x1080"][2 - e.cmp_bench_count() + j] ?? `scene ${j}`;
+            say(`TIME ${api} ${name}: software ${cpu.toFixed(2)} ms, ${api} ${gpu.toFixed(2)} ms per frame`);
+          }
+        }
+        canvas.remove();
+      }
+
+      // An app on the GPU losing its device twice.
+      const appUrl = params.get("app");
+      if (appUrl) {
+        const app = await start(document.getElementById("app"), appUrl, {
+          font: "font.ttf", renderer: "gpu", title: false, stateKey: false,
+        });
+        const until = async (what, cond, ms = 8000) => {
+          const t0 = performance.now();
+          while (!cond()) {
+            if (performance.now() - t0 > ms) { fail(`app: timed out waiting for ${what}`); return false; }
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          return true;
+        };
+        const nudge = () => app.exports.stipple_redraw?.();
+        if (await until("a GPU frame", () => app.stats.gpuFrames > 0)) {
+          const first = app.renderer;
+          say(`ok   app: drawing with ${first}`);
+          app.gpu.lose();
+          await new Promise((r) => setTimeout(r, 200));
+          nudge(); // the lost frame: the CPU draws it
+          const frames = app.stats.gpuFrames;
+          await until("the GPU back", () => { nudge(); return app.stats.gpuFrames > frames; });
+          say(`${app.renderer === first ? "ok  " : "FAIL"} app: back on ${app.renderer} after one loss`);
+          if (app.renderer !== first) failed = true;
+          app.gpu.lose();
+          await new Promise((r) => setTimeout(r, 200));
+          nudge();
+          const presents = app.stats.presents;
+          await until("CPU frames", () => { nudge(); return app.renderer === "software" && app.stats.presents > presents; });
+          const shot = app.snapshot();
+          const px = shot?.getContext("2d").getImageData(0, 0, shot.width, shot.height).data;
+          const colors = new Set();
+          for (let i = 0; px && i < px.length; i += 400) colors.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
+          if (app.renderer === "software" && colors.size > 2) say(`ok   app: on the CPU after a second loss (${colors.size} colors)`);
+          else fail(`app: after a second loss it draws with ${app.renderer}, ${colors.size} colors`);
+        }
+      }
+
+      const verdict = failed ? "GPUCOMPARE FAIL" : "GPUCOMPARE ok";
+      say(verdict, failed);
+      document.title = verdict;
+      fetch(`gpucompare-report?${encodeURIComponent(report.join("\n"))}`).catch(() => {});
+    </script>
+  </body>
+</html>

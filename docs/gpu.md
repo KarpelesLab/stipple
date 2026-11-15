@@ -10,7 +10,7 @@ features, each linking the OS's own driver through hand-written FFI:
 | `gl` | OpenGL ES 2 over surfaceless EGL (Linux) | Renders whole scenes, read back and presented as a bitmap; `dma-buf` export and import |
 | `vk` | Vulkan (Linux) | Device setup, a clear and a shader-drawn triangle, read back |
 | `d3d` | Direct3D 11 (Windows) | Renders whole scenes and presents them straight to the window through a flip-model DXGI swap chain; shared-handle export |
-| (web) | WebGPU in `web/` | A WGSL triangle in the browser |
+| `gpu` on the web | WebGPU, else WebGL2, through `web/gpu.js` | Renders whole scenes straight into the page's canvas |
 
 ## Choosing the renderer
 
@@ -24,17 +24,19 @@ let app = app.renderer(Renderer::Gpu);
 - `Renderer::Gpu` draws with the platform's GPU API: Metal on macOS and iOS
   (build with `--features stipple/mtl`), OpenGL ES 2 on Linux
   (`--features stipple/gl`), Direct3D 11 on Windows (`--features
-  stipple/d3d`). On macOS and iOS the frame goes straight into a
+  stipple/d3d`), WebGPU or WebGL2 in a browser (`--features stipple/gpu`;
+  see [the web](#the-web)). On macOS and iOS the frame goes straight into a
   `CAMetalLayer` over the window's view, on Windows into a DXGI swap chain
-  on the window; on Linux it is read back and presented as a bitmap, until
-  6c presents GL and Vulkan frames directly.
+  on the window, on the web into the canvas; on Linux it is read back and
+  presented as a bitmap, until 6c presents GL and Vulkan frames directly.
 - `Renderer::Auto`, the default, is the CPU for now. The GPU becomes the
   default platform by platform once it has been shown to match the CPU there
   and to be faster (Phase 6h).
 
 The environment variable `STIPPLE_RENDERER` overrides the app's choice, for
 trying an app either way without rebuilding it: `software` (or `cpu`), `gpu`,
-`metal`, `gl`, `d3d11` (or `d3d`), or `auto`. With it set, Stipple says on stderr what it draws
+`metal`, `gl`, `d3d11` (or `d3d`), `webgpu`, `webgl2`, or `auto`. On the web
+the page's `renderer` option (or `?renderer=` in its URL) does the same. With it set, Stipple says on stderr what it draws
 with (`stipple: drawing with Metal`).
 
 ```sh
@@ -133,7 +135,8 @@ targets and both caches are kept from frame to frame.
 
 The lowering (`src/gpu/ops.rs`) is shared; each GPU API is an executor of its
 operation list (`src/gpu/renderer.rs`): GLES2 in `src/gpu/gl/scene.rs`, Metal
-in `src/gpu/metal_scene.rs`, Direct3D 11 in `src/gpu/d3d/scene.rs`.
+in `src/gpu/metal_scene.rs`, Direct3D 11 in `src/gpu/d3d/scene.rs`, WebGPU
+and WebGL2 in `web/gpu.js` (fed by `src/gpu/web.rs`).
 
 ## Metal
 
@@ -214,6 +217,93 @@ failed `Map`, `GetDeviceRemovedReason`), or any call that fails mid-frame, is
 a lost device: that frame is drawn on the CPU and the renderer is set up
 again, once, as on Metal.
 
+## The web
+
+In a browser the module can't reach a GPU API itself, so the lowered frame
+crosses into the page: `src/gpu/web.rs` encodes it as a compact buffer of
+32-bit words (the format is at the top of that file) and `web/gpu.js` draws
+it. Everything geometric is done in Rust, once: each draw carries its
+vertices in device pixels (path fills as fan triangles, image quads already
+through their transform, boxes padded for their antialiased edge). Images
+and glyph rasters are textures the page keeps by id, uploaded the first time
+an image is drawn and freed when it's dropped or unused for 120 frames,
+exactly as the other executors cache theirs.
+
+`gpu.js` first *records* the frame (the clip, layer and path logic, shared by
+both APIs) into a list of render-target switches and draws, one array of
+vertices and one of uniforms, then *replays* it with one upload of each:
+
+- **WebGPU** through `canvas.getContext("webgpu")` in the browser's preferred
+  format, premultiplied: the Metal executor's four shaders in WGSL, a
+  `stencil8` texture beside each target, stencil-and-cover paths at 4×4 in an
+  `r8unorm` scratch target, layers in offscreen targets, uniforms at dynamic
+  offsets in one buffer.
+- **WebGL2** where there's no WebGPU (or it can't draw into the canvas): the
+  same in GLSL ES 3.0, with a `DEPTH24_STENCIL8` renderbuffer beside each
+  target, one uniform block per draw (`bindBufferRange`) and sampler objects
+  for nearest and bilinear sampling. The canvas is drawn y-down and
+  offscreen targets top row first, so all of them sample alike.
+
+The frame goes straight into the canvas: nothing is read back. A canvas holds
+one kind of context, so the GPU's is taken on the app's first GPU frame; if
+the app ends up on the CPU, `stipple.js` puts a fresh canvas in its place for
+the 2D context.
+
+Choosing: `App::renderer` and the page's `renderer` option (`auto`,
+`software`, `gpu`, `webgpu`, `webgl2`; `?renderer=` in the URL overrides
+both). `auto` is the app's choice, and `Renderer::Auto` stays the CPU on the
+web as everywhere until 6h: the GPU is much faster on a real GPU (below), but
+a browser without one hands out WebGPU and WebGL2 on SwiftShader, where the
+software renderer is faster, and a page can't always tell which it got.
+
+Setting up is asynchronous (`requestAdapter`, `requestDevice`): the first
+frame waits for it, then the page asks for a whole frame. WebGPU is tried
+with a test clear of the canvas, since a browser without GPU compositing can
+hand out a device and still fail to give the canvas a texture; then WebGL2
+gets a fresh canvas. A lost device (`GPUDevice.lost`, `webglcontextlost`) is
+set up again once, as natively, and a second loss leaves the app on the CPU.
+So does a WebGPU validation error, which also asks for a new frame right
+away so the one it spoiled is drawn on the CPU.
+
+### Checking it
+
+`examples/webdemo/gpucompare.html` loads `gpucompare.wasm` (the cdylib
+example `gpucompare`, built with `--features gpu`), which holds the
+comparison corpus of `src/gpu/corpus.rs`, draws each scene with the software
+renderer and on WebGPU and WebGL2 into a canvas, and diffs the frames with
+the same tolerances as the native tests. It loses each device and checks a
+new one comes up, times both renderers, and with `?app=webdemo.wasm` runs the
+web demo with `renderer: "gpu"` through two lost devices (back on the GPU
+after the first, on the CPU after the second). CI's `visual-web-gpu` job runs
+it in headless Chrome on SwiftShader; the site check (`tools/site/check.py`)
+runs six of the examples a second time with `?renderer=gpu`.
+
+```sh
+cargo build --release --target wasm32-unknown-unknown --features gpu --example gpucompare --example webdemo
+# serve gpucompare.html, stipple.js, gpu.js, the two .wasm and font.ttf, open gpucompare.html?app=webdemo.wasm
+```
+
+In Chrome on an Apple M5 Max, the corpus stays within a mean of 0.33 of 255
+per channel on both APIs (0.24 on SwiftShader), with at most 0.32% of the
+pixels off by more than 64 (the 1.5× nine-slice, as natively).
+
+Per frame, including lowering the scene and waiting for the GPU, against
+rasterizing in the module and `putImageData` (the software path):
+
+| Scene (Chrome, M5 Max) | Software | WebGPU | WebGL2 |
+|---|---|---|---|
+| The busy widget window at 2560×1600 (the harness) | 37 ms | 2.8 ms | 3.2 ms |
+| 2000 sprites at 1920×1080 (the harness) | 58–65 ms | 4.0 ms | 4.2 ms |
+| `themegallery` at 2560×1600, a whole new frame | 35 ms | 2.9 ms | 3.8 ms |
+| `spritedemo` at 2560×1600, a whole new frame | 6.9 ms | 1.7 ms | 3.6 ms |
+| `widgetsdemo` at 2560×1600, a whole new frame | 426 ms | 3.5 ms | 4.5 ms |
+
+A scene of many long paths gains least: `canvasdemo` takes 300 ms on the
+CPU and about 220 ms on WebGL2, most of it moving its vertices (a 34 MB op
+buffer a frame); batching and smaller path vertices are 6f's. On SwiftShader
+the GPU path is no faster than the CPU (27 to 150 ms against 38 to 41 for
+the widget window, 63 against 56 for the sprites).
+
 ## How close it is to the software renderer
 
 Unit tests (`src/gpu/compare.rs`) draw the same scenes both ways, on GLES2,
@@ -255,10 +345,11 @@ The plan for hardware rendering on every platform, presented straight to the
 window, is Phase 6 in the [roadmap](../ROADMAP.md#phase-6--hardware-rendering).
 Today:
 
-- GLES2, Metal and Direct3D 11 execute the scene; Vulkan and WebGPU only
-  draw a test triangle.
+- GLES2, Metal, Direct3D 11, WebGPU and WebGL2 execute the scene; Vulkan
+  only draws a test triangle.
 - On Linux the GL frame is read back to the CPU and presented as a bitmap;
-  Metal and Direct3D 11 present straight to the window.
+  Metal, Direct3D 11 and the web (into the canvas) present straight to the
+  window.
 - Direct3D 11 is exercised by CI on WARP; it hasn't been tried on a
   hardware GPU yet.
 - `Renderer::Auto` is still the CPU everywhere.

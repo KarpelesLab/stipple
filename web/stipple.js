@@ -18,6 +18,13 @@
 // number of canvases on a page each run an app (the same module or different
 // ones); a module is fetched and compiled once.
 //
+// A module built with `--features stipple/gpu` can draw on the GPU instead
+// of the CPU: WebGPU, or WebGL2 where the browser has no WebGPU, through
+// gpu.js (served next to this file). The canvas then holds a WebGPU or
+// WebGL2 context rather than a 2D one; if the app falls back to the CPU (a
+// GPU lost twice), the canvas is swapped for a fresh one, same attributes
+// and listeners, for the 2D context.
+//
 // Next to the canvas, `start` adds an invisible overlay (`.stipple-overlay`)
 // that mirrors the app's accessibility tree as ARIA elements for screen
 // readers, and holds the hidden <textarea> that has keyboard focus while the
@@ -52,13 +59,26 @@
 //             blocking reads (assets().read, .image, ...) find them: an
 //             array of paths, or the URL of a JSON array of them (a
 //             manifest). Others load with Assets::load / AppHandle::load_asset.
+//   renderer  what draws the frames, overriding the app's App::renderer as
+//             STIPPLE_RENDERER does natively: "auto" (the default: the
+//             app's choice), "software", "gpu" (WebGPU, else WebGL2, else
+//             the CPU), "webgpu" or "webgl2". The page's `?renderer=` query
+//             parameter overrides this option. The GPU ones need a module
+//             built with the `gpu` feature.
 //
-// Returns { exports, stats, canvas, overlay, input, colorScheme, saveState }: `stats`
-// counts presents, animation frames, timer wakes and accessibility-tree
-// updates, for tests; `overlay` is the ARIA overlay, `input` the hidden
+// Returns { exports, stats, canvas, overlay, input, colorScheme, saveState,
+// renderer, snapshot, gpu }: `stats` counts presents (CPU or GPU frames),
+// animation frames, timer wakes and accessibility-tree updates, for tests;
+// `canvas` is the canvas the app is in now, `renderer` what drew the last
+// frame ("software", "webgpu" or "webgl2"), `snapshot()` a 2D canvas copy
+// of the last frame (a GPU canvas can't be read back later), `gpu` the GPU
+// host (gpu.js; `gpu.lose()` loses the device, for tests); `overlay` is the
+// ARIA overlay, `input` the hidden
 // textarea, `colorScheme()` hands the page's current color scheme to the
 // app again (it already follows changes on its own), and `saveState()` saves
 // the app's state now (it already does when the page hides or unloads).
+
+import { gpuHost } from "./gpu.js";
 
 const SHIFT = 1, CTRL = 2, ALT = 4, META = 8;
 
@@ -170,10 +190,15 @@ function audioHost(exports) {
 // ---- End of audio ------------------------------------------------------------
 
 export async function start(canvas, wasmUrl, options = {}) {
-  const ctx = canvas.getContext("2d");
+  // The canvas's context: the 2D one for CPU frames, taken at the first one;
+  // or WebGPU / WebGL2 (gpu.js). A canvas keeps the first context it gives,
+  // so going from one to the other swaps in a fresh canvas (swapCanvas).
+  let ctx = null;
+  let kind = null; // "2d" | "gpu"
+  let renderer = "software";
   const enc = new TextEncoder();
   const dec = new TextDecoder();
-  const stats = { presents: 0, frames: 0, wakes: 0, a11y: 0 };
+  const stats = { presents: 0, frames: 0, wakes: 0, a11y: 0, gpuFrames: 0 };
   const prefix = `stipple${++instances}`;
   let e = null; // the module's exports
   let timer = null;
@@ -302,6 +327,31 @@ export async function start(canvas, wasmUrl, options = {}) {
   canvas.after(overlay);
   // The overlay stands for the canvas's content.
   canvas.setAttribute("aria-hidden", "true");
+
+  // The canvas's event listeners, kept to move them to a fresh canvas.
+  const listeners = [];
+  const listen = (type, fn, opts) => {
+    listeners.push([type, fn, opts]);
+    canvas.addEventListener(type, fn, opts);
+  };
+  // Put a fresh canvas in this one's place (same attributes, style and
+  // listeners), for the other kind of context.
+  let resizes = null;
+  const swapCanvas = () => {
+    const old = canvas;
+    const fresh = old.cloneNode(false);
+    for (const [type, fn, opts] of listeners) fresh.addEventListener(type, fn, opts);
+    const focused = document.activeElement === old;
+    old.replaceWith(fresh);
+    canvas = fresh;
+    ctx = null;
+    kind = null;
+    if (resizes) {
+      resizes.unobserve(old);
+      resizes.observe(fresh);
+    }
+    if (focused) fresh.focus({ preventScroll: true });
+  };
 
   const place = () => {
     const r = canvas.getBoundingClientRect();
@@ -454,13 +504,40 @@ export async function start(canvas, wasmUrl, options = {}) {
     : options.stateKey ?? `stipple-state:${new URL(wasmUrl, location.href).pathname}:${instances}`;
 
   const audio = audioHost(() => e); // see "Audio" above
+  // The GPU renderer (gpu.js), for a module built with it.
+  const gpu = gpuHost({
+    memory: () => e.memory,
+    claim: (fresh) => {
+      if (kind === "2d" || (fresh && kind === "gpu")) swapCanvas();
+      kind = "gpu";
+      return canvas;
+    },
+    current: () => canvas,
+    redraw: () => e?.stipple_redraw?.(),
+    log: (msg) => console.log(msg),
+    onFrame: (api) => {
+      stats.presents++;
+      stats.gpuFrames++;
+      renderer = api;
+    },
+  });
 
   const imports = {
     stipple: {
       ...audio.imports,
+      ...gpu.imports,
       now: () => performance.now(),
       present(ptr, w, h, rects, n) {
         stats.presents++;
+        renderer = "software";
+        if (kind === "gpu") {
+          swapCanvas();
+          n = 0;
+        }
+        if (!ctx) {
+          ctx = canvas.getContext("2d");
+          kind = "2d";
+        }
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w; // clears the canvas, so draw it all
           canvas.height = h;
@@ -911,6 +988,12 @@ export async function start(canvas, wasmUrl, options = {}) {
       } catch (_) { /* not ours: start afresh */ }
     }
   }
+  // What draws: the page's ?renderer=, else the option, else the app's choice.
+  const rendererOption = new URLSearchParams(location.search).get("renderer") ?? options.renderer;
+  if (rendererOption && e.stipple_renderer) {
+    const [p, n] = passStr(String(rendererOption));
+    e.stipple_renderer(p, n);
+  }
   e.stipple_start(...size());
   // Save it whenever the page may go: hidden (a phone's browser can discard
   // a backgrounded tab without another event) and unloading.
@@ -959,7 +1042,8 @@ export async function start(canvas, wasmUrl, options = {}) {
   window.visualViewport?.addEventListener("scroll", keyboardInset);
   // Size and pixel-ratio changes (moving to another screen, zooming).
   const resize = () => { place(); e.stipple_resize(...size()); safeArea(); keyboardInset(); };
-  new ResizeObserver(resize).observe(canvas);
+  resizes = new ResizeObserver(resize);
+  resizes.observe(canvas);
   const watchRatio = () => {
     matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)
       .addEventListener("change", () => { resize(); watchRatio(); }, { once: true });
@@ -998,7 +1082,7 @@ export async function start(canvas, wasmUrl, options = {}) {
   // build) takes touches as the mouse.
   const fingers = !!e.stipple_touch;
   const finger = (ev) => fingers && ev.pointerType === "touch";
-  canvas.addEventListener("pointerdown", (ev) => {
+  listen("pointerdown", (ev) => {
     if (finger(ev)) return;
     ev.preventDefault();
     focusQuietly(input);
@@ -1007,7 +1091,7 @@ export async function start(canvas, wasmUrl, options = {}) {
     e.stipple_pointer(0, 0, x, y, mods(ev));
     e.stipple_pointer(1, ev.button, x, y, mods(ev));
   });
-  canvas.addEventListener("pointermove", (ev) => {
+  listen("pointermove", (ev) => {
     if (finger(ev)) return;
     // The locked pointer stays put: only its motion counts.
     if (document.pointerLockElement === canvas) {
@@ -1024,7 +1108,7 @@ export async function start(canvas, wasmUrl, options = {}) {
     }
   });
   // No middle-click autoscroll or paste over the canvas: the app gets it.
-  canvas.addEventListener("mousedown", (ev) => {
+  listen("mousedown", (ev) => {
     if (ev.button === 1) ev.preventDefault();
   });
   const release = (ev) => {
@@ -1032,9 +1116,9 @@ export async function start(canvas, wasmUrl, options = {}) {
     const [x, y] = at(ev);
     e.stipple_pointer(2, ev.button < 0 ? 0 : ev.button, x, y, mods(ev));
   };
-  canvas.addEventListener("pointerup", release);
-  canvas.addEventListener("pointercancel", release);
-  canvas.addEventListener("pointerleave", (ev) => {
+  listen("pointerup", release);
+  listen("pointercancel", release);
+  listen("pointerleave", (ev) => {
     if (finger(ev)) return;
     if (!canvas.hasPointerCapture?.(ev.pointerId)) e.stipple_pointer(3, 0, 0, 0, 0);
   });
@@ -1052,13 +1136,13 @@ export async function start(canvas, wasmUrl, options = {}) {
     }
   };
   if (fingers) {
-    canvas.addEventListener("touchstart", touch(0), { passive: false });
-    canvas.addEventListener("touchmove", touch(1), { passive: false });
-    canvas.addEventListener("touchend", touch(2), { passive: false });
-    canvas.addEventListener("touchcancel", touch(3), { passive: false });
+    listen("touchstart", touch(0), { passive: false });
+    listen("touchmove", touch(1), { passive: false });
+    listen("touchend", touch(2), { passive: false });
+    listen("touchcancel", touch(3), { passive: false });
   }
-  canvas.addEventListener("contextmenu", (ev) => ev.preventDefault());
-  canvas.addEventListener("wheel", (ev) => {
+  listen("contextmenu", (ev) => ev.preventDefault());
+  listen("wheel", (ev) => {
     ev.preventDefault();
     const [x, y] = at(ev);
     e.stipple_pointer(0, 0, x, y, mods(ev));
@@ -1067,7 +1151,7 @@ export async function start(canvas, wasmUrl, options = {}) {
 
   // Keyboard focus lives in the overlay (the textarea, or the element of the
   // app's focused node); the canvas hands it on when tabbed to.
-  canvas.addEventListener("focus", () => focusQuietly(input));
+  listen("focus", () => focusQuietly(input));
   let appFocused = false;
   overlay.addEventListener("focusin", (ev) => {
     if (!appFocused) {
@@ -1210,5 +1294,12 @@ export async function start(canvas, wasmUrl, options = {}) {
     schedulePads();
   }
 
-  return { exports: e, stats, canvas, overlay, input, colorScheme: scheme, saveState };
+  return {
+    exports: e, stats, overlay, input, colorScheme: scheme, saveState, gpu,
+    get canvas() { return canvas; },
+    get renderer() { return renderer; },
+    // A 2D canvas with the last frame: the canvas itself on the CPU; on the
+    // GPU, a copy made right after drawing the frame again.
+    snapshot() { return kind === "gpu" ? gpu.snapshot() : canvas; },
+  };
 }

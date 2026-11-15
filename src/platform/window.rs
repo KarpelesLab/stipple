@@ -430,6 +430,9 @@ pub(crate) enum GpuLayer {
     /// window stops painting its bitmap over it.
     #[cfg_attr(not(all(target_os = "windows", feature = "d3d")), allow(dead_code))]
     Hwnd(*mut std::ffi::c_void),
+    /// The page's canvas, drawn into through `web/gpu.js` (the web).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    Web,
 }
 
 /// A live native window.

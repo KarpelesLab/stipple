@@ -149,6 +149,18 @@ macro_rules! web_app {
                 glue::locale(unsafe { glue::take_string(ptr, len) });
             }
 
+            /// # Safety
+            /// `ptr`/`len` come from one `stipple_alloc(len)`.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_renderer(ptr: *mut u8, len: usize) {
+                glue::renderer(unsafe { glue::take_string(ptr, len) });
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_redraw() {
+                glue::redraw();
+            }
+
             #[unsafe(no_mangle)]
             pub extern "C" fn stipple_safe_area(top: f64, right: f64, bottom: f64, left: f64) {
                 glue::safe_area(top, right, bottom, left);

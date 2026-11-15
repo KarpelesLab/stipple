@@ -1,10 +1,12 @@
 //! Choosing what draws a window's frames ([`App::renderer`](crate::App::renderer),
-//! `STIPPLE_RENDERER`), and drawing them on the GPU.
+//! `STIPPLE_RENDERER`, or on the web the page's `renderer` option), and drawing
+//! them on the GPU.
 //!
 //! A window that draws on the GPU presents straight into the GPU layer its
 //! backend lays over the content ([`Window::gpu_layer`]: a `CAMetalLayer` on
-//! macOS and iOS, the window's own DXGI swap chain on Windows), skipping the
-//! `Pixmap` and the [`Surface`](crate::render::Surface).
+//! macOS and iOS, the window's own DXGI swap chain on Windows, the canvas's
+//! WebGPU or WebGL2 context on the web), skipping the `Pixmap` and the
+//! [`Surface`](crate::render::Surface).
 //! Where the backend has no GPU layer yet, the GPU draws the frame and it is
 //! read back and presented as a `Pixmap`, as [`App::render_once`](crate::App::render_once)
 //! does everywhere.
@@ -22,6 +24,14 @@ use crate::render::{Color, Pixmap, Renderer, Scene};
 use crate::style::Theme;
 use std::collections::HashMap;
 
+/// Say `msg` where the developer looks: stderr, or the browser's console.
+fn say(msg: std::fmt::Arguments<'_>) {
+    #[cfg(target_arch = "wasm32")]
+    crate::platform::backend::web::log(&msg.to_string(), false);
+    #[cfg(not(target_arch = "wasm32"))]
+    eprintln!("{msg}");
+}
+
 /// Which GPU API.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Which {
@@ -30,6 +40,8 @@ pub(crate) enum Which {
     Metal,
     Gl,
     D3d11,
+    WebGpu,
+    WebGl2,
 }
 
 /// What a window ends up drawing with.
@@ -48,20 +60,49 @@ pub(crate) fn parse(value: &str) -> Option<Want> {
         "metal" | "mtl" => Some(Want::Gpu(Which::Metal)),
         "gl" | "gles" | "opengl" => Some(Want::Gpu(Which::Gl)),
         "d3d11" | "d3d" | "direct3d" => Some(Want::Gpu(Which::D3d11)),
+        "webgpu" => Some(Want::Gpu(Which::WebGpu)),
+        "webgl2" | "webgl" => Some(Want::Gpu(Which::WebGl2)),
         _ => None,
     }
 }
 
+/// The page's `renderer` option (`web/stipple.js`), the web's
+/// `STIPPLE_RENDERER`.
+#[cfg(target_arch = "wasm32")]
+mod page {
+    use super::Want;
+    use std::cell::Cell;
+
+    thread_local! {
+        pub(super) static PAGE: Cell<Option<Want>> = const { Cell::new(None) };
+    }
+
+    /// Set from the page, before the app starts.
+    pub(crate) fn set(value: &str) {
+        PAGE.with(|p| p.set(super::parse(value)));
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) use page::set as set_page_renderer;
+
+/// The page's `renderer` option.
+#[cfg(target_arch = "wasm32")]
+fn from_env() -> Option<Want> {
+    page::PAGE.with(|p| p.get())
+}
+
 /// `STIPPLE_RENDERER`, read once.
+#[cfg(not(target_arch = "wasm32"))]
 fn from_env() -> Option<Want> {
     static ENV: std::sync::OnceLock<Option<Want>> = std::sync::OnceLock::new();
     *ENV.get_or_init(|| {
         let value = std::env::var("STIPPLE_RENDERER").ok()?;
         let want = parse(&value);
         if want.is_none() && !value.trim().eq_ignore_ascii_case("auto") {
-            eprintln!(
-                "stipple: STIPPLE_RENDERER={value:?} isn't one of software, gpu, metal, gl, d3d11, auto"
-            );
+            say(format_args!(
+                "stipple: STIPPLE_RENDERER={value:?} isn't one of software, gpu, metal, gl, d3d11, webgpu, webgl2, auto"
+            ));
         }
         want
     })
@@ -90,7 +131,7 @@ pub(crate) struct PaneGpu {
 
 #[cfg(feature = "gpu")]
 mod shared {
-    use super::Which;
+    use super::{Which, say};
     use crate::gpu::renderer::{Api, GpuError, GpuRenderer};
     use std::cell::RefCell;
 
@@ -126,6 +167,8 @@ mod shared {
             Which::Metal => Some(Api::Metal),
             Which::Gl => Some(Api::Gl),
             Which::D3d11 => Some(Api::D3d11),
+            Which::WebGpu => Some(Api::WebGpu),
+            Which::WebGl2 => Some(Api::WebGl2),
         })
     }
 
@@ -145,13 +188,20 @@ mod shared {
             if gpu.renderer.is_none() {
                 match create(which) {
                     Ok(r) => {
-                        if std::env::var_os("STIPPLE_RENDERER").is_some() {
-                            eprintln!("stipple: drawing with {}", r.api().name());
+                        if cfg!(target_arch = "wasm32")
+                            || std::env::var_os("STIPPLE_RENDERER").is_some()
+                        {
+                            say(format_args!("stipple: drawing with {}", r.api().name()));
                         }
                         gpu.renderer = Some(r);
                     }
+                    // Not ready yet (a browser's GPU comes up asynchronously):
+                    // nothing to show until the platform asks again.
+                    Err(GpuError::Pending) => return Some(Err(GpuError::Pending)),
                     Err(e) => {
-                        eprintln!("stipple: the GPU renderer is {e}; drawing on the CPU");
+                        say(format_args!(
+                            "stipple: the GPU renderer is {e}; drawing on the CPU"
+                        ));
                         gpu.failed = true;
                         return None;
                     }
@@ -163,14 +213,20 @@ mod shared {
                     gpu.renderer = None;
                     gpu.losses += 1;
                     if gpu.losses > 1 {
-                        eprintln!("stipple: GPU device lost again ({e}); drawing on the CPU");
+                        say(format_args!(
+                            "stipple: GPU device lost again ({e}); drawing on the CPU"
+                        ));
                         gpu.failed = true;
                     } else {
-                        eprintln!("stipple: GPU device lost ({e}); setting it up again");
+                        say(format_args!(
+                            "stipple: GPU device lost ({e}); setting it up again"
+                        ));
                     }
                 }
                 Err(GpuError::Unavailable(e)) => {
-                    eprintln!("stipple: the GPU renderer is unavailable: {e}; drawing on the CPU");
+                    say(format_args!(
+                        "stipple: the GPU renderer is unavailable: {e}; drawing on the CPU"
+                    ));
                     gpu.renderer = None;
                     gpu.failed = true;
                 }
@@ -208,7 +264,9 @@ pub(crate) use shared::{current, given_up, reset};
 fn no_gpu() {
     static SAID: std::sync::Once = std::sync::Once::new();
     SAID.call_once(|| {
-        eprintln!("stipple: built without the GPU renderer (feature `gpu`); drawing on the CPU")
+        say(format_args!(
+            "stipple: built without the GPU renderer (feature `gpu`); drawing on the CPU"
+        ))
     });
 }
 
@@ -233,6 +291,11 @@ impl<S: 'static> Pane<S> {
         background: Color,
         scale: crate::geometry::ScaleFactor,
     ) -> Option<Pixmap> {
+        // A browser's GPU draws into the canvas only, never read back: a
+        // frame that comes here is the CPU's.
+        if cfg!(target_arch = "wasm32") {
+            return None;
+        }
         let which = self.gpu_wanted()?;
         #[cfg(feature = "gpu")]
         {
@@ -293,6 +356,14 @@ impl<S: 'static> Pane<S> {
                     self.gpu.layer = true;
                     self.gpu.force = true;
                     window.request_redraw();
+                    None
+                }
+                // The platform asks for a redraw itself once the GPU is
+                // ready (on the web a redraw is delivered at once, so asking
+                // here would loop).
+                Some(Err(crate::gpu::renderer::GpuError::Pending)) => {
+                    self.gpu.layer = true;
+                    self.gpu.force = true;
                     None
                 }
                 _ => self.leave_gpu(window, scene),
@@ -361,6 +432,8 @@ mod tests {
         assert_eq!(parse("gl"), Some(Want::Gpu(Which::Gl)));
         assert_eq!(parse("d3d11"), Some(Want::Gpu(Which::D3d11)));
         assert_eq!(parse("D3D"), Some(Want::Gpu(Which::D3d11)));
+        assert_eq!(parse("WebGPU"), Some(Want::Gpu(Which::WebGpu)));
+        assert_eq!(parse("webgl2"), Some(Want::Gpu(Which::WebGl2)));
         assert_eq!(parse("auto"), None);
         assert_eq!(parse("vulkan?"), None);
         assert_eq!(resolve(Renderer::Auto, None), Want::Software);

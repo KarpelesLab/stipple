@@ -66,6 +66,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`platform::android_receiver_dex`), declared next to the `Alarm` receiver
   (see docs/platforms/android.md). Without it, such a tap still only brings
   the app forward.
+- The web renders on the GPU (#54, Phase 6e): a module built with the `gpu`
+  feature draws its frames with WebGPU through the canvas's `"webgpu"`
+  context, or WebGL2 where the browser has no WebGPU, straight into the canvas
+  (no read-back). The scene is lowered in the module and handed to the new
+  `web/gpu.js` (imported by `stipple.js`, served next to it) as a compact op
+  buffer each frame; images and glyph rasters are textures kept by identity.
+  `stipple.js`'s new `renderer` option (`auto`, `software`, `gpu`, `webgpu`,
+  `webgl2`) and the page's `?renderer=` override `App::renderer` as
+  `STIPPLE_RENDERER` does natively (which also takes `webgpu` and `webgl2`
+  now); `app.renderer` says what drew, `app.snapshot()` copies the last
+  frame. A lost device is set up again once, then the app draws on the CPU on
+  a fresh canvas. `examples/webdemo/gpucompare.html` diffs the comparison
+  corpus on both APIs with the software renderer (CI, on SwiftShader), and
+  the site's examples are built with `gpu` and checked with `?renderer=gpu`
+  too. 2560×1600 widget frame in Chrome on an M5 Max: 37 ms on the CPU,
+  2.8 ms on WebGPU.
 
 - List gestures (#44): `swipe_row(cx, &state, access, key, SwipeActions)`
   puts leading and trailing `SwipeAction`s (label, icon, color,

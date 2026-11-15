@@ -2,7 +2,8 @@
 // through stipple.js. `?embed` shows only the canvas (guides embed the page
 // in an iframe); `?check` is for tools/site/check.py: after the app has drawn,
 // it posts what it saw (and the canvas as a PNG, the gallery's thumbnail) to
-// the checker's server.
+// the checker's server. `?renderer=gpu` (or webgpu, webgl2, software) is
+// stipple.js's: what draws the frames.
 import { start } from "../stipple.js";
 
 const script = document.currentScript ?? document.querySelector("script[data-wasm]");
@@ -62,8 +63,11 @@ if (check) {
   let colors = 0;
   let png = null;
   try {
-    const ctx = canvas.getContext("2d");
-    const { width, height } = canvas;
+    // The last frame as a 2D canvas: on the GPU (?renderer=gpu) the canvas
+    // holds a WebGPU or WebGL2 context, which can't be read back later.
+    const shot = app?.snapshot?.() ?? canvas;
+    const ctx = shot.getContext("2d");
+    const { width, height } = shot;
     const data = ctx.getImageData(0, 0, width, height).data;
     const seen = new Set();
     const step = Math.max(1, Math.floor((width * height) / 40000));
@@ -73,14 +77,17 @@ if (check) {
       if (seen.size > 1000) break;
     }
     colors = seen.size;
-    png = canvas.toDataURL("image/png");
+    png = shot.toDataURL("image/png");
   } catch (e) {
     errors.push(`reading the canvas: ${e}`);
   }
+  // Run again with ?renderer=, the report is NAME@RENDERER.
+  const asked = params.get("renderer");
   const report = {
-    name,
+    name: asked ? `${name}@${asked}` : name,
     started: !!app,
     presents: app?.stats?.presents ?? 0,
+    renderer: app?.renderer ?? null,
     colors,
     errors,
     png,

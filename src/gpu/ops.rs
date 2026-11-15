@@ -108,6 +108,7 @@ pub(crate) struct Sample {
 
 impl Sample {
     /// All of it, as it is, bilinear.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) const WHOLE: Sample = Sample {
         uv: FULL_UV,
         clamp: [0.0, 0.0, 1.0, 1.0],

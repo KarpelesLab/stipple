@@ -855,9 +855,12 @@ stencil-and-cover paths, images and image regions, cached glyphs, layers,
 scissor and stencil clips, canvases). Metal executes it and presents straight
 to a `CAMetalLayer` (macOS, iOS); GLES2 executes it and the frame is read back
 and presented as a bitmap (Linux); both are pixel-compared against the CPU in
-CI. `App::renderer` / `STIPPLE_RENDERER` choose, with the CPU as the default
-and the fallback. Vulkan, Direct3D 11 and WebGPU each draw a test triangle
-off-screen and read it back.
+CI. WebGPU and WebGL2 execute it in the browser (`web/gpu.js`), straight into
+the canvas, compared with the CPU in headless Chrome. `App::renderer` /
+`STIPPLE_RENDERER` (the page's `renderer` option on the web) choose, with the
+CPU as the default and the fallback. Direct3D 11 executes it into a
+flip-model swap chain (Windows); Vulkan draws a test triangle off-screen and
+reads it back.
 
 #### 6a — The architecture
 - 🚧 A GPU presentation seam in the platform layer: a window can hand out a
@@ -866,9 +869,9 @@ off-screen and read it back.
   scale changes, occlusion and device loss reported back.
   *`Window::gpu_layer` / `drop_gpu_layer`: a `CAMetalLayer` over the view on
   macOS and iOS, kept at the view's size and scale; the window itself on
-  Windows, which the renderer gives a DXGI swap chain; device loss comes
-  back from the renderer. The other surfaces come with 6c and 6e; occlusion
-  isn't reported yet.*
+  Windows, which the renderer gives a DXGI swap chain; the canvas itself on
+  the web; device loss comes back from the renderer. The other surfaces come
+  with 6c; occlusion isn't reported yet.*
 - ✅ A renderer trait over the lowered operations, so each backend is an
   executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
   per-backend texture, glyph and offscreen-target caches behind it.
@@ -941,10 +944,21 @@ off-screen and read it back.
   the job's other steps stay on the CPU.*
 
 #### 6e — The web
-- ⬜ The scene executor on WebGPU through the canvas's GPU context, from
+- ✅ The scene executor on WebGPU through the canvas's GPU context, from
   `web/stipple.js` (the sanctioned exception: browser APIs through JS glue),
   and WebGL2 where WebGPU is missing.
-- ⬜ CI: headless Chrome (SwiftShader) pixel comparison.
+  *`src/gpu/web.rs` hands `web/gpu.js` an op buffer a frame (vertices in
+  device pixels, textures by image identity); WGSL on WebGPU, GLSL ES 3.0 on
+  WebGL2, straight into the canvas. The page's `renderer` option /
+  `?renderer=`; `auto` stays the app's choice (SwiftShader is slower than
+  the CPU). Device loss: set up again once, then the CPU on a fresh canvas.
+  Chrome on an M5 Max, 2560×1600 widget frame: 37 ms on the CPU, 2.8 ms
+  WebGPU, 3.2 ms WebGL2.*
+- ✅ CI: headless Chrome (SwiftShader) pixel comparison.
+  *`examples/webdemo/gpucompare.html` diffs the corpus on both APIs and
+  takes an app through two lost devices (`visual-web-gpu`, non-blocking:
+  WebGPU on SwiftShader is flaky headless); the site check runs six examples
+  again with `?renderer=gpu`.*
 
 #### 6f — Fast
 - ⬜ A glyph atlas per backend (one texture, packed, evicted by use) instead
