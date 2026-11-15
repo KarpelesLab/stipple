@@ -22,6 +22,17 @@ mtl = ["gpu"] # Metal, macOS-only
 # `AppHandle::spawn`: run futures on a background tokio runtime and apply their
 # output to the state. Not available on wasm32, where tokio has no threads.
 tokio = ["dep:tokio"]
+# `stipple::audio`'s decoders for compressed formats (Ogg Vorbis, MP3, FLAC,
+# Opus), through oxideav. Off by default: they add compile time. Audio output,
+# the mixer and plain PCM/float WAV are always there.
+audio = [
+    "dep:oxideav-basic",
+    "dep:oxideav-ogg",
+    "dep:oxideav-vorbis",
+    "dep:oxideav-mp3",
+    "dep:oxideav-flac",
+    "dep:oxideav-opus",
+]
 
 [dependencies]
 oxideav-core.workspace = true
@@ -37,6 +48,13 @@ oxideav-bmp.workspace = true
 # Not used directly: a version floor. oxideav-image 0.0.5 asks for any pixfmt 0.1
 # but needs APIs added in 0.1.11, so an older lockfile would fail to build.
 oxideav-pixfmt.workspace = true
+# Audio decoders (the `audio` feature).
+oxideav-basic = { workspace = true, optional = true }
+oxideav-ogg = { workspace = true, optional = true }
+oxideav-vorbis = { workspace = true, optional = true }
+oxideav-mp3 = { workspace = true, optional = true }
+oxideav-flac = { workspace = true, optional = true }
+oxideav-opus = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Only the multi-threaded scheduler; apps enable the drivers they use (net, time,
@@ -83,6 +101,14 @@ oxideav-mjpeg = "0.1.13"
 oxideav-gif = "0.0.14"
 oxideav-webp = "0.3.1"
 oxideav-bmp = "0.1.8"
+# Audio decode for `stipple::audio` (the `audio` feature), at releases that
+# build on our rustc 1.88 floor (newer ones need 1.95).
+oxideav-basic = "0.0.11"
+oxideav-ogg = "0.1.9"
+oxideav-vorbis = "0.0.12"
+oxideav-mp3 = "0.1.3"
+oxideav-flac = "0.0.11"
+oxideav-opus = "0.0.14"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "warn"

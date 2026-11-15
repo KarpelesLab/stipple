@@ -77,6 +77,7 @@ How to build, package and run on each platform, and what works there today.
 | Scenes rendered on the GPU (`stipple::gpu`, experimental) | GLES2 ⁴⁷ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | Message boxes | drawn ⁴⁴ | native ⁴⁴ | native ⁴⁴ | native ³ | drawn ⁴⁴ | native ¹⁰ |
 | Secure password entry | IME off | IME off | `EnableSecureEventInput` ¹⁰ | IME off | IME off | IME off |
+| Sound: effects, streamed music, volume groups (`stipple::audio`) | ALSA ⁷¹ | WASAPI ⁷¹ | Core Audio ⁷¹ | Core Audio ⁷¹ | AAudio ⁷¹ | Web Audio ⁷¹ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -498,6 +499,14 @@ the NVDA, VoiceOver and Orca steps that press a button from the keyboard
 were added with it and haven't run in CI yet. Other backends build-checked.
 See [accessibility.md](accessibility.md#keyboard-focus).
 
+⁷¹ The mixer (voices, pan, groups, fades, streamed music, rate conversion)
+is in the shared core and unit-tested off line. The macOS output was run
+(`audiodemo --selftest` sees the `AudioUnit`'s callback pull frames at the
+device's rate); CI runs the null output on Linux, and tries ALSA through the
+`snd-dummy` driver without failing the run. The web glue was run against a
+stand-in `AudioContext`. Windows, iOS and Android are build-checked only.
+Output stops while a phone app is in the background. See [audio.md](audio.md).
+
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
 on iOS, Android and the web, which hand out contents rather than paths, so do
@@ -532,6 +541,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Images and SVG](images.md): the `image` and `svg` widgets, formats, and oxideav interop
 - [Windows and cursors](windows-and-cursors.md): several windows opened and closed at run time, titles, position, size and state, size limits, maximize, fullscreen, the icon, and cursor shapes
 - [Closing, quitting, focus and attention](window-lifecycle.md): asking before a window closes or the app quits, window focus, attention requests, the bell, Wayland title bars, and mobile apps going to the background
+- [Sound](audio.md): `stipple::audio`: sound effects, streamed music, volume groups, the formats, each platform's output, latency, and the web's autoplay rule
 - [Rendering on the GPU](gpu.md): `stipple::gpu` under `App::render_with`, what it draws how, and how close it is to the software renderer
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository

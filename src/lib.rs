@@ -37,6 +37,7 @@ mod app_keys;
 mod app_lifecycle;
 mod app_pointer;
 mod app_touch;
+pub mod audio;
 #[cfg(test)]
 mod canvas_tests;
 pub mod core;

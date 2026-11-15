@@ -79,6 +79,73 @@ const FOCUSABLE = new Set([
 ]);
 const TEXT_ROLES = new Set(["textbox", "spinbutton"]);
 
+// ---- Audio (stipple::audio) ---------------------------------------------------
+//
+// The module has no threads, so the page pulls the mix: `audio_open` makes an
+// AudioContext with a ScriptProcessorNode whose callback asks the module's
+// `stipple_audio_render(frames)` for each buffer of interleaved stereo f32 and
+// splits it into the two channels. Browsers keep a context suspended until the
+// user interacts with the page (the autoplay policy), so the first click, tap
+// or key press anywhere resumes it. Imported only by apps that use audio.
+//
+// `exports` returns the module's exports (they don't exist yet while the
+// imports are being made).
+
+const AUDIO_FRAMES = 1024; // per callback: about 21 ms at 48 kHz
+
+function audioHost(exports) {
+  let ctx = null;
+  let paused = false;
+  const resume = () => {
+    if (ctx && !paused && ctx.state !== "running") ctx.resume().catch(() => {});
+  };
+  const imports = {
+    audio_open() {
+      const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!AC) return 0;
+      try {
+        ctx = new AC({ latencyHint: "interactive" });
+      } catch (_) {
+        return 0;
+      }
+      const node = ctx.createScriptProcessor(AUDIO_FRAMES, 0, 2);
+      node.onaudioprocess = (ev) => {
+        const out = ev.outputBuffer;
+        const left = out.getChannelData(0);
+        const right = out.getChannelData(1);
+        const e = exports();
+        const ptr = e?.stipple_audio_render?.(out.length) ?? 0;
+        if (!ptr) {
+          left.fill(0);
+          right.fill(0);
+          return;
+        }
+        const mix = new Float32Array(e.memory.buffer, ptr, out.length * 2);
+        for (let i = 0; i < out.length; i++) {
+          left[i] = mix[2 * i];
+          right[i] = mix[2 * i + 1];
+        }
+      };
+      node.connect(ctx.destination);
+      // The autoplay policy: start on the first user gesture.
+      for (const type of ["pointerdown", "keydown", "touchend"]) {
+        globalThis.addEventListener?.(type, resume, { capture: true });
+      }
+      resume();
+      return ctx.sampleRate;
+    },
+    audio_pause(p) {
+      paused = p !== 0;
+      if (!ctx) return;
+      if (paused) ctx.suspend().catch(() => {});
+      else resume();
+    },
+  };
+  return { imports };
+}
+
+// ---- End of audio ------------------------------------------------------------
+
 export async function start(canvas, wasmUrl, options = {}) {
   const ctx = canvas.getContext("2d");
   const enc = new TextEncoder();
@@ -266,8 +333,11 @@ export async function start(canvas, wasmUrl, options = {}) {
   const stateKey = options.stateKey === false ? null
     : options.stateKey ?? `stipple-state:${new URL(wasmUrl, location.href).pathname}:${instances}`;
 
+  const audio = audioHost(() => e); // see "Audio" above
+
   const imports = {
     stipple: {
+      ...audio.imports,
       now: () => performance.now(),
       present(ptr, w, h, rects, n) {
         stats.presents++;

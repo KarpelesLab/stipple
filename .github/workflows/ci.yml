@@ -32,6 +32,26 @@ jobs:
         run: cargo run -p motiondemo -- --selftest
       - name: listmotion selftest (enter, exit and layout animations, off-screen)
         run: cargo run -p listmotion -- --selftest
+      - name: clippy (audio feature)
+        run: cargo clippy -p stipple --all-targets --features audio -- -D warnings
+      - name: test (audio feature)
+        run: cargo test -p stipple --features audio audio::
+      - name: audiodemo selftest (no sound card, the null output)
+        run: STIPPLE_AUDIO=null cargo run -p audiodemo -- --selftest --expect-backend null
+      # The runners have no sound card: load ALSA's dummy driver (a card that
+      # plays nothing, in real time) and play through libasound. Not blocking:
+      # the runner's kernel may not have the module.
+      - name: audiodemo selftest (ALSA, snd-dummy)
+        continue-on-error: true
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libasound2t64 || sudo apt-get install -y -qq libasound2
+          sudo modprobe snd-dummy || {
+            sudo apt-get install -y -qq "linux-modules-extra-$(uname -r)" && sudo modprobe snd-dummy
+          }
+          sudo chmod a+rw /dev/snd/* || true
+          cat /proc/asound/cards
+          cargo run -p audiodemo -- --selftest --expect-backend alsa
 
   # Gamepads on Linux: a virtual pad made through uinput
   # (.github/scripts/uinput-gamepad.py) must show up in `gamepaddemo --list`,

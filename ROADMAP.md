@@ -2135,15 +2135,36 @@ game needs on top:
 - ⬜ Later: present on the GPU (Phase 6) without a read-back.
 
 #### 9d — Audio
-- ⬜ Audio output on every platform, each through the OS's own API with
+- ✅ Audio output on every platform, each through the OS's own API with
   hand-written FFI: CoreAudio (`AudioUnit`) on macOS and iOS, WASAPI on
   Windows, ALSA (`libasound`, loaded at run time) on Linux, AAudio on Android,
   Web Audio on the web.
-- ⬜ A mixer: one-shot sound effects (decoded up front with oxideav), streamed
+  *`stipple::audio::Audio`: stereo `f32` at the device's rate through a render
+  callback; default output unit / RemoteIO, WASAPI shared event-driven (COM
+  vtables by hand, reopens on device loss), ALSA `default` via
+  `dlopen("libasound.so.2")`, AAudio via `dlopen("libaaudio.so")` (reopens on
+  disconnect), a `ScriptProcessorNode` in `stipple.js` pulling an exported
+  `stipple_audio_render` (resumed on the first gesture); a null output that
+  keeps time where none opens (`STIPPLE_AUDIO=null`). Run on macOS
+  (`audiodemo --selftest`), the web glue against a stand-in context; CI tries
+  ALSA on `snd-dummy`, non-blocking; Windows, iOS, Android build-checked.*
+- ✅ A mixer: one-shot sound effects (decoded up front with oxideav), streamed
   music (decoded as it plays), per-sound volume, pan and pitch, and volume
   groups (master, music, effects) for a settings screen.
-- ⬜ Pausing and resuming with the app's lifecycle, and following the audio
+  *`Sound` (shared PCM; `Sound::decode`, `Audio::load` resampled by windowed
+  sinc; a `Tone` synthesizer), `Audio::play` → `Voice` (stop, fades, volume,
+  constant-power pan, speed by cubic interpolation, pause), `play_music`
+  (a worker thread decodes into a lock-free ring, loop points), `Group`s with
+  volumes and pauses, `pause_all`. Commands reach the audio thread through a
+  `try_lock`ed queue; gains ramp per 256 frames. WAV built in; Ogg Vorbis,
+  MP3, FLAC and Opus behind the `audio` feature. `Audio::offline` renders
+  without a device; unit-tested exactly. See `docs/audio.md`.*
+- ✅ Pausing and resuming with the app's lifecycle, and following the audio
   session on iOS and Android (interruptions, the silent switch).
+  *`Lifecycle::Background` stops every output (the unit and an inactive
+  session on iOS, `requestPause` on Android) and `Foreground` restarts it; the
+  iOS session is ambient (mixes with other apps, follows the silent switch).
+  Interruption notifications and Android audio focus aren't followed yet.*
 
 #### 9e — Game UI
 - ⬜ A game theme: the game's own fonts (loaded from its files), colors,
