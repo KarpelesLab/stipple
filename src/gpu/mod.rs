@@ -42,7 +42,8 @@ use crate::render::{Color, Font, Pixmap, Scene};
 )]
 pub(crate) mod ops;
 
-// The glyph atlas and batching, shared by every executor.
+// The glyph atlas and batching, shared by every executor, and the
+// canvases kept as textures between frames.
 #[cfg_attr(
     not(any(
         all(any(target_os = "linux", target_os = "android"), feature = "gl"),
@@ -71,6 +72,20 @@ pub(crate) mod atlas;
     allow(dead_code)
 )]
 pub(crate) mod batch;
+#[cfg_attr(
+    not(any(
+        all(any(target_os = "linux", target_os = "android"), feature = "gl"),
+        all(
+            any(target_os = "linux", target_os = "android", target_os = "macos"),
+            feature = "vk"
+        ),
+        all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
+        all(target_os = "windows", feature = "d3d"),
+        all(target_arch = "wasm32", feature = "gpu")
+    )),
+    allow(dead_code)
+)]
+pub(crate) mod canvas;
 
 // The renderer seam: the executors of `ops`'s list, and choosing one.
 #[cfg_attr(
@@ -578,6 +593,81 @@ pub fn render_scene_scaled(
 /// a handful.
 pub fn last_frame_draw_calls() -> usize {
     renderer::LAST_DRAWS.with(|d| d.get())
+}
+
+/// What the calling thread's GPU renderers hold, and what they did in their
+/// last frame (see [`stats`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct GpuStats {
+    /// Bytes of texture the image caches hold: glyph atlas pages, images, and
+    /// canvases kept as textures.
+    pub texture_bytes: usize,
+    /// Bytes of pixels kept on the CPU for the canvases drawn as textures
+    /// (each also held as a texture).
+    pub canvas_bytes: usize,
+    /// Whole images uploaded as new textures in the last frame.
+    pub uploads: usize,
+    /// Bytes of canvas pixels rasterized again and uploaded into the
+    /// textures they had in the last frame (only their invalidated areas).
+    pub canvas_upload_bytes: usize,
+}
+
+/// The calling thread's GPU renderers (the one its windows share, and
+/// [`render_scene_scaled`]'s), summed: the texture memory their caches hold,
+/// and their last frame's uploads. All zero when nothing has drawn on the
+/// GPU. For benchmarks and memory budgets (`examples/bench`).
+pub fn stats() -> GpuStats {
+    let add = |s: &mut GpuStats, r: &renderer::GpuRenderer| {
+        let (uploaded, kept) = r.canvas_bytes();
+        s.texture_bytes += r.texture_bytes();
+        s.canvas_bytes += kept;
+        s.uploads += r.uploads();
+        s.canvas_upload_bytes += uploaded;
+    };
+    let mut s = GpuStats::default();
+    crate::app_gpu::inspect_gpu(|r| {
+        if let Some(r) = r {
+            add(&mut s, r);
+        }
+    });
+    DEFAULT.with(|cell| {
+        if let Ok(slot) = cell.try_borrow()
+            && let Some(r) = slot.as_ref()
+        {
+            add(&mut s, r);
+        }
+    });
+    s
+}
+
+/// The name of the device the calling thread's GPU renderer draws on, as
+/// its driver gives it (`Apple M2 Max`, `llvmpipe (LLVM 17.0.6, 256 bits)`,
+/// `Microsoft Basic Render Driver`), once something has drawn on the GPU:
+/// the renderer its windows share, else [`render_scene_scaled`]'s. `None`
+/// when nothing has, or the API doesn't say (in a browser).
+pub fn device_name() -> Option<String> {
+    let app = crate::app_gpu::inspect_gpu(|r| r.map(|r| r.device()));
+    app.or_else(|| {
+        DEFAULT.with(|cell| {
+            cell.try_borrow()
+                .ok()
+                .and_then(|slot| slot.as_ref().map(|r| r.device()))
+        })
+    })
+    .filter(|name| !name.is_empty())
+}
+
+/// [`render_scene_scaled`] without reading the frame back: draw `scene`
+/// offscreen on the calling thread's renderer and wait for the GPU to
+/// finish. What drawing a frame costs, for benchmarks (a window's frames go
+/// straight to its GPU layer, never read back).
+pub fn draw_scene_scaled(
+    scene: &Scene,
+    background: Color,
+    scale: ScaleFactor,
+) -> Result<(), String> {
+    with_default(|r| r.finish(scene, background, scale, None)).map_err(|e| e.to_string())
 }
 
 /// The API `STIPPLE_RENDERER` names (`metal`, `vulkan`, `gl`, `d3d11`), for

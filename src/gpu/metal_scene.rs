@@ -31,6 +31,7 @@
 
 use super::atlas::{AtlasPage, Upload};
 use super::batch::{self, Cmd, TexRef};
+use super::canvas::rekey;
 use super::ops::{Clip, Op, Plan, Sample};
 use super::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::geometry::{PhysicalSize, ScaleFactor};
@@ -354,6 +355,7 @@ struct Texture {
     image: Weak<Pixmap>,
     tex: Id,
     used: u64,
+    bytes: usize,
 }
 
 /// An atlas page's texture, holding `version` of it.
@@ -669,9 +671,58 @@ impl MetalExecutor {
                     image: Arc::downgrade(image),
                     tex,
                     used: count,
+                    bytes: w * h * 4,
                 },
             );
             Some(tex)
+        }
+    }
+
+    /// Update the textures `plan` changed in places (canvases kept as
+    /// textures), by a blit at the start of `f`'s command buffer: ordered
+    /// after the frames still drawing from them.
+    unsafe fn update_textures(&mut self, f: &mut Frame, plan: &Plan) {
+        if plan.updates.is_empty() {
+            return;
+        }
+        unsafe {
+            f.end();
+            let mut blit: Id = std::ptr::null_mut();
+            for u in &plan.updates {
+                let Some(t) = rekey(&mut self.textures, u, |t| &mut t.image) else {
+                    continue;
+                };
+                let tex = t.tex;
+                for &r in &u.rects {
+                    let bytes = u.rows(r);
+                    let buf = send!(Id; self.device, c"newBufferWithBytes:length:options:",
+                        bytes.as_ptr() as *const c_void; *const c_void, bytes.len(); usize, 0u64; u64);
+                    if buf.is_null() {
+                        continue;
+                    }
+                    if blit.is_null() {
+                        blit = send!(Id; f.cmd, c"blitCommandEncoder");
+                    }
+                    let size = Size3 {
+                        w: r[2] as usize,
+                        h: r[3] as usize,
+                        d: 1,
+                    };
+                    let origin = Size3 {
+                        w: r[0] as usize,
+                        h: r[1] as usize,
+                        d: 0,
+                    };
+                    send!((); blit,
+                        c"copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+                        buf; Id, 0usize; usize, r[2] as usize * 4; usize, bytes.len(); usize,
+                        size; Size3, tex; Id, 0usize; usize, 0usize; usize, origin; Size3);
+                    release(buf);
+                }
+            }
+            if !blit.is_null() {
+                send!((); blit, c"endEncoding");
+            }
         }
     }
 
@@ -1120,6 +1171,7 @@ impl MetalExecutor {
             self.uploads = 0;
             self.draws = 0;
             self.sync_atlas(f, &plan.atlas)?;
+            self.update_textures(f, plan);
             let mut levels = vec![Level {
                 layer: None,
                 opacity: 1.0,
@@ -1488,6 +1540,30 @@ impl Executor for MetalExecutor {
 
     fn draws(&self) -> usize {
         self.draws
+    }
+
+    fn texture_bytes(&self) -> usize {
+        self.textures.values().map(|t| t.bytes).sum::<usize>()
+            + self
+                .atlas
+                .values()
+                .map(|a| a.side as usize * a.side as usize * 4)
+                .sum::<usize>()
+    }
+
+    fn device(&self) -> String {
+        unsafe {
+            let name = send!(Id; self.device, c"name");
+            if name.is_null() {
+                return String::new();
+            }
+            let c = send!(*const c_char; name, c"UTF8String");
+            if c.is_null() {
+                String::new()
+            } else {
+                CStr::from_ptr(c).to_string_lossy().into_owned()
+            }
+        }
     }
 }
 

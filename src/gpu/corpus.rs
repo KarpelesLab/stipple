@@ -15,6 +15,10 @@ pub(crate) struct Case {
     pub scale: f64,
     pub mean: f64,
     pub bad: f64,
+    /// A frame drawn first, as the same window's, and what changed from it
+    /// to `scene` (logical rects): a canvas kept as a texture is updated
+    /// only there.
+    pub before: Option<(Scene, Vec<Rect>)>,
 }
 
 /// The background the corpus is drawn on.
@@ -36,6 +40,7 @@ pub(crate) fn cases(font: Option<&Font>) -> Vec<Case> {
                 scale,
                 mean,
                 bad,
+                before: None,
             });
         }
     };
@@ -54,6 +59,15 @@ pub(crate) fn cases(font: Option<&Font>) -> Vec<Case> {
         add("text-effects", text_effects(font), &[1.0, 2.0], 1.5, 0.02);
         add("text-page", text_page(font), &[1.0, 2.0], 1.0, 0.01);
     }
+    let (before, after, changed) = canvas_update();
+    out.push(Case {
+        name: "canvas-update".into(),
+        scene: after,
+        scale: 1.0,
+        mean: 0.5,
+        bad: 0.005,
+        before: Some((before, vec![changed])),
+    });
     out
 }
 
@@ -461,6 +475,39 @@ pub(crate) fn canvas() -> Scene {
         });
     s.draw_canvas(Rect::from_xywh(20.0, 20.0, 100.0, 70.0), &paint);
     s
+}
+
+/// A canvas (with an id, so the GPU renderers keep it as a texture) before
+/// and after a band of it changed, and the band (in the scene's
+/// coordinates).
+pub(crate) fn canvas_update() -> (Scene, Scene, Rect) {
+    let bounds = Rect::from_xywh(10.0, 10.0, 140.0, 100.0);
+    let band = Rect::from_xywh(0.0, 40.0, 140.0, 20.0);
+    let frame = |changed: bool| {
+        let mut s = Scene::new(Size::new(160.0, 120.0));
+        let paint: crate::render::CanvasPaint =
+            std::rc::Rc::new(move |c: &mut crate::render::Canvas<'_>| {
+                for i in 0..5 {
+                    let row = Rect::from_xywh(0.0, i as f64 * 20.0, 140.0, 20.0);
+                    let lit = changed && row == band;
+                    let color = if lit {
+                        Color::rgb(0xef, 0xc0, 0x40)
+                    } else {
+                        Color::rgb(0x30, 0x40 + i * 0x20, 0x60)
+                    };
+                    c.fill_rect(row, color);
+                    c.fill_round_rect(
+                        Rect::from_xywh(8.0 + i as f64 * 20.0, row.min_y() + 4.0, 40.0, 12.0),
+                        6.0,
+                        if lit { Color::BLACK } else { Color::WHITE },
+                    );
+                }
+            });
+        s.draw_canvas_with_id(bounds, &paint, Some(crate::core::CanvasId(1)));
+        s
+    };
+    let changed = band.translate(Vec2::new(bounds.min_x(), bounds.min_y()));
+    (frame(false), frame(true), changed)
 }
 
 /// A busy widget window at 1280x800 (drawn at scale 2): text, checkboxes,

@@ -147,7 +147,11 @@ and the 95th percentile:
 | `scroll_list` | A wheel step (48 px) over the 10,000-row list, to the frame ready |
 | `type_char` | A character typed into the focused text field, to the frame ready |
 | `theme_switch` | A click on a button switching light and dark, to the frame ready |
-| `sprites_2000` | 2000 32×32 sprites over a 1920×1080 background (the `spritedemo --bench` scene) |
+| `sprites_2000` | 2000 32×32 sprites over a 1920×1080 background (the `spritedemo --bench` scene), read back |
+| `gallery_4k` | The widget window at 3840×2160 (1920×1080 at scale 2), a whole frame drawn from its scene; on a GPU offscreen, waiting for it, not read back (what a frame presented to a window costs); `texture_mb`: the texture memory the GPU's caches hold after it |
+| `sprites_10k` | 10 000 sprites from a `SpriteSheet` over a 3840×2160 background, likewise |
+| `canvas_row` | One row of a 120×40 grid of characters drawn in an `Element::canvas` changed and invalidated, to the frame ready; on a GPU only the row is rasterized and uploaded into the canvas's texture (`upload_kb`) |
+| `transition` | Each frame of a page pushed and popped on a `nav_stack` and a bottom sheet opened and dismissed, animating, on a phone-sized window (390×844 at scale 3) |
 | `layout_tree` | Laying out a tree of ~4,000 elements |
 | `text_layout`, `text_layout_cold`, `text_layout_cjk` | Laying out a 400-word paragraph wrapped at 560 px: with shaping cached, with a font just loaded, and 1,200 Japanese characters through the system's CJK fallback (when there is one) |
 | `startup` | Loading the system font, making the app and drawing its first frame |
@@ -172,8 +176,41 @@ how many draw calls their last frame took (`draw_calls`, from
 `--quick` runs a third of the iterations, `--list` names the scenarios.
 Asking for a GPU renderer the machine doesn't have measures the software
 one instead, and the report says so (`gpu_unavailable`). The JSON holds
-each scenario's median, p95, minimum and samples, and the run's
-`calibration_ms`.
+each scenario's median, p95, minimum and samples, the run's
+`calibration_ms`, and on a GPU the device it drew on (`gpu_device`, from
+`stipple::gpu::device_name`) and whether that is a hardware GPU
+(`gpu_hardware`: not llvmpipe, lavapipe, SwiftShader, WARP or a virtual
+machine's paravirtual device). The memory figures come from
+`stipple::gpu::stats`.
+
+On an Apple M5 Max (macOS, release build; Chrome 157 for the browser,
+where these scenarios run in the module on the CPU):
+
+| Scenario | Software | Metal | Chrome (wasm, software) |
+|---|---|---|---|
+| `gallery_4k` | 357 ms | 0.76 ms, 1 MB of textures | 3.7 s |
+| `sprites_10k` | 18 ms | 2.6 ms, 34 MB of textures | 27 ms |
+| `canvas_row` | 0.49 ms (18 432 pixels) | 1.4 ms (74 kB uploaded; 171 ms drawing the canvas straight) | 1.4 ms |
+| `transition` (per frame) | 103 ms | 3.5 ms (p95 4.1) | 494 ms |
+
+The software renderer's `transition` frames are whole 1170×2532 frames,
+which is why phones draw on the GPU.
+
+**On a phone.** The benchmark draws offscreen, so on Android it runs as a
+plain executable over `adb`, on the GPU (GLES on EGL) or the CPU:
+
+```sh
+cargo build --release --example bench --features gl --target aarch64-linux-android  # with the NDK's linker
+adb push target/aarch64-linux-android/release/examples/bench /data/local/tmp/
+adb shell 'cd /data/local/tmp && ./bench --renderer gl --only transition,canvas_row --json phone.json'
+adb pull /data/local/tmp/phone.json && python3 tools/bench/compare.py phone.json
+```
+
+Its `transition` frames are held to 8.3 ms at the 95th percentile (120 Hz;
+`perf/budgets.json`, platforms `android` and `ios`). On iOS there's no
+shell to run it from yet: the scenario is the same app code, so time it in
+an app on the device. CI only compile-checks the benchmark for both (the
+`mobile` job in `ci.yml`).
 
 **In the browser**, the same scenarios run in the wasm module on the
 software renderer (its GPU renderers draw into the page's canvas only), and
@@ -207,7 +244,22 @@ The budgets are hard limits, whatever the baseline: on the desktop runners,
 `hover` and `type_char` must be ready within 16 ms (one frame at 60 Hz) on
 the software renderer and Metal; `scroll_list` (16 ms) and `theme_switch`
 (100 ms) warn for now, as do the browser's `web_hover` and `web_type_char`
-work (16 ms). Thresholds and budgets live in `perf/budgets.json`.
+work (16 ms). `canvas_row` must be ready within 16 ms on the software
+renderer (and warns past it on a GPU). Thresholds and budgets live in
+`perf/budgets.json`.
+
+The GPU targets depend on the device, so a budget can say
+`"hardware": true` (checked only when the report's `gpu_hardware` is) or
+`false` (only on a software GPU). On a hardware GPU, `gallery_4k` and
+`sprites_10k` must draw within 4 ms and `transition` frames within 8.3 ms
+(p95); CI's runners have no GPU (llvmpipe, WARP, SwiftShader, the macOS
+VM's paravirtual Metal), so there they only warn past a 250 ms ceiling,
+and the hardware targets are checked wherever the benchmark runs on a real
+GPU (`python3 tools/bench/compare.py out.json` on your machine). Memory
+budgets cap the texture memory the GPU's caches hold after `gallery_4k`
+(32 MB) and `sprites_10k` (48 MB: the 4K background is 33 MB), with `max`
+in place of `ms`. A scenario not in the baseline yet is reported without
+being compared.
 
 To take new baselines, run the Perf workflow by hand with
 **update_baseline** ticked (it commits the run's reports to

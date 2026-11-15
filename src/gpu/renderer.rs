@@ -8,8 +8,9 @@
 //! and presents it ([`GpuLayer`]), with its own texture, glyph and
 //! offscreen-target caches behind it.
 
+use super::canvas::CanvasCache;
 use super::ops::{self, Plan, RasterCache};
-use crate::geometry::ScaleFactor;
+use crate::geometry::{Rect, ScaleFactor};
 use crate::platform::GpuLayer;
 use crate::render::{Color, Pixmap, Scene};
 
@@ -175,6 +176,18 @@ pub(crate) trait Executor {
     fn draws(&self) -> usize {
         0
     }
+
+    /// Bytes of texture the executor's image cache holds (glyph rasters,
+    /// images, canvases).
+    fn texture_bytes(&self) -> usize {
+        0
+    }
+
+    /// The device's name, as the driver gives it (`llvmpipe`, `Microsoft
+    /// Basic Render Driver`, `Apple M2`), if known.
+    fn device(&self) -> String {
+        String::new()
+    }
 }
 
 thread_local! {
@@ -323,6 +336,12 @@ impl KeptFrame {
 pub(crate) struct GpuRenderer {
     exec: Box<dyn Executor>,
     rasters: RasterCache,
+    /// The canvases each window keeps as textures.
+    canvases: CanvasCache,
+    /// Whose frame the next one is, and its damage ([`next_frame`](Self::next_frame)).
+    next: Option<(u64, Option<Vec<Rect>>)>,
+    /// Whose frame is being drawn.
+    drawing: Option<u64>,
     /// The next frame fails as if the device were lost (tests).
     #[cfg(test)]
     lose: bool,
@@ -385,6 +404,9 @@ impl GpuRenderer {
         Self {
             exec,
             rasters: RasterCache::default(),
+            canvases: CanvasCache::default(),
+            next: None,
+            drawing: None,
             #[cfg(test)]
             lose: false,
         }
@@ -394,9 +416,24 @@ impl GpuRenderer {
         self.exec.api()
     }
 
+    /// The next frame is window `owner`'s, and `damage` (logical rects;
+    /// `None` for all of it) is what changed since its last one: its
+    /// canvases are kept as textures and updated only there. Frames drawn
+    /// without this draw canvases straight.
+    pub(crate) fn next_frame(&mut self, owner: u64, damage: Option<Vec<Rect>>) {
+        self.next = Some((owner, damage));
+    }
+
     fn plan(&mut self, scene: &Scene, background: Color, scale: ScaleFactor) -> Plan {
         let physical = scale.to_physical(scene.logical_size());
-        ops::plan(scene, background, physical, &mut self.rasters)
+        let next = self.next.take();
+        self.drawing = next.as_ref().map(|n| n.0);
+        let canvases = next.map(|(owner, damage)| ops::CanvasArgs {
+            cache: &mut self.canvases,
+            owner,
+            damage,
+        });
+        ops::plan_with(scene, background, physical, &mut self.rasters, canvases)
     }
 
     #[cfg(test)]
@@ -425,10 +462,14 @@ impl GpuRenderer {
         self.counted(frame)
     }
 
-    /// Note the frame's draw calls.
-    fn counted<T>(&self, frame: Result<T, GpuError>) -> Result<T, GpuError> {
+    /// After drawing a frame: note its draw calls; one that failed leaves
+    /// its window's canvas textures unknown, so they start over.
+    fn counted<T>(&mut self, frame: Result<T, GpuError>) -> Result<T, GpuError> {
+        let owner = self.drawing.take();
         if frame.is_ok() {
             LAST_DRAWS.with(|d| d.set(self.exec.draws()));
+        } else if let Some(owner) = owner {
+            self.canvases.forget(owner);
         }
         frame
     }
@@ -481,7 +522,6 @@ impl GpuRenderer {
     /// Render `scene` offscreen and wait for the GPU, without a read-back;
     /// with `region`, only that pixel rectangle over the last frame (see
     /// [`render_partial`](Self::render_partial)).
-    #[allow(dead_code)] // the comparison tests and benchmark use it
     pub(crate) fn finish(
         &mut self,
         scene: &Scene,
@@ -498,7 +538,6 @@ impl GpuRenderer {
     }
 
     /// Texture uploads in the last frame.
-    #[allow(dead_code)] // the comparison tests and benchmark use it
     pub(crate) fn uploads(&self) -> usize {
         self.exec.uploads()
     }
@@ -507,6 +546,22 @@ impl GpuRenderer {
     #[allow(dead_code)] // the comparison tests and benchmark use it
     pub(crate) fn draws(&self) -> usize {
         self.exec.draws()
+    }
+
+    /// The device's name, if known.
+    pub(crate) fn device(&self) -> String {
+        self.exec.device()
+    }
+
+    /// Bytes of texture the executor's caches hold.
+    pub(crate) fn texture_bytes(&self) -> usize {
+        self.exec.texture_bytes()
+    }
+
+    /// Bytes of canvas pixels the last frame rasterized and uploaded, and
+    /// bytes of canvas pixels kept on the CPU.
+    pub(crate) fn canvas_bytes(&self) -> (usize, usize) {
+        (self.canvases.uploaded(), self.canvases.bytes())
     }
 
     /// Make the next frame fail as if the device were lost.
@@ -557,6 +612,7 @@ mod tests {
     fn a_kept_frame_is_its_windows_only() {
         let mut kept = KeptFrame::default();
         let mut plan = Plan {
+            updates: Vec::new(),
             size: PhysicalSize::new(SIZE.0, SIZE.1),
             background: Color::rgb(1, 2, 3),
             ops: Vec::new(),

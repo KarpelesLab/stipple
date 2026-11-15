@@ -1010,11 +1010,21 @@ CPU as the default and the fallback.
   when unsure. Run on Metal, MoltenVK (offscreen), WebGPU and WebGL2
   (widget window 1.27 → 0.45 ms for a button's change on Metal); D3D11, X11
   and Android presents compile-checked, CI-run.*
-- ⬜ Canvases (`Element::canvas`) upload only their invalidated areas, or draw
+- ✅ Canvases (`Element::canvas`) upload only their invalidated areas, or draw
   straight to the GPU when their content is only scene primitives.
-- ⬜ Benchmarks in CI with targets: a full 4K redraw of the widget gallery and
+  *`src/gpu/canvas.rs`: a window's canvases are textures re-rasterized only
+  under the frame's damage and sub-uploaded on every executor; canvases that
+  change mostly whole each frame, or can't be textures, draw straight.
+  Run on Metal, Vulkan (MoltenVK), WebGPU and WebGL2 (Chrome); D3D11 and
+  GLES2 compile-checked, run by CI's comparisons.*
+- ✅ Benchmarks in CI with targets: a full 4K redraw of the widget gallery and
   of 10 000 sprites under 4 ms on the desktop runners' GPUs, and 120 Hz with
   page and sheet transitions on the phones; memory budgets for the caches.
+  *`gallery_4k`, `sprites_10k`, `canvas_row`, `transition`; the 4 ms and
+  8.3 ms targets apply to runs on a hardware GPU (the report's
+  `gpu_hardware`; CI's runners have none: they get loose ceilings), the
+  phones' by running the benchmark on a device (docs/performance.md).
+  On an M5 Max: 0.76 ms and 2.6 ms on Metal, transition frames 3.5 ms.*
 
 #### 6g — Zero-copy content
 - ⬜ Embedded viewports (`Element::viewport`), video frames and the camera

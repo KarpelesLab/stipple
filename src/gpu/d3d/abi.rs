@@ -42,7 +42,6 @@ pub(crate) const DXGI_FORMAT_B8G8R8A8_UNORM: u32 = 87;
 
 // --- d3d11.h: resources ---
 pub(crate) const D3D11_USAGE_DEFAULT: u32 = 0;
-pub(crate) const D3D11_USAGE_IMMUTABLE: u32 = 1;
 pub(crate) const D3D11_USAGE_DYNAMIC: u32 = 2;
 pub(crate) const D3D11_USAGE_STAGING: u32 = 3;
 pub(crate) const D3D11_BIND_VERTEX_BUFFER: u32 = 0x1;
@@ -192,6 +191,8 @@ pub(crate) const VT_DXGI_OBJECT_GET_PARENT: usize = 6;
 pub(crate) const VT_DXGI_DEVICE_GET_ADAPTER: usize = 7;
 /// `IDXGIResource` (`IDXGIObject` 0-6, `IDXGIDeviceSubObject::GetDevice` 7).
 pub(crate) const VT_DXGI_RESOURCE_GET_SHARED_HANDLE: usize = 8;
+/// `IDXGIAdapter` (`IDXGIObject` 0-6, EnumOutputs 7).
+pub(crate) const VT_DXGI_ADAPTER_GET_DESC: usize = 8;
 /// `IDXGIFactory` (`IDXGIObject` 0-6, EnumAdapters 7).
 pub(crate) const VT_FACTORY_MAKE_WINDOW_ASSOCIATION: usize = 8;
 // 9 GetWindowAssociation, 10 CreateSwapChain, 11 CreateSoftwareAdapter,
@@ -322,6 +323,41 @@ pub(crate) struct SubresourceData {
     pub pSysMem: *const c_void,
     pub SysMemPitch: u32,
     pub SysMemSlicePitch: u32,
+}
+
+/// `DXGI_ADAPTER_DESC`
+#[repr(C)]
+pub(crate) struct AdapterDesc {
+    pub Description: [u16; 128],
+    pub VendorId: u32,
+    pub DeviceId: u32,
+    pub SubSysId: u32,
+    pub Revision: u32,
+    pub DedicatedVideoMemory: usize,
+    pub DedicatedSystemMemory: usize,
+    pub SharedSystemMemory: usize,
+    /// `LUID`: `LowPart`, `HighPart`.
+    pub AdapterLuid: [u32; 2],
+}
+
+impl AdapterDesc {
+    /// The adapter's name.
+    pub(crate) fn name(&self) -> String {
+        let end = self.Description.iter().position(|&c| c == 0).unwrap_or(128);
+        String::from_utf16_lossy(&self.Description[..end])
+    }
+}
+
+/// `D3D11_BOX`
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct D3d11Box {
+    pub left: u32,
+    pub top: u32,
+    pub front: u32,
+    pub right: u32,
+    pub bottom: u32,
+    pub back: u32,
 }
 
 /// `D3D11_MAPPED_SUBRESOURCE`
@@ -678,6 +714,24 @@ mod tests {
         assert_eq!(size_of::<Guid>(), 16);
         assert_eq!(size_of::<Texture2dDesc>(), 44);
         assert_eq!(size_of::<BufferDesc>(), 24);
+        assert_eq!(size_of::<D3d11Box>(), 24);
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(size_of::<AdapterDesc>(), 304);
+        let mut desc = AdapterDesc {
+            Description: [0; 128],
+            VendorId: 0,
+            DeviceId: 0,
+            SubSysId: 0,
+            Revision: 0,
+            DedicatedVideoMemory: 0,
+            DedicatedSystemMemory: 0,
+            SharedSystemMemory: 0,
+            AdapterLuid: [0; 2],
+        };
+        for (d, c) in desc.Description.iter_mut().zip("WARP".encode_utf16()) {
+            *d = c;
+        }
+        assert_eq!(desc.name(), "WARP");
         assert_eq!(size_of::<RenderTargetBlendDesc>(), 32);
         assert_eq!(size_of::<BlendDesc>(), 264);
         assert_eq!(size_of::<StencilOpDesc>(), 16);

@@ -37,6 +37,7 @@
 
 use super::atlas::{AtlasPage, Upload};
 use super::batch::{Cmd, QUAD_FLOATS, TexRef};
+use super::canvas::rekey;
 use super::ops::{Clip, Op, Plan};
 use super::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::geometry::ScaleFactor;
@@ -110,6 +111,7 @@ struct Texture {
     image: Weak<Pixmap>,
     id: u32,
     used: u64,
+    bytes: usize,
 }
 
 /// An atlas page's texture in the page, holding `version` of it.
@@ -201,6 +203,7 @@ impl WebExecutor {
                 image: Arc::downgrade(image),
                 id,
                 used: self.count,
+                bytes: image.as_bytes().len(),
             },
         );
         Some(id)
@@ -249,6 +252,21 @@ impl WebExecutor {
                         self.uploads += 1;
                     }
                 }
+            }
+        }
+    }
+
+    /// Update the textures `plan` changed in places (canvases kept as
+    /// textures), a rectangle at a time.
+    fn update_textures(&mut self, plan: &Plan) {
+        for u in &plan.updates {
+            let Some(t) = rekey(&mut self.textures, u, |t| &mut t.image) else {
+                continue;
+            };
+            let id = t.id;
+            for &r in &u.rects {
+                let rows = u.rows(r);
+                unsafe { js::gpu_texture_sub(id, rows.as_ptr(), r[0], r[1], r[2], r[3]) };
             }
         }
     }
@@ -394,6 +412,7 @@ impl Executor for WebExecutor {
         _scale: ScaleFactor,
         dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
+        self.update_textures(plan);
         // Only what changed, over the last frame the page keeps.
         self.kept.limit(0, plan, dirty);
         self.encode(plan);
@@ -419,6 +438,15 @@ impl Executor for WebExecutor {
 
     fn uploads(&self) -> usize {
         self.uploads
+    }
+
+    fn texture_bytes(&self) -> usize {
+        self.textures.values().map(|t| t.bytes).sum::<usize>()
+            + self
+                .atlas
+                .values()
+                .map(|a| a.side as usize * a.side as usize * 4)
+                .sum::<usize>()
     }
 }
 

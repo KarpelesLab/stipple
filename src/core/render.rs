@@ -1260,7 +1260,9 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible
             scene.draw_image_source(node.bounds.inset(*padding), source, *fit);
         }
         // The app draws it, when it is rasterized (see `Scene::draw_canvas`).
-        NodeContent::Canvas { paint, .. } => scene.draw_canvas(node.bounds, &paint.0),
+        NodeContent::Canvas { paint, id, .. } => {
+            scene.draw_canvas_with_id(node.bounds, &paint.0, Some(*id))
+        }
         NodeContent::None => {}
     }
     // Clip children to this node's bounds (scroll containers, overlay panels)

@@ -35,6 +35,7 @@ use super::sys::*;
 use crate::geometry::{PhysicalSize, ScaleFactor};
 use crate::gpu::atlas::{AtlasPage, Upload};
 use crate::gpu::batch::QUAD_FLOATS;
+use crate::gpu::canvas::{TextureUpdate, rekey};
 use crate::gpu::ops::Plan;
 use crate::gpu::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::platform::GpuLayer;
@@ -150,6 +151,7 @@ struct Tex {
     image: Weak<Pixmap>,
     img: Image,
     used: u64,
+    bytes: usize,
 }
 
 /// An atlas page's texture, holding `version` of it.
@@ -201,6 +203,8 @@ pub(crate) struct VkExecutor {
     family: u32,
     memory: VkPhysicalDeviceMemoryProperties,
     max_size: i32,
+    /// `VkPhysicalDeviceProperties::deviceName`.
+    device_name: String,
     stencil_format: u32,
     stencil_aspect: u32,
     /// The platform's window surface extension (xcb, Android) is on.
@@ -349,6 +353,10 @@ impl VkExecutor {
                     .unwrap(),
             );
             let max_size = (max as i32).clamp(4096, 16384);
+            // `deviceName`, after the four version and id words and the type.
+            let name = &props[20..20 + 256];
+            let end = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+            let device_name = String::from_utf8_lossy(&name[..end]).into_owned();
 
             // Device extensions: the swapchain, when there are surfaces, and
             // the portability subset, where the driver has one.
@@ -440,6 +448,7 @@ impl VkExecutor {
                 family,
                 memory,
                 max_size,
+                device_name,
                 stencil_format: stencil.unwrap_or(FORMAT_UNDEFINED),
                 stencil_aspect: if stencil == Some(FORMAT_S8_UINT) {
                     ASPECT_STENCIL
@@ -1408,7 +1417,7 @@ impl VkExecutor {
             )?;
             self.uploads = 0;
             self.draws = 0;
-            let images = self.upload(&rec, &plan.atlas)?;
+            let images = self.upload(&rec, &plan.atlas, &plan.updates)?;
             let sets = self.descriptor_sets(&rec, &images, &plan.atlas)?;
             // The paths' vertices, then the quads' (at `quads`).
             let plain = std::mem::size_of_val(rec.vertices.as_slice());
@@ -1435,16 +1444,26 @@ impl VkExecutor {
         }
     }
 
-    /// Upload the images `rec` draws that aren't cached, and what changed
-    /// in the atlas `pages`; returns each image's view, in `rec.images`'
-    /// order.
+    /// Upload the images `rec` draws that aren't cached, what changed in
+    /// the atlas `pages`, and the rectangles of cached images that changed
+    /// (`updates`: canvases kept as textures); returns each image's view,
+    /// in `rec.images`' order.
     unsafe fn upload(
         &mut self,
         rec: &Recording,
         pages: &[AtlasPage],
+        updates: &[TextureUpdate],
     ) -> Result<Vec<VkImageView>, GpuError> {
         unsafe {
             let count = self.count;
+            // Textures updated in places: now their new image's, each
+            // rectangle copied in below. (key, update)
+            let mut patched: Vec<(usize, &TextureUpdate)> = Vec::new();
+            for u in updates {
+                if rekey(&mut self.textures, u, |t| &mut t.image).is_some() {
+                    patched.push((Arc::as_ptr(&u.image) as usize, u));
+                }
+            }
             // Atlas pages gone: their textures go (no frame is in flight).
             let gone: Vec<u64> = self
                 .atlas
@@ -1516,12 +1535,19 @@ impl VkExecutor {
                         image: Arc::downgrade(image),
                         img,
                         used: count,
+                        bytes: image.as_bytes().len(),
                     },
                 );
                 fresh.push((i, staged));
                 staged += image.as_bytes().len().next_multiple_of(16);
             }
-            if fresh.is_empty() && atlas.is_empty() {
+            let patch_at = staged;
+            for (_, u) in &patched {
+                for r in &u.rects {
+                    staged += (r[2] as usize * r[3] as usize * 4).next_multiple_of(16);
+                }
+            }
+            if fresh.is_empty() && atlas.is_empty() && patched.is_empty() {
                 return Ok(views);
             }
             self.ensure_buffer(
@@ -1540,6 +1566,10 @@ impl VkExecutor {
             }
             for &(id, _, _) in &atlas {
                 let t = self.atlas.get_mut(&id).unwrap();
+                transition(&mut barriers, &mut t.img, LAYOUT_TRANSFER_DST);
+            }
+            for &(key, _) in &patched {
+                let t = self.textures.get_mut(&key).unwrap();
                 transition(&mut barriers, &mut t.img, LAYOUT_TRANSFER_DST);
             }
             self.barrier(&barriers);
@@ -1603,6 +1633,39 @@ impl VkExecutor {
                 );
                 self.uploads += 1;
             }
+            let mut offset = patch_at;
+            for &(key, u) in &patched {
+                let dst = self.textures[&key].img.image;
+                for &r in &u.rects {
+                    let rows = u.rows(r);
+                    std::ptr::copy_nonoverlapping(rows.as_ptr(), ptr.add(offset), rows.len());
+                    let region = VkBufferImageCopy {
+                        bufferOffset: offset as u64,
+                        bufferRowLength: 0,
+                        bufferImageHeight: 0,
+                        imageSubresource: layers(ASPECT_COLOR),
+                        imageOffset: VkOffset3D {
+                            x: r[0] as i32,
+                            y: r[1] as i32,
+                            z: 0,
+                        },
+                        imageExtent: VkExtent3D {
+                            width: r[2],
+                            height: r[3],
+                            depth: 1,
+                        },
+                    };
+                    (self.vk.vkCmdCopyBufferToImage)(
+                        self.cmd,
+                        buffer,
+                        dst,
+                        LAYOUT_TRANSFER_DST,
+                        1,
+                        &region,
+                    );
+                    offset += rows.len().next_multiple_of(16);
+                }
+            }
             let mut barriers = Vec::new();
             for &(i, _) in &fresh {
                 let key = Arc::as_ptr(&rec.images[i]) as usize;
@@ -1611,6 +1674,10 @@ impl VkExecutor {
             }
             for &(id, _, _) in &atlas {
                 let t = self.atlas.get_mut(&id).unwrap();
+                transition(&mut barriers, &mut t.img, LAYOUT_SHADER_READ_ONLY);
+            }
+            for &(key, _) in &patched {
+                let t = self.textures.get_mut(&key).unwrap();
                 transition(&mut barriers, &mut t.img, LAYOUT_SHADER_READ_ONLY);
             }
             self.barrier(&barriers);
@@ -2682,6 +2749,19 @@ impl Executor for VkExecutor {
 
     fn draws(&self) -> usize {
         self.draws
+    }
+
+    fn texture_bytes(&self) -> usize {
+        self.textures.values().map(|t| t.bytes).sum::<usize>()
+            + self
+                .atlas
+                .values()
+                .map(|a| a.side as usize * a.side as usize * 4)
+                .sum::<usize>()
+    }
+
+    fn device(&self) -> String {
+        self.device_name.clone()
     }
 }
 

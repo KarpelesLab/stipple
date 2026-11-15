@@ -136,8 +136,21 @@ renderer does, and turns it into device-space draw operations:
   below 1 is drawn into an offscreen target and composited once at that
   opacity, so overlapping content inside it doesn't show through itself.
 - **Clips** are scissor rectangles when upright, stencil polygons when rotated.
-- **Canvases** run their paint callback for the part on screen, and what they
-  paint is drawn like the rest.
+- **Canvases** (`Element::canvas`) in a window's frames are kept as
+  textures: rasterized on the CPU once, into exactly the pixels the canvas
+  covers, then on each later frame only the frame's damage over it (the
+  areas `invalidate_canvas_rect` named, whatever moved over it) is
+  rasterized again and uploaded into the texture it already has
+  (`replaceRegion`-style sub-uploads: a blit from a buffer on Metal,
+  `UpdateSubresource` with a box on Direct3D 11, buffer-to-image copy
+  regions on Vulkan, `glTexSubImage2D` on GLES2 and WebGL2, `writeTexture`
+  with an origin on WebGPU). A terminal that changes a row a tick uploads a
+  row. A canvas that changes over half its area three frames in a row (a
+  game drawn into it, one that moves), one drawn rotated or skewed, partly
+  off the window, or sharing its id with another canvas is instead drawn
+  straight on the GPU: its paint callback runs for the part on screen and
+  what it paints is drawn like the rest (a canvas back to changing little
+  for ten frames becomes a texture again). `src/gpu/canvas.rs`.
 - Gradients, soft masks, raw `oxideav` image nodes and concave clips (none of
   which Stipple's own widgets make) are rasterized on the CPU for just their
   bounds and drawn as an image.
@@ -287,6 +300,12 @@ The Metal times include lowering the scene on the CPU and waiting for the
 GPU to finish. In a window, `spritedemo` (2560×1504 pixels, redrawn every
 frame) runs at the display's 120 fps either way, but takes 84% of a CPU core
 on the software renderer and 4% on Metal.
+
+Canvases kept as textures: the benchmark's `canvas_row` (one row of a
+120×40 grid of characters in a canvas filling a 1024×768 window changed and
+invalidated, to the frame read back) takes 1.4 ms on Metal, uploading
+74 kB; drawing that canvas straight every frame instead took 171 ms (every
+glyph of the grid rasterized and drawn again).
 
 ## Direct3D 11
 

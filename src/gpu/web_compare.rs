@@ -10,6 +10,9 @@ use crate::platform::GpuLayer;
 use crate::render::{Font, Pixmap, Scene, SoftwareRenderer};
 use std::cell::RefCell;
 
+/// The window number the comparison's frames are drawn as.
+const OWNER: u64 = u64::MAX;
+
 thread_local! {
     static CASES: RefCell<Vec<Case>> = const { RefCell::new(Vec::new()) };
     static BENCH: RefCell<Vec<(Scene, f64)>> = const { RefCell::new(Vec::new()) };
@@ -44,20 +47,23 @@ pub fn bench_count() -> usize {
     BENCH.with(|b| b.borrow().len())
 }
 
-fn scene_of(i: usize, bench: bool) -> (Scene, f64) {
+type Before = Option<(Scene, Vec<crate::geometry::Rect>)>;
+
+fn scene_of(i: usize, bench: bool) -> (Scene, f64, Before) {
     if bench {
-        BENCH.with(|b| b.borrow()[i].clone())
+        let (scene, scale) = BENCH.with(|b| b.borrow()[i].clone());
+        (scene, scale, None)
     } else {
         CASES.with(|c| {
             let c = &c.borrow()[i];
-            (c.scene.clone(), c.scale)
+            (c.scene.clone(), c.scale, c.before.clone())
         })
     }
 }
 
 /// Case (or with `bench`, timing scene) `i` on the CPU.
 pub fn cpu(i: usize, bench: bool) -> Pixmap {
-    let (scene, scale) = scene_of(i, bench);
+    let (scene, scale, _) = scene_of(i, bench);
     SoftwareRenderer::new()
         .background(corpus::BACKGROUND)
         .render(scene, ScaleFactor::new(scale))
@@ -66,8 +72,30 @@ pub fn cpu(i: usize, bench: bool) -> Pixmap {
 /// Case (or timing scene) `i` drawn into the page's canvas on `api` (0 the
 /// page's choice, 1 WebGPU, 2 WebGL2). The page sets its GPU up before.
 pub fn gpu(i: usize, bench: bool, api: u32) -> Result<String, String> {
-    let (scene, scale) = scene_of(i, bench);
-    present(&scene, scale, api, None)
+    let (scene, scale, before) = scene_of(i, bench);
+    let Some((first, changed)) = before else {
+        return present(&scene, scale, api, None);
+    };
+    // A window's frame before this one, then this one with what changed:
+    // its canvas texture must be updated in place, not uploaded anew. (The
+    // first present sets the renderer up.)
+    present(&first, scale, api, None)?;
+    let canvases = |damage: Option<Vec<crate::geometry::Rect>>| {
+        GPU.with(|g| {
+            if let Some(r) = g.borrow_mut().as_mut() {
+                r.next_frame(OWNER, damage);
+            }
+        })
+    };
+    canvases(None);
+    present(&first, scale, api, None)?;
+    canvases(Some(changed));
+    let name = present(&scene, scale, api, None)?;
+    let uploads = GPU.with(|g| g.borrow().as_ref().map_or(0, |r| r.uploads()));
+    if uploads != 0 {
+        return Err(format!("{name} uploaded the canvas anew"));
+    }
+    Ok(name)
 }
 
 /// Draw `scene` into the canvas, only `dirty` (physical pixels) when the

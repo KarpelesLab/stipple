@@ -1749,6 +1749,7 @@ impl<S: 'static> Pane<S> {
         } else {
             // Full render: forced (expose/resize), GPU path, first frame, a
             // size change, or unlocalizable (`Damage::Full`) damage.
+            self.gpu.damage = Some(app_gpu::canvas_damage(&damage, force));
             let mut pixmap = self.rasterize(scene, theme, scale);
             self.composite_viewports(&mut pixmap, viewport_content, scale);
             let regions = if force || fading {

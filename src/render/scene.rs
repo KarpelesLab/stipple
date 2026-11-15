@@ -241,6 +241,16 @@ impl Scene {
     /// just that part. An area repaint of two rows of a terminal runs it for
     /// those two rows.
     pub fn draw_canvas(&mut self, bounds: Rect, paint: &CanvasPaint) {
+        self.draw_canvas_with_id(bounds, paint, None);
+    }
+
+    /// [`draw_canvas`](Self::draw_canvas) for an element's canvas, by its id.
+    pub(crate) fn draw_canvas_with_id(
+        &mut self,
+        bounds: Rect,
+        paint: &CanvasPaint,
+        id: Option<crate::core::CanvasId>,
+    ) {
         if bounds.width() <= 0.0 || bounds.height() <= 0.0 {
             return;
         }
@@ -249,6 +259,7 @@ impl Scene {
             bounds,
             paint: paint.clone(),
             scale: self.scale,
+            id,
         });
         self.emit_uncommanded(placeholder(index, bounds));
     }

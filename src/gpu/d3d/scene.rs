@@ -32,6 +32,7 @@ use super::{D3D11CreateDevice, blob_bytes, compile_source, release, vmethod};
 use crate::geometry::{PhysicalSize, ScaleFactor};
 use crate::gpu::atlas::{AtlasPage, Upload};
 use crate::gpu::batch::{self, Cmd, QUAD_FLOATS, TexRef};
+use crate::gpu::canvas::rekey;
 use crate::gpu::d3d_abi::*;
 use crate::gpu::ops::{Clip, Op, Plan, Sample};
 use crate::gpu::renderer::{Api, DamageLog, Executor, GpuError};
@@ -160,9 +161,10 @@ struct Target {
 /// A cached image texture.
 struct Texture {
     image: Weak<Pixmap>,
-    _tex: Com,
+    tex: Com,
     srv: Com,
     used: u64,
+    bytes: usize,
 }
 
 /// An atlas page's texture, holding `version` of it.
@@ -249,6 +251,8 @@ pub(crate) struct D3dExecutor {
     ctx: Com,
     /// The largest texture side the device takes.
     max: i32,
+    /// The adapter's name (`Microsoft Basic Render Driver` for WARP).
+    device_name: String,
     vs: Com,
     layout: Com,
     /// The batched quads' vertex shader and input layout, and their pixel
@@ -313,6 +317,30 @@ impl Drop for D3dExecutor {
     }
 }
 
+/// The name of the adapter `device` is on, or an empty string.
+unsafe fn adapter_name(device: *mut c_void) -> String {
+    unsafe {
+        let mut dxgi = std::ptr::null_mut();
+        let hr = com!(device, VT_QUERY_INTERFACE,
+            (*const Guid, *mut *mut c_void) -> Hresult, &IID_IDXGI_DEVICE, &mut dxgi);
+        if hr < 0 || dxgi.is_null() {
+            return String::new();
+        }
+        let dxgi = Com(dxgi);
+        let mut adapter = std::ptr::null_mut();
+        let hr = com!(dxgi.ptr(), VT_DXGI_DEVICE_GET_ADAPTER,
+            (*mut *mut c_void) -> Hresult, &mut adapter);
+        if hr < 0 || adapter.is_null() {
+            return String::new();
+        }
+        let adapter = Com(adapter);
+        let mut desc = std::mem::zeroed::<AdapterDesc>();
+        let hr = com!(adapter.ptr(), VT_DXGI_ADAPTER_GET_DESC,
+            (*mut AdapterDesc) -> Hresult, &mut desc);
+        if hr < 0 { String::new() } else { desc.name() }
+    }
+}
+
 /// Make a D3D11 device: a hardware one, or WARP.
 unsafe fn create_device() -> Result<(Com, Com, u32), GpuError> {
     let levels = [
@@ -368,10 +396,12 @@ impl D3dExecutor {
             } else {
                 D3D10_MAX_TEXTURE_SIZE
             };
+            let device_name = adapter_name(device.ptr());
             let mut me = D3dExecutor {
                 device,
                 ctx,
                 max,
+                device_name,
                 vs: Com::null(),
                 layout: Com::null(),
                 quad_vs: Com::null(),
@@ -621,11 +651,13 @@ impl D3dExecutor {
             if w == 0 || h == 0 || w > self.max as u32 || h > self.max as u32 {
                 return None;
             }
+            // Default rather than immutable usage: a canvas's texture is
+            // updated in places (`update_textures`).
             let desc = Texture2dDesc::new(
                 w,
                 h,
                 DXGI_FORMAT_R8G8B8A8_UNORM,
-                D3D11_USAGE_IMMUTABLE,
+                D3D11_USAGE_DEFAULT,
                 D3D11_BIND_SHADER_RESOURCE,
                 0,
             );
@@ -649,12 +681,43 @@ impl D3dExecutor {
                 key,
                 Texture {
                     image: Arc::downgrade(image),
-                    _tex: tex,
+                    tex,
                     srv,
                     used: count,
+                    bytes: w as usize * h as usize * 4,
                 },
             );
             Some(ptr)
+        }
+    }
+
+    /// Update the textures `plan` changed in places (canvases kept as
+    /// textures): `UpdateSubresource` of each rectangle as a box, straight
+    /// from the image's rows.
+    unsafe fn update_textures(&mut self, plan: &Plan) {
+        unsafe {
+            let ctx = self.ctx.ptr();
+            for u in &plan.updates {
+                let Some(t) = rekey(&mut self.textures, u, |t| &mut t.image) else {
+                    continue;
+                };
+                let tex = t.tex.ptr();
+                let bytes = u.image.as_bytes();
+                for &r in &u.rects {
+                    let b = D3d11Box {
+                        left: r[0],
+                        top: r[1],
+                        front: 0,
+                        right: r[0] + r[2],
+                        bottom: r[1] + r[3],
+                        back: 1,
+                    };
+                    let src = bytes[u.offset(r)..].as_ptr() as *const c_void;
+                    com!(ctx, VT_CTX_UPDATE_SUBRESOURCE,
+                        (*mut c_void, u32, *const D3d11Box, *const c_void, u32, u32) -> (),
+                        tex, 0, &b, src, u.image.stride() as u32, 0);
+                }
+            }
         }
     }
 
@@ -1173,6 +1236,7 @@ impl D3dExecutor {
             }
             self.uploads = 0;
             self.draws = 0;
+            self.update_textures(plan);
             self.fixed_state();
             self.sync_atlas(&plan.atlas)?;
             let mut levels = vec![Level {
@@ -1802,6 +1866,19 @@ impl Executor for D3dExecutor {
 
     fn draws(&self) -> usize {
         self.draws
+    }
+
+    fn texture_bytes(&self) -> usize {
+        self.textures.values().map(|t| t.bytes).sum::<usize>()
+            + self
+                .atlas
+                .values()
+                .map(|a| a.side as usize * a.side as usize * 4)
+                .sum::<usize>()
+    }
+
+    fn device(&self) -> String {
+        self.device_name.clone()
     }
 }
 

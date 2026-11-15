@@ -137,8 +137,10 @@ jobs:
         include:
           - target: aarch64-linux-android
             os: ubuntu-latest
+            gpu: gl
           - target: aarch64-apple-ios
             os: macos-latest
+            gpu: mtl
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
@@ -147,6 +149,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo build (the library)
         run: cargo build --target ${{ matrix.target }}
+      # The benchmark runs on a phone too (its `transition` frames are held
+      # to 120 Hz there, docs/performance.md); CI can only build it.
+      - name: cargo check (the benchmark, with the GPU renderer)
+        run: cargo check --example bench --features ${{ matrix.gpu }} --target ${{ matrix.target }}
 
   # The public API against docs/api-guidelines.md: #[non_exhaustive], options
   # structs, one path per item. rustdoc's JSON output is a nightly feature.

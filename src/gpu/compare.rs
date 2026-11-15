@@ -248,6 +248,36 @@ fn a_partial_redraw_matches_the_software_renderer() {
     }
 }
 
+/// A canvas kept as a texture, a band of it changed: only the band is
+/// rasterized and uploaded into the texture it had, and the frame matches
+/// the software renderer's of the new content.
+#[test]
+fn a_canvas_texture_updated_in_place_matches_the_software_renderer() {
+    let (before, after, changed) = canvas_update();
+    if gpu(&before, BACKGROUND, 1.0).is_none() {
+        return;
+    }
+    let owner = u64::MAX - 1;
+    let frame = with_default(|r| {
+        r.next_frame(owner, None);
+        r.render(&before, BACKGROUND, ScaleFactor::IDENTITY)?;
+        r.next_frame(owner, Some(vec![changed]));
+        let p = r.render(&after, BACKGROUND, ScaleFactor::IDENTITY)?;
+        assert_eq!(r.uploads(), 0, "updated in place, not uploaded anew");
+        assert_eq!(r.canvas_bytes().0, 140 * 20 * 4, "just the band");
+        Ok(p)
+    })
+    .unwrap();
+    let cpu = SoftwareRenderer::new()
+        .background(BACKGROUND)
+        .render(after, ScaleFactor::IDENTITY);
+    dump("canvas-update", "gpu", &frame);
+    dump("canvas-update", "cpu", &cpu);
+    let d = diff(&frame, &cpu);
+    eprintln!("canvas-update: {d:?}");
+    assert!(d.mean < 0.5 && d.bad < 0.005, "{d:?}");
+}
+
 /// The whole App path: `App::render_with` the GPU renderer, against the
 /// software default, for a widget tree with text, boxes and an image (the
 /// path OS-drawn controls take under the native theme).
@@ -338,6 +368,110 @@ fn an_app_on_the_gpu_survives_losing_the_device() {
     assert!(crate::app_gpu::current(|r| r.is_some()), "set up again");
     let d = diff(&again, &cpu);
     assert!(d.mean < 1.0 && d.bad < 0.01, "{d:?}");
+    crate::app_gpu::reset(None);
+}
+
+/// A canvas on an app drawn on the GPU is kept as a texture: a row
+/// invalidated is all that is rasterized and uploaded again, and every frame
+/// still matches the software renderer's.
+#[test]
+fn an_invalidated_canvas_row_is_all_that_is_uploaded() {
+    use crate::core::CanvasId;
+    use crate::prelude::*;
+    use crate::render::{Renderer, Surface};
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    if gpu(&Scene::new(Size::new(1.0, 1.0)), Color::BLACK, 1.0).is_none() {
+        return;
+    }
+    let Some(font) = Font::system_default() else {
+        return;
+    };
+    const GRID: CanvasId = CanvasId(7);
+    const ROW: f64 = 20.0;
+    struct Keep(PhysicalSize, Option<Pixmap>);
+    impl Surface for Keep {
+        fn resize(&mut self, size: PhysicalSize) {
+            self.0 = size;
+        }
+        fn size(&self) -> PhysicalSize {
+            self.0
+        }
+        fn present(&mut self, pixmap: &Pixmap, _: &[Rect]) {
+            self.1 = Some(pixmap.clone());
+        }
+    }
+    let make = |renderer: Renderer, rows: Rc<RefCell<Vec<String>>>| {
+        let f = font.clone();
+        App::new((), move |_: &(), _: &mut Cx<()>| {
+            let rows = rows.clone();
+            let font = f.clone();
+            Element::canvas(GRID, move |c: &mut Canvas| {
+                c.fill_rect(
+                    Rect::from_xywh(0.0, 0.0, 300.0, 200.0),
+                    Color::rgb(20, 24, 30),
+                );
+                for (i, text) in rows.borrow().iter().enumerate() {
+                    let top = i as f64 * ROW;
+                    if c.needs_paint(Rect::from_xywh(0.0, top, 300.0, ROW)) {
+                        let paint = TextPaint::new(&font, 14.0, Color::rgb(220, 230, 220));
+                        c.fill_text(text, Point::new(6.0, top + 15.0), &paint);
+                    }
+                }
+            })
+            .width(300.0)
+            .height(200.0)
+        })
+        .theme(Theme::dark())
+        .logical_size(Size::new(300.0, 200.0))
+        .scale(ScaleFactor::new(2.0))
+        .font(font.clone())
+        .renderer(renderer)
+    };
+    let lines = |n: usize| {
+        (0..10)
+            .map(|i| format!("Line {i} · tick {n}"))
+            .collect::<Vec<_>>()
+    };
+    let cpu_rows = Rc::new(RefCell::new(lines(0)));
+    let gpu_rows = Rc::new(RefCell::new(lines(0)));
+    crate::app_gpu::reset(None);
+    let mut cpu = make(Renderer::Software, cpu_rows.clone());
+    let mut gpu_app = make(Renderer::Gpu, gpu_rows.clone());
+    let (mut a, mut b) = (
+        Keep(PhysicalSize::new(0, 0), None),
+        Keep(PhysicalSize::new(0, 0), None),
+    );
+    for tick in 0..4 {
+        if tick > 0 {
+            let row = tick * 2;
+            for rows in [&cpu_rows, &gpu_rows] {
+                rows.borrow_mut()[row] = format!("Row {row} changed at tick {tick}");
+            }
+            let rect = Rect::from_xywh(0.0, row as f64 * ROW, 300.0, ROW);
+            cpu.handle().invalidate_canvas_rect(GRID, rect);
+            gpu_app.handle().invalidate_canvas_rect(GRID, rect);
+        }
+        cpu.present_frame(&mut a);
+        gpu_app.present_frame(&mut b);
+        let (c, g) = (a.1.as_ref().unwrap(), b.1.as_ref().unwrap());
+        dump(&format!("canvas-row-{tick}"), "gpu", g);
+        dump(&format!("canvas-row-{tick}"), "cpu", c);
+        let d = diff(g, c);
+        eprintln!("canvas row, tick {tick}: {d:?}");
+        assert!(d.mean < 1.0 && d.bad < 0.01, "tick {tick}: {d:?}");
+        let (uploaded, kept) = crate::app_gpu::current(|r| r.unwrap().canvas_bytes());
+        // At scale 2, the canvas is 600x400 pixels; a row is 600x40. (Both
+        // apps draw on the GPU when `STIPPLE_RENDERER` says so.)
+        let apps = kept / (600 * 400 * 4);
+        assert!(apps >= 1 && kept == apps * 600 * 400 * 4, "{kept}");
+        if tick == 0 {
+            assert_eq!(uploaded, 600 * 400 * 4, "the first frame: all of it");
+        } else {
+            assert_eq!(uploaded, 600 * 40 * 4, "tick {tick}: just the row");
+            assert_eq!(crate::app_gpu::current(|r| r.unwrap().uploads()), 0);
+        }
+    }
     crate::app_gpu::reset(None);
 }
 

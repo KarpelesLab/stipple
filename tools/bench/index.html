@@ -87,6 +87,9 @@
         const info = gl?.getExtension("WEBGL_debug_renderer_info");
         report.gpu_device = gl ? String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER)) : "no WebGL2";
       } catch (_) { report.gpu_device = "unknown"; }
+      // A hardware GPU, not a CPU implementation (SwiftShader on CI).
+      report.gpu_hardware = !/swiftshader|llvmpipe|lavapipe|software|basic render|unknown|no webgl/i
+        .test(report.gpu_device);
 
       try {
         const fontBytes = new Uint8Array(await (await fetch(fontUrl)).arrayBuffer());

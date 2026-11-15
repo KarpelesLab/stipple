@@ -150,6 +150,35 @@ pub(crate) struct PaneGpu {
     /// The next present through the `Surface` must be whole (the GPU layer
     /// was just taken away, or a GPU frame was skipped).
     pub(crate) force: bool,
+    /// This window's number for the GPU renderer, which keeps its canvases
+    /// as textures under it (0 until it draws).
+    owner: u64,
+    /// The damage of the frame about to be drawn and read back, for its
+    /// canvases ([`canvas_damage`]); `None` draws them straight.
+    pub(crate) damage: Option<Option<Vec<crate::geometry::Rect>>>,
+}
+
+impl PaneGpu {
+    /// This window's number for the GPU renderer.
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    fn owner(&mut self) -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        if self.owner == 0 {
+            self.owner = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.owner
+    }
+}
+
+/// What changed since a window's last frame, for the GPU renderer's canvas
+/// textures: the damage's rects, or `None` (all of it) for a whole frame.
+pub(crate) fn canvas_damage(damage: &Damage, force: bool) -> Option<Vec<crate::geometry::Rect>> {
+    match damage {
+        _ if force => None,
+        Damage::None => Some(Vec::new()),
+        Damage::Regions(rects) => Some(rects.clone()),
+        Damage::Full => None,
+    }
 }
 
 #[cfg(feature = "gpu")]
@@ -268,6 +297,14 @@ mod shared {
         })
     }
 
+    /// Run `f` on the thread's renderer, if there is one (for its stats).
+    pub(crate) fn inspect<T>(f: impl FnOnce(Option<&GpuRenderer>) -> T) -> T {
+        GPU.with(|g| match g.try_borrow() {
+            Ok(g) => f(g.renderer.as_ref()),
+            Err(_) => f(None),
+        })
+    }
+
     /// Start over: no renderer, nothing given up (tests).
     #[cfg(test)]
     pub(crate) fn reset(factory: Option<Factory>) {
@@ -288,6 +325,8 @@ mod shared {
     }
 }
 
+#[cfg(feature = "gpu")]
+pub(crate) use shared::inspect as inspect_gpu;
 #[cfg(all(test, feature = "gpu"))]
 pub(crate) use shared::{current, given_up, reset};
 
@@ -359,6 +398,7 @@ impl<S: 'static> Pane<S> {
         background: Color,
         scale: crate::geometry::ScaleFactor,
     ) -> Option<Pixmap> {
+        let damage = self.gpu.damage.take();
         // A browser's GPU draws into the canvas only, never read back: a
         // frame that comes here is the CPU's.
         if cfg!(target_arch = "wasm32") {
@@ -367,11 +407,18 @@ impl<S: 'static> Pane<S> {
         let which = self.gpu_wanted()?;
         #[cfg(feature = "gpu")]
         {
-            shared::with(which, |g| g.render(scene, background, scale))?.ok()
+            let owner = self.gpu.owner();
+            shared::with(which, |g| {
+                if let Some(damage) = damage {
+                    g.next_frame(owner, damage);
+                }
+                g.render(scene, background, scale)
+            })?
+            .ok()
         }
         #[cfg(not(feature = "gpu"))]
         {
-            let _ = (which, scene, background, scale);
+            let _ = (which, scene, background, scale, damage);
             no_gpu();
             None
         }
@@ -412,10 +459,12 @@ impl<S: 'static> Pane<S> {
             } else {
                 gpu_dirty(damage, scale, scale.to_physical(scene.logical_size()))
             };
+            let owner = self.gpu.owner();
             let shown = shared::with(which, |g| {
                 if !g.can_present(&layer) {
                     return Ok(false);
                 }
+                g.next_frame(owner, canvas_damage(damage, force));
                 g.present(&scene, background, scale, &layer, dirty)
                     .map(|()| true)
                     .inspect(|_| {

@@ -29,7 +29,9 @@
 //!   applied to the geometry.
 //! - **Clips.** An upright rect clip is a scissor rectangle, any other convex
 //!   clip a stencil polygon ([`Op::PushClip`]).
-//! - **Canvases** run their paint callback into a scene that is walked in turn.
+//! - **Canvases** of a window's frame are kept as textures, updated where the
+//!   frame is damaged (`gpu::canvas`); others run their paint callback into a
+//!   scene that is walked in turn.
 //! - Anything else (gradients, soft masks, raw `oxideav` image nodes, concave
 //!   clips) is rasterized on the CPU for just its own bounds and drawn as an
 //!   image: a local fallback, never the whole frame.
@@ -39,6 +41,9 @@
 
 use super::atlas::{self, Atlas, AtlasPage};
 use super::batch::{self, Cmd};
+pub(crate) use super::canvas::TextureUpdate;
+use super::canvas::{CanvasCache, CanvasFrame};
+use crate::core::CanvasId;
 use crate::geometry::{PhysicalSize, Rect};
 use crate::render::Filter;
 use crate::render::lower::{self, Bounds, Deferred};
@@ -181,6 +186,9 @@ pub(crate) struct Plan {
     pub cmds: Vec<Cmd>,
     /// The vertices of every [`Cmd::Quads`] (see `super::batch`).
     pub quads: Vec<f32>,
+    /// Cached textures whose images changed in places, to update before
+    /// drawing (the canvases kept as textures, `gpu::canvas`).
+    pub updates: Vec<TextureUpdate>,
 }
 
 impl Plan {
@@ -328,12 +336,35 @@ impl RasterCache {
 /// Lower `scene` for a `physical`-pixel target cleared to `background`.
 /// The scene's logical extent is fitted to the target the way the software
 /// renderer fits its view box (uniform scale, centered).
+#[allow(dead_code)] // the tests and the web's comparison page use it
 pub(crate) fn plan(
     scene: &Scene,
     background: Color,
     physical: PhysicalSize,
     cache: &mut RasterCache,
 ) -> Plan {
+    plan_with(scene, background, physical, cache, None)
+}
+
+/// A window's frame for [`plan_with`]: its canvases are kept as textures in
+/// `cache` under `owner`, and `damage` (logical rects, `None` for all of it)
+/// is what changed since its last frame.
+pub(crate) struct CanvasArgs<'a> {
+    pub cache: &'a mut CanvasCache,
+    pub owner: u64,
+    pub damage: Option<Vec<Rect>>,
+}
+
+/// [`plan`], keeping canvases as textures when `canvases` says whose frame
+/// this is.
+pub(crate) fn plan_with(
+    scene: &Scene,
+    background: Color,
+    physical: PhysicalSize,
+    cache: &mut RasterCache,
+    canvases: Option<CanvasArgs<'_>>,
+) -> Plan {
+    let mut updates = Vec::new();
     let (w, h) = (physical.width as f32, physical.height as f32);
     let logical = scene.logical_size();
     let (lw, lh) = (logical.width as f32, logical.height as f32);
@@ -349,12 +380,19 @@ pub(crate) fn plan(
             e: (w - lw * s) / 2.0,
             f: (h - lh * s) / 2.0,
         };
+        let target = [0.0, 0.0, w, h];
+        let mut frame =
+            canvases.map(|c| (c.cache.begin(c.owner, c.damage, &root, target), c.cache));
         let mut walker = Walker {
             ops: &mut ops,
             cache,
-            target: [0.0, 0.0, w, h],
+            canvases: frame.as_mut().map(|(f, _)| f),
+            target,
         };
         scene.with_root(|nodes, deferred| walker.nodes(deferred, nodes, &root));
+        if let Some((f, c)) = frame {
+            updates = c.end(f);
+        }
     }
     let atlas = cache.atlas.snapshot();
     cache.sweep();
@@ -367,12 +405,15 @@ pub(crate) fn plan(
         atlas,
         cmds,
         quads,
+        updates,
     }
 }
 
 struct Walker<'a> {
     ops: &'a mut Vec<Op>,
     cache: &'a mut RasterCache,
+    /// The window's canvases kept as textures, when it has them.
+    canvases: Option<&'a mut CanvasFrame>,
     /// The target's extent, for culling.
     target: Bounds,
 }
@@ -600,7 +641,8 @@ impl Walker<'_> {
                             bounds,
                             paint,
                             scale,
-                        }) => self.canvas(*bounds, paint, *scale, &local),
+                            id,
+                        }) => self.canvas(*bounds, paint, *scale, &local, *id),
                         None => {}
                     }
                 }
@@ -969,9 +1011,23 @@ impl Walker<'_> {
         });
     }
 
-    /// A canvas: its paint callback runs for the part of `bounds` on the
-    /// target, and what it drew is walked, clipped to `bounds`.
-    fn canvas(&mut self, bounds: Rect, paint: &CanvasPaint, scale: f64, local: &Transform2D) {
+    /// A canvas: kept as a texture when it can be (`gpu::canvas`), else its
+    /// paint callback runs for the part of `bounds` on the target, and what
+    /// it drew is walked, clipped to `bounds`.
+    fn canvas(
+        &mut self,
+        bounds: Rect,
+        paint: &CanvasPaint,
+        scale: f64,
+        local: &Transform2D,
+        id: Option<CanvasId>,
+    ) {
+        if let (Some(id), Some(frame)) = (id, self.canvases.as_deref_mut())
+            && let Some(op) = frame.draw(id, bounds, paint, scale, local)
+        {
+            self.ops.push(op);
+            return;
+        }
         let dirty = match lower::invert(local) {
             Some(inv) => {
                 let v = lower::map_bounds(&inv, self.target);
@@ -1114,6 +1170,7 @@ mod tests {
             color: [1.0; 4],
         };
         let mut plan = Plan {
+            updates: Vec::new(),
             size: PhysicalSize::new(200, 100),
             background: Color::rgb(255, 0, 0),
             ops: vec![

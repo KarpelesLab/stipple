@@ -33,6 +33,7 @@
 use super::*;
 use crate::gpu::atlas::{AtlasPage, Upload};
 use crate::gpu::batch::{self, Cmd, QUAD_FLOATS, TexRef};
+use crate::gpu::canvas::rekey;
 use crate::gpu::ops::{Clip, Op, Plan, Sample};
 use crate::gpu::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::platform::GpuLayer;
@@ -62,6 +63,7 @@ const GL_FRONT: GLenum = 0x0404;
 const GL_BACK: GLenum = 0x0405;
 const GL_ONE: GLenum = 1;
 const GL_MAX_TEXTURE_SIZE: GLenum = 0x0D33;
+const GL_RENDERER: GLenum = 0x1F01;
 const GL_MAX_RENDERBUFFER_SIZE: GLenum = 0x84E8;
 const GL_TRIANGLE_FAN: GLenum = 0x0006;
 const GL_STREAM_DRAW: GLenum = 0x88E0;
@@ -95,6 +97,7 @@ unsafe extern "C" {
     fn glDeleteFramebuffers(n: GLsizei, framebuffers: *const GLuint);
     fn glDeleteRenderbuffers(n: GLsizei, renderbuffers: *const GLuint);
     fn glGetIntegerv(pname: GLenum, data: *mut GLint);
+    fn glGetString(name: GLenum) -> *const u8;
     fn glPixelStorei(pname: GLenum, param: GLint);
     fn glDisableVertexAttribArray(index: GLuint);
     #[allow(clippy::too_many_arguments)]
@@ -384,6 +387,7 @@ struct Texture {
     image: Weak<Pixmap>,
     tex: GLuint,
     used: u64,
+    bytes: usize,
 }
 
 /// An atlas page's texture, holding `version` of it.
@@ -465,6 +469,8 @@ struct State {
     resolve: Program,
     vbo: GLuint,
     max_size: i32,
+    /// `GL_RENDERER`.
+    renderer: String,
     frame_target: Option<Target>,
     layers: Vec<Target>,
     scratch: Option<Target>,
@@ -618,6 +624,14 @@ impl State {
             let (mut max_tex, mut max_rb) = (0, 0);
             glGetIntegerv(GL_MAX_TEXTURE_SIZE, &mut max_tex);
             glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &mut max_rb);
+            let name = glGetString(GL_RENDERER);
+            let renderer = if name.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(name as *const std::ffi::c_char)
+                    .to_string_lossy()
+                    .into_owned()
+            };
             Ok(State {
                 dpy,
                 ctx,
@@ -633,6 +647,7 @@ impl State {
                 resolve,
                 vbo,
                 max_size: max_tex.min(max_rb).max(64),
+                renderer,
                 frame_target: None,
                 layers: Vec::new(),
                 scratch: None,
@@ -757,9 +772,39 @@ impl State {
                     image: Arc::downgrade(image),
                     tex,
                     used: frame,
+                    bytes: size.width as usize * size.height as usize * 4,
                 },
             );
             tex
+        }
+    }
+
+    /// Update the textures `plan` changed in places (canvases kept as
+    /// textures): `glTexSubImage2D` of each rectangle, its rows packed
+    /// (GLES2 has no `GL_UNPACK_ROW_LENGTH`).
+    unsafe fn update_textures(&mut self, plan: &Plan) {
+        unsafe {
+            for u in &plan.updates {
+                let Some(t) = rekey(&mut self.textures, u, |t| &mut t.image) else {
+                    continue;
+                };
+                glBindTexture(GL_TEXTURE_2D, t.tex);
+                glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+                for &r in &u.rects {
+                    let rows = u.rows(r);
+                    glTexSubImage2D(
+                        GL_TEXTURE_2D,
+                        0,
+                        r[0] as GLint,
+                        r[1] as GLint,
+                        r[2] as GLsizei,
+                        r[3] as GLsizei,
+                        GL_RGBA,
+                        GL_UNSIGNED_BYTE,
+                        rows.as_ptr() as *const c_void,
+                    );
+                }
+            }
         }
     }
 
@@ -1219,6 +1264,7 @@ impl State {
             self.uploads = 0;
             self.draws = 0;
             self.sync_atlas(&plan.atlas);
+            self.update_textures(plan);
             let full = [0, 0, w, h];
             let mut levels = vec![Level {
                 layer: None,
@@ -1600,5 +1646,25 @@ impl Executor for GlExecutor {
 
     fn draws(&self) -> usize {
         STATE.with(|cell| cell.borrow().as_ref().map_or(0, |s| s.draws))
+    }
+
+    fn device(&self) -> String {
+        STATE.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .map_or_else(String::new, |s| s.renderer.clone())
+        })
+    }
+
+    fn texture_bytes(&self) -> usize {
+        STATE.with(|cell| {
+            cell.borrow().as_ref().map_or(0, |s| {
+                s.textures.values().map(|t| t.bytes).sum::<usize>()
+                    + s.atlas
+                        .values()
+                        .map(|a| a.side as usize * a.side as usize * 4)
+                        .sum::<usize>()
+            })
+        })
     }
 }

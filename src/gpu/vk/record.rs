@@ -624,6 +624,7 @@ mod tests {
             atlas: Vec::new(),
             cmds,
             quads,
+            updates: Vec::new(),
         }
     }
 

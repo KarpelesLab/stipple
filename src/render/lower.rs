@@ -37,6 +37,10 @@ pub(crate) enum Deferred {
         bounds: Rect,
         paint: CanvasPaint,
         scale: f64,
+        /// The element's [`CanvasId`](crate::core::CanvasId), when it came
+        /// from one (the GPU renderers keep such a canvas as a texture).
+        #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+        id: Option<crate::core::CanvasId>,
     },
     /// A region of a bitmap ([`Scene::draw_image_region`]).
     Sprite(SpriteDraw),
@@ -383,6 +387,7 @@ impl Lower<'_> {
                 bounds,
                 paint,
                 scale,
+                ..
             } => self.canvas(*bounds, paint, *scale, &local),
             Deferred::Sprite(sprite) => Some(match self.sprites {
                 Some(sink) => {

@@ -18,7 +18,14 @@ A scenario regresses when its median is more than its threshold times the
 (scaled) baseline's, *and* more than `min_delta_ms` slower in absolute terms
 (sub-millisecond scenarios jitter by more than their own size on a shared
 runner). A budget is a hard limit on a metric (input to frame ready under
-16 ms), whatever the baseline.
+16 ms), whatever the baseline. A budget with `"hardware": true` applies only
+to a run on a hardware GPU (the report's `gpu_hardware`), one with
+`"hardware": false` only to a run without one (llvmpipe, WARP, SwiftShader,
+a virtual machine's device): CI's runners have no GPU, so the hardware
+targets are checked where the benchmark runs on one.
+
+A scenario the baseline doesn't have yet is reported without comparing it
+(its budgets still apply).
 
 Timing on CI is noisy, so a failure has to happen twice: with `--rerun`, the
 command is run again for just the failing scenarios (`{only}`: their names,
@@ -78,8 +85,20 @@ def budgets_for(config, run, name):
             continue
         if b.get("renderers") and run.get("renderer") not in b["renderers"]:
             continue
+        if "hardware" in b and bool(run.get("gpu_hardware")) != b["hardware"]:
+            continue
         out.append(b)
     return out
+
+
+def budget_limit(budget):
+    """A budget's limit and its unit: `ms` for a time, `max` (in the
+    metric's own unit) for another metric, such as `texture_mb`."""
+    if "ms" in budget:
+        return budget["ms"], " ms"
+    unit = budget.get("metric", "").rsplit("_", 1)[-1]
+    unit = {"mb": "MB", "kb": "kB"}.get(unit, unit)
+    return budget["max"], f" {unit}" if unit else ""
 
 
 def calibration_factor(now, base):
@@ -129,13 +148,15 @@ def evaluate(now, base, config):
                     )
                 )
         for budget in budgets_for(config, now, name):
-            got = s.get(budget.get("metric", "median_ms"))
-            if got is not None and got > budget["ms"]:
+            what = budget.get("metric", "median_ms")
+            got = s.get(what)
+            limit, unit = budget_limit(budget)
+            if got is not None and got > limit:
                 fails.append(
                     (
                         "budget",
                         budget.get("blocking", True),
-                        f"{budget.get('metric', 'median_ms')} {got:.2f} ms over the {budget['ms']} ms budget",
+                        f"{what} {got:.2f}{unit} over the {limit}{unit} budget",
                     )
                 )
         rows.append(
@@ -149,7 +170,9 @@ def evaluate(now, base, config):
                 "p95": s.get("p95_ms"),
                 "ratio": ratio,
                 "budgets": [
-                    f"{bb['ms']}" + ("" if bb.get("metric", "median_ms") == "median_ms" else f" ({bb['metric']})")
+                    "{}{}".format(*budget_limit(bb))
+                    + ("" if bb.get("metric", "median_ms") == "median_ms" else f" ({bb['metric']})")
+                    + ("" if "hardware" not in bb else " (hardware GPU)" if bb["hardware"] else " (software GPU)")
                     for bb in budgets_for(config, now, name)
                 ],
                 "work": s.get("work_ms"),
@@ -193,7 +216,8 @@ def markdown(title, now, base, rows, missing, factor, provisional, reran):
     if now.get("gpu_unavailable"):
         meta.append(f"⚠️ asked for {now.get('renderer_requested')}: {now['gpu_unavailable']}")
     if now.get("gpu_device"):
-        meta.append(f"device {now['gpu_device']}")
+        kind = "" if "gpu_hardware" not in now else " (hardware)" if now["gpu_hardware"] else " (software)"
+        meta.append(f"device {now['gpu_device']}{kind}")
     if base:
         meta.append(f"calibration {fmt(now.get('calibration_ms'))} ms (baseline {fmt(base.get('calibration_ms'))} ms, scale ×{factor:.2f})")
     else:

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(gpu)* windows on the GPU redraw only what changed, over the frame kept from before, and present only that where the platform can (`VK_KHR_incremental_present`, DXGI `Present1` dirty rectangles, `eglSwapBuffersWithDamage`) ([#54](https://github.com/KarpelesLab/stipple/issues/54))
 - *(gpu)* a glyph atlas and batched draws: glyphs are packed into one texture per backend (grown, then evicted by least recent use), and runs of boxes, images, sprites and text that share a texture are one draw call (a widget window is a handful of draws instead of hundreds); `gpu::last_frame_draw_calls`, and draw calls in the bench report ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- *(gpu)* canvases are kept as textures on the GPU renderers and re-rasterized and uploaded only where invalidated (sub-rect uploads on Metal, Direct3D 11, Vulkan, GLES2, WebGPU and WebGL2); `gpu::stats`, `gpu::device_name`, `gpu::draw_scene_scaled` ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- *(bench)* `gallery_4k`, `sprites_10k`, `canvas_row` and `transition` scenarios, the GPU device and texture memory in the reports, hardware-GPU and memory budgets ([#54](https://github.com/KarpelesLab/stipple/pull/54))
 
 ## [0.0.7](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.6...stipple-v0.0.7) - 2026-11-15
 

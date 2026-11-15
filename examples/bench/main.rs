@@ -25,7 +25,21 @@
 //! - `type_char`: a character typed into the focused text field.
 //! - `theme_switch`: a button switching light and dark.
 //! - `sprites_2000`: 2000 32×32 sprites over a background at 1920×1080 (the
-//!   `spritedemo --bench` scene).
+//!   `spritedemo --bench` scene), read back.
+//! - `gallery_4k`: the widget window at 3840×2160 (1920×1080 at scale 2),
+//!   a whole frame drawn from its scene; on a GPU renderer drawn offscreen
+//!   without a read-back (what a frame presented to a window costs), with
+//!   the texture memory the GPU's caches hold after it (`texture_mb`).
+//! - `sprites_10k`: 10 000 sprites from a `SpriteSheet` over a background at
+//!   3840×2160, likewise.
+//! - `canvas_row`: one row of a 120×40 grid of characters (a terminal's
+//!   glyph run) drawn in an `Element::canvas` changed and invalidated, to the frame ready: on the
+//!   GPU renderers only that row is rasterized and uploaded into the
+//!   canvas's texture (`upload_kb`).
+//! - `transition`: each frame of a page pushed and popped on a `nav_stack`
+//!   and a bottom sheet opened and dismissed, on a phone-sized window
+//!   (390×844 at scale 3), animating. On a phone (see
+//!   `docs/performance.md`) each should fit in 8.3 ms (120 Hz).
 //! - `layout_tree`: laying out a tree of ~4,000 elements.
 //! - `text_layout`, `text_layout_cold`, `text_layout_cjk`: laying out a long
 //!   paragraph with shaping cached, with a fresh font, and in Japanese
@@ -43,8 +57,11 @@
 //! to this app running live to the frame presented after them, on each
 //! renderer.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
+use stipple::core::CanvasId;
 use stipple::game::SpriteSheet;
 use stipple::platform::time::Instant;
 use stipple::prelude::*;
@@ -304,7 +321,7 @@ impl Plan<'_> {
 fn run(plan: &Plan) -> Vec<Outcome> {
     type Scenario = fn(&Plan) -> Option<Outcome>;
     // Scenarios that draw nothing run on the software renderer's run only.
-    let all: [(&str, bool, Scenario); 13] = [
+    let all: [(&str, bool, Scenario); 17] = [
         ("calibration", true, calibration),
         ("startup", false, startup),
         ("first_frame_1x", false, |p| {
@@ -318,6 +335,10 @@ fn run(plan: &Plan) -> Vec<Outcome> {
         ("type_char", false, type_char),
         ("theme_switch", false, theme_switch),
         ("sprites_2000", false, sprites),
+        ("gallery_4k", false, gallery_4k),
+        ("sprites_10k", false, sprites_10k),
+        ("canvas_row", false, canvas_row),
+        ("transition", false, transition),
         ("layout_tree", true, layout_tree),
         ("text_layout", true, text_layout),
         ("text_layout_cold", true, text_layout_cold),
@@ -534,11 +555,8 @@ fn theme_switch(plan: &Plan) -> Option<Outcome> {
     Some(outcome(plan, "theme_switch", samples, 3))
 }
 
-/// The `spritedemo --bench` scene: a background and 2000 sprites cut from a
-/// sheet, unscaled, at 1920×1080.
-fn sprites(plan: &Plan) -> Option<Outcome> {
-    const SW: u32 = 1920;
-    const SH: u32 = 1080;
+/// A sheet of 64 32×32 round sprites, and a `w`×`h` background.
+fn sprite_assets(w: u32, h: u32) -> (SpriteSheet, Arc<Pixmap>) {
     let mut sheet = vec![0u8; 256 * 256 * 4];
     for i in 0..64usize {
         let (ox, oy) = ((i % 8) * 32, (i / 8) * 32);
@@ -563,32 +581,47 @@ fn sprites(plan: &Plan) -> Option<Outcome> {
         32,
         32,
     );
-    let mut bg = vec![0u8; (SW * SH * 4) as usize];
-    for y in 0..SH {
-        for x in 0..SW {
-            let at = ((y * SW + x) * 4) as usize;
+    let mut bg = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let at = ((y * w + x) * 4) as usize;
             bg[at..at + 4].copy_from_slice(&[(x / 8) as u8, (y / 5) as u8, 80, 255]);
         }
     }
-    let bg = Arc::new(Pixmap::from_rgba8(PhysicalSize::new(SW, SH), bg));
+    (
+        sheet,
+        Arc::new(Pixmap::from_rgba8(PhysicalSize::new(w, h), bg)),
+    )
+}
+
+/// A `w`×`h` scene of the background and `n` sprites cut from the sheet,
+/// unscaled, at places from the fixed seed.
+fn sprite_scene(n: usize, w: u32, h: u32) -> impl Fn() -> Scene {
+    let (sheet, bg) = sprite_assets(w, h);
     let mut rng = Rng(SEED);
-    let spots: Vec<(f64, f64)> = (0..2000)
+    let spots: Vec<(f64, f64)> = (0..n)
         .map(|_| {
             (
-                (rng.next() % (SW as u64 - 32)) as f64,
-                (rng.next() % (SH as u64 - 32)) as f64,
+                (rng.next() % (w as u64 - 32)) as f64,
+                (rng.next() % (h as u64 - 32)) as f64,
             )
         })
         .collect();
-    let scene = || {
-        let mut s = Scene::new(Size::new(SW as f64, SH as f64));
+    move || {
+        let mut s = Scene::new(Size::new(w as f64, h as f64));
         let opts = ImageOptions::new();
-        s.draw_image_with(Rect::from_xywh(0.0, 0.0, SW as f64, SH as f64), &bg, &opts);
+        s.draw_image_with(Rect::from_xywh(0.0, 0.0, w as f64, h as f64), &bg, &opts);
         for (i, (x, y)) in spots.iter().enumerate() {
             sheet.draw(&mut s, i % 64, Rect::from_xywh(*x, *y, 32.0, 32.0), &opts);
         }
         s
-    };
+    }
+}
+
+/// The `spritedemo --bench` scene: a background and 2000 sprites cut from a
+/// sheet, unscaled, at 1920×1080.
+fn sprites(plan: &Plan) -> Option<Outcome> {
+    let scene = sprite_scene(2000, 1920, 1080);
     let target = plan.target;
     let mut failed = None;
     let samples = sample(3, plan.n(20), |_| {
@@ -613,6 +646,328 @@ fn sprites(plan: &Plan) -> Option<Outcome> {
     }
     draw_calls(plan, &mut o);
     Some(o)
+}
+
+/// 10 000 sprites at 3840×2160, drawn (on a GPU, without a read-back).
+fn sprites_10k(plan: &Plan) -> Option<Outcome> {
+    let scene = sprite_scene(10_000, 3840, 2160);
+    draw_whole(
+        plan,
+        "sprites_10k",
+        plan.n(12),
+        &scene,
+        ScaleFactor::IDENTITY,
+    )
+}
+
+/// The widget window at 3840×2160: its scene built once, then drawn whole.
+fn gallery_4k(plan: &Plan) -> Option<Outcome> {
+    let captured = Rc::new(RefCell::new(None));
+    let keep = captured.clone();
+    let mut app = make_app(&plan.font, 2.0, Renderer::Software)
+        .logical_size(Size::new(1920.0, 1080.0))
+        .render_with(move |scene: &Scene, _, scale| {
+            *keep.borrow_mut() = Some(scene.clone());
+            Pixmap::new(scale.to_physical(scene.logical_size()))
+        });
+    app.render_once();
+    let scene = captured.borrow_mut().take()?;
+    // Hundreds of milliseconds a frame on the CPU (seconds in a browser):
+    // fewer of those.
+    let n = match plan.target {
+        Target::Software => plan.n(5),
+        Target::Gpu(_) => plan.n(12),
+    };
+    draw_whole(
+        plan,
+        "gallery_4k",
+        n,
+        &|| scene.clone(),
+        ScaleFactor::new(2.0),
+    )
+}
+
+/// Draw the scene `make` builds (not timed) whole at `scale`, `n` times: on
+/// the CPU into a pixmap, on a GPU offscreen, waiting for it, not read back.
+/// On a GPU, also the texture memory its caches hold after it (MB).
+fn draw_whole(
+    plan: &Plan,
+    name: &'static str,
+    n: usize,
+    make: &dyn Fn() -> Scene,
+    scale: ScaleFactor,
+) -> Option<Outcome> {
+    let target = plan.target;
+    let mut failed = None;
+    let bg = Color::rgb(0x18, 0x1b, 0x22);
+    let warmup = if target == Target::Software { 1 } else { 2 };
+    let samples = sample(warmup, n, |_| {
+        let s = make();
+        let t = Instant::now();
+        match target {
+            Target::Software => {
+                std::hint::black_box(SoftwareRenderer::new().background(bg).render(s, scale));
+            }
+            Target::Gpu(_) => {
+                if let Err(e) = gpu_draw(&s, bg, scale) {
+                    failed = Some(e);
+                }
+            }
+        }
+        ms_since(t)
+    });
+    let mut o = outcome(plan, name, samples, warmup);
+    if let Some(e) = failed {
+        o.renderer = "software".into();
+        o.note = format!("GPU failed: {e}");
+    } else if let Target::Gpu(_) = target {
+        o.extra
+            .push(("texture_mb", gpu_texture_bytes() as f64 / 1e6));
+    }
+    Some(o)
+}
+
+/// The canvas `canvas_row` draws a grid of text into: 120 columns, 40 rows.
+const GRID: CanvasId = CanvasId(1);
+const GRID_ROWS: usize = 40;
+const GRID_ROW_H: f64 = 18.0;
+
+fn grid_line(rng: &mut Rng) -> String {
+    (0..120)
+        .map(|_| (b'!' + (rng.next() % 90) as u8) as char)
+        .collect()
+}
+
+fn canvas_row(plan: &Plan) -> Option<Outcome> {
+    let mut rng = Rng(SEED);
+    let rows = Rc::new(RefCell::new(
+        (0..GRID_ROWS)
+            .map(|_| grid_line(&mut rng))
+            .collect::<Vec<_>>(),
+    ));
+    let view_rows = rows.clone();
+    let font = plan.font.clone();
+    let mut app = App::new((), move |_: &(), _: &mut Cx<()>| {
+        let rows = view_rows.clone();
+        let font = font.clone();
+        Element::canvas(GRID, move |c: &mut Canvas| {
+            let size = c.size();
+            c.fill_rect(
+                Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                Color::rgb(16, 18, 22),
+            );
+            // A terminal's way: a character per cell, no shaping.
+            let mut run = GlyphRun::new(&font, 13.0, Color::rgb(200, 220, 200));
+            for (i, text) in rows.borrow().iter().enumerate() {
+                let top = 4.0 + i as f64 * GRID_ROW_H;
+                if c.needs_paint(Rect::from_xywh(0.0, top, size.width, GRID_ROW_H)) {
+                    run.push_cells(text, Point::new(6.0, top), 8.4);
+                }
+            }
+            c.fill_glyph_run(&run);
+        })
+        .grow(1.0)
+    })
+    .logical_size(Size::new(W, H))
+    .font(plan.font.clone())
+    .renderer(plan.target.renderer());
+    let mut sink = Sink(PhysicalSize::new(0, 0));
+    app.present_frame(&mut sink);
+    let handle = app.handle();
+    let mut pixels = Vec::new();
+    let mut uploaded = Vec::new();
+    let samples = sample(5, plan.n(60), |i| {
+        let r = (i * 7) % GRID_ROWS;
+        rows.borrow_mut()[r] = grid_line(&mut rng);
+        RasterStats::take();
+        let t = Instant::now();
+        handle.invalidate_canvas_rect(
+            GRID,
+            Rect::from_xywh(0.0, 4.0 + r as f64 * GRID_ROW_H, W, GRID_ROW_H),
+        );
+        std::hint::black_box(app.present_frame(&mut sink));
+        let ms = ms_since(t);
+        pixels.push(RasterStats::take().pixels as f64);
+        uploaded.push(gpu_canvas_upload_bytes() as f64 / 1e3);
+        ms
+    });
+    let mut o = outcome(plan, "canvas_row", samples, 5);
+    match plan.target {
+        Target::Software => {
+            pixels.sort_by(f64::total_cmp);
+            o.extra.push(("pixels", median(&pixels)));
+        }
+        Target::Gpu(_) => {
+            uploaded.sort_by(f64::total_cmp);
+            o.extra.push(("upload_kb", median(&uploaded)));
+        }
+    }
+    Some(o)
+}
+
+/// The phone-sized app the transitions run on: a page stack, and a sheet.
+struct Phone {
+    nav: NavStack<u32>,
+    sheet: BottomSheet,
+}
+
+fn phone_view(s: &Phone, cx: &mut Cx<Phone>) -> Element {
+    let pages = nav_stack(
+        cx,
+        &s.nav,
+        |s| &mut s.nav,
+        |cx, page| {
+            let page = *page;
+            let bar = app_bar(cx, format!("Page {page}"))
+                .on_back(|s: &mut Phone| {
+                    s.nav.pop();
+                })
+                .view(cx);
+            let rows = (0..24)
+                .map(|i| {
+                    row(vec![
+                        label(cx, format!("Item {i} on page {page}")),
+                        spacer(),
+                        switch(cx, "", i % 3 == 0, |_| {}),
+                    ])
+                })
+                .collect();
+            column(vec![
+                bar,
+                row(vec![
+                    button(cx, "Next").on_tap(cx, move |s: &mut Phone| s.nav.push(page + 1)),
+                    button(cx, "Sheet").on_tap(cx, |s: &mut Phone| s.sheet.open()),
+                ])
+                .gap(8.0),
+                scroll(cx).child(column(rows).gap(6.0)).grow(1.0),
+            ])
+            .gap(8.0)
+            .grow(1.0)
+        },
+    );
+    bottom_sheet(cx, &s.sheet, |s| &mut s.sheet)
+        .title("Details")
+        .children(vec![
+            label(cx, "A sheet over the page."),
+            button(cx, "Close").on_tap(cx, |s: &mut Phone| s.sheet.dismiss()),
+        ])
+        .open(cx);
+    pages
+}
+
+fn transition(plan: &Plan) -> Option<Outcome> {
+    let mut app = App::new(
+        Phone {
+            nav: NavStack::new(0),
+            sheet: BottomSheet::new(),
+        },
+        phone_view,
+    )
+    .theme(Theme::light())
+    .logical_size(Size::new(390.0, 844.0))
+    .scale(ScaleFactor::new(3.0))
+    .font(plan.font.clone())
+    .renderer(plan.target.renderer());
+    let mut sink = Sink(PhysicalSize::new(0, 0));
+    app.present_frame(&mut sink);
+    // Motion on, for this one.
+    stipple::anim::set_reduced_motion(Some(false));
+    let rounds = plan.n(3).min(6);
+    let mut samples = Vec::new();
+    let mut missing = None;
+    'rounds: for round in 0..=rounds {
+        for name in ["Next", "Back", "Sheet", "Close"] {
+            let t = Instant::now();
+            if !app.click(Role::Button, name) {
+                missing = Some(name);
+                break 'rounds;
+            }
+            app.present_frame(&mut sink);
+            let mut frames = vec![ms_since(t)];
+            // Each frame of the animation, as the display asks for them.
+            for _ in 0..600 {
+                if !app.animating() {
+                    break;
+                }
+                let t = Instant::now();
+                std::hint::black_box(app.present_frame(&mut sink));
+                frames.push(ms_since(t));
+            }
+            // The first round warms up.
+            if round > 0 {
+                samples.extend(frames);
+            }
+        }
+    }
+    stipple::anim::set_reduced_motion(Some(true));
+    if let Some(name) = missing {
+        (plan.log)(&format!("    (no {name} button: skipped)"));
+        return None;
+    }
+    let mut o = outcome(plan, "transition", samples, 1);
+    o.note = "each frame of page push/pop and sheet open/close".into();
+    Some(o)
+}
+
+/// Draw `scene` on the GPU offscreen and wait for it, not read back.
+#[cfg(feature = "gpu")]
+fn gpu_draw(scene: &Scene, bg: Color, scale: ScaleFactor) -> Result<(), String> {
+    stipple::gpu::draw_scene_scaled(scene, bg, scale)
+}
+
+#[cfg(not(feature = "gpu"))]
+fn gpu_draw(_: &Scene, _: Color, _: ScaleFactor) -> Result<(), String> {
+    Err("built without the `gpu` feature".into())
+}
+
+/// Bytes of texture the thread's GPU renderers' caches hold.
+#[cfg(feature = "gpu")]
+fn gpu_texture_bytes() -> usize {
+    stipple::gpu::stats().texture_bytes
+}
+
+#[cfg(not(feature = "gpu"))]
+fn gpu_texture_bytes() -> usize {
+    0
+}
+
+/// Bytes of canvas pixels the last GPU frame uploaded.
+#[cfg(feature = "gpu")]
+fn gpu_canvas_upload_bytes() -> usize {
+    stipple::gpu::stats().canvas_upload_bytes
+}
+
+#[cfg(not(feature = "gpu"))]
+fn gpu_canvas_upload_bytes() -> usize {
+    0
+}
+
+/// The device the GPU renderer draws on, and whether it's a hardware one
+/// (not a CPU implementation: llvmpipe, lavapipe, SwiftShader, WARP, or a
+/// virtual machine's paravirtual device).
+#[cfg(feature = "gpu")]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn gpu_device() -> (String, bool) {
+    let name = stipple::gpu::device_name().unwrap_or_default();
+    let lower = name.to_ascii_lowercase();
+    let soft = [
+        "llvmpipe",
+        "lavapipe",
+        "softpipe",
+        "swiftshader",
+        "basic render",
+        "warp",
+        "paravirtual",
+        "software",
+    ];
+    let hardware = !name.is_empty() && !soft.iter().any(|s| lower.contains(s));
+    (name, hardware)
+}
+
+#[cfg(not(feature = "gpu"))]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn gpu_device() -> (String, bool) {
+    (String::new(), false)
 }
 
 /// Draw `scene` on the GPU and read it back.
@@ -899,6 +1254,10 @@ fn main() {
             "type_char",
             "theme_switch",
             "sprites_2000",
+            "gallery_4k",
+            "sprites_10k",
+            "canvas_row",
+            "transition",
             "layout_tree",
             "text_layout",
             "text_layout_cold",
@@ -963,6 +1322,16 @@ fn main() {
     let started = Instant::now();
     let outcomes = run(&plan);
     print!("{}", table(&outcomes));
+    let (device, hardware) = match target {
+        Target::Gpu(_) => gpu_device(),
+        Target::Software => (String::new(), false),
+    };
+    if !device.is_empty() {
+        eprintln!(
+            "bench: on {device} ({})",
+            if hardware { "hardware" } else { "software" }
+        );
+    }
     eprintln!("bench: {:.1} s", started.elapsed().as_secs_f64());
 
     let meta = [
@@ -975,6 +1344,7 @@ fn main() {
         ("renderer_requested", requested.clone()),
         ("renderer", target.name().to_string()),
         ("gpu_unavailable", gpu_note),
+        ("gpu_device", device.clone()),
         (
             "profile",
             if cfg!(debug_assertions) {
@@ -987,7 +1357,12 @@ fn main() {
         ("commit", std::env::var("GITHUB_SHA").unwrap_or_default()),
     ];
     if let Some(path) = value("--json") {
-        std::fs::write(&path, to_json(&meta, &outcomes)).expect("write the JSON");
+        let json = to_json(&meta, &outcomes).replacen(
+            "{\n",
+            &format!("{{\n  \"gpu_hardware\": {hardware},\n"),
+            1,
+        );
+        std::fs::write(&path, json).expect("write the JSON");
         eprintln!("bench: wrote {path}");
     }
 }
