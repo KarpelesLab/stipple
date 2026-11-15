@@ -1,5 +1,6 @@
-//! OS integration: a tray icon with a menu, desktop notifications, and opening
-//! URLs and files in their default apps.
+//! OS integration: a tray icon with a menu, desktop notifications (now or
+//! scheduled), the share sheet, haptics, and opening URLs and files in their
+//! default apps.
 //!
 //! The tray icon is a status item in macOS's menu bar, a notification-area
 //! icon on Windows, and a `StatusNotifierItem` on Linux (KDE, GNOME with the
@@ -10,7 +11,8 @@
 //! `--selftest` drives it without input, for CI: it opens a URL
 //! (`$STIPPLE_SELFTEST_URL`, default `https://example.com/stipple-selftest`)
 //! and, if `$STIPPLE_SELFTEST_FILE` is set, that file, shows a notification,
-//! reports whether the tray icon is shown, and quits. With
+//! schedules a notification half a second on (`traydemo-later`) and lists
+//! what's pending, reports whether the tray icon is shown, and quits. With
 //! `$STIPPLE_SELFTEST_EXPECT_TRAY` set it first waits (up to 20 s) for a tray
 //! host to pick "Ping" from the menu and activate the icon, as CI's mock host
 //! on Linux does.
@@ -47,6 +49,22 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let notify = button(cx, "Show a notification").on_tap(cx, |s| {
         s.status = result("notify", send_notification(s));
     });
+    let later = button(cx, "Notify in 5 s").on_tap(cx, |s| {
+        s.status = result("schedule_notification", schedule_later(5000));
+    });
+    let handle = cx.handle();
+    let share = button(cx, "Share…").on_tap(cx, move |_| {
+        handle.share(
+            platform::Share::new()
+                .text("Made with Stipple")
+                .url("https://github.com/KarpelesLab/stipple"),
+            |s: &mut State, outcome| s.status = format!("share: {outcome:?}"),
+        );
+    });
+    let buzz = button(cx, "Haptic").on_tap(cx, |s| {
+        platform::haptic(platform::Haptic::Success);
+        s.status = "haptic played (felt on a Force Touch trackpad)".into();
+    });
     column(vec![
         heading(cx, "Tray, notifications and URLs"),
         label(
@@ -64,6 +82,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             ),
         ),
         row(vec![open, file, notify]).gap(theme.spacing.sm),
+        row(vec![later, share, buzz]).gap(theme.spacing.sm),
         label(cx, state.status.clone()),
     ])
     .gap(theme.spacing.md)
@@ -77,6 +96,18 @@ fn open_url(url: &str) -> Result<(), stipple::platform::PlatformError> {
 fn send_notification(s: &State) -> Result<(), stipple::platform::PlatformError> {
     stipple::platform::notify(
         &Notification::new("Stipple traydemo").body(format!("{} pings so far", s.pings)),
+    )
+}
+
+/// Schedule `traydemo-later` in `ms` milliseconds (on the desktops, a timer
+/// while the app runs).
+fn schedule_later(ms: u64) -> Result<(), stipple::platform::PlatformError> {
+    platform::schedule_notification(
+        &platform::ScheduledNotification::new(
+            "traydemo-later",
+            Notification::new("Stipple traydemo later").body("Scheduled by traydemo"),
+        )
+        .after(Duration::from_millis(ms)),
     )
 }
 
@@ -183,6 +214,11 @@ fn start_selftest(handle: &AppHandle<State>) {
             );
         }
         println!("traydemo: notify -> {:?}", send_notification(s));
+        println!(
+            "traydemo: schedule_notification -> {:?}",
+            schedule_later(500)
+        );
+        platform::pending_notifications(|ids| println!("traydemo: pending {ids:?}"));
         let waiter = quit.clone();
         if expect_tray {
             // Wait for the host to pick Ping and activate the icon.

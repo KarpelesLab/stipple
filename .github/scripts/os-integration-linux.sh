@@ -5,7 +5,8 @@
 #   dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/examples/traydemo
 #
 # Checks, from the mock's log and the app's output:
-# - the notification reached org.freedesktop.Notifications.Notify;
+# - the notification reached org.freedesktop.Notifications.Notify, and so did
+#   the one scheduled half a second on;
 # - an https URL went to the portal's OpenURI, and a file: URL to xdg-open
 #   (a stand-in script on PATH that logs its argument);
 # - the StatusNotifierItem registered with the watcher, served its properties
@@ -61,6 +62,8 @@ grep -q "traydemo: tray activate ok" "$out/traydemo.log"
 grep -q "traydemo: event loop exited" "$out/traydemo.log"
 # The desktop's side.
 grep -qE "^NOTIFY app=traydemo summary=Stipple traydemo body=[0-9]+ pings so far" "$out/mock-desktop.log"
+grep -q 'traydemo: pending \["traydemo-later"\]' "$out/traydemo.log"
+grep -q "^NOTIFY app=traydemo summary=Stipple traydemo later body=Scheduled by traydemo" "$out/mock-desktop.log"
 grep -q "^OPENURI https://example.com/stipple-selftest" "$out/mock-desktop.log"
 grep -q "^REGISTER org.kde.StatusNotifierItem-" "$out/mock-desktop.log"
 grep -q "^ITEM id=traydemo title=Stipple tray demo status=Active menu=/MenuBar pixmaps=22x22:1936,32x32:4096,64x64:16384" "$out/mock-desktop.log"

@@ -173,6 +173,10 @@ pub(super) unsafe extern "C" fn on_activity_result(
     result: i32,
     data: JObject,
 ) {
+    if code & super::share::SHARE_CODE != 0 {
+        super::share::closed(code);
+        return;
+    }
     let Some(waiting) = take(code) else {
         return;
     };

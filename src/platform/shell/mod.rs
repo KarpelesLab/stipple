@@ -37,6 +37,17 @@ pub(crate) mod ios;
 #[allow(unsafe_code)]
 mod windows;
 
+mod haptic;
+pub(crate) mod schedule;
+pub(crate) mod sharing;
+
+pub use haptic::{Haptic, haptic};
+pub use schedule::{
+    NotificationTime, ScheduledNotification, cancel_all_notifications, cancel_notification,
+    pending_notifications, request_notification_permission, schedule_notification,
+};
+pub use sharing::{Share, ShareFile, ShareOutcome, share};
+
 /// A desktop notification: a title and an optional body.
 ///
 /// ```
@@ -131,7 +142,10 @@ pub(crate) fn set_tray_shown(shown: bool) {
 static PENDING: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 
 /// Queue `event` for the event loop and wake it. Safe from any thread.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "ios", target_os = "android")),
+    allow(dead_code)
+)]
 pub(crate) fn post(event: Event) {
     if let Ok(mut p) = PENDING.lock() {
         p.push(event);

@@ -1,11 +1,12 @@
-# Tray icons, notifications, message boxes, opening URLs and app directories
+# Tray icons, notifications, sharing, haptics, message boxes, opening URLs and app directories
 
-Ways an app reaches past its window: a tray icon with a menu, desktop
-notifications, message boxes, handing a URL or file to the app the user
-picked for it, finding where to keep its files and what version it is, and
-reading the files it was packaged with. The user's languages and formatting
-settings are in [localization.md](localization.md). The `traydemo` example
-shows all three:
+Ways an app reaches past its window: a tray icon with a menu, notifications
+(now or scheduled), the system's share sheet, haptic feedback, message boxes,
+handing a URL or file to the app the user picked for it, finding where to keep
+its files and what version it is, and reading the files it was packaged with.
+The user's languages and formatting settings are in
+[localization.md](localization.md). The `traydemo` example shows most of them
+(`androiddemo` and `touchdemo` the mobile side):
 
 ```sh
 cargo run --example traydemo
@@ -279,7 +280,117 @@ carries the balloon belongs to it. Windows names the notification after the
 executable; a toast with buttons or images would need the WinRT toast APIs and
 an AppUserModelID, which Stipple doesn't use.
 
-Clicking a notification does nothing yet, and there are no actions or icons.
+Clicking a notification shown with `notify` does nothing yet, and there are
+no actions or icons. Scheduled ones report their taps (below).
+
+### Scheduled notifications
+
+```rust
+use std::time::Duration;
+use stipple::platform::{self, Notification, ScheduledNotification};
+
+// At a moment that makes sense to the user (not on the first schedule):
+platform::request_notification_permission(|granted| { /* … */ });
+
+platform::schedule_notification(
+    &ScheduledNotification::new("potion", Notification::new("The potion is ready"))
+        .after(Duration::from_secs(15 * 60)),   // or .at(SystemTime), .repeating(Duration)
+)?;
+platform::cancel_notification("potion");        // or cancel_all_notifications()
+platform::pending_notifications(|ids| { /* reconcile after a restart */ });
+
+App::new(state, view).on_notification_tapped(|s, id| s.open_panel(id));
+```
+
+A scheduled notification has an id of the app's choosing: scheduling again
+under it replaces the pending one (a game reschedules whenever its timers
+change), cancelling takes it back (and removes it from the notification
+center once shown), and a tap that brings the app up reports it as
+`Event::NotificationTapped(id)`, which `App::on_notification_tapped` hears.
+`repeating(interval)` shows it again every interval after the first time.
+
+| | Delivered by | App not running | Tap reported | Permission |
+|---|---|---|---|---|
+| iOS | `UNUserNotificationCenter`: a `UNTimeIntervalNotificationTrigger`, or a `UNCalendarNotificationTrigger` for a daily or weekly repeat | shown | yes, also when it launches the app | `requestAuthorizationWithOptions:` |
+| Android | `AlarmManager` (exact where allowed, else inexact) and a broadcast receiver that posts it | shown with the `Alarm` receiver in the APK; otherwise only while the process lives | when the tap starts the activity | `POST_NOTIFICATIONS` (13+) |
+| Web | a timer in the page, then the `Notification` API | no (while the page is open) | yes (`onclick`) | `Notification.requestPermission` |
+| macOS, Windows, Linux | a timer thread, then `notify` | no (while the app runs) | no | none |
+
+- **iOS** repeats an interval of a minute or more, starting one interval after
+  scheduling; a 24-hour or 7-day repeat is a calendar trigger at the first
+  time's time of day (and weekday). The center keeps the requests across
+  launches, and `pending_notifications` asks it (answering on a queue of its
+  own). Without permission the center refuses the request (logged).
+- **Android** keeps what's scheduled in a file of the app's, since
+  `AlarmManager` can't list its alarms; the alarms are set again when the app
+  starts, and at boot with the receiver. A tap while the activity is alive
+  only brings the app to the front: `NativeActivity` doesn't pass
+  `onNewIntent` on, so which one it was isn't known. Delivery while the
+  process is gone needs a `classes.dex` in the APK and a manifest entry; see
+  [the Android page](platforms/android.md#scheduled-notifications), with the
+  exact-alarm permissions.
+- **The desktops** have no scheduler of their own that Stipple uses (macOS's
+  `UNUserNotificationCenter` needs a bundle, Windows' scheduled toasts an
+  AppUserModelID, Linux has none): a thread shows each one with `notify` when
+  it's due, while the app runs, and forgets them when it quits.
+- **The web** has nothing reliable without a push server and a service
+  worker; the page's timers stop with the tab.
+
+## The share sheet
+
+```rust
+use stipple::platform::{Share, ShareOutcome};
+
+handle.share(
+    Share::new()
+        .text("Scanned with QR Master")
+        .url("https://example.com/item/42")
+        .subject("A code")                      // mail's subject line
+        .file("code.png", png_bytes, "image/png")
+        .anchor(button_rect),                   // an iPad's popover points here
+    |s: &mut State, outcome| match outcome {
+        ShareOutcome::Shared => s.toast("Shared"),
+        ShareOutcome::Unavailable => s.copy_to_clipboard(),
+        _ => {}
+    },
+);
+```
+
+`AppHandle::share` shows the system's share sheet and runs the answer as a
+state update; `platform::share(&share, done)` is the same with a plain
+callback (run on whichever thread the system answers on). Call it from the
+handler of the button the user pressed.
+
+| | How | `Shared` means | Files |
+|---|---|---|---|
+| iOS | `UIActivityViewController`, a popover from the anchor on an iPad | the activity completed | written to the app's tmp directory, as file URLs |
+| Android | `Intent.createChooser` over `ACTION_SEND` / `ACTION_SEND_MULTIPLE` | a target was picked (the chooser's `IntentSender`) | put in `MediaStore`'s Downloads (Android 10+), where they stay |
+| macOS | `NSSharingServicePicker` from the key window's view, at the anchor | a service was picked | temporary files, as file URLs |
+| Web | `navigator.share` | the promise resolved | `File`s, where `navigator.canShare` takes them |
+| Windows, Linux | — (`Unavailable`) | | |
+
+On Android, a share of files only fails (`Unavailable`) before Android 10,
+since files need a `FileProvider` otherwise, which is a Java class. Windows'
+`DataTransferManager` share UI needs WinRT interop Stipple doesn't have yet,
+and Linux desktops have no share portal: there `Unavailable` comes at once, so
+the app can copy or save instead.
+
+## Haptic feedback
+
+```rust
+use stipple::platform::{Haptic, haptic};
+haptic(Haptic::Success); // Selection, Light, Medium, Heavy, Success, Warning, Error
+```
+
+A short tap on the device's haptic engine, a no-op where there's none.
+
+| | How |
+|---|---|
+| iOS | `UISelectionFeedbackGenerator`, `UIImpactFeedbackGenerator` (light, medium, heavy), `UINotificationFeedbackGenerator` (success, warning, error) |
+| Android | `View.performHapticFeedback` on the app's view (`CLOCK_TICK`, `KEYBOARD_TAP`, `VIRTUAL_KEY`, `LONG_PRESS`; `CONFIRM` and `REJECT` on Android 11+), which needs no permission and follows the user's touch-feedback setting |
+| macOS | `NSHapticFeedbackManager` (felt on a Force Touch trackpad while touching it) |
+| Web | `navigator.vibrate` with a short pattern (Chrome and Firefox on Android) |
+| Windows, Linux | nothing |
 
 ## Message boxes
 
@@ -405,7 +516,17 @@ On the **iOS** simulator, `touchdemo`'s self-test calls `notify`: it must hand
 the notification over (`Ok`) and the center must report the app's permission
 (`getNotificationSettingsWithCompletionHandler:`). Nobody answers the
 permission prompt there, so the notification itself isn't shown; the
-screenshot shows the prompt.
+screenshot shows the prompt. It also schedules one an hour on and lists the
+pending ones (the center's answer to the request is logged).
+
+On the **Android** emulator, `androiddemo` opens the share chooser with a
+text, a URL and a file, backs out of it (`Cancelled`), plays a haptic, and
+schedules a notification ten seconds on; the app goes to the background and
+its process is ended, the APK's `Alarm` receiver posts the notification
+(`dumpsys notification`), and tapping it starts the app, which hears its id.
+Linux's `traydemo` self-test schedules one half a second on, which must reach
+the mock notification server. The macOS share picker and haptics, the iOS
+share sheet and the web paths are build-checked only.
 
 No real tray host or notification popup is looked at, and nothing clicks the
 real icons on Windows or macOS: there, the menus and click handling are

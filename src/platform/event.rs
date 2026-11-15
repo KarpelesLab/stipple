@@ -412,6 +412,11 @@ pub enum Event {
     /// The user clicked the tray icon; its menu
     /// items arrive as [`MenuCommand`](Event::MenuCommand)s instead.
     TrayActivated,
+    /// The user tapped (or clicked) the notification scheduled under this id
+    /// with [`schedule_notification`](crate::platform::schedule_notification),
+    /// which brought the app up (launching it, where the platform can). See
+    /// [`App::on_notification_tapped`](crate::App::on_notification_tapped).
+    NotificationTapped(String),
 
     /// A drag from another application entered the window at `position`
     /// (logical pixels), carrying the kinds of data in `offer`. The app answers

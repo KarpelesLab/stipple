@@ -58,6 +58,8 @@ use crate::render::{Pixmap, Surface};
 
 /// Accessibility: the host view's node provider (TalkBack, `uiautomator`).
 mod a11y;
+/// Scheduled notifications: `AlarmManager` and the broadcast receivers.
+mod alarm;
 /// Predictive back: the `OnBackInvokedCallback` (Android 13 and later).
 mod back;
 /// The Java classes defined at run time: the host view and friends.
@@ -74,9 +76,13 @@ mod notify;
 mod pick;
 /// The system bars' insets, edge to edge, the orientation.
 mod screen;
+/// The share sheet: `ACTION_SEND` through the chooser.
+mod share;
 
+pub(crate) use alarm::{cancel_scheduled, pending_scheduled, request_permission, schedule};
 pub(crate) use notify::notify;
 pub(crate) use pick::{create_document, open_document};
+pub(crate) use share::share;
 
 // ---- NDK FFI ----------------------------------------------------------------
 
@@ -990,6 +996,31 @@ pub(crate) fn clipboard_text() -> Option<String> {
 pub(crate) fn set_clipboard_text(text: &str) -> bool {
     with_activity(|a| unsafe { jni::set_clipboard_text(a.vm, a.clazz, text) }.then_some(()))
         .is_some()
+}
+
+/// Play `kind` with `View.performHapticFeedback` on the host view (the
+/// window's decor view without one), on the main thread. It follows the
+/// user's touch-feedback setting and needs no permission.
+pub(crate) fn haptic(kind: crate::platform::Haptic) {
+    run_on_main(move |jni, activity| {
+        let mut view = classes::host().view.get();
+        if view.is_null() {
+            view = jni
+                .call_object(activity, c"getWindow", c"()Landroid/view/Window;", &[])
+                .and_then(|w| jni.call_object(w, c"getDecorView", c"()Landroid/view/View;", &[]))
+                .unwrap_or(std::ptr::null_mut());
+        }
+        if view.is_null() {
+            return;
+        }
+        let constant = kind.android_constant(alarm::sdk(jni));
+        jni.call_bool(
+            view,
+            c"performHapticFeedback",
+            c"(I)Z",
+            &[jni::JValue { i: constant }],
+        );
+    });
 }
 
 /// Open `url` in the app that handles it, through an `ACTION_VIEW` intent.

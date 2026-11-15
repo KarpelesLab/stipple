@@ -12,6 +12,14 @@
 //! need: strings, types, prototypes, methods, class definitions, a few type
 //! lists, the constructors' code and the class data, plus the map.
 //!
+//! A class may also load a native library when it's initialized
+//! ([`Class::load_library`]: `const-string v0, "name";
+//! invoke-static {v0}, System.loadLibrary; return-void` in its `<clinit>`), so
+//! JNI finds its natives by their exported names (`Java_pkg_Class_method`)
+//! without `RegisterNatives`. That is for a class the system instantiates in
+//! a process the app's code hasn't run in: the [`ALARM`] receiver, written
+//! into an APK at build time ([`receiver_dex`]).
+//!
 //! The format is the one in AOSP's `dex-format` documentation; the sort
 //! orders and alignments below are the ones ART's `DexFileVerifier` checks.
 
@@ -45,9 +53,13 @@ pub(crate) struct Class {
     pub interfaces: &'static [&'static str],
     pub ctor: &'static [&'static str],
     pub natives: &'static [Native],
+    /// A native library its static initializer loads (`System.loadLibrary`),
+    /// if any.
+    pub load_library: Option<&'static str>,
 }
 
 const ACC_PUBLIC: u32 = 0x1;
+const ACC_STATIC: u32 = 0x8;
 const ACC_NATIVE: u32 = 0x100;
 const ACC_CONSTRUCTOR: u32 = 0x1_0000;
 const NO_INDEX: u32 = 0xffff_ffff;
@@ -212,6 +224,23 @@ pub(crate) fn build(classes: &[Class]) -> Vec<u8> {
             });
         }
         protos.insert(ctor);
+        if c.load_library.is_some() {
+            let clinit: Proto = ("V", vec![]);
+            methods.insert(MethodRef {
+                class: c.name,
+                name: "<clinit>",
+                proto: clinit.clone(),
+            });
+            protos.insert(clinit);
+            let load: Proto = ("V", vec![STRING]);
+            methods.insert(MethodRef {
+                class: SYSTEM,
+                name: "loadLibrary",
+                proto: load.clone(),
+            });
+            types.insert(SYSTEM);
+            protos.insert(load);
+        }
         for n in c.natives {
             let proto: Proto = (n.ret, n.params.to_vec());
             methods.insert(MethodRef {
@@ -229,6 +258,11 @@ pub(crate) fn build(classes: &[Class]) -> Vec<u8> {
     let mut strings: BTreeSet<String> = types.iter().map(|t| t.to_string()).collect();
     strings.extend(protos.iter().map(shorty));
     strings.extend(methods.iter().map(|m| m.name.to_string()));
+    strings.extend(
+        classes
+            .iter()
+            .filter_map(|c| c.load_library.map(str::to_string)),
+    );
     debug_assert!(strings.iter().all(|s| s.is_ascii()));
 
     let strings: Vec<String> = strings.into_iter().collect();
@@ -310,7 +344,12 @@ pub(crate) fn build(classes: &[Class]) -> Vec<u8> {
     // constructor. Each parameter here is a single register wide (no `J` or
     // `D`), so with `this` there are `1 + params` registers, all of them ins.
     align4(&mut data);
-    map.push((TYPE_CODE_ITEM, classes.len() as u32, file_off(&data)));
+    let clinits = classes.iter().filter(|c| c.load_library.is_some()).count();
+    map.push((
+        TYPE_CODE_ITEM,
+        (classes.len() + clinits) as u32,
+        file_off(&data),
+    ));
     let mut code_offs = Vec::new();
     for c in classes {
         assert!(
@@ -337,21 +376,67 @@ pub(crate) fn build(classes: &[Class]) -> Vec<u8> {
         u16le(&mut data, regs_list);
         u16le(&mut data, 0x000e); // return-void
     }
+    // The static initializers: `System.loadLibrary(name)`, in one register.
+    let mut clinit_offs = Vec::new();
+    for c in classes {
+        let Some(lib) = c.load_library else {
+            clinit_offs.push(0);
+            continue;
+        };
+        align4(&mut data);
+        clinit_offs.push(file_off(&data));
+        u16le(&mut data, 1); // registers_size
+        u16le(&mut data, 0); // ins_size
+        u16le(&mut data, 1); // outs_size
+        u16le(&mut data, 0); // tries_size
+        u32le(&mut data, 0); // debug_info_off
+        u32le(&mut data, 6); // insns_size, in code units
+        // const-string v0, string@lib (format 21c).
+        u16le(&mut data, 0x001a);
+        u16le(&mut data, string_idx(lib) as u16);
+        // invoke-static {v0}, System.loadLibrary (format 35c).
+        u16le(&mut data, (1 << 12) | 0x71);
+        u16le(
+            &mut data,
+            method_idx(SYSTEM, "loadLibrary", &("V", vec![STRING])) as u16,
+        );
+        u16le(&mut data, 0);
+        u16le(&mut data, 0x000e); // return-void
+    }
 
     // Class data: the constructor as the one direct method, the natives as
     // virtual methods, each list in method index order.
     map.push((TYPE_CLASS_DATA_ITEM, classes.len() as u32, file_off(&data)));
     let mut class_data_offs = Vec::new();
-    for (c, &code_off) in classes.iter().zip(&code_offs) {
+    for ((c, &code_off), &clinit_off) in classes.iter().zip(&code_offs).zip(&clinit_offs) {
         class_data_offs.push(file_off(&data));
         uleb128(&mut data, 0); // static fields
         uleb128(&mut data, 0); // instance fields
-        uleb128(&mut data, 1); // direct methods
-        uleb128(&mut data, c.natives.len() as u32); // virtual methods
+        // Direct methods: the constructor and the static initializer, in
+        // method index order (each index after the first as a difference).
         let ctor: Proto = ("V", c.ctor.to_vec());
-        uleb128(&mut data, method_idx(c.name, "<init>", &ctor));
-        uleb128(&mut data, ACC_PUBLIC | ACC_CONSTRUCTOR);
-        uleb128(&mut data, code_off);
+        let mut direct = vec![(
+            method_idx(c.name, "<init>", &ctor),
+            ACC_PUBLIC | ACC_CONSTRUCTOR,
+            code_off,
+        )];
+        if c.load_library.is_some() {
+            direct.push((
+                method_idx(c.name, "<clinit>", &("V", vec![])),
+                ACC_STATIC | ACC_CONSTRUCTOR,
+                clinit_off,
+            ));
+        }
+        direct.sort_unstable();
+        uleb128(&mut data, direct.len() as u32); // direct methods
+        uleb128(&mut data, c.natives.len() as u32); // virtual methods
+        let mut last = 0;
+        for (i, (idx, flags, off)) in direct.into_iter().enumerate() {
+            uleb128(&mut data, if i == 0 { idx } else { idx - last });
+            last = idx;
+            uleb128(&mut data, flags);
+            uleb128(&mut data, off);
+        }
         let mut natives: Vec<u32> = c
             .natives
             .iter()
@@ -461,6 +546,8 @@ const fn native(name: &'static str, params: &'static [&'static str], ret: &'stat
 }
 
 const CHAR_SEQUENCE: &str = "Ljava/lang/CharSequence;";
+const STRING: &str = "Ljava/lang/String;";
+const SYSTEM: &str = "Ljava/lang/System;";
 const NODE_INFO: &str = "Landroid/view/accessibility/AccessibilityNodeInfo;";
 
 /// The view the backend adds to its `NativeActivity`, which a
@@ -490,6 +577,7 @@ pub(crate) const HOST_VIEW: Class = Class {
             "Landroid/view/WindowInsets;",
         ),
     ],
+    load_library: None,
 };
 
 /// The input method's connection to the focused text field.
@@ -513,6 +601,7 @@ pub(crate) const INPUT: Class = Class {
         native("performEditorAction", &["I"], "Z"),
         native("performContextMenuAction", &["I"], "Z"),
     ],
+    load_library: None,
 };
 
 /// The accessibility tree, a virtual view per node.
@@ -526,6 +615,7 @@ pub(crate) const NODES: Class = Class {
         native("performAction", &["I", "I", "Landroid/os/Bundle;"], "Z"),
         native("findFocus", &["I"], NODE_INFO),
     ],
+    load_library: None,
 };
 
 /// Memory warnings (`onTrimMemory`), which `NativeActivity` doesn't forward.
@@ -543,6 +633,7 @@ pub(crate) const CALLBACKS: Class = Class {
             "V",
         ),
     ],
+    load_library: None,
 };
 
 /// A headless `Fragment` the backend adds to its activity to hear what a
@@ -565,6 +656,7 @@ pub(crate) const RESULTS: Class = Class {
             "V",
         ),
     ],
+    load_library: None,
 };
 
 const ACTIVITY: &str = "Landroid/app/Activity;";
@@ -588,11 +680,53 @@ pub(crate) const LIFECYCLE: Class = Class {
         native("onActivitySaveInstanceState", &[ACTIVITY, BUNDLE], "V"),
         native("onActivityDestroyed", &[ACTIVITY], "V"),
     ],
+    load_library: None,
+};
+
+const CONTEXT: &str = "Landroid/content/Context;";
+const INTENT: &str = "Landroid/content/Intent;";
+
+/// The broadcast receiver the backend registers at run time while the app's
+/// process lives: it hears its scheduled notifications' alarms, and which
+/// target the share sheet's chooser picked.
+pub(crate) const RECEIVER: Class = Class {
+    name: "Lorg/stipple/android/Receiver;",
+    superclass: "Landroid/content/BroadcastReceiver;",
+    interfaces: &[],
+    ctor: &[],
+    natives: &[native("onReceive", &[CONTEXT, INTENT], "V")],
+    load_library: None,
 };
 
 /// Every class the Android backend defines, in the order it loads them.
-pub(crate) const ANDROID_CLASSES: [Class; 6] =
-    [HOST_VIEW, INPUT, NODES, CALLBACKS, RESULTS, LIFECYCLE];
+pub(crate) const ANDROID_CLASSES: [Class; 7] = [
+    HOST_VIEW, INPUT, NODES, CALLBACKS, RESULTS, LIFECYCLE, RECEIVER,
+];
+
+/// The broadcast receiver an app's manifest declares (with the dex from
+/// [`receiver_dex`] in its APK) so its scheduled notifications show when its
+/// process isn't running: it loads the app's library (named by
+/// `load_library`, filled in by [`receiver_dex`]) and its `onReceive` is the
+/// library's `Java_org_stipple_android_Alarm_onReceive`.
+pub(crate) const ALARM: Class = Class {
+    name: "Lorg/stipple/android/Alarm;",
+    superclass: "Landroid/content/BroadcastReceiver;",
+    interfaces: &[],
+    ctor: &[],
+    natives: &[native("onReceive", &[CONTEXT, INTENT], "V")],
+    load_library: None,
+};
+
+/// A `classes.dex` holding [`ALARM`], loading native library `lib` (the
+/// `android.app.lib_name` of the app's `NativeActivity`, without `lib` and
+/// `.so`), for the APK.
+pub(crate) fn receiver_dex(lib: &str) -> Vec<u8> {
+    let lib: &'static str = Box::leak(lib.to_string().into_boxed_str());
+    build(&[Class {
+        load_library: Some(lib),
+        ..ALARM
+    }])
+}
 
 /// Predictive back on Android 13 (API 33): an `OnBackInvokedCallback` the
 /// backend registers while the app would go back. Loaded on its own, from a
@@ -603,6 +737,7 @@ pub(crate) const BACK_CALLBACK: Class = Class {
     interfaces: &["Landroid/window/OnBackInvokedCallback;"],
     ctor: &[],
     natives: &[native("onBackInvoked", &[], "V")],
+    load_library: None,
 };
 
 const BACK_EVENT: &str = "Landroid/window/BackEvent;";
@@ -620,6 +755,7 @@ pub(crate) const BACK_ANIMATION: Class = Class {
         native("onBackProgressed", &[BACK_EVENT], "V"),
         native("onBackCancelled", &[], "V"),
     ],
+    load_library: None,
 };
 
 /// A class's binary name, as `ClassLoader.loadClass` wants it:
@@ -683,6 +819,7 @@ mod tests {
                 params: &[],
                 ret: "V",
             }],
+            load_library: None,
         },
         Class {
             name: "Lorg/example/Box;",
@@ -701,6 +838,7 @@ mod tests {
                     ret: "I",
                 },
             ],
+            load_library: None,
         },
     ];
 
@@ -828,6 +966,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_receiver_loads_its_library_first() {
+        let dex = build(&[RECEIVER]);
+        assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
+        let dex = receiver_dex("stipple_android");
+        assert_eq!(read_u32(&dex, 96), 1, "one class");
+        assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
+        assert_eq!(&dex[12..32], &sha1(&dex[32..]));
+        // Two code items: the constructor's and `<clinit>`'s, whose header
+        // is one register, no ins, one out, six code units.
+        let needle = [1u8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0];
+        let at = dex
+            .windows(needle.len())
+            .position(|w| w == needle)
+            .expect("the static initializer");
+        let insns = &dex[at + 16..at + 28];
+        assert_eq!(insns[0], 0x1a, "const-string");
+        assert_eq!(&insns[4..6], &[0x71, 0x10], "invoke-static, one register");
+        assert_eq!(&insns[10..12], &[0x0e, 0x00], "return-void");
+        assert!(dex.windows(15).any(|w| w == b"stipple_android"));
+        assert!(dex.windows(11).any(|w| w == b"loadLibrary"));
+        assert_eq!(binary_name(ALARM.name), "org.stipple.android.Alarm");
+    }
+
     /// With `STIPPLE_DEX_OUT` set, write the Android backend's classes there
     /// (and the demo next to it), so `dexdump` from the Android SDK's build
     /// tools can check them; CI does.
@@ -841,6 +1003,11 @@ mod tests {
             std::fs::write(
                 path.with_extension("back-animation.dex"),
                 build(&[BACK_ANIMATION]),
+            )
+            .unwrap();
+            std::fs::write(
+                path.with_extension("receiver.dex"),
+                receiver_dex("stipple_android"),
             )
             .unwrap();
         }

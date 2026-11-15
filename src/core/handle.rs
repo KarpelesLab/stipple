@@ -468,6 +468,41 @@ impl<S> AppHandle<S> {
         crate::platform::notify(notification)
     }
 
+    /// Show the system's share sheet with `share`, and apply how it ended to
+    /// the state: `done` runs on the UI thread as an update. Call it from a
+    /// handler (the button the user pressed); see
+    /// [`platform::share`](crate::platform::share) for each platform.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// use stipple::platform::{Share, ShareOutcome};
+    /// # struct State { status: String }
+    /// # fn f(handle: AppHandle<State>, png: Vec<u8>) {
+    /// handle.share(
+    ///     Share::new().text("My code").file("code.png", png, "image/png"),
+    ///     |s: &mut State, outcome| {
+    ///         s.status = match outcome {
+    ///             ShareOutcome::Shared => "Shared".into(),
+    ///             ShareOutcome::Unavailable => "Can't share here".into(),
+    ///             _ => String::new(),
+    ///         };
+    ///     },
+    /// );
+    /// # }
+    /// ```
+    pub fn share(
+        &self,
+        share: crate::platform::Share,
+        done: impl FnOnce(&mut S, crate::platform::ShareOutcome) + Send + 'static,
+    ) where
+        S: 'static,
+    {
+        let handle = self.clone();
+        crate::platform::share(&share, move |outcome| {
+            handle.update(move |s| done(s, outcome));
+        });
+    }
+
     /// Repaint all of [canvas](crate::core::Element::canvas) `id`, without
     /// rebuilding the view: its paint callback runs again and only its area
     /// is re-rasterized and presented. Safe from any thread; repaints

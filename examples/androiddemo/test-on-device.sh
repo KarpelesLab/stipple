@@ -590,6 +590,23 @@ case "$saved" in
   *) echo "stipple-saved.txt holds: $saved" >&2; exit 1 ;;
 esac
 
+# The share sheet (ACTION_SEND through the chooser), with a text, a URL and a
+# file (through MediaStore on Android 10 and later): Back closes the chooser
+# without picking a target, which the app hears as Cancelled. Then a haptic.
+wait_top "$pkg" 20
+files=0
+((sdk >= 29)) && files=1
+tap_when 'text="Share"'
+wait_for "stipple: share chooser started \(request [0-9]+, $files files\)" 20
+wait_top "ChooserActivity|ResolverActivity" 30
+sleep 2
+adb exec-out screencap -p > "$shots/android-share.png"
+adb shell input keyevent KEYCODE_BACK
+wait_for "androiddemo: share Cancelled" 20
+wait_top "$pkg" 20
+tap_when 'text="Buzz"'
+wait_for "androiddemo: haptic" 10
+
 # The process dies while the picker is up, and Android brings the activity
 # back with its saved state: the results fragment was dropped from it, so the
 # restore doesn't trip over a class only Stipple's loader knows.
@@ -706,4 +723,38 @@ if ! grep -q "Tapped 2 times" "$shots/android-restored-ui.xml"; then
 fi
 echo "android: state restored after process death"
 fi
+
+# Scheduled notifications: Later schedules one ten seconds on. The app goes
+# to the background and its process ends; the alarm starts it again for the
+# APK's Alarm receiver (classes.dex), which posts the notification. A tap on
+# it starts the activity, which hears which notification it was.
+adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
+wait_top "$pkg" 30
+adb logcat -c
+tap_when 'text="Later"' 30
+wait_for 'stipple: notification "androiddemo-later" scheduled in' 20
+wait_for 'androiddemo: pending \[.*"androiddemo-later".*\]' 10
+adb shell input keyevent KEYCODE_HOME
+sleep 2
+pid="$(adb shell pidof "$pkg" | tr -d '\r')"
+adb shell am kill "$pkg"
+sleep 1
+if [ -n "$pid" ] && adb shell pidof "$pkg" >/dev/null; then
+  adb shell run-as "$pkg" kill -9 "$pid" || true
+fi
+wait_for 'stipple: scheduled notification "androiddemo-later" posted' 60
+sleep 1
+if ! adb shell dumpsys notification --noredact | grep -A40 "pkg=$pkg" \
+  | grep -q "android.title=String (Scheduled from androiddemo)"; then
+  echo "the scheduled notification isn't in dumpsys notification:" >&2
+  adb shell dumpsys notification --noredact | grep -A20 "pkg=$pkg" >&2 || true
+  exit 1
+fi
+adb shell cmd statusbar expand-notifications
+sleep 2
+adb exec-out screencap -p > "$shots/android-scheduled.png"
+tap_when 'text="Scheduled from androiddemo"' 20
+wait_for 'androiddemo: notification tapped "androiddemo-later"' 60
+adb shell cmd statusbar collapse || true
+echo "android: scheduled notification shown with the process gone, and its tap heard"
 echo "android: all checks passed"

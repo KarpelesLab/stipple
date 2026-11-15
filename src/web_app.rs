@@ -243,6 +243,18 @@ macro_rules! web_app {
             pub extern "C" fn stipple_gamepad_axis(index: u32, axis: u32, value: f64) {
                 glue::gamepad_axis(index, axis, value);
             }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_answer(id: u32, value: u32) {
+                glue::answer(id, value);
+            }
+
+            /// # Safety
+            /// `ptr`/`len` come from one `stipple_alloc(len)`.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_notification(ptr: *mut u8, len: usize) {
+                glue::notification_tapped(unsafe { glue::take_string(ptr, len) });
+            }
         }
 
         // Natively there's nothing to export, but `$make` still counts as used.

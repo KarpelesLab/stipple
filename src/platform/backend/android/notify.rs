@@ -12,6 +12,11 @@
 //! allows notifications in the settings. Before Android 13 there's nothing to
 //! ask, but the user may have turned the app's notifications off, which
 //! `notify` reports too.
+//!
+//! [`request_permission`] asks the same way without a notification waiting,
+//! and [`post_scheduled`] posts one that [`alarm`](super::alarm) scheduled,
+//! under a notification id made from the app's id, its tap opening the app
+//! with that id in the launch intent ([`TAPPED_EXTRA`]).
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -38,6 +43,15 @@ static ANSWER: AtomicU8 = AtomicU8::new(UNKNOWN);
 /// Notifications waiting for the permission request's answer.
 static WAITING: Mutex<Vec<Notification>> = Mutex::new(Vec::new());
 
+/// [`request_permission`]'s callers waiting for the answer.
+type PermissionFn = Box<dyn FnOnce(bool) + Send>;
+static ASKERS: Mutex<Vec<PermissionFn>> = Mutex::new(Vec::new());
+
+/// The launch intent's extra naming the scheduled notification tapped, and
+/// when it was posted (to tell one tap from another).
+pub(super) const TAPPED_EXTRA: &str = "org.stipple.notification";
+pub(super) const TAPPED_AT_EXTRA: &str = "org.stipple.notification.at";
+
 /// Whether the channel has been made, in this process.
 static CHANNEL_MADE: AtomicBool = AtomicBool::new(false);
 
@@ -54,7 +68,7 @@ pub(crate) fn notify(n: &Notification) -> Result<(), PlatformError> {
                 if sdk >= 33 && !granted(jni, context) {
                     return Some(None);
                 }
-                Some(Some(post(jni, context, sdk, n)))
+                Some(Some(post(jni, context, sdk, n, None)))
             })
         })
     })
@@ -71,6 +85,15 @@ pub(crate) fn notify(n: &Notification) -> Result<(), PlatformError> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .push(n.clone());
+    if !ask() {
+        return Err(os("no activity"));
+    }
+    Ok(())
+}
+
+/// Ask for `POST_NOTIFICATIONS` (unless a request is out already), from the
+/// results fragment. `false` if there's no activity to ask from.
+fn ask() -> bool {
     if ANSWER.swap(ASKING, Ordering::AcqRel) != ASKING {
         let asking = run_on_main(|jni, activity| {
             let asked = (|| {
@@ -92,10 +115,71 @@ pub(crate) fn notify(n: &Notification) -> Result<(), PlatformError> {
         if !asking {
             ANSWER.store(UNKNOWN, Ordering::Release);
             WAITING.lock().unwrap_or_else(|e| e.into_inner()).clear();
-            return Err(os("no activity"));
+            for f in std::mem::take(&mut *ASKERS.lock().unwrap_or_else(|e| e.into_inner())) {
+                f(false);
+            }
+            return false;
         }
     }
-    Ok(())
+    true
+}
+
+/// Ask for the permission to post (Android 13 and later), and tell `done`
+/// whether notifications may be shown. Before 13, whether the user left
+/// them on.
+pub(crate) fn request_permission(done: PermissionFn) {
+    let now = with_activity(|a| {
+        let (vm, context, sdk) = (a.vm, a.clazz, a.sdk_version);
+        unsafe {
+            jni::with_env(vm, |jni| {
+                if sdk >= 33 && !granted(jni, context) {
+                    return Some(None);
+                }
+                Some(Some(enabled(jni, context)))
+            })
+        }
+    });
+    match now {
+        Some(Some(enabled)) => done(enabled),
+        None => done(false),
+        Some(None) => {
+            ASKERS.lock().unwrap_or_else(|e| e.into_inner()).push(done);
+            ask();
+        }
+    }
+}
+
+/// Whether the user left the app's notifications on.
+fn enabled(jni: &Jni, context: JObject) -> bool {
+    manager(jni, context)
+        .and_then(|m| jni.call_bool(m, c"areNotificationsEnabled", c"()Z", &[]))
+        .unwrap_or(true)
+}
+
+/// The `NotificationManager`.
+pub(super) fn manager(jni: &Jni, context: JObject) -> Option<JObject> {
+    let name = jni.string("notification")?;
+    jni.call_object(
+        context,
+        c"getSystemService",
+        c"(Ljava/lang/String;)Ljava/lang/Object;",
+        &[JValue { l: name }],
+    )
+}
+
+/// Post `n`, scheduled under the app's `id`, now (when its alarm went off):
+/// from a broadcast receiver, so nothing is asked. On the main thread.
+pub(super) fn post_scheduled(
+    jni: &Jni,
+    context: JObject,
+    sdk: i32,
+    id: &str,
+    n: &Notification,
+) -> Result<(), PlatformError> {
+    if sdk >= 33 && !granted(jni, context) {
+        return Err(os("notifications aren't allowed"));
+    }
+    post(jni, context, sdk, n, Some(id))
 }
 
 /// Whether the app holds `POST_NOTIFICATIONS`.
@@ -123,11 +207,14 @@ fn answered(jni: &Jni, context: JObject, granted: Option<bool>) {
         Ordering::Release,
     );
     log(&format!("stipple: notification permission {granted:?}"));
+    for f in std::mem::take(&mut *ASKERS.lock().unwrap_or_else(|e| e.into_inner())) {
+        f(granted == Some(true));
+    }
     let waiting = std::mem::take(&mut *WAITING.lock().unwrap_or_else(|e| e.into_inner()));
     let sdk = with_activity(|a| Some(a.sdk_version)).unwrap_or(33);
     for n in waiting {
         let result = if granted == Some(true) {
-            post(jni, context, sdk, &n)
+            post(jni, context, sdk, &n, None)
         } else {
             Err(os("notifications aren't allowed"))
         };
@@ -160,18 +247,17 @@ pub(super) unsafe extern "C" fn on_request_permissions_result(
     }
 }
 
-/// Post `n` through the `NotificationManager`.
-fn post(jni: &Jni, context: JObject, sdk: i32, n: &Notification) -> Result<(), PlatformError> {
+/// Post `n` through the `NotificationManager`; `tag` is the app's id for a
+/// scheduled one.
+fn post(
+    jni: &Jni,
+    context: JObject,
+    sdk: i32,
+    n: &Notification,
+    tag: Option<&str>,
+) -> Result<(), PlatformError> {
     let failed = || os("NotificationManager refused the notification");
-    let name = jni.string("notification").ok_or_else(failed)?;
-    let manager = jni
-        .call_object(
-            context,
-            c"getSystemService",
-            c"(Ljava/lang/String;)Ljava/lang/Object;",
-            &[JValue { l: name }],
-        )
-        .ok_or_else(|| os("no NotificationManager"))?;
+    let manager = manager(jni, context).ok_or_else(|| os("no NotificationManager"))?;
     if jni.call_bool(manager, c"areNotificationsEnabled", c"()Z", &[]) == Some(false) {
         return Err(os("notifications are turned off for the app"));
     }
@@ -217,7 +303,7 @@ fn post(jni: &Jni, context: JObject, sdk: i32, n: &Notification) -> Result<(), P
         c"(Z)Landroid/app/Notification$Builder;",
         &[JValue { z: 1 }],
     );
-    if let Some(open) = launch_intent(jni, context) {
+    if let Some(open) = launch_intent(jni, context, tag) {
         jni.call_object(
             builder,
             c"setContentIntent",
@@ -229,7 +315,10 @@ fn post(jni: &Jni, context: JObject, sdk: i32, n: &Notification) -> Result<(), P
         .call_object(builder, c"build", c"()Landroid/app/Notification;", &[])
         .ok_or_else(failed)?;
     static NEXT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(1);
-    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let id = match tag {
+        Some(tag) => scheduled_id(tag),
+        None => NEXT.fetch_add(1, Ordering::Relaxed),
+    };
     jni.call_void(
         manager,
         c"notify",
@@ -239,6 +328,13 @@ fn post(jni: &Jni, context: JObject, sdk: i32, n: &Notification) -> Result<(), P
     .ok_or_else(failed)?;
     log(&format!("stipple: notification {id} posted"));
     Ok(())
+}
+
+/// The notification id of the one scheduled under `tag`: the last posted
+/// under it is replaced. Negative, so it never meets the others, numbered
+/// from 1.
+pub(super) fn scheduled_id(tag: &str) -> i32 {
+    !crate::platform::shell::schedule::int_id(tag)
 }
 
 /// The app's channel: `new NotificationChannel("stipple", "Notifications",
@@ -280,8 +376,9 @@ fn small_icon(jni: &Jni, context: JObject) -> i32 {
     .unwrap_or(0)
 }
 
-/// A `PendingIntent` that opens the app.
-fn launch_intent(jni: &Jni, context: JObject) -> Option<JObject> {
+/// A `PendingIntent` that opens the app, saying it was for scheduled
+/// notification `tag`.
+fn launch_intent(jni: &Jni, context: JObject, tag: Option<&str>) -> Option<JObject> {
     let pm = jni.call_object(
         context,
         c"getPackageManager",
@@ -295,6 +392,25 @@ fn launch_intent(jni: &Jni, context: JObject) -> Option<JObject> {
         c"(Ljava/lang/String;)Landroid/content/Intent;",
         &[JValue { l: package }],
     )?;
+    let mut code = 0;
+    if let Some(tag) = tag {
+        code = crate::platform::shell::schedule::int_id(tag);
+        let (key, value) = (jni.string(TAPPED_EXTRA)?, jni.string16(tag)?);
+        jni.call_object(
+            intent,
+            c"putExtra",
+            c"(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue { l: key }, JValue { l: value }],
+        )?;
+        let key = jni.string(TAPPED_AT_EXTRA)?;
+        let at = crate::platform::shell::schedule::now_ms() as i64;
+        jni.call_object(
+            intent,
+            c"putExtra",
+            c"(Ljava/lang/String;J)Landroid/content/Intent;",
+            &[JValue { l: key }, JValue { j: at }],
+        )?;
+    }
     // FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT.
     let flags = 0x0400_0000 | 0x0800_0000;
     jni.call_static_object(
@@ -303,7 +419,7 @@ fn launch_intent(jni: &Jni, context: JObject) -> Option<JObject> {
         c"(Landroid/content/Context;ILandroid/content/Intent;I)Landroid/app/PendingIntent;",
         &[
             JValue { l: context },
-            JValue { i: 0 },
+            JValue { i: code },
             JValue { l: intent },
             JValue { i: flags },
         ],

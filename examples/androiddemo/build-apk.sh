@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Build androiddemo and package it as a signed debug APK, with no Gradle: the
 # NDK's clang links the cdylib, and the SDK's build tools (aapt, zipalign,
-# apksigner) package and sign it.
+# apksigner) package and sign it. The APK's classes.dex holds Stipple's
+# org.stipple.android.Alarm receiver (stipple::platform::android_receiver_dex,
+# written here by a host test), for scheduled notifications.
 #
 #   examples/androiddemo/build-apk.sh [x86_64|arm64-v8a] [out.apk]
 #
@@ -32,7 +34,9 @@ ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}"
 if [ -z "$ndk" ]; then
   ndk="$(ls -d "$ANDROID_HOME"/ndk/* | sort -V | tail -1)"
 fi
-linker="$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/${target}21-clang"
+host_tag=linux-x86_64
+[ "$(uname -s)" = Darwin ] && host_tag=darwin-x86_64
+linker="$ndk/toolchains/llvm/prebuilt/$host_tag/bin/${target}21-clang"
 if [ ! -x "$linker" ]; then
   echo "no NDK linker at $linker (set ANDROID_NDK_HOME to an NDK)" >&2
   exit 1
@@ -52,6 +56,11 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/lib/$abi"
 cp "$lib" "$work/lib/$abi/libstipple_android.so"
+# The Alarm receiver, loading libstipple_android.so (the dexdump test writes it
+# next to the backend's run-time classes).
+(cd "$root" && STIPPLE_DEX_OUT="$work/stipple-classes.dex" \
+  cargo test --lib platform::dex::tests::writes_the_classes_for_dexdump >/dev/null)
+cp "$work/stipple-classes.receiver.dex" "$work/classes.dex"
 cp "$here/AndroidManifest.xml" "$work/"
 (
   cd "$work"
@@ -62,6 +71,7 @@ cp "$here/AndroidManifest.xml" "$work/"
   fi
   "$build_tools/aapt" package -f -M AndroidManifest.xml -I "$platform_jar" "${assets[@]}" -F base.apk
   "$build_tools/aapt" add base.apk "lib/$abi/libstipple_android.so"
+  "$build_tools/aapt" add base.apk classes.dex
   "$build_tools/zipalign" -f -p 4 base.apk aligned.apk
   keytool -genkeypair -keystore debug.ks -storepass android -keypass android \
     -alias debug -dname "CN=stipple" -keyalg RSA -keysize 2048 -validity 10000 >/dev/null 2>&1

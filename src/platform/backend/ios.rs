@@ -407,10 +407,18 @@ unsafe fn set_root_background(window: Id, color: Option<crate::render::Color>) {
     }
 }
 
+/// The app's view (null before it's made), for what's presented from it.
+pub(crate) fn app_view() -> Id {
+    CTX.with(|c| c.borrow().view)
+}
+
 /// `application:didFinishLaunchingWithOptions:` — without scenes, build the
 /// window + view, draw the first frame, and show it. With scenes, the scene
 /// delegate does when its scene connects ([`scene`]).
 extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) -> bool {
+    // Before launching ends, so a notification tap that launched the app
+    // reaches the center's delegate.
+    crate::platform::shell::ios::install_delegate();
     if !scene::uses_scenes() {
         unsafe {
             let bounds = msg_rect(msg_id(class("UIScreen"), sel("mainScreen")), sel("bounds"));

@@ -1154,6 +1154,25 @@ mod selftest {
             );
             log(&format!("touchdemo: notify {sent:?}"));
             check(sent.is_ok(), format!("notify: {sent:?}"));
+            // A scheduled one: the center takes the request (or refuses it
+            // while permission is undecided; either way its completion
+            // handler logs), and the pending list answers.
+            stipple::platform::haptic(stipple::platform::Haptic::Success);
+            let scheduled = stipple::platform::schedule_notification(
+                &stipple::platform::ScheduledNotification::new(
+                    "touchdemo-later",
+                    Notification::new("Stipple later").body("Scheduled by touchdemo"),
+                )
+                .after(Duration::from_secs(3600)),
+            );
+            log(&format!("touchdemo: scheduled {scheduled:?}"));
+            check(
+                scheduled.is_ok(),
+                format!("schedule_notification: {scheduled:?}"),
+            );
+            stipple::platform::pending_notifications(|ids| {
+                log(&format!("touchdemo: pending {ids:?}"));
+            });
         });
         steps.run(1000, |_| {
             simulate::notification_status(|status| {

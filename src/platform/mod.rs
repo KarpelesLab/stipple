@@ -47,9 +47,24 @@ pub mod clipboard;
 /// Wayland, where composing is the client's job).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) mod compose;
-/// A writer for the Dalvik executables the Android backend loads at run time.
-#[cfg(any(target_os = "android", test))]
+/// A writer for the Dalvik executables the Android backend loads at run time
+/// (and the one an APK carries, from [`android_receiver_dex`] on any host).
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
 pub(crate) mod dex;
+
+/// A `classes.dex` for an Android APK holding the `org.stipple.android.Alarm`
+/// broadcast receiver, which shows the app's
+/// [scheduled notifications](schedule_notification) when its process isn't
+/// running: the receiver loads the native library `lib` (the
+/// `android.app.lib_name` of the app's `NativeActivity`, `stipple_android` for
+/// `libstipple_android.so`). Write it from a build script (or a host tool)
+/// into the APK as `classes.dex`, set `android:hasCode="true"`, and declare the
+/// receiver in the manifest; see `docs/platforms/android.md`.
+// Hidden: an Android packaging step, not an app API.
+#[doc(hidden)]
+pub fn android_receiver_dex(lib: &str) -> Vec<u8> {
+    dex::receiver_dex(lib)
+}
 /// Native file dialogs (open/save/folder) backed by each OS's picker.
 pub mod dialog;
 mod error;
@@ -142,7 +157,12 @@ pub use pointer::{
 pub use saved_state::{save_state, take_restored_state};
 pub use screen::{Orientation, Orientations};
 pub use secure::{secure_input, set_secure_input};
-pub use shell::{Notification, notify, open_path, open_url, tray_shown};
+pub use shell::{
+    Haptic, Notification, NotificationTime, ScheduledNotification, Share, ShareFile, ShareOutcome,
+    cancel_all_notifications, cancel_notification, haptic, notify, open_path, open_url,
+    pending_notifications, request_notification_permission, schedule_notification, share,
+    tray_shown,
+};
 #[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
 pub(crate) use window::GpuLayer;
 pub(crate) use window::Window;

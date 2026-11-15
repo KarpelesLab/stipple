@@ -6,14 +6,23 @@
      (Android 13 and later): Back goes to the app's OnBackInvokedCallback, which
      Stipple registers only while the app would go back. versionName and
      versionCode are what platform::app_info reports (test-on-device.sh
-     checks them). See
-     docs/platforms/android.md for packaging. -->
+     checks them). The APK carries a classes.dex with Stipple's Alarm receiver
+     (build-apk.sh writes it), so scheduled notifications show while the
+     process is gone, and are set again after a reboot; the exact-alarm
+     permissions let them show on time. See docs/platforms/android.md for
+     packaging. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.karpeleslab.stipple"
     android:versionCode="7" android:versionName="1.2.3">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <!-- platform::notify, on Android 13 and later. -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-  <application android:label="Stipple" android:hasCode="false" android:debuggable="true"
+  <!-- platform::schedule_notification: exact alarms (granted by default on
+       Android 12 with the first, on 13 and later with the second), and the
+       alarms set again after a reboot. -->
+  <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
+  <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+  <application android:label="Stipple" android:hasCode="true" android:debuggable="true"
       android:enableOnBackInvokedCallback="true"
       android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
     <activity android:name="android.app.NativeActivity" android:exported="true"
@@ -24,5 +33,11 @@
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
     </activity>
+    <receiver android:name="org.stipple.android.Alarm" android:exported="false">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED"/>
+        <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+      </intent-filter>
+    </receiver>
   </application>
 </manifest>

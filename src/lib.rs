@@ -3693,6 +3693,12 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                Event::NotificationTapped(ref id) => {
+                    if self.notification_tapped(id) && !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::TrayActivated => {
                     if self.run_tray_activate() {
                         present(&mut self, &mut surfaces, idx, window, false);

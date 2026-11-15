@@ -36,6 +36,7 @@ type BackEnabledFn<S> = Box<dyn Fn(&S) -> bool>;
 type BackProgressFn<S> = Box<dyn FnMut(&mut S, BackGesture)>;
 type SaveFn<S> = Box<dyn FnMut(&S) -> Vec<u8>>;
 type RestoreFn<S> = Box<dyn FnMut(&mut S, &[u8])>;
+type TappedFn<S> = Box<dyn FnMut(&mut S, &str)>;
 
 /// The app's lifecycle hooks.
 pub(crate) struct Hooks<S> {
@@ -50,6 +51,7 @@ pub(crate) struct Hooks<S> {
     back_progress: Option<BackProgressFn<S>>,
     save: Option<SaveFn<S>>,
     restore: Option<RestoreFn<S>>,
+    tapped: Option<TappedFn<S>>,
     /// Whether the app is in the background (between
     /// [`Lifecycle::Background`] and [`Lifecycle::Foreground`]).
     pub(crate) background: bool,
@@ -68,6 +70,7 @@ impl<S> Default for Hooks<S> {
             back_progress: None,
             save: None,
             restore: None,
+            tapped: None,
             background: false,
         }
     }
@@ -183,6 +186,40 @@ impl<S: 'static> App<S> {
     pub fn on_lifecycle(mut self, hook: impl FnMut(&mut S, Lifecycle) + 'static) -> Self {
         self.lifecycle.lifecycle = Some(Box::new(hook));
         self
+    }
+
+    /// Hear which [scheduled notification](crate::platform::schedule_notification)
+    /// the user tapped, by its id, once it brought the app up: to open the
+    /// panel it's about. The hook may change the state; the view is rebuilt.
+    ///
+    /// A tap that launches the app arrives once the app runs, after
+    /// [`restore_state`](Self::restore_state). Reported on iOS, the web and
+    /// Android (when the tap starts the activity); see
+    /// [`schedule_notification`](crate::platform::schedule_notification).
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// struct State { panel: String }
+    /// # fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+    /// App::new(State { panel: String::new() }, view)
+    ///     .on_notification_tapped(|s, id| s.panel = id.to_string())
+    ///     .run();
+    /// ```
+    pub fn on_notification_tapped(mut self, hook: impl FnMut(&mut S, &str) + 'static) -> Self {
+        self.lifecycle.tapped = Some(Box::new(hook));
+        self
+    }
+
+    /// Run the notification-tap hook for `id`. Returns whether it ran.
+    pub(crate) fn notification_tapped(&mut self, id: &str) -> bool {
+        let Some(hook) = self.lifecycle.tapped.as_mut() else {
+            return false;
+        };
+        hook(&mut self.state, id);
+        for pane in &mut self.panes {
+            pane.dirty = true;
+        }
+        true
     }
 
     /// The app went to the background, came back or is short of memory:

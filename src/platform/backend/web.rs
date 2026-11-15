@@ -39,6 +39,13 @@
 //! phone's notch, status bar or home indicator (`env(safe-area-inset-*)`,
 //! nonzero only on a page with `viewport-fit=cover`), through
 //! `stipple_safe_area(top, right, bottom, left)`.
+//! | `date_now() -> f64` | `Date.now()` |
+//! | `share_file(name, name_len, mime, mime_len, data, data_len)` | keeps a `File` for the next `share` |
+//! | `share(id, title, title_len, text, text_len, url, url_len)` | `navigator.share` with the files kept; answers `stipple_answer(id, 0 shared / 1 cancelled / 2 unavailable)` |
+//! | `vibrate(ptr, n)` | `navigator.vibrate` with `n` `u32` milliseconds |
+//! | `schedule_notification(id, id_len, title, title_len, body, body_len, delay_ms, repeat_ms)` | a timer (then an interval) showing a `Notification` tagged with the id; a click calls `stipple_notification(id)` |
+//! | `cancel_notification(id, id_len)` | clears that id's timer (an empty id: all) |
+//! | `notification_permission(id)` | `Notification.requestPermission`, answering `stipple_answer(id, granted)` |
 //!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
@@ -87,6 +94,37 @@ mod js {
         pub fn gamepad_rumble(index: u32, low: f64, high: f64, ms: f64) -> u32;
         pub fn fetch_asset(id: u32, ptr: *const u8, len: usize);
         pub fn keep_awake(on: u32);
+        pub fn date_now() -> f64;
+        pub fn share_file(
+            name: *const u8,
+            name_len: usize,
+            mime: *const u8,
+            mime_len: usize,
+            data: *const u8,
+            data_len: usize,
+        );
+        pub fn share(
+            id: u32,
+            title: *const u8,
+            title_len: usize,
+            text: *const u8,
+            text_len: usize,
+            url: *const u8,
+            url_len: usize,
+        );
+        pub fn vibrate(ptr: *const u32, n: usize);
+        pub fn schedule_notification(
+            id: *const u8,
+            id_len: usize,
+            title: *const u8,
+            title_len: usize,
+            body: *const u8,
+            body_len: usize,
+            delay_ms: f64,
+            repeat_ms: f64,
+        );
+        pub fn cancel_notification(id: *const u8, id_len: usize);
+        pub fn notification_permission(id: u32);
     }
 }
 
@@ -889,6 +927,89 @@ pub(crate) fn fetch_asset(id: u32, path: &str) {
 pub fn asset(id: u32, path: String, data: Vec<u8>, status: u32) {
     crate::platform::assets::web::fetched(id, path, data, status);
     drain();
+}
+
+/// `Date.now()`: milliseconds since the Unix epoch.
+pub(crate) fn date_now() -> f64 {
+    unsafe { js::date_now() }
+}
+
+/// Hand `share` to `navigator.share`, for share request `id`.
+pub(crate) fn share(id: u32, share: &crate::platform::Share) {
+    for f in &share.files {
+        let mime = f.mime_type();
+        unsafe {
+            js::share_file(
+                f.name.as_ptr(),
+                f.name.len(),
+                mime.as_ptr(),
+                mime.len(),
+                f.bytes.as_ptr(),
+                f.bytes.len(),
+            )
+        };
+    }
+    let (s, t, u) = (&share.subject, &share.text, &share.url);
+    unsafe {
+        js::share(
+            id,
+            s.as_ptr(),
+            s.len(),
+            t.as_ptr(),
+            t.len(),
+            u.as_ptr(),
+            u.len(),
+        )
+    }
+}
+
+/// `navigator.vibrate(pattern)`.
+pub(crate) fn vibrate(pattern: &[u32]) {
+    unsafe { js::vibrate(pattern.as_ptr(), pattern.len()) }
+}
+
+/// Show `entry` in `delay_ms`, then every `repeat_ms` if it repeats.
+pub(crate) fn schedule_notification(
+    entry: &crate::platform::shell::schedule::Entry,
+    delay_ms: u64,
+) {
+    let (i, t, b) = (&entry.id, &entry.title, &entry.body);
+    unsafe {
+        js::schedule_notification(
+            i.as_ptr(),
+            i.len(),
+            t.as_ptr(),
+            t.len(),
+            b.as_ptr(),
+            b.len(),
+            delay_ms as f64,
+            entry.repeat_ms as f64,
+        )
+    }
+}
+
+/// Clear notification `id`'s timer; an empty `id` clears them all.
+pub(crate) fn cancel_notification(id: &str) {
+    unsafe { js::cancel_notification(id.as_ptr(), id.len()) }
+}
+
+/// Ask for the permission to notify, answering waiter `id`.
+pub(crate) fn notification_permission(id: u32) {
+    unsafe { js::notification_permission(id) }
+}
+
+/// The page answered waiter `id` (a share, a permission request) with
+/// `value`.
+#[doc(hidden)]
+pub fn answer(id: u32, value: u32) {
+    crate::platform::shell::sharing::answer(id, value);
+    drain();
+}
+
+/// The user clicked the notification scheduled under `id`.
+#[doc(hidden)]
+pub fn notification_tapped(id: String) {
+    deliver(Event::NotificationTapped(id));
 }
 
 /// Rumble the page's pad `index` (see [`gamepad::set_rumble`](crate::gamepad::set_rumble)).

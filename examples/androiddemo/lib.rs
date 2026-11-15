@@ -60,6 +60,14 @@
 //!   `androiddemo: assets list=... img=... svg=... streamed=... exists=...
 //!   missing=...` at start: the APK's packaged files (`assets/`, which
 //!   build-apk.sh adds) read through `platform::assets`.
+//! - `androiddemo: share Shared|Cancelled|Unavailable` once *Share*'s chooser
+//!   answers (a text, a URL and a small file, which goes through `MediaStore`);
+//!   `androiddemo: haptic` for *Buzz* (`View.performHapticFeedback`);
+//! - `androiddemo: scheduled Ok(())` when *Later* schedules a notification
+//!   ten seconds on (`androiddemo-later`), `androiddemo: pending [...]` with
+//!   what's still to show, and `androiddemo: notification tapped "..."` when a
+//!   tap on it starts the activity. The APK carries the `Alarm` receiver
+//!   (`classes.dex`, see `build-apk.sh`), so it shows with the process gone.
 //!
 //! Non-Android builds compile to an empty cdylib so `cargo build --examples`
 //! works everywhere.
@@ -70,9 +78,11 @@ mod app {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
     use stipple::core::{PinchEvent, PinchPhase};
-    use stipple::platform::BackGesture;
     use stipple::platform::backend::android::{self, ANativeActivity};
     use stipple::platform::dialog::{self, FileDialog};
+    use stipple::platform::{
+        BackGesture, Haptic, ScheduledNotification, Share, ShareOutcome, haptic,
+    };
     use stipple::prelude::*;
 
     struct State {
@@ -189,8 +199,10 @@ mod app {
         if OFFSET.swap(offset.to_bits(), Ordering::Relaxed) != offset.to_bits() {
             println!("androiddemo: scrolled to {offset:.0}");
         }
+        // (Short enough to leave the button room with the two rows of
+        // platform buttons on CI's small screen.)
         let list = Element::stack(Axis::Vertical, vec![column(rows).gap(theme.spacing.sm)])
-            .height(240.0)
+            .height(196.0)
             .scrollable(id)
             .align(Align::Start, Align::Center);
         // A strip of chips a sideways swipe scrolls.
@@ -261,7 +273,44 @@ mod app {
             );
             println!("androiddemo: save requested");
         });
-        row(vec![notify, open, save]).gap(theme.spacing.sm)
+        let handle = cx.handle();
+        let share = button(cx, "Share").on_tap(cx, move |_| {
+            handle.share(
+                Share::new()
+                    .text("Shared from androiddemo")
+                    .url("https://github.com/KarpelesLab/stipple")
+                    .subject("Stipple")
+                    .file(
+                        "stipple-share.txt",
+                        b"A file shared by androiddemo\n".to_vec(),
+                        "text/plain",
+                    ),
+                |_: &mut State, outcome: ShareOutcome| println!("androiddemo: share {outcome:?}"),
+            );
+            println!("androiddemo: share requested");
+        });
+        let buzz = button(cx, "Buzz").on_tap(cx, |_| {
+            haptic(Haptic::Success);
+            println!("androiddemo: haptic");
+        });
+        let later = button(cx, "Later").on_tap(cx, |_| {
+            let scheduled = stipple::platform::schedule_notification(
+                &ScheduledNotification::new(
+                    "androiddemo-later",
+                    Notification::new("Scheduled from androiddemo").body("Tap to open the app"),
+                )
+                .after(Duration::from_secs(10)),
+            );
+            println!("androiddemo: scheduled {scheduled:?}");
+            stipple::platform::pending_notifications(|ids| {
+                println!("androiddemo: pending {ids:?}");
+            });
+        });
+        column(vec![
+            row(vec![notify, open, save]).gap(theme.spacing.sm),
+            row(vec![share, buzz, later]).gap(theme.spacing.sm),
+        ])
+        .gap(theme.spacing.sm)
     }
 
     /// Read the APK's packaged files (`assets/`, which build-apk.sh adds)
@@ -403,7 +452,10 @@ mod app {
                     Handled::No
                 }
             })
-            .on_lifecycle(|_: &mut State, change| println!("androiddemo: lifecycle {change:?}"));
+            .on_lifecycle(|_: &mut State, change| println!("androiddemo: lifecycle {change:?}"))
+            .on_notification_tapped(|_: &mut State, id| {
+                println!("androiddemo: notification tapped {id:?}");
+            });
         // The screen stays on while the demo shows (CI checks the window's
         // FLAG_KEEP_SCREEN_ON).
         app.handle().set_keep_awake(true);

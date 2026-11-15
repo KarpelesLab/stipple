@@ -23,6 +23,7 @@ pub(super) type Env = *mut c_void;
 #[derive(Clone, Copy)]
 pub(super) union JValue {
     pub(super) i: i32,
+    pub(super) j: i64,
     pub(super) f: f32,
     pub(super) l: JObject,
     pub(super) z: u8,

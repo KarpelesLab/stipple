@@ -297,6 +297,72 @@ waits for the answer, and later calls fail once it's refused. See
 on its emulator, checks the next `notify` fails, grants the permission with
 `adb shell pm grant` and finds the notification in `dumpsys notification`.
 
+### Scheduled notifications
+
+`platform::schedule_notification` sets an `AlarmManager` alarm (exact where
+the app may: Android 6 to 11, or with `SCHEDULE_EXACT_ALARM` granted on 12, or
+`USE_EXACT_ALARM` on 13 and later; otherwise inexact, which the system may
+delay by some minutes). When it goes off, a broadcast receiver posts the
+notification. Which receiver depends on the APK:
+
+- **With nothing added**, the backend registers a receiver at run time (a
+  class of its run-time dex). It hears the alarm while the app's process
+  lives, including in the background, but not once the system ended it.
+- **With the `Alarm` receiver**, the notification shows whatever became of the
+  process: the system starts it for the receiver, whose class (in the APK's
+  `classes.dex`) loads the app's library and calls into Stipple. It also sets
+  the alarms again after a reboot, which loses them. Write the dex with
+  `stipple::platform::android_receiver_dex(lib_name)` (from a build script
+  or any host program; `build-apk.sh` writes it through a test), add it to the
+  APK as `classes.dex` (`aapt add base.apk classes.dex`), and declare it:
+
+```xml
+<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+<!-- optional: exact alarms -->
+<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
+<uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+<application ... android:hasCode="true">
+  ...
+  <receiver android:name="org.stipple.android.Alarm" android:exported="false">
+    <intent-filter>
+      <action android:name="android.intent.action.BOOT_COMPLETED"/>
+      <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
+    </intent-filter>
+  </receiver>
+</application>
+```
+
+(`USE_EXACT_ALARM` is meant for alarm and calendar apps; Google Play reviews
+it. Leave both out for inexact alarms.)
+
+The backend keeps what's scheduled in `stipple-notifications.txt` in the app's
+files directory, since `AlarmManager` can't list its alarms: for
+`pending_notifications`, and to set the alarms again when the app starts.
+Tapping a scheduled notification opens the app with its id in the launch
+intent; Stipple reports it (`App::on_notification_tapped`) when the tap
+starts the activity. While the activity is alive, a tap only brings it to the
+front: `NativeActivity` doesn't pass `onNewIntent` on, so which notification
+it was isn't known. Force-stopping the app (Settings, `am force-stop`) cancels
+its alarms, as Android does for every app.
+
+## Share sheet and haptics
+
+`platform::share` sends an `ACTION_SEND` (`ACTION_SEND_MULTIPLE` for several
+files) through `Intent.createChooser`, started from the results fragment; the
+chooser's `IntentSender` tells the run-time receiver which target was picked
+(`ShareOutcome::Shared`), and its closing without one is `Cancelled`. Files
+need `content:` URIs another app may read: without a `FileProvider` (a Java
+class), Stipple puts them in `MediaStore`'s Downloads (Android 10 and later,
+no permission needed), where they stay; before Android 10 only text and URLs
+are shared. `platform::haptic` calls `View.performHapticFeedback` on the host
+view, which needs no permission and follows the user's touch-feedback
+setting.
+
+CI's emulator opens the chooser with a file and backs out of it, plays a
+haptic, then schedules a notification, sends the app to the background and
+ends its process: the `Alarm` receiver must post it (`dumpsys notification`),
+and tapping it must start the app with its id.
+
 ## Building
 
 The app's crate builds as a `cdylib`, under the name the manifest gives:
@@ -347,6 +413,9 @@ mkdir -p lib/arm64-v8a
 cp target/aarch64-linux-android/release/libstipple_android.so lib/arm64-v8a/
 aapt package -f -M AndroidManifest.xml -I "$ANDROID_HOME/platforms/android-34/android.jar" -F base.apk
 aapt add base.apk lib/arm64-v8a/libstipple_android.so
+# optional, for scheduled notifications (see above): classes.dex from
+# stipple::platform::android_receiver_dex("stipple_android")
+aapt add base.apk classes.dex
 zipalign -f -p 4 base.apk aligned.apk
 apksigner sign --ks your.keystore --out yourapp.apk aligned.apk
 ```

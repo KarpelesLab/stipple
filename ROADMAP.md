@@ -1413,6 +1413,25 @@ Most input only works on X11 today.
   the Linux call reaches a mock server, and that Windows and macOS accept it; no
   popup is looked at. iOS and Android: see 7f. Clicks and actions on
   notifications are still to do.
+- ✅ Scheduled notifications (`platform::schedule_notification`,
+  `cancel_notification`, `pending_notifications`,
+  `request_notification_permission`, `App::on_notification_tapped`):
+  _`UNUserNotificationCenter` triggers and its delegate's
+  `didReceiveNotificationResponse:` on iOS; `AlarmManager` with a run-time
+  receiver, or the APK's `Alarm` receiver (a build-time dex whose `<clinit>`
+  loads the app's library) to show with the process gone and re-arm at boot,
+  on Android; timers on the desktops and the web. CI runs the Android cold
+  path end to end (alarm, post, tap) and Linux's timer against the mock; iOS
+  checks the request is made. Android can't tell which one was tapped while
+  the activity is alive (no `onNewIntent`)._
+- ✅ Share sheet (`AppHandle::share`, `platform::share`): _`UIActivityViewController`,
+  the `ACTION_SEND` chooser (files via `MediaStore`, outcome from its
+  `IntentSender`), `NSSharingServicePicker`, `navigator.share`; CI opens and
+  cancels the Android chooser. Windows (`DataTransferManager`) and Linux
+  answer `Unavailable`._
+- ✅ Haptics (`platform::haptic`): _UIKit feedback generators,
+  `View.performHapticFeedback`, `NSHapticFeedbackManager`, `navigator.vibrate`;
+  the built-in widgets don't play them yet._
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
   optional (secure) text field, answered asynchronously as a state update.

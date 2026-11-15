@@ -135,7 +135,7 @@ pub(crate) fn export(id: u32, name: &str, bytes: &[u8]) -> bool {
 
 /// The view controller to present from: the key window's root, or what it
 /// presents, all the way up.
-unsafe fn presenter() -> Id {
+pub(crate) unsafe fn presenter() -> Id {
     unsafe {
         let app = msg!(class("UIApplication"), "sharedApplication", () -> Id);
         let window = if app.is_null() {

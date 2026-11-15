@@ -48,6 +48,7 @@ const NODES: usize = 2;
 const CALLBACKS: usize = 3;
 const RESULTS: usize = 4;
 const LIFECYCLE: usize = 5;
+const RECEIVER: usize = 6;
 
 /// Loaded class `index`, if loading worked.
 fn class(index: usize) -> Option<JObject> {
@@ -112,6 +113,7 @@ fn function(class: &str, name: &str) -> Option<*const c_void> {
         ("Results", "onRequestPermissionsResult") => {
             super::notify::on_request_permissions_result as *const c_void
         }
+        ("Receiver", "onReceive") => super::alarm::on_receive as *const c_void,
         ("Lifecycle", "onActivitySaveInstanceState") => on_save_instance_state as *const c_void,
         ("Lifecycle", "onActivityCreated") => on_activity_bundle as *const c_void,
         ("Lifecycle", _) => on_activity as *const c_void,
@@ -250,6 +252,7 @@ pub(super) fn install(activity: &ANativeActivity) -> bool {
                 &[JValue { l: callbacks }],
             )?;
             register_lifecycle(jni, activity.clazz);
+            super::alarm::activity_created(jni, activity.clazz, activity.sdk_version);
             let mut host = HOST.lock().unwrap_or_else(|e| e.into_inner());
             release(jni, &mut host);
             *host = Host {
@@ -406,6 +409,11 @@ pub(super) fn provider(jni: &Jni) -> Option<JObject> {
         host.provider = Global(jni.global(provider) as usize);
     }
     Some(host.provider.get())
+}
+
+/// The run-time broadcast receiver's class.
+pub(super) fn receiver_class() -> Option<JObject> {
+    class(RECEIVER)
 }
 
 /// The `Input` class, for a new connection.

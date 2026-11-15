@@ -4082,6 +4082,13 @@ jobs:
           # ...and the notification was handed to UNUserNotificationCenter.
           grep -q "touchdemo: notify Ok" "$LOG"
           grep -qE "touchdemo: notification permission [a-z_]+" "$LOG"
+          # A scheduled one (an hour on) went to the center, whose pending
+          # list answered; its completion handler says whether it took it
+          # (with the permission prompt unanswered, it may refuse).
+          grep -q "touchdemo: scheduled Ok" "$LOG"
+          grep -qE "touchdemo: pending \[" "$LOG"
+          grep -E "stipple: scheduled notification (request accepted|refused)" "$LOG" \
+            || echo "warning: no answer from addNotificationRequest in the log"
           grep -q "touchdemo: phase 2 passed" "$LOG"
 
       # Process death: going to the background saves the app's state (the
@@ -4512,7 +4519,7 @@ jobs:
           STIPPLE_DEX_OUT="$PWD/stipple-classes.dex" cargo test --lib platform::dex::
           dexdump="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/dexdump"
           "$dexdump" -d stipple-classes.dex > dexdump.txt
-          for class in HostView Input Nodes Callbacks Results Lifecycle; do
+          for class in HostView Input Nodes Callbacks Results Lifecycle Receiver; do
             grep -q "Class descriptor  : 'Lorg/stipple/android/$class;'" dexdump.txt
           done
           grep -c "(PUBLIC NATIVE)" dexdump.txt
@@ -4521,6 +4528,10 @@ jobs:
           "$dexdump" -d stipple-classes.back.dex | grep -q "Class descriptor  : 'Lorg/stipple/android/Back;'"
           "$dexdump" -d stipple-classes.back-animation.dex \
             | grep -q "Class descriptor  : 'Lorg/stipple/android/BackAnimation;'"
+          # The APK's Alarm receiver, whose <clinit> loads the app's library.
+          "$dexdump" -d stipple-classes.receiver.dex > receiver.txt
+          grep -q "Class descriptor  : 'Lorg/stipple/android/Alarm;'" receiver.txt
+          grep -q "invoke-static {v0}, Ljava/lang/System;.loadLibrary" receiver.txt
 
       - name: Enable KVM
         run: |

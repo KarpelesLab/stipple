@@ -235,6 +235,27 @@ refused. A notification shows while the app is on screen too (the center's
 delegate answers `willPresentNotification:` with a banner). The bundle needs
 nothing extra in its `Info.plist`.
 
+`platform::schedule_notification` adds a request under the app's id with a
+`UNTimeIntervalNotificationTrigger` (a `UNCalendarNotificationTrigger` for a
+daily or weekly repeat, at the first time's time of day), which iOS delivers
+whether or not the app runs; `cancel_notification` removes the pending and
+delivered ones, and `pending_notifications` asks the center. Scheduling
+doesn't ask for permission: call `platform::request_notification_permission`
+first. The center's delegate is set while the app finishes launching, so the
+tap that launched it reaches `App::on_notification_tapped` too.
+
+## Share sheet and haptics
+
+`platform::share` presents a `UIActivityViewController` from the top view
+controller, with the text, the URL and the files (written to the app's tmp
+directory first); on an iPad it's a popover from `Share::anchor` (the middle
+of the app's view without one). The subject goes to Mail through key-value
+coding. `platform::haptic` plays a `UISelectionFeedbackGenerator`,
+`UIImpactFeedbackGenerator` (light, medium, heavy) or
+`UINotificationFeedbackGenerator`; the simulator has no haptic engine.
+`touchdemo`'s simulator self-test schedules a notification and lists what's
+pending; the share sheet is build-checked only.
+
 ## File pickers
 
 `dialog::open_file_contents` and `dialog::save_file_contents` (or

@@ -39,6 +39,9 @@
 //   openUrl   (url) => void, in place of window.open (stipple::platform::open_url).
 //   notify    (title, body) => void, in place of the Notification API
 //             (stipple::platform::notify).
+//   share     async ({ title, text, url, files }) => void, in place of
+//             navigator.share (stipple::platform::share): resolving means
+//             shared, an AbortError cancelled, anything else unavailable.
 //   stateKey  the sessionStorage key the app's saved state is kept under
 //             (App::save_state / restore_state); by default one per module
 //             URL and canvas order on the page. false keeps no state.
@@ -364,6 +367,37 @@ export async function start(canvas, wasmUrl, options = {}) {
     }
   });
 
+  // stipple::platform::share: navigator.share, with the files handed over
+  // just before (share_file).
+  const share = options.share ?? ((data) => {
+    if (!navigator.share) return Promise.reject(new Error("no navigator.share"));
+    if (data.files?.length && navigator.canShare && !navigator.canShare(data)) {
+      return Promise.reject(new Error("these files can't be shared"));
+    }
+    return navigator.share(data);
+  });
+  let shareFiles = [];
+  // Scheduled notifications (stipple::platform::schedule_notification):
+  // timers while the page is open, by id.
+  const scheduled = new Map();
+  const showScheduled = (id, title, body) => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") {
+      return console.warn(`stipple: notification ${id} not shown: no permission`);
+    }
+    const n = new Notification(title, { body, tag: id });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+      const [p, l] = passStr(id);
+      e.stipple_notification?.(p, l);
+    };
+  };
+  const unschedule = (id) => {
+    const t = scheduled.get(id);
+    if (t) { clearTimeout(t.timeout); clearInterval(t.interval); }
+    scheduled.delete(id);
+  };
+
   // The app's saved state (App::save_state) lives in the tab's
   // sessionStorage, which a reload, a discarded tab brought back and the
   // history's back and forward keep, but a new tab doesn't.
@@ -476,6 +510,50 @@ export async function start(canvas, wasmUrl, options = {}) {
       },
       open_url(ptr, len) { openUrl(str(ptr, len)); },
       notify(tp, tl, bp, bl) { notify(str(tp, tl), str(bp, bl)); },
+      share_file(np, nl, mp, ml, dp, dl) {
+        const bytes = new Uint8Array(e.memory.buffer, dp, dl).slice();
+        shareFiles.push(new File([bytes], str(np, nl), { type: str(mp, ml) }));
+      },
+      share(id, tp, tl, xp, xl, up, ul) {
+        const data = {};
+        if (tl) data.title = str(tp, tl);
+        if (xl) data.text = str(xp, xl);
+        if (ul) data.url = str(up, ul);
+        if (shareFiles.length) data.files = shareFiles;
+        shareFiles = [];
+        Promise.resolve().then(() => share(data)).then(
+          () => e.stipple_answer?.(id, 0),
+          (err) => e.stipple_answer?.(id, err?.name === "AbortError" ? 1 : 2),
+        );
+      },
+      vibrate(ptr, n) {
+        try { navigator.vibrate?.(Array.from(new Uint32Array(e.memory.buffer, ptr, n))); } catch (_) {}
+      },
+      schedule_notification(ip, il, tp, tl, bp, bl, delay, repeat) {
+        const id = str(ip, il), title = str(tp, tl), body = str(bp, bl);
+        unschedule(id);
+        const t = { timeout: null, interval: null };
+        t.timeout = setTimeout(() => {
+          showScheduled(id, title, body);
+          if (repeat > 0) t.interval = setInterval(() => showScheduled(id, title, body), repeat);
+          else scheduled.delete(id);
+        }, Math.min(delay, 0x7fffffff));
+        scheduled.set(id, t);
+      },
+      cancel_notification(ip, il) {
+        if (il === 0) { for (const id of [...scheduled.keys()]) unschedule(id); return; }
+        unschedule(str(ip, il));
+      },
+      notification_permission(id) {
+        if (typeof Notification === "undefined") return e.stipple_answer?.(id, 0);
+        if (Notification.permission !== "default") {
+          return e.stipple_answer?.(id, Notification.permission === "granted" ? 1 : 0);
+        }
+        Promise.resolve(Notification.requestPermission()).then(
+          (p) => e.stipple_answer?.(id, p === "granted" ? 1 : 0),
+          () => e.stipple_answer?.(id, 0),
+        );
+      },
       save_state(ptr, len) {
         if (!stateKey) return;
         try {

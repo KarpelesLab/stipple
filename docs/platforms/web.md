@@ -169,6 +169,9 @@ once with a light color scheme.
 | File dialogs | see below |
 | Safe area | `env(safe-area-inset-*)`, measured on a hidden probe and taken as far as it reaches over the canvas, as `cx.safe_area()` (`Event::WindowChanged` when it changes). Zero unless the page's viewport meta tag has `viewport-fit=cover` and the phone has a notch or rounded corners. See [layout.md](../layout.md#the-safe-area-phones) |
 | Keeping the screen awake | `AppHandle::set_keep_awake` takes a Screen Wake Lock (`navigator.wakeLock`), asked again each time the page becomes visible (the browser lets it go when the page hides); nothing where the browser has no wake lock |
+| Share sheet | `navigator.share` (with `File`s where `navigator.canShare` takes them), from a click handler; browsers without it answer `ShareOutcome::Unavailable` |
+| Haptics | `navigator.vibrate` (Chrome and Firefox on Android; not Safari or desktops) |
+| Scheduled notifications | a `setTimeout` (then `setInterval`) in the page, so only while it's open; clicking one focuses the page and reports its id (`App::on_notification_tapped`). No service worker, so nothing shows once the tab is closed |
 
 ### Clipboard
 

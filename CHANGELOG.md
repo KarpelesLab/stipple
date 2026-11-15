@@ -91,6 +91,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Theme::layout_direction`.
 - A message box's default "OK" button and iOS's accessibility values
   ("on", "checked", "expanded"…) are in the user's language.
+- The system's share sheet: `AppHandle::share(Share::new().text(..).url(..)
+  .file(name, bytes, mime), |state, outcome| ..)` (or `platform::share`), with
+  an anchor for an iPad's popover: `UIActivityViewController` on iOS, the
+  `ACTION_SEND` chooser on Android (files through `MediaStore`),
+  `NSSharingServicePicker` on macOS and `navigator.share` on the web;
+  `ShareOutcome::Unavailable` elsewhere.
+- Haptic feedback: `platform::haptic(Haptic::Success)` (selection, light,
+  medium, heavy, success, warning, error) through UIKit's feedback
+  generators, `View.performHapticFeedback`, `NSHapticFeedbackManager` and
+  `navigator.vibrate`.
+- Scheduled notifications: `platform::schedule_notification(
+  &ScheduledNotification::new(id, notification).after(d))` (`.at(time)`,
+  `.repeating(interval)`), `cancel_notification`, `cancel_all_notifications`,
+  `pending_notifications`, `request_notification_permission`, and
+  `App::on_notification_tapped` / `Event::NotificationTapped` for the one the
+  user tapped. iOS through `UNUserNotificationCenter` triggers, Android through
+  `AlarmManager` and a broadcast receiver (shown with the process gone when
+  the APK carries the receiver from `platform::android_receiver_dex`), timers
+  while the app or page runs on the desktops and the web.
 
 - Test helpers on `App` that find elements as a screen reader knows them:
   `app.find(Role::CheckBox, "Buy milk")` (where it is, whether it's checked),
