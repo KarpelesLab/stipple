@@ -17,8 +17,10 @@ that are a game's own:
 - **Drawing** ([below](#drawing)): sprite sheets and animations, tilemaps, a
   camera, and pixel art scaled by whole numbers, on fast blit paths.
 
-The rest of Phase 9 (see the [roadmap](../ROADMAP.md#phase-9--2d-games)),
-pointer lock, gamepads, touch controls, audio and game UI, lands alongside.
+Pointer lock is in [pointer-events.md](pointer-events.md#pointer-lock) and
+gamepads in [gamepads.md](gamepads.md). The rest of Phase 9 (see the
+[roadmap](../ROADMAP.md#phase-9--2d-games)), touch controls, audio and game
+UI, lands alongside.
 
 The `gameloop` example puts the pieces together in about a hundred lines: a
 square moved with the arrows or WASD, stepped at 120 Hz, with an fps label.
