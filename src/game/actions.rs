@@ -3,15 +3,29 @@
 //! keys.
 
 use super::InputState;
+use crate::platform::gamepad::{GamepadAxis, GamepadButton};
 use crate::platform::{PhysicalKey, PointerButton};
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
+/// Which part of a gamepad axis a [`Binding::GamepadAxis`] reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AxisDirection {
+    /// All of it: −1 to 1 (a trigger: 0 to 1). Written `PadAxis:LeftX`.
+    Both,
+    /// Only the positive half (right, down, a trigger pulled), as 0 to 1:
+    /// a stick pushed right as a "move right" button. Written
+    /// `PadAxis:LeftX+`.
+    Positive,
+    /// Only the negative half (left, up), as 0 to 1: pushed left is 1.
+    /// Written `PadAxis:LeftX-`.
+    Negative,
+}
+
 /// One input an action is bound to.
 ///
-/// More kinds (gamepad buttons and axes) join as they become available, so
-/// match with a `_` arm.
+/// More kinds may join, so match with a `_` arm.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Binding {
@@ -23,55 +37,146 @@ pub enum Binding {
     /// Two keys as an axis: `neg` gives -1, `pos` +1, both or neither 0.
     /// Held while either is down.
     KeyAxis { neg: PhysicalKey, pos: PhysicalKey },
+    /// A gamepad button, on any pad (the [touch
+    /// controls](super::TouchControls) included).
+    GamepadButton(GamepadButton),
+    /// A gamepad stick or trigger axis, on any pad: its value is analog,
+    /// with `dead_zone` (0 to 1) cut off and the rest rescaled to reach 1,
+    /// and it is held while past the dead zone. A half axis
+    /// ([`Positive`](AxisDirection::Positive) or
+    /// [`Negative`](AxisDirection::Negative)) is a button: with a dead zone
+    /// of 0.5, "pushed right more than half way".
+    GamepadAxis {
+        axis: GamepadAxis,
+        direction: AxisDirection,
+        dead_zone: f32,
+    },
 }
 
+/// What [`Binding::capture`] waits for a stick or trigger to be pushed past.
+const CAPTURE_THRESHOLD: f32 = 0.5;
+
 impl Binding {
-    /// Whether the input is down (an axis: either key).
+    /// The dead zone [`axis`](Self::axis) gives, and the text form leaves
+    /// unwritten.
+    pub const DEFAULT_DEAD_ZONE: f32 = 0.25;
+
+    /// A gamepad axis (or half of one) with the default dead zone.
+    pub fn axis(axis: GamepadAxis, direction: AxisDirection) -> Binding {
+        Binding::GamepadAxis {
+            axis,
+            direction,
+            dead_zone: Binding::DEFAULT_DEAD_ZONE,
+        }
+    }
+
+    /// Whether the input is down (an axis: either key; a gamepad axis: past
+    /// its dead zone).
     pub fn held(&self, input: &InputState) -> bool {
         match *self {
             Binding::Key(k) => input.key_held(k),
             Binding::MouseButton(b) => input.button_held(b),
             Binding::KeyAxis { neg, pos } => input.key_held(neg) || input.key_held(pos),
+            Binding::GamepadButton(b) => input.gamepad_held(None, b),
+            Binding::GamepadAxis { .. } => self.value(input) != 0.0,
         }
     }
 
-    /// Whether the input went down since the last update.
+    /// Whether the input went down since the last update (a gamepad axis:
+    /// went past its dead zone on some pad).
     pub fn pressed(&self, input: &InputState) -> bool {
         match *self {
             Binding::Key(k) => input.key_pressed(k),
             Binding::MouseButton(b) => input.button_pressed(b),
             Binding::KeyAxis { neg, pos } => input.key_pressed(neg) || input.key_pressed(pos),
+            Binding::GamepadButton(b) => input.gamepad_pressed(None, b),
+            Binding::GamepadAxis {
+                axis,
+                direction,
+                dead_zone,
+            } => input.pads_matching(None).any(|p| {
+                let (now, was) = p.axis(axis);
+                shape(now, direction, dead_zone) != 0.0 && shape(was, direction, dead_zone) == 0.0
+            }),
         }
     }
 
-    /// Whether the input came up since the last update.
+    /// Whether the input came up since the last update (a gamepad axis:
+    /// came back inside its dead zone on some pad).
     pub fn released(&self, input: &InputState) -> bool {
         match *self {
             Binding::Key(k) => input.key_released(k),
             Binding::MouseButton(b) => input.button_released(b),
             Binding::KeyAxis { neg, pos } => input.key_released(neg) || input.key_released(pos),
+            Binding::GamepadButton(b) => input.gamepad_released(None, b),
+            Binding::GamepadAxis {
+                axis,
+                direction,
+                dead_zone,
+            } => input.pads_matching(None).any(|p| {
+                let (now, was) = p.axis(axis);
+                shape(now, direction, dead_zone) == 0.0 && shape(was, direction, dead_zone) != 0.0
+            }),
         }
     }
 
-    /// The input's value, from -1 to 1: 1 while a key or button is held, an
-    /// axis's direction.
+    /// The input's value, from -1 to 1: 1 while a key or button is held, a
+    /// key axis's direction, a gamepad axis's position past its dead zone
+    /// (on the pad pushing it furthest).
     pub fn value(&self, input: &InputState) -> f32 {
         match *self {
             Binding::KeyAxis { neg, pos } => {
                 f32::from(u8::from(input.key_held(pos))) - f32::from(u8::from(input.key_held(neg)))
             }
+            Binding::GamepadAxis {
+                axis,
+                direction,
+                dead_zone,
+            } => input
+                .pads_matching(None)
+                .map(|p| shape(p.axis(axis).0, direction, dead_zone))
+                .fold(0.0, |a, v| if v.abs() > a.abs() { v } else { a }),
             _ => f32::from(u8::from(self.held(input))),
         }
     }
 
-    /// The first key or mouse button pressed since the last update, as a
-    /// binding: what a "press a key…" row in a settings screen waits for.
+    /// The first input pressed since the last update, as a binding: what a
+    /// "press a key…" row in a settings screen waits for. A key, else a
+    /// mouse button, else a gamepad button, else a stick pushed (or a
+    /// trigger pulled) past half way, as the half axis it was pushed along
+    /// with the default dead zone. The touch controls aren't captured.
     pub fn capture(input: &InputState) -> Option<Binding> {
         input
             .keys_pressed()
             .next()
             .map(Binding::Key)
             .or_else(|| input.buttons_pressed().next().map(Binding::MouseButton))
+            .or_else(|| {
+                input
+                    .gamepad_buttons_pressed()
+                    .next()
+                    .map(Binding::GamepadButton)
+            })
+            .or_else(|| {
+                input
+                    .pads_matching(None)
+                    .filter(|p| p.is_real())
+                    .find_map(|p| {
+                        GamepadAxis::ALL.into_iter().find_map(|axis| {
+                            let (now, was) = p.axis(axis);
+                            (now.abs() >= CAPTURE_THRESHOLD && was.abs() < CAPTURE_THRESHOLD).then(
+                                || {
+                                    let direction = if now > 0.0 {
+                                        AxisDirection::Positive
+                                    } else {
+                                        AxisDirection::Negative
+                                    };
+                                    Binding::axis(axis, direction)
+                                },
+                            )
+                        })
+                    })
+            })
     }
 
     /// The binding a raw key press gives (for a settings screen that takes
@@ -83,9 +188,50 @@ impl Binding {
     }
 }
 
+/// A gamepad axis's `value` read through `direction` and `dead_zone`.
+fn shape(value: f32, direction: AxisDirection, dead_zone: f32) -> f32 {
+    let v = match direction {
+        AxisDirection::Both => value,
+        AxisDirection::Positive => value.max(0.0),
+        AxisDirection::Negative => (-value).max(0.0),
+    };
+    let dz = dead_zone.clamp(0.0, 0.99);
+    let m = v.abs();
+    if m <= dz || m.is_nan() {
+        0.0
+    } else {
+        v.signum() * ((m - dz) / (1.0 - dz)).min(1.0)
+    }
+}
+
+/// `(x, y)` with a radial dead zone: 0 within `dead_zone` of the center,
+/// then rescaled so the edge of the dead zone is 0 and length 1 is 1, and
+/// no longer than 1.
+pub(crate) fn radial_dead_zone(x: f32, y: f32, dead_zone: f32) -> (f32, f32) {
+    let dz = dead_zone.clamp(0.0, 0.99);
+    let len = (x * x + y * y).sqrt();
+    if len <= dz || len.is_nan() {
+        return (0.0, 0.0);
+    }
+    let scaled = ((len - dz) / (1.0 - dz)).min(1.0);
+    (x / len * scaled, y / len * scaled)
+}
+
+fn button_name(b: GamepadButton) -> String {
+    format!("{b:?}")
+}
+
+fn axis_name(a: GamepadAxis) -> String {
+    format!("{a:?}")
+}
+
 /// The text form, as [`Actions::to_text`] writes it: `Key:KeyW`,
-/// `Mouse:Left`, `KeyAxis:KeyA/KeyD`. Keys go by their W3C `code` name, or
-/// `#` and the HID usage in hex when they have none.
+/// `Mouse:Left`, `KeyAxis:KeyA/KeyD`, `Pad:South`, `PadAxis:LeftX` (all of
+/// it), `PadAxis:LeftX+` / `PadAxis:LeftX-` (a half), with `@0.5` after an
+/// axis whose dead zone isn't [the default](Binding::DEFAULT_DEAD_ZONE).
+/// Keys go by their W3C `code` name, or `#` and the HID usage in hex when
+/// they have none; pad buttons and axes by their [`GamepadButton`] and
+/// [`GamepadAxis`] names.
 impl fmt::Display for Binding {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn key(f: &mut fmt::Formatter<'_>, k: PhysicalKey) -> fmt::Result {
@@ -112,6 +258,23 @@ impl fmt::Display for Binding {
                 key(f, neg)?;
                 f.write_str("/")?;
                 key(f, pos)
+            }
+            Binding::GamepadButton(b) => write!(f, "Pad:{}", button_name(b)),
+            Binding::GamepadAxis {
+                axis,
+                direction,
+                dead_zone,
+            } => {
+                let sign = match direction {
+                    AxisDirection::Both => "",
+                    AxisDirection::Positive => "+",
+                    AxisDirection::Negative => "-",
+                };
+                write!(f, "PadAxis:{}{sign}", axis_name(axis))?;
+                if dead_zone != Binding::DEFAULT_DEAD_ZONE {
+                    write!(f, "@{dead_zone}")?;
+                }
+                Ok(())
             }
         }
     }
@@ -178,6 +341,45 @@ impl std::str::FromStr for Binding {
                         .map_err(|_| err(format!("unknown mouse button `{n}`")))?,
                 ),
             })),
+            "Pad" => {
+                let name = rest.trim();
+                GamepadButton::ALL
+                    .into_iter()
+                    .find(|b| button_name(*b) == name)
+                    .map(Binding::GamepadButton)
+                    .ok_or_else(|| err(format!("unknown gamepad button `{name}`")))
+            }
+            "PadAxis" => {
+                let (name, dead_zone) = match rest.split_once('@') {
+                    Some((name, dz)) => {
+                        let dz = dz.trim();
+                        let dead_zone = dz
+                            .parse::<f32>()
+                            .ok()
+                            .filter(|v| (0.0..1.0).contains(v))
+                            .ok_or_else(|| err(format!("bad dead zone `{dz}`")))?;
+                        (name, dead_zone)
+                    }
+                    None => (rest, Binding::DEFAULT_DEAD_ZONE),
+                };
+                let name = name.trim();
+                let (name, direction) = if let Some(n) = name.strip_suffix('+') {
+                    (n.trim_end(), AxisDirection::Positive)
+                } else if let Some(n) = name.strip_suffix('-') {
+                    (n.trim_end(), AxisDirection::Negative)
+                } else {
+                    (name, AxisDirection::Both)
+                };
+                let axis = GamepadAxis::ALL
+                    .into_iter()
+                    .find(|a| axis_name(*a) == name)
+                    .ok_or_else(|| err(format!("unknown gamepad axis `{name}`")))?;
+                Ok(Binding::GamepadAxis {
+                    axis,
+                    direction,
+                    dead_zone,
+                })
+            }
             other => Err(err(format!("unknown input kind `{other}`"))),
         }
     }
@@ -198,7 +400,8 @@ struct ActionState {
 /// Call [`update`](Self::update) once per game update with the frame's
 /// [`InputState`], then ask about actions: [`pressed`](Self::pressed),
 /// [`held`](Self::held), [`released`](Self::released) and
-/// [`value`](Self::value) (or [`axis2`](Self::axis2) for a direction).
+/// [`value`](Self::value) (or [`axis2`](Self::axis2) and
+/// [`stick`](Self::stick) for a direction).
 ///
 /// ```
 /// use stipple::game::{Actions, Binding, InputState};
@@ -373,6 +576,19 @@ impl<A: Copy + Eq + Hash> Actions<A> {
         } else {
             (x, y)
         }
+    }
+
+    /// A direction from two analog actions, `x` and `y` (each −1 to 1, `y`
+    /// down), as a stick reads: a radial `dead_zone` around the center
+    /// (rather than one per axis, which snaps diagonals to the axes), the
+    /// rest rescaled from 0, and no longer than 1.
+    ///
+    /// Bind the stick's axes with no dead zone of their own
+    /// (`Binding::GamepadAxis { axis: GamepadAxis::LeftX, direction:
+    /// AxisDirection::Both, dead_zone: 0.0 }`); keys bound as a
+    /// [`KeyAxis`](Binding::KeyAxis) to the same actions work too.
+    pub fn stick(&self, x: A, y: A, dead_zone: f32) -> (f32, f32) {
+        radial_dead_zone(self.value(x), self.value(y), dead_zone)
     }
 
     /// The bindings as text, one action per line: `name = Key:KeyW,
@@ -603,5 +819,242 @@ mod tests {
         assert_eq!(c.bindings(Act::Left)[0], Binding::Key(PhysicalKey::KEY_J));
         assert!("Pad:A".parse::<Binding>().is_err());
         assert!("KeyAxis:KeyA".parse::<Binding>().is_err());
+    }
+
+    mod pads {
+        use super::super::*;
+        use crate::platform::Event;
+        use crate::platform::gamepad::{GamepadEvent, GamepadId};
+
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        enum Act {
+            Jump,
+            Right,
+            Left,
+            MoveX,
+            MoveY,
+            Throttle,
+        }
+
+        const PAD: GamepadId = GamepadId(1);
+
+        fn axis(i: &mut InputState, axis: GamepadAxis, value: f32) {
+            i.event(&Event::Gamepad(GamepadEvent::Axis {
+                id: PAD,
+                axis,
+                value,
+            }));
+        }
+
+        fn button(i: &mut InputState, button: GamepadButton, pressed: bool) {
+            i.event(&Event::Gamepad(GamepadEvent::Button {
+                id: PAD,
+                button,
+                pressed,
+            }));
+        }
+
+        fn close(a: f32, b: f32) -> bool {
+            (a - b).abs() < 1e-5
+        }
+
+        fn actions() -> Actions<Act> {
+            let full = |axis| Binding::GamepadAxis {
+                axis,
+                direction: AxisDirection::Both,
+                dead_zone: 0.0,
+            };
+            Actions::new()
+                .with(Act::Jump, Binding::GamepadButton(GamepadButton::South))
+                .with(Act::Jump, Binding::Key(PhysicalKey::SPACE))
+                .with(
+                    Act::Right,
+                    Binding::GamepadAxis {
+                        axis: GamepadAxis::LeftX,
+                        direction: AxisDirection::Positive,
+                        dead_zone: 0.5,
+                    },
+                )
+                .with(
+                    Act::Left,
+                    Binding::axis(GamepadAxis::LeftX, AxisDirection::Negative),
+                )
+                .with(Act::MoveX, full(GamepadAxis::LeftX))
+                .with(Act::MoveY, full(GamepadAxis::LeftY))
+                .with(
+                    Act::Throttle,
+                    Binding::axis(GamepadAxis::RightTrigger, AxisDirection::Both),
+                )
+        }
+
+        #[test]
+        fn pad_buttons_drive_actions_like_keys() {
+            let (mut a, mut i) = (actions(), InputState::new());
+            button(&mut i, GamepadButton::South, true);
+            button(&mut i, GamepadButton::South, false);
+            a.update(&i);
+            i.end_update();
+            assert!(a.pressed(Act::Jump) && a.released(Act::Jump), "a tap");
+            button(&mut i, GamepadButton::South, true);
+            a.update(&i);
+            i.end_update();
+            assert!(a.pressed(Act::Jump) && a.held(Act::Jump));
+            assert_eq!(a.value(Act::Jump), 1.0);
+        }
+
+        #[test]
+        fn axes_dead_zones_and_half_axes() {
+            let (mut a, mut i) = (actions(), InputState::new());
+            // Inside every dead zone but the full axes' (0).
+            axis(&mut i, GamepadAxis::LeftX, 0.2);
+            a.update(&i);
+            i.end_update();
+            assert!(!a.held(Act::Right) && !a.held(Act::Left));
+            assert!(close(a.value(Act::MoveX), 0.2));
+            // Past half way right: the half axis is a button now.
+            axis(&mut i, GamepadAxis::LeftX, 0.75);
+            let right = a.bindings(Act::Right)[0];
+            assert!(right.pressed(&i) && right.held(&i));
+            a.update(&i);
+            i.end_update();
+            assert!(a.pressed(Act::Right) && a.held(Act::Right));
+            assert!(
+                close(a.value(Act::Right), 0.5),
+                "rescaled from the dead zone"
+            );
+            assert_eq!(a.value(Act::Left), 0.0, "the other half");
+            // Back: released.
+            axis(&mut i, GamepadAxis::LeftX, -0.25);
+            assert!(right.released(&i));
+            a.update(&i);
+            i.end_update();
+            assert!(
+                a.released(Act::Right) && !a.held(Act::Left),
+                "at the dead zone"
+            );
+            axis(&mut i, GamepadAxis::LeftX, -1.0);
+            a.update(&i);
+            assert_eq!(a.value(Act::Left), 1.0, "pushed left is 1");
+            assert_eq!(a.value(Act::MoveX), -1.0);
+            // A trigger, full range with the default dead zone.
+            axis(&mut i, GamepadAxis::RightTrigger, 0.625);
+            a.update(&i);
+            assert!(close(a.value(Act::Throttle), 0.5));
+        }
+
+        #[test]
+        fn the_stick_helper_has_a_radial_dead_zone() {
+            let (mut a, mut i) = (actions(), InputState::new());
+            axis(&mut i, GamepadAxis::LeftX, 0.1);
+            axis(&mut i, GamepadAxis::LeftY, 0.1);
+            a.update(&i);
+            assert_eq!(a.stick(Act::MoveX, Act::MoveY, 0.2), (0.0, 0.0));
+            // Diagonal: not snapped to an axis, and no longer than 1.
+            axis(&mut i, GamepadAxis::LeftX, 1.0);
+            axis(&mut i, GamepadAxis::LeftY, 1.0);
+            a.update(&i);
+            let (x, y) = a.stick(Act::MoveX, Act::MoveY, 0.2);
+            assert!(close(x, std::f32::consts::FRAC_1_SQRT_2) && close(x, y));
+            axis(&mut i, GamepadAxis::LeftX, 0.6);
+            axis(&mut i, GamepadAxis::LeftY, 0.0);
+            a.update(&i);
+            let (x, y) = a.stick(Act::MoveX, Act::MoveY, 0.2);
+            assert!(close(x, 0.5) && y == 0.0, "{x}");
+            assert_eq!(radial_dead_zone(0.0, 0.0, 0.0), (0.0, 0.0));
+        }
+
+        #[test]
+        fn capture_takes_pad_buttons_and_axes() {
+            let mut i = InputState::new();
+            axis(&mut i, GamepadAxis::LeftY, 0.3);
+            assert_eq!(Binding::capture(&i), None, "not far enough");
+            axis(&mut i, GamepadAxis::LeftY, -0.8);
+            assert_eq!(
+                Binding::capture(&i),
+                Some(Binding::axis(GamepadAxis::LeftY, AxisDirection::Negative))
+            );
+            i.end_update();
+            assert_eq!(Binding::capture(&i), None, "held from before");
+            axis(&mut i, GamepadAxis::LeftTrigger, 0.9);
+            assert_eq!(
+                Binding::capture(&i),
+                Some(Binding::axis(
+                    GamepadAxis::LeftTrigger,
+                    AxisDirection::Positive
+                ))
+            );
+            button(&mut i, GamepadButton::West, true);
+            assert_eq!(
+                Binding::capture(&i),
+                Some(Binding::GamepadButton(GamepadButton::West)),
+                "a button before an axis"
+            );
+        }
+
+        #[test]
+        fn pad_bindings_round_trip_through_text() {
+            let all = [
+                Binding::GamepadButton(GamepadButton::South),
+                Binding::GamepadButton(GamepadButton::DPadLeft),
+                Binding::axis(GamepadAxis::LeftX, AxisDirection::Positive),
+                Binding::axis(GamepadAxis::LeftY, AxisDirection::Negative),
+                Binding::axis(GamepadAxis::RightTrigger, AxisDirection::Both),
+                Binding::GamepadAxis {
+                    axis: GamepadAxis::RightX,
+                    direction: AxisDirection::Both,
+                    dead_zone: 0.0,
+                },
+                Binding::GamepadAxis {
+                    axis: GamepadAxis::LeftX,
+                    direction: AxisDirection::Negative,
+                    dead_zone: 0.35,
+                },
+            ];
+            let text: Vec<String> = all.iter().map(Binding::to_string).collect();
+            assert_eq!(
+                text,
+                [
+                    "Pad:South",
+                    "Pad:DPadLeft",
+                    "PadAxis:LeftX+",
+                    "PadAxis:LeftY-",
+                    "PadAxis:RightTrigger",
+                    "PadAxis:RightX@0",
+                    "PadAxis:LeftX-@0.35",
+                ]
+            );
+            for (b, t) in all.iter().zip(&text) {
+                assert_eq!(t.parse::<Binding>().as_ref(), Ok(b), "{t}");
+            }
+            let mut a = actions();
+            let saved = a.to_text(|a| format!("{a:?}"));
+            assert!(saved.contains("Jump = Pad:South, Key:Space\n"), "{saved}");
+            assert!(saved.contains("Right = PadAxis:LeftX+@0.5\n"), "{saved}");
+            a.set_bindings(Act::Jump, Vec::new());
+            a.load_text(&saved, |n| {
+                [Act::Jump, Act::Right, Act::Left]
+                    .into_iter()
+                    .find(|a| format!("{a:?}") == n)
+            })
+            .unwrap();
+            assert_eq!(a.bindings(Act::Jump), actions().bindings(Act::Jump));
+            for bad in [
+                "Pad:Z",
+                "PadAxis:LeftZ",
+                "PadAxis:LeftX@2",
+                "PadAxis:LeftX+@x",
+            ] {
+                assert!(bad.parse::<Binding>().is_err(), "{bad}");
+            }
+            assert_eq!(
+                " PadAxis: LeftX + @ 0.5 ".parse::<Binding>(),
+                Ok(Binding::GamepadAxis {
+                    axis: GamepadAxis::LeftX,
+                    direction: AxisDirection::Positive,
+                    dead_zone: 0.5
+                }),
+                "spaces"
+            );
+        }
     }
 }

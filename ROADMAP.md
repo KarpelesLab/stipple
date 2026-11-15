@@ -2085,10 +2085,13 @@ game needs on top:
   axes (with dead zones), queried per update (`pressed`, `held`, `released`,
   `value`); bindings that can be listed, changed and saved.
   *`game::Actions<A>` over a `#[non_exhaustive]` `Binding` (`Key`,
-  `MouseButton`, `KeyAxis`; gamepad variants come with the gamepad
-  backends), `axis2`, rebinding (`rebind`, `unbind`, `bound_to`,
-  `Binding::capture` for "press a key…"), and a line-per-action text form
-  (`to_text` / `load_text`). Unit-tested.*
+  `MouseButton`, `KeyAxis`, `GamepadButton`, `GamepadAxis` with a dead zone
+  and a whole or half axis), `axis2`, `stick` (radial dead zone), rebinding
+  (`rebind`, `unbind`, `bound_to`, `Binding::capture` for "press a key…",
+  pad buttons and axes too), and a line-per-action text form (`to_text` /
+  `load_text`: `Pad:South`, `PadAxis:LeftX+@0.5`). `InputState` follows
+  every pad (any-pad queries) and adds up locked-pointer motion.
+  Unit- and App-tested.*
 - ✅ Pointer lock: relative mouse motion with the cursor hidden and held in
   place (macOS `CGAssociateMouseAndMouseCursorPosition`, Windows raw input +
   `ClipCursor`, X11 a pointer grab and warp, Wayland
@@ -2105,8 +2108,13 @@ game needs on top:
   *`stipple::gamepad` (`gamepads`, `state`, `set_rumble`), `Event::Gamepad`
   and `App::on_gamepad`; rumble on Windows, Linux (`FF_RUMBLE`) and the web.
   See `docs/gamepads.md` and `examples/gamepaddemo`.*
-- ⬜ Touch controls for phones: a virtual stick and buttons drawn over the
+- ✅ Touch controls for phones: a virtual stick and buttons drawn over the
   game, feeding the same actions.
+  *`game::TouchControls` (`TouchStick`, `TouchButton`, placed from a
+  `Corner`), a finger per control, read as one more pad by the gamepad
+  bindings; shown while touch is the last device used; drawn in the theme's
+  colors by a `TouchOverlay` canvas. In `examples/gameloop`; unit- and
+  App-tested, not yet tried on a phone.*
 
 #### 9c — Drawing a game
 - ✅ Sprites: draw part of an image (a source rect into a sprite sheet or

@@ -2868,7 +2868,7 @@ impl<S: 'static> App<S> {
                 self.start_windows(window, &mut surfaces);
             }
             // The game loop's input sees every key and button first.
-            self.game_event(&event);
+            self.game_event(&event, wid);
             // Woken: run the state's updates and due timers. Multi-window
             // backends wake every window in turn; the first one runs them, and
             // each brings its own window up to date.

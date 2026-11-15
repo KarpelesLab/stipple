@@ -1,20 +1,32 @@
-//! The game loop in a few lines: a square moved with the arrow keys or WASD
-//! (through rebindable actions), stepped at a fixed 120 Hz and drawn
-//! interpolated in a canvas at the display's rate, with an fps counter.
+//! The game loop in a few lines: a square moved with the arrow keys, WASD,
+//! a gamepad's left stick or an on-screen touch stick (all through the same
+//! rebindable actions), stepped at a fixed 120 Hz and drawn interpolated in a
+//! canvas at the display's rate, with an fps counter.
 //!
 //! Each frame only the canvas repaints; the view is rebuilt when the fps
-//! shown changes or the game pauses. P pauses (the loop stops and asks for no
+//! shown changes or the game pauses. Shift, the pad's A or the touch "Go"
+//! button held speeds the square up (on a phone: the left thumb steers while
+//! the right holds Go). P or Start pauses (the loop stops and asks for no
 //! frames); the Resume button resumes. Minimizing the window pauses too.
+//!
+//! The touch controls show once a finger touches the screen, and hide again
+//! on a key or a gamepad.
 //!
 //! With `--selftest` it runs 120 frames, prints the loop's stats and quits.
 
 use std::cell::Cell;
 use std::rc::Rc;
 use stipple::core::CanvasId;
-use stipple::game::{Actions, Binding, FixedStep, Frame, GameLoop};
+use stipple::game::{
+    Actions, AxisDirection, Binding, Corner, FixedStep, Frame, GameLoop, TouchButton,
+    TouchControls, TouchOverlay, TouchStick,
+};
+use stipple::gamepad::{GamepadAxis, GamepadButton};
+use stipple::geometry::Vec2;
 use stipple::prelude::*;
 
 const WORLD: CanvasId = CanvasId(1);
+const TOUCH: CanvasId = CanvasId(2);
 const FIELD: Size = Size::new(480.0, 320.0);
 const SIDE: f64 = 32.0;
 /// Pixels per second.
@@ -22,10 +34,9 @@ const SPEED: f64 = 240.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Act {
-    Left,
-    Right,
-    Up,
-    Down,
+    MoveX,
+    MoveY,
+    Boost,
     Pause,
 }
 
@@ -40,21 +51,44 @@ struct Game {
     fps: u32,
     paused: bool,
     selftest: bool,
+    touch: TouchOverlay,
 }
 
 fn actions() -> Actions<Act> {
     use PhysicalKey as K;
     let key = Binding::Key;
+    let keys = |neg, pos| Binding::KeyAxis { neg, pos };
+    // The stick's axes without a dead zone of their own: `stick` applies a
+    // radial one to both together.
+    let stick = |axis| Binding::GamepadAxis {
+        axis,
+        direction: AxisDirection::Both,
+        dead_zone: 0.0,
+    };
     Actions::new()
-        .with(Act::Left, key(K::ARROW_LEFT))
-        .with(Act::Left, key(K::KEY_A))
-        .with(Act::Right, key(K::ARROW_RIGHT))
-        .with(Act::Right, key(K::KEY_D))
-        .with(Act::Up, key(K::ARROW_UP))
-        .with(Act::Up, key(K::KEY_W))
-        .with(Act::Down, key(K::ARROW_DOWN))
-        .with(Act::Down, key(K::KEY_S))
+        .with(Act::MoveX, keys(K::ARROW_LEFT, K::ARROW_RIGHT))
+        .with(Act::MoveX, keys(K::KEY_A, K::KEY_D))
+        .with(Act::MoveX, stick(GamepadAxis::LeftX))
+        .with(Act::MoveY, keys(K::ARROW_UP, K::ARROW_DOWN))
+        .with(Act::MoveY, keys(K::KEY_W, K::KEY_S))
+        .with(Act::MoveY, stick(GamepadAxis::LeftY))
+        .with(Act::Boost, key(K::SHIFT_LEFT))
+        .with(Act::Boost, Binding::GamepadButton(GamepadButton::South))
         .with(Act::Pause, key(K::KEY_P))
+        .with(Act::Pause, Binding::GamepadButton(GamepadButton::Start))
+}
+
+/// A stick for the left thumb and two buttons for the right one; they are
+/// the gamepad's left stick, A and Start.
+fn touch_controls() -> TouchControls {
+    TouchControls::new()
+        .with_stick(TouchStick::left().at(Corner::BottomLeft, Vec2::new(90.0, 90.0)))
+        .with_button(TouchButton::new(GamepadButton::South, "Go"))
+        .with_button(
+            TouchButton::new(GamepadButton::Start, "II")
+                .at(Corner::TopRight, Vec2::new(36.0, 36.0))
+                .radius(22.0),
+        )
 }
 
 fn update(g: &mut Game, frame: &mut Frame) {
@@ -64,10 +98,13 @@ fn update(g: &mut Game, frame: &mut Frame) {
         frame.rebuild();
         return;
     }
-    let (dx, dy) = g.actions.axis2(Act::Left, Act::Right, Act::Up, Act::Down);
+    // The touch controls' look follows their state (and showing, hiding).
+    g.touch.sync(frame);
+    let (dx, dy) = g.actions.stick(Act::MoveX, Act::MoveY, 0.2);
+    let boost = if g.actions.held(Act::Boost) { 2.0 } else { 1.0 };
     for _ in 0..g.step.advance(frame.dt()) {
         g.prev = g.pos;
-        let d = SPEED * g.step.dt_secs();
+        let d = SPEED * boost * g.step.dt_secs();
         g.pos.x = (g.pos.x + f64::from(dx) * d).clamp(0.0, FIELD.width - SIDE);
         g.pos.y = (g.pos.y + f64::from(dy) * d).clamp(0.0, FIELD.height - SIDE);
     }
@@ -118,12 +155,19 @@ fn view(g: &Game, cx: &mut Cx<Game>) -> Element {
     } else {
         label(
             &theme,
-            format!("{} fps — arrows or WASD to move, P to pause", g.fps),
+            format!(
+                "{} fps — arrows, WASD, a pad or touch to move; Shift or A to speed up; P to pause",
+                g.fps
+            ),
         )
     };
-    column(vec![status, world])
-        .padding(Insets::uniform(12.0))
-        .gap(8.0)
+    // The touch controls over everything, covering the window.
+    Element::layers(vec![
+        column(vec![status, world])
+            .padding(Insets::uniform(12.0))
+            .gap(8.0),
+        g.touch.element(&theme),
+    ])
 }
 
 fn main() {
@@ -136,10 +180,15 @@ fn main() {
         fps: 0,
         paused: false,
         selftest: std::env::args().any(|a| a == "--selftest"),
+        touch: TouchOverlay::new(TOUCH).font(Font::system_default()),
     };
     App::new(game, view)
         .title("Game loop")
         .logical_size(Size::new(504.0, 384.0))
-        .game_loop(GameLoop::new(update).paused_when(|g: &Game| g.paused))
+        .game_loop(
+            GameLoop::new(update)
+                .paused_when(|g: &Game| g.paused)
+                .touch_controls(touch_controls()),
+        )
         .run();
 }

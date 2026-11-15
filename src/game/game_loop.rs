@@ -1,7 +1,7 @@
 //! The game loop: an update that runs once per display frame while the game
 //! plays, without rebuilding the view.
 
-use super::InputState;
+use super::{InputState, TouchControls};
 use crate::App;
 use crate::core::{CanvasId, CanvasInvalidation};
 use crate::geometry::Rect;
@@ -33,11 +33,15 @@ pub type PausedFn<S> = Box<dyn Fn(&S) -> bool>;
 /// On resuming, the first frame's `dt` is one refresh interval, not the
 /// time paused, and presses made while paused (the key that unpaused) are
 /// forgotten.
+///
+/// A game loop starts [gamepad](crate::gamepad) support, so pads reach its
+/// [`InputState`].
 pub struct GameLoop<S> {
     pub(crate) update: UpdateFn<S>,
     pub(crate) paused: Option<PausedFn<S>>,
     pub(crate) pause_unfocused: bool,
     pub(crate) max_dt: Duration,
+    pub(crate) touch: Option<TouchControls>,
 }
 
 impl<S> std::fmt::Debug for GameLoop<S> {
@@ -46,6 +50,7 @@ impl<S> std::fmt::Debug for GameLoop<S> {
             .field("paused_when", &self.paused.is_some())
             .field("pause_unfocused", &self.pause_unfocused)
             .field("max_dt", &self.max_dt)
+            .field("touch_controls", &self.touch)
             .finish_non_exhaustive()
     }
 }
@@ -58,7 +63,16 @@ impl<S> GameLoop<S> {
             paused: None,
             pause_unfocused: false,
             max_dt: Duration::from_millis(100),
+            touch: None,
         }
+    }
+
+    /// On-screen [`TouchControls`]: their sticks and buttons read as a pad
+    /// in the frame's input (see [`InputState::touch_controls`]); draw them
+    /// with a [`TouchOverlay`](super::TouchOverlay).
+    pub fn touch_controls(mut self, controls: TouchControls) -> GameLoop<S> {
+        self.touch = Some(controls);
+        self
     }
 
     /// Pause while `paused` returns `true` for the state. It is asked after
@@ -294,10 +308,14 @@ impl<S: 'static> App<S> {
     }
 
     /// Run a [`GameLoop`] on the app's frames, replacing any set before.
-    pub fn game_loop(mut self, looper: GameLoop<S>) -> Self {
+    pub fn game_loop(mut self, mut looper: GameLoop<S>) -> Self {
+        let mut input = InputState::new();
+        input.set_touch_controls(looper.touch.take());
+        // Pads reach the input as events once support has started.
+        crate::platform::gamepad::start();
         self.game = Some(Box::new(Runtime {
             looper,
-            input: InputState::new(),
+            input,
             last: None,
             seen: 0,
             running: false,
@@ -307,11 +325,22 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Take what the game's input needs from a window event.
-    pub(crate) fn game_event(&mut self, event: &Event) {
-        if let Some(game) = self.game.as_mut() {
-            game.input.event(event);
+    /// Take what the game's input needs from an event for window `window`.
+    pub(crate) fn game_event(&mut self, event: &Event, window: crate::platform::WindowId) {
+        let Some(game) = self.game.as_mut() else {
+            return;
+        };
+        let pane = self
+            .panes
+            .iter()
+            .find(|p| p.native == Some(window))
+            .or(self.panes.first());
+        if let Some(pane) = pane {
+            // Where the touch controls sit, and whether moves are motion.
+            game.input.set_area(pane.info.inner_size);
+            game.input.set_pointer_locked(pane.pointer.locked);
         }
+        game.input.event(event);
     }
 
     /// Whether the game loop should run now.

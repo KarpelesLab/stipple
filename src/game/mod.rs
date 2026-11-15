@@ -16,18 +16,24 @@ mod input;
 mod pixel;
 mod sprite;
 mod tilemap;
+mod touch_controls;
 
 #[cfg(test)]
 mod app_tests;
 #[cfg(test)]
 mod draw_tests;
+#[cfg(test)]
+mod input_app_tests;
 
-pub use actions::{Actions, Binding, ParseBindingError};
+pub use actions::{Actions, AxisDirection, Binding, ParseBindingError};
 pub use camera::Camera2D;
 pub use fixed_step::FixedStep;
 pub(crate) use game_loop::Runtime;
 pub use game_loop::{Frame, GameLoop, LoopStats, PausedFn, UpdateFn};
-pub use input::InputState;
+pub use input::{InputDevice, InputState, TouchPoint};
 pub use pixel::{PixelLayout, PixelViewport};
 pub use sprite::{Playback, SpriteAnimation, SpriteSheet};
 pub use tilemap::Tilemap;
+pub use touch_controls::{
+    Corner, ShowTouch, Stick, TouchButton, TouchControls, TouchOverlay, TouchStick,
+};

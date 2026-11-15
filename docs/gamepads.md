@@ -45,9 +45,43 @@ gamepad::set_rumble(id, 0.8, 0.3, Duration::from_millis(250));
 | `Event::Gamepad` | the same events, for code on the raw `platform::run` loop |
 
 Gamepad support starts the first time it's used (`on_gamepad`, `gamepads`,
-`state`, or `gamepad::start()`): devices are opened and, on Windows and Linux,
-a thread starts. An app that never asks pays nothing. Pads already connected
-then arrive as `Connected` events.
+`state`, `gamepad::start()`, or a game loop): devices are opened and, on
+Windows and Linux, a thread starts. An app that never asks pays nothing.
+Pads already connected then arrive as `Connected` events.
+
+## With Actions
+
+A game on [the game loop](games.md) needn't handle events or poll: the
+frame's `InputState` follows every pad (`gamepad_held(None, GamepadButton::South)`,
+`gamepad_axis(Some(id), GamepadAxis::LeftX)`, with latched presses and
+releases, and everything let go on disconnect and focus loss), and
+`Actions` take pad bindings next to keys, rebindable and saved the same way:
+
+```rust
+use stipple::game::{Actions, AxisDirection, Binding};
+use stipple::gamepad::{GamepadAxis, GamepadButton};
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Act { Jump, MoveX, MoveY, MenuDown }
+
+let raw = |axis| Binding::GamepadAxis { axis, direction: AxisDirection::Both, dead_zone: 0.0 };
+let actions = Actions::new()
+    .with(Act::Jump, Binding::GamepadButton(GamepadButton::South)) // Pad:South
+    .with(Act::MoveX, raw(GamepadAxis::LeftX))                     // PadAxis:LeftX@0
+    .with(Act::MoveY, raw(GamepadAxis::LeftY))
+    .with(Act::MenuDown, Binding::GamepadAxis {                    // PadAxis:LeftY+@0.5
+        axis: GamepadAxis::LeftY,
+        direction: AxisDirection::Positive,
+        dead_zone: 0.5,
+    });
+// Per update: actions.update(frame.input());
+// actions.stick(Act::MoveX, Act::MoveY, 0.2) is the left stick with a radial dead zone.
+```
+
+The bindings read any pad, which suits a single-player game; the on-screen
+[touch controls](games.md#input) are one more pad to them. See
+[games.md](games.md#actions) for dead zones, half axes and capturing a
+binding from the pad.
 
 ## The layout
 

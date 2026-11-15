@@ -163,20 +163,93 @@ whatever has focus:
 | `keys_held()`, `keys_pressed()`, `modifiers()` | All of them. |
 | `button_held(b)`, `button_pressed(b)`, `button_released(b)` | Mouse buttons. |
 | `pointer()` | Where the pointer is in the window, `None` outside it. |
-| `motion()`, `wheel()` | How far it moved, and the wheel turned (in pixels; lines count 40 px), since the last update. |
+| `motion()`, `wheel()` | How far it moved (or, locked, how far the mouse moved), and the wheel turned (in pixels; lines count 40 px), since the last update. |
+| `gamepad_held(pad, b)`, `gamepad_pressed(pad, b)`, `gamepad_released(pad, b)` | Gamepad buttons, on `Some(id)` or on any pad with `None` (the touch controls included). |
+| `gamepad_axis(pad, axis)` | A stick (−1…1, +Y down) or trigger (0…1), no dead zone; with `None`, the pad pushing it furthest. |
+| `gamepads()`, `gamepad_buttons_pressed()` | The connected pads, and the buttons pressed on them. |
+| `touches()`, `touches_started()`, `touches_ended()` | The fingers down (`id`, `start`, `position`), and those that landed and lifted since the last update. |
+| `last_device()` | `Keyboard`, `Mouse`, `Gamepad` or `Touch`: what to show prompts for. |
 
 *Pressed* and *released* are edges since the last update, and they are
-latched: a key pressed and released between two frames reads as both on the
-next frame, so a quick tap is never lost. A key repeat is not a press. When
-the window loses focus, every held key and button is let go and reported
-released, so a key released in another window doesn't stay held.
+latched: a key (or pad button) pressed and released between two frames
+reads as both on the next frame, so a quick tap is never lost. A key repeat
+is not a press. When the window loses focus, every held key, button and
+finger is let go and reported released, and the pads' buttons and axes
+too, so nothing released in another window stays held. A pad that
+disconnects reports its held buttons released. The game loop starts gamepad
+support, so pads that are already connected show up on their own.
+
+The pointer events a touch screen's first finger also produces aren't taken
+as the mouse: a tap is in `touches_started()`, not `button_pressed(Left)`.
 
 The game sees keys whether or not a widget uses them too; while a text
 field in a menu has focus, pause the game (or ignore its input).
 
+**Mouse look.** Lock the pointer (`AppHandle::set_pointer_lock(true)`, from
+a click; see [pointer lock](pointer-events.md#pointer-lock)) and read
+`motion()`: while locked it adds up the mouse's relative motion
+(`Event::PointerDelta`) since the last update, and the pointer's moves (it is
+held in place) don't count; unlocked it is how far the pointer moved. Either
+way it's in logical pixels, so one sensitivity works for both:
+
+```rust
+# let input = stipple::game::InputState::new();
+# let (mut yaw, mut pitch) = (0.0f64, 0.0f64);
+if input.pointer_locked() {
+    let m = input.motion(); // frame.input()
+    yaw += m.dx * 0.15;
+    pitch = (pitch - m.dy * 0.15).clamp(-89.0, 89.0);
+}
+```
+
 An `InputState` can also be fed by hand (`key`, `button`, `pointer_moved`,
-`wheel_by`, `event`, then `end_update` once per update), for a test or for
-input the game routes itself.
+`add_motion`, `wheel_by`, `gamepad`, `touch`, `event`, then `end_update`
+once per update), for a test or for input the game routes itself.
+
+**Touch controls.** For phones, `TouchControls` puts a virtual stick and
+buttons over the game, and they act as one more pad: a `TouchStick` moves a
+pad stick, a `TouchButton` holds a pad button, so the gamepad bindings below
+play them too.
+
+```rust
+use stipple::core::CanvasId;
+use stipple::game::{Corner, GameLoop, ShowTouch, TouchButton, TouchControls, TouchOverlay, TouchStick};
+use stipple::gamepad::GamepadButton;
+use stipple::prelude::*;
+
+let controls = TouchControls::new()
+    .with_stick(TouchStick::left()) // the left pad stick, floating over the left half
+    .with_button(TouchButton::new(GamepadButton::South, "A")) // bottom right
+    .with_button(TouchButton::new(GamepadButton::East, "B").at(Corner::BottomRight, Vec2::new(160.0, 60.0)))
+    .show(ShowTouch::Auto);
+// The loop: GameLoop::new(update).touch_controls(controls)
+// The state keeps a TouchOverlay::new(CanvasId(2)).font(Font::system_default());
+// the update calls overlay.sync(frame) (it repaints when they change), and
+// the view puts overlay.element(&theme) last in an Element::layers covering
+// the window.
+```
+
+- A finger belongs to the control it lands on until it lifts: a button (or
+  just outside it), else a free stick whose area it's in, so the left thumb
+  steers while the right one holds a button. A floating stick
+  (`TouchStick::left()`'s default) centers where the finger lands anywhere
+  on its half of the window; `floating(false)` needs the finger on it.
+  Other fingers stay the game's (`touches()`).
+- The stick reads its finger's distance from the center over `radius`,
+  clamped to 1, with a radial `dead_zone`; a trigger button also pulls its
+  axis all the way.
+- Placement: each control's center is `inset` in from a `Corner` of the
+  window; `radius` sizes it.
+- `ShowTouch::Auto` (the default) shows them while touch is the last device
+  used: they hide on a key, a click or a pad and come back on the next touch
+  (before any input, they show on iOS and Android). `Always`, or `Never`
+  (off: they take no touches).
+- They're drawn in the theme's colors: the stick's ring in `surface` and
+  `border`, the knob and the buttons in `primary` (`primary_active` while
+  held), the labels in `on_primary` (with the overlay's font).
+- `input.touch_controls()` gives their state (`visible()`, `stick_value(i)`,
+  `button_held(i)`) to a game that draws them itself (`paint(canvas, theme,
+  font)`).
 
 ## Actions
 
@@ -209,19 +282,66 @@ let (dx, dy) = actions.axis2(Act::Left, Act::Right, Act::Up, Act::Down);
 - `held(a)` while any of its bindings is held; `pressed(a)` on the update it
   starts, `released(a)` on the one it stops (both on one update for a tap).
 - `value(a)` adds up its bindings' values (1 for a held key or button,
-  -1/0/1 for a `KeyAxis`), clamped to -1…1. `axis2` makes a direction from
-  four actions, `y` down, no longer than 1, so diagonals aren't faster.
-- `Binding` is `#[non_exhaustive]`: gamepad buttons and axes join it.
+  -1/0/1 for a `KeyAxis`, analog for a gamepad axis), clamped to -1…1.
+  `axis2` makes a direction from four actions, `y` down, no longer than 1,
+  so diagonals aren't faster.
+- `Binding` is `#[non_exhaustive]`, so match it with a `_` arm.
+
+**Gamepads.** Gamepad bindings read any pad (the touch controls included):
+
+| binding | text | value |
+|---|---|---|
+| `GamepadButton(b)` | `Pad:South` | 1 while held |
+| `GamepadAxis { axis, direction: Both, dead_zone }` | `PadAxis:LeftX` | the axis (−1…1, a trigger 0…1) past the dead zone, rescaled to reach 1 |
+| `GamepadAxis { axis, direction: Positive, .. }` | `PadAxis:LeftX+` | the positive half as 0…1: right, down, a trigger |
+| `GamepadAxis { axis, direction: Negative, .. }` | `PadAxis:LeftX-` | the negative half as 0…1: left, up |
+
+An axis binding is held while past its dead zone, and pressed or released
+when it crosses it, so a half axis is a button: `PadAxis:LeftX+@0.5` is
+"pushed right more than half way" (menu navigation, a D-pad stand-in).
+`Binding::axis(axis, direction)` takes the default dead zone
+(`Binding::DEFAULT_DEAD_ZONE`, 0.25), which the text form leaves out;
+another is written `@0.35`.
+
+For a stick, bind its two axes whole with no dead zone and read them
+together with `stick`, which applies a radial dead zone (a per-axis one
+snaps diagonals to the axes) and keeps the length within 1:
+
+```rust
+use stipple::game::{Actions, AxisDirection, Binding};
+use stipple::gamepad::{GamepadAxis, GamepadButton};
+use stipple::prelude::*;
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Act { MoveX, MoveY, Jump, Right }
+
+let raw = |axis| Binding::GamepadAxis { axis, direction: AxisDirection::Both, dead_zone: 0.0 };
+let mut actions = Actions::new()
+    .with(Act::MoveX, raw(GamepadAxis::LeftX))
+    .with(Act::MoveX, Binding::KeyAxis { neg: PhysicalKey::KEY_A, pos: PhysicalKey::KEY_D })
+    .with(Act::MoveY, raw(GamepadAxis::LeftY))
+    .with(Act::Jump, Binding::GamepadButton(GamepadButton::South))
+    .with(Act::Right, Binding::GamepadAxis {
+        axis: GamepadAxis::LeftX,
+        direction: AxisDirection::Positive,
+        dead_zone: 0.5,
+    });
+# let input = stipple::game::InputState::new();
+actions.update(&input);
+let (dx, dy) = actions.stick(Act::MoveX, Act::MoveY, 0.2); // radial dead zone 0.2
+```
 
 **Rebinding.** `iter()` lists every action with its bindings, in the order
 they were bound (the rows of a controls screen); `bindings(a)`,
 `set_bindings(a, list)`, `rebind(a, slot, binding)` (a "primary" and
 "secondary" column), `unbind(binding)` (take a key away from whatever had
 it) and `bound_to(binding)` (conflicts). For a "press a key…" row:
-`Binding::capture(frame.input())` gives the first key or mouse button
-pressed since the last update, and `Binding::from_key_event(ev)` does the
-same from an `on_raw_key` handler, for a settings screen shown while the
-game is paused.
+`Binding::capture(frame.input())` gives the first key, mouse button or
+gamepad button pressed since the last update, else a stick or trigger
+pushed past half way (as the half axis it went along, `PadAxis:LeftY-`,
+with the default dead zone); the touch controls aren't captured.
+`Binding::from_key_event(ev)` does the same for keys from an `on_raw_key`
+handler, for a settings screen shown while the game is paused.
 
 **Saving them.** `to_text(name_of)` writes one line per action, and
 `load_text(text, action_of)` reads it back over the defaults (actions not
@@ -229,14 +349,15 @@ in the text keep theirs; unknown names are skipped; a malformed line is an
 error with its line number, and nothing changes):
 
 ```text
-Left = Key:ArrowLeft, Key:KeyA
-Jump = Key:Space, Mouse:Left
-Steer = KeyAxis:KeyQ/KeyE
+Left = Key:ArrowLeft, Key:KeyA, PadAxis:LeftX-@0.5
+Jump = Key:Space, Mouse:Left, Pad:South
+Steer = KeyAxis:KeyQ/KeyE, PadAxis:RightX
 ```
 
 Keys are written by their W3C `code` name (`#` and the hex HID usage for a
 key without one), mouse buttons as `Left`, `Right`, `Middle`, `Back`,
-`Forward` or a number. A single `Binding` prints and parses (`Display`,
+`Forward` or a number, pad buttons and axes by their `GamepadButton` and
+`GamepadAxis` names. A single `Binding` prints and parses (`Display`,
 `FromStr`) the same way.
 
 ## Drawing
