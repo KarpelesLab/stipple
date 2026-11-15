@@ -6,6 +6,8 @@ When it's drawn, each paragraph goes through the Unicode Bidirectional
 Algorithm (UAX #9), implemented by `oxideav-scribe`, and its runs are placed in
 visual order.
 
+<!-- live: bididemo -->
+
 ![bididemo on X11](screenshots/stipple-x11-bidi.png)
 
 ```rust

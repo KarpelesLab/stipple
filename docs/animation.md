@@ -5,6 +5,8 @@ frame each time it builds; the loop then wakes at the display's next refresh,
 the view builds again with a later time, and so on. When builds stop asking,
 frames stop, and an idle app uses no CPU.
 
+<!-- live: motiondemo -->
+
 ## Asking for frames
 
 `Cx::frame_time()` is the time of the frame being built, on a timeline that
@@ -276,6 +278,8 @@ elements were and are. A view that samples an `Animated` itself
 [performance.md](performance.md#animation-frames-without-a-build).
 
 ## Enter, exit and layout animations
+
+<!-- live: listmotion -->
 
 Elements can also animate as they come and go, and as the layout moves them:
 

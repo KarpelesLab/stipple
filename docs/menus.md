@@ -9,6 +9,8 @@ state and a check mark. The `menudemo` example shows all of it:
 cargo run -p menudemo            # or: dark
 ```
 
+<!-- live: menudemo -->
+
 ## The menu bar
 
 Pass `App::menu` a function of the state. It's called again as the state

@@ -1,0 +1,286 @@
+# The examples on the site (https://karpeleslab.github.io/stipple/): which
+# run in the browser, and how they're built. tools/site/build.py and the Pages
+# workflow both read this file; it's the one place that lists them.
+#
+# Every directory under examples/ is either a [web.NAME] (built for wasm32 and
+# run on the site, with a card in the gallery) or a [native.NAME] (listed with
+# its source and what it needs). `build.py check-manifest` fails on one that
+# is in neither.
+
+[build]
+# One cargo invocation builds every web example: `args` is `arg` once per
+# example, `{crate}` the example's package and `{artifact}` its wasm module's
+# name. `out` is where the module lands.
+command = "cargo build --release --target wasm32-unknown-unknown --lib {args}"
+arg = "-p {crate}"
+out = "target/wasm32-unknown-unknown/release/{artifact}.wasm"
+
+# [web.NAME] keys, all optional:
+#   title     the card's title (default: NAME)
+#   description  one line about it (default: its Cargo.toml's)
+#   group     the gallery section
+#   size      [width, height]: the CSS size it's shown at in guides and
+#             thumbnails (the app fills whatever canvas it gets)
+#   source    the file "View source" opens (default: src/main.rs)
+#   artifact  the wasm module's name (default: NAME_web: the [lib] in the
+#             example's Cargo.toml, whose src/web.rs includes main.rs)
+#   crate     the package to build (default: NAME)
+
+# --- Apps ---
+
+[web.todo]
+description = "The getting-started tutorial's todo list: add, tick off and delete todos, with a dark-mode switch."
+title = "Todo list"
+group = "Apps"
+size = [440, 440]
+
+[web.calculator]
+title = "Calculator"
+group = "Apps"
+size = [320, 460]
+
+[web.webdemo]
+description = "The web backend's showcase: a counter with a context menu, a spinner, timers, a text editor with copy and paste, opening and saving files."
+title = "Web demo"
+group = "Apps"
+size = [560, 380]
+source = "src/lib.rs"
+artifact = "webdemo"
+
+[web.window]
+description = "A settings panel: switches, a slider, a choice, and window controls."
+title = "Settings window"
+group = "Apps"
+size = [640, 480]
+
+[web.sessionsdemo]
+title = "Tabs, passwords and colors"
+group = "Apps"
+size = [760, 480]
+
+# --- Widgets and layout ---
+
+[web.widgetsdemo]
+title = "Widgets"
+group = "Widgets and layout"
+size = [720, 480]
+
+[web.nativegallery]
+title = "Every control"
+group = "Widgets and layout"
+size = [380, 360]
+
+[web.layoutdemo]
+title = "Layout"
+group = "Widgets and layout"
+size = [720, 520]
+
+[web.tabledemo]
+title = "Tables and trees"
+group = "Widgets and layout"
+size = [900, 560]
+
+[web.scrolldemo]
+title = "Scrolling"
+group = "Widgets and layout"
+size = [420, 360]
+
+[web.overlaydemo]
+title = "Menus and dialogs"
+group = "Widgets and layout"
+size = [480, 420]
+
+[web.tabsdemo]
+title = "Tabs"
+group = "Widgets and layout"
+size = [360, 440]
+
+[web.menudemo]
+title = "Menu bar"
+group = "Widgets and layout"
+size = [640, 420]
+
+[web.themegallery]
+title = "Themes"
+group = "Widgets and layout"
+size = [760, 640]
+
+[web.material3demo]
+title = "Material 3"
+group = "Widgets and layout"
+size = [760, 680]
+
+[web.imagedemo]
+title = "Images and SVG"
+group = "Widgets and layout"
+size = [580, 340]
+
+[web.viewportdemo]
+title = "Embedded viewport"
+group = "Widgets and layout"
+size = [480, 360]
+
+# --- Text ---
+
+[web.textinput]
+description = "An editable text field: Tab to focus it, then type."
+title = "Text field"
+group = "Text"
+size = [640, 240]
+
+[web.textarea]
+title = "Text area"
+group = "Text"
+size = [640, 320]
+
+[web.clipboarddemo]
+title = "Clipboard"
+group = "Text"
+size = [640, 240]
+
+[web.bididemo]
+title = "Right-to-left text"
+group = "Text"
+size = [640, 480]
+
+# --- Animation and graphics ---
+
+[web.motiondemo]
+title = "Motion"
+group = "Animation and graphics"
+size = [480, 640]
+
+[web.listmotion]
+title = "Animated list"
+group = "Animation and graphics"
+size = [420, 560]
+
+[web.transformdemo]
+title = "Transforms"
+group = "Animation and graphics"
+size = [620, 360]
+
+[web.canvasdemo]
+title = "Custom painting"
+group = "Animation and graphics"
+size = [720, 480]
+
+# --- Games ---
+
+[web.gamedemo]
+title = "Lampwick"
+group = "Games"
+size = [960, 540]
+source = "src/lib.rs"
+artifact = "lampwick"
+
+[web.spritedemo]
+title = "Sprites and tilemaps"
+group = "Games"
+size = [960, 540]
+
+[web.gameui]
+title = "Game UI"
+group = "Games"
+size = [960, 540]
+
+[web.gameloop]
+title = "Game loop"
+group = "Games"
+size = [504, 384]
+
+[web.audiodemo]
+title = "Sound"
+group = "Games"
+size = [560, 420]
+
+[web.gamepaddemo]
+title = "Gamepads"
+group = "Games"
+size = [720, 640]
+
+# --- Input ---
+
+[web.clickdemo]
+description = "The whole window is a button that counts clicks."
+title = "Clicks"
+group = "Input"
+size = [480, 300]
+
+[web.hoverdemo]
+description = "Two buttons that highlight on hover."
+title = "Hover"
+group = "Input"
+size = [420, 160]
+
+[web.pointerdemo]
+description = "Every pointer and wheel event a custom element gets: buttons, double clicks, horizontal scrolling, the pointer leaving."
+title = "Pointer events"
+group = "Input"
+size = [400, 300]
+
+[web.touchdemo]
+title = "Touch"
+group = "Input"
+size = [360, 640]
+
+[web.rawkeys]
+description = "An element that takes raw keys, as a terminal does: what arrives for each key."
+title = "Raw keys"
+group = "Input"
+size = [800, 440]
+
+[web.lifecycle]
+title = "Focus and closing"
+group = "Input"
+size = [420, 340]
+
+# --- Native only ---
+
+[native.a11ydemo]
+needs = "Linux: talks to the AT-SPI accessibility bus over D-Bus."
+
+[native.uiademo]
+needs = "Windows: the UI Automation provider."
+
+[native.androiddemo]
+needs = "Android: a NativeActivity in an APK."
+
+[native.contentproc]
+needs = "Linux, macOS or Windows: a second process sharing memory with the UI."
+
+[native.d3ddemo]
+needs = "Windows: Direct3D 11."
+
+[native.metaldemo]
+needs = "macOS: Metal."
+
+[native.gpudemo]
+needs = "A GPU (EGL + GLES2, `--features stipple/gl`); it prints what it read back."
+
+[native.gpuwindow]
+needs = "A GPU (EGL + GLES2) and a native window."
+
+[native.dmabuftest]
+needs = "Linux: EGL dma-buf export and import."
+
+[native.dri3probe]
+needs = "Linux: X11 with DRI3 and GBM."
+
+[native.traydemo]
+needs = "A desktop with a system tray (Linux, Windows or macOS)."
+
+[native.filedialog]
+needs = "A desktop's file dialog (the portal on Linux, IFileDialog, NSOpenPanel). The web demo opens and saves files in the browser."
+
+[native.multiwindow]
+needs = "A desktop: two OS windows on one state. The web has one canvas per app."
+
+[native.asyncdemo]
+needs = "Threads: it runs background work on a thread, which `wasm32-unknown-unknown` doesn't have."
+
+[native.dropdemo]
+needs = "A desktop: files and text dropped from other apps (the web backend doesn't take drops yet)."
+
+[native.fontdemo]
+needs = "System fonts, found by family name; the web has only the font the page loads."

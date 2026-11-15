@@ -47,9 +47,13 @@ scripted keys at a fixed 60 Hz, off screen, checks the exact score, and
 that the settings, controls and best score were saved and read back (CI
 runs it); `gamedemo --shots DIR` renders its screens.
 
+<!-- live: gamedemo -->
+
 ![Lampwick, mid-game](screenshots/stipple-gamedemo-play.png)
 
 ## The loop
+
+<!-- live: gameloop -->
 
 `App::on_frame(update)` runs `update(&mut state, &mut Frame)` once per
 display frame, on the UI thread, while the game runs. `App::game_loop` takes
@@ -385,6 +389,8 @@ key without one), mouse buttons as `Left`, `Right`, `Middle`, `Back`,
 
 ## Drawing
 
+<!-- live: spritedemo -->
+
 A game draws its world into a canvas (`Element::canvas`, see
 [canvas.md](canvas.md)) every frame. On top of the canvas's shapes, text and
 bitmaps, a game gets:
@@ -534,6 +540,8 @@ view), the pause menu is a modal overlay, and everything else is an
 `gameui --shots DIR` renders each screen off screen.
 
 ![gameui's settings screen](screenshots/stipple-gameui-settings.png)
+
+<!-- live: gameui -->
 
 ### A game's theme
 

@@ -7,6 +7,8 @@ part of it changed, and only that part is painted again, rasterized and
 presented. A terminal's grid, a chart, a waveform or a game board fits this
 model.
 
+<!-- live: canvasdemo -->
+
 ```rust
 use stipple::prelude::*;
 use std::cell::RefCell;

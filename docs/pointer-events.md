@@ -9,6 +9,8 @@ reports it. `Element::on_pointer` and `Element::on_wheel` give it that, and
 [Touch gestures](#touch-gestures)). A game or a 3D view can lock the pointer
 and read the mouse's motion instead (see [Pointer lock](#pointer-lock)).
 
+<!-- live: pointerdemo -->
+
 ```rust
 use stipple::prelude::*;
 

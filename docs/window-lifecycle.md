@@ -5,6 +5,8 @@ has the keyboard focus, and ask for the user's attention (flash the taskbar,
 bounce the Dock icon, sound the bell). On Wayland, Stipple also draws the
 window's title bar when the compositor won't.
 
+<!-- live: lifecycle -->
+
 ## Asking before a window closes
 
 Closing a window (its close button, Alt+F4, ⌘W, the window manager) asks

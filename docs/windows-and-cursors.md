@@ -5,6 +5,8 @@ move and resize them, and read where they are and what state they're in. A
 window can have a minimum and maximum size, open maximized or fullscreen, and
 carry an icon. The mouse cursor changes as the pointer moves over elements.
 
+<!-- live: window -->
+
 ## Window control
 
 Set these before the app runs, on the `App`:

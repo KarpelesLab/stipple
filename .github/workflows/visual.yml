@@ -2838,6 +2838,45 @@ jobs:
             visual_output/web-restore.txt
           if-no-files-found: warn
 
+  # The site the Pages workflow publishes (tools/site): build every web
+  # example and the site, open each example in headless Chrome (it must start,
+  # present frames and draw more than a blank canvas, without a panic), and
+  # check the site's internal links and #anchors. Non-blocking while it
+  # settles in: a failure shows as a failed job without failing the run.
+  visual-site:
+    name: Visual test (site + examples in Chrome)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Every example is on the site or listed as native-only
+        run: python3 tools/site/build.py check-manifest
+
+      - name: Build the web examples
+        run: python3 tools/site/build.py wasm
+
+      - name: Install a font
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
+      - name: Generate the site
+        run: python3 tools/site/build.py site --out site --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf --strict
+
+      - name: Run every example in headless Chrome, and check the links
+        run: python3 tools/site/check.py site --chrome google-chrome
+
+      - name: Upload the thumbnails
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-site-thumbnails
+          path: site/thumbs/*.png
+          if-no-files-found: warn
+
   # Draw a WebGPU triangle (hand-written WGSL, no wgpu) in headless Chrome on
   # SwiftShader and screenshot it, proving the browser GPU backend.
   visual-webgpu:

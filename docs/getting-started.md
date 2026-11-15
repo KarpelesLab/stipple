@@ -5,6 +5,8 @@ checkboxes to tick them off, buttons to delete them, and a switch for dark
 mode. Then it tests the app without a window. It assumes you know Rust; it
 doesn't assume you know Stipple.
 
+<!-- live: todo -->
+
 ![The finished app](screenshots/getting-started-todo.png)
 
 The finished app is [`examples/todo`](../examples/todo/src/main.rs) in this

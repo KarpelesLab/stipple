@@ -1,10 +1,17 @@
 name: Pages
 
-# Publish the web demo (examples/webdemo) to GitHub Pages:
-# https://karpeleslab.github.io/stipple/ (multi.html: two apps on one page;
-# webgpu.html: the WebGPU probe; game.html: Lampwick, the game in
-# examples/gamedemo). The bundle is the one the visual-web CI job tests: the
-# pages, web/stipple.js, the release wasm and a font.
+# Publish the site to GitHub Pages: https://karpeleslab.github.io/stipple/
+#
+# tools/site/build.py turns the README into the landing page and docs/ into
+# the guides, with the examples running in them, and makes a gallery of every
+# example that runs in the browser (listed, with how to build them, in
+# tools/site/examples.toml). tools/site/check.py then opens each example in
+# headless Chrome, which takes the gallery's thumbnails, and checks the
+# site's links.
+#
+# The pages that were here before the site keep their URLs: webdemo.html (the
+# web demo and its #selftest), multi.html (two apps on one page), webgpu.html
+# (the WebGPU probe) and game.html (Lampwick, examples/gamedemo).
 
 on:
   push:
@@ -12,9 +19,12 @@ on:
     paths:
       - "src/**"
       - "web/**"
-      - "examples/webdemo/**"
-      - "examples/gamedemo/**"
+      - "docs/**"
+      - "examples/**"
+      - "tools/site/**"
+      - "README.md"
       - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -30,7 +40,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build the web demo
+    name: Build the site
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -39,24 +49,27 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build the wasm modules
-        run: |
-          cargo build -p webdemo --target wasm32-unknown-unknown --release
-          cargo build -p gamedemo --lib --target wasm32-unknown-unknown --release
+      - name: Every example is on the site or listed as native-only
+        run: python3 tools/site/build.py check-manifest
+
+      # All of them in one cargo invocation (the command is in examples.toml).
+      - name: Build the web examples
+        run: python3 tools/site/build.py wasm
 
       - name: Install a font
         run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
 
-      - name: Assemble the site
-        run: |
-          mkdir -p site
-          cp examples/webdemo/index.html examples/webdemo/multi.html examples/webdemo/webgpu.html web/stipple.js site/
-          cp target/wasm32-unknown-unknown/release/webdemo.wasm site/
-          cp examples/gamedemo/game.html target/wasm32-unknown-unknown/release/lampwick.wasm site/
-          cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf site/font.ttf
-          # Serve the files as they are (no Jekyll processing).
-          touch site/.nojekyll
-          ls -l site/
+      - name: Generate the site
+        run: python3 tools/site/build.py site --out site --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf --strict
+
+      # Thumbnails for the gallery, and a check that each example starts and
+      # draws. An example that fails here gets no thumbnail (its card shows a
+      # placeholder) but doesn't hold up the deployment.
+      - name: Run the examples in headless Chrome
+        run: python3 tools/site/check.py site --chrome google-chrome || echo "::warning::some examples failed in headless Chrome (see the log)"
+
+      - name: Check the links
+        run: python3 tools/site/check.py site --links
 
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

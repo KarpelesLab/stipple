@@ -4,6 +4,8 @@
 the app state. Its `EditBuffer` handles the caret, the selection, the
 clipboard and undo. This page lists the keys and clicks they understand.
 
+<!-- live: textarea -->
+
 ```rust
 struct Form { name: TextInput, notes: TextInput, names: Vec<String> }
 let form = Form {

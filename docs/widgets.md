@@ -1,5 +1,7 @@
 # Widgets
 
+<!-- live: widgetsdemo -->
+
 Widgets are plain functions that take the view's `cx` first and return an
 `Element`: `label(cx, "Hi")`, `button(cx, "Save")`, `checkbox(cx, "Wi-Fi",
 on, on_toggle)` and so on (see the
@@ -430,6 +432,8 @@ because the platforms have no matching control that Stipple can draw yet:
 the stepper buttons, the split divider, toolbars, toasts, the tab bar and
 the color picker. The password field's frame is the OS's text field frame
 there.
+
+<!-- live: themegallery -->
 
 ## Motion
 

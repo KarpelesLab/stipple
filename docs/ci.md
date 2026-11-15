@@ -7,7 +7,8 @@ Three workflows run on every push and pull request:
 - **Visual**: builds the examples on each platform, runs them in real windows,
   screenshots them, and checks what it can see: that a click changed the
   screen, that text was typed, that the web demo's scripted selftest passes in
-  headless Chrome, that an
+  headless Chrome, that every example on the [site](platforms/web.md#the-site)
+  starts and draws there, that an
   accessibility tree reached the OS. Linux runs under Xvfb (X11) and headless
   sway and Weston (Wayland); iOS and Android under their simulator and
   emulator.

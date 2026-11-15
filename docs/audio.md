@@ -6,6 +6,8 @@ with its own volume, pan and speed, in volume groups a settings screen can
 turn up and down. `examples/audiodemo` plays synthesized effects and a
 generated tune, with a slider per group.
 
+<!-- live: audiodemo -->
+
 ```rust,no_run
 use std::time::Duration;
 use stipple::audio::{Audio, Group, MusicParams, PlayParams, Sound};

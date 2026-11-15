@@ -9,6 +9,8 @@ can carry size constraints. The `layoutdemo` example shows all of it:
 cargo run -p layoutdemo
 ```
 
+<!-- live: layoutdemo -->
+
 ## Stacks
 
 `row(children)` lays children left to right, `column(children)` top to bottom.

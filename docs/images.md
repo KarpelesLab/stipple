@@ -4,6 +4,8 @@ The `image` and `svg` widgets show bitmaps and vector graphics. Everything is
 decoded by the [`oxideav`](https://github.com/OxideAV) stack, the same pure-Rust
 media stack Stipple renders with; Stipple uses no other image library.
 
+<!-- live: imagedemo -->
+
 ```rust
 use std::sync::Arc;
 use stipple::prelude::*;

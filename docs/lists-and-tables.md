@@ -9,6 +9,8 @@ and a tree:
 cargo run -p tabledemo               # --theme dark | contrast | native
 ```
 
+<!-- live: tabledemo -->
+
 ## Virtualized lists
 
 ```rust

@@ -4,6 +4,8 @@ A Stipple app compiles to a `wasm32-unknown-unknown` module that renders into an
 RGBA framebuffer, which a small hand-written script blits onto a `<canvas>`. No
 `wasm-bindgen` and no JavaScript framework are involved.
 
+<!-- live: webdemo -->
+
 ## Making an app a web app
 
 The app is an ordinary `App`. Build it in a function and hand that to
@@ -25,7 +27,41 @@ crate-type = ["cdylib", "rlib"]
 ```
 
 The macro generates the module's exports on `wasm32` and nothing elsewhere, so
-the crate still builds and tests natively. The page side is
+the crate still builds and tests natively.
+
+A program that builds its app in `main` and calls `run` can be a web app as it
+is: on the web, `App::run` hands the app to the page and returns, so
+`stipple::web_app!(main)` works too. The app fills the canvas, whatever
+`logical_size` it asked for, and `Font::system_default()` is the font the page
+loaded. That's how the examples on the [site](#the-site) run: each keeps its
+`src/main.rs`, ends it with the macro, and adds a library target that
+includes it:
+
+```rust
+// src/main.rs, at the bottom
+stipple::web_app!(main);
+```
+
+```rust
+// src/web.rs
+#[path = "main.rs"]
+mod example;
+```
+
+```toml
+[lib]
+name = "myapp_web"
+path = "src/web.rs"
+crate-type = ["cdylib"]
+```
+
+`cargo build --lib --release --target wasm32-unknown-unknown` then builds
+`myapp_web.wasm`, and `cargo run` still opens a window. What doesn't carry
+over is what the browser can't do: threads (`std::thread::spawn` panics),
+`std::time::Instant` (use `stipple::platform::time::Instant`, which reads
+`performance.now()`), the file system, and exiting the process.
+
+The page side is
 [`web/stipple.js`](../../web/stipple.js), one file with no dependencies:
 
 ```html
@@ -71,8 +107,33 @@ Serve these files from one directory:
 python3 -m http.server --directory site
 ```
 
-The `Pages` workflow publishes the same bundle to
-<https://karpeleslab.github.io/stipple/> on each push to `master`.
+## The site
+
+The `Pages` workflow publishes <https://karpeleslab.github.io/stipple/> on
+each push to `master`: the README, these guides, and every example that runs
+in a browser, built by [`tools/site`](../../tools/site/build.py) (Python, no
+dependencies). [`tools/site/examples.toml`](../../tools/site/examples.toml)
+lists the examples, which run on the web and which need a desktop, and the one
+cargo command that builds them all. A guide shows an example running where it
+has a line
+
+```html
+<!-- live: todo -->
+```
+
+which GitHub doesn't show. To build the site locally:
+
+```sh
+python3 tools/site/build.py wasm        # every web example, release, wasm32
+python3 tools/site/build.py site --font /path/to/DejaVuSans.ttf
+python3 tools/site/check.py target/site # each example in headless Chrome, and the links
+python3 -m http.server --directory target/site
+```
+
+`check.py` opens every example and fails if one doesn't start, draw or
+panics; it also saves each one's first frames as the gallery's thumbnail. CI
+runs it on every push. The demo's own pages keep their URLs: `webdemo.html`
+(this page's `index.html`), `multi.html`, `webgpu.html` and `game.html`.
 
 [`examples/webdemo`](../../examples/webdemo) has a click counter, a spinner
 while a timer "loads", a repeating timer, a text editor with copy and paste,

@@ -5,6 +5,8 @@ Most widgets take the keyboard through `Element::on_key`: they get
 `SelectLeft`, `Copy`, typed `Text`). Keys with no mapping are dropped, Tab
 moves focus, and Escape and the menu keys are the toolkit's.
 
+<!-- live: rawkeys -->
+
 An element that needs **every** key, such as a terminal, a game or a key-binding
 editor, adds `Element::on_raw_key`.
 

@@ -5,6 +5,8 @@ everything inside it. Neither changes layout: the element keeps its laid-out
 box, and its siblings don't move. Pointer input follows the transform, so a
 button is pressed where it's drawn.
 
+<!-- live: transformdemo -->
+
 ```rust
 use stipple::prelude::*;
 

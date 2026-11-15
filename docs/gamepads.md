@@ -3,6 +3,8 @@
 `stipple::gamepad` reads game controllers on every platform, mapped to one
 standard layout: the one printed on an Xbox or PlayStation pad.
 
+<!-- live: gamepaddemo -->
+
 ## The API
 
 ```rust

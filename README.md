@@ -12,7 +12,9 @@ Android, iOS, and the web — **pixel-identical** across platforms under its own
 themes, or **native** under `Theme::native()` — while depending on **as little
 third-party code as possible**.
 
-**Try it in a browser:** the [web demo](https://karpeleslab.github.io/stipple/)
+**Try it in a browser:** [the site](https://karpeleslab.github.io/stipple/) has
+the guides with the examples running in them, and a
+[gallery](https://karpeleslab.github.io/stipple/examples/) of the examples
 (wasm + canvas, deployed from `master`).
 
 It builds on the pure-Rust [`oxideav`](https://github.com/OxideAV) media stack
