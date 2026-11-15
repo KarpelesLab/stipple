@@ -138,15 +138,16 @@ buttons can use: `FocusGroup::Select` for a radio group (put `radio`s in it),
 
 ## Toasts
 
-Short notifications, stacked in the window's bottom-right corner above
-everything else.
+Short notifications above everything else: stacked in the window's
+bottom-right corner on a desktop, or one at a time as a bar across the bottom
+(a snackbar) on a phone.
 
 ```rust
-struct App { toasts: Toasts }
+struct App { toasts: Toasts, notes: Vec<String> }
 // in the view, once per frame (it adds an overlay rather than returning an element):
 toasts(cx, &theme, &state.toasts, |s: &mut App| &mut s.toasts);
 
-// A toast that stays until its × is clicked:
+// A toast that stays until it's dismissed:
 state.toasts.push("Connected", ToastKind::Info);
 
 // A toast that dismisses itself after 4 seconds, using a timer on the app's handle:
@@ -155,11 +156,55 @@ button_labeled(&theme, "Save").on_tap(cx, move |s: &mut App| {
     s.toasts.push_for(&handle, Duration::from_secs(4), |s: &mut App| &mut s.toasts,
         "Saved", ToastKind::Success);
 })
+
+// A toast with an action: its button dismisses the toast and runs the closure.
+let id = s.toasts.push_for(&handle, Duration::from_secs(6), |s: &mut App| &mut s.toasts,
+    "Deleted", ToastKind::Info);
+s.toasts.action(id, "Undo", move |s: &mut App| s.notes.push(note.clone()));
+
+// Where they go, and room for a bottom navigation bar (56 px tall):
+let toasts = Toasts::new()
+    .with_placement(ToastPlacement::Auto)   // the default
+    .with_bottom_offset(56.0);
 ```
 
 `ToastKind` (`Info`, `Success`, `Warning`, `Error`) sets the color of the accent
-bar. At most four toasts show at once, the newest ones. Clicks outside the
-toasts reach the UI underneath.
+bar. Every toast has a × that dismisses it, and can be swiped away: dragged
+sideways with a finger or the mouse it follows along, fading, and let go past
+about a third of its width it slides on out; short of that it springs back
+(with the theme's toast motion). A swipe that starts on the action button
+doesn't press it. Clicks outside the toasts reach the UI underneath, the strip
+kept clear by the bottom offset included.
+
+`ToastPlacement` picks the layout:
+
+| Placement | Layout |
+|---|---|
+| `Auto` (default) | `Bottom` in a window narrower than 600 logical pixels (`NARROW_WINDOW`), else `Corner` |
+| `Corner` | up to four stacked in the bottom trailing corner (bottom-left right to left), 320 wide, newest at the bottom |
+| `Bottom` | a snackbar: the newest toast only, centered, the window's width less the theme's `lg` margin each side, at most 560 wide; older ones wait behind it, their timers running |
+
+`with_bottom_offset` / `set_bottom_offset` raise either layout by that many
+logical pixels, above a bottom navigation bar or tab bar. There is no safe-area
+API yet (issue #38): add the bottom inset yourself.
+
+`action` takes a closure on the state type the `toasts` view is built for
+(`Fn(&mut S) + Send + Sync`); it runs once, after the toast is dismissed, so it
+may push another toast. A toast keeps at most one action; giving it another
+replaces it.
+
+Each toast is a `Role::Alert` named by its message, with its action and ×
+buttons inside. A toast appearing (not those already up in the first frame) is
+announced:
+
+| Platform | How |
+|---|---|
+| macOS | `AXAnnouncementRequested` on the window, high priority |
+| iOS | `UIAccessibilityAnnouncementNotification` (the layout-changed notification as for any new element, not a screen change) |
+| Android | a `TYPE_ANNOUNCEMENT` accessibility event from the toast's node, with its message |
+| Web | the node gets ARIA role `alert`, which browsers' screen readers generally announce (the bridge reuses its elements, so this is not guaranteed) |
+| Linux (AT-SPI) | the role is `notification`; no announcement event is raised yet |
+| Windows (UIA) | a group; no notification event (`UiaRaiseNotificationEvent`) yet |
 
 ## Tab bar
 

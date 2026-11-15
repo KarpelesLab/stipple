@@ -1531,10 +1531,15 @@ impl Window for MacWindow {
         }
         // Focus that moved is announced, once the tree is the view's.
         let moved = root.focus_moved_from(self.a11y_tree.borrow().as_ref());
+        // So are alerts (toasts) that appeared.
+        let alerts = root.alerts_new_since(self.a11y_tree.borrow().as_ref());
         *self.a11y_tree.borrow_mut() = Some(root.clone());
         clear_ax_elements(self);
         if let Some(path) = moved {
             ax_focus::announce(self.view, &path);
+        }
+        for text in alerts {
+            ax_focus::announce_alert(self.view, &text);
         }
     }
     fn set_pointer_lock(&self, locked: bool) -> bool {

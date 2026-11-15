@@ -19,7 +19,9 @@
 //! order, so VoiceOver's cursor stays on its object across updates. An update
 //! that changes what VoiceOver reads posts
 //! `UIAccessibilityLayoutChangedNotification`; the first tree, or a dialog
-//! opening or closing, `UIAccessibilityScreenChangedNotification`.
+//! opening or closing, `UIAccessibilityScreenChangedNotification`. An alert
+//! (a toast) appearing is announced with
+//! `UIAccessibilityAnnouncementNotification`.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -43,6 +45,7 @@ unsafe extern "C" {
     static UIAccessibilityTraitSelected: u64;
     static UIAccessibilityLayoutChangedNotification: u32;
     static UIAccessibilityScreenChangedNotification: u32;
+    static UIAccessibilityAnnouncementNotification: u32;
     fn UIAccessibilityPostNotification(notification: u32, argument: Id);
     fn UIAccessibilityIsVoiceOverRunning() -> bool;
 }
@@ -297,10 +300,11 @@ pub(super) fn set_tree(root: &A11yNode) {
             return None;
         }
         let change = a11y_tree::change(&s.items, &items);
+        let alerts = a11y_tree::new_alerts(&s.items, &items);
         s.items = items;
-        Some(change)
+        Some((change, alerts))
     });
-    let Some(change) = change else {
+    let Some((change, alerts)) = change else {
         return;
     };
     let view = super::CTX.with(|c| c.borrow().view);
@@ -318,6 +322,12 @@ pub(super) fn set_tree(root: &A11yNode) {
                 UIAccessibilityScreenChangedNotification,
                 std::ptr::null_mut(),
             ),
+        }
+        for text in alerts {
+            UIAccessibilityPostNotification(
+                UIAccessibilityAnnouncementNotification,
+                nsstring(&text.replace('\0', "")),
+            );
         }
     }
 }

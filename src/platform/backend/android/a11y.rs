@@ -10,7 +10,9 @@
 //! The UI thread flattens each new tree into [`TREE`] (virtual view ids are
 //! the nodes' indices in tree order; the root, the window, is the host view
 //! itself) and asks the main thread to announce the change. The provider's
-//! methods run on the main thread and read it from there.
+//! methods run on the main thread and read it from there. An alert (a toast)
+//! appearing is announced too: a `TYPE_ANNOUNCEMENT` event from its node,
+//! with its message, which TalkBack speaks.
 
 use std::sync::Mutex;
 
@@ -43,6 +45,7 @@ const TYPE_VIEW_HOVER_EXIT: i32 = 0x100;
 const TYPE_WINDOW_CONTENT_CHANGED: i32 = 0x800;
 const TYPE_VIEW_ACCESSIBILITY_FOCUSED: i32 = 0x8000;
 const TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED: i32 = 0x1_0000;
+const TYPE_ANNOUNCEMENT: i32 = 0x4000;
 
 // AccessibilityNodeInfo.FOCUS_INPUT and FOCUS_ACCESSIBILITY.
 const FOCUS_INPUT: i32 = 1;
@@ -98,13 +101,40 @@ pub(super) struct Changes {
     pub(super) content: bool,
     /// Input focus moved to this node.
     pub(super) focused: Option<i32>,
+    /// This alert (a toast) appeared (the last one, if several did).
+    pub(super) alert: Option<i32>,
 }
 
 impl Changes {
     pub(super) fn merge(&mut self, other: Changes) {
         self.content |= other.content;
         self.focused = other.focused.or(self.focused);
+        self.alert = other.alert.or(self.alert);
     }
+}
+
+/// The last alert (a toast) in `new` that isn't in `old` (by name), as a
+/// virtual view id; none for the first tree.
+fn new_alert(old: &[Node], new: &[Node]) -> Option<i32> {
+    if old.is_empty() {
+        return None;
+    }
+    let is_alert = |n: &&Node| n.role == A11yRole::Alert && !n.name.is_empty();
+    let mut before: Vec<&str> = old
+        .iter()
+        .filter(is_alert)
+        .map(|n| n.name.as_str())
+        .collect();
+    let mut found = None;
+    for (i, n) in new.iter().enumerate().filter(|(_, n)| is_alert(n)) {
+        match before.iter().position(|b| *b == n.name) {
+            Some(j) => {
+                before.swap_remove(j);
+            }
+            None => found = Some(i as i32),
+        }
+    }
+    found
 }
 
 /// Flatten `root` (logical pixels, laid out in `content`, window pixels, at
@@ -163,6 +193,7 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
     };
     let was = focus_of(&t.nodes);
     let now = focus_of(&nodes);
+    let alert = new_alert(&t.nodes, &nodes);
     t.nodes = nodes;
     if t.a11y_focus as usize >= t.nodes.len() {
         t.a11y_focus = HOST_VIEW_ID;
@@ -170,6 +201,7 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
     Changes {
         content: true,
         focused: now.filter(|_| now != was),
+        alert,
     }
 }
 
@@ -191,6 +223,16 @@ pub(super) fn announce(jni: &Jni, changes: Changes) {
     }
     if let Some(id) = changes.focused {
         send_event(jni, id, TYPE_VIEW_FOCUSED);
+    }
+    // (Still an alert: the tree may have changed again since.)
+    if let Some(id) = changes.alert.filter(|&id| {
+        let t = tree();
+        usize::try_from(id)
+            .ok()
+            .and_then(|i| t.nodes.get(i))
+            .is_some_and(|n| n.role == A11yRole::Alert)
+    }) {
+        send_event(jni, id, TYPE_ANNOUNCEMENT);
     }
 }
 

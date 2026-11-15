@@ -5,16 +5,25 @@
 //! which VoiceOver follows (as UIA's focus-changed event on Windows, AT-SPI's
 //! `focus:` on Linux). The focus is whatever the App's tree says: a text field
 //! clicked or tabbed to, or a button reached with Tab.
+//!
+//! An alert (a toast) appearing is announced: `AXAnnouncementRequested` on
+//! the window, with its message.
 
 use std::ffi::c_void;
 
-use super::{Id, Sel, msg_id, msg_id_u64, msg_u64, nsstring, objc_msgSend, sel, window_for_view};
+use super::{
+    Id, Sel, class, msg_id, msg_id_u64, msg_u64, nsstring, objc_msgSend, sel, window_for_view,
+};
 use crate::platform::access::A11yNode;
 
 #[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {
     fn NSAccessibilityPostNotification(element: Id, notification: Id);
+    fn NSAccessibilityPostNotificationWithUserInfo(element: Id, notification: Id, info: Id);
 }
+
+/// `NSAccessibilityPriorityHigh`.
+const PRIORITY_HIGH: i64 = 90;
 
 /// Mark a freshly made element focused (`setAccessibilityFocused:`), when its
 /// node is.
@@ -68,5 +77,38 @@ pub(super) fn announce(view: Id, path: &[usize]) {
     if std::env::var_os("STIPPLE_COCOA_A11Y").is_some() {
         let label = super::nsstring_to_string(unsafe { msg_id(el, sel("accessibilityLabel")) });
         println!("Cocoa a11y: focus moved to {label:?}");
+    }
+}
+
+/// An alert (a toast) reading `text` appeared under `view`: ask VoiceOver to
+/// announce it (`AXAnnouncementRequested`, at high priority, posted on the
+/// view's window).
+pub(super) fn announce_alert(view: Id, text: &str) {
+    let text = text.replace('\0', "");
+    unsafe {
+        let number: unsafe extern "C" fn(Id, Sel, i64) -> Id =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let priority = number(class("NSNumber"), sel("numberWithInteger:"), PRIORITY_HIGH);
+        let objects = [nsstring(&text), priority];
+        let keys = [nsstring("AXAnnouncementKey"), nsstring("AXPriorityKey")];
+        let dictionary: unsafe extern "C" fn(Id, Sel, *const Id, *const Id, u64) -> Id =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let info = dictionary(
+            class("NSDictionary"),
+            sel("dictionaryWithObjects:forKeys:count:"),
+            objects.as_ptr(),
+            keys.as_ptr(),
+            2,
+        );
+        let window = msg_id(view, sel("window"));
+        let target = if window.is_null() { view } else { window };
+        NSAccessibilityPostNotificationWithUserInfo(
+            target,
+            nsstring("AXAnnouncementRequested"),
+            info,
+        );
+    }
+    if std::env::var_os("STIPPLE_COCOA_A11Y").is_some() {
+        println!("Cocoa a11y: announced {text:?}");
     }
 }

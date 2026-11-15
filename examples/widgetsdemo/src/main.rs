@@ -5,10 +5,12 @@
 //! chips, which the arrow keys move through) on the left and, on the right, a second,
 //! vertical split with a preview above an event log. Drag either divider, or
 //! focus one (Tab) and use the arrow keys. "Notify" raises a toast that
-//! dismisses itself after four seconds; the welcome toast stays until its ×.
-//! A navigation bar along the bottom switches between that editor, a long
-//! inbox and an about page; each keeps its state (the inbox its scroll
-//! offset) while another shows.
+//! dismisses itself after four seconds; the welcome toast stays until its ×
+//! (or a swipe sideways). The trash button clears the log, with an "Undo" on
+//! the toast it raises. Narrow the window below 600 px and the toasts become
+//! a snackbar across the bottom. A navigation bar along the bottom switches
+//! between that editor, a long inbox and an about page; each keeps its state
+//! (the inbox its scroll offset) while another shows.
 //!
 //! Pick the theme with an argument: `light` (default), `dark`, `material`,
 //! `material-dark`, `contrast` or `native`.
@@ -90,6 +92,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let theme = *cx.theme();
     let sp = theme.spacing;
     let handle = cx.handle();
+    let undo_handle = handle.clone();
 
     let bar = toolbar(
         &theme,
@@ -105,9 +108,25 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
                 s.italic = !s.italic;
             }),
             tool_separator(&theme),
-            tool_icon_button(cx, &theme, &state.trash, "Clear log", |s: &mut State| {
-                s.log.clear();
-            }),
+            tool_icon_button(
+                cx,
+                &theme,
+                &state.trash,
+                "Clear log",
+                move |s: &mut State| {
+                    let cleared = std::mem::take(&mut s.log);
+                    let id = s.toasts.push_for(
+                        &undo_handle,
+                        Duration::from_secs(6),
+                        |s: &mut State| &mut s.toasts,
+                        "Log cleared",
+                        ToastKind::Info,
+                    );
+                    s.toasts.action(id, "Undo", move |s: &mut State| {
+                        s.log.clone_from(&cleared);
+                    });
+                },
+            ),
             spacer(),
             tool_button(cx, &theme, "Notify", move |s: &mut State| {
                 let n = s.log.len();

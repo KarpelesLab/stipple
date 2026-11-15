@@ -230,7 +230,7 @@ impl ElementKey {
             Anchor::Below(_) => 3,
             Anchor::Popup(_) => 4,
             Anchor::RightOf(_) => 5,
-            Anchor::Aligned { .. } => 6,
+            Anchor::Aligned { .. } | Anchor::Inset { .. } => 6,
         };
         let mut seen = [0usize; 7];
         overlays

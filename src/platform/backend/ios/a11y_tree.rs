@@ -124,13 +124,35 @@ pub(crate) enum Change {
     Screen,
 }
 
-pub(crate) fn change(old: &[Item], new: &[Item]) -> Change {
-    let dialogs = |items: &[Item]| {
+/// The alerts (toasts) in `new` that weren't in `old`, by label, in reading
+/// order: what VoiceOver announces (`UIAccessibilityAnnouncementNotification`)
+/// rather than moving its cursor to them. None for the first tree.
+pub(crate) fn new_alerts(old: &[Item], new: &[Item]) -> Vec<String> {
+    if old.is_empty() {
+        return Vec::new();
+    }
+    let alerts = |items: &[Item]| -> Vec<String> {
         items
             .iter()
-            .filter(|i| matches!(i.role, A11yRole::Dialog | A11yRole::Alert))
-            .count()
+            .filter(|i| i.role == A11yRole::Alert && !i.label.is_empty())
+            .map(|i| i.label.clone())
+            .collect()
     };
+    let mut before = alerts(old);
+    alerts(new)
+        .into_iter()
+        .filter(|label| match before.iter().position(|b| b == label) {
+            Some(i) => {
+                before.swap_remove(i);
+                false
+            }
+            None => true,
+        })
+        .collect()
+}
+
+pub(crate) fn change(old: &[Item], new: &[Item]) -> Change {
+    let dialogs = |items: &[Item]| items.iter().filter(|i| i.role == A11yRole::Dialog).count();
     if old.is_empty() && !new.is_empty() || dialogs(old) != dialogs(new) {
         return Change::Screen;
     }
@@ -221,5 +243,18 @@ mod tests {
             },
         ]));
         assert_eq!(change(&first, &dialog), Change::Screen);
+        // A toast is announced, without changing the screen.
+        let toast = flatten(&window(vec![
+            node(A11yRole::Button, "OK"),
+            A11yNode {
+                children: vec![node(A11yRole::Button, "Undo")],
+                ..node(A11yRole::Alert, "Deleted")
+            },
+        ]));
+        assert_eq!(change(&first, &toast), Change::Layout);
+        assert_eq!(new_alerts(&first, &toast), ["Deleted"]);
+        assert!(new_alerts(&toast, &toast).is_empty());
+        assert!(new_alerts(&[], &toast).is_empty(), "the first tree");
+        assert!(new_alerts(&toast, &first).is_empty(), "gone");
     }
 }

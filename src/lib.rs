@@ -1265,6 +1265,23 @@ impl<S: 'static> Pane<S> {
                             place(vertical, size.height - m.height),
                         )
                     }
+                    Anchor::Inset {
+                        horizontal,
+                        vertical,
+                        insets,
+                    } => {
+                        let place = |align, free: f64, start: f64, end: f64| match align {
+                            crate::core::Align::Center => {
+                                (start + (free - start - end) / 2.0).max(0.0)
+                            }
+                            crate::core::Align::End => (free - end).max(0.0),
+                            crate::core::Align::Start | crate::core::Align::Stretch => start,
+                        };
+                        Point::new(
+                            place(horizontal, size.width - m.width, insets.left, insets.right),
+                            place(vertical, size.height - m.height, insets.top, insets.bottom),
+                        )
+                    }
                 };
                 let origin = match spec.anchor {
                     Anchor::At(_) | Anchor::Center => origin,
@@ -4076,8 +4093,8 @@ pub mod prelude {
         page_stack,
     };
     pub use crate::widgets::{
-        NumberInput, Select, SplitPane, ToastKind, Toasts, number_input, select, split_pane,
-        toasts, tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar,
+        NumberInput, Select, SplitPane, ToastKind, ToastPlacement, Toasts, number_input, select,
+        split_pane, toasts, tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar,
     };
     pub use crate::widgets::{image, svg};
     pub use crate::{App, CloseResponse};

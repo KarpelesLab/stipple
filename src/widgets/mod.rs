@@ -53,7 +53,7 @@ pub use preedit::DisplayText;
 pub use select::{Select, select};
 pub use split::{SplitPane, split_pane};
 pub use tab_bar::{TAB_MAX_WIDTH, TAB_MIN_WIDTH, Tab, TabBar, TabBarState, TabIndicator, tab_bar};
-pub use toast::{Toast, ToastId, ToastKind, Toasts, toasts};
+pub use toast::{NARROW_WINDOW, Toast, ToastId, ToastKind, ToastPlacement, Toasts, toasts};
 pub use toolbar::{tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar};
 
 use crate::core::{

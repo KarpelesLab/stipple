@@ -171,6 +171,41 @@ impl A11yNode {
             _ => Some(path),
         }
     }
+
+    /// The alerts (toasts) in this tree that weren't in the tree `old`, by
+    /// name, in tree order: what a backend asks the screen reader to
+    /// announce. None for the first tree (`old` is `None`), which the screen
+    /// reader reads as a whole, nor for an alert with no name.
+    pub fn alerts_new_since(&self, old: Option<&A11yNode>) -> Vec<String> {
+        fn alerts<'a>(n: &'a A11yNode, out: &mut Vec<&'a str>) {
+            if n.role == A11yRole::Alert && !n.name.is_empty() {
+                out.push(&n.name);
+            }
+            for c in &n.children {
+                alerts(c, out);
+            }
+        }
+        let Some(old) = old else {
+            return Vec::new();
+        };
+        let mut before = Vec::new();
+        alerts(old, &mut before);
+        let mut now = Vec::new();
+        alerts(self, &mut now);
+        now.into_iter()
+            .filter(|name| {
+                // Each alert there before matches one now, by name.
+                match before.iter().position(|b| b == name) {
+                    Some(i) => {
+                        before.swap_remove(i);
+                        false
+                    }
+                    None => true,
+                }
+            })
+            .map(str::to_owned)
+            .collect()
+    }
 }
 
 /// The ARIA role the web's bridge gives `role`; empty for none (static text,
@@ -285,6 +320,26 @@ mod tests {
 
     fn leaf(role: A11yRole, name: &str) -> A11yNode {
         A11yNode::new(role, name, (0.0, 0.0, 0.0, 0.0))
+    }
+
+    #[test]
+    fn new_alerts_are_the_ones_to_announce() {
+        let window = |children| A11yNode {
+            children,
+            ..leaf(A11yRole::Window, "App")
+        };
+        let saved = || leaf(A11yRole::Alert, "Saved");
+        let first = window(vec![leaf(A11yRole::Button, "OK"), saved()]);
+        assert!(first.alerts_new_since(None).is_empty(), "the first tree");
+        assert!(first.alerts_new_since(Some(&first)).is_empty());
+        let more = window(vec![
+            saved(),
+            leaf(A11yRole::Alert, "Deleted"),
+            saved(),
+            leaf(A11yRole::Alert, ""),
+        ]);
+        assert_eq!(more.alerts_new_since(Some(&first)), ["Deleted", "Saved"]);
+        assert!(first.alerts_new_since(Some(&more)).is_empty(), "gone");
     }
 
     #[test]

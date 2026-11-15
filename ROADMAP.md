@@ -1331,6 +1331,11 @@ Most input only works on X11 today.
   iOS, `TabList`/`Tab` roles, a bottom inset for the safe area (#38 will feed
   it), `navigation_rail` for wide windows, and `page_stack` keeping every
   page alive off stage (`Element::offstage`).
+- ✅ Toasts on phones (#43): a snackbar placement (`ToastPlacement::Bottom`,
+  automatic below 600 px; the newest alone, centered, up to 560 wide), a
+  bottom offset to clear a navigation bar, an action button
+  (`Toasts::action`, e.g. "Undo"), swipe to dismiss with a spring back, and
+  new toasts announced on macOS, iOS and Android.
 - ✅ Document tab bar (`tab_bar`): closable tabs, drag to reorder (in-app
   drags, with the shifted tabs springing into place), per-tab color and
   indicator (dot, bell, count), a context menu per tab, a new-tab button,
@@ -1765,8 +1770,9 @@ Most input only works on X11 today.
   with no scroll actions on every platform (only lists, trees and tables have
   them); UIA has no Value, Toggle, Selection, ExpandCollapse, Scroll or Text
   patterns and raises only the focus-changed event (no structure or property
-  changes); macOS elements have no value for fields; no platform posts
-  announcements for live regions (toasts).
+  changes); macOS elements have no value for fields; toasts are announced on
+  macOS, iOS and Android (and the web's ARIA alert) but not yet by UIA or
+  AT-SPI.
 - ✅ Keyboard focus for buttons and the other controls a tap activates
   (`core::tab_focus`): an `on_tap` element whose role is a button, checkbox,
   switch, tab, select, list or tree item, row, cell or column header (not a

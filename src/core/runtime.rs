@@ -235,6 +235,15 @@ pub enum Anchor {
         vertical: Align,
         margin: f64,
     },
+    /// Like [`Aligned`](Self::Aligned), with a separate inset from each edge
+    /// (logical pixels; `left` is the leading edge, `right` the trailing one,
+    /// so they swap in a right-to-left layout). `Center` centers within the
+    /// inset area. Toasts use it to sit above a bottom navigation bar.
+    Inset {
+        horizontal: Align,
+        vertical: Align,
+        insets: crate::geometry::Insets,
+    },
 }
 
 /// A floating layer drawn above the main tree — a menu, popover, tooltip, or
