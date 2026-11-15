@@ -170,6 +170,16 @@ pub(crate) trait Executor {
 
     /// Texture uploads in the last frame.
     fn uploads(&self) -> usize;
+
+    /// Draw calls in the last frame (0 where it isn't counted).
+    fn draws(&self) -> usize {
+        0
+    }
+}
+
+thread_local! {
+    /// The draw calls of the thread's last frame (`gpu::last_frame_draw_calls`).
+    pub(crate) static LAST_DRAWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The changes of the last frames presented to a window, so that a back
@@ -411,7 +421,16 @@ impl GpuRenderer {
     ) -> Result<Pixmap, GpuError> {
         self.lost()?;
         let plan = self.plan(scene, background, scale);
-        self.exec.read_back(&plan)
+        let frame = self.exec.read_back(&plan);
+        self.counted(frame)
+    }
+
+    /// Note the frame's draw calls.
+    fn counted<T>(&self, frame: Result<T, GpuError>) -> Result<T, GpuError> {
+        if frame.is_ok() {
+            LAST_DRAWS.with(|d| d.set(self.exec.draws()));
+        }
+        frame
     }
 
     /// Whether frames can go straight to `layer`.
@@ -432,7 +451,8 @@ impl GpuRenderer {
     ) -> Result<(), GpuError> {
         self.lost()?;
         let mut plan = self.plan(scene, background, scale);
-        self.exec.present(&mut plan, layer, scale, dirty)
+        let frame = self.exec.present(&mut plan, layer, scale, dirty);
+        self.counted(frame)
     }
 
     /// Render only the pixel rectangle `region` of `scene` over the frame
@@ -449,7 +469,8 @@ impl GpuRenderer {
     ) -> Result<Pixmap, GpuError> {
         let mut plan = self.plan(scene, background, scale);
         plan.limit(region);
-        self.exec.read_back(&plan)
+        let frame = self.exec.read_back(&plan);
+        self.counted(frame)
     }
 
     /// Let go of what presents to `layer`: its window is going away.
@@ -472,13 +493,20 @@ impl GpuRenderer {
         if let Some(r) = region {
             plan.limit(r);
         }
-        self.exec.finish(&plan)
+        let frame = self.exec.finish(&plan);
+        self.counted(frame)
     }
 
     /// Texture uploads in the last frame.
     #[allow(dead_code)] // the comparison tests and benchmark use it
     pub(crate) fn uploads(&self) -> usize {
         self.exec.uploads()
+    }
+
+    /// Draw calls in the last frame.
+    #[allow(dead_code)] // the comparison tests and benchmark use it
+    pub(crate) fn draws(&self) -> usize {
+        self.exec.draws()
     }
 
     /// Make the next frame fail as if the device were lost.
@@ -533,6 +561,9 @@ mod tests {
             background: Color::rgb(1, 2, 3),
             ops: Vec::new(),
             partial: None,
+            atlas: Vec::new(),
+            cmds: Vec::new(),
+            quads: Vec::new(),
         };
         let dirty = Some([10, 10, 20, 20]);
         assert_eq!(kept.region(1, &plan, dirty), None);

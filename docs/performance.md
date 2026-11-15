@@ -165,6 +165,10 @@ cargo run --release --example bench --features mtl -- --renderer metal  # gl (--
 cargo run --release --example bench -- --only hover,type_char --json out.json
 ```
 
+On a GPU renderer, `first_frame_*`, `hover` and `sprites_2000` also report
+how many draw calls their last frame took (`draw_calls`, from
+`stipple::gpu::last_frame_draw_calls`).
+
 `--quick` runs a third of the iterations, `--list` names the scenarios.
 Asking for a GPU renderer the machine doesn't have measures the software
 one instead, and the report says so (`gpu_unavailable`). The JSON holds

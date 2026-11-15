@@ -107,7 +107,7 @@ renderer does, and turns it into device-space draw operations:
 
 - **Boxes.** Upright rects and rounded rects, filled or stroked (what
   `fill_rect`, `fill_round_rect` and their strokes draw, so most of a widget
-  tree), go through one shader: the exact pixel coverage of a sharp box or
+  tree), are shaded analytically: the exact pixel coverage of a sharp box or
   ring, a signed distance for rounded corners.
 - **Paths.** Every other solid fill or stroke (curves, `fill_path`,
   `stroke_path` with joins, caps and dashes, rotated boxes) is flattened and
@@ -130,7 +130,8 @@ renderer does, and turns it into device-space draw operations:
 - **Text** is drawn from the scene's own glyph outlines, whatever font set
   them: each glyph is rasterized once on the CPU per size, color, transform and
   sixteenth of a pixel of position, kept across frames (and dropped after 120
-  frames unused), and drawn as an image.
+  frames unused), packed into the glyph atlas, and drawn as a region of it
+  (see [Batching and the glyph atlas](#batching-and-the-glyph-atlas)).
 - **Layers.** Transforms are applied to the geometry. A layer with an opacity
   below 1 is drawn into an offscreen target and composited once at that
   opacity, so overlapping content inside it doesn't show through itself.
@@ -144,8 +145,9 @@ renderer does, and turns it into device-space draw operations:
 Everything is blended in premultiplied alpha. The context, shaders, render
 targets and both caches are kept from frame to frame.
 
-The lowering (`src/gpu/ops.rs`) is shared; each GPU API is an executor of its
-operation list (`src/gpu/renderer.rs`): GLES2 in `src/gpu/gl/scene.rs`, Metal
+The lowering (`src/gpu/ops.rs`), the glyph atlas (`src/gpu/atlas.rs`) and
+batching (`src/gpu/batch.rs`) are shared; each GPU API is an executor of the
+batched operation list (`src/gpu/renderer.rs`): GLES2 in `src/gpu/gl/scene.rs`, Metal
 in `src/gpu/metal_scene.rs`, Vulkan in `src/gpu/vk/`, Direct3D 11 in
 `src/gpu/d3d/scene.rs`, WebGPU and WebGL2 in `web/gpu.js` (fed by
 `src/gpu/web.rs`).
@@ -196,17 +198,56 @@ different everywhere, only in a rectangle over it, and checks the result
 against the software renderer's two frames put together the same way;
 `gpucompare.html` does the same on WebGPU and WebGL2 through the canvas, and
 `a_window_frame_redraws_only_what_changed` presents to a `CAMetalLayer`.
-On an Apple M5 Max the widget window of [How fast](#how-fast) takes 1.27 ms
+On an Apple M5 Max the widget window of [How fast](#how-fast) took 1.27 ms
 on Metal drawn whole and 0.45 ms with a button's worth (120×40 logical) of
-change. In Chrome on the same machine the work of a hover in the benchmark
+change; with batching and the glyph atlas (below), 0.55 and 0.37 ms. In Chrome on the same machine the work of a hover in the benchmark
 app (`tools/bench/run_web.py`, `web_hover`'s `work_ms`) went from about
 3.8–4.8 ms to 3.0–4.2 ms on WebGL2 and from 4.8–5.4 ms to 3.1–4.8 ms on
 WebGPU; what's left is building the frame on the CPU.
 
+## Batching and the glyph atlas
+
+Boxes and textured quads (images, image regions and sprites, nine-slice
+pieces, glyphs, layers composited) are all drawn by one *quad* shader whose
+every input is a vertex attribute: a box's rectangle, color, radius and
+stroke, or a textured quad's texture coordinates, clamp rectangle, tint and
+distances to its antialiased edges, five `vec4`s a vertex (the format is at
+the top of `src/gpu/batch.rs`). So the lowered operations, still in paint
+order, are batched: a run of boxes and textured quads that samples one
+texture (boxes sample none) and isn't interrupted by a path, a clip or a
+layer is a single draw call, the quads' vertices one range of the frame's
+vertex buffer. Nothing is reordered, so the frame is the same, just drawn
+with fewer calls. A batch of boxes alone is drawn by a variant of the shader
+without a texture.
+
+Glyph rasters go into the **glyph atlas**: square pages of straight-alpha
+RGBA, 512 pixels on a side at first, packed on shelves (rows of one height,
+filled left to right, freed spans and emptied shelves reused). A full page is
+doubled, up to 2048 pixels (every raster stays where it is); then a second
+page opens; once both are full, the least recently used rasters (never one
+the frame being drawn uses) are evicted to make room. Rasters keep the
+transparent pixel their bounds were padded with and are sampled no closer
+than half a texel to their edges, so bilinear filtering never reaches a
+neighbor. A glyph too big for the atlas (over 256 pixels) is an image of
+its own, as before. The pages live on the CPU in the lowering's glyph
+cache; each frame carries a snapshot of them, and an executor keeps one
+texture per page, uploading a page whole when it first sees it or it has
+grown, and otherwise only the area written since the version it has (Metal
+blits it in the frame's command buffer, Vulkan copies it from its staging
+buffer, GLES uses `glTexSubImage2D`, Direct3D 11 `UpdateSubresource`, the web
+`writeTexture` and `texSubImage2D`).
+
+All of a frame's text is then one texture, so text batches with the boxes
+around it: the busy widget window (865 boxes and glyphs) is one draw call
+where it was 865, the 2000-sprite scene one where it was 2001, and an app's
+widget gallery a handful. `stipple::gpu::last_frame_draw_calls()` says how
+many the thread's last GPU frame took; the benchmarks report it
+(`draw_calls`).
+
 ## Metal
 
-The Metal executor is the GLES2 one translated: the same four shaders in MSL
-(boxes, textured quads, flat stencil fills, the path resolve), compiled from
+The Metal executor is the GLES2 one translated: the same shaders in MSL
+(batched boxes and textured quads, flat stencil fills, the path resolve), compiled from
 source when the renderer is created (`newLibraryWithSource:`; no offline
 toolchain and no precompiled `.metallib`), the same premultiplied blending,
 paths by stencil-and-cover at 4×4 into a scratch target, layers in pooled
@@ -236,8 +277,11 @@ On an Apple M5 Max (`cargo test --release --features mtl --lib --
 
 | Scene | CPU | Metal | Metal, read back |
 |---|---|---|---|
-| A widget window at 2560×1600 (text, checkboxes, buttons) | 38.4 ms | 1.1 ms | 4.0 ms |
-| 2000 sprites over a background at 1920×1080 | 33.3 ms | 1.8 ms | 3.3 ms |
+| A widget window at 2560×1600 (text, checkboxes, buttons) | 38.4 ms | 0.56 ms | 3.3 ms |
+| 2000 sprites over a background at 1920×1080 | 33.3 ms | 0.7 ms | 2.2 ms |
+
+(Before batching and the atlas, the same frames took 1.16 and 1.51 ms on
+Metal, in 865 and 2001 draw calls; they now take one each.)
 
 The Metal times include lowering the scene on the CPU and waiting for the
 GPU to finish. In a window, `spritedemo` (2560×1504 pixels, redrawn every
@@ -246,7 +290,7 @@ on the software renderer and 4% on Metal.
 
 ## Direct3D 11
 
-The Direct3D 11 executor is the Metal one translated again: the same four
+The Direct3D 11 executor is the Metal one translated again: the same
 shaders in HLSL (`src/gpu/shaders/scene.hlsl`), the same premultiplied
 blending, stencil-and-cover paths at 4×4 into a scratch target, pooled layer
 targets, scissor rectangles and stencil polygons. Every target is
@@ -292,11 +336,12 @@ In a browser the module can't reach a GPU API itself, so the lowered frame
 crosses into the page: `src/gpu/web.rs` encodes it as a compact buffer of
 32-bit words (the format is at the top of that file) and `web/gpu.js` draws
 it. Everything geometric is done in Rust, once: each draw carries its
-vertices in device pixels (path fills as fan triangles, image quads already
-through their transform, boxes padded for their antialiased edge). Images
-and glyph rasters are textures the page keeps by id, uploaded the first time
-an image is drawn and freed when it's dropped or unused for 120 frames,
-exactly as the other executors cache theirs.
+vertices in device pixels (path fills as fan triangles; boxes and image
+quads batched, each batch one draw with its quad vertices). Images are
+textures the page keeps by id, uploaded the first time an image is drawn and
+freed when it's dropped or unused for 120 frames, exactly as the other
+executors cache theirs; each glyph atlas page is a texture too, updated with
+only what changed in it (`writeTexture`, `texSubImage2D`).
 
 `gpu.js` first *records* the frame (the clip, layer and path logic, shared by
 both APIs) into a list of render-target switches and draws, one array of
@@ -374,15 +419,17 @@ rasterizing in the module and `putImageData` (the software path):
 
 | Scene (Chrome, M5 Max) | Software | WebGPU | WebGL2 |
 |---|---|---|---|
-| The busy widget window at 2560×1600 (the harness) | 37 ms | 2.8 ms | 3.2 ms |
-| 2000 sprites at 1920×1080 (the harness) | 58–65 ms | 4.0 ms | 4.2 ms |
+| The busy widget window at 2560×1600 (the harness) | 37 ms | 1.4 ms | 1.1 ms |
+| 2000 sprites at 1920×1080 (the harness) | 58–65 ms | 1.4 ms | 1.0 ms |
 | `themegallery` at 2560×1600, a whole new frame | 35 ms | 2.9 ms | 3.8 ms |
 | `spritedemo` at 2560×1600, a whole new frame | 6.9 ms | 1.7 ms | 3.6 ms |
 | `widgetsdemo` at 2560×1600, a whole new frame | 426 ms | 3.5 ms | 4.5 ms |
 
 A scene of many long paths gains least: `canvasdemo` takes 300 ms on the
 CPU and about 220 ms on WebGL2, most of it moving its vertices (a 34 MB op
-buffer a frame); batching and smaller path vertices are 6f's. On SwiftShader
+buffer a frame); smaller path vertices are 6f's. (Before batching and the
+glyph atlas, the harness's widget window took 2.9 ms on WebGPU and 3.3 ms on
+WebGL2, its sprites 3.6 and 3.7 ms.) On SwiftShader
 the GPU path is no faster than the CPU (27 to 150 ms against 38 to 41 for
 the widget window, 63 against 56 for the sprites).
 ## Vulkan
@@ -394,9 +441,11 @@ texture), the Metal executor's clip, layer and stencil-and-cover bookkeeping
 without any Vulkan in it, so it is unit-tested on every host. `exec.rs` then
 turns that into one command buffer: the frame's new images uploaded through a
 staging buffer (textures cached by the image's identity, in shared 16 MB
-memory blocks rather than an allocation each), every vertex of the frame in
-one host-visible buffer, every uniform as push constants, one descriptor set
-per texture. Render passes load and store; a pass that starts cleared clears
+memory blocks rather than an allocation each), as are the glyph atlas
+pages (whole the first time, then only what changed), every vertex of the
+frame in one host-visible buffer (the paths' and clips', then the batched
+quads'), the remaining uniforms as push constants, one descriptor set per
+texture. Render passes load and store; a pass that starts cleared clears
 inside it; between passes one barrier makes the last pass's writes visible
 and moves images that change roles (a layer drawn, then composited) to their
 new layout. Targets are `R8G8B8A8_UNORM` (the frame, layers) and `R8_UNORM`
@@ -410,8 +459,8 @@ one, else whatever there is (lavapipe).
 
 ### The shaders
 
-The shaders are GLSL 4.50 in `src/gpu/shaders/` (`scene.vert`, `box.frag`,
-`tex.frag`, `flat.frag`, `resolve.frag`, the GLSL ES and MSL ones
+The shaders are GLSL 4.50 in `src/gpu/shaders/` (`scene.vert`, `quad.vert`,
+`quad.frag`, `quadbox.frag`, `flat.frag`, `resolve.frag`, the GLSL ES and MSL ones
 translated), with their SPIR-V checked in next to them and included with
 `include_bytes!`: no shader compiler is a dependency. `tools/shaders.sh`
 compiles them with glslang's `glslang`, at the release it pins (built without
@@ -455,8 +504,8 @@ the present names that rectangle (a new swapchain's first frame names none).
   MoltenVK (the Vulkan SDK's, or Homebrew's `molten-vk` and `vulkan-loader`),
   presenting to the window's `CAMetalLayer` through `VK_EXT_metal_surface`.
   Metal stays the platform's renderer. On an Apple M5 Max the benchmark of
-  [How fast](#how-fast) takes 1.3 ms a frame for the widget window (3.3 ms read back) and
-  1.4 ms for the sprites (2.5 ms), about Metal's own times.
+  [How fast](#how-fast) takes 0.56 ms a frame for the widget window (2.4 ms read back) and
+  0.66 ms for the sprites (1.6 ms), about Metal's own times.
 
 ### Wayland
 
@@ -556,9 +605,6 @@ Today:
   drawn whole. The partial presents of Direct3D 11, Vulkan and GLES (X11,
   Android) have been compile-checked and run in CI only; the partial
   redraw itself is checked on every backend by the comparison tests.
-- Glyphs are one texture each rather than packed in an atlas, and every draw
-  is its own draw call, so a frame with a lot of text costs more GPU calls
-  than it needs.
 - Embedded-content viewports: on a read-back frame the app blits registered
   content over the placeholder, as on the CPU path; presenting straight to
   the window it is drawn as an image, uploaded every frame.

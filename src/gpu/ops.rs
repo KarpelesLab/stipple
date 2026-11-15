@@ -20,8 +20,10 @@
 //!   identity: an image that doesn't change is uploaded once.
 //! - **Glyphs.** Glyph groups (cache-keyed groups) are rasterized once per
 //!   glyph, size, color and sub-pixel position on the CPU, kept in a
-//!   [`RasterCache`] across frames, and drawn as images: so text is drawn from
-//!   the scene's own glyph outlines, whatever its font.
+//!   [`RasterCache`] across frames, packed into its glyph atlas
+//!   (`super::atlas`), and drawn as regions of the atlas page: so text is
+//!   drawn from the scene's own glyph outlines, whatever its font, from one
+//!   texture.
 //! - **Layers.** A group with an opacity below 1 is an offscreen layer
 //!   ([`Op::PushLayer`] / [`Op::PopLayer`]), composited once; transforms are
 //!   applied to the geometry.
@@ -31,7 +33,12 @@
 //! - Anything else (gradients, soft masks, raw `oxideav` image nodes, concave
 //!   clips) is rasterized on the CPU for just its own bounds and drawn as an
 //!   image: a local fallback, never the whole frame.
+//!
+//! The operations are then batched (`super::batch`): runs of boxes and
+//! textured quads that share a texture become one draw call each.
 
+use super::atlas::{self, Atlas, AtlasPage};
+use super::batch::{self, Cmd};
 use crate::geometry::{PhysicalSize, Rect};
 use crate::render::Filter;
 use crate::render::lower::{self, Bounds, Deferred};
@@ -73,7 +80,7 @@ pub(crate) enum Op {
     /// (swapped ends mirror it); `tint` (premultiplied) multiplies every
     /// texel; `nearest` samples nearest-neighbor instead of bilinear.
     Image {
-        image: Arc<Pixmap>,
+        image: Source,
         transform: Transform2D,
         rect: [f32; 4],
         opacity: f32,
@@ -93,32 +100,40 @@ pub(crate) enum Op {
     PopLayer,
 }
 
+/// The bitmap an [`Op::Image`] draws.
+#[derive(Clone, Debug)]
+pub(crate) enum Source {
+    /// An image of its own, kept by its identity.
+    Image(Arc<Pixmap>),
+    /// A glyph raster: the pixel rectangle `region` (`[x, y, w, h]`) of the
+    /// atlas page `plan.atlas[page]`.
+    Atlas { page: usize, region: [u32; 4] },
+}
+
 /// All of a bitmap.
 pub(crate) const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 /// No tint.
 pub(crate) const NO_TINT: Premul = [1.0, 1.0, 1.0, 1.0];
 
-/// Which part of a texture a quad shows, tinted how and filtered how.
+/// Which part of a texture a quad shows, and tinted how.
 pub(crate) struct Sample {
     pub uv: [f32; 4],
     pub clamp: [f32; 4],
     pub tint: [f32; 4],
-    pub nearest: bool,
 }
 
 impl Sample {
-    /// All of it, as it is, bilinear.
+    /// All of it, as it is.
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) const WHOLE: Sample = Sample {
         uv: FULL_UV,
         clamp: [0.0, 0.0, 1.0, 1.0],
         tint: NO_TINT,
-        nearest: false,
     };
 
     /// The part `uv` of a `w`×`h` texture, kept half a texel inside it so
     /// bilinear filtering doesn't reach its neighbors.
-    pub(crate) fn region(uv: [f32; 4], w: u32, h: u32, tint: [f32; 4], nearest: bool) -> Sample {
+    pub(crate) fn region(uv: [f32; 4], w: u32, h: u32, tint: [f32; 4]) -> Sample {
         let inside = |a: f32, b: f32, n: u32| {
             let half = 0.5 / n.max(1) as f32;
             let (lo, hi) = (a.min(b) + half, a.max(b) - half);
@@ -135,7 +150,6 @@ impl Sample {
             uv,
             clamp: [u0, v0, u1, v1],
             tint,
-            nearest,
         }
     }
 }
@@ -154,12 +168,19 @@ pub(crate) enum Clip {
 pub(crate) struct Plan {
     pub size: PhysicalSize,
     pub background: Color,
+    /// The operations in paint order.
     pub ops: Vec<Op>,
     /// `Some` when the frame redraws only this pixel rectangle
     /// (`[x0, y0, x1, y1]`, see [`Plan::limit`]): the target keeps the
     /// previous frame's pixels (loaded, not cleared) and only the stencil
     /// starts cleared.
     pub partial: Option<[i32; 4]>,
+    /// The glyph atlas's pages, as this frame left them.
+    pub atlas: Vec<AtlasPage>,
+    /// The operations batched: what an executor draws.
+    pub cmds: Vec<Cmd>,
+    /// The vertices of every [`Cmd::Quads`] (see `super::batch`).
+    pub quads: Vec<f32>,
 }
 
 impl Plan {
@@ -195,7 +216,11 @@ impl Plan {
                 .filter(|op| op_bounds(op).is_none_or(|b| intersects(&b, &keep))),
         );
         ops.push(Op::PopClip);
+        // Batched anew: what's left of the frame.
+        let (cmds, quads) = batch::batch(&ops, &self.atlas);
         self.ops = ops;
+        self.cmds = cmds;
+        self.quads = quads;
         self.partial = Some(r);
     }
 }
@@ -250,12 +275,15 @@ fn op_bounds(op: &Op) -> Option<Bounds> {
 }
 
 /// Glyph rasters kept across frames, keyed by glyph, size, color, transform
-/// and sub-pixel position. Each raster is an `Arc<Pixmap>` whose identity
-/// stays the same while it's cached, so a backend's texture cache (keyed by
-/// identity) keeps its texture too.
+/// and sub-pixel position: packed into the atlas, or (too big for it, or
+/// when it is full of this frame's glyphs) each an `Arc<Pixmap>` whose
+/// identity stays the same while it's cached, so a backend's texture cache
+/// (keyed by identity) keeps its texture too.
 #[derive(Default)]
 pub(crate) struct RasterCache {
     entries: HashMap<u64, Cached>,
+    /// Rasters in the atlas, each with its offset (see [`Cached::offset`]).
+    atlas: Atlas<(i32, i32)>,
     frame: u64,
 }
 
@@ -278,7 +306,7 @@ impl RasterCache {
     /// Rasters currently held.
     #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
-        self.entries.len()
+        self.entries.len() + self.atlas.len()
     }
 
     /// End a frame: forget rasters that weren't used lately.
@@ -292,6 +320,7 @@ impl RasterCache {
             let cut = ages[self.entries.len() - MAX_ENTRIES];
             self.entries.retain(|_, c| c.used > cut);
         }
+        self.atlas.sweep(KEEP_FRAMES, MAX_ENTRIES);
         self.frame += 1;
     }
 }
@@ -327,12 +356,17 @@ pub(crate) fn plan(
         };
         scene.with_root(|nodes, deferred| walker.nodes(deferred, nodes, &root));
     }
+    let atlas = cache.atlas.snapshot();
     cache.sweep();
+    let (cmds, quads) = batch::batch(&ops, &atlas);
     Plan {
         size: physical,
         background,
         ops,
         partial: None,
+        atlas,
+        cmds,
+        quads,
     }
 }
 
@@ -511,6 +545,11 @@ fn paint_hash(nodes: &[Node], h: &mut impl std::hash::Hasher) {
 /// Rasterize `node`, drawn through `t`, into a `w`×`h` bitmap whose top-left
 /// is the device pixel `(x0, y0)`.
 fn raster(node: &Node, t: &Transform2D, x0: i32, y0: i32, w: u32, h: u32) -> Pixmap {
+    Pixmap::from_rgba8(PhysicalSize::new(w, h), raster_bytes(node, t, x0, y0, w, h))
+}
+
+/// [`raster`]'s pixels, straight-alpha RGBA rows.
+fn raster_bytes(node: &Node, t: &Transform2D, x0: i32, y0: i32, w: u32, h: u32) -> Vec<u8> {
     let shift = Transform2D::translate(-x0 as f32, -y0 as f32).compose(t);
     // A one-off render: no need for the bitmap cache.
     let frame = Renderer::with_cache_capacity(w, h, 1).render_node(node, shift);
@@ -520,7 +559,7 @@ fn raster(node: &Node, t: &Transform2D, x0: i32, y0: i32, w: u32, h: u32) -> Pix
     for y in 0..h as usize {
         data.extend_from_slice(&plane.data[y * plane.stride..y * plane.stride + row]);
     }
-    Pixmap::from_rgba8(PhysicalSize::new(w, h), data)
+    data
 }
 
 impl Walker<'_> {
@@ -548,7 +587,7 @@ impl Walker<'_> {
                     }
                     match deferred.get(i) {
                         Some(Deferred::Image(image)) => self.ops.push(Op::Image {
-                            image: image.clone(),
+                            image: Source::Image(image.clone()),
                             transform: local,
                             rect,
                             opacity: 1.0,
@@ -818,32 +857,52 @@ impl Walker<'_> {
         paint_hash(&g.children, &mut hasher);
         let k = hasher.finish();
         let frame = self.cache.frame;
-        let entry = self.cache.entries.entry(k).or_insert_with(|| {
-            let node = Node::Group(Group {
-                children: g.children.clone(),
-                clip: g.clip.clone(),
-                ..Group::new()
+        let push = |ops: &mut Vec<Op>, image: Source, offset: (i32, i32), w: u32, h: u32| {
+            let (ox, oy) = (bx + offset.0 as f32, by + offset.1 as f32);
+            ops.push(Op::Image {
+                image,
+                transform: Transform2D::translate(ox, oy),
+                rect: [0.0, 0.0, w as f32, h as f32],
+                opacity: g.opacity,
+                uv: FULL_UV,
+                tint: NO_TINT,
+                nearest: false,
             });
-            // The raster's top-left in device pixels, for this position.
-            let at = Transform2D::translate(-bx, -by).compose(&snapped);
+        };
+        let atlased = |slot: atlas::Slot| Source::Atlas {
+            page: slot.page,
+            region: slot.rect,
+        };
+        if let Some((slot, &offset)) = self.cache.atlas.get(k) {
+            return push(self.ops, atlased(slot), offset, slot.rect[2], slot.rect[3]);
+        }
+        if let Some(entry) = self.cache.entries.get_mut(&k) {
+            entry.used = frame;
+            let (iw, ih) = (entry.image.size().width, entry.image.size().height);
+            let image = Source::Image(entry.image.clone());
+            return push(self.ops, image, entry.offset, iw, ih);
+        }
+        let node = Node::Group(Group {
+            children: g.children.clone(),
+            clip: g.clip.clone(),
+            ..Group::new()
+        });
+        // The raster's top-left in device pixels, for this position.
+        let at = Transform2D::translate(-bx, -by).compose(&snapped);
+        let pixels = raster_bytes(&node, &at, x0, y0, w, h);
+        if let Some((slot, _)) = self.cache.atlas.insert(k, w, h, &pixels, (x0, y0)) {
+            return push(self.ops, atlased(slot), (x0, y0), w, h);
+        }
+        let image = Arc::new(Pixmap::from_rgba8(PhysicalSize::new(w, h), pixels));
+        self.cache.entries.insert(
+            k,
             Cached {
-                image: Arc::new(raster(&node, &at, x0, y0, w, h)),
+                image: image.clone(),
                 offset: (x0, y0),
                 used: frame,
-            }
-        });
-        entry.used = frame;
-        let (ox, oy) = (bx + entry.offset.0 as f32, by + entry.offset.1 as f32);
-        let (iw, ih) = (entry.image.size().width, entry.image.size().height);
-        self.ops.push(Op::Image {
-            image: entry.image.clone(),
-            transform: Transform2D::translate(ox, oy),
-            rect: [0.0, 0.0, iw as f32, ih as f32],
-            opacity: g.opacity,
-            uv: FULL_UV,
-            tint: NO_TINT,
-            nearest: false,
-        });
+            },
+        );
+        push(self.ops, Source::Image(image), (x0, y0), w, h);
     }
 
     /// [`fallback`](Self::fallback) for a group already composed into `local`.
@@ -872,7 +931,7 @@ impl Walker<'_> {
         let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
         let image = Arc::new(raster(node, t, x0, y0, w, h));
         self.ops.push(Op::Image {
-            image,
+            image: Source::Image(image),
             transform: Transform2D::translate(x0 as f32, y0 as f32),
             rect: [0.0, 0.0, w as f32, h as f32],
             opacity: 1.0,
@@ -900,7 +959,7 @@ impl Walker<'_> {
         let t = s.tint;
         let r = img.bounds;
         self.ops.push(Op::Image {
-            image: s.image.clone(),
+            image: Source::Image(s.image.clone()),
             transform: *local,
             rect: [r.x, r.y, r.x + r.width, r.y + r.height],
             opacity: s.opacity,
@@ -1065,6 +1124,9 @@ mod tests {
                 Op::PopLayer,
             ],
             partial: None,
+            atlas: Vec::new(),
+            cmds: Vec::new(),
+            quads: Vec::new(),
         };
         plan.limit([95, 0, 120, 50]);
         assert_eq!(plan.partial, Some([95, 0, 120, 50]));
@@ -1090,6 +1152,18 @@ mod tests {
         assert!(matches!(ops[4], Op::PopLayer));
         assert!(matches!(ops[5], Op::PopClip));
         assert_eq!(ops.len(), 6);
+        // Batched anew: the clip, the fill and the box before the layer in
+        // one batch, the layer's box in another.
+        let quads: Vec<u32> = plan
+            .cmds
+            .iter()
+            .filter_map(|c| match c {
+                Cmd::Quads(q) => Some(q.count),
+                Cmd::Op(_) => None,
+            })
+            .collect();
+        assert_eq!(quads, vec![6, 6]);
+        assert_eq!(plan.quads.len(), 12 * batch::QUAD_FLOATS);
     }
 
     #[test]
@@ -1142,7 +1216,7 @@ mod tests {
         else {
             panic!("{ops:?}");
         };
-        assert!(Arc::ptr_eq(drawn, &image));
+        assert!(matches!(drawn, Source::Image(d) if Arc::ptr_eq(d, &image)));
         assert_eq!(*rect, [10.0, 10.0, 30.0, 30.0]);
     }
 
@@ -1173,7 +1247,10 @@ mod tests {
         else {
             panic!("{ops:?}");
         };
-        assert!(Arc::ptr_eq(drawn, &image), "the whole image's texture");
+        assert!(
+            matches!(drawn, Source::Image(d) if Arc::ptr_eq(d, &image)),
+            "the whole image's texture"
+        );
         assert_eq!(*rect, [10.0, 10.0, 50.0, 30.0]);
         assert_eq!(*uv, [0.75, 0.0, 0.25, 0.5], "mirrored across");
         assert_eq!(*tint, [1.0, 0.0, 0.0, 1.0]);
@@ -1195,23 +1272,24 @@ mod tests {
         );
         let mut cache = RasterCache::default();
         let first = lower(&s, &mut cache);
-        let images = |ops: &[Op]| -> Vec<Arc<Pixmap>> {
+        let images = |ops: &[Op]| -> Vec<(usize, [u32; 4])> {
             ops.iter()
                 .filter_map(|op| match op {
-                    Op::Image { image, .. } => Some(image.clone()),
+                    Op::Image {
+                        image: Source::Atlas { page, region },
+                        ..
+                    } => Some((*page, *region)),
                     _ => None,
                 })
                 .collect()
         };
         let a = images(&first);
-        assert_eq!(a.len(), 3);
+        assert_eq!(a.len(), 3, "each glyph a region of the atlas: {first:?}");
         // Three 'l's at most at three sub-pixel phases; never more rasters
         // than glyphs.
         assert!(cache.len() <= 3);
         let second = images(&lower(&s, &mut cache));
-        for (x, y) in a.iter().zip(&second) {
-            assert!(Arc::ptr_eq(x, y), "a repeated frame reuses its rasters");
-        }
+        assert_eq!(a, second, "a repeated frame reuses its rasters");
         // A different color is a different raster.
         let mut red = Scene::new(Size::new(200.0, 40.0));
         red.fill_text(
@@ -1220,7 +1298,7 @@ mod tests {
             &crate::render::TextPaint::new(&font, 16.0, Color::rgb(255, 0, 0)),
         );
         let r = images(&lower(&red, &mut cache));
-        assert!(!Arc::ptr_eq(&r[0], &a[0]));
+        assert_ne!(r[0], a[0]);
     }
 
     #[test]
@@ -1245,21 +1323,26 @@ mod tests {
         s.fill_rich_text(&text, Point::new(4.0, 4.0), &paint);
         let mut cache = RasterCache::default();
         let ops = lower(&s, &mut cache);
-        let images: Vec<&Arc<Pixmap>> = ops
+        let images: Vec<&Source> = ops
             .iter()
             .filter_map(|op| match op {
                 Op::Image { image, .. } => Some(image),
                 _ => None,
             })
             .collect();
+        let region = |s: &Source| match s {
+            Source::Atlas { region, .. } => *region,
+            Source::Image(_) => panic!("not in the atlas"),
+        };
         // The shadow, the outline and the fill are each a raster of the
-        // glyph (three different ones here; a shadow in the outline's color would share its raster), then the icon is its own image.
+        // glyph (three different ones here; a shadow in the outline's color
+        // would share its raster), then the icon is its own image.
         assert_eq!(images.len(), 4, "{ops:?}");
-        assert!(!Arc::ptr_eq(images[0], images[1]));
-        assert!(!Arc::ptr_eq(images[1], images[2]));
-        assert!(Arc::ptr_eq(images[3], &icon));
+        assert_ne!(region(images[0]), region(images[1]));
+        assert_ne!(region(images[1]), region(images[2]));
+        assert!(matches!(images[3], Source::Image(i) if Arc::ptr_eq(i, &icon)));
         // The outline raster is wider than the fill's.
-        assert!(images[1].size().width > images[2].size().width);
+        assert!(region(images[1])[2] > region(images[2])[2]);
         // The translucent shadow is composited as a layer.
         let shadow_layer =
             matches!(ops[0], Op::PushLayer { opacity } if (opacity - 128.0 / 255.0).abs() < 0.01);

@@ -351,6 +351,17 @@ fn outcome(plan: &Plan, name: &'static str, samples: Vec<f64>, warmup: usize) ->
     }
 }
 
+/// On the GPU, note the draw calls of the scenario's last frame.
+fn draw_calls(plan: &Plan, o: &mut Outcome) {
+    #[cfg(feature = "gpu")]
+    if matches!(plan.target, Target::Gpu(_)) && o.renderer == plan.target.name() {
+        o.extra
+            .push(("draw_calls", stipple::gpu::last_frame_draw_calls() as f64));
+    }
+    #[cfg(not(feature = "gpu"))]
+    let _ = (plan, o);
+}
+
 fn cpu_outcome(name: &'static str, samples: Vec<f64>, warmup: usize) -> Outcome {
     Outcome {
         name,
@@ -409,7 +420,9 @@ fn first_frame(plan: &Plan, name: &'static str, scale: f64) -> Option<Outcome> {
         std::hint::black_box(app.render_once());
         ms_since(t)
     });
-    Some(outcome(plan, name, samples, 2))
+    let mut o = outcome(plan, name, samples, 2);
+    draw_calls(plan, &mut o);
+    Some(o)
 }
 
 /// A surface that keeps nothing: the frames are presented to it as to a
@@ -458,6 +471,7 @@ fn hover(plan: &Plan) -> Option<Outcome> {
         ms
     });
     let mut o = outcome(plan, "hover", samples, 10);
+    draw_calls(plan, &mut o);
     if plan.target == Target::Software {
         pixels.sort_by(f64::total_cmp);
         o.extra.push(("pixels", median(&pixels)));
@@ -597,6 +611,7 @@ fn sprites(plan: &Plan) -> Option<Outcome> {
         o.renderer = "software".into();
         o.note = format!("GPU failed: {e}");
     }
+    draw_calls(plan, &mut o);
     Some(o)
 }
 

@@ -171,7 +171,8 @@ pub(crate) const VT_CTX_RS_SET_VIEWPORTS: usize = 44;
 pub(crate) const VT_CTX_RS_SET_SCISSOR_RECTS: usize = 45;
 // 46 CopySubresourceRegion
 pub(crate) const VT_CTX_COPY_RESOURCE: usize = 47;
-// 48 UpdateSubresource, 49 CopyStructureCount
+pub(crate) const VT_CTX_UPDATE_SUBRESOURCE: usize = 48;
+// 49 CopyStructureCount
 pub(crate) const VT_CTX_CLEAR_RTV: usize = 50;
 // 51 ClearUnorderedAccessViewUint, 52 ClearUnorderedAccessViewFloat
 pub(crate) const VT_CTX_CLEAR_DSV: usize = 53;
@@ -350,6 +351,32 @@ pub(crate) struct D3dRect {
     pub top: i32,
     pub right: i32,
     pub bottom: i32,
+}
+
+/// `D3D11_BOX`
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct D3dBox {
+    pub left: u32,
+    pub top: u32,
+    pub front: u32,
+    pub right: u32,
+    pub bottom: u32,
+    pub back: u32,
+}
+
+impl D3dBox {
+    /// The pixels `[x0, y0, x1, y1]` of a 2D texture.
+    pub(crate) fn pixels(r: [u32; 4]) -> Self {
+        D3dBox {
+            left: r[0],
+            top: r[1],
+            front: 0,
+            right: r[2],
+            bottom: r[3],
+            back: 1,
+        }
+    }
 }
 
 /// `D3D11_INPUT_ELEMENT_DESC`
@@ -552,45 +579,28 @@ pub(crate) type Constants = [[f32; 4]; 8];
 /// The constant buffer's size in bytes.
 pub(crate) const CONSTANTS_BYTES: usize = std::mem::size_of::<Constants>();
 
-/// `box_ps`: `u1` the rect, `u2` the color, `u3.x` the radius, `u3.y` the
-/// stroke.
-pub(crate) fn box_constants(
-    xf: [f32; 4],
-    rect: [f32; 4],
-    color: [f32; 4],
-    radius: f32,
-    stroke: f32,
-) -> [[f32; 4]; 4] {
-    [xf, rect, color, [radius, stroke, 0.0, 0.0]]
+/// The batched quads' vertices (`crate::gpu::batch`): five `float4`s, the
+/// semantics `QUAD0`..`QUAD4` of `quad_vs`.
+pub(crate) const QUAD_STRIDE: u32 = 80;
+
+/// The input layout of `quad_vs`: `QUAD0`..`QUAD4`, a `float4` each, one
+/// after the other in one vertex buffer.
+pub(crate) fn quad_elements() -> [InputElementDesc; 5] {
+    std::array::from_fn(|i| InputElementDesc {
+        SemanticName: c"QUAD".as_ptr() as *const u8,
+        SemanticIndex: i as u32,
+        Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
+        InputSlot: 0,
+        AlignedByteOffset: i as u32 * 16,
+        InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+        InstanceDataStepRate: 0,
+    })
 }
 
-/// `tex_ps`: `u1` the rect, `u2` the uv, `u3` the uv clamp, `u4` the tint,
-/// `u5` the device pixels per local unit (x, y), the opacity and whether
-/// the texture is premultiplied, `u6` whether edges are antialiased and
-/// whether it is sampled nearest.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn tex_constants(
-    xf: [f32; 4],
-    rect: [f32; 4],
-    uv: [f32; 4],
-    clamp: [f32; 4],
-    tint: [f32; 4],
-    px: (f32, f32),
-    opacity: f32,
-    premul: bool,
-    aa: bool,
-    nearest: bool,
-) -> [[f32; 4]; 7] {
-    let flag = |b: bool| if b { 1.0 } else { 0.0 };
-    [
-        xf,
-        rect,
-        uv,
-        clamp,
-        tint,
-        [px.0, px.1, opacity, flag(premul)],
-        [flag(aa), flag(nearest), 0.0, 0.0],
-    ]
+/// `quad_ps` and `quadbox_ps`: `u1.x` whether the batch's texture is
+/// sampled nearest.
+pub(crate) fn quad_constants(xf: [f32; 4], nearest: bool) -> [[f32; 4]; 2] {
+    [xf, [if nearest { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]]
 }
 
 /// `flat_ps`: `u1` the color.
@@ -678,6 +688,7 @@ mod tests {
         assert_eq!(size_of::<SwapChainDesc1>(), 48);
         assert_eq!(size_of::<Viewport>(), 24);
         assert_eq!(size_of::<D3dRect>(), 16);
+        assert_eq!(size_of::<D3dBox>(), 24);
         if size_of::<usize>() == 8 {
             assert_eq!(size_of::<PresentParameters>(), 32);
         }
@@ -739,27 +750,36 @@ mod tests {
     fn constants_are_laid_out_as_the_shaders_read_them() {
         let xf = device_to_clip(200, 100);
         assert_eq!(xf, [0.01, -0.02, -1.0, 1.0]);
-        let b = box_constants(xf, [1.0, 2.0, 3.0, 4.0], [0.5; 4], 6.0, 2.0);
-        assert_eq!(b[0], xf);
-        assert_eq!(b[3], [6.0, 2.0, 0.0, 0.0]);
-        let t = tex_constants(
-            xf,
-            [0.0; 4],
-            [0.0, 0.0, 1.0, 1.0],
-            [0.1, 0.1, 0.9, 0.9],
-            [1.0; 4],
-            (2.0, 3.0),
-            0.5,
-            true,
-            false,
-            true,
-        );
-        assert_eq!(t[5], [2.0, 3.0, 0.5, 1.0]);
-        assert_eq!(t[6], [0.0, 1.0, 0.0, 0.0]);
-        assert!(size_of_val(&t) <= CONSTANTS_BYTES);
+        let q = quad_constants(xf, true);
+        assert_eq!(q, [xf, [1.0, 0.0, 0.0, 0.0]]);
+        assert_eq!(quad_constants(xf, false)[1][0], 0.0);
         let r = resolve_constants(xf, [1.0; 4], [0.25, 0.5], 1.0);
         assert_eq!(r[2], [0.25, 0.5, 1.0, 0.0]);
         assert_eq!(flat_constants(xf, [0.0; 4])[1], [0.0; 4]);
+    }
+
+    #[test]
+    fn the_quad_layout_is_the_batch_vertex_format() {
+        use crate::gpu::batch::QUAD_FLOATS;
+        assert_eq!(QUAD_STRIDE as usize, QUAD_FLOATS * 4);
+        let e = quad_elements();
+        for (i, e) in e.iter().enumerate() {
+            assert_eq!(e.SemanticIndex, i as u32);
+            assert_eq!(e.AlignedByteOffset, i as u32 * 16);
+            assert_eq!(e.Format, DXGI_FORMAT_R32G32B32A32_FLOAT);
+        }
+        assert!(e[4].AlignedByteOffset + 16 <= QUAD_STRIDE);
+        assert_eq!(
+            D3dBox::pixels([1, 2, 5, 9]),
+            D3dBox {
+                left: 1,
+                top: 2,
+                front: 0,
+                right: 5,
+                bottom: 9,
+                back: 1
+            }
+        );
     }
 
     #[test]

@@ -8,8 +8,9 @@
 //! use.
 
 pub(crate) const SCENE_VERT: &[u8] = include_bytes!("../shaders/scene.vert.spv");
-pub(crate) const BOX_FRAG: &[u8] = include_bytes!("../shaders/box.frag.spv");
-pub(crate) const TEX_FRAG: &[u8] = include_bytes!("../shaders/tex.frag.spv");
+pub(crate) const QUAD_VERT: &[u8] = include_bytes!("../shaders/quad.vert.spv");
+pub(crate) const QUAD_FRAG: &[u8] = include_bytes!("../shaders/quad.frag.spv");
+pub(crate) const QUADBOX_FRAG: &[u8] = include_bytes!("../shaders/quadbox.frag.spv");
 pub(crate) const FLAT_FRAG: &[u8] = include_bytes!("../shaders/flat.frag.spv");
 pub(crate) const RESOLVE_FRAG: &[u8] = include_bytes!("../shaders/resolve.frag.spv");
 
@@ -109,32 +110,14 @@ mod tests {
     }
 
     #[test]
-    fn the_box_shader_reads_its_push_constants_where_they_are_written() {
-        let r = reflect(BOX_FRAG);
-        assert_eq!(
-            r.push,
-            bytes(&[BOX_RECT, BOX_COLOR, BOX_RADIUS, BOX_STROKE])
-        );
-        assert!(r.bindings.is_empty());
-    }
-
-    #[test]
-    fn the_texture_shader_reads_its_push_constants_and_one_sampler() {
-        let r = reflect(TEX_FRAG);
-        assert_eq!(
-            r.push,
-            bytes(&[
-                TEX_RECT,
-                TEX_UV,
-                TEX_CLAMP,
-                TEX_TINT,
-                TEX_PX,
-                TEX_OPACITY,
-                TEX_PREMUL,
-                TEX_AA
-            ])
-        );
+    fn the_quad_shaders_read_xf_and_one_sampler_at_most() {
+        assert_eq!(reflect(QUAD_VERT).push, bytes(&[XF]));
+        assert!(reflect(QUAD_VERT).bindings.is_empty());
+        let r = reflect(QUAD_FRAG);
+        assert!(r.push.is_empty());
         assert_eq!(r.bindings, vec![(0, 0)]);
+        let r = reflect(QUADBOX_FRAG);
+        assert!(r.push.is_empty() && r.bindings.is_empty());
     }
 
     #[test]
@@ -147,7 +130,7 @@ mod tests {
 
     #[test]
     fn every_push_constant_fits_the_range() {
-        for spv in [SCENE_VERT, BOX_FRAG, TEX_FRAG, FLAT_FRAG, RESOLVE_FRAG] {
+        for spv in [SCENE_VERT, QUAD_VERT, FLAT_FRAG, RESOLVE_FRAG] {
             let r = reflect(spv);
             // The last member is at most a vec4 (16 bytes).
             assert!(r.push.iter().all(|&o| o + 4 <= PUSH_BYTES));

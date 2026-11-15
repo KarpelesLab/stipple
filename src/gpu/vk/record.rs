@@ -10,9 +10,13 @@
 //! stencil-and-cover into a supersampled scratch target, resolved into the
 //! level. The executor then only turns each [`Cmd`] into Vulkan commands.
 //!
-//! The vertices of the whole frame go into one array (`[x, y, aux_x, aux_y]`
-//! each, device pixels, top-left origin); each draw names a range of it.
+//! The vertices of the whole frame go into two arrays: the paths', clips'
+//! and resolves' (`[x, y, aux_x, aux_y]` each, device pixels, top-left
+//! origin), and the batched quads' (`crate::gpu::batch`'s format, a batch of
+//! boxes and textured quads drawn with one call); each draw names a range of
+//! one of them.
 
+use crate::gpu::batch::{self, QUAD_FLOATS, TexRef};
 use crate::gpu::ops::{Clip, Op, Plan, Premul, Sample};
 use crate::render::Pixmap;
 use oxideav_core::Transform2D;
@@ -33,10 +37,11 @@ pub(crate) enum Target {
 /// The pipelines, each a shader pair with its blend and stencil state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Pipe {
-    /// Boxes, on the frame or a layer, inside the stencil clip.
-    Box,
-    /// Textured quads (images, glyphs, layers), inside the stencil clip.
-    Tex,
+    /// A batch of boxes (no texture), on the frame or a layer, inside the
+    /// stencil clip.
+    QuadBoxes,
+    /// A batch of boxes and textured quads (images, glyphs, layers).
+    Quads,
     /// A path's coverage resolved into the frame or a layer.
     Resolve,
     /// A clip polygon counted into the stencil (no color).
@@ -53,8 +58,8 @@ pub(crate) enum Pipe {
 
 impl Pipe {
     pub(crate) const ALL: [Pipe; 9] = [
-        Pipe::Box,
-        Pipe::Tex,
+        Pipe::QuadBoxes,
+        Pipe::Quads,
         Pipe::Resolve,
         Pipe::ClipInc,
         Pipe::ClipDec,
@@ -71,6 +76,11 @@ impl Pipe {
             Pipe::WindNonZero | Pipe::WindEvenOdd | Pipe::CoverNonZero | Pipe::CoverEvenOdd
         )
     }
+
+    /// Whether it draws [`Recording::quads`] (else [`Recording::vertices`]).
+    pub(crate) fn quad(self) -> bool {
+        matches!(self, Pipe::QuadBoxes | Pipe::Quads)
+    }
 }
 
 /// A texture a draw samples.
@@ -78,6 +88,8 @@ impl Pipe {
 pub(crate) enum Texture {
     /// [`Recording::images`]`[index]`, sampled nearest or bilinear.
     Image { index: usize, nearest: bool },
+    /// The glyph atlas page `plan.atlas[page]`.
+    Atlas { page: usize, nearest: bool },
     /// A layer, composited into its parent.
     Layer(usize),
     /// The scratch target, resolved.
@@ -93,18 +105,6 @@ pub(crate) const PUSH_BYTES: u32 = (PUSH_FLOATS * 4) as u32;
 
 // Float indices into the push constants (byte offset / 4), per shader.
 pub(crate) const XF: usize = 0;
-pub(crate) const BOX_RECT: usize = 4;
-pub(crate) const BOX_COLOR: usize = 8;
-pub(crate) const BOX_RADIUS: usize = 12;
-pub(crate) const BOX_STROKE: usize = 13;
-pub(crate) const TEX_RECT: usize = 4;
-pub(crate) const TEX_UV: usize = 8;
-pub(crate) const TEX_CLAMP: usize = 12;
-pub(crate) const TEX_TINT: usize = 16;
-pub(crate) const TEX_PX: usize = 20;
-pub(crate) const TEX_OPACITY: usize = 22;
-pub(crate) const TEX_PREMUL: usize = 23;
-pub(crate) const TEX_AA: usize = 24;
 pub(crate) const FLAT_COLOR: usize = 4;
 pub(crate) const RESOLVE_COLOR: usize = 4;
 pub(crate) const RESOLVE_INV: usize = 8;
@@ -120,7 +120,8 @@ pub(crate) struct Draw {
     pub scissor: [i32; 4],
     /// The stencil reference (the clip depth, or 0).
     pub reference: u32,
-    /// The first vertex in [`Recording::vertices`] and how many.
+    /// The first vertex in [`Recording::vertices`] (in
+    /// [`Recording::quads`] for a [`Pipe::quad`] one) and how many.
     pub first: u32,
     pub count: u32,
     pub push: Push,
@@ -145,6 +146,8 @@ pub(crate) struct Recording {
     pub cmds: Vec<Cmd>,
     /// `[x, y, aux_x, aux_y]` per vertex.
     pub vertices: Vec<f32>,
+    /// The batched quads' vertices, [`QUAD_FLOATS`] each.
+    pub quads: Vec<f32>,
     /// The images the frame draws, each once.
     pub images: Vec<Arc<Pixmap>>,
     /// Layers in use at once, at most.
@@ -316,72 +319,28 @@ impl Recorder {
         Some(i)
     }
 
-    fn draw_box(&mut self, level: &Level, rect: [f32; 4], radius: f32, stroke: f32, color: Premul) {
-        if !self.bind(level) {
+    /// Draw the quad vertices `verts` (see `crate::gpu::batch`) with one
+    /// call: sampling `texture`, or boxes only without one.
+    fn draw_quads(&mut self, level: &Level, verts: &[f32], texture: Option<Texture>) {
+        if verts.is_empty() || !self.bind(level) {
             return;
         }
-        let pad = 1.0 + stroke * 0.5;
-        let (x0, y0, x1, y1) = (rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad);
-        #[rustfmt::skip]
-        let v = [
-            x0, y0, x0, y0,  x1, y0, x1, y0,  x0, y1, x0, y1,
-            x0, y1, x0, y1,  x1, y0, x1, y0,  x1, y1, x1, y1,
-        ];
-        let mut p = Self::push(xf(self.w, self.h));
-        p[BOX_RECT..BOX_RECT + 4].copy_from_slice(&rect);
-        p[BOX_COLOR..BOX_COLOR + 4].copy_from_slice(&color);
-        p[BOX_RADIUS] = radius;
-        p[BOX_STROKE] = stroke;
-        self.draw(Pipe::Box, level.scissor, level.depth, &v, p, None);
-    }
-
-    /// Draw `texture` over the local `rect` through `m`: `premul` if its
-    /// pixels are premultiplied, `aa` to antialias its edges.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_texture(
-        &mut self,
-        level: &Level,
-        texture: Texture,
-        m: &Transform2D,
-        rect: [f32; 4],
-        opacity: f32,
-        premul: bool,
-        aa: bool,
-        sample: &Sample,
-    ) {
-        if !self.bind(level) {
-            return;
-        }
-        let px = (m.a.hypot(m.b).max(1e-6), m.c.hypot(m.d).max(1e-6));
-        let (pu, pv) = if aa {
-            (1.0 / px.0, 1.0 / px.1)
+        let first = (self.out.quads.len() / QUAD_FLOATS) as u32;
+        self.out.quads.extend_from_slice(verts);
+        let pipe = if texture.is_some() {
+            Pipe::Quads
         } else {
-            (0.0, 0.0)
+            Pipe::QuadBoxes
         };
-        let (x0, y0, x1, y1) = (rect[0] - pu, rect[1] - pv, rect[2] + pu, rect[3] + pv);
-        let corner = |x: f32, y: f32| {
-            let d = m.apply(oxideav_core::Point { x, y });
-            [d.x, d.y, x, y]
-        };
-        let (a, b, c, d) = (
-            corner(x0, y0),
-            corner(x1, y0),
-            corner(x0, y1),
-            corner(x1, y1),
-        );
-        let v: Vec<f32> = [a, b, c, c, b, d].concat();
-        let flag = |b: bool| if b { 1.0 } else { 0.0 };
-        let mut p = Self::push(xf(self.w, self.h));
-        p[TEX_RECT..TEX_RECT + 4].copy_from_slice(&rect);
-        p[TEX_UV..TEX_UV + 4].copy_from_slice(&sample.uv);
-        p[TEX_CLAMP..TEX_CLAMP + 4].copy_from_slice(&sample.clamp);
-        p[TEX_TINT..TEX_TINT + 4].copy_from_slice(&sample.tint);
-        p[TEX_PX] = px.0;
-        p[TEX_PX + 1] = px.1;
-        p[TEX_OPACITY] = opacity;
-        p[TEX_PREMUL] = flag(premul);
-        p[TEX_AA] = flag(aa);
-        self.draw(Pipe::Tex, level.scissor, level.depth, &v, p, Some(texture));
+        self.out.cmds.push(Cmd::Draw(Draw {
+            pipe,
+            scissor: level.scissor,
+            reference: level.depth,
+            first,
+            count: (verts.len() / QUAD_FLOATS) as u32,
+            push: Self::push(xf(self.w, self.h)),
+            texture,
+        }));
     }
 
     /// Fill `contours` by stencil-and-cover: the winding into the scratch
@@ -497,9 +456,9 @@ impl Recorder {
 
     fn composite(&mut self, layer: &Level, parent: &Level) {
         let full = [0.0, 0.0, self.w as f32, self.h as f32];
-        self.draw_texture(
-            parent,
-            Texture::Layer(layer.layer.unwrap()),
+        let mut v = Vec::with_capacity(batch::QUAD_VERTICES * QUAD_FLOATS);
+        batch::tex_quad(
+            &mut v,
             &Transform2D::identity(),
             full,
             layer.opacity,
@@ -507,6 +466,8 @@ impl Recorder {
             false,
             &Sample::WHOLE,
         );
+        let texture = Texture::Layer(layer.layer.unwrap());
+        self.draw_quads(parent, &v, Some(texture));
     }
 
     fn frame(&mut self, plan: &Plan) {
@@ -530,17 +491,33 @@ impl Recorder {
         // starts cleared, see the executor).
         self.pass(Target::Frame, plan.partial.is_none().then_some(clear));
 
-        for op in &plan.ops {
-            match op {
-                Op::Box {
-                    rect,
-                    radius,
-                    stroke,
-                    color,
-                } => {
+        for cmd in &plan.cmds {
+            let op = match cmd {
+                batch::Cmd::Quads(q) => {
+                    let texture = match &q.texture {
+                        None => None,
+                        Some(TexRef::Image(image)) => {
+                            self.image(image).map(|index| Texture::Image {
+                                index,
+                                nearest: q.nearest,
+                            })
+                        }
+                        Some(TexRef::Atlas(page)) => Some(Texture::Atlas {
+                            page: *page,
+                            nearest: q.nearest,
+                        }),
+                    };
+                    let n = QUAD_FLOATS;
+                    let verts = &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
                     let level = levels.last().unwrap();
-                    self.draw_box(level, *rect, *radius, *stroke, *color);
+                    self.draw_quads(level, verts, texture);
+                    continue;
                 }
+                batch::Cmd::Op(i) => &plan.ops[*i],
+            };
+            match op {
+                // Batched into `Cmd::Quads`.
+                Op::Box { .. } | Op::Image { .. } => {}
                 Op::Path {
                     contours,
                     even_odd,
@@ -549,29 +526,6 @@ impl Recorder {
                 } => {
                     let level = levels.last().unwrap();
                     self.draw_path(level, contours, *even_odd, *color, *bbox);
-                }
-                Op::Image {
-                    image,
-                    transform,
-                    rect,
-                    opacity,
-                    uv,
-                    tint,
-                    nearest,
-                } => {
-                    let Some(index) = self.image(image) else {
-                        continue;
-                    };
-                    let size = image.size();
-                    let sample = Sample::region(*uv, size.width, size.height, *tint, *nearest);
-                    let texture = Texture::Image {
-                        index,
-                        nearest: sample.nearest,
-                    };
-                    let level = levels.last().unwrap();
-                    self.draw_texture(
-                        level, texture, transform, *rect, *opacity, false, true, &sample,
-                    );
                 }
                 Op::PushClip(Clip::Rect(r)) => {
                     let level = levels.last_mut().unwrap();
@@ -661,11 +615,15 @@ mod tests {
     use crate::render::Color;
 
     fn plan(ops: Vec<Op>) -> Plan {
+        let (cmds, quads) = batch::batch(&ops, &[]);
         Plan {
             size: PhysicalSize::new(100, 50),
             background: Color::rgb(255, 0, 0),
             ops,
             partial: None,
+            atlas: Vec::new(),
+            cmds,
+            quads,
         }
     }
 
@@ -704,7 +662,7 @@ mod tests {
 
     fn draw_image(img: &Arc<Pixmap>, nearest: bool) -> Op {
         Op::Image {
-            image: img.clone(),
+            image: crate::gpu::ops::Source::Image(img.clone()),
             transform: Transform2D::identity(),
             rect: [0.0, 0.0, 16.0, 16.0],
             opacity: 1.0,
@@ -744,21 +702,23 @@ mod tests {
     }
 
     #[test]
-    fn a_box_is_one_quad_with_its_uniforms() {
-        let r = record(&plan(vec![a_box()]), (0, 0), 4096);
+    fn boxes_are_one_draw_of_quads() {
+        let r = record(&plan(vec![a_box(), a_box()]), (0, 0), 4096);
         let d = draws(&r);
         assert_eq!(d.len(), 1);
         let d = d[0];
-        assert_eq!(d.pipe, Pipe::Box);
-        assert_eq!((d.first, d.count), (0, 6));
+        assert_eq!(d.pipe, Pipe::QuadBoxes);
+        assert_eq!((d.first, d.count), (0, 12));
         assert_eq!(d.scissor, [0, 0, 100, 50]);
         assert_eq!(d.reference, 0);
+        assert_eq!(d.texture, None);
         assert_eq!(&d.push[XF..XF + 4], &[0.02, 0.04, -1.0, -1.0]);
-        assert_eq!(&d.push[BOX_RECT..BOX_RECT + 4], &[10.0, 10.0, 30.0, 20.0]);
-        assert_eq!(&d.push[BOX_COLOR..BOX_COLOR + 4], &[0.5, 0.0, 0.0, 0.5]);
-        // Padded by a pixel for the antialiased edge.
-        assert_eq!(&r.vertices[..4], &[9.0, 9.0, 9.0, 9.0]);
-        assert_eq!(r.vertices.len(), 24);
+        // Padded by a pixel for the antialiased edge, the rect and color
+        // beside it.
+        assert_eq!(&r.quads[..8], &[9.0, 9.0, 9.0, 9.0, 10.0, 10.0, 30.0, 20.0]);
+        assert_eq!(&r.quads[8..12], &[0.5, 0.0, 0.0, 0.5]);
+        assert_eq!(r.quads.len(), 12 * QUAD_FLOATS);
+        assert!(r.vertices.is_empty());
     }
 
     #[test]
@@ -879,11 +839,18 @@ mod tests {
         );
         let d = draws(&r);
         assert_eq!(d[2].texture, Some(Texture::Layer(1)));
-        assert_eq!(d[2].push[TEX_OPACITY], 0.25);
-        assert_eq!(d[2].push[TEX_PREMUL], 1.0);
-        assert_eq!(d[2].push[TEX_AA], 0.0);
+        assert_eq!(d[2].pipe, Pipe::Quads);
+        // Premultiplied texels, at the layer's opacity, edges not
+        // antialiased.
+        let v = &r.quads[d[2].first as usize * QUAD_FLOATS..];
+        assert_eq!(
+            &v[12..17],
+            &[0.25, 0.25, 0.25, 0.25, batch::MODE_TEX_PREMUL]
+        );
+        assert_eq!(v[4], batch::NO_EDGE);
         assert_eq!(d[3].texture, Some(Texture::Layer(0)));
-        assert_eq!(d[3].push[TEX_OPACITY], 0.5);
+        let v = &r.quads[d[3].first as usize * QUAD_FLOATS..];
+        assert_eq!(v[12], 0.5);
         assert_eq!(r.textures(), vec![Texture::Layer(1), Texture::Layer(0)]);
     }
 
@@ -943,11 +910,11 @@ mod tests {
             vec![
                 (Pipe::ClipInc, 0),
                 (Pipe::ClipInc, 1),
-                (Pipe::Box, 2),
+                (Pipe::QuadBoxes, 2),
                 (Pipe::ClipDec, 2),
-                (Pipe::Box, 1),
+                (Pipe::QuadBoxes, 1),
                 (Pipe::ClipDec, 1),
-                (Pipe::Box, 0),
+                (Pipe::QuadBoxes, 0),
             ]
         );
     }
@@ -987,31 +954,33 @@ mod tests {
         );
         // Kept half a texel inside the image.
         let d = &draws(&r)[1];
+        let v = &r.quads[d.first as usize * QUAD_FLOATS..];
         assert_eq!(
-            &d.push[TEX_CLAMP..TEX_CLAMP + 4],
+            &v[8..12],
             &[1.0 / 16.0, 1.0 / 8.0, 1.0 - 1.0 / 16.0, 1.0 - 1.0 / 8.0]
         );
-        assert_eq!(d.push[TEX_PREMUL], 0.0);
-        assert_eq!(d.push[TEX_AA], 1.0);
+        assert_eq!(v[16], batch::MODE_TEX);
+        assert_ne!(v[4], batch::NO_EDGE, "antialiased edges");
     }
 
     #[test]
-    fn empty_and_oversized_images_are_skipped() {
+    fn oversized_images_are_left_out() {
         let r = record(
-            &plan(vec![
-                draw_image(&image(0, 4), false),
-                draw_image(&image(5000, 4), false),
-            ]),
+            &plan(vec![draw_image(&image(5000, 4), false)]),
             (0, 0),
             4096,
         );
         assert!(r.images.is_empty());
-        assert!(draws(&r).is_empty());
+        // Drawn without a texture, by the shader that leaves textured
+        // quads out.
+        let d = draws(&r);
+        assert_eq!(d.len(), 1);
+        assert_eq!((d[0].pipe, d[0].texture), (Pipe::QuadBoxes, None));
     }
 
     #[test]
     fn push_constant_offsets_fit_the_range() {
-        for i in [BOX_STROKE, TEX_AA, RESOLVE_TAP, FLAT_COLOR + 3] {
+        for i in [RESOLVE_TAP, FLAT_COLOR + 3] {
             assert!(i < PUSH_FLOATS);
         }
         // Vulkan guarantees 128 bytes of push constants.

@@ -6,17 +6,18 @@
 // with its vertices already in device pixels. This file draws it into the
 // app's canvas with WebGPU (`canvas.getContext("webgpu")`, WGSL shaders) or,
 // where the browser has no WebGPU, WebGL2 (GLSL ES 3.0), the same way the
-// Metal executor does natively (src/gpu/metal_scene.rs): analytic boxes,
-// paths by stencil-and-cover at 4x4 supersampling in a scratch target,
-// textured quads for images and glyphs, scissor and stencil clips, and
+// Metal executor does natively (src/gpu/metal_scene.rs): batches of analytic
+// boxes and textured quads (images, glyphs from the atlas) each one draw
+// (src/gpu/batch.rs), paths by stencil-and-cover at 4x4 supersampling in a
+// scratch target, scissor and stencil clips, and
 // layers in offscreen targets composited at their opacity. Everything is
 // blended in premultiplied alpha on the encoded sRGB values, as the software
 // renderer blends. No read-back: the canvas shows what was drawn.
 //
 // The frame is first *recorded* (shared by both APIs: the clip, layer and
-// path logic) into a list of render-target switches and draws plus one array
-// of vertices and one of uniforms, then *replayed* by the API's backend with
-// one upload of each.
+// path logic) into a list of render-target switches and draws plus two
+// arrays of vertices (paths and clips; batched quads) and one of uniforms,
+// then *replayed* by the API's backend with one upload of each.
 //
 // A frame can be partial (the header's flags): it redraws only what changed
 // (its ops are clipped to that) over the last frame, so the last frame is
@@ -35,13 +36,19 @@
 
 // ---- The op buffer (src/gpu/web.rs) -----------------------------------------
 
-const OP_BOX = 1, OP_PATH = 2, OP_IMAGE = 3, OP_CLIP_RECT = 4, OP_CLIP_POLY = 5,
-  OP_POP_CLIP = 6, OP_LAYER = 7, OP_POP_LAYER = 8;
+const OP_PATH = 2, OP_CLIP_RECT = 4, OP_CLIP_POLY = 5,
+  OP_POP_CLIP = 6, OP_LAYER = 7, OP_POP_LAYER = 8, OP_QUADS = 9;
 
 // What a recorded draw uses: its pipeline (shader, blending, stencil state).
-const P_BOX = 0, P_TEX = 1, P_RESOLVE = 2, P_CLIP_INC = 3, P_CLIP_DEC = 4,
+// P_QUAD draws a batch of boxes and textured quads, P_QUADBOX one of boxes
+// only (no texture); both read the quad vertices (QUAD_FLOATS each, the
+// format of src/gpu/batch.rs), the others the 4-float ones.
+const P_QUAD = 0, P_QUADBOX = 1, P_RESOLVE = 2, P_CLIP_INC = 3, P_CLIP_DEC = 4,
   P_WIND_NZ = 5, P_WIND_EO = 6, P_COVER_NZ = 7, P_COVER_EO = 8;
-const TEXTURED = [false, true, true, false, false, false, false, false, false];
+const TEXTURED = [true, false, true, false, false, false, false, false, false];
+const QUAD = [true, true, false, false, false, false, false, false, false];
+const QUAD_FLOATS = 20;
+const NO_EDGE = 1e4;
 
 // Render targets: the frame, a layer (0, 1, ...), the path scratch.
 const T_FRAME = -1, T_SCRATCH = -2;
@@ -71,6 +78,8 @@ class Recording {
     this.ncmd = 0;
     this.verts = new Float32Array(16384);
     this.nvert = 0; // vertices (4 floats each)
+    this.quads = new Float32Array(65536);
+    this.nquad = 0; // quad vertices (QUAD_FLOATS each)
     this.unis = new Float32Array(4096);
     this.nslot = 0;
     this.stride = 64; // floats per slot
@@ -84,6 +93,7 @@ class Recording {
     this.stride = stride;
     this.ncmd = 0;
     this.nvert = 0;
+    this.nquad = 0;
     this.nslot = 0;
     this.layers = 0;
     this.scratchW = 0;
@@ -117,6 +127,39 @@ class Recording {
   copy(f, at, n) {
     const first = this.room(n);
     this.verts.set(f.subarray(at, at + n * 4), first * 4);
+    return first;
+  }
+
+  // Room for `n` more quad vertices; returns the first one's index.
+  roomQuads(n) {
+    const need = (this.nquad + n) * QUAD_FLOATS;
+    if (need > this.quads.length) {
+      const v = new Float32Array(Math.max(need, this.quads.length * 2));
+      v.set(this.quads.subarray(0, this.nquad * QUAD_FLOATS));
+      this.quads = v;
+    }
+    const first = this.nquad;
+    this.nquad += n;
+    return first;
+  }
+
+  // Copy `n` quad vertices from `f` at word `at`.
+  copyQuads(f, at, n) {
+    const first = this.roomQuads(n);
+    this.quads.set(f.subarray(at, at + n * QUAD_FLOATS), first * QUAD_FLOATS);
+    return first;
+  }
+
+  // A `w` x `h` layer's premultiplied texture over the whole target at
+  // `opacity`, as a quad (batch.rs's `tex_quad`, edges not antialiased).
+  layerQuad(w, h, opacity) {
+    const first = this.roomQuads(6);
+    let o = first * QUAD_FLOATS;
+    for (const [x, y] of [[0, 0], [w, 0], [0, h], [0, h], [w, 0], [w, h]]) {
+      this.quads.set([x, y, x / w, y / h, NO_EDGE, NO_EDGE, NO_EDGE, NO_EDGE, 0, 0, 1, 1,
+        opacity, opacity, opacity, opacity, 2, 0, 0, 0], o);
+      o += QUAD_FLOATS;
+    }
     return first;
   }
 
@@ -178,8 +221,8 @@ function record(u, rec, max, stride) {
     rec.cmd(C_OPEN, target, clear === true ? CLEAR : clear === false ? KEEP : clear, vw, vh);
     on = target;
   };
-  const draw = (pipe, slot, tex, first, count, s, ref) =>
-    rec.cmd(C_DRAW, pipe, slot, tex, first, count, s[0], s[1], s[2] - s[0], s[3] - s[1], ref);
+  const draw = (pipe, slot, tex, first, count, s, ref, nearest = 0) =>
+    rec.cmd(C_DRAW, pipe, slot, tex, first, count, s[0], s[1], s[2] - s[0], s[3] - s[1], ref, nearest);
   // Get ready to draw into `level`; false when its scissor is empty.
   const bind = (level) => {
     if (empty(level.scissor)) return false;
@@ -192,10 +235,8 @@ function record(u, rec, max, stride) {
   };
   const composite = (layer, parent) => {
     if (!bind(parent)) return;
-    const slot = rec.slot(xfFrame, [0, 0, W, H], WHITE, [0, 0, 1, 1], [0, 0, 1, 1],
-      [0, 0, layer.opacity, 1], [1, 1, 0, 0]);
-    const first = rec.quad(0, 0, W, H, (x, y) => [x, y]);
-    draw(P_TEX, slot, layerTex(layer.layer), first, 6, parent.scissor, parent.depth);
+    const first = rec.layerQuad(W, H, layer.opacity);
+    draw(P_QUAD, rec.slot(xfFrame), layerTex(layer.layer), first, 6, parent.scissor, parent.depth);
   };
 
   open(T_FRAME, partial ? CLEAR_STENCIL : CLEAR, W, H);
@@ -204,16 +245,15 @@ function record(u, rec, max, stride) {
     const op = u[p++];
     const level = levels[levels.length - 1];
     switch (op) {
-      case OP_BOX: {
-        const rect = f.subarray(p, p + 4);
-        const radius = f[p + 4], stroke = f[p + 5];
-        const color = f.subarray(p + 6, p + 10);
-        const n = u[p + 10];
-        const at = p + 11;
-        p = at + n * 4;
-        if (!bind(level)) break;
-        const slot = rec.slot(xfFrame, rect, color, null, null, [radius, stroke, 0, 0]);
-        draw(P_BOX, slot, 0, rec.copy(f, at, n), n, level.scissor, level.depth);
+      case OP_QUADS: {
+        const id = u[p], nearest = u[p + 1], n = u[p + 2];
+        const at = p + 3;
+        p = at + n * QUAD_FLOATS;
+        if (n === 0 || !bind(level)) break;
+        // p1.w: nearest (WebGPU's shader picks its sampler by it).
+        const slot = rec.slot(xfFrame, null, null, null, null, null, [0, 0, 0, nearest]);
+        draw(id ? P_QUAD : P_QUADBOX, slot, id, rec.copyQuads(f, at, n), n, level.scissor,
+          level.depth, nearest);
         break;
       }
       case OP_PATH: {
@@ -246,23 +286,6 @@ function record(u, rec, max, stride) {
         const slot = rec.slot(xfFrame, null, color, null, null, null, null, [0, 0, ss > 1 ? ss * 0.25 : 0, 0]);
         const first = rec.quad(x0, y0, x1, y1, (x, y) => [(x - x0) * ss, (y - y0) * ss]);
         draw(P_RESOLVE, slot, TEX_SCRATCH, first, 6, level.scissor, level.depth);
-        break;
-      }
-      case OP_IMAGE: {
-        const id = u[p];
-        const rect = f.subarray(p + 1, p + 5);
-        const px = [f[p + 5], f[p + 6]];
-        const opacity = f[p + 7];
-        const uv = f.subarray(p + 8, p + 12);
-        const clamp = f.subarray(p + 12, p + 16);
-        const tint = f.subarray(p + 16, p + 20);
-        const nearest = u[p + 20];
-        const n = u[p + 21];
-        const at = p + 22;
-        p = at + n * 4;
-        if (!bind(level)) break;
-        const slot = rec.slot(xfFrame, rect, tint, uv, clamp, [0, 0, opacity, 0], [px[0], px[1], 1, nearest]);
-        draw(P_TEX, slot, id, rec.copy(f, at, n), n, level.scissor, level.depth);
         break;
       }
       case OP_CLIP_RECT: {
@@ -354,21 +377,44 @@ struct VOut { @builtin(position) pos: vec4f, @location(0) aux: vec2f };
   return o;
 }
 
-// A box: aux is the device position. Coverage is the exact overlap of the
-// pixel with a sharp box (or ring), or a signed distance for rounded corners.
-// p0: radius, stroke.
+// Batched boxes and textured quads (src/gpu/batch.rs): every input is a
+// vertex attribute, so a run of them is one draw.
+struct QOut {
+  @builtin(position) pos: vec4f,
+  @location(0) p: vec2f,
+  @location(1) a1: vec4f,
+  @location(2) a2: vec4f,
+  @location(3) a3: vec4f,
+  @location(4) mode: f32,
+};
+
+@vertex fn quad_vs(@location(0) a0: vec4f, @location(1) a1: vec4f, @location(2) a2: vec4f,
+                   @location(3) a3: vec4f, @location(4) a4: vec4f) -> QOut {
+  var o: QOut;
+  o.pos = vec4f(a0.xy * u.xf.xy + u.xf.zw, 0.0, 1.0);
+  o.p = a0.zw;
+  o.a1 = a1;
+  o.a2 = a2;
+  o.a3 = a3;
+  o.mode = a4.x;
+  return o;
+}
+
+// A box: p is the device position, a1 the rect, a2 the color, a3 the radius
+// and stroke. Coverage is the exact overlap of the pixel with a sharp box
+// (or ring), or a signed distance for rounded corners.
 fn span(p: f32, h: f32) -> f32 { return max(min(h, p + 0.5) - max(-h, p - 0.5), 0.0); }
 fn boxcov(p: vec2f, h0: vec2f) -> f32 { let h = max(h0, vec2f(0.0)); return span(p.x, h.x) * span(p.y, h.y); }
 fn sdf(p: vec2f, h: vec2f, r: f32) -> f32 {
   let d = abs(p) - (h - vec2f(r));
   return length(max(d, vec2f(0.0))) + min(max(d.x, d.y), 0.0) - r;
 }
-@fragment fn box_fs(i: VOut) -> @location(0) vec4f {
-  let c = (u.rect.xy + u.rect.zw) * 0.5;
-  let h = (u.rect.zw - u.rect.xy) * 0.5;
-  let p = i.aux - c;
-  let radius = u.p0.x;
-  let stroke = u.p0.y;
+fn quad_box(i: QOut) -> vec4f {
+  let c = (i.a1.xy + i.a1.zw) * 0.5;
+  let h = (i.a1.zw - i.a1.xy) * 0.5;
+  let p = i.p - c;
+  let radius = i.a3.x;
+  let stroke = i.a3.y;
   let w = stroke * 0.5;
   var cov: f32;
   if (radius <= 0.0) {
@@ -382,27 +428,30 @@ fn sdf(p: vec2f, h: vec2f, r: f32) -> f32 {
       cov = clamp(0.5 - d, 0.0, 1.0);
     }
   }
-  return u.color * cov;
+  return i.a2 * cov;
 }
 
-// A textured quad: aux is the local position inside rect; uv the part of the
-// texture spread over it, kept within clampr; color the (premultiplied) tint.
-// p0: -, -, opacity, premultiplied texels; p1: device pixels per local unit
-// along x and y (for edge coverage), antialiased edges, nearest.
-@fragment fn tex_fs(i: VOut) -> @location(0) vec4f {
-  let f = (i.aux - u.rect.xy) / (u.rect.zw - u.rect.xy);
-  let uv = clamp(mix(u.uv.xy, u.uv.zw, f), u.clampr.xy, u.clampr.zw);
+// Boxes only (a batch without a texture): textured quads are left out.
+@fragment fn quadbox_fs(i: QOut) -> @location(0) vec4f {
+  if (i.mode < 0.5) { return quad_box(i); }
+  return vec4f(0.0);
+}
+
+// Boxes and textured quads: p is the texture coordinate, kept within a2; a1
+// the distances to the edges in device pixels (for their coverage); a3 the
+// tint times the opacity (premultiplied); mode 2 for premultiplied texels.
+// p1.w: nearest. (Sampled before branching: textureSample needs uniform
+// control flow.)
+@fragment fn quad_fs(i: QOut) -> @location(0) vec4f {
+  let uv = clamp(i.p, i.a2.xy, i.a2.zw);
   let a = textureSample(t, lin, uv);
   let b = textureSample(t, near, uv);
+  if (i.mode < 0.5) { return quad_box(i); }
   var c = select(a, b, u.p1.w > 0.5);
-  if (u.p0.w < 0.5) { c = vec4f(c.rgb * c.a, c.a); }
-  c = c * u.color;
-  var cov = 1.0;
-  if (u.p1.z > 0.5) {
-    let d = min(i.aux - u.rect.xy, u.rect.zw - i.aux) * u.p1.xy;
-    cov = clamp(d.x + 0.5, 0.0, 1.0) * clamp(d.y + 0.5, 0.0, 1.0);
-  }
-  return c * (u.p0.z * cov);
+  if (i.mode < 1.5) { c = vec4f(c.rgb * c.a, c.a); }
+  c = c * i.a3;
+  let cov = clamp(min(i.a1.x, i.a1.z) + 0.5, 0.0, 1.0) * clamp(min(i.a1.y, i.a1.w) + 0.5, 0.0, 1.0);
+  return c * cov;
 }
 
 // A flat color: the stencil and cover passes, and stencil clips.
@@ -443,12 +492,15 @@ async function createWebGpu(claim, log) {
   const blend = { color: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
     alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } };
   const face = (compare, passOp) => ({ compare, passOp, failOp: "keep", depthFailOp: "keep" });
-  const pipeline = (fs, layout, target, { blended = false, write = true, front, back = front, read = 0xff, writeMask = 0 }) =>
+  const plain = { entryPoint: "vs", buffers: [{ arrayStride: 16, attributes: [
+    { shaderLocation: 0, offset: 0, format: "float32x2" },
+    { shaderLocation: 1, offset: 8, format: "float32x2" }] }] };
+  const quads = { entryPoint: "quad_vs", buffers: [{ arrayStride: QUAD_FLOATS * 4,
+    attributes: [0, 1, 2, 3, 4].map((i) => ({ shaderLocation: i, offset: i * 16, format: "float32x4" })) }] };
+  const pipeline = (fs, layout, target, { blended = false, write = true, front, back = front, read = 0xff, writeMask = 0, vertex = plain }) =>
     device.createRenderPipeline({
       layout,
-      vertex: { module, entryPoint: "vs", buffers: [{ arrayStride: 16, attributes: [
-        { shaderLocation: 0, offset: 0, format: "float32x2" },
-        { shaderLocation: 1, offset: 8, format: "float32x2" }] }] },
+      vertex: { module, ...vertex },
       fragment: { module, entryPoint: fs, targets: [{ format: target,
         blend: blended ? blend : undefined, writeMask: write ? GPUColorWrite.ALL : 0 }] },
       primitive: { topology: "triangle-list", cullMode: "none" },
@@ -457,8 +509,8 @@ async function createWebGpu(claim, log) {
     });
   const test = face("equal", "keep");
   const pipes = [];
-  pipes[P_BOX] = pipeline("box_fs", plU, format, { blended: true, front: test });
-  pipes[P_TEX] = pipeline("tex_fs", plT, format, { blended: true, front: test });
+  pipes[P_QUAD] = pipeline("quad_fs", plT, format, { blended: true, front: test, vertex: quads });
+  pipes[P_QUADBOX] = pipeline("quadbox_fs", plU, format, { blended: true, front: test, vertex: quads });
   pipes[P_RESOLVE] = pipeline("resolve_fs", plT, format, { blended: true, front: test });
   pipes[P_CLIP_INC] = pipeline("flat_fs", plU, format, { write: false, front: face("equal", "increment-clamp"), writeMask: 0xff });
   pipes[P_CLIP_DEC] = pipeline("flat_fs", plU, format, { write: false, front: face("equal", "decrement-clamp"), writeMask: 0xff });
@@ -519,6 +571,7 @@ class WebGpuRenderer {
     // The frame target, which keeps the last frame (see `frame`).
     this.frameTex = null;
     this.vbuf = null;
+    this.qbuf = null;
     this.ubuf = null;
     this.gen = 0; // bumped when the uniform buffer is replaced (bind groups follow)
     this.lin = device.createSampler({ magFilter: "linear", minFilter: "linear" });
@@ -548,6 +601,14 @@ class WebGpuRenderer {
     this.device.queue.writeTexture({ texture: tex }, data, { bytesPerRow: w * 4 }, [w, h]);
     this.free(id);
     this.textures.set(id, { tex, view: tex.createView(), bg: null, gen: -1 });
+    return true;
+  }
+
+  // Replace the w x h pixels at (x, y) of texture `id`.
+  textureSub(id, data, x, y, w, h) {
+    const t = this.textures.get(id);
+    if (!t) return false;
+    this.device.queue.writeTexture({ texture: t.tex, origin: [x, y] }, data, { bytesPerRow: w * 4 }, [w, h]);
     return true;
   }
 
@@ -591,6 +652,12 @@ class WebGpuRenderer {
     if (!this.vbuf || this.vbuf.size < vbytes) {
       this.vbuf?.destroy();
       this.vbuf = this.device.createBuffer({ size: Math.max(vbytes * 2, 1 << 18),
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    }
+    const qbytes = Math.max(rec.nquad * QUAD_FLOATS * 4, 16);
+    if (!this.qbuf || this.qbuf.size < qbytes) {
+      this.qbuf?.destroy();
+      this.qbuf = this.device.createBuffer({ size: Math.max(qbytes * 2, 1 << 20),
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     }
     const ubytes = Math.max(rec.nslot, 1) * rec.stride * 4;
@@ -644,11 +711,13 @@ class WebGpuRenderer {
     }
     this.buffers(rec);
     dev.queue.writeBuffer(this.vbuf, 0, rec.verts.buffer, 0, rec.nvert * 16);
+    if (rec.nquad > 0) dev.queue.writeBuffer(this.qbuf, 0, rec.quads.buffer, 0, rec.nquad * QUAD_FLOATS * 4);
     dev.queue.writeBuffer(this.ubuf, 0, rec.unis.buffer, 0, Math.max(rec.nslot, 1) * rec.stride * 4);
     const frameView = this.frameTex.view;
     const enc = dev.createCommandEncoder();
     let pass = null;
     let pipe = -1;
+    let quadsBound = false;
     const c = rec.cmds;
     const bg = rec.bg;
     for (let i = 0; i < rec.ncmd; i++) {
@@ -668,16 +737,23 @@ class WebGpuRenderer {
         });
         if (target === T_SCRATCH) pass.setViewport(0, 0, c[o + 3], c[o + 4], 0, 1);
         pass.setVertexBuffer(0, this.vbuf);
+        quadsBound = false;
         pipe = -1;
         continue;
       }
       // C_DRAW
-      const p = c[o + 1], slot = c[o + 2], tex = c[o + 3];
+      let p = c[o + 1];
+      const slot = c[o + 2], tex = c[o + 3];
       let group = this.bgU;
       if (TEXTURED[p]) {
         const t = tex === TEX_SCRATCH ? this.scratch : tex < 0 ? this.layers[-tex - 1] : this.textures.get(tex);
-        if (!t) continue;
-        group = this.bindGroup(t);
+        if (t) group = this.bindGroup(t);
+        else if (p === P_QUAD) p = P_QUADBOX; // its boxes still draw
+        else continue;
+      }
+      if (QUAD[p] !== quadsBound) {
+        quadsBound = QUAD[p];
+        pass.setVertexBuffer(0, quadsBound ? this.qbuf : this.vbuf);
       }
       if (p !== pipe) { pass.setPipeline(this.pipes[p]); pipe = p; }
       pass.setBindGroup(0, group, [slot * rec.stride * 4]);
@@ -725,6 +801,79 @@ void main() {
 }
 `;
 
+// The batched quads' vertex shader (WGSL's quad_vs).
+const GLSL_QUAD_VS = `#version 300 es
+precision highp float;
+layout(std140) uniform U { vec4 xf; vec4 rect; vec4 color; vec4 uv; vec4 clampr; vec4 p0; vec4 p1; vec4 p2; };
+uniform float u_flip;
+layout(location = 0) in vec4 a0;
+layout(location = 1) in vec4 a1;
+layout(location = 2) in vec4 a2;
+layout(location = 3) in vec4 a3;
+layout(location = 4) in vec4 a4;
+out vec2 v_p;
+out vec4 v_a1;
+out vec4 v_a2;
+out vec4 v_a3;
+out float v_mode;
+void main() {
+  v_p = a0.zw;
+  v_a1 = a1;
+  v_a2 = a2;
+  v_a3 = a3;
+  v_mode = a4.x;
+  gl_Position = vec4(a0.xy * xf.xy + xf.zw, 0.0, 1.0);
+  gl_Position.y *= u_flip;
+}
+`;
+
+const GLSL_QUAD_HEAD = `#version 300 es
+precision highp float;
+uniform sampler2D u_tex;
+in vec2 v_p;
+in vec4 v_a1;
+in vec4 v_a2;
+in vec4 v_a3;
+in float v_mode;
+out vec4 o;
+float span(float p, float h) { return max(min(h, p + 0.5) - max(-h, p - 0.5), 0.0); }
+float boxcov(vec2 p, vec2 h) { h = max(h, vec2(0.0)); return span(p.x, h.x) * span(p.y, h.y); }
+float sdf(vec2 p, vec2 h, float r) {
+  vec2 d = abs(p) - (h - vec2(r));
+  return length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - r;
+}
+vec4 quadBox() {
+  vec2 c = (v_a1.xy + v_a1.zw) * 0.5;
+  vec2 h = (v_a1.zw - v_a1.xy) * 0.5;
+  vec2 p = v_p - c;
+  float radius = v_a3.x, stroke = v_a3.y, w = stroke * 0.5;
+  float cov;
+  if (radius <= 0.0) {
+    cov = stroke > 0.0 ? boxcov(p, h + vec2(w)) - boxcov(p, h - vec2(w)) : boxcov(p, h);
+  } else {
+    float r = min(radius, min(h.x, h.y));
+    float d = sdf(p, h, r);
+    cov = stroke > 0.0 ? clamp(0.5 - (d - w), 0.0, 1.0) - clamp(0.5 - (d + w), 0.0, 1.0)
+                       : clamp(0.5 - d, 0.0, 1.0);
+  }
+  return v_a2 * cov;
+}
+`;
+
+const GLSL_QUAD_FS = {
+  quad: `
+void main() {
+  if (v_mode < 0.5) { o = quadBox(); return; }
+  vec4 c = texture(u_tex, clamp(v_p, v_a2.xy, v_a2.zw));
+  if (v_mode < 1.5) { c.rgb *= c.a; }
+  c *= v_a3;
+  float cov = clamp(min(v_a1.x, v_a1.z) + 0.5, 0.0, 1.0) * clamp(min(v_a1.y, v_a1.w) + 0.5, 0.0, 1.0);
+  o = c * cov;
+}`,
+  quadbox: `
+void main() { o = v_mode < 0.5 ? quadBox() : vec4(0.0); }`,
+};
+
 // The fragment shaders: the WGSL ones above, in GLSL ES 3.0.
 const GLSL_FS_HEAD = `#version 300 es
 precision highp float;
@@ -735,43 +884,6 @@ out vec4 o;
 `;
 
 const GLSL_FS = {
-  box: `
-float span(float p, float h) { return max(min(h, p + 0.5) - max(-h, p - 0.5), 0.0); }
-float boxcov(vec2 p, vec2 h) { h = max(h, vec2(0.0)); return span(p.x, h.x) * span(p.y, h.y); }
-float sdf(vec2 p, vec2 h, float r) {
-  vec2 d = abs(p) - (h - vec2(r));
-  return length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - r;
-}
-void main() {
-  vec2 c = (rect.xy + rect.zw) * 0.5;
-  vec2 h = (rect.zw - rect.xy) * 0.5;
-  vec2 p = v_aux - c;
-  float radius = p0.x, stroke = p0.y, w = stroke * 0.5;
-  float cov;
-  if (radius <= 0.0) {
-    cov = stroke > 0.0 ? boxcov(p, h + vec2(w)) - boxcov(p, h - vec2(w)) : boxcov(p, h);
-  } else {
-    float r = min(radius, min(h.x, h.y));
-    float d = sdf(p, h, r);
-    cov = stroke > 0.0 ? clamp(0.5 - (d - w), 0.0, 1.0) - clamp(0.5 - (d + w), 0.0, 1.0)
-                       : clamp(0.5 - d, 0.0, 1.0);
-  }
-  o = color * cov;
-}`,
-  tex: `
-void main() {
-  vec2 f = (v_aux - rect.xy) / (rect.zw - rect.xy);
-  vec2 st = clamp(mix(uv.xy, uv.zw, f), clampr.xy, clampr.zw);
-  vec4 c = texture(u_tex, st);
-  if (p0.w < 0.5) { c.rgb *= c.a; }
-  c *= color;
-  float cov = 1.0;
-  if (p1.z > 0.5) {
-    vec2 d = min(v_aux - rect.xy, rect.zw - v_aux) * p1.xy;
-    cov = clamp(d.x + 0.5, 0.0, 1.0) * clamp(d.y + 0.5, 0.0, 1.0);
-  }
-  o = c * (p0.z * cov);
-}`,
   flat: `
 void main() { o = color; }`,
   resolve: `
@@ -807,10 +919,15 @@ function createWebGl2(canvas, log) {
   const programs = {};
   try {
     const vs = shader(gl.VERTEX_SHADER, GLSL_VS);
-    for (const [name, body] of Object.entries(GLSL_FS)) {
+    const qvs = shader(gl.VERTEX_SHADER, GLSL_QUAD_VS);
+    const all = [
+      ...Object.entries(GLSL_FS).map(([name, body]) => [name, vs, GLSL_FS_HEAD + body]),
+      ...Object.entries(GLSL_QUAD_FS).map(([name, body]) => [name, qvs, GLSL_QUAD_HEAD + body]),
+    ];
+    for (const [name, v, fs] of all) {
       const p = gl.createProgram();
-      gl.attachShader(p, vs);
-      gl.attachShader(p, shader(gl.FRAGMENT_SHADER, GLSL_FS_HEAD + body));
+      gl.attachShader(p, v);
+      gl.attachShader(p, shader(gl.FRAGMENT_SHADER, fs));
       gl.linkProgram(p);
       if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
       gl.uniformBlockBinding(p, gl.getUniformBlockIndex(p, "U"), 0);
@@ -851,6 +968,15 @@ class WebGl2Renderer {
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 16, 0);
     gl.enableVertexAttribArray(1);
     gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 16, 8);
+    this.qvao = gl.createVertexArray();
+    this.qvbo = gl.createBuffer();
+    gl.bindVertexArray(this.qvao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.qvbo);
+    for (let i = 0; i < 5; i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, 4, gl.FLOAT, false, QUAD_FLOATS * 4, i * 16);
+    }
+    gl.bindVertexArray(null);
     const sampler = (filter) => {
       const s = gl.createSampler();
       gl.samplerParameteri(s, gl.TEXTURE_MIN_FILTER, filter);
@@ -908,6 +1034,20 @@ class WebGl2Renderer {
     return true;
   }
 
+  // Replace the w x h pixels at (x, y) of texture `id`.
+  textureSub(id, data, x, y, w, h) {
+    const tex = this.textures.get(id);
+    if (!tex || this.lost) return false;
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    return true;
+  }
+
   free(id) {
     // A lost context took its textures with it.
     const del = (t) => { if (!this.lost) this.gl.deleteTexture(t); };
@@ -948,7 +1088,7 @@ class WebGl2Renderer {
   state(p, ref) {
     const gl = this.gl;
     switch (p) {
-      case P_BOX: case P_TEX: case P_RESOLVE:
+      case P_QUAD: case P_QUADBOX: case P_RESOLVE:
         gl.enable(gl.BLEND);
         gl.colorMask(true, true, true, true);
         gl.stencilFunc(gl.EQUAL, ref, 0xff);
@@ -1014,9 +1154,12 @@ class WebGl2Renderer {
       this.scratch = this.target(sw, sh, gl.R8);
     }
     if (this.scratch) fillResolve(rec, this.scratch.w, this.scratch.h);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.qvbo);
+    gl.bufferData(gl.ARRAY_BUFFER, rec.quads.subarray(0, rec.nquad * QUAD_FLOATS), gl.STREAM_DRAW);
     gl.bindVertexArray(this.vao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
     gl.bufferData(gl.ARRAY_BUFFER, rec.verts.subarray(0, rec.nvert * 4), gl.STREAM_DRAW);
+    let quadsBound = false;
     gl.bindBuffer(gl.UNIFORM_BUFFER, this.ubo);
     gl.bufferData(gl.UNIFORM_BUFFER, rec.unis.subarray(0, Math.max(rec.nslot, 1) * rec.stride), gl.STREAM_DRAW);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -1025,7 +1168,7 @@ class WebGl2Renderer {
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.DEPTH_TEST);
     gl.activeTexture(gl.TEXTURE0);
-    const names = ["box", "tex", "resolve", "flat", "flat", "flat", "flat", "flat", "flat"];
+    const names = ["quad", "quadbox", "resolve", "flat", "flat", "flat", "flat", "flat", "flat"];
     let flip = 1, th = H, prog = null;
     const c = rec.cmds;
     const bg = rec.bg;
@@ -1052,13 +1195,22 @@ class WebGl2Renderer {
         }
         continue;
       }
-      const p = c[o + 1], slot = c[o + 2], tex = c[o + 3];
+      let p = c[o + 1];
+      const slot = c[o + 2], tex = c[o + 3];
       if (TEXTURED[p]) {
         const t = tex === TEX_SCRATCH ? this.scratch?.tex : tex < 0 ? this.layers[-tex - 1]?.tex : this.textures.get(tex);
-        if (!t) continue;
-        gl.bindTexture(gl.TEXTURE_2D, t);
-        const nearest = p === P_TEX && rec.unis[slot * rec.stride + 27] > 0.5;
-        gl.bindSampler(0, nearest ? this.near : this.lin);
+        if (t) {
+          gl.bindTexture(gl.TEXTURE_2D, t);
+          gl.bindSampler(0, p === P_QUAD && c[o + 11] ? this.near : this.lin);
+        } else if (p === P_QUAD) {
+          p = P_QUADBOX; // its boxes still draw
+        } else {
+          continue;
+        }
+      }
+      if (QUAD[p] !== quadsBound) {
+        quadsBound = QUAD[p];
+        gl.bindVertexArray(quadsBound ? this.qvao : this.vao);
       }
       const pr = this.programs[names[p]];
       if (pr !== prog) {
@@ -1076,6 +1228,7 @@ class WebGl2Renderer {
       gl.drawArrays(gl.TRIANGLES, c[o + 4], c[o + 5]);
     }
     gl.bindSampler(0, null);
+    gl.bindVertexArray(null);
     return 0;
   }
 
@@ -1187,6 +1340,10 @@ export function gpuHost({ memory, claim, current, redraw, log = console.log, onF
     gpu_texture(id, ptr, w, h) {
       if (!gpu) return 0;
       return gpu.texture(id, new Uint8Array(memory().buffer, ptr, w * h * 4), w, h) ? 1 : 0;
+    },
+    gpu_texture_sub(id, ptr, x, y, w, h) {
+      if (!gpu) return 0;
+      return gpu.textureSub(id, new Uint8Array(memory().buffer, ptr, w * h * 4), x, y, w, h) ? 1 : 0;
     },
     gpu_free(id) {
       gpu?.free(id);

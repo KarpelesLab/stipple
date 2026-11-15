@@ -2,9 +2,11 @@
 //! offscreen (and read back) or into a window's flip-model DXGI swap chain
 //! (and presented).
 //!
-//! It is the Metal executor (`metal_scene.rs`) translated: the same four
-//! shaders in HLSL (`shaders/scene.hlsl`), compiled with `D3DCompile` when the
-//! executor is created, the same premultiplied blending, stencil-and-cover
+//! It is the Metal executor (`metal_scene.rs`) translated: the same shaders
+//! in HLSL (`shaders/scene.hlsl`), compiled with `D3DCompile` when the
+//! executor is created, each batch of boxes and textured quads
+//! (`crate::gpu::batch`) one draw, the same premultiplied blending,
+//! stencil-and-cover
 //! paths at 4×4 supersampling into a scratch target, layers in pooled
 //! offscreen targets, scissor and stencil clips. Every target is a
 //! `B8G8R8A8_UNORM` color texture with a `D24_UNORM_S8_UINT` one beside it
@@ -19,13 +21,17 @@
 //! vertex buffer used as a ring (`WRITE_NO_OVERWRITE`, `WRITE_DISCARD` when it
 //! wraps), each draw's constants into one dynamic constant buffer
 //! (`WRITE_DISCARD`), images into immutable textures cached by the image's
-//! identity, like the other executors'.
+//! identity, like the other executors', and each glyph atlas page into a
+//! texture brought up to date (`UpdateSubresource`, only what changed) at
+//! the start of the frame.
 //!
 //! Raw COM through vtable slots (`abi.rs`), as in the rest of the Windows
 //! code; no `windows` crate.
 
 use super::{D3D11CreateDevice, blob_bytes, compile_source, release, vmethod};
 use crate::geometry::{PhysicalSize, ScaleFactor};
+use crate::gpu::atlas::{AtlasPage, Upload};
+use crate::gpu::batch::{self, Cmd, QUAD_FLOATS, TexRef};
 use crate::gpu::d3d_abi::*;
 use crate::gpu::ops::{Clip, Op, Plan, Sample};
 use crate::gpu::renderer::{Api, DamageLog, Executor, GpuError};
@@ -159,6 +165,14 @@ struct Texture {
     used: u64,
 }
 
+/// An atlas page's texture, holding `version` of it.
+struct AtlasTex {
+    tex: Com,
+    srv: Com,
+    side: u32,
+    version: u64,
+}
+
 /// A window's swap chain.
 struct Chain {
     swap: Com,
@@ -237,8 +251,15 @@ pub(crate) struct D3dExecutor {
     max: i32,
     vs: Com,
     layout: Com,
-    ps_box: Com,
-    ps_tex: Com,
+    /// The batched quads' vertex shader and input layout, and their pixel
+    /// shaders: boxes only, and boxes with textured quads.
+    quad_vs: Com,
+    quad_layout: Com,
+    ps_quadbox: Com,
+    ps_quad: Com,
+    /// Whether the quads' vertex shader and layout are bound (else the
+    /// paths').
+    quad_bound: bool,
     ps_flat: Com,
     ps_resolve: Com,
     /// Premultiplied source-over; plain writes; no color writes.
@@ -268,8 +289,13 @@ pub(crate) struct D3dExecutor {
     /// Swap chains, by window handle.
     chains: HashMap<usize, Chain>,
     textures: HashMap<usize, Texture>,
+    /// The atlas pages' textures, by page id.
+    atlas: HashMap<u64, AtlasTex>,
+    /// The layer composites' quad vertices.
+    scratch_quads: Vec<f32>,
     count: u64,
     uploads: usize,
+    draws: usize,
 }
 
 impl Drop for D3dExecutor {
@@ -348,8 +374,11 @@ impl D3dExecutor {
                 max,
                 vs: Com::null(),
                 layout: Com::null(),
-                ps_box: Com::null(),
-                ps_tex: Com::null(),
+                quad_vs: Com::null(),
+                quad_layout: Com::null(),
+                ps_quadbox: Com::null(),
+                ps_quad: Com::null(),
+                quad_bound: false,
                 ps_flat: Com::null(),
                 ps_resolve: Com::null(),
                 blend_premul: Com::null(),
@@ -375,8 +404,11 @@ impl D3dExecutor {
                 scratch: None,
                 chains: HashMap::new(),
                 textures: HashMap::new(),
+                atlas: HashMap::new(),
+                scratch_quads: Vec::new(),
                 count: 0,
                 uploads: 0,
+                draws: 0,
             };
             me.build().map_err(|e| match e {
                 GpuError::Lost(e) => GpuError::Unavailable(e),
@@ -424,6 +456,26 @@ impl D3dExecutor {
             )?;
             self.layout = Com(layout);
 
+            let quad_blob = shader(c"quad_vs", c"vs_4_0")?;
+            let (code, len) = blob_bytes(quad_blob.ptr());
+            let mut vs = std::ptr::null_mut();
+            check(
+                com!(dev, VT_DEVICE_CREATE_VERTEX_SHADER,
+                    (*const c_void, usize, *mut c_void, *mut *mut c_void) -> Hresult,
+                    code, len, std::ptr::null_mut(), &mut vs),
+                "CreateVertexShader (quads)",
+            )?;
+            self.quad_vs = Com(vs);
+            let elements = quad_elements();
+            let mut layout = std::ptr::null_mut();
+            check(
+                com!(dev, VT_DEVICE_CREATE_INPUT_LAYOUT,
+                    (*const InputElementDesc, u32, *const c_void, usize, *mut *mut c_void) -> Hresult,
+                    elements.as_ptr(), elements.len() as u32, code, len, &mut layout),
+                "CreateInputLayout (quads)",
+            )?;
+            self.quad_layout = Com(layout);
+
             let pixel = |entry: &core::ffi::CStr| -> Result<Com, GpuError> {
                 let blob = shader(entry, c"ps_4_0")?;
                 let (code, len) = blob_bytes(blob.ptr());
@@ -436,8 +488,8 @@ impl D3dExecutor {
                 )?;
                 Ok(Com(ps))
             };
-            self.ps_box = pixel(c"box_ps")?;
-            self.ps_tex = pixel(c"tex_ps")?;
+            self.ps_quadbox = pixel(c"quadbox_ps")?;
+            self.ps_quad = pixel(c"quad_ps")?;
             self.ps_flat = pixel(c"flat_ps")?;
             self.ps_resolve = pixel(c"resolve_ps")?;
 
@@ -614,6 +666,70 @@ impl D3dExecutor {
         });
     }
 
+    /// Bring the atlas pages' textures up to date with `pages` (a new
+    /// texture with the whole page, or the part that changed copied in),
+    /// and release those of pages gone.
+    unsafe fn sync_atlas(&mut self, pages: &[AtlasPage]) -> Result<(), GpuError> {
+        unsafe {
+            self.atlas.retain(|id, _| pages.iter().any(|p| p.id == *id));
+            for p in pages {
+                let have = self.atlas.get(&p.id).map(|t| (t.side, t.version));
+                match p.upload(have) {
+                    Upload::Nothing => {}
+                    Upload::Whole => {
+                        self.atlas.remove(&p.id);
+                        if p.side > self.max as u32 {
+                            continue;
+                        }
+                        let desc = Texture2dDesc::new(
+                            p.side,
+                            p.side,
+                            DXGI_FORMAT_R8G8B8A8_UNORM,
+                            D3D11_USAGE_DEFAULT,
+                            D3D11_BIND_SHADER_RESOURCE,
+                            0,
+                        );
+                        let data = SubresourceData {
+                            pSysMem: p.pixels.as_ptr() as *const c_void,
+                            SysMemPitch: p.side * 4,
+                            SysMemSlicePitch: 0,
+                        };
+                        let mut tex = std::ptr::null_mut();
+                        check(
+                            com!(self.device.ptr(), VT_DEVICE_CREATE_TEXTURE2D,
+                                (*const Texture2dDesc, *const SubresourceData, *mut *mut c_void) -> Hresult,
+                                &desc, &data, &mut tex),
+                            "CreateTexture2D (atlas)",
+                        )?;
+                        let tex = Com(tex);
+                        let srv = view(self.device.ptr(), VT_DEVICE_CREATE_SRV, tex.ptr())?;
+                        self.atlas.insert(
+                            p.id,
+                            AtlasTex {
+                                tex,
+                                srv,
+                                side: p.side,
+                                version: p.version,
+                            },
+                        );
+                        self.uploads += 1;
+                    }
+                    Upload::Region(r) => {
+                        let t = self.atlas.get_mut(&p.id).unwrap();
+                        let bytes = p.region(r);
+                        let b = D3dBox::pixels(r);
+                        com!(self.ctx.ptr(), VT_CTX_UPDATE_SUBRESOURCE,
+                            (*mut c_void, u32, *const D3dBox, *const c_void, u32, u32) -> (),
+                            t.tex.ptr(), 0, &b, bytes.as_ptr() as *const c_void, (r[2] - r[0]) * 4, 0);
+                        t.version = p.version;
+                        self.uploads += 1;
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
     /// `(rtv, dsv, w, h)` of `on`.
     fn target_of(&self, f: &Frame, on: On) -> (*mut c_void, *mut c_void, i32, i32) {
         let of = |t: &Target| (t.rtv.ptr(), t.stencil.dsv.ptr(), t.w, t.h);
@@ -694,14 +810,13 @@ impl D3dExecutor {
 
     /// The fixed state every frame draws with (after `ClearState`, or
     /// whatever was bound before).
-    unsafe fn fixed_state(&self) {
+    unsafe fn fixed_state(&mut self) {
         unsafe {
             let ctx = self.ctx.ptr();
-            com!(ctx, VT_CTX_IA_SET_INPUT_LAYOUT, (*mut c_void) -> (), self.layout.ptr());
+            self.quad_bound = true;
+            self.use_quads(false);
             com!(ctx, VT_CTX_IA_SET_PRIMITIVE_TOPOLOGY, (u32) -> (),
                 D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            com!(ctx, VT_CTX_VS_SET_SHADER,
-                (*mut c_void, *const *mut c_void, u32) -> (), self.vs.ptr(), std::ptr::null(), 0);
             let cb = self.constants.ptr();
             com!(ctx, VT_CTX_VS_SET_CONSTANT_BUFFERS,
                 (u32, u32, *const *mut c_void) -> (), 0, 1, &cb);
@@ -711,6 +826,26 @@ impl D3dExecutor {
             com!(ctx, VT_CTX_PS_SET_SAMPLERS,
                 (u32, u32, *const *mut c_void) -> (), 0, 2, samplers.as_ptr());
             com!(ctx, VT_CTX_RS_SET_STATE, (*mut c_void) -> (), self.raster.ptr());
+        }
+    }
+
+    /// Bind the quads' vertex shader and input layout (`quads`), or the
+    /// paths'.
+    unsafe fn use_quads(&mut self, quads: bool) {
+        if self.quad_bound == quads {
+            return;
+        }
+        self.quad_bound = quads;
+        let (layout, vs) = if quads {
+            (self.quad_layout.ptr(), self.quad_vs.ptr())
+        } else {
+            (self.layout.ptr(), self.vs.ptr())
+        };
+        unsafe {
+            let ctx = self.ctx.ptr();
+            com!(ctx, VT_CTX_IA_SET_INPUT_LAYOUT, (*mut c_void) -> (), layout);
+            com!(ctx, VT_CTX_VS_SET_SHADER,
+                (*mut c_void, *const *mut c_void, u32) -> (), vs, std::ptr::null(), 0);
         }
     }
 
@@ -724,6 +859,23 @@ impl D3dExecutor {
     /// Draw `verts` (`[x, y, aux_x, aux_y]` each) as triangles with the
     /// shader constants `u` (`u[0]` the device-to-clip mapping).
     unsafe fn submit(&mut self, verts: &[f32], u: &[[f32; 4]]) -> Result<(), GpuError> {
+        unsafe {
+            if verts.is_empty() {
+                return Ok(());
+            }
+            self.use_quads(false);
+            self.draw_vertices(verts, 16, u)
+        }
+    }
+
+    /// Draw `verts` (`stride` bytes each) as triangles with the shader
+    /// constants `u`, through the bound vertex shader and layout.
+    unsafe fn draw_vertices(
+        &mut self,
+        verts: &[f32],
+        stride: u32,
+        u: &[[f32; 4]],
+    ) -> Result<(), GpuError> {
         unsafe {
             let ctx = self.ctx.ptr();
             let bytes = std::mem::size_of_val(verts);
@@ -767,7 +919,7 @@ impl D3dExecutor {
                 bytes,
             );
             com!(ctx, VT_CTX_UNMAP, (*mut c_void, u32) -> (), self.vbuf.ptr(), 0);
-            let (buf, stride, offset) = (self.vbuf.ptr(), 16u32, self.vused as u32);
+            let (buf, offset) = (self.vbuf.ptr(), self.vused as u32);
             com!(ctx, VT_CTX_IA_SET_VERTEX_BUFFERS,
                 (u32, u32, *const *mut c_void, *const u32, *const u32) -> (),
                 0, 1, &buf, &stride, &offset);
@@ -789,7 +941,9 @@ impl D3dExecutor {
             );
             com!(ctx, VT_CTX_UNMAP, (*mut c_void, u32) -> (), self.constants.ptr(), 0);
 
-            com!(ctx, VT_CTX_DRAW, (u32, u32) -> (), (verts.len() / 4) as u32, 0);
+            let count = (bytes / stride as usize) as u32;
+            com!(ctx, VT_CTX_DRAW, (u32, u32) -> (), count, 0);
+            self.draws += 1;
             Ok(())
         }
     }
@@ -801,84 +955,33 @@ impl D3dExecutor {
         }
     }
 
-    unsafe fn draw_box(
+    /// Draw the quad vertices `verts` (see `crate::gpu::batch`) in one
+    /// call: sampling `srv` (nearest-neighbor or bilinear), or boxes only
+    /// without one.
+    unsafe fn draw_quads(
         &mut self,
         f: &mut Frame,
         level: &Level,
-        rect: [f32; 4],
-        radius: f32,
-        stroke: f32,
-        color: [f32; 4],
+        verts: &[f32],
+        srv: Option<*mut c_void>,
+        nearest: bool,
     ) -> Result<(), GpuError> {
         unsafe {
-            let prog = Self::prog(&self.ps_box, &self.blend_premul);
-            if !self.bind(f, level, prog, &self.ds_test, level.depth) {
-                return Ok(());
-            }
-            let pad = 1.0 + stroke * 0.5;
-            let (x0, y0, x1, y1) = (rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad);
-            #[rustfmt::skip]
-            let v = [
-                x0, y0, x0, y0,  x1, y0, x1, y0,  x0, y1, x0, y1,
-                x0, y1, x0, y1,  x1, y0, x1, y0,  x1, y1, x1, y1,
-            ];
-            let u = box_constants(device_to_clip(f.w, f.h), rect, color, radius, stroke);
-            self.submit(&v, &u)
-        }
-    }
-
-    /// Draw texture `srv` over the local `rect` through `m` (see the GL
-    /// executor's `draw_texture`).
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn draw_texture(
-        &mut self,
-        f: &mut Frame,
-        level: &Level,
-        srv: *mut c_void,
-        m: &Transform2D,
-        rect: [f32; 4],
-        opacity: f32,
-        premul: bool,
-        aa: bool,
-        sample: &Sample,
-    ) -> Result<(), GpuError> {
-        unsafe {
-            let prog = Self::prog(&self.ps_tex, &self.blend_premul);
-            if !self.bind(f, level, prog, &self.ds_test, level.depth) {
-                return Ok(());
-            }
-            let px = (m.a.hypot(m.b).max(1e-6), m.c.hypot(m.d).max(1e-6));
-            let (pu, pv) = if aa {
-                (1.0 / px.0, 1.0 / px.1)
+            let ps = if srv.is_some() {
+                &self.ps_quad
             } else {
-                (0.0, 0.0)
+                &self.ps_quadbox
             };
-            let (x0, y0, x1, y1) = (rect[0] - pu, rect[1] - pv, rect[2] + pu, rect[3] + pv);
-            let corner = |x: f32, y: f32| {
-                let d = m.apply(oxideav_core::Point { x, y });
-                [d.x, d.y, x, y]
-            };
-            let (a, b, c, d) = (
-                corner(x0, y0),
-                corner(x1, y0),
-                corner(x0, y1),
-                corner(x1, y1),
-            );
-            let v: Vec<f32> = [a, b, c, c, b, d].concat();
-            self.bind_texture(srv);
-            let u = tex_constants(
-                device_to_clip(f.w, f.h),
-                rect,
-                sample.uv,
-                sample.clamp,
-                sample.tint,
-                px,
-                opacity,
-                premul,
-                aa,
-                sample.nearest,
-            );
-            self.submit(&v, &u)
+            let prog = Self::prog(ps, &self.blend_premul);
+            if verts.is_empty() || !self.bind(f, level, prog, &self.ds_test, level.depth) {
+                return Ok(());
+            }
+            if let Some(srv) = srv {
+                self.bind_texture(srv);
+            }
+            self.use_quads(true);
+            let u = quad_constants(device_to_clip(f.w, f.h), nearest);
+            self.draw_vertices(verts, QUAD_STRIDE, &u)
         }
     }
 
@@ -1044,17 +1147,20 @@ impl D3dExecutor {
         unsafe {
             let srv = self.layers[layer.layer.unwrap()].srv.ptr();
             let full = [0.0, 0.0, f.w as f32, f.h as f32];
-            self.draw_texture(
-                f,
-                parent,
-                srv,
+            let mut v = std::mem::take(&mut self.scratch_quads);
+            v.clear();
+            batch::tex_quad(
+                &mut v,
                 &Transform2D::identity(),
                 full,
                 layer.opacity,
                 true,
                 false,
                 &Sample::WHOLE,
-            )
+            );
+            let drawn = self.draw_quads(f, parent, &v, Some(srv), false);
+            self.scratch_quads = v;
+            drawn
         }
     }
 
@@ -1066,7 +1172,9 @@ impl D3dExecutor {
                 self.layers.clear();
             }
             self.uploads = 0;
+            self.draws = 0;
             self.fixed_state();
+            self.sync_atlas(&plan.atlas)?;
             let mut levels = vec![Level {
                 layer: None,
                 opacity: 1.0,
@@ -1092,17 +1200,30 @@ impl D3dExecutor {
                 self.open(f, On::Frame, Some(clear));
             }
 
-            for op in &plan.ops {
-                match op {
-                    Op::Box {
-                        rect,
-                        radius,
-                        stroke,
-                        color,
-                    } => {
+            for cmd in &plan.cmds {
+                let op = match cmd {
+                    Cmd::Quads(q) => {
+                        let srv = match &q.texture {
+                            None => None,
+                            Some(TexRef::Image(image)) => self.texture(image),
+                            Some(TexRef::Atlas(i)) => plan
+                                .atlas
+                                .get(*i)
+                                .and_then(|p| self.atlas.get(&p.id))
+                                .map(|t| t.srv.ptr()),
+                        };
+                        let n = QUAD_FLOATS;
+                        let verts =
+                            &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
                         let level = levels.last().unwrap();
-                        self.draw_box(f, level, *rect, *radius, *stroke, *color)?;
+                        self.draw_quads(f, level, verts, srv, q.nearest)?;
+                        continue;
                     }
+                    Cmd::Op(i) => &plan.ops[*i],
+                };
+                match op {
+                    // Batched into `Cmd::Quads`.
+                    Op::Box { .. } | Op::Image { .. } => {}
                     Op::Path {
                         contours,
                         even_odd,
@@ -1111,25 +1232,6 @@ impl D3dExecutor {
                     } => {
                         let level = levels.last().unwrap();
                         self.draw_path(f, level, contours, *even_odd, *color, *bbox)?;
-                    }
-                    Op::Image {
-                        image,
-                        transform,
-                        rect,
-                        opacity,
-                        uv,
-                        tint,
-                        nearest,
-                    } => {
-                        let Some(srv) = self.texture(image) else {
-                            continue;
-                        };
-                        let size = image.size();
-                        let sample = Sample::region(*uv, size.width, size.height, *tint, *nearest);
-                        let level = levels.last().unwrap();
-                        self.draw_texture(
-                            f, level, srv, transform, *rect, *opacity, false, true, &sample,
-                        )?;
                     }
                     Op::PushClip(Clip::Rect(r)) => {
                         let level = levels.last_mut().unwrap();
@@ -1696,6 +1798,10 @@ impl Executor for D3dExecutor {
 
     fn uploads(&self) -> usize {
         self.uploads
+    }
+
+    fn draws(&self) -> usize {
+        self.draws
     }
 }
 

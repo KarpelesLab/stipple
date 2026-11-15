@@ -989,10 +989,17 @@ CPU as the default and the fallback.
   again with `?renderer=gpu`.*
 
 #### 6f — Fast
-- ⬜ A glyph atlas per backend (one texture, packed, evicted by use) instead
+- ✅ A glyph atlas per backend (one texture, packed, evicted by use) instead
   of a texture per glyph.
-- ⬜ Batching: instanced boxes and quads, one draw call per run of compatible
+  *`src/gpu/atlas.rs`: shelf-packed 512–2048 px pages (two at most), grown
+  before evicting the least recently used; each executor uploads only the
+  area that changed.*
+- ✅ Batching: instanced boxes and quads, one draw call per run of compatible
   operations, image regions and sprites (Phase 9) batched per texture.
+  *`src/gpu/batch.rs`: one quad shader with per-vertex attributes for boxes
+  and textured quads, so a run of them sharing a texture is one draw on all
+  six APIs (the widget gallery: 865 boxes and glyphs in 1 draw; 2000
+  sprites in 1).*
 - ✅ Damage: redraw only the damaged region (scissored, with the rest of the
   previous frame kept), and present only it where the platform can
   (`VK_KHR_incremental_present`, DXGI `Present1` dirty rects,

@@ -42,6 +42,36 @@ use crate::render::{Color, Font, Pixmap, Scene};
 )]
 pub(crate) mod ops;
 
+// The glyph atlas and batching, shared by every executor.
+#[cfg_attr(
+    not(any(
+        all(any(target_os = "linux", target_os = "android"), feature = "gl"),
+        all(
+            any(target_os = "linux", target_os = "android", target_os = "macos"),
+            feature = "vk"
+        ),
+        all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
+        all(target_os = "windows", feature = "d3d"),
+        all(target_arch = "wasm32", feature = "gpu")
+    )),
+    allow(dead_code)
+)]
+pub(crate) mod atlas;
+#[cfg_attr(
+    not(any(
+        all(any(target_os = "linux", target_os = "android"), feature = "gl"),
+        all(
+            any(target_os = "linux", target_os = "android", target_os = "macos"),
+            feature = "vk"
+        ),
+        all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
+        all(target_os = "windows", feature = "d3d"),
+        all(target_arch = "wasm32", feature = "gpu")
+    )),
+    allow(dead_code)
+)]
+pub(crate) mod batch;
+
 // The renderer seam: the executors of `ops`'s list, and choosing one.
 #[cfg_attr(
     not(any(
@@ -539,6 +569,15 @@ pub fn render_scene_scaled(
     scale: ScaleFactor,
 ) -> Result<Pixmap, String> {
     with_default(|r| r.render(scene, background, scale)).map_err(|e| e.to_string())
+}
+
+/// The draw calls the calling thread's last GPU frame took (drawn by
+/// [`render_scene_scaled`] or by an app on [`Renderer::Gpu`](crate::render::Renderer::Gpu)),
+/// for benchmarks; 0 before any. Runs of boxes, images and glyphs that
+/// share a texture are one call each, so a frame of widgets and text takes
+/// a handful.
+pub fn last_frame_draw_calls() -> usize {
+    renderer::LAST_DRAWS.with(|d| d.get())
 }
 
 /// The API `STIPPLE_RENDERER` names (`metal`, `vulkan`, `gl`, `d3d11`), for

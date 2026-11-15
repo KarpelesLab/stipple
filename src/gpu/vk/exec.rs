@@ -4,8 +4,11 @@
 //! The plan is first recorded (`record.rs`: passes and draws, no Vulkan),
 //! then turned into one command buffer: the images the frame draws uploaded
 //! (each texture cached by the image's identity, in shared memory blocks),
-//! the vertices of the whole frame in one host-visible buffer, push
-//! constants for every uniform, and one descriptor set per texture. Every
+//! the glyph atlas pages brought up to date (only what changed in them),
+//! the vertices of the whole frame in one host-visible buffer (the paths'
+//! and the batched quads', one after the other), push constants for the
+//! rest, and one descriptor set per texture. A batch of boxes and textured
+//! quads is one draw. Every
 //! render pass loads and stores; a pass that starts cleared clears inside it.
 //! Between passes one pipeline barrier makes the previous pass's writes
 //! visible and moves the images that change roles (a layer drawn into, then
@@ -30,6 +33,8 @@ use super::record::{self, Cmd, Draw, Pipe, Recording, Target, Texture};
 use super::shaders;
 use super::sys::*;
 use crate::geometry::{PhysicalSize, ScaleFactor};
+use crate::gpu::atlas::{AtlasPage, Upload};
+use crate::gpu::batch::QUAD_FLOATS;
 use crate::gpu::ops::Plan;
 use crate::gpu::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::platform::GpuLayer;
@@ -147,6 +152,13 @@ struct Tex {
     used: u64,
 }
 
+/// An atlas page's texture, holding `version` of it.
+struct AtlasTex {
+    img: Image,
+    side: u32,
+    version: u64,
+}
+
 /// A host-visible buffer, mapped for its life.
 struct HostBuffer {
     buffer: VkBuffer,
@@ -212,6 +224,8 @@ pub(crate) struct VkExecutor {
     layers: Vec<Surface2>,
     scratch: Option<Surface2>,
     textures: HashMap<usize, Tex>,
+    /// The atlas pages' textures, by page id.
+    atlas: HashMap<u64, AtlasTex>,
     blocks: Vec<Block>,
     vertices: Option<HostBuffer>,
     staging: Option<HostBuffer>,
@@ -221,6 +235,7 @@ pub(crate) struct VkExecutor {
     kept: KeptFrame,
     count: u64,
     uploads: usize,
+    draws: usize,
 }
 
 impl VkExecutor {
@@ -451,6 +466,7 @@ impl VkExecutor {
                 scratch: None,
                 textures: HashMap::new(),
                 blocks: Vec::new(),
+                atlas: HashMap::new(),
                 vertices: None,
                 staging: None,
                 readback: None,
@@ -458,6 +474,7 @@ impl VkExecutor {
                 kept: KeptFrame::default(),
                 count: 0,
                 uploads: 0,
+                draws: 0,
             };
             // From here `me`'s Drop frees whatever was made.
             if stencil.is_none() {
@@ -546,14 +563,15 @@ impl VkExecutor {
 
             let modules = [
                 shaders::SCENE_VERT,
-                shaders::BOX_FRAG,
-                shaders::TEX_FRAG,
+                shaders::QUAD_VERT,
+                shaders::QUAD_FRAG,
+                shaders::QUADBOX_FRAG,
                 shaders::FLAT_FRAG,
                 shaders::RESOLVE_FRAG,
             ]
             .map(|spv| self.shader(spv));
             let built = match modules.iter().cloned().collect::<Result<Vec<_>, _>>() {
-                Ok(m) => self.pipelines([m[0], m[1], m[2], m[3], m[4]]),
+                Ok(m) => self.pipelines([m[0], m[1], m[2], m[3], m[4], m[5]]),
                 Err(e) => Err(e),
             };
             for m in modules.into_iter().flatten() {
@@ -683,20 +701,21 @@ impl VkExecutor {
         }
     }
 
-    /// Every pipeline, from the vertex shader and the four fragment shaders.
+    /// Every pipeline, from the two vertex shaders and the four fragment
+    /// shaders.
     unsafe fn pipelines(
         &self,
-        m: [VkShaderModule; 5],
+        m: [VkShaderModule; 6],
     ) -> Result<HashMap<Pipe, VkPipeline>, GpuError> {
         unsafe {
-            let [vs, boxes, tex, flat, resolve] = m;
+            let [scene_vs, quad_vs, quads, quad_boxes, flat, resolve] = m;
             let mut pipes = HashMap::new();
             for pipe in Pipe::ALL {
-                let fs = match pipe {
-                    Pipe::Box => boxes,
-                    Pipe::Tex => tex,
-                    Pipe::Resolve => resolve,
-                    _ => flat,
+                let (vs, fs) = match pipe {
+                    Pipe::Quads => (quad_vs, quads),
+                    Pipe::QuadBoxes => (quad_vs, quad_boxes),
+                    Pipe::Resolve => (scene_vs, resolve),
+                    _ => (scene_vs, flat),
                 };
                 match self.pipeline(pipe, vs, fs) {
                     Ok(p) => {
@@ -735,7 +754,7 @@ impl VkExecutor {
             // (front, back, blend, writes color)
             let test = face(COMPARE_EQUAL, STENCIL_KEEP, 0xff, 0);
             let (front, back, blend, write) = match pipe {
-                Pipe::Box | Pipe::Tex | Pipe::Resolve => (test, test, true, true),
+                Pipe::QuadBoxes | Pipe::Quads | Pipe::Resolve => (test, test, true, true),
                 Pipe::ClipInc => {
                     let f = face(COMPARE_EQUAL, STENCIL_INCR_CLAMP, 0xff, 0xff);
                     (f, f, false, false)
@@ -783,25 +802,30 @@ impl VkExecutor {
                     pSpecializationInfo: std::ptr::null(),
                 },
             ];
+            // A quad vertex is five vec4s (`crate::gpu::batch`), any other
+            // one.
+            let vec4s = if pipe.quad() { QUAD_FLOATS / 4 } else { 1 };
             let binding = VkVertexInputBindingDescription {
                 binding: 0,
-                stride: 16,
+                stride: (vec4s * 16) as u32,
                 inputRate: VERTEX_INPUT_RATE_VERTEX,
             };
-            let attr = VkVertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                format: FORMAT_R32G32B32A32_SFLOAT,
-                offset: 0,
-            };
+            let attrs: Vec<VkVertexInputAttributeDescription> = (0..vec4s)
+                .map(|i| VkVertexInputAttributeDescription {
+                    location: i as u32,
+                    binding: 0,
+                    format: FORMAT_R32G32B32A32_SFLOAT,
+                    offset: (i * 16) as u32,
+                })
+                .collect();
             let vi = VkPipelineVertexInputStateCreateInfo {
                 sType: ST_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
                 pNext: std::ptr::null(),
                 flags: 0,
                 vertexBindingDescriptionCount: 1,
                 pVertexBindingDescriptions: &binding,
-                vertexAttributeDescriptionCount: 1,
-                pVertexAttributeDescriptions: &attr,
+                vertexAttributeDescriptionCount: attrs.len() as u32,
+                pVertexAttributeDescriptions: attrs.as_ptr(),
             };
             let ia = VkPipelineInputAssemblyStateCreateInfo {
                 sType: ST_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
@@ -1383,21 +1407,24 @@ impl VkExecutor {
                 "vkBeginCommandBuffer",
             )?;
             self.uploads = 0;
-            let images = self.upload(&rec)?;
-            let sets = self.descriptor_sets(&rec, &images)?;
-            if !rec.vertices.is_empty() {
-                let bytes = std::mem::size_of_val(rec.vertices.as_slice()) as u64;
-                self.ensure_buffer(|s| &mut s.vertices, bytes, BUFFER_VERTEX, false)?;
+            self.draws = 0;
+            let images = self.upload(&rec, &plan.atlas)?;
+            let sets = self.descriptor_sets(&rec, &images, &plan.atlas)?;
+            // The paths' vertices, then the quads' (at `quads`).
+            let plain = std::mem::size_of_val(rec.vertices.as_slice());
+            let quads = plain.next_multiple_of(256);
+            let bytes = quads + std::mem::size_of_val(rec.quads.as_slice());
+            if bytes > 0 {
+                self.ensure_buffer(|s| &mut s.vertices, bytes as u64, BUFFER_VERTEX, false)?;
                 let vb = self.vertices.as_ref().unwrap();
+                std::ptr::copy_nonoverlapping(rec.vertices.as_ptr() as *const u8, vb.ptr, plain);
                 std::ptr::copy_nonoverlapping(
-                    rec.vertices.as_ptr() as *const u8,
-                    vb.ptr,
-                    bytes as usize,
+                    rec.quads.as_ptr() as *const u8,
+                    vb.ptr.add(quads),
+                    bytes - quads,
                 );
-                let offset = 0u64;
-                (self.vk.vkCmdBindVertexBuffers)(self.cmd, 0, 1, &vb.buffer, &offset);
             }
-            self.passes(&rec, &sets);
+            self.passes(&rec, &sets, quads as u64);
 
             // The frame, ready to be copied out.
             let mut barriers = Vec::new();
@@ -1408,14 +1435,59 @@ impl VkExecutor {
         }
     }
 
-    /// Upload the images `rec` draws that aren't cached; returns each one's
-    /// view, in `rec.images`' order.
-    unsafe fn upload(&mut self, rec: &Recording) -> Result<Vec<VkImageView>, GpuError> {
+    /// Upload the images `rec` draws that aren't cached, and what changed
+    /// in the atlas `pages`; returns each image's view, in `rec.images`'
+    /// order.
+    unsafe fn upload(
+        &mut self,
+        rec: &Recording,
+        pages: &[AtlasPage],
+    ) -> Result<Vec<VkImageView>, GpuError> {
         unsafe {
             let count = self.count;
+            // Atlas pages gone: their textures go (no frame is in flight).
+            let gone: Vec<u64> = self
+                .atlas
+                .keys()
+                .filter(|id| !pages.iter().any(|p| p.id == **id))
+                .copied()
+                .collect();
+            for id in gone {
+                let t = self.atlas.remove(&id).unwrap();
+                self.free_image(t.img);
+            }
+            // (page id, region, staging offset) of what changed in a page.
+            let mut atlas: Vec<(u64, [u32; 4], usize)> = Vec::new();
+            let mut staged = 0usize;
+            for p in pages {
+                let have = self.atlas.get(&p.id).map(|t| (t.side, t.version));
+                let region = match p.upload(have) {
+                    Upload::Nothing => continue,
+                    Upload::Whole => {
+                        if let Some(old) = self.atlas.remove(&p.id) {
+                            self.free_image(old.img);
+                        }
+                        let img = self.image(
+                            FORMAT_R8G8B8A8_UNORM,
+                            p.side as i32,
+                            p.side as i32,
+                            USAGE_SAMPLED | USAGE_TRANSFER_DST,
+                            ASPECT_COLOR,
+                            true,
+                        )?;
+                        let (side, version) = (p.side, p.version);
+                        self.atlas.insert(p.id, AtlasTex { img, side, version });
+                        [0, 0, p.side, p.side]
+                    }
+                    Upload::Region(r) => r,
+                };
+                self.atlas.get_mut(&p.id).unwrap().version = p.version;
+                atlas.push((p.id, region, staged));
+                staged += ((region[2] - region[0]) * (region[3] - region[1]) * 4) as usize;
+                staged = staged.next_multiple_of(16);
+            }
             let mut views = Vec::with_capacity(rec.images.len());
             let mut fresh: Vec<(usize, usize)> = Vec::new(); // (image index, staging offset)
-            let mut staged = 0usize;
             for (i, image) in rec.images.iter().enumerate() {
                 let key = Arc::as_ptr(image) as usize;
                 if let Some(t) = self.textures.get_mut(&key) {
@@ -1449,7 +1521,7 @@ impl VkExecutor {
                 fresh.push((i, staged));
                 staged += image.as_bytes().len().next_multiple_of(16);
             }
-            if fresh.is_empty() {
+            if fresh.is_empty() && atlas.is_empty() {
                 return Ok(views);
             }
             self.ensure_buffer(
@@ -1466,7 +1538,42 @@ impl VkExecutor {
                 let t = self.textures.get_mut(&key).unwrap();
                 transition(&mut barriers, &mut t.img, LAYOUT_TRANSFER_DST);
             }
+            for &(id, _, _) in &atlas {
+                let t = self.atlas.get_mut(&id).unwrap();
+                transition(&mut barriers, &mut t.img, LAYOUT_TRANSFER_DST);
+            }
             self.barrier(&barriers);
+            for &(id, r, offset) in &atlas {
+                let page = pages.iter().find(|p| p.id == id).unwrap();
+                let bytes = page.region(r);
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(offset), bytes.len());
+                let region = VkBufferImageCopy {
+                    bufferOffset: offset as u64,
+                    bufferRowLength: 0,
+                    bufferImageHeight: 0,
+                    imageSubresource: layers(ASPECT_COLOR),
+                    imageOffset: VkOffset3D {
+                        x: r[0] as i32,
+                        y: r[1] as i32,
+                        z: 0,
+                    },
+                    imageExtent: VkExtent3D {
+                        width: r[2] - r[0],
+                        height: r[3] - r[1],
+                        depth: 1,
+                    },
+                };
+                let dst = self.atlas[&id].img.image;
+                (self.vk.vkCmdCopyBufferToImage)(
+                    self.cmd,
+                    buffer,
+                    dst,
+                    LAYOUT_TRANSFER_DST,
+                    1,
+                    &region,
+                );
+                self.uploads += 1;
+            }
             for &(i, offset) in &fresh {
                 let image = &rec.images[i];
                 let bytes = image.as_bytes();
@@ -1502,6 +1609,10 @@ impl VkExecutor {
                 let t = self.textures.get_mut(&key).unwrap();
                 transition(&mut barriers, &mut t.img, LAYOUT_SHADER_READ_ONLY);
             }
+            for &(id, _, _) in &atlas {
+                let t = self.atlas.get_mut(&id).unwrap();
+                transition(&mut barriers, &mut t.img, LAYOUT_SHADER_READ_ONLY);
+            }
             self.barrier(&barriers);
             Ok(views)
         }
@@ -1512,9 +1623,22 @@ impl VkExecutor {
         &mut self,
         rec: &Recording,
         images: &[VkImageView],
+        pages: &[AtlasPage],
     ) -> Result<HashMap<Texture, VkDescriptorSet>, GpuError> {
         unsafe {
-            let textures = rec.textures();
+            // An atlas page without a texture (it couldn't be uploaded)
+            // isn't sampled: its draws find no set and draw nothing.
+            let page_view = |page: usize| {
+                pages
+                    .get(page)
+                    .and_then(|p| self.atlas.get(&p.id))
+                    .map(|t| t.img.view)
+            };
+            let textures: Vec<Texture> = rec
+                .textures()
+                .into_iter()
+                .filter(|t| !matches!(*t, Texture::Atlas { page, .. } if page_view(page).is_none()))
+                .collect();
             let mut sets = HashMap::new();
             if textures.is_empty() {
                 return Ok(sets);
@@ -1580,6 +1704,10 @@ impl VkExecutor {
                             images[index],
                             if nearest { self.nearest } else { self.linear },
                         ),
+                        Texture::Atlas { page, nearest } => (
+                            page_view(page).unwrap(),
+                            if nearest { self.nearest } else { self.linear },
+                        ),
                         Texture::Layer(i) => (self.layers[i].color.view, self.linear),
                         Texture::Scratch => {
                             (self.scratch.as_ref().unwrap().color.view, self.linear)
@@ -1622,8 +1750,14 @@ impl VkExecutor {
         }
     }
 
-    /// Turn the recorded passes and draws into Vulkan commands.
-    unsafe fn passes(&mut self, rec: &Recording, sets: &HashMap<Texture, VkDescriptorSet>) {
+    /// Turn the recorded passes and draws into Vulkan commands; the quads'
+    /// vertices are at `quads` bytes into the vertex buffer.
+    unsafe fn passes(
+        &mut self,
+        rec: &Recording,
+        sets: &HashMap<Texture, VkDescriptorSet>,
+        quads: u64,
+    ) {
         unsafe {
             let cmd = self.cmd;
             let mut open = false;
@@ -1631,6 +1765,8 @@ impl VkExecutor {
             // The frame's stencil starts cleared even when its colors are
             // kept (a partial frame).
             let mut fresh = true;
+            // Which vertex array is bound: the quads' or the others'.
+            let mut array: Option<bool> = None;
             for (i, c) in rec.cmds.iter().enumerate() {
                 match c {
                     Cmd::Pass { target, clear } => {
@@ -1733,6 +1869,12 @@ impl VkExecutor {
                         if !open {
                             continue;
                         }
+                        if array != Some(d.pipe.quad()) {
+                            let vb = self.vertices.as_ref().unwrap().buffer;
+                            let offset = if d.pipe.quad() { quads } else { 0 };
+                            (self.vk.vkCmdBindVertexBuffers)(cmd, 0, 1, &vb, &offset);
+                            array = Some(d.pipe.quad());
+                        }
                         self.draw(d, sets, &mut bound);
                     }
                 }
@@ -1744,7 +1886,7 @@ impl VkExecutor {
     }
 
     unsafe fn draw(
-        &self,
+        &mut self,
         d: &Draw,
         sets: &HashMap<Texture, VkDescriptorSet>,
         bound: &mut Option<Pipe>,
@@ -1774,9 +1916,12 @@ impl VkExecutor {
                 record::PUSH_BYTES,
                 d.push.as_ptr().cast(),
             );
-            if let Some(t) = d.texture
-                && let Some(set) = sets.get(&t)
-            {
+            if let Some(t) = d.texture {
+                // A texture that couldn't be made (an atlas page): nothing
+                // to sample.
+                let Some(set) = sets.get(&t) else {
+                    return;
+                };
                 (self.vk.vkCmdBindDescriptorSets)(
                     cmd,
                     BIND_POINT_GRAPHICS,
@@ -1789,6 +1934,7 @@ impl VkExecutor {
                 );
             }
             (self.vk.vkCmdDraw)(cmd, d.count, 1, d.first, 0);
+            self.draws += 1;
         }
     }
 
@@ -2533,6 +2679,10 @@ impl Executor for VkExecutor {
     fn uploads(&self) -> usize {
         self.uploads
     }
+
+    fn draws(&self) -> usize {
+        self.draws
+    }
 }
 
 impl Drop for VkExecutor {
@@ -2548,6 +2698,9 @@ impl Drop for VkExecutor {
                 self.drop_swap(swap);
             }
             for (_, t) in std::mem::take(&mut self.textures) {
+                self.free_image(t.img);
+            }
+            for (_, t) in std::mem::take(&mut self.atlas) {
                 self.free_image(t.img);
             }
             let surfaces: Vec<Surface2> = self

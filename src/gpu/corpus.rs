@@ -48,9 +48,11 @@ pub(crate) fn cases(font: Option<&Font>) -> Vec<Case> {
     add("layers", layers(), &[1.0, 2.0], 0.8, 0.01);
     add("clips", clipped(), &[1.0, 2.0], 0.5, 0.005);
     add("canvas", canvas(), &[1.0], 0.5, 0.005);
+    add("sprite-field", sprite_field(), &[1.0, 2.0], 1.5, 0.02);
     if let Some(font) = font {
         add("text", text(font), &[1.0, 2.0], 1.0, 0.01);
         add("text-effects", text_effects(font), &[1.0, 2.0], 1.5, 0.02);
+        add("text-page", text_page(font), &[1.0, 2.0], 1.0, 0.01);
     }
     out
 }
@@ -354,6 +356,43 @@ pub(crate) fn text(font: &Font) -> Scene {
     s
 }
 
+/// A page of text: many lines, sizes and colors over boxes, every glyph
+/// from the atlas, the boxes and text batched together.
+pub(crate) fn text_page(font: &Font) -> Scene {
+    use crate::render::TextPaint;
+    let mut s = Scene::new(Size::new(320.0, 240.0));
+    s.fill_round_rect(
+        Rect::from_xywh(4.0, 4.0, 312.0, 232.0),
+        6.0,
+        Color::rgb(0x22, 0x26, 0x30),
+    );
+    let colors = [
+        Color::WHITE,
+        Color::rgb(0x60, 0x9c, 0xff),
+        Color::rgb(0xef, 0x68, 0x68),
+        Color::rgb(0x9a, 0xd0, 0x7a),
+    ];
+    let mut y = 8.0;
+    for i in 0..18 {
+        let size = 8.0 + (i % 6) as f64 * 2.5;
+        if i % 4 == 1 {
+            s.fill_rect(
+                Rect::from_xywh(8.0, y, 304.0, size * 1.2),
+                Color::rgb(0x30, 0x36, 0x44),
+            );
+        }
+        let line = format!("{i:02}: The quick brown fox jumps over the lazy dog 0123456789");
+        let x = 10.0 + (i as f64 * 0.37) % 1.0;
+        s.fill_text(
+            &line,
+            Point::new(x, y),
+            &TextPaint::new(font, size, colors[i % colors.len()]),
+        );
+        y += size * 1.25;
+    }
+    s
+}
+
 /// Rich text with an outline and a blurred shadow.
 pub(crate) fn text_effects(font: &Font) -> Scene {
     use crate::render::{RichText, SpanStyle, TextOutline, TextPaint, TextShadow};
@@ -368,6 +407,32 @@ pub(crate) fn text_effects(font: &Font) -> Scene {
         .outline(TextOutline::new(2.0, Color::BLACK))
         .shadow(TextShadow::new(Vec2::new(2.0, 3.0), Color::rgba(0, 0, 0, 140)).blur(2.0));
     s.fill_rich_text(&text, Point::new(8.0, 8.0), &paint);
+    s
+}
+
+/// Many sprites from one sheet: scaled nearest and bilinear, flipped,
+/// tinted and faded, over a background (batched per texture and filter).
+pub(crate) fn sprite_field() -> Scene {
+    use crate::render::ImageOptions;
+    let sheet = ramp();
+    let mut s = Scene::new(Size::new(320.0, 240.0));
+    s.fill_rect(
+        Rect::from_xywh(0.0, 0.0, 320.0, 240.0),
+        Color::rgb(30, 40, 80),
+    );
+    for i in 0..400 {
+        let (x, y) = ((i * 37 % 300) as f64, (i * 53 % 220) as f64 + 0.3);
+        let src = Rect::from_xywh((i % 2) as f64 * 8.0, (i / 2 % 2) as f64 * 8.0, 8.0, 8.0);
+        let size = 8.0 + (i % 3) as f64 * 8.0;
+        let mut o = ImageOptions::new().flip_x(i % 5 == 0).flip_y(i % 7 == 0);
+        if i % 2 == 0 {
+            o = o.nearest();
+        }
+        if i % 11 == 0 {
+            o = o.tint(Color::rgb(255, 160, 60)).opacity(0.7);
+        }
+        s.draw_image_region(src, Rect::from_xywh(x, y, size, size), &sheet, &o);
+    }
     s
 }
 

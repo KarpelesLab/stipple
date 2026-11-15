@@ -181,6 +181,30 @@ fn text_effects_match_the_software_renderer() {
 }
 
 #[test]
+fn a_text_page_matches_the_software_renderer() {
+    let Some(font) = Font::system_default() else {
+        eprintln!("skipping: no system font found");
+        return;
+    };
+    let s = text_page(&font);
+    agree("text-page", &s, 1.0, 1.0, 0.01);
+    agree("text-page@2", &s, 2.0, 1.0, 0.01);
+    // Its glyphs are in the atlas: a frame drawn again uploads nothing and
+    // draws in a single call.
+    gpu(&s, BACKGROUND, 2.0).unwrap();
+    assert_eq!(uploads(), 0);
+    let draws = with_default(|r| Ok(r.draws())).unwrap_or(0);
+    assert!(draws <= 1, "{draws} draw calls");
+}
+
+#[test]
+fn a_sprite_field_matches_the_software_renderer() {
+    let s = sprite_field();
+    agree("sprite-field", &s, 1.0, 1.5, 0.02);
+    agree("sprite-field@2", &s, 2.0, 1.5, 0.02);
+}
+
+#[test]
 fn canvases_match_the_software_renderer() {
     let s = canvas();
     agree("canvas", &s, 1.0, 0.5, 0.005);
@@ -353,15 +377,38 @@ fn bench_cpu_against_gpu() {
         let gpu = time(&mut || {
             with_default(|r| r.finish(scene, bg, s, None)).unwrap();
         });
+        // Draw calls: what the executor made, against one per box and
+        // image, three per path and one per clip polygon and layer pass
+        // (as before batching).
+        let draws = with_default(|r| Ok(r.draws())).unwrap_or(0);
         // A hover's worth of change (a 120x40 button, logical): only that
         // redrawn over the last frame, as a window's next frame is.
         let r = device_region(Rect::from_xywh(200.0, 300.0, 120.0, 40.0), scale);
         let partial = time(&mut || {
             with_default(|g| g.finish(scene, bg, s, Some(r))).unwrap();
         });
+        let plan = super::ops::plan(
+            scene,
+            bg,
+            s.to_physical(scene.logical_size()),
+            &mut super::ops::RasterCache::default(),
+        );
+        let unbatched: usize = plan
+            .ops
+            .iter()
+            .map(|op| match op {
+                super::ops::Op::Path { .. } => 3,
+                super::ops::Op::PushClip(super::ops::Clip::Polygon(_)) => 2,
+                super::ops::Op::PushClip(_)
+                | super::ops::Op::PopClip
+                | super::ops::Op::PushLayer { .. } => 0,
+                _ => 1,
+            })
+            .sum();
         eprintln!(
             "{name}: CPU {cpu:.2} ms, GPU {gpu:.2} ms (with read-back {read:.2} ms, \
-             a 120x40 change redrawn alone {partial:.2} ms) per frame"
+             a 120x40 change redrawn alone {partial:.2} ms) per frame, \
+             {draws} draw calls ({unbatched} unbatched)"
         );
     }
 }

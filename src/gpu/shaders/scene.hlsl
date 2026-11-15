@@ -2,7 +2,7 @@
 // D3DCompile when the executor is created (vs_4_0 / ps_4_0). Each matches its
 // MSL twin in src/gpu/metal_scene.rs and its GLSL twin in src/gpu/gl/scene.rs.
 //
-// One constant buffer feeds every stage: `xf` is the vertex shader's
+// One constant buffer feeds every stage: `xf` is the vertex shaders'
 // device-to-clip mapping, u1..u7 the pixel shader's own fields (packed by
 // src/gpu/d3d/abi.rs's *_constants functions).
 
@@ -26,8 +26,9 @@ struct VOut {
     float2 aux : TEXCOORD0;
 };
 
-// Every program shares one vertex shader: `xy` in device pixels mapped to
-// clip space by `xf` (scale.xy, offset.zw), and a pass-through `aux`.
+// The paths, clips and resolves share one vertex shader: `xy` in device
+// pixels mapped to clip space by `xf` (scale.xy, offset.zw), and a
+// pass-through `aux`.
 VOut vs_main(float4 d : POSITION) {
     VOut o;
     o.pos = float4(d.xy * xf.xy + xf.zw, 0.0, 1.0);
@@ -35,9 +36,40 @@ VOut vs_main(float4 d : POSITION) {
     return o;
 }
 
-// A box: `aux` is the device position. Coverage is the exact overlap of the
-// pixel with a sharp box (or ring), or a signed distance for rounded corners.
-// u1 = rect, u2 = color, u3.x = radius, u3.y = stroke.
+// Batched boxes and textured quads (src/gpu/batch.rs): every input is a
+// vertex attribute, QUAD0..QUAD4 (a0..a4), so a run of them is one draw.
+// `a0.xy` in device pixels is mapped to clip space by `xf`.
+struct QIn {
+    float4 a0 : QUAD0;
+    float4 a1 : QUAD1;
+    float4 a2 : QUAD2;
+    float4 a3 : QUAD3;
+    float4 a4 : QUAD4;
+};
+
+struct QOut {
+    float4 pos : SV_Position;
+    float2 p : TEXCOORD0;
+    float4 a1 : TEXCOORD1;
+    float4 a2 : TEXCOORD2;
+    float4 a3 : TEXCOORD3;
+    float mode : TEXCOORD4;
+};
+
+QOut quad_vs(QIn d) {
+    QOut o;
+    o.pos = float4(d.a0.xy * xf.xy + xf.zw, 0.0, 1.0);
+    o.p = d.a0.zw;
+    o.a1 = d.a1;
+    o.a2 = d.a2;
+    o.a3 = d.a3;
+    o.mode = d.a4.x;
+    return o;
+}
+
+// A box: `p` is the device position, `a1` the rect, `a2` the color, `a3`
+// the radius and stroke. Coverage is the exact overlap of the pixel with a
+// sharp box (or ring), or a signed distance for rounded corners.
 float span1(float p, float h) {
     return max(min(h, p + 0.5) - max(-h, p - 0.5), 0.0);
 }
@@ -49,12 +81,12 @@ float sdf(float2 p, float2 h, float r) {
     float2 d = abs(p) - (h - float2(r, r));
     return length(max(d, float2(0.0, 0.0))) + min(max(d.x, d.y), 0.0) - r;
 }
-float4 box_ps(VOut i) : SV_Target {
-    float2 c = (u1.xy + u1.zw) * 0.5;
-    float2 h = (u1.zw - u1.xy) * 0.5;
-    float2 p = i.aux - c;
-    float radius = u3.x;
-    float stroke = u3.y;
+float4 quad_box(QOut i) {
+    float2 c = (i.a1.xy + i.a1.zw) * 0.5;
+    float2 h = (i.a1.zw - i.a1.xy) * 0.5;
+    float2 p = i.p - c;
+    float radius = i.a3.x;
+    float stroke = i.a3.y;
     float w = stroke * 0.5;
     float cov;
     if (radius <= 0.0) {
@@ -72,33 +104,37 @@ float4 box_ps(VOut i) : SV_Target {
             cov = saturate(0.5 - d);
         }
     }
-    return u2 * cov;
+    return i.a2 * cov;
 }
 
-// A textured quad: `aux` is the local position inside the rect u1; u5.xy the
-// device pixels per local unit along each axis (for edge coverage). u2 is the
-// part of the texture spread over the rect, kept within u3; u4 (premultiplied)
-// tints every texel. u5.z = opacity, u5.w = premultiplied, u6.x = antialiased
-// edges, u6.y = nearest.
-float4 tex_ps(VOut i) : SV_Target {
-    float2 f = (i.aux - u1.xy) / (u1.zw - u1.xy);
-    float2 uv = clamp(lerp(u2.xy, u2.zw, f), u3.xy, u3.zw);
+// Boxes only (a batch without a texture): textured quads are left out.
+float4 quadbox_ps(QOut i) : SV_Target {
+    if (i.mode < 0.5) {
+        return quad_box(i);
+    }
+    return float4(0.0, 0.0, 0.0, 0.0);
+}
+
+// Boxes and textured quads: `p` is the texture coordinate, kept within `a2`;
+// `a1` the distances to the edges in device pixels (for their coverage);
+// `a3` the tint times the opacity (premultiplied). u1.x = nearest.
+float4 quad_ps(QOut i) : SV_Target {
+    if (i.mode < 0.5) {
+        return quad_box(i);
+    }
+    float2 uv = clamp(i.p, i.a2.xy, i.a2.zw);
     float4 c;
-    if (u6.y > 0.5) {
+    if (u1.x > 0.5) {
         c = tex0.SampleLevel(smp_nearest, uv, 0.0);
     } else {
         c = tex0.SampleLevel(smp_bilinear, uv, 0.0);
     }
-    if (u5.w < 0.5) {
+    if (i.mode < 1.5) {
         c.rgb *= c.a;
     }
-    c *= u4;
-    float cov = 1.0;
-    if (u6.x > 0.5) {
-        float2 d = min(i.aux - u1.xy, u1.zw - i.aux) * u5.xy;
-        cov = saturate(d.x + 0.5) * saturate(d.y + 0.5);
-    }
-    return c * (u5.z * cov);
+    c *= i.a3;
+    float cov = saturate(min(i.a1.x, i.a1.z) + 0.5) * saturate(min(i.a1.y, i.a1.w) + 0.5);
+    return c * cov;
 }
 
 // A flat color (u1): the stencil and cover passes, and stencil clips.

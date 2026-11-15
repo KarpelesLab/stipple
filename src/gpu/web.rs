@@ -4,28 +4,29 @@
 //!
 //! Everything that is geometry is done here, once, in Rust: each draw comes
 //! with its vertices, already in device pixels (path fills as fan
-//! triangles, image quads through their transform, boxes padded for their
-//! antialiased edge), so the page only uploads them and replays the draws.
-//! Images are textures the page keeps by id: an image is uploaded the first
-//! time it is drawn (keyed by its `Arc<Pixmap>`'s identity, as the other
-//! executors key theirs) and freed once it is dropped or hasn't been drawn
-//! for a while. Glyph rasters are images like any other.
+//! triangles; boxes and image quads batched, `super::batch`, each batch one
+//! draw), so the page only uploads them and replays the draws. Images are
+//! textures the page keeps by id: an image is uploaded the first time it is
+//! drawn (keyed by its `Arc<Pixmap>`'s identity, as the other executors key
+//! theirs) and freed once it is dropped or hasn't been drawn for a while.
+//! Each glyph atlas page is a texture too, updated with only what changed
+//! in it (`gpu_texture_sub`).
 //!
 //! The buffer is a run of 32-bit words (`f32` bits where a value is a float):
 //!
 //! ```text
 //! header   width height bg_r bg_g bg_b bg_a flags    (background premultiplied)
-//! 1 box    rect[4] radius stroke color[4] n verts[n*4]
 //! 2 path   even_odd color[4] bbox[4](i32) n verts[n*4]        (fan triangles)
-//! 3 image  id rect[4] px[2] opacity uv[4] clamp[4] tint[4] nearest n verts[n*4]
 //! 4 clip   rect[4](i32)                                       (a scissor)
 //! 5 clip   n verts[n*4]                         (a convex polygon, as triangles)
 //! 6 pop clip
 //! 7 layer  opacity
 //! 8 pop layer
+//! 9 quads  id nearest n verts[n*20]     (a batch; id 0: boxes only, no texture)
 //! ```
 //!
-//! A vertex is `x y aux_x aux_y` (see the shaders in `web/gpu.js`).
+//! A path or clip vertex is `x y aux_x aux_y`, a quad vertex the five
+//! `vec4`s `super::batch` describes (see the shaders in `web/gpu.js`).
 //!
 //! `flags` bit 0 says the frame is partial ([`Plan::limit`]): it redraws only
 //! what changed (its ops are clipped to that) over the last frame, which the
@@ -34,12 +35,13 @@
 //! it (it has no last frame of that size) answers 4, and the frame is drawn
 //! whole next time.
 
-use super::ops::{Clip, Op, Plan, Sample};
+use super::atlas::{AtlasPage, Upload};
+use super::batch::{Cmd, QUAD_FLOATS, TexRef};
+use super::ops::{Clip, Op, Plan};
 use super::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::geometry::ScaleFactor;
 use crate::platform::GpuLayer;
 use crate::render::Pixmap;
-use oxideav_core::{Point, Transform2D};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
@@ -54,6 +56,9 @@ mod js {
         /// Upload a `w`×`h` straight-alpha RGBA texture as `id`; 0 if the
         /// device can't take it (too big).
         pub fn gpu_texture(id: u32, ptr: *const u8, w: u32, h: u32) -> u32;
+        /// Replace the `w`×`h` pixels at `(x, y)` of texture `id` with the
+        /// straight-alpha RGBA at `ptr`; 0 if it can't.
+        pub fn gpu_texture_sub(id: u32, ptr: *const u8, x: u32, y: u32, w: u32, h: u32) -> u32;
         /// Free texture `id` (0: all of them).
         pub fn gpu_free(id: u32);
         /// Draw a frame: 0 shown, 1 the device was lost, 2 not now (the page
@@ -74,6 +79,9 @@ mod js {
     pub unsafe fn gpu_texture(_: u32, _: *const u8, _: u32, _: u32) -> u32 {
         1
     }
+    pub unsafe fn gpu_texture_sub(_: u32, _: *const u8, _: u32, _: u32, _: u32, _: u32) -> u32 {
+        1
+    }
     pub unsafe fn gpu_free(_: u32) {}
     pub unsafe fn gpu_init(_: u32) -> u32 {
         3
@@ -87,14 +95,13 @@ mod js {
 /// Free a texture not drawn for this many frames.
 const TEXTURE_KEEP_FRAMES: u64 = 120;
 
-const OP_BOX: u32 = 1;
 const OP_PATH: u32 = 2;
-const OP_IMAGE: u32 = 3;
 const OP_CLIP_RECT: u32 = 4;
 const OP_CLIP_POLY: u32 = 5;
 const OP_POP_CLIP: u32 = 6;
 const OP_LAYER: u32 = 7;
 const OP_POP_LAYER: u32 = 8;
+const OP_QUADS: u32 = 9;
 
 /// Header flag: a partial frame, drawn over the last one.
 const FLAG_PARTIAL: u32 = 1;
@@ -105,11 +112,20 @@ struct Texture {
     used: u64,
 }
 
+/// An atlas page's texture in the page, holding `version` of it.
+struct AtlasTex {
+    id: u32,
+    side: u32,
+    version: u64,
+}
+
 /// The web executor: the page's GPU, the textures it holds, and the op
 /// buffer, kept from frame to frame.
 pub(crate) struct WebExecutor {
     api: Api,
     textures: HashMap<usize, Texture>,
+    /// The atlas pages' textures, by page id.
+    atlas: HashMap<u64, AtlasTex>,
     next_id: u32,
     count: u64,
     uploads: usize,
@@ -147,6 +163,7 @@ impl WebExecutor {
         Ok(WebExecutor {
             api,
             textures: HashMap::new(),
+            atlas: HashMap::new(),
             next_id: 1,
             count: 0,
             uploads: 0,
@@ -171,8 +188,7 @@ impl WebExecutor {
         if size.width == 0 || size.height == 0 {
             return None;
         }
-        let id = self.next_id;
-        self.next_id = self.next_id.checked_add(1).unwrap_or(1);
+        let id = self.new_id();
         let ok =
             unsafe { js::gpu_texture(id, image.as_bytes().as_ptr(), size.width, size.height) != 0 };
         if !ok {
@@ -188,6 +204,53 @@ impl WebExecutor {
             },
         );
         Some(id)
+    }
+
+    fn new_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id = self.next_id.checked_add(1).unwrap_or(1);
+        id
+    }
+
+    /// Bring the page's atlas textures up to date with `pages`, and free
+    /// those of pages gone.
+    fn sync_atlas(&mut self, pages: &[AtlasPage]) {
+        self.atlas.retain(|id, t| {
+            let keep = pages.iter().any(|p| p.id == *id);
+            if !keep {
+                unsafe { js::gpu_free(t.id) };
+            }
+            keep
+        });
+        for p in pages {
+            let have = self.atlas.get(&p.id).map(|t| (t.side, t.version));
+            match p.upload(have) {
+                Upload::Nothing => {}
+                Upload::Whole => {
+                    if let Some(old) = self.atlas.remove(&p.id) {
+                        unsafe { js::gpu_free(old.id) };
+                    }
+                    let id = self.new_id();
+                    let ok = unsafe { js::gpu_texture(id, p.pixels.as_ptr(), p.side, p.side) != 0 };
+                    if ok {
+                        self.uploads += 1;
+                        let (side, version) = (p.side, p.version);
+                        self.atlas.insert(p.id, AtlasTex { id, side, version });
+                    }
+                }
+                Upload::Region(r) => {
+                    let t = self.atlas.get_mut(&p.id).unwrap();
+                    let bytes = p.region(r);
+                    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+                    let ok =
+                        unsafe { js::gpu_texture_sub(t.id, bytes.as_ptr(), r[0], r[1], w, h) != 0 };
+                    if ok {
+                        t.version = p.version;
+                        self.uploads += 1;
+                    }
+                }
+            }
+        }
     }
 
     /// Free the textures whose image is gone or wasn't drawn lately.
@@ -226,24 +289,33 @@ impl WebExecutor {
             0
         });
         self.uploads = 0;
-        for op in &plan.ops {
-            match op {
-                Op::Box {
-                    rect,
-                    radius,
-                    stroke,
-                    color,
-                } => {
-                    buf.push(OP_BOX);
-                    push_f(&mut buf, rect);
-                    push_f(&mut buf, &[*radius, *stroke]);
-                    push_f(&mut buf, color);
-                    let pad = 1.0 + stroke * 0.5;
-                    let (x0, y0, x1, y1) =
-                        (rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad);
-                    let v = |x: f32, y: f32| [x, y, x, y];
-                    push_quad(&mut buf, [v(x0, y0), v(x1, y0), v(x0, y1), v(x1, y1)]);
+        self.sync_atlas(&plan.atlas);
+        for cmd in &plan.cmds {
+            let op = match cmd {
+                Cmd::Quads(q) => {
+                    let id = match &q.texture {
+                        None => 0,
+                        Some(TexRef::Image(image)) => self.texture(image).unwrap_or(0),
+                        Some(TexRef::Atlas(i)) => plan
+                            .atlas
+                            .get(*i)
+                            .and_then(|p| self.atlas.get(&p.id))
+                            .map_or(0, |t| t.id),
+                    };
+                    buf.push(OP_QUADS);
+                    buf.push(id);
+                    buf.push(u32::from(q.nearest));
+                    buf.push(q.count);
+                    let n = QUAD_FLOATS;
+                    let verts = &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
+                    push_f(&mut buf, verts);
+                    continue;
                 }
+                Cmd::Op(i) => &plan.ops[*i],
+            };
+            match op {
+                // Batched into `Cmd::Quads`.
+                Op::Box { .. } | Op::Image { .. } => {}
                 Op::Path {
                     contours,
                     even_odd,
@@ -255,22 +327,6 @@ impl WebExecutor {
                     push_f(&mut buf, color);
                     buf.extend(bbox.iter().map(|&v| v as u32));
                     push_fans(&mut buf, contours.iter().map(|c| c.as_slice()));
-                }
-                Op::Image {
-                    image,
-                    transform,
-                    rect,
-                    opacity,
-                    uv,
-                    tint,
-                    nearest,
-                } => {
-                    let Some(id) = self.texture(image) else {
-                        continue;
-                    };
-                    let size = image.size();
-                    let sample = Sample::region(*uv, size.width, size.height, *tint, *nearest);
-                    push_image(&mut buf, id, transform, *rect, *opacity, &sample);
                 }
                 Op::PushClip(Clip::Rect(r)) => {
                     buf.push(OP_CLIP_RECT);
@@ -302,15 +358,6 @@ fn push_f(buf: &mut Vec<u32>, values: &[f32]) {
     buf.extend(values.iter().map(|v| v.to_bits()));
 }
 
-/// Two triangles over the corners `top-left, top-right, bottom-left,
-/// bottom-right`, each `[x, y, aux_x, aux_y]`, with their count first.
-fn push_quad(buf: &mut Vec<u32>, [a, b, c, d]: [[f32; 4]; 4]) {
-    buf.push(6);
-    for v in [a, b, c, c, b, d] {
-        push_f(buf, &v);
-    }
-}
-
 /// Each polygon as a fan of triangles from its first point, with the vertex
 /// count first.
 fn push_fans<'a>(buf: &mut Vec<u32>, polys: impl Iterator<Item = &'a [[f32; 2]]> + Clone) {
@@ -323,43 +370,6 @@ fn push_fans<'a>(buf: &mut Vec<u32>, polys: impl Iterator<Item = &'a [[f32; 2]]>
             }
         }
     }
-}
-
-/// A textured quad over the local `rect` drawn through `m`, its edges
-/// padded a device pixel for their antialiasing (as `draw_texture` in the
-/// Metal executor).
-fn push_image(
-    buf: &mut Vec<u32>,
-    id: u32,
-    m: &Transform2D,
-    rect: [f32; 4],
-    opacity: f32,
-    sample: &Sample,
-) {
-    let px = (m.a.hypot(m.b).max(1e-6), m.c.hypot(m.d).max(1e-6));
-    buf.push(OP_IMAGE);
-    buf.push(id);
-    push_f(buf, &rect);
-    push_f(buf, &[px.0, px.1, opacity]);
-    push_f(buf, &sample.uv);
-    push_f(buf, &sample.clamp);
-    push_f(buf, &sample.tint);
-    buf.push(u32::from(sample.nearest));
-    let (pu, pv) = (1.0 / px.0, 1.0 / px.1);
-    let (x0, y0, x1, y1) = (rect[0] - pu, rect[1] - pv, rect[2] + pu, rect[3] + pv);
-    let corner = |x: f32, y: f32| {
-        let d = m.apply(Point { x, y });
-        [d.x, d.y, x, y]
-    };
-    push_quad(
-        buf,
-        [
-            corner(x0, y0),
-            corner(x1, y0),
-            corner(x0, y1),
-            corner(x1, y1),
-        ],
-    );
 }
 
 impl Executor for WebExecutor {
@@ -441,6 +451,7 @@ mod tests {
         WebExecutor {
             api: Api::WebGpu,
             textures: HashMap::new(),
+            atlas: HashMap::new(),
             next_id: 1,
             count: 0,
             uploads: 0,
@@ -457,20 +468,20 @@ mod tests {
             let op = buf[p];
             ops.push(op);
             p += 1;
-            // Fixed words, then (for some) a vertex count and its vertices.
+            // Fixed words, then (for some) a vertex count and its vertices
+            // of so many words.
             let (fixed, verts) = match op {
-                OP_BOX => (10, true),
-                OP_PATH => (9, true),
-                OP_IMAGE => (21, true),
-                OP_CLIP_RECT => (4, false),
-                OP_CLIP_POLY => (0, true),
-                OP_POP_CLIP | OP_POP_LAYER => (0, false),
-                OP_LAYER => (1, false),
+                OP_PATH => (9, 4),
+                OP_CLIP_RECT => (4, 0),
+                OP_CLIP_POLY => (0, 4),
+                OP_POP_CLIP | OP_POP_LAYER => (0, 0),
+                OP_LAYER => (1, 0),
+                OP_QUADS => (2, QUAD_FLOATS),
                 _ => panic!("unknown op {op} at {}", p - 1),
             };
             p += fixed;
-            if verts {
-                p += 1 + buf[p] as usize * 4;
+            if verts > 0 {
+                p += 1 + buf[p] as usize * verts;
             }
         }
         assert_eq!(p, buf.len(), "the last op ends the buffer");
@@ -494,7 +505,7 @@ mod tests {
             ex.encode(&plan);
             assert_eq!(&ex.buf[..2], &[320, 240]);
             let ops = walk(&ex.buf);
-            assert_eq!(ops.len(), plan.ops.len(), "one op each");
+            assert_eq!(ops.len(), plan.cmds.len(), "one op per command");
             let count = |op: u32| ops.iter().filter(|&&o| o == op).count();
             assert_eq!(count(OP_LAYER), count(OP_POP_LAYER));
             assert_eq!(
@@ -531,6 +542,10 @@ mod tests {
         ex.sweep();
         ex.encode(&plan);
         assert_eq!(ex.uploads(), 0, "the same image, the same texture");
+        // A batch of quads: its texture's id, then its vertices.
+        let at = 7;
+        assert_eq!(ex.buf[at], OP_QUADS, "{:?}", &ex.buf[..12]);
+        assert!(ex.buf[at + 1] > 0);
         drop(plan);
         drop(scene);
         ex.sweep();

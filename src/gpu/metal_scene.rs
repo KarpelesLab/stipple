@@ -15,8 +15,11 @@
 //! A frame is one command buffer; each change of target (a layer pushed or
 //! popped, a path's scratch pass) is a new render pass. Vertices go into
 //! shared buffers the command buffer keeps alive; images are textures cached
-//! by the image's identity, like the GL backend's. Raw `objc_msgSend` FFI, as
-//! in the rest of the macOS and iOS code.
+//! by the image's identity, like the GL backend's, and each glyph atlas page
+//! is a texture brought up to date at the start of the frame by a blit of
+//! what changed in it. Each batch of boxes and textured quads
+//! (`super::batch`) is one draw call. Raw `objc_msgSend` FFI, as in the rest
+//! of the macOS and iOS code.
 //!
 //! A window's frames are drawn into a target of the executor's own that
 //! persists from frame to frame, then copied into the layer's drawable and
@@ -26,6 +29,8 @@
 
 #![allow(unsafe_code)]
 
+use super::atlas::{AtlasPage, Upload};
+use super::batch::{self, Cmd, TexRef};
 use super::ops::{Clip, Op, Plan, Sample};
 use super::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::geometry::{PhysicalSize, ScaleFactor};
@@ -171,53 +176,72 @@ vertex VOut vs(uint vid [[vertex_id]], const device float4* v [[buffer(0)]],
     return o;
 }
 
-// A box: `aux` is the device position. Coverage is the exact overlap of the
-// pixel with a sharp box (or ring), or a signed distance for rounded corners.
-struct BoxU { float4 rect; float4 color; float radius; float stroke; };
+// Batched boxes and textured quads (`batch.rs`): every input is a vertex
+// attribute, `a0`..`a4`, so a run of them is one draw.
+struct QV { float4 a0; float4 a1; float4 a2; float4 a3; float4 a4; };
+struct QOut { float4 pos [[position]]; float2 p; float4 a1; float4 a2; float4 a3; float mode; };
+vertex QOut quad_vs(uint vid [[vertex_id]], const device QV* v [[buffer(0)]],
+                    constant float4& xf [[buffer(1)]]) {
+    QV d = v[vid];
+    QOut o;
+    o.pos = float4(d.a0.xy * xf.xy + xf.zw, 0.0, 1.0);
+    o.p = d.a0.zw;
+    o.a1 = d.a1;
+    o.a2 = d.a2;
+    o.a3 = d.a3;
+    o.mode = d.a4.x;
+    return o;
+}
+
+// A box: `p` is the device position, `a1` the rect, `a2` the color, `a3`
+// the radius and stroke. Coverage is the exact overlap of the pixel with a
+// sharp box (or ring), or a signed distance for rounded corners.
 static float span(float p, float h) { return max(min(h, p + 0.5) - max(-h, p - 0.5), 0.0); }
 static float boxcov(float2 p, float2 h) { h = max(h, float2(0.0)); return span(p.x, h.x) * span(p.y, h.y); }
 static float sdf(float2 p, float2 h, float r) {
     float2 d = abs(p) - (h - float2(r));
     return length(max(d, float2(0.0))) + min(max(d.x, d.y), 0.0) - r;
 }
-fragment float4 box_fs(VOut in [[stage_in]], constant BoxU& u [[buffer(0)]]) {
-    float2 c = (u.rect.xy + u.rect.zw) * 0.5;
-    float2 h = (u.rect.zw - u.rect.xy) * 0.5;
-    float2 p = in.aux - c;
-    float w = u.stroke * 0.5;
+static float4 quad_box(QOut in) {
+    float4 rect = in.a1;
+    float radius = in.a3.x;
+    float stroke = in.a3.y;
+    float2 c = (rect.xy + rect.zw) * 0.5;
+    float2 h = (rect.zw - rect.xy) * 0.5;
+    float2 p = in.p - c;
+    float w = stroke * 0.5;
     float cov;
-    if (u.radius <= 0.0) {
-        cov = u.stroke > 0.0 ? boxcov(p, h + float2(w)) - boxcov(p, h - float2(w)) : boxcov(p, h);
+    if (radius <= 0.0) {
+        cov = stroke > 0.0 ? boxcov(p, h + float2(w)) - boxcov(p, h - float2(w)) : boxcov(p, h);
     } else {
-        float r = min(u.radius, min(h.x, h.y));
+        float r = min(radius, min(h.x, h.y));
         float d = sdf(p, h, r);
-        cov = u.stroke > 0.0 ? clamp(0.5 - (d - w), 0.0, 1.0) - clamp(0.5 - (d + w), 0.0, 1.0)
-                             : clamp(0.5 - d, 0.0, 1.0);
+        cov = stroke > 0.0 ? clamp(0.5 - (d - w), 0.0, 1.0) - clamp(0.5 - (d + w), 0.0, 1.0)
+                           : clamp(0.5 - d, 0.0, 1.0);
     }
-    return u.color * cov;
+    return in.a2 * cov;
 }
 
-// A textured quad: `aux` is the local position inside `rect`, `px` the device
-// pixels per local unit along each axis (for edge coverage). `uv` is the part
-// of the texture spread over the rect, kept within `clampr`; `tint`
-// (premultiplied) multiplies every texel.
-struct TexU { float4 rect; float4 uv; float4 clampr; float4 tint; float2 px;
-              float opacity; float premul; float aa; float nearest; };
-fragment float4 tex_fs(VOut in [[stage_in]], texture2d<float> t [[texture(0)]],
-                       constant TexU& u [[buffer(0)]]) {
+// Boxes only (a batch without a texture): textured quads are left out.
+fragment float4 quadbox_fs(QOut in [[stage_in]]) {
+    return in.mode < 0.5 ? quad_box(in) : float4(0.0);
+}
+
+// Boxes and textured quads: `p` is the texture coordinate, kept within
+// `a2`; `a1` the distances to the edges in device pixels (for their
+// coverage); `a3` the tint times the opacity (premultiplied).
+fragment float4 quad_fs(QOut in [[stage_in]], texture2d<float> t [[texture(0)]],
+                        constant float& nearest [[buffer(0)]]) {
+    if (in.mode < 0.5) { return quad_box(in); }
     constexpr sampler lin(filter::linear, address::clamp_to_edge);
     constexpr sampler near(filter::nearest, address::clamp_to_edge);
-    float2 f = (in.aux - u.rect.xy) / (u.rect.zw - u.rect.xy);
-    float2 uv = clamp(mix(u.uv.xy, u.uv.zw, f), u.clampr.xy, u.clampr.zw);
-    float4 c = u.nearest > 0.5 ? t.sample(near, uv) : t.sample(lin, uv);
-    if (u.premul < 0.5) { c.rgb *= c.a; }
-    c *= u.tint;
-    float cov = 1.0;
-    if (u.aa > 0.5) {
-        float2 d = min(in.aux - u.rect.xy, u.rect.zw - in.aux) * u.px;
-        cov = clamp(d.x + 0.5, 0.0, 1.0) * clamp(d.y + 0.5, 0.0, 1.0);
-    }
-    return c * (u.opacity * cov);
+    float2 uv = clamp(in.p, in.a2.xy, in.a2.zw);
+    float4 c = nearest > 0.5 ? t.sample(near, uv) : t.sample(lin, uv);
+    if (in.mode < 1.5) { c.rgb *= c.a; }
+    c *= in.a3;
+    float cov = clamp(min(in.a1.x, in.a1.z) + 0.5, 0.0, 1.0)
+              * clamp(min(in.a1.y, in.a1.w) + 0.5, 0.0, 1.0);
+    return c * cov;
 }
 
 // A flat color: the stencil and cover passes, and stencil clips.
@@ -236,29 +260,6 @@ fragment float4 resolve_fs(VOut in [[stage_in]], texture2d<float> t [[texture(0)
     return u.color * (c * 0.25);
 }
 "#;
-
-#[repr(C)]
-struct BoxU {
-    rect: [f32; 4],
-    color: [f32; 4],
-    radius: f32,
-    stroke: f32,
-    _pad: [f32; 2],
-}
-
-#[repr(C)]
-struct TexU {
-    rect: [f32; 4],
-    uv: [f32; 4],
-    clamp: [f32; 4],
-    tint: [f32; 4],
-    px: [f32; 2],
-    opacity: f32,
-    premul: f32,
-    aa: f32,
-    nearest: f32,
-    _pad: [f32; 2],
-}
 
 #[repr(C)]
 struct ResolveU {
@@ -355,6 +356,13 @@ struct Texture {
     used: u64,
 }
 
+/// An atlas page's texture, holding `version` of it.
+struct AtlasTex {
+    tex: Id,
+    side: u32,
+    version: u64,
+}
+
 /// A clip pushed on a target, and how to undo it.
 enum Undo {
     Scissor([i32; 4]),
@@ -429,8 +437,9 @@ pub(crate) struct MetalExecutor {
     device: Id,
     queue: Id,
     srgb: *mut c_void,
-    boxes: Id,
-    tex: Id,
+    /// Batched quads: boxes only, and boxes with textured quads.
+    quad_boxes: Id,
+    quads: Id,
     resolve: Id,
     /// Stencil-only on the frame and layers (clip polygons).
     clip: Id,
@@ -452,11 +461,16 @@ pub(crate) struct MetalExecutor {
     layers: Vec<Target>,
     scratch: Option<Target>,
     textures: HashMap<usize, Texture>,
+    /// The atlas pages' textures, by page id.
+    atlas: HashMap<u64, AtlasTex>,
+    /// The quad vertices of the frame being encoded (layer composites).
+    scratch_quads: Vec<f32>,
     /// The last presented frame's command buffer (retained), to see whether
     /// the device failed it.
     last: Id,
     count: u64,
     uploads: usize,
+    draws: usize,
 }
 
 impl Drop for MetalExecutor {
@@ -468,10 +482,13 @@ impl Drop for MetalExecutor {
             for t in self.textures.values() {
                 release(t.tex);
             }
+            for t in self.atlas.values() {
+                release(t.tex);
+            }
             for obj in [
                 self.last,
-                self.boxes,
-                self.tex,
+                self.quad_boxes,
+                self.quads,
                 self.resolve,
                 self.clip,
                 self.wind,
@@ -522,8 +539,8 @@ impl MetalExecutor {
                 device,
                 queue,
                 srgb: CGColorSpaceCreateWithName(kCGColorSpaceSRGB),
-                boxes: std::ptr::null_mut(),
-                tex: std::ptr::null_mut(),
+                quad_boxes: std::ptr::null_mut(),
+                quads: std::ptr::null_mut(),
                 resolve: std::ptr::null_mut(),
                 clip: std::ptr::null_mut(),
                 wind: std::ptr::null_mut(),
@@ -540,9 +557,12 @@ impl MetalExecutor {
                 layers: Vec::new(),
                 scratch: None,
                 textures: HashMap::new(),
+                atlas: HashMap::new(),
+                scratch_quads: Vec::new(),
                 last: std::ptr::null_mut(),
                 count: 0,
                 uploads: 0,
+                draws: 0,
             };
             if queue.is_null() {
                 return Err(GpuError::Unavailable("no Metal command queue".into()));
@@ -559,17 +579,18 @@ impl MetalExecutor {
             }
             let func = |name: &CStr| send!(Id; lib, c"newFunctionWithName:", nsstring(name); Id);
             let vs = func(c"vs");
+            let quad_vs = func(c"quad_vs");
             let fns = [
-                func(c"box_fs"),
-                func(c"tex_fs"),
+                func(c"quadbox_fs"),
+                func(c"quad_fs"),
                 func(c"flat_fs"),
                 func(c"resolve_fs"),
             ];
-            let [box_fs, tex_fs, flat_fs, resolve_fs] = fns;
+            let [quadbox_fs, quad_fs, flat_fs, resolve_fs] = fns;
             let built = (|| -> Result<(), GpuError> {
                 let dev = device;
-                me.boxes = pipeline(dev, vs, box_fs, PIXEL_BGRA8, true, true)?;
-                me.tex = pipeline(dev, vs, tex_fs, PIXEL_BGRA8, true, true)?;
+                me.quad_boxes = pipeline(dev, quad_vs, quadbox_fs, PIXEL_BGRA8, true, true)?;
+                me.quads = pipeline(dev, quad_vs, quad_fs, PIXEL_BGRA8, true, true)?;
                 me.resolve = pipeline(dev, vs, resolve_fs, PIXEL_BGRA8, true, true)?;
                 me.clip = pipeline(dev, vs, flat_fs, PIXEL_BGRA8, false, false)?;
                 me.wind = pipeline(dev, vs, flat_fs, PIXEL_R8, false, false)?;
@@ -599,7 +620,7 @@ impl MetalExecutor {
                 me.ds_cover_eo = depth_stencil(dev, ne, ne, 1, 0);
                 Ok(())
             })();
-            for f in [vs, box_fs, tex_fs, flat_fs, resolve_fs, lib] {
+            for f in [vs, quad_vs, quadbox_fs, quad_fs, flat_fs, resolve_fs, lib] {
                 release(f);
             }
             built?;
@@ -665,6 +686,85 @@ impl MetalExecutor {
             }
             keep
         });
+    }
+
+    /// Bring the atlas pages' textures up to date with `pages`, by blits
+    /// in `f`'s command buffer (so a frame still drawing from a texture
+    /// finishes first), and drop the textures of pages gone.
+    unsafe fn sync_atlas(&mut self, f: &Frame, pages: &[AtlasPage]) -> Result<(), GpuError> {
+        unsafe {
+            self.atlas.retain(|id, t| {
+                let keep = pages.iter().any(|p| p.id == *id);
+                if !keep {
+                    release(t.tex);
+                }
+                keep
+            });
+            let mut blit: Id = std::ptr::null_mut();
+            for p in pages {
+                let have = self.atlas.get(&p.id).map(|t| (t.side, t.version));
+                let region = match p.upload(have) {
+                    Upload::Nothing => continue,
+                    Upload::Whole => {
+                        if let Some(old) = self.atlas.remove(&p.id) {
+                            release(old.tex);
+                        }
+                        let side = p.side as usize;
+                        let desc = send!(Id; class(c"MTLTextureDescriptor"),
+                            c"texture2DDescriptorWithPixelFormat:width:height:mipmapped:",
+                            PIXEL_RGBA8; u64, side as u64; u64, side as u64; u64, false; bool);
+                        send!((); desc, c"setUsage:", USAGE_SHADER_READ; u64);
+                        send!((); desc, c"setStorageMode:", STORAGE_PRIVATE; u64);
+                        let tex = send!(Id; self.device, c"newTextureWithDescriptor:", desc; Id);
+                        if tex.is_null() {
+                            return Err(GpuError::Lost("no atlas texture".into()));
+                        }
+                        self.atlas.insert(
+                            p.id,
+                            AtlasTex {
+                                tex,
+                                side: p.side,
+                                version: p.version,
+                            },
+                        );
+                        [0, 0, p.side, p.side]
+                    }
+                    Upload::Region(r) => r,
+                };
+                let t = self.atlas.get_mut(&p.id).unwrap();
+                t.version = p.version;
+                let bytes = p.region(region);
+                let buf = send!(Id; self.device, c"newBufferWithBytes:length:options:",
+                    bytes.as_ptr() as *const c_void; *const c_void, bytes.len(); usize, 0u64; u64);
+                if buf.is_null() {
+                    return Err(GpuError::Lost("no atlas upload buffer".into()));
+                }
+                if blit.is_null() {
+                    blit = send!(Id; f.cmd, c"blitCommandEncoder");
+                }
+                let (w, h) = (
+                    (region[2] - region[0]) as usize,
+                    (region[3] - region[1]) as usize,
+                );
+                let size = Size3 { w, h, d: 1 };
+                let origin = Size3 {
+                    w: region[0] as usize,
+                    h: region[1] as usize,
+                    d: 0,
+                };
+                send!((); blit,
+                    c"copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+                    buf; Id, 0usize; usize, w * 4; usize, w * h * 4; usize, size; Size3,
+                    t.tex; Id, 0usize; usize, 0usize; usize, origin; Size3);
+                // The command buffer keeps it until it has run.
+                release(buf);
+                self.uploads += 1;
+            }
+            if !blit.is_null() {
+                send!((); blit, c"endEncoding");
+            }
+            Ok(())
+        }
     }
 
     fn target_of(&self, f: &Frame, on: On) -> (Id, Id) {
@@ -777,7 +877,8 @@ impl MetalExecutor {
         }
     }
 
-    unsafe fn draw(f: &Frame, count: usize) {
+    unsafe fn draw(&mut self, f: &Frame, count: usize) {
+        self.draws += 1;
         unsafe {
             send!((); f.enc, c"drawPrimitives:vertexStart:vertexCount:",
                 TRIANGLE; u64, 0u64; u64, count as u64; u64);
@@ -789,98 +890,38 @@ impl MetalExecutor {
         [2.0 / w as f32, -2.0 / h as f32, -1.0, 1.0]
     }
 
-    unsafe fn draw_box(
-        &self,
-        f: &mut Frame,
-        level: &Level,
-        rect: [f32; 4],
-        radius: f32,
-        stroke: f32,
-        color: [f32; 4],
-    ) -> Result<(), GpuError> {
-        unsafe {
-            if !self.bind(f, level, self.boxes, self.ds_test, level.depth) {
-                return Ok(());
-            }
-            let pad = 1.0 + stroke * 0.5;
-            let (x0, y0, x1, y1) = (rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad);
-            #[rustfmt::skip]
-            let v = [
-                x0, y0, x0, y0,  x1, y0, x1, y0,  x0, y1, x0, y1,
-                x0, y1, x0, y1,  x1, y0, x1, y0,  x1, y1, x1, y1,
-            ];
-            self.vertices(f, &v, Self::xf(f.w, f.h))?;
-            Self::uniforms(
-                f,
-                &BoxU {
-                    rect,
-                    color,
-                    radius,
-                    stroke,
-                    _pad: [0.0; 2],
-                },
-            );
-            Self::draw(f, 6);
-            Ok(())
-        }
-    }
-
-    /// Draw texture `tex` over the local `rect` through `m` (see the GL
-    /// executor's `draw_texture`).
+    /// Draw `count` quad vertices from `first` of `quads` (see
+    /// `super::batch`) in one call: sampling `tex` (nearest-neighbor or
+    /// bilinear), or boxes only without one.
     #[allow(clippy::too_many_arguments)]
-    unsafe fn draw_texture(
-        &self,
+    unsafe fn draw_quads(
+        &mut self,
         f: &mut Frame,
         level: &Level,
-        tex: Id,
-        m: &Transform2D,
-        rect: [f32; 4],
-        opacity: f32,
-        premul: bool,
-        aa: bool,
-        sample: &Sample,
+        quads: &[f32],
+        first: u32,
+        count: u32,
+        tex: Option<Id>,
+        nearest: bool,
     ) -> Result<(), GpuError> {
         unsafe {
-            if !self.bind(f, level, self.tex, self.ds_test, level.depth) {
+            let pipe = if tex.is_some() {
+                self.quads
+            } else {
+                self.quad_boxes
+            };
+            if count == 0 || !self.bind(f, level, pipe, self.ds_test, level.depth) {
                 return Ok(());
             }
-            let px = (m.a.hypot(m.b).max(1e-6), m.c.hypot(m.d).max(1e-6));
-            let (pu, pv) = if aa {
-                (1.0 / px.0, 1.0 / px.1)
-            } else {
-                (0.0, 0.0)
-            };
-            let (x0, y0, x1, y1) = (rect[0] - pu, rect[1] - pv, rect[2] + pu, rect[3] + pv);
-            let corner = |x: f32, y: f32| {
-                let d = m.apply(oxideav_core::Point { x, y });
-                [d.x, d.y, x, y]
-            };
-            let (a, b, c, d) = (
-                corner(x0, y0),
-                corner(x1, y0),
-                corner(x0, y1),
-                corner(x1, y1),
-            );
-            let v: Vec<f32> = [a, b, c, c, b, d].concat();
-            self.vertices(f, &v, Self::xf(f.w, f.h))?;
-            send!((); f.enc, c"setFragmentTexture:atIndex:", tex; Id, 0usize; usize);
-            let flag = |b: bool| if b { 1.0 } else { 0.0 };
-            Self::uniforms(
-                f,
-                &TexU {
-                    rect,
-                    uv: sample.uv,
-                    clamp: sample.clamp,
-                    tint: sample.tint,
-                    px: [px.0, px.1],
-                    opacity,
-                    premul: flag(premul),
-                    aa: flag(aa),
-                    nearest: flag(sample.nearest),
-                    _pad: [0.0; 2],
-                },
-            );
-            Self::draw(f, 6);
+            let n = batch::QUAD_FLOATS;
+            let verts = &quads[first as usize * n..(first + count) as usize * n];
+            self.vertices(f, verts, Self::xf(f.w, f.h))?;
+            if let Some(tex) = tex {
+                send!((); f.enc, c"setFragmentTexture:atIndex:", tex; Id, 0usize; usize);
+                let flag: f32 = if nearest { 1.0 } else { 0.0 };
+                Self::uniforms(f, &flag);
+            }
+            self.draw(f, count as usize);
             Ok(())
         }
     }
@@ -958,7 +999,7 @@ impl MetalExecutor {
             if !fans.is_empty() {
                 self.vertices(f, &fans, xf)?;
                 Self::uniforms(f, &white);
-                Self::draw(f, fans.len() / 4);
+                self.draw(f, fans.len() / 4);
             }
 
             // Cover: full coverage wherever the winding says inside.
@@ -976,7 +1017,7 @@ impl MetalExecutor {
             ];
             self.vertices(f, &quad, xf)?;
             Self::uniforms(f, &white);
-            Self::draw(f, 6);
+            self.draw(f, 6);
 
             // Resolve into the level.
             if !self.bind(f, level, self.resolve, self.ds_test, level.depth) {
@@ -1004,7 +1045,7 @@ impl MetalExecutor {
                     _pad: 0.0,
                 },
             );
-            Self::draw(f, 6);
+            self.draw(f, 6);
             Ok(())
         }
     }
@@ -1012,7 +1053,7 @@ impl MetalExecutor {
     /// Draw the polygon `pts` into the stencil of `level`'s target, where it
     /// is `from`, with `ds` (increment or decrement).
     unsafe fn stencil_polygon(
-        &self,
+        &mut self,
         f: &mut Frame,
         level: &Level,
         pts: &[[f32; 2]],
@@ -1035,7 +1076,7 @@ impl MetalExecutor {
             if !fans.is_empty() {
                 self.vertices(f, &fans, Self::xf(w, h))?;
                 Self::uniforms(f, &[0.0f32; 4]);
-                Self::draw(f, fans.len() / 4);
+                self.draw(f, fans.len() / 4);
             }
             Ok(())
         }
@@ -1043,7 +1084,7 @@ impl MetalExecutor {
 
     /// Composite the layer `layer` into `parent`.
     unsafe fn composite(
-        &self,
+        &mut self,
         f: &mut Frame,
         layer: &Level,
         parent: &Level,
@@ -1051,17 +1092,21 @@ impl MetalExecutor {
         unsafe {
             let tex = self.layers[layer.layer.unwrap()].color;
             let full = [0.0, 0.0, f.w as f32, f.h as f32];
-            self.draw_texture(
-                f,
-                parent,
-                tex,
+            let mut v = std::mem::take(&mut self.scratch_quads);
+            v.clear();
+            batch::tex_quad(
+                &mut v,
                 &Transform2D::identity(),
                 full,
                 layer.opacity,
                 true,
                 false,
                 &Sample::WHOLE,
-            )
+            );
+            let count = (v.len() / batch::QUAD_FLOATS) as u32;
+            let drawn = self.draw_quads(f, parent, &v, 0, count, Some(tex), false);
+            self.scratch_quads = v;
+            drawn
         }
     }
 
@@ -1073,6 +1118,8 @@ impl MetalExecutor {
                 self.layers.clear();
             }
             self.uploads = 0;
+            self.draws = 0;
+            self.sync_atlas(f, &plan.atlas)?;
             let mut levels = vec![Level {
                 layer: None,
                 opacity: 1.0,
@@ -1090,17 +1137,27 @@ impl MetalExecutor {
             ];
             self.open(f, On::Frame, plan.partial.is_none().then_some(clear));
 
-            for op in &plan.ops {
-                match op {
-                    Op::Box {
-                        rect,
-                        radius,
-                        stroke,
-                        color,
-                    } => {
+            for cmd in &plan.cmds {
+                let op = match cmd {
+                    Cmd::Quads(q) => {
+                        let tex = match &q.texture {
+                            None => None,
+                            Some(TexRef::Image(image)) => self.texture(image),
+                            Some(TexRef::Atlas(i)) => plan
+                                .atlas
+                                .get(*i)
+                                .and_then(|p| self.atlas.get(&p.id))
+                                .map(|t| t.tex),
+                        };
                         let level = levels.last().unwrap();
-                        self.draw_box(f, level, *rect, *radius, *stroke, *color)?;
+                        self.draw_quads(f, level, &plan.quads, q.first, q.count, tex, q.nearest)?;
+                        continue;
                     }
+                    Cmd::Op(i) => &plan.ops[*i],
+                };
+                match op {
+                    // Batched into `Cmd::Quads`.
+                    Op::Box { .. } | Op::Image { .. } => {}
                     Op::Path {
                         contours,
                         even_odd,
@@ -1109,25 +1166,6 @@ impl MetalExecutor {
                     } => {
                         let level = levels.last().unwrap();
                         self.draw_path(f, level, contours, *even_odd, *color, *bbox)?;
-                    }
-                    Op::Image {
-                        image,
-                        transform,
-                        rect,
-                        opacity,
-                        uv,
-                        tint,
-                        nearest,
-                    } => {
-                        let Some(tex) = self.texture(image) else {
-                            continue;
-                        };
-                        let size = image.size();
-                        let sample = Sample::region(*uv, size.width, size.height, *tint, *nearest);
-                        let level = levels.last().unwrap();
-                        self.draw_texture(
-                            f, level, tex, transform, *rect, *opacity, false, true, &sample,
-                        )?;
                     }
                     Op::PushClip(Clip::Rect(r)) => {
                         let level = levels.last_mut().unwrap();
@@ -1446,6 +1484,10 @@ impl Executor for MetalExecutor {
 
     fn uploads(&self) -> usize {
         self.uploads
+    }
+
+    fn draws(&self) -> usize {
+        self.draws
     }
 }
 

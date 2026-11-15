@@ -15,25 +15,31 @@
 //! there (its caches start over once).
 //!
 //! Everything is drawn in premultiplied alpha into framebuffer objects that
-//! carry a stencil buffer: boxes through an analytic-coverage shader, paths by
+//! carry a stencil buffer: boxes (analytic coverage) and textured quads
+//! (images, image regions, glyphs from the atlas) batched by
+//! `crate::gpu::batch`, each batch one draw of the quad program; paths by
 //! stencil-and-cover into a supersampled scratch target that is then resolved
-//! (averaged) into the frame, images and glyph rasters as textured quads, and
-//! layers into pooled offscreen targets composited at their opacity. Clips are
-//! scissor rectangles or stencil polygons.
+//! (averaged) into the frame; layers into pooled offscreen targets composited
+//! at their opacity. Clips are scissor rectangles or stencil polygons.
 //!
 //! The context, programs, targets and textures live in a thread-local, so a
 //! renderer set with `App::render_with` keeps them from frame to frame.
 //! Textures for images are cached by the image's identity (its `Arc`): kept
 //! while the image is alive and drawn, re-uploaded if it is replaced, and
-//! freed once it is dropped or hasn't been drawn for a while.
+//! freed once it is dropped or hasn't been drawn for a while. Each glyph
+//! atlas page is a texture brought up to date at the start of a frame with
+//! only what changed in it (`glTexSubImage2D`).
 
 use super::*;
+use crate::gpu::atlas::{AtlasPage, Upload};
+use crate::gpu::batch::{self, Cmd, QUAD_FLOATS, TexRef};
 use crate::gpu::ops::{Clip, Op, Plan, Sample};
 use crate::gpu::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::platform::GpuLayer;
 use oxideav_core::Transform2D;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::CStr;
 use std::sync::{Arc, Weak};
 
 const GL_SCISSOR_TEST: GLenum = 0x0C11;
@@ -90,10 +96,28 @@ unsafe extern "C" {
     fn glDeleteRenderbuffers(n: GLsizei, renderbuffers: *const GLuint);
     fn glGetIntegerv(pname: GLenum, data: *mut GLint);
     fn glPixelStorei(pname: GLenum, param: GLint);
+    fn glDisableVertexAttribArray(index: GLuint);
+    #[allow(clippy::too_many_arguments)]
+    fn glTexSubImage2D(
+        target: GLenum,
+        level: GLint,
+        xoffset: GLint,
+        yoffset: GLint,
+        width: GLsizei,
+        height: GLsizei,
+        format: GLenum,
+        ty: GLenum,
+        pixels: *const c_void,
+    );
 }
 
-// Every program shares one vertex shader: `a_pos` in device pixels mapped to
-// clip space by `u_xf` (scale.xy, offset.zw), and a pass-through `a_aux`.
+/// Vertex attribute slots cleared before each draw (the quad program uses
+/// five).
+const MAX_ATTRIBS: GLuint = 8;
+
+// The path, clip and resolve programs share one vertex shader: `a_pos` in
+// device pixels mapped to clip space by `u_xf` (scale.xy, offset.zw), and a
+// pass-through `a_aux`.
 const VS: &[u8] = b"attribute vec2 a_pos;\n\
 attribute vec2 a_aux;\n\
 uniform vec4 u_xf;\n\
@@ -105,13 +129,38 @@ void main() {\n\
 
 const PRECISION: &str = "#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n";
 
-// A box: `v_aux` is the device position. Coverage is the exact overlap of the
-// pixel with a sharp box (or ring), or a signed distance for rounded corners.
-const BOX_FS: &str = "varying vec2 v_aux;\n\
-uniform vec4 u_rect;\n\
-uniform float u_radius;\n\
-uniform float u_stroke;\n\
-uniform vec4 u_color;\n\
+// Batched boxes and textured quads (`crate::gpu::batch`; the MSL `quad_vs`
+// in `metal_scene.rs`): every input is a vertex attribute, `a0`..`a4`, so a
+// run of them is one draw. `a0.xy` in device pixels is mapped to clip space
+// by `u_xf`; the rest is passed through.
+const QUAD_VS: &[u8] = b"attribute vec4 a0;\n\
+attribute vec4 a1;\n\
+attribute vec4 a2;\n\
+attribute vec4 a3;\n\
+attribute vec4 a4;\n\
+uniform vec4 u_xf;\n\
+varying vec2 v_p;\n\
+varying vec4 v_a1;\n\
+varying vec4 v_a2;\n\
+varying vec4 v_a3;\n\
+varying float v_mode;\n\
+void main() {\n\
+  v_p = a0.zw;\n\
+  v_a1 = a1;\n\
+  v_a2 = a2;\n\
+  v_a3 = a3;\n\
+  v_mode = a4.x;\n\
+  gl_Position = vec4(a0.xy * u_xf.xy + u_xf.zw, 0.0, 1.0);\n\
+}\n\0";
+
+// A box: `v_p` is the device position, `v_a1` the rect, `v_a2` the color,
+// `v_a3` the radius and stroke. Coverage is the exact overlap of the pixel
+// with a sharp box (or ring), or a signed distance for rounded corners.
+const QUAD_BOX: &str = "varying vec2 v_p;\n\
+varying vec4 v_a1;\n\
+varying vec4 v_a2;\n\
+varying vec4 v_a3;\n\
+varying float v_mode;\n\
 float span(float p, float h) {\n\
   return max(min(h, p + 0.5) - max(-h, p - 0.5), 0.0);\n\
 }\n\
@@ -123,57 +172,53 @@ float sdf(vec2 p, vec2 h, float r) {\n\
   vec2 d = abs(p) - (h - vec2(r));\n\
   return length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - r;\n\
 }\n\
-void main() {\n\
-  vec2 c = (u_rect.xy + u_rect.zw) * 0.5;\n\
-  vec2 h = (u_rect.zw - u_rect.xy) * 0.5;\n\
-  vec2 p = v_aux - c;\n\
-  float w = u_stroke * 0.5;\n\
+vec4 quadBox() {\n\
+  float radius = v_a3.x;\n\
+  float stroke = v_a3.y;\n\
+  vec2 c = (v_a1.xy + v_a1.zw) * 0.5;\n\
+  vec2 h = (v_a1.zw - v_a1.xy) * 0.5;\n\
+  vec2 p = v_p - c;\n\
+  float w = stroke * 0.5;\n\
   float cov;\n\
-  if (u_radius <= 0.0) {\n\
-    if (u_stroke > 0.0) {\n\
+  if (radius <= 0.0) {\n\
+    if (stroke > 0.0) {\n\
       cov = boxcov(p, h + vec2(w)) - boxcov(p, h - vec2(w));\n\
     } else {\n\
       cov = boxcov(p, h);\n\
     }\n\
   } else {\n\
-    float r = min(u_radius, min(h.x, h.y));\n\
+    float r = min(radius, min(h.x, h.y));\n\
     float d = sdf(p, h, r);\n\
-    if (u_stroke > 0.0) {\n\
+    if (stroke > 0.0) {\n\
       cov = clamp(0.5 - (d - w), 0.0, 1.0) - clamp(0.5 - (d + w), 0.0, 1.0);\n\
     } else {\n\
       cov = clamp(0.5 - d, 0.0, 1.0);\n\
     }\n\
   }\n\
-  gl_FragColor = u_color * cov;\n\
+  return v_a2 * cov;\n\
 }\n";
 
-// A textured quad: `v_aux` is the local position inside `u_rect`, `u_px` the
-// device pixels per local unit along each axis (for edge coverage). `u_uv`
-// is the part of the texture spread over the rect (swapped ends mirror it),
-// kept within `u_clamp` so a neighbor in an atlas doesn't bleed in; `u_tint`
-// (premultiplied) multiplies every texel.
-const TEX_FS: &str = "varying vec2 v_aux;\n\
-uniform sampler2D u_tex;\n\
-uniform vec4 u_rect;\n\
-uniform vec2 u_px;\n\
-uniform float u_opacity;\n\
-uniform float u_premul;\n\
-uniform float u_aa;\n\
-uniform vec4 u_uv;\n\
-uniform vec4 u_clamp;\n\
-uniform vec4 u_tint;\n\
+// Boxes only (a batch without a texture): textured quads are left out.
+const QUADBOX_MAIN: &str = "void main() {\n\
+  gl_FragColor = v_mode < 0.5 ? quadBox() : vec4(0.0);\n\
+}\n";
+
+// Boxes and textured quads. A textured quad: `v_p` is the texture
+// coordinate, kept within `v_a2` (so a neighbor in the atlas doesn't bleed
+// in); `v_a1` the distances to its edges in device pixels (for their
+// coverage); `v_a3` the tint times the opacity (premultiplied).
+const QUAD_MAIN: &str = "uniform sampler2D u_tex;\n\
 void main() {\n\
-  vec2 f = (v_aux - u_rect.xy) / (u_rect.zw - u_rect.xy);\n\
-  vec2 uv = clamp(mix(u_uv.xy, u_uv.zw, f), u_clamp.xy, u_clamp.zw);\n\
-  vec4 t = texture2D(u_tex, uv);\n\
-  if (u_premul < 0.5) { t.rgb *= t.a; }\n\
-  t *= u_tint;\n\
-  float cov = 1.0;\n\
-  if (u_aa > 0.5) {\n\
-    vec2 d = min(v_aux - u_rect.xy, u_rect.zw - v_aux) * u_px;\n\
-    cov = clamp(d.x + 0.5, 0.0, 1.0) * clamp(d.y + 0.5, 0.0, 1.0);\n\
+  if (v_mode < 0.5) {\n\
+    gl_FragColor = quadBox();\n\
+  } else {\n\
+    vec4 t = texture2D(u_tex, clamp(v_p, v_a2.xy, v_a2.zw));\n\
+    if (v_mode < 1.5) { t.rgb *= t.a; }\n\
+    t *= v_a3;\n\
+    float cov = clamp(min(v_a1.x, v_a1.z) + 0.5, 0.0, 1.0)\n\
+              * clamp(min(v_a1.y, v_a1.w) + 0.5, 0.0, 1.0);\n\
+    gl_FragColor = t * cov;\n\
   }\n\
-  gl_FragColor = t * (u_opacity * cov);\n\
 }\n";
 
 // A flat color: the stencil and cover passes, and stencil clips.
@@ -195,18 +240,37 @@ void main() {\n\
   gl_FragColor = u_color * (c * 0.25);\n\
 }\n";
 
+/// The path, clip and resolve programs' attributes: `(name, floats)`, packed
+/// in a vertex in this order.
+const PLAIN_ATTRIBS: &[(&CStr, GLint)] = &[(c"a_pos", 2), (c"a_aux", 2)];
+/// The quad programs' attributes.
+const QUAD_ATTRIBS: &[(&CStr, GLint)] =
+    &[(c"a0", 4), (c"a1", 4), (c"a2", 4), (c"a3", 4), (c"a4", 4)];
+
 /// A linked program and the locations it uses.
 struct Program {
     id: GLuint,
-    a_pos: GLuint,
-    a_aux: Option<GLuint>,
+    /// Each attribute's location (if the program uses it), floats and
+    /// offset in floats.
+    attribs: Vec<(Option<GLuint>, GLint, usize)>,
+    /// Floats per vertex.
+    stride: usize,
     u: HashMap<&'static str, GLint>,
 }
 
 impl Program {
     unsafe fn new(fs_body: &str, uniforms: &[&'static str]) -> Result<Self, String> {
+        unsafe { Self::with(VS, PLAIN_ATTRIBS, fs_body, uniforms) }
+    }
+
+    unsafe fn with(
+        vs_src: &[u8],
+        layout: &[(&CStr, GLint)],
+        fs_body: &str,
+        uniforms: &[&'static str],
+    ) -> Result<Self, String> {
         unsafe {
-            let vs = compile(GL_VERTEX_SHADER, VS)?;
+            let vs = compile(GL_VERTEX_SHADER, vs_src)?;
             let src = format!("{PRECISION}{fs_body}\0");
             let fs = compile(GL_FRAGMENT_SHADER, src.as_bytes())?;
             let id = glCreateProgram();
@@ -218,10 +282,15 @@ impl Program {
             if ok == 0 {
                 return Err("scene program link failed".into());
             }
-            let a_pos = glGetAttribLocation(id, c"a_pos".as_ptr());
-            let a_aux = glGetAttribLocation(id, c"a_aux".as_ptr());
-            if a_pos < 0 {
-                return Err("scene program: no a_pos".into());
+            let mut attribs = Vec::new();
+            let mut at = 0;
+            for &(name, n) in layout {
+                let loc = glGetAttribLocation(id, name.as_ptr());
+                attribs.push(((loc >= 0).then_some(loc as GLuint), n, at));
+                at += n as usize;
+            }
+            if attribs[0].0.is_none() {
+                return Err("scene program: no position attribute".into());
             }
             let mut u = HashMap::new();
             for name in uniforms.iter().copied().chain(["u_xf"]) {
@@ -230,8 +299,8 @@ impl Program {
             }
             Ok(Self {
                 id,
-                a_pos: a_pos as GLuint,
-                a_aux: (a_aux >= 0).then_some(a_aux as GLuint),
+                attribs,
+                stride: at,
                 u,
             })
         }
@@ -317,6 +386,13 @@ struct Texture {
     used: u64,
 }
 
+/// An atlas page's texture, holding `version` of it.
+struct AtlasTex {
+    tex: GLuint,
+    side: u32,
+    version: u64,
+}
+
 /// Textures of images not drawn for this many frames are freed.
 const TEXTURE_KEEP_FRAMES: u64 = 120;
 
@@ -382,8 +458,9 @@ struct State {
     kept: KeptFrame,
     /// `eglSwapBuffersWithDamage{KHR,EXT}` on this display, once looked up.
     swap_damage: Option<Option<SwapWithDamage>>,
-    boxes: Program,
-    tex: Program,
+    /// Batched quads: boxes only, and boxes with textured quads.
+    quad_boxes: Program,
+    quads: Program,
     flat: Program,
     resolve: Program,
     vbo: GLuint,
@@ -392,9 +469,13 @@ struct State {
     layers: Vec<Target>,
     scratch: Option<Target>,
     textures: HashMap<usize, Texture>,
+    /// The atlas pages' textures, by page id.
+    atlas: HashMap<u64, AtlasTex>,
     frame: u64,
     /// Texture uploads in the last frame (for tests).
     uploads: usize,
+    /// Draw calls in the last frame.
+    draws: usize,
 }
 
 thread_local! {
@@ -518,20 +599,17 @@ impl State {
         config: EGLConfig,
     ) -> Result<Self, String> {
         unsafe {
-            let boxes = Program::new(BOX_FS, &["u_rect", "u_radius", "u_stroke", "u_color"])?;
-            let tex = Program::new(
-                TEX_FS,
-                &[
-                    "u_tex",
-                    "u_rect",
-                    "u_px",
-                    "u_opacity",
-                    "u_premul",
-                    "u_aa",
-                    "u_uv",
-                    "u_clamp",
-                    "u_tint",
-                ],
+            let quad_boxes = Program::with(
+                QUAD_VS,
+                QUAD_ATTRIBS,
+                &format!("{QUAD_BOX}{QUADBOX_MAIN}"),
+                &[],
+            )?;
+            let quads = Program::with(
+                QUAD_VS,
+                QUAD_ATTRIBS,
+                &format!("{QUAD_BOX}{QUAD_MAIN}"),
+                &["u_tex"],
             )?;
             let flat = Program::new(FLAT_FS, &["u_color"])?;
             let resolve = Program::new(RESOLVE_FS, &["u_tex", "u_inv", "u_tap", "u_color"])?;
@@ -549,8 +627,8 @@ impl State {
                 swapped: std::collections::HashSet::new(),
                 kept: KeptFrame::default(),
                 swap_damage: None,
-                boxes,
-                tex,
+                quad_boxes,
+                quads,
                 flat,
                 resolve,
                 vbo,
@@ -559,8 +637,10 @@ impl State {
                 layers: Vec::new(),
                 scratch: None,
                 textures: HashMap::new(),
+                atlas: HashMap::new(),
                 frame: 0,
                 uploads: 0,
+                draws: 0,
             })
         }
     }
@@ -595,7 +675,9 @@ impl State {
         }
     }
 
-    /// Upload `verts` (`[x, y, aux_x, aux_y]` each) and point `prog` at them.
+    /// Upload `verts` (laid out as `prog`'s attributes say: `[x, y, aux_x,
+    /// aux_y]` each, or a quad vertex) and point `prog` at them. Attribute
+    /// arrays it doesn't use are disabled, so none reads past the buffer.
     unsafe fn vertices(&self, prog: &Program, verts: &[f32]) {
         unsafe {
             glBindBuffer(GL_ARRAY_BUFFER, self.vbo);
@@ -605,19 +687,23 @@ impl State {
                 verts.as_ptr() as *const c_void,
                 GL_STREAM_DRAW,
             );
-            let stride = 4 * std::mem::size_of::<f32>() as GLsizei;
-            glEnableVertexAttribArray(prog.a_pos);
-            glVertexAttribPointer(prog.a_pos, 2, GL_FLOAT, GL_FALSE, stride, core::ptr::null());
-            if let Some(aux) = prog.a_aux {
-                glEnableVertexAttribArray(aux);
-                glVertexAttribPointer(
-                    aux,
-                    2,
-                    GL_FLOAT,
-                    GL_FALSE,
-                    stride,
-                    (2 * std::mem::size_of::<f32>()) as *const c_void,
-                );
+            for i in 0..MAX_ATTRIBS {
+                glDisableVertexAttribArray(i);
+            }
+            let f = std::mem::size_of::<f32>();
+            let stride = (prog.stride * f) as GLsizei;
+            for &(loc, n, at) in &prog.attribs {
+                if let Some(loc) = loc {
+                    glEnableVertexAttribArray(loc);
+                    glVertexAttribPointer(
+                        loc,
+                        n,
+                        GL_FLOAT,
+                        GL_FALSE,
+                        stride,
+                        (at * f) as *const c_void,
+                    );
+                }
             }
         }
     }
@@ -690,95 +776,124 @@ impl State {
         });
     }
 
-    unsafe fn draw_box(
-        &self,
-        level: &Level,
-        rect: [f32; 4],
-        radius: f32,
-        stroke: f32,
-        c: [f32; 4],
-    ) {
+    /// Bring the atlas pages' textures up to date with `pages` (only what
+    /// changed since the version each holds), and delete those of pages
+    /// gone.
+    unsafe fn sync_atlas(&mut self, pages: &[AtlasPage]) {
         unsafe {
-            let t = self.target(level);
-            let p = &self.boxes;
-            Self::use_program(p, t.w, t.h);
-            glUniform4f(p.loc("u_rect"), rect[0], rect[1], rect[2], rect[3]);
-            glUniform1f(p.loc("u_radius"), radius);
-            glUniform1f(p.loc("u_stroke"), stroke);
-            glUniform4f(p.loc("u_color"), c[0], c[1], c[2], c[3]);
-            let pad = 1.0 + stroke * 0.5;
-            let (x0, y0, x1, y1) = (rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad);
-            #[rustfmt::skip]
-            let v = [
-                x0, y0, x0, y0,  x1, y0, x1, y0,  x0, y1, x0, y1,
-                x0, y1, x0, y1,  x1, y0, x1, y0,  x1, y1, x1, y1,
-            ];
-            self.vertices(p, &v);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
+            self.atlas.retain(|id, t| {
+                let keep = pages.iter().any(|p| p.id == *id);
+                if !keep {
+                    glDeleteTextures(1, &t.tex);
+                }
+                keep
+            });
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+            for p in pages {
+                let have = self.atlas.get(&p.id).map(|t| (t.side, t.version));
+                match p.upload(have) {
+                    Upload::Nothing => {}
+                    Upload::Whole => {
+                        if let Some(old) = self.atlas.remove(&p.id) {
+                            glDeleteTextures(1, &old.tex);
+                        }
+                        let mut tex = 0;
+                        glGenTextures(1, &mut tex);
+                        glBindTexture(GL_TEXTURE_2D, tex);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                        glTexImage2D(
+                            GL_TEXTURE_2D,
+                            0,
+                            GL_RGBA as GLint,
+                            p.side as GLsizei,
+                            p.side as GLsizei,
+                            0,
+                            GL_RGBA,
+                            GL_UNSIGNED_BYTE,
+                            p.pixels.as_ptr() as *const c_void,
+                        );
+                        self.uploads += 1;
+                        let (side, version) = (p.side, p.version);
+                        self.atlas.insert(p.id, AtlasTex { tex, side, version });
+                    }
+                    Upload::Region(r) => {
+                        let t = self.atlas.get_mut(&p.id).unwrap();
+                        // Packed rows: GLES2 has no UNPACK_ROW_LENGTH.
+                        let bytes = p.region(r);
+                        glBindTexture(GL_TEXTURE_2D, t.tex);
+                        glTexSubImage2D(
+                            GL_TEXTURE_2D,
+                            0,
+                            r[0] as GLint,
+                            r[1] as GLint,
+                            (r[2] - r[0]) as GLsizei,
+                            (r[3] - r[1]) as GLsizei,
+                            GL_RGBA,
+                            GL_UNSIGNED_BYTE,
+                            bytes.as_ptr() as *const c_void,
+                        );
+                        t.version = p.version;
+                        self.uploads += 1;
+                    }
+                }
+            }
         }
     }
 
-    /// Draw texture `tex` over the local `rect` through `m`; `premul` if its
-    /// pixels are premultiplied, `aa` to antialias its edges; `sample` says
-    /// which part of it, tinted how, and filtered how.
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn draw_texture(
-        &self,
+    /// Draw the quad vertices `verts` (see `crate::gpu::batch`) into
+    /// `level` (bound) with one call: sampling `tex` (nearest-neighbor or
+    /// bilinear), or boxes only without one.
+    unsafe fn draw_quads(
+        &mut self,
         level: &Level,
-        tex: GLuint,
-        m: &Transform2D,
-        rect: [f32; 4],
-        opacity: f32,
-        premul: bool,
-        aa: bool,
-        sample: &Sample,
+        verts: &[f32],
+        tex: Option<GLuint>,
+        nearest: bool,
     ) {
         unsafe {
+            let s = level.scissor;
+            if verts.is_empty() || s[2] <= s[0] || s[3] <= s[1] {
+                return;
+            }
             let t = self.target(level);
-            let p = &self.tex;
+            let p = if tex.is_some() {
+                &self.quads
+            } else {
+                &self.quad_boxes
+            };
             Self::use_program(p, t.w, t.h);
-            // Device pixels per local unit along each local axis.
-            let px = (m.a.hypot(m.b).max(1e-6), m.c.hypot(m.d).max(1e-6));
-            let (pu, pv) = if aa {
-                (1.0 / px.0, 1.0 / px.1)
-            } else {
-                (0.0, 0.0)
-            };
-            let (x0, y0, x1, y1) = (rect[0] - pu, rect[1] - pv, rect[2] + pu, rect[3] + pv);
-            let corner = |x: f32, y: f32| {
-                let d = m.apply(oxideav_core::Point { x, y });
-                [d.x, d.y, x, y]
-            };
-            let (a, b, c, d) = (
-                corner(x0, y0),
-                corner(x1, y0),
-                corner(x0, y1),
-                corner(x1, y1),
+            if let Some(tex) = tex {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glUniform1i(p.loc("u_tex"), 0);
+                let filter = if nearest { GL_NEAREST } else { GL_LINEAR };
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            }
+            self.vertices(p, verts);
+            glDrawArrays(GL_TRIANGLES, 0, (verts.len() / QUAD_FLOATS) as GLsizei);
+            self.draws += 1;
+        }
+    }
+
+    /// Composite the layer `layer` into `parent` (bound) at its opacity.
+    unsafe fn composite(&mut self, layer: &Level, parent: &Level, w: i32, h: i32) {
+        unsafe {
+            let tex = self.target(layer).tex;
+            let mut v = Vec::with_capacity(batch::QUAD_VERTICES * QUAD_FLOATS);
+            batch::tex_quad(
+                &mut v,
+                &Transform2D::identity(),
+                [0.0, 0.0, w as f32, h as f32],
+                layer.opacity,
+                true,
+                false,
+                &Sample::WHOLE,
             );
-            let v: Vec<f32> = [a, b, c, c, b, d].concat();
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, tex);
-            glUniform1i(p.loc("u_tex"), 0);
-            glUniform4f(p.loc("u_rect"), rect[0], rect[1], rect[2], rect[3]);
-            glUniform2f(p.loc("u_px"), px.0, px.1);
-            glUniform1f(p.loc("u_opacity"), opacity);
-            glUniform1f(p.loc("u_premul"), if premul { 1.0 } else { 0.0 });
-            glUniform1f(p.loc("u_aa"), if aa { 1.0 } else { 0.0 });
-            let uv = sample.uv;
-            glUniform4f(p.loc("u_uv"), uv[0], uv[1], uv[2], uv[3]);
-            let c = sample.clamp;
-            glUniform4f(p.loc("u_clamp"), c[0], c[1], c[2], c[3]);
-            let k = sample.tint;
-            glUniform4f(p.loc("u_tint"), k[0], k[1], k[2], k[3]);
-            let filter = if sample.nearest {
-                GL_NEAREST
-            } else {
-                GL_LINEAR
-            };
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-            self.vertices(p, &v);
-            glDrawArrays(GL_TRIANGLES, 0, 6);
+            self.draw_quads(parent, &v, Some(tex), false);
         }
     }
 
@@ -865,6 +980,7 @@ impl State {
                     .collect();
                 self.vertices(p, &v);
                 glDrawArrays(GL_TRIANGLE_FAN, 0, contour.len() as GLsizei);
+                self.draws += 1;
             }
 
             // Cover: full coverage wherever the winding says inside.
@@ -880,6 +996,7 @@ impl State {
             ];
             self.vertices(p, &quad);
             glDrawArrays(GL_TRIANGLES, 0, 6);
+            self.draws += 1;
             glDisable(GL_STENCIL_TEST);
 
             // Resolve into the level.
@@ -905,13 +1022,14 @@ impl State {
             .concat();
             self.vertices(r, &v);
             glDrawArrays(GL_TRIANGLES, 0, 6);
+            self.draws += 1;
             Ok(())
         }
     }
 
     /// Draw the polygon `pts` into the stencil of `level`'s target, from
     /// clip depth `from` with `op`.
-    unsafe fn stencil_polygon(&self, level: &Level, pts: &[[f32; 2]], from: u32, op: GLenum) {
+    unsafe fn stencil_polygon(&mut self, level: &Level, pts: &[[f32; 2]], from: u32, op: GLenum) {
         unsafe {
             let t = self.target(level);
             let p = &self.flat;
@@ -924,6 +1042,7 @@ impl State {
             let v: Vec<f32> = pts.iter().flat_map(|q| [q[0], q[1], 0.0, 0.0]).collect();
             self.vertices(p, &v);
             glDrawArrays(GL_TRIANGLE_FAN, 0, pts.len() as GLsizei);
+            self.draws += 1;
             glColorMask(1, 1, 1, 1);
         }
     }
@@ -1015,33 +1134,28 @@ impl State {
                 a,
             );
             glClear(GL_COLOR_BUFFER_BIT);
-            // The frame as one quad: device pixels of the window to clip
-            // space with y up (the window's rows run bottom-up), sampling the
-            // frame target, whose row 0 is device row 0.
-            let p = &self.tex;
+            // The frame as one quad of the quad program: device pixels of
+            // the window to clip space with y up (the window's rows run
+            // bottom-up), sampling the frame target (premultiplied, whose
+            // row 0 is device row 0) nearest, its edges not antialiased.
+            let p = &self.quads;
             glUseProgram(p.id);
             glUniform4f(p.loc("u_xf"), 2.0 / sw as f32, -2.0 / sh as f32, -1.0, 1.0);
-            let (x0, y0) = (offset.0 as f32, offset.1 as f32);
-            let (x1, y1) = (x0 + w as f32, y0 + h as f32);
-            let (fw, fh) = (w as f32, h as f32);
-            #[rustfmt::skip]
-            let v = [
-                x0, y0, 0.0, 0.0,  x1, y0, fw, 0.0,  x0, y1, 0.0, fh,
-                x0, y1, 0.0, fh,   x1, y0, fw, 0.0,  x1, y1, fw, fh,
-            ];
+            let mut v = Vec::with_capacity(batch::QUAD_VERTICES * QUAD_FLOATS);
+            batch::tex_quad(
+                &mut v,
+                &Transform2D::translate(offset.0 as f32, offset.1 as f32),
+                [0.0, 0.0, w as f32, h as f32],
+                1.0,
+                true,
+                false,
+                &Sample::WHOLE,
+            );
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, self.frame_target.as_ref().unwrap().tex);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glUniform1i(p.loc("u_tex"), 0);
-            glUniform4f(p.loc("u_rect"), 0.0, 0.0, fw, fh);
-            glUniform2f(p.loc("u_px"), 1.0, 1.0);
-            glUniform1f(p.loc("u_opacity"), 1.0);
-            glUniform1f(p.loc("u_premul"), 1.0);
-            glUniform1f(p.loc("u_aa"), 0.0);
-            glUniform4f(p.loc("u_uv"), 0.0, 0.0, 1.0, 1.0);
-            glUniform4f(p.loc("u_clamp"), 0.0, 0.0, 1.0, 1.0);
-            glUniform4f(p.loc("u_tint"), 1.0, 1.0, 1.0, 1.0);
             self.vertices(p, &v);
             glDrawArrays(GL_TRIANGLES, 0, 6);
             let err = glGetError();
@@ -1103,6 +1217,8 @@ impl State {
                 self.frame_target = Some(Target::new(w, h)?);
             }
             self.uploads = 0;
+            self.draws = 0;
+            self.sync_atlas(&plan.atlas);
             let full = [0, 0, w, h];
             let mut levels = vec![Level {
                 layer: None,
@@ -1129,15 +1245,37 @@ impl State {
                 glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
             }
 
-            for op in &plan.ops {
+            for cmd in &plan.cmds {
+                let op = match cmd {
+                    Cmd::Quads(q) => {
+                        let tex = match &q.texture {
+                            None => None,
+                            Some(TexRef::Image(image)) => {
+                                let size = image.size();
+                                (size.width as i32 <= self.max_size
+                                    && size.height as i32 <= self.max_size)
+                                    .then(|| self.texture(image))
+                            }
+                            Some(TexRef::Atlas(i)) => plan
+                                .atlas
+                                .get(*i)
+                                .and_then(|p| self.atlas.get(&p.id))
+                                .map(|t| t.tex),
+                        };
+                        let n = QUAD_FLOATS;
+                        let verts =
+                            &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
+                        let level = levels.pop().unwrap();
+                        self.draw_quads(&level, verts, tex, q.nearest);
+                        levels.push(level);
+                        continue;
+                    }
+                    Cmd::Op(i) => &plan.ops[*i],
+                };
                 let level = levels.last().unwrap();
                 match op {
-                    Op::Box {
-                        rect,
-                        radius,
-                        stroke,
-                        color,
-                    } => self.draw_box(level, *rect, *radius, *stroke, *color),
+                    // Batched into `Cmd::Quads`.
+                    Op::Box { .. } | Op::Image { .. } => {}
                     Op::Path {
                         contours,
                         even_odd,
@@ -1148,24 +1286,6 @@ impl State {
                         let r = self.draw_path(&level, contours, *even_odd, *color, *bbox);
                         levels.push(level);
                         r?;
-                    }
-                    Op::Image {
-                        image,
-                        transform,
-                        rect,
-                        opacity,
-                        uv,
-                        tint,
-                        nearest,
-                    } => {
-                        let level = levels.pop().unwrap();
-                        let tex = self.texture(image);
-                        let size = image.size();
-                        let sample = Sample::region(*uv, size.width, size.height, *tint, *nearest);
-                        self.draw_texture(
-                            &level, tex, transform, *rect, *opacity, false, true, &sample,
-                        );
-                        levels.push(level);
                     }
                     Op::PushClip(Clip::Rect(r)) => {
                         let level = levels.last_mut().unwrap();
@@ -1234,40 +1354,20 @@ impl State {
                             continue;
                         }
                         let layer = levels.pop().unwrap();
-                        let parent = levels.last().unwrap();
-                        self.bind(parent);
-                        let tex = self.target(&layer).tex;
-                        let full_rect = [0.0, 0.0, w as f32, h as f32];
-                        self.draw_texture(
-                            parent,
-                            tex,
-                            &Transform2D::identity(),
-                            full_rect,
-                            layer.opacity,
-                            true,
-                            false,
-                            &Sample::WHOLE,
-                        );
+                        let parent = levels.pop().unwrap();
+                        self.bind(&parent);
+                        self.composite(&layer, &parent, w, h);
+                        levels.push(parent);
                     }
                 }
             }
             // Close any layers left open.
             while levels.len() > 1 {
                 let layer = levels.pop().unwrap();
-                let parent = levels.last().unwrap();
-                self.bind(parent);
-                let tex = self.target(&layer).tex;
-                let full_rect = [0.0, 0.0, w as f32, h as f32];
-                self.draw_texture(
-                    parent,
-                    tex,
-                    &Transform2D::identity(),
-                    full_rect,
-                    layer.opacity,
-                    true,
-                    false,
-                    &Sample::WHOLE,
-                );
+                let parent = levels.pop().unwrap();
+                self.bind(&parent);
+                self.composite(&layer, &parent, w, h);
+                levels.push(parent);
             }
 
             self.sweep_textures();
@@ -1496,5 +1596,9 @@ impl Executor for GlExecutor {
 
     fn uploads(&self) -> usize {
         STATE.with(|cell| cell.borrow().as_ref().map_or(0, |s| s.uploads))
+    }
+
+    fn draws(&self) -> usize {
+        STATE.with(|cell| cell.borrow().as_ref().map_or(0, |s| s.draws))
     }
 }
