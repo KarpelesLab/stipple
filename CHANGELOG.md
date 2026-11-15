@@ -41,6 +41,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DialogueBox`, `stat_bar` / `health_bar`, `progress_bar`, `checkbox` and
   `switch` in its frames. `gameui` has a "Painted" look ("Look" on its title menu).
 
+- `NavStack` and `nav_stack` (#40): a stack of pages the app pushes and pops,
+  the covered ones kept alive off stage, moving the platform's way
+  (`PageTransition::Slide` under `Theme::native()` on iOS, `SharedAxis`
+  under the Material motion, `Fade` elsewhere), the top page following iOS's
+  edge swipe and Android's predictive back gesture; it takes Back while it
+  can pop. `app_bar(cx, title)`: a back button, the title and actions, in
+  Material's or `UINavigationBar`'s proportions.
+- `BottomSheet` and `bottom_sheet` (#42): a modal sheet from the bottom edge
+  on `SheetDetent`s (`Fit`, `Half`, `Full`, `Height`), with a grab handle,
+  dragged and flung between detents or away, its content's scroll handing a
+  pull at the top to the sheet on touch screens; the scrim, Back and Escape
+  close it; a centered dialog on windows at least `SHEET_WIDE` wide.
+- `Cx::on_back(BackHandler)`: a view takes Back (and the back gesture's
+  progress, and optionally an unused Escape) while it's on screen; the last
+  one declared gets it, before the App's `on_back` hook, and the App tells
+  the system it would go back meanwhile.
+- `MotionTokens::page` and `MotionTokens::sheet`, in every preset.
+- `examples/navdemo`, in the browser too.
 - Test helpers on `App` that find elements as a screen reader knows them:
   `app.find(Role::CheckBox, "Buy milk")` (where it is, whether it's checked),
   `find_all` (every match), `find_text("1 left")` and
@@ -81,6 +99,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `NavigationBar::bottom_inset` is gone: the bar takes the window's safe
   area by itself.
+- `MotionTokens` has two more fields, `page` and `sheet`.
+- `App::touch` hands the finger's pointer events to `on_pointer` handlers
+  first, as the run loop does.
 - `scroll(cx)` and `scroll_horizontal(cx)` take no length: a scroll
   container fills the space its column (or, sideways, its row) leaves free,
   shrinks first when its siblings need the room (down to 100 px or its

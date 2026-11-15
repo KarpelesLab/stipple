@@ -1450,6 +1450,22 @@ Most input only works on X11 today.
   edge-to-edge app (the window's safe area, #38), `navigation_rail` for wide
   windows, and `page_stack` keeping every
   page alive off stage (`Element::offstage`).
+- ✅ Page stack driven by the back gesture (#40): `NavStack` + `nav_stack`
+  keep the covered pages alive off stage and push and pop the platform's way
+  (iOS's slide with the page below shifting and dimming, Material's shared
+  axis, a short fade on desktops), the top page following iOS's edge swipe
+  and Android's predictive back before it settles or springs back; Back is
+  taken while it can pop (`Cx::on_back`); `app_bar` with a back button,
+  title and actions in Material's or `UINavigationBar`'s proportions.
+  *Unit-tested at fixed frame times; the gestures themselves only on CI's
+  simulators/emulators through `on_back_progress`.*
+- ✅ Modal bottom sheet (#42): `BottomSheet` + `bottom_sheet` on detents (its
+  content's height, half, full), a grab handle, dragged with the pointer and
+  settled or flung away by its release velocity, its scrolled-to-top content
+  handing a touch pull to the sheet; the scrim, Back and Escape close it;
+  `Dialog` role with focus kept inside; a centered dialog on wide windows.
+  *Not yet lifted above the soft keyboard, and its bottom inset is passed by
+  hand until #38.*
 - ✅ Toasts on phones (#43): a snackbar placement (`ToastPlacement::Bottom`,
   automatic below 600 px; the newest alone, centered, up to 560 wide), a
   bottom offset to clear a navigation bar, an action button

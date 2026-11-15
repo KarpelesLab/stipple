@@ -329,6 +329,39 @@ and is unit-tested on every host. The edge is the view's, which is the safe
 area's: in landscape on a phone with a notch, a finger starting in the inset
 beside the view isn't seen.
 
+### Back declared by the view
+
+A widget with something to go back from can take Back itself, without the
+app wiring its hooks: `nav_stack` while its stack is deeper than its root,
+and an open `bottom_sheet` (see [widgets.md](widgets.md#page-stack-and-app-bar)).
+They do it with `Cx::on_back`, which any view can call while it builds:
+
+```rust
+use stipple::core::BackHandler;
+
+if state.editing {
+    cx.on_back(
+        BackHandler::new(|s: &mut State| s.editing = false)
+            // The back gesture's progress, for a preview (optional).
+            .on_progress(|s, gesture| s.peek = gesture)
+            // An Escape nothing focused used closes it too.
+            .escape(true),
+    );
+}
+```
+
+While the last build declared one, the App tells the system it would go back
+(as a `back_enabled` saying yes does, so iOS's edge swipe is the back
+gesture and Android previews nothing of its own), and Back goes to the
+handler declared **last** in the build: declare in the order things stack (a
+sheet a page opens is built after the page stack, so it closes first). An
+open menu still closes before it; the App's own `on_back`, `back_enabled`
+and `on_back_progress` hooks only run when no view declared one. The
+gesture's progress goes to the same handler, and nowhere when it has no
+`on_progress` (a sheet), so a stack under an open sheet doesn't move. A
+gamepad's B reaches it as Back does. Not inside a `cx.memo`ized subtree: a
+reused one isn't built, so it declares nothing.
+
 ## Keeping the state across process death
 
 A backgrounded app may be ended by the system to free memory, and started

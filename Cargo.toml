@@ -267,6 +267,11 @@ path = "examples/menudemo/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "navdemo_web"
+path = "examples/navdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "motiondemo_web"
 path = "examples/motiondemo/web.rs"
 crate-type = ["cdylib"]

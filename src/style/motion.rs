@@ -86,6 +86,12 @@ pub struct MotionTokens {
     pub toast_scale: f64,
     /// A tree's disclosure triangle turning as its node expands or collapses.
     pub disclosure: Motion,
+    /// A [`nav_stack`](crate::widgets::nav_stack) pushing or popping a page,
+    /// and settling (or springing back) when the back gesture lets go.
+    pub page: Motion,
+    /// A [`bottom_sheet`](crate::widgets::bottom_sheet) settling on a detent
+    /// after a drag, or sliding away when dragged off.
+    pub sheet: Motion,
 }
 
 impl Default for MotionTokens {
@@ -134,6 +140,8 @@ impl MotionTokens {
         toast_offset: f64,
         toast_scale: f64,
         disclosure: Motion,
+        page: Motion,
+        sheet: Motion,
     );
 
     /// Stipple's own motion, shared by [`Theme::light`](super::Theme::light),
@@ -161,6 +169,8 @@ impl MotionTokens {
             toast_offset: 24.0,
             toast_scale: 1.0,
             disclosure: ms(150, Easing::EaseOut),
+            page: ms(300, Easing::EMPHASIZED_DECELERATE),
+            sheet: Motion::Spring(SpringParams::with_response(0.35, 0.9)),
         }
     }
 
@@ -185,6 +195,8 @@ impl MotionTokens {
             toast_offset: 0.0,
             toast_scale: 1.0,
             disclosure: Motion::Instant,
+            page: Motion::Instant,
+            sheet: Motion::Instant,
         }
     }
 
@@ -216,6 +228,8 @@ impl MotionTokens {
             toast_offset: 0.0,
             toast_scale: 0.8,
             disclosure: ms(200, Easing::STANDARD), // short4
+            page: ms(300, Easing::EMPHASIZED_DECELERATE),
+            sheet: ms(300, Easing::EMPHASIZED_DECELERATE),
         }
     }
 
@@ -247,6 +261,8 @@ impl MotionTokens {
             toast_offset: 32.0,
             toast_scale: 1.0,
             disclosure: ms(167, FLUENT_DECELERATE),
+            page: ms(250, FLUENT_DECELERATE),
+            sheet: ms(250, FLUENT_DECELERATE),
         }
     }
 
@@ -278,6 +294,8 @@ impl MotionTokens {
             toast_offset: 32.0,
             toast_scale: 1.0,
             disclosure: ms(250, CA_DEFAULT),
+            page: ms(250, CA_DEFAULT),
+            sheet: Motion::Spring(SpringParams::with_response(0.35, 1.0)),
         }
     }
 
@@ -308,6 +326,8 @@ impl MotionTokens {
             toast_offset: 32.0,
             toast_scale: 1.0,
             disclosure: ms(250, CA_DEFAULT),
+            page: Motion::Spring(SpringParams::with_response(0.35, 1.0)),
+            sheet: Motion::Spring(SpringParams::with_response(0.4, 0.9)),
         }
     }
 
@@ -337,6 +357,8 @@ impl MotionTokens {
             toast_offset: 24.0,
             toast_scale: 1.0,
             disclosure: ms(200, ADW_EASE_OUT_QUAD),
+            page: Motion::Spring(SpringParams::with_response(0.25, 1.0)),
+            sheet: Motion::Spring(SpringParams::with_response(0.3, 1.0)),
         }
     }
 
@@ -391,6 +413,8 @@ mod tests {
                 m.toast_enter,
                 m.toast_exit,
                 m.disclosure,
+                m.page,
+                m.sheet,
             ] {
                 match motion {
                     Motion::Instant => {}

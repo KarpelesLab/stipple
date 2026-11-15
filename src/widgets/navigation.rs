@@ -579,7 +579,7 @@ thread_local! {
 }
 
 /// Template `svg` with `currentColor` made `color`, parsed once.
-fn tinted(svg: &'static str, color: Color) -> Option<Arc<Svg>> {
+pub(super) fn tinted(svg: &'static str, color: Color) -> Option<Arc<Svg>> {
     let source = (svg.as_ptr() as usize, svg.len());
     TINTED.with(|cache| {
         if let Some((_, _, doc)) = cache

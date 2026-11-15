@@ -520,6 +520,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Layout](layout.md): stacks, wrapping, grids, and min/max sizes
 - [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
 - [Widgets](widgets.md): select, number input, split pane, toolbar, toasts, tab bar,
+  page stack and app bar, bottom sheet,
   password field and color picker
 - [Menus](menus.md): the menu bar, shortcuts and context menus (long press on touch screens)
 - [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`

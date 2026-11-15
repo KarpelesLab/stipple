@@ -413,6 +413,8 @@ scales and offsets entrances start from:
 | `dialog_exit` | those closing, their scrim fading with them |
 | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` | toasts coming and going |
 | `disclosure` | tree disclosure triangles turning |
+| `page` | a page stack pushing and popping, and settling after the back gesture |
+| `sheet` | a bottom sheet settling on a detent after a drag |
 
 `MotionTokens::standard()` is Stipple's own (the light and dark themes),
 `material()` Material 3's (the Material themes, and Android), and

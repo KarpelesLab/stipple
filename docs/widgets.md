@@ -375,6 +375,136 @@ a page that goes off stage is dropped. Each page is told whether it shows.
 Since every page is built every frame, keep pages cheap to build, or memoize
 them with `cx.memo`.
 
+## Page stack and app bar
+
+<!-- live: navdemo -->
+
+A phone app drills into its content: a list, then an item's details, then
+its settings. `NavStack<P>` keeps those pages in the app state (any `P`: an
+enum of screens, an id), root first, and `nav_stack` shows the top one:
+
+```rust
+#[derive(Clone, Copy)]
+enum Page { History, Details(usize) }
+
+struct App { nav: NavStack<Page> } // NavStack::new(Page::History)
+
+fn view(state: &App, cx: &mut Cx<App>) -> Element {
+    nav_stack(cx, &state.nav, |s| &mut s.nav, |cx, page| match *page {
+        Page::History => column(vec![
+            app_bar(cx, "History").view(cx),
+            button(cx, "Scan #1").on_tap(cx, |s| s.nav.push(Page::Details(1))),
+        ]),
+        Page::Details(n) => column(vec![
+            app_bar(cx, format!("Scan #{n}"))
+                .back_label("History")
+                .on_back(|s| { s.nav.pop(); })
+                .view(cx),
+            label(cx, "Decoded text…"),
+        ]),
+    })
+}
+```
+
+- `push(page)` shows a page over the current one, `pop()` goes back (the root
+  stays), `pop_to_root()` goes back to the root; `depth()`, `top()`,
+  `pages()` and `can_pop()` read it. They animate from whatever is moving: a
+  pop in the middle of a push turns round from where it is.
+- **The pages under the top one stay alive.** Every page is built each frame,
+  in order, and those covered are kept off stage (`Element::offstage`, as in
+  `page_stack`): not drawn, hit, focused or read by assistive technologies,
+  but keeping their scroll offsets and fields, so going back finds the page
+  as it was. A page that's been popped is built once more, last, while it
+  leaves, then dropped.
+- **Transitions** follow the theme (`PageTransition::of`), on its `page`
+  motion token: under `Theme::native()` on iOS, `Slide`: the new page slides
+  in from the trailing edge while the one under it shifts a third of the way
+  the other way and dims, as `UINavigationController` does; under the
+  Material motion (the Material themes, and `Theme::native()` on Android),
+  `SharedAxis`: Material's shared X axis, the pages cross-fading as they
+  shift 30 px; elsewhere (desktops, the web) `Fade`: the new page fades in
+  over the old one as it slides 16 px. `NavStack::new(root)
+  .transition(PageTransition::Slide)` (or `set_transition`) picks one. Under
+  reduced motion pages switch at once.
+- **Back pops it.** While it can pop, the stack takes Back for the app
+  (`Cx::on_back`, see
+  [window-lifecycle.md](window-lifecycle.md#back-declared-by-the-view)):
+  Android's Back button, a gamepad's B, and the back gestures. The top page
+  follows the gesture's progress: iOS's edge swipe drags it off with the
+  finger, revealing the page under it; Android 14's predictive back shrinks
+  it into a card that shifts toward the edge. Let go, it settles on the
+  `page` motion, gone (the pop) or back in place (the gesture cancelled),
+  from where the finger left it. Escape doesn't pop.
+- `app_bar(cx, title)` is the bar along the top of a page:
+  `.on_back(handler)` adds the back button (Material's arrow, or iOS's
+  chevron with `.back_label(…)`, the previous page's title, beside it; its
+  accessible name is "Back"), `.actions(vec![…])` puts buttons at its end and
+  `.top_inset(px)` extends it under the status bar. It draws as `NavLook::of`
+  the theme: Material 3's small top app bar (64 px, the title after the
+  arrow) or, under `Theme::native()` on iOS, `UINavigationBar`'s proportions
+  (44 px, the title centered, over a hairline). Make it part of each page so
+  it moves with the page.
+
+## Bottom sheet
+
+On a phone, what a desktop puts in a dialog often goes in a sheet: a panel
+that slides up from the bottom edge over a scrim, as wide as the screen, with
+rounded top corners. `BottomSheet` is its state in the app (open or not, and
+the detent it rests on), and `bottom_sheet` declares it like a `dialog`:
+
+```rust
+#[derive(Default)]
+struct App { result: BottomSheet }
+
+fn view(state: &App, cx: &mut Cx<App>) -> Element {
+    bottom_sheet(cx, &state.result, |s| &mut s.result)
+        .title("QR code")
+        .detents(vec![SheetDetent::Fit, SheetDetent::Full])
+        .children(vec![
+            label(cx, "https://example.com"),
+            button(cx, "Open").on_tap(cx, |s| s.result.dismiss()),
+        ])
+        .on_dismiss(|s| { /* closed by the user */ })
+        .open(cx);
+    button(cx, "Show result").on_tap(cx, |s| s.result.open())
+}
+```
+
+- **Detents.** `SheetDetent::Fit` (its content's height), `Half` (half the
+  window), `Full` (the window less a 48 px strip at the top) and
+  `Height(px)`, lowest first; `Fit` alone by default. `open()` opens it on
+  the first, `open_at(i)` on another; `detent()` says where it rests. Its
+  content scrolls beyond the tallest.
+- **Dragging.** A drag on its grab handle (or its title) moves it with the
+  pointer; on a touch screen, so does pulling its content down while that's
+  scrolled to its top (the scroll hands the finger to the sheet, and the row
+  it landed on doesn't tap). Pushing the content up scrolls it, as usual.
+  Let go, it heads where the release's velocity takes it: the nearest
+  detent, settling on the theme's `sheet` motion, or, below half the lowest
+  detent, away (a fling down closes it from anywhere). Above the tallest it
+  resists, and below the lowest it slides down rather than shrinking.
+- **Closing.** A tap on the scrim, Back (the button, the gestures, a
+  gamepad's B, ahead of a page stack under it) and Escape close it, as do a
+  drag down: each runs `BottomSheet::dismiss`, then `on_dismiss`. The app
+  closes it with `dismiss()`. It slides in and out on the theme's `dialog`
+  and `dialog_exit` motion, its scrim fading with it.
+- Focus stays inside it while it's up, and assistive technologies see a
+  `Dialog` named by its title.
+- **On a wide window** (at least `SHEET_WIDE`, 640 px) it shows as a centered
+  dialog instead, without the handle or detents; `.adaptive(false)` keeps the
+  sheet (up to 640 px wide, centered).
+- `.handle(false)` hides the handle, `.bottom_inset(px)` pads the content
+  above the home indicator (until the window's safe area is reported,
+  [#38](https://github.com/KarpelesLab/stipple/issues/38)), and `.id(…)` tells
+  two sheets' animations apart.
+
+`navdemo` shows both: a history list drilling into a scan's details, a
+result sheet on its content's height and a filter sheet on half the window:
+
+```sh
+cargo run --example navdemo                # or: dark, material, native
+```
+
 ## Password field
 
 A single-line field that shows a bullet per character.
@@ -455,6 +585,8 @@ timings and curves in the theme's motion tokens (`theme.motion`, a
 | `toasts` | a new toast slides in from the window's edge; a dismissed one slides back out and fades before it goes; the others glide to their new places | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` |
 | The drawn message box (`AppHandle::message`), `dialog` | it fades in as it scales into place, its scrim fading in with it; closing, it scales back as it fades out with its scrim | `dialog`, `dialog_scale`, `dialog_exit` |
 | `tree` | a disclosure triangle turns as its node expands or collapses | `disclosure` |
+| `nav_stack` | a pushed page slides (or fades) in over the one below, a popped one away; after the back gesture the page settles from where the finger left it | `page` |
+| `bottom_sheet` | it slides up and back down, its scrim fading with it; let go after a drag it settles on a detent | `dialog`, `dialog_exit`, `sheet` |
 | Drop targets (`on_drop`) | the app's "drop here" highlight fades in and out with the target's drag-over level | `DROP_FADE` |
 | Controls the OS draws under `Theme::native()` | the OS's picture of the old state fades into the new one: hover, press and focus; a checkbox, radio or switch flipping | `state`, `toggle` |
 

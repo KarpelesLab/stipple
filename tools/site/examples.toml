@@ -101,6 +101,12 @@ title = "Menus and dialogs"
 group = "Widgets and layout"
 size = [480, 420]
 
+[web.navdemo]
+description = "A stack of pages Back and the back gesture pop, with app bars, and bottom sheets dragged between detents."
+title = "Pages and sheets"
+group = "Widgets and layout"
+size = [360, 640]
+
 [web.tabsdemo]
 description = "A tab strip switching content, plus a right-click context menu."
 title = "Tabs"

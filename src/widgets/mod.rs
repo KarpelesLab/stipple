@@ -29,6 +29,9 @@ mod menus_tests;
 mod motion;
 #[cfg(test)]
 mod motion_tests;
+mod nav_stack;
+#[cfg(test)]
+mod nav_stack_tests;
 mod navigation;
 #[cfg(test)]
 mod navigation_tests;
@@ -36,6 +39,9 @@ mod number;
 mod password;
 mod preedit;
 mod select;
+mod sheet;
+#[cfg(test)]
+mod sheet_tests;
 mod split;
 mod tab_bar;
 #[cfg(test)]
@@ -47,6 +53,7 @@ mod toolbar;
 
 pub use chips::{Chip, chip, choice_chips, filter_chips};
 pub use color_picker::{ColorPicker, color_button, color_picker};
+pub use nav_stack::{AppBar, NavStack, PageTransition, app_bar, nav_stack};
 pub use navigation::{
     NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail,
     page_stack, safe_area,
@@ -55,6 +62,7 @@ pub use number::{NumberInput, number_input};
 pub use password::{PasswordField, password_field};
 pub use preedit::DisplayText;
 pub use select::{Select, select};
+pub use sheet::{BottomSheet, BottomSheetView, SHEET_WIDE, SheetDetent, bottom_sheet};
 pub use split::{Split, SplitPane, split_pane};
 pub use tab_bar::{TAB_MAX_WIDTH, TAB_MIN_WIDTH, Tab, TabBar, TabBarState, TabIndicator, tab_bar};
 pub(crate) use text_input::FieldHooks;
