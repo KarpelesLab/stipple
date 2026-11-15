@@ -5,7 +5,7 @@
 //!   score it reaches, that the best score and the settings and controls
 //!   were saved and read back; prints a summary; exits non-zero on failure.
 //!   Sound goes to the default output (`STIPPLE_AUDIO=null` for none).
-//! - `--shots DIR`: renders the screens off screen into `DIR/*.ppm`.
+//! - `--shots DIR`: renders the screens off screen into `DIR/*.png`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -215,12 +215,8 @@ fn run_selftest(store: &SaveStore) -> Result<String, String> {
 fn shots(dir: &Path) {
     let _ = std::fs::create_dir_all(dir);
     let audio = Audio::offline(48_000);
-    let font = Font::system_default();
     let render = |name: &str, game: Game, keys: &[KeyInput]| {
         let mut a = app(game);
-        if let Some(font) = font.clone() {
-            a = a.font(font);
-        }
         a.render_once();
         a.render_once();
         for k in keys {
@@ -232,8 +228,8 @@ fn shots(dir: &Path) {
             std::thread::sleep(Duration::from_millis(10));
             frame = a.render_once();
         }
-        let path = dir.join(format!("{name}.ppm"));
-        write_ppm(&path, &frame);
+        let path = dir.join(format!("{name}.png"));
+        frame.save_png(&path).expect("write the screenshot");
         println!("{}", path.display());
     };
     let game = || Game::new(SaveStore::memory(), audio.clone(), SEED);
@@ -279,18 +275,4 @@ fn shots(dir: &Path) {
     g.best = g.stage.borrow().world.score;
     g.new_best = true;
     render("over", g, &[]);
-}
-
-fn write_ppm(path: &Path, frame: &Pixmap) {
-    let size = frame.size();
-    let mut out = format!("P6\n{} {}\n255\n", size.width, size.height).into_bytes();
-    let bytes = frame.as_bytes();
-    let stride = frame.stride();
-    for y in 0..size.height as usize {
-        for x in 0..size.width as usize {
-            let i = y * stride + x * 4;
-            out.extend_from_slice(&bytes[i..i + 3]);
-        }
-    }
-    std::fs::write(path, out).expect("write the screenshot");
 }

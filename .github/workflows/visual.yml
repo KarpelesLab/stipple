@@ -233,7 +233,6 @@ jobs:
         run: |
           mkdir -p visual_output/gamedemo
           cargo run --release -p gamedemo -- --shots visual_output/gamedemo
-          for f in visual_output/gamedemo/*.ppm; do convert "$f" "${f%.ppm}.png" && rm "$f"; done
           # The title shows: many colors, not a blank frame.
           colors=$(convert visual_output/gamedemo/title.png -format '%k' info:)
           echo "title: $colors colors"
@@ -2662,9 +2661,7 @@ jobs:
         run: |
           mkdir -p visual_output
           ./target/release/material3demo
-          for i in 0 1 2 3; do
-            convert -size 360x320 -depth 8 "rgba:theme$i.raw" "m$i.png"
-          done
+          for i in 0 1 2 3; do cp "theme$i.png" "m$i.png"; done
           montage m0.png m1.png m2.png m3.png -tile 2x2 -geometry +6+6 -background '#222' \
             visual_output/stipple-material3.png
           identify visual_output/stipple-material3.png
@@ -2702,9 +2699,7 @@ jobs:
         run: |
           mkdir -p visual_output
           ./target/release/themegallery
-          for i in 0 1 2 3; do
-            convert -size 360x300 -depth 8 "rgba:theme$i.raw" "t$i.png"
-          done
+          for i in 0 1 2 3; do cp "theme$i.png" "t$i.png"; done
           montage t0.png t1.png t2.png t3.png -tile 2x2 -geometry +6+6 -background '#222' \
             visual_output/stipple-themes.png
           identify visual_output/stipple-themes.png
@@ -2925,11 +2920,11 @@ jobs:
         run: |
           mkdir -p visual_output
           ./target/release/gpudemo | tee gpudemo.log
-          convert -size 420x300 -depth 8 rgba:gpu-out.raw visual_output/stipple-gpu.png
+          cp gpu-out.png visual_output/stipple-gpu.png
           # GPU-native geometry: solid rects tessellated + filled on the GPU.
-          convert -size 420x300 -depth 8 rgba:gpu-rects.raw visual_output/stipple-gpu-rects.png
+          cp gpu-rects.png visual_output/stipple-gpu-rects.png
           # GPU-native render of the actual widget-tree Scene (render_scene).
-          convert -size 420x300 -depth 8 rgba:gpu-scene.raw visual_output/stipple-gpu-scene.png
+          cp gpu-scene.png visual_output/stipple-gpu-scene.png
           # Vulkan-rendered frame (clear) read back from the GPU, raw FFI.
           convert -size 420x300 -depth 8 rgba:gpu-vk.raw visual_output/stipple-gpu-vk.png
           # Vulkan triangle drawn by real SPIR-V shaders, read back, raw FFI.
@@ -2972,8 +2967,8 @@ jobs:
         run: |
           mkdir -p gpu-compare visual_output
           cargo test -p stipple --features gl --lib gpu:: -- --nocapture --test-threads 1
-          for f in gpu-compare/*.ppm; do
-            convert "$f" "visual_output/gpu-compare-$(basename "${f%.ppm}").png"
+          for f in gpu-compare/*.png; do
+            cp "$f" "visual_output/gpu-compare-$(basename "$f")"
           done
 
       - name: Upload screenshot

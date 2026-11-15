@@ -13,7 +13,7 @@ use crate::style::Theme;
 use std::rc::Rc;
 
 use super::password::password_field_with;
-use super::{PasswordField, Variant, button_variant, placeholder};
+use super::{PasswordField, Variant, button_variant, field_text};
 
 /// The panel's width, in logical pixels.
 const WIDTH: f64 = 400.0;
@@ -80,7 +80,6 @@ pub(crate) fn overlay<S: 'static>(
     }
     let words = Element::stack(Axis::Vertical, words)
         .gap(theme.spacing.xs)
-        .align(Align::Start, Align::Stretch)
         .grow(1.0)
         .shrink(1.0);
     let mut rows = vec![
@@ -112,7 +111,7 @@ pub(crate) fn overlay<S: 'static>(
             }
             AlertInput::Plain(b) => {
                 let shown = b.display();
-                let text = Element::text(placeholder(shown.text), theme.font_size, p.text)
+                let text = field_text(shown.text, theme, p.text)
                     .grow(1.0)
                     .caret(shown.caret)
                     .selection(shown.selection)
@@ -123,7 +122,6 @@ pub(crate) fn overlay<S: 'static>(
                     .radius(theme.radius)
                     .border(p.border, 1.0)
                     .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-                    .align(Align::Start, Align::Center)
                     .native_text_frame(theme)
                     .on_key(cx, move |s: &mut S, k| {
                         if !keys(s, k) {
@@ -190,7 +188,6 @@ pub(crate) fn overlay<S: 'static>(
         .fill(p.surface)
         .border(p.border, 1.0)
         .radius(theme.radius * 2.0)
-        .align(Align::Start, Align::Stretch)
         .width(WIDTH)
         .role(Role::Dialog)
         .a11y_label(if mb.title.is_empty() {

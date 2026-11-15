@@ -639,8 +639,17 @@ fn layout_element(
             axis.cross(avail)
         };
         for ((child, m), span) in line_children.iter().zip(line_measured).zip(&spans) {
+            // As in a grid cell, `Stretch` leaves a child sized across alone.
+            let fixed_cross = match axis {
+                Axis::Horizontal => child.layout.size.height,
+                Axis::Vertical => child.layout.size.width.filter(|_| !child.layout.soft_width),
+            };
+            let align = match (child.layout.align_self.unwrap_or(*cross_align), fixed_cross) {
+                (Align::Stretch, Some(_)) => Align::Start,
+                (a, _) => a,
+            };
             let (cross_off, cross_len) = align_in(
-                *cross_align,
+                align,
                 axis.cross(*m),
                 line_cross,
                 axis.cross(min_size(child)),
@@ -1417,6 +1426,71 @@ mod tests {
     }
 
     #[test]
+    fn rows_center_and_columns_stretch_by_default() {
+        // A row centers its children across.
+        let row = Element::stack(Axis::Horizontal, vec![block(20.0, 10.0), block(20.0, 30.0)]);
+        let tree = layout(&row, Rect::from_xywh(0.0, 0.0, 100.0, 40.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(0.0, 15.0, 20.0, 10.0),
+                Rect::from_xywh(20.0, 5.0, 20.0, 30.0),
+            ]
+        );
+        // A column stretches what has no width (a row in it spans it, so a
+        // growing child pushes), leaves a sized child alone, and a child can
+        // opt out with `align_self`.
+        let col = Element::stack(
+            Axis::Vertical,
+            vec![
+                Element::stack(
+                    Axis::Horizontal,
+                    vec![
+                        block(10.0, 10.0),
+                        Element::boxed(BoxStyle::default()).grow(1.0),
+                        block(10.0, 10.0),
+                    ],
+                ),
+                block(30.0, 10.0),
+                cell(30.0, 10.0).align_self(Align::Center),
+                cell(30.0, 10.0).align_self(Align::End),
+            ],
+        );
+        let tree = layout(&col, Rect::from_xywh(0.0, 0.0, 100.0, 100.0), None);
+        assert_eq!(
+            tree.children[0].bounds,
+            Rect::from_xywh(0.0, 0.0, 100.0, 10.0)
+        );
+        assert_eq!(
+            tree.children[0].children[2].bounds,
+            Rect::from_xywh(90.0, 0.0, 10.0, 10.0)
+        );
+        assert_eq!(
+            tree.children[1].bounds,
+            Rect::from_xywh(0.0, 10.0, 30.0, 10.0)
+        );
+        assert_eq!(
+            tree.children[2].bounds,
+            Rect::from_xywh(35.0, 20.0, 30.0, 10.0)
+        );
+        assert_eq!(
+            tree.children[3].bounds,
+            Rect::from_xywh(70.0, 30.0, 30.0, 10.0)
+        );
+        // `align_self(Stretch)` in a centering column fills it.
+        let col = Element::stack(
+            Axis::Vertical,
+            vec![cell(30.0, 10.0).align_self(Align::Stretch)],
+        )
+        .align(Align::Start, Align::Center);
+        let tree = layout(&col, Rect::from_xywh(0.0, 0.0, 100.0, 100.0), None);
+        assert_eq!(
+            tree.children[0].bounds,
+            Rect::from_xywh(0.0, 0.0, 100.0, 10.0)
+        );
+    }
+
+    #[test]
     fn layout_grow_stops_at_max_width() {
         let row = Element::stack(
             Axis::Horizontal,
@@ -1430,9 +1504,10 @@ mod tests {
         .gap(10.0);
         let tree = layout(&row, Rect::from_xywh(0.0, 0.0, 210.0, 20.0), None);
         assert_eq!(tree.children[0].bounds.width(), 50.0);
+        // (An empty box in a row sits at its middle.)
         assert_eq!(
             tree.children[1].bounds,
-            Rect::from_xywh(60.0, 0.0, 150.0, 0.0)
+            Rect::from_xywh(60.0, 10.0, 150.0, 0.0)
         );
     }
 
@@ -1536,8 +1611,8 @@ mod tests {
             Axis::Horizontal,
             vec![
                 block(40.0, 20.0),
-                block(40.0, 10.0).grow(1.0),
-                block(40.0, 10.0).grow(1.0),
+                cell(40.0, 10.0).grow(1.0),
+                cell(40.0, 10.0).grow(1.0),
             ],
         )
         .gap(10.0)
@@ -1833,7 +1908,7 @@ mod tests {
             rects(&tree),
             vec![
                 Rect::from_xywh(160.0, 0.0, 40.0, 10.0),
-                Rect::from_xywh(0.0, 0.0, 160.0, 0.0)
+                Rect::from_xywh(0.0, 5.0, 160.0, 0.0)
             ]
         );
         // Three 40-wide items in 100: two per line, each line from the right.

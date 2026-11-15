@@ -88,6 +88,25 @@ impl Pixmap {
             self.data[i + 3],
         ])
     }
+
+    /// Encode as a PNG file (8-bit RGBA): a frame from
+    /// [`App::render_once`](crate::App::render_once) as a screenshot, say.
+    pub fn encode_png(&self) -> Vec<u8> {
+        let (w, h) = (self.size.width, self.size.height);
+        if w == 0 || h == 0 {
+            // PNG has no empty image: an empty pixmap saves as one
+            // transparent pixel.
+            return Pixmap::new(PhysicalSize::new(1, 1)).encode_png();
+        }
+        oxideav_png::encode_rgba8(w, h, &self.data, &Default::default())
+            .expect("the PNG encoder takes any non-empty RGBA8 image")
+    }
+
+    /// Write the pixmap to `path` as a PNG file (see
+    /// [`encode_png`](Self::encode_png)).
+    pub fn save_png(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        std::fs::write(path, self.encode_png())
+    }
 }
 
 /// The integer pixel rects of `src` that `damage` (physical pixels) covers,
@@ -171,6 +190,21 @@ mod tests {
         assert_eq!(pm.pixel(1, 0), Some([10, 20, 30, 40]));
         assert_eq!(pm.pixel(2, 0), None);
         assert_eq!(pm.stride(), 8);
+    }
+
+    #[test]
+    fn png_round_trips() {
+        let mut pm = Pixmap::new(PhysicalSize::new(3, 2));
+        pm.as_bytes_mut()[4..8].copy_from_slice(&[10, 20, 30, 40]);
+        pm.as_bytes_mut()[20..24].copy_from_slice(&[255, 0, 128, 255]);
+        let png = pm.encode_png();
+        assert!(png.starts_with(b"\x89PNG"));
+        assert_eq!(Pixmap::decode(&png).unwrap(), pm);
+        let empty = Pixmap::new(PhysicalSize::new(0, 4)).encode_png();
+        assert_eq!(
+            Pixmap::decode(&empty).unwrap().size(),
+            PhysicalSize::new(1, 1)
+        );
     }
 
     #[test]

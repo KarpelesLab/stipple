@@ -95,11 +95,10 @@ fn view(state: &Term, cx: &mut Cx<Term>) -> Element {
         ],
     )
     .padding(Insets::uniform(16.0))
-    .align(Align::Start, Align::Stretch)
 }
 
 fn main() {
-    let mut app = App::new(Term::default(), view)
+    let app = App::new(Term::default(), view)
         .title("Stipple Raw Keys")
         .theme(Theme::dark())
         .logical_size(Size::new(800.0, 440.0))
@@ -111,8 +110,5 @@ fn main() {
                 ),
             )
         });
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

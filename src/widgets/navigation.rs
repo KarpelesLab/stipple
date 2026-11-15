@@ -252,7 +252,6 @@ impl<S: 'static> NavigationBar<S> {
             top.into_iter().chain([row]).chain(inset).collect(),
         )
         .fill(fill)
-        .align(Align::Start, Align::Stretch)
         .on_key(cx, move |s: &mut S, k| {
             if let Some(to) = step(k, selected, n, rtl, false) {
                 on_select(s, to);
@@ -325,7 +324,6 @@ pub fn navigation_rail<S: 'static>(
         .padding(Insets::new(44.0, 0.0, 12.0, 0.0))
         .width(80.0)
         .fill(container(theme))
-        .align(Align::Start, Align::Stretch)
         .on_key(cx, move |s: &mut S, k| {
             if let Some(to) = step(k, selected, n, false, true) {
                 on_select(s, to);

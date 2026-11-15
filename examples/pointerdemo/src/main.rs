@@ -118,7 +118,7 @@ fn main() {
         lock_on_click: std::env::args().any(|a| a == "--lock-test"),
         ..Pad::default()
     };
-    let mut app = App::new(pad, view)
+    let app = App::new(pad, view)
         .on_pointer_lock(|pad: &mut Pad, _, locked| {
             pad.locked = locked;
             if locked {
@@ -129,8 +129,5 @@ fn main() {
         .title("Stipple Pointer")
         .theme(Theme::dark())
         .logical_size(Size::new(400.0, 300.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

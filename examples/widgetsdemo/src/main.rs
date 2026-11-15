@@ -195,8 +195,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         ),
     ])
     .gap(sp.sm)
-    .padding(Insets::uniform(sp.lg))
-    .align(Align::Start, Align::Stretch);
+    .padding(Insets::uniform(sp.lg));
     let log = column(
         std::iter::once(heading(&theme, "Log"))
             .chain(state.log.iter().map(|l| label(&theme, l.as_str())))
@@ -240,7 +239,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             let rows = (1..=60)
                 .map(|n| label(&theme, format!("Message {n}")).padding(Insets::uniform(sp.sm)))
                 .collect();
-            let list = Element::stack(Axis::Vertical, rows).align(Align::Start, Align::Stretch);
+            let list = Element::stack(Axis::Vertical, rows);
             let id = cx.register_scroll();
             column(vec![list])
                 .scrollable(id)
@@ -273,7 +272,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     column(vec![bar, pages, nav])
         .gap(sp.md)
         .padding(Insets::uniform(sp.md))
-        .align(Align::Start, Align::Stretch)
         .fill(theme.palette.background)
         .grow(1.0)
 }
@@ -290,13 +288,10 @@ fn theme_from_args() -> Theme {
 }
 
 fn main() {
-    let mut app = App::new(State::new(), view)
+    let app = App::new(State::new(), view)
         .title("Stipple Widgets")
         .theme(theme_from_args())
         .logical_size(Size::new(W, H));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }
 
@@ -310,12 +305,10 @@ mod tests {
 
     #[test]
     fn the_select_sits_where_ci_clicks() {
-        let mut app = App::new(State::new(), view).logical_size(Size::new(W, H));
-        if let Some(font) = Font::system_default() {
-            app = app.font(font);
-        } else {
+        if Font::system_default().is_none() {
             return; // positions depend on text metrics
         }
+        let mut app = App::new(State::new(), view).logical_size(Size::new(W, H));
         app.render_once();
         let tree = app.accessibility_tree().unwrap();
         let combo = tree

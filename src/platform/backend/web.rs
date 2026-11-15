@@ -457,7 +457,7 @@ pub fn start<S: 'static>(
         h.scale.set(ScaleFactor::new(scale).get());
     });
     let mut app = make();
-    if app.font.is_none()
+    if matches!(app.font, crate::AppFont::System)
         && let Some(font) = HOST.with(|h| h.font.borrow_mut().take())
     {
         app = app.font(font);

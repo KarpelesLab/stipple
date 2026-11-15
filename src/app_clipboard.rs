@@ -286,7 +286,9 @@ mod tests {
             a: EditBuffer::from_text("hello world"),
             b: EditBuffer::from_text("xy"),
         };
-        let mut app = App::new(state, view).logical_size(Size::new(300.0, 200.0));
+        let mut app = App::new(state, view)
+            .no_font()
+            .logical_size(Size::new(300.0, 200.0));
         if let Some(font) = crate::render::Font::system_default() {
             app = app.font(font);
         }

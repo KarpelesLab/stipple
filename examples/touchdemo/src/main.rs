@@ -181,8 +181,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         label(&theme, "Note").a11y_id("note-label"),
         field.labelled_by("note-label").grow(1.0),
     ])
-    .gap(8.0)
-    .align(Align::Start, Align::Center);
+    .gap(8.0);
     let rows = (0..ROWS)
         .map(|i| {
             button_labeled(&theme, format!("Row {i}"))
@@ -210,13 +209,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     if OFFSET.swap(offset.to_bits(), Ordering::Relaxed) != offset.to_bits() {
         log(&format!("touchdemo: scrolled to {offset:.0}"));
     }
-    let list = Element::stack(
-        Axis::Vertical,
-        vec![column(rows).gap(4.0).align(Align::Start, Align::Stretch)],
-    )
-    .height(LIST_H)
-    .scrollable(id)
-    .align(Align::Start, Align::Stretch);
+    let list = Element::stack(Axis::Vertical, vec![column(rows).gap(4.0)])
+        .height(LIST_H)
+        .scrollable(id);
     // A sideways strip of chips, scrolled by a sideways drag.
     let chips = (0..12)
         .map(|i| button_labeled(&theme, format!("Chip {i}")).width(90.0))
@@ -248,11 +243,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         });
     // Everything but the strip keeps off the screen's edges; the strip runs
     // edge to edge, where the back swipe starts.
-    let inset = |e: Element| {
-        column(vec![e])
-            .align(Align::Start, Align::Stretch)
-            .padding(Insets::symmetric(PAD, 0.0))
-    };
+    let inset = |e: Element| column(vec![e]).padding(Insets::symmetric(PAD, 0.0));
     column(vec![
         inset(field),
         inset(label(
@@ -264,7 +255,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         inset(pinch),
     ])
     .gap(12.0)
-    .align(Align::Start, Align::Stretch)
     .padding(Insets::symmetric(0.0, PAD))
     .grow(1.0)
 }
@@ -274,7 +264,7 @@ fn main() {
         zoom: 1.0,
         ..State::default()
     };
-    let mut app = App::new(state, view)
+    let app = App::new(state, view)
         .title("Stipple Touch")
         .logical_size(Size::new(360.0, 720.0))
         // Follows the system's light and dark mode.
@@ -323,9 +313,6 @@ fn main() {
             log(&format!("touchdemo: restored text {text:?}"));
             s.field = EditBuffer::from_text(text);
         });
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     #[cfg(target_os = "ios")]
     {
         use stipple::platform::backend::ios::simulate;

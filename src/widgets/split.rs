@@ -166,11 +166,7 @@ pub fn split_pane<S>(
     let rtl = theme.is_rtl();
     let f = state.fraction;
     let tracks = vec![Track::fr(f), Track::px(HANDLE), Track::fr(1.0 - f)];
-    let pane = |content: Element| {
-        Element::stack(Axis::Vertical, vec![content])
-            .align(Align::Start, Align::Stretch)
-            .clip()
-    };
+    let pane = |content: Element| Element::stack(Axis::Vertical, vec![content]).clip();
     // A hairline along the divider, broken by a short grip in its middle.
     let (cross, grip) = match state.axis {
         Axis::Horizontal => (Axis::Vertical, (3.0, 24.0)),
@@ -280,6 +276,7 @@ mod tests {
                 .align(Align::Start, Align::Stretch)
             },
         )
+        .no_font()
         .logical_size(Size::new(400.0 + HANDLE, 100.0));
         app.render_once();
         let tree = app.accessibility_tree().unwrap();

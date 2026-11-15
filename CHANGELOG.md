@@ -135,6 +135,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `KeyLocation`, `OptionAsMeta`, `CursorIcon`, `UserAttention`, `BackGesture`,
   `BackEdge`, `NativeMenuItem`, `ClipboardKind`, `MessageKind`,
   `GamepadButton`, `GamepadAxis`, `NativeControl`.
+- *(core)* Stacks align like CSS flexbox: a row (`row`, a horizontal
+  `Element::stack`) centers its children across by default, and a column
+  stretches the ones without a width to its own (a row in a column spans
+  it, so a `spacer()` in it pushes). Cross-axis `Stretch` now leaves a child
+  sized on that axis alone, as grid cells already did; a text field's default
+  width yields to it. Children that relied on sitting at the top of a row or
+  at a column's left need `.align(Align::Start, Align::Start)` on the stack
+  or `.align_self(Align::Start)`.
+- *(app)* An app draws text with the system's default font
+  (`Font::system_default()`) when it sets none, instead of drawing no text;
+  where there's none (or on the web without the page's `font` option) it says
+  so once on stderr, logcat or the console. `App::no_font()` draws no text,
+  for font-independent pixel tests.
+
+### Added
+
+- *(core)* `Element::align_self(Align)`: a child's own cross-axis alignment
+  in a stack.
+- *(widgets)* `Element::placeholder(text)` on `text_field`, `text_editor`,
+  `text_area` and `password_field`: a muted hint while the field is empty and
+  not composing, exposed to accessibility as `AccessNode::placeholder` (the
+  AT-SPI description, `aria-placeholder` on the web).
+- *(render)* `Pixmap::encode_png()` and `Pixmap::save_png(path)`. The
+  examples' `--shots`/`--png` modes and `themegallery`, `material3demo` and
+  `gpudemo` write PNGs instead of PPM or raw RGBA files.
 
 ## [0.0.5](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.4...stipple-v0.0.5) - 2026-11-15
 

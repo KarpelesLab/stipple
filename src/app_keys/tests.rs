@@ -80,6 +80,7 @@ fn app() -> App<Term> {
             .on_key(cx, |_: &mut Term, _: &KeyInput| {});
         column(vec![term, other])
     })
+    .no_font()
     .logical_size(Size::new(300.0, 200.0))
     .menu(|_: &Term| {
         MenuBar::new().menu(

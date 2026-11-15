@@ -497,7 +497,6 @@ pub fn toasts<S: 'static>(
     }
     let content = Element::stack(Axis::Vertical, cards)
         .gap(theme.spacing.sm)
-        .align(Align::Start, Align::Stretch)
         .width(width);
     let insets = Insets {
         top: margin,
@@ -653,14 +652,11 @@ where
             .map(|button| button.on_tap(cx, move |s: &mut S| Toasts::run_action(s, field, id)));
     }
     let message = Element::stack(Axis::Horizontal, vec![message])
-        .align(Align::Start, Align::Center)
         .grow(1.0)
         .shrink(1.0);
     let mut parts = vec![bar, message];
     if let Some(action) = action {
-        parts.push(
-            Element::stack(Axis::Horizontal, vec![action]).align(Align::Start, Align::Center),
-        );
+        parts.push(Element::stack(Axis::Horizontal, vec![action]));
     }
     parts.push(close);
     let card = Element::stack(Axis::Horizontal, parts)
@@ -752,6 +748,7 @@ mod tests {
                 .grow(1.0)
                 .on_tap(cx, |s: &mut App1| s.clicks += 1)
         })
+        .no_font()
         .logical_size(size)
     }
 

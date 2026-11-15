@@ -36,9 +36,10 @@ the crate still builds and tests natively. The page side is
 </script>
 ```
 
-Give the canvas a CSS size; the app fills it. A font is needed for text: the
-page fetches it and hands it to the app, unless the app set its own with
-`App::font`.
+Give the canvas a CSS size; the app fills it. A font is needed for text, and
+the web has no system fonts to fall back on: the page fetches it and hands it
+to the app, unless the app set its own with `App::font`. Without either, the
+browser console says so and text isn't drawn.
 
 `start` also adds an invisible element next to the canvas, `.stipple-overlay`,
 fixed over it: the [ARIA mirror](#accessibility) of the app's accessibility

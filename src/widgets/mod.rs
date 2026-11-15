@@ -155,7 +155,6 @@ pub fn scroll<S>(cx: &mut Cx<S>, height: f64, content: Element) -> Element {
     Element::stack(Axis::Vertical, vec![content])
         .height(height)
         .scrollable(id)
-        .align(Align::Start, Align::Stretch)
 }
 
 /// A fixed-width sideways scroll viewport around `content` (a strip of chips,
@@ -218,8 +217,6 @@ pub fn panel(theme: &Theme, children: Vec<Element>) -> Element {
         .border(theme.palette.border, 1.0)
         .padding(Insets::uniform(theme.spacing.lg))
         .gap(theme.spacing.md)
-        // Stretch children across the card width so rows and dividers fill it.
-        .align(Align::Start, Align::Stretch)
 }
 
 /// A primary action surface (the visual basis of an icon-only button). Fixed
@@ -1102,22 +1099,15 @@ pub fn text_field<S>(
     value: &str,
     on_key: impl FnMut(&mut S, &KeyInput) + 'static,
 ) -> Element {
-    // A leading space keeps an empty field from collapsing to zero height.
-    let shown = if value.is_empty() {
-        String::from(" ")
-    } else {
-        value.to_string()
-    };
     Element::stack(
         Axis::Horizontal,
-        vec![Element::text(shown, theme.font_size, theme.palette.text)],
+        vec![field_text(value.to_string(), theme, theme.palette.text)],
     )
     .fill(theme.palette.surface)
     .radius(theme.radius)
     .border(theme.palette.border, 1.0)
     .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-    .align(Align::Start, Align::Center)
-    .width(200.0)
+    .default_width(200.0)
     .native_text_frame(theme)
     .cursor(crate::platform::CursorIcon::Text)
     .on_key(cx, on_key)
@@ -1151,7 +1141,7 @@ pub fn text_editor<S>(
 ) -> Element {
     let shown = buffer.display();
     // The text fills the field so right-to-left lines can sit at its right edge.
-    let text = Element::text(placeholder(shown.text), theme.font_size, theme.palette.text)
+    let text = field_text(shown.text, theme, theme.palette.text)
         .direction(buffer.direction())
         .grow(1.0)
         .caret(shown.caret)
@@ -1162,8 +1152,7 @@ pub fn text_editor<S>(
         .radius(theme.radius)
         .border(theme.palette.border, 1.0)
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-        .align(Align::Start, Align::Center)
-        .width(200.0)
+        .default_width(200.0)
         .native_text_frame(theme)
         .on_key(cx, move |s, k| match k {
             // Single-line: a triple-click selects the whole field.
@@ -1181,13 +1170,15 @@ pub fn text_editor<S>(
         })
 }
 
-/// The text a field shows: a lone space for an empty one, which keeps it from
-/// collapsing to zero height (the caret then sits at index 0 of it).
-fn placeholder(text: String) -> String {
+/// The text leaf showing a field's value `text` in `color`: for an empty
+/// field, a lone space, which keeps it from collapsing to zero height (the
+/// caret then sits at index 0 of it), and where its
+/// [`placeholder`](Element::placeholder) goes.
+pub(crate) fn field_text(text: String, theme: &Theme, color: Color) -> Element {
     if text.is_empty() {
-        String::from(" ")
+        Element::text(" ", theme.font_size, color).empty_field(theme.palette.text_muted)
     } else {
-        text
+        Element::text(text, theme.font_size, color)
     }
 }
 
@@ -1204,7 +1195,7 @@ pub fn text_area<S>(
 ) -> Element {
     let shown = buffer.display();
     // The text fills the field so right-to-left lines can sit at its right edge.
-    let text = Element::text(placeholder(shown.text), theme.font_size, theme.palette.text)
+    let text = field_text(shown.text, theme, theme.palette.text)
         .direction(buffer.direction())
         .grow(1.0)
         .caret(shown.caret)
@@ -1216,7 +1207,7 @@ pub fn text_area<S>(
         .border(theme.palette.border, 1.0)
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
         .align(Align::Start, Align::Start)
-        .width(280.0)
+        .default_width(280.0)
         .height(120.0)
         .native_text_frame(theme)
         .on_key(cx, move |s, k| field(s).apply(k))
@@ -1316,7 +1307,6 @@ pub fn switch<S>(
         .width(40.0)
         .height(22.0)
         .padding(Insets::uniform(3.0))
-        .align(Align::Start, Align::Center)
         .on_tap(cx, on_toggle)
         .role(Role::Switch)
         .checked(on)
@@ -1355,7 +1345,6 @@ pub fn slider<S>(
     .width(160.0)
     .height(22.0)
     .padding(Insets::symmetric(3.0, 3.0))
-    .align(Align::Start, Align::Center)
     .on_drag(cx, on_change)
 }
 
@@ -1389,7 +1378,6 @@ pub fn setting_row(theme: &Theme, accent: Color, action: impl Into<String>) -> E
         button_variant(theme, action, Variant::Secondary),
     ])
     .gap(theme.spacing.md)
-    .align(Align::Start, Align::Center)
     .height(40.0)
 }
 
@@ -1574,7 +1562,6 @@ pub fn menu_item<S>(
     Element::stack(Axis::Horizontal, vec![label(theme, text)])
         .radius(theme.radius / 2.0)
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-        .align(Align::Start, Align::Center)
         .on_tap(cx, on_select)
 }
 
@@ -1588,7 +1575,6 @@ pub fn menu(theme: &Theme, items: Vec<Element>) -> Element {
         .radius(theme.radius)
         .padding(Insets::uniform(theme.spacing.xs))
         .gap(2.0)
-        .align(Align::Start, Align::Stretch)
         .width(180.0)
 }
 
@@ -2291,5 +2277,92 @@ mod tests {
         m.place_caret(2);
         m.move_right();
         assert_eq!(m.caret(), 3);
+    }
+
+    #[test]
+    fn placeholders_show_while_empty_and_reach_screen_readers() {
+        use crate::core::{Role, accessibility_tree, layout};
+        use crate::geometry::Rect;
+        struct S {
+            name: EditBuffer,
+            pass: PasswordField,
+        }
+        let theme = Theme::light();
+        let leaf = |el: &Element| -> (String, Color, bool) {
+            let ElementKind::Stack { children, .. } = &el.kind else {
+                panic!("a field is a stack")
+            };
+            match &children[0].kind {
+                ElementKind::Text {
+                    text, color, style, ..
+                } => (text.clone(), *color, style.placeholder),
+                _ => panic!("its first child is its text"),
+            }
+        };
+        let fields = |s: &S| {
+            let mut cx = Cx::new(&theme);
+            let editor = text_editor(&mut cx, &theme, &s.name, |s: &mut S| &mut s.name)
+                .placeholder("Your name");
+            let plain =
+                text_field(&mut cx, &theme, s.name.text(), |_: &mut S, _| {}).placeholder("Search");
+            let pass = password_field(&mut cx, &theme, &s.pass, |s: &mut S| &mut s.pass)
+                .placeholder("Password");
+            (editor, plain, pass)
+        };
+        let mut s = S {
+            name: EditBuffer::new(),
+            pass: PasswordField::new(),
+        };
+        // Empty: the hints, muted.
+        let (editor, plain, pass) = fields(&s);
+        let muted = theme.palette.text_muted;
+        assert_eq!(leaf(&editor), ("Your name".into(), muted, true));
+        assert_eq!(leaf(&plain), ("Search".into(), muted, true));
+        assert_eq!(leaf(&pass), ("Password".into(), muted, true));
+        // A screen reader hears an empty field with a placeholder.
+        let tree = accessibility_tree(
+            &layout(
+                &column(vec![editor, pass]),
+                Rect::from_xywh(0.0, 0.0, 300.0, 200.0),
+                None,
+            ),
+            None,
+        );
+        let nodes = tree.descendants();
+        let field = nodes.iter().find(|n| n.role == Role::TextField).unwrap();
+        assert_eq!(field.name, "");
+        assert_eq!(field.placeholder.as_deref(), Some("Your name"));
+        let secret = nodes
+            .iter()
+            .find(|n| n.role == Role::PasswordField)
+            .unwrap();
+        assert_eq!(secret.placeholder.as_deref(), Some("Password"));
+        // Typed into, or composing: the value, and the hint stays for the
+        // screen reader only.
+        s.name.apply(&KeyInput::Text("Ada".into()));
+        let (editor, _, _) = fields(&s);
+        assert_eq!(leaf(&editor), ("Ada".into(), theme.palette.text, false));
+        let tree = accessibility_tree(
+            &layout(
+                &column(vec![editor]),
+                Rect::from_xywh(0.0, 0.0, 300.0, 40.0),
+                None,
+            ),
+            None,
+        );
+        let nodes = tree.descendants();
+        let field = nodes.iter().find(|n| n.role == Role::TextField).unwrap();
+        assert_eq!(field.name, "Ada");
+        assert_eq!(field.placeholder.as_deref(), Some("Your name"));
+        let mut s = S {
+            name: EditBuffer::new(),
+            pass: PasswordField::new(),
+        };
+        s.name.apply(&KeyInput::Preedit {
+            text: "ni".into(),
+            cursor: None,
+        });
+        let (editor, _, _) = fields(&s);
+        assert!(!leaf(&editor).2, "no hint over a composition");
     }
 }

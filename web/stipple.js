@@ -24,7 +24,8 @@
 // app does, so input methods and dead keys work.
 //
 // Options:
-//   font      URL of the font to load (text doesn't render without one).
+//   font      URL of the font to load (the web has no system font; without
+//             one, text isn't drawn and the console says so).
 //   label     the accessible name of the app (default: the canvas's
 //             aria-label, if any).
 //   title     false to leave document.title alone (for a page that runs
@@ -280,6 +281,7 @@ export async function start(canvas, wasmUrl, options = {}) {
     attr(el, "aria-selected", node.s === undefined ? null : node.s ? "true" : "false");
     attr(el, "aria-expanded", node.e === undefined ? null : node.e ? "true" : "false");
     attr(el, "aria-checked", node.c === undefined ? null : node.c ? "true" : "false");
+    attr(el, "aria-placeholder", node.p ?? null);
     if (FOCUSABLE.has(node.r)) {
       if (el.tabIndex !== -1 || !el.hasAttribute("tabindex")) el.tabIndex = -1;
     } else if (el.hasAttribute("tabindex")) {

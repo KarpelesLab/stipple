@@ -14,23 +14,19 @@ struct Form {
 fn view(state: &Form, cx: &mut Cx<Form>) -> Element {
     let theme = *cx.theme();
     let area = text_area(cx, &theme, &state.buffer, |s: &mut Form| &mut s.buffer)
-        .width(560.0)
-        .height(200.0);
+        .height(200.0)
+        .placeholder("Write a few lines…");
     panel(
         &theme,
         vec![label(&theme, "Multi-line editor (Tab to focus):"), area],
     )
     .padding(Insets::uniform(32.0))
-    .align(Align::Start, Align::Stretch)
 }
 
 fn main() {
-    let mut app = App::new(Form::default(), view)
+    let app = App::new(Form::default(), view)
         .title("Stipple Text Area")
         .theme(Theme::dark())
         .logical_size(Size::new(640.0, 320.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

@@ -45,10 +45,10 @@ fn step<S: 'static>(app: &mut App<S>, surface: &mut Sink) -> Damage {
     let pane = &mut panes[0];
     pane.anim_only = pane.animating && !pane.dirty;
     pane.dirty |= pane.animating && !pane.anim_only;
-    let (scene, damage) = match pane.repaint(theme, font.as_ref(), false) {
+    let (scene, damage) = match pane.repaint(theme, font.get(), false) {
         Some(frame) => frame,
         None => {
-            let scene = pane.build_frame(state, theme, font.as_ref());
+            let scene = pane.build_frame(state, theme, font.get());
             (scene, pane.take_damage())
         }
     };
@@ -117,6 +117,7 @@ fn rows_app(labels: Vec<&'static str>) -> (App<Rows>, Rc<Cell<usize>>) {
         }
         Element::stack(Axis::Vertical, children)
     })
+    .no_font()
     .logical_size(Size::new(200.0, 200.0));
     (app, builds)
 }
@@ -227,6 +228,7 @@ fn scroll_containers_and_drop_targets_keep_their_ids_too() {
         });
         Element::stack(Axis::Vertical, vec![first, panel])
     })
+    .no_font()
     .logical_size(Size::new(200.0, 200.0));
     let _ = app.render_frame();
     fn drop_of(n: &LayoutNode) -> Option<crate::core::DropId> {
@@ -269,6 +271,7 @@ fn what_a_memoized_subtree_reads_through_cx_is_an_input() {
                 .key("card")
         })
     })
+    .no_font()
     .logical_size(Size::new(100.0, 100.0));
     let _ = app.render_frame();
     rebuild(&mut app);
@@ -292,7 +295,8 @@ fn a_memoized_subtree_that_animates_is_built_every_time() {
             cx.request_frame();
             Element::boxed(Default::default()).width(10.0).height(10.0)
         })
-    });
+    })
+    .no_font();
     let _ = app.render_frame();
     let mut surface = Sink::default();
     let _ = step(&mut app, &mut surface);
@@ -378,6 +382,7 @@ fn a_reused_subtree_is_laid_out_from_its_last_layout_until_its_look_changes() {
         });
         Element::stack(Axis::Vertical, vec![card])
     })
+    .no_font()
     .logical_size(Size::new(200.0, 200.0));
     let _ = app.render_frame();
     let first = tree(&app).clone();
@@ -436,6 +441,7 @@ fn mover_app(fill: bool, length: Duration) -> (App<Mover>, Rc<Cell<usize>>) {
             vec![tile, Element::stack(Axis::Vertical, rows)],
         )
     })
+    .no_font()
     .logical_size(Size::new(300.0, 300.0));
     (app, builds)
 }
@@ -518,7 +524,8 @@ fn frames_the_view_asks_for_or_that_move_the_layout_are_built() {
         counter.set(counter.get() + 1);
         cx.request_frame();
         Element::boxed(Default::default()).width(10.0).height(10.0)
-    });
+    })
+    .no_font();
     let mut surface = Sink::default();
     for _ in 0..3 {
         let _ = step(&mut app, &mut surface);
@@ -537,7 +544,8 @@ fn frames_the_view_asks_for_or_that_move_the_layout_are_built() {
             .height(10.0)
             .key("bar")
             .transition(Transition::tween(MOVE, Easing::Linear))
-    });
+    })
+    .no_font();
     let _ = step(&mut app, &mut surface);
     wide.set(true);
     app.panes[0].dirty = true;
@@ -630,10 +638,10 @@ fn measure(app: &mut App<Bench>, frames: usize) -> (Duration, Duration, f64) {
         pane.anim_only = pane.animating && !pane.dirty;
         pane.dirty |= pane.animating && !pane.anim_only;
         let start = Instant::now();
-        let (scene, damage) = match pane.repaint(theme, font.as_ref(), false) {
+        let (scene, damage) = match pane.repaint(theme, font.get(), false) {
             Some(frame) => frame,
             None => {
-                let scene = pane.build_frame(state, theme, font.as_ref());
+                let scene = pane.build_frame(state, theme, font.get());
                 (scene, pane.take_damage())
             }
         };

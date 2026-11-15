@@ -152,6 +152,9 @@ pub(crate) struct Semantics {
     /// The [`id`](Semantics::id) of the element that labels this one (a
     /// field's caption).
     pub labelled_by: Option<String>,
+    /// A text field's hint, read while it's empty (see
+    /// [`Element::placeholder`](crate::core::Element::placeholder)).
+    pub placeholder: Option<String>,
 }
 
 /// A node in the accessibility tree.
@@ -183,6 +186,10 @@ pub struct AccessNode {
     /// The id of the node that labels this one
     /// ([`Element::labelled_by`](crate::core::Element::labelled_by)).
     pub labelled_by: Option<String>,
+    /// A text field's hint
+    /// ([`Element::placeholder`](crate::core::Element::placeholder)), which
+    /// screen readers read while it's empty.
+    pub placeholder: Option<String>,
     pub children: Vec<AccessNode>,
 }
 
@@ -247,9 +254,9 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         let labelled = label.is_some();
         let mut name = label.unwrap_or_else(|| text_of(node));
         // An empty field lays out a single space to keep its line's height
-        // (`widgets::text_editor`); a screen reader should read it as empty,
-        // not as "space".
-        if role == Role::TextField && name == " " {
+        // (`widgets::text_editor`), or its placeholder; a screen reader should
+        // read it as empty, not as "space" or as if the hint were typed.
+        if role == Role::TextField && (name == " " || shows_placeholder(node)) {
             name.clear();
         }
         if !labelled && matches!(role, Role::TextField | Role::SpinButton) {
@@ -270,8 +277,17 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         text_selection,
         id: sem.and_then(|s| s.id.clone()),
         labelled_by: sem.and_then(|s| s.labelled_by.clone()),
+        placeholder: sem.and_then(|s| s.placeholder.clone()),
         children,
     }
+}
+
+/// Whether the field `node` shows its placeholder in place of a value.
+fn shows_placeholder(node: &LayoutNode) -> bool {
+    matches!(
+        own_text(node).map(|n| &n.content),
+        Some(NodeContent::Text { style, .. }) if style.placeholder
+    )
 }
 
 /// The caret and selection of an editable field whose name is `name`: from
@@ -284,7 +300,8 @@ fn caret_of(node: &LayoutNode, name: &str) -> (Option<usize>, Option<(usize, usi
     let NodeContent::Text { text, .. } = &leaf.content else {
         return (None, None);
     };
-    if text != name && !(name.is_empty() && text == " ") {
+    let hint = matches!(&leaf.content, NodeContent::Text { style, .. } if style.placeholder);
+    if text != name && !(name.is_empty() && (text == " " || hint)) {
         return (None, None);
     }
     let snap = |i: usize| {
@@ -333,7 +350,7 @@ pub fn accessibility_tree(root: &LayoutNode, focused: Option<FocusId>) -> Access
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Align, Axis, BoxStyle, Cx, Element, layout};
+    use crate::core::{Axis, BoxStyle, Cx, Element, layout};
     use crate::render::Color;
     use crate::style::Theme;
 
@@ -355,7 +372,6 @@ mod tests {
             Axis::Vertical,
             vec![Element::text("Title", 18.0, Color::BLACK), field, button],
         )
-        .align(Align::Start, Align::Stretch)
         .fill(Color::WHITE)
         .padding(crate::geometry::Insets::uniform(4.0));
         let laid = layout(&root, Rect::from_xywh(0.0, 0.0, 200.0, 120.0), None);

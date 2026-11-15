@@ -81,7 +81,6 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     ])
     .gap(8.0)
     .padding(Insets::uniform(24.0))
-    .align(Align::Start, Align::Stretch)
     .grow(1.0)
 }
 
@@ -114,12 +113,7 @@ fn folder_name(id: u64) -> &'static str {
 /// y = 24 + 36k .. +28 (what the checks look at).
 fn mirrored_view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     let theme = *cx.theme();
-    let line = |children: Vec<Element>| {
-        row(children)
-            .gap(8.0)
-            .align(Align::Start, Align::Center)
-            .height(ROW)
-    };
+    let line = |children: Vec<Element>| row(children).gap(8.0).height(ROW);
     let checkbox = checkbox(cx, &theme, state.agree, |s: &mut Demo| s.agree = !s.agree);
     let switch = switch(cx, &theme, state.wifi, |s: &mut Demo| s.wifi = !s.wifi);
     let slider = slider(cx, &theme, state.volume, |s: &mut Demo, v| s.volume = v);
@@ -168,7 +162,6 @@ fn mirrored_view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     ])
     .gap(8.0)
     .padding(Insets::uniform(24.0))
-    .align(Align::Start, Align::Stretch)
     .grow(1.0)
 }
 
@@ -232,9 +225,6 @@ fn main() {
     let check = args.iter().any(|a| a == "--mirror-check");
     let mirror = check || args.iter().any(|a| a == "--mirror");
     let mut app = if mirror { mirrored_app() } else { demo_app() };
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     if check {
         match check_mirrored(&app.render_once()) {
             Ok(()) => println!("bididemo mirror: ok"),

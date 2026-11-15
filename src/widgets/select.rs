@@ -1,7 +1,7 @@
 //! A select (dropdown): a button showing the chosen option, which opens a list
 //! of the options below it.
 
-use crate::core::{Align, Anchor, Axis, Cx, Element, KeyInput, OverlaySpec, Role};
+use crate::core::{Anchor, Axis, Cx, Element, KeyInput, OverlaySpec, Role};
 use crate::geometry::Insets;
 use crate::platform::native::NativeControl;
 use crate::style::Theme;
@@ -228,7 +228,6 @@ pub fn select<S, T: AsRef<str>>(
         .radius(theme.radius)
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
         .gap(theme.spacing.sm)
-        .align(Align::Start, Align::Center)
         .width(200.0);
     if let Some(deco) = theme.native_deco(control) {
         el = native_size(el.native(deco), control).width(200.0);
@@ -267,7 +266,6 @@ fn option_list<S>(
         .radius(theme.radius / 2.0)
         .padding(Insets::symmetric(theme.spacing.sm, 0.0))
         .gap(theme.spacing.xs)
-        .align(Align::Start, Align::Center)
         .height(row_height)
         .role(Role::ListItem)
         .a11y_label(text.clone());
@@ -277,9 +275,7 @@ fn option_list<S>(
         rows.push(row.on_tap(cx, move |s: &mut S| field(s).choose(i)));
     }
     let many = rows.len() > MAX_VISIBLE;
-    let mut list = Element::stack(Axis::Vertical, rows)
-        .gap(2.0)
-        .align(Align::Start, Align::Stretch);
+    let mut list = Element::stack(Axis::Vertical, rows).gap(2.0);
     if many {
         let height = MAX_VISIBLE as f64 * (row_height + 2.0);
         list = scroll(cx, height, list);
@@ -289,7 +285,6 @@ fn option_list<S>(
         .border(p.border, 1.0)
         .radius(theme.radius)
         .padding(Insets::uniform(theme.spacing.xs))
-        .align(Align::Start, Align::Stretch)
         .clip()
         .role(Role::List)
 }
@@ -374,6 +369,7 @@ mod tests {
                 .padding(Insets::uniform(10.0))
             },
         )
+        .no_font()
         .logical_size(Size::new(300.0, 300.0))
     }
 

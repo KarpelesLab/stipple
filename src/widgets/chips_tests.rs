@@ -64,6 +64,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
 
 fn app_with(theme: Theme, width: f64, state: State) -> App<State> {
     let mut app = App::new(state, view)
+        .no_font()
         .theme(theme)
         .logical_size(Size::new(width, 400.0));
     app.render_once();

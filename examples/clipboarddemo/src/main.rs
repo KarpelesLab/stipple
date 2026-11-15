@@ -57,14 +57,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     } else {
         text_editor(cx, &theme, &state.buffer, |s: &mut State| &mut s.buffer)
     }
-    .width(560.0)
     .height(64.0);
     panel(
         &theme,
         vec![label(&theme, "Clipboard (Tab to focus):"), field],
     )
     .padding(Insets::uniform(32.0))
-    .align(Align::Start, Align::Stretch)
 }
 
 /// The rich content `--copy-rich` and `--roundtrip` write: text, HTML and a
@@ -165,9 +163,6 @@ fn main() {
     .title("Stipple Clipboard")
     .theme(Theme::dark())
     .logical_size(Size::new(640.0, 240.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     let paste = if has("--paste-rich") {
         Some(ClipboardKind::Clipboard)
     } else if has("--paste-primary") {

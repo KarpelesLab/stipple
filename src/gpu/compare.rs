@@ -4,7 +4,7 @@
 //! These need a GL device (Mesa's llvmpipe does: surfaceless EGL). Without
 //! one they're skipped, unless `STIPPLE_REQUIRE_GPU` is set (as CI's GPU job
 //! does), when they fail. `STIPPLE_GPU_DUMP=<dir>` writes both frames of each
-//! comparison there as PPMs.
+//! comparison there as PNGs.
 
 use super::*;
 use crate::geometry::{Affine, Point, Size, Vec2};
@@ -28,13 +28,8 @@ fn dump(name: &str, which: &str, p: &Pixmap) {
     let Some(dir) = std::env::var_os("STIPPLE_GPU_DUMP") else {
         return;
     };
-    let (w, h) = (p.size().width, p.size().height);
-    let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
-    for px in p.as_bytes().as_chunks::<4>().0 {
-        out.extend_from_slice(&px[..3]);
-    }
-    let path = std::path::Path::new(&dir).join(format!("{name}-{which}.ppm"));
-    let _ = std::fs::write(path, out);
+    let path = std::path::Path::new(&dir).join(format!("{name}-{which}.png"));
+    let _ = p.save_png(path);
 }
 
 /// How two frames differ.

@@ -41,7 +41,7 @@ impl<S: 'static> App<S> {
         if pane.input_viewport.is_some() {
             return RawOutcome::default();
         }
-        pane.ensure_tree(state, theme, font.as_ref());
+        pane.ensure_tree(state, theme, font.get());
         let Some(raw) = pane
             .tree
             .as_ref()

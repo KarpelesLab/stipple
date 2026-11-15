@@ -116,8 +116,7 @@ mod app {
                 spinner(cx, &theme),
                 label(&theme, format!("Running for {} s", state.ticks)),
             ])
-            .gap(theme.spacing.sm)
-            .align(Align::Start, Align::Center),
+            .gap(theme.spacing.sm),
             platform_row(cx, &theme),
         ])
         .gap(theme.spacing.md);
@@ -227,9 +226,7 @@ mod app {
             );
             println!("androiddemo: save requested");
         });
-        row(vec![notify, open, save])
-            .gap(theme.spacing.sm)
-            .align(Align::Start, Align::Center)
+        row(vec![notify, open, save]).gap(theme.spacing.sm)
     }
 
     fn main() {
@@ -304,9 +301,6 @@ mod app {
                 }
             })
             .on_lifecycle(|_: &mut State, change| println!("androiddemo: lifecycle {change:?}"));
-        if let Some(font) = Font::system_default() {
-            app = app.font(font);
-        }
         app.handle().every(Duration::from_secs(1), |s: &mut State| {
             s.ticks += 1;
             println!(

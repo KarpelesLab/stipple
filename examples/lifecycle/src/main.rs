@@ -61,14 +61,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             },
         ),
     ])
-    .gap(theme.spacing.sm)
-    .align(Align::Start, Align::Center);
+    .gap(theme.spacing.sm);
     let busy = row(vec![
         checkbox(cx, &theme, state.busy, |s: &mut State| s.busy = !s.busy),
         label(&theme, "Work is running (closing asks first)"),
     ])
-    .gap(theme.spacing.sm)
-    .align(Align::Start, Align::Center);
+    .gap(theme.spacing.sm);
     let beep = button_labeled(&theme, "Beep").on_tap(cx, {
         let handle = handle.clone();
         move |_| handle.beep()
@@ -121,7 +119,7 @@ fn main() {
         focused: true,
         ..Default::default()
     };
-    let mut app = App::new(state, view)
+    let app = App::new(state, view)
         // What the app is, for where the OS can't tell (no bundle): its
         // directories are named after the id.
         .app_info(
@@ -148,9 +146,6 @@ fn main() {
             d.temp.display()
         )),
         Err(e) => say(format_args!("dirs unavailable: {e}")),
-    }
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
     }
     let handle = app.handle();
     let on_close = handle.clone();

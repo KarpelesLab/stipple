@@ -12,7 +12,7 @@ use crate::geometry::Insets;
 use crate::render::{Color, Svg, TextDirection};
 use crate::style::Theme;
 
-use super::{EditBuffer, placeholder};
+use super::{EditBuffer, field_text};
 
 /// What a hidden character shows as.
 const BULLET: char = '•';
@@ -254,20 +254,16 @@ pub(crate) fn password_field_with<S: 'static>(
 ) -> Element {
     let (caret, selection) = state.shown_marks();
     let e = edit.clone();
-    let text = Element::text(
-        placeholder(state.shown()),
-        theme.font_size,
-        theme.palette.text,
-    )
-    .direction(TextDirection::Ltr)
-    .grow(1.0)
-    .shrink(1.0)
-    .caret(caret)
-    .selection(selection)
-    .clip()
-    .on_text_pos(cx, move |s, index, extend| {
-        e(s, &mut |p| p.place(index, extend))
-    });
+    let text = field_text(state.shown(), theme, theme.palette.text)
+        .direction(TextDirection::Ltr)
+        .grow(1.0)
+        .shrink(1.0)
+        .caret(caret)
+        .selection(selection)
+        .clip()
+        .on_text_pos(cx, move |s, index, extend| {
+            e(s, &mut |p| p.place(index, extend))
+        });
     let mut children = vec![text];
     if state.reveal_button
         && let Some(icon) = eye(theme.palette.text_muted, state.revealed)
@@ -296,8 +292,7 @@ pub(crate) fn password_field_with<S: 'static>(
         .radius(theme.radius)
         .border(theme.palette.border, 1.0)
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-        .align(Align::Start, Align::Center)
-        .width(200.0)
+        .default_width(200.0)
         .native_text_frame(theme)
         .cursor(crate::platform::CursorIcon::Text)
         .on_key(cx, move |s, k| {
@@ -372,7 +367,9 @@ mod tests {
         let state = State {
             pw: PasswordField::new().reveal_button(true),
         };
-        let mut app = App::new(state, view).logical_size(Size::new(300.0, 80.0));
+        let mut app = App::new(state, view)
+            .no_font()
+            .logical_size(Size::new(300.0, 80.0));
         app.render_once();
         assert!(app.focus_next());
         app.render_once();

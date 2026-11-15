@@ -23,9 +23,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::rc::Rc;
 
-use crate::core::{
-    Align, Axis, BoxStyle, Cx, Element, KeyInput, Role, ScrollId, ScrollRequests, pointer,
-};
+use crate::core::{Axis, BoxStyle, Cx, Element, KeyInput, Role, ScrollId, ScrollRequests, pointer};
 use crate::geometry::Insets;
 use crate::platform::Modifiers;
 use crate::render::Color;
@@ -190,11 +188,10 @@ impl Window {
         children.push(Element::boxed(BoxStyle::default()).height(above));
         children.extend(rows);
         children.push(Element::boxed(BoxStyle::default()).height(below));
-        let content = Element::stack(Axis::Vertical, children).align(Align::Start, Align::Stretch);
+        let content = Element::stack(Axis::Vertical, children);
         Element::stack(Axis::Vertical, vec![content])
             .height(self.height)
             .scrollable(self.id)
-            .align(Align::Start, Align::Stretch)
     }
 }
 
@@ -448,7 +445,6 @@ pub(crate) fn frame(theme: &Theme, children: Vec<Element>) -> Element {
         .border(theme.palette.border, 1.0)
         .radius(theme.radius / 2.0)
         .padding(Insets::uniform(1.0))
-        .align(Align::Start, Align::Stretch)
         .clip()
 }
 
@@ -500,8 +496,7 @@ pub fn virtual_list<S: 'static>(
         let content = row(cx, info);
         let mut el = Element::stack(Axis::Horizontal, vec![content])
             .height(window.rows.height(index))
-            .padding(Insets::symmetric(theme.spacing.md, 0.0))
-            .align(Align::Start, Align::Center);
+            .padding(Insets::symmetric(theme.spacing.md, 0.0));
         if let Some(fill) = row_fill(theme, info.selected, false) {
             el = el.fill(fill);
         }
@@ -713,6 +708,7 @@ mod tests {
                 crate::widgets::column(vec![list.width(300.0)])
             },
         )
+        .no_font()
         .logical_size(crate::geometry::Size::new(320.0, 300.0))
     }
 

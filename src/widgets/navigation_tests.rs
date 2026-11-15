@@ -47,7 +47,6 @@ fn page(s: &State, cx: &mut Cx<State>, i: usize, visible: bool) -> Element {
                 .collect();
             let id = cx.register_scroll();
             Element::stack(Axis::Vertical, rows)
-                .align(Align::Start, Align::Stretch)
                 .scrollable(id)
                 .grow(1.0)
         }
@@ -83,7 +82,9 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
 }
 
 fn app_with(state: State) -> App<State> {
-    let mut app = App::new(state, view).logical_size(Size::new(400.0, 600.0));
+    let mut app = App::new(state, view)
+        .no_font()
+        .logical_size(Size::new(400.0, 600.0));
     app.render_once();
     app
 }

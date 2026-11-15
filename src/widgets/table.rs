@@ -304,7 +304,6 @@ pub fn table<S: 'static>(
             .height(spec.row_height)
             .padding(Insets::symmetric(theme.spacing.md, 0.0))
             .gap(theme.spacing.xs)
-            .align(Align::Start, Align::Center)
             .clip()
             .role(Role::ColumnHeader);
         if column.sortable {
@@ -476,6 +475,7 @@ mod tests {
                 crate::widgets::column(vec![grid])
             },
         )
+        .no_font()
         .logical_size(Size::new(400.0, 320.0))
     }
 

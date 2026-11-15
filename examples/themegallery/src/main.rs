@@ -1,9 +1,8 @@
 //! Renders the same UI under several themes to show the theme engine and the
 //! customization builder (`accent`, `high_contrast`, …).
 //!
-//! Writes one raw RGBA file per theme (`theme0.raw` … `themeN.raw`) at a fixed
-//! size; the CI theme job converts each to a PNG and montages them into one
-//! screenshot.
+//! Writes one PNG per theme (`theme0.png` … `themeN.png`) at a fixed size;
+//! the CI theme job montages them into one screenshot.
 
 use stipple::prelude::*;
 
@@ -47,9 +46,6 @@ fn render(theme: Theme) -> stipple::render::Pixmap {
     let mut app = App::new((), view)
         .theme(theme)
         .logical_size(Size::new(W, H));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.render_once()
 }
 
@@ -67,7 +63,9 @@ fn main() {
     ];
     for (i, (name, theme)) in themes.iter().enumerate() {
         let pixmap = render(*theme);
-        std::fs::write(format!("theme{i}.raw"), pixmap.as_bytes()).expect("write raw");
+        pixmap
+            .save_png(format!("theme{i}.png"))
+            .expect("write the PNG");
         println!("rendered theme {i} ({name})");
     }
     println!("size {}x{}", W as u32, H as u32);

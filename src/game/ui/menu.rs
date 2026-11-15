@@ -70,7 +70,6 @@ pub fn menu_button<S>(
     .radius(theme.radius)
     .padding(Insets::symmetric(theme.spacing.lg, theme.spacing.md))
     .gap(theme.spacing.sm)
-    .align(Align::Start, Align::Center)
     .min_width(280.0)
     .transform(Transform::IDENTITY.scale(scale))
     .transition_for(AnimProp::Fill, state)
@@ -92,7 +91,6 @@ pub fn menu_button<S>(
 pub fn menu_list(theme: &Theme, items: Vec<Element>) -> Element {
     Element::stack(Axis::Vertical, items)
         .gap(theme.spacing.sm)
-        .align(Align::Start, Align::Stretch)
         .spatial_nav()
 }
 
@@ -111,7 +109,6 @@ pub fn controls_hint(theme: &Theme, hints: &[(&str, &str)]) -> Element {
                 ],
             )
             .gap(theme.spacing.xs)
-            .align(Align::Start, Align::Center)
         })
         .collect();
     Element::stack(Axis::Horizontal, items)
@@ -293,7 +290,6 @@ impl GameOverScreen {
                         Element::text(value, theme.typography.title, p.text).bold(),
                     ],
                 )
-                .align(Align::Start, Align::Center)
             })
             .collect();
         let results = Element::stack(Axis::Vertical, rows)
@@ -302,7 +298,6 @@ impl GameOverScreen {
             .border(p.border, 1.0)
             .radius(theme.radius)
             .padding(Insets::uniform(theme.spacing.lg))
-            .align(Align::Start, Align::Stretch)
             .width(320.0);
         let page = screen(
             theme,

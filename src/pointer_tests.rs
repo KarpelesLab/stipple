@@ -48,6 +48,7 @@ fn app() -> App<Log> {
         let b = tile(cx, 'b');
         Element::stack(Axis::Vertical, vec![a, b])
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0))
 }
 
@@ -198,6 +199,7 @@ fn positions_are_read_through_transforms() {
         let a = tile(cx, 'a').transform(Transform::IDENTITY.scale(2.0).origin(0.0, 0.0));
         Element::stack(Axis::Vertical, vec![a])
     })
+    .no_font()
     .logical_size(Size::new(300.0, 200.0));
     let _ = app.render_frame();
     app.pointer_event(press(PointerButton::Left, 150.0, 80.0));
@@ -219,6 +221,7 @@ fn leaving_the_window_clears_every_hover() {
             .on_tap(cx, |_: &mut Log| {});
         Element::stack(Axis::Vertical, vec![a, b])
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0));
     let _ = app.render_frame();
     app.pointer_event(moved(10.0, 10.0));
@@ -268,6 +271,7 @@ fn a_release_outside_the_window_ends_the_hover() {
             .on_tap(cx, |_: &mut Log| {});
         Element::stack(Axis::Vertical, vec![b])
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0));
     let _ = app.render_frame();
     app.pointer_event(moved(10.0, 10.0));
@@ -304,6 +308,7 @@ fn the_wheel_goes_to_the_innermost_taker() {
             .scrollable(id);
         Element::stack(Axis::Vertical, vec![list])
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0));
     let _ = app.render_frame();
     let scroll = |app: &App<Log>| app.panes[0].scroll_offsets.get(&ScrollId(0)).copied();

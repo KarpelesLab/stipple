@@ -125,7 +125,6 @@ fn row_of(s: &State, item: &Item, cx: &mut Cx<State>, theme: &Theme) -> Element 
     let glide = Transition::spring(SpringParams::with_response(0.45 * s.slow, 0.85));
     row(vec![swatch, name, remove])
         .gap(theme.spacing.md)
-        .align(Align::Start, Align::Center)
         .padding(Insets::new(6.0, 12.0, 6.0, 12.0))
         .fill(p.surface.mix(hue, 0.18))
         .radius(theme.radius)
@@ -174,22 +173,17 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
         );
     }
     let rows = s.items.iter().map(|i| row_of(s, i, cx, &theme)).collect();
-    body.push(column(rows).gap(6.0).align(Align::Start, Align::Stretch));
+    body.push(column(rows).gap(6.0));
     column(body)
         .gap(theme.spacing.md)
         .padding(Insets::uniform(24.0))
-        .align(Align::Start, Align::Stretch)
 }
 
 fn app(state: State) -> App<State> {
-    let mut app = App::new(state, view)
+    App::new(state, view)
         .title("Stipple List Motion")
         .theme(Theme::dark())
-        .logical_size(Size::new(420.0, 560.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
-    app
+        .logical_size(Size::new(420.0, 560.0))
 }
 
 /// The accessibility tree's node named `name`, if any.

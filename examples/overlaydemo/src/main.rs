@@ -103,12 +103,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
 }
 
 fn main() {
-    let mut app = App::new(State::default(), view)
+    let app = App::new(State::default(), view)
         .title("Stipple Overlays")
         .theme(Theme::dark())
         .logical_size(Size::new(W, H));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

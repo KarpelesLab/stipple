@@ -36,7 +36,6 @@ pub fn setting_row(theme: &Theme, label: impl Into<String>, control: Element) ->
     .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
     .fill(p.surface.mix(p.background, 0.4))
     .radius(theme.radius)
-    .align(Align::Start, Align::Center)
     .min_height(52.0)
 }
 
@@ -77,7 +76,6 @@ pub fn game_slider<S>(
         .radius(9.0)
         .height(18.0)
         .width(CONTROL_WIDTH)
-        .align(Align::Start, Align::Center)
         .on_key(cx, move |s: &mut S, k: &KeyInput| {
             let to = match k {
                 KeyInput::Left => v - step,
@@ -119,8 +117,7 @@ pub fn volume_row<S>(
             Element::text(format!("{percent}%"), theme.typography.body, p.text_muted).width(48.0),
         ],
     )
-    .gap(theme.spacing.md)
-    .align(Align::Start, Align::Center);
+    .gap(theme.spacing.md);
     setting_row(theme, label, control)
 }
 
@@ -142,9 +139,7 @@ pub fn toggle_row<S>(
         p.text_muted,
     )
     .width(48.0);
-    let control = Element::stack(Axis::Horizontal, vec![switch, state])
-        .gap(theme.spacing.md)
-        .align(Align::Start, Align::Center);
+    let control = Element::stack(Axis::Horizontal, vec![switch, state]).gap(theme.spacing.md);
     setting_row(theme, label, control)
 }
 
@@ -196,7 +191,6 @@ pub fn choice_row<S>(
     .width(CONTROL_WIDTH)
     .padding(Insets::symmetric(theme.spacing.xs, 2.0))
     .radius(theme.radius)
-    .align(Align::Start, Align::Center)
     .on_key(cx, move |s: &mut S, k: &KeyInput| match k {
         KeyInput::Left => keys(s, prev),
         KeyInput::Right | KeyInput::Enter => keys(s, next),

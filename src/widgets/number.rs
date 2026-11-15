@@ -256,7 +256,6 @@ pub fn number_input<S>(
         .radius(theme.radius)
         .border(border, 1.0)
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-        .align(Align::Start, Align::Center)
         .grow(1.0)
         .shrink(1.0);
     // An invalid entry keeps the self-drawn frame, so its red border shows.
@@ -281,7 +280,6 @@ pub fn number_input<S>(
         .border(p.border, 1.0)
         .radius(theme.radius)
         .gap(1.0)
-        .align(Align::Start, Align::Stretch)
         .width(24.0);
 
     Element::stack(Axis::Horizontal, vec![edit, steppers])
@@ -401,6 +399,7 @@ mod tests {
                 })])
             },
         )
+        .no_font()
         .logical_size(Size::new(300.0, 100.0));
         app.render_once();
         let tree = app.accessibility_tree().unwrap();

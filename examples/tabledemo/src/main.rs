@@ -266,10 +266,7 @@ fn demo_app(theme: Theme) -> App<Demo> {
 }
 
 fn main() {
-    let mut app = demo_app(theme_from_args());
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
+    let app = demo_app(theme_from_args());
     app.run();
 }
 

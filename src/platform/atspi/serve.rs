@@ -669,7 +669,11 @@ fn node_property(b: &Bridge, n: &Node, iface: &str, prop: &str) -> Option<Value>
     let text = n.text();
     Some(match (iface, prop) {
         (ACCESSIBLE, "Name") => Value::Str(n.name().to_string()),
-        (ACCESSIBLE, "Description" | "AccessibleId" | "HelpText") => Value::Str(String::new()),
+        // A field's placeholder is the hint Orca reads after its (empty) value.
+        (ACCESSIBLE, "Description" | "HelpText") => {
+            Value::Str(n.node.placeholder.clone().unwrap_or_default())
+        }
+        (ACCESSIBLE, "AccessibleId") => Value::Str(String::new()),
         (ACCESSIBLE, "Locale") => Value::Str(locale()),
         (ACCESSIBLE, "Parent") => {
             let path = if n.chain.is_empty() {

@@ -71,9 +71,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let status = if state.loaded {
         label(&theme, "Loaded.")
     } else {
-        row(vec![spinner(cx, &theme), label(&theme, "Loading…")])
-            .gap(theme.spacing.sm)
-            .align(Align::Start, Align::Center)
+        row(vec![spinner(cx, &theme), label(&theme, "Loading…")]).gap(theme.spacing.sm)
     };
     let notes = text_editor(cx, &theme, &state.notes, |s: &mut State| &mut s.notes)
         .width(420.0)
@@ -121,8 +119,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             }),
             label(&theme, "A checkbox"),
         ])
-        .gap(theme.spacing.sm)
-        .align(Align::Start, Align::Center),
+        .gap(theme.spacing.sm),
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(theme.spacing.lg))

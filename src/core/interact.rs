@@ -612,7 +612,8 @@ mod tests {
         let (laid, watch) = tree(&mut view(), &HashMap::new());
         let (a, b) = (ElementKey::new("a"), ElementKey::new("b"));
         let inputs = Inputs {
-            pointer: Some(Point::new(60.0, 10.0)),
+            // The row centers its cards across: they span y 25..75.
+            pointer: Some(Point::new(60.0, 30.0)),
             ..Inputs::default()
         };
         let states = collect(&laid, &inputs);

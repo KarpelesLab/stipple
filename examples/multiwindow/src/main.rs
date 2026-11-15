@@ -132,9 +132,6 @@ fn main() {
     .title("Stipple — A")
     .theme(Theme::dark())
     .logical_size(Size::new(320.0, 240.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
 
     // A second, independent OS window placed to the right of the first.
     let b = app.open_window(

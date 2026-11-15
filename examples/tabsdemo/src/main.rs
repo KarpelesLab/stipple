@@ -31,7 +31,6 @@ fn content(state: &State, theme: &Theme, cx: &mut Cx<State>) -> Element {
     ])
     .gap(theme.spacing.md)
     .grow(1.0)
-    .align(Align::Start, Align::Stretch)
     // Secondary click anywhere over the body opens the context menu there.
     .on_context(cx, |s: &mut State, at: Point| s.menu_at = Some(at))
 }
@@ -62,16 +61,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         open_menu(cx, &theme, at, items, |s: &mut State| s.menu_at = None);
     }
 
-    panel(&theme, vec![bar, body]).align(Align::Start, Align::Stretch)
+    panel(&theme, vec![bar, body])
 }
 
 fn main() {
-    let mut app = App::new(State::default(), view)
+    let app = App::new(State::default(), view)
         .title("Stipple Tabs")
         .theme(Theme::dark())
         .logical_size(Size::new(360.0, 440.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

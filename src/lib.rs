@@ -149,7 +149,7 @@ pub struct App<S> {
     theme: Theme,
     base_theme: Theme,
     theme_fn: Option<ThemeFn<S>>,
-    font: Option<Font>,
+    font: AppFont,
     // One [`Pane`] per OS window. There is always at least one (the primary,
     // index 0); additional windows are added via [`App::open_window`].
     panes: Vec<Pane<S>>,
@@ -578,6 +578,54 @@ impl<S: 'static> Pane<S> {
     }
 }
 
+/// The font an [`App`] draws text with.
+pub(crate) enum AppFont {
+    /// The system's default, loaded on first use.
+    System,
+    /// One the app chose with [`App::font`].
+    Set(Font),
+    /// None: text isn't drawn ([`App::no_font`]).
+    None,
+}
+
+impl AppFont {
+    pub(crate) fn get(&self) -> Option<&Font> {
+        match self {
+            AppFont::System => system_font(),
+            AppFont::Set(font) => Some(font),
+            AppFont::None => None,
+        }
+    }
+}
+
+/// The system's default font, loaded once for every app in the process. When
+/// there is none, says so once (text would otherwise just be missing).
+fn system_font() -> Option<&'static Font> {
+    static FONT: std::sync::OnceLock<Option<Font>> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| {
+        let font = Font::system_default();
+        if font.is_none() {
+            log_warning(
+                "stipple: no system font found, so text won't be drawn; \
+                 load one with App::font (on the web, the font option of start)",
+            );
+        }
+        font
+    })
+    .as_ref()
+}
+
+/// Report a problem the app can still run with: on the platform's log where
+/// stderr goes nowhere (the browser console, Android's logcat), else stderr.
+fn log_warning(msg: &str) {
+    #[cfg(target_arch = "wasm32")]
+    crate::platform::backend::web::log(msg, true);
+    #[cfg(target_os = "android")]
+    crate::platform::backend::android::log(msg);
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
+    eprintln!("{msg}");
+}
+
 impl<S: 'static> App<S> {
     /// Create an app from initial `state` and a primary-window `build` closure.
     pub fn new(state: S, build: impl FnMut(&S, &mut Cx<'_, S>) -> Element + 'static) -> Self {
@@ -587,7 +635,7 @@ impl<S: 'static> App<S> {
             theme: Theme::light(),
             base_theme: Theme::light(),
             theme_fn: None,
-            font: None,
+            font: AppFont::System,
             panes: vec![{
                 let mut pane = Pane::new(WindowId::PRIMARY, Box::new(build), handle.clone());
                 pane.primary = true;
@@ -670,10 +718,20 @@ impl<S: 'static> App<S> {
         self
     }
 
-    /// Set the font used to render text. Without one, text elements are laid
-    /// out as zero-size and not painted.
+    /// Set the font used to render text. Without one the app uses the
+    /// system's default sans-serif face ([`Font::system_default`]), loaded
+    /// when the first frame is laid out; on the web, the font the page passed
+    /// to `start` (see [`web_app!`]).
     pub fn font(mut self, font: Font) -> Self {
-        self.font = Some(font);
+        self.font = AppFont::Set(font);
+        self
+    }
+
+    /// Draw no text at all: text elements are laid out as zero-size and not
+    /// painted. For pixel tests that must not depend on the fonts a machine
+    /// has installed; [`font`](Self::font) undoes it.
+    pub fn no_font(mut self) -> Self {
+        self.font = AppFont::None;
         self
     }
 
@@ -2417,7 +2475,7 @@ impl<S: 'static> App<S> {
             clipboard,
             ..
         } = self;
-        let frame = panes[0].render_frame(state, theme, font.as_ref(), viewport_content);
+        let frame = panes[0].render_frame(state, theme, font.get(), viewport_content);
         clipboard.sync_primary(panes[0].tree.as_ref(), panes[0].focused, None);
         frame
     }
@@ -2540,7 +2598,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].click_at(state, theme, font.as_ref(), pos) | panes[idx].refresh_interactions()
+        panes[idx].click_at(state, theme, font.get(), pos) | panes[idx].refresh_interactions()
     }
 
     fn pane_context_at(&mut self, idx: usize, pos: Point) -> bool {
@@ -2551,7 +2609,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].context_at(state, theme, font.as_ref(), pos)
+        panes[idx].context_at(state, theme, font.get(), pos)
     }
 
     fn pane_type_text(&mut self, idx: usize, text: &str) -> bool {
@@ -2562,7 +2620,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].type_text(state, theme, font.as_ref(), text)
+        panes[idx].type_text(state, theme, font.get(), text)
     }
 
     fn pane_press_key(&mut self, idx: usize, input: KeyInput) -> bool {
@@ -2573,7 +2631,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].press_key(state, theme, font.as_ref(), input)
+        panes[idx].press_key(state, theme, font.get(), input)
     }
 
     fn pane_focus_next(&mut self, idx: usize) -> bool {
@@ -2588,7 +2646,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].focus_step(state, theme, font.as_ref(), back) | panes[idx].refresh_interactions()
+        panes[idx].focus_step(state, theme, font.get(), back) | panes[idx].refresh_interactions()
     }
 
     fn pane_drag_at_point(&mut self, idx: usize, pos: Point) -> bool {
@@ -2599,7 +2657,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].drag_at_point(state, theme, font.as_ref(), pos)
+        panes[idx].drag_at_point(state, theme, font.get(), pos)
     }
 
     fn pane_text_press_at(&mut self, idx: usize, pos: Point) -> bool {
@@ -2613,7 +2671,7 @@ impl<S: 'static> App<S> {
         panes[idx].text_press_at(
             state,
             theme,
-            font.as_ref(),
+            font.get(),
             pos,
             crate::platform::time::Instant::now(),
         )
@@ -2627,7 +2685,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].text_drag_at(state, theme, font.as_ref(), pos)
+        panes[idx].text_drag_at(state, theme, font.get(), pos)
     }
 
     fn pane_hover_at(&mut self, idx: usize, pos: Point) -> bool {
@@ -2638,7 +2696,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].hover_at(state, theme, font.as_ref(), pos) | panes[idx].refresh_interactions()
+        panes[idx].hover_at(state, theme, font.get(), pos) | panes[idx].refresh_interactions()
     }
 
     fn pane_scroll_by(&mut self, idx: usize, dx: f64, dy: f64) -> bool {
@@ -2649,7 +2707,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].scroll_by(state, theme, font.as_ref(), dx, dy)
+        panes[idx].scroll_by(state, theme, font.get(), dx, dy)
     }
 
     /// The left button, or the first finger, went down at `position` (outside
@@ -2842,6 +2900,7 @@ impl<S: 'static> App<S> {
                 text_selection: node.text_selection,
                 id: node.id.clone(),
                 labelled_by: node.labelled_by.clone(),
+                placeholder: node.placeholder.clone(),
                 children: node.children.iter().map(to_platform_a11y).collect(),
             }
         }
@@ -2922,16 +2981,16 @@ impl<S: 'static> App<S> {
             // A new title shows in the title bar Stipple may draw around the
             // content (Wayland without server-side decorations).
             let mut retitled = false;
-            let (scene, damage) = match pane.repaint(theme, font.as_ref(), force) {
+            let (scene, damage) = match pane.repaint(theme, font.get(), force) {
                 Some(frame) => {
                     app_dbg(format_args!("present: repainted"));
                     frame
                 }
                 None => {
                     pane.drop_stale_preedit(state);
-                    let scene = pane.build_frame(state, theme, font.as_ref());
+                    let scene = pane.build_frame(state, theme, font.get());
                     app_dbg(format_args!("present: built"));
-                    pane.sync_ime(window, font.as_ref());
+                    pane.sync_ime(window, font.get());
                     retitled = pane.sync_title(window);
                     // The view may have changed the cursor under a pointer at
                     // rest (a terminal hiding it while the user types).
@@ -3711,7 +3770,7 @@ impl<S: 'static> App<S> {
             menu,
             ..
         } = self;
-        let font = font.as_ref();
+        let font = font.get();
         let pane = &mut panes[idx];
         let plain = !(mods.shift || mods.ctrl || mods.alt || mods.meta);
         let has_bar = pane.menu_bar.is_some();
@@ -3786,7 +3845,7 @@ impl<S: 'static> App<S> {
         if !pane.menu_ui.borrow().is_active() {
             return None;
         }
-        pane.ensure_tree(state, theme, font.as_ref());
+        pane.ensure_tree(state, theme, font.get());
         let result = match key {
             Some(key) => pane.menu_ui.borrow_mut().handle_key(key),
             None => KeyResult::Handled,
@@ -3825,7 +3884,7 @@ impl<S: 'static> App<S> {
             ..
         } = self;
         let pane = &mut panes[idx];
-        pane.ensure_tree(state, theme, font.as_ref());
+        pane.ensure_tree(state, theme, font.get());
         let changed = {
             let mut ui = pane.menu_ui.borrow_mut();
             if ui.is_active() {
@@ -4175,6 +4234,7 @@ mod tests {
                 ])
             },
         )
+        .no_font()
         .logical_size(Size::new(200.0, 80.0))
     }
 
@@ -4218,6 +4278,7 @@ mod tests {
         let mut app = App::new((), move |_s: &(), _cx: &mut Cx<()>| {
             column(vec![Element::viewport(vid).width(100.0).height(80.0)])
         })
+        .no_font()
         .logical_size(Size::new(200.0, 150.0))
         .on_viewport_input(move |id, ev| sink_log.borrow_mut().push((id, ev)));
 
@@ -4267,6 +4328,7 @@ mod tests {
             column(vec![viewport(&Theme::light(), vid, 40.0, 30.0)])
                 .padding(crate::geometry::Insets::uniform(10.0))
         })
+        .no_font()
         .logical_size(Size::new(100.0, 60.0));
 
         // No content yet: the viewport shows the dark-slate placeholder.
@@ -4331,6 +4393,7 @@ mod tests {
                 .height(40.0),
             ])
         })
+        .no_font()
         .logical_size(Size::new(200.0, 80.0))
     }
 
@@ -4339,7 +4402,8 @@ mod tests {
         let mut busy = App::new((), |_: &(), cx: &mut Cx<()>| {
             let theme = *cx.theme();
             crate::widgets::spinner(cx, &theme)
-        });
+        })
+        .no_font();
         let _ = busy.render_frame();
         assert!(busy.animating(), "a spinner keeps asking for frames");
 
@@ -4364,6 +4428,7 @@ mod tests {
             .height(40.0)
             .on_tap(cx, |dark: &mut bool| *dark = !*dark)
         })
+        .no_font()
         .theme_with(|dark: &bool, base: &Theme| if *dark { Theme::dark() } else { *base })
         .logical_size(Size::new(200.0, 80.0))
     }
@@ -4494,6 +4559,7 @@ mod tests {
             .width(300.0)
             .height(100.0)
         })
+        .no_font()
         .logical_size(Size::new(300.0, 100.0))
     }
 
@@ -4549,6 +4615,7 @@ mod tests {
                 .width(100.0)
                 .height(100.0)
         })
+        .no_font()
         .logical_size(Size::new(100.0, 100.0));
 
         assert!(!app.state().on);
@@ -4570,6 +4637,7 @@ mod tests {
             crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
                 .width(200.0)
         })
+        .no_font()
         .logical_size(Size::new(200.0, 40.0));
 
         // Press at x=150 of a 200-wide slider -> fraction 0.75.
@@ -4593,6 +4661,7 @@ mod tests {
             crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
                 .width(200.0)
         })
+        .no_font()
         .theme(Theme::light().layout_direction(LayoutDirection::Rtl))
         .logical_size(Size::new(200.0, 40.0));
         app.render_once();
@@ -4641,6 +4710,7 @@ mod tests {
             });
             column(vec![field])
         })
+        .no_font()
         .logical_size(Size::new(300.0, 100.0));
         app.focus_next(); // focus the field
         let tree = app.accessibility_tree().expect("a frame was built");
@@ -4755,6 +4825,7 @@ mod tests {
                 .collect();
             crate::widgets::scroll(cx, 200.0, column(rows))
         })
+        .no_font()
         .logical_size(Size::new(200.0, 200.0))
     }
 
@@ -4934,6 +5005,7 @@ mod tests {
             let theme = *cx.theme();
             crate::widgets::text_editor(cx, &theme, &s.buf, |s: &mut Editor| &mut s.buf)
         })
+        .no_font()
         .logical_size(Size::new(300.0, 100.0));
         let window = ImeWindow(Default::default());
         assert!(app.focus_next());
@@ -4966,6 +5038,7 @@ mod tests {
                 column(vec![a, b])
             },
         )
+        .no_font()
         .logical_size(Size::new(300.0, 100.0));
         let window = ImeWindow(Default::default());
         app.render_once();
@@ -5014,6 +5087,7 @@ mod tests {
                 field,
             ])
         })
+        .no_font()
         .logical_size(Size::new(300.0, 100.0));
         assert!(app.focus_next());
         assert!(app.press_key(KeyInput::SetSelection {
@@ -5083,7 +5157,7 @@ mod tests {
                 panes,
                 ..
             } = app;
-            assert!(panes[0].text_press_at(state, theme, font.as_ref(), at, t));
+            assert!(panes[0].text_press_at(state, theme, font.get(), at, t));
             panes[0].end_text_select();
         };
         let t0 = Instant::now();
@@ -5120,6 +5194,7 @@ mod tests {
                 ])
             },
         )
+        .no_font()
         .logical_size(Size::new(200.0, 80.0));
         // Drawn over (50..150, 20..60): its laid-out corner misses.
         assert!(!app.click_at(Point::new(20.0, 10.0)));
@@ -5138,6 +5213,7 @@ mod tests {
                 .width(200.0)
                 .transform(Transform::IDENTITY.rotate_degrees(180.0))
         })
+        .no_font()
         .logical_size(Size::new(200.0, 40.0));
         // The slider's middle, which a half turn about it leaves in place.
         let _ = app.render_frame();
@@ -5184,6 +5260,7 @@ mod tests {
                 .transform(Transform::IDENTITY.scale(scale)),
             ])
         })
+        .no_font()
         .logical_size(Size::new(300.0, 120.0));
         let _ = app.render_frame();
         let _ = app.render_frame();

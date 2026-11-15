@@ -1,9 +1,9 @@
 //! Renders a Stipple frame on the CPU, routes it through the GPU
 //! ([`stipple::gpu::present_offscreen`] — EGL + GLES2 upload → draw → read back),
-//! and writes the read-back RGBA to `gpu-out.raw`.
+//! and writes the read-back frame to `gpu-out.png`.
 //!
 //! The CI GPU job builds this with `--features stipple::gpu/gl`, runs it against
-//! Mesa's software GL, and converts the raw output to a PNG screenshot. Without
+//! Mesa's software GL, and keeps the PNGs as screenshots. Without
 //! the `gl` feature, `present_offscreen` returns an error and the demo exits
 //! non-zero.
 
@@ -35,14 +35,11 @@ fn main() {
     let mut app = App::new((), view)
         .theme(Theme::dark())
         .logical_size(Size::new(W, H));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     let cpu = app.render_once();
 
     match stipple::gpu::present_offscreen(&cpu) {
         Ok(out) => {
-            std::fs::write("gpu-out.raw", out.as_bytes()).expect("write raw");
+            out.save_png("gpu-out.png").expect("write the PNG");
             println!(
                 "GPU round-trip ok: {}x{}",
                 out.size().width,
@@ -110,7 +107,7 @@ fn main() {
 
     match stipple::gpu::render_offscreen(size, Color::rgb(0x14, 0x15, 0x18), &rects, &texts) {
         Ok(out) => {
-            std::fs::write("gpu-rects.raw", out.as_bytes()).expect("write raw");
+            out.save_png("gpu-rects.png").expect("write the PNG");
             println!(
                 "GPU-native scene ok: {}x{}",
                 out.size().width,
@@ -136,7 +133,7 @@ fn main() {
             stipple::geometry::ScaleFactor::IDENTITY,
         ) {
             Ok(out) => {
-                std::fs::write("gpu-scene.raw", out.as_bytes()).expect("write raw");
+                out.save_png("gpu-scene.png").expect("write the PNG");
                 println!(
                     "GPU render_scene ok: {}x{}",
                     out.size().width,

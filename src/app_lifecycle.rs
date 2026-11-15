@@ -569,18 +569,20 @@ mod tests {
 
     #[test]
     fn back_asks_the_hook_until_there_is_nothing_to_close() {
-        let mut app = App::new(State::default(), view);
+        let mut app = App::new(State::default(), view).no_font();
         assert!(!app.request_back(), "without a hook, back leaves the app");
 
         let screens = Rc::new(Cell::new(2));
         let left = screens.clone();
-        let mut app = App::new(State::default(), view).on_back(move |_| {
-            if left.get() == 0 {
-                return crate::core::Handled::No;
-            }
-            left.set(left.get() - 1);
-            crate::core::Handled::Yes
-        });
+        let mut app = App::new(State::default(), view)
+            .no_font()
+            .on_back(move |_| {
+                if left.get() == 0 {
+                    return crate::core::Handled::No;
+                }
+                left.set(left.get() - 1);
+                crate::core::Handled::Yes
+            });
         app.render_frame();
         assert!(app.request_back());
         assert!(app.panes[0].dirty, "going back rebuilds the view");
@@ -592,13 +594,16 @@ mod tests {
     #[test]
     fn the_system_learns_beforehand_whether_back_reaches_the_app() {
         // No hooks: Back is the system's.
-        let app = App::new(State::default(), view);
+        let app = App::new(State::default(), view).no_font();
         assert!(!app.wants_back());
         // An `on_back` hook alone takes every Back, as before predictive back.
-        let app = App::new(State::default(), view).on_back(|_| Handled::No);
+        let app = App::new(State::default(), view)
+            .no_font()
+            .on_back(|_| Handled::No);
         assert!(app.wants_back());
         // `back_enabled` answers from the state.
         let mut app = App::new(State::default(), view)
+            .no_font()
             .back_enabled(|s| s.busy)
             .on_back(|s| {
                 s.busy = false;
@@ -626,9 +631,10 @@ mod tests {
     fn the_back_gesture_reaches_its_hook() {
         let gestures = Rc::new(std::cell::RefCell::new(Vec::new()));
         let seen = gestures.clone();
-        let mut app = App::new(State::default(), view);
+        let mut app = App::new(State::default(), view).no_font();
         assert!(!app.back_progress(BackGesture::Cancelled), "no hook");
         let mut app = App::new(State::default(), view)
+            .no_font()
             .on_back_progress(move |_, g| seen.borrow_mut().push(g));
         app.render_frame();
         assert!(app.back_progress(BackGesture::Started {
@@ -642,7 +648,7 @@ mod tests {
 
     #[test]
     fn state_saved_comes_back_after_process_death() {
-        let mut app = App::new(State::default(), view);
+        let mut app = App::new(State::default(), view).no_font();
         assert_eq!(app.saved_state(), None, "no hook, nothing saved");
         assert!(!app.restore_saved_state(b"x"));
 
@@ -653,6 +659,7 @@ mod tests {
             }
         };
         let mut before = App::new(State::default(), view)
+            .no_font()
             .save_state(save)
             .restore_state(restore);
         before.state.quits = 42;
@@ -661,6 +668,7 @@ mod tests {
 
         // The process ends; a new one starts from the bytes.
         let mut after = App::new(State::default(), view)
+            .no_font()
             .save_state(save)
             .restore_state(restore);
         after.render_frame();
@@ -672,13 +680,15 @@ mod tests {
         assert_eq!(after.state().quits, 42);
 
         // An empty save is no save.
-        let mut empty = App::new(State::default(), view).save_state(|_| Vec::new());
+        let mut empty = App::new(State::default(), view)
+            .no_font()
+            .save_state(|_| Vec::new());
         assert_eq!(empty.saved_state(), None);
     }
 
     #[test]
     fn without_hooks_everything_closes() {
-        let mut app = App::new(State::default(), view);
+        let mut app = App::new(State::default(), view).no_font();
         assert!(app.request_close());
         assert!(app.request_quit());
     }
@@ -692,6 +702,7 @@ mod tests {
             },
             view,
         )
+        .no_font()
         .on_close_requested(|s, id| {
             s.asked.push(id);
             if s.busy {
@@ -711,14 +722,16 @@ mod tests {
     #[test]
     fn quitting_asks_the_quit_hook_or_else_every_window() {
         // A quit hook decides alone.
-        let mut app = App::new(State::default(), view).on_quit_requested(|s| {
-            s.quits += 1;
-            if s.quits > 1 {
-                CloseResponse::Close
-            } else {
-                CloseResponse::Cancel
-            }
-        });
+        let mut app = App::new(State::default(), view)
+            .no_font()
+            .on_quit_requested(|s| {
+                s.quits += 1;
+                if s.quits > 1 {
+                    CloseResponse::Close
+                } else {
+                    CloseResponse::Cancel
+                }
+            });
         assert!(!app.request_quit());
         assert!(app.request_quit());
         assert_eq!(app.state().quits, 2);
@@ -732,6 +745,7 @@ mod tests {
             },
             view,
         )
+        .no_font()
         .on_close_requested(|s, id| {
             s.asked.push(id);
             if s.busy && s.asked.len() == 2 {
@@ -753,6 +767,7 @@ mod tests {
             record.set(Some(cx.window_focused()));
             spacer()
         })
+        .no_font()
         .on_window_focus(|s, _, focused| s.focus.push(focused));
         app.render_frame();
         assert_eq!(seen.get(), Some(true), "focused until told otherwise");
@@ -771,8 +786,9 @@ mod tests {
         let _lock = crate::platform::frame::SUSPEND_TEST_LOCK
             .lock()
             .unwrap_or_else(|e| e.into_inner());
-        let mut app =
-            App::new(State::default(), view).on_lifecycle(|s, change| s.changes.push(change));
+        let mut app = App::new(State::default(), view)
+            .no_font()
+            .on_lifecycle(|s, change| s.changes.push(change));
         app.render_frame();
         assert!(!app.in_background());
         assert!(
@@ -799,7 +815,7 @@ mod tests {
             ]
         );
         // Without a hook, coming back still repaints, and a warning doesn't.
-        let mut app = App::new(State::default(), view);
+        let mut app = App::new(State::default(), view).no_font();
         app.render_frame();
         assert!(!app.lifecycle_changed(Lifecycle::LowMemory));
         assert!(!app.panes[0].dirty);

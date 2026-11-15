@@ -140,7 +140,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(theme.spacing.lg))
-    .align(Align::Start, Align::Stretch)
 }
 
 fn arg(name: &str) -> Option<String> {
@@ -162,12 +161,9 @@ fn main() {
         drops: Vec::new(),
         file,
     };
-    let mut app = App::new(state, view)
+    let app = App::new(state, view)
         .title("Stipple drop demo")
         .logical_size(Size::new(520.0, 360.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     println!("dropdemo: ready");
     if let Some(expect) = expect {
         let handle = app.handle();

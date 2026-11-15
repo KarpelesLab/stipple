@@ -75,7 +75,7 @@ const STYLES: [(&str, FontStyle); 4] = [
 fn view(state: &Fonts, cx: &mut Cx<Fonts>) -> Element {
     let theme = *cx.theme();
     let ink = theme.palette.text;
-    let line = |el: Element| row(vec![el]).height(ROW).align(Align::Start, Align::Center);
+    let line = |el: Element| row(vec![el]).height(ROW);
     let mono = &state.mono;
     let m = mono.metrics(SIZE);
     let name = mono.family_name().unwrap_or("?").to_string();
@@ -118,7 +118,6 @@ fn view(state: &Fonts, cx: &mut Cx<Fonts>) -> Element {
     )));
     column(rows)
         .padding(Insets::new(16.0, 24.0, 16.0, 24.0))
-        .align(Align::Start, Align::Stretch)
         .grow(1.0)
 }
 
@@ -149,14 +148,10 @@ fn load(family: &str) -> Option<Font> {
 }
 
 fn demo_app(mono: Font) -> App<Fonts> {
-    let mut app = App::new(Fonts { mono }, view)
+    App::new(Fonts { mono }, view)
         .title("Stipple — fonts and decorations")
         .theme(Theme::light())
-        .logical_size(Size::new(720.0, 520.0));
-    if let Some(ui) = Font::system_default() {
-        app = app.font(ui);
-    }
-    app
+        .logical_size(Size::new(720.0, 520.0))
 }
 
 /// Dark pixels in row `k`'s band, between x `x0` and `x1`.

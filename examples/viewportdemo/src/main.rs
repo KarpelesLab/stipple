@@ -73,10 +73,7 @@ fn demo_app() -> App<()> {
 }
 
 fn main() {
-    let mut app = demo_app();
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
+    let app = demo_app();
     app.run();
 }
 

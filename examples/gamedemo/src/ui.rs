@@ -92,9 +92,7 @@ fn section(theme: &Theme, title: &str, rows: Vec<Element>) -> Element {
         .bold(),
     ];
     items.extend(rows);
-    column(items)
-        .gap(theme.spacing.xs)
-        .align(Align::Start, Align::Stretch)
+    column(items).gap(theme.spacing.xs)
 }
 
 fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
@@ -157,28 +155,20 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
             },
         ));
     }
-    controls.push(
-        row(vec![
-            spacer(),
-            gui::menu_button(cx, theme, "Reset controls", |g: &mut Game| {
-                g.actions = default_actions();
-                g.save_controls();
-            })
-            .width(280.0),
-        ])
-        .align(Align::Start, Align::Center),
-    );
+    controls.push(row(vec![
+        spacer(),
+        gui::menu_button(cx, theme, "Reset controls", |g: &mut Game| {
+            g.actions = default_actions();
+            g.save_controls();
+        })
+        .width(280.0),
+    ]));
     let controls = section(theme, "Controls", controls);
     let back =
         gui::menu_button(cx, theme, "Back", |g: &mut Game| g.screen = g.settings_back).width(240.0);
     let body = row(vec![
-        column(vec![audio, display])
-            .gap(theme.spacing.lg)
-            .align(Align::Start, Align::Stretch)
-            .grow(1.0),
-        column(vec![controls])
-            .align(Align::Start, Align::Stretch)
-            .grow(1.4),
+        column(vec![audio, display]).gap(theme.spacing.lg).grow(1.0),
+        column(vec![controls]).grow(1.4),
     ])
     .gap(theme.spacing.xl)
     .align(Align::Start, Align::Start);
@@ -187,15 +177,13 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
             Element::text("Settings", theme.typography.heading, theme.palette.text).bold(),
             spacer(),
             hints(theme),
-        ])
-        .align(Align::Start, Align::Center),
+        ]),
         body,
         spacer(),
         row(vec![back, spacer()]),
     ])
     .gap(theme.spacing.lg)
     .padding(Insets::uniform(theme.spacing.xl))
-    .align(Align::Start, Align::Stretch)
     .grow(1.0)
     .fill(theme.palette.background.mix(Color::BLACK, 0.3))
     .spatial_nav()
@@ -218,8 +206,7 @@ fn hud(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
             Element::text("\u{2600}", theme.typography.title, p.warning),
             gui::stat_bar(theme, &lamp),
         ])
-        .gap(theme.spacing.xs)
-        .align(Align::Start, Align::Center),
+        .gap(theme.spacing.xs),
     ])
     .gap(theme.spacing.xs);
     let top = row(vec![
@@ -245,7 +232,7 @@ fn hud(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
         });
     }
     Element::layers(vec![
-        column(vec![top, spacer()]).align(Align::Start, Align::Stretch),
+        column(vec![top, spacer()]),
         gui::floating_texts(theme, &g.floaters),
     ])
     // The game takes what the HUD doesn't.

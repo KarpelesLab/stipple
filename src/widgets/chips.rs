@@ -169,7 +169,6 @@ fn chip_group(theme: &Theme, chips: Vec<Element>, group: FocusGroup) -> Element 
     Element::stack(Axis::Horizontal, chips)
         .wrap()
         .gap(theme.spacing.sm)
-        .align(Align::Start, Align::Center)
         .focus_group(group)
 }
 
@@ -235,8 +234,7 @@ fn chip_with_role<S>(
         .transition_for(AnimProp::Border, state)
         .radius(HEIGHT / 2.0)
         .height(HEIGHT)
-        .padding(Insets::symmetric(theme.spacing.md, 0.0))
-        .align(Align::Start, Align::Center);
+        .padding(Insets::symmetric(theme.spacing.md, 0.0));
     super::pressable(el, theme, Some(fill))
         .on_tap(cx, on_tap)
         .role(role)

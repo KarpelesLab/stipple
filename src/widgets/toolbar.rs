@@ -25,7 +25,6 @@ pub fn toolbar(theme: &Theme, items: Vec<Element>) -> Element {
         .radius(theme.radius)
         .padding(Insets::uniform(theme.spacing.xs))
         .gap(theme.spacing.xs)
-        .align(Align::Start, Align::Center)
         .role(Role::Toolbar)
 }
 
@@ -136,6 +135,7 @@ mod tests {
             );
             super::super::column(vec![bar])
         })
+        .no_font()
         .logical_size(Size::new(400.0, 60.0));
         app.render_once();
         let tree = app.accessibility_tree().unwrap();

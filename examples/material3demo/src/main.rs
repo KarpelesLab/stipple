@@ -7,8 +7,8 @@
 //! L*) and maps onto Stipple's existing tokens, so the standard widgets theme
 //! correctly with no changes.
 //!
-//! Writes one raw RGBA file per scheme (`theme0.raw` … `theme3.raw`) at a fixed
-//! size; the CI Material 3 job converts each to a PNG and montages them.
+//! Writes one PNG per scheme (`theme0.png` … `theme3.png`) at a fixed size;
+//! the CI Material 3 job montages them.
 
 use stipple::prelude::*;
 
@@ -54,9 +54,6 @@ fn render(theme: Theme) -> stipple::render::Pixmap {
     let mut app = App::new((), view)
         .theme(theme)
         .logical_size(Size::new(W, H));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.render_once()
 }
 
@@ -76,7 +73,9 @@ fn main() {
     ];
     for (i, (name, theme)) in schemes.iter().enumerate() {
         let pixmap = render(*theme);
-        std::fs::write(format!("theme{i}.raw"), pixmap.as_bytes()).expect("write raw");
+        pixmap
+            .save_png(format!("theme{i}.png"))
+            .expect("write the PNG");
         println!("rendered scheme {i} ({name})");
     }
     println!("size {}x{}", W as u32, H as u32);

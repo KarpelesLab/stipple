@@ -172,7 +172,7 @@ impl<S: 'static> App<S> {
                 state: ButtonState::Pressed,
                 position,
             } => {
-                pane.ensure_tree(state, theme, font.as_ref());
+                pane.ensure_tree(state, theme, font.get());
                 pane.pointer_in = true;
                 pane.last_pointer = position;
                 let track = &mut pane.pointer;
@@ -219,7 +219,7 @@ impl<S: 'static> App<S> {
                 state: ButtonState::Released,
                 position,
             } => {
-                pane.ensure_tree(state, theme, font.as_ref());
+                pane.ensure_tree(state, theme, font.get());
                 pane.last_pointer = position;
                 pane.pointer.buttons = pane.pointer.buttons.without(button);
                 let count = if pane.pointer.last_button == Some(button) {
@@ -260,7 +260,7 @@ impl<S: 'static> App<S> {
             // means nothing.
             Event::PointerMoved { .. } if pane.pointer.locked => out.done = true,
             Event::PointerDelta { dx, dy } => {
-                pane.ensure_tree(state, theme, font.as_ref());
+                pane.ensure_tree(state, theme, font.get());
                 let at = pane.last_pointer;
                 let target = pane.pointer.capture.or_else(|| pane.pointer_target(at));
                 if let Some(id) = target {
@@ -277,7 +277,7 @@ impl<S: 'static> App<S> {
                 out.done = true;
             }
             Event::PointerMoved { position } => {
-                pane.ensure_tree(state, theme, font.as_ref());
+                pane.ensure_tree(state, theme, font.get());
                 match pane.pointer.capture {
                     Some(id) => {
                         out.redraw =
@@ -287,7 +287,7 @@ impl<S: 'static> App<S> {
                 }
             }
             Event::Scroll { delta } => {
-                pane.ensure_tree(state, theme, font.as_ref());
+                pane.ensure_tree(state, theme, font.get());
                 let at = pane.last_pointer;
                 let target = pane.tree.as_ref().and_then(|t| {
                     let layer = press_layer(t, pane.overlay_active, at).0;

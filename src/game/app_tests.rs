@@ -112,6 +112,7 @@ fn the_loop_updates_per_frame_repaints_without_builds_and_pauses() {
         },
         view,
     )
+    .no_font()
     .logical_size(Size::new(200.0, 100.0))
     .game_loop(GameLoop::new(update).paused_when(|g: &Game| g.paused));
     let requests = app.game.as_ref().unwrap().requests.clone();

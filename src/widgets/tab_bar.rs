@@ -574,7 +574,6 @@ pub fn tab_bar<S: 'static>(
         let body = Element::stack(Axis::Horizontal, content)
             .gap(theme.spacing.xs)
             .padding(Insets::new(0.0, theme.spacing.sm, 0.0, theme.spacing.md))
-            .align(Align::Start, Align::Center)
             .grow(1.0);
         // The color strip along the top (transparent without a color).
         let strip_color = match tab.color {
@@ -616,7 +615,6 @@ pub fn tab_bar<S: 'static>(
         let mut el = Element::stack(Axis::Vertical, vec![top, body])
             .fill(base)
             .radius(theme.radius)
-            .align(Align::Start, Align::Stretch)
             .height(HEIGHT - 4.0)
             .clip()
             .key(("stipple-tab", &*bar_id, tab.id));
@@ -808,7 +806,6 @@ fn list_overlay<S: 'static>(
             .gap(theme.spacing.sm)
             .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
             .radius(theme.radius / 2.0)
-            .align(Align::Start, Align::Center)
             .hovered(move |e| e.fill(hover))
             .on_tap(cx, move |s: &mut S| {
                 field(s).list_open = false;
@@ -827,7 +824,6 @@ fn list_overlay<S: 'static>(
         .radius(theme.radius)
         .padding(Insets::uniform(theme.spacing.xs))
         .gap(2.0)
-        .align(Align::Start, Align::Stretch)
         .min_width(180.0)
         .role(Role::Menu);
     let dismiss = cx.register(move |s: &mut S| field(s).list_open = false);

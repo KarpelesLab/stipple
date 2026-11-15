@@ -131,9 +131,10 @@ impl Font {
     /// usable sans-serif face, with a symbol fallback. Returns `None` if none
     /// is found.
     ///
-    /// Intended for examples and tests; apps should use
-    /// [`Font::from_family`] (a family the user picked, or a generic one such
-    /// as `"sans-serif"`), or bundle their fonts and use [`Font::from_bytes`].
+    /// This is what an [`App`](crate::App) draws with when it sets no font of
+    /// its own. To choose, use [`Font::from_family`] (a family the user
+    /// picked, or a generic one such as `"sans-serif"`), or bundle fonts and
+    /// use [`Font::from_bytes`].
     pub fn system_default() -> Option<Self> {
         const CANDIDATES: &[&str] = &[
             // Linux (Liberation / DejaVu / Noto are near-ubiquitous).

@@ -22,7 +22,9 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
 }
 
 fn app() -> App<State> {
-    let mut app = App::new(State::default(), view).logical_size(Size::new(520.0, 360.0));
+    let mut app = App::new(State::default(), view)
+        .no_font()
+        .logical_size(Size::new(520.0, 360.0));
     app.render_once();
     app
 }
@@ -195,6 +197,7 @@ fn a_box_and_its_scrim_fade_in_and_the_next_comes_in_as_it_leaves() {
     });
     crate::anim::set_reduced_motion(Some(false));
     let mut app = App::new(State::default(), view)
+        .no_font()
         .theme(theme)
         .logical_size(Size::new(520.0, 360.0));
     app.render_once();

@@ -12,9 +12,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::core::menu::{ItemKind, Menu, MenuBar, MenuItem, mnemonic};
-use crate::core::{
-    ActionId, Align, Anchor, Axis, BoxStyle, ContextId, Cx, Element, OverlaySpec, Role,
-};
+use crate::core::{ActionId, Anchor, Axis, BoxStyle, ContextId, Cx, Element, OverlaySpec, Role};
 use crate::geometry::{Insets, Point};
 use crate::platform::menu::{mnemonic_at, mnemonic_range};
 use crate::style::Theme;
@@ -411,7 +409,6 @@ pub(crate) fn with_bar<S: 'static>(
         )
         .padding(Insets::symmetric(theme.spacing.sm + 2.0, theme.spacing.xs))
         .radius(theme.radius / 2.0)
-        .align(Align::Start, Align::Center)
         .role(Role::MenuItem)
         .a11y_label(text)
         .expanded(open);
@@ -438,8 +435,7 @@ pub(crate) fn with_bar<S: 'static>(
 
     let strip = Element::stack(Axis::Horizontal, titles)
         .gap(2.0)
-        .padding(Insets::symmetric(theme.spacing.xs, 2.0))
-        .align(Align::Start, Align::Center);
+        .padding(Insets::symmetric(theme.spacing.xs, 2.0));
     let line = Element::boxed(BoxStyle {
         fill: Some(p.border),
         ..BoxStyle::default()
@@ -447,10 +443,8 @@ pub(crate) fn with_bar<S: 'static>(
     .height(1.0);
     let menubar = Element::stack(Axis::Vertical, vec![strip, line])
         .fill(p.surface)
-        .align(Align::Start, Align::Stretch)
         .role(Role::MenuBar);
     Element::stack(Axis::Vertical, vec![menubar, content.grow(1.0)])
-        .align(Align::Start, Align::Stretch)
 }
 
 /// Declare the open context menu (if any) as overlays, from the context menus
@@ -588,7 +582,6 @@ fn panel<S: 'static>(
             rows.push(
                 Element::stack(Axis::Vertical, vec![line])
                     .padding(Insets::symmetric(theme.spacing.xs, theme.spacing.xs))
-                    .align(Align::Start, Align::Stretch)
                     .role(Role::Separator),
             );
             ids.push(None);
@@ -634,7 +627,6 @@ fn panel<S: 'static>(
         let mut row = Element::stack(Axis::Horizontal, cells)
             .padding(Insets::symmetric(theme.spacing.xs, 0.0))
             .gap(theme.spacing.sm)
-            .align(Align::Start, Align::Center)
             .height(row_height)
             .radius(theme.radius / 2.0)
             .role(Role::MenuItem)
@@ -679,7 +671,6 @@ fn panel<S: 'static>(
         .border(p.border, 1.0)
         .radius(theme.radius)
         .padding(Insets::uniform(theme.spacing.xs))
-        .align(Align::Start, Align::Stretch)
         .min_width(160.0)
         .role(Role::Menu);
     if !title.is_empty() {

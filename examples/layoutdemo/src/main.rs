@@ -104,8 +104,7 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     ];
     let wrapped = row(tags.iter().map(|t| chip(&theme, t)).collect())
         .wrap()
-        .gap(sp.sm)
-        .align(Align::Start, Align::Center);
+        .gap(sp.sm);
     let wrap_panel = panel(&theme, vec![heading(&theme, "Wrap"), wrapped]);
 
     // Both grow; the first stops at its max and the second takes the rest.
@@ -146,19 +145,13 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     .gap(sp.lg)
     .align(Align::Stretch, Align::Start);
 
-    column(vec![page])
-        .padding(Insets::uniform(sp.lg))
-        .align(Align::Start, Align::Stretch)
-        .grow(1.0)
+    column(vec![page]).padding(Insets::uniform(sp.lg)).grow(1.0)
 }
 
 fn main() {
-    let mut app = App::new((), view)
+    let app = App::new((), view)
         .title("Stipple Layout")
         .theme(Theme::dark())
         .logical_size(Size::new(W, H));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

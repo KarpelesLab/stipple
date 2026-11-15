@@ -145,7 +145,7 @@ fn main() {
         ..Demo::default()
     };
     let (maximized, fullscreen) = (state.maximized, state.fullscreen);
-    let mut app = App::new(state, view)
+    let app = App::new(state, view)
         .title("Stipple")
         .theme(Theme::dark())
         .logical_size(Size::new(640.0, 480.0))
@@ -153,8 +153,5 @@ fn main() {
         .maximized(maximized)
         .fullscreen(fullscreen)
         .icon(icon());
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

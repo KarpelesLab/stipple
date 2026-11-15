@@ -46,10 +46,10 @@ impl<S: 'static> App<S> {
             ..
         } = self;
         let pane = &mut panes[0];
-        let (scene, damage) = match pane.repaint(theme, font.as_ref(), false) {
+        let (scene, damage) = match pane.repaint(theme, font.get(), false) {
             Some(frame) => frame,
             None => {
-                let scene = pane.build_frame(state, theme, font.as_ref());
+                let scene = pane.build_frame(state, theme, font.get());
                 (scene, pane.take_damage())
             }
         };
@@ -128,6 +128,7 @@ fn grid_app() -> GridApp {
             .on_tap(cx, |s: &mut Grid| s.taps += 1),
         ])
     })
+    .no_font()
     .logical_size(Size::new(120.0, 100.0));
     (app, builds, painted, rows)
 }
@@ -252,6 +253,7 @@ fn viewport_content_from_the_handle_presents_just_the_viewport() {
             Element::viewport(vid).width(40.0).height(30.0),
         ])
     })
+    .no_font()
     .logical_size(Size::new(100.0, 100.0));
     let mut screen = Recorder::default();
     app.present_to(&mut screen);
@@ -290,6 +292,7 @@ fn a_transformed_canvas_is_damaged_where_it_is_drawn() {
             .transform(Transform::IDENTITY.translate(50.0, 40.0)),
         ])
     })
+    .no_font()
     .logical_size(Size::new(100.0, 100.0));
     let mut screen = Recorder::default();
     app.present_to(&mut screen);

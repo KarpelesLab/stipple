@@ -40,7 +40,6 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
                 label(&theme, "Background work: running…"),
             ])
             .gap(theme.spacing.sm)
-            .align(Align::Start, Align::Center)
         }
     };
     let reload = button_labeled(&theme, "Run again").on_tap(cx, move |s: &mut State| {
@@ -118,12 +117,9 @@ fn main() {
         ticks_loading: 0,
         ticks_idle: 0,
     };
-    let mut app = App::new(state, view)
+    let app = App::new(state, view)
         .title("Stipple")
         .logical_size(Size::new(360.0, 200.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     let handle = app.handle();
     let quit = handle.clone();
     let worker = handle.clone();

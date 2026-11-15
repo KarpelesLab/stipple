@@ -532,6 +532,7 @@ fn stateless_popups_come_in_through_the_core() {
             button_labeled(&t, "Dialog").on_tap(cx, |s: &mut Pop| s.dialog = true),
         ])
     })
+    .no_font()
     .logical_size(Size::new(400.0, 300.0));
     crate::anim::set_reduced_motion(Some(false));
     let _ = app.render_frame();

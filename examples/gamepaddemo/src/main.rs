@@ -89,7 +89,6 @@ fn pad_view(theme: &Theme, id: GamepadId, info: &GamepadInfo) -> Element {
                 label(theme, format!("{v:+.2}")),
             ])
             .gap(12.0)
-            .align(Align::Start, Align::Center)
         })
         .collect();
     panel(
@@ -120,10 +119,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         children.push(divider(&theme));
         children.extend(state.log.iter().map(|l| label(&theme, l.as_str())));
     }
-    column(children)
-        .gap(16.0)
-        .padding(Insets::uniform(24.0))
-        .align(Align::Start, Align::Stretch)
+    column(children).gap(16.0).padding(Insets::uniform(24.0))
 }
 
 fn main() {
@@ -140,12 +136,9 @@ fn main() {
         }
         return;
     }
-    let mut app = App::new(State::default(), view)
+    let app = App::new(State::default(), view)
         .title("Gamepads")
         .logical_size(Size::new(720.0, 760.0))
         .on_gamepad(on_gamepad);
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

@@ -40,13 +40,10 @@ fn view(state: &Counter, cx: &mut Cx<Counter>) -> Element {
 }
 
 fn main() {
-    let mut app = App::new(Counter { n: 0 }, view)
+    App::new(Counter { n: 0 }, view)
         .title("Counter")
-        .theme(Theme::dark());
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
-    app.run();
+        .theme(Theme::dark())
+        .run();
 }
 ```
 

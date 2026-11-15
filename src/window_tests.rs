@@ -174,7 +174,7 @@ fn titled(s: &Doc, cx: &mut Cx<Doc>) -> Element {
 
 #[test]
 fn the_view_titles_its_window_when_the_title_changes() {
-    let app = App::new(doc(), titled);
+    let app = App::new(doc(), titled).no_font();
     let handle = app.handle();
     let mut run = run(app);
     assert_eq!(run.desk.take_log(), ["title 100 a.txt (0)"]);
@@ -193,7 +193,7 @@ fn the_view_titles_its_window_when_the_title_changes() {
 #[test]
 fn windows_open_and_close_at_run_time() {
     let seen: Arc<Mutex<Vec<WindowId>>> = Default::default();
-    let app = App::new(doc(), titled);
+    let app = App::new(doc(), titled).no_font();
     let handle = app.handle();
     let mut run = run(app);
     run.desk.take_log();
@@ -249,7 +249,7 @@ fn windows_open_and_close_at_run_time() {
 
 #[test]
 fn closing_the_primary_window_keeps_the_others() {
-    let mut app = App::new(doc(), titled);
+    let mut app = App::new(doc(), titled).no_font();
     let other = app.open_window(WindowAttributes::new().title("Other"), titled);
     let handle = app.handle();
     let mut run = run(app);
@@ -267,7 +267,9 @@ fn closing_the_primary_window_keeps_the_others() {
 
 #[test]
 fn the_app_can_keep_running_with_no_window() {
-    let app = App::new(doc(), titled).exit_on_last_window_closed(false);
+    let app = App::new(doc(), titled)
+        .no_font()
+        .exit_on_last_window_closed(false);
     let handle = app.handle();
     let mut run = run(app);
     run.desk.take_log();
@@ -292,7 +294,9 @@ fn the_app_can_keep_running_with_no_window() {
 
 #[test]
 fn a_change_in_one_window_reaches_the_others() {
-    let mut app = App::new(doc(), titled).logical_size(Size::new(200.0, 100.0));
+    let mut app = App::new(doc(), titled)
+        .no_font()
+        .logical_size(Size::new(200.0, 100.0));
     app.open_window(WindowAttributes::new().title("Other"), titled);
     let mut run = run(app);
     run.send(101, Event::RedrawRequested);
@@ -324,6 +328,7 @@ fn window_changes_reach_the_state_and_views_that_read_them() {
         cx.set_window_title(if info.maximized { "max" } else { "normal" });
         crate::widgets::spacer()
     })
+    .no_font()
     .on_window_change(move |_, id, info| log.borrow_mut().push((id, info.maximized)));
     let handle = app.handle();
     let mut run = run(app);
@@ -351,9 +356,11 @@ fn a_backgrounded_app_repaints_only_when_it_comes_back() {
     use crate::platform::Lifecycle;
     let seen: Rc<RefCell<Vec<Lifecycle>>> = Default::default();
     let record = seen.clone();
-    let app = App::new(doc(), titled).on_lifecycle(move |_, change| {
-        record.borrow_mut().push(change);
-    });
+    let app = App::new(doc(), titled)
+        .no_font()
+        .on_lifecycle(move |_, change| {
+            record.borrow_mut().push(change);
+        });
     let handle = app.handle();
     let mut run = run(app);
     run.desk.take_log();

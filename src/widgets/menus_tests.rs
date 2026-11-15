@@ -41,6 +41,7 @@ fn app() -> App<Doc> {
                 ),
         ])
     })
+    .no_font()
     .logical_size(Size::new(400.0, 300.0))
     .menu(|doc: &Doc| {
         MenuBar::new()

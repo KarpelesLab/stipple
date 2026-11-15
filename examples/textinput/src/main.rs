@@ -36,24 +36,18 @@ fn echo(buffer: &EditBuffer) {
 fn view(state: &Form, cx: &mut Cx<Form>) -> Element {
     echo(&state.buffer);
     let theme = *cx.theme();
-    let field = text_editor(cx, &theme, &state.buffer, |s: &mut Form| &mut s.buffer)
-        .width(560.0)
-        .height(64.0);
+    let field = text_editor(cx, &theme, &state.buffer, |s: &mut Form| &mut s.buffer).height(64.0);
     panel(
         &theme,
         vec![label(&theme, "Type here (Tab to focus):"), field],
     )
     .padding(Insets::uniform(32.0))
-    .align(Align::Start, Align::Stretch)
 }
 
 fn main() {
-    let mut app = App::new(Form::default(), view)
+    let app = App::new(Form::default(), view)
         .title("Stipple Text Input")
         .theme(Theme::dark())
         .logical_size(Size::new(640.0, 240.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

@@ -17,8 +17,24 @@ cargo run -p layoutdemo
 row(vec![icon, label(&theme, "Title"), spacer(), close_button])
     .gap(8.0)                          // space between children
     .padding(Insets::uniform(12.0))    // space inside the edge
-    .align(Align::Start, Align::Center) // (main axis, cross axis)
+    .align(Align::Start, Align::End)   // (main axis, cross axis)
 ```
+
+By default, as in CSS flexbox, a row centers its children across (a checkbox,
+a label and a button line up on their middles) and a column stretches them
+to its width (a row inside it spans the column, so a `spacer()` in the row
+pushes). A child with a fixed size across keeps it, and `.align_self(align)`
+on a child overrides the stack's cross-axis alignment for that child alone:
+
+```rust
+column(vec![
+    text_editor(cx, &theme, &state.note, |s: &mut State| &mut s.note), // full width
+    button_labeled(&theme, "Save").align_self(Align::End),               // its own width, at the right
+])
+```
+
+A text field's default width (200) is only a default: a column stretches it
+like any other unsized child, while `.width(w)` fixes it.
 
 - A child's `.grow(weight)` gives it a share of the leftover main-axis space.
   `spacer()` is an empty element with `grow(1.0)`.
@@ -26,7 +42,8 @@ row(vec![icon, label(&theme, "Title"), spacer(), close_button])
   in proportion to `weight × its natural size`. Children don't shrink by
   default; without a shrinking child, an overflowing stack overflows.
 - Main-axis alignment (`Start`, `Center`, `End`) places the children as a block
-  when nothing grows. Cross-axis `Stretch` fills the stack's cross extent.
+  when nothing grows. Cross-axis `Stretch` fills the stack's cross extent,
+  except for a child sized on that axis.
 
 ## Wrapping
 

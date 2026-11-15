@@ -28,12 +28,9 @@ fn view(state: &Clicks, cx: &mut Cx<Clicks>) -> Element {
 }
 
 fn main() {
-    let mut app = App::new(Clicks { n: 0 }, view)
+    let app = App::new(Clicks { n: 0 }, view)
         .title("Stipple Clicks")
         .theme(Theme::dark())
         .logical_size(Size::new(640.0, 480.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

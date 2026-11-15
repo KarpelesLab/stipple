@@ -417,7 +417,6 @@ pub fn tree<S: 'static>(
                 bottom: 0.0,
             })
             .gap(theme.spacing.xs)
-            .align(Align::Start, Align::Center)
             .role(Role::TreeItem)
             .selected(row.selected);
         if node.has_children {
@@ -486,6 +485,7 @@ mod tests {
                 crate::widgets::column(vec![view.width(300.0)])
             },
         )
+        .no_font()
         .logical_size(Size::new(320.0, 300.0))
     }
 

@@ -186,7 +186,6 @@ pub fn health_bar(theme: &Theme, value: f32, max: f32) -> Element {
         ],
     )
     .gap(theme.spacing.xs)
-    .align(Align::Start, Align::Center)
 }
 
 /// A HUD counter (score, coins, ammo): `label` and `value`, the number
@@ -212,7 +211,6 @@ pub fn counter(theme: &Theme, id: &str, label: &str, value: i64) -> Element {
         ..p.background
     })
     .radius(theme.radius)
-    .align(Align::Start, Align::Center)
     .key(("counter-box", id))
 }
 
@@ -238,7 +236,6 @@ pub fn minimap_slot(theme: &Theme, width: f64, height: f64, content: Option<Elem
         .border(p.primary, 2.0)
         .radius(theme.radius)
         .padding(Insets::uniform(2.0))
-        .align(Align::Start, Align::Stretch)
         .clip()
 }
 
@@ -586,7 +583,6 @@ impl<'a, S: 'static> DialogueBox<'a, S> {
         }
         parts.push(panel);
         Element::stack(Axis::Vertical, parts)
-            .align(Align::Start, Align::Stretch)
             .shrink(1.0)
             .spatial_nav()
     }

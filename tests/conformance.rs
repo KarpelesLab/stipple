@@ -26,6 +26,7 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
 #[test]
 fn samples_are_pixel_stable() {
     let mut app = App::new((), view)
+        .no_font()
         .theme(Theme::light())
         .logical_size(Size::new(100.0, 100.0))
         .scale(ScaleFactor::IDENTITY);
@@ -64,6 +65,7 @@ fn samples_are_pixel_stable() {
 fn theme_swap_changes_samples() {
     let mk = |theme: Theme| {
         App::new((), view)
+            .no_font()
             .theme(theme)
             .logical_size(Size::new(40.0, 40.0))
             .render_once()

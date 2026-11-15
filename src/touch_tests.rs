@@ -68,6 +68,7 @@ fn app() -> App<Log> {
             });
         column(vec![scroll(cx, 300.0, column(items)), photo])
     })
+    .no_font()
     .logical_size(Size::new(300.0, 400.0))
 }
 
@@ -284,6 +285,7 @@ fn a_right_to_left_strip_scrolls_towards_the_left() {
             .scrollable(cx.register_scroll());
         column(vec![strip]).layout_direction(LayoutDirection::Rtl)
     })
+    .no_font()
     .logical_size(Size::new(300.0, 100.0));
     app.render_once();
     let id = ScrollId(0);

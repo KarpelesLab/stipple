@@ -13,9 +13,7 @@ struct Gallery {
 }
 
 fn labeled(theme: &Theme, control: Element, text: &str) -> Element {
-    row(vec![control, label(theme, text)])
-        .gap(theme.spacing.sm)
-        .align(Align::Start, Align::Center)
+    row(vec![control, label(theme, text)]).gap(theme.spacing.sm)
 }
 
 fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
@@ -63,12 +61,9 @@ fn main() {
         level: 0.6,
         name: EditBuffer::from_text("Stipple"),
     };
-    let mut app = App::new(state, view)
+    let app = App::new(state, view)
         .title("Stipple")
         .theme(Theme::native())
         .logical_size(Size::new(360.0, 340.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

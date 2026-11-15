@@ -244,12 +244,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             &theme,
             "Use the menu bar or its shortcuts, or right-click the canvas.",
         ),
-        text_editor(cx, &theme, &state.note, |s: &mut State| &mut s.note).width(240.0),
+        text_editor(cx, &theme, &state.note, |s: &mut State| &mut s.note),
         canvas,
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(theme.spacing.lg))
-    .align(Align::Start, Align::Stretch)
     .fill(p.background)
 }
 
@@ -261,9 +260,6 @@ fn build() -> App<State> {
     app = app.menu(move |s: &State| menu_bar(s, &handle));
     if std::env::args().nth(1).as_deref() == Some("dark") {
         app = app.theme(Theme::dark());
-    }
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
     }
     app
 }

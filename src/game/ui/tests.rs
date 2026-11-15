@@ -215,6 +215,7 @@ fn menu_app_with(menu: Menu) -> App<Menu> {
         let items = vec![b(cx, "One"), b(cx, "Two"), b(cx, "Three")];
         menu_list(&theme, items)
     })
+    .no_font()
     .logical_size(Size::new(400.0, 300.0))
     .gamepad_navigation_when(|m: &Menu| !m.nav_off)
     .on_back(|m: &mut Menu| {
@@ -384,6 +385,7 @@ fn a_hud_lets_presses_through_to_the_game_except_on_its_controls() {
             .align(crate::core::Align::Start, crate::core::Align::Start);
         hud(game, overlay)
     })
+    .no_font()
     .logical_size(Size::new(300.0, 200.0));
     app.render_once();
     let press = |x: f64, y: f64| Event::PointerButton {
@@ -428,6 +430,7 @@ fn a_hit_through_overlay_takes_only_its_controls_presses() {
         });
         Element::stack(Axis::Vertical, vec![below]).grow(1.0)
     })
+    .no_font()
     .logical_size(Size::new(300.0, 200.0));
     app.render_once();
     assert!(app.click_at(Point::new(200.0, 150.0)));

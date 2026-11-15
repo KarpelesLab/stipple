@@ -4,6 +4,11 @@
 the caret, the selection, the clipboard and undo. This page lists the keys and
 clicks they understand.
 
+`.placeholder("Search")` on a field (these two, `text_field` and
+`password_field`) shows a hint, muted, while it's empty and nothing is being
+composed in it; screen readers get it as the field's placeholder (its
+description on AT-SPI, `aria-placeholder` on the web).
+
 ## Keyboard shortcuts
 
 Word movement uses Ctrl on Windows and Linux and Option (Alt) on macOS,

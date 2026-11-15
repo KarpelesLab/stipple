@@ -15,7 +15,7 @@
 //! gamepad (d-pad or left stick, A/✕ to select, B/○ to go back, Start to
 //! pause), as well as the mouse.
 //!
-//! `--shots DIR` renders each screen off screen into `DIR/*.ppm` and quits.
+//! `--shots DIR` renders each screen off screen into `DIR/*.png` and quits.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -301,9 +301,7 @@ fn section(theme: &Theme, title: &str, rows: Vec<Element>) -> Element {
         .bold(),
     ];
     items.extend(rows);
-    column(items)
-        .gap(theme.spacing.xs)
-        .align(Align::Start, Align::Stretch)
+    column(items).gap(theme.spacing.xs)
 }
 
 fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
@@ -363,29 +361,21 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
             },
         ));
     }
-    controls.push(
-        row(vec![
-            spacer(),
-            gui::menu_button(cx, theme, "Reset controls", |g: &mut Game| {
-                g.actions = default_actions();
-            })
-            .width(260.0),
-        ])
-        .align(Align::Start, Align::Center),
-    );
+    controls.push(row(vec![
+        spacer(),
+        gui::menu_button(cx, theme, "Reset controls", |g: &mut Game| {
+            g.actions = default_actions();
+        })
+        .width(260.0),
+    ]));
     let controls = section(theme, "Controls", controls);
     let back = gui::menu_button(cx, theme, "Back", |g: &mut Game| {
         g.screen = g.settings_back;
     })
     .width(240.0);
     let body = row(vec![
-        column(vec![audio, display])
-            .gap(theme.spacing.lg)
-            .align(Align::Start, Align::Stretch)
-            .grow(1.0),
-        column(vec![controls])
-            .align(Align::Start, Align::Stretch)
-            .grow(1.0),
+        column(vec![audio, display]).gap(theme.spacing.lg).grow(1.0),
+        column(vec![controls]).grow(1.0),
     ])
     .gap(theme.spacing.xl)
     .align(Align::Start, Align::Start);
@@ -394,15 +384,13 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
             Element::text("Settings", theme.typography.heading, theme.palette.text).bold(),
             spacer(),
             hints(theme),
-        ])
-        .align(Align::Start, Align::Center),
+        ]),
         body,
         spacer(),
         row(vec![back, spacer()]),
     ])
     .gap(theme.spacing.lg)
     .padding(Insets::uniform(theme.spacing.xl))
-    .align(Align::Start, Align::Stretch)
     .grow(1.0)
     // One spatial group: the arrows cross from one column to the other.
     .spatial_nav()
@@ -479,8 +467,7 @@ fn play(g: &Game, cx: &mut Cx<Game>, theme: &Theme, visible: bool) -> Element {
             Element::text("\u{21AF}", theme.typography.title, p.warning),
             gui::stat_bar(theme, &boost),
         ])
-        .gap(theme.spacing.xs)
-        .align(Align::Start, Align::Center),
+        .gap(theme.spacing.xs),
     ])
     .gap(theme.spacing.xs);
     let pause = button_variant(theme, "II", Variant::Secondary)
@@ -526,8 +513,7 @@ fn play(g: &Game, cx: &mut Cx<Game>, theme: &Theme, visible: bool) -> Element {
             .gap(theme.spacing.lg)
             .align(Align::Start, Align::End),
     ])
-    .padding(Insets::uniform(theme.spacing.lg))
-    .align(Align::Start, Align::Stretch);
+    .padding(Insets::uniform(theme.spacing.lg));
     if g.screen == Screen::Play && g.paused {
         let buttons = vec![
             gui::menu_button(cx, theme, "Resume", |g: &mut Game| g.paused = false),
@@ -637,12 +623,8 @@ fn main() {
 
 /// Render each screen off screen into `dir`.
 fn shots(dir: &str) {
-    let font = Font::system_default();
     let render_in = |style: GameStyle, name: &str, game: Game, keys: &[KeyInput]| {
         let mut a = app(game, style);
-        if let Some(font) = font.clone() {
-            a = a.font(font);
-        }
         a.render_once();
         a.render_once();
         for k in keys {
@@ -655,8 +637,8 @@ fn shots(dir: &str) {
             std::thread::sleep(Duration::from_millis(10));
             frame = a.render_once();
         }
-        let path = format!("{dir}/{name}.ppm");
-        write_ppm(&path, &frame);
+        let path = format!("{dir}/{name}.png");
+        frame.save_png(&path).expect("write the screenshot");
         println!("{path}");
     };
     let render = |name: &str, game: Game, keys: &[KeyInput]| {
@@ -703,18 +685,4 @@ fn shots(dir: &str) {
     g.best = 410;
     g.played = 83.0;
     render("over", g, &[]);
-}
-
-fn write_ppm(path: &str, frame: &Pixmap) {
-    let size = frame.size();
-    let mut out = format!("P6\n{} {}\n255\n", size.width, size.height).into_bytes();
-    let bytes = frame.as_bytes();
-    let stride = frame.stride();
-    for y in 0..size.height as usize {
-        for x in 0..size.width as usize {
-            let i = y * stride + x * 4;
-            out.extend_from_slice(&bytes[i..i + 3]);
-        }
-    }
-    std::fs::write(path, out).expect("write the screenshot");
 }

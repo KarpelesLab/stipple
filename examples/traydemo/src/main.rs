@@ -156,9 +156,6 @@ fn main() {
     let mut app = App::new(state, view)
         .title("Stipple tray demo")
         .logical_size(Size::new(560.0, 220.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     let handle = app.handle();
     let tray_handle = handle.clone();
     app = app.tray(move |s: &State| tray(s, &tray_handle));

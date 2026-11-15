@@ -155,7 +155,7 @@ impl<S: 'static> App<S> {
         } = self;
         let pane = &mut panes[idx];
         if touch.phase == TouchPhase::Started {
-            pane.ensure_tree(state, theme, font.as_ref());
+            pane.ensure_tree(state, theme, font.get());
         }
         let now = pane.touch_now();
         let mut gestures = std::mem::take(&mut pane.touch);
@@ -174,11 +174,11 @@ impl<S: 'static> App<S> {
                 // The press becomes a scroll: it no longer clicks, focuses or
                 // selects.
                 pane.cancel_press();
-                pane.scroll_container_by(state, theme, font.as_ref(), target, delta);
+                pane.scroll_container_by(state, theme, font.get(), target, delta);
                 true
             }
             TouchAction::Scroll { target, delta } => {
-                pane.scroll_container_by(state, theme, font.as_ref(), target, delta)
+                pane.scroll_container_by(state, theme, font.get(), target, delta)
                     .0
             }
             TouchAction::End => false,
@@ -245,7 +245,7 @@ impl<S: 'static> App<S> {
         let Some((target, delta)) = pane.touch.tick(now) else {
             return false;
         };
-        let (moved, clamped) = pane.scroll_container_by(state, theme, font.as_ref(), target, delta);
+        let (moved, clamped) = pane.scroll_container_by(state, theme, font.get(), target, delta);
         if clamped {
             // It reached the end of the content.
             pane.touch.stop_fling();

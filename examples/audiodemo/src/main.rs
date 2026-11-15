@@ -170,7 +170,6 @@ fn slider_row(
         label(theme, format!("{:.0}%", value * 100.0)),
     ])
     .gap(theme.spacing.md)
-    .align(Align::Start, Align::Center)
 }
 
 fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
@@ -288,12 +287,9 @@ fn main() {
     }
     let demo = Demo::new(Audio::shared());
     demo.apply_volumes();
-    let mut app = App::new(demo, view)
+    let app = App::new(demo, view)
         .title("Stipple Audio")
         .logical_size(Size::new(560.0, 420.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }
 

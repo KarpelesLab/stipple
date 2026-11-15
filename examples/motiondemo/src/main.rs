@@ -182,7 +182,6 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(24.0))
-    .align(Align::Start, Align::Stretch)
 }
 
 /// Check the animations at fixed times.
@@ -256,12 +255,9 @@ fn main() {
         }
         return;
     }
-    let mut app = App::new(State::new(), view)
+    let app = App::new(State::new(), view)
         .title("Stipple Motion")
         .theme(Theme::dark())
         .logical_size(Size::new(480.0, 640.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

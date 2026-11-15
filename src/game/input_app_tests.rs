@@ -134,6 +134,7 @@ fn pads_touch_controls_and_the_locked_pointer_reach_the_actions() {
                 .radius(20.0),
         );
     let mut app = App::new(game, view)
+        .no_font()
         .logical_size(Size::new(200.0, 100.0))
         .game_loop(GameLoop::new(update).touch_controls(controls));
     // Locked from the start, as a platform granting it would.

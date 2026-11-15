@@ -62,6 +62,13 @@ pub(crate) struct LayoutStyle {
     /// a grid cell. `0` counts as `1`.
     pub column_span: u16,
     pub row_span: u16,
+    /// This element's own cross-axis alignment in a stack, over the stack's
+    /// (CSS's `align-self`). Set via [`Element::align_self`].
+    pub align_self: Option<Align>,
+    /// The width is a widget's default (a text field's 200), not the app's:
+    /// a column stretching its children stretches this one too. Cleared by
+    /// [`Element::width`].
+    pub soft_width: bool,
 }
 
 /// The painted decoration of an element's box: fill, corner radius, border.
@@ -113,6 +120,11 @@ pub(crate) struct TextStyle {
     pub italic: Option<bool>,
     /// Underline, strikethrough and overline.
     pub decoration: Decoration,
+    /// An empty text field's value (shown as a lone space): the color an
+    /// [`Element::placeholder`] is drawn in, in its place.
+    pub empty_field: Option<Color>,
+    /// This text is a field's placeholder, not its value.
+    pub placeholder: bool,
 }
 
 impl TextStyle {
@@ -459,7 +471,14 @@ impl Element {
         }
     }
 
-    /// An undecorated container laying `children` along `axis`.
+    /// An undecorated container laying `children` along `axis`, from its
+    /// start. Across, a row (`Horizontal`) centers its children, so a
+    /// checkbox, a label and a button line up on their middles, and a column
+    /// (`Vertical`) stretches the ones without a width to its own, as CSS
+    /// flexbox does (a row in a column spans it, so a
+    /// [`spacer`](crate::widgets::spacer) in it pushes). Change it with
+    /// [`align`](Element::align), or for one child with
+    /// [`align_self`](Element::align_self).
     pub fn stack(axis: Axis, children: Vec<Element>) -> Self {
         Self {
             layout: LayoutStyle::default(),
@@ -492,7 +511,10 @@ impl Element {
                 axis,
                 gap: 0.0,
                 main_align: Align::Start,
-                cross_align: Align::Start,
+                cross_align: match axis {
+                    Axis::Horizontal => Align::Center,
+                    Axis::Vertical => Align::Stretch,
+                },
                 children,
             },
         }
@@ -873,6 +895,16 @@ impl Element {
 
     pub fn width(mut self, w: f64) -> Self {
         self.layout.size.width = Some(w);
+        self.layout.soft_width = false;
+        self
+    }
+
+    /// A widget's default width `w`: its width unless a column stretches it
+    /// (or the app sets one with [`width`](Element::width)), as an unsized
+    /// CSS `<input>` stretches in a flex column.
+    pub(crate) fn default_width(mut self, w: f64) -> Self {
+        self.layout.size.width = Some(w);
+        self.layout.soft_width = true;
         self
     }
 
@@ -998,6 +1030,62 @@ impl Element {
     /// (for an icon-only button, or a container such as a notification).
     pub fn a11y_label(mut self, label: impl Into<String>) -> Self {
         self.semantics.get_or_insert_with(Semantics::default).label = Some(label.into());
+        self
+    }
+
+    /// Give a text field ([`text_field`](crate::widgets::text_field),
+    /// [`text_editor`](crate::widgets::text_editor),
+    /// [`text_area`](crate::widgets::text_area),
+    /// [`password_field`](crate::widgets::password_field)) a hint: `text`
+    /// shown muted while the field is empty and nothing is being composed in
+    /// it, and given to screen readers as the field's placeholder.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// struct Form { name: EditBuffer }
+    /// let theme = Theme::light();
+    /// let mut cx = Cx::new(&theme);
+    /// let form = Form { name: EditBuffer::new() };
+    /// let field = text_editor(&mut cx, &theme, &form.name, |f: &mut Form| &mut f.name)
+    ///     .placeholder("Your name");
+    /// # let _ = field;
+    /// ```
+    pub fn placeholder(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        if !text.is_empty() {
+            self.show_placeholder(&text);
+        }
+        self.semantics
+            .get_or_insert_with(Semantics::default)
+            .placeholder = Some(text);
+        self
+    }
+
+    /// Put `hint` in the place of the empty field value under this element,
+    /// if there is one.
+    fn show_placeholder(&mut self, hint: &str) -> bool {
+        if let ElementKind::Text {
+            text, color, style, ..
+        } = &mut self.kind
+        {
+            let Some(muted) = style.empty_field else {
+                return false;
+            };
+            *text = hint.to_string();
+            *color = muted;
+            style.placeholder = true;
+            return true;
+        }
+        self.children_mut()
+            .is_some_and(|children| children.iter_mut().any(|c| c.show_placeholder(hint)))
+    }
+
+    /// Mark this text as an empty field's value, where a
+    /// [`placeholder`](Element::placeholder) goes, drawn in `muted`.
+    pub(crate) fn empty_field(mut self, muted: Color) -> Self {
+        if let ElementKind::Text { style, .. } = &mut self.kind {
+            style.empty_field = Some(muted);
+        }
         self
     }
 
@@ -1300,6 +1388,10 @@ impl Element {
     /// A stack's (main-axis, cross-axis) alignment of its children; for a grid,
     /// the (horizontal, vertical) alignment of each child within its cell; for
     /// [`layers`](Element::layers), of each sized child within the box.
+    ///
+    /// A stack starts as `(Start, Center)` for a row and `(Start, Stretch)`
+    /// for a column (see [`stack`](Element::stack)). `Stretch` leaves a child
+    /// with a fixed size on that axis alone: it sits at the start.
     pub fn align(mut self, main: Align, cross: Align) -> Self {
         match &mut self.kind {
             ElementKind::Stack {
@@ -1315,6 +1407,26 @@ impl Element {
             }
             _ => {}
         }
+        self
+    }
+
+    /// Align this element across its stack (vertically in a row,
+    /// horizontally in a column) by `align`, whatever the stack's own
+    /// [`align`](Element::align) says: a button that keeps its natural width
+    /// in a column that stretches the others, say. In a grid cell or
+    /// [`layers`](Element::layers) it has no effect.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let form = column(vec![
+    ///     label(&theme, "Name"),
+    ///     button_labeled(&theme, "Save").align_self(Align::End),
+    /// ]);
+    /// # let _ = form;
+    /// ```
+    pub fn align_self(mut self, align: Align) -> Self {
+        self.layout.align_self = Some(align);
         self
     }
 

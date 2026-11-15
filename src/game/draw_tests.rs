@@ -53,10 +53,7 @@ fn render(name: &str, scene: Scene) -> Pixmap {
 
 fn dump(name: &str, pm: &Pixmap) {
     if let Ok(dir) = std::env::var("STIPPLE_DUMP") {
-        let s = pm.size();
-        let png = oxideav_png::encode_rgba8(s.width, s.height, pm.as_bytes(), &Default::default())
-            .expect("encode");
-        std::fs::write(format!("{dir}/{name}.png"), png).expect("write");
+        pm.save_png(format!("{dir}/{name}.png")).expect("write");
     }
 }
 

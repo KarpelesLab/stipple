@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use crate::core::{Align, Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Role};
+use crate::core::{Anchor, Axis, BoxStyle, Cx, Element, KeyInput, OverlaySpec, Role};
 use crate::geometry::{Insets, PhysicalSize};
 use crate::render::{Color, ImageFit, Pixmap};
 use crate::style::Theme;
@@ -405,11 +405,7 @@ pub fn color_picker<S>(
     })
     .width(32.0)
     .height(28.0);
-    rows.push(
-        Element::stack(Axis::Horizontal, vec![preview, hex])
-            .gap(theme.spacing.sm)
-            .align(Align::Start, Align::Center),
-    );
+    rows.push(Element::stack(Axis::Horizontal, vec![preview, hex]).gap(theme.spacing.sm));
 
     if !state.swatches.is_empty() {
         let current = state.color();
@@ -438,16 +434,11 @@ pub fn color_picker<S>(
                 .a11y_label(c.to_hex())
             })
             .collect();
-        rows.push(
-            Element::stack(Axis::Horizontal, swatches)
-                .gap((AREA_W - 18.0 * 10.0) / 9.0)
-                .align(Align::Start, Align::Center),
-        );
+        rows.push(Element::stack(Axis::Horizontal, swatches).gap((AREA_W - 18.0 * 10.0) / 9.0));
     }
 
     Element::stack(Axis::Vertical, rows)
         .gap(theme.spacing.sm)
-        .align(Align::Start, Align::Stretch)
         .width(AREA_W)
         .role(Role::Group)
         .a11y_label("Color picker")
@@ -494,7 +485,6 @@ pub fn color_button<S>(
         .fill(p.surface)
         .border(p.border, 1.0)
         .radius(theme.radius)
-        .align(Align::Start, Align::Center)
         .hovered(move |e| e.fill(p.surface.mix(hover.with_alpha(255), 0.08)))
         .on_tap(cx, move |s: &mut S| {
             let p = field(s);
@@ -551,7 +541,9 @@ mod tests {
             picker: ColorPicker::new(Color::rgb(0, 0x90, 0xff)),
             changes: Vec::new(),
         };
-        App::new(state, view).logical_size(Size::new(320.0, 360.0))
+        App::new(state, view)
+            .no_font()
+            .logical_size(Size::new(320.0, 360.0))
     }
 
     #[test]

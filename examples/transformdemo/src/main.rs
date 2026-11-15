@@ -118,8 +118,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         cards,
         row(vec![tilted, pause])
             .gap(theme.spacing.lg * 2.0)
-            .padding(Insets::symmetric(theme.spacing.md, 0.0))
-            .align(Align::Start, Align::Center),
+            .padding(Insets::symmetric(theme.spacing.md, 0.0)),
     ])
     .gap(theme.spacing.lg)
     .padding(Insets::uniform(theme.spacing.lg))
@@ -140,12 +139,9 @@ fn main() {
         offset: Duration::ZERO,
         last_frame: Cell::new(Duration::ZERO),
     };
-    let mut app = App::new(state, view)
+    let app = App::new(state, view)
         .title("Stipple Transforms")
         .theme(Theme::dark())
         .logical_size(Size::new(620.0, 360.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

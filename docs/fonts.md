@@ -35,8 +35,9 @@ let ui = Font::from_bytes(include_bytes!("Inter-Regular.ttf").to_vec())?
 ```
 
 The generic names are `sans-serif`, `serif`, `monospace`, `system-ui`,
-`emoji`, `cjk` and `symbol`. `Font::system_default()` remains a quick way to
-get some sans-serif face in examples and tests.
+`emoji`, `cjk` and `symbol`. `Font::system_default()` is the sans-serif face
+an app draws with when it sets none (it says so on stderr, once, if the
+system has none of the faces it looks for).
 
 ### Where system fonts come from
 
@@ -97,7 +98,9 @@ style drawn keeps its own copy, so add them when the text needs them.
 
 ## Fonts on elements
 
-`App::font` sets the font for the whole app. Any text element, or a container
+`App::font` sets the font for the whole app (by default, `Font::system_default()`,
+loaded when the first frame is laid out; `App::no_font` draws no text at all,
+for pixel tests that mustn't depend on installed fonts). Any text element, or a container
 (applying to the text inside it that doesn't set its own), can change it:
 
 ```rust

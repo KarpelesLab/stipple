@@ -56,12 +56,9 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
 }
 
 fn main() {
-    let mut app = App::new((), view)
+    let app = App::new((), view)
         .title("Stipple Scroll")
         .theme(Theme::dark())
         .logical_size(Size::new(W, H));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }

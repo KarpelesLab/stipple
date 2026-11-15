@@ -34,6 +34,7 @@ fn two_tiles(first: Element) -> App<()> {
     App::new((), move |_: &(), _: &mut Cx<()>| {
         Element::stack(Axis::Vertical, vec![first.clone(), tile()])
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0))
 }
 
@@ -88,6 +89,7 @@ fn a_tappable_element_styling_its_own_hover_gets_no_highlight() {
             ],
         )
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0));
     let _ = app.render_frame();
     assert!(app.hover_at(Point::new(10.0, 10.0)));
@@ -111,6 +113,7 @@ fn the_view_reads_keyed_states_through_cx() {
             ],
         )
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0));
     let _ = app.render_frame();
     assert!(app.hover_at(Point::new(10.0, 10.0)), "the view reads it");
@@ -148,6 +151,7 @@ fn a_drop_target_styles_its_drag_over_look() {
             ],
         )
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0));
     let _ = app.render_frame();
     assert!(app.drag_enter(Point::new(10.0, 10.0), DragOffer::FILES));
@@ -179,6 +183,7 @@ fn a_dragged_source_knows_it() {
             ],
         )
     })
+    .no_font()
     .logical_size(Size::new(200.0, 100.0));
     let _ = app.render_frame();
     app.pointer_press(Point::new(10.0, 10.0));
@@ -234,6 +239,7 @@ fn a_leaving_element_stays_drawn_but_clicks_go_through_it() {
             Element::stack(Axis::Vertical, rows)
         },
     )
+    .no_font()
     .logical_size(Size::new(200.0, 200.0));
     let _ = app.render_frame();
     assert!(!app.animating());
@@ -298,6 +304,7 @@ fn a_closing_popup_is_drawn_but_clicks_focus_and_readers_go_past_it() {
             .on_tap(cx, |s: &mut S| s.under += 1);
         Element::stack(Axis::Vertical, vec![pick, under])
     })
+    .no_font()
     .theme(slow_exits())
     .logical_size(Size::new(300.0, 300.0));
     let _ = app.render_frame();
@@ -368,6 +375,7 @@ fn a_closing_dialog_fades_with_its_scrim_which_no_longer_blocks() {
             .height(300.0)
             .on_tap(cx, |s: &mut S| s.under += 1)
     })
+    .no_font()
     .theme(slow_exits())
     .logical_size(Size::new(400.0, 400.0));
     let _ = app.render_frame();
@@ -393,6 +401,7 @@ fn tab_strip(selected: usize) -> App<usize> {
         let strip = crate::widgets::tabs(cx, &t, &labels, *s, |s: &mut usize, i| *s = i);
         Element::stack(Axis::Vertical, vec![strip]).padding(crate::geometry::Insets::uniform(15.0))
     })
+    .no_font()
     .theme(crate::style::Theme::dark())
     .logical_size(Size::new(360.0, 100.0))
 }

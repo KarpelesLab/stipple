@@ -92,7 +92,9 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
 }
 
 fn app(n: usize, width: f64) -> App<State> {
-    let mut app = App::new(State::new(n), view).logical_size(Size::new(width, 200.0));
+    let mut app = App::new(State::new(n), view)
+        .no_font()
+        .logical_size(Size::new(width, 200.0));
     app.render_once();
     app
 }

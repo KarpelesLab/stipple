@@ -67,9 +67,6 @@ fn main() {
         .theme(Theme::dark())
         .logical_size(Size::new(640.0, 480.0));
 
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     // Render each frame on the GPU; fall back to the software rasterizer if the
     // GPU path is unavailable (e.g. built without the `gl` feature).
     app = app.render_with(move |scene: &Scene, bg, scale| {

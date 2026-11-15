@@ -273,7 +273,7 @@ let pages = page_stack(cx, 4, state.tab, |cx, i, visible| match i {
     _ => settings_page(cx, state),
 });
 let bar = navigation_bar(cx, &theme, items, state.tab, |s: &mut App, i| s.tab = i);
-column(vec![pages, bar]).align(Align::Start, Align::Stretch).grow(1.0)
+column(vec![pages, bar]).grow(1.0)
 ```
 
 - Tapping an item runs `on_select` with its index. Focused (Tab), ←/→ move

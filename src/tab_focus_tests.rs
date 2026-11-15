@@ -42,7 +42,9 @@ fn view(s: &Form, cx: &mut Cx<Form>) -> crate::core::Element {
 }
 
 fn app_with(form: Form) -> App<Form> {
-    let mut app = App::new(form, view).logical_size(Size::new(300.0, 300.0));
+    let mut app = App::new(form, view)
+        .no_font()
+        .logical_size(Size::new(300.0, 300.0));
     app.render_once();
     app
 }

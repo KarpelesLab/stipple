@@ -231,20 +231,16 @@ fn view(state: &Calc, cx: &mut Cx<Calc>) -> Element {
             key(&theme, cx, "=", Variant::Primary, 1.0, |s| s.equals()),
         ]),
     ])
-    .gap(8.0)
-    .align(Align::Start, Align::Stretch);
+    .gap(8.0);
 
-    panel(&theme, vec![display, keypad]).align(Align::Start, Align::Stretch)
+    panel(&theme, vec![display, keypad])
 }
 
 fn main() {
-    let mut app = App::new(Calc::default(), view)
+    let app = App::new(Calc::default(), view)
         .title("Stipple Calculator")
         .theme(Theme::dark())
         .logical_size(Size::new(300.0, 460.0));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     app.run();
 }
 

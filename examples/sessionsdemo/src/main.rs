@@ -365,11 +365,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .gap(sp.lg)
     .padding(Insets::uniform(sp.lg))
     .fill(theme.palette.surface)
-    .align(Align::Start, Align::Stretch)
     .grow(1.0);
 
     column(vec![bar, body])
-        .align(Align::Start, Align::Stretch)
         .fill(theme.palette.background)
         .grow(1.0)
 }
@@ -417,13 +415,10 @@ fn alert_selftest(handle: &AppHandle<State>, drawn: bool) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let drawn = args.iter().any(|a| a == "--drawn");
-    let mut app = App::new(State::new(drawn), view)
+    let app = App::new(State::new(drawn), view)
         .title("Stipple Sessions")
         .theme(theme_from_args())
         .logical_size(Size::new(W, H));
-    if let Some(font) = Font::system_default() {
-        app = app.font(font);
-    }
     if args.iter().any(|a| a == "--alert-selftest") {
         alert_selftest(&app.handle(), drawn);
     }

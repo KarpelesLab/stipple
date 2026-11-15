@@ -383,7 +383,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].drag_enter(state, theme, font.as_ref(), pos, offer)
+        panes[idx].drag_enter(state, theme, font.get(), pos, offer)
     }
 
     pub(crate) fn pane_drag_over(&mut self, idx: usize, pos: Point) -> bool {
@@ -394,7 +394,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].drag_over(state, theme, font.as_ref(), pos)
+        panes[idx].drag_over(state, theme, font.get(), pos)
     }
 
     pub(crate) fn pane_drag_leave(&mut self, idx: usize) {
@@ -410,7 +410,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].drop_data(state, theme, font.as_ref(), pos, data)
+        panes[idx].drop_data(state, theme, font.get(), pos, data)
     }
 
     pub(crate) fn pane_source_move(&mut self, idx: usize, pos: Point) -> bool {
@@ -421,7 +421,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].source_move(state, theme, font.as_ref(), pos)
+        panes[idx].source_move(state, theme, font.get(), pos)
     }
 
     pub(crate) fn pane_source_release(&mut self, idx: usize, pos: Point) -> bool {
@@ -432,7 +432,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].source_release(state, theme, font.as_ref(), pos)
+        panes[idx].source_release(state, theme, font.get(), pos)
     }
 
     pub(crate) fn pane_source_cancel(&mut self, idx: usize) -> bool {
@@ -526,6 +526,7 @@ mod tests {
             SEEN.with(|c| c.set(cx.drop_state(zone)));
             column(vec![item, block().drop_target(zone)])
         })
+        .no_font()
         .logical_size(Size::new(200.0, 80.0))
     }
 
@@ -637,6 +638,7 @@ mod tests {
             cx.set_drop_hover(zone, |s: &mut St, on| s.hovering = on);
             column(vec![item, block().drop_target(zone)])
         })
+        .no_font()
         .logical_size(Size::new(200.0, 80.0))
     }
 
@@ -701,6 +703,7 @@ mod tests {
         let mut app = App::new((), |_: &(), cx: &mut Cx<()>| {
             block().height(80.0).on_drop(cx, |_, _, _| {})
         })
+        .no_font()
         .logical_size(Size::new(200.0, 80.0));
         let (before, _) = app.render_frame();
         assert!(app.drag_enter(Point::new(10.0, 10.0), DragOffer::TEXT));
