@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.7](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.6...stipple-v0.0.7) - 2026-11-15
+
+### Added
+
+- *(gpu)* Vulkan scene executor, GLES on EGL window surfaces ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- in-app purchases: StoreKit, Play Billing over JNI, a mock store ([#56](https://github.com/KarpelesLab/stipple/pull/56))
+- *(gpu)* the web renders on WebGPU, with WebGL2 as the fallback ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- runtime permissions and camera capture (#35, #34)
+- list gestures: swipe actions on rows, pull to refresh ([#44](https://github.com/KarpelesLab/stipple/pull/44))
+- drag tabs between windows and out into windows of their own ([#24](https://github.com/KarpelesLab/stipple/pull/24))
+- keyboard hints on text fields and keyboard avoidance (#39, #38)
+- *(gpu)* Direct3D 11 scene executor and flip-model DXGI swap chain ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- store packaging with cargo-stipple: signed .aab/APK and .app/.ipa ([#50](https://github.com/KarpelesLab/stipple/pull/50))
+- rich text with inline icons, text outline and shadow, selectable text (#61, #46)
+- share sheet, haptics, scheduled notifications (#36, #37, #57)
+- localization: the user's languages, locale-aware formatting, plurals ([#47](https://github.com/KarpelesLab/stipple/pull/47))
+- *(gpu)* renderer seam, App::renderer, and Metal end to end ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- *(widgets)* page stack with back-gesture transitions, app bar, bottom sheet
+- *(core)* Back declared by the view, touch pull-down hand-off, claimed presses
+- edge to edge with the safe area, orientation, keeping the screen awake (#38, #58, #62)
+- nine-slice images, image backgrounds and widget skins ([#60](https://github.com/KarpelesLab/stipple/pull/60))
+- packaged assets: platform::assets() and AppHandle::load_asset ([#59](https://github.com/KarpelesLab/stipple/pull/59))
+- scrolls fill by default, labeled checkboxes and switches, find/click test helpers
+
+### Fixed
+
+- *(gpu)* don't release Direct3D objects while the process exits ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+
+### Other
+
+- *(visual)* fix the checks that broke while Visual runs kept being cancelled
+- update screenshots from CI
+- *(web)* the examples answer within a frame (GPU by default on real GPUs, faster builds, no frames out of view)
+- compare.py and update_baseline.py read and write UTF-8 (Windows' cp1252 console couldn't print the table)
+- benchmarks on every push, native and web, CPU and GPU renderers
+- *(android)* wait_top defined before quick mode needs it; billing check non-blocking at first
+- android.billing packs the Play Billing Library (#56, #50)
+- report a scheduled notification's tap while the activity runs ([#57](https://github.com/KarpelesLab/stipple/pull/57))
+- font-independent blur check; skip the CJK test when the CJK family has no CJK glyphs
+- update screenshots from CI
+- mirror only an app that declares its languages
+- *(android)* retry send-trim-memory while the trim level settles after resuming
+- CFF and CFF2 outlines, CJK collections, lazy system fallbacks ([#48](https://github.com/KarpelesLab/stipple/pull/48))
+- update screenshots from CI
+- no [workspace] table at all; fix an unused variable and mut
+- one package; the examples are Cargo examples
+- interactive documentation and examples on Pages
+- run in the browser
+- *(getting-started)* cargo add stipple, no git dependency
+- ship docs/getting-started.md, which the tutorial doctest includes
+- a getting-started tutorial, compiled and run in CI
+- *(widgets)* one way to compose containers
+- plan hardware rendering (Phase 6): direct presentation on every platform
+
 ### Added
 
 - Benchmarks on every push: `examples/bench` times a window of widgets'
