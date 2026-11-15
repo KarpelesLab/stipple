@@ -101,7 +101,7 @@ no timers uses no CPU, and one with a timer sleeps until it's due:
 | macOS | `nextEventMatchingMask:untilDate:` | a posted application-defined `NSEvent` |
 | iOS | UIKit's run loop | `dispatch_async_f` / `dispatch_after_f` on the main queue |
 | Web | a `setTimeout` at the next deadline, which calls into the module | a zero-delay `setTimeout` (the page has one thread) |
-| Android | not yet: updates queue until the next input | — |
+| Android | `ALooper_pollOnce`, with the next timer as its timeout | `ALooper_wake` |
 
 With several windows, the backend wakes each open window in turn: the first
 runs the updates and timers, and every window whose view changed re-renders.
