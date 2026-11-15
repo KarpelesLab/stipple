@@ -30,6 +30,7 @@ const EMPTY: u32 = u32::MAX;
 /// let (cols, rows) = map.visible_cells(Rect::from_xywh(0.0, 0.0, 320.0, 180.0));
 /// assert_eq!((cols, rows), (0..20, 0..12));
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tilemap {
     cols: u32,
@@ -65,6 +66,12 @@ impl Tilemap {
             *cell = tile.map_or(EMPTY, |t| t.min(EMPTY as usize - 1) as u32);
         }
         map
+    }
+
+    /// With its top-left corner at `origin` in world space.
+    pub fn at(mut self, origin: Point) -> Self {
+        self.origin = origin;
+        self
     }
 
     /// The number of columns.

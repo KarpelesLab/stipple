@@ -300,7 +300,7 @@ let mut actions = Actions::new()
 actions.update(&input); // frame.input()
 if actions.pressed(Act::Jump) { /* … */ }
 let steer = actions.value(Act::Steer); // -1 to 1
-let (dx, dy) = actions.axis2(Act::Left, Act::Right, Act::Up, Act::Down);
+let (dx, dy) = actions.axis2((Act::Left, Act::Right), (Act::Up, Act::Down));
 ```
 
 - `held(a)` while any of its bindings is held; `pressed(a)` on the update it
@@ -400,7 +400,8 @@ bitmaps, a game gets:
   The pixels aren't copied: keep the `Arc<Pixmap>` and draw from it every
   frame.
 - **`SpriteSheet`**: an image and its frames, cut as a grid
-  (`SpriteSheet::grid(image, 16, 16)`, `grid_spaced` for margins and gaps) or
+  (`SpriteSheet::grid(image, 16, 16)`, or `from_grid(image,
+  SpriteGrid::new(16, 16).margin(1).spacing(2))` for margins and gaps) or
   added one by one, by name if you like (`add("coin", rect)`, `index("coin")`).
   `sheet.draw(scene, frame, dst, &opts)` and `draw_at(scene, frame, top_left,
   &opts)` draw a frame.
@@ -408,7 +409,8 @@ bitmaps, a game gets:
   0.1)`, or `with_durations`), played `Loop`, `Once` or `PingPong`, sampled at
   a time: `walk.frame_at(t)` gives the sheet frame to draw.
 - **`Tilemap`**: a grid of tile numbers (frames of a tileset sheet) with a
-  tile size and an origin in the world. `map.draw(scene, &tileset, view,
+  tile size and an origin in the world (`Tilemap::new(cols, rows,
+  tile).at(origin)`). `map.draw(scene, &tileset, view,
   &opts)` draws only the cells that cross `view`, so a level of any size costs
   what's on screen; `cell_at`, `cell_rect` and `visible_cells` answer the
   usual questions.
@@ -420,7 +422,10 @@ bitmaps, a game gets:
   `visible_rect` map between the two. Draw the world inside `cam.push(scene)`
   / `cam.pop(scene)` (a `Scene` layer) or `cam.draw(scene, |s| …)`. With
   `snap` (on by default) the translation is rounded to whole screen units, so
-  pixel art doesn't shimmer while the camera glides.
+  pixel art doesn't shimmer while the camera glides. Set it up with
+  `Camera2D::new(viewport).at(p).with_zoom(2.0)` (`with_rotation`,
+  `with_snap`, `with_shake(strength, decay)`); the fields stay public to
+  move it each frame.
 - **`PixelViewport`**: a fixed virtual resolution for pixel art,
   `PixelViewport::new(320, 180)`. `vp.paint(canvas, |s| …)` gives the game a
   `Scene` of 320×180 to draw into, rasterizes it at that size, and blits it
@@ -545,7 +550,8 @@ App::new(state, view).game_style(style); // the theme and the font
 A `GameStyle` is what a game decides: `font` (from the game's files with
 `with_font_bytes`, or `with_font` for a `Font` with more faces),
 `background`, `surface`, `accent`, `text`, `text_muted`, `danger`,
-`success`, `warning`, `radius`, `font_size` and `focus`. `style.theme()`
+`success`, `warning`, `radius`, `font_size` and `focus`, each set with its
+`with_…` (`with_background`, `with_surface`, `with_text`, …). `style.theme()`
 (or `Theme::game(&style)`) makes the `Theme` every widget reads, with a
 type scale for a screen read from the sofa (titles 1.3×, headings 2× the
 body). Widgets draw text in the app's font, so the font goes to
@@ -613,9 +619,9 @@ shown at once need different labels.
 
 | | |
 |---|---|
-| `title_screen(theme, title, subtitle, menu, footer)` | The title large in the accent, the menu under it, a footer (a `controls_hint`) at the bottom. |
+| `TitleScreen::new(title, menu).subtitle(..).footer(..).view(theme)` | The title large in the accent, the menu under it, a footer (a `controls_hint`) at the bottom, on the theme's background; `.backdrop(None)` leaves the game showing behind it (or `Some(color)`). |
 | `pause_menu(cx, theme, title, buttons, on_resume)` | A modal panel over the game, dimmed behind it; a press on the game resumes. Declare it from the view while paused, and pause the loop with `GameLoop::paused_when`: the canvas keeps the frozen frame. |
-| `game_over_screen(theme, title, lines, menu)` | The title in the danger color, popping in; a panel of results (`("Score", "340".into())`); the menu. |
+| `GameOverScreen::new(title, menu).line("Score", 340).view(theme)` | The title in the danger color, popping in; a panel of results, a `line(label, value)` each; the menu. `.backdrop(..)` as for the title screen. |
 | `controls_hint(theme, &[("Enter / A", "Select"), …])`, `key_cap(theme, text)` | Key caps and what they do. |
 
 Switch screens with a `page_stack` on a `screen` field, and go back in
@@ -641,8 +647,8 @@ Switch screens with a `page_stack` on a `screen` field, and go back in
 | `game_slider(cx, theme, value, step, on_change)` | A slider that takes focus: Left and Right step it, Home and End go to the ends, a drag sets it. |
 | `toggle_row(cx, theme, label, on, on_toggle)` | A switch. |
 | `choice_row(cx, theme, label, options, selected, on_change)` | `‹ 2× ›`: Left, Right and Enter cycle through the options, and the arrows can be tapped. A pixel scale, a difficulty, a language. |
-| `fullscreen_row(cx, theme, label)` | A switch showing whether the window is fullscreen, switching it with `WindowRequest::Fullscreen`. |
-| `binding_row(cx, theme, label, bindings, &state, on_activate)` | An action's bindings as key caps (`binding_name`: `W`, `Space`, `←`, `L-Shift`, `Left click`, `Pad A`, `Pad LB`, `L-Stick ←`), a ⚠ flag naming the actions it shares one with, and "Press a key…" while it waits. |
+| `fullscreen_row(cx, theme, label, on_change)` | A switch showing whether the window is fullscreen, switching it with `WindowRequest::Fullscreen`; `on_change` gets the new state, to save with the settings (and restore with `App::fullscreen`). |
+| `binding_row(cx, theme, label, bindings, &state, on_activate)` | `state` is a `BindingRowState::default().capturing(..).conflicts(names)`. An action's bindings as key caps (`binding_name`: `W`, `Space`, `←`, `L-Shift`, `Left click`, `Pad A`, `Pad LB`, `L-Stick ←`), a ⚠ flag naming the actions it shares one with, and "Press a key…" while it waits. |
 
 There's no vsync row: frames always follow the display's refresh (see
 [the loop](#the-loop)).
@@ -655,12 +661,12 @@ it the input:
 fn update(g: &mut Game, frame: &mut Frame) {
     if let Some(capture) = g.capture.as_mut() {
         match capture.poll(frame.input(), frame.time()) {
-            Capture::Waiting => return,
             Capture::Cancelled => g.capture = None,
             Capture::Bound(binding) => {
                 capture.apply(&mut g.actions, binding); // returns the conflicts
                 g.capture = None;
             }
+            _ => return, // still waiting
         }
         frame.rebuild();
         return;
@@ -725,7 +731,7 @@ leave the HUD's to the HUD.
 | `counter(theme, id, label, value)` | A label and a number that pops (from 1.6×, on a bouncy spring) each time it changes. |
 | `minimap_slot(theme, w, h, content)` | A framed, clipped box for the game's map canvas. |
 | `FloatingTexts`, `floating_texts(theme, &texts)` | `spawn(text, color, at, frame.time())` a "+10" where it happened; `update(frame.time())` each frame drops those older than `FLOAT_LIFE` (600 ms) and says whether to rebuild. Each is keyed: it rises into place as it comes, and rises off, fading, as it goes. |
-| `Typewriter`, `dialogue_box(cx, theme, speaker, &text, portrait, on_activate)` | A box along the bottom: the speaker's name on a tab, a portrait (an image, 72 × 72) and the text typed out at `TYPEWRITER_SPEED` (40 characters a second, or `with_speed`), timed by the frames that show it (`Cx::frame_time`). It asks for frames while it types, keeps its size meanwhile, and shows ▼ when done. It takes focus when it shows; a tap, Enter or South runs `on_activate`, where `text.advance()` reveals the rest, or returns `true` once all of it shows (go to the next line). |
+| `Typewriter`, `DialogueBox::new(&text, on_activate).speaker(name).portrait(image).view(cx, theme)` | A box along the bottom: the speaker's name on a tab, a portrait (an image, 72 × 72) and the text typed out at `TYPEWRITER_SPEED` (40 characters a second, or `with_speed`), timed by the frames that show it (`Cx::frame_time`). It asks for frames while it types, keeps its size meanwhile, and shows ▼ when done. It takes focus when it shows; a tap, Enter or South runs `on_activate`, where `text.advance()` reveals the rest, or returns `true` once all of it shows (go to the next line). |
 
 The geometry of spatial navigation, keys and a gamepad moving through a
 menu (the stick's thresholds, a held direction's repeat), the HUD letting

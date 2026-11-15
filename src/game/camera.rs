@@ -14,14 +14,15 @@ use crate::render::Scene;
 /// use stipple::game::Camera2D;
 /// use stipple::geometry::{Point, Size};
 ///
-/// let mut cam = Camera2D::new(Size::new(320.0, 180.0));
-/// cam.position = Point::new(1000.0, 500.0);
-/// cam.zoom = 2.0;
+/// let cam = Camera2D::new(Size::new(320.0, 180.0))
+///     .at(Point::new(1000.0, 500.0))
+///     .with_zoom(2.0);
 /// // The followed point is at the screen's center…
 /// assert_eq!(cam.world_to_screen(Point::new(1000.0, 500.0)), Point::new(160.0, 90.0));
 /// // …and the screen's corner is half a screen away at 2× zoom.
 /// assert_eq!(cam.screen_to_world(Point::new(0.0, 0.0)), Point::new(920.0, 455.0));
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Camera2D {
     /// The world point at the center of the screen.
@@ -58,6 +59,38 @@ impl Camera2D {
             trauma: 0.0,
             time: 0.0,
         }
+    }
+
+    /// Looking at `position` (see [`position`](Self::position)).
+    pub fn at(mut self, position: Point) -> Self {
+        self.position = position;
+        self
+    }
+
+    /// Zoomed to `zoom` screen units per world unit.
+    pub fn with_zoom(mut self, zoom: f64) -> Self {
+        self.zoom = zoom;
+        self
+    }
+
+    /// Turned by `rotation` radians.
+    pub fn with_rotation(mut self, rotation: f64) -> Self {
+        self.rotation = rotation;
+        self
+    }
+
+    /// Snapping to whole screen units, or not (see [`snap`](Self::snap)).
+    pub fn with_snap(mut self, snap: bool) -> Self {
+        self.snap = snap;
+        self
+    }
+
+    /// Shaking by up to `strength` screen units at full trauma, losing
+    /// `decay` trauma a second.
+    pub fn with_shake(mut self, strength: f64, decay: f64) -> Self {
+        self.shake_strength = strength;
+        self.shake_decay = decay;
+        self
     }
 
     /// Shake the camera: add `amount` (`0..=1`) of trauma. The shake's

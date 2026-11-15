@@ -21,12 +21,12 @@ mod theme;
 mod tests;
 
 pub use hud::{
-    Bar, FILL_MOTION, FLOAT_LIFE, FloatingTexts, GHOST_MOTION, TYPEWRITER_SPEED, Typewriter,
-    counter, dialogue_box, floating_texts, health_bar, hud, minimap_slot, stat_bar,
+    Bar, DialogueBox, FILL_MOTION, FLOAT_LIFE, FloatingTexts, GHOST_MOTION, TYPEWRITER_SPEED,
+    Typewriter, counter, floating_texts, health_bar, hud, minimap_slot, stat_bar,
 };
 pub use menu::{
-    MENU_FOCUS_SCALE, controls_hint, game_over_screen, key_cap, menu_button, menu_list, pause_menu,
-    title_screen,
+    GameOverScreen, MENU_FOCUS_SCALE, TitleScreen, controls_hint, key_cap, menu_button, menu_list,
+    pause_menu,
 };
 pub use nav::{REPEAT_DELAY, REPEAT_EVERY, STICK_PRESS, STICK_RELEASE};
 pub use settings::{

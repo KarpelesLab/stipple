@@ -1,5 +1,5 @@
-//! Menus and screens: [`menu_button`], [`menu_list`], [`title_screen`],
-//! [`pause_menu`], [`game_over_screen`] and [`controls_hint`].
+//! Menus and screens: [`menu_button`], [`menu_list`], [`TitleScreen`],
+//! [`pause_menu`], [`GameOverScreen`] and [`controls_hint`].
 
 use crate::anim::SpringParams;
 use crate::core::{
@@ -135,93 +135,199 @@ pub fn key_cap(theme: &Theme, text: &str) -> Element {
     .align(Align::Center, Align::Center)
 }
 
-/// A title screen: the game's `title` large in the accent, a `subtitle`
-/// under it, the `menu` (a [`menu_list`]) below, and `footer` (say a
-/// [`controls_hint`]) at the bottom, on the theme's background.
-pub fn title_screen(
-    theme: &Theme,
-    title: impl Into<String>,
-    subtitle: impl Into<String>,
+/// A title screen: the game's title large in the accent, a subtitle under
+/// it, the menu (a [`menu_list`]) below, and a footer (say a
+/// [`controls_hint`]) at the bottom, on the theme's background, or on a
+/// [`backdrop`](Self::backdrop) of your choosing, or none, to show the game
+/// behind it.
+///
+/// ```
+/// use stipple::game::ui::{self as gui, TitleScreen};
+/// use stipple::prelude::*;
+///
+/// fn title(cx: &mut Cx<()>, theme: &Theme) -> Element {
+///     let menu = gui::menu_list(theme, vec![gui::menu_button(cx, theme, "Play", |_| {})]);
+///     TitleScreen::new("STARLIT COURIER", menu)
+///         .subtitle("deliveries across the comet belt")
+///         .footer(gui::controls_hint(theme, &[("Enter / A", "Select")]))
+///         .view(theme)
+/// }
+/// # let _ = title;
+/// ```
+#[derive(Debug)]
+pub struct TitleScreen {
+    title: String,
+    subtitle: Option<String>,
     menu: Element,
-    footer: Element,
-) -> Element {
-    let p = &theme.palette;
-    let heading = theme.typography.heading;
-    let head = Element::stack(
-        Axis::Vertical,
-        vec![
-            Element::text(title, heading * 1.6, p.primary).bold(),
-            Element::text(subtitle, theme.typography.title, p.text_muted),
-        ],
-    )
-    .gap(theme.spacing.xs)
-    .align(Align::Start, Align::Center)
-    .appear(Effect::fade().and(Effect::slide(0.0, -16.0)));
-    screen(
-        theme,
-        vec![
+    footer: Option<Element>,
+    /// `None` for the theme's background.
+    backdrop: Option<Option<Color>>,
+}
+
+impl TitleScreen {
+    /// A title screen showing `title` over `menu`.
+    pub fn new(title: impl Into<String>, menu: Element) -> Self {
+        Self {
+            title: title.into(),
+            subtitle: None,
+            menu,
+            footer: None,
+            backdrop: None,
+        }
+    }
+
+    /// With `subtitle` under the title.
+    pub fn subtitle(mut self, subtitle: impl Into<String>) -> Self {
+        self.subtitle = Some(subtitle.into());
+        self
+    }
+
+    /// With `footer` at the bottom.
+    pub fn footer(mut self, footer: Element) -> Self {
+        self.footer = Some(footer);
+        self
+    }
+
+    /// Fill the screen with `color` instead of the theme's background, or
+    /// with nothing (`None`): the game, or whatever is under the screen,
+    /// shows through.
+    pub fn backdrop(mut self, color: Option<Color>) -> Self {
+        self.backdrop = Some(color);
+        self
+    }
+
+    /// The screen's element.
+    pub fn view(self, theme: &Theme) -> Element {
+        let p = &theme.palette;
+        let heading = theme.typography.heading;
+        let mut head = vec![Element::text(self.title, heading * 1.6, p.primary).bold()];
+        if let Some(subtitle) = self.subtitle {
+            head.push(Element::text(
+                subtitle,
+                theme.typography.title,
+                p.text_muted,
+            ));
+        }
+        let head = Element::stack(Axis::Vertical, head)
+            .gap(theme.spacing.xs)
+            .align(Align::Start, Align::Center)
+            .appear(Effect::fade().and(Effect::slide(0.0, -16.0)));
+        let mut children = vec![
             crate::widgets::spacer(),
             head,
             gap(theme.spacing.xl),
-            menu,
+            self.menu,
             crate::widgets::spacer(),
-            footer,
-        ],
-    )
-    .fill(p.background)
+        ];
+        children.extend(self.footer);
+        backdrop(
+            screen(theme, children),
+            self.backdrop.unwrap_or(Some(p.background)),
+        )
+    }
 }
 
-/// A game-over screen: `title` large (in the danger color), `lines` of
-/// results (a label and a value each: score, time, best), and the `menu`
-/// (retry, quit) under them.
-pub fn game_over_screen(
-    theme: &Theme,
-    title: impl Into<String>,
-    lines: &[(&str, String)],
+/// A game-over screen: the title large (in the danger color, popping in),
+/// lines of results (a label and a value each: score, time, best) in a
+/// panel, and the menu (retry, quit) under them, on the theme's background
+/// darkened, or on a [`backdrop`](Self::backdrop) of your choosing.
+///
+/// ```
+/// use stipple::game::ui::{self as gui, GameOverScreen};
+/// use stipple::prelude::*;
+///
+/// fn game_over(cx: &mut Cx<()>, theme: &Theme, score: u32) -> Element {
+///     let menu = gui::menu_list(theme, vec![gui::menu_button(cx, theme, "Try again", |_| {})]);
+///     GameOverScreen::new("HULL BREACHED", menu)
+///         .line("Score", score)
+///         .line("Time", "2:05")
+///         .view(theme)
+/// }
+/// # let _ = game_over;
+/// ```
+#[derive(Debug)]
+pub struct GameOverScreen {
+    title: String,
+    lines: Vec<(String, String)>,
     menu: Element,
-) -> Element {
-    let p = &theme.palette;
-    let rows = lines
-        .iter()
-        .map(|(what, value)| {
-            Element::stack(
-                Axis::Horizontal,
-                vec![
-                    Element::text(*what, theme.typography.body, p.text_muted),
-                    crate::widgets::spacer(),
-                    Element::text(value.clone(), theme.typography.title, p.text).bold(),
-                ],
-            )
-            .align(Align::Start, Align::Center)
-        })
-        .collect();
-    let results = Element::stack(Axis::Vertical, rows)
-        .gap(theme.spacing.sm)
-        .fill(p.surface)
-        .border(p.border, 1.0)
-        .radius(theme.radius)
-        .padding(Insets::uniform(theme.spacing.lg))
-        .align(Align::Start, Align::Stretch)
-        .width(320.0);
-    screen(
-        theme,
-        vec![
-            crate::widgets::spacer(),
-            Element::text(title, theme.typography.heading * 1.4, p.danger)
-                .bold()
-                .appear(
-                    Effect::fade()
-                        .and(Effect::scale(1.4))
-                        .transition(Transition::spring(SpringParams::BOUNCY)),
-                ),
-            gap(theme.spacing.lg),
-            results,
-            gap(theme.spacing.lg),
+    /// `None` for the theme's background, darkened.
+    backdrop: Option<Option<Color>>,
+}
+
+impl GameOverScreen {
+    /// A game-over screen showing `title` over `menu`.
+    pub fn new(title: impl Into<String>, menu: Element) -> Self {
+        Self {
+            title: title.into(),
+            lines: Vec::new(),
             menu,
-            crate::widgets::spacer(),
-        ],
-    )
-    .fill(p.background.mix(Color::BLACK, 0.2))
+            backdrop: None,
+        }
+    }
+
+    /// With a line of results: `label` and its `value`.
+    pub fn line(mut self, label: impl Into<String>, value: impl ToString) -> Self {
+        self.lines.push((label.into(), value.to_string()));
+        self
+    }
+
+    /// Fill the screen with `color` instead of the theme's darkened
+    /// background, or with nothing (`None`): the game shows through.
+    pub fn backdrop(mut self, color: Option<Color>) -> Self {
+        self.backdrop = Some(color);
+        self
+    }
+
+    /// The screen's element.
+    pub fn view(self, theme: &Theme) -> Element {
+        let p = &theme.palette;
+        let rows = self
+            .lines
+            .into_iter()
+            .map(|(what, value)| {
+                Element::stack(
+                    Axis::Horizontal,
+                    vec![
+                        Element::text(what, theme.typography.body, p.text_muted),
+                        crate::widgets::spacer(),
+                        Element::text(value, theme.typography.title, p.text).bold(),
+                    ],
+                )
+                .align(Align::Start, Align::Center)
+            })
+            .collect();
+        let results = Element::stack(Axis::Vertical, rows)
+            .gap(theme.spacing.sm)
+            .fill(p.surface)
+            .border(p.border, 1.0)
+            .radius(theme.radius)
+            .padding(Insets::uniform(theme.spacing.lg))
+            .align(Align::Start, Align::Stretch)
+            .width(320.0);
+        let page = screen(
+            theme,
+            vec![
+                crate::widgets::spacer(),
+                Element::text(self.title, theme.typography.heading * 1.4, p.danger)
+                    .bold()
+                    .appear(
+                        Effect::fade()
+                            .and(Effect::scale(1.4))
+                            .transition(Transition::spring(SpringParams::BOUNCY)),
+                    ),
+                gap(theme.spacing.lg),
+                results,
+                gap(theme.spacing.lg),
+                self.menu,
+                crate::widgets::spacer(),
+            ],
+        );
+        backdrop(
+            page,
+            self.backdrop
+                .unwrap_or(Some(p.background.mix(Color::BLACK, 0.2))),
+        )
+    }
 }
 
 /// Declare the pause menu: a modal panel with `title` and `buttons` (a
@@ -279,4 +385,12 @@ fn screen(theme: &Theme, children: Vec<Element>) -> Element {
 /// A fixed gap in a column.
 fn gap(height: f64) -> Element {
     Element::stack(Axis::Vertical, Vec::new()).height(height)
+}
+
+/// `page` on `color`, if any.
+fn backdrop(page: Element, color: Option<Color>) -> Element {
+    match color {
+        Some(color) => page.fill(color),
+        None => page,
+    }
 }

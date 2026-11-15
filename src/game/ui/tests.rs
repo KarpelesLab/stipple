@@ -613,11 +613,15 @@ fn a_dialogue_box_asks_for_frames_while_it_types() {
     let tw = Typewriter::new("One two three");
     let mut cx = Cx::<()>::new(&theme);
     cx.set_frame_time(Duration::from_secs(1));
-    let _ = dialogue_box(&mut cx, &theme, Some("Ana"), &tw, None, |_| {});
+    let _ = DialogueBox::new(&tw, |_| {})
+        .speaker("Ana")
+        .view(&mut cx, &theme);
     assert!(cx.frame_requested());
     let mut cx = Cx::<()>::new(&theme);
     cx.set_frame_time(Duration::from_secs(9));
-    let _ = dialogue_box(&mut cx, &theme, Some("Ana"), &tw, None, |_| {});
+    let _ = DialogueBox::new(&tw, |_| {})
+        .speaker("Ana")
+        .view(&mut cx, &theme);
     assert!(!cx.frame_requested(), "typed out: no more frames");
 }
 

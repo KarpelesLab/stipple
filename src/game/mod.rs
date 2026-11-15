@@ -35,7 +35,7 @@ pub(crate) use game_loop::Runtime;
 pub use game_loop::{Frame, GameLoop, LoopStats, PausedFn, UpdateFn};
 pub use input::{InputDevice, InputState, TouchPoint};
 pub use pixel::{PixelLayout, PixelViewport};
-pub use sprite::{Playback, SpriteAnimation, SpriteSheet};
+pub use sprite::{Playback, SpriteAnimation, SpriteGrid, SpriteSheet};
 pub use tilemap::Tilemap;
 pub use touch_controls::{
     Corner, ShowTouch, Stick, TouchButton, TouchControls, TouchOverlay, TouchStick,

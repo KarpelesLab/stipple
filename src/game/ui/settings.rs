@@ -210,16 +210,20 @@ pub fn choice_row<S>(
 
 /// A fullscreen row: a [`toggle_row`] showing whether the window is
 /// fullscreen and switching it through the
-/// [window API](crate::core::AppHandle::window).
+/// [window API](crate::core::AppHandle::window). `on_change` gets the state
+/// it asked for (`true` for fullscreen), to keep in the game's settings and
+/// restore at the next start (with [`App::fullscreen`](crate::App::fullscreen)).
 pub fn fullscreen_row<S: 'static>(
     cx: &mut Cx<S>,
     theme: &Theme,
     label: impl Into<String>,
+    mut on_change: impl FnMut(&mut S, bool) + 'static,
 ) -> Element {
     let on = cx.window_info().fullscreen;
     let handle = cx.handle();
-    toggle_row(cx, theme, label, on, move |_: &mut S| {
+    toggle_row(cx, theme, label, on, move |s: &mut S| {
         handle.window(WindowRequest::Fullscreen(!on));
+        on_change(s, !on);
     })
 }
 
@@ -339,6 +343,7 @@ pub fn key_name(key: PhysicalKey) -> String {
 }
 
 /// What a controls screen's [`binding_row`] shows besides the bindings.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BindingRowState {
     /// The row waits for an input ("Press a key…").
@@ -346,6 +351,20 @@ pub struct BindingRowState {
     /// The other actions that share one of this action's bindings, named:
     /// flagged on the row.
     pub conflicts: Vec<String>,
+}
+
+impl BindingRowState {
+    /// Waiting for an input, or not.
+    pub fn capturing(mut self, capturing: bool) -> Self {
+        self.capturing = capturing;
+        self
+    }
+
+    /// Sharing a binding with these actions (their names).
+    pub fn conflicts(mut self, conflicts: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.conflicts = conflicts.into_iter().map(Into::into).collect();
+        self
+    }
 }
 
 /// A controls screen's row: the action's `label`, its `bindings` as key
@@ -417,6 +436,7 @@ pub fn binding_row<S>(
 }
 
 /// What a [`RebindCapture`] saw.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Capture {
     /// Nothing yet.
@@ -443,6 +463,7 @@ pub enum Capture {
 /// arrives: `paused_when(|s| s.paused && s.capture.is_none())`) and gamepad
 /// navigation off (`gamepad_navigation_when(|s| s.capture.is_none())`), so
 /// the pad's South button is bound rather than pressing the row again.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RebindCapture<A> {
     /// The action being bound.

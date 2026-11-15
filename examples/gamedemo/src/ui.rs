@@ -6,11 +6,10 @@ use super::*;
 /// The theme: `GameStyle::ember` with a translucent background, so the
 /// garden shows dimly behind the menus.
 pub fn style() -> GameStyle {
-    let mut style = GameStyle::ember();
-    style.background = Color::rgba(0x12, 0x0e, 0x1c, 0xb4);
-    style.surface = Color::rgb(0x26, 0x1f, 0x33);
-    style.accent = Color::rgb(0xff, 0xb3, 0x47);
-    style
+    GameStyle::ember()
+        .with_background(Color::rgba(0x12, 0x0e, 0x1c, 0xb4))
+        .with_surface(Color::rgb(0x26, 0x1f, 0x33))
+        .with_accent(Color::rgb(0xff, 0xb3, 0x47))
 }
 
 pub fn view(g: &Game, cx: &mut Cx<Game>) -> Element {
@@ -77,7 +76,10 @@ fn title(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     ])
     .gap(theme.spacing.md)
     .align(Align::Start, Align::Center);
-    gui::title_screen(theme, "LAMPWICK", "a lantern-keeper's night", menu, footer)
+    TitleScreen::new("LAMPWICK", menu)
+        .subtitle("a lantern-keeper's night")
+        .footer(footer)
+        .view(theme)
 }
 
 fn section(theme: &Theme, title: &str, rows: Vec<Element>) -> Element {
@@ -113,15 +115,12 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
             volume(cx, "Effects", s.effects, |s, v| s.effects = v),
         ],
     );
-    let on = cx.window_info().fullscreen;
-    let handle = cx.handle();
     let display = section(
         theme,
         "Display",
         vec![
-            gui::toggle_row(cx, theme, "Fullscreen", on, move |g: &mut Game| {
-                g.settings.fullscreen = !on;
-                handle.window(WindowRequest::Fullscreen(!on));
+            gui::fullscreen_row(cx, theme, "Fullscreen", |g: &mut Game, on| {
+                g.settings.fullscreen = on;
                 g.save_settings();
             }),
             gui::choice_row(
@@ -140,13 +139,9 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     );
     let mut controls = Vec::new();
     for (act, _, label) in ACTIONS {
-        let state = BindingRowState {
-            capturing: g.capture.is_some_and(|c| c.action == act),
-            conflicts: gui::conflicts(&g.actions, act)
-                .into_iter()
-                .map(|a| label_of(a).to_string())
-                .collect(),
-        };
+        let state = BindingRowState::default()
+            .capturing(g.capture.is_some_and(|c| c.action == act))
+            .conflicts(gui::conflicts(&g.actions, act).into_iter().map(label_of));
         controls.push(gui::binding_row(
             cx,
             theme,
@@ -276,18 +271,13 @@ fn game_over(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     } else {
         g.best.to_string()
     };
-    gui::game_over_screen(
-        theme,
-        "THE LANTERN GOES OUT",
-        &[
-            ("Score", w.score.to_string()),
-            ("Best", best),
-            ("Embers caught", w.caught.to_string()),
-            ("Moths burst", w.burst.to_string()),
-            ("Time", format!("{}:{:02}", secs / 60, secs % 60)),
-        ],
-        menu,
-    )
+    GameOverScreen::new("THE LANTERN GOES OUT", menu)
+        .line("Score", w.score)
+        .line("Best", best)
+        .line("Embers caught", w.caught)
+        .line("Moths burst", w.burst)
+        .line("Time", format!("{}:{:02}", secs / 60, secs % 60))
+        .view(theme)
 }
 
 fn back(g: &mut Game) -> Handled {

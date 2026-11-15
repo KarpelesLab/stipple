@@ -5,6 +5,46 @@ use crate::render::{ImageOptions, Pixmap, Scene};
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// How a sprite sheet's image is cut into a grid of equal cells (see
+/// [`SpriteSheet::from_grid`]): the cell size, the margin of pixels around
+/// the grid and the spacing between cells, all in the image's pixels.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SpriteGrid {
+    /// A cell's width.
+    pub frame_width: u32,
+    /// A cell's height.
+    pub frame_height: u32,
+    /// Pixels around the grid, on every side.
+    pub margin: u32,
+    /// Pixels between two cells.
+    pub spacing: u32,
+}
+
+impl SpriteGrid {
+    /// Cells of `frame_width`×`frame_height`, packed edge to edge.
+    pub fn new(frame_width: u32, frame_height: u32) -> Self {
+        Self {
+            frame_width,
+            frame_height,
+            margin: 0,
+            spacing: 0,
+        }
+    }
+
+    /// With `margin` pixels around the grid.
+    pub fn margin(mut self, margin: u32) -> Self {
+        self.margin = margin;
+        self
+    }
+
+    /// With `spacing` pixels between cells.
+    pub fn spacing(mut self, spacing: u32) -> Self {
+        self.spacing = spacing;
+        self
+    }
+}
+
 /// An image cut into frames: a grid of equal cells, or named regions of any
 /// size (an atlas). Frames are numbered in the order they were added (a grid
 /// row by row, left to right).
@@ -43,18 +83,30 @@ impl SpriteSheet {
     /// `image` cut into a grid of `frame_width`×`frame_height` cells, row by
     /// row (a partial cell at the right or bottom edge is left out).
     pub fn grid(image: Arc<Pixmap>, frame_width: u32, frame_height: u32) -> Self {
-        Self::grid_spaced(image, frame_width, frame_height, 0, 0)
+        Self::from_grid(image, SpriteGrid::new(frame_width, frame_height))
     }
 
-    /// Like [`grid`](Self::grid), for a sheet with a `margin` of pixels
-    /// around the grid and `spacing` pixels between cells.
-    pub fn grid_spaced(
-        image: Arc<Pixmap>,
-        frame_width: u32,
-        frame_height: u32,
-        margin: u32,
-        spacing: u32,
-    ) -> Self {
+    /// `image` cut as `grid` says: like [`grid`](Self::grid), for a sheet
+    /// with a margin around the cells or spacing between them.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use stipple::game::{SpriteGrid, SpriteSheet};
+    /// use stipple::geometry::{PhysicalSize, Rect};
+    /// use stipple::render::Pixmap;
+    ///
+    /// let image = Arc::new(Pixmap::new(PhysicalSize::new(37, 20)));
+    /// // 10 px cells, 1 px around them and 2 px between: x at 1, 13 and 25.
+    /// let sheet = SpriteSheet::from_grid(image, SpriteGrid::new(10, 10).margin(1).spacing(2));
+    /// assert_eq!(sheet.frame(2), Some(Rect::from_xywh(25.0, 1.0, 10.0, 10.0)));
+    /// ```
+    pub fn from_grid(image: Arc<Pixmap>, grid: SpriteGrid) -> Self {
+        let SpriteGrid {
+            frame_width,
+            frame_height,
+            margin,
+            spacing,
+        } = grid;
         let mut sheet = Self::new(image);
         let size = sheet.image.size();
         if frame_width == 0 || frame_height == 0 {
@@ -133,6 +185,7 @@ impl SpriteSheet {
 }
 
 /// What a [`SpriteAnimation`] does after its last frame.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Playback {
     /// Starts over.
@@ -277,7 +330,7 @@ mod tests {
     fn a_spaced_grid_skips_margins_and_gaps() {
         let image = Arc::new(Pixmap::new(PhysicalSize::new(37, 20)));
         // 1 px margin, 2 px spacing, 10 px cells: x at 1, 13, 25; one row.
-        let sheet = SpriteSheet::grid_spaced(image, 10, 10, 1, 2);
+        let sheet = SpriteSheet::from_grid(image, SpriteGrid::new(10, 10).margin(1).spacing(2));
         assert_eq!(sheet.len(), 3);
         assert_eq!(sheet.frame(2), Some(Rect::from_xywh(25.0, 1.0, 10.0, 10.0)));
     }

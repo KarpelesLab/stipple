@@ -1,6 +1,6 @@
 //! A HUD over the game: [`hud`], [`stat_bar`] / [`health_bar`] with a
 //! damage ghost, [`counter`] with a pop, [`minimap_slot`],
-//! [`FloatingTexts`], and [`dialogue_box`] with [`Typewriter`] text.
+//! [`FloatingTexts`], and [`DialogueBox`] with [`Typewriter`] text.
 
 use std::cell::Cell;
 use std::time::Duration;
@@ -40,6 +40,7 @@ pub const FILL_MOTION: Motion = Motion::Tween {
 };
 
 /// A HUD bar: health, energy, a boss's life, a charge.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bar {
     /// How full it is, 0 to `max`.
@@ -440,89 +441,153 @@ impl Typewriter {
     }
 }
 
-/// A dialogue box along the bottom of the screen: the `speaker`'s name on
-/// a tab, an optional `portrait` (an [`image`](crate::widgets::image),
-/// shown 72 × 72), and the [`Typewriter`]'s text as far as it has typed,
-/// with a ▼ when it is all there. It asks for frames while it types.
+/// What a [`DialogueBox`] runs when the player moves on.
+type OnActivate<S> = Box<dyn FnMut(&mut S)>;
+
+/// A dialogue box along the bottom of the screen: the speaker's name on a
+/// tab ([`speaker`](Self::speaker)), an optional
+/// [`portrait`](Self::portrait) (an [`image`](crate::widgets::image), shown
+/// 72 × 72), and the [`Typewriter`]'s text as far as it has typed, with a ▼
+/// when it is all there. It asks for frames while it types.
 ///
 /// The box is a button that takes focus when it shows (it is a
 /// [`spatial_nav`](Element::spatial_nav) group of one): a tap, Enter,
 /// Space or a gamepad's South button runs `on_activate`, which calls
 /// [`Typewriter::advance`] and shows the next line when that says so.
-pub fn dialogue_box<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    speaker: Option<&str>,
-    text: &Typewriter,
+///
+/// ```
+/// use stipple::game::ui::{DialogueBox, Typewriter};
+/// use stipple::prelude::*;
+///
+/// struct Game { line: Typewriter }
+///
+/// fn dialogue(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
+///     DialogueBox::new(&g.line, |g: &mut Game| {
+///         if g.line.advance() {
+///             g.line = Typewriter::new("Next line.");
+///         }
+///     })
+///     .speaker("Dispatch")
+///     .view(cx, theme)
+/// }
+/// # let _ = dialogue;
+/// ```
+pub struct DialogueBox<'a, S> {
+    text: &'a Typewriter,
+    speaker: Option<String>,
     portrait: Option<Element>,
-    on_activate: impl FnMut(&mut S) + 'static,
-) -> Element {
-    let p = &theme.palette;
-    let now = cx.frame_time();
-    let shown = text.visible_at(now);
-    let done = text.is_done();
-    if !done {
-        cx.request_frame();
+    on_activate: OnActivate<S>,
+}
+
+impl<S> std::fmt::Debug for DialogueBox<'_, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DialogueBox")
+            .field("text", &self.text)
+            .field("speaker", &self.speaker)
+            .field("portrait", &self.portrait)
+            .finish_non_exhaustive()
     }
-    let body = theme.typography.title;
-    // The whole text, unseen, holds the box's size while it types.
-    let words = Element::layers(vec![
-        Element::text(text.text(), body, Color::TRANSPARENT).wrap(),
-        Element::text(shown, body, p.text).wrap(),
-    ])
-    .grow(1.0)
-    .shrink(1.0);
-    let more = Element::text(
-        if done { "\u{25BC}" } else { " " },
-        theme.typography.caption,
-        p.primary,
-    );
-    let mut row = Vec::with_capacity(3);
-    if let Some(face) = portrait {
+}
+
+impl<'a, S: 'static> DialogueBox<'a, S> {
+    /// A box typing out `text`, running `on_activate` when the player
+    /// moves on.
+    pub fn new(text: &'a Typewriter, on_activate: impl FnMut(&mut S) + 'static) -> Self {
+        Self {
+            text,
+            speaker: None,
+            portrait: None,
+            on_activate: Box::new(on_activate),
+        }
+    }
+
+    /// With `name` on a tab above the box.
+    pub fn speaker(mut self, name: impl Into<String>) -> Self {
+        self.speaker = Some(name.into());
+        self
+    }
+
+    /// With `portrait` (an image, say) at the left, 72 × 72.
+    pub fn portrait(mut self, portrait: Element) -> Self {
+        self.portrait = Some(portrait);
+        self
+    }
+
+    /// The box's element.
+    pub fn view(self, cx: &mut Cx<S>, theme: &Theme) -> Element {
+        let Self {
+            text,
+            speaker,
+            portrait,
+            on_activate,
+        } = self;
+        let p = &theme.palette;
+        let now = cx.frame_time();
+        let shown = text.visible_at(now);
+        let done = text.is_done();
+        if !done {
+            cx.request_frame();
+        }
+        let body = theme.typography.title;
+        // The whole text, unseen, holds the box's size while it types.
+        let words = Element::layers(vec![
+            Element::text(text.text(), body, Color::TRANSPARENT).wrap(),
+            Element::text(shown, body, p.text).wrap(),
+        ])
+        .grow(1.0)
+        .shrink(1.0);
+        let more = Element::text(
+            if done { "\u{25BC}" } else { " " },
+            theme.typography.caption,
+            p.primary,
+        );
+        let mut row = Vec::with_capacity(3);
+        if let Some(face) = portrait {
+            row.push(
+                face.width(72.0)
+                    .height(72.0)
+                    .border(p.primary, 2.0)
+                    .radius(theme.radius),
+            );
+        }
+        row.push(words);
         row.push(
-            face.width(72.0)
-                .height(72.0)
-                .border(p.primary, 2.0)
-                .radius(theme.radius),
+            Element::stack(Axis::Vertical, vec![crate::widgets::spacer(), more])
+                .align(Align::Start, Align::End),
         );
+        let panel = Element::stack(Axis::Horizontal, row)
+            .gap(theme.spacing.md)
+            .padding(Insets::uniform(theme.spacing.lg))
+            .fill(Color {
+                a: 235,
+                ..p.surface
+            })
+            .border(p.primary, 2.0)
+            .radius(theme.radius)
+            .align(Align::Start, Align::Stretch)
+            .min_height(96.0)
+            .on_tap(cx, on_activate)
+            .role(Role::Button)
+            .a11y_label(text.text().to_string());
+        let mut parts = Vec::with_capacity(2);
+        if let Some(name) = speaker {
+            let tab = Element::stack(
+                Axis::Horizontal,
+                vec![Element::text(name, theme.typography.body, p.on_primary).bold()],
+            )
+            .fill(p.primary)
+            .radius(theme.radius)
+            .padding(Insets::symmetric(theme.spacing.md, theme.spacing.xs));
+            parts.push(
+                Element::stack(Axis::Horizontal, vec![tab])
+                    .padding(Insets::symmetric(theme.spacing.md, 0.0))
+                    .align(Align::Start, Align::Start),
+            );
+        }
+        parts.push(panel);
+        Element::stack(Axis::Vertical, parts)
+            .align(Align::Start, Align::Stretch)
+            .shrink(1.0)
+            .spatial_nav()
     }
-    row.push(words);
-    row.push(
-        Element::stack(Axis::Vertical, vec![crate::widgets::spacer(), more])
-            .align(Align::Start, Align::End),
-    );
-    let panel = Element::stack(Axis::Horizontal, row)
-        .gap(theme.spacing.md)
-        .padding(Insets::uniform(theme.spacing.lg))
-        .fill(Color {
-            a: 235,
-            ..p.surface
-        })
-        .border(p.primary, 2.0)
-        .radius(theme.radius)
-        .align(Align::Start, Align::Stretch)
-        .min_height(96.0)
-        .on_tap(cx, on_activate)
-        .role(Role::Button)
-        .a11y_label(text.text().to_string());
-    let mut parts = Vec::with_capacity(2);
-    if let Some(name) = speaker {
-        let tab = Element::stack(
-            Axis::Horizontal,
-            vec![Element::text(name, theme.typography.body, p.on_primary).bold()],
-        )
-        .fill(p.primary)
-        .radius(theme.radius)
-        .padding(Insets::symmetric(theme.spacing.md, theme.spacing.xs));
-        parts.push(
-            Element::stack(Axis::Horizontal, vec![tab])
-                .padding(Insets::symmetric(theme.spacing.md, 0.0))
-                .align(Align::Start, Align::Start),
-        );
-    }
-    parts.push(panel);
-    Element::stack(Axis::Vertical, parts)
-        .align(Align::Start, Align::Stretch)
-        .shrink(1.0)
-        .spatial_nav()
 }

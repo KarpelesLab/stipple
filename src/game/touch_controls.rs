@@ -62,6 +62,7 @@ impl Stick {
 }
 
 /// When the touch controls show.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum ShowTouch {
     /// While touch is the [last device used](super::InputState::last_device):
@@ -77,6 +78,7 @@ pub enum ShowTouch {
 
 /// An on-screen stick: a finger dragged from its center moves a gamepad
 /// stick.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct TouchStick {
     /// The pad stick it moves.
@@ -160,6 +162,7 @@ impl TouchStick {
 
 /// An on-screen button: held while a finger that landed on it is down, as a
 /// gamepad button.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct TouchButton {
     /// The pad button it holds. A trigger also pulls its axis all the way.

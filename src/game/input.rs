@@ -29,6 +29,7 @@ pub enum InputDevice {
 }
 
 /// A finger on the screen, as [`InputState::touches`] reports it.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TouchPoint {
     /// Identifies the finger while it's down (ids may be reused after).

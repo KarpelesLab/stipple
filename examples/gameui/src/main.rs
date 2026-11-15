@@ -23,7 +23,8 @@ use std::time::Duration;
 
 use stipple::core::CanvasId;
 use stipple::game::ui::{
-    self as gui, Bar, BindingRowState, Capture, FloatingTexts, GameStyle, RebindCapture, Typewriter,
+    self as gui, Bar, BindingRowState, Capture, DialogueBox, FloatingTexts, GameOverScreen,
+    GameStyle, RebindCapture, TitleScreen, Typewriter,
 };
 use stipple::game::{Actions, Binding, Frame, GameLoop};
 use stipple::gamepad::{self, GamepadButton, GamepadEvent};
@@ -170,7 +171,6 @@ fn update(g: &mut Game, frame: &mut Frame) {
     // A controls row waiting for an input takes the next one.
     if let Some(capture) = g.capture.as_mut() {
         match capture.poll(frame.input(), frame.time()) {
-            Capture::Waiting => {}
             Capture::Cancelled => {
                 g.capture = None;
                 frame.rebuild();
@@ -180,6 +180,8 @@ fn update(g: &mut Game, frame: &mut Frame) {
                 g.capture = None;
                 frame.rebuild();
             }
+            // Still waiting.
+            _ => {}
         }
         return;
     }
@@ -283,13 +285,10 @@ fn title(cx: &mut Cx<Game>, theme: &Theme) -> Element {
         ],
     )
     .width(320.0);
-    gui::title_screen(
-        theme,
-        "STARLIT COURIER",
-        "deliveries across the comet belt",
-        menu,
-        hints(theme),
-    )
+    TitleScreen::new("STARLIT COURIER", menu)
+        .subtitle("deliveries across the comet belt")
+        .footer(hints(theme))
+        .view(theme)
 }
 
 fn section(theme: &Theme, title: &str, rows: Vec<Element>) -> Element {
@@ -326,7 +325,7 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
         theme,
         "Display",
         vec![
-            gui::fullscreen_row(cx, theme, "Fullscreen"),
+            gui::fullscreen_row(cx, theme, "Fullscreen", |_: &mut Game, _| {}),
             gui::choice_row(
                 cx,
                 theme,
@@ -347,13 +346,9 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     );
     let mut controls = Vec::new();
     for (act, label) in ACTIONS {
-        let state = BindingRowState {
-            capturing: g.capture.is_some_and(|c| c.action == act),
-            conflicts: gui::conflicts(&g.actions, act)
-                .into_iter()
-                .map(|a| name_of(a).to_string())
-                .collect(),
-        };
+        let state = BindingRowState::default()
+            .capturing(g.capture.is_some_and(|c| c.action == act))
+            .conflicts(gui::conflicts(&g.actions, act).into_iter().map(name_of));
         controls.push(gui::binding_row(
             cx,
             theme,
@@ -505,23 +500,19 @@ fn play(g: &Game, cx: &mut Cx<Game>, theme: &Theme, visible: bool) -> Element {
         (Some((line, text)), true) => {
             let line = *line;
             bottom.push(
-                gui::dialogue_box(
-                    cx,
-                    theme,
-                    Some("Dispatch"),
-                    text,
-                    Some(portrait(theme)),
-                    move |g: &mut Game| {
-                        let Some((_, text)) = g.dialogue.as_mut() else {
-                            return;
-                        };
-                        if text.advance() {
-                            g.dialogue = LINES
-                                .get(line + 1)
-                                .map(|next| (line + 1, Typewriter::new(*next)));
-                        }
-                    },
-                )
+                DialogueBox::new(text, move |g: &mut Game| {
+                    let Some((_, text)) = g.dialogue.as_mut() else {
+                        return;
+                    };
+                    if text.advance() {
+                        g.dialogue = LINES
+                            .get(line + 1)
+                            .map(|next| (line + 1, Typewriter::new(*next)));
+                    }
+                })
+                .speaker("Dispatch")
+                .portrait(portrait(theme))
+                .view(cx, theme)
                 .grow(1.0),
             );
         }
@@ -584,16 +575,11 @@ fn game_over(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     .width(320.0);
     let minutes = (g.played / 60.0) as u32;
     let seconds = (g.played % 60.0) as u32;
-    gui::game_over_screen(
-        theme,
-        "HULL BREACHED",
-        &[
-            ("Score", g.score.to_string()),
-            ("Best", g.best.to_string()),
-            ("Time", format!("{minutes}:{seconds:02}")),
-        ],
-        menu,
-    )
+    GameOverScreen::new("HULL BREACHED", menu)
+        .line("Score", g.score)
+        .line("Best", g.best)
+        .line("Time", format!("{minutes}:{seconds:02}"))
+        .view(theme)
 }
 
 fn back(g: &mut Game) -> Handled {

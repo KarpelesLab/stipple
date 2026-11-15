@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- *(game, audio)* the public API follows `docs/api-guidelines.md`:
+  - `#[non_exhaustive]` on `audio::{PlayParams, MusicParams, Tone, AudioStats, AudioError, Waveform}`, `game::{Camera2D, PixelViewport, PixelLayout, Tilemap, TouchButton, TouchStick, TouchPoint, ParseBindingError, Playback, ShowTouch}`, `game::save::{Loaded, SaveInfo, SlotInfo, SlotState, ParseKeyValuesError}` and `game::ui::{GameStyle, Bar, RebindCapture, BindingRowState, Capture}`: build them with their constructors and setters (fields stay public to read and assign), and match the enums with a `_` arm.
+  - New setters: `Camera2D::{at, with_zoom, with_rotation, with_snap, with_shake}`, `Tilemap::at`, `GameStyle::{with_background, with_surface, with_text, with_text_muted, with_danger, with_success, with_warning}`, `BindingRowState::{capturing, conflicts}`.
+  - `SpriteSheet::grid_spaced(image, w, h, margin, spacing)` is `SpriteSheet::from_grid(image, SpriteGrid::new(w, h).margin(m).spacing(s))`.
+  - `Actions::axis2(left, right, up, down)` is `axis2((left, right), (up, down))`.
+  - `game::ui::title_screen(theme, title, subtitle, menu, footer)` is `TitleScreen::new(title, menu).subtitle(..).footer(..).view(theme)`, and `game_over_screen(theme, title, lines, menu)` is `GameOverScreen::new(title, menu).line(label, value).view(theme)`; both take `.backdrop(None)` to show the game behind them instead of the theme's opaque background.
+  - `game::ui::dialogue_box(cx, theme, speaker, &text, portrait, on_activate)` is `DialogueBox::new(&text, on_activate).speaker(..).portrait(..).view(cx, theme)`.
+  - `game::ui::fullscreen_row` takes an `on_change(&mut S, bool)`, so the game can save the setting.
+
 ## [0.0.5](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.4...stipple-v0.0.5) - 2026-11-15
 
 ### Added

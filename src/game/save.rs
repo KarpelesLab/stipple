@@ -72,6 +72,7 @@ pub struct SaveStore {
 }
 
 /// What [`SaveStore::load`] read.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Loaded {
     /// The contents, as saved.
@@ -565,6 +566,7 @@ pub struct KeyValues {
 }
 
 /// A line of [`KeyValues`] text that isn't `key = value`.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParseKeyValuesError {
     /// The line, from 1.
@@ -716,6 +718,7 @@ fn unescape(value: &str) -> String {
 ///         SlotState::Empty => println!("{}: empty", slot.index),
 ///         SlotState::Saved(info) => println!("{}: saved {:?}", slot.index, info.modified),
 ///         SlotState::Damaged => println!("{}: damaged", slot.index),
+///         _ => println!("{}: ?", slot.index),
 ///     }
 /// }
 /// let bytes = slots.load(1)?; // Option<Vec<u8>>
@@ -729,6 +732,7 @@ pub struct SaveSlots {
 }
 
 /// A slot, as [`SaveSlots::list`] sees it.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotInfo {
     pub index: usize,
@@ -736,6 +740,7 @@ pub struct SlotInfo {
 }
 
 /// What is in a slot.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SlotState {
     Empty,
@@ -745,6 +750,7 @@ pub enum SlotState {
 }
 
 /// A saved slot's details.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SaveInfo {
     /// When it was saved.

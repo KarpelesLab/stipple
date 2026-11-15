@@ -290,6 +290,7 @@ impl fmt::Display for Binding {
 }
 
 /// A binding or a bindings file that couldn't be read.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParseBindingError {
     /// The line it was on (1-based; 0 for a single binding).
@@ -574,9 +575,15 @@ impl<A: Copy + Eq + Hash> Actions<A> {
         self.get(action).value
     }
 
-    /// A direction from four actions, `(x, y)` with `y` down as on screen,
-    /// no longer than 1 (a diagonal isn't faster).
-    pub fn axis2(&self, left: A, right: A, up: A, down: A) -> (f32, f32) {
+    /// A direction from four actions, given as two `(negative, positive)`
+    /// pairs, `x` (left, right) and `y` (up, down): `(x, y)` with `y` down as
+    /// on screen, no longer than 1 (a diagonal isn't faster).
+    ///
+    /// ```ignore
+    /// let (dx, dy) = actions.axis2((Act::Left, Act::Right), (Act::Up, Act::Down));
+    /// ```
+    pub fn axis2(&self, x: (A, A), y: (A, A)) -> (f32, f32) {
+        let ((left, right), (up, down)) = (x, y);
         let x = self.value(right) - self.value(left);
         let y = self.value(down) - self.value(up);
         let len = (x * x + y * y).sqrt();
@@ -756,7 +763,7 @@ mod tests {
         key(&mut i, PhysicalKey::ARROW_UP, true);
         a.update(&i);
         assert_eq!(a.value(Act::Steer), -1.0);
-        let (x, y) = a.axis2(Act::Left, Act::Right, Act::Up, Act::Down);
+        let (x, y) = a.axis2((Act::Left, Act::Right), (Act::Up, Act::Down));
         assert!((x - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
         assert!((y + std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-6);
         key(&mut i, PhysicalKey::KEY_E, true);

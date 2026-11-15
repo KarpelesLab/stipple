@@ -18,4 +18,5 @@ stipple::platform::ButtonState  # pressed or released
 stipple::widgets::SortOrder     # ascending or descending
 stipple::game::Corner           # four corners
 stipple::game::Stick            # left or right stick
+stipple::game::AxisDirection    # a whole axis or one of its two halves
 stipple::core::LayoutDirection  # left to right or right to left

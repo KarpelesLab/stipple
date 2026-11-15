@@ -23,7 +23,8 @@ use stipple::audio::Audio;
 use stipple::core::CanvasId;
 use stipple::game::save::{KeyValues, SaveStore};
 use stipple::game::ui::{
-    self as gui, Bar, BindingRowState, Capture, FloatingTexts, GameStyle, RebindCapture,
+    self as gui, Bar, BindingRowState, Capture, FloatingTexts, GameOverScreen, GameStyle,
+    RebindCapture, TitleScreen,
 };
 use stipple::game::{
     Actions, AxisDirection, Binding, Corner, FixedStep, Frame, GameLoop, InputDevice, TouchButton,
@@ -326,7 +327,6 @@ pub fn update(g: &mut Game, frame: &mut Frame) {
     // A controls row waiting for an input takes the next one.
     if let Some(capture) = g.capture.as_mut() {
         match capture.poll(frame.input(), frame.time()) {
-            Capture::Waiting => {}
             Capture::Cancelled => {
                 g.capture = None;
                 frame.rebuild();
@@ -337,6 +337,8 @@ pub fn update(g: &mut Game, frame: &mut Frame) {
                 g.save_controls();
                 frame.rebuild();
             }
+            // Still waiting.
+            _ => {}
         }
         return;
     }
@@ -354,7 +356,9 @@ pub fn update(g: &mut Game, frame: &mut Frame) {
     if g.actions.pressed(Act::Flare) {
         g.flare_queued = true;
     }
-    let (dx, dy) = g.actions.axis2(Act::Left, Act::Right, Act::Up, Act::Down);
+    let (dx, dy) = g
+        .actions
+        .axis2((Act::Left, Act::Right), (Act::Up, Act::Down));
     let control = |flare| Control {
         dir: V2::new(dx, dy),
         flare,

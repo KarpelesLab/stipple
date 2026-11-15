@@ -32,6 +32,7 @@ use std::sync::Arc;
 /// let l = PixelViewport::new(320, 180).max_factor(2).layout(Size::new(1000.0, 600.0), 1.0);
 /// assert_eq!((l.factor, l.rect), (2, Rect::from_xywh(180.0, 120.0, 640.0, 360.0)));
 /// ```
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct PixelViewport {
     width: u32,
@@ -47,6 +48,7 @@ pub struct PixelViewport {
 }
 
 /// Where a [`PixelViewport`]'s picture lands on a canvas.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PixelLayout {
     /// The picture, in the canvas's (logical) coordinates.

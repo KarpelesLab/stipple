@@ -50,6 +50,7 @@ impl Group {
 /// let p = PlayParams::default().volume(0.5).pan(-1.0).speed(1.5);
 /// assert_eq!(p.group, Group::EFFECTS);
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayParams {
     /// Linear gain: 1 plays the sound as recorded, 0 is silent. Above 1
@@ -260,6 +261,7 @@ enum Cmd {
 
 /// Mixer counters, for diagnostics and tests (see
 /// [`Audio::stats`](super::Audio::stats)).
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AudioStats {
     /// Frames (one sample per channel) the output pulled from the mixer.

@@ -27,6 +27,7 @@ use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Theme, Typography}
 /// The font comes from the game's own files (`include_bytes!`, or read at
 /// run time), with [`with_font_bytes`](Self::with_font_bytes) or
 /// [`with_font`](Self::with_font) for a [`Font`] built with its other faces.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameStyle {
     /// The game's font, drawn by every widget (through
@@ -115,6 +116,49 @@ impl GameStyle {
     /// Set the accent (the highlight and the focus ring).
     pub fn with_accent(mut self, accent: Color) -> Self {
         self.accent = accent;
+        self
+    }
+
+    /// Set the background (behind everything; a translucent one lets the
+    /// game show through the menus).
+    pub fn with_background(mut self, background: Color) -> Self {
+        self.background = background;
+        self
+    }
+
+    /// Set the surface (panels, buttons at rest, a bar's track).
+    pub fn with_surface(mut self, surface: Color) -> Self {
+        self.surface = surface;
+        self
+    }
+
+    /// Set the text color.
+    pub fn with_text(mut self, text: Color) -> Self {
+        self.text = text;
+        self
+    }
+
+    /// Set the color of labels and hints that step back.
+    pub fn with_text_muted(mut self, text_muted: Color) -> Self {
+        self.text_muted = text_muted;
+        self
+    }
+
+    /// Set the color of health, warnings and failures.
+    pub fn with_danger(mut self, danger: Color) -> Self {
+        self.danger = danger;
+        self
+    }
+
+    /// Set the color of healing, success, a full bar.
+    pub fn with_success(mut self, success: Color) -> Self {
+        self.success = success;
+        self
+    }
+
+    /// Set the color of gold, coins, a caution.
+    pub fn with_warning(mut self, warning: Color) -> Self {
+        self.warning = warning;
         self
     }
 

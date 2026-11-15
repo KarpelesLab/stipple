@@ -56,6 +56,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// Why a sound couldn't be decoded.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AudioError {
     /// A format (or a WAV encoding) this build can't decode; most need the
@@ -77,6 +78,7 @@ impl fmt::Display for AudioError {
 impl std::error::Error for AudioError {}
 
 /// How to play streamed music (see [`Audio::play_music`]).
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MusicParams {
     /// Linear gain (see [`PlayParams::volume`]).

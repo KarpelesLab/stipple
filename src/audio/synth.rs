@@ -4,6 +4,7 @@ use super::Sound;
 use std::time::Duration;
 
 /// The shape of a [`Tone`]'s wave.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Waveform {
     /// A pure tone.
@@ -34,6 +35,7 @@ pub enum Waveform {
 ///     .render(48_000);
 /// assert_eq!(zap.frames(), 7_200);
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tone {
     pub waveform: Waveform,
