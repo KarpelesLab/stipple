@@ -203,6 +203,52 @@ impl<S> AppHandle<S> {
         wake::wake();
     }
 
+    /// Read the packaged file at `path` ([`platform::assets`](crate::platform::assets))
+    /// and `decode` it off the UI thread, then `apply` the result to the
+    /// state on the UI thread: a scene's art loads behind a loading screen,
+    /// and goes when the state drops it. On the web the file is fetched, and
+    /// decoded on the page's thread once it arrives.
+    ///
+    /// `decode` takes the bytes: `Pixmap::decode`, `Svg::parse`,
+    /// `Sound::decode`, or the app's own; its error becomes
+    /// [`AssetError::Decode`](crate::platform::AssetError::Decode).
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// # use std::sync::Arc;
+    /// # struct State { background: Option<Arc<Pixmap>> }
+    /// # fn enter(cx: &mut Cx<State>) {
+    /// cx.handle().load_asset("scenes/forest.png", Pixmap::decode, |s: &mut State, r| {
+    ///     match r {
+    ///         Ok(pixmap) => s.background = Some(Arc::new(pixmap)),
+    ///         Err(e) => eprintln!("{e}"),
+    ///     }
+    /// });
+    /// # }
+    /// ```
+    pub fn load_asset<T, E>(
+        &self,
+        path: &str,
+        decode: impl FnOnce(&[u8]) -> Result<T, E> + Send + 'static,
+        apply: impl FnOnce(&mut S, Result<T, crate::platform::AssetError>) + Send + 'static,
+    ) where
+        T: Send + 'static,
+        E: std::fmt::Display,
+        S: 'static,
+    {
+        let handle = self.clone();
+        let owned = path.to_owned();
+        crate::platform::assets().load(path, move |bytes| {
+            let result = bytes.and_then(|b| {
+                decode(&b).map_err(|e| crate::platform::AssetError::Decode {
+                    path: owned,
+                    message: e.to_string(),
+                })
+            });
+            handle.update(move |s| apply(s, result));
+        });
+    }
+
     /// Run `f` on the state once, after `delay`.
     pub fn after(&self, delay: Duration, f: impl FnOnce(&mut S) + Send + 'static) -> TimerId {
         let mut f = Some(f);

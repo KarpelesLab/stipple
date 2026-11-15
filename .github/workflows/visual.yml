@@ -347,8 +347,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb imagemagick fonts-dejavu-core
 
-      - name: Build the image demo
-        run: cargo build --release --example imagedemo
+      # Its PNG and SVG are packaged assets: `assets/` next to the
+      # executable, as an installed app has them (from a checkout it would
+      # read examples/imagedemo/assets instead).
+      - name: Build the image demo, its assets next to it
+        run: |
+          cargo build --release --example imagedemo
+          cp -R examples/imagedemo/assets target/release/examples/assets
 
       - name: Start Xvfb
         run: |
@@ -366,6 +371,8 @@ jobs:
           sleep 4
           import -window root visual_output/stipple-image-root.png
           echo "=== image.log ==="; cat visual_output/image.log || true
+          # platform::assets found the directory next to the executable.
+          grep -qE "imagedemo: assets from .*/target/release/examples/assets$" visual_output/image.log
           # The window (580x340) sits at the root top-left; crop it for the artifact.
           convert visual_output/stipple-image-root.png -crop 580x340+0+0 +repage \
             visual_output/stipple-image.png
@@ -3904,6 +3911,9 @@ jobs:
         run: |
           cargo build --release --example touchdemo --target aarch64-apple-ios-sim
           cp target/aarch64-apple-ios-sim/release/examples/touchdemo Stipple.app/window
+          # Its packaged files, in the bundle's assets/ (platform::assets).
+          rm -rf Stipple.app/assets
+          cp -R examples/touchdemo/assets Stipple.app/assets
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
           xcrun simctl install "$DEV" Stipple.app
           # Start in light mode: the next step switches to dark.
@@ -3926,6 +3936,20 @@ jobs:
           grep -E "touchdemo: (app|dirs) " "$LOG" || true
           grep -qF 'touchdemo: app id=com.karpeleslab.stipple name="Stipple" version=1.0 build=1' "$LOG"
           grep -qE "touchdemo: dirs data=/.+/Library/Application Support cache=/.+/Library/Caches temp=/.+/tmp exist=true" "$LOG"
+          # platform::assets reads the bundle's assets/ (resourcePath): the
+          # file's size and FNV-1a hash as on disk, the listings, a missing
+          # file, and an SVG loaded off the UI thread (AppHandle::load_asset).
+          grep -E "touchdemo: (assets|asset|loaded) " "$LOG" || true
+          grep -qE "touchdemo: assets dir=/.+/Stipple\.app/assets$" "$LOG"
+          size=$(wc -c < examples/touchdemo/assets/hello.txt | tr -d ' ')
+          fnv=$(python3 -c 'import sys
+          h = 0x811C9DC5
+          for b in open(sys.argv[1], "rb").read():
+              h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+          print(f"{h:08x}")' examples/touchdemo/assets/hello.txt)
+          grep -qF "touchdemo: asset hello.txt bytes=$size fnv1a=$fnv text=\"Hello from a packaged asset.\"" "$LOG"
+          grep -qF 'touchdemo: assets list=["hello.txt"] img=["dot.svg"] exists=true missing=Some("no asset \"nope.txt\"")' "$LOG"
+          grep -qF 'touchdemo: loaded img/dot.svg Ok("16x16")' "$LOG"
           # The view adopts UIKeyInput and takes the keyboard while the field
           # has focus...
           grep -q "touchdemo: keyboard focused key_input=true can_become=true first_responder=true" "$LOG"

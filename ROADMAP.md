@@ -1422,6 +1422,18 @@ Most input only works on X11 today.
   (XDG); macOS was run by hand bundled and unbundled; Windows is build-checked
   only. No web storage (OPFS) and no key-value settings store yet. See
   [docs/os-integration.md](docs/os-integration.md#app-directories-and-bundle-information).
+- ✅ Packaged assets (`platform::assets()`, `AppHandle::load_asset`, #59):
+  _files read by relative path from the APK's `assets/` (`AAssetManager`, no
+  JNI), the bundle's `resourcePath/assets`, `assets/` next to the
+  executable, or the web server (`fetch`; blocking reads only for what the
+  page preloaded), with `set_assets_dir` for `cargo run`; image, SVG, font,
+  sound and text loaders, a streaming reader, and loading/decoding on worker
+  threads. `build-apk.sh` packs `assets/`, CI's iOS bundle carries one, the
+  site serves and preloads each example's. CI reads them on the Android
+  emulator, the iOS simulator, Linux and headless Chrome; Windows is
+  build-checked. Not yet: Play Asset Delivery, iOS on-demand resources,
+  `AAsset_openFileDescriptor`._ See
+  [docs/os-integration.md](docs/os-integration.md#packaged-assets).
 
 #### 7e — Widgets and layout
 - ✅ Image and SVG widgets: `image(...)` / `svg(...)` with fill / contain /

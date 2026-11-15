@@ -32,6 +32,7 @@
 //! | `notify(title, title_len, body, body_len)` | a `Notification`, asking for permission first if needed |
 //! | `save_state(ptr, len)` | keeps the app's saved state in the tab's `sessionStorage` (`len` 0 removes it) |
 //! | `gamepad_rumble(index, low, high, ms) -> u32` | `vibrationActuator.playEffect("dual-rumble")` on pad `index`; 0 if it has none |
+//! | `fetch_asset(id, ptr, len)` | `fetch` of the packaged file at that path under the page's assets URL; the bytes (or the failure) come back through `stipple_asset` |
 //!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
@@ -78,6 +79,7 @@ mod js {
         pub fn message_box(confirm: u32, ptr: *const u8, len: usize) -> u32;
         pub fn save_state(ptr: *const u8, len: usize);
         pub fn gamepad_rumble(index: u32, low: f64, high: f64, ms: f64) -> u32;
+        pub fn fetch_asset(id: u32, ptr: *const u8, len: usize);
     }
 }
 
@@ -829,6 +831,21 @@ pub fn save_state() {
 #[doc(hidden)]
 pub fn file_picked(id: u32, file: Option<(String, Vec<u8>)>) {
     crate::platform::dialog::web_picked(id, file);
+    drain();
+}
+
+/// Ask the page to fetch the packaged file at `path`, for request `id`; it
+/// answers through [`asset`].
+pub(crate) fn fetch_asset(id: u32, path: &str) {
+    unsafe { js::fetch_asset(id, path.as_ptr(), path.len()) }
+}
+
+/// The page fetched the packaged file at `path` for request `id` (0: one it
+/// preloaded before starting the app): its bytes, or `status`, the HTTP
+/// status (0 for a network error), when it isn't 200.
+#[doc(hidden)]
+pub fn asset(id: u32, path: String, data: Vec<u8>, status: u32) {
+    crate::platform::assets::web::fetched(id, path, data, status);
     drain();
 }
 

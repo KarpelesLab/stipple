@@ -64,6 +64,16 @@ class Example:
         self.source = spec.get("source", "main.rs" if (ROOT / "examples" / name / "main.rs").exists() else "lib.rs")
         self.artifact = spec.get("artifact", f"{name}_web")
         self.needs = spec.get("needs", "")
+        # Its packaged files (stipple::platform::assets): examples/NAME/assets/,
+        # served next to its page and preloaded before it starts.
+        self.assets_dir = ROOT / "examples" / name / "assets"
+
+    def asset_files(self):
+        """The example's packaged files, as /-separated paths under its
+        assets directory."""
+        if not self.assets_dir.is_dir():
+            return []
+        return sorted(p.relative_to(self.assets_dir).as_posix() for p in self.assets_dir.rglob("*") if p.is_file())
 
     @property
     def source_url(self):
@@ -372,6 +382,9 @@ class Site:
     def runner(self, ex):
         page = f"examples/{ex.name}.html"
         r = lambda to: self.rel(page, to)  # noqa: E731
+        assets = ""
+        if ex.asset_files():
+            assets = f' data-assets="{r(f"examples/{ex.name}/assets")}/" data-preload="{r(f"examples/{ex.name}/assets.json")}"'
         text = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -395,7 +408,7 @@ class Site:
 <canvas id="app" aria-label="{esc(ex.title)}"></canvas>
 <p class="status" role="status">Loading…</p>
 </main>
-<script type="module" src="{r('assets/run.js')}" data-name="{esc(ex.name)}" data-wasm="{r(f'wasm/{ex.name}.wasm')}" data-font="{r('font.ttf')}"></script>
+<script type="module" src="{r('assets/run.js')}" data-name="{esc(ex.name)}" data-wasm="{r(f'wasm/{ex.name}.wasm')}" data-font="{r('font.ttf')}"{assets}></script>
 </body>
 </html>
 """
@@ -420,6 +433,12 @@ class Site:
         self.gallery()
         for ex in self.web:
             self.runner(ex)
+            # Its packaged files, and the list the page preloads.
+            files = ex.asset_files()
+            for f in files:
+                self.copy(ex.assets_dir / f, f"examples/{ex.name}/assets/{f}")
+            if files:
+                self.write(f"examples/{ex.name}/assets.json", json.dumps(files))
         # Assets: the site's own, images the guides show, the page side of
         # Stipple and the font.
         for f in (HERE / "assets").iterdir():

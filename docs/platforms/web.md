@@ -212,6 +212,18 @@ dialog::save_file_contents(&FileDialog::new().file_name("notes.txt"), bytes);
 - `FileDialog::accept` filters the web's picker; the desktop dialogs ignore it,
   and don't pre-fill `file_name` yet.
 
+### Packaged assets
+
+[`platform::assets`](../os-integration.md#packaged-assets) fetches files from
+`start`'s `assets` URL (default `assets/`, next to the page). A fetch can't
+block, so `AppHandle::load_asset` and `assets().load` work for any file and
+answer once it arrives, while the blocking calls (`read`, `image`, `text`…)
+see only the files listed in `start`'s `preload` (an array, or the URL of a
+JSON array), which `stipple.js` fetches before it starts the app. The site
+does this for each example with an `assets/` directory: it serves it next to
+the example's page with an `assets.json` listing every file, which the page
+preloads (`imagedemo` reads its PNG and SVG that way).
+
 ### Input methods and dead keys
 
 Keyboard focus, while the app has it, is on a hidden `<textarea>` in the
@@ -346,6 +358,7 @@ The module exports:
 | `stipple_wake()` | the timer |
 | `stipple_frame()` | `requestAnimationFrame` |
 | `stipple_file(id, …)`, `stipple_file_cancel(id)` | a picked file, or a cancelled picker |
+| `stipple_asset(id, path…, data…, status)` | a packaged file fetched for `fetch_asset` request `id` (0: a preload, before `stipple_start`), with its HTTP status (0: the fetch failed) |
 | `stipple_restore_state(ptr, len)` | the state saved in `sessionStorage`, before `stipple_start` |
 | `stipple_save_state()` | `pagehide` and `visibilitychange` to hidden: the app saves its state, through the `save_state` import |
 
@@ -356,8 +369,9 @@ browsers only grant during a user gesture), `set_title`, `clipboard_write`,
 `save_file`, `open_url` (`window.open`, for `platform::open_url`), `notify`
 (the `Notification` API, for `platform::notify`), `log` (panics are printed to
 the console), `set_a11y` (the accessibility tree as JSON), `set_ime` (the caret
-rect, or none), `set_text_input` and `save_state` (the bytes to keep in
-`sessionStorage`; none removes them), and for `stipple::game::save`'s
+rect, or none), `set_text_input`, `save_state` (the bytes to keep in
+`sessionStorage`; none removes them) and `fetch_asset` (a packaged file
+under the `assets` URL, answered through `stipple_asset`), and for `stipple::game::save`'s
 `SaveStore::local_storage`: `date_now`, `storage_set`, `storage_get`,
 `storage_keys`, `storage_read` and `storage_remove` (`localStorage`, values
 kept base64). See `src/platform/backend/web.rs`.

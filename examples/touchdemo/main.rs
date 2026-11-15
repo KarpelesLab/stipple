@@ -45,6 +45,9 @@
 //! launch` passes it on as `SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1`), the app drives
 //! itself, since a simulator can't script touches or typing:
 //!
+//! 0. it reads the bundle's packaged files (`Stipple.app/assets/`, copied
+//!    from `examples/touchdemo/assets` by CI) through `platform::assets`,
+//!    and loads one through `AppHandle::load_asset`;
 //! 1. it taps the text field, types through the view's `UIKeyInput` methods
 //!    (`insertText:` and `deleteBackward`, sent through objc dispatch),
 //!    composes through its `UITextInput` methods (`setMarkedText:selectedRange:`,
@@ -543,6 +546,43 @@ mod selftest {
         move |_| simulate::text_input_status().contains(&format!("doc={text:?} "))
     }
 
+    /// The bundle's packaged files (`Stipple.app/assets/`, which CI copies
+    /// from `examples/touchdemo/assets`) through `platform::assets`: where
+    /// they are, a whole file with its size and FNV-1a hash, the listings,
+    /// an SVG decoded, a missing file, and one loaded off the UI thread
+    /// into the state (`AppHandle::load_asset`).
+    fn log_assets(handle: &AppHandle<State>) {
+        let files = stipple::platform::assets();
+        let dir = files.dir();
+        log(&format!(
+            "touchdemo: assets dir={}",
+            dir.map_or("-".into(), |d| d.display().to_string())
+        ));
+        match files.read("hello.txt") {
+            Ok(bytes) => log(&format!(
+                "touchdemo: asset hello.txt bytes={} fnv1a={:08x} text={:?}",
+                bytes.len(),
+                bytes
+                    .iter()
+                    .fold(0x811c_9dc5_u32, |h, &b| (h ^ u32::from(b))
+                        .wrapping_mul(0x0100_0193)),
+                String::from_utf8_lossy(&bytes).trim_end()
+            )),
+            Err(e) => log(&format!("touchdemo: asset hello.txt failed: {e}")),
+        }
+        log(&format!(
+            "touchdemo: assets list={:?} img={:?} exists={} missing={:?}",
+            files.list("").unwrap_or_default(),
+            files.list("img").unwrap_or_default(),
+            files.exists("img/dot.svg"),
+            files.read("nope.txt").err().map(|e| e.to_string()),
+        ));
+        handle.load_asset("img/dot.svg", Svg::parse, |_, r| {
+            let size = r.map(|s| format!("{}x{}", s.size().width, s.size().height));
+            log(&format!("touchdemo: loaded img/dot.svg {size:?}"));
+        });
+    }
+
     pub fn schedule(handle: &AppHandle<State>) {
         let _ = std::fs::remove_file(std::env::temp_dir().join("touchdemo.log"));
         log("touchdemo: selftest starting");
@@ -565,6 +605,7 @@ mod selftest {
             )),
             Err(e) => log(&format!("touchdemo: dirs unavailable: {e}")),
         }
+        log_assets(handle);
         let mut steps = Steps(VecDeque::new());
 
         // Tap the text field: it takes focus, and the view the keyboard.

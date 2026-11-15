@@ -27,6 +27,9 @@
 pub mod a11y;
 /// Platform-neutral accessibility tree handed to each backend's OS bridge.
 pub(crate) mod access;
+/// Files the app was packaged with: the APK's assets, the bundle's
+/// resources, a directory next to the executable, the web server's.
+mod assets;
 /// The AT-SPI bridge X11 and Wayland windows serve their trees through.
 #[cfg(target_os = "linux")]
 pub(crate) mod atspi;
@@ -110,6 +113,7 @@ pub(crate) mod wake;
 mod window;
 
 pub(crate) use access::{A11yNode, A11yRole};
+pub use assets::{AssetError, AssetReader, Assets, assets, set_assets_dir};
 pub use back::{BackEdge, BackGesture, back_enabled, set_back_enabled};
 pub use bundle::{AppDirs, AppInfo, app_info, dirs, set_app_info};
 pub use error::PlatformError;

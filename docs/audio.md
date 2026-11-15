@@ -37,6 +37,13 @@ theme.fade_out(Duration::from_secs(2));
 audio.pause_all();
 ```
 
+The bytes can come from files the app was packaged with rather than the
+executable: `audio.load(&assets().read("sfx/jump.wav")?)` or
+`assets().sound("sfx/jump.wav")`, and
+`audio.play_music(assets().read("music/theme.ogg")?, params)`, which keeps
+only the encoded file in memory (see
+[Packaged assets](os-integration.md#packaged-assets)).
+
 ## The pieces
 
 - **`Audio`** is the mixer and the output device it plays through. Clones

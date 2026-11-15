@@ -5,6 +5,12 @@
 #
 #   examples/androiddemo/build-apk.sh [x86_64|arm64-v8a] [out.apk]
 #
+# The app's packaged files, examples/androiddemo/assets/ (or the directory
+# STIPPLE_APK_ASSETS names), go into the APK's assets/, where
+# stipple::platform::assets reads them through the AAssetManager. Music and
+# other already-compressed formats are stored uncompressed (aapt's -0), so
+# reading them doesn't inflate them first.
+#
 # Needs ANDROID_HOME (the SDK, with build-tools and a platform) and an NDK in
 # ANDROID_NDK_HOME (or the newest one under $ANDROID_HOME/ndk), plus the Rust
 # target (`rustup target add x86_64-linux-android aarch64-linux-android`).
@@ -20,6 +26,7 @@ esac
 
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
+asset_dir="$(cd "${STIPPLE_APK_ASSETS:-$here/assets}" 2>/dev/null && pwd || true)"
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
 ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}"
 if [ -z "$ndk" ]; then
@@ -48,7 +55,12 @@ cp "$lib" "$work/lib/$abi/libstipple_android.so"
 cp "$here/AndroidManifest.xml" "$work/"
 (
   cd "$work"
-  "$build_tools/aapt" package -f -M AndroidManifest.xml -I "$platform_jar" -F base.apk
+  assets=()
+  if [ -d "$asset_dir" ]; then
+    assets=(-A "$asset_dir")
+    for ext in png jpg jpeg webp ogg mp3 opus flac; do assets+=(-0 "$ext"); done
+  fi
+  "$build_tools/aapt" package -f -M AndroidManifest.xml -I "$platform_jar" "${assets[@]}" -F base.apk
   "$build_tools/aapt" add base.apk "lib/$abi/libstipple_android.so"
   "$build_tools/zipalign" -f -p 4 base.apk aligned.apk
   keytool -genkeypair -keystore debug.ks -storepass android -keypass android \

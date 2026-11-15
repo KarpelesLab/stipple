@@ -50,6 +50,11 @@
 //!   *Open*'s document picker answers, and `androiddemo: saved true|false`
 //!   once *Save*'s has written `stipple-saved.txt` (or was cancelled).
 //!
+//! - `androiddemo: asset hello.txt bytes=N fnv1a=H text="..."` and
+//!   `androiddemo: assets list=... img=... svg=... streamed=... exists=...
+//!   missing=...` at start: the APK's packaged files (`assets/`, which
+//!   build-apk.sh adds) read through `platform::assets`.
+//!
 //! Non-Android builds compile to an empty cdylib so `cargo build --examples`
 //! works everywhere.
 
@@ -232,6 +237,49 @@ mod app {
         row(vec![notify, open, save]).gap(theme.spacing.sm)
     }
 
+    /// Read the APK's packaged files (`assets/`, which build-apk.sh adds)
+    /// through `platform::assets`, the AAssetManager: a whole file with its
+    /// size and FNV-1a hash, the listings, an SVG decoded, a file read in
+    /// pieces after a seek, and a missing one.
+    fn log_assets() {
+        use std::io::{Read, Seek, SeekFrom};
+        let files = stipple::platform::assets();
+        match files.read("hello.txt") {
+            Ok(bytes) => println!(
+                "androiddemo: asset hello.txt bytes={} fnv1a={:08x} text={:?}",
+                bytes.len(),
+                fnv1a(&bytes),
+                String::from_utf8_lossy(&bytes).trim_end()
+            ),
+            Err(e) => println!("androiddemo: asset hello.txt failed: {e}"),
+        }
+        let streamed = files.open("hello.txt").map(|mut r| {
+            let mut rest = String::new();
+            let _ = r.seek(SeekFrom::Start(6));
+            let _ = r.read_to_string(&mut rest);
+            (r.len(), rest.trim_end().to_owned())
+        });
+        let svg = files
+            .svg("img/dot.svg")
+            .map(|s| format!("{}x{}", s.size().width, s.size().height));
+        println!(
+            "androiddemo: assets list={:?} img={:?} svg={:?} streamed={:?} exists={} missing={:?}",
+            files.list("").unwrap_or_default(),
+            files.list("img").unwrap_or_default(),
+            svg.map_err(|e| e.to_string()),
+            streamed.map_err(|e| e.to_string()),
+            files.exists("img/dot.svg"),
+            files.read("nope.txt").err().map(|e| e.to_string()),
+        );
+    }
+
+    /// FNV-1a, 32 bits: a hash CI recomputes from the file.
+    fn fnv1a(bytes: &[u8]) -> u32 {
+        bytes.iter().fold(0x811c_9dc5, |h, &b| {
+            (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+        })
+    }
+
     fn main() {
         let theme = Theme::native();
         println!(
@@ -279,6 +327,7 @@ mod app {
             ),
             Err(e) => println!("androiddemo: dirs unavailable: {e}"),
         }
+        log_assets();
         let state = State {
             taps: 0,
             ticks: 0,

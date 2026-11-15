@@ -28,7 +28,19 @@ row(vec![
 ])
 ```
 
-`examples/imagedemo` shows both, and every fit mode.
+`examples/imagedemo` shows both, and every fit mode. It reads them as
+packaged files rather than compiling them in:
+
+```rust
+let sun = stipple::platform::assets().image("sun.png")?; // assets/sun.png
+let logo = stipple::platform::assets().svg("logo.svg")?;
+```
+
+`include_bytes!` is fine for a few small images. For more, keep them as
+files the app is packaged with (the APK's `assets/`, the bundle's, next to
+the executable, on the web server) and load each when it's needed, off the UI
+thread with `AppHandle::load_asset`; see
+[Packaged assets](os-integration.md#packaged-assets).
 
 ## Formats
 
@@ -89,6 +101,21 @@ Images compare by identity, not by pixels. Decode once and keep the `Arc` in
 your state (or a `static`); building the view from the same `Arc` each frame
 costs nothing, and swapping in a different one repaints just the image's area.
 Decoding inside the view would decode, and repaint, every frame.
+
+## Memory
+
+A decoded bitmap is RGBA, 4 bytes a pixel, whatever its file's size: a
+1170×2532 phone background is 11.9 MB once decoded though its JPEG was a few
+hundred kilobytes, and a 4096×4096 sprite sheet 64 MB. An SVG costs its parsed
+tree plus its last raster (the box's physical size, again 4 bytes a pixel).
+The GPU path then holds each bitmap a second time, as an RGBA texture; it
+doesn't keep compressed (ASTC, ETC2, BC) textures yet.
+
+So decode what the screen shows, at the size it's shown at, and let the rest
+go: an image is freed when the last `Arc` to it is dropped, which a game does
+as it leaves a scene. Loading the next scene's art with
+`AppHandle::load_asset` decodes it on a worker thread, behind a loading
+screen.
 
 ## Limits
 

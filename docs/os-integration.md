@@ -2,7 +2,8 @@
 
 Ways an app reaches past its window: a tray icon with a menu, desktop
 notifications, message boxes, handing a URL or file to the app the user
-picked for it, and finding where to keep its files and what version it is.
+picked for it, finding where to keep its files and what version it is, and
+reading the files it was packaged with.
 The `traydemo` example shows all three:
 
 ```sh
@@ -116,6 +117,107 @@ reads the simulator bundle's `Info.plist` values and container directories, and
 `androiddemo` reads the emulator package's label, `versionName` and
 `versionCode`, and its files and cache directories. macOS was checked by hand,
 bundled and unbundled; Windows is build-checked only.
+
+## Packaged assets
+
+Files the app ships with (art, fonts, sounds, levels) can be compiled in with
+`include_bytes!`, which suits a few small ones. For more, `platform::assets()`
+reads them from where each platform packages them, so they stay out of the
+executable (a game's hundreds of megabytes of art don't belong in the `.so`
+inside an APK) and load when they're needed:
+
+```rust
+use stipple::platform::{self, assets};
+
+// From a checkout, `cargo run` and `cargo test` read the source tree's.
+platform::set_assets_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/assets"));
+
+let sun = assets().image("art/sun.png")?;      // Pixmap
+let logo = assets().svg("art/logo.svg")?;      // Svg
+let title = assets().font("fonts/Display.ttf")?;
+let coin = assets().sound("sfx/coin.wav")?;    // decoded whole
+let story = assets().text("story/intro.txt")?;
+let music = assets().read("music/theme.ogg")?; // bytes, for Audio::play_music
+let mut level = assets().open("levels/1.bin")?; // Read + Seek, as it goes
+assets().exists("art/moon.png");
+assets().list("art")?;                         // file names, sorted
+```
+
+Paths are relative and `/`-separated on every platform; `..`, `.`, `\`,
+`:`, an empty component or a leading `/` is refused
+(`AssetError::InvalidPath`), so a path can't leave the assets.
+
+| | Where the files are | Read with |
+|---|---|---|
+| Android | the APK's `assets/` | `AAssetManager_open` / `AAsset_read` on the activity's asset manager (no JNI) |
+| iOS | `YourApp.app/assets/` | the file system, under `NSBundle.mainBundle.resourcePath` |
+| macOS | `YourApp.app/Contents/Resources/assets/`; unbundled, `assets/` next to the executable | the same |
+| Windows, Linux | `assets/` next to the executable | the file system |
+| Web | `assets/` next to the page (`stipple.js`'s `assets` option) | `fetch` |
+
+Off Android and the web, `$STIPPLE_ASSETS` names the directory instead of the
+packaged one, and when neither exists, the directory given to
+`platform::set_assets_dir` is used: the source tree's, so the same binary
+reads its packaged files once installed and the checkout's under `cargo run`.
+A shipped app never reads that path, since its packaged directory wins.
+`assets().dir()` says which directory it found (`None` on Android and the
+web).
+
+**Loading off the UI thread.** A large image takes a while to decode, so a
+scene's art is better loaded behind a loading screen. `AppHandle::load_asset`
+reads the file and decodes it on a worker thread, then hands the result to
+the state on the UI thread:
+
+```rust
+cx.handle().load_asset("scenes/forest.png", Pixmap::decode, |s: &mut State, r| {
+    match r {
+        Ok(pixmap) => s.background = Some(Arc::new(pixmap)),
+        Err(e) => s.error = Some(e.to_string()),
+    }
+});
+```
+
+The art goes when the state drops its `Arc`. `assets().load(path, done)` is
+the same without the state: `done` gets the bytes on a worker thread.
+
+**On the web**, reading a file means fetching it, which can't block. So:
+
+- `load_asset` and `assets().load` work for every file: `stipple.js` fetches
+  `assets + path` and hands the bytes back when they arrive (decoding then
+  runs on the page's thread, which has no other);
+- the blocking calls (`read`, `open`, `image`, `text`, `exists`, `list`…)
+  find only the files the page **preloaded** before it started the app, and
+  fail with `AssetError::NotPreloaded` for others. The page lists them in
+  `start`'s `preload` option, an array of paths or the URL of a JSON array (a
+  manifest):
+
+  ```js
+  await start(canvas, "game.wasm", {
+    font: "font.ttf",
+    assets: "assets/",            // the default
+    preload: "assets.json",       // ["ui/logo.svg", "fonts/Display.ttf", …]
+  });
+  ```
+
+  Preload what the first screen needs, and `load_asset` the rest. A
+  preloaded file stays in memory for the page's life.
+
+**Packaging.** On Android, `aapt package -A assets/` puts a directory into
+the APK (`examples/androiddemo/build-apk.sh` does, storing already-compressed
+formats uncompressed); on iOS and macOS the bundle step copies it into the
+`.app` (see the [iOS](platforms/ios.md#packaging) and
+[Android](platforms/android.md#packaging) guides); on the desktop it goes
+next to the executable; the site serves each web example's `assets/` next to
+its page, with a manifest it preloads.
+
+Music isn't decoded ahead: `Audio::play_music` keeps the *encoded* bytes and
+decodes as it plays, so `assets().read("theme.ogg")` costs the file's size,
+not the decoded track's. An image decodes to 4 bytes a pixel, so a 2048×2048
+background is 16 MB however small its PNG was (see [Images](images.md#memory)).
+
+Not there yet: Play Asset Delivery and iOS on-demand resources (files
+downloaded after install), and `AAsset_openFileDescriptor` for handing an
+uncompressed asset's file descriptor to a decoder.
 
 ## Notifications
 
@@ -325,3 +427,15 @@ button), then prints the answer:
 
 Real key presses on the native alerts aren't sent (the self-test clicks
 programmatically), and the iOS and web alerts are build-checked only.
+
+For packaged assets: `androiddemo`'s APK carries an `assets/` directory, and
+on the emulator it reads a file whole (its size and FNV-1a hash must match the
+source's), lists the top and a subdirectory, decodes an SVG, reads after a
+seek and reports a missing file, all through the `AAssetManager`. `touchdemo`'s
+iOS self-test does the same from the simulator bundle's `assets/` (the
+directory must be the bundle's), and loads an SVG through
+`AppHandle::load_asset`. The Linux `visual-image` job runs `imagedemo` with
+its PNG and SVG next to the executable, and the site's `check.py` runs it in
+headless Chrome with the page preloading them. macOS was run by hand bundled,
+unbundled (next to the executable) and from the checkout; Windows is
+build-checked only.

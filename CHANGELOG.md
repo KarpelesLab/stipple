@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Packaged assets (#59): `platform::assets()` reads files the app was
+  packaged with by relative path (`read`, `open` as a `Read + Seek` reader,
+  `exists`, `list`, and the `image`, `svg`, `font`, `sound` and `text`
+  loaders): the APK's `assets/` through the `AAssetManager` on Android, the
+  bundle's `assets/` on iOS and macOS, `assets/` next to the executable on
+  Windows and Linux, `$STIPPLE_ASSETS`, and the directory given to
+  `platform::set_assets_dir` (the source tree's, for `cargo run`). On the web
+  `stipple.js` fetches them from its new `assets` URL, preloading its
+  `preload` list for the blocking calls. `Assets::load` and
+  `AppHandle::load_asset(path, decode, apply)` read and decode on worker
+  threads (on the web, once the fetch is done) and hand the result to the
+  state. `build-apk.sh` packs `examples/androiddemo/assets/`, the site serves
+  and preloads each example's `assets/`, and `imagedemo` loads its PNG and
+  SVG this way instead of `include_bytes!`.
 - Test helpers on `App` that find elements as a screen reader knows them:
   `app.find(Role::CheckBox, "Buy milk")` (where it is, whether it's checked),
   `find_all` (every match), `find_text("1 left")` and

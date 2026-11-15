@@ -112,6 +112,18 @@ else
   log | grep "androiddemo: cjk" || echo "android: no CJK line in the log"
 fi
 wait_for "androiddemo: dirs data=/data/(user/0|data)/$pkg/files cache=/data/(user/0|data)/$pkg/cache temp=/data/(user/0|data)/$pkg/cache/tmp exist=true" 5
+# platform::assets from the APK's assets/ (AAssetManager): the whole file,
+# its size and FNV-1a hash as on disk, listed, an SVG decoded, read after a
+# seek, and a missing one reported.
+asset_src="$(cd "$(dirname "$0")" && pwd)/assets/hello.txt"
+asset_size="$(wc -c < "$asset_src" | tr -d ' ')"
+asset_fnv="$(python3 -c 'import sys
+h = 0x811C9DC5
+for b in open(sys.argv[1], "rb").read():
+    h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
+print(f"{h:08x}")' "$asset_src")"
+wait_for "androiddemo: asset hello.txt bytes=$asset_size fnv1a=$asset_fnv text=\"Hello from a packaged asset\.\"" 5
+wait_for 'androiddemo: assets list=\[[^]]*"hello\.txt"[^]]*\] img=\["dot\.svg"\] svg=Ok\("16x16"\) streamed=Ok\(\([0-9]+, "from a packaged asset\."\)\) exists=true missing=Some\("no asset \\"nope\.txt\\""\)' 5
 adb exec-out screencap -p > "$shots/android.png"
 
 size="$(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)"

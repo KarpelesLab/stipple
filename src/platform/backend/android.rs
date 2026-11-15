@@ -1015,6 +1015,18 @@ pub(crate) fn app_info() -> Option<crate::platform::bundle::OsInfo> {
     })
 }
 
+/// Run `f` with the activity's `AAssetManager` (the APK's `assets/`), for
+/// [`assets`](crate::platform::assets), while the activity is current, so
+/// the manager stays alive through `f`. `None` before there is an activity.
+pub(crate) fn with_asset_manager<R>(f: impl FnOnce(*mut c_void) -> Option<R>) -> Option<R> {
+    with_activity(|a| {
+        if a.asset_manager.is_null() {
+            return None;
+        }
+        f(a.asset_manager)
+    })
+}
+
 /// The app's files directory (`ANativeActivity.internalDataPath`, else
 /// `getFilesDir()`) and `getCacheDir()`, for
 /// [`dirs`](crate::platform::dirs). Asked once, once there is an activity.

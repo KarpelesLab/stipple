@@ -47,6 +47,21 @@ pub(super) fn info() -> OsInfo {
     })
 }
 
+/// The main bundle's resource directory (`resourcePath`): `Contents/Resources`
+/// in a macOS bundle, the `.app` itself on iOS, the executable's directory
+/// for a binary outside a bundle.
+pub(crate) fn resource_dir() -> Option<PathBuf> {
+    with_pool(|| {
+        let bundle = unsafe { msg!(class("NSBundle"), "mainBundle", () -> Id) };
+        if bundle.is_null() {
+            return None;
+        }
+        rust_string(unsafe { msg!(bundle, "resourcePath", () -> Id) })
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+    })
+}
+
 /// The path of `url` (an `NSURL`), if it is a file URL.
 fn url_path(url: Id) -> Option<PathBuf> {
     if url.is_null() {

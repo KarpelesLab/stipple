@@ -6,6 +6,12 @@
 //! stays sharp. The bottom row puts the SVG in a wide box with each
 //! [`ImageFit`] mode.
 //!
+//! The files are packaged assets (`stipple::platform::assets`), not
+//! `include_bytes!`: `assets/` next to the executable, in the app bundle or
+//! the APK, or on the web server (where the page preloads them). From a
+//! checkout, `cargo run` reads them from `examples/imagedemo/assets`, which
+//! the demo gives as its fallback directory.
+//!
 //! The decoded assets live in the app state behind `Arc`s: images compare by
 //! identity, so building the view from the same `Arc` each frame is a no-op
 //! repaint.
@@ -15,10 +21,8 @@
 //! content rather than the flat background.
 
 use std::sync::Arc;
+use stipple::platform::{self, AssetError};
 use stipple::prelude::*;
-
-const SUN_PNG: &[u8] = include_bytes!("assets/sun.png");
-const LOGO_SVG: &[u8] = include_bytes!("assets/logo.svg");
 
 struct Assets {
     sun: Arc<Pixmap>,
@@ -26,10 +30,25 @@ struct Assets {
 }
 
 fn load() -> Assets {
-    Assets {
-        sun: Arc::new(Pixmap::decode(SUN_PNG).expect("bundled PNG decodes")),
-        logo: Arc::new(Svg::parse(LOGO_SVG).expect("bundled SVG parses")),
+    // Packaged files win; from a checkout (`cargo run`), the source tree's.
+    platform::set_assets_dir(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/imagedemo/assets"
+    ));
+    let files = platform::assets();
+    if let Some(dir) = files.dir() {
+        println!("imagedemo: assets from {}", dir.display());
     }
+    Assets {
+        sun: Arc::new(need(files.image("sun.png"))),
+        logo: Arc::new(need(files.svg("logo.svg"))),
+    }
+}
+
+/// The asset, or the reason it isn't there, as a panic: the demo has nothing
+/// to show without it.
+fn need<T>(r: Result<T, AssetError>) -> T {
+    r.unwrap_or_else(|e| panic!("imagedemo: {e}"))
 }
 
 /// A fitted box: the SVG in a wide frame, placed per `fit`.

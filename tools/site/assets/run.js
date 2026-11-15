@@ -6,7 +6,7 @@
 import { start } from "../stipple.js";
 
 const script = document.currentScript ?? document.querySelector("script[data-wasm]");
-const { name, wasm, font } = script.dataset;
+const { name, wasm, font, assets, preload } = script.dataset;
 const params = new URLSearchParams(location.search);
 const embed = params.has("embed");
 const check = params.has("check");
@@ -34,7 +34,9 @@ try {
   // title: false keeps the page's title; stateKey: false starts each visit
   // afresh (the gallery's thumbnails, and readers, see the example as it
   // starts).
-  app = await start(canvas, wasm, { font, title: false, stateKey: false });
+  // assets/preload: the example's packaged files (examples/NAME/assets/),
+  // preloaded so its blocking reads find them.
+  app = await start(canvas, wasm, { font, title: false, stateKey: false, assets, preload });
   status.hidden = true;
   if (!embed) canvas.focus();
 } catch (e) {

@@ -172,6 +172,22 @@ macro_rules! web_app {
                 glue::file_picked(id, Some((name, data)));
             }
 
+            /// # Safety
+            /// Each pointer/length pair comes from one `stipple_alloc`.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_asset(
+                id: u32,
+                path: *mut u8,
+                path_len: usize,
+                data: *mut u8,
+                data_len: usize,
+                status: u32,
+            ) {
+                let path = unsafe { glue::take_string(path, path_len) };
+                let data = unsafe { glue::take_bytes(data, data_len) };
+                glue::asset(id, path, data, status);
+            }
+
             #[unsafe(no_mangle)]
             pub extern "C" fn stipple_file_cancel(id: u32) {
                 glue::file_picked(id, None);

@@ -42,6 +42,13 @@
 //   stateKey  the sessionStorage key the app's saved state is kept under
 //             (App::save_state / restore_state); by default one per module
 //             URL and canvas order on the page. false keeps no state.
+//   assets    the URL the app's packaged files are under
+//             (stipple::platform::assets), relative to the page; default
+//             "assets/". Each read fetches `assets + path`.
+//   preload   the packaged files to fetch before the app starts, so its
+//             blocking reads (assets().read, .image, ...) find them: an
+//             array of paths, or the URL of a JSON array of them (a
+//             manifest). Others load with Assets::load / AppHandle::load_asset.
 //
 // Returns { exports, stats, canvas, overlay, input, colorScheme, saveState }: `stats`
 // counts presents, animation frames, timer wakes and accessibility-tree
@@ -502,6 +509,10 @@ export async function start(canvas, wasmUrl, options = {}) {
         }).catch(() => {});
         return 1;
       },
+      fetch_asset(id, ptr, len) {
+        const path = str(ptr, len);
+        getAsset(path).then(([data, status]) => deliverAsset(id, path, data, status));
+      },
       message_box(confirm, ptr, len) {
         const text = str(ptr, len);
         if (confirm) return window.confirm(text) ? 1 : 0;
@@ -509,6 +520,22 @@ export async function start(canvas, wasmUrl, options = {}) {
         return 1;
       },
     },
+  };
+
+  // Packaged files (stipple::platform::assets): fetched under `assets`,
+  // answered through stipple_asset (request 0: a preload).
+  const assetBase = new URL((options.assets ?? "assets/").replace(/\/*$/, "/"), location.href);
+  const getAsset = async (path) => {
+    try {
+      const r = await fetch(new URL(path, assetBase));
+      if (!r.ok) return [new Uint8Array(0), r.status];
+      return [new Uint8Array(await r.arrayBuffer()), 200];
+    } catch (_) { return [new Uint8Array(0), 0]; }
+  };
+  const deliverAsset = (id, path, data, status) => {
+    const [pp, pl] = passStr(path);
+    const [dp, dl] = pass(data);
+    e.stipple_asset?.(id, pp, pl, dp, dl, status);
   };
 
   const module = await compile(wasmUrl);
@@ -528,6 +555,18 @@ export async function start(canvas, wasmUrl, options = {}) {
     if (!bytes) continue;
     const [p, n] = pass(bytes);
     e.stipple_set_font(p, n);
+  }
+
+  if (options.preload) {
+    let list = options.preload;
+    if (typeof list === "string") {
+      try {
+        const r = await fetch(new URL(list, location.href));
+        list = r.ok ? await r.json() : [];
+      } catch (_) { list = []; }
+    }
+    const got = await Promise.all(list.map(async (path) => [path, ...await getAsset(path)]));
+    for (const [path, data, status] of got) deliverAsset(0, path, data, status);
   }
 
   // prefers-color-scheme, read before the app is built (Theme::native() reads

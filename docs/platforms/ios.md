@@ -50,6 +50,13 @@ binary and an `Info.plist`:
 - **`MinimumOSVersion` must be at least 15.0**: `Theme::native()` uses
   `UIButtonConfiguration`, which arrived in iOS 15.
 
+The app's packaged files ([`platform::assets`](../os-integration.md#packaged-assets))
+go in an `assets` directory inside the bundle, next to the binary
+(`YourApp.app/assets/`): Stipple reads them under the main bundle's
+`resourcePath`. CI copies `examples/touchdemo/assets` there for `touchdemo`'s
+self-test. (On macOS the directory is `Contents/Resources/assets`.) On-demand
+resources aren't supported yet.
+
 To run it in the simulator:
 
 ```sh

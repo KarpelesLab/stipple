@@ -327,6 +327,9 @@ fn xdg_dirs(
 // ---- Per-platform dispatch ---------------------------------------------------
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) use apple::resource_dir;
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 use apple::{dirs as os_dirs, info as os_info};
 
 #[cfg(target_os = "windows")]

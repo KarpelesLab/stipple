@@ -329,6 +329,17 @@ apksigner sign --ks your.keystore --out yourapp.apk aligned.apk
 suffix. The ABI directory is `arm64-v8a` for `aarch64` and `x86_64` for the
 emulator.
 
+The app's packaged files ([`platform::assets`](../os-integration.md#packaged-assets))
+go in the APK's `assets/`: add `-A assets` to `aapt package`, and `-0 png
+-0 ogg …` to store already-compressed formats as they are (reading a
+compressed entry inflates it first). `build-apk.sh` packs
+`examples/androiddemo/assets/` (or `$STIPPLE_APK_ASSETS`). Stipple reads them
+through the activity's `AAssetManager` (`AAssetManager_open`, `AAsset_read`,
+`AAssetDir` for listings), with no JNI; a read before the activity exists
+fails with `AssetError::Unavailable`. Play's base module is limited in size,
+and Play Asset Delivery (asset packs downloaded after install) isn't
+supported yet.
+
 Three manifest settings matter:
 
 - **`configChanges`** keeps the activity across rotation, resizing, keyboard and
