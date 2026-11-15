@@ -4732,10 +4732,15 @@ jobs:
           xcrun simctl boot "$DEV" || true
           xcrun simctl bootstatus "$DEV" -b || true
           xcrun simctl install "$DEV" "target/stipple-package/ios-sim/Stipple Touch.app"
-          xcrun simctl launch "$DEV" com.karpeleslab.stipple
-          sleep 10
+          # The bundle information and assets lines come from touchdemo's
+          # self-test, which logs them first.
+          SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 xcrun simctl launch "$DEV" com.karpeleslab.stipple
           DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
           LOG="$DATA/tmp/touchdemo.log"
+          for _ in $(seq 60); do
+            grep -q "touchdemo: assets dir=" "$LOG" 2>/dev/null && break
+            sleep 1
+          done
           cat "$LOG" || true
           grep -qF 'touchdemo: app id=com.karpeleslab.stipple name="Stipple Touch" version=1.2.3 build=7' "$LOG"
           grep -qE "touchdemo: assets dir=/.+/Stipple Touch\.app/assets$" "$LOG"

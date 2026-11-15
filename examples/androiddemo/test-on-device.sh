@@ -96,15 +96,40 @@ wait_for() {
   return 1
 }
 
-# Wait up to $2 seconds for the resumed activity to match $1.
+# Wait up to $2 seconds for the resumed activity to match $1. (Android 11
+# and older name it mResumedActivity.)
+resumed="topResumedActivity|mResumedActivity"
 wait_top() {
   local i
   for ((i = 0; i < ${2:-20}; i++)); do
-    adb shell dumpsys activity activities | grep -E "topResumedActivity" | grep -qE "$1" && return 0
+    adb shell dumpsys activity activities | grep -E "$resumed" | grep -qE "$1" && return 0
     sleep 1
   done
   echo "the top activity isn't $1:" >&2
-  adb shell dumpsys activity activities | grep -E "topResumedActivity" >&2 || true
+  adb shell dumpsys activity activities | grep -E "$resumed" >&2 || true
+  return 1
+}
+
+# Tap the first node in a fresh uiautomator dump matching the regex $1.
+tap_node() {
+  local b x1 y1 x2 y2
+  adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || true
+  b="$(adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' | grep -E "$1" | head -1 \
+    | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' || true)"
+  [ -n "$b" ] || return 1
+  read -r x1 y1 x2 y2 <<< "$b"
+  adb shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2))
+}
+# Wait up to $2 seconds for node $1 and tap it.
+tap_when() {
+  local i
+  for ((i = 0; i < ${2:-20}; i++)); do
+    tap_node "$1" && return 0
+    sleep 1
+  done
+  echo "no node matching $1 on screen:" >&2
+  adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' | grep -oE '(text|resource-id|content-desc)="[^"]+"' >&2 || true
+  adb exec-out screencap -p > "$shots/android-no-node.png" || true
   return 1
 }
 
@@ -548,34 +573,11 @@ fi
 ### Notifications and the document picker, through the buttons' accessibility
 ### nodes (their bounds come from a uiautomator dump).
 
-# Tap the first node in a fresh uiautomator dump matching the regex $1.
-tap_node() {
-  local b x1 y1 x2 y2
-  adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || true
-  b="$(adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' | grep -E "$1" | head -1 \
-    | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' || true)"
-  [ -n "$b" ] || return 1
-  read -r x1 y1 x2 y2 <<< "$b"
-  adb shell input tap $(((x1 + x2) / 2)) $(((y1 + y2) / 2))
-}
-# Wait up to $2 seconds for node $1 and tap it.
-tap_when() {
-  local i
-  for ((i = 0; i < ${2:-20}; i++)); do
-    tap_node "$1" && return 0
-    sleep 1
-  done
-  echo "no node matching $1 on screen:" >&2
-  adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' | grep -oE '(text|resource-id|content-desc)="[^"]+"' >&2 || true
-  adb exec-out screencap -p > "$shots/android-no-node.png" || true
-  return 1
-}
-
 # Notifications on Android 13+: the first asks for POST_NOTIFICATIONS (the
 # permission was revoked before launch), through the results fragment. "Don't
 # allow" drops it and makes the next one fail; once granted, one is posted.
 tap_when 'text="Notify"'
-wait_for "stipple: asking for the notification permission" 20
+wait_for "stipple: asking for .*android.permission.POST_NOTIFICATIONS" 20
 wait_top "GrantPermissionsActivity" 20
 adb exec-out screencap -p > "$shots/android-permission.png"
 tap_when 'permission_deny_button'

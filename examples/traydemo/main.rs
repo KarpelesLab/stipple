@@ -221,10 +221,14 @@ fn start_selftest(handle: &AppHandle<State>) {
         platform::pending_notifications(|ids| println!("traydemo: pending {ids:?}"));
         let waiter = quit.clone();
         if expect_tray {
-            // Wait for the host to pick Ping and activate the icon.
+            // Wait for the host to pick Ping and activate the icon, and for
+            // the scheduled notification (half a second on) to go out.
             let started = std::time::Instant::now();
             quit.every(Duration::from_millis(100), move |s: &mut State| {
-                if s.pings >= 1 && s.activations >= 1 {
+                if s.pings >= 1
+                    && s.activations >= 1
+                    && started.elapsed() > Duration::from_millis(1500)
+                {
                     println!("traydemo: tray ping ok");
                     println!("traydemo: tray activate ok");
                     waiter.exit();

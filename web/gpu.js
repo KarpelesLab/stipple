@@ -511,6 +511,9 @@ class WebGpuRenderer {
     device.lost.then((info) => {
       if (!this.destroyed) log(`stipple: the WebGPU device was lost (${info.reason || "unknown"}: ${info.message})`);
       this.lost = true;
+      // Ask for a frame, which sets the renderer up again: an app with
+      // nothing animating wouldn't draw until its next input.
+      if (!this.destroyed) this.onBroken?.();
     });
     device.addEventListener?.("uncapturederror", (ev) => {
       if (!this.broken) log(`stipple: WebGPU: ${ev.error?.message ?? ev.error}`);
@@ -831,8 +834,12 @@ class WebGl2Renderer {
     this.near = sampler(gl.NEAREST);
     this.onLost = (ev) => {
       ev.preventDefault(); // so the context can come back
-      if (!this.destroyed && !this.wasLost) log("stipple: the WebGL2 context was lost");
+      if (this.destroyed || this.wasLost) return;
+      log("stipple: the WebGL2 context was lost");
       this.wasLost = true;
+      // Ask for a frame, which waits for the context to come back and draws
+      // again: an app with nothing animating wouldn't until its next input.
+      this.onBroken?.();
     };
     canvas.addEventListener("webglcontextlost", this.onLost);
   }

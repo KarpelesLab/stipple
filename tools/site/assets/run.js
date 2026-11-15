@@ -65,7 +65,16 @@ if (check) {
   try {
     // The last frame as a 2D canvas: on the GPU (?renderer=gpu) the canvas
     // holds a WebGPU or WebGL2 context, which can't be read back later.
-    const shot = app?.snapshot?.() ?? canvas;
+    // A GPU canvas whose context was lost draws again once it's back.
+    let shot = app?.snapshot?.();
+    for (let i = 0; !shot && app?.renderer && app.renderer !== "software" && i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      shot = app.snapshot();
+    }
+    if (!shot && app?.renderer && app.renderer !== "software") {
+      throw new Error(`no snapshot of the ${app.renderer} canvas (its context lost?)`);
+    }
+    shot ??= canvas;
     const ctx = shot.getContext("2d");
     const { width, height } = shot;
     const data = ctx.getImageData(0, 0, width, height).data;
