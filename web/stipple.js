@@ -61,7 +61,8 @@
 //             manifest). Others load with Assets::load / AppHandle::load_asset.
 //   renderer  what draws the frames, overriding the app's App::renderer as
 //             STIPPLE_RENDERER does natively: "auto" (the default: the
-//             app's choice), "software", "gpu" (WebGPU, else WebGL2, else
+//             app's choice, where Renderer::Auto is the GPU when the
+//             browser has a hardware one, else the CPU), "software", "gpu" (WebGPU, else WebGL2, else
 //             the CPU), "webgpu" or "webgl2". The page's `?renderer=` query
 //             parameter overrides this option. The GPU ones need a module
 //             built with the `gpu` feature.
@@ -86,6 +87,29 @@ const SHIFT = 1, CTRL = 2, ALT = 4, META = 8;
 // it once. Each still gets its own instance (and memory).
 const modules = new Map();
 let instances = 0;
+
+// Whether the browser draws WebGL (and so WebGPU) on a hardware GPU rather
+// than a software rasterizer (SwiftShader, llvmpipe), which is slower than
+// the module's own: `renderer: "auto"` then draws on the GPU (in a module
+// built with it). A context that would be slow isn't handed out at all with
+// `failIfMajorPerformanceCaveat`; the renderer's name catches the rest.
+// Asked once per page.
+let hardwareGpu = null;
+function hasHardwareGpu() {
+  if (hardwareGpu !== null) return hardwareGpu;
+  hardwareGpu = false;
+  try {
+    const gl = document.createElement("canvas")
+      .getContext("webgl2", { failIfMajorPerformanceCaveat: true });
+    if (gl) {
+      const info = gl.getExtension("WEBGL_debug_renderer_info");
+      const name = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+      hardwareGpu = !/swiftshader|llvmpipe|softpipe|lavapipe|software|basic render/i.test(name);
+      gl.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  } catch (_) { /* no WebGL2: the CPU */ }
+  return hardwareGpu;
+}
 
 // Bytes as base64 (Web Storage keeps strings).
 function toBase64(bytes) {
@@ -202,7 +226,43 @@ export async function start(canvas, wasmUrl, options = {}) {
   const prefix = `stipple${++instances}`;
   let e = null; // the module's exports
   let timer = null;
+  // The app asked for a frame (request_frame), and whether a
+  // requestAnimationFrame is out for it. Frames wait while the canvas is out
+  // of view (scrolled away, or in an iframe scrolled off its page): nothing
+  // would show them, and an animation there would cost as much as one in
+  // view. The module hears of it too (stipple_visible), so its frame clock
+  // stops rather than falling back to a timer; coming back into view, it
+  // draws a whole frame and animations go on.
   let framePending = false;
+  let rafQueued = false;
+  let inView = true;
+  let shown = true; // what the module was last told
+  const runFrame = () => {
+    rafQueued = false;
+    if (!framePending) return;
+    framePending = false;
+    stats.frames++;
+    e.stipple_frame();
+  };
+  const queueFrame = () => {
+    if (rafQueued || !inView) return;
+    rafQueued = true;
+    requestAnimationFrame(runFrame);
+  };
+  const syncShown = () => {
+    const now = inView && document.visibilityState !== "hidden";
+    if (now === shown || !e?.stipple_visible) return;
+    shown = now;
+    e.stipple_visible(now ? 1 : 0);
+  };
+  const visibility = typeof IntersectionObserver === "function"
+    ? new IntersectionObserver((entries) => {
+      const last = entries[entries.length - 1];
+      inView = last.isIntersecting || last.intersectionRatio > 0;
+      syncShown();
+      if (inView && framePending) queueFrame();
+    })
+    : null;
   // The screen wake lock the app wants (keep_awake), and the one held.
   let wantAwake = false;
   let wakeLock = null;
@@ -350,6 +410,8 @@ export async function start(canvas, wasmUrl, options = {}) {
       resizes.unobserve(old);
       resizes.observe(fresh);
     }
+    visibility?.unobserve(old);
+    visibility?.observe(fresh);
     if (focused) fresh.focus({ preventScroll: true });
   };
 
@@ -562,13 +624,8 @@ export async function start(canvas, wasmUrl, options = {}) {
         }, ms);
       },
       request_frame() {
-        if (framePending) return;
         framePending = true;
-        requestAnimationFrame(() => {
-          framePending = false;
-          stats.frames++;
-          e.stipple_frame();
-        });
+        queueFrame();
       },
       set_cursor(ptr, len) { canvas.style.cursor = str(ptr, len); },
       keep_awake(on) { wantAwake = on !== 0; syncWake(); },
@@ -994,12 +1051,21 @@ export async function start(canvas, wasmUrl, options = {}) {
     const [p, n] = passStr(String(rendererOption));
     e.stipple_renderer(p, n);
   }
+  // `auto` (the app's Renderer::Auto) is the GPU on a hardware one, when
+  // the module has the GPU renderer (it imports gpu.js's functions).
+  const auto = !rendererOption || String(rendererOption).toLowerCase() === "auto";
+  if (auto && e.stipple_gpu_hardware
+    && WebAssembly.Module.imports(module).some((i) => i.name === "gpu_frame")) {
+    e.stipple_gpu_hardware(hasHardwareGpu() ? 1 : 0);
+  }
   e.stipple_start(...size());
+  syncShown(); // a page opened in a background tab
   // Save it whenever the page may go: hidden (a phone's browser can discard
   // a backgrounded tab without another event) and unloading.
   const saveState = () => e.stipple_save_state?.();
   window.addEventListener("pagehide", saveState);
   document.addEventListener("visibilitychange", () => {
+    syncShown();
     if (document.visibilityState === "hidden") saveState();
     // The browser lets a wake lock go when the page hides: ask again.
     else syncWake();
@@ -1044,6 +1110,7 @@ export async function start(canvas, wasmUrl, options = {}) {
   const resize = () => { place(); e.stipple_resize(...size()); safeArea(); keyboardInset(); };
   resizes = new ResizeObserver(resize);
   resizes.observe(canvas);
+  visibility?.observe(canvas);
   const watchRatio = () => {
     matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)
       .addEventListener("change", () => { resize(); watchRatio(); }, { once: true });

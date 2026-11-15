@@ -263,10 +263,16 @@ the 2D context.
 
 Choosing: `App::renderer` and the page's `renderer` option (`auto`,
 `software`, `gpu`, `webgpu`, `webgl2`; `?renderer=` in the URL overrides
-both). `auto` is the app's choice, and `Renderer::Auto` stays the CPU on the
-web as everywhere until 6h: the GPU is much faster on a real GPU (below), but
-a browser without one hands out WebGPU and WebGL2 on SwiftShader, where the
-software renderer is faster, and a page can't always tell which it got.
+both). `auto` is the app's choice, and on the web `Renderer::Auto` is the
+GPU when the browser has a hardware one: it is much faster there (below),
+while a browser without one hands out WebGPU and WebGL2 on SwiftShader,
+where the software renderer is faster. `stipple.js` tells them apart once
+per page: WebGL2 refuses a context asked for with
+`failIfMajorPerformanceCaveat` on a software rasterizer, and the renderer's
+name (`WEBGL_debug_renderer_info`) catches the rest (SwiftShader, llvmpipe,
+lavapipe, Microsoft Basic Render). Only a module built with the renderer
+(one that imports `gpu_frame`) is told (`stipple_gpu_hardware`). Natively
+`Auto` stays the CPU until 6h.
 
 Setting up is asynchronous (`requestAdapter`, `requestDevice`): the first
 frame waits for it, then the page asks for a whole frame. WebGPU is tried

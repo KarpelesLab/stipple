@@ -128,8 +128,8 @@ has a line
 which GitHub doesn't show. To build the site locally:
 
 ```sh
-python3 tools/site/build.py wasm        # every web example, release, wasm32
-python3 tools/site/build.py site --font /path/to/DejaVuSans.ttf
+python3 tools/site/build.py wasm        # every web example, release, wasm32, SIMD, LTO
+python3 tools/site/build.py site --font /path/to/DejaVuSans.ttf  # and wasm-opt, if installed
 python3 tools/site/check.py target/site # each example in headless Chrome, and the links
 python3 -m http.server --directory target/site
 ```
@@ -360,7 +360,7 @@ page's `?renderer=` query parameter:
 
 | `renderer` | Draws with |
 |---|---|
-| `auto` (the default) | the app's choice; `Renderer::Auto` is the CPU for now |
+| `auto` (the default) | the app's choice; `Renderer::Auto` is the GPU when the browser runs WebGPU / WebGL2 on a hardware one (and the module has the `gpu` feature), else the CPU |
 | `software` | the CPU, `putImageData` |
 | `gpu` | WebGPU, else WebGL2, else the CPU |
 | `webgpu`, `webgl2` | that API, else the CPU |
@@ -378,6 +378,14 @@ hands out, so `stipple.js` then swaps in a fresh canvas element (the same
 attributes, style and listeners) for the 2D context; `app.canvas` is always
 the current one. A GPU canvas can't be read back after the frame is shown:
 `app.snapshot()` gives a 2D copy of the last frame.
+
+### Speed
+
+`auto` puts an app on the GPU where the browser has a real one; out of view
+(scrolled away, in an iframe scrolled off its page, a hidden tab) an app
+draws no frames at all; the site builds its modules with SIMD, LTO and
+`wasm-opt`. Numbers, and what to do for your own app, are in
+[performance.md](../performance.md#on-the-web).
 
 ## How it fits together
 
@@ -410,6 +418,8 @@ The module exports:
 | `stipple_restore_state(ptr, len)` | the state saved in `sessionStorage`, before `stipple_start` |
 | `stipple_save_state()` | `pagehide` and `visibilitychange` to hidden: the app saves its state, through the `save_state` import |
 | `stipple_renderer(ptr, len)` | the page's `renderer` option, before `stipple_start` |
+| `stipple_gpu_hardware(on)` | whether WebGL2 runs on a hardware GPU (not SwiftShader), before `stipple_start`, for `renderer: "auto"` |
+| `stipple_visible(on)` | the canvas scrolled out of view or the tab hidden (0), or back (1): frames stop meanwhile |
 | `stipple_redraw()` | the GPU came up: draw a whole frame |
 
 It imports, from the module `"stipple"`: `now`, `present`, `schedule`,

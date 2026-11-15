@@ -920,6 +920,29 @@ pub fn renderer(value: String) {
     crate::app_gpu::set_page_renderer(&value);
 }
 
+/// Whether the browser's WebGPU / WebGL2 run on a hardware GPU, as the page
+/// found (`web/stipple.js`): then [`Renderer::Auto`](crate::render::Renderer::Auto)
+/// draws on it. Called before [`start`].
+#[doc(hidden)]
+pub fn gpu_hardware(on: bool) {
+    crate::app_gpu::set_page_hardware_gpu(on);
+}
+
+/// The canvas went out of view (`false`: scrolled away, its iframe scrolled
+/// off its page, or the tab hidden) or came back (`true`). Out of view,
+/// frames stop, as natively in the background (the frame clock's fallback
+/// timer too, which would otherwise drive a game loop on its own); back in
+/// view, a whole frame is drawn, and whatever animates asks for frames again.
+/// Timers keep running.
+#[doc(hidden)]
+pub fn visible(on: bool) {
+    let was = !frame::suspended();
+    frame::set_suspended(!on);
+    if on && !was {
+        redraw();
+    }
+}
+
 /// The page wants a whole new frame (its GPU just came up).
 #[doc(hidden)]
 pub fn redraw() {

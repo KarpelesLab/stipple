@@ -217,3 +217,97 @@ python3 tools/bench/update_baseline.py --from target/bench --provisional --note 
 Each workflow run's summary shows the tables (baseline, expected after
 scaling, now, delta, budget), and its artifacts hold the JSON (`perf-linux`,
 `perf-macos`, `perf-windows`, `perf-web`).
+
+## On the web
+
+A Stipple app in a browser is the same code compiled to WebAssembly, so a
+frame costs what it does natively plus what wasm loses (no threads, 128-bit
+SIMD at best, a slower allocator). What the site does to keep the examples
+responsive, and what you can do for your own app:
+
+- **Draw on the GPU when there is one.** `renderer: "auto"` (the default)
+  draws with WebGPU, else WebGL2, when the browser runs them on a hardware
+  GPU and the module was built with the `gpu` feature; on a software one
+  (SwiftShader, llvmpipe: a machine or VM without a GPU, some headless
+  browsers) it stays on the CPU, which is faster there. `stipple.js` asks
+  WebGL2 for a context with `failIfMajorPerformanceCaveat` and reads the
+  renderer's name (`WEBGL_debug_renderer_info`) once per page. On the GPU a
+  frame costs well under a millisecond of the page's time whatever changed;
+  on the CPU it costs what the [damage](#painting-only-what-shows) covers,
+  four times the pixels at a pixel ratio of 2.
+- **Build for speed.** The site builds its modules with SIMD
+  (`-C target-feature=+simd128`, which every current browser runs), link-time
+  optimization and one codegen unit, then runs `wasm-opt -O2` over them
+  (`[build.env]` and `[build.wasm-opt]` in `tools/site/examples.toml`). SIMD
+  and LTO make the CPU renderer about a quarter faster; `wasm-opt` takes
+  15% off the size (2.85 → 2.43 MB, 0.9 MB compressed).
+- **Use current dependencies.** Stipple's minimum Rust (1.88) holds its own
+  builds to the dependency versions that Rust can build, and the oxideav
+  versions after that are much faster: oxideav-raster 0.1.4 stopped
+  rasterizing every path and clip into a mask the size of the window (a
+  full frame of `widgetsdemo` at 2560×1504 went from 370 to 40 ms in the
+  browser), and oxideav-ttf 0.1.9 stopped re-parsing the font for each
+  string it shapes (1.9 ms → 13 µs per new string). An app on a current
+  toolchain resolves to them by itself; the site sets
+  `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=allow` so it does too (in a
+  checkout that has a `Cargo.lock` already, run `cargo update` with it).
+- **Nothing runs out of view.** Frames wait while the canvas is scrolled
+  out of view (in a page, or as an iframe in another page) or the tab is
+  hidden: `stipple.js` holds back `requestAnimationFrame` and tells the module
+  (`stipple_visible`), whose frame clock stops instead of falling back to a
+  timer. Back in view, it draws a whole frame and animations go on. An idle
+  app does nothing at all.
+
+The examples on the site, measured in Chrome on an Apple M5 Max (headless,
+on the real GPU) in a 1280×800 window at a pixel ratio of 2 (a 2560×1504
+canvas), driving real input through the DevTools protocol. *Work* is the
+time spent in the module per event or frame (build, layout, paint,
+rasterize and present, or lower and submit on the GPU); *latency* is from
+the event's timestamp to the end of the first present after it, median /
+95th percentile, and includes waiting for the display's next frame where
+the answer is animated (a hover highlight fades in). Before: the CPU, the
+dependencies Rust 1.88 resolves to, a plain release build.
+
+| Example | First frame | Hover: work p95 | Hover: latency | Click: latency | Typing: latency | Wheel: work p95, latency | Animation: frame p95 |
+|---|---|---|---|---|---|---|---|
+| widgetsdemo, before | 662 ms | 376 ms | 353 / 383 ms | | | | |
+| widgetsdemo, CPU now | 124 ms | 1.6 ms | 11 / 16 ms | | | | |
+| widgetsdemo, GPU now | 106 ms | 0.9 ms | 11 / 15 ms | | | | |
+| todo, before | 81 ms | | | 17 / 44 ms | 2.6 / 3.8 ms | | |
+| todo, CPU now | 34 ms | | | 1.7 / 5.8 ms | 1.0 / 1.1 ms | | |
+| todo, GPU now | 40 ms | | | 0.4 / 1.1 ms | 0.7 / 0.8 ms | | |
+| listgestures, before | 541 ms | 70 ms | 9.7 / 23 ms | 24 / 301 ms | | 425 ms, 408 / 448 ms | |
+| listgestures, CPU now | 61 ms | 10 ms | 7.3 / 15 ms | 4.0 / 4.9 ms | | 21 ms, 43 / 48 ms | |
+| listgestures, GPU now | 47 ms | 1.1 ms | 12 / 16 ms | 0.8 / 1.6 ms | | 0.7 ms, 15 / 32 ms | |
+| tabledemo, before | 984 ms | 6.5 ms | 9.4 / 18 ms | 5.2 / 182 ms | | 2.5 ms, 19 / 37 ms | |
+| tabledemo, CPU now | 59 ms | 2.0 ms | 9.7 / 16 ms | 2.1 / 10 ms | | 1.3 ms, 11 / 27 ms | |
+| tabledemo, GPU now | 52 ms | 1.1 ms | 11 / 16 ms | 1.6 / 2.0 ms | | 0.8 ms, 12 / 27 ms | |
+| motiondemo, before | 107 ms | 5.3 ms | 11 / 19 ms | 7.2 / 11 ms | | | 13 ms (1 dropped) |
+| motiondemo, CPU now | 49 ms | 2.4 ms | 11 / 16 ms | 2.0 / 2.1 ms | | | 5.1 ms |
+| motiondemo, GPU now | 43 ms | 0.4 ms | 12 / 18 ms | 0.5 / 0.9 ms | | | 0.7 ms |
+| gamedemo, before | 198 ms | 5.2 ms | 9.3 / 20 ms | 8.1 / 16 ms | | | 10 ms |
+| gamedemo, CPU now | 106 ms | 2.5 ms | 11 / 20 ms | 7.5 / 15 ms | | | 5.4 ms |
+| gamedemo, GPU now | 78 ms | 1.1 ms | 13 / 17 ms | 7.4 / 15 ms | | | 0.7 ms |
+| spritedemo, before | 46 ms | 6.2 ms | 11 / 15 ms | 6.0 / 7.0 ms | | | 6.5 ms |
+| spritedemo, CPU now | 38 ms | 4.1 ms | 12 / 16 ms | 4.1 / 4.3 ms | | | 4.3 ms |
+| spritedemo, GPU now | 30 ms | 0.3 ms | 12 / 16 ms | 0.4 / 0.6 ms | | | 0.3 ms |
+| themegallery, before | 92 ms | 0.9 ms | 8.3 / 15 ms | | | | |
+| themegallery, GPU now | 45 ms | 0.6 ms | 13 / 16 ms | | | | |
+
+(gamedemo answers a click on its next game tick.) No animation dropped a
+frame after the changes; motiondemo dropped one before. At a pixel ratio of
+1 the CPU numbers are about a quarter of these. The benchmarks
+(`tools/bench/run_web.py`, built as the site builds) went, on the CPU:
+`theme_switch` 267 → 5.1 ms, `first_frame_2x` 1050 → 10.7 ms, `scroll_list`
+40.8 → 3.1 ms, `text_layout_cold` 373 → 2.2 ms, `startup` 446 → 7 ms, and in
+the page `web_theme_switch` 290 → 17 ms and `web_scroll_list` 44 → 17 ms
+(both now within a frame, which is what they wait for).
+
+Two more things the CPU renderer does now: a floating overlay that stays up
+(a toast) no longer makes every frame a whole one (the tree diff covers the
+overlay layers like the rest; `widgetsdemo`'s welcome toast had made each
+hover repaint the window), and a rectangular clip around content that sits
+well inside it is left out (it clipped nothing, and cost a mask the size of
+the repainted area for each primitive under it: a list's clipped rows).
+What is left on the CPU is fill rate: a wheel step over `listgestures`
+repaints the whole list, 2.3 million pixels at a ratio of 2, in about 20 ms.

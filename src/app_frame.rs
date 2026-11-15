@@ -66,27 +66,21 @@ impl<S: 'static> Pane<S> {
             crate::platform::frame::request();
         }
         // What is drawn over the tree, as `take_damage` would.
-        let overlays = self.overlay_active || self.painted_overlay_active;
         let hover_changed = self.highlight_alphas != self.painted_highlights;
-        let damage = if overlays {
-            Damage::Full
-        } else {
-            let (old, new) = (self.presented.as_ref()?, self.tree.as_ref()?);
-            match self.overlay_damage_rects(old, new, hover_changed, false) {
-                Some(more) => {
-                    rects.extend(more);
-                    if rects.is_empty() {
-                        Damage::None
-                    } else {
-                        Damage::Regions(crate::core::coalesce(rects))
-                    }
+        let (old, new) = (self.presented.as_ref()?, self.tree.as_ref()?);
+        let damage = match self.overlay_damage_rects(old, new, hover_changed, false) {
+            Some(more) => {
+                rects.extend(more);
+                if rects.is_empty() {
+                    Damage::None
+                } else {
+                    Damage::Regions(crate::core::coalesce(rects))
                 }
-                None => Damage::Full,
             }
+            None => Damage::Full,
         };
         let damage = crate::merge_regions(damage, self.take_content_damage());
         self.painted_highlights = self.highlight_alphas.clone();
-        self.painted_overlay_active = self.overlay_active;
         crate::app_dbg(format_args!("present: animated without a build"));
         Some((self.paint_scene(theme, font), damage))
     }

@@ -329,8 +329,8 @@ fn viewport_is(node: &LayoutNode, id: ViewportId) -> bool {
 }
 
 /// Fold `extra` damage rects into `base`. [`Damage::Full`] absorbs everything;
-/// otherwise the rects extend (or become) the region list. An empty `extra`
-/// leaves `base` unchanged.
+/// otherwise the rects extend (or become) the region list, coalesced (so an
+/// area isn't rasterized twice). An empty `extra` leaves `base` unchanged.
 fn merge_regions(base: Damage, extra: Vec<Rect>) -> Damage {
     if matches!(base, Damage::Full) || extra.is_empty() {
         return base;
@@ -341,7 +341,7 @@ fn merge_regions(base: Damage, extra: Vec<Rect>) -> Damage {
         Damage::Full => unreachable!("handled above"),
     };
     regions.extend(extra);
-    Damage::Regions(regions)
+    Damage::Regions(crate::core::coalesce(regions))
 }
 
 /// Everything specific to one OS window: its view onto the shared state, its
@@ -456,10 +456,8 @@ struct Pane<S> {
     touch_epoch: crate::platform::time::Instant,
     // The timer that wakes the loop when a held finger becomes a long press.
     long_press_timer: Option<crate::core::TimerId>,
-    // Whether the frame just built / on screen has overlay layers — overlays
-    // can't be localized by the tree diff, so their presence forces full damage.
+    // Whether the frame just built has overlay layers (they hit-test first).
     overlay_active: bool,
-    painted_overlay_active: bool,
     // The embedded viewport that currently holds input focus (set when its
     // content was last pressed), so keyboard input forwards to it until focus
     // moves elsewhere. `None` = the Stipple chrome owns keyboard focus.
@@ -601,7 +599,6 @@ impl<S: 'static> Pane<S> {
             touch_epoch: crate::platform::time::Instant::now(),
             long_press_timer: None,
             overlay_active: false,
-            painted_overlay_active: false,
             input_viewport: None,
             cursor: CursorIcon::Default,
             menu_ui: Default::default(),
@@ -1779,18 +1776,16 @@ impl<S: 'static> Pane<S> {
     /// frame, and any case where a referenced node can't be found all fall back
     /// to [`Damage::Full`].
     fn take_damage(&mut self) -> Damage {
-        // Floating overlays paint above the tree and can't be localized by the
-        // diff, so any frame with overlays (or that just had them) is full.
-        let overlay_changed = self.overlay_active || self.painted_overlay_active;
+        // Floating overlays are later children of the tree's root (the
+        // layers), so the diff localizes them like the rest: one appearing or
+        // going changes the root's children, which repaints the window.
         let hover_changed = self.highlight_alphas != self.painted_highlights;
         let focus_changed = self.focused != self.painted_focused;
         // The drop-target highlight is rare and short-lived: repaint it whole.
         let drop_changed = self.dnd.highlight != self.dnd.painted;
 
         let damage = match (&self.presented, &self.tree) {
-            (Some(old), Some(new))
-                if !overlay_changed && !drop_changed && old.bounds == new.bounds =>
-            {
+            (Some(old), Some(new)) if !drop_changed && old.bounds == new.bounds => {
                 let base = crate::core::diff_trees(old, new);
                 match self.overlay_damage_rects(old, new, hover_changed, focus_changed) {
                     Some(rects) => merge_regions(base, rects),
@@ -1807,7 +1802,6 @@ impl<S: 'static> Pane<S> {
         self.painted_highlights = self.highlight_alphas.clone();
         self.painted_focused = self.focused;
         self.dnd.painted = self.dnd.highlight.clone();
-        self.painted_overlay_active = self.overlay_active;
         damage
     }
 
@@ -4995,6 +4989,53 @@ mod tests {
             bound.max_y() <= 40.0,
             "unhover damage strayed past the old box"
         );
+    }
+
+    /// An overlay that stays up (a toast) doesn't make every frame whole:
+    /// the diff covers its layer like the rest. Its coming and going does.
+    #[test]
+    fn an_overlay_on_screen_keeps_damage_local() {
+        use crate::core::{BoxStyle, OverlaySpec};
+        use crate::render::Color;
+        let mut app = App::new(false, |gone: &bool, cx: &mut Cx<bool>| {
+            if !*gone {
+                let toast = Element::boxed(BoxStyle {
+                    fill: Some(Color::rgb(90, 90, 90)),
+                    radius: 0.0,
+                    border: None,
+                })
+                .width(60.0)
+                .height(20.0);
+                cx.overlay(OverlaySpec::new(toast, Anchor::At(Point::new(130.0, 50.0))));
+            }
+            column(vec![
+                Element::boxed(BoxStyle {
+                    fill: Some(Color::rgb(20, 20, 20)),
+                    radius: 0.0,
+                    border: None,
+                })
+                .width(100.0)
+                .height(40.0)
+                .on_tap(cx, |gone| *gone = true),
+            ])
+        })
+        .no_font()
+        .logical_size(Size::new(200.0, 80.0));
+        let _ = app.render_frame();
+        assert!(app.hover_at(Point::new(50.0, 20.0)));
+        let (_p, d) = app.render_frame();
+        let bound = match &d {
+            Damage::Regions(_) => d.bounding().expect("some region"),
+            other => panic!("expected localized regions under an overlay, got {other:?}"),
+        };
+        assert!(bound.max_x() <= 100.0 && bound.max_y() <= 40.0, "{bound:?}");
+        // The toast going repaints where it was (the layers' root changed).
+        assert!(app.click_at(Point::new(50.0, 20.0)));
+        let (_p, d) = app.render_frame();
+        let bound = d
+            .bounding()
+            .unwrap_or(Rect::from_xywh(0.0, 0.0, 200.0, 80.0));
+        assert!(bound.contains(Point::new(150.0, 60.0)), "{d:?}");
     }
 
     #[derive(Default)]

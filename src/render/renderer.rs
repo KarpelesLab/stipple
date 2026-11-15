@@ -17,9 +17,12 @@
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Renderer {
-    /// Stipple's choice. For now that is [`Software`](Self::Software)
-    /// everywhere: the GPU becomes the default platform by platform once it
-    /// matches the CPU closely enough on each (Phase 6 of the roadmap).
+    /// Stipple's choice. On the web that is [`Gpu`](Self::Gpu) when the
+    /// browser runs WebGPU / WebGL2 on a hardware GPU (and the app was built
+    /// with the `gpu` feature), else [`Software`](Self::Software); elsewhere
+    /// [`Software`](Self::Software) for now: the GPU becomes the default
+    /// platform by platform once it matches the CPU closely enough on each
+    /// (Phase 6 of the roadmap).
     #[default]
     Auto,
     /// The CPU rasterizer, always.

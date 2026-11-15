@@ -157,6 +157,16 @@ macro_rules! web_app {
             }
 
             #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_visible(on: u32) {
+                glue::visible(on != 0);
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_gpu_hardware(on: u32) {
+                glue::gpu_hardware(on != 0);
+            }
+
+            #[unsafe(no_mangle)]
             pub extern "C" fn stipple_redraw() {
                 glue::redraw();
             }

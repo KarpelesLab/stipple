@@ -19,6 +19,25 @@ command = "cargo build --release --target wasm32-unknown-unknown --features gpu 
 arg = "--example {artifact}"
 out = "target/wasm32-unknown-unknown/release/examples/{artifact}.wasm"
 
+# The environment the command runs in: how fast the modules run on the site
+# (docs/performance.md#on-the-web). SIMD (every current browser has it),
+# one codegen unit and link-time optimization for the release profile, and
+# the newest dependencies the toolchain can build rather than the newest the
+# library's minimum Rust can (oxideav-raster from 0.1.4 needs Rust 1.95 and
+# rasterizes several times faster; without a Cargo.lock the build resolves
+# afresh).
+[build.env]
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS = "-C target-feature=+simd128"
+CARGO_PROFILE_RELEASE_LTO = "true"
+CARGO_PROFILE_RELEASE_CODEGEN_UNITS = "1"
+CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS = "allow"
+
+# `build.py site` runs binaryen's wasm-opt on each module it copies when
+# wasm-opt is on the PATH (or in $WASM_OPT), with these arguments; without
+# it the modules are copied as built.
+[build.wasm-opt]
+args = ["-O2", "--strip-debug", "--strip-producers"]
+
 # Every example has a `description`: one line about what it shows. Other
 # [web.NAME] keys, all optional:
 #   title     the card's title (default: NAME)

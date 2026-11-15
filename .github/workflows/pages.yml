@@ -59,6 +59,13 @@ jobs:
       - name: Install a font
         run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
 
+      # binaryen's wasm-opt, which `build.py site` runs over each module (a
+      # tool, not a dependency; without it the modules are copied as built).
+      - name: Install wasm-opt
+        run: |
+          curl -sSL https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz | tar xz -C "$RUNNER_TEMP"
+          echo "WASM_OPT=$RUNNER_TEMP/binaryen-version_123/bin/wasm-opt" >> "$GITHUB_ENV"
+
       - name: Generate the site
         run: python3 tools/site/build.py site --out site --font /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf --strict
 

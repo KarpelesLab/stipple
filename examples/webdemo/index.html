@@ -106,6 +106,9 @@
         const check = (name, ok, detail) => { checks[name] = { ok: !!ok, detail }; };
 
         // HiDPI: the backing store is the CSS size times the pixel ratio.
+        // (On a GPU, `renderer: "auto"` with a hardware one, the canvas is
+        // sized as the first frame is drawn, once the GPU is up.)
+        for (let i = 0; i < 100 && stats.presents === 0; i++) await sleep(20);
         const dpr = window.devicePixelRatio;
         check("hidpi", canvas.width === Math.round(canvas.clientWidth * dpr),
           `${canvas.width}x${canvas.height} px for ${canvas.clientWidth}x${canvas.clientHeight} CSS px at ${dpr}x`);
@@ -265,7 +268,8 @@
         await sleep(100);
         const clicks1 = probe(0);
         await clickOn(second, BUTTONS.counter, BUTTONS.y);
-        const px = second.getContext("2d").getImageData(0, 0, second.width, second.height).data;
+        const shot = app2.snapshot();
+        const px = shot.getContext("2d").getImageData(0, 0, shot.width, shot.height).data;
         const colors = new Set();
         for (let i = 0; i < px.length; i += 16) colors.add((px[i] << 16) | (px[i + 1] << 8) | px[i + 2]);
         const p2 = (i) => app2.exports.webdemo_probe(i);

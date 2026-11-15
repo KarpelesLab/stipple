@@ -376,6 +376,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The web is faster (docs/performance.md#on-the-web): `Renderer::Auto`
+  draws with WebGPU / WebGL2 when the browser runs them on a hardware GPU
+  (`stipple.js` checks once per page; SwiftShader stays on the CPU); an app
+  scrolled out of view, in an iframe off its page or in a hidden tab draws
+  no frames (`stipple_visible`); the site builds its modules with SIMD, LTO
+  and `wasm-opt -O2`, and with the newest oxideav its toolchain can build
+  (raster and shaping several times faster). On the examples at a pixel
+  ratio of 2, a hover went from up to 380 ms to under 2 ms of work.
+- The CPU renderer: a floating overlay that stays up (a toast) no longer
+  makes every frame a whole one, and a rectangular clip around content well
+  inside it is left out (it cost a mask the size of the repainted area).
 - `Font::with_system_fallbacks()` loads each system fallback when text first
   needs it rather than at once.
 - Stipple says on stderr which GPU API it draws with whenever it sets one

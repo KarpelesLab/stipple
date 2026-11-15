@@ -77,16 +77,35 @@ mod page {
 
     thread_local! {
         pub(super) static PAGE: Cell<Option<Want>> = const { Cell::new(None) };
+        /// The browser draws WebGPU / WebGL2 on a hardware GPU (not
+        /// SwiftShader or another software rasterizer), as the page found.
+        pub(super) static HARDWARE: Cell<bool> = const { Cell::new(false) };
     }
 
     /// Set from the page, before the app starts.
     pub(crate) fn set(value: &str) {
         PAGE.with(|p| p.set(super::parse(value)));
     }
+
+    /// Set from the page, before the app starts.
+    pub(crate) fn set_hardware(on: bool) {
+        HARDWARE.with(|h| h.set(on));
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use page::set as set_page_renderer;
+pub(crate) use page::{set as set_page_renderer, set_hardware as set_page_hardware_gpu};
+
+/// Whether [`Renderer::Auto`] draws on the GPU: on the web, in a module built
+/// with the renderer, when the page found a hardware GPU behind WebGPU and
+/// WebGL2 (on a software one, SwiftShader, the CPU renderer is faster).
+/// Elsewhere not yet (Phase 6h).
+fn auto_gpu() -> bool {
+    #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
+    return page::HARDWARE.with(|h| h.get());
+    #[cfg(not(all(target_arch = "wasm32", feature = "gpu")))]
+    false
+}
 
 /// The page's `renderer` option.
 #[cfg(target_arch = "wasm32")]
@@ -114,7 +133,9 @@ fn from_env() -> Option<Want> {
 pub(crate) fn resolve(choice: Renderer, env: Option<Want>) -> Want {
     env.unwrap_or(match choice {
         Renderer::Gpu => Want::Gpu(Which::Native),
-        // `Auto` is the CPU until the GPU is the better default (Phase 6h).
+        // `Auto` is the CPU until the GPU is the better default (Phase 6h),
+        // except in a browser with a hardware GPU.
+        Renderer::Auto if auto_gpu() => Want::Gpu(Which::Native),
         Renderer::Auto | Renderer::Software => Want::Software,
     })
 }

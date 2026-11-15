@@ -203,6 +203,27 @@ pub(crate) fn is_rect(path: &Path) -> bool {
         .all(|w| w[0].x == w[1].x || w[0].y == w[1].y)
 }
 
+/// How far inside a rect clip what it holds must stay for the clip to change
+/// nothing, in the group's units: two pixels at a scale of 1/2 or more, so a
+/// pixel the content touches is one the clip covers wholly (the clip's
+/// anti-aliased edge would otherwise lighten content that reaches it).
+const HOLD_MARGIN: f32 = 2.0;
+
+/// Whether the rect `clip` holds everything `children` draw (in the same
+/// coordinates), with [`HOLD_MARGIN`] to spare: the clip then clips nothing.
+fn holds(clip: &Path, children: &[Node]) -> bool {
+    if !is_rect(clip) {
+        return false;
+    }
+    let (Some(c), Some(b)) = (path_bounds(clip), subtree_bounds(children)) else {
+        return false;
+    };
+    b[0] >= c[0] + HOLD_MARGIN
+        && b[1] >= c[1] + HOLD_MARGIN
+        && b[2] <= c[2] - HOLD_MARGIN
+        && b[3] <= c[3] - HOLD_MARGIN
+}
+
 /// The inverse of `t`, if it has one.
 pub(crate) fn invert(t: &Transform2D) -> Option<Transform2D> {
     let det = t.a * t.d - t.b * t.c;
@@ -314,7 +335,12 @@ impl Lower<'_> {
                 // A rect clip around the whole view clips nothing the view
                 // doesn't, and costs a mask the size of the area for every
                 // primitive under it.
-                let clip = g.clip.clone().filter(|c| !self.covers_view(c, &local));
+                // Nor does one around everything under it (a clipped row
+                // whose content sits inside it).
+                let clip = g
+                    .clip
+                    .clone()
+                    .filter(|c| !self.covers_view(c, &local) && !holds(c, &children));
                 Some(Node::Group(Group {
                     transform: g.transform,
                     opacity: g.opacity,
@@ -584,6 +610,49 @@ mod tests {
             }
         }
         let _ = Point::ORIGIN;
+    }
+
+    /// A rect clip around everything under it (with room to spare) is
+    /// dropped: it would cost a mask and clip nothing. One that what it
+    /// holds reaches stays, and the render is the same either way.
+    #[test]
+    fn a_clip_holding_its_content_is_dropped() {
+        let make = |inset: f64| {
+            let mut s = Scene::new(Size::new(100.0, 100.0));
+            s.push_clip(Rect::from_xywh(10.0, 10.0, 60.0, 30.0));
+            s.fill_rect(
+                Rect::from_xywh(
+                    10.0 + inset,
+                    10.0 + inset,
+                    60.0 - 2.0 * inset,
+                    30.0 - 2.0 * inset,
+                ),
+                Color::WHITE,
+            );
+            s.pop_clip();
+            s
+        };
+        let clipped = |scene: &Scene| {
+            fn any(nodes: &[Node]) -> bool {
+                nodes.iter().any(|n| match n {
+                    Node::Group(g) => g.clip.is_some() || any(&g.children),
+                    _ => false,
+                })
+            }
+            any(&scene.lower_root(None, &Transform2D::identity()))
+        };
+        assert!(!clipped(&make(4.0)), "content well inside: no clip");
+        assert!(clipped(&make(0.0)), "content reaching the edge: clipped");
+        assert!(clipped(&make(1.0)), "within the margin: clipped");
+        let r = SoftwareRenderer::new().background(Color::BLACK);
+        let unclipped = {
+            let mut s = Scene::new(Size::new(100.0, 100.0));
+            s.fill_rect(Rect::from_xywh(14.0, 14.0, 52.0, 22.0), Color::WHITE);
+            s
+        };
+        let a = r.render(make(4.0), ScaleFactor::new(2.0));
+        let b = r.render(unclipped, ScaleFactor::new(2.0));
+        assert!(a == b, "the same pixels");
     }
 
     /// A glyph's cache key is for the GPU: the software rasterizer gets the

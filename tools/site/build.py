@@ -8,7 +8,10 @@ browser. Standard library only (Python 3.11+, for tomllib).
     python3 tools/site/build.py check-manifest # every example classified?
     python3 tools/site/check.py target/site    # links, examples load, thumbnails
 
-Which examples run on the web, and how they're built, is in examples.toml.
+Which examples run on the web, and how they're built, is in examples.toml:
+`wasm` runs its command in its [build.env] (SIMD, LTO), and `site` runs
+binaryen's wasm-opt over each module when it's installed (on the PATH, or
+$WASM_OPT).
 
 A guide shows a running example where it says, on a line of its own,
 
@@ -124,6 +127,39 @@ def check_manifest():
 def wasm_command(build, web):
     args = " ".join(build["arg"].format(name=e.name, artifact=e.artifact) for e in web)
     return build["command"].format(args=args)
+
+
+def wasm_env(build):
+    """The environment the build command adds: [build.env] (what the caller's
+    environment sets wins)."""
+    return {k: str(v) for k, v in build.get("env", {}).items()}
+
+
+def find_wasm_opt():
+    return os.environ.get("WASM_OPT") or shutil.which("wasm-opt")
+
+
+def optimize_modules(jobs, args):
+    """Run wasm-opt over each (src, dest) of `jobs`, a few at a time; a
+    module it fails on is copied as built. Returns the failures."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    tool = find_wasm_opt()
+    failed = []
+
+    def one(job):
+        src, dest = job
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if tool:
+            r = subprocess.run([tool, *args, str(src), "-o", str(dest)], capture_output=True, text=True)
+            if r.returncode == 0:
+                return
+            failed.append(f"wasm-opt failed on {src.name}: {r.stderr.strip()[:300]}")
+        shutil.copyfile(src, dest)
+
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
+        list(pool.map(one, jobs))
+    return failed
 
 
 # --- Pages ------------------------------------------------------------------
@@ -451,17 +487,24 @@ class Site:
             self.copy(self.font, "font.ttf")
         else:
             self.problems.append("no --font: text in the examples won't render")
-        # The modules.
+        # The modules, through wasm-opt where it's installed.
         missing = []
         if self.wasm_dir is not None:
+            jobs = []
             for ex in self.web:
                 src = Path(self.build["out"].format(artifact=ex.artifact, name=ex.name))
                 if not src.is_absolute():
                     src = ROOT / src
                 if src.exists():
-                    self.copy(src, f"wasm/{ex.name}.wasm")
+                    jobs.append((src, self.out / f"wasm/{ex.name}.wasm"))
                 else:
                     missing.append(ex.name)
+            opt = self.build.get("wasm-opt", {}).get("args", ["-O3"])
+            if find_wasm_opt():
+                print(f"wasm-opt {' '.join(opt)}: {len(jobs)} modules", flush=True)
+            # Not a problem for --strict: the module as built still works.
+            for warning in optimize_modules(jobs, opt):
+                print("warning:", warning, file=sys.stderr)
         if missing:
             self.problems.append("not built (run `build.py wasm`): " + ", ".join(missing))
         # The pages that were here before the site: the web demo and its
@@ -503,9 +546,10 @@ def main():
     if a.cmd == "wasm":
         build, web, _ = load_manifest()
         cmd = wasm_command(build, web)
-        print(cmd, flush=True)
+        env = wasm_env(build)
+        print(" ".join(f"{k}={shlex.quote(v)}" for k, v in env.items()), cmd, flush=True)
         if not a.print:
-            sys.exit(subprocess.call(shlex.split(cmd), cwd=ROOT))
+            sys.exit(subprocess.call(shlex.split(cmd), cwd=ROOT, env={**env, **os.environ}))
         return
     font = a.font
     site = Site(a.out, font, wasm_dir=None if a.no_wasm else True, strict=a.strict)

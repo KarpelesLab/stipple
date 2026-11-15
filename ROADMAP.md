@@ -975,6 +975,13 @@ CPU as the default and the fallback.
   the CPU). Device loss: set up again once, then the CPU on a fresh canvas.
   Chrome on an M5 Max, 2560×1600 widget frame: 37 ms on the CPU, 2.8 ms
   WebGPU, 3.2 ms WebGL2.*
+- ✅ The default on the web where it's fast: `Renderer::Auto` draws on the
+  GPU when the browser has a hardware one, on the CPU under SwiftShader.
+  *`stipple.js` asks WebGL2 with `failIfMajorPerformanceCaveat` and reads
+  the renderer's name; `stipple_gpu_hardware`. With the site's build (SIMD,
+  LTO, wasm-opt, current oxideav), frames out of view stopped and overlays
+  no longer forcing whole frames, the examples answer input within a frame
+  at a pixel ratio of 2 (docs/performance.md#on-the-web).*
 - ✅ CI: headless Chrome (SwiftShader) pixel comparison.
   *`examples/webdemo/gpucompare.html` diffs the corpus on both APIs and
   takes an app through two lost devices (`visual-web-gpu`, non-blocking:
