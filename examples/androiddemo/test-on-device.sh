@@ -96,6 +96,18 @@ wait_for() {
   return 1
 }
 
+# Wait up to $2 seconds for the resumed activity to match $1.
+wait_top() {
+  local i
+  for ((i = 0; i < ${2:-20}; i++)); do
+    adb shell dumpsys activity activities | grep -E "topResumedActivity" | grep -qE "$1" && return 0
+    sleep 1
+  done
+  echo "the top activity isn't $1:" >&2
+  adb shell dumpsys activity activities | grep -E "topResumedActivity" >&2 || true
+  return 1
+}
+
 # Each build signs with a fresh debug key, so an older install has to go first.
 adb install -r "$apk" || { adb uninstall "$pkg" && adb install "$apk"; }
 adb shell am force-stop "$pkg" || true
@@ -556,17 +568,6 @@ tap_when() {
   echo "no node matching $1 on screen:" >&2
   adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' | grep -oE '(text|resource-id|content-desc)="[^"]+"' >&2 || true
   adb exec-out screencap -p > "$shots/android-no-node.png" || true
-  return 1
-}
-# Wait up to $2 seconds for the resumed activity to match $1.
-wait_top() {
-  local i
-  for ((i = 0; i < ${2:-20}; i++)); do
-    adb shell dumpsys activity activities | grep -E "topResumedActivity" | grep -qE "$1" && return 0
-    sleep 1
-  done
-  echo "the top activity isn't $1:" >&2
-  adb shell dumpsys activity activities | grep -E "topResumedActivity" >&2 || true
   return 1
 }
 
