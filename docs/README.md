@@ -17,6 +17,7 @@ How to build, package and run on each platform, and what works there today.
 - [iOS](platforms/ios.md)
 - [Android](platforms/android.md)
 - [Web](platforms/web.md): `wasm32` and a `<canvas>`
+- [Packaging for the App Store and Google Play](packaging.md): `cargo-stipple`, a signed `.ipa` and `.aab` from a manifest in `Cargo.toml`
 
 ### What works where
 

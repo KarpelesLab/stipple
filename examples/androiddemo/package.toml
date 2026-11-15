@@ -1,0 +1,30 @@
+# androiddemo's packaging manifest for cargo-stipple (tools/package), which
+# CI builds an .aab and a universal APK from:
+#
+#   tools/package/cargo-stipple android --example androiddemo \
+#       --config examples/androiddemo/package.toml
+#
+# An app keeps the same keys in its Cargo.toml, under
+# [package.metadata.stipple]. See docs/packaging.md.
+id = "com.karpeleslab.stipple"
+name = "Stipple"
+version = "1.2.3"
+build = 7
+icon = "../../tools/package/stipple-icon.svg"
+icon-background = "#16181d"
+assets = "assets"
+languages = ["en", "fr", "ja"]
+
+[localized.fr]
+name = "Stipple (démo)"
+
+[localized.ja]
+name = "Stipple デモ"
+
+[android]
+# The NativeActivity loads libstipple_android.so.
+lib-name = "stipple_android"
+permissions = ["POST_NOTIFICATIONS"]
+# The Alarm receiver and its classes.dex (platform::schedule_notification).
+scheduled-notifications = true
+splash-background = "#16181d"

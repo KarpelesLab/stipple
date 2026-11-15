@@ -11,7 +11,9 @@ Three workflows run on every push and pull request:
   starts and draws there, that an
   accessibility tree reached the OS. Linux runs under Xvfb (X11) and headless
   sway and Weston (Wayland); iOS and Android under their simulator and
-  emulator.
+  emulator. It also packages `touchdemo` and `androiddemo` for the stores
+  with [`cargo-stipple`](packaging.md) (an `.ipa` and a simulator `.app`, an
+  `.aab` and a universal APK) and checks the results.
 - **Release-plz**: on `master`, opens release pull requests and publishes to
   crates.io when one is merged.
 

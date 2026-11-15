@@ -1,0 +1,26 @@
+# touchdemo's packaging manifest for cargo-stipple (tools/package), which CI
+# builds a simulator .app and an ad hoc .ipa from:
+#
+#   tools/package/cargo-stipple ios --simulator --example touchdemo \
+#       --config examples/touchdemo/package.toml
+#
+# An app keeps the same keys in its Cargo.toml, under
+# [package.metadata.stipple]. See docs/packaging.md.
+id = "com.karpeleslab.stipple"
+name = "Stipple Touch"
+version = "1.2.3"
+build = 7
+icon = "../../tools/package/stipple-icon.svg"
+icon-background = "#16181d"
+assets = "assets"
+orientations = ["portrait", "landscape"]
+languages = ["en", "fr"]
+
+[localized.fr]
+name = "Stipple Tactile"
+usage = { photo-library = "Pour choisir une image à afficher." }
+
+[ios]
+minimum-os = "15.0"
+device-family = ["iphone", "ipad"]
+usage = { photo-library = "To pick a picture to show." }

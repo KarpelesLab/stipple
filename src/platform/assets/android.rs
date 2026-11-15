@@ -75,7 +75,9 @@ fn open_mode(path: &str, mode: c_int) -> Result<Option<Asset>, AssetError> {
     let c = c_path(path)?;
     crate::platform::backend::android::with_asset_manager(|mgr| {
         let a = unsafe { AAssetManager_open(mgr, c.as_ptr(), mode) };
-        Some((!a.is_null()).then_some(Asset(a)))
+        // `then`, not `then_some`: an `Asset` made of a null pointer would be
+        // dropped, and `AAsset_close(NULL)` crashes (Android 15).
+        Some((!a.is_null()).then(|| Asset(a)))
     })
     .ok_or_else(no_activity)
 }

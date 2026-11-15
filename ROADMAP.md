@@ -1488,6 +1488,19 @@ Most input only works on X11 today.
   build-checked. Not yet: Play Asset Delivery, iOS on-demand resources,
   `AAsset_openFileDescriptor`._ See
   [docs/os-integration.md](docs/os-integration.md#packaged-assets).
+- ✅ Store packaging (`cargo-stipple`, #50): _a manifest in `Cargo.toml`
+  (`[package.metadata.stipple]`) to a signed `.aab` (proto resources from
+  `aapt2`, three ABIs at 16 KB pages, native targeting, no language splits)
+  and universal APK, and a signed `.app`/`.ipa` (Info.plist, `actool` icon
+  catalog, `InfoPlist.strings`, privacy manifest, dSYM) or a simulator
+  `.app`; icons drawn from one image by Stipple's own image code; keys from
+  the environment. Python standard library plus a Rust helper; no Gradle,
+  no Xcode project. Run by hand on an API 35 emulator (the universal APK)
+  and the iOS 27 simulator; signed with a development identity; CI
+  packages both demos, launches the simulator `.app` and has bundletool
+  validate and split the bundle (not blocking yet). Not yet: an upload to
+  either store, asset packs, on-demand resources, app extensions._ See
+  [docs/packaging.md](docs/packaging.md).
 - ✅ The user's languages and formats (#47): `platform::preferred_languages`
   (BCP 47 tags in order: `NSLocale.preferredLanguages`,
   `LocaleList.getDefault()` over JNI, `GetUserPreferredUILanguages`,

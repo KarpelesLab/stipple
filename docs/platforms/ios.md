@@ -13,6 +13,13 @@ cargo build --release -p your-app --target aarch64-apple-ios       # device
 
 ## Packaging
 
+For the App Store, [`cargo-stipple ios`](../packaging.md) writes the bundle
+below from a manifest in the app's `Cargo.toml` (with the icon catalog,
+localized names and permission prompts, the privacy manifest and the
+assets), signs it with your identity and provisioning profile, and zips the
+`.ipa`; `--simulator` makes a simulator `.app`. See
+[packaging.md](../packaging.md). What follows is the bundle by hand.
+
 iOS only runs bundled apps. The smallest bundle is a directory holding the
 binary and an `Info.plist`:
 
@@ -69,8 +76,9 @@ xcrun simctl install booted YourApp.app
 xcrun simctl launch booted com.example.your-app
 ```
 
-A device build must also be signed with your Apple developer identity, which
-Xcode or `codesign` handles.
+A device build must also be signed with your Apple developer identity and a
+provisioning profile: `cargo-stipple ios` does it (see
+[packaging.md](../packaging.md#ios)), or Xcode, or `codesign`.
 
 ## Layout
 

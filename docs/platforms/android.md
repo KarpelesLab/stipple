@@ -385,6 +385,13 @@ Building only the `stipple` library needs no NDK: nothing links until the cdylib
 
 ## Packaging
 
+For Google Play, [`cargo-stipple android`](../packaging.md) builds every
+ABI and writes a signed Android App Bundle (`.aab`) and a universal APK from
+a manifest in the app's `Cargo.toml`: launcher icons from one image, the
+label in each language, target SDK 35, 16 KB pages, and the upload key from
+environment variables. See [packaging.md](../packaging.md). What follows is
+what it does underneath, by hand, for one ABI.
+
 The APK needs no Gradle. [`examples/androiddemo/build-apk.sh`](../../examples/androiddemo/build-apk.sh)
 does all of this for the demo (`build-apk.sh x86_64 stipple.apk`, or
 `arm64-v8a` for a phone). By hand, with the SDK's build tools:

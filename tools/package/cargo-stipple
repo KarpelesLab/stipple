@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Package a Stipple app for the App Store and Google Play: a signed `.ipa`
+(and a simulator `.app`) for iOS, an `.aab` and a universal APK for Android,
+from the `[package.metadata.stipple]` section of the app's Cargo.toml.
+Standard library only (Python 3.11+, for tomllib).
+
+    cargo-stipple android [--example NAME | --lib] [--config FILE]
+    cargo-stipple ios [--simulator] [--example NAME | --bin NAME] [--config FILE]
+    cargo-stipple check [--config FILE]       # read the manifest, print it
+
+With this directory on PATH, Cargo runs it as a subcommand:
+`cargo stipple android`. See docs/packaging.md for the manifest's keys,
+signing (environment variables) and uploading.
+"""
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import common  # noqa: E402
+from common import PackageError, Target  # noqa: E402
+from manifest import ManifestError, load  # noqa: E402
+
+
+def main(argv):
+    # `cargo stipple ...` runs `cargo-stipple stipple ...`.
+    if argv[:1] == ["stipple"]:
+        argv = argv[1:]
+    ap = argparse.ArgumentParser(prog="cargo stipple", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    for name, what in (
+        ("android", "an .aab for Google Play and a universal APK"),
+        ("ios", "an .app and an .ipa for the App Store (or a simulator .app)"),
+        ("check", "read the manifest and print what it gives"),
+    ):
+        p = sub.add_parser(name, help=what)
+        p.add_argument("--manifest-path", default="Cargo.toml", help="the app's Cargo.toml")
+        p.add_argument("--config", help="a TOML file with the manifest's keys, instead of Cargo.toml's")
+        p.add_argument("--build", type=int, help="the build number (versionCode, CFBundleVersion)")
+        p.add_argument("-v", "--verbose", action="store_true", help="print each command")
+        if name == "check":
+            continue
+        which = p.add_mutually_exclusive_group()
+        which.add_argument("--example", help="package an example of the package")
+        if name == "android":
+            which.add_argument("--lib", action="store_true", help="the package's cdylib (the default)")
+        else:
+            which.add_argument("--bin", help="the binary to package")
+            p.add_argument("--simulator", action="store_true", help="a .app for the simulator")
+            p.add_argument("--ios-target", help="the Rust target (default aarch64-apple-ios[-sim])")
+        p.add_argument("--profile", default="release", help="the Cargo profile (release)")
+        p.add_argument("--features", help="Cargo features to build with")
+        p.add_argument("--out", help="the output directory (target/stipple-package/<platform>)")
+    args = ap.parse_args(argv)
+    common.VERBOSE = args.verbose
+    if args.build is not None:
+        import os
+
+        os.environ["STIPPLE_BUILD_NUMBER"] = str(args.build)
+
+    m, meta, package = load(args.manifest_path, args.config)
+    args.manifest_path = str(Path(package["manifest_path"]))
+    target_dir = Path(meta["target_directory"])
+    if args.cmd == "check":
+        for k, v in sorted(vars(m).items()):
+            if k not in ("package", "base"):
+                print(f"{k} = {v!r}")
+        return 0
+
+    if args.example:
+        target = Target(package, "example", args.example)
+    elif args.cmd == "android":
+        target = Target(package, "lib")
+    else:
+        target = Target(package, "bin", args.bin)
+    work = target_dir / "stipple-package" / "work"
+    work.mkdir(parents=True, exist_ok=True)
+    helper = common.Helper(args.manifest_path, work, target_dir)
+    if args.cmd == "android":
+        import android
+
+        android.package(m, args, target, target_dir, work, helper)
+    else:
+        import ios
+
+        ios.package(m, args, target, target_dir, work, helper)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except (PackageError, ManifestError) as e:
+        print(f"cargo-stipple: error: {e}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        sys.exit(130)

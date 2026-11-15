@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Store packaging (#50): `cargo-stipple` (`tools/package`, Python standard
+  library plus a small Rust helper built against the app's own Stipple)
+  reads `[package.metadata.stipple]` from the app's `Cargo.toml` (id, name,
+  version and build, one icon image, orientations, languages and localized
+  names, permissions and iOS usage strings, assets, minimum OS and target
+  SDK) and writes, for Android, a signed Android App Bundle (proto manifest
+  and resources from `aapt2`, `lib/` for arm64-v8a, armeabi-v7a and x86_64
+  linked for 16 KB pages, assets, the receiver dex, the native targeting and
+  bundle config) and a universal APK, with adaptive and legacy launcher
+  icons, `strings.xml` per language, a locale config, an Android 12 splash
+  colour and target SDK 35; and for iOS a `.app` (Info.plist with the
+  launch screen, scenes, orientations, device families, usage
+  descriptions, encryption flag and the SDK keys; the icon catalog through
+  `actool`, or loose icons without Xcode; `InfoPlist.strings` per
+  language; `PrivacyInfo.xcprivacy` with Stipple's required-reason APIs;
+  assets; a dSYM) signed with an identity and provisioning profile from the
+  environment (ad hoc without), zipped into an `.ipa`, or built for the
+  simulator. Signing keys come from `STIPPLE_ANDROID_KEYSTORE*` and
+  `STIPPLE_IOS_*`. See `docs/packaging.md`. CI packages `touchdemo` and
+  `androiddemo`, launches the simulator `.app`, and has bundletool validate
+  and split the bundle.
+
 - Packaged assets (#59): `platform::assets()` reads files the app was
   packaged with by relative path (`read`, `open` as a `Read + Seek` reader,
   `exists`, `list`, and the `image`, `svg`, `font`, `sound` and `text`
@@ -192,6 +214,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Font::with_system_fallbacks()` loads each system fallback when text first
   needs it rather than at once.
+
+### Fixed
+
+- Android: reading an asset that isn't there no longer crashes on Android 15
+  (`AAsset_close` was called on the null asset).
 
 ### Other
 
