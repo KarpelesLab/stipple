@@ -3117,6 +3117,47 @@ jobs:
           # global id — the macOS runner has real IOSurface support.
           grep -q "Metal IOSurface: IOSurface .* id [0-9]" metaldemo.log
 
+      # The scene executor on Metal against the software renderer, pixel by
+      # pixel (src/gpu/compare.rs); with STIPPLE_REQUIRE_GPU the tests fail
+      # instead of skipping when there's no Metal device. The frames go up
+      # as an artifact.
+      - name: Compare the Metal renderer with the software one
+        env:
+          STIPPLE_REQUIRE_GPU: "1"
+          STIPPLE_GPU_DUMP: visual_output/metal-compare
+        run: |
+          mkdir -p visual_output/metal-compare
+          cargo test --features mtl --lib -- gpu:: app_gpu --nocapture --test-threads 1
+          # The frame times, CPU against Metal, for the log.
+          cargo test --release --features mtl --lib -- --ignored bench_cpu_against_gpu --nocapture
+      - name: Upload the Metal comparison frames
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-macos-metal-compare
+          path: visual_output/metal-compare/*
+          if-no-files-found: warn
+
+      # A real window drawn by Metal and presented through its CAMetalLayer.
+      - name: Screenshot an app drawn with Metal
+        env:
+          STIPPLE_COCOA_A11Y: "1"
+          STIPPLE_RENDERER: metal
+        run: |
+          mkdir -p visual_output
+          cargo build --release --features mtl --example widgetsdemo
+          ./target/release/examples/widgetsdemo > visual_output/metal-window.log 2>&1 &
+          pid=$!
+          sleep 6
+          cat visual_output/metal-window.log
+          win=$(sed -n 's/^Cocoa window number: //p' visual_output/metal-window.log)
+          [ -n "$win" ]
+          screencapture -x -o -l "$win" visual_output/stipple-macos-metal.png
+          kill "$pid" || true
+          # It drew with Metal, and didn't fall back to the CPU.
+          grep -q "stipple: drawing with Metal" visual_output/metal-window.log
+          ! grep -q "drawing on the CPU" visual_output/metal-window.log
+
       - name: Launch the Stipple window and screenshot the screen
         env:
           STIPPLE_COCOA_A11Y: "1"

@@ -1,30 +1,49 @@
-//! Experimental GPU present path: route a software [`Pixmap`] through OpenGL
-//! ES 2 (raw EGL + GLES FFI — no `ash`/`glutin`/`khronos` crate; linking the
-//! OS's GL driver fits the "close to the OS" policy in `ROADMAP.md` §1).
+//! The GPU renderers, each over the OS's own API through hand-written FFI
+//! (no `ash`/`glutin`/`metal` crate; linking the OS's driver fits the
+//! "close to the OS" policy in `ROADMAP.md` §1).
 //!
-//! Two paths share the seam: [`present_offscreen`] composites a finished CPU
-//! [`Pixmap`] on the GPU (a pass-through shader), while [`render_scene`] renders
-//! a live stipple [`Scene`] **GPU-natively**: boxes, paths (stencil-and-cover),
-//! images and glyphs (textures cached by identity), clips, and layers with
-//! transforms and group opacity, matching the software renderer to within a
-//! small tolerance (see [`render_scene_scaled`] and `docs/gpu.md`). Both read
-//! back to a `Pixmap`, the GPU half of the [`Surface`](crate::render::Surface)
-//! seam. The scene lowering (`ops`) is backend-neutral; executing it on
-//! Vulkan/Metal/D3D/WebGPU is future work. The EGL
-//! context is **surfaceless**, so it runs headlessly under Mesa's software GL in
-//! CI.
+//! [`render_scene_scaled`] renders a live stipple [`Scene`] **GPU-natively**:
+//! boxes, paths (stencil-and-cover), images and glyphs (textures cached by
+//! identity), clips, and layers with transforms and group opacity, matching the
+//! software renderer to within a small tolerance (see `docs/gpu.md`). The scene
+//! lowering (`ops`) is backend-neutral; Metal (macOS, iOS; feature `mtl`) and
+//! OpenGL ES 2 over surfaceless EGL (Linux; feature `gl`, which also runs
+//! headlessly under Mesa's software GL in CI) execute it. Apps choose it with
+//! [`App::renderer`](crate::App::renderer); on macOS and iOS the frames go
+//! straight to the window's `CAMetalLayer`.
 //!
-//! Linux-only for now (EGL/GLESv2); other targets return an error so the
-//! crate still builds everywhere.
+//! [`present_offscreen`] composites a finished CPU [`Pixmap`] through GLES2.
+//! Vulkan, Direct3D 11 and Metal also have device and triangle spikes below.
+//! Entry points whose backend isn't built in return an error, so the crate
+//! still builds everywhere.
 
 #![allow(unsafe_code)] // raw GPU FFI
 
 use crate::geometry::{PhysicalSize, Rect, ScaleFactor};
 use crate::render::{Color, Font, Pixmap, Scene};
 
-// The scene lowering is backend-neutral; only the GL backend executes it yet.
-#[cfg_attr(not(all(target_os = "linux", feature = "gl")), allow(dead_code))]
-mod ops;
+// The scene lowering is backend-neutral; GLES2 and Metal execute it.
+#[cfg_attr(
+    not(any(
+        all(target_os = "linux", feature = "gl"),
+        all(any(target_os = "macos", target_os = "ios"), feature = "mtl")
+    )),
+    allow(dead_code)
+)]
+pub(crate) mod ops;
+
+// The renderer seam: the executors of `ops`'s list, and choosing one.
+#[cfg_attr(
+    not(any(
+        all(target_os = "linux", feature = "gl"),
+        all(any(target_os = "macos", target_os = "ios"), feature = "mtl")
+    )),
+    allow(dead_code)
+)]
+pub(crate) mod renderer;
+
+#[cfg(all(any(target_os = "macos", target_os = "ios"), feature = "mtl"))]
+mod metal_scene;
 
 #[cfg(all(target_os = "linux", feature = "gl"))]
 mod gl;
@@ -448,8 +467,10 @@ pub fn render_offscreen(
 
 /// Render a live stipple [`Scene`] **GPU-natively** at `scale` (physical
 /// pixels per logical pixel) on a target cleared to `background`, returning
-/// the rendered frame. This is what a renderer set with
-/// [`App::render_with`](crate::App::render_with) calls.
+/// the rendered frame, on this platform's GPU API: Metal on macOS and iOS
+/// (feature `mtl`), OpenGL ES 2 on Linux (feature `gl`). This is what
+/// [`Renderer::Gpu`](crate::render::Renderer::Gpu) draws with, and it can be
+/// set as a renderer with [`App::render_with`](crate::App::render_with).
 ///
 /// Everything a scene holds is drawn on the GPU (see `docs/gpu.md`): boxes
 /// through an analytic-coverage shader, paths (fills, strokes, dashes) by
@@ -462,22 +483,39 @@ pub fn render_offscreen(
 /// rasterized on the CPU, and only for their own bounds. The output stays
 /// within a small tolerance of [`SoftwareRenderer`](crate::render::SoftwareRenderer).
 ///
-/// The GL context and caches are kept per thread, from frame to frame.
-/// Errors if the `gl` feature is off or no GL/EGL device is available.
+/// The device and caches are kept per thread, from frame to frame.
+/// Errors if no GPU backend is built in for this platform or no device is
+/// available.
 pub fn render_scene_scaled(
     scene: &Scene,
     background: Color,
     scale: ScaleFactor,
 ) -> Result<Pixmap, String> {
-    #[cfg(all(target_os = "linux", feature = "gl"))]
-    {
-        gl::render_scene_native(scene, background, scale)
-    }
-    #[cfg(not(all(target_os = "linux", feature = "gl")))]
-    {
-        let _ = (scene, background, scale);
-        Err("stipple::gpu: built without the `gl` feature (Linux-only GLES backend)".to_string())
-    }
+    with_default(|r| r.render(scene, background, scale)).map_err(|e| e.to_string())
+}
+
+thread_local! {
+    /// The calling thread's renderer for [`render_scene_scaled`].
+    static DEFAULT: std::cell::RefCell<Option<renderer::GpuRenderer>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` on the calling thread's default renderer, creating it first; a
+/// renderer whose device was lost is dropped, to be made anew next time.
+fn with_default<T>(
+    f: impl FnOnce(&mut renderer::GpuRenderer) -> Result<T, renderer::GpuError>,
+) -> Result<T, renderer::GpuError> {
+    DEFAULT.with(|cell| {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(renderer::GpuRenderer::new(None)?);
+        }
+        let r = f(slot.as_mut().unwrap());
+        if matches!(r, Err(renderer::GpuError::Lost(_))) {
+            *slot = None;
+        }
+        r
+    })
 }
 
 /// [`render_scene_scaled`] at scale 1. `font` is no longer used: text is
@@ -487,5 +525,11 @@ pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pix
     render_scene_scaled(scene, background, ScaleFactor::IDENTITY)
 }
 
-#[cfg(all(test, target_os = "linux", feature = "gl"))]
+#[cfg(all(
+    test,
+    any(
+        all(target_os = "linux", feature = "gl"),
+        all(target_os = "macos", feature = "mtl")
+    )
+))]
 mod compare;

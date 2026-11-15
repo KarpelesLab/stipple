@@ -1372,6 +1372,8 @@ struct MacWindow {
     size: Cell<PhysicalSize>,
     scale: Cell<f64>,
     fb: RefCell<Framebuffer>,
+    /// The `CAMetalLayer` a GPU renderer presents into, once one asked.
+    metal: RefCell<Option<super::metal_layer::MetalLayer>>,
     /// Accessible label exposed to NSAccessibility (the window title).
     a11y_label: RefCell<String>,
     /// The current accessibility tree (pushed each frame by the App). The view's
@@ -1500,6 +1502,28 @@ impl Window for MacWindow {
             size: self.size.get(),
             view: self.view,
         })
+    }
+    fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        let mut metal = self.metal.borrow_mut();
+        if metal.is_none() {
+            unsafe {
+                // A layer-backed view, with the Metal layer over its own.
+                msg_void_bool(self.view, sel("setWantsLayer:"), true);
+                *metal = super::metal_layer::MetalLayer::attach(msg_id(self.view, sel("layer")));
+            }
+        }
+        let layer = metal.as_mut()?;
+        let (size, scale) = (self.size.get(), self.scale.get());
+        unsafe { layer.fit(size.width as f64 / scale, size.height as f64 / scale, scale) };
+        Some(crate::platform::GpuLayer::Metal(layer.layer()))
+    }
+    fn drop_gpu_layer(&self) {
+        if let Some(layer) = self.metal.borrow_mut().take() {
+            unsafe {
+                layer.detach();
+                msg_void_bool(self.view, sel("setNeedsDisplay:"), true);
+            }
+        }
     }
     fn clipboard(&self) -> Option<String> {
         crate::platform::clipboard::text()
@@ -1820,6 +1844,7 @@ unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, Platf
             size: Cell::new(size),
             scale: Cell::new(scale),
             fb: RefCell::new(Framebuffer::default()),
+            metal: RefCell::new(None),
             a11y_label: RefCell::new(attrs.title.clone()),
             a11y_tree: RefCell::new(None),
             a11y_elements: RefCell::new(None),
@@ -1882,6 +1907,9 @@ unsafe fn close_windows() {
     });
     for w in closed {
         clear_ax_elements(&w);
+        if let Some(layer) = w.metal.borrow_mut().take() {
+            unsafe { layer.detach() };
+        }
         unsafe {
             // No more callbacks into a window we no longer know.
             msg_void_id(w.window, sel("setDelegate:"), std::ptr::null_mut());

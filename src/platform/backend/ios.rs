@@ -289,6 +289,8 @@ struct IosCtx {
     scale: f64,
     /// What shows around the safe area.
     background: Option<crate::render::Color>,
+    /// The `CAMetalLayer` a GPU renderer presents into, once one asked.
+    metal: Option<super::metal_layer::MetalLayer>,
     /// Raw pointer to the (type-erased) handler. `UIApplicationMain` never
     /// returns, so the handler in `run`'s frame lives for the process lifetime.
     handler: *mut DynHandler,
@@ -1249,6 +1251,36 @@ impl Window for IosWindow {
     }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(IosSurface { size: self.size })
+    }
+    fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        CTX.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.view.is_null() {
+                return None;
+            }
+            if c.metal.is_none() {
+                // Over the view's own layer, which `drawRect:` fills.
+                c.metal =
+                    unsafe { super::metal_layer::MetalLayer::attach(msg_id(c.view, sel("layer"))) };
+            }
+            let scale = if c.scale > 0.0 { c.scale } else { 1.0 };
+            let size = self.size;
+            let layer = c.metal.as_mut()?;
+            unsafe { layer.fit(size.width as f64 / scale, size.height as f64 / scale, scale) };
+            Some(crate::platform::GpuLayer::Metal(layer.layer()))
+        })
+    }
+    fn drop_gpu_layer(&self) {
+        let (layer, view) = CTX.with(|c| {
+            let mut c = c.borrow_mut();
+            (c.metal.take(), c.view)
+        });
+        if let Some(layer) = layer {
+            unsafe {
+                layer.detach();
+                msg_void_bool(view, sel("setNeedsDisplay"), true);
+            }
+        }
     }
 }
 

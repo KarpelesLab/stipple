@@ -39,6 +39,7 @@ mod app_clipboard;
 mod app_dnd;
 mod app_frame;
 mod app_gamepad;
+mod app_gpu;
 mod app_keys;
 mod app_lifecycle;
 mod app_pointer;
@@ -205,6 +206,8 @@ pub struct App<S> {
     gamepad: Option<app_gamepad::GamepadFn<S>>,
     // Menus driven by gamepads (`gamepad_navigation`).
     gamepad_nav: Option<app_gamepad::GamepadNav<S>>,
+    /// What draws the frames, for windows opened later ([`App::renderer`]).
+    renderer: crate::render::Renderer,
 }
 
 /// Called when a window moves, resizes or changes state (see
@@ -366,6 +369,8 @@ struct Pane<S> {
     // GPU backend (stipple::gpu) drive on-screen present through the `Surface` seam
     // without stipple depending on it. `None` = software rasterization.
     frame_renderer: Option<FrameRenderer>,
+    /// What draws the frames ([`App::renderer`]) and the GPU layer's state.
+    gpu: app_gpu::PaneGpu,
     // Retained from the last frame build, for routing pointer events.
     tree: Option<LayoutNode>,
     handlers: Handlers<S>,
@@ -529,6 +534,7 @@ impl<S: 'static> Pane<S> {
             attrs: WindowAttributes::new(),
             scale: ScaleFactor::IDENTITY,
             frame_renderer: None,
+            gpu: Default::default(),
             tree: None,
             handlers: Handlers::default(),
             backs: Vec::new(),
@@ -674,6 +680,7 @@ impl<S: 'static> App<S> {
             game: None,
             gamepad: None,
             gamepad_nav: None,
+            renderer: Default::default(),
         }
     }
 
@@ -704,6 +711,7 @@ impl<S: 'static> App<S> {
         let id = self.handle.next_window_id();
         let mut pane = Pane::new(id, Box::new(view), self.handle.clone());
         pane.attrs = attrs;
+        pane.gpu.choice = self.renderer;
         self.panes.push(pane);
         id
     }
@@ -759,6 +767,18 @@ impl<S: 'static> App<S> {
         renderer: impl FnMut(&Scene, Color, ScaleFactor) -> Pixmap + 'static,
     ) -> Self {
         self.primary().frame_renderer = Some(Box::new(renderer));
+        self
+    }
+
+    /// Choose what draws the frames: the CPU, or the platform's GPU API
+    /// (see [`Renderer`](crate::render::Renderer) and `docs/gpu.md`). The
+    /// environment variable `STIPPLE_RENDERER` overrides it. A renderer set
+    /// with [`render_with`](Self::render_with) takes precedence over both.
+    pub fn renderer(mut self, renderer: crate::render::Renderer) -> Self {
+        self.renderer = renderer;
+        for pane in &mut self.panes {
+            pane.gpu.choice = renderer;
+        }
         self
     }
 
@@ -1139,6 +1159,9 @@ impl<S: 'static> Pane<S> {
     /// [`render_with`](App::render_with) renderer if set, else the software path.
     fn rasterize(&mut self, scene: Scene, theme: &Theme, scale: ScaleFactor) -> Pixmap {
         let bg = theme.palette.background;
+        if let Some(pixmap) = self.gpu_rasterize(&scene, bg, scale) {
+            return pixmap;
+        }
         match self.frame_renderer.as_mut() {
             Some(render) => render(&scene, bg, scale),
             None => SoftwareRenderer::new().background(bg).render(scene, scale),
@@ -1645,6 +1668,7 @@ impl<S: 'static> Pane<S> {
         // Mid-fade, an unchanged view needs no rasterizing at all.
         let can_partial = !force
             && self.frame_renderer.is_none()
+            && self.gpu_wanted().is_none()
             && (matches!(damage, Damage::Regions(_)) || (fading && damage.is_empty()))
             && self.last_pixmap.as_ref().map(Pixmap::size) == Some(phys_size);
 
@@ -3164,6 +3188,16 @@ impl<S: 'static> App<S> {
                     (scene, pane.take_damage())
                 }
             };
+            let force = force || retitled || std::mem::take(&mut pane.gpu.force);
+            // Straight to the window's GPU layer, when the window draws on
+            // the GPU and has one.
+            let Some(scene) =
+                pane.present_gpu(scene, &damage, theme, viewport_content, window, force)
+            else {
+                crate::platform::frame::note_present(began.elapsed());
+                return;
+            };
+            let force = force || std::mem::take(&mut pane.gpu.force);
             let phys_size = window.inner_size();
             let surface = surfaces[idx].get_or_insert_with(|| window.create_surface());
             pane.present_scene(
@@ -3173,7 +3207,7 @@ impl<S: 'static> App<S> {
                 viewport_content,
                 surface.as_mut(),
                 phys_size,
-                force || retitled,
+                force,
             );
             crate::platform::frame::note_present(began.elapsed());
         };
@@ -3811,6 +3845,7 @@ impl<S: 'static> App<S> {
                 continue;
             };
             let mut pane = Pane::new(request.id, request.view, self.handle.clone());
+            pane.gpu.choice = self.renderer;
             pane.native = Some(native);
             pane.dark_sent = attrs.dark;
             pane.info = provisional_info(&attrs, window.scale_factor());

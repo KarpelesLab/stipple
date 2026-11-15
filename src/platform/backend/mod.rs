@@ -38,6 +38,10 @@ pub(crate) mod windows;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
 
+/// A `CAMetalLayer` over a view, for GPU presentation (macOS, iOS).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) mod metal_layer;
+
 // Public only for the repository's `touchdemo` harness example, which drives
 // the UIKit text-input protocol through `ios::simulate`.
 #[cfg(target_os = "ios")]

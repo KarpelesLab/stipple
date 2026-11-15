@@ -834,43 +834,62 @@ tolerance, with the software path kept as the fallback. No `wgpu`, `ash`,
 platform layer is.*
 
 Where it stands (see the implementation status above and
-[`docs/gpu.md`](docs/gpu.md)): every backend presents a CPU `Pixmap`.
-`src/gpu/ops.rs` lowers a `Scene` to a backend-independent list of draw
-operations (analytic boxes, stencil-and-cover paths, images and image
-regions, cached glyphs, layers, scissor and stencil clips, canvases), and GLES2
-executes it, pixel-compared against the CPU in CI, but the frame is read back
-and presented as a bitmap. Vulkan, Metal, Direct3D 11 and WebGPU each draw a
-test triangle off-screen and read it back.
+[`docs/gpu.md`](docs/gpu.md)): `src/gpu/ops.rs` lowers a `Scene` to a
+backend-independent list of draw operations (analytic boxes,
+stencil-and-cover paths, images and image regions, cached glyphs, layers,
+scissor and stencil clips, canvases). Metal executes it and presents straight
+to a `CAMetalLayer` (macOS, iOS); GLES2 executes it and the frame is read back
+and presented as a bitmap (Linux); both are pixel-compared against the CPU in
+CI. `App::renderer` / `STIPPLE_RENDERER` choose, with the CPU as the default
+and the fallback. Vulkan, Direct3D 11 and WebGPU each draw a test triangle
+off-screen and read it back.
 
 #### 6a — The architecture
-- ⬜ A GPU presentation seam in the platform layer: a window can hand out a
+- 🚧 A GPU presentation seam in the platform layer: a window can hand out a
   GPU surface (a `CAMetalLayer`, a DXGI swapchain, a Vulkan or EGL window
   surface, a WebGPU canvas context) instead of taking a `Pixmap`, with resize,
   scale changes, occlusion and device loss reported back.
-- ⬜ A renderer trait over the lowered operations, so each backend is an
+  *`Window::gpu_layer` / `drop_gpu_layer`: a `CAMetalLayer` over the view on
+  macOS and iOS, kept at the view's size and scale; device loss comes back
+  from the renderer. The other surfaces come with 6c–6e; occlusion isn't
+  reported yet.*
+- ✅ A renderer trait over the lowered operations, so each backend is an
   executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
   per-backend texture, glyph and offscreen-target caches behind it.
-- ⬜ Choosing: `App::renderer(Renderer::{Auto, Software, Gpu})` plus an
+  *`gpu::renderer::Executor` (read back, or present to a layer) and
+  `GpuRenderer` (an executor plus the glyph cache); GLES2 and Metal.*
+- ✅ Choosing: `App::renderer(Renderer::{Auto, Software, Gpu})` plus an
   environment override (`STIPPLE_RENDERER=software|gpu|metal|vulkan|…`).
   `Auto` picks the platform's GPU backend when a device is available and
   falls back to software when it isn't, when creating it fails, and when the
   device is lost mid-run (rebuilding caches on a new device if one comes back).
-- ⬜ Shaders: one small set (boxes, image/region/glyph quads, stencil fill,
+  *`STIPPLE_RENDERER=software|gpu|metal|gl|auto`. `Auto` stays the CPU
+  until 6h; a lost device is set up again once, then the app stays on the
+  CPU. Loss simulated in tests, on Metal and on a stand-in device.*
+- 🚧 Shaders: one small set (boxes, image/region/glyph quads, stencil fill,
   layer composite), written per API in its own language (MSL, HLSL, GLSL ES,
   WGSL) and SPIR-V for Vulkan, checked in compiled where the API needs
   bytecode, with the sources next to them and a CI step that recompiles the
   bytecode and fails if it differs. No shader compiler as a dependency.
+  *MSL and GLSL ES are compiled from source by the driver at run time
+  (`newLibraryWithSource:`); bytecode for SPIR-V and HLSL comes with 6c/6d.*
 - ⬜ Frame pacing from the swapchain (Metal's display sync, DXGI's waitable
   object, Vulkan FIFO, `wl_surface.frame`, `requestAnimationFrame`) feeding
   the existing frame clock; an idle app does no GPU work.
 
 #### 6b — Metal (macOS, iOS) end to end
-- ⬜ The scene executor on Metal and presentation through a `CAMetalLayer`
+- ✅ The scene executor on Metal and presentation through a `CAMetalLayer`
   backing the window's view (macOS) and the UIKit view (iOS), at the
   display's scale, in sRGB.
-- ⬜ Pixel comparison with the software renderer in CI on the macOS runner's
+  *`src/gpu/metal_scene.rs`, feature `mtl`. Whole frames each present (no
+  damage yet: 6f). Run on macOS (2560×1600 widget frame: 38 ms on the CPU,
+  1.1 ms on Metal); iOS compile-checked only.*
+- ✅ Pixel comparison with the software renderer in CI on the macOS runner's
   Metal device (the `src/gpu/compare.rs` corpus), and the macOS visual jobs
   run once with each renderer.
+  *The `visual-macos` job runs the corpus with `STIPPLE_REQUIRE_GPU`, prints
+  the frame times, and screenshots `widgetsdemo` with
+  `STIPPLE_RENDERER=metal`; its other steps stay on the CPU.*
 - First because the development machines and the macOS runner have real GPUs,
   and because macOS presentation is the one most clearly bound by the CPU
   path today.

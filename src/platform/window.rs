@@ -411,6 +411,18 @@ impl WindowAttributes {
     }
 }
 
+/// A window's GPU layer, which a GPU renderer draws frames into and presents
+/// (see [`Window::gpu_layer`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    any(not(feature = "gpu"), not(any(target_os = "macos", target_os = "ios"))),
+    allow(dead_code)
+)]
+pub(crate) enum GpuLayer {
+    /// A `CAMetalLayer` over the content view (macOS, iOS), sized to it.
+    Metal(*mut std::ffi::c_void),
+}
+
 /// A live native window.
 ///
 /// Backends implement this; the rest of Stipple drives windows only through this
@@ -442,6 +454,19 @@ pub trait Window {
 
     /// Create a [`Surface`] that presents into this window's drawable.
     fn create_surface(&self) -> Box<dyn Surface>;
+
+    /// The GPU presentation seam: put a GPU layer over the window's content
+    /// (once), keep it at the window's size and scale, and hand it out for a
+    /// GPU renderer to present frames into instead of a [`Surface`]. `None`
+    /// (the default): this backend only takes `Pixmap`s.
+    #[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+    fn gpu_layer(&self) -> Option<GpuLayer> {
+        None
+    }
+
+    /// Take the GPU layer away again (the renderer fell back to the CPU):
+    /// the [`Surface`]'s frames show from the next present on.
+    fn drop_gpu_layer(&self) {}
 
     /// Read the system clipboard's text, if any. Default: `None` (backends that
     /// don't implement the clipboard fall back to the in-process mirror).

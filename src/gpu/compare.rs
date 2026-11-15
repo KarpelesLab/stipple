@@ -1,9 +1,11 @@
 //! The GPU scene renderer against the software renderer: each scene is drawn
 //! both ways and the frames compared pixel by pixel.
 //!
-//! These need a GL device (Mesa's llvmpipe does: surfaceless EGL). Without
-//! one they're skipped, unless `STIPPLE_REQUIRE_GPU` is set (as CI's GPU job
-//! does), when they fail. `STIPPLE_GPU_DUMP=<dir>` writes both frames of each
+//! They run on the platform's GPU API, with the same scenes and tolerances:
+//! Metal on macOS (feature `mtl`), GLES2 on Linux (feature `gl`; Mesa's
+//! llvmpipe does, through surfaceless EGL). Without a device they're skipped,
+//! unless `STIPPLE_REQUIRE_GPU` is set (as CI's GPU jobs do), when they fail.
+//! `STIPPLE_GPU_DUMP=<dir>` writes both frames of each
 //! comparison there as PNGs.
 
 use super::*;
@@ -22,6 +24,11 @@ fn gpu(scene: &Scene, bg: Color, scale: f64) -> Option<Pixmap> {
             None
         }
     }
+}
+
+/// Texture uploads in the thread.s last GPU frame.
+fn uploads() -> usize {
+    with_default(|r| Ok(r.uploads())).unwrap_or(0)
 }
 
 fn dump(name: &str, which: &str, p: &Pixmap) {
@@ -297,14 +304,14 @@ fn an_unchanged_image_is_uploaded_once() {
     if gpu(&scene, bg, 1.0).is_none() {
         return;
     }
-    assert!(gl::last_uploads() >= 1);
+    assert!(uploads() >= 1);
     gpu(&scene, bg, 1.0).unwrap();
-    assert_eq!(gl::last_uploads(), 0, "the second frame reuses the texture");
+    assert_eq!(uploads(), 0, "the second frame reuses the texture");
     // A new image (a new `Arc`) is uploaded.
     let mut other = Scene::new(Size::new(160.0, 120.0));
     other.draw_image(Rect::from_xywh(4.0, 4.0, 16.0, 16.0), ramp());
     gpu(&other, bg, 1.0).unwrap();
-    assert_eq!(gl::last_uploads(), 1);
+    assert_eq!(uploads(), 1);
 }
 
 fn layers() -> Scene {
@@ -490,5 +497,127 @@ fn an_app_renders_the_same_through_render_with() {
         let d = diff(&gpu_frame, &cpu);
         eprintln!("app@{scale}: {d:?}");
         assert!(d.mean < 1.0 && d.bad < 0.01, "app@{scale}: {d:?}");
+    }
+}
+
+/// `App::renderer(Renderer::Gpu)`: the app draws on the GPU, and when the
+/// device is lost it draws that frame on the CPU and sets the GPU up again.
+#[test]
+fn an_app_on_the_gpu_survives_losing_the_device() {
+    use crate::prelude::*;
+    use crate::render::Renderer;
+    if gpu(&Scene::new(Size::new(1.0, 1.0)), Color::BLACK, 1.0).is_none() {
+        return;
+    }
+    fn view(_: &(), cx: &mut Cx<()>) -> Element {
+        panel(cx)
+            .children(vec![
+                heading(cx, "On the GPU"),
+                image(ramp()).width(32.0).height(32.0),
+                button(cx, "OK"),
+            ])
+            .width(200.0)
+    }
+    let make = || {
+        let mut app = App::new((), view)
+            .theme(Theme::dark())
+            .logical_size(Size::new(240.0, 160.0))
+            .scale(ScaleFactor::new(2.0));
+        if let Some(font) = Font::system_default() {
+            app = app.font(font);
+        }
+        app
+    };
+    crate::app_gpu::reset(None);
+    let cpu = make().render_once();
+    let mut app = make().renderer(Renderer::Gpu);
+    let first = app.render_once();
+    assert!(crate::app_gpu::current(|r| r.is_some()), "a GPU renderer");
+    dump("app-renderer", "gpu", &first);
+    let d = diff(&first, &cpu);
+    eprintln!("app-renderer: {d:?}");
+    assert!(d.mean < 1.0 && d.bad < 0.01, "{d:?}");
+
+    crate::app_gpu::current(|r| r.unwrap().lose_device());
+    assert_eq!(app.render_once(), cpu, "the lost frame is the CPU's");
+    let again = app.render_once();
+    assert!(crate::app_gpu::current(|r| r.is_some()), "set up again");
+    let d = diff(&again, &cpu);
+    assert!(d.mean < 1.0 && d.bad < 0.01, "{d:?}");
+    crate::app_gpu::reset(None);
+}
+
+/// Frame times, CPU against GPU (`--ignored`; build with `--release`).
+#[test]
+#[ignore]
+fn bench_cpu_against_gpu() {
+    use crate::prelude::*;
+    use std::time::Instant;
+    let Some(font) = Font::system_default() else {
+        return;
+    };
+    // A busy widget window: text, boxes, rounded rects, borders.
+    fn widgets(_: &(), cx: &mut Cx<()>) -> Element {
+        let rows: Vec<Element> = (0..24)
+            .map(|i| {
+                row(vec![
+                    checkbox(cx, format!("Item {i}"), i % 3 == 0, |_| {}),
+                    label(cx, "A line of text that says something"),
+                    button(cx, "Edit"),
+                ])
+                .gap(8.0)
+            })
+            .collect();
+        column(vec![heading(cx, "Widgets"), column(rows).gap(4.0)])
+            .gap(8.0)
+            .padding(crate::geometry::Insets::uniform(16.0))
+    }
+    let mut app = App::new((), widgets)
+        .theme(Theme::dark())
+        .font(font)
+        .logical_size(Size::new(1280.0, 800.0))
+        .scale(ScaleFactor::new(2.0));
+    app.render_once();
+    let scene = app.panes[0].paint_scene(&app.theme, app.font.get());
+    // ~2000 sprites over a background, as `spritedemo --bench` draws.
+    let sheet = ramp();
+    let mut sprites = Scene::new(Size::new(1920.0, 1080.0));
+    sprites.fill_rect(
+        Rect::from_xywh(0.0, 0.0, 1920.0, 1080.0),
+        Color::rgb(30, 40, 80),
+    );
+    for i in 0..2000 {
+        let (x, y) = ((i * 37 % 1888) as f64, (i * 53 % 1048) as f64);
+        sprites.draw_image(Rect::from_xywh(x, y, 32.0, 32.0), sheet.clone());
+    }
+    let bg = Color::rgb(0x18, 0x1b, 0x22);
+    let time = |f: &mut dyn FnMut()| {
+        f();
+        let n = 20;
+        let t = Instant::now();
+        for _ in 0..n {
+            f();
+        }
+        t.elapsed().as_secs_f64() * 1000.0 / n as f64
+    };
+    for (name, scene, scale) in [
+        ("widgets 2560x1600", &scene, 2.0),
+        ("sprites 1920x1080", &sprites, 1.0),
+    ] {
+        let s = ScaleFactor::new(scale);
+        let cpu = time(&mut || {
+            SoftwareRenderer::new()
+                .background(bg)
+                .render(scene.clone(), s);
+        });
+        let read = time(&mut || {
+            render_scene_scaled(scene, bg, s).unwrap();
+        });
+        let gpu = time(&mut || {
+            with_default(|r| r.finish(scene, bg, s)).unwrap();
+        });
+        eprintln!(
+            "{name}: CPU {cpu:.2} ms, GPU {gpu:.2} ms (with read-back {read:.2} ms) per frame"
+        );
     }
 }

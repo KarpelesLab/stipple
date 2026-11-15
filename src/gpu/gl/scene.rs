@@ -15,9 +15,8 @@
 //! freed once it is dropped or hasn't been drawn for a while.
 
 use super::*;
-use crate::geometry::ScaleFactor;
-use crate::gpu::ops::{self, Clip, Op, Plan, RasterCache};
-use crate::render::Scene;
+use crate::gpu::ops::{Clip, Op, Plan, Sample};
+use crate::gpu::renderer::{Api, Executor, GpuError};
 use oxideav_core::Transform2D;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -295,47 +294,6 @@ impl Target {
     }
 }
 
-/// Which part of a texture a quad shows, tinted how and filtered how.
-struct Sample {
-    uv: [f32; 4],
-    clamp: [f32; 4],
-    tint: [f32; 4],
-    nearest: bool,
-}
-
-impl Sample {
-    /// All of it, as it is, bilinear.
-    const WHOLE: Sample = Sample {
-        uv: ops::FULL_UV,
-        clamp: [0.0, 0.0, 1.0, 1.0],
-        tint: ops::NO_TINT,
-        nearest: false,
-    };
-
-    /// The part `uv` of a `w`×`h` texture, kept half a texel inside it so
-    /// bilinear filtering doesn't reach its neighbors.
-    fn region(uv: [f32; 4], w: u32, h: u32, tint: [f32; 4], nearest: bool) -> Sample {
-        let inside = |a: f32, b: f32, n: u32| {
-            let half = 0.5 / n.max(1) as f32;
-            let (lo, hi) = (a.min(b) + half, a.max(b) - half);
-            if lo <= hi {
-                (lo, hi)
-            } else {
-                let mid = (a + b) / 2.0;
-                (mid, mid)
-            }
-        };
-        let (u0, u1) = inside(uv[0], uv[2], w);
-        let (v0, v1) = inside(uv[1], uv[3], h);
-        Sample {
-            uv,
-            clamp: [u0, v0, u1, v1],
-            tint,
-            nearest,
-        }
-    }
-}
-
 /// A cached image texture.
 struct Texture {
     image: Weak<Pixmap>,
@@ -375,7 +333,6 @@ struct State {
     layers: Vec<Target>,
     scratch: Option<Target>,
     textures: HashMap<usize, Texture>,
-    rasters: RasterCache,
     frame: u64,
     /// Texture uploads in the last frame (for tests).
     uploads: usize,
@@ -425,7 +382,6 @@ impl State {
                 layers: Vec::new(),
                 scratch: None,
                 textures: HashMap::new(),
-                rasters: RasterCache::default(),
                 frame: 0,
                 uploads: 0,
             })
@@ -1020,16 +976,24 @@ impl State {
     }
 }
 
-/// Render `scene` at `scale` through the persistent GL scene renderer.
-pub(crate) fn render(
-    scene: &Scene,
-    background: Color,
-    scale: ScaleFactor,
-) -> Result<Pixmap, String> {
+/// The GLES2 executor. Its context and caches are the calling thread's
+/// (EGL contexts are bound per thread), shared by every executor on it.
+pub(crate) struct GlExecutor;
+
+impl GlExecutor {
+    /// Set up (or reuse) the calling thread's context.
+    pub(crate) fn new() -> Result<Self, GpuError> {
+        with_state(|_| Ok(()))?;
+        Ok(GlExecutor)
+    }
+}
+
+/// Run `f` on the calling thread's GL state, made current.
+fn with_state<T>(f: impl FnOnce(&mut State) -> Result<T, GpuError>) -> Result<T, GpuError> {
     STATE.with(|cell| {
         let mut slot = cell.borrow_mut();
         if slot.is_none() {
-            *slot = Some(unsafe { State::new()? });
+            *slot = Some(unsafe { State::new() }.map_err(GpuError::Unavailable)?);
         }
         let state = slot.as_mut().unwrap();
         unsafe {
@@ -1040,17 +1004,26 @@ pub(crate) fn render(
                 state.ctx,
             ) == 0
             {
-                return Err(format!("eglMakeCurrent failed: {:#x}", eglGetError()));
+                return Err(GpuError::Lost(format!(
+                    "eglMakeCurrent failed: {:#x}",
+                    eglGetError()
+                )));
             }
         }
-        let physical = scale.to_physical(scene.logical_size());
-        let plan = ops::plan(scene, background, physical, &mut state.rasters);
-        unsafe { state.render(&plan) }
+        f(state)
     })
 }
 
-/// Texture uploads in the calling thread's last frame (for tests).
-#[cfg(test)]
-pub(crate) fn last_uploads() -> usize {
-    STATE.with(|cell| cell.borrow().as_ref().map_or(0, |s| s.uploads))
+impl Executor for GlExecutor {
+    fn api(&self) -> Api {
+        Api::Gl
+    }
+
+    fn read_back(&mut self, plan: &Plan) -> Result<Pixmap, GpuError> {
+        with_state(|state| unsafe { state.render(plan) }.map_err(GpuError::Lost))
+    }
+
+    fn uploads(&self) -> usize {
+        STATE.with(|cell| cell.borrow().as_ref().map_or(0, |s| s.uploads))
+    }
 }

@@ -59,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the system it would go back meanwhile.
 - `MotionTokens::page` and `MotionTokens::sheet`, in every preset.
 - `examples/navdemo`, in the browser too.
+- Choosing the renderer: `App::renderer(Renderer::{Auto, Software, Gpu})`
+  (`stipple::render::Renderer`) and the `STIPPLE_RENDERER` environment
+  override (`software`, `gpu`, `metal`, `gl`, `auto`). Frames fall back to the
+  CPU when there's no GPU backend or device, when setting it up fails, and
+  when the device is lost (set up again once). `Auto` is still the CPU.
+- Metal renders whole scenes (feature `mtl`): the GLES2 executor's shaders in
+  MSL, compiled at run time, and frames presented straight to a
+  `CAMetalLayer` over the window's view on macOS (and iOS, compile-checked),
+  in sRGB at the display's scale. It matches the software renderer within the
+  GL tolerances, and a busy 2560×1600 frame takes about 1 ms instead of
+  38 ms. `stipple::gpu::render_scene_scaled` now uses Metal on macOS. See
+  `docs/gpu.md`.
 - Test helpers on `App` that find elements as a screen reader knows them:
   `app.find(Role::CheckBox, "Buy milk")` (where it is, whether it's checked),
   `find_all` (every match), `find_text("1 left")` and

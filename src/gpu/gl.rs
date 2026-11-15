@@ -7,9 +7,7 @@ use crate::render::{Color, Pixmap};
 use core::ffi::{c_char, c_void};
 
 mod scene;
-#[cfg(test)]
-pub(crate) use scene::last_uploads;
-pub(crate) use scene::render as render_scene_native;
+pub(crate) use scene::GlExecutor;
 
 // ---- EGL / GL scalar types --------------------------------------------------
 

@@ -98,6 +98,47 @@ pub(crate) const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 /// No tint.
 pub(crate) const NO_TINT: Premul = [1.0, 1.0, 1.0, 1.0];
 
+/// Which part of a texture a quad shows, tinted how and filtered how.
+pub(crate) struct Sample {
+    pub uv: [f32; 4],
+    pub clamp: [f32; 4],
+    pub tint: [f32; 4],
+    pub nearest: bool,
+}
+
+impl Sample {
+    /// All of it, as it is, bilinear.
+    pub(crate) const WHOLE: Sample = Sample {
+        uv: FULL_UV,
+        clamp: [0.0, 0.0, 1.0, 1.0],
+        tint: NO_TINT,
+        nearest: false,
+    };
+
+    /// The part `uv` of a `w`×`h` texture, kept half a texel inside it so
+    /// bilinear filtering doesn't reach its neighbors.
+    pub(crate) fn region(uv: [f32; 4], w: u32, h: u32, tint: [f32; 4], nearest: bool) -> Sample {
+        let inside = |a: f32, b: f32, n: u32| {
+            let half = 0.5 / n.max(1) as f32;
+            let (lo, hi) = (a.min(b) + half, a.max(b) - half);
+            if lo <= hi {
+                (lo, hi)
+            } else {
+                let mid = (a + b) / 2.0;
+                (mid, mid)
+            }
+        };
+        let (u0, u1) = inside(uv[0], uv[2], w);
+        let (v0, v1) = inside(uv[1], uv[3], h);
+        Sample {
+            uv,
+            clamp: [u0, v0, u1, v1],
+            tint,
+            nearest,
+        }
+    }
+}
+
 /// A clip region, in device pixels.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Clip {

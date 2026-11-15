@@ -139,6 +139,8 @@ pub use saved_state::{save_state, take_restored_state};
 pub use screen::{Orientation, Orientations};
 pub use secure::{secure_input, set_secure_input};
 pub use shell::{Notification, notify, open_path, open_url, tray_shown};
+#[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
+pub(crate) use window::GpuLayer;
 pub(crate) use window::Window;
 pub use window::{
     CursorIcon, ImeState, UserAttention, WindowAttributes, WindowInfo, WindowRequest,
