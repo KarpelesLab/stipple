@@ -15,6 +15,17 @@ unsafe extern "C" {
     fn objc_autoreleasePoolPop(pool: *mut c_void);
 }
 
+unsafe extern "C" {
+    /// libSystem: nonzero on the process's main thread.
+    fn pthread_main_np() -> std::ffi::c_int;
+}
+
+/// Whether this is the main thread, the only one AppKit and UIKit views may
+/// be used from.
+pub fn on_main_thread() -> bool {
+    unsafe { pthread_main_np() != 0 }
+}
+
 #[derive(Clone, Copy)]
 #[repr(C)]
 pub struct CgSize {

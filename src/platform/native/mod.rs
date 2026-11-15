@@ -193,6 +193,13 @@ pub fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Arc<Pi
     if size.width == 0 || size.height == 0 {
         return None;
     }
+    // AppKit and UIKit views only work on the main thread: elsewhere (a test
+    // thread rendering headless) they can stall in layout. Fall back to the
+    // self-drawn look there, and don't cache that.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if !objc::on_main_thread() {
+        return None;
+    }
     // Thousandths of a pixel keep the key hashable; only exact scales repeat.
     let key = (deco, size.width, size.height, (scale * 1000.0) as u32);
     let cache = CACHE.get_or_init(Default::default);
