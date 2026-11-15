@@ -187,6 +187,14 @@ name = "androiddemo"
 path = "examples/androiddemo/lib.rs"
 crate-type = ["cdylib"]
 
+# examples/cameraview as an Android app: libcameraview_android.so, which
+# `STIPPLE_APK_EXAMPLE=cameraview_android examples/androiddemo/build-apk.sh`
+# packages with examples/cameraview/AndroidManifest.xml.
+[[example]]
+name = "cameraview_android"
+path = "examples/cameraview/android.rs"
+crate-type = ["cdylib"]
+
 # The examples in the browser (the site's live examples): each NAME_web
 # compiles examples/NAME/main.rs, through web.rs, as a wasm module that
 # web/stipple.js runs. tools/site/examples.toml lists them.
@@ -358,6 +366,11 @@ crate-type = ["cdylib"]
 [[example]]
 name = "todo_web"
 path = "examples/todo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "cameraview_web"
+path = "examples/cameraview/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]

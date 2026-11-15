@@ -237,6 +237,8 @@ impl<S: 'static> App<S> {
             crate::platform::frame::set_suspended(background);
             // Audio output stops with the app, and starts again with it.
             crate::audio::set_app_background(background);
+            // So do the cameras.
+            crate::camera::set_app_background(background);
         }
         // A memory warning drops the bitmaps the OS drew, which are redrawn
         // on demand.

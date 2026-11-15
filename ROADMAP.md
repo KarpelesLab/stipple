@@ -962,7 +962,8 @@ off-screen and read it back.
   page and sheet transitions on the phones; memory budgets for the caches.
 
 #### 6g — Zero-copy content
-- ⬜ Embedded viewports (`Element::viewport`) and video frames imported as
+- ⬜ Embedded viewports (`Element::viewport`), video frames and the camera
+  preview (`camera_preview`, converted per frame today) imported as
   textures without a copy: `dma-buf` (Linux), `IOSurface` (macOS, iOS), DXGI
   shared handles (Windows), `AHardwareBuffer` (Android), building on the
   export and import spikes in [`docs/gpu.md`](docs/gpu.md).
@@ -1456,7 +1457,7 @@ Most input only works on X11 today.
   notifications are still to do.
 - ✅ Scheduled notifications (`platform::schedule_notification`,
   `cancel_notification`, `pending_notifications`,
-  `request_notification_permission`, `App::on_notification_tapped`):
+  `platform::permission`, `App::on_notification_tapped`):
   _`UNUserNotificationCenter` triggers and its delegate's
   `didReceiveNotificationResponse:` on iOS; `AlarmManager` with a run-time
   receiver, or the APK's `Alarm` receiver (a build-time dex whose `<clinit>`
@@ -1475,6 +1476,21 @@ Most input only works on X11 today.
 - ✅ Haptics (`platform::haptic`): _UIKit feedback generators,
   `View.performHapticFeedback`, `NSHapticFeedbackManager`, `navigator.vibrate`;
   the built-in widgets don't play them yet._
+- ✅ Runtime permissions (#35, `platform::permission`: `status`, `request`,
+  `open_settings`, `AppHandle::request_permission`): _camera, microphone,
+  notifications, photos, location; `AVCaptureDevice`, `UNUserNotificationCenter`,
+  `PHPhotoLibrary`, `CLLocationManager` on iOS; `requestPermissions` through
+  the results fragment on Android; the Permissions API on the web. macOS
+  answers the camera's prompt for real (run locally); iOS and Android prompts
+  are build-checked._
+- ✅ Camera capture (#34, `stipple::camera`): _live preview element, every
+  frame (YUV planes, borrowed) on a capture thread, torch, zoom, tap to
+  focus, lens switching, paused in the background. AVFoundation on iOS and
+  macOS (run on a Mac; CI checks the simulator says there's no camera),
+  Camera2 NDK on Android (CI reads frames from the emulator's virtual camera,
+  non-blocking), `getUserMedia` on the web (build-checked). The preview is
+  converted and drawn through the renderer; zero-copy is 6g. Windows (Media
+  Foundation) and Linux (V4L2 / PipeWire) are still to do._
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
   optional (secure) text field, answered asynchronously as a state update.

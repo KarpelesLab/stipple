@@ -111,7 +111,7 @@ fn function(class: &str, name: &str) -> Option<*const c_void> {
         ("Callbacks", "onConfigurationChanged") => on_configuration_changed as *const c_void,
         ("Results", "onActivityResult") => super::pick::on_activity_result as *const c_void,
         ("Results", "onRequestPermissionsResult") => {
-            super::notify::on_request_permissions_result as *const c_void
+            super::permission::on_request_permissions_result as *const c_void
         }
         ("Receiver", "onReceive") => super::alarm::on_receive as *const c_void,
         ("Lifecycle", "onActivitySaveInstanceState") => on_save_instance_state as *const c_void,

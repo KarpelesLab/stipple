@@ -14,6 +14,10 @@
 # other already-compressed formats are stored uncompressed (aapt's -0), so
 # reading them doesn't inflate them first.
 #
+# Another example builds the same way: STIPPLE_APK_EXAMPLE names its cdylib
+# example (`cameraview_android`), and STIPPLE_APK_MANIFEST its manifest
+# (`examples/cameraview/AndroidManifest.xml`); both default to androiddemo's.
+#
 # Needs ANDROID_HOME (the SDK, with build-tools and a platform) and an NDK in
 # ANDROID_NDK_HOME (or the newest one under $ANDROID_HOME/ndk), plus the Rust
 # target (`rustup target add x86_64-linux-android aarch64-linux-android`).
@@ -30,6 +34,8 @@ esac
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 asset_dir="$(cd "${STIPPLE_APK_ASSETS:-$here/assets}" 2>/dev/null && pwd || true)"
+example="${STIPPLE_APK_EXAMPLE:-androiddemo}"
+manifest="$(cd "$(dirname "${STIPPLE_APK_MANIFEST:-$here/AndroidManifest.xml}")" && pwd)/$(basename "${STIPPLE_APK_MANIFEST:-$here/AndroidManifest.xml}")"
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
 ndk="${ANDROID_NDK_HOME:-${ANDROID_NDK_LATEST_HOME:-}}"
 if [ -z "$ndk" ]; then
@@ -44,12 +50,12 @@ if [ ! -x "$linker" ]; then
 fi
 export "CARGO_TARGET_$(echo "$target" | tr 'a-z-' 'A-Z_')_LINKER=$linker"
 
-(cd "$root" && cargo build --example androiddemo --target "$target" --release)
+(cd "$root" && cargo build --example "$example" --target "$target" --release)
 target_dir="$(cd "$root" && cargo metadata --format-version 1 --no-deps \
   | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
 # The example `androiddemo` is libandroiddemo.so; the manifest names the
 # library the NativeActivity loads `stipple_android`.
-lib="$target_dir/$target/release/examples/libandroiddemo.so"
+lib="$target_dir/$target/release/examples/lib$example.so"
 
 build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
 platform_jar="$(ls "$ANDROID_HOME"/platforms/*/android.jar | sort -V | tail -1)"
@@ -62,7 +68,7 @@ cp "$lib" "$work/lib/$abi/libstipple_android.so"
 (cd "$root" && STIPPLE_DEX_OUT="$work/stipple-classes.dex" \
   cargo test --lib platform::dex::tests::writes_the_classes_for_dexdump >/dev/null)
 cp "$work/stipple-classes.receiver.dex" "$work/classes.dex"
-cp "$here/AndroidManifest.xml" "$work/"
+cp "$manifest" "$work/AndroidManifest.xml"
 (
   cd "$work"
   assets=()

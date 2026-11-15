@@ -44,7 +44,7 @@ pub(crate) mod sharing;
 pub use haptic::{Haptic, haptic};
 pub use schedule::{
     NotificationTime, ScheduledNotification, cancel_all_notifications, cancel_notification,
-    pending_notifications, request_notification_permission, schedule_notification,
+    pending_notifications, schedule_notification,
 };
 pub use sharing::{Share, ShareFile, ShareOutcome, share};
 

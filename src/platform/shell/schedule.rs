@@ -115,7 +115,8 @@ impl ScheduledNotification {
 /// replacing any notification pending under the same id.
 ///
 /// Ask for permission first, at a moment that makes sense to the user, with
-/// [`request_notification_permission`]: scheduling doesn't ask, and without
+/// [`permission::request`](crate::platform::permission::request)`(Permission::Notifications, …)`:
+/// scheduling doesn't ask, and without
 /// permission the notification isn't shown (iOS drops the request; Android
 /// 13+ can't post it when it's due). `Ok` means the system took the request.
 ///
@@ -165,18 +166,6 @@ pub fn cancel_all_notifications() {
 /// across launches, the desktops and the web don't.
 pub fn pending_notifications(done: impl FnOnce(Vec<String>) + Send + 'static) {
     os::pending(Box::new(done));
-}
-
-/// Ask the user's permission to show notifications, and tell `done` whether
-/// it's granted. The system asks once (iOS's prompt, Android 13's dialog, the
-/// browser's); later calls answer at once with what the user said. Where no
-/// permission is needed (the desktops, Android before 13) it's `true`.
-///
-/// Call it from the UI thread. `done` runs on whichever thread the system
-/// answers on; change the state from it with
-/// [`AppHandle::update`](crate::core::AppHandle::update).
-pub fn request_notification_permission(done: impl FnOnce(bool) + Send + 'static) {
-    os::request_permission(Box::new(done));
 }
 
 // ---- The list kept by hand, where the system keeps none -----------------------
@@ -327,26 +316,24 @@ pub(crate) fn now_ms() -> u64 {
 
 #[cfg_attr(target_os = "android", allow(dead_code))]
 type Pending = Box<dyn FnOnce(Vec<String>) + Send>;
-#[cfg_attr(target_os = "android", allow(dead_code))]
-type Permission = Box<dyn FnOnce(bool) + Send>;
 
 #[cfg(target_os = "ios")]
 mod os {
     pub(super) use crate::platform::shell::ios::{
-        cancel_scheduled as cancel, pending_scheduled as pending, request_permission, schedule,
+        cancel_scheduled as cancel, pending_scheduled as pending, schedule,
     };
 }
 
 #[cfg(target_os = "android")]
 mod os {
     pub(super) use crate::platform::backend::android::{
-        cancel_scheduled as cancel, pending_scheduled as pending, request_permission, schedule,
+        cancel_scheduled as cancel, pending_scheduled as pending, schedule,
     };
 }
 
 #[cfg(target_arch = "wasm32")]
 mod os {
-    use super::{Entry, Pending, Permission, ScheduledNotification, now_ms};
+    use super::{Entry, Pending, ScheduledNotification, now_ms};
     use crate::platform::PlatformError;
     use crate::platform::backend::web;
     use std::sync::Mutex;
@@ -382,11 +369,6 @@ mod os {
             .collect();
         done(ids);
     }
-
-    pub(super) fn request_permission(done: Permission) {
-        let id = crate::platform::shell::sharing::register(move |v| done(v != 0));
-        web::notification_permission(id);
-    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -394,7 +376,7 @@ mod os {
     //! A thread that sleeps until the next one is due, then shows it with
     //! [`notify`](crate::platform::notify).
 
-    use super::{Entry, Pending, Permission, ScheduledNotification, now_ms};
+    use super::{Entry, Pending, ScheduledNotification, now_ms};
     use crate::platform::PlatformError;
     use std::sync::{Condvar, Mutex};
     use std::time::Duration;
@@ -428,10 +410,6 @@ mod os {
             .map(|e| e.id.clone())
             .collect();
         done(ids);
-    }
-
-    pub(super) fn request_permission(done: Permission) {
-        done(true);
     }
 
     /// Start the thread, once.
@@ -496,7 +474,7 @@ mod os {
     target_os = "windows"
 )))]
 mod os {
-    use super::{Pending, Permission, ScheduledNotification};
+    use super::{Pending, ScheduledNotification};
     use crate::platform::PlatformError;
 
     pub(super) fn schedule(_n: &ScheduledNotification) -> Result<(), PlatformError> {
@@ -505,9 +483,6 @@ mod os {
     pub(super) fn cancel(_id: Option<&str>) {}
     pub(super) fn pending(done: Pending) {
         done(Vec::new());
-    }
-    pub(super) fn request_permission(done: Permission) {
-        done(false);
     }
 }
 

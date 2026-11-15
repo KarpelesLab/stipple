@@ -47,6 +47,7 @@ mod app_pointer;
 mod app_select;
 mod app_touch;
 pub mod audio;
+pub mod camera;
 #[cfg(test)]
 mod canvas_tests;
 pub mod core;

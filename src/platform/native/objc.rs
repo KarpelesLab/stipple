@@ -96,3 +96,90 @@ pub fn with_pool<R>(f: impl FnOnce() -> R) -> R {
         r
     }
 }
+
+// ---- Blocks that call a Rust closure once -------------------------------------
+
+unsafe extern "C" {
+    static _NSConcreteGlobalBlock: c_void;
+}
+
+#[repr(C)]
+struct BlockDescriptor {
+    reserved: usize,
+    size: usize,
+}
+
+/// A block literal taking one argument of type `A` and calling `f` with it,
+/// once. Marked global, so `Block_copy` hands back the same pointer and never
+/// frees it: each one is leaked (a few dozen bytes per completion handler).
+#[repr(C)]
+struct OnceBlock<A> {
+    isa: *const c_void,
+    flags: i32,
+    reserved: i32,
+    invoke: unsafe extern "C" fn(*mut OnceBlock<A>, A),
+    descriptor: *const BlockDescriptor,
+    f: std::sync::Mutex<Option<OnceFn<A>>>,
+}
+
+type OnceFn<A> = Box<dyn FnOnce(A) + Send>;
+
+static ONCE_DESCRIPTOR: BlockDescriptor = BlockDescriptor {
+    reserved: 0,
+    // The same for every `A`: it only shows in the function pointer's type.
+    size: std::mem::size_of::<OnceBlock<usize>>(),
+};
+
+unsafe extern "C" fn once_invoke<A>(block: *mut OnceBlock<A>, arg: A) {
+    let f = unsafe { &(*block).f }
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take();
+    if let Some(f) = f {
+        f(arg);
+    }
+}
+
+/// A completion-handler block `^(A arg)` calling `f` the first time it's
+/// invoked, from whatever queue the framework answers on. `A` is the
+/// argument's C type: `u8` for a `BOOL`, `isize` for an `NSInteger`, [`Id`]
+/// for an object.
+pub fn once_block<A: 'static>(f: impl FnOnce(A) + Send + 'static) -> Id {
+    const BLOCK_IS_GLOBAL: i32 = 1 << 28;
+    let block = Box::leak(Box::new(OnceBlock::<A> {
+        isa: &raw const _NSConcreteGlobalBlock,
+        flags: BLOCK_IS_GLOBAL,
+        reserved: 0,
+        invoke: once_invoke::<A>,
+        descriptor: &ONCE_DESCRIPTOR,
+        f: std::sync::Mutex::new(Some(Box::new(f))),
+    }));
+    (block as *mut OnceBlock<A>).cast()
+}
+
+// ---- Frameworks loaded on demand ----------------------------------------------
+
+unsafe extern "C" {
+    fn dlopen(path: *const std::ffi::c_char, mode: std::ffi::c_int) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, name: *const std::ffi::c_char) -> *mut c_void;
+}
+
+/// Load the system framework `name` (`"AVFoundation"`), so its classes are
+/// known to the runtime, and return its handle (null if it isn't there).
+/// Loading again is cheap: the loader keeps it.
+pub fn load_framework(name: &str) -> *mut c_void {
+    const RTLD_LAZY: std::ffi::c_int = 1;
+    let path = format!("/System/Library/Frameworks/{name}.framework/{name}");
+    let Ok(c) = CString::new(path) else {
+        return std::ptr::null_mut();
+    };
+    unsafe { dlopen(c.as_ptr(), RTLD_LAZY) }
+}
+
+/// Symbol `name` of a library [`load_framework`] loaded; null if missing.
+pub fn symbol(handle: *mut c_void, name: &std::ffi::CStr) -> *mut c_void {
+    if handle.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe { dlsym(handle, name.as_ptr()) }
+}

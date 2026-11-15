@@ -138,8 +138,6 @@ pub(crate) fn pending_scheduled(done: Box<dyn FnOnce(Vec<String>) + Send>) {
     done(ids);
 }
 
-pub(crate) use notify::request_permission;
-
 // ---- The store ------------------------------------------------------------------
 
 fn store_path(jni: &Jni, context: JObject) -> Option<String> {

@@ -714,16 +714,27 @@ pub(super) unsafe fn accent_color(vm: *mut c_void, context: JObject, dark: bool)
 /// Intent(ACTION_VIEW, Uri.parse(url)))`, in a new task. `false` when no
 /// activity can (`ActivityNotFoundException`) or the URL doesn't parse.
 pub(super) unsafe fn open_url(vm: *mut c_void, activity: JObject, url: &str) -> bool {
+    unsafe { start_intent(vm, activity, "android.intent.action.VIEW", url) }
+}
+
+/// Start an activity for an `Intent` of `action` on the URI `uri`, in a new
+/// task.
+pub(super) unsafe fn start_intent(
+    vm: *mut c_void,
+    activity: JObject,
+    action: &str,
+    uri: &str,
+) -> bool {
     unsafe {
         with_env(vm, |jni| {
-            let s = jni.string(url)?;
+            let s = jni.string(uri)?;
             let uri = jni.call_static_object(
                 c"android/net/Uri",
                 c"parse",
                 c"(Ljava/lang/String;)Landroid/net/Uri;",
                 &[JValue { l: s }],
             )?;
-            let action = jni.string("android.intent.action.VIEW")?;
+            let action = jni.string(action)?;
             let class = jni.find_class(c"android/content/Intent")?;
             let init = jni.method(class, c"<init>", c"(Ljava/lang/String;Landroid/net/Uri;)V")?;
             let new_object: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> JObject =

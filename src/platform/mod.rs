@@ -93,6 +93,9 @@ pub(crate) mod locale;
 pub(crate) mod menu;
 /// OS-drawn controls and system appearance for the native theme.
 pub mod native;
+/// Runtime permissions: the camera, the microphone, notifications, photos,
+/// the location.
+pub mod permission;
 mod pointer;
 /// seccomp-BPF syscall sandbox for the content process (the hardening layer of
 /// the Stipple-as-compositor content path).
@@ -166,8 +169,7 @@ pub use secure::{secure_input, set_secure_input};
 pub use shell::{
     Haptic, Notification, NotificationTime, ScheduledNotification, Share, ShareFile, ShareOutcome,
     cancel_all_notifications, cancel_notification, haptic, notify, open_path, open_url,
-    pending_notifications, request_notification_permission, schedule_notification, share,
-    tray_shown,
+    pending_notifications, schedule_notification, share, tray_shown,
 };
 #[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
 pub(crate) use window::GpuLayer;

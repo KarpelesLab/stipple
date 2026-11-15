@@ -376,6 +376,27 @@ too:
 (`taskAffinity=""` gives it a task of its own, out of Recents, so it never
 becomes the root of the app's task.)
 
+## Permissions and the camera
+
+`platform::permission` maps each permission to the manifest's
+(`CAMERA`, `RECORD_AUDIO`, `POST_NOTIFICATIONS`, `READ_MEDIA_IMAGES` or
+`READ_EXTERNAL_STORAGE`, `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION`),
+checks it with `checkSelfPermission` and asks with `requestPermissions` from
+the same headless fragment the pickers use, whose
+`onRequestPermissionsResult` brings the answer back (a `NativeActivity` has
+none). Declare each one asked for:
+
+```xml
+<uses-permission android:name="android.permission.CAMERA"/>
+```
+
+`stipple::camera` uses Camera2 through the NDK (`libcamera2ndk.so`, with
+`libmediandk.so`'s `AImageReader` for the frames, both loaded at run time):
+no Java, Android 7 (API 24) and later. `examples/cameraview` builds as an APK
+with `STIPPLE_APK_EXAMPLE=cameraview_android
+STIPPLE_APK_MANIFEST=examples/cameraview/AndroidManifest.xml
+examples/androiddemo/build-apk.sh`. See [camera.md](../camera.md).
+
 ## Share sheet and haptics
 
 `platform::share` sends an `ACTION_SEND` (`ACTION_SEND_MULTIPLE` for several

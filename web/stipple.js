@@ -193,6 +193,52 @@ export async function start(canvas, wasmUrl, options = {}) {
       wakeLock = null;
     }
   };
+  // Permissions (permission_status): what the Permissions API last said,
+  // by kind: 0 camera, 1 microphone, 2 notifications, 3 location. Codes: 0
+  // granted, 1 denied, 2 not asked.
+  const permCode = (state) => (state === "granted" ? 0 : state === "denied" ? 1 : 2);
+  const permState = [2, 2, 2, 2];
+  ["camera", "microphone", "notifications", "geolocation"].forEach((name, kind) => {
+    try {
+      navigator.permissions?.query({ name }).then((st) => {
+        permState[kind] = permCode(st.state);
+        st.addEventListener?.("change", () => { permState[kind] = permCode(st.state); });
+      }, () => {});
+    } catch (_) { /* not a name this browser knows */ }
+  });
+  // The cameras (camera_open): video inputs found, and those open by id.
+  let cameraCount = 0xffffffff;
+  navigator.mediaDevices?.enumerateDevices?.().then(
+    (ds) => { cameraCount = ds.filter((d) => d.kind === "videoinput").length; },
+    () => {},
+  );
+  const cameras = new Map();
+  // Hand each new frame of an open camera to the module, as RGBA.
+  const pumpCamera = (id, cam) => {
+    const next = () => {
+      if (cam.closed) return;
+      if (cam.video.requestVideoFrameCallback) cam.video.requestVideoFrameCallback(grab);
+      else requestAnimationFrame((now) => grab(now, null));
+    };
+    const grab = (now, meta) => {
+      if (cam.closed) return;
+      const v = cam.video;
+      const w = v.videoWidth, h = v.videoHeight;
+      if (!cam.paused && w && h && v.readyState >= 2 && e) {
+        if (!cam.canvas || cam.canvas.width !== w || cam.canvas.height !== h) {
+          cam.canvas = typeof OffscreenCanvas !== "undefined"
+            ? new OffscreenCanvas(w, h)
+            : Object.assign(document.createElement("canvas"), { width: w, height: h });
+          cam.ctx = cam.canvas.getContext("2d", { willReadFrequently: true });
+        }
+        cam.ctx.drawImage(v, 0, 0, w, h);
+        const [ptr, len] = pass(cam.ctx.getImageData(0, 0, w, h).data);
+        e.stipple_camera_frame?.(id, ptr, len, w, h, meta?.mediaTime != null ? meta.mediaTime * 1000 : now);
+      }
+      next();
+    };
+    next();
+  };
   let pendingCopy = null;
   let pendingHtml = null;
   let storageOut = new Uint8Array(0); // see storage_get
@@ -561,15 +607,115 @@ export async function start(canvas, wasmUrl, options = {}) {
         if (il === 0) { for (const id of [...scheduled.keys()]) unschedule(id); return; }
         unschedule(str(ip, il));
       },
-      notification_permission(id) {
-        if (typeof Notification === "undefined") return e.stipple_answer?.(id, 0);
-        if (Notification.permission !== "default") {
-          return e.stipple_answer?.(id, Notification.permission === "granted" ? 1 : 0);
+      permission_status(kind) {
+        if (kind === 2) {
+          if (typeof Notification === "undefined") return 1;
+          return permCode(Notification.permission === "default" ? "prompt" : Notification.permission);
         }
-        Promise.resolve(Notification.requestPermission()).then(
-          (p) => e.stipple_answer?.(id, p === "granted" ? 1 : 0),
-          () => e.stipple_answer?.(id, 0),
-        );
+        return permState[kind] ?? 2;
+      },
+      permission_request(id, kind) {
+        const answer = (code) => {
+          if (code === 0 || code === 1) permState[kind] = code;
+          e.stipple_answer?.(id, code);
+        };
+        if (kind === 0 || kind === 1) {
+          const md = navigator.mediaDevices;
+          if (!md?.getUserMedia) return answer(3);
+          md.getUserMedia(kind === 0 ? { video: true } : { audio: true }).then(
+            (stream) => { stream.getTracks().forEach((t) => t.stop()); answer(0); },
+            (err) => answer(err?.name === "NotAllowedError" || err?.name === "SecurityError" ? 1 : 3),
+          );
+        } else if (kind === 2) {
+          if (typeof Notification === "undefined") return answer(1);
+          if (Notification.permission !== "default") {
+            return answer(Notification.permission === "granted" ? 0 : 1);
+          }
+          Promise.resolve(Notification.requestPermission()).then(
+            (p) => answer(permCode(p === "default" ? "prompt" : p)),
+            () => answer(1),
+          );
+        } else if (kind === 3) {
+          if (!navigator.geolocation) return answer(1);
+          navigator.geolocation.getCurrentPosition(
+            () => answer(0),
+            (err) => answer(err?.code === 1 ? 1 : 2),
+          );
+        } else {
+          answer(0);
+        }
+      },
+      camera_count: () => cameraCount,
+      camera_open(id, facing, width, height) {
+        const md = navigator.mediaDevices;
+        if (!md?.getUserMedia) return e.stipple_camera_failed?.(id, 2);
+        const video = document.createElement("video");
+        video.muted = true;
+        video.playsInline = true;
+        video.setAttribute("aria-hidden", "true");
+        // In the document (some browsers only advance a video that is), but
+        // not seen.
+        Object.assign(video.style, {
+          position: "fixed", left: "0", top: "0", width: "1px", height: "1px",
+          opacity: "0", pointerEvents: "none",
+        });
+        document.body.appendChild(video);
+        const cam = { video, stream: null, track: null, canvas: null, ctx: null, paused: false, closed: false };
+        cameras.set(id, cam);
+        md.getUserMedia({
+          audio: false,
+          video: {
+            facingMode: facing === 1 ? "user" : "environment",
+            width: { ideal: width }, height: { ideal: height },
+          },
+        }).then((stream) => {
+          if (cam.closed) { stream.getTracks().forEach((t) => t.stop()); return; }
+          permState[0] = 0;
+          cam.stream = stream;
+          cam.track = stream.getVideoTracks()[0] ?? null;
+          video.srcObject = stream;
+          video.play().catch(() => {});
+          const caps = cam.track?.getCapabilities?.() ?? {};
+          const settings = cam.track?.getSettings?.() ?? {};
+          const user = settings.facingMode ? settings.facingMode === "user" : facing === 1;
+          const flags = (caps.torch ? 1 : 0)
+            | (caps.pointsOfInterest || caps.focusMode?.includes?.("single-shot") ? 2 : 0)
+            | (user ? 4 : 0);
+          e.stipple_camera_caps?.(id, flags, caps.zoom?.min ?? 1, caps.zoom?.max ?? 1);
+          pumpCamera(id, cam);
+        }, (err) => {
+          const name = err?.name;
+          if (name === "NotAllowedError") permState[0] = 1;
+          e.stipple_camera_failed?.(id,
+            name === "NotAllowedError" || name === "SecurityError" ? 1
+              : name === "NotFoundError" || name === "OverconstrainedError" ? 2 : 3);
+        });
+      },
+      camera_pause(id, paused) {
+        const cam = cameras.get(id);
+        if (!cam) return;
+        cam.paused = paused !== 0;
+        if (cam.track) cam.track.enabled = !cam.paused;
+      },
+      camera_close(id) {
+        const cam = cameras.get(id);
+        if (!cam) return;
+        cameras.delete(id);
+        cam.closed = true;
+        cam.stream?.getTracks().forEach((t) => t.stop());
+        cam.video.srcObject = null;
+        cam.video.remove();
+      },
+      camera_torch(id, on) {
+        cameras.get(id)?.track?.applyConstraints({ advanced: [{ torch: on !== 0 }] }).catch(() => {});
+      },
+      camera_zoom(id, factor) {
+        cameras.get(id)?.track?.applyConstraints({ advanced: [{ zoom: factor }] }).catch(() => {});
+      },
+      camera_focus(id, x, y) {
+        cameras.get(id)?.track?.applyConstraints({
+          advanced: [{ pointsOfInterest: [{ x, y }], focusMode: "single-shot" }],
+        }).catch(() => {});
       },
       save_state(ptr, len) {
         if (!stateKey) return;

@@ -273,6 +273,12 @@ title = "Pointer events"
 group = "Input"
 size = [400, 300]
 
+[web.cameraview]
+description = "A camera viewfinder: the live preview with the torch, zoom and lens over it, tap to focus, every frame counted on the capture thread. Asks for the camera first."
+title = "Camera"
+group = "Input"
+size = [360, 640]
+
 [web.screendemo]
 description = "A phone's screen: drawn edge to edge with the safe area outlined, the orientation read and locked, and the screen kept awake."
 title = "Screen"

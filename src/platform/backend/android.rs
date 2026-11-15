@@ -72,6 +72,8 @@ mod insets;
 mod jni;
 /// Notifications through `NotificationManager`.
 mod notify;
+/// Runtime permissions: `checkSelfPermission` and `requestPermissions`.
+pub(crate) mod permission;
 /// The Storage Access Framework's document picker.
 mod pick;
 /// The system bars' insets, edge to edge, the orientation.
@@ -79,7 +81,7 @@ mod screen;
 /// The share sheet: `ACTION_SEND` through the chooser.
 mod share;
 
-pub(crate) use alarm::{cancel_scheduled, pending_scheduled, request_permission, schedule};
+pub(crate) use alarm::{cancel_scheduled, pending_scheduled, schedule};
 pub(crate) use notify::notify;
 pub(crate) use pick::{create_document, open_document};
 pub(crate) use share::share;
@@ -1021,6 +1023,29 @@ pub(crate) fn haptic(kind: crate::platform::Haptic) {
             &[jni::JValue { i: constant }],
         );
     });
+}
+
+/// Degrees the screen's content is turned counterclockwise from the
+/// device's natural orientation (`Display.getRotation()`), for the camera's
+/// frames; 0 without an activity.
+pub(crate) fn display_rotation() -> u32 {
+    with_activity(|a| {
+        let (vm, activity) = (a.vm, a.clazz);
+        unsafe {
+            jni::with_env(vm, |jni| {
+                let wm = jni.call_object(
+                    activity,
+                    c"getWindowManager",
+                    c"()Landroid/view/WindowManager;",
+                    &[],
+                )?;
+                let display =
+                    jni.call_object(wm, c"getDefaultDisplay", c"()Landroid/view/Display;", &[])?;
+                jni.call_int(display, c"getRotation", c"()I", &[])
+            })
+        }
+    })
+    .map_or(0, |r| (r.clamp(0, 3) as u32) * 90)
 }
 
 /// Open `url` in the app that handles it, through an `ACTION_VIEW` intent.

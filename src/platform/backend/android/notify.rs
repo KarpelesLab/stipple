@@ -5,16 +5,15 @@
 //!
 //! On Android 13 and later posting needs the `POST_NOTIFICATIONS` runtime
 //! permission (which the app's manifest must declare). The first [`notify`]
-//! without it asks (`requestPermissions` from the headless
-//! [`Results`](crate::platform::dex::RESULTS) fragment, whose
-//! `onRequestPermissionsResult` comes back here), and the notification waits
+//! without it asks (through [`permission::ask`](super::permission::ask):
+//! `requestPermissions` from the headless results fragment), and the notification waits
 //! for the answer, as on iOS; once refused, `notify` fails, until the user
 //! allows notifications in the settings. Before Android 13 there's nothing to
 //! ask, but the user may have turned the app's notifications off, which
 //! `notify` reports too.
 //!
-//! [`request_permission`] asks the same way without a notification waiting,
-//! and [`post_scheduled`] posts one that [`alarm`](super::alarm) scheduled,
+//! [`ask`] asks the same way without a notification waiting (for
+//! [`platform::permission`](crate::platform::permission)), and [`post_scheduled`] posts one that [`alarm`](super::alarm) scheduled,
 //! under a notification id made from the app's id, its tap opening the app
 //! with that id in the launch intent ([`TAPPED_EXTRA`]). A `NativeActivity`
 //! doesn't pass `onNewIntent` on, so when the tap only brings the running
@@ -25,15 +24,12 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-use super::jni::{self, Env, JObject, JValue, Jni};
-use super::{classes, log, run_on_main, with_activity};
+use super::jni::{self, JObject, JValue, Jni};
+use super::{log, with_activity};
 use crate::platform::PlatformError;
 use crate::platform::shell::Notification;
 
 const PERMISSION: &str = "android.permission.POST_NOTIFICATIONS";
-/// The request code of the permission request (above the document
-/// picker's, which are under 0x8000).
-const PERMISSION_CODE: i32 = 0x1_0000;
 const CHANNEL: &str = "stipple";
 
 /// The permission request: not made (or answered inconclusively), waiting
@@ -47,8 +43,8 @@ static ANSWER: AtomicU8 = AtomicU8::new(UNKNOWN);
 /// Notifications waiting for the permission request's answer.
 static WAITING: Mutex<Vec<Notification>> = Mutex::new(Vec::new());
 
-/// [`request_permission`]'s callers waiting for the answer.
-type PermissionFn = Box<dyn FnOnce(bool) + Send>;
+/// [`ask`]'s callers waiting for the answer.
+type PermissionFn = Box<dyn FnOnce(Option<bool>) + Send>;
 static ASKERS: Mutex<Vec<PermissionFn>> = Mutex::new(Vec::new());
 
 /// The launch intent's extra naming the scheduled notification tapped, and
@@ -89,72 +85,33 @@ pub(crate) fn notify(n: &Notification) -> Result<(), PlatformError> {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .push(n.clone());
-    if !ask() {
+    if !ask(Box::new(|_| {})) {
         return Err(os("no activity"));
     }
     Ok(())
 }
 
-/// Ask for `POST_NOTIFICATIONS` (unless a request is out already), from the
-/// results fragment. `false` if there's no activity to ask from.
-fn ask() -> bool {
-    if ANSWER.swap(ASKING, Ordering::AcqRel) != ASKING {
-        let asking = run_on_main(|jni, activity| {
-            let asked = (|| {
-                let fragment = classes::results_fragment(jni, activity)?;
-                let permissions = jni.string_array(&[PERMISSION])?;
-                jni.call_void(
-                    fragment,
-                    c"requestPermissions",
-                    c"([Ljava/lang/String;I)V",
-                    &[JValue { l: permissions }, JValue { i: PERMISSION_CODE }],
-                )
-            })();
-            if asked.is_some() {
-                log("stipple: asking for the notification permission");
-            } else {
-                answered(jni, activity, None);
-            }
-        });
-        if !asking {
-            ANSWER.store(UNKNOWN, Ordering::Release);
-            WAITING.lock().unwrap_or_else(|e| e.into_inner()).clear();
-            for f in std::mem::take(&mut *ASKERS.lock().unwrap_or_else(|e| e.into_inner())) {
-                f(false);
-            }
-            return false;
+/// Ask for `POST_NOTIFICATIONS` (unless a request is out already), and
+/// tell `then` the answer (`None` if it didn't conclude). `false` (and `then`
+/// told `None`) if there's no activity to ask from.
+pub(super) fn ask(then: PermissionFn) -> bool {
+    ASKERS.lock().unwrap_or_else(|e| e.into_inner()).push(then);
+    if ANSWER.swap(ASKING, Ordering::AcqRel) == ASKING {
+        return true;
+    }
+    let asking = super::permission::ask(&[PERMISSION], Box::new(answered));
+    if !asking {
+        ANSWER.store(UNKNOWN, Ordering::Release);
+        WAITING.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        for f in std::mem::take(&mut *ASKERS.lock().unwrap_or_else(|e| e.into_inner())) {
+            f(None);
         }
     }
-    true
-}
-
-/// Ask for the permission to post (Android 13 and later), and tell `done`
-/// whether notifications may be shown. Before 13, whether the user left
-/// them on.
-pub(crate) fn request_permission(done: PermissionFn) {
-    let now = with_activity(|a| {
-        let (vm, context, sdk) = (a.vm, a.clazz, a.sdk_version);
-        unsafe {
-            jni::with_env(vm, |jni| {
-                if sdk >= 33 && !granted(jni, context) {
-                    return Some(None);
-                }
-                Some(Some(enabled(jni, context)))
-            })
-        }
-    });
-    match now {
-        Some(Some(enabled)) => done(enabled),
-        None => done(false),
-        Some(None) => {
-            ASKERS.lock().unwrap_or_else(|e| e.into_inner()).push(done);
-            ask();
-        }
-    }
+    asking
 }
 
 /// Whether the user left the app's notifications on.
-fn enabled(jni: &Jni, context: JObject) -> bool {
+pub(super) fn enabled(jni: &Jni, context: JObject) -> bool {
     manager(jni, context)
         .and_then(|m| jni.call_bool(m, c"areNotificationsEnabled", c"()Z", &[]))
         .unwrap_or(true)
@@ -188,15 +145,7 @@ pub(super) fn post_scheduled(
 
 /// Whether the app holds `POST_NOTIFICATIONS`.
 fn granted(jni: &Jni, context: JObject) -> bool {
-    let Some(permission) = jni.string(PERMISSION) else {
-        return false;
-    };
-    jni.call_int(
-        context,
-        c"checkSelfPermission",
-        c"(Ljava/lang/String;)I",
-        &[JValue { l: permission }],
-    ) == Some(0)
+    super::permission::granted(jni, context, PERMISSION)
 }
 
 /// The permission request's answer (`None` when it didn't conclude): post
@@ -212,7 +161,7 @@ fn answered(jni: &Jni, context: JObject, granted: Option<bool>) {
     );
     log(&format!("stipple: notification permission {granted:?}"));
     for f in std::mem::take(&mut *ASKERS.lock().unwrap_or_else(|e| e.into_inner())) {
-        f(granted == Some(true));
+        f(granted);
     }
     let waiting = std::mem::take(&mut *WAITING.lock().unwrap_or_else(|e| e.into_inner()));
     let sdk = with_activity(|a| Some(a.sdk_version)).unwrap_or(33);
@@ -225,29 +174,6 @@ fn answered(jni: &Jni, context: JObject, granted: Option<bool>) {
         if let Err(e) = result {
             eprintln!("stipple: notification {:?} not shown: {e}", n.title);
         }
-    }
-}
-
-/// `Results.onRequestPermissionsResult`. On the main thread.
-pub(super) unsafe extern "C" fn on_request_permissions_result(
-    env: Env,
-    this: JObject,
-    code: i32,
-    _permissions: JObject,
-    results: JObject,
-) {
-    if code != PERMISSION_CODE {
-        return;
-    }
-    unsafe {
-        jni::in_native(env, |jni| {
-            // Empty when the request was interrupted.
-            let granted = jni.int_vec(results).first().map(|&r| r == 0);
-            let activity =
-                jni.call_object(this, c"getActivity", c"()Landroid/app/Activity;", &[])?;
-            answered(jni, activity, granted);
-            Some(())
-        });
     }
 }
 

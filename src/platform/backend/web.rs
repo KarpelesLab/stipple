@@ -48,7 +48,13 @@
 //! | `vibrate(ptr, n)` | `navigator.vibrate` with `n` `u32` milliseconds |
 //! | `schedule_notification(id, id_len, title, title_len, body, body_len, delay_ms, repeat_ms)` | a timer (then an interval) showing a `Notification` tagged with the id; a click calls `stipple_notification(id)` |
 //! | `cancel_notification(id, id_len)` | clears that id's timer (an empty id: all) |
-//! | `notification_permission(id)` | `Notification.requestPermission`, answering `stipple_answer(id, granted)` |
+//! | `permission_status(kind) -> u32` | what the Permissions API last said for kind 0 camera, 1 microphone, 2 notifications (`Notification.permission`), 3 location: 0 granted, 1 denied, 2 not asked |
+//! | `permission_request(id, kind)` | asks: `getUserMedia` (its stream stopped at once), `Notification.requestPermission` or `getCurrentPosition`, answering `stipple_answer(id, status)` (3: no device) |
+//! | `camera_count() -> u32` | the video inputs `enumerateDevices` listed (`u32::MAX` until it answered) |
+//! | `camera_open(id, facing, width, height)` | `getUserMedia` (`facingMode` `user` for 1, else `environment`), playing in a hidden `<video>`; reports `stipple_camera_caps(id, flags, zoom_min, zoom_max)` (flags: 1 torch, 2 focus point, 4 facing the user) or `stipple_camera_failed(id, code)`, then each new frame's RGBA through `stipple_camera_frame(id, ptr, len, width, height, ms)` |
+//! | `camera_pause(id, paused)` | stops handing frames over and disables the track, or the reverse |
+//! | `camera_close(id)` | stops the stream's tracks |
+//! | `camera_torch(id, on)`, `camera_zoom(id, factor)`, `camera_focus(id, x, y)` | `applyConstraints` with `torch`, `zoom`, `pointsOfInterest` |
 //!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
@@ -128,7 +134,15 @@ mod js {
             repeat_ms: f64,
         );
         pub fn cancel_notification(id: *const u8, id_len: usize);
-        pub fn notification_permission(id: u32);
+        pub fn permission_status(kind: u32) -> u32;
+        pub fn permission_request(id: u32, kind: u32);
+        pub fn camera_count() -> u32;
+        pub fn camera_open(id: u32, facing: u32, width: u32, height: u32);
+        pub fn camera_pause(id: u32, paused: u32);
+        pub fn camera_close(id: u32);
+        pub fn camera_torch(id: u32, on: u32);
+        pub fn camera_zoom(id: u32, factor: f64);
+        pub fn camera_focus(id: u32, x: f64, y: f64);
     }
 }
 
@@ -1019,9 +1033,87 @@ pub(crate) fn cancel_notification(id: &str) {
     unsafe { js::cancel_notification(id.as_ptr(), id.len()) }
 }
 
-/// Ask for the permission to notify, answering waiter `id`.
-pub(crate) fn notification_permission(id: u32) {
-    unsafe { js::notification_permission(id) }
+/// The page's number for `permission`, if the page gates it.
+pub(crate) fn permission_kind(permission: crate::platform::permission::Permission) -> Option<u32> {
+    use crate::platform::permission::Permission;
+    match permission {
+        Permission::Camera => Some(0),
+        Permission::Microphone => Some(1),
+        Permission::Notifications => Some(2),
+        Permission::Location => Some(3),
+        _ => None,
+    }
+}
+
+fn permission_code(code: u32) -> crate::platform::permission::PermissionStatus {
+    use crate::platform::permission::PermissionStatus;
+    match code {
+        0 => PermissionStatus::Granted,
+        1 => PermissionStatus::Denied,
+        _ => PermissionStatus::NotDetermined,
+    }
+}
+
+/// What the page last heard of permission `kind`.
+pub(crate) fn permission_status(kind: u32) -> crate::platform::permission::PermissionStatus {
+    permission_code(unsafe { js::permission_status(kind) })
+}
+
+/// Ask for permission `kind`, answering `done`.
+pub(crate) fn request_permission(kind: u32, done: crate::platform::permission::Done) {
+    let id = crate::platform::shell::sharing::register(move |v| done(permission_code(v)));
+    unsafe { js::permission_request(id, kind) }
+}
+
+/// The video inputs the page found (`u32::MAX`: not known yet).
+pub(crate) fn camera_count() -> u32 {
+    unsafe { js::camera_count() }
+}
+
+/// Open camera `id`, facing the user (`facing` 1) or not.
+pub(crate) fn camera_open(id: u32, facing: u32, width: u32, height: u32) {
+    unsafe { js::camera_open(id, facing, width, height) }
+}
+
+pub(crate) fn camera_pause(id: u32, paused: bool) {
+    unsafe { js::camera_pause(id, u32::from(paused)) }
+}
+
+pub(crate) fn camera_close(id: u32) {
+    unsafe { js::camera_close(id) }
+}
+
+pub(crate) fn camera_torch(id: u32, on: bool) {
+    unsafe { js::camera_torch(id, u32::from(on)) }
+}
+
+pub(crate) fn camera_zoom(id: u32, factor: f64) {
+    unsafe { js::camera_zoom(id, factor) }
+}
+
+pub(crate) fn camera_focus(id: u32, x: f64, y: f64) {
+    unsafe { js::camera_focus(id, x, y) }
+}
+
+/// A frame of camera `id` arrived from the page.
+#[doc(hidden)]
+pub fn camera_frame(id: u32, pixels: Vec<u8>, width: u32, height: u32, ms: f64) {
+    crate::camera::os::frame(id, &pixels, width, height, ms);
+    drain();
+}
+
+/// Camera `id`'s stream started, and can do this.
+#[doc(hidden)]
+pub fn camera_caps(id: u32, flags: u32, zoom_min: f64, zoom_max: f64) {
+    crate::camera::os::caps(id, flags, zoom_min, zoom_max);
+    drain();
+}
+
+/// Camera `id` couldn't start.
+#[doc(hidden)]
+pub fn camera_failed(id: u32, code: u32) {
+    crate::camera::os::failed(id, code);
+    drain();
 }
 
 /// The page answered waiter `id` (a share, a permission request) with

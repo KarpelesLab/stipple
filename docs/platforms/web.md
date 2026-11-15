@@ -172,6 +172,8 @@ once with a light color scheme.
 | Keeping the screen awake | `AppHandle::set_keep_awake` takes a Screen Wake Lock (`navigator.wakeLock`), asked again each time the page becomes visible (the browser lets it go when the page hides); nothing where the browser has no wake lock |
 | Share sheet | `navigator.share` (with `File`s where `navigator.canShare` takes them), from a click handler; browsers without it answer `ShareOutcome::Unavailable` |
 | Haptics | `navigator.vibrate` (Chrome and Firefox on Android; not Safari or desktops) |
+| Permissions | `platform::permission`: the Permissions API for the camera, the microphone and the location (what it last said; it's asked once at start and followed), `Notification.permission`; asking opens a `getUserMedia` stream and stops it, or reads the position once. No settings page to open |
+| Camera | `stipple::camera`: `getUserMedia` into a hidden `<video>`, each new frame (`requestVideoFrameCallback`) drawn into a canvas and handed over as RGBA on the page's thread; torch, zoom and focus point through `applyConstraints` where the browser offers them. Needs HTTPS (or `localhost`). See [camera.md](../camera.md) |
 | Scheduled notifications | a `setTimeout` (then `setInterval`) in the page, so only while it's open; clicking one focuses the page and reports its id (`App::on_notification_tapped`). No service worker, so nothing shows once the tab is closed |
 
 ### Clipboard

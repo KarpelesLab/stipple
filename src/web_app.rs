@@ -257,6 +257,35 @@ macro_rules! web_app {
             /// # Safety
             /// `ptr`/`len` come from one `stipple_alloc(len)`.
             #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_camera_frame(
+                id: u32,
+                ptr: *mut u8,
+                len: usize,
+                width: u32,
+                height: u32,
+                ms: f64,
+            ) {
+                glue::camera_frame(id, unsafe { glue::take_bytes(ptr, len) }, width, height, ms);
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_camera_caps(
+                id: u32,
+                flags: u32,
+                zoom_min: f64,
+                zoom_max: f64,
+            ) {
+                glue::camera_caps(id, flags, zoom_min, zoom_max);
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_camera_failed(id: u32, code: u32) {
+                glue::camera_failed(id, code);
+            }
+
+            /// # Safety
+            /// `ptr`/`len` come from one `stipple_alloc(len)`.
+            #[unsafe(no_mangle)]
             pub unsafe extern "C" fn stipple_notification(ptr: *mut u8, len: usize) {
                 glue::notification_tapped(unsafe { glue::take_string(ptr, len) });
             }

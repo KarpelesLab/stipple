@@ -519,6 +519,34 @@ pub(crate) fn pending_scheduled(done: PendingFn) {
     };
 }
 
+/// The app's `UNAuthorizationStatus`, from the center's settings. The center
+/// answers on a queue of its own; this waits for it (a moment, at most two
+/// seconds). `None` if there's no center or no answer.
+pub(crate) fn notification_authorization() -> Option<isize> {
+    use std::sync::{Arc, Condvar};
+    let center = with_pool(center)?;
+    let answer: Arc<(Mutex<Option<isize>>, Condvar)> = Arc::default();
+    let got = answer.clone();
+    let block = crate::platform::native::objc::once_block(move |settings: Id| {
+        let status = if settings.is_null() {
+            0
+        } else {
+            unsafe { msg!(settings, "authorizationStatus", () -> isize) }
+        };
+        *got.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(status);
+        got.1.notify_all();
+    });
+    with_pool(|| unsafe {
+        msg!(center, "getNotificationSettingsWithCompletionHandler:", (block: Id) -> ())
+    });
+    let (lock, cond) = &*answer;
+    let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let (guard, _) = cond
+        .wait_timeout_while(guard, std::time::Duration::from_secs(2), |a| a.is_none())
+        .unwrap_or_else(|e| e.into_inner());
+    *guard
+}
+
 /// Ask for permission (alert, sound, badge); the system prompts the first
 /// time and answers at once after.
 pub(crate) fn request_permission(done: PermissionFn) {

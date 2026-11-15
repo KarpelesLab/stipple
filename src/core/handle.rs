@@ -203,6 +203,35 @@ impl<S> AppHandle<S> {
         wake::wake();
     }
 
+    /// Ask the user for `permission`
+    /// ([`platform::permission::request`](crate::platform::permission::request)),
+    /// then apply the answer to the state on the UI thread with `answer`. If
+    /// it was decided already, no prompt shows and the answer comes at once
+    /// (on the next turn of the loop). Call it from the UI thread (a handler).
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// use stipple::platform::permission::Permission;
+    /// # struct State { camera_allowed: bool }
+    /// # fn ask(cx: &mut Cx<State>) {
+    /// cx.handle().request_permission(Permission::Camera, |s, status| {
+    ///     s.camera_allowed = status.is_granted();
+    /// });
+    /// # }
+    /// ```
+    pub fn request_permission(
+        &self,
+        permission: crate::platform::permission::Permission,
+        answer: impl FnOnce(&mut S, crate::platform::permission::PermissionStatus) + Send + 'static,
+    ) where
+        S: 'static,
+    {
+        let handle = self.clone();
+        crate::platform::permission::request(permission, move |status| {
+            handle.update(move |s| answer(s, status));
+        });
+    }
+
     /// Read the packaged file at `path` ([`platform::assets`](crate::platform::assets))
     /// and `decode` it off the UI thread, then `apply` the result to the
     /// state on the UI thread: a scene's art loads behind a loading screen,

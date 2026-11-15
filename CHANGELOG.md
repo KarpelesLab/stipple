@@ -84,6 +84,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `listgestures`.
 - The Menu key and Shift+F10 open the nearest context menu around the focused
   element when it has none of its own.
+- Runtime permissions (#35): `platform::permission::status(Permission)` →
+  `PermissionStatus::{Granted, Denied, NotDetermined, Restricted}`,
+  `request(permission, done)` and `open_settings()`, for the camera, the
+  microphone, notifications, photos and the location, and
+  `AppHandle::request_permission(permission, |state, status| …)` answering on
+  the UI thread. `AVCaptureDevice`, `UNUserNotificationCenter`,
+  `PHPhotoLibrary` and `CLLocationManager` on iOS (the frameworks loaded on
+  first use), `AVCaptureDevice` on macOS, `checkSelfPermission` /
+  `requestPermissions` through the results fragment on Android (any
+  permission now, what was asked remembered to tell refused from not asked),
+  the Permissions API, `getUserMedia`, `Notification` and geolocation on the
+  web; granted where nothing gates it.
+- The camera (#34): `stipple::camera`. `Camera::open(CameraOptions::new()
+  .lens(Lens::Back).resolution(w, h))`, every frame to `Camera::on_frame` on
+  the capture thread as a `Frame` (YUV 4:2:0 planes with strides, borrowed
+  from the camera's buffer, or RGBA on the web; timestamp, rotation,
+  mirroring), `camera_preview(cx, &camera)` as a live viewfinder element
+  (repainting alone, through the renderer for now), `preview_mapping` between
+  frame and preview coordinates, the torch, zoom, `focus_at` /
+  `focus_at_preview`, `set_lens`, `start` / `stop`, and pausing in the
+  background. `AVCaptureSession` with a sample-buffer delegate on iOS and
+  macOS, Camera2 through the NDK (`ACameraCaptureSession` into an
+  `AImageReader`, no Java) on Android, `getUserMedia` with a hidden `<video>`
+  on the web; Windows and Linux report `Unsupported`. New `cameraview`
+  example (also as an Android APK); see `docs/camera.md`.
 - Packaged assets (#59): `platform::assets()` reads files the app was
   packaged with by relative path (`read`, `open` as a `Read + Seek` reader,
   `exists`, `list`, and the `image`, `svg`, `font`, `sound` and `text`
@@ -255,6 +280,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its height is `keyboard_inset` and the App lays the view out above it,
   as on iOS and the web. A plain text field's `inputType` is now
   `0xc001` (sentences capitalized, auto-correct) instead of `0x4001`.
+- `platform::request_notification_permission` is gone:
+  `platform::permission::request(Permission::Notifications, |status| …)`
+  replaces it (and `status` reads it without asking).
 - `NavigationBar::bottom_inset` is gone: the bar takes the window's safe
   area by itself.
 - `MotionTokens` has two more fields, `page` and `sheet`.

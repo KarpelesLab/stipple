@@ -258,9 +258,37 @@ nothing extra in its `Info.plist`.
 daily or weekly repeat, at the first time's time of day), which iOS delivers
 whether or not the app runs; `cancel_notification` removes the pending and
 delivered ones, and `pending_notifications` asks the center. Scheduling
-doesn't ask for permission: call `platform::request_notification_permission`
-first. The center's delegate is set while the app finishes launching, so the
+doesn't ask for permission: call
+`platform::permission::request(Permission::Notifications, …)` first. The center's delegate is set while the app finishes launching, so the
 tap that launched it reaches `App::on_notification_tapped` too.
+
+## Permissions and the camera
+
+`platform::permission` asks for and reports the camera and the microphone
+(`AVCaptureDevice`), notifications (`UNUserNotificationCenter`), the photo
+library (`PHPhotoLibrary`, read and write) and the location while in use
+(`CLLocationManager`); `open_settings` opens the app's page in Settings.
+**Each needs its usage string in the `Info.plist`, or iOS kills the app when
+it asks:**
+
+```xml
+<key>NSCameraUsageDescription</key>
+<string>Scans barcodes.</string>
+<key>NSMicrophoneUsageDescription</key>
+<string>…</string>
+<key>NSPhotoLibraryUsageDescription</key>
+<string>…</string>
+<key>NSLocationWhenInUseUsageDescription</key>
+<string>…</string>
+```
+
+`stipple::camera` captures through `AVCaptureSession` and an
+`AVCaptureVideoDataOutput` whose delegate (a class built at run time) gets
+NV12 frames on a dispatch queue; the back lens prefers the virtual
+triple/dual-wide camera (macro focus close up). The frameworks are loaded the
+first time they're used. The simulator has no camera: `Camera::lenses()` is
+empty and `Camera::open` returns `CameraError::NoCamera`, which CI checks.
+See [camera.md](../camera.md).
 
 ## Share sheet and haptics
 

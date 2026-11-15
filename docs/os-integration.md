@@ -283,14 +283,21 @@ an AppUserModelID, which Stipple doesn't use.
 Clicking a notification shown with `notify` does nothing yet, and there are
 no actions or icons. Scheduled ones report their taps (below).
 
+To check where the permission stands, or ask for it before the first
+notification, use `platform::permission` with `Permission::Notifications`
+(`status`, `request`, `open_settings` once refused); it covers the camera,
+the microphone, photos and the location the same way. See
+[camera.md](camera.md#permissions).
+
 ### Scheduled notifications
 
 ```rust
 use std::time::Duration;
 use stipple::platform::{self, Notification, ScheduledNotification};
+use stipple::platform::permission::Permission;
 
 // At a moment that makes sense to the user (not on the first schedule):
-platform::request_notification_permission(|granted| { /* … */ });
+platform::permission::request(Permission::Notifications, |status| { /* … */ });
 
 platform::schedule_notification(
     &ScheduledNotification::new("potion", Notification::new("The potion is ready"))
