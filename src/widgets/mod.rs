@@ -10,7 +10,7 @@
 //! `button_variant` (Primary/Secondary/Ghost/Danger) / `button_labeled`
 //! ([`Element::on_tap`]), `text_field` / `text_editor` ([`Element::on_key`]; the
 //! latter is caret-aware via [`EditBuffer`]), `checkbox`, `switch`, and `slider`
-//! ([`Element::on_drag`]). All colors and metrics come from the [`Theme`], so
+//! ([`Element::on_drag`]), and chips (`chip`, `choice_chips`, `filter_chips`). All colors and metrics come from the [`Theme`], so
 //! swapping or customizing the theme reskins everything.
 
 #![forbid(unsafe_code)]
@@ -18,6 +18,9 @@
 pub(crate) mod alert;
 #[cfg(test)]
 mod alert_tests;
+mod chips;
+#[cfg(test)]
+mod chips_tests;
 mod color_picker;
 pub(crate) mod menus;
 #[cfg(test)]
@@ -36,6 +39,7 @@ mod tab_bar_tests;
 mod toast;
 mod toolbar;
 
+pub use chips::{Chip, chip, choice_chips, filter_chips};
 pub use color_picker::{ColorPicker, color_button, color_picker};
 pub use number::{NumberInput, number_input};
 pub use password::{PasswordField, password_field};
@@ -153,7 +157,9 @@ pub fn scroll<S>(cx: &mut Cx<S>, height: f64, content: Element) -> Element {
 /// are clipped to the viewport; a horizontal wheel or trackpad swipe over it
 /// scrolls it (a vertical wheel too, when no vertical container is under the
 /// pointer), and on a touch screen a sideways finger drag scrolls and flings
-/// it. Put several elements in a [`row`] for `content`. Inside a
+/// it. Put several elements in a [`row`] for `content`. The content
+/// measures with no width limit, so a wrapping row (a group of
+/// [`choice_chips`] or [`filter_chips`]) stays on one line in it. Inside a
 /// [`scroll`] list, a drag picks the container along its direction.
 pub fn scroll_horizontal<S>(cx: &mut Cx<S>, width: f64, content: Element) -> Element {
     let id = cx.register_scroll();
@@ -1388,7 +1394,11 @@ pub fn setting_row(theme: &Theme, accent: Color, action: impl Into<String>) -> E
 }
 
 /// A radio button: a circle filled with the primary color when `selected`.
-/// Tapping calls `on_select`.
+/// Tapping calls `on_select`. Assistive technologies see a radio button,
+/// checked while `selected`; put a group of them in a row or column made a
+/// [`FocusGroup::Select`](crate::core::FocusGroup::Select)
+/// [`focus_group`](Element::focus_group) for the arrow keys to move between
+/// them.
 pub fn radio<S>(
     cx: &mut Cx<S>,
     theme: &Theme,
@@ -1398,7 +1408,9 @@ pub fn radio<S>(
     let control = NativeControl::Radio { selected };
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
-            .on_tap(cx, on_select);
+            .on_tap(cx, on_select)
+            .role(Role::RadioButton)
+            .checked(selected);
     }
     // Like the checkbox's mark, the dot is always there, faded out and
     // shrunk while unselected.
@@ -1426,6 +1438,8 @@ pub fn radio<S>(
         .height(22.0)
         .align(Align::Center, Align::Center)
         .on_tap(cx, on_select)
+        .role(Role::RadioButton)
+        .checked(selected)
 }
 
 /// A horizontal tab strip (segmented control): one cell per label, the

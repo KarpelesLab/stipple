@@ -71,7 +71,7 @@ pub(crate) use handle::{AlertInput, AlertView};
 pub use handle::{AppHandle, TimerId};
 pub use ime::{ime_state, paint_preedit, secure_focused};
 pub use interact::{ElementKey, Interaction, Reactive};
-pub use keys::{Handled, KeyConfig, RawKeyId};
+pub use keys::{FocusGroup, Handled, KeyConfig, RawKeyId};
 pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
 pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};

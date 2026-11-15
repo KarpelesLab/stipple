@@ -1327,6 +1327,12 @@ Most input only works on X11 today.
   button, the `PasswordField` role) and color picker (`color_picker` /
   `color_button`: HSV area, hue and alpha strips, hex field, swatches).
   `examples/sessionsdemo` + `visual-sessions` CI.
+- ✅ Chips (`chip`, `choice_chips`, `filter_chips`): a check mark that pops in
+  on the toggle motion, an optional leading icon, groups that wrap (or stay on
+  one line in `scroll_horizontal`), arrow keys through a group
+  (`Element::focus_group`, right-to-left aware; a choice group is one Tab stop
+  and the arrows pick), and `RadioButton` / `CheckBox` roles. `Role::RadioButton`
+  is mapped on every backend and given to `radio` too.
 - ✅ Table, tree and data grid: `table(...)` with sortable headers (▲/▼),
   drag-to-resize columns, single/multi row selection (Shift/Ctrl+click,
   Shift+arrows) and striped rows; `tree(...)` with disclosure triangles,

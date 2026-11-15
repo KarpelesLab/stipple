@@ -1258,7 +1258,7 @@ impl<S: 'static> Pane<S> {
         // Focus goes into a drawn message box while it's up, and back after.
         match alert_focus {
             Some(target) => {
-                let order = crate::core::tab_focus::tab_order(&tree, modal_layers);
+                let order = crate::core::tab_focus::tab_order(&tree, modal_layers, self.focused);
                 if !self.focused.is_some_and(|f| order.contains(&f)) {
                     self.alert_return.get_or_insert(self.focused);
                     self.focused = Some(target);
@@ -1837,7 +1837,7 @@ impl<S: 'static> Pane<S> {
             .and_then(|t| crate::core::tab_focus::tap_activation(t, id))
         {
             if !crate::core::tab_focus::activates(&input) {
-                return false;
+                return self.arrow_focus(state, id, &input);
             }
             crate::core::set_pointer_position(at, None);
             let ran = self.handlers.dispatch(action, state);
@@ -1851,6 +1851,28 @@ impl<S: 'static> Pane<S> {
             self.dirty = true;
         }
         ran
+    }
+
+    /// An arrow key on a button inside a
+    /// [`focus_group`](crate::core::Element::focus_group): move focus to the
+    /// group's next control (pressing it, in a radio-like group). Returns
+    /// whether the key moved focus.
+    fn arrow_focus(&mut self, state: &mut S, focused: FocusId, input: &KeyInput) -> bool {
+        let Some((next, press)) = self
+            .tree
+            .as_ref()
+            .and_then(|t| crate::core::tab_focus::arrow_step(t, focused, input))
+        else {
+            return false;
+        };
+        self.focused = Some(next);
+        self.focus_visible = true;
+        self.dirty = true;
+        if let Some((action, at)) = press {
+            crate::core::set_pointer_position(at, None);
+            self.handlers.dispatch(action, state);
+        }
+        true
     }
 
     /// If focus left the element showing composition text, tell it to drop
@@ -1918,7 +1940,7 @@ impl<S: 'static> Pane<S> {
         let order = self
             .tree
             .as_ref()
-            .map(|t| crate::core::tab_focus::tab_order(t, self.modal_layers))
+            .map(|t| crate::core::tab_focus::tab_order(t, self.modal_layers, self.focused))
             .unwrap_or_default();
         let Some(next) = crate::core::tab_focus::step(&order, self.focused, back) else {
             return false;
@@ -2652,6 +2674,7 @@ impl<S: 'static> App<S> {
                 Role::ComboBox => A11yRole::ComboBox,
                 Role::SpinButton => A11yRole::SpinButton,
                 Role::CheckBox => A11yRole::CheckBox,
+                Role::RadioButton => A11yRole::RadioButton,
                 Role::Switch => A11yRole::Switch,
                 Role::Splitter => A11yRole::Splitter,
                 Role::Toolbar => A11yRole::Toolbar,
@@ -3871,7 +3894,6 @@ fn map_key_for(code: KeyCode, modifiers: Modifiers, mac: bool) -> Option<KeyInpu
 pub mod prelude {
     pub use crate::anim::SpringParams;
     pub use crate::anim::{Easing, Spring, Tween};
-    pub use crate::core::Handled;
     pub use crate::core::{
         Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
         OverlaySpec, TimerId, Track, View,
@@ -3879,6 +3901,7 @@ pub mod prelude {
     pub use crate::core::{AnimProp, Effect, ElementKey, Interaction, Transition};
     pub use crate::core::{CanvasId, ViewportId};
     pub use crate::core::{DROP_FADE, DropState};
+    pub use crate::core::{FocusGroup, Handled};
     pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};
     pub use crate::core::{PointerEvent, PointerEventKind, WheelEvent};
     pub use crate::geometry::Transform;
@@ -3897,8 +3920,8 @@ pub mod prelude {
     pub use crate::style::Theme;
     pub use crate::style::{MotionTokens, Palette, Spacing, Typography};
     pub use crate::widgets::{
-        ColorPicker, PasswordField, Tab, TabBar, TabBarState, TabIndicator, color_button,
-        color_picker, password_field, tab_bar,
+        Chip, ColorPicker, PasswordField, Tab, TabBar, TabBarState, TabIndicator, chip,
+        choice_chips, color_button, color_picker, filter_chips, password_field, tab_bar,
     };
     pub use crate::widgets::{
         Column, ListState, SelectionMode, SortOrder, TableSpec, TableState, TreeModel, TreeSpec,

@@ -38,7 +38,7 @@ The rest of this page says what each check proves, and what it doesn't.
 Text fields, and other elements with a key handler, take keyboard focus.
 So do buttons and the other controls a tap activates: an element with
 `on_tap` whose role is a button (the role a tap handler implies), checkbox,
-switch, tab, select, list or tree item, table row, cell or column header
+radio button, switch, tab, select, list or tree item, table row, cell or column header
 (`stipple::core::tab_focus`). Menu items don't: an open menu takes the
 arrow keys, Enter and Escape itself. Neither does a control inside another
 focusable element (a password field's reveal button is part of the field,
@@ -48,7 +48,13 @@ a list's rows are part of a list that takes focus as a whole).
   the previous one, wrapping round. While a modal overlay (a dialog, a
   message box) is up, Tab stays in it.
 - Enter or Space presses the focused button: its `on_tap` handler runs, as
-  for a tap at its middle. Other keys don't reach it.
+  for a tap at its middle. Other keys don't reach it, except the arrows,
+  Home and End inside an element made a `focus_group` (a group of chips or
+  radio buttons): they move focus to the previous, next, first or last
+  control in it, wrapping, with Left and Right swapped in a right-to-left
+  layout. In a `FocusGroup::Select` group (radio buttons, `choice_chips`) the
+  control focus lands on is pressed too, and Tab stops at one control of the
+  group only: the checked one, else the first.
 - The focus ring goes round it, a little outside its edge (so it shows on a
   button filled with the ring's color).
 - The accessibility tree says it is focused, so each platform announces the
@@ -75,8 +81,8 @@ control type, name, bounds in screen pixels (logical bounds scaled by the
 window's DPI and offset by the client area's position, worked out when
 asked), keyboard focusability and focus; navigation goes to the parent,
 siblings and children; the root finds the focused node and the deepest node
-under a point. Buttons, menu items, checkboxes, switches, selects, tabs and
-column headers have the Invoke pattern, which clicks the middle of the node.
+under a point. Buttons, menu items, checkboxes, radio buttons, switches,
+selects, tabs and column headers have the Invoke pattern, which clicks the middle of the node.
 The tree is rebuilt only when it changes, and a replaced tree is kept while a
 client still holds any of its elements. When focus moves to another node
 (Tab), the window raises UIA's focus-changed event
@@ -174,7 +180,7 @@ window's. Then it presses the button with `AXPress`
 must list the action, the call must succeed, and the app must log the tap.
 
 The elements of the controls a click activates (buttons, menu items,
-checkboxes, switches, selects, tabs, column headers) are a run-time subclass
+checkboxes, radio buttons, switches, selects, tabs, column headers) are a run-time subclass
 of `NSAccessibilityElement` whose `accessibilityPerformPress` clicks the
 middle of the element (a pointer move, press and release queued for the
 window, delivered by the event loop), so AppKit lists `AXPress` for them.
@@ -343,7 +349,7 @@ or `zbus`).
   attributes, interfaces, relations) and `Component` (extents in
   screen, window and parent coordinates, `Contains`, `GetAccessibleAtPoint`
   to the deepest node, `GrabFocus` for fields and items). Buttons, menu
-  items, checkboxes, switches, selects, tabs, column headers and list and
+  items, checkboxes, radio buttons, switches, selects, tabs, column headers and list and
   tree items have `Action` with one "click", which clicks the middle of the
   node on the UI thread (handed over through the loop's wake, as UIA's Invoke
   on Windows). Labels, fields, password fields and spin buttons have `Text`

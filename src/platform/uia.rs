@@ -60,6 +60,7 @@ const UIA_NamePropertyId: i32 = 30005;
 
 // Control-type ids (one per role).
 const UIA_ButtonControlTypeId: i32 = 50000;
+const UIA_RadioButtonControlTypeId: i32 = 50013;
 const UIA_EditControlTypeId: i32 = 50004;
 const UIA_TextControlTypeId: i32 = 50020;
 const UIA_GroupControlTypeId: i32 = 50026;
@@ -310,6 +311,7 @@ fn control_type(role: A11yRole) -> i32 {
         A11yRole::MenuItem => UIA_MenuItemControlTypeId,
         // Not named to UIA yet: the closest control type above.
         A11yRole::ComboBox | A11yRole::CheckBox | A11yRole::Switch => UIA_ButtonControlTypeId,
+        A11yRole::RadioButton => UIA_RadioButtonControlTypeId,
         A11yRole::SpinButton => UIA_EditControlTypeId,
         A11yRole::Splitter | A11yRole::Toolbar | A11yRole::Separator | A11yRole::Alert => {
             UIA_GroupControlTypeId
@@ -327,7 +329,7 @@ fn invokable(role: A11yRole) -> bool {
     use A11yRole::*;
     matches!(
         role,
-        Button | MenuItem | ComboBox | CheckBox | Switch | Tab | ColumnHeader
+        Button | MenuItem | ComboBox | CheckBox | RadioButton | Switch | Tab | ColumnHeader
     )
 }
 

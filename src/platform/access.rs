@@ -55,6 +55,9 @@ pub enum A11yRole {
     SpinButton,
     /// A checkbox ([`A11yNode::checked`] says whether it is checked).
     CheckBox,
+    /// One option of a single-choice group ([`A11yNode::checked`] says
+    /// whether it is the picked one).
+    RadioButton,
     /// An on/off switch ([`A11yNode::checked`] says whether it is on).
     Switch,
     /// A draggable divider between two panes.
@@ -192,6 +195,7 @@ pub(crate) fn aria_role(role: A11yRole) -> &'static str {
         A11yRole::ComboBox => "combobox",
         A11yRole::SpinButton => "spinbutton",
         A11yRole::CheckBox => "checkbox",
+        A11yRole::RadioButton => "radio",
         A11yRole::Switch => "switch",
         A11yRole::Splitter | A11yRole::Separator => "separator",
         A11yRole::Toolbar => "toolbar",

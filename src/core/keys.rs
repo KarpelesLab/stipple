@@ -43,6 +43,24 @@ pub struct KeyConfig {
     pub ime_cursor: Option<Rect>,
     /// Which Option keys act as Meta on macOS while the element has focus.
     pub option_as_meta: OptionAsMeta,
+    /// The arrow keys move focus among the controls inside the element
+    /// (see [`Element::focus_group`]).
+    pub focus_group: Option<FocusGroup>,
+}
+
+/// How the arrow keys move focus among the controls a tap activates inside
+/// an element (its buttons, checkboxes, radio buttons, chips): see
+/// [`Element::focus_group`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FocusGroup {
+    /// The arrows move focus from one control to the next; each stays its
+    /// own Tab stop, and Enter or Space presses it. A row of checkboxes or
+    /// filter chips.
+    Move,
+    /// The arrows move focus and press the control they land on, and Tab
+    /// stops at one control of the group only: the checked (or selected) one,
+    /// else the first. A radio group, or a row of choice chips.
+    Select,
 }
 
 impl Element {
@@ -114,6 +132,18 @@ impl Element {
     /// effect elsewhere.
     pub fn option_as_meta(mut self, option: OptionAsMeta) -> Self {
         self.keyboard_mut().option_as_meta = option;
+        self
+    }
+
+    /// Let the arrow keys move focus among the controls a tap activates
+    /// inside this element, as in a radio group or a row of chips: Left and
+    /// Up go to the previous one, Right and Down to the next (Left and Right
+    /// swap in a right-to-left layout), wrapping, and Home and End to the
+    /// first and the last. With [`FocusGroup::Select`] the control focus
+    /// lands on is pressed too, and Tab stops at the group's checked control
+    /// only. The element itself doesn't take focus.
+    pub fn focus_group(mut self, group: FocusGroup) -> Self {
+        self.keyboard_mut().focus_group = Some(group);
         self
     }
 }

@@ -47,6 +47,18 @@ pub fn measure(el: &Element, avail: Size, font: Option<&Font>) -> Size {
     size
 }
 
+/// The room a stack's children measure in, out of the stack's `inner` size:
+/// all of it, but no limit across in a sideways scroll container, whose
+/// content runs as wide as it likes (a wrapping row of chips stays on one
+/// line there).
+fn child_room(el: &Element, axis: Axis, inner: Size) -> Size {
+    if el.scroll.is_some() && axis == Axis::Horizontal {
+        Size::new(f64::INFINITY, inner.height)
+    } else {
+        inner
+    }
+}
+
 /// [`measure`], without a memoized subtree's cache.
 fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
     let pad = el.layout.padding;
@@ -110,7 +122,8 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
             children,
             ..
         } => {
-            let sizes: Vec<Size> = children.iter().map(|c| measure(c, inner, font)).collect();
+            let room = child_room(el, *axis, inner);
+            let sizes: Vec<Size> = children.iter().map(|c| measure(c, room, font)).collect();
             let lines = if el.wrap {
                 let mains: Vec<f64> = sizes.iter().map(|s| axis.main(*s)).collect();
                 break_lines(axis.main(inner), *gap, &mains)
@@ -564,7 +577,8 @@ fn layout_element(
     let main_avail = axis.main(avail);
 
     // Main-axis distribution.
-    let measured: Vec<Size> = children.iter().map(|c| measure(c, avail, font)).collect();
+    let room = child_room(el, axis, avail);
+    let measured: Vec<Size> = children.iter().map(|c| measure(c, room, font)).collect();
     // A wrapping stack flows children onto lines that fit the main axis; each
     // line is then laid out like an unwrapped stack whose cross extent is the
     // line's tallest child. Lines pack from the cross start, `gap` apart.

@@ -828,7 +828,7 @@ fn component(bus: &str, n: &Node, member: &str, args: &mut Args) -> (Reply, Opti
             use A11yRole::*;
             let activates = matches!(
                 n.role(),
-                Button | MenuItem | ComboBox | CheckBox | Switch | Tab | ColumnHeader
+                Button | MenuItem | ComboBox | CheckBox | RadioButton | Switch | Tab | ColumnHeader
             );
             let ok = n.node.focused || (focusable(n.role()) && !activates);
             let events = (ok && !n.node.focused).then(|| n.click());
@@ -1083,6 +1083,7 @@ fn role_name(r: A11yRole) -> &'static str {
         ComboBox => "combo box",
         SpinButton => "spin button",
         CheckBox => "check box",
+        RadioButton => "radio button",
         Switch => "toggle button",
         Splitter => "split pane",
         Toolbar => "tool bar",

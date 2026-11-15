@@ -98,6 +98,43 @@ what screen readers read out. Any element can go in a toolbar, a `select` for
 example. Items that don't fit overflow the toolbar; it doesn't move them to an
 overflow menu yet.
 
+## Chips
+
+Small pill-shaped toggles: one alone, a group that picks one option, or a
+group of filters each on or off. A selected chip is filled with the accent
+color and led by a check mark, which slides and fades in on the theme's
+`toggle` motion (a chip's icon gives way to it).
+
+```rust
+struct App { symbology: usize, filters: [bool; 3], flash: bool }
+// in the view:
+choice_chips(cx, &theme, ["2D", "Stacked", "Linear", "Postal"], state.symbology,
+    |s: &mut App, i| s.symbology = i)
+filter_chips(cx, &theme, ["QR", "EAN", "Code 128"], &state.filters,
+    |s: &mut App, i| s.filters[i] = !s.filters[i])
+chip(cx, &theme, Chip::new("Flash").icon(&state.flash_icon), state.flash,
+    |s: &mut App| s.flash = !s.flash)
+```
+
+The app keeps the selection; the chips report taps. `choice_chips` takes the
+selected index, or `None` for none. Labels can be `&str`s, `String`s or
+`Chip`s (a `Chip` adds a leading icon, a `Pixmap` or an `Svg`).
+
+- A group lays its chips out in a row that wraps onto more lines when they
+  don't fit the width its container gives it (stretch it across, as a panel
+  does). Inside `scroll_horizontal` it stays on one line and scrolls
+  sideways.
+- `choice_chips` are radio buttons: Tab stops at the selected chip only, and
+  the arrow keys move to the previous or next chip and pick it, wrapping;
+  Home and End go to the first and the last.
+- `filter_chips` are checkboxes: each is a Tab stop, the arrow keys move focus
+  between them without toggling, and Enter or Space toggles the focused one.
+- In a right-to-left layout the row is mirrored and Left and Right follow it.
+
+The arrow keys come from `Element::focus_group`, which any container of
+buttons can use: `FocusGroup::Select` for a radio group (put `radio`s in it),
+`FocusGroup::Move` for a row of checkboxes or tool buttons.
+
 ## Toasts
 
 Short notifications, stacked in the window's bottom-right corner above
@@ -235,6 +272,7 @@ timings and curves in the theme's motion tokens (`theme.motion`, a
 | `button_variant` / `button_labeled` | the hover and press looks fade in and out (the hover overlay over the button's color, twice over while pressed); a pressed button shrinks a little | `state`, `press`, `press_scale` |
 | `switch` | the thumb slides over; the track's color fades | `toggle`, `state` |
 | `checkbox`, `radio` | the check mark or dot pops in (and out) as it grows and fades; the box's color fades | `toggle`, `state` |
+| `chip`, `choice_chips`, `filter_chips` | the check mark pops in as it grows and fades, its slot opening before the label (or the icon fading out under it); the fill, border and label color fade; hover and press as a button | `toggle`, `state`, `press`, `press_scale` |
 | `tabs` | the accent fill slides (and stretches) from the old tab to the new one under the labels; the tabs' own fills and text colors fade | `indicator`, `state` |
 | `tab_bar` | the accent strip slides out of the tab selected before and into the new one; the list of every tab grows in, and fades and shrinks back out when it closes | `indicator`, `popup`, `popup_exit` |
 | `select` | the list grows and slides in from the button as it fades in; closing, it fades as it shrinks back toward the button | `popup`, `popup_scale`, `popup_offset`, `popup_exit` |
@@ -329,6 +367,8 @@ unit tests: CI's Windows and macOS runs don't hover native controls.
 | Number input | `SpinButton`, with `Increase` and `Decrease` buttons | the text |
 | Split pane divider | `Splitter` | — |
 | Toolbar | `Toolbar`, with buttons and `Separator`s | — |
+| Choice chips | `RadioButton`s, the selected one checked | the chip's label |
+| Filter chips, a chip alone | `CheckBox`es, checked while on | the chip's label |
 | Toast | `Alert`, with a `Dismiss` button | the message |
 | Tab bar | `TabList` of `Tab`s (the current one selected), with buttons | the tab's label |
 | Password field | `PasswordField` | its label ("Password"), never the text |
@@ -341,4 +381,6 @@ don't have these roles yet, so they report the closest role they do have:
 a button, a text field, or a group. Menus (see [menus.md](menus.md)) report
 `MenuBar`, `Menu` and `MenuItem`, which the bridges do map, and tabs map to
 UI Automation's `Tab`/`TabItem`, NSAccessibility's `AXTabGroup`, and ARIA's
-`tablist`/`tab`.
+`tablist`/`tab`. Radio buttons map everywhere: UI Automation's `RadioButton`,
+`AXRadioButton`, AT-SPI's `radio button`, ARIA's `radio`, Android's
+`RadioButton`, and on iOS a button that is selected while checked.

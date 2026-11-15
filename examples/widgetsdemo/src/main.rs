@@ -1,7 +1,8 @@
-//! Select, number input, split pane, toolbar and toasts in one window.
+//! Select, number input, chips, split pane, toolbar and toasts in one window.
 //!
 //! A toolbar runs along the top; below it a split pane holds a settings form
-//! (a select and two number inputs) on the left and, on the right, a second,
+//! (a select, two number inputs, a group of choice chips and one of filter
+//! chips, which the arrow keys move through) on the left and, on the right, a second,
 //! vertical split with a preview above an event log. Drag either divider, or
 //! focus one (Tab) and use the arrow keys. "Notify" raises a toast that
 //! dismisses itself after four seconds; the welcome toast stays until its ×.
@@ -21,6 +22,8 @@ const W: f64 = 720.0;
 const H: f64 = 480.0;
 
 const SIZES: [&str; 5] = ["Small", "Medium", "Large", "Extra large", "Huge"];
+const FORMATS: [&str; 3] = ["PNG", "SVG", "PDF"];
+const EXTRAS: [&str; 3] = ["Grid", "Margins", "Labels"];
 
 const ICON: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
 <path d="M3 5h12M7 5V3h4v2M5 5l1 10h6l1-10" fill="none" stroke="#8a8f98" stroke-width="1.6" stroke-linejoin="round"/>
@@ -35,6 +38,8 @@ struct State {
     toasts: Toasts,
     bold: bool,
     italic: bool,
+    format: usize,
+    extras: [bool; 3],
     log: Vec<String>,
     trash: Arc<Svg>,
 }
@@ -52,6 +57,8 @@ impl State {
             toasts,
             bold: true,
             italic: false,
+            format: 0,
+            extras: [true, false, false],
             log: vec!["Ready.".into()],
             trash: Arc::new(Svg::parse(ICON).expect("the bundled icon parses")),
         }
@@ -111,6 +118,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             number_input(cx, &theme, &state.width, |s: &mut State| &mut s.width),
             label(&theme, "Opacity"),
             number_input(cx, &theme, &state.opacity, |s: &mut State| &mut s.opacity),
+            label(&theme, "Format"),
+            choice_chips(cx, &theme, FORMATS, state.format, |s: &mut State, i| {
+                s.format = i;
+            }),
+            label(&theme, "Show"),
+            filter_chips(cx, &theme, EXTRAS, &state.extras, |s: &mut State, i| {
+                s.extras[i] = !s.extras[i];
+            }),
         ],
     )
     .gap(sp.md)
@@ -124,14 +139,25 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         (false, true) => "italic",
         (false, false) => "regular",
     };
+    let extras: Vec<&str> = EXTRAS
+        .iter()
+        .zip(state.extras)
+        .filter_map(|(name, on)| on.then_some(*name))
+        .collect();
+    let extras = if extras.is_empty() {
+        "nothing else".to_string()
+    } else {
+        extras.join(", ").to_lowercase()
+    };
     let preview = column(vec![
         heading(&theme, "Preview"),
         paragraph(
             &theme,
             format!(
-                "{size}, {} px wide at {:.0}% opacity, {style}.",
+                "{size}, {} px wide at {:.0}% opacity, {style}, as {} with {extras}.",
                 state.width.value(),
-                state.opacity.value() * 100.0
+                state.opacity.value() * 100.0,
+                FORMATS[state.format],
             ),
         ),
     ])

@@ -189,6 +189,7 @@ pub(super) fn role(role: A11yRole) -> u32 {
         ComboBox => 11,      // COMBO_BOX
         SpinButton => 52,    // SPIN_BUTTON
         CheckBox => 7,       // CHECK_BOX
+        RadioButton => 44,   // RADIO_BUTTON
         Switch => 62,        // TOGGLE_BUTTON
         Splitter => 53,      // SPLIT_PANE
         Toolbar => 63,       // TOOL_BAR
@@ -213,7 +214,16 @@ pub(super) fn clickable(role: A11yRole) -> bool {
     use A11yRole::*;
     matches!(
         role,
-        Button | MenuItem | ComboBox | CheckBox | Switch | Tab | ColumnHeader | ListItem | TreeItem
+        Button
+            | MenuItem
+            | ComboBox
+            | CheckBox
+            | RadioButton
+            | Switch
+            | Tab
+            | ColumnHeader
+            | ListItem
+            | TreeItem
     )
 }
 

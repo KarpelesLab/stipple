@@ -65,6 +65,11 @@ pub enum Role {
     SpinButton,
     /// A box that is checked or not (see [`Semantics::checked`]).
     CheckBox,
+    /// One option of a group of which exactly one is picked (a
+    /// [`radio`](crate::widgets::radio) or a
+    /// [`choice_chips`](crate::widgets::choice_chips) chip); the picked one is
+    /// [`checked`](Semantics::checked).
+    RadioButton,
     /// An on/off switch (see [`Semantics::checked`]).
     Switch,
     /// A draggable divider between two resizable panes.

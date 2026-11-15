@@ -73,9 +73,9 @@ function compile(url) {
 // Roles a screen reader can move focus to; focusing a text box focuses the
 // app's field.
 const FOCUSABLE = new Set([
-  "button", "textbox", "checkbox", "switch", "combobox", "spinbutton", "option", "listbox",
-  "grid", "row", "gridcell", "columnheader", "tree", "treeitem", "menuitem", "menubar",
-  "menu", "separator",
+  "button", "textbox", "checkbox", "radio", "switch", "combobox", "spinbutton", "option",
+  "listbox", "grid", "row", "gridcell", "columnheader", "tree", "treeitem", "menuitem",
+  "menubar", "menu", "separator",
 ]);
 const TEXT_ROLES = new Set(["textbox", "spinbutton"]);
 

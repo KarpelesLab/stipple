@@ -21,7 +21,8 @@
 //! itself (see `docs/keyboard.md`).
 
 use crate::core::a11y::Role;
-use crate::core::runtime::{ActionId, FocusId, KeyInput, LayoutNode, node_to_window};
+use crate::core::keys::FocusGroup;
+use crate::core::runtime::{ActionId, FocusId, KeyInput, LayoutNode, find_focus, node_to_window};
 use crate::geometry::Point;
 
 /// How far a button's focus ring stands off its edge, in logical pixels.
@@ -38,6 +39,7 @@ fn takes_tab(node: &LayoutNode) -> bool {
         role,
         Role::Button
             | Role::CheckBox
+            | Role::RadioButton
             | Role::Switch
             | Role::Tab
             | Role::ComboBox
@@ -98,22 +100,120 @@ pub fn tap_activation(tree: &LayoutNode, focused: FocusId) -> Option<(ActionId, 
     Some((node.action?, to_window.apply(node.bounds.center())))
 }
 
-/// The Tab order: every focusable in tree order. With a modal overlay up,
-/// `modal_layers` is how many of the root's layers (not counting overlays
-/// leaving) it and the overlays above it take, at the end: only those count,
-/// so Tab stays in the dialog.
-pub fn tab_order(tree: &LayoutNode, modal_layers: Option<usize>) -> Vec<FocusId> {
+/// The Tab order: every focusable in tree order, but one control only of a
+/// [`FocusGroup::Select`] group (see [`Element::focus_group`]): the
+/// `focused` one if it is in the group, else its checked one, else its
+/// first. With a modal overlay up, `modal_layers` is how many of the root's
+/// layers (not counting overlays leaving) it and the overlays above it take,
+/// at the end: only those count, so Tab stays in the dialog.
+///
+/// [`Element::focus_group`]: crate::core::Element::focus_group
+pub fn tab_order(
+    tree: &LayoutNode,
+    modal_layers: Option<usize>,
+    focused: Option<FocusId>,
+) -> Vec<FocusId> {
     let mut order = Vec::new();
     match modal_layers {
         Some(n) => {
             let layers: Vec<&LayoutNode> = tree.children.iter().filter(|l| !l.ghost).collect();
             for layer in &layers[layers.len().saturating_sub(n)..] {
-                crate::core::collect_focusables(layer, &mut order);
+                collect_stops(layer, focused, &mut order);
             }
         }
-        None => crate::core::collect_focusables(tree, &mut order),
+        None => collect_stops(tree, focused, &mut order),
     }
     order
+}
+
+/// The group `node` makes, if it is one (see [`Element::focus_group`]).
+///
+/// [`Element::focus_group`]: crate::core::Element::focus_group
+fn group_of(node: &LayoutNode) -> Option<FocusGroup> {
+    node.keyboard.as_ref().and_then(|k| k.focus_group)
+}
+
+/// The Tab stops under `node`, in tree order (see [`tab_order`]).
+fn collect_stops(node: &LayoutNode, focused: Option<FocusId>, out: &mut Vec<FocusId>) {
+    if group_of(node) == Some(FocusGroup::Select) {
+        let mut members = Vec::new();
+        crate::core::collect_focusables(node, &mut members);
+        let checked = |id: &FocusId| {
+            find_focus(node, *id)
+                .and_then(|n| n.semantics.as_ref())
+                .is_some_and(|s| s.checked == Some(true) || s.selected)
+        };
+        let stop = members
+            .iter()
+            .copied()
+            .find(|f| Some(*f) == focused)
+            .or_else(|| members.iter().copied().find(checked))
+            .or_else(|| members.first().copied());
+        out.extend(stop);
+        return;
+    }
+    if let Some(id) = node.focus {
+        out.push(id);
+    }
+    for child in &node.children {
+        collect_stops(child, focused, out);
+    }
+}
+
+/// Where the arrow key `input` moves focus from `focused`, a control inside
+/// an element made a [`focus_group`](crate::core::Element::focus_group)
+/// (the innermost, if they nest): the group's control it lands on and, in a
+/// [`FocusGroup::Select`] group, the tap to run on it (as
+/// [`tap_activation`] gives it). `None` when `focused` isn't in a group or
+/// `input` isn't an arrow, Home or End.
+pub fn arrow_step(
+    tree: &LayoutNode,
+    focused: FocusId,
+    input: &KeyInput,
+) -> Option<(FocusId, Option<(ActionId, Point)>)> {
+    /// The innermost group around the node focused `id` (`group`: the
+    /// innermost around `node`).
+    fn find<'a>(
+        node: &'a LayoutNode,
+        id: FocusId,
+        group: Option<&'a LayoutNode>,
+    ) -> Option<Option<&'a LayoutNode>> {
+        if node.focus == Some(id) {
+            return Some(group);
+        }
+        let group = if group_of(node).is_some() {
+            Some(node)
+        } else {
+            group
+        };
+        node.children.iter().find_map(|c| find(c, id, group))
+    }
+    let group = find(tree, focused, None)??;
+    let mut members = Vec::new();
+    crate::core::collect_focusables(group, &mut members);
+    let n = members.len();
+    let at = members.iter().position(|f| *f == focused)?;
+    // Left and Right point to the start and the end of a mirrored row.
+    let back = match input {
+        KeyInput::Left => !group.rtl,
+        KeyInput::Right => group.rtl,
+        KeyInput::Up => true,
+        KeyInput::Down => false,
+        KeyInput::Home | KeyInput::End => false,
+        _ => return None,
+    };
+    let to = match input {
+        KeyInput::Home => 0,
+        KeyInput::End => n - 1,
+        _ if back => (at + n - 1) % n,
+        _ => (at + 1) % n,
+    };
+    let next = members[to];
+    let press = match group_of(group) {
+        Some(FocusGroup::Select) => tap_activation(tree, next),
+        _ => None,
+    };
+    Some((next, press))
 }
 
 /// The focusable after `current` in `order` (before it, `back`), wrapping;
@@ -182,7 +282,7 @@ mod tests {
             "a toggle inside the field"
         );
         assert!(c[5].focus.is_none());
-        let order = tab_order(&tree, None);
+        let order = tab_order(&tree, None, None);
         assert_eq!(order.len(), 3);
         assert_eq!(order[0], c[0].focus.unwrap());
         assert_eq!(order[2], c[4].focus.unwrap());
@@ -212,6 +312,48 @@ mod tests {
         assert!(activates(&KeyInput::Text(" ".into())));
         assert!(!activates(&KeyInput::Text("a".into())));
         assert!(!activates(&KeyInput::Escape));
+    }
+
+    #[test]
+    fn a_radio_group_is_one_tab_stop_and_its_arrows_press() {
+        use crate::core::FocusGroup;
+        let tree = laid(|cx| {
+            let radio = |cx: &mut Cx<()>, on: bool| {
+                tile()
+                    .on_tap(cx, |_| {})
+                    .role(Role::RadioButton)
+                    .checked(on)
+            };
+            let group = Element::stack(
+                Axis::Vertical,
+                vec![radio(cx, false), radio(cx, true), radio(cx, false)],
+            )
+            .focus_group(FocusGroup::Select);
+            Element::stack(Axis::Vertical, vec![tile().on_tap(cx, |_| {}), group])
+        });
+        let ids: Vec<FocusId> = tree.children[1]
+            .children
+            .iter()
+            .map(|n| n.focus.unwrap())
+            .collect();
+        let button = tree.children[0].focus.unwrap();
+        // The checked radio stands for the group, or the focused one.
+        assert_eq!(tab_order(&tree, None, None), [button, ids[1]]);
+        assert_eq!(tab_order(&tree, None, Some(ids[2])), [button, ids[2]]);
+        // Down goes to the next and presses it; Up from the first wraps.
+        let (next, press) = arrow_step(&tree, ids[1], &KeyInput::Down).unwrap();
+        assert_eq!(next, ids[2]);
+        assert_eq!(press.map(|p| p.0), tree.children[1].children[2].action);
+        assert_eq!(arrow_step(&tree, ids[0], &KeyInput::Up).unwrap().0, ids[2]);
+        assert_eq!(
+            arrow_step(&tree, ids[2], &KeyInput::Home).unwrap().0,
+            ids[0]
+        );
+        assert!(arrow_step(&tree, ids[0], &KeyInput::Enter).is_none());
+        assert!(
+            arrow_step(&tree, button, &KeyInput::Down).is_none(),
+            "not in a group"
+        );
     }
 
     #[test]

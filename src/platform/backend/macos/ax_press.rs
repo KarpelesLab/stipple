@@ -27,7 +27,7 @@ pub(super) fn pressable(role: A11yRole) -> bool {
     use A11yRole::*;
     matches!(
         role,
-        Button | MenuItem | CheckBox | Switch | ComboBox | Tab | ColumnHeader
+        Button | MenuItem | CheckBox | RadioButton | Switch | ComboBox | Tab | ColumnHeader
     )
 }
 

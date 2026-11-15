@@ -68,13 +68,17 @@ fn item(node: &A11yNode) -> Item {
         (node.name.clone(), value)
     };
     let mut traits = match role {
-        Button | MenuItem | ComboBox | CheckBox | Switch | Tab => BUTTON,
+        Button | MenuItem | ComboBox | CheckBox | RadioButton | Switch | Tab => BUTTON,
         Text => STATIC_TEXT,
         ColumnHeader => HEADER,
         TextField | SpinButton | PasswordField => TEXT_ENTRY,
         _ => 0,
     };
     if node.selected && matches!(role, ListItem | Row | Cell | TreeItem | Tab) {
+        traits |= SELECTED;
+    }
+    // UIKit has no radio trait: the picked option of a group reads as selected.
+    if role == RadioButton && node.checked == Some(true) {
         traits |= SELECTED;
     }
     let is_element = match role {

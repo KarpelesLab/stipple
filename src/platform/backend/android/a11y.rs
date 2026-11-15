@@ -203,6 +203,7 @@ fn class_name(role: A11yRole) -> &'static str {
         }
         A11yRole::Text => "android.widget.TextView",
         A11yRole::CheckBox => "android.widget.CheckBox",
+        A11yRole::RadioButton => "android.widget.RadioButton",
         A11yRole::Switch => "android.widget.Switch",
         A11yRole::List | A11yRole::Tree | A11yRole::Table => "android.widget.ListView",
         A11yRole::ComboBox => "android.widget.Spinner",
@@ -222,6 +223,7 @@ fn clickable(role: A11yRole) -> bool {
             | A11yRole::SpinButton
             | A11yRole::PasswordField
             | A11yRole::CheckBox
+            | A11yRole::RadioButton
             | A11yRole::Switch
             | A11yRole::ComboBox
             | A11yRole::ListItem
