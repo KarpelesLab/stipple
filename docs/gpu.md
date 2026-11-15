@@ -150,6 +150,59 @@ in `src/gpu/metal_scene.rs`, Vulkan in `src/gpu/vk/`, Direct3D 11 in
 `src/gpu/d3d/scene.rs`, WebGPU and WebGL2 in `web/gpu.js` (fed by
 `src/gpu/web.rs`).
 
+## Redrawing only what changed
+
+A window's frame on the GPU is redrawn only where it changed, the way the
+software renderer repaints only the damage. The app's damage for the frame
+(the tree diff, the hover and focus overlays, invalidated canvases, all in
+logical pixels) becomes one rectangle of physical pixels around all of it, a
+pixel wider all round. When the GPU still holds the frame before, the frame
+is *limited* to that rectangle (`Plan::limit` in `src/gpu/ops.rs`): every
+draw is clipped to it (a scissor, intersected with the frame's own clips),
+the background is filled in it in place of the clear, the draws wholly
+outside it are dropped before the executor sees them, and the target keeps
+the rest of the previous frame (its colors are loaded, only its stencil is
+cleared). A hover over one button then costs a few draws of a few thousand
+pixels instead of the whole window.
+
+What the GPU still holds is per backend:
+
+| Backend | The previous frame is in | Presented |
+|---|---|---|
+| Metal | the executor's frame target, copied whole into each drawable (a `CAMetalLayer`'s drawables don't keep their contents, and it has no partial present) | whole |
+| Vulkan | the executor's frame target, copied whole into the acquired image | with `VK_KHR_incremental_present` where the driver has it: the changed rectangle |
+| GLES on EGL | the executor's frame target, drawn whole into the window surface | with `eglSwapBuffersWithDamageKHR`/`EXT` where EGL has it: the changed rectangle |
+| Direct3D 11 | the swap chain's own buffers (flip-sequential keeps them): buffer 0 holds the frame before last, so the change of the last two frames is redrawn | `IDXGISwapChain1::Present1` with the redrawn rectangle as the dirty rectangle |
+| WebGPU | a texture of the renderer's own (the canvas's is new each frame), copied into the canvas's | whole |
+| WebGL2 | the canvas's drawing buffer, `preserveDrawingBuffer: true` | whole |
+
+The executors that keep a frame target share it between their windows and
+their read-backs, so it remembers whose frame it holds (`KeptFrame` in
+`src/gpu/renderer.rs`); a swap chain's back buffers are tracked by their
+age, with the change of each presented frame logged (`DamageLog`). The
+frame is drawn whole whenever that's unknown or not worth it: the first
+frame, a resize (a new target or new buffers), an expose or any forced
+frame, a frame that failed or was skipped, another window's frame in the
+shared target, a back buffer older than the log, damage the app can't
+localize (`Damage::Full`), damage over more than 60% of the window, or a
+background that isn't opaque (filling the rectangle with it wouldn't
+replace what was there). Flip-discard swap chains (the fallback when
+flip-sequential can't be made) and drivers without the partial-present
+extensions still redraw only the change; they just present whole.
+
+`a_partial_redraw_matches_the_software_renderer` (in `src/gpu/compare.rs`,
+on every backend the comparison runs on) draws one frame whole and a second,
+different everywhere, only in a rectangle over it, and checks the result
+against the software renderer's two frames put together the same way;
+`gpucompare.html` does the same on WebGPU and WebGL2 through the canvas, and
+`a_window_frame_redraws_only_what_changed` presents to a `CAMetalLayer`.
+On an Apple M5 Max the widget window of [How fast](#how-fast) takes 1.27 ms
+on Metal drawn whole and 0.45 ms with a button's worth (120×40 logical) of
+change. In Chrome on the same machine the work of a hover in the benchmark
+app (`tools/bench/run_web.py`, `web_hover`'s `work_ms`) went from about
+3.8–4.8 ms to 3.0–4.2 ms on WebGL2 and from 4.8–5.4 ms to 3.1–4.8 ms on
+WebGPU; what's left is building the frame on the CPU.
+
 ## Metal
 
 The Metal executor is the GLES2 one translated: the same four shaders in MSL
@@ -168,11 +221,13 @@ encoded sRGB values, as the software renderer blends them, and the window's
 display exactly as it does for the CPU frames. The layer's drawable is sized
 to the window's physical pixels (its `contentsScale` is the display's scale).
 
-Every presented frame is drawn whole: drawables don't keep the previous
-frame, so redrawing only the damage would need a retained texture and a
-copy, which is 6f's. An idle window still draws nothing: a frame with no
-damage isn't drawn at all. Frames are paced by the display link as before;
-`nextDrawable` blocks when three frames are in flight.
+A window's frames are drawn into a target the executor keeps, then copied
+whole into the drawable (so the layer isn't `framebufferOnly`): drawables
+don't keep the previous frame, and the kept one lets a frame redraw only what
+changed (see [Redrawing only what changed](#redrawing-only-what-changed)).
+An idle window still draws nothing: a frame with no damage isn't drawn at
+all. Frames are paced by the display link as before; `nextDrawable` blocks
+when three frames are in flight.
 
 ### How fast
 
@@ -212,8 +267,10 @@ unavailable and the app draws on the CPU.
 
 A window drawn on the GPU gets a swap chain from
 `IDXGIFactory2::CreateSwapChainForHwnd`: two `B8G8R8A8_UNORM` buffers,
-flip-discard (flip-sequential before Windows 10), stretched while the window
-is resized ahead of its next frame. Its buffers are resized to each frame's
+flip-sequential (its buffers keep their frames, so a frame redraws only what
+changed since the one before last and presents only that with `Present1`;
+flip-discard where flip-sequential can't be made, drawn and presented
+whole), stretched while the window is resized ahead of its next frame. Its buffers are resized to each frame's
 physical size, so a resize or a move to a monitor with another DPI
 (`WM_DPICHANGED` resizes the window, and the next frame is drawn at the new
 scale) reaches the swap chain with the frame drawn for it. A frame-latency
@@ -256,7 +313,12 @@ vertices and one of uniforms, then *replays* it with one upload of each:
   for nearest and bilinear sampling. The canvas is drawn y-down and
   offscreen targets top row first, so all of them sample alike.
 
-The frame goes straight into the canvas: nothing is read back. A canvas holds
+The frame goes straight into the canvas: nothing is read back. On WebGPU it
+is drawn into a texture of the renderer's own and copied into the canvas's,
+and on WebGL2 the drawing buffer is preserved, so a frame redraws only what
+changed over the one before (the op buffer's header says the frame is
+partial; a page with no frame to draw over answers so, and the next frame is
+drawn whole). A canvas holds
 one kind of context, so the GPU's is taken on the app's first GPU frame; if
 the app ends up on the CPU, `stipple.js` puts a fresh canvas in its place for
 the 2D context.
@@ -294,7 +356,9 @@ new one comes up, times both renderers, and with `?app=webdemo.wasm` runs the
 web demo with `renderer: "gpu"` through two lost devices (back on the GPU
 after the first, on the CPU after the second). CI's `visual-web-gpu` job runs
 it in headless Chrome on SwiftShader; the site check (`tools/site/check.py`)
-runs six of the examples a second time with `?renderer=gpu`.
+runs six of the examples a second time with `?renderer=gpu`. It also checks
+a partial redraw: a frame presented whole, then another redrawn only in a
+rectangle over it.
 
 ```sh
 cargo build --release --target wasm32-unknown-unknown --features gpu --example gpucompare --example webdemo
@@ -370,7 +434,9 @@ copy when the formats match): a pass more than drawing into the swapchain
 image, but one set of pipelines and one path for both. The swapchain is
 FIFO, in an 8-bit UNORM format (the frame's encoded sRGB values copied as
 they are, as the CPU frames are shown), re-made when the window's size
-changes or it is out of date.
+changes or it is out of date. Since the frame target persists, a window's
+frame redraws only what changed in it, and with `VK_KHR_incremental_present`
+the present names that rectangle (a new swapchain's first frame names none).
 
 - **X11** (`VK_KHR_xcb_surface`). The backend speaks X11 over its own
   socket and has no `xcb_connection_t`, but a window's id is the same on
@@ -416,7 +482,9 @@ for a window it moves its context to an EGL display on the window system
 GPU's own libxcb connection, on X11; the one display on Android), picks the
 first window config the window's surface takes, and from then on draws each
 frame into its offscreen target, then that target into the window surface
-as one quad flipped to the window's rows, and swaps. No read-back. Read-backs
+as one quad flipped to the window's rows, and swaps (with
+`eglSwapBuffersWithDamageKHR`/`EXT` naming what changed, where EGL has it).
+No read-back. Read-backs
 (tests, `render_scene_scaled`) keep working on the same context without a
 surface.
 
@@ -483,6 +551,11 @@ Today:
 - `Renderer::Auto` is still the CPU everywhere.
 - The Metal path on iOS is compile-checked; it hasn't run on a device or the
   simulator yet.
+- Only frames presented to a window are redrawn in part; a frame that is
+  read back (Wayland, `render_once`, the native benchmark's GPU runs) is
+  drawn whole. The partial presents of Direct3D 11, Vulkan and GLES (X11,
+  Android) have been compile-checked and run in CI only; the partial
+  redraw itself is checked on every backend by the comparison tests.
 - Glyphs are one texture each rather than packed in an atlas, and every draw
   is its own draw call, so a frame with a lot of text costs more GPU calls
   than it needs.

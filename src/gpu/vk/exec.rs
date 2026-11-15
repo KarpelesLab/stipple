@@ -31,7 +31,7 @@ use super::shaders;
 use super::sys::*;
 use crate::geometry::{PhysicalSize, ScaleFactor};
 use crate::gpu::ops::Plan;
-use crate::gpu::renderer::{Api, Executor, GpuError};
+use crate::gpu::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::platform::GpuLayer;
 use crate::render::Pixmap;
 use std::collections::HashMap;
@@ -52,6 +52,7 @@ const VK_KHR_XCB_SURFACE: &CStr = c"VK_KHR_xcb_surface";
 const VK_KHR_ANDROID_SURFACE: &CStr = c"VK_KHR_android_surface";
 const VK_EXT_METAL_SURFACE: &CStr = c"VK_EXT_metal_surface";
 const VK_KHR_SWAPCHAIN: &CStr = c"VK_KHR_swapchain";
+const VK_KHR_INCREMENTAL_PRESENT: &CStr = c"VK_KHR_incremental_present";
 // Drivers that implement Vulkan over another API (MoltenVK) are listed only
 // to an instance that asks for them, and need their subset enabled.
 const VK_KHR_PORTABILITY_ENUMERATION: &CStr = c"VK_KHR_portability_enumeration";
@@ -173,6 +174,9 @@ struct Swap {
     format: u32,
     /// Re-create it before the next frame (resized, out of date).
     stale: bool,
+    /// Frames presented since the swapchain was made (the first shows all
+    /// of it).
+    presents: u64,
 }
 
 /// The Vulkan executor: instance, device, pipelines, targets and caches.
@@ -190,6 +194,8 @@ pub(crate) struct VkExecutor {
     /// The platform's window surface extension (xcb, Android) is on.
     has_surface: bool,
     has_swapchain: bool,
+    /// `VK_KHR_incremental_present` is on: presents say what changed.
+    has_incremental: bool,
     color_pass: VkRenderPass,
     scratch_pass: VkRenderPass,
     set_layout: VkDescriptorSetLayout,
@@ -211,6 +217,8 @@ pub(crate) struct VkExecutor {
     staging: Option<HostBuffer>,
     readback: Option<HostBuffer>,
     swaps: HashMap<usize, Swap>,
+    /// Which window's frame `frame` holds.
+    kept: KeptFrame,
     count: u64,
     uploads: usize,
 }
@@ -358,6 +366,10 @@ impl VkExecutor {
             if has_swapchain {
                 dexts.push(VK_KHR_SWAPCHAIN.as_ptr());
             }
+            let has_incremental = has_swapchain && dev_has(VK_KHR_INCREMENTAL_PRESENT);
+            if has_incremental {
+                dexts.push(VK_KHR_INCREMENTAL_PRESENT.as_ptr());
+            }
             if dev_has(VK_KHR_PORTABILITY_SUBSET) {
                 dexts.push(VK_KHR_PORTABILITY_SUBSET.as_ptr());
             }
@@ -421,6 +433,7 @@ impl VkExecutor {
                 },
                 has_surface: surfaces,
                 has_swapchain,
+                has_incremental,
                 color_pass: NULL,
                 scratch_pass: NULL,
                 set_layout: NULL,
@@ -442,6 +455,7 @@ impl VkExecutor {
                 staging: None,
                 readback: None,
                 swaps: HashMap::new(),
+                kept: KeptFrame::default(),
                 count: 0,
                 uploads: 0,
             };
@@ -1335,6 +1349,7 @@ impl VkExecutor {
                 for old in std::mem::take(&mut self.layers) {
                     self.free_surface(old);
                 }
+                self.kept.forget();
                 self.frame = Some(self.surface(FORMAT_R8G8B8A8_UNORM, w, h)?);
             }
             // Record; on a scratch too small, grow it and record again.
@@ -1613,6 +1628,9 @@ impl VkExecutor {
             let cmd = self.cmd;
             let mut open = false;
             let mut bound: Option<Pipe> = None;
+            // The frame's stencil starts cleared even when its colors are
+            // kept (a partial frame).
+            let mut fresh = true;
             for (i, c) in rec.cmds.iter().enumerate() {
                 match c {
                     Cmd::Pass { target, clear } => {
@@ -1676,6 +1694,20 @@ impl VkExecutor {
                             maxDepth: 1.0,
                         };
                         (self.vk.vkCmdSetViewport)(cmd, 0, 1, &viewport);
+                        let first = *target == Target::Frame && std::mem::take(&mut fresh);
+                        if clear.is_none() && first {
+                            let att = VkClearAttachment {
+                                aspectMask: ASPECT_STENCIL,
+                                colorAttachment: 0,
+                                clearValue: VkClearValue::stencil(0),
+                            };
+                            let rect = VkClearRect {
+                                rect: area,
+                                baseArrayLayer: 0,
+                                layerCount: 1,
+                            };
+                            (self.vk.vkCmdClearAttachments)(cmd, 1, &att, 1, &rect);
+                        }
                         if let Some(c) = clear {
                             let atts = [
                                 VkClearAttachment {
@@ -1824,6 +1856,8 @@ impl VkExecutor {
     unsafe fn offscreen(&mut self, plan: &Plan, read: bool) -> Result<Vec<u8>, GpuError> {
         unsafe {
             self.wait()?;
+            // The frame target no longer holds a window's frame.
+            self.kept.forget();
             let encoded = self.encode(plan);
             if encoded.is_err() {
                 self.end_frame();
@@ -2134,6 +2168,7 @@ impl VkExecutor {
             swap.extent = extent;
             swap.format = format;
             swap.stale = false;
+            swap.presents = 0;
             Ok(())
         }
     }
@@ -2165,7 +2200,12 @@ impl VkExecutor {
         }
     }
 
-    unsafe fn present_to(&mut self, plan: &Plan, layer: &GpuLayer) -> Result<(), GpuError> {
+    unsafe fn present_to(
+        &mut self,
+        plan: &mut Plan,
+        layer: &GpuLayer,
+        dirty: Option<[i32; 4]>,
+    ) -> Result<(), GpuError> {
         unsafe {
             let key = layer_key(layer).ok_or_else(|| GpuError::Unavailable("no window".into()))?;
             self.wait()?;
@@ -2187,11 +2227,15 @@ impl VkExecutor {
                         extent: VkExtent2D::default(),
                         format: 0,
                         stale: true,
+                        presents: 0,
                     },
                 );
             }
             let mut swap = self.swaps.remove(&key).unwrap();
-            let r = self.present_swap(plan, &mut swap, want, offset);
+            let r = self.present_swap(plan, key, &mut swap, want, offset, dirty);
+            if r.is_err() {
+                self.kept.forget();
+            }
             match &r {
                 Err(GpuError::Lost(_)) | Err(GpuError::Unavailable(_)) => self.drop_swap(swap),
                 _ => {
@@ -2204,10 +2248,12 @@ impl VkExecutor {
 
     unsafe fn present_swap(
         &mut self,
-        plan: &Plan,
+        plan: &mut Plan,
+        key: usize,
         swap: &mut Swap,
         want: (i32, i32),
         offset: (i32, i32),
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
         unsafe {
             if !swap.stale {
@@ -2263,6 +2309,15 @@ impl VkExecutor {
             let target = swap.images[index as usize];
             let done = swap.done[index as usize];
 
+            // Into the frame target: only what changed, when it holds this
+            // window's last frame (it's all copied into the image below).
+            if self
+                .frame
+                .as_ref()
+                .is_some_and(|t| (t.w as u32, t.h as u32) == (plan.size.width, plan.size.height))
+            {
+                self.kept.limit(key, plan, dirty);
+            }
             let encoded = self.encode(plan);
             if encoded.is_err() {
                 self.end_frame();
@@ -2364,9 +2419,39 @@ impl VkExecutor {
             let submitted = self.submit(Some(swap.acquire), Some(done));
             self.end_frame();
             submitted?;
+            // What changed, where the driver takes it (not for a new
+            // swapchain's first frame, which shows all of it).
+            let changed = dirty
+                .filter(|_| self.has_incremental && swap.presents > 0)
+                .and_then(|r| {
+                    let x0 = (ox + r[0]).clamp(0, ew);
+                    let y0 = (oy + r[1]).clamp(0, eh);
+                    let x1 = (ox + r[2]).clamp(0, ew);
+                    let y1 = (oy + r[3]).clamp(0, eh);
+                    (x1 > x0 && y1 > y0).then_some(VkRectLayerKHR {
+                        offset: VkOffset2D { x: x0, y: y0 },
+                        extent: VkExtent2D {
+                            width: (x1 - x0) as u32,
+                            height: (y1 - y0) as u32,
+                        },
+                        layer: 0,
+                    })
+                });
+            let region = changed.as_ref().map(|rect| VkPresentRegionKHR {
+                rectangleCount: 1,
+                pRectangles: rect,
+            });
+            let regions = region.as_ref().map(|region| VkPresentRegionsKHR {
+                sType: ST_PRESENT_REGIONS_KHR,
+                pNext: std::ptr::null(),
+                swapchainCount: 1,
+                pRegions: region,
+            });
             let pi = VkPresentInfoKHR {
                 sType: ST_PRESENT_INFO_KHR,
-                pNext: std::ptr::null(),
+                pNext: regions.as_ref().map_or(std::ptr::null(), |r| {
+                    (r as *const VkPresentRegionsKHR).cast()
+                }),
                 waitSemaphoreCount: 1,
                 pWaitSemaphores: &done,
                 swapchainCount: 1,
@@ -2375,6 +2460,10 @@ impl VkExecutor {
                 pResults: std::ptr::null_mut(),
             };
             let r = (self.vk.vkQueuePresentKHR.unwrap())(self.queue, &pi);
+            // The frame target holds the window's frame, presented or not.
+            self.kept
+                .presented(key, (plan.size.width, plan.size.height), dirty);
+            swap.presents += 1;
             match r {
                 VK_SUCCESS => Ok(()),
                 VK_SUBOPTIMAL_KHR | VK_ERROR_OUT_OF_DATE_KHR => {
@@ -2427,11 +2516,12 @@ impl Executor for VkExecutor {
 
     fn present(
         &mut self,
-        plan: &Plan,
+        plan: &mut Plan,
         layer: &GpuLayer,
         _scale: ScaleFactor,
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
-        unsafe { self.present_to(plan, layer) }
+        unsafe { self.present_to(plan, layer, dirty) }
     }
 
     fn release(&mut self, layer: &GpuLayer) {

@@ -55,6 +55,39 @@ pub(crate) fn cases(font: Option<&Font>) -> Vec<Case> {
     out
 }
 
+/// The partial-redraw case: a frame drawn whole (`before`), then the next
+/// one (`after`) redrawn only in `region` (logical pixels) over it, as a
+/// window redraws what changed. The two differ everywhere, so the result
+/// shows both that `region` was redrawn as a whole frame would draw it and
+/// that the rest was kept: `before` outside, `after` inside (see
+/// [`composite`]). `after` has layers, a rotated clip (stencil) and an image
+/// crossing the region's edges.
+pub(crate) fn partial() -> (Scene, Scene, Rect) {
+    (paths(), layers(), Rect::from_xywh(50.0, 30.0, 70.0, 60.0))
+}
+
+/// `region` (logical) at `scale`, in whole device pixels.
+pub(crate) fn device_region(region: Rect, scale: f64) -> [i32; 4] {
+    [
+        (region.min_x() * scale).floor() as i32,
+        (region.min_y() * scale).floor() as i32,
+        (region.max_x() * scale).ceil() as i32,
+        (region.max_y() * scale).ceil() as i32,
+    ]
+}
+
+/// What a partial redraw leaves: `before`, with `after`'s pixels in `r`.
+pub(crate) fn composite(before: &Pixmap, after: &Pixmap, r: [i32; 4]) -> Pixmap {
+    let mut out = before.clone();
+    let w = before.size().width as usize;
+    let (src, dst) = (after.as_bytes(), out.as_bytes_mut());
+    for y in r[1].max(0) as usize..r[3] as usize {
+        let row = (y * w + r[0].max(0) as usize) * 4..(y * w + r[2] as usize) * 4;
+        dst[row.clone()].copy_from_slice(&src[row]);
+    }
+    out
+}
+
 pub(crate) fn rotate_about(radians: f64, c: Point) -> Affine {
     Affine::translate(Vec2::new(-c.x, -c.y))
         .then(Affine::rotate(radians))

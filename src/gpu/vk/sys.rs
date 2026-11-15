@@ -87,6 +87,7 @@ pub(crate) const ST_IMAGE_MEMORY_BARRIER: i32 = 45;
 pub(crate) const ST_MEMORY_BARRIER: i32 = 46;
 pub(crate) const ST_SWAPCHAIN_CREATE_INFO_KHR: i32 = 1_000_001_000;
 pub(crate) const ST_PRESENT_INFO_KHR: i32 = 1_000_001_001;
+pub(crate) const ST_PRESENT_REGIONS_KHR: i32 = 1_000_084_000;
 pub(crate) const ST_XCB_SURFACE_CREATE_INFO_KHR: i32 = 1_000_005_000;
 pub(crate) const ST_ANDROID_SURFACE_CREATE_INFO_KHR: i32 = 1_000_008_000;
 pub(crate) const ST_METAL_SURFACE_CREATE_INFO_EXT: i32 = 1_000_217_000;
@@ -992,6 +993,30 @@ pub(crate) struct VkPresentInfoKHR {
     pub pResults: *mut VkResult,
 }
 
+/// `VK_KHR_incremental_present`: the parts of each swapchain's image that
+/// changed, chained to a [`VkPresentInfoKHR`].
+#[repr(C)]
+pub(crate) struct VkPresentRegionsKHR {
+    pub sType: i32,
+    pub pNext: *const c_void,
+    pub swapchainCount: u32,
+    pub pRegions: *const VkPresentRegionKHR,
+}
+
+#[repr(C)]
+pub(crate) struct VkPresentRegionKHR {
+    pub rectangleCount: u32,
+    pub pRectangles: *const VkRectLayerKHR,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct VkRectLayerKHR {
+    pub offset: VkOffset2D,
+    pub extent: VkExtent2D,
+    pub layer: u32,
+}
+
 #[repr(C)]
 pub(crate) struct VkXcbSurfaceCreateInfoKHR {
     pub sType: i32,
@@ -1280,6 +1305,9 @@ mod tests {
             (std::mem::size_of::<VkRenderPassBeginInfo>(), 64),
             (std::mem::size_of::<VkSubmitInfo>(), 72),
             (std::mem::size_of::<VkPresentInfoKHR>(), 64),
+            (std::mem::size_of::<VkPresentRegionsKHR>(), 32),
+            (std::mem::size_of::<VkPresentRegionKHR>(), 16),
+            (std::mem::size_of::<VkRectLayerKHR>(), 20),
             (std::mem::size_of::<VkImageBlit>(), 80),
             (std::mem::size_of::<VkImageCopy>(), 68),
             (std::mem::size_of::<VkClearAttachment>(), 24),

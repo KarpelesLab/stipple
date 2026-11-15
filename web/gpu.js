@@ -18,6 +18,13 @@
 // of vertices and one of uniforms, then *replayed* by the API's backend with
 // one upload of each.
 //
+// A frame can be partial (the header's flags): it redraws only what changed
+// (its ops are clipped to that) over the last frame, so the last frame is
+// kept: in a preserved drawing buffer on WebGL2, in a texture of the
+// renderer's own on WebGPU (the canvas's texture is new each frame), which is
+// copied into the canvas's. Without a last frame to draw over, `frame`
+// answers 4 and the module draws the next one whole.
+//
 //   const host = gpuHost({ memory, claim, current, redraw, log });
 //   imports.stipple = { ...host.imports, ... };
 //
@@ -44,6 +51,11 @@ const layerTex = (i) => -(i + 1);
 
 // Recorded commands, CMD words each.
 const C_OPEN = 1, C_DRAW = 2;
+// How a C_OPEN starts its target: keeping it, cleared, or keeping its colors
+// with the stencil cleared (a partial frame's first pass).
+const KEEP = 0, CLEAR = 1, CLEAR_STENCIL = 2;
+// The op buffer's header flags.
+const FLAG_PARTIAL = 1;
 const CMD = 12;
 
 // A uniform slot: xf rect color uv clamp p0 p1 p2, one vec4 each (128 bytes),
@@ -64,10 +76,11 @@ class Recording {
     this.stride = 64; // floats per slot
   }
 
-  reset(w, h, bg, stride) {
+  reset(w, h, bg, stride, partial) {
     this.w = w;
     this.h = h;
     this.bg = bg;
+    this.partial = partial;
     this.stride = stride;
     this.ncmd = 0;
     this.nvert = 0;
@@ -156,12 +169,13 @@ function record(u, rec, max, stride) {
   const f = new Float32Array(u.buffer, u.byteOffset, u.length);
   const i32 = new Int32Array(u.buffer, u.byteOffset, u.length);
   const W = u[0], H = u[1];
-  rec.reset(W, H, [f[2], f[3], f[4], f[5]], stride);
+  const partial = (u[6] & FLAG_PARTIAL) !== 0;
+  rec.reset(W, H, [f[2], f[3], f[4], f[5]], stride, partial);
   const xfFrame = [2 / W, -2 / H, -1, 1];
   const levels = [{ layer: T_FRAME, opacity: 1, scissor: [0, 0, W, H], depth: 0, undo: [] }];
   let on = null;
   const open = (target, clear, vw, vh) => {
-    rec.cmd(C_OPEN, target, clear ? 1 : 0, vw, vh);
+    rec.cmd(C_OPEN, target, clear === true ? CLEAR : clear === false ? KEEP : clear, vw, vh);
     on = target;
   };
   const draw = (pipe, slot, tex, first, count, s, ref) =>
@@ -184,8 +198,8 @@ function record(u, rec, max, stride) {
     draw(P_TEX, slot, layerTex(layer.layer), first, 6, parent.scissor, parent.depth);
   };
 
-  open(T_FRAME, true, W, H);
-  let p = 6;
+  open(T_FRAME, partial ? CLEAR_STENCIL : CLEAR, W, H);
+  let p = 7;
   while (p < u.length) {
     const op = u[p++];
     const level = levels[levels.length - 1];
@@ -465,7 +479,9 @@ async function createWebGpu(claim, log) {
     device.destroy();
     return null;
   }
-  ctx.configure({ device, format, alphaMode: "premultiplied" });
+  // The frame is drawn into a texture of the renderer's own and copied in.
+  const usage = GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_DST;
+  ctx.configure({ device, format, alphaMode: "premultiplied", usage });
   // A device doesn't mean the canvas can show its frames (a browser without
   // GPU compositing can have WebGPU on SwiftShader and still fail to hand out
   // the canvas's texture): clear it once and see.
@@ -500,6 +516,8 @@ class WebGpuRenderer {
     this.layers = []; // { tex, view, stencil, bg, gen }
     this.scratch = null;
     this.frameStencil = null;
+    // The frame target, which keeps the last frame (see `frame`).
+    this.frameTex = null;
     this.vbuf = null;
     this.ubuf = null;
     this.gen = 0; // bumped when the uniform buffer is replaced (bind groups follow)
@@ -594,11 +612,19 @@ class WebGpuRenderer {
     if (W > this.max || H > this.max) return 3;
     const rec = this.rec;
     record(u, rec, this.max, this.stride);
+    const dev = this.device;
+    const ft = this.frameTex;
+    if (rec.partial && !(ft && ft.w === W && ft.h === H)) return 4;
     if (this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas.width = W;
       this.canvas.height = H;
     }
-    const dev = this.device;
+    if (!ft || ft.w !== W || ft.h !== H) {
+      ft?.tex.destroy();
+      const tex = dev.createTexture({ size: [W, H], format: this.format,
+        usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+      this.frameTex = { tex, view: tex.createView(), w: W, h: H };
+    }
     if (this.layers[0] && (this.layers[0].w !== W || this.layers[0].h !== H)) {
       for (const l of this.layers) { l.tex.destroy(); l.stencil.destroy(); }
       this.layers = [];
@@ -619,7 +645,7 @@ class WebGpuRenderer {
     this.buffers(rec);
     dev.queue.writeBuffer(this.vbuf, 0, rec.verts.buffer, 0, rec.nvert * 16);
     dev.queue.writeBuffer(this.ubuf, 0, rec.unis.buffer, 0, Math.max(rec.nslot, 1) * rec.stride * 4);
-    const frameView = this.ctx.getCurrentTexture().createView();
+    const frameView = this.frameTex.view;
     const enc = dev.createCommandEncoder();
     let pass = null;
     let pipe = -1;
@@ -629,15 +655,15 @@ class WebGpuRenderer {
       const o = i * CMD;
       if (c[o] === C_OPEN) {
         pass?.end();
-        const target = c[o + 1], clear = c[o + 2] === 1;
+        const target = c[o + 1], mode = c[o + 2];
         let view, sview;
         if (target === T_FRAME) { view = frameView; sview = this.frameStencil.view; }
         else if (target === T_SCRATCH) { view = this.scratch.view; sview = this.scratch.sview; }
         else { view = this.layers[target].view; sview = this.layers[target].sview; }
         const cc = target === T_FRAME ? { r: bg[0], g: bg[1], b: bg[2], a: bg[3] } : { r: 0, g: 0, b: 0, a: 0 };
         pass = enc.beginRenderPass({
-          colorAttachments: [{ view, loadOp: clear ? "clear" : "load", storeOp: "store", clearValue: cc }],
-          depthStencilAttachment: { view: sview, stencilLoadOp: clear ? "clear" : "load",
+          colorAttachments: [{ view, loadOp: mode === CLEAR ? "clear" : "load", storeOp: "store", clearValue: cc }],
+          depthStencilAttachment: { view: sview, stencilLoadOp: mode === KEEP ? "load" : "clear",
             stencilStoreOp: "store", stencilClearValue: 0 },
         });
         if (target === T_SCRATCH) pass.setViewport(0, 0, c[o + 3], c[o + 4], 0, 1);
@@ -660,6 +686,7 @@ class WebGpuRenderer {
       pass.draw(c[o + 5], 1, c[o + 4], 0);
     }
     pass?.end();
+    enc.copyTextureToTexture({ texture: this.frameTex.tex }, { texture: this.ctx.getCurrentTexture() }, [W, H]);
     dev.queue.submit([enc.finish()]);
     return 0;
   }
@@ -761,7 +788,7 @@ void main() {
 
 function createWebGl2(canvas, log) {
   const gl = canvas.getContext("webgl2", { alpha: true, premultipliedAlpha: true, antialias: false,
-    depth: false, stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
+    depth: false, stencil: true, preserveDrawingBuffer: true, powerPreference: "high-performance" });
   if (!gl) return null;
   if (gl.isContextLost()) return null;
   if (!gl.getContextAttributes()?.stencil) {
@@ -813,6 +840,8 @@ class WebGl2Renderer {
     this.scratch = null;
     this.rec = new Recording();
     this.wasLost = false;
+    // The drawing buffer (preserved) holds the last frame, of this size.
+    this.kept = null;
     this.vao = gl.createVertexArray();
     this.vbo = gl.createBuffer();
     this.ubo = gl.createBuffer();
@@ -964,10 +993,15 @@ class WebGl2Renderer {
     if (W > this.max || H > this.max) return 3;
     const rec = this.rec;
     record(u, rec, this.max, this.stride);
+    if (rec.partial && !(this.kept && this.kept[0] === W && this.kept[1] === H &&
+      this.canvas.width === W && this.canvas.height === H)) {
+      return 4;
+    }
     if (this.canvas.width !== W || this.canvas.height !== H) {
       this.canvas.width = W;
       this.canvas.height = H;
     }
+    this.kept = [W, H];
     if (this.layers[0] && (this.layers[0].w !== W || this.layers[0].h !== H)) {
       for (const l of this.layers) this.dropTarget(l);
       this.layers = [];
@@ -998,13 +1032,13 @@ class WebGl2Renderer {
     for (let i = 0; i < rec.ncmd; i++) {
       const o = i * CMD;
       if (c[o] === C_OPEN) {
-        const target = c[o + 1], clear = c[o + 2] === 1, vw = c[o + 3], vh = c[o + 4];
+        const target = c[o + 1], mode = c[o + 2], vw = c[o + 3], vh = c[o + 4];
         const t = target === T_FRAME ? null : target === T_SCRATCH ? this.scratch : this.layers[target];
         gl.bindFramebuffer(gl.FRAMEBUFFER, t ? t.fbo : null);
         gl.viewport(0, 0, vw, vh);
         flip = t ? -1 : 1;
         th = H;
-        if (clear) {
+        if (mode !== KEEP) {
           const cc = t ? [0, 0, 0, 0] : bg;
           // The scratch: only the part this path uses.
           if (target === T_SCRATCH) gl.scissor(0, 0, vw, vh);
@@ -1013,7 +1047,7 @@ class WebGl2Renderer {
           gl.stencilMask(0xff);
           gl.clearColor(cc[0], cc[1], cc[2], cc[3]);
           gl.clearStencil(0);
-          gl.clear(gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
+          gl.clear(mode === CLEAR ? gl.COLOR_BUFFER_BIT | gl.STENCIL_BUFFER_BIT : gl.STENCIL_BUFFER_BIT);
           gl.enable(gl.SCISSOR_TEST);
         }
         continue;

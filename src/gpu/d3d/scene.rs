@@ -28,7 +28,7 @@ use super::{D3D11CreateDevice, blob_bytes, compile_source, release, vmethod};
 use crate::geometry::{PhysicalSize, ScaleFactor};
 use crate::gpu::d3d_abi::*;
 use crate::gpu::ops::{Clip, Op, Plan, Sample};
-use crate::gpu::renderer::{Api, Executor, GpuError};
+use crate::gpu::renderer::{Api, DamageLog, Executor, GpuError};
 use crate::platform::GpuLayer;
 use crate::render::Pixmap;
 use core::ffi::c_void;
@@ -164,10 +164,15 @@ struct Chain {
     swap: Com,
     /// The frame-latency waitable object, when the swap chain has one.
     waitable: *mut c_void,
+    effect: u32,
     flags: u32,
     w: i32,
     h: i32,
     stencil: Option<Stencil>,
+    /// Frames presented since it was made or resized (see
+    /// [`back_buffer_age`]), and what they changed.
+    presents: u64,
+    log: DamageLog,
 }
 
 impl Drop for Chain {
@@ -1077,7 +1082,15 @@ impl D3dExecutor {
                 bg.b as f32 / 255.0 * a,
                 a,
             ];
-            self.open(f, On::Frame, Some(clear));
+            if plan.partial.is_some() {
+                // Keep the colors the target holds; only the stencil starts
+                // cleared.
+                self.open(f, On::Frame, None);
+                com!(self.ctx.ptr(), VT_CTX_CLEAR_DSV, (*mut c_void, u32, f32, u8) -> (),
+                    f.dsv, D3D11_CLEAR_STENCIL, 1.0, 0);
+            } else {
+                self.open(f, On::Frame, Some(clear));
+            }
 
             for op in &plan.ops {
                 match op {
@@ -1360,10 +1373,13 @@ impl D3dExecutor {
                 return Ok(Chain {
                     swap,
                     waitable,
+                    effect,
                     flags,
                     w,
                     h,
                     stencil: None,
+                    presents: 0,
+                    log: DamageLog::default(),
                 });
             }
             Err(GpuError::Unavailable(format!(
@@ -1382,7 +1398,12 @@ impl D3dExecutor {
         }
     }
 
-    unsafe fn present_to(&mut self, plan: &Plan, hwnd: *mut c_void) -> Result<(), GpuError> {
+    unsafe fn present_to(
+        &mut self,
+        plan: &mut Plan,
+        hwnd: *mut c_void,
+        dirty: Option<[i32; 4]>,
+    ) -> Result<(), GpuError> {
         unsafe {
             self.removed()?;
             let (w, h) = self.check_size(plan)?;
@@ -1410,6 +1431,9 @@ impl D3dExecutor {
                 check(hr, "IDXGISwapChain::ResizeBuffers")?;
                 let c = self.chains.get_mut(&key).unwrap();
                 (c.w, c.h) = (w, h);
+                // New buffers, holding no frame.
+                c.presents = 0;
+                c.log.clear();
             }
             // Wait until the swap chain takes another frame (at most one is
             // queued), so the frame drawn now is the next one shown.
@@ -1445,11 +1469,51 @@ impl D3dExecutor {
                 h,
                 on: None,
             };
+            // Only what changed since the frame the buffer holds (the one
+            // before last), when it holds one; then present just that.
+            let region = {
+                let c = &self.chains[&key];
+                let age = back_buffer_age(c.effect, c.presents);
+                let r = (plan.background.a == 255)
+                    .then(|| c.log.region(age, (w as u32, h as u32), dirty))
+                    .flatten();
+                if let Some(r) = r {
+                    plan.limit(r);
+                }
+                r
+            };
             let encoded = self.encode(&mut f, plan);
             drop(rtv);
             drop(back);
+            if encoded.is_err() {
+                let c = self.chains.get_mut(&key).unwrap();
+                c.presents = 0;
+                c.log.clear();
+            }
             self.finish_frame(encoded)?;
-            let hr = com!(swap, VT_SWAP_PRESENT, (u32, u32) -> Hresult, 1, 0);
+            let hr = match region {
+                Some(r) => {
+                    let rect = scissor_rect(r);
+                    let params = PresentParameters {
+                        DirtyRectsCount: 1,
+                        pDirtyRects: &rect,
+                        pScrollRect: std::ptr::null(),
+                        pScrollOffset: std::ptr::null(),
+                    };
+                    com!(swap, VT_SWAP1_PRESENT1,
+                        (u32, u32, *const PresentParameters) -> Hresult, 1, 0, &params)
+                }
+                None => com!(swap, VT_SWAP_PRESENT, (u32, u32) -> Hresult, 1, 0),
+            };
+            let c = self.chains.get_mut(&key).unwrap();
+            if hr == S_OK {
+                c.presents += 1;
+                c.log.presented((w as u32, h as u32), dirty);
+            } else {
+                // Occluded, or failed: start over with a whole frame.
+                c.presents = 0;
+                c.log.clear();
+            }
             match outcome(hr) {
                 Outcome::Ok => Ok(()),
                 _ => Err(failed(hr, "IDXGISwapChain::Present")),
@@ -1617,12 +1681,15 @@ impl Executor for D3dExecutor {
 
     fn present(
         &mut self,
-        plan: &Plan,
+        plan: &mut Plan,
         layer: &GpuLayer,
         _scale: ScaleFactor,
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
         match *layer {
-            GpuLayer::Hwnd(hwnd) if !hwnd.is_null() => unsafe { self.present_to(plan, hwnd) },
+            GpuLayer::Hwnd(hwnd) if !hwnd.is_null() => unsafe {
+                self.present_to(plan, hwnd, dirty)
+            },
             _ => Err(GpuError::Unavailable("no window to present to".into())),
         }
     }

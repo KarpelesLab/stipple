@@ -908,8 +908,8 @@ CPU as the default and the fallback.
 - ✅ The scene executor on Metal and presentation through a `CAMetalLayer`
   backing the window's view (macOS) and the UIKit view (iOS), at the
   display's scale, in sRGB.
-  *`src/gpu/metal_scene.rs`, feature `mtl`. Whole frames each present (no
-  damage yet: 6f). Run on macOS (2560×1600 widget frame: 38 ms on the CPU,
+  *`src/gpu/metal_scene.rs`, feature `mtl`. Only the damage is redrawn
+  (6f). Run on macOS (2560×1600 widget frame: 38 ms on the CPU,
   1.1 ms on Metal); iOS compile-checked only.*
 - ✅ Pixel comparison with the software renderer in CI on the macOS runner's
   Metal device (the `src/gpu/compare.rs` corpus), and the macOS visual jobs
@@ -993,10 +993,16 @@ CPU as the default and the fallback.
   of a texture per glyph.
 - ⬜ Batching: instanced boxes and quads, one draw call per run of compatible
   operations, image regions and sprites (Phase 9) batched per texture.
-- ⬜ Damage: redraw only the damaged region (scissored, with the rest of the
+- ✅ Damage: redraw only the damaged region (scissored, with the rest of the
   previous frame kept), and present only it where the platform can
   (`VK_KHR_incremental_present`, DXGI `Present1` dirty rects,
   `eglSwapBuffersWithDamage`).
+  *`Plan::limit` clips a frame to its damage rectangle over the kept frame:
+  a persistent target on Metal, Vulkan, GLES and WebGPU, the preserved
+  buffer on WebGL2, flip-sequential buffers by age on D3D11; whole frames
+  when unsure. Run on Metal, MoltenVK (offscreen), WebGPU and WebGL2
+  (widget window 1.27 → 0.45 ms for a button's change on Metal); D3D11, X11
+  and Android presents compile-checked, CI-run.*
 - ⬜ Canvases (`Element::canvas`) upload only their invalidated areas, or draw
   straight to the GPU when their content is only scene primitives.
 - ⬜ Benchmarks in CI with targets: a full 4K redraw of the widget gallery and

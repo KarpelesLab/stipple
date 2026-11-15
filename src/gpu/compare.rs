@@ -186,6 +186,44 @@ fn canvases_match_the_software_renderer() {
     agree("canvas", &s, 1.0, 0.5, 0.005);
 }
 
+/// A window's partial redraw: a frame drawn whole, then the next redrawn
+/// only in a region over it (the executor's target keeps the first), against
+/// the software renderer's two frames put together the same way.
+#[test]
+fn a_partial_redraw_matches_the_software_renderer() {
+    let (before, after, region) = partial();
+    let bg = BACKGROUND;
+    for scale in [1.0, 2.0] {
+        let name = format!("partial@{scale}");
+        if gpu(&before, bg, scale).is_none() {
+            return;
+        }
+        let r = device_region(region, scale);
+        let got = with_default(|g| g.render_partial(&after, bg, ScaleFactor::new(scale), r))
+            .expect("a partial frame");
+        let cpu = |s: &Scene| {
+            SoftwareRenderer::new()
+                .background(bg)
+                .render(s.clone(), ScaleFactor::new(scale))
+        };
+        let want = composite(&cpu(&before), &cpu(&after), r);
+        dump(&name, "gpu", &got);
+        dump(&name, "cpu", &want);
+        let d = diff(&got, &want);
+        eprintln!("{name}: {d:?}");
+        assert!(
+            d.mean < 0.8 && d.bad < 0.01,
+            "{name}: the partial GPU frame differs from the software one: {d:?}"
+        );
+        // And it isn't the whole `after` frame: what's outside was kept.
+        let whole = diff(&got, &cpu(&after));
+        assert!(
+            whole.mean > 2.0,
+            "{name}: the frame was redrawn whole: {whole:?}"
+        );
+    }
+}
+
 /// The whole App path: `App::render_with` the GPU renderer, against the
 /// software default, for a widget tree with text, boxes and an image (the
 /// path OS-drawn controls take under the native theme).
@@ -313,10 +351,17 @@ fn bench_cpu_against_gpu() {
             render_scene_scaled(scene, bg, s).unwrap();
         });
         let gpu = time(&mut || {
-            with_default(|r| r.finish(scene, bg, s)).unwrap();
+            with_default(|r| r.finish(scene, bg, s, None)).unwrap();
+        });
+        // A hover's worth of change (a 120x40 button, logical): only that
+        // redrawn over the last frame, as a window's next frame is.
+        let r = device_region(Rect::from_xywh(200.0, 300.0, 120.0, 40.0), scale);
+        let partial = time(&mut || {
+            with_default(|g| g.finish(scene, bg, s, Some(r))).unwrap();
         });
         eprintln!(
-            "{name}: CPU {cpu:.2} ms, GPU {gpu:.2} ms (with read-back {read:.2} ms) per frame"
+            "{name}: CPU {cpu:.2} ms, GPU {gpu:.2} ms (with read-back {read:.2} ms, \
+             a 120x40 change redrawn alone {partial:.2} ms) per frame"
         );
     }
 }

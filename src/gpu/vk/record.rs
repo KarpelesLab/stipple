@@ -526,7 +526,9 @@ impl Recorder {
             bg.b as f32 / 255.0 * a,
             a,
         ];
-        self.pass(Target::Frame, Some(clear));
+        // A partial frame keeps what the target holds (only the stencil
+        // starts cleared, see the executor).
+        self.pass(Target::Frame, plan.partial.is_none().then_some(clear));
 
         for op in &plan.ops {
             match op {
@@ -663,6 +665,7 @@ mod tests {
             size: PhysicalSize::new(100, 50),
             background: Color::rgb(255, 0, 0),
             ops,
+            partial: None,
         }
     }
 
@@ -721,6 +724,23 @@ mod tests {
                 clear: Some([1.0, 0.0, 0.0, 1.0])
             }]
         );
+    }
+
+    #[test]
+    fn a_partial_frame_keeps_the_target_and_scissors_its_draws() {
+        let mut p = plan(vec![a_box()]);
+        p.limit([10, 5, 30, 25]);
+        let r = record(&p, (0, 0), 4096);
+        assert_eq!(
+            r.cmds[0],
+            Cmd::Pass {
+                target: Target::Frame,
+                clear: None
+            }
+        );
+        let d = draws(&r);
+        assert!(!d.is_empty());
+        assert!(d.iter().all(|d| d.scissor == [10, 5, 30, 25]));
     }
 
     #[test]

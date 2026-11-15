@@ -135,14 +135,20 @@ pub(crate) trait Executor {
     }
 
     /// Draw `plan` into `layer` (a window's GPU layer, `plan.size` pixels at
-    /// `scale`) and present it.
+    /// `scale`) and present it. `dirty` is what changed since the frame
+    /// presented to `layer` before (physical pixels, `[x0, y0, x1, y1]`), or
+    /// `None` for everything: an executor that still holds that frame
+    /// redraws only the changed part ([`Plan::limit`], with the region a
+    /// [`DamageLog`] gives) and presents only that part where the platform
+    /// takes it.
     fn present(
         &mut self,
-        plan: &Plan,
+        plan: &mut Plan,
         layer: &GpuLayer,
         scale: ScaleFactor,
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
-        let _ = (plan, layer, scale);
+        let _ = (plan, layer, scale, dirty);
         Err(GpuError::Unavailable(format!(
             "{} can't present to this window",
             self.api().name()
@@ -164,6 +170,143 @@ pub(crate) trait Executor {
 
     /// Texture uploads in the last frame.
     fn uploads(&self) -> usize;
+}
+
+/// The changes of the last frames presented to a window, so that a back
+/// buffer holding an older frame can be brought up to date by redrawing just
+/// what changed since: the union of the changes of the frames it missed.
+/// Whenever that isn't known (the first frame, a resize, a frame that changed
+/// everything, a buffer older than the log) the whole frame is redrawn.
+#[derive(Debug, Default)]
+pub(crate) struct DamageLog {
+    /// The frame size the log is for.
+    size: (u32, u32),
+    /// Each presented frame's change from the one before, newest first.
+    past: Vec<Option<[i32; 4]>>,
+}
+
+/// How many presented frames a [`DamageLog`] remembers (back buffers older
+/// than that are redrawn whole).
+const DAMAGE_LOG_FRAMES: usize = 4;
+
+/// Past this share of the frame, a partial redraw saves too little over a
+/// full one (which needn't load the old frame) to be worth it.
+const PARTIAL_MAX_SHARE: f64 = 0.6;
+
+/// The union of two pixel rectangles.
+fn union(a: [i32; 4], b: [i32; 4]) -> [i32; 4] {
+    [
+        a[0].min(b[0]),
+        a[1].min(b[1]),
+        a[2].max(b[2]),
+        a[3].max(b[3]),
+    ]
+}
+
+impl DamageLog {
+    /// What to redraw of a back buffer `age` frames old (1: it holds the
+    /// frame presented last; 0: its contents are unknown) for a `size`
+    /// frame whose own change is `dirty`: a pixel rectangle, or `None` to
+    /// redraw everything.
+    pub(crate) fn region(
+        &self,
+        age: u32,
+        size: (u32, u32),
+        dirty: Option<[i32; 4]>,
+    ) -> Option<[i32; 4]> {
+        let age = age as usize;
+        if age == 0 || size != self.size || age - 1 > self.past.len() {
+            return None;
+        }
+        let mut r = dirty?;
+        for d in &self.past[..age - 1] {
+            r = union(r, (*d)?);
+        }
+        let (w, h) = (size.0 as i32, size.1 as i32);
+        let r = [r[0].max(0), r[1].max(0), r[2].min(w), r[3].min(h)];
+        if r[2] <= r[0] || r[3] <= r[1] {
+            return None;
+        }
+        let area = (r[2] - r[0]) as f64 * (r[3] - r[1]) as f64;
+        if area > PARTIAL_MAX_SHARE * w as f64 * h as f64 {
+            return None;
+        }
+        Some(r)
+    }
+
+    /// A `size` frame whose change was `dirty` was presented.
+    pub(crate) fn presented(&mut self, size: (u32, u32), dirty: Option<[i32; 4]>) {
+        if size != self.size {
+            self.past.clear();
+            self.size = size;
+        }
+        self.past.insert(0, dirty);
+        self.past.truncate(DAMAGE_LOG_FRAMES);
+    }
+
+    /// Forget everything: the next frame is redrawn whole.
+    pub(crate) fn clear(&mut self) {
+        self.past.clear();
+    }
+}
+
+/// A frame target that persists from frame to frame, shared by an
+/// executor's windows (and its read-backs): which window the frame it holds
+/// was presented to, and that window's [`DamageLog`]. A window whose frame
+/// the target still holds redraws only what changed.
+#[derive(Debug, Default)]
+#[cfg_attr(target_os = "windows", allow(dead_code))] // D3D's swap chain keeps its frames
+pub(crate) struct KeptFrame {
+    owner: Option<usize>,
+    log: DamageLog,
+}
+
+#[cfg_attr(target_os = "windows", allow(dead_code))]
+impl KeptFrame {
+    /// What to redraw of the target for window `key`'s next `size` frame,
+    /// whose change is `dirty`; `None` for everything. The frame is only
+    /// redrawn in part when the background is opaque.
+    pub(crate) fn region(
+        &self,
+        key: usize,
+        plan: &Plan,
+        dirty: Option<[i32; 4]>,
+    ) -> Option<[i32; 4]> {
+        if self.owner != Some(key) || plan.background.a != 255 {
+            return None;
+        }
+        self.log
+            .region(1, (plan.size.width, plan.size.height), dirty)
+    }
+
+    /// Limit `plan` to what window `key` has to redraw (see [`region`](Self::region));
+    /// the region, or `None` when it's redrawn whole.
+    pub(crate) fn limit(
+        &self,
+        key: usize,
+        plan: &mut Plan,
+        dirty: Option<[i32; 4]>,
+    ) -> Option<[i32; 4]> {
+        let r = self.region(key, plan, dirty)?;
+        plan.limit(r);
+        Some(r)
+    }
+
+    /// The target now holds window `key`'s `size` frame, which changed `dirty`.
+    pub(crate) fn presented(&mut self, key: usize, size: (u32, u32), dirty: Option<[i32; 4]>) {
+        if self.owner != Some(key) {
+            self.log.clear();
+            self.owner = Some(key);
+        }
+        self.log.presented(size, dirty);
+    }
+
+    /// Something else was drawn into the target (a read-back, a failed
+    /// frame): the next frame is drawn whole.
+    pub(crate) fn forget(&mut self) {
+        self.owner = None;
+        self.log.clear();
+    }
 }
 
 /// A GPU renderer: an executor and the glyph rasters it draws.
@@ -276,17 +419,37 @@ impl GpuRenderer {
         self.exec.can_present(layer)
     }
 
-    /// Render `scene` at `scale` into `layer` and present it.
+    /// Render `scene` at `scale` into `layer` and present it. `dirty` is
+    /// what changed since the frame presented to `layer` before (physical
+    /// pixels), `None` for everything (see [`Executor::present`]).
     pub(crate) fn present(
         &mut self,
         scene: &Scene,
         background: Color,
         scale: ScaleFactor,
         layer: &GpuLayer,
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
         self.lost()?;
-        let plan = self.plan(scene, background, scale);
-        self.exec.present(&plan, layer, scale)
+        let mut plan = self.plan(scene, background, scale);
+        self.exec.present(&mut plan, layer, scale, dirty)
+    }
+
+    /// Render only the pixel rectangle `region` of `scene` over the frame
+    /// the executor's offscreen target holds (the last one rendered), and
+    /// read it back: the partial redraw a window gets, checked against a
+    /// whole frame.
+    #[allow(dead_code)] // the comparison tests use it
+    pub(crate) fn render_partial(
+        &mut self,
+        scene: &Scene,
+        background: Color,
+        scale: ScaleFactor,
+        region: [i32; 4],
+    ) -> Result<Pixmap, GpuError> {
+        let mut plan = self.plan(scene, background, scale);
+        plan.limit(region);
+        self.exec.read_back(&plan)
     }
 
     /// Let go of what presents to `layer`: its window is going away.
@@ -294,15 +457,21 @@ impl GpuRenderer {
         self.exec.release(layer);
     }
 
-    /// Render `scene` offscreen and wait for the GPU, without a read-back.
+    /// Render `scene` offscreen and wait for the GPU, without a read-back;
+    /// with `region`, only that pixel rectangle over the last frame (see
+    /// [`render_partial`](Self::render_partial)).
     #[allow(dead_code)] // the comparison tests and benchmark use it
     pub(crate) fn finish(
         &mut self,
         scene: &Scene,
         background: Color,
         scale: ScaleFactor,
+        region: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
-        let plan = self.plan(scene, background, scale);
+        let mut plan = self.plan(scene, background, scale);
+        if let Some(r) = region {
+            plan.limit(r);
+        }
         self.exec.finish(&plan)
     }
 
@@ -316,5 +485,67 @@ impl GpuRenderer {
     #[cfg(test)]
     pub(crate) fn lose_device(&mut self) {
         self.lose = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::PhysicalSize;
+
+    const SIZE: (u32, u32) = (100, 100);
+
+    #[test]
+    fn a_back_buffer_catches_up_on_the_frames_it_missed() {
+        let mut log = DamageLog::default();
+        let a = Some([10, 10, 20, 20]);
+        let b = Some([50, 50, 60, 60]);
+        // Nothing presented yet: everything.
+        assert_eq!(log.region(1, SIZE, a), None);
+        log.presented(SIZE, None);
+        assert_eq!(log.region(1, SIZE, a), a);
+        // Unknown contents: everything.
+        assert_eq!(log.region(0, SIZE, a), None);
+        // Two frames old, and the frame before changed everything.
+        assert_eq!(log.region(2, SIZE, a), None);
+        log.presented(SIZE, a);
+        assert_eq!(log.region(2, SIZE, b), Some([10, 10, 60, 60]));
+        assert_eq!(log.region(1, SIZE, b), b);
+        // Older than the log.
+        assert_eq!(log.region(9, SIZE, b), None);
+        // A new size, or a change of the whole frame: everything.
+        assert_eq!(log.region(1, (100, 90), b), None);
+        assert_eq!(log.region(1, SIZE, None), None);
+        // Most of the frame: drawn whole.
+        assert_eq!(log.region(1, SIZE, Some([0, 0, 90, 90])), None);
+        // Clipped to the frame.
+        assert_eq!(
+            log.region(1, SIZE, Some([-5, 90, 10, 120])),
+            Some([0, 90, 10, 100])
+        );
+    }
+
+    #[test]
+    fn a_kept_frame_is_its_windows_only() {
+        let mut kept = KeptFrame::default();
+        let mut plan = Plan {
+            size: PhysicalSize::new(SIZE.0, SIZE.1),
+            background: Color::rgb(1, 2, 3),
+            ops: Vec::new(),
+            partial: None,
+        };
+        let dirty = Some([10, 10, 20, 20]);
+        assert_eq!(kept.region(1, &plan, dirty), None);
+        kept.presented(1, SIZE, None);
+        assert_eq!(kept.region(1, &plan, dirty), dirty);
+        assert_eq!(kept.region(2, &plan, dirty), None, "another window's frame");
+        assert_eq!(kept.limit(1, &mut plan, dirty), dirty);
+        assert_eq!(plan.partial, dirty);
+        kept.forget();
+        assert_eq!(kept.region(1, &plan, dirty), None);
+        // A see-through background can't be filled over the old frame.
+        kept.presented(1, SIZE, None);
+        plan.background = Color::rgba(1, 2, 3, 128);
+        assert_eq!(kept.region(1, &plan, dirty), None);
     }
 }

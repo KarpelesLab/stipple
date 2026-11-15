@@ -302,6 +302,31 @@ pub(crate) fn release_gpu_layer(layer: crate::platform::GpuLayer) {
     let _ = layer;
 }
 
+/// What `damage` (logical pixels) changes of a `size` frame drawn at
+/// `scale`, for the GPU: the physical pixel rectangle around it, a pixel
+/// wider all round (the GPU's antialiasing and filtering reach a little
+/// further than the CPU's), or `None` for the whole frame.
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+fn gpu_dirty(
+    damage: &Damage,
+    scale: crate::geometry::ScaleFactor,
+    size: crate::geometry::PhysicalSize,
+) -> Option<[i32; 4]> {
+    let bounds = crate::geometry::Rect::from_xywh(0.0, 0.0, size.width as f64, size.height as f64);
+    let r = damage
+        .to_physical(scale, bounds)
+        .into_iter()
+        .reduce(|a, b| a.union(b))?;
+    let (w, h) = (size.width as i32, size.height as i32);
+    let r = [
+        (r.min_x() as i32 - 1).max(0),
+        (r.min_y() as i32 - 1).max(0),
+        (r.max_x().ceil() as i32 + 1).min(w),
+        (r.max_y().ceil() as i32 + 1).min(h),
+    ];
+    (r[2] > r[0] && r[3] > r[1]).then_some(r)
+}
+
 /// Without a GPU backend built in there's nothing to draw with: say so once.
 #[cfg(not(feature = "gpu"))]
 fn no_gpu() {
@@ -382,11 +407,16 @@ impl<S: 'static> Pane<S> {
             self.draw_viewport_content(&mut scene, viewport_content);
             let background = theme.palette.background;
             let scale = self.scale;
+            let dirty = if force {
+                None
+            } else {
+                gpu_dirty(damage, scale, scale.to_physical(scene.logical_size()))
+            };
             let shown = shared::with(which, |g| {
                 if !g.can_present(&layer) {
                     return Ok(false);
                 }
-                g.present(&scene, background, scale, &layer)
+                g.present(&scene, background, scale, &layer, dirty)
                     .map(|()| true)
                     .inspect(|_| {
                         static SAID: std::sync::Once = std::sync::Once::new();
@@ -475,6 +505,23 @@ impl<S: 'static> Pane<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_damage_is_one_padded_physical_rectangle() {
+        use crate::geometry::{PhysicalSize, Rect, ScaleFactor};
+        let size = PhysicalSize::new(200, 100);
+        let two = ScaleFactor::new(2.0);
+        assert_eq!(gpu_dirty(&Damage::Full, two, size), None);
+        assert_eq!(gpu_dirty(&Damage::None, two, size), None);
+        let d = Damage::Regions(vec![
+            Rect::from_xywh(10.0, 10.0, 5.0, 5.0),
+            Rect::from_xywh(20.0, 5.0, 5.5, 5.0),
+        ]);
+        assert_eq!(gpu_dirty(&d, two, size), Some([19, 9, 52, 31]));
+        // Clipped to the frame.
+        let d = Damage::Regions(vec![Rect::from_xywh(95.0, 45.0, 20.0, 20.0)]);
+        assert_eq!(gpu_dirty(&d, two, size), Some([189, 89, 200, 100]));
+    }
 
     #[test]
     fn the_environment_overrides_the_app() {

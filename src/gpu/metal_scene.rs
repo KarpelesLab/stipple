@@ -17,11 +17,17 @@
 //! shared buffers the command buffer keeps alive; images are textures cached
 //! by the image's identity, like the GL backend's. Raw `objc_msgSend` FFI, as
 //! in the rest of the macOS and iOS code.
+//!
+//! A window's frames are drawn into a target of the executor's own that
+//! persists from frame to frame, then copied into the layer's drawable and
+//! presented: a `CAMetalLayer` has no partial present, and its drawables'
+//! contents aren't kept, so the kept target is what lets a frame redraw only
+//! what changed since the one before ([`Plan::limit`]).
 
 #![allow(unsafe_code)]
 
 use super::ops::{Clip, Op, Plan, Sample};
-use super::renderer::{Api, Executor, GpuError};
+use super::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::geometry::{PhysicalSize, ScaleFactor};
 use crate::platform::GpuLayer;
 use crate::render::Pixmap;
@@ -390,6 +396,8 @@ struct Frame {
     stencil: Id,
     w: i32,
     h: i32,
+    /// The frame target's stencil is yet to be cleared (by its first pass).
+    fresh: bool,
     /// The vertex buffer being filled.
     buf: Id,
     ptr: *mut u8,
@@ -436,10 +444,11 @@ pub(crate) struct MetalExecutor {
     ds_evenodd: Id,
     ds_cover_nz: Id,
     ds_cover_eo: Id,
-    /// The offscreen frame (read-back), the drawable's stencil, layers,
-    /// the path scratch.
+    /// The frame target (read-backs, and windows' frames before they're
+    /// copied into the drawable), layers, the path scratch.
     frame: Option<Target>,
-    drawable_stencil: Option<(Id, i32, i32)>,
+    /// Which window's frame `frame` holds.
+    kept: KeptFrame,
     layers: Vec<Target>,
     scratch: Option<Target>,
     textures: HashMap<usize, Texture>,
@@ -456,9 +465,6 @@ impl Drop for MetalExecutor {
         self.layers.clear();
         self.scratch = None;
         unsafe {
-            if let Some((s, _, _)) = self.drawable_stencil.take() {
-                release(s);
-            }
             for t in self.textures.values() {
                 release(t.tex);
             }
@@ -530,7 +536,7 @@ impl MetalExecutor {
                 ds_cover_nz: std::ptr::null_mut(),
                 ds_cover_eo: std::ptr::null_mut(),
                 frame: None,
-                drawable_stencil: None,
+                kept: KeptFrame::default(),
                 layers: Vec::new(),
                 scratch: None,
                 textures: HashMap::new(),
@@ -695,7 +701,10 @@ impl MetalExecutor {
             }
             let sa = send!(Id; rpd, c"stencilAttachment");
             send!((); sa, c"setTexture:", stencil; Id);
-            send!((); sa, c"setLoadAction:", if clear.is_some() { CLEAR } else { LOAD }; u64);
+            // The frame's stencil starts cleared even when its colors are
+            // kept (a partial frame).
+            let fresh = on == On::Frame && std::mem::take(&mut f.fresh);
+            send!((); sa, c"setLoadAction:", if clear.is_some() || fresh { CLEAR } else { LOAD }; u64);
             send!((); sa, c"setStoreAction:", STORE; u64);
             send!((); sa, c"setClearStencil:", 0u32; u32);
             f.enc = send!(Id; f.cmd, c"renderCommandEncoderWithDescriptor:", rpd; Id);
@@ -1079,7 +1088,7 @@ impl MetalExecutor {
                 bg.b as f32 / 255.0 * a,
                 a,
             ];
-            self.open(f, On::Frame, Some(clear));
+            self.open(f, On::Frame, plan.partial.is_none().then_some(clear));
 
             for op in &plan.ops {
                 match op {
@@ -1207,6 +1216,7 @@ impl MetalExecutor {
                 stencil,
                 w,
                 h,
+                fresh: true,
                 buf: std::ptr::null_mut(),
                 ptr: std::ptr::null_mut(),
                 cap: 0,
@@ -1231,14 +1241,9 @@ impl MetalExecutor {
     unsafe fn offscreen(&mut self, plan: &Plan, read: bool) -> Result<Vec<u8>, GpuError> {
         unsafe {
             let (w, h) = Self::check_size(plan)?;
-            if self.frame.as_ref().is_none_or(|t| t.w != w || t.h != h) {
-                self.frame = None;
-                self.frame = Some(Target::new(self.device, w, h, PIXEL_BGRA8)?);
-            }
-            let (color, stencil) = {
-                let t = self.frame.as_ref().unwrap();
-                (t.color, t.stencil)
-            };
+            // The target no longer holds a window's frame.
+            self.kept.forget();
+            let (color, stencil) = self.frame_target(w, h)?;
             let mut f = self.frame(color, stencil, w, h)?;
             let encoded = self.encode(&mut f, plan);
             self.finish_frame(encoded)?;
@@ -1280,6 +1285,19 @@ impl MetalExecutor {
                 release(buf);
             }
             Ok(out)
+        }
+    }
+
+    /// The frame target, made `w`×`h` (a new one keeps no frame).
+    unsafe fn frame_target(&mut self, w: i32, h: i32) -> Result<(Id, Id), GpuError> {
+        unsafe {
+            if self.frame.as_ref().is_none_or(|t| t.w != w || t.h != h) {
+                self.kept.forget();
+                self.frame = None;
+                self.frame = Some(Target::new(self.device, w, h, PIXEL_BGRA8)?);
+            }
+            let t = self.frame.as_ref().unwrap();
+            Ok((t.color, t.stencil))
         }
     }
 
@@ -1412,9 +1430,10 @@ impl Executor for MetalExecutor {
 
     fn present(
         &mut self,
-        plan: &Plan,
+        plan: &mut Plan,
         layer: &GpuLayer,
         _scale: ScaleFactor,
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
         let GpuLayer::Metal(layer) = *layer else {
             return Err(GpuError::Unavailable("not a Metal layer".into()));
@@ -1422,7 +1441,7 @@ impl Executor for MetalExecutor {
         if layer.is_null() {
             return Err(GpuError::Unavailable("no Metal layer".into()));
         }
-        pooled(|| unsafe { self.present_to(plan, layer) })
+        pooled(|| unsafe { self.present_to(plan, layer, dirty) })
     }
 
     fn uploads(&self) -> usize {
@@ -1431,7 +1450,12 @@ impl Executor for MetalExecutor {
 }
 
 impl MetalExecutor {
-    unsafe fn present_to(&mut self, plan: &Plan, layer: Id) -> Result<(), GpuError> {
+    unsafe fn present_to(
+        &mut self,
+        plan: &mut Plan,
+        layer: Id,
+        dirty: Option<[i32; 4]>,
+    ) -> Result<(), GpuError> {
         unsafe {
             // The frame before this one: did the device fail it?
             if !self.last.is_null() {
@@ -1447,7 +1471,8 @@ impl MetalExecutor {
             if send!(Id; layer, c"device") != self.device {
                 send!((); layer, c"setDevice:", self.device; Id);
                 send!((); layer, c"setPixelFormat:", PIXEL_BGRA8; u64);
-                send!((); layer, c"setFramebufferOnly:", true; bool);
+                // The frame is copied in from the kept target.
+                send!((); layer, c"setFramebufferOnly:", false; bool);
                 send!((); layer, c"setColorspace:", self.srgb; *mut c_void);
             }
             let size = CgSize {
@@ -1468,24 +1493,130 @@ impl MetalExecutor {
                 // The layer didn't take the new size yet: show it next time.
                 return Err(GpuError::Skipped);
             }
-            if self
-                .drawable_stencil
-                .is_none_or(|(_, sw, sh)| (sw, sh) != (w, h))
-            {
-                if let Some((s, _, _)) = self.drawable_stencil.take() {
-                    release(s);
-                }
-                let s = texture(self.device, PIXEL_STENCIL8, w, h, USAGE_RENDER_TARGET)?;
-                self.drawable_stencil = Some((s, w, h));
-            }
-            let stencil = self.drawable_stencil.unwrap().0;
-            let mut f = self.frame(color, stencil, w, h)?;
+            // Into the kept target (only what changed, when it holds this
+            // window's last frame), then all of it into the drawable.
+            let key = layer as usize;
+            let (frame, stencil) = self.frame_target(w, h)?;
+            self.kept.limit(key, plan, dirty);
+            let mut f = self.frame(frame, stencil, w, h)?;
             let encoded = self.encode(&mut f, plan);
+            if encoded.is_err() {
+                self.kept.forget();
+            }
             self.finish_frame(encoded)?;
+            let blit = send!(Id; f.cmd, c"blitCommandEncoder");
+            let origin = Size3 { w: 0, h: 0, d: 0 };
+            let size = Size3 {
+                w: w as usize,
+                h: h as usize,
+                d: 1,
+            };
+            send!((); blit,
+                c"copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:",
+                frame; Id, 0usize; usize, 0usize; usize, origin; Size3, size; Size3,
+                color; Id, 0usize; usize, 0usize; usize, origin; Size3);
+            send!((); blit, c"endEncoding");
             send!((); f.cmd, c"presentDrawable:", drawable; Id);
             send!((); f.cmd, c"commit");
             self.last = send!(Id; f.cmd, c"retain");
+            self.kept.presented(key, (w as u32, h as u32), dirty);
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu::corpus;
+    use crate::gpu::ops::{RasterCache, plan};
+    use crate::render::{Scene, SoftwareRenderer};
+
+    /// The kept frame target's pixels, premultiplied BGRA.
+    unsafe fn kept_pixels(me: &MetalExecutor) -> Vec<u8> {
+        unsafe {
+            let t = me.frame.as_ref().unwrap();
+            let len = t.w as usize * t.h as usize * 4;
+            let buf = send!(Id; me.device, c"newBufferWithLength:options:", len; usize, 0u64; u64);
+            let cmd = send!(Id; me.queue, c"commandBuffer");
+            let blit = send!(Id; cmd, c"blitCommandEncoder");
+            let origin = Size3 { w: 0, h: 0, d: 0 };
+            let size = Size3 {
+                w: t.w as usize,
+                h: t.h as usize,
+                d: 1,
+            };
+            send!((); blit,
+                c"copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:",
+                t.color; Id, 0usize; usize, 0usize; usize, origin; Size3, size; Size3,
+                buf; Id, 0usize; usize, t.w as usize * 4; usize, len; usize);
+            send!((); blit, c"endEncoding");
+            send!((); cmd, c"commit");
+            send!((); cmd, c"waitUntilCompleted");
+            let p = send!(*const u8; buf, c"contents");
+            let out = std::slice::from_raw_parts(p, len).to_vec();
+            release(buf);
+            out
+        }
+    }
+
+    /// Presenting to a layer (one not on screen): a frame whole, then the
+    /// next with a change, which redraws only the change over the kept frame
+    /// before it's copied into the drawable.
+    #[test]
+    fn a_window_frame_redraws_only_what_changed() {
+        let Ok(mut me) = MetalExecutor::new() else {
+            eprintln!("skipping: no Metal device");
+            return;
+        };
+        pooled(|| {
+            let layer = unsafe { send!(Id; class(c"CAMetalLayer"), c"new") };
+            assert!(!layer.is_null());
+            let gl = GpuLayer::Metal(layer);
+            let (before, after, region) = corpus::partial();
+            let bg = corpus::BACKGROUND;
+            let size = PhysicalSize::new(320, 240);
+            let mut rasters = RasterCache::default();
+            let s = ScaleFactor::new(2.0);
+            let r = corpus::device_region(region, 2.0);
+
+            let mut a = plan(&before, bg, size, &mut rasters);
+            me.present(&mut a, &gl, s, None).expect("the first frame");
+            assert_eq!(a.partial, None, "the first frame is drawn whole");
+            let mut b = plan(&after, bg, size, &mut rasters);
+            me.present(&mut b, &gl, s, Some(r))
+                .expect("the second frame");
+            assert_eq!(b.partial, Some(r), "the second one only where it changed");
+            unsafe { send!((); me.last, c"waitUntilCompleted") };
+
+            let mut got = unsafe { kept_pixels(&me) };
+            for px in got.as_chunks_mut::<4>().0 {
+                px.swap(0, 2); // BGRA to RGBA; the frame is opaque
+            }
+            let cpu = |sc: &Scene| SoftwareRenderer::new().background(bg).render(sc.clone(), s);
+            let want = corpus::composite(&cpu(&before), &cpu(&after), r);
+            let mean = got
+                .iter()
+                .zip(want.as_bytes())
+                .map(|(a, b)| a.abs_diff(*b) as f64)
+                .sum::<f64>()
+                / got.len() as f64;
+            assert!(mean < 0.8, "the kept frame differs: mean {mean}");
+
+            // Another window's frame takes the target: this one's next is
+            // drawn whole.
+            let other = unsafe { send!(Id; class(c"CAMetalLayer"), c"new") };
+            let mut c = plan(&before, bg, size, &mut rasters);
+            me.present(&mut c, &GpuLayer::Metal(other), s, None)
+                .unwrap();
+            let mut d = plan(&after, bg, size, &mut rasters);
+            me.present(&mut d, &gl, s, Some(r)).unwrap();
+            assert_eq!(d.partial, None, "the target held another window's frame");
+            unsafe {
+                send!((); me.last, c"waitUntilCompleted");
+                release(layer);
+                release(other);
+            }
+        });
     }
 }

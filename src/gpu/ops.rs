@@ -155,6 +155,98 @@ pub(crate) struct Plan {
     pub size: PhysicalSize,
     pub background: Color,
     pub ops: Vec<Op>,
+    /// `Some` when the frame redraws only this pixel rectangle
+    /// (`[x0, y0, x1, y1]`, see [`Plan::limit`]): the target keeps the
+    /// previous frame's pixels (loaded, not cleared) and only the stencil
+    /// starts cleared.
+    pub partial: Option<[i32; 4]>,
+}
+
+impl Plan {
+    /// Redraw only the pixel rectangle `r` of the frame, over the previous
+    /// frame the target holds: the ops are clipped to `r` (a scissor) over
+    /// the background filled in it, and the ops wholly outside it are
+    /// dropped. The background has to be opaque, so that filling `r` with it
+    /// replaces what was there exactly as a clear would.
+    pub(crate) fn limit(&mut self, r: [i32; 4]) {
+        debug_assert_eq!(
+            self.background.a, 255,
+            "a partial frame needs an opaque background"
+        );
+        let keep = [r[0] as f32, r[1] as f32, r[2] as f32, r[3] as f32];
+        let bg = self.background;
+        let fill = Op::Box {
+            rect: keep,
+            radius: 0.0,
+            stroke: 0.0,
+            color: [
+                bg.r as f32 / 255.0,
+                bg.g as f32 / 255.0,
+                bg.b as f32 / 255.0,
+                1.0,
+            ],
+        };
+        let old = std::mem::take(&mut self.ops);
+        let mut ops = Vec::with_capacity(old.len() + 3);
+        ops.push(Op::PushClip(Clip::Rect(r)));
+        ops.push(fill);
+        ops.extend(
+            old.into_iter()
+                .filter(|op| op_bounds(op).is_none_or(|b| intersects(&b, &keep))),
+        );
+        ops.push(Op::PopClip);
+        self.ops = ops;
+        self.partial = Some(r);
+    }
+}
+
+/// The device-space box a drawing op can touch (padded a pixel for its
+/// antialiased edge and bilinear filtering), or `None` for the ops that
+/// draw nothing themselves (clips, layers).
+fn op_bounds(op: &Op) -> Option<Bounds> {
+    match op {
+        Op::Box { rect, stroke, .. } => {
+            let pad = 1.0 + stroke.max(0.0) * 0.5;
+            Some([rect[0] - pad, rect[1] - pad, rect[2] + pad, rect[3] + pad])
+        }
+        Op::Path { bbox, .. } => Some([
+            bbox[0] as f32 - 1.0,
+            bbox[1] as f32 - 1.0,
+            bbox[2] as f32 + 1.0,
+            bbox[3] as f32 + 1.0,
+        ]),
+        Op::Image {
+            transform, rect, ..
+        } => {
+            let corners = [
+                (rect[0], rect[1]),
+                (rect[2], rect[1]),
+                (rect[0], rect[3]),
+                (rect[2], rect[3]),
+            ]
+            .map(|(x, y)| {
+                let p = transform.apply(oxideav_core::Point { x, y });
+                (p.x, p.y)
+            });
+            let (mut b, ok) = (
+                [
+                    f32::INFINITY,
+                    f32::INFINITY,
+                    f32::NEG_INFINITY,
+                    f32::NEG_INFINITY,
+                ],
+                corners.iter().all(|(x, y)| x.is_finite() && y.is_finite()),
+            );
+            if !ok {
+                return None;
+            }
+            for (x, y) in corners {
+                b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+            }
+            Some([b[0] - 1.0, b[1] - 1.0, b[2] + 1.0, b[3] + 1.0])
+        }
+        Op::PushClip(_) | Op::PopClip | Op::PushLayer { .. } | Op::PopLayer => None,
+    }
 }
 
 /// Glyph rasters kept across frames, keyed by glyph, size, color, transform
@@ -240,6 +332,7 @@ pub(crate) fn plan(
         size: physical,
         background,
         ops,
+        partial: None,
     }
 }
 
@@ -951,6 +1044,52 @@ mod tests {
             matches!(&ops[..], [Op::Box { rect, .. }] if *rect == [5.0, 7.0, 15.0, 17.0]),
             "{ops:?}"
         );
+    }
+
+    #[test]
+    fn a_limited_plan_fills_its_region_and_drops_what_lies_outside() {
+        let boxed = |x: f32| Op::Box {
+            rect: [x, 10.0, x + 10.0, 20.0],
+            radius: 0.0,
+            stroke: 0.0,
+            color: [1.0; 4],
+        };
+        let mut plan = Plan {
+            size: PhysicalSize::new(200, 100),
+            background: Color::rgb(255, 0, 0),
+            ops: vec![
+                boxed(0.0),
+                Op::PushLayer { opacity: 0.5 },
+                boxed(100.0),
+                boxed(150.0),
+                Op::PopLayer,
+            ],
+            partial: None,
+        };
+        plan.limit([95, 0, 120, 50]);
+        assert_eq!(plan.partial, Some([95, 0, 120, 50]));
+        let ops = &plan.ops;
+        assert!(matches!(ops[0], Op::PushClip(Clip::Rect([95, 0, 120, 50]))));
+        assert!(matches!(
+            ops[1],
+            Op::Box {
+                rect: [95.0, 0.0, 120.0, 50.0],
+                color: [1.0, 0.0, 0.0, 1.0],
+                ..
+            }
+        ));
+        // The box at 0 and the one at 150 are gone; the layer stays.
+        assert!(matches!(ops[2], Op::PushLayer { .. }));
+        assert!(matches!(
+            ops[3],
+            Op::Box {
+                rect: [100.0, ..],
+                ..
+            }
+        ));
+        assert!(matches!(ops[4], Op::PopLayer));
+        assert!(matches!(ops[5], Op::PopClip));
+        assert_eq!(ops.len(), 6);
     }
 
     #[test]

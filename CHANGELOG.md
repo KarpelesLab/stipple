@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- *(gpu)* windows on the GPU redraw only what changed, over the frame kept from before, and present only that where the platform can (`VK_KHR_incremental_present`, DXGI `Present1` dirty rectangles, `eglSwapBuffersWithDamage`) ([#54](https://github.com/KarpelesLab/stipple/issues/54))
+
 ## [0.0.7](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.6...stipple-v0.0.7) - 2026-11-15
 
 ### Added

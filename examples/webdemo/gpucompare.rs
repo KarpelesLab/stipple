@@ -92,6 +92,29 @@ mod harness {
         FRAME.with(|f| f.borrow().as_ref().map_or(0, |p| p.size().height))
     }
 
+    /// The partial-redraw case at `scale` on the CPU (as `cmp_cpu`).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn cmp_partial_cpu(scale: f64) -> *const u8 {
+        let p = web_compare::partial_cpu(scale);
+        FRAME.with(|f| f.borrow_mut().insert(p).as_bytes().as_ptr())
+    }
+
+    /// The partial-redraw case at `scale` presented into the canvas on `api`
+    /// (as `cmp_gpu`): a frame whole, then one redrawn only where it changed.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn cmp_partial_gpu(scale: f64, api: u32) -> u32 {
+        match web_compare::partial_gpu(scale, api) {
+            Ok(name) => {
+                answer(name);
+                1
+            }
+            Err(e) => {
+                answer(e);
+                0
+            }
+        }
+    }
+
     /// Draw case (or timing scene) `i` into the canvas on `api` (0 the page's
     /// choice, 1 WebGPU, 2 WebGL2): 1 drawn (the text answer is the API's
     /// name), 0 not (the text answer says why).

@@ -207,6 +207,8 @@ pub(crate) const VT_SWAP_RESIZE_BUFFERS: usize = 13;
 // GetHwnd, GetCoreWindow, Present1, IsTemporaryMonoSupported,
 // GetRestrictToOutput, SetBackgroundColor, GetBackgroundColor, SetRotation,
 // GetRotation); IDXGISwapChain2: 29 SetSourceSize, 30 GetSourceSize
+/// `IDXGISwapChain1::Present1` (see the list above).
+pub(crate) const VT_SWAP1_PRESENT1: usize = 22;
 pub(crate) const VT_SWAP2_SET_MAXIMUM_FRAME_LATENCY: usize = 31;
 // 32 GetMaximumFrameLatency
 pub(crate) const VT_SWAP2_GET_FRAME_LATENCY_WAITABLE_OBJECT: usize = 33;
@@ -458,20 +460,45 @@ pub(crate) struct SwapChainDesc1 {
     pub Flags: u32,
 }
 
-/// The swap chains to try for a window, best first: flip-discard (Windows
-/// 10) with a frame-latency waitable object (8.1), then flip-sequential with
-/// and without one. `(swap effect, flags)`.
+/// The swap chains to try for a window, best first: flip-sequential with a
+/// frame-latency waitable object (Windows 8.1), whose buffers keep their
+/// frames (so a frame can redraw only what changed, and present only that
+/// with `Present1`'s dirty rectangles), then flip-discard (Windows 10, no
+/// partial presents) with one, then flip-sequential without.
+/// `(swap effect, flags)`.
 pub(crate) const SWAP_CHAIN_LADDER: [(u32, u32); 3] = [
-    (
-        DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
-    ),
     (
         DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
         DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
     ),
+    (
+        DXGI_SWAP_EFFECT_FLIP_DISCARD,
+        DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    ),
     (DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 0),
 ];
+
+/// How many frames old buffer 0 of a [`swap_chain_desc`] swap chain is,
+/// after `presents` frames presented since it was made or resized: two
+/// buffers taking turns, so the one drawn into next holds the frame before
+/// last; `0` (unknown) until both have been presented, and always with
+/// flip-discard, whose buffers don't keep their frames.
+pub(crate) fn back_buffer_age(effect: u32, presents: u64) -> u32 {
+    if effect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL && presents >= 2 {
+        2
+    } else {
+        0
+    }
+}
+
+/// `DXGI_PRESENT_PARAMETERS`
+#[repr(C)]
+pub(crate) struct PresentParameters {
+    pub DirtyRectsCount: u32,
+    pub pDirtyRects: *const D3dRect,
+    pub pScrollRect: *const D3dRect,
+    pub pScrollOffset: *const c_void,
+}
 
 /// A `w`×`h` flip-model swap chain of two BGRA8 buffers, stretched while
 /// the window is resized ahead of its next frame, its alpha ignored (the
@@ -652,6 +679,9 @@ mod tests {
         assert_eq!(size_of::<Viewport>(), 24);
         assert_eq!(size_of::<D3dRect>(), 16);
         if size_of::<usize>() == 8 {
+            assert_eq!(size_of::<PresentParameters>(), 32);
+        }
+        if size_of::<usize>() == 8 {
             assert_eq!(size_of::<InputElementDesc>(), 32);
             assert_eq!(size_of::<SubresourceData>(), 16);
             assert_eq!(size_of::<MappedSubresource>(), 16);
@@ -677,7 +707,8 @@ mod tests {
     #[test]
     fn swap_chains_are_flip_model_best_first() {
         let (effect, flags) = SWAP_CHAIN_LADDER[0];
-        assert_eq!(effect, DXGI_SWAP_EFFECT_FLIP_DISCARD);
+        // Buffers that keep their frames come first, for partial presents.
+        assert_eq!(effect, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL);
         assert_eq!(flags, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT);
         for (effect, _) in SWAP_CHAIN_LADDER {
             assert!(
@@ -692,6 +723,16 @@ mod tests {
         assert_eq!(d.Format, DXGI_FORMAT_B8G8R8A8_UNORM);
         assert_eq!(d.SampleDesc.Count, 1);
         assert_eq!(d.AlphaMode, DXGI_ALPHA_MODE_IGNORE);
+    }
+
+    #[test]
+    fn the_back_buffer_holds_the_frame_before_last() {
+        assert_eq!(back_buffer_age(DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 0), 0);
+        assert_eq!(back_buffer_age(DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 1), 0);
+        assert_eq!(back_buffer_age(DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 2), 2);
+        assert_eq!(back_buffer_age(DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, 9), 2);
+        assert_eq!(back_buffer_age(DXGI_SWAP_EFFECT_FLIP_DISCARD, 9), 0);
+        assert_eq!(swap_chain_desc(1, 1, 0, 0).BufferCount, 2, "two buffers");
     }
 
     #[test]

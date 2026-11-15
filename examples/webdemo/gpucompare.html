@@ -157,6 +157,31 @@
           row.append(label, picture(gpu, w, h), picture(cpu, w, h));
           rows.append(row);
         }
+        // A partial redraw: a frame whole, then the next only where it
+        // changed, over the one the page kept.
+        for (const scale of [1, 2]) {
+          const name = `partial@${scale}`;
+          const ptr = e.cmp_partial_cpu(scale);
+          const w = e.cmp_width(), h = e.cmp_height();
+          const cpu = new Uint8ClampedArray(e.memory.buffer, ptr, w * h * 4).slice();
+          if (!e.cmp_partial_gpu(scale, code)) {
+            fail(`${api} ${name}: ${answer()}`);
+            continue;
+          }
+          snap.width = w;
+          snap.height = h;
+          sctx.drawImage(canvas, 0, 0);
+          const gpu = sctx.getImageData(0, 0, w, h).data;
+          const d = diff(gpu, cpu);
+          const line = `${api} ${name}: mean ${d.mean.toFixed(3)} (< 0.8), bad ${(d.bad * 100).toFixed(3)}% (< 1.0%)`;
+          if (d.mean < 0.8 && d.bad < 0.01) say(`ok   ${line}`); else fail(line);
+          const row = document.createElement("div");
+          row.className = "row";
+          const label = document.createElement("span");
+          label.textContent = `${api} ${name}`;
+          row.append(label, picture(gpu, w, h), picture(cpu, w, h));
+          rows.append(row);
+        }
         say(`SUMMARY ${api}: ${count} cases, worst mean ${worst.toFixed(3)}`);
 
         // Losing the device: the next frame says so, and a new renderer

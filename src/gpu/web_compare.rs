@@ -67,6 +67,12 @@ pub fn cpu(i: usize, bench: bool) -> Pixmap {
 /// page's choice, 1 WebGPU, 2 WebGL2). The page sets its GPU up before.
 pub fn gpu(i: usize, bench: bool, api: u32) -> Result<String, String> {
     let (scene, scale) = scene_of(i, bench);
+    present(&scene, scale, api, None)
+}
+
+/// Draw `scene` into the canvas, only `dirty` (physical pixels) when the
+/// page holds the frame before.
+fn present(scene: &Scene, scale: f64, api: u32, dirty: Option<[i32; 4]>) -> Result<String, String> {
     GPU.with(|g| {
         let mut g = g.borrow_mut();
         if g.is_none() {
@@ -80,10 +86,11 @@ pub fn gpu(i: usize, bench: bool, api: u32) -> Result<String, String> {
         let r = g.as_mut().unwrap();
         let name = r.api().name().to_string();
         match r.present(
-            &scene,
+            scene,
             corpus::BACKGROUND,
             ScaleFactor::new(scale),
             &GpuLayer::Web,
+            dirty,
         ) {
             Ok(()) => Ok(name),
             Err(e) => {
@@ -94,4 +101,34 @@ pub fn gpu(i: usize, bench: bool, api: u32) -> Result<String, String> {
             }
         }
     })
+}
+
+/// The partial-redraw case (`corpus::partial`) at `scale` on the CPU: the
+/// frame a window should show after it.
+pub fn partial_cpu(scale: f64) -> Pixmap {
+    let (before, after, region) = corpus::partial();
+    let cpu = |s: Scene| {
+        SoftwareRenderer::new()
+            .background(corpus::BACKGROUND)
+            .render(s, ScaleFactor::new(scale))
+    };
+    corpus::composite(
+        &cpu(before),
+        &cpu(after),
+        corpus::device_region(region, scale),
+    )
+}
+
+/// The partial-redraw case at `scale` presented into the canvas on `api`:
+/// the first frame whole, then the second with only its region changed, as
+/// a window's frames are.
+pub fn partial_gpu(scale: f64, api: u32) -> Result<String, String> {
+    let (before, after, region) = corpus::partial();
+    present(&before, scale, api, None)?;
+    present(
+        &after,
+        scale,
+        api,
+        Some(corpus::device_region(region, scale)),
+    )
 }

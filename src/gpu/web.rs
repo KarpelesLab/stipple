@@ -14,7 +14,7 @@
 //! The buffer is a run of 32-bit words (`f32` bits where a value is a float):
 //!
 //! ```text
-//! header   width height bg_r bg_g bg_b bg_a          (background premultiplied)
+//! header   width height bg_r bg_g bg_b bg_a flags    (background premultiplied)
 //! 1 box    rect[4] radius stroke color[4] n verts[n*4]
 //! 2 path   even_odd color[4] bbox[4](i32) n verts[n*4]        (fan triangles)
 //! 3 image  id rect[4] px[2] opacity uv[4] clamp[4] tint[4] nearest n verts[n*4]
@@ -26,9 +26,16 @@
 //! ```
 //!
 //! A vertex is `x y aux_x aux_y` (see the shaders in `web/gpu.js`).
+//!
+//! `flags` bit 0 says the frame is partial ([`Plan::limit`]): it redraws only
+//! what changed (its ops are clipped to that) over the last frame, which the
+//! page keeps (WebGL2: a drawing buffer that is preserved; WebGPU: a texture
+//! of its own, copied into the canvas's each frame). A page that can't keep
+//! it (it has no last frame of that size) answers 4, and the frame is drawn
+//! whole next time.
 
 use super::ops::{Clip, Op, Plan, Sample};
-use super::renderer::{Api, Executor, GpuError};
+use super::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::geometry::ScaleFactor;
 use crate::platform::GpuLayer;
 use crate::render::Pixmap;
@@ -50,7 +57,8 @@ mod js {
         /// Free texture `id` (0: all of them).
         pub fn gpu_free(id: u32);
         /// Draw a frame: 0 shown, 1 the device was lost, 2 not now (the page
-        /// asks for a redraw), 3 the GPU can't draw it.
+        /// asks for a redraw), 3 the GPU can't draw it, 4 it was partial and
+        /// the page holds no last frame to draw it over.
         pub fn gpu_frame(ptr: *const u32, words: usize) -> u32;
         /// The app draws on the CPU again: the page gives the canvas back to
         /// the 2D context on the next CPU frame.
@@ -88,6 +96,9 @@ const OP_POP_CLIP: u32 = 6;
 const OP_LAYER: u32 = 7;
 const OP_POP_LAYER: u32 = 8;
 
+/// Header flag: a partial frame, drawn over the last one.
+const FLAG_PARTIAL: u32 = 1;
+
 struct Texture {
     image: Weak<Pixmap>,
     id: u32,
@@ -103,6 +114,8 @@ pub(crate) struct WebExecutor {
     count: u64,
     uploads: usize,
     buf: Vec<u32>,
+    /// Whether the page holds the last frame (the canvas is the one window).
+    kept: KeptFrame,
 }
 
 impl WebExecutor {
@@ -138,6 +151,7 @@ impl WebExecutor {
             count: 0,
             uploads: 0,
             buf: Vec::new(),
+            kept: KeptFrame::default(),
         })
     }
 
@@ -206,6 +220,11 @@ impl WebExecutor {
                 a,
             ],
         );
+        buf.push(if plan.partial.is_some() {
+            FLAG_PARTIAL
+        } else {
+            0
+        });
         self.uploads = 0;
         for op in &plan.ops {
             match op {
@@ -360,17 +379,27 @@ impl Executor for WebExecutor {
 
     fn present(
         &mut self,
-        plan: &Plan,
+        plan: &mut Plan,
         _layer: &GpuLayer,
         _scale: ScaleFactor,
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
+        // Only what changed, over the last frame the page keeps.
+        self.kept.limit(0, plan, dirty);
         self.encode(plan);
         let status = unsafe { js::gpu_frame(self.buf.as_ptr(), self.buf.len()) };
         self.sweep();
+        if status == 0 {
+            self.kept
+                .presented(0, (plan.size.width, plan.size.height), dirty);
+        } else {
+            self.kept.forget();
+        }
         match status {
             0 => Ok(()),
             1 => Err(GpuError::Lost(format!("the {} device", self.api.name()))),
             2 => Err(GpuError::Pending),
+            4 => Err(GpuError::Skipped),
             _ => Err(GpuError::Unavailable(format!(
                 "{} couldn't draw the frame",
                 self.api.name()
@@ -416,13 +445,14 @@ mod tests {
             count: 0,
             uploads: 0,
             buf: Vec::new(),
+            kept: KeptFrame::default(),
         }
     }
 
     /// Walk an op buffer as `web/gpu.js` does, returning the ops in it.
     fn walk(buf: &[u32]) -> Vec<u32> {
         let mut ops = Vec::new();
-        let mut p = 6;
+        let mut p = 7;
         while p < buf.len() {
             let op = buf[p];
             ops.push(op);
@@ -472,6 +502,22 @@ mod tests {
                 count(OP_POP_CLIP)
             );
         }
+        // A partial frame says so in its header, and is clipped to its region.
+        let mut plan = super::super::ops::plan(
+            &super::super::corpus::boxes(),
+            bg,
+            crate::geometry::PhysicalSize::new(320, 240),
+            &mut rasters,
+        );
+        ex.encode(&plan);
+        assert_eq!(ex.buf[6], 0, "a whole frame");
+        plan.limit([10, 10, 50, 40]);
+        ex.encode(&plan);
+        assert_eq!(ex.buf[6], FLAG_PARTIAL);
+        let ops = walk(&ex.buf);
+        assert_eq!(ops[0], OP_CLIP_RECT);
+        assert_eq!(&ex.buf[8..12], &[10, 10, 50, 40]);
+        assert_eq!(*ops.last().unwrap(), OP_POP_CLIP);
         // An image is uploaded once while it lives, and freed after.
         let scene = super::super::corpus::images();
         let plan = super::super::ops::plan(

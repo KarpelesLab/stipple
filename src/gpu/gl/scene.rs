@@ -5,6 +5,10 @@
 //! Presenting draws the frame into its offscreen target exactly as for a
 //! read-back, then draws that target into the window surface (the default
 //! framebuffer: one textured quad, flipped to the window's rows) and swaps.
+//! The offscreen target persists, so a window whose last frame it still holds
+//! redraws only what changed ([`Plan::limit`]); the quad still covers the
+//! whole window, and the swap tells the compositor what changed
+//! (`eglSwapBuffersWithDamageKHR`/`EXT`, where EGL has it).
 //! The window surfaces need an EGL display on the window system: X11 through
 //! EGL's XCB platform on a libxcb connection of the GPU's own (`gpu::xcb`),
 //! Android on its one display. The first frame presented moves the context
@@ -25,7 +29,7 @@
 
 use super::*;
 use crate::gpu::ops::{Clip, Op, Plan, Sample};
-use crate::gpu::renderer::{Api, Executor, GpuError};
+use crate::gpu::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::platform::GpuLayer;
 use oxideav_core::Transform2D;
 use std::cell::RefCell;
@@ -371,6 +375,13 @@ struct State {
     config: EGLConfig,
     /// Window surfaces made, by window.
     windows: HashMap<usize, EGLSurface>,
+    /// The windows whose surface has been swapped since it was made (a
+    /// first swap shows all of it).
+    swapped: std::collections::HashSet<usize>,
+    /// Which window's frame `frame_target` holds.
+    kept: KeptFrame,
+    /// `eglSwapBuffersWithDamage{KHR,EXT}` on this display, once looked up.
+    swap_damage: Option<Option<SwapWithDamage>>,
     boxes: Program,
     tex: Program,
     flat: Program,
@@ -388,6 +399,32 @@ struct State {
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
+}
+
+/// `eglSwapBuffersWithDamageKHR` / `EXT`: rectangles of `[x, y, w, h]`,
+/// bottom-left origin.
+type SwapWithDamage =
+    unsafe extern "C" fn(EGLDisplay, EGLSurface, *const EGLint, EGLint) -> EGLBoolean;
+
+/// The display's swap-with-damage entry point, if it has one.
+unsafe fn swap_with_damage(dpy: EGLDisplay) -> Option<SwapWithDamage> {
+    unsafe {
+        let exts = eglQueryString(dpy, EGL_EXTENSIONS);
+        if exts.is_null() {
+            return None;
+        }
+        let exts = std::ffi::CStr::from_ptr(exts).to_string_lossy();
+        let has = |name: &str| exts.split(' ').any(|e| e == name);
+        let name: &std::ffi::CStr = if has("EGL_KHR_swap_buffers_with_damage") {
+            c"eglSwapBuffersWithDamageKHR"
+        } else if has("EGL_EXT_swap_buffers_with_damage") {
+            c"eglSwapBuffersWithDamageEXT"
+        } else {
+            return None;
+        };
+        let f = eglGetProcAddress(name.as_ptr());
+        (!f.is_null()).then(|| std::mem::transmute::<*const c_void, SwapWithDamage>(f))
+    }
 }
 
 impl State {
@@ -509,6 +546,9 @@ impl State {
                 native,
                 config,
                 windows: HashMap::new(),
+                swapped: std::collections::HashSet::new(),
+                kept: KeptFrame::default(),
+                swap_damage: None,
                 boxes,
                 tex,
                 flat,
@@ -891,6 +931,8 @@ impl State {
     /// Render `plan` and read the frame back.
     unsafe fn render(&mut self, plan: &Plan) -> Result<Pixmap, String> {
         unsafe {
+            // The target no longer holds a window's frame.
+            self.kept.forget();
             let (w, h) = self.draw(plan)?;
             // Read back; device row 0 is GL row 0 here, so rows come out
             // top-first. Undo the premultiplication.
@@ -925,16 +967,33 @@ impl State {
         }
     }
 
-    /// Render `plan` into the window surface `surface` (current) at
-    /// `offset` in it, the rest the background, and swap.
+    /// Render `plan` into window `key`'s surface `surface` (current) at
+    /// `offset` in it, the rest the background, and swap. `dirty` is what
+    /// changed since the window's last frame (see [`Executor::present`]).
     unsafe fn present(
         &mut self,
-        plan: &Plan,
+        plan: &mut Plan,
+        key: usize,
         surface: EGLSurface,
         offset: (i32, i32),
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), String> {
         unsafe {
-            let (w, h) = self.draw(plan)?;
+            // Only what changed, when the target holds the window's last
+            // frame (a new size makes a new target, which holds none).
+            let size = (plan.size.width as i32, plan.size.height as i32);
+            if self
+                .frame_target
+                .as_ref()
+                .is_some_and(|t| (t.w, t.h) == size)
+            {
+                self.kept.limit(key, plan, dirty);
+            }
+            let drawn = self.draw(plan);
+            if drawn.is_err() {
+                self.kept.forget();
+            }
+            let (w, h) = drawn?;
             let (mut sw, mut sh) = (0, 0);
             eglQuerySurface(self.dpy, surface, EGL_WIDTH, &mut sw);
             eglQuerySurface(self.dpy, surface, EGL_HEIGHT, &mut sh);
@@ -989,9 +1048,29 @@ impl State {
             if err != GL_NO_ERROR {
                 return Err(format!("GL error {err:#x} presenting the scene"));
             }
-            if eglSwapBuffers(self.dpy, surface) == 0 {
+            // The window shows all of a new surface's first frame, and only
+            // what changed after that, where EGL takes the damage.
+            if self.swap_damage.is_none() {
+                self.swap_damage = Some(swap_with_damage(self.dpy));
+            }
+            let damage = dirty.filter(|_| self.swapped.contains(&key)).map(|r| {
+                [
+                    offset.0 + r[0],
+                    sh - (offset.1 + r[3]),
+                    r[2] - r[0],
+                    r[3] - r[1],
+                ]
+            });
+            let swapped = match (self.swap_damage.flatten(), damage) {
+                (Some(swap), Some(rect)) => swap(self.dpy, surface, rect.as_ptr(), 1),
+                _ => eglSwapBuffers(self.dpy, surface),
+            };
+            if swapped == 0 {
+                self.kept.forget();
                 return Err(format!("eglSwapBuffers failed: {:#x}", eglGetError()));
             }
+            self.swapped.insert(key);
+            self.kept.presented(key, (w as u32, h as u32), dirty);
             Ok(())
         }
     }
@@ -1020,6 +1099,7 @@ impl State {
                 for old in self.layers.drain(..) {
                     old.delete();
                 }
+                self.kept.forget();
                 self.frame_target = Some(Target::new(w, h)?);
             }
             self.uploads = 0;
@@ -1042,7 +1122,12 @@ impl State {
             );
             glStencilMask(0xff);
             glClearStencil(0);
-            glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            // A partial frame keeps the colors the target holds.
+            if plan.partial.is_some() {
+                glClear(GL_STENCIL_BUFFER_BIT);
+            } else {
+                glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+            }
 
             for op in &plan.ops {
                 let level = levels.last().unwrap();
@@ -1344,6 +1429,7 @@ fn with_window<T>(
                         )));
                     }
                     state.windows.insert(key, s);
+                    state.swapped.remove(&key);
                     s
                 }
             };
@@ -1375,16 +1461,18 @@ impl Executor for GlExecutor {
 
     fn present(
         &mut self,
-        plan: &Plan,
+        plan: &mut Plan,
         layer: &GpuLayer,
         _scale: crate::geometry::ScaleFactor,
+        dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
         let offset = match *layer {
             GpuLayer::Android { content, .. } => (content[0], content[1]),
             _ => (0, 0),
         };
+        let key = layer_key(layer).unwrap_or(0);
         with_window(layer, |state, surface| {
-            unsafe { state.present(plan, surface, offset) }.map_err(GpuError::Lost)
+            unsafe { state.present(plan, key, surface, offset, dirty) }.map_err(GpuError::Lost)
         })
     }
 
@@ -1397,6 +1485,7 @@ impl Executor for GlExecutor {
                 && let Some(state) = slot.as_mut()
                 && let Some(surface) = state.windows.remove(&key)
             {
+                state.swapped.remove(&key);
                 unsafe {
                     eglMakeCurrent(state.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, state.ctx);
                     eglDestroySurface(state.dpy, surface);
