@@ -152,11 +152,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - *(core)* `Element::align_self(Align)`: a child's own cross-axis alignment
-  in a stack.
+  in a stack, and its vertical alignment in a grid cell (CSS's `align-self`);
+  `Element::justify_self(Align)` is its horizontal alignment in a grid cell
+  (`justify-self`). Neither affects children of `layers`.
 - *(widgets)* `Element::placeholder(text)` on `text_field`, `text_editor`,
   `text_area` and `password_field`: a muted hint while the field is empty and
-  not composing, exposed to accessibility as `AccessNode::placeholder` (the
-  AT-SPI description, `aria-placeholder` on the web).
+  not composing, exposed to accessibility as `AccessNode::placeholder`: the
+  AT-SPI description, `AXPlaceholderValue` on macOS, UI Automation's
+  `HelpText` on Windows, `accessibilityHint` on iOS, the node's hint text on
+  Android 8.0 and later (`setHintText`), and `aria-placeholder` on the web.
+
+### Fixed
+
+- *(core)* A text element's `.padding(..)` now places its glyphs inside the
+  padding (they were drawn at the box's corner, as in `motiondemo`'s list
+  labels); the caret, selection, underline, click-to-caret and input-method
+  positions follow, and right to left the padding mirrors as an image's does.
 - *(render)* `Pixmap::encode_png()` and `Pixmap::save_png(path)`. The
   examples' `--shots`/`--png` modes and `themegallery`, `material3demo` and
   `gpudemo` write PNGs instead of PPM or raw RGBA files.

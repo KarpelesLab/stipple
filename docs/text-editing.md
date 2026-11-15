@@ -6,8 +6,10 @@ clicks they understand.
 
 `.placeholder("Search")` on a field (these two, `text_field` and
 `password_field`) shows a hint, muted, while it's empty and nothing is being
-composed in it; screen readers get it as the field's placeholder (its
-description on AT-SPI, `aria-placeholder` on the web).
+composed in it; screen readers get it as the field's placeholder: its
+description on AT-SPI, `AXPlaceholderValue` on macOS, `HelpText` in UI
+Automation, `accessibilityHint` on iOS, the hint text on Android (8.0 and
+later) and `aria-placeholder` on the web.
 
 ## Keyboard shortcuts
 

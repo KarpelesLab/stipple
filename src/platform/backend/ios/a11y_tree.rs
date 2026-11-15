@@ -25,6 +25,9 @@ pub(crate) struct Item {
     pub(crate) is_element: bool,
     pub(crate) label: String,
     pub(crate) value: String,
+    /// `accessibilityHint`: a field's placeholder, which VoiceOver reads
+    /// after a pause, past the (empty) value and the role.
+    pub(crate) hint: String,
     pub(crate) traits: u8,
     /// `(x, y, width, height)` in the view's coordinates (logical pixels).
     pub(crate) frame: (f64, f64, f64, f64),
@@ -92,6 +95,7 @@ fn item(node: &A11yNode) -> Item {
         is_element,
         label,
         value,
+        hint: node.hint().unwrap_or_default().to_string(),
         traits,
         frame: node.bounds,
     }
@@ -162,6 +166,7 @@ pub(crate) fn change(old: &[Item], new: &[Item]) -> Change {
                 && a.is_element == b.is_element
                 && a.label == b.label
                 && a.value == b.value
+                && a.hint == b.hint
                 && a.traits == b.traits
         });
     if same { Change::None } else { Change::Layout }
@@ -219,6 +224,25 @@ mod tests {
             ]
         );
         assert_eq!(items[0].frame, (1.0, 2.0, 30.0, 10.0));
+        assert!(items.iter().all(|i| i.hint.is_empty()));
+    }
+
+    #[test]
+    fn a_placeholder_is_the_fields_hint() {
+        let field = |text: &str, placeholder: &str| A11yNode {
+            placeholder: Some(placeholder.into()),
+            ..node(A11yRole::TextField, text)
+        };
+        let empty = flatten(&window(vec![field("", "Your name")]));
+        assert_eq!(
+            (empty[0].value.as_str(), empty[0].hint.as_str()),
+            ("", "Your name")
+        );
+        // Typing keeps the hint; another hint is a layout change.
+        let typed = flatten(&window(vec![field("Ada", "Your name")]));
+        assert_eq!(typed[0].hint, "Your name");
+        let other = flatten(&window(vec![field("", "Search")]));
+        assert_eq!(change(&empty, &other), Change::Layout);
     }
 
     #[test]

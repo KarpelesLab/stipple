@@ -407,6 +407,11 @@ fn layout_element(
             direction: *direction,
             underline: *underline,
             style: style.clone(),
+            padding: if dir.is_rtl() {
+                el.layout.padding.mirrored()
+            } else {
+                el.layout.padding
+            },
         },
         ElementKind::Viewport { id } => NodeContent::Viewport(*id),
         ElementKind::Canvas {
@@ -504,15 +509,23 @@ fn layout_element(
                 (Align::Stretch, Some(_)) => Align::Start,
                 _ => a,
             };
+            // A child's own `justify_self` / `align_self` wins over the
+            // grid's (horizontal, vertical) alignment, as in CSS grid.
             let (dx, w) = align_in(
-                fixed(align.0, child.layout.size.width),
+                fixed(
+                    child.layout.justify_self.unwrap_or(align.0),
+                    child.layout.size.width,
+                ),
                 m.width,
                 cw,
                 min.width,
                 max.width,
             );
             let (dy, h) = align_in(
-                fixed(align.1, child.layout.size.height),
+                fixed(
+                    child.layout.align_self.unwrap_or(align.1),
+                    child.layout.size.height,
+                ),
                 m.height,
                 ch,
                 min.height,
@@ -799,7 +812,7 @@ fn paint_focus_node(
     else {
         return;
     };
-    let bounds = leaf.bounds;
+    let bounds = leaf.text_rect();
     let styled = style.resolve(font);
     let Some(font) = styled.as_ref() else {
         // No font, no geometry: a caret bar at the start of the box.
@@ -881,7 +894,7 @@ pub(crate) fn caret_index_at(
     };
     let styled = style.resolve(font)?;
     let font = &styled;
-    let b = leaf.bounds;
+    let b = leaf.text_rect();
     let layout = text_layout(
         font,
         text,
@@ -1044,19 +1057,28 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible
             direction,
             underline,
             style,
+            ..
         } => {
             if let Some(f) = style.resolve(font).as_ref()
                 && !text.is_empty()
             {
-                // Wrapped to the laid-out width when `wrap` is set; right-to-left
-                // paragraphs line up against the right edge of the box.
-                let w = node.bounds.width();
-                let layout = text_layout(f, text, *size, *direction, node.wrap, w, node.rtl);
-                scene.fill_layout(&layout, node.bounds.origin, *color);
-                scene.decorate_layout(&layout, node.bounds.origin, &style.decoration, *color);
+                // Inside the padding, wrapped to the width left when `wrap` is
+                // set; right-to-left paragraphs line up against the right edge.
+                let rect = node.text_rect();
+                let o = rect.origin;
+                let layout = text_layout(
+                    f,
+                    text,
+                    *size,
+                    *direction,
+                    node.wrap,
+                    rect.width(),
+                    node.rtl,
+                );
+                scene.fill_layout(&layout, o, *color);
+                scene.decorate_layout(&layout, o, &style.decoration, *color);
                 if let Some((start, end)) = *underline {
                     // Just under the baseline, as thick as the strokes.
-                    let o = node.bounds.origin;
                     let thick = (size / 14.0).max(1.0);
                     let below = f.baseline(*size) + (size / 10.0).max(1.0);
                     for r in layout.selection_rects(start, end.min(text.len())) {
@@ -1689,6 +1711,74 @@ mod tests {
     }
 
     #[test]
+    fn grid_cells_align_themselves() {
+        // Cells stretch by default; a child's own `align_self` (vertical)
+        // and `justify_self` (horizontal) place it in its cell instead.
+        let g = Element::grid(
+            vec![Track::px(100.0), Track::px(100.0), Track::px(100.0)],
+            vec![
+                cell(20.0, 10.0),
+                cell(20.0, 10.0)
+                    .align_self(Align::End)
+                    .justify_self(Align::Center),
+                cell(20.0, 10.0).align_self(Align::Center),
+            ],
+        )
+        .rows(vec![Track::px(40.0)]);
+        let tree = layout(&g, Rect::from_xywh(0.0, 0.0, 300.0, 40.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(0.0, 0.0, 100.0, 40.0),
+                Rect::from_xywh(140.0, 30.0, 20.0, 10.0),
+                Rect::from_xywh(200.0, 15.0, 100.0, 10.0),
+            ]
+        );
+        // Over a grid aligning its cells, `Stretch` fills the cell again,
+        // except on an axis the child has a fixed size on.
+        let g = Element::grid(
+            vec![Track::px(100.0), Track::px(100.0)],
+            vec![
+                cell(20.0, 10.0)
+                    .align_self(Align::Stretch)
+                    .justify_self(Align::Stretch),
+                block(20.0, 10.0).justify_self(Align::Stretch),
+            ],
+        )
+        .rows(vec![Track::px(40.0)])
+        .align(Align::End, Align::Start);
+        let tree = layout(&g, Rect::from_xywh(0.0, 0.0, 200.0, 40.0), None);
+        assert_eq!(
+            rects(&tree),
+            vec![
+                Rect::from_xywh(0.0, 0.0, 100.0, 40.0),
+                Rect::from_xywh(100.0, 0.0, 20.0, 10.0),
+            ]
+        );
+        // Right to left, `justify_self(Start)` is the cell's right edge.
+        let g = Element::grid(
+            vec![Track::px(100.0)],
+            vec![block(20.0, 10.0).justify_self(Align::Start)],
+        )
+        .align(Align::End, Align::Start);
+        let tree = rtl(&g, Rect::from_xywh(0.0, 0.0, 100.0, 10.0));
+        assert_eq!(rects(&tree), vec![Rect::from_xywh(80.0, 0.0, 20.0, 10.0)]);
+        // In layers neither has an effect: their `align` places every child.
+        let layers = |child: Element| {
+            let el = Element::layers(vec![child]).align(Align::End, Align::End);
+            rects(&layout(&el, Rect::from_xywh(0.0, 0.0, 100.0, 40.0), None))
+        };
+        assert_eq!(
+            layers(
+                block(20.0, 10.0)
+                    .align_self(Align::Start)
+                    .justify_self(Align::Start)
+            ),
+            layers(block(20.0, 10.0))
+        );
+    }
+
+    #[test]
     fn grid_fr_rows_size_to_content_then_share_the_laid_out_height() {
         let cells = || vec![cell(10.0, 10.0), cell(10.0, 30.0)];
         let g = Element::grid(vec![Track::Auto], cells())
@@ -2296,6 +2386,71 @@ mod tests {
         assert!(
             w3.abs_diff(h1) <= 2 && h3.abs_diff(w1) <= 2,
             "{w1}x{h1} -> {w3}x{h3}"
+        );
+    }
+
+    /// Text with padding is drawn inside it (a pill's label), measures with
+    /// it, and a click maps to a caret index from where the glyphs are.
+    #[test]
+    fn text_paints_inside_its_padding() {
+        use crate::geometry::Insets;
+        let Some(font) = Font::system_default() else {
+            eprintln!("skipping: no system font found");
+            return;
+        };
+        // The top-left corner of the ink.
+        let ink_origin = |el: Element| {
+            let el = Element::stack(Axis::Vertical, vec![el])
+                .align(Align::Start, Align::Start)
+                .width(200.0)
+                .height(100.0);
+            let out = render_el(&el, 200.0, 100.0, Some(&font));
+            let (mut x0, mut y0) = (u32::MAX, u32::MAX);
+            for y in 0..100 {
+                for x in 0..200 {
+                    if out.pixel(x, y).unwrap()[0] > 128 {
+                        (x0, y0) = (x0.min(x), y0.min(y));
+                    }
+                }
+            }
+            (x0, y0)
+        };
+        let word = || Element::text("Pill", 16.0, Color::WHITE);
+        let pad = Insets::new(10.0, 4.0, 6.0, 30.0);
+        let (x, y) = ink_origin(word());
+        let (px, py) = ink_origin(word().padding(pad));
+        assert_eq!((px - x, py - y), (30, 10), "{x},{y} -> {px},{py}");
+
+        // Measured with the padding around the text.
+        let avail = Size::new(1000.0, 1000.0);
+        let plain = measure(&word(), avail, Some(&font));
+        let padded = measure(&word().padding(pad), avail, Some(&font));
+        assert_eq!(padded, Size::new(plain.width + 34.0, plain.height + 16.0));
+
+        // A right-to-left layout keeps the start padding at the start (right).
+        let rtl_tree = rtl(
+            &Element::stack(Axis::Vertical, vec![word().padding(pad)]),
+            Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
+        );
+        let leaf = &rtl_tree.children[0];
+        let (b, t) = (leaf.bounds, leaf.text_rect());
+        assert_eq!((t.min_x() - b.min_x(), b.max_x() - t.max_x()), (4.0, 30.0));
+
+        // A click left of the glyphs (in the padding) lands before the
+        // first letter; one past them, after the last.
+        let tree = layout(
+            &word().padding(pad),
+            Rect::from_xywh(0.0, 0.0, plain.width + 34.0, plain.height + 16.0),
+            Some(&font),
+        );
+        let mid = 10.0 + plain.height / 2.0;
+        assert_eq!(
+            caret_index_at(&tree, Point::new(31.0, mid), Some(&font)),
+            Some(0)
+        );
+        assert_eq!(
+            caret_index_at(&tree, Point::new(29.0 + plain.width, mid), Some(&font)),
+            Some(4)
         );
     }
 

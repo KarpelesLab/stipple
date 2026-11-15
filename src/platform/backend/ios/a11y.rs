@@ -278,6 +278,7 @@ unsafe fn show(el: Id, item: &Item, frame: CgRect) {
         msg_void_bool(el, sel("setIsAccessibilityElement:"), item.is_element);
         msg_void_id(el, sel("setAccessibilityLabel:"), text(&item.label));
         msg_void_id(el, sel("setAccessibilityValue:"), text(&item.value));
+        msg_void_id(el, sel("setAccessibilityHint:"), text(&item.hint));
         let set_traits: unsafe extern "C" fn(Id, Sel, u64) =
             std::mem::transmute(objc_msgSend as *const c_void);
         set_traits(
@@ -418,6 +419,8 @@ pub struct AccessibilityElement {
     pub is_element: bool,
     pub label: String,
     pub value: String,
+    /// `accessibilityHint`: a field's placeholder.
+    pub hint: String,
     /// Its traits, by name (`button`, `static_text`, `header`, `selected`),
     /// joined with `|`.
     pub traits: String,
@@ -459,6 +462,7 @@ pub(super) unsafe fn read_elements(view: Id) -> Vec<AccessibilityElement> {
                     is_element: is_el(el, sel("isAccessibilityElement")) != 0,
                     label: string_of(msg_id(el, sel("accessibilityLabel"))),
                     value: string_of(msg_id(el, sel("accessibilityValue"))),
+                    hint: string_of(msg_id(el, sel("accessibilityHint"))),
                     traits: names.join("|"),
                     frame: crate::geometry::Rect::from_xywh(
                         f.origin.x,

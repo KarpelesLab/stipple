@@ -97,6 +97,17 @@ spanning `Auto` tracks that are too small for it grows them equally.
 Cells stretch their child by default. A child with a fixed `.width()` or
 `.height()` keeps it and sits at the start of the cell on that axis.
 
+As in CSS grid, a child can align itself in its cell over the grid's
+`.align(..)`: `.justify_self(align)` horizontally and `.align_self(align)`
+vertically. (`Stretch` there still leaves a fixed size alone.)
+
+```rust
+grid(vec![Track::Auto, Track::fr(1.0)], vec![
+    label(&theme, "Total"),
+    label(&theme, "42.00").justify_self(Align::End), // at the right of its stretched column
+])
+```
+
 Children are measured at their column's width, so wrapped text in an `fr`
 column wraps there and its row is tall enough.
 
@@ -106,7 +117,9 @@ column wraps there and its row is tall enough.
 same box, each later one drawn over (and hit before) the ones before it: a
 fill behind content, a badge over an icon. Each child fills the box unless
 it's sized, then sits per `.align(horizontal, vertical)`; the box is as big as
-its biggest child.
+its biggest child. A child's `.align_self()` and `.justify_self()` have no
+effect here: the layers' `.align()` places every child (wrap one in a stack or
+a one-cell grid to place it on its own).
 
 ```rust
 let card = Element::layers(vec![

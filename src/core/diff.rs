@@ -298,6 +298,7 @@ mod tests {
                 direction: Default::default(),
                 underline: None,
                 style: Default::default(),
+                padding: Default::default(),
             },
             action: None,
             focus: None,

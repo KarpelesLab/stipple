@@ -50,7 +50,7 @@ fn position(leaf: &LayoutNode, font: Option<&Font>, i: usize) -> Option<(f64, f6
     let ls = text[..i].rfind('\n').map_or(0, |n| n + 1);
     let line = text[..ls].bytes().filter(|&b| b == b'\n').count();
     let w = font.map_or(0.0, |f| f.measure(&text[ls..i], *size).width);
-    let b = leaf.bounds;
+    let b = leaf.text_rect();
     let x = (b.min_x() + w).min(b.max_x().max(b.min_x()));
     Some((x, b.min_y() + line as f64 * line_h, line_h))
 }

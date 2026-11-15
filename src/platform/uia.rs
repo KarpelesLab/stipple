@@ -57,6 +57,9 @@ const E_NOINTERFACE: Hresult = 0x8000_4002_u32 as i32;
 const E_POINTER: Hresult = 0x8000_4003_u32 as i32;
 const UIA_ControlTypePropertyId: i32 = 30003;
 const UIA_NamePropertyId: i32 = 30005;
+// What Narrator and NVDA read after an edit control's name and value: an
+// empty field's placeholder (Chromium and WinUI put `placeholder` here too).
+const UIA_HelpTextPropertyId: i32 = 30013;
 
 // Control-type ids (one per role).
 const UIA_ButtonControlTypeId: i32 = 50000;
@@ -273,6 +276,9 @@ struct Provider {
     refcount: u32,
     /// UTF-16 (NUL-terminated) accessible name, for `SysAllocString`.
     name: Vec<u16>,
+    /// UTF-16 (NUL-terminated) `HelpText`, the node's
+    /// [`hint`](A11yNode::hint); `None` when it has none.
+    help_text: Option<Vec<u16>>,
     control_type: i32,
     runtime_id: i32,
     /// Logical `(x, y, width, height)` in the window's client area.
@@ -596,6 +602,12 @@ unsafe extern "system" fn get_property_value(
             UIA_NamePropertyId => {
                 v.vt = VT_BSTR;
                 v.val = SysAllocString((*p).name.as_ptr()) as u64;
+            }
+            UIA_HelpTextPropertyId => {
+                if let Some(text) = &(*p).help_text {
+                    v.vt = VT_BSTR;
+                    v.val = SysAllocString(text.as_ptr()) as u64;
+                }
             }
             UIA_HasKeyboardFocusPropertyId => {
                 v.vt = VT_BOOL;
@@ -965,6 +977,7 @@ impl UiaTree {
             .map(|(i, (n, _, _))| {
                 let mut name: Vec<u16> = n.name.encode_utf16().collect();
                 name.push(0);
+                let help_text = n.hint().map(|h| h.encode_utf16().chain([0]).collect());
                 Provider {
                     vtable: &PROVIDER_VTBL,
                     fragment_vtable: &FRAGMENT_VTBL,
@@ -972,6 +985,7 @@ impl UiaTree {
                     invoke_vtable: &INVOKE_VTBL,
                     refcount: 1,
                     name,
+                    help_text,
                     control_type: control_type(n.role),
                     runtime_id: i as i32 + 1,
                     bounds: n.bounds,
@@ -1128,8 +1142,14 @@ unsafe fn navigate_through(frag: *mut c_void, direction: i32) -> *mut c_void {
 unsafe fn dump(frag: *mut c_void, depth: usize) {
     unsafe {
         let indent = "  ".repeat(depth);
+        let help = name_through(frag, UIA_HelpTextPropertyId);
+        let help = if help.is_empty() {
+            String::new()
+        } else {
+            format!(" helptext={help:?}")
+        };
         println!(
-            "UIA provider:{indent} controltype={} name={:?}",
+            "UIA provider:{indent} controltype={} name={:?}{help}",
             int_through(frag, UIA_ControlTypePropertyId),
             name_through(frag, UIA_NamePropertyId)
         );
@@ -1160,7 +1180,10 @@ pub fn selftest(name: &str) -> Result<(), String> {
     let root = A11yNode {
         children: vec![
             leaf(A11yRole::Text, "Welcome to Stipple", false),
-            leaf(A11yRole::TextField, "Name", true),
+            A11yNode {
+                placeholder: Some("Your name".into()),
+                ..leaf(A11yRole::TextField, "Name", true)
+            },
             A11yNode {
                 children: vec![leaf(A11yRole::Button, "OK", false)],
                 ..leaf(A11yRole::Group, "", false)
@@ -1219,7 +1242,16 @@ pub fn selftest(name: &str) -> Result<(), String> {
                 "UIA provider: focus={:?}",
                 name_through(focus, UIA_NamePropertyId)
             );
+            // The field's placeholder is its HelpText, what Narrator and
+            // NVDA read after an empty edit control.
+            let help = name_through(focus, UIA_HelpTextPropertyId);
             release_through(focus);
+            if help != "Your name" {
+                return Err(format!(
+                    "the field's HelpText is {help:?}, not its placeholder"
+                ));
+            }
+            println!("UIA provider: focus helptext={help:?}");
         }
         let fvt = &**(frag as *mut *const FragmentVtbl);
         let mut froot: *mut c_void = core::ptr::null_mut();

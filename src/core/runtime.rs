@@ -1238,8 +1238,9 @@ pub(crate) enum NodeContent {
     /// Decoration only (the common case).
     #[default]
     None,
-    /// Text, painted from the node's bounds origin (right-to-left paragraphs
-    /// against its right edge).
+    /// Text, painted from the origin of the node's bounds less `padding`
+    /// (right-to-left paragraphs against that box's right edge); see
+    /// [`LayoutNode::text_rect`].
     Text {
         text: String,
         size: f64,
@@ -1251,6 +1252,9 @@ pub(crate) enum NodeContent {
         underline: Option<(usize, usize)>,
         /// Font, weight, slant and decoration lines.
         style: crate::core::TextStyle,
+        /// The element's padding (mirrored, right to left): the text sits
+        /// inside it, as an image does.
+        padding: crate::geometry::Insets,
     },
     /// An embedded-content viewport: the node's bounds reserve an area the
     /// compositor fills with externally-rendered pixels for this
@@ -1416,6 +1420,15 @@ impl LayoutNode {
             offstage: false,
             hit_through: false,
             children,
+        }
+    }
+
+    /// The box a text node's lines are laid out in: its bounds less its
+    /// padding. Just the bounds for any other node.
+    pub(crate) fn text_rect(&self) -> Rect {
+        match &self.content {
+            NodeContent::Text { padding, .. } => self.bounds.inset(*padding),
+            _ => self.bounds,
         }
     }
 }

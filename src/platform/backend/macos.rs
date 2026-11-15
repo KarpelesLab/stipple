@@ -740,6 +740,13 @@ unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id,
         }
     };
     unsafe { ax_focus::mark(el, node) };
+    // A field's placeholder is its `AXPlaceholderValue`, which VoiceOver
+    // reads after an empty field's role, as it does an `NSTextField`'s.
+    if let Some(hint) = node.hint()
+        && !el.is_null()
+    {
+        unsafe { msg_void_id(el, sel("setAccessibilityPlaceholderValue:"), nsstring(hint)) };
+    }
     if !node.children.is_empty() {
         let arr = unsafe { msg_id(class("NSMutableArray"), sel("array")) };
         for child in &node.children {
@@ -759,7 +766,12 @@ unsafe fn dump_ax(el: Id, depth: usize) {
     let role = nsstring_to_string(unsafe { msg_id(el, sel("accessibilityRole")) });
     let label = nsstring_to_string(unsafe { msg_id(el, sel("accessibilityLabel")) });
     let indent = "  ".repeat(depth);
-    println!("Cocoa a11y:{indent} role={role} label={label}");
+    let hint = nsstring_to_string(unsafe { msg_id(el, sel("accessibilityPlaceholderValue")) });
+    if hint.is_empty() {
+        println!("Cocoa a11y:{indent} role={role} label={label}");
+    } else {
+        println!("Cocoa a11y:{indent} role={role} label={label} placeholder={hint}");
+    }
     let children = unsafe { msg_id(el, sel("accessibilityChildren")) };
     if !children.is_null() {
         let n = unsafe { msg_u64(children, sel("count")) };
@@ -2240,4 +2252,30 @@ where
         WINDOWS.with(|ws| ws.borrow_mut().clear());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::access::{A11yNode, A11yRole};
+
+    /// A field's placeholder reaches its element as `AXPlaceholderValue`,
+    /// read back through objc dispatch as an assistive client reads it.
+    #[test]
+    fn a_placeholder_is_the_fields_placeholder_value() {
+        crate::platform::native::objc::with_pool(|| unsafe {
+            let read = |node: &A11yNode| {
+                let null = std::ptr::null_mut();
+                let el = build_ax_element(node, null, null);
+                nsstring_to_string(msg_id(el, sel("accessibilityPlaceholderValue")))
+            };
+            let field = A11yNode {
+                placeholder: Some("Your name".into()),
+                ..A11yNode::new(A11yRole::TextField, "", (0.0, 0.0, 100.0, 20.0))
+            };
+            assert_eq!(read(&field), "Your name");
+            let plain = A11yNode::new(A11yRole::TextField, "Ada", (0.0, 0.0, 100.0, 20.0));
+            assert_eq!(read(&plain), "");
+        });
+    }
 }

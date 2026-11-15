@@ -62,9 +62,13 @@ pub(crate) struct LayoutStyle {
     /// a grid cell. `0` counts as `1`.
     pub column_span: u16,
     pub row_span: u16,
-    /// This element's own cross-axis alignment in a stack, over the stack's
-    /// (CSS's `align-self`). Set via [`Element::align_self`].
+    /// This element's own cross-axis alignment in a stack, or vertical one in
+    /// a grid cell, over its container's (CSS's `align-self`). Set via
+    /// [`Element::align_self`].
     pub align_self: Option<Align>,
+    /// This element's own horizontal alignment in a grid cell, over the
+    /// grid's (CSS's `justify-self`). Set via [`Element::justify_self`].
+    pub justify_self: Option<Align>,
     /// The width is a widget's default (a text field's 200), not the app's:
     /// a column stretching its children stretches this one too. Cleared by
     /// [`Element::width`].
@@ -1413,8 +1417,13 @@ impl Element {
     /// Align this element across its stack (vertically in a row,
     /// horizontally in a column) by `align`, whatever the stack's own
     /// [`align`](Element::align) says: a button that keeps its natural width
-    /// in a column that stretches the others, say. In a grid cell or
-    /// [`layers`](Element::layers) it has no effect.
+    /// in a column that stretches the others, say.
+    ///
+    /// In a [`grid`](Element::grid) cell it aligns the element vertically
+    /// within the cell, over the grid's vertical alignment, as CSS's
+    /// `align-self` does there; [`justify_self`](Element::justify_self) is
+    /// the horizontal one. In [`layers`](Element::layers) it has no effect:
+    /// their [`align`](Element::align) places every child.
     ///
     /// ```
     /// use stipple::prelude::*;
@@ -1427,6 +1436,32 @@ impl Element {
     /// ```
     pub fn align_self(mut self, align: Align) -> Self {
         self.layout.align_self = Some(align);
+        self
+    }
+
+    /// Align this element horizontally within its [`grid`](Element::grid)
+    /// cell by `align`, whatever the grid's own [`align`](Element::align)
+    /// says (CSS's `justify-self`): a narrow cell's content at the end of a
+    /// stretched column, say. As there, `Stretch` leaves an element with a
+    /// fixed width alone, at the cell's start. Outside a grid it has no
+    /// effect: a stack's main axis is laid out by its `align` and the
+    /// children's [`grow`](Element::grow), and layers place every child per
+    /// their `align`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let form = Element::grid(
+    ///     vec![Track::Auto, Track::fr(1.0)],
+    ///     vec![
+    ///         label(&theme, "Total"),
+    ///         label(&theme, "42.00").justify_self(Align::End),
+    ///     ],
+    /// );
+    /// # let _ = form;
+    /// ```
+    pub fn justify_self(mut self, align: Align) -> Self {
+        self.layout.justify_self = Some(align);
         self
     }
 

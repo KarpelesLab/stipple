@@ -71,6 +71,8 @@ struct Node {
     focused: bool,
     selected: bool,
     checked: Option<bool>,
+    /// A field's placeholder, its hint text; empty for none.
+    hint: String,
     /// Whether any of it is on screen (inside the content).
     visible: bool,
 }
@@ -168,6 +170,7 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
             focused: n.focused,
             selected: n.selected,
             checked: n.checked,
+            hint: n.hint().unwrap_or_default().to_string(),
             visible,
         });
         let children: Vec<i32> = n
@@ -295,6 +298,18 @@ fn window_origin(jni: &Jni) -> Option<(i32, i32)> {
     jni.call_void(decor, c"getLocationOnScreen", c"([I)V", &[JValue { l: at }])?;
     let [x, y] = jni.ints::<2>(at)?;
     Some((x, y))
+}
+
+/// `AccessibilityNodeInfo.setHintText` came in API 26 (Android 8.0).
+const HINT_TEXT_SDK: i32 = 26;
+
+/// `Build.VERSION.SDK_INT`, read once (0 if it can't be).
+fn sdk_int(jni: &Jni) -> i32 {
+    static SDK: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    *SDK.get_or_init(|| {
+        jni.static_int(c"android/os/Build$VERSION", c"SDK_INT")
+            .unwrap_or(0)
+    })
 }
 
 fn set_bool(jni: &Jni, info: JObject, setter: &std::ffi::CStr, value: bool) {
@@ -441,6 +456,15 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
     }
     if role == A11yRole::PasswordField {
         set_bool(jni, info, c"setPassword", true);
+    }
+    // A field's placeholder is its hint text, which TalkBack reads after an
+    // empty field's role (`setHintText`, API 26; older systems go without).
+    // A hint that can't be set leaves the rest of the node as it is.
+    if !node.hint.is_empty()
+        && sdk_int(jni) >= HINT_TEXT_SDK
+        && let Some(hint) = jni.string16(&node.hint)
+    {
+        let _ = jni.call_void(info, c"setHintText", seq, &[JValue { l: hint }]);
     }
     if scrollable(role) {
         set_bool(jni, info, c"setScrollable", true);

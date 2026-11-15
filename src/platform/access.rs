@@ -138,6 +138,15 @@ impl A11yNode {
         1 + self.children.iter().map(A11yNode::count).sum::<usize>()
     }
 
+    /// The hint a screen reader reads with this node, when it has one: a
+    /// field's [`placeholder`](Self::placeholder), unless empty. Every bridge
+    /// exposes it the platform's way (AT-SPI's description, UIA's
+    /// `HelpText`, `AXPlaceholderValue`, iOS's `accessibilityHint`,
+    /// Android's hint text, `aria-placeholder`).
+    pub fn hint(&self) -> Option<&str> {
+        self.placeholder.as_deref().filter(|p| !p.is_empty())
+    }
+
     /// The path (child index at each level) to the first focused node, in
     /// depth-first order; `Some(vec![])` when it's this node.
     pub fn focused_path(&self) -> Option<Vec<usize>> {
@@ -299,7 +308,7 @@ pub(crate) fn aria_json(node: &A11yNode) -> String {
         if let Some(e) = n.expanded {
             let _ = write!(out, ",\"e\":{}", u8::from(e));
         }
-        if let Some(p) = n.placeholder.as_deref().filter(|p| !p.is_empty()) {
+        if let Some(p) = n.hint() {
             out.push_str(",\"p\":");
             string(out, p);
         }
@@ -409,6 +418,17 @@ mod tests {
         let mut swapped = button.clone();
         swapped.children[2].children[0].role = A11yRole::CheckBox;
         assert_eq!(swapped.focus_moved_from(Some(&button)), Some(vec![2, 0]));
+    }
+
+    #[test]
+    fn a_placeholder_is_the_hint_unless_empty() {
+        let field = |p: Option<&str>| A11yNode {
+            placeholder: p.map(String::from),
+            ..leaf(A11yRole::TextField, "")
+        };
+        assert_eq!(field(Some("Your name")).hint(), Some("Your name"));
+        assert_eq!(field(Some("")).hint(), None);
+        assert_eq!(field(None).hint(), None);
     }
 
     #[test]
