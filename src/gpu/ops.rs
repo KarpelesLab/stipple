@@ -33,8 +33,10 @@
 //!   image: a local fallback, never the whole frame.
 
 use crate::geometry::{PhysicalSize, Rect};
+use crate::render::Filter;
 use crate::render::lower::{self, Bounds, Deferred};
 use crate::render::scene::{rect_path, round_rect_path};
+use crate::render::sprite::SpriteDraw;
 use crate::render::{CanvasPaint, Color, Pixmap, Scene};
 use oxideav_core::{
     FillRule, Group, LineJoin, Node, Paint, Path, PathCommand, PathNode, Rgba, Stroke, Transform2D,
@@ -67,11 +69,17 @@ pub(crate) enum Op {
     },
     /// A straight-alpha bitmap stretched over the local rect `rect`
     /// (`[x0, y0, x1, y1]`), drawn through `transform`, at `opacity`.
+    /// `uv` is the part of the bitmap drawn, `[u0, v0, u1, v1]` in `0..=1`
+    /// (swapped ends mirror it); `tint` (premultiplied) multiplies every
+    /// texel; `nearest` samples nearest-neighbor instead of bilinear.
     Image {
         image: Arc<Pixmap>,
         transform: Transform2D,
         rect: [f32; 4],
         opacity: f32,
+        uv: [f32; 4],
+        tint: Premul,
+        nearest: bool,
     },
     /// Clip what follows (until the matching [`Op::PopClip`]) to the
     /// intersection with this clip.
@@ -84,6 +92,11 @@ pub(crate) enum Op {
     },
     PopLayer,
 }
+
+/// All of a bitmap.
+pub(crate) const FULL_UV: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+/// No tint.
+pub(crate) const NO_TINT: Premul = [1.0, 1.0, 1.0, 1.0];
 
 /// A clip region, in device pixels.
 #[derive(Clone, Debug, PartialEq)]
@@ -404,7 +417,11 @@ impl Walker<'_> {
                             transform: local,
                             rect,
                             opacity: 1.0,
+                            uv: FULL_UV,
+                            tint: NO_TINT,
+                            nearest: false,
                         }),
+                        Some(Deferred::Sprite(sprite)) => self.sprite(sprite, img, &local),
                         Some(Deferred::Canvas {
                             bounds,
                             paint,
@@ -688,6 +705,9 @@ impl Walker<'_> {
             transform: Transform2D::translate(ox, oy),
             rect: [0.0, 0.0, iw as f32, ih as f32],
             opacity: g.opacity,
+            uv: FULL_UV,
+            tint: NO_TINT,
+            nearest: false,
         });
     }
 
@@ -721,6 +741,37 @@ impl Walker<'_> {
             transform: Transform2D::translate(x0 as f32, y0 as f32),
             rect: [0.0, 0.0, w as f32, h as f32],
             opacity: 1.0,
+            uv: FULL_UV,
+            tint: NO_TINT,
+            nearest: false,
+        });
+    }
+
+    /// A region of a bitmap ([`Scene::draw_image_region`]): the bitmap's
+    /// own texture, sampled over the region (mirrored by swapping its ends),
+    /// tinted and faded in the shader.
+    fn sprite(&mut self, s: &SpriteDraw, img: &oxideav_core::ImageRef, local: &Transform2D) {
+        let size = s.image.size();
+        let (w, h) = (size.width as f32, size.height as f32);
+        let [x0, y0, x1, y1] = s.src.map(|v| v as f32);
+        let (mut u0, mut u1) = (x0 / w, x1 / w);
+        let (mut v0, mut v1) = (y0 / h, y1 / h);
+        if s.flip_x {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        if s.flip_y {
+            std::mem::swap(&mut v0, &mut v1);
+        }
+        let t = s.tint;
+        let r = img.bounds;
+        self.ops.push(Op::Image {
+            image: s.image.clone(),
+            transform: *local,
+            rect: [r.x, r.y, r.x + r.width, r.y + r.height],
+            opacity: s.opacity,
+            uv: [u0, v0, u1, v1],
+            tint: premul(Rgba::new(t[0], t[1], t[2], t[3])),
+            nearest: s.filter == Filter::Nearest,
         });
     }
 
@@ -912,6 +963,41 @@ mod tests {
         };
         assert!(Arc::ptr_eq(drawn, &image));
         assert_eq!(*rect, [10.0, 10.0, 30.0, 30.0]);
+    }
+
+    #[test]
+    fn a_region_samples_its_part_of_the_image() {
+        use crate::render::ImageOptions;
+        let image = Arc::new(Pixmap::new(PhysicalSize::new(8, 4)));
+        let mut s = Scene::new(Size::new(100.0, 100.0));
+        let opts = ImageOptions::new()
+            .nearest()
+            .flip_x(true)
+            .tint(Color::rgba(255, 0, 0, 255))
+            .opacity(0.5);
+        let src = Rect::from_xywh(2.0, 0.0, 4.0, 2.0);
+        s.draw_image_region(src, Rect::from_xywh(10.0, 10.0, 40.0, 20.0), &image, &opts);
+        let ops = lower(&s, &mut RasterCache::default());
+        let [
+            Op::Image {
+                image: drawn,
+                rect,
+                uv,
+                tint,
+                nearest,
+                opacity,
+                ..
+            },
+        ] = &ops[..]
+        else {
+            panic!("{ops:?}");
+        };
+        assert!(Arc::ptr_eq(drawn, &image), "the whole image's texture");
+        assert_eq!(*rect, [10.0, 10.0, 50.0, 30.0]);
+        assert_eq!(*uv, [0.75, 0.0, 0.25, 0.5], "mirrored across");
+        assert_eq!(*tint, [1.0, 0.0, 0.0, 1.0]);
+        assert!(*nearest);
+        assert_eq!(*opacity, 0.5);
     }
 
     #[test]

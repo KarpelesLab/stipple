@@ -1,0 +1,16 @@
+[package]
+name = "spritedemo"
+description = "Stipple example: an animated sprite walking over a tilemap at a 320×180 pixel-art resolution, with a following camera; and a sprite-blitting benchmark."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true

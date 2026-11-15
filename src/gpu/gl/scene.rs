@@ -133,7 +133,10 @@ void main() {\n\
 }\n";
 
 // A textured quad: `v_aux` is the local position inside `u_rect`, `u_px` the
-// device pixels per local unit along each axis (for edge coverage).
+// device pixels per local unit along each axis (for edge coverage). `u_uv`
+// is the part of the texture spread over the rect (swapped ends mirror it),
+// kept within `u_clamp` so a neighbor in an atlas doesn't bleed in; `u_tint`
+// (premultiplied) multiplies every texel.
 const TEX_FS: &str = "varying vec2 v_aux;\n\
 uniform sampler2D u_tex;\n\
 uniform vec4 u_rect;\n\
@@ -141,10 +144,15 @@ uniform vec2 u_px;\n\
 uniform float u_opacity;\n\
 uniform float u_premul;\n\
 uniform float u_aa;\n\
+uniform vec4 u_uv;\n\
+uniform vec4 u_clamp;\n\
+uniform vec4 u_tint;\n\
 void main() {\n\
-  vec2 uv = (v_aux - u_rect.xy) / (u_rect.zw - u_rect.xy);\n\
+  vec2 f = (v_aux - u_rect.xy) / (u_rect.zw - u_rect.xy);\n\
+  vec2 uv = clamp(mix(u_uv.xy, u_uv.zw, f), u_clamp.xy, u_clamp.zw);\n\
   vec4 t = texture2D(u_tex, uv);\n\
   if (u_premul < 0.5) { t.rgb *= t.a; }\n\
+  t *= u_tint;\n\
   float cov = 1.0;\n\
   if (u_aa > 0.5) {\n\
     vec2 d = min(v_aux - u_rect.xy, u_rect.zw - v_aux) * u_px;\n\
@@ -287,6 +295,47 @@ impl Target {
     }
 }
 
+/// Which part of a texture a quad shows, tinted how and filtered how.
+struct Sample {
+    uv: [f32; 4],
+    clamp: [f32; 4],
+    tint: [f32; 4],
+    nearest: bool,
+}
+
+impl Sample {
+    /// All of it, as it is, bilinear.
+    const WHOLE: Sample = Sample {
+        uv: ops::FULL_UV,
+        clamp: [0.0, 0.0, 1.0, 1.0],
+        tint: ops::NO_TINT,
+        nearest: false,
+    };
+
+    /// The part `uv` of a `w`×`h` texture, kept half a texel inside it so
+    /// bilinear filtering doesn't reach its neighbors.
+    fn region(uv: [f32; 4], w: u32, h: u32, tint: [f32; 4], nearest: bool) -> Sample {
+        let inside = |a: f32, b: f32, n: u32| {
+            let half = 0.5 / n.max(1) as f32;
+            let (lo, hi) = (a.min(b) + half, a.max(b) - half);
+            if lo <= hi {
+                (lo, hi)
+            } else {
+                let mid = (a + b) / 2.0;
+                (mid, mid)
+            }
+        };
+        let (u0, u1) = inside(uv[0], uv[2], w);
+        let (v0, v1) = inside(uv[1], uv[3], h);
+        Sample {
+            uv,
+            clamp: [u0, v0, u1, v1],
+            tint,
+            nearest,
+        }
+    }
+}
+
 /// A cached image texture.
 struct Texture {
     image: Weak<Pixmap>,
@@ -344,7 +393,17 @@ impl State {
             let boxes = Program::new(BOX_FS, &["u_rect", "u_radius", "u_stroke", "u_color"])?;
             let tex = Program::new(
                 TEX_FS,
-                &["u_tex", "u_rect", "u_px", "u_opacity", "u_premul", "u_aa"],
+                &[
+                    "u_tex",
+                    "u_rect",
+                    "u_px",
+                    "u_opacity",
+                    "u_premul",
+                    "u_aa",
+                    "u_uv",
+                    "u_clamp",
+                    "u_tint",
+                ],
             )?;
             let flat = Program::new(FLAT_FS, &["u_color"])?;
             let resolve = Program::new(RESOLVE_FS, &["u_tex", "u_inv", "u_tap", "u_color"])?;
@@ -527,7 +586,8 @@ impl State {
     }
 
     /// Draw texture `tex` over the local `rect` through `m`; `premul` if its
-    /// pixels are premultiplied, `aa` to antialias its edges.
+    /// pixels are premultiplied, `aa` to antialias its edges; `sample` says
+    /// which part of it, tinted how, and filtered how.
     #[allow(clippy::too_many_arguments)]
     unsafe fn draw_texture(
         &self,
@@ -538,6 +598,7 @@ impl State {
         opacity: f32,
         premul: bool,
         aa: bool,
+        sample: &Sample,
     ) {
         unsafe {
             let t = self.target(level);
@@ -570,6 +631,19 @@ impl State {
             glUniform1f(p.loc("u_opacity"), opacity);
             glUniform1f(p.loc("u_premul"), if premul { 1.0 } else { 0.0 });
             glUniform1f(p.loc("u_aa"), if aa { 1.0 } else { 0.0 });
+            let uv = sample.uv;
+            glUniform4f(p.loc("u_uv"), uv[0], uv[1], uv[2], uv[3]);
+            let c = sample.clamp;
+            glUniform4f(p.loc("u_clamp"), c[0], c[1], c[2], c[3]);
+            let k = sample.tint;
+            glUniform4f(p.loc("u_tint"), k[0], k[1], k[2], k[3]);
+            let filter = if sample.nearest {
+                GL_NEAREST
+            } else {
+                GL_LINEAR
+            };
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
             self.vertices(p, &v);
             glDrawArrays(GL_TRIANGLES, 0, 6);
         }
@@ -794,10 +868,17 @@ impl State {
                         transform,
                         rect,
                         opacity,
+                        uv,
+                        tint,
+                        nearest,
                     } => {
                         let level = levels.pop().unwrap();
                         let tex = self.texture(image);
-                        self.draw_texture(&level, tex, transform, *rect, *opacity, false, true);
+                        let size = image.size();
+                        let sample = Sample::region(*uv, size.width, size.height, *tint, *nearest);
+                        self.draw_texture(
+                            &level, tex, transform, *rect, *opacity, false, true, &sample,
+                        );
                         levels.push(level);
                     }
                     Op::PushClip(Clip::Rect(r)) => {
@@ -879,6 +960,7 @@ impl State {
                             layer.opacity,
                             true,
                             false,
+                            &Sample::WHOLE,
                         );
                     }
                 }
@@ -898,6 +980,7 @@ impl State {
                     layer.opacity,
                     true,
                     false,
+                    &Sample::WHOLE,
                 );
             }
 

@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub(crate) mod bidi;
+mod blit;
 mod canvas;
 mod color;
 mod convert;
@@ -35,6 +36,7 @@ pub(crate) mod lower;
 mod path;
 pub(crate) mod scene;
 mod software;
+pub(crate) mod sprite;
 pub(crate) mod surface;
 mod text;
 
@@ -48,6 +50,7 @@ pub use image::{ImageError, ImageFit, ImageSource, Svg, image_formats};
 pub use path::{LineCap, LineJoin, Path, StrokeStyle};
 pub use scene::{DrawCmd, Scene};
 pub use software::{RasterStats, SoftwareRenderer};
+pub use sprite::{Filter, ImageOptions};
 pub use surface::{Pixmap, Surface};
 pub use text::{Font, FontError, TextLayout};
 

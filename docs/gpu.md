@@ -61,6 +61,10 @@ renderer does, and turns it into device-space draw operations:
   texture is freed once its image is dropped or hasn't been drawn for 120
   frames. The images stay plain `Pixmap`s, so `Pixmap::from_oxideav_image`,
   `from_video_frame` and `to_video_frame` work as before.
+- **Image regions** (`Scene::draw_image_region`: sprites, tiles) are textured
+  quads from the whole bitmap's texture: the region's texture coordinates
+  (swapped ends for a flip), kept half a texel inside the region, `GL_NEAREST`
+  when sampled nearest, the tint and opacity applied in the shader.
 - **Text** is drawn from the scene's own glyph outlines, whatever font set
   them: each glyph is rasterized once on the CPU per size, color, transform and
   sixteenth of a pixel of position, kept across frames (and dropped after 120

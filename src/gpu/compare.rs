@@ -234,6 +234,34 @@ fn images_match_the_software_renderer() {
     agree("images@2", &images(), 2.0, 1.0, 0.01);
 }
 
+/// Image regions: unscaled, scaled nearest and linear, flipped, turned,
+/// tinted and faded.
+fn regions() -> Scene {
+    use crate::render::ImageOptions;
+    let image = ramp();
+    let mut s = Scene::new(Size::new(160.0, 120.0));
+    s.fill_rect(
+        Rect::from_xywh(0.0, 60.0, 160.0, 60.0),
+        Color::rgb(0x40, 0x40, 0x40),
+    );
+    let quarter = Rect::from_xywh(8.0, 0.0, 8.0, 8.0);
+    let o = ImageOptions::new();
+    s.draw_image_region(quarter, Rect::from_xywh(4.0, 4.0, 8.0, 8.0), &image, &o);
+    let big = Rect::from_xywh(20.0, 4.0, 32.0, 32.0);
+    s.draw_image_region(quarter, big, &image, &o.nearest().flip_x(true));
+    let lin = Rect::from_xywh(60.0, 4.0, 40.0, 40.0);
+    s.draw_image_region(quarter, lin, &image, &o.flip_y(true));
+    let turned = o.rotate(0.6).tint(Color::rgb(255, 160, 60)).opacity(0.7);
+    s.draw_image_with(Rect::from_xywh(100.0, 60.0, 40.0, 40.0), &image, &turned);
+    s
+}
+
+#[test]
+fn regions_match_the_software_renderer() {
+    agree("regions", &regions(), 1.0, 1.5, 0.02);
+    agree("regions@2", &regions(), 2.0, 1.5, 0.02);
+}
+
 #[test]
 fn an_unchanged_image_is_uploaded_once() {
     let scene = images();

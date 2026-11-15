@@ -2109,17 +2109,29 @@ game needs on top:
   game, feeding the same actions.
 
 #### 9c — Drawing a game
-- ⬜ Sprites: draw part of an image (a source rect into a sprite sheet or
+- ✅ Sprites: draw part of an image (a source rect into a sprite sheet or
   atlas), flipped, rotated, scaled, tinted and faded; sprite-sheet and
   animation helpers (frames, durations, looping).
-- ⬜ Pixel art: nearest-neighbor sampling, and a fixed virtual resolution (say
+  *`Scene::draw_image_region` with `ImageOptions`; `game::SpriteSheet`,
+  `game::SpriteAnimation` (loop, once, ping-pong); the GL path textures the
+  region from the bitmap's own texture. See [games.md](docs/games.md).*
+- ✅ Pixel art: nearest-neighbor sampling, and a fixed virtual resolution (say
   320×180) scaled by whole numbers and letterboxed into the window.
-- ⬜ Tilemaps: draw the visible tiles of a grid from a tileset.
-- ⬜ A camera: a world-to-screen transform (position, zoom, shake) for the
+  *`Filter::Nearest`; `game::PixelViewport` (whole-number scale in device
+  pixels, bars, pointer → virtual pixels); `spritedemo`.*
+- ✅ Tilemaps: draw the visible tiles of a grid from a tileset.
+  *`game::Tilemap`: only the cells crossing the camera's view are drawn.*
+- ✅ A camera: a world-to-screen transform (position, zoom, shake) for the
   canvas.
-- ⬜ Fast paths in the software rasterizer for what games draw most: opaque
+  *`game::Camera2D`: rotation, follow, clamping, trauma shake, pixel snapping;
+  drawn through a scene layer.*
+- ✅ Fast paths in the software rasterizer for what games draw most: opaque
   and alpha-blended blits that are unscaled or scaled by whole numbers, so a
   full 1080p screen of sprites fits a 60 Hz frame on a desktop CPU.
+  *Regions are blitted by Stipple (index tables, opaque runs copied,
+  separable bilinear, pixel-aligned rect fills), the rest rasterized in runs:
+  1080p + 2000 32×32 sprites in 4.4 ms (unscaled) and 4.1 ms (2× nearest),
+  from 84 ms through the rasterizer, on an M5 Max (`spritedemo --bench`).*
 - ⬜ Later: present on the GPU (Phase 6) without a read-back.
 
 #### 9d — Audio

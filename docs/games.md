@@ -14,10 +14,11 @@ that are a game's own:
   released since the last update.
 - **Actions** ([below](#actions)): "jump", "move left", bound to inputs the
   player can change and save.
+- **Drawing** ([below](#drawing)): sprite sheets and animations, tilemaps, a
+  camera, and pixel art scaled by whole numbers, on fast blit paths.
 
 The rest of Phase 9 (see the [roadmap](../ROADMAP.md#phase-9--2d-games)),
-pointer lock, gamepads, touch controls, sprites and tilemaps, audio and game
-UI, lands alongside.
+pointer lock, gamepads, touch controls, audio and game UI, lands alongside.
 
 The `gameloop` example puts the pieces together in about a hundred lines: a
 square moved with the arrows or WASD, stepped at 120 Hz, with an fps label.
@@ -235,3 +236,137 @@ Keys are written by their W3C `code` name (`#` and the hex HID usage for a
 key without one), mouse buttons as `Left`, `Right`, `Middle`, `Back`,
 `Forward` or a number. A single `Binding` prints and parses (`Display`,
 `FromStr`) the same way.
+
+## Drawing
+
+A game draws its world into a canvas (`Element::canvas`, see
+[canvas.md](canvas.md)) every frame. On top of the canvas's shapes, text and
+bitmaps, a game gets:
+
+- **Image regions**: `Scene::draw_image_region(src, dst, &image, &opts)` draws
+  part of a bitmap: a frame of a sprite sheet, a tile of a tileset.
+  `ImageOptions` flips it (`flip_x`, `flip_y`), rotates and scales it about a
+  pivot (`rotate`, `scale`, `pivot`, as fractions of `dst`), multiplies it by a
+  `tint`, fades it (`opacity`), and picks the sampling: `Filter::Linear`
+  (smooth, the default) or `Filter::Nearest` (`.nearest()`: hard pixels).
+  `draw_image_with(dst, &image, &opts)` draws a whole bitmap the same way.
+  The pixels aren't copied: keep the `Arc<Pixmap>` and draw from it every
+  frame.
+- **`SpriteSheet`**: an image and its frames, cut as a grid
+  (`SpriteSheet::grid(image, 16, 16)`, `grid_spaced` for margins and gaps) or
+  added one by one, by name if you like (`add("coin", rect)`, `index("coin")`).
+  `sheet.draw(scene, frame, dst, &opts)` and `draw_at(scene, frame, top_left,
+  &opts)` draw a frame.
+- **`SpriteAnimation`**: frames with durations (`SpriteAnimation::new(4..8,
+  0.1)`, or `with_durations`), played `Loop`, `Once` or `PingPong`, sampled at
+  a time: `walk.frame_at(t)` gives the sheet frame to draw.
+- **`Tilemap`**: a grid of tile numbers (frames of a tileset sheet) with a
+  tile size and an origin in the world. `map.draw(scene, &tileset, view,
+  &opts)` draws only the cells that cross `view`, so a level of any size costs
+  what's on screen; `cell_at`, `cell_rect` and `visible_cells` answer the
+  usual questions.
+- **`Camera2D`**: the world point at the screen's center (`position`), `zoom`,
+  an optional `rotation`, and shake (`shake(amount)` adds trauma that fades as
+  `update(dt)` runs). `follow(target, rate, dt)` trails a point smoothly,
+  `clamp_to(bounds)` keeps the view inside the level. `transform()` is the
+  world-to-screen `Affine`; `world_to_screen`, `screen_to_world` and
+  `visible_rect` map between the two. Draw the world inside `cam.push(scene)`
+  / `cam.pop(scene)` (a `Scene` layer) or `cam.draw(scene, |s| …)`. With
+  `snap` (on by default) the translation is rounded to whole screen units, so
+  pixel art doesn't shimmer while the camera glides.
+- **`PixelViewport`**: a fixed virtual resolution for pixel art,
+  `PixelViewport::new(320, 180)`. `vp.paint(canvas, |s| …)` gives the game a
+  `Scene` of 320×180 to draw into, rasterizes it at that size, and blits it
+  nearest-neighbor into the canvas at the largest whole-number scale that fits
+  in device pixels, centered on whole pixels, with bars (`bar_color`) around
+  it. `vp.pointer_to_virtual(e.position)` turns a pointer position on the
+  canvas into virtual pixels (`None` on the bars); `layout(size, scale)` is
+  the arithmetic on its own.
+
+```rust
+use std::sync::Arc;
+use stipple::game::{Camera2D, PixelViewport, SpriteAnimation, SpriteSheet, Tilemap};
+use stipple::prelude::*;
+use stipple::render::ImageOptions;
+
+struct World {
+    sheet: SpriteSheet,
+    map: Tilemap,
+    walk: SpriteAnimation,
+    cam: Camera2D,
+    vp: PixelViewport,
+    hero: Point,
+    time: f64,
+}
+
+fn paint(w: &World, c: &mut Canvas) {
+    let px = ImageOptions::new().nearest();
+    w.vp.paint(c, |s| {
+        w.cam.draw(s, |s| {
+            w.map.draw(s, &w.sheet, w.cam.visible_rect(), &px);
+            w.sheet.draw_at(s, w.walk.frame_at(w.time), w.hero, &px);
+        });
+    });
+}
+```
+
+The `spritedemo` example is a complete scene: a sprite sheet painted pixel by
+pixel at startup, a hero walking over a tilemap at 320×180 with the camera
+following, coins spinning, clouds in parallax, a click to send the hero
+somewhere (through `pointer_to_virtual` and `screen_to_world`), and the frame
+rate printed every second. `spritedemo --png FILE` renders a frame
+off-screen.
+
+### How it draws, and what it costs
+
+The software renderer draws image regions itself instead of handing them to
+`oxideav-raster`, whose general path builds a canvas-sized coverage mask for
+every primitive and samples images pixel by pixel through the inverse
+transform. The scene is walked in paint order:
+
+- an upright region drawn unscaled at whole pixels, or scaled
+  nearest-neighbor (by whole numbers or not), is blitted through a table of
+  source columns and rows: no transform per pixel, opaque runs copied whole,
+  translucent pixels blended exactly as the rasterizer blends them;
+- other upright regions (linear, scaled or at fractional positions) are
+  sampled bilinear through per-column and per-row taps, clamped to the
+  region so neighbors in an atlas don't bleed in, with antialiased edges;
+- turned regions are mapped back pixel by pixel (nearest, or bilinear with
+  antialiased edges);
+- a solid rect on whole device pixels (a background, a health bar) is filled
+  directly;
+- everything else between them (paths, text) is rasterized by
+  `oxideav-raster` for just the box it covers, and composited in order.
+
+Regions inside a translucent layer, or a clip that isn't an upright rect,
+are drawn by the rasterizer as plain images (nearest regions upscaled first
+so they stay blocky). A canvas's paint callback now runs once per frame
+rendered, not once per band.
+
+The GPU path (`stipple::gpu`, see [gpu.md](gpu.md)) draws a region as a
+textured quad from the whole bitmap's texture (cached by its `Arc`, uploaded
+once): the region's texture coordinates (swapped for a flip), `GL_NEAREST`
+for nearest sampling, the tint and opacity in the shader, and the samples
+kept half a texel inside the region.
+
+`spritedemo --bench` times the software renderer drawing a 1920×1080 frame:
+a full-screen background image and 2000 32×32 sprites (discs with soft alpha
+edges, so every sprite blends), single-threaded, release build, Apple M5 Max:
+
+| What | ms per frame |
+|---|---|
+| Before: the same bitmaps through `draw_image` (the rasterizer's path) | 84 |
+| Unscaled regions (`draw_image_region`) | 4.4 |
+| 16×16 regions drawn 2× nearest, half of them flipped | 4.1 |
+| Unscaled, tinted and at 80% opacity | 11 |
+| Bilinear at fractional positions | 26 |
+| Turned (bilinear) | 44 |
+
+So a full 1080p screen of sprites fits a 60 Hz frame with room to spare when
+they're drawn unscaled or scaled by whole numbers (what pixel art and most 2D
+games draw); smooth subpixel motion and rotation cost more, and fit when
+fewer sprites need them. A `PixelViewport` game rasterizes only its virtual
+resolution (320×180 is 1/36 of 1080p) plus one nearest blit to the window.
+
+Not yet: the frame isn't presented from the GPU without a read-back (Phase 6
+work), and the software blits run on one thread.

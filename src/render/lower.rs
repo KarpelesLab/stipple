@@ -18,9 +18,11 @@ use crate::geometry::{Rect, Vec2};
 use crate::render::Pixmap;
 use crate::render::canvas::{Canvas, CanvasPaint};
 use crate::render::scene::Scene;
+use crate::render::sprite::SpriteDraw;
 use oxideav_core::{
     Group, ImageRef, Node, Path, PathCommand, Rect as OxRect, Transform2D, VideoFrame, VideoPlane,
 };
+use std::cell::RefCell;
 use std::sync::Arc;
 
 /// Content recorded by a [`Scene`] as a placeholder, made into nodes when the
@@ -36,6 +38,8 @@ pub(crate) enum Deferred {
         paint: CanvasPaint,
         scale: f64,
     },
+    /// A region of a bitmap ([`Scene::draw_image_region`]).
+    Sprite(SpriteDraw),
 }
 
 impl std::fmt::Debug for Deferred {
@@ -45,6 +49,7 @@ impl std::fmt::Debug for Deferred {
             Deferred::Canvas { bounds, .. } => {
                 f.debug_struct("Canvas").field("bounds", bounds).finish()
             }
+            Deferred::Sprite(s) => f.debug_tuple("Sprite").field(&s.src).finish(),
         }
     }
 }
@@ -69,6 +74,38 @@ pub(crate) fn placeholder(index: usize, bounds: Rect) -> Node {
 pub(crate) fn deferred_index(img: &ImageRef) -> Option<usize> {
     let pts = img.frame.pts?;
     (img.frame.planes.is_empty() && pts & TAG_MASK == TAG).then_some((pts & !TAG_MASK) as usize)
+}
+
+/// Image regions lowered for the software compositor are image nodes with no
+/// pixel planes whose timestamp carries this tag plus the index into the
+/// list of regions the lowering recorded.
+const SPRITE_TAG: i64 = 0x5350_5254_0000_0000;
+
+/// A marker for recorded region `index` in place of placeholder `img`.
+fn sprite_marker(index: usize, img: &ImageRef) -> Node {
+    Node::Image(ImageRef {
+        frame: Box::new(VideoFrame {
+            pts: Some(SPRITE_TAG | index as i64),
+            planes: Vec::new(),
+        }),
+        bounds: img.bounds,
+        transform: img.transform,
+    })
+}
+
+/// The recorded region a marker stands for.
+pub(crate) fn sprite_index(img: &ImageRef) -> Option<usize> {
+    let pts = img.frame.pts?;
+    (img.frame.planes.is_empty() && pts & TAG_MASK == SPRITE_TAG)
+        .then_some((pts & !TAG_MASK) as usize)
+}
+
+/// How many times to repeat each pixel of a nearest-sampled region drawn
+/// through `t` (into `bounds`) so a bilinear rasterizer keeps it blocky.
+pub(crate) fn nearest_upscale(sprite: &SpriteDraw, bounds: &OxRect, t: &Transform2D) -> u32 {
+    let sx = t.a.hypot(t.b) * bounds.width / sprite.width() as f32;
+    let sy = t.c.hypot(t.d) * bounds.height / sprite.height() as f32;
+    (sx.max(sy).ceil() as u32).clamp(1, 8)
 }
 
 fn ox_rect(r: Rect) -> OxRect {
@@ -193,6 +230,9 @@ const MARGIN: f32 = 0.01;
 pub(crate) struct Lower<'a> {
     pub deferred: &'a [Deferred],
     pub view: Option<Bounds>,
+    /// Where image regions are recorded for the software compositor (each
+    /// left as a marker node); without it they become plain image nodes.
+    pub sprites: Option<&'a RefCell<Vec<SpriteDraw>>>,
 }
 
 impl Lower<'_> {
@@ -318,6 +358,18 @@ impl Lower<'_> {
                 paint,
                 scale,
             } => self.canvas(*bounds, paint, *scale, &local),
+            Deferred::Sprite(sprite) => Some(match self.sprites {
+                Some(sink) => {
+                    let mut sink = sink.borrow_mut();
+                    sink.push(sprite.clone());
+                    sprite_marker(sink.len() - 1, img)
+                }
+                None => {
+                    // Assume a 2× display: hard pixels at either density.
+                    let k = nearest_upscale(sprite, &r, &local) * 2;
+                    sprite.to_node(r, img.transform, k)
+                }
+            }),
         }
     }
 
@@ -406,7 +458,7 @@ impl Lower<'_> {
         let origin = bounds.origin;
         let scene = paint_canvas(bounds, paint, scale, dirty);
         let shift = Transform2D::translate(origin.x as f32, origin.y as f32);
-        let inner = scene.lower_root(self.view, &local.compose(&shift));
+        let inner = scene.lower_root_with(self.view, &local.compose(&shift), self.sprites);
         if inner.is_empty() {
             return None;
         }

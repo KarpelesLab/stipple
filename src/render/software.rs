@@ -2,8 +2,13 @@
 //! `oxideav-raster` into a [`Pixmap`] ready for any [`Surface`] to present.
 
 use crate::geometry::{PhysicalSize, Rect, ScaleFactor};
+use crate::render::blit::Compositor;
+use crate::render::lower::Lower;
+use crate::render::scene::frame_for;
 use crate::render::{Color, Pixmap, Scene};
+use oxideav_core::{Group, Node, Transform2D, VectorFrame};
 use oxideav_raster::Renderer;
+use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Pixels rasterized and rasterizer runs since the process started (or the
@@ -94,24 +99,9 @@ impl SoftwareRenderer {
     /// A heavy scene (many primitives, or a canvas) is rasterized in bands,
     /// each with only what crosses it; the result is the same.
     pub fn render_at(&self, scene: Scene, physical: PhysicalSize) -> Pixmap {
-        let heavy = scene.primitive_count() > BAND_PRIMITIVES || scene.has_canvas();
-        if !heavy || physical.height <= BAND * 2 {
-            let frame = scene.into_vector_frame();
-            return self.rasterize_frame(frame, physical);
-        }
-        let logical = scene.logical_size();
-        let (w, h) = (physical.width.max(1), physical.height.max(1));
-        let (sx, sy) = (logical.width / w as f64, logical.height / h as f64);
-        let mut out = Pixmap::new(PhysicalSize::new(w, h));
-        let mut y = 0;
-        while y < h {
-            let bh = BAND.min(h - y);
-            let view = Rect::from_xywh(0.0, y as f64 * sy, w as f64 * sx, bh as f64 * sy);
-            let band = self.render_area(&scene, view, PhysicalSize::new(w, bh));
-            out.blit(&band, 0, y);
-            y += bh;
-        }
-        out
+        let size = scene.logical_size();
+        let view = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+        self.rasterize_scene(&scene, view, false, physical)
     }
 
     /// Rasterize only `view` — a logical sub-rect of `scene` — into a buffer of
@@ -119,7 +109,7 @@ impl SoftwareRenderer {
     /// but without consuming the scene, so an area repaint of several rects
     /// lowers one scene several times instead of cloning it for each.
     pub fn render_area(&self, scene: &Scene, view: Rect, physical: PhysicalSize) -> Pixmap {
-        self.rasterize_frame(scene.vector_frame_region(view), physical)
+        self.rasterize_scene(scene, view, true, physical)
     }
 
     /// Rasterize only `view` — a logical sub-rect of `scene` — into a buffer of
@@ -131,8 +121,84 @@ impl SoftwareRenderer {
     /// straight copy (see [`Pixmap::blit`]). This is the area-repaint path: a
     /// hover change re-rasterizes two small button rects instead of the window.
     pub fn render_region(&self, scene: Scene, view: Rect, physical: PhysicalSize) -> Pixmap {
-        let frame = scene.into_vector_frame_region(view);
-        self.rasterize_frame(frame, physical)
+        self.rasterize_scene(&scene, view, true, physical)
+    }
+
+    /// Lower `scene` for `view` once (culling what can't touch it when
+    /// `cull`), then rasterize it into `physical` pixels: in one pass when
+    /// it's light and holds no image regions, else through the compositor
+    /// (see `render::blit`), which blits regions itself and rasterizes the
+    /// rest in runs, band by band when the scene is heavy.
+    fn rasterize_scene(
+        &self,
+        scene: &Scene,
+        view: Rect,
+        cull: bool,
+        physical: PhysicalSize,
+    ) -> Pixmap {
+        let (w, h) = (physical.width.max(1), physical.height.max(1));
+        let heavy = scene.primitive_count() > BAND_PRIMITIVES || scene.has_canvas();
+        let sprites = RefCell::new(Vec::new());
+        let cull_view = cull.then(|| Lower::view_of(view));
+        let root = scene.lower_root_with(cull_view, &Transform2D::identity(), Some(&sprites));
+        let sprites = sprites.into_inner();
+        if sprites.is_empty() && (!heavy || h <= BAND * 2) {
+            return self.rasterize_frame(frame_for(view, root), PhysicalSize::new(w, h));
+        }
+        // Logical to device pixels, as the rasterizer fits a view box
+        // (uniform scale, centered).
+        let (vw, vh) = (view.width() as f32, view.height() as f32);
+        let base = if vw > 0.0 && vh > 0.0 {
+            let s = (w as f32 / vw).min(h as f32 / vh);
+            Transform2D {
+                a: s,
+                b: 0.0,
+                c: 0.0,
+                d: s,
+                e: (w as f32 - vw * s) / 2.0 - view.min_x() as f32 * s,
+                f: (h as f32 - vh * s) / 2.0 - view.min_y() as f32 * s,
+            }
+        } else {
+            return Pixmap::new(PhysicalSize::new(w, h));
+        };
+        let raster = |nodes: &[Node], r: [i32; 4], bg: Color| self.raster_run(nodes, r, bg, heavy);
+        Compositor::new(w, h, self.background, &sprites, &raster).run(&root, &base)
+    }
+
+    /// Rasterize `nodes` (in device pixels) for the device rect `r` over
+    /// `bg`: band by band, each with only what crosses it, when `banded` and
+    /// the rect is tall.
+    fn raster_run(&self, nodes: &[Node], r: [i32; 4], bg: Color, banded: bool) -> Pixmap {
+        let (w, h) = ((r[2] - r[0]).max(1) as u32, (r[3] - r[1]).max(1) as u32);
+        let frame = |nodes: Vec<Node>, y: u32, bh: u32| {
+            let shift = Transform2D::translate(-r[0] as f32, -(r[1] + y as i32) as f32);
+            let root = Group {
+                transform: shift,
+                children: nodes,
+                ..Group::new()
+            };
+            VectorFrame::new(w as f32, bh as f32).with_root(root)
+        };
+        let renderer = SoftwareRenderer::new().with_background(bg);
+        if !banded || h <= BAND * 2 {
+            return renderer.rasterize_frame(frame(nodes.to_vec(), 0, h), PhysicalSize::new(w, h));
+        }
+        let mut out = Pixmap::new(PhysicalSize::new(w, h));
+        let mut y = 0;
+        while y < h {
+            let bh = BAND.min(h - y);
+            let band = Rect::from_xywh(r[0] as f64, (r[1] + y as i32) as f64, w as f64, bh as f64);
+            let culled = Lower {
+                deferred: &[],
+                view: Some(Lower::view_of(band)),
+                sprites: None,
+            }
+            .nodes(nodes, &Transform2D::identity());
+            let part = renderer.rasterize_frame(frame(culled, y, bh), PhysicalSize::new(w, bh));
+            out.blit(&part, 0, y);
+            y += bh;
+        }
+        out
     }
 
     /// Run a lowered frame through the rasterizer and copy the single packed

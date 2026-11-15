@@ -100,6 +100,10 @@ transform, invalidated areas are presented where the canvas is drawn.
   doesn't copy the pixels; when rasterizing, only the part of the bitmap inside
   the area being rasterized is copied. Keep the `Arc` and draw it every time
   (an inline sixel or iTerm2 image).
+- Parts of bitmaps: `draw_image_region(src, dst, &image, &opts)` draws a
+  source rect (a sprite-sheet frame, a tile) flipped, rotated, scaled, tinted,
+  faded, smooth or as hard pixels, through fast blits; see
+  [games.md](games.md).
 - Text at exact positions: `GlyphRun` holds clusters, each with its pen on the
   baseline, in one `Font` (family and style, so a bold run is a run with
   `font.bold()`), size and color, plus an optional `Decoration` (underlines in

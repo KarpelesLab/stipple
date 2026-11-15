@@ -10,11 +10,13 @@ use crate::geometry::{Affine, Point, Rect, Size};
 use crate::render::canvas::CanvasPaint;
 use crate::render::convert::{to_ox_point, to_transform2d};
 use crate::render::lower::{Deferred, Lower, placeholder};
-use crate::render::{Color, Pixmap};
+use crate::render::sprite::SpriteDraw;
+use crate::render::{Color, ImageOptions, Pixmap};
 use oxideav_core::{
     Group, Node, Paint, Path, PathNode, Point as OxPoint, Rgba, Stroke, Transform2D, VectorFrame,
     ViewBox,
 };
+use std::cell::RefCell;
 use std::sync::Arc;
 
 /// Control-point offset for approximating a quarter circle with a cubic
@@ -68,6 +70,14 @@ pub enum DrawCmd {
     Viewport { rect: Rect, id: u64 },
     /// A bitmap drawn into `rect`: an OS-drawn control under the native theme.
     Image { rect: Rect, image: Arc<Pixmap> },
+    /// The source rect `src` (pixels) of `image` drawn into `dst`, with
+    /// `options` (see [`Scene::draw_image_region`]).
+    ImageRegion {
+        src: Rect,
+        dst: Rect,
+        image: Arc<Pixmap>,
+        options: ImageOptions,
+    },
 }
 
 /// A clip region or layer under construction: the primitives emitted while it
@@ -154,6 +164,71 @@ impl Scene {
         self.deferred.push(Deferred::Image(image.clone()));
         self.emit(placeholder(index, rect));
         self.commands.push(DrawCmd::Image { rect, image });
+    }
+
+    /// Draw the part `src` of `image` (a rect in its pixels, rounded to whole
+    /// ones: a frame of a sprite sheet, a tile of a tileset) into `dst`, with
+    /// `options`: flipped, rotated and scaled about a pivot, tinted, faded,
+    /// sampled smoothly or as hard pixels ([`Filter`](crate::render::Filter)).
+    ///
+    /// Like [`draw_image`](Self::draw_image), the pixels aren't copied. The
+    /// software renderer blits the region straight from the image, with fast
+    /// paths for what games draw most (upright, unscaled or scaled by whole
+    /// numbers); the GPU path textures the region from the image's texture.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use stipple::geometry::{PhysicalSize, Rect, ScaleFactor, Size};
+    /// use stipple::render::{Color, ImageOptions, Pixmap, Scene, SoftwareRenderer};
+    ///
+    /// // A 2×1 sheet: a red frame and a blue one.
+    /// let sheet = Arc::new(Pixmap::from_rgba8(
+    ///     PhysicalSize::new(2, 1),
+    ///     vec![255, 0, 0, 255, 0, 0, 255, 255],
+    /// ));
+    /// let mut scene = Scene::new(Size::new(8.0, 8.0));
+    /// // The blue frame, four times its size, as hard pixels.
+    /// let src = Rect::from_xywh(1.0, 0.0, 1.0, 1.0);
+    /// let opts = ImageOptions::new().nearest();
+    /// scene.draw_image_region(src, Rect::from_xywh(2.0, 2.0, 4.0, 4.0), &sheet, &opts);
+    /// let out = SoftwareRenderer::new().render(scene, ScaleFactor::IDENTITY);
+    /// assert_eq!(out.pixel(3, 3), Some([0, 0, 255, 255]));
+    /// assert_eq!(out.pixel(1, 1), Some([0, 0, 0, 0]));
+    /// ```
+    pub fn draw_image_region(
+        &mut self,
+        src: Rect,
+        dst: Rect,
+        image: &Arc<Pixmap>,
+        options: &ImageOptions,
+    ) {
+        if dst.width() <= 0.0 || dst.height() <= 0.0 || options.opacity <= 0.0 {
+            return;
+        }
+        let Some(sprite) = SpriteDraw::new(image.clone(), src, options) else {
+            return;
+        };
+        let index = self.deferred.len();
+        self.deferred.push(Deferred::Sprite(sprite));
+        let mut node = placeholder(index, dst);
+        if let Node::Image(img) = &mut node {
+            img.transform = to_transform2d(options.transform(dst));
+        }
+        self.emit(node);
+        self.commands.push(DrawCmd::ImageRegion {
+            src,
+            dst,
+            image: image.clone(),
+            options: *options,
+        });
+    }
+
+    /// Draw all of `image` into `dst` with `options` (see
+    /// [`draw_image_region`](Self::draw_image_region)).
+    pub fn draw_image_with(&mut self, dst: Rect, image: &Arc<Pixmap>, options: &ImageOptions) {
+        let size = image.size();
+        let src = Rect::from_xywh(0.0, 0.0, size.width as f64, size.height as f64);
+        self.draw_image_region(src, dst, image, options);
     }
 
     /// Reserve `bounds` for a custom-paint canvas: `paint` draws it, in the
@@ -441,10 +516,23 @@ impl Scene {
     /// of it) with the root drawn through `t`: what can't touch `view`
     /// dropped, bitmaps and canvases made into nodes.
     pub(crate) fn lower_root(&self, view: Option<[f32; 4]>, t: &Transform2D) -> Vec<Node> {
+        self.lower_root_with(view, t, None)
+    }
+
+    /// [`lower_root`](Self::lower_root), with image regions recorded in
+    /// `sprites` and left as markers for the software compositor (see
+    /// `render::blit`) when it's given, else made into plain image nodes.
+    pub(crate) fn lower_root_with(
+        &self,
+        view: Option<[f32; 4]>,
+        t: &Transform2D,
+        sprites: Option<&RefCell<Vec<SpriteDraw>>>,
+    ) -> Vec<Node> {
         let lower = |s: &Scene| {
             Lower {
                 deferred: &s.deferred,
                 view,
+                sprites,
             }
             .nodes(&s.stack[0].nodes, t)
         };
@@ -484,7 +572,7 @@ impl Scene {
 }
 
 /// A frame whose view box is `view`, drawing `root`.
-fn frame_for(view: Rect, root: Vec<Node>) -> VectorFrame {
+pub(crate) fn frame_for(view: Rect, root: Vec<Node>) -> VectorFrame {
     let (w, h) = (view.width() as f32, view.height() as f32);
     let root = Group {
         children: root,
