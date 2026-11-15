@@ -1655,6 +1655,12 @@ mod tests {
             return;
         };
         eprintln!("cjk family: {:?}", cjk.family_name());
+        // Without a CJK font installed the lookup can land on a general
+        // face (DejaVu Sans on a bare Linux): nothing to test then.
+        if !cjk.has_glyph('日') {
+            eprintln!("skipping: the system's CJK family has no CJK glyphs");
+            return;
+        }
         let text = "日本語";
         let shaped = cjk.shaped(text, 32.0);
         assert_eq!(shaped.len(), 3, "{shaped:?}");
