@@ -302,6 +302,17 @@ coding. `platform::haptic` plays a `UISelectionFeedbackGenerator`,
 `touchdemo`'s simulator self-test schedules a notification and lists what's
 pending; the share sheet is build-checked only.
 
+## In-app purchases
+
+`platform::store` uses StoreKit's original API (`SKProductsRequest`,
+`SKPaymentQueue` and a transaction observer, a class built at run time),
+since StoreKit 2 is Swift-only; Apple deprecated it in the iOS 18 SDK but it
+still works and passes review. The binary links `StoreKit.framework`. The
+observer is added as the app finishes launching when it has an
+`App::on_transaction` hook, so unfinished transactions come back at once.
+Build-checked only; testing needs a sandbox account or an Xcode StoreKit
+configuration. See [purchases.md](../purchases.md).
+
 ## File pickers
 
 `dialog::open_file_contents` and `dialog::save_file_contents` (or

@@ -422,6 +422,9 @@ extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) ->
     // Before launching ends, so a notification tap that launched the app
     // reaches the center's delegate.
     crate::platform::shell::ios::install_delegate();
+    // StoreKit's transaction observer, if the app listens for transactions:
+    // the queue hands back the unfinished ones as soon as it's added.
+    crate::platform::store::ios::launched();
     if !scene::uses_scenes() {
         unsafe {
             let bounds = msg_rect(msg_id(class("UIScreen"), sel("mainScreen")), sel("bounds"));

@@ -125,6 +125,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `AImageReader`, no Java) on Android, `getUserMedia` with a hidden `<video>`
   on the web; Windows and Linux report `Unsupported`. New `cameraview`
   example (also as an Android APK); see `docs/camera.md`.
+- In-app purchases (#56): `platform::store()` → `Store` with
+  `products(&[ProductId], |Result<Vec<Product>, StoreError>|)` (localized
+  title, description and price, price micros and currency, a subscription's
+  period), `purchase(id, |PurchaseResult|)` (`Purchased`, `Pending`,
+  `Cancelled`, `Failed`), `finish(&Transaction)` (finish, consume or
+  acknowledge), `restore_purchases()` and `kind()`; every transaction
+  (bought, restored, pending, unfinished from an earlier run) reaches
+  `App::on_transaction(|state, &Transaction|)`, with the purchase token or
+  transaction id and the signed receipt for a server to check.
+  `AppHandle::store()` runs the callbacks as state updates. iOS uses
+  StoreKit's original API through the Objective-C runtime (build-checked);
+  Android drives the Play Billing Library (6 to 9) over JNI, its listeners
+  `java.lang.reflect.Proxy` objects over a native `InvocationHandler` the
+  backend defines in its run-time dex, so Stipple ships no Java; the library
+  must be in the APK (Gradle, or `tools/android/billing.py`, which
+  `STIPPLE_BILLING=1 build-apk.sh` uses). Desktops and the web answer
+  `StoreError::Unavailable`. `Store::mock(MockStore)` (or
+  `STIPPLE_STORE=mock`) is an in-memory store with scripted outcomes (Ask to
+  Buy, interrupted purchases, owned items), and `App::run_pending` delivers
+  its transactions in tests. New `storedemo` example and
+  `docs/purchases.md`; CI runs the Android driver end to end against a
+  stand-in for the library.
 - Packaged assets (#59): `platform::assets()` reads files the app was
   packaged with by relative path (`read`, `open` as a `Read + Seek` reader,
   `exists`, `list`, and the `image`, `svg`, `font`, `sound` and `text`

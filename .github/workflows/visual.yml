@@ -4793,7 +4793,7 @@ jobs:
           STIPPLE_DEX_OUT="$PWD/stipple-classes.dex" cargo test --lib platform::dex::
           dexdump="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/dexdump"
           "$dexdump" -d stipple-classes.dex > dexdump.txt
-          for class in HostView Input Nodes Callbacks Results Lifecycle Receiver; do
+          for class in HostView Input Nodes Callbacks Results Lifecycle Receiver Invoke; do
             grep -q "Class descriptor  : 'Lorg/stipple/android/$class;'" dexdump.txt
           done
           grep -c "(PUBLIC NATIVE)" dexdump.txt
@@ -4839,8 +4839,12 @@ jobs:
           # which this image ships: its focus moved to "Tap me" and its click
           # (.github/a11y/android/test-talkback.sh). Required, after passing
           # in every run since TalkBack stopped skipping labels (dcba223).
+          # In-app purchases against a stand-in for the Play Billing Library
+          # (.github/billing/android/test-billing.sh): the JNI driver's whole
+          # path, which the real library can't show without a signed-in Play Store.
           script: |
             bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
+            bash .github/billing/android/test-billing.sh stipple.apk visual_output
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-talkback.sh a11yprobe.apk visual_output; fi
 

@@ -135,6 +135,10 @@ for b in open(sys.argv[1], "rb").read():
 print(f"{h:08x}")' "$asset_src")"
 wait_for "androiddemo: asset hello.txt bytes=$asset_size fnv1a=$asset_fnv text=\"Hello from a packaged asset\.\"" 5
 wait_for 'androiddemo: assets list=\[[^]]*"hello\.txt"[^]]*\] img=\["dot\.svg"\] svg=Ok\("16x16"\) streamed=Ok\(\([0-9]+, "from a packaged asset\."\)\) exists=true missing=Some\("no asset \\"nope\.txt\\""\)' 5
+# platform::store without the Play Billing Library in the APK: an error that
+# says so, not a crash (.github/billing/android/test-billing.sh runs it with
+# a stand-in for the library).
+wait_for 'androiddemo: store error Unavailable\("the Play Billing Library isn.t in the APK' 20
 adb exec-out screencap -p > "$shots/android.png"
 
 # The screen: drawn edge to edge, the app reads the status bar's height as

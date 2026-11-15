@@ -532,6 +532,31 @@ impl<S> AppHandle<S> {
         });
     }
 
+    /// The app's [store](crate::platform::store), with callbacks that run as
+    /// state updates on the UI thread.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// use stipple::platform::{ProductId, PurchaseResult};
+    /// # struct State { prices: Vec<String>, status: String }
+    /// # fn f(handle: AppHandle<State>) {
+    /// handle.store().products(vec![ProductId::consumable("gems_100")], |s: &mut State, r| {
+    ///     s.prices = r.map(|ps| ps.into_iter().map(|p| p.price).collect()).unwrap_or_default();
+    /// });
+    /// handle.store().purchase("gems_100", |s: &mut State, r| {
+    ///     s.status = match r {
+    ///         PurchaseResult::Failed(e) => e.to_string(),
+    ///         _ => String::new(), // the gems arrive at App::on_transaction
+    ///     };
+    /// });
+    /// # }
+    /// ```
+    pub fn store(&self) -> StoreHandle<S> {
+        StoreHandle {
+            handle: self.clone(),
+        }
+    }
+
     /// Repaint all of [canvas](crate::core::Element::canvas) `id`, without
     /// rebuilding the view: its paint callback runs again and only its area
     /// is re-rasterized and presented. Safe from any thread; repaints
@@ -870,6 +895,69 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
             .build()
             .expect("start the tokio runtime")
     })
+}
+
+/// The app's [store](crate::platform::store) from an [`AppHandle`]: the same
+/// calls as [`Store`](crate::platform::Store), with callbacks that change the
+/// state (run as [updates](AppHandle::update) on the UI thread).
+pub struct StoreHandle<S> {
+    handle: AppHandle<S>,
+}
+
+impl<S> Clone for StoreHandle<S> {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle.clone(),
+        }
+    }
+}
+
+impl<S> std::fmt::Debug for StoreHandle<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoreHandle").finish_non_exhaustive()
+    }
+}
+
+impl<S: 'static> StoreHandle<S> {
+    /// Which store this is.
+    pub fn kind(&self) -> crate::platform::StoreKind {
+        crate::platform::store().kind()
+    }
+
+    /// [`Store::products`](crate::platform::Store::products), applying the
+    /// answer to the state.
+    pub fn products(
+        &self,
+        ids: Vec<crate::platform::ProductId>,
+        done: impl FnOnce(&mut S, Result<Vec<crate::platform::Product>, crate::platform::StoreError>)
+        + Send
+        + 'static,
+    ) {
+        let handle = self.handle.clone();
+        crate::platform::store().products(&ids, move |r| handle.update(move |s| done(s, r)));
+    }
+
+    /// [`Store::purchase`](crate::platform::Store::purchase), applying how it
+    /// ended to the state. Grant purchases in
+    /// [`App::on_transaction`](crate::App::on_transaction), not here.
+    pub fn purchase(
+        &self,
+        product_id: &str,
+        done: impl FnOnce(&mut S, crate::platform::PurchaseResult) + Send + 'static,
+    ) {
+        let handle = self.handle.clone();
+        crate::platform::store().purchase(product_id, move |r| handle.update(move |s| done(s, r)));
+    }
+
+    /// [`Store::finish`](crate::platform::Store::finish).
+    pub fn finish(&self, transaction: &crate::platform::Transaction) {
+        crate::platform::store().finish(transaction);
+    }
+
+    /// [`Store::restore_purchases`](crate::platform::Store::restore_purchases).
+    pub fn restore_purchases(&self) {
+        crate::platform::store().restore_purchases();
+    }
 }
 
 #[cfg(test)]

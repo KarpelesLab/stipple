@@ -417,6 +417,10 @@ pub enum Event {
     /// which brought the app up (launching it, where the platform can). See
     /// [`App::on_notification_tapped`](crate::App::on_notification_tapped).
     NotificationTapped(String),
+    /// A purchase changed: bought, restored or pending, from
+    /// [`platform::store`](crate::platform::store). See
+    /// [`App::on_transaction`](crate::App::on_transaction).
+    Transaction(crate::platform::Transaction),
 
     /// A drag from another application entered the window at `position`
     /// (logical pixels), carrying the kinds of data in `offer`. The app answers

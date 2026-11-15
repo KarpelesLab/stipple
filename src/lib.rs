@@ -2835,12 +2835,24 @@ impl<S: 'static> App<S> {
     }
 
     /// Run what's queued on the app's [`AppHandle`] (updates, due timers,
-    /// message boxes asked for), as the event loop does when woken. Returns
-    /// whether anything ran. For tests, which have no loop.
+    /// message boxes asked for) and the [store](crate::platform::store)'s
+    /// transactions waiting for [`on_transaction`](Self::on_transaction), as
+    /// the event loop does when woken. Returns whether anything ran. For
+    /// tests, which have no loop.
     pub fn run_pending(&mut self) -> bool {
-        let (ran, _) = self
+        let (mut ran, _) = self
             .handle
             .pump(&mut self.state, crate::platform::time::Instant::now());
+        // The store's transactions; other posted events stay for the loop.
+        let posted = crate::platform::shell::take_posted();
+        if !posted.is_empty() {
+            for event in posted {
+                match event {
+                    Event::Transaction(t) => ran |= self.transaction(&t),
+                    other => crate::platform::shell::post(other),
+                }
+            }
+        }
         if ran {
             for pane in &mut self.panes {
                 pane.dirty = true;
@@ -3151,6 +3163,7 @@ impl<S: 'static> App<S> {
     where
         S: 'static,
     {
+        self.start_store();
         #[cfg(target_arch = "wasm32")]
         let app = backend::web::adopt(self);
         #[cfg(not(target_arch = "wasm32"))]
@@ -3843,6 +3856,12 @@ impl<S: 'static> App<S> {
                 }
                 Event::NotificationTapped(ref id) => {
                     if self.notification_tapped(id) && !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::Transaction(ref t) => {
+                    if self.transaction(t) && !self.in_background() {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait

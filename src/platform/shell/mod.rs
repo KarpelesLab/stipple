@@ -142,10 +142,6 @@ pub(crate) fn set_tray_shown(shown: bool) {
 static PENDING: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 
 /// Queue `event` for the event loop and wake it. Safe from any thread.
-#[cfg_attr(
-    not(any(target_os = "linux", target_os = "ios", target_os = "android")),
-    allow(dead_code)
-)]
 pub(crate) fn post(event: Event) {
     if let Ok(mut p) = PENDING.lock() {
         p.push(event);

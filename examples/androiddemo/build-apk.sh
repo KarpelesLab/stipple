@@ -4,7 +4,9 @@
 # apksigner) package and sign it. The APK's classes.dex holds Stipple's
 # org.stipple.android.Alarm receiver and org.stipple.android.Tapped activity
 # (stipple::platform::android_receiver_dex, written here by a host test), for
-# scheduled notifications and their taps.
+# scheduled notifications and their taps. With STIPPLE_BILLING=1 it also
+# carries the Play Billing Library, for in-app purchases (see
+# docs/purchases.md).
 #
 #   examples/androiddemo/build-apk.sh [x86_64|arm64-v8a] [out.apk]
 #
@@ -69,6 +71,20 @@ cp "$lib" "$work/lib/$abi/libstipple_android.so"
   cargo test --lib platform::dex::tests::writes_the_classes_for_dexdump >/dev/null)
 cp "$work/stipple-classes.receiver.dex" "$work/classes.dex"
 cp "$manifest" "$work/AndroidManifest.xml"
+# STIPPLE_BILLING=1: the Play Billing Library (and its dependencies) as
+# classes2.dex..., and the entries it adds to the manifest, for
+# platform::store (tools/android/billing.py fetches it from Google's Maven
+# repository; STIPPLE_BILLING_VERSION picks the version).
+extra_dex=()
+if [ "${STIPPLE_BILLING:-0}" = 1 ]; then
+  python3 "$root/tools/android/billing.py" "$work/billing" \
+    --version "${STIPPLE_BILLING_VERSION:-8.3.0}" --manifest "$manifest"
+  cp "$work/billing/AndroidManifest.xml" "$work/AndroidManifest.xml"
+  for dex in "$work"/billing/classes*.dex; do
+    cp "$dex" "$work/"
+    extra_dex+=("$(basename "$dex")")
+  done
+fi
 (
   cd "$work"
   assets=()
@@ -78,7 +94,7 @@ cp "$manifest" "$work/AndroidManifest.xml"
   fi
   "$build_tools/aapt" package -f -M AndroidManifest.xml -I "$platform_jar" "${assets[@]}" -F base.apk
   "$build_tools/aapt" add base.apk "lib/$abi/libstipple_android.so"
-  "$build_tools/aapt" add base.apk classes.dex
+  "$build_tools/aapt" add base.apk classes.dex ${extra_dex[@]+"${extra_dex[@]}"}
   "$build_tools/zipalign" -f -p 4 base.apk aligned.apk
   keytool -genkeypair -keystore debug.ks -storepass android -keypass android \
     -alias debug -dname "CN=stipple" -keyalg RSA -keysize 2048 -validity 10000 >/dev/null 2>&1

@@ -49,6 +49,7 @@ const CALLBACKS: usize = 3;
 const RESULTS: usize = 4;
 const LIFECYCLE: usize = 5;
 const RECEIVER: usize = 6;
+const INVOKE: usize = 7;
 
 /// Loaded class `index`, if loading worked.
 fn class(index: usize) -> Option<JObject> {
@@ -114,6 +115,7 @@ fn function(class: &str, name: &str) -> Option<*const c_void> {
             super::permission::on_request_permissions_result as *const c_void
         }
         ("Receiver", "onReceive") => super::alarm::on_receive as *const c_void,
+        ("Invoke", "invoke") => super::billing::invoke as *const c_void,
         ("Lifecycle", "onActivitySaveInstanceState") => on_save_instance_state as *const c_void,
         ("Lifecycle", "onActivityCreated") => on_activity_bundle as *const c_void,
         ("Lifecycle", _) => on_activity as *const c_void,
@@ -419,6 +421,12 @@ pub(super) fn receiver_class() -> Option<JObject> {
 /// The `Input` class, for a new connection.
 pub(super) fn input_class() -> Option<JObject> {
     class(INPUT)
+}
+
+/// The `Invoke` class: the invocation handler behind
+/// [`billing`](super::billing)'s proxies.
+pub(super) fn invoke_class() -> Option<JObject> {
+    class(INVOKE)
 }
 
 /// `ComponentCallbacks2.TRIM_MEMORY_*` levels that mean memory is short:

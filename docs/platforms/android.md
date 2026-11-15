@@ -145,7 +145,7 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
 An input method talks to a `View` (`onCreateInputConnection`), and
 accessibility services to a view's `AccessibilityNodeProvider`; a
 `NativeActivity` has neither. Rather than ship Java, the backend assembles
-six tiny classes into a dex file at start-up (`stipple::platform::dex`, a
+a few tiny classes into a dex file at start-up (`stipple::platform::dex`, a
 hand-written writer) and loads them with `InMemoryDexClassLoader` (Android 8
 and later; before, `DexClassLoader` from a file in the app's private
 storage):
@@ -174,6 +174,11 @@ exist before): `org.stipple.android.Back`, an `OnBackInvokedCallback` (API
 33), or `org.stipple.android.BackAnimation`, an `OnBackAnimationCallback`
 (API 34 and later), for predictive back. `adb logcat -s stipple` shows `back
 callback registered` / `unregistered` as the app's answer changes.
+
+And `org.stipple.android.Invoke`, a `java.lang.reflect.InvocationHandler`
+whose `invoke` is native: behind `java.lang.reflect.Proxy` objects it
+implements the Play Billing Library's listener interfaces, which only the
+app's class loader has (see [In-app purchases](#in-app-purchases)).
 
 Every method is `native`, bound to Rust with `RegisterNatives`; the only
 bytecode is each constructor's call to its superclass's. It runs on the main
@@ -416,6 +421,21 @@ ends its process: the `Alarm` receiver must post it (`dumpsys notification`),
 and tapping it must start the app with its id. Then it schedules another and
 leaves the app in front: tapping that one, with the activity alive, must
 report its id too (through `Tapped`).
+
+## In-app purchases
+
+`platform::store` drives the Google Play Billing Library over JNI: its
+classes are looked up in the activity's class loader, its builders called by
+name, and its listeners are proxies over the `Invoke` class above, so Stipple
+adds no Java, and any library version from 6 to 9 works. The library itself
+must be in the APK: a Gradle build adds the dependency (with a `-keep` rule,
+as nothing in Java references it); `build-apk.sh` adds it with
+`STIPPLE_BILLING=1`, through `tools/android/billing.py`, which dexes the
+library and its dependencies into `classes2.dex` and adds what the library
+puts in the manifest. Without it, the store answers `Unavailable`. CI checks
+that answer in `test-on-device.sh`, then runs the purchase path against a
+stand-in for the library (`.github/billing/android/test-billing.sh`). See
+[purchases.md](../purchases.md) for the Play Console side and testing.
 
 ## Building
 

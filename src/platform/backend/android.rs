@@ -62,6 +62,8 @@ mod a11y;
 mod alarm;
 /// Predictive back: the `OnBackInvokedCallback` (Android 13 and later).
 mod back;
+/// In-app purchases: the Play Billing Library over JNI.
+pub(crate) mod billing;
 /// The Java classes defined at run time: the host view and friends.
 mod classes;
 /// The input method's `InputConnection` to the focused text field.

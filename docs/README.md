@@ -84,6 +84,7 @@ How to build, package and run on each platform, and what works there today.
 | Sound: effects, streamed music, volume groups (`stipple::audio`) | ALSA ⁷¹ | WASAPI ⁷¹ | Core Audio ⁷¹ | Core Audio ⁷¹ | AAudio ⁷¹ | Web Audio ⁷¹ |
 | Camera: live preview, every frame, torch, zoom, focus, lenses (`stipple::camera`) | ❌ | ❌ | AVFoundation ⁷² | AVFoundation ⁷² | Camera2 NDK ⁷² | `getUserMedia` ⁷² |
 | Runtime permissions (`platform::permission`) | — | — | camera, microphone ⁷² | ✅ ⁷² | ✅ ⁷² | ✅ ⁷² |
+| In-app purchases (`platform::store`) | mock ⁷³ | mock ⁷³ | mock ⁷³ | StoreKit ⁷³ | Play Billing ⁷³ | mock ⁷³ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -521,6 +522,13 @@ virtual camera (not yet required to pass). The web glue and the iOS and
 Android permission prompts are build-checked only. The preview goes through
 the renderer, a conversion per frame shown. See [camera.md](camera.md).
 
+⁷³ StoreKit's original API on iOS (build-checked), the Play Billing Library
+driven over JNI on Android (the library must be in the APK). CI runs the
+Android driver end to end on an emulator against a stand-in for the library;
+the real library was run up to Google Play's answer (an emulator without a
+signed-in Play Store). Desktops and the web have no store and answer
+`Unavailable`; the mock store runs everywhere. See [purchases.md](purchases.md).
+
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
 on iOS, Android and the web, which hand out contents rather than paths, so do
@@ -535,6 +543,7 @@ they: use `open_file_contents` and `save_file_contents` there.
   password field and color picker
 - [Menus](menus.md): the menu bar, shortcuts and context menus (long press on touch screens)
 - [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
+- [In-app purchases](purchases.md): StoreKit and Google Play Billing, products, purchases, restoring, the mock store, and checking purchases on a server
 - [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, in-app drags, and dragging files and text out to other apps
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades,

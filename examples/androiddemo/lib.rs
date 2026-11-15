@@ -68,6 +68,11 @@
 //!   what's still to show, and `androiddemo: notification tapped "..."` when a
 //!   tap on it starts the activity. The APK carries the `Alarm` receiver
 //!   (`classes.dex`, see `build-apk.sh`), so it shows with the process gone.
+//! - `androiddemo: store products N` or `androiddemo: store error ...` at
+//!   start: `platform::store` asking Google Play about two products. Without
+//!   the Play Billing Library in the APK the error says so; with it
+//!   (`STIPPLE_BILLING=1 build-apk.sh`) the library connects to the Play
+//!   Store, and `stipple: billing: setup finished: CODE` logs its answer.
 //!
 //! Non-Android builds compile to an empty cdylib so `cargo build --examples`
 //! works everywhere.
@@ -81,7 +86,7 @@ mod app {
     use stipple::platform::backend::android::{self, ANativeActivity};
     use stipple::platform::dialog::{self, FileDialog};
     use stipple::platform::{
-        BackGesture, Haptic, ScheduledNotification, Share, ShareOutcome, haptic,
+        BackGesture, Haptic, ProductId, ScheduledNotification, Share, ShareOutcome, haptic,
     };
     use stipple::prelude::*;
 
@@ -481,7 +486,49 @@ mod app {
             .on_lifecycle(|_: &mut State, change| println!("androiddemo: lifecycle {change:?}"))
             .on_notification_tapped(|_: &mut State, id| {
                 println!("androiddemo: notification tapped {id:?}");
+            })
+            .on_transaction(|_: &mut State, t| {
+                println!(
+                    "androiddemo: transaction {} {:?} {:?} id={} token={} kind={:?}",
+                    t.product_id, t.state, t.store, t.id, t.token, t.kind
+                );
+                // Nothing to grant in a demo: finish it (consumes the gems,
+                // acknowledges the rest).
+                if t.is_paid() {
+                    stipple::platform::store().finish(t);
+                }
             });
+        // The store (Google Play, if the APK carries the Play Billing
+        // Library: build-apk.sh with STIPPLE_BILLING=1): what it says about
+        // two products. The app isn't in the Play Console, so a device with
+        // Google Play answers with no products, or with why it can't; if it
+        // does know the gems, the demo buys them.
+        let handle = app.handle();
+        app.handle().store().products(
+            vec![
+                ProductId::consumable("stipple_demo_gems"),
+                ProductId::subscription("stipple_demo_vip"),
+            ],
+            move |_: &mut State, r| match r {
+                Ok(products) => {
+                    println!("androiddemo: store products {}", products.len());
+                    for p in &products {
+                        println!(
+                            "androiddemo: product {} {:?} {:?} {} {} {} {:?}",
+                            p.id, p.kind, p.title, p.price, p.price_micros, p.currency, p.period
+                        );
+                    }
+                    if products.iter().any(|p| p.id == "stipple_demo_gems") {
+                        handle
+                            .store()
+                            .purchase("stipple_demo_gems", |_: &mut State, r| {
+                                println!("androiddemo: purchase {r:?}");
+                            });
+                    }
+                }
+                Err(e) => println!("androiddemo: store error {e:?}"),
+            },
+        );
         // The screen stays on while the demo shows (CI checks the window's
         // FLAG_KEEP_SCREEN_ON).
         app.handle().set_keep_awake(true);

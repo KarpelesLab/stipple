@@ -124,6 +124,8 @@ pub(crate) mod shell;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub mod shm;
+/// In-app purchases: StoreKit, Google Play Billing, a mock.
+pub(crate) mod store;
 /// The text store behind the Windows Text Services Framework bridge, without
 /// the COM (unit-tested everywhere).
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -170,6 +172,10 @@ pub use shell::{
     Haptic, Notification, NotificationTime, ScheduledNotification, Share, ShareFile, ShareOutcome,
     cancel_all_notifications, cancel_notification, haptic, notify, open_path, open_url,
     pending_notifications, schedule_notification, share, tray_shown,
+};
+pub use store::{
+    MockOutcome, MockStore, Product, ProductId, ProductKind, PurchaseResult, Store, StoreError,
+    StoreKind, Transaction, TransactionState, store,
 };
 #[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
 pub(crate) use window::GpuLayer;

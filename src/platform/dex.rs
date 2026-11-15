@@ -698,9 +698,31 @@ pub(crate) const RECEIVER: Class = Class {
     load_library: None,
 };
 
+/// A `java.lang.reflect.InvocationHandler` whose `invoke` is native: behind
+/// a `java.lang.reflect.Proxy`, it implements any interface, which is how the
+/// backend listens to libraries it doesn't compile against (the Play Billing
+/// Library's listeners: their interfaces live in the app's class loader, if
+/// the APK has them at all).
+pub(crate) const INVOKE: Class = Class {
+    name: "Lorg/stipple/android/Invoke;",
+    superclass: "Ljava/lang/Object;",
+    interfaces: &["Ljava/lang/reflect/InvocationHandler;"],
+    ctor: &[],
+    natives: &[native(
+        "invoke",
+        &[
+            "Ljava/lang/Object;",
+            "Ljava/lang/reflect/Method;",
+            "[Ljava/lang/Object;",
+        ],
+        "Ljava/lang/Object;",
+    )],
+    load_library: None,
+};
+
 /// Every class the Android backend defines, in the order it loads them.
-pub(crate) const ANDROID_CLASSES: [Class; 7] = [
-    HOST_VIEW, INPUT, NODES, CALLBACKS, RESULTS, LIFECYCLE, RECEIVER,
+pub(crate) const ANDROID_CLASSES: [Class; 8] = [
+    HOST_VIEW, INPUT, NODES, CALLBACKS, RESULTS, LIFECYCLE, RECEIVER, INVOKE,
 ];
 
 /// The broadcast receiver an app's manifest declares (with the dex from

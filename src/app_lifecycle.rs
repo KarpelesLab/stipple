@@ -37,6 +37,7 @@ type BackProgressFn<S> = Box<dyn FnMut(&mut S, BackGesture)>;
 type SaveFn<S> = Box<dyn FnMut(&S) -> Vec<u8>>;
 type RestoreFn<S> = Box<dyn FnMut(&mut S, &[u8])>;
 type TappedFn<S> = Box<dyn FnMut(&mut S, &str)>;
+type TransactionFn<S> = Box<dyn FnMut(&mut S, &crate::platform::Transaction)>;
 
 /// The app's lifecycle hooks.
 pub(crate) struct Hooks<S> {
@@ -52,6 +53,7 @@ pub(crate) struct Hooks<S> {
     save: Option<SaveFn<S>>,
     restore: Option<RestoreFn<S>>,
     tapped: Option<TappedFn<S>>,
+    transaction: Option<TransactionFn<S>>,
     /// Whether the app is in the background (between
     /// [`Lifecycle::Background`] and [`Lifecycle::Foreground`]).
     pub(crate) background: bool,
@@ -71,6 +73,7 @@ impl<S> Default for Hooks<S> {
             save: None,
             restore: None,
             tapped: None,
+            transaction: None,
             background: false,
         }
     }
@@ -220,6 +223,68 @@ impl<S: 'static> App<S> {
             pane.dirty = true;
         }
         true
+    }
+
+    /// Hear every purchase from [`platform::store`](crate::platform::store):
+    /// bought, restored, pending, including the ones left unfinished by an
+    /// earlier run (the store hands them back at launch) and the ones
+    /// approved while the app wasn't running. Grant what a
+    /// [paid](crate::platform::Transaction::is_paid) transaction bought,
+    /// save that, then [`finish`](crate::platform::Store::finish) it. The hook
+    /// may change the state; the view is rebuilt.
+    ///
+    /// Setting the hook makes the app listen for transactions from launch.
+    /// See `docs/purchases.md`.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// use stipple::platform::{TransactionState, store};
+    /// struct State { gems: u32, no_ads: bool }
+    /// # fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+    /// App::new(State { gems: 0, no_ads: false }, view)
+    ///     .on_transaction(|s, t| {
+    ///         if !t.is_paid() {
+    ///             return; // pending: wait
+    ///         }
+    ///         match t.product_id.as_str() {
+    ///             "gems_100" => s.gems += 100 * t.quantity,
+    ///             "no_ads" => s.no_ads = true,
+    ///             _ => return,
+    ///         }
+    ///         // (save the state first, so a crash can't lose the grant)
+    ///         store().finish(t);
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn on_transaction(
+        mut self,
+        hook: impl FnMut(&mut S, &crate::platform::Transaction) + 'static,
+    ) -> Self {
+        self.lifecycle.transaction = Some(Box::new(hook));
+        self
+    }
+
+    /// Run the transaction hook for `transaction`. Returns whether it ran.
+    pub(crate) fn transaction(&mut self, transaction: &crate::platform::Transaction) -> bool {
+        let Some(hook) = self.lifecycle.transaction.as_mut() else {
+            eprintln!(
+                "stipple: a transaction of {:?} arrived, but the app has no on_transaction hook",
+                transaction.product_id
+            );
+            return false;
+        };
+        hook(&mut self.state, transaction);
+        for pane in &mut self.panes {
+            pane.dirty = true;
+        }
+        true
+    }
+
+    /// Start listening for transactions, if the app hears them.
+    pub(crate) fn start_store(&self) {
+        if self.lifecycle.transaction.is_some() {
+            crate::platform::store().start();
+        }
     }
 
     /// The app went to the background, came back or is short of memory:

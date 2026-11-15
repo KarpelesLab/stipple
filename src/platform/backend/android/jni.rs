@@ -77,6 +77,7 @@ const GET_STATIC_FIELD_ID: usize = 144;
 const GET_STATIC_INT_FIELD: usize = 150;
 const GET_ARRAY_LENGTH: usize = 171;
 const NEW_OBJECT_ARRAY: usize = 172;
+const GET_OBJECT_ARRAY_ELEMENT: usize = 173;
 const SET_OBJECT_ARRAY_ELEMENT: usize = 174;
 const GET_INT_ARRAY_REGION: usize = 203;
 const REGISTER_NATIVES: usize = 215;
@@ -1213,6 +1214,57 @@ impl Jni {
                 std::mem::transmute(self.f(CALL_STATIC_BOOLEAN_METHOD_A));
             let r = f(self.0, class, m, args.as_ptr());
             (!self.clear()).then_some(r != 0)
+        }
+    }
+
+    /// Call an object-returning static method of `class` (a class object,
+    /// for classes `find_class` can't see: those of the app's class loader).
+    pub(super) fn call_static_object_on(
+        &self,
+        class: JObject,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<JObject> {
+        let m = self.static_method(class, name, sig)?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> JObject =
+                std::mem::transmute(self.f(CALL_STATIC_OBJECT_METHOD_A));
+            self.ok(f(self.0, class, m, args.as_ptr()))
+        }
+    }
+
+    /// An array of `class` (a class object) holding `items`.
+    pub(super) fn object_array(&self, class: JObject, items: &[JObject]) -> Option<JObject> {
+        unsafe {
+            let new: unsafe extern "C" fn(Env, i32, JObject, JObject) -> JObject =
+                std::mem::transmute(self.f(NEW_OBJECT_ARRAY));
+            let array = self.ok(new(self.0, items.len() as i32, class, std::ptr::null_mut()))?;
+            let set: unsafe extern "C" fn(Env, JObject, i32, JObject) =
+                std::mem::transmute(self.f(SET_OBJECT_ARRAY_ELEMENT));
+            for (i, item) in items.iter().enumerate() {
+                set(self.0, array, i as i32, *item);
+            }
+            (!self.clear()).then_some(array)
+        }
+    }
+
+    /// The elements of an `Object[]` (none for `null`).
+    pub(super) fn object_vec(&self, array: JObject) -> Vec<JObject> {
+        if array.is_null() {
+            return Vec::new();
+        }
+        unsafe {
+            let len: unsafe extern "C" fn(Env, JObject) -> i32 =
+                std::mem::transmute(self.f(GET_ARRAY_LENGTH));
+            let get: unsafe extern "C" fn(Env, JObject, i32) -> JObject =
+                std::mem::transmute(self.f(GET_OBJECT_ARRAY_ELEMENT));
+            let n = len(self.0, array).max(0);
+            let out = (0..n).map(|i| get(self.0, array, i)).collect();
+            if self.clear() {
+                return Vec::new();
+            }
+            out
         }
     }
 }

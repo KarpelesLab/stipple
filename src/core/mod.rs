@@ -69,7 +69,7 @@ pub use element::{Align, BoxStyle, Element};
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use handle::runtime;
 pub(crate) use handle::{AlertInput, AlertView};
-pub use handle::{AppHandle, TimerId};
+pub use handle::{AppHandle, StoreHandle, TimerId};
 pub(crate) use ime::{focused_caret, ime_state, input_hints, paint_preedit, secure_focused};
 pub use interact::{ElementKey, Interaction};
 pub use keys::{FocusGroup, Handled, RawKeyId};

@@ -1505,6 +1505,14 @@ Most input only works on X11 today.
   non-blocking), `getUserMedia` on the web (build-checked). The preview is
   converted and drawn through the renderer; zero-copy is 6g. Windows (Media
   Foundation) and Linux (V4L2 / PipeWire) are still to do._
+- ✅ In-app purchases (`platform::store`, `App::on_transaction`, #56): _StoreKit's
+  original API through the Objective-C runtime (StoreKit 2 is Swift-only;
+  build-checked), the Play Billing Library over JNI with listener proxies over
+  a native `InvocationHandler` (no Java; the library must be in the APK:
+  Gradle, or `tools/android/billing.py`); a mock store (`Store::mock`,
+  `STIPPLE_STORE=mock`) everywhere, `Unavailable` on desktops and the web.
+  CI runs the Android driver against a stand-in for the library; no real
+  purchase has been made (that needs store listings and signed-in testers)._
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
   optional (secure) text field, answered asynchronously as a state update.
