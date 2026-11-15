@@ -19,6 +19,8 @@ that are a game's own:
 - **Game UI** ([below](#game-ui)): a game theme, menus driven by the
   keyboard and gamepads, settings rows (volume, rebinding, display), a HUD
   and dialogue boxes.
+- **Saving** ([below](#saving)): settings and save slots, written
+  atomically with a backup.
 
 Pointer lock is in [pointer-events.md](pointer-events.md#pointer-lock),
 gamepads in [gamepads.md](gamepads.md) and sound in [audio.md](audio.md). See
@@ -619,7 +621,7 @@ Switch screens with a `page_stack` on a `screen` field, and go back in
 | `toggle_row(cx, theme, label, on, on_toggle)` | A switch. |
 | `choice_row(cx, theme, label, options, selected, on_change)` | `‹ 2× ›`: Left, Right and Enter cycle through the options, and the arrows can be tapped. A pixel scale, a difficulty, a language. |
 | `fullscreen_row(cx, theme, label)` | A switch showing whether the window is fullscreen, switching it with `WindowRequest::Fullscreen`. |
-| `binding_row(cx, theme, label, bindings, &state, on_activate)` | An action's bindings as key caps (`binding_name`: `W`, `Space`, `←`, `L-Shift`, `Left click`), a ⚠ flag naming the actions it shares one with, and "Press a key…" while it waits. |
+| `binding_row(cx, theme, label, bindings, &state, on_activate)` | An action's bindings as key caps (`binding_name`: `W`, `Space`, `←`, `L-Shift`, `Left click`, `Pad A`, `Pad LB`, `L-Stick ←`), a ⚠ flag naming the actions it shares one with, and "Press a key…" while it waits. |
 
 There's no vsync row: frames always follow the display's refresh (see
 [the loop](#the-loop)).
@@ -704,3 +706,72 @@ The geometry of spatial navigation, keys and a gamepad moving through a
 menu (the stick's thresholds, a held direction's repeat), the HUD letting
 presses through, the capture's flow, the typewriter's timing and the bar's
 ghost at fixed frame times are tested in `src/game/ui/tests.rs`.
+
+## Saving
+
+`stipple::game::save` keeps a game's settings and saved games, written so
+that a crash, a full disk or a pulled plug never leaves the player without
+a save.
+
+```rust,no_run
+use stipple::game::save::{KeyValues, SaveSlots, SaveStore, SlotState};
+
+// The app's data directory (platform::dirs().data, named after the id
+// given to App::app_info); on the web, localStorage.
+let store = SaveStore::app_data()?; // or SaveStore::new(dir), SaveStore::memory()
+
+// Settings: `key = value` text.
+let mut settings = KeyValues::new();
+settings.set("music", 0.6);
+settings.set("fullscreen", true);
+store.save_text("settings", &settings)?;
+let settings = store.load_text("settings")?.unwrap_or_default();
+let music: f32 = settings.get_or("music", 0.8);
+
+// Bytes, in whatever form the game likes.
+store.save("controls", b"Jump = Key:Space, Pad:South\n")?;
+let controls = store.load("controls")?.map(|l| l.bytes);
+
+// Numbered slots, with when each was saved.
+let slots = SaveSlots::new(store.clone(), "slot", 3);
+slots.save(0, b"level=4\n")?;
+for slot in slots.list() {
+    if let SlotState::Saved(info) = slot.state {
+        println!("slot {}: {} bytes, saved {:?}", slot.index, info.size, info.modified);
+    }
+}
+let resume = slots.latest(); // for "Continue"
+# Ok::<(), std::io::Error>(())
+```
+
+**How a save is written.** `save(name, bytes)` writes `name.tmp` in the same
+directory, flushes it to the disk (`fsync`), moves the current `name` to
+`name.bak` (if it is good), renames `name.tmp` to `name`, and flushes the
+directory. Every file ends with a footer line (`#stipple-save 1`, the
+contents' CRC-32 and length, and the time saved), so `load` notices a file
+that is cut short or damaged and falls back to `name.bak`
+(`Loaded::from_backup`); a damaged file never replaces a good backup. If
+the process stops anywhere along the way, `load` reads the old save or the
+new one, never a mix (the tests crash a save at each step). Names are plain
+file names (letters, digits, `-`, `_`, `.`); `names()`, `exists()` and
+`delete()` (the file, its backup and any leftover temporary) round it out.
+A file edited by hand fails its checksum and is taken as damaged.
+
+**`KeyValues`** is a small ordered `key = value` list: `set(key, value)`
+takes anything `Display`, `get_or(key, default)` parses into the default's
+type, `#` lines are comments, line breaks in values are escaped.
+`Actions::to_text` writes the same shape, so a game's controls can be
+saved as their own file (`save`) and read back with `load_text` over the
+defaults.
+
+**Where.** `SaveStore::app_data()` uses `platform::dirs().data` (see
+[os-integration.md](os-integration.md)): Application Support on macOS,
+the app's container on iOS, `getFilesDir` on Android, `%APPDATA%` on
+Windows, `$XDG_DATA_HOME` on Linux. On the web it is the page's
+`localStorage` under the app's id (through `web/stipple.js`, base64),
+which outlives the tab, unlike `App::save_state`'s `sessionStorage`;
+browsers allow a few megabytes. `SaveStore::new(dir)` takes any directory,
+`SaveStore::memory()` keeps nothing on disk (tests).
+
+The `gamedemo` example keeps its settings, controls and high score this
+way.

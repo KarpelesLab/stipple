@@ -532,6 +532,31 @@ fn bindings_have_short_names() {
         binding_name(&Binding::MouseButton(PointerButton::Left)),
         "Left click"
     );
+    use crate::game::AxisDirection;
+    use crate::platform::gamepad::{GamepadAxis, GamepadButton};
+    assert_eq!(
+        binding_name(&Binding::GamepadButton(GamepadButton::South)),
+        "Pad A"
+    );
+    assert_eq!(
+        binding_name(&Binding::GamepadButton(GamepadButton::DPadLeft)),
+        "Pad \u{2190}"
+    );
+    assert_eq!(
+        binding_name(&Binding::axis(GamepadAxis::LeftX, AxisDirection::Negative)),
+        "L-Stick \u{2190}"
+    );
+    assert_eq!(
+        binding_name(&Binding::axis(GamepadAxis::RightY, AxisDirection::Both)),
+        "R-Stick \u{2195}"
+    );
+    assert_eq!(
+        binding_name(&Binding::axis(
+            GamepadAxis::LeftTrigger,
+            AxisDirection::Positive
+        )),
+        "Pad LT"
+    );
 }
 
 // --- Typewriter text ---

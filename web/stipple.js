@@ -53,6 +53,15 @@ const SHIFT = 1, CTRL = 2, ALT = 4, META = 8;
 const modules = new Map();
 let instances = 0;
 
+// Bytes as base64 (Web Storage keeps strings).
+function toBase64(bytes) {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + 0x8000, bytes.length)));
+  }
+  return btoa(bin);
+}
+
 function compile(url) {
   let module = modules.get(url);
   if (!module) {
@@ -157,6 +166,7 @@ export async function start(canvas, wasmUrl, options = {}) {
   let framePending = false;
   let pendingCopy = null;
   let pendingHtml = null;
+  let storageOut = new Uint8Array(0); // see storage_get
 
   const str = (ptr, len) => dec.decode(new Uint8Array(e.memory.buffer, ptr, len));
   // Copy bytes into memory the module allocates; the export that receives
@@ -442,14 +452,42 @@ export async function start(canvas, wasmUrl, options = {}) {
         if (!stateKey) return;
         try {
           if (len === 0) return sessionStorage.removeItem(stateKey);
-          const bytes = new Uint8Array(e.memory.buffer, ptr, len);
-          let bin = "";
-          for (let i = 0; i < len; i += 0x8000) {
-            bin += String.fromCharCode(...bytes.subarray(i, Math.min(i + 0x8000, len)));
-          }
-          sessionStorage.setItem(stateKey, btoa(bin));
+          sessionStorage.setItem(stateKey, toBase64(new Uint8Array(e.memory.buffer, ptr, len)));
         } catch (err) { console.warn("stipple: the state couldn't be saved", err); }
       },
+      // stipple::game::save on the web: localStorage, values kept base64.
+      // A read leaves its bytes in `storageOut` for storage_read to copy
+      // into a buffer the module allocated for them.
+      date_now: () => Date.now(),
+      storage_set(kp, kl, vp, vl) {
+        try {
+          localStorage.setItem(str(kp, kl), toBase64(new Uint8Array(e.memory.buffer, vp, vl)));
+          return 1;
+        } catch (_) { return 0; }
+      },
+      storage_get(kp, kl) {
+        let value = null;
+        try { value = localStorage.getItem(str(kp, kl)); } catch (_) {}
+        if (value === null) return -1;
+        try { storageOut = Uint8Array.from(atob(value), (c) => c.charCodeAt(0)); } catch (_) { return -1; }
+        return storageOut.length;
+      },
+      storage_keys(pp, pl) {
+        const prefix = str(pp, pl), keys = [];
+        try {
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k !== null && k.startsWith(prefix)) keys.push(k);
+          }
+        } catch (_) {}
+        storageOut = new TextEncoder().encode(keys.join("\n"));
+        return storageOut.length;
+      },
+      storage_read(ptr) {
+        new Uint8Array(e.memory.buffer, ptr, storageOut.length).set(storageOut);
+        storageOut = new Uint8Array(0);
+      },
+      storage_remove(kp, kl) { try { localStorage.removeItem(str(kp, kl)); } catch (_) {} },
       gamepad_rumble(index, low, high, ms) {
         const pad = navigator.getGamepads?.()[index];
         const act = pad?.vibrationActuator;

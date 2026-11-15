@@ -14,6 +14,7 @@ mod fixed_step;
 mod game_loop;
 mod input;
 mod pixel;
+pub mod save;
 mod sprite;
 mod tilemap;
 mod touch_controls;

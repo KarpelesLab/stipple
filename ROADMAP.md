@@ -2224,8 +2224,15 @@ game needs on top:
   times. Not covered: clicks on HUD buttons still reach `InputState`.*
 
 #### 9f — Saving
-- ⬜ Settings and save slots in the app's data directory (#49), written
+- ✅ Settings and save slots in the app's data directory (#49), written
   atomically.
+  *`game::save`: `SaveStore` (`app_data()` over `platform::dirs()`, any
+  directory, memory, or `localStorage` on the web through `stipple.js`)
+  writes a temp file, fsyncs it, keeps the last good file as `.bak` and
+  renames; a CRC-32 footer catches damage and `load` falls back to the
+  `.bak`. `KeyValues` (`key = value` text), `SaveSlots` (listed with the
+  time saved, `latest`). Unit-tested with a crash simulated at each step.
+  See [docs/games.md](docs/games.md#saving).*
 
 - **Exit criteria:** `examples/gamedemo`, a small original game, runs on the
   desktops, the web and the phones: a title menu, a settings screen (volume,

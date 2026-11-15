@@ -31,6 +31,7 @@ pub use menu::{
 pub use nav::{REPEAT_DELAY, REPEAT_EVERY, STICK_PRESS, STICK_RELEASE};
 pub use settings::{
     BindingRowState, CONTROL_WIDTH, Capture, RebindCapture, binding_name, binding_row, choice_row,
-    conflicts, fullscreen_row, game_slider, key_name, setting_row, toggle_row, volume_row,
+    conflicts, fullscreen_row, game_slider, key_name, pad_button_name, setting_row, toggle_row,
+    volume_row,
 };
 pub use theme::GameStyle;

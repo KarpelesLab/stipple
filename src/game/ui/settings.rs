@@ -6,8 +6,9 @@
 use std::time::Duration;
 
 use crate::core::{Align, AnimProp, Axis, Cx, Element, KeyInput, Role, Transition};
-use crate::game::{Actions, Binding, InputState};
+use crate::game::{Actions, AxisDirection, Binding, InputState};
 use crate::geometry::Insets;
+use crate::platform::gamepad::{GamepadAxis, GamepadButton};
 use crate::platform::{PhysicalKey, PointerButton, WindowRequest};
 use crate::render::Color;
 use crate::style::Theme;
@@ -238,7 +239,11 @@ pub fn binding_name(binding: &Binding) -> String {
             PointerButton::Other(n) => format!("Mouse {n}"),
         },
         Binding::KeyAxis { neg, pos } => format!("{} / {}", key_name(*neg), key_name(*pos)),
-        // Gamepad bindings, and whatever else joins `Binding`.
+        Binding::GamepadButton(b) => pad_button_name(*b).into(),
+        Binding::GamepadAxis {
+            axis, direction, ..
+        } => pad_axis_name(*axis, *direction),
+        // Whatever else joins `Binding`.
         #[allow(unreachable_patterns)]
         other => {
             let text = other.to_string();
@@ -248,6 +253,54 @@ pub fn binding_name(binding: &Binding) -> String {
             }
         }
     }
+}
+
+/// A pad button's short name, Xbox style (the layout most pads label):
+/// `Pad A`, `Pad LB`, `Pad Start`, `Pad \u{2191}` for the d-pad.
+pub fn pad_button_name(button: GamepadButton) -> &'static str {
+    use GamepadButton as B;
+    match button {
+        B::South => "Pad A",
+        B::East => "Pad B",
+        B::West => "Pad X",
+        B::North => "Pad Y",
+        B::LeftShoulder => "Pad LB",
+        B::RightShoulder => "Pad RB",
+        B::LeftTrigger => "Pad LT",
+        B::RightTrigger => "Pad RT",
+        B::Select => "Pad Select",
+        B::Start => "Pad Start",
+        B::Guide => "Pad Home",
+        B::LeftStick => "Pad L3",
+        B::RightStick => "Pad R3",
+        B::DPadUp => "Pad \u{2191}",
+        B::DPadDown => "Pad \u{2193}",
+        B::DPadLeft => "Pad \u{2190}",
+        B::DPadRight => "Pad \u{2192}",
+    }
+}
+
+/// A pad axis's short name: `L-Stick \u{2190}` for a half stick axis,
+/// `L-Stick \u{2194}` for a whole one, `Pad LT` for a trigger.
+fn pad_axis_name(axis: GamepadAxis, direction: AxisDirection) -> String {
+    use GamepadAxis as A;
+    let (stick, horizontal) = match axis {
+        A::LeftX => ("L-Stick", true),
+        A::LeftY => ("L-Stick", false),
+        A::RightX => ("R-Stick", true),
+        A::RightY => ("R-Stick", false),
+        A::LeftTrigger => return "Pad LT".into(),
+        A::RightTrigger => return "Pad RT".into(),
+    };
+    let arrow = match (direction, horizontal) {
+        (AxisDirection::Both, true) => '\u{2194}',
+        (AxisDirection::Both, false) => '\u{2195}',
+        (AxisDirection::Negative, true) => '\u{2190}',
+        (AxisDirection::Positive, true) => '\u{2192}',
+        (AxisDirection::Negative, false) => '\u{2191}',
+        (AxisDirection::Positive, false) => '\u{2193}',
+    };
+    format!("{stick} {arrow}")
 }
 
 /// A key's short name: the letter or digit for those keys, an arrow for

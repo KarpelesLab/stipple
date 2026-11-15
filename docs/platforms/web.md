@@ -249,6 +249,10 @@ at another moment. `webdemo` keeps its click count and checkbox this way;
 `index.html#restore` checks it in CI. See
 [window-lifecycle.md](../window-lifecycle.md#keeping-the-state-across-process-death).
 
+What should outlive the tab (settings, saved games) goes in `localStorage`
+through `stipple::game::save::SaveStore` (`SaveStore::app_data()` or
+`local_storage(prefix)`); see [games.md](../games.md#saving).
+
 ## How it fits together
 
 `App::run` on the web keeps the event handler and returns; from then on the
@@ -287,7 +291,10 @@ browsers only grant during a user gesture), `set_title`, `clipboard_write`,
 (the `Notification` API, for `platform::notify`), `log` (panics are printed to
 the console), `set_a11y` (the accessibility tree as JSON), `set_ime` (the caret
 rect, or none), `set_text_input` and `save_state` (the bytes to keep in
-`sessionStorage`; none removes them). See `src/platform/backend/web.rs`.
+`sessionStorage`; none removes them), and for `stipple::game::save`'s
+`SaveStore::local_storage`: `date_now`, `storage_set`, `storage_get`,
+`storage_keys`, `storage_read` and `storage_remove` (`localStorage`, values
+kept base64). See `src/platform/backend/web.rs`.
 
 `std::time::Instant::now` panics on `wasm32-unknown-unknown`, so Stipple's
 timers and frame clock use `stipple::platform::time::Instant`, which is std's
