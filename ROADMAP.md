@@ -545,7 +545,8 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 - ✅ **High-DPI** on Windows (per-monitor v2), macOS (`backingScaleFactor`), iOS
   (`UIScreen.scale`), X11 (`Xft.dpi`) and Wayland (output scale). X11 and Wayland
   run at 2x in CI; Windows and macOS await a real high-DPI display.
-- ✅ **iOS** runs full-screen in the safe area, with touch input.
+- ✅ **iOS** runs full-screen in the safe area, with touch input (or edge to
+  edge, with the safe area reported; it follows rotations).
 - ✅ **Title bars** match the content's light or dark on Windows and macOS.
 - ✅ **Text** centers capitals in the line, whatever the font's metrics claim.
 - ✅ **Published screenshots**: CI commits fresh, deterministic screenshots to
@@ -1445,8 +1446,9 @@ Most input only works on X11 today.
   and `examples/widgetsdemo`.
 - ✅ Bottom navigation bar (`navigation_bar`, #41): icon + label + badge per
   destination, Material 3's pill look or `UITabBar`'s proportions on native
-  iOS, `TabList`/`Tab` roles, a bottom inset for the safe area (#38 will feed
-  it), `navigation_rail` for wide windows, and `page_stack` keeping every
+  iOS, `TabList`/`Tab` roles, its background under the home indicator in an
+  edge-to-edge app (the window's safe area, #38), `navigation_rail` for wide
+  windows, and `page_stack` keeping every
   page alive off stage (`Element::offstage`).
 - ✅ Toasts on phones (#43): a snackbar placement (`ToastPlacement::Bottom`,
   automatic below 600 px; the newest alone, centered, up to 560 wide), a
@@ -1487,6 +1489,26 @@ Most input only works on X11 today.
   scrolls the cursor into view (`Cx::scroll_offset` / `Cx::scroll_requests`).
 
 #### 7f — Platform completeness
+- ✅ Edge to edge, orientation and keeping awake (#38, #58, #62):
+  *`App::edge_to_edge` (iOS: the view over the whole screen; Android:
+  `setDecorFitsSystemWindows(false)` or the layout flags, the cutout mode,
+  transparent bars with their icons from the frame's corners), `Cx::safe_area`
+  from `safeAreaInsets` and `WindowInsets` (systemBars and displayCutout, the
+  keyboard's taken off the content), the web's `env(safe-area-inset-*)`;
+  `navigation_bar` and `toasts` follow it. The iOS view controller relays the
+  view out on every layout change (`viewDidLayoutSubviews`,
+  `viewSafeAreaInsetsDidChange`), which a rotation never reached before;
+  `App::orientations` / `AppHandle::set_orientations` through
+  `supportedInterfaceOrientations` (with `requestGeometryUpdate` on iOS 16)
+  and `setRequestedOrientation`; `set_keep_awake` through the idle timer,
+  `FLAG_KEEP_SCREEN_ON`, the Screen Wake Lock, an IOKit assertion,
+  `SetThreadExecutionState` and the portal's or the screen saver's
+  `Inhibit`. Unit-tested (the insets' geometry, rebuilds on a safe-area
+  change, the bar and toasts); CI's iOS simulator turns `screendemo` sideways
+  and back and the Android emulator reads the safe area, the requested
+  orientation and the keep-screen-on flag (both non-blocking until they've
+  passed); the desktops' keep-awake is compile-checked only. No soft
+  keyboard inset in the safe area yet, nor a status-bar style the app sets.*
 - ✅ Android: high-DPI (the density over 160 dpi; CI's emulator runs at
   2.625x), and the native theme's system colors: night mode, followed live on
   configuration changes, and the Android 12 wallpaper accent, read from

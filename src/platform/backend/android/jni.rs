@@ -60,6 +60,7 @@ const GET_STATIC_METHOD_ID: usize = 113;
 const CALL_STATIC_OBJECT_METHOD_A: usize = 116;
 const SET_INT_FIELD: usize = 109;
 const CALL_STATIC_FLOAT_METHOD_A: usize = 137;
+const CALL_STATIC_INT_METHOD_A: usize = 131;
 const NEW_STRING: usize = 163;
 const GET_STRING_LENGTH: usize = 164;
 const GET_STRING_CHARS: usize = 165;
@@ -335,6 +336,23 @@ impl Jni {
         }
     }
 
+    pub(super) fn call_static_int(
+        &self,
+        class: &CStr,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<i32> {
+        let class = self.find_class(class)?;
+        let m = self.static_method(class, name, sig)?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> i32 =
+                std::mem::transmute(self.f(CALL_STATIC_INT_METHOD_A));
+            let r = f(self.0, class, m, args.as_ptr());
+            (!self.clear()).then_some(r)
+        }
+    }
+
     pub(super) fn call_static_float(
         &self,
         class: &CStr,
@@ -553,15 +571,16 @@ pub(super) unsafe fn animator_duration_scale(vm: *mut c_void, context: JObject) 
     }
 }
 
-/// Color the status and navigation bars `argb` (the app's background), with
-/// dark icons on a light one. Call on the main thread: these are `View` and
-/// `Window` methods.
+/// Color the status and navigation bars `argb` (the app's background, or
+/// transparent when the app draws under them), with dark icons on a light
+/// one (`light` for the status bar, then for the navigation bar). Call on
+/// the main thread: these are `View` and `Window` methods.
 pub(super) unsafe fn style_system_bars(
     vm: *mut c_void,
     activity: JObject,
     sdk: i32,
     argb: u32,
-    light: bool,
+    light: (bool, bool),
 ) -> bool {
     // WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS.
     const DRAWS_SYSTEM_BAR_BACKGROUNDS: i32 = 0x8000_0000_u32 as i32;
@@ -584,12 +603,15 @@ pub(super) unsafe fn style_system_bars(
             jni.call_void(window, c"setStatusBarColor", c"(I)V", &color)?;
             jni.call_void(window, c"setNavigationBarColor", c"(I)V", &color)?;
             let decor = jni.call_object(window, c"getDecorView", c"()Landroid/view/View;", &[])?;
-            let mut mask = LIGHT_STATUS_BAR;
-            if sdk >= 26 {
-                mask |= LIGHT_NAVIGATION_BAR;
+            let mut flags = jni.call_int(decor, c"getSystemUiVisibility", c"()I", &[])?;
+            for (on, bit, since) in [
+                (light.0, LIGHT_STATUS_BAR, 23),
+                (light.1, LIGHT_NAVIGATION_BAR, 26),
+            ] {
+                if sdk >= since {
+                    flags = if on { flags | bit } else { flags & !bit };
+                }
             }
-            let flags = jni.call_int(decor, c"getSystemUiVisibility", c"()I", &[])?;
-            let flags = if light { flags | mask } else { flags & !mask };
             jni.call_void(
                 decor,
                 c"setSystemUiVisibility",

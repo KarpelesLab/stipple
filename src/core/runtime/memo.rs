@@ -103,6 +103,7 @@ struct Reads {
     drops: Vec<(DropId, DropState)>,
     scrolls: Vec<(ScrollId, f64)>,
     window_info: Option<WindowInfo>,
+    safe_area: Option<crate::geometry::Insets>,
     /// Memoized subtrees and derived values inside it (kept with it).
     nested: Vec<u64>,
     values: Vec<u64>,
@@ -116,6 +117,9 @@ impl Reads {
         self.scrolls.extend_from_slice(&inner.scrolls);
         if inner.window_info.is_some() {
             self.window_info = inner.window_info;
+        }
+        if inner.safe_area.is_some() {
+            self.safe_area = inner.safe_area;
         }
         self.nested.extend_from_slice(&inner.nested);
         self.values.extend_from_slice(&inner.values);
@@ -218,6 +222,10 @@ impl<S> MemoFrame<S> {
 
     pub(super) fn read_window_info(&self, info: WindowInfo) {
         self.record(|r| r.window_info = Some(info));
+    }
+
+    pub(super) fn read_safe_area(&self, insets: crate::geometry::Insets) {
+        self.record(|r| r.safe_area = Some(insets));
     }
 }
 
@@ -431,7 +439,11 @@ impl<S> Cx<'_, S> {
             && entry
                 .reads
                 .window_info
-                .is_none_or(|info| info == self.window_info);
+                .is_none_or(|info| info == self.window_info)
+            && entry
+                .reads
+                .safe_area
+                .is_none_or(|insets| insets == self.window_info.safe_area);
         if !same {
             return None;
         }
@@ -502,6 +514,9 @@ impl<S> Cx<'_, S> {
         }
         if entry.reads.window_info.is_some() {
             self.window_info_read = true;
+        }
+        if entry.reads.safe_area.is_some() {
+            self.safe_area_read = true;
         }
         // What is kept inside it stays kept.
         self.memo.used.extend(entry.reads.nested.iter().copied());

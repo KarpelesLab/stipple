@@ -145,6 +145,7 @@ impl Geometry {
             work_area: self.work_area.map(|[x, y, w, h]| {
                 Rect::from_xywh(x as f64 / s, y as f64 / s, w as f64 / s, h as f64 / s)
             }),
+            safe_area: crate::geometry::Insets::ZERO,
         }
     }
 }

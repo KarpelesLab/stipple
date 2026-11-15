@@ -57,6 +57,11 @@ pub(crate) mod ios_edge_swipe;
 #[path = "ios/saved_state.rs"]
 mod ios_saved_state;
 
+// The Android backend's NDK-free parts, unit-tested on every host.
+#[cfg(all(test, not(target_os = "android")))]
+#[path = "android/insets.rs"]
+mod android_insets;
+
 /// The Android entry point: an app's `ANativeActivity_onCreate` hands the
 /// activity to [`android::start`].
 #[cfg(target_os = "android")]

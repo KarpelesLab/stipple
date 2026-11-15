@@ -484,6 +484,11 @@ pub(crate) const HOST_VIEW: Class = Class {
             "Landroid/view/accessibility/AccessibilityNodeProvider;",
         ),
         native("dispatchHoverEvent", &["Landroid/view/MotionEvent;"], "Z"),
+        native(
+            "onApplyWindowInsets",
+            &["Landroid/view/WindowInsets;"],
+            "Landroid/view/WindowInsets;",
+        ),
     ],
 };
 

@@ -59,9 +59,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app asking. A Korean family follows a CJK one without Hangul.
 - On the web, `stipple.js`'s `font` option takes a list of URLs: the first is
   the app's font, the rest its fallbacks (a CJK font, say).
+- Edge to edge on phones (#38): `App::edge_to_edge(true)` draws under the
+  status bar, the notch and the home indicator (iOS) or the system bars
+  (Android, which go transparent, their icons dark or light to suit what's
+  under them), and `cx.safe_area()` (also `WindowInfo::safe_area`) says how
+  far in to keep the controls, updated as the device turns; `safe_area(cx)`
+  is a column padded by it. `navigation_bar` runs its background under the
+  home indicator and `toasts` keep clear of it by themselves. On the web,
+  a page with `viewport-fit=cover` reports `env(safe-area-inset-*)`.
+- Orientation (#58): the iOS view follows a rotation (and iPad split view
+  or Stage Manager), with a new size and safe area inside the rotation's
+  animation; `WindowInfo::orientation()`; `App::orientations(..)` and
+  `AppHandle::set_orientations(..)` (`Orientations::PORTRAIT`,
+  `LANDSCAPE`, ...) restrict or lock it on iOS and Android.
+- Keeping the screen awake (#62): `AppHandle::set_keep_awake(true)` on iOS,
+  Android, the web (Screen Wake Lock), macOS, Windows and Linux.
+- `examples/screendemo`: edge to edge with the safe area outlined, the
+  orientation locked and the screen kept awake.
 
 ### Changed (breaking)
 
+- `NavigationBar::bottom_inset` is gone: the bar takes the window's safe
+  area by itself.
 - `scroll(cx)` and `scroll_horizontal(cx)` take no length: a scroll
   container fills the space its column (or, sideways, its row) leaves free,
   shrinks first when its siblings need the room (down to 100 px or its

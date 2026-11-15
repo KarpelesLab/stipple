@@ -347,6 +347,8 @@ struct Pane<S> {
     /// read it (so a change rebuilds it).
     info: crate::platform::WindowInfo,
     info_read: bool,
+    /// Whether its last build read the safe area.
+    safe_area_read: bool,
     /// The title the view gave the window last build (`Cx::set_window_title`),
     /// and the one last sent to the window from it.
     built_title: Option<String>,
@@ -516,6 +518,7 @@ impl<S: 'static> Pane<S> {
             native: None,
             info: Default::default(),
             info_read: false,
+            safe_area_read: false,
             built_title: None,
             view_title: None,
             builds: 0,
@@ -810,6 +813,37 @@ impl<S: 'static> App<S> {
     /// Open the window fullscreen.
     pub fn fullscreen(mut self, fullscreen: bool) -> Self {
         self.primary().attrs.fullscreen = fullscreen;
+        self
+    }
+
+    /// Draw edge to edge on a phone (`true`): under the status bar, the
+    /// notch or Dynamic Island, the home indicator and Android's navigation
+    /// bar, which go transparent, with their icons light or dark to suit
+    /// what the app draws under them. The view then keeps its controls clear
+    /// of them with [`Cx::safe_area`](crate::core::Cx::safe_area) (or
+    /// [`safe_area`](crate::widgets::safe_area) around them), while a
+    /// photo, a map or a camera's preview runs under the bars;
+    /// [`navigation_bar`](crate::widgets::navigation_bar) and
+    /// [`toasts`](crate::widgets::toasts) keep clear by themselves.
+    ///
+    /// `false`, the default: the app gets the safe area only, and the
+    /// theme's background fills around it (the safe area then reads zero).
+    /// Honored on iOS and Android; desktops and the web always give the app
+    /// the whole window. See `docs/layout.md`.
+    pub fn edge_to_edge(mut self, on: bool) -> Self {
+        self.primary().attrs.edge_to_edge = on;
+        self
+    }
+
+    /// Let a phone or tablet turn the app only these ways (all of them by
+    /// default, as far as the bundle's `Info.plist` or manifest allow):
+    /// `Orientations::PORTRAIT` for an app that only stands upright.
+    /// [`AppHandle::set_orientations`](crate::core::AppHandle::set_orientations)
+    /// changes it while the app runs. iOS's `supportedInterfaceOrientations`
+    /// (an iPad app that allows multitasking turns every way regardless) and
+    /// Android's `setRequestedOrientation`; desktops and the web ignore it.
+    pub fn orientations(mut self, set: crate::platform::Orientations) -> Self {
+        self.primary().attrs.orientations = Some(set);
         self
     }
 
@@ -1168,6 +1202,7 @@ impl<S: 'static> Pane<S> {
         cx.set_pointer_locked(self.pointer.locked);
         let mut element = (self.view)(state, &mut cx);
         self.info_read = cx.window_info_read();
+        self.safe_area_read = cx.safe_area_read();
         self.built_title = cx.take_window_title();
         self.builds += 1;
         // The menus Stipple draws: the menu bar above the view, and the open
@@ -2497,6 +2532,14 @@ impl<S: 'static> App<S> {
         self.render_frame().0
     }
 
+    /// Pretend the primary window reported `insets` as its safe area (as a
+    /// phone drawing edge to edge would), for tests.
+    #[cfg(test)]
+    pub(crate) fn set_safe_area(&mut self, insets: crate::geometry::Insets) {
+        self.panes[0].info.safe_area = insets;
+        self.panes[0].dirty = true;
+    }
+
     /// Whether the primary window's last frame asked for another: something on
     /// it animates (a spinner, a fading highlight). An idle app returns `false`
     /// and gets no frames.
@@ -3680,9 +3723,10 @@ impl<S: 'static> App<S> {
             let info = window.info();
             if info != self.panes[idx].info {
                 let pane = &mut self.panes[idx];
+                let insets_changed = info.safe_area != pane.info.safe_area;
                 pane.info = info;
                 self.handle.set_window_info(id, Some(info));
-                let mut redraw = pane.info_read;
+                let mut redraw = pane.info_read || (pane.safe_area_read && insets_changed);
                 if let Some(f) = self.on_window_change.as_mut() {
                     f(&mut self.state, id, &info);
                     for pane in &mut self.panes {
@@ -3832,6 +3876,7 @@ fn provisional_info(attrs: &WindowAttributes, scale: ScaleFactor) -> crate::plat
         minimized: false,
         fullscreen: attrs.fullscreen,
         work_area: None,
+        safe_area: crate::geometry::Insets::ZERO,
     }
 }
 
@@ -4254,6 +4299,7 @@ pub mod prelude {
     pub use crate::platform::{BackGesture, KeyCode, Lifecycle, Modifiers};
     pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
     pub use crate::platform::{KeyEvent, OptionAsMeta, PhysicalKey};
+    pub use crate::platform::{Orientation, Orientations};
     pub use crate::platform::{WindowAttributes, WindowId, WindowInfo};
     pub use crate::render::{
         Canvas, Color, Font, GlyphRun, ImageFit, Path, Pixmap, StrokeStyle, Svg, TextDirection,
@@ -4277,7 +4323,7 @@ pub mod prelude {
     };
     pub use crate::widgets::{
         NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail,
-        page_stack,
+        page_stack, safe_area,
     };
     pub use crate::widgets::{
         NumberInput, Select, SplitPane, ToastKind, ToastPlacement, Toasts, ToolButton,

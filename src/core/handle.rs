@@ -412,6 +412,27 @@ impl<S> AppHandle<S> {
         self.window(WindowRequest::PointerLock(locked));
     }
 
+    /// Keep the screen from dimming and locking while the app shows (`true`),
+    /// as a game the player watches, a recipe being cooked from or a
+    /// presentation want; `false` (the default) lets it sleep again. A phone
+    /// keeps it only while the app is in the foreground. iOS
+    /// (`idleTimerDisabled`), Android (`FLAG_KEEP_SCREEN_ON`), the web (the
+    /// Screen Wake Lock API, asked again whenever the page shows), macOS (a
+    /// power assertion), Windows (`SetThreadExecutionState`) and Linux (the
+    /// desktop portal's or the screen saver's `Inhibit`).
+    pub fn set_keep_awake(&self, on: bool) {
+        self.window(WindowRequest::KeepAwake(on));
+    }
+
+    /// Let a phone or tablet turn the app only these ways from now on (see
+    /// [`App::orientations`](crate::App::orientations)): lock a minigame to
+    /// landscape, let it turn freely again with `Orientations::ALL`. If the
+    /// device is turned a way that isn't allowed, the app turns to one that
+    /// is. A no-op on desktops and the web.
+    pub fn set_orientations(&self, set: crate::platform::Orientations) {
+        self.window(WindowRequest::Orientations(set));
+    }
+
     /// Sound the system beep, as a terminal's audible bell.
     pub fn beep(&self) {
         self.window(WindowRequest::Beep);

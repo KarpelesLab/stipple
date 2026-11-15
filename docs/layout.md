@@ -168,6 +168,52 @@ is set; otherwise it follows the parent:
   room there is. It never collapses to nothing for lack of a size, and never
   grows past its parent for a long list.
 
+## The safe area (phones)
+
+On a phone the system draws over parts of the screen: the status bar, a
+notch or Dynamic Island, the home indicator or Android's navigation bar,
+rounded corners. By default a Stipple app gets the rest, the safe area, and
+the theme's background fills around it, so nothing else needs doing.
+
+A camera's preview, a photo or a map should run under the bars instead,
+with only the controls kept clear of them. `App::edge_to_edge(true)` gives
+the app the whole screen (on iOS and Android; desktops and the web always
+give it the whole window), and `cx.safe_area()` says how far in from each
+edge the system's things reach, in logical pixels, as `Insets`. A view that
+reads it is built again when it changes: the phone turned, the bars shown or
+hidden, iPad split view. `safe_area(cx)` is a column padded by it:
+
+```rust,no_run
+use stipple::prelude::*;
+# struct State;
+fn view(_: &State, cx: &mut Cx<State>) -> Element {
+    let theme = *cx.theme();
+    Element::layers(vec![
+        // Under the bars: the whole screen.
+        Element::boxed(BoxStyle::filled(theme.palette.primary)),
+        // The controls: inside the safe area.
+        safe_area(cx).children(vec![heading(cx, "Viewfinder")]),
+    ])
+    .grow(1.0)
+}
+# fn main() {
+App::new(State, view).edge_to_edge(true).run();
+# }
+```
+
+`navigation_bar` reads it too: its background runs on under the home
+indicator, its items above it; `toasts` stay clear of it. Edge to edge, the
+status bar's icons turn dark over a light top edge and light over a dark one
+(from the color the frame has in its top-left corner; Android's navigation
+bar from the bottom-left one). On Android the soft keyboard isn't in the
+safe area: the content ends above it, as without edge to edge. In a browser,
+a page whose viewport meta tag has `viewport-fit=cover` reports a phone's
+`env(safe-area-inset-*)`, as far as they reach over the canvas.
+
+It is also in `WindowInfo::safe_area`, with the window's orientation
+(`WindowInfo::orientation()`, landscape when wider than tall); see
+[windows-and-cursors.md](windows-and-cursors.md#phones-orientation-and-keeping-awake).
+
 ## Right-to-left layouts
 
 `Theme::layout_direction(LayoutDirection::Rtl)`, or

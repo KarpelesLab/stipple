@@ -84,6 +84,9 @@ fn function(class: &str, name: &str) -> Option<*const c_void> {
         ("HostView", "onCheckIsTextEditor") => ime::on_check_is_text_editor as *const c_void,
         ("HostView", "getAccessibilityNodeProvider") => a11y::node_provider as *const c_void,
         ("HostView", "dispatchHoverEvent") => a11y::dispatch_hover_event as *const c_void,
+        ("HostView", "onApplyWindowInsets") => {
+            super::screen::on_apply_window_insets as *const c_void
+        }
         ("Input", "commitText") => ime::commit_text as *const c_void,
         ("Input", "setComposingText") => ime::set_composing_text as *const c_void,
         ("Input", "finishComposingText") => ime::finish_composing_text as *const c_void,

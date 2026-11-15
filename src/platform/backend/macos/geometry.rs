@@ -77,6 +77,7 @@ pub(super) unsafe fn read_info(window: Id, view: Id) -> WindowInfo {
             minimized: msg_bool(window, sel("isMiniaturized")),
             fullscreen: msg_u64(window, sel("styleMask")) & STYLE_FULLSCREEN != 0,
             work_area,
+            safe_area: crate::geometry::Insets::ZERO,
         }
     }
 }

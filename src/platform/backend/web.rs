@@ -33,6 +33,12 @@
 //! | `save_state(ptr, len)` | keeps the app's saved state in the tab's `sessionStorage` (`len` 0 removes it) |
 //! | `gamepad_rumble(index, low, high, ms) -> u32` | `vibrationActuator.playEffect("dual-rumble")` on pad `index`; 0 if it has none |
 //! | `fetch_asset(id, ptr, len)` | `fetch` of the packaged file at that path under the page's assets URL; the bytes (or the failure) come back through `stipple_asset` |
+//! | `keep_awake(on)` | a Screen Wake Lock (`navigator.wakeLock.request("screen")`), asked again whenever the page shows, or released |
+//!
+//! The page also reports the canvas's safe area, the part of it under a
+//! phone's notch, status bar or home indicator (`env(safe-area-inset-*)`,
+//! nonzero only on a page with `viewport-fit=cover`), through
+//! `stipple_safe_area(top, right, bottom, left)`.
 //!
 //! Waking and timers: [`wake`](crate::platform::wake) and the frame clock call
 //! back into `rearm`, which asks the page for one timer at the earliest
@@ -43,7 +49,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
+use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::access::{A11yNode, aria_json};
 use crate::platform::event::Ime;
 use crate::platform::event::{
@@ -80,6 +86,7 @@ mod js {
         pub fn save_state(ptr: *const u8, len: usize);
         pub fn gamepad_rumble(index: u32, low: f64, high: f64, ms: f64) -> u32;
         pub fn fetch_asset(id: u32, ptr: *const u8, len: usize);
+        pub fn keep_awake(on: u32);
     }
 }
 
@@ -166,6 +173,8 @@ struct Host {
     /// Whether the page started the app ([`start`]), so its canvas sets the
     /// size.
     started: Cell<bool>,
+    /// The canvas's safe area, in CSS pixels.
+    safe_area: Cell<Insets>,
 }
 
 thread_local! {
@@ -184,6 +193,7 @@ thread_local! {
             text_input: Cell::new(false),
             primary: Cell::new(None),
             started: Cell::new(false),
+            safe_area: Cell::new(Insets::ZERO),
         }
     };
 }
@@ -310,6 +320,17 @@ impl Window for WebWindow {
         if kind == crate::platform::clipboard::ClipboardKind::Clipboard {
             crate::platform::clipboard::write(content);
         }
+    }
+
+    fn info(&self) -> crate::platform::WindowInfo {
+        let mut info =
+            crate::platform::WindowInfo::from_size(self.inner_size(), self.scale_factor());
+        info.safe_area = HOST.with(|h| h.safe_area.get());
+        info
+    }
+
+    fn set_keep_awake(&self, on: bool) {
+        unsafe { js::keep_awake(u32::from(on)) }
     }
 
     fn set_pointer_lock(&self, locked: bool) -> bool {
@@ -762,6 +783,16 @@ pub fn color_scheme(dark: bool, accent: i32) {
     let changed = crate::platform::native::set_web_look(SystemLook { dark, accent });
     if changed && HOST.with(|h| h.handler.borrow().is_some()) {
         deliver(Event::ThemeChanged);
+    }
+}
+
+/// The canvas's safe area changed (CSS pixels from each edge).
+#[doc(hidden)]
+pub fn safe_area(top: f64, right: f64, bottom: f64, left: f64) {
+    let insets = Insets::new(top.max(0.0), right.max(0.0), bottom.max(0.0), left.max(0.0));
+    let changed = HOST.with(|h| h.safe_area.replace(insets)) != insets;
+    if changed && HOST.with(|h| h.handler.borrow().is_some()) {
+        deliver(Event::WindowChanged);
     }
 }
 

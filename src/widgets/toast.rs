@@ -217,8 +217,9 @@ impl Toasts {
     }
 
     /// These toasts, raised `px` logical pixels above their usual place (the
-    /// theme's margin from the window's bottom edge): above a bottom
-    /// navigation bar, a tab bar, or the bottom safe area.
+    /// theme's margin from the window's bottom edge, or from the
+    /// [safe area](crate::core::Cx::safe_area)'s, which they keep clear of
+    /// by themselves): above a bottom navigation bar or a tab bar.
     pub fn bottom_offset(mut self, px: f64) -> Self {
         self.set_bottom_offset(px);
         self
@@ -442,8 +443,11 @@ pub fn toasts<S: 'static>(
         return;
     }
     let margin = theme.spacing.lg;
+    // Clear of the status bar, the notch and the home indicator, in an app
+    // drawn edge to edge.
+    let safe = cx.safe_area();
     let width = if bottom && window.width > 0.0 {
-        (window.width - 2.0 * margin).clamp(0.0, SNACKBAR_MAX)
+        (window.width - 2.0 * margin - safe.horizontal()).clamp(0.0, SNACKBAR_MAX)
     } else {
         WIDTH
     };
@@ -497,10 +501,10 @@ pub fn toasts<S: 'static>(
         .gap(theme.spacing.sm)
         .width(width);
     let insets = Insets {
-        top: margin,
-        right: margin,
-        bottom: margin + state.bottom_offset,
-        left: margin,
+        top: margin + safe.top,
+        right: margin + safe.right,
+        bottom: margin + state.bottom_offset + safe.bottom,
+        left: margin + safe.left,
     };
     cx.overlay(OverlaySpec {
         content,

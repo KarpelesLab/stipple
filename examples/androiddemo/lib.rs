@@ -48,7 +48,13 @@
 //!   notification, which asks for `POST_NOTIFICATIONS` first on Android 13;
 //! - `androiddemo: opened "name" (N bytes): "text"` / `open cancelled` once
 //!   *Open*'s document picker answers, and `androiddemo: saved true|false`
-//!   once *Save*'s has written `stipple-saved.txt` (or was cancelled).
+//!   once *Save*'s has written `stipple-saved.txt` (or was cancelled);
+//! - `androiddemo: safe area T R B L Portrait|Landscape` as the window's
+//!   safe area changes: the app draws edge to edge (`App::edge_to_edge`),
+//!   its background under the status and navigation bars and its content
+//!   inside the safe area. It also stands upright only
+//!   (`App::orientations`) and keeps the screen on
+//!   (`AppHandle::set_keep_awake`), which CI reads back from `dumpsys`.
 //!
 //! - `androiddemo: asset hello.txt bytes=N fnv1a=H text="..."` and
 //!   `androiddemo: assets list=... img=... svg=... streamed=... exists=...
@@ -92,6 +98,8 @@ mod app {
     static OFFSET: AtomicU64 = AtomicU64::new(0);
     /// The strip's scroll offset in the frame last built (`f64` bits).
     static STRIP_OFFSET: AtomicU64 = AtomicU64::new(0);
+    /// The safe area and orientation last logged.
+    static SAFE: Mutex<String> = Mutex::new(String::new());
 
     fn view(state: &State, cx: &mut Cx<State>) -> Element {
         FRAMES.fetch_add(1, Ordering::Relaxed);
@@ -197,10 +205,29 @@ mod app {
         let strip = Element::stack(Axis::Horizontal, vec![row(chips).gap(theme.spacing.sm)])
             .width(280.0)
             .scrollable(strip_id);
+        // Drawn edge to edge: the content keeps inside the safe area.
+        let safe = cx.safe_area();
+        let turned = cx.window_info().orientation();
+        let line = format!(
+            "{} {} {} {} {turned:?}",
+            safe.top, safe.right, safe.bottom, safe.left
+        );
+        let mut last = SAFE.lock().unwrap();
+        if *last != line {
+            println!("androiddemo: safe area {line}");
+            *last = line;
+        }
+        drop(last);
+        let pad = theme.spacing.lg;
         column(vec![top, tap, label(cx, greeting), strip, list])
             .gap(theme.spacing.lg)
             .align(Align::Center, Align::Center)
-            .padding(Insets::uniform(theme.spacing.lg))
+            .padding(Insets::new(
+                pad + safe.top,
+                pad + safe.right,
+                pad + safe.bottom,
+                pad + safe.left,
+            ))
             .grow(1.0)
     }
 
@@ -335,6 +362,9 @@ mod app {
         };
         let app = App::new(state, view)
             .theme(theme)
+            // Under the status and navigation bars, upright only.
+            .edge_to_edge(true)
+            .orientations(Orientations::PORTRAIT)
             // Back resets the count: there is something to go back from
             // only while it isn't 0.
             .back_enabled(|s: &State| s.taps > 0)
@@ -374,6 +404,9 @@ mod app {
                 }
             })
             .on_lifecycle(|_: &mut State, change| println!("androiddemo: lifecycle {change:?}"));
+        // The screen stays on while the demo shows (CI checks the window's
+        // FLAG_KEEP_SCREEN_ON).
+        app.handle().set_keep_awake(true);
         app.handle().every(Duration::from_secs(1), |s: &mut State| {
             s.ticks += 1;
             println!(

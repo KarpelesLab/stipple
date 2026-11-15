@@ -72,7 +72,24 @@ Xcode or `codesign` handles.
 The app fills the screen's safe area at `UIScreen.scale`, so it stays clear of
 the notch, the status bar and the home indicator. Around the safe area the
 window shows the theme's background. The size passed to `App::logical_size`
-doesn't apply: the screen decides.
+doesn't apply: the screen decides. With `App::edge_to_edge(true)` the app
+fills the whole screen instead and reads the safe area with
+`cx.safe_area()` (the root view's `safeAreaInsets`; see
+[layout.md](../layout.md#the-safe-area-phones)).
+
+The window's root view controller is Stipple's own (built at run time). UIKit
+lays its view out again whenever its bounds or safe area change (a rotation,
+iPad split view and Stage Manager, the status bar coming and going), and
+`viewDidLayoutSubviews` / `viewSafeAreaInsetsDidChange` then place the app's
+view and tell the app: a new size (`Event::Resized`, drawn at once, inside
+the rotation's animation) or, when only the safe area moved,
+`Event::WindowChanged`. Its `supportedInterfaceOrientations` answers
+`App::orientations` (UIKit's default until the app sets some; the
+`Info.plist`'s `UISupportedInterfaceOrientations` must allow them too), and
+its `preferredStatusBarStyle` has dark icons over a light top edge, light
+ones over a dark one. `AppHandle::set_keep_awake` sets the application's
+`idleTimerDisabled`. See
+[windows-and-cursors.md](../windows-and-cursors.md#phones-orientation-and-keeping-awake).
 
 ## Input
 

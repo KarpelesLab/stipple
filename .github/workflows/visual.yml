@@ -4350,6 +4350,46 @@ jobs:
           if grep "saved state: restoring" "$NEXT"; then exit 1; fi
           [ ! -e "$FILE" ]
 
+      # The screen (screendemo's self-test, on the iPhone again): drawn edge
+      # to edge, the app reads a notched iPhone's safe area; it locks itself
+      # sideways (setNeedsUpdateOfSupportedInterfaceOrientations and the
+      # scene's requestGeometryUpdate turn the simulator's interface) and
+      # checks the view followed, wider than tall with the notch's side in
+      # the safe area (viewDidLayoutSubviews), then upright again; then it
+      # keeps the screen awake (the idle timer off). The bundle allows every
+      # orientation.
+      - name: Edge to edge, rotation and keeping awake (screendemo self-test)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          [ -z "${IPAD:-}" ] || xcrun simctl shutdown "$IPAD" || true
+          xcrun simctl boot "$DEV" || true
+          xcrun simctl bootstatus "$DEV" -b || true
+          cargo build --release --example screendemo --target aarch64-apple-ios-sim
+          APP="$RUNNER_TEMP/screen/Stipple.app"
+          rm -rf "$RUNNER_TEMP/screen"
+          mkdir -p "$RUNNER_TEMP/screen"
+          cp -R Stipple.app "$APP"
+          cp target/aarch64-apple-ios-sim/release/examples/screendemo "$APP/window"
+          plutil -replace UISupportedInterfaceOrientations -json \
+            '["UIInterfaceOrientationPortrait","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]' \
+            "$APP/Info.plist"
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          xcrun simctl install "$DEV" "$APP"
+          SIMCTL_CHILD_SCREENDEMO_SELFTEST=1 xcrun simctl launch \
+            --stderr="$PWD/visual_output/screendemo-stderr.log" "$DEV" com.karpeleslab.stipple
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/screendemo.log"
+          for _ in $(seq 1 60); do
+            grep -qE "screendemo: selftest (passed|FAILED)" "$LOG" 2>/dev/null && break
+            sleep 1
+          done
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-screen.png || true
+          echo "=== screendemo.log ==="; cat "$LOG" || true
+          grep -qE "screendemo: sideways Landscape" "$LOG"
+          grep -q "screendemo: selftest passed" "$LOG"
+
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4
         if: always()

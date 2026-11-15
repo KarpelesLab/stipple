@@ -64,12 +64,16 @@ mod back;
 mod classes;
 /// The input method's `InputConnection` to the focused text field.
 mod ime;
+/// The geometry of the system bars' insets (Android-free, tested on hosts).
+mod insets;
 /// Hand-written JNI for the clipboard, key characters and the accent color.
 mod jni;
 /// Notifications through `NotificationManager`.
 mod notify;
 /// The Storage Access Framework's document picker.
 mod pick;
+/// The system bars' insets, edge to edge, the orientation.
+mod screen;
 
 pub(crate) use notify::notify;
 pub(crate) use pick::{create_document, open_document};
@@ -90,15 +94,7 @@ struct ANativeWindowBuffer {
     reserved: [u32; 6],
 }
 
-/// `ARect`, as `onContentRectChanged` reports it.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ARect {
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) right: i32,
-    pub(crate) bottom: i32,
-}
+pub(crate) use insets::ARect;
 
 const ALOOPER_PREPARE_ALLOW_NON_CALLBACKS: c_int = 1;
 const ALOOPER_EVENT_INPUT: c_int = 1;
@@ -106,6 +102,8 @@ const ALOOPER_POLL_CALLBACK: c_int = -2;
 const ALOOPER_POLL_ERROR: c_int = -4;
 /// AWINDOW_FLAG_FULLSCREEN: hide the status bar.
 const AWINDOW_FLAG_FULLSCREEN: u32 = 0x400;
+/// AWINDOW_FLAG_KEEP_SCREEN_ON.
+const AWINDOW_FLAG_KEEP_SCREEN_ON: u32 = 0x80;
 /// Looper idents for the command pipe and the input queue.
 const LOOPER_ID_COMMAND: c_int = 1;
 const LOOPER_ID_INPUT: c_int = 2;
@@ -360,6 +358,8 @@ enum Command {
     InputQueueCreated(usize),
     InputQueueDestroyed,
     ContentRect(ARect),
+    /// The system bars' and the keyboard's insets (see [`screen`]).
+    Insets(insets::WindowInsets),
     ConfigChanged,
     LowMemory,
     /// An event for the app from the main thread (an accessibility action,
@@ -415,8 +415,10 @@ struct Instance {
 /// Work the UI thread hands to the main thread.
 #[derive(Debug, Default)]
 struct MainRequests {
-    /// Color the system bars: the background as ARGB, and whether it's light.
-    bars: Option<(u32, bool)>,
+    /// Color the system bars: the background as ARGB (0, transparent, edge
+    /// to edge), and whether the status bar's and the navigation bar's are
+    /// light.
+    bars: Option<(u32, (bool, bool))>,
     /// Show (`true`) or hide the soft keyboard.
     soft_input: Option<bool>,
     /// Tell the input method the field changed.
@@ -1175,8 +1177,16 @@ struct View {
     window: Cell<*mut c_void>,
     /// The window's full size, in pixels.
     window_size: Cell<(i32, i32)>,
-    /// Where the app draws: the window less the system bars.
+    /// The content rectangle `NativeActivity` reports: the window less the
+    /// system bars (on Android 14 and before).
     content: Cell<Option<ARect>>,
+    /// The system bars' and the keyboard's insets, once read.
+    insets: Cell<insets::WindowInsets>,
+    /// The app draws under the system bars ([`WindowAttributes::edge_to_edge`]).
+    edge_to_edge: bool,
+    /// Edge to edge, whether the status bar and the navigation bar have
+    /// light content under them, as last told to the system.
+    bars_light: Cell<Option<(bool, bool)>>,
     scale: Cell<f64>,
     /// The color around the content rectangle and behind the system bars: the
     /// app's background, read from the corner of each frame.
@@ -1191,32 +1201,34 @@ struct View {
 }
 
 impl View {
-    /// The content rectangle, clipped to the window; the whole window until
-    /// the system reports one.
+    /// Where the app draws, in the window: clear of the system bars (unless
+    /// edge to edge) and of the keyboard (see [`screen::content_rect`]).
     fn content_rect(&self) -> ARect {
-        let (w, h) = self.window_size.get();
-        let full = ARect {
-            left: 0,
-            top: 0,
-            right: w,
-            bottom: h,
-        };
-        match self.content.get() {
-            Some(r) => {
-                let r = ARect {
-                    left: r.left.clamp(0, w),
-                    top: r.top.clamp(0, h),
-                    right: r.right.clamp(0, w),
-                    bottom: r.bottom.clamp(0, h),
-                };
-                if r.right > r.left && r.bottom > r.top {
-                    r
-                } else {
-                    full
-                }
-            }
-            None => full,
-        }
+        insets::content_rect(
+            self.window_size.get(),
+            self.content.get(),
+            self.insets.get(),
+            self.edge_to_edge,
+        )
+    }
+
+    /// The safe area in logical pixels: what of the system bars overlaps
+    /// the content.
+    fn safe_area(&self) -> crate::geometry::Insets {
+        let r = insets::safe_area(
+            self.window_size.get(),
+            self.content_rect(),
+            self.insets.get(),
+        );
+        let s = self.scale.get();
+        let l = |v: i32| f64::from(v) / s;
+        crate::geometry::Insets::new(l(r.top), l(r.right), l(r.bottom), l(r.left))
+    }
+
+    /// Ask the main thread to read the window's insets again.
+    fn request_insets(&self) {
+        let sdk = unsafe { (*self.instance.activity).sdk_version };
+        run_on_main(move |jni, activity| screen::report(jni, activity, sdk));
     }
 
     fn inner_size(&self) -> PhysicalSize {
@@ -1264,6 +1276,23 @@ impl View {
         let new_background = pixmap
             .pixel(0, 0)
             .is_some_and(|[r, g, b, _]| self.set_background([r, g, b, 255]));
+        if self.edge_to_edge {
+            // The bars are see-through: their icons go dark over light
+            // content, light over dark.
+            let light = |p: Option<[u8; 4]>| {
+                p.is_some_and(|[r, g, b, _]| {
+                    299 * u32::from(r) + 587 * u32::from(g) + 114 * u32::from(b) > 128_000
+                })
+            };
+            let size = pixmap.size();
+            let bars = (
+                light(pixmap.pixel(0, 0)),
+                light(pixmap.pixel(0, size.height.saturating_sub(1))),
+            );
+            if self.bars_light.replace(Some(bars)) != Some(bars) {
+                self.instance.request(|req| req.bars = Some((0, bars)));
+            }
+        }
         // The part of the window to redraw: the damage, moved to the content's
         // place, or everything.
         let mut dirty = (!damage.is_empty() && !new_background).then(|| {
@@ -1383,10 +1412,15 @@ impl View {
         if self.background.replace(rgba) == rgba {
             return false;
         }
+        if self.edge_to_edge {
+            // The bars are see-through (see `present`).
+            return true;
+        }
         let [r, g, b, _] = rgba.map(u32::from);
         let argb = 0xff00_0000 | (r << 16) | (g << 8) | b;
         let light = 299 * r + 587 * g + 114 * b > 128_000;
-        self.instance.request(|req| req.bars = Some((argb, light)));
+        self.instance
+            .request(|req| req.bars = Some((argb, (light, light))));
         true
     }
 }
@@ -1438,6 +1472,26 @@ impl Window for AndroidWindow {
     }
     fn set_fullscreen(&self, fullscreen: bool) {
         set_fullscreen(self.view.instance.activity, fullscreen);
+    }
+    fn info(&self) -> crate::platform::WindowInfo {
+        let mut info =
+            crate::platform::WindowInfo::from_size(self.inner_size(), self.scale_factor());
+        info.safe_area = self.view.safe_area();
+        info
+    }
+    fn set_keep_awake(&self, on: bool) {
+        // Posted to the main thread by the NDK; the flag holds while the
+        // window shows.
+        let (add, remove) = if on {
+            (AWINDOW_FLAG_KEEP_SCREEN_ON, 0)
+        } else {
+            (0, AWINDOW_FLAG_KEEP_SCREEN_ON)
+        };
+        unsafe { ANativeActivity_setWindowFlags(self.view.instance.activity, add, remove) };
+    }
+    fn set_orientations(&self, set: crate::platform::Orientations) {
+        let value = set.android_request();
+        run_on_main(move |jni, activity| screen::request_orientation(jni, activity, value));
     }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(AndroidSurface {
@@ -1530,11 +1584,13 @@ impl Loop<'_> {
                 self.view.update_size();
                 self.view.presented.set(false);
                 self.resized();
+                self.view.request_insets();
             }
             Command::WindowResized => {
                 if self.view.update_size() {
                     self.resized();
                 }
+                self.view.request_insets();
             }
             Command::RedrawNeeded => {
                 if !self.view.window.get().is_null() {
@@ -1554,6 +1610,26 @@ impl Loop<'_> {
                 if self.view.inner_size() != before {
                     self.resized();
                 } else {
+                    self.view.redraw.set(true);
+                }
+                self.view.request_insets();
+            }
+            Command::Insets(insets) => {
+                let before = self.view.inner_size();
+                if self.view.insets.replace(insets) != insets {
+                    let safe = self.view.safe_area();
+                    // CI looks for this line in logcat.
+                    log(&format!(
+                        "Stipple Android: safe area {} {} {} {} edge {}",
+                        safe.top, safe.right, safe.bottom, safe.left, self.view.edge_to_edge
+                    ));
+                    if self.view.inner_size() != before {
+                        self.resized();
+                    } else {
+                        // Moved without resizing (turned half a turn), or
+                        // only the safe area changed.
+                        self.deliver(Event::WindowChanged);
+                    }
                     self.view.redraw.set(true);
                 }
             }
@@ -1580,6 +1656,7 @@ impl Loop<'_> {
                     self.deliver(Event::ScaleFactorChanged(ScaleFactor::new(config.scale)));
                     self.resized();
                 }
+                self.view.request_insets();
                 if config.dark != old.dark {
                     // Delivered as `ThemeChanged` ahead of the wake this causes.
                     crate::platform::native::note_changed();
@@ -2111,6 +2188,9 @@ where
         window: Cell::new(std::ptr::null_mut()),
         window_size: Cell::new((1, 1)),
         content: Cell::new(None),
+        insets: Cell::new(insets::WindowInsets::default()),
+        edge_to_edge: attrs.edge_to_edge,
+        bars_light: Cell::new(None),
         scale: Cell::new(config.scale),
         background: Cell::new([0, 0, 0, 0]),
         redraw: Cell::new(false),
@@ -2138,6 +2218,18 @@ where
     instance.set_phase(Phase::Running);
     // A new activity has no back callback yet: give it the app's last word.
     instance.request(|r| r.back_callback = Some(crate::platform::back_enabled()));
+    let sdk = activity.sdk_version;
+    if attrs.edge_to_edge {
+        run_on_main(move |jni, activity| {
+            if screen::draw_edge_to_edge(jni, activity, sdk).is_none() {
+                log("stipple: can't draw edge to edge");
+            }
+            screen::report(jni, activity, sdk);
+        });
+    }
+    if let Some(set) = attrs.orientations {
+        lp.window.set_orientations(set);
+    }
 
     loop {
         if lp.run_commands() {

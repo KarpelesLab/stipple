@@ -337,6 +337,11 @@ path = "examples/todo/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "screendemo_web"
+path = "examples/screendemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "touchdemo_web"
 path = "examples/touchdemo/web.rs"
 crate-type = ["cdylib"]

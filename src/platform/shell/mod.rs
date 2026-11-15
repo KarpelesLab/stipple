@@ -20,7 +20,7 @@ use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
-mod linux;
+pub(crate) mod linux;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 pub(crate) mod sni;

@@ -254,8 +254,8 @@ kept clear by the bottom offset included.
 | `Bottom` | a snackbar: the newest toast only, centered, the window's width less the theme's `lg` margin each side, at most 560 wide; older ones wait behind it, their timers running |
 
 `bottom_offset` / `set_bottom_offset` raise either layout by that many
-logical pixels, above a bottom navigation bar or tab bar. There is no safe-area
-API yet (issue #38): add the bottom inset yourself.
+logical pixels, above a bottom navigation bar or tab bar. The window's
+[safe area](layout.md#the-safe-area-phones) is kept clear of by itself.
 
 `action` takes a closure on the state type the `toasts` view is built for
 (`Fn(&mut S) + Send + Sync`); it runs once, after the toast is dismissed, so it
@@ -356,10 +356,10 @@ column(vec![pages, bar]).grow(1.0)
   the selected icon and small label in the accent) under `Theme::native()`
   on iOS. `NavigationBar::new(items, selected, on_select).look(NavLook::Ios)`
   picks one; `.view(cx)` builds it.
-- `NavigationBar::bottom_inset(px)` extends the bar's background below its
-  items, under the home indicator. The window's safe-area insets aren't
-  reported yet ([#38](https://github.com/KarpelesLab/stipple/issues/38));
-  until then pass the value yourself (34 on a Face ID iPhone in portrait).
+- In an app drawn [edge to edge](layout.md#the-safe-area-phones), the bar's
+  background runs on under the home indicator (or Android's navigation
+  bar) and to the screen's sides, its items kept inside the window's safe
+  area.
 - Assistive technologies see a `TabList` of `Tab`s, the selected one
   selected, each named by its label and badge ("History, 3 new").
 - `navigation_rail` lays the same items down the side (Material 3's rail,

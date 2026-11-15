@@ -48,7 +48,8 @@ mod toolbar;
 pub use chips::{Chip, chip, choice_chips, filter_chips};
 pub use color_picker::{ColorPicker, color_button, color_picker};
 pub use navigation::{
-    NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail, page_stack,
+    NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail,
+    page_stack, safe_area,
 };
 pub use number::{NumberInput, number_input};
 pub use password::{PasswordField, password_field};

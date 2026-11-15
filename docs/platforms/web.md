@@ -167,6 +167,8 @@ once with a light color scheme.
 | Animation | `requestAnimationFrame` paces the frame clock, and stops when nothing animates |
 | Clipboard | see below |
 | File dialogs | see below |
+| Safe area | `env(safe-area-inset-*)`, measured on a hidden probe and taken as far as it reaches over the canvas, as `cx.safe_area()` (`Event::WindowChanged` when it changes). Zero unless the page's viewport meta tag has `viewport-fit=cover` and the phone has a notch or rounded corners. See [layout.md](../layout.md#the-safe-area-phones) |
+| Keeping the screen awake | `AppHandle::set_keep_awake` takes a Screen Wake Lock (`navigator.wakeLock`), asked again each time the page becomes visible (the browser lets it go when the page hides); nothing where the browser has no wake lock |
 
 ### Clipboard
 

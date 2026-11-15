@@ -461,6 +461,9 @@ pub struct Cx<'a, S> {
     window: crate::platform::WindowId,
     window_info: crate::platform::WindowInfo,
     window_info_read: bool,
+    /// Whether the view read the safe area (and only that, as far as the
+    /// window goes, unless `window_info_read`).
+    safe_area_read: bool,
     window_focused: bool,
     pointer_locked: bool,
     window_title: Option<String>,
@@ -518,6 +521,7 @@ impl<'a, S> Cx<'a, S> {
             window: crate::platform::WindowId::PRIMARY,
             window_info: Default::default(),
             window_info_read: false,
+            safe_area_read: false,
             window_focused: true,
             pointer_locked: false,
             window_title: None,
@@ -559,6 +563,25 @@ impl<'a, S> Cx<'a, S> {
         self.window_info_read = true;
         self.memo.read_window_info(self.window_info);
         self.window_info
+    }
+
+    /// How far in from each edge of the window the system draws over the
+    /// app (the status bar, a notch, the home indicator or navigation bar),
+    /// in logical pixels: what the view keeps its controls clear of when the
+    /// app draws [edge to edge](crate::App::edge_to_edge). Zero otherwise,
+    /// and on desktops. A view that reads it is built again when it changes
+    /// (the phone turned, say). [`safe_area`](crate::widgets::safe_area)
+    /// pads its children by it.
+    pub fn safe_area(&mut self) -> crate::geometry::Insets {
+        let insets = self.window_info.safe_area;
+        self.safe_area_read = true;
+        self.memo.read_safe_area(insets);
+        insets
+    }
+
+    /// Whether the view read [`safe_area`](Self::safe_area) this build.
+    pub(crate) fn safe_area_read(&self) -> bool {
+        self.safe_area_read
     }
 
     /// Whether the view read [`window_info`](Self::window_info) this build.

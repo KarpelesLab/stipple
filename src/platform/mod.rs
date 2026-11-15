@@ -33,6 +33,8 @@ mod assets;
 /// The AT-SPI bridge X11 and Wayland windows serve their trees through.
 #[cfg(target_os = "linux")]
 pub(crate) mod atspi;
+/// Keeping the screen awake on desktops.
+pub(crate) mod awake;
 /// Predictive back: whether the app would go back, and the gesture's progress.
 pub(crate) mod back;
 pub mod backend;
@@ -85,6 +87,8 @@ mod saved_state;
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub mod scm;
+/// Orientations: which way the screen is turned, and which ways it may turn.
+mod screen;
 /// Secure keyboard entry (macOS) while a password field has focus.
 mod secure;
 /// Opening URLs and files in the default app, notifications, and the plumbing
@@ -132,6 +136,7 @@ pub use pointer::{
     DoubleClick, double_click, pointer_modifiers, set_double_click, set_pointer_modifiers,
 };
 pub use saved_state::{save_state, take_restored_state};
+pub use screen::{Orientation, Orientations};
 pub use secure::{secure_input, set_secure_input};
 pub use shell::{Notification, notify, open_path, open_url, tray_shown};
 pub(crate) use window::Window;

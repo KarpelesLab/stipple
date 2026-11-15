@@ -143,6 +143,11 @@ macro_rules! web_app {
             }
 
             #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_safe_area(top: f64, right: f64, bottom: f64, left: f64) {
+                glue::safe_area(top, right, bottom, left);
+            }
+
+            #[unsafe(no_mangle)]
             pub extern "C" fn stipple_focus(focused: u32) {
                 glue::focus(focused != 0);
             }

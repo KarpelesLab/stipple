@@ -113,6 +113,18 @@ impl Window for FakeWindow {
             .borrow_mut()
             .push(format!("increments {} {step:?}", self.id));
     }
+    fn set_keep_awake(&self, on: bool) {
+        self.desk
+            .log
+            .borrow_mut()
+            .push(format!("awake {} {on}", self.id));
+    }
+    fn set_orientations(&self, set: crate::platform::Orientations) {
+        self.desk
+            .log
+            .borrow_mut()
+            .push(format!("orientations {} {set:?}", self.id));
+    }
 }
 
 /// Run the app's handler as a multi-window backend would.
@@ -317,6 +329,53 @@ fn a_change_in_one_window_reaches_the_others() {
     // ...and the other window follows on the wake that requests.
     run.wake();
     assert_eq!(run.desk.take_log(), ["title 101 a.txt (1)"]);
+}
+
+#[test]
+fn a_view_reading_the_safe_area_follows_it_but_not_the_window_moving() {
+    let app = App::new(doc(), |_: &Doc, cx: &mut Cx<Doc>| {
+        let safe = cx.safe_area();
+        cx.set_window_title(format!("top {}", safe.top));
+        crate::widgets::spacer()
+    })
+    .no_font();
+    let mut run = run(app);
+    assert_eq!(run.desk.take_log(), ["title 100 top 0"]);
+    // Moved: nothing it reads changed, so no rebuild (and no retitle).
+    let mut info = WindowInfo::from_size(PhysicalSize::new(200, 100), ScaleFactor::IDENTITY);
+    info.position = Some(Point::new(5.0, 6.0));
+    run.desk.info.borrow_mut().insert(100, info);
+    run.send(100, Event::WindowChanged);
+    run.send(100, Event::RedrawRequested);
+    assert!(run.desk.take_log().is_empty());
+    // Turned: the safe area changed, and the view is built again.
+    info.safe_area = crate::geometry::Insets::new(47.0, 0.0, 34.0, 0.0);
+    run.desk.info.borrow_mut().insert(100, info);
+    run.send(100, Event::WindowChanged);
+    assert_eq!(run.desk.take_log(), ["title 100 top 47"]);
+    assert_eq!(
+        info.orientation(),
+        crate::platform::Orientation::Landscape,
+        "200x100 is wider than tall"
+    );
+}
+
+#[test]
+fn keep_awake_and_orientations_reach_the_window() {
+    let app = App::new(doc(), titled).no_font();
+    let handle = app.handle();
+    let mut run = run(app);
+    run.desk.take_log();
+    handle.set_keep_awake(true);
+    handle.set_orientations(crate::platform::Orientations::LANDSCAPE);
+    run.wake();
+    assert_eq!(
+        run.desk.take_log(),
+        [
+            "awake 100 true",
+            "orientations 100 Orientations(LANDSCAPE_LEFT | LANDSCAPE_RIGHT)"
+        ]
+    );
 }
 
 #[test]

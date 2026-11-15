@@ -45,7 +45,11 @@
 #    the app save its state (onSaveInstanceState), `am kill` ends the
 #    backgrounded process, and starting it again restores the count and the
 #    text from the saved Bundle;
-# 12. screenshots of each state land in the screenshot directory.
+# 12. screenshots of each state land in the screenshot directory;
+# 13. the screen: drawn edge to edge, the app reports a non-zero safe area,
+#    and dumpsys shows its requested portrait orientation and the window's
+#    FLAG_KEEP_SCREEN_ON (reported, not fatal unless
+#    STIPPLE_ANDROID_SCREEN_STRICT=1).
 #
 # STIPPLE_ANDROID_QUICK=1 runs only what differs between Android releases
 # (1, 2, 5, 6 and 10), as CI does on its older emulators.
@@ -125,6 +129,30 @@ print(f"{h:08x}")' "$asset_src")"
 wait_for "androiddemo: asset hello.txt bytes=$asset_size fnv1a=$asset_fnv text=\"Hello from a packaged asset\.\"" 5
 wait_for 'androiddemo: assets list=\[[^]]*"hello\.txt"[^]]*\] img=\["dot\.svg"\] svg=Ok\("16x16"\) streamed=Ok\(\([0-9]+, "from a packaged asset\."\)\) exists=true missing=Some\("no asset \\"nope\.txt\\""\)' 5
 adb exec-out screencap -p > "$shots/android.png"
+
+# The screen: drawn edge to edge, the app reads the status bar's height as
+# its safe area's top (Android 6 and later, which have getRootWindowInsets);
+# it asked to stand upright (setRequestedOrientation) and to keep the screen
+# on (FLAG_KEEP_SCREEN_ON). Reported, and only fatal with
+# STIPPLE_ANDROID_SCREEN_STRICT=1, until they have passed on every emulator.
+screen_failed=""
+if ! wait_for "androiddemo: safe area [1-9][0-9.]* [0-9.]+ [0-9.]+ [0-9.]+ Portrait" 10; then
+  screen_failed="$screen_failed safe-area"
+fi
+log | grep -E "Stipple Android: safe area" | tail -3 || true
+orientation="$(adb shell dumpsys activity activities | tr -d '\r' | grep -iE "requestedOrientation|mOrientation=|orientation=" | head -5 || true)"
+echo "android: orientation: $orientation"
+echo "$orientation" | grep -qiE "(requestedOrientation|mOrientation|orientation)=(1|portrait|SCREEN_ORIENTATION_PORTRAIT)\b" \
+  || screen_failed="$screen_failed orientation"
+if ! adb shell dumpsys window windows | tr -d '\r' | grep -E "KEEP_SCREEN_ON" | head -3; then
+  screen_failed="$screen_failed keep-awake"
+fi
+if [ -n "$screen_failed" ]; then
+  echo "android: screen checks FAILED:$screen_failed" >&2
+  [ "${STIPPLE_ANDROID_SCREEN_STRICT:-0}" = 1 ] && exit 1
+else
+  echo "android: screen checks passed"
+fi
 
 size="$(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)"
 read -r width height <<< "$size"

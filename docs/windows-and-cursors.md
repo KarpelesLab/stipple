@@ -48,7 +48,11 @@ button(cx, "Fullscreen").on_tap(cx, move |s| {
 The requests are `Maximized(bool)`, `Fullscreen(bool)`, `Minimized(bool)`,
 `MinSize(Option<Size>)`, `MaxSize(Option<Size>)`, `Icon(Option<Pixmap>)`,
 `Title(String)`, `Position(Point)` (the outer top-left corner),
-`InnerSize(Size)` and `ResizeIncrements(Option<Size>)`. `handle.window(..)`
+`InnerSize(Size)` and `ResizeIncrements(Option<Size>)`, and for the app as
+a whole (whichever window they're sent to) `KeepAwake(bool)` and
+`Orientations(..)`, which `handle.set_keep_awake(..)` and
+`handle.set_orientations(..)` send (see
+[below](#phones-orientation-and-keeping-awake)). `handle.window(..)`
 changes the primary window; `handle.window_to(id, ..)` any window. Code that
 drives a backend directly calls the same methods on the `Window` trait
 (`set_min_size`, `set_max_size`, `set_maximized`, `set_fullscreen`,
@@ -160,6 +164,50 @@ character cell) counted from the minimum size.
 | Windows | `GetWindowRect`, `SetWindowPos` | `AdjustWindowRectEx` | `WM_SIZING` | `IsZoomed`, `IsIconic`; `ShowWindow` | `GetMonitorInfoW` |
 | macOS | `frame` (flipped to top-left), `setFrameTopLeftPoint:` | `setContentSize:` | `setContentResizeIncrements:` | `isZoomed`, `isMiniaturized`; `miniaturize:` | `visibleFrame` |
 
+## Phones: orientation and keeping awake
+
+**Orientation.** A phone or tablet turns the app as the user turns the
+device, as far as the bundle allows (`UISupportedInterfaceOrientations` in
+the `Info.plist`, `android:screenOrientation` in the manifest): the window
+gets a new size (`Event::Resized`), and on iOS a new safe area, laid out and
+drawn inside the rotation's animation. A view picks its portrait or
+landscape layout from `cx.window_info().orientation()` (`Portrait` or
+`Landscape`: whether it is wider than tall), or from the size itself.
+
+`App::orientations(Orientations::PORTRAIT)` lets it turn only those ways,
+and `handle.set_orientations(..)` changes that while the app runs (a game
+locking a minigame sideways with `Orientations::LANDSCAPE`, then letting it
+turn again with `Orientations::ALL`); turned a way that isn't allowed, the
+app turns to one that is. `LANDSCAPE_LEFT` has the top of the device on the
+left (turned a quarter counterclockwise). iOS answers the root view
+controller's `supportedInterfaceOrientations` with it, asks again with
+`setNeedsUpdateOfSupportedInterfaceOrientations` (iOS 16; before, the
+system's `attemptRotationToDeviceOrientation`) and turns the scene with
+`requestGeometryUpdateWithPreferences:`; the `Info.plist` must list the
+orientations too, and an iPad app that allows multitasking (no
+`UIRequiresFullScreen`) turns every way regardless. Android calls
+`Activity.setRequestedOrientation`, overriding the manifest; keep
+`orientation|screenSize` in its `configChanges` so a turn resizes the app
+instead of recreating the activity. Desktops and the web ignore it.
+
+**Keeping the screen awake.** `handle.set_keep_awake(true)` keeps the
+screen from dimming and locking while the app shows (a game the player
+watches, a recipe, a presentation); `false` lets it sleep again. A phone
+keeps it only while the app is in the foreground.
+
+| | How |
+|---|---|
+| iOS | `UIApplication.idleTimerDisabled` |
+| Android | `FLAG_KEEP_SCREEN_ON` on the window (`ANativeActivity_setWindowFlags`), no permission needed |
+| Web | the Screen Wake Lock API (`navigator.wakeLock.request("screen")`), asked again whenever the page becomes visible; where the browser lacks it, nothing |
+| macOS | an IOKit power assertion, `PreventUserIdleDisplaySleep` |
+| Windows | `SetThreadExecutionState(ES_CONTINUOUS \| ES_DISPLAY_REQUIRED \| ES_SYSTEM_REQUIRED)`, on the UI thread |
+| Linux | the desktop portal's `Inhibit` (idle), else `org.freedesktop.ScreenSaver.Inhibit`, over D-Bus; the inhibition lasts while the connection stays open |
+
+`examples/screendemo` shows all three: its backdrop under the bars, the safe
+area outlined, buttons locking it upright or sideways, and a switch keeping
+the screen awake.
+
 ## Cursors
 
 `CursorIcon` names the cursor shapes: `Default`, `Text`, `Pointer`,
@@ -219,6 +267,15 @@ make it fullscreen, a text field, and a strip of boxes, each with another
 cursor. `--maximized` and `--fullscreen` open the window that way.
 
 ## What CI checks
+
+On the iOS simulator, `screendemo`'s self-test reads the safe area, locks
+itself sideways (the simulator's interface turns), checks the view
+followed, turns back upright and checks the idle timer is off after
+`set_keep_awake`. On the Android emulator, `androiddemo` (edge to edge,
+upright only, kept awake) reports a non-zero safe area, and `dumpsys`
+shows the requested orientation and `FLAG_KEEP_SCREEN_ON`. Both are
+non-blocking for now. Keeping the screen awake on the desktops is
+build-checked only.
 
 On X11 (Xvfb), CI reads the window's `WM_NORMAL_HINTS` and `_NET_WM_ICON` back
 with `xprop`, and moves the pointer over a button and off it to check that the

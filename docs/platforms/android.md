@@ -51,9 +51,35 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
 - **The window.** Frames are rendered in software and copied into the
   `ANativeWindow`'s buffer, only the damaged part when the buffer allows it. The
   app gets the content rectangle the system bars leave free (it shrinks when
-  the soft keyboard is up); the rest of the window, and the status and
+  the soft keyboard is up), also on Android 15 and later, which lay every
+  app targeting them out under the bars: the window's insets
+  (`getRootWindowInsets`: `getInsets(systemBars() | displayCutout())` on
+  Android 11 and later, the system window and display cutout insets
+  before) come off it. The rest of the window, and the status and
   navigation bars, take the app's background color, with dark or light bar
   icons to match.
+- **Edge to edge.** With `App::edge_to_edge(true)` the app draws the whole
+  window, under the bars (`setDecorFitsSystemWindows(false)` on Android 11
+  and later, the `SYSTEM_UI_FLAG_LAYOUT_*` flags before) and into the display
+  cutout (`LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS`, `SHORT_EDGES` on Android 9
+  and 10), and reads the bars' insets as `cx.safe_area()`. The bars go
+  transparent, without Android 10's scrim, their icons dark over light
+  content and light over dark (the status bar from the frame's top-left
+  pixel, the navigation bar from its bottom-left one). The content still
+  ends above the soft keyboard (`getInsets(ime())`). The insets are read
+  again whenever the host view is given new ones (`onApplyWindowInsets`)
+  and the window's size or content rectangle changes; a change that keeps
+  the size (a half turn, the bars showing) is `Event::WindowChanged`. See
+  [layout.md](../layout.md#the-safe-area-phones).
+- **Orientation and keeping awake.** `App::orientations` and
+  `AppHandle::set_orientations` call `Activity.setRequestedOrientation`
+  (portrait alone is `SCREEN_ORIENTATION_PORTRAIT`, both landscapes
+  `USER_LANDSCAPE`, every way `FULL_USER`, honoring the user's rotation
+  lock); keep `orientation|screenSize` in the activity's `configChanges`, so
+  a turn resizes the app rather than recreating the activity.
+  `AppHandle::set_keep_awake` sets `FLAG_KEEP_SCREEN_ON` on the window
+  (`ANativeActivity_setWindowFlags`). See
+  [windows-and-cursors.md](../windows-and-cursors.md#phones-orientation-and-keeping-awake).
 - **Touch and mouse.** Every finger arrives as an `Event::Touch` (its id,
   phase and position). The first finger down is also the pointer, until it
   lifts; a tap is a press and release, and lifting a finger leaves no hover

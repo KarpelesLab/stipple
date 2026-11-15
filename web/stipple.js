@@ -175,6 +175,21 @@ export async function start(canvas, wasmUrl, options = {}) {
   let e = null; // the module's exports
   let timer = null;
   let framePending = false;
+  // The screen wake lock the app wants (keep_awake), and the one held.
+  let wantAwake = false;
+  let wakeLock = null;
+  const syncWake = () => {
+    if (wantAwake && !wakeLock && document.visibilityState === "visible") {
+      wakeLock = navigator.wakeLock?.request("screen").then((lock) => {
+        lock.addEventListener("release", () => { wakeLock = null; });
+        if (!wantAwake) lock.release();
+        return lock;
+      }).catch(() => { wakeLock = null; }) ?? null;
+    } else if (!wantAwake && wakeLock) {
+      wakeLock.then((lock) => lock?.release());
+      wakeLock = null;
+    }
+  };
   let pendingCopy = null;
   let pendingHtml = null;
   let storageOut = new Uint8Array(0); // see storage_get
@@ -396,6 +411,7 @@ export async function start(canvas, wasmUrl, options = {}) {
         });
       },
       set_cursor(ptr, len) { canvas.style.cursor = str(ptr, len); },
+      keep_awake(on) { wantAwake = on !== 0; syncWake(); },
       pointer_lock(on) {
         // Browsers only lock during (or a few seconds after) a user
         // gesture; a refusal or the lock ending reports kind 5.
@@ -634,10 +650,35 @@ export async function start(canvas, wasmUrl, options = {}) {
   window.addEventListener("pagehide", saveState);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") saveState();
+    // The browser lets a wake lock go when the page hides: ask again.
+    else syncWake();
   });
 
+  // The safe area (a phone's notch, status bar and home indicator, with
+  // `viewport-fit=cover`), measured through a probe padded by it, as far as
+  // it reaches over the canvas.
+  const safeProbe = document.createElement("div");
+  safeProbe.style.cssText = "position:fixed;left:0;top:0;width:0;height:0;" +
+    "visibility:hidden;pointer-events:none;padding:env(safe-area-inset-top,0px) " +
+    "env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px)";
+  document.body.append(safeProbe);
+  const safeArea = () => {
+    if (!e.stipple_safe_area) return;
+    const s = getComputedStyle(safeProbe);
+    const r = canvas.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth || window.innerWidth;
+    const vh = document.documentElement.clientHeight || window.innerHeight;
+    const px = (v) => parseFloat(v) || 0;
+    e.stipple_safe_area(
+      Math.max(0, px(s.paddingTop) - r.top),
+      Math.max(0, px(s.paddingRight) - (vw - r.right)),
+      Math.max(0, px(s.paddingBottom) - (vh - r.bottom)),
+      Math.max(0, px(s.paddingLeft) - r.left));
+  };
+  safeArea();
+  window.addEventListener("resize", safeArea);
   // Size and pixel-ratio changes (moving to another screen, zooming).
-  const resize = () => { place(); e.stipple_resize(...size()); };
+  const resize = () => { place(); e.stipple_resize(...size()); safeArea(); };
   new ResizeObserver(resize).observe(canvas);
   const watchRatio = () => {
     matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)

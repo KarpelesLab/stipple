@@ -140,15 +140,14 @@ impl NavLook {
 /// What picking an item runs, with its index.
 type OnSelect<S> = Rc<dyn Fn(&mut S, usize)>;
 
-/// A [`navigation_bar`] with its options: its look, the safe area under it,
-/// and an id when a window shows more than one.
+/// A [`navigation_bar`] with its options: its look, and an id when a window
+/// shows more than one.
 pub struct NavigationBar<S> {
     id: String,
     items: Vec<NavItem>,
     selected: usize,
     on_select: OnSelect<S>,
     look: Option<NavLook>,
-    bottom_inset: f64,
 }
 
 impl<S> std::fmt::Debug for NavigationBar<S> {
@@ -158,7 +157,6 @@ impl<S> std::fmt::Debug for NavigationBar<S> {
             .field("items", &self.items)
             .field("selected", &self.selected)
             .field("look", &self.look)
-            .field("bottom_inset", &self.bottom_inset)
             .finish_non_exhaustive()
     }
 }
@@ -177,7 +175,6 @@ impl<S: 'static> NavigationBar<S> {
             selected,
             on_select: Rc::new(on_select),
             look: None,
-            bottom_inset: 0.0,
         }
     }
 
@@ -190,16 +187,6 @@ impl<S: 'static> NavigationBar<S> {
     /// Draw it as `look` instead of the one [`NavLook::of`] picks.
     pub fn look(mut self, look: NavLook) -> Self {
         self.look = Some(look);
-        self
-    }
-
-    /// Extend the bar's background `inset` logical pixels below its items:
-    /// the part of the screen under the home indicator (or gesture bar),
-    /// where the items must not go. Window safe-area insets aren't reported
-    /// yet ([#38](https://github.com/KarpelesLab/stipple/issues/38)); this is
-    /// where they will go.
-    pub fn bottom_inset(mut self, inset: f64) -> Self {
-        self.bottom_inset = inset.max(0.0);
         self
     }
 
@@ -232,7 +219,12 @@ impl<S: 'static> NavigationBar<S> {
             })
             .collect();
         let p = &theme.palette;
-        let row = Element::stack(Axis::Horizontal, items).align(Align::Start, Align::Stretch);
+        // Drawn edge to edge, the bar's background runs under the home
+        // indicator and to the screen's sides; its items stay clear of them.
+        let safe = cx.safe_area();
+        let row = Element::stack(Axis::Horizontal, items)
+            .align(Align::Start, Align::Stretch)
+            .padding(Insets::new(0.0, safe.right, 0.0, safe.left));
         let (fill, top) = match look {
             NavLook::Material => (container(theme), None),
             NavLook::Ios => (
@@ -246,7 +238,7 @@ impl<S: 'static> NavigationBar<S> {
                 ),
             ),
         };
-        let inset = (self.bottom_inset > 0.0).then(|| super::spacer().height(self.bottom_inset));
+        let inset = (safe.bottom > 0.0).then(|| super::spacer().height(safe.bottom));
         let on_select = self.on_select;
         Element::stack(
             Axis::Vertical,
@@ -269,8 +261,11 @@ impl<S: 'static> NavigationBar<S> {
 ///
 /// It draws as [`NavLook::of`] the theme picks: Material 3's bar (a pill
 /// behind the selected icon), or `UITabBar`'s proportions under
-/// [`Theme::native`] on iOS. For another look, an id, or the safe area
-/// under it (see [`NavigationBar::bottom_inset`]) build a [`NavigationBar`].
+/// [`Theme::native`] on iOS. For another look or an id, build a
+/// [`NavigationBar`]. In an app drawn [edge to edge](crate::App::edge_to_edge)
+/// its background runs on under the home indicator (or Android's navigation
+/// bar), its items kept above it: the window's
+/// [safe area](crate::core::Cx::safe_area).
 ///
 /// Assistive technologies see a [`Role::TabList`] of [`Role::Tab`]s, the
 /// selected one selected, each named by its label and badge.
@@ -285,6 +280,27 @@ pub fn navigation_bar<S: 'static>(
     on_select: impl Fn(&mut S, usize) + 'static,
 ) -> Element {
     NavigationBar::new(items, selected, on_select).view(cx)
+}
+
+/// A column that fills its place, padded by the window's
+/// [safe area](crate::core::Cx::safe_area), for the content of an app drawn
+/// [edge to edge](crate::App::edge_to_edge) that must stay clear of the
+/// status bar, the notch and the home indicator. Add the children with
+/// `.children(vec![..])` or `.child(..)`; the area outside it is whatever
+/// is drawn behind (a `layers` background, say).
+///
+/// ```
+/// use stipple::prelude::*;
+/// # struct State;
+/// fn view(_: &State, cx: &mut Cx<State>) -> Element {
+///     safe_area(cx).children(vec![heading(cx, "Inbox")])
+/// }
+/// ```
+pub fn safe_area<S>(cx: &mut Cx<S>) -> Element {
+    Element::stack(Axis::Vertical, Vec::new())
+        .align(Align::Start, Align::Stretch)
+        .padding(cx.safe_area())
+        .grow(1.0)
 }
 
 /// The items of a [`navigation_bar`] down the side of a wide window, as

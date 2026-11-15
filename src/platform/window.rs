@@ -1,5 +1,6 @@
-use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
+use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::event::WindowId;
+use crate::platform::screen::{Orientation, Orientations};
 use crate::render::{Color, Pixmap, Surface};
 
 /// A mouse cursor shape. Elements declare one (see
@@ -102,6 +103,15 @@ pub enum WindowRequest {
     /// relative motion as [`Event::PointerDelta`](crate::platform::Event::PointerDelta),
     /// or release it (`false`).
     PointerLock(bool),
+    /// Keep the screen from dimming and locking while the app shows
+    /// (`true`), or let it again (`false`). Applies to the app, whichever
+    /// window it is sent to. See
+    /// [`AppHandle::set_keep_awake`](crate::core::AppHandle::set_keep_awake).
+    KeepAwake(bool),
+    /// Let a phone or tablet turn the app only these ways. Applies to the
+    /// app, whichever window it is sent to; a no-op on desktops. See
+    /// [`AppHandle::set_orientations`](crate::core::AppHandle::set_orientations).
+    Orientations(Orientations),
 }
 
 /// How insistently [`WindowRequest::Attention`] asks for the user's
@@ -138,6 +148,8 @@ impl WindowRequest {
             WindowRequest::PointerLock(on) => {
                 window.set_pointer_lock(*on);
             }
+            WindowRequest::KeepAwake(on) => window.set_keep_awake(*on),
+            WindowRequest::Orientations(set) => window.set_orientations(*set),
         }
     }
 }
@@ -173,6 +185,14 @@ pub struct WindowInfo {
     /// of the monitor the window is on, in desktop coordinates, or `None`
     /// where unknown.
     pub work_area: Option<Rect>,
+    /// How far in from each edge of the content area the system's own
+    /// things are drawn over it: the status bar, a notch or Dynamic Island,
+    /// the home indicator or navigation bar, rounded corners. Zero unless
+    /// the app draws [edge to edge](crate::App::edge_to_edge) on iOS or
+    /// Android (or a web page that covers a phone's notch); zero on
+    /// desktops. Read it from a view with
+    /// [`Cx::safe_area`](crate::core::Cx::safe_area).
+    pub safe_area: Insets,
 }
 
 impl WindowInfo {
@@ -188,6 +208,18 @@ impl WindowInfo {
             minimized: false,
             fullscreen: false,
             work_area: None,
+            safe_area: Insets::ZERO,
+        }
+    }
+
+    /// Which way the window is turned: [`Landscape`](Orientation::Landscape)
+    /// when it is wider than tall. A view picks its portrait or landscape
+    /// layout from it (or from the size itself, which says more).
+    pub fn orientation(&self) -> Orientation {
+        if self.inner_size.width > self.inner_size.height {
+            Orientation::Landscape
+        } else {
+            Orientation::Portrait
         }
     }
 }
@@ -240,6 +272,15 @@ pub struct WindowAttributes {
     /// comes to the front). `true` by default; the window manager may still
     /// decide otherwise.
     pub focus: bool,
+    /// Draw under the status bar, the notch and the home indicator or
+    /// navigation bar, and read where they are from
+    /// [`WindowInfo::safe_area`] (iOS and Android; see
+    /// [`App::edge_to_edge`](crate::App::edge_to_edge)). `false` by default.
+    pub edge_to_edge: bool,
+    /// The ways a phone or tablet may turn the app, or `None` to leave it to
+    /// the bundle (`Info.plist`, the manifest). See
+    /// [`App::orientations`](crate::App::orientations).
+    pub orientations: Option<Orientations>,
 }
 
 impl Default for WindowAttributes {
@@ -259,6 +300,8 @@ impl Default for WindowAttributes {
             decorations: true,
             resize_increments: None,
             focus: true,
+            edge_to_edge: false,
+            orientations: None,
         }
     }
 }
@@ -351,6 +394,19 @@ impl WindowAttributes {
     /// runs (`true` by default).
     pub fn focus(mut self, focus: bool) -> Self {
         self.focus = focus;
+        self
+    }
+
+    /// Draw under the system's bars, the notch and the home indicator
+    /// (see [`edge_to_edge`](Self::edge_to_edge)).
+    pub fn edge_to_edge(mut self, on: bool) -> Self {
+        self.edge_to_edge = on;
+        self
+    }
+
+    /// Let a phone or tablet turn the app only these ways.
+    pub fn orientations(mut self, set: Orientations) -> Self {
+        self.orientations = Some(set);
         self
     }
 }
@@ -601,6 +657,17 @@ pub trait Window {
     /// cursor shows a copy or a "no" sign) and refuses a drop it declined.
     /// Default: a no-op (backends without drops).
     fn set_drop_accepted(&self, _accepted: bool) {}
+    /// Keep the screen from dimming and locking while the app shows (`true`),
+    /// or let it again. Default: the desktop's own way, through
+    /// `platform::awake` (a power assertion on macOS,
+    /// `SetThreadExecutionState` on Windows, the screen saver's `Inhibit`
+    /// over D-Bus on Linux); the mobile and web backends override it.
+    fn set_keep_awake(&self, on: bool) {
+        crate::platform::awake::set(on);
+    }
+    /// Let the device turn the app only the ways in `set`. Default: a
+    /// no-op (desktops); honored on iOS and Android.
+    fn set_orientations(&self, _set: Orientations) {}
     /// Carry `data` (files or text) out of the window as a drag other
     /// applications can drop: the App calls this when an in-app drag from an
     /// [`Element::drag_source`](crate::core::Element::drag_source) leaves the

@@ -249,6 +249,12 @@ title = "Pointer events"
 group = "Input"
 size = [400, 300]
 
+[web.screendemo]
+description = "A phone's screen: drawn edge to edge with the safe area outlined, the orientation read and locked, and the screen kept awake."
+title = "Screen"
+group = "Input"
+size = [360, 640]
+
 [web.touchdemo]
 description = "A text field and a list a finger drag scrolls, with a self-test for the iOS simulator."
 title = "Touch"

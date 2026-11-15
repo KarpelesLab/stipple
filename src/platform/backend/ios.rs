@@ -54,6 +54,9 @@ mod lifecycle;
 mod saved_state;
 /// The scene the app's window lives in, and its session's saved state.
 mod scene;
+/// The view's size and safe area as the device turns, the orientations,
+/// the status bar's look and the idle timer.
+mod screen;
 /// Input methods: `UITextInput` on the view.
 mod text_input;
 
@@ -297,6 +300,18 @@ struct IosCtx {
     /// The next frame's background (its top-left pixel) goes around the safe
     /// area, after the theme changed look.
     match_background: bool,
+    /// The view fills the screen, under the bars (see [`screen`]).
+    edge_to_edge: bool,
+    /// The app's `UIInterfaceOrientationMask`, or 0 for UIKit's default.
+    orientations: u64,
+    /// The safe area the app was last told about, in points (zero unless
+    /// edge to edge).
+    safe_area: crate::geometry::Insets,
+    /// Whether the view was placed once (and the app told its size).
+    laid_out: bool,
+    /// Whether the last frame's top-left pixel was light, for the status
+    /// bar's icons.
+    top_light: Option<bool>,
 }
 
 thread_local! {
@@ -426,7 +441,10 @@ unsafe fn show_window(window: Id) {
         msg_void_id(root, sel("addSubview:"), view);
         observe_reduce_motion(view);
         lifecycle::observe(view);
-        let vc = msg_id(msg_id(class("UIViewController"), sel("alloc")), sel("init"));
+        let vc = msg_id(
+            msg_id(screen::register_controller_class(), sel("alloc")),
+            sel("init"),
+        );
         msg_void_id(vc, sel("setView:"), root);
         msg_void_id(window, sel("setRootViewController:"), vc);
 
@@ -438,30 +456,13 @@ unsafe fn show_window(window: Id) {
         });
 
         // Show the window first: the safe area is only known once it's visible,
-        // and OS-drawn controls are captured through it.
+        // and OS-drawn controls are captured through it. The view controller
+        // places the view (in the safe area, or over the whole screen) and
+        // tells the app its size whenever its layout changes, from now on
+        // (see `screen`); the app starts with its requested size, but on iOS
+        // the screen decides.
         msg_void(window, sel("makeKeyAndVisible"));
-        let safe = msg_insets(window, sel("safeAreaInsets"));
-        let frame = CgRect {
-            origin: CgPoint {
-                x: bounds.origin.x + safe.left,
-                y: bounds.origin.y + safe.top,
-            },
-            size: CgSize {
-                width: bounds.size.width - safe.left - safe.right,
-                height: bounds.size.height - safe.top - safe.bottom,
-            },
-        };
-        msg_void_rect(view, sel("setFrame:"), frame);
-
-        let size = PhysicalSize::new(
-            (frame.size.width * scale).round() as u32,
-            (frame.size.height * scale).round() as u32,
-        );
-        CTX.with(|c| c.borrow_mut().size = size);
-        let win = IosWindow { size };
-        // The app starts with its requested size; on iOS the screen decides.
-        call_handler(Event::Resized(size), &win);
-        call_handler(Event::RedrawRequested, &win);
+        screen::relayout();
 
         // UIKit owns the run loop, so wakeups and timers go through the main
         // dispatch queue, which it drains.
@@ -959,6 +960,12 @@ pub mod simulate {
         crate::platform::dialog::picker_ios::pick_presented(path)
     }
 
+    /// The app's view's frame, its root view's safe area and whether the
+    /// idle timer is off, as a line of text.
+    pub fn screen_status() -> String {
+        super::screen::status()
+    }
+
     /// A finger `id` at `position` (logical pixels, in the app's content).
     pub fn touch(id: u64, phase: TouchPhase, position: Point) {
         later(move || touch_input(phase, &[(id, position)]));
@@ -1229,6 +1236,17 @@ impl Window for IosWindow {
         // new background from the next frame.
         CTX.with(|c| c.borrow_mut().match_background = true);
     }
+    fn info(&self) -> crate::platform::WindowInfo {
+        let mut info = crate::platform::WindowInfo::from_size(self.size, self.scale_factor());
+        info.safe_area = CTX.with(|c| c.borrow().safe_area);
+        info
+    }
+    fn set_keep_awake(&self, on: bool) {
+        screen::set_keep_awake(on);
+    }
+    fn set_orientations(&self, set: crate::platform::Orientations) {
+        screen::set_orientations(set);
+    }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(IosSurface { size: self.size })
     }
@@ -1248,6 +1266,9 @@ impl Surface for IosSurface {
     }
     fn present(&mut self, pixmap: &Pixmap, _damage: &[crate::geometry::Rect]) {
         let size = pixmap.size();
+        let top_light = pixmap
+            .pixel(0, 0)
+            .map(|[r, g, b, _]| 299 * r as u32 + 587 * g as u32 + 114 * b as u32 > 128_000);
         let (view, window, background) = CTX.with(|c| {
             let mut c = c.borrow_mut();
             c.fb = pixmap.as_bytes().to_vec();
@@ -1264,6 +1285,9 @@ impl Surface for IosSurface {
         // Messaged with the context released: UIKit may call the view back.
         if background.is_some() {
             unsafe { set_root_background(window, background) };
+        }
+        if let Some(light) = top_light {
+            screen::set_top_color(light);
         }
         if !view.is_null() {
             unsafe { msg_void_bool(view, sel("setNeedsDisplay"), true) };
@@ -1292,6 +1316,8 @@ where
         c.size = size;
         c.background = attrs.background;
         c.handler = boxed;
+        c.edge_to_edge = attrs.edge_to_edge;
+        c.orientations = attrs.orientations.map_or(0, |o| o.ios_mask());
     });
     // A launch after the system ended the app in the background: hand its
     // saved state to the app's first event. With scenes, that waits for the

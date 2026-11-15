@@ -69,7 +69,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
             .align(Align::Start, Align::Stretch)
             .grow(1.0);
     }
-    let mut bar = NavigationBar::new(items(), s.tab, on).bottom_inset(s.inset);
+    let mut bar = NavigationBar::new(items(), s.tab, on);
     if let Some(look) = s.look {
         bar = bar.look(look);
     }
@@ -79,9 +79,14 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
 }
 
 fn app_with(state: State) -> App<State> {
+    let inset = state.inset;
     let mut app = App::new(state, view)
         .no_font()
         .logical_size(Size::new(400.0, 600.0));
+    if inset > 0.0 {
+        // A phone drawn edge to edge: the home indicator under the bar.
+        app.set_safe_area(crate::geometry::Insets::new(47.0, 0.0, inset, 0.0));
+    }
     app.render_once();
     app
 }
@@ -177,6 +182,39 @@ fn the_ios_look_is_a_tab_bars_height_and_the_inset_extends_it() {
     });
     assert_eq!(find(&app, Role::TabList).bounds.height(), 80.0 + 34.0);
     assert_eq!(NavLook::of(&Theme::light()), NavLook::Material);
+}
+
+#[test]
+fn the_bar_follows_the_safe_area_as_it_changes() {
+    let mut app = app();
+    assert_eq!(find(&app, Role::TabList).bounds.height(), 80.0);
+    // Turned to landscape: the home indicator is shorter, and the notch's
+    // side and the other one are kept clear of.
+    app.set_safe_area(crate::geometry::Insets::new(0.0, 59.0, 21.0, 59.0));
+    app.render_once();
+    let bar = find(&app, Role::TabList).bounds;
+    assert_eq!(
+        (bar.min_x(), bar.width()),
+        (0.0, 400.0),
+        "the background runs on"
+    );
+    assert_eq!(bar.height(), 80.0 + 21.0);
+    let tabs = tabs(&app);
+    assert_eq!(tabs[0].bounds.min_x(), 59.0);
+    assert_eq!(tabs[3].bounds.max_x(), 400.0 - 59.0);
+}
+
+#[test]
+fn safe_area_pads_its_children() {
+    let mut app = App::new((), |_: &(), cx: &mut Cx<()>| {
+        super::safe_area(cx).children(vec![super::label(cx, "Top")])
+    })
+    .no_font()
+    .logical_size(Size::new(400.0, 600.0));
+    app.set_safe_area(crate::geometry::Insets::new(47.0, 0.0, 34.0, 0.0));
+    app.render_once();
+    let top = app.find_text("Top").map(|n| n.bounds);
+    assert_eq!(top.map(|b| b.min_y()), Some(47.0));
 }
 
 #[test]
