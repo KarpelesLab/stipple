@@ -57,17 +57,11 @@ class Example:
         self.name = name
         self.web = web
         self.spec = spec
-        cargo = ROOT / "examples" / name / "Cargo.toml"
-        meta = tomllib.loads(cargo.read_text()) if cargo.exists() else {}
-        desc = meta.get("package", {}).get("description", "")
-        desc = re.sub(r"^Stipple (example|spike):\s*", "", desc).strip()
-        self.description = desc[:1].upper() + desc[1:] if desc else ""
-        self.description = spec.get("description", self.description)
+        self.description = spec.get("description", "")
         self.title = spec.get("title", name)
         self.group = spec.get("group", "Other")
         self.size = spec.get("size", [640, 420])
-        self.source = spec.get("source", "src/main.rs" if (ROOT / "examples" / name / "src/main.rs").exists() else "src/lib.rs")
-        self.crate = spec.get("crate", name)
+        self.source = spec.get("source", "main.rs" if (ROOT / "examples" / name / "main.rs").exists() else "lib.rs")
         self.artifact = spec.get("artifact", f"{name}_web")
         self.needs = spec.get("needs", "")
 
@@ -90,7 +84,9 @@ def load_manifest():
 def check_manifest():
     _, web, native = load_manifest()
     known = {e.name for e in web + native}
-    dirs = {p.name for p in (ROOT / "examples").iterdir() if (p / "Cargo.toml").exists()}
+    dirs = {
+        p.name for p in (ROOT / "examples").iterdir() if (p / "main.rs").exists() or (p / "lib.rs").exists()
+    }
     ok = True
     for name in sorted(dirs - known):
         print(f"examples/{name} is in neither [web] nor [native] of tools/site/examples.toml")
@@ -98,11 +94,25 @@ def check_manifest():
     for name in sorted(known - dirs):
         print(f"tools/site/examples.toml lists {name}, which isn't in examples/")
         ok = False
+    for e in web + native:
+        if not e.description:
+            print(f"tools/site/examples.toml: {e.name} has no description")
+            ok = False
+        if not (ROOT / "examples" / e.name / e.source).exists():
+            print(f"tools/site/examples.toml: {e.name}'s source, examples/{e.name}/{e.source}, doesn't exist")
+            ok = False
+    # Each web example's wasm module is a cdylib [[example]] in Cargo.toml.
+    cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
+    libs = {t["name"] for t in cargo.get("example", []) if "cdylib" in t.get("crate-type", [])}
+    for e in web:
+        if e.artifact not in libs:
+            print(f"{e.name}: Cargo.toml has no cdylib [[example]] named {e.artifact}")
+            ok = False
     return ok
 
 
 def wasm_command(build, web):
-    args = " ".join(build["arg"].format(crate=e.crate, name=e.name, artifact=e.artifact) for e in web)
+    args = " ".join(build["arg"].format(name=e.name, artifact=e.artifact) for e in web)
     return build["command"].format(args=args)
 
 
@@ -343,7 +353,7 @@ class Site:
             groups.setdefault(ex.group, []).append(ex)
         parts = [
             """<header class="page-head"><h1>Examples</h1>
-<p>Each of these is one of the example programs in the repository's <code>examples/</code>, compiled to WebAssembly unchanged and running in your browser. The same code opens a native window with <code>cargo run -p NAME</code>.</p></header>"""
+<p>Each of these is one of the example programs in the repository's <code>examples/</code>, compiled to WebAssembly unchanged and running in your browser. The same code opens a native window with <code>cargo run --example NAME</code>.</p></header>"""
         ]
         for g, exs in groups.items():
             gid = md.slugify(g)
@@ -354,7 +364,7 @@ class Site:
         )
         parts.append(
             f"""<section><h2 id="native-only">Native only</h2>
-<p>These need something a browser doesn't have. Run them with <code>cargo run -p NAME</code>.</p>
+<p>These need something a browser doesn't have. Run them with <code>cargo run --example NAME</code>.</p>
 <div class="table-wrap"><table class="native"><thead><tr><th>Example</th><th>What it shows</th><th>Needs</th></tr></thead><tbody>{rows}</tbody></table></div></section>"""
         )
         self.write(page, self.shell(page, "Examples · Stipple", "\n".join(parts), sidebar=False, cls="gallery"))
@@ -425,7 +435,7 @@ class Site:
         missing = []
         if self.wasm_dir is not None:
             for ex in self.web:
-                src = Path(self.build["out"].format(artifact=ex.artifact, crate=ex.crate, name=ex.name))
+                src = Path(self.build["out"].format(artifact=ex.artifact, name=ex.name))
                 if not src.is_absolute():
                     src = ROOT / src
                 if src.exists():

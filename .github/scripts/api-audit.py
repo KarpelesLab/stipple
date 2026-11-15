@@ -4,7 +4,7 @@
 Reads rustdoc's JSON for the crate (a nightly feature):
 
     RUSTDOCFLAGS="-Z unstable-options --output-format json" \\
-      cargo +nightly doc -p stipple --no-deps --lib --target-dir target/apijson
+      cargo +nightly doc --no-deps --lib --target-dir target/apijson
     python3 .github/scripts/api-audit.py target/apijson/doc/stipple.json
 
 and lists, for every item reachable from outside the crate that isn't

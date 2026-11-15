@@ -1,12 +1,15 @@
 [package]
 name = "stipple"
 description = "Stipple: a cross-platform, self-drawn UI toolkit in Rust."
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-authors.workspace = true
+# Bumped by release-plz (release-plz.toml).
+version = "0.0.6"
+edition = "2024"
+# Floor is set by the oxideav stack: oxideav-scribe → oxideav-png → compcol
+# requires rustc 1.88. (We'd happily target 1.86 otherwise.)
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/KarpelesLab/stipple"
+authors = ["Karpelès Lab Inc."]
 # Keep the published crate to the library: no examples, screenshots or web glue.
 include = ["src/**/*", "tests/**/*", "docs/getting-started.md", "Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE"]
 
@@ -34,57 +37,10 @@ audio = [
     "dep:oxideav-opus",
 ]
 
-[dependencies]
-oxideav-core.workspace = true
-oxideav-raster.workspace = true
-oxideav-scribe.workspace = true
-oxideav-svg.workspace = true
-oxideav-image.workspace = true
-oxideav-png.workspace = true
-oxideav-mjpeg.workspace = true
-oxideav-gif.workspace = true
-oxideav-webp.workspace = true
-oxideav-bmp.workspace = true
-# Not used directly: a version floor. oxideav-image 0.0.5 asks for any pixfmt 0.1
-# but needs APIs added in 0.1.11, so an older lockfile would fail to build.
-oxideav-pixfmt.workspace = true
-# Audio decoders (the `audio` feature).
-oxideav-basic = { workspace = true, optional = true }
-oxideav-ogg = { workspace = true, optional = true }
-oxideav-vorbis = { workspace = true, optional = true }
-oxideav-mp3 = { workspace = true, optional = true }
-oxideav-flac = { workspace = true, optional = true }
-oxideav-opus = { workspace = true, optional = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# Only the multi-threaded scheduler; apps enable the drivers they use (net, time,
-# fs...) in their own tokio dependency, and the runtime turns those on.
-tokio = { version = "1", default-features = false, features = ["rt-multi-thread"], optional = true }
-
-[lints]
-workspace = true
-
-[workspace]
-resolver = "3"
-members = ["examples/*"]
-
-[workspace.package]
-version = "0.0.6"
-edition = "2024"
-# Floor is set by the oxideav stack: oxideav-scribe → oxideav-png → compcol
-# requires rustc 1.88. (We'd happily target 1.86 otherwise.)
-rust-version = "1.88"
-license = "MIT"
-repository = "https://github.com/KarpelesLab/stipple"
-authors = ["Karpelès Lab Inc."]
-
-[workspace.dependencies]
-# Examples and the web target depend on the library at the repository root.
-stipple = { version = "0.0.6", path = "." }
-
 # --- oxideav media stack (the one sanctioned heavy dependency) ---
 # Pure-Rust content rendering: scene graph, CPU rasterizer, font shaping,
 # image decode, SVG. See ROADMAP.md §1 for the dependency policy.
+[dependencies]
 oxideav-core = "0.1.27"
 oxideav-raster = "0.1.3"
 oxideav-scribe = "0.1.8"
@@ -93,24 +49,316 @@ oxideav-svg = "0.1.9"
 # registry the codec crates register into. Pinned below the releases that need
 # rustc 1.95 (the MSRV-aware resolver would pick these anyway).
 oxideav-image = "0.0.5"
-oxideav-pixfmt = "0.1.11"
 oxideav-png = "0.1.12"
 oxideav-mjpeg = "0.1.13"
 oxideav-gif = "0.0.14"
 oxideav-webp = "0.3.1"
 oxideav-bmp = "0.1.8"
+# Not used directly: a version floor. oxideav-image 0.0.5 asks for any pixfmt 0.1
+# but needs APIs added in 0.1.11, so an older lockfile would fail to build.
+oxideav-pixfmt = "0.1.11"
 # Audio decode for `stipple::audio` (the `audio` feature), at releases that
 # build on our rustc 1.88 floor (newer ones need 1.95).
-oxideav-basic = "0.0.11"
-oxideav-ogg = "0.1.9"
-oxideav-vorbis = "0.0.12"
-oxideav-mp3 = "0.1.3"
-oxideav-flac = "0.0.11"
-oxideav-opus = "0.0.14"
+oxideav-basic = { version = "0.0.11", optional = true }
+oxideav-ogg = { version = "0.1.9", optional = true }
+oxideav-vorbis = { version = "0.0.12", optional = true }
+oxideav-mp3 = { version = "0.1.3", optional = true }
+oxideav-flac = { version = "0.0.11", optional = true }
+oxideav-opus = { version = "0.0.14", optional = true }
 
-[workspace.lints.rust]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Only the multi-threaded scheduler; apps enable the drivers they use (net, time,
+# fs...) in their own tokio dependency, and the runtime turns those on.
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread"], optional = true }
+
+# One package, not a workspace. The empty table keeps it its own root when the
+# checkout sits inside another Cargo workspace's directory (a git worktree
+# under an older checkout, a vendored copy), which Cargo would otherwise
+# refuse to build.
+[workspace]
+
+[lints.rust]
 unsafe_op_in_unsafe_fn = "warn"
 missing_debug_implementations = "warn"
 
-[workspace.lints.clippy]
+[lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# --- Examples ---
+#
+# Each directory under examples/ is an example, `examples/NAME/main.rs`, run
+# with `cargo run --example NAME`; what each shows is in
+# tools/site/examples.toml. The entries below are only the ones that need
+# settings: tests to run, features, and the libraries built for the browser
+# and Android.
+
+# Examples with tests, run by `cargo test`.
+[[example]]
+name = "audiodemo"
+test = true
+
+[[example]]
+name = "bididemo"
+test = true
+
+[[example]]
+name = "calculator"
+test = true
+
+[[example]]
+name = "fontdemo"
+test = true
+
+[[example]]
+name = "imagedemo"
+test = true
+
+[[example]]
+name = "menudemo"
+test = true
+
+[[example]]
+name = "sessionsdemo"
+test = true
+
+[[example]]
+name = "tabledemo"
+test = true
+
+[[example]]
+name = "todo"
+test = true
+
+[[example]]
+name = "viewportdemo"
+test = true
+
+[[example]]
+name = "widgetsdemo"
+test = true
+
+# The raw GPU backends: `--features gpu`, or a backend (gl, vk, d3d, mtl).
+[[example]]
+name = "d3ddemo"
+required-features = ["gpu"]
+
+[[example]]
+name = "dmabuftest"
+required-features = ["gpu"]
+
+[[example]]
+name = "dri3probe"
+required-features = ["gpu"]
+
+[[example]]
+name = "gpudemo"
+required-features = ["gpu"]
+
+[[example]]
+name = "gpuwindow"
+required-features = ["gpu"]
+
+[[example]]
+name = "metaldemo"
+required-features = ["gpu"]
+
+# Libraries rather than programs.
+
+# The web demo: a wasm module that examples/webdemo/index.html loads.
+[[example]]
+name = "webdemo"
+path = "examples/webdemo/lib.rs"
+crate-type = ["cdylib"]
+test = true
+
+# Lampwick (examples/gamedemo) in the browser: lampwick.wasm, for game.html.
+# `gamedemo` is the native program, which includes lib.rs as a module.
+[[example]]
+name = "lampwick"
+path = "examples/gamedemo/lib.rs"
+crate-type = ["cdylib"]
+
+# An Android app: libandroiddemo.so, which examples/androiddemo/build-apk.sh
+# packages as the libstipple_android.so its NativeActivity loads.
+[[example]]
+name = "androiddemo"
+path = "examples/androiddemo/lib.rs"
+crate-type = ["cdylib"]
+
+# The examples in the browser (the site's live examples): each NAME_web
+# compiles examples/NAME/main.rs, through web.rs, as a wasm module that
+# web/stipple.js runs. tools/site/examples.toml lists them.
+[[example]]
+name = "audiodemo_web"
+path = "examples/audiodemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "bididemo_web"
+path = "examples/bididemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "calculator_web"
+path = "examples/calculator/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "canvasdemo_web"
+path = "examples/canvasdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "clickdemo_web"
+path = "examples/clickdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "clipboarddemo_web"
+path = "examples/clipboarddemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "gameloop_web"
+path = "examples/gameloop/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "gamepaddemo_web"
+path = "examples/gamepaddemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "gameui_web"
+path = "examples/gameui/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "hoverdemo_web"
+path = "examples/hoverdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "imagedemo_web"
+path = "examples/imagedemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "layoutdemo_web"
+path = "examples/layoutdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "lifecycle_web"
+path = "examples/lifecycle/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "listmotion_web"
+path = "examples/listmotion/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "material3demo_web"
+path = "examples/material3demo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "menudemo_web"
+path = "examples/menudemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "motiondemo_web"
+path = "examples/motiondemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "nativegallery_web"
+path = "examples/nativegallery/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "overlaydemo_web"
+path = "examples/overlaydemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "pointerdemo_web"
+path = "examples/pointerdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "rawkeys_web"
+path = "examples/rawkeys/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "scrolldemo_web"
+path = "examples/scrolldemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "sessionsdemo_web"
+path = "examples/sessionsdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "spritedemo_web"
+path = "examples/spritedemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "tabledemo_web"
+path = "examples/tabledemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "tabsdemo_web"
+path = "examples/tabsdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "textarea_web"
+path = "examples/textarea/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "textinput_web"
+path = "examples/textinput/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "themegallery_web"
+path = "examples/themegallery/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "todo_web"
+path = "examples/todo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "touchdemo_web"
+path = "examples/touchdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "transformdemo_web"
+path = "examples/transformdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "viewportdemo_web"
+path = "examples/viewportdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "widgetsdemo_web"
+path = "examples/widgetsdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "window_web"
+path = "examples/window/web.rs"
+crate-type = ["cdylib"]

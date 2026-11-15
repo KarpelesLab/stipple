@@ -291,7 +291,7 @@ App::new(Game::default(), view)
 | Web | `canvas.requestPointerLock({ unadjustedMovement: true })`, plain where that's unsupported | `pointermove`'s `movementX` / `movementY` (CSS pixels) | only during or shortly after a user gesture: lock from a click or key handler; Escape releases it |
 | iOS, Android | — (refused: `on_pointer_lock` hears `false`) | — | |
 
-`cargo run -p pointerdemo`: `L` locks the pointer and the pad prints each
+`cargo run --example pointerdemo`: `L` locks the pointer and the pad prints each
 motion and the total; `L` or Escape releases it. CI runs it on X11 under
 Xvfb with `--lock-test` (lock on the first click), moves the mouse with
 `xdotool mousemove_relative` and checks the motion and that the pointer
@@ -307,7 +307,7 @@ would, without a window: unit tests drive a view through it and check the
 state. `stipple::platform::set_pointer_modifiers` sets the modifiers the next
 events carry.
 
-`cargo run -p pointerdemo` prints every pointer and wheel event its pad gets,
+`cargo run --example pointerdemo` prints every pointer and wheel event its pad gets,
 whether it's hovered, and hides the cursor while you type. CI runs it on X11
 under Xvfb and checks, with `xdotool`, a middle click, a double click,
 Shift+right-click, the horizontal wheel (buttons 6 and 7), the hidden cursor

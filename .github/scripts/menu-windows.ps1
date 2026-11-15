@@ -3,7 +3,7 @@
 # with the keyboard (Alt+E, then a mnemonic), use a shortcut, and open the
 # native context menu (a "#32768" popup window) and pick from it.
 param(
-  [string]$Exe = ".\target\release\menudemo.exe",
+  [string]$Exe = ".\target\release\examples\menudemo.exe",
   [string]$Out = "visual_output"
 )
 $ErrorActionPreference = "Stop"

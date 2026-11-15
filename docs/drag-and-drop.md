@@ -7,7 +7,7 @@ window and drop in other applications. While a drag hovers a target, the view ca
 the drag is doing to it and animate. The `dropdemo` example shows all of it:
 
 ```sh
-cargo run -p dropdemo
+cargo run --example dropdemo
 ```
 
 ## Drop targets

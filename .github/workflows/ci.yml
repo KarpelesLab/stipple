@@ -26,28 +26,29 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt
         run: cargo fmt --all -- --check
+      # `gpu`: the GPU examples need it (they're skipped without).
       - name: clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --all-targets --features gpu -- -D warnings
       - name: clippy (tokio feature)
-        run: cargo clippy -p stipple --all-targets --features tokio -- -D warnings
+        run: cargo clippy --all-targets --features tokio -- -D warnings
       - name: test
-        run: cargo test --workspace
+        run: cargo test --features gpu
       - name: test (tokio feature)
-        run: cargo test -p stipple --features tokio
+        run: cargo test --features tokio
       - name: motiondemo selftest (animations at fixed times, off-screen)
-        run: cargo run -p motiondemo -- --selftest
+        run: cargo run --example motiondemo -- --selftest
       - name: listmotion selftest (enter, exit and layout animations, off-screen)
-        run: cargo run -p listmotion -- --selftest
+        run: cargo run --example listmotion -- --selftest
       - name: todo selftest (the getting-started app, driven headless)
-        run: cargo run -p todo -- --selftest target/todo.png
+        run: cargo run --example todo -- --selftest target/todo.png
       - name: clippy (audio feature)
-        run: cargo clippy -p stipple --all-targets --features audio -- -D warnings
+        run: cargo clippy --all-targets --features audio -- -D warnings
       - name: test (audio feature)
-        run: "cargo test -p stipple --features audio audio::"
+        run: "cargo test --features audio audio::"
       - name: audiodemo selftest (no sound card, the null output)
-        run: STIPPLE_AUDIO=null cargo run -p audiodemo -- --selftest --expect-backend null
+        run: STIPPLE_AUDIO=null cargo run --example audiodemo -- --selftest --expect-backend null
       - name: gamedemo selftest (a seeded game played by script, its score and saves checked)
-        run: STIPPLE_AUDIO=null cargo run -p gamedemo -- --selftest
+        run: STIPPLE_AUDIO=null cargo run --example gamedemo -- --selftest
       # The runners have no sound card: load ALSA's dummy driver (a card that
       # plays nothing, in real time) and play through libasound. Not blocking:
       # the runner's kernel may not have the module.
@@ -61,7 +62,7 @@ jobs:
           }
           sudo chmod a+rw /dev/snd/* || true
           cat /proc/asound/cards
-          cargo run -p audiodemo -- --selftest --expect-backend alsa
+          cargo run --example audiodemo -- --selftest --expect-backend alsa
 
   # Gamepads on Linux: a virtual pad made through uinput
   # (.github/scripts/uinput-gamepad.py) must show up in `gamepaddemo --list`,
@@ -75,25 +76,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the gamepad demo
-        run: cargo build -p gamepaddemo
+        run: cargo build --example gamepaddemo
       - name: List a virtual gamepad
         run: |
           sudo modprobe uinput || true
           sudo python3 .github/scripts/uinput-gamepad.py 20 &
           sleep 2
-          out=$(sudo ./target/debug/gamepaddemo --list)
+          out=$(sudo ./target/debug/examples/gamepaddemo --list)
           echo "$out"
           echo "$out" | grep -q "Stipple Virtual Pad \[1234:5678\]"
 
   msrv:
-    name: MSRV 1.88 (workspace)
+    name: MSRV 1.88 (library and examples)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
-      - name: cargo check (workspace)
-        run: cargo check --workspace
+      - name: cargo check (library and examples)
+        run: cargo check --examples --features gpu
 
   # Verify the stack is mobile-portable: it cross-compiles for Android and iOS
   # with their native backends (NativeActivity, UIKit). Building the library
@@ -116,8 +117,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - name: cargo build (umbrella crate)
-        run: cargo build -p stipple --target ${{ matrix.target }}
+      - name: cargo build (the library)
+        run: cargo build --target ${{ matrix.target }}
 
   # The public API against docs/api-guidelines.md: #[non_exhaustive], options
   # structs, one path per item. rustdoc's JSON output is a nightly feature.
@@ -129,7 +130,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
       - name: rustdoc JSON
-        run: cargo doc -p stipple --no-deps --lib --features audio --target-dir target/apijson
+        run: cargo doc --no-deps --lib --features audio --target-dir target/apijson
         env:
           RUSTDOCFLAGS: -Z unstable-options --output-format json
       - name: Audit

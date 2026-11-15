@@ -154,7 +154,7 @@ menu mnemonics.
 
 ## Trying it
 
-`cargo run -p fontdemo` shows the `monospace` family in four styles and every
+`cargo run --example fontdemo` shows the `monospace` family in four styles and every
 decoration; `--family "Name"` picks another family, `--list` prints the
 installed families, and `--check` renders off screen and checks the result (CI
 runs it on X11, Windows and macOS, and screenshots the window on X11).

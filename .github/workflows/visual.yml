@@ -16,9 +16,9 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Compile the whole workspace on each desktop OS. This build-verifies the
-  # per-OS platform backends (today: X11 on Linux; the others use the headless
-  # fallback until their native backends land).
+  # Compile the library and every example on each desktop OS. This
+  # build-verifies the per-OS platform backends (today: X11 on Linux; the
+  # others use the headless fallback until their native backends land).
   build:
     name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -30,8 +30,8 @@ jobs:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Build workspace
-        run: cargo build --workspace --all-targets
+      - name: Build the library and the examples
+        run: cargo build --all-targets --features gpu
 
   # Run the windowed example against a real (virtual) X server and screenshot
   # the result, proving the native X11 backend connects, maps a window, and
@@ -51,7 +51,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick x11-utils x11-xserver-utils xdotool fonts-dejavu-core
 
       - name: Build the window example
-        run: cargo build --release -p window
+        run: cargo build --release --example window
 
       - name: Start Xvfb
         run: |
@@ -66,7 +66,7 @@ jobs:
           STIPPLE_X11_DEBUG: "1"
         run: |
           mkdir -p visual_output
-          ./target/release/window > visual_output/app.log 2>&1 &
+          ./target/release/examples/window > visual_output/app.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           echo "=== window tree ==="
@@ -102,8 +102,8 @@ jobs:
           DISPLAY: ":99"
         run: |
           kill "$APP_PID" 2>/dev/null || true
-          cargo build --release -p touchdemo
-          ./target/release/touchdemo > visual_output/button-focus.log 2>&1 &
+          cargo build --release --example touchdemo
+          ./target/release/examples/touchdemo > visual_output/button-focus.log 2>&1 &
           TOUCH_PID=$!
           sleep 4
           xdotool key Tab; sleep 0.5; xdotool key Tab; sleep 0.5
@@ -120,8 +120,8 @@ jobs:
           DISPLAY: ":99"
         run: |
           kill "$APP_PID" 2>/dev/null || true
-          cargo build --release -p nativegallery
-          ./target/release/nativegallery > visual_output/native.log 2>&1 &
+          cargo build --release --example nativegallery
+          ./target/release/examples/nativegallery > visual_output/native.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root -crop 360x340+0+0 +repage visual_output/stipple-x11-native.png
@@ -133,7 +133,7 @@ jobs:
           kill "$APP_PID" 2>/dev/null || true
           sleep 1
           printf 'Xft.dpi: 192\n' | xrdb -nocpp -merge
-          ./target/release/nativegallery > visual_output/native-2x.log 2>&1 &
+          ./target/release/examples/nativegallery > visual_output/native-2x.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root -crop 720x680+0+0 +repage visual_output/hidpi-before.png
@@ -155,10 +155,10 @@ jobs:
           DISPLAY: ":99"
         run: |
           kill "$APP_PID" 2>/dev/null || true
-          cargo build --release -p asyncdemo
+          cargo build --release --example asyncdemo
           # The app quits itself once a 100ms timer has fired ten times and a
           # background thread's result has arrived, with no input at all.
-          timeout 20 ./target/release/asyncdemo --selftest | tee visual_output/async.log
+          timeout 20 ./target/release/examples/asyncdemo --selftest | tee visual_output/async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' visual_output/async.log
           grep -q 'asyncdemo: event loop exited' visual_output/async.log
           grep -q 'asyncdemo: spinner ok' visual_output/async.log
@@ -167,11 +167,11 @@ jobs:
         env:
           DISPLAY: ":99"
         run: |
-          cargo build --release -p canvasdemo
+          cargo build --release --example canvasdemo
           # A background thread changes a few rows of a 120x36 glyph grid at
           # the refresh rate and invalidates just those; the app checks with
           # RasterStats that what was rasterized adds up to those rows.
-          timeout 30 ./target/release/canvasdemo --selftest | tee visual_output/canvas.log
+          timeout 30 ./target/release/examples/canvasdemo --selftest | tee visual_output/canvas.log
           grep -q 'canvasdemo: selftest ok' visual_output/canvas.log
           grep -q 'canvasdemo: event loop exited' visual_output/canvas.log
 
@@ -182,8 +182,8 @@ jobs:
           kill "$APP_PID" 2>/dev/null || true
           # Back to 1x after the Xft.dpi step above.
           printf 'Xft.dpi: 96\n' | xrdb -nocpp -merge
-          cargo build --release -p layoutdemo
-          ./target/release/layoutdemo > visual_output/layout.log 2>&1 &
+          cargo build --release --example layoutdemo
+          ./target/release/examples/layoutdemo > visual_output/layout.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root -crop 720x520+0+0 +repage visual_output/stipple-x11-layout.png
@@ -193,8 +193,8 @@ jobs:
           DISPLAY: ":99"
         run: |
           kill "$APP_PID" 2>/dev/null || true
-          cargo build --release -p widgetsdemo
-          STIPPLE_X11_DEBUG=1 STIPPLE_APP_DEBUG=1 ./target/release/widgetsdemo > visual_output/widgets.log 2>&1 &
+          cargo build --release --example widgetsdemo
+          STIPPLE_X11_DEBUG=1 STIPPLE_APP_DEBUG=1 ./target/release/examples/widgetsdemo > visual_output/widgets.log 2>&1 &
           WPID=$!
           echo "APP_PID=$WPID" >> "$GITHUB_ENV"
           sleep 4
@@ -232,7 +232,7 @@ jobs:
       - name: gamedemo screens (off screen)
         run: |
           mkdir -p visual_output/gamedemo
-          cargo run --release -p gamedemo -- --shots visual_output/gamedemo
+          cargo run --release --example gamedemo -- --shots visual_output/gamedemo
           # The title shows: many colors, not a blank frame.
           colors=$(convert visual_output/gamedemo/title.png -format '%k' info:)
           echo "title: $colors colors"
@@ -273,7 +273,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool x11-utils fonts-dejavu-core
 
       - name: Build the viewport demo
-        run: cargo build --release -p viewportdemo
+        run: cargo build --release --example viewportdemo
 
       - name: Start Xvfb
         run: |
@@ -286,7 +286,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/viewportdemo > visual_output/viewport.log 2>&1 &
+          ./target/release/examples/viewportdemo > visual_output/viewport.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/stipple-viewport.png
@@ -348,7 +348,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick fonts-dejavu-core
 
       - name: Build the image demo
-        run: cargo build --release -p imagedemo
+        run: cargo build --release --example imagedemo
 
       - name: Start Xvfb
         run: |
@@ -361,7 +361,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/imagedemo > visual_output/image.log 2>&1 &
+          ./target/release/examples/imagedemo > visual_output/image.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/stipple-image-root.png
@@ -421,7 +421,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
 
       - name: Build the bidi demo
-        run: cargo build --release -p bididemo
+        run: cargo build --release --example bididemo
 
       - name: Start Xvfb
         run: |
@@ -434,7 +434,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/bididemo > visual_output/bidi.log 2>&1 &
+          ./target/release/examples/bididemo > visual_output/bidi.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/root.png
@@ -478,9 +478,9 @@ jobs:
         run: |
           kill "$APP_PID" 2>/dev/null || true
           sleep 1
-          ./target/release/bididemo --mirror-check | tee visual_output/bidi-mirror-check.log
+          ./target/release/examples/bididemo --mirror-check | tee visual_output/bidi-mirror-check.log
           grep -q 'bididemo mirror: ok' visual_output/bidi-mirror-check.log
-          ./target/release/bididemo --mirror > visual_output/bidi-mirror.log 2>&1 &
+          ./target/release/examples/bididemo --mirror > visual_output/bidi-mirror.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/root3.png
@@ -545,15 +545,15 @@ jobs:
           sudo apt-get install -y xvfb imagemagick fonts-dejavu-core fonts-liberation
 
       - name: Build the font demo
-        run: cargo build --release -p fontdemo
+        run: cargo build --release --example fontdemo
 
       - name: List families and check the rendering off screen
         run: |
           mkdir -p visual_output
-          ./target/release/fontdemo --list > visual_output/fonts-list.log
+          ./target/release/examples/fontdemo --list > visual_output/fonts-list.log
           head -n 40 visual_output/fonts-list.log
           grep -q '^DejaVu Sans Mono \[mono\]: 400 700 400i 700i' visual_output/fonts-list.log
-          ./target/release/fontdemo --check | tee visual_output/fonts-check.log
+          ./target/release/examples/fontdemo --check | tee visual_output/fonts-check.log
           grep -q 'fontdemo: ok' visual_output/fonts-check.log
           # The family's own bold and italic faces, not synthesized ones.
           ! grep -q synthetic visual_output/fonts-check.log
@@ -568,7 +568,7 @@ jobs:
         env:
           DISPLAY: ":99"
         run: |
-          ./target/release/fontdemo > visual_output/fonts.log 2>&1 &
+          ./target/release/examples/fontdemo > visual_output/fonts.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/root.png
@@ -612,7 +612,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool x11-utils fonts-dejavu-core
 
       - name: Build the table demo
-        run: cargo build --release -p tabledemo
+        run: cargo build --release --example tabledemo
 
       - name: Start Xvfb
         run: |
@@ -625,7 +625,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/tabledemo > visual_output/table.log 2>&1 &
+          ./target/release/examples/tabledemo > visual_output/table.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           # The window (900x560) sits at the root top-left.
@@ -686,7 +686,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool x11-utils fonts-dejavu-core
 
       - name: Build the scroll demo
-        run: cargo build --release -p scrolldemo
+        run: cargo build --release --example scrolldemo
 
       - name: Start Xvfb
         run: |
@@ -699,7 +699,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/scrolldemo > visual_output/scroll.log 2>&1 &
+          ./target/release/examples/scrolldemo > visual_output/scroll.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/scroll-before.png
@@ -770,7 +770,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick fonts-dejavu-core
 
       - name: Build listmotion
-        run: cargo build --release -p listmotion
+        run: cargo build --release --example listmotion
 
       - name: Start Xvfb
         run: |
@@ -783,7 +783,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/listmotion --demo > visual_output/listmotion.log 2>&1 &
+          ./target/release/examples/listmotion --demo > visual_output/listmotion.log 2>&1 &
           APP=$!
           echo "APP_PID=$APP" >> "$GITHUB_ENV"
           ae() { compare -metric AE "$1" "$2" null: 2>&1 | awk '{printf "%d", $1}'; }
@@ -853,7 +853,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool x11-utils fonts-dejavu-core
 
       - name: Build the overlay demo
-        run: cargo build --release -p overlaydemo
+        run: cargo build --release --example overlaydemo
 
       - name: Start Xvfb
         run: |
@@ -866,7 +866,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/overlaydemo > visual_output/overlay.log 2>&1 &
+          ./target/release/examples/overlaydemo > visual_output/overlay.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/overlay-base.png
@@ -927,7 +927,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
 
       - name: Build the menu demo
-        run: cargo build --release -p menudemo
+        run: cargo build --release --example menudemo
 
       - name: Start Xvfb
         run: |
@@ -940,7 +940,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          STIPPLE_X11_DEBUG=1 STIPPLE_APP_DEBUG=1 ./target/release/menudemo > visual_output/menu.log 2>&1 &
+          STIPPLE_X11_DEBUG=1 STIPPLE_APP_DEBUG=1 ./target/release/examples/menudemo > visual_output/menu.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           # Keep the pointer off the window's controls (and give it focus).
@@ -1040,7 +1040,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool xclip fonts-dejavu-core
 
       - name: Build the clipboard demo
-        run: cargo build --release -p clipboarddemo
+        run: cargo build --release --example clipboarddemo
 
       - name: Start Xvfb
         run: |
@@ -1053,7 +1053,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/clipboarddemo > visual_output/clipboard.log 2>&1 &
+          ./target/release/examples/clipboarddemo > visual_output/clipboard.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           xdotool key Tab            # focus the field ("Clip")
@@ -1117,7 +1117,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           kill "$APP_PID" 2>/dev/null || true
-          ./target/release/clipboarddemo --copy-rich > visual_output/rich.log 2>&1 &
+          ./target/release/examples/clipboarddemo --copy-rich > visual_output/rich.log 2>&1 &
           rich=$!
           sleep 3
           xdotool key Tab ctrl+c     # this field's copy is text + HTML + PNG
@@ -1135,17 +1135,17 @@ jobs:
           # Paste the image back in from xclip (INCR the other way)...
           xclip -selection clipboard -t image/png -i visual_output/copied.png
           sleep 0.5
-          timeout 20 ./target/release/clipboarddemo --paste-rich | tee visual_output/paste-rich.log
+          timeout 20 ./target/release/examples/clipboarddemo --paste-rich | tee visual_output/paste-rich.log
           grep -q "^pasted Clipboard: .*image=400x300" visual_output/paste-rich.log
           # ...and HTML.
           printf '<p>pasted <b>html</b></p>' | xclip -selection clipboard -t text/html
           sleep 0.5
-          timeout 20 ./target/release/clipboarddemo --paste-rich | tee -a visual_output/paste-rich.log
+          timeout 20 ./target/release/examples/clipboarddemo --paste-rich | tee -a visual_output/paste-rich.log
           grep -q "^pasted Clipboard: .*html=\"<p>pasted <b>html</b></p>\"" visual_output/paste-rich.log
           # The app reads another client's PRIMARY too.
           printf 'primary text' | xclip -selection primary
           sleep 0.5
-          timeout 20 ./target/release/clipboarddemo --paste-primary | tee -a visual_output/paste-rich.log
+          timeout 20 ./target/release/examples/clipboarddemo --paste-primary | tee -a visual_output/paste-rich.log
           grep -q '^pasted Primary: text="primary text"' visual_output/paste-rich.log
 
       - name: Stop the app and Xvfb
@@ -1184,7 +1184,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool python3-xlib fonts-dejavu-core
 
       - name: Build the drop demo
-        run: cargo build --release -p dropdemo
+        run: cargo build --release --example dropdemo
 
       - name: Start Xvfb
         run: |
@@ -1198,7 +1198,7 @@ jobs:
           STIPPLE_APP_DEBUG: "1"
         run: |
           mkdir -p visual_output
-          ./target/release/dropdemo --expect 4 --timeout 90 > visual_output/drop.log 2>&1 &
+          ./target/release/examples/dropdemo --expect 4 --timeout 90 > visual_output/drop.log 2>&1 &
           APP=$!
           echo "APP_PID=$APP" >> "$GITHUB_ENV"
           sleep 3
@@ -1317,7 +1317,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool x11-utils fonts-dejavu-core
 
       - name: Build the multi-window demo
-        run: cargo build --release -p multiwindow
+        run: cargo build --release --example multiwindow
 
       - name: Start Xvfb
         run: |
@@ -1330,7 +1330,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/multiwindow > visual_output/multiwindow.log 2>&1 &
+          ./target/release/examples/multiwindow > visual_output/multiwindow.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/multiwindow.png
@@ -1359,7 +1359,7 @@ jobs:
           # The screenshot's app has windows of the same names: stop it first.
           kill "$APP_PID" 2>/dev/null || true
           sleep 1
-          timeout 60 bash .github/scripts/runtime-windows.sh target/release/multiwindow x11
+          timeout 60 bash .github/scripts/runtime-windows.sh target/release/examples/multiwindow x11
 
       - name: Stop the app and Xvfb
         if: always()
@@ -1394,7 +1394,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
 
       - name: Build the calculator demo
-        run: cargo build --release -p calculator
+        run: cargo build --release --example calculator
 
       - name: Start Xvfb
         run: |
@@ -1407,7 +1407,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/calculator > visual_output/calculator.log 2>&1 &
+          ./target/release/examples/calculator > visual_output/calculator.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/calc-before.png
@@ -1463,7 +1463,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
 
       - name: Build the tabs demo
-        run: cargo build --release -p tabsdemo
+        run: cargo build --release --example tabsdemo
 
       - name: Start Xvfb
         run: |
@@ -1476,7 +1476,7 @@ jobs:
           DISPLAY: ":99"
         run: |
           mkdir -p visual_output
-          ./target/release/tabsdemo > visual_output/tabs.log 2>&1 &
+          ./target/release/examples/tabsdemo > visual_output/tabs.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           import -window root visual_output/tabs-0.png
@@ -1530,7 +1530,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
 
       - name: Build the sessions demo
-        run: cargo build --release -p sessionsdemo
+        run: cargo build --release --example sessionsdemo
 
       - name: Start Xvfb
         run: |
@@ -1549,7 +1549,7 @@ jobs:
             echo "$1 -> $2: $d pixels changed"
             [ "$(echo "$d" | awk '{printf "%d", $1}')" -gt "$3" ]
           }
-          ./target/release/sessionsdemo > visual_output/sessions.log 2>&1 &
+          ./target/release/examples/sessionsdemo > visual_output/sessions.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           shot stipple-x11-sessions
@@ -1587,7 +1587,7 @@ jobs:
         run: |
           # No native alert on Linux: the self-test's question is drawn in the
           # window (dark theme); Escape presses its Cancel (button 2).
-          ./target/release/sessionsdemo dark --alert-selftest > visual_output/alert.log 2>&1 &
+          ./target/release/examples/sessionsdemo dark --alert-selftest > visual_output/alert.log 2>&1 &
           pid=$!
           sleep 4
           import -window root -crop 760x480+0+0 +repage visual_output/stipple-x11-sessions-alert-dark.png
@@ -1630,7 +1630,7 @@ jobs:
             libegl-dev libgles-dev libegl-mesa0 libgl1-mesa-dri libgbm-dev
 
       - name: Build the GPU window example (GLES backend)
-        run: cargo build --release -p gpuwindow --features stipple/gl
+        run: cargo build --release --example gpuwindow --features gl
 
       - name: Start Xvfb
         run: |
@@ -1645,7 +1645,7 @@ jobs:
           GALLIUM_DRIVER: llvmpipe
         run: |
           mkdir -p visual_output
-          ./target/release/gpuwindow > visual_output/gpuwindow.log 2>&1 &
+          ./target/release/examples/gpuwindow > visual_output/gpuwindow.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 5
           import -window root visual_output/stipple-gpu-window.png
@@ -1693,7 +1693,7 @@ jobs:
           sudo apt-get install -y libegl-dev libgles-dev libegl-mesa0 libgl1-mesa-dri libgbm-dev
 
       - name: Build the dma-buf spike (GLES backend)
-        run: cargo build --release -p dmabuftest --features stipple/gl
+        run: cargo build --release --example dmabuftest --features gl
 
       - name: Run the export/import self-test
         env:
@@ -1701,7 +1701,7 @@ jobs:
           GALLIUM_DRIVER: llvmpipe
         run: |
           set +e
-          ./target/release/dmabuftest | tee dmabuf.log
+          ./target/release/examples/dmabuftest | tee dmabuf.log
           rc=${PIPESTATUS[0]}
           echo "exit code: $rc"
           # 0 = functional pass, 2 = unsupported on this (software) device — both
@@ -1730,14 +1730,14 @@ jobs:
       - name: Install Xvfb
         run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Build dri3probe
-        run: cargo build --release -p dri3probe
+        run: cargo build --release --example dri3probe --features gpu
       - name: Negotiate the Present extension under Xvfb
         run: |
           Xvfb :99 -screen 0 1024x768x24 &
           XVFB_PID=$!
           sleep 2
           set +e
-          DISPLAY=:99 ./target/release/dri3probe | tee dri3.log
+          DISPLAY=:99 ./target/release/examples/dri3probe | tee dri3.log
           set -e
           kill "$XVFB_PID" 2>/dev/null || true
           # The Present extension must negotiate (Xvfb supports Present, no GPU).
@@ -1757,12 +1757,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the content-process demo
-        run: cargo build --release -p contentproc
+        run: cargo build --release --example contentproc
       - name: Run the cross-process content path
         run: |
           # Capture both streams: the UI process logs to stdout, the content
           # process to stderr.
-          ./target/release/contentproc 2>&1 | tee contentproc.log
+          ./target/release/examples/contentproc 2>&1 | tee contentproc.log
           # The UI process mapped the content process's buffer, composited it into
           # a viewport, and the forwarded input crossed the process boundary.
           grep -q "RESULT: PASS" contentproc.log
@@ -1790,7 +1790,7 @@ jobs:
         run: sudo apt-get install -y fcitx5 fcitx5-mozc fcitx5-chinese-addons fcitx5-hangul dbus-x11
 
       - name: Build the window, textinput, clipboard, rawkeys and multi-window examples
-        run: cargo build --release -p window -p textinput -p clipboarddemo -p rawkeys -p multiwindow
+        run: cargo build --release --example window --example textinput --example clipboarddemo --example rawkeys --example multiwindow
 
       - name: Run under headless sway and screenshot with grim
         run: |
@@ -1815,7 +1815,7 @@ jobs:
           mkdir -p visual_output
 
           # --- render: the window example, screenshotted with grim ---
-          ./target/release/window > visual_output/wl.log 2>&1 &
+          ./target/release/examples/window > visual_output/wl.log 2>&1 &
           WIN_PID=$!
           sleep 5
           grim visual_output/stipple-wayland.png || echo "grim failed"
@@ -1823,22 +1823,22 @@ jobs:
           sleep 1
 
           # --- wakeups: timers and a background thread, with no input. ---
-          cargo build --release -p asyncdemo
-          timeout 20 ./target/release/asyncdemo --selftest | tee visual_output/wl-async.log
+          cargo build --release --example asyncdemo
+          timeout 20 ./target/release/examples/asyncdemo --selftest | tee visual_output/wl-async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' visual_output/wl-async.log
           grep -q 'asyncdemo: event loop exited' visual_output/wl-async.log
           grep -q 'asyncdemo: spinner ok' visual_output/wl-async.log
 
           # --- canvas: only the invalidated rows are re-rasterized. ---
-          cargo build --release -p canvasdemo
-          timeout 30 ./target/release/canvasdemo --selftest | tee visual_output/wl-canvas.log
+          cargo build --release --example canvasdemo
+          timeout 30 ./target/release/examples/canvasdemo --selftest | tee visual_output/wl-canvas.log
           grep -q 'canvasdemo: selftest ok' visual_output/wl-canvas.log
 
           # --- scale: with the output at 2x, the buffer must follow it. ---
           export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
           swaymsg output HEADLESS-1 scale 2
           sleep 1
-          ./target/release/window > visual_output/wl-2x.log 2>&1 &
+          ./target/release/examples/window > visual_output/wl-2x.log 2>&1 &
           WIN_PID=$!
           sleep 5
           grim visual_output/stipple-wayland-2x.png || echo "grim failed"
@@ -1850,7 +1850,7 @@ jobs:
           # --- input: type into the textinput field via wtype (virtual
           # keyboard). Tab focuses the field, then we type text — exercising the
           # wl_seat keyboard + xkb keymap decode path end to end. ---
-          ./target/release/textinput > visual_output/wl-input.log 2>&1 &
+          ./target/release/examples/textinput > visual_output/wl-input.log 2>&1 &
           TXT_PID=$!
           sleep 4
           # Each wtype run creates a virtual keyboard, and the app only binds
@@ -1869,7 +1869,7 @@ jobs:
           # locale's Compose file. wtype's keymap names the dead key by value.
           # The app also binds sway's zwp_text_input_v3 (no input method runs
           # here, so nothing comes back through it). ---
-          LANG=C.UTF-8 STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+          LANG=C.UTF-8 STIPPLE_TEXTINPUT_ECHO=1 ./target/release/examples/textinput \
             > visual_output/wl-compose.log 2>&1 &
           TXT_PID=$!
           sleep 4
@@ -1889,7 +1889,7 @@ jobs:
           # nothing about where a key is: the backend reports the physical key
           # as unknown ("phys=?") and we check the logical keys, modifiers and
           # repeats. (The first Tab only focuses the element.) ---
-          ./target/release/rawkeys > visual_output/wl-rawkeys.log 2>&1 &
+          ./target/release/examples/rawkeys > visual_output/wl-rawkeys.log 2>&1 &
           RAW_PID=$!
           sleep 4
           wtype -s 500 -d 120 -k Tab -k F5 -M ctrl -k d -m ctrl -k Tab \
@@ -1910,7 +1910,7 @@ jobs:
           # --- clipboard: copy out of the app, paste into it, copy back out.
           # wl-copy / wl-paste reach the selection through the compositor, so
           # each direction crosses wl_data_device. ---
-          ./target/release/clipboarddemo > visual_output/wl-clipboard.log 2>&1 &
+          ./target/release/examples/clipboarddemo > visual_output/wl-clipboard.log 2>&1 &
           CLIP_PID=$!
           sleep 4
           # Focus the field ("Clip"), select all, copy: the app owns the selection.
@@ -1936,7 +1936,7 @@ jobs:
           [ "$primary" = "ClipPaste" ]
 
           # --- rich clipboard: a field whose copy is text + HTML + a PNG. ---
-          ./target/release/clipboarddemo --copy-rich > visual_output/wl-rich.log 2>&1 &
+          ./target/release/examples/clipboarddemo --copy-rich > visual_output/wl-rich.log 2>&1 &
           CLIP_PID=$!
           sleep 4
           wtype -s 500 -d 120 -k Tab -M ctrl -k c -m ctrl 2>> visual_output/wtype.log; sleep 1
@@ -1952,7 +1952,7 @@ jobs:
           # key gives it a keyboard.
           wl-copy -t image/png < visual_output/wl-copied.png
           sleep 1
-          ./target/release/clipboarddemo --paste-rich > visual_output/wl-paste-rich.log 2>&1 &
+          ./target/release/examples/clipboarddemo --paste-rich > visual_output/wl-paste-rich.log 2>&1 &
           CLIP_PID=$!
           sleep 3
           wtype -s 500 -k Tab 2>> visual_output/wtype.log
@@ -1961,7 +1961,7 @@ jobs:
           grep -q '^pasted Clipboard: .*image=400x300' visual_output/wl-paste-rich.log
           wl-copy --primary "wl primary"
           sleep 1
-          ./target/release/clipboarddemo --paste-primary > visual_output/wl-paste-primary.log 2>&1 &
+          ./target/release/examples/clipboarddemo --paste-primary > visual_output/wl-paste-primary.log 2>&1 &
           CLIP_PID=$!
           sleep 3
           wtype -s 500 -k Tab 2>> visual_output/wtype.log
@@ -1973,7 +1973,7 @@ jobs:
           # a third toplevel opened and closed while the app runs, as sway's
           # tree shows them. ---
           OUT_DIR=visual_output timeout 60 \
-            bash .github/scripts/runtime-windows.sh target/release/multiwindow wayland
+            bash .github/scripts/runtime-windows.sh target/release/examples/multiwindow wayland
 
           echo "=== seatd.log ==="; cat seatd.log || true
           echo "=== sway.log ==="; cat sway.log || true
@@ -2013,7 +2013,7 @@ jobs:
           export WAYLAND_DISPLAY="$SOCK"
           sleep 2
           OUT_DIR=visual_output timeout 300 \
-            dbus-run-session -- bash .github/scripts/wayland-ime.sh target/release/textinput
+            dbus-run-session -- bash .github/scripts/wayland-ime.sh target/release/examples/textinput
           kill "$SWAY_PID" 2>/dev/null || true
 
       - name: Upload screenshot + logs
@@ -2046,7 +2046,7 @@ jobs:
 
       - name: Build the clickdemo + textinput + hoverdemo + textarea + pointerdemo + rawkeys examples
         # Release so per-event re-rasterization keeps up with input.
-        run: cargo build --release -p clickdemo -p textinput -p hoverdemo -p textarea -p pointerdemo -p rawkeys
+        run: cargo build --release --example clickdemo --example textinput --example hoverdemo --example textarea --example pointerdemo --example rawkeys
 
       - name: Click + type, screenshotting the results
         env:
@@ -2059,7 +2059,7 @@ jobs:
           sleep 2
 
           # --- pointer: click a counting button ---
-          ./target/release/clickdemo > visual_output/clickdemo.log 2>&1 &
+          ./target/release/examples/clickdemo > visual_output/clickdemo.log 2>&1 &
           CLICK_PID=$!
           sleep 3
           import -window root visual_output/clicks-before.png
@@ -2071,7 +2071,7 @@ jobs:
 
           # --- keyboard: focus the field (Tab), type, then move the caret and
           # insert mid-string to exercise the caret-aware EditBuffer ---
-          ./target/release/textinput > visual_output/textinput.log 2>&1 &
+          ./target/release/examples/textinput > visual_output/textinput.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 3
           xdotool key Tab; sleep 1
@@ -2099,7 +2099,7 @@ jobs:
           # neither keysym, so xdotool borrows a spare keycode for each, which
           # the app sees as a MappingNotify. The pending sequence shows as an
           # underlined preedit, screenshotted mid-sequence. ---
-          LANG=C.UTF-8 STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+          LANG=C.UTF-8 STIPPLE_TEXTINPUT_ECHO=1 ./target/release/examples/textinput \
             > visual_output/compose.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           COMPOSE_PID=$!
@@ -2121,7 +2121,7 @@ jobs:
           # gets F-keys, Ctrl+letters and Tab with their physical keys, before
           # the toolkit maps them; the menu's Ctrl+T shortcut still wins; a
           # held key repeats (XKB detectable auto-repeat: no fake releases). ---
-          ./target/release/rawkeys > visual_output/rawkeys.log 2>&1 &
+          ./target/release/examples/rawkeys > visual_output/rawkeys.log 2>&1 &
           RAW_PID=$!
           sleep 3
           xdotool key Tab; sleep 0.5   # focus the element (no raw handler yet)
@@ -2155,7 +2155,7 @@ jobs:
           [ "$(grep -c "Released Char('b')" visual_output/rawkeys.log)" = 1 ]
 
           # --- hover: move the cursor onto the right button ---
-          STIPPLE_APP_DEBUG=1 ./target/release/hoverdemo > visual_output/hoverdemo.log 2>&1 &
+          STIPPLE_APP_DEBUG=1 ./target/release/examples/hoverdemo > visual_output/hoverdemo.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 3
           xdotool mousemove 284 70  # center of the right button
@@ -2170,7 +2170,7 @@ jobs:
 
           # --- multi-line editing: type across lines (Enter = newline), then
           # navigate up and select down across lines ---
-          ./target/release/textarea > visual_output/textarea.log 2>&1 &
+          ./target/release/examples/textarea > visual_output/textarea.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 3
           xdotool key Tab; sleep 1
@@ -2199,7 +2199,7 @@ jobs:
         run: |
           # The textarea example from the last step is still up.
           kill "$APP_PID" 2>/dev/null || true
-          ./target/release/pointerdemo > visual_output/pointer.log 2> visual_output/pointer-debug.log &
+          ./target/release/examples/pointerdemo > visual_output/pointer.log 2> visual_output/pointer-debug.log &
           APP_PID=$!
           sleep 3
           xdotool mousemove 200 150; sleep 0.5
@@ -2235,7 +2235,7 @@ jobs:
           DISPLAY: ":99"
           STIPPLE_X11_DEBUG: "1"
         run: |
-          ./target/release/pointerdemo --lock-test > visual_output/pointerlock.log \
+          ./target/release/examples/pointerdemo --lock-test > visual_output/pointerlock.log \
             2> visual_output/pointerlock-debug.log &
           LOCK_PID=$!
           sleep 3
@@ -2284,7 +2284,7 @@ jobs:
           # --- IBus's keyboard engine: dead_acute e -> é, through XIM ---
           # (`ibus engine NAME` can exit 1 even when it switched.)
           ibus engine xkb:us::eng || true
-          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/examples/textinput \
             > visual_output/xim.log 2>&1 &
           APP=$!
           sleep 3
@@ -2307,7 +2307,7 @@ jobs:
           # until then).
           ibus engine mozc-jp || true
           [ "$(ibus engine)" = mozc-jp ] || { echo "::error::IBus has no mozc-jp engine"; exit 1; }
-          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/examples/textinput \
             > visual_output/xim-mozc.log 2>&1 &
           APP=$!
           sleep 3
@@ -2329,7 +2329,7 @@ jobs:
 
           # --- the server goes away: the app falls back to its own compose ---
           ibus engine xkb:us::eng || true
-          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/textinput \
+          XMODIFIERS=@im=ibus STIPPLE_TEXTINPUT_ECHO=1 ./target/release/examples/textinput \
             > visual_output/xim-gone.log 2>&1 &
           APP=$!
           sleep 3
@@ -2370,19 +2370,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build the window example
-        run: cargo build --release -p window
+        run: cargo build --release --example window
 
       - name: Exercise the raw Direct3D 11 (WARP) backend
         shell: bash
         run: |
-          cargo run --release -p d3ddemo --features stipple/d3d | tee d3ddemo.log
+          cargo run --release --example d3ddemo --features d3d | tee d3ddemo.log
           # WARP is always available on the runner, so a device must come up.
           grep -q "D3D11 device: WARP device" d3ddemo.log
 
       - name: Exercise the raw UI Automation provider
         shell: bash
         run: |
-          cargo run --release -p uiademo | tee uiademo.log
+          cargo run --release --example uiademo | tee uiademo.log
           # The hand-built provider answers via its COM vtable: a server-side
           # provider (options 1) whose root is a Window control (50032), "Stipple".
           grep -q 'UIA provider: options=34 controltype=50032 name="Stipple"' uiademo.log
@@ -2415,8 +2415,8 @@ jobs:
       - name: Read and drive a running window through UI Automation (out of process)
         shell: powershell
         run: |
-          cargo build --release -p touchdemo
-          .github\scripts\uia-walk.ps1 .\target\release\touchdemo.exe visual_output
+          cargo build --release --example touchdemo
+          .github\scripts\uia-walk.ps1 .\target\release\examples\touchdemo.exe visual_output
           # ...and a GPU-rendered frame must read back as the cleared stipple blue
           # (R=0x60 G=0x9c B=0xff A=0xff), checked tool-free from the printed pixel.
           grep -q "D3D11 readback: .* first pixel 96,156,255,255" d3ddemo.log
@@ -2431,8 +2431,8 @@ jobs:
       - name: Timers and background work wake the event loop
         shell: bash
         run: |
-          cargo build --release -p asyncdemo
-          timeout 30 ./target/release/asyncdemo.exe --selftest | tee async.log
+          cargo build --release --example asyncdemo
+          timeout 30 ./target/release/examples/asyncdemo.exe --selftest | tee async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
 
@@ -2443,23 +2443,23 @@ jobs:
         run: |
           # Titles (GetWindowTextW), frames (GetWindowRect / GetClientRect)
           # and resize increments are read back from Win32 in the debug lines.
-          cargo build --release -p multiwindow
-          timeout 60 bash .github/scripts/runtime-windows.sh target/release/multiwindow.exe log
+          cargo build --release --example multiwindow
+          timeout 60 bash .github/scripts/runtime-windows.sh target/release/examples/multiwindow.exe log
           grep -q 'asyncdemo: spinner ok' async.log
 
       - name: A canvas repaints only the rows it invalidates
         shell: bash
         run: |
-          cargo build --release -p canvasdemo
-          timeout 30 ./target/release/canvasdemo.exe --selftest | tee canvas.log
+          cargo build --release --example canvasdemo
+          timeout 30 ./target/release/examples/canvasdemo.exe --selftest | tee canvas.log
           grep -q 'canvasdemo: selftest ok' canvas.log
 
       - name: Round-trip text through the system clipboard
         shell: bash
         run: |
-          cargo build --release -p clipboarddemo
+          cargo build --release --example clipboarddemo
           # Set CF_UNICODETEXT through stipple::platform::clipboard, read it back.
-          timeout 30 ./target/release/clipboarddemo.exe --roundtrip | tee clipboard.log
+          timeout 30 ./target/release/examples/clipboarddemo.exe --roundtrip | tee clipboard.log
           grep -q 'clipboard roundtrip: ok' clipboard.log
           # ...and another process sees it on the OS clipboard.
           powershell -NoProfile -Command Get-Clipboard | tee os-clipboard.txt
@@ -2469,7 +2469,7 @@ jobs:
         shell: bash
         run: |
           # CF_UNICODETEXT + "HTML Format" (CF_HTML) + CF_DIBV5 + "PNG", read back.
-          timeout 30 ./target/release/clipboarddemo.exe --roundtrip-rich | tee rich.log
+          timeout 30 ./target/release/examples/clipboarddemo.exe --roundtrip-rich | tee rich.log
           grep -q 'rich roundtrip: ok' rich.log
           # Another process sees each format (.NET decodes CF_HTML and the bitmap).
           powershell -NoProfile -STA -Command '
@@ -2491,10 +2491,10 @@ jobs:
             Add-Type -AssemblyName System.Drawing
             $b = New-Object System.Drawing.Bitmap 32,16
             [System.Windows.Forms.Clipboard]::SetImage($b)'
-          timeout 30 ./target/release/clipboarddemo.exe --read | tee read.log
+          timeout 30 ./target/release/examples/clipboarddemo.exe --read | tee read.log
           grep -q 'image=32x16' read.log
           powershell -NoProfile -Command 'Set-Clipboard -Value "<i>from powershell</i>" -AsHtml'
-          timeout 30 ./target/release/clipboarddemo.exe --read | tee -a read.log
+          timeout 30 ./target/release/examples/clipboarddemo.exe --read | tee -a read.log
           grep -q 'html=".*<i>from powershell</i>' read.log
 
       # TSF: the thread manager activates, the field's window is tied to its
@@ -2509,18 +2509,18 @@ jobs:
         env:
           OUT_DIR: visual_output
         run: |
-          cargo build --release -p textinput
-          timeout 120 bash .github/scripts/tsf-windows.sh target/release/textinput.exe
+          cargo build --release --example textinput
+          timeout 120 bash .github/scripts/tsf-windows.sh target/release/examples/textinput.exe
 
       - name: Drive the native menu bar and context menu
         shell: powershell
         run: |
-          cargo build --release -p menudemo
+          cargo build --release --example menudemo
           # Reads the HMENU back (GetMenu/GetMenuStringW), picks with
           # WM_COMMAND, Alt+E then a mnemonic, and Ctrl+D, opens the native
           # context menu (#32768) with a right-click and picks from it, and
           # checks menudemo's log saw each command exactly once.
-          .github\scripts\menu-windows.ps1 .\target\release\menudemo.exe visual_output
+          .github\scripts\menu-windows.ps1 .\target\release\examples\menudemo.exe visual_output
 
       # Not yet passing on the runner: DoDragDrop doesn't complete there (see
       # the progress lines), so this reports without failing the job while
@@ -2530,11 +2530,11 @@ jobs:
         timeout-minutes: 8
         continue-on-error: true
         run: |
-          cargo build --release -p dropdemo
+          cargo build --release --example dropdemo
           New-Item -ItemType Directory -Force visual_output | Out-Null
           $file = Join-Path $env:RUNNER_TEMP 'dropped.txt'
           Set-Content -Path $file -Value 'hello'
-          $app = Start-Process -FilePath .\target\release\dropdemo.exe `
+          $app = Start-Process -FilePath .\target\release\examples\dropdemo.exe `
             -ArgumentList '--expect', '2', '--timeout', '90' -PassThru `
             -RedirectStandardOutput visual_output\drop.log `
             -RedirectStandardError visual_output\drop-err.log
@@ -2571,9 +2571,9 @@ jobs:
       - name: Screenshot the Stipple window and the native gallery
         shell: powershell
         run: |
-          cargo build --release -p nativegallery
-          .github\scripts\capture-window.ps1 .\target\release\window.exe visual_output\stipple-windows.png
-          .github\scripts\capture-window.ps1 .\target\release\nativegallery.exe visual_output\stipple-windows-native.png
+          cargo build --release --example nativegallery
+          .github\scripts\capture-window.ps1 .\target\release\examples\window.exe visual_output\stipple-windows.png
+          .github\scripts\capture-window.ps1 .\target\release\examples\nativegallery.exe visual_output\stipple-windows-native.png
 
       # A mirrored (right-to-left) UI: bididemo --mirror-check renders it off
       # screen with the system font and checks it is laid out from the right
@@ -2582,8 +2582,8 @@ jobs:
       - name: Check the mirrored UI
         shell: bash
         run: |
-          cargo build --release -p bididemo
-          timeout 60 ./target/release/bididemo.exe --mirror-check | tee bidi-mirror.log
+          cargo build --release --example bididemo
+          timeout 60 ./target/release/examples/bididemo.exe --mirror-check | tee bidi-mirror.log
           grep -q 'bididemo mirror: ok' bidi-mirror.log
 
       # System fonts found by scanning the Windows Fonts directories: the
@@ -2592,17 +2592,17 @@ jobs:
       - name: Check system fonts and decorations
         shell: bash
         run: |
-          cargo build --release -p fontdemo
-          ./target/release/fontdemo.exe --list > fonts-list.log
+          cargo build --release --example fontdemo
+          ./target/release/examples/fontdemo.exe --list > fonts-list.log
           head -n 40 fonts-list.log
           grep -q 'Consolas\|Courier New' fonts-list.log
-          timeout 60 ./target/release/fontdemo.exe --check | tee fonts-check.log
+          timeout 60 ./target/release/examples/fontdemo.exe --check | tee fonts-check.log
           grep -q 'fontdemo: ok' fonts-check.log
 
       - name: Screenshot the mirrored UI
         shell: powershell
         run: |
-          .github\scripts\capture-window.ps1 .\target\release\bididemo.exe visual_output\stipple-windows-bidi-mirror.png -Title "Stipple - mirrored UI" -Arguments "--mirror"
+          .github\scripts\capture-window.ps1 .\target\release\examples\bididemo.exe visual_output\stipple-windows-bidi-mirror.png -Title "Stipple - mirrored UI" -Arguments "--mirror"
 
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
@@ -2632,10 +2632,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the textinput example
-        run: cargo build --release -p textinput
+        run: cargo build --release --example textinput
       - name: Type through the Microsoft Japanese IME
         shell: powershell
-        run: .github\scripts\ime-windows.ps1 .\target\release\textinput.exe visual_output
+        run: .github\scripts\ime-windows.ps1 .\target\release\examples\textinput.exe visual_output
       - name: Upload logs and screenshots
         uses: actions/upload-artifact@v4
         if: always()
@@ -2660,11 +2660,11 @@ jobs:
       - name: Install ImageMagick + font
         run: sudo apt-get update && sudo apt-get install -y imagemagick fonts-dejavu-core
       - name: Build the material3 demo
-        run: cargo build --release -p material3demo
+        run: cargo build --release --example material3demo
       - name: Render the Material 3 schemes and montage them
         run: |
           mkdir -p visual_output
-          ./target/release/material3demo
+          ./target/release/examples/material3demo
           for i in 0 1 2 3; do cp "theme$i.png" "m$i.png"; done
           montage m0.png m1.png m2.png m3.png -tile 2x2 -geometry +6+6 -background '#222' \
             visual_output/stipple-material3.png
@@ -2698,11 +2698,11 @@ jobs:
       - name: Install ImageMagick + font
         run: sudo apt-get update && sudo apt-get install -y imagemagick fonts-dejavu-core
       - name: Build the themegallery example
-        run: cargo build --release -p themegallery
+        run: cargo build --release --example themegallery
       - name: Render themes and montage them
         run: |
           mkdir -p visual_output
-          ./target/release/themegallery
+          ./target/release/examples/themegallery
           for i in 0 1 2 3; do cp "theme$i.png" "t$i.png"; done
           montage t0.png t1.png t2.png t3.png -tile 2x2 -geometry +6+6 -background '#222' \
             visual_output/stipple-themes.png
@@ -2741,7 +2741,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build the wasm module
-        run: cargo build -p webdemo --target wasm32-unknown-unknown --release
+        run: cargo build --example webdemo --target wasm32-unknown-unknown --release
 
       - name: Install a font, and ImageMagick to check the screenshot
         run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core imagemagick
@@ -2750,7 +2750,7 @@ jobs:
         run: |
           mkdir -p site visual_output
           cp examples/webdemo/index.html examples/webdemo/multi.html web/stipple.js site/
-          cp target/wasm32-unknown-unknown/release/webdemo.wasm site/
+          cp target/wasm32-unknown-unknown/release/examples/webdemo.wasm site/
           cp /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf site/font.ttf
           ls -l site/
 
@@ -2954,7 +2954,7 @@ jobs:
             imagemagick fonts-dejavu-core
 
       - name: Build gpudemo with the GL + Vulkan features
-        run: cargo build --release -p gpudemo --features stipple/gl,stipple/vk
+        run: cargo build --release --example gpudemo --features gl,vk
 
       - name: Render through the GPU and convert the readback to PNG
         env:
@@ -2962,7 +2962,7 @@ jobs:
           GALLIUM_DRIVER: llvmpipe
         run: |
           mkdir -p visual_output
-          ./target/release/gpudemo | tee gpudemo.log
+          ./target/release/examples/gpudemo | tee gpudemo.log
           cp gpu-out.png visual_output/stipple-gpu.png
           # GPU-native geometry: solid rects tessellated + filled on the GPU.
           cp gpu-rects.png visual_output/stipple-gpu-rects.png
@@ -3009,7 +3009,7 @@ jobs:
           STIPPLE_GPU_DUMP: ${{ github.workspace }}/gpu-compare
         run: |
           mkdir -p gpu-compare visual_output
-          cargo test -p stipple --features gl --lib gpu:: -- --nocapture --test-threads 1
+          cargo test --features gl --lib gpu:: -- --nocapture --test-threads 1
           for f in gpu-compare/*.png; do
             cp "$f" "visual_output/gpu-compare-$(basename "$f")"
           done
@@ -3035,11 +3035,11 @@ jobs:
       - name: Install cliclick
         run: brew install cliclick
       - name: Build the clickdemo example (release)
-        run: cargo build --release -p clickdemo
+        run: cargo build --release --example clickdemo
       - name: Click the window and screenshot before/after
         run: |
           mkdir -p visual_output
-          ./target/release/clickdemo > visual_output/clickdemo-macos.log 2>&1 &
+          ./target/release/examples/clickdemo > visual_output/clickdemo-macos.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 4
           screencapture -x visual_output/mac-clicks-before.png
@@ -3067,8 +3067,8 @@ jobs:
         env:
           OUT_DIR: visual_output
         run: |
-          cargo build --release -p textinput
-          bash .github/scripts/ime-macos.sh target/release/textinput
+          cargo build --release --example textinput
+          bash .github/scripts/ime-macos.sh target/release/examples/textinput
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         if: always()
@@ -3089,11 +3089,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build the window example
-        run: cargo build --release -p window
+        run: cargo build --release --example window
 
       - name: Exercise the raw Metal backend
         run: |
-          cargo run --release -p metaldemo --features stipple/mtl | tee metaldemo.log
+          cargo run --release --example metaldemo --features mtl | tee metaldemo.log
           # A Metal device is always available on the macOS runner.
           grep -q "Metal device: " metaldemo.log
           # ...and a GPU-rendered frame must read back as the cleared stipple blue
@@ -3111,7 +3111,7 @@ jobs:
           STIPPLE_COCOA_A11Y: "1"
         run: |
           mkdir -p visual_output
-          ./target/release/window > visual_output/macos.log 2>&1 &
+          ./target/release/examples/window > visual_output/macos.log 2>&1 &
           echo "APP_PID=$!" >> "$GITHUB_ENV"
           sleep 5
           echo "=== macos.log ==="; cat visual_output/macos.log || true
@@ -3131,8 +3131,8 @@ jobs:
           # Titles, frames and contentResizeIncrements are read back from
           # AppKit in the debug lines. macOS has no `timeout`; perl's alarm
           # stands in for it.
-          cargo build --release -p multiwindow
-          perl -e 'alarm 60; exec @ARGV' bash .github/scripts/runtime-windows.sh target/release/multiwindow log
+          cargo build --release --example multiwindow
+          perl -e 'alarm 60; exec @ARGV' bash .github/scripts/runtime-windows.sh target/release/examples/multiwindow log
           # ...and the *full* element tree (not just the root) is vended: the view
           # has children, and a recursive walk over -accessibilityChildren reaches
           # nested AXStaticText descendants — proving the whole hierarchy is exposed.
@@ -3151,21 +3151,21 @@ jobs:
         env:
           STIPPLE_COCOA_DROP: /tmp/stipple-dropped.txt
         run: |
-          cargo build --release -p dropdemo
+          cargo build --release --example dropdemo
           echo hello > /tmp/stipple-dropped.txt
           # CI can't drag in Finder: the backend calls the view's own
           # NSDraggingDestination methods with a stand-in NSDraggingInfo whose
           # pasteboard holds the file's URL, through real objc dispatch.
-          perl -e 'alarm 60; exec @ARGV' ./target/release/dropdemo --expect 1 --timeout 30 | tee drop.log
+          perl -e 'alarm 60; exec @ARGV' ./target/release/examples/dropdemo --expect 1 --timeout 30 | tee drop.log
           grep -q "Cocoa drop: wrote=true ops=\[1, 1, 1\] prepared=true performed=true" drop.log
           grep -q 'dropdemo: drop files \[".*stipple-dropped.txt"\]' drop.log
           grep -q 'dropdemo: selftest ok' drop.log
 
       - name: Timers and background work wake the event loop
         run: |
-          cargo build --release -p asyncdemo
+          cargo build --release --example asyncdemo
           # macOS has no `timeout`; perl's alarm stands in for it.
-          perl -e 'alarm 30; exec @ARGV' ./target/release/asyncdemo --selftest | tee async.log
+          perl -e 'alarm 30; exec @ARGV' ./target/release/examples/asyncdemo --selftest | tee async.log
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' async.log
           grep -q 'asyncdemo: event loop exited' async.log
           grep -q 'asyncdemo: spinner ok' async.log
@@ -3183,15 +3183,15 @@ jobs:
 
       - name: A canvas repaints only the rows it invalidates
         run: |
-          cargo build --release -p canvasdemo
-          perl -e 'alarm 30; exec @ARGV' ./target/release/canvasdemo --selftest | tee canvas.log
+          cargo build --release --example canvasdemo
+          perl -e 'alarm 30; exec @ARGV' ./target/release/examples/canvasdemo --selftest | tee canvas.log
           grep -q 'canvasdemo: selftest ok' canvas.log
 
       - name: Round-trip text through the system clipboard
         run: |
-          cargo build --release -p clipboarddemo
+          cargo build --release --example clipboarddemo
           # Set NSPasteboard's string through stipple::platform::clipboard, read it back.
-          perl -e 'alarm 30; exec @ARGV' ./target/release/clipboarddemo --roundtrip | tee clipboard.log
+          perl -e 'alarm 30; exec @ARGV' ./target/release/examples/clipboarddemo --roundtrip | tee clipboard.log
           grep -q 'clipboard roundtrip: ok' clipboard.log
           # ...and another process sees it on the general pasteboard.
           pbpaste | tee os-clipboard.txt
@@ -3200,7 +3200,7 @@ jobs:
       - name: Round-trip HTML and an image through the system clipboard
         run: |
           # public.utf8-plain-text + public.html + public.png, read back.
-          perl -e 'alarm 30; exec @ARGV' ./target/release/clipboarddemo --roundtrip-rich | tee rich.log
+          perl -e 'alarm 30; exec @ARGV' ./target/release/examples/clipboarddemo --roundtrip-rich | tee rich.log
           grep -q 'rich roundtrip: ok' rich.log
           # Another process sees each type.
           osascript -e 'clipboard info' | tee os-rich.txt
@@ -3211,12 +3211,12 @@ jobs:
           osascript -e "set the clipboard to (read (POSIX file \"$png\") as «class PNGf»)"
           w=$(sips -g pixelWidth "$png" | awk '/pixelWidth/ {print $2}')
           h=$(sips -g pixelHeight "$png" | awk '/pixelHeight/ {print $2}')
-          perl -e 'alarm 30; exec @ARGV' ./target/release/clipboarddemo --read | tee read.log
+          perl -e 'alarm 30; exec @ARGV' ./target/release/examples/clipboarddemo --read | tee read.log
           grep -q "image=${w}x${h}" read.log
 
       - name: Drive the native menu bar and context menu
         run: |
-          cargo build --release -p menudemo
+          cargo build --release --example menudemo
           mkdir -p visual_output
           # In-process (System Events needs an accessibility grant the runner
           # may lack): print the NSMenu bar, pick Edit > Add Item through
@@ -3226,7 +3226,7 @@ jobs:
           # Tab into the note field and Cmd+C again (the field copies; the
           # menu item must not run a second time).
           STIPPLE_COCOA_MENU_SELFTEST='perform=Edit/Add Item;key=cmd+d;right=320,300;key=cmd+c;key=tab;key=cmd+c' \
-            perl -e 'alarm 60; exec @ARGV' ./target/release/menudemo > visual_output/menu-macos.log 2>&1 || true
+            perl -e 'alarm 60; exec @ARGV' ./target/release/examples/menudemo > visual_output/menu-macos.log 2>&1 || true
           echo "=== menu-macos.log ==="; cat visual_output/menu-macos.log
           log=visual_output/menu-macos.log
           grep -q 'Cocoa menu selftest: done' $log
@@ -3248,7 +3248,7 @@ jobs:
             || echo "note: AppKit matched no key equivalent (app not active?)"
           # osascript can drive the real menu bar where System Events is
           # allowed; report, but don't require it.
-          ./target/release/menudemo > visual_output/menu-osascript.log 2>&1 &
+          ./target/release/examples/menudemo > visual_output/menu-osascript.log 2>&1 &
           PID=$!
           sleep 4
           perl -e 'alarm 20; exec @ARGV' osascript -e 'tell application "System Events" to tell process "menudemo" to click menu item "Add Item" of menu "Edit" of menu bar 1' \
@@ -3260,8 +3260,8 @@ jobs:
         env:
           STIPPLE_COCOA_A11Y: "1"
         run: |
-          cargo build --release -p nativegallery
-          ./target/release/nativegallery > visual_output/native.log 2>&1 &
+          cargo build --release --example nativegallery
+          ./target/release/examples/nativegallery > visual_output/native.log 2>&1 &
           PID=$!
           sleep 5
           cat visual_output/native.log
@@ -3279,19 +3279,19 @@ jobs:
           # Prints the window number screencapture needs.
           STIPPLE_COCOA_A11Y: "1"
         run: |
-          cargo build --release -p bididemo
-          perl -e 'alarm 60; exec @ARGV' ./target/release/bididemo --mirror-check | tee bidi-mirror.log
+          cargo build --release --example bididemo
+          perl -e 'alarm 60; exec @ARGV' ./target/release/examples/bididemo --mirror-check | tee bidi-mirror.log
           grep -q 'bididemo mirror: ok' bidi-mirror.log
           # System fonts found by scanning /System/Library/Fonts and
           # /Library/Fonts: `monospace` (Menlo) in four styles, decorated,
           # rendered off screen and checked.
-          cargo build --release -p fontdemo
-          ./target/release/fontdemo --list > fonts-list.log
+          cargo build --release --example fontdemo
+          ./target/release/examples/fontdemo --list > fonts-list.log
           head -n 40 fonts-list.log
           grep -q 'Menlo' fonts-list.log
-          perl -e 'alarm 60; exec @ARGV' ./target/release/fontdemo --check | tee fonts-check.log
+          perl -e 'alarm 60; exec @ARGV' ./target/release/examples/fontdemo --check | tee fonts-check.log
           grep -q 'fontdemo: ok' fonts-check.log
-          ./target/release/bididemo --mirror > visual_output/bidi-mirror.log 2>&1 &
+          ./target/release/examples/bididemo --mirror > visual_output/bidi-mirror.log 2>&1 &
           PID=$!
           sleep 5
           cat visual_output/bidi-mirror.log
@@ -3310,9 +3310,9 @@ jobs:
       # doesn't take either.
       - name: Accessibility from outside the app (AX API)
         run: |
-          cargo build --release -p touchdemo
+          cargo build --release --example touchdemo
           swiftc -O -o axprobe .github/a11y/macos/axprobe.swift
-          ./target/release/touchdemo > visual_output/touchdemo-macos.log 2>&1 &
+          ./target/release/examples/touchdemo > visual_output/touchdemo-macos.log 2>&1 &
           PID=$!
           sleep 5
           probe() {
@@ -3360,7 +3360,7 @@ jobs:
       # landed; see .github/scripts/voiceover-macos.sh.
       - name: Screen reader (VoiceOver)
         timeout-minutes: 15
-        run: bash .github/scripts/voiceover-macos.sh ./target/release/touchdemo
+        run: bash .github/scripts/voiceover-macos.sh ./target/release/examples/touchdemo
 
       - name: Upload VoiceOver logs
         uses: actions/upload-artifact@v4
@@ -3397,11 +3397,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y dbus at-spi2-core
 
       - name: Build the a11y demo
-        run: cargo build --release -p a11ydemo
+        run: cargo build --release --example a11ydemo
 
       - name: Connect to the session + AT-SPI buses and read the unique names
         run: |
-          dbus-run-session -- ./target/release/a11ydemo | tee a11y.log
+          dbus-run-session -- ./target/release/examples/a11ydemo | tee a11y.log
           # The session bus assigns every connection a ":1.N" unique name...
           grep -qE "D-Bus connected: unique name :1\." a11y.log
           # ...and we can reach the separate AT-SPI bus via org.a11y.Bus.
@@ -3413,7 +3413,7 @@ jobs:
           # apostrophe in a comment or a quoted grep pattern can't end it early.
           cat > a11y-query.sh <<'EOF'
             set -euo pipefail
-            ./target/release/a11ydemo serve > serve.log 2>&1 &
+            ./target/release/examples/a11ydemo serve > serve.log 2>&1 &
             SRV=$!
             # If any check fails, show what the server logged.
             trap 'echo "----- serve.log"; cat serve.log' ERR
@@ -3487,7 +3487,7 @@ jobs:
             orca speech-dispatcher sway wtype seatd
 
       - name: Build touchdemo
-        run: cargo build --release -p touchdemo
+        run: cargo build --release --example touchdemo
 
       # From outside the app, as Orca reads it (the AT-SPI twin of the UIA walk
       # on Windows, .github/scripts/uia-walk.ps1): in a private session bus,
@@ -3510,7 +3510,7 @@ jobs:
           Xvfb :99 -screen 0 1024x768x24 &
           sleep 2
           DISPLAY=:99 dbus-run-session -- \
-            bash .github/scripts/atspi-linux.sh target/release/touchdemo visual_output xdotool key Tab
+            bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output xdotool key Tab
 
       # The accessibility bus itself restarting (at-spi-bus-launcher killed,
       # then started again on demand): the app reconnects and registers
@@ -3520,7 +3520,7 @@ jobs:
         continue-on-error: true
         run: |
           DISPLAY=:99 dbus-run-session -- \
-            bash .github/scripts/atspi-bus-restart.sh target/release/touchdemo visual_output
+            bash .github/scripts/atspi-bus-restart.sh target/release/examples/touchdemo visual_output
 
       # Orca itself, headless: its debug log records every utterance whether
       # or not a synthesizer is heard; it must speak the field after Tab, then
@@ -3529,7 +3529,7 @@ jobs:
       - name: Orca speaks the focused control after Tab (X11)
         run: |
           DISPLAY=:99 dbus-run-session -- bash .github/scripts/orca-linux.sh \
-            target/release/touchdemo visual_output "xdotool key Tab" "xdotool type --delay 150 hi"
+            target/release/examples/touchdemo visual_output "xdotool key Tab" "xdotool type --delay 150 hi"
 
       # The same walk with touchdemo as a Wayland client of headless sway (the
       # bridge doesn't depend on the backend; Wayland hides window positions,
@@ -3551,7 +3551,7 @@ jobs:
           unset DISPLAY
           mkdir -p visual_output/wayland
           dbus-run-session -- \
-            bash .github/scripts/atspi-linux.sh target/release/touchdemo visual_output/wayland wtype -k Tab
+            bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/wayland wtype -k Tab
 
       - name: Upload the AT-SPI logs
         if: always()
@@ -3578,15 +3578,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y dbus
 
       - name: Build the file-dialog demo
-        run: cargo build --release -p filedialog
+        run: cargo build --release --example filedialog
 
       - name: Round-trip OpenFile through the mock portal
         run: |
           dbus-run-session -- bash -ec '
-            ./target/release/filedialog serve > serve.log 2>&1 &
+            ./target/release/examples/filedialog serve > serve.log 2>&1 &
             SRV=$!
             sleep 2
-            out=$(./target/release/filedialog)
+            out=$(./target/release/examples/filedialog)
             echo "client: $out"
             cat serve.log
             # The mock portal served exactly one request...
@@ -3615,7 +3615,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb dbus python3-dbus python3-gi fonts-dejavu-core
 
       - name: Build the tray demo
-        run: cargo build --release -p traydemo
+        run: cargo build --release --example traydemo
 
       - name: Start Xvfb
         run: |
@@ -3626,7 +3626,7 @@ jobs:
         env:
           DISPLAY: ":99"
           OUT_DIR: visual_output
-        run: dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/traydemo
+        run: dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/examples/traydemo
 
       - name: Upload logs
         uses: actions/upload-artifact@v4
@@ -3651,7 +3651,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build the tray demo
-        run: cargo build --release -p traydemo
+        run: cargo build --release --example traydemo
 
       - name: Register a stipple-selftest URL protocol that logs its URL
         shell: powershell
@@ -3672,7 +3672,7 @@ jobs:
         run: |
           echo "hello from stipple" > stipple-note.txt
           export STIPPLE_SELFTEST_FILE="$(cygpath -w "$PWD/stipple-note.txt")"
-          timeout 60 ./target/release/traydemo.exe --selftest 2>&1 | tee tray.log
+          timeout 60 ./target/release/examples/traydemo.exe --selftest 2>&1 | tee tray.log
           # Shell_NotifyIconW(NIM_ADD) took the icon, and the balloon went on it.
           grep -q "traydemo: tray shown=true" tray.log
           grep -q "Shell_NotifyIcon added=true" tray.log
@@ -3696,9 +3696,9 @@ jobs:
           STIPPLE_DEBUG_DIALOG: "1"
           STIPPLE_ALERT_HOLD_MS: "6000"
         run: |
-          cargo build --release -p sessionsdemo
+          cargo build --release --example sessionsdemo
           New-Item -ItemType Directory -Force -Path visual_output | Out-Null
-          $p = Start-Process -FilePath .\target\release\sessionsdemo.exe -ArgumentList '--alert-selftest' `
+          $p = Start-Process -FilePath .\target\release\examples\sessionsdemo.exe -ArgumentList '--alert-selftest' `
             -RedirectStandardOutput visual_output\alert.log -RedirectStandardError visual_output\alert-err.log -PassThru
           Start-Sleep -Seconds 4
           Add-Type -AssemblyName System.Drawing
@@ -3751,7 +3751,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build the tray demo
-        run: cargo build --release -p traydemo
+        run: cargo build --release --example traydemo
 
       - name: Status item, notification and open_url
         env:
@@ -3760,7 +3760,7 @@ jobs:
         run: |
           echo "hello from stipple" > /tmp/stipple-note.txt
           # macOS has no `timeout`; perl's alarm stands in for it.
-          perl -e 'alarm 60; exec @ARGV' ./target/release/traydemo --selftest 2>&1 | tee tray.log
+          perl -e 'alarm 60; exec @ARGV' ./target/release/examples/traydemo --selftest 2>&1 | tee tray.log
           grep -q "traydemo: tray shown=true" tray.log
           grep -q "NSStatusItem button=" tray.log
           grep -q "NSStatusItem button=.* in a window=true" tray.log \
@@ -3778,9 +3778,9 @@ jobs:
           STIPPLE_DEBUG_DIALOG: "1"
           STIPPLE_ALERT_HOLD_MS: "4000"
         run: |
-          cargo build --release -p sessionsdemo
+          cargo build --release --example sessionsdemo
           mkdir -p visual_output
-          ./target/release/sessionsdemo --alert-selftest > visual_output/alert.log 2>&1 &
+          ./target/release/examples/sessionsdemo --alert-selftest > visual_output/alert.log 2>&1 &
           pid=$!
           sleep 3
           screencapture -x visual_output/stipple-macos-alert.png || true
@@ -3814,12 +3814,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Build the window example for the iOS simulator
-        run: cargo build --release -p window --target aarch64-apple-ios-sim
+        run: cargo build --release --example window --target aarch64-apple-ios-sim
 
       - name: Bundle, boot a simulator, launch, and capture the runtime marker
         run: |
           mkdir -p visual_output Stipple.app
-          cp target/aarch64-apple-ios-sim/release/window Stipple.app/window
+          cp target/aarch64-apple-ios-sim/release/examples/window Stipple.app/window
           cat > Stipple.app/Info.plist <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -3869,8 +3869,8 @@ jobs:
 
       - name: Screenshot the native gallery
         run: |
-          cargo build --release -p nativegallery --target aarch64-apple-ios-sim
-          cp target/aarch64-apple-ios-sim/release/nativegallery Stipple.app/window
+          cargo build --release --example nativegallery --target aarch64-apple-ios-sim
+          cp target/aarch64-apple-ios-sim/release/examples/nativegallery Stipple.app/window
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
           xcrun simctl install "$DEV" Stipple.app
           # A fixed status bar keeps the screenshot unchanged between runs.
@@ -3898,8 +3898,8 @@ jobs:
       # logs to its tmp dir, read back here.
       - name: Touch scrolling, gestures, back swipe, the keyboard, composition, accessibility and document pickers (touchdemo self-test)
         run: |
-          cargo build --release -p touchdemo --target aarch64-apple-ios-sim
-          cp target/aarch64-apple-ios-sim/release/touchdemo Stipple.app/window
+          cargo build --release --example touchdemo --target aarch64-apple-ios-sim
+          cp target/aarch64-apple-ios-sim/release/examples/touchdemo Stipple.app/window
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
           xcrun simctl install "$DEV" Stipple.app
           # Start in light mode: the next step switches to dark.
@@ -4073,7 +4073,7 @@ jobs:
         timeout-minutes: 25
         run: |
           HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install xcodegen
-          cp target/aarch64-apple-ios-sim/release/touchdemo Stipple.app/window
+          cp target/aarch64-apple-ios-sim/release/examples/touchdemo Stipple.app/window
           xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
           xcrun simctl install "$DEV" Stipple.app
           xcrun simctl ui "$DEV" appearance light || true
@@ -4139,7 +4139,7 @@ jobs:
           rm -rf "$RUNNER_TEMP/ipad"
           mkdir -p "$RUNNER_TEMP/ipad"
           cp -R Stipple.app "$APP"
-          cp target/aarch64-apple-ios-sim/release/touchdemo "$APP/window"
+          cp target/aarch64-apple-ios-sim/release/examples/touchdemo "$APP/window"
           plutil -replace UIDeviceFamily -json '[1,2]' "$APP/Info.plist"
           plutil -replace UIApplicationSceneManifest.UIApplicationSupportsMultipleScenes -bool YES "$APP/Info.plist"
           # Several scenes (iPad multitasking) want every orientation.
@@ -4479,7 +4479,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick x11-utils xdotool python3-xlib fonts-dejavu-core
 
       - name: Build the lifecycle example
-        run: cargo build --release -p lifecycle
+        run: cargo build --release --example lifecycle
 
       - name: Cancel a close, follow focus, ring the bell, then close
         run: |
@@ -4489,7 +4489,7 @@ jobs:
           mkdir -p visual_output
           LOG=visual_output/lifecycle-x11.log
           W="Stipple lifecycle"
-          ./target/release/lifecycle > "$LOG" 2>&1 &
+          ./target/release/examples/lifecycle > "$LOG" 2>&1 &
           APP=$!
           sleep 4
           # Mapping the window gave it the focus (its own SetInputFocus).
@@ -4559,7 +4559,7 @@ jobs:
           sudo apt-get install -y sway grim seatd imagemagick fonts-dejavu-core
 
       - name: Build the lifecycle and window examples
-        run: cargo build --release -p lifecycle -p window
+        run: cargo build --release --example lifecycle --example window
 
       - name: Run under headless sway
         run: |
@@ -4577,7 +4577,7 @@ jobs:
           mkdir -p visual_output
           LOG=visual_output/lifecycle-wayland.log
           W='[title="Stipple lifecycle"]'
-          STIPPLE_WAYLAND_DEBUG=1 ./target/release/lifecycle > "$LOG" 2>&1 &
+          STIPPLE_WAYLAND_DEBUG=1 ./target/release/examples/lifecycle > "$LOG" 2>&1 &
           APP=$!
           sleep 4
           # sway draws the decorations.
@@ -4586,7 +4586,7 @@ jobs:
           if grep -q 'decorated' "$LOG"; then exit 1; fi
           grep -q 'lifecycle: focus true' "$LOG"
           # Another window takes the focus: the bell rings and asks for attention.
-          ./target/release/window > /dev/null 2>&1 &
+          ./target/release/examples/window > /dev/null 2>&1 &
           OTHER=$!
           sleep 4
           grep -q 'lifecycle: focus false' "$LOG"
@@ -4644,7 +4644,7 @@ jobs:
           sudo apt-get install -y weston imagemagick fonts-dejavu-core
 
       - name: Build the lifecycle example
-        run: cargo build --release -p lifecycle
+        run: cargo build --release --example lifecycle
 
       - name: Run under headless Weston
         run: |
@@ -4657,7 +4657,7 @@ jobs:
           sleep 4
           export WAYLAND_DISPLAY=wayland-csd
           LOG=visual_output/decorations-weston.log
-          STIPPLE_WAYLAND_DEBUG=1 ./target/release/lifecycle > "$LOG" 2>&1 &
+          STIPPLE_WAYLAND_DEBUG=1 ./target/release/examples/lifecycle > "$LOG" 2>&1 &
           APP=$!
           sleep 5
           grep -v 'frame' "$LOG" | head -40
@@ -4687,10 +4687,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the lifecycle example
-        run: cargo build --release -p lifecycle
+        run: cargo build --release --example lifecycle
       - name: Refuse a logoff, then close
         shell: powershell
-        run: .github\scripts\lifecycle-windows.ps1 .\target\release\lifecycle.exe visual_output
+        run: .github\scripts\lifecycle-windows.ps1 .\target\release\examples\lifecycle.exe visual_output
       - name: Upload log
         uses: actions/upload-artifact@v4
         if: always()
@@ -4718,10 +4718,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build touchdemo
-        run: cargo build --release -p touchdemo
+        run: cargo build --release --example touchdemo
       - name: Drive touchdemo with NVDA
         shell: powershell
-        run: .github\scripts\nvda-windows.ps1 .\target\release\touchdemo.exe visual_output
+        run: .github\scripts\nvda-windows.ps1 .\target\release\examples\touchdemo.exe visual_output
       - name: Upload NVDA's log
         uses: actions/upload-artifact@v4
         if: always()
@@ -4743,10 +4743,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the lifecycle example
-        run: cargo build --release -p lifecycle
+        run: cargo build --release --example lifecycle
       - name: Close and quit through the delegates
         run: |
-          STIPPLE_COCOA_LIFECYCLE=1 perl -e 'alarm 30; exec @ARGV' ./target/release/lifecycle \
+          STIPPLE_COCOA_LIFECYCLE=1 perl -e 'alarm 30; exec @ARGV' ./target/release/examples/lifecycle \
             | tee lifecycle-macos.log
           grep -q 'Cocoa lifecycle: badge="3"' lifecycle-macos.log
           grep 'Cocoa lifecycle:' lifecycle-macos.log | grep -q 'CloseRequested'

@@ -1,0 +1,355 @@
+//! Menus: a menu bar with shortcuts, a submenu, checkable and disabled items,
+//! and a context menu on the canvas.
+//!
+//! On macOS the menu bar is the system one (with the standard application
+//! menu in front), on Windows the window's native menu bar, and on Linux a bar
+//! Stipple draws across the top of the window: click a title, or press Alt or
+//! F10 and use the arrow keys, Enter and Escape, or Alt plus an underlined
+//! letter. Shortcuts (Ctrl+D adds an item, Ctrl+S saves…) work everywhere;
+//! Ctrl+C copies a summary, except in the note field, which copies its own
+//! selection. Right-click the canvas, or press the Menu key or Shift+F10 over
+//! it, for its context menu: the system's own on macOS and Windows.
+//!
+//! Each command logs a `menudemo: …` line. Pass `dark` for the dark theme. CI
+//! drives the drawn menus on X11 (`xdotool`), the native ones on Windows
+//! (`.github/scripts/menu-windows.ps1`) and on macOS (the
+//! `STIPPLE_COCOA_MENU_SELFTEST` self-test), and checks the log.
+
+use stipple::prelude::*;
+use stipple::widgets::TextInput;
+
+const W: f64 = 640.0;
+const H: f64 = 420.0;
+
+const COLORS: [(&str, Color); 3] = [
+    ("&Blue", Color::rgb(0x3b, 0x6e, 0xd8)),
+    ("&Green", Color::rgb(0x2f, 0x9e, 0x5b)),
+    ("&Orange", Color::rgb(0xe0, 0x7b, 0x26)),
+];
+const ZOOMS: [u32; 3] = [100, 125, 150];
+
+struct State {
+    items: Vec<String>,
+    /// How many items were there at the last save.
+    saved: usize,
+    next: usize,
+    color: usize,
+    zoom: usize,
+    grid: bool,
+    status: String,
+    note: TextInput,
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            items: Vec::new(),
+            saved: 0,
+            next: 1,
+            color: 0,
+            zoom: 0,
+            grid: true,
+            status: "Ready".into(),
+            note: TextInput::from_text("A note"),
+        }
+    }
+
+    /// Show `status`, and log it (CI reads the log to see what ran).
+    fn say(&mut self, status: impl Into<String>) {
+        self.status = status.into();
+        println!("menudemo: {} ({} items)", self.status, self.items.len());
+    }
+
+    fn dirty(&self) -> bool {
+        self.items.len() != self.saved
+    }
+
+    fn add(&mut self) {
+        self.items.push(format!("Item {}", self.next));
+        self.next += 1;
+        self.say(format!("Added item {}", self.next - 1));
+    }
+
+    fn clear(&mut self) {
+        self.items.clear();
+        self.say("Cleared");
+    }
+}
+
+/// The colors, as a submenu with the current one checked.
+fn color_menu(state: &State) -> Menu<State> {
+    COLORS
+        .iter()
+        .enumerate()
+        .fold(Menu::new("&Color"), |menu, (i, (name, _))| {
+            menu.item(
+                MenuItem::new(*name, move |s: &mut State| {
+                    s.color = i;
+                    s.say(format!("Color: {}", COLORS[i].0.trim_start_matches('&')));
+                })
+                .checked(state.color == i),
+            )
+        })
+}
+
+fn menu_bar(state: &State, handle: &AppHandle<State>) -> MenuBar<State> {
+    let quit = handle.clone();
+    let zoom = ZOOMS
+        .iter()
+        .enumerate()
+        .fold(Menu::new("&Zoom"), |menu, (i, pct)| {
+            menu.item(
+                MenuItem::new(format!("{pct}%"), move |s: &mut State| {
+                    s.zoom = i;
+                    s.say(format!("Zoom {}%", ZOOMS[i]));
+                })
+                .checked(state.zoom == i),
+            )
+        });
+    MenuBar::new()
+        .menu(
+            Menu::new("&File")
+                .item(
+                    MenuItem::new("&New", |s: &mut State| {
+                        s.clear();
+                        s.saved = 0;
+                        s.say("New document");
+                    })
+                    .shortcut(Shortcut::cmd('n')),
+                )
+                .item(
+                    MenuItem::new("&Save", |s: &mut State| {
+                        s.saved = s.items.len();
+                        s.say(format!("Saved {} items", s.saved));
+                    })
+                    .shortcut(Shortcut::cmd('s'))
+                    .enabled(state.dirty()),
+                )
+                .submenu(
+                    Menu::new("Open &Recent")
+                        .item(MenuItem::new("notes.txt", |s: &mut State| {
+                            s.say("Opened notes.txt")
+                        }))
+                        .item(MenuItem::new("todo.txt", |s: &mut State| {
+                            s.say("Opened todo.txt")
+                        })),
+                )
+                .separator()
+                .item(
+                    MenuItem::new("&Quit", move |_: &mut State| quit.exit())
+                        .shortcut(Shortcut::cmd('q')),
+                ),
+        )
+        .menu(
+            Menu::new("&Edit")
+                .item(MenuItem::new("&Add Item", State::add).shortcut(Shortcut::cmd('d')))
+                .item(
+                    MenuItem::new("&Remove Last", |s: &mut State| {
+                        s.items.pop();
+                        s.say("Removed the last item");
+                    })
+                    .shortcut(Shortcut::key(KeyCode::Delete))
+                    .enabled(!state.items.is_empty()),
+                )
+                .item(
+                    MenuItem::new("C&lear", State::clear)
+                        .shortcut(Shortcut::cmd_key(KeyCode::Delete))
+                        .enabled(!state.items.is_empty()),
+                )
+                .separator()
+                .item(
+                    // Ctrl+C / ⌘C: in the note field, the field copies its
+                    // selection instead.
+                    MenuItem::new("&Copy Summary", |s: &mut State| {
+                        let summary = format!("{} items", s.items.len());
+                        stipple::core::set_clipboard_text(&summary);
+                        s.say("Copied the summary");
+                    })
+                    .shortcut(Shortcut::cmd('c')),
+                ),
+        )
+        .menu(
+            Menu::new("&View")
+                .item(
+                    MenuItem::new("Show &Grid", |s: &mut State| {
+                        s.grid = !s.grid;
+                        s.say(format!("Grid {}", if s.grid { "on" } else { "off" }));
+                    })
+                    .shortcut(Shortcut::cmd('g'))
+                    .checked(state.grid),
+                )
+                .separator()
+                .submenu(zoom)
+                .submenu(color_menu(state)),
+        )
+        .menu(
+            Menu::new("&Help").item(MenuItem::new("&About Menus", |s: &mut State| {
+                s.say("Stipple menus demo")
+            })),
+        )
+}
+
+fn view(state: &State, cx: &mut Cx<State>) -> Element {
+    let theme = *cx.theme();
+    let p = theme.palette;
+    let scale = ZOOMS[state.zoom] as f64 / 100.0;
+    let chips: Vec<Element> = state
+        .items
+        .iter()
+        .map(|item| {
+            Element::stack(
+                Axis::Horizontal,
+                vec![Element::text(
+                    item.clone(),
+                    theme.typography.body * scale,
+                    Color::WHITE,
+                )],
+            )
+            .fill(Color::rgba(0, 0, 0, 0x40))
+            .radius(theme.radius)
+            .padding(Insets::symmetric(theme.spacing.sm, theme.spacing.xs))
+        })
+        .collect();
+    let mut canvas = Element::stack(Axis::Horizontal, chips)
+        .wrap()
+        .gap(theme.spacing.sm)
+        .padding(Insets::uniform(theme.spacing.md))
+        .fill(COLORS[state.color].1)
+        .radius(theme.radius)
+        .grow(1.0);
+    if state.grid {
+        canvas = canvas.border(Color::rgba(255, 255, 255, 0x90), 2.0);
+    }
+    let canvas = canvas.context_menu(
+        cx,
+        Menu::new("Canvas")
+            .item(MenuItem::new("&Add Item", State::add).shortcut(Shortcut::cmd('d')))
+            .item(MenuItem::new("C&lear", State::clear).enabled(!state.items.is_empty()))
+            .separator()
+            .submenu(color_menu(state)),
+    );
+    let saved = if state.dirty() { "unsaved" } else { "saved" };
+    column(vec![
+        heading(cx, "Menus"),
+        Element::text(
+            format!(
+                "{} \u{2014} {} items, {saved}",
+                state.status,
+                state.items.len()
+            ),
+            theme.typography.body,
+            p.text_muted,
+        ),
+        paragraph(
+            cx,
+            "Use the menu bar or its shortcuts, or right-click the canvas.",
+        ),
+        text_field(cx, &state.note, |s| &mut s.note),
+        canvas,
+    ])
+    .gap(theme.spacing.md)
+    .padding(Insets::uniform(theme.spacing.lg))
+    .fill(p.background)
+}
+
+fn build() -> App<State> {
+    let mut app = App::new(State::new(), view)
+        .title("Stipple Menus")
+        .logical_size(Size::new(W, H));
+    let handle = app.handle();
+    app = app.menu(move |s: &State| menu_bar(s, &handle));
+    if std::env::args().nth(1).as_deref() == Some("dark") {
+        app = app.theme(Theme::dark());
+    }
+    app
+}
+
+fn main() {
+    build().run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Where CI (visual.yml) clicks: the File title and the canvas.
+    const FILE_AT: Point = Point::new(24.0, 14.0);
+    const CANVAS_AT: Point = Point::new(320.0, 300.0);
+
+    #[test]
+    fn the_targets_sit_where_ci_clicks() {
+        let mut app = build();
+        if Font::system_default().is_none() {
+            return; // positions depend on text metrics
+        }
+        app.render_once();
+        let file = app
+            .find(Role::MenuItem, "File")
+            .expect("the drawn menu bar")
+            .bounds;
+        assert!(file.contains(FILE_AT), "{file:?}");
+        assert!(app.click_at(FILE_AT));
+        app.render_once();
+        assert!(app.find(Role::Menu, "File").is_some());
+        app.press_key_code(KeyCode::Escape, Modifiers::default());
+        app.press_key_code(KeyCode::Escape, Modifiers::default());
+
+        assert!(app.right_click_at(CANVAS_AT));
+        app.render_once();
+        assert!(app.find(Role::Menu, "Canvas").is_some());
+        // CI picks "Clear" with Down, Down, Enter after adding two items.
+        app.press_key_code(KeyCode::Escape, Modifiers::default());
+        let cmd = Modifiers::COMMAND;
+        app.press_key_code(KeyCode::Char('d'), cmd);
+        app.press_key_code(KeyCode::Char('d'), cmd);
+        assert_eq!(app.state().items.len(), 2);
+        app.render_once();
+        app.right_click_at(CANVAS_AT);
+        app.render_once();
+        app.press_key_code(KeyCode::ArrowDown, Modifiers::default());
+        app.press_key_code(KeyCode::ArrowDown, Modifiers::default());
+        app.press_key_code(KeyCode::Enter, Modifiers::default());
+        assert!(app.state().items.is_empty());
+        assert_eq!(app.state().status, "Cleared");
+    }
+
+    #[test]
+    fn save_follows_the_state() {
+        let mut app = build();
+        app.render_once();
+        let cmd = Modifiers::COMMAND;
+        assert!(
+            !app.press_key_code(KeyCode::Char('s'), cmd),
+            "nothing to save"
+        );
+        app.press_key_code(KeyCode::Char('d'), cmd);
+        assert!(app.press_key_code(KeyCode::Char('s'), cmd));
+        assert_eq!(app.state().status, "Saved 1 items");
+        assert!(app.press_key_code(KeyCode::Char('g'), cmd));
+        assert!(!app.state().grid);
+    }
+
+    #[test]
+    fn the_copy_shortcut_goes_to_a_focused_field() {
+        let mut app = build();
+        app.render_once();
+        let cmd = Modifiers::COMMAND;
+        assert!(app.press_key_code(KeyCode::Char('c'), cmd));
+        assert_eq!(app.state().status, "Copied the summary");
+        // Tab focuses the note: Ctrl+C (⌘C) copies from it, not the menu.
+        app.press_key_code(KeyCode::Tab, Modifiers::default());
+        app.render_once();
+        app.press_key_code(KeyCode::Char('d'), cmd);
+        assert_eq!(
+            app.state().status,
+            "Added item 1",
+            "other shortcuts still work"
+        );
+        app.press_key_code(KeyCode::Char('c'), cmd);
+        assert_eq!(app.state().status, "Added item 1");
+    }
+}
+
+// In the browser, `web.rs` builds this file as a library and the page
+// runs `main`'s app (on the web, `App::run` hands it to the page).
+stipple::web_app!(main);

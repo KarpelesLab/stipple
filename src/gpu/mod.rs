@@ -15,7 +15,7 @@
 //! CI.
 //!
 //! Linux-only for now (EGL/GLESv2); other targets return an error so the
-//! workspace still builds everywhere.
+//! crate still builds everywhere.
 
 #![allow(unsafe_code)] // raw GPU FFI
 

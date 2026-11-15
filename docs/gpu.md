@@ -99,7 +99,7 @@ The tests skip when there is no GL device, and fail instead when
 each comparison there.
 
 ```sh
-STIPPLE_REQUIRE_GPU=1 cargo test -p stipple --features gl --lib gpu::
+STIPPLE_REQUIRE_GPU=1 cargo test --features gl --lib gpu::
 ```
 
 CI's GPU job runs them under Mesa's llvmpipe and uploads the frames, and

@@ -422,7 +422,7 @@ closed tab, restoring its session after a restart) brings its
 
 ## Trying it
 
-`cargo run -p lifecycle` opens a window that asks before closing while "work
+`cargo run --example lifecycle` opens a window that asks before closing while "work
 is running": close it once and it cancels and asks you to close again; close
 it again and it checks for a moment, then closes itself. It shows whether it
 has the focus, and a second after it loses the focus it rings the bell, asks

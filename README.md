@@ -161,33 +161,34 @@ content). See [docs/widgets.md](./docs/widgets.md) for the rest.
 ## Examples
 
 ```sh
-cargo run -p window        # a settings panel in a native window
-cargo run -p clickdemo     # a click-counting button
-cargo run -p calculator    # a four-function calculator
-cargo run -p todo          # the getting-started todo list (--selftest: drive it headless)
-cargo run -p textinput     # an editable text field (Tab to focus, then type)
-cargo run -p textarea      # multi-line editing and selection
-cargo run -p clipboarddemo # copy / cut / paste
-cargo run -p scrolldemo    # a clipped, wheel-scrolled list
-cargo run -p overlaydemo   # dropdown menu + modal dialog
-cargo run -p tabsdemo      # tabs + right-click context menu
-cargo run -p hoverdemo     # hover highlighting
-cargo run -p pointerdemo   # every pointer and wheel event a custom element gets
-cargo run -p motiondemo    # shake, pulse, staggered list, interruptible spring
-cargo run -p listmotion    # rows that fade in and out and glide when reordered
-cargo run -p multiwindow   # two OS windows sharing one state
-cargo run -p filedialog    # native file dialog (portal, IFileDialog, NSOpenPanel)
-cargo run -p themegallery  # one card under four themes (writes .raw files)
-cargo run -p material3demo # Material 3 baseline + dynamic-color themes
-cargo run -p imagedemo     # PNG and SVG images, and the fit modes
-cargo run -p bididemo      # Hebrew, Arabic and mixed right-to-left text (--mirror: a mirrored UI)
+cargo run --example window        # a settings panel in a native window
+cargo run --example clickdemo     # a click-counting button
+cargo run --example calculator    # a four-function calculator
+cargo run --example todo          # the getting-started todo list (--selftest: drive it headless)
+cargo run --example textinput     # an editable text field (Tab to focus, then type)
+cargo run --example textarea      # multi-line editing and selection
+cargo run --example clipboarddemo # copy / cut / paste
+cargo run --example scrolldemo    # a clipped, wheel-scrolled list
+cargo run --example overlaydemo   # dropdown menu + modal dialog
+cargo run --example tabsdemo      # tabs + right-click context menu
+cargo run --example hoverdemo     # hover highlighting
+cargo run --example pointerdemo   # every pointer and wheel event a custom element gets
+cargo run --example motiondemo    # shake, pulse, staggered list, interruptible spring
+cargo run --example listmotion    # rows that fade in and out and glide when reordered
+cargo run --example multiwindow   # two OS windows sharing one state
+cargo run --example filedialog    # native file dialog (portal, IFileDialog, NSOpenPanel)
+cargo run --example themegallery  # one card under four themes (writes .raw files)
+cargo run --example material3demo # Material 3 baseline + dynamic-color themes
+cargo run --example imagedemo     # PNG and SVG images, and the fit modes
+cargo run --example bididemo      # Hebrew, Arabic and mixed right-to-left text (--mirror: a mirrored UI)
 ```
 
 Each opens a real native window via `App::run` (Wayland, then X11, on Linux;
 Win32; Cocoa), or falls back to a one-shot headless render where no display is
 available. Platform and subsystem probes live alongside them:
-`gpuwindow` / `gpudemo` (GLES, `--features stipple/gl`), `d3ddemo`,
-`metaldemo`, `dmabuftest`, `dri3probe`, `viewportdemo`, `contentproc`
+`gpuwindow` / `gpudemo` (GLES, `--features gl`), `d3ddemo` (`--features d3d`),
+`metaldemo` (`--features mtl`), `dmabuftest`, `dri3probe` (`--features gl`),
+`viewportdemo`, `contentproc`
 (sandboxed content process composited over shared memory), `a11ydemo` and
 `uiademo` (accessibility bridges), `androiddemo` (an Android app as a `NativeActivity` cdylib),
 and `webdemo` (a `wasm32` module for a `<canvas>`). See [`docs/`](./docs/README.md)
@@ -195,7 +196,7 @@ for how to build and package each platform.
 
 ## Status & MSRV
 
-Pre-alpha. The whole workspace builds on **Rust 1.88** (edition 2024).
+Pre-alpha. The library and its examples build on **Rust 1.88** (edition 2024).
 
 Working today, each verified in CI on its platform:
 

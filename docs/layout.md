@@ -6,7 +6,7 @@ top-down. There are two kinds of container, stacks and grids, and every element
 can carry size constraints. The `layoutdemo` example shows all of it:
 
 ```sh
-cargo run -p layoutdemo
+cargo run --example layoutdemo
 ```
 
 <!-- live: layoutdemo -->

@@ -91,7 +91,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   `docs/screenshots/stipple-macos.png`.
 - ✅ **Desktop trio native + CI-screenshot-verified**: X11, Win32, and Cocoa
   backends each render the demo on their own OS runner. The build matrix also
-  compiles the whole workspace on all three.
+  compiles the library and every example on all three.
 - ✅ **Input on X11 + Win32** (pointer move/buttons/wheel, keys, text, resize);
   X11 resolves keysyms (`GetKeyboardMapping`) to text + editing keys and grabs
   focus so it works WM-less. The App re-renders + presents on every input.
@@ -435,8 +435,8 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   (`/dev/dri/renderD129`). The `dri3probe` example chains it end to end:
   `dri3_open_drm_fd()` → GBM-bind EGL to that fd → dma-buf round-trip, proving
   on real GPU + X hardware that the server's GPU can export and re-import the
-  buffers the compositor will hand it (`cargo run -p dri3probe
-  --features stipple/gl`).
+  buffers the compositor will hand it (`cargo run --example dri3probe
+  --features gl`).
   **Phase C (UI integration — done):** the toolkit-side compositor surface is
   wired and CI-verified on the software path (no GPU needed, so it runs under
   Xvfb). A **viewport element** (`Element::viewport(ViewportId)` /

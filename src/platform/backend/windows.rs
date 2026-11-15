@@ -11,7 +11,7 @@
 //! and typed text from `WM_CHAR`.
 //!
 //! **Verification:** build-checked on the `windows-latest` CI runner via the
-//! workspace build matrix; runtime-screenshotted by the Visual workflow's
+//! build matrix; runtime-screenshotted by the Visual workflow's
 //! Windows job.
 #![allow(unsafe_code)]
 

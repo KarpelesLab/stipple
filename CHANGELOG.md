@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set on the control (`.strikethrough()`, `.weight(..)`) reach the label,
   not the check mark.
 
+### Other
+
+- The repository is one package, no longer a workspace: the examples are
+  Cargo examples (`cargo run --example todo`), each in `examples/NAME/main.rs`,
+  and what each shows is in `tools/site/examples.toml`. The published crate
+  is unchanged.
+
 ## [0.0.6](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.5...stipple-v0.0.6) - 2026-11-15
 
 ### Added

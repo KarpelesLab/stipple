@@ -32,17 +32,19 @@ if [ ! -x "$linker" ]; then
 fi
 export "CARGO_TARGET_$(echo "$target" | tr 'a-z-' 'A-Z_')_LINKER=$linker"
 
-(cd "$root" && cargo build -p androiddemo --target "$target" --release)
+(cd "$root" && cargo build --example androiddemo --target "$target" --release)
 target_dir="$(cd "$root" && cargo metadata --format-version 1 --no-deps \
   | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
-lib="$target_dir/$target/release/libstipple_android.so"
+# The example `androiddemo` is libandroiddemo.so; the manifest names the
+# library the NativeActivity loads `stipple_android`.
+lib="$target_dir/$target/release/examples/libandroiddemo.so"
 
 build_tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
 platform_jar="$(ls "$ANDROID_HOME"/platforms/*/android.jar | sort -V | tail -1)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/lib/$abi"
-cp "$lib" "$work/lib/$abi/"
+cp "$lib" "$work/lib/$abi/libstipple_android.so"
 cp "$here/AndroidManifest.xml" "$work/"
 (
   cd "$work"

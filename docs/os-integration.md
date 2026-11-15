@@ -6,7 +6,7 @@ picked for it, and finding where to keep its files and what version it is.
 The `traydemo` example shows all three:
 
 ```sh
-cargo run -p traydemo
+cargo run --example traydemo
 ```
 
 ## Opening URLs and files

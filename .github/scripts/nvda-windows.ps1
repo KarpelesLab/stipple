@@ -26,7 +26,7 @@
 # NVDA's key here is Insert. Keys are typed with keybd_event, so they reach
 # NVDA's keyboard hook as typed keys (NVDA handles injected keys by default).
 param(
-  [string]$Exe = ".\target\release\touchdemo.exe",
+  [string]$Exe = ".\target\release\examples\touchdemo.exe",
   [string]$Out = "visual_output",
   [string]$Title = "Stipple Touch",
   [string]$Synth = ".github\a11y\windows\stippleSpy.py",

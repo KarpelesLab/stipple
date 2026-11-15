@@ -33,9 +33,10 @@ A program that builds its app in `main` and calls `run` can be a web app as it
 is: on the web, `App::run` hands the app to the page and returns, so
 `stipple::web_app!(main)` works too. The app fills the canvas, whatever
 `logical_size` it asked for, and `Font::system_default()` is the font the page
-loaded. That's how the examples on the [site](#the-site) run: each keeps its
-`src/main.rs`, ends it with the macro, and adds a library target that
-includes it:
+loaded. That's how the examples on the [site](#the-site) run: each ends its
+`main.rs` with the macro, and a second target, a `cdylib`, includes it (in
+Stipple's repository, an `[[example]]` named `NAME_web`). In a crate of your
+own, that target is the library:
 
 ```rust
 // src/main.rs, at the bottom
@@ -92,7 +93,7 @@ Other options: `label`, the app's accessible name (default: the canvas's
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo build --release -p webdemo --target wasm32-unknown-unknown
+cargo build --release --example webdemo --target wasm32-unknown-unknown
 ```
 
 Serve these files from one directory:
@@ -100,7 +101,7 @@ Serve these files from one directory:
 - `examples/webdemo/index.html`, the page (and `multi.html`, two copies of
   the app side by side);
 - `web/stipple.js`;
-- `target/wasm32-unknown-unknown/release/webdemo.wasm`;
+- `target/wasm32-unknown-unknown/release/examples/webdemo.wasm`;
 - `font.ttf`, the font the page loads. Without it, text doesn't render.
 
 ```sh

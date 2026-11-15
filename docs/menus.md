@@ -6,7 +6,7 @@ app state (like an `on_tap` handler), and optionally a shortcut, an enabled
 state and a check mark. The `menudemo` example shows all of it:
 
 ```sh
-cargo run -p menudemo            # or: dark
+cargo run --example menudemo            # or: dark
 ```
 
 <!-- live: menudemo -->

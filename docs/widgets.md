@@ -76,7 +76,7 @@ accessor closure to reach it, the same way `text_field` takes its
 `TextInput`. The `widgetsdemo` example shows them all:
 
 ```sh
-cargo run -p widgetsdemo            # or: dark, material, material-dark, contrast, native
+cargo run --example widgetsdemo            # or: dark, material, material-dark, contrast, native
 ```
 
 `widgetsdemo` switches between its pages with a navigation bar. The tab bar,
@@ -85,7 +85,7 @@ terminal-like app's chrome (with message boxes, see
 [os-integration.md](os-integration.md#message-boxes)):
 
 ```sh
-cargo run -p sessionsdemo           # the same theme names
+cargo run --example sessionsdemo           # the same theme names
 ```
 
 ## Select

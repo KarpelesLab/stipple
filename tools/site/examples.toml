@@ -1,30 +1,33 @@
-# The examples on the site (https://karpeleslab.github.io/stipple/): which
-# run in the browser, and how they're built. tools/site/build.py and the Pages
-# workflow both read this file; it's the one place that lists them.
+# The examples (https://karpeleslab.github.io/stipple/examples/): what each
+# shows, which run in the browser, and how they're built. tools/site/build.py
+# and the Pages workflow both read this file; it's the one place that lists
+# them.
 #
-# Every directory under examples/ is either a [web.NAME] (built for wasm32 and
+# Every directory under examples/ is a Cargo example (`examples/NAME/main.rs`,
+# `cargo run --example NAME`) and is either a [web.NAME] (built for wasm32 and
 # run on the site, with a card in the gallery) or a [native.NAME] (listed with
 # its source and what it needs). `build.py check-manifest` fails on one that
-# is in neither.
+# is in neither, has no description, or whose wasm module isn't an
+# [[example]] in Cargo.toml.
 
 [build]
 # One cargo invocation builds every web example: `args` is `arg` once per
-# example, `{crate}` the example's package and `{artifact}` its wasm module's
-# name. `out` is where the module lands.
-command = "cargo build --release --target wasm32-unknown-unknown --lib {args}"
-arg = "-p {crate}"
-out = "target/wasm32-unknown-unknown/release/{artifact}.wasm"
+# example, `{artifact}` its wasm module's name (a cdylib [[example]] in
+# Cargo.toml). `out` is where the module lands.
+command = "cargo build --release --target wasm32-unknown-unknown {args}"
+arg = "--example {artifact}"
+out = "target/wasm32-unknown-unknown/release/examples/{artifact}.wasm"
 
+# Every example has a `description`: one line about what it shows. Other
 # [web.NAME] keys, all optional:
 #   title     the card's title (default: NAME)
-#   description  one line about it (default: its Cargo.toml's)
 #   group     the gallery section
 #   size      [width, height]: the CSS size it's shown at in guides and
 #             thumbnails (the app fills whatever canvas it gets)
-#   source    the file "View source" opens (default: src/main.rs)
-#   artifact  the wasm module's name (default: NAME_web: the [lib] in the
-#             example's Cargo.toml, whose src/web.rs includes main.rs)
-#   crate     the package to build (default: NAME)
+#   source    the file "View source" opens (default: main.rs)
+#   artifact  the wasm module's name (default: NAME_web: the cdylib
+#             [[example]] in Cargo.toml whose web.rs includes main.rs)
+# [native.NAME] has `needs`: what it takes that a browser doesn't have.
 
 # --- Apps ---
 
@@ -35,6 +38,7 @@ group = "Apps"
 size = [440, 440]
 
 [web.calculator]
+description = "A four-function calculator — a button grid (rows in a column), a result display, and a small state machine."
 title = "Calculator"
 group = "Apps"
 size = [320, 460]
@@ -44,7 +48,7 @@ description = "The web backend's showcase: a counter with a context menu, a spin
 title = "Web demo"
 group = "Apps"
 size = [560, 380]
-source = "src/lib.rs"
+source = "lib.rs"
 artifact = "webdemo"
 
 [web.window]
@@ -54,6 +58,7 @@ group = "Apps"
 size = [640, 480]
 
 [web.sessionsdemo]
+description = "A document tab bar, a password field, a color picker and message boxes."
 title = "Tabs, passwords and colors"
 group = "Apps"
 size = [760, 480]
@@ -61,61 +66,73 @@ size = [760, 480]
 # --- Widgets and layout ---
 
 [web.widgetsdemo]
+description = "Select, number input, split pane, toolbar, toasts and a navigation bar."
 title = "Widgets"
 group = "Widgets and layout"
 size = [720, 480]
 
 [web.nativegallery]
+description = "Every control under the native theme."
 title = "Every control"
 group = "Widgets and layout"
 size = [380, 360]
 
 [web.layoutdemo]
+description = "Grid tracks, wrapping rows, and min/max size constraints."
 title = "Layout"
 group = "Widgets and layout"
 size = [720, 520]
 
 [web.tabledemo]
+description = "A virtualized 10,000-row table and a tree."
 title = "Tables and trees"
 group = "Widgets and layout"
 size = [900, 560]
 
 [web.scrolldemo]
+description = "A tall list inside a fixed-height scroll viewport (clipped + wheel-scrollable)."
 title = "Scrolling"
 group = "Widgets and layout"
 size = [420, 360]
 
 [web.overlaydemo]
+description = "A dropdown menu and a modal dialog rendered as overlay layers."
 title = "Menus and dialogs"
 group = "Widgets and layout"
 size = [480, 420]
 
 [web.tabsdemo]
+description = "A tab strip switching content, plus a right-click context menu."
 title = "Tabs"
 group = "Widgets and layout"
 size = [360, 440]
 
 [web.menudemo]
+description = "A menu bar with shortcuts, submenus and checkable items, and a context menu."
 title = "Menu bar"
 group = "Widgets and layout"
 size = [640, 420]
 
 [web.themegallery]
+description = "The same UI rendered under several themes, to show the theme engine + customization."
 title = "Themes"
 group = "Widgets and layout"
 size = [760, 640]
 
 [web.material3demo]
+description = "A Material 3 (Material You) dynamic-color theme — baseline light/dark plus seed-recolored schemes."
 title = "Material 3"
 group = "Widgets and layout"
 size = [760, 680]
 
 [web.imagedemo]
+description = "PNG and SVG images."
 title = "Images and SVG"
 group = "Widgets and layout"
 size = [580, 340]
 
 [web.viewportdemo]
+description = "Composite externally-rendered content into an embedded viewport."
 title = "Embedded viewport"
 group = "Widgets and layout"
 size = [480, 360]
@@ -129,16 +146,19 @@ group = "Text"
 size = [640, 240]
 
 [web.textarea]
+description = "A multi-line text area: typing across lines, arrows, and selecting across lines — used by CI to verify multi-line editing."
 title = "Text area"
 group = "Text"
 size = [640, 320]
 
 [web.clipboarddemo]
+description = "Copy/cut/paste in a text field (Ctrl+C/X/V), synced with the OS clipboard."
 title = "Clipboard"
 group = "Text"
 size = [640, 240]
 
 [web.bididemo]
+description = "Right-to-left and bidirectional text (Hebrew, Arabic, mixed) in labels, a wrapped paragraph and editors, and a mirrored right-to-left UI (--mirror)."
 title = "Right-to-left text"
 group = "Text"
 size = [640, 480]
@@ -146,21 +166,25 @@ size = [640, 480]
 # --- Animation and graphics ---
 
 [web.motiondemo]
+description = "Keyframes, staggers, pulses and interruptible springs (stipple::anim)."
 title = "Motion"
 group = "Animation and graphics"
 size = [480, 640]
 
 [web.listmotion]
+description = "An animated list — items fade and slide in, fade out, and glide when the list reorders."
 title = "Animated list"
 group = "Animation and graphics"
 size = [420, 560]
 
 [web.transformdemo]
+description = "Elements scaled, rotated, moved and faded as groups, still clickable where they are drawn."
 title = "Transforms"
 group = "Animation and graphics"
 size = [620, 360]
 
 [web.canvasdemo]
+description = "A custom-paint canvas drawing an animated glyph grid, repainting only the rows that change."
 title = "Custom painting"
 group = "Animation and graphics"
 size = [720, 480]
@@ -168,33 +192,39 @@ size = [720, 480]
 # --- Games ---
 
 [web.gamedemo]
+description = "Lampwick, a small game on Phase 9 — a pixel-art night garden at 320×180, menus, settings that persist, a HUD, sound and music, keyboard, mouse, gamepad and touch input."
 title = "Lampwick"
 group = "Games"
 size = [960, 540]
-source = "src/lib.rs"
+source = "lib.rs"
 artifact = "lampwick"
 
 [web.spritedemo]
+description = "An animated sprite walking over a tilemap at a 320×180 pixel-art resolution, with a following camera; and a sprite-blitting benchmark."
 title = "Sprites and tilemaps"
 group = "Games"
 size = [960, 540]
 
 [web.gameui]
+description = "A game's UI — title menu, settings (volume, controls, display), a HUD over the game, a pause menu and a dialogue box, all driven by the keyboard and a gamepad."
 title = "Game UI"
 group = "Games"
 size = [960, 540]
 
 [web.gameloop]
+description = "The game loop — a square moved with the arrow keys or WASD through actions, with an fps counter."
 title = "Game loop"
 group = "Games"
 size = [504, 384]
 
 [web.audiodemo]
+description = "Stipple::audio — synthesized sound effects, a generated music loop streamed with loop points, and volume sliders per group."
 title = "Sound"
 group = "Games"
 size = [560, 420]
 
 [web.gamepaddemo]
+description = "The connected gamepads, their buttons and axes, live."
 title = "Gamepads"
 group = "Games"
 size = [720, 640]
@@ -220,6 +250,7 @@ group = "Input"
 size = [400, 300]
 
 [web.touchdemo]
+description = "A text field and a list a finger drag scrolls, with a self-test for the iOS simulator."
 title = "Touch"
 group = "Input"
 size = [360, 640]
@@ -231,6 +262,7 @@ group = "Input"
 size = [800, 440]
 
 [web.lifecycle]
+description = "Confirming window close, following window focus, and asking for attention."
 title = "Focus and closing"
 group = "Input"
 size = [420, 340]
@@ -238,49 +270,65 @@ size = [420, 340]
 # --- Native only ---
 
 [native.a11ydemo]
+description = "Connect to D-Bus with the hand-written client in stipple::platform (the AT-SPI accessibility bridge foundation) and print the unique name."
 needs = "Linux: talks to the AT-SPI accessibility bus over D-Bus."
 
 [native.uiademo]
+description = "Exercise the hand-written UI Automation provider in stipple::platform (the Windows accessibility bridge) and print what it returns."
 needs = "Windows: the UI Automation provider."
 
 [native.androiddemo]
+description = "An Android app in a NativeActivity, with touch, keys, timers and animation (built as a cdylib for the APK)."
 needs = "Android: a NativeActivity in an APK."
 
 [native.contentproc]
+description = "A separate content process renders into shared memory, passed to the UI process and composited into a viewport (CPU dual of the GPU dma-buf path)."
 needs = "Linux, macOS or Windows: a second process sharing memory with the UI."
 
 [native.d3ddemo]
+description = "Exercise the raw Direct3D 11 (WARP) backend in stipple::gpu and print what it created."
 needs = "Windows: Direct3D 11."
 
 [native.metaldemo]
+description = "Exercise the raw Metal backend in stipple::gpu and print what it created."
 needs = "macOS: Metal."
 
 [native.gpudemo]
-needs = "A GPU (EGL + GLES2, `--features stipple/gl`); it prints what it read back."
+description = "Render a frame on the CPU, then route it through the GPU (stipple::gpu) and dump the read-back RGBA."
+needs = "A GPU (EGL + GLES2, `--features gl`); it prints what it read back."
 
 [native.gpuwindow]
+description = "A real window whose frames are rendered on the GPU (stipple::gpu) and presented through the platform Surface."
 needs = "A GPU (EGL + GLES2) and a native window."
 
 [native.dmabuftest]
+description = "Prove cross-process GPU surface sharing — export a GL texture as a dma-buf and re-import it (EGL_MESA_image_dma_buf_export / EGL_EXT_image_dma_buf_import)."
 needs = "Linux: EGL dma-buf export and import."
 
 [native.dri3probe]
+description = "DRI3Open over the raw X11 socket -> the server's DRM fd -> bind that GPU via GBM and round-trip a dma-buf (DRI3 + Present groundwork)."
 needs = "Linux: X11 with DRI3 and GBM."
 
 [native.traydemo]
+description = "A tray icon with a menu, a desktop notification, and opening URLs and files in their default apps."
 needs = "A desktop with a system tray (Linux, Windows or macOS)."
 
 [native.filedialog]
+description = "Native file dialog via the xdg-desktop-portal FileChooser (D-Bus), with a built-in mock portal for headless verification."
 needs = "A desktop's file dialog (the portal on Linux, IFileDialog, NSOpenPanel). The web demo opens and saves files in the browser."
 
 [native.multiwindow]
+description = "Two real OS windows (X11), each a pane with its own view onto the shared app state."
 needs = "A desktop: two OS windows on one state. The web has one canvas per app."
 
 [native.asyncdemo]
+description = "Timers and background work updating the UI through an AppHandle."
 needs = "Threads: it runs background work on a thread, which `wasm32-unknown-unknown` doesn't have."
 
 [native.dropdemo]
+description = "Dropping files and text from other applications, and dragging items inside the app."
 needs = "A desktop: files and text dropped from other apps (the web backend doesn't take drops yet)."
 
 [native.fontdemo]
+description = "System fonts by family name, bold and italic faces (real or synthesized), a fallback chain, terminal metrics, and text decorations (underline styles, strikethrough, overline, colors)."
 needs = "System fonts, found by family name; the web has only the font the page loads."

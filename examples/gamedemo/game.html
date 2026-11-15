@@ -12,9 +12,10 @@
   </head>
   <body>
     <!-- Lampwick (examples/gamedemo): a small game on Stipple, built with
-         `cargo build -p gamedemo --lib --target wasm32-unknown-unknown --release`
-         and served next to web/stipple.js and a font. Settings, controls and
-         the best score are kept in localStorage. -->
+         `cargo build --release --example lampwick --target wasm32-unknown-unknown`
+         (target/wasm32-unknown-unknown/release/examples/lampwick.wasm) and
+         served next to web/stipple.js and a font. Settings, controls and the
+         best score are kept in localStorage. -->
     <canvas id="app" aria-label="Lampwick"></canvas>
     <pre id="error"></pre>
     <script type="module">

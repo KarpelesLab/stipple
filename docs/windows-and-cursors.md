@@ -196,7 +196,7 @@ drag started. The scrim behind a modal dialog shows the arrow.
 To hide the cursor while the user types, as terminals and editors do, keep a
 flag in the state: set it from the key handler, clear it on the next pointer
 move (an [`on_pointer`](pointer-events.md) `Move`), and pick
-`CursorIcon::Hidden` while it's set. `cargo run -p pointerdemo` does this.
+`CursorIcon::Hidden` while it's set. `cargo run --example pointerdemo` does this.
 
 A game that hides the cursor to steer with the mouse locks the pointer
 instead, which also holds it in place and reports the mouse's motion: see
@@ -214,7 +214,7 @@ Each backend uses the system's own cursors:
 
 ## Trying it
 
-`cargo run -p window -- --controls` adds buttons that maximize the window and
+`cargo run --example window -- --controls` adds buttons that maximize the window and
 make it fullscreen, a text field, and a strip of boxes, each with another
 cursor. `--maximized` and `--fullscreen` open the window that way.
 

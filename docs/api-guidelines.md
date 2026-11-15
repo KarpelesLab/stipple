@@ -135,7 +135,7 @@ Deliberate exceptions (the plain values above, closed enums,
 
 ```sh
 RUSTDOCFLAGS="-Z unstable-options --output-format json" \
-  cargo +nightly doc -p stipple --no-deps --lib --target-dir target/apijson
+  cargo +nightly doc --no-deps --lib --target-dir target/apijson
 python3 .github/scripts/api-audit.py target/apijson/doc/stipple.json
 ```
 

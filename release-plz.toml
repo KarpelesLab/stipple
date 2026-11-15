@@ -1,0 +1,10 @@
+# release-plz (.github/workflows/release-plz.yml): bumps the version in
+# Cargo.toml, writes CHANGELOG.md's release section, tags, makes the GitHub
+# release and publishes to crates.io.
+
+[workspace]
+# The tags and releases have been `stipple-vX.Y.Z` since the repository was a
+# workspace of several crates. For a lone package, release-plz would default
+# to `vX.Y.Z`.
+git_tag_name = "{{ package }}-v{{ version }}"
+git_release_name = "{{ package }}-v{{ version }}"

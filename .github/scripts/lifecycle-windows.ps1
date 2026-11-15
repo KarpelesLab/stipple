@@ -3,7 +3,7 @@
 # app, whose close hook cancels and shows its banner; WM_CLOSE then confirms,
 # and the app closes its window itself once its check is done.
 param(
-  [string]$Exe = ".\target\release\lifecycle.exe",
+  [string]$Exe = ".\target\release\examples\lifecycle.exe",
   [string]$Out = "visual_output"
 )
 $ErrorActionPreference = "Stop"

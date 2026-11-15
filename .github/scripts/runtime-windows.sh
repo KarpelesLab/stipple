@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The multiwindow example's self-test: titles, geometry, and a window opened
-# and closed while the app runs (see examples/multiwindow/src/main.rs).
+# and closed while the app runs (see examples/multiwindow/main.rs).
 #
 #   bash .github/scripts/runtime-windows.sh <multiwindow binary> <x11|wayland|log>
 #

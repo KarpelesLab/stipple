@@ -2,7 +2,7 @@
 # traydemo's selftest against a mock desktop on a private session bus. Run
 # inside `dbus-run-session`, with DISPLAY pointing at an X server (Xvfb).
 #
-#   dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/traydemo
+#   dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/examples/traydemo
 #
 # Checks, from the mock's log and the app's output:
 # - the notification reached org.freedesktop.Notifications.Notify;

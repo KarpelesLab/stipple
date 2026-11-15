@@ -8,7 +8,7 @@
 # and sees the app (and the tree) follow, then moves keyboard focus with Tab
 # and asks UIA which element has it.
 param(
-  [string]$Exe = ".\target\release\touchdemo.exe",
+  [string]$Exe = ".\target\release\examples\touchdemo.exe",
   [string]$Out = "visual_output",
   [string]$Title = "Stipple Touch"
 )

@@ -6,7 +6,7 @@ extent still covers all 10,000. The `tabledemo` example has a 10,000-row table
 and a tree:
 
 ```sh
-cargo run -p tabledemo               # --theme dark | contrast | native
+cargo run --example tabledemo               # --theme dark | contrast | native
 ```
 
 <!-- live: tabledemo -->

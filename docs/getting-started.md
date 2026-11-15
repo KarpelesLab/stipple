@@ -9,9 +9,9 @@ doesn't assume you know Stipple.
 
 ![The finished app](screenshots/getting-started-todo.png)
 
-The finished app is [`examples/todo`](../examples/todo/src/main.rs) in this
-repository (`cargo run -p todo`). The code below is compiled by `cargo test`,
-so it stays in step with Stipple.
+The finished app is [`examples/todo`](../examples/todo/main.rs) in this
+repository (`cargo run --example todo`). The code below is compiled by
+`cargo test`, so it stays in step with Stipple.
 
 ## 1. A new project
 
@@ -228,7 +228,7 @@ or dark mode (`Theme::native()` tracks it). Every widget reads its colors
 from the theme, so nothing else changes.
 `Theme::light().accent(color).radius(10.0)` makes a theme of your own.
 
-That's the app: [`examples/todo/src/main.rs`](../examples/todo/src/main.rs)
+That's the app: [`examples/todo/main.rs`](../examples/todo/main.rs)
 has it whole.
 
 ## 6. Testing it without a window
@@ -322,5 +322,5 @@ makes them snap, as it does for users who ask for it.
   [macOS](platforms/macos.md), [iOS](platforms/ios.md),
   [Android](platforms/android.md) and [the web](platforms/web.md): how to
   build, package and run on each.
-- The [examples](../examples): `cargo run -p widgetsdemo` shows most widgets,
-  and the README lists the rest.
+- The [examples](../examples): `cargo run --example widgetsdemo` shows most
+  widgets, and the README lists the rest.
