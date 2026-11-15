@@ -70,6 +70,9 @@ Serve these files from one directory:
 python3 -m http.server --directory site
 ```
 
+The `Pages` workflow publishes the same bundle to
+<https://karpeleslab.github.io/stipple/> on each push to `master`.
+
 [`examples/webdemo`](../../examples/webdemo) has a click counter, a spinner
 while a timer "loads", a repeating timer, a text editor with copy and paste,
 buttons that open and save a file, and a checkbox, in `Theme::native()`.

@@ -12,6 +12,9 @@ Android, iOS, and the web — **pixel-identical** across platforms under its own
 themes, or **native** under `Theme::native()` — while depending on **as little
 third-party code as possible**.
 
+**Try it in a browser:** the [web demo](https://karpeleslab.github.io/stipple/)
+(wasm + canvas, deployed from `master`).
+
 It builds on the pure-Rust [`oxideav`](https://github.com/OxideAV) media stack
 for all 2D content rendering (scene graph, CPU rasterizer, font shaping, image
 decode, SVG) and adds everything around it: native windowing and input per OS,
