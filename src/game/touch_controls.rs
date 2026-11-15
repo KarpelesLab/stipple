@@ -507,7 +507,11 @@ impl TouchControls {
                 let size = theme.typography.title.max(r * 0.6);
                 let text = font.measure(&button.label, size);
                 let origin = Point::new(at.x - text.width / 2.0, at.y - text.height / 2.0);
-                c.fill_text(font, &button.label, origin, size, p.on_primary);
+                c.fill_text(
+                    &button.label,
+                    origin,
+                    &crate::render::TextPaint::new(font, size, p.on_primary),
+                );
             }
         }
     }

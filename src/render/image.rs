@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 /// Why an image couldn't be loaded.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ImageError {
     /// The bytes aren't a format any registered `oxideav` crate recognizes.
     UnknownFormat,
@@ -142,6 +143,7 @@ impl Pixmap {
 
 /// How an image is placed in a box whose aspect ratio may differ from its own.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ImageFit {
     /// Stretch to the box exactly, ignoring the aspect ratio.
     Fill,
@@ -283,6 +285,7 @@ impl Svg {
 /// state (or a `static`) and hand out clones, so an unchanged view compares
 /// equal and a swapped image damages its area.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum ImageSource {
     Bitmap(Arc<Pixmap>),
     Svg(Arc<Svg>),

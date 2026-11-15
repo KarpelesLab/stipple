@@ -20,6 +20,7 @@ pub(super) struct Preedit {
 /// spliced in at the caret, and where the caret, selection and preedit are in
 /// that string. See [`EditBuffer::display`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DisplayText {
     /// The text to draw.
     pub text: String,

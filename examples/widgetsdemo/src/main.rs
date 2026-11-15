@@ -115,12 +115,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
                 "Clear log",
                 move |s: &mut State| {
                     let cleared = std::mem::take(&mut s.log);
-                    let id = s.toasts.push_for(
-                        &undo_handle,
+                    let id = s.toasts.push("Log cleared", ToastKind::Info);
+                    s.toasts.dismiss_after(
+                        id,
                         Duration::from_secs(6),
+                        &undo_handle,
                         |s: &mut State| &mut s.toasts,
-                        "Log cleared",
-                        ToastKind::Info,
                     );
                     s.toasts.action(id, "Undo", move |s: &mut State| {
                         s.log.clone_from(&cleared);
@@ -130,13 +130,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             spacer(),
             tool_button(cx, &theme, "Notify", move |s: &mut State| {
                 let n = s.log.len();
-                s.toasts.push_for(
-                    &handle,
-                    Duration::from_secs(4),
-                    |s: &mut State| &mut s.toasts,
-                    format!("Notification #{n}"),
-                    ToastKind::Success,
-                );
+                let id = s
+                    .toasts
+                    .push(format!("Notification #{n}"), ToastKind::Success);
+                s.toasts
+                    .dismiss_after(id, Duration::from_secs(4), &handle, |s: &mut State| {
+                        &mut s.toasts
+                    });
             }),
         ],
     );

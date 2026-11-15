@@ -45,6 +45,7 @@ impl Default for FontWeight {
 
 /// The style a [`Font`] draws in: a weight and whether it slants.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct FontStyle {
     pub weight: FontWeight,
     /// Italic (or, when the family has no italic face, a synthesized oblique).
@@ -89,6 +90,7 @@ pub struct FontId(pub(crate) u64);
 
 /// A family installed on the system, as listed by [`Font::families`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FontFamilyInfo {
     /// The family name, as [`Font::from_family`] takes it.
     pub name: String,
@@ -112,6 +114,7 @@ pub struct FontFamilyInfo {
 /// text layout ([`Font::line_height`], [`Font::baseline`]) uses the
 /// typographic box, which for some fonts is tighter.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FontMetrics {
     /// The size these metrics are for, in pixels per em.
     pub size: f64,
@@ -129,9 +132,13 @@ pub struct FontMetrics {
     pub x_height: f64,
     /// The widest advance of any glyph in the font.
     pub max_advance: f64,
+    /// The underline's top edge, below the baseline.
     pub underline_position: f64,
+    /// The underline's thickness.
     pub underline_thickness: f64,
+    /// The strikeout's top edge (negative: above the baseline).
     pub strikeout_position: f64,
+    /// The strikeout's thickness.
     pub strikeout_thickness: f64,
     /// Whether the font is monospaced: a terminal's cell is then
     /// [`Font::advance_of`] any character wide.

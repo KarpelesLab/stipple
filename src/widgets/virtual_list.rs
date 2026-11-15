@@ -37,6 +37,7 @@ pub const DEFAULT_OVERSCAN: usize = 2;
 
 /// How the rows of a virtualized list are sized.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum RowHeight<'a> {
     /// Every row is this tall, in logical pixels.
     Fixed(f64),
@@ -199,6 +200,7 @@ impl Window {
 
 /// How many rows a [`ListState`] lets the user select.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SelectionMode {
     /// No selection; the keyboard cursor still moves.
     None,
@@ -359,9 +361,11 @@ impl ListState {
 
 /// What a row builder is told about the row it builds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RowInfo {
     /// The row's index.
     pub index: usize,
+    /// Whether it's selected.
     pub selected: bool,
     /// Whether the keyboard cursor is on this row.
     pub cursor: bool,
@@ -370,8 +374,11 @@ pub struct RowInfo {
 /// The shape of a [`virtual_list`]: how many rows, how tall, and how tall the
 /// viewport is.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct VirtualList<'a> {
+    /// How many rows.
     pub rows: usize,
+    /// How tall they are.
     pub row_height: RowHeight<'a>,
     /// The viewport height, in logical pixels.
     pub height: f64,

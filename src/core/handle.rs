@@ -74,7 +74,7 @@ pub(crate) struct AlertView {
 }
 
 /// A window's view, as [`AppHandle::open_window`] takes it: like
-/// [`ViewFn`](crate::ViewFn), but able to cross threads.
+/// `ViewFn`, but able to cross threads.
 pub type SendViewFn<S> = Box<dyn FnMut(&S, &mut Cx<'_, S>) -> Element + Send>;
 
 /// A window [`AppHandle::open_window`] asked for, waiting for the UI thread.

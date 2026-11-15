@@ -17,9 +17,29 @@ use crate::render::Color;
 mod motion;
 pub use motion::MotionTokens;
 
+/// Chainable setters for an input struct's public fields, one per field:
+/// `fn field(mut self, field: Type) -> Self`. Used inside an `impl` block.
+macro_rules! setters {
+    ($($field:ident: $ty:ty),* $(,)?) => {
+        $(
+            #[doc = concat!("Set `", stringify!($field), "`.")]
+            pub fn $field(mut self, $field: $ty) -> Self {
+                self.$field = $field;
+                self
+            }
+        )*
+    };
+}
+pub(crate) use setters;
+
 /// Semantic colors. Names describe *role*, not hue, so light/dark/custom themes
 /// can supply different values for the same role.
+///
+/// Start from [`Palette::light`] or [`Palette::dark`] (or a theme's
+/// palette) and change roles with the setters:
+/// `Palette::dark().primary(Color::rgb(0xff, 0x80, 0x00))`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Palette {
     /// Window/background fill.
     pub background: Color,
@@ -53,13 +73,94 @@ pub struct Palette {
     pub selection: Color,
 }
 
+impl Palette {
+    /// The default light theme's colors.
+    pub fn light() -> Self {
+        let primary = Color::rgb(0x3b, 0x82, 0xf6);
+        let (primary_hover, primary_active) = states(primary, false);
+        Self {
+            background: Color::rgb(0xf7, 0xf7, 0xf8),
+            surface: Color::WHITE,
+            primary,
+            primary_hover,
+            primary_active,
+            on_primary: Color::WHITE,
+            text: Color::rgb(0x1a, 0x1a, 0x1e),
+            text_muted: Color::rgb(0x6b, 0x70, 0x80),
+            border: Color::rgb(0xe2, 0xe4, 0xe9),
+            success: Color::rgb(0x22, 0xa5, 0x5a),
+            warning: Color::rgb(0xe0, 0x8a, 0x00),
+            danger: Color::rgb(0xdc, 0x3a, 0x3a),
+            focus_ring: primary,
+            hover_overlay: Color::rgba(0, 0, 0, 18),
+            selection: Color::rgba(0x3b, 0x82, 0xf6, 60),
+        }
+    }
+
+    /// The default dark theme's colors.
+    pub fn dark() -> Self {
+        let primary = Color::rgb(0x60, 0x9c, 0xff);
+        let (primary_hover, primary_active) = states(primary, true);
+        Self {
+            background: Color::rgb(0x14, 0x15, 0x18),
+            surface: Color::rgb(0x1e, 0x20, 0x25),
+            primary,
+            primary_hover,
+            primary_active,
+            on_primary: Color::rgb(0x0a, 0x0b, 0x0d),
+            text: Color::rgb(0xec, 0xee, 0xf2),
+            text_muted: Color::rgb(0x9a, 0xa0, 0xae),
+            border: Color::rgb(0x2c, 0x2f, 0x36),
+            success: Color::rgb(0x35, 0xc7, 0x76),
+            warning: Color::rgb(0xf5, 0x9e, 0x0b),
+            danger: Color::rgb(0xf2, 0x55, 0x55),
+            focus_ring: primary,
+            hover_overlay: Color::rgba(255, 255, 255, 28),
+            selection: Color::rgba(0x60, 0x9c, 0xff, 80),
+        }
+    }
+
+    setters!(
+        background: Color,
+        surface: Color,
+        primary: Color,
+        primary_hover: Color,
+        primary_active: Color,
+        on_primary: Color,
+        text: Color,
+        text_muted: Color,
+        border: Color,
+        success: Color,
+        warning: Color,
+        danger: Color,
+        focus_ring: Color,
+        hover_overlay: Color,
+        selection: Color,
+    );
+}
+
+impl Default for Palette {
+    fn default() -> Self {
+        Self::light()
+    }
+}
+
 /// A type scale, in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Typography {
+    /// Small print: captions, tooltips, badges.
     pub caption: f64,
+    /// Body text and most controls' labels.
     pub body: f64,
+    /// Titles of sections and dialogs.
     pub title: f64,
+    /// Headings ([`heading`](crate::widgets::heading)).
     pub heading: f64,
+}
+
+impl Typography {
+    setters!(caption: f64, body: f64, title: f64, heading: f64);
 }
 
 impl Default for Typography {
@@ -76,12 +177,22 @@ impl Default for Typography {
 /// A spacing scale in logical pixels. A small fixed scale keeps layouts
 /// rhythmically consistent.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Spacing {
+    /// Extra small: inside compact controls.
     pub xs: f64,
+    /// Small: between a control's parts.
     pub sm: f64,
+    /// Medium: between controls.
     pub md: f64,
+    /// Large: a panel's padding.
     pub lg: f64,
+    /// Extra large: between sections.
     pub xl: f64,
+}
+
+impl Spacing {
+    setters!(xs: f64, sm: f64, md: f64, lg: f64, xl: f64);
 }
 
 impl Default for Spacing {
@@ -97,10 +208,18 @@ impl Default for Spacing {
 }
 
 /// A complete look: palette + typography + spacing + corner radius.
+///
+/// Start from one of the themes ([`Theme::light`], [`Theme::dark`],
+/// [`Theme::native`], [`Theme::material3_from_seed`]…) and adjust it with the
+/// `with_*` methods, or assign its public fields.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Theme {
+    /// The colors, by role.
     pub palette: Palette,
+    /// The text sizes.
     pub typography: Typography,
+    /// The spacing scale.
     pub spacing: Spacing,
     /// Default corner radius for rounded surfaces, in logical pixels.
     pub radius: f64,
@@ -131,6 +250,7 @@ pub struct Theme {
 /// menu read from a couch wants something bolder, like
 /// [`FocusLook::BOLD`].
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FocusLook {
     /// The ring's stroke width, in logical pixels.
     pub width: f64,
@@ -156,6 +276,8 @@ impl FocusLook {
         offset: 3.0,
         glow: 8.0,
     };
+
+    setters!(width: f64, offset: f64, glow: f64);
 
     /// How far outside an element's bounds the ring and its glow reach, at
     /// most (what has to be repainted when focus moves).
@@ -277,26 +399,8 @@ impl Theme {
 
     /// The default light theme.
     pub fn light() -> Self {
-        let primary = Color::rgb(0x3b, 0x82, 0xf6);
-        let (primary_hover, primary_active) = states(primary, false);
         Self {
-            palette: Palette {
-                background: Color::rgb(0xf7, 0xf7, 0xf8),
-                surface: Color::WHITE,
-                primary,
-                primary_hover,
-                primary_active,
-                on_primary: Color::WHITE,
-                text: Color::rgb(0x1a, 0x1a, 0x1e),
-                text_muted: Color::rgb(0x6b, 0x70, 0x80),
-                border: Color::rgb(0xe2, 0xe4, 0xe9),
-                success: Color::rgb(0x22, 0xa5, 0x5a),
-                warning: Color::rgb(0xe0, 0x8a, 0x00),
-                danger: Color::rgb(0xdc, 0x3a, 0x3a),
-                focus_ring: primary,
-                hover_overlay: Color::rgba(0, 0, 0, 18),
-                selection: Color::rgba(0x3b, 0x82, 0xf6, 60),
-            },
+            palette: Palette::light(),
             typography: Typography::default(),
             spacing: Spacing::default(),
             radius: 8.0,
@@ -311,26 +415,8 @@ impl Theme {
 
     /// The default dark theme.
     pub fn dark() -> Self {
-        let primary = Color::rgb(0x60, 0x9c, 0xff);
-        let (primary_hover, primary_active) = states(primary, true);
         Self {
-            palette: Palette {
-                background: Color::rgb(0x14, 0x15, 0x18),
-                surface: Color::rgb(0x1e, 0x20, 0x25),
-                primary,
-                primary_hover,
-                primary_active,
-                on_primary: Color::rgb(0x0a, 0x0b, 0x0d),
-                text: Color::rgb(0xec, 0xee, 0xf2),
-                text_muted: Color::rgb(0x9a, 0xa0, 0xae),
-                border: Color::rgb(0x2c, 0x2f, 0x36),
-                success: Color::rgb(0x35, 0xc7, 0x76),
-                warning: Color::rgb(0xf5, 0x9e, 0x0b),
-                danger: Color::rgb(0xf2, 0x55, 0x55),
-                focus_ring: primary,
-                hover_overlay: Color::rgba(255, 255, 255, 28),
-                selection: Color::rgba(0x60, 0x9c, 0xff, 80),
-            },
+            palette: Palette::dark(),
             typography: Typography::default(),
             spacing: Spacing::default(),
             radius: 8.0,
@@ -389,6 +475,40 @@ impl Theme {
     /// Set how the focus ring is drawn (see [`FocusLook`]).
     pub fn with_focus(mut self, focus: FocusLook) -> Self {
         self.focus = focus;
+        self
+    }
+
+    /// Set the colors.
+    pub fn with_palette(mut self, palette: Palette) -> Self {
+        self.palette = palette;
+        self
+    }
+
+    /// Set the text sizes. [`font_size`](Self::font_size) follows
+    /// `typography.body`.
+    pub fn with_typography(mut self, typography: Typography) -> Self {
+        self.typography = typography;
+        self.font_size = typography.body;
+        self
+    }
+
+    /// Set the spacing scale.
+    pub fn with_spacing(mut self, spacing: Spacing) -> Self {
+        self.spacing = spacing;
+        self
+    }
+
+    /// Set whether widgets ask the OS to draw their chrome (see
+    /// [`Theme::native`]).
+    pub fn with_native(mut self, native: bool) -> Self {
+        self.native = native;
+        self
+    }
+
+    /// Set whether the `App` rebuilds this theme when the system's look
+    /// changes (see [`follows_system`](Self::follows_system)).
+    pub fn with_follows_system(mut self, follows: bool) -> Self {
+        self.follows_system = follows;
         self
     }
 

@@ -32,6 +32,7 @@ const BUTTON_W: f64 = 28.0;
 
 /// A mark on a tab that something happened in it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TabIndicator {
     /// A dot (activity, unsaved changes), in the tab's color or the accent.
     Dot,

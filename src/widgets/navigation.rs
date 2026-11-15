@@ -17,6 +17,7 @@ use crate::style::Theme;
 
 /// A mark on a destination that something waits there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NavBadge {
     /// A small dot (something new).
     Dot,
@@ -26,6 +27,7 @@ pub enum NavBadge {
 
 /// A destination's icon.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub enum NavIcon {
     /// A bitmap or an SVG, drawn in its own colors.
     Image(ImageSource),
@@ -113,6 +115,7 @@ impl NavItem {
 
 /// How a [`navigation_bar`] looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NavLook {
     /// Material 3's navigation bar: 80 px tall, a pill behind the selected
     /// icon, the label below. The self-drawn default everywhere.

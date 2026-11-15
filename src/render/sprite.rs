@@ -12,6 +12,7 @@ use std::sync::Arc;
 /// How a bitmap is sampled when it is drawn at another size or position than
 /// its own pixels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Filter {
     /// Bilinear: smooth, what photos and UI images want.
     #[default]
@@ -37,6 +38,7 @@ pub enum Filter {
 /// assert!(opts.flip_x && opts.scale.dx == 2.0);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ImageOptions {
     /// Mirror the region left to right (within the destination rect).
     pub flip_x: bool,

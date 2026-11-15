@@ -74,14 +74,19 @@ impl TreeState {
 
 /// What a tree row builder is told about the node it builds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TreeRow {
+    /// The node, as the model identifies it.
     pub id: u64,
     /// Nesting depth (0 for a root).
     pub depth: usize,
     /// Position among the visible (flattened) rows.
     pub index: usize,
+    /// Whether it has children (and shows a disclosure triangle).
     pub has_children: bool,
+    /// Whether it's expanded, its children showing.
     pub expanded: bool,
+    /// Whether it's the selected node.
     pub selected: bool,
 }
 
@@ -97,7 +102,7 @@ struct Flat {
 
 /// The visible nodes, depth first: each root, and the children of every
 /// expanded node.
-fn flatten(model: &impl TreeModel, state: &TreeState) -> Vec<Flat> {
+fn flatten(model: &dyn TreeModel, state: &TreeState) -> Vec<Flat> {
     let mut out = Vec::new();
     // (id, depth, parent index), pushed in reverse so they pop in order.
     let mut stack: Vec<(u64, usize, Option<usize>)> = model
@@ -198,9 +203,14 @@ fn handle_key(state: &mut TreeState, flat: &[Flat], key: &KeyInput) -> Option<us
     Some(to)
 }
 
-/// The shape of a [`tree`]: row height, viewport height and indentation.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TreeSpec {
+/// What a [`tree`] shows: its model, and its row height, viewport height and
+/// indentation.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
+pub struct TreeSpec<'a> {
+    /// Where the nodes come from.
+    pub model: &'a dyn TreeModel,
+    /// The height of every row, in logical pixels.
     pub row_height: f64,
     /// The viewport height, in logical pixels.
     pub height: f64,
@@ -210,30 +220,51 @@ pub struct TreeSpec {
     pub overscan: usize,
 }
 
-impl Default for TreeSpec {
-    fn default() -> Self {
+impl std::fmt::Debug for TreeSpec<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TreeSpec")
+            .field("row_height", &self.row_height)
+            .field("height", &self.height)
+            .field("indent", &self.indent)
+            .field("overscan", &self.overscan)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a> TreeSpec<'a> {
+    /// The nodes of `model`, in 24px rows indented 16px a level, in a 240px
+    /// viewport.
+    pub fn new(model: &'a dyn TreeModel) -> Self {
         Self {
+            model,
             row_height: 24.0,
             height: 240.0,
             indent: 16.0,
             overscan: DEFAULT_OVERSCAN,
         }
     }
-}
 
-impl TreeSpec {
+    /// Set the height of every row.
     pub fn row_height(mut self, height: f64) -> Self {
         self.row_height = height;
         self
     }
 
+    /// Set the viewport height.
     pub fn height(mut self, height: f64) -> Self {
         self.height = height;
         self
     }
 
+    /// Set the indentation per level.
     pub fn indent(mut self, indent: f64) -> Self {
         self.indent = indent;
+        self
+    }
+
+    /// Set how many rows are built beyond each edge of the viewport.
+    pub fn overscan(mut self, rows: usize) -> Self {
+        self.overscan = rows;
         self
     }
 }
@@ -268,7 +299,7 @@ pub(super) fn turn_of(
     }
 }
 
-/// A virtualized tree over `model`: each visible node is a row indented by its
+/// A virtualized tree over `spec.model`: each visible node is a row indented by its
 /// depth, with a disclosure triangle (tap to expand or collapse) when it has
 /// children, and the content `label` builds for it. Only the rows in the
 /// viewport are built; the expanded part of the tree is walked (ids only) to
@@ -298,8 +329,7 @@ pub(super) fn turn_of(
 ///     &theme,
 ///     &state.tree,
 ///     |s: &mut App| &mut s.tree,
-///     &Numbers,
-///     TreeSpec::default(),
+///     TreeSpec::new(&Numbers),
 ///     |_cx, row| label(&theme, format!("Node {}", row.id)),
 /// );
 /// # let _ = view;
@@ -309,13 +339,12 @@ pub fn tree<S: 'static>(
     theme: &Theme,
     state: &TreeState,
     field: impl Fn(&mut S) -> &mut TreeState + Copy + 'static,
-    model: &impl TreeModel,
-    spec: TreeSpec,
+    spec: TreeSpec<'_>,
     mut label: impl FnMut(&mut Cx<S>, &TreeRow) -> Element,
 ) -> Element {
     let p = &theme.palette;
     let rtl = theme.is_rtl();
-    let flat: Rc<[Flat]> = flatten(model, state).into();
+    let flat: Rc<[Flat]> = flatten(spec.model, state).into();
     let rows = Rows::new(flat.len(), RowHeight::Fixed(spec.row_height));
     let window = Window::new(cx, rows, spec.height, spec.overscan);
     let now = cx.frame_time();
@@ -450,8 +479,7 @@ mod tests {
                     &theme,
                     &state.tree,
                     |s: &mut App| &mut s.tree,
-                    &Big,
-                    TreeSpec::default(),
+                    TreeSpec::new(&Big),
                     |_cx, row| Element::text(format!("Node {}", row.id), 14.0, theme.palette.text),
                 );
                 // Under a container: the root is reported as the window.

@@ -28,6 +28,7 @@ const KAPPA: f64 = 0.552_284_749_830_793_4;
 /// from vector paths (the CPU rasterizer uses the nodes; the GPU path uses
 /// these). See [`Scene::commands`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum DrawCmd {
     /// A box: `radius` rounds the corners (0 = sharp); `border` > 0 strokes the
     /// outline at that width instead of filling.
@@ -267,7 +268,7 @@ impl Scene {
 
     /// Primitives drawn so far (each glyph, rect, path, bitmap and canvas
     /// counts one): a rough measure of the cost of rasterizing the scene.
-    pub fn primitive_count(&self) -> usize {
+    pub(crate) fn primitive_count(&self) -> usize {
         self.primitives
     }
 
@@ -479,26 +480,6 @@ impl Scene {
     pub fn into_vector_frame(self) -> VectorFrame {
         let size = self.logical_size;
         self.into_vector_frame_view(Rect::from_xywh(0.0, 0.0, size.width, size.height), false)
-    }
-
-    /// Lower to a frame whose view box is `view` — a logical-pixel sub-rect of
-    /// the scene. A renderer sized to that region's physical pixels then
-    /// rasterizes only the region; content outside it is clipped by the canvas
-    /// bounds — and anything that can't touch the region is dropped before
-    /// it gets to the rasterizer. Used for area-limited repaints (see
-    /// `SoftwareRenderer::render_region`).
-    pub fn into_vector_frame_region(self, view: Rect) -> VectorFrame {
-        self.into_vector_frame_view(view, true)
-    }
-
-    /// Lower to a frame for `view` without consuming the scene: what an area
-    /// repaint uses, so the scene needn't be cloned per area. Only what can
-    /// touch `view` is kept (see [`into_vector_frame_region`]).
-    ///
-    /// [`into_vector_frame_region`]: Scene::into_vector_frame_region
-    pub fn vector_frame_region(&self, view: Rect) -> VectorFrame {
-        let root = self.lower_root(Some(Lower::view_of(view)), &Transform2D::identity());
-        frame_for(view, root)
     }
 
     /// Close any clips or layers the caller left open.

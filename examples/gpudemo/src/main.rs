@@ -93,7 +93,11 @@ fn main() {
         let m = font.measure(label, 30.0);
         let (tw, th) = (m.width.ceil() + 12.0, m.height.ceil() + 6.0);
         let mut scene = stipple::render::Scene::new(Size::new(tw, th));
-        scene.fill_text(&font, label, Point::new(6.0, 2.0), 30.0, Color::WHITE);
+        scene.fill_text(
+            label,
+            Point::new(6.0, 2.0),
+            &TextPaint::new(&font, 30.0, Color::WHITE),
+        );
         let pm = stipple::render::SoftwareRenderer::new()
             .with_background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY);

@@ -153,13 +153,13 @@ state.toasts.push("Connected", ToastKind::Info);
 // A toast that dismisses itself after 4 seconds, using a timer on the app's handle:
 let handle = cx.handle();
 button_labeled(&theme, "Save").on_tap(cx, move |s: &mut App| {
-    s.toasts.push_for(&handle, Duration::from_secs(4), |s: &mut App| &mut s.toasts,
-        "Saved", ToastKind::Success);
+    let id = s.toasts.push("Saved", ToastKind::Success);
+    s.toasts.dismiss_after(id, Duration::from_secs(4), &handle, |s: &mut App| &mut s.toasts);
 })
 
 // A toast with an action: its button dismisses the toast and runs the closure.
-let id = s.toasts.push_for(&handle, Duration::from_secs(6), |s: &mut App| &mut s.toasts,
-    "Deleted", ToastKind::Info);
+let id = s.toasts.push("Deleted", ToastKind::Info);
+s.toasts.dismiss_after(id, Duration::from_secs(6), &handle, |s: &mut App| &mut s.toasts);
 s.toasts.action(id, "Undo", move |s: &mut App| s.notes.push(note.clone()));
 
 // Where they go, and room for a bottom navigation bar (56 px tall):
@@ -411,10 +411,8 @@ buttons do. Change the motion with `Theme::with_motion`, starting from a
 preset:
 
 ```rust
-let theme = Theme::light().with_motion(MotionTokens {
-    press_scale: 1.0, // no shrink
-    ..MotionTokens::standard()
-});
+// No shrink when pressed.
+let theme = Theme::light().with_motion(MotionTokens::standard().press_scale(1.0));
 ```
 
 `MotionTokens::instant()` turns the widgets' motion off. The OS's

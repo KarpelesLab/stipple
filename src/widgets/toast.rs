@@ -41,6 +41,7 @@ pub struct ToastId(u64);
 
 /// What a toast is about, which sets its accent color.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ToastKind {
     /// Neutral news (the theme's primary color).
     #[default]
@@ -55,6 +56,7 @@ pub enum ToastKind {
 
 /// Where the [`toasts`] view puts the toasts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ToastPlacement {
     /// [`Bottom`](Self::Bottom) in a window narrower than [`NARROW_WINDOW`]
     /// (a phone, a narrow split), else [`Corner`](Self::Corner).
@@ -107,9 +109,13 @@ impl PartialEq for ToastAction {
 
 /// One notification.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Toast {
+    /// Which toast it is.
     pub id: ToastId,
+    /// What it says.
     pub message: String,
+    /// What it's about.
     pub kind: ToastKind,
     action: Option<ToastAction>,
 }
@@ -248,9 +254,10 @@ impl Toasts {
         id
     }
 
-    /// Show `message` and dismiss it after `duration`, with a timer on the
-    /// app's `handle` (from [`Cx::handle`], cloned into your handler). `field`
-    /// is an accessor returning these toasts inside the app state.
+    /// Dismiss the toast `id` after `duration` (say one just
+    /// [`push`](Self::push)ed), with a timer on the app's `handle` (from
+    /// [`Cx::handle`], cloned into your handler). `field` is an accessor
+    /// returning these toasts inside the app state.
     ///
     /// ```no_run
     /// use stipple::prelude::*;
@@ -259,24 +266,21 @@ impl Toasts {
     ///     let theme = *cx.theme();
     ///     let handle = cx.handle();
     ///     button_labeled(&theme, "Save").on_tap(cx, move |s: &mut App| {
-    ///         s.toasts.push_for(&handle, Duration::from_secs(4), |s: &mut App| &mut s.toasts,
-    ///             "Saved", ToastKind::Success);
+    ///         let id = s.toasts.push("Saved", ToastKind::Success);
+    ///         s.toasts.dismiss_after(id, Duration::from_secs(4), &handle, |s: &mut App| &mut s.toasts);
     ///     })
     /// }
     /// ```
-    pub fn push_for<S>(
-        &mut self,
-        handle: &AppHandle<S>,
+    pub fn dismiss_after<S>(
+        &self,
+        id: ToastId,
         duration: Duration,
+        handle: &AppHandle<S>,
         field: impl Fn(&mut S) -> &mut Toasts + Send + 'static,
-        message: impl Into<String>,
-        kind: ToastKind,
-    ) -> ToastId {
-        let id = self.push(message, kind);
+    ) {
         handle.after(duration, move |s| {
             field(s).dismiss(id);
         });
-        id
     }
 
     /// Give the toast `id` an action: a button labeled `label` that
@@ -292,8 +296,8 @@ impl Toasts {
     ///     let handle = cx.handle();
     ///     button_labeled(&theme, "Delete").on_tap(cx, move |s: &mut App| {
     ///         let Some(note) = s.notes.pop() else { return };
-    ///         let id = s.toasts.push_for(&handle, Duration::from_secs(6),
-    ///             |s: &mut App| &mut s.toasts, "Deleted", ToastKind::Info);
+    ///         let id = s.toasts.push("Deleted", ToastKind::Info);
+    ///         s.toasts.dismiss_after(id, Duration::from_secs(6), &handle, |s: &mut App| &mut s.toasts);
     ///         s.toasts.action(id, "Undo", move |s: &mut App| s.notes.push(note.clone()));
     ///     })
     /// }
@@ -710,7 +714,7 @@ mod tests {
     }
 
     #[test]
-    fn push_for_dismisses_on_its_timer() {
+    fn dismiss_after_dismisses_on_its_timer() {
         struct State {
             toasts: Toasts,
         }
@@ -719,13 +723,12 @@ mod tests {
             toasts: Toasts::new(),
         };
         let start = Instant::now();
-        state.toasts.push_for(
-            &handle,
-            Duration::from_millis(50),
-            |s: &mut State| &mut s.toasts,
-            "brief",
-            ToastKind::Info,
-        );
+        let id = state.toasts.push("brief", ToastKind::Info);
+        state
+            .toasts
+            .dismiss_after(id, Duration::from_millis(50), &handle, |s: &mut State| {
+                &mut s.toasts
+            });
         state.toasts.push("sticky", ToastKind::Info);
         handle.pump(&mut state, start);
         assert_eq!(state.toasts.len(), 2, "not due yet");

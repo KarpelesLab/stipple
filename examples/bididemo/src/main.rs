@@ -138,8 +138,7 @@ fn mirrored_view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
         &theme,
         &state.tree,
         |s: &mut Demo| &mut s.tree,
-        &Folders,
-        TreeSpec::default().height(96.0),
+        TreeSpec::new(&Folders).height(96.0),
         |_cx, row| label(&theme, folder_name(row.id)),
     );
     column(vec![

@@ -112,7 +112,8 @@ transform, invalidated areas are presented where the canvas is drawn.
   `push_cell(cluster, pen, width)` places a cluster spanning cells or carrying
   combining marks; `push(cluster, pen)` uses the cluster's own advance. Draw it
   with `fill_glyph_run`. `draw_decoration` draws decorations alone.
-- Laid-out text: `fill_text` and `fill_layout`, as anywhere else.
+- Laid-out text: `fill_text(text, origin, &TextPaint::new(&font, size, color))`
+  and `fill_layout`, as anywhere else.
 - Anything else: `push_node` takes an `oxideav-core` node.
 
 ## Cost, and checking it

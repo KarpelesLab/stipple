@@ -665,11 +665,9 @@ impl Decor {
                         let size = 18.0;
                         let m = font.measure("\u{d7}", size);
                         scene.fill_text(
-                            font,
                             "\u{d7}",
                             Point::new(cx - m.width / 2.0, cy - m.height / 2.0),
-                            size,
-                            glyph,
+                            &crate::render::TextPaint::new(font, size, glyph),
                         );
                     }
                     None => scene.fill_rect(Rect::from_xywh(cx - 4.0, cy - 4.0, 8.0, 8.0), glyph),
@@ -692,11 +690,9 @@ impl Decor {
             let m = font.measure(&title, size);
             scene.push_clip(Rect::from_xywh(0.0, 0.0, left, TITLE_HEIGHT));
             scene.fill_text(
-                font,
                 &title,
                 Point::new(12.0, (TITLE_HEIGHT - m.height) / 2.0),
-                size,
-                fg,
+                &crate::render::TextPaint::new(font, size, fg),
             );
             scene.pop_clip();
         }

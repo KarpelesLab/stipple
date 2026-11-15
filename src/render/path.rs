@@ -158,6 +158,7 @@ pub enum LineCap {
 
 /// How the corners of a stroked path are drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LineJoin {
     /// A sharp corner.
     #[default]

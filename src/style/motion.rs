@@ -32,17 +32,16 @@ use crate::anim::{Easing, Motion, SpringParams};
 /// use stipple::anim::Motion;
 /// use stipple::style::{MotionTokens, Theme};
 /// // The default look, with popups that only fade.
-/// let theme = Theme::light().with_motion(MotionTokens {
-///     popup_scale: 1.0,
-///     popup_offset: 0.0,
-///     ..MotionTokens::standard()
-/// });
+/// let theme = Theme::light().with_motion(
+///     MotionTokens::standard().popup_scale(1.0).popup_offset(0.0),
+/// );
 /// # let _ = theme;
 /// // Nothing animates (reduced motion does this too, system-wide).
 /// let still = Theme::light().with_motion(MotionTokens::instant());
 /// assert_eq!(still.motion.toggle, Motion::Instant);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct MotionTokens {
     /// Color changes: hover and press looks, a switch's track, a checkbox's
     /// box, a segmented tab's fill and text.
@@ -117,6 +116,26 @@ const FAST_OUT_SLOW_IN: Easing = Easing::cubic_bezier(0.4, 0.0, 0.2, 1.0);
 const LINEAR_OUT_SLOW_IN: Easing = Easing::cubic_bezier(0.0, 0.0, 0.2, 1.0);
 
 impl MotionTokens {
+    super::setters!(
+        state: Motion,
+        press: Motion,
+        press_scale: f64,
+        toggle: Motion,
+        indicator: Motion,
+        popup: Motion,
+        popup_scale: f64,
+        popup_offset: f64,
+        popup_exit: Motion,
+        dialog: Motion,
+        dialog_scale: f64,
+        dialog_exit: Motion,
+        toast_enter: Motion,
+        toast_exit: Motion,
+        toast_offset: f64,
+        toast_scale: f64,
+        disclosure: Motion,
+    );
+
     /// Stipple's own motion, shared by [`Theme::light`](super::Theme::light),
     /// [`Theme::dark`](super::Theme::dark) and their variants: quick
     /// ease-out color changes (150 ms, like a CSS transition), a slight press

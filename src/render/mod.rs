@@ -52,7 +52,7 @@ pub use scene::{DrawCmd, Scene};
 pub use software::{RasterStats, SoftwareRenderer};
 pub use sprite::{Filter, ImageOptions};
 pub use surface::{Pixmap, Surface};
-pub use text::{Font, FontError, TextLayout};
+pub use text::{Font, FontError, TextLayout, TextPaint};
 
 /// Low-level conversions to `oxideav-core` coordinate types. Exposed for
 /// crates that build scene-graph nodes directly (e.g. the future text-run

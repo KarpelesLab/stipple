@@ -31,6 +31,7 @@ static RUNS: AtomicU64 = AtomicU64::new(0);
 /// assert!(RasterStats::take().pixels >= 100);
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RasterStats {
     /// Pixels rasterized.
     pub pixels: u64,
@@ -323,7 +324,11 @@ mod tests {
                 &StrokeStyle::new(2.5).dashed(&[3.0, 2.0]),
             );
             if let Some(font) = &font {
-                s.fill_text(font, "Bands", Point::new(7.3, 41.6), 19.0, Color::BLACK);
+                s.fill_text(
+                    "Bands",
+                    Point::new(7.3, 41.6),
+                    &crate::render::TextPaint::new(font, 19.0, Color::BLACK),
+                );
             }
             s
         };

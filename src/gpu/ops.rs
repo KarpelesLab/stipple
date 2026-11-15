@@ -1007,7 +1007,11 @@ mod tests {
             return;
         };
         let mut s = Scene::new(Size::new(200.0, 40.0));
-        s.fill_text(&font, "lll", Point::new(4.0, 4.0), 16.0, Color::WHITE);
+        s.fill_text(
+            "lll",
+            Point::new(4.0, 4.0),
+            &crate::render::TextPaint::new(&font, 16.0, Color::WHITE),
+        );
         let mut cache = RasterCache::default();
         let first = lower(&s, &mut cache);
         let images = |ops: &[Op]| -> Vec<Arc<Pixmap>> {
@@ -1030,11 +1034,9 @@ mod tests {
         // A different color is a different raster.
         let mut red = Scene::new(Size::new(200.0, 40.0));
         red.fill_text(
-            &font,
             "l",
             Point::new(4.0, 4.0),
-            16.0,
-            Color::rgb(255, 0, 0),
+            &crate::render::TextPaint::new(&font, 16.0, Color::rgb(255, 0, 0)),
         );
         let r = images(&lower(&red, &mut cache));
         assert!(!Arc::ptr_eq(&r[0], &a[0]));

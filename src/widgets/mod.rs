@@ -254,6 +254,7 @@ pub fn paragraph(theme: &Theme, text: impl Into<String>) -> Element {
 
 /// Visual emphasis level for a button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Variant {
     /// Filled accent — the primary action.
     Primary,

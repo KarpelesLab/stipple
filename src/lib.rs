@@ -65,7 +65,6 @@ pub mod widgets;
 mod window_tests;
 
 pub use app_lifecycle::CloseResponse;
-pub use platform::Lifecycle;
 /// Gamepads: buttons and axes on a standard layout (see [`platform::gamepad`]).
 pub use platform::gamepad;
 
@@ -87,7 +86,7 @@ use std::collections::HashMap;
 /// A Stipple application.
 ///
 /// Owns the global app `state` and shared presentation (the active [`Theme`] and
-/// font), plus one [`Pane`] per OS window. The primary window's `build` closure
+/// font), plus one pane per OS window. The primary window's `build` closure
 /// is passed to [`App::new`]; further windows are added with
 /// [`App::open_window`], each with its own view onto the same shared state.
 /// Every pane maps state (via a [`Cx`] for registering event handlers) to an
@@ -160,22 +159,22 @@ pub struct App<S> {
 
 /// Called when a window moves, resizes or changes state (see
 /// [`App::on_window_change`]).
-pub type WindowChangeFn<S> = Box<dyn FnMut(&mut S, WindowId, &crate::platform::WindowInfo)>;
+pub(crate) type WindowChangeFn<S> = Box<dyn FnMut(&mut S, WindowId, &crate::platform::WindowInfo)>;
 
 /// The active theme as a function of the app state and the theme set with
 /// [`App::theme`] (see [`App::theme_with`]).
-pub type ThemeFn<S> = std::rc::Rc<dyn Fn(&S, &Theme) -> Theme>;
+pub(crate) type ThemeFn<S> = std::rc::Rc<dyn Fn(&S, &Theme) -> Theme>;
 
 /// A tray icon declared as a function of the app state (see [`App::tray`]).
-pub type TrayFn<S> = std::rc::Rc<dyn Fn(&S) -> crate::core::Tray<S>>;
+pub(crate) type TrayFn<S> = std::rc::Rc<dyn Fn(&S) -> crate::core::Tray<S>>;
 
 /// A menu bar declared as a function of the app state (see [`App::menu`]).
-pub type MenuFn<S> = std::rc::Rc<dyn Fn(&S) -> crate::core::MenuBar<S>>;
+pub(crate) type MenuFn<S> = std::rc::Rc<dyn Fn(&S) -> crate::core::MenuBar<S>>;
 
 /// A sink for input forwarded to an embedded viewport's content: receives the
 /// target [`ViewportId`] and a [`ViewportEvent`] (pointer/keys/wheel) in
 /// viewport-local coordinates. Set via [`App::on_viewport_input`].
-pub type ViewportInputFn = Box<dyn FnMut(ViewportId, ViewportEvent)>;
+pub(crate) type ViewportInputFn = Box<dyn FnMut(ViewportId, ViewportEvent)>;
 
 /// A pointer transition forwarded to a viewport (internal helper for
 /// [`App::try_forward_pointer`]).
@@ -192,11 +191,11 @@ enum PointerKind {
 /// A pluggable rasterizer: turns a built [`Scene`] (with a background color, at a
 /// scale factor) into the [`Pixmap`] the [`Surface`] presents. Set via
 /// [`App::render_with`] to route frames through a GPU backend.
-pub type FrameRenderer = Box<dyn FnMut(&Scene, Color, ScaleFactor) -> Pixmap>;
+pub(crate) type FrameRenderer = Box<dyn FnMut(&Scene, Color, ScaleFactor) -> Pixmap>;
 
 /// A view closure mapping the shared state (and a [`Cx`] for registering event
 /// handlers) to an [`Element`] tree. Boxed so each window can hold its own view.
-pub type ViewFn<S> = Box<dyn FnMut(&S, &mut Cx<'_, S>) -> Element>;
+pub(crate) type ViewFn<S> = Box<dyn FnMut(&S, &mut Cx<'_, S>) -> Element>;
 
 /// Counts consecutive presses at (nearly) the same spot within the
 /// platform's double-click time and distance
@@ -660,7 +659,7 @@ impl<S: 'static> App<S> {
     /// app bundle; a bundle's or Android package's own values win). Desktop
     /// app directories are named after the id, and Wayland windows carry it
     /// as their app id. Same as
-    /// [`platform::set_app_info`](crate::platform::set_app_info), which takes
+    /// [`platform::set_app_info`], which takes
     /// effect at once. See `docs/os-integration.md`.
     ///
     /// ```
@@ -4070,7 +4069,7 @@ pub mod prelude {
     pub use crate::render::{
         Canvas, Color, Font, GlyphRun, ImageFit, Path, Pixmap, StrokeStyle, Svg, TextDirection,
     };
-    pub use crate::render::{Decoration, FontStyle, FontWeight, UnderlineStyle};
+    pub use crate::render::{Decoration, FontStyle, FontWeight, TextPaint, UnderlineStyle};
     pub use crate::style::Theme;
     pub use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Typography};
     pub use crate::widgets::{

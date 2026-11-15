@@ -249,11 +249,10 @@ fn paint_grid(c: &mut Canvas, screen: &Mutex<Screen>, font: Option<&Font>, image
             let baseline =
                 y + font.baseline(FONT_SIZE) + (CELL_H - font.line_height(FONT_SIZE)) / 2.0;
             c.draw_decoration(
-                &font.metrics(FONT_SIZE),
                 Point::new(50.0 * CELL_W, baseline),
                 30.0 * CELL_W,
-                &Decoration::underline(UnderlineStyle::Dashed),
-                FG[3],
+                &TextPaint::new(font, FONT_SIZE, FG[3])
+                    .decoration(Decoration::underline(UnderlineStyle::Dashed)),
             );
         }
         if row == screen.cursor.1 {
@@ -291,11 +290,9 @@ fn paint_status(c: &mut Canvas, font: Option<&Font>) {
         stats.pixels as f64 / 1e6
     );
     c.fill_text(
-        font,
         &text,
         Point::new(8.0, (STATUS_H - font.line_height(12.0)) / 2.0),
-        12.0,
-        FG[0],
+        &TextPaint::new(font, 12.0, FG[0]),
     );
 }
 

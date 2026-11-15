@@ -75,15 +75,17 @@ table(
     &theme,
     &state.table,                         // a TableState
     |s: &mut App| &mut s.table,
-    TableSpec::new(&columns, state.order.len()).row_height(26.0).height(400.0),
-    |s: &mut App, column, order| s.sort(column, order),
+    TableSpec::new(&columns, state.order.len())
+        .row_height(26.0)
+        .height(400.0)
+        .on_sort(|s: &mut App, column, order| s.sort(column, order)),
     |_cx, row, column| label(&theme, cell_text(state, row, column)),
 )
 ```
 
 - **Sorting**: clicking a sortable header sorts by it, and clicking again
   reverses it. The table moves its ▲/▼ indicator, clears the selection, scrolls
-  to the top and calls your `on_sort`. You reorder the data: the `row` passed to
+  to the top and calls the spec's `on_sort`. You reorder the data: the `row` passed to
   the cell builder is the display position, so keep an order (`Vec<usize>`) and
   map through it.
 - **Resizing**: drag a header's right edge. Widths live in the `TableState`
@@ -106,8 +108,9 @@ tree(
     &theme,
     &state.tree,                            // a TreeState
     |s: &mut App| &mut s.tree,
-    &state.folders,                         // impl TreeModel
-    TreeSpec::default().row_height(26.0).height(400.0),
+    TreeSpec::new(&state.folders)           // a TreeModel
+        .row_height(26.0)
+        .height(400.0),
     |_cx, row| label(&theme, name_of(row.id)),
 )
 ```

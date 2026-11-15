@@ -19,6 +19,7 @@ use oxideav_scribe::bidi::{
 /// edge for right-to-left), how neutral characters between runs of different
 /// directions resolve, and which way the lines of a paragraph are aligned.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TextDirection {
     /// Take each paragraph's direction from its first strong character (UAX #9
     /// rules P2 and P3): Hebrew or Arabic makes it right-to-left, Latin

@@ -15,6 +15,7 @@ use crate::platform::{BackGesture, Lifecycle, WindowId};
 /// The answer to a close or quit request (see [`App::on_close_requested`] and
 /// [`App::on_quit_requested`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CloseResponse {
     /// Go ahead: close the window, or quit.
     #[default]

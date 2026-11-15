@@ -70,10 +70,7 @@ the shaper's face chain only handles TrueType outlines for now.
 
 ```rust
 let bold = mono.bold();                         // FontWeight::BOLD
-let light_italic = mono.styled(FontStyle {
-    weight: FontWeight::LIGHT,
-    italic: true,
-});
+let light_italic = mono.styled(FontStyle::ITALIC.with_weight(FontWeight::LIGHT));
 ```
 
 `styled` picks the family's face the way CSS does: the requested slant first,
@@ -142,9 +139,12 @@ Element::text("heading", 14.0, ink).decorate(Decoration::overline().with_underli
 `None`) — a terminal's SGR 4:x, 9, 53 and 58. Positions and thickness come
 from the font's metrics; straight lines are snapped to whole pixels.
 
-To draw text yourself, `Scene::fill_layout` draws a `TextLayout` and
-`Scene::decorate_layout` its decorations; `Scene::draw_decoration` draws one
-run's lines given its metrics, baseline start and width.
+To draw text yourself, `Scene::fill_text(text, origin, &paint)` draws a string
+in a `TextPaint` (font, size, color and an optional decoration:
+`TextPaint::new(&font, 14.0, color).decoration(deco)`); `Scene::fill_layout`
+draws a `TextLayout` and `Scene::decorate_layout` its decorations; and
+`Scene::draw_decoration(baseline, width, &paint)` draws one run's lines given
+its baseline start and width.
 
 `Element::underline(range)` is something else: it underlines a byte range, for
 menu mnemonics.

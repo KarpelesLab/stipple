@@ -367,28 +367,26 @@ fn text_matches_the_software_renderer() {
     };
     let mut s = Scene::new(Size::new(220.0, 100.0));
     s.fill_text(
-        &font,
         "Stipple on the GPU",
         Point::new(6.0, 4.0),
-        16.0,
-        Color::WHITE,
+        &crate::render::TextPaint::new(&font, 16.0, Color::WHITE),
     );
     s.fill_text(
-        &font,
         "Kerning: AVAWAY",
         Point::new(6.3, 28.4),
-        13.0,
-        Color::rgb(0x60, 0x9c, 0xff),
+        &crate::render::TextPaint::new(&font, 13.0, Color::rgb(0x60, 0x9c, 0xff)),
     );
     s.fill_text(
-        &font,
         "Big",
         Point::new(120.0, 40.0),
-        40.0,
-        Color::rgb(0xef, 0x68, 0x68),
+        &crate::render::TextPaint::new(&font, 40.0, Color::rgb(0xef, 0x68, 0x68)),
     );
     s.push_layer(rotate_about(-0.2, Point::new(50.0, 75.0)), 1.0);
-    s.fill_text(&font, "rotated", Point::new(10.0, 65.0), 18.0, Color::WHITE);
+    s.fill_text(
+        "rotated",
+        Point::new(10.0, 65.0),
+        &crate::render::TextPaint::new(&font, 18.0, Color::WHITE),
+    );
     s.pop_layer();
     agree("text", &s, 1.0, 1.0, 0.01);
     agree("text@2", &s, 2.0, 1.0, 0.01);

@@ -3,11 +3,12 @@
 
 use crate::geometry::{Point, Rect};
 use crate::render::font::FontMetrics;
-use crate::render::{Color, Scene};
+use crate::render::{Color, Scene, TextPaint};
 use oxideav_core::{LineCap, Node, Path, PathNode, Point as OxPoint, Stroke};
 
 /// How an underline is drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum UnderlineStyle {
     /// One straight line.
     #[default]
@@ -28,9 +29,13 @@ pub enum UnderlineStyle {
 /// These map onto a terminal's SGR attributes: 4 and 4:1–4:5 (underline
 /// styles), 9 (strikethrough), 53 (overline) and 58 (decoration color).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct Decoration {
+    /// The underline's style, if underlined.
     pub underline: Option<UnderlineStyle>,
+    /// A line through the middle.
     pub strikethrough: bool,
+    /// A line above.
     pub overline: bool,
     /// The lines' color; `None` draws them in the text's color.
     pub color: Option<Color>,
@@ -105,14 +110,21 @@ fn thickness(t: f64) -> f64 {
 }
 
 impl Scene {
-    /// Draw `decoration`'s lines along a run of text `width` wide whose
-    /// baseline starts at `baseline` (its left end), with positions and
-    /// thickness from `metrics` (see [`Font::metrics`](crate::render::Font::metrics)).
-    /// The lines take the decoration's color, else `text_color`.
+    /// Draw the lines of `paint`'s decoration along a run of text `width`
+    /// wide whose baseline starts at `baseline` (its left end), placed and
+    /// sized from the metrics of `paint`'s font at its size (see
+    /// [`Font::metrics`](crate::render::Font::metrics)). The lines take the
+    /// decoration's color, else `paint`'s.
     ///
     /// Straight lines are pixel-snapped rectangles; a curly underline is a
     /// stroked wave.
-    pub fn draw_decoration(
+    pub fn draw_decoration(&mut self, baseline: Point, width: f64, paint: &TextPaint) {
+        let metrics = paint.font.metrics(paint.size);
+        self.decoration_lines(&metrics, baseline, width, &paint.decoration, paint.color);
+    }
+
+    /// [`draw_decoration`](Self::draw_decoration) with the metrics at hand.
+    pub(crate) fn decoration_lines(
         &mut self,
         metrics: &FontMetrics,
         baseline: Point,
@@ -218,7 +230,7 @@ mod tests {
     fn draw(deco: Decoration) -> Pixmap {
         let mut scene = Scene::new(Size::new(100.0, 50.0));
         scene.fill_rect(Rect::from_xywh(0.0, 0.0, 100.0, 50.0), Color::WHITE);
-        scene.draw_decoration(
+        scene.decoration_lines(
             &metrics(),
             Point::new(10.0, 30.0),
             80.0,
@@ -306,7 +318,7 @@ mod tests {
         let deco = Decoration::underline(UnderlineStyle::Single)
             .with_strikethrough()
             .with_color(red);
-        scene.draw_decoration(
+        scene.decoration_lines(
             &metrics(),
             Point::new(10.0, 30.0),
             80.0,

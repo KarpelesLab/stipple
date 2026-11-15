@@ -3,6 +3,8 @@
 //! edge, single or multiple row selection (Shift/Ctrl+click, Shift+arrows),
 //! and striped rows. Only the visible rows' cells are built.
 
+use std::rc::Rc;
+
 use crate::core::{Align, Axis, BoxStyle, Cx, Element, Role, pointer};
 use crate::geometry::Insets;
 use crate::style::Theme;
@@ -16,7 +18,9 @@ const HANDLE: f64 = 6.0;
 
 /// A table column: its header title and starting width.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Column {
+    /// The header's title.
     pub title: String,
     /// The starting width, in logical pixels (the user can resize it).
     pub width: f64,
@@ -62,7 +66,9 @@ impl Column {
 /// A sort direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SortOrder {
+    /// Smallest first.
     Ascending,
+    /// Largest first.
     Descending,
 }
 
@@ -88,6 +94,7 @@ struct Resize {
 /// A table's state, kept in the app state: the row selection, the sort, and
 /// the column widths the user has set.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct TableState {
     /// The row selection and keyboard cursor (rows by display index).
     pub rows: ListState,
@@ -135,10 +142,16 @@ impl TableState {
     }
 }
 
-/// The shape of a [`table`]: its columns, row count and sizes.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TableSpec<'a> {
+/// What a header click sorting the table calls (see [`TableSpec::on_sort`]).
+type SortFn<S> = Rc<dyn Fn(&mut S, usize, SortOrder)>;
+
+/// The shape of a [`table`]: its columns, row count and sizes, and what
+/// sorting it calls, for an app state `S`.
+#[non_exhaustive]
+pub struct TableSpec<'a, S> {
+    /// The columns, in order.
     pub columns: &'a [Column],
+    /// How many rows the table has.
     pub rows: usize,
     /// The height of every row, and of the header.
     pub row_height: f64,
@@ -148,9 +161,33 @@ pub struct TableSpec<'a> {
     pub striped: bool,
     /// Rows built beyond each edge of the viewport.
     pub overscan: usize,
+    on_sort: Option<SortFn<S>>,
 }
 
-impl<'a> TableSpec<'a> {
+impl<S> Clone for TableSpec<'_, S> {
+    fn clone(&self) -> Self {
+        Self {
+            on_sort: self.on_sort.clone(),
+            ..*self
+        }
+    }
+}
+
+impl<S> std::fmt::Debug for TableSpec<'_, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TableSpec")
+            .field("columns", &self.columns)
+            .field("rows", &self.rows)
+            .field("row_height", &self.row_height)
+            .field("height", &self.height)
+            .field("striped", &self.striped)
+            .field("overscan", &self.overscan)
+            .field("on_sort", &self.on_sort.is_some())
+            .finish()
+    }
+}
+
+impl<'a, S> TableSpec<'a, S> {
     /// `rows` rows of `columns`, 28px rows, a 320px body, striped.
     pub fn new(columns: &'a [Column], rows: usize) -> Self {
         Self {
@@ -160,21 +197,38 @@ impl<'a> TableSpec<'a> {
             height: 320.0,
             striped: true,
             overscan: DEFAULT_OVERSCAN,
+            on_sort: None,
         }
     }
 
+    /// Set the height of every row, and of the header.
     pub fn row_height(mut self, height: f64) -> Self {
         self.row_height = height;
         self
     }
 
+    /// Set the height of the scrolling body.
     pub fn height(mut self, height: f64) -> Self {
         self.height = height;
         self
     }
 
+    /// Set whether every other row is tinted.
     pub fn striped(mut self, striped: bool) -> Self {
         self.striped = striped;
+        self
+    }
+
+    /// Set how many rows are built beyond each edge of the viewport.
+    pub fn overscan(mut self, rows: usize) -> Self {
+        self.overscan = rows;
+        self
+    }
+
+    /// Call `f` with the column and direction when a click on a sortable
+    /// header sorts the table, for the app to reorder the rows it shows.
+    pub fn on_sort(mut self, f: impl Fn(&mut S, usize, SortOrder) + 'static) -> Self {
+        self.on_sort = Some(Rc::new(f));
         self
     }
 }
@@ -183,9 +237,10 @@ impl<'a> TableSpec<'a> {
 /// body that builds only the visible rows' cells with `cell(cx, row, column)`.
 ///
 /// Clicking a sortable header sorts by it (again to reverse): the table moves
-/// its indicator, clears the selection, scrolls to the top and calls `on_sort` with the column and
-/// direction, and the app reorders the rows it shows (the row index passed to
-/// `cell` is the display position). Dragging a header's right edge resizes the
+/// its indicator, clears the selection, scrolls to the top and calls the
+/// spec's [`on_sort`](TableSpec::on_sort) with the column and direction, and
+/// the app reorders the rows it shows (the row index passed to `cell` is the
+/// display position). Dragging a header's right edge resizes the
 /// column. Rows select per the [`TableState`]'s [`SelectionMode`].
 ///
 /// ```
@@ -202,8 +257,8 @@ impl<'a> TableSpec<'a> {
 ///     &theme,
 ///     &state.table,
 ///     |s: &mut App| &mut s.table,
-///     TableSpec::new(&columns, 10_000),
-///     |_s: &mut App, _column, _order| { /* reorder the rows */ },
+///     TableSpec::new(&columns, 10_000)
+///         .on_sort(|_s: &mut App, _column, _order| { /* reorder the rows */ }),
 ///     |_cx, row, column| label(&theme, format!("{row}:{column}")),
 /// );
 /// # let _ = grid;
@@ -213,8 +268,7 @@ pub fn table<S: 'static>(
     theme: &Theme,
     state: &TableState,
     field: impl Fn(&mut S) -> &mut TableState + Copy + 'static,
-    spec: TableSpec<'_>,
-    on_sort: impl Fn(&mut S, usize, SortOrder) + Clone + 'static,
+    spec: TableSpec<'_, S>,
     mut cell: impl FnMut(&mut Cx<S>, usize, usize) -> Element,
 ) -> Element {
     let p = &theme.palette;
@@ -254,7 +308,7 @@ pub fn table<S: 'static>(
             .clip()
             .role(Role::ColumnHeader);
         if column.sortable {
-            let on_sort = on_sort.clone();
+            let on_sort = spec.on_sort.clone();
             let (requests, id) = (window.requests.clone(), window.id);
             head = head.on_tap(cx, move |s: &mut S| {
                 let t = field(s);
@@ -266,7 +320,9 @@ pub fn table<S: 'static>(
                 t.rows.clear();
                 t.rows.set_cursor(None);
                 requests.scroll_to(id, 0.0);
-                on_sort(s, col, order);
+                if let Some(on_sort) = &on_sort {
+                    on_sort(s, col, order);
+                }
             });
         }
         let (min, current) = (column.min_width, widths[col]);
@@ -399,13 +455,13 @@ mod tests {
                     |s: &mut App| &mut s.table,
                     TableSpec::new(&cols, state.order.len())
                         .row_height(24.0)
-                        .height(240.0),
-                    |s: &mut App, col, order| {
-                        s.sorted.push((col, order));
-                        if order == SortOrder::Descending {
-                            s.order.reverse();
-                        }
-                    },
+                        .height(240.0)
+                        .on_sort(|s: &mut App, col, order| {
+                            s.sorted.push((col, order));
+                            if order == SortOrder::Descending {
+                                s.order.reverse();
+                            }
+                        }),
                     |_cx, row, col| {
                         let item = state.order[row];
                         let text = if col == 0 {

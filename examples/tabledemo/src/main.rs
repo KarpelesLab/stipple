@@ -184,8 +184,8 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
         |s: &mut Demo| &mut s.table,
         TableSpec::new(&cols, state.order.len())
             .row_height(26.0)
-            .height(390.0),
-        |s: &mut Demo, column, order| s.sort(column, order),
+            .height(390.0)
+            .on_sort(|s: &mut Demo, column, order| s.sort(column, order)),
         |_cx, row, column| {
             let i = state.order[row];
             let f = &state.files[i];
@@ -204,8 +204,7 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
         &theme,
         &state.tree,
         |s: &mut Demo| &mut s.tree,
-        &state.folders,
-        TreeSpec::default().row_height(26.0).height(417.0),
+        TreeSpec::new(&state.folders).row_height(26.0).height(417.0),
         |_cx, row| label(&theme, state.folders.names[row.id as usize].clone()),
     )
     .width(280.0);

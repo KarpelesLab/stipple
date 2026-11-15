@@ -235,7 +235,7 @@ impl Scene {
         if !spans.is_empty() {
             let metrics = font.metrics(run.size);
             for (pen, width) in spans {
-                self.draw_decoration(&metrics, pen, width, &run.decoration, run.color);
+                self.decoration_lines(&metrics, pen, width, &run.decoration, run.color);
             }
         }
     }

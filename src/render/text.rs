@@ -861,6 +861,51 @@ impl TextLayout<'_> {
     }
 }
 
+/// How [`Scene::fill_text`] and [`Scene::draw_decoration`] draw text: in
+/// which font, at what size, in what color, and with which
+/// [`Decoration`](crate::render::Decoration) (none unless set).
+#[derive(Clone, Debug)]
+pub struct TextPaint {
+    pub(crate) font: Font,
+    pub(crate) size: f64,
+    pub(crate) color: Color,
+    pub(crate) decoration: crate::render::Decoration,
+}
+
+impl TextPaint {
+    /// Text in `font` (a cheap handle, cloned) at `size` logical pixels, in
+    /// `color`, undecorated.
+    pub fn new(font: &Font, size: f64, color: Color) -> Self {
+        Self {
+            font: font.clone(),
+            size,
+            color,
+            decoration: crate::render::Decoration::NONE,
+        }
+    }
+
+    /// Draw the text with `decoration`'s lines.
+    pub fn decoration(mut self, decoration: crate::render::Decoration) -> Self {
+        self.decoration = decoration;
+        self
+    }
+
+    /// The font.
+    pub fn font(&self) -> &Font {
+        &self.font
+    }
+
+    /// The size, in logical pixels.
+    pub fn size(&self) -> f64 {
+        self.size
+    }
+
+    /// The color.
+    pub fn color(&self) -> Color {
+        self.color
+    }
+}
+
 impl Scene {
     /// Draw `decoration`'s lines under, through or over every line of
     /// `layout`, placed as [`fill_layout`](Self::fill_layout) draws them at
@@ -884,7 +929,7 @@ impl Scene {
             }
             let x = origin.x + layout.line_x(line);
             let y = origin.y + i as f64 * layout.line_height + first_baseline;
-            self.draw_decoration(
+            self.decoration_lines(
                 &metrics,
                 Point::new(x, y),
                 line.width,
@@ -894,28 +939,33 @@ impl Scene {
         }
     }
 
-    /// Shape and paint `text` with `font` at `origin` (the top-left of the text
-    /// box, logical pixels), `size_px`, and `color`. Newlines (`\n`) start a new
-    /// line, each dropped by one `line_height` from the last.
+    /// Shape and paint `text` at `origin` (the top-left of the text box,
+    /// logical pixels) in `paint`'s font, size and color, with its
+    /// decoration if it has one. Newlines (`\n`) start a new line, each
+    /// dropped by one `line_height` from the last.
     ///
     /// Each line goes through the Unicode Bidirectional Algorithm, with its
     /// direction taken from its first strong character; right-to-left lines
     /// are aligned to the right edge of the widest line. Use
     /// [`Font::layout`] and [`Scene::fill_layout`] to choose the direction or
     /// the alignment width.
-    pub fn fill_text(
-        &mut self,
-        font: &Font,
-        text: &str,
-        origin: Point,
-        size_px: f64,
-        color: Color,
-    ) {
-        if text.is_empty() || size_px <= 0.0 {
+    ///
+    /// ```no_run
+    /// # use stipple::geometry::{Point, Size};
+    /// # use stipple::render::{Color, Font, Scene, TextPaint};
+    /// # let font = Font::system_default().unwrap();
+    /// let mut scene = Scene::new(Size::new(200.0, 40.0));
+    /// scene.fill_text("Hello", Point::new(4.0, 4.0), &TextPaint::new(&font, 16.0, Color::BLACK));
+    /// ```
+    pub fn fill_text(&mut self, text: &str, origin: Point, paint: &TextPaint) {
+        if text.is_empty() || paint.size <= 0.0 {
             return;
         }
-        let layout = font.layout(text, size_px, TextDirection::Auto, None);
-        self.fill_layout(&layout, origin, color);
+        let layout = paint
+            .font
+            .layout(text, paint.size, TextDirection::Auto, None);
+        self.fill_layout(&layout, origin, paint.color);
+        self.decorate_layout(&layout, origin, &paint.decoration, paint.color);
     }
 
     /// Paint a [`TextLayout`] with its top-left at `origin`, in `color`.
@@ -1014,7 +1064,11 @@ mod tests {
         for size in [14.0, 28.0] {
             let mut scene = Scene::new(Size::new(200.0, 60.0));
             let white = Color::rgb(255, 255, 255);
-            scene.fill_text(&font, "HEH", Point::new(0.0, 10.0), size, white);
+            scene.fill_text(
+                "HEH",
+                Point::new(0.0, 10.0),
+                &TextPaint::new(&font, size, white),
+            );
             let px = crate::render::software::SoftwareRenderer::new()
                 .render(scene, crate::geometry::ScaleFactor::IDENTITY);
             let inked = |y: u32| (0..200).any(|x| px.pixel(x, y).is_some_and(|p| p[3] > 127));
@@ -1086,7 +1140,11 @@ mod tests {
         let mut scene = Scene::new(Size::new(200.0, 50.0));
         // White background so black text stands out.
         scene.fill_rect(Rect::from_xywh(0.0, 0.0, 200.0, 50.0), Color::WHITE);
-        scene.fill_text(&font, "Hello", Point::new(8.0, 8.0), 28.0, Color::BLACK);
+        scene.fill_text(
+            "Hello",
+            Point::new(8.0, 8.0),
+            &TextPaint::new(&font, 28.0, Color::BLACK),
+        );
 
         let pm = SoftwareRenderer::new().render(scene, ScaleFactor::IDENTITY);
         // Some pixel must be darkened by a glyph (not pure white).
@@ -1116,11 +1174,9 @@ mod tests {
         scene.fill_rect(Rect::from_xywh(0.0, 0.0, 160.0, 50.0), Color::WHITE);
         // Pure red text: glyph interiors must be red, not the default black.
         scene.fill_text(
-            &font,
             "RED",
             Point::new(8.0, 8.0),
-            32.0,
-            Color::rgb(255, 0, 0),
+            &TextPaint::new(&font, 32.0, Color::rgb(255, 0, 0)),
         );
 
         let pm = SoftwareRenderer::new().render(scene, ScaleFactor::IDENTITY);
@@ -1346,7 +1402,11 @@ mod tests {
     /// Render `text` white on black with `font` and return the pixmap.
     fn ink(font: &Font, text: &str, size: f64) -> crate::render::Pixmap {
         let mut scene = Scene::new(Size::new(200.0, 60.0));
-        scene.fill_text(font, text, Point::new(10.0, 5.0), size, Color::WHITE);
+        scene.fill_text(
+            text,
+            Point::new(10.0, 5.0),
+            &TextPaint::new(font, size, Color::WHITE),
+        );
         SoftwareRenderer::new()
             .with_background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY)
