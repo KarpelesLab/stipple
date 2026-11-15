@@ -107,6 +107,10 @@ screenshots `gpuwindow` under Xvfb.
 
 ## Not done yet
 
+The plan for hardware rendering on every platform, presented straight to the
+window, is Phase 6 in the [roadmap](../ROADMAP.md#phase-6--hardware-rendering).
+Today:
+
 - Only GLES2 executes the scene. The lowering (`src/gpu/ops.rs`) doesn't depend
   on GL, but Vulkan, Metal, Direct3D and WebGPU only draw a test triangle.
 - The frame is read back to the CPU and presented as a bitmap; presenting the

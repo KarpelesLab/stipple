@@ -819,14 +819,113 @@ abstraction is frozen at the end of Phase 2.
   scaling.
 - **Exit criteria:** a demo runs in the browser from the same `view` code.
 
-### Phase 6 — GPU backends (cross-cutting, optional)
-*Goal: smooth high-DPI/animation perf without sacrificing the dep policy.*
+### Phase 6 — Hardware rendering
+*Goal: every platform renders on its own GPU API and presents straight to the
+screen, matching the software renderer pixel for pixel within a small
+tolerance, with the software path kept as the fallback. No `wgpu`, `ash`,
+`metal`, `windows` or `naga`: each API through hand-written FFI, as the
+platform layer is.*
 
-- Implement `Surface` (and a scene-upload compositor) on raw **Metal** (macOS/
-  iOS), **D3D12** (Windows), **Vulkan** (Linux/Android), **WebGPU** (web).
-  No wgpu. Glyph/mask atlases on GPU; oxideav-raster remains the CPU fallback.
-- **Exit criteria:** GPU backend is a drop-in `Surface` with measurable
-  frame-time wins; software path stays the default/fallback.
+Where it stands (see the implementation status above and
+[`docs/gpu.md`](docs/gpu.md)): every backend presents a CPU `Pixmap`.
+`src/gpu/ops.rs` lowers a `Scene` to a backend-independent list of draw
+operations (analytic boxes, stencil-and-cover paths, images and image
+regions, cached glyphs, layers, scissor and stencil clips, canvases), and GLES2
+executes it, pixel-compared against the CPU in CI, but the frame is read back
+and presented as a bitmap. Vulkan, Metal, Direct3D 11 and WebGPU each draw a
+test triangle off-screen and read it back.
+
+#### 6a — The architecture
+- ⬜ A GPU presentation seam in the platform layer: a window can hand out a
+  GPU surface (a `CAMetalLayer`, a DXGI swapchain, a Vulkan or EGL window
+  surface, a WebGPU canvas context) instead of taking a `Pixmap`, with resize,
+  scale changes, occlusion and device loss reported back.
+- ⬜ A renderer trait over the lowered operations, so each backend is an
+  executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
+  per-backend texture, glyph and offscreen-target caches behind it.
+- ⬜ Choosing: `App::renderer(Renderer::{Auto, Software, Gpu})` plus an
+  environment override (`STIPPLE_RENDERER=software|gpu|metal|vulkan|…`).
+  `Auto` picks the platform's GPU backend when a device is available and
+  falls back to software when it isn't, when creating it fails, and when the
+  device is lost mid-run (rebuilding caches on a new device if one comes back).
+- ⬜ Shaders: one small set (boxes, image/region/glyph quads, stencil fill,
+  layer composite), written per API in its own language (MSL, HLSL, GLSL ES,
+  WGSL) and SPIR-V for Vulkan, checked in compiled where the API needs
+  bytecode, with the sources next to them and a CI step that recompiles the
+  bytecode and fails if it differs. No shader compiler as a dependency.
+- ⬜ Frame pacing from the swapchain (Metal's display sync, DXGI's waitable
+  object, Vulkan FIFO, `wl_surface.frame`, `requestAnimationFrame`) feeding
+  the existing frame clock; an idle app does no GPU work.
+
+#### 6b — Metal (macOS, iOS) end to end
+- ⬜ The scene executor on Metal and presentation through a `CAMetalLayer`
+  backing the window's view (macOS) and the UIKit view (iOS), at the
+  display's scale, in sRGB.
+- ⬜ Pixel comparison with the software renderer in CI on the macOS runner's
+  Metal device (the `src/gpu/compare.rs` corpus), and the macOS visual jobs
+  run once with each renderer.
+- First because the development machines and the macOS runner have real GPUs,
+  and because macOS presentation is the one most clearly bound by the CPU
+  path today.
+
+#### 6c — Vulkan (Linux, Android), with GLES as the fallback
+- ⬜ The scene executor on Vulkan, presenting through `VK_KHR_wayland_surface`,
+  `VK_KHR_xcb_surface` and `VK_KHR_android_surface`.
+- ⬜ GLES2/3 presenting straight to an EGL window surface (Wayland, X11,
+  Android) for drivers without Vulkan, instead of reading back.
+- ⬜ CI: lavapipe (Vulkan) and llvmpipe (GL) pixel comparisons, the Linux
+  visual jobs with each renderer, and the Android emulator's GPU.
+
+#### 6d — Direct3D 11 (Windows)
+- ⬜ The scene executor on Direct3D 11 (already the API the Windows spike
+  uses; Direct3D 12 only if a measurement shows D3D11 limiting) and a
+  flip-model DXGI swapchain on the window, with per-monitor DPI.
+- ⬜ CI on WARP: pixel comparison and the Windows visual jobs with each
+  renderer.
+
+#### 6e — The web
+- ⬜ The scene executor on WebGPU through the canvas's GPU context, from
+  `web/stipple.js` (the sanctioned exception: browser APIs through JS glue),
+  and WebGL2 where WebGPU is missing.
+- ⬜ CI: headless Chrome (SwiftShader) pixel comparison.
+
+#### 6f — Fast
+- ⬜ A glyph atlas per backend (one texture, packed, evicted by use) instead
+  of a texture per glyph.
+- ⬜ Batching: instanced boxes and quads, one draw call per run of compatible
+  operations, image regions and sprites (Phase 9) batched per texture.
+- ⬜ Damage: redraw only the damaged region (scissored, with the rest of the
+  previous frame kept), and present only it where the platform can
+  (`VK_KHR_incremental_present`, DXGI `Present1` dirty rects,
+  `eglSwapBuffersWithDamage`).
+- ⬜ Canvases (`Element::canvas`) upload only their invalidated areas, or draw
+  straight to the GPU when their content is only scene primitives.
+- ⬜ Benchmarks in CI with targets: a full 4K redraw of the widget gallery and
+  of 10 000 sprites under 4 ms on the desktop runners' GPUs, and 120 Hz with
+  page and sheet transitions on the phones; memory budgets for the caches.
+
+#### 6g — Zero-copy content
+- ⬜ Embedded viewports (`Element::viewport`) and video frames imported as
+  textures without a copy: `dma-buf` (Linux), `IOSurface` (macOS, iOS), DXGI
+  shared handles (Windows), `AHardwareBuffer` (Android), building on the
+  export and import spikes in [`docs/gpu.md`](docs/gpu.md).
+- ⬜ Natively drawn controls (`Theme::native()`) kept as cached textures, so
+  the native theme works under the GPU renderers (today `App::render_with`
+  skips their chrome).
+
+#### 6h — The default
+- ⬜ Once 6b–6f pass their exit criteria on a platform, `Renderer::Auto`
+  chooses the GPU there by default; software stays the fallback and the
+  choice for headless rendering and tests.
+- Later, not planned yet: an app-facing GPU element (custom shaders, 3D
+  content in a viewport), wide color and HDR.
+
+- **Exit criteria:** on macOS, iOS, Windows, Linux (Wayland and X11), Android
+  and the web, the GPU renderer presents directly to the window; it matches
+  the software renderer within the comparison tolerance on the whole test
+  corpus in CI; the benchmarks meet their targets; device loss and a missing
+  GPU fall back to software in tests; and it is the default on every
+  platform where those hold.
 
 ### Phase 7 — App-ready parity
 *Goal: everything a real app needs, on every platform. Rendering, the native look
@@ -2295,6 +2394,15 @@ Each backend's wait also wakes for the handle and for timers. Futures run on
 tokio, behind an optional `tokio` feature, on tokio's own threads, with their
 output applied through the handle; tokio never owns the main thread. Other
 runtimes post through the handle the same way. See [`docs/async.md`](docs/async.md).
+
+**Locked: hardware rendering (November 2026).** One lowering
+(`src/gpu/ops.rs`), executed per API through hand-written FFI: Metal on macOS
+and iOS, Direct3D 11 on Windows, Vulkan on Linux and Android with GLES as their
+fallback, WebGPU on the web with WebGL2 as its fallback. Shaders are written
+per API and checked in (compiled where the API wants bytecode), with no shader
+compiler or graphics crate as a dependency. The software renderer stays: as the
+fallback, for headless rendering and tests, and as the reference the GPU
+renderers are compared with. See Phase 6.
 
 **Still open:**
 - State/reactivity primitives: signals vs. message/`update`-reducer vs. hybrid.
