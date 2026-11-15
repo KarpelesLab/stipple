@@ -164,6 +164,7 @@ impl<T: Animatable> Animation for Tween<T> {
 
 /// An animation started late; see [`AnimationExt::delay`].
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Delay<A> {
     pub inner: A,
     /// Seconds before `inner` starts.
@@ -210,6 +211,7 @@ impl<A: Animation> Animation for Delay<A> {
 /// The inner animation must have a finite, positive duration; otherwise it
 /// plays once.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Repeat<A> {
     pub inner: A,
     /// Number of runs, `None` for forever.
@@ -407,6 +409,7 @@ pub fn stagger_within(index: usize, count: usize, step: f64, max: f64) -> f64 {
 /// `velocity` and decays exponentially (`v(t) = v₀·e^(−rate·t)`), coming to
 /// rest at [`Decay::target`]. What a released scroll or thrown card does.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Decay<T: Animatable> {
     pub from: T,
     pub velocity: T::Vector,

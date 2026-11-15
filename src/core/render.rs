@@ -665,7 +665,8 @@ fn layout_element(
 /// bounds, a `selection` highlight behind any selected text range, and a
 /// `caret` bar at the text's caret index (or its end when no caret is set).
 /// No-op if `focused` isn't in the tree.
-pub fn paint_focus(
+#[cfg(test)]
+pub(crate) fn paint_focus(
     tree: &LayoutNode,
     focused: FocusId,
     scene: &mut Scene,
@@ -688,7 +689,7 @@ pub fn paint_focus(
 /// [`paint_focus`] with the ring drawn the way `look` says (its width, how
 /// far it stands off a button, its glow; see
 /// [`Theme::focus`](crate::style::Theme::focus)).
-pub fn paint_focus_look(
+pub(crate) fn paint_focus_look(
     tree: &LayoutNode,
     focused: FocusId,
     scene: &mut Scene,
@@ -844,7 +845,7 @@ fn text_layout<'a>(
     } else {
         LayoutDirection::Ltr
     };
-    font.layout_in(text, size, direction, wrap.then_some(width), ui)
+    font.layout_with(text, size, direction, wrap.then_some(width), ui)
         .with_align_width(width)
 }
 
@@ -853,7 +854,11 @@ fn text_layout<'a>(
 /// `x` the nearer edge of the character under it, in visual order, so clicks
 /// land correctly in right-to-left and mixed-direction text. Returns `None` if
 /// `node` has no text or no `font`.
-pub fn caret_index_at(node: &LayoutNode, point: Point, font: Option<&Font>) -> Option<usize> {
+pub(crate) fn caret_index_at(
+    node: &LayoutNode,
+    point: Point,
+    font: Option<&Font>,
+) -> Option<usize> {
     let leaf = first_text(node)?;
     let NodeContent::Text {
         text,
@@ -882,7 +887,12 @@ pub fn caret_index_at(node: &LayoutNode, point: Point, font: Option<&Font>) -> O
 
 /// Overlay a `highlight` (typically translucent) on the hovered tappable
 /// element, matching its corner radius. No-op if `hovered` isn't in the tree.
-pub fn paint_hover(tree: &LayoutNode, hovered: ActionId, scene: &mut Scene, highlight: Color) {
+pub(crate) fn paint_hover(
+    tree: &LayoutNode,
+    hovered: ActionId,
+    scene: &mut Scene,
+    highlight: Color,
+) {
     if let Some((node, to_window, opacity)) = node_to_window(tree, &|n| n.action == Some(hovered)) {
         // An OS-drawn control shows hover itself (see `mark_native_states`).
         if node.native.is_some() || opacity <= 0.0 {
@@ -905,7 +915,7 @@ pub fn paint_hover(tree: &LayoutNode, hovered: ActionId, scene: &mut Scene, high
 }
 
 /// Tell each OS-drawn control which interaction state to draw itself in.
-pub fn mark_native_states(
+pub(crate) fn mark_native_states(
     node: &mut LayoutNode,
     hovered: Option<ActionId>,
     pressed: Option<ActionId>,
@@ -965,7 +975,7 @@ pub fn paint(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>) {
 /// say, aren't shaped or put in the scene at all. Under a clip (a scroll
 /// container, a clipped panel) what is outside the clip is left out too.
 /// Conservative: a subtree is kept when the box around everything it draws
-/// (through transforms, [`CULL_MARGIN`] wider for anti-aliasing and glyph
+/// (through transforms, a little wider for anti-aliasing and glyph
 /// overhang) meets the visible area.
 pub fn paint_visible(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible: Rect) {
     if drawn_near(node, visible) {
@@ -1100,7 +1110,10 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible
 /// [horizontal](LayoutNode::scroll_horizontal) one (so the offset is the
 /// source of truth, re-applied each frame). Returns nothing; clamps `offsets`
 /// in place so the app keeps valid values.
-pub fn apply_scroll(node: &mut LayoutNode, offsets: &mut std::collections::HashMap<ScrollId, f64>) {
+pub(crate) fn apply_scroll(
+    node: &mut LayoutNode,
+    offsets: &mut std::collections::HashMap<ScrollId, f64>,
+) {
     if let Some(id) = node.scroll {
         let max_off = scroll_range(node, 0.0);
         let off = offsets.entry(id).or_insert(0.0);

@@ -13,6 +13,7 @@ pub const REST_EPSILON: f64 = 1e-3;
 /// Use a preset or [`SpringParams::with_response`], which takes the more
 /// intuitive "how long one oscillation takes" in place of a stiffness.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct SpringParams {
     /// `k` in `a = -k·x - c·v`: the natural angular frequency squared.
     /// Higher is snappier.

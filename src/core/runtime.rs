@@ -23,7 +23,7 @@ use crate::style::Theme;
 use std::collections::HashMap;
 
 mod memo;
-pub use memo::MemoCache;
+pub(crate) use memo::MemoCache;
 pub(crate) use memo::MemoMark;
 
 /// A boxed pointer-tap handler that mutates the app state `S`.
@@ -43,6 +43,7 @@ type DragFn<S> = Box<dyn FnMut(&mut S, &DragMotion)>;
 /// both rectangles are as laid out when the press landed, so they don't move
 /// under the pointer while the drag reshapes the UI.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct DragMotion {
     /// Where the pointer is now.
     pub position: Point,
@@ -56,6 +57,17 @@ pub struct DragMotion {
 }
 
 impl DragMotion {
+    /// A motion with the pointer at `position` after a press at `origin`, on
+    /// an element laid out at `bounds` inside `parent` (to fake one in a test).
+    pub fn new(position: Point, origin: Point, bounds: Rect, parent: Rect) -> Self {
+        DragMotion {
+            position,
+            origin,
+            bounds,
+            parent,
+        }
+    }
+
     /// The pointer's x position as a fraction (0..=1) across the element's
     /// press-time bounds: what [`Element::on_drag`](crate::core::Element::on_drag)
     /// handlers receive.
@@ -123,7 +135,7 @@ pub struct ActionId(pub(crate) u32);
 
 /// An opaque handle to a focusable element: one with a registered key
 /// handler, or a button (or another control a tap activates) taking keyboard
-/// focus through its tap handler (see [`tab_focus`](crate::core::tab_focus)).
+/// focus through its tap handler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FocusId(pub(crate) u32);
 
@@ -191,7 +203,7 @@ impl ScrollRequests {
     }
 
     /// Take the pending requests, oldest first.
-    pub fn take(&self) -> Vec<(ScrollId, f64)> {
+    pub(crate) fn take(&self) -> Vec<(ScrollId, f64)> {
         std::mem::take(&mut self.0.borrow_mut())
     }
 }
@@ -207,6 +219,7 @@ pub struct ViewportId(pub u32);
 
 /// Where an [`OverlaySpec`] is positioned within the window.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Anchor {
     /// Place the overlay's top-left at an absolute window point (e.g. a menu
     /// dropped below its button).
@@ -251,6 +264,7 @@ pub enum Anchor {
 /// its [`Anchor`] and paints it last (topmost). Its `content`'s handlers
 /// register through the same [`Cx`], so taps/keys inside it work normally.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct OverlaySpec {
     pub content: Element,
     pub anchor: Anchor,
@@ -262,9 +276,37 @@ pub struct OverlaySpec {
     pub dismiss: Option<ActionId>,
 }
 
+impl OverlaySpec {
+    /// `content` placed at `anchor`: not modal, nothing fired when the
+    /// pointer presses outside it.
+    pub fn new(content: Element, anchor: Anchor) -> Self {
+        OverlaySpec {
+            content,
+            anchor,
+            modal: false,
+            dismiss: None,
+        }
+    }
+
+    /// Paint a scrim behind the overlay and keep the pointer from the main
+    /// tree (`true`: a modal dialog).
+    pub fn modal(mut self, modal: bool) -> Self {
+        self.modal = modal;
+        self
+    }
+
+    /// Fire `action` when the scrim, or the area outside the overlay, is
+    /// pressed.
+    pub fn dismiss(mut self, action: ActionId) -> Self {
+        self.dismiss = Some(action);
+        self
+    }
+}
+
 /// A platform-neutral keyboard input, delivered to the focused element. The
 /// app/platform layer translates raw key events into these.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyInput {
     /// Committed text (one or more characters), e.g. from a key press or IME.
     Text(String),
@@ -346,6 +388,7 @@ pub enum KeyInput {
 /// **viewport-local** logical pixels (origin at the viewport's top-left), so the
 /// content can route them without knowing where the viewport sits in the window.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum ViewportEvent {
     /// Pointer pressed at `local`. `button`: 0 = primary/left, 1 = secondary/
     /// right, 2 = middle.
@@ -513,7 +556,7 @@ impl<'a, S> Cx<'a, S> {
     }
 
     /// Whether the view read [`window_info`](Self::window_info) this build.
-    pub fn window_info_read(&self) -> bool {
+    pub(crate) fn window_info_read(&self) -> bool {
         self.window_info_read
     }
 
@@ -537,7 +580,7 @@ impl<'a, S> Cx<'a, S> {
     }
 
     /// Take the title the view set with [`window_title`](Self::window_title).
-    pub fn take_window_title(&mut self) -> Option<String> {
+    pub(crate) fn take_window_title(&mut self) -> Option<String> {
         self.window_title.take()
     }
 
@@ -566,8 +609,7 @@ impl<'a, S> Cx<'a, S> {
 
     /// The size of the window being built for, in logical pixels: what a
     /// widget that fits itself to the window (a [`tab_bar`] deciding how many
-    /// tabs fit) measures against. Zero outside a running app, until
-    /// [`set_window_size`](Self::set_window_size).
+    /// tabs fit) measures against. Zero outside a running app.
     ///
     /// [`tab_bar`]: crate::widgets::tab_bar
     pub fn window_size(&self) -> Size {
@@ -576,7 +618,7 @@ impl<'a, S> Cx<'a, S> {
 
     /// Set what [`window_size`](Self::window_size) reports (the app does
     /// this before each build).
-    pub fn set_window_size(&mut self, size: Size) {
+    pub(crate) fn set_window_size(&mut self, size: Size) {
         self.window_size = size;
     }
 
@@ -613,7 +655,7 @@ impl<'a, S> Cx<'a, S> {
     }
 
     /// Whether this build called [`request_frame`](Self::request_frame).
-    pub fn frame_requested(&self) -> bool {
+    pub(crate) fn frame_requested(&self) -> bool {
         self.frame.requested
     }
 
@@ -743,7 +785,7 @@ impl<'a, S> Cx<'a, S> {
     /// }
     /// # let theme = Theme::light();
     /// # let mut cx = Cx::new(&theme);
-    /// # assert!(view(&St { dropped: 0 }, &mut cx).drop.is_some());
+    /// # let _ = view(&St { dropped: 0 }, &mut cx);
     /// ```
     pub fn drop_state(&mut self, id: DropId) -> crate::core::dnd::DropState {
         if !self.drop_queried.contains(&id) {
@@ -756,13 +798,13 @@ impl<'a, S> Cx<'a, S> {
 
     /// Seed this frame's drop-target states (the app does this before each
     /// build).
-    pub fn set_drop_states(&mut self, states: HashMap<DropId, crate::core::dnd::DropState>) {
+    pub(crate) fn set_drop_states(&mut self, states: HashMap<DropId, crate::core::dnd::DropState>) {
         self.drop_states = states;
     }
 
     /// The drop targets whose state the view read this build. Call before
     /// [`into_handlers`](Cx::into_handlers).
-    pub fn take_drop_queried(&mut self) -> Vec<DropId> {
+    pub(crate) fn take_drop_queried(&mut self) -> Vec<DropId> {
         std::mem::take(&mut self.drop_queried)
     }
 
@@ -873,7 +915,7 @@ impl<'a, S> Cx<'a, S> {
 
     /// Take the context menus registered this frame (the app keeps the one
     /// that is open). Call before [`into_handlers`](Cx::into_handlers).
-    pub fn take_context_menus(&mut self) -> Vec<(ContextId, crate::core::menu::Menu<S>)> {
+    pub(crate) fn take_context_menus(&mut self) -> Vec<(ContextId, crate::core::menu::Menu<S>)> {
         std::mem::take(&mut self.context_menus)
     }
 
@@ -913,7 +955,11 @@ impl<'a, S> Cx<'a, S> {
 
     /// Seed this frame's scroll offsets and the request queue (the app does
     /// this before each build).
-    pub fn set_scroll_state(&mut self, offsets: HashMap<ScrollId, f64>, requests: ScrollRequests) {
+    pub(crate) fn set_scroll_state(
+        &mut self,
+        offsets: HashMap<ScrollId, f64>,
+        requests: ScrollRequests,
+    ) {
         self.scroll_offsets = offsets;
         self.scroll_requests = requests;
     }
@@ -927,7 +973,7 @@ impl<'a, S> Cx<'a, S> {
 
     /// Take the overlays declared this frame (the app lays them out + paints them
     /// on top). Call before [`into_handlers`](Cx::into_handlers).
-    pub fn take_overlays(&mut self) -> Vec<OverlaySpec> {
+    pub(crate) fn take_overlays(&mut self) -> Vec<OverlaySpec> {
         std::mem::take(&mut self.overlays)
     }
 
@@ -987,8 +1033,8 @@ impl<S> core::fmt::Debug for Cx<'_, S> {
 }
 
 /// The handler tables produced by building a frame. Dispatch resolves an
-/// [`ActionId`] / [`FocusId`] (from [`hit_test`] / [`focus_at`]) to its handler
-/// and invokes it against the app state.
+/// [`ActionId`] (from [`hit_test`]) to its handler and invokes it against the
+/// app state.
 pub struct Handlers<S> {
     taps: Vec<TapFn<S>>,
     keys: Vec<KeyFn<S>>,
@@ -1014,7 +1060,7 @@ impl<S> Handlers<S> {
 
     /// Invoke the key handler for focused element `id` with `input`. Returns
     /// `true` if one existed and ran.
-    pub fn dispatch_key(&mut self, id: FocusId, input: &KeyInput, state: &mut S) -> bool {
+    pub(crate) fn dispatch_key(&mut self, id: FocusId, input: &KeyInput, state: &mut S) -> bool {
         if let Some(handler) = self.keys.get_mut(id.0 as usize) {
             handler(state, input);
             true
@@ -1025,7 +1071,7 @@ impl<S> Handlers<S> {
 
     /// Invoke raw key handler `id` with `event`. `None` if there is no such
     /// handler.
-    pub fn dispatch_raw_key(
+    pub(crate) fn dispatch_raw_key(
         &mut self,
         id: crate::core::keys::RawKeyId,
         event: &crate::platform::KeyEvent,
@@ -1035,24 +1081,14 @@ impl<S> Handlers<S> {
         Some(handler(state, event))
     }
 
-    /// Invoke the drag handler for `id` with `fraction` (0..=1 across the
-    /// element width). Returns `true` if one existed and ran.
-    pub fn dispatch_drag(&mut self, id: DragId, fraction: f64, state: &mut S) -> bool {
-        // A unit-wide element, so `fraction_x` is `fraction` again.
-        let unit = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
-        let at = Point::new(fraction, 0.0);
-        let motion = DragMotion {
-            position: at,
-            origin: at,
-            bounds: unit,
-            parent: unit,
-        };
-        self.dispatch_drag_motion(id, &motion, state)
-    }
-
     /// Invoke the drag handler for `id` with `motion`. Returns `true` if one
     /// existed and ran.
-    pub fn dispatch_drag_motion(&mut self, id: DragId, motion: &DragMotion, state: &mut S) -> bool {
+    pub(crate) fn dispatch_drag_motion(
+        &mut self,
+        id: DragId,
+        motion: &DragMotion,
+        state: &mut S,
+    ) -> bool {
         if let Some(handler) = self.drags.get_mut(id.0 as usize) {
             handler(state, motion);
             true
@@ -1063,7 +1099,7 @@ impl<S> Handlers<S> {
 
     /// Invoke the text-pointer handler for `id` with a resolved byte `index` and
     /// the `extend` flag. Returns `true` if one existed and ran.
-    pub fn dispatch_text_pos(
+    pub(crate) fn dispatch_text_pos(
         &mut self,
         id: TextPosId,
         index: usize,
@@ -1080,7 +1116,7 @@ impl<S> Handlers<S> {
 
     /// Invoke the context (secondary-click) handler for `id` with the click
     /// `pos`. Returns `true` if one existed and ran.
-    pub fn dispatch_context(&mut self, id: ContextId, pos: Point, state: &mut S) -> bool {
+    pub(crate) fn dispatch_context(&mut self, id: ContextId, pos: Point, state: &mut S) -> bool {
         if let Some(handler) = self.contexts.get_mut(id.0 as usize) {
             handler(state, pos);
             true
@@ -1090,14 +1126,14 @@ impl<S> Handlers<S> {
     }
 
     /// Whether drop target `id` exists and accepts something `offer` carries.
-    pub fn drop_accepts(&self, id: DropId, offer: DragOffer) -> bool {
+    pub(crate) fn drop_accepts(&self, id: DropId, offer: DragOffer) -> bool {
         self.drops
             .get(id.0 as usize)
             .is_some_and(|t| t.accepts.accepts(offer))
     }
 
     /// Invoke drop target `id`'s drop handler. Returns `true` if it ran.
-    pub fn dispatch_drop(
+    pub(crate) fn dispatch_drop(
         &mut self,
         id: DropId,
         data: &DropData,
@@ -1115,7 +1151,12 @@ impl<S> Handlers<S> {
 
     /// Tell drop target `id` a drag started (`true`) or stopped (`false`)
     /// hovering it. Returns `true` if it has a hover handler, which ran.
-    pub fn dispatch_drop_hover(&mut self, id: DropId, hovering: bool, state: &mut S) -> bool {
+    pub(crate) fn dispatch_drop_hover(
+        &mut self,
+        id: DropId,
+        hovering: bool,
+        state: &mut S,
+    ) -> bool {
         match self
             .drops
             .get_mut(id.0 as usize)
@@ -1131,7 +1172,11 @@ impl<S> Handlers<S> {
 
     /// Ask drag source `id` for its payload. `None` if it declined or doesn't
     /// exist.
-    pub fn dispatch_drag_source(&mut self, id: DragSourceId, state: &mut S) -> Option<DropData> {
+    pub(crate) fn dispatch_drag_source(
+        &mut self,
+        id: DragSourceId,
+        state: &mut S,
+    ) -> Option<DropData> {
         self.drag_sources.get_mut(id.0 as usize)?(state)
     }
 
@@ -1189,7 +1234,7 @@ impl<S> core::fmt::Debug for Handlers<S> {
 
 /// Paintable leaf content carried by a [`LayoutNode`] beyond its decoration.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub enum NodeContent {
+pub(crate) enum NodeContent {
     /// Decoration only (the common case).
     #[default]
     None,
@@ -1235,72 +1280,72 @@ pub enum NodeContent {
 /// and the focus queries.
 #[derive(Clone, Debug)]
 pub struct LayoutNode {
-    pub bounds: Rect,
-    pub decoration: BoxStyle,
-    pub content: NodeContent,
-    pub action: Option<ActionId>,
-    pub focus: Option<FocusId>,
-    pub drag: Option<DragId>,
+    pub(crate) bounds: Rect,
+    pub(crate) decoration: BoxStyle,
+    pub(crate) content: NodeContent,
+    pub(crate) action: Option<ActionId>,
+    pub(crate) focus: Option<FocusId>,
+    pub(crate) drag: Option<DragId>,
     /// Secondary-click (context) handle: this element opens a context menu on
     /// right-click.
-    pub context: Option<ContextId>,
+    pub(crate) context: Option<ContextId>,
     /// Drop-target handle: drags from other apps (and in-app drags) can be
     /// dropped here.
-    pub drop: Option<DropId>,
+    pub(crate) drop: Option<DropId>,
     /// Drag-source handle: a press-and-move here starts an in-app drag.
-    pub drag_source: Option<DragSourceId>,
+    pub(crate) drag_source: Option<DragSourceId>,
     /// Pointer and wheel handle: raw pointer events and wheel scrolls over
     /// this node go to its handlers (see `Element::on_pointer`).
-    pub pointer: Option<crate::core::PointerId>,
+    pub(crate) pointer: Option<crate::core::PointerId>,
     /// Caret byte index for an editable text leaf (drawn by the focus overlay).
-    pub caret: Option<usize>,
+    pub(crate) caret: Option<usize>,
     /// Selected byte range `[start, end)` for an editable text leaf (the focus
     /// overlay highlights it).
-    pub selection: Option<(usize, usize)>,
+    pub(crate) selection: Option<(usize, usize)>,
     /// Byte range of input-method composition (preedit) text inside an editable
     /// text leaf (the focus overlay underlines it).
-    pub preedit: Option<(usize, usize)>,
+    pub(crate) preedit: Option<(usize, usize)>,
     /// The element's keyboard settings (raw key handler, Tab, IME, Option as
     /// Meta), copied from [`Element::keyboard`](crate::core::Element::keyboard).
-    pub keyboard: Option<Box<crate::core::keys::KeyConfig>>,
+    pub(crate) keyboard: Option<Box<crate::core::keys::KeyConfig>>,
     /// Text-pointer handle: this element resolves pointer presses/drags to a
     /// byte index in its text (click-to-position / drag-to-select).
-    pub text_pos: Option<TextPosId>,
+    pub(crate) text_pos: Option<TextPosId>,
     /// When `true`, the text content word-wraps to `bounds.width` when painted.
-    pub wrap: bool,
+    pub(crate) wrap: bool,
     /// When set, the OS draws this node's chrome. See [`Element::native`].
     ///
     /// [`Element::native`]: crate::core::Element
-    pub native: Option<crate::platform::native::NativeDeco>,
+    pub(crate) native: Option<crate::platform::native::NativeDeco>,
     /// While an OS-drawn control fades from one state's picture to the next:
     /// the picture it fades from, drawn over [`native`](Self::native) with
     /// this opacity (from 1 down to 0).
-    pub native_from: Option<(crate::platform::native::NativeDeco, f32)>,
+    pub(crate) native_from: Option<(crate::platform::native::NativeDeco, f32)>,
     /// Scroll container handle: wheel events over this node adjust the app's
     /// offset for `id`, and its children are laid out at natural size + shifted.
-    pub scroll: Option<ScrollId>,
+    pub(crate) scroll: Option<ScrollId>,
     /// Whether the scroll container scrolls sideways: a horizontal stack made
     /// [`scrollable`](crate::core::Element::scrollable) (its offset then
     /// counts from the left, or from the right when laid out right to left).
-    pub scroll_horizontal: bool,
+    pub(crate) scroll_horizontal: bool,
     /// When `true`, children are clipped to this node's `bounds` when painted
     /// (set for scroll containers and overlay panels).
-    pub clip: bool,
+    pub(crate) clip: bool,
     /// The cursor this element asked for (see [`Element::cursor`]); `None`
     /// picks one from its handlers in [`cursor_at`].
     ///
     /// [`Element::cursor`]: crate::core::Element::cursor
-    pub cursor: Option<CursorIcon>,
+    pub(crate) cursor: Option<CursorIcon>,
     /// Declared accessibility semantics (role, name, item state), copied from
     /// the element. See [`Element::role`].
     ///
     /// [`Element::role`]: crate::core::Element::role
-    pub semantics: Option<Semantics>,
+    pub(crate) semantics: Option<Semantics>,
     /// Whether this node was laid out right to left (its effective
     /// [`LayoutDirection`](crate::layout::LayoutDirection)): its children are
     /// mirrored, `Auto` text in it lines up on the right, and a drag on it
     /// reports mirrored x positions.
-    pub rtl: bool,
+    pub(crate) rtl: bool,
     /// How this node and its subtree are drawn moved, scaled or rotated (see
     /// [`Element::transform`]). `bounds` stay the laid-out box; the transform
     /// is resolved against them by [`LayoutNode::affine`], so scrolling a
@@ -1308,37 +1353,37 @@ pub struct LayoutNode {
     /// through its inverse.
     ///
     /// [`Element::transform`]: crate::core::Element::transform
-    pub transform: Option<crate::geometry::Transform>,
+    pub(crate) transform: Option<crate::geometry::Transform>,
     /// Group opacity of this node and its subtree (see [`Element::opacity`]).
     ///
     /// [`Element::opacity`]: crate::core::Element::opacity
-    pub opacity: f32,
+    pub(crate) opacity: f32,
     /// The element's identity, if it uses interaction states or transitions
     /// (see [`Element::key`](crate::core::Element::key)): what the app finds
     /// it by to work out its [`Interaction`](crate::core::Interaction).
-    pub key: Option<crate::core::ElementKey>,
+    pub(crate) key: Option<crate::core::ElementKey>,
     /// A copy of an element that has left, drawn while its
     /// [exit](crate::core::Element::exit) effect runs: stripped of handlers,
     /// identity and semantics, and skipped by hover and accessibility.
-    pub ghost: bool,
+    pub(crate) ghost: bool,
     /// Laid out but kept off stage (see [`Element::offstage`]): once the app
     /// has applied scroll offsets and presence to the tree, the node's
     /// subtree is made a handler-less, invisible [ghost](Self::ghost).
     ///
     /// [`Element::offstage`]: crate::core::Element::offstage
-    pub offstage: bool,
+    pub(crate) offstage: bool,
     /// The element lets pointer input through (see
     /// [`Element::hit_through`](crate::core::Element::hit_through)): its
     /// own handlers aren't hit, and as an overlay layer it takes no press
     /// that none of its children take.
-    pub hit_through: bool,
-    pub children: Vec<LayoutNode>,
+    pub(crate) hit_through: bool,
+    pub(crate) children: Vec<LayoutNode>,
 }
 
 impl LayoutNode {
     /// A bare container: bounds + `children`, no decoration or handlers. Used to
     /// stack the main tree and overlay layers under one routable/paintable root.
-    pub fn container(bounds: Rect, children: Vec<LayoutNode>) -> LayoutNode {
+    pub(crate) fn container(bounds: Rect, children: Vec<LayoutNode>) -> LayoutNode {
         LayoutNode {
             bounds,
             decoration: BoxStyle::default(),
@@ -1376,6 +1421,32 @@ impl LayoutNode {
 }
 
 impl LayoutNode {
+    /// The node's laid-out box, in its own layout coordinates (before its
+    /// [`transform`](Self::transform)).
+    pub fn bounds(&self) -> Rect {
+        self.bounds
+    }
+
+    /// The laid-out children, in source order.
+    pub fn children(&self) -> &[LayoutNode] {
+        &self.children
+    }
+
+    /// Whether this node was laid out right to left (its children mirrored).
+    pub fn rtl(&self) -> bool {
+        self.rtl
+    }
+
+    /// The transform the node is drawn with, if any.
+    pub fn transform(&self) -> Option<crate::geometry::Transform> {
+        self.transform
+    }
+
+    /// The node's group opacity, `0.0..=1.0`.
+    pub fn opacity(&self) -> f32 {
+        self.opacity
+    }
+
     /// The matrix mapping this node's layout coordinates (its `bounds` and its
     /// subtree's) to where they are drawn in its parent's coordinates, or
     /// `None` when it has no transform.
@@ -1471,7 +1542,7 @@ pub(crate) fn clipped_out(node: &LayoutNode, point: Point) -> bool {
 /// scroll container, other than a [`hit_through`](LayoutNode::hit_through)
 /// node's own. What a hit-through overlay layer is asked before it takes
 /// a press.
-pub fn takes_press(node: &LayoutNode, point: Point) -> bool {
+pub(crate) fn takes_press(node: &LayoutNode, point: Point) -> bool {
     let Some(point) = node.to_local(point) else {
         return false;
     };
@@ -1500,9 +1571,8 @@ pub fn takes_press(node: &LayoutNode, point: Point) -> bool {
 ///
 /// `point` is in window coordinates, and a node under a
 /// [transform](LayoutNode::transform) is hit where it is drawn — as in every
-/// `*_at` query here. Bounds those return ([`drag_at`], [`drop_at`],
-/// [`viewport_at`]) are layout bounds: read a pointer against them with
-/// [`local_point`].
+/// hit query here. The bounds of a [`LayoutNode`] are layout bounds: read a
+/// pointer against them with [`local_point`].
 pub fn hit_test(node: &LayoutNode, point: Point) -> Option<ActionId> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
@@ -1526,7 +1596,7 @@ pub fn hit_test(node: &LayoutNode, point: Point) -> Option<ActionId> {
 /// under it that has one. A node's own [`cursor`](LayoutNode::cursor) wins;
 /// otherwise editable text shows the I-beam and tap or drag targets the
 /// pointing hand. Elsewhere it is [`CursorIcon::Default`].
-pub fn cursor_at(node: &LayoutNode, point: Point) -> CursorIcon {
+pub(crate) fn cursor_at(node: &LayoutNode, point: Point) -> CursorIcon {
     fn find(node: &LayoutNode, point: Point) -> Option<CursorIcon> {
         let point = node.to_local(point)?;
         let inside = node.bounds.contains(point);
@@ -1556,7 +1626,7 @@ pub fn cursor_at(node: &LayoutNode, point: Point) -> CursorIcon {
 
 /// Find the [`ContextId`] of the top-most node with a secondary-click handler
 /// containing `point` (mirrors [`hit_test`], for right-clicks).
-pub fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
+pub(crate) fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
     let point = node.to_local(point)?;
@@ -1578,7 +1648,7 @@ pub fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
 /// Find the top-most drop target containing `point`, returning its
 /// [`DropId`] and bounds (mirrors [`hit_test`], for drags). Whether it takes
 /// the drag is up to its handler ([`Handlers::drop_accepts`]).
-pub fn drop_at(node: &LayoutNode, point: Point) -> Option<(DropId, Rect)> {
+pub(crate) fn drop_at(node: &LayoutNode, point: Point) -> Option<(DropId, Rect)> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
     let point = node.to_local(point)?;
@@ -1597,7 +1667,7 @@ pub fn drop_at(node: &LayoutNode, point: Point) -> Option<(DropId, Rect)> {
 }
 
 /// Find the node carrying drop target `id`, if present.
-pub fn find_drop(node: &LayoutNode, id: DropId) -> Option<&LayoutNode> {
+pub(crate) fn find_drop(node: &LayoutNode, id: DropId) -> Option<&LayoutNode> {
     if node.drop == Some(id) {
         return Some(node);
     }
@@ -1605,7 +1675,7 @@ pub fn find_drop(node: &LayoutNode, id: DropId) -> Option<&LayoutNode> {
 }
 
 /// Find the [`DragSourceId`] of the top-most drag source containing `point`.
-pub fn drag_source_at(node: &LayoutNode, point: Point) -> Option<DragSourceId> {
+pub(crate) fn drag_source_at(node: &LayoutNode, point: Point) -> Option<DragSourceId> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
     let point = node.to_local(point)?;
@@ -1626,7 +1696,7 @@ pub fn drag_source_at(node: &LayoutNode, point: Point) -> Option<DragSourceId> {
 /// Find the top-most text-pointer node containing `point`, returning its
 /// [`TextPosId`] and the node (so the caller can resolve a byte index from the
 /// node's text and bounds).
-pub fn text_pos_at(node: &LayoutNode, point: Point) -> Option<(TextPosId, &LayoutNode)> {
+pub(crate) fn text_pos_at(node: &LayoutNode, point: Point) -> Option<(TextPosId, &LayoutNode)> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
     let point = node.to_local(point)?;
@@ -1660,7 +1730,7 @@ fn first_text_pos(node: &LayoutNode) -> Option<(TextPosId, &LayoutNode)> {
 /// (used for click-to-focus). A button's focus (see
 /// [`tab_focus`](crate::core::tab_focus)) is passed over: a click doesn't
 /// focus a button.
-pub fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
+pub(crate) fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
     let point = node.to_local(point)?;
@@ -1682,7 +1752,8 @@ pub fn focus_at(node: &LayoutNode, point: Point) -> Option<FocusId> {
 
 /// Find the top-most draggable node containing `point`, returning its
 /// [`DragId`] and bounds (so the caller can compute the drag fraction).
-pub fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
+#[cfg(test)]
+pub(crate) fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
     let point = node.to_local(point)?;
@@ -1703,7 +1774,7 @@ pub fn drag_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect)> {
 /// Like [`drag_at`], but also returns the bounds of the draggable's parent
 /// (its own bounds when it is `node` itself), for [`DragMotion::parent`],
 /// and whether the draggable was laid out right to left ([`LayoutNode::rtl`]).
-pub fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
+pub(crate) fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
     fn walk(node: &LayoutNode, parent: Rect, point: Point) -> Option<(DragId, Rect, Rect, bool)> {
         let point = node.to_local(point)?;
         for child in node.children.iter().rev() {
@@ -1719,32 +1790,12 @@ pub fn drag_hit_at(node: &LayoutNode, point: Point) -> Option<(DragId, Rect, Rec
     walk(node, node.bounds, point)
 }
 
-/// Find the [`ScrollId`] of the top-most scroll container containing `point`
-/// (the wheel target). Children are tested first so a nested scroll area wins.
-pub fn scroll_at(node: &LayoutNode, point: Point) -> Option<ScrollId> {
-    // A transformed node is hit where it's drawn: read the point in its
-    // layout space (and its subtree's).
-    let point = node.to_local(point)?;
-    if clipped_out(node, point) {
-        return None;
-    }
-    for child in node.children.iter().rev() {
-        if let Some(id) = scroll_at(child, point) {
-            return Some(id);
-        }
-    }
-    match node.scroll {
-        Some(id) if node.bounds.contains(point) => Some(id),
-        _ => None,
-    }
-}
-
 /// The innermost vertical and horizontal scroll containers under a point
 /// (see [`scroll_targets_at`]): a drag picks the one along its direction, so a
 /// sideways strip inside a vertical list scrolls sideways and the list up and
 /// down.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ScrollTargets {
+pub(crate) struct ScrollTargets {
     /// The innermost container that scrolls up and down.
     pub vertical: Option<ScrollId>,
     /// The innermost container that scrolls sideways.
@@ -1761,7 +1812,7 @@ impl ScrollTargets {
 /// The innermost vertical and horizontal scroll containers containing
 /// `point`, through transforms and clipping, in the top-most subtree that has
 /// any.
-pub fn scroll_targets_at(node: &LayoutNode, point: Point) -> ScrollTargets {
+pub(crate) fn scroll_targets_at(node: &LayoutNode, point: Point) -> ScrollTargets {
     let mut found = ScrollTargets::default();
     let Some(point) = node.to_local(point) else {
         return found;
@@ -1790,7 +1841,7 @@ pub fn scroll_targets_at(node: &LayoutNode, point: Point) -> ScrollTargets {
 }
 
 /// Find the scroll-container node carrying `id`, if present.
-pub fn find_scroll(node: &LayoutNode, id: ScrollId) -> Option<&LayoutNode> {
+pub(crate) fn find_scroll(node: &LayoutNode, id: ScrollId) -> Option<&LayoutNode> {
     if node.scroll == Some(id) {
         return Some(node);
     }
@@ -1798,7 +1849,7 @@ pub fn find_scroll(node: &LayoutNode, id: ScrollId) -> Option<&LayoutNode> {
 }
 
 /// Find the node carrying focus `id`, if present.
-pub fn find_focus(node: &LayoutNode, id: FocusId) -> Option<&LayoutNode> {
+pub(crate) fn find_focus(node: &LayoutNode, id: FocusId) -> Option<&LayoutNode> {
     if node.focus == Some(id) {
         return Some(node);
     }
@@ -1806,7 +1857,7 @@ pub fn find_focus(node: &LayoutNode, id: FocusId) -> Option<&LayoutNode> {
 }
 
 /// Find the node carrying tap-action `id`, if present (for hover highlight).
-pub fn find_action(node: &LayoutNode, id: ActionId) -> Option<&LayoutNode> {
+pub(crate) fn find_action(node: &LayoutNode, id: ActionId) -> Option<&LayoutNode> {
     if node.action == Some(id) {
         return Some(node);
     }
@@ -1815,7 +1866,7 @@ pub fn find_action(node: &LayoutNode, id: ActionId) -> Option<&LayoutNode> {
 
 /// Find the node carrying text-pointer `id`, if present (for continuing a
 /// drag-selection after the pointer leaves the element bounds).
-pub fn find_text_pos(node: &LayoutNode, id: TextPosId) -> Option<&LayoutNode> {
+pub(crate) fn find_text_pos(node: &LayoutNode, id: TextPosId) -> Option<&LayoutNode> {
     if node.text_pos == Some(id) {
         return Some(node);
     }
@@ -1825,7 +1876,7 @@ pub fn find_text_pos(node: &LayoutNode, id: TextPosId) -> Option<&LayoutNode> {
 /// The first text-bearing [`LayoutNode`] at or under `node`, in tree order.
 /// Used to position the caret and selection highlight inside a focused text
 /// field (read its `content` text/size plus `bounds`/`caret`/`selection`).
-pub fn first_text(node: &LayoutNode) -> Option<&LayoutNode> {
+pub(crate) fn first_text(node: &LayoutNode) -> Option<&LayoutNode> {
     if matches!(node.content, NodeContent::Text { .. }) {
         return Some(node);
     }
@@ -1836,7 +1887,7 @@ pub fn first_text(node: &LayoutNode) -> Option<&LayoutNode> {
 /// paint order, so the app can composite each one's registered content into its
 /// laid-out rect (and route input landing inside it to that content). Bounds are
 /// in absolute logical pixels.
-pub fn collect_viewports(node: &LayoutNode, out: &mut Vec<(ViewportId, Rect)>) {
+pub(crate) fn collect_viewports(node: &LayoutNode, out: &mut Vec<(ViewportId, Rect)>) {
     if let NodeContent::Viewport(id) = node.content {
         out.push((id, node.bounds));
     }
@@ -1848,7 +1899,7 @@ pub fn collect_viewports(node: &LayoutNode, out: &mut Vec<(ViewportId, Rect)>) {
 /// Find the top-most embedded-content viewport containing `point`, returning its
 /// [`ViewportId`] and bounds (so the app can forward the event with
 /// viewport-local coordinates). Children are tested first, mirroring paint order.
-pub fn viewport_at(node: &LayoutNode, point: Point) -> Option<(ViewportId, Rect)> {
+pub(crate) fn viewport_at(node: &LayoutNode, point: Point) -> Option<(ViewportId, Rect)> {
     // A transformed node is hit where it's drawn: read the point in its
     // layout space (and its subtree's).
     let point = node.to_local(point)?;
@@ -1867,7 +1918,7 @@ pub fn viewport_at(node: &LayoutNode, point: Point) -> Option<(ViewportId, Rect)
 }
 
 /// Collect every focusable [`FocusId`] in paint/tree order, for Tab traversal.
-pub fn collect_focusables(node: &LayoutNode, out: &mut Vec<FocusId>) {
+pub(crate) fn collect_focusables(node: &LayoutNode, out: &mut Vec<FocusId>) {
     if let Some(id) = node.focus {
         out.push(id);
     }

@@ -1,10 +1,10 @@
 //! Stipple's layout primitives.
 //!
-//! A self-contained flex/box model (no `taffy`): [`Constraints`] describe the
-//! size range a parent offers a child, [`Axis`] picks main vs. cross, and
-//! [`solve_main_axis`] distributes space along the main axis among fixed-size
-//! and flexible children. `stipple::core` composes these into a full tree layout
-//! pass; the algorithms here are deliberately small and independently testable.
+//! The vocabulary of Stipple's layout: the [`Axis`] a stack runs along, the
+//! [`LayoutDirection`] a UI reads in, and the [`Track`]s of a grid.
+//!
+//! The solvers behind it (a self-contained flex/box model, no `taffy`) are
+//! internal: [`Element`](crate::core::Element)'s layout pass composes them.
 
 #![forbid(unsafe_code)]
 
@@ -105,56 +105,9 @@ impl LayoutDirection {
     }
 }
 
-/// The size range a parent offers a child: every laid-out size must satisfy
-/// `min <= size <= max` component-wise.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Constraints {
-    pub min: Size,
-    pub max: Size,
-}
-
-impl Constraints {
-    /// Loose constraints: anything from zero up to `max`.
-    #[inline]
-    pub fn loose(max: Size) -> Self {
-        Self {
-            min: Size::ZERO,
-            max,
-        }
-    }
-
-    /// Tight constraints: exactly `size`.
-    #[inline]
-    pub fn tight(size: Size) -> Self {
-        Self {
-            min: size,
-            max: size,
-        }
-    }
-
-    /// Clamp `size` into the allowed range.
-    #[inline]
-    pub fn constrain(&self, size: Size) -> Size {
-        size.clamp(self.min, self.max)
-    }
-
-    /// Shrink the available maximum by `amount` on each side's total (e.g. for
-    /// padding), keeping `min` no larger than the new `max`.
-    pub fn deflate(&self, horizontal: f64, vertical: f64) -> Self {
-        let max = Size::new(
-            (self.max.width - horizontal).max(0.0),
-            (self.max.height - vertical).max(0.0),
-        );
-        Self {
-            min: self.min.clamp(Size::ZERO, max),
-            max,
-        }
-    }
-}
-
 /// One participant in a main-axis flex layout.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FlexItem {
+pub(crate) struct FlexItem {
     /// The item's natural size along the main axis, in logical pixels.
     pub basis: f64,
     /// Share of leftover free space this item absorbs. `0.0` = fixed size.
@@ -182,7 +135,7 @@ impl FlexItem {
     }
 
     /// A flexible item with the given grow weight and zero basis.
-    #[inline]
+    #[cfg(test)]
     pub fn flex(grow: f64) -> Self {
         Self {
             grow,
@@ -222,13 +175,13 @@ impl FlexItem {
 /// Clamp `length` to `min..=max`, letting `min` win when they conflict (the CSS
 /// rule: a min-width larger than the max-width still applies).
 #[inline]
-pub fn clamp_len(length: f64, min: f64, max: f64) -> f64 {
+pub(crate) fn clamp_len(length: f64, min: f64, max: f64) -> f64 {
     length.min(max).max(min)
 }
 
 /// The resolved position of one item along the main axis.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Span {
+pub(crate) struct Span {
     /// Offset from the start of the content area.
     pub offset: f64,
     /// Length along the main axis.
@@ -251,7 +204,8 @@ impl Span {
 /// Mirror `spans` laid out in a container `extent` long (see
 /// [`Span::mirrored`]): what a right-to-left layout does to a row's items or a
 /// grid's columns. The slice keeps its order, so item `k` keeps index `k`.
-pub fn mirror_spans(spans: &mut [Span], extent: f64) {
+#[cfg(test)]
+pub(crate) fn mirror_spans(spans: &mut [Span], extent: f64) {
     for s in spans {
         *s = s.mirrored(extent);
     }
@@ -267,7 +221,7 @@ pub fn mirror_spans(spans: &mut [Span], extent: f64) {
 /// `shrink` weight give up space in proportion to `shrink × basis`, stopping at
 /// their `min`. With no growing item, leftover space is left unused (items pack
 /// at the start); with no shrinking item, an overflow overflows.
-pub fn solve_main_axis(available: f64, gap: f64, items: &[FlexItem]) -> Vec<Span> {
+pub(crate) fn solve_main_axis(available: f64, gap: f64, items: &[FlexItem]) -> Vec<Span> {
     if items.is_empty() {
         return Vec::new();
     }
@@ -376,7 +330,11 @@ fn pack(lengths: &[f64], gap: f64) -> Vec<Span> {
 /// item moves to a new line when it would overflow the current one; an item
 /// longer than `available` gets a line of its own. Returns each line's index
 /// range. An infinite `available` keeps everything on one line.
-pub fn break_lines(available: f64, gap: f64, lengths: &[f64]) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn break_lines(
+    available: f64,
+    gap: f64,
+    lengths: &[f64],
+) -> Vec<std::ops::Range<usize>> {
     let mut lines = Vec::new();
     let mut start = 0;
     let mut used = 0.0;
@@ -399,6 +357,7 @@ pub fn break_lines(available: f64, gap: f64, lengths: &[f64]) -> Vec<std::ops::R
 
 /// How a grid track (a column or a row) is sized.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Track {
     /// A fixed length in logical pixels.
     Fixed(f64),
@@ -426,7 +385,7 @@ impl Track {
 
 /// An item's footprint on one grid axis, for [`solve_tracks`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TrackItem {
+pub(crate) struct TrackItem {
     /// First track the item occupies.
     pub start: usize,
     /// Number of tracks it spans (at least 1).
@@ -444,7 +403,7 @@ pub struct TrackItem {
 /// (an `fr` track can be squeezed to zero, like CSS `minmax(0, 1fr)`); with
 /// `None` (indefinite space) they size to their content in proportion to their
 /// weights.
-pub fn solve_tracks(
+pub(crate) fn solve_tracks(
     tracks: &[Track],
     available: Option<f64>,
     gap: f64,
@@ -532,7 +491,7 @@ pub fn solve_tracks(
 
 /// The extent of tracks `start..start + span` in `spans`, gaps included, as
 /// `(offset, length)`. Spans running past the last track are clipped to it.
-pub fn span_extent(spans: &[Span], start: usize, span: usize) -> (f64, f64) {
+pub(crate) fn span_extent(spans: &[Span], start: usize, span: usize) -> (f64, f64) {
     if spans.is_empty() {
         return (0.0, 0.0);
     }
@@ -548,7 +507,10 @@ pub fn span_extent(spans: &[Span], start: usize, span: usize) -> (f64, f64) {
 /// it. An item goes to the first free position at or after the previous item
 /// that fits it (earlier holes are not back-filled). Returns each item's
 /// `(row, column)` and the number of rows used.
-pub fn place_cells(columns: usize, spans: &[(usize, usize)]) -> (Vec<(usize, usize)>, usize) {
+pub(crate) fn place_cells(
+    columns: usize,
+    spans: &[(usize, usize)],
+) -> (Vec<(usize, usize)>, usize) {
     let columns = columns.max(1);
     let mut occupied: Vec<Vec<bool>> = Vec::new();
     let mut placed = Vec::with_capacity(spans.len());

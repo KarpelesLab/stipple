@@ -2425,8 +2425,8 @@ impl<S: 'static> App<S> {
 
     /// Move focus to the next focusable element in the primary window (Tab).
     /// Buttons, checkboxes, switches, tabs and the other controls a tap
-    /// activates are focusable too (see [`core::tab_focus`]), and Enter or
-    /// Space presses the focused one.
+    /// activates are focusable too, and Enter or Space presses the focused
+    /// one.
     pub fn focus_next(&mut self) -> bool {
         self.pane_focus_next(0)
     }
@@ -4048,8 +4048,7 @@ pub mod prelude {
     pub use crate::anim::SpringParams;
     pub use crate::anim::{Easing, Spring, Tween};
     pub use crate::core::{
-        Align, Anchor, AppHandle, Axis, BoxStyle, Cx, Element, KeyInput, LayoutDirection,
-        OverlaySpec, TimerId, Track, View,
+        Align, Anchor, AppHandle, BoxStyle, Cx, Element, KeyInput, OverlaySpec, TimerId, View,
     };
     pub use crate::core::{AnimProp, Effect, ElementKey, Interaction, Transition};
     pub use crate::core::{CanvasId, ViewportId};
@@ -4059,6 +4058,7 @@ pub mod prelude {
     pub use crate::core::{PointerEvent, PointerEventKind, WheelEvent};
     pub use crate::geometry::Transform;
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};
+    pub use crate::layout::{Axis, LayoutDirection, Track};
     pub use crate::platform::Notification;
     pub use crate::platform::PointerButton;
     pub use crate::platform::dialog::{MessageBox, MessageKind, MessageResponse};

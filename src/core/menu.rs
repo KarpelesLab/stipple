@@ -287,8 +287,7 @@ impl<S> Menu<S> {
     }
 
     /// Every command of this menu and its submenus with its id, depth-first
-    /// from 1: the ids [`to_native`](Menu::to_native) gives them, as a native
-    /// context menu reports its pick.
+    /// from 1: the ids a native context menu reports its pick by.
     pub fn commands(&self) -> Vec<(u32, &MenuItem<S>)> {
         let mut out = Vec::new();
         self.number(&mut 1, &mut out);
@@ -304,7 +303,7 @@ impl<S> Menu<S> {
 
     /// The platform-neutral description of this menu, for a native context
     /// menu, its commands numbered as in [`commands`](Menu::commands).
-    pub fn to_native(&self) -> NativeMenu {
+    pub(crate) fn to_native(&self) -> NativeMenu {
         self.native_from(&mut 1)
     }
 
@@ -427,7 +426,7 @@ impl<S> MenuBar<S> {
 
     /// The platform-neutral description handed to a native menu bar, with
     /// `app_name` for the items macOS adds.
-    pub fn to_native(&self, app_name: &str) -> NativeMenuBar {
+    pub(crate) fn to_native(&self, app_name: &str) -> NativeMenuBar {
         let mut next = 1;
         NativeMenuBar {
             app_name: app_name.to_string(),
@@ -511,7 +510,7 @@ impl<S> Tray<S> {
 
     /// The description handed to the platform: command ids start at
     /// [`TRAY_ID_BASE`](crate::platform::TRAY_ID_BASE), shortcuts dropped.
-    pub fn to_native(&self) -> crate::platform::NativeTray {
+    pub(crate) fn to_native(&self) -> crate::platform::NativeTray {
         fn strip(items: &mut [NativeMenuItem]) {
             for item in items {
                 match item {

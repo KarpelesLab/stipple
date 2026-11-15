@@ -37,14 +37,10 @@ struct Shared {
 /// fill makes each window unmistakable in the root screenshot.
 fn colored_window(color: Color, text: &str, cx: &mut Cx<Shared>) -> Element {
     let theme = *cx.theme();
-    let panel = Element::boxed(BoxStyle {
-        fill: Some(color),
-        radius: 0.0,
-        border: None,
-    })
-    .width(320.0)
-    .height(240.0)
-    .align(Align::Center, Align::Center);
+    let panel = Element::boxed(BoxStyle::filled(color))
+        .width(320.0)
+        .height(240.0)
+        .align(Align::Center, Align::Center);
     column(vec![panel, label(&theme, text)])
         .grow(1.0)
         .align(Align::Center, Align::Center)

@@ -14,17 +14,16 @@
 //! - [`paint`] draws that tree into a [`Scene`], and [`hit_test`] routes
 //!   pointer taps to the registered [`Handlers`].
 //!
-//! Between frames, [`diff_trees`] reconciles the previously-presented
-//! [`LayoutNode`] tree against the freshly built one to compute the changed
-//! [`Damage`] region, so the platform re-presents only what moved rather than
-//! the whole window.
+//! Between frames, the app diffs the previously-presented [`LayoutNode`] tree
+//! against the freshly built one to compute the changed [`Damage`] region, so
+//! the platform re-presents only what moved rather than the whole window.
 //!
 //! Still ahead (ROADMAP.md Phase 1+): fine-grained per-node state so a rebuild
 //! can skip unchanged subtrees entirely, and richer gesture recognition.
 
 #![forbid(unsafe_code)]
 
-pub mod a11y;
+pub(crate) mod a11y;
 mod canvas;
 mod clipboard;
 pub(crate) mod crossfade;
@@ -35,20 +34,19 @@ mod handle;
 pub(crate) mod highlight;
 mod ime;
 pub(crate) mod interact;
-/// Raw keys, keeping Tab, IME for custom elements and Option as Meta.
-pub mod keys;
-pub mod menu;
+pub(crate) mod keys;
+pub(crate) mod menu;
 pub(crate) mod native_fade;
 mod pointer;
 mod pointer_events;
 pub(crate) mod presence;
 mod render;
-pub mod runtime;
-pub mod tab_focus;
+pub(crate) mod runtime;
+pub(crate) mod tab_focus;
 pub(crate) mod touch;
 pub(crate) mod transition;
 
-pub use a11y::{AccessNode, Role, Semantics, accessibility_tree};
+pub use a11y::{AccessNode, Role, accessibility_tree};
 pub use canvas::{CanvasId, CanvasPainter};
 pub(crate) use canvas::{CanvasInvalidation, invalidated_rects};
 pub(crate) use clipboard::{
@@ -60,21 +58,24 @@ pub use clipboard::{
     write_clipboard,
 };
 pub use crossfade::THEME_FADE;
-pub(crate) use diff::coalesce;
-pub use diff::{Damage, diff_trees};
+pub use diff::Damage;
+pub(crate) use diff::{coalesce, diff_trees};
 pub(crate) use dnd::DropFades;
 pub use dnd::{DROP_FADE, DropState};
-pub use element::{Align, BoxStyle, Element, ElementKind, LayoutStyle, SizeOverride, TextStyle};
+#[cfg(test)]
+pub(crate) use element::ElementKind;
+pub(crate) use element::TextStyle;
+pub use element::{Align, BoxStyle, Element};
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use handle::runtime;
 pub(crate) use handle::{AlertInput, AlertView};
 pub use handle::{AppHandle, TimerId};
-pub use ime::{ime_state, paint_preedit, secure_focused};
-pub use interact::{ElementKey, Interaction, Reactive};
-pub use keys::{FocusGroup, Handled, KeyConfig, RawKeyId};
+pub(crate) use ime::{ime_state, paint_preedit, secure_focused};
+pub use interact::{ElementKey, Interaction};
+pub use keys::{FocusGroup, Handled, RawKeyId};
 pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
 pub(crate) use pointer::set_pointer_position;
-pub use pointer::{PointerInfo, pointer, set_pointer_modifiers};
+pub use pointer::{PointerInfo, pointer};
 pub use pointer_events::{
     PinchEvent, PinchPhase, PointerButtons, PointerEvent, PointerEventKind, PointerId, WheelEvent,
 };
@@ -82,29 +83,28 @@ pub(crate) use pointer_events::{
     PointerHandlers, WheelTarget, pointer_at, pointer_local, wheel_target_at,
 };
 pub use presence::Effect;
-pub use render::caret_index_at;
-pub(crate) use render::scroll_range;
-pub use render::{
-    apply_scroll, layout, layout_with_direction, mark_native_states, measure, paint, paint_focus,
-    paint_focus_look, paint_hover, paint_visible,
+pub(crate) use render::{
+    apply_scroll, caret_index_at, mark_native_states, paint_focus_look, paint_hover, scroll_range,
 };
+pub use render::{layout, layout_with_direction, measure, paint, paint_visible};
 pub use runtime::{
     ActionId, Anchor, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, Handlers,
-    KeyInput, LayoutNode, MemoCache, NodeContent, OverlaySpec, ScrollId, ScrollRequests,
-    ScrollTargets, TextPosId, ViewportEvent, ViewportId, collect_focusables, collect_viewports,
-    context_at, cursor_at, drag_at, drag_hit_at, drag_source_at, drop_at, find_action, find_drop,
-    find_focus, find_scroll, find_text_pos, first_text, focus_at, hit_test, local_point,
-    node_to_window, scroll_at, scroll_targets_at, takes_press, text_pos_at, viewport_at,
+    KeyInput, LayoutNode, OverlaySpec, ScrollId, ScrollRequests, TextPosId, ViewportEvent,
+    ViewportId, hit_test, local_point, node_to_window,
 };
-pub use tab_focus::promote_tap_focus;
+pub(crate) use runtime::{
+    MemoCache, NodeContent, ScrollTargets, collect_focusables, collect_viewports, context_at,
+    cursor_at, drag_hit_at, drag_source_at, drop_at, find_action, find_drop, find_focus,
+    find_scroll, find_text_pos, focus_at, scroll_targets_at, takes_press, text_pos_at, viewport_at,
+};
+pub(crate) use tab_focus::promote_tap_focus;
 pub use transition::{AnimProp, Transition};
 
-// The font type lives in stipple::render; re-export so callers of the layout/paint
-// passes have one import path for the active font.
-pub use crate::render::Font;
-
-// Re-export the layout axis and grid tracks so widget crates speak one vocabulary.
-pub use crate::layout::{Axis, LayoutDirection, Track};
+// Their canonical paths are `stipple::render::Font` and `stipple::layout::*`;
+// these keep the crate's own `crate::core::…` imports short.
+#[allow(unused_imports)] // `LayoutDirection` is only used by tests.
+pub(crate) use crate::layout::{Axis, LayoutDirection, Track};
+pub(crate) use crate::render::Font;
 
 use crate::geometry::{Rect, Size};
 use crate::render::Scene;

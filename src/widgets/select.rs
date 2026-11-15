@@ -181,7 +181,8 @@ fn next_match<T: AsRef<str>>(options: &[T], from: usize, typed: &str) -> Option<
 /// # let theme = Theme::light();
 /// # let mut cx = Cx::new(&theme);
 /// # let el = view(&App { size: Select::new(None) }, &mut cx);
-/// # assert!(el.action.is_some() && el.focus.is_some());
+/// # drop(el);
+/// # assert!(cx.into_handlers().len() >= 2);
 /// ```
 pub fn select<S, T: AsRef<str>>(
     cx: &mut Cx<S>,

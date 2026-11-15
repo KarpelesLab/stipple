@@ -10,11 +10,13 @@
 
 use crate::geometry::Point;
 use crate::platform::Modifiers;
-pub use crate::platform::set_pointer_modifiers;
+#[cfg(doc)]
+use crate::platform::set_pointer_modifiers;
 use std::cell::Cell;
 
-/// The pointer state for the event being handled. See [`pointer`].
+/// The pointer state for the event being handled. See [`pointer()`].
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct PointerInfo {
     /// The pointer position, in window logical pixels.
     pub position: Point,

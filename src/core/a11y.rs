@@ -30,6 +30,7 @@ use crate::geometry::Rect;
 
 /// The semantic kind of an [`AccessNode`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Role {
     /// The top-level window (tree root).
     Window,
@@ -63,14 +64,14 @@ pub enum Role {
     ComboBox,
     /// A numeric field with increment and decrement steps.
     SpinButton,
-    /// A box that is checked or not (see [`Semantics::checked`]).
+    /// A box that is checked or not (see [`Element::checked`](crate::core::Element::checked)).
     CheckBox,
     /// One option of a group of which exactly one is picked (a
     /// [`radio`](crate::widgets::radio) or a
     /// [`choice_chips`](crate::widgets::choice_chips) chip); the picked one is
-    /// [`checked`](Semantics::checked).
+    /// [`checked`](crate::core::Element::checked).
     RadioButton,
-    /// An on/off switch (see [`Semantics::checked`]).
+    /// An on/off switch (see [`Element::checked`](crate::core::Element::checked)).
     Switch,
     /// A draggable divider between two resizable panes.
     Splitter,
@@ -92,7 +93,7 @@ pub enum Role {
     /// [`Tab`](Role::Tab)s.
     TabList,
     /// One tab of a [`TabList`](Role::TabList); the selected one is
-    /// [`selected`](Semantics::selected).
+    /// [`selected`](crate::core::Element::selected).
     Tab,
     /// A text field whose text is hidden (a
     /// [`password_field`](crate::widgets::password_field)). Its name never
@@ -132,7 +133,7 @@ impl Role {
 /// [`expanded`](crate::core::Element::expanded) and
 /// [`checked`](crate::core::Element::checked).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Semantics {
+pub(crate) struct Semantics {
     /// The role to report, instead of the inferred one.
     pub role: Option<Role>,
     /// The name to report, instead of the element's text.
@@ -153,18 +154,9 @@ pub struct Semantics {
     pub labelled_by: Option<String>,
 }
 
-impl Semantics {
-    /// Semantics with `role`, no name override, not selected, not expandable.
-    pub fn new(role: Role) -> Self {
-        Self {
-            role: Some(role),
-            ..Self::default()
-        }
-    }
-}
-
 /// A node in the accessibility tree.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct AccessNode {
     pub role: Role,
     /// The accessible name (a control's label, or the text itself).
@@ -172,7 +164,7 @@ pub struct AccessNode {
     pub bounds: Rect,
     /// Whether this node currently holds keyboard focus.
     pub focused: bool,
-    /// Whether this item is selected (see [`Semantics::selected`]).
+    /// Whether this item is selected (see [`Element::selected`](crate::core::Element::selected)).
     pub selected: bool,
     /// Whether this item is expanded, if it can expand.
     pub expanded: Option<bool>,

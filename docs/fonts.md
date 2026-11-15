@@ -107,8 +107,8 @@ Element::text("let x = 1;", 14.0, ink).font(mono.clone());
 column(rows).font(mono.clone()).weight(FontWeight::MEDIUM);
 ```
 
-These set the element's `TextStyle` (`font`, `weight`, `italic`,
-`decoration`), which `TextStyle::resolve` turns into the font drawn with.
+These set the element's text style (its font, weight, slant and decoration
+lines), which resolves against the app's font into the font drawn with.
 
 ## Metrics
 

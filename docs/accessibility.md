@@ -2,7 +2,7 @@
 
 Stipple draws every control itself, so the operating system can't see them on
 its own. Each frame, the `App` builds an accessibility tree from the layout
-(`stipple::core::a11y`: roles, names, bounds, focus, selected / checked /
+(`stipple::core::AccessNode`: roles, names, bounds, focus, selected / checked /
 expanded state, a text field's caret and selection, and which element labels
 a field), maps it to the platform-neutral `stipple::platform::A11yNode`
 tree, and gives it to the window, whose backend exposes it to the platform's
@@ -38,8 +38,7 @@ The rest of this page says what each check proves, and what it doesn't.
 Text fields, and other elements with a key handler, take keyboard focus.
 So do buttons and the other controls a tap activates: an element with
 `on_tap` whose role is a button (the role a tap handler implies), checkbox,
-radio button, switch, tab, select, list or tree item, table row, cell or column header
-(`stipple::core::tab_focus`). Menu items don't: an open menu takes the
+radio button, switch, tab, select, list or tree item, table row, cell or column header. Menu items don't: an open menu takes the
 arrow keys, Enter and Escape itself. Neither does a control inside another
 focusable element (a password field's reveal button is part of the field,
 a list's rows are part of a list that takes focus as a whole).

@@ -24,6 +24,7 @@ use crate::render::{
 
 /// Alignment of children along an axis.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Align {
     #[default]
     Start,
@@ -35,14 +36,14 @@ pub enum Align {
 
 /// Fixed-size overrides for an element. `None` means "size to content / fill".
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SizeOverride {
+pub(crate) struct SizeOverride {
     pub width: Option<f64>,
     pub height: Option<f64>,
 }
 
 /// Layout properties common to every element.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct LayoutStyle {
+pub(crate) struct LayoutStyle {
     pub padding: Insets,
     pub size: SizeOverride,
     /// Main-axis grow weight when this element is a flex child. `0.0` = fixed.
@@ -66,6 +67,7 @@ pub struct LayoutStyle {
 /// The painted decoration of an element's box: fill, corner radius, border.
 /// Applies to any element — a leaf bar, a button, or a container panel.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct BoxStyle {
     pub fill: Option<Color>,
     pub radius: f64,
@@ -73,11 +75,36 @@ pub struct BoxStyle {
     pub border: Option<(Color, f64)>,
 }
 
+impl BoxStyle {
+    /// A box filled with `color`, square-cornered, without a border.
+    pub fn filled(color: Color) -> Self {
+        Self::default().fill(color)
+    }
+
+    /// Fill the box with `color`.
+    pub fn fill(mut self, color: Color) -> Self {
+        self.fill = Some(color);
+        self
+    }
+
+    /// Round the corners by `radius` logical pixels.
+    pub fn radius(mut self, radius: f64) -> Self {
+        self.radius = radius;
+        self
+    }
+
+    /// Draw a border of `width` logical pixels in `color`.
+    pub fn border(mut self, color: Color, width: f64) -> Self {
+        self.border = Some((color, width));
+        self
+    }
+}
+
 /// How a text element's glyphs are drawn, beyond its size and color: its
 /// font, weight and slant (each `None` inherits the app's font), and the
 /// lines drawn along it.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct TextStyle {
+pub(crate) struct TextStyle {
     /// The font; `None` uses the app's [`App::font`](crate::App::font).
     pub font: Option<Font>,
     /// A weight overriding the font's.
@@ -91,7 +118,7 @@ pub struct TextStyle {
 impl TextStyle {
     /// The font this style draws with, given the app's `base` font: its own
     /// font (else `base`) in its weight and slant. `None` without either.
-    pub fn resolve(&self, base: Option<&Font>) -> Option<Font> {
+    pub(crate) fn resolve(&self, base: Option<&Font>) -> Option<Font> {
         let font = self.font.as_ref().or(base)?;
         let mut style = font.style();
         if let Some(w) = self.weight {
@@ -106,7 +133,7 @@ impl TextStyle {
 
 /// What an element arranges; all kinds share [`Element::decoration`].
 #[derive(Clone, Debug, PartialEq)]
-pub enum ElementKind {
+pub(crate) enum ElementKind {
     /// A leaf with no children.
     Leaf,
     /// A single line of text. Sizes to the shaped run (via the active font);
@@ -183,102 +210,102 @@ pub enum ElementKind {
 /// produces an equal tree.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Element {
-    pub layout: LayoutStyle,
-    pub decoration: BoxStyle,
+    pub(crate) layout: LayoutStyle,
+    pub(crate) decoration: BoxStyle,
     /// Handler this element routes pointer taps to, if any. Set via
     /// [`Element::on_tap`]; resolved against the [`Cx`] handler table.
-    pub action: Option<ActionId>,
+    pub(crate) action: Option<ActionId>,
     /// Focus + keyboard handle, if this element is focusable. Set via
     /// [`Element::on_key`].
-    pub focus: Option<FocusId>,
+    pub(crate) focus: Option<FocusId>,
     /// Drag handle, if this element responds to pointer drags. Set via
     /// [`Element::on_drag`].
-    pub drag: Option<DragId>,
+    pub(crate) drag: Option<DragId>,
     /// Secondary-click (context) handle: this element opens a context menu on
     /// right-click. Set via [`Element::on_context`].
-    pub context: Option<ContextId>,
+    pub(crate) context: Option<ContextId>,
     /// Drop-target handle: drags from other applications (and in-app drags)
     /// can be dropped on this element. Set via [`Element::on_drop`].
-    pub drop: Option<DropId>,
+    pub(crate) drop: Option<DropId>,
     /// Drag-source handle: pressing on this element and moving starts an
     /// in-app drag. Set via [`Element::drag_source`].
-    pub drag_source: Option<DragSourceId>,
+    pub(crate) drag_source: Option<DragSourceId>,
     /// Pointer and wheel handle: raw pointer events and wheel scrolls over
     /// this element go to its handlers. Set via [`Element::on_pointer`] and
     /// [`Element::on_wheel`].
-    pub pointer: Option<crate::core::PointerId>,
+    pub(crate) pointer: Option<crate::core::PointerId>,
     /// Caret position as a byte index into this element's text, for an editable
     /// text leaf. `None` for non-editable text and non-text elements. Set via
     /// [`Element::caret`]; the focus overlay draws the caret bar there.
-    pub caret: Option<usize>,
+    pub(crate) caret: Option<usize>,
     /// Selected byte range `[start, end)` into this element's text, for an
     /// editable text leaf. `None` when there is no selection. Set via
     /// [`Element::selection`]; the focus overlay highlights it.
-    pub selection: Option<(usize, usize)>,
+    pub(crate) selection: Option<(usize, usize)>,
     /// Byte range `[start, end)` of input-method composition (preedit) text
     /// shown inside this element's text, which the focus overlay underlines.
     /// Set via [`Element::preedit`].
-    pub preedit: Option<(usize, usize)>,
+    pub(crate) preedit: Option<(usize, usize)>,
     /// How this element takes the keyboard beyond [`on_key`](Element::on_key):
     /// a raw key handler, keeping Tab, input-method support and Option as
     /// Meta. Set via [`Element::on_raw_key`], [`Element::captures_tab`],
     /// [`Element::ime_input`], [`Element::ime_cursor_area`] and
     /// [`Element::option_as_meta`]. `None` for most elements.
-    pub keyboard: Option<Box<crate::core::keys::KeyConfig>>,
+    pub(crate) keyboard: Option<Box<crate::core::keys::KeyConfig>>,
     /// Text-pointer handle: pointer presses/drags on this element resolve to a
     /// byte index in its text. Set via [`Element::on_text_pos`].
-    pub text_pos: Option<TextPosId>,
+    pub(crate) text_pos: Option<TextPosId>,
     /// When `true` on a text element, the text greedily word-wraps to the
     /// element's content width instead of laying out on one line. Set via
     /// [`Element::wrap`].
-    pub wrap: bool,
+    pub(crate) wrap: bool,
     /// Scroll-container handle: when set, this element lays its children out at
     /// natural size (overflowing its bounds), clips them, and routes wheel events
     /// to the app's offset for this id. Set via [`Element::scrollable`].
-    pub scroll: Option<ScrollId>,
+    pub(crate) scroll: Option<ScrollId>,
     /// When `true`, children are clipped to this element's painted bounds. Set
     /// implicitly by [`Element::scrollable`] and via [`Element::clip`].
-    pub clip: bool,
+    pub(crate) clip: bool,
     /// When set, the OS draws this element's chrome instead of `decoration`,
     /// which remains the fallback. See [`crate::platform::native`].
-    pub native: Option<NativeDeco>,
+    pub(crate) native: Option<NativeDeco>,
     /// The mouse cursor shown over this element. `None` picks one from its
     /// handlers: the I-beam over editable text, the pointing hand over taps
     /// and drags, else whatever its parent shows. Set via [`Element::cursor`].
-    pub cursor: Option<CursorIcon>,
+    pub(crate) cursor: Option<CursorIcon>,
     /// Declared accessibility semantics: a role overriding the one inferred
     /// from the element's handlers (a combo box, a table row), a name for an
     /// element with no text (an icon button), and item state. Set via
     /// [`Element::role`], [`Element::a11y_label`], [`Element::selected`] and
     /// [`Element::expanded`].
-    pub semantics: Option<Semantics>,
+    pub(crate) semantics: Option<Semantics>,
     /// The direction this element lays its children out in, or `None` to
     /// inherit its parent's (the root inherits the theme's
     /// [`layout_direction`](crate::style::Theme::layout_direction)). Set via
     /// [`Element::layout_direction`].
-    pub layout_direction: Option<LayoutDirection>,
+    pub(crate) layout_direction: Option<LayoutDirection>,
     /// How this element and its subtree are moved, scaled and rotated where
     /// they're drawn, after layout (it never affects layout). `None` draws
     /// them where they were laid out. Set via [`Element::transform`].
-    pub transform: Option<Transform>,
+    pub(crate) transform: Option<Transform>,
     /// Group opacity of this element and its subtree, `0.0..=1.0`: they are
     /// drawn together, then blended at this opacity. Set via
     /// [`Element::opacity`].
-    pub opacity: f32,
+    pub(crate) opacity: f32,
     /// Laid out as usual but kept off stage: not drawn, hit, focused or
     /// shown to assistive technologies. Set via [`Element::offstage`].
-    pub offstage: bool,
+    pub(crate) offstage: bool,
     /// Pointer input passes through the element itself to what is under
     /// it; the elements inside it still take theirs. Set via
     /// [`Element::hit_through`].
-    pub hit_through: bool,
+    pub(crate) hit_through: bool,
     /// Interaction-state styling and motion: the element's
     /// [`key`](Element::key), per-state overrides
     /// ([`hovered`](Element::hovered), [`drag_over`](Element::drag_over)…),
     /// [`disabled`](Element::disabled) and [`transition`](Element::transition)s.
     /// `None` for an element using none of them.
-    pub reactive: Option<Box<Reactive>>,
-    pub kind: ElementKind,
+    pub(crate) reactive: Option<Box<Reactive>>,
+    pub(crate) kind: ElementKind,
 }
 
 impl Element {
@@ -359,9 +386,9 @@ impl Element {
     /// composites externally-rendered content into. Give it a size via
     /// [`width`](Element::width)/[`height`](Element::height) (or
     /// [`grow`](Element::grow) inside a flex parent); add a
-    /// [`border`](Element::border) to frame it. The app locates it by `id` with
-    /// [`collect_viewports`](crate::core::collect_viewports) to blit content over the
-    /// placeholder, and routes pointer/keys landing inside it to that content.
+    /// [`border`](Element::border) to frame it. The app locates it by `id` to
+    /// blit content over the placeholder, and routes pointer/keys landing
+    /// inside it to that content.
     pub fn viewport(id: ViewportId) -> Self {
         Self {
             layout: LayoutStyle::default(),
@@ -501,7 +528,7 @@ impl Element {
     /// use stipple::prelude::*;
     /// let theme = Theme::light();
     /// let card = Element::layers(vec![
-    ///     Element::boxed(BoxStyle { fill: Some(theme.palette.primary), ..BoxStyle::default() }),
+    ///     Element::boxed(BoxStyle::filled(theme.palette.primary)),
     ///     label(&theme, "Over the fill").padding(Insets::uniform(8.0)),
     /// ]);
     /// # let _ = card;
@@ -521,11 +548,10 @@ impl Element {
     ///
     /// A button made this way (or a checkbox, switch, tab, list item… by its
     /// [`role`](Element::role)) also takes keyboard focus: Tab reaches it and
-    /// Enter or Space runs `handler`, as a tap would (see
-    /// [`tab_focus`](crate::core::tab_focus)).
+    /// Enter or Space runs `handler`, as a tap would.
     ///
     /// ```
-    /// # use stipple::core::{Element, BoxStyle, runtime::Cx};
+    /// # use stipple::core::{Element, BoxStyle, Cx};
     /// # use stipple::style::Theme;
     /// let theme = Theme::light();
     /// let mut cx = Cx::new(&theme);
@@ -533,7 +559,8 @@ impl Element {
     ///     .width(80.0)
     ///     .height(32.0)
     ///     .on_tap(&mut cx, |count: &mut i32| *count += 1);
-    /// assert!(button.action.is_some());
+    /// # drop(button);
+    /// assert_eq!(cx.into_handlers().len(), 1);
     /// ```
     pub fn on_tap<S>(mut self, cx: &mut Cx<'_, S>, handler: impl FnMut(&mut S) + 'static) -> Self {
         self.action = Some(cx.register(handler));
@@ -574,7 +601,8 @@ impl Element {
     /// }
     /// # let theme = Theme::light();
     /// # let mut cx = Cx::new(&theme);
-    /// # assert!(view(&Notes { pinned: false }, &mut cx).context.is_some());
+    /// # let _ = view(&Notes { pinned: false }, &mut cx);
+    /// # assert!(!cx.into_handlers().is_empty());
     /// ```
     pub fn context_menu<S>(mut self, cx: &mut Cx<'_, S>, menu: crate::core::menu::Menu<S>) -> Self {
         self.context = Some(cx.register_context_menu(menu));
@@ -601,7 +629,7 @@ impl Element {
     /// }
     /// # let theme = Theme::light();
     /// # let mut cx = Cx::new(&theme);
-    /// # assert!(view(&Files { names: vec![] }, &mut cx).drop.is_some());
+    /// # let _ = view(&Files { names: vec![] }, &mut cx);
     /// ```
     pub fn on_drop<S>(
         self,
@@ -706,7 +734,8 @@ impl Element {
     /// }
     /// # let theme = Theme::light();
     /// # let mut cx = Cx::new(&theme);
-    /// # assert!(view(&Term::default(), &mut cx).pointer.is_some());
+    /// # let _ = view(&Term::default(), &mut cx);
+    /// # assert!(!cx.into_handlers().is_empty());
     /// ```
     pub fn on_pointer<S>(
         mut self,
@@ -756,7 +785,8 @@ impl Element {
     /// }
     /// # let theme = Theme::light();
     /// # let mut cx = Cx::new(&theme);
-    /// # assert!(view(&Photo::default(), &mut cx).pointer.is_some());
+    /// # let _ = view(&Photo::default(), &mut cx);
+    /// # assert!(!cx.into_handlers().is_empty());
     /// ```
     pub fn on_pinch<S>(
         mut self,

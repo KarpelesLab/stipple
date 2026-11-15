@@ -550,13 +550,9 @@ fn play(g: &Game, cx: &mut Cx<Game>, theme: &Theme, visible: bool) -> Element {
 /// The dispatcher's portrait: a placeholder drawn in boxes.
 fn portrait(theme: &Theme) -> Element {
     let p = &theme.palette;
-    let face = Element::boxed(BoxStyle {
-        fill: Some(p.primary.mix(p.surface, 0.4)),
-        radius: 18.0,
-        border: None,
-    })
-    .width(36.0)
-    .height(36.0);
+    let face = Element::boxed(BoxStyle::filled(p.primary.mix(p.surface, 0.4)).radius(18.0))
+        .width(36.0)
+        .height(36.0);
     column(vec![face])
         .fill(p.background)
         .align(Align::Center, Align::Center)

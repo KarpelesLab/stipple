@@ -57,7 +57,7 @@ fn position(leaf: &LayoutNode, font: Option<&Font>, i: usize) -> Option<(f64, f6
 
 /// Underline the focused field's composition text, one stroke per line it
 /// spans. Drawn after the focus overlay, in `color` (the text color).
-pub fn paint_preedit(
+pub(crate) fn paint_preedit(
     tree: &LayoutNode,
     focused: FocusId,
     scene: &mut Scene,
@@ -87,7 +87,7 @@ pub fn paint_preedit(
 
 /// Whether the focused element is a password field: one whose text must not
 /// go through an input method (it would see, and may learn, the password).
-pub fn secure_focused(tree: &LayoutNode, focused: Option<FocusId>) -> bool {
+pub(crate) fn secure_focused(tree: &LayoutNode, focused: Option<FocusId>) -> bool {
     focused
         .and_then(|f| find_focus(tree, f))
         .and_then(|n| n.semantics.as_ref())
@@ -98,7 +98,7 @@ pub fn secure_focused(tree: &LayoutNode, focused: Option<FocusId>) -> bool {
 /// What the input method should know about the focused field, or `None` when
 /// the focused element doesn't take text (which disables the IME). A
 /// password field takes text without one, so it gets `None` too.
-pub fn ime_state(
+pub(crate) fn ime_state(
     tree: &LayoutNode,
     focused: Option<FocusId>,
     font: Option<&Font>,

@@ -10,7 +10,7 @@ of them (see [Checking](#checking)).
 - **Plain values stay open.** A type that *is* its fields, and always will
   be, keeps public fields and no `#[non_exhaustive]`, so callers can write
   `Point { x, y }` and destructure it: `Point`, `Size`, `Rect`, `Vec2`,
-  `Insets`, `PhysicalSize`, `Color`, `Span`. Adding a field to one of these is
+  `Insets`, `PhysicalSize`, `Color`. Adding a field to one of these is
   a breaking change, so it doesn't happen.
 - **Everything else is `#[non_exhaustive]`**: options, parameters, styles,
   events, infos, stats. A new field is then not a breaking change.

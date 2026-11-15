@@ -28,6 +28,7 @@ use crate::platform::event::{KeyCode, Modifiers};
 /// assert_eq!(redo.label_for(false), "Ctrl+Shift+Z");
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct Shortcut {
     /// The key. Letters are stored lower-case and match either case.
     pub key: KeyCode,

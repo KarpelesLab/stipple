@@ -23,12 +23,7 @@ fn content(state: &State, theme: &Theme, cx: &mut Cx<State>) -> Element {
         1 => ("Settings", Color::rgb(0x4f, 0x9d, 0xe0)),
         _ => ("About", Color::rgb(0x66, 0xbb, 0x6a)),
     };
-    let swatch = Element::boxed(BoxStyle {
-        fill: Some(color),
-        radius: theme.radius,
-        border: None,
-    })
-    .height(180.0);
+    let swatch = Element::boxed(BoxStyle::filled(color).radius(theme.radius)).height(180.0);
     column(vec![
         heading(theme, title),
         swatch,

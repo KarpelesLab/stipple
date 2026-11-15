@@ -9,6 +9,7 @@ use super::{
 
 /// How an [`Animated`] value moves to a new target.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Motion {
     /// Jump there.
     Instant,

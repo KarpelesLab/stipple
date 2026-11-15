@@ -468,7 +468,8 @@ pub fn color_picker<S>(
 /// # let theme = Theme::light();
 /// # let mut cx = Cx::new(&theme);
 /// # let app = App { tint: ColorPicker::new(Color::WHITE), applied: Color::WHITE };
-/// # assert!(view(&app, &mut cx).action.is_some());
+/// # let _ = view(&app, &mut cx);
+/// # assert!(!cx.into_handlers().is_empty());
 /// ```
 pub fn color_button<S>(
     cx: &mut Cx<S>,

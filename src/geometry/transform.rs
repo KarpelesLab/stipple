@@ -26,6 +26,7 @@ use crate::geometry::{Affine, Point, Rect, Vec2};
 /// assert!(!t.is_identity());
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Transform {
     /// Offset in logical pixels, applied last.
     pub translate: Vec2,

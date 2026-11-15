@@ -59,6 +59,7 @@ use crate::geometry::{Point, Rect, Size, Transform, Vec2};
 /// # let _ = effect;
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Effect {
     /// The group opacity, from 0 (invisible) to 1, multiplied into the
     /// element's own.
@@ -121,6 +122,18 @@ impl Effect {
             },
             transition: self.transition,
         }
+    }
+
+    /// This effect at `opacity` (0: invisible, 1: the element's own).
+    pub fn opacity(mut self, opacity: f32) -> Self {
+        self.opacity = opacity;
+        self
+    }
+
+    /// This effect with `transform` in place of its own.
+    pub fn transform(mut self, transform: Transform) -> Self {
+        self.transform = transform;
+        self
     }
 
     /// Move with `transition` instead (any [`Transition`]: a tween, a spring).

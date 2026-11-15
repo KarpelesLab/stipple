@@ -178,9 +178,8 @@ pub fn scroll_horizontal<S>(cx: &mut Cx<S>, width: f64, content: Element) -> Ele
 /// An embedded-content viewport of `width`×`height` logical pixels for the
 /// given [`ViewportId`], framed with a hairline themed border. The app fills the
 /// reserved rect with externally-rendered pixels (a browser page, video, or a
-/// sandboxed content process's GPU surface) by locating it via
-/// [`collect_viewports`](crate::core::collect_viewports); until then a neutral
-/// placeholder shows. The `id` is caller-chosen so it stays stable across frames
+/// sandboxed content process's GPU surface) by locating it by `id`; until then
+/// a neutral placeholder shows. The `id` is caller-chosen so it stays stable across frames
 /// and correlates with the content source.
 pub fn viewport(theme: &Theme, id: ViewportId, width: f64, height: f64) -> Element {
     Element::viewport(id)
@@ -1141,14 +1140,15 @@ pub fn text_field<S>(
 ///
 /// ```
 /// # use stipple::widgets::{text_editor, EditBuffer};
-/// # use stipple::core::runtime::Cx;
+/// # use stipple::core::Cx;
 /// # use stipple::style::Theme;
 /// struct App { name: EditBuffer }
 /// let theme = Theme::light();
 /// let mut cx = Cx::new(&theme);
 /// let state = App { name: EditBuffer::from_text("hi") };
 /// let field = text_editor(&mut cx, &theme, &state.name, |s: &mut App| &mut s.name);
-/// assert!(field.focus.is_some() && field.text_pos.is_some());
+/// # drop(field);
+/// assert!(cx.into_handlers().len() >= 2); // its key and text-pointer handlers
 /// ```
 pub fn text_editor<S>(
     cx: &mut Cx<S>,

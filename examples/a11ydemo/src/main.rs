@@ -47,6 +47,8 @@ fn atspi_role(role: stipple::core::Role) -> u32 {
         Role::TabList => 53,       // ATSPI_ROLE_PAGE_TAB_LIST
         Role::PasswordField => 55, // ATSPI_ROLE_PASSWORD_TEXT
         Role::Dialog => 16,        // ATSPI_ROLE_DIALOG
+        // A role added later: a panel until it gets its own mapping.
+        _ => 54,
     }
 }
 

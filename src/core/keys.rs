@@ -31,7 +31,7 @@ pub struct RawKeyId(pub(crate) u32);
 /// How an element takes the keyboard, beyond its [`on_key`](Element::on_key)
 /// handler. Built with the `Element` methods below.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct KeyConfig {
+pub(crate) struct KeyConfig {
     /// The raw key handler.
     pub raw: Option<RawKeyId>,
     /// Tab and Shift+Tab stay with the element instead of moving focus.
@@ -52,6 +52,7 @@ pub struct KeyConfig {
 /// an element (its buttons, checkboxes, radio buttons, chips): see
 /// [`Element::focus_group`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum FocusGroup {
     /// The arrows move focus from one control to the next; each stays its
     /// own Tab stop, and Enter or Space presses it. A row of checkboxes or

@@ -49,15 +49,11 @@ pub struct MemoCache {
     values: HashMap<u64, (u64, Box<dyn Any>), Hashed>,
 }
 
+#[cfg(test)]
 impl MemoCache {
     /// How many subtrees are kept.
     pub fn len(&self) -> usize {
         self.subtrees.len()
-    }
-
-    /// Whether nothing is kept.
-    pub fn is_empty(&self) -> bool {
-        self.subtrees.is_empty() && self.values.is_empty()
     }
 }
 
@@ -519,7 +515,7 @@ impl<S> Cx<'_, S> {
     }
 
     /// Seed the memo cache from the previous build (see [`Cx::memo`]).
-    pub fn set_memo_cache(&mut self, cache: MemoCache) {
+    pub(crate) fn set_memo_cache(&mut self, cache: MemoCache) {
         self.memo.cache = cache;
         self.memo.used.clear();
         self.memo.values_used.clear();
@@ -528,13 +524,13 @@ impl<S> Cx<'_, S> {
     /// Hand over the previous build's handlers, for reused memoized subtrees
     /// to take theirs from (the app does this before each build). The ones
     /// not taken are dropped with this `Cx`.
-    pub fn set_previous_handlers(&mut self, handlers: Handlers<S>) {
+    pub(crate) fn set_previous_handlers(&mut self, handlers: Handlers<S>) {
         self.memo.prev = Some(handlers);
         self.memo.opened = None;
     }
 
     /// Take the memo cache back, dropping what this build didn't use.
-    pub fn take_memo_cache(&mut self) -> MemoCache {
+    pub(crate) fn take_memo_cache(&mut self) -> MemoCache {
         let mut cache = std::mem::take(&mut self.memo.cache);
         let used = std::mem::take(&mut self.memo.used);
         let values = std::mem::take(&mut self.memo.values_used);

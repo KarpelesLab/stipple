@@ -24,6 +24,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(widgets)* `Toasts::push_for` is replaced by `push` followed by `Toasts::dismiss_after(id, duration, &handle, field)`.
 - *(widgets)* `Column`, `TableSpec`, `TableState`, `TreeSpec`, `TreeRow`, `VirtualList`, `RowInfo`, `DisplayText` and `Toast` are `#[non_exhaustive]`, as are `NavBadge`, `NavIcon`, `NavLook`, `RowHeight`, `SelectionMode`, `TabIndicator`, `ToastKind`, `ToastPlacement` and `Variant`.
 - *(app)* `CloseResponse` is `#[non_exhaustive]`. The `FrameRenderer`, `MenuFn`, `ThemeFn`, `TrayFn`, `ViewFn`, `ViewportInputFn` and `WindowChangeFn` aliases are crate-internal (no public signature used them), and `stipple::Lifecycle` is only at its canonical path, `stipple::platform::Lifecycle` (and in the prelude).
+- *(core)* `Element`'s fields are private: build elements with their
+  constructors and modifiers. `LayoutStyle`, `SizeOverride`, `TextStyle`,
+  `ElementKind`, `Semantics`, `KeyConfig` and `Reactive` are internal.
+- *(core)* `LayoutNode`'s fields are private; read a laid-out tree with
+  `bounds()`, `children()`, `rtl()`, `transform()`, `opacity()`, `affine()`
+  and `to_local()`. `NodeContent` and `ScrollTargets` are internal.
+- *(core)* The runtime's plumbing is internal: the `*_at`, `find_*` and
+  `collect_*` tree queries (`hit_test`, `local_point` and `node_to_window`
+  stay), `diff_trees`, `apply_scroll`, `mark_native_states`, `caret_index_at`,
+  `paint_focus`, `paint_focus_look`, `paint_hover`, `paint_preedit`,
+  `ime_state`, `secure_focused`, `promote_tap_focus`, `MemoCache`,
+  `Handlers::dispatch_*` (`Handlers::dispatch` stays), and the `Cx` methods
+  the app drives a build with (`take_overlays`, `take_context_menus`,
+  `set_scroll_state`, `set_drop_states`, `take_drop_queried`,
+  `take_window_title`, `window_info_read`, `frame_requested`,
+  `set_window_size`, the memo-cache seeding), `ScrollRequests::take` and
+  `Menu`/`MenuBar`/`Tray::to_native`.
+- *(core)* One path per item: the `core::a11y`, `core::keys`, `core::menu`,
+  `core::runtime` and `core::tab_focus` modules are private (their public
+  items are at `stipple::core::*`). `Axis`, `LayoutDirection` and `Track` are
+  only at `stipple::layout` (and the prelude), `Font` only at
+  `stipple::render`, `set_pointer_modifiers` only at `stipple::platform`.
+- *(core)* `#[non_exhaustive]`: `Align`, `Anchor`, `KeyInput`,
+  `ViewportEvent`, `Role`, `FocusGroup`, `PointerEventKind`, `PinchPhase`,
+  `Damage` (match them with a `_` arm), and `BoxStyle`, `Effect`,
+  `OverlaySpec`, `Shortcut`, `AccessNode`, `DragMotion`, `DropState`,
+  `PointerEvent`, `WheelEvent`, `PinchEvent`, `PointerInfo`. Build a
+  `BoxStyle` with `BoxStyle::filled(color).radius(r).border(c, w)` and an
+  overlay with `OverlaySpec::new(content, anchor).modal(true).dismiss(id)`;
+  `Effect` gains `opacity()` and `transform()` setters, `DragMotion` a
+  `new()` for tests.
+- *(layout)* The flex and grid solvers (`Constraints`, `FlexItem`, `Span`,
+  `TrackItem`, `solve_main_axis`, `solve_tracks`, `break_lines`,
+  `place_cells`, `span_extent`, `mirror_spans`, `clamp_len`) are internal;
+  `Track` is `#[non_exhaustive]`.
+- *(geometry)* `Transform` is `#[non_exhaustive]`: start from
+  `Transform::IDENTITY` (or `default()`) and chain its builders.
+- *(anim)* `Easing` and `Motion` are `#[non_exhaustive]`, and so are
+  `Tween`, `Spring`, `SpringParams`, `Decay`, `Delay` and `Repeat`: build
+  them with `new`, the presets and the `AnimationExt` combinators.
+- *(render)* `Font::layout_in(text, size, max_width, ui)` drops its
+  `direction` parameter: it lays out with `TextDirection::Auto`, the only
+  direction the UI's affects (use `Font::layout` for an explicit one).
 
 ## [0.0.5](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.4...stipple-v0.0.5) - 2026-11-15
 

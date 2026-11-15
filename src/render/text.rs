@@ -337,17 +337,30 @@ impl Font {
         direction: TextDirection,
         max_width: Option<f64>,
     ) -> TextLayout<'a> {
-        self.layout_in(text, size_px, direction, max_width, LayoutDirection::Ltr)
+        self.layout_with(text, size_px, direction, max_width, LayoutDirection::Ltr)
     }
 
-    /// [`layout`](Self::layout) for text inside a UI laid out in `ui`
-    /// direction. Left to right it is the same as `layout`. Right to left,
-    /// with [`TextDirection::Auto`]: a paragraph with no strong character (an
-    /// empty field, a number) runs right to left instead of left to right,
-    /// and every line lines up against the right edge of the alignment width,
-    /// whatever its own direction. An explicit `Ltr` or `Rtl` direction is
-    /// laid out as `layout` would.
+    /// [`layout`](Self::layout) with [`TextDirection::Auto`], for text inside
+    /// a UI laid out in `ui` direction, as the widgets lay theirs out. Left to
+    /// right it is the same as `layout`. Right to left, a paragraph with no
+    /// strong character (an empty field, a number) runs right to left instead
+    /// of left to right, and every line lines up against the right edge of
+    /// the alignment width, whatever its own direction. (With an explicit
+    /// `Ltr` or `Rtl` direction the UI's makes no difference: use `layout`.)
     pub fn layout_in<'a>(
+        &'a self,
+        text: &'a str,
+        size_px: f64,
+        max_width: Option<f64>,
+        ui: LayoutDirection,
+    ) -> TextLayout<'a> {
+        self.layout_with(text, size_px, TextDirection::Auto, max_width, ui)
+    }
+
+    /// [`layout`](Self::layout) in direction `direction` inside a UI laid out
+    /// in `ui` direction: [`layout_in`](Self::layout_in) when `direction` is
+    /// `Auto`, `layout` otherwise.
+    pub(crate) fn layout_with<'a>(
         &'a self,
         text: &'a str,
         size_px: f64,
@@ -1305,21 +1318,21 @@ mod tests {
         // otherwise. The caret of an empty field sits at the right edge.
         for neutral in ["", " ", "123", "(42)"] {
             let mirrored = font
-                .layout_in(neutral, 16.0, TextDirection::Auto, None, rtl_ui)
+                .layout_in(neutral, 16.0, None, rtl_ui)
                 .with_align_width(120.0);
             assert!(mirrored.line_is_rtl(0), "{neutral:?}");
             let plain = font.layout(neutral, 16.0, TextDirection::Auto, None);
             assert!(!plain.line_is_rtl(0), "{neutral:?}");
         }
         let empty = font
-            .layout_in("", 16.0, TextDirection::Auto, None, rtl_ui)
+            .layout_in("", 16.0, None, rtl_ui)
             .with_align_width(120.0);
         assert_eq!(empty.caret_position(0).x, 120.0);
         // Latin text keeps its left-to-right reading order but lines up right;
         // each line of a multi-line text decides its own direction.
         let text = "abc\n12";
         let layout = font
-            .layout_in(text, 16.0, TextDirection::Auto, None, rtl_ui)
+            .layout_in(text, 16.0, None, rtl_ui)
             .with_align_width(300.0);
         assert!(!layout.line_is_rtl(0) && layout.line_is_rtl(1));
         let w = font.measure("abc", 16.0).width;
@@ -1327,17 +1340,11 @@ mod tests {
         assert!((layout.caret_position(3).x - 300.0).abs() < 0.01);
         // An explicit direction is laid out as `layout` would.
         let forced = font
-            .layout_in("abc", 16.0, TextDirection::Ltr, None, rtl_ui)
+            .layout_with("abc", 16.0, TextDirection::Ltr, None, rtl_ui)
             .with_align_width(300.0);
         assert!(forced.caret_position(0).x.abs() < 0.01);
         // Left to right, `layout_in` is `layout`.
-        let a = font.layout_in(
-            "abc אבג",
-            16.0,
-            TextDirection::Auto,
-            None,
-            LayoutDirection::Ltr,
-        );
+        let a = font.layout_in("abc אבג", 16.0, None, LayoutDirection::Ltr);
         let b = font.layout("abc אבג", 16.0, TextDirection::Auto, None);
         assert_eq!(a.caret_position(5), b.caret_position(5));
     }

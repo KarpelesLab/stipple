@@ -24,6 +24,7 @@ use crate::geometry::{Affine, Rect, ScaleFactor};
 
 /// What changed between two frames, in **logical** pixels.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Damage {
     /// Nothing changed; the previous frame is still valid (skip present).
     None,
@@ -86,7 +87,7 @@ impl Damage {
 /// Diff a previously-presented tree against the freshly built one, returning the
 /// damaged region. Pass trees laid out at the same root size; a size change
 /// should be treated as [`Damage::Full`] by the caller.
-pub fn diff_trees(old: &LayoutNode, new: &LayoutNode) -> Damage {
+pub(crate) fn diff_trees(old: &LayoutNode, new: &LayoutNode) -> Damage {
     let mut regions = Vec::new();
     diff_node(old, new, Affine::IDENTITY, Affine::IDENTITY, &mut regions);
     if regions.is_empty() {

@@ -135,7 +135,7 @@ Stipple is one crate, `stipple`, with these modules:
 | `stipple::geometry` | Logical-pixel math (Point, Size, Rect, Insets, Affine) |
 | `stipple::render` | Scene → oxideav `VectorFrame` → raster → `Surface`; fonts |
 | `stipple::platform` | Per-OS windowing, input, clipboard, file dialogs, accessibility bridges, shared memory + sandbox |
-| `stipple::layout` | Flex/box layout solver |
+| `stipple::layout` | Layout vocabulary: `Axis`, `LayoutDirection`, grid `Track`s |
 | `stipple::core` | Reactive runtime: `View`, `Element` IR, reconcile, events, a11y tree |
 | `stipple::anim` | Easing, tweens, springs |
 | `stipple::style` | Design tokens and themes (incl. Material 3) |

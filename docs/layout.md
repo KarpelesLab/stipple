@@ -93,7 +93,7 @@ its biggest child.
 
 ```rust
 let card = Element::layers(vec![
-    Element::boxed(BoxStyle { fill: Some(theme.palette.primary), ..BoxStyle::default() }),
+    Element::boxed(BoxStyle::filled(theme.palette.primary)),
     label(&theme, "Over the fill").padding(Insets::uniform(8.0)),
 ]);
 ```

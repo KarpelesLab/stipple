@@ -59,6 +59,7 @@ pub fn lerp(a: f64, b: f64, t: f64) -> f64 {
 /// Standard easing curves, mapping normalized time `t ∈ [0, 1]` to an eased
 /// progress value. Inputs are clamped to `[0, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Easing {
     #[default]
     Linear,
@@ -93,6 +94,7 @@ impl Easing {
 /// A time-driven interpolation between two values (`f64` unless another
 /// [`Animatable`] is given).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Tween<T = f64> {
     pub from: T,
     pub to: T,
@@ -134,6 +136,7 @@ impl<T: Animatable> Tween<T> {
 /// after the state in its fields. Generic over any [`Animatable`] (`f64` by
 /// default); the velocity is in the value's [`Vector`] space.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Spring<T: Animatable = f64> {
     pub position: T,
     pub velocity: T::Vector,

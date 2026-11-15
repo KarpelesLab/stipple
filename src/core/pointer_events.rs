@@ -18,6 +18,7 @@ pub struct PointerId(pub(crate) u32);
 
 /// What a [`PointerEvent`] reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PointerEventKind {
     /// A button went down over the element. The element then captures the
     /// pointer: it gets every move and release until the last button is up,
@@ -84,6 +85,7 @@ impl PointerButtons {
 /// A pointer event delivered to an element's
 /// [`on_pointer`](crate::core::Element::on_pointer) handler.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PointerEvent {
     /// What happened.
     pub kind: PointerEventKind,
@@ -132,6 +134,7 @@ impl PointerEvent {
 /// [`on_wheel`](crate::core::Element::on_wheel) handler (which then takes it
 /// instead of the scroll container it is in).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct WheelEvent {
     /// The horizontal delta: positive scrolls right (towards the end of the
     /// content), in `unit`s.
@@ -155,6 +158,7 @@ pub struct WheelEvent {
 
 /// Where a [`PinchEvent`] is in its gesture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PinchPhase {
     /// The second finger landed: the gesture starts (scale 1, no rotation or
     /// translation yet).
@@ -174,6 +178,7 @@ pub enum PinchPhase {
 /// once and each measured from where the gesture began, so a handler applies
 /// them to the value it had at [`Began`](PinchPhase::Began).
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct PinchEvent {
     /// Where the gesture is.
     pub phase: PinchPhase,

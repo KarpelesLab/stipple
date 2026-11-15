@@ -22,6 +22,7 @@ pub const DROP_FADE: Duration = Duration::from_millis(180);
 /// What a drag is doing to one drop target, as of the frame being built. See
 /// [`Cx::drop_state`](crate::core::Cx::drop_state).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct DropState {
     /// A drag is over the target now (it is the top-most drop target under
     /// the pointer).

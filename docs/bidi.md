@@ -94,7 +94,7 @@ text.
 same layout the widgets use. Draw it with `Scene::fill_layout`, and use
 `caret_position`, `index_at` and `selection_rects` for a custom editor.
 `Scene::fill_text` lays text out with `TextDirection::Auto`. In a mirrored
-layout, use `Font::layout_in(.., LayoutDirection::Rtl)` to get the same
+layout, use `Font::layout_in(text, size, max_width, LayoutDirection::Rtl)` to get the same
 alignment the widgets get (see below).
 
 ## Mirrored layouts

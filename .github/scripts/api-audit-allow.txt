@@ -9,18 +9,24 @@ stipple::geometry::Rect         # origin, size
 stipple::geometry::Vec2         # dx, dy
 stipple::geometry::Insets       # top, right, bottom, left
 stipple::render::Color          # r, g, b, a
-stipple::layout::Span           # offset, length
 stipple::geometry::Affine::new  # the six matrix coefficients, as in every 2D API
 stipple::render::Color::rgb     # red, green, blue, as in every color API
 stipple::render::Color::rgba    # red, green, blue, alpha
 stipple::render::Color::from_hsv # hue, saturation, value
+stipple::geometry::Insets::new  # top, right, bottom, left: CSS's order
+stipple::geometry::Rect::from_xywh # x, y, width, height, as in every 2D API
+stipple::anim::CubicBezier      # x1, y1, x2, y2: CSS cubic-bezier()'s control points
+stipple::anim::CubicBezier::new # CSS cubic-bezier()'s four numbers, in its order
+stipple::anim::Easing::cubic_bezier # the same, as an Easing
+stipple::anim::lerp             # lerp(a, b, t), the universal order
 
 # Closed enums: the set can't grow.
-stipple::core::Axis             # horizontal or vertical
+stipple::layout::Axis           # horizontal or vertical
 stipple::platform::ButtonState  # pressed or released
 stipple::widgets::SortOrder     # ascending or descending
 stipple::game::Corner           # four corners
 stipple::game::Stick            # left or right stick
 stipple::game::AxisDirection    # a whole axis or one of its two halves
-stipple::core::LayoutDirection  # left to right or right to left
 stipple::render::LineCap        # butt, round or square: the set SVG, canvas and PostScript share
+stipple::layout::LayoutDirection # left to right or right to left
+stipple::core::Handled          # a key was used or it wasn't
