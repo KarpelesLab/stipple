@@ -1370,6 +1370,76 @@ pub(crate) fn translate(node: &mut LayoutNode, by: Vec2) {
     }
 }
 
+/// Scroll the vertical scroll containers around focused node `focused`,
+/// innermost first, just far enough to show `field` (its box) or, when that
+/// doesn't fit, `caret`, with a small margin: what keeps a text field in view
+/// while it has focus. `offsets` takes the new offsets and the tree is moved
+/// to match (as [`apply_scroll`] does).
+pub(crate) fn reveal(
+    tree: &mut LayoutNode,
+    focused: FocusId,
+    caret: Rect,
+    field: Rect,
+    offsets: &mut std::collections::HashMap<ScrollId, f64>,
+) {
+    fn path(node: &LayoutNode, focused: FocusId, at: &mut Vec<usize>) -> bool {
+        if node.focus == Some(focused) {
+            return true;
+        }
+        for (i, child) in node.children.iter().enumerate() {
+            at.push(i);
+            if path(child, focused, at) {
+                return true;
+            }
+            at.pop();
+        }
+        false
+    }
+    let mut at = Vec::new();
+    if !path(tree, focused, &mut at) {
+        return;
+    }
+    const MARGIN: f64 = 8.0;
+    let (mut caret, mut field) = (caret, field);
+    for depth in (0..at.len()).rev() {
+        let mut node = &mut *tree;
+        for &i in &at[..depth] {
+            node = &mut node.children[i];
+        }
+        let Some(id) = node.scroll.filter(|_| !node.scroll_horizontal) else {
+            continue;
+        };
+        let view = node.bounds;
+        // The whole field when it fits, else its caret's line.
+        let want = if field.height() + 2.0 * MARGIN <= view.height() {
+            field
+        } else {
+            caret
+        };
+        let margin = MARGIN.min(((view.height() - want.height()) / 2.0).max(0.0));
+        let delta = if want.min_y() - margin < view.min_y() {
+            want.min_y() - margin - view.min_y()
+        } else if want.max_y() + margin > view.max_y() {
+            want.max_y() + margin - view.max_y()
+        } else {
+            continue;
+        };
+        let off = offsets.get(&id).copied().unwrap_or(0.0);
+        let new = (off + delta).clamp(0.0, scroll_range(node, off));
+        let moved = new - off;
+        if moved.abs() < f64::EPSILON {
+            continue;
+        }
+        offsets.insert(id, new);
+        let by = Vec2::new(0.0, -moved);
+        for child in &mut node.children {
+            translate(child, by);
+        }
+        caret = caret.translate(by);
+        field = field.translate(by);
+    }
+}
+
 /// `rect` reflected left to right within `within`: the same size, as far from
 /// `within`'s right edge as it was from its left.
 fn mirror_x(rect: Rect, within: Rect) -> Rect {

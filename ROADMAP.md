@@ -1203,6 +1203,18 @@ Most input only works on X11 today.
   cursor-anchor info for the candidate bar; selection moves from a non-empty
   selection or mid-composition are refused. See
   [docs/platforms/android.md](docs/platforms/android.md).
+- ✅ Keyboard hints and keyboard avoidance (#39): `input_kind`,
+  `autocapitalize`, `autocorrect`, `enter_action` and `autofill` on fields
+  map to `EditorInfo`, `UITextInputTraits` and the web's `inputmode` /
+  `enterkeyhint` / `autocapitalize` / `autocorrect` (tables unit-tested on
+  the host); `Next` moves focus everywhere. `Cx::keyboard_inset()` from iOS's
+  keyboard frame, Android's `ime()` insets and `visualViewport`; the view is
+  laid out above the keyboard and the focused field scrolled into view. *CI:
+  `androiddemo`'s barcode field restarts the connection as `inputType 0x2` /
+  `IME_ACTION_DONE` and its action submits; `touchdemo`'s iOS self-test
+  reads the number pad / Done traits after Next. The keyboard avoidance runs
+  in unit tests only (the simulator and emulator CI show no measured
+  keyboard).*
 - ⬜ Dead keys and compose on mobile hardware keyboards (iOS and Android).
 - 🚧 IME verification with a real input method. **X11**: IBus (`--xim`)
   with its keyboard engine and Mozc, required in CI (Mozc was informational

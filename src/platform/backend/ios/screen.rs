@@ -78,6 +78,117 @@ extern "C" fn status_bar_style(_this: Id, _cmd: Sel) -> i64 {
     }
 }
 
+// ---- The keyboard's frame -------------------------------------------------------
+
+/// How far up from the bottom of a view `bounds` tall the keyboard's frame
+/// `keyboard` (in the view's coordinates) reaches: zero when it is off the
+/// bottom (hidden), floating above it on an iPad, or empty.
+pub(crate) fn keyboard_overlap(bounds_height: f64, keyboard: CgRect) -> f64 {
+    let top = keyboard.origin.y;
+    let bottom = top + keyboard.size.height;
+    // A floating or split keyboard that doesn't reach the bottom edge
+    // covers no fixed strip: nothing to lay out above.
+    if keyboard.size.width <= 0.0 || keyboard.size.height <= 0.0 || bottom < bounds_height - 1.0 {
+        return 0.0;
+    }
+    (bounds_height - top).clamp(0.0, bounds_height)
+}
+
+/// `stippleKeyboardChanged:`, for `UIKeyboardWillChangeFrameNotification`
+/// and `UIKeyboardWillHideNotification`: the keyboard's end frame, in the
+/// view's coordinates, gives how much of the view it covers. The app hears
+/// of a change ([`Event::WindowChanged`]) and lays its view out above it.
+pub(super) extern "C" fn keyboard_changed(this: Id, _cmd: Sel, notification: Id) {
+    #[link(name = "UIKit", kind = "framework")]
+    unsafe extern "C" {
+        static UIKeyboardFrameEndUserInfoKey: Id;
+        static UIKeyboardWillHideNotification: Id;
+    }
+    let inset = unsafe {
+        let hiding = {
+            let name = msg_id(notification, sel("name"));
+            let eq: unsafe extern "C" fn(Id, Sel, Id) -> i8 =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            eq(
+                name,
+                sel("isEqualToString:"),
+                UIKeyboardWillHideNotification,
+            ) != 0
+        };
+        let info = msg_id(notification, sel("userInfo"));
+        let value = if info.is_null() {
+            std::ptr::null_mut()
+        } else {
+            let get: unsafe extern "C" fn(Id, Sel, Id) -> Id =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            get(info, sel("objectForKey:"), UIKeyboardFrameEndUserInfoKey)
+        };
+        if hiding || value.is_null() {
+            0.0
+        } else {
+            // In screen coordinates: into the view's.
+            let frame = msg_rect(value, sel("CGRectValue"));
+            let screen = msg_id(msg_id(this, sel("window")), sel("screen"));
+            let space = if screen.is_null() {
+                std::ptr::null_mut()
+            } else {
+                msg_id(screen, sel("coordinateSpace"))
+            };
+            let convert: unsafe extern "C" fn(Id, Sel, CgRect, Id) -> CgRect =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            let local = if space.is_null() {
+                convert(
+                    this,
+                    sel("convertRect:fromView:"),
+                    frame,
+                    std::ptr::null_mut(),
+                )
+            } else {
+                convert(this, sel("convertRect:fromCoordinateSpace:"), frame, space)
+            };
+            keyboard_overlap(msg_rect(this, sel("bounds")).size.height, local)
+        }
+    };
+    let changed = CTX.with(|c| {
+        let mut c = c.borrow_mut();
+        (std::mem::replace(&mut c.keyboard, inset) - inset).abs() > 0.5
+    });
+    if changed {
+        let size = CTX.with(|c| c.borrow().size);
+        call_handler(Event::WindowChanged, &IosWindow { size });
+    }
+}
+
+/// Have `view` hear the keyboard's frame changing (and it hiding).
+///
+/// # Safety
+/// `view` must be a live `StippleUIView`, which stays alive for the process.
+pub(super) unsafe fn observe_keyboard(view: Id) {
+    #[link(name = "UIKit", kind = "framework")]
+    unsafe extern "C" {
+        static UIKeyboardWillChangeFrameNotification: Id;
+        static UIKeyboardWillHideNotification: Id;
+    }
+    let add: unsafe extern "C" fn(Id, Sel, Id, Sel, Id, Id) =
+        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
+    unsafe {
+        let center = msg_id(class("NSNotificationCenter"), sel("defaultCenter"));
+        for name in [
+            UIKeyboardWillChangeFrameNotification,
+            UIKeyboardWillHideNotification,
+        ] {
+            add(
+                center,
+                sel("addObserver:selector:name:object:"),
+                view,
+                sel("stippleKeyboardChanged:"),
+                name,
+                std::ptr::null_mut(),
+            );
+        }
+    }
+}
+
 /// The root view controller's class.
 pub(super) fn register_controller_class() -> Class {
     let name = c"StippleViewController";

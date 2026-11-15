@@ -584,6 +584,19 @@ impl<'a, S> Cx<'a, S> {
         insets
     }
 
+    /// How far up from the window's bottom the on-screen keyboard reaches,
+    /// in logical pixels: zero while it is hidden, and on desktops. The view
+    /// is already laid out above it (the window's root gets the height left
+    /// over, and [`safe_area`](Self::safe_area)'s bottom shrinks by it), and
+    /// the focused text field is scrolled into view; read it to change the
+    /// view while the user types (hide a bottom bar, say). A view that reads
+    /// it is built again when it changes.
+    pub fn keyboard_inset(&mut self) -> f64 {
+        let inset = self.window_info.keyboard_inset;
+        self.memo.read_keyboard_inset(inset);
+        inset
+    }
+
     /// Whether the view read [`safe_area`](Self::safe_area) this build.
     pub(crate) fn safe_area_read(&self) -> bool {
         self.safe_area_read

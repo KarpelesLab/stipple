@@ -309,6 +309,9 @@ struct IosCtx {
     /// The safe area the app was last told about, in points (zero unless
     /// edge to edge).
     safe_area: crate::geometry::Insets,
+    /// How far up from the view's bottom the on-screen keyboard reaches, in
+    /// points (see [`screen::keyboard_changed`]).
+    keyboard: f64,
     /// Whether the view was placed once (and the app told its size).
     laid_out: bool,
     /// Whether the last frame's top-left pixel was light, for the status
@@ -450,6 +453,7 @@ unsafe fn show_window(window: Id) {
         msg_void_bool(view, sel("setMultipleTouchEnabled:"), true);
         msg_void_id(root, sel("addSubview:"), view);
         observe_reduce_motion(view);
+        screen::observe_keyboard(view);
         lifecycle::observe(view);
         let vc = msg_id(
             msg_id(screen::register_controller_class(), sel("alloc")),
@@ -1203,6 +1207,12 @@ fn register_view_class() -> Class {
             locale_changed as *const c_void,
             c"v@:@".as_ptr(),
         );
+        class_addMethod(
+            cls,
+            sel("stippleKeyboardChanged:"),
+            screen::keyboard_changed as *const c_void,
+            c"v@:@".as_ptr(),
+        );
         objc_registerClassPair(cls);
         cls
     }
@@ -1261,6 +1271,9 @@ impl Window for IosWindow {
     fn set_text_input_active(&self, active: bool) {
         set_text_input(active);
     }
+    fn set_input_hints(&self, hints: &crate::platform::InputHints) {
+        text_input::set_hints(*hints);
+    }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         text_input::set_state(state);
     }
@@ -1274,7 +1287,11 @@ impl Window for IosWindow {
     }
     fn info(&self) -> crate::platform::WindowInfo {
         let mut info = crate::platform::WindowInfo::from_size(self.size, self.scale_factor());
-        info.safe_area = CTX.with(|c| c.borrow().safe_area);
+        CTX.with(|c| {
+            let c = c.borrow();
+            info.safe_area = c.safe_area;
+            info.keyboard_inset = c.keyboard;
+        });
         info
     }
     fn set_keep_awake(&self, on: bool) {

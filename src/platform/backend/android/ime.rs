@@ -19,8 +19,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::classes;
 use super::jni::{self, Env, JObject, JValue, Jni};
 use super::{Command, log, post_command};
+use crate::platform::InputHints;
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers};
 use crate::platform::input_connection::{Editor, Sync};
+use crate::platform::input_hints::android;
 use crate::platform::window::ImeState;
 
 static EDITOR: Mutex<Editor> = Mutex::new(Editor::EMPTY);
@@ -33,15 +35,24 @@ fn editor() -> std::sync::MutexGuard<'static, Editor> {
     EDITOR.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-// EditorInfo constants.
-const TYPE_CLASS_TEXT: i32 = 0x1;
-const TYPE_TEXT_FLAG_CAP_SENTENCES: i32 = 0x4000;
-const TYPE_TEXT_VARIATION_PASSWORD: i32 = 0x80;
-const IME_ACTION_DONE: i32 = 6;
-const IME_ACTION_NEXT: i32 = 5;
+/// The focused field's keyboard hints, from `Window::set_input_hints`.
+static HINTS: Mutex<InputHints> = Mutex::new(InputHints {
+    kind: crate::platform::InputKind::Text,
+    autocapitalize: None,
+    autocorrect: None,
+    action: None,
+    autofill: None,
+    multiline: false,
+    secure: false,
+});
+
+fn hints() -> InputHints {
+    *HINTS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+// EditorInfo's action codes (the rest are in `input_hints::android`).
+const IME_ACTION_NEXT: i32 = android::IME_ACTION_NEXT;
 const IME_ACTION_PREVIOUS: i32 = 7;
-const IME_FLAG_NO_FULLSCREEN: i32 = 0x0200_0000;
-const IME_FLAG_NO_EXTRACT_UI: i32 = 0x1000_0000;
 
 // ---- The UI thread's side ------------------------------------------------------
 
@@ -49,6 +60,12 @@ const IME_FLAG_NO_EXTRACT_UI: i32 = 0x1000_0000;
 /// method.
 pub(super) fn sync(state: Option<&ImeState>) -> Sync {
     editor().sync(state)
+}
+
+/// The focused field's keyboard hints. Returns whether they changed.
+pub(super) fn set_hints(new: InputHints) -> bool {
+    let mut h = HINTS.lock().unwrap_or_else(|e| e.into_inner());
+    std::mem::replace(&mut *h, new) != new
 }
 
 /// Whether a text input has focus. Returns whether that changed.
@@ -169,7 +186,8 @@ pub(super) fn soft_input(jni: &Jni, show: bool) -> bool {
 /// Drive the host view's `InputConnection` from the app, the way an input
 /// method would (through the Java objects, so through the natives' binding),
 /// and log what the editable reads back. For CI, which has no composing
-/// keyboard to type with; needs a focused text field.
+/// keyboard to type with; needs a focused text field. On a field with an
+/// action key, it presses that instead (`performEditorAction`).
 pub(super) fn self_test(jni: &Jni) {
     let view = classes::host().view.get();
     let result = (|| {
@@ -184,6 +202,15 @@ pub(super) fn self_test(jni: &Jni) {
             return Some("no connection (no text field has focus)".to_string());
         };
         let input_type = jni.int_field(info, c"inputType")?;
+        let ime_options = jni.int_field(info, c"imeOptions")?;
+        // A field with an action key: press it, as the keyboard would.
+        if hints().action.is_some() {
+            let action = ime_options & 0xff;
+            jni.call_bool(ic, c"performEditorAction", c"(I)Z", &[JValue { i: action }])?;
+            return Some(format!(
+                "inputType 0x{input_type:x}, imeOptions 0x{ime_options:x}, action {action}"
+            ));
+        }
         let text = |s: &str| jni.string16(s);
         let seq = c"(Ljava/lang/CharSequence;I)Z";
         jni.call_bool(
@@ -222,8 +249,8 @@ pub(super) fn self_test(jni: &Jni) {
         jni.call_bool(ic, c"finishComposingText", c"()Z", &[])?;
         let finished = before(jni, ic)?;
         Some(format!(
-            "inputType 0x{input_type:x}, composing {composing:?}, committed {committed:?}, \
-             deleted {deleted:?}, finished {finished:?}"
+            "inputType 0x{input_type:x}, imeOptions 0x{ime_options:x}, composing {composing:?}, \
+             committed {committed:?}, deleted {deleted:?}, finished {finished:?}"
         ))
     })();
     log(&format!(
@@ -288,17 +315,12 @@ pub(super) unsafe extern "C" fn on_create_input_connection(
                 let ed = editor();
                 (!ed.is_focused(), ed.selection16())
             };
-            let input_type = if password {
-                TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD
-            } else {
-                TYPE_CLASS_TEXT | TYPE_TEXT_FLAG_CAP_SENTENCES
-            };
+            let mut hints = hints();
+            hints.secure |= password;
+            let input_type = android::input_type(&hints);
+            let ime_options = android::ime_options(&hints);
             jni.set_int_field(info, c"inputType", input_type)?;
-            jni.set_int_field(
-                info,
-                c"imeOptions",
-                IME_ACTION_DONE | IME_FLAG_NO_FULLSCREEN | IME_FLAG_NO_EXTRACT_UI,
-            )?;
+            jni.set_int_field(info, c"imeOptions", ime_options)?;
             jni.set_int_field(info, c"initialSelStart", start)?;
             jni.set_int_field(info, c"initialSelEnd", end)?;
             let ic = jni.new_object(
@@ -307,7 +329,8 @@ pub(super) unsafe extern "C" fn on_create_input_connection(
                 &[JValue { l: this }, JValue { z: 0 }],
             )?;
             log(&format!(
-                "stipple: input connection created (inputType 0x{input_type:x}, selection {start}..{end})"
+                "stipple: input connection created (inputType 0x{input_type:x}, \
+                 imeOptions 0x{ime_options:x}, selection {start}..{end})"
             ));
             Some(ic)
         })
@@ -445,15 +468,18 @@ pub(super) unsafe extern "C" fn get_cursor_caps_mode(_env: Env, _this: JObject, 
 }
 
 /// The keyboard's action key (Done, Next, ...) as the key it stands for:
-/// Next and Previous move focus like Tab and Shift+Tab, the rest press Enter.
+/// Enter, which submits the field, and for a field whose action is Next
+/// also moves focus on (the App does that). Next on a field that didn't
+/// ask for it, and Previous, move focus like Tab and Shift+Tab.
 pub(super) unsafe extern "C" fn perform_editor_action(
     _env: Env,
     _this: JObject,
     action: i32,
 ) -> u8 {
     send(editor().finish_composing());
+    let asked = hints().enter() == Some(crate::platform::EnterAction::Next);
     match action {
-        IME_ACTION_NEXT => key(KeyCode::Tab, Modifiers::default()),
+        IME_ACTION_NEXT if !asked => key(KeyCode::Tab, Modifiers::default()),
         IME_ACTION_PREVIOUS => key(
             KeyCode::Tab,
             Modifiers {

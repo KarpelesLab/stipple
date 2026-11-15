@@ -40,6 +40,82 @@ text_area(cx, &state.notes, |s| &mut s.notes);
   `buffer()` and `buffer_mut()` reach the `EditBuffer` (caret, selection,
   direction, undo).
 
+## Keyboard hints
+
+On a phone the field picks the on-screen keyboard. Tell it what the field
+takes:
+
+```rust
+text_field(cx, &state.code, |s| &mut s.code)
+    .placeholder("EAN-13")
+    .input_kind(InputKind::Number)      // a number pad
+    .enter_action(EnterAction::Done)    // the action key says Done
+    .on_submit(cx, |s| lookup(s.code.text()));
+text_field(cx, &state.email, |s| &mut s.email)
+    .input_kind(InputKind::Email)
+    .autofill(Autofill::Email)
+    .enter_action(EnterAction::Next);   // Return moves on to the next field
+```
+
+- `.input_kind(..)`: `Text` (the default), `Number` (digits: barcodes,
+  PINs, postal codes), `Decimal`, `Phone`, `Email`, `Url` or `Search`. Only
+  `Text` is capitalized and corrected by default; the other kinds type
+  exactly what was pressed. It's a hint, not a filter: a hardware keyboard
+  or a paste can still put any text in the field.
+- `.autocapitalize(Autocapitalize::Off | Characters | Words | Sentences)`
+  and `.autocorrect(false)` override the kind's defaults (a code typed in
+  capitals: `Characters` and `autocorrect(false)`). A password never gets
+  either, whatever is asked.
+- `.enter_action(EnterAction::Done | Go | Next | Search | Send)`: the action
+  key's label. Each submits the field (its `on_submit` handlers run, as
+  Enter does). `Next` then moves focus to the next field, like Tab, on every
+  platform (Enter on a desktop too). In a `text_area` Enter stays a new line,
+  and only `Next` takes effect (moving on without one). `Search` is the
+  default for `InputKind::Search`.
+- `.autofill(..)`: what the field holds, for the system's autofill
+  (`Username`, `Password`, `NewPassword`, `OneTimeCode`, `Email`, `Phone`,
+  `Name`, `PostalCode`, `StreetAddress`, `Url`): iOS's `textContentType` and
+  the web's `autocomplete`.
+- On a `password_field` the same hints apply, masked: `.input_kind(Number)`
+  makes a PIN pad.
+
+| | Keyboard | Capitals and corrections | Action key | Autofill |
+|---|---|---|---|---|
+| Android | `EditorInfo.inputType`: `TYPE_CLASS_NUMBER` (with `FLAG_DECIMAL`), `TYPE_CLASS_PHONE`, `TYPE_CLASS_TEXT` with the e-mail or URI variation; the password variations for a password field | `TYPE_TEXT_FLAG_CAP_*`, `AUTO_CORRECT` or `NO_SUGGESTIONS` | `imeOptions`: `IME_ACTION_DONE` (the default), `GO`, `NEXT`, `SEARCH`, `SEND`; a text area `IME_FLAG_NO_ENTER_ACTION` | not passed |
+| iOS | `keyboardType`: number pad, decimal pad, phone pad, e-mail, URL, web search; `secureTextEntry` for a password field | `autocapitalizationType`, `autocorrectionType`, `spellCheckingType` | `returnKeyType`: Done, Go, Next, Search, Send (Return by default) | `textContentType` |
+| Web | the hidden textarea's `inputmode` (`numeric`, `decimal`, `tel`, `email`, `url`, `search`) | `autocapitalize`, `autocorrect`, `spellcheck` | `enterkeyhint` | `autocomplete` |
+| Desktops | ignored: there is no on-screen keyboard | ignored | `Next` moves focus on Enter | ignored |
+
+When focus moves to a field with other hints, the keyboard changes with it
+(Android restarts the input connection, iOS reloads the input views).
+
+## The on-screen keyboard
+
+While the on-screen keyboard is up, the App lays the view out in the part
+of the window above it, as if the window were that much shorter, and keeps
+the focused field in view: each scroll container around it scrolls just far
+enough to show the field (or its caret's line, when the field is taller
+than the room left). It does so again whenever focus moves, the caret moves
+or the keyboard changes size, so a field the user scrolled away stays there
+until they type. `Cx::keyboard_inset()` gives the keyboard's height over
+the window's bottom in logical pixels (zero while it's hidden, and on
+desktops), for a view that wants to change while the user types (hide a tab
+bar); `Cx::safe_area()`'s bottom shrinks by it, since the home indicator is
+under the keyboard.
+
+- **iOS**: from `UIKeyboardWillChangeFrameNotification` and
+  `UIKeyboardWillHideNotification`, the keyboard's end frame converted to the
+  view's coordinates (a floating or split iPad keyboard that doesn't reach
+  the bottom covers nothing).
+- **Android**: the `ime()` window insets (the system window insets before
+  Android 11), both edge to edge and not. The app's content no longer shrinks
+  for the keyboard in the backend; the App lays the view out above it as on
+  iOS. On older Androids that resize the window themselves, the inset is
+  zero.
+- **Web**: `visualViewport`: what of the canvas lies below the visual
+  viewport's bottom (a phone browser shrinks the visual viewport, not the
+  layout viewport, for the keyboard).
+
 A raw key hook isn't part of a field: an element of your own can take keys
 with `Element::on_key`, and `Element::on_raw_key` sees physical keys (see
 [keyboard.md](keyboard.md)).

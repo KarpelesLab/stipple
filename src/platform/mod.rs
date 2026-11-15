@@ -78,6 +78,8 @@ mod input;
 /// Android's `InputConnection` model of a Stipple text field.
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod input_connection;
+/// The on-screen keyboard's hints for a text field, and their platform tables.
+pub(crate) mod input_hints;
 /// Raw key events: physical keys, key text, left/right modifiers, repeat.
 mod key;
 /// X11 keysym names and their Unicode characters (generated table).
@@ -143,6 +145,8 @@ pub use event::{
     SCROLL_LINE_PX, ScrollDelta, ScrollPhase, ScrollUnit, Touch, TouchPhase, WindowId,
     file_uri_to_path, parse_uri_list, path_to_file_uri, uri_list,
 };
+pub(crate) use input_hints::InputHints;
+pub use input_hints::{Autocapitalize, Autofill, EnterAction, InputKind};
 pub use key::{
     KeyEvent, KeyLocation, ModifierSides, OptionAsMeta, PhysicalKey, consume_key, handle_back,
 };

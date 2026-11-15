@@ -30,6 +30,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `STIPPLE_IOS_*`. See `docs/packaging.md`. CI packages `touchdemo` and
   `androiddemo`, launches the simulator `.app`, and has bundletool validate
   and split the bundle.
+- Keyboard hints on text fields (#39): `.input_kind(InputKind::Number)`
+  (and `Decimal`, `Phone`, `Email`, `Url`, `Search`), `.autocapitalize(..)`,
+  `.autocorrect(bool)`, `.enter_action(EnterAction::Done)` (and `Go`, `Next`,
+  `Search`, `Send`) and `.autofill(Autofill::OneTimeCode)` (and others) on a
+  `text_field`, `text_area` or `password_field`. They become Android's
+  `EditorInfo.inputType` and `imeOptions`, iOS's `UITextInputTraits`
+  (`keyboardType`, `autocapitalizationType`, `autocorrectionType`,
+  `returnKeyType`, `secureTextEntry`, `textContentType`) and the web
+  textarea's `inputmode`, `enterkeyhint`, `autocapitalize`, `autocorrect`,
+  `spellcheck` and `autocomplete`; desktops ignore them. Only plain text is
+  capitalized and corrected by default. Each action key submits the field;
+  `Next` then moves focus on (Enter too, on every platform).
+- Keyboard avoidance (#39, the rest of #38): `WindowInfo::keyboard_inset`
+  and `Cx::keyboard_inset()` give the on-screen keyboard's height (iOS's
+  keyboard frame notifications, Android's `ime()` insets, the web's
+  `visualViewport`). The App lays the view out above it, shrinks the safe
+  area's bottom by it, and scrolls the focused text field's scroll
+  containers just far enough to show it (whenever focus, the caret or the
+  keyboard changes, on every platform).
 
 - Packaged assets (#59): `platform::assets()` reads files the app was
   packaged with by relative path (`read`, `open` as a `Read + Seek` reader,
@@ -198,6 +217,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- Android: the content rectangle no longer shrinks for the soft keyboard;
+  its height is `keyboard_inset` and the App lays the view out above it,
+  as on iOS and the web. A plain text field's `inputType` is now
+  `0xc001` (sentences capitalized, auto-correct) instead of `0x4001`.
 - `NavigationBar::bottom_inset` is gone: the bar takes the window's safe
   area by itself.
 - `MotionTokens` has two more fields, `page` and `sheet`.

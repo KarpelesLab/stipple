@@ -1277,6 +1277,17 @@ impl View {
         crate::geometry::Insets::new(l(r.top), l(r.right), l(r.bottom), l(r.left))
     }
 
+    /// How far up from the content's bottom the keyboard reaches, in
+    /// logical pixels.
+    fn keyboard_inset(&self) -> f64 {
+        let px = insets::keyboard(
+            self.window_size.get(),
+            self.content_rect(),
+            self.insets.get(),
+        );
+        f64::from(px) / self.scale.get()
+    }
+
     /// Ask the main thread to read the window's insets again.
     fn request_insets(&self) {
         let sdk = unsafe { (*self.instance.activity).sdk_version };
@@ -1510,6 +1521,13 @@ impl Window for AndroidWindow {
                 .request_ime(crate::platform::input_connection::Sync::Restart);
         }
     }
+    fn set_input_hints(&self, hints: &crate::platform::InputHints) {
+        // A field wanting another keyboard: the input method starts over.
+        if ime::set_hints(*hints) && self.view.text_input.get() {
+            self.view
+                .request_ime(crate::platform::input_connection::Sync::Restart);
+        }
+    }
     fn set_ime(&self, state: Option<&crate::platform::window::ImeState>) {
         let what = ime::sync(state);
         if what != crate::platform::input_connection::Sync::Unchanged {
@@ -1529,6 +1547,7 @@ impl Window for AndroidWindow {
         let mut info =
             crate::platform::WindowInfo::from_size(self.inner_size(), self.scale_factor());
         info.safe_area = self.view.safe_area();
+        info.keyboard_inset = self.view.keyboard_inset();
         info
     }
     fn set_keep_awake(&self, on: bool) {
@@ -1674,6 +1693,10 @@ impl Loop<'_> {
                     log(&format!(
                         "Stipple Android: safe area {} {} {} {} edge {}",
                         safe.top, safe.right, safe.bottom, safe.left, self.view.edge_to_edge
+                    ));
+                    log(&format!(
+                        "Stipple Android: keyboard inset {}",
+                        self.view.keyboard_inset()
                     ));
                     if self.view.inner_size() != before {
                         self.resized();

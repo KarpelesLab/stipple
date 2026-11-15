@@ -21,8 +21,9 @@ pub(crate) struct WindowInsets {
 
 /// The content rectangle: the window (or, unless edge to edge, the content
 /// rectangle `NativeActivity` reports, which shrinks for the keyboard on
-/// older Androids) less the system bars unless edge to edge, and less the
-/// keyboard. The whole window if that leaves nothing.
+/// older Androids) less the system bars unless edge to edge. The keyboard
+/// doesn't shrink it: the App lays the view out above
+/// [`keyboard`]. The whole window if that leaves nothing.
 pub(crate) fn content_rect(
     window: (i32, i32),
     native: Option<ARect>,
@@ -52,12 +53,20 @@ pub(crate) fn content_rect(
         r.right = r.right.min(w - b.right);
         r.bottom = r.bottom.min(h - b.bottom);
     }
-    r.bottom = r.bottom.min(h - insets.ime);
     if r.right > r.left && r.bottom > r.top {
         r
     } else {
         full
     }
+}
+
+/// How far up from `content`'s bottom the keyboard reaches, in window
+/// pixels (zero when the content already ends above it).
+pub(crate) fn keyboard(window: (i32, i32), content: ARect, insets: WindowInsets) -> i32 {
+    if insets.ime <= 0 {
+        return 0;
+    }
+    (content.bottom - (window.1 - insets.ime)).clamp(0, content.bottom - content.top)
 }
 
 /// What of the system bars still overlaps `content`, in window pixels from
@@ -103,15 +112,30 @@ mod tests {
         let r = content_rect(PHONE, full, insets, true);
         assert_eq!((r.top, r.bottom), (0, 2400));
         assert_eq!(safe_area(PHONE, r, insets), BARS);
-        // The keyboard up: the content ends above it, with nothing of the
-        // navigation bar left under it.
+        // The keyboard up: the content stays, and the keyboard covers its
+        // bottom 900 pixels (the App lays the view out above them; the
+        // navigation bar under it is covered too).
         let typing = WindowInsets {
             bars: BARS,
             ime: 900,
         };
         let r = content_rect(PHONE, full, typing, true);
-        assert_eq!(r.bottom, 1500);
-        assert_eq!(safe_area(PHONE, r, typing).bottom, 0);
+        assert_eq!(r.bottom, 2400);
+        assert_eq!(keyboard(PHONE, r, typing), 900);
         assert_eq!(safe_area(PHONE, r, typing).top, 120);
+        // Not edge to edge, the content ends above the navigation bar, which
+        // the keyboard's height includes.
+        let r = content_rect(PHONE, full, typing, false);
+        assert_eq!(keyboard(PHONE, r, typing), 900 - 63);
+        // An older Android shrinking the content for the keyboard itself.
+        let shrunk = Some(ARect {
+            left: 0,
+            top: 0,
+            right: 1080,
+            bottom: 1500,
+        });
+        let r = content_rect(PHONE, shrunk, typing, false);
+        assert_eq!(keyboard(PHONE, r, typing), 0);
+        assert_eq!(keyboard(PHONE, r, insets), 0);
     }
 }

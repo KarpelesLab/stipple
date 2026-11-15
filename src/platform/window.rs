@@ -193,6 +193,12 @@ pub struct WindowInfo {
     /// desktops. Read it from a view with
     /// [`Cx::safe_area`](crate::core::Cx::safe_area).
     pub safe_area: Insets,
+    /// How far up from the bottom of the content area the on-screen
+    /// keyboard covers it, in logical pixels: zero while it is hidden, and
+    /// on desktops. The App lays the view out above it and keeps the
+    /// focused text field in view; read it from a view with
+    /// [`Cx::keyboard_inset`](crate::core::Cx::keyboard_inset).
+    pub keyboard_inset: f64,
 }
 
 impl WindowInfo {
@@ -209,6 +215,7 @@ impl WindowInfo {
             fullscreen: false,
             work_area: None,
             safe_area: Insets::ZERO,
+            keyboard_inset: 0.0,
         }
     }
 
@@ -677,6 +684,12 @@ pub trait Window {
     /// its on-screen keyboard (and hide it again). The app calls this after
     /// each frame it presents. Default: a no-op. Honored on Android.
     fn set_text_input_active(&self, _active: bool) {}
+    /// The focused text field's hints for the on-screen keyboard (its
+    /// kind, capitalization, corrections, action key and autofill). The App
+    /// calls this when they change, before [`set_ime`](Self::set_ime) and
+    /// [`set_text_input_active`](Self::set_text_input_active). Default: a
+    /// no-op (desktops); honored on Android, iOS and the web.
+    fn set_input_hints(&self, _hints: &crate::platform::InputHints) {}
     /// Whether the window takes the drag that is over it, at the position of
     /// the last [`Event::DragEnter`](crate::platform::Event::DragEnter) or
     /// [`Event::DragOver`](crate::platform::Event::DragOver). Call it while

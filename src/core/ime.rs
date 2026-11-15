@@ -95,6 +95,43 @@ pub(crate) fn secure_focused(tree: &LayoutNode, focused: Option<FocusId>) -> boo
         == Some(crate::core::a11y::Role::PasswordField)
 }
 
+/// The focused text field's hints for the on-screen keyboard, or `None` when
+/// the focused element doesn't take text. A password field's are marked
+/// secure.
+pub(crate) fn input_hints(
+    tree: &LayoutNode,
+    focused: Option<FocusId>,
+) -> Option<crate::platform::InputHints> {
+    let focused = focused?;
+    entry_leaf(tree, focused)?;
+    let node = find_focus(tree, focused)?;
+    let semantics = node.semantics.as_ref();
+    let mut hints = semantics.and_then(|s| s.input).unwrap_or_default();
+    hints.secure = semantics.and_then(|s| s.role) == Some(crate::core::a11y::Role::PasswordField);
+    Some(hints)
+}
+
+/// The focused text field's caret rectangle (the start of the composition
+/// while composing) in window coordinates, and the field's box: what is
+/// scrolled into view while it has focus. `None` when the focused element
+/// doesn't take text.
+pub(crate) fn focused_caret(
+    tree: &LayoutNode,
+    focused: Option<FocusId>,
+    font: Option<&Font>,
+) -> Option<(Rect, Rect, usize)> {
+    let focused = focused?;
+    let leaf = entry_leaf(tree, focused)?;
+    let NodeContent::Text { text, .. } = &leaf.content else {
+        return None;
+    };
+    let caret = leaf.caret.unwrap_or(text.len()).min(text.len());
+    let at = leaf.preedit.map_or(caret, |(s, _)| s);
+    let (x, y, h) = position(leaf, font, at)?;
+    let field = find_focus(tree, focused).map_or(leaf.bounds, |n| n.bounds);
+    Some((Rect::from_xywh(x, y, 2.0, h), field, at))
+}
+
 /// What the input method should know about the focused field, or `None` when
 /// the focused element doesn't take text (which disables the IME). A
 /// password field takes text without one, so it gets `None` too.
@@ -112,8 +149,7 @@ pub(crate) fn ime_state(
     };
     // The candidate window goes by the start of the composition, else the caret.
     let caret = leaf.caret.unwrap_or(text.len()).min(text.len());
-    let at = leaf.preedit.map_or(caret, |(s, _)| s);
-    let (x, y, h) = position(leaf, font, at)?;
+    let (cursor_area, _, _) = focused_caret(tree, focused, font)?;
     // The text without the preedit, and the caret and anchor in it.
     let (surrounding, cursor, anchor) = match leaf.preedit {
         Some((s, e)) if e <= text.len() && s <= e => {
@@ -136,7 +172,7 @@ pub(crate) fn ime_state(
         }
     };
     Some(ImeState {
-        cursor_area: Rect::from_xywh(x, y, 2.0, h),
+        cursor_area,
         surrounding,
         cursor,
         anchor,

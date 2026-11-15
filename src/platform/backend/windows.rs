@@ -612,6 +612,7 @@ fn read_info(hwnd: Hwnd, prev: Option<WindowInfo>) -> WindowInfo {
         fullscreen,
         work_area,
         safe_area: crate::geometry::Insets::ZERO,
+        keyboard_inset: 0.0,
     };
     if minimized && let Some(prev) = prev {
         info.position = prev.position;

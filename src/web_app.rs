@@ -155,6 +155,11 @@ macro_rules! web_app {
             }
 
             #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_keyboard_inset(inset: f64) {
+                glue::keyboard_inset(inset);
+            }
+
+            #[unsafe(no_mangle)]
             pub extern "C" fn stipple_focus(focused: u32) {
                 glue::focus(focused != 0);
             }

@@ -78,6 +78,7 @@ pub(super) unsafe fn read_info(window: Id, view: Id) -> WindowInfo {
             fullscreen: msg_u64(window, sel("styleMask")) & STYLE_FULLSCREEN != 0,
             work_area,
             safe_area: crate::geometry::Insets::ZERO,
+            keyboard_inset: 0.0,
         }
     }
 }

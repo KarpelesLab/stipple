@@ -28,6 +28,7 @@
 //! | `set_a11y(ptr, len)` | the ARIA overlay, from the accessibility tree as JSON (see [`aria_json`](crate::platform::access::aria_json)) |
 //! | `set_ime(active, x, y, w, h)` | moves the hidden `<textarea>` that takes composition to the caret (CSS pixels) |
 //! | `set_text_input(active)` | the textarea's `inputmode`, which shows or hides a touch keyboard |
+//! | `set_input_hints(ptr, len)` | the focused field's keyboard hints, as `name=value;…` attributes for the textarea (`inputmode`, `enterkeyhint`, `autocapitalize`, `autocorrect`, `spellcheck`, `autocomplete`) |
 //! | `open_url(ptr, len)` | `window.open(url, "_blank", "noopener")` |
 //! | `notify(title, title_len, body, body_len)` | a `Notification`, asking for permission first if needed |
 //! | `save_state(ptr, len)` | keeps the app's saved state in the tab's `sessionStorage` (`len` 0 removes it) |
@@ -38,7 +39,9 @@
 //! The page also reports the canvas's safe area, the part of it under a
 //! phone's notch, status bar or home indicator (`env(safe-area-inset-*)`,
 //! nonzero only on a page with `viewport-fit=cover`), through
-//! `stipple_safe_area(top, right, bottom, left)`.
+//! `stipple_safe_area(top, right, bottom, left)`, and how far up from its
+//! bottom the on-screen keyboard reaches (from `visualViewport`) through
+//! `stipple_keyboard_inset(px)`.
 //! | `date_now() -> f64` | `Date.now()` |
 //! | `share_file(name, name_len, mime, mime_len, data, data_len)` | keeps a `File` for the next `share` |
 //! | `share(id, title, title_len, text, text_len, url, url_len)` | `navigator.share` with the files kept; answers `stipple_answer(id, 0 shared / 1 cancelled / 2 unavailable)` |
@@ -87,6 +90,7 @@ mod js {
         pub fn set_a11y(ptr: *const u8, len: usize);
         pub fn set_ime(active: u32, x: f64, y: f64, width: f64, height: f64);
         pub fn set_text_input(active: u32);
+        pub fn set_input_hints(ptr: *const u8, len: usize);
         pub fn open_url(ptr: *const u8, len: usize);
         pub fn notify(title: *const u8, title_len: usize, body: *const u8, body_len: usize);
         pub fn message_box(confirm: u32, ptr: *const u8, len: usize) -> u32;
@@ -213,6 +217,8 @@ struct Host {
     started: Cell<bool>,
     /// The canvas's safe area, in CSS pixels.
     safe_area: Cell<Insets>,
+    /// How far up from the canvas's bottom the on-screen keyboard reaches.
+    keyboard: Cell<f64>,
 }
 
 thread_local! {
@@ -232,6 +238,7 @@ thread_local! {
             primary: Cell::new(None),
             started: Cell::new(false),
             safe_area: Cell::new(Insets::ZERO),
+            keyboard: Cell::new(0.0),
         }
     };
 }
@@ -363,7 +370,10 @@ impl Window for WebWindow {
     fn info(&self) -> crate::platform::WindowInfo {
         let mut info =
             crate::platform::WindowInfo::from_size(self.inner_size(), self.scale_factor());
-        info.safe_area = HOST.with(|h| h.safe_area.get());
+        HOST.with(|h| {
+            info.safe_area = h.safe_area.get();
+            info.keyboard_inset = h.keyboard.get();
+        });
         info
     }
 
@@ -407,6 +417,11 @@ impl Window for WebWindow {
             }
             None => unsafe { js::set_ime(0, 0.0, 0.0, 0.0, 0.0) },
         }
+    }
+
+    fn set_input_hints(&self, hints: &crate::platform::InputHints) {
+        let attrs = crate::platform::input_hints::web_attributes(hints);
+        unsafe { js::set_input_hints(attrs.as_ptr(), attrs.len()) }
     }
 
     fn set_text_input_active(&self, active: bool) {
@@ -829,6 +844,17 @@ pub fn color_scheme(dark: bool, accent: i32) {
 pub fn safe_area(top: f64, right: f64, bottom: f64, left: f64) {
     let insets = Insets::new(top.max(0.0), right.max(0.0), bottom.max(0.0), left.max(0.0));
     let changed = HOST.with(|h| h.safe_area.replace(insets)) != insets;
+    if changed && HOST.with(|h| h.handler.borrow().is_some()) {
+        deliver(Event::WindowChanged);
+    }
+}
+
+/// How far up from the canvas's bottom the on-screen keyboard reaches (CSS
+/// pixels), from the page's `visualViewport`.
+#[doc(hidden)]
+pub fn keyboard_inset(inset: f64) {
+    let inset = inset.max(0.0);
+    let changed = HOST.with(|h| h.keyboard.replace(inset)) != inset;
     if changed && HOST.with(|h| h.handler.borrow().is_some()) {
         deliver(Event::WindowChanged);
     }

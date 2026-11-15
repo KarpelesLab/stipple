@@ -133,7 +133,17 @@ keyboard, and it resigns when focus leaves. `insertText:` types (a newline is
 Enter) and `deleteBackward` is Backspace. A hardware keyboard types the same
 way; its arrows, Home/End, Page Up/Down, Escape, Tab, Delete, F-keys and
 Ctrl/Cmd shortcuts arrive as key events through `pressesBegan:withEvent:`, with
-their modifiers.
+their modifiers. The view's `UITextInputTraits` (keyboard type,
+capitalization, corrections, the Return key's label, secure entry, content
+type for autofill) follow the focused field's
+[keyboard hints](../text-editing.md#keyboard-hints).
+
+**Keyboard avoidance.** The keyboard's frame
+(`UIKeyboardWillChangeFrameNotification`, `UIKeyboardWillHideNotification`)
+gives how far it reaches over the view: `cx.keyboard_inset()`. The App lays
+the view out above it and scrolls the focused field into view (see
+[text-editing.md](../text-editing.md#the-on-screen-keyboard)). The view
+itself keeps its size, so nothing is redrawn at another resolution.
 
 **Composing.** The Japanese, Chinese and Korean keyboards compose through
 `UITextInput`: `setMarkedText:selectedRange:` is the composition, shown
@@ -304,8 +314,6 @@ applies.
 
 ## Known gaps
 
-- The keyboard doesn't push the content up, so it can cover a field near the
-  bottom of the screen.
 - `UITextInput` knows the caret's rectangle only: `firstRectForRange:` answers
   it for any range, `selectionRectsForRange:` is empty and a touch on the text
   doesn't place the caret through the text system (the app does it). A

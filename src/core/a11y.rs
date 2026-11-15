@@ -155,6 +155,9 @@ pub(crate) struct Semantics {
     /// A text field's hint, read while it's empty (see
     /// [`Element::placeholder`](crate::core::Element::placeholder)).
     pub placeholder: Option<String>,
+    /// A text field's hints for the on-screen keyboard (see
+    /// [`Element::input_kind`](crate::core::Element::input_kind)).
+    pub input: Option<crate::platform::InputHints>,
 }
 
 /// A node in the accessibility tree.

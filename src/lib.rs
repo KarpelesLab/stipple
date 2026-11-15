@@ -466,6 +466,12 @@ struct Pane<S> {
     // What the window's input method was last told (`None`: disabled), so
     // `Window::set_ime` is only called on a change.
     ime_sent: Option<crate::platform::ImeState>,
+    // The keyboard hints the window was last told, sent on a change.
+    hints_sent: Option<crate::platform::InputHints>,
+    // The focused text field, caret and keyboard inset last scrolled into
+    // view: it is scrolled again only when one of them changes, so the user
+    // can scroll it away.
+    revealed: Option<(FocusId, usize, u64)>,
     // Whether secure keyboard entry was last turned on for a focused password
     // field.
     secure_sent: bool,
@@ -576,6 +582,8 @@ impl<S: 'static> Pane<S> {
             crossfade: Default::default(),
             painted_focused: None,
             ime_sent: None,
+            hints_sent: None,
+            revealed: None,
             secure_sent: false,
             primary: false,
             alert_return: None,
@@ -1229,7 +1237,7 @@ impl<S: 'static> Pane<S> {
     fn build_frame(&mut self, state: &S, theme: &Theme, font: Option<&Font>) -> Scene {
         let theme = *theme; // Theme is Copy; avoids borrowing through `theme` in `cx`.
         let mut cx = Cx::with_handle(&theme, self.handle.clone());
-        cx.set_window_size(self.attrs.logical_size);
+        cx.set_window_size(self.layout_size());
         cx.set_memo_cache(std::mem::take(&mut self.memo_cache));
         // Memoized subtrees that are reused carry their handlers over.
         cx.set_previous_handlers(std::mem::take(&mut self.handlers));
@@ -1244,7 +1252,10 @@ impl<S: 'static> Pane<S> {
         // Keyed elements' interaction states, from where they were on screen.
         let states = self.interactions();
         cx.set_interactions(states.clone());
-        cx.set_window(self.id, self.info, self.window_focused);
+        // The view's safe area ends where the keyboard starts.
+        let mut info = self.info;
+        info.safe_area.bottom = (info.safe_area.bottom - info.keyboard_inset).max(0.0);
+        cx.set_window(self.id, info, self.window_focused);
         cx.set_pointer_locked(self.pointer.locked);
         let mut element = (self.view)(state, &mut cx);
         self.info_read = cx.window_info_read();
@@ -1327,7 +1338,7 @@ impl<S: 'static> Pane<S> {
         self.watch = watch;
         self.transitions.end();
 
-        let size = self.attrs.logical_size;
+        let size = self.layout_size();
         let win = Rect::from_xywh(0.0, 0.0, size.width, size.height);
         // A right-to-left theme mirrors the view and its overlays.
         let dir = theme.layout_direction;
@@ -1518,6 +1529,7 @@ impl<S: 'static> Pane<S> {
         // Apply (and clamp) scroll-container offsets to the laid-out tree before
         // painting, so the retained tree matches what's drawn for event routing.
         crate::core::apply_scroll(&mut tree, &mut self.scroll_offsets);
+        self.reveal_caret(&mut tree, font);
         // Elements entering, leaving (drawn from the last frame's tree while
         // they do) and moving to where the layout put them.
         let old = self.tree.as_ref();
@@ -2191,6 +2203,35 @@ impl<S: 'static> Pane<S> {
         false
     }
 
+    /// The size the view is laid out in: the window above the on-screen
+    /// keyboard.
+    fn layout_size(&self) -> Size {
+        let size = self.attrs.logical_size;
+        let keyboard = self.info.keyboard_inset.clamp(0.0, size.height);
+        Size::new(size.width, (size.height - keyboard).max(1.0))
+    }
+
+    /// Keep the focused text field's caret in view: scroll each scroll
+    /// container around it, innermost first, just far enough. Only when the
+    /// field, its caret or the keyboard changed since it last did, so a
+    /// field the user scrolled away stays there until they type.
+    fn reveal_caret(&mut self, tree: &mut LayoutNode, font: Option<&Font>) {
+        let Some((caret, field, at)) = crate::core::focused_caret(tree, self.focused, font) else {
+            self.revealed = None;
+            return;
+        };
+        let key = (
+            self.focused.expect("a focused caret"),
+            at,
+            self.info.keyboard_inset.to_bits(),
+        );
+        if self.revealed == Some(key) {
+            return;
+        }
+        self.revealed = Some(key);
+        crate::core::reveal(tree, key.0, caret, field, &mut self.scroll_offsets);
+    }
+
     fn sync_ime(&mut self, window: &dyn crate::platform::Window, font: Option<&Font>) {
         let ime = match (&self.tree, self.input_viewport) {
             (Some(tree), None) => crate::core::ime_state(tree, self.focused, font),
@@ -2198,6 +2239,18 @@ impl<S: 'static> Pane<S> {
         }
         // An element that isn't a text field but opted into the IME.
         .or_else(|| self.custom_ime());
+        // The keyboard's hints for the focused field, before the IME hears
+        // of it (a touch keyboard is set up from them).
+        let hints = match (&self.tree, self.input_viewport) {
+            (Some(tree), None) => crate::core::input_hints(tree, self.focused),
+            _ => None,
+        };
+        if let Some(h) = hints
+            && hints != self.hints_sent
+        {
+            window.set_input_hints(&h);
+            self.hints_sent = hints;
+        }
         if ime != self.ime_sent {
             window.set_ime(ime.as_ref());
             self.ime_sent = ime;
@@ -2591,6 +2644,14 @@ impl<S: 'static> App<S> {
         self.panes[0].dirty = true;
     }
 
+    /// Pretend the on-screen keyboard covers the bottom `inset` logical
+    /// pixels of the primary window, for tests.
+    #[cfg(test)]
+    pub(crate) fn set_keyboard_inset(&mut self, inset: f64) {
+        self.panes[0].info.keyboard_inset = inset;
+        self.panes[0].dirty = true;
+    }
+
     /// Whether the primary window's last frame asked for another: something on
     /// it animates (a spinner, a fading highlight). An idle app returns `false`
     /// and gets no frames.
@@ -2808,6 +2869,25 @@ impl<S: 'static> App<S> {
     }
 
     fn pane_press_key(&mut self, idx: usize, input: KeyInput) -> bool {
+        // A field whose action key is Next: Enter submits it (a single-line
+        // one), then focus moves on.
+        if matches!(input, KeyInput::Enter) {
+            let pane = &self.panes[idx];
+            let next = pane
+                .tree
+                .as_ref()
+                .filter(|_| pane.input_viewport.is_none())
+                .and_then(|t| crate::core::input_hints(t, pane.focused))
+                .filter(|h| h.enter() == Some(crate::platform::EnterAction::Next));
+            if let Some(hints) = next {
+                let submitted = !hints.multiline && self.pane_send_key(idx, input);
+                return self.pane_focus_step(idx, false) | submitted;
+            }
+        }
+        self.pane_send_key(idx, input)
+    }
+
+    fn pane_send_key(&mut self, idx: usize, input: KeyInput) -> bool {
         let App {
             state,
             theme,
@@ -3833,9 +3913,13 @@ impl<S: 'static> App<S> {
             if info != self.panes[idx].info {
                 let pane = &mut self.panes[idx];
                 let insets_changed = info.safe_area != pane.info.safe_area;
+                // The keyboard moving changes where the view is laid out.
+                let keyboard_moved = info.keyboard_inset != pane.info.keyboard_inset;
                 pane.info = info;
                 self.handle.set_window_info(id, Some(info));
-                let mut redraw = pane.info_read || (pane.safe_area_read && insets_changed);
+                let mut redraw = pane.info_read
+                    || keyboard_moved
+                    || ((pane.safe_area_read || keyboard_moved) && insets_changed);
                 if let Some(f) = self.on_window_change.as_mut() {
                     f(&mut self.state, id, &info);
                     for pane in &mut self.panes {
@@ -3987,6 +4071,7 @@ fn provisional_info(attrs: &WindowAttributes, scale: ScaleFactor) -> crate::plat
         fullscreen: attrs.fullscreen,
         work_area: None,
         safe_area: crate::geometry::Insets::ZERO,
+        keyboard_inset: 0.0,
     }
 }
 
@@ -4406,6 +4491,7 @@ pub mod prelude {
     pub use crate::platform::Notification;
     pub use crate::platform::PointerButton;
     pub use crate::platform::dialog::{MessageBox, MessageKind, MessageResponse};
+    pub use crate::platform::{Autocapitalize, Autofill, EnterAction, InputKind};
     pub use crate::platform::{BackGesture, KeyCode, Lifecycle, Modifiers};
     pub use crate::platform::{CursorIcon, DragOffer, DropData, UserAttention, WindowRequest};
     pub use crate::platform::{KeyEvent, OptionAsMeta, PhysicalKey};

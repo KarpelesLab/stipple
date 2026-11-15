@@ -89,10 +89,16 @@ mod app {
         taps: u32,
         ticks: u32,
         name: TextInput,
+        code: TextInput,
     }
 
     /// The field's text in the frame last built, to log its changes.
     static TEXT: Mutex<String> = Mutex::new(String::new());
+    /// The barcode field's text in the frame last built.
+    static CODE: Mutex<String> = Mutex::new(String::new());
+    /// The barcode CI types, after which the app presses the keyboard's
+    /// action key (Done) through the input connection.
+    const BARCODE: &str = "4006381333931";
     /// Whether the input connection self-test ran.
     static SELF_TEST: AtomicBool = AtomicBool::new(false);
     /// The frame to run it in.
@@ -114,7 +120,26 @@ mod app {
     fn view(state: &State, cx: &mut Cx<State>) -> Element {
         FRAMES.fetch_add(1, Ordering::Relaxed);
         let theme = *cx.theme();
-        let field = text_field(cx, &state.name, |s| &mut s.name);
+        let field = text_field(cx, &state.name, |s| &mut s.name).width(170.0);
+        // Digits only: a number pad, nothing corrected, and Done.
+        let code_field = text_field(cx, &state.code, |s| &mut s.code)
+            .placeholder("Barcode")
+            .input_kind(InputKind::Number)
+            .enter_action(EnterAction::Done)
+            .width(110.0)
+            .on_submit(cx, |s| {
+                println!("androiddemo: code submitted {}", s.code.text())
+            });
+        let code = state.code.text().to_string();
+        let mut last = CODE.lock().unwrap();
+        if *last != code {
+            println!("androiddemo: code {code:?}");
+            if code == BARCODE {
+                SELF_TEST_AT.store(FRAMES.load(Ordering::Relaxed) + 3, Ordering::Relaxed);
+            }
+            *last = code;
+        }
+        drop(last);
         let name = state.name.text();
         // What the field shows: its text, and a word the keyboard is still
         // composing (typed at the end here).
@@ -139,7 +164,7 @@ mod app {
         let top = column(vec![
             heading(cx, "Stipple on Android"),
             label(cx, "Type your name:"),
-            field,
+            row(vec![field, code_field]).gap(theme.spacing.sm),
             row(vec![
                 spinner(cx),
                 label(cx, format!("Running for {} s", state.ticks)),
@@ -408,6 +433,7 @@ mod app {
             taps: 0,
             ticks: 0,
             name: TextInput::new(),
+            code: TextInput::new(),
         };
         let app = App::new(state, view)
             .theme(theme)

@@ -4047,6 +4047,11 @@ jobs:
           grep -qF 'touchdemo: text "Hi日本"' "$LOG"
           grep -qF 'touchdemo: text "HiJP"' "$LOG"
           grep -q 'touchdemo: composing text_input=true doc="Hiにほん" selected=5..5 marked="にほん"' "$LOG"
+          # UITextInputTraits: the text field's Return key (Next) moved focus
+          # to a barcode field, whose traits are a number pad (4) with a Done
+          # key (9), nothing capitalized or corrected; Done submitted it.
+          grep -q 'touchdemo: number field .*keyboard_type=4 return_key=9 autocapitalization=0 autocorrection=1' "$LOG"
+          grep -qF 'touchdemo: code submitted 4006381333931' "$LOG"
           # UIAccessibility: the elements were read, and activating one
           # tapped its row.
           grep -qE "touchdemo: a11y [1-9][0-9]* elements" "$LOG"

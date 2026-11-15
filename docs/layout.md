@@ -205,8 +205,11 @@ App::new(State, view).edge_to_edge(true).run();
 indicator, its items above it; `toasts` stay clear of it. Edge to edge, the
 status bar's icons turn dark over a light top edge and light over a dark one
 (from the color the frame has in its top-left corner; Android's navigation
-bar from the bottom-left one). On Android the soft keyboard isn't in the
-safe area: the content ends above it, as without edge to edge. In a browser,
+bar from the bottom-left one). The on-screen keyboard isn't in the safe
+area: while it is up (iOS, Android, a phone's browser) the App lays the view
+out above it, the safe area's bottom shrinks by it, and `cx.keyboard_inset()`
+says how tall it is (see
+[text-editing.md](text-editing.md#the-on-screen-keyboard)). In a browser,
 a page whose viewport meta tag has `viewport-fit=cover` reports a phone's
 `env(safe-area-inset-*)`, as far as they reach over the canvas.
 

@@ -168,6 +168,7 @@ once with a light color scheme.
 | Clipboard | see below |
 | File dialogs | see below |
 | Safe area | `env(safe-area-inset-*)`, measured on a hidden probe and taken as far as it reaches over the canvas, as `cx.safe_area()` (`Event::WindowChanged` when it changes). Zero unless the page's viewport meta tag has `viewport-fit=cover` and the phone has a notch or rounded corners. See [layout.md](../layout.md#the-safe-area-phones) |
+| On-screen keyboard | the focused field's [hints](../text-editing.md#keyboard-hints) become the hidden textarea's `inputmode`, `enterkeyhint`, `autocapitalize`, `autocorrect`, `spellcheck` and `autocomplete`; how far the keyboard reaches over the canvas comes from `visualViewport` (the canvas's bottom less the visual viewport's) as `cx.keyboard_inset()`, and the view is laid out above it |
 | Keeping the screen awake | `AppHandle::set_keep_awake` takes a Screen Wake Lock (`navigator.wakeLock`), asked again each time the page becomes visible (the browser lets it go when the page hides); nothing where the browser has no wake lock |
 | Share sheet | `navigator.share` (with `File`s where `navigator.canShare` takes them), from a click handler; browsers without it answer `ShareOutcome::Unavailable` |
 | Haptics | `navigator.vibrate` (Chrome and Firefox on Android; not Safari or desktops) |
@@ -247,7 +248,9 @@ instead:
 
 `Window::set_ime` moves the textarea to the caret, so the IME's candidate
 window opens next to the text, and `set_text_input_active` switches its
-`inputmode` between `text` and `none`, which shows or hides a touch keyboard.
+`inputmode` between the focused field's (`text`, `numeric`, `decimal`,
+`tel`, `email`, `url`, `search`, from `set_input_hints`) and `none`, which
+shows or hides a touch keyboard.
 The textarea is emptied after each commit; the field draws the text.
 
 ### Accessibility
@@ -374,7 +377,8 @@ browsers only grant during a user gesture), `set_title`, `clipboard_write`,
 `save_file`, `open_url` (`window.open`, for `platform::open_url`), `notify`
 (the `Notification` API, for `platform::notify`), `log` (panics are printed to
 the console), `set_a11y` (the accessibility tree as JSON), `set_ime` (the caret
-rect, or none), `set_text_input`, `save_state` (the bytes to keep in
+rect, or none), `set_text_input`, `set_input_hints` (the focused field's
+keyboard attributes), `save_state` (the bytes to keep in
 `sessionStorage`; none removes them) and `fetch_asset` (a packaged file
 under the `assets` URL, answered through `stipple_asset`), and for `stipple::game::save`'s
 `SaveStore::local_storage`: `date_now`, `storage_set`, `storage_get`,

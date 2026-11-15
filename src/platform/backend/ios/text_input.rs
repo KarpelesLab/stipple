@@ -39,9 +39,10 @@ use super::{
     class_addProtocol, current_window, key_tap, msg_bool, msg_id, nsstring, objc_allocateClassPair,
     objc_getClass, objc_getProtocol, objc_msgSend, objc_registerClassPair, sel, string_of,
 };
-use crate::platform::ImeState;
 use crate::platform::event::{Event, Ime, KeyCode, Modifiers};
 use crate::platform::input;
+use crate::platform::input_hints::ios::{Traits, traits};
+use crate::platform::{Autofill, ImeState, InputHints};
 
 #[link(name = "objc", kind = "dylib")]
 unsafe extern "C" {
@@ -83,6 +84,8 @@ struct TextState {
     delegate: Id,
     /// The view's `UITextInputStringTokenizer`, made on first use.
     tokenizer: Id,
+    /// The focused field's keyboard hints, from `Window::set_input_hints`.
+    hints: InputHints,
 }
 
 thread_local! {
@@ -668,6 +671,77 @@ extern "C" fn character_range_at_point(_this: Id, _cmd: Sel, _point: CgPoint) ->
 
 // ---- Wiring ------------------------------------------------------------------------
 
+// ---- UITextInputTraits ----------------------------------------------------------
+
+fn current_traits() -> Traits {
+    STATE.with(|s| traits(&s.borrow().hints))
+}
+
+extern "C" fn keyboard_type(_this: Id, _cmd: Sel) -> isize {
+    current_traits().keyboard
+}
+
+extern "C" fn autocapitalization_type(_this: Id, _cmd: Sel) -> isize {
+    current_traits().autocapitalization
+}
+
+/// `autocorrectionType`, and `spellCheckingType`, which shares its values.
+extern "C" fn autocorrection_type(_this: Id, _cmd: Sel) -> isize {
+    current_traits().autocorrection
+}
+
+extern "C" fn return_key_type(_this: Id, _cmd: Sel) -> isize {
+    current_traits().return_key
+}
+
+extern "C" fn is_secure_text_entry(_this: Id, _cmd: Sel) -> bool {
+    current_traits().secure
+}
+
+/// `textContentType`: UIKit's constant for what the field holds, or nil.
+extern "C" fn text_content_type(_this: Id, _cmd: Sel) -> Id {
+    #[link(name = "UIKit", kind = "framework")]
+    unsafe extern "C" {
+        static UITextContentTypeUsername: Id;
+        static UITextContentTypePassword: Id;
+        static UITextContentTypeNewPassword: Id;
+        static UITextContentTypeOneTimeCode: Id;
+        static UITextContentTypeEmailAddress: Id;
+        static UITextContentTypeTelephoneNumber: Id;
+        static UITextContentTypeName: Id;
+        static UITextContentTypePostalCode: Id;
+        static UITextContentTypeFullStreetAddress: Id;
+        static UITextContentTypeURL: Id;
+    }
+    let Some(content) = current_traits().content else {
+        return std::ptr::null_mut();
+    };
+    unsafe {
+        match content {
+            Autofill::Username => UITextContentTypeUsername,
+            Autofill::Password => UITextContentTypePassword,
+            Autofill::NewPassword => UITextContentTypeNewPassword,
+            Autofill::OneTimeCode => UITextContentTypeOneTimeCode,
+            Autofill::Email => UITextContentTypeEmailAddress,
+            Autofill::Phone => UITextContentTypeTelephoneNumber,
+            Autofill::Name => UITextContentTypeName,
+            Autofill::PostalCode => UITextContentTypePostalCode,
+            Autofill::StreetAddress => UITextContentTypeFullStreetAddress,
+            Autofill::Url => UITextContentTypeURL,
+        }
+    }
+}
+
+/// The focused field's keyboard hints changed: the keyboard reloads them
+/// (`reloadInputViews`) if the view holds it.
+pub(super) fn set_hints(hints: InputHints) {
+    let changed = STATE.with(|s| std::mem::replace(&mut s.borrow_mut().hints, hints) != hints);
+    let view = super::CTX.with(|c| c.borrow().view);
+    if changed && !view.is_null() && unsafe { msg_bool(view, sel("isFirstResponder")) } {
+        unsafe { super::msg_void(view, sel("reloadInputViews")) };
+    }
+}
+
 /// Make the view class a `UITextInput` (which includes `UIKeyInput`).
 ///
 /// # Safety
@@ -821,6 +895,43 @@ pub(super) unsafe fn add_methods(cls: Class) {
             character_range_at_point as *const c_void,
             format!("@@:{point}"),
         ),
+        // UITextInputTraits, from the focused field's hints.
+        ("keyboardType", keyboard_type as *const c_void, "q@:".into()),
+        (
+            "autocapitalizationType",
+            autocapitalization_type as *const c_void,
+            "q@:".into(),
+        ),
+        (
+            "autocorrectionType",
+            autocorrection_type as *const c_void,
+            "q@:".into(),
+        ),
+        (
+            "spellCheckingType",
+            autocorrection_type as *const c_void,
+            "q@:".into(),
+        ),
+        (
+            "returnKeyType",
+            return_key_type as *const c_void,
+            "q@:".into(),
+        ),
+        (
+            "isSecureTextEntry",
+            is_secure_text_entry as *const c_void,
+            "B@:".into(),
+        ),
+        (
+            "secureTextEntry",
+            is_secure_text_entry as *const c_void,
+            "B@:".into(),
+        ),
+        (
+            "textContentType",
+            text_content_type as *const c_void,
+            "@@:".into(),
+        ),
     ];
     for (name, imp, types) in methods {
         let types = CString::new(types).unwrap();
@@ -954,9 +1065,14 @@ pub(super) unsafe fn status(view: Id) -> String {
                 msg_id(selected, sel("end"))
             },
         );
+        let int: unsafe extern "C" fn(Id, Sel) -> isize =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let content = msg_id(view, sel("textContentType"));
         format!(
             "text_input={conforms} doc={doc:?} selected={s0}..{s1} marked={marked} has_text={} \
-             first_rect=({:.0},{:.0},{:.0},{:.0}) caret=({:.0},{:.0},{:.0},{:.0})",
+             first_rect=({:.0},{:.0},{:.0},{:.0}) caret=({:.0},{:.0},{:.0},{:.0}) \
+             keyboard_type={} return_key={} autocapitalization={} autocorrection={} \
+             secure={} content={:?}",
             msg_bool(view, sel("hasText")),
             r.origin.x,
             r.origin.y,
@@ -966,6 +1082,16 @@ pub(super) unsafe fn status(view: Id) -> String {
             caret.origin.y,
             caret.size.width,
             caret.size.height,
+            int(view, sel("keyboardType")),
+            int(view, sel("returnKeyType")),
+            int(view, sel("autocapitalizationType")),
+            int(view, sel("autocorrectionType")),
+            msg_bool(view, sel("isSecureTextEntry")),
+            if content.is_null() {
+                None
+            } else {
+                Some(string_of(content))
+            },
         )
     }
 }

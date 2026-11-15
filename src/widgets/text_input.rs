@@ -242,6 +242,81 @@ impl Element {
     }
 }
 
+impl Element {
+    /// The kind of text this field takes, which picks the on-screen keyboard
+    /// (a number pad, a phone pad, `@` for an e-mail address) and its
+    /// defaults: only plain text is capitalized and corrected. On a
+    /// [`text_field`], [`text_area`] or
+    /// [`password_field`](super::password_field) (a number one is a PIN pad).
+    /// iOS, Android and the web honor it; desktops, with no on-screen
+    /// keyboard, ignore it, and the field takes any text everywhere (a hint,
+    /// not a filter).
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// struct Scan { code: TextInput }
+    /// fn view(state: &Scan, cx: &mut Cx<Scan>) -> Element {
+    ///     text_field(cx, &state.code, |s| &mut s.code)
+    ///         .placeholder("EAN-13")
+    ///         .input_kind(InputKind::Number)
+    ///         .enter_action(EnterAction::Done)
+    ///         .on_submit(cx, |s| println!("{}", s.code.text()))
+    /// }
+    /// # let theme = Theme::light();
+    /// # let _ = view(&Scan { code: TextInput::new() }, &mut Cx::new(&theme));
+    /// ```
+    pub fn input_kind(mut self, kind: crate::platform::InputKind) -> Self {
+        self.input_hints().kind = kind;
+        self
+    }
+
+    /// Which letters the on-screen keyboard capitalizes on its own. Default:
+    /// sentences for [`InputKind::Text`](crate::platform::InputKind::Text),
+    /// none for the other kinds and for passwords. iOS, Android and the web.
+    pub fn autocapitalize(mut self, mode: crate::platform::Autocapitalize) -> Self {
+        self.input_hints().autocapitalize = Some(mode);
+        self
+    }
+
+    /// Whether the on-screen keyboard corrects words and offers suggestions
+    /// (`false` keeps a code or a name exactly as typed). Default: on for
+    /// plain text and search terms, off for the other kinds; never on a
+    /// password. iOS, Android and the web.
+    pub fn autocorrect(mut self, on: bool) -> Self {
+        self.input_hints().autocorrect = Some(on);
+        self
+    }
+
+    /// What the on-screen keyboard's action key says: Done, Go, Next, Search
+    /// or Send. Each submits the field (runs its
+    /// [`on_submit`](Element::on_submit) handlers), as Enter does;
+    /// [`Next`](crate::platform::EnterAction::Next) then moves focus to the
+    /// next field, on every platform (Enter on a desktop too). Default: the
+    /// platform's own (Done on Android, Return on iOS). A [`text_area`]'s
+    /// Enter stays a new line: there only `Next` takes effect, moving focus
+    /// on without one.
+    pub fn enter_action(mut self, action: crate::platform::EnterAction) -> Self {
+        self.input_hints().action = Some(action);
+        self
+    }
+
+    /// What the field holds, for the system's autofill to offer: a saved
+    /// password, a one-time code from a text message, an address. iOS
+    /// (`textContentType`) and the web (`autocomplete`).
+    pub fn autofill(mut self, content: crate::platform::Autofill) -> Self {
+        self.input_hints().autofill = Some(content);
+        self
+    }
+
+    /// This element's keyboard hints, made on first use.
+    fn input_hints(&mut self) -> &mut crate::platform::InputHints {
+        self.semantics
+            .get_or_insert_with(Default::default)
+            .input
+            .get_or_insert_with(Default::default)
+    }
+}
+
 /// Register a field's key handler: `edit` applies a key to the field's state
 /// and says whether the text changed; Enter submits instead when `submits`.
 pub(crate) fn field_keys<S: 'static>(
@@ -366,7 +441,8 @@ pub fn text_area<S: 'static>(
         .default_width(280.0)
         .height(120.0)
         .native_text_frame(&theme);
-    let (el, _) = field_keys(cx, el, false, move |s, k| field(s).apply(k));
+    let (mut el, _) = field_keys(cx, el, false, move |s, k| field(s).apply(k));
+    el.input_hints().multiline = true;
     field_pointer(cx, el, field)
 }
 
@@ -418,6 +494,102 @@ mod tests {
             "",
             "a single-line field takes no newline"
         );
+    }
+
+    #[derive(Default)]
+    struct Form {
+        first: TextInput,
+        second: TextInput,
+        notes: TextInput,
+        submitted: u32,
+    }
+
+    #[test]
+    fn hints_reach_the_focused_field_and_next_moves_on() {
+        use crate::platform::{Autocapitalize, Autofill, EnterAction, InputKind};
+        let mut app = App::new(Form::default(), |s: &Form, cx: &mut Cx<Form>| {
+            crate::widgets::column(vec![
+                text_field(cx, &s.first, |s| &mut s.first)
+                    .input_kind(InputKind::Email)
+                    .autocapitalize(Autocapitalize::Off)
+                    .autocorrect(false)
+                    .autofill(Autofill::Email)
+                    .enter_action(EnterAction::Next)
+                    .on_submit(cx, |s| s.submitted += 1),
+                text_area(cx, &s.notes, |s| &mut s.notes).enter_action(EnterAction::Next),
+                text_field(cx, &s.second, |s| &mut s.second),
+            ])
+        })
+        .no_font()
+        .logical_size(Size::new(300.0, 400.0));
+        app.render_once();
+        assert!(app.focus_next());
+        let hints = |app: &App<Form>| {
+            let pane = &app.panes[0];
+            crate::core::input_hints(pane.tree.as_ref().unwrap(), pane.focused)
+        };
+        let h = hints(&app).expect("a text field has focus");
+        assert_eq!(h.kind, InputKind::Email);
+        assert_eq!(h.autocapitalize, Some(Autocapitalize::Off));
+        assert_eq!(h.autocorrect, Some(false));
+        assert_eq!(h.autofill, Some(Autofill::Email));
+        assert!(!h.multiline && !h.secure);
+        // Next: Enter submits, then focus moves to the text area.
+        app.press_key(KeyInput::Enter);
+        assert_eq!(app.state().submitted, 1);
+        let h = hints(&app).expect("the text area has focus");
+        assert!(h.multiline);
+        // There, Next moves on without a new line.
+        app.press_key(KeyInput::Enter);
+        assert_eq!(app.state().notes.text(), "");
+        let h = hints(&app).expect("the last field has focus");
+        assert_eq!(h, crate::platform::InputHints::default());
+    }
+
+    #[test]
+    fn the_keyboard_shrinks_the_layout_and_the_focused_field_scrolls_into_view() {
+        let mut app = App::new(Form::default(), |s: &Form, cx: &mut Cx<Form>| {
+            let fields = vec![
+                crate::widgets::spacer().height(500.0),
+                text_field(cx, &s.first, |s| &mut s.first),
+                crate::widgets::spacer().height(40.0),
+            ];
+            crate::widgets::column(vec![crate::widgets::scroll(cx).children(fields)])
+        })
+        .no_font()
+        .logical_size(Size::new(300.0, 400.0));
+        app.render_once();
+        fn field(n: &LayoutNode) -> Option<&LayoutNode> {
+            if n.focus.is_some() {
+                return Some(n);
+            }
+            n.children.iter().find_map(field)
+        }
+        let bounds = |app: &App<Form>| field(app.panes[0].tree.as_ref().unwrap()).unwrap().bounds;
+        assert!(bounds(&app).min_y() > 400.0, "below the window to start");
+        // Focusing it scrolls it into view.
+        assert!(app.focus_next());
+        app.render_once();
+        let b = bounds(&app);
+        assert!(b.max_y() <= 400.0 && b.min_y() >= 0.0, "{b:?}");
+        // The keyboard covers the bottom 250: the view is laid out in the 150
+        // above it, and the field scrolled up into that.
+        app.set_keyboard_inset(250.0);
+        app.render_once();
+        let b = bounds(&app);
+        assert!(b.max_y() <= 150.0 && b.min_y() >= 0.0, "{b:?}");
+        let root = app.panes[0].tree.as_ref().unwrap();
+        assert_eq!(root.bounds.height(), 150.0);
+        // Scrolled away by the user, it stays away until the caret moves.
+        let id = *app.panes[0].scroll_offsets.keys().next().unwrap();
+        app.panes[0].scroll_offsets.insert(id, 0.0);
+        app.panes[0].dirty = true;
+        app.render_once();
+        assert!(bounds(&app).min_y() > 150.0);
+        app.type_text("x");
+        app.render_once();
+        let b = bounds(&app);
+        assert!(b.max_y() <= 150.0, "typing brings it back: {b:?}");
     }
 
     #[test]

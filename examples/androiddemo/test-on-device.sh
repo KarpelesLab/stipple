@@ -26,7 +26,10 @@
 #    InputConnection with a text inputType), and `input text` types into it
 #    (keys); then the app drives the connection as a composing keyboard would
 #    (compose, commit an emoji, delete around the caret, finish), and the
-#    field must hold the result;
+#    field must hold the result; Tab then moves to a barcode field, which the
+#    input method restarts for as a number field with a Done key, digits
+#    typed into it, and the action key pressed through the connection
+#    submits it;
 # 8. Notify asks for POST_NOTIFICATIONS (answered "Don't allow" in the system's
 #    dialog, so the next one fails); once `pm grant`ed, the notification shows
 #    in `dumpsys notification`;
@@ -475,13 +478,46 @@ adb shell input text "Stipple"
 # Each key rebuilds the frame, which the emulator's software rendering makes slow.
 wait_for 'androiddemo: text "Stipple"' 90
 # The keyboard connected through the host view's InputConnection.
-wait_for "stipple: input connection created \(inputType 0x4001" 10
+# A plain text field: capitalized sentences, corrected (0xc001).
+wait_for "stipple: input connection created \(inputType 0xc001" 10
 # The app's self-test then composes "にほ", commits "日本🎉", deletes the
 # emoji (two UTF-16 units) and composes and finishes "!".
 wait_for "stipple: input connection self-test: inputType" 30
 wait_for 'androiddemo: text "Stipple日本!"' 60
 sleep 2
 adb exec-out screencap -p > "$shots/android-typed.png"
+
+# The barcode field next to it asks for a number pad with a Done key: the
+# input method starts over with TYPE_CLASS_NUMBER (0x2) and IME_ACTION_DONE
+# (6, with no fullscreen or extract UI: 0x12000006).
+adb shell input keyevent KEYCODE_TAB
+wait_for "stipple: input connection created \(inputType 0x2, imeOptions 0x12000006" 20
+# The system's input method service sees the same editor (its dump's format
+# varies between releases: a warning if it can't be found).
+ime_seen=""
+for _ in 1 2 3 4 5; do
+  if adb shell dumpsys input_method | grep -qE "inputType=0x2( |$)"; then
+    ime_seen=1
+    break
+  fi
+  sleep 1
+done
+if [ -z "$ime_seen" ]; then
+  echo "::warning::dumpsys input_method doesn't show inputType=0x2"
+  adb shell dumpsys input_method | grep -E "inputType|imeOptions" | head -10 || true
+fi
+adb shell input text "4006381333931"
+wait_for 'androiddemo: code "4006381333931"' 60
+# The app then presses the keyboard's action key through the connection
+# (performEditorAction(IME_ACTION_DONE)), which submits the field.
+wait_for "stipple: input connection self-test: inputType 0x2, imeOptions 0x12000006, action 6" 30
+wait_for "androiddemo: code submitted 4006381333931" 20
+# The keyboard's inset reaches the app while it shows (a warning if the
+# emulator showed none).
+if ! log | grep -qE "Stipple Android: keyboard inset [1-9]"; then
+  echo "::warning::no keyboard inset was reported"
+fi
+adb exec-out screencap -p > "$shots/android-number-field.png"
 
 if ! adb shell pidof "$pkg" >/dev/null || log | grep -q "panicked"; then
   echo "the app crashed" >&2

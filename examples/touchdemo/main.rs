@@ -15,6 +15,7 @@
 //! - `touchdemo: pinch <phase> scale S` as two fingers pinch the box;
 //! - `touchdemo: text "..."` and `touchdemo: preedit ...` as the field's text
 //!   and composition change;
+//! - `touchdemo: keyboard inset N` as the on-screen keyboard comes and goes;
 //! - `touchdemo: theme dark` / `light` as the system's look changes;
 //! - `touchdemo: lifecycle Background` (and `Foreground`, `LowMemory`);
 //! - `touchdemo: back Started` / `back Cancelled` and `touchdemo: went back`
@@ -52,6 +53,11 @@
 //!    (`insertText:` and `deleteBackward`, sent through objc dispatch),
 //!    composes through its `UITextInput` methods (`setMarkedText:selectedRange:`,
 //!    a committing `insertText:`, an autocorrect-style `replaceRange:withText:`),
+//!    then shows a barcode field beside it (a number pad with a Done key):
+//!    Return in the text field (its action is Next) moves focus there, the
+//!    view's `UITextInputTraits` must say so (`keyboardType` 4,
+//!    `returnKeyType` 9), and digits then Return submit it
+//!    (`touchdemo: code submitted ...`); then it
 //!    drags the list with a synthetic finger through the backend's touch path,
 //!    taps outside the field, then reads the view's accessibility elements as
 //!    VoiceOver does and activates a row through one. Then it holds a finger
@@ -91,6 +97,11 @@ const PINCH_H: f64 = 100.0;
 #[derive(Default)]
 struct State {
     field: TextInput,
+    /// A barcode field beside the text field, shown once the self-test asks
+    /// (so Tab order on desktops stays field, then rows): a number pad with
+    /// a Done key, reached from the field by its Next key.
+    code: Option<TextInput>,
+    code_submitted: bool,
     tapped: Vec<usize>,
     /// The rows whose context menu item was picked.
     pinned: Vec<usize>,
@@ -119,6 +130,8 @@ struct State {
 static OFFSET: AtomicU64 = AtomicU64::new(0);
 /// The strip's scroll offset in the frame last built (`f64` bits).
 static STRIP_OFFSET: AtomicU64 = AtomicU64::new(0);
+/// The keyboard inset in the frame last built (`f64` bits).
+static KEYBOARD: AtomicU64 = AtomicU64::new(0);
 /// Views built so far.
 static BUILDS: AtomicUsize = AtomicUsize::new(0);
 /// Whether the theme's look changed while the app ran.
@@ -176,6 +189,32 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         cx.request_frame();
     }
     let field = text_field(cx, &state.field, |s| &mut s.field).height(FIELD_H);
+    let field = match &state.code {
+        Some(code) => {
+            let code = text_field(cx, code, |s| s.code.get_or_insert_with(TextInput::new))
+                .placeholder("Barcode")
+                .input_kind(InputKind::Number)
+                .enter_action(EnterAction::Done)
+                .width(110.0)
+                .height(FIELD_H)
+                .on_submit(cx, |s| {
+                    let code = s.code.as_ref().map(|c| c.text().to_string());
+                    log(&format!(
+                        "touchdemo: code submitted {}",
+                        code.unwrap_or_default()
+                    ));
+                    s.code_submitted = true;
+                });
+            row(vec![field.enter_action(EnterAction::Next).grow(1.0), code]).gap(8.0)
+        }
+        None => field,
+    };
+    // The on-screen keyboard's height, as it changes (zero with the
+    // simulator's hardware keyboard connected).
+    let keyboard = cx.keyboard_inset();
+    if KEYBOARD.swap(keyboard.to_bits(), Ordering::Relaxed) != keyboard.to_bits() {
+        log(&format!("touchdemo: keyboard inset {keyboard:.0}"));
+    }
     // On Linux the field has a caption, which a screen reader reads with it
     // (AT-SPI's labelled-by relation, checked by the AT-SPI walk in CI). The
     // mobile self-tests tap the field where it is without one.
@@ -370,6 +409,8 @@ mod selftest {
     static SAVED: Mutex<Option<bool>> = Mutex::new(None);
     /// The document picker's class.
     const PICKER: &str = "UIDocumentPickerViewController";
+    /// The barcode typed into the number field.
+    const BARCODE: &str = "4006381333931";
 
     fn check(ok: bool, what: impl Into<String>) {
         if !ok {
@@ -690,6 +731,35 @@ mod selftest {
                 s.field.text() == "HiJP",
                 format!("replaceRange gave {:?}", s.field.text()),
             );
+            check(
+                simulate::text_input_status().contains("keyboard_type=0 return_key=0"),
+                "a plain text field's traits",
+            );
+            // A barcode field appears beside it, and the field's Return key
+            // becomes Next.
+            s.code = Some(TextInput::new());
+        });
+        // Return (a newline from the keyboard) moves on to the barcode
+        // field, whose traits are a number pad with a Done key.
+        steps.run(500, |_| simulate::insert_text("\n"));
+        steps.until(|_| simulate::text_input_status().contains("keyboard_type=4 "));
+        steps.run(0, |s| {
+            let status = simulate::text_input_status();
+            log(&format!("touchdemo: number field {status}"));
+            check(
+                status
+                    .contains("keyboard_type=4 return_key=9 autocapitalization=0 autocorrection=1"),
+                format!("number field traits {status}"),
+            );
+            check(s.field.text() == "HiJP", "Next added no text to the field");
+            simulate::insert_text(BARCODE);
+        });
+        steps.until(|s| s.code.as_ref().is_some_and(|c| c.text() == BARCODE));
+        // Done submits it.
+        steps.run(0, |_| simulate::insert_text("\n"));
+        steps.until(|s| s.code_submitted);
+        steps.run(0, |s| {
+            check(s.code_submitted, "Done didn't submit the barcode field")
         });
 
         // Drag the list up 300 points with a second finger id, a move every

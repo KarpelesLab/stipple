@@ -201,7 +201,11 @@ the caret for the candidate window. This also gives the keyboard layout's dead
 keys (Option+E, then E).
 
 **iOS.** The view is a `UITextInput`: while a text field has focus it is first
-responder and the keyboard's document. The keyboard reads the field's text
+responder and the keyboard's document. Its `UITextInputTraits`
+(`keyboardType`, `autocapitalizationType`, `autocorrectionType`,
+`spellCheckingType`, `returnKeyType`, `secureTextEntry`, `textContentType`)
+come from the focused field's [keyboard hints](text-editing.md#keyboard-hints),
+and `reloadInputViews` applies new ones when focus moves. The keyboard reads the field's text
 around the caret and the selection (`textInRange:`, `selectedTextRange`, from
 `Window::set_ime`, in UTF-16 offsets), composes with
 `setMarkedText:selectedRange:` (the preedit, at the caret) and commits with
@@ -270,7 +274,16 @@ document read back through `textInRange:` / `selectedTextRange` /
 `markedTextRange` must match, `firstRectForRange:` must lie in the field, and
 a committing `insertText:` and a `replaceRange:withText:` must edit the
 field's text. The document model is unit-tested on every host
-(`src/platform/backend/ios/doc.rs`).
+(`src/platform/backend/ios/doc.rs`). The self-test then shows a barcode
+field (`InputKind::Number`, `EnterAction::Done`) next to the field, whose
+action is Next: a Return typed through `insertText:` must move focus there,
+the view's traits must read back as a number pad with a Done key and no
+capitals or corrections, and a Return after the digits must submit it.
+On the Android emulator, `androiddemo`'s barcode field must restart the
+input connection as `inputType 0x2` and `imeOptions 0x12000006`
+(`IME_ACTION_DONE`, no fullscreen editor), and the editor action pressed
+through the connection must submit it. The hint tables themselves are
+unit-tested on every host (`src/platform/input_hints.rs`).
 
 X11's XIM client runs against a real input method in CI: IBus started with
 `ibus-daemon --xim` under Xvfb, `XMODIFIERS=@im=ibus`. With IBus's keyboard
@@ -406,3 +419,5 @@ non-blocking attempt.
   keyboard driven by a person (CI runs a self-test through the connection).
 - On iOS: selection rectangles, hit-testing a point to a position, selections
   made from the keyboard, and dead keys on hardware keyboards.
+- Autofill hints on Android (the host view isn't an autofill view; the
+  keyboard still gets the `inputType`).

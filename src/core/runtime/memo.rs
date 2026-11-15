@@ -104,6 +104,7 @@ struct Reads {
     scrolls: Vec<(ScrollId, f64)>,
     window_info: Option<WindowInfo>,
     safe_area: Option<crate::geometry::Insets>,
+    keyboard_inset: Option<f64>,
     /// Memoized subtrees and derived values inside it (kept with it).
     nested: Vec<u64>,
     values: Vec<u64>,
@@ -120,6 +121,9 @@ impl Reads {
         }
         if inner.safe_area.is_some() {
             self.safe_area = inner.safe_area;
+        }
+        if inner.keyboard_inset.is_some() {
+            self.keyboard_inset = inner.keyboard_inset;
         }
         self.nested.extend_from_slice(&inner.nested);
         self.values.extend_from_slice(&inner.values);
@@ -226,6 +230,10 @@ impl<S> MemoFrame<S> {
 
     pub(super) fn read_safe_area(&self, insets: crate::geometry::Insets) {
         self.record(|r| r.safe_area = Some(insets));
+    }
+
+    pub(super) fn read_keyboard_inset(&self, inset: f64) {
+        self.record(|r| r.keyboard_inset = Some(inset));
     }
 }
 
@@ -443,7 +451,11 @@ impl<S> Cx<'_, S> {
             && entry
                 .reads
                 .safe_area
-                .is_none_or(|insets| insets == self.window_info.safe_area);
+                .is_none_or(|insets| insets == self.window_info.safe_area)
+            && entry
+                .reads
+                .keyboard_inset
+                .is_none_or(|inset| inset == self.window_info.keyboard_inset);
         if !same {
             return None;
         }

@@ -125,6 +125,15 @@ impl Window for FakeWindow {
             .borrow_mut()
             .push(format!("orientations {} {set:?}", self.id));
     }
+    fn set_input_hints(&self, hints: &crate::platform::InputHints) {
+        self.desk.log.borrow_mut().push(format!(
+            "hints {} {:?} {:?} secure={}",
+            self.id,
+            hints.kind,
+            hints.enter(),
+            hints.secure
+        ));
+    }
 }
 
 /// Run the app's handler as a multi-window backend would.
@@ -439,5 +448,73 @@ fn a_backgrounded_app_repaints_only_when_it_comes_back() {
     assert_eq!(
         *seen.borrow(),
         [Lifecycle::Background, Lifecycle::Foreground]
+    );
+}
+
+#[test]
+fn the_focused_fields_keyboard_hints_reach_the_window_and_the_view_sees_the_keyboard() {
+    use crate::platform::{EnterAction, InputKind, KeyCode, Modifiers};
+    use crate::widgets::TextInput;
+    struct Form {
+        code: TextInput,
+        pin: crate::widgets::PasswordField,
+    }
+    let app = App::new(
+        Form {
+            code: TextInput::new(),
+            pin: Default::default(),
+        },
+        |s: &Form, cx: &mut Cx<Form>| {
+            let keyboard = cx.keyboard_inset();
+            let bottom = cx.safe_area().bottom;
+            cx.set_window_title(format!("keyboard {keyboard} bottom {bottom}"));
+            crate::widgets::column(vec![
+                crate::widgets::text_field(cx, &s.code, |s| &mut s.code)
+                    .input_kind(InputKind::Number)
+                    .enter_action(EnterAction::Done),
+                crate::widgets::password_field(cx, &s.pin, |s| &mut s.pin)
+                    .input_kind(InputKind::Number),
+            ])
+        },
+    )
+    .no_font();
+    let mut run = run(app);
+    assert_eq!(run.desk.take_log(), ["title 100 keyboard 0 bottom 0"]);
+    let tab = |state| Event::Key {
+        code: KeyCode::Tab,
+        state,
+        modifiers: Modifiers::default(),
+    };
+    run.send(100, tab(ButtonState::Pressed));
+    run.send(100, tab(ButtonState::Released));
+    run.send(100, Event::RedrawRequested);
+    let log = run.desk.take_log();
+    assert!(
+        log.contains(&"hints 100 Number Some(Done) secure=false".to_string()),
+        "{log:?}"
+    );
+    // A PIN field: a number pad, masked.
+    run.send(100, tab(ButtonState::Pressed));
+    run.send(100, Event::RedrawRequested);
+    let log = run.desk.take_log();
+    assert!(
+        log.contains(&"hints 100 Number None secure=true".to_string()),
+        "{log:?}"
+    );
+    // The keyboard comes up over the home indicator: the view is built
+    // again, its safe area ending at the keyboard.
+    let mut info = WindowInfo::from_size(PhysicalSize::new(200, 100), ScaleFactor::IDENTITY);
+    info.safe_area = crate::geometry::Insets::new(0.0, 0.0, 20.0, 0.0);
+    run.desk.info.borrow_mut().insert(100, info);
+    run.send(100, Event::WindowChanged);
+    run.desk.take_log();
+    info.keyboard_inset = 60.0;
+    run.desk.info.borrow_mut().insert(100, info);
+    run.send(100, Event::WindowChanged);
+    run.send(100, Event::RedrawRequested);
+    assert!(
+        run.desk
+            .take_log()
+            .contains(&"title 100 keyboard 60 bottom 0".to_string())
     );
 }

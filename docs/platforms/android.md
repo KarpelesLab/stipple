@@ -50,8 +50,8 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
   as it's newer than API 21), with the frame clock's timer as the fallback.
 - **The window.** Frames are rendered in software and copied into the
   `ANativeWindow`'s buffer, only the damaged part when the buffer allows it. The
-  app gets the content rectangle the system bars leave free (it shrinks when
-  the soft keyboard is up), also on Android 15 and later, which lay every
+  app gets the content rectangle the system bars leave free, also on
+  Android 15 and later, which lay every
   app targeting them out under the bars: the window's insets
   (`getRootWindowInsets`: `getInsets(systemBars() | displayCutout())` on
   Android 11 and later, the system window and display cutout insets
@@ -65,8 +65,7 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
   and 10), and reads the bars' insets as `cx.safe_area()`. The bars go
   transparent, without Android 10's scrim, their icons dark over light
   content and light over dark (the status bar from the frame's top-left
-  pixel, the navigation bar from its bottom-left one). The content still
-  ends above the soft keyboard (`getInsets(ime())`). The insets are read
+  pixel, the navigation bar from its bottom-left one). The insets are read
   again whenever the host view is given new ones (`onApplyWindowInsets`)
   and the window's size or content rectangle changes; a change that keeps
   the size (a half turn, the bars showing) is `Event::WindowChanged`. See
@@ -207,15 +206,27 @@ suggestions and autocorrect work as in any Android app:
   inserted at the caret), in UTF-16 units as Java counts them. The backend
   updates its copy as soon as the keyboard edits it, before the field has
   run, and takes the field's word for it once the edits are in.
-- The keyboard's action key presses Enter (Done, Go, Search, Send), Tab
-  (Next) or Shift+Tab (Previous); its Select all / Cut / Copy / Paste are the
-  usual shortcuts. Keys it sends as key events (Backspace, Enter on most
+- `EditorInfo.inputType` and `imeOptions` come from the focused field's
+  [keyboard hints](../text-editing.md#keyboard-hints) (`InputKind::Number`
+  is `TYPE_CLASS_NUMBER`, `EnterAction::Go` is `IME_ACTION_GO`, ...); a
+  field with other hints restarts the input method.
+- The keyboard's action key presses Enter (Done, Go, Search, Send, and Next
+  on a field that asked for Next, which then moves focus on), Tab (Next on
+  one that didn't) or Shift+Tab (Previous); its Select all / Cut / Copy /
+  Paste are the usual shortcuts. Keys it sends as key events (Backspace, Enter on most
   keyboards) arrive as keys; a key typed while it composes commits the
   composition first.
 - The field's focus restarts the input method (`restartInput`); caret and
   text changes it didn't make are reported with `updateSelection`.
-- A password field gets a password `inputType`, so the keyboard shows no
-  suggestions and learns nothing; its text isn't shared.
+- A password field gets a password `inputType` (a number password with
+  `InputKind::Number`) and `IME_FLAG_NO_PERSONALIZED_LEARNING`, so the
+  keyboard shows no suggestions and learns nothing; its text isn't shared.
+- **The soft keyboard's height** (`getInsets(ime())`, the system window
+  insets before Android 11) is `cx.keyboard_inset()`, edge to edge or not:
+  the App lays the view out above it and scrolls the focused field into view
+  (see [text-editing.md](../text-editing.md#the-on-screen-keyboard)). The
+  content rectangle itself doesn't shrink for it. Logged as
+  `Stipple Android: keyboard inset N`.
 
 `stipple::platform::backend::android::input_connection_self_test()` drives
 the focused field's connection as a keyboard would and logs what it reads

@@ -245,6 +245,9 @@ export async function start(canvas, wasmUrl, options = {}) {
   for (const [k, v] of [["autocomplete", "off"], ["autocorrect", "off"], ["autocapitalize", "off"],
     ["spellcheck", "false"], ["inputmode", "none"]]) input.setAttribute(k, v);
   input.tabIndex = -1;
+  // The keyboard the focused field asks for, and whether one has focus.
+  let inputMode = "text";
+  let textInput = false;
   input.style.cssText =
     "position:absolute;left:0;top:0;width:1px;height:1px;margin:0;padding:0;border:0;" +
     "outline:none;resize:none;overflow:hidden;white-space:pre;font-size:16px;" +
@@ -505,8 +508,22 @@ export async function start(canvas, wasmUrl, options = {}) {
         s.height = `${active ? Math.max(h, 1) : 1}px`;
       },
       set_text_input(active) {
-        // A touch keyboard only while a text field has focus.
-        input.setAttribute("inputmode", active ? "text" : "none");
+        // A touch keyboard only while a text field has focus: the one its
+        // hints ask for.
+        textInput = active !== 0;
+        input.setAttribute("inputmode", textInput ? inputMode : "none");
+      },
+      set_input_hints(ptr, len) {
+        // The focused field's keyboard: `name=value;...` attributes.
+        for (const pair of str(ptr, len).split(";")) {
+          const at = pair.indexOf("=");
+          if (at < 0) continue;
+          const [k, v] = [pair.slice(0, at), pair.slice(at + 1)];
+          if (k === "inputmode") inputMode = v || "text";
+          else if (v) input.setAttribute(k, v);
+          else input.removeAttribute(k);
+        }
+        input.setAttribute("inputmode", textInput ? inputMode : "none");
       },
       open_url(ptr, len) { openUrl(str(ptr, len)); },
       notify(tp, tl, bp, bl) { notify(str(tp, tl), str(bp, bl)); },
@@ -782,8 +799,20 @@ export async function start(canvas, wasmUrl, options = {}) {
   };
   safeArea();
   window.addEventListener("resize", safeArea);
+  // The on-screen keyboard: the visual viewport shrinks above it while the
+  // layout viewport (and the canvas) stays, so what of the canvas lies below
+  // the visual viewport's bottom is under the keyboard.
+  const keyboardInset = () => {
+    const vv = window.visualViewport;
+    if (!vv || !e.stipple_keyboard_inset) return;
+    const r = canvas.getBoundingClientRect();
+    const bottom = vv.offsetTop + vv.height;
+    e.stipple_keyboard_inset(Math.max(0, Math.min(r.height, r.bottom - bottom)));
+  };
+  window.visualViewport?.addEventListener("resize", keyboardInset);
+  window.visualViewport?.addEventListener("scroll", keyboardInset);
   // Size and pixel-ratio changes (moving to another screen, zooming).
-  const resize = () => { place(); e.stipple_resize(...size()); safeArea(); };
+  const resize = () => { place(); e.stipple_resize(...size()); safeArea(); keyboardInset(); };
   new ResizeObserver(resize).observe(canvas);
   const watchRatio = () => {
     matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`)

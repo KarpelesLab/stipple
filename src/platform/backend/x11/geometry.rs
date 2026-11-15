@@ -146,6 +146,7 @@ impl Geometry {
                 Rect::from_xywh(x as f64 / s, y as f64 / s, w as f64 / s, h as f64 / s)
             }),
             safe_area: crate::geometry::Insets::ZERO,
+            keyboard_inset: 0.0,
         }
     }
 }
