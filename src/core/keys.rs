@@ -61,6 +61,17 @@ pub enum FocusGroup {
     /// stops at one control of the group only: the checked (or selected) one,
     /// else the first. A radio group, or a row of choice chips.
     Select,
+    /// The arrows move focus to the nearest control in the direction
+    /// pressed, by where the controls are on screen rather than their order
+    /// in the tree (spatial navigation, as a game menu or a TV app moves):
+    /// Down from a button reaches the one below it, in a list, a grid or a
+    /// settings screen alike. Moving past the last control in a row or a
+    /// column wraps to the first. A control with a key handler of its own
+    /// (a slider, a field) keeps Left and Right; Up and Down still move.
+    /// When nothing in the window has focus (or a modal dialog opens over
+    /// it), the group's first control takes it, so a gamepad or the arrows
+    /// have somewhere to start. See [`Element::spatial_nav`].
+    Spatial,
 }
 
 impl Element {
@@ -145,6 +156,17 @@ impl Element {
     pub fn focus_group(mut self, group: FocusGroup) -> Self {
         self.keyboard_mut().focus_group = Some(group);
         self
+    }
+
+    /// Move focus among the controls inside this element by where they are
+    /// on screen: the arrow keys (and, with
+    /// [`App::gamepad_navigation`](crate::App::gamepad_navigation), a
+    /// gamepad's d-pad and left stick) go to the nearest control in the
+    /// direction pressed. Shorthand for
+    /// [`focus_group`](Self::focus_group)`(`[`FocusGroup::Spatial`]`)`; see
+    /// there. A game's menus, a settings screen, a grid of levels.
+    pub fn spatial_nav(self) -> Self {
+        self.focus_group(FocusGroup::Spatial)
     }
 }
 

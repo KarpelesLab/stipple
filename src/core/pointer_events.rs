@@ -371,7 +371,7 @@ pub(crate) fn pointer_at(
         }
     }
     match node.pointer {
-        Some(id) if wants(id) && node.bounds.contains(point) => Some(id),
+        Some(id) if wants(id) && !node.hit_through && node.bounds.contains(point) => Some(id),
         _ => None,
     }
 }
@@ -404,7 +404,7 @@ pub(crate) fn wheel_target_at(
         return None;
     }
     match node.pointer {
-        Some(id) if wants(id) => Some(WheelTarget::Handler(id)),
+        Some(id) if wants(id) && !node.hit_through => Some(WheelTarget::Handler(id)),
         _ => node.scroll.map(|_| WheelTarget::Scroll),
     }
 }

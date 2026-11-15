@@ -268,6 +268,10 @@ pub struct Element {
     /// Laid out as usual but kept off stage: not drawn, hit, focused or
     /// shown to assistive technologies. Set via [`Element::offstage`].
     pub offstage: bool,
+    /// Pointer input passes through the element itself to what is under
+    /// it; the elements inside it still take theirs. Set via
+    /// [`Element::hit_through`].
+    pub hit_through: bool,
     /// Interaction-state styling and motion: the element's
     /// [`key`](Element::key), per-state overrides
     /// ([`hovered`](Element::hovered), [`drag_over`](Element::drag_over)…),
@@ -305,6 +309,7 @@ impl Element {
             transform: None,
             opacity: 1.0,
             offstage: false,
+            hit_through: false,
             reactive: None,
             kind: ElementKind::Leaf,
         }
@@ -337,6 +342,7 @@ impl Element {
             transform: None,
             opacity: 1.0,
             offstage: false,
+            hit_through: false,
             reactive: None,
             kind: ElementKind::Text {
                 text: text.into(),
@@ -382,6 +388,7 @@ impl Element {
             transform: None,
             opacity: 1.0,
             offstage: false,
+            hit_through: false,
             reactive: None,
             kind: ElementKind::Viewport { id },
         }
@@ -416,6 +423,7 @@ impl Element {
             transform: None,
             opacity: 1.0,
             offstage: false,
+            hit_through: false,
             reactive: None,
             kind: ElementKind::Image {
                 source: source.into(),
@@ -451,6 +459,7 @@ impl Element {
             transform: None,
             opacity: 1.0,
             offstage: false,
+            hit_through: false,
             reactive: None,
             kind: ElementKind::Stack {
                 axis,
@@ -1167,6 +1176,25 @@ impl Element {
     /// page of a navigation bar alive while one shows.
     pub fn offstage(mut self, offstage: bool) -> Self {
         self.offstage = offstage;
+        self
+    }
+
+    /// Let pointer input through this element to what is under it, except
+    /// where an element inside it takes it: a game's HUD laid over its
+    /// canvas, where a click on the HUD's empty area (or on a health bar,
+    /// a score) reaches the canvas and a click on a pause button presses
+    /// the button.
+    ///
+    /// Inside a view, an element without handlers already lets presses
+    /// through to the elements under it (in
+    /// [`layers`](Element::layers), say); this also passes over the
+    /// element's own tap, pointer, wheel and context handlers and its
+    /// cursor. As an overlay's content (see
+    /// [`Cx::overlay`](crate::core::Cx::overlay)), a non-modal overlay
+    /// made this way takes only the presses its children take, and the
+    /// rest reach the layers below instead of stopping at the overlay.
+    pub fn hit_through(mut self) -> Self {
+        self.hit_through = true;
         self
     }
 

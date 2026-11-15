@@ -466,6 +466,7 @@ fn layout_element(
         key: el.reactive.as_ref().and_then(|r| r.id),
         ghost: false,
         offstage: el.offstage,
+        hit_through: el.hit_through,
         children: Vec::new(),
     };
 
@@ -673,6 +674,29 @@ pub fn paint_focus(
     caret: Color,
     selection: Color,
 ) {
+    paint_focus_look(
+        tree,
+        focused,
+        scene,
+        font,
+        (ring, &crate::style::FocusLook::STANDARD),
+        caret,
+        selection,
+    );
+}
+
+/// [`paint_focus`] with the ring drawn the way `look` says (its width, how
+/// far it stands off a button, its glow; see
+/// [`Theme::focus`](crate::style::Theme::focus)).
+pub fn paint_focus_look(
+    tree: &LayoutNode,
+    focused: FocusId,
+    scene: &mut Scene,
+    font: Option<&Font>,
+    (ring, look): (Color, &crate::style::FocusLook),
+    caret: Color,
+    selection: Color,
+) {
     let Some((node, to_window, opacity)) = node_to_window(tree, &|n| n.focus == Some(focused))
     else {
         return;
@@ -682,7 +706,7 @@ pub fn paint_focus(
     if layer {
         scene.push_layer(to_window, opacity);
     }
-    paint_focus_node(node, scene, font, ring, caret, selection);
+    paint_focus_node(node, scene, font, (ring, look), caret, selection);
     if layer {
         scene.pop_layer();
     }
@@ -693,7 +717,7 @@ fn paint_focus_node(
     node: &LayoutNode,
     scene: &mut Scene,
     font: Option<&Font>,
-    ring: Color,
+    (ring, look): (Color, &crate::style::FocusLook),
     caret: Color,
     selection: Color,
 ) {
@@ -701,20 +725,39 @@ fn paint_focus_node(
         .native
         .is_some_and(|n| crate::platform::native::draws_focus(n.control));
     if !os_focus {
-        if crate::core::tab_focus::is_tap_focus(node) {
-            // A button's ring stands off it, following its corners, so it
-            // shows on a button filled with the ring's color too.
-            let (r, out) = (node.decoration.radius, crate::core::tab_focus::RING_OFFSET);
-            let b = node.bounds;
-            let around = Rect::from_xywh(
-                b.min_x() - out,
-                b.min_y() - out,
-                b.width() + 2.0 * out,
-                b.height() + 2.0 * out,
-            );
-            scene.stroke_round_rect(around, if r > 0.0 { r + out } else { 0.0 }, ring, 2.0);
+        // A button's ring stands off it, following its corners, so it
+        // shows on a button filled with the ring's color too.
+        let tap = crate::core::tab_focus::is_tap_focus(node);
+        let (r, out) = if tap {
+            (node.decoration.radius, look.offset)
         } else {
-            scene.stroke_rect(node.bounds, ring, 2.0);
+            (node.decoration.radius, 0.0)
+        };
+        let b = node.bounds;
+        let grown = |by: f64| {
+            Rect::from_xywh(
+                b.min_x() - by,
+                b.min_y() - by,
+                b.width() + 2.0 * by,
+                b.height() + 2.0 * by,
+            )
+        };
+        let corner = |by: f64| if r > 0.0 { r + by } else { 0.0 };
+        // The glow: rings fading out beyond the ring, drawn first.
+        if look.glow > 0.0 {
+            let steps = (look.glow / 2.0).ceil().max(1.0) as usize;
+            for i in (0..steps).rev() {
+                let by = out + look.width / 2.0 + 1.0 + 2.0 * i as f64;
+                let fade = 1.0 - i as f64 / steps as f64;
+                let a = (f64::from(ring.a) * 0.3 * fade * fade).round() as u8;
+                let color = Color { a, ..ring };
+                scene.stroke_round_rect(grown(by), corner(by), color, 2.0);
+            }
+        }
+        if tap || r > 0.0 {
+            scene.stroke_round_rect(grown(out), corner(out), ring, look.width);
+        } else {
+            scene.stroke_rect(b, ring, look.width);
         }
     }
     // Only text entry shows a caret: not a focusable that also takes taps (a

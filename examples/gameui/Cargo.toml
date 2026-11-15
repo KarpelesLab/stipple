@@ -1,0 +1,16 @@
+[package]
+name = "gameui"
+description = "Stipple example: a game's UI — title menu, settings (volume, controls, display), a HUD over the game, a pause menu and a dialogue box, all driven by the keyboard and a gamepad."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true

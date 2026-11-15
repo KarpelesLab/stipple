@@ -17,6 +17,7 @@ mod pixel;
 mod sprite;
 mod tilemap;
 mod touch_controls;
+pub mod ui;
 
 #[cfg(test)]
 mod app_tests;

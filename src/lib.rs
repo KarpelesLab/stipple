@@ -73,7 +73,7 @@ use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
     KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_viewports,
     context_at, drag_hit_at, find_action, find_focus, find_text_pos, focus_at, hit_test,
-    layout_with_direction, measure, paint_focus, paint_hover, text_pos_at, viewport_at,
+    layout_with_direction, measure, paint_hover, text_pos_at, viewport_at,
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::{
@@ -154,6 +154,8 @@ pub struct App<S> {
     game: Option<Box<game::Runtime<S>>>,
     // `on_gamepad`'s hook.
     gamepad: Option<app_gamepad::GamepadFn<S>>,
+    // Menus driven by gamepads (`gamepad_navigation`).
+    gamepad_nav: Option<app_gamepad::GamepadNav<S>>,
 }
 
 /// Called when a window moves, resizes or changes state (see
@@ -568,6 +570,7 @@ impl<S: 'static> App<S> {
             closing: Vec::new(),
             game: None,
             gamepad: None,
+            gamepad_nav: None,
         }
     }
 
@@ -1300,6 +1303,13 @@ impl<S: 'static> Pane<S> {
         if crate::core::presence::retire_offstage(&mut tree, self.focused) {
             self.focused = None;
         }
+        // A spatial group (a game's menu) takes focus when nothing in the
+        // active layers has it, so the arrows and a gamepad start there.
+        let entered = crate::core::tab_focus::spatial_entry(&tree, modal_layers, self.focused);
+        if let Some(first) = entered {
+            self.focused = Some(first);
+            self.focus_visible = true;
+        }
         crate::core::mark_native_states(&mut tree, hovered, pressed, self.focused);
         self.native_fades.update(&mut tree, &theme.motion, now);
         self.update_highlights(&theme, now);
@@ -1322,6 +1332,11 @@ impl<S: 'static> Pane<S> {
         }
         self.tree = Some(tree);
         self.dirty = false;
+        if entered.is_some() {
+            // Built before it had focus: again, with its focused look.
+            self.dirty = true;
+            crate::platform::frame::request();
+        }
         self.paint_scene(&theme, font)
     }
 
@@ -1345,12 +1360,12 @@ impl<S: 'static> Pane<S> {
         }
         // Overlay a focus ring + caret on the focused element.
         if let Some(fid) = self.focused {
-            paint_focus(
+            crate::core::paint_focus_look(
                 tree,
                 fid,
                 &mut scene,
                 font,
-                theme.palette.focus_ring,
+                (theme.palette.focus_ring, &theme.focus),
                 theme.palette.text,
                 theme.palette.selection,
             );
@@ -1582,20 +1597,16 @@ impl<S: 'static> Pane<S> {
         }
         if focus_changed {
             // The focus ring is a 2px stroke centered on the bounds, so inflate
-            // to cover the half that sits outside (plus a safety margin).
+            // to cover the half that sits outside (plus a safety margin), or
+            // as far as the theme's ring and glow reach.
+            let margin = self.built_theme.map_or(FOCUS_RING_MARGIN, |t| {
+                t.focus.reach().max(FOCUS_RING_MARGIN)
+            });
             if let Some(id) = self.painted_focused {
-                rects.push(drawn_bounds(
-                    old,
-                    &|n| n.focus == Some(id),
-                    FOCUS_RING_MARGIN,
-                )?);
+                rects.push(drawn_bounds(old, &|n| n.focus == Some(id), margin)?);
             }
             if let Some(id) = self.focused {
-                rects.push(drawn_bounds(
-                    new,
-                    &|n| n.focus == Some(id),
-                    FOCUS_RING_MARGIN,
-                )?);
+                rects.push(drawn_bounds(new, &|n| n.focus == Some(id), margin)?);
             }
         }
         Some(rects)
@@ -1845,7 +1856,18 @@ impl<S: 'static> Pane<S> {
         input: KeyInput,
     ) -> bool {
         self.ensure_tree(state, theme, font);
-        let Some(id) = self.focused else { return false };
+        let Some(id) = self.focused else {
+            return self.enter_spatial(&input);
+        };
+        // In a spatial group (a game's menu), the arrows move focus by where
+        // the controls are.
+        if self
+            .tree
+            .as_ref()
+            .is_some_and(|t| crate::core::tab_focus::spatial_takes(t, id, &input))
+        {
+            return self.arrow_focus(state, id, &input);
+        }
         // A focused button: Enter or Space presses it, in its middle, as a
         // tap there would; it takes no other keys.
         if let Some((action, at)) = self
@@ -1889,6 +1911,23 @@ impl<S: 'static> Pane<S> {
             crate::core::set_pointer_position(at, None);
             self.handlers.dispatch(action, state);
         }
+        true
+    }
+
+    /// With nothing focused, an arrow key (or Enter) focuses the first
+    /// control of a spatial group, if the window has one. Returns whether
+    /// it did.
+    fn enter_spatial(&mut self, input: &KeyInput) -> bool {
+        let wants = crate::core::tab_focus::Direction::of(input).is_some()
+            || crate::core::tab_focus::activates(input);
+        let Some(first) = self.tree.as_ref().filter(|_| wants).and_then(|t| {
+            crate::core::tab_focus::spatial_entry(t, self.modal_layers, self.focused)
+        }) else {
+            return false;
+        };
+        self.focused = Some(first);
+        self.focus_visible = true;
+        self.dirty = true;
         true
     }
 
@@ -2264,12 +2303,18 @@ fn press_layer(tree: &LayoutNode, overlays: bool, pos: Point) -> (&LayoutNode, b
     if !overlays {
         return (tree, true);
     }
+    // A hit-through overlay (a HUD) takes only what its controls take.
+    let takes = |layer: &LayoutNode| {
+        !layer.ghost
+            && layer.bounds.contains(pos)
+            && (!layer.hit_through || crate::core::takes_press(layer, pos))
+    };
     match tree
         .children
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, layer)| !layer.ghost && layer.bounds.contains(pos))
+        .find(|(_, l)| takes(l))
     {
         Some((i, layer)) => (layer, i == 0),
         None => (tree, true),
@@ -2874,9 +2919,14 @@ impl<S: 'static> App<S> {
             // each brings its own window up to date.
             let mut ran = false;
             if matches!(event, Event::Wake) {
-                let (did, next) = self
-                    .handle
-                    .pump(&mut self.state, crate::platform::time::Instant::now());
+                let now = crate::platform::time::Instant::now();
+                let (did, next) = self.handle.pump(&mut self.state, now);
+                // A gamepad direction held in a menu repeats.
+                let did = self.gamepad_nav_wake(0, now) | did;
+                let next = match (next, self.gamepad_nav_deadline()) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
                 crate::platform::wake::set_deadline(next);
                 if self.handle.exit_requested() {
                     return ControlFlow::Exit;
@@ -3203,7 +3253,10 @@ impl<S: 'static> App<S> {
                             return ControlFlow::Wait;
                         }
                         let writes_clipboard = matches!(input, KeyInput::Copy | KeyInput::Cut);
+                        let escape = input == KeyInput::Escape;
                         let changed = self.pane_press_key(idx, input);
+                        // Unused, Escape goes back in a game's menus.
+                        let changed = changed || (escape && self.escape_back(idx));
                         // (Unless the handler put richer content there itself,
                         // which the present below hands over.)
                         if writes_clipboard && !crate::core::clipboard_write_queued() {
@@ -3299,7 +3352,10 @@ impl<S: 'static> App<S> {
                     ControlFlow::Wait
                 }
                 Event::Gamepad(ref pad) => {
-                    if self.run_gamepad(pad) && !self.in_background() {
+                    let heard = self.run_gamepad(pad);
+                    let now = crate::platform::time::Instant::now();
+                    let moved = self.gamepad_nav_event(idx, pad, now);
+                    if (heard || moved) && !self.in_background() {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -3830,7 +3886,10 @@ impl<S: 'static> App<S> {
         if code == KeyCode::Tab {
             return self.pane_focus_next(0);
         }
-        map_key(code, modifiers).is_some_and(|input| self.pane_press_key(0, input))
+        map_key(code, modifiers).is_some_and(|input| {
+            let escape = input == KeyInput::Escape;
+            self.pane_press_key(0, input) || (escape && self.escape_back(0))
+        })
     }
 
     /// Release `code` in the primary window: Alt released on its own focuses
@@ -3974,7 +4033,7 @@ pub mod prelude {
     };
     pub use crate::render::{Decoration, FontStyle, FontWeight, UnderlineStyle};
     pub use crate::style::Theme;
-    pub use crate::style::{MotionTokens, Palette, Spacing, Typography};
+    pub use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Typography};
     pub use crate::widgets::{
         Chip, ColorPicker, PasswordField, Tab, TabBar, TabBarState, TabIndicator, chip,
         choice_chips, color_button, color_picker, filter_chips, password_field, tab_bar,

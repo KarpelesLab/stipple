@@ -23,7 +23,7 @@
 use crate::core::a11y::Role;
 use crate::core::keys::FocusGroup;
 use crate::core::runtime::{ActionId, FocusId, KeyInput, LayoutNode, find_focus, node_to_window};
-use crate::geometry::Point;
+use crate::geometry::{Point, Rect};
 
 /// How far a button's focus ring stands off its edge, in logical pixels.
 pub const RING_OFFSET: f64 = 2.0;
@@ -164,31 +164,19 @@ fn collect_stops(node: &LayoutNode, focused: Option<FocusId>, out: &mut Vec<Focu
 /// an element made a [`focus_group`](crate::core::Element::focus_group)
 /// (the innermost, if they nest): the group's control it lands on and, in a
 /// [`FocusGroup::Select`] group, the tap to run on it (as
-/// [`tap_activation`] gives it). `None` when `focused` isn't in a group or
-/// `input` isn't an arrow, Home or End.
+/// [`tap_activation`] gives it). In a [`FocusGroup::Spatial`] group, the
+/// nearest control the arrow points to (see [`spatial_pick`]). `None` when
+/// `focused` isn't in a group or `input` isn't an arrow, Home or End.
 pub fn arrow_step(
     tree: &LayoutNode,
     focused: FocusId,
     input: &KeyInput,
 ) -> Option<(FocusId, Option<(ActionId, Point)>)> {
-    /// The innermost group around the node focused `id` (`group`: the
-    /// innermost around `node`).
-    fn find<'a>(
-        node: &'a LayoutNode,
-        id: FocusId,
-        group: Option<&'a LayoutNode>,
-    ) -> Option<Option<&'a LayoutNode>> {
-        if node.focus == Some(id) {
-            return Some(group);
-        }
-        let group = if group_of(node).is_some() {
-            Some(node)
-        } else {
-            group
-        };
-        node.children.iter().find_map(|c| find(c, id, group))
+    let group = group_around(tree, focused)?;
+    if group_of(group) == Some(FocusGroup::Spatial) {
+        let dir = Direction::of(input)?;
+        return spatial_step(tree, group, focused, dir).map(|next| (next, None));
     }
-    let group = find(tree, focused, None)??;
     let mut members = Vec::new();
     crate::core::collect_focusables(group, &mut members);
     let n = members.len();
@@ -214,6 +202,281 @@ pub fn arrow_step(
         _ => None,
     };
     Some((next, press))
+}
+
+/// The innermost [`focus_group`](crate::core::Element::focus_group) around
+/// the node focused `id`, if it is in one.
+fn group_around(tree: &LayoutNode, id: FocusId) -> Option<&LayoutNode> {
+    /// The innermost group around the node focused `id` (`group`: the
+    /// innermost around `node`).
+    fn find<'a>(
+        node: &'a LayoutNode,
+        id: FocusId,
+        group: Option<&'a LayoutNode>,
+    ) -> Option<Option<&'a LayoutNode>> {
+        if node.focus == Some(id) {
+            return Some(group);
+        }
+        let group = if group_of(node).is_some() {
+            Some(node)
+        } else {
+            group
+        };
+        node.children.iter().find_map(|c| find(c, id, group))
+    }
+    find(tree, id, None)?
+}
+
+/// A direction focus moves in on screen (see [`FocusGroup::Spatial`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+impl Direction {
+    /// The direction an arrow key points, `None` for other keys.
+    pub fn of(input: &KeyInput) -> Option<Direction> {
+        match input {
+            KeyInput::Left => Some(Direction::Left),
+            KeyInput::Right => Some(Direction::Right),
+            KeyInput::Up => Some(Direction::Up),
+            KeyInput::Down => Some(Direction::Down),
+            _ => None,
+        }
+    }
+
+    /// The arrow key pointing this way.
+    pub fn key(self) -> KeyInput {
+        match self {
+            Direction::Left => KeyInput::Left,
+            Direction::Right => KeyInput::Right,
+            Direction::Up => KeyInput::Up,
+            Direction::Down => KeyInput::Down,
+        }
+    }
+
+    /// The other way.
+    pub fn opposite(self) -> Direction {
+        match self {
+            Direction::Left => Direction::Right,
+            Direction::Right => Direction::Left,
+            Direction::Up => Direction::Down,
+            Direction::Down => Direction::Up,
+        }
+    }
+
+    /// Left or right.
+    pub fn is_horizontal(self) -> bool {
+        matches!(self, Direction::Left | Direction::Right)
+    }
+}
+
+/// Where a candidate lies from the control focus leaves, going one way.
+struct Placed {
+    id: FocusId,
+    /// Whether it is ahead that way at all.
+    ahead: bool,
+    /// The gap between the edges facing each other (0 when they overlap).
+    gap: f64,
+    /// How far its center is off the line through the focused one's.
+    off: f64,
+    /// Whether it shares the focused one's row (going left or right) or
+    /// column (going up or down).
+    in_beam: bool,
+    /// How far its far edge is from the focused one's near edge.
+    reach: f64,
+}
+
+fn place(from: Rect, (id, r): (FocusId, Rect), dir: Direction) -> Placed {
+    const EPS: f64 = 0.5;
+    let (fc, c) = (from.center(), r.center());
+    let (ahead, gap, reach) = match dir {
+        Direction::Right => (
+            c.x > fc.x + EPS && r.max_x() > from.max_x() - EPS,
+            r.min_x() - from.max_x(),
+            r.max_x() - from.min_x(),
+        ),
+        Direction::Left => (
+            c.x < fc.x - EPS && r.min_x() < from.min_x() + EPS,
+            from.min_x() - r.max_x(),
+            from.max_x() - r.min_x(),
+        ),
+        Direction::Down => (
+            c.y > fc.y + EPS && r.max_y() > from.max_y() - EPS,
+            r.min_y() - from.max_y(),
+            r.max_y() - from.min_y(),
+        ),
+        Direction::Up => (
+            c.y < fc.y - EPS && r.min_y() < from.min_y() + EPS,
+            from.min_y() - r.max_y(),
+            from.max_y() - r.min_y(),
+        ),
+    };
+    let (off, in_beam) = if dir.is_horizontal() {
+        (
+            (c.y - fc.y).abs(),
+            r.min_y() < from.max_y() && r.max_y() > from.min_y(),
+        )
+    } else {
+        (
+            (c.x - fc.x).abs(),
+            r.min_x() < from.max_x() && r.max_x() > from.min_x(),
+        )
+    };
+    Placed {
+        id,
+        ahead,
+        gap: gap.max(0.0),
+        off,
+        in_beam,
+        reach,
+    }
+}
+
+/// Spatial navigation's geometry: of `candidates` (each control and where
+/// it is on screen), the one focus moves to from the control at `from`
+/// going `dir`.
+///
+/// Only controls ahead of `from` that way count. The nearest one sharing
+/// its row (going left or right) or column (going up or down) wins, then
+/// the best lined up of those as near, unless one out of line lies wholly
+/// nearer than it starts: then the nearest out of line by
+/// `13·gap² + offset²` (Android's weighing, which favors staying in line).
+/// With nothing ahead and `wrap`, focus wraps to the farthest control the
+/// other way in the same row or column.
+pub fn spatial_pick(
+    from: Rect,
+    candidates: &[(FocusId, Rect)],
+    dir: Direction,
+    wrap: bool,
+) -> Option<FocusId> {
+    let by = |a: f64, b: f64| a.partial_cmp(&b).unwrap_or(std::cmp::Ordering::Equal);
+    let placed: Vec<Placed> = candidates
+        .iter()
+        .filter(|(_, r)| *r != from)
+        .map(|&c| place(from, c, dir))
+        .filter(|p| p.ahead)
+        .collect();
+    let beam = placed
+        .iter()
+        .filter(|p| p.in_beam)
+        .min_by(|a, b| by(a.gap, b.gap).then(by(a.off, b.off)));
+    let score = |p: &Placed| 13.0 * p.gap * p.gap + p.off * p.off;
+    let other = placed
+        .iter()
+        .filter(|p| !p.in_beam)
+        .min_by(|a, b| by(score(a), score(b)));
+    let extent = if dir.is_horizontal() {
+        from.width()
+    } else {
+        from.height()
+    };
+    match (beam, other) {
+        // Out of line, it only wins when it ends before the one in line
+        // starts.
+        (Some(b), Some(o)) if o.reach <= b.gap + extent => return Some(o.id),
+        (Some(b), _) => return Some(b.id),
+        (None, Some(o)) => return Some(o.id),
+        (None, None) => {}
+    }
+    if !wrap {
+        return None;
+    }
+    // Wrap: the farthest the other way, in line.
+    candidates
+        .iter()
+        .filter(|(_, r)| *r != from)
+        .map(|&c| place(from, c, dir.opposite()))
+        .filter(|p| p.ahead && p.in_beam)
+        .max_by(|a, b| by(a.reach, b.reach).then(by(b.off, a.off)))
+        .map(|p| p.id)
+}
+
+/// Where the node focused `id` is drawn, in window coordinates (the box
+/// around it, through any transform).
+fn drawn_rect(tree: &LayoutNode, id: FocusId) -> Option<Rect> {
+    let (node, to_window, _) = node_to_window(tree, &|n| n.focus == Some(id))?;
+    Some(if to_window.is_identity() {
+        node.bounds
+    } else {
+        to_window.map_rect(node.bounds)
+    })
+}
+
+/// The control in spatial `group` focus moves to from `focused` going `dir`
+/// (see [`spatial_pick`]).
+fn spatial_step(
+    tree: &LayoutNode,
+    group: &LayoutNode,
+    focused: FocusId,
+    dir: Direction,
+) -> Option<FocusId> {
+    let mut members = Vec::new();
+    crate::core::collect_focusables(group, &mut members);
+    let from = drawn_rect(tree, focused)?;
+    let candidates: Vec<(FocusId, Rect)> = members
+        .into_iter()
+        .filter(|id| *id != focused)
+        .filter_map(|id| Some((id, drawn_rect(tree, id)?)))
+        .collect();
+    spatial_pick(from, &candidates, dir, true)
+}
+
+/// Whether the key `input` on the control focused `focused` moves focus
+/// spatially instead of going to the control: the control sits in a
+/// [`FocusGroup::Spatial`] group (the innermost around it) and `input` is
+/// an arrow that it doesn't keep. A button keeps none; a control with a key
+/// handler of its own (a slider, a field) keeps Left and Right.
+pub fn spatial_takes(tree: &LayoutNode, focused: FocusId, input: &KeyInput) -> bool {
+    let Some(dir) = Direction::of(input) else {
+        return false;
+    };
+    if group_around(tree, focused).and_then(group_of) != Some(FocusGroup::Spatial) {
+        return false;
+    }
+    !dir.is_horizontal() || find_focus(tree, focused).is_some_and(is_tap_focus)
+}
+
+/// The control a [`FocusGroup::Spatial`] group gives focus to when focus
+/// isn't in the window's active layers (`modal_layers`, as for
+/// [`tab_order`]): nothing has focus, or a modal dialog opened over the
+/// focused control. The first control of the first spatial group there, in
+/// tree order; `None` when focus is already there, or there is no such
+/// group.
+pub fn spatial_entry(
+    tree: &LayoutNode,
+    modal_layers: Option<usize>,
+    focused: Option<FocusId>,
+) -> Option<FocusId> {
+    fn first(node: &LayoutNode) -> Option<FocusId> {
+        if node.ghost {
+            return None;
+        }
+        if group_of(node) == Some(FocusGroup::Spatial) {
+            let mut members = Vec::new();
+            crate::core::collect_focusables(node, &mut members);
+            if let Some(f) = members.first() {
+                return Some(*f);
+            }
+        }
+        node.children.iter().find_map(first)
+    }
+    let layers: Vec<&LayoutNode> = match modal_layers {
+        Some(n) => {
+            let all: Vec<&LayoutNode> = tree.children.iter().filter(|l| !l.ghost).collect();
+            all[all.len().saturating_sub(n)..].to_vec()
+        }
+        None => vec![tree],
+    };
+    if let Some(f) = focused
+        && layers.iter().any(|l| find_focus(l, f).is_some())
+    {
+        return None;
+    }
+    layers.into_iter().find_map(first)
 }
 
 /// The focusable after `current` in `order` (before it, `back`), wrapping;

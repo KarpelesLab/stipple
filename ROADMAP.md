@@ -2175,17 +2175,36 @@ game needs on top:
   Interruption notifications and Android audio focus aren't followed yet.*
 
 #### 9e — Game UI
-- ⬜ A game theme: the game's own fonts (loaded from its files), colors,
+- ✅ A game theme: the game's own fonts (loaded from its files), colors,
   corner radii and focus look, in place of the system-like themes.
-- ⬜ Menus driven by the keyboard and the gamepad: focus moves in the direction
+  *`game::ui::GameStyle` (font from bytes, colors, radius, size, focus) →
+  `Theme::game` / `App::game_style`; presets `neon` and `ember`.
+  `Theme::focus` is a `FocusLook` (width, offset, glow) for every theme;
+  `FocusLook::BOLD` glows. See [docs/games.md](docs/games.md#game-ui).*
+- ✅ Menus driven by the keyboard and the gamepad: focus moves in the direction
   pressed (spatial navigation), A/Enter activates, B/Escape goes back.
-- ⬜ Screens: a title menu, a pause menu over the frozen game, a
+  *`Element::spatial_nav()` (`FocusGroup::Spatial`): geometry-based moves,
+  wrapping in line, the first control focused when nothing is;
+  `App::gamepad_navigation[_when]`: d-pad and stick (thresholds, held
+  repeat) as arrows, South as Enter, East and Escape to `on_back`.
+  Unit- and App-tested.*
+- ✅ Screens: a title menu, a pause menu over the frozen game, a
   game-over screen, through `page_stack` and modal overlays.
-- ⬜ A settings screen's parts: volume sliders, a control-rebinding row ("press
+  *`menu_button`, `menu_list`, `title_screen`, `pause_menu` (modal),
+  `game_over_screen`, `controls_hint`; `examples/gameui`.*
+- ✅ A settings screen's parts: volume sliders, a control-rebinding row ("press
   a key…"), display settings (fullscreen, vsync, pixel scale), language.
-- ⬜ A HUD over the canvas: layers that let input through to the game except
+  *`volume_row`/`game_slider`, `binding_row` + `RebindCapture` (via
+  `Binding::capture`; Escape or a timeout cancel; conflicts flagged),
+  `fullscreen_row`, `choice_row` (pixel scale, language), `toggle_row`.
+  No vsync switch: frames always follow the display.*
+- ✅ A HUD over the canvas: layers that let input through to the game except
   where a widget sits; health and progress bars, counters, a minimap slot;
   floating text and dialogue boxes with typewriter text.
+  *`hud` + `Element::hit_through()` (also for overlays), `stat_bar` /
+  `health_bar` with a damage ghost, `counter` (pops), `minimap_slot`,
+  `FloatingTexts`, `dialogue_box` + `Typewriter`. Tested at fixed frame
+  times. Not covered: clicks on HUD buttons still reach `InputState`.*
 
 #### 9f — Saving
 - ⬜ Settings and save slots in the app's data directory (#49), written

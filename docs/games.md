@@ -16,11 +16,13 @@ that are a game's own:
   player can change and save.
 - **Drawing** ([below](#drawing)): sprite sheets and animations, tilemaps, a
   camera, and pixel art scaled by whole numbers, on fast blit paths.
+- **Game UI** ([below](#game-ui)): a game theme, menus driven by the
+  keyboard and gamepads, settings rows (volume, rebinding, display), a HUD
+  and dialogue boxes.
 
-Pointer lock is in [pointer-events.md](pointer-events.md#pointer-lock) and
-gamepads in [gamepads.md](gamepads.md). The rest of Phase 9 (see the
-[roadmap](../ROADMAP.md#phase-9--2d-games)), touch controls, audio and game
-UI, lands alongside.
+Pointer lock is in [pointer-events.md](pointer-events.md#pointer-lock),
+gamepads in [gamepads.md](gamepads.md) and sound in [audio.md](audio.md). See
+the [roadmap](../ROADMAP.md#phase-9--2d-games) for what Phase 9 still lacks.
 
 The `gameloop` example puts the pieces together in about a hundred lines: a
 square moved with the arrows or WASD, stepped at 120 Hz, with an fps label.
@@ -493,3 +495,212 @@ resolution (320×180 is 1/36 of 1080p) plus one nearest blit to the window.
 
 Not yet: the frame isn't presented from the GPU without a read-back (Phase 6
 work), and the software blits run on one thread.
+
+## Game UI
+
+`stipple::game::ui` dresses Stipple's widgets for a game: the game's own
+font and colors, menus moved through with the arrows and a gamepad, the
+usual screens, a settings screen's rows and a HUD over the game. None of it
+is a framework: screens are pages of a `page_stack` (or a `match` in the
+view), the pause menu is a modal overlay, and everything else is an
+`Element`. `examples/gameui` ("Starlit Courier") puts it all together;
+`gameui --shots DIR` renders each screen off screen.
+
+![gameui's settings screen](screenshots/stipple-gameui-settings.png)
+
+### A game's theme
+
+```rust
+use stipple::game::ui::GameStyle;
+
+let style = GameStyle::neon() // or GameStyle::ember()
+    .with_font_bytes(include_bytes!("../assets/Display.ttf").to_vec())?
+    .with_accent(Color::rgb(0x2e, 0xc4, 0xb6));
+App::new(state, view).game_style(style); // the theme and the font
+```
+
+A `GameStyle` is what a game decides: `font` (from the game's files with
+`with_font_bytes`, or `with_font` for a `Font` with more faces),
+`background`, `surface`, `accent`, `text`, `text_muted`, `danger`,
+`success`, `warning`, `radius`, `font_size` and `focus`. `style.theme()`
+(or `Theme::game(&style)`) makes the `Theme` every widget reads, with a
+type scale for a screen read from the sofa (titles 1.3×, headings 2× the
+body). Widgets draw text in the app's font, so the font goes to
+`App::font`; `App::game_style` sets both. The presets: `neon` (night blues,
+a hot pink accent, a glowing ring) and `ember` (charcoal and parchment,
+amber, square corners).
+
+**The focus ring.** `Theme::focus` is a `FocusLook`, for any theme: the
+ring's `width`, its `offset` from a button, and a `glow` fading out around
+it. `FocusLook::STANDARD` is the usual 2 px ring; `FocusLook::BOLD` (3 px,
+3 px off, an 8 px glow) is a game's. The ring follows rounded corners.
+
+### Menus for the keyboard and the gamepad
+
+```rust
+use stipple::game::ui::{menu_button, menu_list};
+
+let menu = menu_list(&theme, vec![
+    menu_button(cx, &theme, "Start", |g: &mut Game| g.start()),
+    menu_button(cx, &theme, "Settings", |g: &mut Game| g.screen = Screen::Settings),
+    menu_button(cx, &theme, "Quit", move |_: &mut Game| handle.exit()),
+]);
+
+App::new(game, view)
+    .gamepad_navigation()
+    .on_back(|g| g.back()); // Escape, and the pad's B / ○
+```
+
+**Spatial navigation.** `Element::spatial_nav()` (that is,
+`focus_group(FocusGroup::Spatial)`) makes the arrow keys move focus among
+the controls inside an element by where they are on screen: Down reaches
+the control below, whatever the tree's order, across the columns of a
+settings screen or the cells of a level grid. The nearest control in line
+(sharing the row going left or right, the column going up or down) wins,
+unless one out of line ends before it starts (then the nearest by
+`13·gap² + offset²`, Android's weighing); past the last one in a row or a
+column, focus wraps to the first. A control with a key handler of its own
+(a slider, a choice row, a text field) keeps Left and Right; Up and Down
+still move. When nothing in the window has focus, or a modal dialog opens
+over the focused control, the first control of the first spatial group
+there takes it, its ring showing, so a pad has somewhere to start: the
+title menu's first button, the pause menu's "Resume", a dialogue box.
+`menu_list` is a column made `spatial_nav`; Enter and Space press the
+focused button.
+
+**Gamepads.** `App::gamepad_navigation()` drives the menus with every
+connected pad: the d-pad and the left stick move focus as the arrows do
+(the stick presses a direction past 0.5 and lets go of it below 0.3; a
+held direction repeats after 400 ms, then every 120 ms), South (A, ✕)
+presses like Enter, and East (B, ○) goes back: an open menu closes, else
+`App::on_back` runs. Escape goes back the same way when nothing focused
+used it. `gamepad_navigation_when(|s| …)` turns it on only when the state
+says so: off while a controls row waits for a button, say. `on_gamepad`
+still hears every event (Start to pause). `App::gamepad_event(&event, now)`
+and `App::gamepad_repeat(now)` feed it by hand, for tests and scripted
+input.
+
+`menu_button` is a wide button with its label in the title size; focused
+(from the keyboard or a pad) or hovered, it fills with the accent, grows 6%
+on a spring and shows ‹ › markers. It reads its state through
+`Cx::interaction` under the key `("menu_button", label)`, so the buttons
+shown at once need different labels.
+
+### Screens
+
+| | |
+|---|---|
+| `title_screen(theme, title, subtitle, menu, footer)` | The title large in the accent, the menu under it, a footer (a `controls_hint`) at the bottom. |
+| `pause_menu(cx, theme, title, buttons, on_resume)` | A modal panel over the game, dimmed behind it; a press on the game resumes. Declare it from the view while paused, and pause the loop with `GameLoop::paused_when`: the canvas keeps the frozen frame. |
+| `game_over_screen(theme, title, lines, menu)` | The title in the danger color, popping in; a panel of results (`("Score", "340".into())`); the menu. |
+| `controls_hint(theme, &[("Enter / A", "Select"), …])`, `key_cap(theme, text)` | Key caps and what they do. |
+
+Switch screens with a `page_stack` on a `screen` field, and go back in
+`on_back`:
+
+```rust
+.on_back(|g: &mut Game| {
+    match g.screen {
+        Screen::Settings => g.screen = g.settings_back, // the title or the pause menu
+        Screen::Play => g.paused = !g.paused,
+        Screen::Title => return Handled::No,
+    }
+    Handled::Yes
+})
+```
+
+### A settings screen
+
+| | |
+|---|---|
+| `setting_row(theme, label, control)` | A label and a control on a band; a `spatial_nav` column of them is a settings screen. |
+| `volume_row(cx, theme, label, value, on_change)` | A `game_slider` in 5% steps and the percentage; `value` is an `f32` from 0 to 1, for the game's mixer. |
+| `game_slider(cx, theme, value, step, on_change)` | A slider that takes focus: Left and Right step it, Home and End go to the ends, a drag sets it. |
+| `toggle_row(cx, theme, label, on, on_toggle)` | A switch. |
+| `choice_row(cx, theme, label, options, selected, on_change)` | `‹ 2× ›`: Left, Right and Enter cycle through the options, and the arrows can be tapped. A pixel scale, a difficulty, a language. |
+| `fullscreen_row(cx, theme, label)` | A switch showing whether the window is fullscreen, switching it with `WindowRequest::Fullscreen`. |
+| `binding_row(cx, theme, label, bindings, &state, on_activate)` | An action's bindings as key caps (`binding_name`: `W`, `Space`, `←`, `L-Shift`, `Left click`), a ⚠ flag naming the actions it shares one with, and "Press a key…" while it waits. |
+
+There's no vsync row: frames always follow the display's refresh (see
+[the loop](#the-loop)).
+
+**"Press a key…".** Activating a binding row starts a
+`RebindCapture::new(action, slot)`, and each update of the game loop hands
+it the input:
+
+```rust
+fn update(g: &mut Game, frame: &mut Frame) {
+    if let Some(capture) = g.capture.as_mut() {
+        match capture.poll(frame.input(), frame.time()) {
+            Capture::Waiting => return,
+            Capture::Cancelled => g.capture = None,
+            Capture::Bound(binding) => {
+                capture.apply(&mut g.actions, binding); // returns the conflicts
+                g.capture = None;
+            }
+        }
+        frame.rebuild();
+        return;
+    }
+    // …
+}
+
+App::new(game, view)
+    // The loop runs while a capture waits, even in a paused game's settings…
+    .game_loop(GameLoop::new(update).paused_when(|g: &Game| g.paused && g.capture.is_none()))
+    // …and the pad's South button is bound, not pressed.
+    .gamepad_navigation_when(|g: &Game| g.capture.is_none());
+```
+
+`poll` takes what `Binding::capture` reports (keys and mouse buttons, and
+gamepad buttons where `Binding` has them). Its first call only starts the
+clock and lets that frame's presses go (the Enter or the click that
+started it). Escape cancels, and so does waiting longer than its `timeout`
+(8 s: a player with only a pad has no Escape). `key_event(ev)` does the
+same from an `on_raw_key` handler. `apply` puts the binding in the action's
+slot and returns the other actions bound to it too; `conflicts(&actions,
+action)` lists them for the row's flag. In the row's handler, start a
+capture only when none runs, so that a second Enter or click is the input
+bound.
+
+### A HUD
+
+```rust
+use stipple::game::ui::{self as gui, Bar};
+
+let overlay = column(vec![
+    row(vec![
+        gui::health_bar(&theme, g.hull, 100.0),
+        spacer(),
+        gui::counter(&theme, "score", "SCORE", g.score),
+    ]),
+    spacer(),
+    row(vec![spacer(), gui::minimap_slot(&theme, 140.0, 104.0, None)]),
+]);
+gui::hud(canvas, Element::layers(vec![overlay, gui::floating_texts(&theme, &g.floaters)]))
+```
+
+**Input through the HUD.** `hud(game, overlay)` lays the overlay, made
+`Element::hit_through()`, over the game. A press goes to the topmost
+element under it that takes presses, so the HUD's empty space, a bar or a
+score lets it through to the canvas's `on_pointer` handler, and a pause
+button takes it. `hit_through` also passes over the element's own
+handlers, and an overlay (`Cx::overlay`) whose content is hit-through takes
+only the presses its controls take, leaving the rest to the layers below.
+A game reading clicks from its `InputState` sees every click, those on HUD
+buttons too: take the game's clicks with `on_pointer` on the canvas to
+leave the HUD's to the HUD.
+
+| | |
+|---|---|
+| `stat_bar(theme, &Bar::new(value, max, color))` | A bar; `.segments(n)` cuts it into cells, `.size(w, h)`, `.ghost(color)`. Going down, the fill moves at once (`FILL_MOTION`, 120 ms) while the part just lost stays in the ghost color, lingers, then drains (`GHOST_MOTION`, 700 ms). |
+| `health_bar(theme, value, max)` | A heart, a bar in the danger color with its ghost, and `64/100`. |
+| `counter(theme, id, label, value)` | A label and a number that pops (from 1.6×, on a bouncy spring) each time it changes. |
+| `minimap_slot(theme, w, h, content)` | A framed, clipped box for the game's map canvas. |
+| `FloatingTexts`, `floating_texts(theme, &texts)` | `spawn(text, color, at, frame.time())` a "+10" where it happened; `update(frame.time())` each frame drops those older than `FLOAT_LIFE` (600 ms) and says whether to rebuild. Each is keyed: it rises into place as it comes, and rises off, fading, as it goes. |
+| `Typewriter`, `dialogue_box(cx, theme, speaker, &text, portrait, on_activate)` | A box along the bottom: the speaker's name on a tab, a portrait (an image, 72 × 72) and the text typed out at `TYPEWRITER_SPEED` (40 characters a second, or `with_speed`), timed by the frames that show it (`Cx::frame_time`). It asks for frames while it types, keeps its size meanwhile, and shows ▼ when done. It takes focus when it shows; a tap, Enter or South runs `on_activate`, where `text.advance()` reveals the rest, or returns `true` once all of it shows (go to the next line). |
+
+The geometry of spatial navigation, keys and a gamepad moving through a
+menu (the stick's thresholds, a held direction's repeat), the HUD letting
+presses through, the capture's flow, the typewriter's timing and the bar's
+ghost at fixed frame times are tested in `src/game/ui/tests.rs`.

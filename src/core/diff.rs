@@ -281,6 +281,7 @@ mod tests {
             key: None,
             ghost: false,
             offstage: false,
+            hit_through: false,
             children,
         }
     }
@@ -323,6 +324,7 @@ mod tests {
             key: None,
             ghost: false,
             offstage: false,
+            hit_through: false,
             children: Vec::new(),
         }
     }

@@ -120,6 +120,54 @@ pub struct Theme {
     /// press looks, toggles, tab indicators, popups, dialogs, toasts and
     /// disclosure triangles. See [`MotionTokens`].
     pub motion: MotionTokens,
+    /// How the focus ring around the focused control is drawn: its width,
+    /// how far it stands off a button, and a glow around it (see
+    /// [`FocusLook`]). Its color is [`Palette::focus_ring`].
+    pub focus: FocusLook,
+}
+
+/// How the keyboard focus ring is drawn (see [`Theme::focus`]). The default,
+/// [`FocusLook::STANDARD`], is a 2 px ring standing 2 px off a button; a game
+/// menu read from a couch wants something bolder, like
+/// [`FocusLook::BOLD`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FocusLook {
+    /// The ring's stroke width, in logical pixels.
+    pub width: f64,
+    /// How far the ring stands off a button's edge (the ring around a text
+    /// field or another element that takes keys sits on its edge).
+    pub offset: f64,
+    /// How far a soft glow in the ring's color spreads outside the ring,
+    /// fading out; 0 for none.
+    pub glow: f64,
+}
+
+impl FocusLook {
+    /// The usual ring: 2 px wide, 2 px off the button, no glow.
+    pub const STANDARD: FocusLook = FocusLook {
+        width: 2.0,
+        offset: 2.0,
+        glow: 0.0,
+    };
+
+    /// A game's ring: 3 px wide, 3 px off, with an 8 px glow.
+    pub const BOLD: FocusLook = FocusLook {
+        width: 3.0,
+        offset: 3.0,
+        glow: 8.0,
+    };
+
+    /// How far outside an element's bounds the ring and its glow reach, at
+    /// most (what has to be repainted when focus moves).
+    pub fn reach(&self) -> f64 {
+        self.offset.max(0.0) + self.width / 2.0 + self.glow.max(0.0) + 1.0
+    }
+}
+
+impl Default for FocusLook {
+    fn default() -> Self {
+        Self::STANDARD
+    }
 }
 
 /// Derive the hover/active/ring tints from a `primary` accent.
@@ -257,6 +305,7 @@ impl Theme {
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
             motion: MotionTokens::standard(),
+            focus: FocusLook::STANDARD,
         }
     }
 
@@ -290,6 +339,7 @@ impl Theme {
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
             motion: MotionTokens::standard(),
+            focus: FocusLook::STANDARD,
         }
     }
 
@@ -333,6 +383,12 @@ impl Theme {
     /// Set how the built-in widgets animate (see [`MotionTokens`]).
     pub fn with_motion(mut self, motion: MotionTokens) -> Self {
         self.motion = motion;
+        self
+    }
+
+    /// Set how the focus ring is drawn (see [`FocusLook`]).
+    pub fn with_focus(mut self, focus: FocusLook) -> Self {
+        self.focus = focus;
         self
     }
 
@@ -583,6 +639,7 @@ impl Theme {
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
             motion: MotionTokens::material(),
+            focus: FocusLook::STANDARD,
         }
     }
 }

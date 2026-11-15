@@ -1318,6 +1318,11 @@ pub struct LayoutNode {
     ///
     /// [`Element::offstage`]: crate::core::Element::offstage
     pub offstage: bool,
+    /// The element lets pointer input through (see
+    /// [`Element::hit_through`](crate::core::Element::hit_through)): its
+    /// own handlers aren't hit, and as an overlay layer it takes no press
+    /// that none of its children take.
+    pub hit_through: bool,
     pub children: Vec<LayoutNode>,
 }
 
@@ -1355,6 +1360,7 @@ impl LayoutNode {
             key: None,
             ghost: false,
             offstage: false,
+            hit_through: false,
             children,
         }
     }
@@ -1451,6 +1457,33 @@ pub(crate) fn clipped_out(node: &LayoutNode, point: Point) -> bool {
     node.clip && !node.bounds.contains(point)
 }
 
+/// Whether something in `node`'s subtree takes a press at `point` (window
+/// coordinates): a tap, pointer, drag, context, text or focus target, or a
+/// scroll container, other than a [`hit_through`](LayoutNode::hit_through)
+/// node's own. What a hit-through overlay layer is asked before it takes
+/// a press.
+pub fn takes_press(node: &LayoutNode, point: Point) -> bool {
+    let Some(point) = node.to_local(point) else {
+        return false;
+    };
+    if clipped_out(node, point) || node.ghost {
+        return false;
+    }
+    if node.children.iter().any(|c| takes_press(c, point)) {
+        return true;
+    }
+    !node.hit_through
+        && node.bounds.contains(point)
+        && (node.action.is_some()
+            || node.pointer.is_some()
+            || node.drag.is_some()
+            || node.drag_source.is_some()
+            || node.context.is_some()
+            || node.text_pos.is_some()
+            || node.focus.is_some()
+            || node.scroll.is_some())
+}
+
 /// Find the [`ActionId`] of the top-most tappable node containing `point`.
 ///
 /// Children are painted after (on top of) their parent, so they are tested
@@ -1473,7 +1506,7 @@ pub fn hit_test(node: &LayoutNode, point: Point) -> Option<ActionId> {
             return Some(id);
         }
     }
-    if node.action.is_some() && node.bounds.contains(point) {
+    if node.action.is_some() && !node.hit_through && node.bounds.contains(point) {
         node.action
     } else {
         None
@@ -1498,7 +1531,7 @@ pub fn cursor_at(node: &LayoutNode, point: Point) -> CursorIcon {
                 return Some(c);
             }
         }
-        if !inside {
+        if !inside || node.hit_through {
             return None;
         }
         node.cursor.or(if node.text_pos.is_some() {
@@ -1526,7 +1559,7 @@ pub fn context_at(node: &LayoutNode, point: Point) -> Option<ContextId> {
             return Some(id);
         }
     }
-    if node.context.is_some() && node.bounds.contains(point) {
+    if node.context.is_some() && !node.hit_through && node.bounds.contains(point) {
         node.context
     } else {
         None
@@ -1888,6 +1921,7 @@ mod tests {
             key: None,
             ghost: false,
             offstage: false,
+            hit_through: false,
             children: Vec::new(),
         }
     }
@@ -1951,6 +1985,7 @@ mod tests {
             key: None,
             ghost: false,
             offstage: false,
+            hit_through: false,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),
