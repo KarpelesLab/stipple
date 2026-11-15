@@ -20,9 +20,7 @@ cargo add stipple
 ```
 
 Stipple needs Rust 1.88 or newer, and no system libraries: it talks to
-Wayland, X11, Win32 and Cocoa itself. This guide follows the repository's
-`master` branch; until its next release reaches crates.io, depend on it from
-git instead: `cargo add stipple --git https://github.com/KarpelesLab/stipple`.
+Wayland, X11, Win32 and Cocoa itself.
 
 ## 2. A window
 
