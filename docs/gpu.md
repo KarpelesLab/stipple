@@ -25,7 +25,7 @@ use stipple::render::{Scene, SoftwareRenderer};
 let app = app.render_with(|scene: &Scene, background, scale| {
     stipple::gpu::render_scene_scaled(scene, background, scale).unwrap_or_else(|_| {
         // No GL device: fall back to the CPU.
-        SoftwareRenderer::new().with_background(background).render(scene.clone(), scale)
+        SoftwareRenderer::new().background(background).render(scene.clone(), scale)
     })
 });
 ```

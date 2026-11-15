@@ -84,13 +84,13 @@ impl State {
             },
         ];
         Self {
-            tint: ColorPicker::new(COLORS[2].1).with_alpha(false),
+            tint: ColorPicker::new(COLORS[2].1).alpha_strip(false),
             sessions,
             selected: 0,
             bar: TabBarState::new(),
             next: 4,
             host: EditBuffer::from_text("build.example.com"),
-            password: PasswordField::new().with_reveal_button(true),
+            password: PasswordField::new().reveal_button(true),
             log: vec!["Ready.".into()],
             drawn,
         }

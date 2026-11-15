@@ -84,7 +84,7 @@ the character typed last, whatever side of the caret it's drawn on.
 - **Selection** is a logical range, so in mixed text it can show as several
   rectangles on one line.
 
-`EditBuffer::set_direction` (or `with_direction`) sets the paragraph direction
+`EditBuffer::set_direction` sets the paragraph direction
 for both editing and drawing; `text_editor` and `text_area` pass it to their
 text.
 
@@ -108,7 +108,7 @@ theme's layout direction:
 use stipple::prelude::*;
 
 let app = App::new(state, view)
-    .theme(Theme::light().with_layout_direction(LayoutDirection::Rtl));
+    .theme(Theme::light().layout_direction(LayoutDirection::Rtl));
 ```
 
 ![bididemo --mirror on X11](screenshots/stipple-x11-bidi-mirror.png)

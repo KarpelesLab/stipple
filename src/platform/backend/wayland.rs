@@ -1393,7 +1393,7 @@ impl Window for WaylandWindow {
         clipboard::drag_out::start(&mut self.conn.lock().unwrap(), self.surface, data)
     }
     fn set_clipboard(&self, text: &str) {
-        let content = crate::platform::clipboard::ClipboardContent::text(text);
+        let content = crate::platform::clipboard::ClipboardContent::from_text(text);
         clipboard::set(&mut self.conn.lock().unwrap(), &content);
     }
     fn read_clipboard(

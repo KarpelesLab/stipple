@@ -78,7 +78,7 @@ impl SoftwareRenderer {
     }
 
     /// Set the canvas clear color (default: transparent).
-    pub fn with_background(mut self, color: Color) -> Self {
+    pub fn background(mut self, color: Color) -> Self {
         self.background = color;
         self
     }
@@ -180,7 +180,7 @@ impl SoftwareRenderer {
             };
             VectorFrame::new(w as f32, bh as f32).with_root(root)
         };
-        let renderer = SoftwareRenderer::new().with_background(bg);
+        let renderer = SoftwareRenderer::new().background(bg);
         if !banded || h <= BAND * 2 {
             return renderer.rasterize_frame(frame(nodes.to_vec(), 0, h), PhysicalSize::new(w, h));
         }
@@ -273,7 +273,7 @@ mod tests {
             );
             s
         };
-        let r = SoftwareRenderer::new().with_background(Color::rgb(0, 0, 0));
+        let r = SoftwareRenderer::new().background(Color::rgb(0, 0, 0));
         let full = r.render(make(), ScaleFactor::IDENTITY);
 
         // Re-render just the 1x-scale region around the red square.
@@ -333,7 +333,7 @@ mod tests {
             s
         };
         assert!(make().primitive_count() > BAND_PRIMITIVES);
-        let r = SoftwareRenderer::new().with_background(Color::rgb(30, 30, 30));
+        let r = SoftwareRenderer::new().background(Color::rgb(30, 30, 30));
         let scale = ScaleFactor::new(1.5);
         let physical = scale.to_physical(Size::new(120.0, 200.0));
         let banded = r.render(make(), scale);

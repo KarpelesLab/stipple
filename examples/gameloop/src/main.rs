@@ -82,9 +82,9 @@ fn actions() -> Actions<Act> {
 /// the gamepad's left stick, A and Start.
 fn touch_controls() -> TouchControls {
     TouchControls::new()
-        .with_stick(TouchStick::left().at(Corner::BottomLeft, Vec2::new(90.0, 90.0)))
-        .with_button(TouchButton::new(GamepadButton::South, "Go"))
-        .with_button(
+        .stick(TouchStick::left().at(Corner::BottomLeft, Vec2::new(90.0, 90.0)))
+        .button(TouchButton::new(GamepadButton::South, "Go"))
+        .button(
             TouchButton::new(GamepadButton::Start, "II")
                 .at(Corner::TopRight, Vec2::new(36.0, 36.0))
                 .radius(22.0),

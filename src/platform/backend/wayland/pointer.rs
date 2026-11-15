@@ -90,7 +90,7 @@ impl Axes {
     /// though each axis stops).
     pub(super) fn stop(&mut self) -> Option<ScrollDelta> {
         std::mem::take(&mut self.scrolling)
-            .then(|| ScrollDelta::pixels(0.0, 0.0).with_phase(ScrollPhase::Ended))
+            .then(|| ScrollDelta::pixels(0.0, 0.0).phase(ScrollPhase::Ended))
     }
 
     /// `frame`: the source applied to this frame only.

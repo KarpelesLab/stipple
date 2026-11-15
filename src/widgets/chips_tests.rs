@@ -231,7 +231,7 @@ fn arrows_move_among_filters_without_toggling_them() {
 
 #[test]
 fn right_to_left_the_arrows_follow_the_mirrored_row() {
-    let theme = Theme::light().with_layout_direction(LayoutDirection::Rtl);
+    let theme = Theme::light().layout_direction(LayoutDirection::Rtl);
     let mut app = app_with(theme, 600.0, State::new());
     let (stacked, linear) = (named(&app, "Stacked"), named(&app, "Linear"));
     assert!(linear.bounds.max_x() < stacked.bounds.min_x(), "mirrored");

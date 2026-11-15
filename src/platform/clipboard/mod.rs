@@ -62,7 +62,7 @@ pub enum ClipboardKind {
 ///
 /// ```
 /// # use stipple::platform::clipboard::ClipboardContent;
-/// let c = ClipboardContent::text("bold").with_html("<b>bold</b>");
+/// let c = ClipboardContent::from_text("bold").html("<b>bold</b>");
 /// assert_eq!(c.text.as_deref(), Some("bold"));
 /// assert!(c.image.is_none() && !c.is_empty());
 /// ```
@@ -80,7 +80,7 @@ pub struct ClipboardContent {
 
 impl ClipboardContent {
     /// Plain text only.
-    pub fn text(text: impl Into<String>) -> Self {
+    pub fn from_text(text: impl Into<String>) -> Self {
         Self {
             text: Some(text.into()),
             ..Self::default()
@@ -88,7 +88,7 @@ impl ClipboardContent {
     }
 
     /// An image only.
-    pub fn image(image: Pixmap) -> Self {
+    pub fn from_image(image: Pixmap) -> Self {
         Self {
             image: Some(image),
             ..Self::default()
@@ -96,19 +96,19 @@ impl ClipboardContent {
     }
 
     /// Add (or replace) the HTML representation.
-    pub fn with_html(mut self, html: impl Into<String>) -> Self {
+    pub fn html(mut self, html: impl Into<String>) -> Self {
         self.html = Some(html.into());
         self
     }
 
     /// Add (or replace) the plain-text representation.
-    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+    pub fn text(mut self, text: impl Into<String>) -> Self {
         self.text = Some(text.into());
         self
     }
 
     /// Add (or replace) the image.
-    pub fn with_image(mut self, image: Pixmap) -> Self {
+    pub fn image(mut self, image: Pixmap) -> Self {
         self.image = Some(image);
         self
     }
@@ -283,7 +283,7 @@ mod rich {
             .text
             .then(os::text)
             .flatten()
-            .map(ClipboardContent::text)
+            .map(ClipboardContent::from_text)
     }
     pub fn write(content: &ClipboardContent) -> bool {
         content.text.as_deref().is_some_and(os::set_text)

@@ -270,13 +270,13 @@ impl WindowAttributes {
     }
 
     /// Set the title.
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
     /// Set the initial inner (content) size, in logical pixels.
-    pub fn with_logical_size(mut self, size: Size) -> Self {
+    pub fn logical_size(mut self, size: Size) -> Self {
         self.logical_size = size;
         self
     }
@@ -288,68 +288,68 @@ impl WindowAttributes {
     }
 
     /// Ask for a dark (`true`) or light title bar, to match the content.
-    pub fn with_dark(mut self, dark: bool) -> Self {
+    pub fn dark(mut self, dark: bool) -> Self {
         self.dark = Some(dark);
         self
     }
 
     /// Set the color behind the content, for areas the app doesn't draw.
-    pub fn with_background(mut self, color: Color) -> Self {
+    pub fn background(mut self, color: Color) -> Self {
         self.background = Some(color);
         self
     }
 
     /// Set the initial top-left position in logical pixels.
-    pub fn with_position(mut self, x: i32, y: i32) -> Self {
+    pub fn position(mut self, x: i32, y: i32) -> Self {
         self.position = Some((x, y));
         self
     }
 
     /// Set the smallest inner size, in logical pixels, the user can resize to.
-    pub fn with_min_size(mut self, size: Size) -> Self {
+    pub fn min_size(mut self, size: Size) -> Self {
         self.min_size = Some(size);
         self
     }
 
     /// Set the largest inner size, in logical pixels, the user can resize to.
-    pub fn with_max_size(mut self, size: Size) -> Self {
+    pub fn max_size(mut self, size: Size) -> Self {
         self.max_size = Some(size);
         self
     }
 
     /// Open the window maximized.
-    pub fn with_maximized(mut self, maximized: bool) -> Self {
+    pub fn maximized(mut self, maximized: bool) -> Self {
         self.maximized = maximized;
         self
     }
 
     /// Open the window fullscreen.
-    pub fn with_fullscreen(mut self, fullscreen: bool) -> Self {
+    pub fn fullscreen(mut self, fullscreen: bool) -> Self {
         self.fullscreen = fullscreen;
         self
     }
 
     /// Set the window icon from a straight-alpha RGBA image.
-    pub fn with_icon(mut self, icon: Pixmap) -> Self {
+    pub fn icon(mut self, icon: Pixmap) -> Self {
         self.icon = Some(icon);
         self
     }
 
     /// Give the window a title bar and borders (the default), or not.
-    pub fn with_decorations(mut self, decorations: bool) -> Self {
+    pub fn decorations(mut self, decorations: bool) -> Self {
         self.decorations = decorations;
         self
     }
 
     /// Snap the user's resizing to whole steps of `step` logical pixels.
-    pub fn with_resize_increments(mut self, step: Size) -> Self {
+    pub fn resize_increments(mut self, step: Size) -> Self {
         self.resize_increments = Some(step);
         self
     }
 
     /// Whether the window takes keyboard focus when it opens while the app
     /// runs (`true` by default).
-    pub fn with_focus(mut self, focus: bool) -> Self {
+    pub fn focus(mut self, focus: bool) -> Self {
         self.focus = focus;
         self
     }
@@ -413,7 +413,7 @@ pub trait Window {
         let text = (kind == ClipboardKind::Clipboard && formats.text)
             .then(|| self.clipboard())
             .flatten();
-        ClipboardRead::Ready(text.map(ClipboardContent::text))
+        ClipboardRead::Ready(text.map(ClipboardContent::from_text))
     }
 
     /// Put `content` on the clipboard or the primary selection, every
@@ -714,11 +714,11 @@ mod tests {
     #[test]
     fn window_attributes_builders() {
         let a = WindowAttributes::new()
-            .with_min_size(Size::new(100.0, 50.0))
-            .with_max_size(Size::new(800.0, 600.0))
-            .with_maximized(true)
-            .with_fullscreen(true)
-            .with_icon(Pixmap::new(PhysicalSize::new(16, 16)));
+            .min_size(Size::new(100.0, 50.0))
+            .max_size(Size::new(800.0, 600.0))
+            .maximized(true)
+            .fullscreen(true)
+            .icon(Pixmap::new(PhysicalSize::new(16, 16)));
         assert_eq!(a.min_size, Some(Size::new(100.0, 50.0)));
         assert_eq!(a.max_size, Some(Size::new(800.0, 600.0)));
         assert!(a.maximized && a.fullscreen);

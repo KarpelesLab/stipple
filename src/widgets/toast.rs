@@ -147,8 +147,8 @@ struct Swipe {
 /// use stipple::widgets::{ToastKind, ToastPlacement, Toasts};
 /// struct App { notes: Vec<String> }
 /// let mut t = Toasts::new()
-///     .with_placement(ToastPlacement::Bottom)
-///     .with_bottom_offset(56.0);
+///     .placement(ToastPlacement::Bottom)
+///     .bottom_offset(56.0);
 /// let id = t.push("Deleted", ToastKind::Info);
 /// t.action(id, "Undo", |s: &mut App| s.notes.push("restored".into()));
 /// assert_eq!(t.items()[0].action_label(), Some("Undo"));
@@ -205,8 +205,8 @@ impl Toasts {
         Self::default()
     }
 
-    /// These toasts, shown at `placement`.
-    pub fn with_placement(mut self, placement: ToastPlacement) -> Self {
+    /// These toasts, shown at `placement` (see [`ToastPlacement::resolve`]).
+    pub fn placement(mut self, placement: ToastPlacement) -> Self {
         self.placement = placement;
         self
     }
@@ -216,28 +216,18 @@ impl Toasts {
         self.placement = placement;
     }
 
-    /// Where the toasts show, as set (see [`ToastPlacement::resolve`]).
-    pub fn placement(&self) -> ToastPlacement {
-        self.placement
-    }
-
     /// These toasts, raised `px` logical pixels above their usual place (the
     /// theme's margin from the window's bottom edge): above a bottom
     /// navigation bar, a tab bar, or the bottom safe area.
-    pub fn with_bottom_offset(mut self, px: f64) -> Self {
+    pub fn bottom_offset(mut self, px: f64) -> Self {
         self.set_bottom_offset(px);
         self
     }
 
     /// Raise the toasts `px` logical pixels above their usual place from now
-    /// on (see [`with_bottom_offset`](Self::with_bottom_offset)).
+    /// on (see [`bottom_offset`](Self::bottom_offset)).
     pub fn set_bottom_offset(&mut self, px: f64) {
         self.bottom_offset = px.max(0.0);
-    }
-
-    /// How far above their usual place the toasts show.
-    pub fn bottom_offset(&self) -> f64 {
-        self.bottom_offset
     }
 
     /// Show `message` until it's dismissed (by its × button, a swipe or

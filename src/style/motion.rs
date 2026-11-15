@@ -32,12 +32,12 @@ use crate::anim::{Easing, Motion, SpringParams};
 /// use stipple::anim::Motion;
 /// use stipple::style::{MotionTokens, Theme};
 /// // The default look, with popups that only fade.
-/// let theme = Theme::light().with_motion(
+/// let theme = Theme::light().motion(
 ///     MotionTokens::standard().popup_scale(1.0).popup_offset(0.0),
 /// );
 /// # let _ = theme;
 /// // Nothing animates (reduced motion does this too, system-wide).
-/// let still = Theme::light().with_motion(MotionTokens::instant());
+/// let still = Theme::light().motion(MotionTokens::instant());
 /// assert_eq!(still.motion.toggle, Motion::Instant);
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -955,7 +955,7 @@ mod selftest {
         // Cancel button does; its contents run in another process, which
         // nothing here can tap) must reach the app's callback.
         steps.run(0, |_| {
-            dialog::open_file_contents(&FileDialog::new().with_accept(".txt,image/*"), |file| {
+            dialog::open_file_contents(&FileDialog::new().accept(".txt,image/*"), |file| {
                 log(&format!(
                     "touchdemo: open picker answered {:?}",
                     file.as_ref().map(|f| &f.name)
@@ -984,7 +984,7 @@ mod selftest {
                 format!("open picker answered {picked:?}"),
             );
             dialog::save_file_contents_then(
-                &FileDialog::new().with_file_name("touchdemo.txt"),
+                &FileDialog::new().file_name("touchdemo.txt"),
                 b"Saved by touchdemo\n",
                 |saved| {
                     log(&format!("touchdemo: save picker answered {saved}"));
@@ -1021,7 +1021,7 @@ mod selftest {
         let path = picked_path.clone();
         steps.run(0, move |_| {
             let _ = std::fs::write(&path, b"Picked by touchdemo\n");
-            dialog::open_file_contents(&FileDialog::new().with_accept(".txt"), |file| {
+            dialog::open_file_contents(&FileDialog::new().accept(".txt"), |file| {
                 log(&format!(
                     "touchdemo: open picker picked {:?}",
                     file.as_ref()
@@ -1053,7 +1053,7 @@ mod selftest {
             // The copy UIKit hands over is the app's to delete, and was.
             check(!path.exists(), "the picked copy was left behind");
             dialog::save_file_contents_then(
-                &FileDialog::new().with_file_name("touchdemo.txt"),
+                &FileDialog::new().file_name("touchdemo.txt"),
                 b"Saved by touchdemo\n",
                 |saved| {
                     log(&format!("touchdemo: save picker exported {saved}"));

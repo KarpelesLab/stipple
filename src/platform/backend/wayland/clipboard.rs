@@ -308,7 +308,7 @@ fn serve(fd: i32, bytes: Vec<u8>) {
 /// Make `text` the selection.
 #[cfg(test)]
 fn set_text(conn: &mut WlConn, text: &str) {
-    set(conn, &ClipboardContent::text(text));
+    set(conn, &ClipboardContent::from_text(text));
 }
 
 /// Make `content` the selection.

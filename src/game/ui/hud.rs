@@ -372,7 +372,7 @@ impl Typewriter {
     }
 
     /// Type at `chars_per_second` instead.
-    pub fn with_speed(mut self, chars_per_second: f32) -> Self {
+    pub fn speed(mut self, chars_per_second: f32) -> Self {
         self.speed = chars_per_second.max(0.0);
         self
     }

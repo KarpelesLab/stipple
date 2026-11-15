@@ -80,7 +80,7 @@ fn agree(name: &str, scene: &Scene, scale: f64, mean: f64, bad: f64) -> Option<D
     let bg = Color::rgb(0x18, 0x1b, 0x22);
     let gpu = gpu(scene, bg, scale)?;
     let cpu = SoftwareRenderer::new()
-        .with_background(bg)
+        .background(bg)
         .render(scene.clone(), ScaleFactor::new(scale));
     dump(name, "gpu", &gpu);
     dump(name, "cpu", &cpu);

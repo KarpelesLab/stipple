@@ -54,14 +54,14 @@ impl PasswordField {
 
     /// Show an eye button at the end of the field that reveals the text
     /// while it's on.
-    pub fn with_reveal_button(mut self, on: bool) -> Self {
+    pub fn reveal_button(mut self, on: bool) -> Self {
         self.reveal_button = on;
         self
     }
 
     /// The name assistive technologies read for the field (they never read
     /// its text).
-    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+    pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = label.into();
         self
     }
@@ -219,7 +219,7 @@ fn eye(color: Color, crossed: bool) -> Option<Arc<Svg>> {
 /// What it does differently from a text field:
 ///
 /// - The text shows as a bullet per character, unless revealed (by the eye
-///   button, with [`PasswordField::with_reveal_button`], or
+///   button, with [`PasswordField::reveal_button`], or
 ///   [`PasswordField::set_revealed`]).
 /// - Copy and cut do nothing, even revealed; paste works.
 /// - It takes no input method: typing goes straight in (an IME would see the
@@ -370,7 +370,7 @@ mod tests {
     #[test]
     fn typing_into_the_field_goes_without_an_ime_and_shows_bullets() {
         let state = State {
-            pw: PasswordField::new().with_reveal_button(true),
+            pw: PasswordField::new().reveal_button(true),
         };
         let mut app = App::new(state, view).logical_size(Size::new(300.0, 80.0));
         app.render_once();

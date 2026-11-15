@@ -166,7 +166,7 @@ fn doc() -> Doc {
 
 /// A view titled after the document, that counts clicks anywhere in it.
 fn titled(s: &Doc, cx: &mut Cx<Doc>) -> Element {
-    cx.window_title(format!("{} ({})", s.name, s.clicks));
+    cx.set_window_title(format!("{} ({})", s.name, s.clicks));
     crate::widgets::spacer()
         .grow(1.0)
         .on_tap(cx, |s: &mut Doc| s.clicks += 1)
@@ -201,12 +201,10 @@ fn windows_open_and_close_at_run_time() {
     // One view for any number of windows, told which it builds.
     let saw = seen.clone();
     let id = handle.open_window(
-        WindowAttributes::new()
-            .with_title("Second")
-            .with_focus(false),
+        WindowAttributes::new().title("Second").focus(false),
         move |s: &Doc, cx: &mut Cx<Doc>| {
             saw.lock().unwrap().push(cx.window_id());
-            cx.window_title(format!("second: {}", s.clicks));
+            cx.set_window_title(format!("second: {}", s.clicks));
             crate::widgets::spacer()
         },
     );
@@ -252,7 +250,7 @@ fn windows_open_and_close_at_run_time() {
 #[test]
 fn closing_the_primary_window_keeps_the_others() {
     let mut app = App::new(doc(), titled);
-    let other = app.open_window(WindowAttributes::new().with_title("Other"), titled);
+    let other = app.open_window(WindowAttributes::new().title("Other"), titled);
     let handle = app.handle();
     let mut run = run(app);
     assert!(
@@ -279,7 +277,7 @@ fn the_app_can_keep_running_with_no_window() {
     assert!(handle.windows().is_empty());
     // Timers still run, and new windows open from the hidden one.
     handle.update(|s| s.clicks = 5);
-    let id = handle.open_window(WindowAttributes::new().with_title("Again"), titled);
+    let id = handle.open_window(WindowAttributes::new().title("Again"), titled);
     run.wake();
     assert_eq!(run.desk.take_log(), ["open 101 Again focus=true"]);
     run.send(101, Event::RedrawRequested);
@@ -295,7 +293,7 @@ fn the_app_can_keep_running_with_no_window() {
 #[test]
 fn a_change_in_one_window_reaches_the_others() {
     let mut app = App::new(doc(), titled).logical_size(Size::new(200.0, 100.0));
-    app.open_window(WindowAttributes::new().with_title("Other"), titled);
+    app.open_window(WindowAttributes::new().title("Other"), titled);
     let mut run = run(app);
     run.send(101, Event::RedrawRequested);
     run.desk.take_log();
@@ -323,7 +321,7 @@ fn window_changes_reach_the_state_and_views_that_read_them() {
     let log = changes.clone();
     let app = App::new(doc(), |_: &Doc, cx: &mut Cx<Doc>| {
         let info = cx.window_info();
-        cx.window_title(if info.maximized { "max" } else { "normal" });
+        cx.set_window_title(if info.maximized { "max" } else { "normal" });
         crate::widgets::spacer()
     })
     .on_window_change(move |_, id, info| log.borrow_mut().push((id, info.maximized)));

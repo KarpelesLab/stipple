@@ -87,7 +87,7 @@ use stipple::platform::clipboard::{ClipboardContent, ClipboardFormats, Clipboard
 // Copy as text and HTML.
 write_clipboard(
     ClipboardKind::Clipboard,
-    ClipboardContent::text("ls -l").with_html("<pre>ls -l</pre>"),
+    ClipboardContent::from_text("ls -l").html("<pre>ls -l</pre>"),
 );
 // Middle click in the terminal: paste the primary selection.
 request_clipboard(ClipboardKind::Primary, ClipboardFormats::TEXT);

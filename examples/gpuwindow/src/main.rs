@@ -76,7 +76,7 @@ fn main() {
         stipple::gpu::render_scene_scaled(scene, bg, scale).unwrap_or_else(|e| {
             eprintln!("GPU render unavailable ({e}); using software");
             SoftwareRenderer::new()
-                .with_background(bg)
+                .background(bg)
                 .render(scene.clone(), scale)
         })
     });

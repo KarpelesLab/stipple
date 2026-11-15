@@ -100,7 +100,7 @@ green push to `master`.
 Every widget reads its colors and metrics from a [`Theme`] — a semantic
 `Palette` (roles, interaction states, status colors, overlays), a `Typography`
 scale, a `Spacing` scale, and a corner radius. Customizing is a one-liner:
-`Theme::dark().with_accent(color).with_radius(14.0)` recolors the accent,
+`Theme::dark().accent(color).radius(14.0)` recolors the accent,
 derives its hover/active tints, and picks a readable on-color automatically;
 `high_contrast()` maximizes text/border contrast. **Material 3** is built in
 too: `Theme::material3_light()` / `material3_dark()`, or

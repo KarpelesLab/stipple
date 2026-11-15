@@ -68,7 +68,7 @@ pub(crate) fn parse_id(id: &str) -> GamepadInfo {
         && p.len() == 4
         && let (Some(v), Some(p)) = (hex(v), hex(p))
     {
-        return GamepadInfo::new(name.trim()).with_ids(v, p);
+        return GamepadInfo::new(name.trim()).ids(v, p);
     }
     let name = id.split(" (").next().unwrap_or(id).trim();
     let after = |key: &str| {
@@ -78,7 +78,7 @@ pub(crate) fn parse_id(id: &str) -> GamepadInfo {
     };
     let info = GamepadInfo::new(if name.is_empty() { "Gamepad" } else { name });
     match (after("Vendor:"), after("Product:")) {
-        (Some(v), Some(p)) => info.with_ids(v, p),
+        (Some(v), Some(p)) => info.ids(v, p),
         _ => info,
     }
 }

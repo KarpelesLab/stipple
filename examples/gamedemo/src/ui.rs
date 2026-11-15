@@ -7,9 +7,9 @@ use super::*;
 /// garden shows dimly behind the menus.
 pub fn style() -> GameStyle {
     GameStyle::ember()
-        .with_background(Color::rgba(0x12, 0x0e, 0x1c, 0xb4))
-        .with_surface(Color::rgb(0x26, 0x1f, 0x33))
-        .with_accent(Color::rgb(0xff, 0xb3, 0x47))
+        .background(Color::rgba(0x12, 0x0e, 0x1c, 0xb4))
+        .surface(Color::rgb(0x26, 0x1f, 0x33))
+        .accent(Color::rgb(0xff, 0xb3, 0x47))
 }
 
 pub fn view(g: &Game, cx: &mut Cx<Game>) -> Element {

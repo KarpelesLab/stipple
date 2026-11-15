@@ -1665,7 +1665,7 @@ impl Loop<'_> {
         let vm = unsafe { (*self.instance.activity).vm };
         match unsafe { jni::input_device(vm, device) } {
             Some((name, vendor, product)) if vendor > 0 && product > 0 => {
-                GamepadInfo::new(name).with_ids(vendor as u16, product as u16)
+                GamepadInfo::new(name).ids(vendor as u16, product as u16)
             }
             Some((name, ..)) => GamepadInfo::new(name),
             None => GamepadInfo::new("Gamepad"),

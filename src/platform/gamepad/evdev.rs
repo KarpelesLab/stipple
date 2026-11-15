@@ -408,7 +408,7 @@ mod os {
         let mut info = GamepadInfo::new(name);
         if ioctl_buf(fd, EVIOCGID, &mut id) {
             let word = |i: usize| u16::from_ne_bytes([id[i], id[i + 1]]);
-            info = info.with_ids(word(2), word(4));
+            info = info.ids(word(2), word(4));
         }
         let map = Map::new(&keys, &axes, xbox_labels(path, info.vendor_id));
         let state = read_state(fd, &map)?;

@@ -31,7 +31,7 @@ use std::sync::Mutex;
 /// scene.fill_glyph_run(&run);
 /// // A misspelled word with an undercurl.
 /// let mut word = GlyphRun::new(&font, 14.0, Color::WHITE)
-///     .decoration(Decoration::underline(UnderlineStyle::Curly));
+///     .decoration(Decoration::NONE.underline(UnderlineStyle::Curly));
 /// word.push_cells("teh", Point::new(64.0, 0.0), 8.0);
 /// scene.fill_glyph_run(&word);
 /// ```
@@ -285,7 +285,7 @@ mod tests {
         run.push_cells("I   I", Point::new(0.0, 0.0), 16.0);
         scene.fill_glyph_run(&run);
         let out = SoftwareRenderer::new()
-            .with_background(Color::BLACK)
+            .background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY);
         assert!(
             red_in(&out, Rect::from_xywh(0.0, 0.0, 16.0, 20.0)),
@@ -310,11 +310,11 @@ mod tests {
         };
         let mut scene = Scene::new(Size::new(80.0, 24.0));
         let mut run = GlyphRun::new(&font, 16.0, Color::rgb(255, 0, 0))
-            .decoration(Decoration::underline(UnderlineStyle::Single));
+            .decoration(Decoration::NONE.underline(UnderlineStyle::Single));
         run.push_cells("I  I", Point::new(8.0, 0.0), 16.0);
         scene.fill_glyph_run(&run);
         let out = SoftwareRenderer::new()
-            .with_background(Color::BLACK)
+            .background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY);
         let y = font.baseline(16.0) + 0.5;
         let h = 24.0 - y;

@@ -99,7 +99,7 @@ fn main() {
             &TextPaint::new(&font, 30.0, Color::WHITE),
         );
         let pm = stipple::render::SoftwareRenderer::new()
-            .with_background(Color::BLACK)
+            .background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY);
         (pm, Rect::from_xywh(40.0, 130.0, tw, th))
     });

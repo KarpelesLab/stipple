@@ -127,8 +127,8 @@ fn pads_touch_controls_and_the_locked_pointer_reach_the_actions() {
     // A 200×100 window: the stick floats over the left half, A sits at
     // (160, 60).
     let controls = TouchControls::new()
-        .with_stick(TouchStick::left().radius(40.0).dead_zone(0.0))
-        .with_button(
+        .stick(TouchStick::left().radius(40.0).dead_zone(0.0))
+        .button(
             TouchButton::new(GamepadButton::South, "A")
                 .at(Corner::BottomRight, Vec2::new(40.0, 40.0))
                 .radius(20.0),

@@ -612,9 +612,9 @@ fn layout_element(
                 .zip(line_measured)
                 .map(|(c, m)| {
                     FlexItem::fixed(axis.main(*m))
-                        .with_grow(c.layout.grow)
-                        .with_shrink(c.layout.shrink)
-                        .with_bounds(axis.main(min_size(c)), axis.main(max_size(c)))
+                        .grow(c.layout.grow)
+                        .shrink(c.layout.shrink)
+                        .bounds(axis.main(min_size(c)), axis.main(max_size(c)))
                 })
                 .collect();
             let spans = solve_main_axis(main_avail, *gap, &items);
@@ -846,7 +846,7 @@ fn text_layout<'a>(
         LayoutDirection::Ltr
     };
     font.layout_with(text, size, direction, wrap.then_some(width), ui)
-        .with_align_width(width)
+        .align_width(width)
 }
 
 /// Resolve a pointer position (logical pixels, absolute) to the nearest caret
@@ -2014,7 +2014,7 @@ mod tests {
         let mut scene = Scene::new(Size::new(w, h));
         paint(&tree, &mut scene, font);
         SoftwareRenderer::new()
-            .with_background(Color::BLACK)
+            .background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY)
     }
 
@@ -2242,7 +2242,7 @@ mod tests {
             Color::WHITE,
         );
         let out = SoftwareRenderer::new()
-            .with_background(Color::BLACK)
+            .background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY);
         assert_eq!(out.pixel(50, 15), Some([255, 255, 255, 255]), "upright");
         assert_eq!(
@@ -2323,9 +2323,10 @@ mod tests {
             return;
         };
         // White text with a red underline and strikethrough over black.
-        let deco = crate::render::Decoration::underline(crate::render::UnderlineStyle::Single)
-            .with_strikethrough()
-            .with_color(RED);
+        let deco = crate::render::Decoration::NONE
+            .underline(crate::render::UnderlineStyle::Single)
+            .strikethrough()
+            .color(RED);
         let el = Element::text("Lined text", 20.0, Color::WHITE).decorate(deco);
         let out = render_el(&el, 200.0, 40.0, Some(&font));
         let width = font.measure("Lined text", 20.0).width as u32;

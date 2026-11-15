@@ -78,9 +78,9 @@ fn rich() -> ClipboardContent {
         let [r, g, b, _] = x.to_le_bytes();
         px.extend_from_slice(&[r, g, b, 255]);
     }
-    ClipboardContent::text("stipple rich clipboard")
-        .with_html("<b>stipple</b> rich <i>clipboard</i>")
-        .with_image(Pixmap::from_rgba8(PhysicalSize::new(w, h), px))
+    ClipboardContent::from_text("stipple rich clipboard")
+        .html("<b>stipple</b> rich <i>clipboard</i>")
+        .image(Pixmap::from_rgba8(PhysicalSize::new(w, h), px))
 }
 
 /// One line describing `content`.

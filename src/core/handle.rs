@@ -38,7 +38,7 @@ pub(crate) enum AlertInput {
 impl AlertInput {
     fn new(input: &crate::platform::dialog::MessageInput) -> Self {
         if input.secure {
-            let mut p = PasswordField::new().with_reveal_button(true);
+            let mut p = PasswordField::new().reveal_button(true);
             p.set_text(input.value.clone());
             AlertInput::Secure(p)
         } else {
@@ -290,7 +290,7 @@ impl<S> AppHandle<S> {
     /// # struct State;
     /// # fn editor(_: &State, _: &mut Cx<State>) -> Element { spacer() }
     /// # fn f(handle: AppHandle<State>) {
-    /// let id = handle.open_window(WindowAttributes::new().with_title("Untitled"), editor);
+    /// let id = handle.open_window(WindowAttributes::new().title("Untitled"), editor);
     /// // ...later
     /// handle.close_window(id);
     /// # }

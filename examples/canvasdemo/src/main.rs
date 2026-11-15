@@ -252,7 +252,7 @@ fn paint_grid(c: &mut Canvas, screen: &Mutex<Screen>, font: Option<&Font>, image
                 Point::new(50.0 * CELL_W, baseline),
                 30.0 * CELL_W,
                 &TextPaint::new(font, FONT_SIZE, FG[3])
-                    .decoration(Decoration::underline(UnderlineStyle::Dashed)),
+                    .decoration(Decoration::NONE.underline(UnderlineStyle::Dashed)),
             );
         }
         if row == screen.cursor.1 {

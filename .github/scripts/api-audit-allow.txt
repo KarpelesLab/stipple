@@ -30,3 +30,7 @@ stipple::game::AxisDirection    # a whole axis or one of its two halves
 stipple::render::LineCap        # butt, round or square: the set SVG, canvas and PostScript share
 stipple::layout::LayoutDirection # left to right or right to left
 stipple::core::Handled          # a key was used or it wasn't
+
+# Names: the few `with_*` and `get_*` that aren't a setter or a getter.
+stipple::render::Color::with_alpha     # derives a copy of a plain value (`RED.with_alpha(128)`), like `mix` and `darken`; `Color` has no setters
+stipple::game::save::KeyValues::get_or # a lookup with a default, beside the map's `get` and `set`

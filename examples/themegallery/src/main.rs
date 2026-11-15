@@ -1,5 +1,5 @@
 //! Renders the same UI under several themes to show the theme engine and the
-//! customization builder (`with_accent`, `high_contrast`, …).
+//! customization builder (`accent`, `high_contrast`, …).
 //!
 //! Writes one raw RGBA file per theme (`theme0.raw` … `themeN.raw`) at a fixed
 //! size; the CI theme job converts each to a PNG and montages them into one
@@ -60,8 +60,8 @@ fn main() {
         (
             "violet",
             Theme::dark()
-                .with_accent(Color::rgb(0x8b, 0x5c, 0xf6))
-                .with_radius(14.0),
+                .accent(Color::rgb(0x8b, 0x5c, 0xf6))
+                .radius(14.0),
         ),
         ("high-contrast", Theme::light().high_contrast()),
     ];

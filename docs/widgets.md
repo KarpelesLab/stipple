@@ -164,8 +164,8 @@ s.toasts.action(id, "Undo", move |s: &mut App| s.notes.push(note.clone()));
 
 // Where they go, and room for a bottom navigation bar (56 px tall):
 let toasts = Toasts::new()
-    .with_placement(ToastPlacement::Auto)   // the default
-    .with_bottom_offset(56.0);
+    .placement(ToastPlacement::Auto)   // the default
+    .bottom_offset(56.0);
 ```
 
 `ToastKind` (`Info`, `Success`, `Warning`, `Error`) sets the color of the accent
@@ -184,7 +184,7 @@ kept clear by the bottom offset included.
 | `Corner` | up to four stacked in the bottom trailing corner (bottom-left right to left), 320 wide, newest at the bottom |
 | `Bottom` | a snackbar: the newest toast only, centered, the window's width less the theme's `lg` margin each side, at most 560 wide; older ones wait behind it, their timers running |
 
-`with_bottom_offset` / `set_bottom_offset` raise either layout by that many
+`bottom_offset` / `set_bottom_offset` raise either layout by that many
 logical pixels, above a bottom navigation bar or tab bar. There is no safe-area
 API yet (issue #38): add the bottom inset yourself.
 
@@ -312,7 +312,7 @@ A single-line field that shows a bullet per character.
 
 ```rust
 struct App { password: PasswordField }
-let state = App { password: PasswordField::new().with_reveal_button(true) };
+let state = App { password: PasswordField::new().reveal_button(true) };
 // in the view:
 password_field(cx, &theme, &state.password, |s: &mut App| &mut s.password)
 // read it with state.password.text(); clear() empties it
@@ -326,7 +326,7 @@ password_field(cx, &theme, &state.password, |s: &mut App| &mut s.password)
   focus, so other processes can't read the keystrokes through event taps
   (`platform::secure_input()` tells). The other platforms have no equivalent
   an app turns on.
-- `with_reveal_button(true)` adds an eye button that shows the text while on.
+- `reveal_button(true)` adds an eye button that shows the text while on.
 
 ## Color picker
 
@@ -344,8 +344,8 @@ color_button(cx, &theme, &state.tint, |s: &mut App| &mut s.tint,
 
 The picker keeps the hue, saturation and value apart, so dragging to gray and
 back keeps the hue. The hex field takes `#rgb`, `#rrggbb` and `#rrggbbaa`; the
-color follows as soon as what's typed parses. `ColorPicker::with_alpha(false)`
-drops the alpha strip and `with_swatches` replaces the swatches.
+color follows as soon as what's typed parses. `ColorPicker::alpha_strip(false)`
+drops the alpha strip and `swatches` replaces the swatches.
 
 `platform::dialog::pick_color(initial)` opens the platform's color dialog
 instead, where it has one: `ChooseColorW` on Windows (it blocks, like the file
@@ -407,12 +407,12 @@ scale, springy toggles, popups that grow from 96%. The Material 3 themes use
 | Linux | `adwaita()` | Adwaita's `200ms $ease-out-quad` transitions; GTK 4's popovers appear and go at once |
 
 None of them scale buttons but the standard one, as none of those platforms'
-buttons do. Change the motion with `Theme::with_motion`, starting from a
+buttons do. Change the motion with `Theme::motion`, starting from a
 preset:
 
 ```rust
 // No shrink when pressed.
-let theme = Theme::light().with_motion(MotionTokens::standard().press_scale(1.0));
+let theme = Theme::light().motion(MotionTokens::standard().press_scale(1.0));
 ```
 
 `MotionTokens::instant()` turns the widgets' motion off. The OS's

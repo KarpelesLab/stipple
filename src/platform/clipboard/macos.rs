@@ -51,7 +51,7 @@ pub fn text() -> Option<String> {
 }
 
 pub fn set_text(text: &str) -> bool {
-    write(&ClipboardContent::text(text))
+    write(&ClipboardContent::from_text(text))
 }
 
 pub fn read(formats: ClipboardFormats) -> Option<ClipboardContent> {

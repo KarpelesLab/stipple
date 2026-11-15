@@ -488,13 +488,6 @@ impl EditBuffer {
         }
     }
 
-    /// This buffer with its paragraph direction set (see
-    /// [`set_direction`](Self::set_direction)).
-    pub fn with_direction(mut self, direction: TextDirection) -> Self {
-        self.direction = direction;
-        self
-    }
-
     /// Set the paragraph direction: [`TextDirection::Auto`] (the default) takes
     /// each line's direction from its first strong character. [`text_editor`]
     /// and [`text_area`] draw the text with it, and Left and Right move the
@@ -2283,7 +2276,8 @@ mod tests {
 
     #[test]
     fn direction_can_be_forced() {
-        let mut b = EditBuffer::from_text("abc").with_direction(TextDirection::Rtl);
+        let mut b = EditBuffer::from_text("abc");
+        b.set_direction(TextDirection::Rtl);
         assert_eq!(b.direction(), TextDirection::Rtl);
         // Latin letters keep their order inside a right-to-left line: the
         // caret before "a" is at the line's visual left edge.

@@ -1122,13 +1122,13 @@ impl Element {
 
     /// Strike this text through ([`decorate`](Self::decorate)).
     pub fn strikethrough(self) -> Self {
-        self.decorate(Decoration::strikethrough())
+        self.decorate(Decoration::NONE.strikethrough())
     }
 
     /// Underline all of this text in `style` ([`decorate`](Self::decorate));
     /// [`underline`](Self::underline) marks a byte range instead.
     pub fn underline_style(self, style: UnderlineStyle) -> Self {
-        self.decorate(Decoration::underline(style))
+        self.decorate(Decoration::NONE.underline(style))
     }
 
     /// Underline the byte range `[start, end)` of this text element, in its

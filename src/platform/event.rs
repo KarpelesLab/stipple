@@ -229,7 +229,7 @@ impl ScrollDelta {
     }
 
     /// This delta, part of a gesture at `phase`.
-    pub const fn with_phase(mut self, phase: ScrollPhase) -> Self {
+    pub const fn phase(mut self, phase: ScrollPhase) -> Self {
         self.phase = phase;
         self
     }

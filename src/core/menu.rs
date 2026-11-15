@@ -154,7 +154,7 @@ impl<S> MenuItem<S> {
     }
 
     /// The command's shortcut, if any.
-    pub fn get_shortcut(&self) -> Option<Shortcut> {
+    pub(crate) fn key_shortcut(&self) -> Option<Shortcut> {
         match &self.kind {
             ItemKind::Action { shortcut, .. } => *shortcut,
             _ => None,
@@ -162,7 +162,7 @@ impl<S> MenuItem<S> {
     }
 
     /// The menu a submenu item opens.
-    pub fn get_submenu(&self) -> Option<&Menu<S>> {
+    pub(crate) fn child_menu(&self) -> Option<&Menu<S>> {
         match &self.kind {
             ItemKind::Submenu(menu) => Some(menu),
             _ => None,
@@ -269,7 +269,7 @@ impl<S> Menu<S> {
         if rest.is_empty() {
             Some(item)
         } else {
-            item.get_submenu()?.item_at(rest)
+            item.child_menu()?.item_at(rest)
         }
     }
 

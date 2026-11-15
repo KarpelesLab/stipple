@@ -478,8 +478,8 @@ unsafe fn translate_event(etype: u64, ev: Id, view_h: f64) -> Option<Event> {
             let precise = unsafe { msg_bool(ev, sel("hasPreciseScrollingDeltas")) };
             let phase = unsafe { msg_u64(ev, sel("phase")) };
             let momentum = unsafe { msg_u64(ev, sel("momentumPhase")) };
-            let delta = input::mac_scroll(dx, dy, precise)
-                .with_phase(input::mac_scroll_phase(phase, momentum));
+            let delta =
+                input::mac_scroll(dx, dy, precise).phase(input::mac_scroll_phase(phase, momentum));
             // Momentum and phase-end events can carry no movement; a
             // gesture's start and end still say so.
             let says = delta.dx != 0.0

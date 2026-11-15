@@ -249,9 +249,9 @@ struct StickState {
 /// use stipple::geometry::Vec2;
 ///
 /// let controls = TouchControls::new()
-///     .with_stick(TouchStick::left())
-///     .with_button(TouchButton::new(GamepadButton::South, "A"))
-///     .with_button(
+///     .stick(TouchStick::left())
+///     .button(TouchButton::new(GamepadButton::South, "A"))
+///     .button(
 ///         TouchButton::new(GamepadButton::East, "B").at(Corner::BottomRight, Vec2::new(160.0, 60.0)),
 ///     );
 /// # let _ = controls;
@@ -288,14 +288,14 @@ impl TouchControls {
     }
 
     /// With `stick` too.
-    pub fn with_stick(mut self, stick: TouchStick) -> TouchControls {
+    pub fn stick(mut self, stick: TouchStick) -> TouchControls {
         self.sticks.push(stick);
         self.stick_state.push(StickState::default());
         self
     }
 
     /// With `button` too.
-    pub fn with_button(mut self, button: TouchButton) -> TouchControls {
+    pub fn button(mut self, button: TouchButton) -> TouchControls {
         self.buttons.push(button);
         self
     }
@@ -546,8 +546,8 @@ pub(crate) fn stick_vector(d: Vec2, radius: f64, dead_zone: f32) -> (f32, f32) {
 /// }
 ///
 /// let controls = TouchControls::new()
-///     .with_stick(TouchStick::left())
-///     .with_button(TouchButton::new(GamepadButton::South, "A"));
+///     .stick(TouchStick::left())
+///     .button(TouchButton::new(GamepadButton::South, "A"));
 /// let game = Game { touch: TouchOverlay::new(CanvasId(2)).font(Font::system_default()) };
 /// App::new(game, view)
 ///     .game_loop(
@@ -642,9 +642,9 @@ mod tests {
 
     fn controls() -> TouchControls {
         let mut c = TouchControls::new()
-            .with_stick(TouchStick::left().radius(50.0).dead_zone(0.2))
-            .with_button(TouchButton::new(GamepadButton::South, "A"))
-            .with_button(
+            .stick(TouchStick::left().radius(50.0).dead_zone(0.2))
+            .button(TouchButton::new(GamepadButton::South, "A"))
+            .button(
                 TouchButton::new(GamepadButton::RightTrigger, "R")
                     .at(Corner::TopRight, Vec2::new(50.0, 50.0)),
             );
@@ -726,7 +726,7 @@ mod tests {
 
     #[test]
     fn a_fixed_stick_needs_the_finger_on_it() {
-        let mut c = TouchControls::new().with_stick(TouchStick::left().floating(false));
+        let mut c = TouchControls::new().stick(TouchStick::left().floating(false));
         c.set_area(Size::new(800.0, 400.0));
         // Home is (100, 300).
         c.touch(&touch(1, TouchPhase::Started, 300.0, 100.0));

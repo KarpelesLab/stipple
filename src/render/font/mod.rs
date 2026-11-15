@@ -71,13 +71,13 @@ impl FontStyle {
     };
 
     /// This style at `weight`.
-    pub fn with_weight(mut self, weight: FontWeight) -> Self {
+    pub fn weight(mut self, weight: FontWeight) -> Self {
         self.weight = weight;
         self
     }
 
     /// This style, slanted or upright.
-    pub fn with_italic(mut self, italic: bool) -> Self {
+    pub fn italic(mut self, italic: bool) -> Self {
         self.italic = italic;
         self
     }
@@ -554,7 +554,7 @@ impl Font {
 
     /// This font at `weight`, keeping its slant.
     pub fn with_weight(&self, weight: FontWeight) -> Font {
-        self.styled(self.style.with_weight(weight))
+        self.styled(self.style.weight(weight))
     }
 
     /// This font bold.
@@ -564,7 +564,7 @@ impl Font {
 
     /// This font italic.
     pub fn italic(&self) -> Font {
-        self.styled(self.style.with_italic(true))
+        self.styled(self.style.italic(true))
     }
 
     /// The style this font draws in.

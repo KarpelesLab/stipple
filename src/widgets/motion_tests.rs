@@ -28,7 +28,7 @@ fn linear(ms: u64) -> Motion {
 /// The light theme with every motion a 100 ms linear tween.
 fn theme() -> Theme {
     let m = linear(100);
-    Theme::light().with_motion(MotionTokens {
+    Theme::light().motion(MotionTokens {
         state: m,
         press: m,
         toggle: m,

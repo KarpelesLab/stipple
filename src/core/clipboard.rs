@@ -74,7 +74,7 @@ pub fn set_primary_text(text: &str) {
 /// # use stipple::platform::clipboard::{ClipboardContent, ClipboardKind};
 /// write_clipboard(
 ///     ClipboardKind::Clipboard,
-///     ClipboardContent::text("bold").with_html("<b>bold</b>"),
+///     ClipboardContent::from_text("bold").html("<b>bold</b>"),
 /// );
 /// assert_eq!(stipple::core::clipboard_text(), "bold");
 /// ```
@@ -117,7 +117,7 @@ pub(crate) fn mirror(kind: ClipboardKind, formats: ClipboardFormats) -> Option<C
         ClipboardKind::Clipboard => clipboard_text(),
         ClipboardKind::Primary => primary_text(),
     };
-    (formats.text && !text.is_empty()).then(|| ClipboardContent::text(text))
+    (formats.text && !text.is_empty()).then(|| ClipboardContent::from_text(text))
 }
 
 /// The text selected in the focused text field, if it has a selection.
@@ -141,20 +141,20 @@ mod tests {
     #[test]
     fn writes_update_the_mirrors_and_queue() {
         take_requests();
-        write_clipboard(ClipboardKind::Primary, ClipboardContent::text("sel"));
+        write_clipboard(ClipboardKind::Primary, ClipboardContent::from_text("sel"));
         request_clipboard(ClipboardKind::Clipboard, ClipboardFormats::ALL);
         assert_eq!(primary_text(), "sel");
         assert_eq!(
             take_requests(),
             vec![
-                ClipboardRequest::Write(ClipboardKind::Primary, ClipboardContent::text("sel")),
+                ClipboardRequest::Write(ClipboardKind::Primary, ClipboardContent::from_text("sel")),
                 ClipboardRequest::Read(ClipboardKind::Clipboard, ClipboardFormats::ALL),
             ]
         );
         assert!(take_requests().is_empty());
         assert_eq!(
             mirror(ClipboardKind::Primary, ClipboardFormats::TEXT),
-            Some(ClipboardContent::text("sel"))
+            Some(ClipboardContent::from_text("sel"))
         );
         let image_only = ClipboardFormats {
             image: true,

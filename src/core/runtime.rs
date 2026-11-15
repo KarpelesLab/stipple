@@ -570,16 +570,16 @@ impl<'a, S> Cx<'a, S> {
     /// # use stipple::prelude::*;
     /// # struct State { file: String, dirty: bool }
     /// fn view(s: &State, cx: &mut Cx<State>) -> Element {
-    ///     cx.window_title(format!("{}{} — Editor", s.file, if s.dirty { "*" } else { "" }));
+    ///     cx.set_window_title(format!("{}{} — Editor", s.file, if s.dirty { "*" } else { "" }));
     ///     // ...
     /// #   spacer()
     /// }
     /// ```
-    pub fn window_title(&mut self, title: impl Into<String>) {
+    pub fn set_window_title(&mut self, title: impl Into<String>) {
         self.window_title = Some(title.into());
     }
 
-    /// Take the title the view set with [`window_title`](Self::window_title).
+    /// Take the title the view set with [`set_window_title`](Self::set_window_title).
     pub(crate) fn take_window_title(&mut self) -> Option<String> {
         self.window_title.take()
     }

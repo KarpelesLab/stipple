@@ -260,7 +260,7 @@ fn a_leaving_element_stays_drawn_but_clicks_go_through_it() {
 /// test sees them leaving.
 fn slow_exits() -> crate::style::Theme {
     let slow = crate::anim::Motion::tween(5.0, Easing::Linear);
-    crate::style::Theme::light().with_motion(crate::style::MotionTokens {
+    crate::style::Theme::light().motion(crate::style::MotionTokens {
         popup: crate::anim::Motion::Instant,
         dialog: crate::anim::Motion::Instant,
         popup_exit: slow,

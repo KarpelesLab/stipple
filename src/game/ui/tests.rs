@@ -491,11 +491,11 @@ fn a_capture_binds_the_next_input_and_flags_conflicts() {
 fn escape_or_waiting_too_long_cancels_a_capture() {
     let mut input = InputState::new();
     let t0 = Duration::from_secs(1);
-    let mut cap = RebindCapture::new(Act::Fire, 0).with_timeout(Duration::from_secs(2));
+    let mut cap = RebindCapture::new(Act::Fire, 0).timeout(Duration::from_secs(2));
     cap.poll(&input, t0);
     input.key(&key(PhysicalKey::ESCAPE, KeyCode::Escape));
     assert_eq!(cap.poll(&input, t0 + 16 * MS), Capture::Cancelled);
-    let mut cap = RebindCapture::new(Act::Fire, 0).with_timeout(Duration::from_secs(2));
+    let mut cap = RebindCapture::new(Act::Fire, 0).timeout(Duration::from_secs(2));
     let quiet = InputState::new();
     cap.poll(&quiet, t0);
     assert_eq!(cap.poll(&quiet, t0 + 1999 * MS), Capture::Waiting);
@@ -587,7 +587,7 @@ fn bindings_have_short_names() {
 
 #[test]
 fn a_typewriter_reveals_characters_over_frame_time_and_skips() {
-    let mut tw = Typewriter::new("Héllo there").with_speed(20.0);
+    let mut tw = Typewriter::new("Héllo there").speed(20.0);
     assert_eq!(tw.len(), 11);
     let t0 = Duration::from_secs(3);
     assert_eq!(tw.shown_at(t0), 0, "the first frame starts the clock");
@@ -601,7 +601,7 @@ fn a_typewriter_reveals_characters_over_frame_time_and_skips() {
     assert_eq!(tw.visible_at(t0 + 260 * MS), "Héllo there");
     assert!(tw.advance());
     // Typed out on its own, it is done.
-    let tw = Typewriter::new("Hi").with_speed(10.0);
+    let tw = Typewriter::new("Hi").speed(10.0);
     tw.shown_at(t0);
     assert_eq!(tw.visible_at(t0 + 200 * MS), "Hi");
     assert!(tw.is_done());
@@ -728,7 +728,7 @@ fn floating_texts_go_after_their_life_and_counters_pop_on_change() {
 
 #[test]
 fn a_game_style_makes_a_theme_with_its_colors_and_focus_look() {
-    let style = GameStyle::ember().with_font_size(20.0);
+    let style = GameStyle::ember().font_size(20.0);
     let theme = Theme::game(&style);
     assert_eq!(theme.palette.primary, style.accent);
     assert_eq!(theme.palette.background, style.background);
@@ -739,7 +739,7 @@ fn a_game_style_makes_a_theme_with_its_colors_and_focus_look() {
     assert!(GameStyle::neon().focus.glow > 0.0);
     assert!(
         GameStyle::neon()
-            .with_font_bytes(b"not a font".to_vec())
+            .font_bytes(b"not a font".to_vec())
             .is_err()
     );
 }

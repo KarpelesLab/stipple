@@ -242,9 +242,9 @@ use stipple::gamepad::GamepadButton;
 use stipple::prelude::*;
 
 let controls = TouchControls::new()
-    .with_stick(TouchStick::left()) // the left pad stick, floating over the left half
-    .with_button(TouchButton::new(GamepadButton::South, "A")) // bottom right
-    .with_button(TouchButton::new(GamepadButton::East, "B").at(Corner::BottomRight, Vec2::new(160.0, 60.0)))
+    .stick(TouchStick::left()) // the left pad stick, floating over the left half
+    .button(TouchButton::new(GamepadButton::South, "A")) // bottom right
+    .button(TouchButton::new(GamepadButton::East, "B").at(Corner::BottomRight, Vec2::new(160.0, 60.0)))
     .show(ShowTouch::Auto);
 // The loop: GameLoop::new(update).touch_controls(controls)
 // The state keeps a TouchOverlay::new(CanvasId(2)).font(Font::system_default());
@@ -410,12 +410,12 @@ bitmaps, a game gets:
   a time: `walk.frame_at(t)` gives the sheet frame to draw.
 - **`Tilemap`**: a grid of tile numbers (frames of a tileset sheet) with a
   tile size and an origin in the world (`Tilemap::new(cols, rows,
-  tile).at(origin)`). `map.draw(scene, &tileset, view,
+  tile).origin(p)`). `map.draw(scene, &tileset, view,
   &opts)` draws only the cells that cross `view`, so a level of any size costs
   what's on screen; `cell_at`, `cell_rect` and `visible_cells` answer the
   usual questions.
 - **`Camera2D`**: the world point at the screen's center (`position`), `zoom`,
-  an optional `rotation`, and shake (`shake(amount)` adds trauma that fades as
+  an optional `rotation`, and shake (`add_trauma(amount)` adds trauma that fades as
   `update(dt)` runs). `follow(target, rate, dt)` trails a point smoothly,
   `clamp_to(bounds)` keeps the view inside the level. `transform()` is the
   world-to-screen `Affine`; `world_to_screen`, `screen_to_world` and
@@ -423,8 +423,8 @@ bitmaps, a game gets:
   / `cam.pop(scene)` (a `Scene` layer) or `cam.draw(scene, |s| …)`. With
   `snap` (on by default) the translation is rounded to whole screen units, so
   pixel art doesn't shimmer while the camera glides. Set it up with
-  `Camera2D::new(viewport).at(p).with_zoom(2.0)` (`with_rotation`,
-  `with_snap`, `with_shake(strength, decay)`); the fields stay public to
+  `Camera2D::new(viewport).position(p).zoom(2.0)` (`rotation`,
+  `snap`, `shake(strength, decay)`); the fields stay public to
   move it each frame.
 - **`PixelViewport`**: a fixed virtual resolution for pixel art,
   `PixelViewport::new(320, 180)`. `vp.paint(canvas, |s| …)` gives the game a
@@ -542,16 +542,16 @@ view), the pause menu is a modal overlay, and everything else is an
 use stipple::game::ui::GameStyle;
 
 let style = GameStyle::neon() // or GameStyle::ember()
-    .with_font_bytes(include_bytes!("../assets/Display.ttf").to_vec())?
-    .with_accent(Color::rgb(0x2e, 0xc4, 0xb6));
+    .font_bytes(include_bytes!("../assets/Display.ttf").to_vec())?
+    .accent(Color::rgb(0x2e, 0xc4, 0xb6));
 App::new(state, view).game_style(style); // the theme and the font
 ```
 
 A `GameStyle` is what a game decides: `font` (from the game's files with
-`with_font_bytes`, or `with_font` for a `Font` with more faces),
+`font_bytes`, or `font` for a `Font` with more faces),
 `background`, `surface`, `accent`, `text`, `text_muted`, `danger`,
-`success`, `warning`, `radius`, `font_size` and `focus`, each set with its
-`with_…` (`with_background`, `with_surface`, `with_text`, …). `style.theme()`
+`success`, `warning`, `radius`, `font_size` and `focus`, each set with the
+setter of the same name (`.background(c)`, `.surface(c)`, `.text(c)`, …). `style.theme()`
 (or `Theme::game(&style)`) makes the `Theme` every widget reads, with a
 type scale for a screen read from the sofa (titles 1.3×, headings 2× the
 body). Widgets draw text in the app's font, so the font goes to
@@ -731,7 +731,7 @@ leave the HUD's to the HUD.
 | `counter(theme, id, label, value)` | A label and a number that pops (from 1.6×, on a bouncy spring) each time it changes. |
 | `minimap_slot(theme, w, h, content)` | A framed, clipped box for the game's map canvas. |
 | `FloatingTexts`, `floating_texts(theme, &texts)` | `spawn(text, color, at, frame.time())` a "+10" where it happened; `update(frame.time())` each frame drops those older than `FLOAT_LIFE` (600 ms) and says whether to rebuild. Each is keyed: it rises into place as it comes, and rises off, fading, as it goes. |
-| `Typewriter`, `DialogueBox::new(&text, on_activate).speaker(name).portrait(image).view(cx, theme)` | A box along the bottom: the speaker's name on a tab, a portrait (an image, 72 × 72) and the text typed out at `TYPEWRITER_SPEED` (40 characters a second, or `with_speed`), timed by the frames that show it (`Cx::frame_time`). It asks for frames while it types, keeps its size meanwhile, and shows ▼ when done. It takes focus when it shows; a tap, Enter or South runs `on_activate`, where `text.advance()` reveals the rest, or returns `true` once all of it shows (go to the next line). |
+| `Typewriter`, `DialogueBox::new(&text, on_activate).speaker(name).portrait(image).view(cx, theme)` | A box along the bottom: the speaker's name on a tab, a portrait (an image, 72 × 72) and the text typed out at `TYPEWRITER_SPEED` (40 characters a second, or `speed`), timed by the frames that show it (`Cx::frame_time`). It asks for frames while it types, keeps its size meanwhile, and shows ▼ when done. It takes focus when it shows; a tap, Enter or South runs `on_activate`, where `text.advance()` reveals the rest, or returns `true` once all of it shows (go to the next line). |
 
 The geometry of spatial navigation, keys and a gamepad moving through a
 menu (the stick's thresholds, a held direction's repeat), the HUD letting

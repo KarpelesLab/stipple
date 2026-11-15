@@ -188,7 +188,7 @@ fn layers(app: &App<State>) -> Vec<(bool, f32)> {
 fn a_box_and_its_scrim_fade_in_and_the_next_comes_in_as_it_leaves() {
     // Five-second linear motion, so wall-clock frames land mid-way.
     let slow = crate::anim::Motion::tween(5.0, crate::anim::Easing::Linear);
-    let theme = crate::style::Theme::light().with_motion(crate::style::MotionTokens {
+    let theme = crate::style::Theme::light().motion(crate::style::MotionTokens {
         dialog: slow,
         dialog_exit: slow,
         ..crate::style::MotionTokens::standard()

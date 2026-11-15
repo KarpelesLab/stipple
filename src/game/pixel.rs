@@ -159,7 +159,7 @@ impl PixelViewport {
         let mut scene = Scene::new(self.size());
         draw(&mut scene);
         SoftwareRenderer::new()
-            .with_background(self.background)
+            .background(self.background)
             .render_at(scene, PhysicalSize::new(self.width, self.height))
     }
 

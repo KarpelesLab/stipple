@@ -992,8 +992,8 @@ mod tests {
         i.set_area(Size::new(800.0, 400.0));
         i.set_touch_controls(Some(
             TouchControls::new()
-                .with_stick(TouchStick::left().radius(50.0).dead_zone(0.0))
-                .with_button(TouchButton::new(GamepadButton::South, "A")),
+                .stick(TouchStick::left().radius(50.0).dead_zone(0.0))
+                .button(TouchButton::new(GamepadButton::South, "A")),
         ));
         assert!(!i.touch_controls().unwrap().visible());
         // A quick tap on A between updates is seen; the left thumb steers.

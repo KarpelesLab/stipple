@@ -126,13 +126,13 @@ use stipple::platform::dialog::{self, FileDialog};
 
 // In a tap handler:
 let handle = cx.handle();
-dialog::open_file_contents(&FileDialog::new().with_accept(".txt"), move |file| {
+dialog::open_file_contents(&FileDialog::new().accept(".txt"), move |file| {
     if let Some(file) = file {
         handle.update(move |s: &mut State| s.text = String::from_utf8_lossy(&file.bytes).into());
     }
 });
 
-dialog::save_file_contents(&FileDialog::new().with_file_name("notes.txt"), bytes);
+dialog::save_file_contents(&FileDialog::new().file_name("notes.txt"), bytes);
 ```
 
 - `open_file_contents` opens an `<input type=file>` and returns at once; the

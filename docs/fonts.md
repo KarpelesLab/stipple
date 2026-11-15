@@ -70,7 +70,7 @@ the shaper's face chain only handles TrueType outlines for now.
 
 ```rust
 let bold = mono.bold();                         // FontWeight::BOLD
-let light_italic = mono.styled(FontStyle::ITALIC.with_weight(FontWeight::LIGHT));
+let light_italic = mono.styled(FontStyle::ITALIC.weight(FontWeight::LIGHT));
 ```
 
 `styled` picks the family's face the way CSS does: the requested slant first,
@@ -129,9 +129,9 @@ can be tighter.
 
 ```rust
 Element::text("misspeled", 14.0, ink)
-    .decorate(Decoration::underline(UnderlineStyle::Curly).with_color(red));
+    .decorate(Decoration::NONE.underline(UnderlineStyle::Curly).color(red));
 Element::text("old price", 14.0, ink).strikethrough();
-Element::text("heading", 14.0, ink).decorate(Decoration::overline().with_underline(UnderlineStyle::Double));
+Element::text("heading", 14.0, ink).decorate(Decoration::NONE.overline().underline(UnderlineStyle::Double));
 ```
 
 `Decoration` holds an optional underline (`Single`, `Double`, `Curly`,

@@ -207,7 +207,7 @@ mod app {
             println!("androiddemo: notify {sent:?}");
         });
         let open = button_labeled(theme, "Open").on_tap(cx, |_: &mut State| {
-            dialog::open_file_contents(&FileDialog::new().with_accept(".txt"), |file| match file {
+            dialog::open_file_contents(&FileDialog::new().accept(".txt"), |file| match file {
                 Some(f) => println!(
                     "androiddemo: opened {:?} ({} bytes): {:?}",
                     f.name,
@@ -221,7 +221,7 @@ mod app {
         let save = button_labeled(theme, "Save").on_tap(cx, |s: &mut State| {
             let text = format!("Saved by androiddemo after {} taps\n", s.taps);
             dialog::save_file_contents_then(
-                &FileDialog::new().with_file_name("stipple-saved.txt"),
+                &FileDialog::new().file_name("stipple-saved.txt"),
                 text.as_bytes(),
                 |saved| println!("androiddemo: saved {saved}"),
             );

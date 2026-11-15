@@ -445,7 +445,7 @@ impl Game {
             let limit = (MAP_COLS * TILE - TILE) as f64;
             self.target = Some((world.x - 8.0).clamp(0.0, limit));
             self.rest = 0.0;
-            self.cam.shake(0.5);
+            self.cam.add_trauma(0.5);
         }
     }
 }

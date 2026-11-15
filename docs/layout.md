@@ -120,7 +120,7 @@ larger than the maximum, the minimum wins, as in CSS.
 
 ## Right-to-left layouts
 
-`Theme::with_layout_direction(LayoutDirection::Rtl)`, or
+`Theme::layout_direction(LayoutDirection::Rtl)`, or
 `.layout_direction(..)` on an element and its subtree, mirrors everything above
 horizontally: rows run right to left, `Align::Start` on a horizontal axis is
 the right edge, grid columns count from the right, and the `left` padding inset

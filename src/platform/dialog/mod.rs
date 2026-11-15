@@ -90,17 +90,17 @@ impl FileDialog {
         Self::default()
     }
 
-    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+    pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
-    pub fn with_file_name(mut self, name: impl Into<String>) -> Self {
+    pub fn file_name(mut self, name: impl Into<String>) -> Self {
         self.file_name = name.into();
         self
     }
 
-    pub fn with_accept(mut self, accept: impl Into<String>) -> Self {
+    pub fn accept(mut self, accept: impl Into<String>) -> Self {
         self.accept = accept.into();
         self
     }

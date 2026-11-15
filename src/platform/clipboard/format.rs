@@ -510,9 +510,9 @@ mod tests {
 
     #[test]
     fn payload_offers_and_serves_each_type() {
-        let content = ClipboardContent::text("caf\u{e9} \u{2713}")
-            .with_html("<p>hi</p>")
-            .with_image(checker());
+        let content = ClipboardContent::from_text("caf\u{e9} \u{2713}")
+            .html("<p>hi</p>")
+            .image(checker());
         let p = Payload::new(content);
         let mimes = p.mimes();
         assert!(mimes.contains(&"UTF8_STRING") && mimes.contains(&HTML_MIME));

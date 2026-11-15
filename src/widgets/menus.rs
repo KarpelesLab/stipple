@@ -125,7 +125,7 @@ impl ShapeItem {
         let (text, key) = mnemonic(item.label());
         ShapeItem {
             selectable: item.is_enabled(),
-            submenu: item.get_submenu().map(Shape::of),
+            submenu: item.child_menu().map(Shape::of),
             mnemonic: key,
             initial: text.chars().next().and_then(|c| c.to_lowercase().next()),
         }
@@ -535,7 +535,7 @@ fn popups<S: 'static>(
             break;
         }
         let next = highlight.and_then(|i| {
-            let sub = current.items.get(i)?.get_submenu()?;
+            let sub = current.items.get(i)?.child_menu()?;
             Some((i, sub, row_ids.get(i).copied().flatten()?))
         });
         match next {
@@ -605,7 +605,7 @@ fn panel<S: 'static>(
             Element::text(mark, theme.typography.body, p.primary).width(18.0),
             label_text(item.label(), cues, theme.typography.body, ink).grow(1.0),
         ];
-        if let Some(s) = item.get_shortcut() {
+        if let Some(s) = item.key_shortcut() {
             // Keep shortcuts clear of the labels.
             let text = Element::text(s.label(), theme.typography.body, p.text_muted);
             cells.push(
@@ -617,7 +617,7 @@ fn panel<S: 'static>(
                 )),
             );
         }
-        let submenu = item.get_submenu().is_some();
+        let submenu = item.child_menu().is_some();
         cells.push(
             Element::text(
                 match (submenu, theme.is_rtl()) {

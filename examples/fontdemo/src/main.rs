@@ -33,32 +33,33 @@ fn decorations() -> Vec<(&'static str, Decoration)> {
     vec![
         (
             "single underline",
-            Decoration::underline(UnderlineStyle::Single),
+            Decoration::NONE.underline(UnderlineStyle::Single),
         ),
         (
             "double underline",
-            Decoration::underline(UnderlineStyle::Double),
+            Decoration::NONE.underline(UnderlineStyle::Double),
         ),
         (
             "curly underline, red",
-            Decoration::underline(UnderlineStyle::Curly).with_color(red),
+            Decoration::NONE.underline(UnderlineStyle::Curly).color(red),
         ),
         (
             "dotted underline",
-            Decoration::underline(UnderlineStyle::Dotted),
+            Decoration::NONE.underline(UnderlineStyle::Dotted),
         ),
         (
             "dashed underline",
-            Decoration::underline(UnderlineStyle::Dashed),
+            Decoration::NONE.underline(UnderlineStyle::Dashed),
         ),
-        ("strikethrough", Decoration::strikethrough()),
-        ("overline", Decoration::overline()),
+        ("strikethrough", Decoration::NONE.strikethrough()),
+        ("overline", Decoration::NONE.overline()),
         (
             "all three, blue",
-            Decoration::underline(UnderlineStyle::Single)
-                .with_strikethrough()
-                .with_overline()
-                .with_color(blue),
+            Decoration::NONE
+                .underline(UnderlineStyle::Single)
+                .strikethrough()
+                .overline()
+                .color(blue),
         ),
     ]
 }

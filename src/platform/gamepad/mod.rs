@@ -170,7 +170,7 @@ impl GamepadInfo {
     }
 
     /// With its vendor and product ids.
-    pub fn with_ids(mut self, vendor: u16, product: u16) -> Self {
+    pub fn ids(mut self, vendor: u16, product: u16) -> Self {
         self.vendor_id = Some(vendor);
         self.product_id = Some(product);
         self
@@ -213,19 +213,8 @@ impl GamepadState {
         GamepadButton::ALL.into_iter().filter(|b| self.pressed(*b))
     }
 
-    /// This state with `button` down or up.
-    pub fn with_button(mut self, button: GamepadButton, pressed: bool) -> Self {
-        self.set_button(button, pressed);
-        self
-    }
-
-    /// This state with `axis` at `value` (clamped to the axis's range).
-    pub fn with_axis(mut self, axis: GamepadAxis, value: f32) -> Self {
-        self.set_axis(axis, value);
-        self
-    }
-
-    fn set_button(&mut self, button: GamepadButton, pressed: bool) {
+    /// Set `button` down or up.
+    pub fn set_button(&mut self, button: GamepadButton, pressed: bool) {
         if pressed {
             self.buttons |= button.bit();
         } else {
@@ -233,7 +222,8 @@ impl GamepadState {
         }
     }
 
-    fn set_axis(&mut self, axis: GamepadAxis, value: f32) {
+    /// Set `axis` to `value`, clamped to the axis's range.
+    pub fn set_axis(&mut self, axis: GamepadAxis, value: f32) {
         self.axes[axis as usize] = axis.clamp(value);
     }
 }
@@ -548,9 +538,9 @@ mod tests {
         let mut r = Registry::new();
         let id = r.connect(GamepadInfo::default(), GamepadState::default());
         r.take_events();
-        let s = GamepadState::default()
-            .with_button(GamepadButton::Start, true)
-            .with_axis(GamepadAxis::RightY, -0.5);
+        let mut s = GamepadState::default();
+        s.set_button(GamepadButton::Start, true);
+        s.set_axis(GamepadAxis::RightY, -0.5);
         r.set_state(id, s);
         r.set_state(id, s);
         assert_eq!(
@@ -574,11 +564,11 @@ mod tests {
 
     #[test]
     fn state_accessors() {
-        let s = GamepadState::default()
-            .with_button(GamepadButton::DPadLeft, true)
-            .with_button(GamepadButton::North, true)
-            .with_axis(GamepadAxis::LeftTrigger, 0.25)
-            .with_axis(GamepadAxis::LeftY, f32::NAN);
+        let mut s = GamepadState::default();
+        s.set_button(GamepadButton::DPadLeft, true);
+        s.set_button(GamepadButton::North, true);
+        s.set_axis(GamepadAxis::LeftTrigger, 0.25);
+        s.set_axis(GamepadAxis::LeftY, f32::NAN);
         assert_eq!(
             s.pressed_buttons().collect::<Vec<_>>(),
             [GamepadButton::North, GamepadButton::DPadLeft]

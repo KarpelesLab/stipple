@@ -575,7 +575,7 @@ mod tests {
         };
         assert!(img.frame.planes[0].data.len() < 64 * 64 * 4 / 4, "cropped");
 
-        let r = SoftwareRenderer::new().with_background(Color::BLACK);
+        let r = SoftwareRenderer::new().background(Color::BLACK);
         let full = r.render(make(), ScaleFactor::IDENTITY);
         let area = r.render_area(&make(), view, PhysicalSize::new(10, 5));
         for y in 0..5 {

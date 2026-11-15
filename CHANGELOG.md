@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- One naming convention for setters (see "Naming" in
+  `docs/api-guidelines.md`; `api-audit.py` now flags `with_*` builders and
+  `get_*` getters). Chainable setters take the bare property name, `&mut self`
+  setters are `set_*`, getters have no `get_` (this also renames the `with_*`
+  setters added earlier in this release):
+
+  | Before | After |
+  |---|---|
+  | `Theme::with_{accent, palette, typography, spacing, radius, font_size, motion, focus, layout_direction, follows_system}` | `Theme::{accent, palette, …}` |
+  | `Theme::with_native(bool)` | `Theme::native_controls(bool)` (`Theme::native()` stays the preset) |
+  | `GameStyle::with_{font, font_bytes, accent, background, surface, text, text_muted, danger, success, warning, radius, font_size, focus}` | `GameStyle::{font, font_bytes, accent, …}` |
+  | `WindowAttributes::with_{title, logical_size, position, min_size, max_size, maximized, fullscreen, icon, decorations, resize_increments, focus, dark, background}` | `WindowAttributes::{title, logical_size, …}` |
+  | `FileDialog::with_{title, file_name, accept}` | `FileDialog::{title, file_name, accept}` |
+  | `ClipboardContent::text(t)`, `::image(i)` / `.with_{text, html, image}` | `ClipboardContent::from_text(t)`, `::from_image(i)` / `.{text, html, image}` |
+  | `Decoration::underline(s)`, `::strikethrough()`, `::overline()` / `.with_{underline, strikethrough, overline, color}` | `Decoration::NONE.underline(s)`, `.strikethrough()`, `.overline()`, `.color(c)` |
+  | `FontStyle::with_{weight, italic}` | `FontStyle::{weight, italic}` |
+  | `Camera2D::at`, `with_{zoom, rotation, snap, shake}`; `Camera2D::shake(amount)` | `Camera2D::{position, zoom, rotation, snap, shake}`; `Camera2D::add_trauma(amount)` |
+  | `Tilemap::at` | `Tilemap::origin` |
+  | `Toasts::with_{placement, bottom_offset}` (and the `placement()`, `bottom_offset()` getters) | `Toasts::{placement, bottom_offset}` (getters removed; `set_*` stay) |
+  | `ColorPicker::with_alpha(bool)`, `with_swatches` | `ColorPicker::alpha_strip(bool)`, `swatches` |
+  | `PasswordField::with_{label, reveal_button}` | `PasswordField::{label, reveal_button}` |
+  | `TouchControls::with_{stick, button}` | `TouchControls::{stick, button}` |
+  | `Typewriter::with_speed`, `RebindCapture::with_timeout` (and its `timeout()` getter) | `Typewriter::speed`, `RebindCapture::timeout` (getter removed) |
+  | `GamepadInfo::with_ids`; `GamepadState::with_{button, axis}` | `GamepadInfo::ids`; `GamepadState::set_{button, axis}` (`&mut self`) |
+  | `ScrollDelta::with_phase`, `TextLayout::with_align_width`, `SoftwareRenderer::with_background` | `phase`, `align_width`, `background` |
+  | `Spring::with_params` (and the `params()` getter) | `Spring::params` (getter removed) |
+  | `App::with_viewport_content` | `App::viewport_content` |
+  | `EditBuffer::with_direction` | removed: `set_direction` |
+  | `Cx::window_title(t)` | `Cx::set_window_title(t)` |
+  | `MenuItem::get_shortcut`, `get_submenu` | crate-internal |
+
+  Kept: `Color::with_alpha` (derives a copy of a plain value), the `Font`
+  derivations (`with_fallback`, `with_fallbacks`, `with_system_fallbacks`,
+  `with_face`, `with_weight`), `with_*` constructors (`Spring::with_velocity`,
+  `SpringParams::with_response`, `SpriteAnimation::with_durations`,
+  `Cx::with_handle`) and `KeyValues::get_or`.
 - One public path per item: gamepads are only at `stipple::gamepad` (not
   `stipple::platform::gamepad`), `Shortcut` only at `stipple::core`. The
   `Native*` menu and tray types, `TRAY_ID_BASE`, `App::native_tray` and

@@ -131,15 +131,14 @@ impl<T: Animatable> Spring<T> {
         }
     }
 
-    /// Replace the stiffness and damping.
-    pub fn with_params(mut self, params: SpringParams) -> Self {
+    /// This spring with `params`' stiffness and damping.
+    pub fn params(mut self, params: SpringParams) -> Self {
         self.stiffness = params.stiffness;
         self.damping = params.damping;
         self
     }
 
-    /// The stiffness and damping.
-    pub fn params(&self) -> SpringParams {
+    fn current_params(&self) -> SpringParams {
         SpringParams::new(self.stiffness, self.damping)
     }
 
@@ -147,7 +146,7 @@ impl<T: Animatable> Spring<T> {
     /// spring's current state (exact, not integrated).
     fn state_at(&self, t: f64) -> (T::Vector, T::Vector) {
         let x0 = self.position.to_vector().minus(self.target.to_vector());
-        let c = coeffs(self.params(), t.max(0.0));
+        let c = coeffs(self.current_params(), t.max(0.0));
         (
             x0.times(c.a).plus(self.velocity.times(c.b)),
             x0.times(c.av).plus(self.velocity.times(c.bv)),

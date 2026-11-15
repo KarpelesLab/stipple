@@ -580,7 +580,7 @@ mod tests {
     fn a_mirrored_tree_puts_its_triangles_on_the_right_and_swaps_the_arrows() {
         use crate::layout::LayoutDirection;
         let mut app =
-            app().theme(crate::style::Theme::light().with_layout_direction(LayoutDirection::Rtl));
+            app().theme(crate::style::Theme::light().layout_direction(LayoutDirection::Rtl));
         app.render_once();
         // The 300-wide tree hugs the right edge of the 320-wide window; its
         // triangle is mirrored from 9..25 to the right end of the row.

@@ -5,7 +5,7 @@
 //! states + status colors + overlays), a [`Typography`] scale, a [`Spacing`]
 //! scale, and corner [`radius`](Theme::radius). Widgets read tokens from the
 //! theme rather than hard-coding values, so re-skinning is swapping the theme —
-//! and the [builder methods](Theme::with_accent) make a custom theme a
+//! and the [builder methods](Theme::accent) make a custom theme a
 //! one-liner.
 
 #![forbid(unsafe_code)]
@@ -210,8 +210,9 @@ impl Default for Spacing {
 /// A complete look: palette + typography + spacing + corner radius.
 ///
 /// Start from one of the themes ([`Theme::light`], [`Theme::dark`],
-/// [`Theme::native`], [`Theme::material3_from_seed`]…) and adjust it with the
-/// `with_*` methods, or assign its public fields.
+/// [`Theme::native`], [`Theme::material3_from_seed`]…) and adjust it with its
+/// setters ([`accent`](Self::accent), [`radius`](method@Self::radius)…), or assign its
+/// public fields.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct Theme {
@@ -233,7 +234,7 @@ pub struct Theme {
     pub follows_system: bool,
     /// The direction the UI reads in. Left to right by default;
     /// [`LayoutDirection::Rtl`] mirrors the whole UI for Arabic, Hebrew and
-    /// other right-to-left languages (see [`Theme::with_layout_direction`]).
+    /// other right-to-left languages (see [`Theme::layout_direction`]).
     pub layout_direction: LayoutDirection,
     /// How the built-in widgets animate: durations and curves for hover and
     /// press looks, toggles, tab indicators, popups, dialogs, toasts and
@@ -322,7 +323,7 @@ impl Theme {
             Self::light()
         };
         let mut theme = match look.accent {
-            Some(accent) => base.with_accent(accent),
+            Some(accent) => base.accent(accent),
             None => base,
         };
         // Window background, control surface, and separator of each platform.
@@ -372,7 +373,7 @@ impl Theme {
         theme.native = native::available();
         theme.follows_system = true;
         theme.motion = MotionTokens::native();
-        theme.with_font_size(metrics.1)
+        theme.font_size(metrics.1)
     }
 
     /// Whether this theme's background is dark, so windows can match it.
@@ -431,7 +432,7 @@ impl Theme {
 
     /// Recolor the theme around a new `accent`: sets `primary`, derives its
     /// hover/active tints + focus ring, and picks a readable `on_primary`.
-    pub fn with_accent(mut self, accent: Color) -> Self {
+    pub fn accent(mut self, accent: Color) -> Self {
         let dark = self.palette.background.luminance() < 0.5;
         let (hover, active) = states(accent, dark);
         self.palette.primary = accent;
@@ -455,7 +456,7 @@ impl Theme {
     /// [`LayoutDirection::from_env`] picks the direction from the locale;
     /// [`Element::layout_direction`](crate::core::Element::layout_direction)
     /// overrides it for a subtree. See `docs/bidi.md` in the repository.
-    pub fn with_layout_direction(mut self, direction: LayoutDirection) -> Self {
+    pub fn layout_direction(mut self, direction: LayoutDirection) -> Self {
         self.layout_direction = direction;
         self
     }
@@ -467,59 +468,59 @@ impl Theme {
     }
 
     /// Set how the built-in widgets animate (see [`MotionTokens`]).
-    pub fn with_motion(mut self, motion: MotionTokens) -> Self {
+    pub fn motion(mut self, motion: MotionTokens) -> Self {
         self.motion = motion;
         self
     }
 
     /// Set how the focus ring is drawn (see [`FocusLook`]).
-    pub fn with_focus(mut self, focus: FocusLook) -> Self {
+    pub fn focus(mut self, focus: FocusLook) -> Self {
         self.focus = focus;
         self
     }
 
     /// Set the colors.
-    pub fn with_palette(mut self, palette: Palette) -> Self {
+    pub fn palette(mut self, palette: Palette) -> Self {
         self.palette = palette;
         self
     }
 
     /// Set the text sizes. [`font_size`](Self::font_size) follows
     /// `typography.body`.
-    pub fn with_typography(mut self, typography: Typography) -> Self {
+    pub fn typography(mut self, typography: Typography) -> Self {
         self.typography = typography;
         self.font_size = typography.body;
         self
     }
 
     /// Set the spacing scale.
-    pub fn with_spacing(mut self, spacing: Spacing) -> Self {
+    pub fn spacing(mut self, spacing: Spacing) -> Self {
         self.spacing = spacing;
         self
     }
 
     /// Set whether widgets ask the OS to draw their chrome (see
     /// [`Theme::native`]).
-    pub fn with_native(mut self, native: bool) -> Self {
+    pub fn native_controls(mut self, native: bool) -> Self {
         self.native = native;
         self
     }
 
     /// Set whether the `App` rebuilds this theme when the system's look
     /// changes (see [`follows_system`](Self::follows_system)).
-    pub fn with_follows_system(mut self, follows: bool) -> Self {
+    pub fn follows_system(mut self, follows: bool) -> Self {
         self.follows_system = follows;
         self
     }
 
     /// Set the default corner radius.
-    pub fn with_radius(mut self, radius: f64) -> Self {
+    pub fn radius(mut self, radius: f64) -> Self {
         self.radius = radius;
         self
     }
 
     /// Set the base font size (also updates `typography.body`).
-    pub fn with_font_size(mut self, size: f64) -> Self {
+    pub fn font_size(mut self, size: f64) -> Self {
         self.font_size = size;
         self.typography.body = size;
         self
@@ -811,7 +812,7 @@ mod tests {
 
     #[test]
     fn with_accent_recolors_and_picks_on_color() {
-        let t = Theme::light().with_accent(Color::rgb(0xff, 0xd0, 0x00)); // bright yellow
+        let t = Theme::light().accent(Color::rgb(0xff, 0xd0, 0x00)); // bright yellow
         assert_eq!(t.palette.primary, Color::rgb(0xff, 0xd0, 0x00));
         assert_eq!(t.palette.focus_ring, t.palette.primary);
         // On a bright accent, content should be dark.

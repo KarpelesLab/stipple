@@ -312,7 +312,7 @@ fn the_wheel_goes_to_the_innermost_taker() {
     assert!(app.pointer_event(Event::Scroll {
         delta: ScrollDelta::lines(1.0, 0.0),
     }));
-    let trackpad = ScrollDelta::pixels(0.0, 3.5).with_phase(ScrollPhase::Started);
+    let trackpad = ScrollDelta::pixels(0.0, 3.5).phase(ScrollPhase::Started);
     assert!(app.pointer_event(Event::Scroll { delta: trackpad }));
     assert_eq!(scroll(&app).unwrap_or(0.0), 0.0, "the list didn't move");
     let wheel = &app.state().wheel;

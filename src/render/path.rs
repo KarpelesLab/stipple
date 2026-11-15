@@ -290,7 +290,7 @@ mod tests {
 
     fn raster(scene: Scene) -> crate::render::Pixmap {
         SoftwareRenderer::new()
-            .with_background(Color::BLACK)
+            .background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY)
     }
 

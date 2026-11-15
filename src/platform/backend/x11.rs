@@ -1150,7 +1150,7 @@ impl Window for X11Window {
         self.reg.borrow_mut().ime.push((self.window, spot));
     }
     fn set_clipboard(&self, text: &str) {
-        let content = crate::platform::clipboard::ClipboardContent::text(text);
+        let content = crate::platform::clipboard::ClipboardContent::from_text(text);
         self.write_clipboard(
             crate::platform::clipboard::ClipboardKind::Clipboard,
             &content,

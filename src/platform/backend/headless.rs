@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn run_stops_on_exit() {
-        let attrs = WindowAttributes::new().with_logical_size(Size::new(10.0, 10.0));
+        let attrs = WindowAttributes::new().logical_size(Size::new(10.0, 10.0));
         let mut seen = 0;
         run(
             attrs,

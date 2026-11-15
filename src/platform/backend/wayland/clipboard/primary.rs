@@ -194,7 +194,7 @@ mod tests {
         conn.clip.primary.manager = 20;
         conn.clip.primary.device = 21;
         conn.clip.serial = 5;
-        set(&mut conn, &ClipboardContent::text("sel"));
+        set(&mut conn, &ClipboardContent::from_text("sel"));
         let source = conn.clip.primary.source.unwrap();
         let (object, opcode, args, _) = read_request(&compositor);
         assert_eq!(
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!((word(&args, 0), word(&args, 4)), (source, 5));
         assert_eq!(
             read(&mut conn, ClipboardFormats::TEXT),
-            Some(ClipboardContent::text("sel"))
+            Some(ClipboardContent::from_text("sel"))
         );
 
         // Another client reads it: send(mime, fd).
@@ -259,7 +259,7 @@ mod tests {
         });
         assert_eq!(
             read(&mut conn, ClipboardFormats::TEXT),
-            Some(ClipboardContent::text("theirs"))
+            Some(ClipboardContent::from_text("theirs"))
         );
         let _compositor = owner.join().unwrap();
     }

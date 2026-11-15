@@ -217,7 +217,7 @@ mod imp {
             ])
         })
         .logical_size(Size::new(W as f64, H as f64))
-        .with_viewport_content(PAGE, content);
+        .viewport_content(PAGE, content);
         let frame = app.render_once();
         let center = frame.pixel(W / 2, H / 2).unwrap_or([0, 0, 0, 0]);
         if center != GREEN && center != ORANGE {

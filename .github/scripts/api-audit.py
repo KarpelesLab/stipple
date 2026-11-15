@@ -14,7 +14,10 @@ and lists, for every item reachable from outside the crate that isn't
   - items reachable at more than one public path (the prelude aside);
   - functions and methods with 5 or more parameters (not counting `self`,
     `cx` and `theme`), or a run of 3 or more parameters of the same
-    number or bool type.
+    number or bool type;
+  - names (docs/api-guidelines.md, "Naming"): by-value builders
+    (`self -> Self`) named `with_*`, where a setter takes the bare property
+    name, and `&self` methods named `get_*`, where a getter does.
 Items listed in api-audit-allow.txt (one path per line, `# reason` after it)
 are deliberate exceptions. Exits 1 if anything else is found.
 """
@@ -109,6 +112,23 @@ def main():
                 run = 1
             prev = prim
 
+    def check_naming(p, type_id, fn, name):
+        inputs = fn["sig"]["inputs"]
+        if not inputs or inputs[0][0] != "self":
+            return
+        recv = inputs[0][1]
+        borrowed = recv.get("borrowed_ref") if isinstance(recv, dict) else None
+        if name.startswith("with_") and borrowed is None:
+            out = fn["sig"].get("output")
+            returns_self = isinstance(out, dict) and (
+                out.get("generic") == "Self"
+                or str(out.get("resolved_path", {}).get("id")) == type_id
+            )
+            if returns_self:
+                problems.append(("naming", p, "a `with_*` builder: setters take the bare name"))
+        elif name.startswith("get_") and borrowed is not None and not borrowed["is_mutable"]:
+            problems.append(("naming", p, "a `get_*` method: getters take the bare name"))
+
     for iid, p in sorted(seen.items(), key=lambda x: x[1]):
         it = idx[iid]
         k = kind(it)
@@ -133,6 +153,7 @@ def main():
                     m = idx.get(str(mid))
                     if m and m["visibility"] == "public" and kind(m) == "function" and not hidden(m):
                         check_fn(f"{p}::{m['name']}", m["inner"]["function"])
+                        check_naming(f"{p}::{m['name']}", iid, m["inner"]["function"], m["name"])
 
     # One canonical path per item: the prelude may repeat any of them.
     for table in (all_paths, mods):
@@ -148,6 +169,7 @@ def main():
         "enum": "enums not #[non_exhaustive]",
         "params": "functions with many (or easily swapped) parameters",
         "paths": "items with more than one public path (outside the prelude)",
+        "naming": "setters named `with_*`, getters named `get_*`",
     }
     for key, title in titles.items():
         items = [x for x in found if x[0] == key]

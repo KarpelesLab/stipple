@@ -10,7 +10,7 @@
 //! arrow keys move on screen, and Shift+arrows can select a logical range that
 //! shows as several rectangles.
 //!
-//! `--mirror` sets `Theme::with_layout_direction(LayoutDirection::Rtl)`: rows
+//! `--mirror` sets `Theme::layout_direction(LayoutDirection::Rtl)`: rows
 //! run right to left, checkboxes and switches sit right of their labels,
 //! progress bars and sliders fill from the right, the selected first tab is
 //! the rightmost, grid columns count from the right, and the tree's triangles
@@ -182,7 +182,7 @@ fn demo_app() -> App<Demo> {
 fn mirrored_app() -> App<Demo> {
     App::new(demo_state(), mirrored_view)
         .title("Stipple - mirrored UI")
-        .theme(Theme::light().with_layout_direction(LayoutDirection::Rtl))
+        .theme(Theme::light().layout_direction(LayoutDirection::Rtl))
         .logical_size(Size::new(640.0, 480.0))
 }
 

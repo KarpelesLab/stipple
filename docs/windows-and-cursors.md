@@ -25,8 +25,8 @@ App::new(State, view)
 ```
 
 or on the `WindowAttributes` of a window opened with `App::open_window`
-(`with_min_size`, `with_max_size`, `with_maximized`, `with_fullscreen`,
-`with_icon`). Sizes are in logical pixels, like `logical_size`.
+(`min_size`, `max_size`, `maximized`, `fullscreen`,
+`icon`). Sizes are in logical pixels, like `logical_size`.
 
 To change the window while the app runs, queue a `WindowRequest` through the
 app's handle. It applies to the primary window between events:
@@ -84,12 +84,12 @@ which window it is building, so one view function can serve many windows:
 fn editor(s: &State, cx: &mut Cx<State>) -> Element {
     let id = cx.window_id();
     let name = s.docs.iter().find(|(w, _)| *w == id).map_or("", |(_, n)| n);
-    cx.window_title(format!("{name} — Editor"));
+    cx.set_window_title(format!("{name} — Editor"));
     label(cx.theme(), name)
 }
 # fn f(handle: AppHandle<State>) {
 let id = handle.open_window(
-    WindowAttributes::new().with_title("Untitled").with_focus(false),
+    WindowAttributes::new().title("Untitled").focus(false),
     editor,
 );
 // ...
@@ -98,7 +98,7 @@ handle.close_window(id);
 ```
 
 A view passed to `AppHandle::open_window` must be `Send`, as the handle can be
-used from other threads. `WindowAttributes::with_focus(false)` asks for a new
+used from other threads. `WindowAttributes::focus(false)` asks for a new
 window not to take focus (Wayland leaves that to the compositor).
 
 Closing the last window ends the app, unless
@@ -121,7 +121,7 @@ window apply on its next event, which the request itself causes.
 ## Titles
 
 The title starts as `WindowAttributes::title` (`App::title` for the primary
-window). A view can derive it from the state with `cx.window_title(..)`; the
+window). A view can derive it from the state with `cx.set_window_title(..)`; the
 window is retitled whenever the title a build gives changes. A
 `WindowRequest::Title` sets it directly.
 

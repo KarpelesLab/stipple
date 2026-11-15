@@ -64,7 +64,10 @@ impl<S> ClipboardState<S> {
         }
         crate::core::set_primary_text(&sel);
         if let Some(w) = window.filter(|w| w.has_primary_selection()) {
-            w.write_clipboard(ClipboardKind::Primary, &ClipboardContent::text(sel.clone()));
+            w.write_clipboard(
+                ClipboardKind::Primary,
+                &ClipboardContent::from_text(sel.clone()),
+            );
         }
         self.primary_sent = sel;
     }
@@ -334,7 +337,7 @@ mod tests {
         let mut app = app().on_clipboard(move |_s, kind, content| {
             sink.borrow_mut().push((kind, content));
         });
-        crate::core::write_clipboard(ClipboardKind::Clipboard, ClipboardContent::text("t"));
+        crate::core::write_clipboard(ClipboardKind::Clipboard, ClipboardContent::from_text("t"));
         crate::core::request_clipboard(ClipboardKind::Clipboard, ClipboardFormats::TEXT);
         crate::core::request_clipboard(
             ClipboardKind::Primary,
@@ -347,7 +350,10 @@ mod tests {
         assert_eq!(
             *got.borrow(),
             vec![
-                (ClipboardKind::Clipboard, Some(ClipboardContent::text("t"))),
+                (
+                    ClipboardKind::Clipboard,
+                    Some(ClipboardContent::from_text("t"))
+                ),
                 (ClipboardKind::Primary, None),
             ]
         );

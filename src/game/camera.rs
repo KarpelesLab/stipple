@@ -15,8 +15,8 @@ use crate::render::Scene;
 /// use stipple::geometry::{Point, Size};
 ///
 /// let cam = Camera2D::new(Size::new(320.0, 180.0))
-///     .at(Point::new(1000.0, 500.0))
-///     .with_zoom(2.0);
+///     .position(Point::new(1000.0, 500.0))
+///     .zoom(2.0);
 /// // The followed point is at the screen's center…
 /// assert_eq!(cam.world_to_screen(Point::new(1000.0, 500.0)), Point::new(160.0, 90.0));
 /// // …and the screen's corner is half a screen away at 2× zoom.
@@ -61,33 +61,33 @@ impl Camera2D {
         }
     }
 
-    /// Looking at `position` (see [`position`](Self::position)).
-    pub fn at(mut self, position: Point) -> Self {
+    /// Looking at `position`: the world point at the screen's center.
+    pub fn position(mut self, position: Point) -> Self {
         self.position = position;
         self
     }
 
     /// Zoomed to `zoom` screen units per world unit.
-    pub fn with_zoom(mut self, zoom: f64) -> Self {
+    pub fn zoom(mut self, zoom: f64) -> Self {
         self.zoom = zoom;
         self
     }
 
     /// Turned by `rotation` radians.
-    pub fn with_rotation(mut self, rotation: f64) -> Self {
+    pub fn rotation(mut self, rotation: f64) -> Self {
         self.rotation = rotation;
         self
     }
 
-    /// Snapping to whole screen units, or not (see [`snap`](Self::snap)).
-    pub fn with_snap(mut self, snap: bool) -> Self {
+    /// Snapping the translation to whole screen units, or not (on by default).
+    pub fn snap(mut self, snap: bool) -> Self {
         self.snap = snap;
         self
     }
 
     /// Shaking by up to `strength` screen units at full trauma, losing
     /// `decay` trauma a second.
-    pub fn with_shake(mut self, strength: f64, decay: f64) -> Self {
+    pub fn shake(mut self, strength: f64, decay: f64) -> Self {
         self.shake_strength = strength;
         self.shake_decay = decay;
         self
@@ -97,7 +97,7 @@ impl Camera2D {
     /// offset grows with the square of the trauma, which fades at
     /// [`shake_decay`](Self::shake_decay) per second as
     /// [`update`](Self::update) runs.
-    pub fn shake(&mut self, amount: f64) {
+    pub fn add_trauma(&mut self, amount: f64) {
         if amount.is_finite() {
             self.trauma = (self.trauma + amount).clamp(0.0, 1.0);
         }
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn shake_fades_and_follow_and_clamp_settle() {
         let mut cam = Camera2D::new(Size::new(100.0, 100.0));
-        cam.shake(1.0);
+        cam.add_trauma(1.0);
         cam.update(0.1);
         let o = cam.shake_offset();
         assert!(o.dx.abs() <= 8.0 && o.dy.abs() <= 8.0);

@@ -698,7 +698,7 @@ impl Decor {
         }
         self.font = Some(font);
         let s = scale.max(1);
-        SoftwareRenderer::new().with_background(bg).render_at(
+        SoftwareRenderer::new().background(bg).render_at(
             scene,
             PhysicalSize::new((width as u32) * s, TITLE_HEIGHT as u32 * s),
         )
@@ -936,7 +936,7 @@ mod tests {
         #[test]
         fn asks_for_server_side_and_switches_on_client_side() {
             let (mut conn, compositor) = conn_pair();
-            let attrs = WindowAttributes::new().with_min_size(Size::new(100.0, 50.0));
+            let attrs = WindowAttributes::new().min_size(Size::new(100.0, 50.0));
             setup(
                 &mut conn,
                 Some(MANAGER_ID),
@@ -987,7 +987,7 @@ mod tests {
             let (conn, _compositor) = csd_conn();
             assert!(conn.decor.csd);
             let (mut conn, _compositor) = conn_pair();
-            let attrs = WindowAttributes::new().with_decorations(false);
+            let attrs = WindowAttributes::new().decorations(false);
             setup(&mut conn, None, XDG_SURFACE, TOPLEVEL, Some(SEAT), &attrs);
             assert!(!conn.decor.csd);
         }

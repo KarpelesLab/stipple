@@ -86,7 +86,7 @@ impl ColorPicker {
     }
 
     /// Show the alpha strip (`true`, the default), or keep colors opaque.
-    pub fn with_alpha(mut self, enabled: bool) -> Self {
+    pub fn alpha_strip(mut self, enabled: bool) -> Self {
         self.alpha_enabled = enabled;
         if !enabled {
             self.alpha = 255;
@@ -96,7 +96,7 @@ impl ColorPicker {
     }
 
     /// The swatches offered below the strips.
-    pub fn with_swatches(mut self, swatches: Vec<Color>) -> Self {
+    pub fn swatches(mut self, swatches: Vec<Color>) -> Self {
         self.swatches = swatches;
         self
     }
@@ -317,7 +317,7 @@ fn picture(p: Arc<Pixmap>, w: f64, h: f64, theme: &Theme) -> Element {
 
 /// An inline color picker for `state` (see [`ColorPicker`]): a
 /// saturation/value area for the current hue, a hue strip, an alpha strip
-/// (unless [`ColorPicker::with_alpha`] turned it off), a hex field and a row
+/// (unless [`ColorPicker::alpha_strip`] turned it off), a hex field and a row
 /// of swatches. Dragging, typing a hex that parses or tapping a swatch changes
 /// the color and calls `on_change` with it. `field` is an accessor returning
 /// the [`ColorPicker`] inside the app state.
@@ -556,7 +556,7 @@ mod tests {
 
     #[test]
     fn hex_typing_follows_parses_only() {
-        let mut p = ColorPicker::new(Color::rgb(255, 0, 0)).with_alpha(false);
+        let mut p = ColorPicker::new(Color::rgb(255, 0, 0)).alpha_strip(false);
         assert_eq!(p.hex(), "#ff0000");
         p.hex_key(&KeyInput::SelectAll);
         assert!(!p.hex_key(&KeyInput::Text("#0".into()))); // not a color yet

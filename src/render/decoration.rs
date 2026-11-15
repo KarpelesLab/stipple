@@ -50,50 +50,27 @@ impl Decoration {
         color: None,
     };
 
-    /// An underline in `style`.
-    pub fn underline(style: UnderlineStyle) -> Self {
-        Self {
-            underline: Some(style),
-            ..Self::NONE
-        }
-    }
-
-    /// A strikethrough.
-    pub fn strikethrough() -> Self {
-        Self {
-            strikethrough: true,
-            ..Self::NONE
-        }
-    }
-
-    /// An overline.
-    pub fn overline() -> Self {
-        Self {
-            overline: true,
-            ..Self::NONE
-        }
-    }
-
-    /// These lines, also underlined in `style`.
-    pub fn with_underline(mut self, style: UnderlineStyle) -> Self {
+    /// These lines, also underlined in `style`. Start from
+    /// [`NONE`](Self::NONE): `Decoration::NONE.underline(UnderlineStyle::Single)`.
+    pub const fn underline(mut self, style: UnderlineStyle) -> Self {
         self.underline = Some(style);
         self
     }
 
     /// These lines, also struck through.
-    pub fn with_strikethrough(mut self) -> Self {
+    pub const fn strikethrough(mut self) -> Self {
         self.strikethrough = true;
         self
     }
 
     /// These lines, also overlined.
-    pub fn with_overline(mut self) -> Self {
+    pub const fn overline(mut self) -> Self {
         self.overline = true;
         self
     }
 
     /// These lines in `color` instead of the text's.
-    pub fn with_color(mut self, color: Color) -> Self {
+    pub const fn color(mut self, color: Color) -> Self {
         self.color = Some(color);
         self
     }
@@ -258,7 +235,7 @@ mod tests {
 
     #[test]
     fn single_underline_sits_at_the_underline_position() {
-        let px = draw(Decoration::underline(UnderlineStyle::Single));
+        let px = draw(Decoration::NONE.underline(UnderlineStyle::Single));
         assert_eq!(inked_rows(&px), [32]);
         // Exactly the run's extent.
         assert!(dark(&px, 10, 32) && dark(&px, 89, 32));
@@ -267,29 +244,29 @@ mod tests {
 
     #[test]
     fn double_underline_has_two_lines_with_a_gap() {
-        let px = draw(Decoration::underline(UnderlineStyle::Double));
+        let px = draw(Decoration::NONE.underline(UnderlineStyle::Double));
         assert_eq!(inked_rows(&px), [32, 34]);
     }
 
     #[test]
     fn strikethrough_and_overline_use_their_metrics() {
-        let px = draw(Decoration::strikethrough());
+        let px = draw(Decoration::NONE.strikethrough());
         assert_eq!(
             inked_rows(&px),
             [24, 25],
             "2 px thick, 6 above the baseline"
         );
-        let px = draw(Decoration::overline());
+        let px = draw(Decoration::NONE.overline());
         assert_eq!(inked_rows(&px), [14], "at the ascent");
     }
 
     #[test]
     fn dotted_and_dashed_lines_are_broken() {
-        let dotted = draw(Decoration::underline(UnderlineStyle::Dotted));
+        let dotted = draw(Decoration::NONE.underline(UnderlineStyle::Dotted));
         let row: Vec<bool> = (10..90).map(|x| dark(&dotted, x, 32)).collect();
         assert!(row.iter().step_by(2).all(|d| *d), "every other pixel inked");
         assert!(row.iter().skip(1).step_by(2).all(|d| !*d));
-        let dashed = draw(Decoration::underline(UnderlineStyle::Dashed));
+        let dashed = draw(Decoration::NONE.underline(UnderlineStyle::Dashed));
         let row: Vec<bool> = (10..90).map(|x| dark(&dashed, x, 32)).collect();
         assert_eq!(&row[..6], [true, true, true, false, false, true]);
         let inked = row.iter().filter(|d| **d).count();
@@ -298,7 +275,7 @@ mod tests {
 
     #[test]
     fn curly_underline_waves_within_the_run() {
-        let px = draw(Decoration::underline(UnderlineStyle::Curly));
+        let px = draw(Decoration::NONE.underline(UnderlineStyle::Curly));
         let rows = inked_rows(&px);
         assert!(rows.len() >= 2, "a wave spans rows: {rows:?}");
         assert!(rows.iter().all(|&y| (31..=36).contains(&y)), "{rows:?}");
@@ -315,9 +292,10 @@ mod tests {
     fn decoration_color_overrides_the_text_color() {
         let red = Color::rgb(255, 0, 0);
         let mut scene = Scene::new(Size::new(100.0, 50.0));
-        let deco = Decoration::underline(UnderlineStyle::Single)
-            .with_strikethrough()
-            .with_color(red);
+        let deco = Decoration::NONE
+            .underline(UnderlineStyle::Single)
+            .strikethrough()
+            .color(red);
         scene.decoration_lines(
             &metrics(),
             Point::new(10.0, 30.0),

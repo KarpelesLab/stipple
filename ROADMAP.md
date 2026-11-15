@@ -121,8 +121,8 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   GPU-native scene tessellation and Vulkan/Metal/D3D/WebGPU are future work.
 - ✅ **Theme engine + customization**: a semantic `Palette` (roles, interaction
   states, status, overlays), a `Typography` scale, and a `Theme` builder —
-  `with_accent` (recolor + derive hover/active + pick a readable on-color),
-  `with_radius`, `with_font_size`, `high_contrast`. Widgets gained `heading`
+  `accent` (recolor + derive hover/active + pick a readable on-color),
+  `radius`, `font_size`, `high_contrast`. Widgets gained `heading`
   and `button_variant` (Primary/Secondary/Ghost/Danger); the App's focus ring
   and hover overlay read theme tokens. **CI-verified**: the `themegallery`
   example renders one card under four themes, montaged into
@@ -377,7 +377,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   ending when the last window closes. The X11 backend drives multiple top-level
   windows on one connection (a shared `WindowReg` adopts windows opened mid-loop
   via the new `Window::open_window`/`close_window` seam; events route by XID),
-  and `WindowAttributes::with_position` lays them out. **CI-verified** (X11): the
+  and `WindowAttributes::position` lays them out. **CI-verified** (X11): the
   multiwindow example opens a red and a blue window side by side and the root
   screenshot confirms both painted, each its own color.
 - ✅ **Runtime windows, titles and geometry** (#18–#20): Wayland (one
@@ -386,10 +386,10 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   view) -> WindowId` / `close_window(id)` open and close them from any thread
   while the app runs; `Cx::window_id` lets one view serve many windows;
   `App::exit_on_last_window_closed(false)` keeps the app running with none;
-  `WindowAttributes::with_focus`. Backends wake every window, and an event
+  `WindowAttributes::focus`. Backends wake every window, and an event
   that changes the state in one window re-renders the others. Titles: real on
   every desktop backend (`_NET_WM_NAME` + `WM_NAME`, `xdg_toplevel.set_title`,
-  `SetWindowTextW`), declarative with `Cx::window_title` or through
+  `SetWindowTextW`), declarative with `Cx::set_window_title` or through
   `WindowRequest::Title`. Geometry: `WindowRequest::{Position, InnerSize,
   ResizeIncrements, Minimized}`, `WindowInfo` (position, inner/outer size,
   scale, maximized/minimized/fullscreen, work area) from `Cx::window_info`,
@@ -443,7 +443,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   `widgets::viewport`) reserves a rect carried through measure/layout/paint as
   `NodeContent::Viewport`, painting a placeholder and recording a
   `DrawCmd::Viewport`. The `App` holds a content registry
-  (`with_viewport_content` / `set_viewport_content`) and **composites** each
+  (`viewport_content` / `set_viewport_content`) and **composites** each
   viewport's externally-rendered pixels over its placeholder after rasterize
   (`Pane::composite_viewports`; `collect_viewports` locates the rects) — the CPU
   analog of a GPU backend sampling the imported texture into the rect.
@@ -1117,7 +1117,7 @@ Most input only works on X11 today.
   wrapped right-to-left paragraphs, visual caret movement, multi-rectangle
   selections and hit-testing in mixed text. CI screenshots `bididemo` on X11.
   See [docs/bidi.md](docs/bidi.md).
-- ✅ Mirrored layouts for right-to-left UIs: `Theme::with_layout_direction`
+- ✅ Mirrored layouts for right-to-left UIs: `Theme::layout_direction`
   (left to right by default; `LayoutDirection::from_env` / `for_language` pick
   it from a locale) and `Element::layout_direction` for a subtree. Rows run
   right to left, horizontal start/end alignment and grid columns flip, the
@@ -1213,7 +1213,7 @@ Most input only works on X11 today.
   (`AppHandle::request_attention`, `beep`, `set_badge`). On Wayland,
   server-side decorations through xdg-decoration, or a title bar Stipple
   draws (move, resize, maximize, minimize, close, window menu);
-  `WindowAttributes::with_decorations(false)` turns them off. CI cancels and
+  `WindowAttributes::decorations(false)` turns them off. CI cancels and
   confirms closes on X11, Wayland (sway), Windows and macOS, follows focus on
   X11 and Wayland, reads the X11 urgency hint and the macOS badge, and checks
   Weston gets a decorated buffer. Not yet: the Windows taskbar overlay badge

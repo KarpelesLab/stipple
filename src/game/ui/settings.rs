@@ -505,14 +505,9 @@ impl<A: Copy + Eq + std::hash::Hash> RebindCapture<A> {
     }
 
     /// Give up after `timeout` instead.
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
-    }
-
-    /// How long it waits.
-    pub fn timeout(&self) -> Duration {
-        self.timeout
     }
 
     /// Look at a frame's `input` (at frame time `now`): what was pressed

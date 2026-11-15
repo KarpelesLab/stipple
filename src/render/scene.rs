@@ -723,7 +723,7 @@ mod tests {
         use crate::geometry::ScaleFactor;
         use crate::render::software::SoftwareRenderer;
         SoftwareRenderer::new()
-            .with_background(Color::BLACK)
+            .background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY)
     }
 

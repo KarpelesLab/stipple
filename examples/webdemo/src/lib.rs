@@ -80,7 +80,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         .height(44.0);
     let open = button_labeled(&theme, "Open…").on_tap(cx, move |_: &mut State| {
         let handle = handle.clone();
-        dialog::open_file_contents(&FileDialog::new().with_accept(".txt,text/*"), move |file| {
+        dialog::open_file_contents(&FileDialog::new().accept(".txt,text/*"), move |file| {
             if let Some(file) = file {
                 let text = String::from_utf8_lossy(&file.bytes).into_owned();
                 handle.update(move |s: &mut State| {
@@ -91,7 +91,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         });
     });
     let save = button_labeled(&theme, "Save").on_tap(cx, |s: &mut State| {
-        let opts = FileDialog::new().with_file_name("notes.txt");
+        let opts = FileDialog::new().file_name("notes.txt");
         dialog::save_file_contents(&opts, s.notes.text().as_bytes());
     });
     let file = match &state.file {

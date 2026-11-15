@@ -18,15 +18,15 @@ use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Theme, Typography}
 /// use stipple::game::ui::GameStyle;
 /// use stipple::prelude::*;
 /// let style = GameStyle::neon()
-///     .with_accent(Color::rgb(0x2e, 0xc4, 0xb6))
-///     .with_radius(4.0);
+///     .accent(Color::rgb(0x2e, 0xc4, 0xb6))
+///     .radius(4.0);
 /// let theme = style.theme();
 /// assert_eq!(theme.palette.primary, Color::rgb(0x2e, 0xc4, 0xb6));
 /// ```
 ///
 /// The font comes from the game's own files (`include_bytes!`, or read at
-/// run time), with [`with_font_bytes`](Self::with_font_bytes) or
-/// [`with_font`](Self::with_font) for a [`Font`] built with its other faces.
+/// run time), with [`font_bytes`](Self::font_bytes) or
+/// [`font`](Self::font) for a [`Font`] built with its other faces.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct GameStyle {
@@ -102,80 +102,80 @@ impl GameStyle {
     }
 
     /// Use `font` for every widget.
-    pub fn with_font(mut self, font: Font) -> Self {
+    pub fn font(mut self, font: Font) -> Self {
         self.font = Some(font);
         self
     }
 
     /// Use the font in `bytes` (a TrueType `.ttf`, from the game's files)
     /// for every widget.
-    pub fn with_font_bytes(self, bytes: Vec<u8>) -> Result<Self, FontError> {
-        Ok(self.with_font(Font::from_bytes(bytes)?))
+    pub fn font_bytes(self, bytes: Vec<u8>) -> Result<Self, FontError> {
+        Ok(self.font(Font::from_bytes(bytes)?))
     }
 
     /// Set the accent (the highlight and the focus ring).
-    pub fn with_accent(mut self, accent: Color) -> Self {
+    pub fn accent(mut self, accent: Color) -> Self {
         self.accent = accent;
         self
     }
 
     /// Set the background (behind everything; a translucent one lets the
     /// game show through the menus).
-    pub fn with_background(mut self, background: Color) -> Self {
+    pub fn background(mut self, background: Color) -> Self {
         self.background = background;
         self
     }
 
     /// Set the surface (panels, buttons at rest, a bar's track).
-    pub fn with_surface(mut self, surface: Color) -> Self {
+    pub fn surface(mut self, surface: Color) -> Self {
         self.surface = surface;
         self
     }
 
     /// Set the text color.
-    pub fn with_text(mut self, text: Color) -> Self {
+    pub fn text(mut self, text: Color) -> Self {
         self.text = text;
         self
     }
 
     /// Set the color of labels and hints that step back.
-    pub fn with_text_muted(mut self, text_muted: Color) -> Self {
+    pub fn text_muted(mut self, text_muted: Color) -> Self {
         self.text_muted = text_muted;
         self
     }
 
     /// Set the color of health, warnings and failures.
-    pub fn with_danger(mut self, danger: Color) -> Self {
+    pub fn danger(mut self, danger: Color) -> Self {
         self.danger = danger;
         self
     }
 
     /// Set the color of healing, success, a full bar.
-    pub fn with_success(mut self, success: Color) -> Self {
+    pub fn success(mut self, success: Color) -> Self {
         self.success = success;
         self
     }
 
     /// Set the color of gold, coins, a caution.
-    pub fn with_warning(mut self, warning: Color) -> Self {
+    pub fn warning(mut self, warning: Color) -> Self {
         self.warning = warning;
         self
     }
 
     /// Set the corner radius.
-    pub fn with_radius(mut self, radius: f64) -> Self {
+    pub fn radius(mut self, radius: f64) -> Self {
         self.radius = radius;
         self
     }
 
     /// Set the body text size (the rest of the type scale follows).
-    pub fn with_font_size(mut self, size: f64) -> Self {
+    pub fn font_size(mut self, size: f64) -> Self {
         self.font_size = size;
         self
     }
 
     /// Set the focus ring's look.
-    pub fn with_focus(mut self, focus: FocusLook) -> Self {
+    pub fn focus(mut self, focus: FocusLook) -> Self {
         self.focus = focus;
         self
     }

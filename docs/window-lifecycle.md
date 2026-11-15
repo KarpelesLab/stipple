@@ -141,7 +141,7 @@ The title bar and margin live in the window's buffer, around the content
 (`set_window_geometry` tells the compositor where the window proper is). The
 app still sees only its content: its size, and pointer positions within it.
 
-`WindowAttributes::with_decorations(false)` turns the decorations off: no title
+`WindowAttributes::decorations(false)` turns the decorations off: no title
 bar at all, on Wayland (Stipple asks for none and draws none), X11
 (`_MOTIF_WM_HINTS`) and Windows (a popup window with a sizing border).
 

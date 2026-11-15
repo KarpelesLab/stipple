@@ -339,7 +339,7 @@ struct Pane<S> {
     /// read it (so a change rebuilds it).
     info: crate::platform::WindowInfo,
     info_read: bool,
-    /// The title the view gave the window last build (`Cx::window_title`),
+    /// The title the view gave the window last build (`Cx::set_window_title`),
     /// and the one last sent to the window from it.
     built_title: Option<String>,
     view_title: Option<String>,
@@ -887,7 +887,7 @@ impl<S: 'static> App<S> {
 
     /// Seed the content for an embedded [`viewport`](Element::viewport) at build
     /// time (builder form of [`set_viewport_content`](App::set_viewport_content)).
-    pub fn with_viewport_content(mut self, id: ViewportId, content: Pixmap) -> Self {
+    pub fn viewport_content(mut self, id: ViewportId, content: Pixmap) -> Self {
         self.viewport_content.insert(id, content);
         self
     }
@@ -1042,9 +1042,7 @@ impl<S: 'static> Pane<S> {
         let bg = theme.palette.background;
         match self.frame_renderer.as_mut() {
             Some(render) => render(&scene, bg, scale),
-            None => SoftwareRenderer::new()
-                .with_background(bg)
-                .render(scene, scale),
+            None => SoftwareRenderer::new().background(bg).render(scene, scale),
         }
     }
 
@@ -1559,7 +1557,7 @@ impl<S: 'static> Pane<S> {
                 return; // damage fell entirely outside the surface
             }
             let s = scale.get();
-            let renderer = SoftwareRenderer::new().with_background(theme.palette.background);
+            let renderer = SoftwareRenderer::new().background(theme.palette.background);
             let mut pixmap = self.last_pixmap.take().expect("checked by can_partial");
             for r in &regions {
                 let (pw, ph) = (r.width() as u32, r.height() as u32);
@@ -3343,7 +3341,7 @@ impl<S: 'static> App<S> {
                             let text = crate::core::clipboard_text();
                             window.write_clipboard(
                                 crate::platform::clipboard::ClipboardKind::Clipboard,
-                                &crate::platform::clipboard::ClipboardContent::text(text),
+                                &crate::platform::clipboard::ClipboardContent::from_text(text),
                             );
                         }
                         if changed {
@@ -3414,7 +3412,7 @@ impl<S: 'static> App<S> {
                     crate::anim::set_system_motion_scale(crate::platform::native::motion_scale());
                     if self.base_theme.follows_system {
                         self.base_theme =
-                            Theme::native().with_layout_direction(self.base_theme.layout_direction);
+                            Theme::native().layout_direction(self.base_theme.layout_direction);
                         self.refresh_theme();
                         let dark = self.theme.is_dark();
                         for pane in &mut self.panes {
@@ -4595,7 +4593,7 @@ mod tests {
             crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
                 .width(200.0)
         })
-        .theme(Theme::light().with_layout_direction(LayoutDirection::Rtl))
+        .theme(Theme::light().layout_direction(LayoutDirection::Rtl))
         .logical_size(Size::new(200.0, 40.0));
         app.render_once();
         // The knob (the slider's 16-wide child) sits a quarter of the way in

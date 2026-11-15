@@ -416,7 +416,7 @@ scales and offsets entrances start from:
 `Theme::native()` picks the platform's: `fluent()` on Windows, `macos()`,
 `ios()`, and `adwaita()` on Linux. [widgets.md](widgets.md#motion) lists
 what each widget does and where each preset's numbers come from;
-`Theme::with_motion` sets your own, and `MotionTokens::instant()` turns the
+`Theme::motion` sets your own, and `MotionTokens::instant()` turns the
 widgets' motion off.
 
 Your own elements can follow the theme too:

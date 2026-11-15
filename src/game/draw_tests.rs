@@ -45,7 +45,7 @@ fn quads() -> Arc<Pixmap> {
 /// Render over opaque black at 1×, dumping it if asked.
 fn render(name: &str, scene: Scene) -> Pixmap {
     let out = SoftwareRenderer::new()
-        .with_background(Color::BLACK)
+        .background(Color::BLACK)
         .render(scene, ScaleFactor::IDENTITY);
     dump(name, &out);
     out
@@ -377,7 +377,7 @@ fn an_area_render_of_regions_matches_the_full_render() {
         s.draw_canvas(Rect::from_xywh(10.0, 10.0, 200.0, 150.0), &paint);
         s
     };
-    let r = SoftwareRenderer::new().with_background(Color::BLACK);
+    let r = SoftwareRenderer::new().background(Color::BLACK);
     let full = r.render(make(), ScaleFactor::IDENTITY);
     dump("area_full", &full);
     let view = Rect::from_xywh(37.0, 41.0, 90.0, 70.0);

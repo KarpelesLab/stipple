@@ -109,9 +109,9 @@ pub fn default_actions() -> Actions<Act> {
 /// A stick for the left thumb, Flare for the right, pause at the top.
 fn touch_controls() -> TouchControls {
     TouchControls::new()
-        .with_stick(TouchStick::left().at(Corner::BottomLeft, Vec2::new(110.0, 110.0)))
-        .with_button(TouchButton::new(GamepadButton::South, "Flare").radius(48.0))
-        .with_button(
+        .stick(TouchStick::left().at(Corner::BottomLeft, Vec2::new(110.0, 110.0)))
+        .button(TouchButton::new(GamepadButton::South, "Flare").radius(48.0))
+        .button(
             TouchButton::new(GamepadButton::Start, "II")
                 .at(Corner::TopRight, Vec2::new(40.0, 110.0))
                 .radius(24.0),
@@ -386,7 +386,7 @@ pub fn update(g: &mut Game, frame: &mut Frame) {
             }
             Event::Hit { at } | Event::Cold { at } => {
                 g.sounds.hit(at.x);
-                stage.cam.shake(0.6);
+                stage.cam.add_trauma(0.6);
                 let p = stage.to_canvas(V2::new(at.x + 4.0, at.y - 18.0));
                 let text = if matches!(event, Event::Cold { .. }) {
                     "cold!"
@@ -403,7 +403,7 @@ pub fn update(g: &mut Game, frame: &mut Frame) {
             }
             Event::Flare { at, burst } => {
                 g.sounds.flare();
-                stage.cam.shake(0.25);
+                stage.cam.add_trauma(0.25);
                 if burst > 0 {
                     let p = stage.to_canvas(V2::new(at.x - 10.0, at.y - 30.0));
                     g.floaters.spawn(

@@ -69,7 +69,7 @@ impl Tilemap {
     }
 
     /// With its top-left corner at `origin` in world space.
-    pub fn at(mut self, origin: Point) -> Self {
+    pub fn origin(mut self, origin: Point) -> Self {
         self.origin = origin;
         self
     }

@@ -535,7 +535,7 @@ mod tests {
         };
         assert_eq!(image.size(), PhysicalSize::new(20, 40));
         let out = SoftwareRenderer::new()
-            .with_background(Color::rgb(0, 0, 0))
+            .background(Color::rgb(0, 0, 0))
             .render(scene, ScaleFactor::new(2.0));
         assert_eq!(out.pixel(10, 20), Some([0, 255, 0, 255]));
         assert_eq!(out.pixel(30, 20), Some([0, 0, 0, 255]));

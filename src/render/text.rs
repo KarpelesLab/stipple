@@ -329,7 +329,7 @@ impl Font {
     /// paragraph's first strong character. With `max_width`, paragraphs
     /// word-wrap to that width as [`wrap`](Self::wrap) does. Right-to-left
     /// paragraphs are aligned to the right edge of the layout's
-    /// [alignment width](TextLayout::with_align_width).
+    /// [alignment width](TextLayout::align_width).
     pub fn layout<'a>(
         &'a self,
         text: &'a str,
@@ -632,7 +632,7 @@ struct CharBox {
 impl TextLayout<'_> {
     /// Set the width right-to-left lines are aligned against (normally the
     /// width of the box the text is drawn in). Defaults to the widest line.
-    pub fn with_align_width(mut self, width: f64) -> Self {
+    pub fn align_width(mut self, width: f64) -> Self {
         self.align_width = width;
         self
     }
@@ -1290,7 +1290,7 @@ mod tests {
         let text = "שלום עולם";
         let layout = font
             .layout(text, 16.0, TextDirection::Auto, None)
-            .with_align_width(300.0);
+            .align_width(300.0);
         assert!(layout.line_is_rtl(0));
         let w = layout.size().width;
         assert!((layout.caret_position(0).x - 300.0).abs() < 0.01);
@@ -1299,14 +1299,14 @@ mod tests {
         // reading right to left within its run.
         let ltr = font
             .layout(text, 16.0, TextDirection::Ltr, None)
-            .with_align_width(300.0);
+            .align_width(300.0);
         assert!(!ltr.line_is_rtl(0));
         assert!((ltr.caret_position(0).x - w).abs() < 0.01);
         assert!(ltr.caret_position(text.len()).x.abs() < 0.01);
         // An empty right-to-left field puts its caret at the right edge.
         let empty = font
             .layout("", 16.0, TextDirection::Rtl, None)
-            .with_align_width(120.0);
+            .align_width(120.0);
         assert_eq!(empty.caret_position(0).x, 120.0);
     }
 
@@ -1319,21 +1319,17 @@ mod tests {
         for neutral in ["", " ", "123", "(42)"] {
             let mirrored = font
                 .layout_in(neutral, 16.0, None, rtl_ui)
-                .with_align_width(120.0);
+                .align_width(120.0);
             assert!(mirrored.line_is_rtl(0), "{neutral:?}");
             let plain = font.layout(neutral, 16.0, TextDirection::Auto, None);
             assert!(!plain.line_is_rtl(0), "{neutral:?}");
         }
-        let empty = font
-            .layout_in("", 16.0, None, rtl_ui)
-            .with_align_width(120.0);
+        let empty = font.layout_in("", 16.0, None, rtl_ui).align_width(120.0);
         assert_eq!(empty.caret_position(0).x, 120.0);
         // Latin text keeps its left-to-right reading order but lines up right;
         // each line of a multi-line text decides its own direction.
         let text = "abc\n12";
-        let layout = font
-            .layout_in(text, 16.0, None, rtl_ui)
-            .with_align_width(300.0);
+        let layout = font.layout_in(text, 16.0, None, rtl_ui).align_width(300.0);
         assert!(!layout.line_is_rtl(0) && layout.line_is_rtl(1));
         let w = font.measure("abc", 16.0).width;
         assert!((layout.caret_position(0).x - (300.0 - w)).abs() < 0.01);
@@ -1341,7 +1337,7 @@ mod tests {
         // An explicit direction is laid out as `layout` would.
         let forced = font
             .layout_with("abc", 16.0, TextDirection::Ltr, None, rtl_ui)
-            .with_align_width(300.0);
+            .align_width(300.0);
         assert!(forced.caret_position(0).x.abs() < 0.01);
         // Left to right, `layout_in` is `layout`.
         let a = font.layout_in("abc אבג", 16.0, None, LayoutDirection::Ltr);
@@ -1356,7 +1352,7 @@ mod tests {
         let full = font.measure(text, 16.0).width;
         let layout = font
             .layout(text, 16.0, TextDirection::Auto, Some(full / 2.0))
-            .with_align_width(full / 2.0);
+            .align_width(full / 2.0);
         assert!(layout.line_count() > 1);
         for line in 0..layout.line_count() {
             assert!(layout.line_is_rtl(line));
@@ -1415,7 +1411,7 @@ mod tests {
             &TextPaint::new(font, size, Color::WHITE),
         );
         SoftwareRenderer::new()
-            .with_background(Color::BLACK)
+            .background(Color::BLACK)
             .render(scene, ScaleFactor::IDENTITY)
     }
 

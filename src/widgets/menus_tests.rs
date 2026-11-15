@@ -398,7 +398,7 @@ fn an_underline_is_painted_under_the_mnemonic() {
 fn a_mirrored_ui_mirrors_the_bar_its_menus_and_their_keys() {
     use crate::layout::LayoutDirection;
     use crate::style::Theme;
-    let mut app = app().theme(Theme::light().with_layout_direction(LayoutDirection::Rtl));
+    let mut app = app().theme(Theme::light().layout_direction(LayoutDirection::Rtl));
     app.render_once();
     // The bar runs right to left: File is rightmost.
     let file = find(&app, Role::MenuItem, "File");

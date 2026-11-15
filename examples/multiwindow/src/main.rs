@@ -10,7 +10,7 @@
 //! printing a `multiwindow: step N` line after each change so a test can
 //! check it from outside (`xprop`, `xdotool`, `swaymsg`):
 //!
-//! 1. the first window's title follows the state (`Cx::window_title`), the
+//! 1. the first window's title follows the state (`Cx::set_window_title`), the
 //!    second is retitled, moved to 360,260 and resized to 300x200
 //!    (`AppHandle::window_to`), and the first snaps its resizing to 8x16
 //!    steps;
@@ -70,10 +70,10 @@ fn selftest(handle: &AppHandle<Shared>, b: WindowId) {
         s.step = 2;
         let c = h.open_window(
             WindowAttributes::new()
-                .with_title("Stipple — C")
-                .with_logical_size(Size::new(200.0, 150.0))
-                .with_position(700, 0)
-                .with_focus(false),
+                .title("Stipple — C")
+                .logical_size(Size::new(200.0, 150.0))
+                .position(700, 0)
+                .focus(false),
             |_: &Shared, cx: &mut Cx<Shared>| {
                 let text = format!("{:?}", cx.window_id());
                 colored_window(Color::rgb(0x40, 0xb0, 0x60), &text, cx)
@@ -124,7 +124,7 @@ fn main() {
         |s: &Shared, cx: &mut Cx<Shared>| {
             // The title follows the state.
             if s.selftest {
-                cx.window_title(format!("Stipple — A step {}", s.step));
+                cx.set_window_title(format!("Stipple — A step {}", s.step));
             }
             colored_window(Color::rgb(0xd8, 0x40, 0x40), s.label_a, cx)
         },
@@ -139,9 +139,9 @@ fn main() {
     // A second, independent OS window placed to the right of the first.
     let b = app.open_window(
         WindowAttributes::new()
-            .with_title("Stipple — B")
-            .with_logical_size(Size::new(320.0, 240.0))
-            .with_position(340, 0),
+            .title("Stipple — B")
+            .logical_size(Size::new(320.0, 240.0))
+            .position(340, 0),
         |s: &Shared, cx: &mut Cx<Shared>| {
             colored_window(Color::rgb(0x40, 0x80, 0xd8), s.label_b, cx)
         },

@@ -998,7 +998,7 @@ mod tests {
             vec![Wire::Deliver {
                 window: 7,
                 kind: ClipboardKind::Primary,
-                content: Some(ClipboardContent::text("hello world")),
+                content: Some(ClipboardContent::from_text("hello world")),
             }]
         );
     }
@@ -1055,7 +1055,7 @@ mod tests {
             &a,
             ClipboardKind::Clipboard,
             5,
-            ClipboardContent::text("hi"),
+            ClipboardContent::from_text("hi"),
         );
         assert_eq!(req[0], OP_SET_SELECTION_OWNER);
         assert_eq!(rd_u32(&req, 4), Some(5));
@@ -1114,7 +1114,7 @@ mod tests {
             &a,
             ClipboardKind::Clipboard,
             5,
-            ClipboardContent::image(image.clone()),
+            ClipboardContent::from_image(image.clone()),
         );
         let png = a.atom("image/png");
         let ask = SelectionRequest {

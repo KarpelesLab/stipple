@@ -145,21 +145,21 @@ impl FlexItem {
 
     /// Set the grow weight.
     #[inline]
-    pub fn with_grow(mut self, grow: f64) -> Self {
+    pub fn grow(mut self, grow: f64) -> Self {
         self.grow = grow;
         self
     }
 
     /// Set the shrink weight.
     #[inline]
-    pub fn with_shrink(mut self, shrink: f64) -> Self {
+    pub fn shrink(mut self, shrink: f64) -> Self {
         self.shrink = shrink;
         self
     }
 
     /// Bound the item's length to `min..=max`.
     #[inline]
-    pub fn with_bounds(mut self, min: f64, max: f64) -> Self {
+    pub fn bounds(mut self, min: f64, max: f64) -> Self {
         self.min = min;
         self.max = max;
         self
@@ -624,10 +624,7 @@ mod tests {
         let spans = solve_main_axis(
             300.0,
             0.0,
-            &[
-                FlexItem::flex(1.0).with_bounds(0.0, 100.0),
-                FlexItem::flex(1.0),
-            ],
+            &[FlexItem::flex(1.0).bounds(0.0, 100.0), FlexItem::flex(1.0)],
         );
         assert_eq!(lengths(&spans), vec![100.0, 200.0]);
         assert_eq!(offsets(&spans), vec![0.0, 100.0]);
@@ -639,8 +636,8 @@ mod tests {
             500.0,
             10.0,
             &[
-                FlexItem::flex(1.0).with_bounds(0.0, 50.0),
-                FlexItem::flex(3.0).with_bounds(0.0, 80.0),
+                FlexItem::flex(1.0).bounds(0.0, 50.0),
+                FlexItem::flex(3.0).bounds(0.0, 80.0),
             ],
         );
         assert_eq!(lengths(&spans), vec![50.0, 80.0]);
@@ -655,8 +652,8 @@ mod tests {
             300.0,
             0.0,
             &[
-                FlexItem::flex(1.0).with_bounds(0.0, 40.0),
-                FlexItem::flex(1.0).with_bounds(0.0, 120.0),
+                FlexItem::flex(1.0).bounds(0.0, 40.0),
+                FlexItem::flex(1.0).bounds(0.0, 120.0),
                 FlexItem::flex(1.0),
             ],
         );
@@ -670,8 +667,8 @@ mod tests {
             1000.0,
             0.0,
             &[
-                FlexItem::fixed(10.0).with_bounds(60.0, f64::INFINITY),
-                FlexItem::fixed(500.0).with_bounds(0.0, 200.0),
+                FlexItem::fixed(10.0).bounds(60.0, f64::INFINITY),
+                FlexItem::fixed(500.0).bounds(0.0, 200.0),
             ],
         );
         assert_eq!(lengths(&spans), vec![60.0, 200.0]);
@@ -687,7 +684,7 @@ mod tests {
             0.0,
             &[
                 FlexItem::fixed(100.0),
-                FlexItem::flex(1.0).with_bounds(80.0, f64::INFINITY),
+                FlexItem::flex(1.0).bounds(80.0, f64::INFINITY),
             ],
         );
         assert_eq!(lengths(&spans), vec![100.0, 80.0]);
@@ -700,8 +697,8 @@ mod tests {
             200.0,
             0.0,
             &[
-                FlexItem::fixed(100.0).with_shrink(1.0),
-                FlexItem::fixed(300.0).with_shrink(1.0),
+                FlexItem::fixed(100.0).shrink(1.0),
+                FlexItem::fixed(300.0).shrink(1.0),
             ],
         );
         assert_eq!(lengths(&spans), vec![50.0, 150.0]);
@@ -716,9 +713,9 @@ mod tests {
             0.0,
             &[
                 FlexItem::fixed(100.0)
-                    .with_shrink(1.0)
-                    .with_bounds(90.0, f64::INFINITY),
-                FlexItem::fixed(300.0).with_shrink(1.0),
+                    .shrink(1.0)
+                    .bounds(90.0, f64::INFINITY),
+                FlexItem::fixed(300.0).shrink(1.0),
             ],
         );
         assert_eq!(lengths(&spans), vec![90.0, 110.0]);
@@ -729,10 +726,7 @@ mod tests {
         let spans = solve_main_axis(
             50.0,
             0.0,
-            &[
-                FlexItem::fixed(100.0),
-                FlexItem::fixed(20.0).with_shrink(1.0),
-            ],
+            &[FlexItem::fixed(100.0), FlexItem::fixed(20.0).shrink(1.0)],
         );
         assert_eq!(lengths(&spans), vec![100.0, 0.0]);
     }
@@ -744,8 +738,8 @@ mod tests {
             120.0,
             20.0,
             &[
-                FlexItem::fixed(100.0).with_shrink(1.0),
-                FlexItem::fixed(100.0).with_shrink(1.0),
+                FlexItem::fixed(100.0).shrink(1.0),
+                FlexItem::fixed(100.0).shrink(1.0),
             ],
         );
         assert_eq!(lengths(&spans), vec![50.0, 50.0]);

@@ -27,7 +27,7 @@ fn main() {
     }
 
     use stipple::platform::dialog::{self, FileDialog};
-    match dialog::open_file(&FileDialog::new().with_title("Pick a file")) {
+    match dialog::open_file(&FileDialog::new().title("Pick a file")) {
         Some(path) => println!("PICKED: {}", path.display()),
         None => {
             eprintln!("no file chosen (cancelled or no portal)");
@@ -45,7 +45,7 @@ fn main() {
     let picked = match mode.as_str() {
         "save" => dialog::save_file(&FileDialog::new()),
         "folder" => dialog::pick_folder(&FileDialog::new()),
-        _ => dialog::open_file(&FileDialog::new().with_title("Pick a file")),
+        _ => dialog::open_file(&FileDialog::new().title("Pick a file")),
     };
     match picked {
         Some(path) => println!("PICKED: {}", path.display()),
