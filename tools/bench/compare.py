@@ -47,7 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 
 def load(path):
     try:
-        return json.loads(Path(path).read_text())
+        return json.loads(Path(path).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return None
 
@@ -178,9 +178,9 @@ def rerun(command, names):
         if r.returncode != 0:
             print(f"the re-run failed ({r.returncode})")
         if out.exists():
-            return json.loads(out.read_text())
+            return json.loads(out.read_text(encoding="utf-8"))
         found = sorted(Path(tmp).glob("*.json"))
-        return json.loads(found[0].read_text()) if found else None
+        return json.loads(found[0].read_text(encoding="utf-8")) if found else None
 
 
 def fmt(v, digits=2):
@@ -234,6 +234,9 @@ def markdown(title, now, base, rows, missing, factor, provisional, reran):
 
 
 def main():
+    # Windows consoles default to cp1252, which can't print the table's marks.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run", type=Path, help="this run's JSON")
     ap.add_argument("--baseline", type=Path, help="the baseline's JSON (missing: recording only)")
@@ -281,7 +284,7 @@ def main():
     md = markdown(title, now, base, rows, missing, factor, provisional, reran)
     print(md)
     if a.summary:
-        with open(a.summary, "a") as f:
+        with open(a.summary, "a", encoding="utf-8") as f:
             f.write(md + "\n")
     failed = [r["name"] for r in rows if any(blocking for _, blocking, _ in r["fails"])]
     if failed:

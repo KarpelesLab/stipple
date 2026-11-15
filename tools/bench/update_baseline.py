@@ -52,7 +52,7 @@ def main():
             sys.exit(f"no <runner>-<renderer>.json reports under {source}")
         BASELINE.mkdir(parents=True, exist_ok=True)
         for p in found:
-            report = json.loads(p.read_text())
+            report = json.loads(p.read_text(encoding="utf-8"))
             if report.get("gpu_unavailable"):
                 print(f"skip {p.name}: it measured the software renderer ({report['gpu_unavailable']})")
                 continue
@@ -60,7 +60,7 @@ def main():
             if a.provisional:
                 report["provisional"] = True
             report["baseline_from"] = a.note or (f"Perf workflow run {a.run}" if a.run else str(p))
-            (BASELINE / p.name).write_text(json.dumps(report, indent=2) + "\n")
+            (BASELINE / p.name).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
             print(f"perf/baseline/{p.name}")
 
 
