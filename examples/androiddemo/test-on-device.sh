@@ -103,6 +103,14 @@ wait_for "androiddemo: tick 3 " 60
 # platform::app_info from PackageManager (the manifest's label and versions),
 # platform::dirs from the activity (getFilesDir, getCacheDir), created.
 wait_for "androiddemo: app id=$pkg name=\"Stipple\" version=1\.2\.3 build=7" 5
+# Japanese through the default font's system fallback (Noto Sans CJK, CFF
+# outlines in a .ttc). Reported, not yet required.
+if log | grep -qE "androiddemo: cjk .* glyphs=true ink=[0-9]{3,}"; then
+  log | grep "androiddemo: cjk"
+else
+  echo "::warning::android: Japanese didn't draw from the system CJK font"
+  log | grep "androiddemo: cjk" || echo "android: no CJK line in the log"
+fi
 wait_for "androiddemo: dirs data=/data/(user/0|data)/$pkg/files cache=/data/(user/0|data)/$pkg/cache temp=/data/(user/0|data)/$pkg/cache/tmp exist=true" 5
 adb exec-out screencap -p > "$shots/android.png"
 

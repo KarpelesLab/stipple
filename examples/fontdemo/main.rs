@@ -8,7 +8,10 @@
 //! `--family NAME` draws NAME instead of `monospace`. `--check` renders the
 //! window off screen, checks that the bold row carries more ink than the
 //! regular one and that each decorated row has its lines, prints
-//! `fontdemo: ok` and exits.
+//! `fontdemo: ok` and exits; with `--cjk` too, it also requires the last
+//! row's Japanese, Chinese and Korean to draw, from the system's CJK fonts
+//! (Noto Sans CJK on Linux: CFF outlines in a collection), which the font
+//! loads when that row first needs them.
 //!
 //! Rows are `ROW` high, row `k` spanning y = 16 + `ROW`·k, so the CI checks
 //! (the `visual-fonts` job) look at fixed places.
@@ -21,6 +24,10 @@ const ROW: f64 = 30.0;
 const SIZE: f64 = 16.0;
 /// Sample text: Latin, digits, and a check mark most monospace fonts lack.
 const SAMPLE: &str = "The quick brown fox 0123 \u{2713}";
+/// Japanese, Chinese and Korean, drawn from the system's CJK fallback.
+const CJK: &str = "日本語のテキスト 中文 한국어";
+/// The row [`CJK`] is on.
+const CJK_ROW: u32 = 14;
 
 struct Fonts {
     mono: Font,
@@ -116,6 +123,9 @@ fn view(state: &Fonts, cx: &mut Cx<Fonts>) -> Element {
             m.strikeout_position,
         ),
     )));
+    rows.push(line(
+        Element::text(format!("{:<22}{CJK}", "system CJK fallback"), SIZE, ink).font(mono.clone()),
+    ));
     column(rows)
         .padding(Insets::new(16.0, 24.0, 16.0, 24.0))
         .grow(1.0)
@@ -132,7 +142,7 @@ impl ItalicIf for Element {
     }
 }
 
-/// The family to draw, with a symbol fallback.
+/// The family to draw, with a symbol fallback and the system's.
 fn load(family: &str) -> Option<Font> {
     let mono = Font::from_family(family, FontStyle::NORMAL).ok()?;
     let symbols = [
@@ -144,7 +154,7 @@ fn load(family: &str) -> Option<Font> {
     .iter()
     .filter_map(|f| Font::from_family(f, FontStyle::NORMAL).ok())
     .collect::<Vec<_>>();
-    Some(mono.with_fallbacks(&symbols))
+    Some(mono.with_fallbacks(&symbols).with_system_fallbacks())
 }
 
 fn demo_app(mono: Font) -> App<Fonts> {
@@ -199,6 +209,25 @@ fn check(pm: &Pixmap, cell: f64) -> Result<(), String> {
     Ok(())
 }
 
+/// The checks `--check --cjk` adds: every character of the CJK row has a
+/// glyph, and the row is inked like text.
+fn check_cjk(pm: &Pixmap, font: &Font, cell: f64) -> Result<(), String> {
+    let missing: String = CJK
+        .chars()
+        .filter(|c| !c.is_whitespace() && !font.has_glyph(*c))
+        .collect();
+    let x0 = 24 + (22.0 * cell).ceil() as u32;
+    let ink = ink_in(pm, CJK_ROW, x0, 700);
+    println!("fontdemo: cjk ink {ink}, missing {missing:?}");
+    if !missing.is_empty() {
+        return Err(format!("no glyph for {missing:?}"));
+    }
+    if ink < 400 {
+        return Err("the CJK row is nearly blank".into());
+    }
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--list") {
@@ -245,9 +274,18 @@ fn main() {
         }
     }
     let cell = mono.advance_of('M', SIZE);
-    let mut app = demo_app(mono);
+    let cjk = args.iter().any(|a| a == "--cjk");
+    let mut app = demo_app(mono.clone());
     if args.iter().any(|a| a == "--check") {
-        match check(&app.render_once(), cell) {
+        let pm = app.render_once();
+        let result = check(&pm, cell).and_then(|()| {
+            if cjk {
+                check_cjk(&pm, &mono, cell)
+            } else {
+                Ok(())
+            }
+        });
+        match result {
             Ok(()) => println!("fontdemo: ok"),
             Err(e) => {
                 println!("fontdemo: FAILED: {e}");

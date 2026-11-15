@@ -15,8 +15,10 @@ no Qt, no `libwayland` or `libxcb`.
 
 `Font::system_default()` loads the first of Liberation Sans, DejaVu Sans and Noto
 Sans it finds in the usual `/usr/share/fonts` locations, and adds DejaVu Sans as
-a fallback for glyphs the main font lacks. Shipping apps should bundle their font
-and load it with `Font::from_bytes`.
+a fallback for glyphs the main font lacks. Japanese, Chinese and Korean text
+draws from Noto Sans CJK (`fonts-noto-cjk`) or another installed CJK family,
+loaded the first time text needs it (see [fonts](../fonts.md#fallbacks)).
+Shipping apps should bundle their font and load it with `Font::from_bytes`.
 
 ## High-DPI
 

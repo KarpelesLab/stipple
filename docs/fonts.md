@@ -29,7 +29,7 @@ for family in Font::families() {
     println!("{} {:?}", family.name, family.monospace);
 }
 
-// Fonts the app ships.
+// Fonts the app ships (TrueType or OpenType, .ttf, .otf, .ttc).
 let ui = Font::from_bytes(include_bytes!("Inter-Regular.ttf").to_vec())?
     .with_face(include_bytes!("Inter-Bold.ttf").to_vec())?;
 ```
@@ -37,7 +37,17 @@ let ui = Font::from_bytes(include_bytes!("Inter-Regular.ttf").to_vec())?
 The generic names are `sans-serif`, `serif`, `monospace`, `system-ui`,
 `emoji`, `cjk` and `symbol`. `Font::system_default()` is the sans-serif face
 an app draws with when it sets none (it says so on stderr, once, if the
-system has none of the faces it looks for).
+system has none of the faces it looks for); it falls back to the system's
+CJK, emoji and symbol fonts (see [Fallbacks](#fallbacks)).
+
+Outlines can be TrueType (`glyf`) or PostScript (`CFF `, and the variable
+`CFF2`, drawn at its default instance), in a single font (`.ttf`, `.otf`) or
+a collection (`.ttc`, `.otc`): the CJK fonts Android, macOS and most Linux
+distributions ship (Noto Sans CJK, Hiragino, Source Han Sans) are CFF
+collections. `oxideav-ttf` reads both kinds into the same outlines, so
+shaping, fallback, metrics and drawing (CPU and GPU) treat them alike. CFF
+curves are flattened to short lines in font units, which is invisible at
+text sizes.
 
 ### Where system fonts come from
 
@@ -64,8 +74,22 @@ preference wins), and a missing family falls to its `accept` substitutes
 generic names (Menlo on macOS, Consolas on Windows, DejaVu Sans Mono on Linux).
 Fontconfig's `<match>` rules and binary caches are not read.
 
-Faces with CFF (PostScript) outlines (`.otf` with an `OTTO` header) are skipped:
-the shaper's face chain only handles TrueType outlines for now.
+The `cjk` family is, in order of preference:
+
+| Platform | `cjk` |
+|---|---|
+| Android | Noto Sans CJK (`/system/fonts/NotoSansCJK-Regular.ttc`) |
+| Linux, BSDs | Noto Sans CJK (`fonts-noto-cjk`, in `/usr/share/fonts/opentype/noto`), Source Han Sans, Droid Sans Fallback, WenQuanYi, VL Gothic, IPA Gothic, Nanum Gothic … |
+| macOS, iOS | Hiragino Sans, PingFang SC, Apple SD Gothic Neo |
+| Windows | Microsoft YaHei, Yu Gothic, Malgun Gothic, MS Gothic, SimSun |
+| Web | none: pass a CJK font in `stipple.js`'s `font` list (see [web](platforms/web.md)) |
+
+On Linux and Android, Noto Sans CJK has a face per region (Han characters are
+drawn differently in Japan, Korea, China, Taiwan and Hong Kong); on Linux the
+one for the locale's region (`LC_ALL`, `LC_CTYPE` or `LANG`, say `ja_JP`) comes
+first. Where the `cjk` family has no Hangul (Hiragino, Yu Gothic), the system fallbacks add a
+Korean family after it (Apple SD Gothic Neo, Malgun Gothic, Noto Sans CJK KR,
+Nanum Gothic).
 
 ## Bold, italic and other weights
 
@@ -93,8 +117,16 @@ let font = mono.with_system_fallbacks();
 
 A character the font has no glyph for is drawn from the first fallback that
 has one, in order. Fallbacks follow the requested style: bold text uses each
-fallback's bold face, where it has one. CJK and emoji fonts are large, and each
-style drawn keeps its own copy, so add them when the text needs them.
+fallback's bold face, where it has one. CJK and emoji fonts are large (5 to
+20 MB), and each style drawn keeps its own copy.
+
+The system's fallbacks (`with_system_fallbacks()`, which
+`Font::system_default()` already has) are loaded only when text needs them: the
+first time a string has a character no face of the font has, the system family
+for it joins the chain (`cjk` for Han, kana and Hangul, then a Korean family
+if that one lacks Hangul; `emoji` for pictographs; `symbol` for the rest),
+once per style. An app that never shows Japanese never loads a CJK font, and a
+translated one draws Japanese, Chinese and Korean without asking for it.
 
 ## Fonts on elements
 

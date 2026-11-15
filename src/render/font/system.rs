@@ -60,8 +60,7 @@ impl Index {
     pub(crate) fn new(faces: Vec<SystemFace>, aliases: HashMap<String, Alias>) -> Self {
         let mut by_family: HashMap<String, Vec<usize>> = HashMap::new();
         for (i, f) in faces.iter().enumerate() {
-            // CFF-outline faces can't be shaped by the face chain yet.
-            if f.info.cff || f.info.family.is_empty() {
+            if f.info.family.is_empty() {
                 continue;
             }
             by_family
@@ -104,6 +103,11 @@ impl Index {
             candidates.extend(a.prefer.iter().map(String::as_str));
         }
         candidates.push(name);
+        if key == "cjk"
+            && let Some(face) = noto_cjk_for(&locale())
+        {
+            candidates.push(face);
+        }
         if let Some(a) = alias {
             candidates.extend(a.accept.iter().map(String::as_str));
         }
@@ -151,6 +155,36 @@ impl Index {
             .collect();
         out.sort_by_key(|f| f.name.to_lowercase());
         out
+    }
+}
+
+/// The POSIX locale (`LC_ALL`, `LC_CTYPE`, `LANG`, the first set), e.g.
+/// `ja_JP.UTF-8`; empty when none is.
+fn locale() -> String {
+    ["LC_ALL", "LC_CTYPE", "LANG"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|v| !v.is_empty())
+        .unwrap_or_default()
+}
+
+/// The Noto Sans CJK face for `locale`'s region: Han characters are drawn
+/// differently in Japan, Korea, mainland China, Taiwan and Hong Kong, and
+/// the collection has a face for each.
+fn noto_cjk_for(locale: &str) -> Option<&'static str> {
+    let l = locale.to_ascii_lowercase().replace('-', "_");
+    if l.starts_with("ja") {
+        Some("Noto Sans CJK JP")
+    } else if l.starts_with("ko") {
+        Some("Noto Sans CJK KR")
+    } else if l.starts_with("zh_hk") || l.starts_with("zh_mo") {
+        Some("Noto Sans CJK HK")
+    } else if l.starts_with("zh_tw") || l.contains("hant") {
+        Some("Noto Sans CJK TC")
+    } else if l.starts_with("zh") {
+        Some("Noto Sans CJK SC")
+    } else {
+        None
     }
 }
 
@@ -268,9 +302,18 @@ fn generic(key: &str) -> &'static [&'static str] {
                     "Heiti SC",
                 ]
             } else {
+                // Noto Sans CJK is Android's (`NotoSansCJK-Regular.ttc`) and
+                // most distributions' (`fonts-noto-cjk`): one collection, a
+                // face per region, each covering all of CJK.
                 &[
                     "Noto Sans CJK SC",
+                    "Noto Sans CJK JP",
+                    "Noto Sans CJK TC",
+                    "Noto Sans CJK KR",
+                    "Noto Sans SC",
+                    "Noto Sans JP",
                     "Source Han Sans",
+                    "Source Han Sans SC",
                     "Droid Sans Fallback",
                     "WenQuanYi Micro Hei",
                     "WenQuanYi Zen Hei",
@@ -281,6 +324,24 @@ fn generic(key: &str) -> &'static [&'static str] {
                     "Baekmuk Gulim",
                     "UnDotum",
                     "NanumGothic",
+                ]
+            }
+        }
+        // Not a public generic name: the Korean family the system
+        // fallbacks add when the `cjk` one has no Hangul.
+        "korean" => {
+            if windows {
+                &["Malgun Gothic", "Gulim", "Dotum"]
+            } else if apple {
+                &["Apple SD Gothic Neo", "AppleGothic"]
+            } else {
+                &[
+                    "Noto Sans CJK KR",
+                    "Noto Sans KR",
+                    "Source Han Sans K",
+                    "NanumGothic",
+                    "UnDotum",
+                    "Baekmuk Gulim",
                 ]
             }
         }
@@ -457,6 +518,18 @@ mod tests {
             assert_eq!(bare.resolve("monospace").unwrap().0, "DejaVu Sans Mono");
             assert_eq!(bare.resolve("sans-serif").unwrap().0, "Liberation Sans");
         }
+    }
+
+    #[test]
+    fn cjk_follows_the_locales_region() {
+        assert_eq!(noto_cjk_for("ja_JP.UTF-8"), Some("Noto Sans CJK JP"));
+        assert_eq!(noto_cjk_for("ko_KR"), Some("Noto Sans CJK KR"));
+        assert_eq!(noto_cjk_for("zh_TW.UTF-8"), Some("Noto Sans CJK TC"));
+        assert_eq!(noto_cjk_for("zh-Hant"), Some("Noto Sans CJK TC"));
+        assert_eq!(noto_cjk_for("zh_HK"), Some("Noto Sans CJK HK"));
+        assert_eq!(noto_cjk_for("zh_CN.UTF-8"), Some("Noto Sans CJK SC"));
+        assert_eq!(noto_cjk_for("en_US.UTF-8"), None);
+        assert_eq!(noto_cjk_for(""), None);
     }
 
     #[test]

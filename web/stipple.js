@@ -25,7 +25,10 @@
 //
 // Options:
 //   font      URL of the font to load (the web has no system font; without
-//             one, text isn't drawn and the console says so).
+//             one, text isn't drawn and the console says so), or a list of
+//             URLs: the first is the app's font, the others its fallbacks in
+//             order (a CJK or emoji font, say). Any TrueType or OpenType
+//             font, CFF (.otf) and collections (.ttc) included.
 //   label     the accessible name of the app (default: the canvas's
 //             aria-label, if any).
 //   title     false to leave document.title alone (for a page that runs
@@ -512,14 +515,19 @@ export async function start(canvas, wasmUrl, options = {}) {
   const instance = await WebAssembly.instantiate(module, imports);
   e = instance.exports;
 
-  if (options.font) {
+  // The first font is the app's; each later one is its fallback, in order
+  // (a CJK or emoji font, say). Fetched together, handed over in order.
+  const fonts = [options.font ?? []].flat();
+  const loaded = await Promise.all(fonts.map(async (url) => {
     try {
-      const r = await fetch(options.font);
-      if (r.ok) {
-        const [p, n] = pass(new Uint8Array(await r.arrayBuffer()));
-        e.stipple_set_font(p, n);
-      }
-    } catch (_) { /* no font: shapes only */ }
+      const r = await fetch(url);
+      return r.ok ? new Uint8Array(await r.arrayBuffer()) : null;
+    } catch (_) { return null; /* no font: shapes only */ }
+  }));
+  for (const bytes of loaded) {
+    if (!bytes) continue;
+    const [p, n] = pass(bytes);
+    e.stipple_set_font(p, n);
   }
 
   // prefers-color-scheme, read before the app is built (Theme::native() reads

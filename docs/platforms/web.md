@@ -76,7 +76,10 @@ The page side is
 Give the canvas a CSS size; the app fills it. A font is needed for text, and
 the web has no system fonts to fall back on: the page fetches it and hands it
 to the app, unless the app set its own with `App::font`. Without either, the
-browser console says so and text isn't drawn.
+browser console says so and text isn't drawn. `font` can also be a list: the
+first is the app's font and the rest its fallbacks, in order, for characters
+it lacks (`{ font: ["Inter.ttf", "NotoSansJP-Regular.otf"] }` draws Japanese
+from the second).
 
 `start` also adds an invisible element next to the canvas, `.stipple-overlay`,
 fixed over it: the [ARIA mirror](#accessibility) of the app's accessibility
@@ -328,7 +331,7 @@ The module exports:
 | Export | Called for |
 |---|---|
 | `stipple_alloc(len)` | memory for the page to pass bytes in (taken back by the export that receives them) |
-| `stipple_set_font(ptr, len)` | the font's bytes |
+| `stipple_set_font(ptr, len)` | a font's bytes: the first call's is the app's font, each later one a fallback |
 | `stipple_start(w, h, ratio)` | building and running the app in a canvas of `w` × `h` CSS pixels |
 | `stipple_resize(w, h, ratio)` | size or pixel-ratio changes |
 | `stipple_pointer(kind, button, x, y, mods)` | moves, presses, releases and leaving the canvas; while the pointer is locked, its motion (`movementX`/`movementY`) and the lock ending or being refused |

@@ -437,11 +437,19 @@ pub unsafe fn take_string(ptr: *mut u8, len: usize) -> String {
     String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
-/// The font the page loaded, used by the app unless it set its own.
+/// A font the page loaded: the first is the one the app draws with unless it
+/// sets its own; each later one becomes its fallback (a CJK or emoji font,
+/// say), in order.
 #[doc(hidden)]
 pub fn set_font(bytes: Vec<u8>) {
     match Font::from_bytes(bytes) {
-        Ok(font) => HOST.with(|h| *h.font.borrow_mut() = Some(font)),
+        Ok(font) => HOST.with(|h| {
+            let mut slot = h.font.borrow_mut();
+            *slot = Some(match slot.take() {
+                Some(primary) => primary.with_fallback(&font),
+                None => font,
+            });
+        }),
         Err(_) => log("stipple: the font could not be read", true),
     }
 }

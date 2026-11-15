@@ -238,7 +238,10 @@ switch's knob. UIKit has no checkbox or radio button, so those stay self-drawn.
 
 `Font::system_default()` finds San Francisco in the simulator, but this hasn't
 been checked on a device, where the app is sandboxed. Bundle a font and load it
-with `Font::from_bytes` to be safe.
+with `Font::from_bytes` to be safe. Japanese, Chinese and Korean text falls
+back to Hiragino Sans, PingFang and Apple SD Gothic Neo (CFF collections in
+`/System/Library/Fonts`), loaded when text first needs them; the same caveat
+applies.
 
 ## Known gaps
 

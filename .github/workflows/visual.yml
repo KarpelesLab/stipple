@@ -530,7 +530,10 @@ jobs:
   # italic faces), draws it in four styles and with every decoration, and
   # `--check` verifies off screen that bold is heavier and each decorated row
   # has its lines. The window is screenshotted, and each decorated row must
-  # hold more than the text's colors (the red curly line adds red).
+  # hold more than the text's colors (the red curly line adds red). Its last
+  # row is Japanese, Chinese and Korean, which the font draws from the
+  # system's CJK fallback: Noto Sans CJK, CFF outlines in a collection
+  # (fonts-noto-cjk); `--cjk` requires every character to have a glyph.
   visual-fonts:
     name: Visual test (Fonts and decorations / X11)
     runs-on: ubuntu-latest
@@ -542,7 +545,7 @@ jobs:
       - name: Install Xvfb, ImageMagick, fonts
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb imagemagick fonts-dejavu-core fonts-liberation
+          sudo apt-get install -y xvfb imagemagick fonts-dejavu-core fonts-liberation fonts-noto-cjk
 
       - name: Build the font demo
         run: cargo build --release --example fontdemo
@@ -553,7 +556,8 @@ jobs:
           ./target/release/examples/fontdemo --list > visual_output/fonts-list.log
           head -n 40 visual_output/fonts-list.log
           grep -q '^DejaVu Sans Mono \[mono\]: 400 700 400i 700i' visual_output/fonts-list.log
-          ./target/release/examples/fontdemo --check | tee visual_output/fonts-check.log
+          grep -E '^Noto Sans CJK (JP|SC)' visual_output/fonts-list.log
+          ./target/release/examples/fontdemo --check --cjk | tee visual_output/fonts-check.log
           grep -q 'fontdemo: ok' visual_output/fonts-check.log
           # The family's own bold and italic faces, not synthesized ones.
           ! grep -q synthetic visual_output/fonts-check.log

@@ -12,8 +12,11 @@ pub(crate) mod fontconfig;
 pub(crate) mod sfnt;
 pub(crate) mod system;
 
+#[cfg(test)]
+mod cff_tests;
+
 use crate::render::text::{Font, FontError, ShapeCache};
-use oxideav_scribe::{Face, FaceChain};
+use oxideav_scribe::{Face, FaceChain, PositionedGlyph};
 use sfnt::{FaceInfo, RawMetrics};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -212,9 +215,14 @@ impl FaceSource {
 }
 
 /// Parse face `index` of `bytes` with scribe.
+///
+/// Every face goes through scribe's TrueType face, CFF-outline (`OTTO`) ones
+/// included: `oxideav-ttf` reads `CFF ` and `CFF2` charstrings (subroutines,
+/// CID-keyed fonts' FDSelect) into the same outlines `glyf` gives, so shaping,
+/// fallback and measuring treat both alike. (Scribe's own CFF face kind draws
+/// outlines but can't shape or join a face chain.)
 pub(crate) fn parse_face(bytes: Vec<u8>, index: u32) -> Result<Face, FontError> {
     let result = match bytes.first_chunk::<4>() {
-        Some(b"OTTO") => Face::from_otf_bytes(bytes),
         Some(b"ttcf") => Face::from_ttc_bytes(bytes, index),
         _ => Face::from_ttf_bytes(bytes),
     };
@@ -227,6 +235,9 @@ pub(crate) struct Family {
     pub(crate) name: Option<String>,
     pub(crate) faces: Vec<Arc<FaceSource>>,
     pub(crate) fallbacks: Vec<Font>,
+    /// Whether the system's fallbacks (symbols, CJK, emoji) join the chain,
+    /// each loaded when text first needs it.
+    pub(crate) system_fallbacks: bool,
     variants: Mutex<HashMap<FontStyle, Arc<Variant>>>,
 }
 
@@ -235,11 +246,13 @@ impl Family {
         name: Option<String>,
         faces: Vec<Arc<FaceSource>>,
         fallbacks: Vec<Font>,
+        system_fallbacks: bool,
     ) -> Arc<Self> {
         Arc::new(Self {
             name,
             faces,
             fallbacks,
+            system_fallbacks,
             variants: Mutex::new(HashMap::new()),
         })
     }
@@ -276,39 +289,68 @@ impl Family {
     }
 
     fn build(&self, style: FontStyle) -> Result<Variant, FontError> {
+        let (primary, _) = self
+            .pick(style)
+            .ok_or_else(|| FontError::new("font family has no faces"))?;
+        Ok(Variant {
+            id: next_id(),
+            chain: Mutex::new(Arc::new(self.build_chain(style, Vec::new())?)),
+            metrics: primary.info.metrics,
+            monospace: primary.info.monospace,
+            cap_height: OnceLock::new(),
+            x_height: OnceLock::new(),
+            shapes: ShapeCache::default(),
+        })
+    }
+
+    /// The shaping chain for `style`: its face, the fallbacks' (in order,
+    /// each in the requested style, then their own fallbacks), then the
+    /// system families `system` names. A face already in the chain isn't
+    /// added twice. A chain built with more `system` families starts with
+    /// the same faces as one built with fewer, so glyphs shaped with the
+    /// shorter one keep their face indices.
+    pub(crate) fn build_chain(
+        &self,
+        style: FontStyle,
+        system: Vec<&'static str>,
+    ) -> Result<Chain, FontError> {
         let (primary, synth) = self
             .pick(style)
             .ok_or_else(|| FontError::new("font family has no faces"))?;
         let mut chain = FaceChain::new(primary.parse()?);
         let mut synths = vec![synth];
-        // Fallbacks in order, each in the requested style, then their own
-        // fallbacks; a face already in the chain isn't added twice.
         let mut seen: Vec<*const FaceSource> = vec![Arc::as_ptr(primary)];
-        let mut queue: Vec<&Font> = self.fallbacks.iter().collect();
+        let extra: Vec<Arc<Family>> = system
+            .iter()
+            .filter_map(|g| system_family(g).ok())
+            .collect();
+        let mut queue: Vec<&Family> = self.fallbacks.iter().map(|f| &*f.family).collect();
+        let mut extra_queued = false;
         let mut i = 0;
-        while i < queue.len() && i < 64 {
-            let family = &queue[i].family;
+        loop {
+            if i == queue.len() && !extra_queued {
+                queue.extend(extra.iter().map(|f| &**f));
+                extra_queued = true;
+            }
+            if i >= queue.len() || i >= 64 {
+                break;
+            }
+            let family = queue[i];
             i += 1;
             if let Some((source, synth)) = family.pick(style)
                 && !seen.contains(&Arc::as_ptr(source))
-                && !source.info.cff
                 && let Ok(face) = source.parse()
             {
                 seen.push(Arc::as_ptr(source));
                 chain = chain.push_fallback(face);
                 synths.push(synth);
             }
-            queue.extend(family.fallbacks.iter());
+            queue.extend(family.fallbacks.iter().map(|f| &*f.family));
         }
-        Ok(Variant {
-            id: next_id(),
-            chain,
+        Ok(Chain {
+            faces: chain,
             synth: synths,
-            metrics: primary.info.metrics,
-            monospace: primary.info.monospace,
-            cap_height: OnceLock::new(),
-            x_height: OnceLock::new(),
-            shapes: ShapeCache::default(),
+            system,
         })
     }
 
@@ -328,13 +370,30 @@ impl Family {
     }
 }
 
+/// A style's shaping chain: the faces glyphs are drawn from, in order.
+pub(crate) struct Chain {
+    pub(crate) faces: FaceChain,
+    /// What each face (by index) is drawn with.
+    pub(crate) synth: Vec<Synthesis>,
+    /// The system fallback families (generic names) added to the chain so
+    /// far, found or not.
+    pub(crate) system: Vec<&'static str>,
+}
+
+impl core::ops::Deref for Chain {
+    type Target = FaceChain;
+    fn deref(&self) -> &FaceChain {
+        &self.faces
+    }
+}
+
 /// One family in one style: the shaping chain (primary face plus fallbacks)
 /// and its caches.
 pub(crate) struct Variant {
     pub(crate) id: u64,
-    pub(crate) chain: FaceChain,
-    /// What each chain face (by index) is drawn with.
-    pub(crate) synth: Vec<Synthesis>,
+    /// Replaced by a longer one when a system fallback is loaded (see
+    /// `Font::load_system_fallbacks`); never shortened.
+    chain: Mutex<Arc<Chain>>,
     /// The primary face's metrics, in font units.
     pub(crate) metrics: RawMetrics,
     pub(crate) monospace: bool,
@@ -344,6 +403,81 @@ pub(crate) struct Variant {
     /// Shaped runs by (text, size): views rebuild every frame and measure the
     /// same strings several times per layout, and shaping is the costly part.
     pub(crate) shapes: ShapeCache,
+}
+
+impl Variant {
+    /// The current shaping chain.
+    pub(crate) fn chain(&self) -> Arc<Chain> {
+        self.chain.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Replace the chain by `longer`, unless another thread already
+    /// extended it past `from`.
+    pub(crate) fn extend_chain(&self, from: &Arc<Chain>, longer: Chain) {
+        let mut chain = self.chain.lock().unwrap_or_else(|e| e.into_inner());
+        if Arc::ptr_eq(&chain, from) {
+            *chain = Arc::new(longer);
+            self.shapes.clear();
+        }
+    }
+}
+
+/// The installed family `name` resolves to (see [`Font::from_family`]),
+/// without building any style of it. One family per installed family, shared
+/// by every call: a font asked for again (by a view rebuilt each frame) reuses
+/// the loaded faces and compares equal, so an unchanged view still skips its
+/// repaint.
+pub(crate) fn system_family(name: &str) -> Result<Arc<Family>, FontError> {
+    static LOADED: OnceLock<Mutex<HashMap<String, Arc<Family>>>> = OnceLock::new();
+    let (family, faces) = system::index()
+        .resolve(name)
+        .ok_or_else(|| FontError::new(format!("font family {name:?} not found")))?;
+    let key = system::normalize(&family);
+    let loaded = LOADED.get_or_init(Default::default);
+    let mut map = loaded.lock().unwrap_or_else(|e| e.into_inner());
+    let shared = map.entry(key).or_insert_with(|| {
+        let sources = faces
+            .iter()
+            .map(|f| {
+                Arc::new(FaceSource::from_file(
+                    f.path.clone(),
+                    f.index,
+                    f.info.clone(),
+                ))
+            })
+            .collect();
+        Family::new(Some(family), sources, Vec::new(), false)
+    });
+    Ok(shared.clone())
+}
+
+/// Which system fallback (a generic family) `c` would come from when the
+/// font lacks it, past those `tried`: `None` for characters a fallback
+/// isn't loaded for (ASCII, spaces, controls, joiners and selectors).
+pub(crate) fn system_fallback_for(c: char, tried: &[&str]) -> Option<&'static str> {
+    let u = c as u32;
+    if u < 0x80 || c.is_whitespace() || c.is_control() {
+        return None;
+    }
+    let candidates: &[&'static str] = match u {
+        // Zero-width joiners and marks, bidi controls, variation selectors.
+        0x200B..=0x200F | 0x2028..=0x202E | 0x2060..=0x206F | 0xFE00..=0xFE0F => return None,
+        0xE0000..=0xE007F | 0xE0100..=0xE01EF => return None,
+        // Hangul jamo and syllables: a CJK family covers them where it's
+        // pan-CJK (Noto Sans CJK), a Korean one otherwise.
+        0x1100..=0x11FF | 0x3130..=0x318F | 0xA960..=0xA97F | 0xAC00..=0xD7FF => &["cjk", "korean"],
+        // Han, kana, bopomofo, CJK symbols and punctuation, full-width forms.
+        0x2E80..=0x2FFF
+        | 0x3000..=0x9FFF
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F
+        | 0xFF00..=0xFFEF
+        | 0x20000..=0x3FFFF => &["cjk"],
+        // Pictographs and emoji.
+        0x1F000..=0x1FAFF | 0x2600..=0x27BF | 0x2B00..=0x2BFF => &["emoji", "symbol"],
+        _ => &["symbol"],
+    };
+    candidates.iter().copied().find(|g| !tried.contains(g))
 }
 
 fn next_id() -> u64 {
@@ -406,12 +540,10 @@ impl Font {
         faces: Vec<Arc<FaceSource>>,
         style: FontStyle,
     ) -> Result<Font, FontError> {
-        // CFF-outline faces can't be shaped by the face chain yet.
-        let faces: Vec<_> = faces.into_iter().filter(|f| !f.info.cff).collect();
         if faces.is_empty() {
-            return Err(FontError::new("no usable TrueType-outline face"));
+            return Err(FontError::new("font family has no faces"));
         }
-        let family = Family::new(name, faces, Vec::new());
+        let family = Family::new(name, faces, Vec::new(), false);
         Font::in_family(family, style)
     }
 
@@ -424,9 +556,10 @@ impl Font {
         })
     }
 
-    /// Load the first face of the font file at `path` (TrueType, or a
-    /// TrueType collection; every face of a collection joins the family, so
-    /// [`styled`](Self::styled) can pick among them).
+    /// Load the font file at `path`: TrueType or OpenType (`glyf`, `CFF ` or
+    /// `CFF2` outlines), or a collection of them (`.ttc`, `.otc`), whose
+    /// faces all join the family so [`styled`](Self::styled) can pick among
+    /// them, the first drawing by default.
     pub fn from_file(path: impl AsRef<Path>) -> Result<Font, FontError> {
         let path = path.as_ref();
         let bytes =
@@ -447,35 +580,7 @@ impl Font {
     /// thousands of fonts. On the web there are no system fonts: load what the
     /// app ships with [`Font::from_bytes`].
     pub fn from_family(name: &str, style: FontStyle) -> Result<Font, FontError> {
-        // One family per installed family, shared by every call: a font asked
-        // for again (by a view rebuilt each frame) reuses the loaded faces and
-        // compares equal, so an unchanged view still skips its repaint.
-        static LOADED: OnceLock<Mutex<HashMap<String, Arc<Family>>>> = OnceLock::new();
-        let index = system::index();
-        let (family, faces) = index
-            .resolve(name)
-            .ok_or_else(|| FontError::new(format!("font family {name:?} not found")))?;
-        let key = system::normalize(&family);
-        let loaded = LOADED.get_or_init(Default::default);
-        if let Some(shared) = loaded.lock().ok().and_then(|m| m.get(&key).cloned()) {
-            return Font::in_family(shared, style);
-        }
-        let sources = faces
-            .iter()
-            .map(|f| {
-                Arc::new(FaceSource::from_file(
-                    f.path.clone(),
-                    f.index,
-                    f.info.clone(),
-                ))
-            })
-            .collect();
-        let font = Font::from_sources(Some(family), sources, style)?;
-        if let Ok(mut m) = loaded.lock() {
-            let shared = m.entry(key).or_insert_with(|| font.family.clone()).clone();
-            return Font::in_family(shared, style);
-        }
-        Ok(font)
+        Font::in_family(system_family(name)?, style)
     }
 
     /// The font families installed on this system, sorted by name: what a
@@ -495,6 +600,7 @@ impl Font {
             self.family.name.clone(),
             faces,
             self.family.fallbacks.clone(),
+            self.family.system_fallbacks,
         );
         Font::in_family(family, self.style)
     }
@@ -512,22 +618,102 @@ impl Font {
 
     /// [`with_fallback`](Self::with_fallback) for several fonts, in order.
     pub fn with_fallbacks(&self, fallbacks: &[Font]) -> Font {
+        self.refamily(fallbacks, self.family.system_fallbacks)
+    }
+
+    /// This font's faces with `fallbacks` added to its own, and the system's
+    /// fallbacks on or off.
+    pub(crate) fn refamily(&self, fallbacks: &[Font], system_fallbacks: bool) -> Font {
         let mut all = self.family.fallbacks.clone();
         all.extend(fallbacks.iter().cloned());
-        let family = Family::new(self.family.name.clone(), self.family.faces.clone(), all);
+        let family = Family::new(
+            self.family.name.clone(),
+            self.family.faces.clone(),
+            all,
+            system_fallbacks,
+        );
         Font::in_family(family, self.style).unwrap_or_else(|_| self.clone())
     }
 
-    /// This font with the system's fallbacks for symbols, CJK and emoji
-    /// appended (whichever this system has; see
-    /// [`from_family`](Self::from_family)'s generic names). CJK and emoji
-    /// fonts are large, so this costs memory for each style drawn.
+    /// This font with the system's fallbacks for symbols, CJK (Japanese,
+    /// Chinese, Korean) and emoji consulted, after its own, for characters
+    /// it has no glyph for: whichever of [`from_family`](Self::from_family)'s
+    /// generic families this system has. Each is loaded the first time text
+    /// needs it, so a font that never draws Japanese never loads a CJK font
+    /// (they are large: 5 to 20 MB each).
+    ///
+    /// [`Font::system_default`] has them already.
     pub fn with_system_fallbacks(&self) -> Font {
-        let found: Vec<Font> = ["symbol", "cjk", "emoji"]
-            .iter()
-            .filter_map(|g| Font::from_family(g, self.style).ok())
-            .collect();
-        self.with_fallbacks(&found)
+        if self.family.system_fallbacks {
+            return self.clone();
+        }
+        self.refamily(&[], true)
+    }
+
+    /// Glyphs shaped through the variant's cache. With the system's
+    /// fallbacks on, a glyph missing from every face first loads the system
+    /// family that has it (see [`system_fallback_for`]) and shapes again.
+    pub(crate) fn shape_cached(&self, text: &str, size_px: f64) -> Vec<PositionedGlyph> {
+        let mut glyphs = self.variant.shapes.shape(&self.chain(), text, size_px);
+        // A few rounds: Hangul tries the CJK family, then a Korean one.
+        for _ in 0..3 {
+            if !self.family.system_fallbacks
+                || !glyphs.iter().any(|g| g.glyph_id == 0)
+                || !self.load_system_fallbacks(text)
+            {
+                break;
+            }
+            glyphs = self.variant.shapes.shape(&self.chain(), text, size_px);
+        }
+        glyphs
+    }
+
+    /// Add to the chain the system fallbacks `text`'s missing characters
+    /// need and that haven't been tried. Whether the chain grew.
+    fn load_system_fallbacks(&self, text: &str) -> bool {
+        let chain = self.chain();
+        let mut want: Vec<&'static str> = Vec::new();
+        let mut checked: Vec<char> = Vec::new();
+        for c in text.chars() {
+            let Some(generic) = system_fallback_for(c, &chain.system) else {
+                continue;
+            };
+            if want.contains(&generic) || checked.contains(&c) {
+                continue;
+            }
+            checked.push(c);
+            let covered = (0..chain.len()).any(|i| {
+                chain
+                    .face(i as u16)
+                    .with_font(|f| f.glyph_index(c))
+                    .ok()
+                    .flatten()
+                    .is_some_and(|g| g != 0)
+            });
+            if !covered {
+                want.push(generic);
+            }
+        }
+        if want.is_empty() {
+            return false;
+        }
+        let mut system = chain.system.clone();
+        system.extend(want);
+        match self.family.build_chain(self.style, system) {
+            Ok(longer) => {
+                self.variant.extend_chain(&chain, longer);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+    /// Whether `c` draws as a real glyph, from this font or a fallback (the
+    /// system's, loaded if `c` needs one), rather than as the missing-glyph
+    /// box.
+    pub fn has_glyph(&self, c: char) -> bool {
+        let mut buf = [0u8; 4];
+        let glyphs = self.shape_cached(c.encode_utf8(&mut buf), 16.0);
+        !glyphs.is_empty() && glyphs.iter().all(|g| g.glyph_id != 0)
     }
 
     /// The fonts consulted, in order, for characters this one lacks.
@@ -592,7 +778,7 @@ impl Font {
     /// Whether drawing this font in its style synthesizes bold or a slant
     /// (its family has no such face): `(bold, oblique)`.
     pub fn is_synthesized(&self) -> (bool, bool) {
-        let s = self.variant.synth[0];
+        let s = self.chain().synth[0];
         (s.bold, s.oblique)
     }
 
@@ -617,7 +803,7 @@ impl Font {
     /// The font's metrics at `size_px`; see [`FontMetrics`].
     pub fn metrics(&self, size_px: f64) -> FontMetrics {
         let m = &self.variant.metrics;
-        let upem = self.variant.chain.primary().units_per_em().max(1) as f64;
+        let upem = self.chain().primary().units_per_em().max(1) as f64;
         let scale = size_px / upem;
         let (ascent, descent, line_gap) = if m.ascender > 0 {
             (
@@ -627,7 +813,7 @@ impl Font {
             )
         } else {
             let ascent = self.ascent(size_px);
-            let descent = -(self.variant.chain.primary().descent_px(size_px as f32) as f64);
+            let descent = -(self.chain().primary().descent_px(size_px as f32) as f64);
             (
                 ascent,
                 descent,

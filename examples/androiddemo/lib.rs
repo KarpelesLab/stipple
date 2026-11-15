@@ -9,6 +9,8 @@
 //!
 //! - `androiddemo: tick N` once a second, from an `AppHandle::every` timer, so
 //!   the loop wakes for timers;
+//! - `androiddemo: cjk 日本語 glyphs=true ink=N` at start: the default
+//!   font draws Japanese, from the system's CJK font;
 //! - `androiddemo: tapped N` when the button in the middle of the screen is
 //!   tapped (`adb shell input tap`);
 //! - `androiddemo: text "..."` as the field takes keys (`adb shell input text`,
@@ -246,6 +248,27 @@ mod app {
             info.version.as_deref().unwrap_or("-"),
             info.build.as_deref().unwrap_or("-"),
         );
+        // Japanese in the default font, off screen: Roboto has no kana or
+        // kanji, so they come from the system's CJK fallback (Noto Sans CJK,
+        // a collection of CFF fonts), loaded here.
+        if let Some(font) = Font::system_default() {
+            let text = "日本語";
+            let mut scene = stipple::render::Scene::new(Size::new(120.0, 40.0));
+            scene.fill_text(
+                text,
+                Point::new(0.0, 0.0),
+                &TextPaint::new(&font, 32.0, Color::BLACK),
+            );
+            let pm = stipple::render::SoftwareRenderer::new().render(scene, ScaleFactor::IDENTITY);
+            let ink = (0..pm.size().height)
+                .flat_map(|y| (0..pm.size().width).map(move |x| (x, y)))
+                .filter(|&(x, y)| pm.pixel(x, y).is_some_and(|p| p[3] > 127))
+                .count();
+            println!(
+                "androiddemo: cjk {text} glyphs={} ink={ink}",
+                text.chars().all(|c| font.has_glyph(c)),
+            );
+        }
         match stipple::platform::dirs() {
             Ok(d) => println!(
                 "androiddemo: dirs data={} cache={} temp={} exist={}",

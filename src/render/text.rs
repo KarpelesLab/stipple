@@ -17,7 +17,7 @@ use crate::render::bidi::{
     ParagraphLevels, TextDirection, VisualChar, boundary_carets, caret_boundary, has_strong,
     visual_order,
 };
-use crate::render::font::{FaceSource, Family, FontStyle, FontWeight, Synthesis, Variant};
+use crate::render::font::{Chain, FaceSource, Family, FontStyle, FontWeight, Synthesis, Variant};
 use crate::render::scene::Scene;
 use crate::render::software::SoftwareRenderer;
 use core::fmt;
@@ -67,7 +67,19 @@ pub(crate) struct ShapeCache(
 impl ShapeCache {
     const MAX: usize = 4096;
 
-    fn shape(&self, chain: &FaceChain, text: &str, size_px: f64) -> Vec<PositionedGlyph> {
+    /// Forget every run (the chain they were shaped with changed).
+    pub(crate) fn clear(&self) {
+        if let Ok(mut map) = self.0.lock() {
+            map.clear();
+        }
+    }
+
+    pub(crate) fn shape(
+        &self,
+        chain: &FaceChain,
+        text: &str,
+        size_px: f64,
+    ) -> Vec<PositionedGlyph> {
         let key = (text.to_string(), (size_px * 64.0).round() as u32);
         if let Ok(map) = self.0.lock()
             && let Some(glyphs) = map.get(&key)
@@ -90,7 +102,7 @@ impl fmt::Debug for Font {
         f.debug_struct("Font")
             .field("family", &self.family_name())
             .field("style", &self.style)
-            .field("faces", &self.variant.chain.len())
+            .field("faces", &self.chain().len())
             .finish()
     }
 }
@@ -114,8 +126,9 @@ impl fmt::Display for FontError {
 impl std::error::Error for FontError {}
 
 impl Font {
-    /// Load a font from `sfnt` bytes (TrueType, or a TrueType Collection —
-    /// whose faces all join the family, the first drawing by default).
+    /// Load a font from `sfnt` bytes: TrueType or OpenType, with `glyf`,
+    /// `CFF ` or `CFF2` outlines, or a collection of them (whose faces all
+    /// join the family, the first drawing by default).
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, FontError> {
         let faces = FaceSource::from_bytes(bytes)?;
         let first = faces[0].info.clone();
@@ -128,8 +141,10 @@ impl Font {
     }
 
     /// Probe common operating-system font locations and load the first
-    /// usable sans-serif face, with a symbol fallback. Returns `None` if none
-    /// is found.
+    /// usable sans-serif face, with a symbol fallback and the system's
+    /// fallbacks for CJK and emoji (see
+    /// [`with_system_fallbacks`](Self::with_system_fallbacks): each is loaded
+    /// when text first needs it). Returns `None` if none is found.
     ///
     /// This is what an [`App`](crate::App) draws with when it sets no font of
     /// its own. To choose, use [`Font::from_family`] (a family the user
@@ -188,13 +203,13 @@ impl Font {
             .iter()
             .filter_map(|path| Font::from_file(path).ok())
             .collect();
-        Some(font.with_fallbacks(&fallbacks))
+        Some(font.refamily(&fallbacks, true))
     }
 
     /// Distance from the top of the text box to the baseline, in logical
     /// pixels, at `size_px`.
     pub fn ascent(&self, size_px: f64) -> f64 {
-        self.variant.chain.primary().ascent_px(size_px as f32) as f64
+        self.chain().primary().ascent_px(size_px as f32) as f64
     }
 
     /// Distance from the top of a line to its baseline at `size_px`, placing
@@ -228,7 +243,7 @@ impl Font {
         const EM: f64 = 128.0;
         let side = (EM * 2.0) as u32;
         let mut scene = Scene::new(Size::new(side as f64, side as f64));
-        let glyphs = Shaper::shape_to_paths(self.chain(), text, EM as f32);
+        let glyphs = Shaper::shape_to_paths(&self.chain(), text, EM as f32);
         let run = glyphs
             .into_iter()
             .map(|(_, node, transform)| {
@@ -256,14 +271,12 @@ impl Font {
 
     /// Full line height (ascent + descent + line gap) at `size_px`.
     pub fn line_height(&self, size_px: f64) -> f64 {
-        self.variant.chain.primary().line_height_px(size_px as f32) as f64
+        self.chain().primary().line_height_px(size_px as f32) as f64
     }
 
     /// Summed advance width of a single line (no newlines) at `size_px`.
     fn line_width(&self, line: &str, size_px: f64) -> f64 {
-        self.variant
-            .shapes
-            .shape(&self.variant.chain, line, size_px)
+        self.shape_cached(line, size_px)
             .iter()
             .map(|g| g.x_advance)
             .sum::<f32>() as f64
@@ -472,10 +485,7 @@ impl Font {
             } else {
                 para[bytes.clone()].to_string()
             };
-            let mut glyphs = self
-                .variant
-                .shapes
-                .shape(&self.variant.chain, &shaped, size_px);
+            let mut glyphs = self.shape_cached(&shaped, size_px);
             if rtl {
                 glyphs.reverse();
             }
@@ -506,21 +516,21 @@ impl Font {
     }
 
     /// The shaping chain: the primary face of this style, then fallbacks.
-    pub(crate) fn chain(&self) -> &FaceChain {
-        &self.variant.chain
+    /// It can grow (a system fallback loaded for text that needs it), never
+    /// shrink: a glyph's face index stays valid in later chains.
+    pub(crate) fn chain(&self) -> Arc<Chain> {
+        self.variant.chain()
     }
 
     /// `text` shaped as one left-to-right run at `size_px`, through the
     /// shaping cache (for [glyph runs](crate::render::GlyphRun)).
     pub(crate) fn shaped(&self, text: &str, size_px: f64) -> Vec<PositionedGlyph> {
-        self.variant
-            .shapes
-            .shape(&self.variant.chain, text, size_px)
+        self.shape_cached(text, size_px)
     }
 
     /// What is synthesized for face `face_idx` of the shaping chain.
     pub(crate) fn synthesis(&self, face_idx: u16) -> crate::render::font::Synthesis {
-        self.variant
+        self.chain()
             .synth
             .get(face_idx as usize)
             .copied()
@@ -1024,19 +1034,19 @@ impl Scene {
                 color,
             );
             let mut glyphs = Vec::new();
+            let chain = font.chain();
             for run in &line.runs {
                 let mut pen = run.x as f32;
                 for g in &run.glyphs {
                     let x = pen + g.x_offset;
                     pen += g.x_advance;
-                    let face = font.chain().face(g.face_idx);
+                    let face = chain.face(g.face_idx);
                     // Cached: building a glyph's node re-parses its font.
                     let Some(node) = super::glyphs::outline(font, g.face_idx, g.glyph_id, size)
                     else {
                         continue;
                     };
-                    let synth = font
-                        .variant
+                    let synth = chain
                         .synth
                         .get(g.face_idx as usize)
                         .copied()
@@ -1158,6 +1168,81 @@ mod tests {
         }
         // Hard newlines are preserved as breaks.
         assert_eq!(font.wrap("a\nb", 16.0, 10_000.0), vec!["a", "b"]);
+    }
+
+    /// Dark pixels in `pm` (glyph ink on white).
+    fn dark_pixels(pm: &crate::render::Pixmap) -> usize {
+        let mut n = 0;
+        for y in 0..pm.size().height {
+            for x in 0..pm.size().width {
+                if let Some([r, _, _, _]) = pm.pixel(x, y)
+                    && r < 128
+                {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// The system's CJK family (a CFF-outline collection on macOS, Android
+    /// and most Linux distributions) shapes and draws Japanese, alone and as
+    /// a fallback.
+    #[test]
+    fn system_cjk_font_draws_japanese() {
+        let Ok(cjk) = Font::from_family("cjk", FontStyle::NORMAL) else {
+            eprintln!("skipping: no system CJK font");
+            return;
+        };
+        eprintln!("cjk family: {:?}", cjk.family_name());
+        let text = "日本語";
+        let shaped = cjk.shaped(text, 32.0);
+        assert_eq!(shaped.len(), 3, "{shaped:?}");
+        assert!(shaped.iter().all(|g| g.glyph_id != 0), "{shaped:?}");
+        assert!(cjk.measure(text, 32.0).width > 60.0);
+        let draw = |font: &Font| {
+            let mut scene = Scene::new(Size::new(160.0, 50.0));
+            scene.fill_rect(Rect::from_xywh(0.0, 0.0, 160.0, 50.0), Color::WHITE);
+            scene.fill_text(
+                text,
+                Point::new(4.0, 4.0),
+                &TextPaint::new(font, 32.0, Color::BLACK),
+            );
+            dark_pixels(&SoftwareRenderer::new().render(scene, ScaleFactor::IDENTITY))
+        };
+        let alone = draw(&cjk);
+        assert!(alone > 150, "expected CJK glyph ink, got {alone}");
+        // As a fallback of a Latin font, the same characters come from it.
+        if let Some(latin) = Font::system_default() {
+            let chained = draw(&latin.with_fallback(&cjk));
+            assert!(chained > 150, "expected fallback ink, got {chained}");
+            // The default font loads the system's CJK family by itself, the
+            // first time text needs it.
+            let before = latin.chain().len();
+            let lazily = draw(&latin);
+            assert!(lazily > 150, "expected system fallback ink, got {lazily}");
+            assert!(latin.chain().len() > before);
+            assert!(latin.shaped(text, 32.0).iter().all(|g| g.glyph_id != 0));
+        }
+    }
+
+    /// Only text a system fallback could help loads one, and each family is
+    /// tried once.
+    #[test]
+    fn system_fallbacks_are_chosen_by_character() {
+        use crate::render::font::system_fallback_for as pick;
+        assert_eq!(pick('a', &[]), None);
+        assert_eq!(pick('\u{200D}', &[]), None);
+        assert_eq!(pick('\u{3000}', &[]), None, "ideographic space");
+        assert_eq!(pick('日', &[]), Some("cjk"));
+        assert_eq!(pick('カ', &[]), Some("cjk"));
+        assert_eq!(pick('日', &["cjk"]), None);
+        assert_eq!(pick('한', &[]), Some("cjk"));
+        assert_eq!(pick('한', &["cjk"]), Some("korean"));
+        assert_eq!(pick('😀', &[]), Some("emoji"));
+        assert_eq!(pick('✓', &["emoji"]), Some("symbol"));
+        assert_eq!(pick('→', &[]), Some("symbol"));
+        assert_eq!(pick('→', &["symbol"]), None);
     }
 
     #[test]
@@ -1611,7 +1696,7 @@ mod tests {
             .available_styles()
             .iter()
             .any(|s| s.weight.0 >= 600 && !s.italic);
-        assert_eq!(bold.variant.synth[idx as usize].bold, !a_has_bold);
+        assert_eq!(bold.chain().synth[idx as usize].bold, !a_has_bold);
         if a_has_bold {
             assert_ne!(
                 bold.chain().face(idx).stable_id(),

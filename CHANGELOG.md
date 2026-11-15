@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change and a lookup. `Role` is in the prelude.
 - `Toggle`, the spec behind `checkbox`, `switch` and `radio`, for a control
   whose label isn't shown (`.label_visible(false)`) but still names it.
+- Fonts with CFF or CFF2 (PostScript) outlines: `.otf` files and collections
+  such as `NotoSansCJK-Regular.ttc` (Android, Linux) and Hiragino (macOS,
+  iOS), CID-keyed ones included, load, shape, fall back and draw like
+  TrueType fonts; system font discovery no longer skips them (#48).
+- Text falls back to the system's CJK, emoji and symbol fonts by default:
+  `Font::system_default()` has the system fallbacks, and each is loaded the
+  first time text needs it, so Japanese, Chinese and Korean draw without the
+  app asking. A Korean family follows a CJK one without Hangul.
+- On the web, `stipple.js`'s `font` option takes a list of URLs: the first is
+  the app's font, the rest its fallbacks (a CJK font, say).
 
 ### Changed (breaking)
 
@@ -32,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   toggles the control, and it is the control's accessible name. Text styles
   set on the control (`.strikethrough()`, `.weight(..)`) reach the label,
   not the check mark.
+
+### Changed
+
+- `Font::with_system_fallbacks()` loads each system fallback when text first
+  needs it rather than at once.
 
 ### Other
 

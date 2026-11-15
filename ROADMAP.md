@@ -781,6 +781,12 @@ abstraction is frozen at the end of Phase 2.
   per-element fonts, public fallback chains, terminal-grade `FontMetrics`, and
   text decorations (five underline styles, strikethrough, overline, their own
   color). See [`docs/fonts.md`](docs/fonts.md).
+- ✅ **CFF outlines and CJK fallback**: *`.otf` and CFF collections (Noto Sans
+  CJK, Hiragino, Source Han) through `oxideav-ttf`'s CFF/CFF2 reader; system
+  CJK, emoji and symbol fallbacks loaded on first need, by default (#48).
+  Linux picks the Noto CJK face for the POSIX locale's region; elsewhere the
+  order is fixed (no per-language choice from the OS locale or Android's
+  fonts.xml yet).*
 - ✅ **Custom painting with partial invalidation**: `Element::canvas(id, paint)`,
   a leaf whose callback draws into a `Canvas` (a `Scene` in local
   coordinates) when it is rasterized, asked for just the area being
