@@ -184,14 +184,21 @@ if field is not None:
 
 # Keyboard focus, as a screen reader follows it: Tab, then the focus event.
 del events[:]
-subprocess.run(tab_cmd, check=False)
 focused = None
-for _ in range(40):
-    pump(0.25)
-    hits = [e for e in events if e[0].startswith("object:state-changed:focused") and e[1] == 1]
-    if hits:
-        focused = hits[-1]
+# The first key a fresh virtual keyboard sends (wtype makes one per run) can
+# be lost while the compositor switches to its keymap, so a Tab that focuses
+# nothing is sent once more, with a warning; the second must work.
+for attempt in range(2):
+    subprocess.run(tab_cmd, check=False)
+    for _ in range(20 if attempt == 0 else 40):
+        pump(0.25)
+        hits = [e for e in events if e[0].startswith("object:state-changed:focused") and e[1] == 1]
+        if hits:
+            focused = hits[-1]
+            break
+    if focused is not None:
         break
+    print("warning: no focus event after the first Tab; sending it again", flush=True)
 check(focused is not None and focused[2] not in (pyatspi.ROLE_FRAME, pyatspi.ROLE_APPLICATION),
       "after Tab, a control in the window reported state-changed:focused ({})".format(focused))
 check(any(e[0] == "focus:" for e in events), "...and a focus: event")
