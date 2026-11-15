@@ -4705,6 +4705,9 @@ jobs:
           grep -q "native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'" badging.txt
           "$bt/apksigner" verify "$OUT/Stipple-1.2.3-universal.apk"
           "$bt/zipalign" -c -P 16 4 "$OUT/Stipple-1.2.3-universal.apk"
+          # The Play Billing Library (android.billing): its dex and permission.
+          unzip -l "$OUT/Stipple-1.2.3.aab" | grep -q "base/dex/classes2.dex"
+          grep -q "uses-permission: name='com.android.vending.BILLING'" badging.txt
           jarsigner -verify "$OUT/Stipple-1.2.3.aab"
           java -jar bundletool.jar validate --bundle "$OUT/Stipple-1.2.3.aab"
           java -jar bundletool.jar build-apks --bundle "$OUT/Stipple-1.2.3.aab" --output split.apks \

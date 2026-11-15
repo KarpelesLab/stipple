@@ -15,6 +15,7 @@ import platform
 import shutil
 import struct
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
@@ -348,7 +349,7 @@ def manifest_xml(m, lib_name, refs):
     app = [
         f'android:label="{refs["label"]}"',
         f'android:theme="{refs["theme"]}"',
-        f'android:hasCode="{"true" if m.android_alarms else "false"}"',
+        f'android:hasCode="{"true" if m.android_alarms or m.android_billing else "false"}"',
         'android:enableOnBackInvokedCallback="true"',
     ]
     if "icon" in refs:
@@ -517,6 +518,10 @@ def package(m, args, target, target_dir, work, helper):
         shutil.copy(m.android_manifest, manifest)
     else:
         manifest.write_text(manifest_xml(m, lib_name, refs), encoding="utf-8")
+    # The dex files: the receiver's, then the Play Billing Library's.
+    dexes = [("classes.dex", dex)] if dex else []
+    if m.android_billing:
+        dexes += billing(m, manifest, work / "billing", len(dexes))
     compiled = work / "compiled.zip"
     run([sdk.aapt2, "compile", "--dir", work / "res", "-o", compiled], quiet=True)
     link = [
@@ -553,8 +558,8 @@ def package(m, args, target, target_dir, work, helper):
         for abi, lib in libs.items():
             zip_add(z, f"base/lib/{abi}/lib{lib_name}.so", path=lib)
         zip_add(z, "base/native.pb", native_config(list(libs)))
-        if dex:
-            zip_add(z, "base/dex/classes.dex", path=dex)
+        for name, path in dexes:
+            zip_add(z, f"base/dex/{name}", path=path)
     shutil.copy(unsigned, aab)
     keystore.jarsign(aab)
     log(f"wrote {aab}")
@@ -566,8 +571,8 @@ def package(m, args, target, target_dir, work, helper):
     with zipfile.ZipFile(binary_apk) as src, zipfile.ZipFile(raw, "w") as z:
         for info in src.infolist():
             zip_add(z, info.filename, src.read(info), stored=info.compress_type == zipfile.ZIP_STORED)
-        if dex:
-            zip_add(z, "classes.dex", path=dex)
+        for name, path in dexes:
+            zip_add(z, name, path=path)
         for path, name in assets:
             zip_add(z, f"assets/{name}", path=path, stored=path.suffix.lower() in STORED)
         for abi, lib in libs.items():
@@ -593,6 +598,29 @@ def package(m, args, target, target_dir, work, helper):
     else:
         log("bundletool not found (set BUNDLETOOL to its jar to validate the bundle)")
     return aab, apk
+
+
+def billing(m, manifest, out, first):
+    """The Play Billing Library and its dependencies for `platform::store`
+    (tools/android/billing.py: fetched from Google's Maven repository, dexed),
+    as (name, path) dex files numbered after the `first` there are; adds the
+    library's manifest entries to `manifest`."""
+    script = Path(__file__).resolve().parent.parent / "android" / "billing.py"
+    run(
+        [
+            sys.executable, script, out, "--version", m.android_billing,
+            "--manifest", manifest, "--package", m.android_package,
+            "--min-api", m.android_min_sdk,
+        ],
+        quiet=True,
+    )
+    shutil.copy(out / "AndroidManifest.xml", manifest)
+    files = sorted(out.glob("classes*.dex"), key=lambda p: int(p.stem[7:] or 1))
+    log(f"Play Billing Library {m.android_billing}: {len(files)} dex file(s)")
+    return [
+        ("classes.dex" if first + i == 0 else f"classes{first + i + 1}.dex", p)
+        for i, p in enumerate(files)
+    ]
 
 
 def find_bundletool():

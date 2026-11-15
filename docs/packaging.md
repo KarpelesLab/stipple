@@ -93,6 +93,7 @@ permissions = ["CAMERA", "POST_NOTIFICATIONS"]
 # abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
 # lib-name = "qr_master"           # android.app.lib_name: default, the [lib]'s name
 # scheduled-notifications = true   # platform::schedule_notification's receiver and dex
+# billing = true                   # the Play Billing Library for platform::store (or a version: "8.3.0")
 # splash-background = "#16181d"    # Android 12's splash screen
 # icon-foreground = "icons/fg.svg" # the adaptive icon's layer (default: icon)
 # icon-monochrome = "icons/mono.svg"   # Android 13's themed icons
@@ -231,7 +232,9 @@ library's ELF segments). It writes the manifest (the `NativeActivity` with
 `android.app.lib_name`, the `configChanges` and `NoActionBar` theme Stipple
 needs, predictive back, the permissions, and for scheduled notifications
 the `Alarm` receiver with its `classes.dex`; see
-[android.md](platforms/android.md#packaging)), compiles the resources with
+[android.md](platforms/android.md#packaging)), adds the Play Billing Library
+with `billing` (its dex files and manifest entries, from
+`tools/android/billing.py`; see [purchases.md](purchases.md)), compiles the resources with
 `aapt2`, and links them twice:
 
 - **The bundle** (`QR Master-2.1.0.aab`): the module `base/` with the manifest

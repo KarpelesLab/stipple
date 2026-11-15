@@ -28,3 +28,6 @@ permissions = ["POST_NOTIFICATIONS"]
 # The Alarm receiver and its classes.dex (platform::schedule_notification).
 scheduled-notifications = true
 splash-background = "#16181d"
+# The Play Billing Library for platform::store (tools/android/billing.py
+# fetches and dexes it: classes2.dex, and its manifest entries).
+billing = true

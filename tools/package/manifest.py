@@ -67,6 +67,11 @@ COLOR = re.compile(r"^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
 LANG = re.compile(r"^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$")
 
 
+# The Play Billing Library version `android.billing = true` packages: the
+# newest 8.x (9.x needs resources an aapt2 build without Gradle doesn't merge).
+BILLING_VERSION = "8.3.0"
+
+
 def parse_color(value, key):
     """`#rrggbb` or `#rrggbbaa` as (r, g, b, a)."""
     if not isinstance(value, str) or not COLOR.match(value):
@@ -230,6 +235,14 @@ class Manifest:
                 p = "android.permission." + p.upper()
             self.android_permissions.append(p)
         self.android_alarms = bool(d.pop("scheduled-notifications", False))
+        # The Play Billing Library for platform::store: true (the default
+        # version tools/android/billing.py packages) or a version.
+        billing = d.pop("billing", False)
+        if billing is True:
+            billing = BILLING_VERSION
+        if billing and not isinstance(billing, str):
+            raise ManifestError("android.billing: true or a version (\"8.3.0\")")
+        self.android_billing = billing or None
         self.android_theme = d.pop(
             "theme", "@android:style/Theme.DeviceDefault.Light.NoActionBar"
         )

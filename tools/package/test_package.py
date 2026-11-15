@@ -100,6 +100,18 @@ class AndroidTests(unittest.TestCase):
         self.assertIn('android:screenOrientation="portrait"', xml)
         self.assertNotIn("debuggable", xml)
 
+    def test_billing(self):
+        self.assertIsNone(manifest().android_billing)
+        self.assertEqual(manifest(android={"billing": True}).android_billing, "8.3.0")
+        m = manifest(android={"billing": "8.0.0"})
+        self.assertEqual(m.android_billing, "8.0.0")
+        with self.assertRaises(ManifestError):
+            manifest(android={"billing": 8})
+        # The library's code needs hasCode, even without the receiver.
+        xml = android.manifest_xml(m, "my_app", {"label": "@string/app_name", "theme": "@style/AppTheme"})
+        self.assertIn('android:hasCode="true"', xml)
+        self.assertNotIn("org.stipple.android.Alarm", xml)
+
     def test_string_escapes(self):
         self.assertEqual(android._string("It's <b>"), "It\\'s &lt;b&gt;")
         self.assertEqual(android._string("@home"), "\\@home")

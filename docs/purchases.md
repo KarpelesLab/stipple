@@ -188,6 +188,9 @@ isn't in the APK …")`; on a device without Google Play, or signed out of it,
   -keep class com.android.billingclient.api.** { *; }
   ```
 
+- *With cargo-stipple* (see [packaging.md](packaging.md)): `billing = true`
+  under `[package.metadata.stipple.android]` (or a version, `"8.3.0"`) puts
+  the library in the `.aab` and the APK, as below.
 - *Without Gradle* (the `aapt` + `d8` build `examples/androiddemo/build-apk.sh`
   does): `tools/android/billing.py OUT --manifest AndroidManifest.xml`
   resolves the library's dependencies from Google's Maven repository and
