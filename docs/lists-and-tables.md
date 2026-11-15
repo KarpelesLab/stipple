@@ -63,6 +63,121 @@ with `selected()`, `is_selected(i)` and `cursor()`; change it with `select`,
 `toggle`, `extend_to`, `select_all` and `clear`. After the data shrinks, call
 `truncate(count)`.
 
+## Swipe actions and pull to refresh
+
+Phone apps act on a list's rows by swiping them, and check for new items by
+pulling the list down. The `listgestures` example is an inbox with both:
+
+```sh
+cargo run --example listgestures              # --selftest drives it off-screen
+```
+
+<!-- live: listgestures -->
+
+### Swipe actions
+
+`swipe_row` puts actions behind a row. Its state is a `SwipeState` in the app
+state, one per list (one row is open at a time), and each row has a key that
+stays with its item (an id, not the index):
+
+```rust
+use stipple::prelude::*;
+
+struct App { mail: Vec<Mail>, list: ListState, swipe: SwipeState }
+
+// In the row builder of a virtual_list (or for each row of a `scroll`):
+|cx, row| {
+    let id = state.mail[row.index].id;
+    let actions = SwipeActions::new()
+        .trailing(SwipeAction::new("Delete", move |s: &mut App| s.delete(id)).destructive())
+        .trailing(SwipeAction::new("Archive", move |s: &mut App| s.archive(id)))
+        .leading(SwipeAction::new("Unread", move |s: &mut App| s.toggle_read(id)).icon(icon));
+    swipe_row(cx, &state.swipe, |s| &mut s.swipe, id, actions)
+        .child(label(cx, &state.mail[row.index].subject))
+}
+```
+
+- **Leading and trailing.** Dragging the row toward the trailing edge (right,
+  left to right) shows the leading actions; toward the leading edge, the
+  trailing ones. Right-to-left layouts mirror it. Each side's first action is
+  its primary one, at the outer edge. A side with no actions doesn't move.
+- **The drag.** The row follows the finger (or the mouse), the buttons
+  widening behind it with their colors, labels and icons. Let go past half
+  the buttons (or flicked that way) and it stays open on them; a tap on one
+  runs it, and a tap on the row, or pressing another row, shuts it. Short of
+  that, it springs back. Past 60% of the row's width the primary action
+  fills the side, and letting go there runs it (a *full swipe*;
+  `.full_swipe(false)` turns it off, and the row then resists past its
+  buttons). Settling uses the theme's `swipe` motion.
+- **Destructive actions** (`.destructive()`) are red by default, and when one
+  runs, its row is shut at once: the app removes the item, the row slides
+  out and fades (its exit), and the rows below glide up into the gap. A
+  side's first action is the theme's primary color by default, the others
+  gray; `.color(c)` sets one.
+- **Scrolling still works.** A drag only swipes once it is mostly sideways,
+  decided where it leaves the 8-pixel touch slop, on the same move as the
+  touch recognizer: a vertical drag scrolls the list, and a row inside a
+  sideways strip scrolls the strip. The swipe cancels the press, so the row
+  isn't tapped or selected.
+- **Mouse and trackpad.** A sideways mouse drag swipes as a finger does. A
+  two-finger sideways trackpad scroll moves the row and settles it when the
+  fingers lift (without a full swipe); a tilt wheel or Shift+wheel notch
+  opens and shuts it a step at a time. Vertical scrolls still go to the
+  list.
+- **Keyboard and assistive technologies.** Every action is also in the row's
+  context menu: a right-click, a long press, or the Menu key or Shift+F10
+  with the pointer over it. With a `virtual_list` focused, the Menu key opens
+  the cursor row's actions; in a plain list, the actions of the row around
+  the focused control. Screen reader users reach them the same way.
+
+In a `virtual_list` the row's padding and selection tint go on the sliding
+content, so the actions behind span the whole row. In a plain `scroll` the
+row fills the width its column gives it.
+
+### Pull to refresh
+
+`pull_to_refresh` wraps a `scroll` or a `virtual_list`, with a
+`RefreshState` in the app state and the callback that starts a refresh:
+
+```rust
+struct App { items: Vec<Item>, refresh: RefreshState, /* … */ }
+
+pull_to_refresh(cx, &state.refresh, |s| &mut s.refresh, move |s| {
+    // Start loading; the indicator spins until `finish`.
+    handle.spawn(fetch(), |s, items| { s.items = items; s.refresh.finish(); });
+})
+.child(scroll(cx).children(rows))
+```
+
+- On a touch screen, a finger dragging the list *down* while it is scrolled
+  to its top pulls the indicator out after it, following less and less the
+  further it goes. Let go past `REFRESH_THRESHOLD` (64 px) and the state
+  starts refreshing and the callback runs; the indicator stays, spinning,
+  until the app calls `refresh.finish()`, then goes back up. Short of the
+  threshold it goes back up at once. The touch recognizer hands the finger
+  over as it does for a bottom sheet, so a drag anywhere else (or a list
+  scrolled down) scrolls as usual, and the row the finger landed on isn't
+  tapped.
+- **The look** follows the platform: under the iOS look (`Theme::native()` on
+  iOS) the list slides down and UIKit's spokes turn in the gap above it,
+  appearing one by one as it's pulled; elsewhere a Material disc drops from
+  the top over the list, its arc growing with the pull and turning while it
+  refreshes.
+- `refresh.begin()` shows the indicator spinning without a pull (a refresh
+  the app started itself); `is_refreshing()` says whether one is under way;
+  the callback doesn't run again while it is.
+- **Mouse**: there is no pull. A desktop app puts a Refresh button or menu
+  item in its window (the example has one in its toolbar).
+- **Keyboard and assistive technologies**: "Refresh" is in the context menu
+  of the list and of the rows inside it, after the rows' own actions, and
+  runs the callback the same way. `RefreshState::new().label("Actualiser")`
+  names it in the user's language. While it refreshes, screen readers see
+  the indicator as "Refresh…".
+
+The tests drive both at fixed frame times with simulated fingers
+(`src/widgets/swipe_tests.rs`, `src/widgets/refresh_tests.rs`), and
+`listgestures --selftest` drives the example the same way.
+
 ## Tables
 
 ```rust

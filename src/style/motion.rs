@@ -92,6 +92,10 @@ pub struct MotionTokens {
     /// A [`bottom_sheet`](crate::widgets::bottom_sheet) settling on a detent
     /// after a drag, or sliding away when dragged off.
     pub sheet: Motion,
+    /// A list row settling after a swipe (open on its actions, or shut),
+    /// leaving after a destructive one, and a pull-to-refresh indicator
+    /// settling or going away.
+    pub swipe: Motion,
 }
 
 impl Default for MotionTokens {
@@ -142,6 +146,7 @@ impl MotionTokens {
         disclosure: Motion,
         page: Motion,
         sheet: Motion,
+        swipe: Motion,
     );
 
     /// Stipple's own motion, shared by [`Theme::light`](super::Theme::light),
@@ -171,6 +176,7 @@ impl MotionTokens {
             disclosure: ms(150, Easing::EaseOut),
             page: ms(300, Easing::EMPHASIZED_DECELERATE),
             sheet: Motion::Spring(SpringParams::with_response(0.35, 0.9)),
+            swipe: Motion::Spring(SpringParams::with_response(0.3, 1.0)),
         }
     }
 
@@ -197,6 +203,7 @@ impl MotionTokens {
             disclosure: Motion::Instant,
             page: Motion::Instant,
             sheet: Motion::Instant,
+            swipe: Motion::Instant,
         }
     }
 
@@ -230,6 +237,7 @@ impl MotionTokens {
             disclosure: ms(200, Easing::STANDARD), // short4
             page: ms(300, Easing::EMPHASIZED_DECELERATE),
             sheet: ms(300, Easing::EMPHASIZED_DECELERATE),
+            swipe: ms(250, Easing::EMPHASIZED_DECELERATE),
         }
     }
 
@@ -263,6 +271,7 @@ impl MotionTokens {
             disclosure: ms(167, FLUENT_DECELERATE),
             page: ms(250, FLUENT_DECELERATE),
             sheet: ms(250, FLUENT_DECELERATE),
+            swipe: ms(250, FLUENT_DECELERATE),
         }
     }
 
@@ -296,6 +305,7 @@ impl MotionTokens {
             disclosure: ms(250, CA_DEFAULT),
             page: ms(250, CA_DEFAULT),
             sheet: Motion::Spring(SpringParams::with_response(0.35, 1.0)),
+            swipe: Motion::Spring(SpringParams::with_response(0.3, 1.0)),
         }
     }
 
@@ -328,6 +338,7 @@ impl MotionTokens {
             disclosure: ms(250, CA_DEFAULT),
             page: Motion::Spring(SpringParams::with_response(0.35, 1.0)),
             sheet: Motion::Spring(SpringParams::with_response(0.4, 0.9)),
+            swipe: Motion::Spring(SpringParams::with_response(0.35, 1.0)),
         }
     }
 
@@ -359,6 +370,7 @@ impl MotionTokens {
             disclosure: ms(200, ADW_EASE_OUT_QUAD),
             page: Motion::Spring(SpringParams::with_response(0.25, 1.0)),
             sheet: Motion::Spring(SpringParams::with_response(0.3, 1.0)),
+            swipe: Motion::Spring(SpringParams::with_response(0.25, 1.0)),
         }
     }
 
@@ -415,6 +427,7 @@ mod tests {
                 m.disclosure,
                 m.page,
                 m.sheet,
+                m.swipe,
             ] {
                 match motion {
                     Motion::Instant => {}

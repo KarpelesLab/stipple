@@ -106,7 +106,8 @@ on some platforms, and buttons 6 and 7 on X11.
 
 An element with `on_wheel` takes the wheel over itself instead of the scroll
 container it is in; a scroll container inside it still takes the wheel over
-itself. Scroll containers scroll a line as 40 logical pixels
+itself. (A `swipe_row` takes only sideways scrolls, and a gesture's
+deltaless end; vertical ones go on to its list.) Scroll containers scroll a line as 40 logical pixels
 (`stipple::platform::SCROLL_LINE_PX`).
 
 ## Touch gestures
@@ -127,6 +128,17 @@ in the shared core (`core::touch`), so every platform behaves the same:
   still scrolls the list. With no container along the drag, the widget under
   the finger keeps it (a slider drags). A finger landing on a fling stops it
   without tapping.
+- **Pulling a widget.** A finger dragged *down* in a vertical container
+  that is scrolled to its top, inside a bottom sheet or a
+  `pull_to_refresh`, pulls that widget instead (the sheet down, the refresh
+  indicator out). The widget takes the pointer from there: if an element
+  inside it had the press (a swipeable row), that element gets a release
+  first, then the widget a press where the finger is, and the moves.
+- **List rows swiped sideways.** A `swipe_row` watches its press's moves
+  too, and decides on the same move as the recognizer: a mostly sideways
+  move with no sideways container to scroll swipes the row; a vertical
+  one (or one the recognizer took for a scroll) leaves it alone. See
+  [lists-and-tables.md](lists-and-tables.md#swipe-actions).
 - **Long press.** A finger held within those 8 pixels for half a second over
   an element with a `context_menu` (or an `on_context` handler) opens the
   menu where the finger is, as a right-click does with a mouse. The press is

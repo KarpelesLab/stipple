@@ -80,6 +80,23 @@ impl<S: 'static> Pane<S> {
         self.send_pointer_moving(state, id, kind, button, pos, click_count, Vec2::ZERO)
     }
 
+    /// Move the pointer's capture to `id` mid-press, at `at`: the element
+    /// holding it gets a release (its press is over), and `id` a press, so
+    /// it follows the moves from here (a touch pull handed from a list row
+    /// to the list pulled to refresh around it).
+    pub(crate) fn hand_pointer_to(&mut self, state: &mut S, id: PointerId, at: Point) {
+        if self.pointer.capture == Some(id) {
+            return;
+        }
+        let left = Some(PointerButton::Left);
+        if let Some(held) = self.pointer.capture.take() {
+            self.send_pointer(state, held, PointerEventKind::Up, left, at, 1);
+        }
+        self.pointer.capture = Some(id);
+        self.pointer.hover = Some(id);
+        self.send_pointer(state, id, PointerEventKind::Down, left, at, 1);
+    }
+
     /// [`send_pointer`](Self::send_pointer), with the locked pointer's
     /// `movement`.
     #[allow(clippy::too_many_arguments)]
@@ -297,7 +314,10 @@ impl<S: 'static> App<S> {
                 let target = pane.tree.as_ref().and_then(|t| {
                     let layer = press_layer(t, pane.overlay_active, at).0;
                     let pointers = &pane.handlers;
-                    wheel_target_at(layer, at, &|id| pointers.pointers_ref().has_wheel(id))
+                    let (dx, dy) = (delta.dx, delta.dy);
+                    wheel_target_at(layer, at, &|id| {
+                        pointers.pointers_ref().takes_wheel(id, dx, dy)
+                    })
                 });
                 if let Some(WheelTarget::Handler(id)) = target {
                     out.redraw = pane.send_wheel(state, id, delta, at);

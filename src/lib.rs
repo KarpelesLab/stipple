@@ -127,8 +127,8 @@ pub mod gamepad {
 use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
     KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_viewports,
-    context_at, drag_hit_at, find_action, find_focus, find_text_pos, focus_at, hit_test,
-    layout_with_direction, measure, paint_hover, text_pos_at, viewport_at,
+    context_at, drag_hit_at, find_action, find_text_pos, focus_at, hit_test, layout_with_direction,
+    measure, paint_hover, text_pos_at, viewport_at,
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::{
@@ -2008,8 +2008,9 @@ impl<S: 'static> Pane<S> {
     }
 
     /// Open the context menu of the element under the pointer (or of the
-    /// focused element, below it) from the keyboard: the Menu key or
-    /// Shift+F10. Returns whether one opened.
+    /// focused element or the nearest element around it that has one, below
+    /// the focused element) from the keyboard: the Menu key or Shift+F10.
+    /// Returns whether one opened.
     fn context_by_key(&mut self, state: &mut S, theme: &Theme, font: Option<&Font>) -> bool {
         self.ensure_tree(state, theme, font);
         let Some(tree) = self.tree.as_ref() else {
@@ -2024,13 +2025,9 @@ impl<S: 'static> Pane<S> {
             tree
         };
         let pos = self.last_pointer;
-        let hit = context_at(main, pos).map(|id| (id, pos)).or_else(|| {
-            let node = find_focus(main, self.focused?)?;
-            Some((
-                node.context?,
-                Point::new(node.bounds.min_x(), node.bounds.max_y()),
-            ))
-        });
+        let hit = context_at(main, pos)
+            .map(|id| (id, pos))
+            .or_else(|| focus_context(main, self.focused?));
         let Some((id, at)) = hit else {
             return false;
         };
@@ -2574,6 +2571,23 @@ impl<S: 'static> Pane<S> {
             .saturating_duration_since(self.touch_epoch)
             .as_secs_f64()
     }
+}
+
+/// The context menu the keyboard opens for the focused element `focused`: its
+/// own, or that of the nearest element around it with one (a list row
+/// holding the focused button), and where it opens (under the focused
+/// element's bottom-left corner).
+fn focus_context(tree: &LayoutNode, focused: FocusId) -> Option<(core::ContextId, Point)> {
+    type Hit = Option<(core::ContextId, Point)>;
+    fn walk(node: &LayoutNode, focused: FocusId, around: Option<core::ContextId>) -> Hit {
+        let around = node.context.or(around);
+        if node.focus == Some(focused) {
+            let b = node.bounds;
+            return around.map(|id| (id, Point::new(b.min_x(), b.max_y())));
+        }
+        node.children.iter().find_map(|c| walk(c, focused, around))
+    }
+    walk(tree, focused, None)
 }
 
 /// The part of `tree` a press at `pos` reaches, and whether it is the main tree.
@@ -4538,6 +4552,9 @@ pub mod prelude {
     pub use crate::widgets::{
         NumberInput, Select, SplitPane, ToastKind, ToastPlacement, Toasts, ToolButton,
         number_input, select, split_pane, toasts, tool_button, tool_separator, toolbar,
+    };
+    pub use crate::widgets::{
+        RefreshState, SwipeAction, SwipeActions, SwipeState, pull_to_refresh, swipe_row,
     };
     pub use crate::widgets::{image, svg};
     pub use crate::{App, CloseResponse};

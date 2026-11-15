@@ -81,10 +81,18 @@ use crate::render::{Color, ImageSource, RichText, Svg, TextDirection};
 use crate::style::Theme;
 use std::sync::Arc;
 
+mod refresh;
+#[cfg(test)]
+mod refresh_tests;
+mod swipe;
+#[cfg(test)]
+mod swipe_tests;
 mod table;
 mod tree;
 mod virtual_list;
 
+pub use refresh::{PullToRefresh, REFRESH_THRESHOLD, RefreshState, pull_to_refresh};
+pub use swipe::{SWIPE_ACTION_WIDTH, SwipeAction, SwipeActions, SwipeRow, SwipeState, swipe_row};
 pub use table::{Column, SortOrder, TableSpec, TableState, table};
 pub use tree::{TreeModel, TreeRow, TreeSpec, TreeState, tree};
 pub use virtual_list::{

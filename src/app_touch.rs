@@ -47,12 +47,15 @@ impl<S: 'static> Pane<S> {
         let pointers = &self.handlers;
         let scroll = crate::core::scroll_targets_at(tree, p);
         // A downward drag at the top of a vertical container inside an
-        // element that pulls (a bottom sheet) is that element's.
-        let pull_down = scroll.vertical.is_some_and(|v| {
-            self.scroll_offsets.get(&v).copied().unwrap_or(0.0) <= 0.5
-                && pointer_at(layer, p, &|id| pointers.pointers_ref().is_pull(id))
-                    .and_then(|id| crate::core::find_pointer(layer, id))
-                    .is_some_and(|puller| crate::core::find_scroll(puller, v).is_some())
+        // element that pulls (a bottom sheet, a list pulled to refresh) is
+        // that element's.
+        let pull_down = scroll.vertical.and_then(|v| {
+            if self.scroll_offsets.get(&v).copied().unwrap_or(0.0) > 0.5 {
+                return None;
+            }
+            let id = pointer_at(layer, p, &|id| pointers.pointers_ref().is_pull(id))?;
+            let puller = crate::core::find_pointer(layer, id)?;
+            crate::core::find_scroll(puller, v).map(|_| id)
         });
         TouchTargets {
             scroll,
@@ -210,10 +213,12 @@ impl<S: 'static> App<S> {
                     .0
             }
             TouchAction::End => false,
-            TouchAction::Pull => {
+            TouchAction::Pull(puller) => {
                 // The widget that pulls has the finger now: the press no
-                // longer taps what it landed on.
+                // longer taps what it landed on, and an element inside it
+                // that took the press (a swipeable row) lets go of it.
                 pane.cancel_press();
+                pane.hand_pointer_to(state, puller, touch.position);
                 true
             }
             TouchAction::Pinch(pinch) => {

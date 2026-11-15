@@ -486,18 +486,30 @@ pub fn virtual_list<S: 'static>(
     let window = Window::new(cx, spec.geometry(), spec.height, spec.overscan);
     let multi = state.mode() != SelectionMode::Single;
     let mut rows = Vec::with_capacity(window.range.len());
+    let mut cursor_entries = None;
     for index in window.range.clone() {
         let info = RowInfo {
             index,
             selected: state.is_selected(index),
             cursor: state.cursor() == Some(index),
         };
+        let padding = Insets::symmetric(theme.spacing.md, 0.0);
+        let fill = row_fill(theme, info.selected, false);
+        // A swipeable row takes the padding and the tint onto its sliding
+        // content, so its actions span the whole row.
+        super::swipe::offer_chrome(super::swipe::RowChrome { padding, fill });
         let content = row(cx, info);
-        let mut el = Element::stack(Axis::Horizontal, vec![content])
-            .height(window.rows.height(index))
-            .padding(Insets::symmetric(theme.spacing.md, 0.0));
-        if let Some(fill) = row_fill(theme, info.selected, false) {
-            el = el.fill(fill);
+        let (swipes, entries) = super::swipe::chrome_taken::<S>();
+        if info.cursor {
+            cursor_entries = entries;
+        }
+        let mut el =
+            Element::stack(Axis::Horizontal, vec![content]).height(window.rows.height(index));
+        if !swipes {
+            el = el.padding(padding);
+            if let Some(fill) = fill {
+                el = el.fill(fill);
+            }
         }
         // In multi-selection the cursor can sit on an unselected row; mark it.
         if multi && info.cursor {
@@ -515,18 +527,23 @@ pub fn virtual_list<S: 'static>(
     }
     let count = window.rows.count();
     let body = window.assemble(rows);
-    frame(theme, vec![body])
-        .role(Role::List)
-        .on_key(cx, move |s, key| {
-            let st = field(s);
-            let before = st.cursor();
-            if st.handle_key(key, count)
-                && let Some(c) = st.cursor()
-                && Some(c) != before
-            {
-                window.reveal(c);
-            }
-        })
+    // The Menu key while the list has focus: its cursor row's swipe actions,
+    // and the refresh of a pull-to-refresh around it.
+    let menu = super::swipe::entries_menu(&cursor_entries.unwrap_or_default());
+    let mut list = frame(theme, vec![body]);
+    if let Some(menu) = menu {
+        list = list.context_menu(cx, menu);
+    }
+    list.role(Role::List).on_key(cx, move |s, key| {
+        let st = field(s);
+        let before = st.cursor();
+        if st.handle_key(key, count)
+            && let Some(c) = st.cursor()
+            && Some(c) != before
+        {
+            window.reveal(c);
+        }
+    })
 }
 
 #[cfg(test)]

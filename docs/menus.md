@@ -139,7 +139,8 @@ label(cx, "Right-click me").context_menu(
 
 It opens at the pointer on a right-click over the element, or on the Menu key
 or Shift+F10 while the pointer is over it (or, failing that, while the element
-has focus). On a touch screen a long press opens it: a finger held still on
+or something inside it has focus: the nearest context menu around the focused
+element opens). On a touch screen a long press opens it: a finger held still on
 the element for half a second (see
 [pointer-events.md](pointer-events.md#touch-gestures)); lifting that finger
 picks nothing, and a tap then picks an item.

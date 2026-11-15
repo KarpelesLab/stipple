@@ -1011,6 +1011,13 @@ impl<'a, S> Cx<'a, S> {
         self.pointers.set_pull(id);
     }
 
+    /// Have the wheel handler of `id` take only sideways scrolls, leaving
+    /// vertical ones to the scroll container around it (a list row a
+    /// trackpad swipes).
+    pub(crate) fn wheel_sideways(&mut self, id: crate::core::PointerId) {
+        self.pointers.set_sideways(id);
+    }
+
     /// Register a wheel handler on `id` (or a new id), returning the id.
     /// Prefer [`Element::on_wheel`](crate::core::Element::on_wheel).
     pub fn register_wheel(

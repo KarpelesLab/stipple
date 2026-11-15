@@ -519,7 +519,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 ## Topics
 
 - [Layout](layout.md): stacks, wrapping, grids, and min/max sizes
-- [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing
+- [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing, swipe actions, pull to refresh
 - [Widgets](widgets.md): select, number input, split pane, toolbar, toasts, tab bar,
   page stack and app bar, bottom sheet,
   password field and color picker

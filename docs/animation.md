@@ -415,6 +415,7 @@ scales and offsets entrances start from:
 | `disclosure` | tree disclosure triangles turning |
 | `page` | a page stack pushing and popping, and settling after the back gesture |
 | `sheet` | a bottom sheet settling on a detent after a drag |
+| `swipe` | a swiped list row settling open or shut, or leaving after a destructive action; a pull-to-refresh indicator settling and going |
 
 `MotionTokens::standard()` is Stipple's own (the light and dark themes),
 `material()` Material 3's (the Material themes, and Android), and

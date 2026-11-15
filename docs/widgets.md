@@ -631,6 +631,8 @@ timings and curves in the theme's motion tokens (`theme.motion`, a
 | `tree` | a disclosure triangle turns as its node expands or collapses | `disclosure` |
 | `nav_stack` | a pushed page slides (or fades) in over the one below, a popped one away; after the back gesture the page settles from where the finger left it | `page` |
 | `bottom_sheet` | it slides up and back down, its scrim fading with it; let go after a drag it settles on a detent | `dialog`, `dialog_exit`, `sheet` |
+| `swipe_row` | let go, a swiped row settles open on its actions or shut; a row whose destructive action ran slides out and fades, and the rows below glide up | `swipe` |
+| `pull_to_refresh` | let go past the threshold, the indicator settles where it spins; short of it, or when the refresh is done, it goes back up | `swipe` |
 | Drop targets (`on_drop`) | the app's "drop here" highlight fades in and out with the target's drag-over level | `DROP_FADE` |
 | Controls the OS draws under `Theme::native()` | the OS's picture of the old state fades into the new one: hover, press and focus; a checkbox, radio or switch flipping | `state`, `toggle` |
 

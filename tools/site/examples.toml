@@ -89,6 +89,12 @@ title = "Tables and trees"
 group = "Widgets and layout"
 size = [900, 560]
 
+[web.listgestures]
+description = "An inbox whose rows swipe to delete, archive or mark read, pulled down to refresh."
+title = "List gestures"
+group = "Widgets and layout"
+size = [380, 620]
+
 [web.scrolldemo]
 description = "A tall list inside a fixed-height scroll viewport (clipped + wheel-scrollable)."
 title = "Scrolling"

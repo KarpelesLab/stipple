@@ -261,6 +261,11 @@ path = "examples/lifecycle/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "listgestures_web"
+path = "examples/listgestures/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "listmotion_web"
 path = "examples/listmotion/web.rs"
 crate-type = ["cdylib"]

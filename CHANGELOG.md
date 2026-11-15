@@ -67,6 +67,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (see docs/platforms/android.md). Without it, such a tap still only brings
   the app forward.
 
+- List gestures (#44): `swipe_row(cx, &state, access, key, SwipeActions)`
+  puts leading and trailing `SwipeAction`s (label, icon, color,
+  `.destructive()`) behind a `virtual_list` or plain list row: it follows a
+  sideways finger or mouse drag (a vertical one still scrolls), opens on its
+  buttons or springs back, runs the side's primary action on a full swipe
+  (`.full_swipe(false)` turns it off), and a destructive action's row slides
+  out while the rows below glide up; a trackpad's two-finger sideways scroll
+  opens and shuts it; the actions are in the row's context menu (and the
+  focused `virtual_list`'s, for its cursor row). `SwipeState` holds which row
+  is open. `pull_to_refresh(cx, &state, access, on_refresh).child(list)`
+  refreshes a `scroll` or `virtual_list` pulled down at its top on a touch
+  screen, with UIKit's spinner under the content on iOS and Material's disc
+  elsewhere, spinning until `RefreshState::finish`; "Refresh" is in the list's
+  and its rows' context menus. `MotionTokens::swipe` times both. Example
+  `listgestures`.
+- The Menu key and Shift+F10 open the nearest context menu around the focused
+  element when it has none of its own.
 - Packaged assets (#59): `platform::assets()` reads files the app was
   packaged with by relative path (`read`, `open` as a `Read + Seek` reader,
   `exists`, `list`, and the `image`, `svg`, `font`, `sound` and `text`

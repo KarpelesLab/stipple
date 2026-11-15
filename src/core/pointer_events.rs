@@ -213,6 +213,10 @@ pub(crate) struct Slot<S> {
     /// inside this element is the element's, not the container's (a sheet
     /// dragged down by its content).
     pull: bool,
+    /// The wheel handler takes only sideways scrolls (and a gesture's
+    /// deltaless end): a vertical one goes on to the scroll container around
+    /// it (a list row swiped by a trackpad).
+    sideways: bool,
 }
 
 /// The pointer and wheel handlers registered while building a frame, by
@@ -238,6 +242,7 @@ impl<S> PointerHandlers<S> {
                     wheel: None,
                     pinch: None,
                     pull: false,
+                    sideways: false,
                 });
                 PointerId(self.slots.len() as u32 - 1)
             }
@@ -295,6 +300,21 @@ impl<S> PointerHandlers<S> {
         }
     }
 
+    /// Have `id`'s wheel handler take only sideways scrolls (see
+    /// `Slot::sideways`).
+    pub(crate) fn set_sideways(&mut self, id: PointerId) {
+        if let Some(slot) = self.slots.get_mut(id.0 as usize) {
+            slot.sideways = true;
+        }
+    }
+
+    /// Whether `id` has a wheel handler that takes a scroll of `dx`, `dy`.
+    pub(crate) fn takes_wheel(&self, id: PointerId, dx: f64, dy: f64) -> bool {
+        self.slots
+            .get(id.0 as usize)
+            .is_some_and(|s| s.wheel.is_some() && (!s.sideways || dx.abs() >= dy.abs()))
+    }
+
     /// Whether `id` takes a downward touch drag at the top of a scroll
     /// container inside it.
     pub(crate) fn is_pull(&self, id: PointerId) -> bool {
@@ -306,13 +326,6 @@ impl<S> PointerHandlers<S> {
         self.slots
             .get(id.0 as usize)
             .is_some_and(|s| s.pointer.is_some())
-    }
-
-    /// Whether `id` has a wheel handler.
-    pub(crate) fn has_wheel(&self, id: PointerId) -> bool {
-        self.slots
-            .get(id.0 as usize)
-            .is_some_and(|s| s.wheel.is_some())
     }
 
     /// Whether `id` has a pinch handler.

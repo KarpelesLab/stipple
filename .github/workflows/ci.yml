@@ -39,6 +39,8 @@ jobs:
         run: cargo run --example motiondemo -- --selftest
       - name: listmotion selftest (enter, exit and layout animations, off-screen)
         run: cargo run --example listmotion -- --selftest
+      - name: listgestures selftest (swipe actions and pull to refresh, simulated touches)
+        run: cargo run --example listgestures -- --selftest
       - name: todo selftest (the getting-started app, driven headless)
         run: cargo run --example todo -- --selftest target/todo.png
       - name: clippy (audio feature)

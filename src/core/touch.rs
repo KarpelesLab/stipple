@@ -73,11 +73,11 @@ pub struct TouchTargets {
     pub long_press: bool,
     /// The element that takes pinches here.
     pub pinch: Option<PointerId>,
-    /// Whether a downward drag here belongs to the widget around the
-    /// vertical scroll container rather than to the container: it is at its
-    /// top, inside an element that pulls (a bottom sheet dragged down by its
-    /// content).
-    pub pull_down: bool,
+    /// The widget around the vertical scroll container that a downward drag
+    /// here belongs to rather than to the container: it is at its top,
+    /// inside an element that pulls (a bottom sheet dragged down by its
+    /// content, a list pulled to refresh).
+    pub pull_down: Option<PointerId>,
 }
 
 /// A pinch's state at one touch, for the app to hand to its element as a
@@ -120,14 +120,32 @@ pub enum TouchAction {
     Pinch(Pinch),
     /// The finger pulled down at the top of a scroll container inside a
     /// widget that pulls ([`TouchTargets::pull_down`]): its moves go to that
-    /// widget from now on, and the press no longer taps.
-    Pull,
+    /// widget from now on (it takes the pointer's capture), and the press no
+    /// longer taps.
+    Pull(PointerId),
 }
 
 thread_local! {
     /// Whether the finger down pulls a widget (see [`TouchAction::Pull`]),
     /// until it lifts.
     static PULLING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether the finger down scrolls a container or pinches, until it
+    /// lifts.
+    static SCROLLING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Say a finger pulls (or scrolls), as the recognizer would: for handler
+/// tests that feed pointer events by hand.
+#[cfg(test)]
+pub(crate) fn set_gesture(pulling: bool, scrolling: bool) {
+    PULLING.with(|p| p.set(pulling));
+    SCROLLING.with(|p| p.set(scrolling));
+}
+
+/// Whether the finger down became a scroll (or a pinch), so a widget that
+/// also watches its moves (a list row swiped sideways) leaves it alone.
+pub(crate) fn scrolling() -> bool {
+    SCROLLING.with(|p| p.get())
 }
 
 /// Whether the finger down is pulling the widget around a scroll container
@@ -281,10 +299,12 @@ impl TouchGestures {
             TouchPhase::Started if self.primary.is_none() => {
                 self.primary = Some(touch.id);
                 PULLING.with(|p| p.set(false));
+                SCROLLING.with(|p| p.set(false));
             }
             TouchPhase::Ended | TouchPhase::Cancelled if self.primary == Some(touch.id) => {
                 self.primary = None;
                 PULLING.with(|p| p.set(false));
+                SCROLLING.with(|p| p.set(false));
             }
             _ => {}
         }
@@ -329,6 +349,7 @@ impl TouchGestures {
                 };
                 let pair = Pair::new(target, (id, at), (touch.id, p));
                 self.state = State::Pinching(pair);
+                SCROLLING.with(|p| p.set(true));
                 self.samples.clear();
                 TouchAction::Pinch(pair.event(PinchPhase::Began))
             }
@@ -396,10 +417,14 @@ impl TouchGestures {
                 let horizontal = dx.abs() > dy.abs();
                 // Pulled down at its top, a container inside a widget that
                 // pulls hands the drag to that widget.
-                if !horizontal && dy > 0.0 && targets.pull_down && !caught {
+                if let Some(puller) = targets.pull_down
+                    && !horizontal
+                    && dy > 0.0
+                    && !caught
+                {
                     self.state = State::Yielded { id };
                     PULLING.with(|p| p.set(true));
-                    return TouchAction::Pull;
+                    return TouchAction::Pull(puller);
                 }
                 let target = if horizontal {
                     targets.scroll.horizontal
@@ -420,6 +445,7 @@ impl TouchGestures {
                         };
                         self.samples.clear();
                         self.samples.push((now, along(p, horizontal)));
+                        SCROLLING.with(|p| p.set(true));
                         TouchAction::Begin {
                             target,
                             delta: crossed - along(p, horizontal),

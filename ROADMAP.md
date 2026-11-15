@@ -1588,6 +1588,17 @@ Most input only works on X11 today.
   bottom offset to clear a navigation bar, an action button
   (`Toasts::action`, e.g. "Undo"), swipe to dismiss with a spring back, and
   new toasts announced on macOS, iOS and Android.
+- ✅ List gestures (#44): `swipe_row` + `SwipeActions` (leading and trailing
+  actions with a label, icon and color; the row follows the finger, opens on
+  its buttons or springs back on the theme's `swipe` motion, a full swipe runs
+  the primary action, a destructive one's row slides out as the rows below
+  glide up; a sideways mouse drag or trackpad scroll too; every action in the
+  row's context menu, and the focused `virtual_list`'s for its cursor row) and
+  `pull_to_refresh` + `RefreshState` (the touch pull handed over at the top of
+  a `scroll` or `virtual_list`, UIKit's spokes under the content or Material's
+  dropping disc, spinning until `finish`; "Refresh" in the context menus);
+  `listgestures`. *Unit-tested at fixed frame times with simulated touches;
+  no platform accessibility custom actions yet (the context menu stands in).*
 - ✅ Document tab bar (`tab_bar`): closable tabs, drag to reorder (in-app
   drags, with the shifted tabs springing into place), per-tab color and
   indicator (dot, bell, count), a context menu per tab, a new-tab button,
