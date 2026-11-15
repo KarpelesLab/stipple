@@ -84,14 +84,13 @@ pub fn menu_button<S>(
     .a11y_label(label)
 }
 
-/// A column of [`menu_button`]s (or any controls), built by the closure, the arrow keys and a
-/// gamepad move through by where they are
-/// ([`spatial_nav`](Element::spatial_nav)); its first control takes focus
-/// when nothing has it.
-pub fn menu_list<S>(cx: &mut Cx<S>, items: impl FnOnce(&mut Cx<S>) -> Vec<Element>) -> Element {
-    let items = items(cx);
+/// A column for [`menu_button`]s (or any controls; add them with
+/// [`children`](Element::children)) the arrow keys and a gamepad move
+/// through by where they are ([`spatial_nav`](Element::spatial_nav)); its
+/// first control takes focus when nothing has it.
+pub fn menu_list<S>(cx: &Cx<S>) -> Element {
     let theme = cx.theme();
-    Element::stack(Axis::Vertical, items)
+    Element::stack(Axis::Vertical, Vec::new())
         .gap(theme.spacing.sm)
         .spatial_nav()
 }
@@ -147,7 +146,7 @@ pub fn key_cap<S>(cx: &Cx<S>, text: &str) -> Element {
 /// use stipple::prelude::*;
 ///
 /// fn title(cx: &mut Cx<()>, theme: &Theme) -> Element {
-///     let menu = gui::menu_list(cx, |cx| vec![gui::menu_button(cx, "Play", |_| {})]);
+///     let menu = gui::menu_list(cx).child(gui::menu_button(cx, "Play", |_| {}));
 ///     TitleScreen::new("STARLIT COURIER", menu)
 ///         .subtitle("deliveries across the comet belt")
 ///         .footer(gui::controls_hint(cx, &[("Enter / A", "Select")]))
@@ -239,7 +238,7 @@ impl TitleScreen {
 /// use stipple::prelude::*;
 ///
 /// fn game_over(cx: &mut Cx<()>, theme: &Theme, score: u32) -> Element {
-///     let menu = gui::menu_list(cx, |cx| vec![gui::menu_button(cx, "Try again", |_| {})]);
+///     let menu = gui::menu_list(cx).child(gui::menu_button(cx, "Try again", |_| {}));
 ///     GameOverScreen::new("HULL BREACHED", menu)
 ///         .line("Score", score)
 ///         .line("Time", "2:05")
@@ -331,48 +330,100 @@ impl GameOverScreen {
     }
 }
 
-/// Declare the pause menu: a modal panel with `title` and `buttons` (a
-/// [`menu_list`] is made of them) over the game, which shows frozen and
-/// dimmed behind it. Call it from the view while the game is paused
-/// (pause the loop with [`GameLoop::paused_when`](crate::game::GameLoop::paused_when));
-/// a press on the dimmed game runs `on_resume`. It fades and grows in, and
-/// out when the view stops declaring it. Escape and a gamepad's East button
-/// go back through the app's [`on_back`](crate::App::on_back): resume there.
+/// The pause menu: a modal panel with `title` and the [`menu_button`]s you
+/// add with [`children`](PauseMenu::children) (a [`menu_list`] is made of
+/// them) over the game, which shows frozen and dimmed behind it. Declare it
+/// with [`open`](PauseMenu::open) on each build while the game is paused
+/// (pause the loop with
+/// [`GameLoop::paused_when`](crate::game::GameLoop::paused_when)); a press
+/// on the dimmed game runs `on_resume`. It fades and grows in, and out when
+/// the view stops declaring it. Escape and a gamepad's East button go back
+/// through the app's [`on_back`](crate::App::on_back): resume there.
+///
+/// ```
+/// use stipple::game::ui as gui;
+/// use stipple::prelude::*;
+/// struct Game { paused: bool }
+/// fn view(game: &Game, cx: &mut Cx<Game>) -> Element {
+///     if game.paused {
+///         gui::pause_menu(cx, "Paused", |g| g.paused = false)
+///             .children(vec![
+///                 gui::menu_button(cx, "Resume", |g| g.paused = false),
+///                 gui::menu_button(cx, "Quit", |_| {}),
+///             ])
+///             .open(cx);
+///     }
+///     spacer()
+/// }
+/// # let theme = Theme::dark();
+/// # let _ = view(&Game { paused: true }, &mut Cx::new(&theme));
+/// ```
 pub fn pause_menu<S>(
     cx: &mut Cx<S>,
     title: impl Into<String>,
-    buttons: Vec<Element>,
     on_resume: impl FnMut(&mut S) + 'static,
-) {
-    let theme = &crate::widgets::theme_of(cx);
-    let p = &theme.palette;
-    let dismiss = cx.register(on_resume);
-    let content = Element::stack(
-        Axis::Vertical,
-        vec![
-            Element::stack(
-                Axis::Horizontal,
-                vec![Element::text(title, theme.typography.heading, p.text).bold()],
-            )
-            .align(Align::Center, Align::Center),
-            menu_list(cx, |_| buttons),
-        ],
-    )
-    .gap(theme.spacing.lg)
-    .fill(p.surface)
-    .border(p.primary, 2.0)
-    .radius(theme.radius * 2.0)
-    .padding(Insets::uniform(theme.spacing.xl))
-    .align(Align::Center, Align::Stretch)
-    .role(Role::Dialog)
-    .enter(Effect::fade().and(Effect::scale(0.9)))
-    .exit(Effect::fade().and(Effect::scale(0.95)));
-    cx.overlay(OverlaySpec {
-        content,
-        anchor: Anchor::Center,
-        modal: true,
-        dismiss: Some(dismiss),
-    });
+) -> PauseMenu {
+    PauseMenu {
+        title: title.into(),
+        dismiss: cx.register(on_resume),
+        buttons: Vec::new(),
+    }
+}
+
+/// A pause menu being built: see [`pause_menu`]. It shows once
+/// [`open`](Self::open) declares it.
+#[derive(Debug)]
+#[must_use = "a pause menu shows only once `.open(cx)` declares it"]
+pub struct PauseMenu {
+    title: String,
+    dismiss: crate::core::ActionId,
+    buttons: Vec<Element>,
+}
+
+impl PauseMenu {
+    /// Add `child` (a [`menu_button`]) to the menu.
+    pub fn child(mut self, child: Element) -> Self {
+        self.buttons.push(child);
+        self
+    }
+
+    /// Add `children` ([`menu_button`]s) to the menu.
+    pub fn children(mut self, children: Vec<Element>) -> Self {
+        self.buttons.extend(children);
+        self
+    }
+
+    /// Declare the pause menu as an overlay on this build.
+    pub fn open<S>(self, cx: &mut Cx<S>) {
+        let theme = &crate::widgets::theme_of(cx);
+        let p = &theme.palette;
+        let content = Element::stack(
+            Axis::Vertical,
+            vec![
+                Element::stack(
+                    Axis::Horizontal,
+                    vec![Element::text(self.title, theme.typography.heading, p.text).bold()],
+                )
+                .align(Align::Center, Align::Center),
+                menu_list(cx).children(self.buttons),
+            ],
+        )
+        .gap(theme.spacing.lg)
+        .fill(p.surface)
+        .border(p.primary, 2.0)
+        .radius(theme.radius * 2.0)
+        .padding(Insets::uniform(theme.spacing.xl))
+        .align(Align::Center, Align::Stretch)
+        .role(Role::Dialog)
+        .enter(Effect::fade().and(Effect::scale(0.9)))
+        .exit(Effect::fade().and(Effect::scale(0.95)));
+        cx.overlay(OverlaySpec {
+            content,
+            anchor: Anchor::Center,
+            modal: true,
+            dismiss: Some(self.dismiss),
+        });
+    }
 }
 
 /// A screen: `children` in a column filling the window, centered across.

@@ -59,7 +59,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         field
     }
     .height(64.0);
-    panel(cx, |cx| vec![label(cx, "Clipboard (Tab to focus):"), field])
+    panel(cx)
+        .children(vec![label(cx, "Clipboard (Tab to focus):"), field])
         .padding(Insets::uniform(32.0))
 }
 

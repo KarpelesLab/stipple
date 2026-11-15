@@ -46,11 +46,22 @@ of them (see [Checking](#checking)).
   builders end in `.view(cx)`. A widget that only draws takes `&Cx<S>`; one
   that registers a handler takes `&mut Cx<S>`. Coming first, `cx` also fixes
   the state type, so the handlers and accessors after it need no
-  annotation: `|s| s.n += 1`, `|s| &mut s.name`. A widget that holds other
-  elements and needs the theme builds them in a closure given `cx`
-  (`panel(cx, |cx| vec![…])`), since a `cx` argument borrowed for the call
-  would keep the children from registering handlers. `cx.themed(theme, |cx| …)`
+  annotation: `|s| s.n += 1`, `|s| &mut s.name`. `cx.themed(theme, |cx| …)`
   builds part of a view under another theme.
+- **Containers: build the frame, then add the children.** A widget that holds
+  other elements and needs `cx` returns its frame, and the children come in
+  a chained call: `panel(cx).children(vec![…])`, `.child(el)`. The frame's
+  call is done (and `cx` free again) before the arguments of `.children` are
+  evaluated, so the children can register handlers on `cx`; a container
+  taking `cx` and its children in one call couldn't have them. No closures
+  building children, no children built ahead in `let`s for the borrow's
+  sake. `children` and `child` are `Element` methods, for any stack, grid
+  or layers; a container that isn't a plain stack returns a small builder
+  with the same `child`/`children` and a finishing call: `split_pane(…)
+  .panes(first, second)`, `dialog(cx, title, on_dismiss).child(…)
+  .actions(…).open(cx)`. Plain layout that needs no `cx` keeps taking its
+  children directly: `row(vec![…])`, `column(vec![…])`, `grid(tracks,
+  vec![…])`.
 - **Three or more of the same number or bool type in a row** (`f64, f64, f64`,
   a run of `bool`s) get the same treatment, or newtypes, since a caller could
   swap them without the compiler noticing.

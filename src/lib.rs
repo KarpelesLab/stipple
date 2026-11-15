@@ -12,7 +12,7 @@
 //! }
 //!
 //! let mut app = App::new(Counter { n: 0 }, |state: &Counter, cx: &mut Cx<Counter>| {
-//!     panel(cx, |cx| vec![
+//!     panel(cx).children(vec![
 //!         label(cx, format!("Count: {}", state.n)),
 //!         button(cx, "+1").on_tap(cx, |s| s.n += 1),
 //!     ])
@@ -4162,8 +4162,8 @@ pub mod prelude {
     pub use crate::style::Theme;
     pub use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Typography};
     pub use crate::widgets::{
-        Button, EditBuffer, TextInput, Variant, button, checkbox, column, divider, grid, heading,
-        label, open_dialog, open_menu, panel, paragraph, progress_bar, radio, row, scroll,
+        Button, EditBuffer, TextInput, Variant, button, checkbox, column, dialog, divider, grid,
+        heading, label, open_menu, panel, paragraph, progress_bar, radio, row, scroll,
         scroll_horizontal, slider, spacer, spinner, swatch, switch, tabs, text_area, text_field,
         tooltip, viewport,
     };
@@ -4801,7 +4801,7 @@ mod tests {
                         .on_tap(cx, move |s| s.push(i))
                 })
                 .collect();
-            crate::widgets::scroll(cx, 200.0, |_| column(rows))
+            crate::widgets::scroll(cx, 200.0).children(rows)
         })
         .no_font()
         .logical_size(Size::new(200.0, 200.0))

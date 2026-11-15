@@ -53,7 +53,7 @@ pub use number::{NumberInput, number_input};
 pub use password::{PasswordField, password_field};
 pub use preedit::DisplayText;
 pub use select::{Select, select};
-pub use split::{SplitPane, split_pane};
+pub use split::{Split, SplitPane, split_pane};
 pub use tab_bar::{TAB_MAX_WIDTH, TAB_MIN_WIDTH, Tab, TabBar, TabBarState, TabIndicator, tab_bar};
 pub(crate) use text_input::FieldHooks;
 pub use text_input::{TextInput, text_area, text_field};
@@ -150,42 +150,42 @@ pub fn spacer() -> Element {
     Element::stack(Axis::Horizontal, Vec::new()).grow(1.0)
 }
 
-/// A fixed-height vertical scroll viewport around `content`. Content taller than
-/// `height` overflows and is clipped to the viewport; wheel events over it
-/// scroll the app's offset (re-clamped each frame). Register the container once
-/// per frame via `cx` so its scroll position is stable across rebuilds.
+/// A fixed-height vertical scroll viewport: a column whose content, added
+/// with [`children`](Element::children) or [`child`](Element::child), may be
+/// taller than `height`. It overflows and is clipped to the viewport; wheel
+/// events over it scroll the app's offset (re-clamped each frame).
 ///
-/// The closure builds the content with `cx`, so it can register handlers:
-/// `scroll(cx, 300.0, |cx| column(rows(cx)))`.
-pub fn scroll<S>(
-    cx: &mut Cx<S>,
-    height: f64,
-    content: impl FnOnce(&mut Cx<S>) -> Element,
-) -> Element {
-    let content = content(cx);
+/// ```
+/// use stipple::prelude::*;
+/// struct App { items: Vec<String> }
+/// fn view(state: &App, cx: &mut Cx<App>) -> Element {
+///     scroll(cx, 300.0).children(state.items.iter().map(|item| label(cx, item)).collect())
+/// }
+/// # let theme = Theme::light();
+/// # let _ = view(&App { items: vec!["a".into()] }, &mut Cx::new(&theme));
+/// ```
+///
+/// Call it once per frame for each scroll container, in the same order, so
+/// each keeps its scroll position across rebuilds.
+pub fn scroll<S>(cx: &mut Cx<S>, height: f64) -> Element {
     let id = cx.register_scroll();
-    Element::stack(Axis::Vertical, vec![content])
+    Element::stack(Axis::Vertical, Vec::new())
         .height(height)
         .scrollable(id)
 }
 
-/// A fixed-width sideways scroll viewport around `content` (a strip of chips,
-/// a carousel): its children lay out left to right at their natural width and
-/// are clipped to the viewport; a horizontal wheel or trackpad swipe over it
-/// scrolls it (a vertical wheel too, when no vertical container is under the
-/// pointer), and on a touch screen a sideways finger drag scrolls and flings
-/// it. Put several elements in a [`row`] for `content`. The content
-/// measures with no width limit, so a wrapping row (a group of
-/// [`choice_chips`] or [`filter_chips`]) stays on one line in it. Inside a
-/// [`scroll`] list, a drag picks the container along its direction.
-pub fn scroll_horizontal<S>(
-    cx: &mut Cx<S>,
-    width: f64,
-    content: impl FnOnce(&mut Cx<S>) -> Element,
-) -> Element {
-    let content = content(cx);
+/// A fixed-width sideways scroll viewport (a strip of chips, a carousel): a
+/// row whose content, added with [`children`](Element::children) or
+/// [`child`](Element::child), lays out left to right at its natural width
+/// and is clipped to the viewport. A horizontal wheel or trackpad swipe over
+/// it scrolls it (a vertical wheel too, when no vertical container is under
+/// the pointer), and on a touch screen a sideways finger drag scrolls and
+/// flings it. The content measures with no width limit, so a wrapping row (a
+/// group of [`choice_chips`] or [`filter_chips`]) stays on one line in it.
+/// Inside a [`scroll`] list, a drag picks the container along its direction.
+pub fn scroll_horizontal<S>(cx: &mut Cx<S>, width: f64) -> Element {
     let id = cx.register_scroll();
-    Element::stack(Axis::Horizontal, vec![content])
+    Element::stack(Axis::Horizontal, Vec::new())
         .width(width)
         .scrollable(id)
         .align(Align::Start, Align::Stretch)
@@ -227,15 +227,15 @@ pub fn svg(doc: &Arc<Svg>) -> Element {
 }
 
 /// A raised surface card: themed fill, hairline border, rounded corners, and
-/// comfortable padding. Lays the `children` that the closure builds
-/// vertically. They're built by a closure given `cx`, so they can register
-/// handlers in it:
+/// comfortable padding. It's a column: add its content with
+/// [`children`](Element::children) (or [`child`](Element::child)), which
+/// can use `cx` to register handlers:
 ///
 /// ```
 /// use stipple::prelude::*;
 /// struct App { n: i64 }
 /// fn view(state: &App, cx: &mut Cx<App>) -> Element {
-///     panel(cx, |cx| vec![
+///     panel(cx).children(vec![
 ///         heading(cx, format!("{}", state.n)),
 ///         button(cx, "+1").on_tap(cx, |s| s.n += 1),
 ///     ])
@@ -243,9 +243,8 @@ pub fn svg(doc: &Arc<Svg>) -> Element {
 /// # let theme = Theme::light();
 /// # let _ = view(&App { n: 0 }, &mut Cx::new(&theme));
 /// ```
-pub fn panel<S>(cx: &mut Cx<S>, children: impl FnOnce(&mut Cx<S>) -> Vec<Element>) -> Element {
-    let children = children(cx);
-    panel_frame(cx.theme(), children)
+pub fn panel<S>(cx: &Cx<S>) -> Element {
+    panel_frame(cx.theme(), Vec::new())
 }
 
 /// [`panel`]'s card around `children`.
@@ -1551,40 +1550,103 @@ pub fn open_menu<S: 'static>(
     });
 }
 
-/// Declare a modal dialog overlay: a centered panel with `title`, a `body`
-/// element, and a right-aligned row of `actions` (buttons). A dark scrim behind
-/// it blocks the tree; pressing the scrim runs `on_dismiss`. It scales in when
-/// it opens and back out, with its scrim, when the view stops declaring it
-/// (taking no input meanwhile), on the theme's `dialog` and `dialog_exit`
-/// motion.
-pub fn open_dialog<S>(
+/// A modal dialog: a centered panel with `title`, its content (add it with
+/// [`child`](Dialog::child) or [`children`](Dialog::children)) and a
+/// right-aligned row of [`actions`](Dialog::actions) (buttons). Declare it
+/// with [`open`](Dialog::open) on each build while it should show. A dark
+/// scrim behind it blocks the tree; pressing the scrim runs `on_dismiss`. It
+/// scales in when it opens and back out, with its scrim, when the view stops
+/// declaring it (taking no input meanwhile), on the theme's `dialog` and
+/// `dialog_exit` motion.
+///
+/// ```
+/// use stipple::prelude::*;
+/// struct App { confirming: bool }
+/// fn view(state: &App, cx: &mut Cx<App>) -> Element {
+///     if state.confirming {
+///         dialog(cx, "Delete everything?", |s| s.confirming = false)
+///             .child(label(cx, "This can't be undone."))
+///             .actions(vec![
+///                 button(cx, "Cancel").on_tap(cx, |s| s.confirming = false),
+///                 button(cx, "Delete").on_tap(cx, |s| s.confirming = false),
+///             ])
+///             .open(cx);
+///     }
+///     button(cx, "Delete…").on_tap(cx, |s| s.confirming = true)
+/// }
+/// # let theme = Theme::light();
+/// # let _ = view(&App { confirming: true }, &mut Cx::new(&theme));
+/// ```
+pub fn dialog<S>(
     cx: &mut Cx<S>,
     title: impl Into<String>,
-    body: Element,
-    actions: Vec<Element>,
     on_dismiss: impl FnMut(&mut S) + 'static,
-) {
-    let theme = &theme_of(cx);
-    let dismiss = cx.register(on_dismiss);
-    let content = panel_frame(
-        theme,
-        vec![
-            Element::text(title, theme.typography.heading, theme.palette.text),
-            body,
-            row(actions)
-                .gap(theme.spacing.sm)
-                .align(Align::End, Align::Center),
-        ],
-    )
-    .width(340.0)
-    .enter(motion::dialog_effect(&theme.motion))
-    .exit(motion::dialog_exit(&theme.motion));
-    cx.overlay(OverlaySpec {
-        content,
-        anchor: Anchor::Center,
-        modal: true,
-        dismiss: Some(dismiss),
-    });
+) -> Dialog {
+    Dialog {
+        title: title.into(),
+        dismiss: cx.register(on_dismiss),
+        content: Vec::new(),
+        actions: Vec::new(),
+    }
+}
+
+/// A modal dialog being built: see [`dialog`]. It shows once
+/// [`open`](Self::open) declares it.
+#[derive(Debug)]
+#[must_use = "a dialog shows only once `.open(cx)` declares it"]
+pub struct Dialog {
+    title: String,
+    dismiss: crate::core::ActionId,
+    content: Vec<Element>,
+    actions: Vec<Element>,
+}
+
+impl Dialog {
+    /// Add `child` to the dialog's content, under the title.
+    pub fn child(mut self, child: Element) -> Self {
+        self.content.push(child);
+        self
+    }
+
+    /// Add `children` to the dialog's content, under the title.
+    pub fn children(mut self, children: Vec<Element>) -> Self {
+        self.content.extend(children);
+        self
+    }
+
+    /// Put `actions` (buttons) in the row at the dialog's bottom, at its end.
+    pub fn actions(mut self, actions: Vec<Element>) -> Self {
+        self.actions.extend(actions);
+        self
+    }
+
+    /// Declare the dialog as an overlay on this build.
+    pub fn open<S>(self, cx: &mut Cx<S>) {
+        let theme = &theme_of(cx);
+        let mut children = vec![Element::text(
+            self.title,
+            theme.typography.heading,
+            theme.palette.text,
+        )];
+        children.extend(self.content);
+        if !self.actions.is_empty() {
+            children.push(
+                row(self.actions)
+                    .gap(theme.spacing.sm)
+                    .align(Align::End, Align::Center),
+            );
+        }
+        let content = panel_frame(theme, children)
+            .width(340.0)
+            .enter(motion::dialog_effect(&theme.motion))
+            .exit(motion::dialog_exit(&theme.motion));
+        cx.overlay(OverlaySpec {
+            content,
+            anchor: Anchor::Center,
+            modal: true,
+            dismiss: Some(self.dismiss),
+        });
+    }
 }
 
 /// A small tooltip bubble showing `text` (a dark rounded label). Show it via
@@ -1617,8 +1679,8 @@ mod tests {
     #[test]
     fn panel_is_a_decorated_vertical_stack() {
         let theme = Theme::light();
-        let mut cx = Cx::<()>::new(&theme);
-        let p = panel(&mut cx, |cx| vec![divider(cx)]);
+        let cx = Cx::<()>::new(&theme);
+        let p = panel(&cx).child(divider(&cx));
         assert!(p.decoration.fill.is_some());
         assert!(matches!(
             p.kind,
@@ -1627,6 +1689,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn children_follow_a_containers_own() {
+        let theme = Theme::light();
+        let cx = Cx::<()>::new(&theme);
+        let mut r = row(vec![spacer()])
+            .children(vec![divider(&cx), spacer()])
+            .child(divider(&cx));
+        assert_eq!(r.children_mut().map(|c| c.len()), Some(4));
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "only a stack, a grid or layers take children")]
+    fn a_leaf_takes_no_children() {
+        let theme = Theme::light();
+        let cx = Cx::<()>::new(&theme);
+        let _ = label(&cx, "Hi").child(spacer());
     }
 
     #[test]

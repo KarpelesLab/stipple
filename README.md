@@ -148,7 +148,7 @@ annotations (`|s| s.n += 1`, `|s| &mut s.name`). Available in the prelude:
 `paragraph`, `button` (and `Button` for the other variants and custom
 content), `text_field` / `text_area` (editing a `TextInput`), `checkbox`,
 `radio`, `switch`, `slider`, `progress_bar`, `spinner`, `swatch`, `tabs`,
-`scroll`, `open_menu`, `open_dialog`, `tooltip`, `image` / `svg` (PNG, JPEG,
+`scroll`, `open_menu`, `dialog`, `tooltip`, `image` / `svg` (PNG, JPEG,
 GIF, WebP, BMP and SVG, decoded by the oxideav stack; see
 [docs/images.md](./docs/images.md)), and `viewport` (embedded external
 content). See [docs/widgets.md](./docs/widgets.md) for the rest.

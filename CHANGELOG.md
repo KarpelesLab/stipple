@@ -39,10 +39,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TitleScreen::…view(cx)`, and so on for every widget in `widgets` and
   `game::ui`. Widgets that only draw take `&Cx<S>`, those that register
   handlers `&mut Cx<S>`, so `row(vec![label(cx, ..), button(cx, ..).on_tap(cx, ..)])`
-  compiles. Containers that need the theme build their content in a closure
-  given `cx`: `panel(cx, |cx| vec![…])`, `toolbar(cx, |cx| …)`,
-  `scroll(cx, h, |cx| …)`, `scroll_horizontal`, `game::ui::menu_list` and
-  `game::ui::setting_row`.
+  compiles.
+- One way to compose containers: build the frame, then add its children with
+  the new `Element::children(vec![…])` and `Element::child(el)` (for any
+  stack, grid or layers). The frame's call has released `cx` by the time the
+  children are built, so they can register handlers; no more closures or
+  `let`s built ahead for the borrow's sake. `row(vec![…])`, `column(…)` and
+  `grid(…)` keep taking their children.
+
+  | Before | After |
+  |---|---|
+  | `panel(cx, \|cx\| vec![…])` | `panel(cx).children(vec![…])` |
+  | `toolbar(cx, \|cx\| vec![…])` | `toolbar(cx).children(vec![…])` |
+  | `scroll(cx, h, \|cx\| content)`, `scroll_horizontal(cx, w, …)` | `scroll(cx, h).child(content)` (or `.children(…)`) |
+  | `game::ui::menu_list(cx, \|cx\| vec![…])` | `menu_list(cx).children(vec![…])` |
+  | `game::ui::setting_row(cx, label, \|cx\| control)` | `setting_row(cx, label).child(control)` |
+  | `split_pane(cx, &state, field, first, second)` | `split_pane(cx, &state, field).panes(first, second)` |
+  | `open_dialog(cx, title, body, actions, on_dismiss)` | `dialog(cx, title, on_dismiss).child(body).actions(actions).open(cx)` |
+  | `game::ui::pause_menu(cx, title, buttons, on_resume)` | `pause_menu(cx, title, on_resume).children(buttons).open(cx)` |
+
+  `panel`, `toolbar`, `menu_list` and `setting_row` now take `&Cx`. A dialog
+  without actions no longer leaves an empty row (and its gap) at its bottom.
 - `Cx::themed(theme, |cx| …)` builds part of a view under another theme (for
   previews and theme galleries); `Cx::theme()` returns the theme in effect.
 - One button: `button(cx, "Save")`, and the `Button` spec for the other

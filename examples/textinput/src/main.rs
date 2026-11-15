@@ -36,7 +36,8 @@ fn echo(buffer: &TextInput) {
 fn view(state: &Form, cx: &mut Cx<Form>) -> Element {
     echo(&state.buffer);
     let field = text_field(cx, &state.buffer, |s| &mut s.buffer).height(64.0);
-    panel(cx, |cx| vec![label(cx, "Type here (Tab to focus):"), field])
+    panel(cx)
+        .children(vec![label(cx, "Type here (Tab to focus):"), field])
         .padding(Insets::uniform(32.0))
 }
 

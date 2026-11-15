@@ -38,7 +38,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
     let choices = choice_chips(cx, SYMBOLOGIES, s.choice, |s, i| s.choice = Some(i));
     let filters = filter_chips(cx, FILTERS, &s.filters, |s, i| s.filters[i] = !s.filters[i]);
     let filters = if s.horizontal {
-        super::scroll_horizontal(cx, 60.0, |_| filters)
+        super::scroll_horizontal(cx, 60.0).child(filters)
     } else {
         filters
     };

@@ -19,8 +19,8 @@ const H: f64 = 320.0;
 /// variants (filled / outlined / text / error), and tonal status swatches.
 fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     let t = *cx.theme();
-    let card = panel(cx, |cx| {
-        vec![
+    let card = panel(cx)
+        .children(vec![
             heading(cx, "Material 3"),
             label(cx, "Dynamic color from a seed"),
             divider(cx),
@@ -41,9 +41,8 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
                 swatch(t.palette.danger, 28.0, t.radius / 2.0),
             ])
             .gap(t.spacing.sm),
-        ]
-    })
-    .width(324.0);
+        ])
+        .width(324.0);
     column(vec![card])
         .grow(1.0)
         .align(Align::Center, Align::Center)

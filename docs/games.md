@@ -568,7 +568,7 @@ it. `FocusLook::STANDARD` is the usual 2 px ring; `FocusLook::BOLD` (3 px,
 ```rust
 use stipple::game::ui::{menu_button, menu_list};
 
-let menu = menu_list(cx, |cx| vec![
+let menu = menu_list(cx).children(vec![
     menu_button(cx, "Start", |g| g.start()),
     menu_button(cx, "Settings", |g| g.screen = Screen::Settings),
     menu_button(cx, "Quit", move |_| handle.exit()),
@@ -619,7 +619,7 @@ shown at once need different labels.
 | | |
 |---|---|
 | `TitleScreen::new(title, menu).subtitle(..).footer(..).view(cx)` | The title large in the accent, the menu under it, a footer (a `controls_hint`) at the bottom, on the theme's background; `.backdrop(None)` leaves the game showing behind it (or `Some(color)`). |
-| `pause_menu(cx, title, buttons, on_resume)` | A modal panel over the game, dimmed behind it; a press on the game resumes. Declare it from the view while paused, and pause the loop with `GameLoop::paused_when`: the canvas keeps the frozen frame. |
+| `pause_menu(cx, title, on_resume).children(buttons).open(cx)` | A modal panel over the game, dimmed behind it; a press on the game resumes. Declare it from the view while paused, and pause the loop with `GameLoop::paused_when`: the canvas keeps the frozen frame. |
 | `GameOverScreen::new(title, menu).line("Score", 340).view(cx)` | The title in the danger color, popping in; a panel of results, a `line(label, value)` each; the menu. `.backdrop(..)` as for the title screen. |
 | `controls_hint(cx, &[("Enter / A", "Select"), …])`, `key_cap(cx, text)` | Key caps and what they do. |
 
@@ -641,7 +641,7 @@ Switch screens with a `page_stack` on a `screen` field, and go back in
 
 | | |
 |---|---|
-| `setting_row(cx, label, |cx| control)` | A label and a control on a band; a `spatial_nav` column of them is a settings screen. |
+| `setting_row(cx, label).child(control)` | A label and a control on a band; a `spatial_nav` column of them is a settings screen. |
 | `volume_row(cx, label, value, on_change)` | A `game_slider` in 5% steps and the percentage; `value` is an `f32` from 0 to 1, for the game's mixer. |
 | `game_slider(cx, value, step, on_change)` | A slider that takes focus: Left and Right step it, Home and End go to the ends, a drag sets it. |
 | `toggle_row(cx, label, on, on_toggle)` | A switch. |

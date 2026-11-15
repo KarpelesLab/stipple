@@ -94,47 +94,45 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let handle = cx.handle();
     let undo_handle = handle.clone();
 
-    let bar = toolbar(cx, |cx| {
-        vec![
-            tool_button(cx, "New").on_tap(cx, |s| s.note("New document")),
-            tool_button(cx, "Open").on_tap(cx, |s| s.note("Open…")),
-            tool_button(cx, "Save").on_tap(cx, |s| s.note("Saved")),
-            tool_separator(cx),
-            ToolButton::new("B")
-                .selected(state.bold)
-                .view(cx)
-                .on_tap(cx, |s| s.bold = !s.bold),
-            ToolButton::new("I")
-                .selected(state.italic)
-                .view(cx)
-                .on_tap(cx, |s| s.italic = !s.italic),
-            tool_separator(cx),
-            ToolButton::from_icon(&state.trash, "Clear log")
-                .view(cx)
-                .on_tap(cx, move |s| {
-                    let cleared = std::mem::take(&mut s.log);
-                    let id = s.toasts.push("Log cleared", ToastKind::Info);
-                    s.toasts.dismiss_after(
-                        id,
-                        Duration::from_secs(6),
-                        &undo_handle,
-                        |s: &mut State| &mut s.toasts,
-                    );
-                    s.toasts.action(id, "Undo", move |s: &mut State| {
-                        s.log.clone_from(&cleared);
-                    });
-                }),
-            spacer(),
-            tool_button(cx, "Notify").on_tap(cx, move |s| {
-                let n = s.log.len();
-                let id = s
-                    .toasts
-                    .push(format!("Notification #{n}"), ToastKind::Success);
-                s.toasts
-                    .dismiss_after(id, Duration::from_secs(4), &handle, |s| &mut s.toasts);
+    let bar = toolbar(cx).children(vec![
+        tool_button(cx, "New").on_tap(cx, |s| s.note("New document")),
+        tool_button(cx, "Open").on_tap(cx, |s| s.note("Open…")),
+        tool_button(cx, "Save").on_tap(cx, |s| s.note("Saved")),
+        tool_separator(cx),
+        ToolButton::new("B")
+            .selected(state.bold)
+            .view(cx)
+            .on_tap(cx, |s| s.bold = !s.bold),
+        ToolButton::new("I")
+            .selected(state.italic)
+            .view(cx)
+            .on_tap(cx, |s| s.italic = !s.italic),
+        tool_separator(cx),
+        ToolButton::from_icon(&state.trash, "Clear log")
+            .view(cx)
+            .on_tap(cx, move |s| {
+                let cleared = std::mem::take(&mut s.log);
+                let id = s.toasts.push("Log cleared", ToastKind::Info);
+                s.toasts.dismiss_after(
+                    id,
+                    Duration::from_secs(6),
+                    &undo_handle,
+                    |s: &mut State| &mut s.toasts,
+                );
+                s.toasts.action(id, "Undo", move |s: &mut State| {
+                    s.log.clone_from(&cleared);
+                });
             }),
-        ]
-    });
+        spacer(),
+        tool_button(cx, "Notify").on_tap(cx, move |s| {
+            let n = s.log.len();
+            let id = s
+                .toasts
+                .push(format!("Notification #{n}"), ToastKind::Success);
+            s.toasts
+                .dismiss_after(id, Duration::from_secs(4), &handle, |s| &mut s.toasts);
+        }),
+    ]);
 
     let form = grid(
         vec![Track::px(84.0), Track::fr(1.0)],
@@ -198,9 +196,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     )
     .gap(sp.xs)
     .padding(Insets::uniform(sp.lg));
-    let right = split_pane(cx, &state.preview, |s| &mut s.preview, preview, log);
+    let right = split_pane(cx, &state.preview, |s| &mut s.preview).panes(preview, log);
 
-    let body = split_pane(cx, &state.sidebar, |s| &mut s.sidebar, form, right);
+    let body = split_pane(cx, &state.sidebar, |s| &mut s.sidebar).panes(form, right);
     let body = row(vec![body])
         .fill(theme.palette.surface)
         .border(theme.palette.border, 1.0)

@@ -87,10 +87,12 @@ fn view(state: &Term, cx: &mut Cx<Term>) -> Element {
             18.0,
         ))
         .option_as_meta(OptionAsMeta::Left);
-    panel(cx, |cx| {
-        vec![label(cx, "Raw keys (Tab to focus, then type):"), terminal]
-    })
-    .padding(Insets::uniform(16.0))
+    panel(cx)
+        .children(vec![
+            label(cx, "Raw keys (Tab to focus, then type):"),
+            terminal,
+        ])
+        .padding(Insets::uniform(16.0))
 }
 
 fn main() {

@@ -17,16 +17,13 @@ use super::menu::key_cap;
 /// The width of a row's control column (sliders, switches, choices).
 pub const CONTROL_WIDTH: f64 = 240.0;
 
-/// A settings row: `label` on the left, the `control` the closure builds on the right, on a
-/// faint band; a [`menu_list`](super::menu_list) (or any
+/// A settings row: `label` on the left and, on the right, the control you
+/// add with [`child`](Element::child), on a faint band:
+/// `setting_row(cx, "Music").child(game_slider(cx, …))`. A
+/// [`menu_list`](super::menu_list) (or any
 /// [`spatial_nav`](Element::spatial_nav) column) of them is a settings
 /// screen the arrows and a gamepad move through.
-pub fn setting_row<S>(
-    cx: &mut Cx<S>,
-    label: impl Into<String>,
-    control: impl FnOnce(&mut Cx<S>) -> Element,
-) -> Element {
-    let control = control(cx);
+pub fn setting_row<S>(cx: &Cx<S>, label: impl Into<String>) -> Element {
     let theme = cx.theme();
     let p = &theme.palette;
     Element::stack(
@@ -34,7 +31,6 @@ pub fn setting_row<S>(
         vec![
             Element::text(label, theme.typography.body, p.text),
             crate::widgets::spacer(),
-            control,
         ],
     )
     .gap(theme.spacing.md)
@@ -121,7 +117,7 @@ pub fn volume_row<S>(
         ],
     )
     .gap(theme.spacing.md);
-    setting_row(cx, label, |_| control)
+    setting_row(cx, label).child(control)
 }
 
 /// An on/off row: `label` and a switch; a tap (or Enter, or South) on the
@@ -143,7 +139,7 @@ pub fn toggle_row<S>(
     )
     .width(48.0);
     let control = Element::stack(Axis::Horizontal, vec![switch, state]).gap(theme.spacing.md);
-    setting_row(cx, label, |_| control)
+    setting_row(cx, label).child(control)
 }
 
 /// A row choosing one of `options` (a pixel scale, a language, a
@@ -202,7 +198,7 @@ pub fn choice_row<S>(
     })
     .role(Role::ComboBox)
     .a11y_label(label.clone());
-    setting_row(cx, label, |_| control)
+    setting_row(cx, label).child(control)
 }
 
 /// A fullscreen row: a [`toggle_row`] showing whether the window is
@@ -423,7 +419,8 @@ pub fn binding_row<S>(
     } else {
         p.warning
     };
-    setting_row(cx, label.clone(), |_| caps)
+    setting_row(cx, label.clone())
+        .child(caps)
         .border(border, 2.0)
         .transition_for(AnimProp::Border, Transition(theme.motion.state))
         .on_tap(cx, on_activate)

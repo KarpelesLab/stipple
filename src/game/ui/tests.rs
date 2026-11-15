@@ -212,7 +212,7 @@ fn menu_app_with(menu: Menu) -> App<Menu> {
             menu_button(cx, name, move |m| m.pressed.push(name))
         };
         let items = vec![b(cx, "One"), b(cx, "Two"), b(cx, "Three")];
-        menu_list(cx, |_| items)
+        menu_list(cx).children(items)
     })
     .no_font()
     .logical_size(Size::new(400.0, 300.0))

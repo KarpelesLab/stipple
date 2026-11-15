@@ -510,9 +510,9 @@ fn stateless_popups_come_in_through_the_core() {
             open_menu(cx, Point::new(10.0, 10.0), menu, |s| s.menu = false);
         }
         if s.dialog {
-            open_dialog(cx, "Sure?", label(cx, "Really"), vec![], |s| {
-                s.dialog = false
-            });
+            dialog(cx, "Sure?", |s| s.dialog = false)
+                .child(label(cx, "Really"))
+                .open(cx);
         }
         column(vec![
             button(cx, "Menu").on_tap(cx, |s| s.menu = true),
@@ -619,9 +619,9 @@ fn stateless_overlays_and_tooltips_leave_on_the_theme_motion() {
                         .item(crate::core::MenuItem::new("Cut", |_: &mut ()| {}));
                     open_menu(cx, Point::new(10.0, 10.0), menu, |_| {});
                 }
-                Some(Up::Dialog) => {
-                    open_dialog(cx, "Sure?", label(cx, "Really"), vec![], |_: &mut ()| {})
-                }
+                Some(Up::Dialog) => dialog(cx, "Sure?", |_| {})
+                    .child(label(cx, "Really"))
+                    .open(cx),
                 Some(Up::Tip) => cx.overlay(OverlaySpec {
                     content: tooltip(cx, "Bold"),
                     anchor: crate::core::Anchor::Popup(Point::new(10.0, 10.0)),
@@ -664,7 +664,9 @@ fn a_dialog_and_its_scrim_come_in_together_on_the_theme_motion() {
     let view = |open: bool| {
         move |cx: &mut Cx<()>| {
             if open {
-                open_dialog(cx, "Sure?", label(cx, "Really"), vec![], |_: &mut ()| {});
+                dialog(cx, "Sure?", |_| {})
+                    .child(label(cx, "Really"))
+                    .open(cx);
             }
             column(vec![])
         }

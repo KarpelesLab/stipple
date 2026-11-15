@@ -1371,6 +1371,52 @@ impl Element {
         self
     }
 
+    /// Add `children` after this container's own: a stack's ([`row`],
+    /// [`column`], [`panel`], [`scroll`], [`toolbar`]…), a grid's cells, or
+    /// [`layers`](Element::layers). Building the frame first and its children
+    /// in the call keeps `cx` free for them, so they can register handlers:
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// struct App { n: i64 }
+    /// fn view(state: &App, cx: &mut Cx<App>) -> Element {
+    ///     panel(cx).children(vec![
+    ///         heading(cx, format!("{}", state.n)),
+    ///         button(cx, "+1").on_tap(cx, |s| s.n += 1),
+    ///     ])
+    /// }
+    /// # let theme = Theme::light();
+    /// # let _ = view(&App { n: 0 }, &mut Cx::new(&theme));
+    /// ```
+    ///
+    /// A list made in the call works too: `.children(items.iter().map(|i|
+    /// label(cx, i)).collect())`. Only containers hold children: on a text,
+    /// an image or another leaf this is a bug, caught by a debug assertion
+    /// (and in a release build the children are dropped).
+    ///
+    /// [`row`]: crate::widgets::row
+    /// [`column`]: crate::widgets::column
+    /// [`panel`]: crate::widgets::panel
+    /// [`scroll`]: crate::widgets::scroll
+    /// [`toolbar`]: crate::widgets::toolbar
+    pub fn children(mut self, children: Vec<Element>) -> Self {
+        let own = self.children_mut();
+        debug_assert!(
+            own.is_some(),
+            "only a stack, a grid or layers take children"
+        );
+        if let Some(own) = own {
+            own.extend(children);
+        }
+        self
+    }
+
+    /// Add `child` after this container's own children; see
+    /// [`children`](Element::children).
+    pub fn child(self, child: Element) -> Self {
+        self.children(vec![child])
+    }
+
     /// Space between a stack's children (and its wrapped lines), or between a
     /// grid's columns and rows.
     pub fn gap(mut self, gap: f64) -> Self {
@@ -1469,7 +1515,8 @@ impl Element {
 
     // --- interaction states and transitions ---
 
-    /// The element's children, for a container.
+    /// The element's children, for a container ([`children`](Self::children)
+    /// adds to them).
     pub(crate) fn children_mut(&mut self) -> Option<&mut Vec<Element>> {
         match &mut self.kind {
             ElementKind::Stack { children, .. }

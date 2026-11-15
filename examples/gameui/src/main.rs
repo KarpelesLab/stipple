@@ -276,14 +276,13 @@ fn hints<S>(cx: &Cx<S>) -> Element {
 
 fn title(cx: &mut Cx<Game>) -> Element {
     let handle = cx.handle();
-    let menu = gui::menu_list(cx, |cx| {
-        vec![
+    let menu = gui::menu_list(cx)
+        .children(vec![
             gui::menu_button(cx, "Start", Game::start),
             gui::menu_button(cx, "Settings", Game::open_settings),
             gui::menu_button(cx, "Quit", move |_| handle.exit()),
-        ]
-    })
-    .width(320.0);
+        ])
+        .width(320.0);
     TitleScreen::new("STARLIT COURIER", menu)
         .subtitle("deliveries across the comet belt")
         .footer(hints(cx))
@@ -513,17 +512,16 @@ fn play(g: &Game, cx: &mut Cx<Game>, theme: &Theme, visible: bool) -> Element {
     ])
     .padding(Insets::uniform(theme.spacing.lg));
     if g.screen == Screen::Play && g.paused {
-        let buttons = vec![
-            gui::menu_button(cx, "Resume", |g| g.paused = false),
-            gui::menu_button(cx, "Options", Game::open_settings),
-            gui::menu_button(cx, "Quit to title", |g| {
-                g.paused = false;
-                g.screen = Screen::Title;
-            }),
-        ];
-        gui::pause_menu(cx, "Paused", buttons, |g| {
-            g.paused = false;
-        });
+        gui::pause_menu(cx, "Paused", |g| g.paused = false)
+            .children(vec![
+                gui::menu_button(cx, "Resume", |g| g.paused = false),
+                gui::menu_button(cx, "Options", Game::open_settings),
+                gui::menu_button(cx, "Quit to title", |g| {
+                    g.paused = false;
+                    g.screen = Screen::Title;
+                }),
+            ])
+            .open(cx);
     }
     gui::hud(
         canvas,
@@ -543,15 +541,14 @@ fn portrait(theme: &Theme) -> Element {
 }
 
 fn game_over(g: &Game, cx: &mut Cx<Game>) -> Element {
-    let menu = gui::menu_list(cx, |cx| {
-        vec![
+    let menu = gui::menu_list(cx)
+        .children(vec![
             gui::menu_button(cx, "Try again", Game::start),
             gui::menu_button(cx, "Title screen", |g| {
                 g.screen = Screen::Title;
             }),
-        ]
-    })
-    .width(320.0);
+        ])
+        .width(320.0);
     let minutes = (g.played / 60.0) as u32;
     let seconds = (g.played % 60.0) as u32;
     GameOverScreen::new("HULL BREACHED", menu)

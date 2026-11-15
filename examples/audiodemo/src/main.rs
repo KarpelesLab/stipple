@@ -179,54 +179,52 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     };
     let music_on = state.music.as_ref().is_some_and(Voice::is_playing);
     let stats = state.audio.stats();
-    panel(cx, |cx| {
-        vec![
-            heading(cx, "Audio"),
-            label(
-                cx,
-                format!(
-                    "Output: {} at {} Hz · {} voices",
-                    state.audio.backend(),
-                    state.audio.rate(),
-                    stats.voices
-                ),
+    panel(cx).children(vec![
+        heading(cx, "Audio"),
+        label(
+            cx,
+            format!(
+                "Output: {} at {} Hz · {} voices",
+                state.audio.backend(),
+                state.audio.rate(),
+                stats.voices
             ),
-            row(vec![
-                effect(cx, "Coin", |f| &f.coin),
-                effect(cx, "Jump", |f| &f.jump),
-                effect(cx, "Laser", |f| &f.laser),
-                effect(cx, "Explosion", |f| &f.explosion),
-            ])
-            .gap(theme.spacing.sm),
-            slider_row(cx, &theme, "Pan", state.pan, |s, v| s.pan = v),
-            row(vec![
-                button(cx, if music_on { "Stop music" } else { "Play music" })
-                    .on_tap(cx, |s| s.toggle_music()),
-                button(
-                    cx,
-                    if state.paused {
-                        "Resume all"
-                    } else {
-                        "Pause all"
-                    },
-                )
-                .on_tap(cx, |s| {
-                    s.paused = !s.paused;
-                    if s.paused {
-                        s.audio.pause_all();
-                    } else {
-                        s.audio.resume_all();
-                    }
-                }),
-            ])
-            .gap(theme.spacing.sm),
-            slider_row(cx, &theme, "Master", state.master, |s, v| s.master = v),
-            slider_row(cx, &theme, "Music", state.music_volume, |s, v| {
-                s.music_volume = v
+        ),
+        row(vec![
+            effect(cx, "Coin", |f| &f.coin),
+            effect(cx, "Jump", |f| &f.jump),
+            effect(cx, "Laser", |f| &f.laser),
+            effect(cx, "Explosion", |f| &f.explosion),
+        ])
+        .gap(theme.spacing.sm),
+        slider_row(cx, &theme, "Pan", state.pan, |s, v| s.pan = v),
+        row(vec![
+            button(cx, if music_on { "Stop music" } else { "Play music" })
+                .on_tap(cx, |s| s.toggle_music()),
+            button(
+                cx,
+                if state.paused {
+                    "Resume all"
+                } else {
+                    "Pause all"
+                },
+            )
+            .on_tap(cx, |s| {
+                s.paused = !s.paused;
+                if s.paused {
+                    s.audio.pause_all();
+                } else {
+                    s.audio.resume_all();
+                }
             }),
-            slider_row(cx, &theme, "Effects", state.effects, |s, v| s.effects = v),
-        ]
-    })
+        ])
+        .gap(theme.spacing.sm),
+        slider_row(cx, &theme, "Master", state.master, |s, v| s.master = v),
+        slider_row(cx, &theme, "Music", state.music_volume, |s, v| {
+            s.music_volume = v
+        }),
+        slider_row(cx, &theme, "Effects", state.effects, |s, v| s.effects = v),
+    ])
 }
 
 /// Play for half a second and check the output kept pace.

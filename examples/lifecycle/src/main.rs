@@ -100,12 +100,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         let keep = button(cx, "Keep open").on_tap(cx, |s| {
             s.confirm = None;
         });
-        children.push(panel(cx, |cx| {
-            vec![
-                label(cx, text),
-                row(vec![close, keep]).gap(theme.spacing.sm),
-            ]
-        }));
+        children.push(panel(cx).children(vec![
+            label(cx, text),
+            row(vec![close, keep]).gap(theme.spacing.sm),
+        ]));
     }
     column(children)
         .gap(theme.spacing.md)

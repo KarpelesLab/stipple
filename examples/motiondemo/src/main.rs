@@ -96,12 +96,10 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
         // Shift by `offset` within a margin as wide as the swing.
         .padding(Insets::new(0.0, SHAKE - offset, 0.0, SHAKE + offset));
     let check = button(cx, "Check").on_tap(cx, |s| s.submit(anim::now()));
-    let shaker = panel(cx, |cx| {
-        vec![
-            label(cx, "Enter a 4-digit code:"),
-            row(vec![field, check]).gap(theme.spacing.md),
-        ]
-    });
+    let shaker = panel(cx).children(vec![
+        label(cx, "Enter a 4-digit code:"),
+        row(vec![field, check]).gap(theme.spacing.md),
+    ]);
 
     // A pulsing drop target.
     let glow = match s.pulse_from {
@@ -128,9 +126,9 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
             None => Some(anim::now()),
         }
     });
-    let pulser = panel(cx, |_| {
-        vec![row(vec![target.grow(1.0), toggle]).gap(theme.spacing.md)]
-    });
+    let pulser = panel(cx).children(vec![
+        row(vec![target.grow(1.0), toggle]).gap(theme.spacing.md),
+    ]);
 
     // A staggered list.
     let items = ITEMS
@@ -146,7 +144,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
         })
         .collect();
     let replay = button(cx, "Replay").on_tap(cx, |s| s.list_at = anim::now());
-    let list = panel(cx, |_| vec![replay, column(items).gap(4.0)]);
+    let list = panel(cx).children(vec![replay, column(items).gap(4.0)]);
 
     // An interruptible spring: click twice quickly and it turns round.
     let knob_x = cx.animate(&s.knob);
@@ -166,9 +164,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
         .border(p.border, 1.0)
         .radius(18.0)
         .on_tap(cx, |s| s.toggle_knob(anim::now()));
-    let spring = panel(cx, |cx| {
-        vec![label(cx, "Click the track (twice, quickly):"), track]
-    });
+    let spring = panel(cx).children(vec![label(cx, "Click the track (twice, quickly):"), track]);
 
     column(vec![heading(cx, "Motion"), shaker, pulser, list, spring])
         .gap(theme.spacing.md)

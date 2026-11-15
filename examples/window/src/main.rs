@@ -117,7 +117,7 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
         children.push(divider(cx));
         children.push(controls(state, cx));
     }
-    let card = panel(cx, |_| children).width(360.0);
+    let card = panel(cx).children(children).width(360.0);
     column(vec![card])
         .grow(1.0)
         .align(Align::Center, Align::Center)

@@ -26,8 +26,8 @@ fn btn<S>(cx: &mut Cx<S>, text: &str, on_tap: impl FnMut(&mut S) + 'static) -> E
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let theme = *cx.theme();
-    let card = panel(cx, |cx| {
-        vec![
+    let card = panel(cx)
+        .children(vec![
             row(vec![
                 btn(cx, "Menu", |s| s.menu_open = true),
                 btn(cx, "Dialog", |s| s.dialog_open = true),
@@ -42,9 +42,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
                     format!("Picked: {}", state.picked)
                 },
             ),
-        ]
-    })
-    .width(420.0);
+        ])
+        .width(420.0);
 
     // Dropdown anchored just below the Menu button (fixed point for the demo).
     if state.menu_open {
@@ -59,18 +58,19 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
 
     // Modal confirmation dialog.
     if state.dialog_open {
-        let body = label(cx, "Apply changes?");
-        let actions = vec![
-            button(cx, "Cancel")
-                .on_tap(cx, |s| s.dialog_open = false)
-                .width(96.0)
-                .height(36.0),
-            button(cx, "OK")
-                .on_tap(cx, |s| s.dialog_open = false)
-                .width(96.0)
-                .height(36.0),
-        ];
-        open_dialog(cx, "Confirm", body, actions, |s| s.dialog_open = false);
+        dialog(cx, "Confirm", |s| s.dialog_open = false)
+            .child(label(cx, "Apply changes?"))
+            .actions(vec![
+                button(cx, "Cancel")
+                    .on_tap(cx, |s| s.dialog_open = false)
+                    .width(96.0)
+                    .height(36.0),
+                button(cx, "OK")
+                    .on_tap(cx, |s| s.dialog_open = false)
+                    .width(96.0)
+                    .height(36.0),
+            ])
+            .open(cx);
     }
 
     column(vec![card])

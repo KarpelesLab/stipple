@@ -357,13 +357,9 @@ fn a_closing_dialog_fades_with_its_scrim_which_no_longer_blocks() {
     };
     let mut app = App::new(state, move |s: &S, cx: &mut Cx<S>| {
         if s.open {
-            crate::widgets::open_dialog(
-                cx,
-                "Title",
-                Element::stack(Axis::Vertical, vec![]),
-                vec![],
-                |s| s.open = false,
-            );
+            crate::widgets::dialog(cx, "Title", |s| s.open = false)
+                .child(Element::stack(Axis::Vertical, vec![]))
+                .open(cx);
         }
         Element::stack(Axis::Vertical, vec![])
             .width(300.0)

@@ -42,12 +42,11 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
         })
         .collect();
     let content = column(items).gap(theme.spacing.sm);
-    let viewport = scroll(cx, 240.0, |_| content).width(340.0);
+    let viewport = scroll(cx, 240.0).child(content).width(340.0);
 
-    let card = panel(cx, |cx| {
-        vec![label(cx, "Scrollable list"), divider(cx), viewport]
-    })
-    .width(360.0);
+    let card = panel(cx)
+        .children(vec![label(cx, "Scrollable list"), divider(cx), viewport])
+        .width(360.0);
     column(vec![card]).grow(1.0).align(
         stipple::prelude::Align::Center,
         stipple::prelude::Align::Center,

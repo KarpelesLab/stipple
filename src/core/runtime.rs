@@ -686,8 +686,8 @@ impl<'a, S> Cx<'a, S> {
     /// use stipple::prelude::*;
     /// fn view(_: &(), cx: &mut Cx<()>) -> Element {
     ///     row(vec![
-    ///         cx.themed(Theme::light(), |cx| panel(cx, |cx| vec![label(cx, "Light")])),
-    ///         cx.themed(Theme::dark(), |cx| panel(cx, |cx| vec![label(cx, "Dark")])),
+    ///         cx.themed(Theme::light(), |cx| panel(cx).children(vec![label(cx, "Light")])),
+    ///         cx.themed(Theme::dark(), |cx| panel(cx).children(vec![label(cx, "Dark")])),
     ///     ])
     /// }
     /// # let theme = Theme::light();

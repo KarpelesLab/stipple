@@ -142,11 +142,25 @@ fn clamp_unit(v: f64) -> f64 {
     }
 }
 
-/// A split pane: `first` and `second` side by side (or stacked, per the
+/// A split pane: two panes side by side (or stacked, per the
 /// [`SplitPane`]'s axis), with a divider between them that the pointer drags
-/// and the arrow keys move while it has focus. Each pane is clipped to its
-/// share. The split grows to fill its container (`grow(1.0)`); a vertical
-/// split needs a height from its container to share out.
+/// and the arrow keys move while it has focus. Give it its two panes with
+/// [`panes`](Split::panes):
+///
+/// ```
+/// use stipple::prelude::*;
+/// struct App { sidebar: SplitPane }
+/// fn view(state: &App, cx: &mut Cx<App>) -> Element {
+///     split_pane(cx, &state.sidebar, |s| &mut s.sidebar)
+///         .panes(label(cx, "Navigation"), label(cx, "Content"))
+/// }
+/// # let theme = Theme::light();
+/// # let _ = view(&App { sidebar: SplitPane::horizontal(0.3) }, &mut Cx::new(&theme));
+/// ```
+///
+/// Each pane is clipped to its share. The split grows to fill its container
+/// (`grow(1.0)`); a vertical split needs a height from its container to
+/// share out.
 ///
 /// `field` is an accessor returning the [`SplitPane`] inside the app state.
 ///
@@ -157,15 +171,10 @@ pub fn split_pane<S>(
     cx: &mut Cx<S>,
     state: &SplitPane,
     field: impl Fn(&mut S) -> &mut SplitPane + Copy + 'static,
-    first: Element,
-    second: Element,
-) -> Element {
+) -> Split {
     let theme = &super::theme_of(cx);
     let p = &theme.palette;
     let rtl = theme.is_rtl();
-    let f = state.fraction;
-    let tracks = vec![Track::fr(f), Track::px(HANDLE), Track::fr(1.0 - f)];
-    let pane = |content: Element| Element::stack(Axis::Vertical, vec![content]).clip();
     // A hairline along the divider, broken by a short grip in its middle.
     let (cross, grip) = match state.axis {
         Axis::Horizontal => (Axis::Vertical, (3.0, 24.0)),
@@ -190,12 +199,37 @@ pub fn split_pane<S>(
             field(s).apply(&super::logical_key(rtl, k));
         })
         .on_drag_motion(cx, move |s, m| field(s).drag(m));
-    let children = vec![pane(first), handle, pane(second)];
-    let grid = match state.axis {
-        Axis::Horizontal => Element::grid(tracks, children).rows(vec![Track::fr(1.0)]),
-        Axis::Vertical => Element::grid(vec![Track::fr(1.0)], children).rows(tracks),
-    };
-    grid.grow(1.0)
+    Split {
+        axis: state.axis,
+        fraction: state.fraction,
+        handle,
+    }
+}
+
+/// A [`split_pane`] waiting for its two panes: [`panes`](Self::panes)
+/// makes it an element.
+#[derive(Debug)]
+#[must_use = "a split pane shows once `.panes(first, second)` makes it an element"]
+pub struct Split {
+    axis: Axis,
+    fraction: f64,
+    handle: Element,
+}
+
+impl Split {
+    /// The split with `first` and `second` either side of its divider (left
+    /// and right, or top and bottom).
+    pub fn panes(self, first: Element, second: Element) -> Element {
+        let f = self.fraction;
+        let tracks = vec![Track::fr(f), Track::px(HANDLE), Track::fr(1.0 - f)];
+        let pane = |content: Element| Element::stack(Axis::Vertical, vec![content]).clip();
+        let children = vec![pane(first), self.handle, pane(second)];
+        let grid = match self.axis {
+            Axis::Horizontal => Element::grid(tracks, children).rows(vec![Track::fr(1.0)]),
+            Axis::Vertical => Element::grid(vec![Track::fr(1.0)], children).rows(tracks),
+        };
+        grid.grow(1.0)
+    }
 }
 
 #[cfg(test)]
@@ -263,7 +297,7 @@ mod tests {
             |s: &State, cx: &mut Cx<State>| {
                 let a = Element::boxed(BoxStyle::default()).height(10.0);
                 let b = Element::boxed(BoxStyle::default()).height(10.0);
-                super::super::row(vec![split_pane(cx, &s.split, |s| &mut s.split, a, b)])
+                super::super::row(vec![split_pane(cx, &s.split, |s| &mut s.split).panes(a, b)])
                     .align(Align::Start, Align::Stretch)
             },
         )

@@ -87,7 +87,7 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     )
     .gap(sp.xs);
 
-    let grid_panel = panel(cx, |cx| vec![form, divider(cx), tracks]);
+    let grid_panel = panel(cx).children(vec![form, divider(cx), tracks]);
 
     let tags = [
         "layout",
@@ -106,7 +106,7 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     let wrapped = row(tags.iter().map(|t| chip(cx, t)).collect())
         .wrap()
         .gap(sp.sm);
-    let wrap_panel = panel(cx, |cx| vec![heading(cx, "Wrap"), wrapped]);
+    let wrap_panel = panel(cx).children(vec![heading(cx, "Wrap"), wrapped]);
 
     // Both grow; the first stops at its max and the second takes the rest.
     let grow_bars = row(vec![
@@ -129,9 +129,12 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
          panel's edge.",
     )
     .max_width(260.0);
-    let constraints_panel = panel(cx, |cx| {
-        vec![heading(cx, "Constraints"), grow_bars, shrink_bars, capped]
-    });
+    let constraints_panel = panel(cx).children(vec![
+        heading(cx, "Constraints"),
+        grow_bars,
+        shrink_bars,
+        capped,
+    ]);
 
     let page = grid(
         vec![Track::fr(1.0), Track::fr(1.0)],

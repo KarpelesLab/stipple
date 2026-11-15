@@ -59,7 +59,7 @@ fn title(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
         let handle = cx.handle();
         buttons.push(gui::menu_button(cx, "Quit", move |_| handle.exit()));
     }
-    let menu = gui::menu_list(cx, |_| buttons).width(320.0);
+    let menu = gui::menu_list(cx).children(buttons).width(320.0);
     let footer = column(vec![
         Element::text(
             if g.best > 0 {
@@ -208,15 +208,16 @@ fn hud(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     .align(Align::Start, Align::Start)
     .padding(Insets::uniform(theme.spacing.md));
     if g.screen == Screen::Play && g.paused {
-        let buttons = vec![
-            gui::menu_button(cx, "Resume", |g| g.paused = false),
-            gui::menu_button(cx, "Settings", Game::open_settings),
-            gui::menu_button(cx, "Quit to title", |g| {
-                g.paused = false;
-                g.screen = Screen::Title;
-            }),
-        ];
-        gui::pause_menu(cx, "Paused", buttons, |g| g.paused = false);
+        gui::pause_menu(cx, "Paused", |g| g.paused = false)
+            .children(vec![
+                gui::menu_button(cx, "Resume", |g| g.paused = false),
+                gui::menu_button(cx, "Settings", Game::open_settings),
+                gui::menu_button(cx, "Quit to title", |g| {
+                    g.paused = false;
+                    g.screen = Screen::Title;
+                }),
+            ])
+            .open(cx);
     }
     Element::layers(vec![
         column(vec![top, spacer()]),
@@ -227,13 +228,12 @@ fn hud(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
 }
 
 fn game_over(g: &Game, cx: &mut Cx<Game>) -> Element {
-    let menu = gui::menu_list(cx, |cx| {
-        vec![
+    let menu = gui::menu_list(cx)
+        .children(vec![
             gui::menu_button(cx, "Play again", Game::start),
             gui::menu_button(cx, "Title screen", |g| g.screen = Screen::Title),
-        ]
-    })
-    .width(320.0);
+        ])
+        .width(320.0);
     let stage = g.stage.borrow();
     let w = &stage.world;
     let secs = w.time as u32;

@@ -47,8 +47,8 @@ fn setting_row<S>(cx: &Cx<S>, accent: Color, action: &str) -> Element {
 }
 
 fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
-    let card = panel(cx, |cx| {
-        vec![
+    let card = panel(cx)
+        .children(vec![
             label(cx, "Stipple on the GPU"),
             divider(cx),
             setting_row(cx, Color::rgb(0xef, 0x68, 0x68), "Edit"),
@@ -63,9 +63,8 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
             ])
             .gap(16.0),
             button(cx, "OK"),
-        ]
-    })
-    .width(360.0);
+        ])
+        .width(360.0);
     column(vec![card])
         .grow(1.0)
         .align(Align::Center, Align::Center)

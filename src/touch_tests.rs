@@ -41,7 +41,7 @@ fn app() -> App<Log> {
                     .on_tap(cx, move |s| s.tapped.push(100 + i))
             })
             .collect();
-        let mut items = vec![scroll_horizontal(cx, 300.0, |_| row(chips)).height(40.0)];
+        let mut items = vec![scroll_horizontal(cx, 300.0).children(chips).height(40.0)];
         for i in 0..20 {
             let mut item = button(cx, "")
                 .width(300.0)
@@ -65,7 +65,7 @@ fn app() -> App<Log> {
                 s.pinches
                     .push((ev.phase, ev.scale, ev.translation, ev.centroid))
             });
-        column(vec![scroll(cx, 300.0, |_| column(items)), photo])
+        column(vec![scroll(cx, 300.0).children(items), photo])
     })
     .no_font()
     .logical_size(Size::new(300.0, 400.0))

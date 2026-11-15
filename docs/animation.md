@@ -405,7 +405,7 @@ scales and offsets entrances start from:
 | `indicator` | the tab bar's accent strip and the segmented tabs' fill sliding to the selected tab |
 | `popup`, `popup_scale`, `popup_offset` | select lists, drawn menus, `open_menu` and the tab bar's list opening, tooltips showing |
 | `popup_exit` | those closing: fading out as they shrink back toward `popup_scale` and `popup_offset` |
-| `dialog`, `dialog_scale` | the drawn message box and `open_dialog` opening |
+| `dialog`, `dialog_scale` | the drawn message box and `dialog` opening |
 | `dialog_exit` | those closing, their scrim fading with them |
 | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` | toasts coming and going |
 | `disclosure` | tree disclosure triangles turning |

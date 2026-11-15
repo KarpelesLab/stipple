@@ -54,7 +54,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         open_menu(cx, at, menu, |s| s.menu_at = None);
     }
 
-    panel(cx, |_| vec![bar, body])
+    panel(cx).children(vec![bar, body])
 }
 
 fn main() {

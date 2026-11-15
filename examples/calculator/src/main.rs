@@ -225,7 +225,7 @@ fn view(state: &Calc, cx: &mut Cx<Calc>) -> Element {
     ])
     .gap(8.0);
 
-    panel(cx, |_| vec![display, keypad])
+    panel(cx).children(vec![display, keypad])
 }
 
 fn main() {

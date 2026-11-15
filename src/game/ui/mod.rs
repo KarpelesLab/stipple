@@ -25,8 +25,8 @@ pub use hud::{
     Typewriter, counter, floating_texts, health_bar, hud, minimap_slot, stat_bar,
 };
 pub use menu::{
-    GameOverScreen, MENU_FOCUS_SCALE, TitleScreen, controls_hint, key_cap, menu_button, menu_list,
-    pause_menu,
+    GameOverScreen, MENU_FOCUS_SCALE, PauseMenu, TitleScreen, controls_hint, key_cap, menu_button,
+    menu_list, pause_menu,
 };
 pub use nav::{REPEAT_DELAY, REPEAT_EVERY, STICK_PRESS, STICK_RELEASE};
 pub use settings::{

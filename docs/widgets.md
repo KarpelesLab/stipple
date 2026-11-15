@@ -43,12 +43,17 @@ fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
   it. On the field: `.placeholder(..)`, `.on_submit(cx, ..)` (Enter, single
   line only) and `.on_change(cx, ..)` (after each edit). `take()` empties it
   and returns the text.
-- **Containers that need the theme** (`panel`, `toolbar`, `scroll`,
-  `scroll_horizontal`, and the game UI's `menu_list` and `setting_row`) build
-  their content in a closure given `cx`: `panel(cx, |cx| vec![…])`. Plain
-  layout (`row`, `column`, `grid`, `spacer`) takes no `cx`.
+- **Containers.** Plain layout takes its children directly and no `cx`:
+  `row(vec![…])`, `column(vec![…])`, `grid(tracks, vec![…])`, `spacer()`.
+  Containers that need `cx` (`panel`, `toolbar`, `scroll`,
+  `scroll_horizontal`, and the game UI's `menu_list` and `setting_row`)
+  return their frame, and you add the children after it:
+  `panel(cx).children(vec![…])`, `scroll(cx, 300.0).child(list)`. The frame
+  is built before the children, so they can use `cx` too. `split_pane`
+  takes its two `.panes(first, second)`, and `dialog` its content and
+  `.actions(…)` before `.open(cx)`.
 - **Another theme for part of a view**, for previews and theme galleries:
-  `cx.themed(Theme::dark(), |cx| panel(cx, |cx| …))`.
+  `cx.themed(Theme::dark(), |cx| panel(cx).children(…))`.
 
 Accessors infer like handlers do, as long as the closure is written in the
 call, after `cx`. A closure kept in a variable first has no `cx` to learn the
@@ -117,7 +122,7 @@ Two panes with a divider between them.
 struct App { sidebar: SplitPane }
 let sidebar = SplitPane::horizontal(0.3).min_sizes(200.0, 300.0); // or ::vertical
 // in the view:
-split_pane(cx, &state.sidebar, |s| &mut s.sidebar, nav, content)
+split_pane(cx, &state.sidebar, |s| &mut s.sidebar).panes(nav(cx), content(cx))
 ```
 
 A horizontal split puts the panes side by side, and a vertical split stacks
@@ -134,7 +139,7 @@ Splits nest: put a vertical split in one pane of a horizontal one.
 A row of compact buttons on a surface strip.
 
 ```rust
-toolbar(cx, |cx| vec![
+toolbar(cx).children(vec![
     tool_button(cx, "Save").on_tap(cx, |s| s.save()),
     tool_separator(cx),
     ToolButton::new("B").selected(state.bold).view(cx).on_tap(cx, |s| s.bold = !s.bold),
@@ -435,7 +440,7 @@ timings and curves in the theme's motion tokens (`theme.motion`, a
 | Drawn menus (the in-window menu bar, submenus and context menus), `open_menu` | each menu grows in from its corner, and shrinks back and fades out as it closes | `popup`, `popup_exit` |
 | `tooltip` | it fades in, and out | `popup`, `popup_exit` |
 | `toasts` | a new toast slides in from the window's edge; a dismissed one slides back out and fades before it goes; the others glide to their new places | `toast_enter`, `toast_exit`, `toast_offset`, `toast_scale` |
-| The drawn message box (`AppHandle::message`), `open_dialog` | it fades in as it scales into place, its scrim fading in with it; closing, it scales back as it fades out with its scrim | `dialog`, `dialog_scale`, `dialog_exit` |
+| The drawn message box (`AppHandle::message`), `dialog` | it fades in as it scales into place, its scrim fading in with it; closing, it scales back as it fades out with its scrim | `dialog`, `dialog_scale`, `dialog_exit` |
 | `tree` | a disclosure triangle turns as its node expands or collapses | `disclosure` |
 | Drop targets (`on_drop`) | the app's "drop here" highlight fades in and out with the target's drag-over level | `DROP_FADE` |
 | Controls the OS draws under `Theme::native()` | the OS's picture of the old state fades into the new one: hover, press and focus; a checkbox, radio or switch flipping | `state`, `toggle` |
@@ -480,7 +485,7 @@ its edge can land just outside it, as with CSS's `:active` scale. Set
 `press_scale` to 1 if that matters.
 
 The stateful widgets remember when something opened in their state; the
-stateless `open_menu`, `open_dialog`, `tooltip` and the drawn message box come
+stateless `open_menu`, `dialog`, `tooltip` and the drawn message box come
 in through the core's enter animations (`Element::enter`, see
 [animation.md](animation.md#enter-exit-and-layout-animations)). Everything
 that closes goes out through the core's exit animations (`Element::exit` on

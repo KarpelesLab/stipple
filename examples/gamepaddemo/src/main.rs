@@ -92,14 +92,13 @@ fn pad_view<S>(cx: &mut Cx<S>, id: GamepadId, info: &GamepadInfo) -> Element {
             .gap(12.0)
         })
         .collect();
-    panel(cx, |cx| {
-        vec![
+    panel(cx)
+        .children(vec![
             heading(cx, describe(id, info)),
             grid(vec![Track::Auto; 6], buttons).gap(6.0),
             column(axes).gap(6.0),
-        ]
-    })
-    .gap(12.0)
+        ])
+        .gap(12.0)
 }
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {

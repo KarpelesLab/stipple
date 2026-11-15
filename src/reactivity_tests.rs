@@ -206,12 +206,12 @@ fn scroll_containers_and_drop_targets_keep_their_ids_too() {
     };
     let mut app = App::new(state, |s: &Panel, cx: &mut Cx<Panel>| {
         // A container before the memoized one takes the first id.
-        let first = crate::widgets::scroll(cx, 50.0, |_| Element::boxed(Default::default()));
+        let first = crate::widgets::scroll(cx, 50.0).child(Element::boxed(Default::default()));
         let builds = s.builds.clone();
         let panel = cx.memo("panel", (), move |cx| {
             builds.set(builds.get() + 1);
             let content = Element::stack(Axis::Vertical, vec![]).height(200.0);
-            let list = crate::widgets::scroll(cx, 50.0, |_| content);
+            let list = crate::widgets::scroll(cx, 50.0).child(content);
             let id = list.scroll.expect("a scroll container");
             // A button that scrolls the list by the id it captured.
             let button = Element::boxed(Default::default())
@@ -568,7 +568,7 @@ fn rows_scrolled_out_of_view_are_not_painted() {
         .collect();
     let theme = Theme::light();
     let mut cx = Cx::<()>::new(&theme);
-    let list = crate::widgets::scroll(&mut cx, 100.0, |_| Element::stack(Axis::Vertical, rows));
+    let list = crate::widgets::scroll(&mut cx, 100.0).child(Element::stack(Axis::Vertical, rows));
     let window = Size::new(100.0, 300.0);
     let mut laid = crate::core::layout(&list, Rect::from_xywh(0.0, 0.0, 100.0, 300.0), None);
     let mut offsets = std::collections::HashMap::new();
@@ -616,7 +616,7 @@ fn list(theme: &Theme, cx: &mut Cx<Bench>, memo: bool) -> Element {
             false => list_row(theme, cx, i),
         })
         .collect();
-    crate::widgets::scroll(cx, 560.0, |_| column(rows))
+    crate::widgets::scroll(cx, 560.0).children(rows)
 }
 
 /// The median time of `frames` frames' build (or animation frame) and their

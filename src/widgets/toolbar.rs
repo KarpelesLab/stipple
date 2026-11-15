@@ -8,22 +8,20 @@ use crate::render::ImageSource;
 /// pixels.
 const ICON: f64 = 18.0;
 
-/// A toolbar: the `items` the closure builds in a row on a surface strip,
-/// vertically centered.
-/// Build the items with [`tool_button`] (and [`ToolButton`] for icons and
-/// toggles) and [`tool_separator`]; any other element works too (a
-/// [`select`], a [`spacer`] to push the rest to the end). Items that don't
-/// fit overflow.
+/// A toolbar: a row on a surface strip, its items vertically centered. Add
+/// them with [`children`](Element::children): [`tool_button`]s (and
+/// [`ToolButton`]s for icons and toggles) and [`tool_separator`]s; any other
+/// element works too (a [`select`], a [`spacer`] to push the rest to the
+/// end). Items that don't fit overflow.
 ///
 /// Self-drawn under every theme, in the theme's colors. Reported to assistive
 /// technologies as a [`Role::Toolbar`] holding its buttons.
 ///
 /// [`select`]: super::select
 /// [`spacer`]: super::spacer
-pub fn toolbar<S>(cx: &mut Cx<S>, items: impl FnOnce(&mut Cx<S>) -> Vec<Element>) -> Element {
-    let items = items(cx);
+pub fn toolbar<S>(cx: &Cx<S>) -> Element {
     let theme = cx.theme();
-    Element::stack(Axis::Horizontal, items)
+    Element::stack(Axis::Horizontal, Vec::new())
         .fill(theme.palette.surface)
         .border(theme.palette.border, 1.0)
         .radius(theme.radius)
@@ -42,7 +40,7 @@ pub fn toolbar<S>(cx: &mut Cx<S>, items: impl FnOnce(&mut Cx<S>) -> Vec<Element>
 /// use stipple::prelude::*;
 /// struct Doc { bold: bool }
 /// fn bar(doc: &Doc, cx: &mut Cx<Doc>) -> Element {
-///     toolbar(cx, |cx| vec![
+///     toolbar(cx).children(vec![
 ///         tool_button(cx, "Save").on_tap(cx, |_| {}),
 ///         tool_separator(cx),
 ///         ToolButton::new("B").selected(doc.bold).view(cx).on_tap(cx, |d| d.bold = !d.bold),
@@ -164,19 +162,17 @@ mod tests {
             .unwrap(),
         );
         let mut app = App::new(State::default(), move |s: &State, cx: &mut Cx<State>| {
-            let bar = toolbar(cx, |cx| {
-                vec![
-                    tool_button(cx, "Save").on_tap(cx, |s| s.saved += 1),
-                    tool_separator(cx),
-                    ToolButton::new("B")
-                        .selected(s.bold)
-                        .view(cx)
-                        .on_tap(cx, |s| s.bold = !s.bold),
-                    ToolButton::from_icon(&svg, "Delete")
-                        .view(cx)
-                        .on_tap(cx, |_| {}),
-                ]
-            });
+            let bar = toolbar(cx).children(vec![
+                tool_button(cx, "Save").on_tap(cx, |s| s.saved += 1),
+                tool_separator(cx),
+                ToolButton::new("B")
+                    .selected(s.bold)
+                    .view(cx)
+                    .on_tap(cx, |s| s.bold = !s.bold),
+                ToolButton::from_icon(&svg, "Delete")
+                    .view(cx)
+                    .on_tap(cx, |_| {}),
+            ]);
             super::super::column(vec![bar])
         })
         .no_font()

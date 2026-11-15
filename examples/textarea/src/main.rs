@@ -15,10 +15,9 @@ fn view(state: &Form, cx: &mut Cx<Form>) -> Element {
     let area = text_area(cx, &state.buffer, |s| &mut s.buffer)
         .height(200.0)
         .placeholder("Write a few lines…");
-    panel(cx, |cx| {
-        vec![label(cx, "Multi-line editor (Tab to focus):"), area]
-    })
-    .padding(Insets::uniform(32.0))
+    panel(cx)
+        .children(vec![label(cx, "Multi-line editor (Tab to focus):"), area])
+        .padding(Insets::uniform(32.0))
 }
 
 fn main() {

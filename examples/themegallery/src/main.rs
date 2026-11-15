@@ -12,8 +12,8 @@ const H: f64 = 300.0;
 /// A representative card: heading, the four button variants, and status swatches.
 fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     let t = *cx.theme();
-    let card = panel(cx, |cx| {
-        vec![
+    let card = panel(cx)
+        .children(vec![
             heading(cx, "Stipple"),
             label(cx, "Theme customization"),
             divider(cx),
@@ -35,9 +35,8 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
                 swatch(t.palette.danger, 28.0, t.radius / 2.0),
             ])
             .gap(t.spacing.sm),
-        ]
-    })
-    .width(320.0);
+        ])
+        .width(320.0);
     column(vec![card])
         .grow(1.0)
         .align(Align::Center, Align::Center)
