@@ -1,6 +1,6 @@
 # CI and screenshots
 
-Three workflows run on every push and pull request:
+Four workflows run on every push and pull request:
 
 - **CI**: `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test`;
   the 1.88 minimum Rust version; and cross-compiling for Android and iOS.
@@ -14,6 +14,10 @@ Three workflows run on every push and pull request:
   emulator. It also packages `touchdemo` and `androiddemo` for the stores
   with [`cargo-stipple`](packaging.md) (an `.ipa` and a simulator `.app`, an
   `.aab` and a universal APK) and checks the results.
+- **Perf**: the benchmarks (`examples/bench`, and in headless Chrome
+  `tools/bench/`) on Linux, macOS, Windows and the web, on the software
+  renderer and each platform's GPU renderer, compared with the committed
+  baselines and the latency budgets; see [Performance](#performance).
 - **Release-plz**: on `master`, opens release pull requests and publishes to
   crates.io when one is merged.
 
@@ -33,6 +37,28 @@ images therefore always show what the code on `master` renders.
 
 To publish a new screenshot, upload it as an artifact from its job, add its name
 to the list in `commit-screenshots`, and add that job to the list it `needs`.
+
+## Performance
+
+The Perf workflow (`.github/workflows/perf.yml`) runs
+[the benchmarks](performance.md#benchmarks) on every push and pull request:
+
+| Job | Software renderer | GPU renderer |
+|---|---|---|
+| Linux (`ubuntu-latest`) | blocking | GLES2 on Mesa's llvmpipe |
+| macOS (`macos-latest`) | reports | Metal |
+| Windows (`windows-latest`) | reports | Direct3D 11 on WARP |
+| Web (headless Chrome on Linux) | reports | WebGL2 and WebGPU on SwiftShader |
+
+Each comparison (`tools/bench/compare.py`) writes a table to the run's
+**summary** (the run's page on GitHub, under the jobs): baseline, expected
+(the baseline scaled by the two runs' calibration loops), now, delta, budget.
+A scenario that regresses past its threshold or breaks a budget is measured
+again, and fails only if it does both times. The JSON reports are the run's
+artifacts. Only the Linux software renderer fails the run; the rest report
+(their jobs are `continue-on-error`) until their numbers prove steady. To
+make a run's numbers the baselines, run the workflow by hand with
+**update_baseline** ticked: its last job commits them to `perf/baseline/`.
 
 ## Gotchas
 

@@ -375,3 +375,7 @@ needs = "A desktop: files and text dropped from other apps (the web backend does
 [native.fontdemo]
 description = "System fonts by family name, bold and italic faces (real or synthesized), a fallback chain, terminal metrics, and text decorations (underline styles, strikethrough, overline, colors)."
 needs = "System fonts, found by family name; the web has only the font the page loads."
+
+[native.bench]
+description = "Stipple's benchmarks: frames, interactions, sprites, layout and text, timed on the software and GPU renderers, with a JSON report (docs/performance.md#benchmarks)."
+needs = "A terminal: it prints a table and writes JSON. In the browser it runs from tools/bench/ instead."

@@ -207,6 +207,12 @@ name = "cameraview_android"
 path = "examples/cameraview/android.rs"
 crate-type = ["cdylib"]
 
+# The benchmark in the browser (tools/bench/index.html; not on the site).
+[[example]]
+name = "bench_web"
+path = "examples/bench/web.rs"
+crate-type = ["cdylib"]
+
 # The examples in the browser (the site's live examples): each NAME_web
 # compiles examples/NAME/main.rs, through web.rs, as a wasm module that
 # web/stipple.js runs. tools/site/examples.toml lists them.

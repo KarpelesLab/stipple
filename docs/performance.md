@@ -131,3 +131,89 @@ lowering it, comparing it with the last one and keeping a copy are walks over
 every element. A memoized subtree saves building and laying out, not those
 walks; a view with very cheap rows gains little from it, one with costly rows
 (formatting, data work) much more.
+
+## Benchmarks
+
+`examples/bench` times what a user feels, on the software renderer and on
+the GPU one, and CI runs it on every push (the Perf workflow, see
+[CI](ci.md#performance)). Each scenario runs a fixed number of iterations
+after a warm-up, with fixed sizes and a fixed seed, and reports the median
+and the 95th percentile:
+
+| Scenario | What is timed |
+|---|---|
+| `first_frame_1x`, `first_frame_2x` | The whole first frame of a window of widgets (a toolbar, a text field, 32 rows of checkboxes, switches, sliders, buttons and progress bars, a 10,000-row `virtual_list`), 1024×768 at scale 1 and 2 |
+| `hover` | The pointer moving onto another button, to the frame ready; and the pixels rasterized (only the damage is) |
+| `scroll_list` | A wheel step (48 px) over the 10,000-row list, to the frame ready |
+| `type_char` | A character typed into the focused text field, to the frame ready |
+| `theme_switch` | A click on a button switching light and dark, to the frame ready |
+| `sprites_2000` | 2000 32×32 sprites over a 1920×1080 background (the `spritedemo --bench` scene) |
+| `layout_tree` | Laying out a tree of ~4,000 elements |
+| `text_layout`, `text_layout_cold`, `text_layout_cjk` | Laying out a 400-word paragraph wrapped at 560 px: with shaping cached, with a font just loaded, and 1,200 Japanese characters through the system's CJK fallback (when there is one) |
+| `startup` | Loading the system font, making the app and drawing its first frame |
+| `calibration` | A fixed CPU loop: how fast the machine was during the run |
+
+"To the frame ready" is the event and the frame that answers it, presented
+as a window's frame is ([`App::present_frame`](https://docs.rs/stipple/latest/stipple/struct.App.html#method.present_frame)):
+built, laid out, painted, and rasterized (only the damage, on the CPU) or
+drawn on the GPU and read back. Layout and text don't draw, so they run
+with the software renderer only.
+
+```sh
+cargo run --release --example bench                                   # the software renderer
+cargo run --release --example bench --features mtl -- --renderer metal  # gl (--features gl), d3d11 (--features d3d)
+cargo run --release --example bench -- --only hover,type_char --json out.json
+```
+
+`--quick` runs a third of the iterations, `--list` names the scenarios.
+Asking for a GPU renderer the machine doesn't have measures the software
+one instead, and the report says so (`gpu_unavailable`). The JSON holds
+each scenario's median, p95, minimum and samples, and the run's
+`calibration_ms`.
+
+**In the browser**, the same scenarios run in the wasm module on the
+software renderer (its GPU renderers draw into the page's canvas only), and
+the page also runs the app live and times events dispatched to the canvas
+(a hover, a wheel step, a key, a click on "Theme") to the next frame
+presented after them: `web_hover`, `web_scroll_list`, `web_type_char`,
+`web_theme_switch`, as `median_ms` (which includes waiting for the display's
+next frame) and `work_ms` (the time in the event handler and the frame
+callback), on the software renderer, WebGL2 and WebGPU:
+
+```sh
+cargo build --release --target wasm32-unknown-unknown --features gpu --example bench_web
+python3 tools/bench/run_web.py --out target/bench                 # software, webgl2, webgpu
+python3 tools/bench/run_web.py --renderer software --swiftshader  # as on CI: no GPU, SwiftShader
+```
+
+### Baselines and budgets
+
+`tools/bench/compare.py` compares a run with its baseline,
+`perf/baseline/<runner>-<renderer>.json` (`linux`, `macos`, `windows`,
+`web` × `software`, `gl`, `metal`, `d3d11`, `webgl2`, `webgpu`). The
+baseline's median is first scaled by how fast each machine was (the ratio
+of the two runs' `calibration_ms`, clamped to 1/3–3), then a scenario fails
+when it is more than its threshold times that (1.5× by default) *and* more
+than `min_delta_ms` slower. With `--rerun`, the failing scenarios are
+measured again and only one that fails both times fails the check. A
+missing baseline records only; a `"provisional": true` one reports without
+failing.
+
+The budgets are hard limits, whatever the baseline: on the desktop runners,
+`hover` and `type_char` must be ready within 16 ms (one frame at 60 Hz) on
+the software renderer and Metal; `scroll_list` (16 ms) and `theme_switch`
+(100 ms) warn for now, as do the browser's `web_hover` and `web_type_char`
+work (16 ms). Thresholds and budgets live in `perf/budgets.json`.
+
+To take new baselines, run the Perf workflow by hand with
+**update_baseline** ticked (it commits the run's reports to
+`perf/baseline/`), or download a run's reports and copy them in:
+
+```sh
+python3 tools/bench/update_baseline.py --run <run id>       # needs gh
+python3 tools/bench/update_baseline.py --from target/bench --provisional --note "my machine"
+```
+
+Each workflow run's summary shows the tables (baseline, expected after
+scaling, now, delta, budget), and its artifacts hold the JSON (`perf-linux`,
+`perf-macos`, `perf-windows`, `perf-web`).

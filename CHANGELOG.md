@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Benchmarks on every push: `examples/bench` times a window of widgets'
+  first frame (1x, 2x), a hover (and the pixels it rasterizes), a wheel step
+  over a 10,000-row `virtual_list`, a typed character, a theme switch, 2000
+  sprites, layout of a ~4,000-element tree, text layout (cached, cold, CJK)
+  and startup, as medians and p95s after a warm-up, on the software renderer
+  and the platform's GPU one (`--renderer metal|gl|d3d11`), with a JSON
+  report. `tools/bench/` runs it in headless Chrome, plus events dispatched
+  to the running app timed to the next presented frame on software, WebGL2
+  and WebGPU. `tools/bench/compare.py` checks a run against
+  `perf/baseline/<runner>-<renderer>.json` (scaled by a CPU calibration loop
+  in both runs, re-measured before failing) and the latency budgets in
+  `perf/budgets.json`, and writes the table to the GitHub step summary. The
+  new Perf workflow runs it on Linux (software, blocking; GL on llvmpipe),
+  macOS (software, Metal), Windows (software, D3D11 on WARP) and the web.
+  `App::present_frame` presents a frame on a `Surface` as a window does
+  (an animation-only frame without a build, only the damage rasterized),
+  for benchmarks and tests. See `docs/performance.md#benchmarks`.
 - Store packaging (#50): `cargo-stipple` (`tools/package`, Python standard
   library plus a small Rust helper built against the app's own Stipple)
   reads `[package.metadata.stipple]` from the app's `Cargo.toml` (id, name,

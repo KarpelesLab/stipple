@@ -1,0 +1,186 @@
+name: Perf
+
+# Stipple's benchmarks (examples/bench, tools/bench/; see
+# docs/performance.md#benchmarks) on every push and pull request: each
+# scenario's median against the committed baseline
+# (perf/baseline/<runner>-<renderer>.json), and the latency budgets
+# (perf/budgets.json). The tables land in the run's summary; the JSON
+# reports are uploaded as artifacts (perf-<runner>).
+#
+# Blocking: the software renderer on Linux. Everything else reports
+# without failing the run until its numbers have proved steady.
+#
+# To make a run's numbers the new baselines, run this workflow by hand
+# with `update_baseline` ticked (it commits them), or locally
+# `python3 tools/bench/update_baseline.py --run <run id>`.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      update_baseline:
+        description: Commit this run's reports as the new baselines
+        type: boolean
+        default: false
+
+# A newer push to the same branch (or PR) cancels the run still going for the
+# older one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Comparisons report but don't fail while the baselines are being replaced.
+  NO_FAIL: ${{ inputs.update_baseline && '--no-fail' || '' }}
+
+jobs:
+  # The native benchmark, on the software renderer and on the platform's GPU
+  # renderer: GLES2 on Mesa's llvmpipe (Linux), Metal (macOS), Direct3D 11
+  # on WARP (Windows). A machine without the GPU renderer measures the
+  # software one instead and says so; that comparison is skipped.
+  native:
+    name: Perf (${{ matrix.runner }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.runner != 'linux' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, runner: linux, gpu: gl, feature: gl, title: Linux, exe: "" }
+          - { os: macos-latest, runner: macos, gpu: metal, feature: mtl, title: macOS, exe: "" }
+          - { os: windows-latest, runner: windows, gpu: d3d11, feature: d3d, title: Windows, exe: .exe }
+    defaults:
+      run:
+        shell: bash
+    env:
+      BENCH: target/release/examples/bench${{ matrix.exe }}
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Mesa (EGL + GLES on llvmpipe) and a font
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl-dev libgles-dev libegl-mesa0 libgl1-mesa-dri libgbm-dev fonts-dejavu-core
+
+      # Windows has `python`, not `python3`.
+      - name: Find Python
+        run: echo "PYTHON=$(command -v python3 || command -v python)" >> "$GITHUB_ENV"
+
+      - name: Build the benchmark
+        run: cargo build --release --example bench --features ${{ matrix.feature }}
+
+      - name: Software renderer
+        run: |
+          mkdir -p perf-out
+          "$BENCH" --renderer software --runner ${{ matrix.runner }} --json perf-out/${{ matrix.runner }}-software.json
+
+      - name: Compare (software)
+        run: >
+          "$PYTHON" tools/bench/compare.py perf-out/${{ matrix.runner }}-software.json
+          --baseline perf/baseline/${{ matrix.runner }}-software.json
+          --rerun "$BENCH --renderer software --only {only} --json {json}"
+          --summary "$GITHUB_STEP_SUMMARY" --title "${{ matrix.title }} · software" $NO_FAIL
+
+      - name: GPU renderer (${{ matrix.gpu }})
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          "$BENCH" --renderer ${{ matrix.gpu }} --runner ${{ matrix.runner }} --json perf-out/${{ matrix.runner }}-${{ matrix.gpu }}.json
+
+      - name: Compare (${{ matrix.gpu }})
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: >
+          "$PYTHON" tools/bench/compare.py perf-out/${{ matrix.runner }}-${{ matrix.gpu }}.json
+          --baseline perf/baseline/${{ matrix.runner }}-${{ matrix.gpu }}.json
+          --rerun "$BENCH --renderer ${{ matrix.gpu }} --only {only} --json {json}"
+          --summary "$GITHUB_STEP_SUMMARY" --title "${{ matrix.title }} · ${{ matrix.gpu }}" $NO_FAIL
+
+      - name: Upload the reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-${{ matrix.runner }}
+          path: perf-out/*.json
+          if-no-files-found: warn
+
+  # The benchmark in headless Chrome (tools/bench/run_web.py): the scenarios
+  # inside the wasm module on the software renderer, and events dispatched to
+  # the running app timed to the next presented frame on the software
+  # renderer, WebGL2 and WebGPU. The runner has no GPU: WebGL2 and WebGPU run
+  # on SwiftShader (each report records the device), and WebGPU may not come
+  # up at all (the report says so and that comparison is skipped).
+  web:
+    name: Perf (web, Chrome)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install a font
+        run: sudo apt-get update && sudo apt-get install -y fonts-dejavu-core
+
+      - name: Build the benchmark for the browser
+        run: cargo build --release --target wasm32-unknown-unknown --features gpu --example bench_web
+
+      - name: Run in headless Chrome
+        run: python3 tools/bench/run_web.py --swiftshader --percent 50 --runner web --out perf-out
+
+      - name: Compare
+        if: ${{ !cancelled() }}
+        run: |
+          status=0
+          for r in software webgl2 webgpu; do
+            [ -f "perf-out/web-$r.json" ] || { echo "no web-$r.json"; status=1; continue; }
+            python3 tools/bench/compare.py "perf-out/web-$r.json" \
+              --baseline "perf/baseline/web-$r.json" \
+              --rerun "python3 tools/bench/run_web.py --swiftshader --percent 50 --renderer $r --only {only} --json {json}" \
+              --summary "$GITHUB_STEP_SUMMARY" --title "Web (Chrome) · $r" $NO_FAIL || status=1
+          done
+          exit $status
+
+      - name: Upload the reports
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-web
+          path: perf-out/*.json
+          if-no-files-found: warn
+
+  # Run by hand with `update_baseline`: this run's reports become the
+  # baselines, committed to the branch it ran on.
+  update-baseline:
+    name: Update the baselines
+    runs-on: ubuntu-latest
+    needs: [native, web]
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.update_baseline }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: perf-*
+          path: artifacts
+      - name: Copy the reports into perf/baseline
+        run: python3 tools/bench/update_baseline.py --from artifacts --note "Perf workflow run ${{ github.run_id }} (${{ github.sha }})"
+      - name: Commit and push
+        run: |
+          git add perf/baseline
+          if git diff --cached --quiet; then echo "No changes."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "perf: update the baselines from run ${{ github.run_id }}"
+          git push origin "HEAD:${{ github.ref_name }}"

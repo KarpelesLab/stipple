@@ -2654,6 +2654,76 @@ impl<S: 'static> App<S> {
         self.render_frame().0
     }
 
+    /// Present the primary window's next frame on `surface`, as the run loop
+    /// does when a window asks for one, and return its [`Damage`]. Unlike
+    /// [`render_frame`](Self::render_frame), which rasterizes the whole frame
+    /// every time, this takes the window's own path: a frame where only time
+    /// moved a transition is painted without building the view, and on the
+    /// software renderer a frame whose damage is localized re-rasterizes and
+    /// presents only those rectangles (the `damage` argument of
+    /// [`Surface::present`](crate::render::Surface::present)). Nothing is
+    /// presented when nothing changed. For benchmarks and tests of what a
+    /// frame costs in a window
+    /// ([`RasterStats`](crate::render::RasterStats) counts the pixels):
+    ///
+    /// ```
+    /// use stipple::core::Damage;
+    /// use stipple::prelude::*;
+    /// use stipple::render::{RasterStats, Surface};
+    ///
+    /// struct Discard(PhysicalSize);
+    /// impl Surface for Discard {
+    ///     fn resize(&mut self, size: PhysicalSize) { self.0 = size; }
+    ///     fn size(&self) -> PhysicalSize { self.0 }
+    ///     fn present(&mut self, _: &Pixmap, _: &[Rect]) {}
+    /// }
+    ///
+    /// let mut app = App::new(0, |n: &i32, cx: &mut Cx<i32>| {
+    ///     column(vec![
+    ///         button(cx, "Add").on_tap(cx, |n| *n += 1),
+    ///         label(cx, format!("Count: {n}")),
+    ///         spacer().height(400.0),
+    ///     ])
+    /// })
+    /// .logical_size(Size::new(400.0, 500.0));
+    /// let mut window = Discard(PhysicalSize::new(0, 0));
+    /// assert_eq!(app.present_frame(&mut window), Damage::Full);
+    /// assert_eq!(app.present_frame(&mut window), Damage::None);
+    ///
+    /// app.click(Role::Button, "Add");
+    /// RasterStats::take();
+    /// assert!(matches!(app.present_frame(&mut window), Damage::Regions(_)));
+    /// // Only around the label (and the button's press) was drawn again.
+    /// assert!(RasterStats::take().pixels < 400 * 500 / 4);
+    /// ```
+    pub fn present_frame(&mut self, surface: &mut dyn crate::render::Surface) -> Damage {
+        self.run_clipboard_requests(None);
+        self.refresh_theme();
+        self.pump_content();
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            viewport_content,
+            ..
+        } = self;
+        let pane = &mut panes[0];
+        pane.anim_only = pane.animating && !pane.dirty;
+        pane.dirty |= pane.animating && !pane.anim_only;
+        let (scene, damage) = match pane.repaint(theme, font.get(), false) {
+            Some(frame) => frame,
+            None => {
+                let scene = pane.build_frame(state, theme, font.get());
+                (scene, pane.take_damage())
+            }
+        };
+        let phys = pane.scale.to_physical(pane.attrs.logical_size);
+        let shown = damage.clone();
+        pane.present_scene(scene, damage, theme, viewport_content, surface, phys, false);
+        shown
+    }
+
     /// Pretend the primary window reported `insets` as its safe area (as a
     /// phone drawing edge to edge would), for tests.
     #[cfg(test)]

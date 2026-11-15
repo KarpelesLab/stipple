@@ -1,0 +1,41 @@
+{
+  "//": "Read by tools/bench/compare.py; see docs/performance.md#benchmarks. threshold: how many times the baseline's median (scaled by the calibration loop) a scenario may take; min_delta_ms: a smaller slowdown never counts; normalize false: don't scale by the calibration (latencies that wait for the display). budgets: hard limits, whatever the baseline; blocking false only warns.",
+  "threshold": 1.5,
+  "min_delta_ms": 0.3,
+  "scenarios": {
+    "startup": { "threshold": 2.0, "min_delta_ms": 20.0 },
+    "text_layout_cold": { "threshold": 2.0, "min_delta_ms": 5.0 },
+    "first_frame_2x": { "threshold": 1.6 },
+    "web_*": { "normalize": false, "threshold": 1.6, "min_delta_ms": 4.0 },
+    "web_startup": { "normalize": false, "threshold": 2.5, "min_delta_ms": 100.0 }
+  },
+  "budgets": [
+    {
+      "scenarios": ["hover", "type_char"],
+      "ms": 16,
+      "renderers": ["software", "metal"],
+      "platforms": ["linux", "macos", "windows"]
+    },
+    {
+      "scenarios": ["scroll_list"],
+      "ms": 16,
+      "renderers": ["software", "metal"],
+      "platforms": ["linux", "macos", "windows"],
+      "blocking": false
+    },
+    {
+      "scenarios": ["theme_switch"],
+      "ms": 100,
+      "renderers": ["software", "metal"],
+      "platforms": ["linux", "macos", "windows"],
+      "blocking": false
+    },
+    {
+      "scenarios": ["web_hover", "web_type_char"],
+      "metric": "work_ms",
+      "ms": 16,
+      "platforms": ["web"],
+      "blocking": false
+    }
+  ]
+}

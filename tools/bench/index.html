@@ -1,0 +1,253 @@
+<!doctype html>
+<!--
+  Stipple's benchmarks in the browser. bench_web.wasm is the cdylib example
+  `bench_web` (examples/bench, built for wasm32 with `--features gpu`):
+
+  1. On an instance of its own (imports stubbed, as gpucompare.html does) it
+     runs the native benchmark's scenarios (`bench_run`): frames, interactions,
+     sprites, layout and text, on the software renderer.
+  2. It then runs the same module as an app through web/stipple.js, on the
+     renderer asked for (`?renderer=software|webgl2|webgpu|gpu`), and times
+     events dispatched to the canvas (a hover, a click, a key, a wheel step)
+     to the next frame presented after them: `median_ms` is that latency
+     (which includes waiting for the display's next frame), `work_ms` the
+     time spent in the event handler and the frame callback.
+
+  tools/bench/run_web.py serves this page next to stipple.js, gpu.js, the
+  module and font.ttf, runs it in headless Chrome and saves the report. The
+  report is POSTed to /__report as JSON (the format tools/bench/compare.py
+  reads) and shown in the page.
+
+  Parameters: renderer (default software), scenarios=0 (skip step 1),
+  only=a,b (scenarios of step 1), percent=N (iterations, % of the native
+  counts; default 100), events=N (per interaction; default 40),
+  wasm=URL, font=URL.
+-->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>stipple bench</title>
+    <style>
+      body { margin: 8px; font: 13px/1.4 system-ui, sans-serif; background: #fff; color: #111; }
+      #app { width: 1024px; height: 768px; display: block; border: 1px solid #ccc; }
+      pre { white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <pre id="log"></pre>
+    <canvas id="app"></canvas>
+    <script type="module">
+      import { start } from "./stipple.js";
+
+      const params = new URLSearchParams(location.search);
+      const wanted = params.get("renderer") ?? "software";
+      const wasmUrl = params.get("wasm") ?? "bench_web.wasm";
+      const fontUrl = params.get("font") ?? "font.ttf";
+      const events = Number(params.get("events") ?? 40);
+      const out = document.getElementById("log");
+      const say = (line) => {
+        console.log(line);
+        out.textContent += line + "\n";
+      };
+      const report = {
+        schema: 1,
+        tool: "stipple-bench",
+        platform: "web-wasm32",
+        browser: navigator.userAgent,
+        renderer_requested: wanted,
+        renderer: wanted,
+        gpu_unavailable: "",
+        scenarios: [],
+        errors: [],
+      };
+      const finish = async () => {
+        say(JSON.stringify(report, null, 2));
+        document.title = report.errors.length ? "BENCH FAIL" : "BENCH ok";
+        await fetch("/__report", { method: "POST", body: JSON.stringify(report) }).catch(() => {});
+      };
+      window.addEventListener("error", (ev) => report.errors.push(String(ev.message)));
+      window.addEventListener("unhandledrejection", (ev) => report.errors.push(String(ev.reason)));
+
+      const sorted = (xs) => [...xs].sort((a, b) => a - b);
+      const median = (xs) => {
+        const s = sorted(xs);
+        if (!s.length) return null;
+        const m = s.length >> 1;
+        return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+      };
+      const p95 = (xs) => {
+        const s = sorted(xs);
+        return s.length ? s[Math.min(s.length, Math.max(1, Math.ceil(0.95 * s.length))) - 1] : null;
+      };
+      const frame = () => new Promise((r) => requestAnimationFrame(r));
+
+      // What WebGL draws with here (SwiftShader on a CI runner).
+      try {
+        const gl = document.createElement("canvas").getContext("webgl2");
+        const info = gl?.getExtension("WEBGL_debug_renderer_info");
+        report.gpu_device = gl ? String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER)) : "no WebGL2";
+      } catch (_) { report.gpu_device = "unknown"; }
+
+      try {
+        const fontBytes = new Uint8Array(await (await fetch(fontUrl)).arrayBuffer());
+        const module = await WebAssembly.compile(await (await fetch(wasmUrl)).arrayBuffer());
+
+        // 1. The scenarios, on an instance of their own. The calibration
+        // loop always runs (the comparison divides by it).
+        {
+          let e = null;
+          const dec = new TextDecoder();
+          const text = (ptr, len) => dec.decode(new Uint8Array(e.memory.buffer, ptr, len));
+          const own = {
+            now: () => performance.now(),
+            date_now: () => Date.now(),
+            log: (level, ptr, len) => {
+              const m = text(ptr, len);
+              say(`wasm: ${m}`);
+              if (level !== 0) report.errors.push(m);
+            },
+          };
+          // Whatever else the module imports does nothing here.
+          const imports = { stipple: new Proxy(own, { get: (t, k) => t[k] ?? (() => 0) }) };
+          e = (await WebAssembly.instantiate(module, imports)).exports;
+          const pass = (bytes) => {
+            const p = e.bench_alloc(bytes.length);
+            new Uint8Array(e.memory.buffer, p, bytes.length).set(bytes);
+            return [p, bytes.length];
+          };
+          e.bench_font(...pass(fontBytes));
+          const only = params.get("scenarios") === "0" ? "calibration" : (params.get("only") ?? "");
+          const percent = Number(params.get("percent") ?? 100);
+          say(`scenarios: ${only || "all"} at ${percent}%…`);
+          await frame();
+          const len = e.bench_run(...pass(new TextEncoder().encode(only)), percent);
+          if (!len) throw new Error("bench_run made nothing (no font?)");
+          const json = JSON.parse(text(e.bench_out(), len));
+          report.calibration_ms = json.calibration_ms;
+          report.scenarios.push(...json.scenarios);
+        }
+
+        // 2. The app, on the renderer asked for, and events to frames.
+        const t0 = performance.now();
+        const app = await start(document.getElementById("app"), wasmUrl, {
+          font: fontUrl, renderer: wanted, title: false, stateKey: false,
+        });
+        const until = async (what, cond, ms = 10000) => {
+          const t = performance.now();
+          while (!cond()) {
+            if (performance.now() - t > ms) throw new Error(`timed out waiting for ${what}`);
+            await frame();
+          }
+        };
+        await until("the first frame", () => app.stats.presents > 0);
+        const startup = performance.now() - t0;
+        // A GPU comes up asynchronously: give it a moment to take over.
+        if (wanted !== "software") {
+          await until("a GPU frame", () => app.stats.gpuFrames > 0, 5000).catch(() => {});
+        }
+        const drawn = app.renderer;
+        report.renderer = drawn;
+        if (wanted !== "software" && drawn === "software") {
+          report.gpu_unavailable = `${wanted} not available in this browser`;
+        }
+        say(`app: drawing with ${drawn}, first frame after ${startup.toFixed(1)} ms`);
+        const push = (name, latency, work, note = "") => {
+          report.scenarios.push({
+            name, renderer: drawn,
+            median_ms: median(latency), p95_ms: p95(latency), min_ms: sorted(latency)[0],
+            iterations: latency.length, warmup: 3,
+            work_ms: median(work), work_p95_ms: p95(work),
+            ...(note ? { note } : {}),
+            samples_ms: latency.map((v) => Math.round(v * 1000) / 1000),
+          });
+        };
+        push("web_startup", [startup], [startup], "start() to the first frame presented");
+
+        const canvas = () => app.canvas;
+        const node = (role, name) => {
+          const el = [...app.overlay.querySelectorAll("[data-stipple]")]
+            .find((n) => n.getAttribute("role") === role && n.textContent === name);
+          if (!el?._b) throw new Error(`no ${role} "${name}" in the accessibility overlay`);
+          const r = canvas().getBoundingClientRect();
+          const [x, y, w, h] = el._b;
+          return { x: r.left + x + w / 2, y: r.top + y + h / 2 };
+        };
+        const pointer = (type, at, button = -1, buttons = 0) => canvas().dispatchEvent(new PointerEvent(type, {
+          clientX: at.x, clientY: at.y, pointerType: "mouse", pointerId: 1,
+          button, buttons, bubbles: true, cancelable: true,
+        }));
+        const key = (k) => app.input.dispatchEvent(new KeyboardEvent("keydown", {
+          key: k, bubbles: true, cancelable: true,
+        }));
+
+        // One event (`fire`), at the start of a frame, to the next frame
+        // presented after it.
+        const once = (fire) => new Promise((resolve) => {
+          requestAnimationFrame(() => {
+            const before = app.stats.presents;
+            const t = performance.now();
+            fire();
+            const sync = performance.now() - t;
+            const check = (stamp) => {
+              const now = performance.now();
+              if (app.stats.presents > before) {
+                resolve({ latency: now - t, work: sync + Math.max(0, now - Math.max(stamp, t + sync)) });
+              } else if (now - t > 2000) {
+                resolve(null);
+              } else {
+                requestAnimationFrame(check);
+              }
+            };
+            requestAnimationFrame(check);
+          });
+        });
+        const interaction = async (name, fire, after = null) => {
+          const latency = [], work = [];
+          let missed = 0;
+          for (let i = 0; i < events + 3; i++) {
+            const r = await once(() => fire(i));
+            if (after) await once(() => after(i));
+            await frame();
+            if (!r) { missed++; continue; }
+            if (i >= 3) { latency.push(r.latency); work.push(r.work); }
+          }
+          push(name, latency, work, missed ? `${missed} events presented no frame` : "");
+          say(`${name}: ${median(latency)?.toFixed(2)} ms to the frame, ${median(work)?.toFixed(2)} ms of work`);
+        };
+
+        const a = node("button", "Action 2"), b = node("button", "Action 5");
+        await interaction("web_hover", (i) => pointer("pointermove", i % 2 ? b : a));
+
+        const row = node("option","Row 3 · item 00021");
+        pointer("pointermove", row);
+        await frame();
+        await interaction("web_scroll_list", () => canvas().dispatchEvent(new WheelEvent("wheel", {
+          clientX: row.x, clientY: row.y, deltaY: 48, deltaMode: 0, bubbles: true, cancelable: true,
+        })));
+
+        const click = (at) => {
+          pointer("pointerdown", at, 0, 1);
+          pointer("pointerup", at, 0, 0);
+        };
+        const fieldAt = (() => {
+          const el = [...app.overlay.querySelectorAll("[data-stipple]")]
+            .find((n) => n.getAttribute("aria-placeholder") === "Type here");
+          if (!el?._b) throw new Error("no text field in the accessibility overlay");
+          const r = canvas().getBoundingClientRect();
+          const [x, y, w, h] = el._b;
+          return { x: r.left + x + w / 2, y: r.top + y + h / 2 };
+        })();
+        click(fieldAt);
+        await frame();
+        await frame();
+        await interaction("web_type_char", (i) => key("abcde"[i % 5]), () => key("Backspace"));
+
+        const theme = node("button", "Theme");
+        await interaction("web_theme_switch", () => click(theme));
+      } catch (err) {
+        report.errors.push(String(err?.stack ?? err));
+        say(`FAIL ${err?.stack ?? err}`);
+      }
+      await finish();
+    </script>
+  </body>

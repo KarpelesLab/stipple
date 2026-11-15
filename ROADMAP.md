@@ -2629,6 +2629,20 @@ game needs on top:
   corpus; rustdoc; platform and topic guides in [`docs/`](docs/README.md).
 - **Tooling (stretch):** a UI inspector/devtools overlay; hot-reload of `view`.
 - **Packaging:** app bundling per platform (`.app`, MSIX, APK, IPA, wasm).
+- **Performance:** benchmarks of what users feel, on every push.
+  - ✅ *`examples/bench`: first frames at 1x and 2x, hover (with the pixels
+    rasterized), scrolling a 10,000-row list, typing, a theme switch, 2000
+    sprites, layout of a large tree, text layout (cached, cold, CJK) and
+    startup, as medians and p95s, on the software renderer and the
+    platform's GPU one; in headless Chrome too (`tools/bench/`), with
+    events timed to the presented frame on software, WebGL2 and WebGPU. The
+    Perf workflow compares each run with `perf/baseline/` (scaled by a CPU
+    calibration loop, re-run before failing) and checks latency budgets;
+    blocking for Linux's software renderer. See
+    [docs/performance.md](docs/performance.md#benchmarks).*
+  - The first baselines from the CI runners (run the workflow with
+    `update_baseline`); then make macOS, Windows and the web blocking.
+  - A trend page on the site (needs somewhere to keep past runs).
 
 ---
 
