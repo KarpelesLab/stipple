@@ -76,7 +76,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use stipple::core::{PinchEvent, PinchPhase};
 use stipple::platform::Lifecycle;
 use stipple::prelude::*;
-use stipple::widgets::{EditBuffer, text_editor};
+use stipple::widgets::TextInput;
 
 const ROWS: usize = 30;
 const PAD: f64 = 16.0;
@@ -87,7 +87,7 @@ const PINCH_H: f64 = 100.0;
 
 #[derive(Default)]
 struct State {
-    field: EditBuffer,
+    field: TextInput,
     tapped: Vec<usize>,
     /// The rows whose context menu item was picked.
     pinned: Vec<usize>,
@@ -148,7 +148,7 @@ fn log_changes(state: &State, dark: bool) {
         log(&format!("touchdemo: text {text:?}"));
         last.0 = text;
     }
-    let preedit = format!("{:?}", state.field.preedit());
+    let preedit = format!("{:?}", state.field.buffer().preedit());
     if last.1 != preedit {
         log(&format!("touchdemo: preedit {preedit}"));
         last.1 = preedit;
@@ -172,21 +172,21 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     if state.animate {
         cx.request_frame();
     }
-    let field = text_editor(cx, &theme, &state.field, |s: &mut State| &mut s.field).height(FIELD_H);
+    let field = text_field(cx, &state.field, |s| &mut s.field).height(FIELD_H);
     // On Linux the field has a caption, which a screen reader reads with it
     // (AT-SPI's labelled-by relation, checked by the AT-SPI walk in CI). The
     // mobile self-tests tap the field where it is without one.
     #[cfg(target_os = "linux")]
     let field = row(vec![
-        label(&theme, "Note").a11y_id("note-label"),
+        label(cx, "Note").a11y_id("note-label"),
         field.labelled_by("note-label").grow(1.0),
     ])
     .gap(8.0);
     let rows = (0..ROWS)
         .map(|i| {
-            button_labeled(&theme, format!("Row {i}"))
+            button(cx, format!("Row {i}"))
                 .height(48.0)
-                .on_tap(cx, move |s: &mut State| {
+                .on_tap(cx, move |s| {
                     s.tapped.push(i);
                     log(&format!("touchdemo: row {i} tapped"));
                 })
@@ -214,7 +214,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         .scrollable(id);
     // A sideways strip of chips, scrolled by a sideways drag.
     let chips = (0..12)
-        .map(|i| button_labeled(&theme, format!("Chip {i}")).width(90.0))
+        .map(|i| button(cx, format!("Chip {i}")).width(90.0))
         .collect();
     let strip_id = cx.register_scroll();
     let strip_offset = cx.scroll_offset(strip_id);
@@ -225,7 +225,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         .height(STRIP_H)
         .scrollable(strip_id);
     // A box two fingers pinch.
-    let pinch = label(&theme, format!("Pinch me: {:.2}x", state.zoom))
+    let pinch = label(cx, format!("Pinch me: {:.2}x", state.zoom))
         .height(PINCH_H)
         .on_pinch(cx, |ev: &PinchEvent, s: &mut State| {
             if ev.phase == PinchPhase::Began {
@@ -246,10 +246,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let inset = |e: Element| column(vec![e]).padding(Insets::symmetric(PAD, 0.0));
     column(vec![
         inset(field),
-        inset(label(
-            &theme,
-            format!("Rows tapped: {}", state.tapped.len()),
-        )),
+        inset(label(cx, format!("Rows tapped: {}", state.tapped.len()))),
         inset(list),
         strip,
         inset(pinch),
@@ -311,7 +308,7 @@ fn main() {
         .restore_state(|s, bytes| {
             let text = String::from_utf8_lossy(bytes).into_owned();
             log(&format!("touchdemo: restored text {text:?}"));
-            s.field = EditBuffer::from_text(text);
+            s.field = TextInput::from_text(text);
         });
     #[cfg(target_os = "ios")]
     {
@@ -435,7 +432,7 @@ mod selftest {
     /// with the session.
     pub(super) fn close_scene(handle: &AppHandle<State>) {
         handle.after(Duration::from_millis(1500), |s| {
-            s.field = EditBuffer::from_text("Not for later");
+            s.field = TextInput::from_text("Not for later");
             CLOSE_ON_BACKGROUND.store(true, Ordering::Relaxed);
             log("touchdemo: waiting for background to close the session");
         });
@@ -457,7 +454,7 @@ mod selftest {
     /// background (and restored after a system kill).
     pub(super) fn type_text(handle: &AppHandle<State>, text: String) {
         handle.after(Duration::from_millis(1500), move |s| {
-            s.field = EditBuffer::from_text(text);
+            s.field = TextInput::from_text(text);
             log("touchdemo: typed, waiting for background");
         });
     }
@@ -601,13 +598,17 @@ mod selftest {
             ));
             simulate::set_marked_text("にほん", (3, 3));
         });
-        steps.until(|s| s.field.preedit() == Some("にほん"));
+        steps.until(|s| s.field.buffer().preedit() == Some("にほん"));
         steps.run(0, |s| {
             let status = simulate::text_input_status();
             log(&format!("touchdemo: composing {status}"));
             check(
-                s.field.preedit() == Some("にほん") && s.field.text() == "Hi",
-                format!("preedit {:?} over {:?}", s.field.preedit(), s.field.text()),
+                s.field.buffer().preedit() == Some("にほん") && s.field.text() == "Hi",
+                format!(
+                    "preedit {:?} over {:?}",
+                    s.field.buffer().preedit(),
+                    s.field.text()
+                ),
             );
             check(
                 status.contains("text_input=true")
@@ -633,7 +634,7 @@ mod selftest {
                 simulate::text_input_status()
             ));
             check(
-                s.field.text() == "Hi日本" && s.field.preedit().is_none(),
+                s.field.text() == "Hi日本" && s.field.buffer().preedit().is_none(),
                 format!("commit gave {:?}", s.field.text()),
             );
             simulate::replace_range(2, 4, "JP");

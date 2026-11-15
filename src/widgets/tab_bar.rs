@@ -452,11 +452,11 @@ fn bell(color: Color) -> Option<std::sync::Arc<crate::render::Svg>> {
 /// Dragging a tab out into a window of its own isn't done.
 pub fn tab_bar<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     bar: TabBar<S>,
     state: &TabBarState,
     field: impl Fn(&mut S) -> &mut TabBarState + Copy + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let p = theme.palette;
     let n = bar.tabs.len();
     let selected = bar.selected.min(n.saturating_sub(1));
@@ -513,7 +513,7 @@ pub fn tab_bar<S: 'static>(
             "‹",
             first > 0,
             "Scroll tabs left",
-            move |s: &mut S| {
+            move |s| {
                 field(s).first.set(first.saturating_sub(1));
             },
         ));
@@ -563,7 +563,7 @@ pub fn tab_bar<S: 'static>(
             .hovered(move |e| e.fill(danger.with_alpha(40)))
             .pressed(move |e| e.fill(danger.with_alpha(90)))
             .transition_for(AnimProp::Fill, quick)
-            .on_tap(cx, move |s: &mut S| {
+            .on_tap(cx, move |s| {
                 if let Some(f) = &on_close {
                     f(s, i);
                 }
@@ -628,7 +628,7 @@ pub fn tab_bar<S: 'static>(
             .transition_for(AnimProp::Fill, quick)
             .transition_for(AnimProp::Opacity, quick)
             .transition_for(AnimProp::Border, quick)
-            .on_tap(cx, move |s: &mut S| {
+            .on_tap(cx, move |s| {
                 if let Some(f) = &on_select {
                     f(s, i);
                 }
@@ -645,7 +645,7 @@ pub fn tab_bar<S: 'static>(
             let w = fit.tab_width.unwrap_or(0.0);
             el = el
                 .drag_source(cx, move |_| Some(DropData::Internal(payload.clone())))
-                .on_drop_of(cx, DragOffer::INTERNAL, move |s: &mut S, data, _| {
+                .on_drop_of(cx, DragOffer::INTERNAL, move |s, data, _| {
                     let Some(from) = parse_payload(&bar_name, data) else {
                         return;
                     };
@@ -707,11 +707,11 @@ pub fn tab_bar<S: 'static>(
             "›",
             more,
             "Scroll tabs right",
-            move |s: &mut S| {
+            move |s| {
                 field(s).first.set(first + 1);
             },
         ));
-        let list = bar_button(cx, theme, "▾", true, "All tabs", move |s: &mut S| {
+        let list = bar_button(cx, theme, "▾", true, "All tabs", move |s| {
             let st = field(s);
             st.list_open = !st.list_open;
         })
@@ -729,14 +729,9 @@ pub fn tab_bar<S: 'static>(
         row.push(list);
     }
     if let Some(on_new) = bar.on_new.clone() {
-        row.push(bar_button(
-            cx,
-            theme,
-            "+",
-            true,
-            "New tab",
-            move |s: &mut S| on_new(s),
-        ));
+        row.push(bar_button(cx, theme, "+", true, "New tab", move |s| {
+            on_new(s)
+        }));
     }
 
     let on_select = bar.on_select.clone();
@@ -747,7 +742,7 @@ pub fn tab_bar<S: 'static>(
         .fill(bar_bg)
         .align(Align::Start, Align::End)
         .height(HEIGHT)
-        .on_key(cx, move |s: &mut S, k| {
+        .on_key(cx, move |s, k| {
             let to = match k {
                 KeyInput::Left if !rtl => selected.checked_sub(1),
                 KeyInput::Right if rtl => selected.checked_sub(1),
@@ -807,7 +802,7 @@ fn list_overlay<S: 'static>(
             .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
             .radius(theme.radius / 2.0)
             .hovered(move |e| e.fill(hover))
-            .on_tap(cx, move |s: &mut S| {
+            .on_tap(cx, move |s| {
                 field(s).list_open = false;
                 if let Some(f) = &on_select {
                     f(s, i);
@@ -826,7 +821,7 @@ fn list_overlay<S: 'static>(
         .gap(2.0)
         .min_width(180.0)
         .role(Role::Menu);
-    let dismiss = cx.register(move |s: &mut S| field(s).list_open = false);
+    let dismiss = cx.register(move |s| field(s).list_open = false);
     let content = motion::popup(content, &theme.motion, t, (0.5, 0.0))
         .exit(motion::popup_exit(&theme.motion, (0.5, 0.0)));
     cx.overlay(OverlaySpec {

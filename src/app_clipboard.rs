@@ -258,33 +258,27 @@ mod tests {
     use crate::core::{Cx, Element};
     use crate::geometry::{Point, Size};
     use crate::platform::clipboard::{ClipboardContent, ClipboardFormats, ClipboardKind};
-    use crate::style::Theme;
-    use crate::widgets::{EditBuffer, text_editor};
+    use crate::widgets::{TextInput, text_field};
     use std::cell::RefCell;
     use std::rc::Rc;
 
     #[derive(Default)]
     struct S {
-        a: EditBuffer,
-        b: EditBuffer,
+        a: TextInput,
+        b: TextInput,
     }
 
     fn view(s: &S, cx: &mut Cx<S>) -> Element {
-        let t = Theme::light();
         crate::widgets::column(vec![
-            text_editor(cx, &t, &s.a, |s: &mut S| &mut s.a)
-                .width(200.0)
-                .height(40.0),
-            text_editor(cx, &t, &s.b, |s: &mut S| &mut s.b)
-                .width(200.0)
-                .height(40.0),
+            text_field(cx, &s.a, |s| &mut s.a).width(200.0).height(40.0),
+            text_field(cx, &s.b, |s| &mut s.b).width(200.0).height(40.0),
         ])
     }
 
     fn app() -> App<S> {
         let state = S {
-            a: EditBuffer::from_text("hello world"),
-            b: EditBuffer::from_text("xy"),
+            a: TextInput::from_text("hello world"),
+            b: TextInput::from_text("xy"),
         };
         let mut app = App::new(state, view)
             .no_font()

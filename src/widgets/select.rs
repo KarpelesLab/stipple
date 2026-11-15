@@ -176,7 +176,7 @@ fn next_match<T: AsRef<str>>(options: &[T], from: usize, typed: &str) -> Option<
 /// struct App { size: Select }
 /// fn view(state: &App, cx: &mut Cx<App>) -> Element {
 ///     let theme = *cx.theme();
-///     select(cx, &theme, &["Small", "Medium", "Large"], &state.size, |s: &mut App| &mut s.size)
+///     select(cx, &["Small", "Medium", "Large"], &state.size, |s| &mut s.size)
 /// }
 /// # let theme = Theme::light();
 /// # let mut cx = Cx::new(&theme);
@@ -186,14 +186,14 @@ fn next_match<T: AsRef<str>>(options: &[T], from: usize, typed: &str) -> Option<
 /// ```
 pub fn select<S, T: AsRef<str>>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     options: &[T],
     state: &Select,
     field: impl Fn(&mut S) -> &mut Select + Copy + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let p = &theme.palette;
     let labels: Vec<String> = options.iter().map(|o| o.as_ref().to_string()).collect();
-    let tap = cx.register(move |s: &mut S| field(s).toggle());
+    let tap = cx.register(move |s| field(s).toggle());
 
     let open = state.open && !labels.is_empty();
     let opened = state.shown.with(|s| s.track(open, cx.frame_time()));
@@ -203,7 +203,7 @@ pub fn select<S, T: AsRef<str>>(
         // It grows in from its button, and fades back out when it closes.
         let list = motion::popup(list, &theme.motion, t, (0.5, 0.0))
             .exit(motion::popup_exit(&theme.motion, (0.5, 0.0)));
-        let dismiss = cx.register(move |s: &mut S| field(s).close());
+        let dismiss = cx.register(move |s| field(s).close());
         cx.overlay(OverlaySpec {
             content: list,
             anchor: Anchor::Below(tap),
@@ -233,7 +233,7 @@ pub fn select<S, T: AsRef<str>>(
         el = native_size(el.native(deco), control).width(200.0);
     }
     el.action = Some(tap);
-    el.role(Role::ComboBox).on_key(cx, move |s: &mut S, k| {
+    el.role(Role::ComboBox).on_key(cx, move |s, k| {
         field(s).handle_key(k, &labels);
     })
 }
@@ -272,13 +272,13 @@ fn option_list<S>(
         if i == state.highlighted {
             row = row.fill(p.selection);
         }
-        rows.push(row.on_tap(cx, move |s: &mut S| field(s).choose(i)));
+        rows.push(row.on_tap(cx, move |s| field(s).choose(i)));
     }
     let many = rows.len() > MAX_VISIBLE;
     let mut list = Element::stack(Axis::Vertical, rows).gap(2.0);
     if many {
         let height = MAX_VISIBLE as f64 * (row_height + 2.0);
-        list = scroll(cx, height, list);
+        list = scroll(cx, height, |_| list);
     }
     Element::stack(Axis::Vertical, vec![list])
         .fill(p.surface)
@@ -358,15 +358,8 @@ mod tests {
                 fruit: Select::new(Some(0)),
             },
             |s: &State, cx: &mut Cx<State>| {
-                let theme = *cx.theme();
-                super::super::column(vec![select(
-                    cx,
-                    &theme,
-                    &OPTIONS,
-                    &s.fruit,
-                    |s: &mut State| &mut s.fruit,
-                )])
-                .padding(Insets::uniform(10.0))
+                super::super::column(vec![select(cx, &OPTIONS, &s.fruit, |s| &mut s.fruit)])
+                    .padding(Insets::uniform(10.0))
             },
         )
         .no_font()

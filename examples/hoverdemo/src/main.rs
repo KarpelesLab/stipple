@@ -10,20 +10,15 @@
 
 use stipple::prelude::*;
 
-fn button(theme: &Theme, label: &str, cx: &mut Cx<()>) -> Element {
-    button_labeled(theme, label)
+fn hover_button(cx: &mut Cx<()>, label: &str) -> Element {
+    button(cx, label)
         .width(160.0)
         .height(90.0)
-        .on_tap(cx, |_: &mut ()| {})
+        .on_tap(cx, |_| {})
 }
 
 fn view(_state: &(), cx: &mut Cx<()>) -> Element {
-    let theme = *cx.theme();
-    let row = row(vec![
-        button(&theme, "Left", cx),
-        button(&theme, "Right", cx),
-    ])
-    .gap(20.0);
+    let row = row(vec![hover_button(cx, "Left"), hover_button(cx, "Right")]).gap(20.0);
     column(vec![row])
         .padding(Insets::uniform(24.0))
         .align(Align::Start, Align::Start)

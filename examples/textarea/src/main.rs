@@ -8,18 +8,16 @@ use stipple::prelude::*;
 
 #[derive(Default)]
 struct Form {
-    buffer: EditBuffer,
+    buffer: TextInput,
 }
 
 fn view(state: &Form, cx: &mut Cx<Form>) -> Element {
-    let theme = *cx.theme();
-    let area = text_area(cx, &theme, &state.buffer, |s: &mut Form| &mut s.buffer)
+    let area = text_area(cx, &state.buffer, |s| &mut s.buffer)
         .height(200.0)
         .placeholder("Write a few lines…");
-    panel(
-        &theme,
-        vec![label(&theme, "Multi-line editor (Tab to focus):"), area],
-    )
+    panel(cx, |cx| {
+        vec![label(cx, "Multi-line editor (Tab to focus):"), area]
+    })
     .padding(Insets::uniform(32.0))
 }
 

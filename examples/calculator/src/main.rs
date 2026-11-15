@@ -16,7 +16,6 @@
 //! ```
 
 use stipple::prelude::*;
-use stipple::widgets::{Variant, button_variant};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Op {
@@ -156,29 +155,26 @@ fn fmt(x: f64) -> String {
 /// One keypad button: a variant-styled label, a tap handler, a fixed height, and
 /// a flex weight so a row's cells share its width (`weight = 2` double-wide).
 fn key(
-    theme: &Theme,
     cx: &mut Cx<Calc>,
     text: &str,
     variant: Variant,
     weight: f64,
     on: impl FnMut(&mut Calc) + 'static,
 ) -> Element {
-    button_variant(theme, text, variant)
+    Button::new(text)
+        .variant(variant)
+        .view(cx)
         .on_tap(cx, on)
         .height(60.0)
         .grow(weight)
 }
 
-fn digit(theme: &Theme, cx: &mut Cx<Calc>, d: &'static str) -> Element {
-    key(theme, cx, d, Variant::Secondary, 1.0, move |s| {
-        s.input_digit(d)
-    })
+fn digit(cx: &mut Cx<Calc>, d: &'static str) -> Element {
+    key(cx, d, Variant::Secondary, 1.0, move |s| s.input_digit(d))
 }
 
-fn operator(theme: &Theme, cx: &mut Cx<Calc>, text: &str, op: Op) -> Element {
-    key(theme, cx, text, Variant::Primary, 1.0, move |s| {
-        s.set_op(op)
-    })
+fn operator(cx: &mut Cx<Calc>, text: &str, op: Op) -> Element {
+    key(cx, text, Variant::Primary, 1.0, move |s| s.set_op(op))
 }
 
 fn keypad_row(children: Vec<Element>) -> Element {
@@ -189,7 +185,7 @@ fn view(state: &Calc, cx: &mut Cx<Calc>) -> Element {
     let theme = *cx.theme();
 
     // Right-aligned display showing the current entry / result.
-    let display = row(vec![heading(&theme, &state.display)])
+    let display = row(vec![heading(cx, &state.display)])
         .align(Align::End, Align::Center)
         .padding(Insets::symmetric(theme.spacing.lg, theme.spacing.md))
         .height(76.0)
@@ -198,42 +194,38 @@ fn view(state: &Calc, cx: &mut Cx<Calc>) -> Element {
 
     let keypad = column(vec![
         keypad_row(vec![
-            key(&theme, cx, "C", Variant::Danger, 1.0, |s| s.clear()),
-            key(&theme, cx, "←", Variant::Secondary, 1.0, |s| {
-                s.backspace()
-            }),
-            key(&theme, cx, "%", Variant::Secondary, 1.0, |s| s.percent()),
-            operator(&theme, cx, "÷", Op::Div),
+            key(cx, "C", Variant::Danger, 1.0, |s| s.clear()),
+            key(cx, "←", Variant::Secondary, 1.0, |s| s.backspace()),
+            key(cx, "%", Variant::Secondary, 1.0, |s| s.percent()),
+            operator(cx, "÷", Op::Div),
         ]),
         keypad_row(vec![
-            digit(&theme, cx, "7"),
-            digit(&theme, cx, "8"),
-            digit(&theme, cx, "9"),
-            operator(&theme, cx, "×", Op::Mul),
+            digit(cx, "7"),
+            digit(cx, "8"),
+            digit(cx, "9"),
+            operator(cx, "×", Op::Mul),
         ]),
         keypad_row(vec![
-            digit(&theme, cx, "4"),
-            digit(&theme, cx, "5"),
-            digit(&theme, cx, "6"),
-            operator(&theme, cx, "−", Op::Sub),
+            digit(cx, "4"),
+            digit(cx, "5"),
+            digit(cx, "6"),
+            operator(cx, "−", Op::Sub),
         ]),
         keypad_row(vec![
-            digit(&theme, cx, "1"),
-            digit(&theme, cx, "2"),
-            digit(&theme, cx, "3"),
-            operator(&theme, cx, "+", Op::Add),
+            digit(cx, "1"),
+            digit(cx, "2"),
+            digit(cx, "3"),
+            operator(cx, "+", Op::Add),
         ]),
         keypad_row(vec![
-            key(&theme, cx, "0", Variant::Secondary, 2.0, |s| {
-                s.input_digit("0")
-            }),
-            key(&theme, cx, ".", Variant::Secondary, 1.0, |s| s.input_dot()),
-            key(&theme, cx, "=", Variant::Primary, 1.0, |s| s.equals()),
+            key(cx, "0", Variant::Secondary, 2.0, |s| s.input_digit("0")),
+            key(cx, ".", Variant::Secondary, 1.0, |s| s.input_dot()),
+            key(cx, "=", Variant::Primary, 1.0, |s| s.equals()),
         ]),
     ])
     .gap(8.0);
 
-    panel(&theme, vec![display, keypad])
+    panel(cx, |_| vec![display, keypad])
 }
 
 fn main() {

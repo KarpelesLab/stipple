@@ -26,11 +26,11 @@
 
 use stipple::platform::clipboard::{self, ClipboardContent, ClipboardFormats, ClipboardKind};
 use stipple::prelude::*;
-use stipple::widgets::EditBuffer;
+use stipple::widgets::TextInput;
 
 #[derive(Default)]
 struct State {
-    buffer: EditBuffer,
+    buffer: TextInput,
     /// The text last printed.
     shown: std::cell::RefCell<String>,
     /// `--copy-rich`: Ctrl+C in the field copies [`rich`] content.
@@ -43,10 +43,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         println!("field: {text}");
         *state.shown.borrow_mut() = text.to_string();
     }
-    let theme = *cx.theme();
+    let field = text_field(cx, &state.buffer, |s| &mut s.buffer);
     let field = if state.rich {
-        // A field whose copy puts text, HTML and an image on the clipboard.
-        text_field(cx, &theme, text, |s: &mut State, key: &KeyInput| {
+        // A field whose copy puts text, HTML and an image on the clipboard:
+        // its own key handler in place of the field's.
+        field.on_key(cx, |s, key| {
             if *key == KeyInput::Copy {
                 stipple::core::write_clipboard(ClipboardKind::Clipboard, rich());
                 println!("copied rich");
@@ -55,14 +56,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             }
         })
     } else {
-        text_editor(cx, &theme, &state.buffer, |s: &mut State| &mut s.buffer)
+        field
     }
     .height(64.0);
-    panel(
-        &theme,
-        vec![label(&theme, "Clipboard (Tab to focus):"), field],
-    )
-    .padding(Insets::uniform(32.0))
+    panel(cx, |cx| vec![label(cx, "Clipboard (Tab to focus):"), field])
+        .padding(Insets::uniform(32.0))
 }
 
 /// The rich content `--copy-rich` and `--roundtrip` write: text, HTML and a
@@ -154,7 +152,7 @@ fn main() {
     }
     let mut app = App::new(
         State {
-            buffer: EditBuffer::from_text("Clip"),
+            buffer: TextInput::from_text("Clip"),
             rich: has("--copy-rich"),
             ..State::default()
         },

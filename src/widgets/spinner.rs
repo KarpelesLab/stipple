@@ -7,7 +7,6 @@ use std::sync::Arc;
 
 use crate::core::{BoxStyle, Cx, Element};
 use crate::render::{Color, Svg};
-use crate::style::Theme;
 
 /// The spinner's diameter, in logical pixels.
 const SIZE: f64 = 22.0;
@@ -25,7 +24,8 @@ const SWEEP: f64 = 100.0;
 /// at the display's refresh rate for as long as it's on screen, and the app
 /// goes back to idle once it's gone. Under
 /// [reduced motion](crate::anim::reduced_motion) it turns at half the speed.
-pub fn spinner<S>(cx: &mut Cx<S>, theme: &Theme) -> Element {
+pub fn spinner<S>(cx: &mut Cx<S>) -> Element {
+    let theme = &super::theme_of(cx);
     cx.request_frame();
     // It shows that something is happening, so it keeps turning under
     // reduced motion, at half the speed (as Bootstrap's spinners do).
@@ -141,12 +141,12 @@ mod tests {
 
     #[test]
     fn spinner_asks_for_frames_and_reuses_documents() {
-        let theme = Theme::light();
+        let theme = crate::style::Theme::light();
         let mut cx = Cx::<()>::new(&theme);
         assert!(!cx.frame_requested());
-        let a = spinner(&mut cx, &theme);
+        let a = spinner(&mut cx);
         assert!(cx.frame_requested(), "a spinner keeps frames coming");
-        let b = spinner(&mut cx, &theme);
+        let b = spinner(&mut cx);
         assert_eq!(a, b, "the same frame time draws the same document");
     }
 }

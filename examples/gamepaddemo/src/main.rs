@@ -71,7 +71,8 @@ fn chip(theme: &Theme, name: &str, down: bool) -> Element {
         .radius(6.0)
 }
 
-fn pad_view(theme: &Theme, id: GamepadId, info: &GamepadInfo) -> Element {
+fn pad_view<S>(cx: &mut Cx<S>, id: GamepadId, info: &GamepadInfo) -> Element {
+    let theme = cx.theme();
     let state = gamepad::state(id).unwrap_or_default();
     let buttons: Vec<Element> = GamepadButton::ALL
         .iter()
@@ -84,40 +85,38 @@ fn pad_view(theme: &Theme, id: GamepadId, info: &GamepadInfo) -> Element {
             // Sticks run −1..1, triggers 0..1.
             let fraction = if a.is_trigger() { v } else { (v + 1.0) / 2.0 };
             row(vec![
-                label(theme, format!("{a:?}")).width(110.0),
-                progress_bar(theme, fraction as f64).width(240.0),
-                label(theme, format!("{v:+.2}")),
+                label(cx, format!("{a:?}")).width(110.0),
+                progress_bar(cx, fraction as f64).width(240.0),
+                label(cx, format!("{v:+.2}")),
             ])
             .gap(12.0)
         })
         .collect();
-    panel(
-        theme,
+    panel(cx, |cx| {
         vec![
-            heading(theme, describe(id, info)),
+            heading(cx, describe(id, info)),
             grid(vec![Track::Auto; 6], buttons).gap(6.0),
             column(axes).gap(6.0),
-        ],
-    )
+        ]
+    })
     .gap(12.0)
 }
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
-    let theme = *cx.theme();
-    let mut children = vec![heading(&theme, "Gamepads")];
+    let mut children = vec![heading(cx, "Gamepads")];
     if state.pads.is_empty() {
         children.push(paragraph(
-            &theme,
+            cx,
             "No gamepad connected. Plug one in (on Linux, you need read access \
              to /dev/input/event*: the input group, or a udev uaccess rule).",
         ));
     }
     for (id, info) in &state.pads {
-        children.push(pad_view(&theme, *id, info));
+        children.push(pad_view(cx, *id, info));
     }
     if !state.log.is_empty() {
-        children.push(divider(&theme));
-        children.extend(state.log.iter().map(|l| label(&theme, l.as_str())));
+        children.push(divider(cx));
+        children.extend(state.log.iter().map(|l| label(cx, l.as_str())));
     }
     column(children).gap(16.0).padding(Insets::uniform(24.0))
 }

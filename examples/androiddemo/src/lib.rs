@@ -65,7 +65,7 @@ mod app {
     struct State {
         taps: u32,
         ticks: u32,
-        name: EditBuffer,
+        name: TextInput,
     }
 
     /// The field's text in the frame last built, to log its changes.
@@ -89,11 +89,14 @@ mod app {
     fn view(state: &State, cx: &mut Cx<State>) -> Element {
         FRAMES.fetch_add(1, Ordering::Relaxed);
         let theme = *cx.theme();
-        let field = text_editor(cx, &theme, &state.name, |s: &mut State| &mut s.name);
+        let field = text_field(cx, &state.name, |s| &mut s.name);
         let name = state.name.text();
         // What the field shows: its text, and a word the keyboard is still
         // composing (typed at the end here).
-        let shown = format!("{name}{}", state.name.preedit().unwrap_or_default());
+        let shown = format!(
+            "{name}{}",
+            state.name.buffer().preedit().unwrap_or_default()
+        );
         let mut last = TEXT.lock().unwrap();
         if *last != shown {
             shown.clone_into(&mut last);
@@ -109,12 +112,12 @@ mod app {
             android::input_connection_self_test();
         }
         let top = column(vec![
-            heading(&theme, "Stipple on Android"),
-            label(&theme, "Type your name:"),
+            heading(cx, "Stipple on Android"),
+            label(cx, "Type your name:"),
             field,
             row(vec![
-                spinner(cx, &theme),
-                label(&theme, format!("Running for {} s", state.ticks)),
+                spinner(cx),
+                label(cx, format!("Running for {} s", state.ticks)),
             ])
             .gap(theme.spacing.sm),
             platform_row(cx, &theme),
@@ -123,10 +126,10 @@ mod app {
         // The button takes the space the rest leaves, so it covers the middle
         // of the screen and CI can tap it at the screen's center. Two fingers
         // pinch it (and don't tap it).
-        let tap = button_labeled(&theme, "Tap me")
+        let tap = button(cx, "Tap me")
             .width(280.0)
             .grow(1.0)
-            .on_tap(cx, |s: &mut State| {
+            .on_tap(cx, |s| {
                 s.taps += 1;
                 println!("androiddemo: tapped {}", s.taps);
             })
@@ -153,11 +156,9 @@ mod app {
         // scrolls. Built as `scroll` builds it, to read its offset.
         let rows = (0..30)
             .map(|i| {
-                button_labeled(&theme, format!("Row {i}"))
+                button(cx, format!("Row {i}"))
                     .width(280.0)
-                    .on_tap(cx, move |_: &mut State| {
-                        println!("androiddemo: row {i} tapped")
-                    })
+                    .on_tap(cx, move |_| println!("androiddemo: row {i} tapped"))
                     // A long press opens it.
                     .context_menu(
                         cx,
@@ -179,7 +180,7 @@ mod app {
             .align(Align::Start, Align::Center);
         // A strip of chips a sideways swipe scrolls.
         let chips = (0..12)
-            .map(|i| button_labeled(&theme, format!("Chip {i}")).width(90.0))
+            .map(|i| button(cx, format!("Chip {i}")).width(90.0))
             .collect();
         let strip_id = cx.register_scroll();
         let strip_offset = cx.scroll_offset(strip_id);
@@ -189,7 +190,7 @@ mod app {
         let strip = Element::stack(Axis::Horizontal, vec![row(chips).gap(theme.spacing.sm)])
             .width(280.0)
             .scrollable(strip_id);
-        column(vec![top, tap, label(&theme, greeting), strip, list])
+        column(vec![top, tap, label(cx, greeting), strip, list])
             .gap(theme.spacing.lg)
             .align(Align::Center, Align::Center)
             .padding(Insets::uniform(theme.spacing.lg))
@@ -199,13 +200,13 @@ mod app {
     /// Buttons for the system's services: a notification, and the document
     /// picker to open a text file or save one.
     fn platform_row(cx: &mut Cx<State>, theme: &Theme) -> Element {
-        let notify = button_labeled(theme, "Notify").on_tap(cx, |_: &mut State| {
+        let notify = button(cx, "Notify").on_tap(cx, |_| {
             let sent = stipple::platform::notify(
                 &Notification::new("Stipple test").body("A notification from androiddemo"),
             );
             println!("androiddemo: notify {sent:?}");
         });
-        let open = button_labeled(theme, "Open").on_tap(cx, |_: &mut State| {
+        let open = button(cx, "Open").on_tap(cx, |_| {
             dialog::open_file_contents(&FileDialog::new().accept(".txt"), |file| match file {
                 Some(f) => println!(
                     "androiddemo: opened {:?} ({} bytes): {:?}",
@@ -217,7 +218,7 @@ mod app {
             });
             println!("androiddemo: open requested");
         });
-        let save = button_labeled(theme, "Save").on_tap(cx, |s: &mut State| {
+        let save = button(cx, "Save").on_tap(cx, |s| {
             let text = format!("Saved by androiddemo after {} taps\n", s.taps);
             dialog::save_file_contents_then(
                 &FileDialog::new().file_name("stipple-saved.txt"),
@@ -258,7 +259,7 @@ mod app {
         let state = State {
             taps: 0,
             ticks: 0,
-            name: EditBuffer::new(),
+            name: TextInput::new(),
         };
         let mut app = App::new(state, view)
             .theme(theme)
@@ -287,7 +288,7 @@ mod app {
                 let text = String::from_utf8_lossy(bytes);
                 let (taps, name) = text.split_once('\n').unwrap_or((&text, ""));
                 s.taps = taps.parse().unwrap_or(0);
-                s.name = EditBuffer::from_text(name);
+                s.name = TextInput::from_text(name);
                 println!("androiddemo: restored taps={} name={name:?}", s.taps);
             })
             .on_back(|s: &mut State| {

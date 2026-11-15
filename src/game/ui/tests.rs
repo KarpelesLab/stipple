@@ -208,12 +208,11 @@ fn menu_app() -> App<Menu> {
 
 fn menu_app_with(menu: Menu) -> App<Menu> {
     App::new(menu, |_: &Menu, cx: &mut Cx<Menu>| {
-        let theme = *cx.theme();
         let b = |cx: &mut Cx<Menu>, name: &'static str| {
-            menu_button(cx, &theme, name, move |m: &mut Menu| m.pressed.push(name))
+            menu_button(cx, name, move |m| m.pressed.push(name))
         };
         let items = vec![b(cx, "One"), b(cx, "Two"), b(cx, "Three")];
-        menu_list(&theme, items)
+        menu_list(cx, |_| items)
     })
     .no_font()
     .logical_size(Size::new(400.0, 300.0))
@@ -379,8 +378,8 @@ fn a_hud_lets_presses_through_to_the_game_except_on_its_controls() {
         let pause = Element::stack(Axis::Vertical, vec![])
             .width(40.0)
             .height(40.0)
-            .on_tap(cx, |s: &mut Hud| s.paused += 1);
-        let bar = stat_bar(&theme, &Bar::new(50.0, 100.0, theme.palette.danger));
+            .on_tap(cx, |s| s.paused += 1);
+        let bar = stat_bar(cx, &Bar::new(50.0, 100.0, theme.palette.danger));
         let overlay = Element::stack(Axis::Horizontal, vec![bar, crate::widgets::spacer(), pause])
             .align(crate::core::Align::Start, crate::core::Align::Start);
         hud(game, overlay)
@@ -413,11 +412,11 @@ fn a_hit_through_overlay_takes_only_its_controls_presses() {
         let below = Element::stack(Axis::Vertical, vec![])
             .width(300.0)
             .height(200.0)
-            .on_tap(cx, |s: &mut S| s.below += 1);
+            .on_tap(cx, |s| s.below += 1);
         let button = Element::stack(Axis::Vertical, vec![])
             .width(50.0)
             .height(50.0)
-            .on_tap(cx, |s: &mut S| s.on_top += 1);
+            .on_tap(cx, |s| s.on_top += 1);
         let layer = Element::stack(Axis::Vertical, vec![button])
             .width(300.0)
             .height(200.0)
@@ -616,15 +615,11 @@ fn a_dialogue_box_asks_for_frames_while_it_types() {
     let tw = Typewriter::new("One two three");
     let mut cx = Cx::<()>::new(&theme);
     cx.set_frame_time(Duration::from_secs(1));
-    let _ = DialogueBox::new(&tw, |_| {})
-        .speaker("Ana")
-        .view(&mut cx, &theme);
+    let _ = DialogueBox::new(&tw, |_| {}).speaker("Ana").view(&mut cx);
     assert!(cx.frame_requested());
     let mut cx = Cx::<()>::new(&theme);
     cx.set_frame_time(Duration::from_secs(9));
-    let _ = DialogueBox::new(&tw, |_| {})
-        .speaker("Ana")
-        .view(&mut cx, &theme);
+    let _ = DialogueBox::new(&tw, |_| {}).speaker("Ana").view(&mut cx);
     assert!(!cx.frame_requested(), "typed out: no more frames");
 }
 
@@ -678,8 +673,7 @@ fn widths(el: &mut Element) -> (f64, f64) {
 #[test]
 fn a_bar_going_down_leaves_a_ghost_that_lingers_then_drains() {
     let mut rig = Rig::new();
-    let theme = Theme::light();
-    let bar = |v: f32| move |_: &mut Cx<()>| stat_bar(&theme, &Bar::new(v, 100.0, Color::WHITE));
+    let bar = |v: f32| move |cx: &mut Cx<()>| stat_bar(cx, &Bar::new(v, 100.0, Color::WHITE));
     let frame = crate::platform::frame::interval();
     let t0 = Duration::from_secs(10);
     let mut el = rig.build(t0, bar(100.0));
@@ -715,14 +709,15 @@ fn floating_texts_go_after_their_life_and_counters_pop_on_change() {
     assert_eq!(texts.len(), 1);
     // Each is keyed, and leaves with an exit effect.
     let theme = Theme::light();
-    let mut el = floating_texts(&theme, &texts);
+    let cx = Cx::<()>::new(&theme);
+    let mut el = floating_texts(&cx, &texts);
     let item = &mut el.children_mut().unwrap()[0];
     let reactive = item.reactive.as_ref().unwrap();
     assert!(reactive.key.is_some());
     assert!(reactive.presence.as_ref().is_some_and(|p| p.exit.is_some()));
     // A counter's number is keyed by its value, so a new value enters.
     let key_of = |v: i64| {
-        let mut c = counter(&theme, "score", "SCORE", v);
+        let mut c = counter(&cx, "score", "SCORE", v);
         c.children_mut().unwrap()[1].reactive.as_ref().unwrap().key
     };
     assert_ne!(key_of(1), key_of(2));

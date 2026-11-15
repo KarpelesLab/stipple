@@ -17,7 +17,7 @@ const SHAKE: f64 = 10.0;
 const ITEMS: [&str; 6] = ["Inbox", "Drafts", "Sent", "Archive", "Spam", "Trash"];
 
 struct State {
-    code: EditBuffer,
+    code: TextInput,
     /// When the last invalid code was submitted.
     invalid_at: Option<Duration>,
     /// When the pulse started, while it's on.
@@ -32,7 +32,7 @@ struct State {
 impl State {
     fn new() -> Self {
         Self {
-            code: EditBuffer::new(),
+            code: TextInput::new(),
             invalid_at: None,
             pulse_from: None,
             list_at: Duration::ZERO,
@@ -86,52 +86,51 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
         Some(at) => (cx.play(&shake(), at), cx.play(&invalid_border(&theme), at)),
         None => (0.0, p.border),
     };
-    let field = text_editor(cx, &theme, &s.code, |s: &mut State| &mut s.code)
+    // Enter checks the code, as the button does.
+    let field = text_field(cx, &s.code, |s| &mut s.code)
+        .on_submit(cx, |s| s.submit(anim::now()))
         .width(220.0)
-        .height(40.0);
+        .height(40.0)
+        .border(border, 2.0);
     let field = row(vec![field])
-        .border(border, 2.0)
-        .radius(theme.radius)
         // Shift by `offset` within a margin as wide as the swing.
         .padding(Insets::new(0.0, SHAKE - offset, 0.0, SHAKE + offset));
-    let check = button_labeled(&theme, "Check").on_tap(cx, |s: &mut State| s.submit(anim::now()));
-    let shaker = panel(
-        &theme,
+    let check = button(cx, "Check").on_tap(cx, |s| s.submit(anim::now()));
+    let shaker = panel(cx, |cx| {
         vec![
-            label(&theme, "Enter a 4-digit code:"),
+            label(cx, "Enter a 4-digit code:"),
             row(vec![field, check]).gap(theme.spacing.md),
-        ],
-    );
+        ]
+    });
 
     // A pulsing drop target.
     let glow = match s.pulse_from {
         Some(at) => cx.play(&pulse(), at),
         None => 0.0,
     };
-    let target = column(vec![label(&theme, "Drop here")])
+    let target = column(vec![label(cx, "Drop here")])
         .align(Align::Center, Align::Center)
         .height(70.0)
         .fill(p.surface.mix(p.primary, 0.1 + 0.25 * glow))
         .border(p.surface.mix(p.primary, 0.4 + 0.6 * glow), 1.0 + 2.0 * glow)
         .radius(theme.radius);
-    let toggle = button_labeled(
-        &theme,
+    let toggle = button(
+        cx,
         if s.pulse_from.is_some() {
             "Stop"
         } else {
             "Pulse"
         },
     )
-    .on_tap(cx, |s: &mut State| {
+    .on_tap(cx, |s| {
         s.pulse_from = match s.pulse_from {
             Some(_) => None,
             None => Some(anim::now()),
         }
     });
-    let pulser = panel(
-        &theme,
-        vec![row(vec![target.grow(1.0), toggle]).gap(theme.spacing.md)],
-    );
+    let pulser = panel(cx, |_| {
+        vec![row(vec![target.grow(1.0), toggle]).gap(theme.spacing.md)]
+    });
 
     // A staggered list.
     let items = ITEMS
@@ -146,9 +145,8 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
                 .radius(theme.radius)
         })
         .collect();
-    let replay =
-        button_labeled(&theme, "Replay").on_tap(cx, |s: &mut State| s.list_at = anim::now());
-    let list = panel(&theme, vec![replay, column(items).gap(4.0)]);
+    let replay = button(cx, "Replay").on_tap(cx, |s| s.list_at = anim::now());
+    let list = panel(cx, |_| vec![replay, column(items).gap(4.0)]);
 
     // An interruptible spring: click twice quickly and it turns round.
     let knob_x = cx.animate(&s.knob);
@@ -167,21 +165,14 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
         .fill(p.surface.mix(p.primary, 0.2 * knob_x))
         .border(p.border, 1.0)
         .radius(18.0)
-        .on_tap(cx, |s: &mut State| s.toggle_knob(anim::now()));
-    let spring = panel(
-        &theme,
-        vec![label(&theme, "Click the track (twice, quickly):"), track],
-    );
+        .on_tap(cx, |s| s.toggle_knob(anim::now()));
+    let spring = panel(cx, |cx| {
+        vec![label(cx, "Click the track (twice, quickly):"), track]
+    });
 
-    column(vec![
-        heading(&theme, "Motion"),
-        shaker,
-        pulser,
-        list,
-        spring,
-    ])
-    .gap(theme.spacing.md)
-    .padding(Insets::uniform(24.0))
+    column(vec![heading(cx, "Motion"), shaker, pulser, list, spring])
+        .gap(theme.spacing.md)
+        .padding(Insets::uniform(24.0))
 }
 
 /// Check the animations at fixed times.

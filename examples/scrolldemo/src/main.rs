@@ -31,7 +31,7 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
         .map(|i| {
             row(vec![
                 swatch(row_color(i), 22.0, 4.0),
-                label(&theme, format!("Item {i:02}")),
+                label(cx, format!("Item {i:02}")),
             ])
             .gap(theme.spacing.md)
             .padding(Insets::uniform(theme.spacing.sm))
@@ -42,12 +42,11 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
         })
         .collect();
     let content = column(items).gap(theme.spacing.sm);
-    let viewport = scroll(cx, 240.0, content).width(340.0);
+    let viewport = scroll(cx, 240.0, |_| content).width(340.0);
 
-    let card = panel(
-        &theme,
-        vec![label(&theme, "Scrollable list"), divider(&theme), viewport],
-    )
+    let card = panel(cx, |cx| {
+        vec![label(cx, "Scrollable list"), divider(cx), viewport]
+    })
     .width(360.0);
     column(vec![card]).grow(1.0).align(
         stipple::prelude::Align::Center,

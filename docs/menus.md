@@ -125,7 +125,7 @@ still runs the item, once.
 Give any element a context menu with `.context_menu(cx, menu)`:
 
 ```rust
-label(&theme, "Right-click me").context_menu(
+label(cx, "Right-click me").context_menu(
     cx,
     Menu::new("Canvas")
         .item(MenuItem::new("&Add Item", |s: &mut State| s.add()))

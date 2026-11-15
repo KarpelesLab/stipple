@@ -540,7 +540,7 @@ pub(crate) fn stick_vector(d: Vec2, radius: f64, dead_zone: f32) -> (f32, f32) {
 /// fn view(g: &Game, cx: &mut Cx<Game>) -> Element {
 ///     let theme = *cx.theme();
 ///     Element::layers(vec![
-///         label(&theme, "the game"),
+///         label(cx, "the game"),
 ///         g.touch.element(&theme), // over the rest
 ///     ])
 /// }

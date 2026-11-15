@@ -14,7 +14,6 @@ use std::time::Duration;
 use crate::anim::{Animated, Motion};
 use crate::core::{Align, Axis, Cx, Element, KeyInput, Role};
 use crate::geometry::{Insets, Transform};
-use crate::style::Theme;
 
 use super::motion::Memo;
 use super::virtual_list::{DEFAULT_OVERSCAN, RowHeight, Rows, Window, frame, row_fill};
@@ -322,26 +321,25 @@ pub(super) fn turn_of(
 /// }
 /// struct App { tree: TreeState }
 /// let theme = Theme::light();
-/// let mut cx = Cx::new(&theme);
+/// let mut cx = Cx::<App>::new(&theme);
 /// let state = App { tree: TreeState::new() };
 /// let view = tree(
 ///     &mut cx,
-///     &theme,
 ///     &state.tree,
-///     |s: &mut App| &mut s.tree,
+///     |s| &mut s.tree,
 ///     TreeSpec::new(&Numbers),
-///     |_cx, row| label(&theme, format!("Node {}", row.id)),
+///     |cx, row| label(cx, format!("Node {}", row.id)),
 /// );
 /// # let _ = view;
 /// ```
 pub fn tree<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &TreeState,
     field: impl Fn(&mut S) -> &mut TreeState + Copy + 'static,
     spec: TreeSpec<'_>,
     mut label: impl FnMut(&mut Cx<S>, &TreeRow) -> Element,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let p = &theme.palette;
     let rtl = theme.is_rtl();
     let flat: Rc<[Flat]> = flatten(spec.model, state).into();
@@ -395,7 +393,7 @@ pub fn tree<S: 'static>(
                 .align(Align::Center, Align::Center)
                 .role(Role::Button);
             let flat = flat.clone();
-            disclosure = disclosure.on_tap(cx, move |s: &mut S| {
+            disclosure = disclosure.on_tap(cx, move |s| {
                 let st = field(s);
                 if st.is_expanded(node.id) {
                     collapse(st, &flat, index);
@@ -426,7 +424,7 @@ pub fn tree<S: 'static>(
             el = el.fill(fill);
         }
         let w = window.clone();
-        built.push(el.on_tap(cx, move |s: &mut S| {
+        built.push(el.on_tap(cx, move |s| {
             field(s).select(Some(node.id));
             w.reveal(index);
         }));
@@ -434,7 +432,7 @@ pub fn tree<S: 'static>(
     let body = window.assemble(built);
     frame(theme, vec![body])
         .role(Role::Tree)
-        .on_key(cx, move |s: &mut S, key| {
+        .on_key(cx, move |s, key| {
             if let Some(to) = handle_key(field(s), &flat, &super::logical_key(rtl, key)) {
                 window.reveal(to);
             }
@@ -475,9 +473,8 @@ mod tests {
                 let theme = *cx.theme();
                 let view = tree(
                     cx,
-                    &theme,
                     &state.tree,
-                    |s: &mut App| &mut s.tree,
+                    |s| &mut s.tree,
                     TreeSpec::new(&Big),
                     |_cx, row| Element::text(format!("Node {}", row.id), 14.0, theme.palette.text),
                 );

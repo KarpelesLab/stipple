@@ -9,14 +9,13 @@ use crate::platform::dialog::{MessageBox, MessageKind, MessageResponse};
 struct State {
     answers: Vec<MessageResponse>,
     clicks: u32,
-    name: super::EditBuffer,
+    name: super::TextInput,
 }
 
 fn view(s: &State, cx: &mut Cx<State>) -> Element {
-    let theme = *cx.theme();
     super::column(vec![
-        super::button_labeled(&theme, "Behind").on_tap(cx, |s: &mut State| s.clicks += 1),
-        super::text_editor(cx, &theme, &s.name, |s: &mut State| &mut s.name),
+        super::button(cx, "Behind").on_tap(cx, |s| s.clicks += 1),
+        super::text_field(cx, &s.name, |s| &mut s.name),
     ])
     .padding(Insets::uniform(10.0))
 }

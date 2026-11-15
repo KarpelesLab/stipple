@@ -7,7 +7,6 @@ use std::rc::Rc;
 
 use crate::core::{Align, Axis, BoxStyle, Cx, Element, Role, pointer};
 use crate::geometry::Insets;
-use crate::style::Theme;
 
 use super::virtual_list::{
     DEFAULT_OVERSCAN, ListState, RowHeight, Rows, SelectionMode, Window, frame, row_fill,
@@ -249,28 +248,27 @@ impl<'a, S> TableSpec<'a, S> {
 ///
 /// struct App { table: TableState }
 /// let theme = Theme::light();
-/// let mut cx = Cx::new(&theme);
+/// let mut cx = Cx::<App>::new(&theme);
 /// let state = App { table: TableState::new(SelectionMode::Multi) };
 /// let columns = [Column::new("Name", 160.0).sortable(), Column::new("Size", 80.0)];
 /// let grid = table(
 ///     &mut cx,
-///     &theme,
 ///     &state.table,
-///     |s: &mut App| &mut s.table,
+///     |s| &mut s.table,
 ///     TableSpec::new(&columns, 10_000)
 ///         .on_sort(|_s: &mut App, _column, _order| { /* reorder the rows */ }),
-///     |_cx, row, column| label(&theme, format!("{row}:{column}")),
+///     |cx, row, column| label(cx, format!("{row}:{column}")),
 /// );
 /// # let _ = grid;
 /// ```
 pub fn table<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &TableState,
     field: impl Fn(&mut S) -> &mut TableState + Copy + 'static,
     spec: TableSpec<'_, S>,
     mut cell: impl FnMut(&mut Cx<S>, usize, usize) -> Element,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let p = &theme.palette;
     let widths: Vec<f64> = spec
         .columns
@@ -309,7 +307,7 @@ pub fn table<S: 'static>(
         if column.sortable {
             let on_sort = spec.on_sort.clone();
             let (requests, id) = (window.requests.clone(), window.id);
-            head = head.on_tap(cx, move |s: &mut S| {
+            head = head.on_tap(cx, move |s| {
                 let t = field(s);
                 let order = match t.sort {
                     Some((c, o)) if c == col => o.reversed(),
@@ -336,7 +334,7 @@ pub fn table<S: 'static>(
             .width(HANDLE)
             .height(spec.row_height)
             .align(Align::Center, Align::Center)
-            .on_drag(cx, move |s: &mut S, _| {
+            .on_drag(cx, move |s, _| {
                 let at = pointer();
                 let Some(origin) = at.drag_origin else { return };
                 let t = field(s);
@@ -393,20 +391,16 @@ pub fn table<S: 'static>(
             el = el.border(p.focus_ring, 1.0);
         }
         let w = window.clone();
-        built.push(
-            el.role(Role::Row)
-                .selected(selected)
-                .on_tap(cx, move |s: &mut S| {
-                    field(s).rows.click(index, pointer().modifiers);
-                    w.reveal(index);
-                }),
-        );
+        built.push(el.role(Role::Row).selected(selected).on_tap(cx, move |s| {
+            field(s).rows.click(index, pointer().modifiers);
+            w.reveal(index);
+        }));
     }
     let count = spec.rows;
     let body = window.assemble(built);
     frame(theme, vec![header, rule, body])
         .role(Role::Table)
-        .on_key(cx, move |s: &mut S, key| {
+        .on_key(cx, move |s, key| {
             let st = &mut field(s).rows;
             let before = st.cursor();
             if st.handle_key(key, count)
@@ -449,9 +443,8 @@ mod tests {
                 let cols = columns();
                 let grid = table(
                     cx,
-                    &theme,
                     &state.table,
-                    |s: &mut App| &mut s.table,
+                    |s| &mut s.table,
                     TableSpec::new(&cols, state.order.len())
                         .row_height(24.0)
                         .height(240.0)

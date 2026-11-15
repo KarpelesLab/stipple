@@ -219,7 +219,7 @@ mod tests {
         let el = Element::boxed(Default::default())
             .width(100.0)
             .height(40.0)
-            .on_raw_key(&mut cx, |s: &mut Vec<KeyCode>, ev: &KeyEvent| {
+            .on_raw_key(&mut cx, |s, ev: &KeyEvent| {
                 s.push(ev.logical);
                 (ev.logical == KeyCode::F1).into()
             })

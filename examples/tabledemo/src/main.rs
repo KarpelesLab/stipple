@@ -179,14 +179,13 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
 
     let grid = table(
         cx,
-        &theme,
         &state.table,
-        |s: &mut Demo| &mut s.table,
+        |s| &mut s.table,
         TableSpec::new(&cols, state.order.len())
             .row_height(26.0)
             .height(390.0)
             .on_sort(|s: &mut Demo, column, order| s.sort(column, order)),
-        |_cx, row, column| {
+        |cx, row, column| {
             let i = state.order[row];
             let f = &state.files[i];
             let text = match column {
@@ -195,17 +194,16 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
                 2 => KINDS[f.kind].to_string(),
                 _ => human(f.size),
             };
-            label(&theme, text)
+            label(cx, text)
         },
     );
 
     let folders = tree(
         cx,
-        &theme,
         &state.tree,
-        |s: &mut Demo| &mut s.tree,
+        |s| &mut s.tree,
         TreeSpec::new(&state.folders).row_height(26.0).height(417.0),
-        |_cx, row| label(&theme, state.folders.names[row.id as usize].clone()),
+        |cx, row| label(cx, state.folders.names[row.id as usize].clone()),
     )
     .width(280.0);
 
@@ -232,7 +230,7 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     );
 
     column(vec![
-        heading(&theme, "Tables and trees"),
+        heading(cx, "Tables and trees"),
         status,
         row(vec![grid, folders])
             .gap(sp.lg)

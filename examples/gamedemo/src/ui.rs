@@ -29,7 +29,7 @@ pub fn view(g: &Game, cx: &mut Cx<Game>) -> Element {
         0 => title(g, cx, &theme),
         1 => settings(g, cx, &theme),
         2 => hud(g, cx, &theme),
-        _ => game_over(g, cx, &theme),
+        _ => game_over(g, cx),
     });
     let mut layers = vec![canvas, pages];
     if g.screen == Screen::Play {
@@ -38,9 +38,9 @@ pub fn view(g: &Game, cx: &mut Cx<Game>) -> Element {
     Element::layers(layers).fill(Color::rgb(6, 5, 14))
 }
 
-fn hints(theme: &Theme) -> Element {
+fn hints<S>(cx: &Cx<S>) -> Element {
     gui::controls_hint(
-        theme,
+        cx,
         &[
             ("\u{2191}\u{2193}\u{2190}\u{2192}", "Move"),
             ("Enter / A", "Select"),
@@ -51,17 +51,15 @@ fn hints(theme: &Theme) -> Element {
 
 fn title(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     let mut buttons = vec![
-        gui::menu_button(cx, theme, "Play", Game::start),
-        gui::menu_button(cx, theme, "Settings", Game::open_settings),
+        gui::menu_button(cx, "Play", Game::start),
+        gui::menu_button(cx, "Settings", Game::open_settings),
     ];
     // A page can't close itself.
     if !cfg!(target_arch = "wasm32") {
         let handle = cx.handle();
-        buttons.push(gui::menu_button(cx, theme, "Quit", move |_: &mut Game| {
-            handle.exit()
-        }));
+        buttons.push(gui::menu_button(cx, "Quit", move |_| handle.exit()));
     }
-    let menu = gui::menu_list(theme, buttons).width(320.0);
+    let menu = gui::menu_list(cx, |_| buttons).width(320.0);
     let footer = column(vec![
         Element::text(
             if g.best > 0 {
@@ -72,14 +70,14 @@ fn title(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
             theme.typography.body,
             theme.palette.text_muted,
         ),
-        hints(theme),
+        hints(cx),
     ])
     .gap(theme.spacing.md)
     .align(Align::Start, Align::Center);
     TitleScreen::new("LAMPWICK", menu)
         .subtitle("a lantern-keeper's night")
         .footer(footer)
-        .view(theme)
+        .view(cx)
 }
 
 fn section(theme: &Theme, title: &str, rows: Vec<Element>) -> Element {
@@ -97,7 +95,7 @@ fn section(theme: &Theme, title: &str, rows: Vec<Element>) -> Element {
 
 fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     let volume = |cx: &mut Cx<Game>, label: &str, value: f32, set: fn(&mut Settings, f32)| {
-        gui::volume_row(cx, theme, label, value, move |g: &mut Game, v| {
+        gui::volume_row(cx, label, value, move |g, v| {
             set(&mut g.settings, v);
             g.apply_volumes();
             g.save_settings();
@@ -117,22 +115,15 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
         theme,
         "Display",
         vec![
-            gui::fullscreen_row(cx, theme, "Fullscreen", |g: &mut Game, on| {
+            gui::fullscreen_row(cx, "Fullscreen", |g, on| {
                 g.settings.fullscreen = on;
                 g.save_settings();
             }),
-            gui::choice_row(
-                cx,
-                theme,
-                "Pixel scale",
-                &SCALES,
-                s.scale,
-                |g: &mut Game, i| {
-                    g.settings.scale = i;
-                    g.stage.borrow_mut().vp.max_factor = max_factor(i);
-                    g.save_settings();
-                },
-            ),
+            gui::choice_row(cx, "Pixel scale", &SCALES, s.scale, |g, i| {
+                g.settings.scale = i;
+                g.stage.borrow_mut().vp.max_factor = max_factor(i);
+                g.save_settings();
+            }),
         ],
     );
     let mut controls = Vec::new();
@@ -142,11 +133,10 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
             .conflicts(gui::conflicts(&g.actions, act).into_iter().map(label_of));
         controls.push(gui::binding_row(
             cx,
-            theme,
             label,
             g.actions.bindings(act),
             &state,
-            move |g: &mut Game| {
+            move |g| {
                 // A second press while it waits is the input to bind. A key
                 // replaces the first key, a pad button the first pad binding.
                 if g.capture.is_none() {
@@ -157,15 +147,14 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     }
     controls.push(row(vec![
         spacer(),
-        gui::menu_button(cx, theme, "Reset controls", |g: &mut Game| {
+        gui::menu_button(cx, "Reset controls", |g| {
             g.actions = default_actions();
             g.save_controls();
         })
         .width(280.0),
     ]));
     let controls = section(theme, "Controls", controls);
-    let back =
-        gui::menu_button(cx, theme, "Back", |g: &mut Game| g.screen = g.settings_back).width(240.0);
+    let back = gui::menu_button(cx, "Back", |g| g.screen = g.settings_back).width(240.0);
     let body = row(vec![
         column(vec![audio, display]).gap(theme.spacing.lg).grow(1.0),
         column(vec![controls]).grow(1.4),
@@ -176,7 +165,7 @@ fn settings(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
         row(vec![
             Element::text("Settings", theme.typography.heading, theme.palette.text).bold(),
             spacer(),
-            hints(theme),
+            hints(cx),
         ]),
         body,
         spacer(),
@@ -201,10 +190,10 @@ fn hud(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
         .size(160.0, 12.0)
         .ghost(None);
     let bars = column(vec![
-        gui::health_bar(theme, health as f32, world::MAX_HEALTH as f32),
+        gui::health_bar(cx, health as f32, world::MAX_HEALTH as f32),
         row(vec![
             Element::text("\u{2600}", theme.typography.title, p.warning),
-            gui::stat_bar(theme, &lamp),
+            gui::stat_bar(cx, &lamp),
         ])
         .gap(theme.spacing.xs),
     ])
@@ -212,43 +201,38 @@ fn hud(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
     let top = row(vec![
         bars,
         spacer(),
-        gui::counter(theme, "score", "SCORE", i64::from(score)),
-        gui::counter(theme, "best", "BEST", i64::from(g.best.max(score))),
+        gui::counter(cx, "score", "SCORE", i64::from(score)),
+        gui::counter(cx, "best", "BEST", i64::from(g.best.max(score))),
     ])
     .gap(theme.spacing.lg)
     .align(Align::Start, Align::Start)
     .padding(Insets::uniform(theme.spacing.md));
     if g.screen == Screen::Play && g.paused {
         let buttons = vec![
-            gui::menu_button(cx, theme, "Resume", |g: &mut Game| g.paused = false),
-            gui::menu_button(cx, theme, "Settings", Game::open_settings),
-            gui::menu_button(cx, theme, "Quit to title", |g: &mut Game| {
+            gui::menu_button(cx, "Resume", |g| g.paused = false),
+            gui::menu_button(cx, "Settings", Game::open_settings),
+            gui::menu_button(cx, "Quit to title", |g| {
                 g.paused = false;
                 g.screen = Screen::Title;
             }),
         ];
-        gui::pause_menu(cx, theme, "Paused", buttons, |g: &mut Game| {
-            g.paused = false
-        });
+        gui::pause_menu(cx, "Paused", buttons, |g| g.paused = false);
     }
     Element::layers(vec![
         column(vec![top, spacer()]),
-        gui::floating_texts(theme, &g.floaters),
+        gui::floating_texts(cx, &g.floaters),
     ])
     // The game takes what the HUD doesn't.
     .hit_through()
 }
 
-fn game_over(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
-    let menu = gui::menu_list(
-        theme,
+fn game_over(g: &Game, cx: &mut Cx<Game>) -> Element {
+    let menu = gui::menu_list(cx, |cx| {
         vec![
-            gui::menu_button(cx, theme, "Play again", Game::start),
-            gui::menu_button(cx, theme, "Title screen", |g: &mut Game| {
-                g.screen = Screen::Title
-            }),
-        ],
-    )
+            gui::menu_button(cx, "Play again", Game::start),
+            gui::menu_button(cx, "Title screen", |g| g.screen = Screen::Title),
+        ]
+    })
     .width(320.0);
     let stage = g.stage.borrow();
     let w = &stage.world;
@@ -264,7 +248,7 @@ fn game_over(g: &Game, cx: &mut Cx<Game>, theme: &Theme) -> Element {
         .line("Embers caught", w.caught)
         .line("Moths burst", w.burst)
         .line("Time", format!("{}:{:02}", secs / 60, secs % 60))
-        .view(theme)
+        .view(cx)
 }
 
 fn back(g: &mut Game) -> Handled {

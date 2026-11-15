@@ -11,18 +11,23 @@ use crate::geometry::Insets;
 use crate::platform::gamepad::{GamepadAxis, GamepadButton};
 use crate::platform::{PhysicalKey, PointerButton, WindowRequest};
 use crate::render::Color;
-use crate::style::Theme;
 
 use super::menu::key_cap;
 
 /// The width of a row's control column (sliders, switches, choices).
 pub const CONTROL_WIDTH: f64 = 240.0;
 
-/// A settings row: `label` on the left, `control` on the right, on a
+/// A settings row: `label` on the left, the `control` the closure builds on the right, on a
 /// faint band; a [`menu_list`](super::menu_list) (or any
 /// [`spatial_nav`](Element::spatial_nav) column) of them is a settings
 /// screen the arrows and a gamepad move through.
-pub fn setting_row(theme: &Theme, label: impl Into<String>, control: Element) -> Element {
+pub fn setting_row<S>(
+    cx: &mut Cx<S>,
+    label: impl Into<String>,
+    control: impl FnOnce(&mut Cx<S>) -> Element,
+) -> Element {
+    let control = control(cx);
+    let theme = cx.theme();
     let p = &theme.palette;
     Element::stack(
         Axis::Horizontal,
@@ -45,11 +50,11 @@ pub fn setting_row(theme: &Theme, label: impl Into<String>, control: Element) ->
 /// value. [`CONTROL_WIDTH`] wide; override with `.width(..)`.
 pub fn game_slider<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     value: f32,
     step: f32,
     on_change: impl Fn(&mut S, f32) + Clone + 'static,
 ) -> Element {
+    let theme = &crate::widgets::theme_of(cx);
     let p = &theme.palette;
     let v = value.clamp(0.0, 1.0);
     let f = f64::from(v);
@@ -76,7 +81,7 @@ pub fn game_slider<S>(
         .radius(9.0)
         .height(18.0)
         .width(CONTROL_WIDTH)
-        .on_key(cx, move |s: &mut S, k: &KeyInput| {
+        .on_key(cx, move |s, k: &KeyInput| {
             let to = match k {
                 KeyInput::Left => v - step,
                 KeyInput::Right => v + step,
@@ -92,9 +97,7 @@ pub fn game_slider<S>(
             };
             keys(s, to.clamp(0.0, 1.0));
         })
-        .on_drag(cx, move |s: &mut S, x: f64| {
-            on_change(s, x.clamp(0.0, 1.0) as f32)
-        })
+        .on_drag(cx, move |s, x: f64| on_change(s, x.clamp(0.0, 1.0) as f32))
         .role(Role::Group)
 }
 
@@ -103,35 +106,35 @@ pub fn game_slider<S>(
 /// game's mixer.
 pub fn volume_row<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     label: impl Into<String>,
     value: f32,
     on_change: impl Fn(&mut S, f32) + Clone + 'static,
 ) -> Element {
+    let theme = &crate::widgets::theme_of(cx);
     let p = &theme.palette;
     let percent = (value.clamp(0.0, 1.0) * 100.0).round() as u32;
     let control = Element::stack(
         Axis::Horizontal,
         vec![
-            game_slider(cx, theme, value, 0.05, on_change),
+            game_slider(cx, value, 0.05, on_change),
             Element::text(format!("{percent}%"), theme.typography.body, p.text_muted).width(48.0),
         ],
     )
     .gap(theme.spacing.md);
-    setting_row(theme, label, control)
+    setting_row(cx, label, |_| control)
 }
 
 /// An on/off row: `label` and a switch; a tap (or Enter, or South) on the
 /// switch runs `on_toggle`.
 pub fn toggle_row<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     label: impl Into<String>,
     on: bool,
     on_toggle: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let theme = &crate::widgets::theme_of(cx);
     let label = label.into();
-    let switch = crate::widgets::switch(cx, theme, on, on_toggle).a11y_label(label.clone());
+    let switch = crate::widgets::switch(cx, on, on_toggle).a11y_label(label.clone());
     let p = &theme.palette;
     let state = Element::text(
         if on { "On" } else { "Off" },
@@ -140,7 +143,7 @@ pub fn toggle_row<S>(
     )
     .width(48.0);
     let control = Element::stack(Axis::Horizontal, vec![switch, state]).gap(theme.spacing.md);
-    setting_row(theme, label, control)
+    setting_row(cx, label, |_| control)
 }
 
 /// A row choosing one of `options` (a pixel scale, a language, a
@@ -150,12 +153,12 @@ pub fn toggle_row<S>(
 /// new index.
 pub fn choice_row<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     label: impl Into<String>,
     options: &[&str],
     selected: usize,
     on_change: impl Fn(&mut S, usize) + Clone + 'static,
 ) -> Element {
+    let theme = &crate::widgets::theme_of(cx);
     let label = label.into();
     let p = &theme.palette;
     let n = options.len().max(1);
@@ -166,7 +169,7 @@ pub fn choice_row<S>(
         Element::text(glyph, theme.typography.title, p.primary)
             .bold()
             .padding(Insets::symmetric(theme.spacing.xs, 0.0))
-            .on_tap(cx, move |s: &mut S| f(s, to))
+            .on_tap(cx, move |s| f(s, to))
             .role(Role::Group)
     };
     let left = arrow(cx, "\u{2039}", prev);
@@ -191,7 +194,7 @@ pub fn choice_row<S>(
     .width(CONTROL_WIDTH)
     .padding(Insets::symmetric(theme.spacing.xs, 2.0))
     .radius(theme.radius)
-    .on_key(cx, move |s: &mut S, k: &KeyInput| match k {
+    .on_key(cx, move |s, k: &KeyInput| match k {
         KeyInput::Left => keys(s, prev),
         KeyInput::Right | KeyInput::Enter => keys(s, next),
         KeyInput::Text(t) if t == " " => keys(s, next),
@@ -199,7 +202,7 @@ pub fn choice_row<S>(
     })
     .role(Role::ComboBox)
     .a11y_label(label.clone());
-    setting_row(theme, label, control)
+    setting_row(cx, label, |_| control)
 }
 
 /// A fullscreen row: a [`toggle_row`] showing whether the window is
@@ -209,13 +212,12 @@ pub fn choice_row<S>(
 /// restore at the next start (with [`App::fullscreen`](crate::App::fullscreen)).
 pub fn fullscreen_row<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     label: impl Into<String>,
     mut on_change: impl FnMut(&mut S, bool) + 'static,
 ) -> Element {
     let on = cx.window_info().fullscreen;
     let handle = cx.handle();
-    toggle_row(cx, theme, label, on, move |s: &mut S| {
+    toggle_row(cx, label, on, move |s| {
         handle.window(WindowRequest::Fullscreen(!on));
         on_change(s, !on);
     })
@@ -368,12 +370,12 @@ impl BindingRowState {
 /// [`RebindCapture`] for the action.
 pub fn binding_row<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     label: impl Into<String>,
     bindings: &[Binding],
     state: &BindingRowState,
     on_activate: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let theme = &crate::widgets::theme_of(cx);
     let label = label.into();
     let p = &theme.palette;
     let mut right: Vec<Element> = Vec::new();
@@ -408,7 +410,7 @@ pub fn binding_row<S>(
             ));
         }
         for b in bindings {
-            right.push(key_cap(theme, &binding_name(b)));
+            right.push(key_cap(cx, &binding_name(b)));
         }
     }
     let caps = Element::stack(Axis::Horizontal, right)
@@ -421,7 +423,7 @@ pub fn binding_row<S>(
     } else {
         p.warning
     };
-    setting_row(theme, label.clone(), caps)
+    setting_row(cx, label.clone(), |_| caps)
         .border(border, 2.0)
         .transition_for(AnimProp::Border, Transition(theme.motion.state))
         .on_tap(cx, on_activate)

@@ -162,12 +162,12 @@ fn slider_row(
     set: impl Fn(&mut Demo, f64) + 'static,
 ) -> Element {
     row(vec![
-        label(theme, name).width(90.0),
-        slider(cx, theme, value, move |s: &mut Demo, v| {
+        label(cx, name).width(90.0),
+        slider(cx, value, move |s, v| {
             set(s, v);
             s.apply_volumes();
         }),
-        label(theme, format!("{:.0}%", value * 100.0)),
+        label(cx, format!("{:.0}%", value * 100.0)),
     ])
     .gap(theme.spacing.md)
 }
@@ -175,16 +175,15 @@ fn slider_row(
 fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     let theme = *cx.theme();
     let effect = |cx: &mut Cx<Demo>, name: &str, pick: fn(&Effects) -> &Sound| {
-        button_labeled(&theme, name).on_tap(cx, move |s: &mut Demo| s.play(pick(&s.fx)))
+        button(cx, name).on_tap(cx, move |s| s.play(pick(&s.fx)))
     };
     let music_on = state.music.as_ref().is_some_and(Voice::is_playing);
     let stats = state.audio.stats();
-    panel(
-        &theme,
+    panel(cx, |cx| {
         vec![
-            heading(&theme, "Audio"),
+            heading(cx, "Audio"),
             label(
-                &theme,
+                cx,
                 format!(
                     "Output: {} at {} Hz · {} voices",
                     state.audio.backend(),
@@ -201,17 +200,17 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
             .gap(theme.spacing.sm),
             slider_row(cx, &theme, "Pan", state.pan, |s, v| s.pan = v),
             row(vec![
-                button_labeled(&theme, if music_on { "Stop music" } else { "Play music" })
-                    .on_tap(cx, |s: &mut Demo| s.toggle_music()),
-                button_labeled(
-                    &theme,
+                button(cx, if music_on { "Stop music" } else { "Play music" })
+                    .on_tap(cx, |s| s.toggle_music()),
+                button(
+                    cx,
                     if state.paused {
                         "Resume all"
                     } else {
                         "Pause all"
                     },
                 )
-                .on_tap(cx, |s: &mut Demo| {
+                .on_tap(cx, |s| {
                     s.paused = !s.paused;
                     if s.paused {
                         s.audio.pause_all();
@@ -226,8 +225,8 @@ fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
                 s.music_volume = v
             }),
             slider_row(cx, &theme, "Effects", state.effects, |s, v| s.effects = v),
-        ],
-    )
+        ]
+    })
 }
 
 /// Play for half a second and check the output kept pace.

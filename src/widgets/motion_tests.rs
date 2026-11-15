@@ -162,7 +162,7 @@ fn near(a: f64, b: f64) -> bool {
 #[test]
 fn a_switch_slides_its_thumb_and_fades_its_track() {
     let mut rig = Rig::new();
-    let switch_at = |on: bool| move |cx: &mut Cx<()>| switch(cx, &theme(), on, |_: &mut ()| {});
+    let switch_at = |on: bool| move |cx: &mut Cx<()>| switch(cx, on, |_: &mut ()| {});
     let t0 = Duration::from_secs(10);
     let (mut el, _, moving) = rig.build(t0, switch_at(false));
     assert!(!moving, "at rest: no frames");
@@ -192,7 +192,7 @@ fn a_switch_slides_its_thumb_and_fades_its_track() {
 #[test]
 fn a_check_mark_pops_in() {
     let mut rig = Rig::new();
-    let at = |on: bool| move |cx: &mut Cx<()>| checkbox(cx, &theme(), on, |_: &mut ()| {});
+    let at = |on: bool| move |cx: &mut Cx<()>| checkbox(cx, on, |_: &mut ()| {});
     let t0 = Duration::from_secs(10);
     let (mut el, _, _) = rig.build(t0, at(false));
     assert_eq!(kids(&mut el)[0].opacity, 0.0, "hidden while unchecked");
@@ -215,7 +215,7 @@ fn a_button_fades_its_hover_and_shrinks_while_pressed() {
     let mut rig = Rig::new();
     let t = theme();
     let base = t.palette.primary;
-    let view = |cx: &mut Cx<()>| button_labeled(&theme(), "OK").on_tap(cx, |_: &mut ()| {});
+    let view = |cx: &mut Cx<()>| button(cx, "OK").on_tap(cx, |_: &mut ()| {});
     let t0 = Duration::from_secs(10);
     let (el, _, moving) = rig.build(t0, view);
     assert!(!moving);
@@ -255,15 +255,7 @@ struct St {
 }
 
 fn select_view(s: &St) -> impl FnOnce(&mut Cx<St>) -> Element + '_ {
-    move |cx| {
-        select(
-            cx,
-            &theme(),
-            &["One", "Two", "Three"],
-            &s.pick,
-            |s: &mut St| &mut s.pick,
-        )
-    }
+    move |cx| select(cx, &["One", "Two", "Three"], &s.pick, |s| &mut s.pick)
 }
 
 #[test]
@@ -315,7 +307,7 @@ fn a_list_open_from_the_start_is_at_rest() {
 
 fn toasts_view(s: &St) -> impl FnOnce(&mut Cx<St>) -> Element + '_ {
     move |cx| {
-        toasts(cx, &theme(), &s.toasts, |s: &mut St| &mut s.toasts);
+        toasts(cx, &s.toasts, |s| &mut s.toasts);
         Element::stack(crate::layout::Axis::Vertical, vec![])
     }
 }
@@ -401,19 +393,21 @@ fn nothing_moves_at_rest() {
     let t0 = Duration::from_secs(10);
     for i in 0..3 {
         let view = |cx: &mut Cx<St>| {
-            let t = theme();
-            toasts(cx, &t, &st.toasts, |s: &mut St| &mut s.toasts);
+            toasts(cx, &st.toasts, |s| &mut s.toasts);
             column(vec![
-                button_labeled(&t, "Primary").on_tap(cx, |_: &mut St| {}),
-                button_variant(&t, "Ghost", Variant::Ghost).on_tap(cx, |_: &mut St| {}),
-                switch(cx, &t, true, |_: &mut St| {}),
-                switch(cx, &t, false, |_: &mut St| {}),
-                checkbox(cx, &t, true, |_: &mut St| {}),
-                checkbox(cx, &t, false, |_: &mut St| {}),
-                radio(cx, &t, true, |_: &mut St| {}),
-                radio(cx, &t, false, |_: &mut St| {}),
-                tabs(cx, &t, &["A", "B"], 0, |_: &mut St, _| {}),
-                select(cx, &t, &["x", "y"], &st.pick, |s: &mut St| &mut s.pick),
+                button(cx, "Primary").on_tap(cx, |_| {}),
+                Button::new("Ghost")
+                    .variant(Variant::Ghost)
+                    .view(cx)
+                    .on_tap(cx, |_| {}),
+                switch(cx, true, |_| {}),
+                switch(cx, false, |_| {}),
+                checkbox(cx, true, |_| {}),
+                checkbox(cx, false, |_| {}),
+                radio(cx, true, |_| {}),
+                radio(cx, false, |_| {}),
+                tabs(cx, &["A", "B"], 0, |_, _| {}),
+                select(cx, &["x", "y"], &st.pick, |s| &mut s.pick),
             ])
         };
         let (mut el, mut overlays, moving) = rig.build(t0 + i * 500 * MS, view);
@@ -466,7 +460,7 @@ fn bar_view(s: &Bar, selected: usize) -> impl FnOnce(&mut Cx<Bar>) -> Element + 
     move |cx| {
         let tabs = (0..3).map(|i| Tab::new(i, format!("Tab {i}"))).collect();
         let bar = TabBar::new("t", tabs).selected(selected).width(600.0);
-        tab_bar(cx, &theme(), bar, &s.bar, |s: &mut Bar| &mut s.bar)
+        tab_bar(cx, bar, &s.bar, |s| &mut s.bar)
     }
 }
 
@@ -510,26 +504,19 @@ fn stateless_popups_come_in_through_the_core() {
         dialog: bool,
     }
     let mut app = App::new(Pop::default(), |s: &Pop, cx: &mut Cx<Pop>| {
-        let t = theme();
         if s.menu {
-            let item = menu_item(cx, &t, "Cut", |_: &mut Pop| {});
-            open_menu(cx, &t, Point::new(10.0, 10.0), vec![item], |s: &mut Pop| {
-                s.menu = false
-            });
+            let menu = crate::core::Menu::new("Edit")
+                .item(crate::core::MenuItem::new("Cut", |_: &mut Pop| {}));
+            open_menu(cx, Point::new(10.0, 10.0), menu, |s| s.menu = false);
         }
         if s.dialog {
-            open_dialog(
-                cx,
-                &t,
-                "Sure?",
-                label(&t, "Really"),
-                vec![],
-                |s: &mut Pop| s.dialog = false,
-            );
+            open_dialog(cx, "Sure?", label(cx, "Really"), vec![], |s| {
+                s.dialog = false
+            });
         }
         column(vec![
-            button_labeled(&t, "Menu").on_tap(cx, |s: &mut Pop| s.menu = true),
-            button_labeled(&t, "Dialog").on_tap(cx, |s: &mut Pop| s.dialog = true),
+            button(cx, "Menu").on_tap(cx, |s| s.menu = true),
+            button(cx, "Dialog").on_tap(cx, |s| s.dialog = true),
         ])
     })
     .no_font()
@@ -626,22 +613,17 @@ fn stateless_overlays_and_tooltips_leave_on_the_theme_motion() {
     }
     let view = |up: Option<Up>| {
         move |cx: &mut Cx<()>| {
-            let t = theme();
             match up {
                 Some(Up::Menu) => {
-                    let item = menu_item(cx, &t, "Cut", |_: &mut ()| {});
-                    open_menu(cx, &t, Point::new(10.0, 10.0), vec![item], |_: &mut ()| {});
+                    let menu = crate::core::Menu::new("Edit")
+                        .item(crate::core::MenuItem::new("Cut", |_: &mut ()| {}));
+                    open_menu(cx, Point::new(10.0, 10.0), menu, |_| {});
                 }
-                Some(Up::Dialog) => open_dialog(
-                    cx,
-                    &t,
-                    "Sure?",
-                    label(&t, "Really"),
-                    vec![],
-                    |_: &mut ()| {},
-                ),
+                Some(Up::Dialog) => {
+                    open_dialog(cx, "Sure?", label(cx, "Really"), vec![], |_: &mut ()| {})
+                }
                 Some(Up::Tip) => cx.overlay(OverlaySpec {
-                    content: tooltip(&t, "Bold"),
+                    content: tooltip(cx, "Bold"),
                     anchor: crate::core::Anchor::Popup(Point::new(10.0, 10.0)),
                     modal: false,
                     dismiss: None,
@@ -682,15 +664,7 @@ fn a_dialog_and_its_scrim_come_in_together_on_the_theme_motion() {
     let view = |open: bool| {
         move |cx: &mut Cx<()>| {
             if open {
-                let t = theme();
-                open_dialog(
-                    cx,
-                    &t,
-                    "Sure?",
-                    label(&t, "Really"),
-                    vec![],
-                    |_: &mut ()| {},
-                );
+                open_dialog(cx, "Sure?", label(cx, "Really"), vec![], |_: &mut ()| {});
             }
             column(vec![])
         }

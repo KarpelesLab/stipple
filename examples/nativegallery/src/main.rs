@@ -9,11 +9,12 @@ struct Gallery {
     choice: usize,
     on: bool,
     level: f64,
-    name: EditBuffer,
+    name: TextInput,
 }
 
-fn labeled(theme: &Theme, control: Element, text: &str) -> Element {
-    row(vec![control, label(theme, text)]).gap(theme.spacing.sm)
+fn labeled<S>(cx: &Cx<S>, control: Element, text: &str) -> Element {
+    let theme = cx.theme();
+    row(vec![control, label(cx, text)]).gap(theme.spacing.sm)
 }
 
 fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
@@ -22,31 +23,31 @@ fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
         .iter()
         .enumerate()
         .map(|(i, text)| {
-            let control = radio(cx, &theme, state.choice == i, move |s: &mut Gallery| {
+            let control = radio(cx, state.choice == i, move |s| {
                 s.choice = i;
             });
-            labeled(&theme, control, text)
+            labeled(cx, control, text)
         })
         .collect();
-    let check = checkbox(cx, &theme, state.checked, |s: &mut Gallery| {
+    let check = checkbox(cx, state.checked, |s| {
         s.checked = !s.checked;
     });
-    let toggle = switch(cx, &theme, state.on, |s: &mut Gallery| s.on = !s.on);
-    let level = slider(cx, &theme, state.level, |s: &mut Gallery, v| s.level = v);
-    let name = text_editor(cx, &theme, &state.name, |s: &mut Gallery| &mut s.name);
+    let toggle = switch(cx, state.on, |s| s.on = !s.on);
+    let level = slider(cx, state.level, |s, v| s.level = v);
+    let name = text_field(cx, &state.name, |s| &mut s.name);
     column(vec![
-        heading(&theme, "Native controls"),
+        heading(cx, "Native controls"),
         name,
         row(vec![
-            button_labeled(&theme, "Save"),
-            button_variant(&theme, "Cancel", Variant::Secondary),
+            button(cx, "Save"),
+            Button::new("Cancel").variant(Variant::Secondary).view(cx),
         ])
         .gap(theme.spacing.sm),
-        labeled(&theme, check, "Show hidden files"),
+        labeled(cx, check, "Show hidden files"),
         row(radios).gap(theme.spacing.lg),
-        labeled(&theme, toggle, "Sync"),
+        labeled(cx, toggle, "Sync"),
         level,
-        progress_bar(&theme, state.level),
+        progress_bar(cx, state.level),
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(theme.spacing.lg))
@@ -59,7 +60,7 @@ fn main() {
         choice: 0,
         on: true,
         level: 0.6,
-        name: EditBuffer::from_text("Stipple"),
+        name: TextInput::from_text("Stipple"),
     };
     let app = App::new(state, view)
         .title("Stipple")

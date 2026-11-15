@@ -31,24 +31,20 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let status = match &state.result {
         Some(result) => {
             FRAMES_IDLE.fetch_add(1, Ordering::Relaxed);
-            row(vec![label(&theme, format!("Background work: {result}"))])
+            row(vec![label(cx, format!("Background work: {result}"))])
         }
         None => {
             FRAMES_LOADING.fetch_add(1, Ordering::Relaxed);
-            row(vec![
-                spinner(cx, &theme),
-                label(&theme, "Background work: running…"),
-            ])
-            .gap(theme.spacing.sm)
+            row(vec![spinner(cx), label(cx, "Background work: running…")]).gap(theme.spacing.sm)
         }
     };
-    let reload = button_labeled(&theme, "Run again").on_tap(cx, move |s: &mut State| {
+    let reload = button(cx, "Run again").on_tap(cx, move |s| {
         s.result = None;
         start_work(&handle);
     });
     column(vec![
-        heading(&theme, format!("Ticks: {}", state.ticks)),
-        progress_bar(&theme, (state.ticks % 20) as f64 / 19.0),
+        heading(cx, format!("Ticks: {}", state.ticks)),
+        progress_bar(cx, (state.ticks % 20) as f64 / 19.0),
         status,
         reload,
     ])
@@ -62,7 +58,7 @@ fn start_work(handle: &AppHandle<State>) {
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(600));
         let answer = (1..=10u64).product::<u64>(); // stands in for real work
-        handle.update(move |s: &mut State| s.result = Some(format!("10! = {answer}")));
+        handle.update(move |s| s.result = Some(format!("10! = {answer}")));
     });
 }
 

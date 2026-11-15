@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::core::menu::{ItemKind, Menu, MenuBar, MenuItem, mnemonic};
+use crate::core::menu::{ItemKind, Menu, MenuAction, MenuBar, MenuItem, mnemonic};
 use crate::core::{ActionId, Anchor, Axis, BoxStyle, ContextId, Cx, Element, OverlaySpec, Role};
 use crate::geometry::{Insets, Point};
 use crate::platform::menu::{mnemonic_at, mnemonic_range};
@@ -415,7 +415,7 @@ pub(crate) fn with_bar<S: 'static>(
         if open || focus == Some(i) {
             title = title.fill(p.selection);
         }
-        let title = title.on_tap(cx, move |_: &mut S| ui2.borrow_mut().toggle_bar(i));
+        let title = title.on_tap(cx, move |_| ui2.borrow_mut().toggle_bar(i));
         keys.push((title.action.expect("on_tap sets it"), key, initial));
         titles.push(title);
     }
@@ -490,7 +490,7 @@ fn popups<S: 'static>(
     };
     let dismiss = {
         let ui = ui.clone();
-        cx.register(move |_: &mut S| ui.borrow_mut().close())
+        cx.register(move |_| ui.borrow_mut().close())
     };
     let mut current = menu;
     let mut path: Vec<usize> = Vec::new();
@@ -500,7 +500,7 @@ fn popups<S: 'static>(
     // Grow from the corner nearest the anchor: the start edge's top.
     let origin = (if theme.is_rtl() { 1.0 } else { 0.0 }, 0.0);
     for (level, highlight) in levels.iter().enumerate() {
-        let (panel, row_ids) = panel(cx, theme, current, &path, *highlight, ui);
+        let (panel, row_ids) = panel(cx, theme, current, &path, *highlight, ui, None);
         // A level opens when what it's opened from changes.
         let opened = root.map(|root| {
             let mut u = ui.borrow_mut();
@@ -546,6 +546,19 @@ fn popups<S: 'static>(
     }
 }
 
+/// A dropdown showing `menu`'s commands, drawn like a context menu, for
+/// [`open_menu`](super::open_menu): picking one runs it, then `picked`.
+/// Submenus show but don't open.
+pub(crate) fn dropdown<S: 'static>(
+    cx: &mut Cx<S>,
+    theme: &Theme,
+    menu: &Menu<S>,
+    picked: &MenuAction<S>,
+) -> Element {
+    let ui = Rc::new(RefCell::new(MenuUi::default()));
+    panel(cx, theme, menu, &[], None, &ui, Some(picked)).0
+}
+
 /// A menu label's text, its `&` mnemonic underlined when `cues` are on.
 fn label_text(label: &str, cues: bool, size: f64, color: crate::render::Color) -> Element {
     let (text, at) = mnemonic_at(label);
@@ -566,6 +579,7 @@ fn panel<S: 'static>(
     path: &[usize],
     highlight: Option<usize>,
     ui: &Rc<RefCell<MenuUi>>,
+    picked: Option<&MenuAction<S>>,
 ) -> (Element, Vec<Option<ActionId>>) {
     let p = &theme.palette;
     let cues = ui.borrow().cues;
@@ -643,7 +657,7 @@ fn panel<S: 'static>(
             ItemKind::Submenu(_) => {
                 let ui = ui.clone();
                 let open: Vec<usize> = item_path.clone();
-                Some(cx.register(move |_: &mut S| {
+                Some(cx.register(move |_| {
                     let mut u = ui.borrow_mut();
                     u.levels = open.iter().map(|&i| Some(i)).collect();
                     u.levels.push(None);
@@ -651,9 +665,13 @@ fn panel<S: 'static>(
             }
             ItemKind::Action { .. } => item.action().map(|action| {
                 let ui = ui.clone();
-                cx.register(move |s: &mut S| {
+                let picked = picked.cloned();
+                cx.register(move |s| {
                     ui.borrow_mut().close();
                     (action.borrow_mut())(s);
+                    if let Some(picked) = &picked {
+                        (picked.borrow_mut())(s);
+                    }
                 })
             }),
             ItemKind::Separator => None,

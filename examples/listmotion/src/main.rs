@@ -115,10 +115,10 @@ fn row_of(s: &State, item: &Item, cx: &mut Cx<State>, theme: &Theme) -> Element 
         .radius(7.0)
         .fill(hue);
     let id = item.id;
-    let remove = button_labeled(theme, "×")
+    let remove = button(cx, "×")
         .a11y_label(format!("Remove {}", item.name))
-        .on_tap(cx, move |s: &mut State| s.remove(id));
-    let name = label(theme, item.name).grow(1.0);
+        .on_tap(cx, move |s| s.remove(id));
+    let name = label(cx, item.name).grow(1.0);
     // In: fades in, sliding from the left. Out: fades while shrinking a
     // little. Moved: glides on a spring. All slowed down by `--demo`.
     let ease = Transition::ease(s.secs(0.25));
@@ -145,9 +145,7 @@ fn row_of(s: &State, item: &Item, cx: &mut Cx<State>, theme: &Theme) -> Element 
 fn view(s: &State, cx: &mut Cx<State>) -> Element {
     let theme = *cx.theme();
     let p = theme.palette;
-    let button = |cx: &mut Cx<State>, text: &str, f: fn(&mut State)| {
-        button_labeled(&theme, text).on_tap(cx, f)
-    };
+    let button = |cx: &mut Cx<State>, text: &str, f: fn(&mut State)| button(cx, text).on_tap(cx, f);
     let controls = row(vec![
         button(cx, "Add", State::add),
         button(cx, "Shuffle", State::shuffle),
@@ -160,11 +158,11 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
     .gap(theme.spacing.sm)
     .wrap();
 
-    let mut body = vec![heading(&theme, "Groceries"), controls];
+    let mut body = vec![heading(cx, "Groceries"), controls];
     if s.tips {
         // Opening pushes the list down; the rows glide there.
         body.push(
-            label(&theme, "Rows fade in, fade out and glide; × removes one.")
+            label(cx, "Rows fade in, fade out and glide; × removes one.")
                 .padding(Insets::uniform(12.0))
                 .fill(p.surface.mix(p.primary, 0.12))
                 .radius(theme.radius)

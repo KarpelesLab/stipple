@@ -25,43 +25,36 @@ fn content(state: &State, theme: &Theme, cx: &mut Cx<State>) -> Element {
     };
     let swatch = Element::boxed(BoxStyle::filled(color).radius(theme.radius)).height(180.0);
     column(vec![
-        heading(theme, title),
+        heading(cx, title),
         swatch,
-        label(theme, "Right-click anywhere here for a menu"),
+        label(cx, "Right-click anywhere here for a menu"),
     ])
     .gap(theme.spacing.md)
     .grow(1.0)
     // Secondary click anywhere over the body opens the context menu there.
-    .on_context(cx, |s: &mut State, at: Point| s.menu_at = Some(at))
+    .on_context(cx, |s, at: Point| s.menu_at = Some(at))
 }
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let theme = *cx.theme();
 
-    let bar = tabs(cx, &theme, &TABS, state.tab, |s: &mut State, i| {
+    let bar = tabs(cx, &TABS, state.tab, |s, i| {
         s.tab = i;
         s.menu_at = None;
     });
     let body = content(state, &theme, cx);
 
     // When open, declare the context menu as an overlay anchored at the click.
-    // Build the items first so their `cx` borrows don't overlap `open_menu`'s.
+    // Picking an item, or pressing outside, closes it.
     if let Some(at) = state.menu_at {
-        let items = vec![
-            menu_item(cx, &theme, "Go to Profile", |s: &mut State| {
-                s.tab = 0;
-                s.menu_at = None;
-            }),
-            menu_item(cx, &theme, "Go to About", |s: &mut State| {
-                s.tab = 2;
-                s.menu_at = None;
-            }),
-            menu_item(cx, &theme, "Dismiss", |s: &mut State| s.menu_at = None),
-        ];
-        open_menu(cx, &theme, at, items, |s: &mut State| s.menu_at = None);
+        let menu = Menu::new("Go")
+            .item(MenuItem::new("Go to Profile", |s: &mut State| s.tab = 0))
+            .item(MenuItem::new("Go to About", |s: &mut State| s.tab = 2))
+            .item(MenuItem::new("Dismiss", |_: &mut State| {}));
+        open_menu(cx, at, menu, |s| s.menu_at = None);
     }
 
-    panel(&theme, vec![bar, body])
+    panel(cx, |_| vec![bar, body])
 }
 
 fn main() {

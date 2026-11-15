@@ -102,7 +102,7 @@ fn rows_app(labels: Vec<&'static str>) -> (App<Rows>, Rc<Cell<usize>>) {
                 Element::boxed(Default::default())
                     .width(200.0)
                     .height(ROW_H)
-                    .on_tap(cx, |s: &mut Rows| s.tapped.push(99)),
+                    .on_tap(cx, |s| s.tapped.push(99)),
             );
         }
         for (i, &text) in s.labels.iter().enumerate() {
@@ -112,7 +112,7 @@ fn rows_app(labels: Vec<&'static str>) -> (App<Rows>, Rc<Cell<usize>>) {
                 Element::text(text, 12.0, Color::BLACK)
                     .width(200.0)
                     .height(ROW_H)
-                    .on_tap(cx, move |s: &mut Rows| s.tapped.push(i))
+                    .on_tap(cx, move |s| s.tapped.push(i))
             }));
         }
         Element::stack(Axis::Vertical, children)
@@ -206,19 +206,19 @@ fn scroll_containers_and_drop_targets_keep_their_ids_too() {
     };
     let mut app = App::new(state, |s: &Panel, cx: &mut Cx<Panel>| {
         // A container before the memoized one takes the first id.
-        let first = crate::widgets::scroll(cx, 50.0, Element::boxed(Default::default()));
+        let first = crate::widgets::scroll(cx, 50.0, |_| Element::boxed(Default::default()));
         let builds = s.builds.clone();
         let panel = cx.memo("panel", (), move |cx| {
             builds.set(builds.get() + 1);
             let content = Element::stack(Axis::Vertical, vec![]).height(200.0);
-            let list = crate::widgets::scroll(cx, 50.0, content);
+            let list = crate::widgets::scroll(cx, 50.0, |_| content);
             let id = list.scroll.expect("a scroll container");
             // A button that scrolls the list by the id it captured.
             let button = Element::boxed(Default::default())
                 .height(20.0)
-                .on_tap(cx, move |_: &mut Panel| {});
+                .on_tap(cx, move |_| {});
             let requests = cx.scroll_requests();
-            let button = button.on_drop(cx, move |s: &mut Panel, data, _| {
+            let button = button.on_drop(cx, move |s, data, _| {
                 if let DropData::Text(t) = data {
                     s.dropped.push(t.clone());
                 }
@@ -568,7 +568,7 @@ fn rows_scrolled_out_of_view_are_not_painted() {
         .collect();
     let theme = Theme::light();
     let mut cx = Cx::<()>::new(&theme);
-    let list = crate::widgets::scroll(&mut cx, 100.0, Element::stack(Axis::Vertical, rows));
+    let list = crate::widgets::scroll(&mut cx, 100.0, |_| Element::stack(Axis::Vertical, rows));
     let window = Size::new(100.0, 300.0);
     let mut laid = crate::core::layout(&list, Rect::from_xywh(0.0, 0.0, 100.0, 300.0), None);
     let mut offsets = std::collections::HashMap::new();
@@ -595,9 +595,9 @@ struct Bench {
 
 fn list_row(theme: &Theme, cx: &mut Cx<Bench>, i: usize) -> Element {
     row(vec![
-        label(theme, format!("Row {i}")),
+        label(cx, format!("Row {i}")),
         spacer(),
-        label(theme, format!("{} items", i * 7 % 13)),
+        label(cx, format!("{} items", i * 7 % 13)),
     ])
     .padding(Insets::uniform(4.0))
     .fill(if i.is_multiple_of(2) {
@@ -605,7 +605,7 @@ fn list_row(theme: &Theme, cx: &mut Cx<Bench>, i: usize) -> Element {
     } else {
         theme.palette.background
     })
-    .on_tap(cx, move |_: &mut Bench| {})
+    .on_tap(cx, move |_| {})
 }
 
 /// 500 rows in a scroll container, each memoized if `memo`.
@@ -616,7 +616,7 @@ fn list(theme: &Theme, cx: &mut Cx<Bench>, memo: bool) -> Element {
             false => list_row(theme, cx, i),
         })
         .collect();
-    crate::widgets::scroll(cx, 560.0, column(rows))
+    crate::widgets::scroll(cx, 560.0, |_| column(rows))
 }
 
 /// The median time of `frames` frames' build (or animation frame) and their

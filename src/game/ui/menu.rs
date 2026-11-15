@@ -23,10 +23,10 @@ pub const MENU_FOCUS_SCALE: f64 = 1.06;
 /// between them.
 pub fn menu_button<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     label: impl Into<String>,
     on_press: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let theme = &crate::widgets::theme_of(cx);
     let label = label.into();
     let key = ("menu_button", label.clone());
     let states = cx.interaction(&key);
@@ -84,11 +84,13 @@ pub fn menu_button<S>(
     .a11y_label(label)
 }
 
-/// A column of [`menu_button`]s (or any controls) the arrow keys and a
+/// A column of [`menu_button`]s (or any controls), built by the closure, the arrow keys and a
 /// gamepad move through by where they are
 /// ([`spatial_nav`](Element::spatial_nav)); its first control takes focus
 /// when nothing has it.
-pub fn menu_list(theme: &Theme, items: Vec<Element>) -> Element {
+pub fn menu_list<S>(cx: &mut Cx<S>, items: impl FnOnce(&mut Cx<S>) -> Vec<Element>) -> Element {
+    let items = items(cx);
+    let theme = cx.theme();
     Element::stack(Axis::Vertical, items)
         .gap(theme.spacing.sm)
         .spatial_nav()
@@ -96,7 +98,8 @@ pub fn menu_list(theme: &Theme, items: Vec<Element>) -> Element {
 
 /// A row of control hints, each a key cap (or a gamepad button's name) and
 /// what it does: `[("↑↓", "Move"), ("Enter / A", "Select")]`.
-pub fn controls_hint(theme: &Theme, hints: &[(&str, &str)]) -> Element {
+pub fn controls_hint<S>(cx: &Cx<S>, hints: &[(&str, &str)]) -> Element {
+    let theme = cx.theme();
     let p = &theme.palette;
     let items = hints
         .iter()
@@ -104,7 +107,7 @@ pub fn controls_hint(theme: &Theme, hints: &[(&str, &str)]) -> Element {
             Element::stack(
                 Axis::Horizontal,
                 vec![
-                    key_cap(theme, key),
+                    key_cap(cx, key),
                     Element::text(*what, theme.typography.caption, p.text_muted),
                 ],
             )
@@ -118,7 +121,8 @@ pub fn controls_hint(theme: &Theme, hints: &[(&str, &str)]) -> Element {
 
 /// A key cap: `text` (a key's or a gamepad button's name) in a small framed
 /// box, as the controls screen and the hints show bindings.
-pub fn key_cap(theme: &Theme, text: &str) -> Element {
+pub fn key_cap<S>(cx: &Cx<S>, text: &str) -> Element {
+    let theme = cx.theme();
     let p = &theme.palette;
     Element::stack(
         Axis::Horizontal,
@@ -143,11 +147,11 @@ pub fn key_cap(theme: &Theme, text: &str) -> Element {
 /// use stipple::prelude::*;
 ///
 /// fn title(cx: &mut Cx<()>, theme: &Theme) -> Element {
-///     let menu = gui::menu_list(theme, vec![gui::menu_button(cx, theme, "Play", |_| {})]);
+///     let menu = gui::menu_list(cx, |cx| vec![gui::menu_button(cx, "Play", |_| {})]);
 ///     TitleScreen::new("STARLIT COURIER", menu)
 ///         .subtitle("deliveries across the comet belt")
-///         .footer(gui::controls_hint(theme, &[("Enter / A", "Select")]))
-///         .view(theme)
+///         .footer(gui::controls_hint(cx, &[("Enter / A", "Select")]))
+///         .view(cx)
 /// }
 /// # let _ = title;
 /// ```
@@ -194,7 +198,8 @@ impl TitleScreen {
     }
 
     /// The screen's element.
-    pub fn view(self, theme: &Theme) -> Element {
+    pub fn view<S>(self, cx: &Cx<S>) -> Element {
+        let theme = cx.theme();
         let p = &theme.palette;
         let heading = theme.typography.heading;
         let mut head = vec![Element::text(self.title, heading * 1.6, p.primary).bold()];
@@ -234,11 +239,11 @@ impl TitleScreen {
 /// use stipple::prelude::*;
 ///
 /// fn game_over(cx: &mut Cx<()>, theme: &Theme, score: u32) -> Element {
-///     let menu = gui::menu_list(theme, vec![gui::menu_button(cx, theme, "Try again", |_| {})]);
+///     let menu = gui::menu_list(cx, |cx| vec![gui::menu_button(cx, "Try again", |_| {})]);
 ///     GameOverScreen::new("HULL BREACHED", menu)
 ///         .line("Score", score)
 ///         .line("Time", "2:05")
-///         .view(theme)
+///         .view(cx)
 /// }
 /// # let _ = game_over;
 /// ```
@@ -276,7 +281,8 @@ impl GameOverScreen {
     }
 
     /// The screen's element.
-    pub fn view(self, theme: &Theme) -> Element {
+    pub fn view<S>(self, cx: &Cx<S>) -> Element {
+        let theme = cx.theme();
         let p = &theme.palette;
         let rows = self
             .lines
@@ -334,11 +340,11 @@ impl GameOverScreen {
 /// go back through the app's [`on_back`](crate::App::on_back): resume there.
 pub fn pause_menu<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     title: impl Into<String>,
     buttons: Vec<Element>,
     on_resume: impl FnMut(&mut S) + 'static,
 ) {
+    let theme = &crate::widgets::theme_of(cx);
     let p = &theme.palette;
     let dismiss = cx.register(on_resume);
     let content = Element::stack(
@@ -349,7 +355,7 @@ pub fn pause_menu<S>(
                 vec![Element::text(title, theme.typography.heading, p.text).bold()],
             )
             .align(Align::Center, Align::Center),
-            menu_list(theme, buttons),
+            menu_list(cx, |_| buttons),
         ],
     )
     .gap(theme.spacing.lg)

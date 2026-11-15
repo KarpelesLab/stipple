@@ -125,7 +125,7 @@ fn grid_app() -> GridApp {
             .revision(s.revision)
             .width(100.0)
             .height(100.0)
-            .on_tap(cx, |s: &mut Grid| s.taps += 1),
+            .on_tap(cx, |s| s.taps += 1),
         ])
     })
     .no_font()
@@ -221,7 +221,7 @@ fn an_invalidation_during_a_rebuild_is_kept() {
     // An update and an invalidation arrive together: the update rebuilds, and
     // the row still repaints.
     let handle = app.handle();
-    handle.update(|s: &mut Grid| s.taps += 0);
+    handle.update(|s| s.taps += 0);
     handle.invalidate_canvas_rect(GRID, Rect::from_xywh(0.0, 50.0, 100.0, ROW));
     app.wake_to(&mut screen);
     assert_eq!(builds.get(), 2);

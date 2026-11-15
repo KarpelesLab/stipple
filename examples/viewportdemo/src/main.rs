@@ -45,15 +45,13 @@ fn content() -> Pixmap {
 }
 
 fn view(_state: &(), cx: &mut Cx<()>) -> Element {
-    let theme = *cx.theme();
-    let card = panel(
-        &theme,
+    let card = panel(cx, |cx| {
         vec![
-            heading(&theme, "Embedded content"),
+            heading(cx, "Embedded content"),
             // The viewport: the app blits the registered content over this rect.
-            viewport(&theme, PAGE, VW as f64, VH as f64),
-        ],
-    );
+            viewport(cx, PAGE, VW as f64, VH as f64),
+        ]
+    });
     column(vec![card])
         .grow(1.0)
         .align(Align::Center, Align::Center)

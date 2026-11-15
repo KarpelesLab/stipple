@@ -64,11 +64,7 @@ fn main() {
             // Build a real Stipple UI and derive its accessibility tree, then
             // expose the *whole* tree over AT-SPI.
             let mut app = App::new((), |_s: &(), cx: &mut Cx<()>| {
-                let theme = *cx.theme();
-                panel(
-                    &theme,
-                    vec![label(&theme, "Hello"), button_labeled(&theme, "OK")],
-                )
+                panel(cx, |cx| vec![label(cx, "Hello"), button(cx, "OK")])
             });
             app.render_once();
             let root = app.accessibility_tree().expect("accessibility tree");

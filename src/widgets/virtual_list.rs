@@ -453,7 +453,7 @@ pub(crate) fn frame(theme: &Theme, children: Vec<Element>) -> Element {
 /// by `row`, while the scroll extent covers them all.
 ///
 /// `state` is the list's [`ListState`] and `field` the accessor that reaches it
-/// inside the app state, as with [`text_editor`](crate::widgets::text_editor).
+/// inside the app state, as with [`text_field`](crate::widgets::text_field).
 /// The row builder gets the [`Cx`] (rows can hold their own controls) and a
 /// [`RowInfo`]; the list adds the selection tint, the click handling and the
 /// row's height. The list takes keyboard focus as a whole.
@@ -464,26 +464,25 @@ pub(crate) fn frame(theme: &Theme, children: Vec<Element>) -> Element {
 ///
 /// struct App { list: ListState }
 /// let theme = Theme::light();
-/// let mut cx = Cx::new(&theme);
+/// let mut cx = Cx::<App>::new(&theme);
 /// let state = App { list: ListState::new(SelectionMode::Multi) };
 /// let list = virtual_list(
 ///     &mut cx,
-///     &theme,
 ///     &state.list,
-///     |s: &mut App| &mut s.list,
+///     |s| &mut s.list,
 ///     VirtualList::fixed(10_000, 24.0).height(240.0),
-///     |_cx, row| label(&theme, format!("Row {}", row.index)),
+///     |cx, row| label(cx, format!("Row {}", row.index)),
 /// );
 /// # let _ = list;
 /// ```
 pub fn virtual_list<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &ListState,
     field: impl Fn(&mut S) -> &mut ListState + Copy + 'static,
     spec: VirtualList<'_>,
     mut row: impl FnMut(&mut Cx<S>, RowInfo) -> Element,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let window = Window::new(cx, spec.geometry(), spec.height, spec.overscan);
     let multi = state.mode() != SelectionMode::Single;
     let mut rows = Vec::with_capacity(window.range.len());
@@ -508,7 +507,7 @@ pub fn virtual_list<S: 'static>(
         rows.push(
             el.role(Role::ListItem)
                 .selected(info.selected)
-                .on_tap(cx, move |s: &mut S| {
+                .on_tap(cx, move |s| {
                     field(s).click(index, pointer().modifiers);
                     w.reveal(index);
                 }),
@@ -518,7 +517,7 @@ pub fn virtual_list<S: 'static>(
     let body = window.assemble(rows);
     frame(theme, vec![body])
         .role(Role::List)
-        .on_key(cx, move |s: &mut S, key| {
+        .on_key(cx, move |s, key| {
             let st = field(s);
             let before = st.cursor();
             if st.handle_key(key, count)
@@ -568,9 +567,8 @@ mod tests {
         let hi = Cell::new(0usize);
         let el = virtual_list(
             &mut cx,
-            &theme,
             &state.list,
-            |s: &mut App| &mut s.list,
+            |s| &mut s.list,
             VirtualList::fixed(10_000, 24.0).height(240.0),
             |_cx, row| {
                 built.set(built.get() + 1);
@@ -695,12 +693,10 @@ mod tests {
                 list: ListState::new(SelectionMode::Multi),
             },
             |state: &App, cx: &mut Cx<App>| {
-                let theme = *cx.theme();
                 let list = virtual_list(
                     cx,
-                    &theme,
                     &state.list,
-                    |s: &mut App| &mut s.list,
+                    |s| &mut s.list,
                     VirtualList::fixed(10_000, 24.0).height(240.0),
                     |_cx, row| Element::text(format!("Row {}", row.index), 14.0, Color::BLACK),
                 );

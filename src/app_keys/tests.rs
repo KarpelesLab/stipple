@@ -60,7 +60,7 @@ fn app() -> App<Term> {
         let term = Element::boxed(Default::default())
             .width(200.0)
             .height(100.0)
-            .on_raw_key(cx, move |s: &mut Term, ev: &KeyEvent| {
+            .on_raw_key(cx, move |s, ev: &KeyEvent| {
                 s.raw.push(format!("{:?} {:?}", ev.state, ev.logical));
                 match ev.logical {
                     KeyCode::Char('x') => Handled::No,
@@ -68,16 +68,14 @@ fn app() -> App<Term> {
                     _ => Handled::Yes,
                 }
             })
-            .on_key(cx, |s: &mut Term, input: &KeyInput| {
-                s.typed.push(input.clone())
-            })
+            .on_key(cx, |s, input: &KeyInput| s.typed.push(input.clone()))
             .captures_tab(s.capture_tab)
             .ime_cursor_area(Rect::from_xywh(8.0, 16.0, 1.0, 16.0))
             .option_as_meta(OptionAsMeta::Left);
         let other = Element::boxed(Default::default())
             .width(100.0)
             .height(20.0)
-            .on_key(cx, |_: &mut Term, _: &KeyInput| {});
+            .on_key(cx, |_, _: &KeyInput| {});
         column(vec![term, other])
     })
     .no_font()

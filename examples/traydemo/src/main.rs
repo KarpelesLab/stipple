@@ -30,13 +30,13 @@ struct State {
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let theme = *cx.theme();
-    let open = button_labeled(&theme, "Open stipple on GitHub").on_tap(cx, |s: &mut State| {
+    let open = button(cx, "Open stipple on GitHub").on_tap(cx, |s| {
         s.status = result(
             "open_url",
             open_url("https://github.com/KarpelesLab/stipple"),
         );
     });
-    let file = button_labeled(&theme, "Open a text file").on_tap(cx, |s: &mut State| {
+    let file = button(cx, "Open a text file").on_tap(cx, |s| {
         let path = std::env::temp_dir().join("stipple-traydemo.txt");
         let wrote = std::fs::write(&path, "Opened by Stipple's traydemo.\n");
         s.status = match wrote {
@@ -44,13 +44,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             Err(e) => format!("couldn't write {}: {e}", path.display()),
         };
     });
-    let notify = button_labeled(&theme, "Show a notification").on_tap(cx, |s: &mut State| {
+    let notify = button(cx, "Show a notification").on_tap(cx, |s| {
         s.status = result("notify", send_notification(s));
     });
     column(vec![
-        heading(&theme, "Tray, notifications and URLs"),
+        heading(cx, "Tray, notifications and URLs"),
         label(
-            &theme,
+            cx,
             format!(
                 "Tray: {} · pings {} · activations {} · muted {}",
                 if platform::tray_shown() {
@@ -64,7 +64,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             ),
         ),
         row(vec![open, file, notify]).gap(theme.spacing.sm),
-        label(&theme, state.status.clone()),
+        label(cx, state.status.clone()),
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(theme.spacing.lg))

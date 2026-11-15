@@ -218,7 +218,7 @@ fn leaving_the_window_clears_every_hover() {
             .height(50.0)
             .fill(GRAY)
             .hovered(|e| e.fill(RED))
-            .on_tap(cx, |_: &mut Log| {});
+            .on_tap(cx, |_| {});
         Element::stack(Axis::Vertical, vec![a, b])
     })
     .no_font()
@@ -268,7 +268,7 @@ fn a_release_outside_the_window_ends_the_hover() {
             .width(100.0)
             .height(50.0)
             .hovered(|e| e.fill(RED))
-            .on_tap(cx, |_: &mut Log| {});
+            .on_tap(cx, |_| {});
         Element::stack(Axis::Vertical, vec![b])
     })
     .no_font()

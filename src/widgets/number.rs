@@ -180,7 +180,7 @@ impl NumberInput {
     /// Up and Down step; Enter commits the text; Escape reverts it. Typed text
     /// keeps only the characters a number can have (digits, `.`, `-`, `+`,
     /// `e`); every other key edits the text as in a
-    /// [`text_editor`](super::text_editor).
+    /// [`text_field`](super::text_field).
     pub fn apply(&mut self, key: &KeyInput) -> bool {
         let before = self.value;
         match key {
@@ -236,10 +236,10 @@ impl NumberInput {
 /// [`Role::SpinButton`] named by its value.
 pub fn number_input<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &NumberInput,
     field: impl Fn(&mut S) -> &mut NumberInput + Copy + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let p = &theme.palette;
     let buffer = state.buffer();
     let shown = if buffer.is_empty() {
@@ -264,17 +264,15 @@ pub fn number_input<S>(
     }
     let edit = edit
         .role(Role::SpinButton)
-        .on_key(cx, move |s: &mut S, k| {
+        .on_key(cx, move |s, k| {
             field(s).apply(k);
         })
-        .on_text_pos(cx, move |s: &mut S, index, extend| {
-            field(s).pointer(index, extend)
-        });
+        .on_text_pos(cx, move |s, index, extend| field(s).pointer(index, extend));
 
     let up = stepper(theme, "\u{25B4}", "Increase", state.value < state.max)
-        .on_tap(cx, move |s: &mut S| field(s).increment());
+        .on_tap(cx, move |s| field(s).increment());
     let down = stepper(theme, "\u{25BE}", "Decrease", state.value > state.min)
-        .on_tap(cx, move |s: &mut S| field(s).decrement());
+        .on_tap(cx, move |s| field(s).decrement());
     let steppers = Element::stack(Axis::Vertical, vec![up, down])
         .fill(p.surface)
         .border(p.border, 1.0)
@@ -393,10 +391,7 @@ mod tests {
                 n: NumberInput::new(1.0).range(0.0, 3.0),
             },
             |s: &State, cx: &mut Cx<State>| {
-                let theme = *cx.theme();
-                super::super::column(vec![number_input(cx, &theme, &s.n, |s: &mut State| {
-                    &mut s.n
-                })])
+                super::super::column(vec![number_input(cx, &s.n, |s| &mut s.n)])
             },
         )
         .no_font()

@@ -12,11 +12,10 @@
 //! }
 //!
 //! let mut app = App::new(Counter { n: 0 }, |state: &Counter, cx: &mut Cx<Counter>| {
-//!     let theme = *cx.theme();
-//!     panel(
-//!         &theme,
-//!         vec![button(&theme).on_tap(cx, |s: &mut Counter| s.n += 1)],
-//!     )
+//!     panel(cx, |cx| vec![
+//!         label(cx, format!("Count: {}", state.n)),
+//!         button(cx, "+1").on_tap(cx, |s| s.n += 1),
+//!     ])
 //! })
 //! .title("Counter")
 //! .logical_size(Size::new(360.0, 200.0));
@@ -766,8 +765,7 @@ impl<S: 'static> App<S> {
     /// use stipple::prelude::*;
     /// use stipple::platform::AppInfo;
     /// let app = App::new((), |_: &(), cx: &mut Cx<()>| {
-    ///     let theme = *cx.theme();
-    ///     label(&theme, "Hello")
+    ///     label(cx, "Hello")
     /// })
     /// .app_info(AppInfo::new("org.example.Hello").name("Hello").version(env!("CARGO_PKG_VERSION")));
     /// ```
@@ -827,8 +825,7 @@ impl<S: 'static> App<S> {
     /// use stipple::prelude::*;
     /// struct Doc { dirty: bool }
     /// let app = App::new(Doc { dirty: true }, |_: &Doc, cx: &mut Cx<Doc>| {
-    ///     let theme = *cx.theme();
-    ///     label(&theme, "Hello")
+    ///     label(cx, "Hello")
     /// })
     /// .menu(|doc: &Doc| {
     ///     MenuBar::new().menu(
@@ -858,8 +855,7 @@ impl<S: 'static> App<S> {
     /// use stipple::prelude::*;
     /// struct State { muted: bool }
     /// let app = App::new(State { muted: false }, |_: &State, cx: &mut Cx<State>| {
-    ///     let theme = *cx.theme();
-    ///     label(&theme, "Hello")
+    ///     label(cx, "Hello")
     /// })
     /// .tray(|s: &State| {
     ///     Tray::new("My App").menu(
@@ -904,9 +900,8 @@ impl<S: 'static> App<S> {
     /// }
     ///
     /// fn view(state: &State, cx: &mut Cx<State>) -> Element {
-    ///     let theme = *cx.theme();
-    ///     button_labeled(&theme, "Toggle dark mode")
-    ///         .on_tap(cx, |s: &mut State| s.dark = Some(!s.dark.unwrap_or(false)))
+    ///     button(cx, "Toggle dark mode")
+    ///         .on_tap(cx, |s| s.dark = Some(!s.dark.unwrap_or(false)))
     /// }
     ///
     /// App::new(State { dark: None }, view)
@@ -4167,6 +4162,12 @@ pub mod prelude {
     pub use crate::style::Theme;
     pub use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Typography};
     pub use crate::widgets::{
+        Button, EditBuffer, TextInput, Variant, button, checkbox, column, divider, grid, heading,
+        label, open_dialog, open_menu, panel, paragraph, progress_bar, radio, row, scroll,
+        scroll_horizontal, slider, spacer, spinner, swatch, switch, tabs, text_area, text_field,
+        tooltip, viewport,
+    };
+    pub use crate::widgets::{
         Chip, ColorPicker, PasswordField, Tab, TabBar, TabBarState, TabIndicator, chip,
         choice_chips, color_button, color_picker, filter_chips, password_field, tab_bar,
     };
@@ -4175,19 +4176,12 @@ pub mod prelude {
         TreeState, VirtualList, table, tree, virtual_list,
     };
     pub use crate::widgets::{
-        EditBuffer, Variant, button, button_labeled, button_variant, checkbox, column, divider,
-        edit_string, grid, heading, label, menu, menu_item, open_dialog, open_menu, panel,
-        paragraph, progress_bar, radio, row, scroll, scroll_horizontal, setting_row, slider,
-        spacer, spinner, swatch, switch, tabs, text_area, text_editor, text_field, tooltip,
-        viewport,
-    };
-    pub use crate::widgets::{
         NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail,
         page_stack,
     };
     pub use crate::widgets::{
-        NumberInput, Select, SplitPane, ToastKind, ToastPlacement, Toasts, number_input, select,
-        split_pane, toasts, tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar,
+        NumberInput, Select, SplitPane, ToastKind, ToastPlacement, Toasts, ToolButton,
+        number_input, select, split_pane, toasts, tool_button, tool_separator, toolbar,
     };
     pub use crate::widgets::{image, svg};
     pub use crate::{App, CloseResponse};
@@ -4225,12 +4219,11 @@ mod tests {
         App::new(
             Counter { n: 0 },
             |_state: &Counter, cx: &mut Cx<Counter>| {
-                let theme = *cx.theme();
                 column(vec![
-                    button(&theme)
+                    button(cx, "")
                         .width(200.0)
                         .height(80.0)
-                        .on_tap(cx, |s: &mut Counter| s.n += 1),
+                        .on_tap(cx, |s| s.n += 1),
                 ])
             },
         )
@@ -4324,8 +4317,8 @@ mod tests {
 
         let vid = ViewportId(1);
         // A 100×60 window holding a 40×30 viewport inset at (10,10) by a 10px pad.
-        let mut app = App::new((), move |_s: &(), _cx: &mut Cx<()>| {
-            column(vec![viewport(&Theme::light(), vid, 40.0, 30.0)])
+        let mut app = App::new((), move |_s: &(), cx: &mut Cx<()>| {
+            column(vec![viewport(cx, vid, 40.0, 30.0)])
                 .padding(crate::geometry::Insets::uniform(10.0))
         })
         .no_font()
@@ -4383,7 +4376,7 @@ mod tests {
                 })
                 .width(200.0)
                 .height(40.0)
-                .on_tap(cx, |f: &mut bool| *f = !*f),
+                .on_tap(cx, |f| *f = !*f),
                 Element::boxed(BoxStyle {
                     fill: Some(bottom),
                     radius: 0.0,
@@ -4399,11 +4392,8 @@ mod tests {
 
     #[test]
     fn a_spinner_animates_and_a_static_view_idles() {
-        let mut busy = App::new((), |_: &(), cx: &mut Cx<()>| {
-            let theme = *cx.theme();
-            crate::widgets::spinner(cx, &theme)
-        })
-        .no_font();
+        let mut busy =
+            App::new((), |_: &(), cx: &mut Cx<()>| crate::widgets::spinner(cx)).no_font();
         let _ = busy.render_frame();
         assert!(busy.animating(), "a spinner keeps asking for frames");
 
@@ -4426,7 +4416,7 @@ mod tests {
             })
             .width(200.0)
             .height(40.0)
-            .on_tap(cx, |dark: &mut bool| *dark = !*dark)
+            .on_tap(cx, |dark| *dark = !*dark)
         })
         .no_font()
         .theme_with(|dark: &bool, base: &Theme| if *dark { Theme::dark() } else { *base })
@@ -4546,18 +4536,15 @@ mod tests {
 
     #[derive(Default)]
     struct Form {
-        name: String,
+        name: crate::widgets::TextInput,
     }
 
     /// A form with a single text field filling the window.
     fn form_app() -> App<Form> {
         App::new(Form::default(), |state: &Form, cx: &mut Cx<Form>| {
-            let theme = *cx.theme();
-            crate::widgets::text_field(cx, &theme, &state.name, |s: &mut Form, k| {
-                crate::widgets::edit_string(&mut s.name, k)
-            })
-            .width(300.0)
-            .height(100.0)
+            crate::widgets::text_field(cx, &state.name, |s| &mut s.name)
+                .width(300.0)
+                .height(100.0)
         })
         .no_font()
         .logical_size(Size::new(300.0, 100.0))
@@ -4568,17 +4555,17 @@ mod tests {
         let mut app = form_app();
         // Typing with nothing focused is a no-op.
         assert!(!app.type_text("x"));
-        assert_eq!(app.state().name, "");
+        assert_eq!(app.state().name.text(), "");
 
         // Focus the field by clicking it, then type.
         app.click_at(Point::new(150.0, 50.0));
         assert!(app.focused().is_some());
         assert!(app.type_text("Ada"));
-        assert_eq!(app.state().name, "Ada");
+        assert_eq!(app.state().name.text(), "Ada");
 
         // Backspace removes the last character.
         assert!(app.press_key(KeyInput::Backspace));
-        assert_eq!(app.state().name, "Ad");
+        assert_eq!(app.state().name.text(), "Ad");
     }
 
     #[test]
@@ -4598,7 +4585,7 @@ mod tests {
         }
         assert!(app.focused().is_some(), "the press focused the field");
         assert!(app.type_text("Hi"));
-        assert_eq!(app.state().name, "Hi");
+        assert_eq!(app.state().name.text(), "Hi");
     }
 
     #[derive(Default)]
@@ -4609,9 +4596,8 @@ mod tests {
     #[test]
     fn checkbox_toggles_on_click() {
         let mut app = App::new(Toggles::default(), |s: &Toggles, cx: &mut Cx<Toggles>| {
-            let theme = *cx.theme();
             // A checkbox filling the window for a predictable hit point.
-            crate::widgets::checkbox(cx, &theme, s.on, |t: &mut Toggles| t.on = !t.on)
+            crate::widgets::checkbox(cx, s.on, |t| t.on = !t.on)
                 .width(100.0)
                 .height(100.0)
         })
@@ -4633,9 +4619,7 @@ mod tests {
     #[test]
     fn slider_drag_sets_value_from_position() {
         let mut app = App::new(Volume::default(), |s: &Volume, cx: &mut Cx<Volume>| {
-            let theme = *cx.theme();
-            crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
-                .width(200.0)
+            crate::widgets::slider(cx, s.level, |v, f| v.level = f).width(200.0)
         })
         .no_font()
         .logical_size(Size::new(200.0, 40.0));
@@ -4657,9 +4641,7 @@ mod tests {
     fn a_mirrored_slider_fills_and_drags_from_the_right() {
         use crate::layout::LayoutDirection;
         let mut app = App::new(Volume { level: 0.25 }, |s: &Volume, cx: &mut Cx<Volume>| {
-            let theme = *cx.theme();
-            crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
-                .width(200.0)
+            crate::widgets::slider(cx, s.level, |v, f| v.level = f).width(200.0)
         })
         .no_font()
         .theme(Theme::light().layout_direction(LayoutDirection::Rtl))
@@ -4695,7 +4677,7 @@ mod tests {
         assert!(app.focus_next());
         assert!(app.focused().is_some());
         assert!(app.type_text("hi"));
-        assert_eq!(app.state().name, "hi");
+        assert_eq!(app.state().name.text(), "hi");
     }
 
     #[test]
@@ -4704,10 +4686,7 @@ mod tests {
         // A container root holding a field — the realistic shape (the root is
         // the Window, the field a nested TextField).
         let mut app = App::new(Form::default(), |state: &Form, cx: &mut Cx<Form>| {
-            let theme = *cx.theme();
-            let field = crate::widgets::text_field(cx, &theme, &state.name, |s: &mut Form, k| {
-                crate::widgets::edit_string(&mut s.name, k)
-            });
+            let field = crate::widgets::text_field(cx, &state.name, |s| &mut s.name);
             column(vec![field])
         })
         .no_font()
@@ -4814,16 +4793,15 @@ mod tests {
     /// records `i`.
     fn list_app() -> App<Vec<usize>> {
         App::new(Vec::new(), |_: &Vec<usize>, cx: &mut Cx<Vec<usize>>| {
-            let theme = *cx.theme();
             let rows = (0..20)
                 .map(|i| {
-                    button(&theme)
+                    button(cx, "")
                         .width(200.0)
                         .height(50.0)
-                        .on_tap(cx, move |s: &mut Vec<usize>| s.push(i))
+                        .on_tap(cx, move |s| s.push(i))
                 })
                 .collect();
-            crate::widgets::scroll(cx, 200.0, column(rows))
+            crate::widgets::scroll(cx, 200.0, |_| column(rows))
         })
         .no_font()
         .logical_size(Size::new(200.0, 200.0))
@@ -4964,7 +4942,7 @@ mod tests {
 
     #[derive(Default)]
     struct Editor {
-        buf: crate::widgets::EditBuffer,
+        buf: crate::widgets::TextInput,
     }
 
     /// A window that records what the App tells its input method.
@@ -4992,8 +4970,8 @@ mod tests {
 
     #[derive(Default)]
     struct TwoFields {
-        a: crate::widgets::EditBuffer,
-        b: crate::widgets::EditBuffer,
+        a: crate::widgets::TextInput,
+        b: crate::widgets::TextInput,
     }
 
     /// An empty field reports no text, before and during a composition: an
@@ -5002,8 +4980,7 @@ mod tests {
     #[test]
     fn an_empty_field_reports_the_same_text_while_composing() {
         let mut app = App::new(Editor::default(), |s: &Editor, cx: &mut Cx<Editor>| {
-            let theme = *cx.theme();
-            crate::widgets::text_editor(cx, &theme, &s.buf, |s: &mut Editor| &mut s.buf)
+            crate::widgets::text_field(cx, &s.buf, |s| &mut s.buf)
         })
         .no_font()
         .logical_size(Size::new(300.0, 100.0));
@@ -5032,9 +5009,8 @@ mod tests {
         let mut app = App::new(
             TwoFields::default(),
             |s: &TwoFields, cx: &mut Cx<TwoFields>| {
-                let theme = *cx.theme();
-                let a = crate::widgets::text_editor(cx, &theme, &s.a, |s: &mut TwoFields| &mut s.a);
-                let b = crate::widgets::text_editor(cx, &theme, &s.b, |s: &mut TwoFields| &mut s.b);
+                let a = crate::widgets::text_field(cx, &s.a, |s| &mut s.a);
+                let b = crate::widgets::text_field(cx, &s.b, |s| &mut s.b);
                 column(vec![a, b])
             },
         )
@@ -5060,11 +5036,11 @@ mod tests {
         };
         assert!(app.press_key(preedit));
         app.panes[0].preedit_owner = app.panes[0].focused;
-        assert_eq!(app.state().a.preedit(), Some("か"));
+        assert_eq!(app.state().a.buffer().preedit(), Some("か"));
         assert!(app.focus_next());
         let App { state, panes, .. } = &mut app;
         panes[0].drop_stale_preedit(state);
-        assert_eq!(app.state().a.preedit(), None);
+        assert_eq!(app.state().a.buffer().preedit(), None);
         assert_eq!(app.state().a.text(), "");
         assert_eq!(app.panes[0].preedit_owner, None);
     }
@@ -5075,15 +5051,12 @@ mod tests {
     #[test]
     fn an_assistive_selection_reaches_the_field_and_the_tree() {
         let state = Editor {
-            buf: crate::widgets::EditBuffer::from_text("héllo world"),
+            buf: crate::widgets::TextInput::from_text("héllo world"),
         };
         let mut app = App::new(state, |s: &Editor, cx: &mut Cx<Editor>| {
-            let theme = *cx.theme();
-            let field =
-                crate::widgets::text_editor(cx, &theme, &s.buf, |s: &mut Editor| &mut s.buf)
-                    .labelled_by("note");
+            let field = crate::widgets::text_field(cx, &s.buf, |s| &mut s.buf).labelled_by("note");
             column(vec![
-                crate::widgets::label(&theme, "Note").a11y_id("note"),
+                crate::widgets::label(cx, "Note").a11y_id("note"),
                 field,
             ])
         })
@@ -5094,7 +5067,10 @@ mod tests {
             anchor: 1,
             caret: 6
         }));
-        assert_eq!(app.state().buf.selected_text().as_deref(), Some("éllo"));
+        assert_eq!(
+            app.state().buf.buffer().selected_text().as_deref(),
+            Some("éllo")
+        );
         app.render_once();
         let tree = app.accessibility_tree().unwrap();
         let field = tree
@@ -5112,8 +5088,8 @@ mod tests {
             anchor: 99,
             caret: 99
         }));
-        assert_eq!(app.state().buf.selection(), None);
-        assert_eq!(app.state().buf.caret(), "héllo world".len());
+        assert_eq!(app.state().buf.buffer().selection(), None);
+        assert_eq!(app.state().buf.buffer().caret(), "héllo world".len());
     }
 
     #[test]
@@ -5125,11 +5101,10 @@ mod tests {
             return;
         };
         let state = Editor {
-            buf: crate::widgets::EditBuffer::from_text("hello world"),
+            buf: crate::widgets::TextInput::from_text("hello world"),
         };
         let mut app = App::new(state, |s: &Editor, cx: &mut Cx<Editor>| {
-            let theme = *cx.theme();
-            crate::widgets::text_editor(cx, &theme, &s.buf, |s: &mut Editor| &mut s.buf)
+            crate::widgets::text_field(cx, &s.buf, |s| &mut s.buf)
                 .width(300.0)
                 .height(40.0)
         })
@@ -5162,18 +5137,21 @@ mod tests {
         };
         let t0 = Instant::now();
         press(&mut app, t0);
-        assert_eq!(app.state().buf.selection(), None);
+        assert_eq!(app.state().buf.buffer().selection(), None);
         press(&mut app, t0 + Duration::from_millis(150));
-        assert_eq!(app.state().buf.selected_text().as_deref(), Some("world"));
+        assert_eq!(
+            app.state().buf.buffer().selected_text().as_deref(),
+            Some("world")
+        );
         press(&mut app, t0 + Duration::from_millis(300));
         assert_eq!(
-            app.state().buf.selected_text().as_deref(),
+            app.state().buf.buffer().selected_text().as_deref(),
             Some("hello world")
         );
         // A slow second press is a fresh single click.
         press(&mut app, t0 + Duration::from_millis(2000));
         press(&mut app, t0 + Duration::from_millis(2600));
-        assert_eq!(app.state().buf.selection(), None);
+        assert_eq!(app.state().buf.buffer().selection(), None);
     }
 
     // --- Transforms and group opacity -------------------------------------
@@ -5184,13 +5162,12 @@ mod tests {
         let mut app = App::new(
             Counter { n: 0 },
             |_state: &Counter, cx: &mut Cx<Counter>| {
-                let theme = *cx.theme();
                 column(vec![
-                    button(&theme)
+                    button(cx, "")
                         .width(200.0)
                         .height(80.0)
                         .transform(Transform::IDENTITY.scale(0.5))
-                        .on_tap(cx, |s: &mut Counter| s.n += 1),
+                        .on_tap(cx, |s| s.n += 1),
                 ])
             },
         )
@@ -5208,8 +5185,7 @@ mod tests {
         use crate::geometry::Transform;
         // Turned half a turn, the slider's left end is on the right.
         let mut app = App::new(Volume::default(), |s: &Volume, cx: &mut Cx<Volume>| {
-            let theme = *cx.theme();
-            crate::widgets::slider(cx, &theme, s.level, |v: &mut Volume, f| v.level = f)
+            crate::widgets::slider(cx, s.level, |v, f| v.level = f)
                 .width(200.0)
                 .transform(Transform::IDENTITY.rotate_degrees(180.0))
         })
@@ -5249,7 +5225,7 @@ mod tests {
                 Element::boxed(BoxStyle::default())
                     .width(300.0)
                     .height(40.0)
-                    .on_tap(cx, |g: &mut bool| *g = !*g),
+                    .on_tap(cx, |g| *g = !*g),
                 Element::boxed(BoxStyle {
                     fill: Some(Color::rgb(0, 0, 200)),
                     radius: 0.0,

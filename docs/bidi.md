@@ -13,9 +13,9 @@ use stipple::render::TextDirection;
 use stipple::widgets::{label, paragraph};
 
 // Direction detected from the first strong character: right to left here.
-let hello = label(&theme, "שלום, עולם");
+let hello = label(cx, "שלום, עולם");
 // A paragraph forced right to left, whatever it starts with.
-let note = paragraph(&theme, "2024 היה שנה טובה").direction(TextDirection::Rtl);
+let note = paragraph(cx, "2024 היה שנה טובה").direction(TextDirection::Rtl);
 ```
 
 ## Paragraph direction
@@ -36,7 +36,7 @@ The base direction decides where the line starts, how neutral characters
 (spaces, punctuation) between runs of different directions resolve, and the
 alignment: right-to-left paragraphs line up against the right edge of the text
 element's box. A label sized to its text looks the same either way; a stretched
-label, a wrapped paragraph, or the text in a `text_editor` or `text_area` sits
+label, a wrapped paragraph, or the text in a `text_field` or `text_area` sits
 on the right.
 
 ## Shaping and wrapping
@@ -85,7 +85,7 @@ the character typed last, whatever side of the caret it's drawn on.
   rectangles on one line.
 
 `EditBuffer::set_direction` sets the paragraph direction
-for both editing and drawing; `text_editor` and `text_area` pass it to their
+for both editing and drawing; `text_field` and `text_area` pass it to their
 text.
 
 ## Custom drawing

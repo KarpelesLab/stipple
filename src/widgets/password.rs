@@ -213,7 +213,7 @@ fn eye(color: Color, crossed: bool) -> Option<Arc<Svg>> {
 
 /// A single-line password field showing `state`'s text as bullets, with the
 /// caret and selection, wired to keyboard and pointer input like
-/// [`text_editor`](super::text_editor). `field` is an accessor returning the
+/// [`text_field`](super::text_field). `field` is an accessor returning the
 /// [`PasswordField`] inside the app state.
 ///
 /// What it does differently from a text field:
@@ -231,10 +231,10 @@ fn eye(color: Color, crossed: bool) -> Option<Arc<Svg>> {
 /// Default width 200 logical px; override with `.width(..)`.
 pub fn password_field<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &PasswordField,
     field: impl Fn(&mut S) -> &mut PasswordField + Copy + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     password_field_with(cx, theme, state, Rc::new(move |s, f| f(field(s))), None)
 }
 
@@ -278,7 +278,7 @@ pub(crate) fn password_field_with<S: 'static>(
         .radius(theme.radius / 2.0)
         .align(Align::Center, Align::Center)
         .hovered(move |e| e.fill(hover))
-        .on_tap(cx, move |s: &mut S| e(s, &mut |p| p.toggle_revealed()))
+        .on_tap(cx, move |s| e(s, &mut |p| p.toggle_revealed()))
         .a11y_label(if state.revealed {
             "Hide password"
         } else {
@@ -355,11 +355,8 @@ mod tests {
     }
 
     fn view(s: &State, cx: &mut Cx<State>) -> Element {
-        let theme = *cx.theme();
-        super::super::column(vec![password_field(cx, &theme, &s.pw, |s: &mut State| {
-            &mut s.pw
-        })])
-        .padding(Insets::uniform(10.0))
+        super::super::column(vec![password_field(cx, &s.pw, |s| &mut s.pw)])
+            .padding(Insets::uniform(10.0))
     }
 
     #[test]

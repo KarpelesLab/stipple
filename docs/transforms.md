@@ -9,7 +9,7 @@ button is pressed where it's drawn.
 use stipple::prelude::*;
 
 fn badge(theme: &Theme, t: f64) -> Element {
-    label(theme, "New")
+    label(cx, "New")
         .padding(Insets::uniform(6.0))
         .fill(theme.palette.primary)
         // Tilted, pulsing about its center, and half faded in.

@@ -140,7 +140,7 @@ struct Shared<S> {
 /// let handle = app.handle();
 /// std::thread::spawn(move || {
 ///     let result = String::from("loaded"); // slow work, off the UI thread
-///     handle.update(move |s: &mut State| s.result = Some(result));
+///     handle.update(move |s| s.result = Some(result));
 /// });
 /// app.run();
 /// ```
@@ -261,7 +261,7 @@ impl<S> AppHandle<S> {
     /// # struct State;
     /// # fn view(_: &State, cx: &mut Cx<State>) -> Element {
     /// let handle = cx.handle();
-    /// button_labeled(cx.theme(), "Fullscreen")
+    /// button(cx, "Fullscreen")
     ///     .on_tap(cx, move |_| handle.window(WindowRequest::Fullscreen(true)))
     /// # }
     /// ```

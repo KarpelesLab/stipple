@@ -254,7 +254,7 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         let labelled = label.is_some();
         let mut name = label.unwrap_or_else(|| text_of(node));
         // An empty field lays out a single space to keep its line's height
-        // (`widgets::text_editor`), or its placeholder; a screen reader should
+        // (`widgets::text_field`), or its placeholder; a screen reader should
         // read it as empty, not as "space" or as if the hint were typed.
         if role == Role::TextField && (name == " " || shows_placeholder(node)) {
             name.clear();
@@ -408,11 +408,11 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_text_editor_reads_as_empty() {
+    fn an_empty_text_field_reads_as_empty() {
         let theme = Theme::light();
-        let mut cx = Cx::<crate::widgets::EditBuffer>::new(&theme);
-        let empty = crate::widgets::EditBuffer::default();
-        let field = crate::widgets::text_editor(&mut cx, &theme, &empty, |s| s);
+        let mut cx = Cx::<crate::widgets::TextInput>::new(&theme);
+        let empty = crate::widgets::TextInput::default();
+        let field = crate::widgets::text_field(&mut cx, &empty, |s| s);
         let root = Element::stack(Axis::Vertical, vec![field]);
         let laid = layout(&root, Rect::from_xywh(0.0, 0.0, 200.0, 40.0), None);
         let a = accessibility_tree(&laid, None);

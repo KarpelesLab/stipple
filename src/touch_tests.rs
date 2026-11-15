@@ -33,21 +33,20 @@ fn finger(id: u64, phase: TouchPhase, x: f64, y: f64) -> Touch {
 /// that takes pinches (and taps, as row 99).
 fn app() -> App<Log> {
     App::new(Log::default(), |_: &Log, cx: &mut Cx<Log>| {
-        let theme = *cx.theme();
         let chips = (0..10)
             .map(|i| {
-                button(&theme)
+                button(cx, "")
                     .width(100.0)
                     .height(40.0)
-                    .on_tap(cx, move |s: &mut Log| s.tapped.push(100 + i))
+                    .on_tap(cx, move |s| s.tapped.push(100 + i))
             })
             .collect();
-        let mut items = vec![scroll_horizontal(cx, 300.0, row(chips)).height(40.0)];
+        let mut items = vec![scroll_horizontal(cx, 300.0, |_| row(chips)).height(40.0)];
         for i in 0..20 {
-            let mut item = button(&theme)
+            let mut item = button(cx, "")
                 .width(300.0)
                 .height(50.0)
-                .on_tap(cx, move |s: &mut Log| s.tapped.push(i));
+                .on_tap(cx, move |s| s.tapped.push(i));
             if i % 2 == 0 {
                 item = item.context_menu(
                     cx,
@@ -58,15 +57,15 @@ fn app() -> App<Log> {
             }
             items.push(item);
         }
-        let photo = label(&theme, "Photo")
+        let photo = label(cx, "Photo")
             .width(300.0)
             .height(100.0)
-            .on_tap(cx, |s: &mut Log| s.tapped.push(99))
+            .on_tap(cx, |s| s.tapped.push(99))
             .on_pinch(cx, |ev: &PinchEvent, s: &mut Log| {
                 s.pinches
                     .push((ev.phase, ev.scale, ev.translation, ev.centroid))
             });
-        column(vec![scroll(cx, 300.0, column(items)), photo])
+        column(vec![scroll(cx, 300.0, |_| column(items)), photo])
     })
     .no_font()
     .logical_size(Size::new(300.0, 400.0))
@@ -275,9 +274,8 @@ fn a_second_finger_over_the_list_is_ignored() {
 fn a_right_to_left_strip_scrolls_towards_the_left() {
     use crate::layout::LayoutDirection;
     let mut app = App::new((), |_: &(), cx: &mut Cx<()>| {
-        let theme = *cx.theme();
         let chips = (0..10)
-            .map(|_| button(&theme).width(100.0).height(40.0))
+            .map(|_| button(cx, "").width(100.0).height(40.0))
             .collect();
         let strip = Element::stack(Axis::Horizontal, vec![row(chips)])
             .width(300.0)

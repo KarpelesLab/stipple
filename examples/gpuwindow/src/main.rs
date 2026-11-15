@@ -34,27 +34,37 @@ fn ramp() -> Arc<Pixmap> {
     ))
 }
 
+/// A row with a leading color swatch and a trailing button.
+fn setting_row<S>(cx: &Cx<S>, accent: Color, action: &str) -> Element {
+    let theme = cx.theme();
+    row(vec![
+        swatch(accent, 24.0, theme.radius / 2.0),
+        spacer(),
+        Button::new(action).variant(Variant::Secondary).view(cx),
+    ])
+    .gap(theme.spacing.md)
+    .height(40.0)
+}
+
 fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
-    let theme = *cx.theme();
-    let card = panel(
-        &theme,
+    let card = panel(cx, |cx| {
         vec![
-            label(&theme, "Stipple on the GPU"),
-            divider(&theme),
-            setting_row(&theme, Color::rgb(0xef, 0x68, 0x68), "Edit"),
-            setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99), "Edit"),
-            setting_row(&theme, Color::rgb(0x60, 0x9c, 0xff), "Edit"),
+            label(cx, "Stipple on the GPU"),
+            divider(cx),
+            setting_row(cx, Color::rgb(0xef, 0x68, 0x68), "Edit"),
+            setting_row(cx, Color::rgb(0x34, 0xd3, 0x99), "Edit"),
+            setting_row(cx, Color::rgb(0x60, 0x9c, 0xff), "Edit"),
             // An image, and a tilted, translucent layer: drawn on the GPU too.
             row(vec![
                 image(&state.image).width(48.0).height(48.0),
-                button_labeled(&theme, "Tilted")
+                button(cx, "Tilted")
                     .transform(Transform::IDENTITY.rotate_degrees(-6.0))
                     .opacity(0.85),
             ])
             .gap(16.0),
-            button_labeled(&theme, "OK"),
-        ],
-    )
+            button(cx, "OK"),
+        ]
+    })
     .width(360.0);
     column(vec![card])
         .grow(1.0)

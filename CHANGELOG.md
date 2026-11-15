@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- Widgets take the view's `cx` first and read the theme from it: no more
+  `let theme = *cx.theme();` and `&theme` on every call. `label(cx, "Hi")`,
+  `heading(cx, ..)`, `checkbox(cx, checked, on_toggle)`,
+  `select(cx, options, &state, field)`, `NavigationBar::…view(cx)`,
+  `TitleScreen::…view(cx)`, and so on for every widget in `widgets` and
+  `game::ui`. Widgets that only draw take `&Cx<S>`, those that register
+  handlers `&mut Cx<S>`, so `row(vec![label(cx, ..), button(cx, ..).on_tap(cx, ..)])`
+  compiles. Containers that need the theme build their content in a closure
+  given `cx`: `panel(cx, |cx| vec![…])`, `toolbar(cx, |cx| …)`,
+  `scroll(cx, h, |cx| …)`, `scroll_horizontal`, `game::ui::menu_list` and
+  `game::ui::setting_row`.
+- `Cx::themed(theme, |cx| …)` builds part of a view under another theme (for
+  previews and theme galleries); `Cx::theme()` returns the theme in effect.
+- One button: `button(cx, "Save")`, and the `Button` spec for the other
+  variants and custom content
+  (`Button::new("Delete").variant(Variant::Danger).view(cx)`,
+  `Button::from_content(icon).view(cx)`). Removed `button(theme)` (the empty
+  button-colored box), `button_labeled` and `button_variant`.
+- One text input: `text_field(cx, &state.name, |s| &mut s.name)` and
+  `text_area(…)` edit a new `TextInput` state (an `EditBuffer`, with
+  `max_length` and `read_only`, and `text`, `set_text`, `clear`, `take`).
+  `Element::on_submit(cx, ..)` runs on Enter in a single-line field (or a
+  password field) and `Element::on_change(cx, ..)` after each edit; a
+  single-line field no longer inserts a newline on Enter. Removed
+  `text_editor`, the `&str` + `on_key` `text_field`, and `edit_string`. A
+  field clips text and placeholders longer than it.
+- Toolbar buttons: `tool_button(cx, "Save")` and the `ToolButton` spec
+  (`ToolButton::from_icon(icon, name)`, `.selected(on)`), made to act with
+  `.on_tap`; removed `tool_icon_button` and `tool_toggle`.
+- `open_menu(cx, at, menu, on_close)` takes a `Menu` of `MenuItem`s (the same
+  data as the menu bar and context menus), drawn like a context menu; picking
+  an item runs it and then `on_close`. Removed `menu_item` and `menu`.
+- Removed `widgets::setting_row` (a demo composite: a swatch, a spacer and a
+  button).
+- Handlers and accessors need no type annotations where `cx` comes first:
+  `|s| s.n += 1`, `|s| &mut s.name`. The README, docs and examples drop them.
+
 - One naming convention for setters (see "Naming" in
   `docs/api-guidelines.md`; `api-audit.py` now flags `with_*` builders and
   `get_*` getters). Chainable setters take the bare property name, `&mut self`
@@ -163,6 +200,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Android 8.0 and later (`setHintText`), and `aria-placeholder` on the web.
 
 ### Fixed
+
+- `motiondemo`'s code field drew two borders; the field itself turns red now,
+  and Enter checks the code.
 
 - *(core)* A text element's `.padding(..)` now places its glyphs inside the
   padding (they were drawn at the box's corner, as in `motiondemo`'s list

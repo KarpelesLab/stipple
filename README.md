@@ -26,12 +26,11 @@ use stipple::prelude::*;
 struct Counter { n: i64 }
 
 fn view(state: &Counter, cx: &mut Cx<Counter>) -> Element {
-    let theme = *cx.theme();
     column(vec![
-        heading(&theme, format!("{}", state.n)),
+        heading(cx, format!("{}", state.n)),
         row(vec![
-            button_labeled(&theme, "−").on_tap(cx, |s: &mut Counter| s.n -= 1),
-            button_labeled(&theme, "+").on_tap(cx, |s: &mut Counter| s.n += 1),
+            button(cx, "−").on_tap(cx, |s| s.n -= 1),
+            button(cx, "+").on_tap(cx, |s| s.n += 1),
         ])
         .gap(8.0),
     ])
@@ -142,14 +141,17 @@ Stipple is one crate, `stipple`, with these modules:
 `App` and the prelude live at the crate root. The repository root is the
 `stipple` crate; `examples/` holds the demo apps, and `docs/` the guides.
 
-Widgets available in the prelude: `panel`, `row`, `column`, `spacer`,
-`divider`, `label`, `heading`, `paragraph`, `button`, `button_labeled`,
-`button_variant`, `text_field`, `text_editor`, `text_area`, `checkbox`,
-`radio`, `switch`, `slider`, `progress_bar`, `spinner`, `swatch`,
-`setting_row`, `tabs`, `scroll`, `menu` / `menu_item` / `open_menu`,
-`open_dialog`, `tooltip`, `image` / `svg` (PNG, JPEG, GIF, WebP, BMP and SVG,
-decoded by the oxideav stack; see [docs/images.md](./docs/images.md)), and
-`viewport` (embedded external content).
+Widgets take the view's `cx` first and read the theme from it
+(`label(cx, "Hi")`); handlers get the state type from `cx`, so closures need no
+annotations (`|s| s.n += 1`, `|s| &mut s.name`). Available in the prelude:
+`panel`, `row`, `column`, `grid`, `spacer`, `divider`, `label`, `heading`,
+`paragraph`, `button` (and `Button` for the other variants and custom
+content), `text_field` / `text_area` (editing a `TextInput`), `checkbox`,
+`radio`, `switch`, `slider`, `progress_bar`, `spinner`, `swatch`, `tabs`,
+`scroll`, `open_menu`, `open_dialog`, `tooltip`, `image` / `svg` (PNG, JPEG,
+GIF, WebP, BMP and SVG, decoded by the oxideav stack; see
+[docs/images.md](./docs/images.md)), and `viewport` (embedded external
+content). See [docs/widgets.md](./docs/widgets.md) for the rest.
 
 ## Examples
 

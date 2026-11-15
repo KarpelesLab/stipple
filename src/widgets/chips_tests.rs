@@ -34,16 +34,11 @@ impl State {
 }
 
 fn view(s: &State, cx: &mut Cx<State>) -> Element {
-    let theme = *cx.theme();
     let icon = Arc::new(Pixmap::new(PhysicalSize::new(4, 4)));
-    let choices = choice_chips(cx, &theme, SYMBOLOGIES, s.choice, |s: &mut State, i| {
-        s.choice = Some(i)
-    });
-    let filters = filter_chips(cx, &theme, FILTERS, &s.filters, |s: &mut State, i| {
-        s.filters[i] = !s.filters[i]
-    });
+    let choices = choice_chips(cx, SYMBOLOGIES, s.choice, |s, i| s.choice = Some(i));
+    let filters = filter_chips(cx, FILTERS, &s.filters, |s, i| s.filters[i] = !s.filters[i]);
     let filters = if s.horizontal {
-        super::scroll_horizontal(cx, 60.0, filters)
+        super::scroll_horizontal(cx, 60.0, |_| filters)
     } else {
         filters
     };
@@ -51,10 +46,10 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
         choices,
         filters,
         super::row(vec![
-            chip(cx, &theme, Chip::new("Flash").icon(&icon), s.alone, |s| {
+            chip(cx, Chip::new("Flash").icon(&icon), s.alone, |s| {
                 s.alone = !s.alone
             }),
-            super::radio(cx, &theme, s.radio, |s: &mut State| s.radio = true),
+            super::radio(cx, s.radio, |s| s.radio = true),
         ]),
     ])
     .gap(8.0)

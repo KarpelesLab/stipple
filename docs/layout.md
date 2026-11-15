@@ -14,7 +14,7 @@ cargo run -p layoutdemo
 `row(children)` lays children left to right, `column(children)` top to bottom.
 
 ```rust
-row(vec![icon, label(&theme, "Title"), spacer(), close_button])
+row(vec![icon, label(cx, "Title"), spacer(), close_button])
     .gap(8.0)                          // space between children
     .padding(Insets::uniform(12.0))    // space inside the edge
     .align(Align::Start, Align::End)   // (main axis, cross axis)
@@ -28,8 +28,8 @@ on a child overrides the stack's cross-axis alignment for that child alone:
 
 ```rust
 column(vec![
-    text_editor(cx, &theme, &state.note, |s: &mut State| &mut s.note), // full width
-    button_labeled(&theme, "Save").align_self(Align::End),               // its own width, at the right
+    text_field(cx, &state.note, |s| &mut s.note), // full width
+    button(cx, "Save").align_self(Align::End),               // its own width, at the right
 ])
 ```
 
@@ -67,9 +67,9 @@ line to itself. (On a text element, `.wrap()` word-wraps the text instead.)
 grid(
     vec![Track::Auto, Track::fr(1.0)],
     vec![
-        heading(&theme, "Account").span(2, 1),
-        label(&theme, "Name"), name_field,
-        label(&theme, "Email"), email_field,
+        heading(cx, "Account").span(2, 1),
+        label(cx, "Name"), name_field,
+        label(cx, "Email"), email_field,
     ],
 )
 .gap(8.0)                              // .column_gap() / .row_gap() set one
@@ -103,8 +103,8 @@ vertically. (`Stretch` there still leaves a fixed size alone.)
 
 ```rust
 grid(vec![Track::Auto, Track::fr(1.0)], vec![
-    label(&theme, "Total"),
-    label(&theme, "42.00").justify_self(Align::End), // at the right of its stretched column
+    label(cx, "Total"),
+    label(cx, "42.00").justify_self(Align::End), // at the right of its stretched column
 ])
 ```
 
@@ -124,7 +124,7 @@ a one-cell grid to place it on its own).
 ```rust
 let card = Element::layers(vec![
     Element::boxed(BoxStyle::filled(theme.palette.primary)),
-    label(&theme, "Over the fill").padding(Insets::uniform(8.0)),
+    label(cx, "Over the fill").padding(Insets::uniform(8.0)),
 ]);
 ```
 

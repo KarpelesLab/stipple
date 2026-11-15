@@ -79,7 +79,7 @@ fn view(state: &Fonts, cx: &mut Cx<Fonts>) -> Element {
     let mono = &state.mono;
     let m = mono.metrics(SIZE);
     let name = mono.family_name().unwrap_or("?").to_string();
-    let mut rows = vec![line(heading(&theme, format!("{name}, {SIZE} px")))];
+    let mut rows = vec![line(heading(cx, format!("{name}, {SIZE} px")))];
     for (caption, style) in STYLES {
         let (bold, oblique) = mono.styled(style).is_synthesized();
         let note = match (bold, oblique) {
@@ -103,7 +103,7 @@ fn view(state: &Fonts, cx: &mut Cx<Fonts>) -> Element {
         ));
     }
     rows.push(line(label(
-        &theme,
+        cx,
         format!(
             "cell {:.1} x {:.1} px, ascent {:.1}, descent {:.1}, underline +{:.1} ({:.1} thick), \
              strikeout {:.1}",

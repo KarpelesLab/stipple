@@ -19,12 +19,13 @@ struct Demo {
     controls: bool,
     maximized: bool,
     fullscreen: bool,
-    name: EditBuffer,
+    name: TextInput,
 }
 
 /// A small box showing `cursor` while hovered.
-fn cursor_swatch(theme: &Theme, name: &str, cursor: CursorIcon) -> Element {
-    column(vec![label(theme, name)])
+fn cursor_swatch(cx: &Cx<Demo>, name: &str, cursor: CursorIcon) -> Element {
+    let theme = cx.theme();
+    column(vec![label(cx, name)])
         .padding(Insets::symmetric(6.0, 4.0))
         .border(theme.palette.border, 1.0)
         .radius(theme.radius)
@@ -35,32 +36,32 @@ fn cursor_swatch(theme: &Theme, name: &str, cursor: CursorIcon) -> Element {
 fn controls(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     let theme = *cx.theme();
     let handle = cx.handle();
-    let maximize = button_labeled(
-        &theme,
+    let maximize = button(
+        cx,
         if state.maximized {
             "Restore"
         } else {
             "Maximize"
         },
     )
-    .on_tap(cx, move |s: &mut Demo| {
+    .on_tap(cx, move |s| {
         s.maximized = !s.maximized;
         handle.window(WindowRequest::Maximized(s.maximized));
     });
     let handle = cx.handle();
-    let fullscreen = button_labeled(
-        &theme,
+    let fullscreen = button(
+        cx,
         if state.fullscreen {
             "Leave fullscreen"
         } else {
             "Fullscreen"
         },
     )
-    .on_tap(cx, move |s: &mut Demo| {
+    .on_tap(cx, move |s| {
         s.fullscreen = !s.fullscreen;
         handle.window(WindowRequest::Fullscreen(s.fullscreen));
     });
-    let field = text_editor(cx, &theme, &state.name, |s: &mut Demo| &mut s.name);
+    let field = text_field(cx, &state.name, |s| &mut s.name);
     let swatches = [
         ("cross", CursorIcon::Crosshair),
         ("no", CursorIcon::NotAllowed),
@@ -72,7 +73,7 @@ fn controls(state: &Demo, cx: &mut Cx<Demo>) -> Element {
         ("nesw", CursorIcon::NeswResize),
     ]
     .into_iter()
-    .map(|(name, cursor)| cursor_swatch(&theme, name, cursor))
+    .map(|(name, cursor)| cursor_swatch(cx, name, cursor))
     .collect();
     column(vec![
         row(vec![maximize, fullscreen]).gap(theme.spacing.sm),
@@ -82,30 +83,41 @@ fn controls(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     .gap(theme.spacing.sm)
 }
 
+/// A row with a leading color swatch and a trailing button.
+fn setting_row(cx: &Cx<Demo>, accent: Color, action: &str) -> Element {
+    let theme = cx.theme();
+    row(vec![
+        swatch(accent, 24.0, theme.radius / 2.0),
+        spacer(),
+        Button::new(action).variant(Variant::Secondary).view(cx),
+    ])
+    .gap(theme.spacing.md)
+    .height(40.0)
+}
+
 fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
-    let theme = *cx.theme();
     // OK closes the app (and, as a tap target, shows the pointing hand).
     let handle = cx.handle();
-    let ok = button_labeled(&theme, "OK").on_tap(cx, move |_| handle.exit());
+    let ok = button(cx, "OK").on_tap(cx, move |_| handle.exit());
     let mut children = vec![
-        label(&theme, "Welcome to Stipple"),
+        label(cx, "Welcome to Stipple"),
         // A word-wrapping paragraph: long text flows to the panel width.
         paragraph(
-            &theme,
+            cx,
             "Stipple is a self-drawn cross-platform UI toolkit that wraps this \
              paragraph across multiple lines to fit the panel width.",
         ),
-        divider(&theme),
-        setting_row(&theme, Color::rgb(0xef, 0x68, 0x68), "Edit"),
-        setting_row(&theme, Color::rgb(0x34, 0xd3, 0x99), "Edit"),
-        setting_row(&theme, Color::rgb(0xf5, 0x9e, 0x0b), "Edit"),
+        divider(cx),
+        setting_row(cx, Color::rgb(0xef, 0x68, 0x68), "Edit"),
+        setting_row(cx, Color::rgb(0x34, 0xd3, 0x99), "Edit"),
+        setting_row(cx, Color::rgb(0xf5, 0x9e, 0x0b), "Edit"),
         ok,
     ];
     if state.controls {
-        children.push(divider(&theme));
+        children.push(divider(cx));
         children.push(controls(state, cx));
     }
-    let card = panel(&theme, children).width(360.0);
+    let card = panel(cx, |_| children).width(360.0);
     column(vec![card])
         .grow(1.0)
         .align(Align::Center, Align::Center)

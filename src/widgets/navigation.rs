@@ -204,7 +204,8 @@ impl<S: 'static> NavigationBar<S> {
     }
 
     /// The bar's element.
-    pub fn view(self, cx: &mut Cx<S>, theme: &Theme) -> Element {
+    pub fn view(self, cx: &mut Cx<S>) -> Element {
+        let theme = &super::theme_of(cx);
         let look = self.look.unwrap_or_else(|| NavLook::of(theme));
         let n = self.items.len();
         let selected = self.selected.min(n.saturating_sub(1));
@@ -224,7 +225,7 @@ impl<S: 'static> NavigationBar<S> {
                 };
                 el.width(0.0)
                     .grow(1.0)
-                    .on_tap(cx, move |s: &mut S| on(s, i))
+                    .on_tap(cx, move |s| on(s, i))
                     .role(Role::Tab)
                     .selected(i == selected)
                     .a11y_label(item.spoken())
@@ -252,7 +253,7 @@ impl<S: 'static> NavigationBar<S> {
             top.into_iter().chain([row]).chain(inset).collect(),
         )
         .fill(fill)
-        .on_key(cx, move |s: &mut S, k| {
+        .on_key(cx, move |s, k| {
             if let Some(to) = step(k, selected, n, rtl, false) {
                 on_select(s, to);
             }
@@ -279,12 +280,11 @@ impl<S: 'static> NavigationBar<S> {
 /// [`navigation_rail`].
 pub fn navigation_bar<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     items: Vec<NavItem>,
     selected: usize,
     on_select: impl Fn(&mut S, usize) + 'static,
 ) -> Element {
-    NavigationBar::new(items, selected, on_select).view(cx, theme)
+    NavigationBar::new(items, selected, on_select).view(cx)
 }
 
 /// The items of a [`navigation_bar`] down the side of a wide window, as
@@ -297,11 +297,11 @@ pub fn navigation_bar<S: 'static>(
 /// ```
 pub fn navigation_rail<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     items: Vec<NavItem>,
     selected: usize,
     on_select: impl Fn(&mut S, usize) + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let n = items.len();
     let selected = selected.min(n.saturating_sub(1));
     let on_select: OnSelect<S> = Rc::new(on_select);
@@ -313,7 +313,7 @@ pub fn navigation_rail<S: 'static>(
             let on = on_select.clone();
             material_item(theme, item, i == selected, (&id, i), RAIL_PILL_W)
                 .padding(Insets::symmetric(0.0, 4.0))
-                .on_tap(cx, move |s: &mut S| on(s, i))
+                .on_tap(cx, move |s| on(s, i))
                 .role(Role::Tab)
                 .selected(i == selected)
                 .a11y_label(item.spoken())
@@ -324,7 +324,7 @@ pub fn navigation_rail<S: 'static>(
         .padding(Insets::new(44.0, 0.0, 12.0, 0.0))
         .width(80.0)
         .fill(container(theme))
-        .on_key(cx, move |s: &mut S, k| {
+        .on_key(cx, move |s, k| {
             if let Some(to) = step(k, selected, n, false, true) {
                 on_select(s, to);
             }

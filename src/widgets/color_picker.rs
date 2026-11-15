@@ -10,7 +10,7 @@ use crate::geometry::{Insets, PhysicalSize};
 use crate::render::{Color, ImageFit, Pixmap};
 use crate::style::Theme;
 
-use super::{EditBuffer, text_editor};
+use super::{TextInput, text_field};
 
 /// The saturation/value area's size, in logical pixels.
 const AREA_W: f64 = 220.0;
@@ -43,7 +43,7 @@ pub struct ColorPicker {
     value: f64,
     alpha: u8,
     alpha_enabled: bool,
-    hex: EditBuffer,
+    hex: TextInput,
     open: bool,
     swatches: Vec<Color>,
 }
@@ -77,7 +77,7 @@ impl ColorPicker {
             value: 0.0,
             alpha: 255,
             alpha_enabled: true,
-            hex: EditBuffer::new(),
+            hex: TextInput::new(),
             open: false,
             swatches: DEFAULT_SWATCHES.to_vec(),
         };
@@ -177,9 +177,7 @@ impl ColorPicker {
     }
 
     fn sync_hex(&mut self) {
-        let mut hex = EditBuffer::from_text(self.color().to_hex());
-        hex.clear_history();
-        self.hex = hex;
+        self.hex.set_text(self.color().to_hex());
     }
 
     /// Apply a key to the hex field: the color follows each edit that
@@ -191,7 +189,7 @@ impl ColorPicker {
                 true
             }
             KeyInput::SelectLine => {
-                self.hex.select_all();
+                self.hex.buffer_mut().select_all();
                 false
             }
             other => {
@@ -324,13 +322,13 @@ fn picture(p: Arc<Pixmap>, w: f64, h: f64, theme: &Theme) -> Element {
 ///
 /// Self-drawn under every theme (the bitmaps are the same in all of them; the
 /// frame, field and swatches follow the theme).
-pub fn color_picker<S>(
+pub fn color_picker<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &ColorPicker,
     field: impl Fn(&mut S) -> &mut ColorPicker + Copy + 'static,
     on_change: impl Fn(&mut S, Color) + Clone + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let q = |f: f64| (f.clamp(0.0, 1.0) * 1000.0).round() as u16;
     let hue10 = (state.hue.clamp(0.0, 360.0) * 10.0).round() as u16;
     let on = on_change.clone();
@@ -345,7 +343,7 @@ pub fn color_picker<S>(
         theme,
     )
     .cursor(crate::platform::CursorIcon::Crosshair)
-    .on_drag_motion(cx, move |s: &mut S, m| {
+    .on_drag_motion(cx, move |s, m| {
         let b = m.bounds;
         let sat = (m.position.x - b.min_x()) / b.width().max(1.0);
         let val = 1.0 - (m.position.y - b.min_y()) / b.height().max(1.0);
@@ -357,7 +355,7 @@ pub fn color_picker<S>(
     let on = on_change.clone();
     let hue = picture(bitmap(Bitmap::Hue { hue: hue10 }), AREA_W, STRIP_H, theme).on_drag(
         cx,
-        move |s: &mut S, f| {
+        move |s, f| {
             let p = field(s);
             p.set_hue(f * 360.0);
             let c = p.color();
@@ -377,7 +375,7 @@ pub fn color_picker<S>(
             STRIP_H,
             theme,
         )
-        .on_drag(cx, move |s: &mut S, f| {
+        .on_drag(cx, move |s, f| {
             let p = field(s);
             p.set_alpha(f);
             let c = p.color();
@@ -388,9 +386,9 @@ pub fn color_picker<S>(
 
     // The hex field beside a preview of the color.
     let on = on_change.clone();
-    let hex = text_editor(cx, theme, &state.hex, move |s: &mut S| &mut field(s).hex)
+    let hex = text_field(cx, &state.hex, move |s| &mut field(s).hex)
         .width(AREA_W - 32.0 - theme.spacing.sm)
-        .on_key(cx, move |s: &mut S, k| {
+        .on_key(cx, move |s, k| {
             let p = field(s);
             if p.hex_key(k) {
                 let c = p.color();
@@ -427,7 +425,7 @@ pub fn color_picker<S>(
                 .width(18.0)
                 .height(18.0)
                 .hovered(move |e| e.border(ring.mix(Color::BLACK, 0.3), 2.0))
-                .on_tap(cx, move |s: &mut S| {
+                .on_tap(cx, move |s| {
                     field(s).set_color(c);
                     on(s, c);
                 })
@@ -454,7 +452,7 @@ pub fn color_picker<S>(
 /// struct App { tint: ColorPicker, applied: Color }
 /// fn view(s: &App, cx: &mut Cx<App>) -> Element {
 ///     let theme = *cx.theme();
-///     color_button(cx, &theme, &s.tint, |s: &mut App| &mut s.tint, |s: &mut App, c| s.applied = c)
+///     color_button(cx, &s.tint, |s| &mut s.tint, |s, c| s.applied = c)
 /// }
 /// # let theme = Theme::light();
 /// # let mut cx = Cx::new(&theme);
@@ -462,13 +460,13 @@ pub fn color_picker<S>(
 /// # let _ = view(&app, &mut cx);
 /// # assert!(!cx.into_handlers().is_empty());
 /// ```
-pub fn color_button<S>(
+pub fn color_button<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &ColorPicker,
     field: impl Fn(&mut S) -> &mut ColorPicker + Copy + 'static,
     on_change: impl Fn(&mut S, Color) + Clone + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let p = &theme.palette;
     let chip = Element::boxed(BoxStyle {
         fill: Some(state.color()),
@@ -486,7 +484,7 @@ pub fn color_button<S>(
         .border(p.border, 1.0)
         .radius(theme.radius)
         .hovered(move |e| e.fill(p.surface.mix(hover.with_alpha(255), 0.08)))
-        .on_tap(cx, move |s: &mut S| {
+        .on_tap(cx, move |s| {
             let p = field(s);
             let open = !p.is_open();
             p.set_open(open);
@@ -496,13 +494,13 @@ pub fn color_button<S>(
     if state.open
         && let Some(tap) = button.action
     {
-        let picker = color_picker(cx, theme, state, field, on_change);
+        let picker = color_picker(cx, state, field, on_change);
         let content = Element::stack(Axis::Vertical, vec![picker])
             .padding(Insets::uniform(theme.spacing.md))
             .fill(p.surface)
             .border(p.border, 1.0)
             .radius(theme.radius);
-        let dismiss = cx.register(move |s: &mut S| field(s).set_open(false));
+        let dismiss = cx.register(move |s| field(s).set_open(false));
         cx.overlay(OverlaySpec {
             content,
             anchor: Anchor::Below(tap),
@@ -525,13 +523,11 @@ mod tests {
     }
 
     fn view(s: &State, cx: &mut Cx<State>) -> Element {
-        let theme = *cx.theme();
         super::super::column(vec![color_button(
             cx,
-            &theme,
             &s.picker,
-            |s: &mut State| &mut s.picker,
-            |s: &mut State, c| s.changes.push(c),
+            |s| &mut s.picker,
+            |s, c| s.changes.push(c),
         )])
         .padding(Insets::uniform(10.0))
     }

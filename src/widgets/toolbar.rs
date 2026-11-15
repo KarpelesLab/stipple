@@ -3,22 +3,26 @@
 use crate::core::{Align, Axis, BoxStyle, Cx, Element, Role};
 use crate::geometry::Insets;
 use crate::render::ImageSource;
-use crate::style::Theme;
 
-/// Icons in [`tool_icon_button`] are drawn at this size, in logical pixels.
+/// Icons in a [`ToolButton::from_icon`] are drawn at this size, in logical
+/// pixels.
 const ICON: f64 = 18.0;
 
-/// A toolbar: `items` in a row on a surface strip, vertically centered.
-/// Build the items with [`tool_button`], [`tool_icon_button`], [`tool_toggle`]
-/// and [`tool_separator`]; any other element works too (a [`select`], a
-/// [`spacer`] to push the rest to the end). Items that don't fit overflow.
+/// A toolbar: the `items` the closure builds in a row on a surface strip,
+/// vertically centered.
+/// Build the items with [`tool_button`] (and [`ToolButton`] for icons and
+/// toggles) and [`tool_separator`]; any other element works too (a
+/// [`select`], a [`spacer`] to push the rest to the end). Items that don't
+/// fit overflow.
 ///
 /// Self-drawn under every theme, in the theme's colors. Reported to assistive
 /// technologies as a [`Role::Toolbar`] holding its buttons.
 ///
 /// [`select`]: super::select
 /// [`spacer`]: super::spacer
-pub fn toolbar(theme: &Theme, items: Vec<Element>) -> Element {
+pub fn toolbar<S>(cx: &mut Cx<S>, items: impl FnOnce(&mut Cx<S>) -> Vec<Element>) -> Element {
+    let items = items(cx);
+    let theme = cx.theme();
     Element::stack(Axis::Horizontal, items)
         .fill(theme.palette.surface)
         .border(theme.palette.border, 1.0)
@@ -28,70 +32,107 @@ pub fn toolbar(theme: &Theme, items: Vec<Element>) -> Element {
         .role(Role::Toolbar)
 }
 
-/// The frame every tool button shares: compact padding, no fill (the hover
-/// highlight shows it's clickable), optionally tinted when toggled on.
-fn tool_frame(theme: &Theme, children: Vec<Element>, on: bool) -> Element {
-    let mut el = Element::stack(Axis::Horizontal, children)
-        .radius(theme.radius / 2.0)
-        .padding(Insets::symmetric(theme.spacing.sm, theme.spacing.xs))
-        .gap(theme.spacing.xs)
-        .align(Align::Center, Align::Center)
-        .min_height(ICON + 2.0 * theme.spacing.xs)
-        .min_width(ICON + 2.0 * theme.spacing.sm);
-    if on {
-        el = el
-            .fill(theme.palette.selection)
-            .border(theme.palette.primary, 1.0);
-    }
-    el
-}
-
-/// A toolbar button labeled `text`, running `on_tap` when clicked.
-pub fn tool_button<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    text: impl Into<String>,
-    on_tap: impl FnMut(&mut S) + 'static,
-) -> Element {
-    let label = Element::text(text, theme.typography.body, theme.palette.text);
-    tool_frame(theme, vec![label], false).on_tap(cx, on_tap)
-}
-
-/// A toolbar button showing `icon` (a [`Pixmap`] or [`Svg`], drawn at 18×18),
-/// running `on_tap` when clicked. `name` is what assistive technologies read
-/// out, since the icon has no text.
+/// A compact toolbar button: a text label or an icon, with no fill (the
+/// hover highlight shows it's clickable), tinted while
+/// [`selected`](Self::selected). [`tool_button`] is the common case, a text
+/// one; finish a `ToolButton` with [`view`](Self::view), and make it do
+/// something with [`Element::on_tap`].
 ///
-/// [`Pixmap`]: crate::render::Pixmap
-/// [`Svg`]: crate::render::Svg
-pub fn tool_icon_button<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    icon: impl Into<ImageSource>,
-    name: impl Into<String>,
-    on_tap: impl FnMut(&mut S) + 'static,
-) -> Element {
-    let icon = Element::image(icon).width(ICON).height(ICON);
-    tool_frame(theme, vec![icon], false)
-        .a11y_label(name)
-        .on_tap(cx, on_tap)
+/// ```
+/// use stipple::prelude::*;
+/// struct Doc { bold: bool }
+/// fn bar(doc: &Doc, cx: &mut Cx<Doc>) -> Element {
+///     toolbar(cx, |cx| vec![
+///         tool_button(cx, "Save").on_tap(cx, |_| {}),
+///         tool_separator(cx),
+///         ToolButton::new("B").selected(doc.bold).view(cx).on_tap(cx, |d| d.bold = !d.bold),
+///     ])
+/// }
+/// # let theme = Theme::light();
+/// # let _ = bar(&Doc { bold: true }, &mut Cx::new(&theme));
+/// ```
+#[derive(Clone, Debug)]
+pub struct ToolButton {
+    content: ToolContent,
+    selected: bool,
 }
 
-/// A toolbar button labeled `text` that stays tinted while `on` (bold, a view
-/// mode), running `on_tap` when clicked.
-pub fn tool_toggle<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    text: impl Into<String>,
-    on: bool,
-    on_tap: impl FnMut(&mut S) + 'static,
-) -> Element {
-    let label = Element::text(text, theme.typography.body, theme.palette.text);
-    tool_frame(theme, vec![label], on).on_tap(cx, on_tap)
+#[derive(Clone, Debug)]
+enum ToolContent {
+    Text(String),
+    Icon(ImageSource, String),
+}
+
+impl ToolButton {
+    /// A tool button labeled `text`.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            content: ToolContent::Text(text.into()),
+            selected: false,
+        }
+    }
+
+    /// A tool button showing `icon` (a [`Pixmap`] or [`Svg`], drawn at
+    /// 18×18). `name` is what assistive technologies read out, since the icon
+    /// has no text.
+    ///
+    /// [`Pixmap`]: crate::render::Pixmap
+    /// [`Svg`]: crate::render::Svg
+    pub fn from_icon(icon: impl Into<ImageSource>, name: impl Into<String>) -> Self {
+        Self {
+            content: ToolContent::Icon(icon.into(), name.into()),
+            selected: false,
+        }
+    }
+
+    /// Show the button tinted while `selected`: a toggle that is on (bold, a
+    /// view mode).
+    pub fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    /// The button, in `cx`'s theme.
+    pub fn view<S>(self, cx: &Cx<S>) -> Element {
+        let theme = cx.theme();
+        let (child, name) = match self.content {
+            ToolContent::Text(text) => (
+                Element::text(text, theme.typography.body, theme.palette.text),
+                None,
+            ),
+            ToolContent::Icon(icon, name) => {
+                (Element::image(icon).width(ICON).height(ICON), Some(name))
+            }
+        };
+        let mut el = Element::stack(Axis::Horizontal, vec![child])
+            .radius(theme.radius / 2.0)
+            .padding(Insets::symmetric(theme.spacing.sm, theme.spacing.xs))
+            .gap(theme.spacing.xs)
+            .align(Align::Center, Align::Center)
+            .min_height(ICON + 2.0 * theme.spacing.xs)
+            .min_width(ICON + 2.0 * theme.spacing.sm);
+        if self.selected {
+            el = el
+                .fill(theme.palette.selection)
+                .border(theme.palette.primary, 1.0);
+        }
+        match name {
+            Some(name) => el.a11y_label(name),
+            None => el,
+        }
+    }
+}
+
+/// A toolbar button labeled `text`. For an icon or a toggle, build a
+/// [`ToolButton`].
+pub fn tool_button<S>(cx: &Cx<S>, text: impl Into<String>) -> Element {
+    ToolButton::new(text).view(cx)
 }
 
 /// A thin vertical line between groups of toolbar buttons. Reported to
 /// assistive technologies as a [`Role::Separator`].
-pub fn tool_separator(theme: &Theme) -> Element {
+pub fn tool_separator<S>(cx: &Cx<S>) -> Element {
+    let theme = cx.theme();
     Element::boxed(BoxStyle {
         fill: Some(theme.palette.border),
         radius: 0.0,
@@ -123,16 +164,19 @@ mod tests {
             .unwrap(),
         );
         let mut app = App::new(State::default(), move |s: &State, cx: &mut Cx<State>| {
-            let theme = *cx.theme();
-            let bar = toolbar(
-                &theme,
+            let bar = toolbar(cx, |cx| {
                 vec![
-                    tool_button(cx, &theme, "Save", |s: &mut State| s.saved += 1),
-                    tool_separator(&theme),
-                    tool_toggle(cx, &theme, "B", s.bold, |s: &mut State| s.bold = !s.bold),
-                    tool_icon_button(cx, &theme, &svg, "Delete", |_: &mut State| {}),
-                ],
-            );
+                    tool_button(cx, "Save").on_tap(cx, |s| s.saved += 1),
+                    tool_separator(cx),
+                    ToolButton::new("B")
+                        .selected(s.bold)
+                        .view(cx)
+                        .on_tap(cx, |s| s.bold = !s.bold),
+                    ToolButton::from_icon(&svg, "Delete")
+                        .view(cx)
+                        .on_tap(cx, |_| {}),
+                ]
+            });
             super::super::column(vec![bar])
         })
         .no_font()

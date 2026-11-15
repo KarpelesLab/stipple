@@ -148,12 +148,14 @@ mod tests {
     use super::*;
     use crate::core::{Cx, Element, layout};
     use crate::style::Theme;
-    use crate::widgets::{EditBuffer, text_editor};
+    use crate::widgets::{EditBuffer, TextInput, text_field};
 
     fn tree_for(buffer: &EditBuffer) -> (LayoutNode, FocusId) {
         let theme = Theme::light();
-        let mut cx: Cx<EditBuffer> = Cx::new(&theme);
-        let el: Element = text_editor(&mut cx, &theme, buffer, |s: &mut EditBuffer| s);
+        let mut cx: Cx<TextInput> = Cx::new(&theme);
+        let mut input = TextInput::new();
+        *input.buffer_mut() = buffer.clone();
+        let el: Element = text_field(&mut cx, &input, |s| s);
         let tree = layout(&el, Rect::from_xywh(0.0, 0.0, 400.0, 100.0), None);
         let id = tree_focus(&tree).expect("the field is focusable");
         (tree, id)

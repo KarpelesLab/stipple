@@ -78,10 +78,9 @@ fn update(g: &mut Game, frame: &mut Frame) {
 }
 
 fn view(g: &Game, cx: &mut Cx<Game>) -> Element {
-    let theme = *cx.theme();
     let world = g.world.clone();
     column(vec![
-        label(&theme, format!("Score: {}", g.score)),
+        label(cx, format!("Score: {}", g.score)),
         Element::canvas(WORLD, move |c: &mut Canvas| {
             let x = world.borrow().x % c.size().width;
             c.fill_rect(Rect::from_xywh(x, 10.0, 20.0, 20.0), Color::rgb(200, 40, 40));
@@ -569,10 +568,10 @@ it. `FocusLook::STANDARD` is the usual 2 px ring; `FocusLook::BOLD` (3 px,
 ```rust
 use stipple::game::ui::{menu_button, menu_list};
 
-let menu = menu_list(&theme, vec![
-    menu_button(cx, &theme, "Start", |g: &mut Game| g.start()),
-    menu_button(cx, &theme, "Settings", |g: &mut Game| g.screen = Screen::Settings),
-    menu_button(cx, &theme, "Quit", move |_: &mut Game| handle.exit()),
+let menu = menu_list(cx, |cx| vec![
+    menu_button(cx, "Start", |g| g.start()),
+    menu_button(cx, "Settings", |g| g.screen = Screen::Settings),
+    menu_button(cx, "Quit", move |_| handle.exit()),
 ]);
 
 App::new(game, view)
@@ -619,10 +618,10 @@ shown at once need different labels.
 
 | | |
 |---|---|
-| `TitleScreen::new(title, menu).subtitle(..).footer(..).view(theme)` | The title large in the accent, the menu under it, a footer (a `controls_hint`) at the bottom, on the theme's background; `.backdrop(None)` leaves the game showing behind it (or `Some(color)`). |
-| `pause_menu(cx, theme, title, buttons, on_resume)` | A modal panel over the game, dimmed behind it; a press on the game resumes. Declare it from the view while paused, and pause the loop with `GameLoop::paused_when`: the canvas keeps the frozen frame. |
-| `GameOverScreen::new(title, menu).line("Score", 340).view(theme)` | The title in the danger color, popping in; a panel of results, a `line(label, value)` each; the menu. `.backdrop(..)` as for the title screen. |
-| `controls_hint(theme, &[("Enter / A", "Select"), …])`, `key_cap(theme, text)` | Key caps and what they do. |
+| `TitleScreen::new(title, menu).subtitle(..).footer(..).view(cx)` | The title large in the accent, the menu under it, a footer (a `controls_hint`) at the bottom, on the theme's background; `.backdrop(None)` leaves the game showing behind it (or `Some(color)`). |
+| `pause_menu(cx, title, buttons, on_resume)` | A modal panel over the game, dimmed behind it; a press on the game resumes. Declare it from the view while paused, and pause the loop with `GameLoop::paused_when`: the canvas keeps the frozen frame. |
+| `GameOverScreen::new(title, menu).line("Score", 340).view(cx)` | The title in the danger color, popping in; a panel of results, a `line(label, value)` each; the menu. `.backdrop(..)` as for the title screen. |
+| `controls_hint(cx, &[("Enter / A", "Select"), …])`, `key_cap(cx, text)` | Key caps and what they do. |
 
 Switch screens with a `page_stack` on a `screen` field, and go back in
 `on_back`:
@@ -642,13 +641,13 @@ Switch screens with a `page_stack` on a `screen` field, and go back in
 
 | | |
 |---|---|
-| `setting_row(theme, label, control)` | A label and a control on a band; a `spatial_nav` column of them is a settings screen. |
-| `volume_row(cx, theme, label, value, on_change)` | A `game_slider` in 5% steps and the percentage; `value` is an `f32` from 0 to 1, for the game's mixer. |
-| `game_slider(cx, theme, value, step, on_change)` | A slider that takes focus: Left and Right step it, Home and End go to the ends, a drag sets it. |
-| `toggle_row(cx, theme, label, on, on_toggle)` | A switch. |
-| `choice_row(cx, theme, label, options, selected, on_change)` | `‹ 2× ›`: Left, Right and Enter cycle through the options, and the arrows can be tapped. A pixel scale, a difficulty, a language. |
-| `fullscreen_row(cx, theme, label, on_change)` | A switch showing whether the window is fullscreen, switching it with `WindowRequest::Fullscreen`; `on_change` gets the new state, to save with the settings (and restore with `App::fullscreen`). |
-| `binding_row(cx, theme, label, bindings, &state, on_activate)` | `state` is a `BindingRowState::default().capturing(..).conflicts(names)`. An action's bindings as key caps (`binding_name`: `W`, `Space`, `←`, `L-Shift`, `Left click`, `Pad A`, `Pad LB`, `L-Stick ←`), a ⚠ flag naming the actions it shares one with, and "Press a key…" while it waits. |
+| `setting_row(cx, label, |cx| control)` | A label and a control on a band; a `spatial_nav` column of them is a settings screen. |
+| `volume_row(cx, label, value, on_change)` | A `game_slider` in 5% steps and the percentage; `value` is an `f32` from 0 to 1, for the game's mixer. |
+| `game_slider(cx, value, step, on_change)` | A slider that takes focus: Left and Right step it, Home and End go to the ends, a drag sets it. |
+| `toggle_row(cx, label, on, on_toggle)` | A switch. |
+| `choice_row(cx, label, options, selected, on_change)` | `‹ 2× ›`: Left, Right and Enter cycle through the options, and the arrows can be tapped. A pixel scale, a difficulty, a language. |
+| `fullscreen_row(cx, label, on_change)` | A switch showing whether the window is fullscreen, switching it with `WindowRequest::Fullscreen`; `on_change` gets the new state, to save with the settings (and restore with `App::fullscreen`). |
+| `binding_row(cx, label, bindings, &state, on_activate)` | `state` is a `BindingRowState::default().capturing(..).conflicts(names)`. An action's bindings as key caps (`binding_name`: `W`, `Space`, `←`, `L-Shift`, `Left click`, `Pad A`, `Pad LB`, `L-Stick ←`), a ⚠ flag naming the actions it shares one with, and "Press a key…" while it waits. |
 
 There's no vsync row: frames always follow the display's refresh (see
 [the loop](#the-loop)).
@@ -703,14 +702,14 @@ use stipple::game::ui::{self as gui, Bar};
 
 let overlay = column(vec![
     row(vec![
-        gui::health_bar(&theme, g.hull, 100.0),
+        gui::health_bar(cx, g.hull, 100.0),
         spacer(),
-        gui::counter(&theme, "score", "SCORE", g.score),
+        gui::counter(cx, "score", "SCORE", g.score),
     ]),
     spacer(),
-    row(vec![spacer(), gui::minimap_slot(&theme, 140.0, 104.0, None)]),
+    row(vec![spacer(), gui::minimap_slot(cx, 140.0, 104.0, None)]),
 ]);
-gui::hud(canvas, Element::layers(vec![overlay, gui::floating_texts(&theme, &g.floaters)]))
+gui::hud(canvas, Element::layers(vec![overlay, gui::floating_texts(cx, &g.floaters)]))
 ```
 
 **Input through the HUD.** `hud(game, overlay)` lays the overlay, made
@@ -726,12 +725,12 @@ leave the HUD's to the HUD.
 
 | | |
 |---|---|
-| `stat_bar(theme, &Bar::new(value, max, color))` | A bar; `.segments(n)` cuts it into cells, `.size(w, h)`, `.ghost(color)`. Going down, the fill moves at once (`FILL_MOTION`, 120 ms) while the part just lost stays in the ghost color, lingers, then drains (`GHOST_MOTION`, 700 ms). |
-| `health_bar(theme, value, max)` | A heart, a bar in the danger color with its ghost, and `64/100`. |
-| `counter(theme, id, label, value)` | A label and a number that pops (from 1.6×, on a bouncy spring) each time it changes. |
-| `minimap_slot(theme, w, h, content)` | A framed, clipped box for the game's map canvas. |
-| `FloatingTexts`, `floating_texts(theme, &texts)` | `spawn(text, color, at, frame.time())` a "+10" where it happened; `update(frame.time())` each frame drops those older than `FLOAT_LIFE` (600 ms) and says whether to rebuild. Each is keyed: it rises into place as it comes, and rises off, fading, as it goes. |
-| `Typewriter`, `DialogueBox::new(&text, on_activate).speaker(name).portrait(image).view(cx, theme)` | A box along the bottom: the speaker's name on a tab, a portrait (an image, 72 × 72) and the text typed out at `TYPEWRITER_SPEED` (40 characters a second, or `speed`), timed by the frames that show it (`Cx::frame_time`). It asks for frames while it types, keeps its size meanwhile, and shows ▼ when done. It takes focus when it shows; a tap, Enter or South runs `on_activate`, where `text.advance()` reveals the rest, or returns `true` once all of it shows (go to the next line). |
+| `stat_bar(cx, &Bar::new(value, max, color))` | A bar; `.segments(n)` cuts it into cells, `.size(w, h)`, `.ghost(color)`. Going down, the fill moves at once (`FILL_MOTION`, 120 ms) while the part just lost stays in the ghost color, lingers, then drains (`GHOST_MOTION`, 700 ms). |
+| `health_bar(cx, value, max)` | A heart, a bar in the danger color with its ghost, and `64/100`. |
+| `counter(cx, id, label, value)` | A label and a number that pops (from 1.6×, on a bouncy spring) each time it changes. |
+| `minimap_slot(cx, w, h, content)` | A framed, clipped box for the game's map canvas. |
+| `FloatingTexts`, `floating_texts(cx, &texts)` | `spawn(text, color, at, frame.time())` a "+10" where it happened; `update(frame.time())` each frame drops those older than `FLOAT_LIFE` (600 ms) and says whether to rebuild. Each is keyed: it rises into place as it comes, and rises off, fading, as it goes. |
+| `Typewriter`, `DialogueBox::new(&text, on_activate).speaker(name).portrait(image).view(cx)` | A box along the bottom: the speaker's name on a tab, a portrait (an image, 72 × 72) and the text typed out at `TYPEWRITER_SPEED` (40 characters a second, or `speed`), timed by the frames that show it (`Cx::frame_time`). It asks for frames while it types, keeps its size meanwhile, and shows ▼ when done. It takes focus when it shows; a tap, Enter or South runs `on_activate`, where `text.advance()` reveals the rest, or returns `true` once all of it shows (go to the next line). |
 
 The geometry of spatial navigation, keys and a gamepad moving through a
 menu (the stick's thresholds, a held direction's repeat), the HUD letting

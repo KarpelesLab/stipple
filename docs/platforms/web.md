@@ -129,7 +129,7 @@ use stipple::platform::dialog::{self, FileDialog};
 let handle = cx.handle();
 dialog::open_file_contents(&FileDialog::new().accept(".txt"), move |file| {
     if let Some(file) = file {
-        handle.update(move |s: &mut State| s.text = String::from_utf8_lossy(&file.bytes).into());
+        handle.update(move |s| s.text = String::from_utf8_lossy(&file.bytes).into());
     }
 });
 

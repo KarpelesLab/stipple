@@ -16,7 +16,7 @@ cargo run -p dropdemo
 state with the `DropData` and the drop position in logical pixels:
 
 ```rust
-label(&theme, "Drop files here").on_drop(cx, |s: &mut State, data, at| {
+label(cx, "Drop files here").on_drop(cx, |s, data, at| {
     match data {
         DropData::Files(paths) => s.files.extend(paths.iter().cloned()),
         DropData::Text(text) => s.notes.push(text.clone()),
@@ -43,7 +43,7 @@ The simplest way to style a target for the drag is per-state overrides with a
 transition (see [animation.md](animation.md)):
 
 ```rust
-column(vec![label(&theme, "Drop files")])
+column(vec![label(cx, "Drop files")])
     .padding(Insets::uniform(16.0))
     .fill(theme.palette.surface)
     .border(theme.palette.border, 1.0)
@@ -55,7 +55,7 @@ column(vec![label(&theme, "Drop files")])
     .drag_refused(|e| e.fill(theme.palette.surface.mix(theme.palette.danger, 0.25))
         .border(theme.palette.danger, 4.0))
     .transition(Transition::spring(SpringParams::new(180.0, 0.45)))
-    .on_drop_of(cx, DragOffer::FILES, |s: &mut State, data, _| s.add(data))
+    .on_drop_of(cx, DragOffer::FILES, |s, data, _| s.add(data))
 ```
 
 `.drag_over` holds while a drag the target accepts is over it (or over a drop
@@ -69,10 +69,10 @@ position), register it first, read its `DropState`, build the element from it,
 and stamp the id on it:
 
 ```rust
-let zone = cx.register_drop(DragOffer::FILES, |s: &mut State, data, _| s.add(data));
+let zone = cx.register_drop(DragOffer::FILES, |s, data, _| s.add(data));
 let drag = cx.drop_state(zone);
 let glow = if drag.accepted { theme.palette.primary } else { theme.palette.danger };
-column(vec![label(&theme, if drag.over { "Release to drop" } else { "Drop files" })])
+column(vec![label(cx, if drag.over { "Release to drop" } else { "Drop files" })])
     .padding(Insets::uniform(16.0 + 8.0 * drag.level))   // grows
     .fill(theme.palette.surface.mix(glow, 0.25 * drag.level)) // glows, or tints red
     .border(theme.palette.border.mix(glow, drag.level), 1.0 + 3.0 * drag.level)

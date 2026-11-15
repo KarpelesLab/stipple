@@ -52,15 +52,15 @@ fn describe(ev: &KeyEvent) -> String {
 
 fn view(state: &Term, cx: &mut Cx<Term>) -> Element {
     let theme = *cx.theme();
-    let mut lines: Vec<Element> = state.lines.iter().map(|l| label(&theme, l)).collect();
-    lines.push(label(&theme, format!("> {}", state.committed)));
+    let mut lines: Vec<Element> = state.lines.iter().map(|l| label(cx, l)).collect();
+    lines.push(label(cx, format!("> {}", state.committed)));
     let rows = lines.len();
     let terminal = column(lines)
         .padding(Insets::uniform(8.0))
         .fill(theme.palette.surface)
         .width(760.0)
         .height(360.0)
-        .on_raw_key(cx, |s: &mut Term, ev: &KeyEvent| {
+        .on_raw_key(cx, |s, ev: &KeyEvent| {
             println!("rawkeys: {}", describe(ev));
             // The window shows the last few presses (text is slow to draw).
             if ev.is_press() {
@@ -73,7 +73,7 @@ fn view(state: &Term, cx: &mut Cx<Term>) -> Element {
             Handled::Yes
         })
         // Text from an input method or a dead key comes through `on_key`.
-        .on_key(cx, |s: &mut Term, input: &KeyInput| {
+        .on_key(cx, |s, input: &KeyInput| {
             println!("rawkeys: on_key {input:?}");
             if let KeyInput::Text(t) = input {
                 s.committed.push_str(t);
@@ -87,13 +87,9 @@ fn view(state: &Term, cx: &mut Cx<Term>) -> Element {
             18.0,
         ))
         .option_as_meta(OptionAsMeta::Left);
-    panel(
-        &theme,
-        vec![
-            label(&theme, "Raw keys (Tab to focus, then type):"),
-            terminal,
-        ],
-    )
+    panel(cx, |cx| {
+        vec![label(cx, "Raw keys (Tab to focus, then type):"), terminal]
+    })
     .padding(Insets::uniform(16.0))
 }
 

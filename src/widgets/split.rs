@@ -2,7 +2,6 @@
 //! between them.
 
 use crate::core::{Align, Axis, BoxStyle, Cx, DragMotion, Element, KeyInput, Role, Track};
-use crate::style::Theme;
 
 /// The divider's thickness, in logical pixels.
 const HANDLE: f64 = 7.0;
@@ -156,12 +155,12 @@ fn clamp_unit(v: f64) -> f64 {
 /// [`Role::Splitter`].
 pub fn split_pane<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &SplitPane,
     field: impl Fn(&mut S) -> &mut SplitPane + Copy + 'static,
     first: Element,
     second: Element,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let p = &theme.palette;
     let rtl = theme.is_rtl();
     let f = state.fraction;
@@ -187,10 +186,10 @@ pub fn split_pane<S>(
     let handle = Element::stack(cross, vec![segment(), grip, segment()])
         .align(Align::Start, Align::Center)
         .role(Role::Splitter)
-        .on_key(cx, move |s: &mut S, k| {
+        .on_key(cx, move |s, k| {
             field(s).apply(&super::logical_key(rtl, k));
         })
-        .on_drag_motion(cx, move |s: &mut S, m| field(s).drag(m));
+        .on_drag_motion(cx, move |s, m| field(s).drag(m));
     let children = vec![pane(first), handle, pane(second)];
     let grid = match state.axis {
         Axis::Horizontal => Element::grid(tracks, children).rows(vec![Track::fr(1.0)]),
@@ -262,18 +261,10 @@ mod tests {
                 split: SplitPane::horizontal(0.5),
             },
             |s: &State, cx: &mut Cx<State>| {
-                let theme = *cx.theme();
                 let a = Element::boxed(BoxStyle::default()).height(10.0);
                 let b = Element::boxed(BoxStyle::default()).height(10.0);
-                super::super::row(vec![split_pane(
-                    cx,
-                    &theme,
-                    &s.split,
-                    |s: &mut State| &mut s.split,
-                    a,
-                    b,
-                )])
-                .align(Align::Start, Align::Stretch)
+                super::super::row(vec![split_pane(cx, &s.split, |s| &mut s.split, a, b)])
+                    .align(Align::Start, Align::Stretch)
             },
         )
         .no_font()

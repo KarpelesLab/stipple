@@ -69,11 +69,11 @@ impl From<&String> for Chip {
 /// `state` motion. Assistive technologies see a checkbox.
 pub fn chip<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     chip: impl Into<Chip>,
     selected: bool,
     on_tap: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     chip_with_role(cx, theme, chip.into(), selected, Role::CheckBox, on_tap)
 }
 
@@ -94,10 +94,9 @@ pub fn chip<S>(
 ///     let theme = *cx.theme();
 ///     choice_chips(
 ///         cx,
-///         &theme,
 ///         ["2D", "Stacked", "Linear", "Postal"],
 ///         s.symbology,
-///         |s: &mut State, i| s.symbology = i,
+///         |s, i| s.symbology = i,
 ///     )
 /// }
 /// # let theme = Theme::light();
@@ -106,11 +105,11 @@ pub fn chip<S>(
 /// ```
 pub fn choice_chips<S, C: Into<Chip>>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     chips: impl IntoIterator<Item = C>,
     selected: impl Into<Option<usize>>,
     on_select: impl Fn(&mut S, usize) + Clone + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let selected = selected.into();
     let chips = chips
         .into_iter()
@@ -123,7 +122,7 @@ pub fn choice_chips<S, C: Into<Chip>>(
                 c.into(),
                 selected == Some(i),
                 Role::RadioButton,
-                move |s: &mut S| on(s, i),
+                move |s| on(s, i),
             )
         })
         .collect();
@@ -140,11 +139,11 @@ pub fn choice_chips<S, C: Into<Chip>>(
 /// `on_toggle` must be `Clone`, as for [`choice_chips`].
 pub fn filter_chips<S, C: Into<Chip>>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     chips: impl IntoIterator<Item = C>,
     selected: &[bool],
     on_toggle: impl Fn(&mut S, usize) + Clone + 'static,
 ) -> Element {
+    let theme = &super::theme_of(cx);
     let chips = chips
         .into_iter()
         .enumerate()
@@ -156,7 +155,7 @@ pub fn filter_chips<S, C: Into<Chip>>(
                 c.into(),
                 selected.get(i).copied().unwrap_or(false),
                 Role::CheckBox,
-                move |s: &mut S| on(s, i),
+                move |s| on(s, i),
             )
         })
         .collect();

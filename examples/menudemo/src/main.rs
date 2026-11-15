@@ -16,7 +16,7 @@
 //! `STIPPLE_COCOA_MENU_SELFTEST` self-test), and checks the log.
 
 use stipple::prelude::*;
-use stipple::widgets::{EditBuffer, text_editor};
+use stipple::widgets::TextInput;
 
 const W: f64 = 640.0;
 const H: f64 = 420.0;
@@ -37,7 +37,7 @@ struct State {
     zoom: usize,
     grid: bool,
     status: String,
-    note: EditBuffer,
+    note: TextInput,
 }
 
 impl State {
@@ -50,7 +50,7 @@ impl State {
             zoom: 0,
             grid: true,
             status: "Ready".into(),
-            note: EditBuffer::from_text("A note"),
+            note: TextInput::from_text("A note"),
         }
     }
 
@@ -230,7 +230,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     );
     let saved = if state.dirty() { "unsaved" } else { "saved" };
     column(vec![
-        heading(&theme, "Menus"),
+        heading(cx, "Menus"),
         Element::text(
             format!(
                 "{} \u{2014} {} items, {saved}",
@@ -241,10 +241,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             p.text_muted,
         ),
         paragraph(
-            &theme,
+            cx,
             "Use the menu bar or its shortcuts, or right-click the canvas.",
         ),
-        text_editor(cx, &theme, &state.note, |s: &mut State| &mut s.note),
+        text_field(cx, &state.note, |s| &mut s.note),
         canvas,
     ])
     .gap(theme.spacing.md)

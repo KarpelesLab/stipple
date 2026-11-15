@@ -16,11 +16,10 @@ the kept element without calling the closure:
 
 ```rust
 fn view(s: &Inbox, cx: &mut Cx<Inbox>) -> Element {
-    let theme = *cx.theme();
     let rows = s.messages.iter().enumerate().map(|(i, m)| {
         // Built again only when this message changes.
         cx.memo(("message", m.id), (m.revision, i == s.selected), |cx| {
-            message_row(&theme, cx, m, i)
+            message_row(cx, m, i)
         })
     });
     column(rows.collect())

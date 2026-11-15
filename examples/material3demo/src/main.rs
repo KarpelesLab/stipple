@@ -19,20 +19,19 @@ const H: f64 = 320.0;
 /// variants (filled / outlined / text / error), and tonal status swatches.
 fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     let t = *cx.theme();
-    let card = panel(
-        &t,
+    let card = panel(cx, |cx| {
         vec![
-            heading(&t, "Material 3"),
-            label(&t, "Dynamic color from a seed"),
-            divider(&t),
+            heading(cx, "Material 3"),
+            label(cx, "Dynamic color from a seed"),
+            divider(cx),
             row(vec![
-                button_variant(&t, "Filled", Variant::Primary),
-                button_variant(&t, "Outlined", Variant::Secondary),
+                Button::new("Filled").variant(Variant::Primary).view(cx),
+                Button::new("Outlined").variant(Variant::Secondary).view(cx),
             ])
             .gap(t.spacing.sm),
             row(vec![
-                button_variant(&t, "Text", Variant::Ghost),
-                button_variant(&t, "Error", Variant::Danger),
+                Button::new("Text").variant(Variant::Ghost).view(cx),
+                Button::new("Error").variant(Variant::Danger).view(cx),
             ])
             .gap(t.spacing.sm),
             row(vec![
@@ -42,8 +41,8 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
                 swatch(t.palette.danger, 28.0, t.radius / 2.0),
             ])
             .gap(t.spacing.sm),
-        ],
-    )
+        ]
+    })
     .width(324.0);
     column(vec![card])
         .grow(1.0)

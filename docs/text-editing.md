@@ -1,15 +1,46 @@
 # Text editing
 
-`text_editor` and `text_area` keep their text in an `EditBuffer`, which handles
-the caret, the selection, the clipboard and undo. This page lists the keys and
-clicks they understand.
+`text_field` (one line) and `text_area` (several) edit a `TextInput` kept in
+the app state. Its `EditBuffer` handles the caret, the selection, the
+clipboard and undo. This page lists the keys and clicks they understand.
 
-`.placeholder("Search")` on a field (these two, `text_field` and
-`password_field`) shows a hint, muted, while it's empty and nothing is being
-composed in it; screen readers get it as the field's placeholder: its
-description on AT-SPI, `AXPlaceholderValue` on macOS, `HelpText` in UI
-Automation, `accessibilityHint` on iOS, the hint text on Android (8.0 and
-later) and `aria-placeholder` on the web.
+```rust
+struct Form { name: TextInput, notes: TextInput, names: Vec<String> }
+let form = Form {
+    name: TextInput::new().max_length(40),
+    notes: TextInput::from_text("Read-only notes").read_only(true),
+    names: Vec::new(),
+};
+// in the view:
+text_field(cx, &state.name, |s| &mut s.name)
+    .placeholder("Your name")
+    .on_submit(cx, |s| {
+        let name = s.name.take();
+        s.names.push(name);
+    })
+    .on_change(cx, |s| println!("now {:?}", s.name.text()));
+text_area(cx, &state.notes, |s| &mut s.notes);
+```
+
+- `.placeholder("Search")` on a field (these two, and `password_field`) shows
+  a hint, muted, while it's empty and nothing is being composed in it; screen
+  readers get it as the field's placeholder: its description on AT-SPI,
+  `AXPlaceholderValue` on macOS, `HelpText` in UI Automation,
+  `accessibilityHint` on iOS, the hint text on Android (8.0 and later) and
+  `aria-placeholder` on the web. A hint longer than the field is clipped.
+- `.on_submit(cx, ..)` runs on Enter in a `text_field` (and a
+  `password_field`); a `text_area` takes Enter as a new line.
+- `.on_change(cx, ..)` runs after each edit that changes the text, with the
+  new text already in the state.
+- `TextInput::max_length(n)` cuts typing and pasting at `n` characters;
+  `read_only(true)` keeps selecting and copying but refuses edits.
+- `text()`, `set_text()`, `clear()` and `take()` read and replace the text;
+  `buffer()` and `buffer_mut()` reach the `EditBuffer` (caret, selection,
+  direction, undo).
+
+A raw key hook isn't part of a field: an element of your own can take keys
+with `Element::on_key`, and `Element::on_raw_key` sees physical keys (see
+[keyboard.md](keyboard.md)).
 
 ## Keyboard shortcuts
 
@@ -45,7 +76,7 @@ typing over a selection are each a step of their own. Undo puts the selection
 back as it was. A new edit after an undo clears the redo history.
 
 Your code can also call `undo()`, `redo()`, `can_undo()` and `can_redo()` on the
-buffer, for example from a toolbar button, and `clear_history()` after loading
+buffer (`input.buffer_mut()`), for example from a toolbar button, and `clear_history()` after loading
 new text.
 
 ## Mouse
@@ -54,7 +85,7 @@ new text.
 - Double-click selects the word under the pointer (or the run of punctuation or
   spaces).
 - Triple-click selects the line in a `text_area`, and the whole field in a
-  `text_editor`.
+  `text_field`.
 
 Clicks count as one double- or triple-click when they land within 4 logical
 pixels of each other and less than 500 ms apart. Stipple doesn't read the

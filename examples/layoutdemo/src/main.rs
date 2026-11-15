@@ -41,8 +41,9 @@ fn field(theme: &Theme) -> Element {
         .height(26.0)
 }
 
-fn chip(theme: &Theme, text: &str) -> Element {
-    row(vec![label(theme, text)])
+fn chip<S>(cx: &Cx<S>, text: &str) -> Element {
+    let theme = cx.theme();
+    row(vec![label(cx, text)])
         .fill(theme.palette.background)
         .border(theme.palette.border, 1.0)
         .radius(12.0)
@@ -57,14 +58,14 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     let form = grid(
         vec![Track::Auto, Track::fr(1.0)],
         vec![
-            heading(&theme, "Grid").span(2, 1),
-            label(&theme, "Name"),
+            heading(cx, "Grid").span(2, 1),
+            label(cx, "Name"),
             field(&theme),
-            label(&theme, "Email address"),
+            label(cx, "Email address"),
             field(&theme),
-            label(&theme, "Notes"),
+            label(cx, "Notes"),
             paragraph(
-                &theme,
+                cx,
                 "Wrapped text in a 1fr column wraps at the column's width.",
             ),
         ],
@@ -86,7 +87,7 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     )
     .gap(sp.xs);
 
-    let grid_panel = panel(&theme, vec![form, divider(&theme), tracks]);
+    let grid_panel = panel(cx, |cx| vec![form, divider(cx), tracks]);
 
     let tags = [
         "layout",
@@ -102,10 +103,10 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
         "alignment",
         "stipple",
     ];
-    let wrapped = row(tags.iter().map(|t| chip(&theme, t)).collect())
+    let wrapped = row(tags.iter().map(|t| chip(cx, t)).collect())
         .wrap()
         .gap(sp.sm);
-    let wrap_panel = panel(&theme, vec![heading(&theme, "Wrap"), wrapped]);
+    let wrap_panel = panel(cx, |cx| vec![heading(cx, "Wrap"), wrapped]);
 
     // Both grow; the first stops at its max and the second takes the rest.
     let grow_bars = row(vec![
@@ -123,20 +124,14 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
     ])
     .gap(sp.sm);
     let capped = paragraph(
-        &theme,
+        cx,
         "This paragraph has a max width of 260px, so it wraps before reaching the \
          panel's edge.",
     )
     .max_width(260.0);
-    let constraints_panel = panel(
-        &theme,
-        vec![
-            heading(&theme, "Constraints"),
-            grow_bars,
-            shrink_bars,
-            capped,
-        ],
-    );
+    let constraints_panel = panel(cx, |cx| {
+        vec![heading(cx, "Constraints"), grow_bars, shrink_bars, capped]
+    });
 
     let page = grid(
         vec![Track::fr(1.0), Track::fr(1.0)],

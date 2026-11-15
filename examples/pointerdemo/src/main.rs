@@ -100,7 +100,7 @@ fn view(pad: &Pad, cx: &mut Cx<Pad>) -> Element {
         );
     })
     // Clicking focuses the pad; typing then hides the cursor.
-    .on_key(cx, move |pad: &mut Pad, input: &KeyInput| {
+    .on_key(cx, move |pad, input: &KeyInput| {
         let toggle = matches!(input, KeyInput::Text(t) if t.eq_ignore_ascii_case("l"));
         if toggle || (pad.locked && *input == KeyInput::Escape) {
             handle.set_pointer_lock(toggle && !pad.locked);

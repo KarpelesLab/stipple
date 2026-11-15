@@ -169,7 +169,7 @@ fn titled(s: &Doc, cx: &mut Cx<Doc>) -> Element {
     cx.set_window_title(format!("{} ({})", s.name, s.clicks));
     crate::widgets::spacer()
         .grow(1.0)
-        .on_tap(cx, |s: &mut Doc| s.clicks += 1)
+        .on_tap(cx, |s| s.clicks += 1)
 }
 
 #[test]

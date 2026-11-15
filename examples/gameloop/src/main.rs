@@ -149,12 +149,12 @@ fn view(g: &Game, cx: &mut Cx<Game>) -> Element {
     .height(FIELD.height);
     let status = if g.paused {
         row(vec![
-            label(&theme, "Paused"),
-            button_labeled(&theme, "Resume").on_tap(cx, |g: &mut Game| g.paused = false),
+            label(cx, "Paused"),
+            button(cx, "Resume").on_tap(cx, |g| g.paused = false),
         ])
     } else {
         label(
-            &theme,
+            cx,
             format!(
                 "{} fps — arrows, WASD, a pad or touch to move; Shift or A to speed up; P to pause",
                 g.fps

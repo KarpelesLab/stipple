@@ -24,21 +24,14 @@ fn command() -> Modifiers {
 
 fn app() -> App<Doc> {
     App::new(Doc::default(), |_: &Doc, cx: &mut Cx<Doc>| {
-        let theme = *cx.theme();
         column(vec![
-            label(&theme, "Body")
-                .height(40.0)
-                .width(200.0)
-                .context_menu(
-                    cx,
-                    Menu::new("")
-                        .item(MenuItem::new("Cut", |d: &mut Doc| d.log.push("cut")))
-                        .item(
-                            MenuItem::new("Paste", |d: &mut Doc| d.log.push("paste"))
-                                .enabled(false),
-                        )
-                        .item(MenuItem::new("Copy", |d: &mut Doc| d.log.push("copy"))),
-                ),
+            label(cx, "Body").height(40.0).width(200.0).context_menu(
+                cx,
+                Menu::new("")
+                    .item(MenuItem::new("Cut", |d: &mut Doc| d.log.push("cut")))
+                    .item(MenuItem::new("Paste", |d: &mut Doc| d.log.push("paste")).enabled(false))
+                    .item(MenuItem::new("Copy", |d: &mut Doc| d.log.push("copy"))),
+            ),
         ])
     })
     .no_font()

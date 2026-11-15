@@ -42,7 +42,6 @@ impl State {
 }
 
 fn view(s: &State, cx: &mut Cx<State>) -> Element {
-    let theme = *cx.theme();
     let tabs = s
         .docs
         .iter()
@@ -84,11 +83,9 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
             s.next += 1;
             s.selected = s.docs.len() - 1;
         });
-    super::column(vec![tab_bar(cx, &theme, bar, &s.bar, |s: &mut State| {
-        &mut s.bar
-    })])
-    .align(Align::Start, Align::Stretch)
-    .grow(1.0)
+    super::column(vec![tab_bar(cx, bar, &s.bar, |s| &mut s.bar)])
+        .align(Align::Start, Align::Stretch)
+        .grow(1.0)
 }
 
 fn app(n: usize, width: f64) -> App<State> {

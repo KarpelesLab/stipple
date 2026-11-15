@@ -230,7 +230,7 @@ fn a_leaving_element_stays_drawn_but_clicks_go_through_it() {
                         .key(id)
                         .exit(Effect::fade().transition(slow))
                         .animate_position(slow)
-                        .on_tap(cx, move |s: &mut S| {
+                        .on_tap(cx, move |s| {
                             s.tapped.push(id);
                             s.items.retain(|&i| i != id);
                         })
@@ -292,16 +292,13 @@ fn a_closing_popup_is_drawn_but_clicks_focus_and_readers_go_past_it() {
         size: Select,
         under: u32,
     }
-    let theme = slow_exits();
     let mut app = App::new(S::default(), move |s: &S, cx: &mut Cx<S>| {
-        let pick = select(cx, &theme, &["Small", "Large"], &s.size, |s: &mut S| {
-            &mut s.size
-        });
+        let pick = select(cx, &["Small", "Large"], &s.size, |s| &mut s.size);
         // A big target under where the list drops.
         let under = Element::stack(Axis::Vertical, vec![])
             .width(300.0)
             .height(200.0)
-            .on_tap(cx, |s: &mut S| s.under += 1);
+            .on_tap(cx, |s| s.under += 1);
         Element::stack(Axis::Vertical, vec![pick, under])
     })
     .no_font()
@@ -354,7 +351,6 @@ fn a_closing_dialog_fades_with_its_scrim_which_no_longer_blocks() {
         open: bool,
         under: u32,
     }
-    let theme = slow_exits();
     let state = S {
         open: true,
         under: 0,
@@ -363,17 +359,16 @@ fn a_closing_dialog_fades_with_its_scrim_which_no_longer_blocks() {
         if s.open {
             crate::widgets::open_dialog(
                 cx,
-                &theme,
                 "Title",
                 Element::stack(Axis::Vertical, vec![]),
                 vec![],
-                |s: &mut S| s.open = false,
+                |s| s.open = false,
             );
         }
         Element::stack(Axis::Vertical, vec![])
             .width(300.0)
             .height(300.0)
-            .on_tap(cx, |s: &mut S| s.under += 1)
+            .on_tap(cx, |s| s.under += 1)
     })
     .no_font()
     .theme(slow_exits())
@@ -396,9 +391,8 @@ fn a_closing_dialog_fades_with_its_scrim_which_no_longer_blocks() {
 /// The segmented `tabs` view, `selected` chosen, in a dark window.
 fn tab_strip(selected: usize) -> App<usize> {
     App::new(selected, |s: &usize, cx: &mut Cx<usize>| {
-        let t = crate::style::Theme::dark();
         let labels = ["Profile", "Settings", "About"];
-        let strip = crate::widgets::tabs(cx, &t, &labels, *s, |s: &mut usize, i| *s = i);
+        let strip = crate::widgets::tabs(cx, &labels, *s, |s, i| *s = i);
         Element::stack(Axis::Vertical, vec![strip]).padding(crate::geometry::Insets::uniform(15.0))
     })
     .no_font()

@@ -51,7 +51,7 @@ struct State {
     selected: usize,
     bar: TabBarState,
     next: u64,
-    host: EditBuffer,
+    host: TextInput,
     password: PasswordField,
     tint: ColorPicker,
     log: Vec<String>,
@@ -89,7 +89,7 @@ impl State {
             selected: 0,
             bar: TabBarState::new(),
             next: 4,
-            host: EditBuffer::from_text("build.example.com"),
+            host: TextInput::from_text("build.example.com"),
             password: PasswordField::new().reveal_button(true),
             log: vec!["Ready.".into()],
             drawn,
@@ -278,25 +278,23 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             let last = s.sessions.len() - 1;
             s.select(last);
         });
-    let bar = tab_bar(cx, &theme, bar, &state.bar, |s: &mut State| &mut s.bar);
+    let bar = tab_bar(cx, bar, &state.bar, |s| &mut s.bar);
 
     let current = state.sessions.get(state.selected);
     let title = current.map_or("No session".to_string(), |s| s.name.clone());
     let form = grid(
         vec![Track::px(110.0), Track::fr(1.0)],
         vec![
-            label(&theme, "Host"),
-            text_editor(cx, &theme, &state.host, |s: &mut State| &mut s.host).width(260.0),
-            label(&theme, "Password"),
-            password_field(cx, &theme, &state.password, |s: &mut State| &mut s.password)
-                .width(260.0),
-            label(&theme, "Tab color"),
+            label(cx, "Host"),
+            text_field(cx, &state.host, |s| &mut s.host).width(260.0),
+            label(cx, "Password"),
+            password_field(cx, &state.password, |s| &mut s.password).width(260.0),
+            label(cx, "Tab color"),
             row(vec![color_button(
                 cx,
-                &theme,
                 &state.tint,
-                |s: &mut State| &mut s.tint,
-                |s: &mut State, c| {
+                |s| &mut s.tint,
+                |s, c| {
                     let i = s.selected;
                     if let Some(session) = s.sessions.get_mut(i) {
                         session.color = Some(c);
@@ -309,7 +307,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .align(Align::Start, Align::Center);
 
     let h = handle.clone();
-    let connect = button_labeled(&theme, "Connect").on_tap(cx, move |s: &mut State| {
+    let connect = button(cx, "Connect").on_tap(cx, move |s| {
         let mb = if s.password.is_empty() {
             MessageBox::new("A password is needed")
                 .detail(format!("Enter the password for {}.", s.host.text()))
@@ -328,8 +326,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         });
         s.password.clear();
     });
-    let ring =
-        button_variant(&theme, "Ring bell", Variant::Secondary).on_tap(cx, |s: &mut State| {
+    let ring = Button::new("Ring bell")
+        .variant(Variant::Secondary)
+        .view(cx)
+        .on_tap(cx, |s| {
             let n = s.sessions.len();
             if n > 1 {
                 let i = (s.selected + 1) % n;
@@ -356,7 +356,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .gap(2.0);
 
     let body = column(vec![
-        heading(&theme, title),
+        heading(cx, title),
         form,
         actions,
         spacer().grow(1.0),

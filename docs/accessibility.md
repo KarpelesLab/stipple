@@ -370,8 +370,8 @@ or `zbus`).
 - **Relations.** `GetRelationSet` gives `labelled-by` on a control that
   names its caption with `Element::labelled_by(id)` and `label-for` on the
   caption (`Element::a11y_id(id)`), the way a `for` attribute ties a label
-  to a field on the web: `label(&theme, "Note").a11y_id("note")` beside
-  `text_editor(…).labelled_by("note")`. Ids are matched within the window's
+  to a field on the web: `label(cx, "Note").a11y_id("note")` beside
+  `text_field(…).labelled_by("note")`. Ids are matched within the window's
   tree. Nothing is inferred: a label beside a field without them isn't
   related to it (Orca guesses one from the layout, as it does for any
   toolkit). Only AT-SPI exposes the relation so far (not UIA's `LabeledBy`,

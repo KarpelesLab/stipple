@@ -13,7 +13,7 @@ use crate::style::Theme;
 use std::rc::Rc;
 
 use super::password::password_field_with;
-use super::{PasswordField, Variant, button_variant, field_text};
+use super::{Button, PasswordField, Variant, field_text};
 
 /// The panel's width, in logical pixels.
 const WIDTH: f64 = 400.0;
@@ -123,7 +123,7 @@ pub(crate) fn overlay<S: 'static>(
                     .border(p.border, 1.0)
                     .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
                     .native_text_frame(theme)
-                    .on_key(cx, move |s: &mut S, k| {
+                    .on_key(cx, move |s, k| {
                         if !keys(s, k) {
                             h.alert_input(id, |i| {
                                 if let AlertInput::Plain(b) = i {
@@ -135,7 +135,7 @@ pub(crate) fn overlay<S: 'static>(
                             });
                         }
                     })
-                    .on_text_pos(cx, move |_: &mut S, index, extend| {
+                    .on_text_pos(cx, move |_, index, extend| {
                         hp.alert_input(id, |i| {
                             if let AlertInput::Plain(b) = i {
                                 let index = b.display_to_text(index);
@@ -164,11 +164,13 @@ pub(crate) fn overlay<S: 'static>(
                 Variant::Secondary
             };
             let h = handle.clone();
-            let mut b = button_variant(theme, label.clone(), variant)
-                .on_tap(cx, move |s: &mut S| h.answer_alert(id, Some(i), s));
+            let mut b = Button::new(label.clone())
+                .variant(variant)
+                .view(cx)
+                .on_tap(cx, move |s| h.answer_alert(id, Some(i), s));
             if i == default {
                 let keys = keys.clone();
-                b = b.on_key(cx, move |s: &mut S, k| {
+                b = b.on_key(cx, move |s, k| {
                     keys(s, k);
                 });
                 target = target.or(b.focus);

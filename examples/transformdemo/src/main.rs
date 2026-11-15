@@ -36,9 +36,10 @@ impl State {
 }
 
 /// A titled card holding `content` in a fixed-size well.
-fn card(theme: &Theme, title: &str, content: Element) -> Element {
+fn card<S>(cx: &Cx<S>, title: &str, content: Element) -> Element {
+    let theme = cx.theme();
     column(vec![
-        label(theme, title),
+        label(cx, title),
         column(vec![content])
             .align(Align::Center, Align::Center)
             .width(150.0)
@@ -88,33 +89,33 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .opacity((0.6 + 0.4 * (t * std::f64::consts::PI).cos()) as f32);
 
     let cards = row(vec![
-        card(&theme, "Spin", spin),
-        card(&theme, "Pulse", pulse),
-        card(&theme, "Fade (as a group)", pair),
+        card(cx, "Spin", spin),
+        card(cx, "Pulse", pulse),
+        card(cx, "Fade (as a group)", pair),
     ])
     .gap(theme.spacing.md);
 
     let clicks = state.clicks;
-    let tilted = button_labeled(&theme, format!("Click me ({clicks})"))
+    let tilted = button(cx, format!("Click me ({clicks})"))
         .width(180.0)
         .height(48.0)
         .transform(Transform::IDENTITY.rotate_degrees(-8.0))
-        .on_tap(cx, |s: &mut State| {
+        .on_tap(cx, |s| {
             s.clicks += 1;
             println!("transformdemo: clicked {} times", s.clicks);
         });
     let paused = state.held.is_some();
-    let pause = button_labeled(&theme, if paused { "Play" } else { "Pause" })
+    let pause = button(cx, if paused { "Play" } else { "Pause" })
         .width(100.0)
         .height(36.0)
-        .on_tap(cx, |s: &mut State| match s.held.take() {
+        .on_tap(cx, |s| match s.held.take() {
             // Resume from where the motion stood.
             Some(at) => s.offset = s.last_frame.get().saturating_sub(at),
             None => s.held = Some(s.motion_time()),
         });
 
     column(vec![
-        heading(&theme, "Transforms and opacity"),
+        heading(cx, "Transforms and opacity"),
         cards,
         row(vec![tilted, pause])
             .gap(theme.spacing.lg * 2.0)

@@ -16,7 +16,7 @@ use crate::platform::PointerButton;
 use crate::style::{MotionTokens, Theme};
 
 use super::motion::{self, Memo};
-use super::{Variant, button_variant};
+use super::{Button, Variant};
 
 /// At most this many toasts show at once in the corner (the newest); the
 /// rest wait.
@@ -253,11 +253,10 @@ impl Toasts {
     /// use stipple::prelude::*;
     /// struct App { toasts: Toasts }
     /// fn view(_: &App, cx: &mut Cx<App>) -> Element {
-    ///     let theme = *cx.theme();
     ///     let handle = cx.handle();
-    ///     button_labeled(&theme, "Save").on_tap(cx, move |s: &mut App| {
+    ///     button(cx, "Save").on_tap(cx, move |s| {
     ///         let id = s.toasts.push("Saved", ToastKind::Success);
-    ///         s.toasts.dismiss_after(id, Duration::from_secs(4), &handle, |s: &mut App| &mut s.toasts);
+    ///         s.toasts.dismiss_after(id, Duration::from_secs(4), &handle, |s| &mut s.toasts);
     ///     })
     /// }
     /// ```
@@ -282,12 +281,11 @@ impl Toasts {
     /// use stipple::prelude::*;
     /// struct App { toasts: Toasts, notes: Vec<String> }
     /// fn view(_: &App, cx: &mut Cx<App>) -> Element {
-    ///     let theme = *cx.theme();
     ///     let handle = cx.handle();
-    ///     button_labeled(&theme, "Delete").on_tap(cx, move |s: &mut App| {
+    ///     button(cx, "Delete").on_tap(cx, move |s| {
     ///         let Some(note) = s.notes.pop() else { return };
     ///         let id = s.toasts.push("Deleted", ToastKind::Info);
-    ///         s.toasts.dismiss_after(id, Duration::from_secs(6), &handle, |s: &mut App| &mut s.toasts);
+    ///         s.toasts.dismiss_after(id, Duration::from_secs(6), &handle, |s| &mut s.toasts);
     ///         s.toasts.action(id, "Undo", move |s: &mut App| s.notes.push(note.clone()));
     ///     })
     /// }
@@ -424,10 +422,10 @@ impl Toasts {
 /// section of `docs/widgets.md`).
 pub fn toasts<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     state: &Toasts,
     field: impl Fn(&mut S) -> &mut Toasts + Copy + 'static,
 ) {
+    let theme = &super::theme_of(cx);
     let window = cx.window_size();
     let bottom = state.placement.resolve(window.width) == ToastPlacement::Bottom;
     let max = if bottom { 1 } else { MAX_SHOWN };
@@ -640,16 +638,16 @@ where
     .align(Align::Center, Align::Center)
     .min_width(24.0)
     .min_height(24.0);
-    let mut action = toast
-        .action
-        .as_ref()
-        .map(|a| button_variant(theme, a.label.clone(), Variant::Ghost));
+    let mut action = toast.action.as_ref().map(|a| {
+        Button::new(a.label.clone())
+            .variant(Variant::Ghost)
+            .view(cx)
+    });
     if let Some(field) = field {
-        close = close.a11y_label("Dismiss").on_tap(cx, move |s: &mut S| {
+        close = close.a11y_label("Dismiss").on_tap(cx, move |s| {
             field(s).dismiss(id);
         });
-        action = action
-            .map(|button| button.on_tap(cx, move |s: &mut S| Toasts::run_action(s, field, id)));
+        action = action.map(|button| button.on_tap(cx, move |s| Toasts::run_action(s, field, id)));
     }
     let message = Element::stack(Axis::Horizontal, vec![message])
         .grow(1.0)
@@ -712,9 +710,7 @@ mod tests {
         let id = state.toasts.push("brief", ToastKind::Info);
         state
             .toasts
-            .dismiss_after(id, Duration::from_millis(50), &handle, |s: &mut State| {
-                &mut s.toasts
-            });
+            .dismiss_after(id, Duration::from_millis(50), &handle, |s| &mut s.toasts);
         state.toasts.push("sticky", ToastKind::Info);
         handle.pump(&mut state, start);
         assert_eq!(state.toasts.len(), 2, "not due yet");
@@ -742,11 +738,10 @@ mod tests {
 
     fn build(state: App1, size: Size) -> App<App1> {
         App::new(state, |s: &App1, cx: &mut Cx<App1>| {
-            let theme = *cx.theme();
-            toasts(cx, &theme, &s.toasts, |s: &mut App1| &mut s.toasts);
+            toasts(cx, &s.toasts, |s| &mut s.toasts);
             Element::stack(Axis::Vertical, vec![])
                 .grow(1.0)
-                .on_tap(cx, |s: &mut App1| s.clicks += 1)
+                .on_tap(cx, |s| s.clicks += 1)
         })
         .no_font()
         .logical_size(size)

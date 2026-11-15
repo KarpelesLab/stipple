@@ -10,7 +10,7 @@ editor, adds `Element::on_raw_key`.
 
 ```rust
 let terminal = column(rows)
-    .on_raw_key(cx, |term: &mut Term, ev: &KeyEvent| {
+    .on_raw_key(cx, |term, ev: &KeyEvent| {
         if !ev.is_press() {
             return Handled::No;
         }
@@ -23,7 +23,7 @@ let terminal = column(rows)
         }
     })
     // IME commits and dead-key text arrive here.
-    .on_key(cx, |term: &mut Term, input: &KeyInput| term.input(input))
+    .on_key(cx, |term, input: &KeyInput| term.input(input))
     .captures_tab(true)
     .ime_cursor_area(cursor_cell)
     .option_as_meta(OptionAsMeta::Left);

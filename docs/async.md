@@ -16,7 +16,7 @@ let handle = app.handle();
 // From another thread: the closure runs on the UI thread, then the UI re-renders.
 std::thread::spawn(move || {
     let page = download();                       // slow work, off the UI thread
-    handle.update(move |s: &mut State| s.page = Some(page));
+    handle.update(move |s| s.page = Some(page));
 });
 
 app.run();
@@ -40,14 +40,13 @@ To start work from a button, clone the handle into its handler:
 
 ```rust
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
-    let theme = *cx.theme();
     let handle = cx.handle();
-    button_labeled(&theme, "Refresh").on_tap(cx, move |s: &mut State| {
+    button(cx, "Refresh").on_tap(cx, move |s| {
         s.loading = true;
         let handle = handle.clone();
         std::thread::spawn(move || {
             let page = download();
-            handle.update(move |s: &mut State| {
+            handle.update(move |s| {
                 s.loading = false;
                 s.page = Some(page);
             });

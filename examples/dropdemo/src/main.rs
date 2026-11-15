@@ -34,7 +34,7 @@ struct State {
 /// between its resting and drag-over looks.
 fn zone(cx: &mut Cx<State>, title: &str, accepts: DragOffer, motion: Transition) -> Element {
     let theme = *cx.theme();
-    let id = cx.register_drop(accepts, |s: &mut State, data, at| {
+    let id = cx.register_drop(accepts, |s, data, at| {
         let line = match data {
             DropData::Files(paths) => format!("files {paths:?}"),
             DropData::Text(text) => format!("text {text:?}"),
@@ -64,7 +64,7 @@ fn zone(cx: &mut Cx<State>, title: &str, accepts: DragOffer, motion: Transition)
             .border(glow, 4.0)
             .radius(12.0)
     };
-    column(vec![label(&theme, hint), label(&theme, pos)])
+    column(vec![label(cx, hint), label(cx, pos)])
         .gap(theme.spacing.sm)
         .align(Align::Center, Align::Center)
         .padding(Insets::uniform(pad))
@@ -95,8 +95,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     );
 
     // A fixed width keeps the chips where CI's scripted drags expect them.
-    let chip = |text: String| {
-        column(vec![label(&theme, text)])
+    let chip = |cx: &Cx<State>, text: String| {
+        column(vec![label(cx, text)])
             .align(Align::Center, Align::Center)
             .width(68.0)
             .padding(Insets::uniform(theme.spacing.sm))
@@ -108,7 +108,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let mut chips: Vec<Element> = (1..=3)
         .map(|n| {
             let name = format!("chip-{n}");
-            chip(format!("Chip {n}"))
+            chip(cx, format!("Chip {n}"))
                 .drag_source(cx, move |_| Some(DropData::Internal(name.clone())))
         })
         .collect();
@@ -116,10 +116,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     // the window they go to other applications.
     let file = state.file.clone();
     chips.push(
-        chip("File".into()).drag_source(cx, move |_| Some(DropData::Files(vec![file.clone()]))),
+        chip(cx, "File".into()).drag_source(cx, move |_| Some(DropData::Files(vec![file.clone()]))),
     );
     chips.push(
-        chip("Text".into()).drag_source(cx, |_| Some(DropData::Text("Hello from Stipple".into()))),
+        chip(cx, "Text".into())
+            .drag_source(cx, |_| Some(DropData::Text("Hello from Stipple".into()))),
     );
     let last = state
         .drops
@@ -127,16 +128,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         .cloned()
         .unwrap_or_else(|| "nothing yet".into());
     column(vec![
-        heading(&theme, "Drag and drop"),
+        heading(cx, "Drag and drop"),
         row(vec![any, files])
             .gap(theme.spacing.md)
             .align(Align::Start, Align::Stretch)
             .grow(1.0),
         row(chips).gap(theme.spacing.sm),
-        label(
-            &theme,
-            format!("{} dropped; last: {last}", state.drops.len()),
-        ),
+        label(cx, format!("{} dropped; last: {last}", state.drops.len())),
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(theme.spacing.lg))

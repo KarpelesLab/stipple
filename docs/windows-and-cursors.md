@@ -36,7 +36,7 @@ app's handle. It applies to the primary window between events:
 # struct State { full: bool }
 # fn view(state: &State, cx: &mut Cx<State>) -> Element {
 let handle = cx.handle();
-button_labeled(cx.theme(), "Fullscreen").on_tap(cx, move |s: &mut State| {
+button(cx, "Fullscreen").on_tap(cx, move |s| {
     s.full = !s.full;
     handle.window(WindowRequest::Fullscreen(s.full));
 })
@@ -85,7 +85,7 @@ fn editor(s: &State, cx: &mut Cx<State>) -> Element {
     let id = cx.window_id();
     let name = s.docs.iter().find(|(w, _)| *w == id).map_or("", |(_, n)| n);
     cx.set_window_title(format!("{name} — Editor"));
-    label(cx.theme(), name)
+    label(cx, name)
 }
 # fn f(handle: AppHandle<State>) {
 let id = handle.open_window(
@@ -168,7 +168,7 @@ a playing video).
 
 Elements pick a cursor from what they do:
 
-- editable text (`text_editor`, `text_area`, `text_field`) shows the I-beam;
+- editable text (`text_field`, `text_area`) shows the I-beam;
 - anything with `on_tap` or `on_drag` (buttons, checkboxes, sliders, tabs…)
   shows the pointing hand;
 - everything else shows the cursor of the element it sits in, and the arrow at
@@ -183,7 +183,7 @@ children unless they pick their own:
 let splitter = Element::boxed(BoxStyle::default())
     .width(4.0)
     .cursor(CursorIcon::EwResize);
-let disabled = button_labeled(&theme, "Save").cursor(CursorIcon::NotAllowed);
+let disabled = button(cx, "Save").cursor(CursorIcon::NotAllowed);
 ```
 
 The app sets the cursor when the pointer moves onto an element that wants a

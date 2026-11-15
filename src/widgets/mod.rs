@@ -1,17 +1,18 @@
 //! Stipple's self-drawn widget library.
 //!
 //! Every widget is composed from the `stipple::core` [`Element`] IR and drawn by
-//! `oxideav-raster` — there are no native controls. The builders here read
-//! their colors and metrics from a [`Theme`], so a single theme swap re-skins
-//! the whole UI.
+//! `oxideav-raster` — there are no native controls. Widgets take the view's
+//! [`Cx`] first and read their colors and metrics from its [`Theme`], so a
+//! single theme swap re-skins the whole UI ([`Cx::themed`] swaps it for part
+//! of a view).
 //!
-//! Available widgets: structure (`column`, `row`, `grid`, `spacer`, `panel`), content
-//! (`label`, `heading`, `swatch`, `divider`), and interactive controls —
-//! `button_variant` (Primary/Secondary/Ghost/Danger) / `button_labeled`
-//! ([`Element::on_tap`]), `text_field` / `text_editor` ([`Element::on_key`]; the
-//! latter is caret-aware via [`EditBuffer`]), `checkbox`, `switch`, and `slider`
-//! ([`Element::on_drag`]), and chips (`chip`, `choice_chips`, `filter_chips`). All colors and metrics come from the [`Theme`], so
-//! swapping or customizing the theme reskins everything.
+//! Available widgets: structure (`column`, `row`, `grid`, `spacer`, `panel`,
+//! `scroll`), content (`label`, `heading`, `paragraph`, `swatch`, `divider`),
+//! and interactive controls: `button` (and [`Button`] for the other
+//! [`Variant`]s and custom content; [`Element::on_tap`]), `text_field` /
+//! `text_area` (editing a [`TextInput`]), `checkbox`, `switch`, `radio`,
+//! `slider`, `select`, `number_input`, `password_field`, and chips (`chip`,
+//! `choice_chips`, `filter_chips`).
 
 #![forbid(unsafe_code)]
 
@@ -39,6 +40,7 @@ mod split;
 mod tab_bar;
 #[cfg(test)]
 mod tab_bar_tests;
+mod text_input;
 mod toast;
 mod toolbar;
 
@@ -53,8 +55,10 @@ pub use preedit::DisplayText;
 pub use select::{Select, select};
 pub use split::{SplitPane, split_pane};
 pub use tab_bar::{TAB_MAX_WIDTH, TAB_MIN_WIDTH, Tab, TabBar, TabBarState, TabIndicator, tab_bar};
+pub(crate) use text_input::FieldHooks;
+pub use text_input::{TextInput, text_area, text_field};
 pub use toast::{NARROW_WINDOW, Toast, ToastId, ToastKind, ToastPlacement, Toasts, toasts};
-pub use toolbar::{tool_button, tool_icon_button, tool_separator, tool_toggle, toolbar};
+pub use toolbar::{ToolButton, tool_button, tool_separator, toolbar};
 
 use crate::core::{
     Align, Anchor, AnimProp, Axis, BoxStyle, Cx, Effect, Element, KeyInput, OverlaySpec, Role,
@@ -150,7 +154,15 @@ pub fn spacer() -> Element {
 /// `height` overflows and is clipped to the viewport; wheel events over it
 /// scroll the app's offset (re-clamped each frame). Register the container once
 /// per frame via `cx` so its scroll position is stable across rebuilds.
-pub fn scroll<S>(cx: &mut Cx<S>, height: f64, content: Element) -> Element {
+///
+/// The closure builds the content with `cx`, so it can register handlers:
+/// `scroll(cx, 300.0, |cx| column(rows(cx)))`.
+pub fn scroll<S>(
+    cx: &mut Cx<S>,
+    height: f64,
+    content: impl FnOnce(&mut Cx<S>) -> Element,
+) -> Element {
+    let content = content(cx);
     let id = cx.register_scroll();
     Element::stack(Axis::Vertical, vec![content])
         .height(height)
@@ -166,7 +178,12 @@ pub fn scroll<S>(cx: &mut Cx<S>, height: f64, content: Element) -> Element {
 /// measures with no width limit, so a wrapping row (a group of
 /// [`choice_chips`] or [`filter_chips`]) stays on one line in it. Inside a
 /// [`scroll`] list, a drag picks the container along its direction.
-pub fn scroll_horizontal<S>(cx: &mut Cx<S>, width: f64, content: Element) -> Element {
+pub fn scroll_horizontal<S>(
+    cx: &mut Cx<S>,
+    width: f64,
+    content: impl FnOnce(&mut Cx<S>) -> Element,
+) -> Element {
+    let content = content(cx);
     let id = cx.register_scroll();
     Element::stack(Axis::Horizontal, vec![content])
         .width(width)
@@ -180,7 +197,8 @@ pub fn scroll_horizontal<S>(cx: &mut Cx<S>, width: f64, content: Element) -> Ele
 /// sandboxed content process's GPU surface) by locating it by `id`; until then
 /// a neutral placeholder shows. The `id` is caller-chosen so it stays stable across frames
 /// and correlates with the content source.
-pub fn viewport(theme: &Theme, id: ViewportId, width: f64, height: f64) -> Element {
+pub fn viewport<S>(cx: &Cx<S>, id: ViewportId, width: f64, height: f64) -> Element {
+    let theme = cx.theme();
     Element::viewport(id)
         .width(width)
         .height(height)
@@ -209,8 +227,29 @@ pub fn svg(doc: &Arc<Svg>) -> Element {
 }
 
 /// A raised surface card: themed fill, hairline border, rounded corners, and
-/// comfortable padding. Lays its `children` vertically.
-pub fn panel(theme: &Theme, children: Vec<Element>) -> Element {
+/// comfortable padding. Lays the `children` that the closure builds
+/// vertically. They're built by a closure given `cx`, so they can register
+/// handlers in it:
+///
+/// ```
+/// use stipple::prelude::*;
+/// struct App { n: i64 }
+/// fn view(state: &App, cx: &mut Cx<App>) -> Element {
+///     panel(cx, |cx| vec![
+///         heading(cx, format!("{}", state.n)),
+///         button(cx, "+1").on_tap(cx, |s| s.n += 1),
+///     ])
+/// }
+/// # let theme = Theme::light();
+/// # let _ = view(&App { n: 0 }, &mut Cx::new(&theme));
+/// ```
+pub fn panel<S>(cx: &mut Cx<S>, children: impl FnOnce(&mut Cx<S>) -> Vec<Element>) -> Element {
+    let children = children(cx);
+    panel_frame(cx.theme(), children)
+}
+
+/// [`panel`]'s card around `children`.
+fn panel_frame(theme: &Theme, children: Vec<Element>) -> Element {
     Element::stack(Axis::Vertical, children)
         .fill(theme.palette.surface)
         .radius(theme.radius)
@@ -219,32 +258,23 @@ pub fn panel(theme: &Theme, children: Vec<Element>) -> Element {
         .gap(theme.spacing.md)
 }
 
-/// A primary action surface (the visual basis of an icon-only button). Fixed
-/// size; for a text button use [`button_labeled`].
-pub fn button(theme: &Theme) -> Element {
-    Element::boxed(BoxStyle {
-        fill: Some(theme.palette.primary),
-        radius: theme.radius,
-        border: None,
-    })
-    .width(96.0)
-    .height(36.0)
-}
-
 /// A single line of text in the theme's default text color and body size.
-pub fn label(theme: &Theme, text: impl Into<String>) -> Element {
+pub fn label<S>(cx: &Cx<S>, text: impl Into<String>) -> Element {
+    let theme = cx.theme();
     Element::text(text, theme.typography.body, theme.palette.text)
 }
 
 /// A larger heading in the theme's heading size.
-pub fn heading(theme: &Theme, text: impl Into<String>) -> Element {
+pub fn heading<S>(cx: &Cx<S>, text: impl Into<String>) -> Element {
+    let theme = cx.theme();
     Element::text(text, theme.typography.heading, theme.palette.text)
 }
 
 /// A block of body text that word-wraps to its container width across as many
 /// lines as needed. Place it in a cross-stretch container (like [`panel`]) so it
 /// takes the full width.
-pub fn paragraph(theme: &Theme, text: impl Into<String>) -> Element {
+pub fn paragraph<S>(cx: &Cx<S>, text: impl Into<String>) -> Element {
+    let theme = cx.theme();
     Element::text(text, theme.typography.body, theme.palette.text).wrap()
 }
 
@@ -262,55 +292,126 @@ pub enum Variant {
     Danger,
 }
 
-/// A text button styled per [`Variant`], reading colors from the theme.
-pub fn button_variant(theme: &Theme, label: impl Into<String>, variant: Variant) -> Element {
-    let p = &theme.palette;
-    // The OS's primary and regular buttons; it has no equivalent of the others.
-    let control = match variant {
-        Variant::Primary => Some(NativeControl::Button { primary: true }),
-        Variant::Secondary => Some(NativeControl::Button { primary: false }),
-        Variant::Ghost | Variant::Danger => None,
-    };
-    if let Some(control) = control
-        && let Some(deco) = theme.native_deco(control)
-    {
-        let ink = if matches!(variant, Variant::Primary) && native::primary_label_is_on_accent() {
-            p.on_primary
-        } else {
-            p.text
+/// A button: a label (or other content) on a surface styled per
+/// [`Variant`], in the theme's colors. [`button`] is the common case, a
+/// primary button with a text label; build one of these for another variant
+/// or for custom content, and finish it with [`view`](Self::view). Make it do
+/// something with [`Element::on_tap`].
+///
+/// ```
+/// use stipple::prelude::*;
+/// struct Doc { saved: bool }
+/// fn view(_: &Doc, cx: &mut Cx<Doc>) -> Element {
+///     row(vec![
+///         button(cx, "Save").on_tap(cx, |d| d.saved = true),
+///         Button::new("Delete").variant(Variant::Danger).view(cx).on_tap(cx, |_| {}),
+///         Button::from_content(label(cx, "★")).variant(Variant::Ghost).view(cx),
+///     ])
+/// }
+/// # let theme = Theme::light();
+/// # let _ = view(&Doc { saved: false }, &mut Cx::new(&theme));
+/// ```
+#[derive(Clone, Debug)]
+pub struct Button {
+    content: ButtonContent,
+    variant: Variant,
+}
+
+#[derive(Clone, Debug)]
+enum ButtonContent {
+    Label(String),
+    Element(Box<Element>),
+}
+
+impl Button {
+    /// A primary button labeled `label`.
+    pub fn new(label: impl Into<String>) -> Self {
+        Self {
+            content: ButtonContent::Label(label.into()),
+            variant: Variant::Primary,
+        }
+    }
+
+    /// A primary button showing `content` (an icon, an icon and a label)
+    /// instead of a text label. The content keeps its own colors. Name an
+    /// icon-only button with [`Element::a11y_label`].
+    pub fn from_content(content: Element) -> Self {
+        Self {
+            content: ButtonContent::Element(Box::new(content)),
+            variant: Variant::Primary,
+        }
+    }
+
+    /// The emphasis: [`Variant::Primary`] (the default), `Secondary`, `Ghost`
+    /// or `Danger`.
+    pub fn variant(mut self, variant: Variant) -> Self {
+        self.variant = variant;
+        self
+    }
+
+    /// The button, in `cx`'s theme.
+    pub fn view<S>(self, cx: &Cx<S>) -> Element {
+        let theme = cx.theme();
+        let p = &theme.palette;
+        let variant = self.variant;
+        let content = |ink: Color| match self.content {
+            ButtonContent::Label(text) => Element::text(text, theme.typography.body, ink),
+            ButtonContent::Element(el) => *el,
         };
-        let el = Element::stack(
-            Axis::Horizontal,
-            vec![Element::text(label, theme.typography.body, ink)],
-        )
-        .fill(p.surface)
-        .border(p.border, 1.0)
-        .radius(theme.radius)
-        .padding(Insets::symmetric(theme.spacing.lg, 0.0))
-        .align(Align::Center, Align::Center)
-        .native(deco);
-        return native_size(el, control);
+        // The OS's primary and regular buttons; it has no equivalent of the others.
+        let control = match variant {
+            Variant::Primary => Some(NativeControl::Button { primary: true }),
+            Variant::Secondary => Some(NativeControl::Button { primary: false }),
+            Variant::Ghost | Variant::Danger => None,
+        };
+        if let Some(control) = control
+            && let Some(deco) = theme.native_deco(control)
+        {
+            let ink = if matches!(variant, Variant::Primary) && native::primary_label_is_on_accent()
+            {
+                p.on_primary
+            } else {
+                p.text
+            };
+            let el = Element::stack(Axis::Horizontal, vec![content(ink)])
+                .fill(p.surface)
+                .border(p.border, 1.0)
+                .radius(theme.radius)
+                .padding(Insets::symmetric(theme.spacing.lg, 0.0))
+                .align(Align::Center, Align::Center)
+                .native(deco);
+            return native_size(el, control);
+        }
+        let (fill, ink, border): (Option<Color>, Color, Option<Color>) = match variant {
+            Variant::Primary => (Some(p.primary), p.on_primary, None),
+            Variant::Secondary => (Some(p.surface), p.text, Some(p.border)),
+            Variant::Ghost => (None, p.primary, None),
+            Variant::Danger => (Some(p.danger), p.danger.on_color(), None),
+        };
+        let mut el = Element::stack(Axis::Horizontal, vec![content(ink)])
+            .radius(theme.radius)
+            .padding(Insets::symmetric(theme.spacing.lg, theme.spacing.sm))
+            .align(Align::Center, Align::Center);
+        if let Some(fill) = fill {
+            el = el.fill(fill);
+        }
+        if let Some(border) = border {
+            el = el.border(border, 1.0);
+        }
+        pressable(el, theme, fill)
     }
-    let (fill, ink, border): (Option<Color>, Color, Option<Color>) = match variant {
-        Variant::Primary => (Some(p.primary), p.on_primary, None),
-        Variant::Secondary => (Some(p.surface), p.text, Some(p.border)),
-        Variant::Ghost => (None, p.primary, None),
-        Variant::Danger => (Some(p.danger), p.danger.on_color(), None),
-    };
-    let mut el = Element::stack(
-        Axis::Horizontal,
-        vec![Element::text(label, theme.typography.body, ink)],
-    )
-    .radius(theme.radius)
-    .padding(Insets::symmetric(theme.spacing.lg, theme.spacing.sm))
-    .align(Align::Center, Align::Center);
-    if let Some(fill) = fill {
-        el = el.fill(fill);
-    }
-    if let Some(border) = border {
-        el = el.border(border, 1.0);
-    }
-    pressable(el, theme, fill)
+}
+
+/// A primary button with a centered text `label`, sized to it plus padding.
+/// For another [`Variant`] or custom content, build a [`Button`].
+pub fn button<S>(cx: &Cx<S>, label: impl Into<String>) -> Element {
+    Button::new(label).view(cx)
+}
+
+/// The theme `cx` builds with, by value, so a widget can keep reading it
+/// while it registers handlers in `cx`.
+pub(crate) fn theme_of<S>(cx: &Cx<S>) -> Theme {
+    *cx.theme()
 }
 
 /// Give a self-drawn button its hover and press looks, animated with the
@@ -330,33 +431,12 @@ fn pressable(el: Element, theme: &Theme, fill: Option<Color>) -> Element {
         .transition_for(AnimProp::Transform, Transition(m.press))
 }
 
-/// A primary button with a centered text `label` (shorthand for
-/// [`button_variant`] with [`Variant::Primary`]). Sizes to the label plus
-/// padding (intrinsic sizing via the active font's measurement).
-pub fn button_labeled(theme: &Theme, label: impl Into<String>) -> Element {
-    button_variant(theme, label, Variant::Primary)
-}
-
-/// Apply a [`KeyInput`] to an editable string: append committed text, or
-/// remove the last character on backspace. Navigation keys are ignored (no
-/// caret model). For caret-aware editing use an [`EditBuffer`] with
-/// [`text_editor`] instead.
-pub fn edit_string(value: &mut String, input: &KeyInput) {
-    match input {
-        KeyInput::Text(t) => value.push_str(t),
-        KeyInput::Backspace => {
-            value.pop();
-        }
-        _ => {}
-    }
-}
-
-/// A single-line text buffer with a caret, for in-place editing.
+/// A text buffer with a caret and a selection, for in-place editing: what a
+/// [`TextInput`] (the state of a [`text_field`] or [`text_area`]) edits.
 ///
 /// The caret is a byte index into the text, always kept on a UTF-8 char
 /// boundary. Text is inserted and deleted at the caret; the arrow / Home / End
-/// keys move it. Drive it by feeding [`KeyInput`]s to [`EditBuffer::apply`], and
-/// render it (with a positioned caret) via [`text_editor`].
+/// keys move it. Drive it by feeding [`KeyInput`]s to [`EditBuffer::apply`].
 ///
 /// Edits are recorded for [`undo`](Self::undo) / [`redo`](Self::redo).
 /// Consecutive typing (and consecutive Backspace or Delete presses) coalesce
@@ -376,6 +456,8 @@ pub struct EditBuffer {
     direction: TextDirection,
     /// Input-method composition shown at the caret (not part of `text`).
     preedit: Option<preedit::Preedit>,
+    /// Counts changes to `text`, so a field can tell whether a key changed it.
+    revision: u64,
 }
 
 impl PartialEq for EditBuffer {
@@ -482,11 +564,12 @@ impl EditBuffer {
             history: History::default(),
             direction: TextDirection::Auto,
             preedit: None,
+            revision: 0,
         }
     }
 
     /// Set the paragraph direction: [`TextDirection::Auto`] (the default) takes
-    /// each line's direction from its first strong character. [`text_editor`]
+    /// each line's direction from its first strong character. [`text_field`]
     /// and [`text_area`] draw the text with it, and Left and Right move the
     /// caret visually along the line it gives.
     pub fn set_direction(&mut self, direction: TextDirection) {
@@ -531,6 +614,7 @@ impl EditBuffer {
         let before = (self.caret, self.anchor);
         let removed = self.text[range.clone()].to_string();
         self.text.replace_range(range.clone(), s);
+        self.revision += 1;
         self.caret = range.start + s.len();
         self.anchor = None;
         let edit = Edit {
@@ -655,6 +739,7 @@ impl EditBuffer {
             self.text
                 .replace_range(e.at..e.at + e.inserted.len(), &e.removed);
         }
+        self.revision += 1;
         (self.caret, self.anchor) = step.before;
         self.history.redo.push(step);
         self.seal();
@@ -671,6 +756,7 @@ impl EditBuffer {
             self.text
                 .replace_range(e.at..e.at + e.removed.len(), &e.inserted);
         }
+        self.revision += 1;
         (self.caret, self.anchor) = step.after;
         self.history.undo.push(step);
         self.seal();
@@ -1090,86 +1176,6 @@ impl EditBuffer {
     }
 }
 
-/// A single-line editable text field showing `value` and routing keyboard
-/// input to `on_key` while focused (pair with [`edit_string`]). Default width
-/// 200 logical px; override with `.width(..)` on the returned element.
-pub fn text_field<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    value: &str,
-    on_key: impl FnMut(&mut S, &KeyInput) + 'static,
-) -> Element {
-    Element::stack(
-        Axis::Horizontal,
-        vec![field_text(value.to_string(), theme, theme.palette.text)],
-    )
-    .fill(theme.palette.surface)
-    .radius(theme.radius)
-    .border(theme.palette.border, 1.0)
-    .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-    .default_width(200.0)
-    .native_text_frame(theme)
-    .cursor(crate::platform::CursorIcon::Text)
-    .on_key(cx, on_key)
-}
-
-/// A single-line editable field backed by an [`EditBuffer`], rendering the text
-/// with the caret and selection at the buffer's positions (shown while focused).
-///
-/// `field` is an accessor that returns the `&mut EditBuffer` inside the app
-/// state; the field wires both keyboard input (`EditBuffer::apply`) and pointer
-/// interaction (click to place the caret, drag to select) to it. Default width
-/// 200 logical px; override with `.width(..)` on the returned element.
-///
-/// ```
-/// # use stipple::widgets::{text_editor, EditBuffer};
-/// # use stipple::core::Cx;
-/// # use stipple::style::Theme;
-/// struct App { name: EditBuffer }
-/// let theme = Theme::light();
-/// let mut cx = Cx::new(&theme);
-/// let state = App { name: EditBuffer::from_text("hi") };
-/// let field = text_editor(&mut cx, &theme, &state.name, |s: &mut App| &mut s.name);
-/// # drop(field);
-/// assert!(cx.into_handlers().len() >= 2); // its key and text-pointer handlers
-/// ```
-pub fn text_editor<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    buffer: &EditBuffer,
-    field: impl Fn(&mut S) -> &mut EditBuffer + Copy + 'static,
-) -> Element {
-    let shown = buffer.display();
-    // The text fills the field so right-to-left lines can sit at its right edge.
-    let text = field_text(shown.text, theme, theme.palette.text)
-        .direction(buffer.direction())
-        .grow(1.0)
-        .caret(shown.caret)
-        .selection(shown.selection)
-        .preedit(shown.preedit);
-    Element::stack(Axis::Horizontal, vec![text])
-        .fill(theme.palette.surface)
-        .radius(theme.radius)
-        .border(theme.palette.border, 1.0)
-        .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-        .default_width(200.0)
-        .native_text_frame(theme)
-        .on_key(cx, move |s, k| match k {
-            // Single-line: a triple-click selects the whole field.
-            KeyInput::SelectLine => field(s).select_all(),
-            _ => field(s).apply(k),
-        })
-        .on_text_pos(cx, move |s, index, extend| {
-            let b = field(s);
-            let index = b.display_to_text(index);
-            if extend {
-                b.extend_to(index);
-            } else {
-                b.place_caret(index);
-            }
-        })
-}
-
 /// The text leaf showing a field's value `text` in `color`: for an empty
 /// field, a lone space, which keeps it from collapsing to zero height (the
 /// caret then sits at index 0 of it), and where its
@@ -1182,54 +1188,14 @@ pub(crate) fn field_text(text: String, theme: &Theme, color: Color) -> Element {
     }
 }
 
-/// A multi-line editable text area backed by an [`EditBuffer`]: the same
-/// keyboard + pointer wiring as [`text_editor`], but top-aligned so wrapped and
-/// `\n`-separated lines stack from the top. Enter inserts a newline, and
-/// Up/Down move between lines. Default size 280×120 logical px; override with
-/// `.width(..)`/`.height(..)`.
-pub fn text_area<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    buffer: &EditBuffer,
-    field: impl Fn(&mut S) -> &mut EditBuffer + Copy + 'static,
-) -> Element {
-    let shown = buffer.display();
-    // The text fills the field so right-to-left lines can sit at its right edge.
-    let text = field_text(shown.text, theme, theme.palette.text)
-        .direction(buffer.direction())
-        .grow(1.0)
-        .caret(shown.caret)
-        .selection(shown.selection)
-        .preedit(shown.preedit);
-    Element::stack(Axis::Horizontal, vec![text])
-        .fill(theme.palette.surface)
-        .radius(theme.radius)
-        .border(theme.palette.border, 1.0)
-        .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-        .align(Align::Start, Align::Start)
-        .default_width(280.0)
-        .height(120.0)
-        .native_text_frame(theme)
-        .on_key(cx, move |s, k| field(s).apply(k))
-        .on_text_pos(cx, move |s, index, extend| {
-            let b = field(s);
-            let index = b.display_to_text(index);
-            if extend {
-                b.extend_to(index);
-            } else {
-                b.place_caret(index);
-            }
-        })
-}
-
 /// A toggleable checkbox: a small square showing a check mark when `checked`,
 /// calling `on_toggle` when tapped.
 pub fn checkbox<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     checked: bool,
     on_toggle: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let theme = &theme_of(cx);
     let control = NativeControl::Checkbox { checked };
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
@@ -1269,12 +1235,8 @@ pub fn checkbox<S>(
 /// An on/off switch: a pill track with a knob that sits right when `on`
 /// (track tinted with the primary color) and left when off. Tapping calls
 /// `on_toggle`.
-pub fn switch<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    on: bool,
-    on_toggle: impl FnMut(&mut S) + 'static,
-) -> Element {
+pub fn switch<S>(cx: &mut Cx<S>, on: bool, on_toggle: impl FnMut(&mut S) + 'static) -> Element {
+    let theme = &theme_of(cx);
     let control = NativeControl::Switch { on };
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
@@ -1317,10 +1279,10 @@ pub fn switch<S>(
 /// override with `.width(..)`.
 pub fn slider<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     value: f64,
     on_change: impl FnMut(&mut S, f64) + 'static,
 ) -> Element {
+    let theme = &theme_of(cx);
     let v = value.clamp(0.0, 1.0);
     let control = NativeControl::Slider {
         value: (v * 1000.0).round() as u16,
@@ -1349,7 +1311,8 @@ pub fn slider<S>(
 }
 
 /// A 1px themed divider line spanning the cross axis.
-pub fn divider(theme: &Theme) -> Element {
+pub fn divider<S>(cx: &Cx<S>) -> Element {
+    let theme = cx.theme();
     Element::boxed(BoxStyle {
         fill: Some(theme.palette.border),
         radius: 0.0,
@@ -1369,18 +1332,6 @@ pub fn swatch(color: Color, size: f64, radius: f64) -> Element {
     .height(size)
 }
 
-/// A horizontal row with a leading swatch, a flexible spacer, and a trailing
-/// button — a compact "setting row" used to show real composition.
-pub fn setting_row(theme: &Theme, accent: Color, action: impl Into<String>) -> Element {
-    row(vec![
-        swatch(accent, 24.0, theme.radius / 2.0),
-        spacer(),
-        button_variant(theme, action, Variant::Secondary),
-    ])
-    .gap(theme.spacing.md)
-    .height(40.0)
-}
-
 /// A radio button: a circle filled with the primary color when `selected`.
 /// Tapping calls `on_select`. Assistive technologies see a radio button,
 /// checked while `selected`; put a group of them in a row or column made a
@@ -1389,10 +1340,10 @@ pub fn setting_row(theme: &Theme, accent: Color, action: impl Into<String>) -> E
 /// them.
 pub fn radio<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     selected: bool,
     on_select: impl FnMut(&mut S) + 'static,
 ) -> Element {
+    let theme = &theme_of(cx);
     let control = NativeControl::Radio { selected };
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
@@ -1444,11 +1395,11 @@ pub fn radio<S>(
 /// its own index); a plain closure capturing `Copy`/`Clone` data satisfies this.
 pub fn tabs<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     labels: &[&str],
     selected: usize,
     on_select: impl Fn(&mut S, usize) + Clone + 'static,
 ) -> Element {
+    let theme = &theme_of(cx);
     let p = &theme.palette;
     let state = Transition(theme.motion.state);
     let pad = Insets::symmetric(theme.spacing.md, theme.spacing.sm);
@@ -1482,7 +1433,7 @@ pub fn tabs<S>(
             let on = on_select.clone();
             let label = Element::text(*text, theme.typography.body, ink)
                 .transition_for(AnimProp::TextColor, state);
-            cell(label).on_tap(cx, move |s: &mut S| on(s, i))
+            cell(label).on_tap(cx, move |s| on(s, i))
         })
         .collect();
     // The indicator is one element, wherever it is: keyed (by this strip's
@@ -1526,7 +1477,8 @@ pub fn tabs<S>(
 
 /// A progress bar: a track with a primary-filled portion for `fraction` (0..=1).
 /// Default width 200 px; override with `.width(..)`.
-pub fn progress_bar(theme: &Theme, fraction: f64) -> Element {
+pub fn progress_bar<S>(cx: &Cx<S>, fraction: f64) -> Element {
+    let theme = cx.theme();
     let f = fraction.clamp(0.0, 1.0);
     let control = NativeControl::Progress {
         value: (f * 1000.0).round() as u16,
@@ -1551,53 +1503,46 @@ pub fn progress_bar(theme: &Theme, fraction: f64) -> Element {
 mod spinner;
 pub use spinner::spinner;
 
-/// A tappable menu row showing `text`, running `on_select` when clicked. Stretch
-/// it across a [`menu`] panel (the panel stretches its children).
-pub fn menu_item<S>(
-    cx: &mut Cx<S>,
-    theme: &Theme,
-    text: impl Into<String>,
-    on_select: impl FnMut(&mut S) + 'static,
-) -> Element {
-    Element::stack(Axis::Horizontal, vec![label(theme, text)])
-        .radius(theme.radius / 2.0)
-        .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
-        .on_tap(cx, on_select)
-}
-
-/// A floating vertical menu panel (surface, border, padding) holding `items`
-/// (build them with [`menu_item`]). The visual body of a dropdown — show it via
-/// [`open_menu`] or `cx.overlay`.
-pub fn menu(theme: &Theme, items: Vec<Element>) -> Element {
-    Element::stack(Axis::Vertical, items)
-        .fill(theme.palette.surface)
-        .border(theme.palette.border, 1.0)
-        .radius(theme.radius)
-        .padding(Insets::uniform(theme.spacing.xs))
-        .gap(2.0)
-        .width(180.0)
-}
-
-/// Declare a non-modal dropdown overlay anchored with its top-left at `at`,
-/// containing `items` (from [`menu_item`]). `on_dismiss` fires on a press
-/// outside the menu. Call when the menu should be open: it grows in when it
-/// opens, and when the view stops calling this it's kept drawn (taking no
-/// input) while it fades back out, on the theme's [`MotionTokens`]
-/// (`popup`, `popup_exit`).
+/// Declare a non-modal dropdown overlay showing `menu`'s commands, anchored
+/// with its top-left at `at`: the same [`Menu`](crate::core::menu::Menu) and
+/// [`MenuItem`](crate::core::menu::MenuItem)s as the menu bar and context
+/// menus, drawn like a context menu (submenus show but don't open). Picking a
+/// command runs it, then `on_close`; so does a press outside the menu. Call
+/// it while the menu should be open: it grows in when it opens, and when the
+/// view stops calling this it's kept drawn (taking no input) while it fades
+/// back out, on the theme's [`MotionTokens`] (`popup`, `popup_exit`).
+///
+/// ```
+/// use stipple::prelude::*;
+/// struct App { menu_open: bool, color: &'static str }
+/// fn view(state: &App, cx: &mut Cx<App>) -> Element {
+///     if state.menu_open {
+///         let menu = Menu::new("Color")
+///             .item(MenuItem::new("Red", |s: &mut App| s.color = "red"))
+///             .item(MenuItem::new("Blue", |s: &mut App| s.color = "blue"));
+///         open_menu(cx, Point::new(16.0, 48.0), menu, |s| s.menu_open = false);
+///     }
+///     button(cx, "Color…").on_tap(cx, |s| s.menu_open = true)
+/// }
+/// # let theme = Theme::light();
+/// # let _ = view(&App { menu_open: true, color: "" }, &mut Cx::new(&theme));
+/// ```
 ///
 /// [`MotionTokens`]: crate::style::MotionTokens
-pub fn open_menu<S>(
+pub fn open_menu<S: 'static>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     at: Point,
-    items: Vec<Element>,
-    on_dismiss: impl FnMut(&mut S) + 'static,
+    menu: crate::core::menu::Menu<S>,
+    on_close: impl FnMut(&mut S) + 'static,
 ) {
+    let theme = &theme_of(cx);
+    let on_close: crate::core::menu::MenuAction<S> =
+        std::rc::Rc::new(std::cell::RefCell::new(on_close));
     // It grows in from its corner as it opens, and shrinks back as it closes.
-    let content = menu(theme, items)
+    let content = menus::dropdown(cx, theme, &menu, &on_close)
         .enter(motion::popup_effect(&theme.motion, (0.0, 0.0)))
         .exit(motion::popup_exit(&theme.motion, (0.0, 0.0)));
-    let dismiss = cx.register(on_dismiss);
+    let dismiss = cx.register(move |s| (on_close.borrow_mut())(s));
     cx.overlay(OverlaySpec {
         content,
         anchor: Anchor::At(at),
@@ -1614,17 +1559,17 @@ pub fn open_menu<S>(
 /// motion.
 pub fn open_dialog<S>(
     cx: &mut Cx<S>,
-    theme: &Theme,
     title: impl Into<String>,
     body: Element,
     actions: Vec<Element>,
     on_dismiss: impl FnMut(&mut S) + 'static,
 ) {
+    let theme = &theme_of(cx);
     let dismiss = cx.register(on_dismiss);
-    let content = panel(
+    let content = panel_frame(
         theme,
         vec![
-            heading(theme, title),
+            Element::text(title, theme.typography.heading, theme.palette.text),
             body,
             row(actions)
                 .gap(theme.spacing.sm)
@@ -1645,7 +1590,8 @@ pub fn open_dialog<S>(
 /// A small tooltip bubble showing `text` (a dark rounded label). Show it via
 /// `cx.overlay` anchored near the hovered element (non-modal, no dismiss).
 /// It fades in when it shows and out when the view stops showing it.
-pub fn tooltip(theme: &Theme, text: impl Into<String>) -> Element {
+pub fn tooltip<S>(cx: &Cx<S>, text: impl Into<String>) -> Element {
+    let theme = cx.theme();
     Element::stack(
         Axis::Horizontal,
         vec![Element::text(
@@ -1670,7 +1616,9 @@ mod tests {
 
     #[test]
     fn panel_is_a_decorated_vertical_stack() {
-        let p = panel(&Theme::light(), vec![divider(&Theme::light())]);
+        let theme = Theme::light();
+        let mut cx = Cx::<()>::new(&theme);
+        let p = panel(&mut cx, |cx| vec![divider(cx)]);
         assert!(p.decoration.fill.is_some());
         assert!(matches!(
             p.kind,
@@ -1682,17 +1630,17 @@ mod tests {
     }
 
     #[test]
-    fn setting_row_paints_swatch_and_button() {
-        // Swatch fill, plus the button's fill and border; the spacer is empty
-        // and the label needs a font.
+    fn a_secondary_button_paints_its_fill_and_border() {
+        // The button's fill and border; the label needs a font.
         let theme = Theme::light();
+        let cx = Cx::<()>::new(&theme);
         let scene = render_view(
-            &setting_row(&theme, Color::rgb(200, 80, 80), "Edit"),
+            &Button::new("Edit").variant(Variant::Secondary).view(&cx),
             Size::new(300.0, 40.0),
             &theme,
             None,
         );
-        assert_eq!(scene.len(), 3);
+        assert_eq!(scene.len(), 2);
     }
 
     #[test]
@@ -1865,17 +1813,17 @@ mod tests {
     }
 
     #[test]
-    fn text_editor_carries_caret_on_its_text_leaf() {
+    fn text_field_carries_caret_on_its_text_leaf() {
         let theme = Theme::light();
-        let mut cx = Cx::new(&theme);
-        let buf = EditBuffer::from_text("hello");
-        let field = text_editor(&mut cx, &theme, &buf, |s: &mut EditBuffer| s);
+        let mut cx = Cx::<TextInput>::new(&theme);
+        let buf = TextInput::from_text("hello");
+        let field = text_field(&mut cx, &buf, |s| s);
         // The inner text leaf carries the caret byte index for the focus overlay;
         // the field itself carries focus + text-pointer handles.
         assert!(field.focus.is_some());
         assert!(field.text_pos.is_some());
         let ElementKind::Stack { children, .. } = &field.kind else {
-            panic!("text_editor should be a stack");
+            panic!("text_field should be a stack");
         };
         assert_eq!(children[0].caret, Some(5));
     }
@@ -2197,20 +2145,20 @@ mod tests {
     }
 
     #[test]
-    fn text_editor_treats_select_line_as_select_all() {
+    fn text_field_treats_select_line_as_select_all() {
         struct St {
-            b: EditBuffer,
+            b: TextInput,
         }
         let theme = Theme::light();
         let mut st = St {
-            b: EditBuffer::from_text("a\nb"),
+            b: TextInput::from_text("a\nb"),
         };
-        let mut cx = Cx::new(&theme);
-        let field = text_editor(&mut cx, &theme, &st.b, |s: &mut St| &mut s.b);
+        let mut cx = Cx::<St>::new(&theme);
+        let field = text_field(&mut cx, &st.b, |s| &mut s.b);
         let mut handlers = cx.into_handlers();
-        st.b.place_caret(0);
+        st.b.buffer_mut().place_caret(0);
         assert!(handlers.dispatch_key(field.focus.unwrap(), &KeyInput::SelectLine, &mut st));
-        assert_eq!(st.b.selection(), Some((0, 3)));
+        assert_eq!(st.b.buffer().selection(), Some((0, 3)));
     }
 
     #[test]
@@ -2284,7 +2232,7 @@ mod tests {
         use crate::core::{Role, accessibility_tree, layout};
         use crate::geometry::Rect;
         struct S {
-            name: EditBuffer,
+            name: TextInput,
             pass: PasswordField,
         }
         let theme = Theme::light();
@@ -2300,17 +2248,14 @@ mod tests {
             }
         };
         let fields = |s: &S| {
-            let mut cx = Cx::new(&theme);
-            let editor = text_editor(&mut cx, &theme, &s.name, |s: &mut S| &mut s.name)
-                .placeholder("Your name");
-            let plain =
-                text_field(&mut cx, &theme, s.name.text(), |_: &mut S, _| {}).placeholder("Search");
-            let pass = password_field(&mut cx, &theme, &s.pass, |s: &mut S| &mut s.pass)
-                .placeholder("Password");
+            let mut cx = Cx::<S>::new(&theme);
+            let editor = text_field(&mut cx, &s.name, |s| &mut s.name).placeholder("Your name");
+            let plain = text_area(&mut cx, &s.name, |s| &mut s.name).placeholder("Search");
+            let pass = password_field(&mut cx, &s.pass, |s| &mut s.pass).placeholder("Password");
             (editor, plain, pass)
         };
         let mut s = S {
-            name: EditBuffer::new(),
+            name: TextInput::new(),
             pass: PasswordField::new(),
         };
         // Empty: the hints, muted.
@@ -2355,7 +2300,7 @@ mod tests {
         assert_eq!(field.name, "Ada");
         assert_eq!(field.placeholder.as_deref(), Some("Your name"));
         let mut s = S {
-            name: EditBuffer::new(),
+            name: TextInput::new(),
             pass: PasswordField::new(),
         };
         s.name.apply(&KeyInput::Preedit {

@@ -53,7 +53,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let status = row(vec![
         caret,
         label(
-            &theme,
+            cx,
             if focused {
                 "Window focused"
             } else {
@@ -63,15 +63,15 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     ])
     .gap(theme.spacing.sm);
     let busy = row(vec![
-        checkbox(cx, &theme, state.busy, |s: &mut State| s.busy = !s.busy),
-        label(&theme, "Work is running (closing asks first)"),
+        checkbox(cx, state.busy, |s| s.busy = !s.busy),
+        label(cx, "Work is running (closing asks first)"),
     ])
     .gap(theme.spacing.sm);
-    let beep = button_labeled(&theme, "Beep").on_tap(cx, {
+    let beep = button(cx, "Beep").on_tap(cx, {
         let handle = handle.clone();
         move |_| handle.beep()
     });
-    let attention = button_labeled(&theme, "Ask for attention in 2 s").on_tap(cx, {
+    let attention = button(cx, "Ask for attention in 2 s").on_tap(cx, {
         let handle = handle.clone();
         move |_| {
             let handle2 = handle.clone();
@@ -81,9 +81,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         }
     });
     let mut children = vec![
-        heading(&theme, "Lifecycle"),
+        heading(cx, "Lifecycle"),
         status,
-        label(&theme, format!("Bells while away: {}", state.bells)),
+        label(cx, format!("Bells while away: {}", state.bells)),
         busy,
         row(vec![beep, attention]).gap(theme.spacing.sm),
     ];
@@ -93,20 +93,19 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         } else {
             "Work is still running. Close again to close anyway."
         };
-        let close = button_labeled(&theme, "Close anyway").on_tap(cx, {
+        let close = button(cx, "Close anyway").on_tap(cx, {
             let handle = handle.clone();
             move |_| handle.close_window(id)
         });
-        let keep = button_labeled(&theme, "Keep open").on_tap(cx, |s: &mut State| {
+        let keep = button(cx, "Keep open").on_tap(cx, |s| {
             s.confirm = None;
         });
-        children.push(panel(
-            &theme,
+        children.push(panel(cx, |cx| {
             vec![
-                label(&theme, text),
+                label(cx, text),
                 row(vec![close, keep]).gap(theme.spacing.sm),
-            ],
-        ));
+            ]
+        }));
     }
     column(children)
         .gap(theme.spacing.md)

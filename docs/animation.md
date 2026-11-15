@@ -15,14 +15,13 @@ Sample your animation at the frame time, and keep asking while it moves:
 use stipple::anim::{Easing, Tween};
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
-    let theme = *cx.theme();
     // `opened_at` is a `Duration` from `cx.frame_time()` when the panel opened.
     let t = cx.frame_time().saturating_sub(state.opened_at).as_secs_f64();
     let fade = Tween::new(0.0, 1.0, 0.25, Easing::EaseOut);
     if !fade.is_finished(t) {
         cx.request_frame(); // still moving: build again next refresh
     }
-    progress_bar(&theme, fade.sample(t))
+    progress_bar(cx, fade.sample(t))
 }
 ```
 
@@ -160,14 +159,14 @@ an override that restyles the element while it holds:
 ```rust
 use stipple::prelude::*;
 
-let card = column(vec![label(&theme, "Open")])
+let card = column(vec![label(cx, "Open")])
     .padding(Insets::uniform(12.0))
     .fill(theme.palette.surface)
     .radius(6.0)
     .hovered(|e| e.fill(theme.palette.surface.mix(theme.palette.primary, 0.1)))
     .pressed(|e| e.fill(theme.palette.surface.mix(theme.palette.primary, 0.2)))
     .focus_visible(|e| e.border(theme.palette.focus_ring, 2.0))
-    .on_tap(cx, |s: &mut State| s.open());
+    .on_tap(cx, |s| s.open());
 ```
 
 | Override | While |
@@ -205,7 +204,7 @@ give the element a key and ask the `Cx`:
 ```rust
 let states = cx.interaction("save");
 let text = if states.pressed() { "Saving…" } else { "Save" };
-button_labeled(&theme, cx, text, |s: &mut State| s.save()).key("save")
+button(cx, text).on_tap(cx, |s| s.save()).key("save")
 ```
 
 `Cx::interaction(key)` returns an `Interaction` (`hovered()`, `pressed()`,
@@ -236,7 +235,7 @@ animate instead of jumping, whatever changed them: a state override, the app's
 state, or both.
 
 ```rust
-label(&theme, "Drop files here")
+label(cx, "Drop files here")
     .padding(Insets::uniform(16.0))
     .fill(theme.palette.surface)
     .drag_over(|e| e.padding(Insets::uniform(24.0)).fill(theme.palette.primary))
@@ -284,7 +283,7 @@ Elements can also animate as they come and go, and as the layout moves them:
 use stipple::prelude::*;
 
 let rows = state.items.iter().map(|item| {
-    label(&theme, &item.name)
+    label(cx, &item.name)
         .key(item.id)
         // Fades in, sliding from the left, when added.
         .enter(Effect::fade().and(Effect::slide(-40.0, 0.0)))
@@ -368,7 +367,7 @@ leave and glide when it's shuffled, sorted or pushed down by a panel;
 
 ## What animates already
 
-- `spinner(cx, &theme)` turns once a second for as long as it's shown. It asks
+- `spinner(cx)` turns once a second for as long as it's shown. It asks
   for frames itself, so a view that shows it while loading and drops it when
   done goes back to idle on its own.
 - Hover and press highlights fade in and out (120 ms, 60 ms in for a press)

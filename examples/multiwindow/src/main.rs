@@ -36,12 +36,11 @@ struct Shared {
 /// A window that fills itself with `color` and centers `text` — the colored
 /// fill makes each window unmistakable in the root screenshot.
 fn colored_window(color: Color, text: &str, cx: &mut Cx<Shared>) -> Element {
-    let theme = *cx.theme();
     let panel = Element::boxed(BoxStyle::filled(color))
         .width(320.0)
         .height(240.0)
         .align(Align::Center, Align::Center);
-    column(vec![panel, label(&theme, text)])
+    column(vec![panel, label(cx, text)])
         .grow(1.0)
         .align(Align::Center, Align::Center)
 }

@@ -17,13 +17,8 @@ struct State {
     picked: String,
 }
 
-fn btn<S>(
-    theme: &Theme,
-    cx: &mut Cx<S>,
-    text: &str,
-    on_tap: impl FnMut(&mut S) + 'static,
-) -> Element {
-    button_labeled(theme, text)
+fn btn<S>(cx: &mut Cx<S>, text: &str, on_tap: impl FnMut(&mut S) + 'static) -> Element {
+    button(cx, text)
         .on_tap(cx, on_tap)
         .width(120.0)
         .height(40.0)
@@ -31,69 +26,51 @@ fn btn<S>(
 
 fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let theme = *cx.theme();
-
-    let menu_btn = btn(&theme, cx, "Menu", |s: &mut State| s.menu_open = true);
-    let dialog_btn = btn(&theme, cx, "Dialog", |s: &mut State| s.dialog_open = true);
-    let picked = label(
-        &theme,
-        if state.picked.is_empty() {
-            "Picked: (none)".to_string()
-        } else {
-            format!("Picked: {}", state.picked)
-        },
-    );
-
-    let card = panel(
-        &theme,
+    let card = panel(cx, |cx| {
         vec![
-            row(vec![menu_btn, dialog_btn]).gap(theme.spacing.md),
-            divider(&theme),
-            picked,
-        ],
-    )
+            row(vec![
+                btn(cx, "Menu", |s| s.menu_open = true),
+                btn(cx, "Dialog", |s| s.dialog_open = true),
+            ])
+            .gap(theme.spacing.md),
+            divider(cx),
+            label(
+                cx,
+                if state.picked.is_empty() {
+                    "Picked: (none)".to_string()
+                } else {
+                    format!("Picked: {}", state.picked)
+                },
+            ),
+        ]
+    })
     .width(420.0);
 
     // Dropdown anchored just below the Menu button (fixed point for the demo).
     if state.menu_open {
-        let items = vec![
-            menu_item(cx, &theme, "Red", |s: &mut State| {
-                s.picked = "Red".into();
-                s.menu_open = false;
-            }),
-            menu_item(cx, &theme, "Green", |s: &mut State| {
-                s.picked = "Green".into();
-                s.menu_open = false;
-            }),
-            menu_item(cx, &theme, "Blue", |s: &mut State| {
-                s.picked = "Blue".into();
-                s.menu_open = false;
-            }),
-        ];
-        open_menu(
-            cx,
-            &theme,
-            Point::new(36.0, 84.0),
-            items,
-            |s: &mut State| s.menu_open = false,
-        );
+        let mut menu = Menu::new("Color");
+        for color in ["Red", "Green", "Blue"] {
+            menu = menu.item(MenuItem::new(color, move |s: &mut State| {
+                s.picked = color.into()
+            }));
+        }
+        open_menu(cx, Point::new(36.0, 84.0), menu, |s| s.menu_open = false);
     }
 
     // Modal confirmation dialog.
     if state.dialog_open {
-        let body = label(&theme, "Apply changes?");
+        let body = label(cx, "Apply changes?");
         let actions = vec![
-            button_labeled(&theme, "Cancel")
-                .on_tap(cx, |s: &mut State| s.dialog_open = false)
+            button(cx, "Cancel")
+                .on_tap(cx, |s| s.dialog_open = false)
                 .width(96.0)
                 .height(36.0),
-            button_labeled(&theme, "OK")
-                .on_tap(cx, |s: &mut State| s.dialog_open = false)
+            button(cx, "OK")
+                .on_tap(cx, |s| s.dialog_open = false)
                 .width(96.0)
                 .height(36.0),
         ];
-        open_dialog(cx, &theme, "Confirm", body, actions, |s: &mut State| {
-            s.dialog_open = false
-        });
+        open_dialog(cx, "Confirm", body, actions, |s| s.dialog_open = false);
     }
 
     column(vec![card])

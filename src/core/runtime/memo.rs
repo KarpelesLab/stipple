@@ -283,7 +283,7 @@ impl<S> Cx<'_, S> {
     ///     let rows = s.items.iter().enumerate().map(|(i, item)| {
     ///         // Built again only when this row's text changes.
     ///         cx.memo(("row", i), item, |cx| {
-    ///             label(&theme, item.as_str()).on_tap(cx, move |s: &mut Todo| s.done = i)
+    ///             label(cx, item.as_str()).on_tap(cx, move |s| s.done = i)
     ///         })
     ///     });
     ///     column(rows.collect())
@@ -331,7 +331,7 @@ impl<S> Cx<'_, S> {
                 MemoMark::stamp(&mut element);
                 let entry = Entry {
                     deps,
-                    theme: *self.theme,
+                    theme: *self.theme(),
                     size: self.window_size,
                     focused: self.window_focused,
                     element: element.clone(),
@@ -358,7 +358,7 @@ impl<S> Cx<'_, S> {
     /// fn view(s: &Shop, cx: &mut Cx<Shop>) -> Element {
     ///     let theme = *cx.theme();
     ///     let total = cx.derive("total", &s.cents, || s.cents.iter().sum::<u64>());
-    ///     label(&theme, format!("Total: {}.{:02}", total / 100, total % 100))
+    ///     label(cx, format!("Total: {}.{:02}", total / 100, total % 100))
     /// }
     /// # let theme = Theme::light();
     /// # let mut cx = Cx::new(&theme);
@@ -410,7 +410,7 @@ impl<S> Cx<'_, S> {
         let entry = self.memo.cache.subtrees.get(&key)?;
         let same = entry.deps == deps
             && entry.start == start
-            && entry.theme == *self.theme
+            && entry.theme == *self.theme()
             && entry.size == self.window_size
             && entry.focused == self.window_focused
             && entry

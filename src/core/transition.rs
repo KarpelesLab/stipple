@@ -35,7 +35,8 @@ use crate::render::Color;
 /// ```
 /// use stipple::prelude::*;
 /// let theme = Theme::light();
-/// let card = label(&theme, "Hover me")
+/// let cx = &Cx::<()>::new(&theme);
+/// let card = label(cx, "Hover me")
 ///     .fill(theme.palette.surface)
 ///     .hovered(|e| e.fill(theme.palette.primary))
 ///     .transition(Transition::ease(Duration::from_millis(150)));

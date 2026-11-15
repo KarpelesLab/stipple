@@ -61,8 +61,8 @@ fn view(a: &Assets, cx: &mut Cx<Assets>) -> Element {
             fitted(&theme, &a.logo, ImageFit::Fill),
         ])
         .gap(24.0),
-        label(&theme, "PNG at 2x · SVG at 2x · SVG at 1x"),
-        label(&theme, "SVG fit: contain · cover · fill"),
+        label(cx, "PNG at 2x · SVG at 2x · SVG at 1x"),
+        label(cx, "SVG fit: contain · cover · fill"),
     ])
     .gap(24.0)
     .padding(Insets::uniform(24.0))

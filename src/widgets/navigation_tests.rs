@@ -40,9 +40,9 @@ fn page(s: &State, cx: &mut Cx<State>, i: usize, visible: bool) -> Element {
         0 => {
             let rows = (0..30)
                 .map(|r| {
-                    super::label(&theme, format!("Row {r}"))
+                    super::label(cx, format!("Row {r}"))
                         .height(40.0)
-                        .on_tap(cx, move |s: &mut State| s.log.push(format!("row {r}")))
+                        .on_tap(cx, move |s| s.log.push(format!("row {r}")))
                 })
                 .collect();
             let id = cx.register_scroll();
@@ -51,23 +51,20 @@ fn page(s: &State, cx: &mut Cx<State>, i: usize, visible: bool) -> Element {
                 .grow(1.0)
         }
         1 => Element::text("Field", 14.0, theme.palette.text)
-            .on_key(cx, |s: &mut State, _k: &KeyInput| {
-                s.log.push("typed".into())
-            })
+            .on_key(cx, |s, _k: &KeyInput| s.log.push("typed".into()))
             .a11y_label("Field"),
-        n => super::label(&theme, format!("Page {n}")),
+        n => super::label(cx, format!("Page {n}")),
     }
 }
 
 fn view(s: &State, cx: &mut Cx<State>) -> Element {
-    let theme = *cx.theme();
     let pages = page_stack(cx, 4, s.tab, |cx, i, visible| page(s, cx, i, visible));
     let on = |s: &mut State, i| {
         s.log.push(format!("select {i}"));
         s.tab = i;
     };
     if s.rail {
-        let rail = navigation_rail(cx, &theme, items(), s.tab, on);
+        let rail = navigation_rail(cx, items(), s.tab, on);
         return super::row(vec![rail, pages])
             .align(Align::Start, Align::Stretch)
             .grow(1.0);
@@ -76,7 +73,7 @@ fn view(s: &State, cx: &mut Cx<State>) -> Element {
     if let Some(look) = s.look {
         bar = bar.look(look);
     }
-    super::column(vec![pages, bar.view(cx, &theme)])
+    super::column(vec![pages, bar.view(cx)])
         .align(Align::Start, Align::Stretch)
         .grow(1.0)
 }

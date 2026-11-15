@@ -9,7 +9,6 @@ use crate::anim::{Easing, Motion, SpringParams};
 use crate::core::{Align, AnimProp, Axis, BoxStyle, Cx, Effect, Element, Role, Transition};
 use crate::geometry::{Insets, Point};
 use crate::render::Color;
-use crate::style::Theme;
 
 /// The game (a canvas, say) with `overlay` laid over it: the overlay lets
 /// pointer input through to the game except where one of its controls sits
@@ -110,7 +109,8 @@ impl Bar {
 /// The fill and the ghost are separate elements whose widths animate, so
 /// keep the bar in the same place in the view from frame to frame (or
 /// [`key`](Element::key) it).
-pub fn stat_bar(theme: &Theme, bar: &Bar) -> Element {
+pub fn stat_bar<S>(cx: &Cx<S>, bar: &Bar) -> Element {
+    let theme = cx.theme();
     let p = &theme.palette;
     let inner = (bar.width - 4.0).max(0.0);
     let h = (bar.height - 4.0).max(0.0);
@@ -169,9 +169,10 @@ pub fn stat_bar(theme: &Theme, bar: &Bar) -> Element {
 
 /// A health bar: `value` of `max` in the theme's danger color, with a ghost,
 /// and the numbers beside it.
-pub fn health_bar(theme: &Theme, value: f32, max: f32) -> Element {
+pub fn health_bar<S>(cx: &Cx<S>, value: f32, max: f32) -> Element {
+    let theme = cx.theme();
     let p = &theme.palette;
-    let bar = stat_bar(theme, &Bar::new(value, max, p.danger));
+    let bar = stat_bar(cx, &Bar::new(value, max, p.danger));
     Element::stack(
         Axis::Horizontal,
         vec![
@@ -191,7 +192,8 @@ pub fn health_bar(theme: &Theme, value: f32, max: f32) -> Element {
 /// A HUD counter (score, coins, ammo): `label` and `value`, the number
 /// popping (growing and settling back, on a bouncy spring) each time it
 /// changes. `id` tells counters apart.
-pub fn counter(theme: &Theme, id: &str, label: &str, value: i64) -> Element {
+pub fn counter<S>(cx: &Cx<S>, id: &str, label: &str, value: i64) -> Element {
+    let theme = cx.theme();
     let p = &theme.palette;
     let number = Element::text(value.to_string(), theme.typography.title, p.text)
         .bold()
@@ -217,7 +219,8 @@ pub fn counter(theme: &Theme, id: &str, label: &str, value: i64) -> Element {
 /// A framed slot for a minimap, `width` × `height`: the frame, a dark
 /// backing, and `content` (a canvas the game draws the map into, or
 /// nothing yet) clipped inside.
-pub fn minimap_slot(theme: &Theme, width: f64, height: f64, content: Option<Element>) -> Element {
+pub fn minimap_slot<S>(cx: &Cx<S>, width: f64, height: f64, content: Option<Element>) -> Element {
+    let theme = cx.theme();
     let p = &theme.palette;
     let inside = content.unwrap_or_else(|| {
         Element::stack(
@@ -305,7 +308,8 @@ impl FloatingTexts {
 /// The [`FloatingTexts`], each where it was spawned: popping in as it comes
 /// (fading in, rising into place), and rising off as it fades when it goes.
 /// Lay it over the game in a [`hud`].
-pub fn floating_texts(theme: &Theme, texts: &FloatingTexts) -> Element {
+pub fn floating_texts<S>(cx: &Cx<S>, texts: &FloatingTexts) -> Element {
+    let theme = cx.theme();
     let size = theme.typography.title;
     let layers = texts
         .items
@@ -465,7 +469,7 @@ type OnActivate<S> = Box<dyn FnMut(&mut S)>;
 ///         }
 ///     })
 ///     .speaker("Dispatch")
-///     .view(cx, theme)
+///     .view(cx)
 /// }
 /// # let _ = dialogue;
 /// ```
@@ -511,7 +515,8 @@ impl<'a, S: 'static> DialogueBox<'a, S> {
     }
 
     /// The box's element.
-    pub fn view(self, cx: &mut Cx<S>, theme: &Theme) -> Element {
+    pub fn view(self, cx: &mut Cx<S>) -> Element {
+        let theme = &crate::widgets::theme_of(cx);
         let Self {
             text,
             speaker,

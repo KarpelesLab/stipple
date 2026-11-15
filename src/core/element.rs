@@ -553,9 +553,10 @@ impl Element {
     /// ```
     /// use stipple::prelude::*;
     /// let theme = Theme::light();
+    /// let cx = &Cx::<()>::new(&theme);
     /// let card = Element::layers(vec![
     ///     Element::boxed(BoxStyle::filled(theme.palette.primary)),
-    ///     label(&theme, "Over the fill").padding(Insets::uniform(8.0)),
+    ///     label(cx, "Over the fill").padding(Insets::uniform(8.0)),
     /// ]);
     /// # let _ = card;
     /// ```
@@ -584,7 +585,7 @@ impl Element {
     /// let button = Element::boxed(BoxStyle::default())
     ///     .width(80.0)
     ///     .height(32.0)
-    ///     .on_tap(&mut cx, |count: &mut i32| *count += 1);
+    ///     .on_tap(&mut cx, |count: &mut u32| *count += 1);
     /// # drop(button);
     /// assert_eq!(cx.into_handlers().len(), 1);
     /// ```
@@ -618,7 +619,7 @@ impl Element {
     /// struct Notes { pinned: bool }
     /// fn view(s: &Notes, cx: &mut Cx<Notes>) -> Element {
     ///     let theme = *cx.theme();
-    ///     label(&theme, "Right-click me").context_menu(
+    ///     label(cx, "Right-click me").context_menu(
     ///         cx,
     ///         Menu::new("")
     ///             .item(MenuItem::new("Pin", |n: &mut Notes| n.pinned = true).enabled(!s.pinned))
@@ -647,7 +648,7 @@ impl Element {
     /// struct Files { names: Vec<String> }
     /// fn view(_: &Files, cx: &mut Cx<Files>) -> Element {
     ///     let theme = *cx.theme();
-    ///     label(&theme, "Drop files here").on_drop(cx, |s: &mut Files, data, _at| {
+    ///     label(cx, "Drop files here").on_drop(cx, |s, data, _at| {
     ///         if let DropData::Files(paths) = data {
     ///             s.names.extend(paths.iter().map(|p| p.display().to_string()));
     ///         }
@@ -1038,7 +1039,6 @@ impl Element {
     }
 
     /// Give a text field ([`text_field`](crate::widgets::text_field),
-    /// [`text_editor`](crate::widgets::text_editor),
     /// [`text_area`](crate::widgets::text_area),
     /// [`password_field`](crate::widgets::password_field)) a hint: `text`
     /// shown muted while the field is empty and nothing is being composed in
@@ -1046,11 +1046,11 @@ impl Element {
     ///
     /// ```
     /// use stipple::prelude::*;
-    /// struct Form { name: EditBuffer }
+    /// struct Form { name: TextInput }
     /// let theme = Theme::light();
-    /// let mut cx = Cx::new(&theme);
-    /// let form = Form { name: EditBuffer::new() };
-    /// let field = text_editor(&mut cx, &theme, &form.name, |f: &mut Form| &mut f.name)
+    /// let mut cx = Cx::<Form>::new(&theme);
+    /// let form = Form { name: TextInput::new() };
+    /// let field = text_field(&mut cx, &form.name, |f| &mut f.name)
     ///     .placeholder("Your name");
     /// # let _ = field;
     /// ```
@@ -1428,9 +1428,10 @@ impl Element {
     /// ```
     /// use stipple::prelude::*;
     /// let theme = Theme::light();
+    /// let cx = &Cx::<()>::new(&theme);
     /// let form = column(vec![
-    ///     label(&theme, "Name"),
-    ///     button_labeled(&theme, "Save").align_self(Align::End),
+    ///     label(cx, "Name"),
+    ///     button(cx, "Save").align_self(Align::End),
     /// ]);
     /// # let _ = form;
     /// ```
@@ -1451,11 +1452,12 @@ impl Element {
     /// ```
     /// use stipple::prelude::*;
     /// let theme = Theme::light();
+    /// let cx = &Cx::<()>::new(&theme);
     /// let form = Element::grid(
     ///     vec![Track::Auto, Track::fr(1.0)],
     ///     vec![
-    ///         label(&theme, "Total"),
-    ///         label(&theme, "42.00").justify_self(Align::End),
+    ///         label(cx, "Total"),
+    ///         label(cx, "42.00").justify_self(Align::End),
     ///     ],
     /// );
     /// # let _ = form;
@@ -1493,7 +1495,7 @@ impl Element {
     /// fn view(_: &(), cx: &mut Cx<()>) -> Element {
     ///     let theme = *cx.theme();
     ///     let hot = cx.interaction("save").hovered();
-    ///     label(&theme, if hot { "Save now" } else { "Save" }).key("save")
+    ///     label(cx, if hot { "Save now" } else { "Save" }).key("save")
     /// }
     /// # let theme = Theme::light();
     /// # let mut cx = Cx::new(&theme);
@@ -1564,7 +1566,7 @@ impl Element {
     /// use stipple::prelude::*;
     /// fn view(_: &(), cx: &mut Cx<()>) -> Element {
     ///     let theme = *cx.theme();
-    ///     label(&theme, "Drop files here")
+    ///     label(cx, "Drop files here")
     ///         .padding(Insets::uniform(16.0))
     ///         .fill(theme.palette.surface)
     ///         .drag_over(|e| e.padding(Insets::uniform(24.0)).fill(theme.palette.primary))
@@ -1636,7 +1638,8 @@ impl Element {
     /// ```
     /// use stipple::prelude::*;
     /// let theme = Theme::light();
-    /// let row = label(&theme, "New message")
+    /// let cx = &Cx::<()>::new(&theme);
+    /// let row = label(cx, "New message")
     ///     .key(42)
     ///     .enter(Effect::fade().and(Effect::slide(0.0, -12.0)))
     ///     .exit(Effect::fade().and(Effect::scale(0.9)));
@@ -1675,12 +1678,13 @@ impl Element {
     /// ```
     /// use stipple::prelude::*;
     /// let theme = Theme::light();
+    /// let cx = &Cx::<()>::new(&theme);
     /// let items = [3, 1, 2];
     /// let list = column(
     ///     items
     ///         .iter()
     ///         .map(|id| {
-    ///             label(&theme, &format!("Item {id}"))
+    ///             label(cx, &format!("Item {id}"))
     ///                 .key(*id)
     ///                 .animate_position(Transition::spring(SpringParams::SMOOTH))
     ///         })

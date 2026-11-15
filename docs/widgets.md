@@ -1,12 +1,63 @@
 # Widgets
 
-Most widgets are plain functions that take the theme and return an `Element`:
-`label`, `button_labeled`, `checkbox`, `slider`, `text_editor` and so on (see
-the [API docs](https://docs.rs/stipple/latest/stipple/widgets/)). This page
-covers the ones that keep state between frames. Each has a state type that you
-store in your app state, and the widget takes an accessor closure to reach it,
-the same way `text_editor` takes its `EditBuffer`. The `widgetsdemo` example
-shows them all:
+Widgets are plain functions that take the view's `cx` first and return an
+`Element`: `label(cx, "Hi")`, `button(cx, "Save")`, `checkbox(cx, checked,
+on_toggle)` and so on (see the
+[API docs](https://docs.rs/stipple/latest/stipple/widgets/)). They read their
+colors and metrics from the theme `cx` carries, and the handlers that follow
+`cx` get their state type from it, so closures need no annotations:
+
+```rust
+struct Todo { draft: TextInput, items: Vec<String>, done: Vec<bool> }
+
+fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
+    let mut rows = vec![heading(cx, "Todo")];
+    for (i, item) in state.items.iter().enumerate() {
+        rows.push(row(vec![
+            checkbox(cx, state.done[i], move |s| s.done[i] = !s.done[i]),
+            label(cx, item),
+        ]));
+    }
+    rows.push(row(vec![
+        text_field(cx, &state.draft, |s| &mut s.draft)
+            .placeholder("What needs doing?")
+            .on_submit(cx, Todo::add),
+        button(cx, "Add").on_tap(cx, Todo::add),
+    ]));
+    column(rows).gap(8.0).padding(Insets::uniform(16.0))
+}
+```
+
+- **Buttons.** `button(cx, "Save")` is a primary button. For another variant
+  or for custom content, build a `Button` and finish it with `view(cx)`:
+  `Button::new("Delete").variant(Variant::Danger).view(cx)`,
+  `Button::from_content(icon).variant(Variant::Ghost).view(cx)`. Make any of
+  them do something with `.on_tap(cx, |s| …)`.
+- **Text.** `label` is a line of body text, `heading` a larger one, and
+  `paragraph` body text that wraps.
+- **Text input.** `text_field` (one line) and `text_area` (several) edit a
+  `TextInput` kept in the app state, reached through an accessor,
+  `|s| &mut s.draft`. It has undo and redo, selection, the clipboard, input
+  methods and right-to-left text (its `EditBuffer`, `buffer()` /
+  `buffer_mut()`), and `TextInput::new().max_length(n).read_only(b)` limit
+  it. On the field: `.placeholder(..)`, `.on_submit(cx, ..)` (Enter, single
+  line only) and `.on_change(cx, ..)` (after each edit). `take()` empties it
+  and returns the text.
+- **Containers that need the theme** (`panel`, `toolbar`, `scroll`,
+  `scroll_horizontal`, and the game UI's `menu_list` and `setting_row`) build
+  their content in a closure given `cx`: `panel(cx, |cx| vec![…])`. Plain
+  layout (`row`, `column`, `grid`, `spacer`) takes no `cx`.
+- **Another theme for part of a view**, for previews and theme galleries:
+  `cx.themed(Theme::dark(), |cx| panel(cx, |cx| …))`.
+
+Accessors infer like handlers do, as long as the closure is written in the
+call, after `cx`. A closure kept in a variable first has no `cx` to learn the
+state type from, so it needs one: `let name = |s: &mut App| &mut s.name;`.
+
+The rest of this page covers the widgets that keep state between frames. Each
+has a state type that you store in your app state, and the widget takes an
+accessor closure to reach it, the same way `text_field` takes its
+`TextInput`. The `widgetsdemo` example shows them all:
 
 ```sh
 cargo run -p widgetsdemo            # or: dark, material, material-dark, contrast, native
@@ -29,7 +80,7 @@ below it, or above it when there's no room below.
 ```rust
 struct App { size: Select }
 // in the view:
-select(cx, &theme, &["Small", "Medium", "Large"], &state.size, |s: &mut App| &mut s.size)
+select(cx, &["Small", "Medium", "Large"], &state.size, |s| &mut s.size)
 ```
 
 Read the choice with `state.size.selected()`. The list closes when an option
@@ -47,7 +98,7 @@ An editable field with ▴ and ▾ stepper buttons.
 struct App { width: NumberInput }
 let width = NumberInput::new(640.0).range(100.0, 4000.0).step(10.0);
 // in the view:
-number_input(cx, &theme, &state.width, |s: &mut App| &mut s.width)
+number_input(cx, &state.width, |s| &mut s.width)
 ```
 
 `value()` is always a finite number within the range. Typing only accepts
@@ -66,7 +117,7 @@ Two panes with a divider between them.
 struct App { sidebar: SplitPane }
 let sidebar = SplitPane::horizontal(0.3).min_sizes(200.0, 300.0); // or ::vertical
 // in the view:
-split_pane(cx, &theme, &state.sidebar, |s: &mut App| &mut s.sidebar, nav, content)
+split_pane(cx, &state.sidebar, |s| &mut s.sidebar, nav, content)
 ```
 
 A horizontal split puts the panes side by side, and a vertical split stacks
@@ -83,19 +134,21 @@ Splits nest: put a vertical split in one pane of a horizontal one.
 A row of compact buttons on a surface strip.
 
 ```rust
-toolbar(&theme, vec![
-    tool_button(cx, &theme, "Save", |s: &mut App| s.save()),
-    tool_separator(&theme),
-    tool_toggle(cx, &theme, "B", state.bold, |s: &mut App| s.bold = !s.bold),
-    tool_icon_button(cx, &theme, &state.trash_icon, "Delete", |s: &mut App| s.delete()),
+toolbar(cx, |cx| vec![
+    tool_button(cx, "Save").on_tap(cx, |s| s.save()),
+    tool_separator(cx),
+    ToolButton::new("B").selected(state.bold).view(cx).on_tap(cx, |s| s.bold = !s.bold),
+    ToolButton::from_icon(&state.trash_icon, "Delete").view(cx).on_tap(cx, |s| s.delete()),
     spacer(),                      // push the rest to the end
-    tool_button(cx, &theme, "Help", |s: &mut App| s.help()),
+    tool_button(cx, "Help").on_tap(cx, |s| s.help()),
 ])
 ```
 
-Icons are drawn at 18×18 and can be a `Pixmap` or an `Svg`. Keep the `Arc` in
-your state, because images compare by identity. An icon button's `name` is
-what screen readers read out. Any element can go in a toolbar, a `select` for
+`tool_button` is a text button; a `ToolButton` can show an icon instead, and
+stays tinted while `selected` (a toggle that is on). Icons are drawn at 18×18
+and can be a `Pixmap` or an `Svg`. Keep the `Arc` in your state, because
+images compare by identity. An icon button's name is what screen readers read
+out. Any element can go in a toolbar, a `select` for
 example. Items that don't fit overflow the toolbar; it doesn't move them to an
 overflow menu yet.
 
@@ -109,12 +162,12 @@ color and led by a check mark, which slides and fades in on the theme's
 ```rust
 struct App { symbology: usize, filters: [bool; 3], flash: bool }
 // in the view:
-choice_chips(cx, &theme, ["2D", "Stacked", "Linear", "Postal"], state.symbology,
-    |s: &mut App, i| s.symbology = i)
-filter_chips(cx, &theme, ["QR", "EAN", "Code 128"], &state.filters,
-    |s: &mut App, i| s.filters[i] = !s.filters[i])
-chip(cx, &theme, Chip::new("Flash").icon(&state.flash_icon), state.flash,
-    |s: &mut App| s.flash = !s.flash)
+choice_chips(cx, ["2D", "Stacked", "Linear", "Postal"], state.symbology,
+    |s, i| s.symbology = i)
+filter_chips(cx, ["QR", "EAN", "Code 128"], &state.filters,
+    |s, i| s.filters[i] = !s.filters[i])
+chip(cx, Chip::new("Flash").icon(&state.flash_icon), state.flash,
+    |s| s.flash = !s.flash)
 ```
 
 The app keeps the selection; the chips report taps. `choice_chips` takes the
@@ -145,21 +198,21 @@ bottom-right corner on a desktop, or one at a time as a bar across the bottom
 ```rust
 struct App { toasts: Toasts, notes: Vec<String> }
 // in the view, once per frame (it adds an overlay rather than returning an element):
-toasts(cx, &theme, &state.toasts, |s: &mut App| &mut s.toasts);
+toasts(cx, &state.toasts, |s| &mut s.toasts);
 
 // A toast that stays until it's dismissed:
 state.toasts.push("Connected", ToastKind::Info);
 
 // A toast that dismisses itself after 4 seconds, using a timer on the app's handle:
 let handle = cx.handle();
-button_labeled(&theme, "Save").on_tap(cx, move |s: &mut App| {
+button(cx, "Save").on_tap(cx, move |s| {
     let id = s.toasts.push("Saved", ToastKind::Success);
-    s.toasts.dismiss_after(id, Duration::from_secs(4), &handle, |s: &mut App| &mut s.toasts);
+    s.toasts.dismiss_after(id, Duration::from_secs(4), &handle, |s| &mut s.toasts);
 })
 
 // A toast with an action: its button dismisses the toast and runs the closure.
 let id = s.toasts.push("Deleted", ToastKind::Info);
-s.toasts.dismiss_after(id, Duration::from_secs(6), &handle, |s: &mut App| &mut s.toasts);
+s.toasts.dismiss_after(id, Duration::from_secs(6), &handle, |s| &mut s.toasts);
 s.toasts.action(id, "Undo", move |s: &mut App| s.notes.push(note.clone()));
 
 // Where they go, and room for a bottom navigation bar (56 px tall):
@@ -227,7 +280,7 @@ let bar = TabBar::new("docs", tabs)
     .on_reorder(|s: &mut App, from, to| { let d = s.docs.remove(from); s.docs.insert(to, d); })
     .on_rename(|s: &mut App, i| s.start_renaming(i))
     .on_new(|s: &mut App| s.docs.push(Doc::new()));
-tab_bar(cx, &theme, bar, &state.bar, |s: &mut App| &mut s.bar)
+tab_bar(cx, bar, &state.bar, |s| &mut s.bar)
 ```
 
 - Clicking a tab selects it; its × or a middle click closes it, and a double
@@ -272,7 +325,7 @@ let pages = page_stack(cx, 4, state.tab, |cx, i, visible| match i {
     2 => create_page(cx, state),
     _ => settings_page(cx, state),
 });
-let bar = navigation_bar(cx, &theme, items, state.tab, |s: &mut App, i| s.tab = i);
+let bar = navigation_bar(cx, items, state.tab, |s, i| s.tab = i);
 column(vec![pages, bar]).grow(1.0)
 ```
 
@@ -286,7 +339,7 @@ column(vec![pages, bar]).grow(1.0)
   draws itself, and `UITabBar`'s proportions (49 px over a hairline, no pill,
   the selected icon and small label in the accent) under `Theme::native()`
   on iOS. `NavigationBar::new(items, selected, on_select).look(NavLook::Ios)`
-  picks one; `.view(cx, &theme)` builds it.
+  picks one; `.view(cx)` builds it.
 - `NavigationBar::bottom_inset(px)` extends the bar's background below its
   items, under the home indicator. The window's safe-area insets aren't
   reported yet ([#38](https://github.com/KarpelesLab/stipple/issues/38));
@@ -314,7 +367,7 @@ A single-line field that shows a bullet per character.
 struct App { password: PasswordField }
 let state = App { password: PasswordField::new().reveal_button(true) };
 // in the view:
-password_field(cx, &theme, &state.password, |s: &mut App| &mut s.password)
+password_field(cx, &state.password, |s| &mut s.password)
 // read it with state.password.text(); clear() empties it
 ```
 
@@ -330,7 +383,7 @@ password_field(cx, &theme, &state.password, |s: &mut App| &mut s.password)
 
 ## Color picker
 
-`color_picker(cx, &theme, &state.picker, field, on_change)` is an inline
+`color_picker(cx, &state.picker, field, on_change)` is an inline
 picker: a saturation/value area for the current hue, a hue strip, an alpha
 strip, a hex field and a row of swatches. `color_button(...)` is a swatch
 button that opens it in a popup below.
@@ -338,8 +391,8 @@ button that opens it in a popup below.
 ```rust
 struct App { tint: ColorPicker, accent: Color }
 let state = App { tint: ColorPicker::new(Color::rgb(0, 0x90, 0xff)), ... };
-color_button(cx, &theme, &state.tint, |s: &mut App| &mut s.tint,
-    |s: &mut App, c| s.accent = c)
+color_button(cx, &state.tint, |s| &mut s.tint,
+    |s, c| s.accent = c)
 ```
 
 The picker keeps the hue, saturation and value apart, so dragging to gray and
@@ -372,7 +425,7 @@ timings and curves in the theme's motion tokens (`theme.motion`, a
 
 | Widget | What moves | Token |
 |---|---|---|
-| `button_variant` / `button_labeled` | the hover and press looks fade in and out (the hover overlay over the button's color, twice over while pressed); a pressed button shrinks a little | `state`, `press`, `press_scale` |
+| `button` / `Button` | the hover and press looks fade in and out (the hover overlay over the button's color, twice over while pressed); a pressed button shrinks a little | `state`, `press`, `press_scale` |
 | `switch` | the thumb slides over; the track's color fades | `toggle`, `state` |
 | `checkbox`, `radio` | the check mark or dot pops in (and out) as it grows and fades; the box's color fades | `toggle`, `state` |
 | `chip`, `choice_chips`, `filter_chips` | the check mark pops in as it grows and fades, its slot opening before the label (or the icon fading out under it); the fill, border and label color fade; hover and press as a button | `toggle`, `state`, `press`, `press_scale` |

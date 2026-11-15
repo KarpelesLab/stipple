@@ -414,6 +414,10 @@ pub enum ViewportEvent {
 /// [`Element::on_key`](crate::core::Element::on_key)).
 pub struct Cx<'a, S> {
     theme: &'a Theme,
+    /// The theme a [`Cx::themed`] scope put in place of `theme`.
+    themed: Option<Theme>,
+    /// Text fields' submit and change handlers, by the field's focus id.
+    field_hooks: Vec<(FocusId, std::rc::Rc<crate::widgets::FieldHooks<S>>)>,
     taps: Vec<TapFn<S>>,
     keys: Vec<KeyFn<S>>,
     raw_keys: Vec<RawKeyFn<S>>,
@@ -485,6 +489,8 @@ impl<'a, S> Cx<'a, S> {
         Self {
             handle,
             theme,
+            themed: None,
+            field_hooks: Vec::new(),
             taps: Vec::new(),
             keys: Vec::new(),
             raw_keys: Vec::new(),
@@ -665,9 +671,54 @@ impl<'a, S> Cx<'a, S> {
         self.handle.clone()
     }
 
-    /// The active theme.
+    /// The active theme: the app's, or the one a [`themed`](Cx::themed)
+    /// scope put in its place. Widgets read their colors and metrics from it.
     pub fn theme(&self) -> &Theme {
-        self.theme
+        self.themed.as_ref().unwrap_or(self.theme)
+    }
+
+    /// Build part of the view under another theme: widgets made with the `cx`
+    /// that `build` is given read `theme`, and the app's theme is back once it
+    /// returns. For previews and theme galleries, which show one card under
+    /// several themes side by side.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// fn view(_: &(), cx: &mut Cx<()>) -> Element {
+    ///     row(vec![
+    ///         cx.themed(Theme::light(), |cx| panel(cx, |cx| vec![label(cx, "Light")])),
+    ///         cx.themed(Theme::dark(), |cx| panel(cx, |cx| vec![label(cx, "Dark")])),
+    ///     ])
+    /// }
+    /// # let theme = Theme::light();
+    /// # let _ = view(&(), &mut Cx::new(&theme));
+    /// ```
+    pub fn themed<R>(&mut self, theme: Theme, build: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = self.themed.replace(theme);
+        let result = build(self);
+        self.themed = outer;
+        result
+    }
+
+    /// The submit and change handlers of the text field focused as `id`.
+    pub(crate) fn field_hooks(
+        &self,
+        id: FocusId,
+    ) -> Option<std::rc::Rc<crate::widgets::FieldHooks<S>>> {
+        self.field_hooks
+            .iter()
+            .rev()
+            .find(|(f, _)| *f == id)
+            .map(|(_, h)| h.clone())
+    }
+
+    /// Note the submit and change handlers of the text field focused as `id`.
+    pub(crate) fn set_field_hooks(
+        &mut self,
+        id: FocusId,
+        hooks: std::rc::Rc<crate::widgets::FieldHooks<S>>,
+    ) {
+        self.field_hooks.push((id, hooks));
     }
 
     /// Register a pointer-tap handler, returning its [`ActionId`].
@@ -776,10 +827,10 @@ impl<'a, S> Cx<'a, S> {
     /// struct St { dropped: usize }
     /// fn view(_: &St, cx: &mut Cx<St>) -> Element {
     ///     let theme = *cx.theme();
-    ///     let zone = cx.register_drop(DragOffer::FILES, |s: &mut St, _, _| s.dropped += 1);
+    ///     let zone = cx.register_drop(DragOffer::FILES, |s, _, _| s.dropped += 1);
     ///     let drag = cx.drop_state(zone);
     ///     let grow = 8.0 * drag.level;
-    ///     label(&theme, "Drop here")
+    ///     label(cx, "Drop here")
     ///         .padding(Insets::uniform(16.0 + grow))
     ///         .drop_target(zone)
     /// }
@@ -823,7 +874,7 @@ impl<'a, S> Cx<'a, S> {
     ///     let theme = *cx.theme();
     ///     let states = cx.interaction("card");
     ///     let text = if states.pressed() { "Let go to open" } else { "Open" };
-    ///     label(&theme, text).key("card").on_tap(cx, |_| {})
+    ///     label(cx, text).key("card").on_tap(cx, |_| {})
     /// }
     /// # let theme = Theme::light();
     /// # let mut cx = Cx::new(&theme);
@@ -2008,9 +2059,9 @@ mod tests {
     #[test]
     fn dispatch_tap_and_key() {
         let theme = Theme::light();
-        let mut cx = Cx::new(&theme);
-        let tap = cx.register(|st: &mut St| st.n += 5);
-        let focus = cx.register_key(|st: &mut St, k: &KeyInput| {
+        let mut cx = Cx::<St>::new(&theme);
+        let tap = cx.register(|st| st.n += 5);
+        let focus = cx.register_key(|st, k: &KeyInput| {
             if let KeyInput::Text(t) = k {
                 st.s.push_str(t);
             }
@@ -2154,7 +2205,7 @@ mod tests {
         let theme = Theme::light();
         let mut cx = Cx::<St>::new(&theme);
         // A right-click handler that records where it was invoked.
-        let id = cx.register_context(|s: &mut St, p: Point| s.at = Some(p));
+        let id = cx.register_context(|s, p: Point| s.at = Some(p));
         let mut handlers = cx.into_handlers();
 
         // A node carrying that context handle.

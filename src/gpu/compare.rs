@@ -423,15 +423,14 @@ fn an_app_renders_the_same_through_render_with() {
     fn view(_: &(), cx: &mut Cx<()>) -> Element {
         let theme = *cx.theme();
         column(vec![
-            panel(
-                &theme,
+            panel(cx, |cx| {
                 vec![
-                    heading(&theme, "Settings"),
-                    label(&theme, "Rendered on the GPU"),
+                    heading(cx, "Settings"),
+                    label(cx, "Rendered on the GPU"),
                     image(ramp()).width(48.0).height(48.0),
-                    button_labeled(&theme, "OK"),
-                ],
-            )
+                    button(cx, "OK"),
+                ]
+            })
             .width(220.0),
         ])
         .grow(1.0)

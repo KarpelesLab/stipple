@@ -17,14 +17,12 @@ use stipple::prelude::*;
 struct App { list: ListState }
 
 fn view(state: &App, cx: &mut Cx<App>) -> Element {
-    let theme = *cx.theme();
     virtual_list(
         cx,
-        &theme,
         &state.list,
-        |s: &mut App| &mut s.list,              // where the ListState lives
+        |s| &mut s.list,              // where the ListState lives
         VirtualList::fixed(10_000, 24.0).height(320.0),
-        |_cx, row| label(&theme, format!("Row {}", row.index)),
+        |cx, row| label(cx, format!("Row {}", row.index)),
     )
 }
 ```
@@ -72,14 +70,13 @@ let columns = [
 ];
 table(
     cx,
-    &theme,
     &state.table,                         // a TableState
-    |s: &mut App| &mut s.table,
+    |s| &mut s.table,
     TableSpec::new(&columns, state.order.len())
         .row_height(26.0)
         .height(400.0)
         .on_sort(|s: &mut App, column, order| s.sort(column, order)),
-    |_cx, row, column| label(&theme, cell_text(state, row, column)),
+    |cx, row, column| label(cx, cell_text(state, row, column)),
 )
 ```
 
@@ -105,13 +102,12 @@ listing the children is expensive.
 ```rust
 tree(
     cx,
-    &theme,
     &state.tree,                            // a TreeState
-    |s: &mut App| &mut s.tree,
+    |s| &mut s.tree,
     TreeSpec::new(&state.folders)           // a TreeModel
         .row_height(26.0)
         .height(400.0),
-    |_cx, row| label(&theme, name_of(row.id)),
+    |cx, row| label(cx, name_of(row.id)),
 )
 ```
 

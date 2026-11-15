@@ -94,26 +94,24 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let handle = cx.handle();
     let undo_handle = handle.clone();
 
-    let bar = toolbar(
-        &theme,
+    let bar = toolbar(cx, |cx| {
         vec![
-            tool_button(cx, &theme, "New", |s: &mut State| s.note("New document")),
-            tool_button(cx, &theme, "Open", |s: &mut State| s.note("Open…")),
-            tool_button(cx, &theme, "Save", |s: &mut State| s.note("Saved")),
-            tool_separator(&theme),
-            tool_toggle(cx, &theme, "B", state.bold, |s: &mut State| {
-                s.bold = !s.bold;
-            }),
-            tool_toggle(cx, &theme, "I", state.italic, |s: &mut State| {
-                s.italic = !s.italic;
-            }),
-            tool_separator(&theme),
-            tool_icon_button(
-                cx,
-                &theme,
-                &state.trash,
-                "Clear log",
-                move |s: &mut State| {
+            tool_button(cx, "New").on_tap(cx, |s| s.note("New document")),
+            tool_button(cx, "Open").on_tap(cx, |s| s.note("Open…")),
+            tool_button(cx, "Save").on_tap(cx, |s| s.note("Saved")),
+            tool_separator(cx),
+            ToolButton::new("B")
+                .selected(state.bold)
+                .view(cx)
+                .on_tap(cx, |s| s.bold = !s.bold),
+            ToolButton::new("I")
+                .selected(state.italic)
+                .view(cx)
+                .on_tap(cx, |s| s.italic = !s.italic),
+            tool_separator(cx),
+            ToolButton::from_icon(&state.trash, "Clear log")
+                .view(cx)
+                .on_tap(cx, move |s| {
                     let cleared = std::mem::take(&mut s.log);
                     let id = s.toasts.push("Log cleared", ToastKind::Info);
                     s.toasts.dismiss_after(
@@ -125,38 +123,35 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
                     s.toasts.action(id, "Undo", move |s: &mut State| {
                         s.log.clone_from(&cleared);
                     });
-                },
-            ),
+                }),
             spacer(),
-            tool_button(cx, &theme, "Notify", move |s: &mut State| {
+            tool_button(cx, "Notify").on_tap(cx, move |s| {
                 let n = s.log.len();
                 let id = s
                     .toasts
                     .push(format!("Notification #{n}"), ToastKind::Success);
                 s.toasts
-                    .dismiss_after(id, Duration::from_secs(4), &handle, |s: &mut State| {
-                        &mut s.toasts
-                    });
+                    .dismiss_after(id, Duration::from_secs(4), &handle, |s| &mut s.toasts);
             }),
-        ],
-    );
+        ]
+    });
 
     let form = grid(
         vec![Track::px(84.0), Track::fr(1.0)],
         vec![
-            heading(&theme, "Settings").span(2, 1),
-            label(&theme, "Size"),
-            select(cx, &theme, &SIZES, &state.size, |s: &mut State| &mut s.size).width(180.0),
-            label(&theme, "Width"),
-            number_input(cx, &theme, &state.width, |s: &mut State| &mut s.width),
-            label(&theme, "Opacity"),
-            number_input(cx, &theme, &state.opacity, |s: &mut State| &mut s.opacity),
-            label(&theme, "Format"),
-            choice_chips(cx, &theme, FORMATS, state.format, |s: &mut State, i| {
+            heading(cx, "Settings").span(2, 1),
+            label(cx, "Size"),
+            select(cx, &SIZES, &state.size, |s| &mut s.size).width(180.0),
+            label(cx, "Width"),
+            number_input(cx, &state.width, |s| &mut s.width),
+            label(cx, "Opacity"),
+            number_input(cx, &state.opacity, |s| &mut s.opacity),
+            label(cx, "Format"),
+            choice_chips(cx, FORMATS, state.format, |s, i| {
                 s.format = i;
             }),
-            label(&theme, "Show"),
-            filter_chips(cx, &theme, EXTRAS, &state.extras, |s: &mut State, i| {
+            label(cx, "Show"),
+            filter_chips(cx, EXTRAS, &state.extras, |s, i| {
                 s.extras[i] = !s.extras[i];
             }),
         ],
@@ -183,9 +178,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         extras.join(", ").to_lowercase()
     };
     let preview = column(vec![
-        heading(&theme, "Preview"),
+        heading(cx, "Preview"),
         paragraph(
-            &theme,
+            cx,
             format!(
                 "{size}, {} px wide at {:.0}% opacity, {style}, as {} with {extras}.",
                 state.width.value(),
@@ -197,29 +192,15 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .gap(sp.sm)
     .padding(Insets::uniform(sp.lg));
     let log = column(
-        std::iter::once(heading(&theme, "Log"))
-            .chain(state.log.iter().map(|l| label(&theme, l.as_str())))
+        std::iter::once(heading(cx, "Log"))
+            .chain(state.log.iter().map(|l| label(cx, l.as_str())))
             .collect(),
     )
     .gap(sp.xs)
     .padding(Insets::uniform(sp.lg));
-    let right = split_pane(
-        cx,
-        &theme,
-        &state.preview,
-        |s: &mut State| &mut s.preview,
-        preview,
-        log,
-    );
+    let right = split_pane(cx, &state.preview, |s| &mut s.preview, preview, log);
 
-    let body = split_pane(
-        cx,
-        &theme,
-        &state.sidebar,
-        |s: &mut State| &mut s.sidebar,
-        form,
-        right,
-    );
+    let body = split_pane(cx, &state.sidebar, |s| &mut s.sidebar, form, right);
     let body = row(vec![body])
         .fill(theme.palette.surface)
         .border(theme.palette.border, 1.0)
@@ -228,7 +209,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         .clip()
         .grow(1.0);
 
-    toasts(cx, &theme, &state.toasts, |s: &mut State| &mut s.toasts);
+    toasts(cx, &state.toasts, |s| &mut s.toasts);
 
     // The editor, the inbox and the about page, each kept as it was while
     // another shows.
@@ -237,7 +218,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         0 => editor.take().unwrap_or_else(spacer),
         1 => {
             let rows = (1..=60)
-                .map(|n| label(&theme, format!("Message {n}")).padding(Insets::uniform(sp.sm)))
+                .map(|n| label(cx, format!("Message {n}")).padding(Insets::uniform(sp.sm)))
                 .collect();
             let list = Element::stack(Axis::Vertical, rows);
             let id = cx.register_scroll();
@@ -248,8 +229,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
                 .grow(1.0)
         }
         _ => column(vec![
-            heading(&theme, "Stipple widgets"),
-            paragraph(&theme, "Self-drawn widgets over hand-written OS backends."),
+            heading(cx, "Stipple widgets"),
+            paragraph(cx, "Self-drawn widgets over hand-written OS backends."),
         ])
         .gap(sp.sm)
         .padding(Insets::uniform(sp.lg)),
@@ -260,7 +241,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             .badge((state.unread > 0).then_some(NavBadge::Count(state.unread))),
         NavItem::new("About", NavIcon::template(INFO)),
     ];
-    let nav = navigation_bar(cx, &theme, items, state.page, |s: &mut State, i| {
+    let nav = navigation_bar(cx, items, state.page, |s, i| {
         s.page = i;
         if i == 1 {
             s.unread = 0;

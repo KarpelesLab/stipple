@@ -37,10 +37,20 @@ of them (see [Checking](#checking)).
 
 ## Functions
 
-- **Five or more parameters**, not counting `self`, `cx` and `theme`, take an
+- **Five or more parameters**, not counting `self` and `cx`, take an
   options or spec struct, or become a builder, as `TabBar`, `NavigationBar`
-  and `TableSpec` do. A widget's `(cx, &theme, …, on_change)` shape is fine:
-  `select(cx, &theme, options, &state, field)` has three that count.
+  and `TableSpec` do. A widget's `(cx, …, on_change)` shape is fine:
+  `select(cx, options, &state, field)` has three that count.
+- **Widgets take `cx` first** and read the theme from it, never a `&Theme`
+  parameter: `label(cx, "Hi")`, `checkbox(cx, checked, on_toggle)`, and spec
+  builders end in `.view(cx)`. A widget that only draws takes `&Cx<S>`; one
+  that registers a handler takes `&mut Cx<S>`. Coming first, `cx` also fixes
+  the state type, so the handlers and accessors after it need no
+  annotation: `|s| s.n += 1`, `|s| &mut s.name`. A widget that holds other
+  elements and needs the theme builds them in a closure given `cx`
+  (`panel(cx, |cx| vec![…])`), since a `cx` argument borrowed for the call
+  would keep the children from registering handlers. `cx.themed(theme, |cx| …)`
+  builds part of a view under another theme.
 - **Three or more of the same number or bool type in a row** (`f64, f64, f64`,
   a run of `bool`s) get the same treatment, or newtypes, since a caller could
   swap them without the compiler noticing.
@@ -83,6 +93,8 @@ touches:
   `sound.resampled(rate)`, `font.with_fallback(&emoji)`. The only by-value
   `with_*` left is `Color::with_alpha` (a copy of a plain value with another
   alpha, next to `mix` and `darken`); it is allowlisted.
+- **Scoped overrides** that run a closure are named for what the closure
+  builds under: `cx.themed(theme, |cx| …)`.
 - **Callbacks** are `on_*` (`on_change`, `on_sort`, `on_close_requested`);
   hooks that provide a value rather than react to one are named for it
   (`save_state`, `back_enabled`, `paused_when`).

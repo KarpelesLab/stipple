@@ -510,19 +510,19 @@ mod tests {
     fn app() -> App<St> {
         App::new(St::default(), |_: &St, cx: &mut Cx<St>| {
             let item = block()
-                .on_tap(cx, |s: &mut St| s.taps += 1)
+                .on_tap(cx, |s| s.taps += 1)
                 .drag_source(cx, |_| Some(DropData::Internal("item-1".into())));
             let accepts = DragOffer {
                 files: true,
                 text: false,
                 internal: true,
             };
-            let zone = cx.register_drop(accepts, |s: &mut St, data, _| match data {
+            let zone = cx.register_drop(accepts, |s, data, _| match data {
                 DropData::Files(f) => s.files.extend(f.iter().cloned()),
                 DropData::Internal(id) => s.moved.push(id.clone()),
                 DropData::Text(_) => unreachable!("refused"),
             });
-            cx.set_drop_hover(zone, |s: &mut St, on| s.hovering = on);
+            cx.set_drop_hover(zone, |s, on| s.hovering = on);
             SEEN.with(|c| c.set(cx.drop_state(zone)));
             column(vec![item, block().drop_target(zone)])
         })
@@ -631,11 +631,11 @@ mod tests {
         App::new(St::default(), move |_: &St, cx: &mut Cx<St>| {
             let payload = payload.clone();
             let item = block().drag_source(cx, move |_| Some(payload.clone()));
-            let zone = cx.register_drop(DragOffer::ANY, |s: &mut St, data, _| match data {
+            let zone = cx.register_drop(DragOffer::ANY, |s, data, _| match data {
                 DropData::Files(f) => s.files.extend(f.iter().cloned()),
                 DropData::Text(t) | DropData::Internal(t) => s.moved.push(t.clone()),
             });
-            cx.set_drop_hover(zone, |s: &mut St, on| s.hovering = on);
+            cx.set_drop_hover(zone, |s, on| s.hovering = on);
             column(vec![item, block().drop_target(zone)])
         })
         .no_font()

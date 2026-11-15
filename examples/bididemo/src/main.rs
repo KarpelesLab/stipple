@@ -28,9 +28,9 @@ use stipple::prelude::*;
 const ROW: f64 = 28.0;
 
 struct Demo {
-    mixed: EditBuffer,
-    notes: EditBuffer,
-    name: EditBuffer,
+    mixed: TextInput,
+    notes: TextInput,
+    name: TextInput,
     agree: bool,
     wifi: bool,
     volume: f64,
@@ -42,11 +42,11 @@ fn demo_state() -> Demo {
     let mut tree = TreeState::new();
     tree.set_expanded(0, true);
     Demo {
-        mixed: EditBuffer::from_text("abc אבג 123 def (שלום)"),
-        notes: EditBuffer::from_text(
+        mixed: TextInput::from_text("abc אבג 123 def (שלום)"),
+        notes: TextInput::from_text(
             "שלום, זו שורה בעברית.\nAn English line.\nمرحبا، هذا سطر بالعربية.",
         ),
-        name: EditBuffer::new(),
+        name: TextInput::new(),
         agree: true,
         wifi: true,
         volume: 0.25,
@@ -56,26 +56,25 @@ fn demo_state() -> Demo {
 }
 
 fn view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
-    let theme = *cx.theme();
     let row = |el: Element| el.height(ROW);
     column(vec![
-        row(heading(&theme, "Bidirectional text")),
+        row(heading(cx, "Bidirectional text")),
         // Left to right, with a Hebrew word and a number inside.
-        row(label(&theme, "Mixed: abc אבג 123 def")),
+        row(label(cx, "Mixed: abc אבג 123 def")),
         // Right to left, detected from the first letter.
-        row(label(&theme, "שלום עולם! זו שורה בעברית.")),
+        row(label(cx, "שלום עולם! זו שורה בעברית.")),
         // Arabic: the letters join, and the line is right to left.
-        row(label(&theme, "مرحبا بالعالم! هذا سطر بالعربية.")),
+        row(label(cx, "مرحبا بالعالم! هذا سطر بالعربية.")),
         // Forced right to left although it starts with a number and Latin.
-        row(label(&theme, "2024 – English בתוך עברית (עם סוגריים)").direction(TextDirection::Rtl)),
+        row(label(cx, "2024 – English בתוך עברית (עם סוגריים)").direction(TextDirection::Rtl)),
         // A wrapped right-to-left paragraph: every line is right-aligned.
         paragraph(
-            &theme,
+            cx,
             "זוהי פסקה ארוכה בעברית שנשברת לכמה שורות. המילים נשברות ברווחים, \
              וכל שורה מיושרת לימין, כמו שצריך. גם מספרים כמו 3.14 ו-42 נשארים בסדר הנכון.",
         ),
-        text_editor(cx, &theme, &state.mixed, |s: &mut Demo| &mut s.mixed).width(592.0),
-        text_area(cx, &theme, &state.notes, |s: &mut Demo| &mut s.notes)
+        text_field(cx, &state.mixed, |s| &mut s.mixed).width(592.0),
+        text_area(cx, &state.notes, |s| &mut s.notes)
             .width(592.0)
             .height(96.0),
     ])
@@ -112,51 +111,43 @@ fn folder_name(id: u64) -> &'static str {
 /// The mirrored UI. Rows 0 to 5 are `ROW` high, so row `k` spans
 /// y = 24 + 36k .. +28 (what the checks look at).
 fn mirrored_view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
-    let theme = *cx.theme();
     let line = |children: Vec<Element>| row(children).gap(8.0).height(ROW);
-    let checkbox = checkbox(cx, &theme, state.agree, |s: &mut Demo| s.agree = !s.agree);
-    let switch = switch(cx, &theme, state.wifi, |s: &mut Demo| s.wifi = !s.wifi);
-    let slider = slider(cx, &theme, state.volume, |s: &mut Demo, v| s.volume = v);
-    let tabs = tabs(
-        cx,
-        &theme,
-        &["One", "Two", "Three"],
-        state.tab,
-        |s: &mut Demo, i| {
-            s.tab = i;
-        },
-    );
-    let name = text_editor(cx, &theme, &state.name, |s: &mut Demo| &mut s.name).width(240.0);
+    let checkbox = checkbox(cx, state.agree, |s| s.agree = !s.agree);
+    let switch = switch(cx, state.wifi, |s| s.wifi = !s.wifi);
+    let slider = slider(cx, state.volume, |s, v| s.volume = v);
+    let tabs = tabs(cx, &["One", "Two", "Three"], state.tab, |s, i| {
+        s.tab = i;
+    });
+    let name = text_field(cx, &state.name, |s| &mut s.name).width(240.0);
     let tree = tree(
         cx,
-        &theme,
         &state.tree,
-        |s: &mut Demo| &mut s.tree,
+        |s| &mut s.tree,
         TreeSpec::new(&Folders).height(96.0),
-        |_cx, row| label(&theme, folder_name(row.id)),
+        |cx, row| label(cx, folder_name(row.id)),
     );
     column(vec![
         // 0: Latin text in a mirrored UI starts on the right.
-        line(vec![heading(&theme, "Mirrored UI")]),
+        line(vec![heading(cx, "Mirrored UI")]),
         // 1, 2: the control comes first, so it sits rightmost.
-        line(vec![checkbox, label(&theme, "Checkbox label")]),
-        line(vec![switch, label(&theme, "Switch label")]),
+        line(vec![checkbox, label(cx, "Checkbox label")]),
+        line(vec![switch, label(cx, "Switch label")]),
         // 3, 4: filled from the right.
-        line(vec![progress_bar(&theme, 0.3).width(592.0)]),
+        line(vec![progress_bar(cx, 0.3).width(592.0)]),
         line(vec![slider.width(592.0)]),
         // 5: the first (selected) tab is the rightmost.
         tabs.height(ROW),
         // Grid columns count from the right: the label is right of the field.
         grid(
             vec![Track::Auto, Track::fr(1.0)],
-            vec![label(&theme, "Name"), row(vec![name])],
+            vec![label(cx, "Name"), row(vec![name])],
         )
         .gap(8.0)
         .align(Align::Start, Align::Center),
         line(vec![
-            label(&theme, "שלום! Hebrew and English."),
+            label(cx, "שלום! Hebrew and English."),
             spacer(),
-            button_labeled(&theme, "OK"),
+            button(cx, "OK"),
         ]),
         tree,
     ])

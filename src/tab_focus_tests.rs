@@ -7,11 +7,11 @@ use crate::App;
 use crate::core::{Cx, KeyInput, OverlaySpec, Role};
 use crate::geometry::{Insets, Size};
 use crate::platform::Modifiers;
-use crate::widgets::{EditBuffer, button_labeled, checkbox, column, text_editor};
+use crate::widgets::{TextInput, button, checkbox, column, text_field};
 
 #[derive(Default)]
 struct Form {
-    name: EditBuffer,
+    name: TextInput,
     saved: u32,
     cancelled: u32,
     agree: bool,
@@ -20,17 +20,16 @@ struct Form {
 }
 
 fn view(s: &Form, cx: &mut Cx<Form>) -> crate::core::Element {
-    let theme = *cx.theme();
     let main = column(vec![
-        text_editor(cx, &theme, &s.name, |s: &mut Form| &mut s.name).width(200.0),
-        button_labeled(&theme, "Save").on_tap(cx, |s: &mut Form| s.saved += 1),
-        button_labeled(&theme, "Cancel").on_tap(cx, |s: &mut Form| s.cancelled += 1),
-        checkbox(cx, &theme, s.agree, |s: &mut Form| s.agree = !s.agree),
+        text_field(cx, &s.name, |s| &mut s.name).width(200.0),
+        button(cx, "Save").on_tap(cx, |s| s.saved += 1),
+        button(cx, "Cancel").on_tap(cx, |s| s.cancelled += 1),
+        checkbox(cx, s.agree, |s| s.agree = !s.agree),
     ])
     .gap(8.0)
     .padding(Insets::uniform(10.0));
     if s.dialog {
-        let ok = button_labeled(&theme, "OK").on_tap(cx, |s: &mut Form| s.dialog_ok += 1);
+        let ok = button(cx, "OK").on_tap(cx, |s| s.dialog_ok += 1);
         cx.overlay(OverlaySpec {
             content: ok,
             anchor: crate::core::Anchor::Center,

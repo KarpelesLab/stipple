@@ -33,7 +33,7 @@ pub struct State {
     clicks: u32,
     ticks: u32,
     loaded: bool,
-    notes: EditBuffer,
+    notes: TextInput,
     file: Option<(String, usize)>,
     checked: bool,
 }
@@ -69,26 +69,26 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     });
 
     let status = if state.loaded {
-        label(&theme, "Loaded.")
+        label(cx, "Loaded.")
     } else {
-        row(vec![spinner(cx, &theme), label(&theme, "Loading…")]).gap(theme.spacing.sm)
+        row(vec![spinner(cx), label(cx, "Loading…")]).gap(theme.spacing.sm)
     };
-    let notes = text_editor(cx, &theme, &state.notes, |s: &mut State| &mut s.notes)
+    let notes = text_field(cx, &state.notes, |s| &mut s.notes)
         .width(420.0)
         .height(44.0);
-    let open = button_labeled(&theme, "Open…").on_tap(cx, move |_: &mut State| {
+    let open = button(cx, "Open…").on_tap(cx, move |_| {
         let handle = handle.clone();
         dialog::open_file_contents(&FileDialog::new().accept(".txt,text/*"), move |file| {
             if let Some(file) = file {
                 let text = String::from_utf8_lossy(&file.bytes).into_owned();
-                handle.update(move |s: &mut State| {
+                handle.update(move |s| {
                     s.file = Some((file.name, file.bytes.len()));
-                    s.notes = EditBuffer::from_text(text.lines().next().unwrap_or(""));
+                    s.notes = TextInput::from_text(text.lines().next().unwrap_or(""));
                 });
             }
         });
     });
-    let save = button_labeled(&theme, "Save").on_tap(cx, |s: &mut State| {
+    let save = button(cx, "Save").on_tap(cx, |s| {
         let opts = FileDialog::new().file_name("notes.txt");
         dialog::save_file_contents(&opts, s.notes.text().as_bytes());
     });
@@ -97,10 +97,10 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         None => "No file opened".to_string(),
     };
     column(vec![
-        text_field_row(&theme, notes),
+        text_field_row(cx, notes),
         row(vec![
-            button_labeled(&theme, format!("Clicked {} times", state.clicks))
-                .on_tap(cx, |s: &mut State| s.clicks += 1)
+            button(cx, format!("Clicked {} times", state.clicks))
+                .on_tap(cx, |s| s.clicks += 1)
                 // Right-click, or a long press on a touch screen.
                 .context_menu(
                     cx,
@@ -111,13 +111,11 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         ])
         .gap(theme.spacing.sm),
         status,
-        label(&theme, format!("Ticks: {}", state.ticks)),
-        label(&theme, file),
+        label(cx, format!("Ticks: {}", state.ticks)),
+        label(cx, file),
         row(vec![
-            checkbox(cx, &theme, state.checked, |s: &mut State| {
-                s.checked = !s.checked
-            }),
-            label(&theme, "A checkbox"),
+            checkbox(cx, state.checked, |s| s.checked = !s.checked),
+            label(cx, "A checkbox"),
         ])
         .gap(theme.spacing.sm),
     ])
@@ -125,8 +123,9 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .padding(Insets::uniform(theme.spacing.lg))
 }
 
-fn text_field_row(theme: &Theme, field: Element) -> Element {
-    column(vec![label(theme, "Notes (type, copy, paste):"), field]).gap(theme.spacing.xs)
+fn text_field_row<S>(cx: &Cx<S>, field: Element) -> Element {
+    let theme = cx.theme();
+    column(vec![label(cx, "Notes (type, copy, paste):"), field]).gap(theme.spacing.xs)
 }
 
 /// The app. `web_app!` runs it in the page; natively it renders headless.

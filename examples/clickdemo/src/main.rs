@@ -24,7 +24,7 @@ fn view(state: &Clicks, cx: &mut Cx<Clicks>) -> Element {
     )
     .fill(theme.palette.primary)
     .align(Align::Center, Align::Center)
-    .on_tap(cx, |s: &mut Clicks| s.n += 1)
+    .on_tap(cx, |s| s.n += 1)
 }
 
 fn main() {
