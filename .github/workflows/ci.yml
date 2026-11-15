@@ -116,3 +116,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: cargo build (umbrella crate)
         run: cargo build -p stipple --target ${{ matrix.target }}
+
+  # The public API against docs/api-guidelines.md: #[non_exhaustive], options
+  # structs, one path per item. rustdoc's JSON output is a nightly feature.
+  api-audit:
+    name: API audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: rustdoc JSON
+        run: cargo doc -p stipple --no-deps --lib --features audio --target-dir target/apijson
+        env:
+          RUSTDOCFLAGS: -Z unstable-options --output-format json
+      - name: Audit
+        run: python3 .github/scripts/api-audit.py target/apijson/doc/stipple.json

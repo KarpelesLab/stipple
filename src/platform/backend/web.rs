@@ -810,7 +810,7 @@ pub fn file_picked(id: u32, file: Option<(String, Vec<u8>)>) {
     drain();
 }
 
-/// Rumble the page's pad `index` (see [`gamepad::set_rumble`](crate::platform::gamepad::set_rumble)).
+/// Rumble the page's pad `index` (see [`gamepad::set_rumble`](crate::gamepad::set_rumble)).
 pub(crate) fn gamepad_rumble(index: u32, low: f32, high: f32, ms: f64) -> bool {
     unsafe { js::gamepad_rumble(index, low as f64, high as f64, ms) != 0 }
 }

@@ -11,6 +11,7 @@ and lists, for every item reachable from outside the crate that isn't
 #[doc(hidden)]:
   - structs with public fields that aren't #[non_exhaustive];
   - enums that aren't #[non_exhaustive];
+  - items reachable at more than one public path (the prelude aside);
   - functions and methods with 5 or more parameters (not counting `self`,
     `cx` and `theme`), or a run of 3 or more parameters of the same
     number or bool type.
@@ -49,6 +50,8 @@ def main():
     # Walk the module tree from the root, following public re-exports, to find
     # every item's (first) public path.
     seen = {}
+    all_paths = {}
+    mods = {}
 
     def walk(mid, prefix, visiting):
         if mid in visiting or str(mid) not in idx:
@@ -72,13 +75,17 @@ def main():
                         walk(tid, prefix, visiting)
                     continue
                 if kind(t) == "module":
+                    mods.setdefault(str(tid), set()).add(f"{prefix}::{u['name']}")
                     walk(tid, f"{prefix}::{u['name']}", visiting)
                 else:
                     seen.setdefault(str(tid), f"{prefix}::{u['name']}")
+                    all_paths.setdefault(str(tid), set()).add(f"{prefix}::{u['name']}")
             elif k == "module":
+                mods.setdefault(str(cid), set()).add(f"{prefix}::{c['name']}")
                 walk(cid, f"{prefix}::{c['name']}", visiting)
             else:
                 seen.setdefault(str(cid), f"{prefix}::{c['name']}")
+                all_paths.setdefault(str(cid), set()).add(f"{prefix}::{c['name']}")
 
     walk(d["root"], "stipple", frozenset())
 
@@ -127,12 +134,20 @@ def main():
                     if m and m["visibility"] == "public" and kind(m) == "function" and not hidden(m):
                         check_fn(f"{p}::{m['name']}", m["inner"]["function"])
 
+    # One canonical path per item: the prelude may repeat any of them.
+    for table in (all_paths, mods):
+        for iid, ps in table.items():
+            outside = sorted(p for p in ps if not p.startswith("stipple::prelude::"))
+            if len(outside) > 1:
+                problems.append(("paths", outside[0], "also at " + ", ".join(outside[1:])))
+
     found = [x for x in problems if x[1] not in allow]
     stale = sorted(allow - {x[1] for x in problems})
     titles = {
         "struct": "structs with public fields, not #[non_exhaustive]",
         "enum": "enums not #[non_exhaustive]",
         "params": "functions with many (or easily swapped) parameters",
+        "paths": "items with more than one public path (outside the prelude)",
     }
     for key, title in titles.items():
         items = [x for x in found if x[0] == key]

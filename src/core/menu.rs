@@ -40,7 +40,8 @@ use std::rc::Rc;
 use crate::platform::menu::{NativeMenu, NativeMenuBar, NativeMenuItem};
 use crate::platform::{KeyCode, Modifiers};
 
-pub use crate::platform::{Shortcut, mnemonic};
+pub use crate::platform::menu::Shortcut;
+pub(crate) use crate::platform::mnemonic;
 
 /// A menu item's action, shared between the bar, the drawn menus and the
 /// shortcut table.
@@ -464,10 +465,8 @@ impl<S> std::fmt::Debug for MenuBar<S> {
 ///         )
 ///         .on_activate(|s: &mut State| s.shown = true)
 /// }
-/// let mut s = State { muted: false, shown: false };
-/// let t = tray(&s);
-/// assert!(t.activate_command(stipple::platform::TRAY_ID_BASE, &mut s));
-/// assert!(s.muted);
+/// // App::new(..).tray(tray)
+/// # let _ = tray(&State { muted: false, shown: false });
 /// ```
 pub struct Tray<S> {
     tooltip: String,
@@ -509,7 +508,7 @@ impl<S> Tray<S> {
     }
 
     /// The description handed to the platform: command ids start at
-    /// [`TRAY_ID_BASE`](crate::platform::TRAY_ID_BASE), shortcuts dropped.
+    /// `TRAY_ID_BASE`, shortcuts dropped.
     pub(crate) fn to_native(&self) -> crate::platform::NativeTray {
         fn strip(items: &mut [NativeMenuItem]) {
             for item in items {
@@ -535,10 +534,9 @@ impl<S> Tray<S> {
         }
     }
 
-    /// Run the menu command with native id `id` (from
-    /// [`TRAY_ID_BASE`](crate::platform::TRAY_ID_BASE)) if it exists and is
-    /// enabled. Returns whether it ran.
-    pub fn activate_command(&self, id: u32, state: &mut S) -> bool {
+    /// Run the menu command with native id `id` (from `TRAY_ID_BASE`) if it
+    /// exists and is enabled. Returns whether it ran.
+    pub(crate) fn activate_command(&self, id: u32, state: &mut S) -> bool {
         let Some(menu) = &self.menu else {
             return false;
         };

@@ -88,8 +88,6 @@ stipple = { version = "0.0.5", path = "." }
 oxideav-core = "0.1.27"
 oxideav-raster = "0.1.3"
 oxideav-scribe = "0.1.8"
-oxideav-ttf = "0.1.6"
-oxideav-otf = "0.1.2"
 oxideav-svg = "0.1.9"
 # Image decode for `Pixmap::decode`: the oxideav-image gateway over a format
 # registry the codec crates register into. Pinned below the releases that need

@@ -18,7 +18,8 @@ use crate::platform::event::{KeyCode, Modifiers};
 /// on macOS, Ctrl elsewhere, so one declaration fits every platform.
 ///
 /// ```
-/// use stipple::platform::{KeyCode, Modifiers, Shortcut};
+/// use stipple::core::Shortcut;
+/// use stipple::platform::{KeyCode, Modifiers};
 /// let save = Shortcut::cmd('s');
 /// let ctrl = Modifiers::CTRL;
 /// assert!(save.matches_for(KeyCode::Char('s'), ctrl, false));
@@ -305,8 +306,8 @@ pub struct NativeMenu {
     pub items: Vec<NativeMenuItem>,
 }
 
-/// A whole menu bar, as the app hands it to the platform (see
-/// [`MenuBar::to_native`](crate::core::MenuBar::to_native)).
+/// A whole menu bar, as the app hands it to the platform (from a
+/// [`MenuBar`](crate::core::MenuBar)).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct NativeMenuBar {
@@ -336,8 +337,8 @@ pub(crate) enum MenuPopup {
 pub const TRAY_ID_BASE: u32 = 0x8000;
 
 /// A tray icon (a status item on macOS, a notification-area icon on Windows, a
-/// `StatusNotifierItem` on Linux), as the app hands it to the platform (see
-/// [`App::native_tray`](crate::App::native_tray)).
+/// `StatusNotifierItem` on Linux), as the app hands it to the platform (from a
+/// [`Tray`](crate::core::Tray)).
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub struct NativeTray {

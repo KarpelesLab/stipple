@@ -4,7 +4,8 @@
 //! input, IME, clipboard, DPI, vsync, and surface acquisition, and exposes
 //! them through a small platform-neutral vocabulary: [`Event`],
 //! [`WindowAttributes`], [`WindowRequest`], [`WindowInfo`], and services such as
-//! [`clipboard`], [`dialog`], [`notify`] and [`gamepad`]. Everything above
+//! [`clipboard`], [`dialog`] and [`notify`] (gamepads are
+//! [`crate::gamepad`]). Everything above
 //! this layer (`stipple::core`, widgets, …) is free of platform `cfg`s.
 //!
 //! Backends live under [`backend`] and are selected by `cfg`. A headless
@@ -51,7 +52,7 @@ mod event;
 /// The display-driven frame clock that paces animations.
 pub mod frame;
 /// Gamepads: connection, buttons and axes on a standard layout, rumble.
-pub mod gamepad;
+pub(crate) mod gamepad;
 /// Key and scroll translation tables shared by the native backends.
 mod input;
 /// Android's `InputConnection` model of a Stipple text field.
@@ -120,11 +121,9 @@ pub use event::{
 pub use key::{
     KeyEvent, KeyLocation, ModifierSides, OptionAsMeta, PhysicalKey, consume_key, handle_back,
 };
-pub(crate) use menu::MenuPopup;
-pub use menu::{
-    NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, Shortcut, TRAY_ID_BASE, mnemonic,
-    mnemonic_at, mnemonic_range,
-};
+pub(crate) use menu::{MenuPopup, Shortcut};
+pub(crate) use menu::{NativeMenuBar, NativeTray, TRAY_ID_BASE};
+pub use menu::{mnemonic, mnemonic_at, mnemonic_range};
 pub use pointer::{
     DoubleClick, double_click, pointer_modifiers, set_double_click, set_pointer_modifiers,
 };

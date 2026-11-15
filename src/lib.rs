@@ -65,8 +65,50 @@ pub mod widgets;
 mod window_tests;
 
 pub use app_lifecycle::CloseResponse;
-/// Gamepads: buttons and axes on a standard layout (see [`platform::gamepad`]).
-pub use platform::gamepad;
+pub mod gamepad {
+    //! Gamepads: connect and disconnect, buttons and axes on a standard layout,
+    //! and rumble where the platform offers it.
+    //!
+    //! Every pad is mapped to one layout, the one printed on an Xbox or
+    //! PlayStation controller: four face buttons named by where they sit
+    //! ([`South`](GamepadButton::South) is Xbox A / PlayStation ✕), two shoulders,
+    //! two triggers (buttons *and* axes), Select/Back, Start, Guide, two stick
+    //! clicks and the D-pad; two sticks and two triggers as [`GamepadAxis`]es.
+    //!
+    //! **Axes.** Sticks run from −1 to 1 with **+X right and +Y down**, like the
+    //! screen (and like Linux, Android and the web; XInput's and
+    //! GameController's up-is-positive Y is flipped). Triggers run from 0
+    //! (released) to 1. No dead zone is applied, except the one Linux reports for
+    //! a stick (`flat`), so a stick at rest may read a little off 0: apply your
+    //! own dead zone. A trigger also reports as a button, pressed past about 12 %
+    //! of its travel where the pad has no digital trigger of its own.
+    //!
+    //! Two ways in:
+    //!
+    //! - **Events.** [`App::on_gamepad`](crate::App::on_gamepad) (or
+    //!   [`Event::Gamepad`](crate::platform::Event::Gamepad), which
+    //!   [`game::InputState`](crate::game::InputState) reads) hears each
+    //!   [`GamepadEvent`]: a pad connecting or disconnecting, a button going down
+    //!   or up, an axis moving.
+    //! - **Polling.** [`gamepads`] lists the connected pads and [`state`] reads
+    //!   one's buttons and axes, from a per-frame update.
+    //!
+    //! Gamepad support starts the first time either is used (it opens devices
+    //! and, on Windows and Linux, starts a thread), so an app that never asks
+    //! pays nothing.
+    //!
+    //! | platform | source | rumble |
+    //! |---|---|---|
+    //! | Windows | XInput (`xinput1_4.dll`, else `xinput9_1_0.dll`): up to 4 Xbox-compatible pads, polled | ✅ |
+    //! | macOS, iOS | `GameController.framework`'s extended gamepads, polled each frame on the main run loop | ❌ |
+    //! | Linux | evdev (`/dev/input/event*`), hot-plugged through inotify | ✅ (`FF_RUMBLE`) |
+    //! | Android | the activity's key and motion events from gamepad and joystick sources | ❌ |
+    //! | Web | `navigator.getGamepads()`, polled each animation frame (standard mapping) | ✅ (`vibrationActuator`, where the browser has it) |
+    //!
+    //! See `docs/gamepads.md`.
+
+    pub use crate::platform::gamepad::*;
+}
 
 use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
@@ -3953,11 +3995,6 @@ impl<S: 'static> App<S> {
     /// a click action ran.
     pub fn tray_activate(&mut self) -> bool {
         self.run_tray_activate()
-    }
-
-    /// The tray icon as it's handed to the platform, if the app has one.
-    pub fn native_tray(&self) -> Option<crate::platform::NativeTray> {
-        self.tray.as_ref().map(|t| t(&self.state).to_native())
     }
 }
 

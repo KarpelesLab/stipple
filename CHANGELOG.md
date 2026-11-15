@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking)
 
+- One public path per item: gamepads are only at `stipple::gamepad` (not
+  `stipple::platform::gamepad`), `Shortcut` only at `stipple::core`. The
+  `Native*` menu and tray types, `TRAY_ID_BASE`, `App::native_tray` and
+  `Tray::activate_command` (platform plumbing) are no longer public.
 - *(game, audio)* the public API follows `docs/api-guidelines.md`:
   - `#[non_exhaustive]` on `audio::{PlayParams, MusicParams, Tone, AudioStats, AudioError, Waveform}`, `game::{Camera2D, PixelViewport, PixelLayout, Tilemap, TouchButton, TouchStick, TouchPoint, ParseBindingError, Playback, ShowTouch}`, `game::save::{Loaded, SaveInfo, SlotInfo, SlotState, ParseKeyValuesError}` and `game::ui::{GameStyle, Bar, RebindCapture, BindingRowState, Capture}`: build them with their constructors and setters (fields stay public to read and assign), and match the enums with a `_` arm.
   - New setters: `Camera2D::{at, with_zoom, with_rotation, with_snap, with_shake}`, `Tilemap::at`, `GameStyle::{with_background, with_surface, with_text, with_text_muted, with_danger, with_success, with_warning}`, `BindingRowState::{capturing, conflicts}`.
