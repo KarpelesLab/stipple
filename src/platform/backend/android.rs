@@ -997,6 +997,27 @@ pub(crate) fn open_url(url: &str) -> bool {
     with_activity(|a| unsafe { jni::open_url(a.vm, a.clazz, url) }.then_some(())).is_some()
 }
 
+/// The user's languages, 24-hour setting and first day of the week, for
+/// [`platform::locale`](crate::platform::locale).
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn locale() -> Option<crate::platform::locale::OsLocale> {
+    use crate::locale::{HourCycle, Weekday};
+    let info = with_activity(|a| unsafe { jni::locale(a.vm, a.clazz, a.sdk_version) })?;
+    let mut os = crate::platform::locale::OsLocale {
+        languages: info.languages,
+        ..Default::default()
+    };
+    os.formats.hour_cycle = info
+        .is_24_hour
+        .map(|h24| if h24 { HourCycle::H23 } else { HourCycle::H12 });
+    // `Calendar`: 1 is Sunday.
+    os.formats.first_weekday = info
+        .first_day
+        .filter(|d| (1..=7).contains(d))
+        .map(|d| Weekday::from_days_from_monday((d as u32 + 5) % 7));
+    Some(os)
+}
+
 /// The package's name, label, version name and version code, for
 /// [`app_info`](crate::platform::app_info). Asked once, once there is an
 /// activity.
@@ -1661,6 +1682,9 @@ impl Loop<'_> {
                     // Delivered as `ThemeChanged` ahead of the wake this causes.
                     crate::platform::native::note_changed();
                 }
+                // The languages may have changed (with `locale` in the
+                // manifest's `configChanges`); the App compares.
+                crate::platform::locale::note_changed();
             }
             Command::Resume | Command::Start => {
                 self.view.redraw.set(true);
@@ -1671,6 +1695,10 @@ impl Loop<'_> {
                 // again whenever the app comes back (from the settings, say).
                 if crate::anim::set_system_motion_scale(motion_scale()) {
                     crate::platform::native::note_changed();
+                }
+                // Nor does the 24-hour clock setting: read it again too.
+                if cmd_is_resume {
+                    crate::platform::locale::note_changed();
                 }
             }
             Command::Pause => {

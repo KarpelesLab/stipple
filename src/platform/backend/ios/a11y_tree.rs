@@ -62,10 +62,13 @@ fn item(node: &A11yNode) -> Item {
     let (label, value) = if field {
         (String::new(), node.name.clone())
     } else {
+        // In the user's language (VoiceOver reads them as they are).
+        use crate::locale::{Builtin, builtin};
+        let pick = |yes: bool, a: Builtin, b: Builtin| builtin(if yes { a } else { b }).to_string();
         let value = match (role, node.checked, node.expanded) {
-            (Switch, Some(on), _) => if on { "on" } else { "off" }.to_string(),
-            (_, Some(checked), _) => if checked { "checked" } else { "unchecked" }.to_string(),
-            (_, None, Some(open)) => if open { "expanded" } else { "collapsed" }.to_string(),
+            (Switch, Some(on), _) => pick(on, Builtin::On, Builtin::Off),
+            (_, Some(checked), _) => pick(checked, Builtin::Checked, Builtin::Unchecked),
+            (_, None, Some(open)) => pick(open, Builtin::Expanded, Builtin::Collapsed),
             _ => String::new(),
         };
         (node.name.clone(), value)

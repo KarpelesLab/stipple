@@ -331,7 +331,7 @@ does all of this for the demo (`build-apk.sh x86_64 stipple.apk`, or
       android:enableOnBackInvokedCallback="true"
       android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
     <activity android:name="android.app.NativeActivity" android:exported="true"
-        android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density">
+        android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection">
       <meta-data android:name="android.app.lib_name" android:value="stipple_android"/>
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
@@ -368,8 +368,10 @@ supported yet.
 
 Three manifest settings matter:
 
-- **`configChanges`** keeps the activity across rotation, resizing, keyboard and
-  dark-mode switches, which Stipple handles itself. Without it, Android
+- **`configChanges`** keeps the activity across rotation, resizing, keyboard,
+  dark-mode and language switches, which Stipple handles itself (a new
+  language arrives as `Event::LocaleChanged`; see
+  [localization.md](../localization.md)). Without it, Android
   destroys the activity and starts a new one: `App::run` returns and `main` runs
   again on a new thread, losing the app's state.
 - **A `NoActionBar` theme.** The default theme reserves room for a title bar

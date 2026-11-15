@@ -1377,6 +1377,10 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
             {
                 crate::platform::native::note_changed();
             }
+            // The region's formats (Settings > Time & language), as "intl".
+            if msg == WM_SETTINGCHANGE && unsafe { names_setting(lp, "intl") } {
+                crate::platform::locale::note_changed();
+            }
             unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
         }
         // A pick from the menu bar. (Accelerator tables aren't used: the App

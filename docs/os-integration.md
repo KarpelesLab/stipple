@@ -3,8 +3,9 @@
 Ways an app reaches past its window: a tray icon with a menu, desktop
 notifications, message boxes, handing a URL or file to the app the user
 picked for it, finding where to keep its files and what version it is, and
-reading the files it was packaged with.
-The `traydemo` example shows all three:
+reading the files it was packaged with. The user's languages and formatting
+settings are in [localization.md](localization.md). The `traydemo` example
+shows all three:
 
 ```sh
 cargo run --example traydemo

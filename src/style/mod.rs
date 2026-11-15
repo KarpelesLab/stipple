@@ -238,6 +238,11 @@ pub struct Theme {
     /// [`LayoutDirection::Rtl`] mirrors the whole UI for Arabic, Hebrew and
     /// other right-to-left languages (see [`Theme::layout_direction`]).
     pub layout_direction: LayoutDirection,
+    /// Whether the `App` sets [`layout_direction`](Self::layout_direction)
+    /// from the user's language (right to left for Arabic, Hebrew, Persian,
+    /// Urdu…; see [`App::languages`](crate::App::languages)). On in every
+    /// preset; [`Theme::layout_direction`] turns it off.
+    pub follows_locale: bool,
     /// How the built-in widgets animate: durations and curves for hover and
     /// press looks, toggles, tab indicators, popups, dialogs, toasts and
     /// disclosure triangles. See [`MotionTokens`].
@@ -415,6 +420,7 @@ impl Theme {
             native: false,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
+            follows_locale: true,
             motion: MotionTokens::standard(),
             focus: FocusLook::STANDARD,
             skin: None,
@@ -432,6 +438,7 @@ impl Theme {
             native: false,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
+            follows_locale: true,
             motion: MotionTokens::standard(),
             focus: FocusLook::STANDARD,
             skin: None,
@@ -467,11 +474,14 @@ impl Theme {
     /// fill from the right, checkboxes sit right of their labels, tree
     /// disclosure triangles point left, Left and Right swap in trees, split
     /// panes and menus, and popups open leftwards.
-    /// [`LayoutDirection::from_env`] picks the direction from the locale;
+    /// Without it, the `App` follows the user's language (see
+    /// [`follows_locale`](Self::follows_locale)); setting it fixes the
+    /// direction.
     /// [`Element::layout_direction`](crate::core::Element::layout_direction)
     /// overrides it for a subtree. See `docs/bidi.md` in the repository.
     pub fn layout_direction(mut self, direction: LayoutDirection) -> Self {
         self.layout_direction = direction;
+        self.follows_locale = false;
         self
     }
 
@@ -773,6 +783,7 @@ impl Theme {
             native: false,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
+            follows_locale: true,
             motion: MotionTokens::material(),
             focus: FocusLook::STANDARD,
             skin: None,

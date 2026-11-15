@@ -563,6 +563,12 @@ extern "C" fn appearance_changed(_this: Id, _cmd: Sel, _notification: Id) {
     crate::platform::native::note_changed();
 }
 
+/// `stippleLocaleChanged:` — the user's region, languages or formats changed
+/// (`NSCurrentLocaleDidChangeNotification`); the next wake reports it.
+extern "C" fn locale_changed(_this: Id, _cmd: Sel, _notification: Id) {
+    crate::platform::locale::note_changed();
+}
+
 /// Have `view` hear about dark mode and accent changes: dark mode and accent
 /// changes are distributed notifications (they come from System Settings), and
 /// AppKit posts `NSSystemColorsDidChangeNotification` once its colors follow.
@@ -597,6 +603,19 @@ unsafe fn observe_appearance(view: Id) {
         let local = msg_id(class("NSNotificationCenter"), sel("defaultCenter"));
         let name = nsstring("NSSystemColorsDidChangeNotification");
         add(local, observe, view, selector, name, std::ptr::null_mut());
+        // The region, the languages, the 24-hour clock.
+        #[link(name = "Foundation", kind = "framework")]
+        unsafe extern "C" {
+            static NSCurrentLocaleDidChangeNotification: Id;
+        }
+        add(
+            local,
+            observe,
+            view,
+            sel("stippleLocaleChanged:"),
+            NSCurrentLocaleDidChangeNotification,
+            std::ptr::null_mut(),
+        );
         // Reduce motion, posted on the workspace's own center.
         #[link(name = "AppKit", kind = "framework")]
         unsafe extern "C" {
@@ -1317,6 +1336,12 @@ fn register_view_class() -> Class {
             cls,
             sel("stippleAppearanceChanged:"),
             appearance_changed as *const c_void,
+            close_types.as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("stippleLocaleChanged:"),
+            locale_changed as *const c_void,
             close_types.as_ptr(),
         );
         // NSAccessibility overrides: BOOL (c@:) and id (@@:) returns.

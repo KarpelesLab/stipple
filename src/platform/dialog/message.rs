@@ -142,10 +142,11 @@ impl MessageBox {
         self
     }
 
-    /// The buttons' labels: the ones given, or "OK".
+    /// The buttons' labels: the ones given, or "OK" in the user's language
+    /// ("Aceptar", "确定", "אישור"…).
     pub fn button_labels(&self) -> Vec<String> {
         if self.buttons.is_empty() {
-            vec!["OK".to_string()]
+            vec![crate::locale::builtin(crate::locale::Builtin::Ok).to_string()]
         } else {
             self.buttons.clone()
         }

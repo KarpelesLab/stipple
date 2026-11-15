@@ -49,6 +49,11 @@ binary and an `Info.plist`:
   that connected last.
 - **`MinimumOSVersion` must be at least 15.0**: `Theme::native()` uses
   `UIButtonConfiguration`, which arrived in iOS 15.
+- **`CFBundleLocalizations`** lists the languages the app is translated into
+  (`<array><string>en</string><string>fr</string></array>`). iOS offers a
+  per-app language in the Settings app only when the bundle declares more than
+  one, and `platform::preferred_languages()` then starts with the one picked
+  there. See [localization.md](../localization.md).
 
 The app's packaged files ([`platform::assets`](../os-integration.md#packaged-assets))
 go in an `assets` directory inside the bundle, next to the binary
@@ -152,7 +157,8 @@ changes, and an update VoiceOver should hear posts
 `UIAccessibilityScreenChangedNotification` when a dialog opens or closes).
 A text field's element adds the traits a `UITextField` reports (UIKit has
 no public text-entry trait), so VoiceOver says "text field" and XCUITest
-finds it among `textFields`. The values are English words; no adjustable
+finds it among `textFields`. The values ("on", "checked", "expanded"…) are
+in the user's language (eighteen languages; English otherwise); no adjustable
 (swipe up/down) or scroll actions yet. CI drives the app from an XCUITest
 runner, outside its process; see [accessibility.md](../accessibility.md#ios).
 

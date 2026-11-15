@@ -807,6 +807,17 @@ pub fn reduced_motion(reduced: bool) {
     }
 }
 
+/// The page's languages, clock, first day of the week and time zone offset
+/// (see `web/stipple.js`). Called before `start`, and again on
+/// `languagechange`, which a running app sees as [`Event::LocaleChanged`].
+#[doc(hidden)]
+pub fn locale(blob: String) {
+    let changed = crate::platform::locale::set_web(&blob);
+    if changed && HOST.with(|h| h.handler.borrow().is_some()) {
+        deliver(Event::LocaleChanged);
+    }
+}
+
 /// The canvas gained or lost keyboard focus.
 #[doc(hidden)]
 pub fn focus(focused: bool) {

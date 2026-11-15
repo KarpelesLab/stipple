@@ -71,6 +71,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GL tolerances, and a busy 2560×1600 frame takes about 1 ms instead of
   38 ms. `stipple::gpu::render_scene_scaled` now uses Metal on macOS. See
   `docs/gpu.md`.
+- Localization (#47). `platform::preferred_languages()` gives the user's
+  languages as BCP 47 tags in order, `platform::locale()` their formatting
+  conventions (the region's, with the OS's 12/24-hour clock, first weekday,
+  and on macOS, iOS and Windows the separators and date/time formats), and
+  `Event::LocaleChanged` / `App::on_locale_change` say when they change;
+  `platform::set_preferred_languages` is an app's own language setting.
+  `stipple::locale` formats numbers, percentages, money, dates and times
+  (`Locale::format_number`, `format_currency`, `format_date`, …) from a
+  built-in subset of CLDR, the same on every platform, with CLDR plural rules
+  (`Locale::plural`), language negotiation (`locale::negotiate`) and a small
+  message `Catalog` (`key = template` lines, plural forms, fallbacks).
+  `DateTime` is a calendar date and time (`from_unix_local`, `now`). See
+  `docs/localization.md` and the `localedemo` example.
+- The layout direction follows the user's language: right to left for
+  Arabic, Hebrew, Persian, Urdu… `App::languages(["en", "he"])` says which
+  languages the app ships, so an untranslated app stays left to right.
+  `Theme::follows_locale`, on in every preset, is turned off by
+  `Theme::layout_direction`.
+- A message box's default "OK" button and iOS's accessibility values
+  ("on", "checked", "expanded"…) are in the user's language.
+
 - Test helpers on `App` that find elements as a screen reader knows them:
   `app.find(Role::CheckBox, "Buy milk")` (where it is, whether it's checked),
   `find_all` (every match), `find_text("1 left")` and

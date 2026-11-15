@@ -268,6 +268,16 @@ impl DBus {
             .flatten()
     }
 
+    /// Read a string portal setting (GSettings enums such as GNOME's
+    /// `clock-format`).
+    pub fn portal_setting_string(&mut self, namespace: &str, key: &str) -> Option<String> {
+        let reply = self.portal_setting(namespace, key)?;
+        let (sig, mut off) = variant_header(&reply)?;
+        (sig == "s")
+            .then(|| read_string(&reply, &mut off).ok())
+            .flatten()
+    }
+
     /// Read a double portal setting (KDE's `AnimationDurationFactor`).
     pub fn portal_setting_f64(&mut self, namespace: &str, key: &str) -> Option<f64> {
         let reply = self.portal_setting(namespace, key)?;

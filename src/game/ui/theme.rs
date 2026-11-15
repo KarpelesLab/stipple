@@ -244,6 +244,7 @@ impl GameStyle {
             native: false,
             follows_system: false,
             layout_direction: crate::layout::LayoutDirection::Ltr,
+            follows_locale: true,
             motion: MotionTokens::standard(),
             focus: self.focus,
             skin: self.skin,

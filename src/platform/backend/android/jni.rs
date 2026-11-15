@@ -58,6 +58,7 @@ const GET_OBJECT_FIELD: usize = 95;
 const GET_INT_FIELD: usize = 100;
 const GET_STATIC_METHOD_ID: usize = 113;
 const CALL_STATIC_OBJECT_METHOD_A: usize = 116;
+const CALL_STATIC_BOOLEAN_METHOD_A: usize = 119;
 const SET_INT_FIELD: usize = 109;
 const CALL_STATIC_FLOAT_METHOD_A: usize = 137;
 const CALL_STATIC_INT_METHOD_A: usize = 131;
@@ -1163,5 +1164,94 @@ impl Jni {
                 std::mem::transmute(self.f(GET_OBJECT_FIELD));
             self.ok(get(self.0, obj, id))
         }
+    }
+
+    pub(super) fn call_static_bool(
+        &self,
+        class: &CStr,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<bool> {
+        let class = self.find_class(class)?;
+        let m = self.static_method(class, name, sig)?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> u8 =
+                std::mem::transmute(self.f(CALL_STATIC_BOOLEAN_METHOD_A));
+            let r = f(self.0, class, m, args.as_ptr());
+            (!self.clear()).then_some(r != 0)
+        }
+    }
+}
+
+/// The user's languages, clock and week, for
+/// [`platform::locale`](crate::platform::locale).
+pub(super) struct LocaleInfo {
+    /// BCP 47 tags: `LocaleList.getDefault()` (API 24), else
+    /// `Locale.getDefault()`.
+    pub(super) languages: Vec<String>,
+    /// `DateFormat.is24HourFormat(context)`.
+    pub(super) is_24_hour: Option<bool>,
+    /// `Calendar.getInstance().getFirstDayOfWeek()`: 1 is Sunday.
+    pub(super) first_day: Option<i32>,
+}
+
+pub(super) unsafe fn locale(vm: *mut c_void, context: JObject, sdk: i32) -> Option<LocaleInfo> {
+    unsafe {
+        with_env(vm, |jni| {
+            let tag = |locale: JObject| {
+                jni.call_object(locale, c"toLanguageTag", c"()Ljava/lang/String;", &[])
+                    .and_then(|s| jni.to_rust16(s))
+            };
+            let mut languages = Vec::new();
+            if sdk >= 24
+                && let Some(list) = jni.call_static_object(
+                    c"android/os/LocaleList",
+                    c"getDefault",
+                    c"()Landroid/os/LocaleList;",
+                    &[],
+                )
+            {
+                let n = jni.call_int(list, c"size", c"()I", &[]).unwrap_or(0);
+                for i in 0..n.min(32) {
+                    if let Some(l) =
+                        jni.call_object(list, c"get", c"(I)Ljava/util/Locale;", &[JValue { i }])
+                        && let Some(t) = tag(l)
+                    {
+                        languages.push(t);
+                    }
+                }
+            }
+            if languages.is_empty()
+                && let Some(l) = jni.call_static_object(
+                    c"java/util/Locale",
+                    c"getDefault",
+                    c"()Ljava/util/Locale;",
+                    &[],
+                )
+                && let Some(t) = tag(l)
+            {
+                languages.push(t);
+            }
+            let is_24_hour = jni.call_static_bool(
+                c"android/text/format/DateFormat",
+                c"is24HourFormat",
+                c"(Landroid/content/Context;)Z",
+                &[JValue { l: context }],
+            );
+            let first_day = jni
+                .call_static_object(
+                    c"java/util/Calendar",
+                    c"getInstance",
+                    c"()Ljava/util/Calendar;",
+                    &[],
+                )
+                .and_then(|cal| jni.call_int(cal, c"getFirstDayOfWeek", c"()I", &[]));
+            Some(LocaleInfo {
+                languages,
+                is_24_hour,
+                first_day,
+            })
+        })
     }
 }

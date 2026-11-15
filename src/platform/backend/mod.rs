@@ -77,7 +77,7 @@ pub mod android;
 #[doc(hidden)]
 pub mod web;
 
-/// Deliver [`Event::ThemeChanged`] ahead of the wake that follows an appearance
+/// Deliver [`Event::ThemeChanged`] (and [`Event::LocaleChanged`]) ahead of the wake that follows an appearance
 /// change, which the OS reports through a notification, a window message or (on
 /// Linux) a D-Bus signal heard on another thread, and the events
 /// [`shell::post`](crate::platform::shell) queued from other threads (tray
@@ -90,6 +90,11 @@ where
         if matches!(event, Event::Wake) {
             if crate::platform::native::take_changed()
                 && handler(Event::ThemeChanged, window) == ControlFlow::Exit
+            {
+                return ControlFlow::Exit;
+            }
+            if crate::platform::locale::take_changed()
+                && handler(Event::LocaleChanged, window) == ControlFlow::Exit
             {
                 return ControlFlow::Exit;
             }

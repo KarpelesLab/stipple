@@ -169,6 +169,12 @@ title = "Right-to-left text"
 group = "Text"
 size = [640, 480]
 
+[web.localedemo]
+description = "The user's preferred languages, numbers, money, dates and times in their locale, plural forms from a message catalog, and a mirrored UI for Arabic and Hebrew."
+title = "Localization"
+group = "Text"
+size = [720, 560]
+
 # --- Animation and graphics ---
 
 [web.motiondemo]

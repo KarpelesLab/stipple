@@ -775,7 +775,9 @@ abstraction is frozen at the end of Phase 2.
 - **Accessibility** (`stipple-a11y`): semantics tree + AT-SPI / UIA /
   NSAccessibility bridges; keyboard navigation + focus traversal.
 - Styling depth: full theming/token system, transitions, gesture recognizers.
-- i18n: RTL layout, locale-aware formatting, font fallback chains.
+- ✅ i18n: RTL layout, locale-aware formatting, font fallback chains.
+  _Formatting and the user's languages: `stipple::locale` and
+  `platform::locale` (see 7d)._
 - ✅ **Fonts and decorations**: system fonts by family name (font directories
   read by hand; fontconfig's configuration and aliases on Linux), `Font` as a
   cheap handle over a family with real or synthesized bold and italic,
@@ -1454,6 +1456,27 @@ Most input only works on X11 today.
   build-checked. Not yet: Play Asset Delivery, iOS on-demand resources,
   `AAsset_openFileDescriptor`._ See
   [docs/os-integration.md](docs/os-integration.md#packaged-assets).
+- ✅ The user's languages and formats (#47): `platform::preferred_languages`
+  (BCP 47 tags in order: `NSLocale.preferredLanguages`,
+  `LocaleList.getDefault()` over JNI, `GetUserPreferredUILanguages`,
+  `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`, `navigator.languages`),
+  `platform::locale` (the region's conventions with the user's 12/24-hour
+  clock and first weekday, and the OS's separators and date/time patterns on
+  Apple and Windows), `Event::LocaleChanged` / `App::on_locale_change`
+  (`NSCurrentLocaleDidChangeNotification`, `WM_SETTINGCHANGE` "intl",
+  Android configuration changes, GNOME's `clock-format`, `languagechange`),
+  and `platform::set_preferred_languages` for an in-app language setting.
+  `stipple::locale` formats numbers, percentages, currencies, dates and times
+  from a built-in CLDR subset (18 languages, the common regional variants),
+  picks CLDR plural categories (30-odd languages), negotiates languages, and
+  loads a small message `Catalog` with plural forms and fallbacks. The layout
+  direction follows the language shown (`App::languages`) unless the theme
+  sets one; message boxes' default "OK" and iOS's accessibility values follow
+  the user's language. _Formatting, plurals and the env/web parsing are
+  unit-tested; the OS queries were run on macOS by hand and are
+  compile-checked on Windows, iOS, Android and the web. No relative times
+  ("3 min ago") or calendars other than the Gregorian._ See
+  [docs/localization.md](docs/localization.md).
 
 #### 7e — Widgets and layout
 - ✅ Image and SVG widgets: `image(...)` / `svg(...)` with fill / contain /
@@ -2009,6 +2032,13 @@ Most input only works on X11 today.
   once with a light scheme (a live switch is simulated through the same export
   the `change` listener calls), and starts a second app on the page; no real
   IME was run.
+- ✅ Localization on every platform (#47): the languages, the clock and the
+  first weekday from each OS, followed while the app runs (Android declares
+  `locale|layoutDirection` in `configChanges`; iOS restarts the app for a new
+  language and posts `NSCurrentLocaleDidChangeNotification` for the region
+  and the clock). _The web reads `navigator.languages` and `Intl` through
+  `stipple.js`; Android reads `LocaleList`, `DateFormat.is24HourFormat` and
+  `Calendar` over JNI. Compile-checked on iOS, Android, Windows and the web._
 
 ### Phase 8 — A rich, animated, reactive UI
 *Goal: interfaces that respond to everything the user does, with motion, and

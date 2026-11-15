@@ -351,6 +351,11 @@ pub enum Event {
     /// The system's light/dark mode or accent color changed. Read the new look
     /// with [`Theme::native`](crate::style::Theme::native).
     ThemeChanged,
+    /// The user's languages or formatting settings (the region, the 12/24-hour
+    /// clock, …) may have changed: read them again with
+    /// [`preferred_languages`](crate::platform::preferred_languages) and
+    /// [`locale`](crate::platform::locale).
+    LocaleChanged,
     /// The app went to the background, came back, or the system is short of
     /// memory (mobile platforms). See [`Lifecycle`].
     Lifecycle(Lifecycle),

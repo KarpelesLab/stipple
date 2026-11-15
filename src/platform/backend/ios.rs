@@ -1100,7 +1100,15 @@ extern "C" fn motion_changed(_this: Id, _cmd: Sel, _notification: Id) {
     crate::platform::native::note_changed();
 }
 
-/// Have `view` hear `UIAccessibilityReduceMotionStatusDidChangeNotification`.
+/// `stippleLocaleChanged:` — the region or the 24-hour clock changed
+/// (`NSCurrentLocaleDidChangeNotification`; a new language restarts the
+/// app); the next wake reports it.
+extern "C" fn locale_changed(_this: Id, _cmd: Sel, _notification: Id) {
+    crate::platform::locale::note_changed();
+}
+
+/// Have `view` hear `UIAccessibilityReduceMotionStatusDidChangeNotification`,
+/// and `NSCurrentLocaleDidChangeNotification`.
 ///
 /// # Safety
 /// `view` must be a live `StippleUIView`, which stays alive for the process.
@@ -1119,6 +1127,18 @@ unsafe fn observe_reduce_motion(view: Id) {
             view,
             sel("stippleMotionChanged:"),
             UIAccessibilityReduceMotionStatusDidChangeNotification,
+            std::ptr::null_mut(),
+        );
+        #[link(name = "Foundation", kind = "framework")]
+        unsafe extern "C" {
+            static NSCurrentLocaleDidChangeNotification: Id;
+        }
+        add(
+            center,
+            sel("addObserver:selector:name:object:"),
+            view,
+            sel("stippleLocaleChanged:"),
+            NSCurrentLocaleDidChangeNotification,
             std::ptr::null_mut(),
         );
     }
@@ -1167,6 +1187,12 @@ fn register_view_class() -> Class {
             cls,
             sel("stippleMotionChanged:"),
             motion_changed as *const c_void,
+            c"v@:@".as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("stippleLocaleChanged:"),
+            locale_changed as *const c_void,
             c"v@:@".as_ptr(),
         );
         objc_registerClassPair(cls);

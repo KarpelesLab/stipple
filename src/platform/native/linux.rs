@@ -94,6 +94,9 @@ pub fn watch() {
                     if look || motion {
                         super::note_changed();
                     }
+                    if (namespace, key) == ("org.gnome.desktop.interface", "clock-format") {
+                        crate::platform::locale::note_changed();
+                    }
                 });
             });
         drop(spawned);

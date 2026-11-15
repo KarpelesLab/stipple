@@ -42,6 +42,7 @@ mod app_gamepad;
 mod app_gpu;
 mod app_keys;
 mod app_lifecycle;
+mod app_locale;
 mod app_pointer;
 mod app_touch;
 pub mod audio;
@@ -55,6 +56,7 @@ pub mod gpu;
 #[cfg(test)]
 mod interaction_tests;
 pub mod layout;
+pub mod locale;
 pub mod platform;
 #[cfg(test)]
 mod pointer_tests;
@@ -192,6 +194,8 @@ pub struct App<S> {
     native_tray: Option<crate::platform::NativeTray>,
     // Close/quit confirmation and window focus hooks (see `app_lifecycle`).
     lifecycle: app_lifecycle::Hooks<S>,
+    // The languages the app ships and `on_locale_change` (see `app_locale`).
+    locale: app_locale::LocaleState<S>,
     // Pending clipboard reads, the primary selection, and `on_clipboard`.
     clipboard: app_clipboard::ClipboardState<S>,
     // Runtime windows: whether closing the last one ends the loop, what to
@@ -673,6 +677,7 @@ impl<S: 'static> App<S> {
             tray: None,
             native_tray: None,
             lifecycle: Default::default(),
+            locale: Default::default(),
             clipboard: Default::default(),
             exit_on_last_closed: true,
             on_window_change: None,
@@ -991,6 +996,10 @@ impl<S: 'static> App<S> {
             Some(f) => f(&self.state, &self.base_theme),
             None => self.base_theme,
         };
+        // Unless the app fixed it, the UI reads in its language's direction.
+        if self.theme.follows_locale {
+            self.theme.layout_direction = self.ui_direction();
+        }
     }
 
     /// Override the DPI scale used for off-screen rendering (default 1×).
@@ -3300,6 +3309,7 @@ impl<S: 'static> App<S> {
                     | Event::ScaleFactorChanged(_)
                     | Event::WindowChanged
                     | Event::ThemeChanged
+                    | Event::LocaleChanged
                     | Event::Lifecycle(_)
                     | Event::SaveState
             );
@@ -3645,8 +3655,10 @@ impl<S: 'static> App<S> {
                     crate::platform::native::clear_cache();
                     crate::anim::set_system_motion_scale(crate::platform::native::motion_scale());
                     if self.base_theme.follows_system {
-                        self.base_theme =
-                            Theme::native().layout_direction(self.base_theme.layout_direction);
+                        let mut native = Theme::native();
+                        native.layout_direction = self.base_theme.layout_direction;
+                        native.follows_locale = self.base_theme.follows_locale;
+                        self.base_theme = native;
                         self.refresh_theme();
                         let dark = self.theme.is_dark();
                         for pane in &mut self.panes {
@@ -3659,6 +3671,15 @@ impl<S: 'static> App<S> {
                     }
                     // In the background the new look shows on coming back.
                     if !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, true);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::LocaleChanged => {
+                    // The user's languages or formats changed: a new layout
+                    // direction maybe, and views showing dates and numbers
+                    // are built again.
+                    if self.locale_changed() && !self.in_background() {
                         present(&mut self, &mut surfaces, idx, window, true);
                     }
                     ControlFlow::Wait

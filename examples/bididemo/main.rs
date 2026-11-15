@@ -160,7 +160,7 @@ fn mirrored_view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
 fn demo_app() -> App<Demo> {
     App::new(demo_state(), view)
         .title("Stipple — bidirectional text")
-        .theme(Theme::light())
+        .theme(Theme::light().layout_direction(LayoutDirection::Ltr))
         .logical_size(Size::new(640.0, 480.0))
 }
 
@@ -273,7 +273,7 @@ mod tests {
             return;
         };
         let pm = mirrored_app()
-            .theme(Theme::light())
+            .theme(Theme::light().layout_direction(LayoutDirection::Ltr))
             .font(font)
             .render_once();
         assert!(check_mirrored(&pm).is_err());

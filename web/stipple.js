@@ -606,6 +606,33 @@ export async function start(canvas, wasmUrl, options = {}) {
   const motion = () => e.stipple_reduced_motion?.(still?.matches ? 1 : 0);
   motion();
   still?.addEventListener?.("change", motion);
+  // The languages (navigator.languages), the clock and the first day of the
+  // week (Intl), and the time zone, read before the app is built
+  // (platform::locale) and followed on languagechange (Event::LocaleChanged).
+  const localeInfo = () => {
+    const langs = navigator.languages?.length ? [...navigator.languages] : [navigator.language || "en-US"];
+    let hour12 = "";
+    try {
+      const o = new Intl.DateTimeFormat(langs[0], { hour: "numeric" }).resolvedOptions();
+      if (o.hourCycle) hour12 = o.hourCycle === "h11" || o.hourCycle === "h12" ? "1" : "0";
+      else if (o.hour12 !== undefined) hour12 = o.hour12 ? "1" : "0";
+    } catch (_) {}
+    let firstDay = "";
+    try {
+      const l = new Intl.Locale(langs[0]);
+      const w = l.getWeekInfo?.() ?? l.weekInfo;
+      if (w?.firstDay) firstDay = String(w.firstDay);
+    } catch (_) {}
+    const offset = -new Date().getTimezoneOffset();
+    return `languages=${langs.join(",")}\nhour12=${hour12}\nfirst_day=${firstDay}\nutc_offset=${offset}\n`;
+  };
+  const locale = () => {
+    if (!e.stipple_locale) return;
+    const [p, n] = passStr(localeInfo());
+    e.stipple_locale(p, n);
+  };
+  locale();
+  window.addEventListener?.("languagechange", locale);
 
   // A canvas that CSS doesn't size would grow with its backing store at a
   // pixel ratio above 1, so pin it at its current size.

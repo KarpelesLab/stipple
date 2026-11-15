@@ -68,6 +68,8 @@ mod key;
 /// X11 keysym names and their Unicode characters (generated table).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod keysyms;
+/// The user's preferred languages and formatting settings.
+pub(crate) mod locale;
 /// Keyboard shortcuts and the native menu bar description.
 pub(crate) mod menu;
 /// OS-drawn controls and system appearance for the native theme.
@@ -129,6 +131,8 @@ pub use event::{
 pub use key::{
     KeyEvent, KeyLocation, ModifierSides, OptionAsMeta, PhysicalKey, consume_key, handle_back,
 };
+pub(crate) use locale::utc_offset;
+pub use locale::{locale, preferred_languages, set_preferred_languages};
 pub(crate) use menu::{MenuPopup, Shortcut};
 pub(crate) use menu::{NativeMenuBar, NativeTray, TRAY_ID_BASE};
 pub use menu::{mnemonic, mnemonic_at, mnemonic_range};

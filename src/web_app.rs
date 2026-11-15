@@ -142,6 +142,13 @@ macro_rules! web_app {
                 glue::reduced_motion(reduced != 0);
             }
 
+            /// # Safety
+            /// `ptr`/`len` come from one `stipple_alloc(len)`.
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn stipple_locale(ptr: *mut u8, len: usize) {
+                glue::locale(unsafe { glue::take_string(ptr, len) });
+            }
+
             #[unsafe(no_mangle)]
             pub extern "C" fn stipple_safe_area(top: f64, right: f64, bottom: f64, left: f64) {
                 glue::safe_area(top, right, bottom, left);

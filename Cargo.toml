@@ -112,6 +112,10 @@ name = "imagedemo"
 test = true
 
 [[example]]
+name = "localedemo"
+test = true
+
+[[example]]
 name = "menudemo"
 test = true
 
@@ -199,6 +203,11 @@ crate-type = ["cdylib"]
 [[example]]
 name = "calculator_web"
 path = "examples/calculator/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "localedemo_web"
+path = "examples/localedemo/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]

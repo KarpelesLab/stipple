@@ -538,6 +538,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Accessibility](accessibility.md): what each platform's screen readers get, and how CI checks it from outside the app
 - [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements; touch gestures (scrolling, long press, pinch)
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts
+- [Localization](localization.md): the user's languages, numbers, money, dates and times in their locale, plural forms, message catalogs, and following changes
 - [The keyboard](keyboard.md): raw keys for terminals and games, keeping Tab, key repeat, Option as Meta
 - [Gamepads](gamepads.md): connected pads, buttons and axes on a standard layout, rumble, and Linux device permissions
 - [Input methods, dead keys and compose](ime.md): CJK IMEs, preedit, and Compose files

@@ -115,14 +115,20 @@ let app = App::new(state, view)
 
 ![bididemo --mirror on X11](screenshots/stipple-x11-bidi-mirror.png)
 
-The default is left to right. Stipple doesn't mirror on its own, since a UI
-whose strings aren't translated shouldn't flip. To follow the locale, pick the
-direction from it: `LayoutDirection::from_env()` reads `LC_ALL`, `LC_MESSAGES`
-and `LANG`, and `LayoutDirection::for_language("ar-EG")` maps a language tag
-(Arabic, Hebrew, Persian, Urdu, Yiddish, Pashto, Sindhi, Kurdish, Uyghur,
-Dhivehi and a few more read right to left). On Windows and macOS the
-environment usually doesn't carry the UI language, so pass the language your
-app is showing.
+Without it, the `App` follows the user's language: the UI is mirrored when
+the language it shows reads right to left
+(`LayoutDirection::for_language("ar-EG")`: Arabic, Hebrew, Persian, Urdu,
+Yiddish, Pashto, Sindhi, Kurdish, Uyghur, Dhivehi and a few more). The
+language shown is the best match between the user's preferred languages
+(`platform::preferred_languages()`, read from the OS on every platform) and
+the ones the app says it ships with `App::languages(["en", "he"])`, or the
+user's first language when the app doesn't say. A UI whose strings aren't
+translated shouldn't flip, so an app shipping only English should say so
+(`App::languages(["en"])`), or set the theme's direction, which fixes it
+(`Theme::follows_locale` is then off). The direction changes while the app
+runs when the user's languages do (see [localization.md](localization.md)).
+`LayoutDirection::from_env()` still reads `LC_ALL`, `LC_MESSAGES` and `LANG`
+for code without an `App`.
 
 `Element::layout_direction(dir)` sets the direction of one element and
 everything inside it, and is inherited down the tree. Use
