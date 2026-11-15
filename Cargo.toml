@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 # Keep the published crate to the library: no examples, screenshots or web glue.
-include = ["src/**/*", "tests/**/*", "Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE"]
+include = ["src/**/*", "tests/**/*", "docs/getting-started.md", "Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [features]
 # The raw GPU backends (`stipple::gpu`). Off by default.
