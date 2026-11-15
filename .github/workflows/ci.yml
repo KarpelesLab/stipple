@@ -44,6 +44,8 @@ jobs:
         run: "cargo test -p stipple --features audio audio::"
       - name: audiodemo selftest (no sound card, the null output)
         run: STIPPLE_AUDIO=null cargo run -p audiodemo -- --selftest --expect-backend null
+      - name: gamedemo selftest (a seeded game played by script, its score and saves checked)
+        run: STIPPLE_AUDIO=null cargo run -p gamedemo -- --selftest
       # The runners have no sound card: load ALSA's dummy driver (a card that
       # plays nothing, in real time) and play through libasound. Not blocking:
       # the runner's kernel may not have the module.

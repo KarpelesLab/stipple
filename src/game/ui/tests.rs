@@ -512,6 +512,30 @@ fn escape_or_waiting_too_long_cancels_a_capture() {
 }
 
 #[test]
+fn a_capture_by_device_replaces_the_binding_of_the_same_kind() {
+    let mut actions = Actions::new()
+        .with(Act::Jump, Binding::Key(PhysicalKey::SPACE))
+        .with(Act::Jump, Binding::GamepadButton(GamepadButton::South));
+    let cap = RebindCapture::by_device(Act::Jump);
+    cap.apply(&mut actions, Binding::GamepadButton(GamepadButton::North));
+    cap.apply(&mut actions, Binding::Key(PhysicalKey::KEY_J));
+    assert_eq!(
+        actions.bindings(Act::Jump),
+        [
+            Binding::Key(PhysicalKey::KEY_J),
+            Binding::GamepadButton(GamepadButton::North)
+        ]
+    );
+    // None of that kind yet: added.
+    let cap = RebindCapture::by_device(Act::Fire);
+    cap.apply(&mut actions, Binding::MouseButton(PointerButton::Left));
+    assert_eq!(
+        actions.bindings(Act::Fire),
+        [Binding::MouseButton(PointerButton::Left)]
+    );
+}
+
+#[test]
 fn bindings_have_short_names() {
     let k = |k| binding_name(&Binding::Key(k));
     assert_eq!(k(PhysicalKey::KEY_W), "W");

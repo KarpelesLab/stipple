@@ -2239,6 +2239,19 @@ game needs on top:
   controls, fullscreen) that persists, a HUD, a pause menu, sound, and keyboard,
   mouse, gamepad and touch input. Its `--selftest` plays scripted input and
   checks the score in CI.
+  *Partly met: `examples/gamedemo` ("Lampwick": catch drifting embers to
+  keep a lantern lit, burst the moths it draws with a flare). Verified: a
+  title menu; settings (a volume per mixer group, rebinding for keys and
+  pads, fullscreen, pixel scale) persisting through `game::save`; the HUD;
+  the pause menu; the game over keeping the best score; synthesized effects
+  and music; pixel art at 320×180 with camera shake. `--selftest` (CI)
+  drives the menus through the app and plays a seeded game with scripted
+  keys, checking its exact score and the saves read back; the X11 visual
+  job renders its screens. Run in a window on macOS, and in headless Chrome
+  as `game.html` (on the Pages site; it renders and saves to
+  `localStorage`). Compiled for Windows, Linux, iOS and Android but not run
+  there, and its gamepad and touch input not yet played on a real pad or
+  phone (the same paths `gameloop` and `gamepaddemo` use).*
 
 ---
 

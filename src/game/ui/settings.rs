@@ -224,9 +224,10 @@ pub fn fullscreen_row<S: 'static>(
 }
 
 /// A short name for `binding`, as a key cap shows it: `W`, `Space`, `←`,
-/// `L-Shift`, `Left click`, `Q / E` for a key axis. Bindings this doesn't
-/// know (gamepad buttons, which join [`Binding`] separately) show their
-/// text form without its prefix: `Pad:South` shows `South`.
+/// `L-Shift`, `Left click`, `Q / E` for a key axis, `Pad A` (see
+/// [`pad_button_name`]), `L-Stick ←` for half a stick, `Pad LT` for a
+/// trigger. Kinds of [`Binding`] added later show their text form without
+/// its prefix.
 pub fn binding_name(binding: &Binding) -> String {
     match binding {
         Binding::Key(k) => key_name(*k),
@@ -451,6 +452,8 @@ pub struct RebindCapture<A> {
     /// When it started, on the frame clock: `None` until the first poll.
     started: Option<Duration>,
     timeout: Duration,
+    /// [`by_device`](Self::by_device): the slot follows the input's device.
+    by_device: bool,
 }
 
 impl<A: Copy + Eq + std::hash::Hash> RebindCapture<A> {
@@ -464,6 +467,19 @@ impl<A: Copy + Eq + std::hash::Hash> RebindCapture<A> {
             slot,
             started: None,
             timeout: Self::TIMEOUT,
+            by_device: false,
+        }
+    }
+
+    /// Wait for an input for `action`, replacing its first binding from the
+    /// same device: a key or a mouse button replaces its first keyboard or
+    /// mouse binding, a pad button or stick its first gamepad one (one is
+    /// added if it has none). One row then rebinds the keyboard and the pad
+    /// alike, without a pad button pushing out the key. `slot` is ignored.
+    pub fn by_device(action: A) -> Self {
+        Self {
+            by_device: true,
+            ..Self::new(action, 0)
         }
     }
 
@@ -514,7 +530,15 @@ impl<A: Copy + Eq + std::hash::Hash> RebindCapture<A> {
             .iter()
             .position(|b| *b == binding);
         if has.is_none() {
-            actions.rebind(self.action, self.slot, binding);
+            let list = actions.bindings(self.action);
+            let slot = if self.by_device {
+                list.iter()
+                    .position(|b| b.is_gamepad() == binding.is_gamepad())
+                    .unwrap_or(list.len())
+            } else {
+                self.slot
+            };
+            actions.rebind(self.action, slot, binding);
         }
         conflicts(actions, self.action)
     }

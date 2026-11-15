@@ -28,6 +28,9 @@ use std::sync::Arc;
 /// assert_eq!(l.rect, Rect::from_xywh(20.0, 30.0, 960.0, 540.0));
 /// assert_eq!(vp.to_virtual(Point::new(23.5, 30.0), &l), Some(Point::new(1.1666666666666667, 0.0)));
 /// assert_eq!(vp.to_virtual(Point::new(5.0, 5.0), &l), None); // on a bar
+/// // A pixel scale of at most 2×: 640×360, centered.
+/// let l = PixelViewport::new(320, 180).max_factor(2).layout(Size::new(1000.0, 600.0), 1.0);
+/// assert_eq!((l.factor, l.rect), (2, Rect::from_xywh(180.0, 120.0, 640.0, 360.0)));
 /// ```
 #[derive(Debug)]
 pub struct PixelViewport {
@@ -37,6 +40,9 @@ pub struct PixelViewport {
     pub bar: Color,
     /// What the virtual frame is cleared to before the game draws.
     pub background: Color,
+    /// The largest whole-number scale to use (a "pixel scale" setting):
+    /// `None` fills the canvas as far as whole numbers go.
+    pub max_factor: Option<u32>,
     last: Cell<Option<PixelLayout>>,
 }
 
@@ -60,6 +66,7 @@ impl PixelViewport {
             height: height.max(1),
             bar: Color::BLACK,
             background: Color::BLACK,
+            max_factor: None,
             last: Cell::new(None),
         }
     }
@@ -76,6 +83,13 @@ impl PixelViewport {
         self
     }
 
+    /// Scale by at most `factor` device pixels per virtual pixel (with
+    /// wider bars around), for a "pixel scale" setting.
+    pub fn max_factor(mut self, factor: u32) -> Self {
+        self.max_factor = Some(factor.max(1));
+        self
+    }
+
     /// The virtual resolution.
     pub fn size(&self) -> Size {
         Size::new(self.width as f64, self.height as f64)
@@ -83,7 +97,8 @@ impl PixelViewport {
 
     /// Where the picture goes on a canvas of `area` (logical units) shown at
     /// `scale` device pixels per logical unit: the largest whole-number
-    /// scale (in device pixels) that fits, centered on whole device pixels.
+    /// scale (in device pixels) that fits, up to
+    /// [`max_factor`](Self::max_factor), centered on whole device pixels.
     pub fn layout(&self, area: Size, scale: f64) -> PixelLayout {
         let scale = if scale > 0.0 && scale.is_finite() {
             scale
@@ -94,7 +109,10 @@ impl PixelViewport {
         let (vw, vh) = (self.width as f64, self.height as f64);
         let fit = (dw / vw).min(dh / vh);
         let (factor, k) = if fit >= 1.0 {
-            let f = fit.floor();
+            let f = match self.max_factor {
+                Some(max) => fit.floor().min(f64::from(max.max(1))),
+                None => fit.floor(),
+            };
             (f as u32, f)
         } else {
             (0, fit.max(0.0))

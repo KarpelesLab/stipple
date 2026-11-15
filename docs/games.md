@@ -29,6 +29,26 @@ the [roadmap](../ROADMAP.md#phase-9--2d-games) for what Phase 9 still lacks.
 The `gameloop` example puts the pieces together in about a hundred lines: a
 square moved with the arrows or WASD, stepped at 120 Hz, with an fps label.
 
+**A whole game.** `examples/gamedemo` is "Lampwick", a small original game
+built on all of it: Wick keeps a lantern in a night garden, catching the
+embers that drift down (they feed the light, which burns down on its own)
+while moths drawn to the light fly at it; a flare spends light to burst
+them. It has a title menu, a settings screen (volume per group, rebinding
+for the keyboard and the pad, fullscreen, pixel scale) saved as it changes,
+a HUD (hearts, the light, a score that pops, floating "+30 ×3"), a pause
+menu (Escape, Start, B or the touch "II"), a game-over screen keeping the
+best score, synthesized effects and a generated music loop, pixel art at
+320×180 with the camera shaking on a hit, and the keyboard, the mouse, a
+gamepad and the touch controls through the same `Actions`. No image or
+sound files: the sprite sheet is painted at startup. It runs on the web
+too (`game.html` on the [Pages site](https://karpeleslab.github.io/stipple/game.html),
+saving to `localStorage`). `gamedemo --selftest` plays a seeded game with
+scripted keys at a fixed 60 Hz, off screen, checks the exact score, and
+that the settings, controls and best score were saved and read back (CI
+runs it); `gamedemo --shots DIR` renders its screens.
+
+![Lampwick, mid-game](screenshots/stipple-gamedemo-play.png)
+
 ## The loop
 
 `App::on_frame(update)` runs `update(&mut state, &mut Frame)` once per
@@ -408,7 +428,8 @@ bitmaps, a game gets:
   in device pixels, centered on whole pixels, with bars (`bar_color`) around
   it. `vp.pointer_to_virtual(e.position)` turns a pointer position on the
   canvas into virtual pixels (`None` on the bars); `layout(size, scale)` is
-  the arithmetic on its own.
+  the arithmetic on its own. `max_factor` caps the scale (a "pixel scale"
+  setting: 2× in a big window, with wider bars).
 
 ```rust
 use std::sync::Arc;
@@ -663,7 +684,11 @@ same from an `on_raw_key` handler. `apply` puts the binding in the action's
 slot and returns the other actions bound to it too; `conflicts(&actions,
 action)` lists them for the row's flag. In the row's handler, start a
 capture only when none runs, so that a second Enter or click is the input
-bound.
+bound. `RebindCapture::by_device(action)` picks the slot from what is
+pressed: a key or mouse button replaces the action's first keyboard or
+mouse binding, a pad button or stick its first gamepad one
+(`Binding::is_gamepad`), so one row rebinds both without the pad pushing
+out the key.
 
 ### A HUD
 

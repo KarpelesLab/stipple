@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>Lampwick</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #06050e; }
+      canvas { display: block; width: 100vw; height: 100vh; touch-action: none; }
+      #error { position: fixed; inset: auto 0 0 0; margin: 0; padding: 8px; color: #f88; font: 14px monospace; }
+    </style>
+  </head>
+  <body>
+    <!-- Lampwick (examples/gamedemo): a small game on Stipple, built with
+         `cargo build -p gamedemo --lib --target wasm32-unknown-unknown --release`
+         and served next to web/stipple.js and a font. Settings, controls and
+         the best score are kept in localStorage. -->
+    <canvas id="app" aria-label="Lampwick"></canvas>
+    <pre id="error"></pre>
+    <script type="module">
+      import { start } from "./stipple.js";
+      const show = (what) => { document.getElementById("error").textContent += `${what}\n`; };
+      window.addEventListener("error", (ev) => show(ev.message || ev.error));
+      window.addEventListener("unhandledrejection", (ev) => show(ev.reason?.stack || ev.reason));
+      await start(document.getElementById("app"), "lampwick.wasm", { font: "font.ttf" });
+    </script>
+  </body>
+</html>

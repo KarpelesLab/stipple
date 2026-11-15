@@ -7,6 +7,7 @@
 //!   follow and shake, and [`PixelViewport`] for a fixed low resolution scaled
 //!   by whole numbers and letterboxed. They draw through
 //!   [`Scene::draw_image_region`](crate::render::Scene::draw_image_region).
+//! - Saving: [`save`] keeps settings and save slots, written atomically.
 
 mod actions;
 mod camera;

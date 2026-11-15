@@ -8,10 +8,13 @@
       html, body { margin: 0; height: 100%; overflow: hidden; background: #0a0b0d; }
       canvas { display: block; width: 100vw; height: 100vh; }
       #report { display: none; }
+      #game { position: fixed; right: 12px; bottom: 10px; font: 13px system-ui, sans-serif; color: #ffb347; text-decoration: none; opacity: 0.85; }
     </style>
   </head>
   <body>
     <canvas id="app"></canvas>
+    <!-- The site also has a game: examples/gamedemo, built into game.html. -->
+    <a id="game" href="game.html">Play Lampwick, a game on Stipple &rarr;</a>
     <pre id="report"></pre>
     <script type="module">
       // The whole page side is web/stipple.js, served next to this file.

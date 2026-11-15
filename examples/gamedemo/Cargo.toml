@@ -1,0 +1,21 @@
+[package]
+name = "gamedemo"
+description = "Stipple example: Lampwick, a small game on Phase 9 — a pixel-art night garden at 320×180, menus, settings that persist, a HUD, sound and music, keyboard, mouse, gamepad and touch input."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+name = "lampwick"
+# A cdylib for the web (game.html), an rlib for the native binary.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+stipple.workspace = true
+
+[lints]
+workspace = true

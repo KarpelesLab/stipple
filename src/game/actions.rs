@@ -61,6 +61,15 @@ impl Binding {
     /// unwritten.
     pub const DEFAULT_DEAD_ZONE: f32 = 0.25;
 
+    /// Whether it's a gamepad button or axis (rather than the keyboard or
+    /// the mouse).
+    pub fn is_gamepad(&self) -> bool {
+        matches!(
+            self,
+            Binding::GamepadButton(_) | Binding::GamepadAxis { .. }
+        )
+    }
+
     /// A gamepad axis (or half of one) with the default dead zone.
     pub fn axis(axis: GamepadAxis, direction: AxisDirection) -> Binding {
         Binding::GamepadAxis {

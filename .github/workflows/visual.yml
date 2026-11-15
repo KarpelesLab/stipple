@@ -227,6 +227,18 @@ jobs:
             exit 1
           fi
 
+      # Lampwick's screens rendered off screen (no window): the title, the
+      # settings, the game with its HUD, the pause menu and the game over.
+      - name: gamedemo screens (off screen)
+        run: |
+          mkdir -p visual_output/gamedemo
+          cargo run --release -p gamedemo -- --shots visual_output/gamedemo
+          for f in visual_output/gamedemo/*.ppm; do convert "$f" "${f%.ppm}.png" && rm "$f"; done
+          # The title shows: many colors, not a blank frame.
+          colors=$(convert visual_output/gamedemo/title.png -format '%k' info:)
+          echo "title: $colors colors"
+          [ "$colors" -gt 50 ]
+
       - name: Stop the app and Xvfb
         if: always()
         run: |
