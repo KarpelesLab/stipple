@@ -47,6 +47,29 @@ unsafe extern "system" {
     fn CloseHandle(handle: *mut c_void) -> i32;
 }
 
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    /// Whether the process is exiting (`ExitProcess` has begun detaching
+    /// the DLLs). Returns a `BOOLEAN`.
+    fn RtlDllShutdownInProgress() -> u8;
+}
+
+/// Whether the process is exiting, so nothing may be released.
+///
+/// The renderer lives in a thread-local. The main thread's thread-locals are
+/// destroyed from the TLS callback for `DLL_PROCESS_DETACH`, after
+/// `ExitProcess` has killed every other thread, the D3D runtime's and
+/// WARP's workers among them, and while the system DLLs are detaching.
+/// Releasing the device then (and the `ClearState` + `Flush` before it)
+/// calls into a runtime whose threads are gone: it crashed the process at
+/// exit on CI (exit code 127 once `main` had returned). So at process exit
+/// every COM reference and handle is left to the OS, which frees all of it
+/// with the process anyway. Threads that end normally, and renderers dropped
+/// while the app runs (a lost device), release as usual.
+fn exiting() -> bool {
+    unsafe { RtlDllShutdownInProgress() != 0 }
+}
+
 /// Call COM method `slot` of `obj`, typed as
 /// `com!(obj, SLOT, (ArgTypes...) -> Ret, args...)`.
 macro_rules! com {
@@ -84,7 +107,9 @@ impl Com {
 
 impl Drop for Com {
     fn drop(&mut self) {
-        unsafe { release(self.0) };
+        if !self.0.is_null() && !exiting() {
+            unsafe { release(self.0) };
+        }
     }
 }
 
@@ -147,7 +172,7 @@ struct Chain {
 
 impl Drop for Chain {
     fn drop(&mut self) {
-        if !self.waitable.is_null() {
+        if !self.waitable.is_null() && !exiting() {
             unsafe { CloseHandle(self.waitable) };
         }
     }
@@ -246,8 +271,8 @@ impl Drop for D3dExecutor {
     fn drop(&mut self) {
         // Unbind everything and let the deferred releases happen, so the
         // windows' swap chains are really gone (a window can then get a new
-        // one, or go back to GDI).
-        if !self.ctx.is_null() {
+        // one, or go back to GDI). Not at process exit: see `exiting`.
+        if !self.ctx.is_null() && !exiting() {
             unsafe {
                 com!(self.ctx.ptr(), VT_CTX_CLEAR_STATE, () -> ());
                 com!(self.ctx.ptr(), VT_CTX_FLUSH, () -> ());
