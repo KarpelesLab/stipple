@@ -42,7 +42,7 @@ gamepad::set_rumble(id, 0.8, 0.3, Duration::from_millis(250));
 | `state(id)` | a pad's buttons and axes now |
 | `set_rumble(id, low, high, duration)` | rumble; `false` where the pad or platform can't |
 | `App::on_gamepad(hook)` | every event, with the state; the windows re-render after it |
-| `Event::Gamepad` | the same events, for code on the raw `platform::run` loop |
+| `Event::Gamepad` | the same events, as `Event`s (what `game::InputState::event` reads) |
 
 Gamepad support starts the first time it's used (`on_gamepad`, `gamepads`,
 `state`, `gamepad::start()`, or a game loop): devices are opened and, on

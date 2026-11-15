@@ -881,7 +881,7 @@ unsafe fn live_root(root: *mut Provider) -> *mut Provider {
 
 /// A UIA provider tree built from an [`A11yNode`] hierarchy. Owns every provider;
 /// hand the root to UIA via [`UiaTree::root_provider`].
-pub struct UiaTree {
+pub(crate) struct UiaTree {
     // Element addresses are stable: the Vec is built once (never pushed to again),
     // and the raw navigation pointers index its heap buffer, which a later move of
     // the Vec into this struct does not relocate.
@@ -911,7 +911,7 @@ impl Drop for UiaTree {
 impl UiaTree {
     /// Build a provider per node in `root`'s subtree, linking parent/child/sibling
     /// pointers so UIA can navigate the whole hierarchy.
-    pub fn build(root: &A11yNode) -> UiaTree {
+    pub(crate) fn build(root: &A11yNode) -> UiaTree {
         Self::build_in(root, core::ptr::null_mut())
     }
 
@@ -921,7 +921,7 @@ impl UiaTree {
     ///
     /// The window's root providers handed out earlier answer with this
     /// tree's children from now on (see [`live_root`]).
-    pub fn build_hosted(root: &A11yNode, hwnd: *mut c_void) -> UiaTree {
+    pub(crate) fn build_hosted(root: &A11yNode, hwnd: *mut c_void) -> UiaTree {
         let tree = Self::build_in(root, hwnd);
         if !hwnd.is_null() {
             let r = tree.root_provider() as *mut Provider;
@@ -936,7 +936,7 @@ impl UiaTree {
 
     /// Whether a client still holds one of the tree's nodes (each starts
     /// with the tree's own reference).
-    pub fn in_use(&self) -> bool {
+    pub(crate) fn in_use(&self) -> bool {
         self.nodes.iter().any(|p| p.refcount > 1)
     }
 
@@ -1009,7 +1009,7 @@ impl UiaTree {
 
     /// The provider of the node at `path` (child indices from the root, as
     /// [`A11yNode::focused_path`] gives them), or null.
-    pub fn provider_at(&self, path: &[usize]) -> *mut c_void {
+    pub(crate) fn provider_at(&self, path: &[usize]) -> *mut c_void {
         let Some(root) = self.nodes.first() else {
             return core::ptr::null_mut();
         };
@@ -1026,7 +1026,7 @@ impl UiaTree {
 
     /// The root `IRawElementProviderFragmentRoot*` to return from `WM_GETOBJECT`
     /// via `UiaReturnRawElementProvider`. Null only if the tree is empty.
-    pub fn root_provider(&self) -> *mut c_void {
+    pub(crate) fn root_provider(&self) -> *mut c_void {
         self.nodes
             .first()
             .map(|p| p as *const Provider as *mut c_void)
@@ -1045,7 +1045,7 @@ impl UiaTree {
 /// # Safety
 ///
 /// `provider` is null or a provider of a tree that is still alive.
-pub unsafe fn raise_focus_changed(provider: *mut c_void) -> bool {
+pub(crate) unsafe fn raise_focus_changed(provider: *mut c_void) -> bool {
     if provider.is_null() || unsafe { UiaClientsAreListening() } == 0 {
         return false;
     }

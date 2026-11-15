@@ -18,8 +18,8 @@
 //! Two ways in:
 //!
 //! - **Events.** [`App::on_gamepad`](crate::App::on_gamepad) (or
-//!   [`Event::Gamepad`](crate::platform::Event::Gamepad) for code on the raw
-//!   [`platform::run`](crate::platform::backend::run) loop) hears each
+//!   [`Event::Gamepad`](crate::platform::Event::Gamepad), which
+//!   [`game::InputState`](crate::game::InputState) reads) hears each
 //!   [`GamepadEvent`]: a pad connecting or disconnecting, a button going down
 //!   or up, an axis moving.
 //! - **Polling.** [`gamepads`] lists the connected pads and [`state`] reads
@@ -78,6 +78,7 @@ impl std::fmt::Display for GamepadId {
 }
 
 /// A button on the standard layout.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GamepadButton {
     /// The bottom face button: Xbox A, PlayStation ✕, Nintendo B.
@@ -143,6 +144,7 @@ impl GamepadButton {
 
 /// An axis on the standard layout. Sticks run from −1 to 1, +X right and +Y
 /// **down**; triggers from 0 to 1.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GamepadAxis {
     LeftX,

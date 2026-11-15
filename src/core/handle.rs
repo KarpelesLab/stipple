@@ -346,8 +346,7 @@ impl<S> AppHandle<S> {
     }
 
     /// Ask for the user's attention without stealing focus: flash the taskbar
-    /// button, bounce the Dock icon, mark the window urgent. See
-    /// [`Window::request_attention`](crate::platform::Window::request_attention).
+    /// button, bounce the Dock icon, mark the window urgent.
     pub fn request_attention(&self, kind: UserAttention) {
         self.window(WindowRequest::Attention(Some(kind)));
     }
@@ -367,15 +366,13 @@ impl<S> AppHandle<S> {
         self.window(WindowRequest::PointerLock(locked));
     }
 
-    /// Sound the system beep, as a terminal's audible bell. See
-    /// [`Window::beep`](crate::platform::Window::beep).
+    /// Sound the system beep, as a terminal's audible bell.
     pub fn beep(&self) {
         self.window(WindowRequest::Beep);
     }
 
     /// Show `label` as a badge on the application's Dock icon (macOS), or
-    /// remove it with `None`. See
-    /// [`Window::set_badge`](crate::platform::Window::set_badge).
+    /// remove it with `None`.
     pub fn set_badge(&self, label: Option<&str>) {
         self.window(WindowRequest::Badge(label.map(str::to_string)));
     }

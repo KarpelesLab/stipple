@@ -67,6 +67,7 @@ pub use message::{
 pub(crate) use message::{native_allowed, set_event_loop_running};
 
 /// How a file dialog should be presented.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default)]
 pub struct FileDialog {
     /// Window title for the dialog.
@@ -106,9 +107,12 @@ impl FileDialog {
 }
 
 /// A file's name (without its directory) and contents.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct FileContents {
+    /// The file's name, without its directory.
     pub name: String,
+    /// What the file holds.
     pub bytes: Vec<u8>,
 }
 

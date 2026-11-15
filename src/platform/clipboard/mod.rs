@@ -5,13 +5,13 @@
 //! representations at once (plain text, HTML, an image). Apps rarely call
 //! these directly: the `App` already syncs its in-process mirror
 //! (`stipple::core::clipboard`) with the OS around each copy, cut and paste,
-//! through [`Window::clipboard`] / [`Window::set_clipboard`], and the backends
-//! below implement those by calling into this module.
+//! through the window, and the backends below implement that by calling into
+//! this module.
 //!
 //! - **Windows**: `OpenClipboard` + `CF_UNICODETEXT`, with the text in a
 //!   `GlobalAlloc(GMEM_MOVEABLE)` block. Line endings are converted between
 //!   `\n` and Windows' `\r\n`. HTML goes in the registered `HTML Format`
-//!   (`CF_HTML`, see [`format::cf_html_encode`]); images in `CF_DIBV5` and the
+//!   (`CF_HTML`); images in `CF_DIBV5` and the
 //!   registered `PNG` format, and are read from `PNG`, `CF_DIBV5` or `CF_DIB`.
 //! - **macOS**: `NSPasteboard.generalPasteboard`, types `public.utf8-plain-text`
 //!   (`NSPasteboardTypeString`), `public.html` and `public.png`.
@@ -29,7 +29,7 @@
 //! - **iOS, Android**: text only.
 //! - **Elsewhere**: these return `None` / `false`. On Linux the clipboard
 //!   belongs to the display connection, so the backends implement it on their
-//!   window ([`Window::read_clipboard`] / [`Window::write_clipboard`]): Wayland
+//!   window: Wayland
 //!   through `wl_data_device` (and the primary selection through
 //!   `zwp_primary_selection_device_manager_v1`), X11 through the `CLIPBOARD`
 //!   and `PRIMARY` selections.
@@ -37,19 +37,16 @@
 //! [`ClipboardKind::Primary`] is the X11/Wayland select-to-copy,
 //! middle-click-to-paste selection. Elsewhere the `App` keeps it in process.
 //!
-//! [`Window::clipboard`]: crate::platform::Window::clipboard
-//! [`Window::set_clipboard`]: crate::platform::Window::set_clipboard
-//! [`Window::read_clipboard`]: crate::platform::Window::read_clipboard
-//! [`Window::write_clipboard`]: crate::platform::Window::write_clipboard
 //! [`text`]: crate::platform::clipboard::text
 //! [`set_text`]: crate::platform::clipboard::set_text
 
-pub mod format;
+pub(crate) mod format;
 
 use crate::render::Pixmap;
 
 /// Which selection a clipboard call is about.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ClipboardKind {
     /// The clipboard proper: Ctrl/Cmd+C, X and V.
     #[default]
@@ -70,6 +67,7 @@ pub enum ClipboardKind {
 /// assert!(c.image.is_none() && !c.is_empty());
 /// ```
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ClipboardContent {
     /// Plain text.
     pub text: Option<String>,
@@ -137,19 +135,40 @@ impl ClipboardContent {
 
 /// The representations to read from the clipboard. Reading only what is
 /// needed matters: an image can be megabytes another app has to encode.
+///
+/// Combine the constants with `|`: `ClipboardFormats::TEXT | ClipboardFormats::HTML`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct ClipboardFormats {
+    /// Plain text.
     pub text: bool,
+    /// HTML.
     pub html: bool,
+    /// An image.
     pub image: bool,
 }
 
 impl ClipboardFormats {
+    /// Nothing.
+    pub const NONE: Self = Self {
+        text: false,
+        html: false,
+        image: false,
+    };
     /// Plain text only (what a paste into a text field needs).
     pub const TEXT: Self = Self {
         text: true,
-        html: false,
-        image: false,
+        ..Self::NONE
+    };
+    /// HTML only.
+    pub const HTML: Self = Self {
+        html: true,
+        ..Self::NONE
+    };
+    /// An image only.
+    pub const IMAGE: Self = Self {
+        image: true,
+        ..Self::NONE
     };
     /// Every representation.
     pub const ALL: Self = Self {
@@ -157,17 +176,34 @@ impl ClipboardFormats {
         html: true,
         image: true,
     };
+
+    /// The representations in either.
+    pub const fn union(self, other: Self) -> Self {
+        Self {
+            text: self.text || other.text,
+            html: self.html || other.html,
+            image: self.image || other.image,
+        }
+    }
 }
 
-/// The answer to [`Window::read_clipboard`](crate::platform::Window::read_clipboard).
+impl std::ops::BitOr for ClipboardFormats {
+    type Output = Self;
+    fn bitor(self, other: Self) -> Self {
+        self.union(other)
+    }
+}
+
+/// The answer to a window's clipboard read.
 #[derive(Clone, Debug, PartialEq)]
-pub enum ClipboardRead {
+pub(crate) enum ClipboardRead {
     /// The content, there and then (`None` when the clipboard is empty or
     /// holds none of the formats asked for).
     Ready(Option<ClipboardContent>),
     /// The owner has been asked; the content arrives later as
     /// [`Event::Clipboard`](crate::platform::Event::Clipboard). X11 answers
     /// this way when another client owns the selection.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // only X11 answers later
     Pending,
 }
 

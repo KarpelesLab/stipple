@@ -79,6 +79,7 @@ impl State {
         woken || due
     }
 
+    #[cfg_attr(target_os = "ios", allow(dead_code))] // UIKit runs its own loop
     fn timeout(&self, now: Instant) -> Option<std::time::Duration> {
         if self.pending.load(Ordering::Acquire) {
             return Some(std::time::Duration::ZERO);
@@ -115,6 +116,7 @@ pub fn take(now: Instant) -> bool {
 
 /// How long the loop may sleep before the deadline, or `None` to sleep until an
 /// event. Zero when a wake is already pending.
+#[cfg_attr(target_os = "ios", allow(dead_code))] // UIKit runs its own loop
 pub fn timeout(now: Instant) -> Option<std::time::Duration> {
     let frame = super::frame::deadline().map(|at| at.saturating_duration_since(now));
     match (GLOBAL.timeout(now), frame) {

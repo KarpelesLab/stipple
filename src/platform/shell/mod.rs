@@ -1,6 +1,6 @@
 //! Handing things to the rest of the desktop: opening URLs and files in the
 //! default app, desktop notifications, and the event plumbing behind tray
-//! icons ([`Window::set_tray`](crate::platform::Window::set_tray)).
+//! icons.
 //!
 //! | | [`open_url`] | [`notify`] | tray icon |
 //! |---|---|---|---|
@@ -45,9 +45,12 @@ mod windows;
 /// assert_eq!(n.title, "Download complete");
 /// assert_eq!(n.body, "notes.txt is ready");
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Notification {
+    /// The headline.
     pub title: String,
+    /// The text under it; empty for none.
     pub body: String,
 }
 
@@ -111,9 +114,8 @@ pub fn notify(notification: &Notification) -> Result<(), PlatformError> {
     os_notify(notification)
 }
 
-/// Whether the app's tray icon is currently shown (the last
-/// [`Window::set_tray`](crate::platform::Window::set_tray) through the `App`
-/// succeeded).
+/// Whether the app's tray icon is currently shown (the last one the `App`
+/// set succeeded).
 pub fn tray_shown() -> bool {
     TRAY_SHOWN.load(std::sync::atomic::Ordering::Acquire)
 }

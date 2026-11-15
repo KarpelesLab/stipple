@@ -103,7 +103,7 @@ On X11 and Wayland the types are MIME types (`text/plain;charset=utf-8`,
 `UTF8_STRING`, `text/html`, `image/png`); on Windows `CF_UNICODETEXT`,
 `HTML Format` (`CF_HTML`), `CF_DIBV5` and `PNG`; on macOS `public.utf8-plain-text`,
 `public.html` and `public.png`. The web takes text and HTML, iOS and Android
-text only. `stipple::platform::clipboard::format` has the encoders (`CF_HTML`,
+text only. The crate-internal `platform::clipboard::format` has the encoders (`CF_HTML`,
 DIB, PNG).
 
 ## Input methods

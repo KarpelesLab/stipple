@@ -162,7 +162,7 @@ fn cursor_glyph(icon: CursorIcon) -> u16 {
 }
 
 /// Whether an X11 display is reachable (cheap check of `$DISPLAY`).
-pub fn available() -> bool {
+pub(crate) fn available() -> bool {
     std::env::var_os("DISPLAY").is_some()
 }
 
@@ -1705,7 +1705,7 @@ fn create_window(
 /// closed. Additional top-level windows opened via [`Window::open_window`] share
 /// this one connection and loop; their events are dispatched to the same handler
 /// against the [`Window`] they belong to.
-pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
+pub(crate) fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {

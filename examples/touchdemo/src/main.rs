@@ -311,7 +311,7 @@ fn main() {
             match gesture {
                 BackGesture::Started { edge } => log(&format!("touchdemo: back Started {edge:?}")),
                 BackGesture::Cancelled => log("touchdemo: back Cancelled"),
-                BackGesture::Progressed { .. } => {}
+                _ => {}
             }
             s.back_gestures.push(gesture);
         })

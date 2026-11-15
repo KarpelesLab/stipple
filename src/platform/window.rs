@@ -4,11 +4,12 @@ use crate::render::{Color, Pixmap, Surface};
 
 /// A mouse cursor shape. Elements declare one (see
 /// [`Element::cursor`](crate::core::Element::cursor)) and the app sets it on
-/// the window as the pointer moves over them, through [`Window::set_cursor`].
+/// the window as the pointer moves over them.
 ///
 /// Each backend maps these to the system's own cursors. Where a platform has
 /// no exact match the nearest one is used (see `docs/windows-and-cursors.md`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CursorIcon {
     /// The platform's normal arrow.
     #[default]
@@ -41,9 +42,10 @@ pub enum CursorIcon {
     Hidden,
 }
 
-/// What the input method needs to know about the focused text field, passed to
-/// [`Window::set_ime`] while one has keyboard focus.
+/// What the input method needs to know about the focused text field, handed
+/// to the window while one has keyboard focus.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ImeState {
     /// The caret (or, while composing, the start of the composition), in
     /// window-relative logical pixels. The IME puts its candidate window next
@@ -90,22 +92,22 @@ pub enum WindowRequest {
     /// Minimize (`true`) or restore (`false`) the window.
     Minimized(bool),
     /// Ask for the user's attention (`Some`), or withdraw the request
-    /// (`None`). See [`Window::request_attention`].
+    /// (`None`).
     Attention(Option<UserAttention>),
-    /// Sound the system beep. See [`Window::beep`].
+    /// Sound the system beep.
     Beep,
-    /// Show a short badge on the application's icon, or remove it. See
-    /// [`Window::set_badge`].
+    /// Show a short badge on the application's icon, or remove it.
     Badge(Option<String>),
     /// Lock the pointer (`true`): hide the cursor, hold it in place and send
     /// relative motion as [`Event::PointerDelta`](crate::platform::Event::PointerDelta),
-    /// or release it (`false`). See [`Window::set_pointer_lock`].
+    /// or release it (`false`).
     PointerLock(bool),
 }
 
-/// How insistently [`Window::request_attention`] asks for the user's
+/// How insistently [`WindowRequest::Attention`] asks for the user's
 /// attention.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum UserAttention {
     /// Something happened the user may want to look at: the taskbar button
     /// flashes a few times, the Dock icon bounces once.
@@ -118,7 +120,7 @@ pub enum UserAttention {
 
 impl WindowRequest {
     /// Apply this request to `window`.
-    pub fn apply(&self, window: &dyn Window) {
+    pub(crate) fn apply(&self, window: &dyn Window) {
         match self {
             WindowRequest::Maximized(on) => window.set_maximized(*on),
             WindowRequest::Fullscreen(on) => window.set_fullscreen(*on),
@@ -141,12 +143,13 @@ impl WindowRequest {
 }
 
 /// Where a window is and what state it is in, as last reported by the system.
-/// Read it with [`Window::info`], from a view with
+/// Read it from a view with
 /// [`Cx::window_info`](crate::core::Cx::window_info) or from anywhere with
 /// [`AppHandle::window_info`](crate::core::AppHandle::window_info).
 ///
 /// Sizes and positions are in logical pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct WindowInfo {
     /// The outer (frame) top-left corner on the desktop, or `None` where the
     /// system doesn't tell (Wayland, which hides window positions from
@@ -196,8 +199,9 @@ impl Default for WindowInfo {
 }
 
 /// Desired initial properties for a window. Consumed by the backend when
-/// creating the window; later changes go through [`Window`] methods.
+/// creating the window; later changes go through `Window` methods.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct WindowAttributes {
     pub title: String,
     /// Initial inner (content) size in logical pixels.
@@ -260,22 +264,38 @@ impl Default for WindowAttributes {
 }
 
 impl WindowAttributes {
+    /// The defaults: an 800×600 resizable, decorated window titled "Stipple".
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Set the title.
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
+    /// Set the initial inner (content) size, in logical pixels.
     pub fn with_logical_size(mut self, size: Size) -> Self {
         self.logical_size = size;
         self
     }
 
+    /// Whether the user can resize the window (`true` by default).
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    /// Ask for a dark (`true`) or light title bar, to match the content.
+    pub fn with_dark(mut self, dark: bool) -> Self {
+        self.dark = Some(dark);
+        self
+    }
+
+    /// Set the color behind the content, for areas the app doesn't draw.
+    pub fn with_background(mut self, color: Color) -> Self {
+        self.background = Some(color);
         self
     }
 
@@ -338,7 +358,7 @@ impl WindowAttributes {
 /// A live native window.
 ///
 /// Backends implement this; the rest of Stipple drives windows only through this
-/// trait. A window can hand out a [`Surface`] (via [`Window::create_surface`])
+/// trait. A window can hand out a [`Surface`] (via `Window::create_surface`)
 /// that the renderer presents into.
 pub trait Window {
     fn id(&self) -> WindowId;
@@ -350,6 +370,8 @@ pub trait Window {
     fn scale_factor(&self) -> ScaleFactor;
 
     /// Ask the system to deliver a [`RedrawRequested`](crate::platform::Event::RedrawRequested).
+    // Every backend implements it; the app paces redraws through `frame`.
+    #[allow(dead_code)]
     fn request_redraw(&self);
 
     /// Update the window title.
@@ -380,7 +402,7 @@ pub trait Window {
     /// [`ClipboardRead::Pending`] and delivers the content as
     /// [`Event::Clipboard`](crate::platform::Event::Clipboard), to this window,
     /// within a couple of seconds (with `None` when it timed out). Default: the
-    /// clipboard's text through [`Window::clipboard`], and no primary
+    /// clipboard's text through `Window::clipboard`, and no primary
     /// selection.
     fn read_clipboard(
         &self,
@@ -396,7 +418,7 @@ pub trait Window {
 
     /// Put `content` on the clipboard or the primary selection, every
     /// representation it has. Default: the clipboard's text through
-    /// [`Window::set_clipboard`], and no primary selection.
+    /// `Window::set_clipboard`, and no primary selection.
     fn write_clipboard(
         &self,
         kind: crate::platform::clipboard::ClipboardKind,
@@ -425,7 +447,7 @@ pub trait Window {
     /// connection, returning its [`WindowId`]. Default: `None` — the backend is
     /// single-window. Multi-window backends (X11, Wayland, Windows, macOS)
     /// override this; the new window's events arrive through the same handler,
-    /// distinguished by [`Window::id`]. It takes focus if
+    /// distinguished by `Window::id`. It takes focus if
     /// [`WindowAttributes::focus`] says so.
     ///
     /// A multi-window backend delivers [`Event::Wake`](crate::platform::Event::Wake)
@@ -436,7 +458,7 @@ pub trait Window {
 
     /// Request that *this* window be closed and removed from the event loop.
     /// Default: a no-op (single-window backends instead end the loop when the
-    /// handler returns [`ControlFlow::Exit`](crate::platform::ControlFlow)). Multi-window
+    /// handler returns `ControlFlow::Exit`). Multi-window
     /// backends destroy just this window and keep running while others remain.
     fn close_window(&self) {}
 

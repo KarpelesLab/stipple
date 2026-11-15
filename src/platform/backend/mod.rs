@@ -1,19 +1,19 @@
 //! Backend selection.
 //!
-//! Each supported OS gets a module here that implements [`Window`](crate::platform::Window)
-//! and an event loop against that platform's lowest idiomatic interface, written
+//! Each supported OS gets a module here that implements the backend window
+//! contract and an event loop against that platform's lowest idiomatic interface, written
 //! by hand with no windowing crates:
 //!
-//! - **Linux**: [`wayland`] (`wl_shm`), then [`x11`] (MIT-SHM), over their wire
+//! - **Linux**: Wayland (`wl_shm`), then X11 (MIT-SHM), over their wire
 //!   protocols.
 //! - **Windows**: Win32 (`HWND`, GDI blit).
 //! - **macOS**: AppKit (`NSWindow`/`NSView`).
 //! - **iOS**: UIKit (`UIApplicationMain`, `UIView`).
 //! - **Android**: NDK `NativeActivity` / `ANativeWindow`.
 //!
-//! [`headless`] is always available, so the rest of the stack builds, runs and is
-//! golden-image testable on any target. [`run`] picks the native backend for the
-//! target; on Linux it tries Wayland, then X11, then headless. On the web
+//! A headless backend is always available, so the rest of the stack builds, runs
+//! and is golden-image testable on any target. [`App::run`](crate::App::run)
+//! picks the native backend for the target; on Linux it tries Wayland, then X11, then headless. On the web
 //! (`web`) a `wasm32` module renders frames that a page script blits to a
 //! `<canvas>`, and the page drives the loop (see `docs/platforms/web.md`).
 
@@ -21,21 +21,27 @@ use crate::platform::ControlFlow;
 use crate::platform::event::Event;
 use crate::platform::window::{Window, WindowAttributes};
 
-pub mod headless;
+pub(crate) mod headless;
 
 #[cfg(target_os = "linux")]
-pub mod wayland;
+pub(crate) mod wayland;
 
+// Public only for the repository's `dri3probe` and `dmabuftest` harness
+// examples, which drive the DRI3/Present probes directly.
 #[cfg(target_os = "linux")]
+#[doc(hidden)]
 pub mod x11;
 
 #[cfg(target_os = "windows")]
-pub mod windows;
+pub(crate) mod windows;
 
 #[cfg(target_os = "macos")]
-pub mod macos;
+pub(crate) mod macos;
 
+// Public only for the repository's `touchdemo` harness example, which drives
+// the UIKit text-input protocol through `ios::simulate`.
 #[cfg(target_os = "ios")]
+#[doc(hidden)]
 pub mod ios;
 // The iOS backend's UIKit-free parts, unit-tested on every host.
 #[cfg(all(test, not(target_os = "ios")))]
@@ -51,11 +57,15 @@ pub(crate) mod ios_edge_swipe;
 #[path = "ios/saved_state.rs"]
 mod ios_saved_state;
 
+/// The Android entry point: an app's `ANativeActivity_onCreate` hands the
+/// activity to [`android::start`].
 #[cfg(target_os = "android")]
 pub mod android;
 
+// Public only because the `web_app!` macro expands to calls into it.
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code)]
+#[doc(hidden)]
 pub mod web;
 
 /// Deliver [`Event::ThemeChanged`] ahead of the wake that follows an appearance
@@ -110,7 +120,7 @@ where
     )),
     allow(unused_mut)
 )]
-pub fn run<H>(attrs: WindowAttributes, handler: H)
+pub(crate) fn run<H>(attrs: WindowAttributes, handler: H)
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow + 'static,
 {

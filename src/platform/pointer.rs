@@ -38,6 +38,7 @@ pub fn set_pointer_modifiers(modifiers: Modifiers) {
 /// How close in time and space two presses must be to make a double (or
 /// triple) click.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct DoubleClick {
     /// The longest gap between presses.
     pub time: Duration,

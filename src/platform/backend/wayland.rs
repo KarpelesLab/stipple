@@ -263,7 +263,7 @@ fn icon_argb(icon: &Pixmap) -> (u32, Vec<u8>) {
 }
 
 /// Whether a Wayland compositor is reachable (cheap check of `$WAYLAND_DISPLAY`).
-pub fn available() -> bool {
+pub(crate) fn available() -> bool {
     std::env::var_os("WAYLAND_DISPLAY").is_some()
 }
 
@@ -1646,7 +1646,7 @@ fn frame_callback_done(object: u32, opcode: u16) -> bool {
 
 /// Connect to the compositor, create a window, and drive `handler` over its
 /// event stream until it returns [`ControlFlow::Exit`] or the toplevel closes.
-pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
+pub(crate) fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {

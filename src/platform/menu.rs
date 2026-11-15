@@ -20,7 +20,7 @@ use crate::platform::event::{KeyCode, Modifiers};
 /// ```
 /// use stipple::platform::{KeyCode, Modifiers, Shortcut};
 /// let save = Shortcut::cmd('s');
-/// let ctrl = Modifiers { ctrl: true, ..Modifiers::default() };
+/// let ctrl = Modifiers::CTRL;
 /// assert!(save.matches_for(KeyCode::Char('s'), ctrl, false));
 /// assert_eq!(save.label_for(false), "Ctrl+S");
 /// assert_eq!(save.label_for(true), "\u{2318}S");
@@ -221,7 +221,7 @@ fn key_name(key: KeyCode, mac: bool) -> String {
 /// literal `&`). The mnemonic is lower-case.
 ///
 /// ```
-/// use stipple::platform::menu::mnemonic;
+/// use stipple::platform::mnemonic;
 /// assert_eq!(mnemonic("&File"), ("File".to_string(), Some('f')));
 /// assert_eq!(mnemonic("Save &As…"), ("Save As…".to_string(), Some('a')));
 /// assert_eq!(mnemonic("Fish && Chips"), ("Fish & Chips".to_string(), None));
@@ -236,7 +236,7 @@ pub fn mnemonic(label: &str) -> (String, Option<char>) {
 /// character in the text to show, for underlining it.
 ///
 /// ```
-/// use stipple::platform::menu::mnemonic_at;
+/// use stipple::platform::mnemonic_at;
 /// assert_eq!(mnemonic_at("Save &As…"), ("Save As…".to_string(), Some(5)));
 /// assert_eq!(mnemonic_at("A && B"), ("A & B".to_string(), None));
 /// ```
@@ -273,14 +273,18 @@ pub fn mnemonic_range(text: &str, at: Option<usize>) -> Option<(usize, usize)> {
 
 /// One entry of a [`NativeMenu`].
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum NativeMenuItem {
     /// A command. `label` may carry a `&` mnemonic (see [`mnemonic`]).
     Action {
         /// Reported back as [`Event::MenuCommand`](crate::platform::Event::MenuCommand).
         /// Ids start at 1 and stay below `0x8000`.
         id: u32,
+        /// The text, with an optional `&` mnemonic.
         label: String,
+        /// The keyboard shortcut shown beside it.
         shortcut: Option<Shortcut>,
+        /// Whether it can be picked.
         enabled: bool,
         /// `Some` for a checkable item, with its state.
         checked: Option<bool>,
@@ -293,24 +297,31 @@ pub enum NativeMenuItem {
 
 /// A menu: a title and its items.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct NativeMenu {
+    /// The title, which may carry a `&` mnemonic.
     pub label: String,
+    /// The entries, top to bottom.
     pub items: Vec<NativeMenuItem>,
 }
 
-/// A whole menu bar, for [`Window::set_menu_bar`](crate::platform::Window::set_menu_bar).
+/// A whole menu bar, as the app hands it to the platform (see
+/// [`MenuBar::to_native`](crate::core::MenuBar::to_native)).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct NativeMenuBar {
     /// The application's name, for the standard items macOS adds (About,
     /// Hide, Quit).
     pub app_name: String,
+    /// The menus, left to right.
     pub menus: Vec<NativeMenu>,
 }
 
-/// What came of showing a native context menu with
-/// [`Window::popup_menu`](crate::platform::Window::popup_menu).
+/// What came of showing a native context menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuPopup {
+// Only the Windows and macOS backends have native popups to pick from.
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
+pub(crate) enum MenuPopup {
     /// The platform has no native popup menus: draw one instead.
     Unsupported,
     /// The menu closed without a pick.
@@ -325,9 +336,10 @@ pub enum MenuPopup {
 pub const TRAY_ID_BASE: u32 = 0x8000;
 
 /// A tray icon (a status item on macOS, a notification-area icon on Windows, a
-/// `StatusNotifierItem` on Linux), for
-/// [`Window::set_tray`](crate::platform::Window::set_tray).
+/// `StatusNotifierItem` on Linux), as the app hands it to the platform (see
+/// [`App::native_tray`](crate::App::native_tray)).
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct NativeTray {
     /// Shown on hover (and as the item's title where a host has no icon).
     pub tooltip: String,

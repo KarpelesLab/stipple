@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 /// follows a gesture that completes; a [`Cancelled`](Self::Cancelled) one
 /// goes nowhere.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum BackGesture {
     /// The gesture began, from `edge` of the screen.
     Started { edge: BackEdge },
@@ -34,6 +35,7 @@ pub enum BackGesture {
 
 /// The screen edge a back gesture starts from (`BackEvent.getSwipeEdge`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum BackEdge {
     #[default]
     Left,

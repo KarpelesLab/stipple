@@ -19,6 +19,7 @@
 //! platform but macOS, where it's the alert's accessory view.
 
 /// What a message box is about, which sets its icon.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum MessageKind {
     /// Something to know.
@@ -33,6 +34,7 @@ pub enum MessageKind {
 }
 
 /// A text field in a message box (a name to enter, a passphrase).
+#[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MessageInput {
     /// The text the field starts with.
@@ -53,6 +55,7 @@ pub struct MessageInput {
 ///     .cancel(1);
 /// assert_eq!(ask.button_labels(), ["Close", "Cancel"]);
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MessageBox {
     /// The window title (where the platform shows one); the app's name is a
@@ -166,6 +169,7 @@ impl MessageBox {
 }
 
 /// How a message box was answered.
+#[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MessageResponse {
     /// The button pressed (Escape counts as the cancel button); `None` if the

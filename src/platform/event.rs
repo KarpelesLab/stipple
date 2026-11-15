@@ -30,6 +30,7 @@ pub enum ButtonState {
 
 /// A pointer (mouse / pen / single touch) button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PointerButton {
     /// The primary button (a finger on a touch screen).
     Left,
@@ -47,12 +48,81 @@ pub enum PointerButton {
 
 /// Active keyboard modifier keys.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Modifiers {
     pub shift: bool,
     pub ctrl: bool,
     pub alt: bool,
     /// The "logo"/Command/Super/Windows key.
     pub meta: bool,
+}
+
+impl Modifiers {
+    /// No modifier held.
+    pub const NONE: Modifiers = Modifiers {
+        shift: false,
+        ctrl: false,
+        alt: false,
+        meta: false,
+    };
+    /// Shift alone.
+    pub const SHIFT: Modifiers = Modifiers {
+        shift: true,
+        ..Modifiers::NONE
+    };
+    /// Control alone.
+    pub const CTRL: Modifiers = Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    };
+    /// Alt (Option on macOS) alone.
+    pub const ALT: Modifiers = Modifiers {
+        alt: true,
+        ..Modifiers::NONE
+    };
+    /// The logo key (Command, Windows, Super) alone.
+    pub const META: Modifiers = Modifiers {
+        meta: true,
+        ..Modifiers::NONE
+    };
+
+    /// The platform's command modifier: [`META`](Modifiers::META) (Command)
+    /// on macOS, [`CTRL`](Modifiers::CTRL) elsewhere, as
+    /// [`Shortcut::cmd`](crate::platform::Shortcut::cmd) expects.
+    pub const COMMAND: Modifiers = if cfg!(target_os = "macos") {
+        Modifiers::META
+    } else {
+        Modifiers::CTRL
+    };
+
+    /// The modifiers held in either (also `a | b`):
+    /// `Modifiers::CTRL.union(Modifiers::SHIFT)`.
+    pub const fn union(self, other: Modifiers) -> Modifiers {
+        Modifiers {
+            shift: self.shift || other.shift,
+            ctrl: self.ctrl || other.ctrl,
+            alt: self.alt || other.alt,
+            meta: self.meta || other.meta,
+        }
+    }
+
+    /// Whether no modifier is held.
+    pub const fn is_empty(self) -> bool {
+        !(self.shift || self.ctrl || self.alt || self.meta)
+    }
+}
+
+impl std::ops::BitOr for Modifiers {
+    type Output = Modifiers;
+    fn bitor(self, other: Modifiers) -> Modifiers {
+        self.union(other)
+    }
+}
+
+impl std::ops::BitOrAssign for Modifiers {
+    fn bitor_assign(&mut self, other: Modifiers) {
+        *self = self.union(other);
+    }
 }
 
 /// A platform-neutral key identity: the key's meaning under the current
@@ -122,6 +192,7 @@ pub enum KeyCode {
 /// right. [`in_pixels`](ScrollDelta::in_pixels) converts lines at
 /// [`SCROLL_LINE_PX`] per line, as Stipple's scroll containers do.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ScrollDelta {
     pub dx: f64,
     pub dy: f64,
@@ -174,6 +245,7 @@ impl ScrollDelta {
 
 /// What a [`ScrollDelta`] counts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ScrollUnit {
     /// Logical pixels: a trackpad or another precise device. Accumulate them
     /// to scroll by lines.
@@ -188,6 +260,7 @@ pub enum ScrollUnit {
 /// on Wayland) start, move and end, then may coast with momentum. Wheels, and
 /// platforms that don't say, report [`None`](ScrollPhase::None).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ScrollPhase {
     /// Not part of a gesture the platform tracks (a wheel notch).
     #[default]
@@ -204,6 +277,7 @@ pub enum ScrollPhase {
 
 /// Where a touch is in its life.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TouchPhase {
     /// The finger went down.
     Started,
@@ -225,12 +299,26 @@ pub enum TouchPhase {
 /// matching [`Event::PointerMoved`] / [`Event::PointerButton`], so widgets
 /// that only know the pointer keep working on touch screens.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct Touch {
     /// Identifies the finger while it's down; ids may be reused afterwards.
     pub id: u64,
     pub phase: TouchPhase,
     /// Logical pixels, window-relative.
     pub position: Point,
+}
+
+impl Touch {
+    /// Finger `id` at `position` (logical pixels, window-relative), in
+    /// `phase`: what a backend reports, or a test feeds
+    /// [`App::touch`](crate::App::touch).
+    pub fn new(id: u64, phase: TouchPhase, position: Point) -> Touch {
+        Touch {
+            id,
+            phase,
+            position,
+        }
+    }
 }
 
 /// An event delivered to the application for a specific window.
@@ -245,21 +333,17 @@ pub enum Event {
     /// The DPI scale factor changed (e.g. the window moved to another monitor).
     ScaleFactorChanged(ScaleFactor),
     /// The user requested the window be closed (title-bar button, ⌘W, …).
-    /// The window stays open until the handler acts on it (returns
-    /// [`ControlFlow::Exit`](crate::platform::ControlFlow) or calls
-    /// [`Window::close_window`](crate::platform::Window::close_window)), so
-    /// the app can ask first.
+    /// The window stays open until the app acts on it, so it can ask first.
     CloseRequested,
     /// The user asked the whole application to quit (⌘Q or the Dock's Quit on
-    /// macOS, logging out on Windows and macOS). Returning
-    /// [`ControlFlow::Exit`](crate::platform::ControlFlow) quits; anything
-    /// else cancels.
+    /// macOS, logging out on Windows and macOS). The app quits unless it
+    /// cancels.
     QuitRequested,
-    /// The loop was woken by [`wake::wake`](crate::platform::wake::wake) or by
-    /// the deadline set with [`wake::set_deadline`](crate::platform::wake::set_deadline).
+    /// The loop was woken: from another thread (an
+    /// [`AppHandle`](crate::core::AppHandle)), by a timer, or for a frame.
     Wake,
     /// The window moved, or was maximized, minimized, restored or made
-    /// fullscreen: anything [`Window::info`](crate::platform::Window::info)
+    /// fullscreen: anything [`WindowInfo`](crate::platform::WindowInfo)
     /// reports other than a resize, which comes as [`Resized`](Event::Resized).
     WindowChanged,
     /// Keyboard focus entered (`true`) or left (`false`) the window.
@@ -284,7 +368,7 @@ pub enum Event {
     /// A scroll/wheel gesture.
     Scroll { delta: ScrollDelta },
     /// Relative pointer motion while the pointer is locked (see
-    /// [`Window::set_pointer_lock`](crate::platform::Window::set_pointer_lock)):
+    /// [`WindowRequest::PointerLock`](crate::platform::WindowRequest::PointerLock)):
     /// how far the mouse moved, positive right and down, in roughly logical
     /// pixels (the device's own counts where the platform gives them
     /// unaccelerated). Sent instead of [`PointerMoved`](Event::PointerMoved),
@@ -317,18 +401,17 @@ pub enum Event {
     /// text to show at the caret, text to commit, or text to delete around the
     /// caret. See `docs/ime.md`.
     Ime(Ime),
-    /// The user picked the item with this id from the native menu bar (see
-    /// [`Window::set_menu_bar`](crate::platform::Window::set_menu_bar)).
+    /// The user picked the item with this id from the native menu bar or the
+    /// tray icon's menu.
     MenuCommand(u32),
-    /// The user clicked the tray icon (see
-    /// [`Window::set_tray`](crate::platform::Window::set_tray)); its menu
+    /// The user clicked the tray icon; its menu
     /// items arrive as [`MenuCommand`](Event::MenuCommand)s instead.
     TrayActivated,
 
     /// A drag from another application entered the window at `position`
-    /// (logical pixels), carrying the kinds of data in `offer`. Answer with
-    /// [`Window::set_drop_accepted`](crate::platform::Window::set_drop_accepted)
-    /// while handling it, and again on each [`DragOver`](Event::DragOver).
+    /// (logical pixels), carrying the kinds of data in `offer`. The app answers
+    /// whether it would accept a drop there, and again on each
+    /// [`DragOver`](Event::DragOver).
     /// See `docs/drag-and-drop.md`.
     DragEnter { position: Point, offer: DragOffer },
     /// The drag moved to `position` within the window.
@@ -338,9 +421,8 @@ pub enum Event {
     /// The user dropped `data` at `position`. Ends the drag (no
     /// [`DragLeave`](Event::DragLeave) follows).
     Drop { position: Point, data: DropData },
-    /// The answer to a [`Window::read_clipboard`](crate::platform::Window::read_clipboard)
-    /// that returned [`ClipboardRead::Pending`](crate::platform::clipboard::ClipboardRead::Pending):
-    /// the content (`None` when the owner refused, had none of the formats
+    /// The answer to a clipboard read the owner answers later (X11): the
+    /// content (`None` when the owner refused, had none of the formats
     /// asked for, or didn't answer in time).
     Clipboard {
         kind: crate::platform::clipboard::ClipboardKind,
@@ -377,6 +459,7 @@ pub enum Event {
 /// (before the data itself, which some platforms only hand over on drop). Also
 /// the filter of what a drop target accepts.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct DragOffer {
     /// One or more files (or folders), as paths.
     pub files: bool,
@@ -437,6 +520,7 @@ impl DragOffer {
 
 /// Data dropped onto a window.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum DropData {
     /// Files or folders, as local paths.
     Files(Vec<std::path::PathBuf>),
@@ -460,8 +544,7 @@ impl DropData {
 
     /// Whether this can be dragged out of the app to other applications:
     /// files and text can, an [`Internal`](DropData::Internal) payload can't
-    /// (it means nothing outside the app). See
-    /// [`Window::start_drag`](crate::platform::Window::start_drag).
+    /// (it means nothing outside the app).
     pub fn can_leave_app(&self) -> bool {
         !matches!(self, DropData::Internal(_))
     }
@@ -655,6 +738,7 @@ mod dnd_tests {
 /// the focused text field shows underlined at the caret without making it part
 /// of its text; [`Commit`](Ime::Commit) replaces the preedit with final text.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Ime {
     /// The composition in progress. An empty `text` ends it. `cursor` is the
     /// byte range within `text` the IME highlights (equal ends for a plain

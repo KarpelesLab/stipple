@@ -53,37 +53,60 @@ mod os;
 /// A control the OS can draw. Fractions are in thousandths, so values stay `Eq`
 /// and `Hash` for the bitmap cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum NativeControl {
+    /// A push button; `primary` for the default (accented) one.
     Button { primary: bool },
+    /// A check box.
     Checkbox { checked: bool },
+    /// A radio button.
     Radio { selected: bool },
+    /// An on/off switch.
     Switch { on: bool },
+    /// A slider's track and thumb, `value` in thousandths.
     Slider { value: u16 },
+    /// A progress bar, `value` in thousandths.
     Progress { value: u16 },
+    /// A text field's frame.
     TextField,
 }
 
-/// The interaction state a control is drawn in.
+/// The interaction state a control is drawn in. The app fills it in as the
+/// pointer and focus move; [`Theme::native_deco`](crate::style::Theme::native_deco)
+/// starts it at rest.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct NativeState {
+    /// The pointer is over the control.
     pub hovered: bool,
+    /// The control is held down.
     pub pressed: bool,
+    /// The control has keyboard focus.
     pub focused: bool,
 }
 
-/// How an element's chrome is drawn: which control, in which appearance and state.
+/// How an element's chrome is drawn: which control, in which appearance and
+/// state. Get one from [`Theme::native_deco`](crate::style::Theme::native_deco)
+/// and attach it with [`Element::native`](crate::core::Element::native).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct NativeDeco {
+    /// The control drawn.
     pub control: NativeControl,
+    /// Drawn in the dark appearance.
     pub dark: bool,
+    /// The interaction state drawn.
     pub state: NativeState,
 }
 
 /// The system's appearance settings. Anything the OS doesn't report keeps its
 /// default: light mode, no accent.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct SystemLook {
+    /// The system is in dark mode.
     pub dark: bool,
+    /// The user's accent color, where the OS has one.
     pub accent: Option<Color>,
 }
 
@@ -97,7 +120,7 @@ pub fn system_look() -> SystemLook {
 /// its animator duration scale. Read through
 /// [`anim::motion_scale`](crate::anim::motion_scale), which the `App` keeps
 /// up to date.
-pub fn motion_scale() -> f64 {
+pub(crate) fn motion_scale() -> f64 {
     os::motion_scale()
 }
 
@@ -105,7 +128,7 @@ pub fn motion_scale() -> f64 {
 /// window: on Linux, a thread listens for the desktop portal's `SettingChanged`
 /// signal (the color scheme, the accent, and the animation setting). Elsewhere the backends hear about changes themselves, so this does
 /// nothing. Safe to call more than once.
-pub fn watch() {
+pub(crate) fn watch() {
     #[cfg(target_os = "linux")]
     os::watch();
 }
@@ -150,7 +173,7 @@ pub(crate) fn take_changed() -> bool {
 }
 
 /// Forget every bitmap the OS drew, so controls are redrawn in the new look.
-pub fn clear_cache() {
+pub(crate) fn clear_cache() {
     if let Some(cache) = CACHE.get()
         && let Ok(mut cache) = cache.lock()
     {
@@ -189,7 +212,7 @@ pub fn primary_label_is_on_accent() -> bool {
 /// Have the OS draw `deco` at `size` physical pixels (`scale` physical pixels per
 /// logical pixel). Returns straight-alpha RGBA, or `None` when it can't, in which
 /// case the caller falls back to the element's self-drawn decoration.
-pub fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Arc<Pixmap>> {
+pub(crate) fn render(deco: NativeDeco, size: PhysicalSize, scale: f64) -> Option<Arc<Pixmap>> {
     if size.width == 0 || size.height == 0 {
         return None;
     }

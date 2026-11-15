@@ -1951,7 +1951,7 @@ where
 /// until the last window closes or the handler returns `Exit`. More windows
 /// open with [`Window::open_window`]; each one's events reach `handler` with
 /// that window, and [`Event::Wake`] goes to every window in turn.
-pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
+pub(crate) fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {

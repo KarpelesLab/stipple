@@ -20,17 +20,12 @@ pub struct FrameProbe {
     last: Arc<Mutex<Option<Pixmap>>>,
 }
 
+// The probe and surface are test seams: the crate's tests read frames back.
+#[cfg_attr(not(test), allow(dead_code))]
 impl FrameProbe {
     /// The most recently presented frame, if any.
     pub fn last_frame(&self) -> Option<Pixmap> {
         self.last.lock().unwrap().clone()
-    }
-
-    /// Number of times a frame has been presented.
-    pub fn present_count(&self) -> usize {
-        // Stored alongside the frame would be tidier; kept simple for the
-        // scaffold — presence is the signal tests need today.
-        usize::from(self.last.lock().unwrap().is_some())
     }
 }
 
@@ -42,7 +37,9 @@ pub struct HeadlessSurface {
     sink: Arc<Mutex<Option<Pixmap>>>,
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl HeadlessSurface {
+    /// A surface of `size`, and the probe that reads back what it presents.
     pub fn new(size: PhysicalSize) -> (Self, FrameProbe) {
         let sink = Arc::new(Mutex::new(None));
         (
@@ -79,6 +76,7 @@ pub struct HeadlessWindow {
 }
 
 impl HeadlessWindow {
+    #[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))] // no fallback there
     fn new(attrs: &WindowAttributes) -> Self {
         let scale = ScaleFactor::IDENTITY;
         let size = scale.to_physical(attrs.logical_size);
@@ -91,6 +89,7 @@ impl HeadlessWindow {
     }
 
     /// Inspect frames presented into surfaces created from this window.
+    #[allow(dead_code)]
     pub fn frame_probe(&self) -> FrameProbe {
         self.probe.clone()
     }
@@ -122,6 +121,7 @@ impl Window for HeadlessWindow {
 /// window, stopping early if the handler returns [`ControlFlow::Exit`].
 ///
 /// Returns the window so the caller can read its [`FrameProbe`] afterwards.
+#[cfg_attr(any(target_os = "ios", target_arch = "wasm32"), allow(dead_code))] // no fallback there
 pub fn run<H>(
     attrs: WindowAttributes,
     events: impl IntoIterator<Item = Event>,

@@ -109,6 +109,8 @@ pub struct A11yNode {
     pub children: Vec<A11yNode>,
 }
 
+// Not every bridge (nor every target) uses every helper; the tests do.
+#[allow(dead_code)]
 impl A11yNode {
     /// A node with no state and no children.
     pub fn new(role: A11yRole, name: impl Into<String>, bounds: (f64, f64, f64, f64)) -> Self {

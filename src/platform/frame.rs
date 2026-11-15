@@ -1,7 +1,7 @@
 //! The frame clock: delivering [`Event::Wake`](crate::platform::Event::Wake) at
 //! the display's refresh, but only while something asks for frames.
 //!
-//! A view that animates calls [`request`] (through `Cx::request_frame`) each time
+//! A view that animates calls `request` (through `Cx::request_frame`) each time
 //! it builds. The loop then wakes once, at the next refresh, and the app builds
 //! again; when nothing asks, no frames come and an idle app uses no CPU.
 //!
@@ -10,8 +10,8 @@
 //! - A *display source* ticks at the refresh: `wl_surface.frame` on Wayland, a
 //!   `DwmFlush` thread on Windows, `CVDisplayLink` on macOS, `CADisplayLink` on
 //!   iOS, `AChoreographer` on Android, `requestAnimationFrame` on the web. It
-//!   calls [`tick`] from whatever thread it runs on.
-//! - Otherwise a timer at the refresh [`interval`](set_interval) stands in (X11).
+//!   calls `tick` from whatever thread it runs on.
+//! - Otherwise a timer at the refresh [`interval`] stands in (X11).
 //!
 //! A source that has been asked for a frame is trusted to deliver it, but if it
 //! doesn't within two intervals (a hidden window, a compositor that skipped
@@ -24,7 +24,7 @@
 //! diagnostics (`asyncdemo --selftest` prints them).
 //!
 //! There is one event loop per process, so this state is global, like
-//! [`wake`](super::wake).
+//! the loop's wake-up state.
 
 use crate::platform::time::Instant;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +41,7 @@ pub const MISS_LIMIT: u32 = 3;
 /// Where frames came from and what they cost, since the process started (see
 /// [`stats`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct FrameStats {
     /// Frames the display source delivered.
     pub from_display: u64,
@@ -208,7 +209,7 @@ fn source() -> Option<Source> {
 /// Ask for a frame at the display's next refresh. Call it on the UI thread,
 /// once per frame, for as long as something animates; frames stop when calls
 /// stop. Several calls before the frame arrives ask for one frame.
-pub fn request() {
+pub(crate) fn request() {
     let Some(now) = now() else {
         return; // no clock on this target, so nothing animates
     };
@@ -254,7 +255,7 @@ pub(crate) fn set_suspended(suspended: bool) {
 pub(crate) static SUSPEND_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Whether frames are suspended (the app is in the background).
-pub fn suspended() -> bool {
+pub(crate) fn suspended() -> bool {
     SUSPENDED.load(Ordering::Acquire)
 }
 
@@ -284,7 +285,8 @@ pub(crate) fn note_display(took: Duration) {
 }
 
 /// Whether a frame has been asked for and not yet delivered.
-pub fn wanted() -> bool {
+#[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
+pub(crate) fn wanted() -> bool {
     clock(|c| c.wanted.is_some())
 }
 
@@ -362,6 +364,7 @@ pub fn interval() -> Duration {
 }
 
 /// When the loop must wake to deliver the outstanding frame, if one is wanted.
+#[cfg_attr(target_os = "ios", allow(dead_code))] // UIKit runs its own loop
 pub(crate) fn deadline() -> Option<Instant> {
     clock(|c| c.deadline())
 }
@@ -389,7 +392,7 @@ pub(crate) fn now() -> Option<Instant> {
 
 /// Time since the frame clock started (the first call), the timeline animations
 /// sample. `None` on targets without a clock.
-pub fn elapsed() -> Option<Duration> {
+pub(crate) fn elapsed() -> Option<Duration> {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     let now = now()?;
     Some(now.saturating_duration_since(*EPOCH.get_or_init(|| now)))

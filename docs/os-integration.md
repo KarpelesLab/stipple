@@ -279,7 +279,7 @@ is removed when the window closes.
 `App::tray` hands the backend a `NativeTray` (tooltip, icon, and menu items
 whose ids start at `TRAY_ID_BASE`, above the menu bar's) through
 `Window::set_tray`. Picks arrive as `Event::MenuCommand(id)`, like the menu
-bar's, and clicks as `Event::TrayActivated`. `shell::tray_shown()` says whether
+bar's, and clicks as `Event::TrayActivated`. `platform::tray_shown()` says whether
 the last update was shown.
 
 ## What CI checks

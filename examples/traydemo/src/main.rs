@@ -16,7 +16,7 @@
 //! on Linux does.
 
 use std::time::Duration;
-use stipple::platform::shell;
+use stipple::platform;
 use stipple::prelude::*;
 
 const SELFTEST_URL: &str = "https://example.com/stipple-selftest";
@@ -40,7 +40,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         let path = std::env::temp_dir().join("stipple-traydemo.txt");
         let wrote = std::fs::write(&path, "Opened by Stipple's traydemo.\n");
         s.status = match wrote {
-            Ok(()) => result("open_path", shell::open_path(&path)),
+            Ok(()) => result("open_path", platform::open_path(&path)),
             Err(e) => format!("couldn't write {}: {e}", path.display()),
         };
     });
@@ -53,7 +53,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             &theme,
             format!(
                 "Tray: {} · pings {} · activations {} · muted {}",
-                if shell::tray_shown() {
+                if platform::tray_shown() {
                     "shown"
                 } else {
                     "not shown"
@@ -176,13 +176,13 @@ fn start_selftest(handle: &AppHandle<State>) {
     let expect_tray = std::env::var_os("STIPPLE_SELFTEST_EXPECT_TRAY").is_some();
     let quit = handle.clone();
     handle.after(Duration::from_millis(800), move |s: &mut State| {
-        println!("traydemo: tray shown={}", shell::tray_shown());
+        println!("traydemo: tray shown={}", platform::tray_shown());
         let url = std::env::var("STIPPLE_SELFTEST_URL").unwrap_or_else(|_| SELFTEST_URL.into());
         println!("traydemo: open_url({url}) -> {:?}", open_url(&url));
         if let Ok(file) = std::env::var("STIPPLE_SELFTEST_FILE") {
             println!(
                 "traydemo: open_path({file}) -> {:?}",
-                shell::open_path(&file)
+                platform::open_path(&file)
             );
         }
         println!("traydemo: notify -> {:?}", send_notification(s));

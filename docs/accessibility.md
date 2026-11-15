@@ -4,7 +4,7 @@ Stipple draws every control itself, so the operating system can't see them on
 its own. Each frame, the `App` builds an accessibility tree from the layout
 (`stipple::core::AccessNode`: roles, names, bounds, focus, selected / checked /
 expanded state, a text field's caret and selection, and which element labels
-a field), maps it to the platform-neutral `stipple::platform::A11yNode`
+a field), maps it to the platform layer's neutral (crate-internal) `A11yNode`
 tree, and gives it to the window, whose backend exposes it to the platform's
 accessibility API. `App::accessibility_tree()` returns the tree for tests.
 

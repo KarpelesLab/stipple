@@ -2719,7 +2719,7 @@ impl<S: 'static> App<S> {
         }
     }
 
-    /// Run the app against the platform backend ([`backend::run`]): native X11
+    /// Run the app against the platform backend: native X11
     /// when `$DISPLAY` is set, else a one-shot headless present. Frames are
     /// rendered into each window's [`Surface`]; pointer/keyboard events route
     /// through the same dispatch path used by the headless tests.

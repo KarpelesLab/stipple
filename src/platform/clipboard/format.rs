@@ -11,8 +11,9 @@
 //! - **DIB** (Windows' `CF_DIB` / `CF_DIBV5`): a `BITMAPINFOHEADER` or
 //!   `BITMAPV5HEADER` then the pixels, bottom-up BGRA rows.
 
-// The MIME helpers serve the Linux backends.
-#![cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+// The MIME helpers serve the Linux backends, the CF_HTML and DIB codecs
+// Windows; each target uses its own subset.
+#![allow(dead_code)]
 
 use super::{ClipboardContent, ClipboardFormats};
 use crate::geometry::PhysicalSize;
@@ -42,7 +43,7 @@ pub(crate) const IMAGE_MIMES: [&str; 6] = [
 ];
 
 /// Encode `pixmap` as PNG.
-pub fn encode_png(pixmap: &Pixmap) -> Option<Vec<u8>> {
+pub(crate) fn encode_png(pixmap: &Pixmap) -> Option<Vec<u8>> {
     let size = pixmap.size();
     oxideav_png::encode_rgba8(
         size.width,
@@ -202,7 +203,7 @@ fn cf_html_header(start_html: usize, end_html: usize, start: usize, end: usize) 
 
 /// Wrap an HTML `fragment` in Windows' `CF_HTML` format (UTF-8, byte offsets
 /// in a fixed-width header). Not NUL-terminated.
-pub fn cf_html_encode(fragment: &str) -> Vec<u8> {
+pub(crate) fn cf_html_encode(fragment: &str) -> Vec<u8> {
     let header_len = cf_html_header(0, 0, 0, 0).len();
     let start = header_len + CF_HTML_PREFIX.len();
     let end = start + fragment.len();
@@ -217,7 +218,7 @@ pub fn cf_html_encode(fragment: &str) -> Vec<u8> {
 /// The HTML fragment in `CF_HTML` data: between `StartFragment` and
 /// `EndFragment`, else between `StartHTML` and `EndHTML`, else between the
 /// fragment comments.
-pub fn cf_html_decode(data: &[u8]) -> Option<String> {
+pub(crate) fn cf_html_decode(data: &[u8]) -> Option<String> {
     let data = match data.iter().position(|&b| b == 0) {
         Some(nul) => &data[..nul],
         None => data,
@@ -265,7 +266,7 @@ const LCS_SRGB: u32 = 0x7352_4742;
 
 /// Encode `pixmap` as a `CF_DIBV5`: a `BITMAPV5HEADER` with BGRA bit masks,
 /// then bottom-up 32-bit rows (straight alpha).
-pub fn dib_encode(pixmap: &Pixmap) -> Vec<u8> {
+pub(crate) fn dib_encode(pixmap: &Pixmap) -> Vec<u8> {
     let PhysicalSize { width, height } = pixmap.size();
     let mut out = Vec::with_capacity(V5_SIZE + (width * height * 4) as usize);
     let u32le = |out: &mut Vec<u8>, v: u32| out.extend_from_slice(&v.to_le_bytes());
@@ -305,7 +306,7 @@ pub fn dib_encode(pixmap: &Pixmap) -> Vec<u8> {
 /// bitmaps are read directly; anything else goes through the BMP decoder.
 /// 32-bit pixels whose alpha is all zero (as `BI_RGB` bitmaps usually leave
 /// it) are taken as opaque.
-pub fn dib_decode(data: &[u8]) -> Option<Pixmap> {
+pub(crate) fn dib_decode(data: &[u8]) -> Option<Pixmap> {
     let u32at = |o: usize| {
         data.get(o..o + 4)
             .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))

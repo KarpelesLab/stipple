@@ -22,6 +22,7 @@ pub struct PhysicalKey(pub u16);
 
 /// Where a key sits, for keys the keyboard has twice.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KeyLocation {
     /// The only key of its kind, or the main block's one.
     #[default]
@@ -112,6 +113,7 @@ impl ModifierSides {
 /// [`Element::option_as_meta`](crate::core::Element::option_as_meta). Other
 /// platforms don't compose with Alt, so it changes nothing there.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum OptionAsMeta {
     /// Both Option keys compose (the macOS default).
     #[default]
@@ -142,6 +144,7 @@ impl OptionAsMeta {
 /// is where the key is, [`logical`](Self::logical) what it means under the
 /// layout, and [`text`](Self::text) what it types.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct KeyEvent {
     pub state: ButtonState,
     /// The key under the current layout: a named key ([`KeyCode::Enter`],

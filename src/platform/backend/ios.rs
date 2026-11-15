@@ -1273,7 +1273,7 @@ impl Surface for IosSurface {
 
 /// Boot the iOS app: stash the handler, register our classes, and hand control
 /// to `UIApplicationMain` (which does not return).
-pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
+pub(crate) fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {

@@ -1942,7 +1942,7 @@ where
 /// window it belongs to, then forwards it to AppKit. More windows open with
 /// [`Window::open_window`]. The loop exits when the handler returns
 /// [`ControlFlow::Exit`], the last window closes, or the app quits.
-pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
+pub(crate) fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {

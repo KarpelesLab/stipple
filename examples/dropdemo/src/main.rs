@@ -39,6 +39,7 @@ fn zone(cx: &mut Cx<State>, title: &str, accepts: DragOffer, motion: Transition)
             DropData::Files(paths) => format!("files {paths:?}"),
             DropData::Text(text) => format!("text {text:?}"),
             DropData::Internal(id) => format!("internal {id:?}"),
+            other => format!("{other:?}"),
         };
         println!("dropdemo: drop {line} at ({:.0}, {:.0})", at.x, at.y);
         s.drops.push(line);

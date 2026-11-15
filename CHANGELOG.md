@@ -67,6 +67,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(render)* `Font::layout_in(text, size, max_width, ui)` drops its
   `direction` parameter: it lays out with `TextDirection::Auto`, the only
   direction the UI's affects (use `Font::layout` for an explicit one).
+- *(platform)* follows `docs/api-guidelines.md`. The backend plumbing is no
+  longer public: the `Window` trait, `ControlFlow`, `backend::run` and the
+  per-OS backend modules (`headless`, `macos`, `windows`, `wayland`),
+  `A11yNode` / `A11yRole` (the `access` module), `wake`,
+  `MenuPopup`, `clipboard::ClipboardRead`, `clipboard::format`,
+  `frame::{request, suspended, wanted, elapsed}`,
+  `native::{render, clear_cache, watch, motion_scale}`, `WindowRequest::apply`,
+  and on Android `ARect`, `ANativeActivityCallbacks`, `log`,
+  `present_to_native_window` and `ANativeActivity`'s fields. The modules the
+  repository's harness examples drive (`a11y`, `uia`, `scm`, `shm`, `sandbox`,
+  `backend::x11`, `backend::ios`, `backend::web`) are `#[doc(hidden)]`.
+- *(platform)* `platform::menu` and `platform::shell` are no longer public
+  modules: use `platform::{Shortcut, NativeMenu, …, mnemonic, mnemonic_at,
+  mnemonic_range}` and `platform::{notify, open_url, open_path, Notification,
+  tray_shown}`.
+- *(platform)* `#[non_exhaustive]` structs: `Modifiers` (build with
+  `Modifiers::CTRL | Modifiers::SHIFT`, or `Modifiers::COMMAND`), `KeyEvent`,
+  `ScrollDelta`, `Touch` (new `Touch::new`), `DragOffer`, `WindowAttributes`
+  (new `with_dark`, `with_background`), `WindowInfo`, `ImeState`, `DoubleClick`,
+  `Shortcut`, `NativeMenu`, `NativeMenuBar`, `NativeTray`, `Notification`,
+  `FileDialog`, `FileContents`, `MessageBox`, `MessageInput`, `MessageResponse`,
+  `ClipboardContent`, `ClipboardFormats` (new `NONE`, `HTML`, `IMAGE`, `|`),
+  `FrameStats`, `NativeDeco`, `NativeState`, `SystemLook`.
+- *(platform)* `#[non_exhaustive]` enums (add a `_` arm when matching):
+  `PointerButton`, `ScrollUnit`, `ScrollPhase`, `TouchPhase`, `DropData`, `Ime`,
+  `KeyLocation`, `OptionAsMeta`, `CursorIcon`, `UserAttention`, `BackGesture`,
+  `BackEdge`, `NativeMenuItem`, `ClipboardKind`, `MessageKind`,
+  `GamepadButton`, `GamepadAxis`, `NativeControl`.
 
 ## [0.0.5](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.4...stipple-v0.0.5) - 2026-11-15
 

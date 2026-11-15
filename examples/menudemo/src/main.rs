@@ -309,11 +309,7 @@ mod tests {
         assert!(find(&app, Role::Menu, "Canvas").is_some());
         // CI picks "Clear" with Down, Down, Enter after adding two items.
         app.press_key_code(KeyCode::Escape, Modifiers::default());
-        let cmd = Modifiers {
-            ctrl: !cfg!(target_os = "macos"),
-            meta: cfg!(target_os = "macos"),
-            ..Modifiers::default()
-        };
+        let cmd = Modifiers::COMMAND;
         app.press_key_code(KeyCode::Char('d'), cmd);
         app.press_key_code(KeyCode::Char('d'), cmd);
         assert_eq!(app.state().items.len(), 2);
@@ -331,11 +327,7 @@ mod tests {
     fn save_follows_the_state() {
         let mut app = build();
         app.render_once();
-        let cmd = Modifiers {
-            ctrl: !cfg!(target_os = "macos"),
-            meta: cfg!(target_os = "macos"),
-            ..Modifiers::default()
-        };
+        let cmd = Modifiers::COMMAND;
         assert!(
             !app.press_key_code(KeyCode::Char('s'), cmd),
             "nothing to save"
@@ -351,11 +343,7 @@ mod tests {
     fn the_copy_shortcut_goes_to_a_focused_field() {
         let mut app = build();
         app.render_once();
-        let cmd = Modifiers {
-            ctrl: !cfg!(target_os = "macos"),
-            meta: cfg!(target_os = "macos"),
-            ..Modifiers::default()
-        };
+        let cmd = Modifiers::COMMAND;
         assert!(app.press_key_code(KeyCode::Char('c'), cmd));
         assert_eq!(app.state().status, "Copied the summary");
         // Tab focuses the note: Ctrl+C (⌘C) copies from it, not the menu.

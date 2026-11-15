@@ -76,8 +76,6 @@ pub(crate) use pick::{create_document, open_document};
 
 // ---- NDK FFI ----------------------------------------------------------------
 
-/// WINDOW_FORMAT_RGBA_8888: straight R,G,B,A bytes, matching our Pixmap.
-const WINDOW_FORMAT_RGBA_8888: i32 = 1;
 /// WINDOW_FORMAT_RGBX_8888: the same layout, shown opaque.
 const WINDOW_FORMAT_RGBX_8888: i32 = 2;
 
@@ -95,11 +93,11 @@ struct ANativeWindowBuffer {
 /// `ARect`, as `onContentRectChanged` reports it.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ARect {
-    pub left: i32,
-    pub top: i32,
-    pub right: i32,
-    pub bottom: i32,
+pub(crate) struct ARect {
+    pub(crate) left: i32,
+    pub(crate) top: i32,
+    pub(crate) right: i32,
+    pub(crate) bottom: i32,
 }
 
 const ALOOPER_PREPARE_ALLOW_NON_CALLBACKS: c_int = 1;
@@ -260,7 +258,7 @@ const RTLD_NOW: c_int = 2;
 /// pointers; the rest stay null. Field order matches `native_activity.h`.
 #[repr(C)]
 #[derive(Debug)]
-pub struct ANativeActivityCallbacks {
+pub(crate) struct ANativeActivityCallbacks {
     pub on_start: Option<unsafe extern "C" fn(*mut ANativeActivity)>,
     pub on_resume: Option<unsafe extern "C" fn(*mut ANativeActivity)>,
     pub on_save_instance_state:
@@ -281,25 +279,26 @@ pub struct ANativeActivityCallbacks {
     pub on_low_memory: Option<unsafe extern "C" fn(*mut ANativeActivity)>,
 }
 
-/// `ANativeActivity` — the activity handed to `ANativeActivity_onCreate`.
-/// Field order matches `native_activity.h`.
+/// `ANativeActivity` — the activity handed to `ANativeActivity_onCreate`, which
+/// the app passes on to [`start`]. Opaque to apps; the field order matches
+/// `native_activity.h`.
 #[repr(C)]
 #[derive(Debug)]
 pub struct ANativeActivity {
-    pub callbacks: *mut ANativeActivityCallbacks,
-    pub vm: *mut c_void,
-    pub env: *mut c_void,
-    pub clazz: *mut c_void,
-    pub internal_data_path: *const c_char,
-    pub external_data_path: *const c_char,
-    pub sdk_version: i32,
-    pub instance: *mut c_void,
-    pub asset_manager: *mut c_void,
-    pub obb_path: *const c_char,
+    pub(crate) callbacks: *mut ANativeActivityCallbacks,
+    pub(crate) vm: *mut c_void,
+    pub(crate) env: *mut c_void,
+    pub(crate) clazz: *mut c_void,
+    pub(crate) internal_data_path: *const c_char,
+    pub(crate) external_data_path: *const c_char,
+    pub(crate) sdk_version: i32,
+    pub(crate) instance: *mut c_void,
+    pub(crate) asset_manager: *mut c_void,
+    pub(crate) obb_path: *const c_char,
 }
 
 /// Write `msg` to logcat under the `stipple` tag.
-pub fn log(msg: &str) {
+pub(crate) fn log(msg: &str) {
     const ANDROID_LOG_INFO: c_int = 4;
     if let Ok(text) = std::ffi::CString::new(msg) {
         unsafe { __android_log_write(ANDROID_LOG_INFO, c"stipple".as_ptr(), text.as_ptr()) };
@@ -550,6 +549,8 @@ fn post_command(cmd: Command) {
 /// emoji, deleting around the caret), and log what it reads back under the
 /// `stipple` tag. For tests on a device without a composing keyboard: CI's
 /// emulator run calls it from `androiddemo`. Safe from any thread.
+// Public only for the repository's `androiddemo` harness (CI's emulator run).
+#[doc(hidden)]
 pub fn input_connection_self_test() {
     let current = CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if let Some(instance) = current {
@@ -2052,7 +2053,7 @@ impl Loop<'_> {
 
 /// Run the event loop on the UI thread [`start`] spawned, until the activity
 /// is destroyed or the handler exits (which finishes the activity).
-pub fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
+pub(crate) fn run<H>(attrs: WindowAttributes, mut handler: H) -> Result<(), PlatformError>
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {
@@ -2180,45 +2181,4 @@ fn set_fullscreen(activity: *mut ANativeActivity, fullscreen: bool) {
         (0, AWINDOW_FLAG_FULLSCREEN)
     };
     unsafe { ANativeActivity_setWindowFlags(activity, add, remove) };
-}
-
-/// Blit a software [`Pixmap`] to an `ANativeWindow`: size the buffer to the
-/// frame, lock it, copy the pixels row by row (honoring the buffer's pixel
-/// stride), and post. Returns whether the post succeeded. [`run`] presents
-/// through its own surface; this is for apps that drive a window themselves.
-///
-/// # Safety
-/// `window` must be a live `ANativeWindow*`.
-pub unsafe fn present_to_native_window(window: *mut c_void, pixmap: &Pixmap) -> bool {
-    if window.is_null() {
-        return false;
-    }
-    let size = pixmap.size();
-    let (w, h) = (size.width as i32, size.height as i32);
-    unsafe {
-        ANativeWindow_setBuffersGeometry(window, w, h, WINDOW_FORMAT_RGBA_8888);
-        let mut buf = ANativeWindowBuffer {
-            width: 0,
-            height: 0,
-            stride: 0,
-            format: 0,
-            bits: core::ptr::null_mut(),
-            reserved: [0; 6],
-        };
-        if ANativeWindow_lock(window, &mut buf, core::ptr::null_mut()) != 0 || buf.bits.is_null() {
-            return false;
-        }
-        // Copy each row into the locked buffer, honoring its pixel stride.
-        let src = pixmap.as_bytes();
-        let src_stride = pixmap.stride();
-        let copy_w = (buf.width.min(w)) as usize * 4;
-        let rows = buf.height.min(h) as usize;
-        let dst_stride = buf.stride as usize * 4;
-        for y in 0..rows {
-            let s = &src[y * src_stride..y * src_stride + copy_w];
-            let d = (buf.bits as *mut u8).add(y * dst_stride);
-            core::ptr::copy_nonoverlapping(s.as_ptr(), d, copy_w);
-        }
-        ANativeWindow_unlockAndPost(window) == 0
-    }
 }

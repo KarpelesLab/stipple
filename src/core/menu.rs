@@ -40,7 +40,7 @@ use std::rc::Rc;
 use crate::platform::menu::{NativeMenu, NativeMenuBar, NativeMenuItem};
 use crate::platform::{KeyCode, Modifiers};
 
-pub use crate::platform::menu::{Shortcut, mnemonic};
+pub use crate::platform::{Shortcut, mnemonic};
 
 /// A menu item's action, shared between the bar, the drawn menus and the
 /// shortcut table.
