@@ -350,7 +350,16 @@ adb shell input keyevent KEYCODE_HOME
 wait_for "androiddemo: lifecycle Background" 20
 adb shell am start -n "$pkg/android.app.NativeActivity" >/dev/null
 wait_for "androiddemo: lifecycle Foreground" 30
-adb shell am send-trim-memory "$pkg" RUNNING_LOW
+# Right after coming back, the process can still be at the trim level it had
+# in the background, and the system refuses a level below that ("Unable to
+# set a higher trim level than current level"): retry while it settles.
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  if adb shell am send-trim-memory "$pkg" RUNNING_LOW >/dev/null 2>&1; then
+    break
+  fi
+  echo "android: send-trim-memory refused (attempt $attempt); retrying"
+  sleep 1
+done
 wait_for "androiddemo: lifecycle LowMemory" 20
 sleep 2
 
