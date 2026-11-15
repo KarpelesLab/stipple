@@ -545,3 +545,4 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Rendering on the GPU](gpu.md): `stipple::gpu` under `App::render_with`, what it draws how, and how close it is to the software renderer
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository
+- [API guidelines](api-guidelines.md): for contributors: `#[non_exhaustive]`, options structs, what's public, and the audit that checks it

@@ -1,0 +1,21 @@
+# Deliberate exceptions to docs/api-guidelines.md, checked by api-audit.py.
+# One public path per line; say why after a `#`.
+
+# Plain values: they are their fields.
+stipple::geometry::Point        # x, y
+stipple::geometry::Size         # width, height
+stipple::geometry::PhysicalSize # width, height
+stipple::geometry::Rect         # origin, size
+stipple::geometry::Vec2         # dx, dy
+stipple::geometry::Insets       # top, right, bottom, left
+stipple::render::Color          # r, g, b, a
+stipple::layout::Span           # offset, length
+stipple::geometry::Affine::new  # the six matrix coefficients, as in every 2D API
+
+# Closed enums: the set can't grow.
+stipple::core::Axis             # horizontal or vertical
+stipple::platform::ButtonState  # pressed or released
+stipple::widgets::SortOrder     # ascending or descending
+stipple::game::Corner           # four corners
+stipple::game::Stick            # left or right stick
+stipple::core::LayoutDirection  # left to right or right to left
