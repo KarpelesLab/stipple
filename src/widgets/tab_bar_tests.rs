@@ -253,3 +253,110 @@ fn a_middle_click_closes_and_a_double_click_renames() {
     }
     assert_eq!(app.state().log, ["close 1", "rename 0"]);
 }
+
+/// Two windows side by side (contents at (0, 0) and (500, 0) on the desktop,
+/// 400 × 200), each with a bar of its own tabs, which drag between them and
+/// out of both.
+struct Two {
+    tabs: [Vec<String>; 2],
+    bars: [TabBarState; 2],
+    log: Vec<String>,
+}
+
+fn two_view(s: &Two, cx: &mut Cx<Two>) -> Element {
+    let w = usize::from(cx.window_id() != crate::platform::WindowId::PRIMARY);
+    let tabs = s.tabs[w]
+        .iter()
+        .map(|name| Tab::new(name.bytes().map(u64::from).sum(), name.clone()))
+        .collect();
+    let bar = TabBar::new(format!("win{w}"), tabs)
+        .width(400.0)
+        .on_reorder(move |s: &mut Two, from, to| {
+            let t = s.tabs[w].remove(from);
+            s.tabs[w].insert(to, t);
+        })
+        .on_detach(move |s: &mut Two, i, at| {
+            let t = s.tabs[w].remove(i);
+            s.log.push(format!("detach {t} at {at:?}"));
+        })
+        .on_receive(move |s: &mut Two, from_bar, from, to| {
+            let src = usize::from(from_bar == "win1");
+            let t = s.tabs[src].remove(from);
+            let to = to.min(s.tabs[w].len());
+            s.tabs[w].insert(to, t);
+        });
+    super::column(vec![tab_bar(cx, bar, &s.bars[w], move |s: &mut Two| {
+        &mut s.bars[w]
+    })])
+    .align(Align::Start, Align::Stretch)
+    .grow(1.0)
+}
+
+fn two_windows() -> App<Two> {
+    let state = Two {
+        tabs: [vec!["a".into(), "b".into(), "c".into()], vec!["x".into()]],
+        bars: Default::default(),
+        log: Vec::new(),
+    };
+    let size = Size::new(400.0, 200.0);
+    let mut app = App::new(state, two_view).no_font().logical_size(size);
+    app.open_window(
+        crate::platform::WindowAttributes::new().logical_size(size),
+        two_view,
+    );
+    for (pane, x) in app.panes.iter_mut().zip([0.0, 500.0]) {
+        pane.info.inner_size = size;
+        pane.info.outer_size = size;
+        pane.info.position = Some(Point::new(x, 0.0));
+    }
+    app.render_once();
+    app
+}
+
+fn tabs_of2(app: &App<Two>) -> Vec<AccessNode> {
+    let tree = app.accessibility_tree().unwrap();
+    tree.descendants()
+        .into_iter()
+        .filter(|n| n.role == Role::Tab)
+        .cloned()
+        .collect()
+}
+
+/// Drag the primary window's tab `index` to `to` (in its coordinates) and
+/// let go.
+fn drag_tab(app: &mut App<Two>, index: usize, to: Point) {
+    let from = tabs_of2(app)[index].bounds.center();
+    app.pointer_press(from);
+    app.pointer_drag_to(Point::new(from.x + 10.0, from.y));
+    app.render_once();
+    app.pointer_drag_to(to);
+    app.pointer_release(to);
+    app.render_once();
+}
+
+#[test]
+fn a_tab_dropped_on_another_windows_bar_moves_there() {
+    let mut app = two_windows();
+    // Past the other window's only tab (220 wide): to its end.
+    drag_tab(&mut app, 0, Point::new(500.0 + 350.0, 18.0));
+    assert_eq!(app.state().tabs, [vec!["b", "c"], vec!["x", "a"]]);
+    // Onto its first tab: before it.
+    drag_tab(&mut app, 1, Point::new(500.0 + 40.0, 18.0));
+    assert_eq!(app.state().tabs, [vec!["b"], vec!["c", "x", "a"]]);
+    assert!(app.state().log.is_empty());
+}
+
+#[test]
+fn a_tab_let_go_outside_the_windows_detaches_there() {
+    let mut app = two_windows();
+    drag_tab(&mut app, 1, Point::new(200.0, 450.0));
+    assert_eq!(
+        app.state().log,
+        ["detach b at Some(Point { x: 200.0, y: 450.0 })"]
+    );
+    assert_eq!(app.state().tabs, [vec!["a", "c"], vec!["x"]]);
+    // Let go below the bar, in its own window: nothing.
+    drag_tab(&mut app, 0, Point::new(200.0, 150.0));
+    assert_eq!(app.state().tabs, [vec!["a", "c"], vec!["x"]]);
+    assert_eq!(app.state().log.len(), 1);
+}

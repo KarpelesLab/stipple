@@ -1,7 +1,8 @@
 //! A document tab bar, as in a browser, an editor or a terminal: closable,
 //! reorderable tabs with a color and an indicator each, a context menu, a
 //! new-tab button, and scroll arrows plus a list of every tab when they don't
-//! all fit.
+//! all fit. Tabs drag between bars (another window's, say) and out of the
+//! app's windows, for a window of their own.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -12,7 +13,7 @@ use crate::core::{
     Transition,
 };
 use crate::core::{PointerEvent, PointerEventKind};
-use crate::geometry::{Insets, Transform};
+use crate::geometry::{Insets, Point, Transform};
 use crate::platform::{DragOffer, DropData, PointerButton};
 use crate::render::Color;
 use crate::style::Theme;
@@ -108,6 +109,8 @@ impl<S> std::fmt::Debug for Tab<S> {
 type IndexFn<S> = Rc<dyn Fn(&mut S, usize)>;
 type ReorderFn<S> = Rc<dyn Fn(&mut S, usize, usize)>;
 type NewFn<S> = Rc<dyn Fn(&mut S)>;
+type DetachFn<S> = Rc<dyn Fn(&mut S, usize, Option<Point>)>;
+type ReceiveFn<S> = Rc<dyn Fn(&mut S, &str, usize, usize)>;
 
 /// A tab bar to show with [`tab_bar`]: the tabs, which is selected, and what
 /// to do when the user selects, closes, moves or adds one. The app keeps the
@@ -122,6 +125,8 @@ pub struct TabBar<S> {
     on_reorder: Option<ReorderFn<S>>,
     on_new: Option<NewFn<S>>,
     on_rename: Option<IndexFn<S>>,
+    on_detach: Option<DetachFn<S>>,
+    on_receive: Option<ReceiveFn<S>>,
 }
 
 impl<S> std::fmt::Debug for TabBar<S> {
@@ -148,6 +153,8 @@ impl<S> TabBar<S> {
             on_reorder: None,
             on_new: None,
             on_rename: None,
+            on_detach: None,
+            on_receive: None,
         }
     }
 
@@ -195,6 +202,28 @@ impl<S> TabBar<S> {
     /// Show a "+" button at the end that runs `f`.
     pub fn on_new(mut self, f: impl Fn(&mut S) + 'static) -> Self {
         self.on_new = Some(Rc::new(f));
+        self
+    }
+
+    /// Run `f(index, at)` when a tab is dragged out of every window of the
+    /// app and let go: the app moves it to a window of its own (see
+    /// `AppHandle::open_window`), placed at `at`, the point on the desktop
+    /// where it was let go (logical pixels; `None` where the system doesn't
+    /// tell, as on Wayland). While outside the windows, a picture of the tab
+    /// follows the pointer where the platform allows (X11, Windows). With
+    /// it, tabs drag even without [`on_reorder`](Self::on_reorder).
+    pub fn on_detach(mut self, f: impl Fn(&mut S, usize, Option<Point>) + 'static) -> Self {
+        self.on_detach = Some(Rc::new(f));
+        self
+    }
+
+    /// Run `f(from_bar, from, to)` when a tab of another bar (`from_bar`, its
+    /// [id](Self::new), at index `from`) is dropped on this one, onto the tab
+    /// at `to` or after the last (`to` is the tab count): the app moves it
+    /// here. That bar may be in another window of the app: a tab dragged
+    /// out of its window goes on over the others.
+    pub fn on_receive(mut self, f: impl Fn(&mut S, &str, usize, usize) + 'static) -> Self {
+        self.on_receive = Some(Rc::new(f));
         self
     }
 }
@@ -322,15 +351,31 @@ fn drag_payload(bar: &str, index: usize) -> String {
     format!("stipple-tab:{bar}:{index}")
 }
 
-fn parse_payload(bar: &str, data: &DropData) -> Option<usize> {
+/// The bar and index of any bar's tab drag.
+fn parse_any_payload(data: &DropData) -> Option<(&str, usize)> {
     let DropData::Internal(s) = data else {
         return None;
     };
-    s.strip_prefix("stipple-tab:")?
-        .strip_prefix(bar)?
-        .strip_prefix(':')?
-        .parse()
-        .ok()
+    let (bar, index) = s.strip_prefix("stipple-tab:")?.rsplit_once(':')?;
+    Some((bar, index.parse().ok()?))
+}
+
+/// What a tab drag dropped at index `to` of bar `bar` (of `n` tabs; `to`
+/// is `n` past the last) does: a move within the bar (`from`, `to`), or a
+/// tab arriving from another bar (its id, its index, `to`).
+#[derive(Debug, PartialEq, Eq)]
+enum TabDrop<'a> {
+    Reorder(usize, usize),
+    Receive(&'a str, usize, usize),
+}
+
+fn tab_drop<'a>(bar: &str, n: usize, to: usize, data: &'a DropData) -> Option<TabDrop<'a>> {
+    let (from_bar, from) = parse_any_payload(data)?;
+    if from_bar != bar {
+        return Some(TabDrop::Receive(from_bar, from, to.min(n)));
+    }
+    let to = to.min(n.saturating_sub(1));
+    (from != to && from < n).then_some(TabDrop::Reorder(from, to))
 }
 
 /// A small square button with `glyph`, for the bar's ends.
@@ -446,10 +491,12 @@ fn bell(color: Color) -> Option<std::sync::Arc<crate::render::Svg>> {
 /// - Tabs, the close buttons and the bar's buttons fade their hover and press
 ///   looks in and out.
 ///
+/// - With `on_detach`, a tab dragged out of every window of the app and let
+///   go there leaves for a window of its own; with `on_receive`, a tab of
+///   another bar (in another window, say) dropped on this one moves here.
+///
 /// Assistive technologies see a [`Role::TabList`] of [`Role::Tab`]s, the
 /// selected one selected.
-///
-/// Dragging a tab out into a window of its own isn't done.
 pub fn tab_bar<S: 'static>(
     cx: &mut Cx<S>,
     bar: TabBar<S>,
@@ -637,23 +684,25 @@ pub fn tab_bar<S: 'static>(
             Some(w) => el.width(w),
             None => el.grow(1.0).shrink(1.0).max_width(TAB_MAX_WIDTH),
         };
-        if let Some(on_reorder) = bar.on_reorder.clone() {
-            let focus = p.focus_ring;
+        if bar.on_reorder.is_some() || bar.on_detach.is_some() {
             let payload = drag_payload(&bar_id, i);
-            let bar_name = bar_id.clone();
-            let ids = ids.clone();
-            let w = fit.tab_width.unwrap_or(0.0);
+            el = el.drag_source(cx, move |_| Some(DropData::Internal(payload.clone())));
+            if let Some(on_detach) = bar.on_detach.clone() {
+                el = el.on_drop_outside(cx, move |s, _, at| on_detach(s, i, at));
+            }
+        }
+        if bar.on_reorder.is_some() || bar.on_receive.is_some() {
+            let focus = p.focus_ring;
+            let drop = drop_handler(
+                (&bar.on_reorder, &bar.on_receive),
+                &bar_id,
+                &ids,
+                i,
+                fit.tab_width.unwrap_or(0.0),
+                field,
+            );
             el = el
-                .drag_source(cx, move |_| Some(DropData::Internal(payload.clone())))
-                .on_drop_of(cx, DragOffer::INTERNAL, move |s, data, _| {
-                    let Some(from) = parse_payload(&bar_name, data) else {
-                        return;
-                    };
-                    if from != i && from < ids.len() {
-                        field(s).start_slides(&ids, from, i, w);
-                        on_reorder(s, from, i);
-                    }
-                })
+                .on_drop_of(cx, DragOffer::INTERNAL, drop)
                 .drag_over(move |e| e.border(focus, 2.0));
         }
         if let Some((_, slide)) = state.slides.iter().find(|(id, _)| *id == tab.id) {
@@ -689,14 +738,25 @@ pub fn tab_bar<S: 'static>(
         }
         strip.push(el.role(Role::Tab).selected(is_sel).a11y_label(tab.label));
     }
-    row.push(
-        Element::stack(Axis::Horizontal, strip)
-            .gap(2.0)
-            .align(Align::Start, Align::End)
-            .grow(1.0)
-            .shrink(1.0)
-            .clip(),
-    );
+    let mut strip = Element::stack(Axis::Horizontal, strip)
+        .gap(2.0)
+        .align(Align::Start, Align::End)
+        .grow(1.0)
+        .shrink(1.0)
+        .clip();
+    // A tab dropped past the last one goes to the end.
+    if bar.on_reorder.is_some() || bar.on_receive.is_some() {
+        let drop = drop_handler(
+            (&bar.on_reorder, &bar.on_receive),
+            &bar_id,
+            &ids,
+            n,
+            fit.tab_width.unwrap_or(0.0),
+            field,
+        );
+        strip = strip.on_drop_of(cx, DragOffer::INTERNAL, drop);
+    }
+    row.push(strip);
 
     if fit.overflow {
         let first = fit.first;
@@ -762,6 +822,35 @@ pub fn tab_bar<S: 'static>(
             }
         })
         .role(Role::TabList)
+}
+
+/// The drop handler of the tab at `to` (or past the last, `to` = the tab
+/// count) of `bar`: a tab of this bar moves there (`on_reorder`, the tabs it
+/// passes sliding over), another bar's arrives there (`on_receive`).
+fn drop_handler<S: 'static>(
+    (on_reorder, on_receive): (&Option<ReorderFn<S>>, &Option<ReceiveFn<S>>),
+    bar_id: &Rc<str>,
+    ids: &Rc<[u64]>,
+    to: usize,
+    tab_width: f64,
+    field: impl Fn(&mut S) -> &mut TabBarState + Copy + 'static,
+) -> impl FnMut(&mut S, &DropData, Point) + 'static {
+    let (on_reorder, on_receive) = (on_reorder.clone(), on_receive.clone());
+    let (bar_id, ids) = (bar_id.clone(), ids.clone());
+    move |s, data, _| match tab_drop(&bar_id, ids.len(), to, data) {
+        Some(TabDrop::Reorder(from, to)) => {
+            if let Some(f) = &on_reorder {
+                field(s).start_slides(&ids, from, to, tab_width);
+                f(s, from, to);
+            }
+        }
+        Some(TabDrop::Receive(from_bar, from, to)) => {
+            if let Some(f) = &on_receive {
+                f(s, from_bar, from, to);
+            }
+        }
+        None => {}
+    }
 }
 
 /// The list of every tab, dropped below the ▾ button (`below`: its tap
@@ -863,8 +952,35 @@ mod fit_tests {
     #[test]
     fn payloads_name_their_bar() {
         let d = DropData::Internal(drag_payload("docs", 4));
-        assert_eq!(parse_payload("docs", &d), Some(4));
-        assert_eq!(parse_payload("doc", &d), None);
-        assert_eq!(parse_payload("docs", &DropData::Text("x".into())), None);
+        assert_eq!(parse_any_payload(&d), Some(("docs", 4)));
+        assert_eq!(parse_any_payload(&DropData::Text("x".into())), None);
+        // A bar id with a colon in it.
+        let d = DropData::Internal(drag_payload("win:2", 1));
+        assert_eq!(parse_any_payload(&d), Some(("win:2", 1)));
+    }
+
+    #[test]
+    fn drops_reorder_within_a_bar_and_receive_from_others() {
+        let own = DropData::Internal(drag_payload("a", 1));
+        let other = DropData::Internal(drag_payload("b", 2));
+        // Onto another tab of its bar: a move; onto itself: nothing.
+        assert_eq!(tab_drop("a", 4, 3, &own), Some(TabDrop::Reorder(1, 3)));
+        assert_eq!(tab_drop("a", 4, 1, &own), None);
+        // Past the last tab: to the end.
+        assert_eq!(tab_drop("a", 4, 4, &own), Some(TabDrop::Reorder(1, 3)));
+        // Another bar's tab arrives where it's dropped, or at the end.
+        assert_eq!(
+            tab_drop("a", 4, 0, &other),
+            Some(TabDrop::Receive("b", 2, 0))
+        );
+        assert_eq!(
+            tab_drop("a", 4, 4, &other),
+            Some(TabDrop::Receive("b", 2, 4))
+        );
+        assert_eq!(
+            tab_drop("a", 0, 0, &other),
+            Some(TabDrop::Receive("b", 2, 0))
+        );
+        assert_eq!(tab_drop("a", 4, 0, &DropData::Internal("x".into())), None);
     }
 }

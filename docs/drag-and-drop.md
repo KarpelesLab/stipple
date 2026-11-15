@@ -116,6 +116,31 @@ becomes a drag doesn't tap; Escape cancels it.
 row_label.drag_source(cx, move |_| Some(DropData::Internal(item.id.clone())))
 ```
 
+## Across windows, and out of them
+
+An in-app drag of a `DropData::Internal` payload dragged out of its window
+goes on over the app's other windows: their drop targets hover and take it as
+they would in the window it started in (a tab dropped on another window's tab
+bar, say). Let go outside every window of the app, it tells its source, if
+the source asked with `Element::on_drop_outside`:
+
+```rust
+tab.drag_source(cx, move |_| Some(DropData::Internal(id.to_string())))
+    .on_drop_outside(cx, move |s, _data, at| s.open_in_new_window(id, at))
+```
+
+`at` is where it was let go on the desktop, in logical pixels, or `None` where
+the system doesn't say where windows are (Wayland: there, any release outside
+the window it started in counts as outside, as the drag can't tell another of
+the app's windows from the desktop). While the drag is outside every window,
+a picture of the source element follows the pointer, in a borderless window
+of its own, on X11 and Windows; macOS (whose windows keep a title bar) and
+Wayland show none, only the cursor. The app finds the window under the
+pointer from where each window says it is (`WindowInfo::position` and its
+frame), and gets the moves outside the window because a press captures the
+pointer (an implicit grab on X11 and Wayland, `SetCapture` on Windows, AppKit
+on macOS). The [tab bar](widgets.md#tab-bar) is built on it.
+
 ## Dragging out of the app
 
 The same `drag_source` drags files and text into other applications. There is
@@ -208,6 +233,9 @@ other schemes, and files on other hosts, are skipped.
   with a real pointer.
 
 ## Not yet
+
+- A picture of the element following an in-app drag inside the windows, and
+  outside them on macOS and Wayland.
 
 - Telling the app how a drag out ended (dropped, where, or cancelled), and a
   move action (delete the source's copy).

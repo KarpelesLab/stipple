@@ -116,6 +116,11 @@ An event that changes the state in one window re-renders the others too, and
 a wake reaches every window (see [async.md](async.md)). Window requests for a
 window apply on its next event, which the request itself causes.
 
+An in-app drag (a tab, a list item) goes on over the app's other windows, and
+one let go outside them all can open a window of its own (see
+[drag-and-drop.md](drag-and-drop.md#across-windows-and-out-of-them) and the
+[tab bar](widgets.md#tabs-between-windows)).
+
 | | Several windows | Opening at run time |
 |---|---|---|
 | X11 | top-level windows on one connection | `CreateWindow` |

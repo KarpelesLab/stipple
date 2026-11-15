@@ -315,8 +315,52 @@ tab_bar(cx, bar, &state.bar, |s| &mut s.bar)
 - Tabs fade their hover look in and out (`.hovered` with a `.transition`), as
   do the × and the bar's buttons, and a dragged tab dims (`.dragged`).
 
-Dragging a tab out into a window of its own, and macOS's native window tabs,
-aren't done.
+### Tabs between windows
+
+A tab dragged out of every window of the app and let go runs `on_detach`
+with its index and where on the desktop it was let go (`None` on Wayland);
+the app opens a window there for it (`AppHandle::open_window`, see
+[windows-and-cursors.md](windows-and-cursors.md#several-windows)). A tab
+dropped on another bar (another window's: the drag goes on over the app's
+other windows) runs that bar's `on_receive` with the bar it came from (its
+id), its index there, and where it lands (the tab count past the last). Give
+each window's bar its own id, so the app can tell them apart:
+
+```rust
+let w = cx.window_id();
+let bar = TabBar::new(format!("tabs-{}", state.key_of(w)), tabs)
+    .on_detach(move |s: &mut App, i, at| {
+        let doc = s.take(w, i);
+        let mut attrs = WindowAttributes::new().title(&doc.name);
+        if let Some(at) = at {
+            attrs = attrs.position(at.x as i32 - 60, at.y as i32 - 40);
+        }
+        let id = handle.open_window(attrs, view); // the same view, keyed by window
+        s.put(id, 0, doc);
+    })
+    .on_receive(move |s: &mut App, from_bar, from, to| {
+        let doc = s.take(s.window_of(from_bar), from);
+        s.put(w, to, doc);
+    });
+```
+
+While outside the windows, a picture of the tab follows the pointer on X11
+and Windows (see [drag-and-drop.md](drag-and-drop.md#across-windows-and-out-of-them)).
+`sessionsdemo` does both: a session dragged out gets a window of its own, one
+dropped on another window's bar moves there, and a window whose last tab
+leaves closes.
+
+**macOS window tabs.** Under `Theme::native()` the bar is still Stipple's own,
+not AppKit's window tabs (`NSWindow.tabbingMode`, `addTabbedWindow:ordered:`,
+`NSWindowTab`). Those are a different model: each tab is a whole `NSWindow`,
+its title in the tab, and AppKit draws the bar above the content, so a
+`TabBar` of tabs inside one window has nothing to map to; its colors,
+indicators, ×s and context menus would have to be an `NSView` per tab
+(`NSWindowTab.accessoryView`) drawn by AppKit, not by the theme; and the
+drag-out and between-windows behavior here would be AppKit's, with no
+`on_detach` or `on_receive` to tell the app. An app that wants native tabs
+would open a window per document, which a window attribute (a tabbing
+identifier) could group; that isn't done.
 
 ## Navigation bar
 

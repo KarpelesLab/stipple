@@ -1463,8 +1463,10 @@ Most input only works on X11 today.
   loads the app's library) to show with the process gone and re-arm at boot,
   on Android; timers on the desktops and the web. CI runs the Android cold
   path end to end (alarm, post, tap) and Linux's timer against the mock; iOS
-  checks the request is made. Android can't tell which one was tapped while
-  the activity is alive (no `onNewIntent`)._
+  checks the request is made. A tap while the Android activity is alive goes
+  through the APK's windowless `Tapped` activity (same dex; its native
+  `onCreate` calls `Activity.onCreate` with `CallNonvirtualVoidMethod`), which
+  reports it and brings the app forward: tested on an API 35 emulator._
 - ✅ Share sheet (`AppHandle::share`, `platform::share`): _`UIActivityViewController`,
   the `ACTION_SEND` chooser (files via `MediaStore`, outcome from its
   `IntentSender`), `NSSharingServicePicker`, `navigator.share`; CI opens and
@@ -1592,8 +1594,12 @@ Most input only works on X11 today.
   scroll arrows and a list of every tab past what fits, keyboard navigation
   and `TabList`/`Tab` roles, animated with state overrides and transitions.
   Middle-click to close and double-click to rename (`on_rename`) through
-  `Element::on_pointer`; dragging a tab out into a window of its own and
-  macOS's native window tabs are still to do. Password field (`password_field`: masked, no copy or cut,
+  `Element::on_pointer`. ✅ Tabs between windows (`TabBar::on_detach`,
+  `on_receive`): _in-app drags go on over the app's other windows and tell
+  their source when let go outside them all (`Element::on_drop_outside`, with
+  the desktop point), a picture of the tab following the pointer outside on
+  X11 and Windows; `sessionsdemo` detaches sessions into windows. macOS's
+  native window tabs aren't used (a window per tab; see widgets.md)._ Password field (`password_field`: masked, no copy or cut,
   no undo history, IME off, `EnableSecureEventInput` on macOS, a reveal
   button, the `PasswordField` role) and color picker (`color_picker` /
   `color_button`: HSV area, hue and alpha strips, hex field, swatches).

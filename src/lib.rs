@@ -207,6 +207,8 @@ pub struct App<S> {
     exit_on_last_closed: bool,
     on_window_change: Option<WindowChangeFn<S>>,
     closing: Vec<WindowId>,
+    // An in-app drag that left its window: over another, or outside them all.
+    cross_drag: app_dnd::CrossDrag,
     // The game loop, if one runs on the app's frames (see `game`).
     game: Option<Box<game::Runtime<S>>>,
     // `on_gamepad`'s hook.
@@ -701,6 +703,7 @@ impl<S: 'static> App<S> {
             exit_on_last_closed: true,
             on_window_change: None,
             closing: Vec::new(),
+            cross_drag: Default::default(),
             game: None,
             gamepad: None,
             gamepad_nav: None,
@@ -3060,6 +3063,7 @@ impl<S: 'static> App<S> {
         } else if self.panes[idx].dragging.is_some() {
             self.pane_drag_at_point(idx, position)
         } else if self.pane_source_move(idx, position) {
+            self.cross_drag_move(idx, position);
             true
         } else {
             self.pane_hover_at(idx, position)
@@ -3076,7 +3080,11 @@ impl<S: 'static> App<S> {
     }
 
     fn pointer_up_inner(&mut self, idx: usize, position: Point) -> bool {
-        // Drop an in-app drag first.
+        // Drop an in-app drag first: in another window, outside them all, or
+        // here.
+        if let Some(redraw) = self.cross_drag_release(idx, position) {
+            return redraw;
+        }
         if self.pane_source_release(idx, position) {
             return true;
         }
@@ -3642,6 +3650,7 @@ impl<S: 'static> App<S> {
                 } if self.panes[idx].dnd.dragging_internally() => {
                     // Escape cancels an in-app drag.
                     self.pane_source_cancel(idx);
+                    self.cross_drag_end();
                     present(&mut self, &mut surfaces, idx, window, false);
                     ControlFlow::Wait
                 }

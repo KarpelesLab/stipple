@@ -122,6 +122,17 @@ type DropHoverFn<S> = Box<dyn FnMut(&mut S, bool)>;
 /// A boxed drag-source handler: returns the payload of an in-app drag starting
 /// on its element (`None` declines the drag).
 type DragSourceFn<S> = Box<dyn FnMut(&mut S) -> Option<DropData>>;
+/// A boxed drop-outside handler: told the payload of an in-app drag from its
+/// drag source released outside every window of the app, and where on the
+/// desktop (logical pixels), if known.
+type DropOutsideFn<S> = Box<dyn FnMut(&mut S, &DropData, Option<Point>)>;
+
+/// A registered drag source: its payload and what to do when it's dropped
+/// outside the app's windows.
+struct DragSource<S> {
+    payload: DragSourceFn<S>,
+    outside: Option<DropOutsideFn<S>>,
+}
 
 /// A registered drop target: what it accepts and its handlers.
 struct DropTarget<S> {
@@ -427,7 +438,7 @@ pub struct Cx<'a, S> {
     text_pos: Vec<TextPosFn<S>>,
     contexts: Vec<ContextFn<S>>,
     drops: Vec<DropTarget<S>>,
-    drag_sources: Vec<DragSourceFn<S>>,
+    drag_sources: Vec<DragSource<S>>,
     pointers: crate::core::PointerHandlers<S>,
     /// The drag-over state of drop targets as of this build (seeded by the
     /// app), and the targets whose view read theirs.
@@ -959,8 +970,26 @@ impl<'a, S> Cx<'a, S> {
         handler: impl FnMut(&mut S) -> Option<DropData> + 'static,
     ) -> DragSourceId {
         let id = DragSourceId(self.drag_sources.len() as u32);
-        self.drag_sources.push(Box::new(handler));
+        self.drag_sources.push(DragSource {
+            payload: Box::new(handler),
+            outside: None,
+        });
         id
+    }
+
+    /// Set what drag source `id` does when its in-app drag is released
+    /// outside every window of the app: `handler` gets the payload and the
+    /// point on the desktop (logical pixels; `None` where the system doesn't
+    /// tell where windows are, as on Wayland). Prefer
+    /// [`Element::on_drop_outside`](crate::core::Element::on_drop_outside).
+    pub fn set_drop_outside(
+        &mut self,
+        id: DragSourceId,
+        handler: impl FnMut(&mut S, &DropData, Option<Point>) + 'static,
+    ) {
+        if let Some(source) = self.drag_sources.get_mut(id.0 as usize) {
+            source.outside = Some(Box::new(handler));
+        }
     }
 
     /// Register a pointer handler on `id` (an element's existing
@@ -1142,7 +1171,7 @@ pub struct Handlers<S> {
     text_pos: Vec<TextPosFn<S>>,
     contexts: Vec<ContextFn<S>>,
     drops: Vec<DropTarget<S>>,
-    drag_sources: Vec<DragSourceFn<S>>,
+    drag_sources: Vec<DragSource<S>>,
     pointers: crate::core::PointerHandlers<S>,
 }
 
@@ -1276,7 +1305,36 @@ impl<S> Handlers<S> {
         id: DragSourceId,
         state: &mut S,
     ) -> Option<DropData> {
-        self.drag_sources.get_mut(id.0 as usize)?(state)
+        (self.drag_sources.get_mut(id.0 as usize)?.payload)(state)
+    }
+
+    /// Whether drag source `id` has a drop-outside handler.
+    pub(crate) fn drops_outside(&self, id: DragSourceId) -> bool {
+        self.drag_sources
+            .get(id.0 as usize)
+            .is_some_and(|s| s.outside.is_some())
+    }
+
+    /// Tell drag source `id` its drag (carrying `data`) was released outside
+    /// the app's windows, at `screen`. Returns whether it has a handler.
+    pub(crate) fn dispatch_drop_outside(
+        &mut self,
+        id: DragSourceId,
+        data: &DropData,
+        screen: Option<Point>,
+        state: &mut S,
+    ) -> bool {
+        match self
+            .drag_sources
+            .get_mut(id.0 as usize)
+            .and_then(|s| s.outside.as_mut())
+        {
+            Some(f) => {
+                f(state, data, screen);
+                true
+            }
+            None => false,
+        }
     }
 
     /// The pointer and wheel handlers.

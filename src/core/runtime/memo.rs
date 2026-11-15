@@ -30,7 +30,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use super::{Cx, DropTarget, Handlers, LayoutNode, ScrollId};
+use super::{Cx, DragSource, DropTarget, Handlers, LayoutNode, ScrollId};
 use crate::core::dnd::DropState;
 use crate::core::element::Element;
 use crate::core::interact::{ElementKey, Interaction};
@@ -140,7 +140,7 @@ struct Previous<S> {
     text_pos: Vec<Option<super::TextPosFn<S>>>,
     contexts: Vec<Option<super::ContextFn<S>>>,
     drops: Vec<Option<DropTarget<S>>>,
-    drag_sources: Vec<Option<super::DragSourceFn<S>>>,
+    drag_sources: Vec<Option<DragSource<S>>>,
     pointers: Vec<Option<Slot<S>>>,
 }
 

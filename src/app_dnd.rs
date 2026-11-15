@@ -4,13 +4,18 @@
 //! [`Element::drag_source`](crate::core::Element::drag_source), both routed to
 //! the [`Element::on_drop`](crate::core::Element::on_drop) target under the
 //! pointer. An in-app drag of files or text that leaves the window becomes a
-//! drag for other applications ([`Window::start_drag`]). See
-//! `docs/drag-and-drop.md`.
+//! drag for other applications ([`Window::start_drag`]). An in-app drag of an
+//! [`Internal`](DropData::Internal) payload that leaves its window goes on
+//! over the app's other windows ([`CrossDrag`]), and one released outside them
+//! all tells its source ([`Element::on_drop_outside`](crate::core::Element::on_drop_outside)).
+//! See `docs/drag-and-drop.md`.
+
+use std::sync::Arc;
 
 use crate::core::{DragSourceId, DropId, Font, LayoutNode, drag_source_at, drop_at, find_drop};
-use crate::geometry::{Point, Rect};
-use crate::platform::{DragOffer, DropData, Window};
-use crate::render::{Color, Scene};
+use crate::geometry::{Point, Rect, Size};
+use crate::platform::{DragOffer, DropData, Window, WindowAttributes, WindowId, WindowInfo};
+use crate::render::{Color, Pixmap, Scene};
 use crate::style::Theme;
 use crate::{App, Pane};
 
@@ -39,6 +44,8 @@ pub(crate) struct DndState {
     pub(crate) queried: Vec<DropId>,
     /// A press on a drag source, not yet moved far enough to drag.
     press: Option<(DragSourceId, Point)>,
+    /// Where the press that started the in-app drag in progress went down.
+    origin: Point,
     /// The payload of the in-app drag in progress, and the drag source it
     /// started on.
     internal: Option<DropData>,
@@ -265,6 +272,7 @@ impl<S: 'static> Pane<S> {
             return false;
         }
         self.dnd.press = None;
+        self.dnd.origin = origin;
         let Some(data) = self.handlers.dispatch_drag_source(id, state) else {
             return false;
         };
@@ -326,6 +334,64 @@ impl<S: 'static> Pane<S> {
         }
     }
 
+    /// End the in-app drag in progress here without dropping it (it goes to
+    /// another window, or outside them all), returning its payload and the
+    /// drag source it started on.
+    pub(crate) fn take_internal(
+        &mut self,
+        state: &mut S,
+    ) -> Option<(DropData, Option<DragSourceId>)> {
+        self.dnd.press = None;
+        let source = self.dnd.source.take();
+        let data = self.dnd.internal.take()?;
+        self.drag_leave(state);
+        self.dirty = true;
+        Some((data, source))
+    }
+
+    /// Whether the in-app drag in progress started on a drag source that
+    /// takes being dropped outside the app's windows.
+    fn source_drops_outside(&self) -> bool {
+        self.dnd
+            .source
+            .is_some_and(|s| self.handlers.drops_outside(s))
+    }
+
+    /// Whether `pos` (window coordinates) is inside the window's content.
+    fn contains(&self, pos: Point) -> bool {
+        let size = self.attrs.logical_size;
+        pos.x >= 0.0 && pos.y >= 0.0 && pos.x < size.width && pos.y < size.height
+    }
+
+    /// A picture of the in-app drag's source element, for the drag image
+    /// that follows the pointer outside the windows: the pixels, their size
+    /// in logical pixels, and where in it the press went down.
+    fn source_picture(&self, font: Option<&Font>) -> Option<(Arc<Pixmap>, Size, Point)> {
+        let source = self.dnd.source?;
+        let tree = self.tree.as_ref()?;
+        let (node, to_window, _) =
+            crate::core::node_to_window(tree, &|n| n.drag_source == Some(source))?;
+        let b = node.bounds;
+        if b.width() < 1.0 || b.height() < 1.0 {
+            return None;
+        }
+        let size = Size::new(b.width().min(600.0), b.height().min(200.0));
+        let mut scene = Scene::new(size);
+        scene.push_layer(
+            crate::geometry::Affine::translate(crate::geometry::Vec2::new(-b.min_x(), -b.min_y())),
+            1.0,
+        );
+        crate::core::paint(node, &mut scene, font);
+        scene.pop_layer();
+        let pixmap = crate::render::SoftwareRenderer::new().render(scene, self.scale);
+        let top_left = to_window.apply(Point::new(b.min_x(), b.min_y()));
+        let grab = Point::new(
+            (self.dnd.origin.x - top_left.x).clamp(0.0, size.width),
+            (self.dnd.origin.y - top_left.y).clamp(0.0, size.height),
+        );
+        Some((Arc::new(pixmap), size, grab))
+    }
+
     /// Cancel an in-app drag in progress (Escape). Returns whether there was
     /// one.
     pub(crate) fn source_cancel(&mut self, state: &mut S) -> bool {
@@ -340,7 +406,205 @@ impl<S: 'static> Pane<S> {
     }
 }
 
+/// Where a window's content area is on the desktop (its top-left corner, in
+/// logical pixels), from what the backend reports: the frame's corner plus
+/// the frame's borders (the same on the left, right and bottom; the rest on
+/// top, the title bar). `None` where window positions are unknown (Wayland).
+pub(crate) fn content_origin(info: &WindowInfo) -> Option<Point> {
+    let at = info.position?;
+    let side = ((info.outer_size.width - info.inner_size.width) / 2.0).max(0.0);
+    let top = (info.outer_size.height - info.inner_size.height - side).max(0.0);
+    Some(Point::new(at.x + side, at.y + top))
+}
+
+/// Whether the platform can show a drag image of its own outside the app's
+/// windows: a borderless window following the pointer. X11 and Windows (and
+/// not Wayland, which keeps window positions from apps; macOS keeps a title
+/// bar on every window).
+const DRAG_IMAGE_WINDOW: bool = cfg!(any(
+    target_os = "windows",
+    all(
+        unix,
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        ))
+    )
+));
+
+/// An in-app drag that left the window it started in: the window it is over
+/// now, and the drag image following the pointer outside every window.
+#[derive(Debug, Default)]
+pub(crate) struct CrossDrag {
+    /// The other window (pane index) the drag is over, and the pointer in it.
+    over: Option<(usize, Point)>,
+    /// The drag image: the source's picture, its size, the grab point in it,
+    /// and its window while it shows.
+    image: Option<(Arc<Pixmap>, Size, Point)>,
+    window: Option<WindowId>,
+}
+
 impl<S: 'static> App<S> {
+    /// The window (pane index, other than `except` and the drag image's)
+    /// whose content is under desktop point `screen`, and the point in it.
+    fn window_at(&self, screen: Point, except: usize) -> Option<(usize, Point)> {
+        let image = self.cross_drag.window;
+        self.panes.iter().enumerate().find_map(|(j, pane)| {
+            if j == except || Some(pane.id) == image || pane.info.minimized {
+                return None;
+            }
+            let origin = content_origin(&pane.info)?;
+            let local = Point::new(screen.x - origin.x, screen.y - origin.y);
+            pane.contains(local).then_some((j, local))
+        })
+    }
+
+    /// The in-app drag in window `idx` moved to `pos`: outside the window,
+    /// carry it over the app's window there (its drop targets hover), or
+    /// show the drag image when it's over none. Only for payloads that stay
+    /// in the app (the others leave it: see [`pane_drag_out`](Self::pane_drag_out)).
+    pub(crate) fn cross_drag_move(&mut self, idx: usize, pos: Point) {
+        self.cross_drag_track(idx, pos, true);
+    }
+
+    /// [`cross_drag_move`](Self::cross_drag_move), showing the drag image
+    /// outside the windows when `image` is set.
+    fn cross_drag_track(&mut self, idx: usize, pos: Point, image: bool) {
+        let Some(offer) = self.panes[idx]
+            .dnd
+            .internal
+            .as_ref()
+            .filter(|d| !d.can_leave_app())
+            .map(DropData::kind)
+        else {
+            return;
+        };
+        let inside = self.panes[idx].contains(pos);
+        let screen = (!inside)
+            .then(|| content_origin(&self.panes[idx].info))
+            .flatten()
+            .map(|o| Point::new(o.x + pos.x, o.y + pos.y));
+        let target = screen.and_then(|p| self.window_at(p, idx));
+        let was = self.cross_drag.over.map(|(j, _)| j);
+        if let Some(j) = was
+            && target.map(|t| t.0) != Some(j)
+        {
+            self.pane_drag_leave(j);
+            self.panes[j].dirty = true;
+            crate::platform::wake::wake();
+        }
+        if let Some((j, local)) = target {
+            if was == Some(j) {
+                self.pane_drag_over(j, local);
+            } else {
+                self.pane_drag_enter(j, local, offer);
+            }
+            self.panes[j].dirty = true;
+            crate::platform::wake::wake();
+        }
+        self.cross_drag.over = target;
+        match screen {
+            Some(at) if image && target.is_none() && self.panes[idx].source_drops_outside() => {
+                self.show_drag_image(idx, at)
+            }
+            _ => self.hide_drag_image(),
+        }
+    }
+
+    /// The button was released at `pos` during an in-app drag in window
+    /// `idx`: drop it on the other window it's over, or tell its source it
+    /// was let go outside every window. `None` when it's neither (a release
+    /// in the window it started in, which drops as usual).
+    pub(crate) fn cross_drag_release(&mut self, idx: usize, pos: Point) -> Option<bool> {
+        let stays = self.panes[idx]
+            .dnd
+            .internal
+            .as_ref()
+            .is_some_and(|d| !d.can_leave_app());
+        if !stays {
+            return None;
+        }
+        self.cross_drag_track(idx, pos, false);
+        self.cross_drag.image = None;
+        if let Some((j, local)) = self.cross_drag.over.take() {
+            let App { state, panes, .. } = self;
+            let (data, _) = panes[idx].take_internal(state)?;
+            crate::app_dbg(format_args!("drop in window {j} at {local:?}: {data:?}"));
+            self.pane_drop(j, local, &data);
+            self.panes[j].dirty = true;
+            crate::platform::wake::wake();
+            return Some(true);
+        }
+        if self.panes[idx].contains(pos) {
+            return None;
+        }
+        let screen =
+            content_origin(&self.panes[idx].info).map(|o| Point::new(o.x + pos.x, o.y + pos.y));
+        let App { state, panes, .. } = self;
+        let pane = &mut panes[idx];
+        let (data, source) = pane.take_internal(state)?;
+        crate::app_dbg(format_args!("dropped outside at {screen:?}: {data:?}"));
+        if let Some(source) = source {
+            pane.handlers
+                .dispatch_drop_outside(source, &data, screen, state);
+        }
+        Some(true)
+    }
+
+    /// The in-app drag ended (cancelled): leave the other window it was over
+    /// and close the drag image.
+    pub(crate) fn cross_drag_end(&mut self) {
+        if let Some((j, _)) = self.cross_drag.over.take() {
+            self.pane_drag_leave(j);
+            self.panes[j].dirty = true;
+            crate::platform::wake::wake();
+        }
+        self.hide_drag_image();
+        self.cross_drag.image = None;
+    }
+
+    /// Show the drag image (a picture of window `idx`'s drag source) with
+    /// its grab point at desktop point `at`, opening its window or moving it.
+    fn show_drag_image(&mut self, idx: usize, at: Point) {
+        if !DRAG_IMAGE_WINDOW {
+            return;
+        }
+        if self.cross_drag.image.is_none() {
+            self.cross_drag.image = self.panes[idx].source_picture(self.font.get());
+        }
+        let Some((pixmap, size, grab)) = self.cross_drag.image.clone() else {
+            return;
+        };
+        let corner = Point::new(at.x - grab.x, at.y - grab.y);
+        let handle = self.panes[idx].handle.clone();
+        match self.cross_drag.window {
+            Some(id) => handle.window_to(id, crate::platform::WindowRequest::Position(corner)),
+            None => {
+                let attrs = WindowAttributes::new()
+                    .title("")
+                    .logical_size(size)
+                    .position(corner.x.round() as i32, corner.y.round() as i32)
+                    .decorations(false)
+                    .resizable(false)
+                    .focus(false);
+                let id = handle.open_window(attrs, move |_, _| {
+                    crate::core::Element::image(pixmap.clone())
+                        .width(size.width)
+                        .height(size.height)
+                        .opacity(0.85)
+                });
+                self.cross_drag.window = Some(id);
+            }
+        }
+    }
+
+    fn hide_drag_image(&mut self) {
+        if let Some(id) = self.cross_drag.window.take() {
+            self.panes[0].handle.close_window(id);
+        }
+    }
+
     /// A drag from another application, carrying `offer`, entered the primary
     /// window at `pos`. Returns whether a drop target there accepts it. (The
     /// event loop calls this for [`Event::DragEnter`](crate::platform::Event::DragEnter);
@@ -496,6 +760,7 @@ mod tests {
         moved: Vec<String>,
         hovering: bool,
         taps: u32,
+        outside: Vec<(DropData, Option<Point>)>,
     }
 
     thread_local! {
@@ -699,6 +964,144 @@ mod tests {
         assert_eq!(window.started.borrow().len(), 1, "asked");
         app.pointer_release(Point::new(20.0, 60.0));
         assert_eq!(app.state().moved, vec!["hi".to_string()]);
+    }
+
+    /// Two windows side by side, each one draggable item (y 0..40) over a
+    /// zone taking everything (y 40..80), the first's item telling the state
+    /// where it was dropped outside the windows: the primary window's content
+    /// at (100, 100) on the desktop, the other's at (400, 100); `positions`
+    /// off, where are unknown (Wayland).
+    fn two_windows(positions: bool) -> App<St> {
+        use crate::platform::WindowAttributes;
+        let view = |_: &St, cx: &mut Cx<St>| {
+            let item = block()
+                .drag_source(cx, |_| Some(DropData::Internal("tab".into())))
+                .on_drop_outside(cx, |s: &mut St, data, at| {
+                    s.outside.push((data.clone(), at));
+                });
+            let zone = cx.register_drop(DragOffer::ANY, |s, data, at| {
+                if let DropData::Internal(t) = data {
+                    s.moved.push(format!("{t}@{},{}", at.x, at.y));
+                }
+            });
+            cx.set_drop_hover(zone, |s, on| s.hovering = on);
+            column(vec![item, block().drop_target(zone)])
+        };
+        let mut app = App::new(St::default(), view)
+            .no_font()
+            .logical_size(Size::new(200.0, 80.0));
+        app.open_window(
+            WindowAttributes::new().logical_size(Size::new(200.0, 80.0)),
+            view,
+        );
+        let size = Size::new(200.0, 80.0);
+        for (pane, x) in app.panes.iter_mut().zip([100.0, 400.0]) {
+            pane.info.inner_size = size;
+            // A 4 px border and a 24 px title bar around the content.
+            pane.info.outer_size = Size::new(208.0, 108.0);
+            pane.info.position = positions.then_some(Point::new(x - 4.0, 100.0 - 24.0));
+        }
+        app
+    }
+
+    #[test]
+    fn content_sits_inside_the_frame() {
+        let mut info = crate::platform::WindowInfo::from_size(
+            crate::geometry::PhysicalSize::new(200, 80),
+            crate::geometry::ScaleFactor::IDENTITY,
+        );
+        assert_eq!(super::content_origin(&info), None, "position unknown");
+        info.position = Some(Point::new(10.0, 20.0));
+        assert_eq!(super::content_origin(&info), Some(Point::new(10.0, 20.0)));
+        info.outer_size = Size::new(208.0, 108.0);
+        assert_eq!(super::content_origin(&info), Some(Point::new(14.0, 44.0)));
+    }
+
+    #[test]
+    fn an_in_app_drag_goes_on_in_another_window() {
+        let mut app = two_windows(true);
+        let _ = app.render_frame();
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(20.0, 30.0));
+        assert!(app.panes[0].dnd.dragging_internally());
+        // Over the other window's zone: (320, 50) here is (420, 150) on the
+        // desktop, (20, 50) there.
+        app.pointer_drag_to(Point::new(320.0, 50.0));
+        assert!(app.state().hovering, "the other window's zone hovers");
+        assert!(app.panes[1].dnd.target.is_some());
+        assert!(app.panes[1].dirty, "and shows it");
+        assert_eq!(app.panes[0].dnd.target, None);
+        // Between the windows: nothing hovers.
+        app.pointer_drag_to(Point::new(250.0, 50.0));
+        assert!(!app.state().hovering);
+        assert_eq!(app.panes[1].dnd.target, None);
+        // Back over it, and let go: it drops there, at the point in that window.
+        app.pointer_drag_to(Point::new(330.0, 60.0));
+        assert!(app.state().hovering);
+        app.pointer_release(Point::new(330.0, 60.0));
+        assert_eq!(app.state().moved, vec!["tab@30,60".to_string()]);
+        assert!(app.state().outside.is_empty());
+        assert!(!app.state().hovering);
+        assert!(!app.panes[0].dnd.dragging_internally());
+        assert_eq!(app.panes[0].dnd.source, None);
+    }
+
+    #[test]
+    fn a_drag_let_go_outside_every_window_tells_its_source_where() {
+        let mut app = two_windows(true);
+        let _ = app.render_frame();
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(20.0, 30.0));
+        app.pointer_drag_to(Point::new(50.0, 300.0));
+        app.pointer_release(Point::new(50.0, 300.0));
+        assert_eq!(
+            app.state().outside,
+            vec![(
+                DropData::Internal("tab".into()),
+                Some(Point::new(150.0, 400.0))
+            )]
+        );
+        assert!(app.state().moved.is_empty());
+        assert!(!app.panes[0].dnd.dragging_internally());
+
+        // Where windows' positions are unknown, it's let go somewhere.
+        let mut app = two_windows(false);
+        let _ = app.render_frame();
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(20.0, 30.0));
+        app.pointer_drag_to(Point::new(320.0, 50.0));
+        assert!(!app.state().hovering, "no telling it's over the other");
+        app.pointer_release(Point::new(320.0, 50.0));
+        assert_eq!(
+            app.state().outside,
+            vec![(DropData::Internal("tab".into()), None)]
+        );
+
+        // Let go inside its own window, over nothing: nothing happens.
+        let mut app = two_windows(true);
+        let _ = app.render_frame();
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(20.0, 30.0));
+        app.pointer_drag_to(Point::new(260.0, 30.0));
+        app.pointer_drag_to(Point::new(150.0, 20.0));
+        app.pointer_release(Point::new(150.0, 20.0));
+        assert!(app.state().outside.is_empty() && app.state().moved.is_empty());
+    }
+
+    #[test]
+    fn escape_ends_a_drag_over_another_window() {
+        let mut app = two_windows(true);
+        let _ = app.render_frame();
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(20.0, 30.0));
+        app.pointer_drag_to(Point::new(320.0, 50.0));
+        assert!(app.state().hovering);
+        app.pane_source_cancel(0);
+        app.cross_drag_end();
+        assert!(!app.state().hovering);
+        assert_eq!(app.panes[1].dnd.target, None);
+        app.pointer_release(Point::new(320.0, 50.0));
+        assert!(app.state().moved.is_empty() && app.state().outside.is_empty());
     }
 
     #[test]

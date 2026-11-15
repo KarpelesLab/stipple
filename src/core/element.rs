@@ -825,6 +825,29 @@ impl Element {
         self
     }
 
+    /// Tell the state when this element's in-app drag (see
+    /// [`drag_source`](Element::drag_source); call after it) is released
+    /// outside every window of the app: `handler` gets the payload and where
+    /// on the desktop it was let go, in logical pixels (`None` where the
+    /// system doesn't say where windows are: Wayland). A tab bar opens a
+    /// window there for the tab, say. While such a drag is outside the app's
+    /// windows, a picture of the element follows the pointer where the
+    /// platform allows (X11, Windows).
+    ///
+    /// Over another window of the app, the drag goes on there: its drop
+    /// targets hover and take it as they would in the window it started in.
+    pub fn on_drop_outside<S>(
+        self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&mut S, &crate::platform::DropData, Option<crate::geometry::Point>)
+        + 'static,
+    ) -> Self {
+        if let Some(id) = self.drag_source {
+            cx.set_drop_outside(id, handler);
+        }
+        self
+    }
+
     /// Deliver raw pointer events over this element to `handler`: every
     /// button going [`Down`](crate::core::PointerEventKind::Down) and
     /// [`Up`](crate::core::PointerEventKind::Up) (middle and side buttons

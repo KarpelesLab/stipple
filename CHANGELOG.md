@@ -49,6 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   area's bottom by it, and scrolls the focused text field's scroll
   containers just far enough to show it (whenever focus, the caret or the
   keyboard changes, on every platform).
+- Tabs between windows (#24): `TabBar::on_detach(|s, index, at|)` runs when
+  a tab is dragged out of every window of the app and let go (at a desktop
+  point, `None` on Wayland), for a window of its own, and
+  `TabBar::on_receive(|s, from_bar, from, to|)` when another bar's tab (in
+  another window, say) is dropped on this one. Underneath, an in-app drag of
+  an `Internal` payload goes on over the app's other windows (their drop
+  targets hover and take it), and `Element::on_drop_outside(cx, |s, data,
+  at|)` tells a drag source it was let go outside them all; a picture of the
+  source follows the pointer outside the windows on X11 and Windows.
+  `sessionsdemo` detaches sessions into windows of their own and moves them
+  between windows' bars.
+- Android: a tap on a scheduled notification while the activity is alive is
+  reported (#57), through the windowless `org.stipple.android.Tapped`
+  activity the APK's `classes.dex` now also holds
+  (`platform::android_receiver_dex`), declared next to the `Alarm` receiver
+  (see docs/platforms/android.md). Without it, such a tap still only brings
+  the app forward.
 
 - Packaged assets (#59): `platform::assets()` reads files the app was
   packaged with by relative path (`read`, `open` as a `Read + Seek` reader,
