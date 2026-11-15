@@ -48,8 +48,12 @@
 #    the app save its state (onSaveInstanceState), `am kill` ends the
 #    backgrounded process, and starting it again restores the count and the
 #    text from the saved Bundle;
-# 12. screenshots of each state land in the screenshot directory;
-# 13. the screen: drawn edge to edge, the app reports a non-zero safe area,
+# 12. scheduled notifications: one posted with the process gone (the APK's
+#    Alarm receiver), whose tap starts the app with its id; then one tapped
+#    while the activity runs, its id reported too (the Tapped activity), the
+#    process and the activity the same;
+# 13. screenshots of each state land in the screenshot directory;
+# 14. the screen: drawn edge to edge, the app reports a non-zero safe area,
 #    and dumpsys shows its requested portrait orientation and the window's
 #    FLAG_KEEP_SCREEN_ON (reported, not fatal unless
 #    STIPPLE_ANDROID_SCREEN_STRICT=1).
@@ -793,4 +797,26 @@ tap_when 'text="Scheduled from androiddemo"' 20
 wait_for 'androiddemo: notification tapped "androiddemo-later"' 60
 adb shell cmd statusbar collapse || true
 echo "android: scheduled notification shown with the process gone, and its tap heard"
+
+# A tap while the activity runs: NativeActivity doesn't pass onNewIntent on,
+# so the notification opens the APK's Tapped activity, which reports the id
+# and brings the app back. Same process, no new activity.
+wait_top "$pkg" 30
+pid="$(adb shell pidof "$pkg" | tr -d '\r')"
+adb logcat -c
+tap_when 'text="Later"' 30
+wait_for 'stipple: scheduled notification "androiddemo-later" posted' 60
+sleep 1
+adb shell cmd statusbar expand-notifications
+sleep 2
+adb exec-out screencap -p > "$shots/android-scheduled-alive.png"
+tap_when 'text="Scheduled from androiddemo"' 20
+wait_for 'androiddemo: notification tapped "androiddemo-later"' 30
+adb shell cmd statusbar collapse || true
+wait_top "$pkg/android.app.NativeActivity" 20
+if [ "$(adb shell pidof "$pkg" | tr -d '\r')" != "$pid" ]; then
+  echo "the tap started the process again (pid $pid before)" >&2
+  exit 1
+fi
+echo "android: scheduled notification tapped while the activity runs, its id heard"
 echo "android: all checks passed"

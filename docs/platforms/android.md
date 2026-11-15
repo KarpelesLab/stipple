@@ -349,12 +349,32 @@ it. Leave both out for inexact alarms.)
 The backend keeps what's scheduled in `stipple-notifications.txt` in the app's
 files directory, since `AlarmManager` can't list its alarms: for
 `pending_notifications`, and to set the alarms again when the app starts.
-Tapping a scheduled notification opens the app with its id in the launch
-intent; Stipple reports it (`App::on_notification_tapped`) when the tap
-starts the activity. While the activity is alive, a tap only brings it to the
-front: `NativeActivity` doesn't pass `onNewIntent` on, so which notification
-it was isn't known. Force-stopping the app (Settings, `am force-stop`) cancels
-its alarms, as Android does for every app.
+Force-stopping the app (Settings, `am force-stop`) cancels its alarms, as
+Android does for every app.
+
+Tapping a scheduled notification is reported with its id
+(`App::on_notification_tapped`). How it gets there depends on the manifest
+too:
+
+- **With nothing added**, the tap opens the app's launch intent with the id in
+  it, which Stipple reads when the tap *starts* the activity. While the
+  activity is alive, the tap only brings it to the front: `NativeActivity`
+  doesn't pass `onNewIntent` on, so which notification it was isn't known.
+- **With the `Tapped` activity** (a class of the same `classes.dex`), every
+  tap is reported, the activity alive or not: the tap opens `Tapped`, which has
+  no window, reports the id, brings the app's activity forward with its launch
+  intent (or starts it, the event loop finding the tap queued) and finishes at
+  once. The app's own activity stays a plain `NativeActivity`; declare `Tapped`
+  next to the receiver:
+
+```xml
+<activity android:name="org.stipple.android.Tapped" android:exported="false"
+    android:taskAffinity="" android:excludeFromRecents="true" android:noHistory="true"
+    android:theme="@android:style/Theme.NoDisplay"/>
+```
+
+(`taskAffinity=""` gives it a task of its own, out of Recents, so it never
+becomes the root of the app's task.)
 
 ## Share sheet and haptics
 
@@ -372,7 +392,9 @@ setting.
 CI's emulator opens the chooser with a file and backs out of it, plays a
 haptic, then schedules a notification, sends the app to the background and
 ends its process: the `Alarm` receiver must post it (`dumpsys notification`),
-and tapping it must start the app with its id.
+and tapping it must start the app with its id. Then it schedules another and
+leaves the app in front: tapping that one, with the activity alive, must
+report its id too (through `Tapped`).
 
 ## Building
 
@@ -431,7 +453,7 @@ mkdir -p lib/arm64-v8a
 cp target/aarch64-linux-android/release/libstipple_android.so lib/arm64-v8a/
 aapt package -f -M AndroidManifest.xml -I "$ANDROID_HOME/platforms/android-34/android.jar" -F base.apk
 aapt add base.apk lib/arm64-v8a/libstipple_android.so
-# optional, for scheduled notifications (see above): classes.dex from
+# optional, for scheduled notifications and their taps (see above): classes.dex from
 # stipple::platform::android_receiver_dex("stipple_android")
 aapt add base.apk classes.dex
 zipalign -f -p 4 base.apk aligned.apk

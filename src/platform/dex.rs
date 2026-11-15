@@ -17,8 +17,8 @@
 //! invoke-static {v0}, System.loadLibrary; return-void` in its `<clinit>`), so
 //! JNI finds its natives by their exported names (`Java_pkg_Class_method`)
 //! without `RegisterNatives`. That is for a class the system instantiates in
-//! a process the app's code hasn't run in: the [`ALARM`] receiver, written
-//! into an APK at build time ([`receiver_dex`]).
+//! a process the app's code hasn't run in: the [`ALARM`] receiver and the
+//! [`TAPPED`] activity, written into an APK at build time ([`receiver_dex`]).
 //!
 //! The format is the one in AOSP's `dex-format` documentation; the sort
 //! orders and alignments below are the ones ART's `DexFileVerifier` checks.
@@ -717,15 +717,38 @@ pub(crate) const ALARM: Class = Class {
     load_library: None,
 };
 
-/// A `classes.dex` holding [`ALARM`], loading native library `lib` (the
-/// `android.app.lib_name` of the app's `NativeActivity`, without `lib` and
-/// `.so`), for the APK.
+/// The activity a scheduled notification's tap opens when the app's manifest
+/// declares it (with the dex from [`receiver_dex`] in its APK): a
+/// `NativeActivity` doesn't pass `onNewIntent` on, so a tap that only brings
+/// the running activity forward would go unheard. This one, with no window
+/// (`Theme.NoDisplay`), reports the tap and brings the app's own activity
+/// forward (or starts it), then finishes. Its `onCreate` is the library's
+/// `Java_org_stipple_android_Tapped_onCreate`, which calls
+/// `Activity.onCreate` itself.
+pub(crate) const TAPPED: Class = Class {
+    name: "Lorg/stipple/android/Tapped;",
+    superclass: ACTIVITY,
+    interfaces: &[],
+    ctor: &[],
+    natives: &[native("onCreate", &[BUNDLE], "V")],
+    load_library: None,
+};
+
+/// A `classes.dex` holding [`ALARM`] and [`TAPPED`], each loading native
+/// library `lib` (the `android.app.lib_name` of the app's `NativeActivity`,
+/// without `lib` and `.so`), for the APK.
 pub(crate) fn receiver_dex(lib: &str) -> Vec<u8> {
     let lib: &'static str = Box::leak(lib.to_string().into_boxed_str());
-    build(&[Class {
-        load_library: Some(lib),
-        ..ALARM
-    }])
+    build(&[
+        Class {
+            load_library: Some(lib),
+            ..ALARM
+        },
+        Class {
+            load_library: Some(lib),
+            ..TAPPED
+        },
+    ])
 }
 
 /// Predictive back on Android 13 (API 33): an `OnBackInvokedCallback` the
@@ -971,10 +994,10 @@ mod tests {
         let dex = build(&[RECEIVER]);
         assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
         let dex = receiver_dex("stipple_android");
-        assert_eq!(read_u32(&dex, 96), 1, "one class");
+        assert_eq!(read_u32(&dex, 96), 2, "two classes");
         assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
         assert_eq!(&dex[12..32], &sha1(&dex[32..]));
-        // Two code items: the constructor's and `<clinit>`'s, whose header
+        // Code items: each class's constructor and `<clinit>`, whose header
         // is one register, no ins, one out, six code units.
         let needle = [1u8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0];
         let at = dex
@@ -988,6 +1011,8 @@ mod tests {
         assert!(dex.windows(15).any(|w| w == b"stipple_android"));
         assert!(dex.windows(11).any(|w| w == b"loadLibrary"));
         assert_eq!(binary_name(ALARM.name), "org.stipple.android.Alarm");
+        assert_eq!(binary_name(TAPPED.name), "org.stipple.android.Tapped");
+        assert!(dex.windows(8).any(|w| w == b"onCreate"));
     }
 
     /// With `STIPPLE_DEX_OUT` set, write the Android backend's classes there

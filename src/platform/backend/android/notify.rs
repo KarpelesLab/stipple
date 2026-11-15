@@ -16,7 +16,11 @@
 //! [`request_permission`] asks the same way without a notification waiting,
 //! and [`post_scheduled`] posts one that [`alarm`](super::alarm) scheduled,
 //! under a notification id made from the app's id, its tap opening the app
-//! with that id in the launch intent ([`TAPPED_EXTRA`]).
+//! with that id in the launch intent ([`TAPPED_EXTRA`]). A `NativeActivity`
+//! doesn't pass `onNewIntent` on, so when the tap only brings the running
+//! activity forward, that intent goes unheard: when the manifest declares the
+//! [`Tapped`](crate::platform::dex::TAPPED) activity, the tap opens it
+//! instead, which reports the tap and brings the app forward.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -377,21 +381,45 @@ fn small_icon(jni: &Jni, context: JObject) -> i32 {
 }
 
 /// A `PendingIntent` that opens the app, saying it was for scheduled
-/// notification `tag`.
+/// notification `tag`: its launch intent, or, for a scheduled one when the
+/// manifest declares it, the [`Tapped`](crate::platform::dex::TAPPED)
+/// activity, which hears the tap even while the app's activity runs.
 fn launch_intent(jni: &Jni, context: JObject, tag: Option<&str>) -> Option<JObject> {
-    let pm = jni.call_object(
-        context,
-        c"getPackageManager",
-        c"()Landroid/content/pm/PackageManager;",
-        &[],
-    )?;
-    let package = jni.call_object(context, c"getPackageName", c"()Ljava/lang/String;", &[])?;
-    let intent = jni.call_object(
-        pm,
-        c"getLaunchIntentForPackage",
-        c"(Ljava/lang/String;)Landroid/content/Intent;",
-        &[JValue { l: package }],
-    )?;
+    let intent = if tag.is_some() && super::alarm::tapped_declared(jni, context) {
+        let intent = jni.new_named(c"android/content/Intent", c"()V", &[])?;
+        let name = jni.string(super::alarm::TAPPED_CLASS)?;
+        jni.call_object(
+            intent,
+            c"setClassName",
+            c"(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue { l: context }, JValue { l: name }],
+        )?;
+        // FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS |
+        // FLAG_ACTIVITY_NO_HISTORY | FLAG_ACTIVITY_NO_ANIMATION: a task of
+        // its own (the manifest gives it no affinity), out of Recents.
+        let flags = 0x1000_0000 | 0x0080_0000 | 0x4000_0000 | 0x0001_0000;
+        jni.call_object(
+            intent,
+            c"addFlags",
+            c"(I)Landroid/content/Intent;",
+            &[JValue { i: flags }],
+        )?;
+        intent
+    } else {
+        let pm = jni.call_object(
+            context,
+            c"getPackageManager",
+            c"()Landroid/content/pm/PackageManager;",
+            &[],
+        )?;
+        let package = jni.call_object(context, c"getPackageName", c"()Ljava/lang/String;", &[])?;
+        jni.call_object(
+            pm,
+            c"getLaunchIntentForPackage",
+            c"(Ljava/lang/String;)Landroid/content/Intent;",
+            &[JValue { l: package }],
+        )?
+    };
     let mut code = 0;
     if let Some(tag) = tag {
         code = crate::platform::shell::schedule::int_id(tag);

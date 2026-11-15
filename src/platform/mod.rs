@@ -55,11 +55,13 @@ pub(crate) mod dex;
 /// A `classes.dex` for an Android APK holding the `org.stipple.android.Alarm`
 /// broadcast receiver, which shows the app's
 /// [scheduled notifications](schedule_notification) when its process isn't
-/// running: the receiver loads the native library `lib` (the
-/// `android.app.lib_name` of the app's `NativeActivity`, `stipple_android` for
-/// `libstipple_android.so`). Write it from a build script (or a host tool)
-/// into the APK as `classes.dex`, set `android:hasCode="true"`, and declare the
-/// receiver in the manifest; see `docs/platforms/android.md`.
+/// running, and the `org.stipple.android.Tapped` activity, which reports a
+/// tap on one while the app's activity runs: both load the native library
+/// `lib` (the `android.app.lib_name` of the app's `NativeActivity`,
+/// `stipple_android` for `libstipple_android.so`). Write it from a build
+/// script (or a host tool) into the APK as `classes.dex`, set
+/// `android:hasCode="true"`, and declare the receiver and the activity in the
+/// manifest; see `docs/platforms/android.md`.
 // Hidden: an Android packaging step, not an app API.
 #[doc(hidden)]
 pub fn android_receiver_dex(lib: &str) -> Vec<u8> {

@@ -54,6 +54,7 @@ const CALL_INT_METHOD_A: usize = 51;
 const CALL_LONG_METHOD_A: usize = 54;
 const CALL_FLOAT_METHOD_A: usize = 57;
 const CALL_VOID_METHOD_A: usize = 63;
+const CALL_NONVIRTUAL_VOID_METHOD_A: usize = 93;
 const GET_FIELD_ID: usize = 94;
 const GET_OBJECT_FIELD: usize = 95;
 const GET_INT_FIELD: usize = 100;
@@ -1133,6 +1134,26 @@ pub(super) unsafe fn context_dir(
 }
 
 impl Jni {
+    /// Call `class`'s own `name` on `obj`, not an override's: what Java's
+    /// `super.name(..)` does, for a native method overriding one.
+    pub(super) fn call_super_void(
+        &self,
+        obj: JObject,
+        class: &CStr,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<()> {
+        let class = self.find_class(class)?;
+        let m = self.method(class, name, sig)?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JObject, JMethod, *const JValue) =
+                std::mem::transmute(self.f(CALL_NONVIRTUAL_VOID_METHOD_A));
+            f(self.0, obj, class, m, args.as_ptr());
+        }
+        (!self.clear()).then_some(())
+    }
+
     pub(super) fn call_long(
         &self,
         obj: JObject,

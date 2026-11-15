@@ -312,7 +312,7 @@ center once shown), and a tap that brings the app up reports it as
 | | Delivered by | App not running | Tap reported | Permission |
 |---|---|---|---|---|
 | iOS | `UNUserNotificationCenter`: a `UNTimeIntervalNotificationTrigger`, or a `UNCalendarNotificationTrigger` for a daily or weekly repeat | shown | yes, also when it launches the app | `requestAuthorizationWithOptions:` |
-| Android | `AlarmManager` (exact where allowed, else inexact) and a broadcast receiver that posts it | shown with the `Alarm` receiver in the APK; otherwise only while the process lives | when the tap starts the activity | `POST_NOTIFICATIONS` (13+) |
+| Android | `AlarmManager` (exact where allowed, else inexact) and a broadcast receiver that posts it | shown with the `Alarm` receiver in the APK; otherwise only while the process lives | yes with the `Tapped` activity in the APK; otherwise when the tap starts the activity | `POST_NOTIFICATIONS` (13+) |
 | Web | a timer in the page, then the `Notification` API | no (while the page is open) | yes (`onclick`) | `Notification.requestPermission` |
 | macOS, Windows, Linux | a timer thread, then `notify` | no (while the app runs) | no | none |
 
@@ -323,18 +323,25 @@ center once shown), and a tap that brings the app up reports it as
   own). Without permission the center refuses the request (logged).
 - **Android** keeps what's scheduled in a file of the app's, since
   `AlarmManager` can't list its alarms; the alarms are set again when the app
-  starts, and at boot with the receiver. A tap while the activity is alive
-  only brings the app to the front: `NativeActivity` doesn't pass
-  `onNewIntent` on, so which one it was isn't known. Delivery while the
-  process is gone needs a `classes.dex` in the APK and a manifest entry; see
-  [the Android page](platforms/android.md#scheduled-notifications), with the
-  exact-alarm permissions.
+  starts, and at boot with the receiver. Delivery while the process is gone
+  needs a `classes.dex` in the APK and a manifest entry for its `Alarm`
+  receiver. A tap while the activity is alive is reported through the same
+  dex's `Tapped` activity, another manifest entry (a windowless activity that
+  reports the tap and brings the app forward, since `NativeActivity` doesn't
+  pass `onNewIntent` on); without it, such a tap only brings the app to the
+  front. See [the Android page](platforms/android.md#scheduled-notifications),
+  with the exact-alarm permissions.
 - **The desktops** have no scheduler of their own that Stipple uses (macOS's
   `UNUserNotificationCenter` needs a bundle, Windows' scheduled toasts an
   AppUserModelID, Linux has none): a thread shows each one with `notify` when
-  it's due, while the app runs, and forgets them when it quits.
+  it's due, while the app runs, and forgets them when it quits (so
+  `pending_notifications` is empty on the next launch: schedule again from
+  the app's own state). They are plain notifications, so a click on one isn't
+  reported, as for `notify`.
 - **The web** has nothing reliable without a push server and a service
-  worker; the page's timers stop with the tab.
+  worker; the page's timers stop with the tab (reloading it forgets them),
+  and a hidden tab's timers may be slowed down by the browser, so one can
+  show late. A click on one is reported while the page is open.
 
 ## The share sheet
 

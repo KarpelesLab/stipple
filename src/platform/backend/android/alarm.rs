@@ -51,6 +51,7 @@ const ID_EXTRA: &str = "org.stipple.id";
 const TITLE_EXTRA: &str = "org.stipple.title";
 const BODY_EXTRA: &str = "org.stipple.body";
 const ALARM_CLASS: &str = "org.stipple.android.Alarm";
+pub(super) const TAPPED_CLASS: &str = "org.stipple.android.Tapped";
 const STORE: &str = "stipple-notifications.txt";
 
 /// `PendingIntent.FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT`.
@@ -185,7 +186,37 @@ fn save(jni: &Jni, context: JObject, entries: &[Entry]) {
 static DECLARED: AtomicU8 = AtomicU8::new(0);
 
 fn alarm_declared(jni: &Jni, context: JObject) -> bool {
-    match DECLARED.load(Ordering::Relaxed) {
+    declared(jni, context, &DECLARED, ALARM_CLASS, c"getReceiverInfo")
+}
+
+/// Whether the app's manifest declares the [`TAPPED_CLASS`] activity: 0 not
+/// known yet, 1 no, 2 yes.
+static TAPPED_DECLARED: AtomicU8 = AtomicU8::new(0);
+
+/// Whether scheduled notifications' taps go to the
+/// [`Tapped`](crate::platform::dex::TAPPED) activity, which the app's
+/// manifest declares.
+pub(super) fn tapped_declared(jni: &Jni, context: JObject) -> bool {
+    declared(
+        jni,
+        context,
+        &TAPPED_DECLARED,
+        TAPPED_CLASS,
+        c"getActivityInfo",
+    )
+}
+
+/// Whether the app's manifest declares component `class`, asking the
+/// `PackageManager`'s `getter` (`getReceiverInfo`, `getActivityInfo`) once
+/// per process and keeping the answer in `cache`.
+fn declared(
+    jni: &Jni,
+    context: JObject,
+    cache: &AtomicU8,
+    class: &str,
+    getter: &std::ffi::CStr,
+) -> bool {
+    match cache.load(Ordering::Relaxed) {
         1 => return false,
         2 => return true,
         _ => {}
@@ -197,7 +228,7 @@ fn alarm_declared(jni: &Jni, context: JObject) -> bool {
             c"()Landroid/content/pm/PackageManager;",
             &[],
         )?;
-        let name = jni.string(ALARM_CLASS)?;
+        let name = jni.string(class)?;
         let component = jni.new_named(
             c"android/content/ComponentName",
             c"(Landroid/content/Context;Ljava/lang/String;)V",
@@ -206,21 +237,22 @@ fn alarm_declared(jni: &Jni, context: JObject) -> bool {
         // Throws NameNotFoundException (cleared, so `None`) when it isn't.
         jni.call_object(
             pm,
-            c"getReceiverInfo",
+            getter,
             c"(Landroid/content/ComponentName;I)Landroid/content/pm/ActivityInfo;",
             &[JValue { l: component }, JValue { i: 0 }],
         )
     })()
     .is_some();
-    DECLARED.store(if declared { 2 } else { 1 }, Ordering::Relaxed);
-    log(&format!(
-        "stipple: {ALARM_CLASS} receiver {}",
-        if declared {
-            "declared: scheduled notifications show without the app running"
-        } else {
+    cache.store(if declared { 2 } else { 1 }, Ordering::Relaxed);
+    let what = match (class, declared) {
+        (ALARM_CLASS, true) => "declared: scheduled notifications show without the app running",
+        (ALARM_CLASS, false) => {
             "not declared: scheduled notifications show while the process lives"
         }
-    ));
+        (_, true) => "declared: a tap is heard while the activity runs",
+        (_, false) => "not declared: a tap is heard only when it starts the activity",
+    };
+    log(&format!("stipple: {class} {what}"));
     declared
 }
 
@@ -551,6 +583,12 @@ static REPORTED: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 /// tap started it, tell the app which. From `onCreate`, on the main thread.
 pub(super) fn activity_created(jni: &Jni, activity: JObject, sdk: i32) {
     rearm(jni, activity, sdk);
+    report_tap(jni, activity);
+}
+
+/// If `activity`'s intent is a scheduled notification's tap not reported
+/// yet, tell the app which.
+fn report_tap(jni: &Jni, activity: JObject) {
     let tapped = (|| {
         let intent = jni.call_object(activity, c"getIntent", c"()Landroid/content/Intent;", &[])?;
         // FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY: brought back from Recents,
@@ -583,7 +621,89 @@ pub(super) fn activity_created(jni: &Jni, activity: JObject, sdk: i32) {
     })();
     if let Some(id) = tapped {
         log(&format!("stipple: notification {id:?} tapped"));
+        // Queued for the event loop: the running one, or the one the app's
+        // activity starts.
         crate::platform::shell::post(Event::NotificationTapped(id));
+    }
+}
+
+/// `org.stipple.android.Tapped.onCreate`, the windowless activity a
+/// scheduled notification's tap opens when the app's manifest declares it
+/// (with the dex [`receiver_dex`](crate::platform::android_receiver_dex)
+/// writes in its APK). A `NativeActivity` doesn't pass `onNewIntent` on, so
+/// a tap that only brings the running activity forward would go unheard;
+/// this activity reports the tap whatever runs, brings the app's activity
+/// forward with its launch intent (or starts it, the app's event loop then
+/// finding the tap queued), and finishes.
+///
+/// # Safety
+/// Called by the VM, with a valid `env` and references.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn Java_org_stipple_android_Tapped_onCreate(
+    env: Env,
+    this: JObject,
+    saved: JObject,
+) {
+    unsafe {
+        jni::in_native(env, |jni| {
+            // No window, whatever the manifest says: it finishes at once.
+            if let Some(theme) = jni.static_int(c"android/R$style", c"Theme_NoDisplay") {
+                jni.call_void(this, c"setTheme", c"(I)V", &[JValue { i: theme }]);
+            }
+            jni.call_super_void(
+                this,
+                c"android/app/Activity",
+                c"onCreate",
+                c"(Landroid/os/Bundle;)V",
+                &[JValue { l: saved }],
+            );
+            report_tap(jni, this);
+            let opened = (|| {
+                let pm = jni.call_object(
+                    this,
+                    c"getPackageManager",
+                    c"()Landroid/content/pm/PackageManager;",
+                    &[],
+                )?;
+                let package =
+                    jni.call_object(this, c"getPackageName", c"()Ljava/lang/String;", &[])?;
+                // With FLAG_ACTIVITY_NEW_TASK, as the launcher starts it: it
+                // brings the app's task forward, or starts it. Plus
+                // FLAG_ACTIVITY_REORDER_TO_FRONT: a running activity comes
+                // forward, even when its task was started some other way (no
+                // second activity on top).
+                let intent = jni.call_object(
+                    pm,
+                    c"getLaunchIntentForPackage",
+                    c"(Ljava/lang/String;)Landroid/content/Intent;",
+                    &[JValue { l: package }],
+                )?;
+                jni.call_object(
+                    intent,
+                    c"addFlags",
+                    c"(I)Landroid/content/Intent;",
+                    &[JValue { i: 0x0002_0000 }],
+                )?;
+                jni.call_void(
+                    this,
+                    c"startActivity",
+                    c"(Landroid/content/Intent;)V",
+                    &[JValue { l: intent }],
+                )
+            })();
+            if opened.is_none() {
+                log("stipple: can't open the app from the notification");
+            }
+            jni.call_void(this, c"finish", c"()V", &[]);
+            // No animation of its own on the way out.
+            jni.call_void(
+                this,
+                c"overridePendingTransition",
+                c"(II)V",
+                &[JValue { i: 0 }, JValue { i: 0 }],
+            );
+            Some(())
+        });
     }
 }
 
