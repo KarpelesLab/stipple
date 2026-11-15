@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.6](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.5...stipple-v0.0.6) - 2026-11-15
+
+### Added
+
+- sensible defaults — a system font, centered rows, stretched columns, placeholders, PNG export
+
+### Fixed
+
+- placeholders reach every screen reader; text paints inside its padding; align_self in grids
+
+### Other
+
+- *(widgets)* widgets take cx; one button, one text input
+- update screenshots from CI
+- *(api)* one naming convention for setters
+- *(api)* one public path per item; menu and tray plumbing private; audit in CI
+- *(atspi)* send the first Tab again if a fresh virtual keyboard lost it
+- *(api)* platform follows the API guidelines
+- *(api)* core, layout, geometry and anim follow the API guidelines
+- *(api)* widgets, style, render and the crate root follow the API guidelines
+- *(api)* game and audio follow the API guidelines
+- API guidelines, and a rustdoc-JSON audit of the public API
+
 ### Changed (breaking)
 
 - Widgets take the view's `cx` first and read the theme from it: no more
