@@ -193,10 +193,12 @@ impl<S: 'static> App<S> {
         self.gamepad_nav.as_ref().and_then(|n| n.pad.deadline())
     }
 
-    /// Escape that nothing focused used: go back, when gamepad navigation
-    /// is on. Returns whether it went back.
+    /// Escape that nothing focused used: close what the view said Escape
+    /// closes (a sheet, see [`BackHandler::escape`](crate::core::BackHandler::escape)),
+    /// or else go back when gamepad navigation is on. Returns whether it
+    /// went back.
     pub(crate) fn escape_back(&mut self, idx: usize) -> bool {
-        self.nav_on() && self.go_back(idx)
+        self.view_back(idx, true) || (self.nav_on() && self.go_back(idx))
     }
 
     /// Do what a gamepad asked in window `idx`, as the keys would.

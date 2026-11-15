@@ -369,6 +369,8 @@ struct Pane<S> {
     // Retained from the last frame build, for routing pointer events.
     tree: Option<LayoutNode>,
     handlers: Handlers<S>,
+    /// What Back does, as the last build declared it (`Cx::on_back`).
+    backs: Vec<crate::core::BackHandler<S>>,
     pressed: Option<ActionId>,
     // Where a press that hit no tap target went down, so its release can
     // still move focus (to a plain text field, say, or away). Cleared when
@@ -529,6 +531,7 @@ impl<S: 'static> Pane<S> {
             frame_renderer: None,
             tree: None,
             handlers: Handlers::default(),
+            backs: Vec::new(),
             pressed: None,
             press_focus: None,
             focused: None,
@@ -1247,6 +1250,7 @@ impl<S: 'static> Pane<S> {
         let mut overlays = cx.take_overlays();
         self.dnd.queried = cx.take_drop_queried();
         let queried = cx.take_interaction_queried();
+        self.backs = cx.take_back_handlers();
         self.handlers = cx.into_handlers();
         // Lower the tree: give elements their identities, apply the overrides
         // of the states they're in, and animate what changed.
@@ -3681,7 +3685,7 @@ impl<S: 'static> App<S> {
                     ControlFlow::Wait
                 }
                 Event::BackProgress(gesture) => {
-                    if self.back_progress(gesture) {
+                    if self.back_progress(idx, gesture) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -4307,6 +4311,10 @@ pub mod prelude {
     pub use crate::render::{Decoration, FontStyle, FontWeight, TextPaint, UnderlineStyle};
     pub use crate::style::Theme;
     pub use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Typography};
+    pub use crate::widgets::{
+        AppBar, BottomSheet, NavStack, PageTransition, SheetDetent, app_bar, bottom_sheet,
+        nav_stack,
+    };
     pub use crate::widgets::{
         Button, EditBuffer, TextInput, Toggle, Variant, button, checkbox, column, dialog, divider,
         grid, heading, label, open_menu, panel, paragraph, progress_bar, radio, row, scroll,

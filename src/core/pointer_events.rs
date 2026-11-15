@@ -209,6 +209,10 @@ pub(crate) struct Slot<S> {
     pointer: Option<PointerFn<S>>,
     wheel: Option<WheelFn<S>>,
     pinch: Option<PinchFn<S>>,
+    /// A downward touch drag at the top of a vertical scroll container
+    /// inside this element is the element's, not the container's (a sheet
+    /// dragged down by its content).
+    pull: bool,
 }
 
 /// The pointer and wheel handlers registered while building a frame, by
@@ -233,6 +237,7 @@ impl<S> PointerHandlers<S> {
                     pointer: None,
                     wheel: None,
                     pinch: None,
+                    pull: false,
                 });
                 PointerId(self.slots.len() as u32 - 1)
             }
@@ -280,6 +285,20 @@ impl<S> PointerHandlers<S> {
         let id = self.slot(id);
         self.slots[id.0 as usize].pinch = Some(Box::new(handler));
         id
+    }
+
+    /// Have `id` take a downward touch drag at the top of a vertical scroll
+    /// container inside it (see `Slot::pull`).
+    pub(crate) fn set_pull(&mut self, id: PointerId) {
+        if let Some(slot) = self.slots.get_mut(id.0 as usize) {
+            slot.pull = true;
+        }
+    }
+
+    /// Whether `id` takes a downward touch drag at the top of a scroll
+    /// container inside it.
+    pub(crate) fn is_pull(&self, id: PointerId) -> bool {
+        self.slots.get(id.0 as usize).is_some_and(|s| s.pull)
     }
 
     /// Whether `id` has a pointer handler.
@@ -457,4 +476,22 @@ mod tests {
             .without(PointerButton::Other(12));
         assert!(held.is_empty());
     }
+}
+
+thread_local! {
+    /// A pointer handler took the press for a drag of its own.
+    static PRESS_CLAIMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Say, from a pointer handler, that the press under way is the handler's
+/// own drag now (a sheet dragged by its handle): the App cancels it, so its
+/// release taps nothing and moves no focus.
+pub(crate) fn claim_press() {
+    PRESS_CLAIMED.with(|c| c.set(true));
+}
+
+/// Whether a handler claimed the press since the last ask (see
+/// [`claim_press`]).
+pub(crate) fn take_press_claimed() -> bool {
+    PRESS_CLAIMED.with(|c| c.replace(false))
 }

@@ -113,6 +113,11 @@ impl<S: 'static> Pane<S> {
         if ran {
             self.dirty = true;
         }
+        // The handler took the press for a drag of its own (a sheet): the
+        // release taps or focuses nothing.
+        if crate::core::take_press_claimed() {
+            self.cancel_press();
+        }
         ran
     }
 

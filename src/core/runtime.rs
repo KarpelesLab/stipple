@@ -22,7 +22,9 @@ use crate::render::Color;
 use crate::style::Theme;
 use std::collections::HashMap;
 
+mod back;
 mod memo;
+pub use back::BackHandler;
 pub(crate) use memo::MemoCache;
 pub(crate) use memo::MemoMark;
 
@@ -469,6 +471,8 @@ pub struct Cx<'a, S> {
     window_title: Option<String>,
     /// The window's size in logical pixels; zero when unknown.
     window_size: Size,
+    /// What Back does while this build is on screen ([`Cx::on_back`]).
+    backs: Vec<BackHandler<S>>,
 }
 
 /// Per-build animation bookkeeping for a [`Cx`].
@@ -526,6 +530,7 @@ impl<'a, S> Cx<'a, S> {
             pointer_locked: false,
             window_title: None,
             window_size: Size::new(0.0, 0.0),
+            backs: Vec::new(),
         }
     }
 
@@ -955,6 +960,13 @@ impl<'a, S> Cx<'a, S> {
         handler: impl FnMut(&crate::core::PointerEvent, &mut S) + 'static,
     ) -> crate::core::PointerId {
         self.pointers.set_pointer(id, handler)
+    }
+
+    /// Have the element with pointer handler `id` take a downward touch drag
+    /// that starts on a vertical scroll container inside it while that is
+    /// scrolled to its top (a bottom sheet dragged down by its content).
+    pub(crate) fn pull_down(&mut self, id: crate::core::PointerId) {
+        self.pointers.set_pull(id);
     }
 
     /// Register a wheel handler on `id` (or a new id), returning the id.

@@ -73,6 +73,11 @@ pub struct TouchTargets {
     pub long_press: bool,
     /// The element that takes pinches here.
     pub pinch: Option<PointerId>,
+    /// Whether a downward drag here belongs to the widget around the
+    /// vertical scroll container rather than to the container: it is at its
+    /// top, inside an element that pulls (a bottom sheet dragged down by its
+    /// content).
+    pub pull_down: bool,
 }
 
 /// A pinch's state at one touch, for the app to hand to its element as a
@@ -113,6 +118,23 @@ pub enum TouchAction {
     /// A pinch began, moved or ended. When it begins, cancel the first
     /// finger's press as for [`Begin`](Self::Begin).
     Pinch(Pinch),
+    /// The finger pulled down at the top of a scroll container inside a
+    /// widget that pulls ([`TouchTargets::pull_down`]): its moves go to that
+    /// widget from now on, and the press no longer taps.
+    Pull,
+}
+
+thread_local! {
+    /// Whether the finger down pulls a widget (see [`TouchAction::Pull`]),
+    /// until it lifts.
+    static PULLING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the finger down is pulling the widget around a scroll container
+/// at its top ([`TouchAction::Pull`]), so the widget follows moves that
+/// started on its content (which with a mouse it doesn't).
+pub(crate) fn pulling() -> bool {
+    PULLING.with(|p| p.get())
 }
 
 /// The two fingers of a pinch.
@@ -256,9 +278,13 @@ impl TouchGestures {
         targets_at: impl FnOnce(Point) -> TouchTargets,
     ) -> TouchAction {
         match touch.phase {
-            TouchPhase::Started if self.primary.is_none() => self.primary = Some(touch.id),
+            TouchPhase::Started if self.primary.is_none() => {
+                self.primary = Some(touch.id);
+                PULLING.with(|p| p.set(false));
+            }
             TouchPhase::Ended | TouchPhase::Cancelled if self.primary == Some(touch.id) => {
                 self.primary = None;
+                PULLING.with(|p| p.set(false));
             }
             _ => {}
         }
@@ -368,6 +394,13 @@ impl TouchGestures {
                 }
                 // The direction picks the container along it.
                 let horizontal = dx.abs() > dy.abs();
+                // Pulled down at its top, a container inside a widget that
+                // pulls hands the drag to that widget.
+                if !horizontal && dy > 0.0 && targets.pull_down && !caught {
+                    self.state = State::Yielded { id };
+                    PULLING.with(|p| p.set(true));
+                    return TouchAction::Pull;
+                }
                 let target = if horizontal {
                     targets.scroll.horizontal
                 } else {

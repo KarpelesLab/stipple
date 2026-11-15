@@ -80,7 +80,8 @@ pub use pointer_events::{
     PinchEvent, PinchPhase, PointerButtons, PointerEvent, PointerEventKind, PointerId, WheelEvent,
 };
 pub(crate) use pointer_events::{
-    PointerHandlers, WheelTarget, pointer_at, pointer_local, wheel_target_at,
+    PointerHandlers, WheelTarget, claim_press, find_pointer, pointer_at, pointer_local,
+    take_press_claimed, wheel_target_at,
 };
 pub use presence::Effect;
 pub(crate) use render::{
@@ -88,9 +89,9 @@ pub(crate) use render::{
 };
 pub use render::{layout, layout_with_direction, measure, paint, paint_visible};
 pub use runtime::{
-    ActionId, Anchor, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId, FocusId, Handlers,
-    KeyInput, LayoutNode, OverlaySpec, ScrollId, ScrollRequests, TextPosId, ViewportEvent,
-    ViewportId, hit_test, local_point, node_to_window,
+    ActionId, Anchor, BackHandler, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId,
+    FocusId, Handlers, KeyInput, LayoutNode, OverlaySpec, ScrollId, ScrollRequests, TextPosId,
+    ViewportEvent, ViewportId, hit_test, local_point, node_to_window,
 };
 pub(crate) use runtime::{
     MemoCache, NodeContent, ScrollTargets, collect_focusables, collect_viewports, context_at,

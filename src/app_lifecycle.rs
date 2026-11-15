@@ -313,11 +313,18 @@ impl<S: 'static> App<S> {
     }
 
     /// Whether the app would go back if the user asked now: a menu is open,
-    /// or the [`back_enabled`](Self::back_enabled) hook says so (without one,
+    /// the view declared a [`Cx::on_back`](crate::core::Cx::on_back) handler
+    /// (a [`nav_stack`](crate::widgets::nav_stack) deeper than its root, an
+    /// open [`bottom_sheet`](crate::widgets::bottom_sheet)), or the
+    /// [`back_enabled`](Self::back_enabled) hook says so (without one,
     /// whether there is an [`on_back`](Self::on_back) hook). What the system
     /// is told before a back gesture.
     pub fn wants_back(&self) -> bool {
-        if self.panes.iter().any(|p| p.menu_ui.borrow().is_active()) {
+        if self
+            .panes
+            .iter()
+            .any(|p| p.menu_ui.borrow().is_active() || !p.backs.is_empty())
+        {
             return true;
         }
         match &self.lifecycle.back_enabled {
@@ -333,9 +340,23 @@ impl<S: 'static> App<S> {
         crate::platform::set_back_enabled(self.wants_back());
     }
 
-    /// The back gesture moved on: tell the hook. Returns whether it ran (the
-    /// view then rebuilds).
-    pub(crate) fn back_progress(&mut self, gesture: BackGesture) -> bool {
+    /// The back gesture moved on in window `idx`: tell the handler the view
+    /// declared last (see [`Cx::on_back`](crate::core::Cx::on_back)), or
+    /// else the hook. Returns whether one ran (the view then rebuilds).
+    pub(crate) fn back_progress(&mut self, idx: usize, gesture: BackGesture) -> bool {
+        let App { panes, state, .. } = self;
+        if let Some(pane) = panes.get_mut(idx)
+            && let Some(handler) = pane.backs.last_mut()
+        {
+            // The view's handler has Back; one without progress just waits.
+            let ran = handler.progress(state, gesture);
+            if ran {
+                for pane in panes.iter_mut() {
+                    pane.dirty = true;
+                }
+            }
+            return ran;
+        }
         let Some(hook) = self.lifecycle.back_progress.as_mut() else {
             return false;
         };
@@ -441,6 +462,9 @@ impl<S: 'static> App<S> {
         if idx < self.panes.len() && self.menu_nav(idx, Some(MenuKey::Escape)) == Some(true) {
             return true;
         }
+        if self.view_back(idx, false) {
+            return true;
+        }
         let Some(hook) = self.lifecycle.back.as_mut() else {
             return false;
         };
@@ -449,6 +473,24 @@ impl<S: 'static> App<S> {
             pane.dirty = true;
         }
         handled
+    }
+
+    /// Go back through the handler the view declared last in window `idx`
+    /// ([`Cx::on_back`](crate::core::Cx::on_back)), if there is one (and,
+    /// for an `escape`, if it takes Escape). Returns whether it ran.
+    pub(crate) fn view_back(&mut self, idx: usize, escape: bool) -> bool {
+        let App { panes, state, .. } = self;
+        let Some(handler) = panes.get_mut(idx).and_then(|p| p.backs.last_mut()) else {
+            return false;
+        };
+        if escape && !handler.takes_escape() {
+            return false;
+        }
+        handler.back(state);
+        for pane in panes.iter_mut() {
+            pane.dirty = true;
+        }
+        true
     }
 
     /// Ask the app to go back, as Android's Back button would, without a
@@ -632,17 +674,20 @@ mod tests {
         let gestures = Rc::new(std::cell::RefCell::new(Vec::new()));
         let seen = gestures.clone();
         let mut app = App::new(State::default(), view).no_font();
-        assert!(!app.back_progress(BackGesture::Cancelled), "no hook");
+        assert!(!app.back_progress(0, BackGesture::Cancelled), "no hook");
         let mut app = App::new(State::default(), view)
             .no_font()
             .on_back_progress(move |_, g| seen.borrow_mut().push(g));
         app.render_frame();
-        assert!(app.back_progress(BackGesture::Started {
-            edge: crate::platform::BackEdge::Left
-        }));
-        assert!(app.back_progress(BackGesture::Progressed { progress: 0.5 }));
+        assert!(app.back_progress(
+            0,
+            BackGesture::Started {
+                edge: crate::platform::BackEdge::Left
+            }
+        ));
+        assert!(app.back_progress(0, BackGesture::Progressed { progress: 0.5 }));
         assert!(app.panes[0].dirty, "the view follows the gesture");
-        assert!(app.back_progress(BackGesture::Cancelled));
+        assert!(app.back_progress(0, BackGesture::Cancelled));
         assert_eq!(gestures.borrow().len(), 3);
     }
 

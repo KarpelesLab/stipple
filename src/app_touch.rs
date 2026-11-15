@@ -45,16 +45,26 @@ impl<S: 'static> Pane<S> {
         };
         let layer = press_layer(tree, self.overlay_active, p).0;
         let pointers = &self.handlers;
+        let scroll = crate::core::scroll_targets_at(tree, p);
+        // A downward drag at the top of a vertical container inside an
+        // element that pulls (a bottom sheet) is that element's.
+        let pull_down = scroll.vertical.is_some_and(|v| {
+            self.scroll_offsets.get(&v).copied().unwrap_or(0.0) <= 0.5
+                && pointer_at(layer, p, &|id| pointers.pointers_ref().is_pull(id))
+                    .and_then(|id| crate::core::find_pointer(layer, id))
+                    .is_some_and(|puller| crate::core::find_scroll(puller, v).is_some())
+        });
         TouchTargets {
-            scroll: crate::core::scroll_targets_at(tree, p),
+            scroll,
             long_press: context_target(tree, self.overlay_active, p).0.is_some(),
             pinch: pointer_at(layer, p, &|id| pointers.pointers_ref().has_pinch(id)),
+            pull_down,
         }
     }
 
     /// The first finger's press no longer taps, focuses or selects: it became
     /// a scroll, a long press or a pinch.
-    fn cancel_press(&mut self) {
+    pub(crate) fn cancel_press(&mut self) {
         self.pressed = None;
         self.press_focus = None;
         self.press_at = None;
@@ -113,6 +123,23 @@ impl<S: 'static> App<S> {
         if !primary {
             return changed;
         }
+        // The pointer's side reaches `on_pointer` handlers first, as in the
+        // run loop.
+        let event = match touch.phase {
+            TouchPhase::Started => crate::platform::Event::PointerButton {
+                button: crate::platform::PointerButton::Left,
+                state: crate::platform::ButtonState::Pressed,
+                position,
+            },
+            TouchPhase::Moved => crate::platform::Event::PointerMoved { position },
+            TouchPhase::Ended | TouchPhase::Cancelled => crate::platform::Event::PointerButton {
+                button: crate::platform::PointerButton::Left,
+                state: crate::platform::ButtonState::Released,
+                position,
+            },
+        };
+        let now = crate::platform::time::Instant::now();
+        changed |= self.pane_pointer_input(0, &event, now).redraw;
         changed |= match touch.phase {
             TouchPhase::Started => {
                 self.panes[0].last_pointer = position;
@@ -182,6 +209,12 @@ impl<S: 'static> App<S> {
                     .0
             }
             TouchAction::End => false,
+            TouchAction::Pull => {
+                // The widget that pulls has the finger now: the press no
+                // longer taps what it landed on.
+                pane.cancel_press();
+                true
+            }
             TouchAction::Pinch(pinch) => {
                 if pinch.phase == PinchPhase::Began {
                     pane.cancel_press();

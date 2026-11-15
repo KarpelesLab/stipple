@@ -350,7 +350,7 @@ fn the_ios_back_swipe_takes_the_edge_only_while_back_is_enabled() {
                 match out {
                     Out::Touch => _ = app.touch(finger(1, phase, x, 20.0)),
                     Out::CancelTouch => _ = app.touch(finger(1, TouchPhase::Cancelled, x, 20.0)),
-                    Out::Gesture(g) => _ = app.back_progress(g),
+                    Out::Gesture(g) => _ = app.back_progress(0, g),
                     Out::Back => {
                         backs.set(backs.get() + 1);
                         app.request_back();
