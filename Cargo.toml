@@ -306,6 +306,11 @@ path = "examples/rawkeys/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "richtext_web"
+path = "examples/richtext/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "scrolldemo_web"
 path = "examples/scrolldemo/web.rs"
 crate-type = ["cdylib"]

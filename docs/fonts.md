@@ -184,6 +184,69 @@ its baseline start and width.
 `Element::underline(range)` is something else: it underlines a byte range, for
 menu mnemonics.
 
+## Rich text
+
+`RichText` is one text made of runs, each with its own `SpanStyle`, and
+images in the line. It wraps across runs, and right-to-left and mixed text
+is reordered as one text, so a line of game UI doesn't have to be a `row` of
+labels:
+
+<!-- live: richtext -->
+
+```rust
+let coin = Arc::new(Svg::parse(COIN_SVG)?);
+let line = RichText::new()
+    .push("Sold 3 × ")
+    .styled("Healing Potion", SpanStyle::new().color(purple).bold())
+    .push(" for 120 ")
+    .icon(InlineIcon::new(coin).alt(" gold"))
+    .push(".");
+label(cx, line);
+paragraph(cx, RichText::new().push("You ").italic("really").push(" think so?"));
+```
+
+- `SpanStyle` sets a run's `color`, `font`, `weight` (`bold()`), `italic()`,
+  `size` and decoration (`decorate`, `underline`, `strikethrough`); whatever
+  it leaves unset is the element's (or the `TextPaint`'s). `RichText::bold`,
+  `italic` and `colored` are shorthands.
+- A line is as tall as its tallest run or image, and every run of a line
+  sits on one baseline.
+- `InlineIcon` takes a bitmap or an SVG, as tall as the text unless given a
+  `height`, as wide as its aspect ratio makes it, centered on the middle of the
+  capitals. In the text it is one U+FFFC character (what `RichText::text`
+  returns and selection indices count); `alt` stands for it when the text is
+  copied or read by a screen reader (`RichText::plain_text`).
+- Shaping happens per run, so a ligature or Arabic joining doesn't cross a
+  change of style.
+- `label`, `heading` and `paragraph` take a `RichText` or a string;
+  `Element::rich_text(text, size, color)` is the bare element.
+- To draw it yourself: `Scene::fill_rich_text(&text, origin, &paint)`, or
+  `text.layout(&font, size, direction, max_width)` and `Scene::fill_layout`.
+
+## Outline and shadow
+
+Text over artwork needs a stroke or a shadow to stay readable:
+
+```rust
+Element::text("Victory!", 40.0, Color::WHITE)
+    .text_outline(TextOutline::new(2.5, Color::BLACK))
+    .text_shadow(TextShadow::new(Vec2::new(2.0, 3.0), Color::rgba(0, 0, 0, 150)).blur(2.0));
+let paint = TextPaint::new(&font, 18.0, Color::WHITE).outline(TextOutline::new(1.5, Color::BLACK));
+```
+
+- The outline reaches `width` beyond the glyphs' edges, drawn behind them so
+  the letters keep their shape. A translucent color is composited once over
+  the whole line, so overlapping strokes don't darken.
+- The shadow is the glyphs (and their outline) again, `offset` away, under
+  everything. `blur` softens it: three stroked layers, each wider and fainter,
+  rather than a true Gaussian blur, which is cheap and close at the few
+  pixels text shadows use. Images in rich text cast no shadow.
+- On a container, both apply to the text inside that has none of its own.
+- Both come from the glyphs' outlines, so they draw the same on the CPU and
+  the GPU, where each is cached per glyph, size, color and width like the
+  glyphs themselves. `Scene::outline_layout` and `Scene::shadow_layout` draw
+  them for a `TextLayout` of your own (call them before `fill_layout`).
+
 ## Trying it
 
 `cargo run --example fontdemo` shows the `monospace` family in four styles and every

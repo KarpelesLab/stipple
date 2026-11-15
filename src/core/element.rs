@@ -19,8 +19,8 @@ use crate::layout::{Axis, LayoutDirection, Track};
 use crate::platform::CursorIcon;
 use crate::platform::native::NativeDeco;
 use crate::render::{
-    BackgroundImage, Color, Decoration, Font, FontWeight, ImageFit, ImageSource, TextDirection,
-    UnderlineStyle,
+    BackgroundImage, Color, Decoration, Font, FontWeight, ImageFit, ImageSource, RichText,
+    TextDirection, TextOutline, TextShadow, UnderlineStyle,
 };
 
 /// Alignment of children along an axis.
@@ -130,6 +130,18 @@ pub(crate) struct TextStyle {
     pub empty_field: Option<Color>,
     /// This text is a field's placeholder, not its value.
     pub placeholder: bool,
+    /// The runs of rich text ([`Element::rich_text`]), when they differ
+    /// from one another.
+    pub spans: Option<std::sync::Arc<[crate::render::rich::Span]>>,
+    /// An outline around the glyphs ([`Element::text_outline`]).
+    pub outline: Option<TextOutline>,
+    /// A shadow under them ([`Element::text_shadow`]).
+    pub shadow: Option<TextShadow>,
+    /// The text can be selected and copied ([`Element::selectable`]).
+    pub selectable: bool,
+    /// The color its selection is highlighted in, set by the app while it
+    /// has one.
+    pub highlight: Option<Color>,
 }
 
 impl TextStyle {
@@ -145,6 +157,54 @@ impl TextStyle {
             style.italic = i;
         }
         Some(font.styled(style))
+    }
+
+    /// `text` laid out in this style with the app's `base` font (each rich
+    /// run in its own look), `size` pixels by default; see
+    /// [`Font::layout_with`](crate::render::Font). `None` without a font.
+    pub(crate) fn layout<'a>(
+        &self,
+        base: Option<&Font>,
+        text: &'a str,
+        size: f64,
+        direction: TextDirection,
+        max_width: Option<f64>,
+        ui: LayoutDirection,
+    ) -> Option<crate::render::TextLayout<'a>> {
+        let font = self.resolve(base)?;
+        Some(match &self.spans {
+            None => font.layout_with(text, size, direction, max_width, ui),
+            Some(spans) => crate::render::rich::styling(spans, &font, size)
+                .layout(text, direction, max_width, ui),
+        })
+    }
+
+    /// `text[range]` as copied and read aloud: rich text's images as their
+    /// alternative text.
+    pub(crate) fn plain(&self, text: &str, range: std::ops::Range<usize>) -> String {
+        match &self.spans {
+            None => text[range].to_string(),
+            Some(spans) => crate::render::rich::plain_of(text, spans, range),
+        }
+    }
+
+    /// How far its outline and shadow reach beyond its box.
+    pub(crate) fn reach(&self) -> Option<crate::geometry::Insets> {
+        let outline = self.outline.map_or(0.0, |o| o.width.max(0.0));
+        let ring = Insets::uniform(outline + 1.0);
+        match (self.shadow, outline > 0.0) {
+            (Some(shadow), _) => {
+                let s = shadow.reach(outline);
+                Some(crate::geometry::Insets {
+                    top: s.top.max(ring.top),
+                    right: s.right.max(ring.right),
+                    bottom: s.bottom.max(ring.bottom),
+                    left: s.left.max(ring.left),
+                })
+            }
+            (None, true) => Some(ring),
+            (None, false) => None,
+        }
     }
 }
 
@@ -408,6 +468,31 @@ impl Element {
                 style: TextStyle::default(),
             },
         }
+    }
+
+    /// Text made of runs in their own colors, weights, sizes and
+    /// decorations, with images in the line ([`RichText`]), in `color` at
+    /// `size` logical pixels where a run sets neither. A plain string makes
+    /// the same element as [`text`](Self::text).
+    ///
+    /// ```
+    /// use stipple::core::Element;
+    /// use stipple::render::{Color, RichText};
+    /// let gold = Color::rgb(0xd4, 0xa0, 0x17);
+    /// let line = Element::rich_text(
+    ///     RichText::new().push("Gold: ").colored("120", gold),
+    ///     14.0,
+    ///     Color::BLACK,
+    /// );
+    /// # let _ = line;
+    /// ```
+    pub fn rich_text(text: impl Into<RichText>, size: f64, color: Color) -> Self {
+        let (text, spans) = text.into().into_parts();
+        let mut el = Self::text(text, size, color);
+        if let ElementKind::Text { style, .. } = &mut el.kind {
+            style.spans = spans;
+        }
+        el
     }
 
     /// An embedded-content viewport leaf for `id`: a reserved rectangle the app
@@ -1273,6 +1358,80 @@ impl Element {
                 s.decoration = decoration;
             }
         })
+    }
+
+    /// Draw an outline around the glyphs of this text (or of the text inside
+    /// this container that has none of its own), behind them: text over
+    /// artwork stays readable.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// use stipple::render::TextOutline;
+    /// let name = Element::text("Aria", 18.0, Color::WHITE)
+    ///     .text_outline(TextOutline::new(2.0, Color::BLACK));
+    /// # let _ = name;
+    /// ```
+    pub fn text_outline(self, outline: TextOutline) -> Self {
+        self.text_style(&|s| {
+            s.outline.get_or_insert(outline);
+        })
+    }
+
+    /// Draw a shadow under the glyphs of this text (and its outline), or of
+    /// the text inside this container that has none of its own.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// use stipple::geometry::Vec2;
+    /// use stipple::render::TextShadow;
+    /// let title = Element::text("Victory", 32.0, Color::WHITE)
+    ///     .text_shadow(TextShadow::new(Vec2::new(2.0, 2.0), Color::rgba(0, 0, 0, 160)).blur(3.0));
+    /// # let _ = title;
+    /// ```
+    pub fn text_shadow(self, shadow: TextShadow) -> Self {
+        self.text_style(&|s| {
+            s.shadow.get_or_insert(shadow);
+        })
+    }
+
+    /// Let the user select this text (or all the text inside this container)
+    /// and copy it: drag across it, double-click a word, triple-click a
+    /// line, Ctrl/Cmd+A and Shift+arrows once it has a selection, Ctrl/Cmd+C
+    /// or the context menu's Copy; on a touch screen, a long press selects
+    /// the word under the finger and opens Copy / Select All. The pointer is
+    /// an I-beam over it. Rich text copies its images' alternative text.
+    ///
+    /// One selection exists in a window at a time: selecting elsewhere, or
+    /// clicking outside it, clears it. See `docs/text-editing.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let cx = Cx::<()>::new(&theme);
+    /// let code = paragraph(&cx, "4006381333931").selectable();
+    /// # let _ = code;
+    /// ```
+    pub fn selectable(mut self) -> Self {
+        fn set(el: &mut Element) {
+            match &mut el.kind {
+                ElementKind::Text { style, .. } => {
+                    style.selectable = true;
+                    // An identity across builds, which the selection follows.
+                    el.reactive.get_or_insert_with(Default::default);
+                    el.cursor.get_or_insert(CursorIcon::Text);
+                }
+                ElementKind::Stack { children, .. }
+                | ElementKind::Grid { children, .. }
+                | ElementKind::Layers { children, .. } => {
+                    for c in children.iter_mut().filter(|c| !c.indicator) {
+                        set(c);
+                    }
+                }
+                _ => {}
+            }
+        }
+        set(&mut self);
+        self
     }
 
     /// Strike this text through ([`decorate`](Self::decorate)).

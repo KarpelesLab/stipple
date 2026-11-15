@@ -36,6 +36,7 @@ pub(crate) mod lower;
 pub(crate) mod nine_slice;
 mod path;
 mod renderer;
+pub(crate) mod rich;
 pub(crate) mod scene;
 mod software;
 pub(crate) mod sprite;
@@ -52,11 +53,12 @@ pub use image::{ImageError, ImageFit, ImageSource, Svg, image_formats};
 pub use nine_slice::{BackgroundImage, NineSlice, SliceFill};
 pub use path::{LineCap, LineJoin, Path, StrokeStyle};
 pub use renderer::Renderer;
+pub use rich::{InlineIcon, RichText, SpanStyle};
 pub use scene::{DrawCmd, Scene};
 pub use software::{RasterStats, SoftwareRenderer};
 pub use sprite::{Filter, ImageOptions};
 pub use surface::{Pixmap, Surface};
-pub use text::{Font, FontError, TextLayout, TextPaint};
+pub use text::{Font, FontError, TextLayout, TextOutline, TextPaint, TextShadow};
 
 /// Low-level conversions to `oxideav-core` coordinate types. Exposed for
 /// crates that build scene-graph nodes directly (e.g. the future text-run

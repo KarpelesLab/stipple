@@ -541,6 +541,7 @@ jobs:
   # row is Japanese, Chinese and Korean, which the font draws from the
   # system's CJK fallback: Noto Sans CJK, CFF outlines in a collection
   # (fonts-noto-cjk); `--cjk` requires every character to have a glyph.
+  # The richtext example checks its styled runs and outlined title off screen.
   visual-fonts:
     name: Visual test (Fonts and decorations / X11)
     runs-on: ubuntu-latest
@@ -555,7 +556,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick fonts-dejavu-core fonts-liberation fonts-noto-cjk
 
       - name: Build the font demo
-        run: cargo build --release --example fontdemo
+        run: cargo build --release --example fontdemo --example richtext
 
       - name: List families and check the rendering off screen
         run: |
@@ -568,6 +569,9 @@ jobs:
           grep -q 'fontdemo: ok' visual_output/fonts-check.log
           # The family's own bold and italic faces, not synthesized ones.
           ! grep -q synthetic visual_output/fonts-check.log
+          # Rich text's colored runs and the outlined, shadowed title.
+          ./target/release/examples/richtext --check | tee visual_output/richtext-check.log
+          grep -q 'richtext: ok' visual_output/richtext-check.log
 
       - name: Start Xvfb
         run: |

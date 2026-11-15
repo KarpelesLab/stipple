@@ -428,6 +428,28 @@ fn text_matches_the_software_renderer() {
 }
 
 #[test]
+fn text_effects_match_the_software_renderer() {
+    use crate::render::{RichText, SpanStyle, TextOutline, TextPaint, TextShadow};
+    let Some(font) = Font::system_default() else {
+        eprintln!("skipping: no system font found");
+        return;
+    };
+    let mut s = Scene::new(Size::new(220.0, 100.0));
+    let art = crate::geometry::Rect::from_xywh(0.0, 0.0, 220.0, 100.0);
+    s.fill_rect(art, Color::rgb(0xf4, 0xa2, 0x61));
+    let text = RichText::new().push("Gold ").styled(
+        "120",
+        SpanStyle::new().color(Color::rgb(0xff, 0xd7, 0x00)).bold(),
+    );
+    let paint = TextPaint::new(&font, 28.0, Color::WHITE)
+        .outline(TextOutline::new(2.0, Color::BLACK))
+        .shadow(TextShadow::new(Vec2::new(2.0, 3.0), Color::rgba(0, 0, 0, 140)).blur(2.0));
+    s.fill_rich_text(&text, Point::new(8.0, 8.0), &paint);
+    agree("text-effects", &s, 1.0, 1.5, 0.02);
+    agree("text-effects@2", &s, 2.0, 1.5, 0.02);
+}
+
+#[test]
 fn canvases_match_the_software_renderer() {
     let mut s = Scene::new(Size::new(160.0, 120.0));
     let paint: crate::render::CanvasPaint =

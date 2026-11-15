@@ -178,7 +178,8 @@ pub struct AccessNode {
     /// field with an [`a11y_label`](crate::core::Element::a11y_label)).
     pub caret: Option<usize>,
     /// For an editable text field, the selected byte range `[start, end)` of
-    /// `name`, if any (see [`caret`](AccessNode::caret)).
+    /// `name`, if any (see [`caret`](AccessNode::caret)); for
+    /// [selectable](crate::core::Element::selectable) text, its selection.
     pub text_selection: Option<(usize, usize)>,
     /// The id relations name this node by
     /// ([`Element::a11y_id`](crate::core::Element::a11y_id)).
@@ -201,7 +202,7 @@ fn text_of(node: &LayoutNode) -> String {
         first_text(node)
     };
     match found.map(|n| &n.content) {
-        Some(NodeContent::Text { text, .. }) => text.clone(),
+        Some(NodeContent::Text { text, style, .. }) => style.plain(text, 0..text.len()),
         _ => String::new(),
     }
 }
@@ -261,6 +262,8 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         }
         if !labelled && matches!(role, Role::TextField | Role::SpinButton) {
             (caret, text_selection) = caret_of(node, &name);
+        } else if !labelled && role == Role::Text {
+            text_selection = read_selection_of(node);
         }
         (name, Vec::new())
     };
@@ -317,6 +320,26 @@ fn caret_of(node: &LayoutNode, name: &str) -> (Option<usize>, Option<(usize, usi
         .map(|(a, b)| (snap(a.min(b)), snap(a.max(b))))
         .filter(|(a, b)| b > a);
     (caret, selection)
+}
+
+/// The selection in read-only, [selectable](crate::core::Element::selectable)
+/// text, as byte indices into its accessible name (where rich text's images
+/// are their alternative text).
+fn read_selection_of(node: &LayoutNode) -> Option<(usize, usize)> {
+    let leaf = own_text(node)?;
+    let NodeContent::Text { text, style, .. } = &leaf.content else {
+        return None;
+    };
+    let (s, e) = leaf.selection.filter(|_| style.selectable)?;
+    let at = |i: usize| {
+        let mut i = i.min(text.len());
+        while !text.is_char_boundary(i) {
+            i -= 1;
+        }
+        style.plain(text, 0..i).len()
+    };
+    let (s, e) = (at(s.min(e)), at(s.max(e)));
+    (e > s).then_some((s, e))
 }
 
 impl AccessNode {

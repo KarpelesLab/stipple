@@ -12,7 +12,6 @@
 
 use crate::geometry::{Point, Rect, ScaleFactor, Size};
 use crate::layout::LayoutDirection;
-use crate::render::Color;
 use crate::render::bidi::{
     ParagraphLevels, TextDirection, VisualChar, boundary_carets, caret_boundary, has_strong,
     visual_order,
@@ -20,6 +19,7 @@ use crate::render::bidi::{
 use crate::render::font::{Chain, FaceSource, Family, FontStyle, FontWeight, Synthesis, Variant};
 use crate::render::scene::Scene;
 use crate::render::software::SoftwareRenderer;
+use crate::render::{Color, ImageSource};
 use core::fmt;
 use core::ops::Range;
 use oxideav_core::{Group, LineJoin, Node, Paint, Stroke, Transform2D};
@@ -300,33 +300,207 @@ impl Font {
     /// word wider than `max_width` is kept on its own (over-long) line rather
     /// than split mid-word. Returns at least one line.
     pub fn wrap(&self, text: &str, size_px: f64, max_width: f64) -> Vec<String> {
+        let styling = Styling::plain(self, size_px);
         let mut out = Vec::new();
+        let mut start = 0;
         for hard in text.split('\n') {
-            for range in self.wrap_ranges(hard, size_px, max_width) {
+            let para = start..start + hard.len();
+            for range in styling.wrap_ranges(text, para, max_width) {
                 out.push(hard[range].to_string());
             }
+            start += hard.len() + 1;
         }
         out
     }
 
-    /// The byte ranges of the lines `wrap` cuts one paragraph (no `\n`) into.
-    /// The space a line breaks at belongs to neither line. Returns at least one
-    /// (possibly empty) range.
-    fn wrap_ranges(&self, para: &str, size_px: f64, max_width: f64) -> Vec<Range<usize>> {
-        // Shape each word once and accumulate widths (a space between words),
-        // rather than re-shaping the growing line — O(words) shapes per call.
-        let space = self.line_width(" ", size_px);
+    /// Lay out `text` at `size_px` for drawing, caret placement and
+    /// hit-testing, running the Unicode Bidirectional Algorithm over each
+    /// paragraph (`\n` separates paragraphs).
+    ///
+    /// `direction` sets each paragraph's base direction, or detects it from the
+    /// paragraph's first strong character. With `max_width`, paragraphs
+    /// word-wrap to that width as [`wrap`](Self::wrap) does. Right-to-left
+    /// paragraphs are aligned to the right edge of the layout's
+    /// [alignment width](TextLayout::align_width).
+    pub fn layout<'a>(
+        &self,
+        text: &'a str,
+        size_px: f64,
+        direction: TextDirection,
+        max_width: Option<f64>,
+    ) -> TextLayout<'a> {
+        self.layout_with(text, size_px, direction, max_width, LayoutDirection::Ltr)
+    }
+
+    /// [`layout`](Self::layout) with [`TextDirection::Auto`], for text inside
+    /// a UI laid out in `ui` direction, as the widgets lay theirs out. Left to
+    /// right it is the same as `layout`. Right to left, a paragraph with no
+    /// strong character (an empty field, a number) runs right to left instead
+    /// of left to right, and every line lines up against the right edge of
+    /// the alignment width, whatever its own direction. (With an explicit
+    /// `Ltr` or `Rtl` direction the UI's makes no difference: use `layout`.)
+    pub fn layout_in<'a>(
+        &self,
+        text: &'a str,
+        size_px: f64,
+        max_width: Option<f64>,
+        ui: LayoutDirection,
+    ) -> TextLayout<'a> {
+        self.layout_with(text, size_px, TextDirection::Auto, max_width, ui)
+    }
+
+    /// [`layout`](Self::layout) in direction `direction` inside a UI laid out
+    /// in `ui` direction: [`layout_in`](Self::layout_in) when `direction` is
+    /// `Auto`, `layout` otherwise.
+    pub(crate) fn layout_with<'a>(
+        &self,
+        text: &'a str,
+        size_px: f64,
+        direction: TextDirection,
+        max_width: Option<f64>,
+        ui: LayoutDirection,
+    ) -> TextLayout<'a> {
+        Styling::plain(self, size_px).layout(text, direction, max_width, ui)
+    }
+}
+
+/// One look a stretch of a [`TextLayout`] is drawn in: a font at a size, a
+/// color and decoration of its own (else the ones the layout is drawn with),
+/// or an inline image in place of its one character.
+#[derive(Clone, Debug)]
+pub(crate) struct SpanFace {
+    pub font: Font,
+    pub size: f64,
+    pub color: Option<Color>,
+    pub decoration: Option<crate::render::Decoration>,
+    pub icon: Option<(ImageSource, Size)>,
+}
+
+impl SpanFace {
+    /// Text in `font` at `size`, in the layout's color and decoration.
+    pub(crate) fn plain(font: &Font, size: f64) -> Self {
+        Self {
+            font: font.clone(),
+            size,
+            color: None,
+            decoration: None,
+            icon: None,
+        }
+    }
+
+    /// The height of the middle of the capitals above the baseline: where an
+    /// inline image is centered.
+    fn cap_middle(&self) -> f64 {
+        self.font.cap_height_em() * self.size / 2.0
+    }
+
+    /// How far it reaches above the baseline.
+    fn ascent(&self) -> f64 {
+        match &self.icon {
+            Some((_, s)) => self.cap_middle() + s.height / 2.0,
+            None => self.font.baseline(self.size),
+        }
+    }
+
+    /// How far it reaches below the baseline.
+    fn descent(&self) -> f64 {
+        match &self.icon {
+            Some((_, s)) => (s.height / 2.0 - self.cap_middle()).max(0.0),
+            None => self.font.line_height(self.size) - self.font.baseline(self.size),
+        }
+    }
+
+    /// The advance of `piece` (no newlines) in this look.
+    fn width(&self, piece: &str) -> f64 {
+        match &self.icon {
+            Some((_, s)) => s.width * piece.chars().count() as f64,
+            None => self.font.line_width(piece, self.size),
+        }
+    }
+}
+
+/// The looks of a layout's text: [`SpanFace`]s, and from which byte on each
+/// is used. The first span starts at 0.
+#[derive(Clone, Debug)]
+pub(crate) struct Styling {
+    faces: Vec<SpanFace>,
+    /// `(start byte, face index)`, by start.
+    spans: Vec<(usize, usize)>,
+}
+
+impl Styling {
+    /// All of the text in `font` at `size`.
+    pub(crate) fn plain(font: &Font, size: f64) -> Self {
+        Self {
+            faces: vec![SpanFace::plain(font, size)],
+            spans: vec![(0, 0)],
+        }
+    }
+
+    /// `faces`, used from each span's start byte on; `base` where no span
+    /// starts at 0 (and for empty text).
+    pub(crate) fn new(base: SpanFace, faces: Vec<SpanFace>, spans: Vec<(usize, usize)>) -> Self {
+        let mut all = vec![base];
+        all.extend(faces);
+        let mut out: Vec<(usize, usize)> = spans.into_iter().map(|(s, f)| (s, f + 1)).collect();
+        if out.first().is_none_or(|s| s.0 > 0) {
+            out.insert(0, (0, 0));
+        }
+        Self {
+            faces: all,
+            spans: out,
+        }
+    }
+
+    /// The span holding byte `b`.
+    fn span_at(&self, b: usize) -> usize {
+        self.spans.partition_point(|s| s.0 <= b).saturating_sub(1)
+    }
+
+    /// Where span `k` ends.
+    fn span_end(&self, k: usize) -> usize {
+        self.spans.get(k + 1).map_or(usize::MAX, |s| s.0)
+    }
+
+    /// The look of byte `b`.
+    fn face_at(&self, b: usize) -> &SpanFace {
+        &self.faces[self.spans[self.span_at(b)].1]
+    }
+
+    /// The advance of `text[r]` (no newlines), each span in its look.
+    fn width(&self, text: &str, r: Range<usize>) -> f64 {
+        let mut w = 0.0;
+        let mut s = r.start;
+        while s < r.end {
+            let k = self.span_at(s);
+            let e = self.span_end(k).min(r.end);
+            w += self.faces[self.spans[k].1].width(&text[s..e]);
+            s = e;
+        }
+        w
+    }
+
+    /// The byte ranges (relative to the paragraph) of the lines the
+    /// paragraph `text[para]` (no `\n`) wraps into. The space a line breaks
+    /// at belongs to neither line. Returns at least one (possibly empty)
+    /// range.
+    fn wrap_ranges(&self, text: &str, para: Range<usize>, max_width: f64) -> Vec<Range<usize>> {
+        // Measure each word once and accumulate widths (a space between
+        // words), rather than re-measuring the growing line.
+        let p = &text[para.clone()];
+        let w = |r: Range<usize>| self.width(text, para.start + r.start..para.start + r.end);
         let mut out = Vec::new();
         let mut line: Option<Range<usize>> = None;
         let mut width = 0.0;
         let mut at = 0usize;
-        for word in para.split(' ') {
+        for word in p.split(' ') {
             let (ws, we) = (at, at + word.len());
             at = we + 1;
-            let ww = self.line_width(word, size_px);
+            let ww = w(ws..we);
+            let space = if ws > 0 { w(ws - 1..ws) } else { 0.0 };
             match &mut line {
                 // The first word, or a line that so far is empty (a run of
-                // spaces keeps joining it, as `wrap` always did).
+                // spaces keeps joining it).
                 Some(l) if l.start == l.end => {
                     l.end = we;
                     width += space + ww;
@@ -350,56 +524,18 @@ impl Font {
         out
     }
 
-    /// Lay out `text` at `size_px` for drawing, caret placement and
-    /// hit-testing, running the Unicode Bidirectional Algorithm over each
-    /// paragraph (`\n` separates paragraphs).
-    ///
-    /// `direction` sets each paragraph's base direction, or detects it from the
-    /// paragraph's first strong character. With `max_width`, paragraphs
-    /// word-wrap to that width as [`wrap`](Self::wrap) does. Right-to-left
-    /// paragraphs are aligned to the right edge of the layout's
-    /// [alignment width](TextLayout::align_width).
-    pub fn layout<'a>(
-        &'a self,
-        text: &'a str,
-        size_px: f64,
-        direction: TextDirection,
-        max_width: Option<f64>,
-    ) -> TextLayout<'a> {
-        self.layout_with(text, size_px, direction, max_width, LayoutDirection::Ltr)
-    }
-
-    /// [`layout`](Self::layout) with [`TextDirection::Auto`], for text inside
-    /// a UI laid out in `ui` direction, as the widgets lay theirs out. Left to
-    /// right it is the same as `layout`. Right to left, a paragraph with no
-    /// strong character (an empty field, a number) runs right to left instead
-    /// of left to right, and every line lines up against the right edge of
-    /// the alignment width, whatever its own direction. (With an explicit
-    /// `Ltr` or `Rtl` direction the UI's makes no difference: use `layout`.)
-    pub fn layout_in<'a>(
-        &'a self,
-        text: &'a str,
-        size_px: f64,
-        max_width: Option<f64>,
-        ui: LayoutDirection,
-    ) -> TextLayout<'a> {
-        self.layout_with(text, size_px, TextDirection::Auto, max_width, ui)
-    }
-
-    /// [`layout`](Self::layout) in direction `direction` inside a UI laid out
-    /// in `ui` direction: [`layout_in`](Self::layout_in) when `direction` is
-    /// `Auto`, `layout` otherwise.
-    pub(crate) fn layout_with<'a>(
-        &'a self,
-        text: &'a str,
-        size_px: f64,
+    /// Lay `text` out in these looks; see [`Font::layout_with`].
+    pub(crate) fn layout(
+        self,
+        text: &str,
         direction: TextDirection,
         max_width: Option<f64>,
         ui: LayoutDirection,
-    ) -> TextLayout<'a> {
+    ) -> TextLayout<'_> {
         let start_right = ui.is_rtl() && direction == TextDirection::Auto;
         let mut lines = Vec::new();
         let mut start = 0usize;
+        let mut top = 0.0;
         for para in text.split('\n') {
             let para_dir = if start_right && !has_strong(para) {
                 TextDirection::Rtl
@@ -415,31 +551,42 @@ impl Font {
                 .collect();
             let char_at = |b: usize| offsets.partition_point(|&o| o < b);
             let ranges = match max_width {
-                Some(w) if w.is_finite() => self.wrap_ranges(para, size_px, w),
+                Some(w) if w.is_finite() => self.wrap_ranges(text, start..start + para.len(), w),
                 _ => std::iter::once(0..para.len()).collect(),
             };
             for range in ranges {
                 let chars = char_at(range.start)..char_at(range.end);
                 let line_levels = levels.line_levels(chars.clone());
-                let mut runs = self.shape_line(para, &offsets, chars, &line_levels, size_px);
+                let mut runs = self.shape_line(para, start, &offsets, chars, &line_levels);
                 for run in &mut runs {
                     run.range = start + run.range.start..start + run.range.end;
                 }
+                let (ascent, descent) = if runs.is_empty() {
+                    let f = self.face_at(start + range.start);
+                    (f.ascent(), f.descent())
+                } else {
+                    runs.iter().fold((0.0_f64, 0.0_f64), |(a, d), r| {
+                        let f = &self.faces[r.face];
+                        (a.max(f.ascent()), d.max(f.descent()))
+                    })
+                };
                 lines.push(LayoutLine {
                     range: start + range.start..start + range.end,
                     rtl: levels.base == 1,
                     width: runs.iter().map(|r| r.width).sum(),
                     runs,
+                    top,
+                    ascent,
+                    height: ascent + descent,
                 });
+                top += ascent + descent;
             }
             start += para.len() + 1;
         }
         let width = lines.iter().map(|l| l.width).fold(0.0, f64::max);
         TextLayout {
-            font: self,
             text,
-            size: size_px,
-            line_height: self.line_height(size_px),
+            styling: self,
             lines,
             width,
             align_width: width,
@@ -447,17 +594,19 @@ impl Font {
         }
     }
 
-    /// Shape one display line: cut it into runs of one embedding level, shape
-    /// each in logical order (mirroring brackets in right-to-left runs, rule
-    /// L4), and place the runs left to right in visual order (rule L2).
-    /// `chars` is the line's char range within `para`, `levels` its levels.
+    /// Shape one display line: cut it into runs of one embedding level and
+    /// one look, shape each in logical order (mirroring brackets in
+    /// right-to-left runs, rule L4), and place the runs left to right in
+    /// visual order (rule L2). `chars` is the line's char range within
+    /// `para`, which starts at byte `para_start` of the text; `levels` are
+    /// the line's levels.
     fn shape_line(
         &self,
         para: &str,
+        para_start: usize,
         offsets: &[usize],
         chars: Range<usize>,
         levels: &[u8],
-        size_px: f64,
     ) -> Vec<GlyphRun> {
         let n = levels.len();
         if n == 0 {
@@ -471,24 +620,38 @@ impl Font {
         let mut runs = Vec::new();
         let mut s = 0usize;
         while s < n {
+            let k = self.span_at(para_start + offsets[chars.start + s]);
+            let span_end = self.span_end(k);
             let mut e = s + 1;
-            while e < n && levels[e] == levels[s] {
+            while e < n
+                && levels[e] == levels[s]
+                && para_start + offsets[chars.start + e] < span_end
+            {
                 e += 1;
             }
             let bytes = offsets[chars.start + s]..offsets[chars.start + e];
             let rtl = levels[s] & 1 == 1;
-            let shaped: String = if rtl {
-                para[bytes.clone()]
-                    .chars()
-                    .map(|c| oxideav_scribe::bidi::mirrored_glyph(c).unwrap_or(c))
-                    .collect()
+            let face_idx = self.spans[k].1;
+            let face = &self.faces[face_idx];
+            let (glyphs, shaped, width) = if let Some((_, size)) = &face.icon {
+                let piece = para[bytes.clone()].to_string();
+                (Vec::new(), piece, size.width * (e - s) as f64)
             } else {
-                para[bytes.clone()].to_string()
+                let shaped: String = if rtl {
+                    para[bytes.clone()]
+                        .chars()
+                        .map(|c| oxideav_scribe::bidi::mirrored_glyph(c).unwrap_or(c))
+                        .collect()
+                } else {
+                    para[bytes.clone()].to_string()
+                };
+                let mut glyphs = face.font.shape_cached(&shaped, face.size);
+                if rtl {
+                    glyphs.reverse();
+                }
+                let width = glyphs.iter().map(|g| g.x_advance as f64).sum();
+                (glyphs, shaped, width)
             };
-            let mut glyphs = self.shape_cached(&shaped, size_px);
-            if rtl {
-                glyphs.reverse();
-            }
             let rank = (s..e).map(|i| visual_pos[i]).min().unwrap_or(s);
             runs.push((
                 rank,
@@ -497,9 +660,10 @@ impl Font {
                     rtl,
                     level: levels[s],
                     x: 0.0,
-                    width: glyphs.iter().map(|g| g.x_advance as f64).sum(),
+                    width,
                     glyphs,
                     shaped,
+                    face: face_idx,
                 },
             ));
             s = e;
@@ -514,7 +678,9 @@ impl Font {
             })
             .collect()
     }
+}
 
+impl Font {
     /// The shaping chain: the primary face of this style, then fallbacks.
     /// It can grow (a system fallback loaded for text that needs it), never
     /// shrink: a glyph's face index stays valid in later chains.
@@ -595,16 +761,15 @@ fn glyph_cache_key(face: &Face, glyph_id: u16, size_px: f64, synth: Synthesis) -
 /// Text laid out for drawing and editing: paragraphs cut into display lines,
 /// each line's bidirectional runs shaped and placed in visual order.
 ///
-/// Made by [`Font::layout`]. Positions are in logical pixels relative to the
-/// top-left of the text box. Byte indices are into the text the layout was made
-/// from; caret positions are logical (the order the text is stored in), and the
-/// layout maps them to and from visual x positions.
+/// Made by [`Font::layout`] or [`RichText::layout`](crate::render::RichText::layout).
+/// Positions are in logical pixels relative to the top-left of the text box.
+/// Byte indices are into the text the layout was made from; caret positions
+/// are logical (the order the text is stored in), and the layout maps them to
+/// and from visual x positions.
 #[derive(Debug)]
 pub struct TextLayout<'a> {
-    font: &'a Font,
     text: &'a str,
-    size: f64,
-    line_height: f64,
+    styling: Styling,
     lines: Vec<LayoutLine>,
     width: f64,
     align_width: f64,
@@ -623,9 +788,15 @@ struct LayoutLine {
     width: f64,
     /// The line's runs, left to right.
     runs: Vec<GlyphRun>,
+    /// The line's top, below the previous lines.
+    top: f64,
+    /// From the top to the baseline: the most any of its runs reaches above
+    /// it.
+    ascent: f64,
+    height: f64,
 }
 
-/// A run of one embedding level, shaped.
+/// A run of one embedding level and one look, shaped.
 #[derive(Debug)]
 struct GlyphRun {
     /// Byte range in the layout's text (logical order).
@@ -636,11 +807,13 @@ struct GlyphRun {
     /// Left edge within the line.
     x: f64,
     width: f64,
-    /// Shaped glyphs in visual (left-to-right) order.
+    /// Shaped glyphs in visual (left-to-right) order (none for an image).
     glyphs: Vec<PositionedGlyph>,
     /// The text that was shaped: the run's text, with brackets mirrored in a
     /// right-to-left run.
     shaped: String,
+    /// The index of its [`SpanFace`] in the layout's styling.
+    face: usize,
 }
 
 /// One character's box on a line.
@@ -663,10 +836,11 @@ impl TextLayout<'_> {
         self
     }
 
-    /// The size of the laid-out text: the widest line by the number of lines
-    /// times the line height.
+    /// The size of the laid-out text: the widest line by the lines' heights
+    /// (each line as tall as the tallest text or image in it).
     pub fn size(&self) -> Size {
-        Size::new(self.width, self.line_height * self.lines.len() as f64)
+        let height = self.lines.last().map_or(0.0, |l| l.top + l.height);
+        Size::new(self.width, height)
     }
 
     /// The number of display lines.
@@ -753,6 +927,10 @@ impl TextLayout<'_> {
     /// measured as the growth of the shaped prefix ending with it.
     fn run_advances(&self, run: &GlyphRun, text: &str) -> Vec<f64> {
         let n = text.chars().count();
+        let face = &self.styling.faces[run.face];
+        if face.icon.is_some() {
+            return vec![run.width / n.max(1) as f64; n];
+        }
         if run.glyphs.len() == n {
             let mut adv: Vec<f64> = run.glyphs.iter().map(|g| g.x_advance as f64).collect();
             if run.rtl {
@@ -769,9 +947,9 @@ impl TextLayout<'_> {
             .map(|(i, _)| i)
             .chain(std::iter::once(run.shaped.len()));
         for end in ends {
-            let w = self
+            let w = face
                 .font
-                .line_width(&run.shaped[..end], self.size)
+                .line_width(&run.shaped[..end], face.size)
                 .max(prev);
             out.push(w - prev);
             prev = w;
@@ -785,6 +963,11 @@ impl TextLayout<'_> {
             .iter()
             .position(|l| index <= l.range.end)
             .unwrap_or(self.lines.len().saturating_sub(1))
+    }
+
+    /// The height of display line `line` (0 past the last).
+    pub fn line_height(&self, line: usize) -> f64 {
+        self.lines.get(line).map_or(0.0, |l| l.height)
     }
 
     /// Where the caret for byte `index` is drawn: the top of its line and its x
@@ -801,7 +984,6 @@ impl TextLayout<'_> {
         let Some(line) = self.lines.get(li) else {
             return Point::new(0.0, 0.0);
         };
-        let y = li as f64 * self.line_height;
         let (boxes, vis, carets) = self.caret_stops(line);
         let v = caret_boundary(&vis, &carets, index);
         let x = match (boxes.get(v), boxes.last()) {
@@ -809,7 +991,7 @@ impl TextLayout<'_> {
             (None, Some(b)) => b.right,
             (None, None) => self.line_x(line),
         };
-        Point::new(x, y)
+        Point::new(x, line.top)
     }
 
     /// The caret position (a byte index) nearest `point`, relative to the text
@@ -820,8 +1002,11 @@ impl TextLayout<'_> {
         if self.lines.is_empty() {
             return 0;
         }
-        let li = ((point.y / self.line_height.max(1.0)).floor().max(0.0) as usize)
-            .min(self.lines.len() - 1);
+        let li = self
+            .lines
+            .iter()
+            .rposition(|l| l.top <= point.y)
+            .unwrap_or(0);
         let line = &self.lines[li];
         let (boxes, _, carets) = self.caret_stops(line);
         let x = point.x;
@@ -863,11 +1048,10 @@ impl TextLayout<'_> {
         if end <= start {
             return out;
         }
-        for (li, line) in self.lines.iter().enumerate() {
+        for line in &self.lines {
             if line.range.end < start || line.range.start >= end {
                 continue;
             }
-            let y = li as f64 * self.line_height;
             let mut spans: Vec<(f64, f64)> = self
                 .char_boxes(line)
                 .into_iter()
@@ -893,7 +1077,7 @@ impl TextLayout<'_> {
                 });
             }
             for (l, r) in merged {
-                out.push(Rect::from_xywh(l, y, r - l, self.line_height));
+                out.push(Rect::from_xywh(l, line.top, r - l, line.height));
             }
         }
         out
@@ -901,14 +1085,17 @@ impl TextLayout<'_> {
 }
 
 /// How [`Scene::fill_text`] and [`Scene::draw_decoration`] draw text: in
-/// which font, at what size, in what color, and with which
-/// [`Decoration`](crate::render::Decoration) (none unless set).
+/// which font, at what size, in what color, with which
+/// [`Decoration`](crate::render::Decoration) (none unless set), and with an
+/// outline or a shadow (none unless set).
 #[derive(Clone, Debug)]
 pub struct TextPaint {
     pub(crate) font: Font,
     pub(crate) size: f64,
     pub(crate) color: Color,
     pub(crate) decoration: crate::render::Decoration,
+    pub(crate) outline: Option<TextOutline>,
+    pub(crate) shadow: Option<TextShadow>,
 }
 
 impl TextPaint {
@@ -920,12 +1107,26 @@ impl TextPaint {
             size,
             color,
             decoration: crate::render::Decoration::NONE,
+            outline: None,
+            shadow: None,
         }
     }
 
     /// Draw the text with `decoration`'s lines.
     pub fn decoration(mut self, decoration: crate::render::Decoration) -> Self {
         self.decoration = decoration;
+        self
+    }
+
+    /// Draw an outline around the glyphs, behind them.
+    pub fn outline(mut self, outline: TextOutline) -> Self {
+        self.outline = Some(outline);
+        self
+    }
+
+    /// Draw a shadow under the glyphs (and their outline).
+    pub fn shadow(mut self, shadow: TextShadow) -> Self {
+        self.shadow = Some(shadow);
         self
     }
 
@@ -945,11 +1146,129 @@ impl TextPaint {
     }
 }
 
+/// A stroke around text's glyphs, drawn behind them so the letters keep
+/// their shape: what makes a name readable over artwork. `width` is how far
+/// it reaches beyond the glyphs' edges, in logical pixels.
+///
+/// ```
+/// use stipple::render::{Color, TextOutline};
+/// let outline = TextOutline::new(2.0, Color::BLACK);
+/// assert_eq!(outline.width, 2.0);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TextOutline {
+    /// How far the outline reaches beyond the glyphs, in logical pixels.
+    pub width: f64,
+    /// Its color.
+    pub color: Color,
+}
+
+impl TextOutline {
+    /// An outline `width` logical pixels wide in `color`.
+    pub fn new(width: f64, color: Color) -> Self {
+        Self { width, color }
+    }
+}
+
+/// A shadow under text: the glyphs (and their outline) again, `offset` away,
+/// in `color`, softened by `blur`.
+///
+/// A blur is approximated by three stroked layers of the glyphs, each wider
+/// and fainter than the last, rather than a true Gaussian: cheap, cached as
+/// glyphs are, and close enough at the few pixels text shadows use.
+///
+/// ```
+/// use stipple::geometry::Vec2;
+/// use stipple::render::{Color, TextShadow};
+/// let drop = TextShadow::new(Vec2::new(1.0, 2.0), Color::rgba(0, 0, 0, 160)).blur(2.0);
+/// assert_eq!(drop.blur, 2.0);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TextShadow {
+    /// How far the shadow is moved from the text (x right, y down).
+    pub offset: crate::geometry::Vec2,
+    /// How far its edges soften, in logical pixels (0: a hard shadow).
+    pub blur: f64,
+    /// Its color (its alpha is the shadow's opacity).
+    pub color: Color,
+}
+
+impl TextShadow {
+    /// A hard shadow `offset` away in `color`.
+    pub fn new(offset: crate::geometry::Vec2, color: Color) -> Self {
+        Self {
+            offset,
+            blur: 0.0,
+            color,
+        }
+    }
+
+    /// Soften the shadow's edges by `blur` logical pixels.
+    pub fn blur(mut self, blur: f64) -> Self {
+        self.blur = blur.max(0.0);
+        self
+    }
+
+    /// How far beyond the text's box the shadow can reach, given an outline
+    /// `outline` wide: its offset, plus its blur and the outline around it.
+    pub(crate) fn reach(&self, outline: f64) -> crate::geometry::Insets {
+        let spread = self.blur + outline + 1.0;
+        let (dx, dy) = (self.offset.dx, self.offset.dy);
+        crate::geometry::Insets {
+            top: (spread - dy).max(0.0),
+            right: (spread + dx).max(0.0),
+            bottom: (spread + dy).max(0.0),
+            left: (spread - dx).max(0.0),
+        }
+    }
+}
+
+/// A pass drawing every glyph of a layout in one solid color: an outline or
+/// a shadow layer.
+#[derive(Clone, Copy)]
+struct Solid {
+    /// The extra stroke width around each glyph (both sides together).
+    stroke: f32,
+    /// Mixed into the glyphs' cache keys, so the pass's bitmaps don't stand
+    /// in for the fill's.
+    salt: u64,
+    /// The pass's opacity (its color is drawn opaque, the pass composited
+    /// at this).
+    opacity: f32,
+}
+
+impl Solid {
+    fn new(stroke: f64, color: Color, opacity: f32) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        b"stipple.text.solid".hash(&mut h);
+        (stroke as f32).to_bits().hash(&mut h);
+        (color.r, color.g, color.b).hash(&mut h);
+        Self {
+            stroke: stroke as f32,
+            salt: h.finish(),
+            opacity,
+        }
+    }
+}
+
+/// `key` made distinct for a pass salted `salt`.
+fn salted(key: u64, salt: u64) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut h);
+    salt.hash(&mut h);
+    h.finish()
+}
+
 impl Scene {
     /// Draw `decoration`'s lines under, through or over every line of
     /// `layout`, placed as [`fill_layout`](Self::fill_layout) draws them at
     /// `origin`, using the layout's font metrics. `text_color` colors lines
-    /// the decoration gives no color of its own.
+    /// the decoration gives no color of its own. A stretch of rich text with a
+    /// decoration (or color) of its own draws that instead.
     pub fn decorate_layout(
         &mut self,
         layout: &TextLayout<'_>,
@@ -957,31 +1276,52 @@ impl Scene {
         decoration: &crate::render::Decoration,
         text_color: Color,
     ) {
-        if decoration.is_none() || layout.size <= 0.0 {
+        if decoration.is_none()
+            && layout
+                .styling
+                .faces
+                .iter()
+                .all(|f| f.decoration.is_none_or(|d| d.is_none()))
+        {
             return;
         }
-        let metrics = layout.font.metrics(layout.size);
-        let first_baseline = layout.font.baseline(layout.size);
-        for (i, line) in layout.lines.iter().enumerate() {
+        for line in &layout.lines {
             if line.runs.is_empty() {
                 continue;
             }
             let x = origin.x + layout.line_x(line);
-            let y = origin.y + i as f64 * layout.line_height + first_baseline;
-            self.decoration_lines(
-                &metrics,
-                Point::new(x, y),
-                line.width,
-                decoration,
-                text_color,
-            );
+            let y = origin.y + line.top + line.ascent;
+            // Neighboring runs in one look draw one stretch of lines.
+            let mut i = 0;
+            while i < line.runs.len() {
+                let fi = line.runs[i].face;
+                let mut j = i + 1;
+                while j < line.runs.len() && line.runs[j].face == fi {
+                    j += 1;
+                }
+                let face = &layout.styling.faces[fi];
+                let deco = face.decoration.unwrap_or(*decoration);
+                if face.icon.is_none() && !deco.is_none() && face.size > 0.0 {
+                    let x0 = line.runs[i].x;
+                    let last = &line.runs[j - 1];
+                    let metrics = face.font.metrics(face.size);
+                    self.decoration_lines(
+                        &metrics,
+                        Point::new(x + x0, y),
+                        last.x + last.width - x0,
+                        &deco,
+                        face.color.unwrap_or(text_color),
+                    );
+                }
+                i = j;
+            }
         }
     }
 
     /// Shape and paint `text` at `origin` (the top-left of the text box,
     /// logical pixels) in `paint`'s font, size and color, with its
-    /// decoration if it has one. Newlines (`\n`) start a new line, each
-    /// dropped by one `line_height` from the last.
+    /// decoration, outline and shadow if it has them. Newlines (`\n`) start a
+    /// new line, each dropped by one `line_height` from the last.
     ///
     /// Each line goes through the Unicode Bidirectional Algorithm, with its
     /// direction taken from its first strong character; right-to-left lines
@@ -1003,44 +1343,152 @@ impl Scene {
         let layout = paint
             .font
             .layout(text, paint.size, TextDirection::Auto, None);
-        self.fill_layout(&layout, origin, paint.color);
-        self.decorate_layout(&layout, origin, &paint.decoration, paint.color);
+        self.paint_layout(&layout, origin, paint);
     }
 
-    /// Paint a [`TextLayout`] with its top-left at `origin`, in `color`.
+    /// Draw `layout` at `origin` as `paint` says (its color, decoration,
+    /// outline and shadow; the layout has its own font and size).
+    pub(crate) fn paint_layout(
+        &mut self,
+        layout: &TextLayout<'_>,
+        origin: Point,
+        paint: &TextPaint,
+    ) {
+        let outline = paint.outline.map_or(0.0, |o| o.width.max(0.0));
+        if let Some(shadow) = &paint.shadow {
+            self.shadow_pass(layout, origin, shadow, outline);
+        }
+        if let Some(o) = &paint.outline {
+            self.outline_layout(layout, origin, o);
+        }
+        self.fill_layout(layout, origin, paint.color);
+        self.decorate_layout(layout, origin, &paint.decoration, paint.color);
+    }
+
+    /// Draw `outline` around the glyphs of `layout` at `origin`, as
+    /// [`fill_layout`](Self::fill_layout) would place them: call it first,
+    /// so the fill covers the outline's inner half.
+    pub fn outline_layout(
+        &mut self,
+        layout: &TextLayout<'_>,
+        origin: Point,
+        outline: &TextOutline,
+    ) {
+        if outline.width <= 0.0 || outline.color.a == 0 {
+            return;
+        }
+        let opaque = outline.color.with_alpha(255);
+        let pass = Solid::new(
+            outline.width * 2.0,
+            opaque,
+            f32::from(outline.color.a) / 255.0,
+        );
+        self.glyph_pass(layout, origin, opaque, Some(pass));
+    }
+
+    /// Draw `shadow` under the glyphs of `layout` at `origin`, as
+    /// [`fill_layout`](Self::fill_layout) would place them: call it first.
+    pub fn shadow_layout(&mut self, layout: &TextLayout<'_>, origin: Point, shadow: &TextShadow) {
+        self.shadow_pass(layout, origin, shadow, 0.0);
+    }
+
+    /// [`shadow_layout`](Self::shadow_layout) for text with an outline
+    /// `outline` wide, which the shadow takes the shape of.
+    fn shadow_pass(
+        &mut self,
+        layout: &TextLayout<'_>,
+        origin: Point,
+        shadow: &TextShadow,
+        outline: f64,
+    ) {
+        if shadow.color.a == 0 {
+            return;
+        }
+        let at = Point::new(origin.x + shadow.offset.dx, origin.y + shadow.offset.dy);
+        let opaque = shadow.color.with_alpha(255);
+        let alpha = f64::from(shadow.color.a) / 255.0;
+        if shadow.blur <= 0.0 {
+            let pass = Solid::new(outline * 2.0, opaque, alpha as f32);
+            self.glyph_pass(layout, at, opaque, Some(pass));
+            return;
+        }
+        // Layers, each wider and fainter, stacking up to the shadow's
+        // opacity where they all cover.
+        const LAYERS: u32 = 3;
+        let each = 1.0 - (1.0 - alpha).powf(1.0 / f64::from(LAYERS));
+        for i in (1..=LAYERS).rev() {
+            let spread = shadow.blur * f64::from(i) / f64::from(LAYERS);
+            let pass = Solid::new((outline + spread) * 2.0, opaque, each as f32);
+            self.glyph_pass(layout, at, opaque, Some(pass));
+        }
+    }
+
+    /// Paint a [`TextLayout`] with its top-left at `origin`, in `color` (rich
+    /// text's stretches with a color of their own in that, and its images).
     ///
     /// Glyphs are emitted as scene-graph nodes under a group translated to each
     /// line's baseline, so they rasterize and composite like any other
     /// primitive.
     pub fn fill_layout(&mut self, layout: &TextLayout<'_>, origin: Point, color: Color) {
-        let size = layout.size;
-        if size <= 0.0 {
-            return;
-        }
-        let font = layout.font;
-        let first_baseline = font.baseline(size);
-        for (i, line) in layout.lines.iter().enumerate() {
+        self.glyph_pass(layout, origin, color, None);
+    }
+
+    /// Emit the glyphs (and, for the fill, the images) of `layout` at
+    /// `origin`: the fill in each look's color (else `color`), or with
+    /// `solid` every glyph in `color`, stroked as it says.
+    fn glyph_pass(
+        &mut self,
+        layout: &TextLayout<'_>,
+        origin: Point,
+        color: Color,
+        solid: Option<Solid>,
+    ) {
+        for line in &layout.lines {
             if line.runs.is_empty() {
                 continue;
             }
             let lx = layout.line_x(line);
-            let top = origin.y + i as f64 * layout.line_height;
-            // Record a structured command for the GPU backend (the CPU
-            // rasterizer uses the glyph nodes pushed below).
-            self.record_text(
-                &layout.text[line.range.clone()],
-                Point::new(origin.x + lx, top),
-                size,
-                color,
-            );
+            let top = origin.y + line.top;
+            if solid.is_none() {
+                // Record a structured command for the GPU backend (the CPU
+                // rasterizer uses the glyph nodes pushed below).
+                self.record_text(
+                    &layout.text[line.range.clone()],
+                    Point::new(origin.x + lx, top),
+                    layout.styling.faces[0].size,
+                    color,
+                );
+            }
+            let baseline = top + line.ascent;
             let mut glyphs = Vec::new();
-            let chain = font.chain();
+            let mut images = Vec::new();
             for run in &line.runs {
+                let face = &layout.styling.faces[run.face];
+                if let Some((source, size)) = &face.icon {
+                    if solid.is_none() {
+                        let y = baseline - face.cap_middle() - size.height / 2.0;
+                        let n = layout.text[run.range.clone()].chars().count();
+                        for k in 0..n {
+                            let x = origin.x + lx + run.x + k as f64 * size.width;
+                            images.push((Rect::from_xywh(x, y, size.width, size.height), source));
+                        }
+                    }
+                    continue;
+                }
+                let (font, size) = (&face.font, face.size);
+                if size <= 0.0 {
+                    continue;
+                }
+                let fill = match solid {
+                    Some(_) => color,
+                    None => face.color.unwrap_or(color),
+                };
+                let chain = font.chain();
                 let mut pen = run.x as f32;
                 for g in &run.glyphs {
                     let x = pen + g.x_offset;
                     pen += g.x_advance;
-                    let face = chain.face(g.face_idx);
+                    let gface = chain.face(g.face_idx);
                     // Cached: building a glyph's node re-parses its font.
                     let Some(node) = super::glyphs::outline(font, g.face_idx, g.glyph_id, size)
                     else {
@@ -1051,12 +1499,17 @@ impl Scene {
                         .get(g.face_idx as usize)
                         .copied()
                         .unwrap_or_default();
-                    let stroke = if synth.bold { bold_stroke(size) } else { 0.0 };
+                    let mut stroke = if synth.bold { bold_stroke(size) } else { 0.0 };
+                    let mut key = glyph_cache_key(gface, g.glyph_id, size, synth);
+                    if let Some(s) = solid {
+                        stroke += s.stroke;
+                        key = salted(key, s.salt);
+                    }
                     // Wrapped in a cache-keyed group so the rasterizer reuses
                     // the glyph's bitmap wherever it's drawn.
                     let cached = Group {
-                        cache_key: Some(glyph_cache_key(face, g.glyph_id, size, synth)),
-                        children: vec![embolden(node, color, stroke)],
+                        cache_key: Some(key),
+                        children: vec![embolden(node, fill, stroke)],
                         ..Group::default()
                     };
                     // A synthesized oblique leans the glyph about its baseline
@@ -1076,14 +1529,21 @@ impl Scene {
                     glyphs.push(Node::Group(glyph));
                 }
             }
-            if glyphs.is_empty() {
-                continue;
+            if !glyphs.is_empty() {
+                let mut placed = Group::new()
+                    .with_transform(Transform2D::translate(
+                        (origin.x + lx) as f32,
+                        baseline as f32,
+                    ))
+                    .with_children(glyphs);
+                if let Some(s) = solid {
+                    placed.opacity = s.opacity;
+                }
+                self.push_node(Node::Group(placed));
             }
-            let baseline = (top + first_baseline) as f32;
-            let placed = Group::new()
-                .with_transform(Transform2D::translate((origin.x + lx) as f32, baseline))
-                .with_children(glyphs);
-            self.push_node(Node::Group(placed));
+            for (rect, source) in images {
+                self.draw_image_source(rect, source, crate::render::ImageFit::Fill);
+            }
         }
     }
 }

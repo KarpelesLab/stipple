@@ -77,7 +77,7 @@ use crate::core::{
 };
 use crate::geometry::{Insets, Point, Transform};
 use crate::platform::native::{self, NativeControl};
-use crate::render::{Color, ImageSource, Svg, TextDirection};
+use crate::render::{Color, ImageSource, RichText, Svg, TextDirection};
 use crate::style::Theme;
 use std::sync::Arc;
 
@@ -298,24 +298,38 @@ fn panel_frame(theme: &Theme, children: Vec<Element>) -> Element {
         .gap(theme.spacing.md)
 }
 
-/// A single line of text in the theme's default text color and body size.
-pub fn label<S>(cx: &Cx<S>, text: impl Into<String>) -> Element {
+/// A single line of text in the theme's default text color and body size:
+/// a string, or [`RichText`] with runs in their own
+/// colors and weights and images in the line. `.selectable()` lets the user
+/// select and copy it.
+///
+/// ```
+/// use stipple::prelude::*;
+/// let theme = Theme::light();
+/// let cx = Cx::<()>::new(&theme);
+/// let plain = label(&cx, "Ready");
+/// let rich = label(&cx, RichText::new().push("Status: ").bold("ready"));
+/// # let _ = (plain, rich);
+/// ```
+pub fn label<S>(cx: &Cx<S>, text: impl Into<RichText>) -> Element {
     let theme = cx.theme();
-    Element::text(text, theme.typography.body, theme.palette.text)
+    Element::rich_text(text, theme.typography.body, theme.palette.text)
 }
 
-/// A larger heading in the theme's heading size.
-pub fn heading<S>(cx: &Cx<S>, text: impl Into<String>) -> Element {
+/// A larger heading in the theme's heading size (a string or
+/// [`RichText`]).
+pub fn heading<S>(cx: &Cx<S>, text: impl Into<RichText>) -> Element {
     let theme = cx.theme();
-    Element::text(text, theme.typography.heading, theme.palette.text)
+    Element::rich_text(text, theme.typography.heading, theme.palette.text)
 }
 
-/// A block of body text that word-wraps to its container width across as many
-/// lines as needed. Place it in a cross-stretch container (like [`panel`]) so it
+/// A block of body text (a string or [`RichText`])
+/// that word-wraps to its container width across as many lines as needed,
+/// across runs. Place it in a cross-stretch container (like [`panel`]) so it
 /// takes the full width.
-pub fn paragraph<S>(cx: &Cx<S>, text: impl Into<String>) -> Element {
+pub fn paragraph<S>(cx: &Cx<S>, text: impl Into<RichText>) -> Element {
     let theme = cx.theme();
-    Element::text(text, theme.typography.body, theme.palette.text).wrap()
+    Element::rich_text(text, theme.typography.body, theme.palette.text).wrap()
 }
 
 /// Visual emphasis level for a button.

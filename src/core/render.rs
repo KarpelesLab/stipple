@@ -104,6 +104,21 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         ElementKind::Text {
             text, size, style, ..
         } => match style.resolve(font).as_ref() {
+            // Rich text measures as laid out, its lines as tall as their
+            // tallest run or image.
+            Some(_) if style.spans.is_some() => {
+                let max = (el.wrap && inner.width.is_finite()).then_some(inner.width);
+                style
+                    .layout(
+                        font,
+                        text,
+                        *size,
+                        TextDirection::Auto,
+                        max,
+                        LayoutDirection::Ltr,
+                    )
+                    .map_or(Size::ZERO, |l| l.size())
+            }
             // Wrapping text takes the available width and grows in height.
             Some(f) if el.wrap && inner.width.is_finite() => {
                 let lines = f.wrap(text, *size, inner.width);
@@ -877,7 +892,19 @@ fn paint_focus_node(
     };
     let bounds = leaf.text_rect();
     let styled = style.resolve(font);
-    let Some(font) = styled.as_ref() else {
+    let (Some(f), Some(layout)) = (
+        styled.as_ref(),
+        text_layout(
+            style,
+            font,
+            text,
+            *size,
+            *direction,
+            leaf.wrap,
+            bounds.width(),
+            leaf.rtl,
+        ),
+    ) else {
         // No font, no geometry: a caret bar at the start of the box.
         let h = *size;
         scene.fill_rect(
@@ -886,15 +913,7 @@ fn paint_focus_node(
         );
         return;
     };
-    let layout = text_layout(
-        font,
-        text,
-        *size,
-        *direction,
-        leaf.wrap,
-        bounds.width(),
-        leaf.rtl,
-    );
+    let font = f;
     let origin = bounds.origin;
 
     // Selection highlight: in mixed-direction text one logical range can be
@@ -916,22 +935,51 @@ fn paint_focus_node(
 /// The layout a text node is painted with: wrapped to its box when `wrap` is
 /// set, with right-to-left paragraphs aligned to the box's right edge. In a
 /// right-to-left layout (`rtl`), `Auto` text lines up on the right too.
-fn text_layout<'a>(
-    font: &'a Font,
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn text_layout<'a>(
+    style: &crate::core::TextStyle,
+    font: Option<&Font>,
     text: &'a str,
     size: f64,
     direction: TextDirection,
     wrap: bool,
     width: f64,
     rtl: bool,
-) -> TextLayout<'a> {
+) -> Option<TextLayout<'a>> {
     let ui = if rtl {
         LayoutDirection::Rtl
     } else {
         LayoutDirection::Ltr
     };
-    font.layout_with(text, size, direction, wrap.then_some(width), ui)
-        .align_width(width)
+    style
+        .layout(font, text, size, direction, wrap.then_some(width), ui)
+        .map(|l| l.align_width(width))
+}
+
+/// The layout of the text leaf `leaf` (relative to its
+/// [`text_rect`](LayoutNode::text_rect)), if it is one and there's a font.
+pub(crate) fn leaf_layout<'a>(leaf: &'a LayoutNode, font: Option<&Font>) -> Option<TextLayout<'a>> {
+    let NodeContent::Text {
+        text,
+        size,
+        direction,
+        style,
+        ..
+    } = &leaf.content
+    else {
+        return None;
+    };
+    let b = leaf.text_rect();
+    text_layout(
+        style,
+        font,
+        text,
+        *size,
+        *direction,
+        leaf.wrap,
+        b.width(),
+        leaf.rtl,
+    )
 }
 
 /// Resolve a pointer position (logical pixels, absolute) to the nearest caret
@@ -945,28 +993,8 @@ pub(crate) fn caret_index_at(
     font: Option<&Font>,
 ) -> Option<usize> {
     let leaf = first_text(node)?;
-    let NodeContent::Text {
-        text,
-        size,
-        direction,
-        style,
-        ..
-    } = &leaf.content
-    else {
-        return None;
-    };
-    let styled = style.resolve(font)?;
-    let font = &styled;
+    let layout = leaf_layout(leaf, font)?;
     let b = leaf.text_rect();
-    let layout = text_layout(
-        font,
-        text,
-        *size,
-        *direction,
-        leaf.wrap,
-        b.width(),
-        leaf.rtl,
-    );
     Some(layout.index_at(Point::new(point.x - b.min_x(), point.y - b.min_y())))
 }
 
@@ -1169,24 +1197,40 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible
             style,
             ..
         } => {
+            // Inside the padding, wrapped to the width left when `wrap` is
+            // set; right-to-left paragraphs line up against the right edge.
+            let rect = node.text_rect();
             if let Some(f) = style.resolve(font).as_ref()
                 && !text.is_empty()
-            {
-                // Inside the padding, wrapped to the width left when `wrap` is
-                // set; right-to-left paragraphs line up against the right edge.
-                let rect = node.text_rect();
-                let o = rect.origin;
-                let layout = text_layout(
-                    f,
+                && let Some(layout) = text_layout(
+                    style,
+                    font,
                     text,
                     *size,
                     *direction,
                     node.wrap,
                     rect.width(),
                     node.rtl,
-                );
-                scene.fill_layout(&layout, o, *color);
-                scene.decorate_layout(&layout, o, &style.decoration, *color);
+                )
+            {
+                let o = rect.origin;
+                // Selected read-only text: the highlight under the glyphs.
+                if let (Some((s, e)), Some(highlight), None) =
+                    (node.selection, style.highlight, node.caret)
+                {
+                    for r in layout.selection_rects(s, e) {
+                        scene.fill_rect(r.translate(Vec2::new(o.x, o.y)), highlight);
+                    }
+                }
+                let mut paint =
+                    crate::render::TextPaint::new(f, *size, *color).decoration(style.decoration);
+                if let Some(outline) = style.outline {
+                    paint = paint.outline(outline);
+                }
+                if let Some(shadow) = style.shadow {
+                    paint = paint.shadow(shadow);
+                }
+                scene.paint_layout(&layout, o, &paint);
                 if let Some((start, end)) = *underline {
                     // Just under the baseline, as thick as the strokes.
                     let thick = (size / 14.0).max(1.0);
@@ -2334,7 +2378,8 @@ mod tests {
         let w = font.measure("abc", 16.0).width;
         let caret_x = |tree: &LayoutNode, i: usize| {
             text_layout(
-                &font,
+                &crate::core::TextStyle::default(),
+                Some(&font),
                 "abc",
                 16.0,
                 TextDirection::Auto,
@@ -2342,6 +2387,7 @@ mod tests {
                 200.0,
                 tree.rtl,
             )
+            .unwrap()
             .caret_position(i)
             .x
         };

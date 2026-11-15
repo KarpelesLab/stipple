@@ -71,6 +71,7 @@ impl<S: 'static> Pane<S> {
         if self.text_selecting.is_some() {
             self.end_text_select();
         }
+        self.end_select();
         self.dirty = true;
     }
 

@@ -790,6 +790,19 @@ abstraction is frozen at the end of Phase 2.
   Linux picks the Noto CJK face for the POSIX locale's region; elsewhere the
   order is fixed (no per-language choice from the OS locale or Android's
   fonts.xml yet).*
+- ✅ **Rich text** (#61): `RichText`, runs with their own color, weight,
+  slant, size and decoration, and inline images (`InlineIcon`, centered on
+  the capitals, alt text for copying and screen readers), wrapped and
+  bidi-ordered as one text, in `label`/`heading`/`paragraph` and
+  `Scene::fill_rich_text`. *Outline (`TextOutline`) and drop shadow
+  (`TextShadow`, blur as three stroked layers) on any text and in
+  `TextPaint`; cached as glyph rasters on the GPU path. The game
+  `DialogueBox` typewriter still reveals plain text.*
+- ✅ **Selectable text** (#46): `.selectable()` on labels and paragraphs:
+  drag, double/triple-click, Shift+arrows, Ctrl/Cmd+A/C, a Copy / Select All
+  context menu, and a long press on touch. *One selection per window, inside
+  one element; no drag handles on touch yet; the selection reaches screen
+  readers through AT-SPI only.*
 - ✅ **Custom painting with partial invalidation**: `Element::canvas(id, paint)`,
   a leaf whose callback draws into a `Canvas` (a `Scene` in local
   coordinates) when it is rasterized, asked for just the area being

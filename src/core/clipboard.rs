@@ -120,8 +120,28 @@ pub(crate) fn mirror(kind: ClipboardKind, formats: ClipboardFormats) -> Option<C
     (formats.text && !text.is_empty()).then(|| ClipboardContent::from_text(text))
 }
 
-/// The text selected in the focused text field, if it has a selection.
+/// The text selected in the focused text field, if it has a selection, else
+/// in [selectable](crate::core::Element::selectable) read-only text.
 pub(crate) fn selection_text(tree: &LayoutNode, focused: Option<FocusId>) -> Option<String> {
+    field_selection(tree, focused).or_else(|| read_selection(tree))
+}
+
+/// The selected text in read-only text, as copied.
+fn read_selection(node: &LayoutNode) -> Option<String> {
+    if let (Some((s, e)), NodeContent::Text { text, style, .. }) = (node.selection, &node.content)
+        && style.selectable
+        && node.caret.is_none()
+    {
+        let (s, e) = (s.min(e), s.max(e).min(text.len()));
+        if s < e && text.is_char_boundary(s) && text.is_char_boundary(e) {
+            return Some(style.plain(text, s..e));
+        }
+    }
+    node.children.iter().find_map(read_selection)
+}
+
+/// The text selected in the focused text field.
+fn field_selection(tree: &LayoutNode, focused: Option<FocusId>) -> Option<String> {
     let leaf = first_text(find_focus(tree, focused?)?)?;
     let (Some((s, e)), NodeContent::Text { text, .. }) = (leaf.selection, &leaf.content) else {
         return None;

@@ -146,6 +146,46 @@ On X11 and Wayland the types are MIME types (`text/plain;charset=utf-8`,
 text only. The crate-internal `platform::clipboard::format` has the encoders (`CF_HTML`,
 DIB, PNG).
 
+## Selectable text
+
+Labels and paragraphs aren't editable, but `.selectable()` lets the user
+select and copy them: a decoded barcode, an address, an error's details.
+
+<!-- live: richtext -->
+
+```rust
+paragraph(cx, "4006381333931").selectable();
+// On a container: every text inside it.
+column(vec![label(cx, "Order 1042"), label(cx, address)]).selectable();
+```
+
+- **Mouse.** Drag across the text to select; double-click selects a word and
+  triple-click a line (a paragraph's line between line breaks), with the same
+  words and timing as a text field. The pointer is an I-beam over it.
+- **Keys.** Once the text has a selection (or a click in it), Shift+arrows,
+  Shift+Home/End and Shift+Option/Ctrl+arrows extend it, Ctrl/Cmd+A selects
+  all of that text, Ctrl/Cmd+C copies, and Escape clears it. A focused text
+  field keeps its own keys: clicking selectable text takes the focus away
+  from the field, as on the web.
+- **Context menu.** A right-click shows Copy and Select All (on the word
+  under the pointer, unless it is inside the selection). An element with a
+  context menu of its own keeps that one.
+- **Touch.** A finger scrolls rather than selects; a long press selects the
+  word under it and opens the same menu. There are no drag handles to adjust
+  the selection yet: Select All, then Copy, takes the whole text.
+- **One selection per window**, inside one element: a press anywhere else in
+  the window (not in the menu) clears it, and it is forgotten when the
+  element's text changes. It is found again across rebuilds by the element's
+  place in the tree, or by its `.key(..)` when it moves.
+- **Copying** writes plain text: rich text's images become their
+  alternative text (`InlineIcon::alt`). On X11 and Wayland the selection is
+  also the primary selection.
+- **Screen readers** get the text as before, and the selection as the text's
+  selection over AT-SPI (`GetSelection`, `text-selection-changed`). UI
+  Automation and NSAccessibility read the text but not the selection yet.
+
+The highlight is the theme's `palette.selection`, drawn under the glyphs.
+
 ## Input methods
 
 Chinese, Japanese and Korean input methods, dead keys and compose sequences show

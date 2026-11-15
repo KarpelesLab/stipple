@@ -57,7 +57,10 @@ impl<S> Pane<S> {
     /// Whether a gesture latched on a press (a text selection, a drag or an
     /// in-app drag) owns the pointer's moves.
     pub(crate) fn pointer_latched(&self) -> bool {
-        self.text_selecting.is_some() || self.dragging.is_some() || self.dnd.dragging_internally()
+        self.text_selecting.is_some()
+            || self.read_selecting
+            || self.dragging.is_some()
+            || self.dnd.dragging_internally()
     }
 }
 

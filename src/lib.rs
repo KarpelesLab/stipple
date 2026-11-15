@@ -44,6 +44,7 @@ mod app_keys;
 mod app_lifecycle;
 mod app_locale;
 mod app_pointer;
+mod app_select;
 mod app_touch;
 pub mod audio;
 #[cfg(test)]
@@ -63,6 +64,8 @@ mod pointer_tests;
 #[cfg(test)]
 mod reactivity_tests;
 pub mod render;
+#[cfg(test)]
+mod select_tests;
 pub mod style;
 #[cfg(test)]
 mod tab_focus_tests;
@@ -392,6 +395,11 @@ struct Pane<S> {
     dragging: Option<(DragId, Rect, Rect, Point, bool)>,
     // The text element currently being selected by a pointer drag.
     text_selecting: Option<TextPosId>,
+    // The selection in read-only text (`Element::selectable`), whether a
+    // pointer drag is extending it, and its context menu this frame.
+    read_sel: app_select::SharedSelection,
+    read_selecting: bool,
+    select_menu: Option<crate::core::ContextId>,
     // Consecutive presses on text, for double-click (word) and triple-click
     // (line) selection.
     clicks: ClickCounter,
@@ -548,6 +556,9 @@ impl<S: 'static> Pane<S> {
             hovered: None,
             dragging: None,
             text_selecting: None,
+            read_sel: Default::default(),
+            read_selecting: false,
+            select_menu: None,
             clicks: ClickCounter::default(),
             dirty: true,
             canvas_pending: Vec::new(),
@@ -1257,6 +1268,9 @@ impl<S: 'static> Pane<S> {
                 }
             }
         }
+        // The context menu of selectable text (Copy, Select All).
+        let selected = self.selected_text();
+        self.select_menu = Some(app_select::register_menu(&mut cx, &self.read_sel, selected));
         self.context_menus = cx.take_context_menus();
         crate::widgets::menus::context(&mut cx, &theme, &self.context_menus, &self.menu_ui);
         // A message box drawn in the window, over everything else.
@@ -1480,6 +1494,7 @@ impl<S: 'static> Pane<S> {
             .collect();
         // Buttons and the other controls a tap activates take keyboard focus.
         crate::core::promote_tap_focus(&mut tree, &self.catchers);
+        app_select::stamp(&mut tree, &self.read_sel, self.select_menu, &theme);
         self.modal_layers = modal_layers;
         // Focus goes into a drawn message box while it's up, and back after.
         match alert_focus {
@@ -1960,6 +1975,7 @@ impl<S: 'static> Pane<S> {
         // non-modal overlay's catcher (outside an open menu) closes the menu
         // and looks in the main tree; a modal scrim blocks it.
         let (id, catcher) = crate::app_touch::context_target(tree, self.overlay_active, pos);
+        self.select_for_menu(font, pos);
         let closed = catcher && self.menu_ui.borrow().root.is_some();
         if closed {
             self.menu_ui.borrow_mut().close();
@@ -2034,13 +2050,7 @@ impl<S: 'static> Pane<S> {
     /// Whether the focused element edits text, so editing shortcuts (Ctrl+C,
     /// Ctrl+Z…) go to it before the menu bar's.
     fn focused_is_editable(&self) -> bool {
-        fn edits(n: &LayoutNode) -> bool {
-            n.text_pos.is_some() || n.children.iter().any(edits)
-        }
-        match (self.focused, self.tree.as_ref()) {
-            (Some(id), Some(tree)) => find_focus(tree, id).is_some_and(edits),
-            _ => false,
-        }
+        self.focus_edits() || self.has_read_selection()
     }
 
     /// Deliver committed `text` to the focused element. Returns `true` if a
@@ -2068,6 +2078,10 @@ impl<S: 'static> Pane<S> {
         input: KeyInput,
     ) -> bool {
         self.ensure_tree(state, theme, font);
+        // Selected read-only text takes copying and selecting keys.
+        if self.select_key(&input) {
+            return true;
+        }
         let Some(id) = self.focused else {
             return self.enter_spatial(&input);
         };
@@ -2357,7 +2371,7 @@ impl<S: 'static> Pane<S> {
     /// differs from the one last set. Kept as is during a drag or text
     /// selection, which latch the cursor they started with.
     fn cursor_change(&mut self, pos: Point) -> Option<CursorIcon> {
-        if self.dragging.is_some() || self.text_selecting.is_some() {
+        if self.dragging.is_some() || self.text_selecting.is_some() || self.read_selecting {
             return None;
         }
         let now = self
@@ -2847,6 +2861,27 @@ impl<S: 'static> App<S> {
         )
     }
 
+    /// A press at `pos` on selectable text in window `idx` (see
+    /// [`Pane::select_press_at`]).
+    fn pane_select_press_at(&mut self, idx: usize, pos: Point) -> bool {
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            ..
+        } = self;
+        let pane = &mut panes[idx];
+        pane.ensure_tree(state, theme, font.get());
+        let tapping = pane.pressed.is_some();
+        pane.select_press_at(
+            font.get(),
+            pos,
+            crate::platform::time::Instant::now(),
+            tapping,
+        )
+    }
+
     fn pane_text_drag_at(&mut self, idx: usize, pos: Point) -> bool {
         let App {
             state,
@@ -2908,7 +2943,10 @@ impl<S: 'static> App<S> {
         // otherwise latch a drag if a draggable sits there, or else a drag
         // source.
         self.panes[idx].press_focus = None;
-        if self.pane_text_press_at(idx, position) || self.pane_drag_at_point(idx, position) {
+        if self.pane_select_press_at(idx, position)
+            || self.pane_text_press_at(idx, position)
+            || self.pane_drag_at_point(idx, position)
+        {
             redraw = true;
         } else {
             self.panes[idx].source_press(position);
@@ -2936,6 +2974,9 @@ impl<S: 'static> App<S> {
         self.panes[idx].last_pointer = position;
         if self.panes[idx].text_selecting.is_some() {
             self.pane_text_drag_at(idx, position)
+        } else if self.panes[idx].read_selecting {
+            let font = self.font.get();
+            self.panes[idx].select_drag_at(font, position)
         } else if self.panes[idx].dragging.is_some() {
             self.pane_drag_at_point(idx, position)
         } else if self.pane_source_move(idx, position) {
@@ -2961,6 +3002,9 @@ impl<S: 'static> App<S> {
         }
         if self.panes[idx].text_selecting.is_some() {
             self.panes[idx].end_text_select();
+            false
+        } else if self.panes[idx].read_selecting {
+            self.panes[idx].end_select();
             false
         } else if self.panes[idx].dragging.is_some() {
             self.panes[idx].end_drag();
@@ -4371,6 +4415,7 @@ pub mod prelude {
         Canvas, Color, Font, GlyphRun, ImageFit, Path, Pixmap, StrokeStyle, Svg, TextDirection,
     };
     pub use crate::render::{Decoration, FontStyle, FontWeight, TextPaint, UnderlineStyle};
+    pub use crate::render::{InlineIcon, RichText, SpanStyle, TextOutline, TextShadow};
     pub use crate::style::Theme;
     pub use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Typography};
     pub use crate::widgets::{

@@ -181,6 +181,7 @@ cargo run --example themegallery  # one card under four themes (writes .raw file
 cargo run --example material3demo # Material 3 baseline + dynamic-color themes
 cargo run --example imagedemo     # PNG and SVG images, and the fit modes
 cargo run --example bididemo      # Hebrew, Arabic and mixed right-to-left text (--mirror: a mirrored UI)
+cargo run --example richtext      # styled runs with inline icons, outlined/shadowed text, selectable text
 ```
 
 Each opens a real native window via `App::run` (Wayland, then X11, on Linux;

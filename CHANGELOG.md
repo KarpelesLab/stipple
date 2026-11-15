@@ -146,6 +146,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Android, the web (Screen Wake Lock), macOS, Windows and Linux.
 - `examples/screendemo`: edge to edge with the safe area outlined, the
   orientation locked and the screen kept awake.
+- Rich text (#61): `RichText::new().push("Sold ").bold("Potion").icon(coin)`,
+  runs with their own `SpanStyle` (color, font, weight, slant, size,
+  decoration) and images in the line (`InlineIcon`, with alt text), wrapped
+  and reordered for right-to-left text as one text. `label`, `heading` and
+  `paragraph` take one (or a string, as before); `Element::rich_text` and
+  `Scene::fill_rich_text` too.
+- Text outlines and shadows: `Element::text_outline(TextOutline::new(2.0,
+  black))` and `.text_shadow(TextShadow::new(offset, color).blur(2.0))`, and
+  the same on `TextPaint` (`Scene::outline_layout` / `shadow_layout` for a
+  `TextLayout`). Drawn from the glyphs' outlines, so the GPU path caches
+  them as it caches glyphs.
+- Selectable text (#46): `.selectable()` on a label or paragraph (or a
+  container of them) lets the user select it with the mouse (drag,
+  double-click a word, triple-click a line), extend it with Shift+arrows,
+  copy it with Ctrl/Cmd+C or the context menu (Copy, Select All), and on a
+  touch screen select a word with a long press. It shows the I-beam, becomes
+  the primary selection on Linux, and reaches screen readers (AT-SPI).
 
 ### Changed (breaking)
 
@@ -154,6 +171,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `MotionTokens` has two more fields, `page` and `sheet`.
 - `App::touch` hands the finger's pointer events to `on_pointer` handlers
   first, as the run loop does.
+- `TextLayout` lines can differ in height (each is as tall as its tallest
+  run or image): `TextLayout::line_height(line)` gives one. `Font::layout`
+  no longer ties the layout's lifetime to the font.
 - `scroll(cx)` and `scroll_horizontal(cx)` take no length: a scroll
   container fills the space its column (or, sideways, its row) leaves free,
   shrinks first when its siblings need the room (down to 100 px or its

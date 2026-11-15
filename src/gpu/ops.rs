@@ -1084,6 +1084,49 @@ mod tests {
     }
 
     #[test]
+    fn outlined_shadowed_rich_text_lowers_to_glyph_rasters_and_images() {
+        use crate::geometry::Vec2;
+        use crate::render::{InlineIcon, RichText, TextOutline, TextPaint, TextShadow};
+        let Some(font) = crate::render::Font::system_default() else {
+            eprintln!("skipping: no system font found");
+            return;
+        };
+        let icon = Arc::new(Pixmap::new(crate::geometry::PhysicalSize::new(4, 4)));
+        let text = RichText::new()
+            .push("l")
+            .icon(InlineIcon::new(icon.clone()));
+        let paint = TextPaint::new(&font, 16.0, Color::WHITE)
+            .outline(TextOutline::new(2.0, Color::BLACK))
+            .shadow(TextShadow::new(
+                Vec2::new(1.0, 1.0),
+                Color::rgba(0, 0, 80, 128),
+            ));
+        let mut s = Scene::new(Size::new(200.0, 40.0));
+        s.fill_rich_text(&text, Point::new(4.0, 4.0), &paint);
+        let mut cache = RasterCache::default();
+        let ops = lower(&s, &mut cache);
+        let images: Vec<&Arc<Pixmap>> = ops
+            .iter()
+            .filter_map(|op| match op {
+                Op::Image { image, .. } => Some(image),
+                _ => None,
+            })
+            .collect();
+        // The shadow, the outline and the fill are each a raster of the
+        // glyph (three different ones here; a shadow in the outline's color would share its raster), then the icon is its own image.
+        assert_eq!(images.len(), 4, "{ops:?}");
+        assert!(!Arc::ptr_eq(images[0], images[1]));
+        assert!(!Arc::ptr_eq(images[1], images[2]));
+        assert!(Arc::ptr_eq(images[3], &icon));
+        // The outline raster is wider than the fill's.
+        assert!(images[1].size().width > images[2].size().width);
+        // The translucent shadow is composited as a layer.
+        let shadow_layer =
+            matches!(ops[0], Op::PushLayer { opacity } if (opacity - 128.0 / 255.0).abs() < 0.01);
+        assert!(shadow_layer, "{ops:?}");
+    }
+
+    #[test]
     fn a_dashed_line_and_a_curve_are_paths() {
         use crate::render::{Path as SPath, StrokeStyle};
         let mut s = Scene::new(Size::new(100.0, 100.0));

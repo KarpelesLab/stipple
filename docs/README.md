@@ -533,8 +533,8 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Custom painting](canvas.md): `Element::canvas`, invalidating parts of it from any thread, paths, bitmaps and glyph runs
 - [Games](games.md): the game loop (`App::on_frame`), fixed time steps, polled input and rebindable actions
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
-- [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click
-- [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough
+- [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click, selectable labels and paragraphs
+- [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough, rich text with inline icons, outlines and shadows
 - [Accessibility](accessibility.md): what each platform's screen readers get, and how CI checks it from outside the app
 - [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements; touch gestures (scrolling, long press, pinch)
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts

@@ -158,6 +158,17 @@ pub(crate) fn to_window(node: &LayoutNode, outer: Affine) -> Affine {
 /// it has a border, whose anti-aliased edge reaches just outside.
 fn bleed(node: &LayoutNode) -> Rect {
     let b = node.bounds;
+    // Text's outline and shadow reach past its box.
+    if let crate::core::NodeContent::Text { style, .. } = &node.content
+        && let Some(r) = style.reach()
+    {
+        return Rect::from_xywh(
+            b.min_x() - r.left,
+            b.min_y() - r.top,
+            b.width() + r.left + r.right,
+            b.height() + r.top + r.bottom,
+        );
+    }
     if node.decoration.border.is_some() {
         Rect::from_xywh(
             b.min_x() - 1.0,
@@ -204,7 +215,7 @@ pub(crate) fn subtree_extent(node: &LayoutNode, outer: Affine) -> Rect {
     node.children
         .iter()
         .map(|c| subtree_extent(c, m))
-        .fold(drawn(m, node.bounds), Rect::union)
+        .fold(drawn(m, bleed(node)), Rect::union)
 }
 
 /// Merge rectangles that overlap or touch into fewer, larger ones. A small
