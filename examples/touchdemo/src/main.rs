@@ -562,6 +562,25 @@ mod selftest {
     pub fn schedule(handle: &AppHandle<State>) {
         let _ = std::fs::remove_file(std::env::temp_dir().join("touchdemo.log"));
         log("touchdemo: selftest starting");
+        // The bundle's Info.plist, and the app's container directories.
+        let info = stipple::platform::app_info();
+        log(&format!(
+            "touchdemo: app id={} name={:?} version={} build={}",
+            info.id,
+            info.name,
+            info.version.as_deref().unwrap_or("-"),
+            info.build.as_deref().unwrap_or("-"),
+        ));
+        match stipple::platform::dirs() {
+            Ok(d) => log(&format!(
+                "touchdemo: dirs data={} cache={} temp={} exist={}",
+                d.data.display(),
+                d.cache.display(),
+                d.temp.display(),
+                [&d.data, &d.cache, &d.temp].iter().all(|p| p.is_dir()),
+            )),
+            Err(e) => log(&format!("touchdemo: dirs unavailable: {e}")),
+        }
         let mut steps = Steps(VecDeque::new());
 
         // Tap the text field: it takes focus, and the view the keyboard.

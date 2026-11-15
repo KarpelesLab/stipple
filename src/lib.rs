@@ -655,6 +655,28 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Say what the app is: its identifier, name, version and build number,
+    /// for where the OS can't tell (Windows and Linux, and macOS outside an
+    /// app bundle; a bundle's or Android package's own values win). Desktop
+    /// app directories are named after the id, and Wayland windows carry it
+    /// as their app id. Same as
+    /// [`platform::set_app_info`](crate::platform::set_app_info), which takes
+    /// effect at once. See `docs/os-integration.md`.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// use stipple::platform::AppInfo;
+    /// let app = App::new((), |_: &(), cx: &mut Cx<()>| {
+    ///     let theme = *cx.theme();
+    ///     label(&theme, "Hello")
+    /// })
+    /// .app_info(AppInfo::new("org.example.Hello").name("Hello").version(env!("CARGO_PKG_VERSION")));
+    /// ```
+    pub fn app_info(self, info: crate::platform::AppInfo) -> Self {
+        crate::platform::set_app_info(info);
+        self
+    }
+
     /// Set the initial logical window size.
     pub fn logical_size(mut self, size: Size) -> Self {
         self.primary().attrs.logical_size = size;

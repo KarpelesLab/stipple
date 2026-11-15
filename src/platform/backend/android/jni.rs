@@ -50,9 +50,11 @@ const GET_METHOD_ID: usize = 33;
 const CALL_OBJECT_METHOD_A: usize = 36;
 const CALL_BOOLEAN_METHOD_A: usize = 39;
 const CALL_INT_METHOD_A: usize = 51;
+const CALL_LONG_METHOD_A: usize = 54;
 const CALL_FLOAT_METHOD_A: usize = 57;
 const CALL_VOID_METHOD_A: usize = 63;
 const GET_FIELD_ID: usize = 94;
+const GET_OBJECT_FIELD: usize = 95;
 const GET_INT_FIELD: usize = 100;
 const GET_STATIC_METHOD_ID: usize = 113;
 const CALL_STATIC_OBJECT_METHOD_A: usize = 116;
@@ -1025,4 +1027,119 @@ pub(super) unsafe fn in_native_object(
         return std::ptr::null_mut();
     }
     jni.pop_frame_keeping(r)
+}
+
+/// What `PackageManager.getPackageInfo` says of the app's own package.
+pub(super) struct Package {
+    pub(super) name: String,
+    pub(super) label: Option<String>,
+    pub(super) version_name: Option<String>,
+    pub(super) version_code: Option<i64>,
+}
+
+/// The app's package name, label (`ApplicationInfo.loadLabel`), version name
+/// and version code (`getLongVersionCode` from API 28, the `versionCode`
+/// field before).
+pub(super) unsafe fn package(vm: *mut c_void, context: JObject, sdk: i32) -> Option<Package> {
+    unsafe {
+        with_env(vm, |jni| {
+            let name = jni.call_object(context, c"getPackageName", c"()Ljava/lang/String;", &[])?;
+            let pm = jni.call_object(
+                context,
+                c"getPackageManager",
+                c"()Landroid/content/pm/PackageManager;",
+                &[],
+            )?;
+            let label = jni
+                .call_object(
+                    context,
+                    c"getApplicationInfo",
+                    c"()Landroid/content/pm/ApplicationInfo;",
+                    &[],
+                )
+                .and_then(|app| {
+                    jni.call_object(
+                        app,
+                        c"loadLabel",
+                        c"(Landroid/content/pm/PackageManager;)Ljava/lang/CharSequence;",
+                        &[JValue { l: pm }],
+                    )
+                })
+                .and_then(|cs| jni.char_sequence(cs));
+            let info = jni.call_object(
+                pm,
+                c"getPackageInfo",
+                c"(Ljava/lang/String;I)Landroid/content/pm/PackageInfo;",
+                &[JValue { l: name }, JValue { i: 0 }],
+            );
+            let version_name = info
+                .and_then(|i| jni.object_field(i, c"versionName", c"Ljava/lang/String;"))
+                .and_then(|s| jni.to_rust16(s));
+            let version_code = info.and_then(|i| {
+                if sdk >= 28 {
+                    jni.call_long(i, c"getLongVersionCode", c"()J", &[])
+                } else {
+                    jni.int_field(i, c"versionCode").map(i64::from)
+                }
+            });
+            Some(Package {
+                name: jni.to_rust16(name)?,
+                label: label.filter(|l| !l.is_empty()),
+                version_name: version_name.filter(|v| !v.is_empty()),
+                version_code,
+            })
+        })
+    }
+}
+
+/// The absolute path of the `java.io.File` that `getter` (`getCacheDir`,
+/// `getFilesDir`) of `context` returns.
+pub(super) unsafe fn context_dir(
+    vm: *mut c_void,
+    context: JObject,
+    getter: &CStr,
+) -> Option<String> {
+    unsafe {
+        with_env(vm, |jni| {
+            let dir = jni.call_object(context, getter, c"()Ljava/io/File;", &[])?;
+            let path = jni.call_object(dir, c"getAbsolutePath", c"()Ljava/lang/String;", &[])?;
+            jni.to_rust16(path)
+        })
+    }
+}
+
+impl Jni {
+    pub(super) fn call_long(
+        &self,
+        obj: JObject,
+        name: &CStr,
+        sig: &CStr,
+        args: &[JValue],
+    ) -> Option<i64> {
+        let m = self.method(self.class_of(obj)?, name, sig)?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, JMethod, *const JValue) -> i64 =
+                std::mem::transmute(self.f(CALL_LONG_METHOD_A));
+            let r = f(self.0, obj, m, args.as_ptr());
+            (!self.clear()).then_some(r)
+        }
+    }
+
+    /// Read the object field `name` (of type `sig`) of `obj`; `None` for
+    /// `null`.
+    pub(super) fn object_field(&self, obj: JObject, name: &CStr, sig: &CStr) -> Option<JObject> {
+        let class = self.class_of(obj)?;
+        unsafe {
+            let get_id: unsafe extern "C" fn(
+                Env,
+                JObject,
+                *const c_char,
+                *const c_char,
+            ) -> JMethod = std::mem::transmute(self.f(GET_FIELD_ID));
+            let id = self.ok(get_id(self.0, class, name.as_ptr(), sig.as_ptr()))?;
+            let get: unsafe extern "C" fn(Env, JObject, JMethod) -> JObject =
+                std::mem::transmute(self.f(GET_OBJECT_FIELD));
+            self.ok(get(self.0, obj, id))
+        }
+    }
 }

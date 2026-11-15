@@ -100,6 +100,10 @@ echo "android: API $sdk"
 
 wait_for "Stipple Android: window [0-9]+x[0-9]+ presented=true" 90
 wait_for "androiddemo: tick 3 " 60
+# platform::app_info from PackageManager (the manifest's label and versions),
+# platform::dirs from the activity (getFilesDir, getCacheDir), created.
+wait_for "androiddemo: app id=$pkg name=\"Stipple\" version=1\.2\.3 build=7" 5
+wait_for "androiddemo: dirs data=/data/(user/0|data)/$pkg/files cache=/data/(user/0|data)/$pkg/cache temp=/data/(user/0|data)/$pkg/cache/tmp exist=true" 5
 adb exec-out screencap -p > "$shots/android.png"
 
 size="$(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)"

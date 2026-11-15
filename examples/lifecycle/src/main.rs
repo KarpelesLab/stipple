@@ -11,10 +11,12 @@
 //!   caret). A second after it loses focus, the "bell" rings: a beep, an
 //!   attention request and a Dock badge counting the bells, cleared when the
 //!   window is focused again.
+//! - At start it prints what the app is and where its files go
+//!   (`platform::app_info`, `platform::dirs`).
 //!
 //! Each step is printed (`lifecycle: ...`), which CI checks.
 
-use stipple::platform::WindowId;
+use stipple::platform::{AppInfo, WindowId};
 use stipple::prelude::*;
 
 #[derive(Default)]
@@ -120,8 +122,33 @@ fn main() {
         ..Default::default()
     };
     let mut app = App::new(state, view)
+        // What the app is, for where the OS can't tell (no bundle): its
+        // directories are named after the id.
+        .app_info(
+            AppInfo::new("com.karpeleslab.stipple.lifecycle")
+                .name("Stipple lifecycle")
+                .version(env!("CARGO_PKG_VERSION")),
+        )
         .title("Stipple lifecycle")
         .logical_size(Size::new(420.0, 340.0));
+    let info = stipple::platform::app_info();
+    say(format_args!(
+        "app id={} name={:?} version={} build={}",
+        info.id,
+        info.name,
+        info.version.as_deref().unwrap_or("-"),
+        info.build.as_deref().unwrap_or("-"),
+    ));
+    match stipple::platform::dirs() {
+        Ok(d) => say(format_args!(
+            "dirs data={} config={} cache={} temp={}",
+            d.data.display(),
+            d.config.display(),
+            d.cache.display(),
+            d.temp.display()
+        )),
+        Err(e) => say(format_args!("dirs unavailable: {e}")),
+    }
     if let Some(font) = Font::system_default() {
         app = app.font(font);
     }

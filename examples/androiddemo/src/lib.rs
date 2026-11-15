@@ -239,6 +239,25 @@ mod app {
             theme.is_dark(),
             theme.palette.background
         );
+        // The package's name, label and version, and its own directories.
+        let info = stipple::platform::app_info();
+        println!(
+            "androiddemo: app id={} name={:?} version={} build={}",
+            info.id,
+            info.name,
+            info.version.as_deref().unwrap_or("-"),
+            info.build.as_deref().unwrap_or("-"),
+        );
+        match stipple::platform::dirs() {
+            Ok(d) => println!(
+                "androiddemo: dirs data={} cache={} temp={} exist={}",
+                d.data.display(),
+                d.cache.display(),
+                d.temp.display(),
+                [&d.data, &d.cache, &d.temp].iter().all(|p| p.is_dir()),
+            ),
+            Err(e) => println!("androiddemo: dirs unavailable: {e}"),
+        }
         let state = State {
             taps: 0,
             ticks: 0,

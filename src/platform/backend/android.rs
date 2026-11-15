@@ -994,6 +994,58 @@ pub(crate) fn open_url(url: &str) -> bool {
     with_activity(|a| unsafe { jni::open_url(a.vm, a.clazz, url) }.then_some(())).is_some()
 }
 
+/// The package's name, label, version name and version code, for
+/// [`app_info`](crate::platform::app_info). Asked once, once there is an
+/// activity.
+pub(crate) fn app_info() -> Option<crate::platform::bundle::OsInfo> {
+    static INFO: std::sync::OnceLock<jni::Package> = std::sync::OnceLock::new();
+    let p = match INFO.get() {
+        Some(p) => p,
+        None => {
+            let p = with_activity(|a| unsafe { jni::package(a.vm, a.clazz, a.sdk_version) })?;
+            INFO.get_or_init(|| p)
+        }
+    };
+    Some(crate::platform::bundle::OsInfo {
+        id: Some(p.name.clone()),
+        name: p.label.clone(),
+        version: p.version_name.clone(),
+        build: p.version_code.map(|c| c.to_string()),
+    })
+}
+
+/// The app's files directory (`ANativeActivity.internalDataPath`, else
+/// `getFilesDir()`) and `getCacheDir()`, for
+/// [`dirs`](crate::platform::dirs). Asked once, once there is an activity.
+pub(crate) fn app_dirs() -> Option<crate::platform::AppDirs> {
+    static DIRS: std::sync::OnceLock<(std::path::PathBuf, std::path::PathBuf)> =
+        std::sync::OnceLock::new();
+    let (files, cache) = match DIRS.get() {
+        Some(d) => d,
+        None => {
+            let d = with_activity(|a| {
+                let internal = (!a.internal_data_path.is_null()).then(|| {
+                    unsafe { std::ffi::CStr::from_ptr(a.internal_data_path) }
+                        .to_string_lossy()
+                        .into_owned()
+                });
+                let files = internal
+                    .filter(|p| !p.is_empty())
+                    .or_else(|| unsafe { jni::context_dir(a.vm, a.clazz, c"getFilesDir") })?;
+                let cache = unsafe { jni::context_dir(a.vm, a.clazz, c"getCacheDir") }?;
+                Some((files.into(), cache.into()))
+            })?;
+            DIRS.get_or_init(|| d)
+        }
+    };
+    Some(crate::platform::AppDirs {
+        data: files.clone(),
+        config: files.clone(),
+        cache: cache.clone(),
+        temp: cache.join("tmp"),
+    })
+}
+
 // ---- The frame clock: AChoreographer -----------------------------------------
 
 /// Animation frames from `AChoreographer`, resolved at run time: it appeared

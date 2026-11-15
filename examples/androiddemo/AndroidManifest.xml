@@ -4,9 +4,12 @@
      state) across rotation, resizing and dark-mode switches, which Stipple
      handles itself. enableOnBackInvokedCallback opts into predictive back
      (Android 13 and later): Back goes to the app's OnBackInvokedCallback, which
-     Stipple registers only while the app would go back. See
+     Stipple registers only while the app would go back. versionName and
+     versionCode are what platform::app_info reports (test-on-device.sh
+     checks them). See
      docs/platforms/android.md for packaging. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.karpeleslab.stipple">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.karpeleslab.stipple"
+    android:versionCode="7" android:versionName="1.2.3">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <!-- platform::notify, on Android 13 and later. -->
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>

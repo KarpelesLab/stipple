@@ -32,6 +32,7 @@ const XDG_WM_BASE_GET_XDG_SURFACE: u16 = 2;
 const XDG_SURFACE_DESTROY: u16 = 0;
 const XDG_SURFACE_GET_TOPLEVEL: u16 = 1;
 const XDG_TOPLEVEL_DESTROY: u16 = 0;
+const XDG_TOPLEVEL_SET_APP_ID: u16 = 3;
 pub(super) const XDG_TOPLEVEL_SET_MINIMIZED: u16 = 13;
 /// `xdg_toplevel.state` values.
 const STATE_MAXIMIZED: u32 = 1;
@@ -95,6 +96,13 @@ pub(super) fn create(
     let mut a = Vec::new();
     arg_str(&mut a, &attrs.title);
     conn.send(toplevel, XDG_TOPLEVEL_SET_TITLE, &a)?;
+    // The id the app gave (`App::app_info`), which the compositor matches to
+    // its `.desktop` file; without one, the compositor picks.
+    if let Some(id) = crate::platform::bundle::given_id() {
+        let mut a = Vec::new();
+        arg_str(&mut a, &id);
+        conn.send(toplevel, XDG_TOPLEVEL_SET_APP_ID, &a)?;
+    }
     // Server-side decorations where offered, else our own; the other
     // windows' wait aside.
     if conn.decor.toplevel() != 0 {

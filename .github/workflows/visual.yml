@@ -3861,6 +3861,11 @@ jobs:
           echo "=== app debug: input ==="
           grep -E "touch|press|release|wake|Text|Key" visual_output/touchdemo-stderr.log | head -60 || true
           echo "=== app debug (last 20) ==="; tail -20 visual_output/touchdemo-stderr.log || true
+          # platform::app_info reads the bundle's Info.plist, and
+          # platform::dirs gives (and creates) the container's directories.
+          grep -E "touchdemo: (app|dirs) " "$LOG" || true
+          grep -qF 'touchdemo: app id=com.karpeleslab.stipple name="Stipple" version=1.0 build=1' "$LOG"
+          grep -qE "touchdemo: dirs data=/.+/Library/Application Support cache=/.+/Library/Caches temp=/.+/tmp exist=true" "$LOG"
           # The view adopts UIKeyInput and takes the keyboard while the field
           # has focus...
           grep -q "touchdemo: keyboard focused key_input=true can_become=true first_responder=true" "$LOG"
@@ -4433,6 +4438,12 @@ jobs:
           sleep 4
           # Mapping the window gave it the focus (its own SetInputFocus).
           grep -q 'lifecycle: focus true' "$LOG"
+          # platform::app_info falls back to what the app gave (no bundle on
+          # Linux), and platform::dirs follows XDG and creates the directories.
+          ID=com.karpeleslab.stipple.lifecycle
+          grep -qE "lifecycle: app id=$ID name=\"Stipple lifecycle\" version=[0-9]+\.[0-9]+\.[0-9]+ build=-" "$LOG"
+          grep -qF "lifecycle: dirs data=$HOME/.local/share/$ID config=$HOME/.config/$ID cache=$HOME/.cache/$ID temp=" "$LOG"
+          test -d "$HOME/.local/share/$ID" && test -d "$HOME/.config/$ID" && test -d "$HOME/.cache/$ID"
           # The close button: the app cancels, and the window stays.
           python3 .github/scripts/x11-window.py close "$W"
           sleep 1

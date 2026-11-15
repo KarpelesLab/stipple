@@ -1306,6 +1306,17 @@ Most input only works on X11 today.
   click and an activation reach the app); on Windows and macOS it checks the
   icon is created, but the menus and clicks are build-checked only. No XEmbed
   tray on Linux. See [docs/os-integration.md](docs/os-integration.md).
+- ✅ App directories and bundle information (`platform::dirs`,
+  `platform::app_info`, `App::app_info`): data, config, cache and temp
+  directories, created on request (`NSFileManager` on macOS and iOS, named
+  after the bundle id on macOS; `getFilesDir`/`getCacheDir` on Android; known
+  folders on Windows; XDG on Linux), and the id, name, version and build
+  number from the bundle's `Info.plist`, `PackageManager.getPackageInfo` or
+  the Windows version resource, else what the app gave (also the Wayland app
+  id). CI checks iOS (simulator bundle), Android (emulator package) and Linux
+  (XDG); macOS was run by hand bundled and unbundled; Windows is build-checked
+  only. No web storage (OPFS) and no key-value settings store yet. See
+  [docs/os-integration.md](docs/os-integration.md#app-directories-and-bundle-information).
 
 #### 7e — Widgets and layout
 - ✅ Image and SVG widgets: `image(...)` / `svg(...)` with fill / contain /

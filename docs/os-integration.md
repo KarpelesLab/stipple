@@ -1,8 +1,8 @@
-# Tray icons, notifications, message boxes and opening URLs
+# Tray icons, notifications, message boxes, opening URLs and app directories
 
-Four ways an app reaches past its window: a tray icon with a menu, desktop
-notifications, message boxes, and handing a URL or file to the app the user
-picked for it.
+Ways an app reaches past its window: a tray icon with a menu, desktop
+notifications, message boxes, handing a URL or file to the app the user
+picked for it, and finding where to keep its files and what version it is.
 The `traydemo` example shows all three:
 
 ```sh
@@ -37,6 +37,85 @@ that opens it.
 
 Inside Flatpak or Snap, the portal is what lets a sandboxed app open a URL;
 outside, `xdg-open` follows the desktop's settings (and `$BROWSER`).
+
+## App directories and bundle information
+
+```rust
+use stipple::platform::{self, AppInfo};
+
+// For where the OS can't tell (Windows, Linux, macOS outside a bundle).
+let app = App::new(state, view).app_info(
+    AppInfo::new("org.example.Notes")      // reverse-DNS by convention
+        .name("Notes")
+        .version(env!("CARGO_PKG_VERSION")),
+);
+
+let info = platform::app_info();           // id, name, version, build
+let dirs = platform::dirs()?;              // data, config, cache, temp
+std::fs::write(dirs.data.join("notes.db"), b"")?;
+```
+
+`dirs()` returns the app's own directories, creating each one (and its
+parents) if it isn't there yet; the temp directory is made readable by the user
+only on Linux and macOS, and refused if something else is in its place. It
+fails on the web and when the OS has no answer (no `$HOME` on Linux, no
+activity yet on Android).
+
+- `data`: files the user would miss (a database, documents), backed up where
+  the OS backs up apps.
+- `config`: settings; the same directory as `data` everywhere but Linux.
+- `cache`: files that can be made again, kept across launches but not backed
+  up, which the OS may delete when storage runs low.
+- `temp`: scratch files for this run, which may go at any time the app isn't
+  running.
+
+| | `data` and `config` | `cache` | `temp` |
+|---|---|---|---|
+| macOS | `~/Library/Application Support/<id>` | `~/Library/Caches/<id>` | `$TMPDIR/<id>` |
+| iOS | `Library/Application Support` | `Library/Caches` | `tmp` |
+| Android | `getFilesDir()` (`ANativeActivity.internalDataPath`) | `getCacheDir()` | `getCacheDir()/tmp` |
+| Windows | `%APPDATA%\<id>` (`FOLDERID_RoamingAppData`) | `%LOCALAPPDATA%\<id>\Cache` | `%TEMP%\<id>` |
+| Linux | `$XDG_DATA_HOME/<id>`, `$XDG_CONFIG_HOME/<id>` | `$XDG_CACHE_HOME/<id>` | `$XDG_RUNTIME_DIR/<id>`, else `<id>-<uid>` in `$TMPDIR` or `/tmp` |
+| Web | — | | |
+
+The macOS paths are from `NSFileManager` (`URLsForDirectory:inDomains:`,
+`temporaryDirectory`), so a sandboxed app gets its container's. The iOS and
+Android ones are the app's own container, so they carry no id. On Linux the
+XDG defaults apply when a variable is unset or not absolute
+(`~/.local/share`, `~/.config`, `~/.cache`); inside Flatpak they are the
+app's own already. `<id>` is `app_info().id` made into one safe path component
+(separators and `..` replaced).
+
+`app_info()` takes each field from the OS where the app is packaged, then from
+what `App::app_info` (or `platform::set_app_info`) gave, then from the
+executable's name for the id and name (with no version):
+
+| | id | name | version | build |
+|---|---|---|---|---|
+| macOS, iOS | `CFBundleIdentifier` | `CFBundleDisplayName`, else `CFBundleName` | `CFBundleShortVersionString` | `CFBundleVersion` |
+| Android | the package name | the application's label | `versionName` | `versionCode` (`getLongVersionCode` on API 28+) |
+| Windows | — | `ProductName`, else `FileDescription` | `ProductVersion` (the string, else the fixed `a.b.c.d`) | — |
+| Linux, web | — | — | — | — |
+
+A binary run outside an app bundle (`cargo run` on macOS) has no
+`CFBundleIdentifier` or versions, and a Rust executable has no Windows version
+resource unless a build script adds one (`winres`, `embed-resource`), so desktop
+apps should call `App::app_info` with their id and `env!("CARGO_PKG_VERSION")`.
+Call it before `dirs()`: desktop directories are named after the id. On
+Wayland, the id the app gave is also the window's app id
+(`xdg_toplevel.set_app_id`), which the compositor matches to the app's
+`.desktop` file.
+
+There is no key-value settings store on top yet (`NSUserDefaults`,
+`SharedPreferences`, `localStorage`), and no web storage: write files in
+`dirs().config`.
+
+`lifecycle` prints both at start (`lifecycle: app ...`, `lifecycle: dirs ...`).
+CI checks the X11 job's XDG directories exist, `touchdemo`'s iOS self-test
+reads the simulator bundle's `Info.plist` values and container directories, and
+`androiddemo` reads the emulator package's label, `versionName` and
+`versionCode`, and its files and cache directories. macOS was checked by hand,
+bundled and unbundled; Windows is build-checked only.
 
 ## Notifications
 

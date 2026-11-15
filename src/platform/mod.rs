@@ -28,6 +28,9 @@ pub(crate) mod atspi;
 /// Predictive back: whether the app would go back, and the gesture's progress.
 pub(crate) mod back;
 pub mod backend;
+/// The app's directories (data, config, cache, temp) and bundle information
+/// (identifier, name, version, build number).
+mod bundle;
 /// The system clipboard (plain text) on Windows, macOS, iOS and Android.
 pub mod clipboard;
 /// Dead keys and compose sequences from the libX11 Compose file (X11 and
@@ -94,6 +97,7 @@ mod window;
 
 pub use access::{A11yNode, A11yRole};
 pub use back::{BackEdge, BackGesture, back_enabled, set_back_enabled};
+pub use bundle::{AppDirs, AppInfo, app_info, dirs, set_app_info};
 pub use error::PlatformError;
 pub use event::{
     ButtonState, DragOffer, DropData, Event, Ime, KeyCode, Lifecycle, Modifiers, PointerButton,
