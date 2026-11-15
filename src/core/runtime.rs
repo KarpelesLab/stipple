@@ -1296,6 +1296,12 @@ pub struct LayoutNode {
     /// [exit](crate::core::Element::exit) effect runs: stripped of handlers,
     /// identity and semantics, and skipped by hover and accessibility.
     pub ghost: bool,
+    /// Laid out but kept off stage (see [`Element::offstage`]): once the app
+    /// has applied scroll offsets and presence to the tree, the node's
+    /// subtree is made a handler-less, invisible [ghost](Self::ghost).
+    ///
+    /// [`Element::offstage`]: crate::core::Element::offstage
+    pub offstage: bool,
     pub children: Vec<LayoutNode>,
 }
 
@@ -1332,6 +1338,7 @@ impl LayoutNode {
             opacity: 1.0,
             key: None,
             ghost: false,
+            offstage: false,
             children,
         }
     }
@@ -1864,6 +1871,7 @@ mod tests {
             opacity: 1.0,
             key: None,
             ghost: false,
+            offstage: false,
             children: Vec::new(),
         }
     }
@@ -1926,6 +1934,7 @@ mod tests {
             opacity: 1.0,
             key: None,
             ghost: false,
+            offstage: false,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),

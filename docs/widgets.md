@@ -12,7 +12,8 @@ shows them all:
 cargo run -p widgetsdemo            # or: dark, material, material-dark, contrast, native
 ```
 
-The tab bar, password field and color picker are in `sessionsdemo`, a
+`widgetsdemo` switches between its pages with a navigation bar. The tab bar,
+password field and color picker are in `sessionsdemo`, a
 terminal-like app's chrome (with message boxes, see
 [os-integration.md](os-integration.md#message-boxes)):
 
@@ -202,6 +203,63 @@ tab_bar(cx, &theme, bar, &state.bar, |s: &mut App| &mut s.bar)
 
 Dragging a tab out into a window of its own, and macOS's native window tabs,
 aren't done.
+
+## Navigation bar
+
+The bar along the bottom of a phone app that switches between its top-level
+destinations: an icon over a label each, the current one highlighted. The app
+keeps which one is selected.
+
+```rust
+const SCAN: &str = include_str!("scan.svg"); // drawn in currentColor
+
+let items = vec![
+    NavItem::new("Scan", NavIcon::template(SCAN)),
+    NavItem::new("History", &state.history_icon)      // an Arc<Svg> or Arc<Pixmap>
+        .selected_icon(&state.history_filled)         // shown while selected
+        .badge(Some(NavBadge::Count(state.unread))),  // or NavBadge::Dot
+    NavItem::new("Create", NavIcon::template(CREATE)),
+    NavItem::new("Settings", NavIcon::template(SETTINGS)),
+];
+let pages = page_stack(cx, 4, state.tab, |cx, i, visible| match i {
+    0 => scan_page(cx, state, visible), // pause the camera when !visible
+    1 => history_page(cx, state),
+    2 => create_page(cx, state),
+    _ => settings_page(cx, state),
+});
+let bar = navigation_bar(cx, &theme, items, state.tab, |s: &mut App, i| s.tab = i);
+column(vec![pages, bar]).align(Align::Start, Align::Stretch).grow(1.0)
+```
+
+- Tapping an item runs `on_select` with its index. Focused (Tab), ←/→ move
+  the selection (mirrored right to left) and Home/End go to the ends.
+- A `NavIcon::template` is SVG source using `currentColor`, tinted with the
+  item's ink so one icon serves both states and follows the theme; an image
+  (`Arc<Svg>`, `Arc<Pixmap>`, `ImageSource`) draws in its own colors.
+- The look follows the theme (`NavLook::of`): Material 3's bar (80 px, a pill
+  that grows in behind the selected icon, the label below) everywhere it
+  draws itself, and `UITabBar`'s proportions (49 px over a hairline, no pill,
+  the selected icon and small label in the accent) under `Theme::native()`
+  on iOS. `NavigationBar::new(items, selected, on_select).look(NavLook::Ios)`
+  picks one; `.view(cx, &theme)` builds it.
+- `NavigationBar::bottom_inset(px)` extends the bar's background below its
+  items, under the home indicator. The window's safe-area insets aren't
+  reported yet ([#38](https://github.com/KarpelesLab/stipple/issues/38));
+  until then pass the value yourself (34 on a Face ID iPhone in portrait).
+- Assistive technologies see a `TabList` of `Tab`s, the selected one
+  selected, each named by its label and badge ("History, 3 new").
+- `navigation_rail` lays the same items down the side (Material 3's rail,
+  80 px wide, ↑/↓ to move), for wide windows: pick by `cx.window_size()`.
+
+**Keeping pages alive.** `page_stack` builds every page each frame, in
+order, but only the selected one is on stage. The others are laid out where
+it is and kept off stage (`Element::offstage`): not drawn, hit, focused or
+read by assistive technologies. So their scroll containers keep their
+offsets (and every scroll container, tap and field keeps the same id from
+frame to frame), and a page left for another comes back as it was. Focus in
+a page that goes off stage is dropped. Each page is told whether it shows.
+Since every page is built every frame, keep pages cheap to build, or memoize
+them with `cx.memo`.
 
 ## Password field
 

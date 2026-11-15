@@ -40,7 +40,7 @@ use std::time::Duration;
 
 use crate::anim::{Animated, Easing};
 use crate::core::interact::ElementKey;
-use crate::core::runtime::{LayoutNode, NodeContent, ScrollId};
+use crate::core::runtime::{FocusId, LayoutNode, NodeContent, ScrollId};
 use crate::core::transition::Transition;
 use crate::geometry::{Point, Rect, Size, Transform, Vec2};
 
@@ -329,6 +329,31 @@ fn strip(node: &mut LayoutNode) {
     for c in &mut node.children {
         strip(c);
     }
+}
+
+/// Take the [off-stage](LayoutNode::offstage) subtrees of `tree` off stage:
+/// each becomes an invisible ghost without handlers, identity or semantics,
+/// so nothing draws, hits, focuses or reads it. Call it once scroll offsets
+/// and presence have seen the tree as laid out. Returns whether `focused`
+/// was inside one (its focus should go).
+pub(crate) fn retire_offstage(tree: &mut LayoutNode, focused: Option<FocusId>) -> bool {
+    fn holds(node: &LayoutNode, id: FocusId) -> bool {
+        node.focus == Some(id) || node.children.iter().any(|c| holds(c, id))
+    }
+    fn walk(node: &mut LayoutNode, focused: Option<FocusId>, lost: &mut bool) {
+        if node.offstage {
+            *lost |= focused.is_some_and(|f| holds(node, f));
+            strip(node);
+            node.opacity = 0.0;
+            return;
+        }
+        for c in &mut node.children {
+            walk(c, focused, lost);
+        }
+    }
+    let mut lost = false;
+    walk(tree, focused, &mut lost);
+    lost
 }
 
 fn find(node: &LayoutNode, id: ElementKey) -> Option<&LayoutNode> {

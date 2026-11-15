@@ -265,6 +265,9 @@ pub struct Element {
     /// drawn together, then blended at this opacity. Set via
     /// [`Element::opacity`].
     pub opacity: f32,
+    /// Laid out as usual but kept off stage: not drawn, hit, focused or
+    /// shown to assistive technologies. Set via [`Element::offstage`].
+    pub offstage: bool,
     /// Interaction-state styling and motion: the element's
     /// [`key`](Element::key), per-state overrides
     /// ([`hovered`](Element::hovered), [`drag_over`](Element::drag_over)…),
@@ -301,6 +304,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            offstage: false,
             reactive: None,
             kind: ElementKind::Leaf,
         }
@@ -332,6 +336,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            offstage: false,
             reactive: None,
             kind: ElementKind::Text {
                 text: text.into(),
@@ -376,6 +381,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            offstage: false,
             reactive: None,
             kind: ElementKind::Viewport { id },
         }
@@ -409,6 +415,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            offstage: false,
             reactive: None,
             kind: ElementKind::Image {
                 source: source.into(),
@@ -443,6 +450,7 @@ impl Element {
             layout_direction: None,
             transform: None,
             opacity: 1.0,
+            offstage: false,
             reactive: None,
             kind: ElementKind::Stack {
                 axis,
@@ -1143,6 +1151,22 @@ impl Element {
         } else {
             opacity.clamp(0.0, 1.0)
         };
+        self
+    }
+
+    /// Keep this element and its subtree off stage while `offstage` is true:
+    /// built and laid out as usual (so its scroll containers keep their
+    /// offsets, clamped against its real content, and the scroll containers,
+    /// taps and fields after it keep the same ids from frame to frame), but
+    /// not drawn, not hit by the pointer or the wheel, out of the Tab order
+    /// and hidden from assistive technologies. Keyboard focus inside it is
+    /// dropped. Its keyed elements stay present, so nothing in it plays an
+    /// exit or enter effect as it goes off stage and back.
+    ///
+    /// This is how [`page_stack`](crate::widgets::page_stack) keeps every
+    /// page of a navigation bar alive while one shows.
+    pub fn offstage(mut self, offstage: bool) -> Self {
+        self.offstage = offstage;
         self
     }
 

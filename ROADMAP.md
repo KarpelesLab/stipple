@@ -1315,6 +1315,11 @@ Most input only works on X11 today.
 - ✅ Select / dropdown, number input, split pane, toolbar and toasts, with
   keyboard control and accessibility roles; see [docs/widgets.md](docs/widgets.md)
   and `examples/widgetsdemo`.
+- ✅ Bottom navigation bar (`navigation_bar`, #41): icon + label + badge per
+  destination, Material 3's pill look or `UITabBar`'s proportions on native
+  iOS, `TabList`/`Tab` roles, a bottom inset for the safe area (#38 will feed
+  it), `navigation_rail` for wide windows, and `page_stack` keeping every
+  page alive off stage (`Element::offstage`).
 - ✅ Document tab bar (`tab_bar`): closable tabs, drag to reorder (in-app
   drags, with the shifted tabs springing into place), per-tab color and
   indicator (dot, bell, count), a context menu per tab, a new-tab button,

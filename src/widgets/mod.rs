@@ -28,6 +28,9 @@ mod menus_tests;
 mod motion;
 #[cfg(test)]
 mod motion_tests;
+mod navigation;
+#[cfg(test)]
+mod navigation_tests;
 mod number;
 mod password;
 mod preedit;
@@ -41,6 +44,9 @@ mod toolbar;
 
 pub use chips::{Chip, chip, choice_chips, filter_chips};
 pub use color_picker::{ColorPicker, color_button, color_picker};
+pub use navigation::{
+    NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail, page_stack,
+};
 pub use number::{NumberInput, number_input};
 pub use password::{PasswordField, password_field};
 pub use preedit::DisplayText;

@@ -1,6 +1,6 @@
 [package]
 name = "widgetsdemo"
-description = "Stipple example: select, number input, split pane, toolbar and toasts."
+description = "Stipple example: select, number input, split pane, toolbar, toasts and a navigation bar."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

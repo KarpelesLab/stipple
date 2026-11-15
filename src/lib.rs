@@ -1283,6 +1283,11 @@ impl<S: 'static> Pane<S> {
         let offsets = &self.scroll_offsets;
         self.presence
             .update(&mut tree, &presence, old, offsets, now, size);
+        // Off-stage subtrees (pages behind the shown one) were laid out and
+        // scrolled; nothing draws, hits or reads them from here on.
+        if crate::core::presence::retire_offstage(&mut tree, self.focused) {
+            self.focused = None;
+        }
         crate::core::mark_native_states(&mut tree, hovered, pressed, self.focused);
         self.native_fades.update(&mut tree, &theme.motion, now);
         self.update_highlights(&theme, now);
@@ -3933,6 +3938,10 @@ pub mod prelude {
         paragraph, progress_bar, radio, row, scroll, scroll_horizontal, setting_row, slider,
         spacer, spinner, swatch, switch, tabs, text_area, text_editor, text_field, tooltip,
         viewport,
+    };
+    pub use crate::widgets::{
+        NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail,
+        page_stack,
     };
     pub use crate::widgets::{
         NumberInput, Select, SplitPane, ToastKind, Toasts, number_input, select, split_pane,

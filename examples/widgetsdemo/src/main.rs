@@ -6,6 +6,9 @@
 //! vertical split with a preview above an event log. Drag either divider, or
 //! focus one (Tab) and use the arrow keys. "Notify" raises a toast that
 //! dismisses itself after four seconds; the welcome toast stays until its ×.
+//! A navigation bar along the bottom switches between that editor, a long
+//! inbox and an about page; each keeps its state (the inbox its scroll
+//! offset) while another shows.
 //!
 //! Pick the theme with an argument: `light` (default), `dark`, `material`,
 //! `material-dark`, `contrast` or `native`.
@@ -20,6 +23,11 @@ use stipple::widgets::{NumberInput, Select, SplitPane, ToastKind, Toasts};
 
 const W: f64 = 720.0;
 const H: f64 = 480.0;
+
+/// Navigation icons, drawn in `currentColor` so the bar tints them.
+const EDIT: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M4 17.5V20h2.5L17.8 8.7l-2.5-2.5zM20.7 5.8l-2.5-2.5a1 1 0 0 0-1.4 0l-1.3 1.3 3.9 3.9 1.3-1.3a1 1 0 0 0 0-1.4z" fill="currentColor"/></svg>"#;
+const INBOX: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M5 4h14l2 9v7H3v-7zm1.6 2-1.4 7H9a3 3 0 0 0 6 0h3.8l-1.4-7z" fill="currentColor"/></svg>"#;
+const INFO: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20zm-1 8v7h2v-7zm0-4v2h2V6z" fill="currentColor"/></svg>"#;
 
 const SIZES: [&str; 5] = ["Small", "Medium", "Large", "Extra large", "Huge"];
 const FORMATS: [&str; 3] = ["PNG", "SVG", "PDF"];
@@ -42,6 +50,10 @@ struct State {
     extras: [bool; 3],
     log: Vec<String>,
     trash: Arc<Svg>,
+    /// The destination the navigation bar shows.
+    page: usize,
+    /// Inbox messages not opened yet.
+    unread: u32,
 }
 
 impl State {
@@ -61,6 +73,8 @@ impl State {
             extras: [true, false, false],
             log: vec!["Ready.".into()],
             trash: Arc::new(Svg::parse(ICON).expect("the bundled icon parses")),
+            page: 0,
+            unread: 3,
         }
     }
 
@@ -198,7 +212,46 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
 
     toasts(cx, &theme, &state.toasts, |s: &mut State| &mut s.toasts);
 
-    column(vec![bar, body])
+    // The editor, the inbox and the about page, each kept as it was while
+    // another shows.
+    let mut editor = Some(body);
+    let pages = page_stack(cx, 3, state.page, |cx, i, _visible| match i {
+        0 => editor.take().unwrap_or_else(spacer),
+        1 => {
+            let rows = (1..=60)
+                .map(|n| label(&theme, format!("Message {n}")).padding(Insets::uniform(sp.sm)))
+                .collect();
+            let list = Element::stack(Axis::Vertical, rows).align(Align::Start, Align::Stretch);
+            let id = cx.register_scroll();
+            column(vec![list])
+                .scrollable(id)
+                .fill(theme.palette.surface)
+                .radius(theme.radius)
+                .grow(1.0)
+        }
+        _ => column(vec![
+            heading(&theme, "Stipple widgets"),
+            paragraph(&theme, "Self-drawn widgets over hand-written OS backends."),
+        ])
+        .gap(sp.sm)
+        .padding(Insets::uniform(sp.lg)),
+    });
+    let items = vec![
+        NavItem::new("Editor", NavIcon::template(EDIT)),
+        NavItem::new("Inbox", NavIcon::template(INBOX))
+            .badge((state.unread > 0).then_some(NavBadge::Count(state.unread))),
+        NavItem::new("About", NavIcon::template(INFO)),
+    ];
+    let nav = navigation_bar(cx, &theme, items, state.page, |s: &mut State, i| {
+        s.page = i;
+        if i == 1 {
+            s.unread = 0;
+        }
+    })
+    .radius(theme.radius)
+    .clip();
+
+    column(vec![bar, pages, nav])
         .gap(sp.md)
         .padding(Insets::uniform(sp.md))
         .align(Align::Start, Align::Stretch)

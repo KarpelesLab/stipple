@@ -465,6 +465,7 @@ fn layout_element(
         opacity: el.opacity,
         key: el.reactive.as_ref().and_then(|r| r.id),
         ghost: false,
+        offstage: el.offstage,
         children: Vec::new(),
     };
 
