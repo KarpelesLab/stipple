@@ -3,16 +3,17 @@
 //! and [`Element::on_wheel`](crate::core::Element::on_wheel) handler under
 //! the pointer (or the one holding the capture) ahead of the app's own
 //! handling, with click counts, the buttons held and the modifiers; the
-//! pointer leaving the window clears every hover. See
+//! pointer leaving the window clears every hover. The pointer lock (relative
+//! motion with the cursor hidden and held in place) is kept here too. See
 //! `docs/pointer-events.md`.
 
 use crate::core::{
     PointerButtons, PointerEvent, PointerEventKind, PointerId, WheelEvent, WheelTarget, pointer_at,
     pointer_local, wheel_target_at,
 };
-use crate::geometry::Point;
+use crate::geometry::{Point, Vec2};
 use crate::platform::time::Instant;
-use crate::platform::{ButtonState, Event, PointerButton, ScrollDelta};
+use crate::platform::{ButtonState, Event, PointerButton, ScrollDelta, Window, WindowId};
 use crate::{App, ClickCounter, Pane, press_layer};
 
 /// The pointer as the pointer handlers of one window see it.
@@ -30,6 +31,9 @@ pub(crate) struct PointerTrack {
     clicks: ClickCounter,
     last_button: Option<PointerButton>,
     count: u32,
+    /// Whether the pointer is locked to the window (see
+    /// [`App::pane_pointer_lock`]).
+    pub(crate) locked: bool,
 }
 
 impl PointerTrack {
@@ -73,6 +77,22 @@ impl<S: 'static> Pane<S> {
         pos: Point,
         click_count: u32,
     ) -> bool {
+        self.send_pointer_moving(state, id, kind, button, pos, click_count, Vec2::ZERO)
+    }
+
+    /// [`send_pointer`](Self::send_pointer), with the locked pointer's
+    /// `movement`.
+    #[allow(clippy::too_many_arguments)]
+    fn send_pointer_moving(
+        &mut self,
+        state: &mut S,
+        id: PointerId,
+        kind: PointerEventKind,
+        button: Option<PointerButton>,
+        pos: Point,
+        click_count: u32,
+        movement: Vec2,
+    ) -> bool {
         let Some((position, size)) = self.tree.as_ref().and_then(|t| pointer_local(t, id, pos))
         else {
             return false;
@@ -86,6 +106,7 @@ impl<S: 'static> Pane<S> {
             size,
             modifiers: crate::platform::pointer_modifiers(),
             click_count,
+            movement,
         };
         crate::app_dbg(format_args!("pointer {ev:?} to {id:?}"));
         let ran = self.handlers.pointers().dispatch_pointer(id, &ev, state);
@@ -235,6 +256,26 @@ impl<S: 'static> App<S> {
                 }
                 out.done = button != PointerButton::Left;
             }
+            // The locked pointer stays put: a move (a backend's own warp)
+            // means nothing.
+            Event::PointerMoved { .. } if pane.pointer.locked => out.done = true,
+            Event::PointerDelta { dx, dy } => {
+                pane.ensure_tree(state, theme, font.as_ref());
+                let at = pane.last_pointer;
+                let target = pane.pointer.capture.or_else(|| pane.pointer_target(at));
+                if let Some(id) = target {
+                    out.redraw = pane.send_pointer_moving(
+                        state,
+                        id,
+                        PointerEventKind::Motion,
+                        None,
+                        at,
+                        0,
+                        Vec2::new(dx, dy),
+                    );
+                }
+                out.done = true;
+            }
             Event::PointerMoved { position } => {
                 pane.ensure_tree(state, theme, font.as_ref());
                 match pane.pointer.capture {
@@ -302,6 +343,81 @@ impl<S: 'static> Pane<S> {
             self.dirty = true;
         }
         ran
+    }
+}
+
+impl<S: 'static> App<S> {
+    /// Hear when the pointer lock starts (`true`) or ends (`false`) in a
+    /// window, with its id: ended by the app, lost to the system (the window
+    /// lost focus, Escape in a browser, the compositor took it back), or
+    /// refused (no pointer lock on the platform, or no user gesture on the
+    /// web). A game shows "click to resume" on `false`. The view reads the
+    /// same through [`Cx::pointer_locked`](crate::core::Cx::pointer_locked).
+    /// Lock and unlock with
+    /// [`AppHandle::set_pointer_lock`](crate::core::AppHandle::set_pointer_lock).
+    pub fn on_pointer_lock(mut self, hook: impl FnMut(&mut S, WindowId, bool) + 'static) -> Self {
+        self.lifecycle.pointer_lock = Some(Box::new(hook));
+        self
+    }
+
+    /// Lock (`true`) or release the pointer of window `idx`, asking the
+    /// platform through `apply` (which answers whether the pointer is locked
+    /// as asked). Returns whether anything changed (the pane then rebuilds).
+    pub(crate) fn pane_pointer_lock(
+        &mut self,
+        idx: usize,
+        locked: bool,
+        apply: impl FnOnce(bool) -> bool,
+    ) -> bool {
+        let Some(pane) = self.panes.get_mut(idx) else {
+            return false;
+        };
+        if pane.pointer.locked == locked {
+            return false;
+        }
+        let ok = apply(locked);
+        let now = locked && ok;
+        crate::app_dbg(format_args!("pointer lock {locked} -> {now}"));
+        pane.pointer.locked = now;
+        let id = pane.id;
+        self.pointer_lock_report(idx, id, now);
+        true
+    }
+
+    fn pointer_lock_report(&mut self, idx: usize, id: WindowId, locked: bool) {
+        self.panes[idx].dirty = true;
+        if let Some(hook) = self.lifecycle.pointer_lock.as_mut() {
+            hook(&mut self.state, id, locked);
+            for pane in &mut self.panes {
+                pane.dirty = true;
+            }
+        }
+    }
+
+    /// Ask `window` (pane `idx`) to lock or release the pointer, as
+    /// [`WindowRequest::PointerLock`](crate::platform::WindowRequest::PointerLock)
+    /// and the window losing focus or the lock do. Returns whether anything
+    /// changed.
+    pub(crate) fn window_pointer_lock(
+        &mut self,
+        idx: usize,
+        window: &dyn Window,
+        locked: bool,
+    ) -> bool {
+        self.pane_pointer_lock(idx, locked, |on| window.set_pointer_lock(on))
+    }
+
+    /// Whether the primary window has the pointer locked, as far as the app
+    /// knows.
+    pub fn pointer_locked(&self) -> bool {
+        self.panes[0].pointer.locked
+    }
+
+    /// Lock or release the primary window's pointer as a platform with a
+    /// pointer lock would (for tests): `granted` is what the platform
+    /// answers. Returns whether that changed anything.
+    pub fn set_pointer_locked(&mut self, locked: bool, granted: bool) -> bool {
+        self.pane_pointer_lock(0, locked, |_| granted)
     }
 }
 

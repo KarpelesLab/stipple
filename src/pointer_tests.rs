@@ -18,6 +18,8 @@ struct Log {
     /// Which element ('a' or 'b') got which event.
     pointer: Vec<(char, PointerEvent)>,
     wheel: Vec<(char, WheelEvent)>,
+    /// What `on_pointer_lock` heard.
+    locks: Vec<bool>,
 }
 
 impl Log {
@@ -328,4 +330,43 @@ fn the_wheel_goes_to_the_innermost_taker() {
     }));
     assert_eq!(scroll(&app), Some(40.0));
     assert_eq!(app.state().wheel.len(), 2);
+}
+
+#[test]
+fn locked_motion_goes_where_the_pointer_was() {
+    let mut app = app().on_pointer_lock(|log: &mut Log, _, on| log.locks.push(on));
+    let _ = app.render_frame();
+    app.pointer_event(moved(10.0, 70.0));
+    // Refused (no pointer lock on the platform): reported, still unlocked.
+    assert!(app.set_pointer_locked(true, false));
+    assert!(!app.pointer_locked());
+    assert!(app.set_pointer_locked(true, true));
+    assert!(app.pointer_locked());
+    assert!(!app.set_pointer_locked(true, true), "already locked");
+    // Motion reaches `b`, under the pointer, at the position it was locked
+    // at; moves (a backend's warp) are ignored.
+    assert!(app.pointer_event(Event::PointerDelta { dx: 3.0, dy: -2.5 }));
+    assert!(!app.pointer_event(moved(150.0, 10.0)));
+    assert!(app.pointer_event(Event::PointerDelta { dx: -1.0, dy: 0.0 }));
+    let log = &app.state().pointer;
+    let motions: Vec<_> = log.iter().filter(|(_, e)| e.kind == Kind::Motion).collect();
+    assert_eq!(motions.len(), 2);
+    assert_eq!(motions[0].0, 'b');
+    assert_eq!(motions[0].1.movement, crate::geometry::Vec2::new(3.0, -2.5));
+    assert_eq!(motions[0].1.window_position, Point::new(10.0, 70.0));
+    assert_eq!(motions[1].1.movement.dx, -1.0);
+    // Moves and the rest carry no movement.
+    assert!(
+        log.iter()
+            .filter(|(_, e)| e.kind != Kind::Motion)
+            .all(|(_, e)| e.movement == crate::geometry::Vec2::ZERO)
+    );
+    // Losing the focus ends it.
+    app.set_window_focused(false);
+    assert!(!app.pointer_locked());
+    app.set_window_focused(true);
+    assert!(!app.set_pointer_locked(false, true), "already released");
+    assert!(app.set_pointer_locked(true, true));
+    assert!(app.set_pointer_locked(false, true));
+    assert_eq!(app.state().locks, [false, true, false, true, false]);
 }

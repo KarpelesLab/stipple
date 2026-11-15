@@ -196,6 +196,10 @@ flag in the state: set it from the key handler, clear it on the next pointer
 move (an [`on_pointer`](pointer-events.md) `Move`), and pick
 `CursorIcon::Hidden` while it's set. `cargo run -p pointerdemo` does this.
 
+A game that hides the cursor to steer with the mouse locks the pointer
+instead, which also holds it in place and reports the mouse's motion: see
+[Pointer lock](pointer-events.md#pointer-lock).
+
 Each backend uses the system's own cursors:
 
 | | How | Notes |

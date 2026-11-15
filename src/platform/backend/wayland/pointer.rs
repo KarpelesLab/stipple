@@ -1,5 +1,7 @@
-//! `wl_pointer` decoding for the Wayland backend: buttons, and scrolls with
-//! their units (wheel notches or pixels) and gesture phase.
+//! `wl_pointer` decoding for the Wayland backend: buttons, scrolls with
+//! their units (wheel notches or pixels) and gesture phase, and the pointer
+//! lock (`zwp_pointer_constraints_v1` holds the pointer still,
+//! `zwp_relative_pointer_manager_v1` reports its motion).
 
 use crate::platform::event::{PointerButton, ScrollDelta, ScrollPhase};
 
@@ -97,9 +99,121 @@ impl Axes {
     }
 }
 
+/// The globals the pointer lock needs.
+pub(super) const CONSTRAINTS: &str = "zwp_pointer_constraints_v1";
+pub(super) const RELATIVE: &str = "zwp_relative_pointer_manager_v1";
+
+// `zwp_pointer_constraints_v1.lock_pointer`, `zwp_locked_pointer_v1.destroy`
+// and its `unlocked` event; `zwp_relative_pointer_manager_v1.get_relative_pointer`,
+// `zwp_relative_pointer_v1.destroy` and its `relative_motion` event.
+pub(super) const CONSTRAINTS_LOCK_POINTER: u16 = 1;
+pub(super) const LOCKED_POINTER_DESTROY: u16 = 0;
+const LOCKED_POINTER_UNLOCKED: u16 = 1;
+pub(super) const RELATIVE_GET_RELATIVE_POINTER: u16 = 1;
+pub(super) const RELATIVE_POINTER_DESTROY: u16 = 0;
+const RELATIVE_POINTER_RELATIVE_MOTION: u16 = 0;
+/// `zwp_pointer_constraints_v1.lifetime.oneshot`: the lock ends for good
+/// once the compositor lifts it.
+const LIFETIME_ONESHOT: u32 = 1;
+
+/// The pointer lock's protocol objects.
+#[derive(Debug, Default)]
+pub(super) struct Lock {
+    /// The bound globals, when the compositor has them.
+    pub(super) constraints: Option<u32>,
+    pub(super) relative_manager: Option<u32>,
+    /// While locked: the `zwp_locked_pointer_v1`, the
+    /// `zwp_relative_pointer_v1` and the surface it's locked to.
+    pub(super) active: Option<(u32, u32, u32)>,
+}
+
+/// What the compositor said about the pointer lock.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum LockEvent {
+    /// The pointer moved this far (unaccelerated, surface units).
+    Motion(f64, f64),
+    /// The compositor lifted the lock.
+    Unlocked,
+}
+
+impl Lock {
+    /// Whether the cursor should be hidden: the pointer is locked to a
+    /// surface.
+    pub(super) fn hides_cursor(&self) -> bool {
+        self.active.is_some()
+    }
+
+    /// Read a message for one of the lock's objects: the surface it is about
+    /// and what happened. `None` for other objects' messages.
+    pub(super) fn event(&self, object: u32, opcode: u16, args: &[u8]) -> Option<(u32, LockEvent)> {
+        let (locked, relative, surface) = self.active?;
+        if object == relative && opcode == RELATIVE_POINTER_RELATIVE_MOTION {
+            let (dx, dy) = relative_motion(args)?;
+            return Some((surface, LockEvent::Motion(dx, dy)));
+        }
+        (object == locked && opcode == LOCKED_POINTER_UNLOCKED)
+            .then_some((surface, LockEvent::Unlocked))
+    }
+}
+
+/// `lock_pointer`'s arguments: the new `zwp_locked_pointer_v1`, the surface
+/// and pointer, no region (the whole surface), a one-shot lifetime.
+pub(super) fn lock_pointer_args(id: u32, surface: u32, pointer: u32) -> Vec<u8> {
+    [id, surface, pointer, 0, LIFETIME_ONESHOT]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect()
+}
+
+/// `get_relative_pointer`'s arguments: the new `zwp_relative_pointer_v1`, and
+/// the pointer.
+pub(super) fn relative_pointer_args(id: u32, pointer: u32) -> Vec<u8> {
+    [id, pointer].iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
+/// The unaccelerated motion in a `relative_motion` event (`utime_hi`,
+/// `utime_lo`, then `dx`, `dy`, `dx_unaccel` and `dy_unaccel` as `wl_fixed`).
+pub(super) fn relative_motion(args: &[u8]) -> Option<(f64, f64)> {
+    let word = |i: usize| {
+        args.get(i..i + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    Some((fixed_to_f64(word(16)?), fixed_to_f64(word(20)?)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_lock_requests_and_events() {
+        let words = |b: Vec<u8>| -> Vec<u32> {
+            b.chunks(4)
+                .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect()
+        };
+        assert_eq!(words(lock_pointer_args(40, 3, 9)), [40, 3, 9, 0, 1]);
+        assert_eq!(words(relative_pointer_args(41, 9)), [41, 9]);
+        // utime, then accelerated and unaccelerated motion.
+        let motion: Vec<u8> = [0u32, 1000, 512, 256, (-3i32 * 256) as u32, 128]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        assert_eq!(relative_motion(&motion), Some((-3.0, 0.5)));
+        assert_eq!(relative_motion(&motion[..20]), None);
+        let mut lock = Lock::default();
+        assert_eq!(lock.event(41, 0, &motion), None, "not locked");
+        assert!(!lock.hides_cursor());
+        lock.active = Some((40, 41, 3));
+        assert!(lock.hides_cursor());
+        assert_eq!(
+            lock.event(41, 0, &motion),
+            Some((3, LockEvent::Motion(-3.0, 0.5)))
+        );
+        assert_eq!(lock.event(40, 1, &[]), Some((3, LockEvent::Unlocked)));
+        assert_eq!(lock.event(40, 0, &[]), None, "locked: nothing to do");
+        assert_eq!(lock.event(12, 0, &motion), None);
+    }
 
     #[test]
     fn wheels_scroll_lines_and_fingers_pixels_in_phases() {

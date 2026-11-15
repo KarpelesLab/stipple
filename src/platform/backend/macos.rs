@@ -1371,6 +1371,8 @@ struct MacWindow {
     /// The cursor the app asked for, set again on each mouse move over the
     /// view (AppKit resets it at the window's edges and title bar).
     cursor: Cell<CursorIcon>,
+    /// Whether the pointer is locked to this window (see `pointer::lock`).
+    pointer_locked: Cell<bool>,
     /// The focused text field, for the input method (see `text_input`).
     ime: RefCell<Option<crate::platform::ImeState>>,
     /// Geometry and state as AppKit last reported them (see `geometry`).
@@ -1535,9 +1537,22 @@ impl Window for MacWindow {
             ax_focus::announce(self.view, &path);
         }
     }
+    fn set_pointer_lock(&self, locked: bool) -> bool {
+        if self.pointer_locked.get() == locked {
+            return true;
+        }
+        let hidden = self.cursor.get() == CursorIcon::Hidden;
+        let ok = unsafe { pointer::lock(self.view, locked, hidden) };
+        self.pointer_locked.set(locked && ok);
+        if locked && !ok {
+            unsafe { pointer::lock(self.view, false, hidden) };
+        }
+        ok
+    }
     fn set_cursor(&self, cursor: CursorIcon) {
         self.cursor.set(cursor);
-        pointer::set_hidden(cursor == CursorIcon::Hidden);
+        // The locked pointer stays hidden.
+        pointer::set_hidden(cursor == CursorIcon::Hidden || self.pointer_locked.get());
         if cursor != CursorIcon::Hidden {
             unsafe { msg_void(ns_cursor(cursor), sel("set")) };
         }
@@ -1792,6 +1807,7 @@ unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, Platf
             a11y_tree: RefCell::new(None),
             a11y_elements: RefCell::new(None),
             cursor: Cell::new(CursorIcon::Default),
+            pointer_locked: Cell::new(false),
             ime: RefCell::new(None),
             info: Cell::new(WindowInfo::from_size(size, ScaleFactor::new(scale))),
             closing: Cell::new(false),
@@ -2103,9 +2119,17 @@ where
                             used = u;
                             exit |= flow == ControlFlow::Exit;
                         }
+                        // The locked pointer's motion, unaccelerated or not
+                        // as the system has it, instead of moves.
+                        let event = if win.pointer_locked.get() && pointer::is_motion(etype) {
+                            let (dx, dy) = (msg_f64(ev, sel("deltaX")), msg_f64(ev, sel("deltaY")));
+                            (dx != 0.0 || dy != 0.0).then_some(Event::PointerDelta { dx, dy })
+                        } else {
+                            translate_event(etype, ev, view_h)
+                        };
                         if !used
                             && !exit
-                            && let Some(event) = translate_event(etype, ev, view_h)
+                            && let Some(event) = event
                             && handler(event, &*win) == ControlFlow::Exit
                         {
                             exit = true;
@@ -2126,7 +2150,7 @@ where
                     }
                     // Keep the app's cursor over the content: AppKit resets it
                     // at the window's edges and title bar.
-                    if !exit && etype == NS_MOUSE_MOVED {
+                    if !exit && etype == NS_MOUSE_MOVED && !win.pointer_locked.get() {
                         let p = msg_point(ev, sel("locationInWindow"));
                         let b = msg_rect(view, sel("bounds"));
                         let over =
@@ -2139,7 +2163,7 @@ where
                         }
                     }
                     // Nor does it stay hidden outside the window.
-                    if etype == pointer::NS_MOUSE_EXITED {
+                    if etype == pointer::NS_MOUSE_EXITED && !win.pointer_locked.get() {
                         pointer::set_hidden(false);
                     }
                 } else {

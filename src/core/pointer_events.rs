@@ -33,6 +33,12 @@ pub enum PointerEventKind {
     /// with the last button's release instead, if the pointer is elsewhere
     /// by then.
     Leave,
+    /// The mouse moved while the pointer is locked (see
+    /// [`AppHandle::set_pointer_lock`](crate::core::AppHandle::set_pointer_lock)):
+    /// [`PointerEvent::movement`] says how far. The pointer itself stays
+    /// put, so `position` doesn't change. Goes where a move would: the
+    /// element holding the capture, else the one under the pointer.
+    Motion,
 }
 
 /// A set of pointer buttons, such as the ones held down.
@@ -104,6 +110,10 @@ pub struct PointerEvent {
     /// time and distance, see [`double_click`](crate::platform::double_click)).
     /// A release has its press's count; moves and leaves have 0.
     pub click_count: u32,
+    /// For [`Motion`](PointerEventKind::Motion), how far the mouse moved
+    /// (positive right and down, roughly logical pixels, unaccelerated where
+    /// the platform says so); zero for every other kind.
+    pub movement: Vec2,
 }
 
 impl PointerEvent {

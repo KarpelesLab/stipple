@@ -2089,11 +2089,15 @@ game needs on top:
   backends), `axis2`, rebinding (`rebind`, `unbind`, `bound_to`,
   `Binding::capture` for "press a key…"), and a line-per-action text form
   (`to_text` / `load_text`). Unit-tested.*
-- ⬜ Pointer lock: relative mouse motion with the cursor hidden and held in
+- ✅ Pointer lock: relative mouse motion with the cursor hidden and held in
   place (macOS `CGAssociateMouseAndMouseCursorPosition`, Windows raw input +
   `ClipCursor`, X11 a pointer grab and warp, Wayland
   `zwp_pointer_constraints_v1` + `zwp_relative_pointer_manager_v1`, the web's
   `requestPointerLock`), released on Escape and focus loss.
+  *`AppHandle::set_pointer_lock`, `PointerEventKind::Motion` with `movement`
+  (`Event::PointerDelta`), `App::on_pointer_lock` / `Cx::pointer_locked`;
+  released on focus loss (Escape only on the web, the browser's rule);
+  refused on iOS and Android. `docs/pointer-events.md`.*
 - ✅ Gamepads: connect and disconnect, buttons and axes on a standard layout,
   rumble where offered. Windows XInput, macOS and iOS `GameController`,
   Linux evdev (`/dev/input/event*`), Android `InputDevice` sources, the web's

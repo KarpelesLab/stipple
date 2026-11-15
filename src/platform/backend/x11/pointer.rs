@@ -1,7 +1,9 @@
 //! Pointer odds and ends for the X11 backend: the double-click settings the
 //! X settings daemon publishes (XSETTINGS), the blank cursor that
-//! [`CursorIcon::Hidden`](crate::platform::CursorIcon::Hidden) shows, and the
-//! modifiers and buttons of core pointer events.
+//! [`CursorIcon::Hidden`](crate::platform::CursorIcon::Hidden) shows, the
+//! pointer lock (an active pointer grab, and warping the pointer back to the
+//! window's center after each move), and the modifiers and buttons of core
+//! pointer events.
 
 use std::io;
 use std::time::Duration;
@@ -15,6 +17,9 @@ const OP_FREE_PIXMAP: u8 = 54;
 const OP_FREE_GC: u8 = 60;
 const OP_POLY_FILL_RECTANGLE: u8 = 70;
 const OP_CREATE_CURSOR: u8 = 93;
+const OP_GRAB_POINTER: u8 = 26;
+const OP_UNGRAB_POINTER: u8 = 27;
+const OP_WARP_POINTER: u8 = 41;
 
 /// `EnterNotify` and `LeaveNotify` event codes, and their event-mask bits.
 pub(super) const X_ENTER_NOTIFY: u8 = 7;
@@ -202,9 +207,91 @@ pub(super) fn blank_cursor(conn: &mut Conn) -> io::Result<u32> {
     Ok(cursor)
 }
 
+/// A `GrabPointer` request: every pointer event (buttons and motion) to
+/// `window` (not owner events), asynchronously, the pointer confined to
+/// `window` and showing `cursor`, from now on.
+pub(super) fn grab_request(window: u32, cursor: u32) -> Vec<u8> {
+    const MASK: u16 =
+        (super::EV_BUTTON_PRESS | super::EV_BUTTON_RELEASE | super::EV_POINTER_MOTION) as u16;
+    const ASYNC: u8 = 1;
+    let mut req = vec![OP_GRAB_POINTER, 0 /* owner-events: no */, 0, 0];
+    req.extend_from_slice(&window.to_le_bytes());
+    req.extend_from_slice(&MASK.to_le_bytes());
+    req.extend_from_slice(&[ASYNC, ASYNC]); // pointer and keyboard modes
+    req.extend_from_slice(&window.to_le_bytes()); // confine-to
+    req.extend_from_slice(&cursor.to_le_bytes());
+    req.extend_from_slice(&0u32.to_le_bytes()); // CurrentTime
+    finish(req)
+}
+
+/// An `UngrabPointer` request, now.
+pub(super) fn ungrab_request() -> Vec<u8> {
+    let mut req = vec![OP_UNGRAB_POINTER, 0, 0, 0];
+    req.extend_from_slice(&0u32.to_le_bytes()); // CurrentTime
+    finish(req)
+}
+
+/// A `WarpPointer` request moving the pointer to `(x, y)` in `window`,
+/// wherever it is.
+pub(super) fn warp_request(window: u32, x: i16, y: i16) -> Vec<u8> {
+    let mut req = vec![OP_WARP_POINTER, 0, 0, 0];
+    req.extend_from_slice(&0u32.to_le_bytes()); // src-window: None
+    req.extend_from_slice(&window.to_le_bytes());
+    req.extend_from_slice(&[0; 8]); // src x, y, width, height
+    req.extend_from_slice(&x.to_le_bytes());
+    req.extend_from_slice(&y.to_le_bytes());
+    finish(req)
+}
+
+/// Grab the pointer for `window`, showing `cursor` (the blank one), and
+/// wait for the answer. Events that come first are kept in `stray`, for the
+/// event loop. Returns whether the grab took (`GrabSuccess`; not when another
+/// client holds a grab, or the window isn't viewable).
+pub(super) fn grab(
+    conn: &mut Conn,
+    window: u32,
+    cursor: u32,
+    stray: &mut Vec<[u8; 32]>,
+) -> io::Result<bool> {
+    conn.send(&grab_request(window, cursor))?;
+    loop {
+        let mut packet = [0u8; 32];
+        io::Read::read_exact(&mut conn.stream, &mut packet)?;
+        match packet[0] {
+            1 => {
+                super::dbg(format_args!("GrabPointer status {}", packet[1]));
+                return Ok(packet[1] == 0);
+            }
+            0 if packet[10] == OP_GRAB_POINTER => return Ok(false),
+            _ => stray.push(packet),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pointer_lock_requests_are_encoded() {
+        let grab = grab_request(0x0040_0001, 0x0040_0009);
+        assert_eq!(grab.len(), 24);
+        assert_eq!(&grab[..4], &[26, 0, 6, 0]);
+        assert_eq!(&grab[4..8], &0x0040_0001u32.to_le_bytes());
+        // ButtonPress | ButtonRelease | PointerMotion, both modes async.
+        assert_eq!(&grab[8..12], &[0x4c, 0, 1, 1]);
+        assert_eq!(&grab[12..16], &0x0040_0001u32.to_le_bytes(), "confined");
+        assert_eq!(&grab[16..20], &0x0040_0009u32.to_le_bytes());
+        assert_eq!(&grab[20..24], &[0; 4]);
+        assert_eq!(ungrab_request(), [27, 0, 2, 0, 0, 0, 0, 0]);
+        let warp = warp_request(0x0040_0001, 320, -2);
+        assert_eq!(warp.len(), 24);
+        assert_eq!(&warp[..4], &[41, 0, 6, 0]);
+        assert_eq!(&warp[4..8], &[0; 4]);
+        assert_eq!(&warp[8..12], &0x0040_0001u32.to_le_bytes());
+        assert_eq!(&warp[12..20], &[0; 8]);
+        assert_eq!(&warp[20..24], &[0x40, 0x01, 0xfe, 0xff]);
+    }
 
     /// An XSETTINGS blob with a string, a color and two integers.
     fn settings(big: bool) -> Vec<u8> {

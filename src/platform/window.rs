@@ -97,6 +97,10 @@ pub enum WindowRequest {
     /// Show a short badge on the application's icon, or remove it. See
     /// [`Window::set_badge`].
     Badge(Option<String>),
+    /// Lock the pointer (`true`): hide the cursor, hold it in place and send
+    /// relative motion as [`Event::PointerDelta`](crate::platform::Event::PointerDelta),
+    /// or release it (`false`). See [`Window::set_pointer_lock`].
+    PointerLock(bool),
 }
 
 /// How insistently [`Window::request_attention`] asks for the user's
@@ -129,6 +133,9 @@ impl WindowRequest {
             WindowRequest::InnerSize(size) => window.set_inner_size(*size),
             WindowRequest::ResizeIncrements(step) => window.set_resize_increments(*step),
             WindowRequest::Minimized(on) => window.set_minimized(*on),
+            WindowRequest::PointerLock(on) => {
+                window.set_pointer_lock(*on);
+            }
         }
     }
 }
@@ -483,6 +490,26 @@ pub trait Window {
     /// Show `cursor` while the pointer is over this window's content. Default:
     /// a no-op (the platform's arrow stays).
     fn set_cursor(&self, _cursor: CursorIcon) {}
+
+    /// Lock the pointer to the window (`true`), or release it (`false`).
+    /// While locked the cursor is hidden and held in place, and mouse motion
+    /// arrives as [`Event::PointerDelta`](crate::platform::Event::PointerDelta)
+    /// instead of [`Event::PointerMoved`](crate::platform::Event::PointerMoved);
+    /// buttons and the wheel still come, at the position the pointer is
+    /// held at (the window's center on desktops). Unlocking shows the cursor
+    /// again there.
+    ///
+    /// Returns whether the pointer is (or is being) locked as asked: `false`
+    /// where the platform has no pointer lock (the default, iOS, Android, a
+    /// Wayland compositor without `zwp_pointer_constraints_v1`), or refused
+    /// it. A lock the system ends on its own, or a pending one it refuses
+    /// (the web's), comes as
+    /// [`Event::PointerLockLost`](crate::platform::Event::PointerLockLost).
+    /// The app releases the lock when the window loses focus. Releasing
+    /// always returns `true`. See `docs/pointer-events.md`.
+    fn set_pointer_lock(&self, locked: bool) -> bool {
+        !locked
+    }
 
     /// Set or clear the smallest inner size, in logical pixels. Default: a no-op.
     fn set_min_size(&self, _size: Option<Size>) {}

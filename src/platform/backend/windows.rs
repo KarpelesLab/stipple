@@ -1096,7 +1096,10 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
     }
     match msg {
         WM_SETCURSOR if (lp & 0xffff) as u16 == HTCLIENT => {
-            let cursor = CTX.with(|c| c.borrow().cursor);
+            let mut cursor = CTX.with(|c| c.borrow().cursor);
+            if pointer::locked() == Some(hwnd) {
+                cursor = CursorIcon::Hidden;
+            }
             unsafe { SetCursor(load_cursor(cursor)) };
             1
         }
@@ -1172,10 +1175,16 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
                 push_event(Event::Resized(size));
             }
             refresh_info(hwnd);
+            if pointer::locked() == Some(hwnd) {
+                pointer::clip(hwnd);
+            }
             0
         }
         WM_MOVE => {
             refresh_info(hwnd);
+            if pointer::locked() == Some(hwnd) {
+                pointer::clip(hwnd);
+            }
             0
         }
         WM_SIZING => {
@@ -1201,6 +1210,22 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
             }
             0
         }
+        pointer::WM_INPUT => {
+            if pointer::locked() == Some(hwnd)
+                && let Some((dx, dy)) = pointer::raw_motion(lp)
+                && (dx, dy) != (0, 0)
+            {
+                crate::platform::set_pointer_modifiers(modifiers());
+                push_event(Event::PointerDelta {
+                    dx: f64::from(dx),
+                    dy: f64::from(dy),
+                });
+            }
+            // Lets the system clean up the raw input.
+            unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+        }
+        // The locked pointer stays put: its motion comes as `WM_INPUT`.
+        WM_MOUSEMOVE if pointer::locked() == Some(hwnd) => 0,
         WM_MOUSEMOVE => {
             // Ask to hear when the pointer leaves the window.
             pointer::track_leave(hwnd);
@@ -1378,6 +1403,9 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
         attention::WM_QUERYENDSESSION => attention::query_end_session(hwnd),
         WM_DESTROY => {
             tsf::forget(hwnd);
+            if pointer::locked() == Some(hwnd) {
+                pointer::lock(hwnd, false);
+            }
             // The loop ends when the last window is gone; if others stay,
             // the tray icon moves to one of them.
             if tray::owner() == Some(hwnd) {
@@ -1595,8 +1623,22 @@ impl Window for WinWindow {
         CTX.with(|c| c.borrow_mut().drag_out = Some((self.hwnd as usize, data.clone())));
         true
     }
+    fn set_pointer_lock(&self, locked: bool) -> bool {
+        if !locked && pointer::locked() != Some(self.hwnd) {
+            return true;
+        }
+        let ok = pointer::lock(self.hwnd, locked);
+        if !locked {
+            let cursor = CTX.with(|c| c.borrow().cursor);
+            unsafe { SetCursor(load_cursor(cursor)) };
+        }
+        ok
+    }
     fn set_cursor(&self, cursor: CursorIcon) {
         CTX.with(|c| c.borrow_mut().cursor = cursor);
+        if pointer::locked() == Some(self.hwnd) {
+            return;
+        }
         // The pointer is over the client area (we got here from a mouse move),
         // so show it now rather than on the next `WM_SETCURSOR`.
         unsafe { SetCursor(load_cursor(cursor)) };

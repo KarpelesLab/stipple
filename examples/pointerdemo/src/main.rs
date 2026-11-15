@@ -7,6 +7,12 @@
 //! pointer leaves the window, and hides the cursor while the user types
 //! until the pointer moves.
 //!
+//! `L` locks the pointer (and `L` or Escape releases it): the cursor hides
+//! and stays put, and the pad prints each relative motion and the total so
+//! far, as a game reading mouse-look would. The lock ending by itself (the
+//! window losing focus) is printed too. `--lock-test` (CI) locks on the
+//! first click, without a key.
+//!
 //! The window is 400×300, at the screen's top-left corner under Xvfb (no
 //! window manager), all of it the pad.
 
@@ -21,6 +27,11 @@ struct Pad {
     typing: bool,
     /// The hover state last printed.
     hovered: Cell<Option<bool>>,
+    /// The pointer is locked, and how far it moved while locked.
+    locked: bool,
+    moved: (f64, f64),
+    /// Lock on the first click (`--lock-test`).
+    lock_on_click: bool,
 }
 
 fn view(pad: &Pad, cx: &mut Cx<Pad>) -> Element {
@@ -29,14 +40,21 @@ fn view(pad: &Pad, cx: &mut Cx<Pad>) -> Element {
     if pad.hovered.replace(Some(hovered)) != Some(hovered) {
         println!("hovered: {hovered}");
     }
-    let hint = if pad.typing {
-        "Typing: the cursor is hidden"
+    let hint = if cx.pointer_locked() {
+        format!(
+            "Locked: moved ({:.0}, {:.0}). L or Esc releases",
+            pad.moved.0, pad.moved.1
+        )
+    } else if pad.typing {
+        "Typing: the cursor is hidden".to_string()
     } else {
-        "Click, scroll, type"
+        "Click, scroll, type; L locks the pointer".to_string()
     };
+    let handle = cx.handle();
+    let click_handle = cx.handle();
     Element::stack(
         Axis::Vertical,
-        vec![Element::text(hint, 20.0, theme.palette.text)],
+        vec![Element::text(hint, 18.0, theme.palette.text)],
     )
     .fill(theme.palette.surface)
     .align(Align::Center, Align::Center)
@@ -47,7 +65,19 @@ fn view(pad: &Pad, cx: &mut Cx<Pad>) -> Element {
     } else {
         CursorIcon::Crosshair
     })
-    .on_pointer(cx, |ev: &PointerEvent, pad: &mut Pad| {
+    .on_pointer(cx, move |ev: &PointerEvent, pad: &mut Pad| {
+        if ev.kind == PointerEventKind::Motion {
+            pad.moved.0 += ev.movement.dx;
+            pad.moved.1 += ev.movement.dy;
+            println!(
+                "motion dx={} dy={} total=({},{})",
+                ev.movement.dx, ev.movement.dy, pad.moved.0, pad.moved.1
+            );
+            return;
+        }
+        if ev.kind == PointerEventKind::Down && std::mem::take(&mut pad.lock_on_click) {
+            click_handle.set_pointer_lock(true);
+        }
         println!(
             "pointer {:?} button={:?} at=({:.0},{:.0}) clicks={} shift={} ctrl={}",
             ev.kind,
@@ -70,7 +100,12 @@ fn view(pad: &Pad, cx: &mut Cx<Pad>) -> Element {
         );
     })
     // Clicking focuses the pad; typing then hides the cursor.
-    .on_key(cx, |pad: &mut Pad, input: &KeyInput| {
+    .on_key(cx, move |pad: &mut Pad, input: &KeyInput| {
+        let toggle = matches!(input, KeyInput::Text(t) if t.eq_ignore_ascii_case("l"));
+        if toggle || (pad.locked && *input == KeyInput::Escape) {
+            handle.set_pointer_lock(toggle && !pad.locked);
+            return;
+        }
         if !pad.typing && matches!(input, KeyInput::Text(_)) {
             pad.typing = true;
             println!("cursor hidden");
@@ -79,7 +114,18 @@ fn view(pad: &Pad, cx: &mut Cx<Pad>) -> Element {
 }
 
 fn main() {
-    let mut app = App::new(Pad::default(), view)
+    let pad = Pad {
+        lock_on_click: std::env::args().any(|a| a == "--lock-test"),
+        ..Pad::default()
+    };
+    let mut app = App::new(pad, view)
+        .on_pointer_lock(|pad: &mut Pad, _, locked| {
+            pad.locked = locked;
+            if locked {
+                pad.moved = (0.0, 0.0);
+            }
+            println!("pointer locked: {locked}");
+        })
         .title("Stipple Pointer")
         .theme(Theme::dark())
         .logical_size(Size::new(400.0, 300.0));

@@ -264,7 +264,7 @@ The module exports:
 | `stipple_set_font(ptr, len)` | the font's bytes |
 | `stipple_start(w, h, ratio)` | building and running the app in a canvas of `w` × `h` CSS pixels |
 | `stipple_resize(w, h, ratio)` | size or pixel-ratio changes |
-| `stipple_pointer(kind, button, x, y, mods)` | moves, presses, releases and leaving the canvas |
+| `stipple_pointer(kind, button, x, y, mods)` | moves, presses, releases and leaving the canvas; while the pointer is locked, its motion (`movementX`/`movementY`) and the lock ending or being refused |
 | `stipple_touch(phase, id, x, y)` | each finger of `touchstart` (0), `touchmove` (1), `touchend` (2), `touchcancel` (3); a page whose module lacks it takes fingers as the mouse |
 | `stipple_wheel(dx, dy, mode)` | `wheel` |
 | `stipple_key(ptr, len, mods)` | `keydown`; returns whether to `preventDefault` |
@@ -280,7 +280,8 @@ The module exports:
 | `stipple_save_state()` | `pagehide` and `visibilitychange` to hidden: the app saves its state, through the `save_state` import |
 
 It imports, from the module `"stipple"`: `now`, `present`, `schedule`,
-`request_frame`, `set_cursor`, `set_title`, `clipboard_write`,
+`request_frame`, `set_cursor`, `pointer_lock` (`requestPointerLock`, which
+browsers only grant during a user gesture), `set_title`, `clipboard_write`,
 `clipboard_write_html` (the HTML for the next `clipboard_write`), `open_file`,
 `save_file`, `open_url` (`window.open`, for `platform::open_url`), `notify`
 (the `Notification` API, for `platform::notify`), `log` (panics are printed to

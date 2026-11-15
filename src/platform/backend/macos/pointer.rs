@@ -1,14 +1,15 @@
 //! Pointer odds and ends for the AppKit backend: the tracking area that
 //! reports the pointer leaving the view (`NSMouseExited`), hiding the cursor
 //! for [`CursorIcon::Hidden`](crate::platform::CursorIcon::Hidden) (AppKit
-//! counts `hide`s and `unhide`s, so they're kept balanced), and the user's
-//! double-click interval.
+//! counts `hide`s and `unhide`s, so they're kept balanced), the pointer lock
+//! (`CGAssociateMouseAndMouseCursorPosition`), and the user's double-click
+//! interval.
 
 use std::cell::Cell;
 use std::ffi::c_void;
 
 use super::{
-    CgPoint, CgRect, CgSize, Id, Sel, class, msg_f64, msg_id, msg_void, objc_msgSend, sel,
+    CgPoint, CgRect, CgSize, Id, Sel, class, msg_f64, msg_id, msg_rect, msg_void, objc_msgSend, sel,
 };
 
 // NSEventType values for the other buttons, drags and the tracking area.
@@ -26,6 +27,82 @@ const TRACKING_IN_VISIBLE_RECT: u64 = 0x200;
 thread_local! {
     /// Whether this backend has the cursor hidden (one `hide` outstanding).
     static HIDDEN: Cell<bool> = const { Cell::new(false) };
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> i32;
+    fn CGWarpMouseCursorPosition(point: CgPoint) -> i32;
+}
+
+/// Whether an event of type `etype` is the mouse moving (with or without a
+/// button down), which the locked pointer reports as motion.
+pub(super) fn is_motion(etype: u64) -> bool {
+    matches!(
+        etype,
+        super::NS_MOUSE_MOVED
+            | super::NS_LEFT_MOUSE_DRAGGED
+            | NS_RIGHT_MOUSE_DRAGGED
+            | NS_OTHER_MOUSE_DRAGGED
+    )
+}
+
+/// Lock the pointer to `view` (`true`): hide the cursor, put it at the
+/// view's center and stop the mouse moving it (its motion still comes, as
+/// mouse-moved events' `deltaX`/`deltaY`). Or release it, showing the cursor
+/// again at that center unless `cursor_hidden`. Returns whether CoreGraphics
+/// went along.
+///
+/// # Safety
+/// `view` must be a live `NSView` in a window.
+pub(super) unsafe fn lock(view: Id, locked: bool, cursor_hidden: bool) -> bool {
+    unsafe {
+        if locked {
+            set_hidden(true);
+            if let Some(center) = screen_center(view) {
+                CGWarpMouseCursorPosition(center);
+            }
+            // After the warp, which would otherwise hold the mouse still for
+            // a quarter of a second.
+            CGAssociateMouseAndMouseCursorPosition(0) == 0
+        } else {
+            CGAssociateMouseAndMouseCursorPosition(1);
+            set_hidden(cursor_hidden);
+            true
+        }
+    }
+}
+
+/// The center of `view` in CoreGraphics' global display coordinates (top-left
+/// origin, the primary screen's).
+unsafe fn screen_center(view: Id) -> Option<CgPoint> {
+    unsafe {
+        let window = msg_id(view, sel("window"));
+        if window.is_null() {
+            return None;
+        }
+        let bounds = msg_rect(view, sel("bounds"));
+        let convert: unsafe extern "C" fn(Id, Sel, CgRect, Id) -> CgRect =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let in_window = convert(
+            view,
+            sel("convertRect:toView:"),
+            bounds,
+            std::ptr::null_mut(),
+        );
+        let to_screen: unsafe extern "C" fn(Id, Sel, CgRect) -> CgRect =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let r = to_screen(window, sel("convertRectToScreen:"), in_window);
+        let flipped = super::geometry::flip_rect(
+            r.origin.x,
+            r.origin.y,
+            r.size.width,
+            r.size.height,
+            super::geometry::primary_height(),
+        );
+        let c = flipped.center();
+        Some(CgPoint { x: c.x, y: c.y })
+    }
 }
 
 /// Have AppKit tell `view` when the pointer enters and leaves it, whichever

@@ -38,6 +38,7 @@ use crate::geometry::{PhysicalSize, Point, ScaleFactor, Size};
 use crate::platform::ControlFlow;
 use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, WindowId};
+use crate::platform::input;
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, fit_icon};
 use crate::render::{Pixmap, Surface};
 
@@ -1040,6 +1041,9 @@ struct WindowReg {
     /// `set_ime` calls for the input method: the window, and the caret spot
     /// in window pixels while a text field has focus.
     ime: Vec<(u32, Option<(i16, i16)>)>,
+    /// Events read while a window waited for a reply (the pointer grab's),
+    /// for the loop to handle next.
+    stray: Vec<[u8; 32]>,
 }
 
 type Registry = Rc<RefCell<WindowReg>>;
@@ -1065,6 +1069,9 @@ struct X11Window {
     /// Whether the app takes the drag over the window, as last told through
     /// `set_drop_accepted` (XDND answers the source with it).
     drop_accepted: Cell<bool>,
+    /// While the pointer is locked (grabbed, and warped back to the center
+    /// after each move): its motion bookkeeping.
+    lock: Cell<Option<input::WarpLock>>,
 }
 
 impl std::fmt::Debug for Conn {
@@ -1210,6 +1217,35 @@ impl Window for X11Window {
     fn set_cursor(&self, cursor: CursorIcon) {
         let mut conn = self.conn.lock().unwrap();
         let _ = set_cursor(&mut conn, self.window, cursor);
+    }
+    fn set_pointer_lock(&self, locked: bool) -> bool {
+        let mut conn = self.conn.lock().unwrap();
+        if !locked {
+            if self.lock.take().is_some() {
+                let _ = conn.send(&pointer::ungrab_request());
+            }
+            return true;
+        }
+        if self.lock.get().is_some() {
+            return true;
+        }
+        let Ok(cursor) = pointer::blank_cursor(&mut conn) else {
+            return false;
+        };
+        let mut stray = Vec::new();
+        let ok = pointer::grab(&mut conn, self.window, cursor, &mut stray).unwrap_or(false);
+        self.reg.borrow_mut().stray.extend(stray);
+        if !ok {
+            return false;
+        }
+        let center = lock_center(self.geo.get().size);
+        let _ = conn.send(&pointer::warp_request(
+            self.window,
+            center.0 as i16,
+            center.1 as i16,
+        ));
+        self.lock.set(Some(input::WarpLock::new(center)));
+        true
     }
     fn set_min_size(&self, size: Option<Size>) {
         let (_, max) = self.limits.get();
@@ -1660,6 +1696,7 @@ fn create_window(
         limits: Cell::new(limits),
         increments: Cell::new(attrs.resize_increments),
         drop_accepted: Cell::new(false),
+        lock: Cell::new(None),
     })
 }
 
@@ -1766,6 +1803,8 @@ where
         if selection::deliver(expired, &windows, &mut handler) == ControlFlow::Exit {
             break;
         }
+        // Events read while a window waited for a reply.
+        backlog.extend(reg.borrow_mut().stray.drain(..));
         if let Some(event) = backlog.pop_front() {
             buf = event;
         } else {
@@ -1869,6 +1908,13 @@ where
                 let before = geo.size;
                 let moved = geo.configure(&buf);
                 win.geo.set(geo);
+                // The locked pointer is held at the new center.
+                if geo.size != before && win.lock.get().is_some() {
+                    let center = lock_center(geo.size);
+                    win.lock.set(Some(input::WarpLock::new(center)));
+                    let req = pointer::warp_request(win.window, center.0 as i16, center.1 as i16);
+                    let _ = shared.lock().unwrap().send(&req);
+                }
                 crate::platform::atspi::set_origin(win.id(), geo.origin);
                 let mut flow = ControlFlow::Wait;
                 if geo.size != before || !moved {
@@ -1911,6 +1957,36 @@ where
                 } else {
                     ControlFlow::Wait
                 }
+            }
+            // The locked pointer: how far it went from the center, and back
+            // there. Entering and leaving mean nothing then.
+            X_MOTION_NOTIFY if win.lock.get().is_some() => {
+                let mut lock = win.lock.get().unwrap_or_default();
+                let (x, y) = event_xy(&buf);
+                let (delta, warp) = lock.moved((x as i32, y as i32));
+                win.lock.set(Some(lock));
+                if warp {
+                    let (cx, cy) = lock.center();
+                    let req = pointer::warp_request(win.window, cx as i16, cy as i16);
+                    let _ = shared.lock().unwrap().send(&req);
+                }
+                match delta {
+                    Some((dx, dy)) => {
+                        let scale = win.scale_factor().get();
+                        crate::platform::set_pointer_modifiers(pointer::event_modifiers(&buf));
+                        handler(
+                            Event::PointerDelta {
+                                dx: f64::from(dx) / scale,
+                                dy: f64::from(dy) / scale,
+                            },
+                            win,
+                        )
+                    }
+                    None => ControlFlow::Wait,
+                }
+            }
+            pointer::X_ENTER_NOTIFY | pointer::X_LEAVE_NOTIFY if win.lock.get().is_some() => {
+                ControlFlow::Wait
             }
             // The pointer entering reads as a move; leaving (not into a
             // child window) clears the hover.
@@ -2273,6 +2349,11 @@ fn event_window(buf: &[u8; 32]) -> u32 {
         | pointer::X_LEAVE_NOTIFY => rd_u32(buf, 12).unwrap_or(0),
         _ => 0,
     }
+}
+
+/// Where the locked pointer is held in a window of `size`: its center.
+fn lock_center(size: PhysicalSize) -> (i32, i32) {
+    (size.width as i32 / 2, size.height as i32 / 2)
 }
 
 fn event_xy(buf: &[u8; 32]) -> (f64, f64) {

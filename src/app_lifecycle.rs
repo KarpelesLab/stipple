@@ -41,6 +41,8 @@ pub(crate) struct Hooks<S> {
     close: Option<CloseFn<S>>,
     quit: Option<QuitFn<S>>,
     focus: Option<FocusFn<S>>,
+    /// [`App::on_pointer_lock`](crate::App::on_pointer_lock).
+    pub(crate) pointer_lock: Option<FocusFn<S>>,
     lifecycle: Option<LifecycleFn<S>>,
     back: Option<BackFn<S>>,
     back_enabled: Option<BackEnabledFn<S>>,
@@ -58,6 +60,7 @@ impl<S> Default for Hooks<S> {
             close: None,
             quit: None,
             focus: None,
+            pointer_lock: None,
             lifecycle: None,
             back: None,
             back_enabled: None,
@@ -525,6 +528,10 @@ impl<S: 'static> App<S> {
     /// platform would (for tests). Returns whether that changed anything.
     pub fn set_window_focused(&mut self, focused: bool) -> bool {
         let id = self.panes[0].id;
+        // The pointer lock ends with the focus, as in the run loop.
+        if !focused {
+            self.pane_pointer_lock(0, false, |_| true);
+        }
         self.window_focus_changed(0, id, focused)
     }
 

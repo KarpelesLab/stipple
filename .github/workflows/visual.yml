@@ -2209,6 +2209,32 @@ jobs:
           grep -q 'hovered: true' visual_output/pointer.log
           [ "$(grep 'hovered:' visual_output/pointer.log | tail -1)" = "hovered: false" ]
 
+      # The pointer lock: a click locks it (`--lock-test`), the grab holds the
+      # pointer at the window's center (warped back after each move), and
+      # each move arrives as relative motion. Non-blocking while it settles.
+      - name: Lock the pointer (grab + warp)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+          STIPPLE_X11_DEBUG: "1"
+        run: |
+          ./target/release/pointerdemo --lock-test > visual_output/pointerlock.log \
+            2> visual_output/pointerlock-debug.log &
+          LOCK_PID=$!
+          sleep 3
+          xdotool mousemove 100 100; sleep 0.5
+          xdotool click 1; sleep 1
+          xdotool mousemove_relative -- 30 20; sleep 0.5
+          xdotool mousemove_relative -- -10 5; sleep 0.5
+          # Held at the center of the 400×300 window.
+          xdotool getmouselocation | tee visual_output/pointerlock-where.txt
+          kill "$LOCK_PID" 2>/dev/null || true
+          echo "=== pointerlock.log ==="; cat visual_output/pointerlock.log
+          grep -q 'pointer locked: true' visual_output/pointerlock.log
+          grep -q '^motion dx=30 dy=20 ' visual_output/pointerlock.log
+          grep -q '^motion dx=-10 dy=5 total=(20,25)' visual_output/pointerlock.log
+          grep -q 'x:200 y:150 ' visual_output/pointerlock-where.txt
+
       - name: Install IBus (an XIM server) and Mozc
         run: sudo apt-get install -y ibus ibus-mozc dbus-x11
 

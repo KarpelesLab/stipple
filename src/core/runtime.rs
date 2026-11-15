@@ -406,6 +406,7 @@ pub struct Cx<'a, S> {
     window_info: crate::platform::WindowInfo,
     window_info_read: bool,
     window_focused: bool,
+    pointer_locked: bool,
     window_title: Option<String>,
     /// The window's size in logical pixels; zero when unknown.
     window_size: Size,
@@ -460,6 +461,7 @@ impl<'a, S> Cx<'a, S> {
             window_info: Default::default(),
             window_info_read: false,
             window_focused: true,
+            pointer_locked: false,
             window_title: None,
             window_size: Size::new(0.0, 0.0),
         }
@@ -537,6 +539,20 @@ impl<'a, S> Cx<'a, S> {
     /// also [`App::on_window_focus`](crate::App::on_window_focus).
     pub fn window_focused(&self) -> bool {
         self.window_focused
+    }
+
+    /// Whether the window being built has the pointer locked (see
+    /// [`AppHandle::set_pointer_lock`]): show a "click to resume" overlay
+    /// while it hasn't. The app rebuilds the view when it changes; see also
+    /// [`App::on_pointer_lock`](crate::App::on_pointer_lock).
+    pub fn pointer_locked(&self) -> bool {
+        self.pointer_locked
+    }
+
+    /// Set what [`pointer_locked`](Self::pointer_locked) reports (the app
+    /// does this before each build).
+    pub(crate) fn set_pointer_locked(&mut self, locked: bool) {
+        self.pointer_locked = locked;
     }
 
     /// The size of the window being built for, in logical pixels: what a

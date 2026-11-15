@@ -304,6 +304,23 @@ export async function start(canvas, wasmUrl, options = {}) {
         });
       },
       set_cursor(ptr, len) { canvas.style.cursor = str(ptr, len); },
+      pointer_lock(on) {
+        // Browsers only lock during (or a few seconds after) a user
+        // gesture; a refusal or the lock ending reports kind 5.
+        wantLock = on !== 0;
+        if (!wantLock) {
+          if (document.pointerLockElement === canvas) document.exitPointerLock();
+          return;
+        }
+        if (document.pointerLockElement === canvas) return;
+        try {
+          // Unaccelerated where the browser can; where it can't, plain.
+          requestLock({ unadjustedMovement: true })?.catch?.((err) => {
+            if (err?.name !== "NotSupportedError" || !wantLock) return lockLost();
+            try { requestLock()?.catch?.(lockLost); } catch (_) { lockLost(); }
+          });
+        } catch (_) { lockLost(); }
+      },
       set_title(ptr, len) { if (options.title !== false) document.title = str(ptr, len); },
       clipboard_write(ptr, len) {
         pendingCopy = str(ptr, len);
@@ -472,6 +489,27 @@ export async function start(canvas, wasmUrl, options = {}) {
   watchRatio();
   window.addEventListener("scroll", place, { capture: true, passive: true });
 
+  // The pointer lock: whether the app wants it, and telling it when it ends
+  // (Escape, the page losing focus) or was refused. With the promise the
+  // newer `requestPointerLock` returns, a refusal rejects it; older browsers
+  // fire `pointerlockerror` instead.
+  let wantLock = false;
+  let lockPromised = false;
+  const lockLost = () => {
+    if (!wantLock) return;
+    wantLock = false;
+    e.stipple_pointer(5, 0, 0, 0, 0);
+  };
+  const requestLock = (options) => {
+    const p = canvas.requestPointerLock(options);
+    lockPromised = typeof p?.then === "function";
+    return p;
+  };
+  document.addEventListener("pointerlockchange", () => {
+    if (document.pointerLockElement !== canvas) lockLost();
+  });
+  document.addEventListener("pointerlockerror", () => { if (!lockPromised) lockLost(); });
+
   // Pointer input, in CSS pixels relative to the canvas.
   const at = (ev) => {
     const r = canvas.getBoundingClientRect();
@@ -493,6 +531,11 @@ export async function start(canvas, wasmUrl, options = {}) {
   });
   canvas.addEventListener("pointermove", (ev) => {
     if (finger(ev)) return;
+    // The locked pointer stays put: only its motion counts.
+    if (document.pointerLockElement === canvas) {
+      if (ev.movementX || ev.movementY) e.stipple_pointer(4, 0, ev.movementX, ev.movementY, mods(ev));
+      return;
+    }
     const [x, y] = at(ev);
     e.stipple_pointer(0, 0, x, y, mods(ev));
     // A button pressed or released while another is down (a "chord")

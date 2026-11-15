@@ -6,7 +6,8 @@ middle-click paste), a canvas or a map, needs the raw pointer: every button,
 every move, the modifier keys, click counts and the wheel as the device
 reports it. `Element::on_pointer` and `Element::on_wheel` give it that, and
 `Element::on_pinch` gives it two-finger gestures on touch screens (see
-[Touch gestures](#touch-gestures)).
+[Touch gestures](#touch-gestures)). A game or a 3D view can lock the pointer
+and read the mouse's motion instead (see [Pointer lock](#pointer-lock)).
 
 ```rust
 use stipple::prelude::*;
@@ -47,7 +48,7 @@ The handler gets a `PointerEvent` and the app state:
 
 | Field | |
 |---|---|
-| `kind` | `Down`, `Up`, `Move` or `Leave` |
+| `kind` | `Down`, `Up`, `Move` or `Leave`, and `Motion` while the [pointer is locked](#pointer-lock) |
 | `button` | the button that went down or up: `Left`, `Right`, `Middle`, `Back`, `Forward` or `Other(n)`; `None` for moves and leaves |
 | `buttons_held` | the buttons down after this event (`contains`, `is_empty`) |
 | `position` | the pointer in the element's own coordinates: logical pixels from its top-left corner, through any [transform](transforms.md) on the way to it |
@@ -55,6 +56,7 @@ The handler gets a `PointerEvent` and the app state:
 | `size` | the element's laid-out size |
 | `modifiers` | Shift, Ctrl, Alt and the logo key, held at this event |
 | `click_count` | for a press, 1, 2 or 3 for a single, double or triple click (then 1 again); a release has its press's count; moves and leaves 0 |
+| `movement` | for `Motion`, how far the mouse moved; zero otherwise |
 
 Which element gets them:
 
@@ -216,6 +218,84 @@ button comes up outside.
 
 Middle-click paste is up to the app: `on_pointer` sees the middle button, and
 the clipboard API reads what to paste.
+
+## Pointer lock
+
+A game steering a camera with the mouse, or a 3D viewer orbiting, wants the
+mouse's motion rather than the pointer's position: the pointer would hit
+the screen's edge. Locking the pointer hides the cursor and holds it in
+place; mouse motion then reaches `on_pointer` as `PointerEventKind::Motion`
+events, with how far the mouse moved in `movement` (positive right and
+down, roughly logical pixels, unaccelerated where the platform offers it).
+
+```rust
+use stipple::core::{PointerEvent, PointerEventKind};
+use stipple::prelude::*;
+
+#[derive(Default)]
+struct Game {
+    yaw: f64,
+    pitch: f64,
+}
+
+fn view(game: &Game, cx: &mut Cx<Game>) -> Element {
+    let handle = cx.handle();
+    let paused = !cx.pointer_locked();
+    Element::boxed(BoxStyle::default())
+        .on_pointer(cx, move |ev: &PointerEvent, g: &mut Game| match ev.kind {
+            PointerEventKind::Motion => {
+                g.yaw += ev.movement.dx * 0.2;
+                g.pitch = (g.pitch - ev.movement.dy * 0.2).clamp(-89.0, 89.0);
+            }
+            // "Click to resume": lock from the click itself (browsers insist).
+            PointerEventKind::Down if paused => handle.set_pointer_lock(true),
+            _ => {}
+        })
+}
+
+App::new(Game::default(), view)
+    .on_pointer_lock(|_, _, locked| {
+        // The view shows "click to resume" while it's off.
+        println!("pointer locked: {locked}");
+    })
+    .run();
+```
+
+- `AppHandle::set_pointer_lock(true)` locks the primary window's pointer,
+  `false` releases it (another window: `window_to` with
+  `WindowRequest::PointerLock`). A locked pointer shows the cursor again
+  where it was held when released.
+- `App::on_pointer_lock(|state, window, locked| ...)` hears the lock start
+  (`true`) and end (`false`): released by the app, lost (the window lost
+  focus, Escape in a browser, the compositor took it back), or refused (the
+  platform has no pointer lock, the browser saw no user gesture).
+  `Cx::pointer_locked()` tells the view, which is rebuilt when it changes.
+- The lock ends when the window loses keyboard focus, and the app hears so;
+  it doesn't come back by itself. Escape releases it only on the web (the
+  browser's rule); elsewhere an app that wants that handles Escape itself.
+- While locked, `Motion` goes where a move would: the element holding the
+  capture, else the one under the pointer when it was locked. Moves stop
+  (the pointer stays put); buttons and the wheel still come, at the
+  position the pointer is held at (the window's center on desktops).
+- The platform event is `Event::PointerDelta { dx, dy }`, and a lock the
+  system ended or refused is `Event::PointerLockLost`.
+
+| | Holds the pointer | Motion | Notes |
+|---|---|---|---|
+| macOS | `CGAssociateMouseAndMouseCursorPosition(false)` after `CGWarpMouseCursorPosition` to the view's center, `[NSCursor hide]` | mouse events' `deltaX` / `deltaY` (points; with the system's acceleration) | |
+| Windows | `ClipCursor` to one pixel at the client area's center, no cursor on `WM_SETCURSOR` | raw input (`RegisterRawInputDevices`, usage page 1 / usage 2), `WM_INPUT`'s `lLastX` / `lLastY` (device counts, unaccelerated) | absolute devices (tablets, remote desktop) send none |
+| X11 | `GrabPointer` (confined to the window, a blank cursor) and `WarpPointer` back to the center after each move | each move's distance from the last, the warp's own move left out (physical pixels over the scale) | fails while another client holds a grab |
+| Wayland | `zwp_pointer_constraints_v1.lock_pointer` (one-shot), the cursor hidden through `wl_pointer.set_cursor` | `zwp_relative_pointer_v1.relative_motion`'s unaccelerated `dx` / `dy` | refused without both protocols; the cursor hides only with `wp_cursor_shape_v1` |
+| Web | `canvas.requestPointerLock({ unadjustedMovement: true })`, plain where that's unsupported | `pointermove`'s `movementX` / `movementY` (CSS pixels) | only during or shortly after a user gesture: lock from a click or key handler; Escape releases it |
+| iOS, Android | — (refused: `on_pointer_lock` hears `false`) | — | |
+
+`cargo run -p pointerdemo`: `L` locks the pointer and the pad prints each
+motion and the total; `L` or Escape releases it. CI runs it on X11 under
+Xvfb with `--lock-test` (lock on the first click), moves the mouse with
+`xdotool mousemove_relative` and checks the motion and that the pointer
+stayed at the window's center (non-blocking for now). `App::set_pointer_locked`
+locks as a platform would without a window, and `App::pointer_event` with
+`Event::PointerDelta` feeds motion, for unit tests.
 
 ## Testing
 

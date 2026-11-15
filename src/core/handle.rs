@@ -352,6 +352,21 @@ impl<S> AppHandle<S> {
         self.window(WindowRequest::Attention(Some(kind)));
     }
 
+    /// Lock the primary window's pointer (`true`): the cursor hides and stays
+    /// put, and mouse motion reaches `on_pointer` handlers as
+    /// [`PointerEventKind::Motion`](crate::core::PointerEventKind::Motion)
+    /// events with their [`movement`](crate::core::PointerEvent::movement);
+    /// or release it (`false`). The lock ends by itself when the window
+    /// loses focus; [`App::on_pointer_lock`](crate::App::on_pointer_lock)
+    /// hears when it starts, ends or is refused, and
+    /// [`Cx::pointer_locked`](crate::core::Cx::pointer_locked) tells the
+    /// view. On the web, lock from a click or key handler: browsers only
+    /// lock during a user gesture. Other windows: [`window_to`](Self::window_to)
+    /// with [`WindowRequest::PointerLock`]. See `docs/pointer-events.md`.
+    pub fn set_pointer_lock(&self, locked: bool) {
+        self.window(WindowRequest::PointerLock(locked));
+    }
+
     /// Sound the system beep, as a terminal's audible bell. See
     /// [`Window::beep`](crate::platform::Window::beep).
     pub fn beep(&self) {

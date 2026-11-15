@@ -16,6 +16,60 @@ use crate::platform::window::CursorIcon;
 /// same value, so a mouse wheel scrolls the same distance everywhere.
 pub(crate) use crate::platform::event::SCROLL_LINE_PX as LINE_PX;
 
+// ---- Pointer lock by warping (X11) -----------------------------------------
+
+/// The relative motion of a pointer held in place by warping it back to the
+/// window's center after each move, as X11's pointer lock does: a move's
+/// motion is how far it went from the last position seen, and the warp's own
+/// move back to the center (which comes after any moves already queued)
+/// counts for nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) struct WarpLock {
+    /// Where the pointer is held (window pixels).
+    center: (i32, i32),
+    /// The last position a move reported.
+    last: (i32, i32),
+    /// A warp back to the center is on its way.
+    warping: bool,
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl WarpLock {
+    /// Hold the pointer at `center`, where it was just warped to. (That warp
+    /// sends no move if the pointer was there already, so it isn't waited
+    /// for: its move, if any, comes as no motion.)
+    pub(crate) fn new(center: (i32, i32)) -> Self {
+        Self {
+            center,
+            last: center,
+            warping: false,
+        }
+    }
+
+    /// The pointer moved to `at`: its motion (`None` for the warp's own move
+    /// or no motion), and whether to warp it back to the center now.
+    pub(crate) fn moved(&mut self, at: (i32, i32)) -> (Option<(i32, i32)>, bool) {
+        if self.warping && at == self.center {
+            self.warping = false;
+            self.last = at;
+            return (None, false);
+        }
+        let delta = (at.0 - self.last.0, at.1 - self.last.1);
+        self.last = at;
+        let warp = !self.warping && at != self.center;
+        if warp {
+            self.warping = true;
+        }
+        ((delta != (0, 0)).then_some(delta), warp)
+    }
+
+    /// The center the pointer is held at.
+    pub(crate) fn center(&self) -> (i32, i32) {
+        self.center
+    }
+}
+
 // ---- Win32 ------------------------------------------------------------------
 
 /// Translate a Win32 virtual-key code (`WM_KEYDOWN`'s `wParam`) into a named
@@ -83,6 +137,30 @@ pub(crate) fn win32_wheel(wp: usize, horizontal: bool) -> ScrollDelta {
         // Stipple's dy grows downwards; a wheel turned up scrolls towards the top.
         ScrollDelta::lines(0.0, -lines)
     }
+}
+
+/// The relative motion in a `GetRawInputData` `RAWINPUT` block for a mouse:
+/// `lLastX`/`lLastY` of its `RAWMOUSE`, which follows the `RAWINPUTHEADER`
+/// (`header` bytes: 24 on 64-bit Windows, 16 on 32-bit). `None` for another
+/// device, a block too short, or absolute positions (`MOUSE_MOVE_ABSOLUTE`:
+/// tablets and remote desktops), which aren't motion.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) fn win32_raw_mouse_delta(block: &[u8], header: usize) -> Option<(i32, i32)> {
+    const RIM_TYPEMOUSE: u32 = 0;
+    const MOUSE_MOVE_ABSOLUTE: u16 = 1;
+    let u32_at = |at: usize| Some(u32::from_le_bytes(block.get(at..at + 4)?.try_into().ok()?));
+    if u32_at(0)? != RIM_TYPEMOUSE {
+        return None;
+    }
+    // RAWMOUSE: usFlags (u16, padded to 4), the buttons (4), ulRawButtons
+    // (4), then lLastX and lLastY.
+    let flags = u16::from_le_bytes(block.get(header..header + 2)?.try_into().ok()?);
+    if flags & MOUSE_MOVE_ABSOLUTE != 0 {
+        return None;
+    }
+    let dx = u32_at(header + 12)? as i32;
+    let dy = u32_at(header + 16)? as i32;
+    Some((dx, dy))
 }
 
 /// Whether any mouse button is still down after a Win32 button message, from
@@ -848,6 +926,52 @@ pub(crate) fn win32_named(vk: usize) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warp_lock_measures_moves_and_skips_its_warps() {
+        let mut lock = WarpLock::new((100, 50));
+        // The first warp's move, if the pointer wasn't there: no motion.
+        assert_eq!(lock.moved((100, 50)), (None, false));
+        assert_eq!(lock.moved((105, 47)), (Some((5, -3)), true));
+        // Moves already queued before the warp back: from the last one.
+        assert_eq!(lock.moved((108, 47)), (Some((3, 0)), false));
+        // The warp's own move.
+        assert_eq!(lock.moved((100, 50)), (None, false));
+        assert_eq!(lock.moved((99, 50)), (Some((-1, 0)), true));
+        assert_eq!(lock.moved((100, 50)), (None, false));
+        // Back at the center without a warp under way: a real move.
+        assert_eq!(lock.moved((101, 50)), (Some((1, 0)), true));
+        assert_eq!(lock.moved((100, 50)), (None, false));
+        assert_eq!(lock.center(), (100, 50));
+    }
+
+    #[test]
+    fn win32_raw_mouse_motion() {
+        // RAWINPUTHEADER (64-bit: 24 bytes), then RAWMOUSE.
+        let block = |kind: u32, flags: u16, dx: i32, dy: i32| {
+            let mut b = vec![0u8; 24 + 24];
+            b[..4].copy_from_slice(&kind.to_le_bytes());
+            b[24..26].copy_from_slice(&flags.to_le_bytes());
+            b[36..40].copy_from_slice(&dx.to_le_bytes());
+            b[40..44].copy_from_slice(&dy.to_le_bytes());
+            b
+        };
+        assert_eq!(
+            win32_raw_mouse_delta(&block(0, 0, -7, 12), 24),
+            Some((-7, 12))
+        );
+        assert_eq!(
+            win32_raw_mouse_delta(&block(0, 1, 5, 5), 24),
+            None,
+            "absolute"
+        );
+        assert_eq!(
+            win32_raw_mouse_delta(&block(1, 0, 5, 5), 24),
+            None,
+            "keyboard"
+        );
+        assert_eq!(win32_raw_mouse_delta(&block(0, 0, 5, 5)[..30], 24), None);
+    }
 
     #[test]
     fn ios_hardware_keys() {

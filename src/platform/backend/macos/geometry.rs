@@ -36,7 +36,7 @@ pub(super) fn cocoa_top_left(p: Point, primary_h: f64) -> (f64, f64) {
 
 /// The height of the primary screen (the one with the menu bar), which
 /// AppKit's desktop coordinates start from; 0 without screens.
-unsafe fn primary_height() -> f64 {
+pub(super) unsafe fn primary_height() -> f64 {
     unsafe {
         let screens = msg_id(class("NSScreen"), sel("screens"));
         if screens.is_null() || msg_u64(screens, sel("count")) == 0 {

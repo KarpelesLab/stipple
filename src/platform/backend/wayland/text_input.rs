@@ -333,6 +333,7 @@ mod tests {
             decor: Default::default(),
             decors: Vec::new(),
             attention: Default::default(),
+            lock: Default::default(),
         };
         const MANAGER_ID: u32 = 5;
         const SEAT: u32 = 6;

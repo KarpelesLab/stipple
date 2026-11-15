@@ -18,6 +18,7 @@
 //! | `schedule(ms)` | one `setTimeout` that calls `stipple_wake`; replaces the previous one, and a negative `ms` just cancels it |
 //! | `request_frame()` | `requestAnimationFrame`, which calls `stipple_frame` |
 //! | `set_cursor(ptr, len)` | the canvas's `style.cursor` |
+//! | `pointer_lock(on)` | `canvas.requestPointerLock` (unadjusted movement where the browser has it) or `document.exitPointerLock`; motion comes back as `stipple_pointer` kind 4, the lock ending as kind 5 |
 //! | `set_title(ptr, len)` | `document.title` |
 //! | `clipboard_write(ptr, len)` | `navigator.clipboard.writeText` (or `write`, with the HTML), and the text a `copy` / `cut` event hands over |
 //! | `clipboard_write_html(ptr, len)` | the HTML (empty: none) that goes with the next `clipboard_write` |
@@ -62,6 +63,7 @@ mod js {
         pub fn schedule(ms: f64);
         pub fn request_frame();
         pub fn set_cursor(ptr: *const u8, len: usize);
+        pub fn pointer_lock(on: u32);
         pub fn set_title(ptr: *const u8, len: usize);
         pub fn clipboard_write(ptr: *const u8, len: usize);
         pub fn clipboard_write_html(ptr: *const u8, len: usize);
@@ -304,6 +306,12 @@ impl Window for WebWindow {
         }
     }
 
+    fn set_pointer_lock(&self, locked: bool) -> bool {
+        // Granted (or not) later: a refusal comes back as kind 5.
+        unsafe { js::pointer_lock(u32::from(locked)) };
+        true
+    }
+
     fn set_cursor(&self, cursor: CursorIcon) {
         if HOST.with(|h| h.cursor.replace(cursor)) != cursor {
             let css = css_cursor(cursor);
@@ -473,19 +481,23 @@ pub fn resize(width: f64, height: f64, scale: f64) {
 }
 
 /// A pointer event at `(x, y)` CSS pixels: `kind` 0 moves, 1 presses, 2
-/// releases, 3 leaves the canvas. `button` is the DOM's (0 left, 1 middle, 2
-/// right); `mods` packs the modifiers (see [`key`]).
+/// releases, 3 leaves the canvas; while the pointer is locked, 4 is its
+/// motion (`movementX`/`movementY` in `x` and `y`), and 5 says the lock
+/// ended or was refused. `button` is the DOM's (0 left, 1 middle, 2 right);
+/// `mods` packs the modifiers (see [`key`]).
 #[doc(hidden)]
 pub fn pointer(kind: u32, button: u32, x: f64, y: f64, mods: u32) {
     let position = Point::new(x, y);
     let button = web_button(button);
     // Moves record the modifiers too (and the wheel's, which the page
     // precedes with a move).
-    if kind < 3 {
+    if kind < 3 || kind == 4 {
         crate::platform::set_pointer_modifiers(web_modifiers(mods));
     }
     let state = match kind {
         0 => return deliver(Event::PointerMoved { position }),
+        4 => return deliver(Event::PointerDelta { dx: x, dy: y }),
+        5 => return deliver(Event::PointerLockLost),
         1 => ButtonState::Pressed,
         2 => ButtonState::Released,
         _ => return deliver(Event::PointerLeft),

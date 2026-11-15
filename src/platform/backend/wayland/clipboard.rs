@@ -551,6 +551,7 @@ pub(super) mod tests {
             decor: Default::default(),
             decors: Vec::new(),
             attention: Default::default(),
+            lock: Default::default(),
         };
         (conn, theirs)
     }

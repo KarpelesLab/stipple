@@ -283,6 +283,17 @@ pub enum Event {
     },
     /// A scroll/wheel gesture.
     Scroll { delta: ScrollDelta },
+    /// Relative pointer motion while the pointer is locked (see
+    /// [`Window::set_pointer_lock`](crate::platform::Window::set_pointer_lock)):
+    /// how far the mouse moved, positive right and down, in roughly logical
+    /// pixels (the device's own counts where the platform gives them
+    /// unaccelerated). Sent instead of [`PointerMoved`](Event::PointerMoved),
+    /// which stops while the pointer stays put. See `docs/pointer-events.md`.
+    PointerDelta { dx: f64, dy: f64 },
+    /// The system ended the pointer lock (the window lost focus, the user
+    /// pressed Escape in a browser, the compositor took it back), or refused
+    /// one that was pending. Not sent when the app unlocks it itself.
+    PointerLockLost,
     /// A finger on a touch screen started, moved, lifted or was cancelled.
     /// Sent before the pointer events the first finger also produces.
     Touch(Touch),

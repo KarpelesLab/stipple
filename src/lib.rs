@@ -1038,6 +1038,7 @@ impl<S: 'static> Pane<S> {
         let states = self.interactions();
         cx.set_interactions(states.clone());
         cx.set_window(self.id, self.info, self.window_focused);
+        cx.set_pointer_locked(self.pointer.locked);
         let mut element = (self.view)(state, &mut cx);
         self.info_read = cx.window_info_read();
         self.built_title = cx.take_window_title();
@@ -2904,9 +2905,19 @@ impl<S: 'static> App<S> {
             // Window changes queued through `AppHandle::window` and
             // `window_to` go to their window, on its next event.
             let mut retitled = false;
+            let mut relocked = false;
             for request in self.handle.take_window_requests(id) {
                 retitled |= matches!(request, crate::platform::WindowRequest::Title(_));
-                request.apply(window);
+                match request {
+                    // The app keeps the lock's state, and tells the view.
+                    crate::platform::WindowRequest::PointerLock(on) => {
+                        relocked |= self.window_pointer_lock(idx, window, on);
+                    }
+                    request => request.apply(window),
+                }
+            }
+            if relocked {
+                present(&mut self, &mut surfaces, idx, window, false);
             }
             if retitled {
                 // A title bar Stipple draws shows the new title.
@@ -3304,8 +3315,18 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                Event::PointerLockLost => {
+                    if self.window_pointer_lock(idx, window, false) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::FocusChanged(focused) => {
                     self.alt_armed = false;
+                    // The pointer lock ends with the focus.
+                    if !focused {
+                        self.window_pointer_lock(idx, window, false);
+                    }
                     // Alt+Tab away leaves no underlines behind.
                     let pane = &mut self.panes[idx];
                     let mut ui = pane.menu_ui.borrow_mut();
@@ -3484,6 +3505,10 @@ impl<S: 'static> App<S> {
     ) -> ControlFlow {
         let id = self.panes[idx].id;
         let last = self.panes.len() == 1;
+        // A locked pointer goes free with its window.
+        if self.panes[idx].pointer.locked {
+            window.set_pointer_lock(false);
+        }
         self.panes.remove(idx);
         surfaces.remove(idx);
         if let Some(first) = self.panes.first_mut() {

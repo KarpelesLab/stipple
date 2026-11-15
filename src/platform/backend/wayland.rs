@@ -733,6 +733,8 @@ struct WlConn {
     decors: Vec<decor::Decor>,
     /// Activation (attention) requests and the bell.
     attention: attention::Attention,
+    /// The pointer lock's globals and, while locked, objects.
+    lock: pointer::Lock,
 }
 
 impl WlConn {
@@ -765,6 +767,7 @@ impl WlConn {
             decor: decor::Decor::default(),
             decors: Vec::new(),
             attention: attention::Attention::default(),
+            lock: pointer::Lock::default(),
         })
     }
 
@@ -774,7 +777,7 @@ impl WlConn {
         if let (Some(device), Some(serial)) = (self.cursor_device, self.enter_serial) {
             let mut a = Vec::new();
             arg_u32(&mut a, serial);
-            if self.cursor == CursorIcon::Hidden
+            if (self.cursor == CursorIcon::Hidden || self.lock.hides_cursor())
                 && self.decor.cursor().is_none()
                 && let Some(pointer) = self.pointer
             {
@@ -794,6 +797,48 @@ impl WlConn {
             }
             let _ = self.stream.flush();
         }
+    }
+
+    /// Lock the pointer to `surface` (`true`): `zwp_pointer_constraints_v1`
+    /// holds it still and hides the cursor, `zwp_relative_pointer_v1`
+    /// reports its motion. Or release it. Returns whether the pointer is
+    /// (being) locked or released as asked: not without the compositor's
+    /// support or a pointer.
+    fn set_pointer_lock(&mut self, surface: u32, on: bool) -> bool {
+        if let Some((locked, relative, _)) = self.lock.active.take() {
+            let _ = self.send(locked, pointer::LOCKED_POINTER_DESTROY, &[]);
+            let _ = self.send(relative, pointer::RELATIVE_POINTER_DESTROY, &[]);
+        }
+        let ok = !on || self.lock_pointer(surface);
+        self.apply_cursor();
+        let _ = self.stream.flush();
+        ok
+    }
+
+    fn lock_pointer(&mut self, surface: u32) -> bool {
+        let (Some(constraints), Some(manager), Some(ptr)) = (
+            self.lock.constraints,
+            self.lock.relative_manager,
+            self.pointer,
+        ) else {
+            return false;
+        };
+        let locked = self.new_id();
+        let args = pointer::lock_pointer_args(locked, surface, ptr);
+        if self
+            .send(constraints, pointer::CONSTRAINTS_LOCK_POINTER, &args)
+            .is_err()
+        {
+            return false;
+        }
+        let relative = self.new_id();
+        let args = pointer::relative_pointer_args(relative, ptr);
+        let _ = self.send(manager, pointer::RELATIVE_GET_RELATIVE_POINTER, &args);
+        self.lock.active = Some((locked, relative, surface));
+        dbg(format_args!(
+            "pointer lock: locked={locked} relative={relative} surface={surface}"
+        ));
+        true
     }
 
     /// Allocate the next client object id.
@@ -1386,6 +1431,17 @@ impl Window for WaylandWindow {
         conn.cursor = cursor;
         conn.apply_cursor();
     }
+    fn set_pointer_lock(&self, locked: bool) -> bool {
+        let mut conn = self.conn.lock().unwrap();
+        let mine = conn.lock.active.is_some_and(|(_, _, s)| s == self.surface);
+        if !locked && !mine {
+            return true;
+        }
+        if locked && mine {
+            return true;
+        }
+        conn.set_pointer_lock(self.surface, locked)
+    }
     fn set_min_size(&self, size: Option<Size>) {
         // The compositor's limits are the window's, title bar included.
         let (min, _) = {
@@ -1625,6 +1681,8 @@ where
     let mut activation_name = None;
     let mut bell_name = None;
     let mut primary_name = None;
+    let mut constraints_name = None;
+    let mut relative_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1652,6 +1710,8 @@ where
                     attention::ACTIVATION => activation_name = Some(name),
                     attention::SYSTEM_BELL => bell_name = Some(name),
                     clipboard::primary::MANAGER => primary_name = Some(name),
+                    pointer::CONSTRAINTS => constraints_name = Some(name),
+                    pointer::RELATIVE => relative_name = Some(name),
                     _ => {}
                 }
             }
@@ -1730,6 +1790,11 @@ where
     let activation = activation_name.map(|name| bind(&mut conn, name, attention::ACTIVATION, 1));
     let bell = bell_name.map(|name| bind(&mut conn, name, attention::SYSTEM_BELL, 1));
     attention::setup(&mut conn, activation, bell);
+    // The pointer lock, when the compositor has both halves.
+    if let (Some(c), Some(r)) = (constraints_name, relative_name) {
+        conn.lock.constraints = Some(bind(&mut conn, c, pointer::CONSTRAINTS, 1));
+        conn.lock.relative_manager = Some(bind(&mut conn, r, pointer::RELATIVE, 1));
+    }
 
     // The first window; `open_window` makes more the same way.
     let globals = toplevel::Globals {
@@ -1875,6 +1940,24 @@ where
         // The compositor is ready for the next animation frame: it arrives as
         // a wake once this loop goes back to waiting.
         if frame_callback_done(object, opcode) {
+            continue;
+        }
+        // The locked pointer's motion, or the lock ending.
+        let lock = shared.lock().unwrap().lock.event(object, opcode, &args);
+        if let Some((surface, event)) = lock {
+            let event = match event {
+                pointer::LockEvent::Motion(dx, dy) => {
+                    crate::platform::set_pointer_modifiers(wl_modifiers(
+                        mods_mask,
+                        keymap.as_ref(),
+                    ));
+                    Event::PointerDelta { dx, dy }
+                }
+                pointer::LockEvent::Unlocked => Event::PointerLockLost,
+            };
+            if handler(event, find(&windows, surface)) == ControlFlow::Exit {
+                break;
+            }
             continue;
         }
         // Decoration modes and activation tokens.
