@@ -2030,6 +2030,98 @@ styling part of the toolkit.
   screenshots of mid-transition frames on the desktops and the web, and no CPU
   use once everything is at rest.
 
+### Phase 9 — 2D games
+*Goal: a 2D game (an arcade game, a puzzle, a pixel-art platformer, a card
+game) can be written on Stipple alone: the game world drawn into a canvas at the
+display's rate, read from the keyboard, mouse, touch and gamepads, with sound,
+and its menus, settings, HUD and pause screen built from Stipple's widgets under
+the game's own theme.*
+
+What's there already: `Element::canvas` with damage-tracked repaints and
+`draw_image`, the display-driven frame clock (`request_frame`, `frame_time`),
+raw key events with physical codes, full pointer and touch events, fullscreen
+and a hidden cursor, layers and overlays, `page_stack`, themes, lifecycle and
+saved state, and oxideav's decoders for WAV, Vorbis, MP3, FLAC and Opus. What a
+game needs on top:
+
+#### 9a — The game loop
+- ⬜ A per-frame update that runs at the display's rate while the game plays,
+  with the time since the last frame, and doesn't rebuild the view (only the
+  canvas repaints, and the HUD when the state it shows changed).
+- ⬜ A fixed-timestep helper (an accumulator: N updates of a fixed `dt`, then an
+  interpolation factor for drawing), so physics doesn't depend on the refresh
+  rate.
+- ⬜ Pausing: the loop stops when the window is hidden, minimized or the app is
+  backgrounded, and on demand; it resumes without a giant `dt`.
+- ⬜ Frame stats a game can show (fps, update and render times).
+
+#### 9b — Input for games
+- ⬜ Polled input state: which keys (by physical code) and mouse buttons are
+  held, presses and releases since the last update, pointer position and
+  motion, wheel; reset when the window loses focus so no key sticks.
+- ⬜ Actions: named actions bound to keys, mouse buttons, gamepad buttons and
+  axes (with dead zones), queried per update (`pressed`, `held`, `released`,
+  `value`); bindings that can be listed, changed and saved.
+- ⬜ Pointer lock: relative mouse motion with the cursor hidden and held in
+  place (macOS `CGAssociateMouseAndMouseCursorPosition`, Windows raw input +
+  `ClipCursor`, X11 a pointer grab and warp, Wayland
+  `zwp_pointer_constraints_v1` + `zwp_relative_pointer_manager_v1`, the web's
+  `requestPointerLock`), released on Escape and focus loss.
+- ⬜ Gamepads: connect and disconnect, buttons and axes on a standard layout,
+  rumble where offered. Windows XInput, macOS and iOS `GameController`,
+  Linux evdev (`/dev/input/event*`), Android `InputDevice` sources, the web's
+  Gamepad API.
+- ⬜ Touch controls for phones: a virtual stick and buttons drawn over the
+  game, feeding the same actions.
+
+#### 9c — Drawing a game
+- ⬜ Sprites: draw part of an image (a source rect into a sprite sheet or
+  atlas), flipped, rotated, scaled, tinted and faded; sprite-sheet and
+  animation helpers (frames, durations, looping).
+- ⬜ Pixel art: nearest-neighbor sampling, and a fixed virtual resolution (say
+  320×180) scaled by whole numbers and letterboxed into the window.
+- ⬜ Tilemaps: draw the visible tiles of a grid from a tileset.
+- ⬜ A camera: a world-to-screen transform (position, zoom, shake) for the
+  canvas.
+- ⬜ Fast paths in the software rasterizer for what games draw most: opaque
+  and alpha-blended blits that are unscaled or scaled by whole numbers, so a
+  full 1080p screen of sprites fits a 60 Hz frame on a desktop CPU.
+- ⬜ Later: present on the GPU (Phase 6) without a read-back.
+
+#### 9d — Audio
+- ⬜ Audio output on every platform, each through the OS's own API with
+  hand-written FFI: CoreAudio (`AudioUnit`) on macOS and iOS, WASAPI on
+  Windows, ALSA (`libasound`, loaded at run time) on Linux, AAudio on Android,
+  Web Audio on the web.
+- ⬜ A mixer: one-shot sound effects (decoded up front with oxideav), streamed
+  music (decoded as it plays), per-sound volume, pan and pitch, and volume
+  groups (master, music, effects) for a settings screen.
+- ⬜ Pausing and resuming with the app's lifecycle, and following the audio
+  session on iOS and Android (interruptions, the silent switch).
+
+#### 9e — Game UI
+- ⬜ A game theme: the game's own fonts (loaded from its files), colors,
+  corner radii and focus look, in place of the system-like themes.
+- ⬜ Menus driven by the keyboard and the gamepad: focus moves in the direction
+  pressed (spatial navigation), A/Enter activates, B/Escape goes back.
+- ⬜ Screens: a title menu, a pause menu over the frozen game, a
+  game-over screen, through `page_stack` and modal overlays.
+- ⬜ A settings screen's parts: volume sliders, a control-rebinding row ("press
+  a key…"), display settings (fullscreen, vsync, pixel scale), language.
+- ⬜ A HUD over the canvas: layers that let input through to the game except
+  where a widget sits; health and progress bars, counters, a minimap slot;
+  floating text and dialogue boxes with typewriter text.
+
+#### 9f — Saving
+- ⬜ Settings and save slots in the app's data directory (#49), written
+  atomically.
+
+- **Exit criteria:** `examples/gamedemo`, a small original game, runs on the
+  desktops, the web and the phones: a title menu, a settings screen (volume,
+  controls, fullscreen) that persists, a HUD, a pause menu, sound, and keyboard,
+  mouse, gamepad and touch input. Its `--selftest` plays scripted input and
+  checks the score in CI.
+
 ---
 
 ## 4. Cross-cutting tracks (continuous)
