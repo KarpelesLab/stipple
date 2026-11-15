@@ -178,20 +178,60 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         }
     };
 
-    let w = el
-        .layout
-        .size
-        .width
-        .unwrap_or(content.width + pad.horizontal());
-    let h = el
-        .layout
-        .size
-        .height
-        .unwrap_or(content.height + pad.vertical());
-    Size::new(
+    let natural = Size::new(
+        content.width + pad.horizontal(),
+        content.height + pad.vertical(),
+    );
+    let w = el.layout.size.width.unwrap_or(natural.width);
+    let h = el.layout.size.height.unwrap_or(natural.height);
+    let mut size = Size::new(
         clamp_len(w, min.width, max.width),
         clamp_len(h, min.height, max.height),
-    )
+    );
+    // A scroll container sized by nothing else is as long as its content
+    // along its scroll axis, but no longer than the space there is (or it
+    // would never scroll), and no shorter than its floor.
+    if let Some(axis) = scroll_fill_axis(el) {
+        let length = axis.main(natural).min(axis.main(avail));
+        let floor = scroll_floor(el, axis, axis.main(natural));
+        let length = clamp_len(length, floor, axis.main(max));
+        size = axis.size(length, axis.cross(size));
+    }
+    size
+}
+
+/// The shortest a scroll container that fills its parent shrinks to, unless
+/// a [`min_height`](Element::min_height) (or width) says otherwise.
+const SCROLL_MIN: f64 = 100.0;
+
+/// The axis along which `el` is a scroll container whose length nothing
+/// fixes, if it is one: that length then follows its parent (see
+/// [`widgets::scroll`](crate::widgets::scroll)).
+fn scroll_fill_axis(el: &Element) -> Option<Axis> {
+    el.scroll?;
+    let axis = match el.kind {
+        ElementKind::Stack {
+            axis: Axis::Horizontal,
+            ..
+        } => Axis::Horizontal,
+        _ => Axis::Vertical,
+    };
+    let fixed = match axis {
+        Axis::Horizontal => el.layout.size.width,
+        Axis::Vertical => el.layout.size.height,
+    };
+    fixed.is_none().then_some(axis)
+}
+
+/// How short scroll container `el` may get along `axis`, its content
+/// being `natural` long: its own minimum, or [`SCROLL_MIN`] (less for less
+/// content).
+fn scroll_floor(el: &Element, axis: Axis, natural: f64) -> f64 {
+    let own = match axis {
+        Axis::Horizontal => el.layout.min.width,
+        Axis::Vertical => el.layout.min.height,
+    };
+    own.unwrap_or(natural.min(SCROLL_MIN))
 }
 
 /// The element's lower size bounds (zero where unset).
@@ -472,6 +512,7 @@ fn layout_element(
         ghost: false,
         offstage: el.offstage,
         hit_through: el.hit_through,
+        indicator: el.indicator,
         children: Vec::new(),
     };
 
@@ -624,10 +665,31 @@ fn layout_element(
                 .iter()
                 .zip(line_measured)
                 .map(|(c, m)| {
-                    FlexItem::fixed(axis.main(*m))
+                    let item = FlexItem::fixed(axis.main(*m))
                         .grow(c.layout.grow)
                         .shrink(c.layout.shrink)
-                        .bounds(axis.main(min_size(c)), axis.main(max_size(c)))
+                        .bounds(axis.main(min_size(c)), axis.main(max_size(c)));
+                    // A scroll container along this axis, with no length of
+                    // its own, takes the free space and gives it back when
+                    // its siblings overflow (down to its floor).
+                    if scroll_fill_axis(c) == Some(axis) {
+                        FlexItem {
+                            grow: if c.layout.grow > 0.0 {
+                                c.layout.grow
+                            } else {
+                                1.0
+                            },
+                            shrink: if c.layout.shrink > 0.0 {
+                                c.layout.shrink
+                            } else {
+                                1.0
+                            },
+                            min: scroll_floor(c, axis, axis.main(*m)),
+                            ..item
+                        }
+                    } else {
+                        item
+                    }
                 })
                 .collect();
             let spans = solve_main_axis(main_avail, *gap, &items);
@@ -916,6 +978,8 @@ pub(crate) fn paint_hover(
     highlight: Color,
 ) {
     if let Some((node, to_window, opacity)) = node_to_window(tree, &|n| n.action == Some(hovered)) {
+        // A labeled control lights up its box, not its label.
+        let node = indicator_of(node).unwrap_or(node);
         // An OS-drawn control shows hover itself (see `mark_native_states`).
         if node.native.is_some() || opacity <= 0.0 {
             return;
@@ -936,6 +1000,22 @@ pub(crate) fn paint_hover(
     }
 }
 
+/// The [indicator](crate::core::Element) of labeled control `node` (its
+/// box, drawn without a transform), if it has one: found among its
+/// descendants that aren't controls of their own.
+fn indicator_of(node: &LayoutNode) -> Option<&LayoutNode> {
+    node.children
+        .iter()
+        .filter(|c| c.action.is_none())
+        .find_map(|c| {
+            if c.indicator && c.transform.is_none() {
+                Some(c)
+            } else {
+                indicator_of(c)
+            }
+        })
+}
+
 /// Tell each OS-drawn control which interaction state to draw itself in.
 pub(crate) fn mark_native_states(
     node: &mut LayoutNode,
@@ -943,15 +1023,37 @@ pub(crate) fn mark_native_states(
     pressed: Option<ActionId>,
     focused: Option<FocusId>,
 ) {
+    mark_native_states_in(node, (None, None), hovered, pressed, focused);
+}
+
+/// [`mark_native_states`], under the tappable and focusable element `owner`
+/// around `node`: a labeled control's box draws in the state of the control.
+fn mark_native_states_in(
+    node: &mut LayoutNode,
+    owner: (Option<ActionId>, Option<FocusId>),
+    hovered: Option<ActionId>,
+    pressed: Option<ActionId>,
+    focused: Option<FocusId>,
+) {
+    let (action, focus) = if node.indicator {
+        (node.action.or(owner.0), node.focus.or(owner.1))
+    } else {
+        (node.action, node.focus)
+    };
     if let Some(native) = &mut node.native {
         native.state = NativeState {
-            hovered: node.action.is_some() && node.action == hovered,
-            pressed: node.action.is_some() && node.action == pressed,
-            focused: node.focus.is_some() && node.focus == focused,
+            hovered: action.is_some() && action == hovered,
+            pressed: action.is_some() && action == pressed,
+            focused: focus.is_some() && focus == focused,
         };
     }
+    let owner = if node.action.is_some() {
+        (node.action, node.focus)
+    } else {
+        owner
+    };
     for child in &mut node.children {
-        mark_native_states(child, hovered, pressed, focused);
+        mark_native_states_in(child, owner, hovered, pressed, focused);
     }
 }
 
@@ -1278,6 +1380,86 @@ mod tests {
     use super::*;
     use crate::core::element::BoxStyle;
     use crate::render::Color;
+
+    /// A vertical scroll container of `rows` 20-pixel rows, with nothing
+    /// fixing its height.
+    fn list(rows: usize) -> Element {
+        let rows = (0..rows)
+            .map(|_| Element::boxed(BoxStyle::default()).height(20.0))
+            .collect();
+        Element::stack(Axis::Vertical, rows).scrollable(ScrollId(0))
+    }
+
+    fn bar() -> Element {
+        Element::boxed(BoxStyle::default()).height(50.0)
+    }
+
+    #[test]
+    fn a_scroll_fills_the_height_its_column_leaves() {
+        let window = Rect::from_xywh(0.0, 0.0, 200.0, 400.0);
+        for rows in [2, 100] {
+            let root = Element::stack(Axis::Vertical, vec![bar(), list(rows), bar()]);
+            let laid = layout(&root, window, None);
+            let heights: Vec<f64> = laid.children.iter().map(|c| c.bounds.height()).collect();
+            assert_eq!(heights, [50.0, 300.0, 50.0], "{rows} rows");
+        }
+    }
+
+    #[test]
+    fn a_scroll_crowded_out_keeps_its_floor() {
+        let window = Rect::from_xywh(0.0, 0.0, 200.0, 150.0);
+        let root = Element::stack(Axis::Vertical, vec![bar(), list(100), bar()]);
+        let laid = layout(&root, window, None);
+        assert_eq!(laid.children[1].bounds.height(), SCROLL_MIN);
+        // Less content, a lower floor; a min height, another.
+        let root = Element::stack(Axis::Vertical, vec![bar(), list(2), bar(), bar()]);
+        let laid = layout(&root, window, None);
+        assert_eq!(laid.children[1].bounds.height(), 40.0);
+        let root = Element::stack(
+            Axis::Vertical,
+            vec![bar(), list(100).min_height(60.0), bar()],
+        );
+        let laid = layout(&root, window, None);
+        assert_eq!(laid.children[1].bounds.height(), 60.0);
+    }
+
+    #[test]
+    fn a_scroll_with_nothing_to_fill_is_as_tall_as_its_content_and_the_room() {
+        let room = Size::new(200.0, 300.0);
+        assert_eq!(measure(&list(2), room, None).height, 40.0);
+        assert_eq!(measure(&list(100), room, None).height, 300.0);
+        assert_eq!(
+            measure(&list(100).max_height(120.0), room, None).height,
+            120.0
+        );
+        assert_eq!(measure(&list(100).height(80.0), room, None).height, 80.0);
+        // In an auto-sized panel: the panel hugs it.
+        let panel = Element::stack(Axis::Vertical, vec![bar(), list(2)]);
+        assert_eq!(measure(&panel, room, None).height, 90.0);
+        // A fixed height doesn't grow.
+        let root = Element::stack(Axis::Vertical, vec![list(100).height(80.0), bar()]);
+        let laid = layout(&root, Rect::from_xywh(0.0, 0.0, 200.0, 400.0), None);
+        assert_eq!(laid.children[0].bounds.height(), 80.0);
+    }
+
+    #[test]
+    fn a_vertical_scroll_in_a_row_does_not_grow_across() {
+        let root = Element::stack(
+            Axis::Horizontal,
+            vec![list(2).width(50.0), bar().width(30.0)],
+        );
+        let laid = layout(&root, Rect::from_xywh(0.0, 0.0, 400.0, 100.0), None);
+        assert_eq!(laid.children[0].bounds.width(), 50.0);
+        // A sideways one does.
+        let strip = Element::stack(
+            Axis::Horizontal,
+            vec![Element::boxed(BoxStyle::default()).width(30.0)],
+        )
+        .scrollable(ScrollId(1));
+        let root = Element::stack(Axis::Horizontal, vec![strip, bar().width(30.0)]);
+        let laid = layout(&root, Rect::from_xywh(0.0, 0.0, 400.0, 100.0), None);
+        assert_eq!(laid.children[0].bounds.width(), 370.0);
+    }
 
     /// Wrapped text inside a fixed-width box wraps to that box, so the box's
     /// measured height must count every wrapped line.

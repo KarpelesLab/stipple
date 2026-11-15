@@ -24,7 +24,7 @@ fn view(s: &Form, cx: &mut Cx<Form>) -> crate::core::Element {
         text_field(cx, &s.name, |s| &mut s.name).width(200.0),
         button(cx, "Save").on_tap(cx, |s| s.saved += 1),
         button(cx, "Cancel").on_tap(cx, |s| s.cancelled += 1),
-        checkbox(cx, s.agree, |s| s.agree = !s.agree),
+        checkbox(cx, "I agree", s.agree, |s| s.agree = !s.agree),
     ])
     .gap(8.0)
     .padding(Insets::uniform(10.0));

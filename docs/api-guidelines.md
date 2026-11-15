@@ -42,9 +42,9 @@ of them (see [Checking](#checking)).
   and `TableSpec` do. A widget's `(cx, …, on_change)` shape is fine:
   `select(cx, options, &state, field)` has three that count.
 - **Widgets take `cx` first** and read the theme from it, never a `&Theme`
-  parameter: `label(cx, "Hi")`, `checkbox(cx, checked, on_toggle)`, and spec
-  builders end in `.view(cx)`. A widget that only draws takes `&Cx<S>`; one
-  that registers a handler takes `&mut Cx<S>`. Coming first, `cx` also fixes
+  parameter: `label(cx, "Hi")`, `checkbox(cx, "Wi-Fi", on, on_toggle)`, and
+  spec builders end in `.view(cx)`. A widget that only draws takes `&Cx<S>`;
+  one that registers a handler takes `&mut Cx<S>`. Coming first, `cx` also fixes
   the state type, so the handlers and accessors after it need no
   annotation: `|s| s.n += 1`, `|s| &mut s.name`. `cx.themed(theme, |cx| …)`
   builds part of a view under another theme.

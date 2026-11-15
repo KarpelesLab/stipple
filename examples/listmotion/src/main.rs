@@ -184,22 +184,11 @@ fn app(state: State) -> App<State> {
         .logical_size(Size::new(420.0, 560.0))
 }
 
-/// The accessibility tree's node named `name`, if any.
-fn find(app: &App<State>, name: &str) -> Option<Rect> {
-    let tree = app.accessibility_tree()?;
-    tree.descendants()
-        .into_iter()
-        .find(|n| n.name == name)
-        .map(|n| n.bounds)
-}
-
 fn press(app: &mut App<State>, name: &str) -> Result<(), String> {
-    let b = find(app, name).ok_or(format!("no {name:?} to press"))?;
-    let at = Point::new(b.min_x() + b.width() / 2.0, b.min_y() + b.height() / 2.0);
-    if app.click_at(at) {
+    if app.click(Role::Button, name) {
         Ok(())
     } else {
-        Err(format!("{name:?} didn't take the click"))
+        Err(format!("no {name:?} button took the click"))
     }
 }
 
@@ -229,7 +218,10 @@ fn selftest() -> Result<(), String> {
     press(&mut app, "Add")?;
     let _ = app.render_frame();
     ensure(app.animating(), "an added row animates in")?;
-    ensure(find(&app, "Fig").is_some(), "the new row is there at once")?;
+    ensure(
+        app.find_text("Fig").is_some(),
+        "the new row is there at once",
+    )?;
     let frames = settle(&mut app)?;
     // At least one more frame: how many depends on how fast frames render
     // (a slow CI runner draws only a couple in the 200 ms animation).
@@ -243,7 +235,7 @@ fn selftest() -> Result<(), String> {
     press(&mut app, "Remove Cherry")?;
     let (mid, _) = app.render_frame();
     ensure(app.animating(), "a removed row animates out")?;
-    ensure(find(&app, "Cherry").is_none(), "gone for screen readers")?;
+    ensure(app.find_text("Cherry").is_none(), "gone for screen readers")?;
     ensure(
         app.state().items.iter().all(|i| i.name != "Cherry"),
         "gone from the state",

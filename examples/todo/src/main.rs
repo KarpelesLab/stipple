@@ -10,7 +10,6 @@
 //! longer matches it.
 
 use std::path::Path;
-use stipple::core::Role;
 use stipple::prelude::*;
 
 struct Todo {
@@ -44,8 +43,7 @@ fn view(state: &Todos, cx: &mut Cx<Todos>) -> Element {
         row(vec![
             heading(cx, "Todos"),
             spacer(),
-            label(cx, "Dark"),
-            switch(cx, state.dark, |s| s.dark = !s.dark),
+            switch(cx, "Dark", state.dark, |s| s.dark = !s.dark),
         ])
         .gap(8.0),
         row(vec![
@@ -56,7 +54,7 @@ fn view(state: &Todos, cx: &mut Cx<Todos>) -> Element {
             button(cx, "Add").on_tap(cx, Todos::add),
         ])
         .gap(8.0),
-        scroll(cx, 200.0).grow(1.0).children(
+        scroll(cx).children(
             state
                 .items
                 .iter()
@@ -71,13 +69,14 @@ fn view(state: &Todos, cx: &mut Cx<Todos>) -> Element {
 }
 
 fn todo_row(cx: &mut Cx<Todos>, i: usize, todo: &Todo) -> Element {
-    let mut text = label(cx, &todo.text);
+    let mut check = checkbox(cx, &todo.text, todo.done, move |s| {
+        s.items[i].done = !s.items[i].done;
+    });
     if todo.done {
-        text = text.strikethrough();
+        check = check.strikethrough();
     }
     row(vec![
-        checkbox(cx, todo.done, move |s| s.items[i].done = !s.items[i].done).a11y_label(&todo.text),
-        text,
+        check,
         spacer(),
         Button::new("Delete")
             .variant(Variant::Ghost)
@@ -118,31 +117,19 @@ fn main() {
     app().run();
 }
 
-/// Where the `n`th element with `role` (and `name`, unless empty) was laid
-/// out in the last frame.
-fn find(app: &App<Todos>, role: Role, name: &str, n: usize) -> Result<Point, String> {
-    let tree = app.accessibility_tree().ok_or("no frame yet")?;
-    tree.descendants()
-        .into_iter()
-        .filter(|node| node.role == role && (name.is_empty() || node.name == name))
-        .nth(n)
-        .map(|node| node.bounds.center())
-        .ok_or(format!("no {role:?} {name:?} #{n}"))
-}
-
 fn selftest(png: &Path) -> Result<(), String> {
     // Changes snap instead of animating, so each frame shows the result.
     stipple::anim::set_reduced_motion(Some(true));
     let mut app = app();
-    app.render_once();
 
     // Click the field, then type three todos, each followed by Enter.
-    app.click_at(find(&app, Role::TextField, "", 0)?);
+    if !app.click(Role::TextField, "What needs doing?") {
+        return Err("no text field to click".into());
+    }
     for text in ["Buy milk", "Water the plants", "Write a tutorial"] {
         app.type_text(text);
         app.press_key(KeyInput::Enter);
     }
-    app.render_once();
     let texts: Vec<&str> = app.state().items.iter().map(|t| t.text.as_str()).collect();
     if texts != ["Buy milk", "Water the plants", "Write a tutorial"] {
         return Err(format!("added {texts:?}"));
@@ -152,18 +139,25 @@ fn selftest(png: &Path) -> Result<(), String> {
     }
 
     // Tick the first one, delete the second.
-    app.click_at(find(&app, Role::CheckBox, "Buy milk", 0)?);
-    app.render_once();
-    app.click_at(find(&app, Role::Button, "Delete", 1)?);
-    app.render_once();
+    app.click(Role::CheckBox, "Buy milk");
+    let deletes = app.find_all(Role::Button, "Delete");
+    app.click_at(
+        deletes
+            .get(1)
+            .ok_or("no second Delete button")?
+            .bounds
+            .center(),
+    );
     let done: Vec<bool> = app.state().items.iter().map(|t| t.done).collect();
     if done != [true, false] {
         return Err(format!("done flags after a tick and a delete: {done:?}"));
     }
+    if app.find_text("1 left").is_none() {
+        return Err("the count doesn't say 1 left".into());
+    }
 
     // Dark mode, and a picture of the result.
-    app.click_at(find(&app, Role::Switch, "", 0)?);
-    if !app.state().dark {
+    if !app.click(Role::Switch, "Dark") || !app.state().dark {
         return Err("the switch didn't turn dark mode on".into());
     }
     let frame = app.render_once();

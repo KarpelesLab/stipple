@@ -42,6 +42,7 @@ mod tab_bar;
 mod tab_bar_tests;
 mod text_input;
 mod toast;
+mod toggle;
 mod toolbar;
 
 pub use chips::{Chip, chip, choice_chips, filter_chips};
@@ -58,6 +59,7 @@ pub use tab_bar::{TAB_MAX_WIDTH, TAB_MIN_WIDTH, Tab, TabBar, TabBarState, TabInd
 pub(crate) use text_input::FieldHooks;
 pub use text_input::{TextInput, text_area, text_field};
 pub use toast::{NARROW_WINDOW, Toast, ToastId, ToastKind, ToastPlacement, Toasts, toasts};
+pub use toggle::{Toggle, checkbox, radio, switch};
 pub use toolbar::{ToolButton, tool_button, tool_separator, toolbar};
 
 use crate::core::{
@@ -150,32 +152,51 @@ pub fn spacer() -> Element {
     Element::stack(Axis::Horizontal, Vec::new()).grow(1.0)
 }
 
-/// A fixed-height vertical scroll viewport: a column whose content, added
-/// with [`children`](Element::children) or [`child`](Element::child), may be
-/// taller than `height`. It overflows and is clipped to the viewport; wheel
-/// events over it scroll the app's offset (re-clamped each frame).
+/// A vertical scroll viewport: a column whose content, added with
+/// [`children`](Element::children) or [`child`](Element::child), may be
+/// taller than the viewport. It overflows and is clipped to the viewport;
+/// wheel events over it (and finger drags on a touch screen) scroll it.
+///
+/// It fills the height its parent column leaves free, so a list under a
+/// toolbar takes the rest of the window:
 ///
 /// ```
 /// use stipple::prelude::*;
 /// struct App { items: Vec<String> }
 /// fn view(state: &App, cx: &mut Cx<App>) -> Element {
-///     scroll(cx, 300.0).children(state.items.iter().map(|item| label(cx, item)).collect())
+///     column(vec![
+///         heading(cx, "Items"),
+///         scroll(cx).children(state.items.iter().map(|item| label(cx, item)).collect()),
+///     ])
 /// }
 /// # let theme = Theme::light();
 /// # let _ = view(&App { items: vec!["a".into()] }, &mut Cx::new(&theme));
 /// ```
 ///
+/// How tall it is, unless [`height`](Element::height) fixes it:
+///
+/// - **In a column**, it grows into the free height (up to a
+///   [`max_height`](Element::max_height)), and when the column's other
+///   children don't leave it room, it shrinks to make room for them, down
+///   to 100 pixels (or its content's height, if less; a
+///   [`min_height`](Element::min_height) sets another floor).
+/// - **Where nothing gives it a height** (a column that is as tall as its
+///   content, in a dialog, a popover, a row), it is as tall as its content,
+///   but no taller than the space its parent was given: a short list shows
+///   whole, and a long one scrolls in the space there is. Inside another
+///   vertical scroll container, that's the outer one's viewport.
+///
+/// [`scroll_horizontal`] is the same sideways.
+///
 /// Call it once per frame for each scroll container, in the same order, so
 /// each keeps its scroll position across rebuilds.
-pub fn scroll<S>(cx: &mut Cx<S>, height: f64) -> Element {
+pub fn scroll<S>(cx: &mut Cx<S>) -> Element {
     let id = cx.register_scroll();
-    Element::stack(Axis::Vertical, Vec::new())
-        .height(height)
-        .scrollable(id)
+    Element::stack(Axis::Vertical, Vec::new()).scrollable(id)
 }
 
-/// A fixed-width sideways scroll viewport (a strip of chips, a carousel): a
-/// row whose content, added with [`children`](Element::children) or
+/// A sideways scroll viewport (a strip of chips, a carousel): a row whose
+/// content, added with [`children`](Element::children) or
 /// [`child`](Element::child), lays out left to right at its natural width
 /// and is clipped to the viewport. A horizontal wheel or trackpad swipe over
 /// it scrolls it (a vertical wheel too, when no vertical container is under
@@ -183,10 +204,15 @@ pub fn scroll<S>(cx: &mut Cx<S>, height: f64) -> Element {
 /// flings it. The content measures with no width limit, so a wrapping row (a
 /// group of [`choice_chips`] or [`filter_chips`]) stays on one line in it.
 /// Inside a [`scroll`] list, a drag picks the container along its direction.
-pub fn scroll_horizontal<S>(cx: &mut Cx<S>, width: f64) -> Element {
+///
+/// Its width follows [`scroll`]'s rule for height: in a column it spans the
+/// column's width (as any child does); in a row it grows into the free
+/// width and shrinks when the row's other children need the room; elsewhere
+/// it is as wide as its content, up to the width there is.
+/// [`width`](Element::width) fixes it.
+pub fn scroll_horizontal<S>(cx: &mut Cx<S>) -> Element {
     let id = cx.register_scroll();
     Element::stack(Axis::Horizontal, Vec::new())
-        .width(width)
         .scrollable(id)
         .align(Align::Start, Align::Stretch)
 }
@@ -1187,92 +1213,6 @@ pub(crate) fn field_text(text: String, theme: &Theme, color: Color) -> Element {
     }
 }
 
-/// A toggleable checkbox: a small square showing a check mark when `checked`,
-/// calling `on_toggle` when tapped.
-pub fn checkbox<S>(
-    cx: &mut Cx<S>,
-    checked: bool,
-    on_toggle: impl FnMut(&mut S) + 'static,
-) -> Element {
-    let theme = &theme_of(cx);
-    let control = NativeControl::Checkbox { checked };
-    if let Some(deco) = theme.native_deco(control) {
-        return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
-            .on_tap(cx, on_toggle)
-            .checked(checked);
-    }
-    // The mark is always there, faded out and shrunk while unchecked, so it
-    // pops in (and out) on the theme's toggle motion.
-    let m = theme.motion;
-    let mark = Element::text("✓", theme.font_size, theme.palette.on_primary);
-    let mark = if checked {
-        mark
-    } else {
-        mark.opacity(0.0).transform(Transform::IDENTITY.scale(0.4))
-    };
-    let mark = mark
-        .transition_for(AnimProp::Opacity, Transition(m.toggle))
-        .transition_for(AnimProp::Transform, Transition(m.toggle));
-    Element::stack(Axis::Horizontal, vec![mark])
-        .fill(if checked {
-            theme.palette.primary
-        } else {
-            theme.palette.surface
-        })
-        .transition_for(AnimProp::Fill, Transition(m.state))
-        .border(theme.palette.border, 1.0)
-        .radius(theme.radius / 2.0)
-        .width(22.0)
-        .height(22.0)
-        .align(Align::Center, Align::Center)
-        .on_tap(cx, on_toggle)
-        .checked(checked)
-        // Not named by its check mark; the label next to it names it.
-        .a11y_label("")
-}
-
-/// An on/off switch: a pill track with a knob that sits right when `on`
-/// (track tinted with the primary color) and left when off. Tapping calls
-/// `on_toggle`.
-pub fn switch<S>(cx: &mut Cx<S>, on: bool, on_toggle: impl FnMut(&mut S) + 'static) -> Element {
-    let theme = &theme_of(cx);
-    let control = NativeControl::Switch { on };
-    if let Some(deco) = theme.native_deco(control) {
-        return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
-            .on_tap(cx, on_toggle)
-            .role(Role::Switch)
-            .checked(on);
-    }
-    let knob = Element::boxed(BoxStyle {
-        fill: Some(Color::WHITE),
-        radius: 8.0,
-        border: None,
-    })
-    .width(16.0)
-    .height(16.0);
-    // The knob sits after a lead that is as wide as its travel when on (40
-    // wide, less 3 of padding a side and the knob's 16) and empty when off,
-    // so the lead's width slides it over on the theme's toggle motion.
-    let m = theme.motion;
-    let lead = Element::stack(Axis::Horizontal, Vec::new())
-        .width(if on { 18.0 } else { 0.0 })
-        .transition_for(AnimProp::Width, Transition(m.toggle));
-    Element::stack(Axis::Horizontal, vec![lead, knob])
-        .fill(if on {
-            theme.palette.primary
-        } else {
-            theme.palette.border
-        })
-        .transition_for(AnimProp::Fill, Transition(m.state))
-        .radius(11.0)
-        .width(40.0)
-        .height(22.0)
-        .padding(Insets::uniform(3.0))
-        .on_tap(cx, on_toggle)
-        .role(Role::Switch)
-        .checked(on)
-}
-
 /// A horizontal slider with `value` in 0..=1. Dragging anywhere on the track
 /// calls `on_change` with the new fractional position. Default width 160 px;
 /// override with `.width(..)`.
@@ -1329,55 +1269,6 @@ pub fn swatch(color: Color, size: f64, radius: f64) -> Element {
     })
     .width(size)
     .height(size)
-}
-
-/// A radio button: a circle filled with the primary color when `selected`.
-/// Tapping calls `on_select`. Assistive technologies see a radio button,
-/// checked while `selected`; put a group of them in a row or column made a
-/// [`FocusGroup::Select`](crate::core::FocusGroup::Select)
-/// [`focus_group`](Element::focus_group) for the arrow keys to move between
-/// them.
-pub fn radio<S>(
-    cx: &mut Cx<S>,
-    selected: bool,
-    on_select: impl FnMut(&mut S) + 'static,
-) -> Element {
-    let theme = &theme_of(cx);
-    let control = NativeControl::Radio { selected };
-    if let Some(deco) = theme.native_deco(control) {
-        return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
-            .on_tap(cx, on_select)
-            .role(Role::RadioButton)
-            .checked(selected);
-    }
-    // Like the checkbox's mark, the dot is always there, faded out and
-    // shrunk while unselected.
-    let m = theme.motion;
-    let dot = Element::boxed(BoxStyle {
-        fill: Some(theme.palette.primary),
-        radius: 5.0,
-        border: None,
-    })
-    .width(10.0)
-    .height(10.0);
-    let dot = if selected {
-        dot
-    } else {
-        dot.opacity(0.0).transform(Transform::IDENTITY.scale(0.2))
-    };
-    let dot = dot
-        .transition_for(AnimProp::Opacity, Transition(m.toggle))
-        .transition_for(AnimProp::Transform, Transition(m.toggle));
-    Element::stack(Axis::Horizontal, vec![dot])
-        .fill(theme.palette.surface)
-        .border(theme.palette.border, 1.0)
-        .radius(11.0) // half the size → a circle
-        .width(22.0)
-        .height(22.0)
-        .align(Align::Center, Align::Center)
-        .on_tap(cx, on_select)
-        .role(Role::RadioButton)
-        .checked(selected)
 }
 
 /// A horizontal tab strip (segmented control): one cell per label, the

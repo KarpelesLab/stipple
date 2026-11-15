@@ -2520,6 +2520,85 @@ impl<S: 'static> App<S> {
         self.pane_click_at(0, pos)
     }
 
+    /// The first element of the primary window, in reading order, with
+    /// `role` and `name`, as [assistive technologies](Self::accessibility_tree)
+    /// see it: where it is (its `bounds`), whether it's checked, focused,
+    /// selected. A text field is also found by its
+    /// [`placeholder`](crate::core::Element::placeholder). For tests:
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let mut app = App::new(0, |n: &i32, cx: &mut Cx<i32>| {
+    ///     column(vec![
+    ///         button(cx, "Add").on_tap(cx, |n| *n += 1),
+    ///         label(cx, format!("Count: {n}")),
+    ///     ])
+    /// });
+    /// assert!(app.click(Role::Button, "Add"));
+    /// assert!(app.find_text("Count: 1").is_some());
+    /// ```
+    ///
+    /// It looks in the window as the state now is: a change since the last
+    /// frame is laid out first (without drawing a frame).
+    pub fn find(&mut self, role: crate::core::Role, name: &str) -> Option<crate::core::AccessNode> {
+        self.find_all(role, name).into_iter().next()
+    }
+
+    /// Every element of the primary window with `role` and `name`, in
+    /// reading order (see [`find`](Self::find)): the second Delete button
+    /// is `app.find_all(Role::Button, "Delete")[1]`.
+    pub fn find_all(
+        &mut self,
+        role: crate::core::Role,
+        name: &str,
+    ) -> Vec<crate::core::AccessNode> {
+        self.find_where(|n| {
+            n.role == role && (n.name == name || n.placeholder.as_deref() == Some(name))
+        })
+    }
+
+    /// The first element of the primary window named `text`, whatever its
+    /// role: a label showing it, or a button, checkbox or tab it names (see
+    /// [`find`](Self::find)).
+    pub fn find_text(&mut self, text: &str) -> Option<crate::core::AccessNode> {
+        self.find_where(|n| n.name == text).into_iter().next()
+    }
+
+    /// Click the middle of the first element with `role` and `name` (see
+    /// [`find`](Self::find)), as [`click_at`](Self::click_at) does. Returns
+    /// whether there was one, and the click did something with it (ran a
+    /// handler, moved focus).
+    pub fn click(&mut self, role: crate::core::Role, name: &str) -> bool {
+        match self.find(role, name) {
+            Some(node) => self.click_at(node.bounds.center()),
+            None => false,
+        }
+    }
+
+    /// The primary window's accessibility nodes that `matches`, its layout
+    /// brought up to date first.
+    fn find_where(
+        &mut self,
+        matches: impl Fn(&crate::core::AccessNode) -> bool,
+    ) -> Vec<crate::core::AccessNode> {
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            ..
+        } = self;
+        panes[0].ensure_tree(state, theme, font.get());
+        let Some(tree) = panes[0].accessibility_tree() else {
+            return Vec::new();
+        };
+        tree.descendants()
+            .into_iter()
+            .filter(|n| matches(n))
+            .cloned()
+            .collect()
+    }
+
     /// Deliver committed `text` to the primary window's focused element.
     pub fn type_text(&mut self, text: &str) -> bool {
         self.pane_type_text(0, text)
@@ -4150,6 +4229,7 @@ fn map_key_for(code: KeyCode, modifiers: Modifiers, mac: bool) -> Option<KeyInpu
 pub mod prelude {
     pub use crate::anim::SpringParams;
     pub use crate::anim::{Easing, Spring, Tween};
+    pub use crate::core::Role;
     pub use crate::core::{
         Align, Anchor, AppHandle, BoxStyle, Cx, Element, KeyInput, OverlaySpec, TimerId, View,
     };
@@ -4176,8 +4256,8 @@ pub mod prelude {
     pub use crate::style::Theme;
     pub use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Typography};
     pub use crate::widgets::{
-        Button, EditBuffer, TextInput, Variant, button, checkbox, column, dialog, divider, grid,
-        heading, label, open_menu, panel, paragraph, progress_bar, radio, row, scroll,
+        Button, EditBuffer, TextInput, Toggle, Variant, button, checkbox, column, dialog, divider,
+        grid, heading, label, open_menu, panel, paragraph, progress_bar, radio, row, scroll,
         scroll_horizontal, slider, spacer, spinner, swatch, switch, tabs, text_area, text_field,
         tooltip, viewport,
     };
@@ -4608,10 +4688,120 @@ mod tests {
     }
 
     #[test]
+    fn a_labeled_toggle_is_named_by_and_tapped_through_its_label() {
+        #[derive(Default)]
+        struct Form {
+            milk: bool,
+            dark: bool,
+            size: u8,
+        }
+        let mut app = App::new(Form::default(), |s: &Form, cx: &mut Cx<Form>| {
+            crate::widgets::column(vec![
+                crate::widgets::checkbox(cx, "Buy milk", s.milk, |s| s.milk = !s.milk),
+                crate::widgets::switch(cx, "Dark", s.dark, |s| s.dark = !s.dark),
+                crate::widgets::radio(cx, "Large", s.size == 1, |s| s.size = 1),
+                crate::widgets::Toggle::checkbox("Unseen", false)
+                    .label_visible(false)
+                    .view(cx),
+            ])
+            .align(crate::core::Align::Start, crate::core::Align::Start)
+        })
+        .logical_size(Size::new(300.0, 200.0));
+        let Some(font) = crate::render::Font::system_default() else {
+            return; // the labels' extent needs text metrics
+        };
+        app = app.font(font);
+        use crate::core::Role;
+        for (role, name) in [
+            (Role::CheckBox, "Buy milk"),
+            (Role::Switch, "Dark"),
+            (Role::RadioButton, "Large"),
+        ] {
+            let node = app.find(role, name).unwrap();
+            assert_eq!(node.checked, Some(false), "{name}");
+            assert!(node.children.is_empty(), "{name}: the label is part of it");
+            assert!(node.bounds.width() > 60.0, "{name}: {:?}", node.bounds);
+            // A click near the far end lands on the label (the switch's
+            // label is before it: its near end).
+            let b = node.bounds;
+            let x = if role == Role::Switch {
+                b.min_x() + 4.0
+            } else {
+                b.max_x() - 4.0
+            };
+            assert!(app.click_at(Point::new(x, b.center().y)), "{name}");
+            assert_eq!(app.find(role, name).unwrap().checked, Some(true), "{name}");
+        }
+        let s = app.state();
+        assert!(s.milk && s.dark && s.size == 1);
+        // Unseen, the label still names it, and the box is all there is.
+        let unseen = app.find(Role::CheckBox, "Unseen").unwrap();
+        assert_eq!(unseen.bounds.width(), 22.0);
+        assert!(app.find_text("Unseen").is_some());
+        assert!(!app.click(Role::CheckBox, "Missing"));
+    }
+
+    #[test]
+    fn hovering_a_labeled_checkbox_lights_its_box_not_its_label() {
+        let mut app = App::new(false, |on: &bool, cx: &mut Cx<bool>| {
+            let check = crate::widgets::checkbox(cx, "Label", *on, |on| *on = !*on);
+            crate::widgets::column(vec![check])
+                .align(crate::core::Align::Start, crate::core::Align::Start)
+        })
+        .theme(Theme::light())
+        .logical_size(Size::new(200.0, 60.0));
+        let rest = app.render_once();
+        let b = app
+            .find(crate::core::Role::CheckBox, "Label")
+            .unwrap()
+            .bounds;
+        // In the gap between the 22-pixel box and the label.
+        let gap = Point::new(b.min_x() + 25.0, b.center().y);
+        let in_box = Point::new(b.min_x() + 11.0, b.center().y);
+        app.hover_at(gap);
+        let mut lit = app.render_once();
+        for _ in 0..20 {
+            if !app.animating() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            lit = app.render_once();
+        }
+        let px = |pm: &crate::render::Pixmap, p: Point| pm.pixel(p.x as u32, p.y as u32);
+        assert_ne!(px(&rest, in_box), px(&lit, in_box), "the box lights up");
+        assert_eq!(px(&rest, gap), px(&lit, gap), "the rest doesn't");
+    }
+
+    #[test]
+    fn find_and_click_bring_the_layout_up_to_date() {
+        let mut app = App::new(0u32, |n: &u32, cx: &mut Cx<u32>| {
+            let mut items = vec![crate::widgets::button(cx, "Add").on_tap(cx, |n| *n += 1)];
+            for i in 0..*n {
+                items.push(crate::widgets::button(cx, "Delete").on_tap(cx, move |n| *n = i));
+            }
+            items.push(crate::widgets::label(cx, format!("{n} rows")));
+            crate::widgets::column(items)
+        })
+        .logical_size(Size::new(200.0, 300.0));
+        use crate::core::Role;
+        // No frame drawn yet: find lays the window out.
+        assert!(app.find_text("0 rows").is_some());
+        assert!(app.click(Role::Button, "Add"));
+        assert!(app.click(Role::Button, "Add"));
+        assert!(app.click(Role::Button, "Add"));
+        assert!(app.find_text("3 rows").is_some());
+        assert_eq!(app.find_all(Role::Button, "Delete").len(), 3);
+        let second = app.find_all(Role::Button, "Delete")[1].bounds.center();
+        assert!(app.click_at(second));
+        assert_eq!(*app.state(), 1);
+        assert_eq!(app.find_all(Role::Button, "Delete").len(), 1);
+    }
+
+    #[test]
     fn checkbox_toggles_on_click() {
         let mut app = App::new(Toggles::default(), |s: &Toggles, cx: &mut Cx<Toggles>| {
             // A checkbox filling the window for a predictable hit point.
-            crate::widgets::checkbox(cx, s.on, |t| t.on = !t.on)
+            crate::widgets::checkbox(cx, "On", s.on, |t| t.on = !t.on)
                 .width(100.0)
                 .height(100.0)
         })
@@ -4815,7 +5005,7 @@ mod tests {
                         .on_tap(cx, move |s| s.push(i))
                 })
                 .collect();
-            crate::widgets::scroll(cx, 200.0).children(rows)
+            crate::widgets::scroll(cx).height(200.0).children(rows)
         })
         .no_font()
         .logical_size(Size::new(200.0, 200.0))

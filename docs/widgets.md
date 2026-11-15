@@ -1,8 +1,8 @@
 # Widgets
 
 Widgets are plain functions that take the view's `cx` first and return an
-`Element`: `label(cx, "Hi")`, `button(cx, "Save")`, `checkbox(cx, checked,
-on_toggle)` and so on (see the
+`Element`: `label(cx, "Hi")`, `button(cx, "Save")`, `checkbox(cx, "Wi-Fi",
+on, on_toggle)` and so on (see the
 [API docs](https://docs.rs/stipple/latest/stipple/widgets/)). They read their
 colors and metrics from the theme `cx` carries, and the handlers that follow
 `cx` get their state type from it, so closures need no annotations:
@@ -13,10 +13,9 @@ struct Todo { draft: TextInput, items: Vec<String>, done: Vec<bool> }
 fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
     let mut rows = vec![heading(cx, "Todo")];
     for (i, item) in state.items.iter().enumerate() {
-        rows.push(row(vec![
-            checkbox(cx, state.done[i], move |s| s.done[i] = !s.done[i]),
-            label(cx, item),
-        ]));
+        rows.push(checkbox(cx, item, state.done[i], move |s| {
+            s.done[i] = !s.done[i]
+        }));
     }
     rows.push(row(vec![
         text_field(cx, &state.draft, |s| &mut s.draft)
@@ -33,6 +32,16 @@ fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
   `Button::new("Delete").variant(Variant::Danger).view(cx)`,
   `Button::from_content(icon).variant(Variant::Ghost).view(cx)`. Make any of
   them do something with `.on_tap(cx, |s| …)`.
+- **Checkboxes, switches and radio buttons** take their label:
+  `checkbox(cx, "Show hidden files", checked, |s| …)`,
+  `switch(cx, "Sync", on, |s| …)`, `radio(cx, "Large", selected, |s| …)`.
+  The label is drawn next to the control (after a checkbox or radio button,
+  before a switch, whose knob then sits at the end of a stretched row), a
+  click on it toggles the control, and it is the control's accessible name.
+  When something else shows what the control is for (a checkbox in each
+  table row, a settings row's caption), `Toggle` hides the label and keeps
+  the name: `Toggle::checkbox("Select row 3", picked).label_visible(false)
+  .view(cx).on_tap(cx, |s| …)`.
 - **Text.** `label` is a line of body text, `heading` a larger one, and
   `paragraph` body text that wraps.
 - **Text input.** `text_field` (one line) and `text_area` (several) edit a
@@ -48,7 +57,7 @@ fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
   Containers that need `cx` (`panel`, `toolbar`, `scroll`,
   `scroll_horizontal`, and the game UI's `menu_list` and `setting_row`)
   return their frame, and you add the children after it:
-  `panel(cx).children(vec![…])`, `scroll(cx, 300.0).child(list)`. The frame
+  `panel(cx).children(vec![…])`, `scroll(cx).child(list)`. The frame
   is built before the children, so they can use `cx` too. `split_pane`
   takes its two `.panes(first, second)`, and `dialog` its content and
   `.actions(…)` before `.open(cx)`.

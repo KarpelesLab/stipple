@@ -283,6 +283,7 @@ mod tests {
             ghost: false,
             offstage: false,
             hit_through: false,
+            indicator: false,
             children,
         }
     }
@@ -327,6 +328,7 @@ mod tests {
             ghost: false,
             offstage: false,
             hit_through: false,
+            indicator: false,
             children: Vec::new(),
         }
     }

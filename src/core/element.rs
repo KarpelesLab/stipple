@@ -315,6 +315,10 @@ pub struct Element {
     /// it; the elements inside it still take theirs. Set via
     /// [`Element::hit_through`].
     pub(crate) hit_through: bool,
+    /// The part of a labeled control (a checkbox's box, a switch's track)
+    /// that shows the control's hover and press, and that an OS-drawn
+    /// control draws in the state of the tappable element around it.
+    pub(crate) indicator: bool,
     /// Interaction-state styling and motion: the element's
     /// [`key`](Element::key), per-state overrides
     /// ([`hovered`](Element::hovered), [`drag_over`](Element::drag_over)…),
@@ -353,6 +357,7 @@ impl Element {
             opacity: 1.0,
             offstage: false,
             hit_through: false,
+            indicator: false,
             reactive: None,
             kind: ElementKind::Leaf,
         }
@@ -386,6 +391,7 @@ impl Element {
             opacity: 1.0,
             offstage: false,
             hit_through: false,
+            indicator: false,
             reactive: None,
             kind: ElementKind::Text {
                 text: text.into(),
@@ -432,6 +438,7 @@ impl Element {
             opacity: 1.0,
             offstage: false,
             hit_through: false,
+            indicator: false,
             reactive: None,
             kind: ElementKind::Viewport { id },
         }
@@ -467,6 +474,7 @@ impl Element {
             opacity: 1.0,
             offstage: false,
             hit_through: false,
+            indicator: false,
             reactive: None,
             kind: ElementKind::Image {
                 source: source.into(),
@@ -510,6 +518,7 @@ impl Element {
             opacity: 1.0,
             offstage: false,
             hit_through: false,
+            indicator: false,
             reactive: None,
             kind: ElementKind::Stack {
                 axis,
@@ -1147,7 +1156,8 @@ impl Element {
     }
 
     /// Apply `f` to the [`TextStyle`] of this text element, or of every text
-    /// element inside this container.
+    /// element inside this container, except a labeled control's box: a
+    /// checkbox struck through strikes its label, not its check mark.
     fn text_style(mut self, f: &dyn Fn(&mut TextStyle)) -> Self {
         fn set(el: &mut Element, f: &dyn Fn(&mut TextStyle)) {
             match &mut el.kind {
@@ -1155,7 +1165,7 @@ impl Element {
                 ElementKind::Stack { children, .. }
                 | ElementKind::Grid { children, .. }
                 | ElementKind::Layers { children, .. } => {
-                    for c in children {
+                    for c in children.iter_mut().filter(|c| !c.indicator) {
                         set(c, f);
                     }
                 }
@@ -1318,6 +1328,13 @@ impl Element {
         self
     }
 
+    /// Make this the part of a labeled control that shows the control's
+    /// hover and press (see the `indicator` field).
+    pub(crate) fn indicator(mut self) -> Self {
+        self.indicator = true;
+        self
+    }
+
     /// Clip this element's children to its painted bounds (e.g. for an overlay
     /// panel). [`scrollable`](Element::scrollable) sets this implicitly.
     pub fn clip(mut self) -> Self {
@@ -1327,8 +1344,11 @@ impl Element {
 
     /// Make this element a scroll container for `id`: its children lay out at
     /// natural size (overflowing), are clipped to its bounds, and wheel events
-    /// over it scroll the app's offset for `id`. Give it a fixed height (e.g.
-    /// `.height(..)`) to define the viewport.
+    /// over it scroll the app's offset for `id`. A horizontal stack scrolls
+    /// sideways, anything else vertically. Unless [`height`](Element::height)
+    /// (or [`width`](Element::width), sideways) fixes the viewport's length,
+    /// it fills its parent as [`widgets::scroll`](crate::widgets::scroll)
+    /// describes.
     pub fn scrollable(mut self, id: ScrollId) -> Self {
         self.scroll = Some(id);
         self.clip = true;

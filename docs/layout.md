@@ -148,6 +148,24 @@ cells. Content measures against the bounded space, so a paragraph with
 `.max_width(260.0)` wraps at 260 even in a wider container. When a minimum is
 larger than the maximum, the minimum wins, as in CSS.
 
+## Scroll containers
+
+A `scroll(cx)` list or a `scroll_horizontal(cx)` strip lays its content out
+at its natural length and clips it to the viewport. The viewport's length
+along the scroll direction is `.height(h)` (`.width(w)` sideways) when one
+is set; otherwise it follows the parent:
+
+- **In a stack along the same axis** (a list in a column, a strip in a row)
+  it grows into the free space, as with `.grow(1.0)`, up to its
+  `max_height`, and when its siblings don't fit, it shrinks first (down to
+  100 pixels, or its content's length if less; `min_height` sets another
+  floor). A list under a toolbar takes the rest of the window.
+- **Anywhere else** (an auto-sized dialog or popover, a row holding a
+  vertical list) it is as long as its content, but no longer than the space
+  its parent was given: a short list shows whole, a long one scrolls in the
+  room there is. It never collapses to nothing for lack of a size, and never
+  grows past its parent for a long list.
+
 ## Right-to-left layouts
 
 `Theme::layout_direction(LayoutDirection::Rtl)`, or

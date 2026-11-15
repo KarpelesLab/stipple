@@ -62,11 +62,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         ),
     ])
     .gap(theme.spacing.sm);
-    let busy = row(vec![
-        checkbox(cx, state.busy, |s| s.busy = !s.busy),
-        label(cx, "Work is running (closing asks first)"),
-    ])
-    .gap(theme.spacing.sm);
+    let busy = checkbox(
+        cx,
+        "Work is running (closing asks first)",
+        state.busy,
+        |s| s.busy = !s.busy,
+    );
     let beep = button(cx, "Beep").on_tap(cx, {
         let handle = handle.clone();
         move |_| handle.beep()

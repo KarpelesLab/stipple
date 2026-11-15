@@ -42,7 +42,7 @@ fn view(_state: &(), cx: &mut Cx<()>) -> Element {
         })
         .collect();
     let content = column(items).gap(theme.spacing.sm);
-    let viewport = scroll(cx, 240.0).child(content).width(340.0);
+    let viewport = scroll(cx).height(240.0).child(content).width(340.0);
 
     let card = panel(cx)
         .children(vec![label(cx, "Scrollable list"), divider(cx), viewport])

@@ -429,7 +429,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stipple::core::Role;
 
     /// Where CI (visual.yml) clicks: the "build" tab's ×, the color button,
     /// and the drawn alert's "Cancel".
@@ -456,7 +455,7 @@ mod tests {
     #[test]
     fn closing_the_busy_tab_asks_first() {
         let Some(mut app) = app() else { return };
-        let tab = find(&app, |n| n.role == Role::Tab && n.name == "build").expect("the build tab");
+        let tab = app.find(Role::Tab, "build").expect("the build tab").bounds;
         // The × sits at the tab's end.
         let close = Rect::from_xywh(
             tab.max_x() - 24.0,
@@ -468,9 +467,7 @@ mod tests {
         assert!(app.click_at(CLOSE_BUILD_AT));
         app.run_pending();
         app.render_once();
-        let cancel =
-            find(&app, |n| n.role == Role::Button && n.name == "Cancel").expect("the drawn alert");
-        assert!(app.click_at(cancel.center()));
+        assert!(app.click(Role::Button, "Cancel"), "the drawn alert");
         assert_eq!(app.state().sessions.len(), 3);
         // Now press Close (Enter, the default).
         assert!(app.click_at(CLOSE_BUILD_AT));
@@ -489,8 +486,8 @@ mod tests {
         assert!(app.click_at(COLOR_AT));
         assert!(app.state().tint.is_open());
         app.render_once();
-        let swatch = find(&app, |n| n.name == "#0090ff").expect("a blue swatch");
-        assert!(app.click_at(swatch.center()));
+        let swatch = app.find_text("#0090ff").expect("a blue swatch");
+        assert!(app.click_at(swatch.bounds.center()));
         assert_eq!(
             app.state().sessions[0].color,
             Some(Color::rgb(0, 0x90, 0xff))
@@ -500,15 +497,11 @@ mod tests {
     #[test]
     fn connect_without_a_password_shows_an_error() {
         let Some(mut app) = app() else { return };
-        let connect = find(&app, |n| n.name == "Connect").unwrap();
-        assert!(app.click_at(connect.center()));
+        let connect = app.find_text("Connect").unwrap();
+        assert!(app.click_at(connect.bounds.center()));
         app.run_pending();
         app.render_once();
-        assert!(
-            find(&app, |n| n.role == Role::Dialog
-                && n.name == "Stipple Sessions")
-            .is_some()
-        );
+        assert!(app.find(Role::Dialog, "Stipple Sessions").is_some());
         app.press_key(KeyInput::Escape);
         assert_eq!(
             app.state().log.last().unwrap(),

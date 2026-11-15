@@ -162,7 +162,7 @@ fn near(a: f64, b: f64) -> bool {
 #[test]
 fn a_switch_slides_its_thumb_and_fades_its_track() {
     let mut rig = Rig::new();
-    let switch_at = |on: bool| move |cx: &mut Cx<()>| switch(cx, on, |_: &mut ()| {});
+    let switch_at = |on: bool| move |cx: &mut Cx<()>| switch(cx, "", on, |_: &mut ()| {});
     let t0 = Duration::from_secs(10);
     let (mut el, _, moving) = rig.build(t0, switch_at(false));
     assert!(!moving, "at rest: no frames");
@@ -192,7 +192,7 @@ fn a_switch_slides_its_thumb_and_fades_its_track() {
 #[test]
 fn a_check_mark_pops_in() {
     let mut rig = Rig::new();
-    let at = |on: bool| move |cx: &mut Cx<()>| checkbox(cx, on, |_: &mut ()| {});
+    let at = |on: bool| move |cx: &mut Cx<()>| checkbox(cx, "", on, |_: &mut ()| {});
     let t0 = Duration::from_secs(10);
     let (mut el, _, _) = rig.build(t0, at(false));
     assert_eq!(kids(&mut el)[0].opacity, 0.0, "hidden while unchecked");
@@ -400,12 +400,12 @@ fn nothing_moves_at_rest() {
                     .variant(Variant::Ghost)
                     .view(cx)
                     .on_tap(cx, |_| {}),
-                switch(cx, true, |_| {}),
-                switch(cx, false, |_| {}),
-                checkbox(cx, true, |_| {}),
-                checkbox(cx, false, |_| {}),
-                radio(cx, true, |_| {}),
-                radio(cx, false, |_| {}),
+                switch(cx, "switch true", true, |_| {}),
+                switch(cx, "switch false", false, |_| {}),
+                checkbox(cx, "checkbox true", true, |_| {}),
+                checkbox(cx, "checkbox false", false, |_| {}),
+                radio(cx, "radio true", true, |_| {}),
+                radio(cx, "radio false", false, |_| {}),
                 tabs(cx, &["A", "B"], 0, |_, _| {}),
                 select(cx, &["x", "y"], &st.pick, |s| &mut s.pick),
             ])

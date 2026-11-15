@@ -112,8 +112,8 @@ fn folder_name(id: u64) -> &'static str {
 /// y = 24 + 36k .. +28 (what the checks look at).
 fn mirrored_view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     let line = |children: Vec<Element>| row(children).gap(8.0).height(ROW);
-    let checkbox = checkbox(cx, state.agree, |s| s.agree = !s.agree);
-    let switch = switch(cx, state.wifi, |s| s.wifi = !s.wifi);
+    let checkbox = checkbox(cx, "Checkbox label", state.agree, |s| s.agree = !s.agree);
+    let switch = switch(cx, "Switch label", state.wifi, |s| s.wifi = !s.wifi);
     let slider = slider(cx, state.volume, |s, v| s.volume = v);
     let tabs = tabs(cx, &["One", "Two", "Three"], state.tab, |s, i| {
         s.tab = i;
@@ -129,9 +129,10 @@ fn mirrored_view(state: &Demo, cx: &mut Cx<Demo>) -> Element {
     column(vec![
         // 0: Latin text in a mirrored UI starts on the right.
         line(vec![heading(cx, "Mirrored UI")]),
-        // 1, 2: the control comes first, so it sits rightmost.
-        line(vec![checkbox, label(cx, "Checkbox label")]),
-        line(vec![switch, label(cx, "Switch label")]),
+        // 1, 2: a checkbox comes before its label, so it sits rightmost;
+        // a switch after its label, so it sits left of it.
+        line(vec![checkbox]),
+        line(vec![switch]),
         // 3, 4: filled from the right.
         line(vec![progress_bar(cx, 0.3).width(592.0)]),
         line(vec![slider.width(592.0)]),

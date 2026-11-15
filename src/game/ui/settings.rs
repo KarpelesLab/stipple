@@ -130,7 +130,11 @@ pub fn toggle_row<S>(
 ) -> Element {
     let theme = &crate::widgets::theme_of(cx);
     let label = label.into();
-    let switch = crate::widgets::switch(cx, on, on_toggle).a11y_label(label.clone());
+    // The row shows the label: the switch's own stays unseen.
+    let switch = crate::widgets::Toggle::switch(label.clone(), on)
+        .label_visible(false)
+        .view(cx)
+        .on_tap(cx, on_toggle);
     let p = &theme.palette;
     let state = Element::text(
         if on { "On" } else { "Off" },

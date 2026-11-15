@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Test helpers on `App` that find elements as a screen reader knows them:
+  `app.find(Role::CheckBox, "Buy milk")` (where it is, whether it's checked),
+  `find_all` (every match), `find_text("1 left")` and
+  `app.click(Role::Button, "Add")`, which clicks the element's middle. They
+  lay a changed state out first, so no `render_once` is needed between a
+  change and a lookup. `Role` is in the prelude.
+- `Toggle`, the spec behind `checkbox`, `switch` and `radio`, for a control
+  whose label isn't shown (`.label_visible(false)`) but still names it.
+
+### Changed (breaking)
+
+- `scroll(cx)` and `scroll_horizontal(cx)` take no length: a scroll
+  container fills the space its column (or, sideways, its row) leaves free,
+  shrinks first when its siblings need the room (down to 100 px or its
+  content), and elsewhere is as long as its content up to the space there
+  is. `.height(h)` / `.width(w)` fix the length, as for any element.
+  `scroll(cx, 200.0).grow(1.0)` is now `scroll(cx)`.
+- `checkbox`, `switch` and `radio` take a label:
+  `checkbox(cx, "Buy milk", checked, on_toggle)`. It is drawn next to the
+  control (after a checkbox or radio button, before a switch), a click on it
+  toggles the control, and it is the control's accessible name. Text styles
+  set on the control (`.strikethrough()`, `.weight(..)`) reach the label,
+  not the check mark.
+
 ## [0.0.6](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.5...stipple-v0.0.6) - 2026-11-15
 
 ### Added

@@ -12,27 +12,17 @@ struct Gallery {
     name: TextInput,
 }
 
-fn labeled<S>(cx: &Cx<S>, control: Element, text: &str) -> Element {
-    let theme = cx.theme();
-    row(vec![control, label(cx, text)]).gap(theme.spacing.sm)
-}
-
 fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
     let theme = *cx.theme();
     let radios: Vec<Element> = ["Small", "Large"]
         .iter()
         .enumerate()
-        .map(|(i, text)| {
-            let control = radio(cx, state.choice == i, move |s| {
-                s.choice = i;
-            });
-            labeled(cx, control, text)
-        })
+        .map(|(i, text)| radio(cx, *text, state.choice == i, move |s| s.choice = i))
         .collect();
-    let check = checkbox(cx, state.checked, |s| {
+    let check = checkbox(cx, "Show hidden files", state.checked, |s| {
         s.checked = !s.checked;
     });
-    let toggle = switch(cx, state.on, |s| s.on = !s.on);
+    let toggle = switch(cx, "Sync", state.on, |s| s.on = !s.on);
     let level = slider(cx, state.level, |s, v| s.level = v);
     let name = text_field(cx, &state.name, |s| &mut s.name);
     column(vec![
@@ -43,9 +33,9 @@ fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
             Button::new("Cancel").variant(Variant::Secondary).view(cx),
         ])
         .gap(theme.spacing.sm),
-        labeled(cx, check, "Show hidden files"),
+        check,
         row(radios).gap(theme.spacing.lg),
-        labeled(cx, toggle, "Sync"),
+        toggle,
         level,
         progress_bar(cx, state.level),
     ])

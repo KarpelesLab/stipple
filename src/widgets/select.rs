@@ -278,7 +278,7 @@ fn option_list<S>(
     let mut list = Element::stack(Axis::Vertical, rows).gap(2.0);
     if many {
         let height = MAX_VISIBLE as f64 * (row_height + 2.0);
-        list = scroll(cx, height).child(list);
+        list = scroll(cx).height(height).child(list);
     }
     Element::stack(Axis::Vertical, vec![list])
         .fill(p.surface)

@@ -1432,6 +1432,9 @@ pub struct LayoutNode {
     /// own handlers aren't hit, and as an overlay layer it takes no press
     /// that none of its children take.
     pub(crate) hit_through: bool,
+    /// The part of a labeled control that shows its hover and press (see
+    /// `Element::indicator`).
+    pub(crate) indicator: bool,
     pub(crate) children: Vec<LayoutNode>,
 }
 
@@ -1470,6 +1473,7 @@ impl LayoutNode {
             ghost: false,
             offstage: false,
             hit_through: false,
+            indicator: false,
             children,
         }
     }
@@ -2046,6 +2050,7 @@ mod tests {
             ghost: false,
             offstage: false,
             hit_through: false,
+            indicator: false,
             children: Vec::new(),
         }
     }
@@ -2110,6 +2115,7 @@ mod tests {
             ghost: false,
             offstage: false,
             hit_through: false,
+            indicator: false,
             children: vec![
                 leaf(
                     Rect::from_xywh(10.0, 10.0, 30.0, 30.0),

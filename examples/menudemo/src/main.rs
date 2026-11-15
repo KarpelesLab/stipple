@@ -271,19 +271,10 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stipple::core::Role;
 
     /// Where CI (visual.yml) clicks: the File title and the canvas.
     const FILE_AT: Point = Point::new(24.0, 14.0);
     const CANVAS_AT: Point = Point::new(320.0, 300.0);
-
-    fn find(app: &App<State>, role: Role, name: &str) -> Option<Rect> {
-        let tree = app.accessibility_tree()?;
-        tree.descendants()
-            .into_iter()
-            .find(|n| n.role == role && n.name == name)
-            .map(|n| n.bounds)
-    }
 
     #[test]
     fn the_targets_sit_where_ci_clicks() {
@@ -292,17 +283,20 @@ mod tests {
             return; // positions depend on text metrics
         }
         app.render_once();
-        let file = find(&app, Role::MenuItem, "File").expect("the drawn menu bar");
+        let file = app
+            .find(Role::MenuItem, "File")
+            .expect("the drawn menu bar")
+            .bounds;
         assert!(file.contains(FILE_AT), "{file:?}");
         assert!(app.click_at(FILE_AT));
         app.render_once();
-        assert!(find(&app, Role::Menu, "File").is_some());
+        assert!(app.find(Role::Menu, "File").is_some());
         app.press_key_code(KeyCode::Escape, Modifiers::default());
         app.press_key_code(KeyCode::Escape, Modifiers::default());
 
         assert!(app.right_click_at(CANVAS_AT));
         app.render_once();
-        assert!(find(&app, Role::Menu, "Canvas").is_some());
+        assert!(app.find(Role::Menu, "Canvas").is_some());
         // CI picks "Clear" with Down, Down, Enter after adding two items.
         app.press_key_code(KeyCode::Escape, Modifiers::default());
         let cmd = Modifiers::COMMAND;

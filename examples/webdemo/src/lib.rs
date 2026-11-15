@@ -113,11 +113,7 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
         status,
         label(cx, format!("Ticks: {}", state.ticks)),
         label(cx, file),
-        row(vec![
-            checkbox(cx, state.checked, |s| s.checked = !s.checked),
-            label(cx, "A checkbox"),
-        ])
-        .gap(theme.spacing.sm),
+        checkbox(cx, "A checkbox", state.checked, |s| s.checked = !s.checked),
     ])
     .gap(theme.spacing.md)
     .padding(Insets::uniform(theme.spacing.lg))

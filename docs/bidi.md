@@ -153,8 +153,8 @@ subtree:
 
 Widgets follow:
 
-- `checkbox`, `radio` and `switch` sit right of a label that comes after them
-  in a row; a switch's knob is on the left when on.
+- `checkbox` and `radio` sit right of their label, and a `switch` left of
+  its label; a switch's knob is on the left when on.
 - `slider` and `progress_bar` fill from the right, and dragging a slider
   measures from the right edge.
 - `tabs` and `toolbar`s start on the right; `split_pane`'s first pane is the
