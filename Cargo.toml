@@ -2,7 +2,7 @@
 name = "stipple"
 description = "Stipple: a cross-platform, self-drawn UI toolkit in Rust."
 # Bumped by release-plz (release-plz.toml).
-version = "0.0.8"
+version = "0.0.9"
 edition = "2024"
 # Floor is set by the oxideav stack: its current releases (oxideav-raster
 # 0.1.5, oxideav-ttf 0.1.9, the image and audio decoders) need rustc 1.95.
