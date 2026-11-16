@@ -863,7 +863,11 @@ pub fn color_scheme(dark: bool, accent: i32) {
     let accent = u32::try_from(accent)
         .ok()
         .map(|c| crate::render::Color::rgb((c >> 16) as u8, (c >> 8) as u8, c as u8));
-    let changed = crate::platform::native::set_web_look(SystemLook { dark, accent });
+    let changed = crate::platform::native::set_web_look(SystemLook {
+        dark,
+        accent,
+        overlay_scrollers: None,
+    });
     if changed && HOST.with(|h| h.handler.borrow().is_some()) {
         deliver(Event::ThemeChanged);
     }

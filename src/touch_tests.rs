@@ -28,9 +28,10 @@ fn finger(id: u64, phase: TouchPhase, x: f64, y: f64) -> Touch {
 }
 
 /// A 300×400 window: a strip of 10 chips 100 wide (1000 px, so it scrolls
-/// up to 700 sideways) at the top, inside a list of 20 rows 50 tall, of which
-/// the even ones have a context menu; and below the list, a 300×100 photo
-/// that takes pinches (and taps, as row 99).
+/// up to 712 sideways in the 288 px the list's scroll bar leaves) at the
+/// top, inside a list of 20 rows 50 tall, of which the even ones have a
+/// context menu; and below the list, a 300×100 photo that takes pinches
+/// (and taps, as row 99).
 fn app() -> App<Log> {
     App::new(Log::default(), |_: &Log, cx: &mut Cx<Log>| {
         let chips = (0..10)
@@ -201,14 +202,16 @@ fn a_sideways_drag_scrolls_the_strip_and_a_vertical_one_the_list() {
     app.panes[0].scroll_offsets.insert(LIST, 0.0);
     app.panes[0].dirty = true;
     app.render_once();
+    // (From x 280: the list's scroll bar keeps the 12 px right of it.)
     for _ in 0..3 {
-        app.touch(finger(1, TouchPhase::Started, 290.0, 20.0));
-        app.touch(finger(1, TouchPhase::Moved, 280.0, 20.0));
+        app.touch(finger(1, TouchPhase::Started, 280.0, 20.0));
+        app.touch(finger(1, TouchPhase::Moved, 270.0, 20.0));
         app.touch(finger(1, TouchPhase::Moved, 0.0, 20.0));
         app.touch(finger(1, TouchPhase::Ended, 0.0, 20.0));
         app.render_once();
     }
-    assert_eq!(offset(&app, STRIP), 700.0);
+    // 1000 px of chips in the 288 px the list's scroll bar leaves.
+    assert_eq!(offset(&app, STRIP), 712.0);
 }
 
 #[test]

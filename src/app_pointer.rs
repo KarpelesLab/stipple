@@ -197,6 +197,15 @@ impl<S: 'static> App<S> {
                 pane.ensure_tree(state, theme, font.get());
                 pane.pointer_in = true;
                 pane.last_pointer = position;
+                // A left press on a scroll bar is the bar's.
+                if button == PointerButton::Left
+                    && pane.pointer.capture.is_none()
+                    && pane.scroll_bar_press(theme, position)
+                {
+                    out.redraw = true;
+                    out.done = true;
+                    return out;
+                }
                 let track = &mut pane.pointer;
                 if track.buttons.contains(button) {
                     // Its release never came (the window lost the pointer):
@@ -243,6 +252,11 @@ impl<S: 'static> App<S> {
             } => {
                 pane.ensure_tree(state, theme, font.get());
                 pane.last_pointer = position;
+                if button == PointerButton::Left && pane.scroll_bars.holding() {
+                    out.redraw = pane.scroll_bar_release(theme, position);
+                    out.done = true;
+                    return out;
+                }
                 pane.pointer.buttons = pane.pointer.buttons.without(button);
                 let count = if pane.pointer.last_button == Some(button) {
                     pane.pointer.count
@@ -300,13 +314,24 @@ impl<S: 'static> App<S> {
             }
             Event::PointerMoved { position } => {
                 pane.ensure_tree(state, theme, font.get());
+                // A dragged scroll bar thumb follows the pointer.
+                if pane.scroll_bars.holding() {
+                    pane.last_pointer = position;
+                    out.redraw = pane.scroll_bar_drag(theme, position);
+                    out.done = true;
+                    return out;
+                }
+                out.redraw = pane.scroll_bar_hover(theme, Some(position));
                 match pane.pointer.capture {
                     Some(id) => {
-                        out.redraw =
+                        out.redraw |=
                             pane.send_pointer(state, id, PointerEventKind::Move, None, position, 0);
                     }
-                    None => out.redraw = pane.pointer_hover(state, position),
+                    None => out.redraw |= pane.pointer_hover(state, position),
                 }
+            }
+            Event::PointerLeft if !pane.scroll_bars.holding() => {
+                out.redraw = pane.scroll_bar_hover(theme, None);
             }
             Event::Scroll { delta } => {
                 pane.ensure_tree(state, theme, font.get());

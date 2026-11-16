@@ -112,6 +112,7 @@ fn visuals_equal(a: &LayoutNode, b: &LayoutNode) -> bool {
         && a.caret == b.caret
         && a.selection == b.selection
         && a.preedit == b.preedit
+        && a.scroll_bar == b.scroll_bar
 }
 
 /// `outer_old` / `outer_new` map the parents' layout coordinates to the
@@ -296,6 +297,7 @@ mod tests {
             ghost: false,
             offstage: false,
             hit_through: false,
+            scroll_bar: None,
             indicator: false,
             children,
         }
@@ -342,6 +344,7 @@ mod tests {
             ghost: false,
             offstage: false,
             hit_through: false,
+            scroll_bar: None,
             indicator: false,
             children: Vec::new(),
         }

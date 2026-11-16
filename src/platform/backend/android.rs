@@ -980,6 +980,7 @@ pub(crate) fn system_look() -> crate::platform::native::SystemLook {
         Some(crate::platform::native::SystemLook {
             dark: config.dark,
             accent,
+            overlay_scrollers: None,
         })
     })
     .unwrap_or_default()

@@ -1550,6 +1550,10 @@ pub struct LayoutNode {
     /// The part of a labeled control that shows its hover and press (see
     /// `Element::indicator`).
     pub(crate) indicator: bool,
+    /// A scroll container's scroll bar as this frame draws it over its
+    /// content (see [`core::scroll_bar`](crate::core::scroll_bar)); `None`
+    /// when its content fits, or for any other node.
+    pub(crate) scroll_bar: Option<Box<crate::core::scroll_bar::BarPaint>>,
     pub(crate) children: Vec<LayoutNode>,
 }
 
@@ -1589,6 +1593,7 @@ impl LayoutNode {
             ghost: false,
             offstage: false,
             hit_through: false,
+            scroll_bar: None,
             indicator: false,
             children,
         }
@@ -2167,6 +2172,7 @@ mod tests {
             ghost: false,
             offstage: false,
             hit_through: false,
+            scroll_bar: None,
             indicator: false,
             children: Vec::new(),
         }
@@ -2233,6 +2239,7 @@ mod tests {
             ghost: false,
             offstage: false,
             hit_through: false,
+            scroll_bar: None,
             indicator: false,
             children: vec![
                 leaf(

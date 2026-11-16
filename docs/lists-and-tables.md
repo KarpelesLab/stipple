@@ -2,8 +2,10 @@
 
 `virtual_list`, `table` and `tree` show large data sets by building only the
 rows on screen. A 10,000-row table builds about twenty rows a frame; the scroll
-extent still covers all 10,000. The `tabledemo` example has a 10,000-row table
-and a tree:
+extent still covers all 10,000, and so does the scroll bar: its thumb is
+sized and placed for every row, and dragging it scrolls through them all,
+building the rows it reaches (see [Scroll bars](widgets.md#scroll-bars)).
+The `tabledemo` example has a 10,000-row table and a tree:
 
 ```sh
 cargo run --example tabledemo               # --theme dark | contrast | native

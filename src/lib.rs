@@ -44,6 +44,7 @@ mod app_keys;
 mod app_lifecycle;
 mod app_locale;
 mod app_pointer;
+mod app_scroll_bar;
 mod app_select;
 mod app_touch;
 pub mod audio;
@@ -65,6 +66,8 @@ mod pointer_tests;
 #[cfg(test)]
 mod reactivity_tests;
 pub mod render;
+#[cfg(test)]
+mod scroll_bar_tests;
 #[cfg(test)]
 mod select_tests;
 pub mod style;
@@ -456,6 +459,8 @@ struct Pane<S> {
     touch_epoch: crate::platform::time::Instant,
     // The timer that wakes the loop when a held finger becomes a long press.
     long_press_timer: Option<crate::core::TimerId>,
+    // The scroll bars: hovered, dragged, overlay ones showing.
+    scroll_bars: app_scroll_bar::ScrollBars,
     // Whether the frame just built has overlay layers (they hit-test first).
     overlay_active: bool,
     // The embedded viewport that currently holds input focus (set when its
@@ -598,6 +603,7 @@ impl<S: 'static> Pane<S> {
             touch: Default::default(),
             touch_epoch: crate::platform::time::Instant::now(),
             long_press_timer: None,
+            scroll_bars: Default::default(),
             overlay_active: false,
             input_viewport: None,
             cursor: CursorIcon::Default,
@@ -1237,6 +1243,8 @@ impl<S: 'static> Pane<S> {
     /// the painted [`Scene`].
     fn build_frame(&mut self, state: &S, theme: &Theme, font: Option<&Font>) -> Scene {
         let theme = *theme; // Theme is Copy; avoids borrowing through `theme` in `cx`.
+        // Scroll containers that overflow keep a gutter for a classic bar.
+        crate::core::scroll_bar::set_gutter(theme.scroll_bar.gutter());
         let mut cx = Cx::with_handle(&theme, self.handle.clone());
         cx.set_window_size(self.layout_size());
         cx.set_memo_cache(std::mem::take(&mut self.memo_cache));
@@ -1542,6 +1550,8 @@ impl<S: 'static> Pane<S> {
         if crate::core::presence::retire_offstage(&mut tree, self.focused) {
             self.focused = None;
         }
+        // The scroll bars of the containers whose content overflows.
+        self.stamp_scroll_bars(&mut tree, &theme, now);
         // A spatial group (a game's menu) takes focus when nothing in the
         // active layers has it, so the arrows and a gamepad start there.
         let entered = crate::core::tab_focus::spatial_entry(&tree, modal_layers, self.focused);
@@ -1565,7 +1575,8 @@ impl<S: 'static> Pane<S> {
             || self.transitions.animating()
             || self.presence.animating()
             || self.native_fades.animating()
-            || self.touch.flinging();
+            || self.touch.flinging()
+            || self.scroll_bars.animating(&theme, now);
         if self.animating {
             crate::platform::frame::request();
         }
@@ -4611,7 +4622,7 @@ pub mod prelude {
     pub use crate::render::{Decoration, FontStyle, FontWeight, TextPaint, UnderlineStyle};
     pub use crate::render::{InlineIcon, RichText, SpanStyle, TextOutline, TextShadow};
     pub use crate::style::Theme;
-    pub use crate::style::{FocusLook, MotionTokens, Palette, Spacing, Typography};
+    pub use crate::style::{FocusLook, MotionTokens, Palette, ScrollBarLook, Spacing, Typography};
     pub use crate::widgets::{
         AppBar, BottomSheet, NavStack, PageTransition, SheetDetent, app_bar, bottom_sheet,
         nav_stack,

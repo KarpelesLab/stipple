@@ -134,6 +134,7 @@ pub fn system_look() -> SystemLook {
     SystemLook {
         dark: status == 0 && light == 0,
         accent,
+        overlay_scrollers: None,
     }
 }
 

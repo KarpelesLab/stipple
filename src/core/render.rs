@@ -212,7 +212,77 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         let length = clamp_len(length, floor, axis.main(max));
         size = axis.size(length, axis.cross(size));
     }
+    // One whose content overflows it is as much wider (or taller, sideways)
+    // as the gutter its scroll bar keeps, unless its size across is fixed.
+    if let Some(axis) = gutter_axis(el)
+        && axis.main(natural) > axis.main(size) + 0.5
+    {
+        let fixed = match axis {
+            Axis::Horizontal => el.layout.size.height,
+            Axis::Vertical => el.layout.size.width,
+        };
+        if fixed.is_none() {
+            let cross = axis.cross(size) + crate::core::scroll_bar::gutter();
+            size = axis.size(
+                axis.main(size),
+                clamp_len(cross, axis.cross(min), axis.cross(max)),
+            );
+        }
+    }
     size
+}
+
+/// The axis of a scroll container that keeps a gutter for its scroll bar
+/// when its content overflows (a stack that doesn't wrap, while the app's
+/// bars take one), if `el` is one.
+fn gutter_axis(el: &Element) -> Option<Axis> {
+    el.scroll?;
+    if el.wrap || crate::core::scroll_bar::gutter() <= 0.0 {
+        return None;
+    }
+    match el.kind {
+        ElementKind::Stack { axis, .. } => Some(axis),
+        _ => None,
+    }
+}
+
+/// The room a stack's children are laid out in across, out of `avail`, and
+/// their measured sizes: all of it, unless the stack is a scroll container
+/// whose content overflows it, which keeps a gutter for its scroll bar (on
+/// its trailing side; the bottom, sideways, when the content still fits
+/// above it).
+fn gutter_layout(
+    el: &Element,
+    axis: Axis,
+    gap: f64,
+    avail: Size,
+    children: &[Element],
+    font: Option<&Font>,
+) -> (Size, Vec<Size>) {
+    let measure_in = |avail: Size| -> Vec<Size> {
+        let room = child_room(el, axis, avail);
+        children.iter().map(|c| measure(c, room, font)).collect()
+    };
+    if gutter_axis(el) == Some(axis) {
+        // Measured narrower first: a long list, the usual case, overflows.
+        let g = crate::core::scroll_bar::gutter();
+        let narrowed = axis.size(axis.main(avail), (axis.cross(avail) - g).max(0.0));
+        let measured = measure_in(narrowed);
+        let n = measured.len() as f64;
+        let content: f64 =
+            measured.iter().map(|m| axis.main(*m)).sum::<f64>() + gap * (n - 1.0).max(0.0);
+        // A sideways strip whose height leaves no room for the gutter (it
+        // is fixed, say) doesn't squeeze its content: its bar is drawn over
+        // the content's bottom edge instead.
+        let fits = axis == Axis::Vertical
+            || measured
+                .iter()
+                .all(|m| axis.cross(*m) <= axis.cross(narrowed) + 0.5);
+        if content > axis.main(avail) + 0.5 && fits {
+            return (narrowed, measured);
+        }
+    }
+    (avail, measure_in(avail))
 }
 
 /// The shortest a scroll container that fills its parent shrinks to, unless
@@ -528,6 +598,7 @@ fn layout_element(
         ghost: false,
         offstage: el.offstage,
         hit_through: el.hit_through,
+        scroll_bar: None,
         indicator: el.indicator,
         children: Vec::new(),
     };
@@ -644,13 +715,12 @@ fn layout_element(
     }
 
     let inner = bounds.inset(el.layout.padding);
-    let avail = inner.size;
     let axis = *axis;
-    let main_avail = axis.main(avail);
+    let main_avail = axis.main(inner.size);
 
-    // Main-axis distribution.
-    let room = child_room(el, axis, avail);
-    let measured: Vec<Size> = children.iter().map(|c| measure(c, room, font)).collect();
+    // Main-axis distribution. A scroll container whose content overflows
+    // keeps a gutter across for its scroll bar (see `core::scroll_bar`).
+    let (avail, measured) = gutter_layout(el, axis, *gap, inner.size, children, font);
     // A wrapping stack flows children onto lines that fit the main axis; each
     // line is then laid out like an unwrapped stack whose cross extent is the
     // line's tallest child. Lines pack from the cross start, `gap` apart.
@@ -1288,6 +1358,10 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible
         scene.pop_clip();
     } else {
         children(visible, scene);
+    }
+    // A scroll container's bar, over its content.
+    if let Some(bar) = &node.scroll_bar {
+        crate::core::scroll_bar::paint(bar, scene);
     }
 }
 

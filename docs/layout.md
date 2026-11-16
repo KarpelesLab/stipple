@@ -168,6 +168,12 @@ is set; otherwise it follows the parent:
   room there is. It never collapses to nothing for lack of a size, and never
   grows past its parent for a long list.
 
+While its content overflows, a scroll container shows a scroll bar. On
+Linux, Windows and the web it keeps a gutter for it: the content is laid
+out that much narrower (shorter, sideways), and a container sized by its
+content grows by that much instead. See
+[Scroll bars](widgets.md#scroll-bars).
+
 ## The safe area (phones)
 
 On a phone the system draws over parts of the screen: the status bar, a

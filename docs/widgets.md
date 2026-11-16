@@ -596,6 +596,72 @@ dialogs). Elsewhere it returns `None`: macOS's `NSColorPanel` is a floating
 panel rather than a dialog, and the desktop portal only picks a color off the
 screen.
 
+## Scroll bars
+
+Every scroll container shows a scroll bar while its content overflows:
+`scroll` lists, `scroll_horizontal` strips, and the virtualized
+`virtual_list`, `table` and `tree`, whose bars span all their rows though
+only the visible ones are built (spacers stand in for the others, so the
+content's length is known). There is nothing to add to a view: the bar is
+drawn by the toolkit from the laid-out tree, along the container's trailing
+edge (the right one, the left one in a right-to-left layout, the bottom one
+sideways). A table's bar belongs to its body, below the header.
+
+The thumb is as long as the share of the content in view (24 pixels at
+least) and sits where the scroll offset puts it. With a mouse:
+
+- dragging the thumb scrolls the container proportionally, wherever the
+  pointer goes until the release;
+- pressing the track before or after the thumb pages a viewport (less a
+  tenth of it, at most 40 pixels, so a line stays in view) back or on;
+- the thumb grows and darkens under the pointer, and darker still while
+  dragged.
+
+A press on a bar is the bar's: it doesn't tap, select or focus what lies
+under it. A finger never takes the bar (it drags the content), and the bars
+of touch platforms are indicators only.
+
+How the bars look and behave is the theme's `scroll_bar`
+(`style::ScrollBarLook`), and every built-in theme picks the platform's
+convention (`ScrollBarLook::platform()`):
+
+| | Kind | Shown | Gutter |
+|---|---|---|---|
+| Linux, Windows, the web | `CLASSIC`: a 6 px thumb (8 under the pointer) on a faint track | always, while the content overflows | 12 px |
+| macOS | `OVERLAY`: a 7 px thumb (11, with a track, under the pointer) | while scrolling, then fades out | none |
+| iOS, Android | `TOUCH`: a 3 px indicator, not draggable | while scrolling, then fades out | none |
+
+A classic bar keeps a gutter: a scroll container whose content overflows
+lays it out that much narrower (shorter, sideways), so the bar never covers
+a row, and one sized by its content grows by the gutter instead. Content
+that fits keeps the full width. A sideways strip whose height is fixed too
+tight for the gutter keeps its content's height and draws its bar over its
+bottom edge. An overlay bar takes no room: it shows over the content's edge
+while the container scrolls (by the wheel, a finger, the keyboard or the
+app) and while the pointer is over it, stays a moment (0.8 s) and fades out
+along the theme's `motion.scroll_bar` (instantly under reduced motion). At
+rest it isn't drawn, so screenshots of an idle macOS or phone app show none,
+as the platforms do. `Theme::native()` on macOS follows *Show scroll bars*
+in System Settings: *Always* gives the classic bar.
+
+The colors come from the palette: the text color faded (the thumb at about
+35%, 50% under the pointer, 63% dragged; the track 6%), so a bar matches
+light, dark and Material themes alike; `Theme::high_contrast` makes the
+thumb solid (`ScrollBarLook::strong`), in the accent color while hovered or
+dragged. Any theme takes another look:
+
+```rust
+use stipple::style::{ScrollBarLook, Theme};
+// Classic bars on every platform, a little wider.
+let theme = Theme::light().scroll_bar(ScrollBarLook::CLASSIC.width(14.0).thumb(8.0));
+# let _ = theme;
+```
+
+The bars aren't in the accessibility tree: the containers' content is, and
+screen readers scroll it through the rows they move to. Not done yet: holding
+a press on the track to keep paging, arrow buttons, scroll bars on scrolling
+grids taking a gutter (theirs is drawn over the content), and skinned bars.
+
 ## Themes and the native theme
 
 These widgets read all their colors and metrics from the theme, so they follow

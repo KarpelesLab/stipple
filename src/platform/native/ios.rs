@@ -55,6 +55,7 @@ pub fn system_look() -> SystemLook {
         SystemLook {
             dark: style == 2,
             accent: Some(Color::rgb(0, 122, 255)), // iOS's systemBlue tint
+            overlay_scrollers: None,
         }
     })
 }

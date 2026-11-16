@@ -800,7 +800,8 @@ reads on the frames.
 
 Anything else takes a frame with `.background_image(&frame)`, and
 `StateSkin::apply(el)` gives any element a frame per state. Not skinned yet:
-tabs, sliders, text fields and scroll bars.
+tabs, sliders, text fields and scroll bars (which take the palette's
+text color).
 
 `gameui`'s "Look" (on the title menu, or in Settings) switches to
 "Painted": the same screens in a skin whose frames are drawn pixel by pixel

@@ -108,6 +108,10 @@ pub struct SystemLook {
     pub dark: bool,
     /// The user's accent color, where the OS has one.
     pub accent: Option<Color>,
+    /// Whether scroll bars overlay the content and show only while
+    /// scrolling (`Some(true)`) or always show (`Some(false)`), where the OS
+    /// has a setting for it (macOS's *Show scroll bars*).
+    pub overlay_scrollers: Option<bool>,
 }
 
 /// Read the system's light/dark mode and accent color.

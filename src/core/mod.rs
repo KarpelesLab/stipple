@@ -42,6 +42,7 @@ mod pointer_events;
 pub(crate) mod presence;
 mod render;
 pub(crate) mod runtime;
+pub(crate) mod scroll_bar;
 pub(crate) mod tab_focus;
 pub(crate) mod touch;
 pub(crate) mod transition;

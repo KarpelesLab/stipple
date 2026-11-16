@@ -40,6 +40,7 @@ pub fn system_look() -> SystemLook {
         dark: DARK.load(Ordering::Relaxed),
         accent: (accent != 0)
             .then(|| Color::rgb((accent >> 16) as u8, (accent >> 8) as u8, accent as u8)),
+        overlay_scrollers: None,
     }
 }
 

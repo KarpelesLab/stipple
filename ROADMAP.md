@@ -1724,6 +1724,24 @@ Most input only works on X11 today.
   `virtual_list(...)` builds only the rows in and around the viewport (fixed or
   per-row heights) while the scroll extent covers them all; keyboard navigation
   scrolls the cursor into view (`Cx::scroll_offset` / `Cx::scroll_requests`).
+- ✅ Scroll bars on every scroll container (`scroll`, `scroll_horizontal`,
+  `virtual_list`, `table`'s body, `tree`), shown while the content overflows.
+  *`core::scroll_bar` lays each bar out from the laid-out tree (viewport,
+  content extent from the children, so a virtualized list's spacers give the
+  whole extent; the offset), stamps it on the container's node (painted over
+  the children, diffed for damage) and finds the bar under a press;
+  `app_scroll_bar` drags the thumb proportionally, pages on a track press,
+  hovers, and shows overlay bars while scrolling, fading them on
+  `MotionTokens::scroll_bar` (redrawn in animation frames without a build).
+  `style::ScrollBarLook` on `Theme::scroll_bar`: `CLASSIC` (Linux, Windows,
+  web: always shown, a 12 px gutter the layout keeps beside overflowing
+  content), `OVERLAY` (macOS, or classic when *Show scroll bars* is *Always*
+  under `Theme::native`), `TOUCH` (iOS, Android: an indicator, not
+  draggable); colors from the palette, solid under `high_contrast`.
+  Mirrored right to left. Unit and App tests (geometry, gutter, drag, paging,
+  hover, overlay, table and tree extents); `visual-table` drags the
+  `tabledemo` thumb on X11. Not yet: press-and-hold paging, arrow buttons,
+  a gutter for scrolling grids, scroll-bar accessibility roles, skins.*
 
 #### 7f — Platform completeness
 - ✅ Edge to edge, orientation and keeping awake (#38, #58, #62):
@@ -2617,7 +2635,7 @@ game needs on top:
   panels, dialogs, the pause menu, `DialogueBox`, bars (`BarSkin`, fill
   revealed or stretched, tinted), checkboxes and switches (`ToggleSkin`);
   `gameui`'s "Painted" look. Not skinned yet: tabs, sliders, text fields,
-  scroll bars.*
+  scroll bars (they take the palette's colors).*
 
 #### 9f — Saving
 - ✅ Settings and save slots in the app's data directory (#49), written

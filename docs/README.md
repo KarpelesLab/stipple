@@ -29,6 +29,7 @@ How to build, package and run on each platform, and what works there today.
 | Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | mouse wheel ¹⁰ | ✅ ⁶ |
 | Raw pointer events (every button, click counts, lines vs pixels, pointer leaving) | ✅ ³⁶ | ✅ ³⁶ | ✅ ³⁶ | touch | ✅ mouse ³⁶ | ✅ ³⁶ |
 | Touch scrolling (drag, fling, sideways strips) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ✅ ⁶⁰ |
+| Scroll bars (drag the thumb, page on the track) | ✅ ⁷⁴ | ✅ ⁷⁴ | overlay ⁷⁴ | indicator ⁷⁴ | indicator ⁷⁴ | ✅ ⁷⁴ |
 | Touch gestures: long press for the context menu, pinch and two-finger pan (`on_pinch`) | — | — | — | ✅ ⁶⁰ | ✅ ⁶⁰ | ✅ ⁶⁰ |
 | Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹² |
 | Keyboard focus on buttons and toggles (Tab, Shift+Tab, Enter / Space) | ✅ ⁷⁰ | ✅ ⁷⁰ | ✅ ⁷⁰ | hardware keyboard ⁷⁰ | ✅ ⁷⁰ | ✅ ⁷⁰ |
@@ -535,6 +536,15 @@ Android driver end to end on an emulator against a stand-in for the library;
 the real library was run up to Google Play's answer (an emulator without a
 signed-in Play Store). Desktops and the web have no store and answer
 `Unavailable`; the mock store runs everywhere. See [purchases.md](purchases.md).
+
+⁷⁴ In the shared core, drawn by Stipple: a classic bar in a gutter on Linux,
+Windows and the web; on macOS an overlay bar shown while scrolling (classic
+under `Theme::native()` when *Show scroll bars* is *Always*); on iOS and
+Android a thin indicator shown while scrolling, which a finger doesn't drag.
+App-tested (dragging, paging, hover, the virtualized table's and tree's
+extents); on X11, CI drags `tabledemo`'s thumb with `xdotool`. The other
+backends deliver the same pointer events, unchecked there. Not in the
+accessibility tree. See [widgets.md](widgets.md#scroll-bars).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

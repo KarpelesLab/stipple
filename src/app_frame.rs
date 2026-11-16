@@ -59,9 +59,12 @@ impl<S: 'static> Pane<S> {
         }
         self.update_highlights(theme, Some(now));
         self.crossfade.advance(Some(now));
+        // Overlay scroll bars fading out.
+        rects.extend(self.restamp_scroll_bars(theme, now));
         self.animating = self.transitions.animating()
             || self.highlights.animating(Some(now))
-            || self.crossfade.active();
+            || self.crossfade.active()
+            || self.scroll_bars.animating(theme, Some(now));
         if self.animating {
             crate::platform::frame::request();
         }

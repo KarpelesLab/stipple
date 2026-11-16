@@ -96,6 +96,10 @@ pub struct MotionTokens {
     /// leaving after a destructive one, and a pull-to-refresh indicator
     /// settling or going away.
     pub swipe: Motion,
+    /// An overlay scroll bar (see
+    /// [`ScrollBarLook::overlay`](crate::style::ScrollBarLook::overlay))
+    /// fading out a moment after its container stops scrolling.
+    pub scroll_bar: Motion,
 }
 
 impl Default for MotionTokens {
@@ -147,6 +151,7 @@ impl MotionTokens {
         page: Motion,
         sheet: Motion,
         swipe: Motion,
+        scroll_bar: Motion,
     );
 
     /// Stipple's own motion, shared by [`Theme::light`](super::Theme::light),
@@ -177,6 +182,7 @@ impl MotionTokens {
             page: ms(300, Easing::EMPHASIZED_DECELERATE),
             sheet: Motion::Spring(SpringParams::with_response(0.35, 0.9)),
             swipe: Motion::Spring(SpringParams::with_response(0.3, 1.0)),
+            scroll_bar: ms(200, Easing::EaseIn),
         }
     }
 
@@ -204,6 +210,7 @@ impl MotionTokens {
             page: Motion::Instant,
             sheet: Motion::Instant,
             swipe: Motion::Instant,
+            scroll_bar: Motion::Instant,
         }
     }
 
@@ -238,6 +245,7 @@ impl MotionTokens {
             page: ms(300, Easing::EMPHASIZED_DECELERATE),
             sheet: ms(300, Easing::EMPHASIZED_DECELERATE),
             swipe: ms(250, Easing::EMPHASIZED_DECELERATE),
+            scroll_bar: ms(300, Easing::Linear),
         }
     }
 
@@ -272,6 +280,7 @@ impl MotionTokens {
             page: ms(250, FLUENT_DECELERATE),
             sheet: ms(250, FLUENT_DECELERATE),
             swipe: ms(250, FLUENT_DECELERATE),
+            scroll_bar: ms(167, FLUENT_ACCELERATE),
         }
     }
 
@@ -306,6 +315,7 @@ impl MotionTokens {
             page: ms(250, CA_DEFAULT),
             sheet: Motion::Spring(SpringParams::with_response(0.35, 1.0)),
             swipe: Motion::Spring(SpringParams::with_response(0.3, 1.0)),
+            scroll_bar: ms(300, Easing::EaseOut),
         }
     }
 
@@ -339,6 +349,7 @@ impl MotionTokens {
             page: Motion::Spring(SpringParams::with_response(0.35, 1.0)),
             sheet: Motion::Spring(SpringParams::with_response(0.4, 0.9)),
             swipe: Motion::Spring(SpringParams::with_response(0.35, 1.0)),
+            scroll_bar: ms(300, CA_DEFAULT),
         }
     }
 
@@ -371,6 +382,7 @@ impl MotionTokens {
             page: Motion::Spring(SpringParams::with_response(0.25, 1.0)),
             sheet: Motion::Spring(SpringParams::with_response(0.3, 1.0)),
             swipe: Motion::Spring(SpringParams::with_response(0.25, 1.0)),
+            scroll_bar: ms(200, Easing::EaseIn),
         }
     }
 
@@ -428,6 +440,7 @@ mod tests {
                 m.page,
                 m.sheet,
                 m.swipe,
+                m.scroll_bar,
             ] {
                 match motion {
                     Motion::Instant => {}

@@ -15,8 +15,10 @@ use crate::platform::native;
 use crate::render::Color;
 
 mod motion;
+mod scroll_bar;
 mod skin;
 pub use motion::MotionTokens;
+pub use scroll_bar::ScrollBarLook;
 pub use skin::{BarSkin, Skin, StateSkin, ToggleSkin};
 
 /// Chainable setters for an input struct's public fields, one per field:
@@ -256,6 +258,11 @@ pub struct Theme {
     /// borders (a game's painted buttons and panels); `None` for none. See
     /// [`Skin`].
     pub skin: Option<&'static Skin>,
+    /// How scroll containers show their scroll bars: a classic bar in a
+    /// gutter of its own, or an overlay one shown while scrolling (see
+    /// [`ScrollBarLook`]). Every preset takes the platform's
+    /// ([`ScrollBarLook::platform`]).
+    pub scroll_bar: ScrollBarLook,
 }
 
 /// How the keyboard focus ring is drawn (see [`Theme::focus`]). The default,
@@ -385,6 +392,13 @@ impl Theme {
         theme.native = native::available();
         theme.follows_system = true;
         theme.motion = MotionTokens::native();
+        // macOS's *Show scroll bars* setting: always, or overlaid while
+        // scrolling.
+        match look.overlay_scrollers {
+            Some(true) => theme.scroll_bar = ScrollBarLook::OVERLAY,
+            Some(false) => theme.scroll_bar = ScrollBarLook::CLASSIC,
+            None => {}
+        }
         theme.font_size(metrics.1)
     }
 
@@ -425,6 +439,7 @@ impl Theme {
             motion: MotionTokens::standard(),
             focus: FocusLook::STANDARD,
             skin: None,
+            scroll_bar: ScrollBarLook::platform(),
         }
     }
 
@@ -443,6 +458,7 @@ impl Theme {
             motion: MotionTokens::standard(),
             focus: FocusLook::STANDARD,
             skin: None,
+            scroll_bar: ScrollBarLook::platform(),
         }
     }
 
@@ -490,6 +506,13 @@ impl Theme {
     /// is right to left).
     pub fn is_rtl(&self) -> bool {
         self.layout_direction.is_rtl()
+    }
+
+    /// Set how scroll containers show their scroll bars (see
+    /// [`ScrollBarLook`]).
+    pub fn scroll_bar(mut self, look: ScrollBarLook) -> Self {
+        self.scroll_bar = look;
+        self
     }
 
     /// Set how the built-in widgets animate (see [`MotionTokens`]).
@@ -569,6 +592,7 @@ impl Theme {
         }
         self.palette.text_muted = self.palette.text;
         self.radius = 2.0;
+        self.scroll_bar.strong = true;
         self
     }
 }
@@ -788,6 +812,7 @@ impl Theme {
             motion: MotionTokens::material(),
             focus: FocusLook::STANDARD,
             skin: None,
+            scroll_bar: ScrollBarLook::platform(),
         }
     }
 }
@@ -807,6 +832,7 @@ mod tests {
         let dark = Theme::native_for(native::SystemLook {
             dark: true,
             accent: Some(accent),
+            overlay_scrollers: None,
         });
         assert!(dark.is_dark());
         assert_eq!(dark.palette.primary, accent);

@@ -248,6 +248,7 @@ impl GameStyle {
             motion: MotionTokens::standard(),
             focus: self.focus,
             skin: self.skin,
+            scroll_bar: crate::style::ScrollBarLook::platform(),
         }
     }
 }

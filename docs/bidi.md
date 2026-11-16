@@ -188,8 +188,9 @@ Drag handlers on a mirrored element get a mirrored `DragMotion`
 delta. A handler written for a left-to-right layout works unchanged. Pointer
 positions given to tap and context handlers are real window positions.
 
-Stipple has no scroll bars to move: scroll containers scroll vertically and
-show no bar. Layouts built from absolute positions (`Anchor::At`, custom
+Scroll bars mirror too: a vertical container's bar (and the gutter a classic
+one keeps) is on its left, and a right-to-left sideways strip, which starts
+at the right, has its thumb start at the right of its bar. Layouts built from absolute positions (`Anchor::At`, custom
 drawing) aren't mirrored; compute those from the window's right edge.
 
 `LayoutNode::rtl` says whether a laid-out node was mirrored, and

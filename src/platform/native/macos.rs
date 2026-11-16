@@ -37,7 +37,13 @@ pub fn system_look() -> SystemLook {
             let b: f64 = msg!(rgb, "blueComponent", () -> f64);
             Color::rgb(c(r), c(g), c(b))
         });
-        SystemLook { dark, accent }
+        // NSScrollerStyle: 0 legacy (always shown), 1 overlay.
+        let style: i64 = msg!(class("NSScroller"), "preferredScrollerStyle", () -> i64);
+        SystemLook {
+            dark,
+            accent,
+            overlay_scrollers: Some(style == 1),
+        }
     })
 }
 
