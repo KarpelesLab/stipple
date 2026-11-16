@@ -597,7 +597,7 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 ## 2. Architecture
 
 Layered, bottom-up. Each layer is a module of the single `stipple` crate, at the
-repository root. Stipple targets **edition 2024, rust 1.88** (the floor imposed
+repository root. Stipple targets **edition 2024, rust 1.95** (the floor imposed
 by the oxideav dependency chain), `version = 0.0.x`,
 pure-Rust. (oxideav itself is edition 2021 / rust 1.80; Stipple consumes it as a
 dependency but builds on the newer toolchain.)

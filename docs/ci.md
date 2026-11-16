@@ -3,7 +3,7 @@
 Four workflows run on every push and pull request:
 
 - **CI**: `cargo fmt --check`, `cargo clippy -D warnings` and `cargo test`;
-  the 1.88 minimum Rust version; and cross-compiling for Android and iOS.
+  the 1.95 minimum Rust version; and cross-compiling for Android and iOS.
 - **Visual**: builds the examples on each platform, runs them in real windows,
   screenshots them, and checks what it can see: that a click changed the
   screen, that text was typed, that the web demo's scripted selftest passes in

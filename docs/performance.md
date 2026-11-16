@@ -297,16 +297,14 @@ responsive, and what you can do for your own app:
   (`[build.env]` and `[build.wasm-opt]` in `tools/site/examples.toml`). SIMD
   and LTO make the CPU renderer about a quarter faster; `wasm-opt` takes
   15% off the size (2.85 → 2.43 MB, 0.9 MB compressed).
-- **Use current dependencies.** Stipple's minimum Rust (1.88) holds its own
-  builds to the dependency versions that Rust can build, and the oxideav
-  versions after that are much faster: oxideav-raster 0.1.4 stopped
+- **Current dependencies.** Stipple needs Rust 1.95, and with it the oxideav
+  releases that are much faster than the ones before: oxideav-raster 0.1.4 stopped
   rasterizing every path and clip into a mask the size of the window (a
   full frame of `widgetsdemo` at 2560×1504 went from 370 to 40 ms in the
   browser), and oxideav-ttf 0.1.9 stopped re-parsing the font for each
-  string it shapes (1.9 ms → 13 µs per new string). An app on a current
-  toolchain resolves to them by itself; the site sets
-  `CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS=allow` so it does too (in a
-  checkout that has a `Cargo.lock` already, run `cargo update` with it).
+  string it shapes (1.9 ms → 13 µs per new string). Stipple's Cargo.toml
+  asks for them (in a checkout with an older `Cargo.lock`, run
+  `cargo update`).
 - **Nothing runs out of view.** Frames wait while the canvas is scrolled
   out of view (in a page, or as an iframe in another page) or the tab is
   hidden: `stipple.js` holds back `requestAnimationFrame` and tells the module
@@ -322,7 +320,7 @@ rasterize and present, or lower and submit on the GPU); *latency* is from
 the event's timestamp to the end of the first present after it, median /
 95th percentile, and includes waiting for the display's next frame where
 the answer is animated (a hover highlight fades in). Before: the CPU, the
-dependencies Rust 1.88 resolves to, a plain release build.
+dependencies Rust 1.88 resolved to then, a plain release build.
 
 | Example | First frame | Hover: work p95 | Hover: latency | Click: latency | Typing: latency | Wheel: work p95, latency | Animation: frame p95 |
 |---|---|---|---|---|---|---|---|

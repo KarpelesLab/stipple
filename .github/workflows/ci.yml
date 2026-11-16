@@ -115,11 +115,11 @@ jobs:
           echo "$out" | grep -q "Stipple Virtual Pad \[1234:5678\]"
 
   msrv:
-    name: MSRV 1.88 (library and examples)
+    name: MSRV 1.95 (library and examples)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@1.88
+      - uses: dtolnay/rust-toolchain@1.95
       - uses: Swatinem/rust-cache@v2
       - name: cargo check (library and examples)
         run: cargo check --examples --features gpu

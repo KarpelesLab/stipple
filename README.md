@@ -197,7 +197,7 @@ for how to build and package each platform.
 
 ## Status & MSRV
 
-Pre-alpha. The library and its examples build on **Rust 1.88** (edition 2024).
+Pre-alpha. The library and its examples build on **Rust 1.95** (edition 2024).
 
 Working today, each verified in CI on its platform:
 

@@ -21,7 +21,7 @@ cd todos
 cargo add stipple
 ```
 
-Stipple needs Rust 1.88 or newer, and no system libraries: it talks to
+Stipple needs Rust 1.95 or newer, and no system libraries: it talks to
 Wayland, X11, Win32 and Cocoa itself.
 
 ## 2. A window
