@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+### Fixed
+
+- *(gpu)* dashed strokes under a scale (a HiDPI window) have the dash lengths the software renderer draws: the GPU renderers stroke in user space, as oxideav-raster 0.1.5 does, where they dashed in device pixels
 - *(android)* a tap on a scheduled notification is heard with other notifications up: each is in a group of its own, so the system no longer bundles it under a summary whose tap opens the app without its id
 
 ## [0.0.7](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.6...stipple-v0.0.7) - 2026-11-15

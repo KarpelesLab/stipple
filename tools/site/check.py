@@ -254,6 +254,15 @@ def main():
         only = set(a.only.split(",")) if a.only else None
         gpu = set(filter(None, a.gpu.split(",")))
         failed = check_examples(a.site, chrome, only, not a.no_thumbs, a.timeout, gpu)
+        if failed:
+            # Once more, in a fresh browser: on a loaded CI runner Chrome's
+            # GPU process (SwiftShader) can crash for a moment, leaving a
+            # run of examples, CPU-drawn ones too, with blank canvases.
+            print(f"again, in a fresh browser: {', '.join(failed)}")
+            names = {f.split("@")[0] for f in failed}
+            again = check_examples(a.site, chrome, names, not a.no_thumbs, a.timeout,
+                                   {f.split("@")[0] for f in failed if "@" in f})
+            failed = [f for f in failed if f in again]
         print(f"examples: {len(failed)} failed" + (f" ({', '.join(failed)})" if failed else ""))
         ok = not failed
     # After the examples, which write the thumbnails the gallery shows. A

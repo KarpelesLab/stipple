@@ -524,13 +524,41 @@ fn map_rect(t: &Transform2D, r: [f32; 4]) -> [f32; 4] {
 /// The stroke outline the rasterizer fills for `stroke` along `path` under
 /// `t` (as `oxideav-raster` builds it: the width scaled by the mean of the
 /// transform's diagonal).
+///
+/// As oxideav-raster's own renderer does it (so the two agree): the stroke
+/// (width, dashes, joins, caps) is in user space, so the outline is built
+/// in user space scaled by `s`, the transform's largest singular value, and
+/// then mapped to the device by `t · scale(1/s)`, which never stretches a
+/// length, so the flattening tolerances still bound the device error.
 fn stroke_contours(path: &Path, t: &Transform2D, stroke: &Stroke) -> Vec<FlatContour> {
-    let contours = flatten_path(&path.commands, t);
-    let avg_scale = 0.5 * (t.a.abs() + t.d.abs());
-    let width_px = stroke.width * avg_scale.max(1e-6);
-    contours
+    let (a, b, c, d) = (t.a as f64, t.b as f64, t.c as f64, t.d as f64);
+    let det = a * d - b * c;
+    let e2 = a * a + b * b + c * c + d * d;
+    let s = ((e2 + (e2 * e2 - 4.0 * det * det).max(0.0).sqrt()) * 0.5).sqrt();
+    if !(s.is_finite() && s > 1e-12) || det.abs() <= 1e-18 * e2.max(1e-300) {
+        return Vec::new(); // a singular transform: no area
+    }
+    let mut st = stroke.clone();
+    if let Some(dash) = &mut st.dash {
+        for v in &mut dash.array {
+            *v = (*v as f64 * s) as f32;
+        }
+        dash.offset = (dash.offset as f64 * s) as f32;
+    }
+    let width = (stroke.width as f64 * s) as f32;
+    let pre = Transform2D::scale(s as f32, s as f32);
+    let (fa, fb, fc, fd) = (a / s, b / s, c / s, d / s);
+    let (fe, ff) = (t.e as f64, t.f as f64);
+    flatten_path(&path.commands, &pre)
         .iter()
-        .flat_map(|c| stroke_to_fill_path(c, stroke, width_px))
+        .flat_map(|c| stroke_to_fill_path(c, &st, width))
+        .map(|mut c| {
+            for p in &mut c.points {
+                let (x, y) = (p.0 as f64, p.1 as f64);
+                *p = ((fa * x + fc * y + fe) as f32, (fb * x + fd * y + ff) as f32);
+            }
+            c
+        })
         .collect()
 }
 
