@@ -1172,6 +1172,7 @@ fn role_name(r: A11yRole) -> &'static str {
         RadioButton => "radio button",
         Switch => "toggle button",
         Splitter => "split pane",
+        Slider => "slider",
         Toolbar => "tool bar",
         Separator => "separator",
         Alert => "notification",

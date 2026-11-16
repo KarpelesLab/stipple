@@ -1270,19 +1270,43 @@ pub(crate) fn field_text(text: String, theme: &Theme, color: Color) -> Element {
 /// A horizontal slider with `value` in 0..=1. Dragging anywhere on the track
 /// calls `on_change` with the new fractional position. Default width 160 px;
 /// override with `.width(..)`.
+///
+/// It takes keyboard focus (Tab): Left and Right (mirrored in a
+/// right-to-left layout), Up and Down move it by 5%, Home and End to either
+/// end, each through `on_change`. Assistive technologies see a
+/// [`Role::Slider`]; name it with [`a11y_label`](Element::a11y_label)
+/// ("Volume"), which may carry the value as words ("Volume, 80%").
 pub fn slider<S>(
     cx: &mut Cx<S>,
     value: f64,
     on_change: impl FnMut(&mut S, f64) + 'static,
 ) -> Element {
     let theme = &theme_of(cx);
+    let rtl = theme.is_rtl();
     let v = value.clamp(0.0, 1.0);
+    let change = std::rc::Rc::new(std::cell::RefCell::new(on_change));
+    let on_drag = {
+        let change = change.clone();
+        move |s: &mut S, x: f64| (change.borrow_mut())(s, x)
+    };
+    let on_key = move |s: &mut S, key: &KeyInput| {
+        let to = match logical_key(rtl, key) {
+            KeyInput::Left | KeyInput::Down => v - 0.05,
+            KeyInput::Right | KeyInput::Up => v + 0.05,
+            KeyInput::Home => 0.0,
+            KeyInput::End => 1.0,
+            _ => return,
+        };
+        (change.borrow_mut())(s, to.clamp(0.0, 1.0));
+    };
     let control = NativeControl::Slider {
         value: (v * 1000.0).round() as u16,
     };
     if let Some(deco) = theme.native_deco(control) {
         return native_size(Element::boxed(BoxStyle::default()).native(deco), control)
-            .on_drag(cx, on_change);
+            .on_drag(cx, on_drag)
+            .on_key(cx, on_key)
+            .role(Role::Slider);
     }
     let knob = Element::boxed(BoxStyle {
         fill: Some(theme.palette.primary),
@@ -1300,7 +1324,9 @@ pub fn slider<S>(
     .width(160.0)
     .height(22.0)
     .padding(Insets::symmetric(3.0, 3.0))
-    .on_drag(cx, on_change)
+    .on_drag(cx, on_drag)
+    .on_key(cx, on_key)
+    .role(Role::Slider)
 }
 
 /// A 1px themed divider line spanning the cross axis.
@@ -1652,6 +1678,34 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn a_slider_is_a_named_focusable_slider_its_keys_step_mirrored() {
+        for (rtl, right) in [(false, 0.55), (true, 0.45)] {
+            let mut app = crate::App::new(0.5f64, |v: &f64, cx: &mut Cx<f64>| {
+                let s = slider(cx, *v, |v, x| *v = x).a11y_label("Volume");
+                column(vec![s])
+            })
+            .theme(Theme::light().layout_direction(if rtl {
+                crate::layout::LayoutDirection::Rtl
+            } else {
+                crate::layout::LayoutDirection::Ltr
+            }))
+            .no_font()
+            .logical_size(Size::new(200.0, 60.0));
+            app.render_once();
+            let s = app.find(Role::Slider, "Volume").expect("a named slider");
+            assert!(app.focus_next());
+            assert!(app.find(Role::Slider, "Volume").unwrap().focused);
+            assert!(app.press_key(KeyInput::Right));
+            assert!((app.state() - right).abs() < 1e-9, "{}", app.state());
+            assert!(app.press_key(KeyInput::Home));
+            assert_eq!(*app.state(), 0.0);
+            assert!(app.press_key(KeyInput::End));
+            assert_eq!(*app.state(), 1.0);
+            assert!(s.bounds.width() > 100.0);
+        }
     }
 
     #[test]

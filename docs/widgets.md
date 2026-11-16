@@ -789,6 +789,7 @@ unit tests: CI's Windows and macOS runs don't hover native controls.
 | Select | `ComboBox`; its open list is a `List` of `ListItem`s | the chosen option |
 | Number input | `SpinButton`, with `Increase` and `Decrease` buttons | the text |
 | Split pane divider | `Splitter` | — |
+| Slider | `Slider` (focusable: the arrows step it by 5%, Home and End go to the ends, Left and Right swap right to left) | its `a11y_label`, which can carry the value |
 | Toolbar | `Toolbar`, with buttons and `Separator`s | — |
 | Choice chips | `RadioButton`s, the selected one checked | the chip's label |
 | Filter chips, a chip alone | `CheckBox`es, checked while on | the chip's label |
@@ -804,6 +805,8 @@ don't have these roles yet, so they report the closest role they do have:
 a button, a text field, or a group. Menus (see [menus.md](menus.md)) report
 `MenuBar`, `Menu` and `MenuItem`, which the bridges do map, and tabs map to
 UI Automation's `Tab`/`TabItem`, NSAccessibility's `AXTabGroup`, and ARIA's
-`tablist`/`tab`. Radio buttons map everywhere: UI Automation's `RadioButton`,
+`tablist`/`tab`. Sliders map to AT-SPI's `slider`, UI Automation's Slider,
+`AXSlider`, Android's `SeekBar` and ARIA's `slider`; their value isn't
+exposed as a range value yet (put it in the name). Radio buttons map everywhere: UI Automation's `RadioButton`,
 `AXRadioButton`, AT-SPI's `radio button`, ARIA's `radio`, Android's
 `RadioButton`, and on iOS a button that is selected while checked.

@@ -208,6 +208,11 @@ table(
   (`column_width`, `set_column_width`) and stop at `Column::min_width`.
 - **Rows**: `TableState::rows` is a `ListState`, so selection works as above.
   Rows are striped unless `.striped(false)`.
+- **Other keys**: `.on_key(|s, key| …)` gets the keys the selection doesn't
+  use while the table has focus (Enter, typed text, Backspace, Delete…). If
+  it moves the cursor, the table scrolls the new cursor row into view: a file
+  list's Enter to open and type-to-select (see the
+  [reference app](reference-app.md)).
 - Columns have fixed widths, so a table wider than its container is clipped;
   there is no horizontal scrolling yet.
 

@@ -704,6 +704,7 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
         ComboBox => "AXPopUpButton",
         RadioButton => "AXRadioButton",
         SpinButton => "AXTextField",
+        Slider => "AXSlider",
         // Not named to NSAccessibility yet: the closest role above.
         Splitter | Toolbar | Separator | Alert => "AXGroup",
         TabList => "AXTabGroup",

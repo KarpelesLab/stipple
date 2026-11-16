@@ -62,6 +62,8 @@ pub enum A11yRole {
     Switch,
     /// A draggable divider between two panes.
     Splitter,
+    /// A control that sets a value along a track.
+    Slider,
     /// A row of command buttons.
     Toolbar,
     /// A visual divider.
@@ -284,6 +286,7 @@ pub(crate) fn aria_role(role: A11yRole) -> &'static str {
         A11yRole::CheckBox => "checkbox",
         A11yRole::RadioButton => "radio",
         A11yRole::Switch => "switch",
+        A11yRole::Slider => "slider",
         A11yRole::Splitter | A11yRole::Separator => "separator",
         A11yRole::Toolbar => "toolbar",
         A11yRole::Alert => "alert",

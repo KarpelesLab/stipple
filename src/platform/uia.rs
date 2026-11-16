@@ -114,6 +114,7 @@ const UIA_ButtonControlTypeId: i32 = 50000;
 const UIA_CheckBoxControlTypeId: i32 = 50002;
 const UIA_ComboBoxControlTypeId: i32 = 50003;
 const UIA_SpinnerControlTypeId: i32 = 50016;
+const UIA_SliderControlTypeId: i32 = 50015;
 const UIA_ToolBarControlTypeId: i32 = 50021;
 const UIA_PaneControlTypeId: i32 = 50033;
 const UIA_SeparatorControlTypeId: i32 = 50038;
@@ -408,6 +409,7 @@ fn control_type(role: A11yRole) -> i32 {
         A11yRole::CheckBox | A11yRole::Switch => UIA_CheckBoxControlTypeId,
         A11yRole::RadioButton => UIA_RadioButtonControlTypeId,
         A11yRole::SpinButton => UIA_SpinnerControlTypeId,
+        A11yRole::Slider => UIA_SliderControlTypeId,
         A11yRole::Toolbar => UIA_ToolBarControlTypeId,
         A11yRole::Separator => UIA_SeparatorControlTypeId,
         A11yRole::Splitter | A11yRole::Alert => UIA_GroupControlTypeId,
@@ -434,7 +436,7 @@ fn focusable(role: A11yRole) -> bool {
     invokable(role)
         || matches!(
             role,
-            TextField | PasswordField | SpinButton | ListItem | TreeItem | Row | Splitter
+            TextField | PasswordField | SpinButton | ListItem | TreeItem | Row | Splitter | Slider
         )
 }
 

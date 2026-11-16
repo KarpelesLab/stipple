@@ -4760,6 +4760,7 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
         Role::RadioButton => A11yRole::RadioButton,
         Role::Switch => A11yRole::Switch,
         Role::Splitter => A11yRole::Splitter,
+        Role::Slider => A11yRole::Slider,
         Role::Toolbar => A11yRole::Toolbar,
         Role::Separator => A11yRole::Separator,
         Role::Alert => A11yRole::Alert,

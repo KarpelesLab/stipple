@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use crate::core::{Align, Axis, BoxStyle, Cx, Element, Role, pointer};
+use crate::core::{Align, Axis, BoxStyle, Cx, Element, KeyInput, Role, pointer};
 use crate::geometry::Insets;
 
 use super::virtual_list::{
@@ -143,6 +143,7 @@ impl TableState {
 
 /// What a header click sorting the table calls (see [`TableSpec::on_sort`]).
 type SortFn<S> = Rc<dyn Fn(&mut S, usize, SortOrder)>;
+type KeyFn<S> = Rc<dyn Fn(&mut S, &KeyInput)>;
 
 /// The shape of a [`table`]: its columns, row count and sizes, and what
 /// sorting it calls, for an app state `S`.
@@ -161,12 +162,14 @@ pub struct TableSpec<'a, S> {
     /// Rows built beyond each edge of the viewport.
     pub overscan: usize,
     on_sort: Option<SortFn<S>>,
+    on_key: Option<KeyFn<S>>,
 }
 
 impl<S> Clone for TableSpec<'_, S> {
     fn clone(&self) -> Self {
         Self {
             on_sort: self.on_sort.clone(),
+            on_key: self.on_key.clone(),
             ..*self
         }
     }
@@ -182,6 +185,7 @@ impl<S> std::fmt::Debug for TableSpec<'_, S> {
             .field("striped", &self.striped)
             .field("overscan", &self.overscan)
             .field("on_sort", &self.on_sort.is_some())
+            .field("on_key", &self.on_key.is_some())
             .finish()
     }
 }
@@ -197,6 +201,7 @@ impl<'a, S> TableSpec<'a, S> {
             striped: true,
             overscan: DEFAULT_OVERSCAN,
             on_sort: None,
+            on_key: None,
         }
     }
 
@@ -228,6 +233,15 @@ impl<'a, S> TableSpec<'a, S> {
     /// header sorts the table, for the app to reorder the rows it shows.
     pub fn on_sort(mut self, f: impl Fn(&mut S, usize, SortOrder) + 'static) -> Self {
         self.on_sort = Some(Rc::new(f));
+        self
+    }
+
+    /// Give `f` the keys the table's selection doesn't use (Enter, typed
+    /// text, Delete, F2…) while the table has focus. If it moves the cursor (`TableState::rows`), the table
+    /// scrolls the new cursor row into view, as the arrow keys do: a file
+    /// list's Enter to open and type-to-select go here.
+    pub fn on_key(mut self, f: impl Fn(&mut S, &KeyInput) + 'static) -> Self {
+        self.on_key = Some(Rc::new(f));
         self
     }
 }
@@ -398,13 +412,16 @@ pub fn table<S: 'static>(
     }
     let count = spec.rows;
     let body = window.assemble(built);
+    let on_key = spec.on_key.clone();
     frame(theme, vec![header, rule, body])
         .role(Role::Table)
         .on_key(cx, move |s, key| {
-            let st = &mut field(s).rows;
-            let before = st.cursor();
-            if st.handle_key(key, count)
-                && let Some(c) = st.cursor()
+            let before = field(s).rows.cursor();
+            let used = field(s).rows.handle_key(key, count);
+            if !used && let Some(f) = &on_key {
+                f(s, key);
+            }
+            if let Some(c) = field(s).rows.cursor()
                 && Some(c) != before
             {
                 window.reveal(c);
@@ -543,6 +560,63 @@ mod tests {
         assert_eq!(rows(&a)[0].children[0].name, "Item 9999");
         // The value column isn't sortable: clicking it does nothing.
         assert!(!app.click_at(Point::new(160.0, 13.0)));
+    }
+
+    #[test]
+    fn keys_the_selection_skips_reach_on_key_and_a_moved_cursor_is_revealed() {
+        // Typing a number jumps to "Item <n>"; Enter records the cursor row.
+        struct Typed {
+            table: TableState,
+            opened: Vec<usize>,
+        }
+        let mut app = crate::App::new(
+            Typed {
+                table: TableState::new(SelectionMode::Multi),
+                opened: Vec::new(),
+            },
+            |state: &Typed, cx: &mut Cx<Typed>| {
+                let theme = *cx.theme();
+                let cols = columns();
+                let grid = table(
+                    cx,
+                    &state.table,
+                    |s| &mut s.table,
+                    TableSpec::new(&cols, 10_000)
+                        .row_height(24.0)
+                        .height(240.0)
+                        .on_key(|s: &mut Typed, key| match key {
+                            KeyInput::Text(t) => {
+                                if let Ok(n) = t.parse::<usize>() {
+                                    s.table.rows.select(n * 1000);
+                                }
+                            }
+                            KeyInput::Enter => {
+                                s.opened.extend(s.table.rows.cursor());
+                            }
+                            _ => {}
+                        }),
+                    |_cx, row, _col| Element::text(format!("Item {row}"), 14.0, theme.palette.text),
+                );
+                crate::widgets::column(vec![grid])
+            },
+        )
+        .no_font()
+        .logical_size(Size::new(400.0, 320.0));
+        app.render_once();
+        let y = 1.0 + 24.0 + 1.0 + 12.0;
+        assert!(app.click_at(Point::new(40.0, y)));
+        // The arrows are still the selection's.
+        assert!(app.press_key(KeyInput::Down));
+        assert!(app.press_key(KeyInput::Text("7".into())));
+        assert!(app.press_key(KeyInput::Enter));
+        assert_eq!(app.state().opened, vec![7000]);
+        app.render_once();
+        let a = app.accessibility_tree().unwrap();
+        let row = rows(&a)
+            .into_iter()
+            .find(|r| r.children[0].name == "Item 7000")
+            .expect("row 7000 scrolled into view");
+        assert!(row.selected);
     }
 
     #[test]

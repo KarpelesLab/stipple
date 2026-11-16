@@ -97,6 +97,10 @@ pub enum Role {
     Switch,
     /// A draggable divider between two resizable panes.
     Splitter,
+    /// A control that sets a value along a track (a
+    /// [`slider`](crate::widgets::slider)): a volume, a playback position.
+    /// Named by its [`a11y_label`](crate::core::Element::a11y_label).
+    Slider,
     /// A row of command buttons.
     Toolbar,
     /// A visual divider between groups (in a toolbar or menu).

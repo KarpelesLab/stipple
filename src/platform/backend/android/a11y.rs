@@ -276,6 +276,7 @@ fn class_name(role: A11yRole) -> &'static str {
         A11yRole::CheckBox => "android.widget.CheckBox",
         A11yRole::RadioButton => "android.widget.RadioButton",
         A11yRole::Switch => "android.widget.Switch",
+        A11yRole::Slider => "android.widget.SeekBar",
         A11yRole::List | A11yRole::Tree | A11yRole::Table => "android.widget.ListView",
         A11yRole::ComboBox => "android.widget.Spinner",
         A11yRole::TabList => "android.widget.TabWidget",
