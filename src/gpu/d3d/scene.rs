@@ -481,7 +481,7 @@ impl D3dExecutor {
             )?;
             self.vs = Com(vs);
             let element = InputElementDesc {
-                SemanticName: c"POSITION".as_ptr() as *const u8,
+                SemanticName: c"POSITION".as_ptr().cast::<u8>(),
                 SemanticIndex: 0,
                 Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
                 InputSlot: 0,

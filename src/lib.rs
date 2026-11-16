@@ -25,6 +25,9 @@
 //! assert_eq!(frame.size().width, 360);
 //! ```
 
+// On Android (emulated TLS), clippy flags every `thread_local!`, even the
+// ones already initialized with `const { .. }`: a false positive.
+#![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 #![deny(unsafe_code)] // `platform` and `gpu` opt in where they talk to the OS
 
 // docs/getting-started.md's Rust blocks run as doctests, so the tutorial

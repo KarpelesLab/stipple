@@ -23,6 +23,9 @@
 //! count came back. CI runs that in headless Chrome. The page reads the
 //! state through [`webdemo_probe`].
 
+// The crate's false positive on Android (see `src/lib.rs`).
+#![cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
+
 use std::cell::Cell;
 
 use stipple::platform::dialog::{self, FileDialog};

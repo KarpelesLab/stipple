@@ -74,7 +74,7 @@ fn d3d_compile() -> Result<D3dCompileFn, String> {
         if module.is_null() {
             return 0;
         }
-        GetProcAddress(module, c"D3DCompile".as_ptr() as *const u8) as usize
+        GetProcAddress(module, c"D3DCompile".as_ptr().cast::<u8>()) as usize
     });
     if entry == 0 {
         return Err("d3dcompiler_47.dll (D3DCompile) isn't available".into());

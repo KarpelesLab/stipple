@@ -620,7 +620,7 @@ pub(crate) const QUAD_STRIDE: u32 = 80;
 /// after the other in one vertex buffer.
 pub(crate) fn quad_elements() -> [InputElementDesc; 5] {
     std::array::from_fn(|i| InputElementDesc {
-        SemanticName: c"QUAD".as_ptr() as *const u8,
+        SemanticName: c"QUAD".as_ptr().cast::<u8>(),
         SemanticIndex: i as u32,
         Format: DXGI_FORMAT_R32G32B32A32_FLOAT,
         InputSlot: 0,

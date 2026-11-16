@@ -58,7 +58,7 @@ fn raise_notification_fn() -> Option<RaiseNotification> {
         if module.is_null() {
             return 0;
         }
-        GetProcAddress(module, c"UiaRaiseNotificationEvent".as_ptr() as *const u8) as usize
+        GetProcAddress(module, c"UiaRaiseNotificationEvent".as_ptr().cast::<u8>()) as usize
     });
     (f != 0).then(|| unsafe { core::mem::transmute::<usize, RaiseNotification>(f) })
 }
