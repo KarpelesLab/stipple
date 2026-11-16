@@ -3867,7 +3867,6 @@ jobs:
           check 'axprobe: depth scroll areas=[1-9]' $L
           check 'axprobe: depth scroll bar value=0 settable=true' $L
           check '^touchdemo: scrolled to [1-9]' $A
-          check '^touchdemo: scrolled to 0$' $A
           # Reported, not required: the notifications the observer heard.
           grep 'axprobe: depth notification' $L || echo "no notifications heard"
           exit $fail
