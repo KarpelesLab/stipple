@@ -474,6 +474,23 @@ pub(super) unsafe fn unicode_char(
     key_code: i32,
     meta_state: i32,
 ) -> Option<char> {
+    let c = unsafe { key_value(vm, device, key_code, meta_state) }?;
+    // KeyCharacterMap.COMBINING_ACCENT marks a dead key.
+    if c <= 0 || c as u32 & super::dead_keys::COMBINING_ACCENT != 0 {
+        return None;
+    }
+    char::from_u32(c as u32)
+}
+
+/// `KeyCharacterMap.load(device).get(key_code, meta_state)`: the character,
+/// 0 for none, or a dead key's accent with `COMBINING_ACCENT` set. `None` if
+/// the JVM couldn't be asked.
+pub(super) unsafe fn key_value(
+    vm: *mut c_void,
+    device: i32,
+    key_code: i32,
+    meta_state: i32,
+) -> Option<i32> {
     unsafe {
         with_env(vm, |jni| {
             let map = jni.call_static_object(
@@ -482,17 +499,27 @@ pub(super) unsafe fn unicode_char(
                 c"(I)Landroid/view/KeyCharacterMap;",
                 &[JValue { i: device }],
             )?;
-            let c = jni.call_int(
+            jni.call_int(
                 map,
                 c"get",
                 c"(II)I",
                 &[JValue { i: key_code }, JValue { i: meta_state }],
-            )?;
-            // KeyCharacterMap.COMBINING_ACCENT marks a dead key.
-            if c <= 0 || c as u32 & 0x8000_0000 != 0 {
-                return None;
-            }
-            char::from_u32(c as u32)
+            )
+        })
+    }
+}
+
+/// `KeyCharacterMap.getDeadChar(accent, c)`: `c` with the dead key's accent
+/// (0 when they don't combine). `None` if the JVM couldn't be asked.
+pub(super) unsafe fn dead_char(vm: *mut c_void, accent: char, c: char) -> Option<i32> {
+    unsafe {
+        with_env(vm, |jni| {
+            jni.call_static_int(
+                c"android/view/KeyCharacterMap",
+                c"getDeadChar",
+                c"(II)I",
+                &[JValue { i: accent as i32 }, JValue { i: c as i32 }],
+            )
         })
     }
 }

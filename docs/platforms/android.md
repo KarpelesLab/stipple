@@ -95,6 +95,13 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
   works the same on iOS and the web; see
   [pointer-events.md](../pointer-events.md#touch-gestures). Desktop mice keep
   the wheel.
+- **Drops from other apps.** In split screen, a freeform window or on a
+  desktop, a drag from another app reaches the host view's `onDragEvent` and
+  the app's drop targets: text as `DropData::Text`, `file:` URIs as paths,
+  `content:` URIs (an image from the gallery, a document from Files) copied
+  through the `ContentResolver` into the app's temporary directory and
+  delivered as `DropData::Files`. See
+  [drag-and-drop.md](../drag-and-drop.md#ios-and-android).
 - **Menus.** Context menus are drawn by Stipple, not a `PopupMenu`, and open
   on a long press (or a mouse's right button); a tap picks an item, a tap
   outside or Back closes the menu. An `App::menu` bar is drawn across the top
@@ -201,6 +208,12 @@ suggestions and autocorrect work as in any Android app:
   Stipple only composes new text at the caret, and turning the word back into
   a preedit would change the app's text under it. `setSelection` moves the
   caret with arrow keys.
+- **Dead keys.** A hardware keyboard's dead key (a
+  `KeyCharacterMap` value with `COMBINING_ACCENT`, as Alt+E is in the
+  Generic layout) shows its accent as the preedit, and the next key commits
+  what `KeyCharacterMap.getDeadChar` composes (`é`), as Android's own text
+  fields do; see
+  [ime.md](../ime.md#dead-keys-on-mobile-hardware-keyboards).
 - Keys typed on a hardware keyboard (or with `adb shell input`) arrive as keys
   whether or not an input method is connected. A key typed while the input
   method composes commits the composition first, and until the field reports
@@ -593,6 +606,19 @@ count must come back.
   the tap and the pinch, the accessibility nodes, Back (handled, the edge
   swipe, a cancelled one, declined), and the lifecycle.
 
+`examples/androiddemo/test-input.sh` then checks mobile input depth on the
+same device: a finger presses the greeting and moves, the app starts a
+system drag of a text from its host view (`android::drag_self_test`,
+`View.startDragAndDrop` with `DRAG_FLAG_GLOBAL`, as another app's view
+would), carries it over the button and lets go: the drop must reach the app
+through `onDragEvent`. The same with a file, a `MediaStore` `content:` URI
+(`android::drag_file_self_test`, Android 10 and later), which must arrive
+as a copy holding the file's bytes. Then a `uinput` keyboard types Alt+E, E,
+Alt+U, U into the field, which must end in `éü`. The drops passed on local API 34 and
+API 30 emulators and the dead keys on API 34 (after `test-on-device.sh`;
+Android 11 has no `uinput`, so they are skipped there); CI runs it without
+blocking.
+
 CI runs it on x86_64 emulators (the `visual-android` job): everything on
 API 34, and the quick checks on API 33 (`OnBackInvokedCallback` without
 progress) and API 30 (the Back key and `onBackPressed`), each with
@@ -617,8 +643,13 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
   Gboard connect, and drives the connection from the app; no one has typed
   Japanese or Chinese on it yet. There's no extracted-text or cursor-anchor
   support (fullscreen landscape editing, the candidate bar's position), and a
-  selection move from a selection or mid-composition is refused. Dead keys on
-  hardware keyboards don't compose.
+  selection move from a selection or mid-composition is refused. Hardware
+  keyboards' dead keys compose (see [ime.md](../ime.md#dead-keys-on-mobile-hardware-keyboards)), checked with a
+  `uinput` keyboard, not a person's.
+- **Drops come from the app itself in CI.** The emulator has no second app
+  in split screen to drag from; the drop path is the same, but a drag
+  between two apps (and its URI permissions) hasn't been run. Dragging out
+  of the app isn't done.
 - **Predictive back on Android 13 itself is untried** (CI runs API 34); its
   callback has no progress there. While the app takes Back, the system shows
   no preview: drawing one (from `App::on_back_progress`) is the app's job.

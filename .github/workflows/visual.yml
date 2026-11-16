@@ -4536,6 +4536,32 @@ jobs:
           grep -q "touchdemo: edit menu passed" "$LOG" \
             || echo "::warning::touchdemo's edit menu part didn't pass (see the log above)"
 
+      # Mobile input (touchdemo, after part 1): a hardware keyboard's dead
+      # key through UITextInput's marked text (the accent, then the composed
+      # letter), a text and a file dropped through the view's
+      # UIDropInteraction delegate (a stand-in session over real
+      # NSItemProviders: the file is copied into the app's tmp directory),
+      # and the trackpad's scroll recognizer (on the view, continuous and
+      # discrete scrolling, no touches) scrolling the list. Not blocking
+      # until it has passed here.
+      - name: Dead keys, drops and trackpad scrolling (touchdemo, not blocking)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/touchdemo.log"
+          for _ in $(seq 1 120); do
+            grep -qE "touchdemo: mobile input (passed|FAILED)" "$LOG" 2>/dev/null && break
+            sleep 1
+          done
+          grep -E "touchdemo: (dead key|dropped|text drag|file drag|file dropped|pointer|trackpad|mobile input|check failed)" "$LOG" || true
+          grep -q 'touchdemo: dead keys typed ".*éü"' "$LOG"
+          grep -qF 'touchdemo: dropped Text("Dropped from another app")' "$LOG"
+          grep -qE 'touchdemo: file dropped as /.+/stipple-drops/[0-9]+/touchdemo-dragged\.txt' "$LOG"
+          grep -q "touchdemo: pointer scroll_pan=true scroll_types=3 touch_types=0 hover=true" "$LOG"
+          grep -qE "touchdemo: trackpad scrolled the list [0-9]+ -> [0-9]+" "$LOG"
+          grep -q "touchdemo: mobile input passed" "$LOG"
+
       # touchdemo's second part, driven from here: the simulator switches to
       # dark mode (the app follows through traitCollectionDidChange:), the
       # app goes to the background (another app launched) and comes back
@@ -5246,6 +5272,8 @@ jobs:
           # path, which the real library can't show without a signed-in Play Store.
           script: |
             bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
+            # Drops through the system's drag and drop (a text, and a file as a MediaStore content: URI) and a uinput keyboard's dead keys: not blocking until it has passed on CI's emulators.
+            bash examples/androiddemo/test-input.sh visual_output || echo "::warning::test-input.sh failed (drag and drop, dead keys; non-blocking)"
             # Not blocking until it has passed on CI's x86_64 emulators.
             bash .github/billing/android/test-billing.sh stipple.apk visual_output || echo "::warning::test-billing.sh failed (non-blocking)"
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi

@@ -192,13 +192,47 @@ and `Drop { position, data }`. The app answers each enter and move through
 | Wayland | `wl_data_device` / `wl_data_offer` (copy action from v3) | `text/uri-list` | `text/plain;charset=utf-8` and friends |
 | Windows | OLE `IDropTarget` (hand-written COM vtable); `WM_DROPFILES` too | `CF_HDROP` | `CF_UNICODETEXT` |
 | macOS | `NSDraggingDestination` on the view | `public.file-url` (resolved through `NSURL`) | `public.utf8-plain-text` |
-| iOS, Android, web | not yet | | |
+| iOS | `UIDropInteraction` on the view | images and other files (`NSItemProvider` file representations, copied) | `NSString`, and web links (`NSURL`) as their URL |
+| Android | `View.onDragEvent` on the host view | `file:` URIs as paths, `content:` URIs copied through the `ContentResolver` | `ClipData` text (and `coerceToText` for the rest) |
+| Web | not yet | | |
 
 On Windows and macOS the OS asks for the answer inside its own callback, where
 the app can't run, so the backend answers with the app's verdict from the
 previous move (a drag first entering is answered "copy" if it carries files or
 text). The cursor's badge can trail by one move; the drop itself always goes
-where the app says.
+where the app says. Android does the same for the drop's result (its
+`DragEvent`s come on the main thread, not the app's); iOS asks on its main
+thread, where the app's handler runs, so its `UIDropProposal` is the app's
+answer to that very move.
+
+### iOS and Android
+
+On phones and tablets a drop comes from another app beside this one (iPad
+split view and Slide Over; Android's split screen and freeform windows; an
+iPhone app since iOS 15, with the drag held while switching apps). The
+events and `DropData` are the desktop's. What the other app drags comes as
+typed items, which the backend reads after the drop and before delivering
+it (`Event::Drop` arrives a moment after the finger lifts):
+
+- Text is `DropData::Text`; on iOS a web link (a `public.url` that isn't a
+  file) is its URL as text.
+- Anything else (a photo, a PDF, a file from the Files app) only lasts while
+  the drop is handled, so it is copied, under its own name (the provider's
+  `suggestedName` on iOS, `OpenableColumns.DISPLAY_NAME` on Android, with an
+  extension from its type if it has none), into a directory of the drop's
+  own: `<tmp>/stipple-drops/<n>/` (iOS: the app's `tmp`; Android: its cache's
+  `tmp`). The drop is `DropData::Files` with the copies' paths; delete them
+  once read. An Android `file:` URI is passed as its path.
+- A drop of several items carries every file if any; otherwise their texts,
+  one per line.
+
+Android asks for the drag's URI permissions (`requestDragAndDropPermissions`)
+when it drops, and copies `content:` URIs on a thread of its own (a cloud
+provider may fetch the file first). iOS loads each item through
+`NSItemProvider` (`loadObjectOfClass:` for text and links,
+`loadFileRepresentationForTypeIdentifier:` for files), off the main thread.
+The target's verdict changes iOS's drag badge (copy or forbidden); Android
+shows none.
 
 `file:` URIs are percent-decoded to paths (`stipple::platform::parse_uri_list`);
 other schemes, and files on other hosts, are skipped.
@@ -223,6 +257,18 @@ other schemes, and files on other hosts, are skipped.
   complete on the runner yet, so that step only reports; on macOS with
   `STIPPLE_COCOA_DROP=<path>`, which drives the view's own dragging methods
   with a stand-in `NSDraggingInfo` whose pasteboard holds the file's URL.
+- On the Android emulator, `examples/androiddemo/test-input.sh` has
+  `androiddemo` start a system drag itself (`View.startDragAndDrop` with
+  `DRAG_FLAG_GLOBAL`, from its host view, while the script's finger is down)
+  and carries it over the app's own window: a text, then a file as a
+  `MediaStore` `content:` URI, which must arrive copied, with its bytes. The
+  window gets the system's `DragEvent`s as it would from another app; a drag
+  between two apps hasn't been run. It passed on local API 34 and API 30 emulators; CI
+  runs it without blocking. On the iOS simulator `touchdemo`'s self-test
+  calls the drop interaction's delegate with a stand-in session over real
+  `NSItemProvider`s (a text, a file), also not blocking yet. The data
+  conversion (types, file names, the drop's directory, merging items) is
+  unit-tested on every host (`src/platform/backend/mobile_drop.rs`).
 - Wayland's protocol handling is unit-tested against a scripted compositor
   (drops, and the drag-out source: `start_drag`, `send`, `dnd_finished`); CI
   doesn't drag on Wayland. The X11 source's state machine and messages are
@@ -246,4 +292,7 @@ other schemes, and files on other hosts, are skipped.
   feedback; its events (and a drop, which lands) are delivered when the drag
   ends.
 - A drag image following the pointer during in-app drags.
-- Drops on iOS, Android and the web.
+- Drops on the web.
+- Dragging out of the app on iOS (`UIDragInteraction`, which lifts an item
+  on a long press rather than when a drag leaves the window) and Android
+  (`View.startDragAndDrop`, which would need a `FileProvider` for files).

@@ -89,6 +89,7 @@ fn function(class: &str, name: &str) -> Option<*const c_void> {
         ("HostView", "onApplyWindowInsets") => {
             super::screen::on_apply_window_insets as *const c_void
         }
+        ("HostView", "onDragEvent") => super::drag::on_drag_event as *const c_void,
         ("Input", "commitText") => ime::commit_text as *const c_void,
         ("Input", "setComposingText") => ime::set_composing_text as *const c_void,
         ("Input", "finishComposingText") => ime::finish_composing_text as *const c_void,

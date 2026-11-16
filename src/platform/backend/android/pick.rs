@@ -271,7 +271,7 @@ fn transfer(jni: &Jni, resolver: JObject, uri: JObject, waiting: Waiting) -> Out
 }
 
 /// The document's `OpenableColumns.DISPLAY_NAME`.
-fn display_name(jni: &Jni, resolver: JObject, uri: JObject) -> Option<String> {
+pub(super) fn display_name(jni: &Jni, resolver: JObject, uri: JObject) -> Option<String> {
     let columns = jni.string_array(&["_display_name"])?;
     let none = std::ptr::null_mut();
     let cursor = jni.call_object(
@@ -304,7 +304,12 @@ fn display_name(jni: &Jni, resolver: JObject, uri: JObject) -> Option<String> {
 
 /// The document as a file Rust owns: `openFileDescriptor(uri, mode)`, then
 /// `detachFd`.
-fn open_fd(jni: &Jni, resolver: JObject, uri: JObject, mode: &str) -> Option<std::fs::File> {
+pub(super) fn open_fd(
+    jni: &Jni,
+    resolver: JObject,
+    uri: JObject,
+    mode: &str,
+) -> Option<std::fs::File> {
     use std::os::fd::FromRawFd;
     let mode = jni.string(mode)?;
     let pfd = jni.call_object(

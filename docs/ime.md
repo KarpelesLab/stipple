@@ -59,8 +59,8 @@ still reach the element's `on_raw_key` handler. See [keyboard.md](keyboard.md).
 | Windows | TSF (Text Services Framework), IMM32 as the fallback | `TranslateMessage` (`WM_CHAR`) |
 | macOS | `NSTextInputClient` | `NSTextInputClient` |
 | Web | composition events on a hidden `<textarea>` | the browser (composition or `input` events) |
-| iOS | `UITextInput` on the view | the keyboard (on-screen ones compose; hardware dead keys not yet) |
-| Android | an `InputConnection` from a host view (see [platforms/android.md](platforms/android.md#input-methods)) | the keyboard (on-screen ones compose; hardware dead keys not yet) |
+| iOS | `UITextInput` on the view | the keyboard; a hardware keyboard's dead keys through UIKit's marked text ([below](#dead-keys-on-mobile-hardware-keyboards)) |
+| Android | an `InputConnection` from a host view (see [platforms/android.md](platforms/android.md#input-methods)) | the keyboard; a hardware keyboard's dead keys by Stipple, from its `KeyCharacterMap` ([below](#dead-keys-on-mobile-hardware-keyboards)) |
 
 **Wayland.** Stipple binds `zwp_text_input_manager_v3` and creates a text input
 for the seat. While a text field has focus (and the compositor has sent
@@ -248,6 +248,33 @@ doesn't start one.
 
 Set `STIPPLE_COMPOSE_DEBUG=1` to print the table size and locale when it loads.
 
+## Dead keys on mobile hardware keyboards
+
+On-screen keyboards compose themselves and commit the letter. A hardware
+keyboard (a Bluetooth or USB one, an iPad's Smart Keyboard, Chromebooks and
+Android desktops) sends dead keys:
+
+- **Android**: the backend composes, as Android's own text fields do. A key
+  whose `KeyCharacterMap.get` value has `COMBINING_ACCENT` set (Alt+E for
+  the acute in the Generic layout, or the `´` key of a layout with dead keys)
+  types nothing: its accent shows as the preedit. The next key's character
+  goes through `KeyCharacterMap.getDeadChar(accent, c)`: a letter it combines
+  with commits the composed letter (`é`); Space or the same dead key again
+  commits the accent itself; a letter it doesn't combine with commits the
+  accent and the letter. Backspace and Escape take the accent back; another
+  named key (an arrow, Enter, Tab) or a shortcut commits the accent and then
+  does what it does; Shift and the other modifiers leave it pending, so
+  Alt+E then Shift+E gives `É`. Focus leaving the window drops it. The keys a
+  sequence takes (and their releases) don't reach `on_raw_key`. When the JVM
+  can't be asked, a table of the Latin letters with each accent stands in.
+  An input method that takes hardware keys itself (some do) composes instead.
+- **iOS**: UIKit's text system composes, through the view's `UITextInput`:
+  the dead key's accent arrives as marked text (the preedit), and the next
+  key as the composed letter, through `insertText:` (or the letter as marked
+  text, then `unmarkText`). Hardware keys reach the app only while a text
+  input has focus (the view is first responder then); a dead key pressed
+  with nothing focused types nothing.
+
 ## Testing
 
 Unit tests cover the IME state an element with `ime_input` reports (its
@@ -284,6 +311,20 @@ input connection as `inputType 0x2` and `imeOptions 0x12000006`
 (`IME_ACTION_DONE`, no fullscreen editor), and the editor action pressed
 through the connection must submit it. The hint tables themselves are
 unit-tested on every host (`src/platform/input_hints.rs`).
+
+Mobile hardware keyboards' dead keys: Android's state machine and its
+stand-in table are unit-tested on every host
+(`src/platform/backend/android/dead_keys.rs`), and
+`examples/androiddemo/test-input.sh` makes a virtual keyboard with the
+shell's `uinput` command (Android 12 and later; its keys go through the
+kernel and InputReader with the Generic key map) and types Alt+E, E, Alt+U,
+U into the focused field, which must show the accent as a preedit and end in
+`éü`. It passed on a local API 34 emulator; CI runs it without blocking until
+it has passed there. `touchdemo`'s iOS self-test sends the view what UIKit
+sends for a dead key (the accent as marked text, then `insertText:` of the
+composed letter, or the letter marked and then `unmarkText`), also not
+blocking yet. Neither is a person typing on a real keyboard, and a real
+iPad's hardware keyboard hasn't been tried.
 
 X11's XIM client runs against a real input method in CI: IBus started with
 `ibus-daemon --xim` under Xvfb, `XMODIFIERS=@im=ibus`. With IBus's keyboard

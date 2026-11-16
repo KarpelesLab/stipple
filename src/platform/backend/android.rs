@@ -66,6 +66,10 @@ mod back;
 pub(crate) mod billing;
 /// The Java classes defined at run time: the host view and friends.
 mod classes;
+/// Dead keys on hardware keyboards (JVM-free, tested on hosts).
+mod dead_keys;
+/// Drops from other apps: `onDragEvent` on the host view.
+mod drag;
 /// The system's edit menu over a text field: a floating `ActionMode`.
 mod edit_menu;
 /// The input method's `InputConnection` to the focused text field.
@@ -381,6 +385,8 @@ enum Command {
     Ime(crate::platform::event::Ime),
     /// Back, from predictive back's callback (see [`back`]).
     Back,
+    /// A drag from another app over the host view (see [`drag`]).
+    Drag(drag::Drag),
     /// `onSaveInstanceState`: ask the app for the state to keep.
     SaveState,
     /// The document picker's answer to request `id` (see [`pick`]).
@@ -570,6 +576,35 @@ pub fn input_connection_self_test() {
     if let Some(instance) = current {
         instance.request(|r| r.self_test = true);
     }
+}
+
+/// Start a system drag of `text` from the host view
+/// (`View.startDragAndDrop` with `DRAG_FLAG_GLOBAL`), as another app's view
+/// would, while a finger is down: the drag then follows the finger, and
+/// wherever it is let go, over this app or another one, gets the system's
+/// `DragEvent`s. For tests: CI's emulator run drags into the app's own
+/// window, which receives it through the same path as a drop from another
+/// app. Safe from any thread.
+// Public only for the repository's `androiddemo` harness (CI's emulator run).
+#[doc(hidden)]
+pub fn drag_self_test(text: &str) {
+    let what = drag::Dragged::Text(text.to_string());
+    run_on_main(move |jni, activity| drag::start_drag(jni, activity, &what));
+}
+
+/// Like [`drag_self_test`], dragging a file instead: `bytes`, named `name`,
+/// of type `mime`, put in `MediaStore`'s Downloads so the drag carries its
+/// `content:` URI (Android 10 and later), which the drop copies through the
+/// `ContentResolver`.
+// Public only for the repository's `androiddemo` harness (CI's emulator run).
+#[doc(hidden)]
+pub fn drag_file_self_test(name: &str, bytes: &[u8], mime: &str) {
+    let what = drag::Dragged::File(crate::platform::shell::ShareFile::new(
+        name,
+        bytes.to_vec(),
+        mime,
+    ));
+    run_on_main(move |jni, activity| drag::start_drag(jni, activity, &what));
 }
 
 /// The app now would (or wouldn't) go back: register or unregister
@@ -1589,6 +1624,9 @@ impl Window for AndroidWindow {
     fn set_fullscreen(&self, fullscreen: bool) {
         set_fullscreen(self.view.instance.activity, fullscreen);
     }
+    fn set_drop_accepted(&self, accepted: bool) {
+        drag::set_accepted(accepted);
+    }
     fn info(&self) -> crate::platform::WindowInfo {
         let mut info =
             crate::platform::WindowInfo::from_size(self.inner_size(), self.scale_factor());
@@ -1668,6 +1706,8 @@ struct Loop<'h> {
     background: bool,
     /// The activity was destroyed: the loop ends.
     ended: bool,
+    /// A hardware keyboard's dead key waiting for the next key.
+    dead_keys: dead_keys::DeadKeys,
 }
 
 impl Loop<'_> {
@@ -1787,7 +1827,12 @@ impl Loop<'_> {
                 };
             }
             Command::InputQueueDestroyed => self.detach_queue(),
-            Command::Focus(focused) => self.deliver(Event::FocusChanged(focused)),
+            Command::Focus(focused) => {
+                if let Some(clear) = self.dead_keys.reset().filter(|_| !focused) {
+                    self.deliver(Event::Ime(clear));
+                }
+                self.deliver(Event::FocusChanged(focused));
+            }
             Command::ConfigChanged => {
                 let config = read_config(unsafe { &*self.instance.activity });
                 let old = std::mem::replace(&mut self.config, config);
@@ -1837,6 +1882,10 @@ impl Loop<'_> {
                 self.deliver(Event::Ime(edit));
             }
             Command::Back => self.go_back(),
+            Command::Drag(drag) => {
+                let event = drag.event(|x, y| self.view.to_logical(x, y));
+                self.deliver(event);
+            }
             Command::SaveState => {
                 let saved = crate::platform::saved_state::deliver_save(|e| self.deliver(e));
                 *self
@@ -1996,6 +2045,9 @@ impl Loop<'_> {
             }
         }
         let modifiers = input::android_modifiers(meta);
+        if self.dead_key(code, meta, device, state, modifiers) {
+            return true;
+        }
         if self.raw_key(event, code, meta, device, state) {
             return true;
         }
@@ -2026,6 +2078,42 @@ impl Loop<'_> {
             self.deliver(Event::Text(c.to_string()));
         }
         true
+    }
+
+    /// Run a key through the dead-key state (see [`dead_keys`]): a dead key
+    /// shows its accent as a preedit, and the next key commits the composed
+    /// letter. Returns whether the sequence took the key.
+    fn dead_key(
+        &mut self,
+        code: i32,
+        meta: i32,
+        device: i32,
+        state: ButtonState,
+        modifiers: crate::platform::event::Modifiers,
+    ) -> bool {
+        use crate::platform::event::KeyCode;
+        use dead_keys::{NamedKey, Press};
+        if state == ButtonState::Released {
+            return self.dead_keys.release(code);
+        }
+        let vm = unsafe { (*self.instance.activity).vm };
+        let typing = meta & !(AMETA_CTRL_MASK | AMETA_META_MASK);
+        let value = unsafe { jni::key_value(vm, device, code, typing) }.unwrap_or(0);
+        let named = input::android_keycode(code).map(|k| match k {
+            KeyCode::Backspace | KeyCode::Escape => NamedKey::Cancel,
+            _ => NamedKey::Other,
+        });
+        let press = Press::of(value, named, modifiers.ctrl || modifiers.meta);
+        let out = self.dead_keys.press(code, press, |accent, c| {
+            match unsafe { jni::dead_char(vm, accent, c) } {
+                Some(v) => char::from_u32(v as u32).filter(|_| v > 0),
+                None => dead_keys::dead_char(accent, c),
+            }
+        });
+        for edit in out.events {
+            self.deliver(Event::Ime(edit));
+        }
+        !out.pass
     }
 
     /// The Back key: [`Event::BackRequested`] when it's released, and the
@@ -2358,6 +2446,7 @@ where
         mouse_buttons: 0,
         background: false,
         ended: false,
+        dead_keys: dead_keys::DeadKeys::default(),
     };
     if let Some(c) = attrs.background {
         lp.view.set_background([c.r, c.g, c.b, 255]);

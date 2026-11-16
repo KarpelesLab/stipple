@@ -67,8 +67,19 @@ mod macos_ax_plan;
 
 // The Android backend's NDK-free parts, unit-tested on every host.
 #[cfg(all(test, not(target_os = "android")))]
+#[path = "android/dead_keys.rs"]
+mod android_dead_keys;
+#[cfg(all(test, not(target_os = "android")))]
 #[path = "android/insets.rs"]
 mod android_insets;
+#[cfg(all(test, not(target_os = "ios")))]
+#[path = "ios/pan_scroll.rs"]
+mod ios_pan_scroll;
+
+/// What iOS and Android drops carry, as `DropData` (system-free, tested on
+/// hosts).
+#[cfg(any(target_os = "ios", target_os = "android", test))]
+pub(crate) mod mobile_drop;
 
 /// The Android entry point: an app's `ANativeActivity_onCreate` hands the
 /// activity to [`android::start`].

@@ -1351,7 +1351,25 @@ Most input only works on X11 today.
   reads the number pad / Done traits after Next. The keyboard avoidance runs
   in unit tests only (the simulator and emulator CI show no measured
   keyboard).*
-- ⬜ Dead keys and compose on mobile hardware keyboards (iOS and Android).
+- 🚧 Dead keys and compose on mobile hardware keyboards (iOS and Android).
+  **Android**: the backend composes as Android's text fields do: a
+  `KeyCharacterMap` value with `COMBINING_ACCENT` shows its accent as the
+  preedit, the next key commits `KeyCharacterMap.getDeadChar`'s letter
+  (Space or the same accent types the accent, a letter that doesn't combine
+  keeps both, Backspace/Escape cancel, named keys and shortcuts commit then
+  act, modifiers leave it pending; keys a sequence takes don't go out as raw
+  keys). The state machine and a stand-in Latin table are unit-tested on the
+  host (`android/dead_keys.rs`). `examples/androiddemo/test-input.sh` types
+  Alt+E, E, Alt+U, U on a `uinput` keyboard (Generic.kcm's dead acute and
+  diaeresis) into the field, which must end in `éü`: passed on a local API 34
+  emulator; in CI it isn't blocking until it has passed there. **iOS**:
+  UIKit's text system composes and hands the accent over as marked text and
+  the letter through `insertText:` (or marked, then `unmarkText`); the
+  existing `UITextInput` path takes them as preedit and commit, and
+  `touchdemo`'s simulator self-test drives both sequences (not blocking yet).
+  No real hardware keyboard has typed on either; Compose-key sequences
+  (beyond the layout's dead keys) aren't supported on mobile. See
+  [docs/ime.md](docs/ime.md#dead-keys-on-mobile-hardware-keyboards).
 - 🚧 IME verification with a real input method. **X11**: IBus (`--xim`)
   with its keyboard engine and Mozc, required in CI (Mozc was informational
   until it had passed on every run, over forty). **Wayland: verified with a
@@ -2107,9 +2125,29 @@ Most input only works on X11 today.
   once refused `notify` fails. CI's API 34 emulator refuses the system prompt
   through uiautomator, checks the next `notify` fails, `pm grant`s the
   permission and finds the notification in `dumpsys notification`.
-- ⬜ Drag and drop from other apps on mobile: `UIDropInteraction` on iOS
-  (iPad split view) and `View.OnDragListener` on Android, feeding the existing
-  `DragEnter` / `Drop` events.
+- 🚧 Drag and drop from other apps on mobile: `UIDropInteraction` on iOS
+  (iPad split view and Slide Over, iPhone since iOS 15) and `onDragEvent` on
+  Android's host view (split screen, freeform), feeding the existing
+  `DragEnter` / `DragOver` / `DragLeave` / `Drop` events. Text (and iOS web
+  links, as their URL) is `DropData::Text`; images and other files are
+  copied while the drop lasts into `<tmp>/stipple-drops/<n>/` and arrive as
+  `DropData::Files` (iOS: `NSItemProvider` file representations, under their
+  `suggestedName`; Android: `file:` URIs as paths, `content:` URIs through
+  the `ContentResolver` after `requestDragAndDropPermissions`, under their
+  display name, on a thread of their own). The verdict answers iOS's
+  `UIDropProposal` for that very move and Android's drop result. The type
+  tables, file names and item merging are unit-tested on the host
+  (`backend/mobile_drop.rs`). **Android, passed on local API 34 and 30
+  emulators** (`examples/androiddemo/test-input.sh`; not blocking in CI
+  yet): the app starts a real system drag from its host view
+  (`View.startDragAndDrop`, `DRAG_FLAG_GLOBAL`) under the script's finger
+  and drops it on its own window: a text, then a `MediaStore` `content:`
+  URI, which arrives copied with its bytes. **iOS**: `touchdemo`'s self-test
+  drives the delegate with a stand-in session over real `NSItemProvider`s
+  (a text, a file; not blocking yet). Missing: a drag between two apps in
+  CI, and dragging out (`UIDragInteraction` lifts on a long press, which
+  doesn't fit `Window::start_drag`; Android files need a `FileProvider`).
+  See [docs/drag-and-drop.md](docs/drag-and-drop.md#ios-and-android).
 - ✅ iOS: following appearance changes live: `traitCollectionDidChange:` on
   the view, when the screen's `userInterfaceStyle` changes (the screen's
   traits, as UIKit flips a backgrounded app's own to snapshot it), and on
@@ -2117,8 +2155,18 @@ Most input only works on X11 today.
   rebuilt and the area around the safe area takes the new background. CI
   switches the simulator with `xcrun simctl ui ... appearance dark` while
   `touchdemo` runs and checks its theme turned dark. These steps passed in CI once the accessibility fix landed.
-- ⬜ iOS: trackpad / mouse scrolling on iPad (`UIPanGestureRecognizer` with
-  indirect scroll input).
+- 🚧 iOS: trackpad / mouse scrolling on iPad (`UIPanGestureRecognizer` with
+  indirect scroll input): a pan recognizer taking only indirect scrolling
+  (`allowedScrollTypesMask` continuous and discrete, iPadOS 13.4+; no touch
+  types, so fingers stay the app's) → `Event::Scroll` in points with
+  Started / Moved / Ended phases (natural direction), after a `PointerMoved`
+  to the pointer; and pointer hover (`UIHoverGestureRecognizer`) →
+  `PointerMoved` / `PointerLeft` while nothing is pressed. The step
+  conversion is unit-tested on the host (`ios/pan_scroll.rs`); `touchdemo`'s
+  simulator self-test reads the recognizers' settings back and scrolls the
+  list through their action's code (not blocking yet). Not tried with a real
+  trackpad or mouse; no momentum after the fingers lift, and no secondary
+  click. See [docs/platforms/ios.md](docs/platforms/ios.md#trackpad-and-mouse).
 - ⬜ Mobile CI depth: run the iOS features that are only implemented (timers,
   clipboard, opening URLs) on the simulator, with real `UITouch`es rather than
   the synthetic touch path, and try both platforms on physical devices before

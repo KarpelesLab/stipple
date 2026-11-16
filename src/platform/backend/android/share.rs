@@ -231,7 +231,7 @@ fn chosen_sender(jni: &Jni, context: JObject, id: u32) -> Option<JObject> {
 
 /// Put `file` in `MediaStore`'s Downloads and return its `content:` URI
 /// (Android 10+).
-fn media_store(jni: &Jni, context: JObject, file: &ShareFile) -> Option<JObject> {
+pub(super) fn media_store(jni: &Jni, context: JObject, file: &ShareFile) -> Option<JObject> {
     use std::io::Write;
     use std::os::fd::FromRawFd;
     let resolver = jni.call_object(

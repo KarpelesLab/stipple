@@ -45,6 +45,8 @@ pub(crate) mod a11y_tree;
 mod display_link;
 /// The document the keyboard reads (UIKit-free, tested on hosts).
 pub(crate) mod doc;
+/// Drops from other apps: `UIDropInteraction` on the view.
+mod drop;
 /// The interactive back swipe from the leading edge (UIKit-free, tested on
 /// hosts).
 mod edge_swipe;
@@ -52,6 +54,10 @@ mod edge_swipe;
 mod edit_menu;
 /// Background, foreground, memory warnings and appearance changes.
 mod lifecycle;
+/// A trackpad's scrolling, as steps (UIKit-free, tested on hosts).
+mod pan_scroll;
+/// An iPad's trackpad and mouse: scrolling and hovering.
+mod pointer;
 /// The state kept across process death (UIKit-free, tested on hosts).
 mod saved_state;
 /// The scene the app's window lives in, and its session's saved state.
@@ -460,6 +466,8 @@ unsafe fn show_window(window: Id) {
         observe_reduce_motion(view);
         screen::observe_keyboard(view);
         lifecycle::observe(view);
+        drop::install(view);
+        pointer::install(view);
         let vc = msg_id(
             msg_id(screen::register_controller_class(), sel("alloc")),
             sel("init"),
@@ -1005,6 +1013,63 @@ pub mod simulate {
         later(move || touch_input(phase, &[(id, position)]));
     }
 
+    /// Drag `text` (or, with `text` `None`, the file at `path`) from
+    /// another app over the view, entering at `from` and dropping at `to`
+    /// (points): the drop interaction's delegate called as UIKit calls it,
+    /// with a stand-in session whose item providers are real, so the data
+    /// loads as a real drop's does. `done` hears whether UIKit was
+    /// proposed a copy for the last move (the app took the drag there).
+    pub fn drop_item(
+        text: Option<&str>,
+        path: Option<&str>,
+        from: Point,
+        to: Point,
+        done: fn(bool),
+    ) {
+        let (text, path) = (text.map(str::to_string), path.map(str::to_string));
+        later(move || {
+            let copy = crate::platform::native::objc::with_pool(|| unsafe {
+                drop::simulate(text.as_deref(), path.as_deref(), from, to)
+            });
+            done(copy);
+        });
+    }
+
+    /// Scroll as a trackpad does: the scroll recognizer's action with the
+    /// pointer at `at`, at each translation of `translations` (points since
+    /// the gesture began), then the end.
+    pub fn trackpad_scroll(at: Point, translations: &[Point]) {
+        let translations = translations.to_vec();
+        later(move || {
+            for (i, &t) in translations.iter().enumerate() {
+                let state = if i == 0 {
+                    pan_scroll::BEGAN
+                } else {
+                    pan_scroll::CHANGED
+                };
+                pointer::scrolled(state, at, t);
+            }
+            let last = translations.last().copied().unwrap_or(Point::new(0.0, 0.0));
+            pointer::scrolled(pan_scroll::ENDED, at, last);
+        });
+    }
+
+    /// The pointer hovering at `at` (`Some`), or leaving (`None`), as the
+    /// hover recognizer reports it.
+    pub fn hover(at: Option<Point>) {
+        later(move || match at {
+            Some(p) => pointer::hovered(pan_scroll::CHANGED, p),
+            None => pointer::hovered(pan_scroll::ENDED, Point::new(0.0, 0.0)),
+        });
+    }
+
+    /// The trackpad's recognizers as UIKit has them: whether the scroll
+    /// recognizer is on the view, its `allowedScrollTypesMask` and how many
+    /// touch types it takes, and whether the hover recognizer is on it.
+    pub fn pointer_status() -> String {
+        pointer::status()
+    }
+
     /// Type `text`, as `[view insertText:text]`.
     pub fn insert_text(text: &str) {
         let text = text.to_string();
@@ -1323,6 +1388,9 @@ impl Window for IosWindow {
     }
     fn set_keep_awake(&self, on: bool) {
         screen::set_keep_awake(on);
+    }
+    fn set_drop_accepted(&self, accepted: bool) {
+        drop::set_accepted(accepted);
     }
     fn set_orientations(&self, set: crate::platform::Orientations) {
         screen::set_orientations(set);

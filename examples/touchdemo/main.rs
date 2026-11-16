@@ -77,7 +77,13 @@
 //!    would (handing the picker's delegate a file it wrote): the open
 //!    callback gets the file's bytes, the save callback `true`. It ends this
 //!    part with `touchdemo: selftest passed` or
-//!    `touchdemo: selftest FAILED: ...`.
+//!    `touchdemo: selftest FAILED: ...`. Then mobile input, reported on its
+//!    own (`touchdemo: mobile input passed` or `FAILED: ...`): a hardware
+//!    keyboard's dead key as UIKit's text system types it (the accent as
+//!    marked text, then the composed letter), a text and a file dropped on
+//!    the pinch box through the view's `UIDropInteraction` delegate (with
+//!    real item providers), and the list scrolled by the trackpad's scroll
+//!    recognizer.
 //! 2. It then animates and waits for CI to switch the simulator to dark mode
 //!    (`xcrun simctl ui ... appearance dark`) and to send it to the background
 //!    and back; on coming back it logs how many frames it built while away
@@ -135,6 +141,8 @@ struct State {
     remember: bool,
     /// The toasts a tap on "Row 2" raises (desktops).
     toasts: Toasts,
+    /// What was dropped on the pinch box, from another app.
+    dropped: Vec<stipple::platform::DropData>,
 }
 
 /// The list's scroll offset in the frame last built (`f64` bits).
@@ -300,6 +308,14 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             }
             s.pinch_phases.push(ev.phase);
             s.pinch_scale = ev.scale;
+        })
+        // Text and files dragged from another app land here.
+        .on_drop(cx, |s: &mut State, data, at| {
+            log(&format!(
+                "touchdemo: dropped {data:?} at {:.0},{:.0}",
+                at.x, at.y
+            ));
+            s.dropped.push(data.clone());
         });
     // On desktops, a checkbox beside the box (UIA's Toggle pattern, the
     // checked value macOS and AT-SPI report), and the toasts.
@@ -438,6 +454,10 @@ mod selftest {
     type Picked = (String, Vec<u8>);
     /// The strip's offset when a back swipe began (`f64` bits).
     static STRIP_BEFORE: AtomicU64 = AtomicU64::new(0);
+    /// The list's offset before the trackpad scrolled it (`f64` bits).
+    static LIST_BEFORE: AtomicU64 = AtomicU64::new(0);
+    /// The field's text before the dead keys typed.
+    static BEFORE_TEXT: Mutex<String> = Mutex::new(String::new());
     /// What the save picker's callback got, once it ran.
     static SAVED: Mutex<Option<bool>> = Mutex::new(None);
     /// The document picker's class.
@@ -613,6 +633,178 @@ mod selftest {
         });
         steps.run(16, move |_| {
             simulate::touch(id, TouchPhase::Ended, at(last))
+        });
+    }
+
+    /// The list's offset in the frame last built.
+    fn list_offset() -> f64 {
+        f64::from_bits(OFFSET.load(Ordering::Relaxed))
+    }
+
+    /// Mobile input, reported on its own (`touchdemo: mobile input passed`):
+    ///
+    /// - a dead key on a hardware keyboard, as UIKit's text system types it:
+    ///   the accent as marked text, then the composed letter committed in
+    ///   its place (`insertText:`), or marked and then `unmarkText`;
+    /// - drops from another app: the view's `UIDropInteraction` delegate
+    ///   driven with a stand-in session over real `NSItemProvider`s, a text
+    ///   and a file (copied into the app's tmp directory), onto the pinch
+    ///   box;
+    /// - trackpad scrolling: the scroll recognizer is on the view, taking
+    ///   continuous and discrete scrolling and no touches, and its steps
+    ///   (through the same code as its action) scroll the list; a hover
+    ///   over it moves the pointer.
+    fn mobile_input(steps: &mut Steps) {
+        steps.run(500, |_| tap(120.0, PAD + FIELD_H / 2.0));
+        steps.until(|_| holds_keyboard());
+        steps.run(300, |s| {
+            *BEFORE_TEXT.lock().unwrap() = s.field.text().to_string();
+            simulate::set_marked_text("´", (1, 1));
+        });
+        steps.until(|s| s.field.buffer().preedit() == Some("´"));
+        steps.run(0, |s| {
+            log(&format!(
+                "touchdemo: dead key marked {}",
+                simulate::text_input_status()
+            ));
+            check(
+                s.field.buffer().preedit() == Some("´"),
+                "the dead key's accent isn't the preedit",
+            );
+            simulate::insert_text("é");
+        });
+        steps.until(|s| s.field.text().ends_with('é'));
+        steps.run(0, |s| {
+            let before = BEFORE_TEXT.lock().unwrap().clone();
+            check(
+                s.field.text() == format!("{before}é") && s.field.buffer().preedit().is_none(),
+                format!("the dead key typed {:?} after {before:?}", s.field.text()),
+            );
+            // The other way UIKit finishes one: the composed letter marked,
+            // then unmarked.
+            simulate::set_marked_text("¨", (1, 1));
+            simulate::set_marked_text("ü", (1, 1));
+            simulate::unmark_text();
+        });
+        steps.until(|s| s.field.text().ends_with("éü"));
+        steps.run(0, |s| {
+            let before = BEFORE_TEXT.lock().unwrap().clone();
+            log(&format!("touchdemo: dead keys typed {:?}", s.field.text()));
+            check(
+                s.field.text() == format!("{before}éü") && s.field.buffer().preedit().is_none(),
+                format!("dead keys typed {:?}", s.field.text()),
+            );
+            // Back to the text before (which the saved state's check reads
+            // later): any composition dropped, then what was typed deleted.
+            if s.field.buffer().preedit().is_some() {
+                simulate::set_marked_text("", (0, 0));
+            }
+            let typed = s
+                .field
+                .text()
+                .strip_prefix(before.as_str())
+                .map_or(0, |t| t.chars().count());
+            for _ in 0..typed {
+                simulate::delete_backward();
+            }
+        });
+        steps.until(|s| *s.field.text() == *BEFORE_TEXT.lock().unwrap());
+        steps.run(300, |_| tap(300.0, PAD + FIELD_H + 12.0 + 8.0));
+        steps.until(|_| !holds_keyboard());
+
+        // A text dropped on the pinch box.
+        steps.run(300, |_| {
+            let to = element_center("Pinch me").unwrap_or(Point::new(180.0, 640.0));
+            let from = Point::new(to.x - 60.0, to.y - 40.0);
+            simulate::drop_item(Some("Dropped from another app"), None, from, to, |copy| {
+                log(&format!("touchdemo: text drag proposed copy={copy}"));
+                check(copy, "the pinch box didn't take the dragged text");
+            });
+        });
+        steps.until(|s| !s.dropped.is_empty());
+        steps.run(0, |s| {
+            check(
+                s.dropped
+                    == [stipple::platform::DropData::Text(
+                        "Dropped from another app".into(),
+                    )],
+                format!("text drop gave {:?}", s.dropped),
+            );
+            // A file: the provider hands over a file, which the app gets a
+            // copy of.
+            let path = std::env::temp_dir().join("touchdemo-dragged.txt");
+            check(
+                std::fs::write(&path, b"Dragged into touchdemo\n").is_ok(),
+                "can't write the file to drag",
+            );
+            let to = element_center("Pinch me").unwrap_or(Point::new(180.0, 640.0));
+            simulate::drop_item(
+                None,
+                Some(&path.to_string_lossy()),
+                Point::new(to.x, to.y - 50.0),
+                to,
+                |copy| {
+                    log(&format!("touchdemo: file drag proposed copy={copy}"));
+                    check(copy, "the pinch box didn't take the dragged file");
+                },
+            );
+        });
+        steps.until(|s| s.dropped.len() >= 2);
+        steps.run(0, |s| {
+            let original = std::env::temp_dir().join("touchdemo-dragged.txt");
+            match s.dropped.get(1) {
+                Some(stipple::platform::DropData::Files(files)) => {
+                    let copy = files.first().cloned().unwrap_or_default();
+                    log(&format!("touchdemo: file dropped as {}", copy.display()));
+                    check(
+                        files.len() == 1
+                            && copy != original
+                            && copy.file_name() == original.file_name()
+                            && std::fs::read(&copy).ok().as_deref()
+                                == Some(b"Dragged into touchdemo\n".as_slice()),
+                        format!("file drop gave {files:?}"),
+                    );
+                }
+                other => check(false, format!("file drop gave {other:?}")),
+            }
+        });
+
+        // Trackpad scrolling over the list, and a hover.
+        steps.run(300, |_| {
+            let status = simulate::pointer_status();
+            log(&format!("touchdemo: pointer {status}"));
+            check(
+                status.contains("scroll_pan=true scroll_types=3 touch_types=0 hover=true"),
+                format!("pointer recognizers {status}"),
+            );
+            let at = visible_row().unwrap_or(Point::new(180.0, 300.0));
+            simulate::hover(Some(at));
+            LIST_BEFORE.store(list_offset().to_bits(), Ordering::Relaxed);
+            // Towards the top if there's room, else towards the end: the
+            // fingers move down 150 points (or up).
+            let sign = if list_offset() > 200.0 { 1.0 } else { -1.0 };
+            let moves: Vec<Point> = (0..=5)
+                .map(|i| Point::new(0.0, sign * 30.0 * f64::from(i)))
+                .collect();
+            simulate::trackpad_scroll(at, &moves);
+            simulate::hover(None);
+        });
+        steps.until(|_| {
+            (list_offset() - f64::from_bits(LIST_BEFORE.load(Ordering::Relaxed))).abs() >= 100.0
+        });
+        steps.run(0, |_| {
+            let (before, after) = (
+                f64::from_bits(LIST_BEFORE.load(Ordering::Relaxed)),
+                list_offset(),
+            );
+            log(&format!(
+                "touchdemo: trackpad scrolled the list {before:.0} -> {after:.0}"
+            ));
+            check(
+                ((after - before).abs() - 150.0).abs() < 10.0,
+                format!("trackpad scroll moved the list {before:.0} -> {after:.0}"),
+            );
+            report("mobile input");
         });
     }
 
@@ -1301,6 +1493,7 @@ mod selftest {
             );
             report("selftest");
         });
+        mobile_input(&mut steps);
 
         // Part 2: animate, and wait for CI to switch to dark mode and to
         // send the app to the background and back.

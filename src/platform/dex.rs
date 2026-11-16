@@ -576,6 +576,7 @@ pub(crate) const HOST_VIEW: Class = Class {
             &["Landroid/view/WindowInsets;"],
             "Landroid/view/WindowInsets;",
         ),
+        native("onDragEvent", &["Landroid/view/DragEvent;"], "Z"),
     ],
     load_library: None,
 };

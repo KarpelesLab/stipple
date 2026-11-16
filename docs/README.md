@@ -24,9 +24,9 @@ How to build, package and run on each platform, and what works there today.
 | | Linux | Windows | macOS | iOS | Android | Web |
 |---|---|---|---|---|---|---|
 | Window and rendering | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Pointer input | ✅ | ✅ | ✅ | ✅ touch | ✅ touch, mouse ¹⁹ | ✅ ¹² |
+| Pointer input | ✅ | ✅ | ✅ | ✅ touch, iPad pointer hover ⁸⁰ | ✅ touch, mouse ¹⁹ | ✅ ¹² |
 | Keyboard input | ✅ | ✅ | ✅ | ✅ ²⁷ | ✅ ¹⁹ | ✅ ¹² |
-| Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ❌ | mouse wheel ¹⁰ | ✅ ⁶ |
+| Scroll wheel and trackpad | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | ✅ iPad ⁸⁰ | mouse wheel ¹⁰ | ✅ ⁶ |
 | Raw pointer events (every button, click counts, lines vs pixels, pointer leaving) | ✅ ³⁶ | ✅ ³⁶ | ✅ ³⁶ | touch | ✅ mouse ³⁶ | ✅ ³⁶ |
 | Touch scrolling (drag, fling, sideways strips) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ✅ ⁶⁰ |
 | Scroll bars (drag the thumb, page on the track) | ✅ ⁷⁴ | ✅ ⁷⁴ | overlay ⁷⁴ | indicator ⁷⁴ | indicator ⁷⁴ | ✅ ⁷⁴ |
@@ -62,7 +62,7 @@ How to build, package and run on each platform, and what works there today.
 | Memoized subtrees, animation frames without a rebuild, painting only what shows | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ |
 | Rich text editor (`rich_editor`): marks, blocks, links, images placed, wrapped and sized by the pointer; Markdown and HTML | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ |
 | Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ✅ ⁵⁰ | ✅ ⁵⁵ | ✅ ²³ |
-| Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
+| Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ✅ hardware keyboard ⁷⁸ | ✅ hardware keyboard ⁷⁸ | ✅ ²³ |
 | Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ⁴³ |
 | Raw keys (`on_raw_key`): physical key, left/right modifiers, repeat flag | ✅ ⁴² | ✅ ¹⁰ | ✅ ¹⁰ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Key repeat | ✅ ⁴² | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -71,7 +71,7 @@ How to build, package and run on each platform, and what works there today.
 | Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ³ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ✅ ⁶³ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
-| Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ❌ | ❌ | ❌ |
+| Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ✅ ⁷⁹ | ✅ ⁷⁹ | ❌ |
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
 | Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | ❌ | ❌ | ❌ |
 | Asking before closing and quitting | ✅ ³⁷ | ✅ ³⁷ | ✅ ³⁷ | — | — | — |
@@ -330,7 +330,8 @@ text around the caret for autocorrect and dictation, `replaceRange:withText:`
 and the caret rectangle for the candidate bar. CI's `touchdemo` self-test on
 the simulator drives these methods through objc dispatch (marked text, a
 commit, a replacement) and reads the document back; no real keyboard composes
-in CI. Hardware dead keys aren't handled. See [ime.md](ime.md).
+in CI. A hardware keyboard's dead keys compose through the same marked text
+(⁷⁸). See [ime.md](ime.md).
 ⁵¹ `traitCollectionDidChange:`, by the screen's `userInterfaceStyle`. CI
 switches the simulator to dark mode (`xcrun simctl ui ... appearance dark`)
 while `touchdemo` runs and checks its native theme turned dark.
@@ -582,7 +583,6 @@ from other apps works where the clipboard carries them (X11, Wayland,
 Windows, macOS; HTML on the web; text only on iOS and Android). Code is
 shown in the system's monospaced font, which the web doesn't have. See
 [rich-text-editing.md](rich-text-editing.md).
-
 ⁷⁷ In the shared core, from the platform's touches, for text fields, text
 areas and the rich editor: the handles and the web's edit menu are drawn by
 Stipple; iOS 16+ shows the system's menu (`UIEditMenuInteraction`) and
@@ -591,6 +591,39 @@ with synthetic touches; the iOS simulator self-test and the Android emulator
 script check the system menus, added with this change and not yet run in CI
 (they warn rather than fail). See
 [text-editing.md](text-editing.md#editing-with-a-finger).
+⁷⁸ On a hardware keyboard. Android: a key whose `KeyCharacterMap` value is a
+`COMBINING_ACCENT` shows its accent as a preedit and the next key commits the
+letter `KeyCharacterMap.getDeadChar` composes (Space, or the same accent
+again, types the accent; the state machine and a fallback table are
+unit-tested); CI's emulator types Alt+E then E and Alt+U then U on a `uinput`
+keyboard (the Generic key map's dead acute and diaeresis), which must give
+`éü` (passed on a local API 34 emulator, not blocking in CI yet). iOS: UIKit's
+text system composes, handing the accent over as marked text and the letter
+through `insertText:` (or marked, then `unmarkText`), which the backend's
+`UITextInput` takes as a preedit and a commit; `touchdemo`'s simulator
+self-test drives that sequence through objc dispatch (not blocking yet); no
+real hardware keyboard types in CI. See [ime.md](ime.md#dead-keys-on-mobile-hardware-keyboards).
+⁷⁹ iOS: a `UIDropInteraction` on the view (iPad split view and Slide Over,
+and iPhone apps since iOS 15); text and links as text, images and files
+(`NSItemProvider` file representations) copied into the app's tmp directory
+as files. Android: `View.onDragEvent` on the host view (split screen,
+freeform windows): `ClipData` text, `file:` URIs as paths, `content:` URIs
+(images, documents) copied through the `ContentResolver`. CI's Android
+emulator drops a text and a `MediaStore` `content:` URI the app drags
+itself with `View.startDragAndDrop` (`DRAG_FLAG_GLOBAL`), through the
+system's `DragEvent`s (passed on local API 34 and 30 emulators, not blocking in CI
+yet); `touchdemo`'s iOS self-test drives the drop delegate with a stand-in
+session over real item providers (not blocking yet). Drags between two apps
+aren't run in CI, and dragging out of the app isn't done on either. See
+[drag-and-drop.md](drag-and-drop.md#ios-and-android).
+⁸⁰ iPadOS 13.4 and later: a `UIPanGestureRecognizer` taking only indirect
+scrolling (`allowedScrollTypesMask`: a trackpad's two fingers and a mouse's
+wheel, in points, with the gesture's phases; no touches) and a
+`UIHoverGestureRecognizer` for the pointer's moves while nothing is pressed.
+The conversion is unit-tested; `touchdemo`'s simulator self-test reads the
+recognizers' settings back and feeds scroll steps through the same code as
+their action (not blocking yet); a real trackpad isn't used in CI. See
+[platforms/ios.md](platforms/ios.md#trackpad-and-mouse).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

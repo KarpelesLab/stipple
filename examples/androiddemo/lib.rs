@@ -121,6 +121,24 @@ mod app {
     static STRIP_OFFSET: AtomicU64 = AtomicU64::new(0);
     /// The safe area and orientation last logged.
     static SAFE: Mutex<String> = Mutex::new(String::new());
+    /// When the greeting last started a system drag (a press calls its drag
+    /// handler on every move).
+    static DRAG_STARTED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    /// The text the greeting drags.
+    const DRAGGED: &str = "Dropped by androiddemo";
+    /// What the file the "Running for" label drags holds.
+    const DRAGGED_FILE: &str = "A file dragged by androiddemo";
+
+    /// Whether a press's drag handler should start a system drag: once per
+    /// press (the handler runs on every move).
+    fn start_drag() -> bool {
+        let mut last = DRAG_STARTED.lock().unwrap();
+        let start = last.is_none_or(|t| t.elapsed() > Duration::from_secs(2));
+        if start {
+            *last = Some(std::time::Instant::now());
+        }
+        start
+    }
 
     fn view(state: &State, cx: &mut Cx<State>) -> Element {
         FRAMES.fetch_add(1, Ordering::Relaxed);
@@ -172,7 +190,19 @@ mod app {
             row(vec![field, code_field]).gap(theme.spacing.sm),
             row(vec![
                 spinner(cx),
-                label(cx, format!("Running for {} s", state.ticks)),
+                // Pressing it and moving drags a file (a content: URI).
+                label(cx, format!("Running for {} s", state.ticks)).on_drag(
+                    cx,
+                    |_: &mut State, _| {
+                        if start_drag() {
+                            android::drag_file_self_test(
+                                "stipple-dragged.txt",
+                                DRAGGED_FILE.as_bytes(),
+                                "text/plain",
+                            );
+                        }
+                    },
+                ),
             ])
             .gap(theme.spacing.sm),
             platform_row(cx, &theme),
@@ -261,7 +291,28 @@ mod app {
         }
         drop(last);
         let pad = theme.spacing.lg;
-        column(vec![top, tap, label(cx, greeting), strip, list])
+        // Pressing the greeting and moving starts a system drag of a text
+        // (`drag_self_test`, as another app's view would), which the whole
+        // screen takes as a drop.
+        let greeting = label(cx, greeting).on_drag(cx, |_: &mut State, _| {
+            if start_drag() {
+                android::drag_self_test(DRAGGED);
+            }
+        });
+        column(vec![top, tap, greeting, strip, list])
+            .on_drop(cx, |_: &mut State, data, at| match data {
+                DropData::Text(t) => {
+                    println!("androiddemo: dropped text {t:?} at {:.0},{:.0}", at.x, at.y)
+                }
+                DropData::Files(f) => println!(
+                    "androiddemo: dropped files {f:?} holding {:?}",
+                    f.first().and_then(|p| std::fs::read_to_string(p).ok())
+                ),
+                other => println!("androiddemo: dropped {other:?}"),
+            })
+            .on_drop_hover(cx, |_: &mut State, over| {
+                println!("androiddemo: drag {}", if over { "over" } else { "away" })
+            })
             .gap(theme.spacing.lg)
             .align(Align::Center, Align::Center)
             .padding(Insets::new(

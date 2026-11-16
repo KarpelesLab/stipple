@@ -173,6 +173,39 @@ and `caretRectForPosition:` give the caret's rectangle for the candidate bar.
 Positions are UTF-16 offsets held by `UITextPosition` and `UITextRange`
 subclasses the backend builds at run time. See [ime.md](../ime.md).
 
+**Dead keys.** A hardware keyboard's dead keys (Option+E, or the `´` key of a
+layout with dead keys) go through UIKit's text system, as presses the view
+passes on: the accent arrives as marked text (the preedit) and the next key
+as the composed letter (`insertText:`, or marked and then `unmarkText`), so
+`´` then `e` types `é`, as in a `UITextField`. See
+[ime.md](../ime.md#dead-keys-on-mobile-hardware-keyboards).
+
+### Trackpad and mouse
+
+On an iPad with a trackpad or a mouse (iPadOS 13.4 and later):
+
+- **Scrolling.** A `UIPanGestureRecognizer` on the view takes only indirect
+  scrolling (`allowedScrollTypesMask`: continuous, a trackpad's two fingers,
+  and discrete, a mouse's wheel; `allowedTouchTypes` empty, so fingers on the
+  screen stay the app's). Its translation becomes `Event::Scroll` in pixels
+  (points), following the fingers as UIKit's scroll views do (natural
+  scrolling: fingers moving up scroll towards the end), with the gesture's
+  phases (`ScrollPhase::Started`, `Moved`, `Ended`), after a `PointerMoved`
+  to where the pointer is, so the scroll container under it scrolls. There
+  is no momentum after the fingers lift (UIKit leaves that to the scroll
+  view; Stipple's containers don't coast on wheel input).
+- **Hover.** A `UIHoverGestureRecognizer` reports the pointer's moves while
+  nothing is pressed as `PointerMoved`, and its leaving as `PointerLeft`, so
+  hover styles and tooltips work. A click is a touch, as before.
+
+### Drag and drop
+
+A `UIDropInteraction` on the view takes drops from other apps (iPad split
+view and Slide Over; iPhone apps since iOS 15): text and web links arrive as
+`DropData::Text`, images and files as `DropData::Files` (copies in the app's
+tmp directory). Dragging out of the app isn't done. See
+[drag-and-drop.md](../drag-and-drop.md#ios-and-android).
+
 ## Accessibility
 
 The view is a `UIAccessibilityContainer`: VoiceOver sees one
@@ -375,6 +408,13 @@ applies.
   passed on.
 - Hardware keyboard keys only reach the app while a text input has focus (the
   view is first responder only then); they're build-checked, not run in CI.
+  The self-test sends the view what UIKit sends for a dead key, not a real
+  key press.
+- The trackpad's scrolling and hover, and drops from another app, are
+  self-tested through the same code as the recognizers' actions and the drop
+  delegate (with a stand-in drop session), not with a real trackpad or a
+  drag between two apps. No drags out of the app (`UIDragInteraction`), and
+  no right-click from a trackpad (a secondary click is a touch).
 - File pickers answer with contents only (`open_file` and friends return
   `None`), and there is no folder picker. Choosing a file in the picker can't
   be scripted on the simulator (its contents run in another process), so CI
@@ -408,7 +448,15 @@ and activates one (a row, then the context menu's item), presents the
 document pickers and cancels them (checking `presentedViewController` and the
 callbacks), presents them again and answers them through their delegate with a
 file it wrote (`simulate::pick_document`), posts a memory warning, and
-reads the notification permission; it logs to `touchdemo.log` in the app's tmp
+reads the notification permission. A part of its own (`touchdemo: mobile
+input passed`, not blocking in CI until it has passed there) types a dead
+key the way UIKit does (marked `´`, then `insertText:` of `é`; marked `ü`,
+then `unmarkText`), drops a text and a file on the pinch box through the
+view's drop delegate (`simulate::drop_item`: a stand-in session over real
+`NSItemProvider`s and `UIDragItem`s, so the file is loaded and copied as a
+real drop's is), reads the trackpad recognizers' settings back
+(`simulate::pointer_status`) and scrolls the list through their action's
+code (`simulate::trackpad_scroll`). It logs to `touchdemo.log` in the app's tmp
 directory. CI runs it, and drives the second half from outside: it switches
 the simulator to dark mode (`xcrun simctl ui booted appearance dark`), sends
 the app to the background by launching Settings and brings it back by
