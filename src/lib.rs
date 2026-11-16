@@ -1959,8 +1959,16 @@ impl<S: 'static> Pane<S> {
             })
             .unwrap_or((None, None));
 
-        // Clicking moves focus (to the focusable under the cursor, or away).
-        let refocused = foc != self.focused;
+        // Clicking moves focus (to the focusable under the cursor, or away),
+        // unless what was pressed keeps it (a toolbar button for an editor).
+        let keeps = hit.is_some_and(|id| {
+            self.tree
+                .as_ref()
+                .and_then(|t| crate::core::find_action(t, id))
+                .and_then(|n| n.semantics.as_ref())
+                .is_some_and(|s| s.keep_focus)
+        });
+        let refocused = !keeps && foc != self.focused;
         if refocused {
             self.focused = foc;
             self.focus_visible = false;
@@ -4630,6 +4638,7 @@ pub mod prelude {
         AppBar, BottomSheet, NavStack, PageTransition, SheetDetent, app_bar, bottom_sheet,
         nav_stack,
     };
+    pub use crate::widgets::{BlockKind, Marks, RichDocument, RichEditor, RichImage, rich_editor};
     pub use crate::widgets::{
         Button, EditBuffer, TextInput, Toggle, Variant, button, checkbox, column, dialog, divider,
         grid, heading, label, open_menu, panel, paragraph, progress_bar, radio, row, scroll,

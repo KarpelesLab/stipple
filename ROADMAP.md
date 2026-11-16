@@ -813,6 +813,25 @@ abstraction is frozen at the end of Phase 2.
   memoized, so a moved shape refills only the lines it touches. See
   [`docs/text-flow.md`](docs/text-flow.md). *Breaks at spaces only, pieces
   start-aligned (no justification), floats don't avoid placed objects.*
+- ✅ **Rich text editor**: `rich_editor` editing a `RichEditor` (a
+  `RichDocument`: paragraphs, H1–H3, bulleted and numbered list items,
+  quotes and code lines holding text with bold, italic, underline,
+  strikethrough, inline code and links, and inline images keeping their
+  source and decoded picture). Typing inherits the caret's marks, toggles
+  apply to the selection or the next typed text, block kinds to the
+  selected blocks; Enter splits (ending a list on an empty item), Backspace
+  at a block's start outdents or joins; snapshot undo/redo of every edit;
+  Ctrl/Cmd+B/I/U; the text area's caret, selection, IME and bidi through
+  its `EditBuffer`. Copy writes text + HTML, paste reads HTML, images or
+  text (the app reads every format for such an element). `to_markdown` /
+  `from_markdown` (CommonMark-style, escaped, read back line by line with
+  HTML-tag fallback) and `to_html` / `from_html`, round-trip tested.
+  `Element::keeps_focus` for toolbar buttons. `examples/richeditor`,
+  **CI-verified** on X11 (typing, Ctrl+B/I, toolbar clicks, the exported
+  Markdown) and off screen. See
+  [`docs/rich-text-editing.md`](docs/rich-text-editing.md). *Up/Down move
+  by block, not wrapped line; no nested lists, tables or text attributes
+  for screen readers yet.*
 - ✅ **Selectable text** (#46): `.selectable()` on labels and paragraphs:
   drag, double/triple-click, Shift+arrows, Ctrl/Cmd+A/C, a Copy / Select All
   context menu, and a long press on touch. *One selection per window, inside

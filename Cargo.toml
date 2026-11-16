@@ -119,6 +119,10 @@ name = "menudemo"
 test = true
 
 [[example]]
+name = "richeditor"
+test = true
+
+[[example]]
 name = "sessionsdemo"
 test = true
 
@@ -337,6 +341,11 @@ crate-type = ["cdylib"]
 [[example]]
 name = "rawkeys_web"
 path = "examples/rawkeys/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "richeditor_web"
+path = "examples/richeditor/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]

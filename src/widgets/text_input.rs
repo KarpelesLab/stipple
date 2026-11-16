@@ -309,7 +309,7 @@ impl Element {
     }
 
     /// This element's keyboard hints, made on first use.
-    fn input_hints(&mut self) -> &mut crate::platform::InputHints {
+    pub(crate) fn input_hints(&mut self) -> &mut crate::platform::InputHints {
         self.semantics
             .get_or_insert_with(Default::default)
             .input

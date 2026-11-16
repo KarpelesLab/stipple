@@ -208,6 +208,12 @@ title = "Text flow around shapes"
 group = "Text"
 size = [960, 720]
 
+[web.richeditor]
+description = "A rich text editor: a formatting toolbar (bold, italic, underline, strikethrough, code, links, headings, lists, quotes, code blocks, images, undo), and the document exported as Markdown or HTML."
+title = "Rich text editor"
+group = "Text"
+size = [820, 640]
+
 # --- Animation and graphics ---
 
 [web.motiondemo]

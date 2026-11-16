@@ -31,6 +31,10 @@ pub(crate) enum ClipboardRequest {
 thread_local! {
     static CLIPBOARD: RefCell<String> = const { RefCell::new(String::new()) };
     static PRIMARY: RefCell<String> = const { RefCell::new(String::new()) };
+    /// The HTML and image that came with the clipboard text, when the last
+    /// copy or paste had them.
+    static RICH: RefCell<(Option<String>, Option<crate::render::Pixmap>)> =
+        const { RefCell::new((None, None)) };
     static REQUESTS: RefCell<Vec<ClipboardRequest>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -39,13 +43,37 @@ pub fn clipboard_text() -> String {
     CLIPBOARD.with(|c| c.borrow().clone())
 }
 
-/// Replace the clipboard text (the in-process mirror).
+/// Replace the clipboard text (the in-process mirror), dropping any HTML or
+/// image that came with the text before.
 pub fn set_clipboard_text(text: &str) {
     CLIPBOARD.with(|c| {
         let mut s = c.borrow_mut();
         s.clear();
         s.push_str(text);
     });
+    RICH.with(|r| *r.borrow_mut() = (None, None));
+}
+
+/// Everything the in-process clipboard mirror holds: its text, and the HTML
+/// and image that came with it, from a [`write_clipboard`] in this app or,
+/// for an element that pastes rich content (a
+/// [`rich_editor`](crate::widgets::rich_editor)), the system clipboard as
+/// read for its paste. What a key handler reads on `KeyInput::Paste`.
+pub fn clipboard_content() -> ClipboardContent {
+    let text = clipboard_text();
+    let (html, image) = RICH.with(|r| r.borrow().clone());
+    ClipboardContent {
+        text: (!text.is_empty()).then_some(text),
+        html,
+        image,
+    }
+}
+
+/// Make `content` the in-process clipboard: its text (none: empty), HTML
+/// and image.
+pub(crate) fn set_clipboard_content(content: &ClipboardContent) {
+    set_clipboard_text(content.text.as_deref().unwrap_or_default());
+    RICH.with(|r| *r.borrow_mut() = (content.html.clone(), content.image.clone()));
 }
 
 /// The primary selection's text, as last selected in this app (the in-process
@@ -66,8 +94,9 @@ pub fn set_primary_text(text: &str) {
 
 /// Put `content` on the clipboard (or the primary selection), every
 /// representation it has: text, HTML, an image. Call it from any handler; the
-/// running `App` hands it to the system once the handler returns. The text,
-/// if any, also replaces the in-process mirror at once.
+/// running `App` hands it to the system once the handler returns. It also
+/// replaces the in-process mirror at once (see [`clipboard_content`]; for
+/// the primary selection, its text if it has some).
 ///
 /// ```
 /// # use stipple::core::write_clipboard;
@@ -79,10 +108,12 @@ pub fn set_primary_text(text: &str) {
 /// assert_eq!(stipple::core::clipboard_text(), "bold");
 /// ```
 pub fn write_clipboard(kind: ClipboardKind, content: ClipboardContent) {
-    if let Some(text) = &content.text {
-        match kind {
-            ClipboardKind::Clipboard => set_clipboard_text(text),
-            ClipboardKind::Primary => set_primary_text(text),
+    match kind {
+        ClipboardKind::Clipboard => set_clipboard_content(&content),
+        ClipboardKind::Primary => {
+            if let Some(text) = &content.text {
+                set_primary_text(text);
+            }
         }
     }
     REQUESTS.with(|r| r.borrow_mut().push(ClipboardRequest::Write(kind, content)));

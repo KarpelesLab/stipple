@@ -144,10 +144,21 @@ impl<S: 'static> App<S> {
     /// mirror. Returns `false` when the answer comes later (the paste then
     /// happens on [`Event::Clipboard`](crate::platform::Event::Clipboard)).
     pub(crate) fn clipboard_before_paste(&mut self, idx: usize, window: &dyn Window) -> bool {
-        match window.read_clipboard(ClipboardKind::Clipboard, ClipboardFormats::TEXT) {
+        // A rich text editor takes HTML and images too.
+        let rich = self.wants_rich_paste(idx);
+        let formats = if rich {
+            ClipboardFormats::ALL
+        } else {
+            ClipboardFormats::TEXT
+        };
+        match window.read_clipboard(ClipboardKind::Clipboard, formats) {
             ClipboardRead::Ready(content) => {
-                if let Some(text) = content.and_then(|c| c.text) {
-                    crate::core::set_clipboard_text(&text);
+                match content {
+                    Some(c) if rich && !c.is_empty() => crate::core::set_clipboard_content(&c),
+                    Some(ClipboardContent {
+                        text: Some(text), ..
+                    }) => crate::core::set_clipboard_text(&text),
+                    _ => {}
                 }
                 true
             }
@@ -161,8 +172,20 @@ impl<S: 'static> App<S> {
         }
     }
 
-    /// Paste `content`'s text into window `idx`'s focused field, if focus is
-    /// still on `focus`.
+    /// Whether the focused element in window `idx` pastes HTML and images.
+    fn wants_rich_paste(&self, idx: usize) -> bool {
+        let pane = &self.panes[idx];
+        let (Some(tree), Some(focus)) = (pane.tree.as_ref(), pane.focused) else {
+            return false;
+        };
+        crate::core::find_focus(tree, focus)
+            .and_then(|n| n.semantics.as_ref())
+            .is_some_and(|s| s.rich_paste)
+    }
+
+    /// Paste `content` into window `idx`'s focused field, if focus is still
+    /// on `focus`: its text, or for a field that takes them its HTML or
+    /// image too.
     fn paste_into(
         &mut self,
         idx: usize,
@@ -170,17 +193,25 @@ impl<S: 'static> App<S> {
         kind: ClipboardKind,
         content: Option<ClipboardContent>,
     ) -> bool {
-        let text = content.and_then(|c| c.text).filter(|t| !t.is_empty());
-        let Some(text) = text else { return false };
+        let Some(content) = content else { return false };
         if idx >= self.panes.len() || self.panes[idx].focused != focus {
             return false;
         }
+        let text = content.text.clone().filter(|t| !t.is_empty());
         match kind {
             ClipboardKind::Clipboard => {
-                crate::core::set_clipboard_text(&text);
+                let rich = self.wants_rich_paste(idx)
+                    && (content.html.is_some() || content.image.is_some());
+                if rich {
+                    crate::core::set_clipboard_content(&content);
+                } else if let Some(text) = &text {
+                    crate::core::set_clipboard_text(text);
+                } else {
+                    return false;
+                }
                 self.pane_press_key(idx, KeyInput::Paste)
             }
-            ClipboardKind::Primary => self.pane_type_text(idx, &text),
+            ClipboardKind::Primary => text.is_some_and(|t| self.pane_type_text(idx, &t)),
         }
     }
 

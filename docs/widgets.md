@@ -54,6 +54,10 @@ fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
   it. On the field: `.placeholder(..)`, `.on_submit(cx, ..)` (Enter, single
   line only) and `.on_change(cx, ..)` (after each edit). `take()` empties it
   and returns the text.
+- **Rich text.** `rich_editor` edits a `RichEditor`: headings, lists,
+  quotes and code blocks, bold, italic, underline, strikethrough, code,
+  links and images, with Markdown and HTML export and import. See
+  [rich-text-editing.md](rich-text-editing.md).
 - **Containers.** Plain layout takes its children directly and no `cx`:
   `row(vec![…])`, `column(vec![…])`, `grid(tracks, vec![…])`, `spacer()`.
   Containers that need `cx` (`panel`, `toolbar`, `scroll`,
@@ -165,7 +169,10 @@ stays tinted while `selected` (a toggle that is on). Icons are drawn at 18×18
 and can be a `Pixmap` or an `Svg`. Keep the `Arc` in your state, because
 images compare by identity. An icon button's name is what screen readers read
 out. Any element can go in a toolbar, a `select` for
-example. Items that don't fit overflow the toolbar; it doesn't move them to an
+example. `.keeps_focus()` on a button keeps the keyboard focus where it was
+when the button is clicked: a formatting toolbar over a
+[`rich_editor`](rich-text-editing.md) leaves the editor's caret and
+selection in place. Items that don't fit overflow the toolbar; it doesn't move them to an
 overflow menu yet.
 
 ## Chips

@@ -11,8 +11,9 @@
 //! and interactive controls: `button` (and [`Button`] for the other
 //! [`Variant`]s and custom content; [`Element::on_tap`]), `text_field` /
 //! `text_area` (editing a [`TextInput`]), `checkbox`, `switch`, `radio`,
-//! `slider`, `select`, `number_input`, `password_field`, and chips (`chip`,
-//! `choice_chips`, `filter_chips`).
+//! `slider`, `select`, `number_input`, `password_field`, chips (`chip`,
+//! `choice_chips`, `filter_chips`), and the `rich_editor` (editing a
+//! [`RichEditor`]: formatted text that exports to Markdown and HTML).
 
 #![forbid(unsafe_code)]
 
@@ -38,6 +39,7 @@ mod navigation_tests;
 mod number;
 mod password;
 mod preedit;
+mod rich_editor;
 mod select;
 mod sheet;
 #[cfg(test)]
@@ -61,6 +63,9 @@ pub use navigation::{
 pub use number::{NumberInput, number_input};
 pub use password::{PasswordField, password_field};
 pub use preedit::DisplayText;
+pub use rich_editor::{
+    Block, BlockKind, Inline, Marks, RichDocument, RichEditor, RichImage, rich_editor,
+};
 pub use select::{Select, select};
 pub use sheet::{BottomSheet, BottomSheetView, SHEET_WIDE, SheetDetent, bottom_sheet};
 pub use split::{Split, SplitPane, split_pane};

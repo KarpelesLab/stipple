@@ -1285,6 +1285,17 @@ impl Element {
         self
     }
 
+    /// Leave keyboard focus where it is when this element is pressed: a
+    /// toolbar button acting on a text editor (Bold, Insert image) keeps the
+    /// editor focused, its caret and selection in place, as native toolbars
+    /// do. Without it a press moves focus to what was pressed (or nowhere).
+    pub fn keeps_focus(mut self) -> Self {
+        self.semantics
+            .get_or_insert_with(Semantics::default)
+            .keep_focus = true;
+        self
+    }
+
     /// Show `icon` as the mouse cursor while the pointer is over this element
     /// (and over children that don't pick their own).
     pub fn cursor(mut self, icon: CursorIcon) -> Self {

@@ -59,6 +59,7 @@ How to build, package and run on each platform, and what works there today.
 | Text flowing around floats, shapes and images' opaque pixels | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ |
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Memoized subtrees, animation frames without a rebuild, painting only what shows | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ |
+| Rich text editor (`rich_editor`): marks, blocks, links, images; Markdown and HTML | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ |
 | Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ✅ ⁵⁰ | ✅ ⁵⁵ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ⁴³ |
@@ -537,7 +538,6 @@ Android driver end to end on an emulator against a stand-in for the library;
 the real library was run up to Google Play's answer (an emulator without a
 signed-in Play Store). Desktops and the web have no store and answer
 `Unavailable`; the mock store runs everywhere. See [purchases.md](purchases.md).
-
 ⁷⁴ In the shared core, drawn by Stipple: a classic bar in a gutter on Linux,
 Windows and the web; on macOS an overlay bar shown while scrolling (classic
 under `Theme::native()` when *Show scroll bars* is *Always*); on iOS and
@@ -551,6 +551,16 @@ App-tested (no character box over a shape's opaque pixels, pieces of a line
 on both sides of a shape, floats, wrap sides, bidi, selection across the
 pieces). CI runs `textflow --check` and drags its ring with `xdotool` on
 X11; elsewhere only built. See [text-flow.md](text-flow.md).
+⁷⁶ In the shared core: the editor, its keys, undo, and the Markdown and HTML
+export and import are the same everywhere. CI types into it on X11 (Ctrl+B,
+Ctrl+I, toolbar clicks that keep the editor focused, the sample image, an
+HTML paste from xclip) and
+reads the Markdown back, and checks the rendering and both exports off
+screen; elsewhere it is unit- and App-tested only. Pasting HTML and images
+from other apps works where the clipboard carries them (X11, Wayland,
+Windows, macOS; HTML on the web; text only on iOS and Android). Code is
+shown in the system's monospaced font, which the web doesn't have. See
+[rich-text-editing.md](rich-text-editing.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
@@ -577,6 +587,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Games](games.md): the game loop (`App::on_frame`), fixed time steps, polled input and rebindable actions
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click, selectable labels and paragraphs
+- [Rich text editing](rich-text-editing.md): `rich_editor`, a formatting toolbar, headings, lists, links and images, and Markdown and HTML out and in
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough, rich text with inline icons, outlines and shadows
 - [Text flowing around shapes](text-flow.md): floats, shapes in the middle of a column, images whose transparent pixels text runs over, margins, wrap sides and "through" wrapping, for plain and rich text
 - [Accessibility](accessibility.md): what each platform's screen readers get, and how CI checks it from outside the app

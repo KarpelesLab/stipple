@@ -158,6 +158,12 @@ pub(crate) struct Semantics {
     /// A text field's hints for the on-screen keyboard (see
     /// [`Element::input_kind`](crate::core::Element::input_kind)).
     pub input: Option<crate::platform::InputHints>,
+    /// A press on this element leaves keyboard focus where it is (see
+    /// [`Element::keeps_focus`](crate::core::Element::keeps_focus)).
+    pub keep_focus: bool,
+    /// The element pastes HTML and images too: a paste reads every format
+    /// from the system clipboard, not just text (a rich text editor).
+    pub rich_paste: bool,
 }
 
 /// A node in the accessibility tree.

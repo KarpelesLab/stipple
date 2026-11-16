@@ -1,7 +1,7 @@
 # Text editing
 
 `text_field` (one line) and `text_area` (several) edit a `TextInput` kept in
-the app state. Its `EditBuffer` handles the caret, the selection, the
+the app state (for formatted text, see [rich text editing](rich-text-editing.md)). Its `EditBuffer` handles the caret, the selection, the
 clipboard and undo. This page lists the keys and clicks they understand.
 
 <!-- live: textarea -->

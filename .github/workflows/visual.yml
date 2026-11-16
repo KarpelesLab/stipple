@@ -545,6 +545,8 @@ jobs:
   # The textflow example checks off screen that text runs on both sides of
   # its ring and never over its flower's petals; on screen, dragging the
   # ring with xdotool must move it and reflow the text around it.
+  # richeditor edits a document through its toolbar and checks the picture
+  # and the Markdown / HTML exports.
   visual-fonts:
     name: Visual test (Fonts and decorations / X11)
     runs-on: ubuntu-latest
@@ -559,7 +561,7 @@ jobs:
           sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core fonts-liberation fonts-noto-cjk
 
       - name: Build the font demo
-        run: cargo build --release --example fontdemo --example richtext --example textflow
+        run: cargo build --release --example fontdemo --example richtext --example textflow --example richeditor
 
       - name: List families and check the rendering off screen
         run: |
@@ -578,6 +580,9 @@ jobs:
           # Text flowing around a float, a shape in the middle and a card.
           ./target/release/examples/textflow --check | tee visual_output/textflow-check.log
           grep -q 'textflow: ok' visual_output/textflow-check.log
+          # The rich text editor: toolbar edits, the image drawn, both exports.
+          ./target/release/examples/richeditor --check | tee visual_output/richeditor-check.log
+          grep -q 'richeditor: ok' visual_output/richeditor-check.log
 
       - name: Start Xvfb
         run: |
@@ -2188,14 +2193,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install Xvfb, ImageMagick, xdotool, and a font
+      - name: Install Xvfb, ImageMagick, xdotool, xclip, and a font
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core
+          sudo apt-get install -y xvfb imagemagick xdotool xclip fonts-dejavu-core
 
-      - name: Build the clickdemo + textinput + hoverdemo + textarea + pointerdemo + rawkeys examples
+      - name: Build the clickdemo + textinput + hoverdemo + textarea + pointerdemo + rawkeys + richeditor examples
         # Release so per-event re-rasterization keeps up with input.
-        run: cargo build --release --example clickdemo --example textinput --example hoverdemo --example textarea --example pointerdemo --example rawkeys
+        run: cargo build --release --example clickdemo --example textinput --example hoverdemo --example textarea --example pointerdemo --example rawkeys --example richeditor
 
       - name: Click + type, screenshotting the results
         env:
@@ -2374,6 +2379,52 @@ jobs:
           # The hover look came with the pointer, and ended with it outside.
           grep -q 'hovered: true' visual_output/pointer.log
           [ "$(grep 'hovered:' visual_output/pointer.log | tail -1)" = "hovered: false" ]
+
+      # The rich text editor with real input: click into it, type a block,
+      # bold a word with Ctrl+B, italicize another (Shift+Ctrl+Left selects
+      # it, Ctrl+I), make the block a heading from the toolbar (the click
+      # keeps the editor focused), insert the sample image, and paste HTML
+      # that xclip holds (the paste reads text/html from another client).
+      # Each change prints the Markdown (STIPPLE_RICHEDITOR_ECHO), read back
+      # here.
+      - name: Rich text editor (type, Ctrl+B, toolbar, Markdown out)
+        env:
+          DISPLAY: ":99"
+          STIPPLE_X11_DEBUG: "1"
+        run: |
+          STIPPLE_RICHEDITOR_ECHO=1 ./target/release/examples/richeditor \
+            > visual_output/richeditor.log 2> visual_output/richeditor-debug.log &
+          APP_PID=$!
+          sleep 3
+          import -window root visual_output/richeditor-start.png
+          # Into the editor's empty space, then the end of the document.
+          xdotool mousemove 600 250 click 1; sleep 0.5
+          xdotool key ctrl+a Right Return; sleep 0.3
+          xdotool mousemove 348 33 click 1; sleep 0.3   # the ¶ button
+          xdotool type --delay 60 "Typed "
+          xdotool key ctrl+b; sleep 0.2
+          xdotool type --delay 60 "bold"
+          xdotool key ctrl+b; sleep 0.2
+          xdotool type --delay 60 " and slanted"
+          xdotool key shift+ctrl+Left; sleep 0.2
+          xdotool key ctrl+i; sleep 0.3
+          xdotool key End Return; sleep 0.2
+          xdotool mousemove 272 33 click 1; sleep 0.3   # H2
+          xdotool type --delay 60 "Heading"
+          xdotool key Return; sleep 0.2
+          xdotool mousemove 478 78 click 1; sleep 1     # Sample image
+          printf '<p>, <b>pasted</b> <i>html</i></p>' | xclip -selection clipboard -t text/html
+          sleep 0.5
+          xdotool key ctrl+v; sleep 1.5
+          pkill -x xclip || true
+          import -window root visual_output/richeditor-typed.png
+          xdotool mousemove 131 449 click 1; sleep 1    # show the HTML
+          import -window root visual_output/richeditor-html.png
+          kill "$APP_PID" 2>/dev/null || true
+          echo "=== richeditor.log ==="; tail -n 3 visual_output/richeditor.log
+          last=$(tail -n 1 visual_output/richeditor.log)
+          echo "$last" | grep -qF 'Typed **bold** and *slanted*\n\n## Heading\n\n![A sunset](data:image/png;base64,'
+          echo "$last" | grep -qF '), **pasted** *html*\n"'
 
       # The pointer lock: a click locks it (`--lock-test`), the grab holds the
       # pointer at the window's center (warped back after each move), and

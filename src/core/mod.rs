@@ -51,12 +51,12 @@ pub use a11y::{AccessNode, Role, accessibility_tree};
 pub use canvas::{CanvasId, CanvasPainter};
 pub(crate) use canvas::{CanvasInvalidation, invalidated_rects};
 pub(crate) use clipboard::{
-    ClipboardRequest, mirror as clipboard_mirror, selection_text,
+    ClipboardRequest, mirror as clipboard_mirror, selection_text, set_clipboard_content,
     take_requests as take_clipboard_requests, write_queued as clipboard_write_queued,
 };
 pub use clipboard::{
-    clipboard_text, primary_text, request_clipboard, set_clipboard_text, set_primary_text,
-    write_clipboard,
+    clipboard_content, clipboard_text, primary_text, request_clipboard, set_clipboard_text,
+    set_primary_text, write_clipboard,
 };
 pub use crossfade::THEME_FADE;
 pub use diff::Damage;
