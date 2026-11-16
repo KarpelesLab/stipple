@@ -484,6 +484,9 @@ struct Pane<S> {
     ime_sent: Option<crate::platform::ImeState>,
     // The keyboard hints the window was last told, sent on a change.
     hints_sent: Option<crate::platform::InputHints>,
+    // The fallback fonts' generation the window was last drawn with (see
+    // `render::font::warm`): a newer one draws it again, in full.
+    fonts_seen: u64,
     // The focused text field, caret and keyboard inset last scrolled into
     // view: it is scrolled again only when one of them changes, so the user
     // can scroll it away.
@@ -600,6 +603,7 @@ impl<S: 'static> Pane<S> {
             painted_focused: None,
             ime_sent: None,
             hints_sent: None,
+            fonts_seen: 0,
             revealed: None,
             secure_sent: false,
             primary: false,
@@ -2284,6 +2288,12 @@ impl<S: 'static> Pane<S> {
             self.hints_sent = hints;
         }
         if ime != self.ime_sent {
+            // From the first text input on, system fallback fonts load off
+            // this thread: finding them can take seconds, which an input
+            // method's first preedit mustn't wait for.
+            if ime.is_some() {
+                crate::render::font::warm::text_input_focused();
+            }
             window.set_ime(ime.as_ref());
             self.ime_sent = ime;
         }
@@ -3840,6 +3850,15 @@ impl<S: 'static> App<S> {
                     ControlFlow::Wait
                 }
                 Event::Wake => {
+                    // Fallback fonts the window's text was drawn without
+                    // came in (see `render::font::warm`): draw it again, in
+                    // full (the layout may not change, the glyphs do).
+                    let fonts = crate::render::font::warm::generation();
+                    let refont = self.panes[idx].fonts_seen != fonts;
+                    if refont {
+                        self.panes[idx].fonts_seen = fonts;
+                        self.panes[idx].dirty = true;
+                    }
                     // A fling scrolls on with every frame.
                     let flung = self.pane_fling(idx);
                     // A finger held down long enough opens the context menu.
@@ -3860,7 +3879,7 @@ impl<S: 'static> App<S> {
                     pane.anim_only = pane.animating && !pane.dirty && !ran && !flung && !held;
                     pane.dirty |= pane.animating && !pane.anim_only;
                     if ran || flung || held || pane.dirty || pane.anim_only {
-                        present(&mut self, &mut surfaces, idx, window, false);
+                        present(&mut self, &mut surfaces, idx, window, refont);
                     } else if content {
                         // Only canvases or viewport content changed: no
                         // rebuild, just those areas.

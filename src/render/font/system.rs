@@ -39,13 +39,22 @@ pub(crate) struct Index {
     aliases: HashMap<String, Alias>,
 }
 
-/// The process-wide index, built on first use.
+/// The process-wide index (see [`index`]).
+static INDEX: OnceLock<Index> = OnceLock::new();
+
+/// The process-wide index, built on first use (or by
+/// [`warm`](super::warm)'s thread, which a caller arriving meanwhile waits
+/// for).
 pub(crate) fn index() -> &'static Index {
-    static INDEX: OnceLock<Index> = OnceLock::new();
     INDEX.get_or_init(|| {
         let (dirs, aliases) = font_dirs();
         Index::new(scan(&dirs), aliases)
     })
+}
+
+/// Whether the index is built (so [`index`] returns at once).
+pub(crate) fn index_ready() -> bool {
+    INDEX.get().is_some()
 }
 
 /// Family names compare ignoring case and spaces, as fontconfig does.

@@ -405,8 +405,23 @@ prediction list takes the first one (a probe composition left behind is
 how `兄本` was committed instead of `日本`). The commit after Return also
 reached the app only with the next key: TSF delivers it through sent
 messages that run inside `PeekMessageW`, and the event loop delivered its
-queue only after a posted message (fixed in the loop). A failing run ends
-with `FAILED at <stage>` and the window's input state. It has been
+queue only after a posted message (fixed in the loop). Later it failed
+about one run in five, always at the probe: the first `あ` was the first
+text needing a system fallback font, and drawing it indexed every
+installed font and read the CJK collection on the UI thread, 2 to 6 s on
+the runner (the antivirus scans each file first). The window stopped
+answering mid-composition (`IsHungAppWindow`), the probe's `a` came late,
+the script took that for the IME being off and toggled it (`VK_KANJI`),
+and the IME was left in direct input or with a composition Escape couldn't
+cancel. Fallbacks now load on a background thread once a field has the
+input method (see [fonts](fonts.md#where-system-fonts-come-from)), and the
+probe waits up to 6 s for the field to show its `a` before trying another
+toggle: the IME's own first key takes 1 to 4 s on a fresh runner (it
+loads as it starts), and a toggle sent while that key is still on its way
+turns the IME back off. A failing run ends with `FAILED at <stage>`, the
+window's input state, and whether the window answers messages
+(`IsHungAppWindow`, a `WM_NULL` sent with a timeout); each line has the
+time. It has been
 required since it passed three runs in a row after those fixes. On macOS a non-blocking step of the
 `interaction-macos` job (`.github/scripts/ime-macos.sh`) compiles a small
 Swift helper that enables and selects the built-in Japanese input source

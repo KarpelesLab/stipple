@@ -56,6 +56,23 @@ itself, opening each file only for its header tables (names, weight, slant,
 spacing), and caches the list for the process. The first `from_family` or
 `families` call pays for that scan.
 
+The system fallbacks (the `cjk`, `emoji` and `symbol` families a font
+falls back to for characters it lacks) are found through the same list,
+when text first needs them. Once a text field gets the input method, the
+App's thread stops loading them itself: when its text first needs one, the
+list is built and the fallback resolved and read on a background thread,
+the text is drawn without it for that moment (boxes for the missing
+glyphs), and the windows are drawn again when it's ready (nothing is read
+ahead: indexing as the field got focus slowed the input method's own
+start). Indexing can take
+seconds on a cold disk (2 to 8 s for 147 files on CI's Windows runners,
+where the antivirus scans each file as it's opened), and the first such
+text is usually an input method's first preedit, which a stalled UI thread
+breaks: the Microsoft Japanese IME lost the keys typed meanwhile, or left
+its composition stuck. Before any text input (Japanese labels, a headless
+render) fallbacks still load when the text needs them, on its thread
+(`src/render/font/warm.rs`).
+
 | Platform | Directories |
 |---|---|
 | Linux, BSDs | those fontconfig's configuration lists (`/etc/fonts/fonts.conf` or `$FONTCONFIG_FILE`, following its `<include>`s), else `/usr/share/fonts`, `/usr/local/share/fonts`, `~/.local/share/fonts`, `~/.fonts` |

@@ -13,8 +13,8 @@
 #    document: the app's trace says "focus"), and WM_INPUTLANGCHANGEREQUEST
 #    switches the window's thread to Japanese, which activates the IME's
 #    profile.
-# 4. SendInput: VK_IME_ON (or VK_KANJI) until "a" becomes a preedit, Escape
-#    cancels it (again if the first Escape only closed the IME's prediction
+# 4. SendInput: VK_IME_ON (or VK_KANJI) until "a" becomes a preedit (the
+#    IME's first key may take seconds), Escape cancels it (again if the first Escape only closed the IME's prediction
 #    list), then n i h o n (a hiragana preedit), Space (the conversion,
 #    nihon in kanji), Return (the commit). The app prints its field
 #    (STIPPLE_TEXTINPUT_ECHO) and its TSF trace (STIPPLE_DEBUG_TSF).
@@ -34,7 +34,7 @@ $profileGuid = '{A76C93D9-5523-4E90-AAFA-4DB112F9AC76}'
 $profileKey = "HKLM:\SOFTWARE\Microsoft\CTF\TIP\$tip\LanguageProfile\0x00000411\$profileGuid"
 $title = 'Stipple Text Input'
 
-function Stage($msg) { Write-Host "ime-windows: $msg" }
+function Stage($msg) { Write-Host "ime-windows: [$((Get-Date).ToString('HH:mm:ss.fff'))] $msg" }
 function Has-Ime { Test-Path $profileKey }
 
 # Runs a script block with a deadline (installs can stall on the runner).
@@ -131,6 +131,13 @@ public static class Ime {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, StringBuilder s, int n);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] public static extern bool IsHungAppWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr SendMessageTimeoutW(IntPtr h, uint msg, IntPtr wp, IntPtr lp, uint flags, uint ms, out IntPtr result);
+  public static string Responds(IntPtr h) {
+    IntPtr r; var t = DateTime.Now;
+    bool ok = SendMessageTimeoutW(h, 0, IntPtr.Zero, IntPtr.Zero, 2, 3000, out r) != IntPtr.Zero;
+    return String.Format("hung: {0}; WM_NULL answered: {1} in {2} ms", IsHungAppWindow(h), ok, (int)(DateTime.Now - t).TotalMilliseconds);
+  }
   [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, INPUT[] inputs, int size);
 
   static INPUT KeyInput(ushort vk, bool up) {
@@ -268,6 +275,7 @@ function Input-State {
 function Fail([string]$At, [string]$Why) {
   Stage "FAILED at $At`: $Why"
   Stage "  $(Input-State)"
+  Stage "  $([Ime]::Responds($hwnd))"
   Finish 1
 }
 
@@ -370,7 +378,7 @@ function Clear-Composition([string]$Why) {
         if ($i -gt 1) { Stage "$Why`: Escape $i cancelled the composition" }
         return $true
       }
-      Stage "$Why`: Escape $i left $(Last-Field)"
+      Stage "$Why`: Escape $i left $(Last-Field); $([Ime]::Responds($hwnd))"
     } else {
       # Text typed with the IME off, or a stray commit: Backspace it.
       Stage "$Why`: the field has $(Last-Field); Backspace"
@@ -393,7 +401,12 @@ for ($round = 1; $round -le 2 -and -not $on; $round++) {
     Start-Sleep -Milliseconds 500
     $m = Mark
     Send-Keys @(0x41)        # a
-    if (Wait-For $m 0 'preedit=Some(' 1500) {
+    # The IME's first key can take seconds (it loads as it starts on a
+    # fresh runner): wait for the field to show anything before deciding,
+    # since toggling again while the "a" is still on its way turns the IME
+    # back off and leaves that "a" to arrive in the next stage.
+    Wait-For $m 0 'textinput: ' 6000 | Out-Null
+    if ((Since $m)[0].Contains('preedit=Some(')) {
       Stage ("VK 0x{0:x} turned the IME on" -f $toggle)
       $on = $true
     } elseif ((Since $m)[0].Contains('textinput: ')) {

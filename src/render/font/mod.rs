@@ -11,6 +11,7 @@
 pub(crate) mod fontconfig;
 pub(crate) mod sfnt;
 pub(crate) mod system;
+pub(crate) mod warm;
 
 #[cfg(test)]
 mod cff_tests;
@@ -694,7 +695,10 @@ impl Font {
                 want.push(generic);
             }
         }
-        if want.is_empty() {
+        // While this thread takes text input, a fallback that isn't ready
+        // loads in the background (see `warm`): the text goes without it
+        // until the App draws again.
+        if want.is_empty() || warm::must_wait(&want) {
             return false;
         }
         let mut system = chain.system.clone();
@@ -709,7 +713,9 @@ impl Font {
     }
     /// Whether `c` draws as a real glyph, from this font or a fallback (the
     /// system's, loaded if `c` needs one), rather than as the missing-glyph
-    /// box.
+    /// box. On the App's thread once a text field has had the input method,
+    /// a system fallback loads in the background, and this is `false` until
+    /// it's ready.
     pub fn has_glyph(&self, c: char) -> bool {
         let mut buf = [0u8; 4];
         let glyphs = self.shape_cached(c.encode_utf8(&mut buf), 16.0);
