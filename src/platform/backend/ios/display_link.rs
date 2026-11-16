@@ -100,9 +100,13 @@ pub(super) fn install() {
             std::mem::transmute(objc_msgSend as *const c_void);
         let hz = fps(screen, sel("maximumFramesPerSecond"));
         if hz > 0 {
-            crate::platform::frame::set_interval(Duration::from_secs_f64(1.0 / hz as f64));
+            crate::platform::frame::report_refresh(
+                "UIScreen.maximumFramesPerSecond",
+                Duration::from_secs_f64(1.0 / hz as f64),
+            );
         }
     }
+    crate::platform::frame::name_source("CADisplayLink");
     crate::platform::frame::install(Arc::new(start), Some(Arc::new(stop)));
 }
 

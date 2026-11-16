@@ -163,6 +163,23 @@ jobs:
           grep -q 'asyncdemo: event loop exited' visual_output/async.log
           grep -q 'asyncdemo: spinner ok' visual_output/async.log
 
+      - name: Frames paced by Present's vblank; an idle app presents nothing and never wakes
+        env:
+          DISPLAY: ":99"
+          STIPPLE_DEBUG_FRAMES: "1"
+        run: |
+          cargo build --release --example framepacing
+          # Animates for 3 s (about 60 presents a second against Xvfb's fake
+          # 60 Hz vblank, from Present's notifies), then idles for 3 s: no
+          # presents and no wakeups. Exits 1 otherwise.
+          timeout 30 ./target/release/examples/framepacing 2>&1 | tee visual_output/framepacing.log
+          grep -q 'framepacing: ok' visual_output/framepacing.log
+          grep -q 'from the display (Present)' visual_output/framepacing.log
+          grep -q 'stipple: frame pacing: Present reports a' visual_output/framepacing.log
+          # And with Present's clock off, the timer at RandR's refresh still paces.
+          STIPPLE_X11_PRESENT_CLOCK=0 timeout 30 ./target/release/examples/framepacing 2>&1 | tee visual_output/framepacing-timer.log
+          grep -q 'framepacing: ok' visual_output/framepacing-timer.log
+
       - name: A canvas repaints only the rows it invalidates
         env:
           DISPLAY: ":99"
@@ -1813,6 +1830,22 @@ jobs:
           echo "distinct colors: $colors"
           [ "$colors" -gt 16 ]
 
+      - name: Frame pacing drawn with ${{ matrix.api }}; idle, no GPU work
+        env:
+          DISPLAY: ":99"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          STIPPLE_RENDERER: ${{ matrix.renderer }}
+          STIPPLE_DEBUG_FRAMES: "1"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          cargo build --release --example framepacing --features gl,vk
+          # Presents paced by Present's vblank (the swapchain's FIFO behind
+          # them); idle, no presents and no wakeups, so no GPU work.
+          timeout 40 ./target/release/examples/framepacing 2>&1 | tee visual_output/framepacing-${{ matrix.renderer }}.log
+          grep -q "stipple: presenting with ${{ matrix.api }} straight to the window" visual_output/framepacing-${{ matrix.renderer }}.log
+          grep -q 'framepacing: ok' visual_output/framepacing-${{ matrix.renderer }}.log
+
       - name: Stop the app and Xvfb
         if: always()
         run: |
@@ -1982,6 +2015,18 @@ jobs:
           grep -q 'asyncdemo: ticks=10 result="10! = 3628800"' visual_output/wl-async.log
           grep -q 'asyncdemo: event loop exited' visual_output/wl-async.log
           grep -q 'asyncdemo: spinner ok' visual_output/wl-async.log
+
+          # --- frame pacing: wl_surface.frame paces an animation at the
+          # headless output's 60 Hz; idle, the app presents nothing and its
+          # loop never wakes. Not yet seen passing under headless sway, so it
+          # warns instead of failing the job. ---
+          cargo build --release --example framepacing
+          STIPPLE_DEBUG_FRAMES=1 timeout 30 ./target/release/examples/framepacing 2>&1 | tee visual_output/wl-framepacing.log || true
+          if grep -q 'framepacing: ok' visual_output/wl-framepacing.log && grep -q 'from the display (wl_surface.frame)' visual_output/wl-framepacing.log; then
+            echo "ok: frame pacing under sway"
+          else
+            echo "::warning::frame pacing under sway didn't pass (see wl-framepacing.log)"
+          fi
 
           # --- canvas: only the invalidated rows are re-rasterized. ---
           cargo build --release --example canvasdemo
@@ -2843,6 +2888,24 @@ jobs:
           if (-not (Select-String -Path visual_output\d3d-window.log -Pattern 'stipple: drawing with Direct3D 11' -Quiet)) { throw 'not drawn with Direct3D 11' }
           if (Select-String -Path visual_output\d3d-window.log -Pattern 'drawing on the CPU' -Quiet) { throw 'fell back to the CPU' }
 
+      # Frame pacing: DwmFlush on the CPU path, the swap chain's frame-latency
+      # waitable object on Direct3D 11; idle, no presents and no wakeups. Not
+      # blocking until it has passed on the runners (a virtual display's
+      # compositor may not run at a real rate).
+      - name: Frame pacing (CPU and Direct3D 11)
+        continue-on-error: true
+        shell: bash
+        env:
+          STIPPLE_DEBUG_FRAMES: "1"
+        run: |
+          cargo build --release --features d3d --example framepacing
+          timeout 40 ./target/release/examples/framepacing.exe 2>&1 | tee visual_output/framepacing-cpu.log
+          grep -q 'framepacing: ok' visual_output/framepacing-cpu.log
+          STIPPLE_RENDERER=d3d11 timeout 40 ./target/release/examples/framepacing.exe 2>&1 | tee visual_output/framepacing-d3d11.log
+          grep -q 'stipple: drawing with Direct3D 11' visual_output/framepacing-d3d11.log
+          grep -q 'DXGI frame-latency waitable' visual_output/framepacing-d3d11.log
+          grep -q 'framepacing: ok' visual_output/framepacing-d3d11.log
+
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()
@@ -3466,6 +3529,21 @@ jobs:
           # It drew with Metal, and didn't fall back to the CPU.
           grep -q "stipple: drawing with Metal" visual_output/metal-window.log
           ! grep -q "drawing on the CPU" visual_output/metal-window.log
+
+      # Frame pacing: CVDisplayLink ticks, a display-synced CAMetalLayer;
+      # idle, no presents and no wakeups. Not blocking until it has passed on
+      # the runners (their virtual display's link may not tick at a real rate).
+      - name: Frame pacing (CPU and Metal)
+        continue-on-error: true
+        env:
+          STIPPLE_DEBUG_FRAMES: "1"
+        run: |
+          cargo build --release --features mtl --example framepacing
+          perl -e 'alarm 40; exec @ARGV' ./target/release/examples/framepacing 2>&1 | tee visual_output/framepacing-cpu.log
+          grep -q 'framepacing: ok' visual_output/framepacing-cpu.log
+          STIPPLE_RENDERER=metal perl -e 'alarm 40; exec @ARGV' ./target/release/examples/framepacing 2>&1 | tee visual_output/framepacing-metal.log
+          grep -q 'stipple: drawing with Metal' visual_output/framepacing-metal.log
+          grep -q 'framepacing: ok' visual_output/framepacing-metal.log
 
       - name: Launch the Stipple window and screenshot the screen
         env:

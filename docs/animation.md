@@ -519,12 +519,12 @@ each frame to animate. See [transforms.md](transforms.md).
 | Platform | Frames paced by |
 |---|---|
 | Wayland | `wl_surface.frame` callbacks, requested with each commit |
-| X11 | a timer at the monitor's refresh rate, read from RandR (60 Hz if unknown) |
-| Windows | a thread waiting on `DwmFlush`, DWM's composition pass |
+| X11 | Present's vblank notifies (`PresentNotifyMSC`); without Present, a timer at the monitor's refresh rate, read from RandR (60 Hz if unknown) |
+| Windows | a thread waiting on `DwmFlush`, DWM's composition pass, or on a GPU window's swap chain (its frame-latency waitable object) |
 | macOS | a `CVDisplayLink`, stopped while nothing animates |
 | iOS | a `CADisplayLink`, paused while nothing animates |
 | Web | `requestAnimationFrame`, requested only while something animates |
-| Android | not yet: nothing animates there |
+| Android | `AChoreographer` frame callbacks |
 
 A frame that's asked for always arrives: if the display source doesn't deliver
 within two refresh intervals (a hidden window, say), a timer does. A source
@@ -537,7 +537,11 @@ paces frames at the refresh interval until the source delivers one again.
 process started: how many the display source and the fallback timer
 delivered, how many an `App` presented and how long building, rasterizing and
 handing them to the backend took (mean and max), and, on macOS, how long
-`drawRect:` took to put them on screen. `asyncdemo --selftest` prints them.
+`drawRect:` took to put them on screen, how many times the event loop woke,
+and the refresh measured from the source's ticks. `asyncdemo --selftest` and
+`framepacing` print them; `STIPPLE_DEBUG_FRAMES=1` logs the refresh and a
+line a second while frames are presented. See
+[Frame pacing](gpu.md#frame-pacing).
 
 ## Not yet
 

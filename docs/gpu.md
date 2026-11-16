@@ -280,8 +280,9 @@ whole into the drawable (so the layer isn't `framebufferOnly`): drawables
 don't keep the previous frame, and the kept one lets a frame redraw only what
 changed (see [Redrawing only what changed](#redrawing-only-what-changed)).
 An idle window still draws nothing: a frame with no damage isn't drawn at
-all. Frames are paced by the display link as before; `nextDrawable` blocks
-when three frames are in flight.
+all. Frames are paced by the display link as before, and the layer is
+display-synced (`displaySyncEnabled`, macOS); `nextDrawable` blocks when
+three frames are in flight. See [Frame pacing](#frame-pacing).
 
 ### How fast
 
@@ -337,10 +338,10 @@ whole), stretched while the window is resized ahead of its next frame. Its buffe
 physical size, so a resize or a move to a monitor with another DPI
 (`WM_DPICHANGED` resizes the window, and the next frame is drawn at the new
 scale) reaches the swap chain with the frame drawn for it. A frame-latency
-waitable object keeps at most one frame queued: the renderer waits on it
-before drawing, so what it draws is the next frame shown. It doesn't drive
-the frame clock: frames are still paced by the compositor (`DwmFlush`), as
-on the CPU path. While the swap chain shows the frames the window stops
+waitable object (`SetMaximumFrameLatency(1)`) keeps at most one frame
+queued: the renderer waits on it before drawing, so what it draws is the next
+frame shown, and it paces the frame clock (see
+[Frame pacing](#frame-pacing)). While the swap chain shows the frames the window stops
 painting its bitmap; when the renderer falls back, the swap chain is
 released and the bitmap is painted again.
 
@@ -505,6 +506,8 @@ they are, as the CPU frames are shown), re-made when the window's size
 changes or it is out of date. Since the frame target persists, a window's
 frame redraws only what changed in it, and with `VK_KHR_incremental_present`
 the present names that rectangle (a new swapchain's first frame names none).
+With `VK_GOOGLE_display_timing`, a new swapchain's refresh
+(`vkGetRefreshCycleDurationGOOGLE`) is reported to the frame clock.
 
 - **X11** (`VK_KHR_xcb_surface`). The backend speaks X11 over its own
   socket and has no `xcb_connection_t`, but a window's id is the same on
@@ -541,6 +544,65 @@ below already does) and attach it with `zwp_linux_dmabuf_v1` on the
 backend's own connection. That is planned with 6g's zero-copy work; until
 then a Wayland window's frames are drawn on the GPU, read back and presented
 through `wl_shm`.
+
+## Frame pacing
+
+Animation frames come from the frame clock (`stipple::platform::frame`, see
+[Animation](animation.md#where-frames-come-from)): a view that animates asks
+for a frame, the display source ticks at the next refresh, and the app
+builds and presents. When nothing asks, no source is armed, nothing is
+presented and the event loop doesn't wake: an idle app does no GPU work at
+all (a frame with no damage isn't drawn either). What paces each frame:
+
+| Platform | CPU frames | GPU frames |
+|---|---|---|
+| X11 | Present's `PresentNotifyMSC`, a `CompleteNotify` at the window's next vblank, on a connection of the clock's own | the same, the swapchain FIFO (Vulkan) or EGL's swap interval behind it |
+| Wayland | `wl_surface.frame`, requested with each commit | the same (frames are read back and committed as `wl_shm` buffers) |
+| Windows | `DwmFlush`, DWM's composition pass | the swap chain's frame-latency waitable object, after a present |
+| macOS | `CVDisplayLink` | the same, into a display-synced `CAMetalLayer` |
+| iOS | `CADisplayLink` | the same |
+| Android | `AChoreographer` | the same |
+| Web | `requestAnimationFrame` | the same, into the canvas |
+
+On X11 the Present clock runs on a thread with its own connection, so the
+backend's connection never sees Present's generic events: armed, it asks for
+the vblank after the last one it saw (at once if that has passed) and ticks
+when the notify comes. Without Present it isn't installed and the timer
+paces frames at RandR's refresh, as before (`STIPPLE_X11_PRESENT_CLOCK=0`
+forces that). On Windows, once a window has a swap chain, the clock's thread
+waits on (a duplicate of) its waitable object after each present instead of
+calling `DwmFlush`, and hands the signal it consumed to the renderer, which
+then draws without waiting again: the frame is drawn exactly when the swap
+chain has room for it. A frame with nothing presented since falls back to
+`DwmFlush`.
+
+The display's refresh comes from what the platform reports, each logged and
+used to pace the fallback timer: RandR's mode and Present's UST/MSC over 60
+vblanks (X11), `wl_output.mode`, `VK_GOOGLE_display_timing`, `CVDisplayLink`'s
+nominal period, `UIScreen.maximumFramesPerSecond`. The clock also measures
+the refresh it sees: the median gap between back-to-back ticks over the last
+16 (`FrameStats::measured_interval`). A source that doesn't deliver a
+requested frame within two refreshes is backed up by the timer, and one that
+misses three in a row is no longer waited for, as before.
+
+With `STIPPLE_DEBUG_FRAMES=1` the clock logs the reported and measured
+refresh and, once a second while frames are presented, how many there were
+and where they came from:
+
+```text
+stipple: frame pacing: Present reports a 16.66 ms refresh (60.0 Hz)
+stipple: frame pacing: Present ticks every 16.71 ms (59.8 Hz), measured
+stipple: frames: 60 presents in 1.00 s (60.0/s): 60 from the display (Present), 0 from the timer, 60 wakeups
+```
+
+An idle app logs nothing. The `framepacing` example animates for three
+seconds, then idles for three, and checks the presents came at roughly the
+display's rate and that the idle app presented nothing and never woke. CI
+runs it on Xvfb (CPU, and in `visual-gpu-present` with Vulkan on lavapipe
+and GLES on llvmpipe), under headless sway, and, not blocking yet, on
+Windows (CPU and Direct3D 11) and macOS (CPU and Metal). Run locally on
+Xvfb with the CPU, GLES and Vulkan: 60 presents a second from Present, none
+and no wakeups idle.
 
 ## OpenGL ES on a window
 

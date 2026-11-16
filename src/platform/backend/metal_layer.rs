@@ -94,6 +94,12 @@ impl MetalLayer {
                 return None;
             }
             send_bool(layer, c"setOpaque:", true);
+            // Presents wait for the display's refresh (the default, said
+            // anyway: frames are paced by the display link and the layer
+            // together, and an unsynced layer would tear). macOS only: iOS
+            // layers always sync.
+            #[cfg(target_os = "macos")]
+            send_bool(layer, c"setDisplaySyncEnabled:", true);
             send_id(parent, c"addSublayer:", layer);
             Some(Self {
                 layer,

@@ -48,7 +48,7 @@ mod tray;
 /// Input methods through the Text Services Framework.
 mod tsf;
 /// Pacing animation frames by the compositor (`DwmFlush`).
-mod vsync;
+pub(crate) mod vsync;
 
 pub(crate) use tray::notify;
 

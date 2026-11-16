@@ -21,7 +21,12 @@
 //! paces frames at the refresh interval until the source delivers one again.
 //!
 //! [`stats`] counts where frames came from and what presenting them cost, for
-//! diagnostics (`asyncdemo --selftest` prints them).
+//! diagnostics (`asyncdemo --selftest` and `framepacing` print them). The
+//! clock also measures how far apart the display source's ticks come while
+//! something animates ([`FrameStats::measured_interval`]), which is the
+//! refresh the app actually sees; with `STIPPLE_DEBUG_FRAMES` set it logs that,
+//! the refresh a backend reports from its display or swap chain, and a line a
+//! second about what was presented (an idle app logs nothing).
 //!
 //! There is one event loop per process, so this state is global, like
 //! the loop's wake-up state.
@@ -58,6 +63,13 @@ pub struct FrameStats {
     pub displays: u64,
     pub display_time: Duration,
     pub display_max: Duration,
+    /// Times the event loop woke to deliver [`Event::Wake`](crate::platform::Event::Wake):
+    /// a frame, a timer, or another thread. An idle app adds none.
+    pub wakeups: u64,
+    /// How far apart the display source's ticks came while frames were
+    /// asked for back to back: the refresh as observed, once enough ticks
+    /// have been seen (see [`Meter`]).
+    pub measured_interval: Option<Duration>,
 }
 
 impl FrameStats {
@@ -104,6 +116,71 @@ struct Clock {
     /// The source missed [`MISS_LIMIT`] in a row: don't wait for it.
     distrusted: bool,
     stats: FrameStats,
+    meter: Meter,
+}
+
+/// How many tick-to-tick gaps the [`Meter`] looks at.
+const METER_WINDOW: usize = 16;
+
+/// Measures the display source's refresh from the gaps between its ticks.
+///
+/// Only gaps between ticks that both delivered a frame, the second asked for
+/// while the first was being drawn, count: those are what an animating app
+/// sees. The measure is the median of the last [`METER_WINDOW`] gaps, so the
+/// odd frame that took two refreshes to draw, or a tick that came late or
+/// early, doesn't move it.
+#[derive(Clone, Copy, Debug)]
+struct Meter {
+    /// The last display tick that delivered a frame.
+    last: Option<Instant>,
+    gaps: [Duration; METER_WINDOW],
+    /// Gaps recorded so far (saturating at the window), and where the next goes.
+    len: usize,
+    next: usize,
+}
+
+impl Meter {
+    const fn new() -> Self {
+        Self {
+            last: None,
+            gaps: [Duration::ZERO; METER_WINDOW],
+            len: 0,
+            next: 0,
+        }
+    }
+
+    /// The source ticked at `now` and delivered a frame asked for at `asked`.
+    /// Returns the measured interval once the window is full.
+    fn tick(&mut self, now: Instant, asked: Instant, interval: Duration) -> Option<Duration> {
+        let last = self.last.replace(now);
+        // Back to back: the frame was asked for after the last tick (while it
+        // was drawn), not after a pause.
+        let gap = last
+            .filter(|&l| asked >= l)
+            .map(|l| now.saturating_duration_since(l))?;
+        // Ignore gaps no display has (over 500 Hz, under 10 Hz) and pauses.
+        if gap < Duration::from_millis(2) || gap > interval.max(Duration::from_millis(25)) * 4 {
+            return None;
+        }
+        self.gaps[self.next] = gap;
+        self.next = (self.next + 1) % METER_WINDOW;
+        self.len = (self.len + 1).min(METER_WINDOW);
+        self.measured()
+    }
+
+    /// A tick or timer frame that wasn't back to back: start the next gap over.
+    fn break_run(&mut self) {
+        self.last = None;
+    }
+
+    fn measured(&self) -> Option<Duration> {
+        if self.len < METER_WINDOW {
+            return None;
+        }
+        let mut gaps = self.gaps;
+        gaps.sort_unstable();
+        Some(gaps[METER_WINDOW / 2])
+    }
 }
 
 impl Clock {
@@ -125,7 +202,10 @@ impl Clock {
                 displays: 0,
                 display_time: Duration::ZERO,
                 display_max: Duration::ZERO,
+                wakeups: 0,
+                measured_interval: None,
             },
+            meter: Meter::new(),
         }
     }
 
@@ -157,9 +237,13 @@ impl Clock {
 
     /// A display source ticked. Returns whether a frame was wanted.
     fn tick(&mut self, now: Instant) -> bool {
-        if self.wanted.is_none() {
+        let Some(asked) = self.wanted else {
             self.claimed = false;
+            self.meter.break_run();
             return false;
+        };
+        if let Some(measured) = self.meter.tick(now, asked, self.interval) {
+            self.stats.measured_interval = Some(measured);
         }
         self.deliver(now);
         self.stats.from_display += 1;
@@ -184,6 +268,7 @@ impl Clock {
                     self.distrusted |= self.misses >= MISS_LIMIT;
                 }
                 self.deliver(now);
+                self.meter.break_run();
                 self.stats.from_timer += 1;
                 true
             }
@@ -266,11 +351,153 @@ pub fn stats() -> FrameStats {
 
 /// Count a frame an app presented, which took `took`.
 pub(crate) fn note_present(took: Duration) {
-    clock(|c| {
+    let stats = clock(|c| {
         c.stats.presents += 1;
         c.stats.present_time += took;
         c.stats.present_max = c.stats.present_max.max(took);
+        c.stats
     });
+    if debug_on()
+        && let Some(now) = now()
+    {
+        log_summary(now, stats);
+    }
+}
+
+/// Count the event loop waking to deliver a wake (from
+/// [`wake::take`](super::wake::take)).
+pub(crate) fn note_wake() {
+    clock(|c| c.stats.wakeups += 1);
+}
+
+/// What the display source is, for the log: `"timer"` until a backend names
+/// its source.
+static SOURCE_NAME: Mutex<&str> = Mutex::new("timer");
+
+/// Name the running backend's display source (`"wl_surface.frame"`,
+/// `"Present"`, `"DXGI frame-latency waitable"`…), for the log.
+pub(crate) fn name_source(name: &'static str) {
+    if let Ok(mut n) = SOURCE_NAME.lock() {
+        *n = name;
+    }
+}
+
+/// The display source's name (see [`name_source`]).
+pub fn source_name() -> &'static str {
+    SOURCE_NAME.lock().map(|n| *n).unwrap_or("timer")
+}
+
+/// Whether `STIPPLE_DEBUG_FRAMES` asks for the frame log.
+fn debug_on() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("STIPPLE_DEBUG_FRAMES").is_some_and(|v| v != "0"))
+}
+
+/// A line of the frame log, where the platform shows diagnostics.
+fn debug_line(msg: &str) {
+    #[cfg(target_os = "android")]
+    super::backend::android::log(msg);
+    #[cfg(target_arch = "wasm32")]
+    super::backend::web::log(msg, false);
+    #[cfg(not(any(target_os = "android", target_arch = "wasm32")))]
+    eprintln!("{msg}");
+}
+
+fn hz(interval: Duration) -> f64 {
+    1.0 / interval.as_secs_f64().max(1e-9)
+}
+
+/// Whether `a` and `b` differ by more than 10%: a change worth logging (a
+/// timer-driven vblank jitters by several percent; a real change of
+/// refresh is 60 to 120 Hz, 144 to 120, or 60 to 48).
+fn differs(a: Duration, b: Duration) -> bool {
+    let (a, b) = (a.as_secs_f64(), b.as_secs_f64());
+    (a - b).abs() > 0.1 * a.max(b)
+}
+
+/// Log the measured refresh when it first settles and when it moves.
+fn log_measured(measured: Duration) {
+    static LOGGED: Mutex<Option<Duration>> = Mutex::new(None);
+    if !debug_on() {
+        return;
+    }
+    let Ok(mut logged) = LOGGED.lock() else {
+        return;
+    };
+    if logged.is_some_and(|l| !differs(l, measured)) {
+        return;
+    }
+    *logged = Some(measured);
+    debug_line(&format!(
+        "stipple: frame pacing: {} ticks every {:.2} ms ({:.1} Hz), measured",
+        source_name(),
+        measured.as_secs_f64() * 1000.0,
+        hz(measured)
+    ));
+}
+
+/// Once a second while frames are presented: how many, and from where.
+fn log_summary(now: Instant, stats: FrameStats) {
+    static WINDOW: Mutex<Option<(Instant, FrameStats)>> = Mutex::new(None);
+    let Ok(mut window) = WINDOW.lock() else {
+        return;
+    };
+    let Some((start, before)) = *window else {
+        *window = Some((now, stats));
+        return;
+    };
+    let secs = now.saturating_duration_since(start).as_secs_f64();
+    if secs > 3.0 {
+        // The last present was long ago (the app idled): start a new window.
+        *window = Some((now, stats));
+        return;
+    }
+    if secs < 1.0 {
+        return;
+    }
+    *window = Some((now, stats));
+    let presents = stats.presents - before.presents;
+    debug_line(&format!(
+        "stipple: frames: {presents} presents in {secs:.2} s ({:.1}/s): {} from the display \
+         ({}), {} from the timer, {} wakeups",
+        presents as f64 / secs,
+        stats.from_display - before.from_display,
+        source_name(),
+        stats.from_timer - before.from_timer,
+        stats.wakeups - before.wakeups,
+    ));
+}
+
+/// A backend learned the display's refresh from its display or swap chain
+/// (`from`: RandR, Present's UST/MSC, `VK_GOOGLE_display_timing`, a display
+/// link): pace the fallback timer by it, and log it when it changes.
+#[cfg_attr(
+    not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        all(target_os = "android", feature = "vk")
+    )),
+    allow(dead_code)
+)]
+pub(crate) fn report_refresh(from: &'static str, interval: Duration) {
+    static LOGGED: Mutex<Option<(&str, Duration)>> = Mutex::new(None);
+    set_interval(interval);
+    if !debug_on() {
+        return;
+    }
+    let Ok(mut logged) = LOGGED.lock() else {
+        return;
+    };
+    if logged.is_some_and(|(f, l)| f == from && !differs(l, interval)) {
+        return;
+    }
+    *logged = Some((from, interval));
+    debug_line(&format!(
+        "stipple: frame pacing: {from} reports a {:.2} ms refresh ({:.1} Hz)",
+        interval.as_secs_f64() * 1000.0,
+        hz(interval)
+    ));
 }
 
 /// Count a backend putting a frame on screen after the present (macOS's
@@ -297,9 +524,12 @@ pub(crate) fn tick() -> bool {
     let Some(now) = now() else {
         return false;
     };
-    let wanted = clock(|c| c.tick(now));
+    let (wanted, measured) = clock(|c| (c.tick(now), c.stats.measured_interval));
     if wanted {
         super::wake::wake();
+        if let Some(measured) = measured {
+            log_measured(measured);
+        }
     }
     wanted
 }
@@ -344,6 +574,17 @@ pub(crate) fn install(
     if let Ok(mut s) = SOURCE.lock() {
         *s = Some(Source { arm, disarm });
     }
+}
+
+/// Take the display source away (it can no longer tick: the window it
+/// watched is gone): the timer paces frames from now on.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) fn uninstall() {
+    if let Ok(mut s) = SOURCE.lock() {
+        *s = None;
+    }
+    clock(|c| c.claimed = false);
+    name_source("timer");
 }
 
 /// Set the display's refresh interval, which paces the fallback timer.
@@ -495,5 +736,133 @@ mod tests {
         assert_eq!(c.wanted, Some(t0), "the first request's time stands");
         assert!(c.take_due(t0 + 3 * MS));
         assert!(!c.take_due(t0 + 50 * MS), "one frame");
+    }
+
+    #[test]
+    fn a_requested_frame_comes_from_the_source_tick() {
+        let mut c = Clock::new();
+        let t0 = Instant::now();
+        // Requested, and the source armed for it: the timer only backs it up.
+        c.request(t0);
+        c.armed();
+        assert!(c.claimed);
+        assert!(!c.take_due(t0 + 10 * MS), "the timer waits for the source");
+        // The callback comes: that's the tick that delivers the frame.
+        assert!(c.tick(t0 + 16 * MS));
+        assert_eq!(c.wanted, None);
+        assert!(!c.claimed);
+        assert_eq!((c.stats.from_display, c.stats.from_timer), (1, 0));
+        assert!(!c.take_due(t0 + 100 * MS), "delivered once");
+    }
+
+    #[test]
+    fn an_idle_clock_asks_for_nothing_and_counts_nothing() {
+        let mut c = Clock::new();
+        let t0 = Instant::now();
+        // Nothing requested: no deadline, so the loop sleeps; arming without a
+        // request claims nothing.
+        c.armed();
+        assert!(!c.claimed);
+        assert_eq!(c.deadline(), None);
+        for i in 0..100 {
+            assert!(!c.take_due(t0 + i * 16 * MS));
+        }
+        // A source that ticks anyway (a display link winding down) delivers
+        // nothing.
+        assert!(!c.tick(t0 + 5 * MS));
+        assert_eq!(c.stats, FrameStats::default());
+    }
+
+    #[test]
+    fn a_missed_callback_times_out_to_the_timer() {
+        let mut c = Clock::new();
+        let iv = c.interval;
+        let t0 = Instant::now();
+        c.request(t0);
+        c.armed();
+        // The compositor never calls back (the window was hidden): the timer
+        // delivers two intervals on, and counts a miss.
+        assert!(!c.take_due(t0 + iv * 2 - MS));
+        assert!(c.take_due(t0 + iv * 2));
+        assert_eq!((c.stats.from_display, c.stats.from_timer), (0, 1));
+        assert_eq!(c.misses, 1);
+        // The late callback, after the timer delivered, is an idle tick.
+        assert!(!c.tick(t0 + iv * 2 + MS));
+    }
+
+    #[test]
+    fn the_meter_measures_back_to_back_ticks() {
+        let iv = Duration::from_micros(16_667);
+        let mut m = Meter::new();
+        let t0 = Instant::now();
+        let mut measured = None;
+        for i in 0..=METER_WINDOW as u32 {
+            let at = t0 + iv * i;
+            // Asked for while the previous frame was drawn.
+            let asked = if i == 0 { at } else { at - iv / 2 };
+            measured = m.tick(at, asked, iv);
+        }
+        assert_eq!(measured, Some(iv));
+    }
+
+    #[test]
+    fn the_meter_ignores_slow_frames_and_pauses() {
+        let iv = Duration::from_micros(8_333); // 120 Hz
+        let mut m = Meter::new();
+        let mut t = Instant::now();
+        let mut measured = None;
+        for i in 0..40u32 {
+            // Every third frame takes two refreshes to draw.
+            let gap = if i % 3 == 0 { iv * 2 } else { iv };
+            let asked = t + MS;
+            t += gap;
+            measured = m.tick(t, asked, iv).or(measured);
+        }
+        assert_eq!(measured, Some(iv), "the median: the refresh");
+
+        // A frame asked for after a pause doesn't count the pause.
+        let mut m = Meter::new();
+        let t0 = Instant::now();
+        assert_eq!(m.tick(t0, t0, iv), None);
+        assert_eq!(m.tick(t0 + MS * 500, t0 + MS * 490, iv), None);
+        assert_eq!(m.len, 0, "the pause is not a gap");
+        // Nor does one asked for before the last tick (a request that
+        // waited out a whole frame isn't back to back).
+        m.break_run();
+        assert_eq!(m.tick(t0 + MS * 600, t0 + MS * 600, iv), None);
+        assert_eq!(m.tick(t0 + MS * 610, t0 + MS * 590, iv), None);
+        assert_eq!(m.len, 0);
+    }
+
+    #[test]
+    fn ticks_feed_the_meter_and_timer_frames_break_its_run() {
+        let mut c = Clock::new();
+        let iv = c.interval;
+        let mut t = Instant::now();
+        for _ in 0..=METER_WINDOW {
+            c.request(t);
+            c.armed();
+            t += iv;
+            assert!(c.tick(t));
+        }
+        let measured = c.stats.measured_interval.expect("measured");
+        assert!(!differs(measured, iv));
+        // A timer frame in between breaks the run: the next tick starts over.
+        c.request(t);
+        assert!(c.take_due(t + iv * 2));
+        assert_eq!(c.meter.last, None);
+    }
+
+    #[test]
+    fn differences_under_ten_percent_are_the_same_refresh() {
+        let a = Duration::from_micros(16_667);
+        assert!(!differs(a, Duration::from_micros(16_800)));
+        assert!(!differs(a, Duration::from_micros(17_450)));
+        assert!(
+            differs(Duration::from_micros(6_944), Duration::from_micros(8_333)),
+            "144 to 120 Hz"
+        );
+        assert!(differs(a, Duration::from_micros(20_833)), "48 Hz");
+        assert!(differs(a, Duration::from_micros(8_333)));
     }
 }

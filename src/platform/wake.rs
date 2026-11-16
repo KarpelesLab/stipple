@@ -111,6 +111,9 @@ pub fn take(now: Instant) -> bool {
     let woken = GLOBAL.take(now);
     // Both run: a frame that's due is consumed even when a wake came too.
     let frame = super::frame::take_due(now);
+    if woken || frame {
+        super::frame::note_wake();
+    }
     woken || frame
 }
 

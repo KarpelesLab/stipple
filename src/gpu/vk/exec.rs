@@ -59,6 +59,7 @@ const VK_KHR_ANDROID_SURFACE: &CStr = c"VK_KHR_android_surface";
 const VK_EXT_METAL_SURFACE: &CStr = c"VK_EXT_metal_surface";
 const VK_KHR_SWAPCHAIN: &CStr = c"VK_KHR_swapchain";
 const VK_KHR_INCREMENTAL_PRESENT: &CStr = c"VK_KHR_incremental_present";
+const VK_GOOGLE_DISPLAY_TIMING: &CStr = c"VK_GOOGLE_display_timing";
 // Drivers that implement Vulkan over another API (MoltenVK) are listed only
 // to an instance that asks for them, and need their subset enabled.
 const VK_KHR_PORTABILITY_ENUMERATION: &CStr = c"VK_KHR_portability_enumeration";
@@ -212,6 +213,9 @@ pub(crate) struct VkExecutor {
     has_swapchain: bool,
     /// `VK_KHR_incremental_present` is on: presents say what changed.
     has_incremental: bool,
+    /// `VK_GOOGLE_display_timing` is on: a swapchain says its display's
+    /// refresh.
+    has_display_timing: bool,
     color_pass: VkRenderPass,
     scratch_pass: VkRenderPass,
     set_layout: VkDescriptorSetLayout,
@@ -393,6 +397,10 @@ impl VkExecutor {
             if has_incremental {
                 dexts.push(VK_KHR_INCREMENTAL_PRESENT.as_ptr());
             }
+            let has_display_timing = has_swapchain && dev_has(VK_GOOGLE_DISPLAY_TIMING);
+            if has_display_timing {
+                dexts.push(VK_GOOGLE_DISPLAY_TIMING.as_ptr());
+            }
             if dev_has(VK_KHR_PORTABILITY_SUBSET) {
                 dexts.push(VK_KHR_PORTABILITY_SUBSET.as_ptr());
             }
@@ -458,6 +466,7 @@ impl VkExecutor {
                 has_surface: surfaces,
                 has_swapchain,
                 has_incremental,
+                has_display_timing,
                 color_pass: NULL,
                 scratch_pass: NULL,
                 set_layout: NULL,
@@ -2382,7 +2391,29 @@ impl VkExecutor {
             swap.format = format;
             swap.stale = false;
             swap.presents = 0;
+            self.report_refresh(sc);
             Ok(())
+        }
+    }
+
+    /// Tell the frame clock the refresh of the display `sc` presents to, where
+    /// the driver says (`VK_GOOGLE_display_timing`). FIFO presents wait for
+    /// that display's vblank; this paces the frame clock's timer by it too.
+    unsafe fn report_refresh(&self, sc: VkSwapchainKHR) {
+        if !self.has_display_timing {
+            return;
+        }
+        let Some(get) = self.vk.vkGetRefreshCycleDurationGOOGLE else {
+            return;
+        };
+        let mut duration = VkRefreshCycleDurationGOOGLE::default();
+        if unsafe { get(self.device, sc, &mut duration) } == VK_SUCCESS
+            && duration.refreshDuration > 0
+        {
+            crate::platform::frame::report_refresh(
+                "VK_GOOGLE_display_timing",
+                std::time::Duration::from_nanos(duration.refreshDuration),
+            );
         }
     }
 

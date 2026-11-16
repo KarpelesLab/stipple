@@ -937,9 +937,24 @@ CPU as the default and the fallback.
   their SPIR-V checked in (`src/gpu/shaders/`, `tools/shaders.sh` with
   glslang pinned; CI's `shaders` job fails on drift, and unit tests check
   their push-constant layout against the recorder's).*
-- ⬜ Frame pacing from the swapchain (Metal's display sync, DXGI's waitable
+- ✅ Frame pacing from the swapchain (Metal's display sync, DXGI's waitable
   object, Vulkan FIFO, `wl_surface.frame`, `requestAnimationFrame`) feeding
   the existing frame clock; an idle app does no GPU work.
+  *A GPU window on Windows paces the clock by its swap chain's frame-latency
+  waitable object (`windows/vsync.rs`, handing the consumed signal to the
+  renderer), `DwmFlush` otherwise; X11 by Present's `PresentNotifyMSC` vblank
+  notifies on a connection of its own (`x11/present_clock.rs`), CPU and GPU
+  alike, the RandR timer without Present; Metal layers display-synced under
+  `CVDisplayLink` / `CADisplayLink`; Vulkan FIFO with the refresh from
+  `VK_GOOGLE_display_timing`; Wayland's `wl_surface.frame` (GPU frames are
+  committed through the same path) and `wl_output.mode`'s refresh. The
+  reported and measured refresh are logged with `STIPPLE_DEBUG_FRAMES`;
+  `FrameStats` counts wakeups and the measured interval. The `framepacing`
+  example checks ~display-rate presents while animating and no presents and
+  no wakeups idle: run locally on Xvfb (CPU, GLES, Vulkan) and in CI on Xvfb
+  and headless sway, and on Windows (CPU, D3D11) and macOS (CPU, Metal) not
+  blocking yet. macOS keeps `CVDisplayLink` (not the macOS 14 view
+  `CADisplayLink`).*
 
 #### 6b — Metal (macOS, iOS) end to end
 - ✅ The scene executor on Metal and presentation through a `CAMetalLayer`
@@ -1112,7 +1127,8 @@ nothing to drive them and background work couldn't update the UI.
   `ALooper_wake` and times out at the next timer. CI's emulator run checks
   `androiddemo`'s once-a-second timer ticks.
 - ✅ A frame clock driven by the display (`CVDisplayLink`, `CADisplayLink`,
-  `wl_surface.frame`, `DwmFlush`; a RandR-rate timer on X11), so animations
+  `wl_surface.frame`, `DwmFlush`, Present's vblank notifies on X11, a GPU
+  window's swap chain; see Phase 6a's frame pacing), so animations
   tick at the refresh rate and stop when idle. `Cx::request_frame` and
   `Cx::frame_time`; see [`docs/animation.md`](docs/animation.md).
 - ✅ Animated widgets: a turning spinner, and hover and press highlights that

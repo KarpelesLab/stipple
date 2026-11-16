@@ -43,6 +43,8 @@ use oxideav_core::Transform2D;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
+use crate::platform::backend::windows::vsync;
+
 #[link(name = "user32")]
 unsafe extern "system" {
     fn IsWindow(hwnd: *mut c_void) -> i32;
@@ -50,7 +52,6 @@ unsafe extern "system" {
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
-    fn WaitForSingleObject(handle: *mut c_void, ms: u32) -> u32;
     fn CloseHandle(handle: *mut c_void) -> i32;
 }
 
@@ -194,6 +195,7 @@ struct Chain {
 impl Drop for Chain {
     fn drop(&mut self) {
         if !self.waitable.is_null() && !exiting() {
+            vsync::stop_pacing(self.waitable);
             unsafe { CloseHandle(self.waitable) };
         }
     }
@@ -1534,6 +1536,8 @@ impl D3dExecutor {
                             (u32) -> Hresult, 1);
                         waitable = com!(swap2.ptr(), VT_SWAP2_GET_FRAME_LATENCY_WAITABLE_OBJECT,
                             () -> *mut c_void);
+                        // Its signal paces the frame clock from now on.
+                        vsync::pace_by(waitable);
                     }
                 }
                 return Ok(Chain {
@@ -1604,7 +1608,13 @@ impl D3dExecutor {
             // Wait until the swap chain takes another frame (at most one is
             // queued), so the frame drawn now is the next one shown.
             let waitable = self.chains[&key].waitable;
-            if !waitable.is_null() && WaitForSingleObject(waitable, FRAME_WAIT_MS) != WAIT_OBJECT_0
+            // (The frame clock's thread may have waited for it already: then
+            // this returns at once.)
+            if !waitable.is_null()
+                && !vsync::wait_for_slot(
+                    waitable,
+                    std::time::Duration::from_millis(FRAME_WAIT_MS.into()),
+                )
             {
                 return Err(GpuError::Skipped);
             }

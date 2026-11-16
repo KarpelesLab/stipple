@@ -98,10 +98,11 @@ pub(super) fn install() {
         let period = CVDisplayLinkGetNominalOutputVideoRefreshPeriod(link);
         if period.flags & TIME_INDEFINITE == 0 && period.value > 0 && period.scale > 0 {
             let secs = period.value as f64 / period.scale as f64;
-            crate::platform::frame::set_interval(Duration::from_secs_f64(secs));
+            crate::platform::frame::report_refresh("CVDisplayLink", Duration::from_secs_f64(secs));
         }
     }
     LINK.store(link as usize, Ordering::Release);
+    crate::platform::frame::name_source("CVDisplayLink");
     crate::platform::frame::install(Arc::new(start), Some(Arc::new(stop)));
 }
 

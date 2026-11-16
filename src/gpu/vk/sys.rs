@@ -993,6 +993,14 @@ pub(crate) struct VkPresentInfoKHR {
     pub pResults: *mut VkResult,
 }
 
+/// `VK_GOOGLE_display_timing`: how long the swapchain's display takes per
+/// refresh, in nanoseconds.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct VkRefreshCycleDurationGOOGLE {
+    pub refreshDuration: u64,
+}
+
 /// `VK_KHR_incremental_present`: the parts of each swapchain's image that
 /// changed, chained to a [`VkPresentInfoKHR`].
 #[repr(C)]
@@ -1210,6 +1218,7 @@ entry_points! {
         vkGetSwapchainImagesKHR: fn(VkDevice, VkSwapchainKHR, *mut u32, *mut VkImage) -> VkResult;
         vkAcquireNextImageKHR: fn(VkDevice, VkSwapchainKHR, u64, VkSemaphore, VkFence, *mut u32) -> VkResult;
         vkQueuePresentKHR: fn(VkQueue, *const VkPresentInfoKHR) -> VkResult;
+        vkGetRefreshCycleDurationGOOGLE: fn(VkDevice, VkSwapchainKHR, *mut VkRefreshCycleDurationGOOGLE) -> VkResult;
         vkCreateXcbSurfaceKHR: fn(VkInstance, *const VkXcbSurfaceCreateInfoKHR, P, *mut VkSurfaceKHR) -> VkResult;
         vkCreateAndroidSurfaceKHR: fn(VkInstance, *const VkAndroidSurfaceCreateInfoKHR, P, *mut VkSurfaceKHR) -> VkResult;
         vkCreateMetalSurfaceEXT: fn(VkInstance, *const VkMetalSurfaceCreateInfoEXT, P, *mut VkSurfaceKHR) -> VkResult;

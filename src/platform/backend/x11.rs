@@ -54,6 +54,7 @@ mod geometry;
 /// Raw key events: physical keys, key text, sides and repeats.
 mod keys;
 mod pointer;
+mod present_clock;
 mod refresh;
 /// The CLIPBOARD and PRIMARY selections.
 mod selection;
@@ -1754,7 +1755,7 @@ where
     // Animation frames come from a timer at the monitor's refresh rate.
     if let Some(interval) = refresh::interval(&mut conn) {
         dbg(format_args!("refresh interval {interval:?}"));
-        crate::platform::frame::set_interval(interval);
+        crate::platform::frame::report_refresh("RandR", interval);
     }
     let wm_delete = conn.atom_wm_delete;
     // The input method server, if there is one (before any window exists, as
@@ -1776,6 +1777,8 @@ where
 
     // The live set of windows, keyed by XID via linear scan (tiny N).
     let mut windows: Vec<X11Window> = vec![initial];
+    // Frames paced by Present's vblank notifies on the first window.
+    present_clock::install(windows[0].window);
     // Unfocused until the server says otherwise (a `FocusIn` follows the
     // window manager, or our own `SetInputFocus`, giving it focus).
     if handler(Event::FocusChanged(false), &windows[0]) == ControlFlow::Exit {

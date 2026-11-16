@@ -1225,6 +1225,7 @@ mod choreographer {
         }
         let choreographer = choreographer as usize;
         ARMED.store(false, Ordering::Release);
+        crate::platform::frame::name_source("AChoreographer");
         crate::platform::frame::install(
             Arc::new(move || {
                 if ARMED.swap(true, Ordering::AcqRel) {

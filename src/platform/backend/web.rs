@@ -278,6 +278,7 @@ where
         WebWindow.set_title(&attrs.title);
     }
     wake::install(Arc::new(rearm), Some(Arc::new(|_| rearm())));
+    frame::name_source("requestAnimationFrame");
     frame::install(Arc::new(|| unsafe { js::request_frame() }), None);
     deliver(Event::RedrawRequested);
 }

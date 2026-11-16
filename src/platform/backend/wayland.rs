@@ -1600,6 +1600,26 @@ impl Surface for WaylandSurface {
     }
 }
 
+/// `wl_output.mode`: flags, width, height, refresh in mHz.
+const WL_OUTPUT_MODE: u16 = 1;
+
+/// A `wl_output.mode` event: report the current mode's refresh.
+fn output_mode(args: &[u8]) {
+    const MODE_CURRENT: u32 = 1;
+    let word = |i: usize| {
+        args.get(i * 4..i * 4 + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    if let (Some(flags), Some(mhz)) = (word(0), word(3))
+        && flags & MODE_CURRENT != 0
+        && let Ok(mhz) = i32::try_from(mhz)
+        && mhz > 0
+    {
+        let interval = std::time::Duration::from_secs_f64(1000.0 / f64::from(mhz));
+        crate::platform::frame::report_refresh("wl_output.mode", interval);
+    }
+}
+
 /// `wl_surface.frame`: a `wl_callback` that fires when the compositor wants the
 /// next frame.
 const WL_SURFACE_FRAME: u16 = 3;
@@ -1651,6 +1671,7 @@ where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {
     let mut conn = WlConn::connect()?;
+    crate::platform::frame::name_source("wl_surface.frame");
     let size = ScaleFactor::IDENTITY.to_physical(attrs.logical_size);
     let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
 
@@ -1941,6 +1962,10 @@ where
         // a wake once this loop goes back to waiting.
         if frame_callback_done(object, opcode) {
             continue;
+        }
+        // An output's current mode: its refresh paces the fallback timer.
+        if opcode == WL_OUTPUT_MODE && outputs.iter().any(|(id, _)| *id == object) {
+            output_mode(&args);
         }
         // The locked pointer's motion, or the lock ending.
         let lock = shared.lock().unwrap().lock.event(object, opcode, &args);

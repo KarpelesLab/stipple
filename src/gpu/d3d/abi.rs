@@ -105,9 +105,6 @@ pub(crate) const DXGI_ERROR_DEVICE_HUNG: Hresult = 0x887a_0006_u32 as i32;
 pub(crate) const DXGI_ERROR_DEVICE_RESET: Hresult = 0x887a_0007_u32 as i32;
 pub(crate) const DXGI_ERROR_DRIVER_INTERNAL_ERROR: Hresult = 0x887a_0020_u32 as i32;
 
-// --- winbase.h ---
-pub(crate) const WAIT_OBJECT_0: u32 = 0;
-
 // --- vtable slots ---
 
 /// `IUnknown`.
