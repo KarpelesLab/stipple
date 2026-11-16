@@ -9,11 +9,11 @@ fn images_float_left_or_right() {
     let mut ed = RichEditor::new();
     ed.insert_image(sample_image());
     typed(&mut ed, "text beside it");
-    assert_eq!(ed.image_float(), None, "no image at the caret");
+    assert_eq!(ed.image_placement(), None, "no image at the caret");
     ed.select(0, 0);
-    assert_eq!(ed.image_float(), Some(ImageFloat::Inline));
-    ed.set_image_float(ImageFloat::Left);
-    assert_eq!(ed.image_float(), Some(ImageFloat::Left));
+    assert_eq!(ed.image_placement(), Some(ImagePlacement::Inline));
+    ed.set_image_placement(ImagePlacement::Left);
+    assert_eq!(ed.image_placement(), Some(ImagePlacement::Left));
     let src = ed.document().images()[0].src.clone();
     let tag = format!("<img src=\"{src}\" alt=\"a [gray] box\" style=\"float: left\">");
     assert_eq!(ed.to_html(), format!("<p>{tag}text beside it</p>\n"));
@@ -25,7 +25,7 @@ fn images_float_left_or_right() {
     );
     // `align` from older HTML.
     let d = RichDocument::from_html("<p><img src=\"a.png\" align=\"right\">x</p>");
-    assert_eq!(d.images()[0].float, ImageFloat::Right);
+    assert_eq!(d.images()[0].placement, ImagePlacement::Right);
     // The leaf carries it as a float; the shown text is unchanged.
     let leaf = ed.leaf(&Theme::light());
     let crate::core::ElementKind::Text { text, style, .. } = &leaf.kind else {
@@ -41,7 +41,7 @@ fn images_float_left_or_right() {
             .any(|s| s.float.is_some())
     );
     ed.undo();
-    assert_eq!(ed.image_float(), Some(ImageFloat::Inline));
+    assert_eq!(ed.image_placement(), Some(ImagePlacement::Inline));
 }
 
 fn typed(ed: &mut RichEditor, text: &str) {
@@ -885,4 +885,366 @@ fn an_empty_editor_shows_its_placeholder() {
     let f = find(&tree).unwrap();
     assert_eq!(f.name, "");
     assert_eq!(f.placeholder.as_deref(), Some("Write here"));
+}
+
+// --- Image placement and size ---
+
+/// A 200×100 opaque image.
+fn wide_image() -> RichImage {
+    let mut px = Pixmap::new(PhysicalSize::new(200, 100));
+    px.as_bytes_mut()
+        .chunks_mut(4)
+        .for_each(|p| p.copy_from_slice(&[30, 90, 160, 255]));
+    RichImage::from_pixmap(px).alt("wide")
+}
+
+#[test]
+fn image_sizes_resolve_against_the_text_width() {
+    let img = wide_image();
+    // Natural: its own 200 px, but never wider than the text.
+    assert_eq!(img.display_width(500.0), 200.0);
+    assert_eq!(img.display_width(150.0), 150.0);
+    // Relative: a percentage of the text's width, capped at its natural
+    // width unless it may grow.
+    let half = img.clone().sized(ImageSize::Percent(50.0));
+    assert_eq!(half.display_width(300.0), 150.0);
+    assert_eq!(half.display_width(1000.0), 200.0);
+    assert_eq!(half.clone().upscale(true).display_width(1000.0), 500.0);
+    // Pixels, capped likewise (and by the text's width).
+    let px = img.clone().sized(ImageSize::Pixels(120.0));
+    assert_eq!(px.display_width(500.0), 120.0);
+    assert_eq!(px.display_width(100.0), 100.0);
+    let big = img.clone().sized(ImageSize::Pixels(400.0));
+    assert_eq!(big.display_width(500.0), 200.0);
+    assert_eq!(big.clone().upscale(true).display_width(500.0), 400.0);
+    // Bounds: the most always wins, the natural cap over the least.
+    let tiny = img.clone().sized(ImageSize::Percent(10.0));
+    assert_eq!(
+        tiny.clone().min_width(Some(80.0)).display_width(300.0),
+        80.0
+    );
+    assert_eq!(
+        tiny.clone().min_width(Some(250.0)).display_width(300.0),
+        200.0
+    );
+    assert_eq!(
+        tiny.clone()
+            .min_width(Some(250.0))
+            .upscale(true)
+            .display_width(300.0),
+        250.0
+    );
+    assert_eq!(half.max_width(Some(80.0)).display_width(300.0), 80.0);
+}
+
+/// An editor holding a paragraph, `image`, and another paragraph.
+fn editor_with(image: RichImage) -> RichEditor {
+    let mut ed = RichEditor::new();
+    typed(&mut ed, "Before the image, a line of text.\n");
+    ed.insert_image(image);
+    typed(
+        &mut ed,
+        " After it, words that flow around it when it floats, and more words still.",
+    );
+    ed
+}
+
+#[test]
+fn placements_wraps_and_sizes_export_and_read_back() {
+    let cases = [
+        (
+            ImagePlacement::Center,
+            ImageWrap::Both,
+            ImageSize::Percent(40.0),
+        ),
+        (
+            ImagePlacement::Left,
+            ImageWrap::None,
+            ImageSize::Pixels(150.0),
+        ),
+        (ImagePlacement::Right, ImageWrap::Both, ImageSize::Natural),
+        (
+            ImagePlacement::Free { x: 62.5, y: 12.25 },
+            ImageWrap::Largest,
+            ImageSize::Percent(25.0),
+        ),
+        (
+            ImagePlacement::Inline,
+            ImageWrap::Both,
+            ImageSize::Percent(10.0),
+        ),
+    ];
+    for (placement, wrap, size) in cases {
+        let mut ed = editor_with(wide_image());
+        ed.select(0, 0);
+        ed.apply(&KeyInput::Down);
+        ed.apply(&KeyInput::Home);
+        ed.set_image_placement(placement);
+        ed.set_image_wrap(wrap);
+        ed.set_image_size(size);
+        let img = ed.image().expect("the image at the caret");
+        assert_eq!((img.placement, img.wrap, img.size), (placement, wrap, size));
+        let html = ed.to_html();
+        let md = ed.to_markdown();
+        assert_eq!(RichDocument::from_html(&html), *ed.document(), "{html}");
+        assert_eq!(RichDocument::from_markdown(&md), *ed.document(), "{md}");
+        assert!(md.contains("<img src="), "Markdown writes the tag: {md}");
+    }
+    // Bounds and growing past the natural size round-trip too.
+    let mut ed = editor_with(wide_image());
+    ed.select(0, 0);
+    ed.apply(&KeyInput::Down);
+    ed.set_image_size(ImageSize::Percent(80.0));
+    ed.set_image_bounds(Some(40.0), Some(150.0), false);
+    assert_eq!(RichDocument::from_html(&ed.to_html()), *ed.document());
+    ed.set_image_bounds(None, None, true);
+    assert!(
+        ed.to_html()
+            .contains(" data-stipple-upscale style=\"width: 80%\"")
+    );
+    assert_eq!(RichDocument::from_html(&ed.to_html()), *ed.document());
+}
+
+#[test]
+fn centered_and_free_images_write_documented_html() {
+    let img = wide_image()
+        .placed(ImagePlacement::Center)
+        .sized(ImageSize::Percent(40.0));
+    let src = img.src.clone();
+    let doc = doc(vec![para(vec![Inline::Image(img), Inline::text("x")])]);
+    assert_eq!(
+        doc.to_html(),
+        format!(
+            "<p><img src=\"{src}\" alt=\"wide\" style=\"display: block; margin: 0 auto; \
+             width: 40%; max-width: 200px\">x</p>\n"
+        )
+    );
+    let free = wide_image()
+        .placed(ImagePlacement::Free { x: 62.5, y: 10.0 })
+        .wrapped(ImageWrap::None);
+    let doc = doc_of(free);
+    assert!(doc.to_html().contains(
+        "alt=\"wide\" data-stipple-x=\"62.5%\" data-stipple-y=\"10%\" \
+         data-stipple-wrap=\"none\" style=\"display: block; margin-left: 62.5%; \
+         transform: translateX(-50%)\">"
+    ));
+    // Other editors' HTML: centering by margins or `align`, widths by
+    // `width`.
+    let d = RichDocument::from_html(
+        "<p><img src=\"a.png\" style=\"display:block;margin-left:auto;margin-right:auto;width:30%\"></p>\
+         <p><img src=\"b.png\" align=\"middle\" width=\"64\"></p>",
+    );
+    let imgs = d.images();
+    assert_eq!(imgs[0].placement, ImagePlacement::Center);
+    assert_eq!(imgs[0].size, ImageSize::Percent(30.0));
+    assert_eq!(imgs[1].placement, ImagePlacement::Center);
+    assert_eq!(imgs[1].size, ImageSize::Pixels(64.0));
+}
+
+fn doc_of(image: RichImage) -> RichDocument {
+    doc(vec![para(vec![Inline::Image(image)])])
+}
+
+#[test]
+fn image_settings_are_undone_one_at_a_time() {
+    let mut ed = editor_with(wide_image());
+    ed.select(0, 0);
+    ed.apply(&KeyInput::Down);
+    ed.set_image_placement(ImagePlacement::Center);
+    ed.set_image_size(ImageSize::Percent(30.0));
+    // Sizes set one after another (a slider dragged) are one step.
+    ed.set_image_size(ImageSize::Percent(35.0));
+    ed.set_image_wrap(ImageWrap::None);
+    ed.undo();
+    assert_eq!(ed.image().unwrap().wrap, ImageWrap::Both);
+    ed.undo();
+    assert_eq!(ed.image().unwrap().size, ImageSize::Natural);
+    ed.undo();
+    assert_eq!(ed.image_placement(), Some(ImagePlacement::Inline));
+    ed.redo();
+    assert_eq!(ed.image_placement(), Some(ImagePlacement::Center));
+}
+
+/// The element in `app`'s tree taking the editor's text presses.
+fn text_leaf(n: &LayoutNode) -> Option<&LayoutNode> {
+    if n.text_pos.is_some() {
+        return Some(n);
+    }
+    n.children.iter().find_map(text_leaf)
+}
+
+/// The editor's images' boxes in window coordinates, and the text's width.
+fn image_boxes(app: &App<Doc>) -> (Vec<crate::geometry::Rect>, f64) {
+    let leaf = text_leaf(app.panes[0].tree.as_ref().unwrap()).unwrap();
+    // The text box's top-left: where a hit at the node's corner says.
+    let corner = leaf.bounds.origin;
+    let hit = crate::core::text_hit_at(leaf, corner, app.font.get()).unwrap();
+    let origin = crate::geometry::Point::new(corner.x - hit.point.x, corner.y - hit.point.y);
+    let boxes = hit
+        .objects
+        .iter()
+        .map(|(_, r)| r.translate(crate::geometry::Vec2::new(origin.x, origin.y)))
+        .collect();
+    (boxes, hit.width)
+}
+
+fn app_with(image: RichImage, width: f64) -> Option<App<Doc>> {
+    Font::system_default()?;
+    let mut app = app().logical_size(Size::new(width, 500.0));
+    app.state.editor = editor_with(image);
+    app.render_once();
+    Some(app)
+}
+
+#[test]
+fn relative_images_follow_the_window_width() {
+    let img = wide_image()
+        .placed(ImagePlacement::Center)
+        .sized(ImageSize::Percent(25.0));
+    let (Some(narrow), Some(wide)) = (app_with(img.clone(), 500.0), app_with(img, 900.0)) else {
+        return;
+    };
+    let (a, wa) = image_boxes(&narrow);
+    let (b, wb) = image_boxes(&wide);
+    assert!((a[0].width() - wa * 0.25).abs() < 0.01, "{a:?} in {wa}");
+    // A quarter of 900's text area is past the natural 200 px: capped.
+    assert!(wb * 0.25 > 200.0);
+    assert_eq!(b[0].width(), 200.0);
+    assert!(
+        (a[0].height() - a[0].width() / 2.0).abs() < 0.01,
+        "aspect kept"
+    );
+}
+
+#[test]
+fn dragging_a_handle_resizes_and_undo_restores() {
+    let img = wide_image()
+        .placed(ImagePlacement::Center)
+        .sized(ImageSize::Percent(20.0));
+    let Some(mut app) = app_with(img, 700.0) else {
+        return;
+    };
+    let (boxes, width) = image_boxes(&app);
+    let r = boxes[0];
+    // A click on the image selects it, framed with handles.
+    assert!(app.text_press_at(r.center()));
+    app.end_text_select();
+    let at = app
+        .state()
+        .editor
+        .selected_image()
+        .expect("the image is selected");
+    app.render_once();
+    // Its bottom-right handle, dragged 30 px right: a centered image grows
+    // on both sides, so 60 px wider, stored as a percentage.
+    let corner = crate::geometry::Point::new(r.max_x(), r.max_y());
+    assert!(app.text_press_at(corner));
+    app.text_drag_at(crate::geometry::Point::new(corner.x + 15.0, corner.y));
+    app.text_drag_at(crate::geometry::Point::new(corner.x + 30.0, corner.y));
+    app.end_text_select();
+    let want = super::model::round2((r.width() + 60.0) / width * 100.0);
+    let ImageSize::Percent(p) = app.state().editor.image().unwrap().size else {
+        panic!("still relative");
+    };
+    assert!((p - want).abs() < 0.02, "{p} vs {want}");
+    assert_eq!(
+        app.state().editor.selected_image(),
+        Some(at),
+        "still selected"
+    );
+    app.render_once();
+    let (after, _) = image_boxes(&app);
+    assert!((after[0].width() - (r.width() + 60.0)).abs() < 0.5);
+    // One undo step for the whole drag.
+    app.press_key(KeyInput::Undo);
+    assert_eq!(
+        app.state().editor.image().unwrap().size,
+        ImageSize::Percent(20.0)
+    );
+    app.press_key(KeyInput::Redo);
+    assert!(matches!(
+        app.state().editor.image().unwrap().size,
+        ImageSize::Percent(q) if (q - p).abs() < 1e-9
+    ));
+    // A natural-size image's handle stores pixels, never past its natural
+    // width.
+    app.press_key(KeyInput::Undo);
+    app.state.editor.set_image_size(ImageSize::Natural);
+    app.render_once();
+    let (boxes, _) = image_boxes(&app);
+    let r = boxes[0];
+    assert!(app.text_press_at(r.center()));
+    app.end_text_select();
+    app.render_once();
+    let corner = crate::geometry::Point::new(r.min_x(), r.max_y());
+    assert!(app.text_press_at(corner));
+    app.text_drag_at(crate::geometry::Point::new(corner.x + 40.0, corner.y));
+    app.end_text_select();
+    assert_eq!(
+        app.state().editor.image().unwrap().size,
+        ImageSize::Pixels(r.width() - 80.0)
+    );
+    app.render_once();
+    let (boxes, _) = image_boxes(&app);
+    let corner = crate::geometry::Point::new(boxes[0].min_x(), boxes[0].max_y());
+    assert!(app.text_press_at(corner));
+    app.text_drag_at(crate::geometry::Point::new(corner.x - 300.0, corner.y));
+    app.end_text_select();
+    assert_eq!(
+        app.state().editor.image().unwrap().size,
+        ImageSize::Pixels(200.0),
+        "capped at its natural width"
+    );
+}
+
+#[test]
+fn dragging_a_free_image_moves_it_in_percent() {
+    let img = wide_image().placed(ImagePlacement::Free { x: 50.0, y: 20.0 });
+    let Some(mut app) = app_with(img, 700.0) else {
+        return;
+    };
+    let (boxes, width) = image_boxes(&app);
+    let r = boxes[0];
+    let before = app.state().editor.document().clone();
+    let p = r.center();
+    assert!(app.text_press_at(p));
+    app.text_drag_at(crate::geometry::Point::new(p.x + 35.0, p.y + 14.0));
+    app.end_text_select();
+    let ImagePlacement::Free { x, y } = app.state().editor.image().unwrap().placement else {
+        panic!("still free");
+    };
+    let (wx, wy) = (
+        super::model::round2(50.0 + 35.0 / width * 100.0),
+        super::model::round2(20.0 + 14.0 / width * 100.0),
+    );
+    assert!((x - wx).abs() < 0.02 && (y - wy).abs() < 0.02, "{x},{y}");
+    app.render_once();
+    let (moved, _) = image_boxes(&app);
+    assert!((moved[0].center().x - (r.center().x + 35.0)).abs() < 0.5);
+    assert!((moved[0].center().y - (r.center().y + 14.0)).abs() < 0.5);
+    // The exports carry the new place; undo puts it back.
+    assert!(
+        app.state()
+            .editor
+            .to_html()
+            .contains(&format!("data-stipple-x=\"{x}%\""))
+    );
+    app.press_key(KeyInput::Undo);
+    assert_eq!(*app.state().editor.document(), before);
+    // The image is still one character where it was inserted, for screen
+    // readers.
+    app.render_once();
+    let tree = app.accessibility_tree().unwrap();
+    fn field(n: &crate::core::AccessNode) -> Option<&crate::core::AccessNode> {
+        if n.role == crate::core::Role::TextField {
+            return Some(n);
+        }
+        n.children.iter().find_map(field)
+    }
+    assert!(
+        field(&tree)
+            .unwrap()
+            .name
+            .starts_with("Before the image, a line of text.\n\u{FFFC} After it")
+    );
 }

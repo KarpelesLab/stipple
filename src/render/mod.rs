@@ -48,7 +48,9 @@ pub use bidi::TextDirection;
 pub use canvas::{Canvas, CanvasPaint};
 pub use color::Color;
 pub use decoration::{Decoration, UnderlineStyle};
-pub use flow::{FloatImage, FlowItem, FlowOptions, FlowPlacement, FlowShape, TextFlow, WrapSide};
+pub use flow::{
+    FloatImage, FlowItem, FlowOptions, FlowPlacement, FlowShape, RelativeWidth, TextFlow, WrapSide,
+};
 pub use font::{FontFamilyInfo, FontId, FontMetrics, FontStyle, FontWeight};
 pub use glyphs::GlyphRun;
 pub use image::{ImageError, ImageFit, ImageSource, Svg, image_formats};

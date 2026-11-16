@@ -3,6 +3,7 @@
 //! edits it. See `docs/rich-text-editing.md`.
 
 mod html;
+mod image_html;
 mod inline;
 mod markdown;
 mod model;
@@ -14,15 +15,17 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use model::{Attr, DocBuilder, OBJECT};
-pub use model::{Block, BlockKind, ImageFloat, Inline, Marks, RichDocument, RichImage};
+pub use model::{
+    Block, BlockKind, ImagePlacement, ImageSize, ImageWrap, Inline, Marks, RichDocument, RichImage,
+};
 
-use crate::core::{Align, Axis, Cx, Element, Handled, KeyInput};
-use crate::geometry::{Insets, PhysicalSize};
+use crate::core::{Align, Axis, Cx, Element, Handled, KeyInput, TextHit};
+use crate::geometry::{Insets, PhysicalSize, Point, Rect};
 use crate::platform::clipboard::{ClipboardContent, ClipboardKind};
 use crate::platform::{ButtonState, KeyCode, KeyEvent};
 use crate::render::{
     Decoration, FloatImage, Font, FontStyle, InlineIcon, Pixmap, RichText, SpanStyle,
-    UnderlineStyle,
+    UnderlineStyle, WrapSide,
 };
 use crate::style::Theme;
 
@@ -74,8 +77,65 @@ enum Step {
     Typing,
     Backspace,
     Delete,
+    /// Resizing or moving an image with the pointer: one step per drag.
+    Image,
     Other,
 }
+
+/// What dragging from a press on an image does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DragKind {
+    /// Nothing (the image is selected; the drag doesn't select text).
+    Select,
+    /// Resize it from a corner: `sign` 1 for a right corner, -1 for a left
+    /// one; `centered` when it grows on both sides (centered and free
+    /// images keep their center).
+    Resize { sign: f64, centered: bool },
+    /// Move a free image.
+    Move,
+}
+
+/// A pointer drag on an image: which, how, from where, and the image as it
+/// was at the press.
+#[derive(Clone, Debug)]
+struct ImageDrag {
+    at: usize,
+    kind: DragKind,
+    origin: Point,
+    /// The text area's width at the press.
+    width: f64,
+    /// The image's box at the press.
+    rect: Rect,
+    start: RichImage,
+}
+
+/// Where an image was last shown, as the last press on it found: for
+/// making it free where it is.
+#[derive(Clone, Copy, Debug)]
+struct Shown {
+    at: usize,
+    rect: Rect,
+    width: f64,
+}
+
+impl Shown {
+    /// A free placement where it was shown: its center across, its top at
+    /// its paragraph's.
+    fn free_here(&self) -> ImagePlacement {
+        let w = self.width.max(1.0);
+        ImagePlacement::Free {
+            x: (self.rect.center().x / w * 100.0).clamp(0.0, 100.0),
+            y: self.rect.height() / 2.0 / w * 100.0,
+        }
+    }
+}
+
+/// How near a selected image's corner a press grabs its resize handle, in
+/// logical pixels.
+const HANDLE_REACH: f64 = 8.0;
+
+/// The narrowest an image is resized to by its handles.
+const MIN_IMAGE_WIDTH: f64 = 8.0;
 
 /// The document, caret and selection before an edit.
 #[derive(Clone, Debug)]
@@ -95,9 +155,6 @@ struct History {
     /// The kind of the last edit while it may still absorb the next one.
     open: Option<Step>,
 }
-
-/// The tallest an image is shown in the editor, in logical pixels.
-const MAX_IMAGE_HEIGHT: f64 = 200.0;
 
 thread_local! {
     /// The last fragment this thread copied, with the HTML it put on the
@@ -153,6 +210,11 @@ pub struct RichEditor {
     pending: Option<(usize, Attr)>,
     history: History,
     revision: u64,
+    /// A pointer drag on an image, from the press on it to the next press
+    /// or key.
+    image_drag: Option<ImageDrag>,
+    /// Where the image last pressed was shown.
+    last_shown: Option<Shown>,
 }
 
 /// One line of the editor as shown: where its text is in the document, the
@@ -196,6 +258,8 @@ impl RichEditor {
         let end = doc.text.len();
         self.doc = doc;
         self.nav.preedit = None;
+        self.image_drag = None;
+        self.last_shown = None;
         self.set_caret(end, None);
         self.pending = None;
         self.history = History::default();
@@ -290,6 +354,7 @@ impl RichEditor {
     fn restore(&mut self, snap: Snapshot) {
         self.doc = snap.doc;
         self.nav.preedit = None;
+        self.image_drag = None;
         self.set_caret(snap.caret, snap.anchor);
         self.pending = None;
         self.history.open = None;
@@ -592,6 +657,12 @@ impl RichEditor {
     /// Returns whether the document changed.
     pub fn apply(&mut self, input: &KeyInput) -> bool {
         let revision = self.revision;
+        // A double or triple click on an image keeps it selected.
+        if matches!(input, KeyInput::SelectWord | KeyInput::SelectLine) && self.image_drag.is_some()
+        {
+            return false;
+        }
+        self.image_drag = None;
         match input {
             KeyInput::Text(t) => {
                 self.nav.preedit = None;
@@ -873,36 +944,233 @@ impl RichEditor {
             .collect()
     }
 
-    /// How the image at the caret (or the first selected one) is placed:
-    /// `None` when there is no image there. What a toolbar's inline / float
-    /// left / float right buttons show as pressed.
-    pub fn image_float(&self) -> Option<ImageFloat> {
+    /// The image at the caret (or the first selected one), if there is one:
+    /// what a toolbar shows (its placement, size and wrapping).
+    pub fn image(&self) -> Option<RichImage> {
         let r = self.image_ranges().into_iter().next()?;
         self.doc
             .spans
             .at(r.start)
-            .and_then(|a| a.image.as_ref())
-            .map(|i| i.float)
+            .and_then(|a| a.image.as_deref())
+            .cloned()
     }
 
-    /// Place the selected images (or the one at the caret) per `float`: in
-    /// the line, or floated left or right with the text wrapping around
-    /// their opaque pixels. One undo step; nothing without an image there.
-    pub fn set_image_float(&mut self, float: ImageFloat) {
+    /// How the image at the caret (or the first selected one) is placed:
+    /// `None` when there is no image there. What a toolbar's inline / left /
+    /// center / right / free buttons show as pressed (compare with
+    /// [`ImagePlacement::same_kind`]).
+    pub fn image_placement(&self) -> Option<ImagePlacement> {
+        self.image().map(|i| i.placement)
+    }
+
+    /// The byte of the one image the selection holds, when it holds exactly
+    /// one image and nothing else: the image shown selected, with its frame
+    /// and resize handles.
+    pub fn selected_image(&self) -> Option<usize> {
+        let (s, e) = self.selection()?;
+        (e - s == OBJECT.len_utf8()
+            && self.doc.text[s..e].starts_with(OBJECT)
+            && self.doc.spans.at(s).is_some_and(|a| a.image.is_some()))
+        .then_some(s)
+    }
+
+    /// Change the selected images (or the one at the caret) with `f`, as one
+    /// undo step (joining the last one when `step` continues it). Returns
+    /// whether there was an image.
+    fn update_images(&mut self, step: Step, mut f: impl FnMut(RichImage) -> RichImage) -> bool {
         let ranges = self.image_ranges();
         if ranges.is_empty() {
-            return;
+            return false;
         }
-        self.begin(Step::Other);
+        self.begin(step);
         for r in ranges {
             self.doc.spans.update(r, |a| {
                 if let Some(image) = &a.image {
-                    a.image = Some(Arc::new((**image).clone().floated(float)));
+                    a.image = Some(Arc::new(f((**image).clone())));
                 }
             });
         }
-        self.history.open = None;
+        if step == Step::Other {
+            self.history.open = None;
+        }
         self.revision += 1;
+        true
+    }
+
+    /// Place the selected images (or the one at the caret) per `placement`:
+    /// in the line, floated left or right, centered, or free, the text
+    /// wrapping around their opaque pixels. One undo step; nothing without
+    /// an image there. A free placement given while the image isn't free yet
+    /// starts it where it was last shown, when the editor knows (it was
+    /// clicked), so it doesn't jump.
+    pub fn set_image_placement(&mut self, placement: ImagePlacement) {
+        let placement = match (placement, self.image_placement(), &self.last_shown) {
+            (ImagePlacement::Free { .. }, Some(p), Some(shown))
+                if !matches!(p, ImagePlacement::Free { .. })
+                    && self.image_ranges().first().map(|r| r.start) == Some(shown.at) =>
+            {
+                shown.free_here()
+            }
+            _ => placement,
+        };
+        self.update_images(Step::Other, |i| i.placed(placement));
+    }
+
+    /// Make text wrap around the selected images (or the one at the caret)
+    /// per `wrap`. One undo step.
+    pub fn set_image_wrap(&mut self, wrap: ImageWrap) {
+        self.update_images(Step::Other, |i| i.wrapped(wrap));
+    }
+
+    /// Size the selected images (or the one at the caret) per `size`. One
+    /// undo step, which sizes set right after it join (a slider dragged).
+    pub fn set_image_size(&mut self, size: ImageSize) {
+        self.update_images(Step::Image, |i| i.sized(size));
+    }
+
+    /// Bound the selected images' (or the caret's image's) width to `min`
+    /// and `max` logical pixels, and let them grow past their natural size
+    /// or not (`upscale`). One undo step.
+    pub fn set_image_bounds(&mut self, min: Option<f64>, max: Option<f64>, upscale: bool) {
+        self.update_images(Step::Other, |i| {
+            i.min_width(min).max_width(max).upscale(upscale)
+        });
+    }
+
+    /// A press on the editor's text at `hit` (shown-text coordinates): on
+    /// the selected image's corner handle it starts resizing it, on an
+    /// image it selects it (and on a free one starts moving it). Returns
+    /// whether it was on an image.
+    pub(crate) fn press_image(&mut self, hit: &TextHit) -> bool {
+        self.image_drag = None;
+        let objects: Vec<(usize, Rect)> = hit
+            .objects
+            .iter()
+            .map(|(i, r)| (self.shown_to_model(*i), *r))
+            .filter(|(i, _)| {
+                self.doc.text[*i..].starts_with(OBJECT)
+                    && self.doc.spans.at(*i).is_some_and(|a| a.image.is_some())
+            })
+            .collect();
+        let image_at = |at: usize| self.doc.spans.at(at).and_then(|a| a.image.clone());
+        let p = hit.point;
+        // A corner handle of the selected image.
+        if let Some(sel) = self.selected_image()
+            && let Some((_, r)) = objects.iter().find(|(i, _)| *i == sel)
+            && let Some(image) = image_at(sel)
+        {
+            let reach = HANDLE_REACH;
+            for (cx, cy, sign) in [
+                (r.min_x(), r.min_y(), -1.0),
+                (r.max_x(), r.min_y(), 1.0),
+                (r.min_x(), r.max_y(), -1.0),
+                (r.max_x(), r.max_y(), 1.0),
+            ] {
+                if (p.x - cx).abs() <= reach && (p.y - cy).abs() <= reach {
+                    let centered = matches!(
+                        image.placement,
+                        ImagePlacement::Center | ImagePlacement::Free { .. }
+                    );
+                    self.start_drag(sel, *r, hit, DragKind::Resize { sign, centered }, &image);
+                    return true;
+                }
+            }
+        }
+        // The top-most image under the pointer (floats are drawn first).
+        let Some(&(at, r)) = objects.iter().rev().find(|(_, r)| r.contains(p)) else {
+            return false;
+        };
+        let Some(image) = image_at(at) else {
+            return false;
+        };
+        self.nav.preedit = None;
+        self.select(at, at + OBJECT.len_utf8());
+        let kind = if matches!(image.placement, ImagePlacement::Free { .. }) {
+            DragKind::Move
+        } else {
+            DragKind::Select
+        };
+        self.start_drag(at, r, hit, kind, &image);
+        true
+    }
+
+    fn start_drag(
+        &mut self,
+        at: usize,
+        rect: Rect,
+        hit: &TextHit,
+        kind: DragKind,
+        image: &RichImage,
+    ) {
+        self.history.open = None;
+        self.pending = None;
+        self.last_shown = Some(Shown {
+            at,
+            rect,
+            width: hit.width,
+        });
+        self.image_drag = Some(ImageDrag {
+            at,
+            kind,
+            origin: hit.point,
+            width: hit.width,
+            rect,
+            start: image.clone(),
+        });
+    }
+
+    /// The pointer dragged to `hit` after [`press_image`](Self::press_image)
+    /// started a drag: resize or move the image. Returns whether a drag was
+    /// on (else the pointer is selecting text).
+    pub(crate) fn drag_image(&mut self, hit: &TextHit) -> bool {
+        let Some(drag) = self.image_drag.clone() else {
+            return false;
+        };
+        let (dx, dy) = (hit.point.x - drag.origin.x, hit.point.y - drag.origin.y);
+        let w = drag.width.max(1.0);
+        let start = &drag.start;
+        let image = match drag.kind {
+            DragKind::Select => return true,
+            DragKind::Resize { sign, centered } => {
+                let k = if centered { 2.0 } else { 1.0 };
+                let mut new_w = (drag.rect.width() + sign * dx * k).max(MIN_IMAGE_WIDTH);
+                if !start.upscale
+                    && let Some(n) = start.natural_size()
+                {
+                    new_w = new_w.min(n.width.max(MIN_IMAGE_WIDTH));
+                }
+                if let Some(max) = start.max_width {
+                    new_w = new_w.min(max);
+                }
+                let size = match start.size {
+                    ImageSize::Percent(_) => ImageSize::Percent((new_w / w * 100.0).min(100.0)),
+                    _ => ImageSize::Pixels(new_w.round()),
+                };
+                start.clone().sized(size)
+            }
+            DragKind::Move => {
+                let ImagePlacement::Free { x, y } = start.placement else {
+                    return true;
+                };
+                start.clone().placed(ImagePlacement::Free {
+                    x: (x + dx / w * 100.0).clamp(0.0, 100.0),
+                    y: y + dy / w * 100.0,
+                })
+            }
+        };
+        let at = drag.at;
+        let current = self.doc.spans.at(at).and_then(|a| a.image.clone());
+        if current.as_deref() == Some(&image) {
+            return true;
+        }
+        self.begin(Step::Image);
+        let image = Arc::new(image);
+        self.doc.spans.update(at..at + OBJECT.len_utf8(), |a| {
+            a.image = Some(image.clone())
+        });
+        self.set_caret(at + OBJECT.len_utf8(), Some(at));
+        self.revision += 1;
+        true
     }
 
     /// The kind of the block holding the caret.
@@ -1075,6 +1343,7 @@ impl RichEditor {
         let mono = if needs_mono { mono_font() } else { None };
         let c = self.nav.caret;
         let preedit = self.nav.preedit.as_ref();
+        let selected = self.selected_image();
         let mut rt = RichText::new();
         for (i, m) in maps.iter().enumerate() {
             if i > 0 {
@@ -1121,15 +1390,17 @@ impl RichEditor {
                 let style = Self::span_style(&a, kind, theme, mono.as_ref());
                 match &a.image {
                     Some(image) => {
-                        for ch in self.doc.text[r].chars() {
+                        for (i, ch) in self.doc.text[r.clone()].char_indices() {
                             if ch != OBJECT {
                                 continue;
                             }
-                            rt = match image.float {
-                                ImageFloat::Inline => {
-                                    rt.icon_styled(image_icon(image, theme), style.clone())
+                            let frame =
+                                (selected == Some(r.start + i)).then_some(theme.palette.primary);
+                            rt = match image.placement {
+                                ImagePlacement::Inline => {
+                                    rt.icon_styled(image_icon(image, theme, frame), style.clone())
                                 }
-                                side => rt.float(float_image(image, side, theme)),
+                                _ => rt.float(float_image(image, theme, frame)),
                             };
                         }
                     }
@@ -1189,40 +1460,64 @@ fn placeholder_image() -> Arc<Pixmap> {
     PLACEHOLDER.with(Arc::clone)
 }
 
-/// How an image shows in the editor: at its own size up to
-/// [`MAX_IMAGE_HEIGHT`], a placeholder as tall as the text while not loaded.
-/// Its alternative text is U+FFFC, so the accessible text matches the text
-/// the caret indexes.
-fn image_icon(image: &RichImage, theme: &Theme) -> InlineIcon {
+/// The picture an image shows (a placeholder while not loaded) and its
+/// natural width: a pixel of the image per logical pixel, the placeholder
+/// as wide as the text is tall.
+fn image_source(image: &RichImage, theme: &Theme) -> (Arc<Pixmap>, f64) {
     match &image.pixmap {
-        Some(px) => {
-            let h = f64::from(px.size().height).min(MAX_IMAGE_HEIGHT);
-            InlineIcon::new(px.clone()).height(h)
-        }
-        None => InlineIcon::new(placeholder_image()).height(theme.font_size),
+        Some(px) => (px.clone(), f64::from(px.size().width)),
+        None => (placeholder_image(), theme.font_size),
     }
-    .alt(OBJECT.to_string())
 }
 
-/// How a floated image shows: at its own size up to [`MAX_IMAGE_HEIGHT`],
-/// against `side`, the text keeping 6 px off its opaque pixels.
-fn float_image(image: &RichImage, side: ImageFloat, theme: &Theme) -> FloatImage {
-    let (px, h) = match &image.pixmap {
-        Some(px) => (
-            px.clone(),
-            f64::from(px.size().height).min(MAX_IMAGE_HEIGHT),
-        ),
-        None => (placeholder_image(), theme.font_size),
-    };
+/// How an image shows in the line: as wide as its [`ImageSize`] says of the
+/// text area's width, bounded (by its natural width too, unless it may grow,
+/// and by the text area's), with `frame` when it is selected. Its
+/// alternative text is U+FFFC, so the accessible text matches the text the
+/// caret indexes.
+fn image_icon(image: &RichImage, theme: &Theme, frame: Option<crate::render::Color>) -> InlineIcon {
+    let (px, natural) = image_source(image, theme);
+    let icon = InlineIcon::new(px)
+        .relative_width(image.relative_width(natural))
+        .alt(OBJECT.to_string());
+    match frame {
+        Some(c) => icon.frame(c),
+        None => icon,
+    }
+}
+
+/// How a floating image shows: sized as [`image_icon`] says, placed per its
+/// [`ImagePlacement`], the text keeping 6 px off its opaque pixels on the
+/// sides its [`ImageWrap`] says.
+fn float_image(
+    image: &RichImage,
+    theme: &Theme,
+    frame: Option<crate::render::Color>,
+) -> FloatImage {
+    let (px, natural) = image_source(image, theme);
     let f = FloatImage::new(px)
-        .height(h)
+        .relative_width(image.relative_width(natural))
         .alpha(0.5)
         .margin(6.0)
         .alt(OBJECT.to_string());
-    if side == ImageFloat::Left {
-        f.left()
-    } else {
-        f.right()
+    let f = match image.placement {
+        ImagePlacement::Left => f.left(),
+        ImagePlacement::Center => f.center(),
+        ImagePlacement::Free { x, y } => f.positioned(Point::new(x / 100.0, y / 100.0)),
+        _ => f.right(),
+    };
+    let centered = matches!(
+        image.placement,
+        ImagePlacement::Center | ImagePlacement::Free { .. }
+    );
+    let f = match image.wrap {
+        ImageWrap::None => f.wrap(WrapSide::Clear),
+        ImageWrap::Largest if centered => f.wrap(WrapSide::Largest),
+        _ => f,
+    };
+    match frame {
+        Some(c) => f.frame(c),
+        None => f,
     }
 }
 
@@ -1252,7 +1547,9 @@ fn command_key(ev: &KeyEvent) -> Option<char> {
 /// does (the caret and selection by keyboard and pointer, word movement,
 /// undo and redo, input methods, right-to-left text), plus paragraphs,
 /// headings, lists, quotes and code blocks, bold, italic, underline,
-/// strikethrough, inline code, links and images.
+/// strikethrough, inline code, links and images. A click on an image selects
+/// it (framed, with corner handles); dragging a handle resizes it, dragging a
+/// free image moves it.
 ///
 /// Keys: Ctrl/Cmd+B, I and U toggle bold, italic and underline; Enter splits
 /// a block (on an empty list item, it ends the list); Backspace at a block's
@@ -1321,9 +1618,16 @@ pub fn rich_editor<S: 'static>(
         }
         Handled::Yes
     })
-    .on_text_pos(cx, move |s, index, extend| {
+    .on_text_hit(cx, move |s, hit, extend| {
         let ed = field(s);
-        let at = ed.shown_to_model(index);
+        if extend {
+            if ed.drag_image(hit) {
+                return;
+            }
+        } else if ed.press_image(hit) {
+            return;
+        }
+        let at = ed.shown_to_model(hit.index);
         ed.nav.preedit = None;
         if extend {
             ed.with_nav(|b| b.extend_to(at));

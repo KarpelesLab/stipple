@@ -33,7 +33,7 @@ use crate::geometry::{PhysicalSize, Point, Rect, Size};
 use crate::layout::LayoutDirection;
 use crate::render::bidi::{ParagraphLevels, TextDirection, has_strong};
 use crate::render::text::{LayoutLine, Styling, TextLayout};
-use crate::render::{ImageFit, ImageSource, Pixmap, Svg};
+use crate::render::{Color, ImageFit, ImageSource, Pixmap, Svg};
 
 /// The outline of an object text flows around, within its box: what the text
 /// keeps out of (grown by the object's margin).
@@ -289,9 +289,22 @@ pub enum FlowPlacement {
     FloatLeft,
     /// Against the right edge, likewise; text runs on its left.
     FloatRight,
+    /// Centered between the region's edges, at the top of the line holding
+    /// its anchor (below the floats already there when it overlaps them);
+    /// text runs on both sides of it.
+    FloatCenter,
     /// With its box's top-left here, in the text's coordinates; text runs
     /// on both sides of it.
     At(Point),
+    /// With its box's center `x` times the region's width across, and `y`
+    /// times the region's width below the top of the paragraph holding its
+    /// anchor (fractions of the width, so it keeps its place as the region
+    /// widens or narrows), kept within the region's left and right edges
+    /// and below its top. The paragraph's top is where it would be without
+    /// positioned objects, so the object stays put while the text it pushes
+    /// aside moves; all the text, the paragraphs above it too, flows around
+    /// it.
+    Positioned(Point),
 }
 
 /// How an object sits in flowing text: its [placement](FlowPlacement), its
@@ -350,9 +363,21 @@ impl FlowItem {
         Self::new(FlowPlacement::FloatRight)
     }
 
+    /// Centered between the region's edges, at the line holding its anchor.
+    pub fn float_center() -> Self {
+        Self::new(FlowPlacement::FloatCenter)
+    }
+
     /// Placed with its top-left at `at`, in the text's coordinates.
     pub fn at(at: Point) -> Self {
         Self::new(FlowPlacement::At(at))
+    }
+
+    /// Placed with its center at `center`, in fractions of the region's
+    /// width, from the top of its anchor's paragraph
+    /// ([`FlowPlacement::Positioned`]).
+    pub fn positioned(center: Point) -> Self {
+        Self::new(FlowPlacement::Positioned(center))
     }
 
     /// Outlined by `shape` instead of its box.
@@ -389,8 +414,19 @@ impl FlowItem {
         self.wrap.unwrap_or(match self.placement {
             FlowPlacement::FloatLeft => WrapSide::Right,
             FlowPlacement::FloatRight => WrapSide::Left,
-            FlowPlacement::At(_) => WrapSide::Both,
+            FlowPlacement::FloatCenter | FlowPlacement::At(_) | FlowPlacement::Positioned(_) => {
+                WrapSide::Both
+            }
         })
+    }
+
+    /// Whether it floats at the line of its anchor, rather than being
+    /// placed.
+    fn floats(&self) -> bool {
+        matches!(
+            self.placement,
+            FlowPlacement::FloatLeft | FlowPlacement::FloatRight | FlowPlacement::FloatCenter
+        )
     }
 }
 
@@ -503,6 +539,62 @@ impl TextFlow {
     }
 }
 
+/// A width relative to the text an image is in: `fraction` of the width the
+/// text is laid out in, at least `min` and at most `max` logical pixels
+/// (`max` winning over `min`). An editor caps an image at its natural size
+/// with `max`, and keeps it within the text's edges with a `fraction` of 1.
+///
+/// ```
+/// use stipple::render::RelativeWidth;
+/// let w = RelativeWidth::new(0.5).max(300.0);
+/// assert_eq!(w.resolve(Some(400.0), 0.0), 200.0);
+/// assert_eq!(w.resolve(Some(1000.0), 0.0), 300.0); // capped
+/// assert_eq!(w.resolve(None, 120.0), 300.0); // unbounded: its cap
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RelativeWidth {
+    /// The fraction of the text's width (1 is all of it).
+    pub fraction: f64,
+    /// The least width, in logical pixels.
+    pub min: f64,
+    /// The most, in logical pixels (infinite: no limit).
+    pub max: f64,
+}
+
+impl RelativeWidth {
+    /// `fraction` of the text's width, with no bounds.
+    pub fn new(fraction: f64) -> Self {
+        Self {
+            fraction: fraction.max(0.0),
+            min: 0.0,
+            max: f64::INFINITY,
+        }
+    }
+
+    /// At least `px` logical pixels wide.
+    pub fn min(mut self, px: f64) -> Self {
+        self.min = px.max(0.0);
+        self
+    }
+
+    /// At most `px` logical pixels wide.
+    pub fn max(mut self, px: f64) -> Self {
+        self.max = px.max(0.0);
+        self
+    }
+
+    /// The width in a text `width` wide; in an unbounded one (`None`), its
+    /// `max` if it has one, else `fallback` (a natural width), bounded.
+    pub fn resolve(&self, width: Option<f64>, fallback: f64) -> f64 {
+        let w = match width {
+            Some(w) if w.is_finite() => self.fraction * w.max(0.0),
+            _ if self.max.is_finite() => self.max,
+            _ => fallback,
+        };
+        w.max(self.min).min(self.max).max(0.0)
+    }
+}
+
 /// An image floating in a [`RichText`](crate::render::RichText): text flows
 /// around it, keeping out of its [shape](FlowShape) (by default its box; see
 /// [`alpha`](Self::alpha) for its opaque pixels). It is anchored where it is
@@ -533,6 +625,13 @@ pub struct FloatImage {
     pub item: FlowItem,
     /// What copying the text and screen readers get in its place.
     pub alt: String,
+    /// Its width relative to the text's (its height following, keeping its
+    /// aspect ratio), resolved when the text is laid out: in place of
+    /// `width` and `height`.
+    pub relative_width: Option<RelativeWidth>,
+    /// A selection frame drawn around it, with resize handles at its
+    /// corners, in this color: an editor's selected image.
+    pub frame: Option<Color>,
 }
 
 impl FloatImage {
@@ -545,6 +644,8 @@ impl FloatImage {
             height: None,
             item: FlowItem::float_right(),
             alt: String::new(),
+            relative_width: None,
+            frame: None,
         }
     }
 
@@ -560,10 +661,36 @@ impl FloatImage {
         self
     }
 
+    /// Centered in the text's width at its line, text on both sides.
+    pub fn center(mut self) -> Self {
+        self.item.placement = FlowPlacement::FloatCenter;
+        self
+    }
+
     /// Placed with its top-left at `at` in the text's box, text on both
     /// sides.
     pub fn at(mut self, at: Point) -> Self {
         self.item.placement = FlowPlacement::At(at);
+        self
+    }
+
+    /// Placed with its center at `center`, in fractions of the text's width,
+    /// from the top of its paragraph ([`FlowPlacement::Positioned`]).
+    pub fn positioned(mut self, center: Point) -> Self {
+        self.item.placement = FlowPlacement::Positioned(center);
+        self
+    }
+
+    /// As wide as `width` says of the width the text is laid out in, its
+    /// height keeping its aspect ratio.
+    pub fn relative_width(mut self, width: RelativeWidth) -> Self {
+        self.relative_width = Some(width);
+        self
+    }
+
+    /// Drawn with a selection frame and corner handles in `color`.
+    pub fn frame(mut self, color: Color) -> Self {
+        self.frame = Some(color);
         self
     }
 
@@ -616,7 +743,25 @@ impl FloatImage {
         self
     }
 
-    /// The size it's drawn at.
+    /// The size it's drawn at in a text `region` wide (`None`: unbounded),
+    /// its [`relative_width`](Self::relative_width) resolved there.
+    pub fn size_in(&self, region: Option<f64>) -> Size {
+        let Some(rel) = self.relative_width else {
+            return self.size();
+        };
+        let natural = self.source.size();
+        let w = rel.resolve(region, natural.width);
+        let h = if natural.width > 0.0 {
+            w * natural.height / natural.width
+        } else {
+            w
+        };
+        Size::new(w, h)
+    }
+
+    /// The size it's drawn at, without a
+    /// [`relative_width`](Self::relative_width) (with one, see
+    /// [`size_in`](Self::size_in)).
     pub fn size(&self) -> Size {
         let natural = self.source.size();
         let aspect = |a: f64, b: f64| if b > 0.0 { a / b } else { 1.0 };
@@ -638,7 +783,18 @@ pub(crate) struct FlowGeometry {
     /// Each [`TextFlow`] item's box, in order.
     pub items: Vec<Rect>,
     /// The rich text's floating images, in text order, with their boxes.
-    pub images: Vec<(Rect, ImageSource)>,
+    pub images: Vec<PlacedImage>,
+}
+
+/// A rich text's floating image where the flow engine put it.
+#[derive(Clone, Debug)]
+pub(crate) struct PlacedImage {
+    pub rect: Rect,
+    pub source: ImageSource,
+    /// The byte of the text it is anchored at.
+    pub anchor: usize,
+    /// Its selection frame's color, if it has one.
+    pub frame: Option<Color>,
 }
 
 // --- Alpha shapes ---
@@ -807,8 +963,34 @@ struct Placed {
     margin: f64,
     side: WrapSide,
     through: bool,
-    /// Which edge a float is against (`Some(true)`: left).
-    float_left: Option<bool>,
+    /// For a float, where it floats.
+    float: Option<Side>,
+}
+
+/// Which edge a float is against, or the middle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Side {
+    Left,
+    Right,
+    Center,
+}
+
+/// An object of the region, before it's placed.
+struct Obj {
+    item: FlowItem,
+    size: Size,
+    /// For a rich text's floating image, the image.
+    image: Option<ImageSource>,
+    frame: Option<Color>,
+}
+
+/// What a pass of the engine laid out: the lines, each object's box (`None`:
+/// not placed), the text's bottom, and each paragraph's top.
+struct Pass {
+    lines: Vec<LayoutLine>,
+    rects: Vec<Option<Rect>>,
+    bottom: f64,
+    para_tops: Vec<f64>,
 }
 
 impl Placed {
@@ -940,21 +1122,18 @@ impl Styling {
     /// wide as its longest paragraph and its floats), flowing around
     /// `flow`'s objects and the floating images among the looks.
     pub(crate) fn layout_flow<'a>(
-        self,
+        mut self,
         text: &'a str,
         direction: TextDirection,
         max_width: Option<f64>,
         ui: LayoutDirection,
         flow: Option<&TextFlow>,
     ) -> TextLayout<'a> {
+        let bounded = max_width.filter(|w| w.is_finite()).map(|w| w.max(0.0));
+        self.resolve_icons(bounded);
         let start_right = ui.is_rtl() && direction == TextDirection::Auto;
         let options = flow.map(|f| f.options).unwrap_or_default();
         // Every object: the flow's items, then the floating images.
-        struct Obj {
-            item: FlowItem,
-            size: Size,
-            image: Option<ImageSource>,
-        }
         let mut objs: Vec<Obj> = flow
             .map(|f| {
                 f.items
@@ -963,6 +1142,7 @@ impl Styling {
                         item: item.clone(),
                         size: *size,
                         image: None,
+                        frame: None,
                     })
                     .collect()
             })
@@ -972,14 +1152,15 @@ impl Styling {
             if let Some(fl) = &self.faces[fi].float {
                 objs.push(Obj {
                     item: fl.item.clone().anchor(at),
-                    size: fl.size(),
+                    size: fl.size_in(bounded),
                     image: Some(fl.source.clone()),
+                    frame: fl.frame,
                 });
             }
         }
-        let width = match max_width {
-            Some(w) if w.is_finite() => w.max(0.0),
-            _ => {
+        let width = match bounded {
+            Some(w) => w,
+            None => {
                 let mut start = 0;
                 let mut widest: f64 = 0.0;
                 for para in text.split('\n') {
@@ -988,13 +1169,14 @@ impl Styling {
                 }
                 let beside: f64 = objs
                     .iter()
-                    .filter(|o| !matches!(o.item.placement, FlowPlacement::At(_)))
+                    .filter(|o| o.item.floats())
                     .map(|o| o.size.width + o.item.margin)
                     .sum();
                 let placed = objs
                     .iter()
                     .filter_map(|o| match o.item.placement {
                         FlowPlacement::At(p) => Some(p.x + o.size.width),
+                        FlowPlacement::Positioned(_) => Some(o.size.width),
                         _ => None,
                     })
                     .fold(0.0, f64::max);
@@ -1002,16 +1184,111 @@ impl Styling {
             }
         };
 
+        let key = self.content_key(text, direction, start_right);
+        let mut memo = take_memo(key);
+        // Objects positioned from their paragraph's top: where the
+        // paragraphs are without them, then laid out at those places.
+        if objs
+            .iter()
+            .any(|o| matches!(o.item.placement, FlowPlacement::Positioned(_)))
+        {
+            let tops = self
+                .flow_pass(
+                    text,
+                    direction,
+                    start_right,
+                    width,
+                    options,
+                    &objs,
+                    &mut memo,
+                )
+                .para_tops;
+            for o in &mut objs {
+                if let FlowPlacement::Positioned(c) = o.item.placement {
+                    let anchor = o.item.anchor.min(text.len());
+                    let para = text.as_bytes()[..anchor]
+                        .iter()
+                        .filter(|b| **b == b'\n')
+                        .count();
+                    let top = tops.get(para).copied().unwrap_or(0.0);
+                    let (w, h) = (o.size.width, o.size.height);
+                    let x = (c.x * width - w / 2.0).min(width - w).max(0.0);
+                    let y = (top + c.y * width - h / 2.0).max(0.0);
+                    o.item.placement = FlowPlacement::At(Point::new(x, y));
+                }
+            }
+        }
+        let pass = self.flow_pass(
+            text,
+            direction,
+            start_right,
+            width,
+            options,
+            &objs,
+            &mut memo,
+        );
+        put_memo(key, memo);
+        let rects = pass.rects;
+        let bottom = rects
+            .iter()
+            .flatten()
+            .map(|r| r.max_y())
+            .fold(pass.bottom, f64::max);
+        let geometry = FlowGeometry {
+            size: Size::new(width, bottom),
+            items: rects[..n_items]
+                .iter()
+                .map(|r| r.unwrap_or_default())
+                .collect(),
+            images: objs[n_items..]
+                .iter()
+                .zip(&rects[n_items..])
+                .filter_map(|(o, r)| {
+                    Some(PlacedImage {
+                        rect: (*r)?,
+                        source: o.image.clone()?,
+                        anchor: o.item.anchor,
+                        frame: o.frame,
+                    })
+                })
+                .collect(),
+        };
+        TextLayout {
+            text,
+            styling: self,
+            lines: pass.lines,
+            width,
+            align_width: width,
+            start_right,
+            flow: Some(Box::new(geometry)),
+        }
+    }
+
+    /// One pass of the engine: `text` laid out in a region `width` wide
+    /// around `objs`, filling bands through `memo`. Objects still
+    /// [`Positioned`](FlowPlacement::Positioned) are left out: the first
+    /// pass finds their paragraphs' tops.
+    #[allow(clippy::too_many_arguments)]
+    fn flow_pass(
+        &self,
+        text: &str,
+        direction: TextDirection,
+        start_right: bool,
+        width: f64,
+        options: FlowOptions,
+        objs: &[Obj],
+        memo: &mut FillMemo,
+    ) -> Pass {
         let mut rects: Vec<Option<Rect>> = vec![None; objs.len()];
         let mut placed: Vec<Placed> = Vec::new();
-        let place = |placed: &mut Vec<Placed>, obj: &Obj, rect: Rect, float_left| {
+        let place = |placed: &mut Vec<Placed>, obj: &Obj, rect: Rect, float| {
             placed.push(Placed {
                 rect,
                 shape: obj.item.shape.clone(),
                 margin: obj.item.margin,
                 side: obj.item.side(),
                 through: obj.item.through,
-                float_left,
+                float,
             });
         };
         for (i, o) in objs.iter().enumerate() {
@@ -1021,41 +1298,66 @@ impl Styling {
                 place(&mut placed, o, rect, None);
             }
         }
-        let mut pending: Vec<usize> = (0..objs.len())
-            .filter(|&i| !matches!(objs[i].item.placement, FlowPlacement::At(_)))
-            .collect();
+        let mut pending: Vec<usize> = (0..objs.len()).filter(|&i| objs[i].item.floats()).collect();
         pending.sort_by_key(|&i| objs[i].item.anchor);
         // Float `i` at the top of the band at `y` (or lower, below floats it
         // doesn't fit beside).
         let float = |placed: &mut Vec<Placed>, rects: &mut Vec<Option<Rect>>, i: usize, y: f64| {
             let o = &objs[i];
-            let left = o.item.placement == FlowPlacement::FloatLeft;
+            let side = match o.item.placement {
+                FlowPlacement::FloatLeft => Side::Left,
+                FlowPlacement::FloatRight => Side::Right,
+                _ => Side::Center,
+            };
             let (w, h, m) = (o.size.width, o.size.height, o.item.margin);
             // Not above the floats before it.
             let mut top = placed
                 .iter()
-                .filter(|p| p.float_left.is_some())
+                .filter(|p| p.float.is_some())
                 .map(|p| p.rect.min_y())
                 .fold(y, f64::max);
             let x = loop {
                 let beside: Vec<&Placed> = placed
                     .iter()
                     .filter(|p| {
-                        p.float_left.is_some() && p.rect.min_y() < top + h && p.rect.max_y() > top
+                        p.float.is_some() && p.rect.min_y() < top + h && p.rect.max_y() > top
                     })
                     .collect();
-                let lo = beside
-                    .iter()
-                    .filter(|p| p.float_left == Some(true))
-                    .map(|p| p.rect.max_x() + p.margin.max(m))
-                    .fold(0.0, f64::max);
-                let hi = beside
-                    .iter()
-                    .filter(|p| p.float_left == Some(false))
-                    .map(|p| p.rect.min_x() - p.margin.max(m))
-                    .fold(width, f64::min);
-                if beside.is_empty() || hi - lo >= w {
-                    break if left { lo } else { (hi - w).max(0.0) };
+                if side == Side::Center {
+                    let x = ((width - w) / 2.0).max(0.0);
+                    let clear = beside.iter().all(|p| {
+                        let gap = p.margin.max(m);
+                        p.rect.max_x() + gap <= x || p.rect.min_x() - gap >= x + w
+                    });
+                    if clear {
+                        break x;
+                    }
+                } else {
+                    // A centered float bounds a left one on the right, a
+                    // right one on the left.
+                    let lo = beside
+                        .iter()
+                        .filter(|p| {
+                            p.float == Some(Side::Left)
+                                || (side == Side::Right && p.float == Some(Side::Center))
+                        })
+                        .map(|p| p.rect.max_x() + p.margin.max(m))
+                        .fold(0.0, f64::max);
+                    let hi = beside
+                        .iter()
+                        .filter(|p| {
+                            p.float == Some(Side::Right)
+                                || (side == Side::Left && p.float == Some(Side::Center))
+                        })
+                        .map(|p| p.rect.min_x() - p.margin.max(m))
+                        .fold(width, f64::min);
+                    if beside.is_empty() || hi - lo >= w {
+                        break if side == Side::Left {
+                            lo
+                        } else {
+                            (hi - w).max(0.0)
+                        };
+                    }
                 }
                 top = beside
                     .iter()
@@ -1064,16 +1366,16 @@ impl Styling {
             };
             let rect = Rect::from_xywh(x, top, w, h);
             rects[i] = Some(rect);
-            place(placed, o, rect, Some(left));
+            place(placed, o, rect, Some(side));
         };
 
-        let key = self.content_key(text, direction, start_right);
-        let mut memo = take_memo(key);
         let mut lines: Vec<LayoutLine> = Vec::new();
+        let mut para_tops: Vec<f64> = Vec::new();
         let mut y = 0.0;
         let mut start = 0usize;
         let paras: Vec<&str> = text.split('\n').collect();
         for (pi, para) in paras.iter().enumerate() {
+            para_tops.push(y);
             let para_dir = if start_right && !has_strong(para) {
                 TextDirection::Rtl
             } else {
@@ -1198,28 +1500,11 @@ impl Styling {
         for i in std::mem::take(&mut pending) {
             float(&mut placed, &mut rects, i, y);
         }
-        put_memo(key, memo);
-        let bottom = rects.iter().flatten().map(|r| r.max_y()).fold(y, f64::max);
-        let geometry = FlowGeometry {
-            size: Size::new(width, bottom),
-            items: rects[..n_items]
-                .iter()
-                .map(|r| r.unwrap_or_default())
-                .collect(),
-            images: objs[n_items..]
-                .iter()
-                .zip(&rects[n_items..])
-                .filter_map(|(o, r)| Some(((*r)?, o.image.clone()?)))
-                .collect(),
-        };
-        TextLayout {
-            text,
-            styling: self,
+        Pass {
             lines,
-            width,
-            align_width: width,
-            start_right,
-            flow: Some(Box::new(geometry)),
+            rects,
+            bottom: y,
+            para_tops,
         }
     }
 
@@ -1370,7 +1655,7 @@ impl TextLayout<'_> {
     pub fn float_rects(&self) -> Vec<Rect> {
         self.flow
             .as_ref()
-            .map(|f| f.images.iter().map(|(r, _)| *r).collect())
+            .map(|f| f.images.iter().map(|p| p.rect).collect())
             .unwrap_or_default()
     }
 

@@ -39,6 +39,45 @@ type RawKeyFn<S> = Box<dyn FnMut(&mut S, &crate::platform::KeyEvent) -> crate::c
 /// registered with [`Cx::register_drag`] read [`DragMotion::fraction_x`]).
 type DragFn<S> = Box<dyn FnMut(&mut S, &DragMotion)>;
 
+/// A press or drag on editable text, resolved against its layout, delivered
+/// to handlers registered with
+/// [`Element::on_text_hit`](crate::core::Element::on_text_hit): the caret
+/// position under the pointer, the pointer itself, and where the text's
+/// images are, so an editor can tell a press on an image (or its resize
+/// handles) from one in the text.
+#[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct TextHit {
+    /// The caret position under the pointer: a byte index into the text.
+    pub index: usize,
+    /// The pointer, relative to the text's box.
+    pub point: Point,
+    /// The width the text is laid out in.
+    pub width: f64,
+    /// Each image in the text (inline or floating): the byte of its U+FFFC
+    /// and its box, relative to the text's box.
+    pub objects: Vec<(usize, Rect)>,
+}
+
+impl TextHit {
+    /// A hit at caret `index`, the pointer at `point` in a text `width`
+    /// wide, with no images (to fake one in a test).
+    pub fn new(index: usize, point: Point, width: f64) -> Self {
+        Self {
+            index,
+            point,
+            width,
+            objects: Vec::new(),
+        }
+    }
+
+    /// With `objects`: images' bytes and boxes.
+    pub fn objects(mut self, objects: Vec<(usize, Rect)>) -> Self {
+        self.objects = objects;
+        self
+    }
+}
+
 /// A pointer drag in progress, delivered to handlers registered with
 /// [`Element::on_drag_motion`](crate::core::Element::on_drag_motion) on the
 /// press and on every move until release. Positions are window logical pixels;
@@ -110,7 +149,7 @@ impl DragMotion {
 /// A boxed text-pointer handler: receives a resolved byte index into the
 /// element's text and whether the gesture *extends* a selection (drag) or
 /// *places* the caret (initial press).
-type TextPosFn<S> = Box<dyn FnMut(&mut S, usize, bool)>;
+type TextPosFn<S> = Box<dyn FnMut(&mut S, &TextHit, bool)>;
 /// A boxed secondary-click (context) handler: receives the click position in
 /// logical pixels, so it can open a context menu there.
 type ContextFn<S> = Box<dyn FnMut(&mut S, Point)>;
@@ -822,7 +861,17 @@ impl<'a, S> Cx<'a, S> {
     /// flag (`false` = place caret, `true` = extend selection).
     pub fn register_text_pos(
         &mut self,
-        handler: impl FnMut(&mut S, usize, bool) + 'static,
+        mut handler: impl FnMut(&mut S, usize, bool) + 'static,
+    ) -> TextPosId {
+        self.register_text_hit(move |s, hit, extend| handler(s, hit.index, extend))
+    }
+
+    /// Register a text-pointer handler receiving the whole [`TextHit`] (the
+    /// index, the pointer in the text's box, the box's width and where its
+    /// images are), returning its [`TextPosId`].
+    pub fn register_text_hit(
+        &mut self,
+        handler: impl FnMut(&mut S, &TextHit, bool) + 'static,
     ) -> TextPosId {
         let id = TextPosId(self.text_pos.len() as u32);
         self.text_pos.push(Box::new(handler));
@@ -1233,7 +1282,8 @@ impl<S> Handlers<S> {
     }
 
     /// Invoke the text-pointer handler for `id` with a resolved byte `index` and
-    /// the `extend` flag. Returns `true` if one existed and ran.
+    /// the `extend` flag (and no more of a [`TextHit`]: a touch handle moving
+    /// the caret). Returns `true` if one existed and ran.
     pub(crate) fn dispatch_text_pos(
         &mut self,
         id: TextPosId,
@@ -1241,8 +1291,21 @@ impl<S> Handlers<S> {
         extend: bool,
         state: &mut S,
     ) -> bool {
+        let hit = TextHit::new(index, Point::new(0.0, 0.0), 0.0);
+        self.dispatch_text_hit(id, &hit, extend, state)
+    }
+
+    /// Invoke the text-pointer handler for `id` with a whole [`TextHit`]
+    /// and the `extend` flag. Returns `true` if one existed and ran.
+    pub(crate) fn dispatch_text_hit(
+        &mut self,
+        id: TextPosId,
+        hit: &TextHit,
+        extend: bool,
+        state: &mut S,
+    ) -> bool {
         if let Some(handler) = self.text_pos.get_mut(id.0 as usize) {
-            handler(state, index, extend);
+            handler(state, hit, extend);
             true
         } else {
             false

@@ -60,7 +60,7 @@ How to build, package and run on each platform, and what works there today.
 | Text flowing around floats, shapes and images' opaque pixels | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ |
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Memoized subtrees, animation frames without a rebuild, painting only what shows | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ |
-| Rich text editor (`rich_editor`): marks, blocks, links, images; Markdown and HTML | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ |
+| Rich text editor (`rich_editor`): marks, blocks, links, images placed, wrapped and sized by the pointer; Markdown and HTML | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ | ✅ ⁷⁶ |
 | Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ✅ ⁵⁰ | ✅ ⁵⁵ | ✅ ²³ |
 | Dead keys and compose | ✅ ¹⁷ | ✅ | ✅ ¹⁶ | ❌ | ❌ | ✅ ²³ |
 | Input methods in custom elements (`ime_input`) | ✅ ⁴³ | ✅ ⁴³ | ✅ ⁴³ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ⁴³ |
@@ -572,10 +572,12 @@ pieces). CI runs `textflow --check` and drags its ring with `xdotool` on
 X11; elsewhere only built. See [text-flow.md](text-flow.md).
 ⁷⁶ In the shared core: the editor, its keys, undo, and the Markdown and HTML
 export and import are the same everywhere. CI types into it on X11 (Ctrl+B,
-Ctrl+I, toolbar clicks that keep the editor focused, the sample image, an
-HTML paste from xclip) and
-reads the Markdown back, and checks the rendering and both exports off
-screen; elsewhere it is unit- and App-tested only. Pasting HTML and images
+Ctrl+I, toolbar clicks that keep the editor focused, the sample image
+centered at a relative width, an HTML paste from xclip, and a drag of the
+image's resize handle) and reads the HTML and Markdown back, and checks the
+rendering (a floated and a centered image) and both exports off screen;
+elsewhere it is unit- and App-tested only (selecting, resizing and moving
+images by the pointer included). Pasting HTML and images
 from other apps works where the clipboard carries them (X11, Wayland,
 Windows, macOS; HTML on the web; text only on iOS and Android). Code is
 shown in the system's monospaced font, which the web doesn't have. See

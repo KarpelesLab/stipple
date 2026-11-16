@@ -9,8 +9,8 @@ use crate::geometry::{Point, Size};
 use crate::layout::LayoutDirection;
 use crate::render::text::{SpanFace, Styling};
 use crate::render::{
-    Color, Decoration, FloatImage, Font, FontWeight, ImageSource, Pixmap, Scene, Svg,
-    TextDirection, TextFlow, TextLayout, TextPaint, UnderlineStyle,
+    Color, Decoration, FloatImage, Font, FontWeight, ImageSource, Pixmap, RelativeWidth, Scene,
+    Svg, TextDirection, TextFlow, TextLayout, TextPaint, UnderlineStyle,
 };
 
 /// The character an inline image takes the place of in a [`RichText`]'s
@@ -125,6 +125,13 @@ pub struct InlineIcon {
     pub height: Option<f64>,
     /// The text standing for it when copied or read aloud.
     pub alt: String,
+    /// Its width relative to the text's (its height following, keeping its
+    /// aspect ratio), resolved when the text is laid out: in place of
+    /// `height`.
+    pub relative_width: Option<RelativeWidth>,
+    /// A selection frame drawn around it, with resize handles at its
+    /// corners, in this color: an editor's selected image.
+    pub frame: Option<Color>,
 }
 
 impl InlineIcon {
@@ -134,7 +141,22 @@ impl InlineIcon {
             source: source.into(),
             height: None,
             alt: String::new(),
+            relative_width: None,
+            frame: None,
         }
+    }
+
+    /// As wide as `width` says of the width the text is laid out in, its
+    /// height keeping its aspect ratio.
+    pub fn relative_width(mut self, width: RelativeWidth) -> Self {
+        self.relative_width = Some(width);
+        self
+    }
+
+    /// Drawn with a selection frame and corner handles in `color`.
+    pub fn frame(mut self, color: Color) -> Self {
+        self.frame = Some(color);
+        self
     }
 
     /// `height` logical pixels tall.
@@ -444,6 +466,8 @@ pub(crate) fn styling(spans: &[Span], font: &Font, size: f64) -> Styling {
                 color: st.color,
                 decoration: st.decoration,
                 float: s.float.clone(),
+                icon_width: s.icon.as_ref().and_then(|i| i.relative_width),
+                frame: s.icon.as_ref().and_then(|i| i.frame),
             }
         })
         .collect();

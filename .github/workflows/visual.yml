@@ -2428,11 +2428,14 @@ jobs:
       # The rich text editor with real input: click into it, type a block,
       # bold a word with Ctrl+B, italicize another (Shift+Ctrl+Left selects
       # it, Ctrl+I), make the block a heading from the toolbar (the click
-      # keeps the editor focused), insert the sample image, and paste HTML
-      # that xclip holds (the paste reads text/html from another client).
-      # Each change prints the Markdown (STIPPLE_RICHEDITOR_ECHO), read back
-      # here.
-      - name: Rich text editor (type, Ctrl+B, toolbar, Markdown out)
+      # keeps the editor focused), insert the sample image, center it at
+      # half the editor's width (capped at its natural 120 px) from the image
+      # toolbar, and paste HTML that xclip holds (the paste reads text/html
+      # from another client). Then click the image to select it and drag its
+      # bottom-right resize handle 30 px left: a centered image shrinks on
+      # both sides, and its width stays a percentage. Each change prints the
+      # HTML and the Markdown (STIPPLE_RICHEDITOR_ECHO), read back here.
+      - name: Rich text editor (type, Ctrl+B, toolbar, image placement, Markdown/HTML out)
         env:
           DISPLAY: ":99"
           STIPPLE_X11_DEBUG: "1"
@@ -2458,18 +2461,35 @@ jobs:
           xdotool type --delay 60 "Heading"
           xdotool key Return; sleep 0.2
           xdotool mousemove 478 78 click 1; sleep 1     # Sample image
+          xdotool mousemove 128 122 click 1; sleep 0.5  # Center the image
+          xdotool mousemove 503 122 click 1; sleep 0.5  # Width relative to the text
           printf '<p>, <b>pasted</b> <i>html</i></p>' | xclip -selection clipboard -t text/html
           sleep 0.5
           xdotool key ctrl+v; sleep 1.5
           pkill -x xclip || true
           import -window root visual_output/richeditor-typed.png
+          html=$(grep '^richeditor: html=' visual_output/richeditor.log | tail -n 1)
+          last=$(tail -n 1 visual_output/richeditor.log)
+          echo "$html" | grep -qF '<h2>Heading</h2>\n<p><img src=\"data:image/png;base64,'
+          echo "$html" | grep -qF 'alt=\"A sunset\" style=\"display: block; margin: 0 auto; width: 50%; max-width: 120px\">, <strong>pasted</strong> <em>html</em></p>'
+          echo "$last" | grep -qF 'Typed **bold** and *slanted*\n\n## Heading\n\n<img src=\"data:image/png;base64,'
+          echo "$last" | grep -qF 'alt=\"A sunset\" style=\"display: block; margin: 0 auto; width: 50%; max-width: 120px\">, **pasted** *html*\n"'
+          # Select the image, then drag its corner handle.
+          xdotool mousemove 404 316 click 1; sleep 0.5
+          xdotool mousemove 463 351 mousedown 1; sleep 0.2
+          xdotool mousemove 450 351; sleep 0.2
+          xdotool mousemove 433 351; sleep 0.2
+          xdotool mouseup 1; sleep 0.5
+          import -window root visual_output/richeditor-resized.png
           xdotool mousemove 131 449 click 1; sleep 1    # show the HTML
           import -window root visual_output/richeditor-html.png
           kill "$APP_PID" 2>/dev/null || true
-          echo "=== richeditor.log ==="; tail -n 3 visual_output/richeditor.log
+          echo "=== richeditor.log ==="; tail -n 2 visual_output/richeditor.log
           last=$(tail -n 1 visual_output/richeditor.log)
-          echo "$last" | grep -qF 'Typed **bold** and *slanted*\n\n## Heading\n\n![A sunset](data:image/png;base64,'
-          echo "$last" | grep -qF '), **pasted** *html*\n"'
+          # 60 px narrower: about 8% of the editor's width, still relative.
+          width=$(echo "$last" | grep -oE 'margin: 0 auto; width: [0-9.]+%' | sed -E 's/.*width: ([0-9.]+)%/\1/')
+          echo "resized to $width%"
+          awk -v w="$width" 'BEGIN { exit !(w > 4 && w < 12) }'
 
       # The pointer lock: a click locks it (`--lock-test`), the grab holds the
       # pointer at the window's center (warped back after each move), and

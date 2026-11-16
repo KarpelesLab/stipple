@@ -47,8 +47,10 @@ Element::flow_text(paragraph(cx, text).selectable())
 - **`RichText::float(FloatImage)`** puts a floating image in the text
   itself, so any `paragraph` (or `label` with a width) carries it: no
   container needed. `FloatImage::new(source)` floats right by default;
-  `.left()`, `.at(point)`, `.width`, `.height`, `.shape`, `.alpha(threshold)`
-  (its own pixels as its shape), `.margin`, `.wrap`, `.through`, `.alt`.
+  `.left()`, `.center()`, `.at(point)`, `.positioned(center)`, `.width`,
+  `.height`, `.relative_width(RelativeWidth)`, `.shape`, `.alpha(threshold)`
+  (its own pixels as its shape), `.margin`, `.wrap`, `.through`, `.alt`,
+  `.frame(color)` (an editor's selection frame with corner handles).
 - **`Font::layout_flow` / `RichText::layout_flow`** lay text out yourself
   into a `TextFlow`: a region of a given width (`TextFlow::new(width)`, and
   `.direction` for the paragraphs') holding objects of known sizes
@@ -76,8 +78,8 @@ of a horizontal band, for your own layouts.
 
 ## Placement and wrapping
 
-`FlowPlacement` (made by `FlowItem::float_left()`, `float_right()` and
-`at(point)`):
+`FlowPlacement` (made by `FlowItem::float_left()`, `float_right()`,
+`float_center()`, `at(point)` and `positioned(center)`):
 
 - A **float** goes against the region's left or right edge at the top of the
   line holding its anchor (`FlowItem::anchor(byte)`; for a `FloatImage`,
@@ -85,8 +87,30 @@ of a horizontal band, for your own layouts.
   that doesn't fit beside the floats already on that band goes below them;
   one after another on the same side sit side by side, `margin` apart.
   Floats are never placed above an earlier float.
+- A **centered float** (`FloatCenter`) goes in the middle of the region at
+  the top of its anchor's line, below the floats it would overlap; text
+  runs on both sides of it by default. A left float beside it stays left of
+  it, a right one right of it.
 - An object placed **at** a point has its box's top-left there, in the
   text's coordinates.
+- A **positioned** object (`Positioned(center)`) has its box's center
+  `center.x` times the region's width across and `center.y` times the
+  region's width below the top of the paragraph holding its anchor: both in
+  fractions of the width, so it keeps its place as the region narrows or
+  widens. It is kept within the region's left and right edges and below its
+  top. The paragraph's top is where it is without positioned objects: the
+  engine lays the text out once without them to find it, then again around
+  them, so the object doesn't move when the text it pushes aside does, and
+  the text above its paragraph flows around it too (the second pass reuses
+  the first one's bands wherever the room is the same).
+
+**Relative widths.** `RelativeWidth::new(fraction)` makes a floating image
+(`FloatImage::relative_width`) or an inline one
+(`InlineIcon::relative_width`) as wide as `fraction` of the width the text
+is laid out in, `.min(px)` and `.max(px)` bounding it (the most winning),
+its height keeping the aspect ratio. It's resolved at each layout, so the
+image follows the width of the text's box; in an unbounded layout it is as
+wide as its `max`, or its natural width.
 
 `WrapSide` says on which sides of an object text runs, as Word's "wrap text"
 options and CSS's `wrap-flow` do:
@@ -164,6 +188,12 @@ floats as it uses inline images:
   goes through the flow engine whenever the text has a float, so the
   editor's own layout, caret and hit testing see the flowed lines with no
   extra work; `RichText::layout_flow` adds objects the editor places itself.
+- `TextLayout::object_rects()` says where every image went, inline and
+  floating, by the byte of its U+FFFC: what an editor hit-tests to select,
+  resize or move one. `Element::on_text_hit` hands a press or drag on an
+  editable text to a handler with these boxes, the pointer and the text's
+  width (`TextHit`); the rich editor selects, resizes and moves its
+  images with it.
 - `plain_text()` gives the floats' `alt`; exporting to HTML, a float is an
   `<img style="float: right; shape-outside: url(…); shape-image-threshold:
   …; shape-margin: …">` (CSS can express all of `FloatImage` but `through`).

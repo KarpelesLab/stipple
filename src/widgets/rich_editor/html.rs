@@ -5,9 +5,7 @@
 use std::sync::Arc;
 
 use super::inline::{Event, Tag, events};
-use super::model::{
-    Attr, BlockKind, DocBuilder, ImageFloat, Marks, Piece, RichDocument, RichImage,
-};
+use super::model::{Attr, BlockKind, DocBuilder, Marks, Piece, RichDocument};
 
 /// `text` with `&`, `<` and `>` escaped (and `"` too when `attr`).
 pub(crate) fn escape(text: &str, attr: bool, out: &mut String) {
@@ -92,19 +90,7 @@ fn inline_html(pieces: &[Piece], out: &mut String) {
                 out.push('>');
             }
             Event::Text(t) => escape(t, false, out),
-            Event::Image(i) => {
-                out.push_str("<img src=\"");
-                escape(&i.src, true, out);
-                out.push_str("\" alt=\"");
-                escape(&i.alt, true, out);
-                out.push('"');
-                if let Some(side) = i.float.css() {
-                    out.push_str(" style=\"float: ");
-                    out.push_str(side);
-                    out.push('"');
-                }
-                out.push('>');
-            }
+            Event::Image(i) => super::image_html::write_img(i, out),
         }
     }
 }
@@ -641,15 +627,7 @@ impl Reader {
                 return;
             }
             "img" => {
-                let src = tag.attr("src").unwrap_or_default().to_string();
-                let pixmap = if self.decode_images {
-                    super::model::load_source(&src, false).map(Arc::new)
-                } else {
-                    None
-                };
-                let alt = tag.attr("alt").unwrap_or_default();
-                let float = ImageFloat::from_attrs(tag.attr("style"), tag.attr("align"));
-                let image = RichImage::new(src, pixmap).alt(alt).floated(float);
+                let image = super::image_html::read_img(&tag, self.decode_images);
                 self.ensure_block();
                 self.flush_space();
                 let attr = self.attr();

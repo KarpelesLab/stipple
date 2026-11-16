@@ -810,7 +810,10 @@ abstraction is frozen at the end of Phase 2.
   around any elements; `RichText::float(FloatImage)` carries a float in the
   text; `Font`/`RichText::layout_flow` for custom drawing. Hit testing,
   selection and screen readers work across the pieces; filled bands are
-  memoized, so a moved shape refills only the lines it touches. See
+  memoized, so a moved shape refills only the lines it touches. Floats can
+  also be centered (`FloatImage::center`), objects positioned in fractions
+  of the width from their paragraph's top (`positioned`), and images' widths
+  be relative to the text's (`RelativeWidth`). See
   [`docs/text-flow.md`](docs/text-flow.md). *Breaks at spaces only, pieces
   start-aligned (no justification), floats don't avoid placed objects.*
 - ✅ **Rich text editor**: `rich_editor` editing a `RichEditor` (a
@@ -826,11 +829,25 @@ abstraction is frozen at the end of Phase 2.
   text (the app reads every format for such an element). `to_markdown` /
   `from_markdown` (CommonMark-style, escaped, read back line by line with
   HTML-tag fallback) and `to_html` / `from_html`, round-trip tested.
-  Images float left or right (`set_image_float`), the text flowing around
-  their opaque pixels through the text flow engine, exported as
-  `style="float: …"` on an `<img>`.
+  Images are placed in the line, floated left or right, centered with text
+  on both sides, or free (`ImagePlacement::Free`: the center's position in
+  percent of the text area's width, from the anchor paragraph's top), text
+  wrapping on both sides, the larger one or neither (`ImageWrap`) around
+  their opaque pixels through the text flow engine (`FlowPlacement::
+  FloatCenter` and `Positioned`, a two-pass layout so the text above a free
+  image flows around it too); sized naturally, in pixels or in percent of
+  the text area (`ImageSize`, `RelativeWidth` resolved at layout, so
+  resizing the window reflows), capped at the natural size unless allowed
+  to upscale, with optional least and most widths. A click selects an image
+  (a frame with corner handles), its handles resize it (percent stays
+  percent), a free one drags to move it (`Element::on_text_hit` hands the
+  editor the image boxes), each drag one undo step. Exported as CSS floats,
+  `display: block; margin: 0 auto`, `data-stipple-x`/`-y` with a CSS
+  approximation, `width`/`min-width`/`max-width`, and read back (also from
+  `align` and `width` attributes); Markdown writes the `<img>` tag.
   `Element::keeps_focus` for toolbar buttons. `examples/richeditor`,
-  **CI-verified** on X11 (typing, Ctrl+B/I, toolbar clicks, the exported
+  **CI-verified** on X11 (typing, Ctrl+B/I, toolbar clicks, a centered image
+  at a relative width resized by dragging its handle, the exported HTML and
   Markdown) and off screen. See
   [`docs/rich-text-editing.md`](docs/rich-text-editing.md). *Up/Down move
   by block, not wrapped line; no nested lists, tables or text attributes

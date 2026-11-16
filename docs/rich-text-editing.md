@@ -36,9 +36,11 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
 ```
 
 `examples/richeditor` is a complete editor: a toolbar for every mark and
-block kind, links, an image from a file or a built-in sample (in the line,
-or floated left or right), undo and redo,
-and the Markdown or HTML under the editor, saved to a file.
+block kind, links, an image from a file or a built-in sample (placed in the
+line, left, centered, right or freely, text wrapping on both sides, the
+larger one or neither, sized naturally, in pixels or in percent with a
+slider; click an image to resize it by its handles or drag it), undo and
+redo, and the Markdown or HTML under the editor, saved to a file.
 
 ## The document
 
@@ -92,7 +94,8 @@ undo and redo, input methods, and right-to-left text (see
   marks, block kinds, links, images and pastes. It restores the selection.
 - **Links**: `set_link(Some(url))` links the selection; at a caret inside a
   link it changes the whole link, and `set_link(None)` removes it.
-- **Images**: `insert_image(RichImage)` puts one at the caret.
+- **Images**: `insert_image(RichImage)` puts one at the caret; see
+  [Images](#images) for placing, sizing and the pointer.
 - `marks()`, `block_kind()` and `link()` say what is in effect at the caret
   (all of the selection, for marks): what a toolbar shows as pressed.
 
@@ -121,17 +124,101 @@ shows (a gray square while there is none).
 - `RichImage::new(src, pixmap)` keeps both as given: the example inserts a
   picked file under its file name, so the export refers to it by name.
 
-**Floating.** An image sits in the line by default (`ImageFloat::Inline`).
-`set_image_float(ImageFloat::Left)` (or `Right`) floats the selected
-images, or the one next to the caret, against that edge of the editor, the
-text flowing around its opaque pixels with a 6 px margin (the text flow
-engine, [text-flow.md](text-flow.md)): the transparent parts of a PNG let
-text in. `image_float()` says how the image at the caret is placed, for a
-toolbar's pressed state; `RichImage::floated` sets it on a new one. The
-image still stands as one U+FFFC in the text where it was inserted, so the
-caret, selection, undo and copying treat it as before. HTML exports it as
-`<img … style="float: left">` and reads that or `align="left"`; Markdown,
-which has no floats, as the same inline `<img>` tag.
+### Placement
+
+Where an image goes is its `ImagePlacement`:
+
+| `ImagePlacement` | Where | Text |
+|---|---|---|
+| `Inline` (default) | in the line, like a character | before and after it |
+| `Left`, `Right` | floated against that edge, at the top of its line | on its other side |
+| `Center` | centered in the editor, at the top of its line | on both sides |
+| `Free { x, y }` | its center `x`% of the editor's width across, `y`% of the editor's width below the top of its paragraph | on both sides |
+
+Floating images (all but `Inline`) go through the text flow engine
+([text-flow.md](text-flow.md)): text keeps 6 px off their opaque pixels, so
+the transparent parts of a PNG let text in. `ImageWrap` says on which sides
+of a centered or free image text runs: `Both` (default), `Largest` (only
+the side with more room) or `None` (only above and below; on a left or
+right float, `None` keeps text off its other side too).
+
+**Why a free image's `y` is in widths from its paragraph.** A percentage of
+the document's height would move the image every time a line is typed
+anywhere; a position in line heights changes with the font. Measured from
+the top of the paragraph it is anchored in, the image moves with its
+paragraph (text typed above pushes both down) and stays put while you edit
+elsewhere; measured in percent of the editor's *width*, like `x`, it keeps
+its place, its shape and its distance from the text when the window is
+resized, together with a relative width. The paragraph's top is taken as
+it is without free images (the engine lays the text out twice), so a free
+image doesn't move when the text it pushes aside moves, and the text above
+its paragraph flows around it too. It is kept within the editor's left and
+right edges and below its top.
+
+`set_image_placement`, `set_image_wrap`, `set_image_size` and
+`set_image_bounds` change the selected images, or the one next to the
+caret, each as one undo step (sizes set one after another, as a slider
+drags, join one step). `image()` returns the image there, for a toolbar's
+pressed states (`image_placement()` its placement;
+`ImagePlacement::same_kind` compares placements ignoring a free one's
+position). Making an image free that the pointer last selected starts it
+where it was shown, so it doesn't jump. `RichImage::placed`, `wrapped`,
+`sized`, `min_width`, `max_width` and `upscale` set them on a new image.
+
+Whatever its placement, the image still stands as one U+FFFC in the text
+where it was inserted, so the caret, selection, undo, copying and screen
+readers treat it as one character there; only where it is drawn changes.
+
+### Size
+
+`ImageSize` is how wide the image is, resolved each time the editor is laid
+out (so resizing the window reflows a relative size); the height keeps the
+aspect ratio:
+
+- `Natural` (default): its own width (a pixel of the image per logical
+  pixel), never wider than the editor;
+- `Pixels(w)`: `w` logical pixels, never wider than the editor;
+- `Percent(p)`: `p`% of the editor's text width.
+
+Every size is capped at the image's natural width unless `upscale` is set,
+and at its `max_width`; a `min_width` makes it at least that wide (but
+the natural cap and `max_width` still win). `RichImage::display_width(w)`
+says how wide it is in a text `w` wide.
+
+### Selecting, resizing and moving by the pointer
+
+A click on an image selects it (the selection holds just its U+FFFC), and
+it is drawn with a frame and a square handle in each corner. Dragging a
+handle resizes it, keeping its aspect ratio: a relative width stays a
+percentage of the editor's width, any other becomes pixels; a centered or
+free image grows on both sides, keeping its center. Dragging a free image
+moves it, storing the new position in percent. A press anywhere else
+places the caret as usual; Delete or typing replaces the selected image.
+Each drag is one undo step. The widget gets the images' boxes from
+`Element::on_text_hit`, a press or drag on its text resolved against the
+layout (`TextHit`: the caret index, the pointer, the text's width and each
+image's box).
+
+### Images in Markdown and HTML
+
+HTML exports an image as an `<img>` with what it needs:
+
+| The image | Written as |
+|---|---|
+| floated left or right | `style="float: left"` (or `right`) |
+| centered | `style="display: block; margin: 0 auto"` |
+| free | `data-stipple-x="62.5%" data-stipple-y="10%"` and `style="display: block; margin-left: 62.5%; transform: translateX(-50%)"` (CSS can place it across, not down) |
+| `Percent(40)` | `width: 40%; max-width: <natural>px` (the cap, unless it may upscale) |
+| `Pixels(300)` | `width: 300px; max-width: <natural>px` |
+| `min_width`, `max_width` | `min-width: …px`, `max-width: …px` |
+| `ImageWrap::Largest` / `None` | `data-stipple-wrap="largest"` / `"none"` |
+| `upscale` | `data-stipple-upscale` |
+
+`from_html` reads all of these back, and from other editors also
+`align="left|right|center|middle"`, a `width` attribute, and centering by
+`margin-left: auto; margin-right: auto`. Markdown writes `![alt](src)` for
+an image in the line at its natural size, else the same `<img>` tag, which
+CommonMark allows inline and `from_markdown` reads.
 
 **Export uses `src` as it is**: Markdown writes `![alt](src)` and HTML
 `<img src="src" alt="alt">`. Nothing is re-encoded or embedded behind your

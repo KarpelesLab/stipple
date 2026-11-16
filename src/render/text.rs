@@ -383,6 +383,10 @@ impl Font {
     }
 }
 
+/// The side of the square handles at the corners of a selected image's
+/// frame, in logical pixels.
+pub(crate) const SELECTION_HANDLE: f64 = 8.0;
+
 /// One look a stretch of a [`TextLayout`] is drawn in: a font at a size, a
 /// color and decoration of its own (else the ones the layout is drawn with),
 /// or an inline image in place of its one character.
@@ -396,6 +400,10 @@ pub(crate) struct SpanFace {
     /// A floating image anchored at this span's one character (which then
     /// takes no room in the line): text flows around it.
     pub float: Option<Arc<crate::render::flow::FloatImage>>,
+    /// An inline image's width relative to the text's, resolved at layout.
+    pub icon_width: Option<crate::render::RelativeWidth>,
+    /// An inline image's selection frame.
+    pub frame: Option<Color>,
 }
 
 impl SpanFace {
@@ -408,6 +416,8 @@ impl SpanFace {
             decoration: None,
             icon: None,
             float: None,
+            icon_width: None,
+            frame: None,
         }
     }
 
@@ -485,6 +495,23 @@ impl Styling {
         self.spans.get(k + 1).map_or(usize::MAX, |s| s.0)
     }
 
+    /// Size the inline images whose width is relative to the text's for a
+    /// text `width` wide (`None`: unbounded).
+    pub(crate) fn resolve_icons(&mut self, width: Option<f64>) {
+        for f in &mut self.faces {
+            if let (Some(rel), Some((source, size))) = (f.icon_width, f.icon.as_mut()) {
+                let natural = source.size();
+                let w = rel.resolve(width, size.width);
+                let h = if natural.width > 0.0 {
+                    w * natural.height / natural.width
+                } else {
+                    w
+                };
+                *size = Size::new(w, h);
+            }
+        }
+    }
+
     /// The look of byte `b`.
     pub(super) fn face_at(&self, b: usize) -> &SpanFace {
         &self.faces[self.spans[self.span_at(b)].1]
@@ -549,7 +576,7 @@ impl Styling {
 
     /// Lay `text` out in these looks; see [`Font::layout_with`].
     pub(crate) fn layout(
-        self,
+        mut self,
         text: &str,
         direction: TextDirection,
         max_width: Option<f64>,
@@ -559,6 +586,7 @@ impl Styling {
         if self.faces.iter().any(|f| f.float.is_some()) {
             return self.layout_flow(text, direction, max_width, ui, None);
         }
+        self.resolve_icons(max_width.filter(|w| w.is_finite()));
         let start_right = ui.is_rtl() && direction == TextDirection::Auto;
         let mut lines = Vec::new();
         let mut start = 0usize;
@@ -889,6 +917,39 @@ impl TextLayout<'_> {
     /// The number of display lines.
     pub fn line_count(&self) -> usize {
         self.lines.len()
+    }
+
+    /// Where each image of a rich text was drawn, inline ones and floating
+    /// ones, in text order: the byte of its U+FFFC and its box, relative to
+    /// the text box. What an editor hit-tests to select, resize or move one.
+    pub fn object_rects(&self) -> Vec<(usize, Rect)> {
+        let mut out = Vec::new();
+        for line in &self.lines {
+            let lx = self.line_x(line);
+            let baseline = line.top + line.ascent;
+            for run in &line.runs {
+                let face = &self.styling.faces[run.face];
+                let Some((_, size)) = &face.icon else {
+                    continue;
+                };
+                if size.width <= 0.0 {
+                    continue;
+                }
+                let y = baseline - face.cap_middle() - size.height / 2.0;
+                for (k, (i, _)) in self.text[run.range.clone()].char_indices().enumerate() {
+                    let x = lx + run.x + k as f64 * size.width;
+                    out.push((
+                        run.range.start + i,
+                        Rect::from_xywh(x, y, size.width, size.height),
+                    ));
+                }
+            }
+        }
+        if let Some(flow) = &self.flow {
+            out.extend(flow.images.iter().map(|p| (p.anchor, p.rect)));
+        }
+        out.sort_by_key(|(i, _)| *i);
+        out
     }
 
     /// The byte range of display line `line`, or `None` past the last line.
@@ -1525,12 +1586,14 @@ impl Scene {
         if solid.is_none()
             && let Some(flow) = &layout.flow
         {
-            for (rect, source) in &flow.images {
-                self.draw_image_source(
-                    rect.translate(crate::geometry::Vec2::new(origin.x, origin.y)),
-                    source,
-                    crate::render::ImageFit::Fill,
-                );
+            for p in &flow.images {
+                let rect = p
+                    .rect
+                    .translate(crate::geometry::Vec2::new(origin.x, origin.y));
+                self.draw_image_source(rect, &p.source, crate::render::ImageFit::Fill);
+                if let Some(c) = p.frame {
+                    self.draw_selection_frame(rect, c);
+                }
             }
         }
         for line in &layout.lines {
@@ -1560,7 +1623,11 @@ impl Scene {
                         let n = layout.text[run.range.clone()].chars().count();
                         for k in 0..n {
                             let x = origin.x + lx + run.x + k as f64 * size.width;
-                            images.push((Rect::from_xywh(x, y, size.width, size.height), source));
+                            images.push((
+                                Rect::from_xywh(x, y, size.width, size.height),
+                                source,
+                                face.frame,
+                            ));
                         }
                     }
                     continue;
@@ -1631,9 +1698,50 @@ impl Scene {
                 }
                 self.push_node(Node::Group(placed));
             }
-            for (rect, source) in images {
+            for (rect, source, frame) in images {
                 self.draw_image_source(rect, source, crate::render::ImageFit::Fill);
+                if let Some(c) = frame {
+                    self.draw_selection_frame(rect, c);
+                }
             }
+        }
+    }
+
+    /// A selected image's frame: an outline along the inside of `rect` and
+    /// a square handle in each corner, in `color` (white inside). All of it
+    /// is within `rect`, so it is repainted with the text.
+    fn draw_selection_frame(&mut self, rect: Rect, color: Color) {
+        let s = SELECTION_HANDLE
+            .min(rect.width() / 2.0)
+            .min(rect.height() / 2.0);
+        let w = 1.5;
+        self.stroke_rect(
+            Rect::from_xywh(
+                rect.min_x() + w / 2.0,
+                rect.min_y() + w / 2.0,
+                (rect.width() - w).max(0.0),
+                (rect.height() - w).max(0.0),
+            ),
+            color,
+            w,
+        );
+        for (x, y) in [
+            (rect.min_x(), rect.min_y()),
+            (rect.max_x() - s, rect.min_y()),
+            (rect.min_x(), rect.max_y() - s),
+            (rect.max_x() - s, rect.max_y() - s),
+        ] {
+            let r = Rect::from_xywh(x, y, s, s);
+            self.fill_rect(r, color);
+            self.fill_rect(
+                Rect::from_xywh(
+                    r.min_x() + 1.5,
+                    r.min_y() + 1.5,
+                    (s - 3.0).max(0.0),
+                    (s - 3.0).max(0.0),
+                ),
+                Color::WHITE,
+            );
         }
     }
 }

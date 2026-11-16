@@ -1098,6 +1098,20 @@ impl Element {
         self
     }
 
+    /// [`on_text_pos`](Self::on_text_pos), the handler receiving the whole
+    /// [`TextHit`](crate::core::TextHit): the caret index, the pointer in
+    /// the text's box, the width the text is laid out in, and where each of
+    /// its images is. For an editor that selects, resizes or moves the
+    /// images in its text by the pointer.
+    pub fn on_text_hit<S>(
+        mut self,
+        cx: &mut Cx<'_, S>,
+        handler: impl FnMut(&mut S, &crate::core::TextHit, bool) + 'static,
+    ) -> Self {
+        self.text_pos = Some(cx.register_text_hit(handler));
+        self
+    }
+
     // --- decoration modifiers ---
 
     pub fn fill(mut self, color: Color) -> Self {

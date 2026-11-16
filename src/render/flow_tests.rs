@@ -490,3 +490,119 @@ fn moving_a_shape_refills_only_the_lines_it_touches() {
     // Laying the same out again gives the same lines.
     assert_eq!(lay(210.0), b);
 }
+
+/// A solid square, `side` pixels.
+fn block(side: u32) -> Arc<Pixmap> {
+    let data = [40u8, 80, 200, 255].repeat((side * side) as usize);
+    Arc::new(Pixmap::from_rgba8(PhysicalSize::new(side, side), data))
+}
+
+#[test]
+fn relative_widths_resolve_against_the_layout_width() {
+    let Some(font) = font() else { return };
+    let img = block(100);
+    // Half the text's width, at most 150 px (an editor's natural cap).
+    let rel = RelativeWidth::new(0.5).max(150.0);
+    let text = RichText::new()
+        .float(FloatImage::new(img.clone()).left().relative_width(rel))
+        .push(LOREM);
+    for (width, want) in [(200.0, 100.0), (240.0, 120.0), (600.0, 150.0)] {
+        let layout = text.layout(&font, 15.0, TextDirection::Auto, Some(width));
+        let r = layout.float_rects()[0];
+        assert_eq!(r.width(), want, "in {width}");
+        assert_eq!(r.height(), want, "square: the aspect ratio kept");
+    }
+    // An inline image too, and `object_rects` finds it.
+    let text = RichText::new()
+        .push("a ")
+        .icon(crate::render::InlineIcon::new(img).relative_width(RelativeWidth::new(0.25)))
+        .push(" b");
+    let layout = text.layout(&font, 15.0, TextDirection::Auto, Some(400.0));
+    let objects = layout.object_rects();
+    assert_eq!(objects.len(), 1);
+    assert_eq!(objects[0].0, 2);
+    assert_eq!(objects[0].1.width(), 100.0);
+    assert!(layout.size().height >= 100.0, "the line grows with it");
+}
+
+#[test]
+fn a_centered_float_has_text_on_both_sides() {
+    let Some(font) = font() else { return };
+    let text = RichText::new()
+        .push("Intro ")
+        .float(FloatImage::new(block(80)).center().margin(4.0))
+        .push(LOREM);
+    let layout = text.layout(&font, 15.0, TextDirection::Auto, Some(400.0));
+    let r = layout.float_rects()[0];
+    assert_eq!(r, Rect::from_xywh(160.0, 0.0, 80.0, 80.0));
+    let (mut left, mut right) = (false, false);
+    for i in 0..layout.line_count() {
+        let l = layout.line_rect(i).unwrap();
+        if l.min_y() < r.max_y() && l.width() > 0.0 {
+            assert!(l.max_x() <= r.min_x() + 0.01 || l.min_x() >= r.max_x() - 0.01);
+            left |= l.max_x() <= r.min_x();
+            right |= l.min_x() >= r.max_x();
+        }
+    }
+    assert!(left && right, "text runs left and right of it");
+    // Clear: no text beside it, only below.
+    let text = RichText::new()
+        .float(FloatImage::new(block(80)).center().wrap(WrapSide::Clear))
+        .push(LOREM);
+    let layout = text.layout(&font, 15.0, TextDirection::Auto, Some(400.0));
+    let first = layout.line_rect(0).unwrap();
+    assert!(first.min_y() >= 80.0, "the text starts below it");
+}
+
+#[test]
+fn positioned_objects_keep_their_place_relative_to_their_paragraph() {
+    let Some(font) = font() else { return };
+    let img = block(60);
+    let doc = |rel: Option<f64>| {
+        let mut f = FloatImage::new(img.clone()).positioned(Point::new(0.75, 0.1));
+        if let Some(r) = rel {
+            f = f.relative_width(RelativeWidth::new(r));
+        }
+        RichText::new().push(LOREM).push("\n").float(f).push(LOREM)
+    };
+    let width = 400.0;
+    let plain = RichText::new().push(LOREM).push("\n").push(LOREM);
+    let base = plain.layout(&font, 15.0, TextDirection::Auto, Some(width));
+    // The second paragraph's top without the image.
+    let first_of_second = (0..base.line_count())
+        .find(|&i| base.line_range(i).unwrap().start > LOREM.len())
+        .unwrap();
+    let second = base.line_rect(first_of_second).unwrap().min_y();
+    let text = doc(None);
+    let layout = text.layout(&font, 15.0, TextDirection::Auto, Some(width));
+    let r = layout.float_rects()[0];
+    // Its center 75% across and 10% of the width below the paragraph's top.
+    assert!((r.center().x - 300.0).abs() < 0.01, "{r:?}");
+    assert!((r.center().y - (second + 40.0)).abs() < 0.01, "{r:?}");
+    // No text under it, in the lines before it and after it alike.
+    for i in 0..layout.line_count() {
+        let l = layout.line_rect(i).unwrap();
+        if l.width() > 0.0 {
+            assert!(!overlaps(l, r), "line {i} {l:?} under {r:?}");
+        }
+    }
+    // Twice as wide a region: twice as far across, and a relative size
+    // scales with it.
+    let text = doc(Some(0.1));
+    let a = text
+        .layout(&font, 15.0, TextDirection::Auto, Some(400.0))
+        .float_rects()[0];
+    let b = text
+        .layout(&font, 15.0, TextDirection::Auto, Some(800.0))
+        .float_rects()[0];
+    assert_eq!((a.width(), b.width()), (40.0, 80.0));
+    assert!((b.center().x - 2.0 * a.center().x).abs() < 0.01);
+    // Kept within the region's edges.
+    let edge = RichText::new()
+        .float(FloatImage::new(img).positioned(Point::new(1.0, 0.0)))
+        .push("x");
+    let r = edge
+        .layout(&font, 15.0, TextDirection::Auto, Some(300.0))
+        .float_rects()[0];
+    assert_eq!((r.max_x(), r.min_y()), (300.0, 0.0));
+}

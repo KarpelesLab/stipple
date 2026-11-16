@@ -78,7 +78,10 @@ pub(crate) fn signature(pieces: &[Piece]) -> Vec<(String, Marks, Option<Arc<str>
         let (text, attr) = match p {
             Piece::Text(t, a) => (t.clone(), a),
             Piece::Image(i, a) => (
-                format!("\u{FFFC}{}\u{0}{}\u{0}{:?}", i.src, i.alt, i.float),
+                format!(
+                    "\u{FFFC}{}\u{0}{}\u{0}{:?}{:?}{:?}{:?}{:?}{}",
+                    i.src, i.alt, i.placement, i.wrap, i.size, i.min_width, i.max_width, i.upscale
+                ),
                 a,
             ),
         };

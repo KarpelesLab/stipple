@@ -1170,6 +1170,23 @@ pub(crate) fn caret_index_at(
     Some(layout.index_at(Point::new(point.x - b.min_x(), point.y - b.min_y())))
 }
 
+/// [`caret_index_at`] with the rest of what a text-hit handler gets: the
+/// pointer in the text's box, the box's width, and its images' boxes.
+pub(crate) fn text_hit_at(
+    node: &LayoutNode,
+    point: Point,
+    font: Option<&Font>,
+) -> Option<crate::core::TextHit> {
+    let leaf = first_text(node)?;
+    let layout = leaf_layout(leaf, font)?;
+    let b = leaf.text_rect();
+    let local = Point::new(point.x - b.min_x(), point.y - b.min_y());
+    Some(
+        crate::core::TextHit::new(layout.index_at(local), local, b.width())
+            .objects(layout.object_rects()),
+    )
+}
+
 /// Overlay a `highlight` (typically translucent) on the hovered tappable
 /// element, matching its corner radius. No-op if `hovered` isn't in the tree.
 pub(crate) fn paint_hover(

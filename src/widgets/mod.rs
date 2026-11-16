@@ -64,7 +64,8 @@ pub use number::{NumberInput, number_input};
 pub use password::{PasswordField, password_field};
 pub use preedit::DisplayText;
 pub use rich_editor::{
-    Block, BlockKind, ImageFloat, Inline, Marks, RichDocument, RichEditor, RichImage, rich_editor,
+    Block, BlockKind, ImagePlacement, ImageSize, ImageWrap, Inline, Marks, RichDocument,
+    RichEditor, RichImage, rich_editor,
 };
 pub use select::{Select, select};
 pub use sheet::{BottomSheet, BottomSheetView, SHEET_WIDE, SheetDetent, bottom_sheet};

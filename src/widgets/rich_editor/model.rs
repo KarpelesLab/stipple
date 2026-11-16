@@ -8,7 +8,8 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::render::Pixmap;
+use crate::geometry::Size;
+use crate::render::{Pixmap, RelativeWidth};
 
 /// The character an image stands as in the text.
 pub(crate) const OBJECT: char = '\u{FFFC}';
@@ -132,17 +133,25 @@ impl BlockKind {
 }
 
 /// An image in a [`RichDocument`]: where it comes from (`src`: a file path,
-/// a URL or a `data:` URI, exported as is), its alternative text, and the
+/// a URL or a `data:` URI, exported as is), its alternative text, the
 /// decoded picture the editor shows (`None` until loaded: the editor then
-/// shows a placeholder).
+/// shows a placeholder), where it goes ([`ImagePlacement`]), how text wraps
+/// around it ([`ImageWrap`]) and how wide it is ([`ImageSize`], bounded by
+/// `min_width`, `max_width` and, unless `upscale`, its natural width).
 ///
 /// ```
 /// use stipple::geometry::PhysicalSize;
 /// use stipple::render::Pixmap;
-/// use stipple::widgets::RichImage;
-/// let dot = RichImage::from_pixmap(Pixmap::new(PhysicalSize::new(2, 2))).alt("a dot");
+/// use stipple::widgets::{ImagePlacement, ImageSize, RichImage};
+/// let dot = RichImage::from_pixmap(Pixmap::new(PhysicalSize::new(200, 100)))
+///     .alt("a dot")
+///     .placed(ImagePlacement::Center)
+///     .sized(ImageSize::Percent(50.0));
 /// assert!(dot.src.starts_with("data:image/png;base64,"));
 /// assert!(RichImage::load(&dot.src).pixmap.is_some());
+/// // Half of a 300 px wide text; never more than its own 200 px.
+/// assert_eq!(dot.display_width(300.0), 150.0);
+/// assert_eq!(dot.display_width(1000.0), 200.0);
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -154,64 +163,120 @@ pub struct RichImage {
     pub alt: String,
     /// The decoded image, if loaded.
     pub pixmap: Option<Arc<Pixmap>>,
-    /// Whether it sits in the line or floats to a side, the text wrapping
-    /// around its opaque pixels.
-    pub float: ImageFloat,
+    /// Where it goes: in the line, floated left or right, centered, or
+    /// anywhere (free).
+    pub placement: ImagePlacement,
+    /// On which sides of a centered or free image text runs (for a left or
+    /// right float, [`ImageWrap::None`] keeps text off its other side too).
+    pub wrap: ImageWrap,
+    /// How wide it is.
+    pub size: ImageSize,
+    /// The least width, in logical pixels.
+    pub min_width: Option<f64>,
+    /// The most width, in logical pixels.
+    pub max_width: Option<f64>,
+    /// Whether it may grow past its natural width (by default it is capped
+    /// at its natural size).
+    pub upscale: bool,
 }
 
-/// Where a [`RichImage`] goes: in the line like a character, or floated
-/// against the left or right edge with the text flowing around it (around
-/// its opaque pixels: text runs over the transparent ones). Exported as
-/// `style="float: left"` (or `right`) on the `<img>`, in Markdown as an
-/// inline `<img>` tag.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// Where a [`RichImage`] goes. In every case it stays one U+FFFC in the
+/// text where it was inserted (its anchor), so the caret, selection, undo,
+/// copying and screen readers treat it as one character there; only where
+/// it is drawn changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[non_exhaustive]
-pub enum ImageFloat {
-    /// In the line.
+pub enum ImagePlacement {
+    /// In the line, like a character.
     #[default]
     Inline,
-    /// Floated left, text on its right.
+    /// Floated against the left edge, text on its right.
     Left,
-    /// Floated right, text on its left.
+    /// Centered in the text area at its line, text on both sides (see
+    /// [`ImageWrap`]).
+    Center,
+    /// Floated against the right edge, text on its left.
     Right,
+    /// Anywhere: its center `x` percent of the text area's width across,
+    /// and `y` percent of the text area's width below the top of its
+    /// anchor's paragraph. Both are in widths so the image keeps its place
+    /// relative to its paragraph and to the text area's size, whatever is
+    /// typed above it or however the window is resized (a percentage of the
+    /// document's height would move it whenever text is typed); text flows
+    /// around it on the sides its [`ImageWrap`] says.
+    Free {
+        /// Its center across, in percent of the text area's width.
+        x: f64,
+        /// Its center below its paragraph's top, in percent of the text
+        /// area's width.
+        y: f64,
+    },
 }
 
-impl ImageFloat {
-    /// The CSS `float` value, if floated.
-    pub(crate) fn css(self) -> Option<&'static str> {
-        match self {
-            ImageFloat::Inline => None,
-            ImageFloat::Left => Some("left"),
-            ImageFloat::Right => Some("right"),
-        }
+impl ImagePlacement {
+    /// Whether text flows around it (any placement but in the line).
+    pub fn is_floating(self) -> bool {
+        self != ImagePlacement::Inline
     }
 
-    /// The float an `<img>`'s `style` (or legacy `align`) asks for.
-    pub(crate) fn from_attrs(style: Option<&str>, align: Option<&str>) -> ImageFloat {
-        let mut side = align.map(str::to_ascii_lowercase);
-        for decl in style.unwrap_or_default().split(';') {
-            if let Some((prop, value)) = decl.split_once(':')
-                && prop.trim().eq_ignore_ascii_case("float")
-            {
-                side = Some(value.trim().to_ascii_lowercase());
-            }
-        }
-        match side.as_deref() {
-            Some("left") => ImageFloat::Left,
-            Some("right") => ImageFloat::Right,
-            _ => ImageFloat::Inline,
-        }
+    /// The same kind of placement, ignoring a free image's position: what a
+    /// toolbar compares to show its buttons pressed.
+    pub fn same_kind(self, other: ImagePlacement) -> bool {
+        std::mem::discriminant(&self) == std::mem::discriminant(&other)
     }
+}
+
+/// On which sides of a centered or free image text runs, as Word's "wrap
+/// text" options do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ImageWrap {
+    /// Both sides, where there's room.
+    #[default]
+    Both,
+    /// Only the side with more room.
+    Largest,
+    /// Neither: text only above and below it.
+    None,
+}
+
+/// How wide a [`RichImage`] is, resolved when the editor is laid out (so
+/// resizing the window reflows a relative one). The height keeps the
+/// image's aspect ratio. Whatever the size, the image is never wider than
+/// its natural width (unless [`upscale`](RichImage::upscale)), than its
+/// `max_width`, or (but for a relative width or a `min_width` asking for
+/// more) than the text area.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum ImageSize {
+    /// Its natural width.
+    #[default]
+    Natural,
+    /// This many logical pixels wide.
+    Pixels(f64),
+    /// This percent of the text area's width.
+    Percent(f64),
+}
+
+/// `v` rounded to hundredths: what the exports write, so a stored value
+/// reads back the same.
+pub(crate) fn round2(v: f64) -> f64 {
+    (v * 100.0).round() / 100.0
 }
 
 impl RichImage {
-    /// The image at `src` showing `pixmap`.
+    /// The image at `src` showing `pixmap`, in the line, at its natural size.
     pub fn new(src: impl Into<String>, pixmap: Option<Arc<Pixmap>>) -> Self {
         Self {
             src: src.into(),
             alt: String::new(),
             pixmap,
-            float: ImageFloat::Inline,
+            placement: ImagePlacement::Inline,
+            wrap: ImageWrap::Both,
+            size: ImageSize::Natural,
+            min_width: None,
+            max_width: None,
+            upscale: false,
         }
     }
 
@@ -237,10 +302,88 @@ impl RichImage {
         self
     }
 
-    /// Placed per `float`: in the line, or floated left or right.
-    pub fn floated(mut self, float: ImageFloat) -> Self {
-        self.float = float;
+    /// Placed per `placement` (a free one's position rounded to hundredths
+    /// of a percent).
+    pub fn placed(mut self, placement: ImagePlacement) -> Self {
+        self.placement = match placement {
+            ImagePlacement::Free { x, y } => ImagePlacement::Free {
+                x: round2(x),
+                y: round2(y),
+            },
+            p => p,
+        };
         self
+    }
+
+    /// Text wrapping around it per `wrap`.
+    pub fn wrapped(mut self, wrap: ImageWrap) -> Self {
+        self.wrap = wrap;
+        self
+    }
+
+    /// `size` wide (rounded to hundredths).
+    pub fn sized(mut self, size: ImageSize) -> Self {
+        self.size = match size {
+            ImageSize::Pixels(px) => ImageSize::Pixels(round2(px.max(0.0))),
+            ImageSize::Percent(p) => ImageSize::Percent(round2(p.max(0.0))),
+            ImageSize::Natural => ImageSize::Natural,
+        };
+        self
+    }
+
+    /// At least `px` logical pixels wide (`None`: no least).
+    pub fn min_width(mut self, px: Option<f64>) -> Self {
+        self.min_width = px.map(|v| round2(v.max(0.0)));
+        self
+    }
+
+    /// At most `px` logical pixels wide (`None`: no most).
+    pub fn max_width(mut self, px: Option<f64>) -> Self {
+        self.max_width = px.map(|v| round2(v.max(0.0)));
+        self
+    }
+
+    /// Whether it may grow past its natural width.
+    pub fn upscale(mut self, upscale: bool) -> Self {
+        self.upscale = upscale;
+        self
+    }
+
+    /// Its natural size in logical pixels (a pixel of the image per logical
+    /// pixel), if it is loaded.
+    pub fn natural_size(&self) -> Option<Size> {
+        self.pixmap.as_ref().map(|px| {
+            let s = px.size();
+            Size::new(f64::from(s.width), f64::from(s.height))
+        })
+    }
+
+    /// Its width as a [`RelativeWidth`] of the text area: what the editor
+    /// hands the layout. `natural` is its natural width (the placeholder's
+    /// while it isn't loaded).
+    pub(crate) fn relative_width(&self, natural: f64) -> RelativeWidth {
+        let mut cap = self.max_width.unwrap_or(f64::INFINITY);
+        if !self.upscale {
+            cap = cap.min(natural);
+        }
+        let (fraction, cap) = match self.size {
+            ImageSize::Natural => (1.0, cap.min(natural)),
+            ImageSize::Pixels(px) => (1.0, cap.min(px)),
+            ImageSize::Percent(p) => (p / 100.0, cap),
+        };
+        let mut w = RelativeWidth::new(fraction).max(cap);
+        if let Some(min) = self.min_width {
+            w = w.min(min);
+        }
+        w
+    }
+
+    /// The width it is shown at in a text area `text_width` logical pixels
+    /// wide.
+    pub fn display_width(&self, text_width: f64) -> f64 {
+        let natural = self.natural_size().map_or(16.0, |s| s.width);
+        self.relative_width(natural)
+            .resolve(Some(text_width), natural)
     }
 }
 

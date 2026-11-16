@@ -89,13 +89,13 @@ pub(crate) use pointer_events::{
 pub use presence::Effect;
 pub(crate) use render::{
     apply_scroll, caret_index_at, leaf_layout, mark_native_states, paint_focus_look, paint_hover,
-    reveal, scroll_range, translate,
+    reveal, scroll_range, text_hit_at, translate,
 };
 pub use render::{layout, layout_with_direction, measure, paint, paint_visible};
 pub use runtime::{
     ActionId, Anchor, BackHandler, ContextId, Cx, DragId, DragMotion, DragSourceId, DropId,
-    FocusId, Handlers, KeyInput, LayoutNode, OverlaySpec, ScrollId, ScrollRequests, TextPosId,
-    ViewportEvent, ViewportId, hit_test, local_point, node_to_window,
+    FocusId, Handlers, KeyInput, LayoutNode, OverlaySpec, ScrollId, ScrollRequests, TextHit,
+    TextPosId, ViewportEvent, ViewportId, hit_test, local_point, node_to_window,
 };
 pub(crate) use runtime::{
     MemoCache, NodeContent, ScrollTargets, collect_focusables, collect_viewports, context_at,

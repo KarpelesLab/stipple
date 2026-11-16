@@ -10,15 +10,21 @@
 //!
 //! `--check` builds a document through the same calls the toolbar makes,
 //! renders the window off screen, and checks the picture and the exports.
-//! With `STIPPLE_RICHEDITOR_ECHO=1` each change prints the Markdown (CI
-//! types into the window and reads it back).
+//! With `STIPPLE_RICHEDITOR_ECHO=1` each change prints the HTML and the
+//! Markdown (CI types into the window and reads them back).
+//!
+//! Click an image to select it: its corner handles resize it (a relative
+//! width stays relative), and a free image moves by dragging it. The third
+//! toolbar places it (in the line, left, centered, right or free), sets how
+//! text wraps around it, and sizes it (natural, pixels, or a percentage of
+//! the editor's width, with the slider).
 
 use std::cell::Cell;
 use std::sync::Arc;
 
 use stipple::platform::dialog::{self, FileDialog};
 use stipple::prelude::*;
-use stipple::widgets::{ImageFloat, Marks};
+use stipple::widgets::{ImagePlacement, ImageSize, ImageWrap, Marks};
 
 /// Which export shows under the editor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,6 +150,7 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
         && state.echoed.get() != state.editor.revision()
     {
         state.echoed.set(state.editor.revision());
+        println!("richeditor: html={:?}", state.editor.to_html());
         println!("richeditor: md={:?}", state.editor.to_markdown());
     }
     let ed = &state.editor;
@@ -185,14 +192,6 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
             s.editor.redo();
         }),
     ]);
-    // Placing the image at the caret (or the selected ones): pressed for
-    // how it is placed now.
-    let placed = ed.image_float();
-    let float = |cx: &mut Cx<Doc>, label: &str, name: &str, f: ImageFloat| {
-        tool(cx, label, name, placed == Some(f), move |s| {
-            s.editor.set_image_float(f)
-        })
-    };
     let pick = insert_image_file(cx);
     let insert = toolbar(cx).children(vec![
         text_field(cx, &state.link, |s| &mut s.link)
@@ -210,11 +209,8 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
         tool(cx, "Sample image", "Insert the sample image", false, |s| {
             s.editor.insert_image(sample_image())
         }),
-        tool_separator(cx),
-        float(cx, "Inline", "Image in the line", ImageFloat::Inline),
-        float(cx, "◧", "Float the image left", ImageFloat::Left),
-        float(cx, "◨", "Float the image right", ImageFloat::Right),
     ]);
+    let image_bar = image_toolbar(cx, ed);
     let editor = rich_editor(cx, &state.editor, |s| &mut s.editor)
         .placeholder("Write something…")
         .min_height(300.0);
@@ -250,6 +246,7 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
     column(vec![
         formatting,
         insert,
+        image_bar,
         scroll(cx).children(vec![editor]).grow(1.0),
         tabs,
         output,
@@ -258,11 +255,102 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
     .padding(Insets::uniform(16.0))
 }
 
+/// The image at the caret (or the selected one, clicked): where it goes,
+/// how text wraps around it, and how wide it is. Its buttons show the
+/// image's settings as pressed; with no image there they do nothing.
+fn image_toolbar(cx: &mut Cx<Doc>, ed: &RichEditor) -> Element {
+    let image = ed.image();
+    let placed = image.as_ref().map(|i| i.placement);
+    let place = |cx: &mut Cx<Doc>, label: &str, name: &str, p: ImagePlacement| {
+        let on = placed.is_some_and(|q| q.same_kind(p));
+        tool(cx, label, name, on, move |s| {
+            s.editor.set_image_placement(p)
+        })
+    };
+    let wrap = image.as_ref().map(|i| i.wrap);
+    let wrapping = |cx: &mut Cx<Doc>, label: &str, name: &str, w: ImageWrap| {
+        tool(cx, label, name, wrap == Some(w), move |s| {
+            s.editor.set_image_wrap(w)
+        })
+    };
+    let size = image.as_ref().map(|i| i.size);
+    // The pixel width the "px" button starts from: its natural width (its
+    // handles resize it from there).
+    let natural = image
+        .as_ref()
+        .and_then(|i| i.natural_size())
+        .map_or(120.0, |s| s.width);
+    let percent = match size {
+        Some(ImageSize::Percent(p)) => p,
+        _ => 50.0,
+    };
+    let mut items = vec![
+        place(cx, "Inline", "Image in the line", ImagePlacement::Inline),
+        place(cx, "◧", "Float the image left", ImagePlacement::Left),
+        place(cx, "▣", "Center the image", ImagePlacement::Center),
+        place(cx, "◨", "Float the image right", ImagePlacement::Right),
+        place(
+            cx,
+            "Free",
+            "Place the image freely",
+            ImagePlacement::Free { x: 50.0, y: 10.0 },
+        ),
+        tool_separator(cx),
+        wrapping(cx, "Both", "Text on both sides", ImageWrap::Both),
+        wrapping(cx, "Larger", "Text on the larger side", ImageWrap::Largest),
+        wrapping(cx, "None", "No text beside the image", ImageWrap::None),
+        tool_separator(cx),
+        tool(
+            cx,
+            "1:1",
+            "Natural size",
+            size == Some(ImageSize::Natural),
+            |s| s.editor.set_image_size(ImageSize::Natural),
+        ),
+        tool(
+            cx,
+            "px",
+            "Width in pixels",
+            matches!(size, Some(ImageSize::Pixels(_))),
+            move |s| s.editor.set_image_size(ImageSize::Pixels(natural)),
+        ),
+        tool(
+            cx,
+            "%",
+            "Width relative to the text",
+            matches!(size, Some(ImageSize::Percent(_))),
+            move |s| s.editor.set_image_size(ImageSize::Percent(percent)),
+        ),
+    ];
+    // The relative width: a slider from 5% to 100%, and its value.
+    let slider_at = (percent - 5.0) / 95.0;
+    items.push(
+        slider(cx, slider_at, |s: &mut Doc, v| {
+            let p = (5.0 + v * 95.0).round();
+            s.editor.set_image_size(ImageSize::Percent(p));
+        })
+        .a11y_label("Image width in percent")
+        .keeps_focus()
+        .width(120.0),
+    );
+    let readout = match size {
+        Some(ImageSize::Percent(p)) => format!("{p}%"),
+        Some(ImageSize::Pixels(px)) => format!("{px} px"),
+        Some(_) => "natural".into(),
+        None => String::new(),
+    };
+    items.push(label(cx, &readout).a11y_label("Image width"));
+    toolbar(cx).children(items)
+}
+
+/// The window's size, in logical pixels.
+const WINDOW: Size = Size::new(820.0, 640.0);
+
 fn app() -> App<Doc> {
     App::new(Doc::default(), view)
         .title("Stipple Rich Editor")
         .theme(Theme::light())
-        .logical_size(Size::new(820.0, 640.0))
+        .logical_size(WINDOW)
 }
 
 /// Edit the welcome document as the toolbar would, render it, and check
@@ -298,6 +386,13 @@ fn check(mut app: App<Doc>) -> Result<(), String> {
     // Floated right, with text flowing beside it.
     click(&mut app, "Float the image right")?;
     app.type_text("The sunset floats right; this text runs on its left.");
+    // Another, centered in the editor and half its width (capped at its
+    // natural 120 px), text on both sides.
+    app.press_key(KeyInput::Enter);
+    click(&mut app, "Insert the sample image")?;
+    click(&mut app, "Center the image")?;
+    click(&mut app, "Width relative to the text")?;
+    app.type_text("Centered: words run on its left and on its right alike.");
     let pm = app.render_once();
     let md = app.state().editor.to_markdown();
     let html = app.state().editor.to_html();
@@ -326,6 +421,8 @@ fn check(mut app: App<Doc>) -> Result<(), String> {
         "Checked <strong>bold</strong> &amp; &lt;safe&gt;",
         "<img src=\"data:image/png;base64,",
         "style=\"float: right\">The sunset",
+        "alt=\"A sunset\" style=\"display: block; margin: 0 auto; width: 50%; \
+         max-width: 120px\">Centered:",
     ] {
         if !html.contains(want) {
             return Err(format!("the HTML has no {want:?}"));
@@ -337,15 +434,24 @@ fn check(mut app: App<Doc>) -> Result<(), String> {
     if RichDocument::from_html(&html) != *app.state().editor.document() {
         return Err("the HTML doesn't read back as the document".into());
     }
-    // The sample image's sun and sea are drawn.
-    // The sample image's sun and sea are drawn, floated against the right.
-    let (mut sun, mut sea, mut left) = (0, 0, 0);
+    // The sample image's sun and sea are drawn: once floated against the
+    // right, once centered on the editor (none of either on the left
+    // third).
+    let field = app
+        .find(Role::TextField, "Write something…")
+        .ok_or("no editor")?;
+    let scale = f64::from(pm.size().width) / WINDOW.width;
+    let center = (field.bounds.center().x * scale) as u32;
+    let (mut sun, mut sea, mut left, mut middle) = (0, 0, 0, 0);
     let w = pm.size().width;
     for y in 0..pm.size().height {
         for x in 0..w {
             let hit = match pm.pixel(x, y) {
                 Some([0xff, 0xd2, 0x3f, _]) => {
                     sun += 1;
+                    if x.abs_diff(center) < (10.0 * scale) as u32 {
+                        middle += 1;
+                    }
                     true
                 }
                 Some([0x1d, 0x4e, 0x89, _]) => {
@@ -354,17 +460,23 @@ fn check(mut app: App<Doc>) -> Result<(), String> {
                 }
                 _ => false,
             };
-            if hit && x < w / 2 {
+            if hit && x < w / 3 {
                 left += 1;
             }
         }
     }
-    println!("richeditor: {sun} sun pixels, {sea} sea pixels, {left} on the left half");
-    if sun < 50 || sea < 200 {
-        return Err("the inserted image isn't drawn".into());
+    println!(
+        "richeditor: {sun} sun pixels, {sea} sea pixels, {left} on the left third, \
+         {middle} sun pixels at the editor's center"
+    );
+    if sun < 100 || sea < 400 {
+        return Err("the inserted images aren't drawn".into());
     }
     if left > 0 {
-        return Err("the image floated right is drawn on the left".into());
+        return Err("an image is drawn on the left".into());
+    }
+    if middle < 20 {
+        return Err("the centered image isn't at the editor's center".into());
     }
     Ok(())
 }

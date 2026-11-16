@@ -137,9 +137,9 @@ pub mod gamepad {
 
 use crate::core::{
     ActionId, Anchor, AppHandle, BoxStyle, Cx, Damage, DragId, Element, FocusId, Handlers,
-    KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, caret_index_at, collect_viewports,
-    context_at, drag_hit_at, find_action, find_text_pos, focus_at, hit_test, layout_with_direction,
-    measure, paint_hover, text_pos_at, viewport_at,
+    KeyInput, LayoutNode, TextPosId, ViewportEvent, ViewportId, collect_viewports, context_at,
+    drag_hit_at, find_action, find_text_pos, focus_at, hit_test, layout_with_direction, measure,
+    paint_hover, text_hit_at, text_pos_at, viewport_at,
 };
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
 use crate::platform::{
@@ -2391,12 +2391,12 @@ impl<S: 'static> Pane<S> {
     ) -> bool {
         self.ensure_tree(state, theme, font);
         let overlays = self.overlay_active;
-        let Some((id, index, foc)) = self.tree.as_ref().and_then(|t| {
+        let Some((id, hit, foc)) = self.tree.as_ref().and_then(|t| {
             let t = press_layer(t, overlays, pos).0;
             let (id, node) = text_pos_at(t, pos)?;
             let at = crate::core::local_point(t, &|n| n.text_pos == Some(id), pos).unwrap_or(pos);
-            let index = caret_index_at(node, at, font)?;
-            Some((id, index, focus_at(t, pos)))
+            let hit = text_hit_at(node, at, font)?;
+            Some((id, hit, focus_at(t, pos)))
         }) else {
             self.clicks.reset();
             return false;
@@ -2406,7 +2406,7 @@ impl<S: 'static> Pane<S> {
             self.focus_visible = false;
         }
         self.text_selecting = Some(id);
-        self.handlers.dispatch_text_pos(id, index, false, state);
+        self.handlers.dispatch_text_hit(id, &hit, false, state);
         match self.clicks.press(now, pos) {
             2 => {
                 self.send_key(state, theme, font, KeyInput::SelectWord);
@@ -2434,13 +2434,13 @@ impl<S: 'static> Pane<S> {
             return false;
         };
         self.ensure_tree(state, theme, font);
-        let Some(index) = self.tree.as_ref().and_then(|t| {
+        let Some(hit) = self.tree.as_ref().and_then(|t| {
             let at = crate::core::local_point(t, &|n| n.text_pos == Some(id), pos);
-            caret_index_at(find_text_pos(t, id)?, at.unwrap_or(pos), font)
+            text_hit_at(find_text_pos(t, id)?, at.unwrap_or(pos), font)
         }) else {
             return false;
         };
-        let ran = self.handlers.dispatch_text_pos(id, index, true, state);
+        let ran = self.handlers.dispatch_text_hit(id, &hit, true, state);
         if ran {
             self.dirty = true;
         }
