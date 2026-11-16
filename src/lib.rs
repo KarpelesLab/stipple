@@ -34,6 +34,8 @@
 #[doc = include_str!("../docs/getting-started.md")]
 mod getting_started {}
 
+#[cfg(test)]
+mod a11y_scroll_tests;
 pub mod anim;
 mod app_clipboard;
 mod app_dnd;
@@ -1903,9 +1905,9 @@ impl<S: 'static> Pane<S> {
     /// Build the [accessibility tree](crate::core::accessibility_tree) for the
     /// current frame, or `None` until one has been built.
     fn accessibility_tree(&self) -> Option<crate::core::AccessNode> {
-        self.tree
-            .as_ref()
-            .map(|t| crate::core::accessibility_tree(t, self.focused))
+        self.tree.as_ref().map(|t| {
+            crate::core::a11y::accessibility_tree_at(t, self.focused, &self.scroll_offsets)
+        })
     }
 
     fn ensure_tree(&mut self, state: &S, theme: &Theme, font: Option<&Font>) {
@@ -3289,64 +3291,6 @@ impl<S: 'static> App<S> {
         WindowAttributes,
         impl FnMut(Event, &dyn crate::platform::Window) -> ControlFlow + 'static,
     ) {
-        // Map the semantic accessibility tree into the platform-neutral mirror the
-        // backend's OS bridge consumes (NSAccessibility / UIA / AT-SPI).
-        fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platform::A11yNode {
-            use crate::core::Role;
-            use crate::platform::A11yRole;
-            let role = match node.role {
-                Role::Window => A11yRole::Window,
-                Role::Group => A11yRole::Group,
-                Role::Button => A11yRole::Button,
-                Role::TextField => A11yRole::TextField,
-                Role::Text => A11yRole::Text,
-                Role::List => A11yRole::List,
-                Role::ListItem => A11yRole::ListItem,
-                Role::Table => A11yRole::Table,
-                Role::Row => A11yRole::Row,
-                Role::Cell => A11yRole::Cell,
-                Role::ColumnHeader => A11yRole::ColumnHeader,
-                Role::Tree => A11yRole::Tree,
-                Role::TreeItem => A11yRole::TreeItem,
-                Role::MenuBar => A11yRole::MenuBar,
-                Role::Menu => A11yRole::Menu,
-                Role::MenuItem => A11yRole::MenuItem,
-                Role::ComboBox => A11yRole::ComboBox,
-                Role::SpinButton => A11yRole::SpinButton,
-                Role::CheckBox => A11yRole::CheckBox,
-                Role::RadioButton => A11yRole::RadioButton,
-                Role::Switch => A11yRole::Switch,
-                Role::Splitter => A11yRole::Splitter,
-                Role::Toolbar => A11yRole::Toolbar,
-                Role::Separator => A11yRole::Separator,
-                Role::Alert => A11yRole::Alert,
-                Role::TabList => A11yRole::TabList,
-                Role::Tab => A11yRole::Tab,
-                Role::PasswordField => A11yRole::PasswordField,
-                Role::Dialog => A11yRole::Dialog,
-            };
-            crate::platform::A11yNode {
-                role,
-                name: node.name.clone(),
-                bounds: (
-                    node.bounds.min_x(),
-                    node.bounds.min_y(),
-                    node.bounds.width(),
-                    node.bounds.height(),
-                ),
-                focused: node.focused,
-                selected: node.selected,
-                expanded: node.expanded,
-                checked: node.checked,
-                caret: node.caret,
-                text_selection: node.text_selection,
-                id: node.id.clone(),
-                labelled_by: node.labelled_by.clone(),
-                placeholder: node.placeholder.clone(),
-                children: node.children.iter().map(to_platform_a11y).collect(),
-            }
-        }
-
         // A native theme follows the system's look while the app runs, and
         // every app follows the system's animation setting (reduced motion).
         crate::anim::set_system_motion_scale(crate::platform::native::motion_scale());
@@ -4712,6 +4656,71 @@ fn app_dbg(args: std::fmt::Arguments<'_>) {
             .elapsed()
             .as_millis();
         eprintln!("stipple app: [{ms} ms] {args}");
+    }
+}
+
+/// Map the semantic accessibility tree into the platform-neutral mirror the
+/// backend's OS bridge consumes (NSAccessibility / UIA / AT-SPI).
+pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platform::A11yNode {
+    use crate::core::Role;
+    use crate::platform::A11yRole;
+    let role = match node.role {
+        Role::Window => A11yRole::Window,
+        Role::Group => A11yRole::Group,
+        Role::Button => A11yRole::Button,
+        Role::TextField => A11yRole::TextField,
+        Role::Text => A11yRole::Text,
+        Role::List => A11yRole::List,
+        Role::ListItem => A11yRole::ListItem,
+        Role::Table => A11yRole::Table,
+        Role::Row => A11yRole::Row,
+        Role::Cell => A11yRole::Cell,
+        Role::ColumnHeader => A11yRole::ColumnHeader,
+        Role::Tree => A11yRole::Tree,
+        Role::TreeItem => A11yRole::TreeItem,
+        Role::MenuBar => A11yRole::MenuBar,
+        Role::Menu => A11yRole::Menu,
+        Role::MenuItem => A11yRole::MenuItem,
+        Role::ComboBox => A11yRole::ComboBox,
+        Role::SpinButton => A11yRole::SpinButton,
+        Role::CheckBox => A11yRole::CheckBox,
+        Role::RadioButton => A11yRole::RadioButton,
+        Role::Switch => A11yRole::Switch,
+        Role::Splitter => A11yRole::Splitter,
+        Role::Toolbar => A11yRole::Toolbar,
+        Role::Separator => A11yRole::Separator,
+        Role::Alert => A11yRole::Alert,
+        Role::TabList => A11yRole::TabList,
+        Role::Tab => A11yRole::Tab,
+        Role::PasswordField => A11yRole::PasswordField,
+        Role::Dialog => A11yRole::Dialog,
+    };
+    crate::platform::A11yNode {
+        role,
+        name: node.name.clone(),
+        bounds: (
+            node.bounds.min_x(),
+            node.bounds.min_y(),
+            node.bounds.width(),
+            node.bounds.height(),
+        ),
+        focused: node.focused,
+        selected: node.selected,
+        expanded: node.expanded,
+        checked: node.checked,
+        caret: node.caret,
+        text_selection: node.text_selection,
+        id: node.id.clone(),
+        labelled_by: node.labelled_by.clone(),
+        placeholder: node.placeholder.clone(),
+        scroll: node.scroll.map(|s| crate::platform::access::A11yScroll {
+            offset: s.offset,
+            max: s.max,
+            viewport: s.viewport,
+            horizontal: s.horizontal,
+            rtl: s.rtl,
+        }),
+        children: node.children.iter().map(to_platform_a11y).collect(),
     }
 }
 

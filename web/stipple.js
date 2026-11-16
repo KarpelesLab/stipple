@@ -433,6 +433,29 @@ export async function start(canvas, wasmUrl, options = {}) {
   };
   const hasFocus = () => overlay.contains(document.activeElement);
 
+  // Scroll the app's scroll container around `el` (the nearest overlay
+  // element that is one) so that `el`'s node shows: the least movement, as
+  // a wheel at the container's middle. A screen reader that moves focus to a
+  // control scrolled out of view brings it back this way.
+  const revealNode = (el) => {
+    const b = el._b;
+    let c = el.parentElement;
+    while (c && c !== overlay && !c._sc) c = c.parentElement;
+    if (!b || !c || !c._sc || !c._b) return;
+    const across = c._sc[2];
+    const [cx, cy, cw, ch] = c._b;
+    const [v0, v1, t0, t1] = across
+      ? [cx, cx + cw, b[0], b[0] + b[2]]
+      : [cy, cy + ch, b[1], b[1] + b[3]];
+    // How far the content moves: a wheel's pixels, the way it reveals
+    // (right and down positive, a right-to-left strip too).
+    const by = t0 < v0 ? t0 - v0 : t1 > v1 ? Math.min(t1 - v1, t0 - v0) : 0;
+    if (Math.abs(by) < 0.5) return;
+    e.stipple_pointer(0, 0, cx + cw / 2, cy + ch / 2, 0);
+    if (across) e.stipple_wheel(by, 0, 0);
+    else e.stipple_wheel(0, by, 0);
+  };
+
   // A click at the middle of `el`'s node: how a screen reader's "activate"
   // reaches the element (its tap handler, or focus for a text field).
   const clickNode = (el) => {
@@ -471,6 +494,7 @@ export async function start(canvas, wasmUrl, options = {}) {
     attr(el, "aria-expanded", node.e === undefined ? null : node.e ? "true" : "false");
     attr(el, "aria-checked", node.c === undefined ? null : node.c ? "true" : "false");
     attr(el, "aria-placeholder", node.p ?? null);
+    el._sc = node.sc ?? null;
     if (FOCUSABLE.has(node.r)) {
       if (el.tabIndex !== -1 || !el.hasAttribute("tabindex")) el.tabIndex = -1;
     } else if (el.hasAttribute("tabindex")) {
@@ -1226,7 +1250,9 @@ export async function start(canvas, wasmUrl, options = {}) {
       e.stipple_focus(1);
     }
     // A screen reader moved focus to a text field's element: focus the field.
+    // Any control it moved to that is scrolled out of view comes into view.
     const el = ev.target;
+    if (!quiet && el !== input && el._b) revealNode(el);
     if (!quiet && el !== input && TEXT_ROLES.has(el.getAttribute?.("role"))) clickNode(el);
   });
   overlay.addEventListener("focusout", () => {

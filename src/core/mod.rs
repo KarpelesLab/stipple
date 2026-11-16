@@ -47,7 +47,7 @@ pub(crate) mod tab_focus;
 pub(crate) mod touch;
 pub(crate) mod transition;
 
-pub use a11y::{AccessNode, Role, accessibility_tree};
+pub use a11y::{AccessNode, AccessScroll, Role, accessibility_tree};
 pub use canvas::{CanvasId, CanvasPainter};
 pub(crate) use canvas::{CanvasInvalidation, invalidated_rects};
 pub(crate) use clipboard::{

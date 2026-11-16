@@ -12,6 +12,13 @@ re-registered. The Linux counterpart of uia-walk.ps1.
 usage: atspi-walk.py APP_NAME APP_LOG TAB_COMMAND...
        atspi-walk.py --find-only APP_NAME
          (only find the app and its tree, as after the bus restarted)
+
+With ATSPI_WALK_DEPTH=1 in the environment it runs other checks instead,
+after finding the app: the list of rows is a scroll pane whose actions,
+value and Component.ScrollTo scroll it (the app logs its offset), the
+sideways strip of chips scrolls too, the "Remember" check box is checked by
+its action (state and event), and a tap on "Row 2" raises a toast, which
+arrives as an object:announcement and a notification in the tree.
 """
 import os
 import signal
@@ -44,6 +51,17 @@ def pump(seconds):
         while ctx.iteration(False):
             pass
         time.sleep(0.02)
+
+
+def wait_for(cond, seconds=10):
+    for _ in range(int(seconds / 0.25)):
+        pump(0.25)
+        try:
+            if cond():
+                return True
+        except Exception as e:  # an object gone mid-swap: look again
+            print("atspi: retrying after {}".format(e), flush=True)
+    return False
 
 
 def extents(acc):
@@ -114,6 +132,24 @@ pyatspi.Registry.registerEventListener(
     "object:property-change:accessible-name", "object:children-changed",
     "object:text-changed", "object:text-caret-moved", "object:text-selection-changed")
 
+depth = os.environ.get("ATSPI_WALK_DEPTH") == "1"
+announcements = []
+
+
+def on_announcement(event):
+    try:
+        text = event.any_data
+    except Exception as e:
+        text = "unreadable: {}".format(e)
+    announcements.append((event.detail1, text))
+    print("atspi event: {} {} {!r}".format(event.type, event.detail1, text), flush=True)
+
+
+if depth:
+    pyatspi.Registry.registerEventListener(
+        on_event, "object:property-change:accessible-value", "object:state-changed:checked")
+    pyatspi.Registry.registerEventListener(on_announcement, "object:announcement")
+
 app = find_app()
 check(app is not None, "the registry lists the application '{}'".format(app_name))
 if app is None:
@@ -142,6 +178,129 @@ if find_only:
         print("AT-SPI checks failed: " + "; ".join(failures), flush=True)
         sys.exit(1)
     print("atspi: found the app and its tree", flush=True)
+    sys.exit(0)
+
+
+
+def log_lines(prefix):
+    with open(app_log) as f:
+        return [line.strip() for line in f if line.startswith(prefix)]
+
+
+def await_log(prefix, since, seconds=10):
+    """The app's log lines starting with `prefix` after the first `since`."""
+    for _ in range(int(seconds / 0.25)):
+        pump(0.25)
+        lines = log_lines(prefix)
+        if len(lines) > since:
+            return lines[since:]
+    return []
+
+
+def offsets(lines, prefix):
+    return [float(line[len(prefix):]) for line in lines]
+
+
+def scroll_pane_of(acc):
+    while acc is not None and acc.getRole() != pyatspi.ROLE_SCROLL_PANE:
+        acc = acc.parent
+    return acc
+
+
+if depth:
+    # The list of rows: a plain scroll container, a scroll pane.
+    pane = scroll_pane_of(row0)
+    check(pane is not None, "'Row 0' is inside a scroll pane")
+    said = "touchdemo: scrolled to "
+    if pane is not None:
+        print("atspi: scroll pane interfaces {}".format(pyatspi.listInterfaces(pane)), flush=True)
+        value = pane.queryValue()
+        check(value.maximumValue > 0 and value.currentValue == 0,
+              "its value is its offset: {} of 0..{}".format(value.currentValue, value.maximumValue))
+        action = pane.queryAction()
+        names = [action.getName(i) for i in range(action.nActions)]
+        check(names == ["scroll forward", "scroll backward"],
+              "it has scroll forward and backward actions (got {})".format(names))
+        del events[:]
+        n = len(log_lines(said))
+        check(action.doAction(0), "'scroll forward' is accepted")
+        moved = offsets(await_log(said, n), said)
+        check(bool(moved) and moved[-1] > 0, "the app scrolled the list ({})".format(moved))
+        check(wait_for(lambda: value.currentValue > 0),
+              "the pane's value followed ({})".format(value.currentValue))
+        check(any(t.startswith("object:property-change:accessible-value") for t, *_ in events),
+              "an accessible-value change event said so")
+        # Setting the value scrolls there.
+        n = len(log_lines(said))
+        value.currentValue = 0.0
+        moved = offsets(await_log(said, n), said)
+        check(bool(moved) and moved[-1] == 0, "setting the value to 0 scrolled back ({})".format(moved))
+        # A row below the viewport, scrolled into view.
+        row20 = named(walk(frame, 0, []), pyatspi.ROLE_PUSH_BUTTON, "Row 20")
+        check(row20 is not None, "a push button 'Row 20'")
+        if row20 is not None:
+            n = len(log_lines(said))
+            check(row20.queryComponent().scrollTo(pyatspi.SCROLL_ANYWHERE),
+                  "Component.ScrollTo on 'Row 20' is accepted")
+            moved = offsets(await_log(said, n), said)
+            px, py, pw, ph = extents(pane)
+
+            def shown():
+                x, y, w, h = extents(row20)
+                return y >= py and y + h <= py + ph
+            check(bool(moved) and wait_for(shown),
+                  "...and brought it into view ({}; row {}, pane {})".format(
+                      moved, extents(row20), (px, py, pw, ph)))
+    # The sideways strip of chips.
+    # (Its chips have no tap handler: labels in panels.)
+    chip = named(elements, pyatspi.ROLE_LABEL, "Chip 0")
+    strip = scroll_pane_of(chip)
+    check(strip is not None and strip != pane, "the chips are in a scroll pane of their own")
+    if strip is not None:
+        said = "touchdemo: strip scrolled to "
+        n = len(log_lines(said))
+        check(strip.queryAction().doAction(0), "'scroll forward' on the strip is accepted")
+        moved = offsets(await_log(said, n), said)
+        check(bool(moved) and moved[-1] > 0, "the app scrolled the strip ({})".format(moved))
+
+    # The "Remember" check box, checked by its action.
+    box = named(elements, pyatspi.ROLE_CHECK_BOX, "Remember")
+    check(box is not None, "a check box 'Remember'")
+    if box is not None:
+        check(not box.getState().contains(pyatspi.STATE_CHECKED), "...not checked")
+        del events[:]
+        n = len(log_lines("touchdemo: remember on"))
+        check(box.queryAction().doAction(0), "its click action is accepted")
+        check(bool(await_log("touchdemo: remember on", n)), "the app logged 'remember on'")
+        check(wait_for(lambda: box.getState().contains(pyatspi.STATE_CHECKED)), "it is checked now")
+        check(any(t.startswith("object:state-changed:checked") and d == 1 for t, d, *_ in events),
+              "a state-changed:checked event said so")
+
+    # A toast: a tap on "Row 2" raises one, which is announced. The click
+    # lands at the row's middle, so it's scrolled into view first.
+    row2 = named(walk(frame, 0, []), pyatspi.ROLE_PUSH_BUTTON, "Row 2")
+    check(row2 is not None, "a push button 'Row 2'")
+    if row2 is not None and pane is not None:
+        row2.queryComponent().scrollTo(pyatspi.SCROLL_ANYWHERE)
+        py = extents(pane)[1]
+        check(wait_for(lambda: extents(row2)[1] >= py), "'Row 2' scrolled back into view")
+    if row2 is not None:
+        del announcements[:]
+        n = len(log_lines("touchdemo: toast"))
+        check(row2.queryAction().doAction(0), "'click' on 'Row 2' is accepted")
+        check(bool(await_log("touchdemo: toast", n)), "the app raised its toast")
+        check(wait_for(lambda: any(t == "Row 2 tapped" for _, t in announcements)),
+              "an object:announcement said 'Row 2 tapped' ({})".format(announcements))
+        toast = named(walk(frame, 0, []), pyatspi.ROLE_NOTIFICATION, "Row 2 tapped")
+        check(toast is not None, "...and a notification 'Row 2 tapped' is in the tree")
+        if toast is not None:
+            attrs = toast.getAttributes()
+            check("container-live:polite" in attrs, "...a polite live region ({})".format(attrs))
+
+    if failures:
+        print("AT-SPI depth checks failed: " + "; ".join(failures), flush=True)
+        sys.exit(1)
+    print("atspi: all depth checks passed", flush=True)
     sys.exit(0)
 
 if row0 is not None:
@@ -225,16 +384,6 @@ if field is not None:
           "an object:text-changed:insert event announced the typing")
 
 
-
-def wait_for(cond, seconds=10):
-    for _ in range(int(seconds / 0.25)):
-        pump(0.25)
-        try:
-            if cond():
-                return True
-        except Exception as e:  # an object gone mid-swap: look again
-            print("atspi: retrying after {}".format(e), flush=True)
-    return False
 
 
 if field is not None:

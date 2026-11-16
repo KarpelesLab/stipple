@@ -79,6 +79,21 @@ pub enum A11yRole {
     Dialog,
 }
 
+/// Where a scroll container is scrolled — mirrors `stipple::core::AccessScroll`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct A11yScroll {
+    /// How far it is scrolled from its start, `0..=max`, logical pixels.
+    pub offset: f64,
+    /// The largest offset (0 when its content fits).
+    pub max: f64,
+    /// The viewport's length along the axis it scrolls on.
+    pub viewport: f64,
+    /// Whether it scrolls sideways.
+    pub horizontal: bool,
+    /// A sideways strip laid out right to left (its start is on the right).
+    pub rtl: bool,
+}
+
 /// A node in the platform-neutral accessibility tree.
 #[derive(Clone, Debug, PartialEq)]
 pub struct A11yNode {
@@ -108,6 +123,8 @@ pub struct A11yNode {
     pub labelled_by: Option<String>,
     /// A text field's hint, read while it's empty.
     pub placeholder: Option<String>,
+    /// For a scroll container, where it is scrolled.
+    pub scroll: Option<A11yScroll>,
     pub children: Vec<A11yNode>,
 }
 
@@ -129,6 +146,7 @@ impl A11yNode {
             id: None,
             labelled_by: None,
             placeholder: None,
+            scroll: None,
             children: Vec::new(),
         }
     }
@@ -191,25 +209,40 @@ impl A11yNode {
     /// announce. None for the first tree (`old` is `None`), which the screen
     /// reader reads as a whole, nor for an alert with no name.
     pub fn alerts_new_since(&self, old: Option<&A11yNode>) -> Vec<String> {
-        fn alerts<'a>(n: &'a A11yNode, out: &mut Vec<&'a str>) {
+        self.alert_paths_new_since(old)
+            .into_iter()
+            .map(|(_, name)| name)
+            .collect()
+    }
+
+    /// [`alerts_new_since`](Self::alerts_new_since), with the path to each
+    /// alert's node (child indices from this one).
+    pub fn alert_paths_new_since(&self, old: Option<&A11yNode>) -> Vec<(Vec<usize>, String)> {
+        fn alerts<'a>(
+            n: &'a A11yNode,
+            path: &mut Vec<usize>,
+            out: &mut Vec<(Vec<usize>, &'a str)>,
+        ) {
             if n.role == A11yRole::Alert && !n.name.is_empty() {
-                out.push(&n.name);
+                out.push((path.clone(), &n.name));
             }
-            for c in &n.children {
-                alerts(c, out);
+            for (i, c) in n.children.iter().enumerate() {
+                path.push(i);
+                alerts(c, path, out);
+                path.pop();
             }
         }
         let Some(old) = old else {
             return Vec::new();
         };
         let mut before = Vec::new();
-        alerts(old, &mut before);
+        alerts(old, &mut Vec::new(), &mut before);
         let mut now = Vec::new();
-        alerts(self, &mut now);
+        alerts(self, &mut Vec::new(), &mut now);
         now.into_iter()
-            .filter(|name| {
+            .filter(|(_, name)| {
                 // Each alert there before matches one now, by name.
-                match before.iter().position(|b| b == name) {
+                match before.iter().position(|(_, b)| b == name) {
                     Some(i) => {
                         before.swap_remove(i);
                         false
@@ -217,10 +250,15 @@ impl A11yNode {
                     None => true,
                 }
             })
-            .map(str::to_owned)
+            .map(|(path, name)| (path, name.to_owned()))
             .collect()
     }
 }
+
+mod actions;
+mod changes;
+#[allow(unused_imports)]
+pub(crate) use changes::{A11yChange, changes};
 
 /// The ARIA role the web's bridge gives `role`; empty for none (static text,
 /// and the window root, which the page's overlay itself stands for).
@@ -259,10 +297,11 @@ pub(crate) fn aria_role(role: A11yRole) -> &'static str {
 
 /// The tree as the JSON `web/stipple.js` turns into its ARIA overlay: per
 /// node `{"r": role, "n": name, "b": [x, y, w, h], "f": focused, "s":
-/// selected, "e": expanded, "c": checked, "k": [children]}`, with `r` an ARIA
-/// role (see [`aria_role`]; an unnamed group gets none), the booleans as 0/1,
-/// and `s`, `e`, `c` and `k` left out where they don't apply. Bounds are in
-/// whole CSS pixels.
+/// selected, "e": expanded, "c": checked, "sc": [offset, max, sideways,
+/// right to left], "k": [children]}`, with `r` an ARIA role (see
+/// [`aria_role`]; an unnamed group gets none), the booleans as 0/1, and `s`,
+/// `e`, `c`, `sc` (a scroll container's, in whole CSS pixels) and `k` left
+/// out where they don't apply. Bounds are in whole CSS pixels.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(crate) fn aria_json(node: &A11yNode) -> String {
     use std::fmt::Write;
@@ -315,6 +354,16 @@ pub(crate) fn aria_json(node: &A11yNode) -> String {
         if let Some(c) = n.checked {
             let _ = write!(out, ",\"c\":{}", u8::from(c));
         }
+        if let Some(s) = n.scroll {
+            let _ = write!(
+                out,
+                ",\"sc\":[{},{},{},{}]",
+                s.offset.round(),
+                s.max.round(),
+                u8::from(s.horizontal),
+                u8::from(s.rtl)
+            );
+        }
         if !n.children.is_empty() {
             out.push_str(",\"k\":[");
             for (i, c) in n.children.iter().enumerate() {
@@ -357,6 +406,13 @@ mod tests {
             leaf(A11yRole::Alert, ""),
         ]);
         assert_eq!(more.alerts_new_since(Some(&first)), ["Deleted", "Saved"]);
+        assert_eq!(
+            more.alert_paths_new_since(Some(&first)),
+            [
+                (vec![1], "Deleted".to_string()),
+                (vec![2], "Saved".to_string())
+            ]
+        );
         assert!(first.alerts_new_since(Some(&more)).is_empty(), "gone");
     }
 
@@ -450,7 +506,16 @@ mod tests {
                     expanded: Some(false),
                     ..leaf(A11yRole::TreeItem, "src")
                 },
-                leaf(A11yRole::Group, ""),
+                A11yNode {
+                    scroll: Some(A11yScroll {
+                        offset: 12.4,
+                        max: 300.0,
+                        viewport: 50.0,
+                        horizontal: false,
+                        rtl: false,
+                    }),
+                    ..leaf(A11yRole::Group, "")
+                },
             ],
             ..A11yNode::new(A11yRole::Window, "", (0.0, 0.0, 100.0, 50.0))
         };
@@ -462,7 +527,7 @@ mod tests {
                 r#"{"r":"textbox","n":"abc","b":[1,3,30,10],"f":1,"p":"Name"},"#,
                 r#"{"r":"checkbox","n":"Bold","b":[0,0,0,0],"f":0,"c":1},"#,
                 r#"{"r":"treeitem","n":"src","b":[0,0,0,0],"f":0,"s":1,"e":0},"#,
-                r#"{"r":"","n":"","b":[0,0,0,0],"f":0}]}"#,
+                r#"{"r":"","n":"","b":[0,0,0,0],"f":0,"sc":[12,300,0,0]}]}"#,
             )
         );
     }

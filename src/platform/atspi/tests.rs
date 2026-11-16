@@ -743,3 +743,131 @@ fn a_swap_raises_caret_and_selection_events() {
     );
     assert_eq!(got[2].detail1, 6);
 }
+
+/// Window > [Group (a scroll container, scrolled 40 of 300) > [Button "Row 0"
+/// (above the viewport), Button "Row 5" (in view), Button "Row 9" (below)]].
+fn scroll_tree() -> A11yNode {
+    use crate::platform::access::A11yScroll;
+    let row = |name: &str, y: f64| leaf(A11yRole::Button, name, (0.0, y, 100.0, 20.0));
+    A11yNode {
+        children: vec![A11yNode {
+            scroll: Some(A11yScroll {
+                offset: 40.0,
+                max: 300.0,
+                viewport: 100.0,
+                horizontal: false,
+                rtl: false,
+            }),
+            children: vec![row("Row 0", -30.0), row("Row 5", 40.0), row("Row 9", 150.0)],
+            ..leaf(A11yRole::Group, "", (0.0, 0.0, 100.0, 100.0))
+        }],
+        ..leaf(A11yRole::Window, "Scroll", (0.0, 0.0, 100.0, 200.0))
+    }
+}
+
+fn scroller() -> Bridge {
+    let mut b = Bridge::new();
+    b.bus = ":1.7".into();
+    b.win_mut(3).root = Some(Arc::new(scroll_tree()));
+    b
+}
+
+/// The wheel delta of the last action's events.
+fn last_wheel(b: &mut Bridge) -> (f64, f64) {
+    match b.actions.pop().and_then(|(_, e)| e.last().cloned()) {
+        Some(Event::Scroll { delta }) => (delta.dx, delta.dy),
+        other => panic!("no wheel: {other:?}"),
+    }
+}
+
+fn f64_prop(b: &mut Bridge, path: &str, iface: &str, name: &str) -> f64 {
+    let v = prop(b, path, iface, name);
+    // A "d" variant: its signature (length, "d", NUL), padded to 8.
+    f64::from_le_bytes(v[8..16].try_into().unwrap())
+}
+
+#[test]
+fn a_scroll_container_is_a_scroll_pane_with_scroll_actions_and_a_value() {
+    let mut b = scroller();
+    let pane = node_path(3, &[0]);
+    let accessible = "org.a11y.atspi.Accessible";
+    let role = ok(call(&mut b, &pane, accessible, "GetRole", Body::new()), "u");
+    assert_eq!(read_u32(&role, &mut 0).unwrap(), 49, "SCROLL_PANE");
+    let ifaces = ok(
+        call(&mut b, &pane, accessible, "GetInterfaces", Body::new()),
+        "as",
+    );
+    let has = |name: &str| ifaces.windows(name.len()).any(|w| w == name.as_bytes());
+    assert!(has("org.a11y.atspi.Action") && has("org.a11y.atspi.Value"));
+    // The value is the offset, within 0..max.
+    let value = "org.a11y.atspi.Value";
+    assert_eq!(f64_prop(&mut b, &pane, value, "CurrentValue"), 40.0);
+    assert_eq!(f64_prop(&mut b, &pane, value, "MaximumValue"), 300.0);
+    assert_eq!(f64_prop(&mut b, &pane, value, "MinimumValue"), 0.0);
+    // Two actions, a page forward and back, each a wheel at its middle.
+    let n = prop(&mut b, &pane, "org.a11y.atspi.Action", "NActions");
+    assert_eq!(read_u32(&n, &mut 4).unwrap(), 2);
+    for (i, dy) in [(0, 80.0), (1, -40.0)] {
+        let mut body = Body::new();
+        body.i32(i);
+        let r = call(&mut b, &pane, "org.a11y.atspi.Action", "DoAction", body);
+        assert!(boolean(r));
+        assert_eq!(last_wheel(&mut b), (0.0, dy));
+    }
+    // Setting the value scrolls there.
+    let mut body = Body::new();
+    body.str(value)
+        .str("CurrentValue")
+        .variant(&Value::F64(250.0));
+    let props = "org.freedesktop.DBus.Properties";
+    ok(call(&mut b, &pane, props, "Set", body), "");
+    assert_eq!(last_wheel(&mut b), (0.0, 210.0));
+}
+
+#[test]
+fn scroll_to_brings_a_node_into_view() {
+    let mut b = scroller();
+    let scroll_to = |b: &mut Bridge, chain: &[usize]| {
+        let mut body = Body::new();
+        body.u32(6); // ATSPI_SCROLL_ANYWHERE
+        let path = node_path(3, chain);
+        boolean(call(b, &path, "org.a11y.atspi.Component", "ScrollTo", body))
+    };
+    assert!(scroll_to(&mut b, &[0, 0]));
+    assert_eq!(last_wheel(&mut b), (0.0, -30.0));
+    assert!(scroll_to(&mut b, &[0, 1]), "in view: nothing to do");
+    assert!(b.actions.is_empty());
+    assert!(scroll_to(&mut b, &[0, 2]));
+    assert_eq!(last_wheel(&mut b), (0.0, 70.0));
+    // Not in a scroll container.
+    assert!(!scroll_to(&mut b, &[0]));
+}
+
+#[test]
+fn a_toast_appearing_is_announced_and_a_scroll_changes_the_value() {
+    let old = tree();
+    let mut new = tree();
+    new.children.push(leaf(
+        A11yRole::Alert,
+        "Row 2 tapped",
+        (0.0, 0.0, 10.0, 10.0),
+    ));
+    let got = events::diff(1, &old, &new);
+    let announce = got
+        .iter()
+        .find(|s| s.member == "Announcement")
+        .expect("announced");
+    assert_eq!(announce.path, "/org/a11y/atspi/accessible/w1_3");
+    assert_eq!(announce.detail1, 1, "polite");
+    assert_eq!(announce.any, Value::Str("Row 2 tapped".into()));
+    // Still there next time: not announced again.
+    assert!(events::diff(1, &new, &new).is_empty());
+
+    let before = scroll_tree();
+    let mut after = scroll_tree();
+    after.children[0].scroll.as_mut().unwrap().offset = 120.0;
+    let got = events::diff(3, &before, &after);
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].kind, "accessible-value");
+    assert_eq!(got[0].any, Value::F64(120.0));
+}

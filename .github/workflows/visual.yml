@@ -3951,6 +3951,23 @@ jobs:
           DISPLAY=:99 dbus-run-session -- \
             bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output xdotool key Tab
 
+      # Scroll panes, a check box and a toast, through AT-SPI (the walk with
+      # ATSPI_WALK_DEPTH=1, on a fresh touchdemo): the list of rows is a
+      # scroll pane whose "scroll forward" action, Value (set to 0) and
+      # Component.ScrollTo on "Row 20" scroll it (the app logs the offsets,
+      # accessible-value events follow); the strip of chips scrolls too; the
+      # "Remember" check box is checked by its action (state and event); and
+      # a tap on "Row 2" raises a toast, which arrives as an
+      # object:announcement and a polite live-region notification. Passes
+      # locally (at-spi2-core 2.58); not yet seen on the runner, so it
+      # doesn't fail the job.
+      - name: Scroll panes, a check box and a toast's announcement through AT-SPI (X11)
+        continue-on-error: true
+        run: |
+          mkdir -p visual_output/depth
+          DISPLAY=:99 ATSPI_WALK_DEPTH=1 dbus-run-session -- \
+            bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/depth xdotool key Tab
+
       # The accessibility bus itself restarting (at-spi-bus-launcher killed,
       # then started again on demand): the app reconnects and registers
       # again, and a fresh pyatspi client finds it. Not yet seen passing on
@@ -3964,7 +3981,8 @@ jobs:
       # Orca itself, headless: its debug log records every utterance whether
       # or not a synthesizer is heard; it must speak the field after Tab, then
       # the button "Row 0" after another Tab, which Space presses. Required,
-      # after passing in every run since it landed.
+      # after passing in every run since it landed. (Whether it then speaks
+      # the toast "Row 2" raises is only reported.)
       - name: Orca speaks the focused control after Tab (X11)
         run: |
           DISPLAY=:99 dbus-run-session -- bash .github/scripts/orca-linux.sh \

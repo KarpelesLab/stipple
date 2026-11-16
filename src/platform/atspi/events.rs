@@ -96,6 +96,11 @@ pub(super) fn focused(node: &A11yNode) -> Option<Vec<usize>> {
 pub(super) fn diff(win: u64, old: &A11yNode, new: &A11yNode) -> Vec<Signal> {
     let mut out = Vec::new();
     walk(win, old, new, &mut Vec::new(), &mut out);
+    // A toast that appeared is announced (`object:announcement`, polite, with
+    // its message), as GTK does for `gtk_accessible_announce`.
+    for (chain, text) in new.alert_paths_new_since(Some(old)) {
+        out.push(announcement(node_path(win, &chain), text));
+    }
     let (was, is) = (focused(old), focused(new));
     if was != is {
         if let Some(chain) = was {
@@ -111,11 +116,23 @@ pub(super) fn diff(win: u64, old: &A11yNode, new: &A11yNode) -> Vec<Signal> {
 fn walk(win: u64, old: &A11yNode, new: &A11yNode, chain: &mut Vec<usize>, out: &mut Vec<Signal>) {
     let here = node_path(win, chain);
     let path = || here.clone();
-    if old.role != new.role {
+    if super::node_role(old) != super::node_role(new) {
         out.push(
             Signal::new(path(), OBJECT, "PropertyChange")
                 .kind("accessible-role")
-                .any(Value::U32(super::role(new.role))),
+                .any(Value::U32(super::node_role(new))),
+        );
+    }
+    // A scroll container's value is its offset.
+    if let Some(s) = new.scroll
+        && old
+            .scroll
+            .is_none_or(|o| (o.offset - s.offset).abs() > 0.5 || (o.max - s.max).abs() > 0.5)
+    {
+        out.push(
+            Signal::new(path(), OBJECT, "PropertyChange")
+                .kind("accessible-value")
+                .any(Value::F64(s.offset)),
         );
     }
     if old.name != new.name {
@@ -204,6 +221,16 @@ fn caret_events(path: String, old: &A11yNode, new: &A11yNode) -> Vec<Signal> {
         out.push(Signal::new(path, OBJECT, "TextSelectionChanged"));
     }
     out
+}
+
+/// `AtspiLive`: how urgently an announcement is spoken.
+const LIVE_POLITE: i32 = 1;
+
+/// `object:announcement` of `text` from the node at `path`.
+pub(super) fn announcement(path: String, text: String) -> Signal {
+    Signal::new(path, OBJECT, "Announcement")
+        .details(LIVE_POLITE, 0)
+        .any(Value::Str(text))
 }
 
 /// `object:children-changed:{add,remove}` on `parent` for the child at

@@ -143,6 +143,31 @@ impl<'a> Args<'a> {
         read_string(self.buf, &mut self.off).ok()
     }
 
+    /// A variant holding a number (`d`, `i` or `u`), as a `Properties.Set`
+    /// of `Value.CurrentValue` carries it.
+    pub(super) fn variant_f64(&mut self) -> Option<f64> {
+        let len = *self.buf.get(self.off)? as usize;
+        let sig = self.buf.get(self.off + 1..self.off + 1 + len)?.to_vec();
+        self.off += len + 2;
+        match sig.as_slice() {
+            b"d" => {
+                align_to(&mut self.off, 8);
+                let bytes = self.buf.get(self.off..self.off + 8)?;
+                self.off += 8;
+                Some(f64::from_le_bytes(bytes.try_into().ok()?))
+            }
+            b"i" => {
+                align_to(&mut self.off, 4);
+                self.i32().map(f64::from)
+            }
+            b"u" => {
+                align_to(&mut self.off, 4);
+                self.u32().map(f64::from)
+            }
+            _ => None,
+        }
+    }
+
     /// A variant holding an `i` (`Properties.Set` of the application's id).
     pub(super) fn variant_i32(&mut self) -> Option<i32> {
         let len = *self.buf.get(self.off)? as usize;

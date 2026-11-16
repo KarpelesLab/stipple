@@ -202,6 +202,19 @@ pub(super) fn role(role: A11yRole) -> u32 {
     }
 }
 
+/// The AT-SPI role of node `n`: [`role`]'s, except that a plain group which
+/// scrolls is a scroll pane.
+pub(super) fn node_role(n: &A11yNode) -> u32 {
+    if n.role == A11yRole::Group && n.scroll.is_some() {
+        SCROLL_PANE
+    } else {
+        role(n.role)
+    }
+}
+
+/// `ATSPI_ROLE_SCROLL_PANE`.
+pub(super) const SCROLL_PANE: u32 = 49;
+
 /// The roles whose name is their text (the `Text` interface).
 pub(super) fn text_role(role: A11yRole) -> bool {
     use A11yRole::*;

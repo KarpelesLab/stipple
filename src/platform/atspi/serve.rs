@@ -6,13 +6,12 @@
 use super::marshal::{Args, Body, Value};
 use super::text::{self, Which};
 use super::{
-    Bridge, NULL_PATH, ROOT_PATH, Reply, Win, clickable, editable, focusable, node_path,
-    parse_path, role, text_role,
+    Bridge, NULL_PATH, ROOT_PATH, Reply, SCROLL_PANE, Win, clickable, editable, focusable,
+    node_path, node_role, parse_path, text_role,
 };
-use crate::geometry::Point;
+use crate::platform::Event;
 use crate::platform::a11y::Message;
 use crate::platform::access::{A11yNode, A11yRole};
-use crate::platform::{ButtonState, Event, Ime, PointerButton};
 
 const ACCESSIBLE: &str = "org.a11y.atspi.Accessible";
 const APPLICATION: &str = "org.a11y.atspi.Application";
@@ -134,9 +133,78 @@ impl Node<'_> {
             .filter(|v| v.is_finite())
     }
 
+    /// The node's `Value`: a spin button's number, or how far a scroll
+    /// container is scrolled (logical pixels from its start), with its range
+    /// and step.
+    fn value_range(&self) -> Option<ValueRange> {
+        if let Some(s) = self.node.scroll {
+            return Some(ValueRange {
+                current: s.offset,
+                min: 0.0,
+                max: s.max,
+                step: crate::platform::event::SCROLL_LINE_PX,
+                text: format!("{:.0}%", s.fraction() * 100.0),
+            });
+        }
+        let v = self.value()?;
+        Some(ValueRange {
+            current: v,
+            min: f64::MIN,
+            max: f64::MAX,
+            step: 1.0,
+            text: self.node.name.clone(),
+        })
+    }
+
+    /// The node's actions, as `(name, description)`: "click" for the
+    /// controls a click activates, else a page forward and back for a
+    /// scroll container.
+    fn actions(&self) -> &'static [(&'static str, &'static str)] {
+        if clickable(self.role()) {
+            &[("click", "Click")]
+        } else if self.node.scroll.is_some() {
+            &[
+                ("scroll forward", "Scroll forward a page"),
+                ("scroll backward", "Scroll back a page"),
+            ]
+        } else {
+            &[]
+        }
+    }
+
+    /// What action `i` does.
+    fn do_action(&self, i: i32) -> Option<Vec<Event>> {
+        let (name, _) = self.actions().get(usize::try_from(i).ok()?)?;
+        match *name {
+            "click" => Some(self.click()),
+            // At an end there's nothing to do, which still succeeds.
+            "scroll forward" => Some(self.node.scroll_page_events(true).unwrap_or_default()),
+            "scroll backward" => Some(self.node.scroll_page_events(false).unwrap_or_default()),
+            _ => None,
+        }
+    }
+
+    /// Set the node's `Value` to `v`: scroll a scroll container there, or
+    /// type the number into a spin button.
+    fn set_value(&self, v: f64) -> Option<Vec<Event>> {
+        if !v.is_finite() {
+            return None;
+        }
+        if let Some(s) = self.node.scroll {
+            return Some(self.node.scroll_by_events(s.to(v)).unwrap_or_default());
+        }
+        self.value()?;
+        let text = if v.fract() == 0.0 && v.abs() < 1e15 {
+            format!("{}", v as i64)
+        } else {
+            format!("{v}")
+        };
+        Some(self.node.set_text_events(&text))
+    }
+
     fn interfaces(&self) -> Vec<&'static str> {
         let mut out = vec![ACCESSIBLE, COMPONENT];
-        if clickable(self.role()) {
+        if !self.actions().is_empty() {
             out.push(ACTION);
         }
         if text_role(self.role()) {
@@ -145,7 +213,7 @@ impl Node<'_> {
         if editable(self.role()) {
             out.push(EDITABLE_TEXT);
         }
-        if self.value().is_some() {
+        if self.value_range().is_some() {
             out.push(VALUE);
         }
         out
@@ -205,21 +273,7 @@ impl Node<'_> {
 
     /// The pointer events of a click at the node's middle.
     fn click(&self) -> Vec<Event> {
-        let (x, y, w, h) = self.node.bounds;
-        let position = Point::new(x + w / 2.0, y + h / 2.0);
-        vec![
-            Event::PointerMoved { position },
-            Event::PointerButton {
-                button: PointerButton::Left,
-                state: ButtonState::Pressed,
-                position,
-            },
-            Event::PointerButton {
-                button: PointerButton::Left,
-                state: ButtonState::Released,
-                position,
-            },
-        ]
+        self.node.click_events()
     }
 
     /// The caret as a character offset, where the tree says.
@@ -236,43 +290,26 @@ impl Node<'_> {
     }
 
     /// Select the characters `anchor..caret` of an editable field (a plain
-    /// caret when equal): focus it (a click) unless it has the focus, then
-    /// have the field select them. `None` when the tree doesn't carry the
-    /// field's caret (its name isn't its text).
+    /// caret when equal; see [`A11yNode::select_events`]).
     fn select(&self, anchor: i32, caret: i32) -> Option<Vec<Event>> {
-        if !editable(self.role()) || self.node.caret.is_none() {
-            return None;
-        }
         let t = &self.node.name;
-        let mut out = if self.node.focused {
-            Vec::new()
-        } else {
-            self.click()
-        };
-        out.push(Event::Ime(Ime::SetSelection {
-            anchor: text::byte_offset(t, anchor),
-            caret: text::byte_offset(t, caret),
-        }));
-        Some(out)
+        self.node
+            .select_events(text::byte_offset(t, anchor), text::byte_offset(t, caret))
     }
 
-    /// Replace a text field's text: focus it (a click) unless it has the
-    /// focus, then delete all of its text and type the new one.
+    /// Replace a text field's text (see [`A11yNode::set_text_events`]).
     fn set_text(&self, s: &str) -> Vec<Event> {
-        let mut out = if self.node.focused {
-            Vec::new()
-        } else {
-            self.click()
-        };
-        out.push(Event::Ime(Ime::DeleteSurrounding {
-            before: 1 << 30,
-            after: 1 << 30,
-        }));
-        if !s.is_empty() {
-            out.push(Event::Ime(Ime::Commit(s.to_string())));
-        }
-        out
+        self.node.set_text_events(s)
     }
+}
+
+/// A `Value` interface's numbers.
+struct ValueRange {
+    current: f64,
+    min: f64,
+    max: f64,
+    step: f64,
+    text: String,
 }
 
 /// A node's rectangle in window pixels.
@@ -558,16 +595,29 @@ fn node(b: &Bridge, n: &Node, m: &Message) -> (Reply, Option<Vec<Event>>) {
     let mut args = Args::new(&m.body);
     let reply = match (m.interface.as_str(), m.member.as_str()) {
         ("org.freedesktop.DBus.Introspectable", "Introspect") => introspect(&n.interfaces()),
-        (PROPERTIES, "Set") => Reply::Error(UNKNOWN_PROPERTY),
+        (PROPERTIES, "Set") => {
+            let (iface, prop) = (args.str(), args.str());
+            if (iface.as_deref(), prop.as_deref()) != (Some(VALUE), Some("CurrentValue")) {
+                return (Reply::Error(UNKNOWN_PROPERTY), None);
+            }
+            return match args.variant_f64().and_then(|v| n.set_value(v)) {
+                Some(events) => (Reply::Return("", Vec::new()), Some(events)),
+                None => (Reply::Error(INVALID_ARGS), None),
+            };
+        }
         (PROPERTIES, _) => properties(m, PROPERTY_NAMES, |iface, prop| {
             node_property(b, n, iface, prop)
         }),
         (ACCESSIBLE, member) => match member {
             "GetRole" => ret("u", |r| {
-                r.u32(role(n.role()));
+                r.u32(node_role(n.node));
             }),
             "GetRoleName" | "GetLocalizedRoleName" => ret("s", |r| {
-                r.str(role_name(n.role()));
+                r.str(if node_role(n.node) == SCROLL_PANE {
+                    "scroll pane"
+                } else {
+                    role_name(n.role())
+                });
             }),
             "GetChildAtIndex" => {
                 let i = args.i32().unwrap_or(-1);
@@ -616,8 +666,19 @@ fn node(b: &Bridge, n: &Node, m: &Message) -> (Reply, Option<Vec<Event>>) {
                     r.u32(lo).u32(hi);
                 });
             }),
+            // A toast is a polite live region, as a web page's
+            // `role="status"`; its appearing is announced too.
             "GetAttributes" => ret("a{ss}", |r| {
-                r.str_dict(&[("toolkit", "Stipple")]);
+                if n.role() == A11yRole::Alert {
+                    r.str_dict(&[
+                        ("toolkit", "Stipple"),
+                        ("live", "polite"),
+                        ("container-live", "polite"),
+                        ("atomic", "true"),
+                    ]);
+                } else {
+                    r.str_dict(&[("toolkit", "Stipple")]);
+                }
             }),
             "GetApplication" => ret("(so)", |r| {
                 r.obj(bus, ROOT_PATH);
@@ -628,34 +689,51 @@ fn node(b: &Bridge, n: &Node, m: &Message) -> (Reply, Option<Vec<Event>>) {
             _ => Reply::Error(UNKNOWN_METHOD),
         },
         (COMPONENT, member) => return component(bus, n, member, &mut args),
-        (ACTION, member) if clickable(n.role()) => match member {
-            "GetName" | "GetLocalizedName" => ret("s", |r| {
-                r.str("click");
-            }),
-            "GetDescription" => ret("s", |r| {
-                r.str("Click");
-            }),
-            "GetKeyBinding" => ret("s", |r| {
-                r.str("");
-            }),
-            "GetActions" => ret("a(sss)", |r| {
-                r.array(8, |r| {
-                    // One (name, description, key binding).
-                    crate::platform::a11y::align(&mut r.0, 8);
-                    r.str("click").str("Click").str("");
-                });
-            }),
-            "DoAction" => {
-                let ok = args.i32() == Some(0);
-                return (
-                    ret("b", |r| {
-                        r.bool(ok);
-                    }),
-                    ok.then(|| n.click()),
-                );
+        (ACTION, member) if !n.actions().is_empty() => {
+            let actions = n.actions();
+            let at = |args: &mut Args| {
+                args.i32()
+                    .and_then(|i| usize::try_from(i).ok())
+                    .and_then(|i| actions.get(i))
+                    .copied()
+            };
+            match member {
+                "GetName" | "GetLocalizedName" => {
+                    let name = at(&mut args).map_or("", |(name, _)| name);
+                    ret("s", |r| {
+                        r.str(name);
+                    })
+                }
+                "GetDescription" => {
+                    let desc = at(&mut args).map_or("", |(_, desc)| desc);
+                    ret("s", |r| {
+                        r.str(desc);
+                    })
+                }
+                "GetKeyBinding" => ret("s", |r| {
+                    r.str("");
+                }),
+                "GetActions" => ret("a(sss)", |r| {
+                    r.array(8, |r| {
+                        // Each (name, description, key binding).
+                        for (name, desc) in actions {
+                            crate::platform::a11y::align(&mut r.0, 8);
+                            r.str(name).str(desc).str("");
+                        }
+                    });
+                }),
+                "DoAction" => {
+                    let events = args.i32().and_then(|i| n.do_action(i));
+                    return (
+                        ret("b", |r| {
+                            r.bool(events.is_some());
+                        }),
+                        events,
+                    );
+                }
+                _ => Reply::Error(UNKNOWN_METHOD),
             }
-            _ => Reply::Error(UNKNOWN_METHOD),
-        },
+        }
         (TEXT, member) if text_role(n.role()) => return text_call(n, member, &mut args),
         (EDITABLE_TEXT, member) if editable(n.role()) => {
             return editable_call(n, member, &mut args);
@@ -684,26 +762,14 @@ fn node_property(b: &Bridge, n: &Node, iface: &str, prop: &str) -> Option<Value>
             Value::Obj(b.bus.clone(), path)
         }
         (ACCESSIBLE, "ChildCount") => Value::I32(n.node.children.len() as i32),
-        (ACTION, "NActions") if clickable(n.role()) => Value::I32(1),
+        (ACTION, "NActions") if !n.actions().is_empty() => Value::I32(n.actions().len() as i32),
         (TEXT, "CharacterCount") => Value::I32(text::char_count(text?)),
         (TEXT, "CaretOffset") => Value::I32(caret(n)?),
-        (VALUE, "CurrentValue") => Value::F64(n.value()?),
-        (VALUE, "MinimumValue") => {
-            n.value()?;
-            Value::F64(f64::MIN)
-        }
-        (VALUE, "MaximumValue") => {
-            n.value()?;
-            Value::F64(f64::MAX)
-        }
-        (VALUE, "MinimumIncrement") => {
-            n.value()?;
-            Value::F64(1.0)
-        }
-        (VALUE, "Text") => {
-            n.value()?;
-            Value::Str(n.node.name.clone())
-        }
+        (VALUE, "CurrentValue") => Value::F64(n.value_range()?.current),
+        (VALUE, "MinimumValue") => Value::F64(n.value_range()?.min),
+        (VALUE, "MaximumValue") => Value::F64(n.value_range()?.max),
+        (VALUE, "MinimumIncrement") => Value::F64(n.value_range()?.step),
+        (VALUE, "Text") => Value::Str(n.value_range()?.text),
         _ => return None,
     })
 }
@@ -843,7 +909,23 @@ fn component(bus: &str, n: &Node, member: &str, args: &mut Args) -> (Reply, Opti
                 events,
             );
         }
-        "ScrollTo" | "ScrollToPoint" | "SetExtents" | "SetPosition" | "SetSize" => ret("b", |r| {
+        // Scroll the node into view in the scroll container around it
+        // (whatever the type asks for: the least movement that shows it).
+        "ScrollTo" | "ScrollToPoint" => {
+            let inside = n.ancestors.iter().any(|a| a.scroll.is_some());
+            let events = n
+                .win
+                .root
+                .as_deref()
+                .and_then(|root| root.scroll_into_view_events(&n.chain));
+            return (
+                ret("b", |r| {
+                    r.bool(inside);
+                }),
+                events,
+            );
+        }
+        "SetExtents" | "SetPosition" | "SetSize" => ret("b", |r| {
             r.bool(false);
         }),
         _ => Reply::Error(UNKNOWN_METHOD),

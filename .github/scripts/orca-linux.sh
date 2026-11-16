@@ -5,8 +5,11 @@
 # moves the focus into the app's text field and typing echoes into it; Orca
 # must speak the window and the focused entry. Tab again focuses the button
 # "Row 0", which Orca must speak, and Space (TAB_COMMAND with "space" for
-# "Tab") presses it: the app logs the tap. Runs inside a private session bus
-# (dbus-run-session); the display is the caller's.
+# "Tab") presses it: the app logs the tap. Then two more Tabs and Space press
+# "Row 2", whose toast the app announces (object:announcement): whether Orca
+# speaks "Row 2 tapped" is reported, not required (not yet seen in CI). Runs
+# inside a private session bus (dbus-run-session); the display is the
+# caller's.
 #
 # usage: orca-linux.sh APP OUT_DIR TAB_COMMAND TYPE_COMMAND
 set -uo pipefail
@@ -34,6 +37,13 @@ $TAB
 sleep 4
 ${TAB/Tab/space}
 sleep 3
+# On to "Row 2" and press it: its toast is announced.
+$TAB
+sleep 2
+$TAB
+sleep 2
+${TAB/Tab/space}
+sleep 4
 kill "$ORCA_PID" "$APP_PID" 2>/dev/null
 wait 2>/dev/null
 
@@ -65,5 +75,15 @@ else
   echo "FAILED: Space on the focused button didn't press it"
   tail -n 20 "$OUT/orca-app.log"
   status=1
+fi
+# Reported only: the toast's announcement.
+if grep -q "^touchdemo: toast" "$OUT/orca-app.log"; then
+  if grep -q "Row 2 tapped" "$OUT/orca-speech.txt"; then
+    echo "ok: Orca spoke the toast 'Row 2 tapped' (its announcement)"
+  else
+    echo "warning: the app raised its toast, but Orca didn't speak 'Row 2 tapped' (not required)"
+  fi
+else
+  echo "warning: Space on 'Row 2' raised no toast (not required)"
 fi
 exit $status

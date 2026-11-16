@@ -13,6 +13,10 @@
 //!   context menu's item is picked;
 //! - `touchdemo: strip scrolled to N` as the strip's offset changes;
 //! - `touchdemo: pinch <phase> scale S` as two fingers pinch the box;
+//! - on desktops, `touchdemo: remember on` / `off` as the "Remember"
+//!   checkbox beside the box is toggled, and `touchdemo: toast "Row 2
+//!   tapped"` when a tap on "Row 2" raises a toast (for the screen readers'
+//!   checks: UIA's Toggle pattern, the toast's announcement);
 //! - `touchdemo: text "..."` and `touchdemo: preedit ...` as the field's text
 //!   and composition change;
 //! - `touchdemo: keyboard inset N` as the on-screen keyboard comes and goes;
@@ -93,6 +97,9 @@ const FIELD_H: f64 = 44.0;
 const LIST_H: f64 = 400.0;
 const STRIP_H: f64 = 44.0;
 const PINCH_H: f64 = 100.0;
+/// Whether it runs on a desktop (where the screen readers' checks use the
+/// "Remember" checkbox and a toast).
+const DESKTOP: bool = !cfg!(any(target_os = "ios", target_os = "android"));
 
 #[derive(Default)]
 struct State {
@@ -124,6 +131,10 @@ struct State {
     /// The back gesture's steps, and how many times it went back.
     back_gestures: Vec<BackGesture>,
     backs: usize,
+    /// The "Remember" checkbox (desktops).
+    remember: bool,
+    /// The toasts a tap on "Row 2" raises (desktops).
+    toasts: Toasts,
 }
 
 /// The list's scroll offset in the frame last built (`f64` bits).
@@ -231,6 +242,13 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
                 .on_tap(cx, move |s| {
                     s.tapped.push(i);
                     log(&format!("touchdemo: row {i} tapped"));
+                    // A toast the screen readers announce (desktops; the
+                    // mobile self-tests tap rows near the bottom edge).
+                    if DESKTOP && i == 2 {
+                        let message = format!("Row {i} tapped");
+                        log(&format!("touchdemo: toast {message:?}"));
+                        s.toasts.push(message, ToastKind::Info);
+                    }
                 })
                 // A long press (or a right-click) opens it.
                 .context_menu(
@@ -283,6 +301,21 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
             s.pinch_phases.push(ev.phase);
             s.pinch_scale = ev.scale;
         });
+    // On desktops, a checkbox beside the box (UIA's Toggle pattern, the
+    // checked value macOS and AT-SPI report), and the toasts.
+    let pinch = if DESKTOP {
+        toasts(cx, &state.toasts, |s| &mut s.toasts);
+        let remember = checkbox(cx, "Remember", state.remember, |s| {
+            s.remember = !s.remember;
+            log(&format!(
+                "touchdemo: remember {}",
+                if s.remember { "on" } else { "off" }
+            ));
+        });
+        row(vec![pinch.grow(1.0), remember]).gap(8.0)
+    } else {
+        pinch
+    };
     // Everything but the strip keeps off the screen's edges; the strip runs
     // edge to edge, where the back swipe starts.
     let inset = |e: Element| column(vec![e]).padding(Insets::symmetric(PAD, 0.0));

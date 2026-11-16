@@ -3,7 +3,9 @@
 //! virtual view per node of the app's accessibility tree, with its role (as
 //! the class name of the closest Android widget), text, state and screen
 //! bounds, and acts on them: click, focus and select tap the node, scroll
-//! forward and backward scroll it, and set text replaces a field's text.
+//! forward and backward scroll it (any scroll container, plain or a list,
+//! a page at a time, offered only where it can go), and set text replaces a
+//! field's text. A scroll container that scrolled sends `TYPE_VIEW_SCROLLED`.
 //! Hover events from touch exploration (TalkBack's explore by touch) reach
 //! the host view, which says which node is under the finger.
 //!
@@ -20,7 +22,7 @@ use super::classes;
 use super::jni::{self, Env, JObject, JValue, Jni};
 use super::{ARect, Command, post_command};
 use crate::geometry::Point;
-use crate::platform::access::{A11yNode, A11yRole};
+use crate::platform::access::{A11yNode, A11yRole, A11yScroll};
 use crate::platform::event::{ButtonState, Event, KeyCode, Modifiers, PointerButton, ScrollDelta};
 
 /// `AccessibilityNodeProvider.HOST_VIEW_ID`.
@@ -42,6 +44,7 @@ const TYPE_VIEW_CLICKED: i32 = 0x1;
 const TYPE_VIEW_FOCUSED: i32 = 0x8;
 const TYPE_VIEW_HOVER_ENTER: i32 = 0x80;
 const TYPE_VIEW_HOVER_EXIT: i32 = 0x100;
+const TYPE_VIEW_SCROLLED: i32 = 0x1000;
 const TYPE_WINDOW_CONTENT_CHANGED: i32 = 0x800;
 const TYPE_VIEW_ACCESSIBILITY_FOCUSED: i32 = 0x8000;
 const TYPE_VIEW_ACCESSIBILITY_FOCUS_CLEARED: i32 = 0x1_0000;
@@ -75,6 +78,8 @@ struct Node {
     hint: String,
     /// Whether any of it is on screen (inside the content).
     visible: bool,
+    /// For a scroll container, where it is scrolled.
+    scroll: Option<A11yScroll>,
 }
 
 /// The tree the provider serves. `nodes[0]` is the root (the host view).
@@ -105,6 +110,8 @@ pub(super) struct Changes {
     pub(super) focused: Option<i32>,
     /// This alert (a toast) appeared (the last one, if several did).
     pub(super) alert: Option<i32>,
+    /// This scroll container scrolled (the first one, if several did).
+    pub(super) scrolled: Option<i32>,
 }
 
 impl Changes {
@@ -112,6 +119,7 @@ impl Changes {
         self.content |= other.content;
         self.focused = other.focused.or(self.focused);
         self.alert = other.alert.or(self.alert);
+        self.scrolled = other.scrolled.or(self.scrolled);
     }
 }
 
@@ -172,6 +180,7 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
             checked: n.checked,
             hint: n.hint().unwrap_or_default().to_string(),
             visible,
+            scroll: n.scroll,
         });
         let children: Vec<i32> = n
             .children
@@ -197,6 +206,7 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
     let was = focus_of(&t.nodes);
     let now = focus_of(&nodes);
     let alert = new_alert(&t.nodes, &nodes);
+    let scrolled = scrolled(&t.nodes, &nodes);
     t.nodes = nodes;
     if t.a11y_focus as usize >= t.nodes.len() {
         t.a11y_focus = HOST_VIEW_ID;
@@ -205,7 +215,20 @@ pub(super) fn update(root: &A11yNode, content: ARect, scale: f64) -> Changes {
         content: true,
         focused: now.filter(|_| now != was),
         alert,
+        scrolled,
     }
+}
+
+/// The first scroll container in `new` whose offset moved since `old` (the
+/// same node: the same place in tree order, still scrolling).
+fn scrolled(old: &[Node], new: &[Node]) -> Option<i32> {
+    new.iter()
+        .zip(old)
+        .position(|(n, o)| match (n.scroll, o.scroll) {
+            (Some(a), Some(b)) => n.role == o.role && (a.offset - b.offset).abs() > 0.5,
+            _ => false,
+        })
+        .map(|i| i as i32)
 }
 
 /// Announce `changes` to accessibility services. On the main thread.
@@ -226,6 +249,9 @@ pub(super) fn announce(jni: &Jni, changes: Changes) {
     }
     if let Some(id) = changes.focused {
         send_event(jni, id, TYPE_VIEW_FOCUSED);
+    }
+    if let Some(id) = changes.scrolled.filter(|&id| id > 0) {
+        send_event(jni, id, TYPE_VIEW_SCROLLED);
     }
     // (Still an alert: the tree may have changed again since.)
     if let Some(id) = changes.alert.filter(|&id| {
@@ -285,8 +311,36 @@ fn editable(role: A11yRole) -> bool {
     )
 }
 
-fn scrollable(role: A11yRole) -> bool {
-    matches!(role, A11yRole::List | A11yRole::Tree | A11yRole::Table)
+/// Whether node `n` scrolls: a scroll container (a plain one, or a list,
+/// tree or table around one) whose content overflows; a list, tree or table
+/// that says nothing of its scrolling is taken to.
+fn scrollable(n: &Node) -> bool {
+    match n.scroll {
+        Some(s) => s.scrolls(),
+        None => matches!(n.role, A11yRole::List | A11yRole::Tree | A11yRole::Table),
+    }
+}
+
+/// Which ways node `n` can scroll: `(back, forward)`.
+fn scroll_ways(n: &Node) -> (bool, bool) {
+    match n.scroll {
+        Some(s) => (s.offset > 0.5, s.offset < s.max - 0.5),
+        None => (true, true),
+    }
+}
+
+/// The wheel `(dx, dy)` that scrolls node `n` a page forward or back.
+fn scroll_wheel(n: &Node, forward: bool) -> (f64, f64) {
+    match n.scroll {
+        Some(s) => {
+            let page = if forward { s.page() } else { -s.page() };
+            s.wheel(s.to(s.offset + page))
+        }
+        None => {
+            let step = n.height * 0.8;
+            (0.0, if forward { step } else { -step })
+        }
+    }
 }
 
 /// Where the window is on screen, in pixels (the decor view's position).
@@ -466,7 +520,7 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
     {
         let _ = jni.call_void(info, c"setHintText", seq, &[JValue { l: hint }]);
     }
-    if scrollable(role) {
+    if scrollable(&node) {
         set_bool(jni, info, c"setScrollable", true);
     }
     let mut actions = vec![if a11y_focused {
@@ -483,8 +537,14 @@ fn node_info(jni: &Jni, id: i32) -> Option<JObject> {
     ) {
         actions.push(ACTION_SELECT);
     }
-    if scrollable(role) {
-        actions.extend([ACTION_SCROLL_FORWARD, ACTION_SCROLL_BACKWARD]);
+    if scrollable(&node) {
+        let (back, forward) = scroll_ways(&node);
+        if forward {
+            actions.push(ACTION_SCROLL_FORWARD);
+        }
+        if back {
+            actions.push(ACTION_SCROLL_BACKWARD);
+        }
     }
     if editable(role) {
         actions.push(ACTION_SET_TEXT);
@@ -608,18 +668,18 @@ fn act(jni: &Jni, id: i32, action: i32, args: JObject) -> bool {
             }
             true
         }
-        ACTION_SCROLL_FORWARD | ACTION_SCROLL_BACKWARD => {
-            let step = node.height * 0.8;
-            let dy = if action == ACTION_SCROLL_FORWARD {
-                step
-            } else {
-                -step
-            };
+        ACTION_SCROLL_FORWARD | ACTION_SCROLL_BACKWARD if scrollable(&node) => {
+            let forward = action == ACTION_SCROLL_FORWARD;
+            let (back, ahead) = scroll_ways(&node);
+            if !(if forward { ahead } else { back }) {
+                return false;
+            }
+            let (dx, dy) = scroll_wheel(&node, forward);
             post_command(Command::Deliver(Event::PointerMoved {
                 position: node.center,
             }));
             post_command(Command::Deliver(Event::Scroll {
-                delta: ScrollDelta::pixels(0.0, dy),
+                delta: ScrollDelta::pixels(dx, dy),
             }));
             true
         }

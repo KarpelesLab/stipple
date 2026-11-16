@@ -25,8 +25,30 @@
 //! [`a11y_id`](crate::core::Element::a11y_id). A text field's node carries
 //! its caret and selection.
 
-use crate::core::runtime::{FocusId, LayoutNode, NodeContent, first_text};
+use std::collections::HashMap;
+
+use crate::core::runtime::{FocusId, LayoutNode, NodeContent, ScrollId, first_text};
 use crate::geometry::Rect;
+
+/// Where a scroll container is scrolled, as assistive technologies read it
+/// (UIA's Scroll pattern, `AXScrollArea`, Android's scrollable nodes): its
+/// offset and range along the axis it scrolls on, in logical pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct AccessScroll {
+    /// How far it is scrolled from its start (the top, or the leading edge
+    /// sideways), `0..=max`.
+    pub offset: f64,
+    /// The largest offset: the content's length less the viewport's (0 when
+    /// it all fits).
+    pub max: f64,
+    /// The viewport's length along the axis (what a page scrolls).
+    pub viewport: f64,
+    /// Whether it scrolls sideways rather than up and down.
+    pub horizontal: bool,
+    /// A sideways strip laid out right to left (its start is on the right).
+    pub rtl: bool,
+}
 
 /// The semantic kind of an [`AccessNode`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -200,6 +222,9 @@ pub struct AccessNode {
     /// ([`Element::placeholder`](crate::core::Element::placeholder)), which
     /// screen readers read while it's empty.
     pub placeholder: Option<String>,
+    /// For a scroll container (an [`Element::scrollable`](crate::core::Element::scrollable)
+    /// group, or the list, tree or table around one), where it is scrolled.
+    pub scroll: Option<AccessScroll>,
     pub children: Vec<AccessNode>,
 }
 
@@ -244,7 +269,49 @@ fn role_of(node: &LayoutNode) -> Role {
     }
 }
 
-fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNode {
+/// Scroll container `node`'s [`AccessScroll`], at the offsets the app keeps.
+fn scroll_of(node: &LayoutNode, offsets: &HashMap<ScrollId, f64>) -> Option<AccessScroll> {
+    let id = node.scroll?;
+    let offset = offsets.get(&id).copied().unwrap_or(0.0).max(0.0);
+    let max = crate::core::scroll_range(node, offset).max(0.0);
+    let b = node.bounds;
+    Some(AccessScroll {
+        offset: offset.min(max),
+        max,
+        viewport: if node.scroll_horizontal {
+            b.width()
+        } else {
+            b.height()
+        },
+        horizontal: node.scroll_horizontal,
+        rtl: node.scroll_horizontal && node.rtl,
+    })
+}
+
+/// A list, tree or table scrolls through the scroll container inside it (its
+/// body): the first unnamed group with a scroll under `node`, reached through
+/// unnamed groups only, gives its scroll to `node` (and is left a plain
+/// group, so the one container isn't reported twice).
+fn hoist_scroll(node: &mut AccessNode) {
+    fn take(children: &mut [AccessNode]) -> Option<AccessScroll> {
+        children
+            .iter_mut()
+            .filter(|c| c.role == Role::Group && c.name.is_empty())
+            .find_map(|c| c.scroll.take().or_else(|| take(&mut c.children)))
+    }
+    if node.scroll.is_none() && matches!(node.role, Role::List | Role::Tree | Role::Table) {
+        node.scroll = take(&mut node.children);
+    }
+}
+
+/// What [`build`] carries down the tree.
+struct Ctx<'a> {
+    focused: Option<FocusId>,
+    offsets: &'a HashMap<ScrollId, f64>,
+}
+
+fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
+    let focused = cx.focused;
     let role = if is_root { Role::Window } else { role_of(node) };
     // Interactive/text roles take their name from their text and absorb their
     // descendants; containers recurse and expose their meaningful children.
@@ -256,7 +323,7 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
             node.children
                 .iter()
                 .filter(|c| !c.ghost)
-                .map(|c| build(c, focused, false))
+                .map(|c| build(c, cx, false))
                 .filter(|a| !a.is_prunable())
                 .collect(),
         )
@@ -277,7 +344,7 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         (name, Vec::new())
     };
     let sem = node.semantics.as_ref();
-    AccessNode {
+    let mut out = AccessNode {
         role,
         name,
         bounds: node.bounds,
@@ -290,8 +357,11 @@ fn build(node: &LayoutNode, focused: Option<FocusId>, is_root: bool) -> AccessNo
         id: sem.and_then(|s| s.id.clone()),
         labelled_by: sem.and_then(|s| s.labelled_by.clone()),
         placeholder: sem.and_then(|s| s.placeholder.clone()),
+        scroll: scroll_of(node, cx.offsets),
         children,
-    }
+    };
+    hoist_scroll(&mut out);
+    out
 }
 
 /// Whether the field `node` shows its placeholder in place of a value.
@@ -374,9 +444,20 @@ impl AccessNode {
 }
 
 /// Build the accessibility tree for a laid-out UI, marking the node that holds
-/// `focused` (if any). The root is reported as a [`Role::Window`].
+/// `focused` (if any). The root is reported as a [`Role::Window`]. Scroll
+/// containers read as scrolled to their start here (the offsets live in the
+/// app: [`App::accessibility_tree`](crate::App::accessibility_tree) has them).
 pub fn accessibility_tree(root: &LayoutNode, focused: Option<FocusId>) -> AccessNode {
-    build(root, focused, true)
+    accessibility_tree_at(root, focused, &HashMap::new())
+}
+
+/// [`accessibility_tree`] with the scroll containers at `offsets`.
+pub(crate) fn accessibility_tree_at(
+    root: &LayoutNode,
+    focused: Option<FocusId>,
+    offsets: &HashMap<ScrollId, f64>,
+) -> AccessNode {
+    build(root, &Ctx { focused, offsets }, true)
 }
 
 #[cfg(test)]
@@ -454,6 +535,60 @@ mod tests {
             .find(|n| n.role == Role::TextField)
             .unwrap();
         assert_eq!(field.name, "");
+    }
+
+    #[test]
+    fn scroll_containers_say_where_they_are_scrolled() {
+        let theme = Theme::light();
+        let mut cx = Cx::<()>::new(&theme);
+        let rows = |cx: &mut Cx<()>| {
+            (0..10)
+                .map(|i| {
+                    Element::text(format!("Row {i}"), 14.0, Color::BLACK)
+                        .height(20.0)
+                        .on_tap(cx, |_: &mut ()| {})
+                })
+                .collect::<Vec<_>>()
+        };
+        let plain = cx.register_scroll();
+        let in_list = cx.register_scroll();
+        let scroller = Element::stack(Axis::Vertical, rows(&mut cx))
+            .height(100.0)
+            .scrollable(plain);
+        let list = Element::stack(
+            Axis::Vertical,
+            vec![
+                Element::stack(Axis::Vertical, rows(&mut cx))
+                    .height(50.0)
+                    .scrollable(in_list),
+            ],
+        )
+        .role(Role::List);
+        let root = Element::stack(Axis::Vertical, vec![scroller, list]);
+        let mut laid = layout(&root, Rect::from_xywh(0.0, 0.0, 200.0, 400.0), None);
+        let mut offsets = HashMap::from([(plain, 30.0), (in_list, 500.0)]);
+        crate::core::apply_scroll(&mut laid, &mut offsets);
+        let a = accessibility_tree_at(&laid, None, &offsets);
+        let group = &a.children[0];
+        assert_eq!(group.role, Role::Group);
+        let s = group.scroll.expect("a plain scroll container scrolls");
+        assert_eq!((s.offset, s.max, s.viewport), (30.0, 100.0, 100.0));
+        assert!(!s.horizontal);
+        // The list takes its body's scroll (clamped to its end), and the
+        // body's group doesn't report it again.
+        let list = &a.children[1];
+        assert_eq!(list.role, Role::List);
+        let s = list.scroll.expect("the list scrolls");
+        assert_eq!((s.offset, s.max), (150.0, 150.0));
+        assert!(
+            list.descendants()
+                .iter()
+                .skip(1)
+                .all(|n| n.scroll.is_none())
+        );
+        // Without the app's offsets, it reads as at its start.
+        let fresh = accessibility_tree(&laid, None);
+        assert_eq!(fresh.children[0].scroll.map(|s| s.offset), Some(0.0));
     }
 
     #[test]
