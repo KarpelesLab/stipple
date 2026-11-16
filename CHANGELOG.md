@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.8](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.7...stipple-v0.0.8) - 2026-11-16
+
+### Added
+
+- *(gpu)* a glyph atlas and batched draws in every executor ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- *(gpu)* redraw only what changed, and present only that where the platform can ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+
+### Fixed
+
+- *(gpu)* dashes in user space under a scale, as the software renderer draws them; the site check retries a failed example once
+- *(android)* a scheduled notification's tap is heard with other notifications up
+
+### Other
+
+- a lost Tab between the field and Row 0 is sent once more (as the first Tab is); the site check saves what a failed example drew
+- update screenshots from CI
+- update the baselines from run 43795871802
+- minimum Rust 1.95, for the current (much faster) oxideav releases
+- update screenshots from CI
+- *(gpu)* canvases kept as textures, uploaded only where invalidated; benchmark scenarios and GPU targets ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- update screenshots from CI
+- *(android)* grant the notification permission before the scheduled checks in quick mode; find a notification's title anywhere in dumpsys (Android groups several under a summary)
+- update screenshots from CI
+
 ### Added
 
 - *(gpu)* windows on the GPU redraw only what changed, over the frame kept from before, and present only that where the platform can (`VK_KHR_incremental_present`, DXGI `Present1` dirty rectangles, `eglSwapBuffersWithDamage`) ([#54](https://github.com/KarpelesLab/stipple/issues/54))
