@@ -88,6 +88,11 @@
         return c;
       };
 
+      // External sources the module draws (ExternalImage::web_source), by id.
+      const sources = new Map();
+      let nextSource = 1;
+      const readCanvas = document.createElement("canvas");
+
       for (const api of apis) {
         const code = { webgpu: 1, webgl2: 2 }[api];
         const canvas = document.createElement("canvas");
@@ -102,12 +107,25 @@
           current: () => canvas,
           redraw: () => {},
           log: (m) => say(`${api}: ${m}`),
+          source: (id) => sources.get(id),
         });
         const own = {
           ...host.imports,
           now: () => performance.now(),
           date_now: () => Date.now(),
           log: (level, ptr, len) => say(`${api}: ${text(ptr, len)}`, level !== 0),
+          // The CPU renderer reads an external source (as stipple.js does).
+          external_read: (id, ptr, w, h) => {
+            const src = sources.get(id);
+            if (!src) return 0;
+            readCanvas.width = w;
+            readCanvas.height = h;
+            const c = readCanvas.getContext("2d", { willReadFrequently: true });
+            c.clearRect(0, 0, w, h);
+            c.drawImage(src, 0, 0, w, h);
+            new Uint8Array(e.memory.buffer, ptr, w * h * 4).set(c.getImageData(0, 0, w, h).data);
+            return 1;
+          },
         };
         // Whatever else the module imports from "stipple" does nothing here.
         const imports = { stipple: new Proxy(own, { get: (t, k) => t[k] ?? (() => 0) }) };
@@ -181,6 +199,57 @@
           label.textContent = `${api} ${name}`;
           row.append(label, picture(gpu, w, h), picture(cpu, w, h));
           rows.append(row);
+        }
+        // External sources (ExternalImage::web_source), sampled straight
+        // from the page's object: a canvas (WebGPU copies it on the GPU,
+        // WebGL2 hands it to texImage2D) and a VideoFrame of it (a
+        // texture_external on WebGPU), against the CPU reading them back.
+        {
+          const [sw, sh] = [64, 48];
+          const src = document.createElement("canvas");
+          src.width = sw;
+          src.height = sh;
+          const g = src.getContext("2d");
+          const grad = g.createLinearGradient(0, 0, sw, 0);
+          grad.addColorStop(0, "#102030");
+          grad.addColorStop(1, "#e0c040");
+          g.fillStyle = grad;
+          g.fillRect(0, 0, sw, sh);
+          g.fillStyle = "#d02020";
+          g.fillRect(4, 4, 20, 16);
+          g.fillStyle = "#20a040";
+          g.fillRect(36, 24, 24, 20);
+          const kinds = [["canvas", src]];
+          if (typeof VideoFrame !== "undefined") kinds.push(["VideoFrame", new VideoFrame(src, { timestamp: 0 })]);
+          for (const [kind, obj] of kinds) {
+            const id = nextSource++;
+            sources.set(id, obj);
+            const name = `external-${kind}`;
+            const ptr = e.cmp_external_cpu(id, sw, sh);
+            const w = e.cmp_width(), h = e.cmp_height();
+            const cpu = new Uint8ClampedArray(e.memory.buffer, ptr, w * h * 4).slice();
+            if (!e.cmp_external_gpu(id, sw, sh, code)) {
+              fail(`${api} ${name}: ${answer()}`);
+              continue;
+            }
+            const how = answer();
+            snap.width = w;
+            snap.height = h;
+            sctx.drawImage(canvas, 0, 0);
+            const gpu = sctx.getImageData(0, 0, w, h).data;
+            const d = diff(gpu, cpu);
+            // Drawn, not left out by both: the source's colors are there.
+            const colors = new Set();
+            for (let i = 0; i < gpu.length; i += 4) colors.add((gpu[i] << 16) | (gpu[i + 1] << 8) | gpu[i + 2]);
+            const line = `${api} ${name}: mean ${d.mean.toFixed(3)} (< 1.5), bad ${(d.bad * 100).toFixed(3)}% (< 2.0%), ${colors.size} colors, ${how}`;
+            if (d.mean < 1.5 && d.bad < 0.02 && colors.size > 8) say(`ok   ${line}`); else fail(line);
+            const row = document.createElement("div");
+            row.className = "row";
+            const label = document.createElement("span");
+            label.textContent = `${api} ${name}`;
+            row.append(label, picture(gpu, w, h), picture(cpu, w, h));
+            rows.append(row);
+          }
         }
         say(`SUMMARY ${api}: ${count} cases, worst mean ${worst.toFixed(3)}`);
 

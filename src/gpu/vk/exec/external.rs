@@ -4,10 +4,14 @@
 //! modifier and the plane's offset and pitch), and sampled. No pixel is
 //! copied.
 //!
-//! Single-plane formats are imported; NV12, and any buffer the device
-//! refuses, is drawn from its pixels read on the CPU (uploaded as an image).
-//! Imports are cached by the image's identity; the images the last frame
-//! drew are held until the next one is recorded (one frame is in flight).
+//! Single-plane formats are imported as one image; NV12 as two, its luma
+//! plane `R8` and its chroma plane `R8G8` (each laid out at its own offset
+//! and pitch in the buffer), sampled by `quad_yuv.frag`, which converts
+//! with the image's color space (the matrix in the push constants), as
+//! GLES and Metal do. A buffer the device refuses is drawn from its pixels
+//! read on the CPU (uploaded as an image). Imports are cached by the
+//! image's identity; the images the last frame drew are held until the
+//! next one is recorded (one frame is in flight).
 
 // Off Linux and Android (MoltenVK) there are no `dma-buf`s to import.
 #![cfg_attr(
@@ -17,6 +21,7 @@
 
 use super::*;
 use crate::platform::external::{DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, Handle as Ext};
+use crate::render::external::YuvColorSpace;
 use crate::render::{ExternalFormat, ExternalImage};
 
 /// The instance extensions the device ones below need on a 1.0 instance.
@@ -113,11 +118,15 @@ unsafe extern "C" {
 }
 const F_DUPFD_CLOEXEC: i32 = 1030;
 
+/// One plane imported: its image, memory and view.
+type Plane = (VkImage, VkDeviceMemory, VkImageView);
+
 /// One external image's import.
 pub(super) struct Import {
     image: Weak<ExternalImage>,
-    /// The image, its memory and view; `None` if it couldn't be imported.
-    made: Option<(VkImage, VkDeviceMemory, VkImageView)>,
+    /// Each plane's image, memory and view; empty if it couldn't be
+    /// imported.
+    made: Vec<Plane>,
     used: u64,
 }
 
@@ -125,10 +134,20 @@ pub(super) struct Import {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ExtView {
     Imported(VkImageView),
+    /// NV12's luma and chroma, and how to convert them.
+    Yuv(VkImageView, VkImageView, YuvColorSpace),
     /// Its pixels, uploaded as [`Recording::images`]`[i]`.
     Image(usize),
     /// Nothing (it can't be imported or read).
     Nothing,
+}
+
+/// A texture's descriptor set, and for an NV12 image the color space its
+/// quads are converted with (by [`Pipe::QuadsYuv`]).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Set {
+    pub set: VkDescriptorSet,
+    pub yuv: Option<YuvColorSpace>,
 }
 
 /// The executor's imports.
@@ -151,6 +170,7 @@ impl Imports {
                 ExternalFormat::Bgra8,
                 ExternalFormat::Rgbx8,
                 ExternalFormat::Bgrx8,
+                ExternalFormat::Nv12,
             ]
         } else {
             &[]
@@ -194,7 +214,7 @@ impl VkExecutor {
                 }
                 if !self.externals.map.contains_key(&key) {
                     let made = self.import(&image);
-                    if let Some((img, _, _)) = made {
+                    for &(img, _, _) in &made {
                         barriers.push(VkImageMemoryBarrier {
                             sType: ST_IMAGE_MEMORY_BARRIER,
                             pNext: std::ptr::null(),
@@ -220,9 +240,12 @@ impl VkExecutor {
                 let i = self.externals.map.get_mut(&key).unwrap();
                 i.used = count;
                 self.externals.held.push(image.clone());
-                views.push(match i.made {
-                    Some((_, _, view)) => ExtView::Imported(view),
-                    None => match image.pixmap() {
+                views.push(match i.made[..] {
+                    [(_, _, view)] => ExtView::Imported(view),
+                    [(_, _, luma), (_, _, chroma)] => {
+                        ExtView::Yuv(luma, chroma, image.yuv_color_space())
+                    }
+                    _ => match image.pixmap() {
                         Some(p)
                             if p.size().width as i32 <= self.max_size
                                 && p.size().height as i32 <= self.max_size =>
@@ -241,41 +264,75 @@ impl VkExecutor {
         }
     }
 
-    /// Import `image`'s `dma-buf` as a sampled image, or `None`.
+    /// Import `image`'s `dma-buf` as sampled images, one per plane, or
+    /// nothing.
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    unsafe fn import(
-        &mut self,
-        _: &ExternalImage,
-    ) -> Option<(VkImage, VkDeviceMemory, VkImageView)> {
-        None
+    unsafe fn import(&mut self, _: &ExternalImage) -> Vec<Plane> {
+        Vec::new()
     }
 
-    /// Import `image`'s `dma-buf` as a sampled image, or `None`.
+    /// Import `image`'s `dma-buf` as sampled images, one per plane (NV12's
+    /// luma as `R8`, its chroma as `R8G8`), or nothing.
     #[cfg(any(target_os = "linux", target_os = "android"))]
-    unsafe fn import(
-        &mut self,
-        image: &ExternalImage,
-    ) -> Option<(VkImage, VkDeviceMemory, VkImageView)> {
-        let get_props = self.externals.get_fd_properties?;
+    unsafe fn import(&mut self, image: &ExternalImage) -> Vec<Plane> {
         let Ext::DmaBuf(_) = image.handle() else {
-            return None;
+            return Vec::new();
         };
-        let (format, opaque) = match image.format() {
-            ExternalFormat::Rgba8 => (FORMAT_R8G8B8A8_UNORM, false),
-            ExternalFormat::Rgbx8 => (FORMAT_R8G8B8A8_UNORM, true),
-            ExternalFormat::Bgra8 => (FORMAT_B8G8R8A8_UNORM, false),
-            ExternalFormat::Bgrx8 => (FORMAT_B8G8R8A8_UNORM, true),
-            ExternalFormat::Nv12 => return None,
+        // (format, alpha forced to one) per plane.
+        let formats: &[(u32, bool)] = match image.format() {
+            ExternalFormat::Rgba8 => &[(FORMAT_R8G8B8A8_UNORM, false)],
+            ExternalFormat::Rgbx8 => &[(FORMAT_R8G8B8A8_UNORM, true)],
+            ExternalFormat::Bgra8 => &[(FORMAT_B8G8R8A8_UNORM, false)],
+            ExternalFormat::Bgrx8 => &[(FORMAT_B8G8R8A8_UNORM, true)],
+            ExternalFormat::Nv12 => &[(FORMAT_R8_UNORM, false), (FORMAT_R8G8_UNORM, false)],
+            _ => return Vec::new(),
         };
-        let [(fd, offset, stride)] = image.dma_buf_planes()?[..] else {
-            return None;
+        let Some(planes) = image.dma_buf_planes() else {
+            return Vec::new();
         };
+        if planes.len() != formats.len() {
+            return Vec::new();
+        }
         image.wait_acquire();
-        let size = image.size();
         let modifier = match image.modifier() {
             DRM_FORMAT_MOD_INVALID => DRM_FORMAT_MOD_LINEAR,
             m => m,
         };
+        let mut made = Vec::with_capacity(planes.len());
+        for (i, (&(format, opaque), &(fd, offset, stride))) in
+            formats.iter().zip(&planes).enumerate()
+        {
+            let (w, h, _) = image.format().plane_extent(i, image.size());
+            match unsafe { self.import_plane(fd, offset, stride, modifier, format, opaque, w, h) } {
+                Some(p) => made.push(p),
+                None => {
+                    for p in made.drain(..) {
+                        unsafe { self.free_plane(p) };
+                    }
+                    break;
+                }
+            }
+        }
+        made
+    }
+
+    /// Import the `w`×`h` plane of `format` at `offset` (rows `stride`
+    /// bytes apart, laid out by `modifier`) in the `dma-buf` `fd` as a
+    /// sampled image, its alpha forced to one if `opaque`.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn import_plane(
+        &mut self,
+        fd: i32,
+        offset: u64,
+        stride: u32,
+        modifier: u64,
+        format: u32,
+        opaque: bool,
+        w: u32,
+        h: u32,
+    ) -> Option<Plane> {
+        let get_props = self.externals.get_fd_properties?;
         unsafe {
             let d = self.device;
             let plane = SubresourceLayout {
@@ -304,8 +361,8 @@ impl VkExecutor {
                 imageType: IMAGE_TYPE_2D,
                 format,
                 extent: VkExtent3D {
-                    width: size.width,
-                    height: size.height,
+                    width: w,
+                    height: h,
                     depth: 1,
                 },
                 mipLevels: 1,
@@ -406,13 +463,17 @@ impl VkExecutor {
     }
 
     unsafe fn free_import(&mut self, i: Import) {
-        if let Some((img, mem, view)) = i.made {
-            unsafe {
-                let d = self.device;
-                (self.vk.vkDestroyImageView)(d, view, std::ptr::null());
-                (self.vk.vkDestroyImage)(d, img, std::ptr::null());
-                (self.vk.vkFreeMemory)(d, mem, std::ptr::null());
-            }
+        for p in i.made {
+            unsafe { self.free_plane(p) };
+        }
+    }
+
+    unsafe fn free_plane(&mut self, (img, mem, view): Plane) {
+        unsafe {
+            let d = self.device;
+            (self.vk.vkDestroyImageView)(d, view, std::ptr::null());
+            (self.vk.vkDestroyImage)(d, img, std::ptr::null());
+            (self.vk.vkFreeMemory)(d, mem, std::ptr::null());
         }
     }
 

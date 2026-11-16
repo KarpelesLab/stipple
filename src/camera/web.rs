@@ -79,6 +79,9 @@ impl Drop for WebSession {
         if let Some(map) = OPEN.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
             map.remove(&self.id);
         }
+        if let Some(map) = SOURCES.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            map.remove(&self.id);
+        }
     }
 }
 
@@ -155,6 +158,42 @@ pub(crate) fn failed(id: u32, code: u32) {
     }));
 }
 
+/// A frame of camera `id` as its `<video>`, the page's external source
+/// `source`: taken as that (the preview draws the video, the GPU renderer
+/// straight from it) when nothing needs its pixels; `false` asks the page
+/// for them ([`frame`]).
+pub(crate) fn video(id: u32, source: u32, width: u32, height: u32, _ms: f64) -> bool {
+    let Some(sink) = sink(id) else {
+        return false;
+    };
+    SOURCES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashMap::new)
+        .insert(id, source);
+    let size = PhysicalSize::new(width, height);
+    sink.deliver_external(
+        size,
+        0,
+        is_front(id),
+        crate::render::ExternalFormat::Rgbx8,
+        || crate::render::ExternalImage::web(source, size, false),
+    )
+}
+
+/// Each camera's `<video>`, as the page's external source id.
+static SOURCES: Mutex<Option<HashMap<u32, u32>>> = Mutex::new(None);
+
+/// Whether camera `id` faces the user (its preview mirrored).
+fn is_front(id: u32) -> bool {
+    FRONT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .and_then(|m| m.get(&id).copied())
+        .unwrap_or(false)
+}
+
 /// A frame of camera `id`: `width`×`height` RGBA pixels.
 pub(crate) fn frame(id: u32, pixels: &[u8], width: u32, height: u32, timestamp_ms: f64) {
     let Some(sink) = sink(id) else {
@@ -164,19 +203,31 @@ pub(crate) fn frame(id: u32, pixels: &[u8], width: u32, height: u32, timestamp_m
     if pixels.len() < row * height as usize {
         return;
     }
-    let front = FRONT
+    let front = is_front(id);
+    let planes = [Plane::new(pixels, row, 4)];
+    let source = SOURCES
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .as_ref()
-        .and_then(|m| m.get(&id).copied())
-        .unwrap_or(false);
-    let planes = [Plane::new(pixels, row, 4)];
-    sink.deliver(&Frame {
-        size: PhysicalSize::new(width, height),
-        format: FrameFormat::Rgba,
-        planes: &planes,
-        timestamp: Duration::from_secs_f64((timestamp_ms / 1000.0).max(0.0)),
-        rotation: 0,
-        mirrored: front,
+        .and_then(|m| m.get(&id).copied());
+    let size = PhysicalSize::new(width, height);
+    // The app reads the pixels; the preview can still draw the video.
+    let mut video = || source.map(|s| crate::render::ExternalImage::web(s, size, false));
+    let external = source.map(|_| {
+        (
+            crate::render::ExternalFormat::Rgbx8,
+            &mut video as &mut dyn FnMut() -> Option<crate::render::ExternalImage>,
+        )
     });
+    sink.deliver_with(
+        &Frame {
+            size,
+            format: FrameFormat::Rgba,
+            planes: &planes,
+            timestamp: Duration::from_secs_f64((timestamp_ms / 1000.0).max(0.0)),
+            rotation: 0,
+            mirrored: front,
+        },
+        external,
+    );
 }

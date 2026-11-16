@@ -279,7 +279,14 @@ impl Program {
     ) -> Result<Self, String> {
         unsafe {
             let vs = compile(GL_VERTEX_SHADER, vs_src)?;
-            let src = format!("{PRECISION}{fs_body}\0");
+            // `#extension` lines go before everything else.
+            let ext_end: usize = fs_body
+                .split_inclusive('\n')
+                .take_while(|l| l.starts_with("#extension"))
+                .map(str::len)
+                .sum();
+            let (ext, body) = fs_body.split_at(ext_end);
+            let src = format!("{ext}{PRECISION}{body}\0");
             let fs = compile(GL_FRAGMENT_SHADER, src.as_bytes())?;
             let id = glCreateProgram();
             glAttachShader(id, vs);
@@ -474,6 +481,10 @@ struct State {
     quads: Program,
     /// Textured quads sampling NV12 (an external image's two planes).
     quads_yuv: Program,
+    /// Textured quads sampling an external texture (`samplerExternalOES`:
+    /// an Android camera's YUV buffer), where the context has one.
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    quads_ext: Option<Program>,
     /// External images imported (`super::external`).
     externals: Imports,
     flat: Program,
@@ -641,8 +652,24 @@ impl State {
                 QUAD_VS,
                 QUAD_ATTRIBS,
                 &format!("{QUAD_BOX}{}", external::QUAD_YUV_MAIN),
-                &["u_tex", "u_tex2"],
+                &["u_tex", "u_tex2", "u_m0", "u_m1", "u_m2"],
             )?;
+            // Only on Android is there anything to sample through it.
+            let quads_ext = if cfg!(target_os = "android") && external::has_oes_external() {
+                Program::with(
+                    QUAD_VS,
+                    QUAD_ATTRIBS,
+                    &format!(
+                        "{}{QUAD_BOX}{}",
+                        external::OES_EXTENSION,
+                        external::QUAD_EXT_MAIN
+                    ),
+                    &["u_tex"],
+                )
+                .ok()
+            } else {
+                None
+            };
             let flat = Program::new(FLAT_FS, &["u_color"])?;
             let resolve = Program::new(RESOLVE_FS, &["u_tex", "u_inv", "u_tap", "u_color"])?;
             let mut vbo = 0;
@@ -670,7 +697,8 @@ impl State {
                 quad_boxes,
                 quads,
                 quads_yuv,
-                externals: Imports::new(dpy),
+                externals: Imports::new(dpy, quads_ext.is_some()),
+                quads_ext,
                 flat,
                 resolve,
                 vbo,
@@ -963,12 +991,14 @@ impl State {
 
     /// [`draw_quads`](Self::draw_quads) sampling NV12: luma from `y`,
     /// chroma from `uv`, converted in the shader.
+    #[allow(clippy::too_many_arguments)]
     unsafe fn draw_quads_yuv(
         &mut self,
         level: &Level,
         verts: &[f32],
         y: GLuint,
         uv: GLuint,
+        color: crate::render::external::YuvColorSpace,
         nearest: bool,
     ) {
         unsafe {
@@ -987,8 +1017,48 @@ impl State {
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
             }
+            let m = color.rows();
+            for (i, name) in ["u_m0", "u_m1", "u_m2"].into_iter().enumerate() {
+                let r = &m[i * 4..i * 4 + 4];
+                glUniform4f(p.loc(name), r[0], r[1], r[2], r[3]);
+            }
             self.vertices(p, verts);
             glDrawArrays(GL_TRIANGLES, 0, (verts.len() / QUAD_FLOATS) as GLsizei);
+            self.draws += 1;
+        }
+    }
+
+    /// [`draw_quads`](Self::draw_quads) sampling the external texture
+    /// `tex` (`GL_TEXTURE_EXTERNAL_OES`, which converts YUV as it samples).
+    #[cfg(target_os = "android")]
+    unsafe fn draw_quads_ext(&mut self, level: &Level, verts: &[f32], tex: GLuint, nearest: bool) {
+        unsafe {
+            let s = level.scissor;
+            if verts.is_empty() || s[2] <= s[0] || s[3] <= s[1] {
+                return;
+            }
+            let t = self.target(level);
+            let Some(p) = &self.quads_ext else {
+                return;
+            };
+            Self::use_program(p, t.w, t.h);
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(external::GL_TEXTURE_EXTERNAL_OES, tex);
+            glUniform1i(p.loc("u_tex"), 0);
+            let filter = if nearest { GL_NEAREST } else { GL_LINEAR };
+            glTexParameteri(
+                external::GL_TEXTURE_EXTERNAL_OES,
+                GL_TEXTURE_MIN_FILTER,
+                filter,
+            );
+            glTexParameteri(
+                external::GL_TEXTURE_EXTERNAL_OES,
+                GL_TEXTURE_MAG_FILTER,
+                filter,
+            );
+            self.vertices(p, verts);
+            glDrawArrays(GL_TRIANGLES, 0, (verts.len() / QUAD_FLOATS) as GLsizei);
+            glBindTexture(external::GL_TEXTURE_EXTERNAL_OES, 0);
             self.draws += 1;
         }
     }
@@ -1359,6 +1429,7 @@ impl State {
                 let op = match cmd {
                     Cmd::Quads(q) => {
                         let mut chroma = None;
+                        let mut oes = false;
                         let tex = match &q.texture {
                             None => None,
                             Some(TexRef::Image(image)) => self.image_texture(image),
@@ -1370,9 +1441,13 @@ impl State {
                             Some(TexRef::External(image)) => {
                                 match self.externals.get(self.dpy, image, self.frame) {
                                     Some(Planes::One(t)) => Some(t),
-                                    Some(Planes::Yuv(y, uv)) => {
-                                        chroma = Some(uv);
+                                    Some(Planes::Yuv(y, uv, color)) => {
+                                        chroma = Some((uv, color));
                                         Some(y)
+                                    }
+                                    Some(Planes::External(t)) => {
+                                        oes = true;
+                                        Some(t)
                                     }
                                     // Its pixels, read on the CPU.
                                     None => image.pixmap().and_then(|p| self.image_texture(&p)),
@@ -1384,10 +1459,17 @@ impl State {
                             &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
                         let level = levels.pop().unwrap();
                         match (tex, chroma) {
-                            (Some(y), Some(uv)) => {
-                                self.draw_quads_yuv(&level, verts, y, uv, q.nearest)
+                            (Some(y), Some((uv, color))) => {
+                                self.draw_quads_yuv(&level, verts, y, uv, color, q.nearest)
                             }
-                            _ => self.draw_quads(&level, verts, tex, q.nearest),
+                            #[cfg(target_os = "android")]
+                            (Some(t), None) if oes => {
+                                self.draw_quads_ext(&level, verts, t, q.nearest)
+                            }
+                            _ => {
+                                let _ = oes;
+                                self.draw_quads(&level, verts, tex, q.nearest)
+                            }
                         }
                         levels.push(level);
                         continue;

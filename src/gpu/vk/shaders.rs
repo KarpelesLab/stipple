@@ -13,6 +13,7 @@ pub(crate) const QUAD_FRAG: &[u8] = include_bytes!("../shaders/quad.frag.spv");
 pub(crate) const QUADBOX_FRAG: &[u8] = include_bytes!("../shaders/quadbox.frag.spv");
 pub(crate) const FLAT_FRAG: &[u8] = include_bytes!("../shaders/flat.frag.spv");
 pub(crate) const RESOLVE_FRAG: &[u8] = include_bytes!("../shaders/resolve.frag.spv");
+pub(crate) const QUAD_YUV_FRAG: &[u8] = include_bytes!("../shaders/quad_yuv.frag.spv");
 
 /// A SPIR-V module as the 32-bit words `vkCreateShaderModule` takes
 /// (`include_bytes!` only promises byte alignment).
@@ -121,6 +122,15 @@ mod tests {
     }
 
     #[test]
+    fn the_yuv_shader_reads_two_planes_and_the_matrix() {
+        let r = reflect(QUAD_YUV_FRAG);
+        assert_eq!(r.push, bytes(&[YUV_MATRIX, YUV_MATRIX + 4, YUV_MATRIX + 8]));
+        let mut b = r.bindings;
+        b.sort();
+        assert_eq!(b, vec![(0, 0), (0, 1)]);
+    }
+
+    #[test]
     fn the_flat_and_resolve_shaders_match_too() {
         assert_eq!(reflect(FLAT_FRAG).push, bytes(&[FLAT_COLOR]));
         let r = reflect(RESOLVE_FRAG);
@@ -130,7 +140,13 @@ mod tests {
 
     #[test]
     fn every_push_constant_fits_the_range() {
-        for spv in [SCENE_VERT, QUAD_VERT, FLAT_FRAG, RESOLVE_FRAG] {
+        for spv in [
+            SCENE_VERT,
+            QUAD_VERT,
+            FLAT_FRAG,
+            RESOLVE_FRAG,
+            QUAD_YUV_FRAG,
+        ] {
             let r = reflect(spv);
             // The last member is at most a vec4 (16 bytes).
             assert!(r.push.iter().all(|&o| o + 4 <= PUSH_BYTES));

@@ -1096,10 +1096,7 @@ impl Walker<'_> {
         let nearest = o.filter == Filter::Nearest;
         let logical = o.content.logical_size();
         let (lw, lh) = (logical.width as f32, logical.height as f32);
-        // The web's executor (`web/gpu.js`) doesn't composite part of a
-        // layer.
-        let resampled = cfg!(not(target_arch = "wasm32"))
-            && upright(local)
+        let resampled = upright(local)
             && local.a > 0.0
             && local.d > 0.0
             && lw > 0.0

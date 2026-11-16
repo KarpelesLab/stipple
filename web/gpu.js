@@ -10,7 +10,13 @@
 // boxes and textured quads (images, glyphs from the atlas) each one draw
 // (src/gpu/batch.rs), paths by stencil-and-cover at 4x4 supersampling in a
 // scratch target, scissor and stencil clips, and
-// layers in offscreen targets composited at their opacity. Everything is
+// layers in offscreen targets composited at their opacity (a resampled layer,
+// a game's low-resolution frame, drawn in its own pixels and scaled into its
+// rect), and external sources (a <video>, a VideoFrame, an ImageBitmap or a
+// canvas the page registered, e.g. the camera's video) sampled straight from
+// the source each frame: WebGPU imports a video or VideoFrame as a
+// texture_external (importExternalTexture) and copies the others on the GPU
+// (copyExternalImageToTexture); WebGL2 hands them to texImage2D. Everything is
 // blended in premultiplied alpha on the encoded sRGB values, as the software
 // renderer blends. No read-back: the canvas shows what was drawn.
 //
@@ -26,35 +32,43 @@
 // copied into the canvas's. Without a last frame to draw over, `frame`
 // answers 4 and the module draws the next one whole.
 //
-//   const host = gpuHost({ memory, claim, current, redraw, log });
+//   const host = gpuHost({ memory, claim, current, redraw, log, source, onUpload });
 //   imports.stipple = { ...host.imports, ... };
 //
 // `claim(fresh)` returns the canvas to take a GPU context on (stipple.js gives
 // a fresh one if the 2D context has it, or `fresh` asks for one), `current()` the canvas the app is
 // shown in now, `redraw()` asks the app for a whole frame (the GPU came up,
-// asynchronously), `memory()` is the module's memory.
+// asynchronously), `memory()` is the module's memory, `source(id)` the
+// external source the page registered as `id` (stipple.js's
+// `externalSource`), `onUpload()` hears each texture upload (stats).
 
 // ---- The op buffer (src/gpu/web.rs) -----------------------------------------
 
 const OP_PATH = 2, OP_CLIP_RECT = 4, OP_CLIP_POLY = 5,
-  OP_POP_CLIP = 6, OP_LAYER = 7, OP_POP_LAYER = 8, OP_QUADS = 9;
+  OP_POP_CLIP = 6, OP_LAYER = 7, OP_POP_LAYER = 8, OP_QUADS = 9,
+  OP_RESAMPLED = 10, OP_QUADS_EXTERNAL = 11;
 
 // What a recorded draw uses: its pipeline (shader, blending, stencil state).
 // P_QUAD draws a batch of boxes and textured quads, P_QUADBOX one of boxes
 // only (no texture); both read the quad vertices (QUAD_FLOATS each, the
-// format of src/gpu/batch.rs), the others the 4-float ones.
+// format of src/gpu/batch.rs), the others the 4-float ones. P_QUAD_EXT is
+// P_QUAD sampling an external source (WebGPU: a texture_external).
 const P_QUAD = 0, P_QUADBOX = 1, P_RESOLVE = 2, P_CLIP_INC = 3, P_CLIP_DEC = 4,
-  P_WIND_NZ = 5, P_WIND_EO = 6, P_COVER_NZ = 7, P_COVER_EO = 8;
-const TEXTURED = [true, false, true, false, false, false, false, false, false];
-const QUAD = [true, true, false, false, false, false, false, false, false];
+  P_WIND_NZ = 5, P_WIND_EO = 6, P_COVER_NZ = 7, P_COVER_EO = 8, P_QUAD_EXT = 9;
+const TEXTURED = [true, false, true, false, false, false, false, false, false, true];
+const QUAD = [true, true, false, false, false, false, false, false, false, true];
 const QUAD_FLOATS = 20;
 const NO_EDGE = 1e4;
 
 // Render targets: the frame, a layer (0, 1, ...), the path scratch.
 const T_FRAME = -1, T_SCRATCH = -2;
-// A draw's texture: an image's id (1...), a layer, or the scratch.
+// A draw's texture: an image's id (1...), a layer, the scratch, or an
+// external source.
 const TEX_SCRATCH = -1000000;
 const layerTex = (i) => -(i + 1);
+const TEX_EXTERNAL = -2000000;
+const extTex = (id) => TEX_EXTERNAL - id;
+const extOf = (tex) => (tex <= TEX_EXTERNAL ? TEX_EXTERNAL - tex : 0);
 
 // Recorded commands, CMD words each.
 const C_OPEN = 1, C_DRAW = 2;
@@ -98,6 +112,7 @@ class Recording {
     this.layers = 0;
     this.scratchW = 0;
     this.scratchH = 0;
+    this.externals = new Set(); // the external sources drawn
   }
 
   cmd(...words) {
@@ -158,6 +173,25 @@ class Recording {
     for (const [x, y] of [[0, 0], [w, 0], [0, h], [0, h], [w, 0], [w, h]]) {
       this.quads.set([x, y, x / w, y / h, NO_EDGE, NO_EDGE, NO_EDGE, NO_EDGE, 0, 0, 1, 1,
         opacity, opacity, opacity, opacity, 2, 0, 0, 0], o);
+      o += QUAD_FLOATS;
+    }
+    return first;
+  }
+
+  // A resampled layer's top-left `r.w` x `r.h` pixels of a `w` x `h` target
+  // over the device rect `r.dst` (batch.rs's `layer_quad`): kept half a
+  // texel inside the part drawn, so bilinear doesn't reach past it.
+  resampledQuad(w, h, r) {
+    const first = this.roomQuads(6);
+    let o = first * QUAD_FLOATS;
+    const [x0, y0, x1, y1] = r.dst;
+    const u1 = r.w / w, v1 = r.h / h;
+    const cu0 = Math.min(0.5 / w, u1 / 2), cv0 = Math.min(0.5 / h, v1 / 2);
+    const cu1 = Math.max(u1 - 0.5 / w, u1 / 2), cv1 = Math.max(v1 - 0.5 / h, v1 / 2);
+    for (const [x, y, s, t] of [[x0, y0, 0, 0], [x1, y0, u1, 0], [x0, y1, 0, v1],
+      [x0, y1, 0, v1], [x1, y0, u1, 0], [x1, y1, u1, v1]]) {
+      this.quads.set([x, y, s, t, NO_EDGE, NO_EDGE, NO_EDGE, NO_EDGE, cu0, cv0, cu1, cv1,
+        1, 1, 1, 1, 2, 0, 0, 0], o);
       o += QUAD_FLOATS;
     }
     return first;
@@ -235,6 +269,13 @@ function record(u, rec, max, stride) {
   };
   const composite = (layer, parent) => {
     if (!bind(parent)) return;
+    const r = layer.resample;
+    if (r) {
+      const first = rec.resampledQuad(W, H, r);
+      const slot = rec.slot(xfFrame, null, null, null, null, null, [0, 0, 0, r.nearest]);
+      draw(P_QUAD, slot, layerTex(layer.layer), first, 6, parent.scissor, parent.depth, r.nearest);
+      return;
+    }
     const first = rec.layerQuad(W, H, layer.opacity);
     draw(P_QUAD, rec.slot(xfFrame), layerTex(layer.layer), first, 6, parent.scissor, parent.depth);
   };
@@ -253,6 +294,17 @@ function record(u, rec, max, stride) {
         // p1.w: nearest (WebGPU's shader picks its sampler by it).
         const slot = rec.slot(xfFrame, null, null, null, null, null, [0, 0, 0, nearest]);
         draw(id ? P_QUAD : P_QUADBOX, slot, id, rec.copyQuads(f, at, n), n, level.scissor,
+          level.depth, nearest);
+        break;
+      }
+      case OP_QUADS_EXTERNAL: {
+        const id = u[p], nearest = u[p + 1], n = u[p + 2];
+        const at = p + 3;
+        p = at + n * QUAD_FLOATS;
+        if (n === 0 || !bind(level)) break;
+        rec.externals.add(id);
+        const slot = rec.slot(xfFrame, null, null, null, null, null, [0, 0, 0, nearest]);
+        draw(P_QUAD_EXT, slot, extTex(id), rec.copyQuads(f, at, n), n, level.scissor,
           level.depth, nearest);
         break;
       }
@@ -321,6 +373,20 @@ function record(u, rec, max, stride) {
         const index = levels.length - 1;
         rec.layers = Math.max(rec.layers, index + 1);
         levels.push({ layer: index, opacity, scissor: level.scissor, depth: 0, undo: [] });
+        open(index, true, W, H);
+        break;
+      }
+      case OP_RESAMPLED: {
+        // Drawn in its own pixels, w x h at the layer's top-left, unclipped
+        // by what encloses it; composited into dst.
+        const w = u[p], h = u[p + 1];
+        const dst = [f[p + 2], f[p + 3], f[p + 4], f[p + 5]];
+        const nearest = u[p + 6];
+        p += 7;
+        const index = levels.length - 1;
+        rec.layers = Math.max(rec.layers, index + 1);
+        levels.push({ layer: index, opacity: 1, scissor: [0, 0, Math.min(w, W), Math.min(h, H)],
+          depth: 0, undo: [], resample: { w, h, dst, nearest } });
         open(index, true, W, H);
         break;
       }
@@ -470,6 +536,24 @@ fn quad_box(i: QOut) -> vec4f {
 }
 `;
 
+// The quads sampling an external source (a <video> or VideoFrame imported as
+// a texture_external): quad_fs over textureSampleBaseClampToEdge, in a module
+// of its own (binding 1 is a texture_2d in the other).
+const WGSL_EXT = WGSL.slice(0, WGSL.indexOf("// Every program shares one vertex shader"))
+  .replace("@group(0) @binding(1) var t: texture_2d<f32>;", "@group(0) @binding(1) var te: texture_external;")
+  + WGSL.slice(WGSL.indexOf("// Batched boxes and textured quads"), WGSL.indexOf("// Boxes only (a batch without a texture)"))
+  + /* wgsl */ `
+@fragment fn quad_ext_fs(i: QOut) -> @location(0) vec4f {
+  let uv = clamp(i.p, i.a2.xy, i.a2.zw);
+  let a = textureSampleBaseClampToEdge(te, lin, uv);
+  let b = textureSampleBaseClampToEdge(te, near, uv);
+  if (i.mode < 0.5) { return quad_box(i); }
+  let c = vec4f(select(a, b, u.p1.w > 0.5).rgb, 1.0) * i.a3;
+  let cov = clamp(min(i.a1.x, i.a1.z) + 0.5, 0.0, 1.0) * clamp(min(i.a1.y, i.a1.w) + 0.5, 0.0, 1.0);
+  return c * cov;
+}
+`;
+
 // `claim()` hands over the canvas, at the last moment: a canvas that gave a
 // WebGPU context can't give a WebGL2 one.
 async function createWebGpu(claim, log) {
@@ -487,8 +571,14 @@ async function createWebGpu(claim, log) {
     { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
     { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
     { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } }] });
+  const layoutE = device.createBindGroupLayout({ entries: [U,
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, externalTexture: {} },
+    { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+    { binding: 3, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } }] });
   const plU = device.createPipelineLayout({ bindGroupLayouts: [layoutU] });
   const plT = device.createPipelineLayout({ bindGroupLayouts: [layoutT] });
+  const plE = device.createPipelineLayout({ bindGroupLayouts: [layoutE] });
+  const moduleExt = device.createShaderModule({ code: WGSL_EXT });
   const blend = { color: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
     alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" } };
   const face = (compare, passOp) => ({ compare, passOp, failOp: "keep", depthFailOp: "keep" });
@@ -497,11 +587,11 @@ async function createWebGpu(claim, log) {
     { shaderLocation: 1, offset: 8, format: "float32x2" }] }] };
   const quads = { entryPoint: "quad_vs", buffers: [{ arrayStride: QUAD_FLOATS * 4,
     attributes: [0, 1, 2, 3, 4].map((i) => ({ shaderLocation: i, offset: i * 16, format: "float32x4" })) }] };
-  const pipeline = (fs, layout, target, { blended = false, write = true, front, back = front, read = 0xff, writeMask = 0, vertex = plain }) =>
+  const pipeline = (fs, layout, target, { blended = false, write = true, front, back = front, read = 0xff, writeMask = 0, vertex = plain, mod = module }) =>
     device.createRenderPipeline({
       layout,
-      vertex: { module, ...vertex },
-      fragment: { module, entryPoint: fs, targets: [{ format: target,
+      vertex: { module: mod, ...vertex },
+      fragment: { module: mod, entryPoint: fs, targets: [{ format: target,
         blend: blended ? blend : undefined, writeMask: write ? GPUColorWrite.ALL : 0 }] },
       primitive: { topology: "triangle-list", cullMode: "none" },
       depthStencil: { format: "stencil8", depthWriteEnabled: false, depthCompare: "always",
@@ -519,6 +609,7 @@ async function createWebGpu(claim, log) {
   pipes[P_WIND_EO] = pipeline("flat_fs", plU, "r8unorm", { write: false, front: face("always", "invert"), writeMask: 0xff });
   pipes[P_COVER_NZ] = pipeline("flat_fs", plU, "r8unorm", { front: face("not-equal", "keep") });
   pipes[P_COVER_EO] = pipeline("flat_fs", plU, "r8unorm", { front: face("not-equal", "keep"), read: 1 });
+  pipes[P_QUAD_EXT] = pipeline("quad_ext_fs", plE, format, { blended: true, front: test, vertex: quads, mod: moduleExt });
   const error = await device.popErrorScope();
   if (error) {
     log(`stipple: WebGPU couldn't build its pipelines: ${error.message}`);
@@ -549,11 +640,30 @@ async function createWebGpu(claim, log) {
     device.destroy();
     return null;
   }
-  return new WebGpuRenderer(canvas, device, ctx, format, pipes, layoutU, layoutT, log);
+  return new WebGpuRenderer(canvas, device, ctx, format, pipes, layoutU, layoutT, layoutE, log);
 }
 
+// Whether `src` is a source WebGPU imports as a texture_external: a video
+// with a frame, or a VideoFrame.
+const importable = (src) =>
+  (typeof HTMLVideoElement !== "undefined" && src instanceof HTMLVideoElement && src.readyState >= 2 && src.videoWidth > 0)
+  || (typeof VideoFrame !== "undefined" && src instanceof VideoFrame);
+
+// An external source's size, or null if it has nothing to draw yet.
+const sourceSize = (src) => {
+  if (!src) return null;
+  if (typeof HTMLVideoElement !== "undefined" && src instanceof HTMLVideoElement) {
+    return src.readyState >= 2 && src.videoWidth > 0 ? [src.videoWidth, src.videoHeight] : null;
+  }
+  if (typeof VideoFrame !== "undefined" && src instanceof VideoFrame) {
+    return [src.displayWidth, src.displayHeight];
+  }
+  const w = src.naturalWidth ?? src.width, h = src.naturalHeight ?? src.height;
+  return w > 0 && h > 0 ? [w, h] : null;
+};
+
 class WebGpuRenderer {
-  constructor(canvas, device, ctx, format, pipes, layoutU, layoutT, log) {
+  constructor(canvas, device, ctx, format, pipes, layoutU, layoutT, layoutE, log) {
     this.api = "webgpu";
     this.canvas = canvas;
     this.device = device;
@@ -562,6 +672,9 @@ class WebGpuRenderer {
     this.pipes = pipes;
     this.layoutU = layoutU;
     this.layoutT = layoutT;
+    this.layoutE = layoutE;
+    this.source = () => null; // set by gpuHost
+    this.copies = new Map(); // external source id -> { tex, view, w, h, bg, gen } (copied ones)
     this.max = device.limits.maxTextureDimension2D;
     this.stride = Math.max(256, device.limits.minUniformBufferOffsetAlignment) / 4;
     this.textures = new Map(); // id -> { tex, view, bg, gen }
@@ -610,6 +723,47 @@ class WebGpuRenderer {
     if (!t) return false;
     this.device.queue.writeTexture({ texture: t.tex, origin: [x, y] }, data, { bytesPerRow: w * 4 }, [w, h]);
     return true;
+  }
+
+  // The page let go of external source `id`.
+  freeExternal(id) {
+    const c = this.copies.get(id);
+    if (c) {
+      c.tex.destroy();
+      this.copies.delete(id);
+    }
+  }
+
+  // This frame's external sources, ready to draw: by id, the bind group and
+  // the pipeline (a texture_external for a video or VideoFrame, else a copy
+  // made on the GPU drawn as an image).
+  externals(rec) {
+    const out = new Map();
+    for (const id of rec.externals) {
+      const src = this.source(id);
+      const size = sourceSize(src);
+      if (!size) continue;
+      if (importable(src)) {
+        const ext = this.device.importExternalTexture({ source: src });
+        out.set(id, { pipe: P_QUAD_EXT, group: this.device.createBindGroup({ layout: this.layoutE, entries: [
+          { binding: 0, resource: { buffer: this.ubuf, size: SLOT_BYTES } },
+          { binding: 1, resource: ext },
+          { binding: 2, resource: this.lin },
+          { binding: 3, resource: this.near }] }) });
+        continue;
+      }
+      let c = this.copies.get(id);
+      if (!c || c.w !== size[0] || c.h !== size[1]) {
+        c?.tex.destroy();
+        const tex = this.device.createTexture({ size, format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING
+          | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+        c = { tex, view: tex.createView(), w: size[0], h: size[1], bg: null, gen: -1 };
+        this.copies.set(id, c);
+      }
+      this.device.queue.copyExternalImageToTexture({ source: src }, { texture: c.tex }, size);
+      out.set(id, { pipe: P_QUAD, group: this.bindGroup(c) });
+    }
+    return out;
   }
 
   free(id) {
@@ -713,6 +867,7 @@ class WebGpuRenderer {
     dev.queue.writeBuffer(this.vbuf, 0, rec.verts.buffer, 0, rec.nvert * 16);
     if (rec.nquad > 0) dev.queue.writeBuffer(this.qbuf, 0, rec.quads.buffer, 0, rec.nquad * QUAD_FLOATS * 4);
     dev.queue.writeBuffer(this.ubuf, 0, rec.unis.buffer, 0, Math.max(rec.nslot, 1) * rec.stride * 4);
+    const exts = rec.externals.size ? this.externals(rec) : null;
     const frameView = this.frameTex.view;
     const enc = dev.createCommandEncoder();
     let pass = null;
@@ -745,7 +900,11 @@ class WebGpuRenderer {
       let p = c[o + 1];
       const slot = c[o + 2], tex = c[o + 3];
       let group = this.bgU;
-      if (TEXTURED[p]) {
+      if (p === P_QUAD_EXT) {
+        const e = exts?.get(extOf(tex));
+        if (e) { group = e.group; p = e.pipe; }
+        else p = P_QUADBOX; // nothing to draw from yet: its boxes still draw
+      } else if (TEXTURED[p]) {
         const t = tex === TEX_SCRATCH ? this.scratch : tex < 0 ? this.layers[-tex - 1] : this.textures.get(tex);
         if (t) group = this.bindGroup(t);
         else if (p === P_QUAD) p = P_QUADBOX; // its boxes still draw
@@ -953,6 +1112,8 @@ class WebGl2Renderer {
     const align = gl.getParameter(gl.UNIFORM_BUFFER_OFFSET_ALIGNMENT);
     this.stride = Math.max(256, align) / 4;
     this.textures = new Map(); // id -> WebGLTexture
+    this.source = () => null; // set by gpuHost
+    this.extTextures = new Map(); // external source id -> WebGLTexture
     this.layers = []; // { fbo, tex, rb, w, h }
     this.scratch = null;
     this.rec = new Recording();
@@ -1048,6 +1209,42 @@ class WebGl2Renderer {
     return true;
   }
 
+  // The page let go of external source `id`.
+  freeExternal(id) {
+    const t = this.extTextures.get(id);
+    if (t && !this.lost) this.gl.deleteTexture(t);
+    this.extTextures.delete(id);
+  }
+
+  // This frame's external sources, each handed to texImage2D (a copy the
+  // browser makes on the GPU for a video): by id, the texture.
+  externals(rec) {
+    const gl = this.gl;
+    const out = new Map();
+    for (const id of rec.externals) {
+      const src = this.source(id);
+      if (!sourceSize(src)) continue;
+      let tex = this.extTextures.get(id);
+      if (!tex) {
+        tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        this.extTextures.set(id, tex);
+      }
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      try {
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src);
+        out.set(id, tex);
+      } catch {
+        // A source it can't take (a closed VideoFrame): nothing drawn.
+      }
+    }
+    return out;
+  }
+
   free(id) {
     // A lost context took its textures with it.
     const del = (t) => { if (!this.lost) this.gl.deleteTexture(t); };
@@ -1088,7 +1285,7 @@ class WebGl2Renderer {
   state(p, ref) {
     const gl = this.gl;
     switch (p) {
-      case P_QUAD: case P_QUADBOX: case P_RESOLVE:
+      case P_QUAD: case P_QUADBOX: case P_RESOLVE: case P_QUAD_EXT:
         gl.enable(gl.BLEND);
         gl.colorMask(true, true, true, true);
         gl.stencilFunc(gl.EQUAL, ref, 0xff);
@@ -1168,7 +1365,8 @@ class WebGl2Renderer {
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.DEPTH_TEST);
     gl.activeTexture(gl.TEXTURE0);
-    const names = ["quad", "quadbox", "resolve", "flat", "flat", "flat", "flat", "flat", "flat"];
+    const exts = rec.externals.size ? this.externals(rec) : null;
+    const names = ["quad", "quadbox", "resolve", "flat", "flat", "flat", "flat", "flat", "flat", "quad"];
     let flip = 1, th = H, prog = null;
     const c = rec.cmds;
     const bg = rec.bg;
@@ -1198,11 +1396,12 @@ class WebGl2Renderer {
       let p = c[o + 1];
       const slot = c[o + 2], tex = c[o + 3];
       if (TEXTURED[p]) {
-        const t = tex === TEX_SCRATCH ? this.scratch?.tex : tex < 0 ? this.layers[-tex - 1]?.tex : this.textures.get(tex);
+        const t = p === P_QUAD_EXT ? exts?.get(extOf(tex))
+          : tex === TEX_SCRATCH ? this.scratch?.tex : tex < 0 ? this.layers[-tex - 1]?.tex : this.textures.get(tex);
         if (t) {
           gl.bindTexture(gl.TEXTURE_2D, t);
-          gl.bindSampler(0, p === P_QUAD && c[o + 11] ? this.near : this.lin);
-        } else if (p === P_QUAD) {
+          gl.bindSampler(0, (p === P_QUAD || p === P_QUAD_EXT) && c[o + 11] ? this.near : this.lin);
+        } else if (p === P_QUAD || p === P_QUAD_EXT) {
           p = P_QUADBOX; // its boxes still draw
         } else {
           continue;
@@ -1284,7 +1483,8 @@ async function createRenderer(claim, want, log) {
 const API_CODE = { webgpu: 1, webgl2: 2 };
 
 // The module's gpu_* imports over a canvas (see the top of this file).
-export function gpuHost({ memory, claim, current, redraw, log = console.log, onFrame, onRelease }) {
+export function gpuHost({ memory, claim, current, redraw, log = console.log, onFrame, onRelease,
+  source = () => null, onUpload }) {
   let gpu = null;
   let state = "idle"; // idle | pending | ready | failed
   let failedWant = -1;
@@ -1319,7 +1519,10 @@ export function gpuHost({ memory, claim, current, redraw, log = console.log, onF
         log(`stipple: no GPU renderer: ${err.message ?? err}`);
       }
       gpu = r;
-      if (r) r.onBroken = redraw;
+      if (r) {
+        r.onBroken = redraw;
+        r.source = source;
+      }
       state = r ? "ready" : "failed";
       failedWant = r ? -1 : want;
       redraw();
@@ -1339,10 +1542,12 @@ export function gpuHost({ memory, claim, current, redraw, log = console.log, onF
     },
     gpu_texture(id, ptr, w, h) {
       if (!gpu) return 0;
+      onUpload?.();
       return gpu.texture(id, new Uint8Array(memory().buffer, ptr, w * h * 4), w, h) ? 1 : 0;
     },
     gpu_texture_sub(id, ptr, x, y, w, h) {
       if (!gpu) return 0;
+      onUpload?.();
       return gpu.textureSub(id, new Uint8Array(memory().buffer, ptr, w * h * 4), x, y, w, h) ? 1 : 0;
     },
     gpu_free(id) {
@@ -1388,6 +1593,10 @@ export function gpuHost({ memory, claim, current, redraw, log = console.log, onF
       out.height = gpu.canvas.height;
       out.getContext("2d").drawImage(gpu.canvas, 0, 0);
       return out;
+    },
+    // The page let go of external source `id`: free what was made of it.
+    releaseExternal(id) {
+      gpu?.freeExternal(id);
     },
     // Resolves once the GPU has done its work (timing).
     finish() {

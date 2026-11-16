@@ -558,8 +558,7 @@ pub(crate) fn sprites() -> Scene {
 /// A frame drawn at 40×30 and scaled up nearest-neighbor by 3 into the
 /// scene ([`Scene::draw_offscreen`], what `PixelViewport` draws): fills,
 /// sprites flipped and faded, a translucent layer, over bars. On the GPU
-/// renderers a resampled layer (no bitmap uploaded), on the web the
-/// software renderer's bitmap.
+/// renderers (the web's too) a resampled layer, no bitmap uploaded.
 pub(crate) fn pixel_viewport() -> Scene {
     pixel_viewport_with(&ramp())
 }

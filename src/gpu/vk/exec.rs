@@ -589,19 +589,21 @@ impl VkExecutor {
             self.color_pass = self.render_pass(FORMAT_R8G8B8A8_UNORM)?;
             self.scratch_pass = self.render_pass(FORMAT_R8_UNORM)?;
 
-            let binding = VkDescriptorSetLayoutBinding {
-                binding: 0,
+            // The texture, and a second one only NV12's chroma fills
+            // (`quad_yuv.frag`; the other shaders don't read it).
+            let bindings = [0, 1].map(|binding| VkDescriptorSetLayoutBinding {
+                binding,
                 descriptorType: DESCRIPTOR_COMBINED_IMAGE_SAMPLER,
                 descriptorCount: 1,
                 stageFlags: SHADER_STAGE_FRAGMENT,
                 pImmutableSamplers: std::ptr::null(),
-            };
+            });
             let dsl = VkDescriptorSetLayoutCreateInfo {
                 sType: ST_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                 pNext: std::ptr::null(),
                 flags: 0,
-                bindingCount: 1,
-                pBindings: &binding,
+                bindingCount: bindings.len() as u32,
+                pBindings: bindings.as_ptr(),
             };
             check(
                 (vk.vkCreateDescriptorSetLayout)(d, &dsl, std::ptr::null(), &mut self.set_layout),
@@ -662,10 +664,11 @@ impl VkExecutor {
                 shaders::QUADBOX_FRAG,
                 shaders::FLAT_FRAG,
                 shaders::RESOLVE_FRAG,
+                shaders::QUAD_YUV_FRAG,
             ]
             .map(|spv| self.shader(spv));
             let built = match modules.iter().cloned().collect::<Result<Vec<_>, _>>() {
-                Ok(m) => self.pipelines([m[0], m[1], m[2], m[3], m[4], m[5]]),
+                Ok(m) => self.pipelines([m[0], m[1], m[2], m[3], m[4], m[5], m[6]]),
                 Err(e) => Err(e),
             };
             for m in modules.into_iter().flatten() {
@@ -795,18 +798,27 @@ impl VkExecutor {
         }
     }
 
-    /// Every pipeline, from the two vertex shaders and the four fragment
+    /// Every pipeline, from the two vertex shaders and the five fragment
     /// shaders.
     unsafe fn pipelines(
         &self,
-        m: [VkShaderModule; 6],
+        m: [VkShaderModule; 7],
     ) -> Result<HashMap<Pipe, VkPipeline>, GpuError> {
         unsafe {
-            let [scene_vs, quad_vs, quads, quad_boxes, flat, resolve] = m;
+            let [
+                scene_vs,
+                quad_vs,
+                quads,
+                quad_boxes,
+                flat,
+                resolve,
+                quads_yuv,
+            ] = m;
             let mut pipes = HashMap::new();
             for pipe in Pipe::ALL {
                 let (vs, fs) = match pipe {
                     Pipe::Quads => (quad_vs, quads),
+                    Pipe::QuadsYuv => (quad_vs, quads_yuv),
                     Pipe::QuadBoxes => (quad_vs, quad_boxes),
                     Pipe::Resolve => (scene_vs, resolve),
                     _ => (scene_vs, flat),
@@ -848,7 +860,9 @@ impl VkExecutor {
             // (front, back, blend, writes color)
             let test = face(COMPARE_EQUAL, STENCIL_KEEP, 0xff, 0);
             let (front, back, blend, write) = match pipe {
-                Pipe::QuadBoxes | Pipe::Quads | Pipe::Resolve => (test, test, true, true),
+                Pipe::QuadBoxes | Pipe::Quads | Pipe::QuadsYuv | Pipe::Resolve => {
+                    (test, test, true, true)
+                }
                 Pipe::ClipInc => {
                     let f = face(COMPARE_EQUAL, STENCIL_INCR_CLAMP, 0xff, 0xff);
                     (f, f, false, false)
@@ -1778,7 +1792,7 @@ impl VkExecutor {
         images: &[VkImageView],
         externals: &[external::ExtView],
         pages: &[AtlasPage],
-    ) -> Result<HashMap<Texture, VkDescriptorSet>, GpuError> {
+    ) -> Result<HashMap<Texture, external::Set>, GpuError> {
         unsafe {
             // An atlas page without a texture (it couldn't be uploaded)
             // isn't sampled: its draws find no set and draw nothing.
@@ -1813,9 +1827,10 @@ impl VkExecutor {
                     self.descriptor_capacity = 0;
                 }
                 let cap = need.next_power_of_two().max(64);
+                // Two bindings a set (the second NV12's chroma).
                 let size = VkDescriptorPoolSize {
                     ty: DESCRIPTOR_COMBINED_IMAGE_SAMPLER,
-                    descriptorCount: cap,
+                    descriptorCount: cap * 2,
                 };
                 let pi = VkDescriptorPoolCreateInfo {
                     sType: ST_DESCRIPTOR_POOL_CREATE_INFO,
@@ -1854,9 +1869,13 @@ impl VkExecutor {
                 (self.vk.vkAllocateDescriptorSets)(self.device, &ai, handles.as_mut_ptr()),
                 "vkAllocateDescriptorSets",
             )?;
+            // Each texture's view and sampler, and NV12's chroma view and
+            // color space.
+            let mut yuv = Vec::with_capacity(textures.len());
             let infos: Vec<VkDescriptorImageInfo> = textures
                 .iter()
                 .map(|t| {
+                    yuv.push(None);
                     let (view, sampler) = match *t {
                         Texture::Image { index, nearest } => (
                             images[index],
@@ -1869,6 +1888,10 @@ impl VkExecutor {
                         Texture::External { index, nearest } => (
                             match externals[index] {
                                 external::ExtView::Imported(view) => view,
+                                external::ExtView::Yuv(luma, chroma, color) => {
+                                    *yuv.last_mut().unwrap() = Some((chroma, color));
+                                    luma
+                                }
                                 external::ExtView::Image(i) => images[i],
                                 external::ExtView::Nothing => unreachable!("filtered out"),
                             },
@@ -1887,22 +1910,35 @@ impl VkExecutor {
                     }
                 })
                 .collect();
-            let writes: Vec<VkWriteDescriptorSet> = handles
+            let chroma: Vec<Option<VkDescriptorImageInfo>> = yuv
                 .iter()
                 .zip(&infos)
-                .map(|(&set, info)| VkWriteDescriptorSet {
-                    sType: ST_WRITE_DESCRIPTOR_SET,
-                    pNext: std::ptr::null(),
-                    dstSet: set,
-                    dstBinding: 0,
-                    dstArrayElement: 0,
-                    descriptorCount: 1,
-                    descriptorType: DESCRIPTOR_COMBINED_IMAGE_SAMPLER,
-                    pImageInfo: info,
-                    pBufferInfo: std::ptr::null(),
-                    pTexelBufferView: std::ptr::null(),
+                .map(|(y, info)| {
+                    y.map(|(view, _)| VkDescriptorImageInfo {
+                        imageView: view,
+                        ..*info
+                    })
                 })
                 .collect();
+            let write = |set, binding, info: &VkDescriptorImageInfo| VkWriteDescriptorSet {
+                sType: ST_WRITE_DESCRIPTOR_SET,
+                pNext: std::ptr::null(),
+                dstSet: set,
+                dstBinding: binding,
+                dstArrayElement: 0,
+                descriptorCount: 1,
+                descriptorType: DESCRIPTOR_COMBINED_IMAGE_SAMPLER,
+                pImageInfo: info,
+                pBufferInfo: std::ptr::null(),
+                pTexelBufferView: std::ptr::null(),
+            };
+            let mut writes: Vec<VkWriteDescriptorSet> = Vec::with_capacity(handles.len());
+            for ((&set, info), c) in handles.iter().zip(&infos).zip(&chroma) {
+                writes.push(write(set, 0, info));
+                if let Some(c) = c {
+                    writes.push(write(set, 1, c));
+                }
+            }
             (self.vk.vkUpdateDescriptorSets)(
                 self.device,
                 writes.len() as u32,
@@ -1910,8 +1946,14 @@ impl VkExecutor {
                 0,
                 std::ptr::null(),
             );
-            for (t, set) in textures.into_iter().zip(handles) {
-                sets.insert(t, set);
+            for ((t, set), y) in textures.into_iter().zip(handles).zip(yuv) {
+                sets.insert(
+                    t,
+                    external::Set {
+                        set,
+                        yuv: y.map(|(_, color)| color),
+                    },
+                );
             }
             Ok(sets)
         }
@@ -1922,7 +1964,7 @@ impl VkExecutor {
     unsafe fn passes(
         &mut self,
         rec: &Recording,
-        sets: &HashMap<Texture, VkDescriptorSet>,
+        sets: &HashMap<Texture, external::Set>,
         quads: u64,
     ) {
         unsafe {
@@ -2057,14 +2099,33 @@ impl VkExecutor {
     unsafe fn draw(
         &mut self,
         d: &Draw,
-        sets: &HashMap<Texture, VkDescriptorSet>,
+        sets: &HashMap<Texture, external::Set>,
         bound: &mut Option<Pipe>,
     ) {
         unsafe {
             let cmd = self.cmd;
-            if *bound != Some(d.pipe) {
-                (self.vk.vkCmdBindPipeline)(cmd, BIND_POINT_GRAPHICS, self.pipes[&d.pipe]);
-                *bound = Some(d.pipe);
+            // A texture that couldn't be made (an atlas page): nothing to
+            // sample.
+            let set = match d.texture {
+                Some(t) => match sets.get(&t) {
+                    Some(s) => Some(s),
+                    None => return,
+                },
+                None => None,
+            };
+            // An NV12 image's quads go through the YUV shader, its matrix
+            // in the push constants.
+            let mut push = d.push;
+            let mut pipe = d.pipe;
+            if let Some(color) = set.and_then(|s| s.yuv)
+                && pipe == Pipe::Quads
+            {
+                pipe = Pipe::QuadsYuv;
+                push[record::YUV_MATRIX..record::YUV_MATRIX + 12].copy_from_slice(&color.rows());
+            }
+            if *bound != Some(pipe) {
+                (self.vk.vkCmdBindPipeline)(cmd, BIND_POINT_GRAPHICS, self.pipes[&pipe]);
+                *bound = Some(pipe);
             }
             let s = d.scissor;
             let scissor = VkRect2D {
@@ -2083,21 +2144,16 @@ impl VkExecutor {
                 SHADER_STAGE_VERTEX | SHADER_STAGE_FRAGMENT,
                 0,
                 record::PUSH_BYTES,
-                d.push.as_ptr().cast(),
+                push.as_ptr().cast(),
             );
-            if let Some(t) = d.texture {
-                // A texture that couldn't be made (an atlas page): nothing
-                // to sample.
-                let Some(set) = sets.get(&t) else {
-                    return;
-                };
+            if let Some(s) = set {
                 (self.vk.vkCmdBindDescriptorSets)(
                     cmd,
                     BIND_POINT_GRAPHICS,
                     self.layout,
                     0,
                     1,
-                    set,
+                    &s.set,
                     0,
                     std::ptr::null(),
                 );

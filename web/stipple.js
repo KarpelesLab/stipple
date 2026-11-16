@@ -68,8 +68,9 @@
 //             built with the `gpu` feature.
 //
 // Returns { exports, stats, canvas, overlay, input, colorScheme, saveState,
-// renderer, snapshot, gpu }: `stats` counts presents (CPU or GPU frames),
-// animation frames, timer wakes and accessibility-tree updates, for tests;
+// renderer, snapshot, gpu, externalSource, releaseExternal }: `stats` counts
+// presents (CPU or GPU frames), animation frames, timer wakes,
+// accessibility-tree updates and GPU texture uploads, for tests;
 // `canvas` is the canvas the app is in now, `renderer` what drew the last
 // frame ("software", "webgpu" or "webgl2"), `snapshot()` a 2D canvas copy
 // of the last frame (a GPU canvas can't be read back later), `gpu` the GPU
@@ -78,6 +79,11 @@
 // textarea, `colorScheme()` hands the page's current color scheme to the
 // app again (it already follows changes on its own), and `saveState()` saves
 // the app's state now (it already does when the page hides or unloads).
+// `externalSource(source)` registers a <video>, VideoFrame, ImageBitmap or
+// canvas the app draws as an external image (ExternalImage::web_source with
+// the id it answers): the GPU renderer samples it straight from the source,
+// the CPU one reads it when it draws it; the page lets go of it once the
+// app's image is dropped (or `releaseExternal(id)`).
 
 import { gpuHost } from "./gpu.js";
 
@@ -223,7 +229,17 @@ export async function start(canvas, wasmUrl, options = {}) {
   let renderer = "software";
   const enc = new TextEncoder();
   const dec = new TextDecoder();
-  const stats = { presents: 0, frames: 0, wakes: 0, a11y: 0, gpuFrames: 0 };
+  const stats = { presents: 0, frames: 0, wakes: 0, a11y: 0, gpuFrames: 0, uploads: 0 };
+  // External sources the app draws (ExternalImage::web_source), by id: the
+  // camera's <video>s, and what the page registered.
+  const externals = new Map();
+  let nextExternal = 1;
+  const externalSource = (src) => {
+    const id = nextExternal++;
+    externals.set(id, src);
+    return id;
+  };
+  let readCanvas = null;
   const prefix = `stipple${++instances}`;
   let e = null; // the module's exports
   let timer = null;
@@ -310,6 +326,14 @@ export async function start(canvas, wasmUrl, options = {}) {
       if (cam.closed) return;
       const v = cam.video;
       const w = v.videoWidth, h = v.videoHeight;
+      const ms = meta?.mediaTime != null ? meta.mediaTime * 1000 : now;
+      // The GPU renderer draws the video straight from it: no pixels to
+      // read back unless the app wants them (1: taken as it is).
+      if (!cam.paused && w && h && v.readyState >= 2 && e &&
+        e.stipple_camera_video?.(id, cam.source, w, h, ms) === 1) {
+        next();
+        return;
+      }
       if (!cam.paused && w && h && v.readyState >= 2 && e) {
         if (!cam.canvas || cam.canvas.width !== w || cam.canvas.height !== h) {
           cam.canvas = typeof OffscreenCanvas !== "undefined"
@@ -319,7 +343,7 @@ export async function start(canvas, wasmUrl, options = {}) {
         }
         cam.ctx.drawImage(v, 0, 0, w, h);
         const [ptr, len] = pass(cam.ctx.getImageData(0, 0, w, h).data);
-        e.stipple_camera_frame?.(id, ptr, len, w, h, meta?.mediaTime != null ? meta.mediaTime * 1000 : now);
+        e.stipple_camera_frame?.(id, ptr, len, w, h, ms);
       }
       next();
     };
@@ -607,12 +631,41 @@ export async function start(canvas, wasmUrl, options = {}) {
       stats.gpuFrames++;
       renderer = api;
     },
+    source: (id) => externals.get(id),
+    onUpload: () => { stats.uploads++; },
   });
 
   const imports = {
     stipple: {
       ...audio.imports,
       ...gpu.imports,
+      // External sources (ExternalImage::web_source): read for the CPU
+      // renderer (drawn into a 2D canvas at w x h), and let go of.
+      external_read(id, ptr, w, h) {
+        const src = externals.get(id);
+        if (!src || !w || !h) return 0;
+        try {
+          if (!readCanvas) {
+            readCanvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(w, h)
+              : Object.assign(document.createElement("canvas"), { width: w, height: h });
+          }
+          if (readCanvas.width !== w || readCanvas.height !== h) {
+            readCanvas.width = w;
+            readCanvas.height = h;
+          }
+          const c = readCanvas.getContext("2d", { willReadFrequently: true });
+          c.clearRect(0, 0, w, h);
+          c.drawImage(src, 0, 0, w, h);
+          new Uint8Array(e.memory.buffer, ptr, w * h * 4).set(c.getImageData(0, 0, w, h).data);
+          return 1;
+        } catch {
+          return 0;
+        }
+      },
+      external_release(id) {
+        externals.delete(id);
+        gpu.releaseExternal(id);
+      },
       now: () => performance.now(),
       present(ptr, w, h, rects, n) {
         stats.presents++;
@@ -832,7 +885,8 @@ export async function start(canvas, wasmUrl, options = {}) {
           opacity: "0", pointerEvents: "none",
         });
         document.body.appendChild(video);
-        const cam = { video, stream: null, track: null, canvas: null, ctx: null, paused: false, closed: false };
+        const cam = { video, stream: null, track: null, canvas: null, ctx: null, paused: false, closed: false,
+          source: externalSource(video) };
         cameras.set(id, cam);
         md.getUserMedia({
           audio: false,
@@ -874,6 +928,8 @@ export async function start(canvas, wasmUrl, options = {}) {
         if (!cam) return;
         cameras.delete(id);
         cam.closed = true;
+        externals.delete(cam.source);
+        gpu.releaseExternal(cam.source);
         cam.stream?.getTracks().forEach((t) => t.stop());
         cam.video.srcObject = null;
         cam.video.remove();
@@ -1403,6 +1459,8 @@ export async function start(canvas, wasmUrl, options = {}) {
 
   return {
     exports: e, stats, overlay, input, colorScheme: scheme, saveState, gpu,
+    externalSource,
+    releaseExternal: (id) => { externals.delete(id); gpu.releaseExternal(id); },
     get canvas() { return canvas; },
     get renderer() { return renderer; },
     // A 2D canvas with the last frame: the canvas itself on the CPU; on the

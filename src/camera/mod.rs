@@ -236,7 +236,8 @@ type FrameFn = Box<dyn FnMut(&Frame<'_>) + Send>;
 type WakeFn = Box<dyn Fn() + Send + Sync>;
 
 /// A frame handed to the preview as the camera's own buffer (an
-/// `IOSurface`), drawn by a GPU renderer without a copy.
+/// `IOSurface`, an `AHardwareBuffer`, the page's `<video>`), drawn by a GPU
+/// renderer without a copy.
 #[derive(Clone)]
 pub(crate) struct ExternalFrame {
     pub image: Arc<ExternalImage>,
@@ -275,6 +276,8 @@ pub(crate) struct Sink {
     status: Mutex<CameraStatus>,
     /// What the camera can do (the web finds out once the stream starts).
     caps: Mutex<Caps>,
+    /// Whether the preview was handed the camera's buffer yet (said once).
+    handed: std::sync::atomic::AtomicBool,
 }
 
 impl Sink {
@@ -287,6 +290,7 @@ impl Sink {
             last: Mutex::new(None),
             status: Mutex::new(CameraStatus::Starting),
             caps: Mutex::new(Caps::default()),
+            handed: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -331,23 +335,30 @@ impl Sink {
 
     /// A frame arrived (on the capture thread): count it, hand it to the
     /// app, and convert it for the preview unless the last one is still to
-    /// be painted.
-    #[cfg_attr(
-        not(any(target_os = "android", target_arch = "wasm32")),
-        allow(dead_code)
-    )]
+    /// be painted. (The backends all hand their buffers over too, through
+    /// [`deliver_with`](Self::deliver_with).)
+    #[cfg(test)]
     pub(crate) fn deliver(&self, frame: &Frame<'_>) {
         self.deliver_with(frame, None);
     }
 
     /// [`deliver`](Self::deliver) a frame whose buffer `external` can hand
-    /// over as an [`ExternalImage`]: while the renderer imports that without
-    /// a copy, the preview gets the buffer instead of a converted image.
-    #[cfg_attr(not(any(target_os = "ios", target_os = "macos")), allow(dead_code))]
+    /// over as an [`ExternalImage`] of the given format: while the renderer
+    /// imports that format without a copy, the preview gets the buffer
+    /// instead of a converted image.
+    #[cfg_attr(
+        not(any(
+            target_os = "ios",
+            target_os = "macos",
+            target_os = "android",
+            target_arch = "wasm32"
+        )),
+        allow(dead_code)
+    )]
     pub(crate) fn deliver_with(
         &self,
         frame: &Frame<'_>,
-        external: Option<&mut dyn FnMut() -> Option<ExternalImage>>,
+        external: Option<(ExternalFormat, &mut dyn FnMut() -> Option<ExternalImage>)>,
     ) {
         let n = self.frames.fetch_add(1, Ordering::Relaxed);
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) =
@@ -373,21 +384,11 @@ impl Sink {
             }
             p.wanted
         };
-        if let Some(make) = external
-            && crate::platform::external::imported_natively(ExternalFormat::Nv12)
+        if let Some((format, make)) = external
+            && crate::platform::external::imported_natively(format)
             && let Some(image) = make()
         {
-            let mut p = self.preview.lock().unwrap_or_else(|e| e.into_inner());
-            p.external = Some(ExternalFrame {
-                image: Arc::new(image),
-                rotation: frame.rotation,
-                mirrored: frame.mirrored,
-            });
-            p.image = None;
-            p.fresh = true;
-            if let Some(wake) = &p.wake {
-                wake();
-            }
+            self.show_external(image, frame.rotation, frame.mirrored);
             return;
         }
         let image = Arc::new(frame.convert(frame::preview_size(frame.upright_size(), wanted)));
@@ -398,6 +399,74 @@ impl Sink {
         if let Some(wake) = &p.wake {
             wake();
         }
+    }
+
+    /// Hand the preview the camera's buffer `image` as the latest frame.
+    fn show_external(&self, image: ExternalImage, rotation: u32, mirrored: bool) {
+        if !self.handed.swap(true, Ordering::Relaxed) {
+            let msg = format!(
+                "stipple: the camera preview draws the camera's own {:?} buffers on the GPU",
+                image.format()
+            );
+            #[cfg(target_arch = "wasm32")]
+            crate::platform::backend::web::log(&msg, false);
+            #[cfg(not(target_arch = "wasm32"))]
+            eprintln!("{msg}");
+        }
+        let mut p = self.preview.lock().unwrap_or_else(|e| e.into_inner());
+        p.external = Some(ExternalFrame {
+            image: Arc::new(image),
+            rotation,
+            mirrored,
+        });
+        p.image = None;
+        p.fresh = true;
+        if let Some(wake) = &p.wake {
+            wake();
+        }
+    }
+
+    /// A frame of `size` whose pixels the backend hasn't read (the page's
+    /// `<video>`, reading which costs a copy back from the GPU), only as a
+    /// buffer `make` hands over as an [`ExternalImage`] of `format`: taken
+    /// (counted, shown by the preview) when nothing needs its pixels, that
+    /// is, the app has no frame callback and the renderer imports `format`
+    /// without a copy. `false`: read the pixels and
+    /// [`deliver`](Self::deliver) them instead.
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub(crate) fn deliver_external(
+        &self,
+        size: PhysicalSize,
+        rotation: u32,
+        mirrored: bool,
+        format: ExternalFormat,
+        make: impl FnOnce() -> ExternalImage,
+    ) -> bool {
+        if self
+            .on_frame
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
+            || !crate::platform::external::imported_natively(format)
+        {
+            return false;
+        }
+        let n = self.frames.fetch_add(1, Ordering::Relaxed);
+        *self.last.lock().unwrap_or_else(|e| e.into_inner()) = Some((size, rotation, mirrored));
+        if n == 0 {
+            let mut status = self.status.lock().unwrap_or_else(|e| e.into_inner());
+            if *status == CameraStatus::Starting {
+                *status = CameraStatus::Running;
+            }
+        }
+        let wanted = {
+            let p = self.preview.lock().unwrap_or_else(|e| e.into_inner());
+            !p.fresh && p.wake.is_some()
+        };
+        if wanted {
+            self.show_external(make(), rotation, mirrored);
+        }
+        true
     }
 }
 
@@ -881,17 +950,57 @@ mod tests {
         };
         // Nothing imports NV12: converted, as before.
         note_native(&[]);
-        sink.deliver_with(&frame, Some(&mut { buffer }));
+        sink.deliver_with(&frame, Some((ExternalFormat::Nv12, &mut { buffer })));
         assert!(sink.preview.lock().unwrap().image.is_some());
         assert!(sink.preview.lock().unwrap().external.is_none());
         // The renderer imports it: the buffer goes to the preview.
         note_native(&[ExternalFormat::Nv12]);
         sink.preview.lock().unwrap().fresh = false;
-        sink.deliver_with(&frame, Some(&mut { buffer }));
-        let p = sink.preview.lock().unwrap();
-        assert!(p.image.is_none());
-        let ext = p.external.as_ref().expect("the buffer");
-        assert_eq!(ext.rotation, 90);
+        sink.deliver_with(&frame, Some((ExternalFormat::Nv12, &mut { buffer })));
+        {
+            let p = sink.preview.lock().unwrap();
+            assert!(p.image.is_none());
+            let ext = p.external.as_ref().expect("the buffer");
+            assert_eq!(ext.rotation, 90);
+        }
+        // Another format than the renderer imports: converted.
+        sink.preview.lock().unwrap().fresh = false;
+        sink.deliver_with(&frame, Some((ExternalFormat::Yuv420, &mut { buffer })));
+        assert!(sink.preview.lock().unwrap().image.is_some());
+        note_native(&[]);
+    }
+
+    #[test]
+    fn a_frame_without_pixels_is_taken_only_when_nothing_needs_them() {
+        use crate::platform::external::{NATIVE_TEST, note_native};
+        let _lock = NATIVE_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let sink = Arc::new(Sink::new());
+        sink.preview.lock().unwrap().wake = Some(Box::new(|| {}));
+        let size = PhysicalSize::new(2, 2);
+        let make = || {
+            let pixels = Pixmap::from_rgba8(PhysicalSize::new(2, 2), vec![9; 16]);
+            ExternalImage::from_pixels(Arc::new(pixels))
+        };
+        // The renderer doesn't import it: read the pixels instead.
+        note_native(&[]);
+        assert!(!sink.deliver_external(size, 0, true, ExternalFormat::Rgbx8, make));
+        assert_eq!(sink.frames.load(Ordering::Relaxed), 0);
+        // It does: taken, counted, shown.
+        note_native(&[ExternalFormat::Rgbx8]);
+        assert!(sink.deliver_external(size, 0, true, ExternalFormat::Rgbx8, make));
+        assert_eq!(sink.frames.load(Ordering::Relaxed), 1);
+        assert!(
+            sink.preview
+                .lock()
+                .unwrap()
+                .external
+                .as_ref()
+                .unwrap()
+                .mirrored
+        );
+        // The app reads each frame's pixels: they're needed.
+        *sink.on_frame.lock().unwrap() = Some(Box::new(|_| {}));
+        assert!(!sink.deliver_external(size, 0, true, ExternalFormat::Rgbx8, make));
         note_native(&[]);
     }
 

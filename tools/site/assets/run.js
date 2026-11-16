@@ -58,7 +58,14 @@ if (check) {
   while ((app?.stats?.presents ?? 0) === 0 && performance.now() - t0 < 8000) {
     await new Promise((r) => setTimeout(r, 100));
   }
-  await new Promise((r) => setTimeout(r, Number(params.get("settle") ?? 1500)));
+  // Half the settling time to warm up, then the texture uploads over the
+  // other half: an animation on the GPU that uploads nothing a frame (a
+  // game drawn as a resampled layer) shows none.
+  const settle = Number(params.get("settle") ?? 1500);
+  await new Promise((r) => setTimeout(r, settle / 2));
+  const u0 = app?.stats?.uploads ?? 0, f0 = app?.stats?.presents ?? 0;
+  await new Promise((r) => setTimeout(r, settle / 2));
+  const uploads = (app?.stats?.uploads ?? 0) - u0, uploadFrames = (app?.stats?.presents ?? 0) - f0;
   // How many distinct colors a sample of the canvas has: a blank one has 1.
   let colors = 0;
   let png = null;
@@ -98,6 +105,8 @@ if (check) {
     presents: app?.stats?.presents ?? 0,
     renderer: app?.renderer ?? null,
     colors,
+    uploads,
+    uploadFrames,
     errors,
     png,
   };

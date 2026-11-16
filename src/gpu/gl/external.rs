@@ -2,6 +2,11 @@
 //! `EGL_EXT_image_dma_buf_import`, an `AHardwareBuffer` (Android) through
 //! `EGL_ANDROID_get_native_client_buffer`, each plane an `EGLImage` bound
 //! to a texture with `glEGLImageTargetTexture2DOES`. No pixel is copied.
+//! NV12 is two textures converted by the YUV program with the image's
+//! color space; an Android camera's YUV buffer (`ExternalFormat::Yuv420`,
+//! a layout only its driver knows) is one `GL_TEXTURE_EXTERNAL_OES`
+//! texture, which converts as it samples (`samplerExternalOES`,
+//! `GL_OES_EGL_image_external`).
 //!
 //! Imports are cached by the image's identity, like the image textures:
 //! made the first frame an image is drawn, freed once it's dropped or
@@ -12,6 +17,7 @@
 //! from its pixels read on the CPU.
 
 use super::*;
+use crate::render::external::YuvColorSpace;
 use crate::render::{ExternalFormat, ExternalImage};
 use std::collections::HashMap;
 use std::ffi::CStr;
@@ -20,6 +26,7 @@ use std::sync::{Arc, Weak};
 #[link(name = "GLESv2")]
 unsafe extern "C" {
     fn glDeleteTextures(n: GLsizei, textures: *const GLuint);
+    fn glGetString(name: GLenum) -> *const u8;
 }
 
 type EglImage = *mut c_void;
@@ -38,11 +45,17 @@ const EGL_NATIVE_BUFFER_ANDROID: EGLenum = 0x3140;
 /// Images of external images not drawn for this many frames are freed.
 const KEEP_FRAMES: u64 = 120;
 
+/// `GL_TEXTURE_EXTERNAL_OES`.
+pub(super) const GL_TEXTURE_EXTERNAL_OES: GLenum = 0x8D65;
+const GL_EXTENSIONS: GLenum = 0x1F03;
+
 /// One external image's import: a texture per plane (none if it failed).
 struct Import {
     image: Weak<ExternalImage>,
     egl: Vec<EglImage>,
     textures: Vec<GLuint>,
+    /// The texture is a `GL_TEXTURE_EXTERNAL_OES` one.
+    external: bool,
     used: u64,
 }
 
@@ -51,8 +64,24 @@ struct Import {
 pub(super) enum Planes {
     /// One RGBA texture.
     One(GLuint),
-    /// Luma and chroma, converted by the YUV program.
-    Yuv(GLuint, GLuint),
+    /// Luma and chroma, converted by the YUV program in this color space.
+    Yuv(GLuint, GLuint, YuvColorSpace),
+    /// One `GL_TEXTURE_EXTERNAL_OES` texture (converted as it's sampled).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    External(GLuint),
+}
+
+/// Whether the current context samples external textures
+/// (`GL_OES_EGL_image_external`).
+pub(super) unsafe fn has_oes_external() -> bool {
+    unsafe {
+        let ext = glGetString(GL_EXTENSIONS);
+        !ext.is_null()
+            && CStr::from_ptr(ext as *const std::ffi::c_char)
+                .to_string_lossy()
+                .split_ascii_whitespace()
+                .any(|e| e == "GL_OES_EGL_image_external")
+    }
 }
 
 /// The context's imports, and the EGL entry points they need.
@@ -63,6 +92,9 @@ pub(super) struct Imports {
     #[cfg(target_os = "android")]
     client_buffer: Option<NativeClientBuffer>,
     dma_buf: bool,
+    /// The external-texture program is built (`has_oes_external`).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    oes: bool,
     map: HashMap<usize, Import>,
     /// The images the last frame drew, held until the next one.
     held: Vec<Arc<ExternalImage>>,
@@ -76,8 +108,9 @@ unsafe fn proc_addr<T: Copy>(name: &CStr) -> Option<T> {
 }
 
 impl Imports {
-    /// What `dpy` (current, with a context) can import.
-    pub(super) unsafe fn new(dpy: EGLDisplay) -> Self {
+    /// What `dpy` (current, with a context) can import; `oes` if YUV
+    /// buffers can be sampled through an external texture.
+    pub(super) unsafe fn new(dpy: EGLDisplay, oes: bool) -> Self {
         unsafe {
             let ext = eglQueryString(dpy, EGL_EXTENSIONS);
             let ext = if ext.is_null() {
@@ -95,6 +128,7 @@ impl Imports {
                     .then(|| proc_addr(c"eglGetNativeClientBufferANDROID"))
                     .flatten(),
                 dma_buf: cfg!(target_os = "linux") && has("EGL_EXT_image_dma_buf_import"),
+                oes,
                 map: HashMap::new(),
                 held: Vec::new(),
             }
@@ -108,6 +142,13 @@ impl Imports {
         }
         #[cfg(target_os = "android")]
         if self.client_buffer.is_some() {
+            if self.oes {
+                return &[
+                    ExternalFormat::Rgba8,
+                    ExternalFormat::Rgbx8,
+                    ExternalFormat::Yuv420,
+                ];
+            }
             return &[ExternalFormat::Rgba8, ExternalFormat::Rgbx8];
         }
         if self.dma_buf {
@@ -165,8 +206,9 @@ impl Imports {
                 self.held.push(image.clone());
             }
             match i.textures[..] {
+                [t] if i.external => Some(Planes::External(t)),
                 [t] => Some(Planes::One(t)),
-                [y, uv] => Some(Planes::Yuv(y, uv)),
+                [y, uv] => Some(Planes::Yuv(y, uv, image.yuv_color_space())),
                 _ => None,
             }
         }
@@ -178,10 +220,21 @@ impl Imports {
             image: Arc::downgrade(image),
             egl: Vec::new(),
             textures: Vec::new(),
+            external: false,
             used: 0,
         };
         let (Some(create), Some(target)) = (self.create, self.target) else {
             return import;
+        };
+        // A driver-laid YUV buffer is sampled as an external texture.
+        let kind = if image.format() == ExternalFormat::Yuv420 {
+            if !self.oes {
+                return import;
+            }
+            import.external = true;
+            GL_TEXTURE_EXTERNAL_OES
+        } else {
+            GL_TEXTURE_2D
         };
         image.wait_acquire();
         unsafe {
@@ -199,15 +252,19 @@ impl Imports {
                 import.egl.push(egl);
                 let mut tex = 0;
                 glGenTextures(1, &mut tex);
-                glBindTexture(GL_TEXTURE_2D, tex);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glBindTexture(kind, tex);
+                glTexParameteri(kind, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(kind, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(kind, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(kind, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
                 while glGetError() != 0 {}
-                target(GL_TEXTURE_2D, egl);
+                target(kind, egl);
                 import.textures.push(tex);
-                if glGetError() != 0 {
+                let failed = glGetError() != 0;
+                if kind != GL_TEXTURE_2D {
+                    glBindTexture(kind, 0);
+                }
+                if failed {
                     break;
                 }
             }
@@ -289,18 +346,39 @@ unsafe fn free(dpy: EGLDisplay, destroy: Option<DestroyImage>, i: &mut Import) {
 }
 
 /// The YUV program's body: NV12 from a luma (`.r`) and a chroma (`.rg`:
-/// Cb, Cr) texture, full range BT.601 as the CPU converts it.
+/// Cb, Cr) texture, turned into RGB by the image's color space's matrix
+/// (`u_m0`..`u_m2`: rows taking `[y, cb, cr, 1]` to r, g and b), as the CPU
+/// converts it.
 pub(super) const QUAD_YUV_MAIN: &str = "uniform sampler2D u_tex;\n\
 uniform sampler2D u_tex2;\n\
+uniform vec4 u_m0;\n\
+uniform vec4 u_m1;\n\
+uniform vec4 u_m2;\n\
 void main() {\n\
   if (v_mode < 0.5) {\n\
     gl_FragColor = quadBox();\n\
   } else {\n\
     vec2 uv = clamp(v_p, v_a2.xy, v_a2.zw);\n\
-    float y = texture2D(u_tex, uv).r;\n\
-    vec2 c = texture2D(u_tex2, uv).rg - vec2(128.0 / 255.0);\n\
-    vec4 t = vec4(clamp(vec3(y + 1.402 * c.y, y - 0.344136 * c.x - 0.714136 * c.y,\n\
-                             y + 1.772 * c.x), 0.0, 1.0), 1.0);\n\
+    vec4 yuv = vec4(texture2D(u_tex, uv).r, texture2D(u_tex2, uv).rg, 1.0);\n\
+    vec4 t = vec4(clamp(vec3(dot(u_m0, yuv), dot(u_m1, yuv), dot(u_m2, yuv)), 0.0, 1.0), 1.0);\n\
+    t *= v_a3;\n\
+    float cov = clamp(min(v_a1.x, v_a1.z) + 0.5, 0.0, 1.0)\n\
+              * clamp(min(v_a1.y, v_a1.w) + 0.5, 0.0, 1.0);\n\
+    gl_FragColor = t * cov;\n\
+  }\n\
+}\n";
+
+/// What the external-texture program needs first.
+pub(super) const OES_EXTENSION: &str = "#extension GL_OES_EGL_image_external : require\n";
+
+/// The external-texture program's body: the quad program sampling a
+/// `samplerExternalOES` (opaque: the driver converted the YUV).
+pub(super) const QUAD_EXT_MAIN: &str = "uniform samplerExternalOES u_tex;\n\
+void main() {\n\
+  if (v_mode < 0.5) {\n\
+    gl_FragColor = quadBox();\n\
+  } else {\n\
+    vec4 t = vec4(texture2D(u_tex, clamp(v_p, v_a2.xy, v_a2.zw)).rgb, 1.0);\n\
     t *= v_a3;\n\
     float cov = clamp(min(v_a1.x, v_a1.z) + 0.5, 0.0, 1.0)\n\
               * clamp(min(v_a1.y, v_a1.w) + 0.5, 0.0, 1.0);\n\

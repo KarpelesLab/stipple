@@ -70,7 +70,7 @@ pub mod external {
     pub use crate::platform::external::udmabuf;
     pub use crate::platform::external::{
         DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, ExternalError, ExternalFormat,
-        ExternalImage, PlaneLayout, imported_natively,
+        ExternalImage, PlaneLayout, YuvColorSpace, imported_natively,
     };
 }
 pub(crate) use external::{ExternalFormat, ExternalImage};

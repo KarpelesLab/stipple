@@ -9,6 +9,7 @@
 //! to its producer (the camera's pool) while a frame in flight reads it.
 
 use super::*;
+use crate::render::external::YuvColorSpace;
 use crate::render::{ExternalFormat, ExternalImage};
 use std::collections::VecDeque;
 
@@ -55,15 +56,15 @@ impl Imports {
         crate::platform::external::note_native(if yuv { &all } else { &all[..2] });
     }
 
-    /// The texture, and for NV12 the chroma texture too, for `image`;
-    /// `None` if it isn't an `IOSurface` or can't be bound.
+    /// The texture, and for NV12 the chroma texture and color space too,
+    /// for `image`; `None` if it isn't an `IOSurface` or can't be bound.
     pub(super) unsafe fn get(
         &mut self,
         device: Id,
         image: &Arc<ExternalImage>,
         count: u64,
         yuv: bool,
-    ) -> Option<(Id, Option<Id>)> {
+    ) -> Option<(Id, Option<(Id, YuvColorSpace)>)> {
         if image.format() == ExternalFormat::Nv12 && !yuv {
             return None;
         }
@@ -88,7 +89,7 @@ impl Imports {
         }
         match i.textures[..] {
             [t] => Some((t, None)),
-            [y, uv] => Some((y, Some(uv))),
+            [y, uv] => Some((y, Some((uv, image.yuv_color_space())))),
             _ => None,
         }
     }
@@ -115,6 +116,7 @@ unsafe fn import(device: Id, image: &ExternalImage) -> Vec<Id> {
         ExternalFormat::Bgra8 | ExternalFormat::Bgrx8 => &[PIXEL_BGRA8],
         ExternalFormat::Rgba8 | ExternalFormat::Rgbx8 => &[PIXEL_RGBA8],
         ExternalFormat::Nv12 => &[PIXEL_R8, PIXEL_RG8],
+        _ => return Vec::new(),
     };
     let size = image.size();
     let mut out = Vec::new();
@@ -139,21 +141,33 @@ unsafe fn import(device: Id, image: &ExternalImage) -> Vec<Id> {
     out
 }
 
-/// NV12 from a luma (`.r`) and a chroma (`.rg`: Cb, Cr) texture, full range
-/// BT.601 as the CPU converts it (`gl::external::QUAD_YUV_MAIN` in MSL).
+/// The YUV fragment shader's uniforms: `[nearest, 0, 0, 0]`, then the
+/// color space's matrix rows (`YuvColorSpace::rows`).
+pub(super) fn yuv_uniforms(nearest: bool, color: YuvColorSpace) -> [f32; 16] {
+    let mut u = [0.0; 16];
+    u[0] = if nearest { 1.0 } else { 0.0 };
+    u[4..].copy_from_slice(&color.rows());
+    u
+}
+
+/// NV12 from a luma (`.r`) and a chroma (`.rg`: Cb, Cr) texture, turned
+/// into RGB by the image's color space's matrix as the CPU converts it
+/// (`gl::external::QUAD_YUV_MAIN` in MSL).
 pub(super) const MSL_YUV: &str = r#"
+struct YuvU { float4 flags; float4 m0; float4 m1; float4 m2; };
 fragment float4 quad_yuv_fs(QOut in [[stage_in]], texture2d<float> ty [[texture(0)]],
                             texture2d<float> tc [[texture(1)]],
-                            constant float& nearest [[buffer(0)]]) {
+                            constant YuvU& u [[buffer(0)]]) {
     if (in.mode < 0.5) { return quad_box(in); }
     constexpr sampler lin(filter::linear, address::clamp_to_edge);
     constexpr sampler near(filter::nearest, address::clamp_to_edge);
     float2 uv = clamp(in.p, in.a2.xy, in.a2.zw);
-    float y = nearest > 0.5 ? ty.sample(near, uv).r : ty.sample(lin, uv).r;
-    float2 c = (nearest > 0.5 ? tc.sample(near, uv).rg : tc.sample(lin, uv).rg)
-             - float2(128.0 / 255.0);
-    float4 col = float4(clamp(float3(y + 1.402 * c.y, y - 0.344136 * c.x - 0.714136 * c.y,
-                                     y + 1.772 * c.x), 0.0, 1.0), 1.0);
+    bool n = u.flags.x > 0.5;
+    float y = n ? ty.sample(near, uv).r : ty.sample(lin, uv).r;
+    float2 c = n ? tc.sample(near, uv).rg : tc.sample(lin, uv).rg;
+    float4 yuv = float4(y, c, 1.0);
+    float4 col = float4(clamp(float3(dot(u.m0, yuv), dot(u.m1, yuv), dot(u.m2, yuv)),
+                              0.0, 1.0), 1.0);
     col *= in.a3;
     float cov = clamp(min(in.a1.x, in.a1.z) + 0.5, 0.0, 1.0)
               * clamp(min(in.a1.y, in.a1.w) + 0.5, 0.0, 1.0);

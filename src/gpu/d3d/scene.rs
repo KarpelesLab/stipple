@@ -267,6 +267,8 @@ pub(crate) struct D3dExecutor {
     quad_layout: Com,
     ps_quadbox: Com,
     ps_quad: Com,
+    /// Textured quads sampling NV12 (an external image's two planes).
+    ps_quad_yuv: Com,
     /// Whether the quads' vertex shader and layout are bound (else the
     /// paths').
     quad_bound: bool,
@@ -416,6 +418,7 @@ impl D3dExecutor {
                 quad_layout: Com::null(),
                 ps_quadbox: Com::null(),
                 ps_quad: Com::null(),
+                ps_quad_yuv: Com::null(),
                 quad_bound: false,
                 ps_flat: Com::null(),
                 ps_resolve: Com::null(),
@@ -529,6 +532,7 @@ impl D3dExecutor {
             };
             self.ps_quadbox = pixel(c"quadbox_ps")?;
             self.ps_quad = pixel(c"quad_ps")?;
+            self.ps_quad_yuv = pixel(c"quad_yuv_ps")?;
             self.ps_flat = pixel(c"flat_ps")?;
             self.ps_resolve = pixel(c"resolve_ps")?;
 
@@ -1038,11 +1042,25 @@ impl D3dExecutor {
         srv: Option<*mut c_void>,
         nearest: bool,
     ) -> Result<(), GpuError> {
+        unsafe { self.draw_quads_with(f, level, verts, srv, None, nearest) }
+    }
+
+    /// [`draw_quads`](Self::draw_quads), with `chroma` NV12's chroma view
+    /// (`srv` its luma) and the color space it's converted in.
+    unsafe fn draw_quads_with(
+        &mut self,
+        f: &mut Frame,
+        level: &Level,
+        verts: &[f32],
+        srv: Option<*mut c_void>,
+        chroma: Option<(*mut c_void, crate::render::external::YuvColorSpace)>,
+        nearest: bool,
+    ) -> Result<(), GpuError> {
         unsafe {
-            let ps = if srv.is_some() {
-                &self.ps_quad
-            } else {
-                &self.ps_quadbox
+            let ps = match (srv, chroma) {
+                (Some(_), Some(_)) => &self.ps_quad_yuv,
+                (Some(_), None) => &self.ps_quad,
+                _ => &self.ps_quadbox,
             };
             let prog = Self::prog(ps, &self.blend_premul);
             if verts.is_empty() || !self.bind(f, level, prog, &self.ds_test, level.depth) {
@@ -1052,8 +1070,20 @@ impl D3dExecutor {
                 self.bind_texture(srv);
             }
             self.use_quads(true);
-            let u = quad_constants(device_to_clip(f.w, f.h), nearest);
-            self.draw_vertices(verts, QUAD_STRIDE, &u)
+            let xf = device_to_clip(f.w, f.h);
+            let Some((uv, color)) = chroma else {
+                let u = quad_constants(xf, nearest);
+                return self.draw_vertices(verts, QUAD_STRIDE, &u);
+            };
+            let ctx = self.ctx.ptr();
+            com!(ctx, VT_CTX_PS_SET_SHADER_RESOURCES,
+                (u32, u32, *const *mut c_void) -> (), 1, 1, &uv);
+            let u = quad_yuv_constants(xf, nearest, color.rows());
+            let drawn = self.draw_vertices(verts, QUAD_STRIDE, &u);
+            let none: *mut c_void = std::ptr::null_mut();
+            com!(ctx, VT_CTX_PS_SET_SHADER_RESOURCES,
+                (u32, u32, *const *mut c_void) -> (), 1, 1, &none);
+            drawn
         }
     }
 
@@ -1271,6 +1301,7 @@ impl D3dExecutor {
             for cmd in &plan.cmds {
                 let op = match cmd {
                     Cmd::Quads(q) => {
+                        let mut chroma = None;
                         let srv = match &q.texture {
                             None => None,
                             Some(TexRef::Image(image)) => self.texture(image),
@@ -1282,7 +1313,10 @@ impl D3dExecutor {
                             Some(TexRef::External(image)) => {
                                 let dev = self.device.ptr();
                                 match self.externals.get(dev, image, self.count) {
-                                    Some(srv) => Some(srv),
+                                    Some(v) => {
+                                        chroma = v.chroma;
+                                        Some(v.srv)
+                                    }
                                     // Its pixels, if it has some for the CPU.
                                     None => image.pixmap().and_then(|p| self.texture(&p)),
                                 }
@@ -1292,7 +1326,7 @@ impl D3dExecutor {
                         let verts =
                             &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
                         let level = levels.last().unwrap();
-                        self.draw_quads(f, level, verts, srv, q.nearest)?;
+                        self.draw_quads_with(f, level, verts, srv, chroma, q.nearest)?;
                         continue;
                     }
                     Cmd::Op(i) => &plan.ops[*i],

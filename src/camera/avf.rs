@@ -382,7 +382,7 @@ extern "C" fn did_output(this: Id, _cmd: Sel, _output: Id, buffer: *mut c_void, 
                     rotation,
                     mirrored,
                 },
-                Some(&mut external),
+                Some((crate::render::ExternalFormat::Nv12, &mut external)),
             );
         }
         (lib.unlock)(pixels, READ_ONLY);

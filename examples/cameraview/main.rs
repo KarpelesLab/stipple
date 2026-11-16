@@ -255,6 +255,10 @@ pub fn main() {
         .logical_size(Size::new(480.0, 640.0))
         .edge_to_edge(true)
         .on_lifecycle(|_, change| log(&format!("cameraview: lifecycle {change:?}")));
+    // Built with a GPU backend (`STIPPLE_APK_FEATURES=gl` for the APK), drawn
+    // with it: the preview then samples the camera's own buffers.
+    #[cfg(any(feature = "vk", feature = "gl"))]
+    let app = app.renderer(stipple::render::Renderer::Gpu);
     let handle = app.handle();
     if ask_now {
         ask(&handle);

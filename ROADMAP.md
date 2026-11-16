@@ -1176,12 +1176,25 @@ CPU elsewhere, and the CPU is always the fallback.
   Vulkan (`dma-buf`), Metal (`IOSurface`, NV12 converted in the shader) and
   Direct3D 11 (shared handles), read on the CPU elsewhere and by the
   software renderer. The macOS/iOS camera preview hands Metal its
-  `CVPixelBuffer`. Run: the `dma-buf` import on GLES (llvmpipe, and an
-  NVIDIA GPU's own tiled buffers) and Vulkan (lavapipe). Left: Vulkan's
-  import of a tiled NVIDIA buffer samples nothing, Metal, Direct3D 11 and
-  Android to run on devices, NV12 on Vulkan and
-  Direct3D 11, the Android camera (`AHardwareBuffer` YUV needs an
-  external-texture sampler), and video frames (no video decoder yet).*
+  `CVPixelBuffer`. NV12 is imported everywhere it can be: Vulkan as an
+  `R8` and an `R8G8` plane image of the `dma-buf`, Direct3D 11 as a
+  `DXGI_FORMAT_NV12` texture through two plane views, both converted in the
+  shader like GLES and Metal; YUV images carry their color space (BT.601 or
+  BT.709, full or limited range), one matrix for every converter. The
+  Android camera hands the preview each `AImage`'s `AHardwareBuffer`
+  (`Yuv420`), sampled by GLES as a `GL_TEXTURE_EXTERNAL_OES` texture; on the
+  web a `<video>`, `VideoFrame`, `ImageBitmap` or canvas the page holds is
+  an external image (`ExternalImage::web_source`), imported by WebGPU
+  (`importExternalTexture`) or handed to WebGL2's `texImage2D` each frame,
+  and the camera preview draws its `<video>` that way. Run: the `dma-buf`
+  import on GLES (llvmpipe, and an NVIDIA GPU's own tiled buffers) and
+  Vulkan (lavapipe, NV12 included), the shared NV12 texture on WARP
+  (Direct3D 11). Left: Vulkan's import of a tiled NVIDIA buffer samples
+  nothing; Vulkan's `AHardwareBuffer` import (it needs
+  `VK_ANDROID_external_memory_android_hardware_buffer` and a sampler YCbCr
+  conversion); Metal, the Android camera and the web's sources to run on
+  devices and in a browser with a video; video frames (no video decoder
+  yet).*
 - 🚧 Natively drawn controls (`Theme::native()`) kept as cached textures, so
   the native theme works under the GPU renderers.
   *The bitmaps the OS draws, cached by control, value, state, appearance,
@@ -2874,7 +2887,10 @@ game needs on top:
   85 ms on the CPU; on llvmpipe 4–5 ms, slower than the CPU blits.
   Run on Vulkan (NVIDIA) and GLES (llvmpipe, NVIDIA) under Xvfb, and in
   CI on lavapipe, llvmpipe and WARP (Direct3D 11); Metal compile-checked,
-  run by the macOS job (non-blocking); the web keeps the bitmap. See [games.md](docs/games.md#on-the-gpu).*
+  run by the macOS job (non-blocking). On the web, WebGPU and WebGL2 draw
+  the resampled layer too (an op of its own in the op buffer), and the site
+  check fails `spritedemo@gpu` if a frame after the warm-up uploads a
+  texture. See [games.md](docs/games.md#on-the-gpu).*
 
 #### 9d — Audio
 - ✅ Audio output on every platform, each through the OS's own API with

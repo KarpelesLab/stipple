@@ -11,6 +11,10 @@
 //! torch is `FLASH_MODE_TORCH`, the zoom a centered `SCALER_CROP_REGION`,
 //! and a focus point the AF (and AE) regions there.
 //!
+//! While the window's renderer imports the reader's buffers (GLES through
+//! an external texture), the preview gets each image's `AHardwareBuffer`
+//! instead of a converted copy ([`hwbuf`]).
+//!
 //! [`stop`](Session::stop) closes the device (another app may take the
 //! camera while this one is in the background) and
 //! [`start`](Session::start) opens it again.
@@ -22,6 +26,9 @@ use crate::geometry::{PhysicalSize, Point};
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+
+#[path = "android/hwbuf.rs"]
+mod hwbuf;
 
 /// Whether Stipple captures from cameras here.
 pub(super) const SUPPORTED: bool = true;
@@ -385,6 +392,7 @@ unsafe extern "C" fn on_image(ctx: *mut c_void, reader: *mut c_void) {
     if unsafe { (lib.acquire_latest)(reader, &mut image) } != 0 || image.is_null() {
         return;
     }
+    let kept = std::cell::Cell::new(false);
     let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
         let Some(sink) = ctx.sink() else {
             return;
@@ -411,16 +419,24 @@ unsafe extern "C" fn on_image(ctx: *mut c_void, reader: *mut c_void) {
             );
         }
         let (rotation, mirrored) = sink.orient(ctx.sensor, ctx.front, false);
-        sink.deliver(&Frame {
-            size: PhysicalSize::new(w.max(0) as u32, h.max(0) as u32),
-            format: FrameFormat::Yuv420,
-            planes: &planes,
-            timestamp: Duration::from_nanos(t.max(0) as u64),
-            rotation,
-            mirrored,
-        });
+        // The image's own buffer, for a renderer that samples it: kept out
+        // of the reader while the preview holds it.
+        let mut external = || hwbuf::external(lib, reader, image, &kept);
+        sink.deliver_with(
+            &Frame {
+                size: PhysicalSize::new(w.max(0) as u32, h.max(0) as u32),
+                format: FrameFormat::Yuv420,
+                planes: &planes,
+                timestamp: Duration::from_nanos(t.max(0) as u64),
+                rotation,
+                mirrored,
+            },
+            Some((crate::render::ExternalFormat::Yuv420, &mut external)),
+        );
     }));
-    unsafe { (lib.image_delete)(image) };
+    if !kept.get() {
+        unsafe { (lib.image_delete)(image) };
+    }
     if delivered.is_err() {
         eprintln!("stipple: the camera's frame callback panicked");
     }
@@ -506,7 +522,7 @@ impl NdkSession {
                 });
             }
             let (w, h) = self.size;
-            let r = (lib.reader_new)(w, h, AIMAGE_FORMAT_YUV_420_888, 3, &mut o.reader);
+            let r = hwbuf::new_reader(lib, w, h, AIMAGE_FORMAT_YUV_420_888, &mut o.reader);
             if r != 0 || o.reader.is_null() {
                 close(lib, o);
                 return Err(os("AImageReader_new", r));
@@ -629,7 +645,7 @@ fn close(lib: &Lib, o: Open) {
                 on_image_available: None,
             };
             (lib.reader_listener)(o.reader, &mut none);
-            (lib.reader_delete)(o.reader);
+            hwbuf::delete_reader(lib, o.reader);
         }
         if !o.manager.is_null() {
             (lib.manager_delete)(o.manager);

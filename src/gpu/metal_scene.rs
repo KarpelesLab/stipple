@@ -981,7 +981,7 @@ impl MetalExecutor {
     /// Draw `count` quad vertices from `first` of `quads` (see
     /// `super::batch`) in one call: sampling `tex` (nearest-neighbor or
     /// bilinear), or boxes only without one; with `chroma`, `tex` is NV12's
-    /// luma and `chroma` its chroma.
+    /// luma and `chroma` its chroma, converted in that color space.
     #[allow(clippy::too_many_arguments)]
     unsafe fn draw_quads(
         &mut self,
@@ -991,7 +991,7 @@ impl MetalExecutor {
         first: u32,
         count: u32,
         tex: Option<Id>,
-        chroma: Option<Id>,
+        chroma: Option<(Id, crate::render::external::YuvColorSpace)>,
         nearest: bool,
     ) -> Result<(), GpuError> {
         unsafe {
@@ -1008,11 +1008,13 @@ impl MetalExecutor {
             self.vertices(f, verts, Self::xf(f.w, f.h))?;
             if let Some(tex) = tex {
                 send!((); f.enc, c"setFragmentTexture:atIndex:", tex; Id, 0usize; usize);
-                if let Some(uv) = chroma {
+                if let Some((uv, color)) = chroma {
                     send!((); f.enc, c"setFragmentTexture:atIndex:", uv; Id, 1usize; usize);
+                    Self::uniforms(f, &external::yuv_uniforms(nearest, color));
+                } else {
+                    let flag: f32 = if nearest { 1.0 } else { 0.0 };
+                    Self::uniforms(f, &flag);
                 }
-                let flag: f32 = if nearest { 1.0 } else { 0.0 };
-                Self::uniforms(f, &flag);
             }
             self.draw(f, count as usize);
             Ok(())

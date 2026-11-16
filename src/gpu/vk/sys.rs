@@ -107,6 +107,7 @@ pub(crate) const DEVICE_TYPE_DISCRETE: u32 = 2;
 // VkFormat
 pub(crate) const FORMAT_UNDEFINED: u32 = 0;
 pub(crate) const FORMAT_R8_UNORM: u32 = 9;
+pub(crate) const FORMAT_R8G8_UNORM: u32 = 16;
 pub(crate) const FORMAT_R8G8B8A8_UNORM: u32 = 37;
 pub(crate) const FORMAT_B8G8R8A8_UNORM: u32 = 44;
 pub(crate) const FORMAT_R32G32B32A32_SFLOAT: u32 = 109;

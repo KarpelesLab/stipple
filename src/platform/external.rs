@@ -49,6 +49,11 @@ use crate::geometry::PhysicalSize;
 use crate::render::Pixmap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+#[cfg(target_arch = "wasm32")]
+pub(crate) mod web;
+mod yuv;
+pub use yuv::YuvColorSpace;
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 
@@ -67,10 +72,18 @@ pub enum ExternalFormat {
     Rgbx8,
     /// [`Bgra8`](Self::Bgra8) with the alpha byte ignored (DRM `XRGB8888`).
     Bgrx8,
-    /// Two-plane YUV 4:2:0, full range BT.601 (as the camera's frames): a
-    /// plane of luma bytes, then one of interleaved Cb, Cr pairs at half the
-    /// width and height (DRM `NV12`, `kCVPixelFormatType_420YpCbCr8BiPlanarFullRange`).
+    /// Two-plane YUV 4:2:0: a plane of luma bytes, then one of interleaved
+    /// Cb, Cr pairs at half the width and height (DRM `NV12`,
+    /// `kCVPixelFormatType_420YpCbCr8BiPlanarFullRange`, DXGI `NV12`). Full
+    /// range BT.601 (as the camera's frames) unless the image says otherwise
+    /// ([`ExternalImage::color_space`]).
     Nv12,
+    /// YUV 4:2:0 laid out as only its producer's driver knows: an Android
+    /// camera's `AHardwareBuffer` (`AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420`).
+    /// The GPU samples it through an external texture that converts it
+    /// (GLES `samplerExternalOES`); the CPU reads its planes through
+    /// `AHardwareBuffer_lockPlanes` (Android 10). It has no DRM fourcc.
+    Yuv420,
 }
 
 /// DRM fourcc codes (`drm_fourcc.h`).
@@ -111,6 +124,7 @@ impl ExternalFormat {
             ExternalFormat::Rgbx8 => fourcc::XBGR8888,
             ExternalFormat::Bgrx8 => fourcc::XRGB8888,
             ExternalFormat::Nv12 => fourcc::NV12,
+            ExternalFormat::Yuv420 => 0,
         }
     }
 
@@ -149,6 +163,7 @@ impl ExternalFormat {
         match (self, i) {
             (ExternalFormat::Nv12, 0) => (size.width, size.height, 1),
             (ExternalFormat::Nv12, _) => (size.width.div_ceil(2), size.height.div_ceil(2), 2),
+            (ExternalFormat::Yuv420, _) => (size.width, size.height, 1),
             _ => (size.width, size.height, 4),
         }
     }
@@ -165,6 +180,7 @@ impl ExternalFormat {
             ExternalFormat::Bgra8 => &[fourcc::ARGB8888],
             ExternalFormat::Rgbx8 => &[fourcc::XBGR8888],
             ExternalFormat::Bgrx8 => &[fourcc::XRGB8888],
+            ExternalFormat::Yuv420 => &[],
         }
     }
 }
@@ -247,6 +263,11 @@ pub(crate) enum Handle {
     /// An `AHardwareBuffer*`, acquired.
     #[cfg(target_os = "android")]
     HardwareBuffer(*mut std::ffi::c_void),
+    /// A source the page holds (`web/stipple.js`'s `externalSource`: a
+    /// `<video>`, a `VideoFrame`, an `ImageBitmap`, a canvas), by its id;
+    /// an `owned` one is let go of with the image.
+    #[cfg(target_arch = "wasm32")]
+    Web { id: u32, owned: bool },
 }
 
 type ReleaseFn = Box<dyn FnOnce() + Send>;
@@ -275,6 +296,7 @@ pub struct ExternalImage {
     format: ExternalFormat,
     planes: Vec<PlaneLayout>,
     modifier: u64,
+    color: YuvColorSpace,
     #[cfg(any(target_os = "linux", target_os = "android"))]
     acquire: Mutex<Option<OwnedFd>>,
     pixmap: OnceLock<Option<Arc<Pixmap>>>,
@@ -298,6 +320,8 @@ impl std::fmt::Debug for ExternalImage {
             Handle::Dxgi { .. } => "DXGI shared handle",
             #[cfg(target_os = "android")]
             Handle::HardwareBuffer(_) => "AHardwareBuffer",
+            #[cfg(target_arch = "wasm32")]
+            Handle::Web { .. } => "web source",
         };
         f.debug_struct("ExternalImage")
             .field("handle", &kind)
@@ -305,6 +329,7 @@ impl std::fmt::Debug for ExternalImage {
             .field("format", &self.format)
             .field("planes", &self.planes)
             .field("modifier", &format_args!("{:#x}", self.modifier))
+            .field("color", &self.color)
             .finish_non_exhaustive()
     }
 }
@@ -324,6 +349,7 @@ impl ExternalImage {
             format,
             planes,
             modifier,
+            color: YuvColorSpace::default(),
             #[cfg(any(target_os = "linux", target_os = "android"))]
             acquire: Mutex::new(None),
             pixmap: OnceLock::new(),
@@ -364,6 +390,9 @@ impl ExternalImage {
         if size.width == 0 || size.height == 0 {
             return Err(ExternalError::Invalid("an empty dma-buf".into()));
         }
+        if format == ExternalFormat::Yuv420 {
+            return Err(ExternalError::UnsupportedFormat(0));
+        }
         if planes.len() != format.planes() {
             return Err(ExternalError::BadPlanes);
         }
@@ -393,7 +422,8 @@ impl ExternalImage {
     /// The `IOSurfaceRef` `surface` (retained here, released when the image
     /// is dropped): a `CVPixelBuffer`'s (`CVPixelBufferGetIOSurface`), a
     /// surface looked up by its global id, one a Metal texture was made
-    /// from. Its pixel format must be `BGRA`, `RGBA` or `420f`.
+    /// from. Its pixel format must be `BGRA`, `RGBA`, `420f` or `420v` (NV12
+    /// in the video range: [`YuvColorSpace::Bt601Limited`]).
     ///
     /// # Safety
     ///
@@ -405,8 +435,13 @@ impl ExternalImage {
         }
         unsafe {
             let code = apple::IOSurfaceGetPixelFormat(surface);
-            let format = ExternalFormat::from_core_video(code)
-                .ok_or(ExternalError::UnsupportedFormat(code))?;
+            let video_range = code == u32::from_be_bytes(*b"420v");
+            let format = if video_range {
+                ExternalFormat::Nv12
+            } else {
+                ExternalFormat::from_core_video(code)
+                    .ok_or(ExternalError::UnsupportedFormat(code))?
+            };
             let size = PhysicalSize::new(
                 apple::IOSurfaceGetWidth(surface) as u32,
                 apple::IOSurfaceGetHeight(surface) as u32,
@@ -431,18 +466,25 @@ impl ExternalImage {
                     .collect()
             };
             apple::CFRetain(surface);
-            Ok(Self::with_handle(
+            let image = Self::with_handle(
                 Handle::IoSurface(surface),
                 size,
                 format,
                 planes,
                 DRM_FORMAT_MOD_INVALID,
-            ))
+            );
+            Ok(if video_range {
+                image.color_space(YuvColorSpace::Bt601Limited)
+            } else {
+                image
+            })
         }
     }
 
     /// A DXGI shared handle to a texture of `size` pixels in `format`
-    /// (`Rgba8`, `Bgra8` and their X forms): an NT handle (`nt`, from
+    /// (`Rgba8`, `Bgra8` and their X forms, or `Nv12`: a `DXGI_FORMAT_NV12`
+    /// texture, as a video decoder gives, its planes sampled through an `R8`
+    /// and an `R8G8` view and converted in the shader): an NT handle (`nt`, from
     /// `IDXGIResource1::CreateSharedHandle`; the image owns it and closes
     /// it) or a legacy one (`IDXGIResource::GetSharedHandle`; not owned).
     ///
@@ -463,24 +505,31 @@ impl ExternalImage {
         if handle.is_null() || size.width == 0 || size.height == 0 {
             return Err(ExternalError::Invalid("a null shared handle".into()));
         }
-        if format == ExternalFormat::Nv12 {
-            return Err(ExternalError::UnsupportedFormat(format.drm_fourcc()));
+        if format == ExternalFormat::Yuv420 {
+            return Err(ExternalError::UnsupportedFormat(0));
         }
+        let planes = (0..format.planes())
+            .map(|i| {
+                let (w, _, bpp) = format.plane_extent(i, size);
+                PlaneLayout {
+                    offset: 0,
+                    stride: w * bpp,
+                }
+            })
+            .collect();
         Ok(Self::with_handle(
             Handle::Dxgi { handle, nt },
             size,
             format,
-            vec![PlaneLayout {
-                offset: 0,
-                stride: size.width * 4,
-            }],
+            planes,
             DRM_FORMAT_MOD_INVALID,
         ))
     }
 
     /// The `AHardwareBuffer*` `buffer` (acquired here, released when the
-    /// image is dropped). Its format must be `R8G8B8A8_UNORM` or
-    /// `R8G8B8X8_UNORM`.
+    /// image is dropped). Its format must be `R8G8B8A8_UNORM`,
+    /// `R8G8B8X8_UNORM` or `Y8Cb8Cr8_420` (a camera's YUV frames:
+    /// [`ExternalFormat::Yuv420`], sampled through an external texture).
     ///
     /// # Safety
     ///
@@ -499,6 +548,7 @@ impl ExternalImage {
             let format = match d.format {
                 ahb::FORMAT_R8G8B8A8 => ExternalFormat::Rgba8,
                 ahb::FORMAT_R8G8B8X8 => ExternalFormat::Rgbx8,
+                ahb::FORMAT_Y8CB8CR8_420 => ExternalFormat::Yuv420,
                 other => return Err(ExternalError::UnsupportedFormat(other)),
             };
             if d.width == 0 || d.height == 0 {
@@ -511,11 +561,24 @@ impl ExternalImage {
                 format,
                 vec![PlaneLayout {
                     offset: 0,
-                    stride: d.stride * 4,
+                    stride: d.stride * format.plane_extent(0, PhysicalSize::new(1, 1)).2,
                 }],
                 DRM_FORMAT_MOD_INVALID,
             ))
         }
+    }
+
+    /// The YUV color space of an [`Nv12`](ExternalFormat::Nv12) image (what
+    /// its producer said: BT.601 or BT.709, full or limited range); full
+    /// range BT.601 if not given. The other formats ignore it.
+    pub fn color_space(mut self, color: YuvColorSpace) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Its YUV color space ([`color_space`](Self::color_space)).
+    pub fn yuv_color_space(&self) -> YuvColorSpace {
+        self.color
     }
 
     /// Pixels for a renderer that can't import the buffer (the software
@@ -619,14 +682,16 @@ impl ExternalImage {
                 if !modifier_is_linear(self.modifier) {
                     return None;
                 }
-                unix::read_dma_buf(fds, &self.planes, self.format, self.size)
+                unix::read_dma_buf(fds, &self.planes, self.format, self.size, self.color)
             }
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Handle::IoSurface(s) => unsafe { apple::read(*s, self.format, self.size) },
+            Handle::IoSurface(s) => unsafe { apple::read(*s, self.format, self.size, self.color) },
             #[cfg(target_os = "windows")]
             Handle::Dxgi { .. } => None,
             #[cfg(target_os = "android")]
             Handle::HardwareBuffer(b) => unsafe { ahb::read(*b, self.format, self.size) },
+            #[cfg(target_arch = "wasm32")]
+            Handle::Web { id, .. } => web::read(*id, self.size),
         }
     }
 }
@@ -659,6 +724,12 @@ impl Drop for ExternalImage {
                     unsafe { (lib.release)(*b) };
                 }
             }
+            #[cfg(target_arch = "wasm32")]
+            Handle::Web { id, owned } => {
+                if *owned {
+                    web::release(*id);
+                }
+            }
         }
     }
 }
@@ -679,7 +750,7 @@ pub(crate) fn modifier_is_linear(modifier: u64) -> bool {
 
 /// What the renderer that drew the last frame imports without a copy, as a
 /// bit per [`ExternalFormat`], and when it said so.
-static NATIVE: Mutex<(u32, Option<std::time::Instant>)> = Mutex::new((0, None));
+static NATIVE: Mutex<(u32, Option<crate::platform::time::Instant>)> = Mutex::new((0, None));
 
 /// Held by tests that set what's imported natively.
 #[cfg(test)]
@@ -693,7 +764,8 @@ fn bit(format: ExternalFormat) -> u32 {
 #[allow(dead_code)] // by the GPU executors built in
 pub(crate) fn note_native(formats: &[ExternalFormat]) {
     let mask = formats.iter().fold(0, |m, f| m | bit(*f));
-    *NATIVE.lock().unwrap_or_else(|e| e.into_inner()) = (mask, Some(std::time::Instant::now()));
+    *NATIVE.lock().unwrap_or_else(|e| e.into_inner()) =
+        (mask, Some(crate::platform::time::Instant::now()));
 }
 
 /// Whether frames are being drawn (in the last half second) by a renderer
@@ -709,12 +781,13 @@ pub fn imported_natively(format: ExternalFormat) -> bool {
 // ---- Converting on the CPU -------------------------------------------------
 
 /// Convert `planes` (each its bytes from the plane's first row, and its
-/// stride) of a `size` image in `format` to straight RGBA.
+/// stride) of a `size` image in `format` (YUV in `color`) to straight RGBA.
 #[allow(dead_code)] // for the GPU executors built in
 pub(crate) fn to_rgba(
     format: ExternalFormat,
     size: PhysicalSize,
     planes: &[(&[u8], usize)],
+    color: YuvColorSpace,
 ) -> Option<Pixmap> {
     let (w, h) = (size.width as usize, size.height as usize);
     if planes.len() < format.planes() {
@@ -733,12 +806,13 @@ pub(crate) fn to_rgba(
                     .iter_mut()
                     .enumerate()
                 {
-                    let [r, g, b] =
-                        crate::camera::yuv_to_rgb(yr[x], cr[(x / 2) * 2], cr[(x / 2) * 2 + 1]);
+                    let [r, g, b] = color.to_rgb(yr[x], cr[(x / 2) * 2], cr[(x / 2) * 2 + 1]);
                     *px = [r, g, b, 255];
                 }
             }
         }
+        // Read through its planes' own layout (`ahb::read`), never here.
+        ExternalFormat::Yuv420 => return None,
         _ => {
             let (src, stride) = planes[0];
             let (bgr, opaque) = match format {
@@ -925,6 +999,7 @@ mod unix {
         planes: &[PlaneLayout],
         format: ExternalFormat,
         size: PhysicalSize,
+        color: YuvColorSpace,
     ) -> Option<Pixmap> {
         let mut maps = Vec::new();
         for (i, (fd, p)) in fds.iter().zip(planes).enumerate() {
@@ -940,7 +1015,7 @@ mod unix {
             .iter()
             .map(|(m, off, stride)| (&m.bytes()[*off..], *stride))
             .collect();
-        to_rgba(format, size, &views)
+        to_rgba(format, size, &views, color)
     }
 }
 
@@ -1048,6 +1123,7 @@ pub(crate) mod apple {
         s: *mut c_void,
         format: ExternalFormat,
         size: PhysicalSize,
+        color: YuvColorSpace,
     ) -> Option<Pixmap> {
         unsafe {
             if IOSurfaceLock(s, READ_ONLY, std::ptr::null_mut()) != 0 {
@@ -1072,7 +1148,7 @@ pub(crate) mod apple {
                     stride,
                 ));
             }
-            let out = to_rgba(format, size, &views);
+            let out = to_rgba(format, size, &views, color);
             IOSurfaceUnlock(s, READ_ONLY, std::ptr::null_mut());
             out
         }
@@ -1098,7 +1174,26 @@ pub(crate) mod ahb {
 
     pub const FORMAT_R8G8B8A8: u32 = 1;
     pub const FORMAT_R8G8B8X8: u32 = 2;
+    /// `AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420`: what an `AImageReader` of
+    /// `YUV_420_888` images holds.
+    pub const FORMAT_Y8CB8CR8_420: u32 = 0x23;
     const USAGE_CPU_READ_OFTEN: u64 = 3;
+
+    /// `AHardwareBuffer_Plane`.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Plane {
+        data: *mut c_void,
+        pixel_stride: u32,
+        row_stride: u32,
+    }
+
+    /// `AHardwareBuffer_Planes`.
+    #[repr(C)]
+    struct Planes {
+        count: u32,
+        planes: [Plane; 4],
+    }
 
     #[repr(C)]
     #[derive(Default)]
@@ -1119,6 +1214,10 @@ pub(crate) mod ahb {
         pub describe: unsafe extern "C" fn(*const c_void, *mut Desc),
         lock: unsafe extern "C" fn(*mut c_void, u64, i32, *const c_void, *mut *mut c_void) -> c_int,
         unlock: unsafe extern "C" fn(*mut c_void, *mut i32) -> c_int,
+        /// `AHardwareBuffer_lockPlanes` (Android 10), for YUV.
+        lock_planes: Option<
+            unsafe extern "C" fn(*mut c_void, u64, i32, *const c_void, *mut Planes) -> c_int,
+        >,
     }
 
     #[link(name = "dl")]
@@ -1146,6 +1245,7 @@ pub(crate) mod ahb {
                 describe: std::mem::transmute(f(c"AHardwareBuffer_describe")?),
                 lock: std::mem::transmute(f(c"AHardwareBuffer_lock")?),
                 unlock: std::mem::transmute(f(c"AHardwareBuffer_unlock")?),
+                lock_planes: f(c"AHardwareBuffer_lockPlanes").map(|p| std::mem::transmute(p)),
             })
         })
         .as_ref()
@@ -1158,6 +1258,9 @@ pub(crate) mod ahb {
         size: PhysicalSize,
     ) -> Option<Pixmap> {
         let lib = lib()?;
+        if format == ExternalFormat::Yuv420 {
+            return unsafe { read_yuv(lib, b, size) };
+        }
         unsafe {
             let mut d = Desc::default();
             (lib.describe)(b, &mut d);
@@ -1169,7 +1272,50 @@ pub(crate) mod ahb {
             }
             let stride = d.stride as usize * 4;
             let bytes = std::slice::from_raw_parts(ptr as *const u8, stride * size.height as usize);
-            let out = to_rgba(format, size, &[(bytes, stride)]);
+            let out = to_rgba(format, size, &[(bytes, stride)], YuvColorSpace::default());
+            (lib.unlock)(b, std::ptr::null_mut());
+            out
+        }
+    }
+
+    /// Lock a YUV buffer's planes for reading and convert them (as the
+    /// camera converts its frames: full range BT.601).
+    unsafe fn read_yuv(lib: &Lib, b: *mut c_void, size: PhysicalSize) -> Option<Pixmap> {
+        let lock_planes = lib.lock_planes?;
+        unsafe {
+            let mut p = Planes {
+                count: 0,
+                planes: [Plane {
+                    data: std::ptr::null_mut(),
+                    pixel_stride: 0,
+                    row_stride: 0,
+                }; 4],
+            };
+            if lock_planes(b, USAGE_CPU_READ_OFTEN, -1, std::ptr::null(), &mut p) != 0 {
+                return None;
+            }
+            let (w, h) = (size.width as usize, size.height as usize);
+            let out =
+                (p.count >= 3 && p.planes[..3].iter().all(|q| !q.data.is_null())).then(|| {
+                    // Each plane's bytes, up to its last pixel.
+                    let plane = |q: &Plane, cw: usize, ch: usize| {
+                        let len = (ch - 1) * q.row_stride as usize
+                            + (cw - 1) * q.pixel_stride as usize
+                            + 1;
+                        crate::camera::Plane::new(
+                            std::slice::from_raw_parts(q.data as *const u8, len),
+                            q.row_stride as usize,
+                            q.pixel_stride.max(1) as usize,
+                        )
+                    };
+                    let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+                    let planes = [
+                        plane(&p.planes[0], w, h),
+                        plane(&p.planes[1], cw, ch),
+                        plane(&p.planes[2], cw, ch),
+                    ];
+                    crate::camera::Frame::yuv(size, &planes).to_pixmap()
+                });
             (lib.unlock)(b, std::ptr::null_mut());
             out
         }
@@ -1275,19 +1421,60 @@ mod tests {
         let s = PhysicalSize::new(2, 1);
         // Rows padded to 12 bytes.
         let bgra = [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0];
-        let p = to_rgba(ExternalFormat::Bgra8, s, &[(&bgra, 12)]).unwrap();
+        let p = to_rgba(
+            ExternalFormat::Bgra8,
+            s,
+            &[(&bgra, 12)],
+            YuvColorSpace::default(),
+        )
+        .unwrap();
         assert_eq!(p.as_bytes(), &[3, 2, 1, 4, 7, 6, 5, 8]);
-        let p = to_rgba(ExternalFormat::Rgbx8, s, &[(&bgra, 12)]).unwrap();
+        let p = to_rgba(
+            ExternalFormat::Rgbx8,
+            s,
+            &[(&bgra, 12)],
+            YuvColorSpace::default(),
+        )
+        .unwrap();
         assert_eq!(p.as_bytes(), &[1, 2, 3, 255, 5, 6, 7, 255]);
         // NV12: gray luma, neutral chroma → gray; strong Cr → red.
         let y = [128, 200];
-        let p = to_rgba(ExternalFormat::Nv12, s, &[(&y, 2), (&[128, 128], 2)]).unwrap();
+        let p = to_rgba(
+            ExternalFormat::Nv12,
+            s,
+            &[(&y, 2), (&[128, 128], 2)],
+            YuvColorSpace::default(),
+        )
+        .unwrap();
         assert_eq!(p.as_bytes(), &[128, 128, 128, 255, 200, 200, 200, 255]);
-        let p = to_rgba(ExternalFormat::Nv12, s, &[(&[76, 76], 2), (&[85, 255], 2)]).unwrap();
+        let p = to_rgba(
+            ExternalFormat::Nv12,
+            s,
+            &[(&[76, 76], 2), (&[85, 255], 2)],
+            YuvColorSpace::default(),
+        )
+        .unwrap();
         let px = p.pixel(0, 0).unwrap();
         assert!(px[0] > 240 && px[1] < 20 && px[2] < 20, "{px:?}");
+        // Limited range BT.709: video black and white.
+        let lim = YuvColorSpace::Bt709Limited;
+        let p = to_rgba(
+            ExternalFormat::Nv12,
+            s,
+            &[(&[16, 235], 2), (&[128, 128], 2)],
+            lim,
+        );
+        assert_eq!(p.unwrap().as_bytes(), &[0, 0, 0, 255, 255, 255, 255, 255]);
         // Too short a plane: nothing.
-        assert!(to_rgba(ExternalFormat::Bgra8, s, &[(&bgra[..6], 12)]).is_none());
+        assert!(
+            to_rgba(
+                ExternalFormat::Bgra8,
+                s,
+                &[(&bgra[..6], 12)],
+                YuvColorSpace::default()
+            )
+            .is_none()
+        );
     }
 
     #[test]

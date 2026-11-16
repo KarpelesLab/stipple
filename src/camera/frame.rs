@@ -96,6 +96,22 @@ pub struct Frame<'a> {
     pub mirrored: bool,
 }
 
+impl<'a> Frame<'a> {
+    /// An upright, unmirrored YUV frame of `planes`: a YUV buffer read on
+    /// the CPU (an `AHardwareBuffer`'s planes, locked).
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(crate) fn yuv(size: PhysicalSize, planes: &'a [Plane<'a>]) -> Self {
+        Frame {
+            size,
+            format: FrameFormat::Yuv420,
+            planes,
+            timestamp: Duration::ZERO,
+            rotation: 0,
+            mirrored: false,
+        }
+    }
+}
+
 impl Frame<'_> {
     /// The luminance plane (Y) of a YUV frame: what a barcode decoder reads.
     /// `None` for RGBA frames.

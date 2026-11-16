@@ -18,6 +18,8 @@ cbuffer Constants : register(b0) {
 };
 
 Texture2D tex0 : register(t0);
+// NV12's chroma (`quad_yuv_ps`), tex0 its luma.
+Texture2D tex1 : register(t1);
 SamplerState smp_bilinear : register(s0);
 SamplerState smp_nearest : register(s1);
 
@@ -132,6 +134,28 @@ float4 quad_ps(QOut i) : SV_Target {
     if (i.mode < 1.5) {
         c.rgb *= c.a;
     }
+    c *= i.a3;
+    float cov = saturate(min(i.a1.x, i.a1.z) + 0.5) * saturate(min(i.a1.y, i.a1.w) + 0.5);
+    return c * cov;
+}
+
+// `quad_ps` sampling NV12 (an external image): luma from tex0 (.r), chroma
+// from tex1 (.rg: Cb, Cr), turned into RGB by the matrix rows u2..u4 (taking
+// [y, cb, cr, 1] to r, g and b). u1.x = nearest.
+float4 quad_yuv_ps(QOut i) : SV_Target {
+    if (i.mode < 0.5) {
+        return quad_box(i);
+    }
+    float2 uv = clamp(i.p, i.a2.xy, i.a2.zw);
+    float4 yuv;
+    if (u1.x > 0.5) {
+        yuv = float4(tex0.SampleLevel(smp_nearest, uv, 0.0).r,
+                     tex1.SampleLevel(smp_nearest, uv, 0.0).rg, 1.0);
+    } else {
+        yuv = float4(tex0.SampleLevel(smp_bilinear, uv, 0.0).r,
+                     tex1.SampleLevel(smp_bilinear, uv, 0.0).rg, 1.0);
+    }
+    float4 c = float4(saturate(float3(dot(u2, yuv), dot(u3, yuv), dot(u4, yuv))), 1.0);
     c *= i.a3;
     float cov = saturate(min(i.a1.x, i.a1.z) + 0.5) * saturate(min(i.a1.y, i.a1.w) + 0.5);
     return c * cov;

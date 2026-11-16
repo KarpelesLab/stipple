@@ -179,15 +179,28 @@ that arrives before the last one was painted isn't converted, so the preview
 runs at whatever rate the renderer keeps up with (with the software renderer
 on a phone, below the camera's 30 fps full screen), while `on_frame` still
 sees every frame. A path with no copy (the camera's buffer imported as a GPU
-texture) is there on macOS and iOS with the Metal renderer: while the
-window's renderer imports NV12, each frame's `CVPixelBuffer` goes to the
-preview as it is (its `IOSurface`, retained while drawn), and the GPU
-samples its two planes and converts them in the shader; nothing is
-converted on the capture thread (see
-[gpu.md](gpu.md#external-images-without-a-copy); compile-checked, not run on
-a device yet). Android (`AHardwareBuffer`, whose YUV layout needs an
-external-texture sampler) and a native preview layer under the window are
-still to come.
+texture) is taken while the window's renderer imports the camera's format
+(see [gpu.md](gpu.md#external-images-without-a-copy)):
+
+- macOS and iOS, Metal: each frame's `CVPixelBuffer` goes to the preview as
+  it is (its `IOSurface`, retained while drawn), and the GPU samples its two
+  planes and converts them in the shader.
+- Android, GLES: the `AImageReader` is made with `AImageReader_newWithUsage`
+  so the GPU can sample its images as well as the CPU read them, and each
+  image's `AHardwareBuffer` (`Y8Cb8Cr8_420`, a layout only the driver knows)
+  goes to the preview, imported through `eglGetNativeClientBufferANDROID`
+  as a `GL_TEXTURE_EXTERNAL_OES` texture that the driver converts as it
+  samples; the `AImage` stays out of the reader until the preview lets go
+  of it. (The Vulkan renderer doesn't import it: the preview converts there.)
+- The web, WebGPU or WebGL2: the camera's `<video>` itself (WebGPU imports
+  it as a `texture_external`, WebGL2 hands it to `texImage2D`), and when the
+  app has no `on_frame` callback the page doesn't read its pixels back at
+  all.
+
+Nothing is converted on the capture thread then; `on_frame` still gets the
+frame's planes (on the web, read back only when there is a callback). These
+paths are compile-checked; none has run on a device yet. A native preview
+layer under the window is still to come.
 
 ### Controls
 

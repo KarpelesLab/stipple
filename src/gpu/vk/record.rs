@@ -41,6 +41,10 @@ pub(crate) enum Pipe {
     QuadBoxes,
     /// A batch of boxes and textured quads (images, glyphs, layers).
     Quads,
+    /// [`Quads`](Self::Quads) sampling an NV12 external image's two planes,
+    /// converted by the matrix at [`YUV_MATRIX`]. Never recorded: the
+    /// executor draws a `Quads` draw of an imported NV12 image with it.
+    QuadsYuv,
     /// A path's coverage resolved into the frame or a layer.
     Resolve,
     /// A clip polygon counted into the stencil (no color).
@@ -56,9 +60,10 @@ pub(crate) enum Pipe {
 }
 
 impl Pipe {
-    pub(crate) const ALL: [Pipe; 9] = [
+    pub(crate) const ALL: [Pipe; 10] = [
         Pipe::QuadBoxes,
         Pipe::Quads,
+        Pipe::QuadsYuv,
         Pipe::Resolve,
         Pipe::ClipInc,
         Pipe::ClipDec,
@@ -78,7 +83,7 @@ impl Pipe {
 
     /// Whether it draws [`Recording::quads`] (else [`Recording::vertices`]).
     pub(crate) fn quad(self) -> bool {
-        matches!(self, Pipe::QuadBoxes | Pipe::Quads)
+        matches!(self, Pipe::QuadBoxes | Pipe::Quads | Pipe::QuadsYuv)
     }
 }
 
@@ -112,6 +117,8 @@ pub(crate) const FLAT_COLOR: usize = 4;
 pub(crate) const RESOLVE_COLOR: usize = 4;
 pub(crate) const RESOLVE_INV: usize = 8;
 pub(crate) const RESOLVE_TAP: usize = 10;
+/// `quad_yuv.frag`'s matrix: three `vec4` rows (`YuvColorSpace::rows`).
+pub(crate) const YUV_MATRIX: usize = 4;
 
 pub(crate) type Push = [f32; PUSH_FLOATS];
 

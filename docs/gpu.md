@@ -183,9 +183,10 @@ renderer does, and turns it into device-space draw operations:
   rectangle with the scene's filter, nearest or bilinear. So a pixel-art
   game's frame never leaves the GPU and its sprite sheets stay textures,
   where the software renderer's bitmap of it would be uploaded anew every
-  frame. Metal, Vulkan, GLES2 and Direct3D 11 execute them; on the web, drawn
-  rotated or flipped, or bigger than the frame, the scene is drawn as the
-  software renderer's bitmap instead. See [games.md](games.md#on-the-gpu).
+  frame. Metal, Vulkan, GLES2, Direct3D 11, WebGPU and WebGL2 execute them
+  (the web's op buffer has a resampled-layer op); drawn rotated or flipped,
+  or bigger than the frame, the scene is drawn as the software renderer's
+  bitmap instead. See [games.md](games.md#on-the-gpu).
 - Gradients, soft masks, raw `oxideav` image nodes and concave clips (none of
   which Stipple's own widgets make) are rasterized on the CPU for just their
   bounds and drawn as an image.
@@ -296,11 +297,18 @@ many the thread's last GPU frame took; the benchmarks report it
 
 A buffer that lives in another API's memory is drawn as an
 `ExternalImage` (`stipple::render::external`): a `dma-buf` (Linux, Android), an `IOSurface`
-(macOS, iOS), a DXGI shared handle (Windows) or an `AHardwareBuffer`
-(Android), with its size, format (`Rgba8`, `Bgra8`, their `X` forms, and
-`Nv12`: two-plane YUV 4:2:0, full range BT.601, as the camera delivers),
-each plane's offset and stride and, for a `dma-buf`, the DRM format
-modifier. `Scene::draw_external(rect, &image)` and
+(macOS, iOS), a DXGI shared handle (Windows), an `AHardwareBuffer`
+(Android) or, in a browser, a source the page holds (a `<video>`, a
+`VideoFrame`, an `ImageBitmap`, a canvas: `ExternalImage::web_source`), with
+its size, format (`Rgba8`, `Bgra8`, their `X` forms; `Nv12`, two-plane YUV
+4:2:0; and `Yuv420`, the YUV of an Android camera's `AHardwareBuffer`, laid
+out as only its driver knows), each plane's offset and stride and, for a
+`dma-buf`, the DRM format modifier. YUV is full range BT.601 (as cameras
+deliver) unless the image says otherwise: `ExternalImage::color_space`
+takes `YuvColorSpace::{Bt601Full, Bt601Limited, Bt709Full, Bt709Limited}`
+(video decoders' limited range BT.709; an `IOSurface` of `420v` is
+`Bt601Limited` by itself), and every converter, the shaders and the CPU,
+uses the same 3×4 matrix for it. `Scene::draw_external(rect, &image)` and
 `draw_external_region(src, dst, &image, &options)` draw it where a
 `Pixmap` would go (rotated, mirrored, faded, as `draw_image_region`); an
 embedded viewport shows one with `App::set_viewport_external` /
@@ -313,18 +321,28 @@ identity as a `Pixmap`'s texture is:
 | Handle | Executor | How | Formats |
 |---|---|---|---|
 | `dma-buf` | GLES (Linux) | `EGL_EXT_image_dma_buf_import`, an `EGLImage` per plane (the modifier echoed), `glEGLImageTargetTexture2DOES` | all; NV12 as an `R8` and a `GR88` plane, converted in the shader |
-| `dma-buf` | Vulkan (Linux) | `VK_EXT_external_memory_dma_buf` and `VK_KHR_external_memory_fd`, laid out with `VK_EXT_image_drm_format_modifier` (modifier, offset, pitch), a dedicated allocation | single-plane |
+| `dma-buf` | Vulkan (Linux) | `VK_EXT_external_memory_dma_buf` and `VK_KHR_external_memory_fd`, laid out with `VK_EXT_image_drm_format_modifier` (modifier, offset, pitch), a dedicated allocation per plane | all; NV12 as an `R8` and an `R8G8` image (each at its own offset and pitch), converted by `quad_yuv.frag` |
 | `IOSurface` | Metal | `newTextureWithDescriptor:iosurface:plane:`, a texture per plane | BGRA, RGBA, NV12 (`R8Unorm` + `RG8Unorm`, converted in the shader) |
-| DXGI shared handle | Direct3D 11 | `ID3D11Device1::OpenSharedResource1` (NT handle) or `OpenSharedResource`, a view in the texture's format | single-plane |
-| `AHardwareBuffer` | GLES (Android) | `eglGetNativeClientBufferANDROID`, `EGL_NATIVE_BUFFER_ANDROID` | `R8G8B8A8`, `R8G8B8X8` |
+| DXGI shared handle | Direct3D 11 | `ID3D11Device1::OpenSharedResource1` (NT handle) or `OpenSharedResource`, a view in the texture's format | all; a `DXGI_FORMAT_NV12` texture through an `R8_UNORM` and an `R8G8_UNORM` view, converted by `quad_yuv_ps` |
+| `AHardwareBuffer` | GLES (Android) | `eglGetNativeClientBufferANDROID`, `EGL_NATIVE_BUFFER_ANDROID` | `R8G8B8A8`, `R8G8B8X8`; `Y8Cb8Cr8_420` (`Yuv420`, the camera's) as a `GL_TEXTURE_EXTERNAL_OES` texture, which the driver converts as it samples (`samplerExternalOES`) |
+| web source | WebGPU | a `<video>` or `VideoFrame` imported each frame (`importExternalTexture`, a `texture_external` sampled by `quad_ext_fs`); an `ImageBitmap` or canvas copied on the GPU (`copyExternalImageToTexture`) | what the browser decodes |
+| web source | WebGL2 | `texImage2D` from the source each frame (the browser copies a video on the GPU) | what the browser decodes |
 
-Where an executor has no import for the handle or the format (NV12 on
-Vulkan and Direct3D 11, any buffer on the web), or the driver refuses it,
-the image is read on the CPU instead, once, and drawn as its pixels: a
-linear `dma-buf` is mapped (`mmap`, inside `DMA_BUF_IOCTL_SYNC`), an
-`IOSurface` locked, an `AHardwareBuffer` locked, NV12 converted as the
-camera converts it. The software renderer draws external images the same
-way. A tiled `dma-buf` or a DXGI texture can't be read there: a producer
+The three shaders that convert NV12 (GLES, Vulkan, Direct3D 11, and Metal's
+`quad_yuv_fs`) sample the luma's `.r` and the chroma's `.rg` (Cb, Cr) and
+take the image's color space as three rows of a matrix (uniforms, push
+constants, the constant buffer), so BT.709 and limited range cost nothing
+more.
+
+Where an executor has no import for the handle or the format (Vulkan's
+`AHardwareBuffer`, which would need `VK_ANDROID_external_memory_android_hardware_buffer`
+and a sampler YCbCr conversion, not done), or the driver refuses it, the
+image is read on the CPU instead, once, and drawn as its pixels: a linear
+`dma-buf` is mapped (`mmap`, inside `DMA_BUF_IOCTL_SYNC`), an `IOSurface`
+locked, an `AHardwareBuffer` locked (a YUV one's planes through
+`AHardwareBuffer_lockPlanes`, Android 10), a web source drawn into a 2D
+canvas and read back, NV12 converted as the camera converts it. The
+software renderer draws external images the same way. A tiled `dma-buf` or a DXGI texture can't be read there: a producer
 that may meet the software renderer gives pixels with
 `ExternalImage::cpu_pixels`.
 
@@ -343,10 +361,16 @@ new `ExternalImage`, even of the same buffer.
 
 **What tells the camera.** Each executor reports, every frame, the formats
 it imports natively (`stipple::render::external::imported_natively`).
-While the window's renderer imports NV12 (Metal), the camera's preview
-gets the frame's `CVPixelBuffer` (retained, so the capture pool doesn't
-reuse it while drawn) instead of converting it on the capture thread; on
-the CPU renderer, or before the first GPU frame, it converts as before. A
+While the window's renderer imports the camera's format, the preview gets
+the camera's own buffer instead of a frame converted on the capture
+thread: on macOS and iOS (NV12, Metal) the frame's `CVPixelBuffer`
+(retained, so the capture pool doesn't reuse it while drawn); on Android
+(`Yuv420`, GLES) the `AImage`'s `AHardwareBuffer`, the reader made with
+`AImageReader_newWithUsage` for the GPU to sample its images too and the
+`AImage` kept out of the reader until the preview lets go of it; on the
+web (WebGPU or WebGL2) the camera's `<video>` itself, and when the app has
+no frame callback the page doesn't read its pixels back at all. On the CPU
+renderer, or before the first GPU frame, it converts as before. A
 canvas that draws an external image is always walked on the GPU rather than
 kept as a CPU-rasterized texture (`gpu::canvas`), so the buffer is
 imported, not read back.
@@ -378,10 +402,20 @@ Run so far:
   match the software renderer (BGRA exactly; NV12 within a mean of 0.33 of
   255, where the GPU samples the half-size chroma plane bilinearly and the
   CPU per pixel).
-- Vulkan on Mesa's lavapipe (CI's Ubuntu runner): the BGRA buffer is
-  imported (no upload, through `VK_EXT_image_drm_format_modifier` with the
-  linear modifier) and matches exactly; the NV12 one is read on the CPU and
-  matches.
+- Vulkan on Mesa's lavapipe (locally with Mesa 25.0, and CI's Ubuntu
+  runner): the BGRA buffer is imported (no upload, through
+  `VK_EXT_image_drm_format_modifier` with the linear modifier) and matches
+  exactly; the NV12 one is imported as two plane images (no upload) and
+  matches as GLES does (a mean of 0.33), and in BT.709 limited range
+  exactly.
+- GLES on llvmpipe, the same NV12 buffer in BT.709 limited range: imported,
+  within a mean of 0.03 of the CPU's conversion.
+- Direct3D 11 on WARP (a scratch run of CI's Windows runner): an NV12
+  texture made shared on another device (legacy shared handle, initial
+  data) is opened, sampled through its two plane views and converted in
+  the shader, within a mean of 0.2 of the CPU's conversion of the same
+  bytes, with no upload (`gpu::d3d::scene::external::tests`, run by the
+  Windows job's `gpu::` tests).
 - GLES on an NVIDIA GPU (driver 595): a buffer the GPU rendered and
   exported (modifier `0x0300000000606011`, block-linear) is imported and
   drawn. NVIDIA's driver accepts a `udmabuf` (system memory) but samples
@@ -392,8 +426,18 @@ Run so far:
 - CI's `visual-gpu` job runs these on llvmpipe and lavapipe with
   `/dev/udmabuf` opened up (the runner's kernel has it built in), not
   blocking yet.
-- Metal, Direct3D 11 and the Android paths are compile-checked only; the
-  camera's zero-copy preview hasn't run on a Mac or an iPhone yet.
+- Metal and the Android paths (the `AHardwareBuffer` import, the camera's
+  external-texture preview) are compile-checked only; the camera's
+  zero-copy preview hasn't run on a Mac, an iPhone or an Android device yet.
+- The web's external sources on WebGPU and WebGL2 (SwiftShader, headless
+  Chrome): a canvas and a `VideoFrame` drawn by `gpucompare` match the CPU
+  exactly, with no upload. The camera's `<video>` preview hasn't run with a
+  camera (headless Chrome has none).
+- Android: the camera's reader (`AImageReader_newWithUsage`, its images
+  sampled by the GPU and read by the CPU) runs on the emulator (frames with
+  a picture, on the CPU renderer); GLES doesn't come up there (the
+  emulator's EGL refuses a context without a surface), so the
+  external-texture import is compile-checked only.
 
 ## Metal
 
@@ -499,7 +543,17 @@ quads batched, each batch one draw with its quad vertices). Images are
 textures the page keeps by id, uploaded the first time an image is drawn and
 freed when it's dropped or unused for 120 frames, exactly as the other
 executors cache theirs; each glyph atlas page is a texture too, updated with
-only what changed in it (`writeTexture`, `texSubImage2D`).
+only what changed in it (`writeTexture`, `texSubImage2D`). A resampled layer
+(`Scene::draw_offscreen`, a game's pixel-art frame) is an op of its own: the
+page draws what follows in the layer's own pixels and composites that part
+of the layer into its rectangle, so a game's frame is never uploaded. An
+external image the page holds (`ExternalImage::web_source`, the camera's
+`<video>`) is drawn straight from the page's object each frame: WebGPU
+imports a `<video>` or `VideoFrame` as a `texture_external`
+(`importExternalTexture`, drawn by `quad_ext_fs` in a shader module of its
+own) and copies an `ImageBitmap` or canvas on the GPU
+(`copyExternalImageToTexture`); WebGL2 hands the object to `texImage2D`.
+Nothing crosses the module's memory for it.
 
 `gpu.js` first *records* the frame (the clip, layer and path logic, shared by
 both APIs) into a list of render-target switches and draws, one array of
@@ -554,12 +608,17 @@ away so the one it spoiled is drawn on the CPU.
 example `gpucompare`, built with `--features gpu`), which holds the
 comparison corpus of `src/gpu/corpus.rs`, draws each scene with the software
 renderer and on WebGPU and WebGL2 into a canvas, and diffs the frames with
-the same tolerances as the native tests. It loses each device and checks a
+the same tolerances as the native tests (`pixel-viewport` is a resampled
+layer), and draws two external sources, a canvas and a `VideoFrame` of it,
+against the CPU reading them back (both exact on SwiftShader, with no
+upload). It loses each device and checks a
 new one comes up, times both renderers, and with `?app=webdemo.wasm` runs the
 web demo with `renderer: "gpu"` through two lost devices (back on the GPU
 after the first, on the CPU after the second). CI's `visual-web-gpu` job runs
 it in headless Chrome on SwiftShader; the site check (`tools/site/check.py`)
-runs six of the examples a second time with `?renderer=gpu`. It also checks
+runs six of the examples a second time with `?renderer=gpu`, reporting the
+texture uploads over the second half of each run, and fails `spritedemo`
+if it uploads any (none on WebGL2 here: 0 in 45 frames). It also checks
 a partial redraw: a frame presented whole, then another redrawn only in a
 rectangle over it.
 

@@ -312,9 +312,13 @@ headless Chrome, and screenshots an app presented with each; the X11 and
 Android present paths have run in CI only (Wayland's also locally on
 NVIDIA), iOS is compile-checked.
 External images (`dma-buf`, `IOSurface`, DXGI shared handles,
-`AHardwareBuffer`) are imported without a copy; the `dma-buf` import has
-run on GLES (llvmpipe, NVIDIA) and Vulkan (lavapipe), the others are
-compile-checked. See
+`AHardwareBuffer`, and on the web a `<video>`, `VideoFrame` or canvas) are
+imported without a copy, NV12 on every native GPU API and an Android
+camera's YUV through an external texture; the `dma-buf` import (NV12
+included) has run on GLES (llvmpipe, NVIDIA) and Vulkan (lavapipe), the
+shared NV12 texture on WARP, the others are compile-checked; the camera
+preview hands the GPU its own buffers on macOS, iOS, Android and the web.
+See
 [gpu.md](gpu.md).
 ⁴⁸ Through the Text Services Framework (a hand-written `ITextStoreACP` text
 store, composition sink and display attributes), with IMM32 when TSF can't

@@ -23,7 +23,22 @@
 //! 7 layer  opacity
 //! 8 pop layer
 //! 9 quads  id nearest n verts[n*20]     (a batch; id 0: boxes only, no texture)
+//! 10 resampled layer  w h dst[4] nearest
+//! 11 external quads   source nearest n verts[n*20]
 //! ```
+//!
+//! A resampled layer (`Scene::draw_offscreen`, a game's low-resolution
+//! frame) draws what follows, up to its pop, in its own pixels (`w`×`h` at
+//! the top-left of a layer, unclipped by what encloses it), then that part
+//! of the layer goes into the device rect `dst`, nearest or bilinear: the
+//! frame never leaves the GPU and nothing is uploaded for it.
+//!
+//! External quads sample a source the page holds (an
+//! [`ExternalImage::web_source`](crate::render::ExternalImage::web_source)
+//! or the camera's `<video>`: `source` is the page's id of it), taken
+//! straight from it each frame: WebGPU imports a `<video>` or `VideoFrame`
+//! as a `texture_external`, other sources are copied on the GPU
+//! (`copyExternalImageToTexture`); WebGL2 hands it to `texImage2D`.
 //!
 //! A path or clip vertex is `x y aux_x aux_y`, a quad vertex the five
 //! `vec4`s `super::batch` describes (see the shaders in `web/gpu.js`).
@@ -103,6 +118,8 @@ const OP_POP_CLIP: u32 = 6;
 const OP_LAYER: u32 = 7;
 const OP_POP_LAYER: u32 = 8;
 const OP_QUADS: u32 = 9;
+const OP_RESAMPLED: u32 = 10;
+const OP_QUADS_EXTERNAL: u32 = 11;
 
 /// Header flag: a partial frame, drawn over the last one.
 const FLAG_PARTIAL: u32 = 1;
@@ -307,10 +324,24 @@ impl WebExecutor {
             0
         });
         self.uploads = 0;
+        // The page draws a source it holds straight from it.
+        crate::platform::external::note_native(&[crate::render::ExternalFormat::Rgbx8]);
         self.sync_atlas(&plan.atlas);
         for cmd in &plan.cmds {
             let op = match cmd {
                 Cmd::Quads(q) => {
+                    let n = QUAD_FLOATS;
+                    let verts = &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
+                    if let Some(TexRef::External(e)) = &q.texture
+                        && let Some(source) = web_source(e)
+                    {
+                        buf.push(OP_QUADS_EXTERNAL);
+                        buf.push(source);
+                        buf.push(u32::from(q.nearest));
+                        buf.push(q.count);
+                        push_f(&mut buf, verts);
+                        continue;
+                    }
                     let id = match &q.texture {
                         None => 0,
                         Some(TexRef::Image(image)) => self.texture(image).unwrap_or(0),
@@ -329,8 +360,6 @@ impl WebExecutor {
                     buf.push(id);
                     buf.push(u32::from(q.nearest));
                     buf.push(q.count);
-                    let n = QUAD_FLOATS;
-                    let verts = &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
                     push_f(&mut buf, verts);
                     continue;
                 }
@@ -364,17 +393,28 @@ impl WebExecutor {
                     buf.push(OP_LAYER);
                     push_f(&mut buf, &[*opacity]);
                 }
-                // Never lowered for the web (`Walker::offscreen` draws the
-                // software renderer's bitmap there): kept balanced anyway.
-                Op::PushResampled(_) => {
-                    buf.push(OP_LAYER);
-                    push_f(&mut buf, &[1.0]);
+                Op::PushResampled(r) => {
+                    buf.push(OP_RESAMPLED);
+                    buf.extend(r.size);
+                    push_f(&mut buf, &r.dst);
+                    buf.push(u32::from(r.nearest));
                 }
                 Op::PopLayer => buf.push(OP_POP_LAYER),
             }
         }
         self.buf = buf;
     }
+}
+
+/// The page's id of the source an external image is, if it's one.
+#[cfg(target_arch = "wasm32")]
+fn web_source(e: &crate::render::ExternalImage) -> Option<u32> {
+    e.web_id()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn web_source(_: &crate::render::ExternalImage) -> Option<u32> {
+    None
 }
 
 impl Drop for WebExecutor {
@@ -515,7 +555,8 @@ mod tests {
                 OP_CLIP_POLY => (0, 4),
                 OP_POP_CLIP | OP_POP_LAYER => (0, 0),
                 OP_LAYER => (1, 0),
-                OP_QUADS => (2, QUAD_FLOATS),
+                OP_RESAMPLED => (7, 0),
+                OP_QUADS | OP_QUADS_EXTERNAL => (2, QUAD_FLOATS),
                 _ => panic!("unknown op {op} at {}", p - 1),
             };
             p += fixed;
@@ -538,6 +579,7 @@ mod tests {
             super::super::corpus::layers(),
             super::super::corpus::clipped(),
             super::super::corpus::regions(),
+            super::super::corpus::pixel_viewport(),
         ] {
             let size = crate::geometry::PhysicalSize::new(320, 240);
             let plan = super::super::ops::plan(&scene, bg, size, &mut rasters);
@@ -546,7 +588,7 @@ mod tests {
             let ops = walk(&ex.buf);
             assert_eq!(ops.len(), plan.cmds.len(), "one op per command");
             let count = |op: u32| ops.iter().filter(|&&o| o == op).count();
-            assert_eq!(count(OP_LAYER), count(OP_POP_LAYER));
+            assert_eq!(count(OP_LAYER) + count(OP_RESAMPLED), count(OP_POP_LAYER));
             assert_eq!(
                 count(OP_CLIP_RECT) + count(OP_CLIP_POLY),
                 count(OP_POP_CLIP)
@@ -592,5 +634,30 @@ mod tests {
             ex.textures.is_empty(),
             "the image is gone: so is its texture"
         );
+    }
+
+    /// A frame drawn at a resolution of its own (a game's) is a resampled
+    /// layer: its size, where it goes and how it's sampled, then what it
+    /// draws; after the first frame nothing is uploaded for it.
+    #[test]
+    fn an_offscreen_scene_is_a_resampled_layer_not_a_bitmap() {
+        let mut ex = executor();
+        let mut rasters = super::super::ops::RasterCache::default();
+        let bg = crate::render::Color::rgb(1, 2, 3);
+        let scene = super::super::corpus::pixel_viewport();
+        let size = crate::geometry::PhysicalSize::new(160, 120);
+        let plan = super::super::ops::plan(&scene, bg, size, &mut rasters);
+        ex.encode(&plan);
+        let ops = walk(&ex.buf);
+        assert!(ops.contains(&OP_RESAMPLED), "{ops:?}");
+        let at = ex.buf.iter().position(|&w| w == OP_RESAMPLED).unwrap();
+        assert_eq!(&ex.buf[at + 1..at + 3], &[40, 30], "its own pixels");
+        assert_eq!(ex.buf[at + 7], 1, "nearest");
+        ex.sweep();
+        // The next frame: the sprite sheet's texture is kept, the frame
+        // isn't uploaded as a bitmap.
+        let plan = super::super::ops::plan(&scene, bg, size, &mut rasters);
+        ex.encode(&plan);
+        assert_eq!(ex.uploads(), 0);
     }
 }

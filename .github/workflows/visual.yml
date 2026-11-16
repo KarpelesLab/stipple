@@ -3101,7 +3101,9 @@ jobs:
       # GPU) against the software renderer, pixel by pixel, with the same
       # tolerances as GLES2 and Metal (src/gpu/compare.rs); with
       # STIPPLE_REQUIRE_GPU the tests fail instead of skipping when there's no
-      # device. Then the frame times, CPU against D3D11, for the log.
+      # device. Then the frame times, CPU against D3D11, for the log. The
+      # gpu:: tests include an NV12 texture shared from another device, drawn
+      # through two plane views without an upload (gpu::d3d::scene::external).
       # Non-blocking until it has passed on the runner: the D3D11 executor was
       # written on a Mac and only compile-checked there.
       - name: Compare the Direct3D 11 renderer with the software one
@@ -3689,11 +3691,12 @@ jobs:
           done
 
       # External images (6g): real dma-bufs, made by the kernel's udmabuf
-      # from known bytes (BGRA, and NV12 as the camera's frames), drawn by
-      # GLES on llvmpipe (imported through EGL_EXT_image_dma_buf_import, no
-      # upload) and by Vulkan on lavapipe (imported where the driver takes
-      # VK_EXT_image_drm_format_modifier, else read on the CPU), against the
-      # software renderer, which maps them. Not blocking yet.
+      # from known bytes (BGRA, and NV12 as the camera's frames, in full
+      # range BT.601 and limited range BT.709), drawn by GLES on llvmpipe
+      # (imported through EGL_EXT_image_dma_buf_import, no upload) and by
+      # Vulkan on lavapipe (imported through VK_EXT_image_drm_format_modifier,
+      # NV12 as two plane images converted in quad_yuv.frag, no upload),
+      # against the software renderer, which maps them. Not blocking yet.
       - name: External dma-buf images match the software renderer (llvmpipe, lavapipe)
         continue-on-error: true
         env:

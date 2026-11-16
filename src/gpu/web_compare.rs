@@ -160,3 +160,45 @@ pub fn partial_gpu(scale: f64, api: u32) -> Result<String, String> {
         Some(corpus::device_region(region, scale)),
     )
 }
+
+/// A scene drawing the page's external source `id` (`w`×`h`): at its size,
+/// then scaled up nearest-neighbor, turned a quarter and mirrored (as the
+/// camera's preview draws its `<video>`).
+#[cfg(target_arch = "wasm32")]
+fn external_scene(id: u32, w: u32, h: u32) -> Scene {
+    use crate::geometry::{Rect, Size};
+    use crate::render::{ExternalImage, ImageOptions};
+    let image = std::sync::Arc::new(ExternalImage::web(
+        id,
+        crate::geometry::PhysicalSize::new(w, h),
+        false,
+    ));
+    let (fw, fh) = (w as f64, h as f64);
+    let mut scene = Scene::new(Size::new(fw * 4.0, fh * 3.0));
+    scene.draw_external(Rect::from_xywh(4.0, 4.0, fw, fh), &image);
+    let src = Rect::from_xywh(0.0, 0.0, fw, fh);
+    let opts = ImageOptions::new()
+        .nearest()
+        .rotate(std::f64::consts::FRAC_PI_2)
+        .flip_y(true);
+    let dst = Rect::from_xywh(fw * 1.5, fh * 0.5, fw * 2.0, fh * 2.0);
+    scene.draw_external_region(src, dst, &image, &opts);
+    scene
+}
+
+/// [`external_scene`] on the CPU (the source read back through the page).
+#[cfg(target_arch = "wasm32")]
+pub fn external_cpu(id: u32, w: u32, h: u32) -> Pixmap {
+    SoftwareRenderer::new()
+        .background(corpus::BACKGROUND)
+        .render(external_scene(id, w, h), ScaleFactor::IDENTITY)
+}
+
+/// [`external_scene`] drawn into the canvas on `api`, the source sampled
+/// straight from the page's object; how many textures it uploaded too.
+#[cfg(target_arch = "wasm32")]
+pub fn external_gpu(id: u32, w: u32, h: u32, api: u32) -> Result<String, String> {
+    let name = present(&external_scene(id, w, h), 1.0, api, None)?;
+    let uploads = GPU.with(|g| g.borrow().as_ref().map_or(0, |r| r.uploads()));
+    Ok(format!("{name}, {uploads} uploads"))
+}

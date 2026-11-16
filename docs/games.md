@@ -546,11 +546,12 @@ game changes:
 - A `PixelViewport` frame (`Scene::draw_offscreen`) is drawn into an
   offscreen target of the virtual resolution and composited into the canvas
   nearest-neighbor: a *resampled layer* (`Op::PushResampled` in
-  `src/gpu/ops.rs`, executed by Metal, Vulkan, GLES and Direct3D 11). Before,
-  the 320×180 frame was rasterized on the CPU each frame and uploaded as a
-  new texture. On the web, drawn rotated, or with a virtual resolution
-  bigger than the window, it is still the software renderer's bitmap,
-  uploaded each frame.
+  `src/gpu/ops.rs`, executed by Metal, Vulkan, GLES, Direct3D 11, and on
+  the web by WebGPU and WebGL2: the op buffer's resampled-layer op, drawn by
+  `web/gpu.js`). Before, the 320×180 frame was rasterized on the CPU each
+  frame and uploaded as a new texture. Drawn rotated, or with a virtual
+  resolution bigger than the window, it is still the software renderer's
+  bitmap, uploaded each frame.
 
 The frames are paced as every frame is (see
 [gpu.md](gpu.md#frame-pacing)): the display's clock asks for them, and the
@@ -585,7 +586,9 @@ there is no hardware GPU, as `Renderer::Auto` keeps it today. CI's runners
 say the same: on lavapipe and llvmpipe 17–21 ms for the sprite cases (12.5
 for the pixel-art frame) against 4–5 ms on their CPU, on WARP 26–31 ms
 (19) against 6.6–6.9 ms; the self-test passes on all three, uploading
-nothing after its warm-up.
+nothing after its warm-up. On the web, the site check
+(`tools/site/check.py`) runs `spritedemo` with `?renderer=gpu` and fails it
+if a frame after the warm-up uploads a texture.
 
 ## Game UI
 

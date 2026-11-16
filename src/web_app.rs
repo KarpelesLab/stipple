@@ -290,6 +290,19 @@ macro_rules! web_app {
                 glue::camera_frame(id, unsafe { glue::take_bytes(ptr, len) }, width, height, ms);
             }
 
+            /// 1 if the frame was taken as the `<video>` itself (`source`,
+            /// drawn by the GPU renderer), else 0: send its pixels.
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_camera_video(
+                id: u32,
+                source: u32,
+                width: u32,
+                height: u32,
+                ms: f64,
+            ) -> u32 {
+                u32::from(glue::camera_video(id, source, width, height, ms))
+            }
+
             #[unsafe(no_mangle)]
             pub extern "C" fn stipple_camera_caps(
                 id: u32,

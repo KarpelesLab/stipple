@@ -51,7 +51,9 @@
 //! | `permission_status(kind) -> u32` | what the Permissions API last said for kind 0 camera, 1 microphone, 2 notifications (`Notification.permission`), 3 location: 0 granted, 1 denied, 2 not asked |
 //! | `permission_request(id, kind)` | asks: `getUserMedia` (its stream stopped at once), `Notification.requestPermission` or `getCurrentPosition`, answering `stipple_answer(id, status)` (3: no device) |
 //! | `camera_count() -> u32` | the video inputs `enumerateDevices` listed (`u32::MAX` until it answered) |
-//! | `camera_open(id, facing, width, height)` | `getUserMedia` (`facingMode` `user` for 1, else `environment`), playing in a hidden `<video>`; reports `stipple_camera_caps(id, flags, zoom_min, zoom_max)` (flags: 1 torch, 2 focus point, 4 facing the user) or `stipple_camera_failed(id, code)`, then each new frame's RGBA through `stipple_camera_frame(id, ptr, len, width, height, ms)` |
+//! | `camera_open(id, facing, width, height)` | `getUserMedia` (`facingMode` `user` for 1, else `environment`), playing in a hidden `<video>` (registered as an external source); reports `stipple_camera_caps(id, flags, zoom_min, zoom_max)` (flags: 1 torch, 2 focus point, 4 facing the user) or `stipple_camera_failed(id, code)`, then offers each new frame as the video through `stipple_camera_video(id, source, width, height, ms)` (1: taken, drawn by the GPU renderer from the video), else hands its RGBA over through `stipple_camera_frame(id, ptr, len, width, height, ms)` |
+//! | `external_read(id, ptr, width, height) -> u32` | draws external source `id` (`ExternalImage::web_source`, the camera's video) into a 2D canvas and copies its RGBA into `ptr`, for the CPU renderer; 0 without one |
+//! | `external_release(id)` | the page forgets external source `id` |
 //! | `camera_pause(id, paused)` | stops handing frames over and disables the track, or the reverse |
 //! | `camera_close(id)` | stops the stream's tracks |
 //! | `camera_torch(id, on)`, `camera_zoom(id, factor)`, `camera_focus(id, x, y)` | `applyConstraints` with `torch`, `zoom`, `pointsOfInterest` |
@@ -1160,6 +1162,18 @@ pub(crate) fn camera_focus(id: u32, x: f64, y: f64) {
 pub fn camera_frame(id: u32, pixels: Vec<u8>, width: u32, height: u32, ms: f64) {
     crate::camera::os::frame(id, &pixels, width, height, ms);
     drain();
+}
+
+/// A frame of camera `id` arrived as its `<video>` (the page's external
+/// source `source`): whether it was taken as that (else the page sends its
+/// pixels).
+#[doc(hidden)]
+pub fn camera_video(id: u32, source: u32, width: u32, height: u32, ms: f64) -> bool {
+    let taken = crate::camera::os::video(id, source, width, height, ms);
+    if taken {
+        drain();
+    }
+    taken
 }
 
 /// Camera `id`'s stream started, and can do this.

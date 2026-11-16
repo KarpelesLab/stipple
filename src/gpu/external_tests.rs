@@ -8,6 +8,7 @@
 use super::renderer::Api;
 use super::*;
 use crate::geometry::Size;
+use crate::render::external::YuvColorSpace;
 use crate::render::external::{DRM_FORMAT_MOD_LINEAR, DmaBufPlane, udmabuf};
 use crate::render::{ExternalFormat, ExternalImage, ImageOptions, SoftwareRenderer};
 use std::sync::Arc;
@@ -57,6 +58,11 @@ fn bgra() -> Option<Arc<ExternalImage>> {
 /// A 16×8 NV12 frame: luma rising left to right, chroma red on the left
 /// half and blue on the right; the chroma plane at a page-aligned offset.
 fn nv12() -> Option<Arc<ExternalImage>> {
+    nv12_in(YuvColorSpace::Bt601Full)
+}
+
+/// [`nv12`] in the color space `color`.
+fn nv12_in(color: YuvColorSpace) -> Option<Arc<ExternalImage>> {
     let (w, h) = (16usize, 8usize);
     let off = 4096;
     let mut bytes = vec![0u8; off + w * h / 2];
@@ -83,7 +89,8 @@ fn nv12() -> Option<Arc<ExternalImage>> {
             DmaBufPlane::new(fd2, off as u64, w as u32),
         ],
     )
-    .unwrap();
+    .unwrap()
+    .color_space(color);
     Some(Arc::new(image))
 }
 
@@ -142,7 +149,7 @@ fn check(name: &str, scene: &Scene, imported: bool) {
         mean < 1.5,
         "{name}: the GPU frame differs: mean {mean}, worst {worst}"
     );
-    if imported && api == Api::Gl {
+    if imported && matches!(api, Api::Gl | Api::Vulkan) {
         assert_eq!(uploads, 0, "{name}: imported, not uploaded");
     }
 }
@@ -179,6 +186,18 @@ fn an_nv12_dma_buf_is_converted_like_the_camera_frames() {
     let src = Rect::from_xywh(0.0, 0.0, 16.0, 8.0);
     scene.draw_external_region(src, Rect::from_xywh(16.0, 24.0, 32.0, 16.0), &image, &opts);
     check("external-nv12", &scene, true);
+}
+
+#[test]
+fn an_nv12_dma_buf_in_bt709_limited_range_is_converted_as_the_cpu_converts_it() {
+    let Some(image) = nv12_in(YuvColorSpace::Bt709Limited) else {
+        return;
+    };
+    let mut scene = Scene::new(Size::new(40.0, 24.0));
+    let opts = ImageOptions::new().nearest();
+    let src = Rect::from_xywh(0.0, 0.0, 16.0, 8.0);
+    scene.draw_external_region(src, Rect::from_xywh(4.0, 4.0, 32.0, 16.0), &image, &opts);
+    check("external-nv12-bt709", &scene, true);
 }
 
 /// A buffer rendered and exported by the GPU itself (through GBM on the

@@ -636,6 +636,21 @@ pub(crate) fn quad_constants(xf: [f32; 4], nearest: bool) -> [[f32; 4]; 2] {
     [xf, [if nearest { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0]]
 }
 
+/// `quad_yuv_ps`: `u1.x` nearest, `u2`..`u4` the YUV matrix's rows
+/// (`YuvColorSpace::rows`).
+pub(crate) fn quad_yuv_constants(xf: [f32; 4], nearest: bool, rows: [f32; 12]) -> [[f32; 4]; 5] {
+    let row = |i: usize| {
+        [
+            rows[i * 4],
+            rows[i * 4 + 1],
+            rows[i * 4 + 2],
+            rows[i * 4 + 3],
+        ]
+    };
+    let [q0, q1] = quad_constants(xf, nearest);
+    [q0, q1, row(0), row(1), row(2)]
+}
+
 /// `flat_ps`: `u1` the color.
 pub(crate) fn flat_constants(xf: [f32; 4], color: [f32; 4]) -> [[f32; 4]; 2] {
     [xf, color]

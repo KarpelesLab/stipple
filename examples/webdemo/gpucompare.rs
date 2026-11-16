@@ -115,6 +115,30 @@ mod harness {
         }
     }
 
+    /// The external-source case (the page's source `id`, `w`×`h`) on the
+    /// CPU, as `cmp_cpu`.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn cmp_external_cpu(id: u32, w: u32, h: u32) -> *const u8 {
+        let p = web_compare::external_cpu(id, w, h);
+        FRAME.with(|f| f.borrow_mut().insert(p).as_bytes().as_ptr())
+    }
+
+    /// The external-source case drawn into the canvas on `api`, as
+    /// `cmp_gpu` (the answer adds how many textures it uploaded).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn cmp_external_gpu(id: u32, w: u32, h: u32, api: u32) -> u32 {
+        match web_compare::external_gpu(id, w, h, api) {
+            Ok(name) => {
+                answer(name);
+                1
+            }
+            Err(e) => {
+                answer(e);
+                0
+            }
+        }
+    }
+
     /// Draw case (or timing scene) `i` into the canvas on `api` (0 the page's
     /// choice, 1 WebGPU, 2 WebGL2): 1 drawn (the text answer is the API's
     /// name), 0 not (the text answer says why).

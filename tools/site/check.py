@@ -9,7 +9,8 @@ A few examples (--gpu, default GPU_EXAMPLES) run a second time with
 `?renderer=gpu` (WebGPU, else WebGL2; SwiftShader here), reported as
 NAME@gpu: they must start and draw as well, and say what drew them (a
 browser with neither API draws them on the CPU, which is a warning, not a
-failure).
+failure), and how many textures they uploaded over the second half of the
+run: one in NO_UPLOADS (a game drawn as a resampled layer) fails if any.
 
 Links: every relative href/src in the site's pages must name a file in the
 site, and a #fragment an id in it.
@@ -128,6 +129,11 @@ def find_chrome(explicit):
 # game's sprites, rich text, a canvas and an image viewer.
 GPU_EXAMPLES = "widgetsdemo,themegallery,spritedemo,richtext,canvasdemo,imagedemo"
 
+# Examples whose frames, once warmed up, upload no texture on the GPU (a game
+# drawn as a resampled layer, its sprite sheets textures already): their
+# @gpu run fails if it uploads anything a frame.
+NO_UPLOADS = {"spritedemo"}
+
 
 def check_examples(site, chrome, only, thumbs, timeout, gpu=()):
     meta = json.loads((site / "site.json").read_text())
@@ -219,22 +225,29 @@ def check_examples(site, chrome, only, thumbs, timeout, gpu=()):
             continue
         errors = [e for e in r["errors"] if e]
         ok = r["started"] and r["presents"] > 0 and r["colors"] > 2 and not any("panicked" in e for e in errors)
+        gpu_drawn = "key" in ex and r.get("renderer") not in (None, "software")
+        uploading = gpu_drawn and ex["name"] in NO_UPLOADS and r.get("uploads", 0) > 0
+        ok = ok and not uploading
         line = f"{'ok  ' if ok else 'FAIL'} {name}: {r['presents']} frames, {r['colors']} colors"
         if "key" in ex:
             line += f", drawn by {r.get('renderer')}"
             if r.get("renderer") in (None, "software"):
                 line += " (warning: no GPU renderer in this browser)"
+            elif r.get("uploadFrames"):
+                line += f", {r.get('uploads', 0)} texture uploads in {r['uploadFrames']} frames"
+                if uploading:
+                    line += " (none expected)"
         if errors:
             line += " | " + " | ".join(e[:300] for e in errors[:3])
         print(line)
         if not ok:
             failed.append(name)
             # What it drew, next to the thumbnails (CI uploads them).
-            if r.get("png", "").startswith("data:image/png;base64,"):
+            if (r.get("png") or "").startswith("data:image/png;base64,"):
                 (site / "thumbs").mkdir(exist_ok=True)
                 (site / "thumbs" / f"FAILED-{name}.png").write_bytes(
                     base64.b64decode(r["png"].split(",", 1)[1]))
-        if thumbs and "key" not in ex and r.get("png", "").startswith("data:image/png;base64,") and ok:
+        if thumbs and "key" not in ex and (r.get("png") or "").startswith("data:image/png;base64,") and ok:
             (site / "thumbs" / f"{name}.png").write_bytes(base64.b64decode(r["png"].split(",", 1)[1]))
     return failed
 
