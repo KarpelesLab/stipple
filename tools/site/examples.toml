@@ -398,6 +398,10 @@ needs = "Threads: it runs background work on a thread, which `wasm32-unknown-unk
 description = "Dropping files and text from other applications, and dragging items inside the app."
 needs = "A desktop: files and text dropped from other apps (the web backend doesn't take drops yet)."
 
+[native.framepacing]
+description = "Animates for three seconds, then idles for three: presents must follow the display's refresh, and the idle app must present nothing and never wake (docs/gpu.md#frame-pacing)."
+needs = "A native window; `STIPPLE_RENDERER` picks the GPU path. It prints the frame counts and exits 1 when they're off."
+
 [native.fontdemo]
 description = "System fonts by family name, bold and italic faces (real or synthesized), a fallback chain, terminal metrics, and text decorations (underline styles, strikethrough, overline, colors)."
 needs = "System fonts, found by family name; the web has only the font the page loads."
