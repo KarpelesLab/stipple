@@ -11,6 +11,7 @@ use crate::geometry::Rect;
 use crate::platform::wake;
 use crate::platform::{UserAttention, WindowId, WindowRequest};
 use crate::platform::{WindowAttributes, WindowInfo};
+use crate::render::ExternalImage;
 use crate::render::Pixmap;
 use std::collections::HashMap;
 
@@ -105,7 +106,7 @@ struct Shared<S> {
     canvases: Vec<CanvasInvalidation>,
     /// Viewport content queued by [`AppHandle::set_viewport_content`]
     /// (`None` clears it).
-    viewports: Vec<(ViewportId, Option<Pixmap>)>,
+    viewports: Vec<(ViewportId, Option<ViewportContent>)>,
     /// Message boxes asked for, and those drawn in the window.
     asked: Vec<Asked<S>>,
     drawn: Vec<Drawn<S>>,
@@ -596,7 +597,23 @@ impl<S> AppHandle<S> {
     /// area is presented. See
     /// [`App::set_viewport_content`](crate::App::set_viewport_content).
     pub fn set_viewport_content(&self, id: ViewportId, content: Pixmap) {
-        self.with(|s| s.viewports.push((id, Some(content))));
+        self.with(|s| {
+            s.viewports
+                .push((id, Some(ViewportContent::Pixels(content))))
+        });
+        wake::wake();
+    }
+
+    /// Show the external `image` (a `dma-buf`, an `IOSurface`, a DXGI
+    /// shared handle, an `AHardwareBuffer`: a content process's or a video
+    /// decoder's frame) in the embedded viewport `id` while the app runs,
+    /// from any thread. A GPU renderer imports it without a copy; see
+    /// [`App::set_viewport_external`](crate::App::set_viewport_external).
+    pub fn set_viewport_external(&self, id: ViewportId, image: Arc<ExternalImage>) {
+        self.with(|s| {
+            s.viewports
+                .push((id, Some(ViewportContent::External(image))))
+        });
         wake::wake();
     }
 
@@ -615,7 +632,7 @@ impl<S> AppHandle<S> {
 
     /// Take the viewport content queued by
     /// [`set_viewport_content`](Self::set_viewport_content).
-    pub(crate) fn take_viewport_content(&self) -> Vec<(ViewportId, Option<Pixmap>)> {
+    pub(crate) fn take_viewport_content(&self) -> Vec<(ViewportId, Option<ViewportContent>)> {
         self.with(|s| std::mem::take(&mut s.viewports))
     }
 
@@ -1079,5 +1096,26 @@ mod tests {
         let mut n = 0;
         h.pump(&mut n, Instant::now());
         assert_eq!(n, 42);
+    }
+}
+
+/// What an embedded viewport shows: pixels, or an image in another API's
+/// memory that a GPU renderer imports without a copy.
+#[derive(Clone, Debug)]
+pub(crate) enum ViewportContent {
+    Pixels(Pixmap),
+    External(Arc<ExternalImage>),
+}
+
+impl ViewportContent {
+    /// The pixels, read from an external image on the CPU if it is one
+    /// (`None` if it can't be read here).
+    pub(crate) fn pixels(&self) -> Option<std::borrow::Cow<'_, Pixmap>> {
+        match self {
+            ViewportContent::Pixels(p) => Some(std::borrow::Cow::Borrowed(p)),
+            ViewportContent::External(e) => e
+                .pixmap()
+                .map(|p| std::borrow::Cow::Owned(Arc::unwrap_or_clone(p))),
+        }
     }
 }

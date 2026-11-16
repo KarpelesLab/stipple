@@ -434,7 +434,7 @@ impl<S: 'static> Pane<S> {
         scene: Scene,
         damage: &Damage,
         theme: &Theme,
-        viewport_content: &HashMap<ViewportId, Pixmap>,
+        viewport_content: &HashMap<ViewportId, crate::core::ViewportContent>,
         window: &dyn Window,
         force: bool,
     ) -> Option<Scene> {
@@ -522,7 +522,11 @@ impl<S: 'static> Pane<S> {
     /// Draw registered viewport content into `scene` over the viewports'
     /// placeholders, as images (the GPU analog of `composite_viewports`).
     #[cfg(feature = "gpu")]
-    fn draw_viewport_content(&self, scene: &mut Scene, content: &HashMap<ViewportId, Pixmap>) {
+    fn draw_viewport_content(
+        &self,
+        scene: &mut Scene,
+        content: &HashMap<ViewportId, crate::core::ViewportContent>,
+    ) {
         if content.is_empty() {
             return;
         }
@@ -538,14 +542,23 @@ impl<S: 'static> Pane<S> {
                     .map_or(bounds.origin, |(_, m, _)| m.apply(bounds.origin));
                 // Whole pixels, unscaled, as the CPU path blits it.
                 let (x, y) = ((at.x * s).round() / s, (at.y * s).round() / s);
-                let size = src.size();
+                let size = match src {
+                    crate::core::ViewportContent::Pixels(p) => p.size(),
+                    crate::core::ViewportContent::External(e) => e.size(),
+                };
                 let rect = crate::geometry::Rect::from_xywh(
                     x,
                     y,
                     size.width as f64 / s,
                     size.height as f64 / s,
                 );
-                scene.draw_image(rect, std::sync::Arc::new(src.clone()));
+                match src {
+                    crate::core::ViewportContent::Pixels(p) => {
+                        scene.draw_image(rect, std::sync::Arc::new(p.clone()))
+                    }
+                    // Imported by the GPU, not copied.
+                    crate::core::ViewportContent::External(e) => scene.draw_external(rect, e),
+                }
             }
         }
     }

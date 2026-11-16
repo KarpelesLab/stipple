@@ -17,7 +17,7 @@
 use crate::geometry::{PhysicalSize, Rect, Vec2};
 use crate::render::canvas::{Canvas, CanvasPaint};
 use crate::render::scene::Scene;
-use crate::render::sprite::SpriteDraw;
+use crate::render::sprite::{ExternalDraw, SpriteDraw};
 use crate::render::{Filter, ImageOptions, Pixmap, SoftwareRenderer};
 use oxideav_core::{
     Group, ImageRef, Node, Path, PathCommand, Rect as OxRect, Transform2D, VideoFrame, VideoPlane,
@@ -25,6 +25,18 @@ use oxideav_core::{
 use std::cell::{OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+
+thread_local! {
+    /// External images this thread drew on the CPU so far, for the GPU's
+    /// canvas cache: a canvas that draws one is drawn on the GPU instead.
+    static EXTERNALS_DRAWN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many external images this thread has drawn on the CPU so far.
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+pub(crate) fn externals_drawn() -> u64 {
+    EXTERNALS_DRAWN.with(|n| n.get())
+}
 
 /// Content recorded by a [`Scene`] as a placeholder, made into nodes when the
 /// scene is lowered.
@@ -48,6 +60,9 @@ pub(crate) enum Deferred {
     /// A scene drawn at a resolution of its own, then scaled into the
     /// placeholder ([`Scene::draw_offscreen`]).
     Offscreen(Rc<Offscreen>),
+    /// A region of an image in another API's memory
+    /// ([`Scene::draw_external_region`]).
+    External(ExternalDraw),
 }
 
 /// What [`Scene::draw_offscreen`] records: `content` drawn into exactly
@@ -103,6 +118,7 @@ impl std::fmt::Debug for Deferred {
             }
             Deferred::Sprite(s) => f.debug_tuple("Sprite").field(&s.src).finish(),
             Deferred::Offscreen(o) => f.debug_tuple("Offscreen").field(&o.pixels).finish(),
+            Deferred::External(e) => f.debug_tuple("External").field(&e.src).finish(),
         }
     }
 }
@@ -440,6 +456,11 @@ impl Lower<'_> {
             } => self.canvas(*bounds, paint, *scale, &local),
             Deferred::Sprite(sprite) => Some(self.sprite(sprite, img, &local)),
             Deferred::Offscreen(o) => Some(self.sprite(&o.sprite()?, img, &local)),
+            // Drawn as its pixels read on the CPU.
+            Deferred::External(e) => {
+                EXTERNALS_DRAWN.with(|n| n.set(n.get() + 1));
+                Some(self.sprite(&e.sprite()?, img, &local))
+            }
         }
     }
 

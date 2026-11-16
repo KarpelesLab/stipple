@@ -30,6 +30,7 @@
 //! atlas page is a texture brought up to date at the start of a frame with
 //! only what changed in it (`glTexSubImage2D`).
 
+use super::external::{self, Imports, Planes};
 use super::*;
 use crate::gpu::atlas::{AtlasPage, Upload};
 use crate::gpu::batch::{self, Cmd, QUAD_FLOATS, TexRef};
@@ -467,6 +468,10 @@ struct State {
     /// Batched quads: boxes only, and boxes with textured quads.
     quad_boxes: Program,
     quads: Program,
+    /// Textured quads sampling NV12 (an external image's two planes).
+    quads_yuv: Program,
+    /// External images imported (`super::external`).
+    externals: Imports,
     flat: Program,
     resolve: Program,
     vbo: GLuint,
@@ -589,8 +594,9 @@ impl State {
 
     /// Let go of the context (and everything made in it) and its window
     /// surfaces; the display stays, as other users may share it.
-    unsafe fn destroy(self) {
+    unsafe fn destroy(mut self) {
         unsafe {
+            self.externals.clear(self.dpy);
             eglMakeCurrent(self.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             for &s in self.windows.values() {
                 eglDestroySurface(self.dpy, s);
@@ -619,6 +625,12 @@ impl State {
                 &format!("{QUAD_BOX}{QUAD_MAIN}"),
                 &["u_tex"],
             )?;
+            let quads_yuv = Program::with(
+                QUAD_VS,
+                QUAD_ATTRIBS,
+                &format!("{QUAD_BOX}{}", external::QUAD_YUV_MAIN),
+                &["u_tex", "u_tex2"],
+            )?;
             let flat = Program::new(FLAT_FS, &["u_color"])?;
             let resolve = Program::new(RESOLVE_FS, &["u_tex", "u_inv", "u_tap", "u_color"])?;
             let mut vbo = 0;
@@ -645,6 +657,8 @@ impl State {
                 swap_damage: None,
                 quad_boxes,
                 quads,
+                quads_yuv,
+                externals: Imports::new(dpy),
                 flat,
                 resolve,
                 vbo,
@@ -731,6 +745,13 @@ impl State {
             glUseProgram(prog.id);
             glUniform4f(prog.loc("u_xf"), 2.0 / w as f32, 2.0 / h as f32, -1.0, -1.0);
         }
+    }
+
+    /// The texture for `image` unless it's past the size limit.
+    unsafe fn image_texture(&mut self, image: &Arc<Pixmap>) -> Option<GLuint> {
+        let size = image.size();
+        (size.width as i32 <= self.max_size && size.height as i32 <= self.max_size)
+            .then(|| unsafe { self.texture(image) })
     }
 
     /// The texture for `image`, uploading it unless it is cached.
@@ -917,6 +938,38 @@ impl State {
                 glBindTexture(GL_TEXTURE_2D, tex);
                 glUniform1i(p.loc("u_tex"), 0);
                 let filter = if nearest { GL_NEAREST } else { GL_LINEAR };
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
+            }
+            self.vertices(p, verts);
+            glDrawArrays(GL_TRIANGLES, 0, (verts.len() / QUAD_FLOATS) as GLsizei);
+            self.draws += 1;
+        }
+    }
+
+    /// [`draw_quads`](Self::draw_quads) sampling NV12: luma from `y`,
+    /// chroma from `uv`, converted in the shader.
+    unsafe fn draw_quads_yuv(
+        &mut self,
+        level: &Level,
+        verts: &[f32],
+        y: GLuint,
+        uv: GLuint,
+        nearest: bool,
+    ) {
+        unsafe {
+            let s = level.scissor;
+            if verts.is_empty() || s[2] <= s[0] || s[3] <= s[1] {
+                return;
+            }
+            let t = self.target(level);
+            let p = &self.quads_yuv;
+            Self::use_program(p, t.w, t.h);
+            let filter = if nearest { GL_NEAREST } else { GL_LINEAR };
+            for (unit, tex, name) in [(1, uv, "u_tex2"), (0, y, "u_tex")] {
+                glActiveTexture(GL_TEXTURE0 + unit);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glUniform1i(p.loc(name), unit as GLint);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
             }
@@ -1258,6 +1311,7 @@ impl State {
             }
             self.uploads = 0;
             self.draws = 0;
+            self.externals.begin(self.dpy, self.frame);
             self.sync_atlas(&plan.atlas);
             self.update_textures(plan);
             let full = [0, 0, w, h];
@@ -1290,25 +1344,37 @@ impl State {
             for cmd in &plan.cmds {
                 let op = match cmd {
                     Cmd::Quads(q) => {
+                        let mut chroma = None;
                         let tex = match &q.texture {
                             None => None,
-                            Some(TexRef::Image(image)) => {
-                                let size = image.size();
-                                (size.width as i32 <= self.max_size
-                                    && size.height as i32 <= self.max_size)
-                                    .then(|| self.texture(image))
-                            }
+                            Some(TexRef::Image(image)) => self.image_texture(image),
                             Some(TexRef::Atlas(i)) => plan
                                 .atlas
                                 .get(*i)
                                 .and_then(|p| self.atlas.get(&p.id))
                                 .map(|t| t.tex),
+                            Some(TexRef::External(image)) => {
+                                match self.externals.get(self.dpy, image, self.frame) {
+                                    Some(Planes::One(t)) => Some(t),
+                                    Some(Planes::Yuv(y, uv)) => {
+                                        chroma = Some(uv);
+                                        Some(y)
+                                    }
+                                    // Its pixels, read on the CPU.
+                                    None => image.pixmap().and_then(|p| self.image_texture(&p)),
+                                }
+                            }
                         };
                         let n = QUAD_FLOATS;
                         let verts =
                             &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];
                         let level = levels.pop().unwrap();
-                        self.draw_quads(&level, verts, tex, q.nearest);
+                        match (tex, chroma) {
+                            (Some(y), Some(uv)) => {
+                                self.draw_quads_yuv(&level, verts, y, uv, q.nearest)
+                            }
+                            _ => self.draw_quads(&level, verts, tex, q.nearest),
+                        }
                         levels.push(level);
                         continue;
                     }

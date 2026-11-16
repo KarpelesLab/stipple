@@ -302,7 +302,11 @@ the web; on Wayland read back and presented as a bitmap. CI compares test
 scenes and an app with the software renderer under Mesa's llvmpipe (GLES)
 and lavapipe (Vulkan), on the macOS runner's Metal device, on WARP and in
 headless Chrome, and screenshots an app presented with each; the X11 and
-Android present paths have run in CI only, iOS is compile-checked. See
+Android present paths have run in CI only, iOS is compile-checked.
+External images (`dma-buf`, `IOSurface`, DXGI shared handles,
+`AHardwareBuffer`) are imported without a copy; the `dma-buf` import has
+run on GLES (llvmpipe, NVIDIA) and Vulkan (lavapipe), the others are
+compile-checked. See
 [gpu.md](gpu.md).
 ⁴⁸ Through the Text Services Framework (a hand-written `ITextStoreACP` text
 store, composition sink and display attributes), with IMM32 when TSF can't
@@ -550,7 +554,9 @@ iOS simulator, which has no camera, CI checks that opening one says so. On
 the Android emulator CI grants the permission and reads frames from its
 virtual camera (not yet required to pass). The web glue and the iOS and
 Android permission prompts are build-checked only. The preview goes through
-the renderer, a conversion per frame shown. See [camera.md](camera.md).
+the renderer, a conversion per frame shown; with the Metal renderer the
+frame's `IOSurface` is drawn without a copy (compile-checked). See
+[camera.md](camera.md).
 
 ⁷³ StoreKit's original API on iOS (build-checked), the Play Billing Library
 driven over JNI on Android (the library must be in the APK). CI runs the

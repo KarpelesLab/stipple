@@ -3484,6 +3484,29 @@ jobs:
             cp "$f" "visual_output/vk-compare-$(basename "$f")"
           done
 
+      # External images (6g): real dma-bufs, made by the kernel's udmabuf
+      # from known bytes (BGRA, and NV12 as the camera's frames), drawn by
+      # GLES on llvmpipe (imported through EGL_EXT_image_dma_buf_import, no
+      # upload) and by Vulkan on lavapipe (imported where the driver takes
+      # VK_EXT_image_drm_format_modifier, else read on the CPU), against the
+      # software renderer, which maps them. Not blocking yet.
+      - name: External dma-buf images match the software renderer (llvmpipe, lavapipe)
+        continue-on-error: true
+        env:
+          STIPPLE_REQUIRE_GPU: "1"
+          STIPPLE_REQUIRE_UDMABUF: "1"
+          STIPPLE_GPU_DUMP: ${{ github.workspace }}/external-compare
+        run: |
+          sudo modprobe udmabuf 2>/dev/null || true
+          sudo chmod 666 /dev/udmabuf
+          mkdir -p external-compare visual_output
+          LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe \
+            cargo test --features gl --lib -- external --nocapture --test-threads 1
+          cargo test --features vk --lib -- external --nocapture --test-threads 1
+          for f in external-compare/*.png; do
+            cp "$f" "visual_output/external-compare-$(basename "$f")"
+          done
+
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()

@@ -10,7 +10,7 @@ use crate::geometry::{Affine, Point, Rect, Size};
 use crate::render::canvas::CanvasPaint;
 use crate::render::convert::{to_ox_point, to_transform2d};
 use crate::render::lower::{Deferred, Lower, Offscreen, placeholder};
-use crate::render::sprite::SpriteDraw;
+use crate::render::sprite::{ExternalDraw, SpriteDraw};
 use crate::render::{Color, ImageOptions, Pixmap};
 use oxideav_core::{
     Group, Node, Paint, Path, PathNode, Point as OxPoint, Rgba, Stroke, Transform2D, VectorFrame,
@@ -279,6 +279,43 @@ impl Scene {
                 content, pixels, filter,
             ))));
         self.emit_uncommanded(placeholder(index, dst));
+    }
+
+    /// Draw all of `image`, a buffer in another API's memory (a `dma-buf`,
+    /// an `IOSurface`, a DXGI shared handle, an `AHardwareBuffer`), into
+    /// `dst`. A GPU renderer imports it as a texture without a copy; the
+    /// software renderer draws its pixels, read on the CPU (see
+    /// [`ExternalImage`](crate::render::ExternalImage)).
+    pub fn draw_external(&mut self, dst: Rect, image: &Arc<crate::render::ExternalImage>) {
+        let size = image.size();
+        let src = Rect::from_xywh(0.0, 0.0, size.width as f64, size.height as f64);
+        self.draw_external_region(src, dst, image, &ImageOptions::new());
+    }
+
+    /// Draw the part `src` (pixels) of the external `image` into `dst`
+    /// with `options`, as [`draw_image_region`](Self::draw_image_region)
+    /// draws a bitmap's: rotated, mirrored, faded, sampled smoothly or as
+    /// hard pixels. A camera frame is drawn upright this way.
+    pub fn draw_external_region(
+        &mut self,
+        src: Rect,
+        dst: Rect,
+        image: &Arc<crate::render::ExternalImage>,
+        options: &ImageOptions,
+    ) {
+        if dst.width() <= 0.0 || dst.height() <= 0.0 || options.opacity <= 0.0 {
+            return;
+        }
+        let Some(draw) = ExternalDraw::new(image.clone(), src, options) else {
+            return;
+        };
+        let index = self.deferred.len();
+        self.deferred.push(Deferred::External(draw));
+        let mut node = placeholder(index, dst);
+        if let Node::Image(img) = &mut node {
+            img.transform = to_transform2d(options.transform(dst));
+        }
+        self.emit_uncommanded(node);
     }
 
     /// Reserve `bounds` for a custom-paint canvas: `paint` draws it, in the

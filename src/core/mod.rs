@@ -67,6 +67,7 @@ pub use dnd::{DROP_FADE, DropState};
 pub(crate) use element::ElementKind;
 pub(crate) use element::TextStyle;
 pub use element::{Align, BoxStyle, Element};
+pub(crate) use handle::ViewportContent;
 #[cfg(all(feature = "tokio", not(target_arch = "wasm32")))]
 pub use handle::runtime;
 pub(crate) use handle::{AlertInput, AlertView};

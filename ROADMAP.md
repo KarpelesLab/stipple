@@ -1096,11 +1096,23 @@ CPU as the default and the fallback.
   On an M5 Max: 0.76 ms and 2.6 ms on Metal, transition frames 3.5 ms.*
 
 #### 6g — Zero-copy content
-- ⬜ Embedded viewports (`Element::viewport`), video frames and the camera
+- 🚧 Embedded viewports (`Element::viewport`), video frames and the camera
   preview (`camera_preview`, converted per frame today) imported as
   textures without a copy: `dma-buf` (Linux), `IOSurface` (macOS, iOS), DXGI
   shared handles (Windows), `AHardwareBuffer` (Android), building on the
   export and import spikes in [`docs/gpu.md`](docs/gpu.md).
+  *`ExternalImage` (handle, format, planes, modifier, release callback,
+  acquire fence) drawn with `Scene::draw_external`, shown in a viewport with
+  `set_viewport_external`; imported by GLES (`dma-buf`, `AHardwareBuffer`),
+  Vulkan (`dma-buf`), Metal (`IOSurface`, NV12 converted in the shader) and
+  Direct3D 11 (shared handles), read on the CPU elsewhere and by the
+  software renderer. The macOS/iOS camera preview hands Metal its
+  `CVPixelBuffer`. Run: the `dma-buf` import on GLES (llvmpipe, and an
+  NVIDIA GPU's own tiled buffers) and Vulkan (lavapipe). Left: Vulkan's
+  import of a tiled NVIDIA buffer samples nothing, Metal, Direct3D 11 and
+  Android to run on devices, NV12 on Vulkan and
+  Direct3D 11, the Android camera (`AHardwareBuffer` YUV needs an
+  external-texture sampler), and video frames (no video decoder yet).*
 - 🚧 Natively drawn controls (`Theme::native()`) kept as cached textures, so
   the native theme works under the GPU renderers.
   *The bitmaps the OS draws, cached by control, value, state, appearance,

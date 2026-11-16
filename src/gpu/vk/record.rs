@@ -95,6 +95,8 @@ pub(crate) enum Texture {
     LayerNearest(usize),
     /// The scratch target, resolved.
     Scratch,
+    /// [`Recording::externals`]`[index]`, imported by the executor.
+    External { index: usize, nearest: bool },
 }
 
 /// Push constants: `xf` (device pixels to clip space) for the vertex shader
@@ -151,6 +153,8 @@ pub(crate) struct Recording {
     pub quads: Vec<f32>,
     /// The images the frame draws, each once.
     pub images: Vec<Arc<Pixmap>>,
+    /// The external images the frame draws, each once.
+    pub externals: Vec<Arc<crate::render::ExternalImage>>,
     /// Layers in use at once, at most.
     pub layers: usize,
     /// The scratch size the paths need; more than the scratch given means
@@ -508,6 +512,20 @@ impl Recorder {
                             page: *page,
                             nearest: q.nearest,
                         }),
+                        Some(TexRef::External(e)) => {
+                            let index =
+                                match self.out.externals.iter().position(|x| Arc::ptr_eq(x, e)) {
+                                    Some(i) => i,
+                                    None => {
+                                        self.out.externals.push(e.clone());
+                                        self.out.externals.len() - 1
+                                    }
+                                };
+                            Some(Texture::External {
+                                index,
+                                nearest: q.nearest,
+                            })
+                        }
                     };
                     let n = QUAD_FLOATS;
                     let verts = &plan.quads[q.first as usize * n..(q.first + q.count) as usize * n];

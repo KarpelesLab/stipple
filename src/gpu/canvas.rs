@@ -142,6 +142,9 @@ struct Entry {
     calm: u32,
     /// Two canvases of a frame have this id: always drawn straight.
     shared: bool,
+    /// It draws an external image (a camera frame, a viewport's buffer):
+    /// always drawn straight, so the image is imported, not read back.
+    external: bool,
     /// Drawn in the frame being lowered.
     seen: bool,
 }
@@ -155,6 +158,7 @@ impl Entry {
             direct: false,
             calm: 0,
             shared: false,
+            external: false,
             seen: false,
         }
     }
@@ -282,7 +286,7 @@ impl CanvasFrame {
         if std::mem::replace(&mut entry.seen, true) {
             entry.shared = true;
         }
-        if entry.shared {
+        if entry.shared || entry.external {
             entry.image = None;
             return None;
         }
@@ -344,11 +348,18 @@ impl CanvasFrame {
             };
             let scene = canvas_scene(&key, bounds.size, paint);
             let renderer = SoftwareRenderer::new();
+            let externals = crate::render::lower::externals_drawn();
             for &[x, y, w, h] in &rects {
                 let view = Rect::from_xywh(x as f64, y as f64, w as f64, h as f64);
                 let part = renderer.render_area(&scene, view, PhysicalSize::new(w, h));
                 pixels.blit(&part, x, y);
                 self.uploaded += w as usize * h as usize * 4;
+            }
+            // It drew an external image: better imported than read back.
+            if crate::render::lower::externals_drawn() != externals {
+                entry.external = true;
+                entry.image = None;
+                return None;
             }
             let image = Arc::new(pixels);
             if let Some(old) = old {
@@ -444,6 +455,22 @@ mod tests {
 
     fn bounds() -> Rect {
         Rect::from_xywh(10.0, 20.0, 100.0, 50.0)
+    }
+
+    #[test]
+    fn a_canvas_drawing_an_external_image_is_drawn_straight_on_the_gpu() {
+        let mut cache = CanvasCache::default();
+        let pixels = Arc::new(Pixmap::new(PhysicalSize::new(4, 4)));
+        let image = Arc::new(crate::render::ExternalImage::from_pixels(pixels));
+        let paint: CanvasPaint = Rc::new(move |c: &mut Canvas| {
+            c.draw_external(Rect::from_xywh(0.0, 0.0, 100.0, 50.0), &image);
+        });
+        let t = Transform2D::identity();
+        for damage in [None, Some(Vec::new()), None] {
+            let mut f = frame(&mut cache, damage);
+            assert!(f.draw(CanvasId(1), bounds(), &paint, 1.0, &t).is_none());
+            cache.end(f);
+        }
     }
 
     #[test]

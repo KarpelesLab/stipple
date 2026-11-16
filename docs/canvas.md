@@ -147,5 +147,8 @@ sandboxed page), an embedded viewport (`Element::viewport`) fits better than a
 canvas. `AppHandle::set_viewport_content(id, pixmap)` (and
 `clear_viewport_content`) replace a viewport's content from any thread while
 the app runs; only the viewport's area is presented, and the view isn't
-rebuilt. Area repaints now work on windows with viewports too: the content is
+rebuilt. Content that is already a GPU buffer (a content process's
+`dma-buf` or `IOSurface`, a DXGI shared handle) goes through
+`AppHandle::set_viewport_external(id, image)`: a GPU renderer imports it
+without a copy (see [gpu.md](gpu.md#external-images-without-a-copy)). Area repaints now work on windows with viewports too: the content is
 put back over its placeholder after each area render.

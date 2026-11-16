@@ -724,3 +724,6 @@ pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pix
     )
 ))]
 mod compare;
+
+#[cfg(all(test, target_os = "linux", any(feature = "gl", feature = "vk")))]
+mod external_tests;

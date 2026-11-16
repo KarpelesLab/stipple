@@ -86,6 +86,10 @@ macro_rules! send {
     }};
 }
 
+// External images (`IOSurface`s) bound as textures; after `send!`, which
+// it uses.
+mod external;
+
 // Metal's enum values.
 const PIXEL_R8: u64 = 10;
 const PIXEL_RGBA8: u64 = 70;
@@ -443,6 +447,10 @@ pub(crate) struct MetalExecutor {
     /// Batched quads: boxes only, and boxes with textured quads.
     quad_boxes: Id,
     quads: Id,
+    /// Textured quads sampling NV12 (an external image's two planes).
+    quads_yuv: Id,
+    /// External images bound as textures (`external`).
+    externals: external::Imports,
     resolve: Id,
     /// Stencil-only on the frame and layers (clip polygons).
     clip: Id,
@@ -488,10 +496,12 @@ impl Drop for MetalExecutor {
             for t in self.atlas.values() {
                 release(t.tex);
             }
+            self.externals.clear();
             for obj in [
                 self.last,
                 self.quad_boxes,
                 self.quads,
+                self.quads_yuv,
                 self.resolve,
                 self.clip,
                 self.wind,
@@ -544,6 +554,8 @@ impl MetalExecutor {
                 srgb: CGColorSpaceCreateWithName(kCGColorSpaceSRGB),
                 quad_boxes: std::ptr::null_mut(),
                 quads: std::ptr::null_mut(),
+                quads_yuv: std::ptr::null_mut(),
+                externals: external::Imports::default(),
                 resolve: std::ptr::null_mut(),
                 clip: std::ptr::null_mut(),
                 wind: std::ptr::null_mut(),
@@ -570,10 +582,18 @@ impl MetalExecutor {
             if queue.is_null() {
                 return Err(GpuError::Unavailable("no Metal command queue".into()));
             }
-            let src = std::ffi::CString::new(MSL).unwrap();
+            // With the NV12 shader; without it should it not compile (the
+            // camera's frames are then converted on the CPU).
+            let compile = |src: String, err: &mut Id| {
+                let src = std::ffi::CString::new(src).unwrap();
+                send!(Id; device, c"newLibraryWithSource:options:error:",
+                    nsstring(&src); Id, std::ptr::null_mut(); Id, err; *mut Id)
+            };
             let mut err: Id = std::ptr::null_mut();
-            let lib = send!(Id; device, c"newLibraryWithSource:options:error:",
-                nsstring(&src); Id, std::ptr::null_mut(); Id, &mut err; *mut Id);
+            let mut lib = compile(format!("{MSL}{}", external::MSL_YUV), &mut err);
+            if lib.is_null() {
+                lib = compile(MSL.to_string(), &mut err);
+            }
             if lib.is_null() {
                 return Err(GpuError::Unavailable(format!(
                     "the Metal shaders didn't compile: {}",
@@ -588,12 +608,19 @@ impl MetalExecutor {
                 func(c"quad_fs"),
                 func(c"flat_fs"),
                 func(c"resolve_fs"),
+                func(c"quad_yuv_fs"),
             ];
-            let [quadbox_fs, quad_fs, flat_fs, resolve_fs] = fns;
+            let [quadbox_fs, quad_fs, flat_fs, resolve_fs, quad_yuv_fs] = fns;
             let built = (|| -> Result<(), GpuError> {
                 let dev = device;
                 me.quad_boxes = pipeline(dev, quad_vs, quadbox_fs, PIXEL_BGRA8, true, true)?;
                 me.quads = pipeline(dev, quad_vs, quad_fs, PIXEL_BGRA8, true, true)?;
+                me.quads_yuv = if quad_yuv_fs.is_null() {
+                    std::ptr::null_mut()
+                } else {
+                    pipeline(dev, quad_vs, quad_yuv_fs, PIXEL_BGRA8, true, true)
+                        .unwrap_or(std::ptr::null_mut())
+                };
                 me.resolve = pipeline(dev, vs, resolve_fs, PIXEL_BGRA8, true, true)?;
                 me.clip = pipeline(dev, vs, flat_fs, PIXEL_BGRA8, false, false)?;
                 me.wind = pipeline(dev, vs, flat_fs, PIXEL_R8, false, false)?;
@@ -623,7 +650,16 @@ impl MetalExecutor {
                 me.ds_cover_eo = depth_stencil(dev, ne, ne, 1, 0);
                 Ok(())
             })();
-            for f in [vs, quad_vs, quadbox_fs, quad_fs, flat_fs, resolve_fs, lib] {
+            for f in [
+                vs,
+                quad_vs,
+                quadbox_fs,
+                quad_fs,
+                flat_fs,
+                resolve_fs,
+                quad_yuv_fs,
+                lib,
+            ] {
                 release(f);
             }
             built?;
@@ -944,7 +980,8 @@ impl MetalExecutor {
 
     /// Draw `count` quad vertices from `first` of `quads` (see
     /// `super::batch`) in one call: sampling `tex` (nearest-neighbor or
-    /// bilinear), or boxes only without one.
+    /// bilinear), or boxes only without one; with `chroma`, `tex` is NV12's
+    /// luma and `chroma` its chroma.
     #[allow(clippy::too_many_arguments)]
     unsafe fn draw_quads(
         &mut self,
@@ -954,13 +991,14 @@ impl MetalExecutor {
         first: u32,
         count: u32,
         tex: Option<Id>,
+        chroma: Option<Id>,
         nearest: bool,
     ) -> Result<(), GpuError> {
         unsafe {
-            let pipe = if tex.is_some() {
-                self.quads
-            } else {
-                self.quad_boxes
+            let pipe = match (tex, chroma) {
+                (Some(_), Some(_)) => self.quads_yuv,
+                (Some(_), None) => self.quads,
+                _ => self.quad_boxes,
             };
             if count == 0 || !self.bind(f, level, pipe, self.ds_test, level.depth) {
                 return Ok(());
@@ -970,6 +1008,9 @@ impl MetalExecutor {
             self.vertices(f, verts, Self::xf(f.w, f.h))?;
             if let Some(tex) = tex {
                 send!((); f.enc, c"setFragmentTexture:atIndex:", tex; Id, 0usize; usize);
+                if let Some(uv) = chroma {
+                    send!((); f.enc, c"setFragmentTexture:atIndex:", uv; Id, 1usize; usize);
+                }
                 let flag: f32 = if nearest { 1.0 } else { 0.0 };
                 Self::uniforms(f, &flag);
             }
@@ -1149,7 +1190,7 @@ impl MetalExecutor {
             let (w, h) = (f.w as u32, f.h as u32);
             let nearest = batch::layer_quad(&mut v, layer.opacity, layer.resample.as_ref(), w, h);
             let count = (v.len() / batch::QUAD_FLOATS) as u32;
-            let drawn = self.draw_quads(f, parent, &v, 0, count, Some(tex), nearest);
+            let drawn = self.draw_quads(f, parent, &v, 0, count, Some(tex), None, nearest);
             self.scratch_quads = v;
             drawn
         }
@@ -1164,6 +1205,7 @@ impl MetalExecutor {
             }
             self.uploads = 0;
             self.draws = 0;
+            self.externals.begin(self.count, !self.quads_yuv.is_null());
             self.sync_atlas(f, &plan.atlas)?;
             self.update_textures(f, plan);
             let mut levels = vec![Level {
@@ -1187,6 +1229,7 @@ impl MetalExecutor {
             for cmd in &plan.cmds {
                 let op = match cmd {
                     Cmd::Quads(q) => {
+                        let mut chroma = None;
                         let tex = match &q.texture {
                             None => None,
                             Some(TexRef::Image(image)) => self.texture(image),
@@ -1195,9 +1238,21 @@ impl MetalExecutor {
                                 .get(*i)
                                 .and_then(|p| self.atlas.get(&p.id))
                                 .map(|t| t.tex),
+                            Some(TexRef::External(image)) => {
+                                let yuv = !self.quads_yuv.is_null();
+                                match self.externals.get(self.device, image, self.count, yuv) {
+                                    Some((t, uv)) => {
+                                        chroma = uv;
+                                        Some(t)
+                                    }
+                                    // Its pixels, read on the CPU.
+                                    None => image.pixmap().and_then(|p| self.texture(&p)),
+                                }
+                            }
                         };
                         let level = levels.last().unwrap();
-                        self.draw_quads(f, level, &plan.quads, q.first, q.count, tex, q.nearest)?;
+                        let (first, n) = (q.first, q.count);
+                        self.draw_quads(f, level, &plan.quads, first, n, tex, chroma, q.nearest)?;
                         continue;
                     }
                     Cmd::Op(i) => &plan.ops[*i],

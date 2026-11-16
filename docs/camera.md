@@ -179,8 +179,15 @@ that arrives before the last one was painted isn't converted, so the preview
 runs at whatever rate the renderer keeps up with (with the software renderer
 on a phone, below the camera's 30 fps full screen), while `on_frame` still
 sees every frame. A path with no copy (the camera's buffer imported as a GPU
-texture, `CVPixelBuffer`'s `IOSurface` and `AHardwareBuffer`) is on the
-roadmap (6g), as is a native preview layer under the window.
+texture) is there on macOS and iOS with the Metal renderer: while the
+window's renderer imports NV12, each frame's `CVPixelBuffer` goes to the
+preview as it is (its `IOSurface`, retained while drawn), and the GPU
+samples its two planes and converts them in the shader; nothing is
+converted on the capture thread (see
+[gpu.md](gpu.md#external-images-without-a-copy); compile-checked, not run on
+a device yet). Android (`AHardwareBuffer`, whose YUV layout needs an
+external-texture sampler) and a native preview layer under the window are
+still to come.
 
 ### Controls
 

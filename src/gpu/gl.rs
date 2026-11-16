@@ -11,6 +11,7 @@ use crate::geometry::{PhysicalSize, Rect};
 use crate::render::{Color, Pixmap};
 use core::ffi::{c_char, c_void};
 
+mod external;
 mod scene;
 pub(crate) use scene::GlExecutor;
 

@@ -319,6 +319,11 @@ impl WebExecutor {
                             .get(*i)
                             .and_then(|p| self.atlas.get(&p.id))
                             .map_or(0, |t| t.id),
+                        // No platform buffer to import in a browser: what
+                        // pixels it was given.
+                        Some(TexRef::External(e)) => {
+                            e.pixmap().and_then(|p| self.texture(&p)).unwrap_or(0)
+                        }
                     };
                     buf.push(OP_QUADS);
                     buf.push(id);

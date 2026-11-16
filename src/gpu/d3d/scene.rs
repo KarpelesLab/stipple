@@ -88,6 +88,9 @@ macro_rules! com {
     }};
 }
 
+// DXGI shared handles opened as textures; after `com!`, which it uses.
+mod external;
+
 /// Vertex buffers are allocated at least this big.
 const ARENA: usize = 1024 * 1024;
 /// Textures of images not drawn for this many frames are freed.
@@ -296,6 +299,8 @@ pub(crate) struct D3dExecutor {
     /// Swap chains, by window handle.
     chains: HashMap<usize, Chain>,
     textures: HashMap<usize, Texture>,
+    /// External images opened as textures (`external`).
+    externals: external::Imports,
     /// The atlas pages' textures, by page id.
     atlas: HashMap<u64, AtlasTex>,
     /// The layer composites' quad vertices.
@@ -437,6 +442,7 @@ impl D3dExecutor {
                 scratch: None,
                 chains: HashMap::new(),
                 textures: HashMap::new(),
+                externals: external::Imports::default(),
                 atlas: HashMap::new(),
                 scratch_quads: Vec::new(),
                 count: 0,
@@ -1232,6 +1238,7 @@ impl D3dExecutor {
             }
             self.uploads = 0;
             self.draws = 0;
+            self.externals.begin(self.count);
             self.update_textures(plan);
             self.fixed_state();
             self.sync_atlas(&plan.atlas)?;
@@ -1272,6 +1279,14 @@ impl D3dExecutor {
                                 .get(*i)
                                 .and_then(|p| self.atlas.get(&p.id))
                                 .map(|t| t.srv.ptr()),
+                            Some(TexRef::External(image)) => {
+                                let dev = self.device.ptr();
+                                match self.externals.get(dev, image, self.count) {
+                                    Some(srv) => Some(srv),
+                                    // Its pixels, if it has some for the CPU.
+                                    None => image.pixmap().and_then(|p| self.texture(&p)),
+                                }
+                            }
                         };
                         let n = QUAD_FLOATS;
                         let verts =

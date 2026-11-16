@@ -158,6 +158,77 @@ impl ImageOptions {
     }
 }
 
+/// A region of an [`ExternalImage`](crate::render::ExternalImage) to draw
+/// ([`Scene::draw_external_region`](crate::render::Scene::draw_external_region)):
+/// what a GPU renderer imports and textures, and what the software renderer
+/// draws as the image's pixels read on the CPU.
+#[derive(Clone, Debug)]
+pub(crate) struct ExternalDraw {
+    pub image: Arc<crate::render::ExternalImage>,
+    /// As [`SpriteDraw::src`].
+    pub src: [u32; 4],
+    pub flip_x: bool,
+    pub flip_y: bool,
+    pub tint: [u8; 4],
+    pub opacity: f32,
+    pub filter: Filter,
+}
+
+impl ExternalDraw {
+    /// `src` (pixels, rounded to whole ones and clipped to the image) of
+    /// `image`, drawn with `opts`; `None` if nothing of it is left.
+    pub fn new(
+        image: Arc<crate::render::ExternalImage>,
+        src: Rect,
+        opts: &ImageOptions,
+    ) -> Option<Self> {
+        let size = image.size();
+        let (w, h) = (size.width as f64, size.height as f64);
+        let x0 = src.min_x().round().clamp(0.0, w) as u32;
+        let y0 = src.min_y().round().clamp(0.0, h) as u32;
+        let x1 = src.max_x().round().clamp(0.0, w) as u32;
+        let y1 = src.max_y().round().clamp(0.0, h) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let opacity = if opacity_is_valid(opts.opacity) {
+            opts.opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let t = opts.tint;
+        Some(Self {
+            image,
+            src: [x0, y0, x1, y1],
+            flip_x: opts.flip_x,
+            flip_y: opts.flip_y,
+            tint: [t.r, t.g, t.b, t.a],
+            opacity,
+            filter: opts.filter,
+        })
+    }
+
+    /// The same region of the image's pixels read on the CPU (see
+    /// [`ExternalImage::pixmap`](crate::render::ExternalImage::pixmap)), if
+    /// they can be.
+    pub fn sprite(&self) -> Option<SpriteDraw> {
+        let image = self.image.pixmap()?;
+        let size = image.size();
+        if self.src[2] > size.width || self.src[3] > size.height {
+            return None;
+        }
+        Some(SpriteDraw {
+            image,
+            src: self.src,
+            flip_x: self.flip_x,
+            flip_y: self.flip_y,
+            tint: self.tint,
+            opacity: self.opacity,
+            filter: self.filter,
+        })
+    }
+}
+
 /// A region of a bitmap to draw, as recorded by the scene: what the software
 /// compositor blits and the GPU path textures.
 #[derive(Clone, Debug)]

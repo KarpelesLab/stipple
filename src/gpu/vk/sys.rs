@@ -1221,6 +1221,7 @@ entry_points! {
         vkGetRefreshCycleDurationGOOGLE: fn(VkDevice, VkSwapchainKHR, *mut VkRefreshCycleDurationGOOGLE) -> VkResult;
         vkCreateXcbSurfaceKHR: fn(VkInstance, *const VkXcbSurfaceCreateInfoKHR, P, *mut VkSurfaceKHR) -> VkResult;
         vkCreateAndroidSurfaceKHR: fn(VkInstance, *const VkAndroidSurfaceCreateInfoKHR, P, *mut VkSurfaceKHR) -> VkResult;
+        vkGetMemoryFdPropertiesKHR: fn(VkDevice, u32, i32, *mut c_void) -> VkResult;
         vkCreateMetalSurfaceEXT: fn(VkInstance, *const VkMetalSurfaceCreateInfoEXT, P, *mut VkSurfaceKHR) -> VkResult;
     }
 }

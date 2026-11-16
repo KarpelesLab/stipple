@@ -28,6 +28,9 @@
 
 #![allow(unsafe_code)]
 
+// External images (`dma-buf`s) imported as images.
+mod external;
+
 use super::alloc::Ranges;
 use super::record::{self, Cmd, Draw, Pipe, Recording, Target, Texture};
 use super::shaders;
@@ -232,6 +235,8 @@ pub(crate) struct VkExecutor {
     layers: Vec<Surface2>,
     scratch: Option<Surface2>,
     textures: HashMap<usize, Tex>,
+    /// External images imported (`external`).
+    externals: external::Imports,
     /// The atlas pages' textures, by page id.
     atlas: HashMap<u64, AtlasTex>,
     blocks: Vec<Block>,
@@ -295,11 +300,23 @@ impl VkExecutor {
                 exts.push(VK_KHR_SURFACE.as_ptr());
                 exts.push(surface_ext.as_ptr());
             }
+            // What importing a `dma-buf` builds on (`external`).
+            if cfg!(target_os = "linux") {
+                for e in external::INSTANCE_EXTS {
+                    if has(e) {
+                        exts.push(e.as_ptr());
+                    }
+                }
+            }
             let portability = has(VK_KHR_PORTABILITY_ENUMERATION);
             if portability {
                 exts.push(VK_KHR_PORTABILITY_ENUMERATION.as_ptr());
                 // What the portability subset needs on a 1.0 instance.
-                if has(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES2) {
+                if has(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES2)
+                    && !(cfg!(target_os = "linux")
+                        && external::INSTANCE_EXTS
+                            .contains(&VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES2))
+                {
                     exts.push(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES2.as_ptr());
                 }
             }
@@ -404,6 +421,13 @@ impl VkExecutor {
             if dev_has(VK_KHR_PORTABILITY_SUBSET) {
                 dexts.push(VK_KHR_PORTABILITY_SUBSET.as_ptr());
             }
+            // Importing `dma-buf`s: all of what it takes, or none.
+            let dma_buf = cfg!(target_os = "linux")
+                && vk.vkGetMemoryFdPropertiesKHR.is_some()
+                && external::DEVICE_EXTS.iter().all(|e| dev_has(e));
+            if dma_buf {
+                dexts.extend(external::DEVICE_EXTS.iter().map(|e| e.as_ptr()));
+            }
             let priority = 1.0f32;
             let qci = VkDeviceQueueCreateInfo {
                 sType: ST_DEVICE_QUEUE_CREATE_INFO,
@@ -447,6 +471,20 @@ impl VkExecutor {
                 (vk.vkGetPhysicalDeviceFormatProperties)(phys, f, &mut p);
                 p.optimalTilingFeatures & FEATURE_DEPTH_STENCIL_ATTACHMENT != 0
             });
+            let externals = external::Imports {
+                get_fd_properties: if dma_buf {
+                    vk.vkGetMemoryFdPropertiesKHR.map(|f| {
+                        std::mem::transmute::<
+                            unsafe extern "system" fn(VkDevice, u32, i32, *mut c_void) -> VkResult,
+                            external::GetMemoryFdProperties,
+                        >(f)
+                    })
+                } else {
+                    None
+                },
+                dedicated: dma_buf,
+                ..Default::default()
+            };
             let mut me = VkExecutor {
                 vk,
                 instance,
@@ -483,6 +521,7 @@ impl VkExecutor {
                 layers: Vec::new(),
                 scratch: None,
                 textures: HashMap::new(),
+                externals,
                 blocks: Vec::new(),
                 atlas: HashMap::new(),
                 vertices: None,
@@ -1426,8 +1465,9 @@ impl VkExecutor {
             )?;
             self.uploads = 0;
             self.draws = 0;
+            let externals = self.import_externals(&mut rec);
             let images = self.upload(&rec, &plan.atlas, &plan.updates)?;
-            let sets = self.descriptor_sets(&rec, &images, &plan.atlas)?;
+            let sets = self.descriptor_sets(&rec, &images, &externals, &plan.atlas)?;
             // The paths' vertices, then the quads' (at `quads`).
             let plain = std::mem::size_of_val(rec.vertices.as_slice());
             let quads = plain.next_multiple_of(256);
@@ -1699,6 +1739,7 @@ impl VkExecutor {
         &mut self,
         rec: &Recording,
         images: &[VkImageView],
+        externals: &[external::ExtView],
         pages: &[AtlasPage],
     ) -> Result<HashMap<Texture, VkDescriptorSet>, GpuError> {
         unsafe {
@@ -1714,6 +1755,10 @@ impl VkExecutor {
                 .textures()
                 .into_iter()
                 .filter(|t| !matches!(*t, Texture::Atlas { page, .. } if page_view(page).is_none()))
+                .filter(|t| {
+                    !matches!(*t, Texture::External { index, .. }
+                        if matches!(externals.get(index), None | Some(external::ExtView::Nothing)))
+                })
                 .collect();
             let mut sets = HashMap::new();
             if textures.is_empty() {
@@ -1782,6 +1827,14 @@ impl VkExecutor {
                         ),
                         Texture::Atlas { page, nearest } => (
                             page_view(page).unwrap(),
+                            if nearest { self.nearest } else { self.linear },
+                        ),
+                        Texture::External { index, nearest } => (
+                            match externals[index] {
+                                external::ExtView::Imported(view) => view,
+                                external::ExtView::Image(i) => images[i],
+                                external::ExtView::Nothing => unreachable!("filtered out"),
+                            },
                             if nearest { self.nearest } else { self.linear },
                         ),
                         Texture::Layer(i) => (self.layers[i].color.view, self.linear),
@@ -2808,6 +2861,7 @@ impl Drop for VkExecutor {
                 return;
             }
             (self.vk.vkDeviceWaitIdle)(d);
+            self.free_imports();
             for (_, swap) in std::mem::take(&mut self.swaps) {
                 self.drop_swap(swap);
             }

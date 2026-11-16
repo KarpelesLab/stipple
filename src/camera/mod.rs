@@ -65,11 +65,12 @@
 mod frame;
 mod preview;
 
+pub(crate) use frame::yuv_to_rgb;
 pub use frame::{Frame, FrameFormat, Plane, PreviewMapping};
 pub use preview::camera_preview;
 
 use crate::geometry::{PhysicalSize, Point, Size};
-use crate::render::Pixmap;
+use crate::render::{ExternalFormat, ExternalImage, Pixmap};
 use std::fmt;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -234,10 +235,24 @@ pub(crate) trait Session: Send {
 type FrameFn = Box<dyn FnMut(&Frame<'_>) + Send>;
 type WakeFn = Box<dyn Fn() + Send + Sync>;
 
+/// A frame handed to the preview as the camera's own buffer (an
+/// `IOSurface`), drawn by a GPU renderer without a copy.
+#[derive(Clone)]
+pub(crate) struct ExternalFrame {
+    pub image: Arc<ExternalImage>,
+    /// Clockwise degrees to upright, and whether it's mirrored then, as
+    /// [`Frame`]'s.
+    pub rotation: u32,
+    pub mirrored: bool,
+}
+
 /// The preview's latest image and who repaints it.
 #[derive(Default)]
 struct Preview {
     image: Option<Arc<Pixmap>>,
+    /// The latest frame as the camera's buffer, instead of `image`, while
+    /// the renderer imports it without a copy.
+    external: Option<ExternalFrame>,
     /// Converted but not painted yet: the next frame isn't converted.
     fresh: bool,
     /// The element's physical size, as last painted.
@@ -318,15 +333,22 @@ impl Sink {
     /// app, and convert it for the preview unless the last one is still to
     /// be painted.
     #[cfg_attr(
-        not(any(
-            target_os = "ios",
-            target_os = "macos",
-            target_os = "android",
-            target_arch = "wasm32"
-        )),
+        not(any(target_os = "android", target_arch = "wasm32")),
         allow(dead_code)
     )]
     pub(crate) fn deliver(&self, frame: &Frame<'_>) {
+        self.deliver_with(frame, None);
+    }
+
+    /// [`deliver`](Self::deliver) a frame whose buffer `external` can hand
+    /// over as an [`ExternalImage`]: while the renderer imports that without
+    /// a copy, the preview gets the buffer instead of a converted image.
+    #[cfg_attr(not(any(target_os = "ios", target_os = "macos")), allow(dead_code))]
+    pub(crate) fn deliver_with(
+        &self,
+        frame: &Frame<'_>,
+        external: Option<&mut dyn FnMut() -> Option<ExternalImage>>,
+    ) {
         let n = self.frames.fetch_add(1, Ordering::Relaxed);
         *self.last.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((frame.size, frame.rotation, frame.mirrored));
@@ -351,9 +373,27 @@ impl Sink {
             }
             p.wanted
         };
+        if let Some(make) = external
+            && crate::platform::external::imported_natively(ExternalFormat::Nv12)
+            && let Some(image) = make()
+        {
+            let mut p = self.preview.lock().unwrap_or_else(|e| e.into_inner());
+            p.external = Some(ExternalFrame {
+                image: Arc::new(image),
+                rotation: frame.rotation,
+                mirrored: frame.mirrored,
+            });
+            p.image = None;
+            p.fresh = true;
+            if let Some(wake) = &p.wake {
+                wake();
+            }
+            return;
+        }
         let image = Arc::new(frame.convert(frame::preview_size(frame.upright_size(), wanted)));
         let mut p = self.preview.lock().unwrap_or_else(|e| e.into_inner());
         p.image = Some(image);
+        p.external = None;
         p.fresh = true;
         if let Some(wake) = &p.wake {
             wake();
@@ -511,15 +551,20 @@ impl Camera {
     }
 
     /// The latest frame as the preview shows it (upright, at most the
-    /// preview's size), once one was converted for a [`camera_preview`].
+    /// preview's size), once one was shown by a [`camera_preview`]. A frame
+    /// the GPU drew straight from the camera's buffer is read and turned
+    /// upright here, at full size.
     pub fn preview_image(&self) -> Option<Arc<Pixmap>> {
-        self.inner
+        let p = self
+            .inner
             .sink
             .preview
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .image
-            .clone()
+            .unwrap_or_else(|e| e.into_inner());
+        match &p.external {
+            Some(frame) => preview::upright(frame).map(Arc::new),
+            None => p.image.clone(),
+        }
     }
 
     /// Resume capturing after [`stop`](Self::stop).
@@ -803,6 +848,51 @@ mod tests {
         assert_eq!(*sink.status.lock().unwrap(), CameraStatus::Running);
         let image = sink.preview.lock().unwrap().image.clone().unwrap();
         assert_eq!(image.pixel(1, 0), Some([200, 200, 200, 255]));
+    }
+
+    #[test]
+    fn the_preview_gets_the_buffer_while_the_renderer_imports_it() {
+        use crate::platform::external::{NATIVE_TEST, note_native};
+        let _lock = NATIVE_TEST.lock().unwrap_or_else(|e| e.into_inner());
+        let sink = Arc::new(Sink::new());
+        {
+            let mut p = sink.preview.lock().unwrap();
+            p.wanted = PhysicalSize::new(2, 2);
+            p.wake = Some(Box::new(|| {}));
+        }
+        let y = [0u8, 200, 0, 200];
+        let uv = [128u8, 128];
+        let planes = [
+            Plane::new(&y, 2, 1),
+            Plane::new(&uv, 2, 2),
+            Plane::new(&uv[1..], 2, 2),
+        ];
+        let frame = Frame {
+            size: PhysicalSize::new(2, 2),
+            format: FrameFormat::Yuv420,
+            planes: &planes,
+            timestamp: std::time::Duration::ZERO,
+            rotation: 90,
+            mirrored: false,
+        };
+        let buffer = || {
+            let pixels = Pixmap::from_rgba8(PhysicalSize::new(2, 2), vec![9; 16]);
+            Some(ExternalImage::from_pixels(Arc::new(pixels)))
+        };
+        // Nothing imports NV12: converted, as before.
+        note_native(&[]);
+        sink.deliver_with(&frame, Some(&mut { buffer }));
+        assert!(sink.preview.lock().unwrap().image.is_some());
+        assert!(sink.preview.lock().unwrap().external.is_none());
+        // The renderer imports it: the buffer goes to the preview.
+        note_native(&[ExternalFormat::Nv12]);
+        sink.preview.lock().unwrap().fresh = false;
+        sink.deliver_with(&frame, Some(&mut { buffer }));
+        let p = sink.preview.lock().unwrap();
+        assert!(p.image.is_none());
+        let ext = p.external.as_ref().expect("the buffer");
+        assert_eq!(ext.rotation, 90);
+        note_native(&[]);
     }
 
     #[cfg(any(target_os = "linux", target_os = "windows"))]

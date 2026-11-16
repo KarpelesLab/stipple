@@ -48,8 +48,9 @@ use crate::geometry::{PhysicalSize, Rect};
 use crate::render::Filter;
 use crate::render::lower::{self, Bounds, Deferred, Offscreen};
 use crate::render::scene::{rect_path, round_rect_path};
+use crate::render::sprite::ExternalDraw;
 use crate::render::sprite::SpriteDraw;
-use crate::render::{CanvasPaint, Color, Pixmap, Scene};
+use crate::render::{CanvasPaint, Color, ExternalImage, Pixmap, Scene};
 use oxideav_core::{
     FillRule, Group, LineJoin, Node, Paint, Path, PathCommand, PathNode, Rgba, Stroke, Transform2D,
 };
@@ -137,6 +138,9 @@ pub(crate) enum Source {
     /// A glyph raster: the pixel rectangle `region` (`[x, y, w, h]`) of the
     /// atlas page `plan.atlas[page]`.
     Atlas { page: usize, region: [u32; 4] },
+    /// An image in another API's memory, imported (or, where it can't be,
+    /// read on the CPU), kept by its identity.
+    External(Arc<ExternalImage>),
 }
 
 /// All of a bitmap.
@@ -707,6 +711,7 @@ impl Walker<'_> {
                             nearest: false,
                         }),
                         Some(Deferred::Sprite(sprite)) => self.sprite(sprite, img, &local),
+                        Some(Deferred::External(e)) => self.external(e, img, &local),
                         Some(Deferred::Canvas {
                             bounds,
                             paint,
@@ -1139,6 +1144,33 @@ impl Walker<'_> {
         self.target = target;
         self.canvases = canvases;
         self.ops.push(Op::PopLayer);
+    }
+
+    /// A region of an external image: its texture, imported by the
+    /// executor, sampled over the region as a sprite's.
+    fn external(&mut self, e: &ExternalDraw, img: &oxideav_core::ImageRef, local: &Transform2D) {
+        let size = e.image.size();
+        let (w, h) = (size.width as f32, size.height as f32);
+        let [x0, y0, x1, y1] = e.src.map(|v| v as f32);
+        let (mut u0, mut u1) = (x0 / w, x1 / w);
+        let (mut v0, mut v1) = (y0 / h, y1 / h);
+        if e.flip_x {
+            std::mem::swap(&mut u0, &mut u1);
+        }
+        if e.flip_y {
+            std::mem::swap(&mut v0, &mut v1);
+        }
+        let t = e.tint;
+        let r = img.bounds;
+        self.ops.push(Op::Image {
+            image: Source::External(e.image.clone()),
+            transform: *local,
+            rect: [r.x, r.y, r.x + r.width, r.y + r.height],
+            opacity: e.opacity,
+            uv: [u0, v0, u1, v1],
+            tint: premul(Rgba::new(t[0], t[1], t[2], t[3])),
+            nearest: e.filter == Filter::Nearest,
+        });
     }
 
     /// A canvas: kept as a texture when it can be (`gpu::canvas`), else its
@@ -1612,7 +1644,7 @@ mod tests {
             .collect();
         let region = |s: &Source| match s {
             Source::Atlas { region, .. } => *region,
-            Source::Image(_) => panic!("not in the atlas"),
+            Source::Image(_) | Source::External(_) => panic!("not in the atlas"),
         };
         // The shadow, the outline and the fill are each a raster of the
         // glyph (three different ones here; a shadow in the outline's color

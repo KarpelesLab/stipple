@@ -45,7 +45,7 @@
 
 use super::atlas::AtlasPage;
 use super::ops::{Op, Premul, Resample, Sample, Source};
-use crate::render::Pixmap;
+use crate::render::{ExternalImage, Pixmap};
 use oxideav_core::{Point, Transform2D};
 use std::sync::Arc;
 
@@ -69,6 +69,9 @@ pub(crate) enum TexRef {
     Image(Arc<Pixmap>),
     /// The atlas page `plan.atlas[i]`.
     Atlas(usize),
+    /// An external image's texture (or textures, for YUV), imported by the
+    /// executor, kept by its identity.
+    External(Arc<ExternalImage>),
 }
 
 impl TexRef {
@@ -76,6 +79,7 @@ impl TexRef {
         match (self, other) {
             (TexRef::Image(a), TexRef::Image(b)) => Arc::ptr_eq(a, b),
             (TexRef::Atlas(a), TexRef::Atlas(b)) => a == b,
+            (TexRef::External(a), TexRef::External(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -133,6 +137,13 @@ pub(crate) fn batch(ops: &[Op], atlas: &[AtlasPage]) -> (Vec<Cmd>, Vec<f32>) {
                         let size = image.size();
                         (
                             TexRef::Image(image.clone()),
+                            Sample::region(*uv, size.width, size.height, *tint),
+                        )
+                    }
+                    Source::External(image) => {
+                        let size = image.size();
+                        (
+                            TexRef::External(image.clone()),
                             Sample::region(*uv, size.width, size.height, *tint),
                         )
                     }

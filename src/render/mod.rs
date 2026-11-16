@@ -59,6 +59,21 @@ pub use path::{LineCap, LineJoin, Path, StrokeStyle};
 pub use renderer::Renderer;
 pub use rich::{InlineIcon, RichText, SpanStyle};
 pub use scene::{DrawCmd, Scene};
+
+/// Images in another API's memory (a `dma-buf`, an `IOSurface`, a DXGI
+/// shared handle, an `AHardwareBuffer`), drawn without a copy: see
+/// [`ExternalImage`] and `docs/gpu.md`.
+pub mod external {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub use crate::platform::external::DmaBufPlane;
+    #[cfg(target_os = "linux")]
+    pub use crate::platform::external::udmabuf;
+    pub use crate::platform::external::{
+        DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR, ExternalError, ExternalFormat,
+        ExternalImage, PlaneLayout, imported_natively,
+    };
+}
+pub(crate) use external::{ExternalFormat, ExternalImage};
 pub use software::{RasterStats, SoftwareRenderer};
 pub use sprite::{Filter, ImageOptions};
 pub use surface::{Pixmap, Surface};

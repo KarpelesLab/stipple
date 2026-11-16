@@ -6,10 +6,10 @@ features, each linking the OS's own driver through hand-written FFI:
 
 | Feature | Backend | What it does today |
 |---|---|---|
-| `mtl` | Metal (macOS, iOS) | Renders whole scenes and presents them straight to the window through a `CAMetalLayer`; `IOSurface` export |
-| `vk` | Vulkan (Linux, Android) | Renders whole scenes and presents them straight to the window through a swapchain (X11, Android); read back elsewhere |
+| `mtl` | Metal (macOS, iOS) | Renders whole scenes and presents them straight to the window through a `CAMetalLayer`; `IOSurface` export and import |
+| `vk` | Vulkan (Linux, Android) | Renders whole scenes and presents them straight to the window through a swapchain (X11, Android); read back elsewhere; `dma-buf` import (Linux) |
 | `gl` | OpenGL ES 2 over EGL (Linux, Android) | Renders whole scenes and presents them straight to an EGL window surface (X11, Android) where there's no Vulkan; read back elsewhere; `dma-buf` export and import (Linux) |
-| `d3d` | Direct3D 11 (Windows) | Renders whole scenes and presents them straight to the window through a flip-model DXGI swap chain; shared-handle export |
+| `d3d` | Direct3D 11 (Windows) | Renders whole scenes and presents them straight to the window through a flip-model DXGI swap chain; shared-handle export and import |
 | `gpu` on the web | WebGPU, else WebGL2, through `web/gpu.js` | Renders whole scenes straight into the page's canvas |
 
 ## Choosing the renderer
@@ -75,8 +75,9 @@ A renderer set with `App::render_with` (below) takes precedence over both
 `App::renderer` and `STIPPLE_RENDERER`.
 
 What the GPU path doesn't do yet: the theme cross-fade (a theme switch is
-instant on the GPU), and embedded viewport content is drawn as an image
-uploaded every frame.
+instant on the GPU), and embedded viewport content given as a `Pixmap` is
+drawn as an image uploaded every frame (content given as an external image
+is imported without a copy: see [External images](#external-images-without-a-copy)).
 
 ## Rendering through `render_with`
 
@@ -277,6 +278,109 @@ where it was 865, the 2000-sprite scene one where it was 2001, and an app's
 widget gallery a handful. `stipple::gpu::last_frame_draw_calls()` says how
 many the thread's last GPU frame took; the benchmarks report it
 (`draw_calls`).
+
+## External images, without a copy
+
+A buffer that lives in another API's memory is drawn as an
+`ExternalImage` (`stipple::render::external`): a `dma-buf` (Linux, Android), an `IOSurface`
+(macOS, iOS), a DXGI shared handle (Windows) or an `AHardwareBuffer`
+(Android), with its size, format (`Rgba8`, `Bgra8`, their `X` forms, and
+`Nv12`: two-plane YUV 4:2:0, full range BT.601, as the camera delivers),
+each plane's offset and stride and, for a `dma-buf`, the DRM format
+modifier. `Scene::draw_external(rect, &image)` and
+`draw_external_region(src, dst, &image, &options)` draw it where a
+`Pixmap` would go (rotated, mirrored, faded, as `draw_image_region`); an
+embedded viewport shows one with `App::set_viewport_external` /
+`AppHandle::set_viewport_external`, and the camera's preview hands its
+frames over this way (below).
+
+Each GPU executor imports the buffer as a texture, cached by the image's
+identity as a `Pixmap`'s texture is:
+
+| Handle | Executor | How | Formats |
+|---|---|---|---|
+| `dma-buf` | GLES (Linux) | `EGL_EXT_image_dma_buf_import`, an `EGLImage` per plane (the modifier echoed), `glEGLImageTargetTexture2DOES` | all; NV12 as an `R8` and a `GR88` plane, converted in the shader |
+| `dma-buf` | Vulkan (Linux) | `VK_EXT_external_memory_dma_buf` and `VK_KHR_external_memory_fd`, laid out with `VK_EXT_image_drm_format_modifier` (modifier, offset, pitch), a dedicated allocation | single-plane |
+| `IOSurface` | Metal | `newTextureWithDescriptor:iosurface:plane:`, a texture per plane | BGRA, RGBA, NV12 (`R8Unorm` + `RG8Unorm`, converted in the shader) |
+| DXGI shared handle | Direct3D 11 | `ID3D11Device1::OpenSharedResource1` (NT handle) or `OpenSharedResource`, a view in the texture's format | single-plane |
+| `AHardwareBuffer` | GLES (Android) | `eglGetNativeClientBufferANDROID`, `EGL_NATIVE_BUFFER_ANDROID` | `R8G8B8A8`, `R8G8B8X8` |
+
+Where an executor has no import for the handle or the format (NV12 on
+Vulkan and Direct3D 11, any buffer on the web), or the driver refuses it,
+the image is read on the CPU instead, once, and drawn as its pixels: a
+linear `dma-buf` is mapped (`mmap`, inside `DMA_BUF_IOCTL_SYNC`), an
+`IOSurface` locked, an `AHardwareBuffer` locked, NV12 converted as the
+camera converts it. The software renderer draws external images the same
+way. A tiled `dma-buf` or a DXGI texture can't be read there: a producer
+that may meet the software renderer gives pixels with
+`ExternalImage::cpu_pixels`.
+
+**Lifetime and fences.** The image owns its handle (the descriptors are
+closed, the surface and hardware buffer released, an NT handle closed when
+the last `Arc` goes, after the `on_release` callback that hands the buffer
+back to its producer). Executors hold the images a frame drew until the GPU
+is done with it (the next frame on GLES, Vulkan and Direct3D 11; three
+frames on Metal), so dropping an image right after handing a scene over is
+safe. A producer still writing on its GPU attaches a `sync_file`
+(`acquire_fence`, Linux and Android), waited on (up to 32 ms) before the
+import or the read; past that, `dma-buf`'s implicit synchronization and
+`IOSurface`'s order the writes. An image is one frame: a renderer keeps what
+it imported for an image as long as the image lives, so a new frame is a
+new `ExternalImage`, even of the same buffer.
+
+**What tells the camera.** Each executor reports, every frame, the formats
+it imports natively (`stipple::render::external::imported_natively`).
+While the window's renderer imports NV12 (Metal), the camera's preview
+gets the frame's `CVPixelBuffer` (retained, so the capture pool doesn't
+reuse it while drawn) instead of converting it on the capture thread; on
+the CPU renderer, or before the first GPU frame, it converts as before. A
+canvas that draws an external image is always walked on the GPU rather than
+kept as a CPU-rasterized texture (`gpu::canvas`), so the buffer is
+imported, not read back.
+
+`stipple::render::external::udmabuf(bytes)` makes a `dma-buf` from bytes
+(the kernel's `udmabuf`, from a sealed `memfd`): for a CPU producer (a
+content process drawing in software) and for the tests.
+
+### Checking it
+
+`src/gpu/external_tests.rs` draws real `dma-buf`s (from `udmabuf`: a BGRA
+image with translucent pixels and padded rows, and an NV12 frame with its
+chroma plane at an offset, drawn rotated and mirrored as the camera's
+preview draws a phone's frames) on the GPU and on the CPU, which maps them,
+and compares; on GLES it also checks nothing was uploaded. A third test
+renders a buffer on the GPU itself, exports it through GBM (tiled, with a
+vendor modifier) and imports it back. `STIPPLE_REQUIRE_UDMABUF` makes the
+first two fail instead of skipping without `/dev/udmabuf`.
+
+```sh
+cargo test --features gl --lib external   # GLES
+cargo test --features vk --lib external   # Vulkan
+```
+
+Run so far:
+
+- GLES on Mesa's llvmpipe (locally with Mesa 26.1, and on CI's Ubuntu
+  runner): the `udmabuf` BGRA and NV12 buffers are imported (no upload) and
+  match the software renderer (BGRA exactly; NV12 within a mean of 0.33 of
+  255, where the GPU samples the half-size chroma plane bilinearly and the
+  CPU per pixel).
+- Vulkan on Mesa's lavapipe (CI's Ubuntu runner): the BGRA buffer is
+  imported (no upload, through `VK_EXT_image_drm_format_modifier` with the
+  linear modifier) and matches exactly; the NV12 one is read on the CPU and
+  matches.
+- GLES on an NVIDIA GPU (driver 595): a buffer the GPU rendered and
+  exported (modifier `0x0300000000606011`, block-linear) is imported and
+  drawn. NVIDIA's driver accepts a `udmabuf` (system memory) but samples
+  zeros from it, so the tests skip those there.
+- Vulkan on the same NVIDIA GPU: the import of the GLES-exported,
+  block-linear buffer goes through (image, memory, view) but samples
+  nothing, which needs looking into.
+- CI's `visual-gpu` job runs these on llvmpipe and lavapipe with
+  `/dev/udmabuf` opened up (the runner's kernel has it built in), not
+  blocking yet.
+- Metal, Direct3D 11 and the Android paths are compile-checked only; the
+  camera's zero-copy preview hasn't run on a Mac or an iPhone yet.
 
 ## Metal
 
@@ -729,4 +833,7 @@ Today:
   redraw itself is checked on every backend by the comparison tests.
 - Embedded-content viewports: on a read-back frame the app blits registered
   content over the placeholder, as on the CPU path; presenting straight to
-  the window it is drawn as an image, uploaded every frame.
+  the window, a `Pixmap` is drawn as an image, uploaded every frame, and an
+  external image is imported (see
+  [External images](#external-images-without-a-copy), with what of it has
+  run where).

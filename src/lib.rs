@@ -183,7 +183,7 @@ pub struct App<S> {
     // content (sized to the viewport's physical extent) is blitted over its
     // placeholder — the CPU analog of a GPU backend sampling an imported
     // (dma-buf / IOSurface / shared-handle) content texture into the rect.
-    viewport_content: HashMap<ViewportId, Pixmap>,
+    viewport_content: HashMap<ViewportId, crate::core::ViewportContent>,
     /// Updates and timers from outside widget handlers, applied between events.
     handle: AppHandle<S>,
     // Sink for input that lands in an embedded viewport (pointer/keys/wheel),
@@ -1057,7 +1057,8 @@ impl<S: 'static> App<S> {
     /// Seed the content for an embedded [`viewport`](Element::viewport) at build
     /// time (builder form of [`set_viewport_content`](App::set_viewport_content)).
     pub fn viewport_content(mut self, id: ViewportId, content: Pixmap) -> Self {
-        self.viewport_content.insert(id, content);
+        self.viewport_content
+            .insert(id, crate::core::ViewportContent::Pixels(content));
         self
     }
 
@@ -1072,6 +1073,31 @@ impl<S: 'static> App<S> {
     /// [`AppHandle::set_viewport_content`](crate::core::AppHandle::set_viewport_content)
     /// (from any thread): only the viewport's area is presented.
     pub fn set_viewport_content(&mut self, id: ViewportId, content: Pixmap) {
+        self.set_viewport(id, crate::core::ViewportContent::Pixels(content));
+    }
+
+    /// Show the external `image` in the viewport `id`: a buffer in another
+    /// API's memory (a content process's `dma-buf` or `IOSurface`, a DXGI
+    /// shared handle, an `AHardwareBuffer`; see
+    /// [`ExternalImage`](crate::render::ExternalImage)), sized to the
+    /// viewport's physical extent. A GPU renderer imports it as a texture
+    /// without a copy; the software renderer reads it on the CPU and blits
+    /// it as it does [`set_viewport_content`](Self::set_viewport_content)'s
+    /// pixels. A new frame is a new image (even of the same buffer): a
+    /// renderer keeps what it imported for an image as long as the image
+    /// lives.
+    ///
+    /// While the app runs, use
+    /// [`AppHandle::set_viewport_external`](crate::core::AppHandle::set_viewport_external).
+    pub fn set_viewport_external(
+        &mut self,
+        id: ViewportId,
+        image: std::sync::Arc<crate::render::ExternalImage>,
+    ) {
+        self.set_viewport(id, crate::core::ViewportContent::External(image));
+    }
+
+    fn set_viewport(&mut self, id: ViewportId, content: crate::core::ViewportContent) {
         self.viewport_content.insert(id, content);
         for pane in &mut self.panes {
             pane.dirty = true;
@@ -1227,7 +1253,7 @@ impl<S: 'static> Pane<S> {
     fn composite_viewports(
         &self,
         pixmap: &mut Pixmap,
-        content: &HashMap<ViewportId, Pixmap>,
+        content: &HashMap<ViewportId, crate::core::ViewportContent>,
         scale: ScaleFactor,
     ) {
         if content.is_empty() {
@@ -1248,7 +1274,9 @@ impl<S: 'static> Pane<S> {
                     .map_or(bounds.origin, |(_, m, _)| m.apply(bounds.origin));
                 let x = (at.x * s).round().max(0.0) as u32;
                 let y = (at.y * s).round().max(0.0) as u32;
-                pixmap.blit(src, x, y);
+                if let Some(src) = src.pixels() {
+                    pixmap.blit(&src, x, y);
+                }
             }
         }
     }
@@ -1707,7 +1735,7 @@ impl<S: 'static> Pane<S> {
         scene: Scene,
         damage: Damage,
         theme: &Theme,
-        viewport_content: &HashMap<ViewportId, Pixmap>,
+        viewport_content: &HashMap<ViewportId, crate::core::ViewportContent>,
         surface: &mut dyn Surface,
         phys_size: PhysicalSize,
         force: bool,
@@ -1890,7 +1918,7 @@ impl<S: 'static> Pane<S> {
         state: &S,
         theme: &Theme,
         font: Option<&Font>,
-        content: &HashMap<ViewportId, Pixmap>,
+        content: &HashMap<ViewportId, crate::core::ViewportContent>,
     ) -> (Pixmap, Damage) {
         let scene = self.build_frame(state, theme, font);
         let scale = self.scale;
@@ -4851,6 +4879,32 @@ mod tests {
             got[2].1,
             ViewportEvent::PointerUp { button: 0, .. }
         ));
+    }
+
+    #[test]
+    fn external_viewport_content_is_read_and_composited_on_the_cpu() {
+        use crate::core::ViewportId;
+        use crate::geometry::PhysicalSize;
+        use crate::render::ExternalImage;
+        use crate::widgets::viewport;
+
+        let vid = ViewportId(1);
+        let mut app = App::new((), move |_s: &(), cx: &mut Cx<()>| {
+            column(vec![viewport(cx, vid, 40.0, 30.0)])
+                .padding(crate::geometry::Insets::uniform(10.0))
+        })
+        .no_font()
+        .logical_size(Size::new(100.0, 60.0));
+        let mut content = Pixmap::new(PhysicalSize::new(40, 30));
+        for px in content.as_bytes_mut().as_chunks_mut::<4>().0 {
+            px.copy_from_slice(&[0, 200, 100, 255]);
+        }
+        let image = ExternalImage::from_pixels(std::sync::Arc::new(content));
+        app.set_viewport_external(vid, std::sync::Arc::new(image));
+        let after = app.render_once();
+        assert_eq!(after.pixel(20, 20), Some([0, 200, 100, 255]));
+        assert_eq!(after.pixel(49, 39), Some([0, 200, 100, 255]));
+        assert_ne!(after.pixel(2, 2), Some([0, 200, 100, 255]));
     }
 
     #[test]

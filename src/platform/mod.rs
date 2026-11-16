@@ -73,6 +73,9 @@ pub fn android_receiver_dex(lib: &str) -> Vec<u8> {
 pub mod dialog;
 mod error;
 mod event;
+// Images in another API's memory (dma-buf, IOSurface, DXGI shared handles,
+// AHardwareBuffer), drawn without a copy; public as `render::external`.
+pub(crate) mod external;
 /// The display-driven frame clock that paces animations.
 pub mod frame;
 /// Gamepads: connection, buttons and axes on a standard layout, rumble.

@@ -54,6 +54,9 @@ struct Lib {
     plane_base: unsafe extern "C" fn(*mut c_void, usize) -> *mut u8,
     plane_stride: unsafe extern "C" fn(*mut c_void, usize) -> usize,
     plane_height: unsafe extern "C" fn(*mut c_void, usize) -> usize,
+    /// `CVPixelBufferGetIOSurface`: the buffer's `IOSurface`, handed to a
+    /// GPU renderer that imports it.
+    io_surface: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     /// `kCVPixelBufferPixelFormatTypeKey`.
     format_key: usize,
     /// `kCVPixelBufferWidthKey` and `kCVPixelBufferHeightKey` (0 if missing).
@@ -97,6 +100,7 @@ fn lib() -> Option<&'static Lib> {
             plane_base: f!(cv, c"CVPixelBufferGetBaseAddressOfPlane"),
             plane_stride: f!(cv, c"CVPixelBufferGetBytesPerRowOfPlane"),
             plane_height: f!(cv, c"CVPixelBufferGetHeightOfPlane"),
+            io_surface: f!(cv, c"CVPixelBufferGetIOSurface"),
             format_key: *key as usize,
             width_key: {
                 let k = symbol(cv, c"kCVPixelBufferWidthKey") as *const Id;
@@ -358,14 +362,28 @@ extern "C" fn did_output(this: Id, _cmd: Sel, _output: Id, buffer: *mut c_void, 
                 Duration::ZERO
             };
             let (rotation, mirrored) = ctx.sink.orient(ctx.sensor, ctx.front, ctx.raw_mirrored);
-            ctx.sink.deliver(&Frame {
-                size: PhysicalSize::new(w as u32, h as u32),
-                format: FrameFormat::Yuv420,
-                planes: &planes,
-                timestamp,
-                rotation,
-                mirrored,
-            });
+            // The buffer itself, for a renderer that imports its IOSurface:
+            // kept out of the capture pool while the preview holds it.
+            let mut external = || {
+                let surface = (lib.io_surface)(pixels);
+                let image = crate::render::ExternalImage::io_surface(surface).ok()?;
+                crate::platform::external::apple::CFRetain(pixels);
+                let held = pixels as usize;
+                Some(image.on_release(move || {
+                    crate::platform::external::apple::CFRelease(held as *mut c_void)
+                }))
+            };
+            ctx.sink.deliver_with(
+                &Frame {
+                    size: PhysicalSize::new(w as u32, h as u32),
+                    format: FrameFormat::Yuv420,
+                    planes: &planes,
+                    timestamp,
+                    rotation,
+                    mirrored,
+                },
+                Some(&mut external),
+            );
         }
         (lib.unlock)(pixels, READ_ONLY);
     }));
