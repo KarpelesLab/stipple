@@ -2903,6 +2903,18 @@ jobs:
           mkdir -p visual_output/d3d-compare
           cargo test --features d3d --lib -- gpu:: app_gpu --nocapture --test-threads 1
           cargo test --release --features d3d --lib -- --ignored bench_cpu_against_gpu --nocapture
+      # The native theme on Direct3D 11: the gallery with the controls uxtheme
+      # draws, through D3D11 against the CPU at scales 1, 1.5 and 2 (the
+      # comparison above also has a native-themed screen; this is the whole
+      # gallery, as a window shows it). Non-blocking until it has passed here.
+      - name: Compare the native theme on Direct3D 11 with the software renderer
+        continue-on-error: true
+        shell: bash
+        env:
+          STIPPLE_RENDERER: d3d11
+        run: |
+          cargo run --release --features d3d --example nativegallery -- --gpu-check visual_output/d3d-compare | tee native-gpu.log
+          grep -q 'nativegallery gpu: ok' native-gpu.log
       - name: Upload the Direct3D comparison frames
         uses: actions/upload-artifact@v4
         if: always()
@@ -3539,6 +3551,15 @@ jobs:
           cargo test --features mtl --lib -- gpu:: app_gpu --nocapture --test-threads 1
           # The frame times, CPU against Metal, for the log.
           cargo test --release --features mtl --lib -- --ignored bench_cpu_against_gpu --nocapture
+      # The native theme on Metal: AppKit draws controls only on the main
+      # thread, which the tests above aren't on, so the gallery compares
+      # itself there: the controls AppKit draws, through Metal against the CPU
+      # at scales 1, 1.5 and 2. Non-blocking until it has passed here.
+      - name: Compare the native theme on Metal with the software renderer
+        continue-on-error: true
+        run: |
+          cargo run --release --features mtl --example nativegallery -- --gpu-check visual_output/metal-compare | tee native-gpu.log
+          grep -q 'nativegallery gpu: ok' native-gpu.log
       - name: Upload the Metal comparison frames
         uses: actions/upload-artifact@v4
         if: always()

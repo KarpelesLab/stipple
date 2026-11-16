@@ -4022,6 +4022,12 @@ impl<S: 'static> App<S> {
                     // window goes away (unless the app keeps running).
                     return self.close_pane(idx, window, &mut surfaces, &mut host);
                 }
+                Event::ScaleFactorChanged(_) => {
+                    // The bitmaps the OS drew at the old scale won't be drawn
+                    // again; dropping them frees their GPU textures too.
+                    crate::platform::native::clear_cache();
+                    ControlFlow::Wait
+                }
                 _ => ControlFlow::Wait,
             };
             if flow == ControlFlow::Exit {

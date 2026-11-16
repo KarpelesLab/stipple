@@ -60,11 +60,6 @@ with the same colors as on Linux.
 
 ## Limits
 
-- **GPU rendering**: the OS draws the controls into bitmaps, which the GPU
-  renderer (`stipple::gpu::render_scene_scaled` under `App::render_with`)
-  draws as textures, uploaded once per bitmap; only its GL backend (Linux)
-  renders scenes yet, and Linux has no OS-drawn controls, so this combination
-  is tested with ordinary images. See [gpu.md](gpu.md).
 - **Other variants**: `Variant::Ghost` and `Variant::Danger` buttons have no OS
   equivalent and stay self-drawn.
 
@@ -88,6 +83,34 @@ The platform layer delivers
 `Event::ThemeChanged` either way. A theme you customized after building it with
 `Theme::native()` is replaced on a change; set `theme.follows_system = false` to
 keep it.
+
+## On the GPU
+
+The native theme looks the same on every renderer. The OS draws each control
+into a bitmap once per control and value (checked, on, a slider's position),
+state (hovered, pressed, focused), light or dark, size in physical pixels
+and scale, and Stipple keeps those bitmaps. The software renderer copies
+them into the frame. The GPU renderers (`Renderer::Gpu`, `App::render_with` with
+`stipple::gpu::render_scene_scaled`; Metal, Direct3D 11, Vulkan, GLES) get
+the same bitmaps as images, and their image cache keys textures by the
+bitmap itself, so a control that doesn't change is uploaded once and then
+drawn from its texture each frame. A hover or press brings up another
+bitmap and so another texture, which is then kept too. Nothing about the
+native theme is drawn on the CPU per frame.
+
+The bitmaps, and with them their textures, are dropped when they can't be
+drawn again: when the system's look changes (dark mode, accent color, the
+OS theme), when a window's scale changes (another monitor's DPI), and on a
+low-memory warning. The next frame asks the OS again. A texture whose
+bitmap is dropped is freed on the next frame, and one not drawn for 120
+frames is freed anyway (its bitmap stays cached, so drawing it again only
+uploads it).
+
+CI compares the two: `src/gpu/compare.rs` draws a screen of native controls
+with the GPU and with the CPU (on Windows with the controls uxtheme draws,
+on WARP), and `nativegallery --gpu-check` does the same for the whole
+gallery on the main thread, which is where AppKit draws, on Metal and on
+Direct3D 11. See [gpu.md](gpu.md).
 
 ## Using it in your own widgets
 

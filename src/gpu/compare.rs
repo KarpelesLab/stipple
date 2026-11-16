@@ -324,6 +324,99 @@ fn an_app_renders_the_same_through_render_with() {
     }
 }
 
+/// The native theme on the GPU: a screen of every control under
+/// `Theme::native()`, through `App::render_with` the GPU renderer, against
+/// the software default. The bitmaps the OS draws (uxtheme on Windows, which
+/// draws on any thread) reach the GPU as images, cached as textures by their
+/// `Arc`, which the OS-drawn bitmap cache keeps the same from frame to frame:
+/// a second frame uploads none of them again, and once the cache is dropped
+/// (the system's look changed, the window moved to another scale) the next
+/// frame uploads the new ones. AppKit and UIKit only draw on the main thread,
+/// which a test isn't on: there `nativegallery --gpu-check` compares the same
+/// way, and here the controls are self-drawn. Linux has no OS-drawn controls.
+#[test]
+fn a_native_themed_screen_matches_the_software_renderer() {
+    use crate::prelude::*;
+    fn view(_: &(), cx: &mut Cx<()>) -> Element {
+        let theme = *cx.theme();
+        column(vec![
+            row(vec![
+                button(cx, "Save"),
+                Button::new("Cancel").variant(Variant::Secondary).view(cx),
+            ])
+            .gap(theme.spacing.sm),
+            checkbox(cx, "Show hidden files", true, |_| {}),
+            checkbox(cx, "Compress", false, |_| {}),
+            row(vec![
+                radio(cx, "Small", true, |_| {}),
+                radio(cx, "Large", false, |_| {}),
+            ])
+            .gap(theme.spacing.lg),
+            switch(cx, "Sync", true, |_| {}),
+            slider(cx, 0.6, |_, _| {}),
+            progress_bar(cx, 0.4),
+        ])
+        .gap(theme.spacing.md)
+        .padding(Insets::uniform(theme.spacing.lg))
+        .align(Align::Start, Align::Start)
+    }
+    if gpu(&Scene::new(Size::new(1.0, 1.0)), Color::BLACK, 1.0).is_none() {
+        return;
+    }
+    // A switch's first frame is the first step of its animation; reduced
+    // motion shows where it ends up, on both paths alike.
+    crate::anim::set_reduced_motion(Some(true));
+    let make = |theme: Theme, scale: f64| {
+        let mut app = App::new((), view)
+            .theme(theme)
+            .logical_size(Size::new(320.0, 300.0))
+            .scale(ScaleFactor::new(scale));
+        if let Some(font) = Font::system_default() {
+            app = app.font(font);
+        }
+        app
+    };
+    let gpu_frame = |scale: f64| {
+        make(Theme::native(), scale)
+            .render_with(|scene: &Scene, bg, scale| render_scene_scaled(scene, bg, scale).unwrap())
+            .render_once()
+    };
+    // Whether the OS draws this screen's controls on this thread.
+    let os_draws = crate::platform::native::available()
+        && cfg!(not(any(target_os = "macos", target_os = "ios")));
+    for scale in [1.0, 1.5, 2.0] {
+        let cpu = make(Theme::native(), scale).render_once();
+        let frame = gpu_frame(scale);
+        dump(&format!("native@{scale}"), "gpu", &frame);
+        dump(&format!("native@{scale}"), "cpu", &cpu);
+        let d = diff(&frame, &cpu);
+        eprintln!("native@{scale}: {d:?}");
+        assert!(d.mean < 1.0 && d.bad < 0.01, "native@{scale}: {d:?}");
+        if os_draws {
+            // The OS drew them: self-drawn, the screen looks different.
+            let plain = make(Theme::native().native_controls(false), scale).render_once();
+            let d = diff(&plain, &cpu);
+            assert!(
+                d.mean > 0.2,
+                "native@{scale}: the OS drew no controls ({d:?})"
+            );
+            // A second frame finds every bitmap the OS drew already a texture.
+            gpu_frame(scale);
+            let again = uploads();
+            // A new look drops them: the next frame uploads them anew.
+            crate::platform::native::clear_cache();
+            gpu_frame(scale);
+            let fresh = uploads();
+            eprintln!("native@{scale}: uploads {again} then {fresh} after the cache was dropped");
+            assert!(
+                fresh > again,
+                "native@{scale}: {again} then {fresh} uploads"
+            );
+        }
+    }
+    crate::anim::set_reduced_motion(None);
+}
+
 /// `App::renderer(Renderer::Gpu)`: the app draws on the GPU, and when the
 /// device is lost it draws that frame on the CPU and sets the GPU up again.
 #[test]

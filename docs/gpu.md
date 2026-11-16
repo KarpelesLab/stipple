@@ -123,6 +123,15 @@ renderer does, and turns it into device-space draw operations:
   texture is freed once its image is dropped or hasn't been drawn for 120
   frames. The images stay plain `Pixmap`s, so `Pixmap::from_oxideav_image`,
   `from_video_frame` and `to_video_frame` work as before.
+- **Native controls.** Under `Theme::native()` the OS draws each control
+  (uxtheme on Windows, AppKit on macOS, UIKit on iOS) into a bitmap, cached
+  by control, value, state, light or dark, physical size and scale
+  (`platform::native`), and the scene holds that bitmap as an image. The
+  same `Arc` comes back every frame the control looks the same, so its
+  texture is uploaded once and the GPU frame shows exactly the pixels the
+  software path copies. When the system's look or a window's scale
+  changes, the bitmaps are dropped and their textures freed on the next
+  frame (see [the native theme](native-theme.md#on-the-gpu)).
 - **Image regions** (`Scene::draw_image_region`: sprites, tiles) are textured
   quads from the whole bitmap's texture: the region's texture coordinates
   (swapped ends for a flip), kept half a texel inside the region, `GL_NEAREST`
@@ -622,8 +631,15 @@ surface.
 
 Unit tests (`src/gpu/compare.rs`) draw the same scenes both ways, on GLES2,
 Vulkan, Metal or Direct3D 11, and compare them pixel by pixel: boxes, paths, images, clips, layers (translated, rotated,
-scaled, translucent and nested), text, a canvas, and a whole app through
-`App::render_with`, at scales 1, 1.5 and 2. On Mesa's llvmpipe the mean
+scaled, translucent and nested), text, a canvas, a whole app through
+`App::render_with`, and a screen of controls under `Theme::native()`, at
+scales 1, 1.5 and 2. On Windows that screen has the controls uxtheme draws,
+and the test also checks that they differ from the self-drawn ones, that a
+second frame uploads none of them again, and that dropping the OS-drawn
+bitmaps uploads them anew. AppKit and UIKit draw only on the main thread,
+which a test isn't on: there `nativegallery --gpu-check` (built with a GPU
+feature) renders the native gallery both ways on the main thread, at the
+same scales and tolerance, and prints `nativegallery gpu: ok`. On Mesa's llvmpipe the mean
 difference per channel stays under 0.25 of 255, with no pixel off by more than
 64 in any of them (the tests allow a mean of 0.5 to 1 and a handful of edge
 pixels). On Metal the mean stays under 0.23, with at most one such pixel in
@@ -660,8 +676,9 @@ job runs the corpus on the runner's Metal device, prints the frame times, and
 screenshots `widgetsdemo` with `STIPPLE_RENDERER=metal`; the Windows visual
 job runs them on WARP and screenshots `widgetsdemo` with
 `STIPPLE_RENDERER=d3d11` (both non-blocking until they have passed there:
-the executor was written and compile-checked on a Mac). They all upload the
-frames.
+the executor was written and compile-checked on a Mac). Both also run
+`nativegallery --gpu-check`, the native theme on Metal and on Direct3D 11
+against the CPU (non-blocking). They all upload the frames.
 
 ## Not done yet
 

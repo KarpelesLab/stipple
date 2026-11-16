@@ -1101,9 +1101,19 @@ CPU as the default and the fallback.
   textures without a copy: `dma-buf` (Linux), `IOSurface` (macOS, iOS), DXGI
   shared handles (Windows), `AHardwareBuffer` (Android), building on the
   export and import spikes in [`docs/gpu.md`](docs/gpu.md).
-- ⬜ Natively drawn controls (`Theme::native()`) kept as cached textures, so
-  the native theme works under the GPU renderers (today `App::render_with`
-  skips their chrome).
+- 🚧 Natively drawn controls (`Theme::native()`) kept as cached textures, so
+  the native theme works under the GPU renderers.
+  *The bitmaps the OS draws, cached by control, value, state, appearance,
+  physical size and scale, reach every GPU executor as images whose
+  textures are keyed by the bitmap's `Arc`: uploaded once, drawn from the
+  texture after, freed when the bitmaps are dropped (the system's look or a
+  window's scale changed, low memory). `compare.rs` checks a native-themed
+  screen GPU against CPU (with uxtheme's controls on Windows WARP, and
+  their uploads), and `nativegallery --gpu-check` does on the main thread
+  for AppKit on Metal and on Direct3D 11, both non-blocking for now. On
+  WARP both have passed (mean difference under 0.14 of 255, no pixel off by
+  more than 64); the Metal run hasn't been seen yet. Linux has no OS-drawn
+  controls, so there only the self-drawn fallback is compared.*
 
 #### 6h — The default
 - ⬜ Once 6b–6f pass their exit criteria on a platform, `Renderer::Auto`
