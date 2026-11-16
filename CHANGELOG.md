@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.9](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.8...stipple-v0.0.9) - 2026-11-16
+
+### Added
+
+- *(dnd)* drag files and text out of the app on iOS and Android
+- *(ios)* iPad trackpad momentum, secondary click and pointer shapes
+- *(gpu)* NV12 on Vulkan and Direct3D 11, the Android camera through external textures, the web's resampled layers and external sources (6g, 9c)
+- *(examples)* mediabrowser, the Phase 3 reference application
+- *(widgets)* TableSpec::on_key; a focusable slider with Role::Slider
+- *(audio)* a voice's position, seeking and paused state
+- *(gpu)* Wayland dma-bufs under Stipple's title bar, with explicit sync, on the compositor's GPU (6c)
+- *(gpu)* the GPU as the default on macOS and X11 (6h); occluded windows stop drawing (6a)
+- *(gpu)* Vulkan and GLES present to Wayland windows as dma-bufs (6c)
+- *(gpu)* external images imported without a copy: dma-buf, IOSurface, DXGI shared handles, AHardwareBuffer (6g)
+- *(game)* draw games on the GPU without a CPU frame or per-frame upload (9c)
+- *(gpu)* the native theme under the GPU renderers, compared with the CPU
+- *(mobile)* drops from other apps, iPad trackpad scrolling, hardware dead keys
+- *(widgets)* place, wrap and size the rich editor's images; resize and move them by the pointer
+- *(a11y)* UIA Value, Toggle, Selection, ExpandCollapse, Scroll and Text patterns, property, structure and notification events
+- *(a11y)* macOS AXValue, text ranges, checkbox values, change notifications and scroll areas; iOS accessibilityScroll
+- *(a11y)* scroll containers say where they are scrolled; AT-SPI scroll panes and toast announcements
+- *(text)* mobile text editing: touch caret, selection handles, the system's edit menu
+- *(gpu)* pace frames from the swapchain and the display's vblank
+- *(widgets)* float the rich editor's images left or right, text flowing around them
+- *(widgets)* rich text editor with Markdown and HTML export and import
+- *(text)* text flowing around floats, shapes and images' opaque pixels
+- scroll bars on every scroll container
+
+### Fixed
+
+- *(damage)* text running past its box is repainted where it runs
+- *(api)* EditAction, EditMenu and RelativeWidth are #[non_exhaustive]
+- *(web)* redraw the whole frame when Chrome gives a 2D canvas back blank
+- *(ios)* touchdemo's pickers, caret menu and file drop pass again
+- *(text)* load system fallback fonts off the UI thread once a field takes text input
+- *(macos)* drop the legacy action override, so AXPress is listed again
+- *(macos)* list the protocol's actions (AXPress…) next to AXScrollToVisible
+
+### Other
+
+- *(clippy)* clean on Android
+- *(gpu)* skip the tiled dma-buf import on Vulkan with NVIDIA's driver
+- *(touch)* settle a fling before the tap in the scroll-over-a-field test
+- *(mobile)* real touches, timers, clipboard and URLs on the iOS simulator and Android emulators
+- update screenshots from CI
+- *(macos)* the depth check no longer expects the list scrolled back (that was AXScrollToVisible, now gone)
+- *(android)* the a11y probe scrolls the vertical list, not the first scrollable node
+- *(a11y)* scrolling, toasts, UIA patterns, macOS values; the depth checks
+- list the framepacing example (native)
+- *(a11y)* a Space or Enter that presses nothing is sent once more, as a lost Tab is
+- update screenshots from CI
+
 ## [0.0.8](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.7...stipple-v0.0.8) - 2026-11-16
 
 ### Added
