@@ -531,7 +531,11 @@ within two refresh intervals (a hidden window, say), a timer does. A source
 that misses three frames in a row (`frame::MISS_LIMIT`; a display link that
 doesn't tick on a virtual display, say) is no longer waited for: the timer
 paces frames at the refresh interval until the source delivers one again.
-`stipple::platform::frame` holds the clock.
+`stipple::platform::frame` holds the clock. A window the platform reports
+hidden (minimized, covered, on another desktop: `Event::Occluded`) draws no
+animation frames until it shows again, and once every window is hidden (or
+the app is in the background) the clock stops altogether; see
+[Occlusion](gpu.md#occlusion).
 
 `frame::stats()` tells where frames came from and what they cost, since the
 process started: how many the display source and the fallback timer

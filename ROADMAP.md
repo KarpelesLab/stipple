@@ -914,11 +914,12 @@ Direct3D 11 executes it into a
 flip-model swap chain (Windows); all are pixel-compared against the CPU in
 CI. WebGPU and WebGL2 execute it in the browser (`web/gpu.js`), straight into
 the canvas, compared with the CPU in headless Chrome. `App::renderer` /
-`STIPPLE_RENDERER` (the page's `renderer` option on the web) choose, with the
-CPU as the default and the fallback.
+`STIPPLE_RENDERER` (the page's `renderer` option on the web) choose; the
+default draws on a hardware GPU on macOS, X11 and the web (6h) and on the
+CPU elsewhere, and the CPU is always the fallback.
 
 #### 6a — The architecture
-- 🚧 A GPU presentation seam in the platform layer: a window can hand out a
+- ✅ A GPU presentation seam in the platform layer: a window can hand out a
   GPU surface (a `CAMetalLayer`, a DXGI swapchain, a Vulkan or EGL window
   surface, a WebGPU canvas context) instead of taking a `Pixmap`, with resize,
   scale changes, occlusion and device loss reported back.
@@ -929,9 +930,21 @@ CPU as the default and the fallback.
   content rectangle), released through the renderer before the window goes;
   on Wayland the `wl_surface` and a sink the backend hands `dma-buf`s to
   (`platform::dmabuf`, `zwp_linux_dmabuf_v1`; see 6c), likewise released;
-  device loss comes back from the renderer. Occlusion isn't reported yet
-  (Wayland compositors stop a hidden window's frame callbacks, which stops
-  its frames).*
+  device loss comes back from the renderer. Occlusion comes back as
+  `Event::Occluded`: `windowDidChangeOcclusionState:` (macOS), the app's
+  background (iOS), `IsIconic` / `DWMWA_CLOAKED` and a swap chain's
+  `DXGI_STATUS_OCCLUDED` (Windows), unmapping, `_NET_WM_STATE_HIDDEN` and
+  `VisibilityNotify` (X11), `xdg_toplevel`'s `suspended` state (Wayland,
+  `xdg_wm_base` v6), the window destroyed (Android), the canvas out of view
+  (the web). A hidden window draws no frames, CPU or GPU, and once all are
+  hidden the frame clock stops (docs/gpu.md#occlusion). Run on X11
+  (locally under xfwm4 with the CPU, Vulkan and GLES; CI under openbox) and
+  in CI on Windows, non-blocking (`framepacing --hidden`); macOS's
+  compile-checked (its CI step not seen run yet), Wayland's and Android's
+  unit-tested or compile-checked. Left: on Wayland
+  without `suspended` (sway 1.11 on a workspace switch) the frame clock's
+  fallback timer keeps a hidden animating window drawing at ~30 fps once
+  its frame callbacks stop.*
 - ✅ A renderer trait over the lowered operations, so each backend is an
   executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
   per-backend texture, glyph and offscreen-target caches behind it.
@@ -943,9 +956,12 @@ CPU as the default and the fallback.
   `Auto` picks the platform's GPU backend when a device is available and
   falls back to software when it isn't, when creating it fails, and when the
   device is lost mid-run (rebuilding caches on a new device if one comes back).
-  *`STIPPLE_RENDERER=software|gpu|metal|vulkan|gl|d3d11|auto`. `Auto` stays the CPU
-  until 6h; a lost device is set up again once, then the app stays on the
-  CPU. Loss simulated in tests, on Metal and on a stand-in device.*
+  *`STIPPLE_RENDERER=software|gpu|metal|vulkan|gl|d3d11|auto`. `Auto`
+  draws on a hardware GPU where 6h made it the default, else the CPU; a
+  lost device is set up again once, then the app stays on the CPU. Loss
+  simulated in tests on every backend CI runs (Metal, Vulkan, GLES,
+  Direct3D 11, WebGPU/WebGL2) and on a stand-in device, a GPU that fails to
+  start on the stand-in and by running without a driver.*
 - ✅ Shaders: one small set (boxes, image/region/glyph quads, stencil fill,
   layer composite), written per API in its own language (MSL, HLSL, GLSL ES,
   WGSL) and SPIR-V for Vulkan, checked in compiled where the API needs
@@ -1148,9 +1164,24 @@ CPU as the default and the fallback.
   controls, so there only the self-drawn fallback is compared.*
 
 #### 6h — The default
-- ⬜ Once 6b–6f pass their exit criteria on a platform, `Renderer::Auto`
+- 🚧 Once 6b–6f pass their exit criteria on a platform, `Renderer::Auto`
   chooses the GPU there by default; software stays the fallback and the
   choice for headless rendering and tests.
+  *Audited per platform in docs/gpu.md#the-default. `Auto` now draws on
+  the GPU on macOS (Metal) and X11 (Vulkan), as on the web, and only on a
+  hardware GPU (`gpu::is_hardware_device`: llvmpipe, lavapipe, WARP,
+  SwiftShader and paravirtual devices are slower than the CPU renderer, so
+  `Auto` stays there, as on all of CI's runners); never for a frame it
+  would read back (`render_once`, tests, windows without a GPU layer).
+  `STIPPLE_RENDERER` and `App::renderer` still win; a GPU that doesn't
+  start or is lost twice leaves the app on the CPU
+  (`src/app_gpu/auto_tests.rs`). Measured on an RTX 5080: the corpus
+  matches on Vulkan and GLES, Vulkan meets the benchmark targets (0.33 ms,
+  1.07 ms, transition p95 2.9 ms) and GLES doesn't (5.7 ms, 7.7 ms), so
+  GLES stays an explicit choice. Left: iOS (Metal never run on a device),
+  Windows (Direct3D 11 never run on a hardware GPU), Android (the corpus
+  not run there, the benchmark not on a phone) and Wayland (decorated
+  windows read back); X11 on AMD and Intel and on a real X server.*
 - Later, not planned yet: an app-facing GPU element (custom shaders, 3D
   content in a viewport), wide color and HDR.
 
@@ -2720,8 +2751,9 @@ game needs on top:
   *`GameLoop::paused_when(|s| …)`, every window minimized, the app in the
   background, and optionally `pause_when_unfocused`; paused, it asks for no
   frames. The first frame back gets one refresh interval, and presses made
-  while paused are dropped. App-tested. Not covered: a window hidden behind
-  others (occlusion) still runs.*
+  while paused are dropped. App-tested. A window hidden behind others pauses
+  it too where the platform reports that (`Event::Occluded`: macOS, X11
+  without a compositing manager, a Direct3D 11 swap chain; Phase 6a).*
 - ✅ Frame stats a game can show (fps, update and render times).
   *`Frame::stats()` → `LoopStats` (fps, frame, update and present times over
   half a second); the render time is the process's present time, all

@@ -1710,6 +1710,8 @@ impl D3dExecutor {
                 c.log.clear();
             }
             match outcome(hr) {
+                // Minimized, cloaked, the screen locked: shown nowhere.
+                Outcome::Ok if hr == DXGI_STATUS_OCCLUDED => Err(GpuError::Occluded),
                 Outcome::Ok => Ok(()),
                 _ => Err(failed(hr, "IDXGISwapChain::Present")),
             }

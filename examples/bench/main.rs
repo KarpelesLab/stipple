@@ -949,18 +949,7 @@ fn gpu_canvas_upload_bytes() -> usize {
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn gpu_device() -> (String, bool) {
     let name = stipple::gpu::device_name().unwrap_or_default();
-    let lower = name.to_ascii_lowercase();
-    let soft = [
-        "llvmpipe",
-        "lavapipe",
-        "softpipe",
-        "swiftshader",
-        "basic render",
-        "warp",
-        "paravirtual",
-        "software",
-    ];
-    let hardware = !name.is_empty() && !soft.iter().any(|s| lower.contains(s));
+    let hardware = stipple::gpu::is_hardware_device(&name);
     (name, hardware)
 }
 

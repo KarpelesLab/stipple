@@ -1,5 +1,6 @@
-//! Closing, quitting, focus and attention on macOS: the window delegate's
-//! `windowShouldClose:`, `windowDidBecomeKey:` and `windowDidResignKey:`, an
+//! Closing, quitting, focus, occlusion and attention on macOS: the window
+//! delegate's `windowShouldClose:`, `windowDidBecomeKey:`,
+//! `windowDidResignKey:` and `windowDidChangeOcclusionState:`, an
 //! application delegate answering `applicationShouldTerminate:`, and
 //! `requestUserAttention:`, the Dock tile's badge and `NSBeep`.
 
@@ -7,7 +8,7 @@ use std::cell::Cell;
 use std::ffi::c_void;
 
 use super::{
-    CTX, Class, Id, Sel, class, class_addMethod, msg_id, msg_void, msg_void_id, nsstring,
+    CTX, Class, Id, Sel, class, class_addMethod, msg_id, msg_u64, msg_void, msg_void_id, nsstring,
     objc_allocateClassPair, objc_getClass, objc_msgSend, objc_registerClassPair, sel,
 };
 use crate::platform::UserAttention;
@@ -50,8 +51,25 @@ extern "C" fn window_did_resign_key(this: Id, _cmd: Sel, _notification: Id) {
     post_to(this, Event::FocusChanged(false));
 }
 
-/// Add the focus delegate methods to the view class (the view is the
-/// window's delegate).
+/// `NSWindowOcclusionStateVisible`: some of the window shows.
+const NS_WINDOW_OCCLUSION_STATE_VISIBLE: u64 = 1 << 1;
+
+/// `windowDidChangeOcclusionState:`: the window was minimized, covered
+/// entirely, moved to another Space, or the screen went to sleep (or it
+/// came back). AppKit posts it when the window first shows, too; the app
+/// ignores a "visible" it already assumed.
+extern "C" fn window_did_change_occlusion_state(this: Id, _cmd: Sel, notification: Id) {
+    let visible = unsafe {
+        let window = msg_id(notification, sel("object"));
+        !window.is_null()
+            && msg_u64(window, sel("occlusionState")) & NS_WINDOW_OCCLUSION_STATE_VISIBLE != 0
+    };
+    crate::platform::window::debug_window(format_args!("occluded {}", !visible));
+    post_to(this, Event::Occluded(!visible));
+}
+
+/// Add the focus and occlusion delegate methods to the view class (the view
+/// is the window's delegate).
 ///
 /// # Safety
 /// `cls` must be a class being built (allocated, not yet registered).
@@ -67,6 +85,12 @@ pub(super) unsafe fn add_window_methods(cls: Class) {
             cls,
             sel("windowDidResignKey:"),
             window_did_resign_key as *const c_void,
+            c"v@:@".as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("windowDidChangeOcclusionState:"),
+            window_did_change_occlusion_state as *const c_void,
             c"v@:@".as_ptr(),
         );
     }

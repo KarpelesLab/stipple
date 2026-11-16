@@ -299,7 +299,9 @@ impl<S: 'static> App<S> {
         }
         let background = self.lifecycle.background;
         if background != was {
-            crate::platform::frame::set_suspended(background);
+            // Frames stop with the app (and stay stopped coming back if
+            // every window is hidden).
+            self.sync_frames();
             // Audio output stops with the app, and starts again with it.
             crate::audio::set_app_background(background);
             // So do the cameras.

@@ -193,6 +193,21 @@ where these scenarios run in the module on the CPU):
 | `canvas_row` | 0.49 ms (18 432 pixels) | 1.4 ms (74 kB uploaded; 171 ms drawing the canvas straight) | 1.4 ms |
 | `transition` (per frame) | 103 ms | 3.5 ms (p95 4.1) | 494 ms |
 
+On Linux with an NVIDIA GeForce RTX 5080 (release build, November 2026),
+Vulkan meets the hardware targets and OpenGL ES (NVIDIA's EGL) misses two:
+
+| Scenario | Software | Vulkan | OpenGL ES |
+|---|---|---|---|
+| `gallery_4k` | 29 ms | 0.33 ms | 5.7 ms |
+| `sprites_10k` | 20 ms | 1.07 ms | 7.7 ms |
+| `canvas_row` | 0.62 ms | 1.09 ms | 1.06 ms |
+| `transition` (per frame, p95) | 57 ms | 2.9 ms | 3.2 ms |
+
+That's why `Renderer::Auto` picks Vulkan on X11 and leaves OpenGL ES to an
+explicit choice ([gpu.md](gpu.md#the-default)). The report's
+`gpu_hardware` comes from `stipple::gpu::is_hardware_device`, the test
+`Renderer::Auto` makes too.
+
 The software renderer's `transition` frames are whole 1170×2532 frames,
 which is why phones draw on the GPU.
 

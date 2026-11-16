@@ -1,8 +1,11 @@
 # Rendering on the GPU
 
-Stipple renders on the CPU by default (`SoftwareRenderer`, through
-`oxideav-raster`). `stipple::gpu` is an experimental GPU path behind Cargo
-features, each linking the OS's own driver through hand-written FFI:
+Stipple renders on the CPU (`SoftwareRenderer`, through `oxideav-raster`)
+unless it's built with a GPU backend and the platform's GPU path has met
+Phase 6's exit criteria: then `Renderer::Auto` draws on a hardware GPU (see
+[The default](#the-default): macOS on Metal, X11 on Vulkan, and the web).
+`stipple::gpu` is that GPU path, behind Cargo features, each linking the
+OS's own driver through hand-written FFI:
 
 | Feature | Backend | What it does today |
 |---|---|---|
@@ -32,9 +35,15 @@ let app = app.renderer(Renderer::Gpu);
   `dma-buf`s handed to the compositor through `zwp_linux_dmabuf_v1` on
   Wayland (see [Wayland](#wayland)), a DXGI swap chain on Windows, the canvas
   on the web.
-- `Renderer::Auto`, the default, is the CPU for now. The GPU becomes the
-  default platform by platform once it has been shown to match the CPU there
-  and to be faster (Phase 6h).
+- `Renderer::Auto`, the default, draws on the GPU where its path has met
+  Phase 6's exit criteria, in a build with that platform's feature, when the
+  device is a hardware GPU and the window takes GPU frames straight: Metal
+  on macOS, Vulkan on X11 (not OpenGL ES, nor Wayland, yet), WebGPU or
+  WebGL2 in a browser. Everywhere else, on a software GPU (llvmpipe,
+  lavapipe, WARP, SwiftShader, a virtual machine's paravirtual device, all
+  slower than the CPU renderer), and for headless rendering (`render_once`,
+  tests, a window whose frames would be read back) it's the CPU. See
+  [The default](#the-default) for what was checked where.
 
 The environment variable `STIPPLE_RENDERER` overrides the app's choice, for
 trying an app either way without rebuilding it: `software` (or `cpu`), `gpu`,
@@ -69,7 +78,9 @@ draws) is still drawn on the GPU: the frame is read back and presented as a
 bitmap. With `Renderer::Gpu` on Linux and Android, Vulkan
 is tried first and OpenGL ES next, when both are built in.
 
-Each of these is said once on stderr. When a window falls back, its GPU layer
+Each of these is said once on stderr, as is `Renderer::Auto` staying on the
+CPU over a software GPU (`stipple: Vulkan draws on llvmpipe (…), a software
+GPU slower than the CPU; drawing on the CPU`). When a window falls back, its GPU layer
 is taken away and the next frame is presented whole through the window's
 ordinary bitmap path. One renderer (device, pipelines, texture and glyph
 caches) is shared by every window on the thread.
@@ -807,6 +818,46 @@ Windows (CPU and Direct3D 11) and macOS (CPU and Metal). Run locally on
 Xvfb with the CPU, GLES and Vulkan: 60 presents a second from Present, none
 and no wakeups idle.
 
+## Occlusion
+
+A window nobody can see draws no frames. Each backend reports a window
+becoming fully hidden, and visible again, as `Event::Occluded`:
+
+| Platform | Hidden when | Checked |
+|---|---|---|
+| macOS | `windowDidChangeOcclusionState:` without `NSWindowOcclusionStateVisible` (minimized, covered, on another Space, the display asleep) | compile-checked; a non-blocking CI step miniaturizes `framepacing` on the CPU and on Metal, not seen run yet |
+| iOS | the app in the background (`Lifecycle::Background`, as before: UIKit posts it once every scene is) | lifecycle tests |
+| Windows | `IsIconic`, or cloaked (`DWMWA_CLOAKED`: another virtual desktop), read on resize, move, paint and focus changes; and a swap chain's `DXGI_STATUS_OCCLUDED` from `Present` | CI minimizes `framepacing` on the CPU and on Direct3D 11 (WARP), non-blocking: 0 presents in 3 s hidden, 60 (CPU) and 46 (WARP) in the second back |
+| X11 | unmapped (iconified by an ICCCM window manager), `_NET_WM_STATE_HIDDEN`, or `VisibilityNotify` saying `FullyObscured` (never under a compositing manager) | locally under xfwm4 on Xvfb (CPU, Vulkan and GLES on NVIDIA); CI under openbox, non-blocking |
+| Wayland | `xdg_toplevel`'s `suspended` state (`xdg_wm_base` version 6, now bound up to 6) | unit-tested; binding version 6 run in CI under sway 1.11, which doesn't send `suspended` on a workspace switch (see below) |
+| Android | the activity's window destroyed (`onNativeWindowDestroyed`) until a new one comes | compile-checked |
+| Web | the canvas out of view or the tab hidden (an `IntersectionObserver`, `visibilitychange`), as before | headless Chrome |
+
+A hidden window's wakes still run the app's updates and timers, but
+nothing is built or presented, on the CPU or the GPU: what changed is
+drawn, whole, when it shows again. Once every window is hidden the frame
+clock is suspended too (as in the background), so no display source is
+armed and the event loop sleeps until an event or a timer. A swap chain's
+`DXGI_STATUS_OCCLUDED` stops only that window's frames, not the clock, and
+any event for the window but a wake (a repaint the system asks for, a
+resize, focus, input) ends it, since no API says when such a window shows
+again. `framepacing --hidden SECS` minimizes its own window while
+animating and checks nothing is presented meanwhile and that frames come
+back once it's restored (it needs a window manager on X11):
+
+```text
+framepacing: hidden: 0 presents, 0 wakeups in 3.00 s; shown again: 60 presents in 1 s
+```
+
+`STIPPLE_DEBUG_WINDOWS=1` logs each change (`occluded 0x… true`).
+
+On Wayland, a compositor that hides a window without `suspended` (sway 1.11
+on a workspace switch) only stops its frame callbacks, and the frame
+clock's fallback timer (meant for a compositor that skipped a callback)
+then keeps an animating window drawing at about 30 frames a second, as
+measured under sway in CI. Holding a window's frames while its callback is
+outstanding would stop that; it isn't done yet.
+
 ## OpenGL ES on a window
 
 Where there's no Vulkan, the GLES2 executor presents too: on the first frame
@@ -879,6 +930,59 @@ against the CPU (non-blocking). They all upload the frames. The
 uploaded each frame) and `spritedemo --bench` on that GPU and on the CPU,
 not blocking yet.
 
+## The default
+
+`Renderer::Auto` draws on the GPU on a platform once its GPU path meets
+Phase 6's exit criteria (ROADMAP 6h): it presents straight to the window,
+matches the software renderer on the whole comparison corpus in CI, meets
+the benchmarks' targets on a hardware GPU (`gallery_4k` and `sprites_10k`
+within 4 ms, `transition` frames within 8.3 ms at the 95th percentile;
+[performance](performance.md#baselines-and-budgets)), and falls back to
+the CPU in tests when the device is lost or there is none. Where each
+stands (November 2026):
+
+| Criterion | macOS | iOS | Windows | Linux, X11 | Linux, Wayland | Android | Web |
+|---|---|---|---|---|---|---|---|
+| Presents straight to the window | **met**: Metal into a `CAMetalLayer`; CI screenshots `widgetsdemo` on the runner's (paravirtual) Metal, blocking; run on an M5 Max | **unverified**: compile-checked only, never run on a device or the simulator | **met on WARP only**: CI screenshots and paces `widgetsdemo` on Direct3D 11, non-blocking (passing); never run on a hardware GPU | **met**: CI presents with Vulkan (lavapipe) and GLES (llvmpipe) on Xvfb, non-blocking (passing); run locally with Vulkan and GLES on an RTX 5080 (Xvfb, 60 presents a second) | **partly**: `dma-buf`s only for windows the compositor decorates (a title bar Stipple draws is read back), no explicit sync; CI under sway on `vkms` non-blocking, locally on NVIDIA against a scripted compositor | **met on the emulator only**: Vulkan on API 34, non-blocking | **met**: WebGPU or WebGL2 into the canvas |
+| Matches the CPU on the corpus in CI | **met**: `visual-macos`, Metal, blocking | **not met**: not run | **met on WARP**: `visual-windows`, non-blocking (passing: 93 tests) | **met**: `visual-gpu`, GLES on llvmpipe and Vulkan on lavapipe, blocking; also run locally on the RTX 5080 (104 tests, both APIs) | **met** (the same executors as X11) | **not met**: not run on Android | **met, non-blocking**: `gpucompare.html` in headless Chrome (SwiftShader, flaky) |
+| Benchmarks meet their targets on a hardware GPU | **met** on an M5 Max: 0.76 ms, 2.6 ms, 3.5 ms (locally; CI's runner has no hardware GPU) | **unverified**: the benchmark hasn't run on an iPhone | **unverified**: no hardware GPU run | **met with Vulkan** on an RTX 5080: 0.33 ms, 1.07 ms, p95 2.9 ms; **not with GLES**: 5.7 ms, 7.7 ms (p95 3.2 ms) (locally) | as X11 (the same offscreen benchmark) | **unverified**: not run on a phone | **unverified** for the benchmark (it runs on the CPU in the module); a 2560×1600 widget frame takes 2.8 ms on WebGPU on an M5 Max |
+| Device loss and a missing GPU fall back in tests | **met**: `compare.rs` loses the runner's Metal device (blocking); the App's fallback on a stand-in | as macOS, on the stand-in only | **met on WARP** (non-blocking) | **met**: on lavapipe (blocking) and the RTX 5080 (locally) | **met** (the same executors) | on the stand-in only | **met, non-blocking**: two lost devices in headless Chrome |
+| **`Auto` draws on the GPU** | **yes**, on a hardware Metal device | no | no | **yes**, on a hardware Vulkan device | no | no | **yes**, on a hardware GPU (since 6e) |
+
+So `Auto` draws on the GPU on macOS (Metal) and X11 (Vulkan), and in a
+browser, and only on a hardware GPU. iOS, Windows and Android haven't run
+their GPU paths on the hardware `Auto` would pick (a phone, a Windows PC
+with a GPU), and Wayland still reads back windows whose title bar Stipple
+draws; they stay on the CPU until that's done. GLES stays an explicit
+choice on Linux: on the one hardware GPU measured it missed the benchmarks'
+4 ms target (it's still several times faster than the CPU there).
+
+How `Auto` decides, in a build with the platform's feature (`mtl`, `vk`;
+`gpu` on the web):
+
+- A window whose backend hands out a GPU layer (an X11 window's, a Metal
+  layer) gets the GPU renderer, set up on its first frame. If its device
+  is a software one (`gpu::is_hardware_device`: not llvmpipe, lavapipe,
+  softpipe, SwiftShader, WARP, a paravirtual device, or a device without a
+  name), it's let go and the window draws on the CPU from then on;
+  `STIPPLE_RENDERER=gpu` (or `Renderer::Gpu`) still draws on it. CI's
+  runners all have software GPUs, so there `Auto` draws on the CPU.
+- A window without a GPU layer, a Wayland window, and frames that would be
+  read back (`App::render_once`, tests, the benchmark's CPU runs) draw on the
+  CPU: `Auto` never reads back.
+- A GPU that doesn't start, or is lost twice, leaves the app on the CPU, as
+  with `Renderer::Gpu`.
+- `STIPPLE_RENDERER`, `App::renderer(Renderer::Software)` and
+  `App::render_with` win over all of this.
+
+`src/app_gpu/auto_tests.rs` checks each of these on a stand-in GPU and
+window; `compare.rs`'s device-loss test runs on each real backend CI and
+the local machine have (Metal, Vulkan, GLES, Direct3D 11). Run with
+`STIPPLE_RENDERER` unset on X11 with an RTX 5080: `stipple: drawing with
+Vulkan (the default here)`, presenting straight to the window; with no
+Vulkan driver (`VK_ICD_FILENAMES` pointing nowhere), `the GPU renderer is
+unavailable …; drawing on the CPU`, and the same 60 frames a second.
+
 ## Not done yet
 
 The plan for hardware rendering on every platform, presented straight to the
@@ -889,15 +993,23 @@ Today:
 - Metal, Vulkan and GLES (X11, Android, and Wayland as `dma-buf`s),
   Direct3D 11 and the web (into the canvas) present straight to the window.
   On Wayland, a window whose title bar Stipple draws is still read back,
-  the renderer waits for the GPU before each commit (no explicit
-  synchronization yet), and occlusion isn't reported (compositors stop
-  frame callbacks for hidden windows, which already stops the frames).
+  and the renderer waits for the GPU before each commit (no explicit
+  synchronization yet).
 - The X11 and Android present paths (Vulkan and GLES) have been
   compile-checked and run in CI only, under Mesa's software drivers and the
   emulator; the Vulkan swapchain code has run on macOS through MoltenVK.
 - Direct3D 11 is exercised by CI on WARP; it hasn't been tried on a
   hardware GPU yet.
-- `Renderer::Auto` is still the CPU everywhere.
+- `Renderer::Auto` draws on the GPU only on macOS, X11 and the web, on a
+  hardware GPU ([The default](#the-default)): iOS, Windows, Android and
+  Wayland haven't met the exit criteria. The X11 default rests on one
+  hardware GPU (NVIDIA, on Xvfb, where its driver has no DRI3); AMD and
+  Intel, and a real X server, are yet to be tried.
+- Occlusion ([Occlusion](#occlusion)) has run on X11 and, in CI, on
+  Windows; macOS's is compile-checked (its CI step hasn't run yet); Wayland's `suspended` state and Android's are
+  unit-tested or compile-checked only, and a window covered by others is
+  reported only on X11 without a compositing manager, on macOS, and by a
+  Direct3D 11 swap chain.
 - The Metal path on iOS is compile-checked; it hasn't run on a device or the
   simulator yet.
 - Only frames presented to a window are redrawn in part; a frame that is

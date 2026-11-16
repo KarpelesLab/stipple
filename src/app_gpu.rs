@@ -51,6 +51,11 @@ pub(crate) enum Which {
 pub(crate) enum Want {
     Software,
     Gpu(Which),
+    /// [`Renderer::Auto`] where the platform defaults to the GPU: the
+    /// platform's GPU API when its device is a hardware one and the window
+    /// takes its frames straight, the CPU otherwise (a software GPU, a
+    /// frame read back, headless rendering).
+    Auto,
 }
 
 /// A `STIPPLE_RENDERER` value: `None` for `auto` (and for anything it
@@ -97,15 +102,62 @@ mod page {
 #[cfg(target_arch = "wasm32")]
 pub(crate) use page::{set as set_page_renderer, set_hardware as set_page_hardware_gpu};
 
-/// Whether [`Renderer::Auto`] draws on the GPU: on the web, in a module built
-/// with the renderer, when the page found a hardware GPU behind WebGPU and
-/// WebGL2 (on a software one, SwiftShader, the CPU renderer is faster).
-/// Elsewhere not yet (Phase 6h).
+/// Whether [`Renderer::Auto`] draws on the GPU outright: on the web, in a
+/// module built with the renderer, when the page found a hardware GPU behind
+/// WebGPU and WebGL2 (on a software one, SwiftShader, the CPU renderer is
+/// faster).
 fn auto_gpu() -> bool {
     #[cfg(all(target_arch = "wasm32", feature = "gpu"))]
     return page::HARDWARE.with(|h| h.get());
     #[cfg(not(all(target_arch = "wasm32", feature = "gpu")))]
     false
+}
+
+/// Whether [`Renderer::Auto`] tries the GPU on this platform ([`Want::Auto`]):
+/// where the GPU path has met Phase 6's exit criteria (`docs/gpu.md`, "The
+/// default"), in a build with its API: Metal on macOS, Vulkan on Linux
+/// (presenting to X11 windows: see [`auto_presents_to`]). iOS, Windows,
+/// Android and Wayland stay on the CPU until theirs are met.
+fn auto_tries_gpu() -> bool {
+    #[cfg(test)]
+    if let Some(on) = AUTO_TRIES_GPU.with(|a| a.get()) {
+        return on;
+    }
+    cfg!(any(
+        all(target_os = "macos", feature = "mtl"),
+        all(target_os = "linux", feature = "vk")
+    ))
+}
+
+/// The API [`Want::Auto`] draws with: Vulkan on Linux (OpenGL ES, which
+/// misses the benchmarks' targets on the hardware measured, only when asked
+/// for), the platform's own elsewhere.
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+fn auto_api() -> Which {
+    if cfg!(target_os = "linux") {
+        Which::Vulkan
+    } else {
+        Which::Native
+    }
+}
+
+/// Whether [`Want::Auto`] presents to `layer` on the GPU: not to a Wayland
+/// window yet (its `dma-buf` presentation hasn't met the exit criteria).
+#[cfg(feature = "gpu")]
+fn auto_presents_to(layer: &crate::platform::GpuLayer) -> bool {
+    #[cfg(target_os = "linux")]
+    if matches!(layer, crate::platform::GpuLayer::Wayland { .. }) {
+        return false;
+    }
+    let _ = layer;
+    true
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Stands in for the platform in [`auto_tries_gpu`] (tests).
+    pub(crate) static AUTO_TRIES_GPU: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// The page's `renderer` option.
@@ -134,9 +186,10 @@ fn from_env() -> Option<Want> {
 pub(crate) fn resolve(choice: Renderer, env: Option<Want>) -> Want {
     env.unwrap_or(match choice {
         Renderer::Gpu => Want::Gpu(Which::Native),
-        // `Auto` is the CPU until the GPU is the better default (Phase 6h),
-        // except in a browser with a hardware GPU.
+        // `Auto` is the GPU in a browser with a hardware one, and tries it
+        // where the platform's GPU path is the better default (Phase 6h).
         Renderer::Auto if auto_gpu() => Want::Gpu(Which::Native),
+        Renderer::Auto if auto_tries_gpu() => Want::Auto,
         Renderer::Auto | Renderer::Software => Want::Software,
     })
 }
@@ -200,6 +253,8 @@ mod shared {
         failed: bool,
         /// Devices lost so far.
         losses: u32,
+        /// The device is a software one ([`Want::Auto`] draws on the CPU).
+        software_device: bool,
     }
 
     thread_local! {
@@ -241,20 +296,42 @@ mod shared {
     /// Run `f` on the thread's renderer for `which`, setting it up first.
     /// `None` when there is no GPU to draw with (and never will be: the
     /// caller draws on the CPU); a lost device is dropped, to be set up
-    /// again on the next frame, once.
+    /// again on the next frame, once. With `auto` ([`Want::Auto`](super::Want::Auto)),
+    /// a software device is no GPU to draw with either.
     pub(super) fn with<T>(
         which: Which,
+        auto: bool,
         f: impl FnOnce(&mut GpuRenderer) -> Result<T, GpuError>,
     ) -> Option<Result<T, GpuError>> {
         GPU.with(|cell| {
             let mut gpu = cell.borrow_mut();
-            if gpu.failed {
+            if gpu.failed || (auto && gpu.software_device) {
+                return None;
+            }
+            if auto && gpu.renderer.as_ref().is_some_and(|r| !r.hardware()) {
+                gpu.software_device = true;
                 return None;
             }
             if gpu.renderer.is_none() {
                 match create(which) {
+                    Ok(r) if auto && !r.hardware() => {
+                        say(format_args!(
+                            "stipple: {} draws on {}, a software GPU slower than the CPU; drawing on the CPU (STIPPLE_RENDERER=gpu draws on it anyway)",
+                            r.api().name(),
+                            match r.device() {
+                                d if d.is_empty() => "an unnamed device".to_string(),
+                                d => d,
+                            }
+                        ));
+                        gpu.software_device = true;
+                        return None;
+                    }
                     Ok(r) => {
-                        say(format_args!("stipple: drawing with {}", r.api().name()));
+                        say(format_args!(
+                            "stipple: drawing with {}{}",
+                            r.api().name(),
+                            if auto { " (the default here)" } else { "" }
+                        ));
                         gpu.renderer = Some(r);
                     }
                     // Not ready yet (a browser's GPU comes up asynchronously):
@@ -379,14 +456,21 @@ fn no_gpu() {
 }
 
 impl<S: 'static> Pane<S> {
-    /// The GPU API this window draws with, if it draws on the GPU: it asked
-    /// to, and has no custom renderer ([`App::render_with`](crate::App::render_with)).
-    pub(crate) fn gpu_wanted(&self) -> Option<Which> {
+    /// What this window draws with: what it asked for, unless it has a
+    /// custom renderer ([`App::render_with`](crate::App::render_with)).
+    fn want(&self) -> Want {
         if self.frame_renderer.is_some() {
-            return None;
+            return Want::Software;
         }
-        match resolve(self.gpu.choice, from_env()) {
-            Want::Software => None,
+        resolve(self.gpu.choice, from_env())
+    }
+
+    /// The GPU API this window draws frames it reads back with, if any: it
+    /// asked for the GPU. [`Want::Auto`] reads back nothing (headless
+    /// rendering, tests, windows the GPU can't present to draw on the CPU).
+    pub(crate) fn gpu_wanted(&self) -> Option<Which> {
+        match self.want() {
+            Want::Software | Want::Auto => None,
             Want::Gpu(which) => Some(which),
         }
     }
@@ -409,7 +493,7 @@ impl<S: 'static> Pane<S> {
         #[cfg(feature = "gpu")]
         {
             let owner = self.gpu.owner();
-            shared::with(which, |g| {
+            shared::with(which, false, |g| {
                 if let Some(damage) = damage {
                     g.next_frame(owner, damage);
                 }
@@ -439,8 +523,10 @@ impl<S: 'static> Pane<S> {
         window: &dyn Window,
         force: bool,
     ) -> Option<Scene> {
-        let Some(which) = self.gpu_wanted() else {
-            return self.leave_gpu(window, scene);
+        let (which, auto) = match self.want() {
+            Want::Software => return self.leave_gpu(window, scene),
+            Want::Gpu(which) => (which, false),
+            Want::Auto => (auto_api(), true),
         };
         #[cfg(feature = "gpu")]
         {
@@ -451,6 +537,9 @@ impl<S: 'static> Pane<S> {
             let Some(layer) = window.gpu_layer() else {
                 return Some(scene);
             };
+            if auto && !auto_presents_to(&layer) {
+                return self.leave_gpu(window, scene);
+            }
             let mut scene = scene;
             self.draw_viewport_content(&mut scene, viewport_content);
             let background = theme.palette.background;
@@ -461,7 +550,7 @@ impl<S: 'static> Pane<S> {
                 gpu_dirty(damage, scale, scale.to_physical(scene.logical_size()))
             };
             let owner = self.gpu.owner();
-            let shown = shared::with(which, |g| {
+            let shown = shared::with(which, auto, |g| {
                 if !g.can_present(&layer) {
                     return Ok(false);
                 }
@@ -491,6 +580,14 @@ impl<S: 'static> Pane<S> {
                     window.request_redraw();
                     None
                 }
+                // The frame went nowhere: the window can't be seen. Its
+                // frames stop until something shows it (see `app_occlusion`).
+                Some(Err(crate::gpu::renderer::GpuError::Occluded)) => {
+                    self.gpu.layer = true;
+                    self.gpu.force = true;
+                    self.occlusion.by_gpu = true;
+                    None
+                }
                 // The platform asks for a redraw itself once the GPU is
                 // ready (on the web a redraw is delivered at once, so asking
                 // here would loop).
@@ -505,7 +602,9 @@ impl<S: 'static> Pane<S> {
         #[cfg(not(feature = "gpu"))]
         {
             let _ = (which, damage, theme, viewport_content, force);
-            no_gpu();
+            if !auto {
+                no_gpu();
+            }
             self.leave_gpu(window, scene)
         }
     }
@@ -600,7 +699,10 @@ mod tests {
         assert_eq!(parse("auto"), None);
         assert_eq!(parse("vulkan"), Some(Want::Gpu(Which::Vulkan)));
         assert_eq!(parse("vulkan?"), None);
+        // Where `Auto` doesn't try the GPU (see `auto_tests` for where it does).
+        AUTO_TRIES_GPU.with(|a| a.set(Some(false)));
         assert_eq!(resolve(Renderer::Auto, None), Want::Software);
+        AUTO_TRIES_GPU.with(|a| a.set(None));
         assert_eq!(resolve(Renderer::Gpu, None), Want::Gpu(Which::Native));
         assert_eq!(
             resolve(Renderer::Software, Some(Want::Gpu(Which::Metal))),
@@ -720,3 +822,6 @@ mod fallback_tests {
         super::reset(None);
     }
 }
+
+#[cfg(all(test, feature = "gpu"))]
+mod auto_tests;

@@ -359,6 +359,13 @@ pub enum Event {
     /// The app went to the background, came back, or the system is short of
     /// memory (mobile platforms). See [`Lifecycle`].
     Lifecycle(Lifecycle),
+    /// The window became fully hidden (`true`: minimized, on another
+    /// virtual desktop, covered, its surface gone or suspended by the
+    /// compositor) or visible again (`false`). While hidden its animation
+    /// frames stop, on the CPU and the GPU alike; once every window is,
+    /// the frame clock stops too. Coming back, the window is drawn afresh.
+    /// See `docs/gpu.md#occlusion`.
+    Occluded(bool),
 
     /// The pointer moved to `position` (logical pixels, window-relative).
     PointerMoved { position: Point },

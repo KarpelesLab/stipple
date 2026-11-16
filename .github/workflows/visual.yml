@@ -180,6 +180,23 @@ jobs:
           STIPPLE_X11_PRESENT_CLOCK=0 timeout 30 ./target/release/examples/framepacing 2>&1 | tee visual_output/framepacing-timer.log
           grep -q 'framepacing: ok' visual_output/framepacing-timer.log
 
+      # Occlusion (Phase 6a): minimized by a window manager (openbox, started
+      # for this step only: the other steps run without one), the animating
+      # window presents nothing for 3 s (UnmapNotify / _NET_WM_STATE_HIDDEN
+      # reported as Event::Occluded), then draws again once restored. Not
+      # blocking yet.
+      - name: A minimized window draws no frames (openbox)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+        run: |
+          sudo apt-get install -y openbox
+          openbox & WM=$!
+          sleep 2
+          timeout 40 ./target/release/examples/framepacing --hidden 3 2>&1 | tee visual_output/framepacing-hidden.log || true
+          kill $WM; wait $WM 2>/dev/null || true
+          grep -q 'framepacing: hidden ok, shown again ok' visual_output/framepacing-hidden.log
+
       - name: A canvas repaints only the rows it invalidates
         env:
           DISPLAY: ":99"
@@ -3039,6 +3056,20 @@ jobs:
           grep -q 'DXGI frame-latency waitable' visual_output/framepacing-d3d11.log
           grep -q 'framepacing: ok' visual_output/framepacing-d3d11.log
 
+      # Occlusion (Phase 6a): minimized (IsIconic, and on Direct3D 11 the swap
+      # chain's DXGI_STATUS_OCCLUDED), the animating window presents nothing
+      # for 3 s, then draws again once restored. Not blocking yet.
+      - name: A minimized window draws no frames (CPU and Direct3D 11)
+        continue-on-error: true
+        shell: bash
+        env:
+          STIPPLE_DEBUG_WINDOWS: "1"
+        run: |
+          timeout 40 ./target/release/examples/framepacing.exe --hidden 3 2>&1 | tee visual_output/framepacing-hidden-cpu.log
+          grep -q 'framepacing: hidden ok, shown again ok' visual_output/framepacing-hidden-cpu.log
+          STIPPLE_RENDERER=d3d11 timeout 40 ./target/release/examples/framepacing.exe --hidden 3 2>&1 | tee visual_output/framepacing-hidden-d3d11.log
+          grep -q 'framepacing: hidden ok, shown again ok' visual_output/framepacing-hidden-d3d11.log
+
       # A game on the GPU: spritedemo's pixel-art frame drawn and scaled on
       # Direct3D 11 (WARP here), nothing uploaded each frame; its benchmark
       # there and on the CPU, for the log.
@@ -3726,6 +3757,19 @@ jobs:
           STIPPLE_RENDERER=metal perl -e 'alarm 40; exec @ARGV' ./target/release/examples/framepacing 2>&1 | tee visual_output/framepacing-metal.log
           grep -q 'stipple: drawing with Metal' visual_output/framepacing-metal.log
           grep -q 'framepacing: ok' visual_output/framepacing-metal.log
+
+      # Occlusion (Phase 6a): miniaturized (NSWindow's occlusionState), the
+      # animating window presents nothing for 3 s, then draws again once
+      # restored; on the CPU and on Metal. Not blocking yet.
+      - name: A minimized window draws no frames (CPU and Metal)
+        continue-on-error: true
+        env:
+          STIPPLE_DEBUG_WINDOWS: "1"
+        run: |
+          perl -e 'alarm 40; exec @ARGV' ./target/release/examples/framepacing --hidden 3 2>&1 | tee visual_output/framepacing-hidden-cpu.log
+          grep -q 'framepacing: hidden ok, shown again ok' visual_output/framepacing-hidden-cpu.log
+          STIPPLE_RENDERER=metal perl -e 'alarm 40; exec @ARGV' ./target/release/examples/framepacing --hidden 3 2>&1 | tee visual_output/framepacing-hidden-metal.log
+          grep -q 'framepacing: hidden ok, shown again ok' visual_output/framepacing-hidden-metal.log
 
       # A game on the GPU: spritedemo's pixel-art frame drawn and scaled on
       # Metal, nothing uploaded each frame; its benchmark there and on the

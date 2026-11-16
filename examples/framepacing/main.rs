@@ -13,6 +13,11 @@
 //! default); `--rate-only` and `--idle-only` check just one of them (a
 //! virtual display may not pace frames at a real rate). Run with
 //! `STIPPLE_DEBUG_FRAMES=1` to see the frame clock's own log as well.
+//!
+//! `--hidden SECS` adds a phase after the animation: the app minimizes its
+//! window, checks that nothing is presented for that long while it's
+//! hidden (`Event::Occluded`), restores it and checks the animation draws
+//! again. It needs a window manager that minimizes.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -72,6 +77,7 @@ fn main() {
     let idle = Duration::from_secs_f64(arg("--idle", 3.0));
     let check_rate = !std::env::args().any(|a| a == "--idle-only");
     let check_idle = !std::env::args().any(|a| a == "--rate-only");
+    let hidden = Duration::from_secs_f64(arg("--hidden", 0.0));
     let app = App::new(State { animating: true }, view)
         .title("Frame pacing")
         .logical_size(Size::new(360.0, 140.0));
@@ -82,6 +88,9 @@ fn main() {
         let (a, ta) = (stats(), Instant::now());
         std::thread::sleep(animate);
         let (b, tb) = (stats(), Instant::now());
+        if !hidden.is_zero() {
+            check_hidden(&handle, hidden);
+        }
         handle.update(|s: &mut State| s.animating = false);
         // The last frame, and any fade of it.
         std::thread::sleep(Duration::from_secs(1));
@@ -94,6 +103,40 @@ fn main() {
     app.run();
     if FAILED.load(Ordering::Relaxed) {
         std::process::exit(1);
+    }
+}
+
+/// Minimize the window for `hidden`, still animating, and check nothing is
+/// presented meanwhile; then restore it and check frames come back.
+fn check_hidden(handle: &AppHandle<State>, hidden: Duration) {
+    use stipple::platform::WindowRequest;
+    handle.window(WindowRequest::Minimized(true));
+    // The window manager takes a moment.
+    std::thread::sleep(Duration::from_secs(1));
+    let (a, ta) = (stats(), Instant::now());
+    std::thread::sleep(hidden);
+    let (b, tb) = (stats(), Instant::now());
+    handle.window(WindowRequest::Minimized(false));
+    std::thread::sleep(Duration::from_secs(1));
+    let c = stats();
+    std::thread::sleep(Duration::from_secs(1));
+    let d = stats();
+    let (presents, wakeups) = (b.presents - a.presents, b.wakeups - a.wakeups);
+    let back = d.presents - c.presents;
+    println!(
+        "framepacing: hidden: {presents} presents, {wakeups} wakeups in {:.2} s; shown again: {back} presents in 1 s",
+        (tb - ta).as_secs_f64()
+    );
+    // A frame or two may still be on its way as the window goes.
+    let quiet = presents <= 2;
+    let resumed = back as f64 >= 0.3 / stipple::platform::frame::interval().as_secs_f64();
+    println!(
+        "framepacing: hidden {}, shown again {}",
+        if quiet { "ok" } else { "busy" },
+        if resumed { "ok" } else { "stalled" }
+    );
+    if !(quiet && resumed) {
+        FAILED.store(true, Ordering::Relaxed);
     }
 }
 
@@ -141,7 +184,7 @@ fn report(
         if paced { "ok" } else { "off" },
         if quiet { "ok" } else { "busy" }
     );
-    if rate_ok && idle_ok {
+    if rate_ok && idle_ok && !FAILED.load(Ordering::Relaxed) {
         println!("framepacing: ok");
     } else {
         println!("framepacing: FAILED");

@@ -664,6 +664,28 @@ pub fn device_name() -> Option<String> {
     .filter(|name| !name.is_empty())
 }
 
+/// Whether a device named `name` (as [`device_name`] gives it) is a
+/// hardware GPU, not a rasterizer running on the CPU: Mesa's llvmpipe,
+/// lavapipe and softpipe, SwiftShader, Windows' WARP (`Microsoft Basic
+/// Render Driver`), or a virtual machine's paravirtual device (the macOS
+/// runners' `Apple Paravirtual device`). On those the software renderer is
+/// faster, so [`Renderer::Auto`](crate::render::Renderer::Auto) stays on
+/// the CPU. An unknown (empty) name isn't taken for hardware.
+pub fn is_hardware_device(name: &str) -> bool {
+    const SOFTWARE: [&str; 8] = [
+        "llvmpipe",
+        "lavapipe",
+        "softpipe",
+        "swiftshader",
+        "basic render",
+        "warp",
+        "paravirtual",
+        "software",
+    ];
+    let lower = name.to_ascii_lowercase();
+    !lower.trim().is_empty() && !SOFTWARE.iter().any(|s| lower.contains(s))
+}
+
 /// [`render_scene_scaled`] without reading the frame back: draw `scene`
 /// offscreen on the calling thread's renderer and wait for the GPU to
 /// finish. What drawing a frame costs, for benchmarks (a window's frames go

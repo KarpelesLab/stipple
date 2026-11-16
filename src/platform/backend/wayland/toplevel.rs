@@ -37,6 +37,15 @@ pub(super) const XDG_TOPLEVEL_SET_MINIMIZED: u16 = 13;
 /// `xdg_toplevel.state` values.
 const STATE_MAXIMIZED: u32 = 1;
 const STATE_FULLSCREEN: u32 = 2;
+/// The compositor shows nothing of the window (minimized, on another
+/// workspace, fully covered, the screen locked or off) and sends it no
+/// frame callbacks; since `xdg_wm_base` version 6.
+const STATE_SUSPENDED: u32 = 9;
+/// The `xdg_wm_base` version bound, at most: 6 brings the `suspended` state.
+/// Versions 2 to 5 add the tiled states (which `decor` reads), events a
+/// toplevel ignores (`configure_bounds`, `wm_capabilities`) and popup
+/// repositioning, which isn't used.
+pub(super) const WM_BASE_VERSION: u32 = 6;
 
 /// The globals a new window is made from.
 #[derive(Clone, Copy, Debug)]
@@ -226,6 +235,7 @@ pub(super) struct Configure {
     pub size: Option<PhysicalSize>,
     pub maximized: bool,
     pub fullscreen: bool,
+    pub suspended: bool,
 }
 
 /// Parse `xdg_toplevel.configure`: width, height, then the states array
@@ -242,6 +252,7 @@ pub(super) fn parse_configure(args: &[u8]) -> Configure {
         size: (w > 0 && h > 0).then(|| PhysicalSize::new(w as u32, h as u32)),
         maximized: states.contains(&STATE_MAXIMIZED),
         fullscreen: states.contains(&STATE_FULLSCREEN),
+        suspended: states.contains(&STATE_SUSPENDED),
     }
 }
 
@@ -261,8 +272,14 @@ mod tests {
                 size: Some(PhysicalSize::new(800, 600)),
                 maximized: true,
                 fullscreen: true,
+                suspended: false,
             }
         );
+        let mut args = Vec::new();
+        for w in [0u32, 0, 8, 4 /* activated */, STATE_SUSPENDED] {
+            args.extend_from_slice(&w.to_le_bytes());
+        }
+        assert!(parse_configure(&args).suspended);
         // 0x0: the client picks; no states.
         let args = [0u8; 12];
         assert_eq!(parse_configure(&args), Configure::default());

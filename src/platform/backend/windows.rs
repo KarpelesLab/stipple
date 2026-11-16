@@ -41,6 +41,7 @@ mod geometry;
 mod ime;
 /// Raw key events (`Event::RawKey`).
 mod keys;
+mod occlusion;
 /// `WM_MOUSELEAVE` and the double-click settings.
 mod pointer;
 /// The notification-area icon and notification balloons.
@@ -440,6 +441,8 @@ struct PerWin {
     /// The GPU renderer presents to the window through a DXGI swap chain
     /// ([`Window::gpu_layer`]): `WM_PAINT` doesn't blit the bitmap over it.
     gpu: bool,
+    /// Minimized or cloaked, as the app was last told ([`occlusion`]).
+    occluded: bool,
 }
 
 /// Per-thread state shared between the message loop, the [`WndProc`] and the
@@ -638,6 +641,7 @@ fn refresh_info(hwnd: Hwnd) {
     let prev = read_win(hwnd, |w| w.info).flatten();
     let now = read_info(hwnd, prev);
     with_win(hwnd, |w| w.info = Some(now));
+    occlusion::refresh(hwnd);
     let Some(prev) = prev else {
         return;
     };
@@ -1178,6 +1182,8 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
                 }
             });
             unsafe { EndPaint(hwnd, &ps) };
+            // Painted: maybe uncloaked.
+            occlusion::refresh(hwnd);
             // The swap chain shows the GPU's frames: a repaint the window
             // asks for (`request_redraw` after a skipped frame) is drawn anew.
             if read_win(hwnd, |w| w.gpu) == Some(true) {
@@ -1422,6 +1428,9 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
         }
         attention::WM_SETFOCUS | attention::WM_KILLFOCUS => {
             attention::focus_message(hwnd, msg);
+            // Switching virtual desktops moves the focus, and cloaks or
+            // uncloaks windows.
+            occlusion::refresh(hwnd);
             0
         }
         attention::WM_QUERYENDSESSION => attention::query_end_session(hwnd),

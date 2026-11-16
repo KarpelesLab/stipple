@@ -1167,6 +1167,10 @@ struct WaylandWindow {
     pending_size: Cell<Option<PhysicalSize>>,
     pending_state: Cell<(bool, bool)>,
     state: Cell<(bool, bool)>,
+    /// Whether the compositor suspended the window (`xdg_toplevel`'s
+    /// `suspended` state): from the last configure, and as last reported.
+    pending_suspended: Cell<bool>,
+    suspended: Cell<bool>,
     /// Buffer pixels per surface unit (the scale of the output the window is
     /// on, which `output` names), shared with its surface.
     scale: Rc<Cell<u32>>,
@@ -1211,6 +1215,8 @@ impl WaylandWindow {
             pending_size: Cell::new(None),
             pending_state: Cell::new((false, false)),
             state: Cell::new((false, false)),
+            pending_suspended: Cell::new(false),
+            suspended: Cell::new(false),
             scale: Rc::new(Cell::new(scale)),
             output: Cell::new(None),
             configured: Rc::new(Cell::new(false)),
@@ -1751,6 +1757,7 @@ where
     let mut compositor_name = None;
     let mut shm_name = None;
     let mut wm_base_name = None;
+    let mut wm_base_version = 1;
     let mut seat_name = None;
     let mut seat_version = 1;
     let mut data_manager = None;
@@ -1776,7 +1783,10 @@ where
                 match iface.as_str() {
                     "wl_compositor" => compositor_name = Some(name),
                     "wl_shm" => shm_name = Some(name),
-                    "xdg_wm_base" => wm_base_name = Some(name),
+                    "xdg_wm_base" => {
+                        wm_base_name = Some(name);
+                        wm_base_version = version.clamp(1, toplevel::WM_BASE_VERSION);
+                    }
                     "wl_seat" => {
                         seat_name = Some(name);
                         seat_version = version.clamp(1, WL_SEAT_VERSION);
@@ -1834,7 +1844,7 @@ where
         &mut conn,
         wm_base_name.ok_or_else(|| PlatformError::Os("no xdg_wm_base".into()))?,
         "xdg_wm_base",
-        1,
+        wm_base_version,
     );
 
     // Outputs report their scale; the surface's `enter` says which one we're on.
@@ -2338,6 +2348,17 @@ where
                     break;
                 }
             }
+            // Suspended: nothing of it shows, and no frame callbacks come.
+            let suspended = win.pending_suspended.get();
+            if suspended != win.suspended.replace(suspended) {
+                crate::platform::window::debug_window(format_args!(
+                    "occluded {:#x} {suspended}",
+                    win.surface
+                ));
+                if handler(Event::Occluded(suspended), win) == ControlFlow::Exit {
+                    break;
+                }
+            }
             // Paint the frame for this configure.
             if handler(Event::RedrawRequested, win) == ControlFlow::Exit {
                 break;
@@ -2351,6 +2372,7 @@ where
             dbg(format_args!("toplevel configure {configure:?}"));
             win.pending_state
                 .set((configure.maximized, configure.fullscreen));
+            win.pending_suspended.set(configure.suspended);
             let states = decor::configure_states(&args);
             let focus = {
                 let mut conn = shared.lock().unwrap();

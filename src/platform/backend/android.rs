@@ -1704,6 +1704,9 @@ struct Loop<'h> {
     mouse_buttons: i32,
     /// The activity is paused (in the background).
     background: bool,
+    /// The window went (`onNativeWindowDestroyed`) and no new one came yet:
+    /// the app was told it's hidden.
+    occluded: bool,
     /// The activity was destroyed: the loop ends.
     ended: bool,
     /// A hardware keyboard's dead key waiting for the next key.
@@ -1758,6 +1761,9 @@ impl Loop<'_> {
                 self.view.presented.set(false);
                 self.resized();
                 self.view.request_insets();
+                if std::mem::take(&mut self.occluded) {
+                    self.deliver(Event::Occluded(false));
+                }
             }
             Command::WindowResized => {
                 if self.view.update_size() {
@@ -1778,6 +1784,10 @@ impl Loop<'_> {
                     // surface on the window must be gone before it returns.
                     release_gpu(old);
                     unsafe { ANativeWindow_release(old) };
+                }
+                // Nothing to draw into until a new window comes: frames stop.
+                if !std::mem::replace(&mut self.occluded, true) {
+                    self.deliver(Event::Occluded(true));
                 }
             }
             Command::ContentRect(rect) => {
@@ -2445,6 +2455,7 @@ where
         pointer: None,
         mouse_buttons: 0,
         background: false,
+        occluded: false,
         ended: false,
         dead_keys: dead_keys::DeadKeys::default(),
     };

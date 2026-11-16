@@ -45,6 +45,7 @@ mod app_gpu;
 mod app_keys;
 mod app_lifecycle;
 mod app_locale;
+mod app_occlusion;
 mod app_pointer;
 mod app_scroll_bar;
 mod app_select;
@@ -391,6 +392,8 @@ struct Pane<S> {
     frame_renderer: Option<FrameRenderer>,
     /// What draws the frames ([`App::renderer`]) and the GPU layer's state.
     gpu: app_gpu::PaneGpu,
+    /// Whether the window can't be seen, and why ([`Event::Occluded`]).
+    occlusion: app_occlusion::Occlusion,
     // Retained from the last frame build, for routing pointer events.
     tree: Option<LayoutNode>,
     handlers: Handlers<S>,
@@ -572,6 +575,7 @@ impl<S: 'static> Pane<S> {
             scale: ScaleFactor::IDENTITY,
             frame_renderer: None,
             gpu: Default::default(),
+            occlusion: Default::default(),
             tree: None,
             handlers: Handlers::default(),
             backs: Vec::new(),
@@ -3563,8 +3567,14 @@ impl<S: 'static> App<S> {
                     | Event::ThemeChanged
                     | Event::LocaleChanged
                     | Event::Lifecycle(_)
+                    | Event::Occluded(_)
                     | Event::SaveState
             );
+            // A window the GPU last found hidden is seen again by anything
+            // but a wake.
+            if !matches!(event, Event::Wake | Event::Occluded(_)) {
+                self.window_seen(idx);
+            }
             // Pointer buttons, moves and wheels reach `on_pointer` and
             // `on_wheel` handlers first.
             let pointer =
@@ -3871,6 +3881,14 @@ impl<S: 'static> App<S> {
                 // In the background nothing is on screen: updates and timers
                 // ran above, and the windows repaint when the app comes back.
                 Event::Wake if self.in_background() => ControlFlow::Wait,
+                // Nor is a hidden window: it's drawn when it shows again.
+                Event::Wake if self.window_hidden(idx) => ControlFlow::Wait,
+                Event::Occluded(hidden) => {
+                    if self.window_occluded(idx, hidden) {
+                        present(&mut self, &mut surfaces, idx, window, true);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::Lifecycle(change) => {
                     if self.lifecycle_changed(change) {
                         present(&mut self, &mut surfaces, idx, window, true);
@@ -4197,6 +4215,8 @@ impl<S: 'static> App<S> {
             first.primary = true;
         }
         self.closing.retain(|c| *c != id);
+        // The windows left may all be hidden.
+        self.sync_frames();
         self.handle.set_window_info(id, None);
         let open: Vec<WindowId> = self.panes.iter().map(|p| p.id).collect();
         self.handle.drop_window_requests(&open);

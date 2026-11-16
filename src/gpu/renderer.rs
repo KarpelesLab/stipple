@@ -109,6 +109,13 @@ pub(crate) enum GpuError {
     /// nothing, and wait for the platform to ask for the next frame.
     #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     Pending,
+    /// The frame was drawn, but the window can't be seen (a swap chain's
+    /// `DXGI_STATUS_OCCLUDED`): stop drawing it until it shows again.
+    #[cfg_attr(
+        not(any(test, all(target_os = "windows", feature = "d3d"))),
+        allow(dead_code)
+    )]
+    Occluded,
 }
 
 impl std::fmt::Display for GpuError {
@@ -118,6 +125,7 @@ impl std::fmt::Display for GpuError {
             GpuError::Lost(e) => write!(f, "device lost: {e}"),
             GpuError::Skipped => f.write_str("no drawable this frame"),
             GpuError::Pending => f.write_str("still being set up"),
+            GpuError::Occluded => f.write_str("the window can't be seen"),
         }
     }
 }
@@ -551,6 +559,12 @@ impl GpuRenderer {
     /// The device's name, if known.
     pub(crate) fn device(&self) -> String {
         self.exec.device()
+    }
+
+    /// Whether the device is a hardware GPU, by its name (see
+    /// [`is_hardware_device`](super::is_hardware_device)).
+    pub(crate) fn hardware(&self) -> bool {
+        super::is_hardware_device(&self.device())
     }
 
     /// Bytes of texture the executor's caches hold.

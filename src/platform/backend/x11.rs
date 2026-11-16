@@ -53,6 +53,7 @@ mod dnd;
 mod geometry;
 /// Raw key events: physical keys, key text, sides and repeats.
 mod keys;
+mod occlusion;
 mod pointer;
 mod present_clock;
 mod refresh;
@@ -1073,6 +1074,9 @@ struct X11Window {
     /// While the pointer is locked (grabbed, and warped back to the center
     /// after each move): its motion bookkeeping.
     lock: Cell<Option<input::WarpLock>>,
+    /// Whether the window can be seen, as far as the server and the window
+    /// manager say.
+    occlusion: Cell<occlusion::Occlusion>,
 }
 
 impl std::fmt::Debug for Conn {
@@ -1593,6 +1597,7 @@ fn create_window(
         | pointer::EV_ENTER_WINDOW
         | pointer::EV_LEAVE_WINDOW
         | EV_STRUCTURE_NOTIFY
+        | occlusion::EV_VISIBILITY_CHANGE
         | attention::EV_FOCUS_CHANGE
         | selection::EV_PROPERTY_CHANGE;
     req.extend_from_slice(&mask.to_le_bytes());
@@ -1707,6 +1712,7 @@ fn create_window(
         increments: Cell::new(attrs.resize_increments),
         drop_accepted: Cell::new(false),
         lock: Cell::new(None),
+        occlusion: Cell::default(),
     })
 }
 
@@ -1915,6 +1921,31 @@ where
                 dbg(format_args!("expose"));
                 handler(Event::RedrawRequested, win)
             }
+            // Mapped, unmapped (iconified), covered: whether it shows.
+            _ if occlusion::event_window(&buf).is_some() => {
+                match windows
+                    .iter()
+                    .find(|w| Some(w.window) == occlusion::event_window(&buf))
+                {
+                    Some(win) => {
+                        let mut o = win.occlusion.get();
+                        o.event(&buf);
+                        let change = o.change();
+                        win.occlusion.set(o);
+                        match change {
+                            Some(hidden) => {
+                                crate::platform::window::debug_window(format_args!(
+                                    "occluded {:#x} {hidden}",
+                                    win.window
+                                ));
+                                handler(Event::Occluded(hidden), win)
+                            }
+                            None => ControlFlow::Wait,
+                        }
+                    }
+                    None => ControlFlow::Wait,
+                }
+            }
             X_CONFIGURE_NOTIFY => {
                 let mut geo = win.geo.get();
                 let before = geo.size;
@@ -1965,7 +1996,21 @@ where
                         "state {:#x} maximized={} minimized={} fullscreen={}",
                         win.window, geo.maximized, geo.minimized, geo.fullscreen
                     ));
-                    handler(Event::WindowChanged, win)
+                    let mut o = win.occlusion.get();
+                    o.set_minimized(geo.minimized);
+                    let hidden = o.change();
+                    win.occlusion.set(o);
+                    let flow = handler(Event::WindowChanged, win);
+                    match hidden {
+                        Some(hidden) if flow == ControlFlow::Wait => {
+                            crate::platform::window::debug_window(format_args!(
+                                "occluded {:#x} {hidden}",
+                                win.window
+                            ));
+                            handler(Event::Occluded(hidden), win)
+                        }
+                        _ => flow,
+                    }
                 } else {
                     ControlFlow::Wait
                 }

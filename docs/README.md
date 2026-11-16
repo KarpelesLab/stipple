@@ -83,6 +83,8 @@ How to build, package and run on each platform, and what works there today.
 | Attention requests, beep, badge | ✅ ³⁹ | ✅ ³⁹ | ✅ Dock badge ³⁹ | — | — | — |
 | Title bar on Wayland (xdg-decoration, or drawn) | ✅ ⁴⁰ | — | — | — | — | — |
 | Scenes rendered on the GPU (`stipple::gpu`, experimental) | Vulkan, GLES2 ⁴⁷ | Direct3D 11 ⁴⁷ | Metal ⁴⁷ | Metal ⁴⁷ | Vulkan, GLES2 ⁴⁷ | WebGPU, WebGL2 ⁴⁷ |
+| The GPU by default (`Renderer::Auto`), on a hardware GPU | Vulkan, on X11 ⁸³ | ❌ ⁸³ | Metal ⁸³ | ❌ ⁸³ | ❌ ⁸³ | WebGPU, WebGL2 ⁸³ |
+| Hidden windows draw no frames (`Event::Occluded`) | ✅ ⁸⁴ | ✅ ⁸⁴ | ✅ ⁸⁴ | in the background ⁸⁴ | ✅ ⁸⁴ | ✅ ⁸⁴ |
 | Message boxes | drawn ⁴⁴ | native ⁴⁴ | native ⁴⁴ | native ³ | drawn ⁴⁴ | native ¹⁰ |
 | Secure password entry | IME off | IME off | `EnableSecureEventInput` ¹⁰ | IME off | IME off | IME off |
 | Sound: effects, streamed music, volume groups (`stipple::audio`) | ALSA ⁷¹ | WASAPI ⁷¹ | Core Audio ⁷¹ | Core Audio ⁷¹ | AAudio ⁷¹ | Web Audio ⁷¹ |
@@ -645,6 +647,29 @@ probe app that copies from a broadcast and reads once in front), and
 `open_url` bringing Chrome up with the `ACTION_VIEW` intent in `dumpsys
 activity`. Not tried on a physical device. See
 [platforms/android.md](platforms/android.md#running-on-an-emulator).
+⁸³ Where the GPU path has met Phase 6's exit criteria (presenting straight
+to the window, matching the CPU on the corpus in CI, the benchmarks' targets
+on a hardware GPU, falling back when the device is lost or missing), in a
+build with that platform's feature, and only on a hardware GPU: on
+llvmpipe, lavapipe, WARP, SwiftShader or a virtual machine's device the
+CPU renderer is faster, so `Auto` stays there (as on every CI runner).
+Never for frames read back (`render_once`, tests), nor on Wayland yet
+(decorated windows are read back). X11's default rests on an NVIDIA GPU
+run locally; Windows, iOS and Android haven't run their GPU paths on the
+hardware `Auto` would pick. `STIPPLE_RENDERER` and `App::renderer` still
+choose. See [gpu.md](gpu.md#the-default).
+⁸⁴ Minimized, covered, on another desktop or Space, or (Wayland) suspended by
+the compositor: the window's frames stop, CPU and GPU, and the frame clock
+once every window is hidden; it's drawn afresh when it shows. X11 unmaps,
+`_NET_WM_STATE_HIDDEN` and `VisibilityNotify`; Windows `IsIconic`,
+`DWMWA_CLOAKED` and Direct3D 11's `DXGI_STATUS_OCCLUDED`; macOS
+`occlusionState`; Wayland `xdg_toplevel`'s `suspended`; Android the window
+destroyed; iOS the app in the background; the web the canvas out of view.
+`framepacing --hidden` checks it on X11 (openbox) and Windows in CI, not
+blocking yet (macOS has the step, not seen run yet); Wayland's and
+Android's are unit-tested or compile-checked, and a Wayland compositor that doesn't send `suspended`
+(sway) leaves a hidden animating window drawing at ~30 fps on the frame
+clock's fallback timer. See [gpu.md](gpu.md#occlusion).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
@@ -687,7 +712,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Closing, quitting, focus and attention](window-lifecycle.md): asking before a window closes or the app quits, window focus, attention requests, the bell, Wayland title bars, and mobile apps going to the background
 - [The camera and permissions](camera.md): `stipple::camera`'s live preview, frames on a capture thread, torch, zoom, focus and lenses; asking for the camera, microphone, notifications, photos and location
 - [Sound](audio.md): `stipple::audio`: sound effects, streamed music, volume groups, the formats, each platform's output, latency, and the web's autoplay rule
-- [Rendering on the GPU](gpu.md): `stipple::gpu` under `App::render_with`, what it draws how, and how close it is to the software renderer
+- [Rendering on the GPU](gpu.md): `stipple::gpu` under `App::render_with`, what it draws how, how close it is to the software renderer, where it's the default, and hidden windows
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from
 - [CI and screenshots](ci.md): what CI checks, and how screenshots reach this repository
 - [API guidelines](api-guidelines.md): for contributors: `#[non_exhaustive]`, options structs, what's public, and the audit that checks it
