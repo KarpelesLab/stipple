@@ -319,14 +319,20 @@ if row0 is not None and field is not None:
     check(any(e[0] == "focus:" for e in events), "...with a focus: event")
     check(row0.getState().contains(pyatspi.STATE_FOCUSED), "'Row 0' says it is focused")
     for key, what in (("space", "Space"), ("Return", "Enter")):
+        # A key can be lost on the way (as the first Tab above): one that
+        # presses nothing is sent once more, with a warning.
         before = taps()
-        subprocess.run(keys(key), check=False)
         pressed = False
-        for _ in range(40):
-            pump(0.25)
-            if taps() > before:
-                pressed = True
+        for attempt in range(2):
+            subprocess.run(keys(key), check=False)
+            for _ in range(20 if attempt == 0 else 40):
+                pump(0.25)
+                if taps() > before:
+                    pressed = True
+                    break
+            if pressed:
                 break
+            print("warning: no tap after {}; sending it again".format(key), flush=True)
         check(pressed, "{} on the focused 'Row 0' pressed it: the app logged the tap".format(what))
     back = await_focus(keys("shift+Tab"), lambda: field.getState().contains(pyatspi.STATE_FOCUSED))
     check(back is not None and back[2] == pyatspi.ROLE_ENTRY,
