@@ -188,11 +188,13 @@ impl Voice {
 
     /// Hold this voice where it is; [`resume`](Self::resume) carries on.
     pub fn pause(&self) {
+        self.state.paused.store(true, Ordering::Release);
         self.send(Cmd::Pause(self.id, true));
     }
 
     /// Carry on after [`pause`](Self::pause).
     pub fn resume(&self) {
+        self.state.paused.store(false, Ordering::Release);
         self.send(Cmd::Pause(self.id, false));
     }
 
@@ -200,6 +202,33 @@ impl Voice {
     /// or was stopped.
     pub fn is_playing(&self) -> bool {
         self.state.playing.load(Ordering::Acquire)
+    }
+
+    /// Whether the voice is held by [`pause`](Self::pause) (as far as the
+    /// handles know: set by `pause`, cleared by `resume`).
+    pub fn is_paused(&self) -> bool {
+        self.state.paused.load(Ordering::Acquire)
+    }
+
+    /// Where in its sound the voice is playing: the time into the sound (or,
+    /// for streamed music, the time played since it started, loops
+    /// included), as of the output's last buffer. A player's elapsed time
+    /// and seek bar read it.
+    pub fn position(&self) -> Duration {
+        let frames = self.state.position.load(Ordering::Acquire);
+        Duration::from_secs_f64(frames as f64 / f64::from(self.state.rate.max(1)))
+    }
+
+    /// Jump to `at` into the sound (clamped to its end, which ends the
+    /// voice), keeping the volume, pan, speed and pause. Only sounds played
+    /// from memory ([`Audio::play`](super::Audio::play)) can seek; streamed
+    /// music ignores it.
+    pub fn seek(&self, at: Duration) {
+        let frame = (at.as_secs_f64() * f64::from(self.state.rate.max(1))).round() as u64;
+        if self.state.seekable {
+            self.state.position.store(frame, Ordering::Release);
+        }
+        self.send(Cmd::Seek(self.id, frame));
     }
 
     fn frames(&self, d: Duration) -> u32 {
@@ -242,6 +271,13 @@ fn sanitize_pan(pan: f32) -> f32 {
 #[derive(Debug)]
 struct VoiceState {
     playing: AtomicBool,
+    paused: AtomicBool,
+    /// Source frames into the sound, as of the last buffer.
+    position: AtomicU64,
+    /// The source's frame rate.
+    rate: u32,
+    /// Whether the source can seek (a sound in memory).
+    seekable: bool,
 }
 
 /// A request from the game's side to the real-time side.
@@ -256,6 +292,7 @@ enum Cmd {
     Pan(u64, f32),
     Speed(u64, f32),
     Pause(u64, bool),
+    Seek(u64, u64),
     StopAll(u32),
 }
 
@@ -340,6 +377,10 @@ impl Shared {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let state = Arc::new(VoiceState {
             playing: AtomicBool::new(true),
+            paused: AtomicBool::new(false),
+            position: AtomicU64::new(0),
+            rate: source_rate.max(1),
+            seekable: matches!(source, Source::Buffer { .. }),
         });
         let fade_frames = duration_frames(p.fade_in, self.rate);
         let volume = sanitize_volume(p.volume);
@@ -366,6 +407,7 @@ impl Shared {
             tail: 0,
             primed: false,
             last_gain: None,
+            advanced: 0,
             ended: false,
             done: false,
         };
@@ -516,6 +558,9 @@ pub(crate) struct VoiceRt {
     tail: u8,
     primed: bool,
     last_gain: Option<[f32; 2]>,
+    /// Source frames the read position moved past (for a stream's
+    /// position).
+    advanced: u64,
     /// The source ran out.
     ended: bool,
     /// To be removed.
@@ -560,6 +605,7 @@ impl VoiceRt {
         self.frac += self.base_step * f64::from(self.speed);
         while self.frac >= 1.0 {
             self.frac -= 1.0;
+            self.advanced += 1;
             self.hist.rotate_left(1);
             self.hist[3] = self.pull(shared);
             // Three silent frames past the end: `hist[1]` is past the last
@@ -570,6 +616,31 @@ impl VoiceRt {
             }
         }
         out
+    }
+
+    /// Tell the handles where the voice is: the frame at the read position.
+    fn publish_position(&self) {
+        let at = match &self.source {
+            // `pos` is the next frame to pull; the read position sits three
+            // frames behind it once primed (`hist[1]`, with `hist[2..4]` pulled).
+            Source::Buffer { pos, .. } if self.primed => pos.saturating_sub(3) as u64,
+            Source::Buffer { pos, .. } => *pos as u64,
+            Source::Stream(_) => self.advanced,
+        };
+        self.state.position.store(at, Ordering::Release);
+    }
+
+    /// Jump to source frame `frame` (sounds in memory only).
+    fn seek(&mut self, frame: u64) {
+        if let Source::Buffer { sound, pos, .. } = &mut self.source {
+            *pos = (frame as usize).min(sound.frames());
+            self.primed = false;
+            self.frac = 0.0;
+            self.tail = 0;
+            self.hist = [[0.0; 2]; 4];
+            self.ended = false;
+            self.publish_position();
+        }
     }
 
     /// The gains for the left and right outputs, from volume and pan: a
@@ -742,6 +813,11 @@ impl Renderer {
                     v.paused = paused;
                 }
             }
+            Cmd::Seek(id, frame) => {
+                if let Some(v) = self.voice(id) {
+                    v.seek(frame);
+                }
+            }
             Cmd::StopAll(frames) => {
                 for v in &mut self.voices {
                     if v.paused || frames == 0 {
@@ -797,6 +873,7 @@ impl Renderer {
                 block[2 * i + 1] += f[1] * gr;
             }
             v.done = v.ended || stop;
+            v.publish_position();
         }
     }
 }

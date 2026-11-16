@@ -587,3 +587,38 @@ fn compressed_formats_decode() {
     assert!(out.iter().any(|x| x.abs() > 0.3));
     assert!(!v.is_playing());
 }
+
+#[test]
+fn position_follows_playback_and_seek_jumps() {
+    let audio = Audio::offline(RATE);
+    // Mono, each sample its own time, to see where the voice reads.
+    let samples: Vec<f32> = (0..RATE).map(|i| i as f32 / RATE as f32).collect();
+    let s = Sound::from_samples(RATE, 1, samples);
+    let v = audio.play(&s, PlayParams::default().pan(-1.0));
+    assert_eq!(v.position(), Duration::ZERO);
+    render(&audio, 12_000);
+    let at = v.position().as_secs_f64();
+    assert!((at - 0.25).abs() < 0.001, "{at}");
+
+    v.seek(Duration::from_millis(750));
+    assert!((v.position().as_secs_f64() - 0.75).abs() < 0.001);
+    let out = render(&audio, 256);
+    // The first frame after the seek is the sample at 0.75 s (all on the
+    // left: a mono sound panned hard left).
+    assert!((out[0] - 0.75).abs() < 0.001, "{}", out[0]);
+    assert!(v.is_playing());
+
+    v.pause();
+    assert!(v.is_paused());
+    render(&audio, 4_800);
+    let held = v.position();
+    render(&audio, 4_800);
+    assert_eq!(v.position(), held, "a paused voice holds its place");
+    v.resume();
+    assert!(!v.is_paused());
+
+    // Seeking past the end ends it.
+    v.seek(Duration::from_secs(5));
+    render(&audio, 256);
+    assert!(!v.is_playing());
+}

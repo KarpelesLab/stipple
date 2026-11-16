@@ -78,8 +78,12 @@ only the encoded file in memory (see
   `speed` (2 is twice as fast and an octave up), `looping`, the `group`, and
   a `fade_in`. The voice handle can `stop()` (over 5 ms), `fade_out(d)`,
   `fade_to(volume, d)`, `set_volume`, `set_pan`, `set_speed`, `pause()`,
-  `resume()`, and tell whether it `is_playing()`. Dropping the handle leaves
-  the sound playing to its end.
+  `resume()`, and tell whether it `is_playing()` or `is_paused()`.
+  `position()` says where in its sound it is (as of the output's last
+  buffer; for streamed music, the time played since it started), and
+  `seek(at)` jumps there, for a player's elapsed time and seek bar (sounds
+  played from memory only; streamed music ignores it). Dropping the handle
+  leaves the sound playing to its end.
 - **`Audio::play_music(bytes, MusicParams)`** streams: a worker thread
   decodes a little ahead of what plays (about 0.7 s) into a lock-free ring,
   so a long track never sits decoded in memory. `loop_points(start, end)`
