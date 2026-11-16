@@ -544,6 +544,16 @@ fn push_event_to(hwnd: Hwnd, ev: Event) {
     CTX.with(|c| c.borrow_mut().queue.push((hwnd as usize, ev)));
 }
 
+/// Queue what an assistive technology asked of `hwnd` (UIA's patterns: a
+/// click, typed text, a wheel), and post a message so the loop delivers it
+/// once UIA's call returns.
+pub(crate) fn queue_a11y_events(hwnd: *mut c_void, events: Vec<Event>) {
+    for ev in events {
+        push_event_to(hwnd as Hwnd, ev);
+    }
+    unsafe { PostMessageW(hwnd as Hwnd, WM_NULL, 0, 0) };
+}
+
 fn zero_rect() -> Rect {
     Rect {
         left: 0,
@@ -1615,10 +1625,13 @@ impl Window for WinWindow {
         }
         let tree = crate::platform::uia::UiaTree::build_hosted(root, self.hwnd);
         // Focus that moved to another node is announced (screen readers
-        // follow focus through UIA's event), once the tree is the window's.
-        let moved = read_win(self.hwnd, |w| root.focus_moved_from(w.uia_source.as_ref()))
-            .unwrap_or_else(|| root.focus_moved_from(None))
+        // follow focus through UIA's event), once the tree is the window's;
+        // so are the properties and children that changed, and new toasts.
+        let old = read_win(self.hwnd, |w| w.uia_source.clone()).flatten();
+        let moved = root
+            .focus_moved_from(old.as_ref())
             .map(|path| tree.provider_at(&path));
+        let changed = crate::platform::uia::plan_events(&tree, old.as_ref(), root);
         with_win(self.hwnd, |w| {
             w.uia_source = Some(root.clone());
             if let Some(old) = w.uia.replace(tree) {
@@ -1626,8 +1639,9 @@ impl Window for WinWindow {
             }
             w.uia_retired.retain(|t| t.in_use());
         });
+        // The tree is the window's current one (alive) from here on.
+        unsafe { crate::platform::uia::raise_planned(changed) };
         if let Some(provider) = moved {
-            // The tree is the window's current one (alive) from here on.
             unsafe { crate::platform::uia::raise_focus_changed(provider) };
         }
     }

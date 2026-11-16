@@ -2673,6 +2673,23 @@ jobs:
           # declines it; absence would mean the COM call crashed.
           grep -q "D3D11 shared handle" d3ddemo.log
 
+      # The control patterns and the events of a tree swap, from outside the
+      # app (.github/scripts/uia-patterns.ps1): the field's Value and Text,
+      # the "Remember" checkbox's Toggle, the list's and the strip's Scroll,
+      # a row's ScrollItem, property- and structure-changed events, and the
+      # toast a tap on "Row 2" raises. First the patterns in-process, each
+      # through the interface GetPatternProvider hands out (uiademo
+      # --patterns). Not yet seen passing on a runner, so it doesn't fail
+      # the job.
+      - name: UI Automation patterns and events (not required yet)
+        continue-on-error: true
+        shell: powershell
+        run: |
+          cargo build --release --example uiademo --example touchdemo
+          .\target\release\examples\uiademo.exe --patterns
+          if ($LASTEXITCODE -ne 0) { throw "uiademo --patterns failed" }
+          .github\scripts\uia-patterns.ps1 .\target\release\examples\touchdemo.exe visual_output
+
       - name: Timers and background work wake the event loop
         shell: bash
         run: |

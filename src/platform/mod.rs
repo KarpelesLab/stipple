@@ -140,6 +140,9 @@ pub mod time;
 #[cfg(target_os = "windows")]
 #[doc(hidden)]
 pub mod uia;
+/// The UI Automation bridge's COM-free logic (unit-tested everywhere).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) mod uia_logic;
 /// Waking the event loop from timers and other threads.
 pub(crate) mod wake;
 mod window;

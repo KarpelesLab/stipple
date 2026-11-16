@@ -21,7 +21,9 @@
 #      "Row 0 button"), Space presses it and Enter presses it again (the app
 #      logs both taps), and Shift+Tab goes back to the field ("edit");
 #   7. the mouse moved over "Row 1": NVDA's mouse tracking hit-tests through
-#      UIA and says "Row 1" (reported, not required).
+#      UIA and says "Row 1" (reported, not required);
+#   8. the toast a UIA Invoke on "Row 2" raises, announced through UIA's
+#      notification event, is spoken (reported, not required).
 #
 # NVDA's key here is Insert. Keys are typed with keybd_event, so they reach
 # NVDA's keyboard hook as typed keys (NVDA handles injected keys by default).
@@ -428,6 +430,25 @@ try {
       Write-Host "note: no 'Row 1' through UIA for the mouse check"
     }
   } catch { Write-Host "note: mouse check failed: $_" }
+
+  # 8. A toast (reported, not required): invoking "Row 2" through UIA raises
+  # one, which the app announces with UIA's notification event; NVDA speaks
+  # a notification's text.
+  try {
+    $win = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    $cond = New-Object System.Windows.Automation.PropertyCondition(
+      [System.Windows.Automation.AutomationElement]::NameProperty, "Row 2")
+    $row2 = $win.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+    if ($row2 -ne $null) {
+      [void](Front $hwnd)
+      $m = Mark
+      $row2.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+      $hit = Await-Speech $m @('Row 2 tapped') "the toast" 6
+      Note ($hit -ne $null) "NVDA read the toast 'Row 2 tapped' (UIA's notification event)"
+    } else {
+      Write-Host "note: no 'Row 2' through UIA for the toast check"
+    }
+  } catch { Write-Host "note: toast check failed: $_" }
 }
 finally {
   if ($nvda -ne $null -and -not $nvda.HasExited) {

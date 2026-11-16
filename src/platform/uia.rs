@@ -18,8 +18,21 @@
 //! long as a client still holds one of its nodes ([`UiaTree::in_use`]), so a
 //! client calling an element it got earlier never reaches freed memory.
 //! A focus move is signalled to live clients ([`raise_focus_changed`], which
-//! screen readers follow); structure and property changes
-//! (`UiaRaiseStructureChangedEvent`) are follow-up depth.
+//! screen readers follow), and so is every other change a tree swap brings
+//! (`events`): property changes, structure changes where children came or
+//! went, a newly selected item, and a notification for each new toast.
+//!
+//! **Patterns.** Besides Invoke, each provider has an interface (and a
+//! vtable) per control pattern, handed out by `GetPatternProvider` where its
+//! node has it (`uia_logic::patterns`): Value on fields (a field whose text
+//! the tree carries is named by its caption and valued by its text), Toggle
+//! on checkboxes and switches, Selection on lists, trees, tables and tab
+//! bars, SelectionItem on their items and on radio buttons, ExpandCollapse on
+//! what expands and on selects, Scroll on scroll containers (a plain one is a
+//! Pane), ScrollItem on whatever a scroll container holds, and Text (with
+//! ranges) on fields and labels (`patterns`, `text`). They read their node
+//! from the tree the providers were built from, and act through the events a
+//! click, typed text or a wheel would deliver, queued for the window.
 //!
 //! **In a window** ([`UiaTree::build_hosted`]) the root names the window's own
 //! provider as its host (`UiaHostProviderFromHwnd`), bounds are screen pixels
@@ -34,7 +47,15 @@
 #![allow(unsafe_code, non_snake_case, non_upper_case_globals)]
 
 use crate::platform::access::{A11yNode, A11yRole};
+use crate::platform::uia_logic::{self as logic, Patterns};
 use core::ffi::c_void;
+
+mod events;
+mod patterns;
+mod text;
+
+pub(crate) use events::{plan_events, raise_planned};
+pub use patterns::selftest_patterns;
 
 type Hresult = i32;
 const S_OK: Hresult = 0;
@@ -47,6 +68,30 @@ const S_OK: Hresult = 0;
 const ProviderOptions_ServerSideProvider: i32 = 0x2;
 const ProviderOptions_UseComThreading: i32 = 0x20;
 const UIA_InvokePatternId: i32 = 10000;
+const UIA_SelectionPatternId: i32 = 10001;
+const UIA_ValuePatternId: i32 = 10002;
+const UIA_ScrollPatternId: i32 = 10004;
+const UIA_ExpandCollapsePatternId: i32 = 10005;
+const UIA_SelectionItemPatternId: i32 = 10010;
+const UIA_TextPatternId: i32 = 10014;
+const UIA_TogglePatternId: i32 = 10015;
+const UIA_ScrollItemPatternId: i32 = 10017;
+const UIA_IsPasswordPropertyId: i32 = 30019;
+const UIA_IsExpandCollapsePatternAvailablePropertyId: i32 = 30028;
+const UIA_IsScrollPatternAvailablePropertyId: i32 = 30034;
+const UIA_IsScrollItemPatternAvailablePropertyId: i32 = 30035;
+const UIA_IsSelectionItemPatternAvailablePropertyId: i32 = 30036;
+const UIA_IsSelectionPatternAvailablePropertyId: i32 = 30037;
+const UIA_IsTextPatternAvailablePropertyId: i32 = 30040;
+const UIA_IsTogglePatternAvailablePropertyId: i32 = 30041;
+const UIA_IsValuePatternAvailablePropertyId: i32 = 30043;
+const UIA_ValueIsReadOnlyPropertyId: i32 = 30046;
+const UIA_ScrollHorizontalViewSizePropertyId: i32 = 30054;
+const UIA_ScrollVerticalViewSizePropertyId: i32 = 30056;
+const UIA_ScrollHorizontallyScrollablePropertyId: i32 = 30057;
+const UIA_ScrollVerticallyScrollablePropertyId: i32 = 30058;
+const UIA_SelectionCanSelectMultiplePropertyId: i32 = 30060;
+const UIA_SelectionIsSelectionRequiredPropertyId: i32 = 30061;
 const UIA_AutomationFocusChangedEventId: i32 = 20005;
 const UIA_HasKeyboardFocusPropertyId: i32 = 30008;
 const UIA_IsKeyboardFocusablePropertyId: i32 = 30009;
@@ -55,6 +100,9 @@ const UIA_IsInvokePatternAvailablePropertyId: i32 = 30031;
 const E_FAIL: Hresult = 0x8000_4005_u32 as i32;
 const E_NOINTERFACE: Hresult = 0x8000_4002_u32 as i32;
 const E_POINTER: Hresult = 0x8000_4003_u32 as i32;
+const E_INVALIDARG: Hresult = 0x8007_0057_u32 as i32;
+/// `UIA_E_INVALIDOPERATION`: the call doesn't apply to this element now.
+const UIA_E_INVALIDOPERATION: Hresult = 0x8013_1509_u32 as i32;
 const UIA_ControlTypePropertyId: i32 = 30003;
 const UIA_NamePropertyId: i32 = 30005;
 // What Narrator and NVDA read after an edit control's name and value: an
@@ -63,6 +111,12 @@ const UIA_HelpTextPropertyId: i32 = 30013;
 
 // Control-type ids (one per role).
 const UIA_ButtonControlTypeId: i32 = 50000;
+const UIA_CheckBoxControlTypeId: i32 = 50002;
+const UIA_ComboBoxControlTypeId: i32 = 50003;
+const UIA_SpinnerControlTypeId: i32 = 50016;
+const UIA_ToolBarControlTypeId: i32 = 50021;
+const UIA_PaneControlTypeId: i32 = 50033;
+const UIA_SeparatorControlTypeId: i32 = 50038;
 const UIA_RadioButtonControlTypeId: i32 = 50013;
 const UIA_EditControlTypeId: i32 = 50004;
 const UIA_TextControlTypeId: i32 = 50020;
@@ -125,6 +179,8 @@ const UiaAppendRuntimeId: i32 = 3;
 // VARIANT types.
 const VT_EMPTY: u16 = 0;
 const VT_I4: u16 = 3;
+const VT_R8: u16 = 5;
+const VT_UNKNOWN: u16 = 13;
 const VT_BSTR: u16 = 8;
 const VT_BOOL: u16 = 11;
 /// `VARIANT_TRUE` (a `VARIANT_BOOL` of -1).
@@ -161,11 +217,15 @@ unsafe extern "system" {
     fn SysFreeString(bstr: *mut u16);
     fn SafeArrayCreateVector(vt: u16, l_lbound: i32, c_elements: u32) -> *mut c_void;
     fn SafeArrayPutElement(psa: *mut c_void, rg_indices: *const i32, pv: *const c_void) -> Hresult;
+    fn SafeArrayGetElement(psa: *mut c_void, rg_indices: *const i32, pv: *mut c_void) -> Hresult;
+    fn SafeArrayGetUBound(psa: *mut c_void, dim: u32, upper: *mut i32) -> Hresult;
+    fn SafeArrayDestroy(psa: *mut c_void) -> Hresult;
 }
 
 /// A `VARIANT` (x64 layout: 8-byte header, then a 16-byte value union). We only
 /// ever store a VT_I4 or VT_BSTR, both of which fit in the first 8 value bytes.
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct Variant {
     vt: u16,
     r1: u16,
@@ -273,6 +333,16 @@ struct Provider {
     root_vtable: *const RootVtbl,
     /// The `IInvokeProvider` interface pointer is this field's address.
     invoke_vtable: *const InvokeVtbl,
+    // The other patterns' interface pointers, each its field's address (see
+    // `patterns` and `text`).
+    value_vtable: *const patterns::ValueVtbl,
+    toggle_vtable: *const patterns::ToggleVtbl,
+    selection_vtable: *const patterns::SelectionVtbl,
+    selection_item_vtable: *const patterns::SelectionItemVtbl,
+    expand_vtable: *const patterns::ExpandVtbl,
+    scroll_vtable: *const patterns::ScrollVtbl,
+    scroll_item_vtable: *const patterns::ScrollItemVtbl,
+    text_vtable: *const text::TextVtbl,
     refcount: u32,
     /// UTF-16 (NUL-terminated) accessible name, for `SysAllocString`.
     name: Vec<u16>,
@@ -294,6 +364,23 @@ struct Provider {
     children: Vec<*mut Provider>,
     index_in_parent: usize,
     root: *mut Provider,
+    /// The node's place in the tree (child indices from the root).
+    path: Vec<usize>,
+    /// The control patterns it has.
+    patterns: Patterns,
+    /// Whether a scroll container holds it (the ScrollItem pattern).
+    scroll_item: bool,
+    /// The tree the providers were built from (the root's; `None` on the
+    /// others), which the patterns read their node's state from.
+    source: Option<Box<A11yNode>>,
+}
+
+/// The node `p` was built from.
+///
+/// # Safety
+/// `p` is a provider of a live tree.
+unsafe fn node_of<'a>(p: *const Provider) -> Option<&'a A11yNode> {
+    unsafe { (*(*p).root).source.as_deref()?.at_path(&(*p).path) }
 }
 
 fn control_type(role: A11yRole) -> i32 {
@@ -315,13 +402,15 @@ fn control_type(role: A11yRole) -> i32 {
         A11yRole::MenuBar => UIA_MenuBarControlTypeId,
         A11yRole::Menu => UIA_MenuControlTypeId,
         A11yRole::MenuItem => UIA_MenuItemControlTypeId,
-        // Not named to UIA yet: the closest control type above.
-        A11yRole::ComboBox | A11yRole::CheckBox | A11yRole::Switch => UIA_ButtonControlTypeId,
+        A11yRole::ComboBox => UIA_ComboBoxControlTypeId,
+        // UIA has no switch: a checkbox toggles the same way (WinUI's
+        // ToggleSwitch reports a button with the Toggle pattern).
+        A11yRole::CheckBox | A11yRole::Switch => UIA_CheckBoxControlTypeId,
         A11yRole::RadioButton => UIA_RadioButtonControlTypeId,
-        A11yRole::SpinButton => UIA_EditControlTypeId,
-        A11yRole::Splitter | A11yRole::Toolbar | A11yRole::Separator | A11yRole::Alert => {
-            UIA_GroupControlTypeId
-        }
+        A11yRole::SpinButton => UIA_SpinnerControlTypeId,
+        A11yRole::Toolbar => UIA_ToolBarControlTypeId,
+        A11yRole::Separator => UIA_SeparatorControlTypeId,
+        A11yRole::Splitter | A11yRole::Alert => UIA_GroupControlTypeId,
         A11yRole::TabList => UIA_TabControlTypeId,
         A11yRole::Tab => UIA_TabItemControlTypeId,
         // UIA marks a password edit with `IsPassword`, not a control type.
@@ -472,12 +561,33 @@ unsafe extern "system" fn get_pattern_provider(
 ) -> Hresult {
     unsafe {
         let p = this as *mut Provider;
-        *ret = if pattern == UIA_InvokePatternId && (*p).invokable && !(*p).hwnd.is_null() {
-            add_ref(this);
-            &raw mut (*p).invoke_vtable as *mut c_void
-        } else {
-            core::ptr::null_mut()
+        let has = (*p).patterns;
+        let iface: *mut c_void = match pattern {
+            UIA_InvokePatternId if (*p).invokable && !(*p).hwnd.is_null() => {
+                &raw mut (*p).invoke_vtable as *mut c_void
+            }
+            UIA_ValuePatternId if has.value => &raw mut (*p).value_vtable as *mut c_void,
+            UIA_TogglePatternId if has.toggle => &raw mut (*p).toggle_vtable as *mut c_void,
+            UIA_SelectionPatternId if has.selection => {
+                &raw mut (*p).selection_vtable as *mut c_void
+            }
+            UIA_SelectionItemPatternId if has.selection_item => {
+                &raw mut (*p).selection_item_vtable as *mut c_void
+            }
+            UIA_ExpandCollapsePatternId if has.expand_collapse => {
+                &raw mut (*p).expand_vtable as *mut c_void
+            }
+            UIA_ScrollPatternId if has.scroll => &raw mut (*p).scroll_vtable as *mut c_void,
+            UIA_ScrollItemPatternId if (*p).scroll_item => {
+                &raw mut (*p).scroll_item_vtable as *mut c_void
+            }
+            UIA_TextPatternId if has.text => &raw mut (*p).text_vtable as *mut c_void,
+            _ => core::ptr::null_mut(),
         };
+        if !iface.is_null() {
+            add_ref(this);
+        }
+        *ret = iface;
     }
     S_OK
 }
@@ -621,6 +731,17 @@ unsafe extern "system" fn get_property_value(
                 v.vt = VT_BOOL;
                 v.val = VARIANT_TRUE;
             }
+            UIA_IsPasswordPropertyId => {
+                v.vt = VT_BOOL;
+                v.val = if (*p).control_type == UIA_EditControlTypeId
+                    && node_of(p).is_some_and(|n| n.role == A11yRole::PasswordField)
+                {
+                    VARIANT_TRUE
+                } else {
+                    0
+                };
+            }
+            id if patterns::property(p, id, &mut v) => {}
             UIA_IsInvokePatternAvailablePropertyId => {
                 v.vt = VT_BOOL;
                 v.val = if (*p).invokable && !(*p).hwnd.is_null() {
@@ -971,11 +1092,26 @@ impl UiaTree {
 
         // Fill the Vec once (so its buffer never reallocates), then link by raw
         // pointer into that stable buffer.
+        // Each node's path, and whether a scroll container is above it.
+        let mut paths: Vec<(Vec<usize>, bool)> = Vec::with_capacity(flat.len());
+        for (_, parent, sib) in &flat {
+            let entry = match parent {
+                Some(pi) => {
+                    let (pp, under) = &paths[*pi];
+                    let mut path = pp.clone();
+                    path.push(*sib);
+                    let scrolls = flat[*pi].0.scroll.is_some();
+                    (path, *under || scrolls)
+                }
+                None => (Vec::new(), false),
+            };
+            paths.push(entry);
+        }
         let mut nodes: Vec<Provider> = flat
             .iter()
             .enumerate()
             .map(|(i, (n, _, _))| {
-                let mut name: Vec<u16> = n.name.encode_utf16().collect();
+                let mut name: Vec<u16> = logic::uia_name(root, n).encode_utf16().collect();
                 name.push(0);
                 let help_text = n.hint().map(|h| h.encode_utf16().chain([0]).collect());
                 Provider {
@@ -983,10 +1119,23 @@ impl UiaTree {
                     fragment_vtable: &FRAGMENT_VTBL,
                     root_vtable: &ROOT_VTBL,
                     invoke_vtable: &INVOKE_VTBL,
+                    value_vtable: &patterns::VALUE_VTBL,
+                    toggle_vtable: &patterns::TOGGLE_VTBL,
+                    selection_vtable: &patterns::SELECTION_VTBL,
+                    selection_item_vtable: &patterns::SELECTION_ITEM_VTBL,
+                    expand_vtable: &patterns::EXPAND_VTBL,
+                    scroll_vtable: &patterns::SCROLL_VTBL,
+                    scroll_item_vtable: &patterns::SCROLL_ITEM_VTBL,
+                    text_vtable: &text::TEXT_VTBL,
                     refcount: 1,
                     name,
                     help_text,
-                    control_type: control_type(n.role),
+                    // A plain scroll container is a pane (with the Scroll pattern).
+                    control_type: if n.role == A11yRole::Group && n.scroll.is_some() {
+                        UIA_PaneControlTypeId
+                    } else {
+                        control_type(n.role)
+                    },
                     runtime_id: i as i32 + 1,
                     bounds: n.bounds,
                     hwnd,
@@ -997,6 +1146,10 @@ impl UiaTree {
                     children: Vec::new(),
                     index_in_parent: 0,
                     root: core::ptr::null_mut(),
+                    path: paths[i].0.clone(),
+                    patterns: logic::patterns(n),
+                    scroll_item: paths[i].1,
+                    source: (i == 0).then(|| Box::new(root.clone())),
                 }
             })
             .collect();
