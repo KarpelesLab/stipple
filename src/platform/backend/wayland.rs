@@ -16,7 +16,9 @@
 //! (motion, buttons and `axis` scrolling via `wl_pointer`, coordinates from
 //! `wl_fixed`). The clipboard goes through `wl_data_device` (`wayland/clipboard.rs`).
 //! GPU renderers hand their frames over as `dma-buf`s through
-//! `zwp_linux_dmabuf_v1` (`wayland/dmabuf.rs`).
+//! `zwp_linux_dmabuf_v1` (`wayland/dmabuf.rs`), with explicit sync where the
+//! compositor has `wp_linux_drm_syncobj_v1` (`wayland/syncobj.rs`), in a
+//! subsurface under decorations Stipple draws (`wayland/content.rs`).
 //! The FFI footprint — `memfd_create`/`mmap`, `sendmsg`/`recvmsg` for fd
 //! passing — is the reason for the module-level `allow(unsafe_code)`.
 //!
@@ -30,6 +32,9 @@
 /// Attention requests (`xdg_activation_v1`) and the bell.
 mod attention;
 mod clipboard;
+/// GPU frames in a subsurface under decorations Stipple draws.
+#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+mod content;
 /// Server-side decorations, or a title bar and borders drawn by Stipple.
 mod decor;
 /// GPU frames as `dma-buf`s (`zwp_linux_dmabuf_v1`).
@@ -38,6 +43,9 @@ mod dmabuf;
 /// Raw key events and client-side key repeat.
 mod keys;
 mod pointer;
+/// Explicit sync for GPU frames (`wp_linux_drm_syncobj_v1`).
+#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+mod syncobj;
 mod text_input;
 /// Several windows: creating, destroying and configuring toplevels.
 mod toplevel;
@@ -742,6 +750,8 @@ struct WlConn {
     lock: pointer::Lock,
     /// `zwp_linux_dmabuf_v1`: the formats, and the GPU frames' buffers.
     dmabuf: dmabuf::Dmabuf,
+    /// `wp_linux_drm_syncobj_v1`: the GPU frames' timelines.
+    syncobj: syncobj::Syncobj,
 }
 
 impl WlConn {
@@ -781,6 +791,7 @@ impl WlConn {
             attention: attention::Attention::default(),
             lock: pointer::Lock::default(),
             dmabuf: dmabuf::Dmabuf::default(),
+            syncobj: syncobj::Syncobj::default(),
         }
     }
 
@@ -1185,6 +1196,8 @@ struct WaylandWindow {
     drop_accepted: std::cell::Cell<bool>,
     /// Where a GPU renderer hands its frames as dma-bufs, once asked for.
     gpu: RefCell<Option<Box<crate::platform::dmabuf::Sink>>>,
+    /// The subsurface GPU frames go to under decorations Stipple draws.
+    content: Rc<RefCell<content::Content>>,
 }
 
 impl WaylandWindow {
@@ -1223,6 +1236,27 @@ impl WaylandWindow {
             icon: RefCell::new(icon),
             drop_accepted: Cell::new(false),
             gpu: RefCell::new(None),
+            content: Rc::new(RefCell::new(content::Content::new(
+                globals.compositor,
+                globals.subcompositor,
+                globals.shm,
+                objects.surface,
+            ))),
+        }
+    }
+
+    /// Draw the decorations over a GPU frame again, if they look different
+    /// (a frame read back is framed with them anyway).
+    fn refresh_decorations(&self) {
+        // A suspended window commits nothing, the decorations over its GPU
+        // frame included (they're brought up to date once it shows again).
+        if self.suspended.get() {
+            return;
+        }
+        let mut conn = self.conn.lock().unwrap();
+        toplevel::use_decor(&mut conn, self.toplevel);
+        if self.content.borrow_mut().refresh(&mut conn) {
+            let _ = conn.stream.flush();
         }
     }
 
@@ -1357,6 +1391,7 @@ impl Window for WaylandWindow {
         let mut a = Vec::new();
         arg_str(&mut a, title);
         self.toplevel_request(XDG_TOPLEVEL_SET_TITLE, &a);
+        self.refresh_decorations();
         crate::platform::window::debug_window(format_args!("title {:#x} {title:?}", self.surface));
     }
     fn open_window(&self, attrs: WindowAttributes) -> Option<crate::platform::WindowId> {
@@ -1518,9 +1553,8 @@ impl Window for WaylandWindow {
         *self.icon.borrow_mut() = buf;
     }
     fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
-        // GPU frames go to the compositor as dma-bufs where it takes them.
-        // Not under decorations Stipple draws (they frame the CPU's bitmap):
-        // those windows' GPU frames are read back.
+        // GPU frames go to the compositor as dma-bufs where it takes them;
+        // under decorations Stipple draws, in a subsurface.
         if !dmabuf::enabled() {
             return None;
         }
@@ -1530,20 +1564,24 @@ impl Window for WaylandWindow {
                 return None;
             }
             toplevel::use_decor(&mut conn, self.toplevel);
-            if conn.decor.title_height() > 0.0 {
+            if conn.decor.title_height() > 0.0 && !self.content.borrow().available() {
                 return None;
             }
+            // The formats, and the compositor's main device for the renderer
+            // about to be made (asked for once).
+            dmabuf::tranches(&mut conn);
         }
         let mut gpu = self.gpu.borrow_mut();
         let sink = gpu.get_or_insert_with(|| {
             Box::new(crate::platform::dmabuf::Sink(Box::new(
                 dmabuf::WindowSink {
                     conn: self.conn.clone(),
-                    surface: self.surface,
                     toplevel: self.toplevel,
                     scale: self.scale.clone(),
                     configured: self.configured.clone(),
+                    content: self.content.clone(),
                     made: RefCell::new(Vec::new()),
+                    explicit: Cell::new(None),
                 },
             )))
         });
@@ -1562,6 +1600,7 @@ impl Window for WaylandWindow {
             scale: self.scale.clone(),
             configured: self.configured.clone(),
             buffer: None,
+            content: self.content.clone(),
         })
     }
 }
@@ -1578,6 +1617,9 @@ struct WaylandSurface {
     /// Whether its window has been configured (no buffer before that).
     configured: Rc<Cell<bool>>,
     buffer: Option<ShmBuffer>,
+    /// Its window's GPU frames' subsurface, emptied when a frame comes
+    /// this way.
+    content: Rc<RefCell<content::Content>>,
 }
 
 impl std::fmt::Debug for WaylandSurface {
@@ -1611,6 +1653,10 @@ impl Surface for WaylandSurface {
         let mut conn = self.conn.lock().unwrap();
         let scale = self.scale.get().max(1);
         toplevel::use_decor(&mut conn, self.toplevel);
+        // After GPU frames: no frame under the decorations, and no sync
+        // object on a surface showing a wl_shm buffer.
+        self.content.borrow_mut().leave(&mut conn);
+        syncobj::forget(&mut conn, self.surface);
         // Decorations Stipple draws go around the content, in an ARGB buffer
         // (the resize margin is transparent).
         let content = size;
@@ -1772,6 +1818,8 @@ where
     let mut constraints_name = None;
     let mut relative_name = None;
     let mut dmabuf_name = None;
+    let mut syncobj_name = None;
+    let mut subcompositor_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1805,6 +1853,8 @@ where
                     pointer::CONSTRAINTS => constraints_name = Some(name),
                     pointer::RELATIVE => relative_name = Some(name),
                     dmabuf::MANAGER => dmabuf_name = Some((name, version.min(dmabuf::VERSION))),
+                    syncobj::MANAGER => syncobj_name = Some(name),
+                    content::SUBCOMPOSITOR => subcompositor_name = Some(name),
                     _ => {}
                 }
             }
@@ -1893,7 +1943,15 @@ where
     if let Some((name, version)) = dmabuf_name {
         let manager = bind(&mut conn, name, dmabuf::MANAGER, version);
         dmabuf::setup(&mut conn, manager, version);
+        // ...with explicit sync where the compositor has it.
+        if let Some(name) = syncobj_name {
+            let manager = bind(&mut conn, name, syncobj::MANAGER, 1);
+            syncobj::setup(&mut conn, manager);
+        }
     }
+    // GPU frames under decorations Stipple draws go in a subsurface.
+    let subcompositor =
+        subcompositor_name.map(|name| bind(&mut conn, name, content::SUBCOMPOSITOR, 1));
 
     // The first window; `open_window` makes more the same way.
     let globals = toplevel::Globals {
@@ -1903,6 +1961,7 @@ where
         icon_manager,
         decoration_manager,
         seat,
+        subcompositor,
     };
     let (objects, icon) = toplevel::create(&mut conn, globals, &attrs).map_err(os)?;
     dbg(format_args!(
@@ -2191,6 +2250,7 @@ where
                 events.push(Event::PointerMoved { position });
             }
             if motion.redraw {
+                win.refresh_decorations();
                 events.push(Event::RedrawRequested);
             }
             if events
@@ -2234,6 +2294,7 @@ where
                     continue;
                 }
                 decor::Press::Redraw => {
+                    win.refresh_decorations();
                     if handler(Event::RedrawRequested, win) == ControlFlow::Exit {
                         break;
                     }
@@ -2266,6 +2327,9 @@ where
                 toplevel::use_decor(&mut conn, win.toplevel);
                 conn.decor.leave()
             };
+            if redraw {
+                win.refresh_decorations();
+            }
             if handler(Event::PointerLeft, win) == ControlFlow::Exit
                 || (redraw && handler(Event::RedrawRequested, win) == ControlFlow::Exit)
             {
@@ -2359,7 +2423,9 @@ where
                     break;
                 }
             }
-            // Paint the frame for this configure.
+            // Paint the frame for this configure (and the decorations over
+            // a GPU frame, whose focus may have changed).
+            win.refresh_decorations();
             if handler(Event::RedrawRequested, win) == ControlFlow::Exit {
                 break;
             }
@@ -2544,7 +2610,9 @@ where
                     sink,
                 });
             }
-            toplevel::destroy(&mut shared.lock().unwrap(), win.objects());
+            let mut conn = shared.lock().unwrap();
+            win.content.borrow_mut().destroy(&mut conn);
+            toplevel::destroy(&mut conn, win.objects());
         }
     }
     for (surface, size) in resized {

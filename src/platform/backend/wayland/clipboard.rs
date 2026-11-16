@@ -553,6 +553,7 @@ pub(super) mod tests {
             attention: Default::default(),
             lock: Default::default(),
             dmabuf: Default::default(),
+            syncobj: Default::default(),
         };
         (conn, theirs)
     }

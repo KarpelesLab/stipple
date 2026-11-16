@@ -518,6 +518,8 @@ impl VkExecutor {
                 dedicated: dma_buf,
                 ..Default::default()
             };
+            #[cfg(target_os = "linux")]
+            let drm_devices = dmabuf::drm_devices(&vk, instance, phys);
             let mut me = VkExecutor {
                 vk,
                 instance,
@@ -566,7 +568,7 @@ impl VkExecutor {
                 uploads: 0,
                 draws: 0,
                 #[cfg(target_os = "linux")]
-                wayland: dmabuf::Wayland::load(loader()?, instance, export),
+                wayland: dmabuf::Wayland::load(loader()?, instance, phys, drm_devices, export),
             };
             // From here `me`'s Drop frees whatever was made.
             if stencil.is_none() {
@@ -2218,8 +2220,10 @@ impl VkExecutor {
     }
 }
 
-/// The physical device to use and its graphics queue family: a discrete
-/// GPU, else an integrated one, else whatever there is (lavapipe).
+/// The physical device to use and its graphics queue family: the Wayland
+/// compositor's main device where it named one (and the device can say
+/// which it is), else a discrete GPU, else an integrated one, else whatever
+/// there is (lavapipe).
 unsafe fn pick_device(vk: &Fns, instance: VkInstance) -> Result<(VkPhysicalDevice, u32), String> {
     unsafe {
         let mut n = 0u32;
@@ -2249,11 +2253,16 @@ unsafe fn pick_device(vk: &Fns, instance: VkInstance) -> Result<(VkPhysicalDevic
                     .try_into()
                     .unwrap(),
             );
+            #[cfg(target_os = "linux")]
+            let main = crate::platform::dmabuf::main_device()
+                .is_some_and(|main| dmabuf::drm_devices(vk, instance, dev).contains(&main));
+            #[cfg(not(target_os = "linux"))]
+            let main = false;
             let rank = match ty {
                 DEVICE_TYPE_DISCRETE => 3,
                 DEVICE_TYPE_INTEGRATED => 2,
                 _ => 1,
-            };
+            } + if main { 10 } else { 0 };
             if best.is_none_or(|(r, _, _)| rank > r) {
                 best = Some((rank, dev, family as u32));
             }

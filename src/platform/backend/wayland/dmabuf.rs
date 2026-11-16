@@ -19,9 +19,17 @@
 //! answer as a paste does: the other messages that come meanwhile are kept
 //! for the event loop.
 //!
-//! The renderer waits for the GPU to finish a frame before handing it over,
-//! so the compositor never reads a half-drawn buffer, with or without
-//! implicit synchronization on the `dma-buf`.
+//! The tranches keep the device the compositor reads them with and whether
+//! they can be scanned out, and the main device is published for the
+//! renderer to pick the same GPU: the feedback is asked for when a window
+//! first wants a GPU layer, before the renderer is made.
+//!
+//! Where the compositor has `wp_linux_drm_syncobj_v1` (`syncobj.rs`), a
+//! commit carries the frame's acquire and release points; elsewhere the
+//! renderer waits for the GPU before handing a frame over, so the compositor
+//! never reads a half-drawn buffer, with or without implicit synchronization
+//! on the `dma-buf`. Under a title bar Stipple draws, frames go to a
+//! subsurface (`content.rs`).
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -31,10 +39,10 @@ use std::time::{Duration, Instant};
 use super::{
     MAP_PRIVATE, PROT_READ, Shared, WL_CALLBACK_DONE, WL_DISPLAY, WL_DISPLAY_SYNC,
     WL_SURFACE_ATTACH, WL_SURFACE_COMMIT, WL_SURFACE_SET_BUFFER_SCALE, WlConn, arg_u32, close, dbg,
-    mmap, munmap,
+    mmap, munmap, syncobj,
 };
 use crate::geometry::PhysicalSize;
-use crate::platform::dmabuf::{Buffer, BufferId, MOD_INVALID, Present};
+use crate::platform::dmabuf::{Buffer, BufferId, MOD_INVALID, Present, Tranche};
 
 /// The global's interface name, and the highest version spoken.
 pub(super) const MANAGER: &str = "zwp_linux_dmabuf_v1";
@@ -55,7 +63,12 @@ const PARAMS_FAILED: u16 = 1;
 const FB_DONE: u16 = 0;
 const FB_FORMAT_TABLE: u16 = 1;
 const FB_MAIN_DEVICE: u16 = 2;
+const FB_TRANCHE_DONE: u16 = 3;
+const FB_TRANCHE_TARGET_DEVICE: u16 = 4;
 const FB_TRANCHE_FORMATS: u16 = 5;
+const FB_TRANCHE_FLAGS: u16 = 6;
+/// `tranche_flags`: the formats can be scanned out.
+const TRANCHE_SCANOUT: u32 = 1;
 // wl_buffer: the request to destroy it, and `release`.
 const WL_BUFFER_DESTROY: u16 = 0;
 const WL_BUFFER_RELEASE: u16 = 0;
@@ -77,10 +90,12 @@ pub(super) struct Dmabuf {
     sync: Option<u32>,
     /// The feedback's format table: `(fourcc, modifier)` per index.
     table: Vec<(u32, u64)>,
-    /// What the feedback or the events said so far, and the whole list once
-    /// it is complete (`asked` and then `known`).
-    pending: Vec<(u32, u64)>,
-    formats: Vec<(u32, u64)>,
+    /// What the feedback or the events said so far (the tranche being
+    /// described, and those done), and the whole list once it is complete
+    /// (`asked` and then `known`).
+    tranche: Tranche,
+    pending: Vec<Tranche>,
+    tranches: Vec<Tranche>,
     asked: bool,
     known: bool,
     main_device: Option<u64>,
@@ -133,10 +148,10 @@ pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8], n
     }
     if d.manager.is_some_and(|(m, _)| m == object) {
         match opcode {
-            EV_FORMAT if d.feedback.is_none() => d.pending.push((word(0), MOD_INVALID)),
+            EV_FORMAT if d.feedback.is_none() => d.tranche.formats.push((word(0), MOD_INVALID)),
             EV_MODIFIER if d.feedback.is_none() => {
                 let modifier = (u64::from(word(4)) << 32) | u64::from(word(8));
-                d.pending.push((word(0), modifier));
+                d.tranche.formats.push((word(0), modifier));
             }
             _ => {}
         }
@@ -144,7 +159,8 @@ pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8], n
     }
     if d.sync == Some(object) && opcode == WL_CALLBACK_DONE {
         d.sync = None;
-        d.formats = finish(&mut d.pending);
+        let tranche = std::mem::take(&mut d.tranche);
+        d.tranches = finish(vec![tranche]);
         d.known = true;
         return true;
     }
@@ -161,14 +177,21 @@ pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8], n
                 }
             }
             FB_MAIN_DEVICE => conn.dmabuf.main_device = dev_t(args),
+            FB_TRANCHE_TARGET_DEVICE => conn.dmabuf.tranche.target = dev_t(args),
+            FB_TRANCHE_FLAGS => conn.dmabuf.tranche.scanout = word(0) & TRANCHE_SCANOUT != 0,
             FB_TRANCHE_FORMATS => {
                 let d = &mut conn.dmabuf;
                 let formats = tranche_formats(args, &d.table);
-                d.pending.extend(formats);
+                d.tranche.formats.extend(formats);
+            }
+            FB_TRANCHE_DONE => {
+                let d = &mut conn.dmabuf;
+                let tranche = std::mem::take(&mut d.tranche);
+                d.pending.push(tranche);
             }
             FB_DONE => {
                 let d = &mut conn.dmabuf;
-                d.formats = finish(&mut d.pending);
+                d.tranches = finish(std::mem::take(&mut d.pending));
                 d.known = true;
             }
             _ => {}
@@ -178,16 +201,31 @@ pub(super) fn handle(conn: &mut WlConn, object: u32, opcode: u16, args: &[u8], n
     false
 }
 
-/// The formats collected, without repeats, in the order they came; the
-/// collection starts over.
-fn finish(pending: &mut Vec<(u32, u64)>) -> Vec<(u32, u64)> {
-    let mut out: Vec<(u32, u64)> = Vec::with_capacity(pending.len());
-    for f in pending.drain(..) {
-        if !out.contains(&f) {
-            out.push(f);
+/// The tranches collected, each without repeats or formats an earlier one
+/// gave, in the order they came; empty ones dropped.
+fn finish(pending: Vec<Tranche>) -> Vec<Tranche> {
+    let mut seen: Vec<(u32, u64)> = Vec::new();
+    let mut out = Vec::with_capacity(pending.len());
+    for mut t in pending {
+        t.formats.retain(|f| {
+            let new = !seen.contains(f);
+            if new {
+                seen.push(*f);
+            }
+            new
+        });
+        if !t.formats.is_empty() {
+            out.push(t);
         }
     }
     out
+}
+
+impl Dmabuf {
+    /// The compositor's main device, once its feedback said.
+    pub(super) fn main_device(&self) -> Option<u64> {
+        self.main_device
+    }
 }
 
 /// A feedback format table: 16 bytes an entry, a 32-bit fourcc, 4 bytes of
@@ -330,8 +368,9 @@ fn wait(conn: &mut WlConn, deadline: Instant, done: impl Fn(&WlConn) -> bool) ->
     true
 }
 
-/// The formats the compositor takes, asking for them the first time.
-fn formats(conn: &mut WlConn) -> Vec<(u32, u64)> {
+/// The formats the compositor takes, by tranche, asking for them the first
+/// time (and publishing its main device for the renderer).
+pub(super) fn tranches(conn: &mut WlConn) -> Vec<Tranche> {
     let Some((manager, version)) = conn.dmabuf.manager else {
         return Vec::new();
     };
@@ -350,13 +389,17 @@ fn formats(conn: &mut WlConn) -> Vec<(u32, u64)> {
         let known = wait(conn, Instant::now() + ANSWER, |c| c.dmabuf.known);
         let d = &conn.dmabuf;
         dbg(format_args!(
-            "linux-dmabuf v{version}: {} formats{}, main device {:?}",
-            d.formats.len(),
+            "linux-dmabuf v{version}: {} formats in {} tranches{}, main device {:?}",
+            d.tranches.iter().map(|t| t.formats.len()).sum::<usize>(),
+            d.tranches.len(),
             if known { "" } else { " (no answer)" },
             d.main_device
         ));
+        if let Some(dev) = d.main_device {
+            crate::platform::dmabuf::set_main_device(dev);
+        }
     }
-    conn.dmabuf.formats.clone()
+    conn.dmabuf.tranches.clone()
 }
 
 /// Make a `wl_buffer` of `buffer`, waiting for the compositor's answer.
@@ -394,17 +437,37 @@ fn import(conn: &mut WlConn, buffer: &Buffer) -> Result<u32, String> {
 /// A window's dma-buf presentation.
 pub(super) struct WindowSink {
     pub conn: Shared,
-    pub surface: u32,
     pub toplevel: u32,
     pub scale: std::rc::Rc<std::cell::Cell<u32>>,
     pub configured: std::rc::Rc<std::cell::Cell<bool>>,
+    /// Where frames go: the window's surface, or the subsurface under the
+    /// decorations Stipple draws.
+    pub content: std::rc::Rc<std::cell::RefCell<super::content::Content>>,
     /// The buffers made for it, destroyed with it.
     pub made: std::cell::RefCell<Vec<u32>>,
+    /// Whether frames go with explicit sync, decided the first time asked.
+    pub explicit: std::cell::Cell<Option<bool>>,
+}
+
+impl WindowSink {
+    fn explicit(&self) -> bool {
+        if let Some(e) = self.explicit.get() {
+            return e;
+        }
+        let e = syncobj::available(&mut self.conn.lock().unwrap());
+        dbg(format_args!("explicit sync: {e}"));
+        self.explicit.set(Some(e));
+        e
+    }
 }
 
 impl Present for WindowSink {
-    fn formats(&self) -> Vec<(u32, u64)> {
-        formats(&mut self.conn.lock().unwrap())
+    fn tranches(&self) -> Vec<Tranche> {
+        tranches(&mut self.conn.lock().unwrap())
+    }
+
+    fn explicit_sync(&self) -> bool {
+        self.explicit()
     }
 
     fn ready(&self) -> bool {
@@ -419,10 +482,15 @@ impl Present for WindowSink {
 
     fn released(&self, id: BufferId) -> bool {
         let conn = self.conn.lock().unwrap();
-        conn.dmabuf.buffers.get(&id) == Some(&false)
+        // With explicit sync, when its release point has signalled.
+        syncobj::released(&conn, id).unwrap_or(conn.dmabuf.buffers.get(&id) == Some(&false))
     }
 
     fn wait_release(&self, ids: &[BufferId], timeout: Duration) -> Option<BufferId> {
+        if self.explicit() {
+            let conn = self.conn.lock().unwrap();
+            return syncobj::wait_release(&conn, ids, timeout);
+        }
         let mut conn = self.conn.lock().unwrap();
         let free = |c: &WlConn| {
             ids.iter()
@@ -438,17 +506,27 @@ impl Present for WindowSink {
         id: BufferId,
         size: (u32, u32),
         damage: Option<[i32; 4]>,
+        fence: Option<std::os::fd::OwnedFd>,
     ) -> Result<(), String> {
+        let explicit = self.explicit();
         let mut conn = self.conn.lock().unwrap();
         let scale = self.scale.get().max(1);
-        // The window's geometry: all of the buffer (no decorations drawn
-        // here, see `WaylandWindow::gpu_layer`).
+        let logical = PhysicalSize::new(size.0 / scale, size.1 / scale);
         super::toplevel::use_decor(&mut conn, self.toplevel);
-        super::decor::send_geometry(&mut conn, PhysicalSize::new(size.0 / scale, size.1 / scale));
-        let surface = self.surface;
         let io = |e: std::io::Error| e.to_string();
+        // Under a title bar Stipple draws, the subsurface; else the window's
+        // surface, the buffer all of the window's geometry.
+        let mut content = self.content.borrow_mut();
+        let surface = content.target(&mut conn).map_err(io)?;
+        let main = surface == content.main();
+        if main {
+            super::decor::send_geometry(&mut conn, logical);
+        }
         conn.send(surface, WL_SURFACE_SET_BUFFER_SCALE, &scale.to_le_bytes())
             .map_err(io)?;
+        if explicit {
+            syncobj::set_points(&mut conn, surface, id, fence)?;
+        }
         let mut a = Vec::new();
         for v in [id, 0, 0] {
             arg_u32(&mut a, v);
@@ -462,6 +540,9 @@ impl Present for WindowSink {
         .map_err(io)?;
         super::request_frame_callback(&mut conn, surface);
         conn.send(surface, WL_SURFACE_COMMIT, &[]).map_err(io)?;
+        if !main {
+            content.finish(&mut conn, logical, scale).map_err(io)?;
+        }
         conn.stream.flush().map_err(io)?;
         if let Some(busy) = conn.dmabuf.buffers.get_mut(&id) {
             *busy = true;
@@ -482,6 +563,7 @@ impl Present for WindowSink {
 }
 
 fn destroy_buffer(conn: &mut WlConn, id: u32) {
+    syncobj::destroy_buffer(conn, id);
     if conn.dmabuf.buffers.remove(&id).is_some() {
         let _ = conn.send(id, WL_BUFFER_DESTROY, &[]);
     }
@@ -533,9 +615,77 @@ mod tests {
 
     #[test]
     fn formats_are_kept_in_order_without_repeats() {
-        let mut pending = vec![(1, 0), (2, 0), (1, 0), (1, 5)];
-        assert_eq!(finish(&mut pending), vec![(1, 0), (2, 0), (1, 5)]);
-        assert!(pending.is_empty());
+        let t = |scanout, formats: Vec<(u32, u64)>| Tranche {
+            target: Some(0xe280),
+            scanout,
+            formats,
+        };
+        let pending = vec![
+            t(true, vec![(1, 0), (2, 0), (1, 0)]),
+            t(false, vec![(1, 0), (1, 5)]),
+            t(false, vec![(2, 0)]),
+        ];
+        assert_eq!(
+            finish(pending),
+            vec![t(true, vec![(1, 0), (2, 0)]), t(false, vec![(1, 5)])]
+        );
+    }
+
+    #[test]
+    fn feedback_tranches_carry_their_device_and_flags() {
+        let mut conn = test_conn(Dmabuf {
+            manager: Some((9, 4)),
+            feedback: Some(40),
+            table: vec![(XBGR8888, MOD_LINEAR), (ABGR8888, 7)],
+            ..Dmabuf::default()
+        });
+        let dev = |d: u64| {
+            let mut a = 8u32.to_le_bytes().to_vec();
+            a.extend_from_slice(&d.to_ne_bytes());
+            a
+        };
+        let indices = |i: &[u16]| {
+            let mut a = ((i.len() * 2) as u32).to_le_bytes().to_vec();
+            for i in i {
+                a.extend_from_slice(&i.to_ne_bytes());
+            }
+            while !a.len().is_multiple_of(4) {
+                a.push(0);
+            }
+            a
+        };
+        for (opcode, args) in [
+            (FB_MAIN_DEVICE, dev(0xe280)),
+            (FB_TRANCHE_TARGET_DEVICE, dev(0xe280)),
+            (FB_TRANCHE_FLAGS, 1u32.to_le_bytes().to_vec()),
+            (FB_TRANCHE_FORMATS, indices(&[1])),
+            (FB_TRANCHE_DONE, Vec::new()),
+            (FB_TRANCHE_TARGET_DEVICE, dev(0xe280)),
+            (FB_TRANCHE_FLAGS, 0u32.to_le_bytes().to_vec()),
+            (FB_TRANCHE_FORMATS, indices(&[0, 1])),
+            (FB_TRANCHE_DONE, Vec::new()),
+            (FB_DONE, Vec::new()),
+        ] {
+            assert!(handle(&mut conn, 40, opcode, &args, true));
+        }
+        let d = &conn.dmabuf;
+        assert!(d.known);
+        assert_eq!(d.main_device(), Some(0xe280));
+        assert_eq!(
+            d.tranches,
+            vec![
+                Tranche {
+                    target: Some(0xe280),
+                    scanout: true,
+                    formats: vec![(ABGR8888, 7)],
+                },
+                Tranche {
+                    target: Some(0xe280),
+                    scanout: false,
+                    formats: vec![(XBGR8888, MOD_LINEAR)],
+                },
+            ]
+        );
     }
 
     #[test]
@@ -603,7 +753,10 @@ mod tests {
         conn.dmabuf.sync = Some(30);
         assert!(handle(&mut conn, 30, WL_CALLBACK_DONE, &[0; 4], true));
         assert!(conn.dmabuf.known);
-        assert_eq!(conn.dmabuf.formats, vec![(XBGR8888, MOD_LINEAR)]);
+        assert_eq!(
+            crate::platform::dmabuf::flatten(&conn.dmabuf.tranches),
+            vec![(XBGR8888, MOD_LINEAR)]
+        );
         // Someone else's.
         assert!(!handle(&mut conn, 31, 0, &[], true));
     }

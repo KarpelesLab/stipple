@@ -106,6 +106,11 @@ pub(super) enum Press {
     Done,
 }
 
+/// What the decorations look like (see [`Decor::look`]): the title; whether
+/// titled, focused, maximized, tiled, dark, resizable; the button hovered and
+/// the one pressed.
+pub(super) type Look = (String, [bool; 6], Option<Button>, Option<Button>);
+
 /// The decoration state of the toplevel, kept on the connection.
 #[derive(Debug, Default)]
 pub(super) struct Decor {
@@ -704,6 +709,23 @@ impl Decor {
         )
     }
 
+    /// What the decorations look like: when it changes, they're drawn again.
+    pub(super) fn look(&self) -> Look {
+        (
+            self.title.clone(),
+            [
+                self.titled(),
+                self.focused,
+                self.maximized,
+                self.tiled,
+                self.dark,
+                self.resizable,
+            ],
+            self.hover,
+            self.pressed,
+        )
+    }
+
     /// The whole buffer for `content` (physical pixels, `scale` per logical
     /// one) with the decorations around it, as `wl_shm` ARGB8888 bytes
     /// (premultiplied `[B, G, R, A]`), and its size. `None` when there are no
@@ -713,11 +735,30 @@ impl Decor {
         content: &Pixmap,
         scale: u32,
     ) -> Option<(PhysicalSize, Vec<u8>)> {
+        self.framed(content.size(), Some(content), scale)
+    }
+
+    /// The decorations alone around content of `size` (physical pixels),
+    /// where it is left transparent (a GPU frame shows there, in a
+    /// subsurface): as [`frame`](Self::frame).
+    pub(super) fn around(
+        &mut self,
+        size: PhysicalSize,
+        scale: u32,
+    ) -> Option<(PhysicalSize, Vec<u8>)> {
+        self.framed(size, None, scale)
+    }
+
+    fn framed(
+        &mut self,
+        size: PhysicalSize,
+        content: Option<&Pixmap>,
+        scale: u32,
+    ) -> Option<(PhysicalSize, Vec<u8>)> {
         if !self.titled() {
             return None;
         }
         let s = scale.max(1);
-        let size = content.size();
         let (l, t, r, b) = self.insets();
         let (l, t, r, b) = (l as u32 * s, t as u32 * s, r as u32 * s, b as u32 * s);
         let full = PhysicalSize::new(size.width + l + r, size.height + t + b);
@@ -742,7 +783,9 @@ impl Decor {
             }
         };
         copy(&title, l, title_top);
-        copy(content, l, t);
+        if let Some(content) = content {
+            copy(content, l, t);
+        }
         Some((full, out))
     }
 }

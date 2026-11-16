@@ -73,8 +73,7 @@ Frames fall back to the CPU whenever there's no GPU to draw with:
 
 A window the GPU can't present to (X11 without libxcb; an EGL without its
 XCB platform; a Wayland compositor without `zwp_linux_dmabuf_v1`, or a driver
-that can't export a buffer it takes; a Wayland window whose title bar Stipple
-draws) is still drawn on the GPU: the frame is read back and presented as a
+that can't export a buffer it takes) is still drawn on the GPU: the frame is read back and presented as a
 bitmap. With `Renderer::Gpu` on Linux and Android, Vulkan
 is tried first and OpenGL ES next, when both are built in.
 
@@ -685,7 +684,21 @@ connection:
   takes come from its default feedback (version 4: a format table shared as
   an fd, tranches of indices into it, `done`), or from the `modifier` events
   of versions 3 and below; they are asked for the first time a window wants a
-  GPU layer.
+  GPU layer, before the renderer is made.
+- **Device**: the feedback names the compositor's main device (a `dev_t`),
+  and each tranche the device it reads those buffers with and whether they
+  can be scanned out. The main device is published (`platform::dmabuf::
+  set_main_device`) for the renderer about to be made: Vulkan ranks the
+  physical device that `VK_EXT_physical_device_drm` says is that device
+  (its primary or render node) above the others; GLES, whose surfaceless
+  display sits on another GPU, moves to the main device's EGL device
+  (`EGL_EXT_device_enumeration`, `EGL_EXT_device_drm`,
+  `EGL_EXT_platform_device`), keeping a software renderer where it was
+  forced. A format is picked from the first tranche with one both sides take,
+  scan-out tranches first; from a tranche read by another device than the
+  renderer's, only `LINEAR` counts. stderr says once which it is (`stipple:
+  Vulkan renders on the GPU of the Wayland compositor's main device
+  (226:128)`).
 - The renderer keeps a ring of up to three buffers per window, each a
   `wl_buffer` made once (`create_params`, an `add` per plane with its fd,
   `create`, answered by `created` or `failed`), and draws into one the
@@ -715,22 +728,53 @@ connection:
   driver's choice, so this works where the compositor takes the modifier
   the export reports (any modifier for a GPU and compositor on the same
   driver; `LINEAR` under llvmpipe). It is given to the compositor as
-  `XBGR8888` (the same bytes as the exported `ABGR8888`, alpha ignored).
-- **Synchronization**: the renderer waits for the GPU to finish the frame
-  (its fence, `glFinish`) before the commit, so the compositor never reads a
-  half-drawn buffer, with or without implicit synchronization on the
-  `dma-buf`. Explicit synchronization (`linux-drm-syncobj-v1`, or a
-  sync_file attached to the `dma-buf`) would let the commit go out before
-  the GPU is done; not yet.
+  `XBGR8888` (the same bytes as the exported `ABGR8888`, alpha ignored), or
+  `ABGR8888`; a compositor that takes only `XRGB8888`/`ARGB8888` with that
+  modifier gets the frame drawn into the texture with red and blue swapped
+  (a quad sampling `.bgra`, into a framebuffer on the exported texture)
+  instead of copied.
+- **Synchronization**: where the compositor has `wp_linux_drm_syncobj_v1`
+  and a render node does timeline syncobjs (`DRM_CAP_SYNCOBJ_TIMELINE`),
+  frames go with explicit sync (`backend/wayland/syncobj.rs`, the protocol
+  and the DRM syncobj ioctls by hand). Each buffer has a timeline, a DRM
+  syncobj shared with the compositor (`import_timeline`); each commit sets
+  an acquire point, which carries the GPU's fence, and a release point, which
+  the compositor signals once it no longer reads the buffer (then the buffer
+  is free: `wl_buffer.release` means nothing on such a surface). Vulkan
+  signals a semaphore exported as a `sync_file` from the copy's submission
+  (`VK_KHR_external_semaphore_fd`, `SYNC_FD`); GLES puts a native fence
+  after the copy (`EGL_ANDROID_native_fence_sync`). The `sync_file` is moved
+  onto the acquire point (imported into a binary syncobj, transferred), and
+  the commit goes out without waiting for the GPU. A renderer that can't
+  export a fence waits for the GPU and the acquire point is signalled at
+  once. Without explicit sync (or with `STIPPLE_WAYLAND_SYNCOBJ=0`) the
+  renderer waits for the GPU to finish the frame (its fence, `glFinish`)
+  before the commit, so the compositor never reads a half-drawn buffer, with
+  or without implicit synchronization on the `dma-buf`; buffers come back
+  with `wl_buffer.release`. stderr says once which (`stipple: Vulkan frames
+  go to the Wayland compositor with explicit sync (a GPU fence as the
+  acquire point)`).
+- **Decorations Stipple draws** (compositors without `xdg-decoration`, such
+  as GNOME's Mutter and Weston): the window's surface shows the title bar
+  and the resize margin alone, in a `wl_shm` buffer with a transparent hole,
+  and GPU frames go to a `wl_subsurface` above it at the content's corner
+  (`backend/wayland/content.rs`). The subsurface is synchronized, so a
+  frame and the decorations around it (a resize, maximizing) apply together
+  with the window surface's commit; its input region is empty, so the
+  pointer over the content is over the window surface, in the coordinates a
+  framed `wl_shm` buffer has: moving, resizing, the buttons and the app's
+  own pointer events work as for CPU frames. The decorations are drawn again
+  only when they look different (hover, press, focus, title, size), from the
+  frame or from the event that changed them. Fullscreen (no title bar),
+  frames go to the window surface itself and the subsurface is emptied; a
+  frame read back empties it too.
 - **Falling back**: before the first frame the renderer exports a small
   buffer and has the compositor import it. Without `zwp_linux_dmabuf_v1`,
   without the export extensions, without a format and modifier both sides
   take, or when the compositor fails the import, the window's frames are read
   back and presented through `wl_shm` as before, and stderr says why once
   (`stipple: Vulkan can't present to the Wayland window (…); reading frames
-  back`). `STIPPLE_WAYLAND_DMABUF=0` forces that. Windows whose title bar
-  Stipple draws (compositors without `xdg-decoration`, such as GNOME's and
-  Weston) are read back too: the title bar is drawn around the CPU's bitmap.
+  back`). `STIPPLE_WAYLAND_DMABUF=0` forces that.
 
 When it works, stderr says so once, with what was chosen:
 
@@ -743,12 +787,30 @@ and checks what they show): Vulkan on an NVIDIA driver (modifiers, linear
 `XBGR8888`, and `ARGB8888` through the swizzle), GLES on Mesa's llvmpipe
 (linear) and on NVIDIA's EGL (its block-linear modifier, where the
 compositor takes it), with frame pacing, a resize, the compositor refusing
-the buffer and an unknown modifier (both read back). CI runs widgetsdemo
+the buffer and an unknown modifier (both read back). Then, against the same
+compositor grown with `wl_subcompositor` and `wp_linux_drm_syncobj_v1` (it
+waits for each acquire point on its own import of the timeline and signals
+release points with the DRM ioctls): explicit sync with Vulkan's and with
+GLES's fences on NVIDIA and with llvmpipe's native fence (every acquire
+point signalled, frames complete); client-side decorations (title bar in
+the window surface, frames in the subsurface at the content's corner, its
+input region empty, the window geometry around both), going fullscreen and
+back with and without explicit sync; the GLES swizzle to `XRGB8888` on
+llvmpipe (mapped, the same image as `XBGR8888`) and on NVIDIA's EGL; a
+scan-out tranche preferred; the main device matched (render and primary
+node) and a foreign one taking `LINEAR` only. CI runs widgetsdemo
 and framepacing under sway on a `vkms` virtual display (its DRM backend and
 GLES renderer, on llvmpipe), the app on lavapipe and llvmpipe (Mesa exports
 through `udmabuf`), screenshots it with `grim` and checks the frames come at
 the display's 60 Hz (`visual-gpu-present`, not blocking yet; seen passing
-with both).
+with both), noting whether that sway offers explicit sync (the runner's
+sway 1.11 offers `linux-drm-syncobj` only when its renderer and DRM device
+do timeline syncobjs, which `vkms` with llvmpipe doesn't); and widgetsdemo
+under headless Weston 14 (no `xdg-decoration`, `linux-dmabuf` from its GL
+renderer on llvmpipe, no explicit sync), checking Stipple draws the
+title bar and the GPU frames go in the subsurface through `linux-dmabuf`,
+with Vulkan (lavapipe) and GLES (llvmpipe), screenshotting it with
+`weston-screenshooter` (not blocking yet; seen passing on a scratch run).
 
 ## Frame pacing
 
@@ -858,6 +920,14 @@ then keeps an animating window drawing at about 30 frames a second, as
 measured under sway in CI. Holding a window's frames while its callback is
 outstanding would stop that; it isn't done yet.
 
+Once the frame that answers the configure suspending it has gone out, a
+suspended Wayland window commits nothing: no frames (to its surface or,
+under a title bar Stipple draws, to the subsurface its GPU frames go in),
+and no redrawn decorations either (a focus or hover change while suspended
+is drawn once it shows again). Checked against the scripted compositor:
+one commit after `suspended`, none in the next two seconds of an animating
+window, frames again once it's resumed.
+
 ## OpenGL ES on a window
 
 Where there's no Vulkan, the GLES2 executor presents too: on the first frame
@@ -915,7 +985,8 @@ overrides the CPU baseline's renderer too. Build with only the API to test.)
 CI's GPU job runs them under Mesa's llvmpipe (GLES) and lavapipe (Vulkan) and
 screenshots `gpuwindow` under Xvfb; the `visual-gpu-present` jobs screenshot
 `widgetsdemo` presented straight to an Xvfb window with each of Vulkan and
-GLES, and to a Wayland window (sway on `vkms`) through `dma-buf`s; the
+GLES, and to a Wayland window (sway on `vkms`, and headless Weston with
+client-side decorations) through `dma-buf`s; the
 Android emulator run (API 34) starts the demo built with `vk` and
 checks it presents with Vulkan (those two not blocking yet); the macOS visual
 job runs the corpus on the runner's Metal device, prints the frame times, and
@@ -943,7 +1014,7 @@ stands (November 2026):
 
 | Criterion | macOS | iOS | Windows | Linux, X11 | Linux, Wayland | Android | Web |
 |---|---|---|---|---|---|---|---|
-| Presents straight to the window | **met**: Metal into a `CAMetalLayer`; CI screenshots `widgetsdemo` on the runner's (paravirtual) Metal, blocking; run on an M5 Max | **unverified**: compile-checked only, never run on a device or the simulator | **met on WARP only**: CI screenshots and paces `widgetsdemo` on Direct3D 11, non-blocking (passing); never run on a hardware GPU | **met**: CI presents with Vulkan (lavapipe) and GLES (llvmpipe) on Xvfb, non-blocking (passing); run locally with Vulkan and GLES on an RTX 5080 (Xvfb, 60 presents a second) | **partly**: `dma-buf`s only for windows the compositor decorates (a title bar Stipple draws is read back), no explicit sync; CI under sway on `vkms` non-blocking, locally on NVIDIA against a scripted compositor | **met on the emulator only**: Vulkan on API 34, non-blocking | **met**: WebGPU or WebGL2 into the canvas |
+| Presents straight to the window | **met**: Metal into a `CAMetalLayer`; CI screenshots `widgetsdemo` on the runner's (paravirtual) Metal, blocking; run on an M5 Max | **unverified**: compile-checked only, never run on a device or the simulator | **met on WARP only**: CI screenshots and paces `widgetsdemo` on Direct3D 11, non-blocking (passing); never run on a hardware GPU | **met**: CI presents with Vulkan (lavapipe) and GLES (llvmpipe) on Xvfb, non-blocking (passing); run locally with Vulkan and GLES on an RTX 5080 (Xvfb, 60 presents a second) | **partly**: `dma-buf`s for every window (under a title bar Stipple draws, in a subsurface), explicit sync where the compositor has `linux-drm-syncobj`; CI under sway on `vkms` and headless Weston (client-side decorations) non-blocking, never on a hardware GPU; explicit sync only against a scripted compositor (locally on NVIDIA and llvmpipe), no CI compositor offers it | **met on the emulator only**: Vulkan on API 34, non-blocking | **met**: WebGPU or WebGL2 into the canvas |
 | Matches the CPU on the corpus in CI | **met**: `visual-macos`, Metal, blocking | **not met**: not run | **met on WARP**: `visual-windows`, non-blocking (passing: 93 tests) | **met**: `visual-gpu`, GLES on llvmpipe and Vulkan on lavapipe, blocking; also run locally on the RTX 5080 (104 tests, both APIs) | **met** (the same executors as X11) | **not met**: not run on Android | **met, non-blocking**: `gpucompare.html` in headless Chrome (SwiftShader, flaky) |
 | Benchmarks meet their targets on a hardware GPU | **met** on an M5 Max: 0.76 ms, 2.6 ms, 3.5 ms (locally; CI's runner has no hardware GPU) | **unverified**: the benchmark hasn't run on an iPhone | **unverified**: no hardware GPU run | **met with Vulkan** on an RTX 5080: 0.33 ms, 1.07 ms, p95 2.9 ms; **not with GLES**: 5.7 ms, 7.7 ms (p95 3.2 ms) (locally) | as X11 (the same offscreen benchmark) | **unverified**: not run on a phone | **unverified** for the benchmark (it runs on the CPU in the module); a 2560×1600 widget frame takes 2.8 ms on WebGPU on an M5 Max |
 | Device loss and a missing GPU fall back in tests | **met**: `compare.rs` loses the runner's Metal device (blocking); the App's fallback on a stand-in | as macOS, on the stand-in only | **met on WARP** (non-blocking) | **met**: on lavapipe (blocking) and the RTX 5080 (locally) | **met** (the same executors) | on the stand-in only | **met, non-blocking**: two lost devices in headless Chrome |
@@ -952,8 +1023,10 @@ stands (November 2026):
 So `Auto` draws on the GPU on macOS (Metal) and X11 (Vulkan), and in a
 browser, and only on a hardware GPU. iOS, Windows and Android haven't run
 their GPU paths on the hardware `Auto` would pick (a phone, a Windows PC
-with a GPU), and Wayland still reads back windows whose title bar Stipple
-draws; they stay on the CPU until that's done. GLES stays an explicit
+with a GPU), and Wayland's `dma-buf` path (now also under a title bar
+Stipple draws, with explicit sync where offered) hasn't run on a real
+compositor with a hardware GPU, nor explicit sync on any real compositor;
+they stay on the CPU until that's done. GLES stays an explicit
 choice on Linux: on the one hardware GPU measured it missed the benchmarks'
 4 ms target (it's still several times faster than the CPU there).
 
@@ -992,9 +1065,10 @@ Today:
 - GLES2, Vulkan, Metal, Direct3D 11, WebGPU and WebGL2 execute the scene.
 - Metal, Vulkan and GLES (X11, Android, and Wayland as `dma-buf`s),
   Direct3D 11 and the web (into the canvas) present straight to the window.
-  On Wayland, a window whose title bar Stipple draws is still read back,
-  and the renderer waits for the GPU before each commit (no explicit
-  synchronization yet).
+  On Wayland, explicit sync hasn't run against a real compositor yet (only
+  the scripted one: CI's sway doesn't offer it), and the formats come from
+  the default feedback only (not the surface feedback a compositor updates
+  when a window could be scanned out, so a format isn't chosen again then).
 - The X11 and Android present paths (Vulkan and GLES) have been
   compile-checked and run in CI only, under Mesa's software drivers and the
   emulator; the Vulkan swapchain code has run on macOS through MoltenVK.

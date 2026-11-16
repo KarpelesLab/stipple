@@ -1026,27 +1026,45 @@ CPU elsewhere, and the CPU is always the fallback.
   `VK_EXT_image_drm_format_modifier` or a linear image) and attached through
   `zwp_linux_dmabuf_v1`, written by hand in the backend: format feedback
   (v4, or v3's modifier events), a ring of up to three buffers drawn into once
-  released, `damage_buffer`, frame callbacks, the GPU's fence waited before
-  the commit; read back where the compositor or the driver can't
-  (docs/gpu.md#wayland); windows whose title bar Stipple draws (no
-  `xdg-decoration`) still read back. Run locally on NVIDIA against a
-  scripted compositor; in CI on lavapipe under sway on `vkms`, not blocking
-  yet.*
+  released, `damage_buffer`, frame callbacks; read back where the compositor
+  or the driver can't (docs/gpu.md#wayland). Explicit sync where the
+  compositor has `wp_linux_drm_syncobj_v1` (by hand, with the DRM syncobj
+  ioctls): a timeline per buffer, the copy's semaphore exported as a
+  `sync_file` (`VK_KHR_external_semaphore_fd`) moved onto the acquire point,
+  buffers free once their release point signals; else the GPU's fence waited
+  before the commit. The physical device is the compositor's main device
+  where `VK_EXT_physical_device_drm` says so; formats from the first tranche
+  both sides take, scan-out tranches first, another device's `LINEAR` only.
+  Under a title bar Stipple draws (no `xdg-decoration`: Mutter, Weston) the
+  frames go in a synchronized `wl_subsurface` with an empty input region,
+  the decorations in the window surface's `wl_shm` buffer around it. Run
+  locally on NVIDIA against a scripted compositor; in CI on lavapipe under
+  sway on `vkms` and (client-side decorations) headless Weston, not blocking
+  yet; explicit sync only against the scripted compositor (CI's sway 1.11
+  offers it only on a DRM device with timelines, which `vkms` isn't, and
+  headless Weston 14 not at all).*
 - ✅ GLES2/3 presenting straight to an EGL window surface (Wayland, X11,
   Android) for drivers without Vulkan, instead of reading back.
   *X11 (EGL's XCB platform) and Android; the context moves to the window's
   display on the first frame. On Wayland, not an EGL window surface (that
   needs libwayland too) but the same `dma-buf` path as Vulkan: the frame
   copied into a texture exported with `EGL_MESA_image_dma_buf_export`, where
-  the compositor takes the modifier the driver chose. X11 and Android
-  compile-checked and run in CI only; Wayland run locally (llvmpipe, NVIDIA)
-  and in CI on llvmpipe under sway on `vkms`.*
+  the compositor takes the modifier the driver chose (drawn with red and blue
+  swapped for a compositor that takes only `XRGB8888`/`ARGB8888`); a native
+  fence (`EGL_ANDROID_native_fence_sync`) as the explicit-sync acquire point;
+  the context on the compositor's main device (`EGL_EXT_device_drm`,
+  `EGL_EXT_platform_device`) where the surfaceless display is on another
+  GPU. X11 and Android compile-checked and run in CI only; Wayland run
+  locally (llvmpipe, NVIDIA) and in CI on llvmpipe under sway on `vkms` and
+  headless Weston.*
 - ✅ CI: lavapipe (Vulkan) and llvmpipe (GL) pixel comparisons, the Linux
   visual jobs with each renderer, and the Android emulator's GPU.
   *The Vulkan corpus under lavapipe in `visual-gpu`; `visual-gpu-present`
   screenshots `widgetsdemo` on Xvfb with each renderer, and under sway on a
   `vkms` display (GLES renderer on llvmpipe) checks it presents through
-  `linux-dmabuf` with each and paces at 60 Hz; the API 34 emulator run
+  `linux-dmabuf` with each and paces at 60 Hz, and under headless Weston
+  that GPU frames go in a subsurface under Stipple's title bar; the API 34
+  emulator run
   starts androiddemo built with `vk` (`test-renderer.sh`). The last two
   aren't blocking yet.*
 

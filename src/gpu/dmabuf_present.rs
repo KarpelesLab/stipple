@@ -5,13 +5,15 @@
 //!
 //! Each frame is drawn into the executor's persistent frame target as for any
 //! present (only the damage, over the window's last frame), then copied whole
-//! into a free buffer of the ring, which is committed with the damage. The
-//! executor waits for the GPU before the commit.
+//! into a free buffer of the ring, which is committed with the damage. With
+//! explicit synchronization the commit carries a fence the compositor waits
+//! for (a `sync_file` the copy signals); otherwise, or where the driver can't
+//! export one, the executor waits for the GPU before the commit.
 
 use crate::gpu::renderer::GpuError;
 use crate::platform::GpuLayer;
 use crate::platform::dmabuf::{
-    ABGR8888, ARGB8888, BufferId, MOD_INVALID, Present, XBGR8888, XRGB8888,
+    ABGR8888, ARGB8888, BufferId, MOD_INVALID, MOD_LINEAR, Present, Tranche, XBGR8888, XRGB8888,
 };
 use std::time::Duration;
 
@@ -68,6 +70,80 @@ pub(crate) fn choose(
             .collect();
         (!both.is_empty()).then_some((fourcc, layout, both))
     })
+}
+
+/// The formats to choose from, tranche by tranche in the order to try them,
+/// from the compositor's tranches: in its order of preference, but those it
+/// can scan out first (a buffer that can go straight to the display needs
+/// no composition); from a tranche it reads with another device than the
+/// one we render with (`ours`: its `dev_t`s, primary and render node; empty
+/// when unknown) only LINEAR, the one layout two devices are sure to share.
+/// A format is picked from the first tranche that has one both sides take.
+pub(crate) fn offered(tranches: &[Tranche], ours: &[u64]) -> Vec<Vec<(u32, u64)>> {
+    let order = tranches
+        .iter()
+        .filter(|t| t.scanout)
+        .chain(tranches.iter().filter(|t| !t.scanout));
+    order
+        .map(|t| {
+            let foreign = !ours.is_empty() && t.target.is_some_and(|d| !ours.contains(&d));
+            t.formats
+                .iter()
+                .copied()
+                .filter(|f| !foreign || f.1 == MOD_LINEAR)
+                .collect::<Vec<_>>()
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// [`choose`] over each of `offered`'s tranches in turn: the first that
+/// has a format both sides take.
+pub(crate) fn choose_in(
+    offered: &[Vec<(u32, u64)>],
+    mut drawable: impl FnMut(u32, Layout) -> Vec<u64>,
+) -> Option<(u32, Layout, Vec<u64>)> {
+    offered.iter().find_map(|t| choose(t, &mut drawable))
+}
+
+/// A `dev_t` as `major:minor`, for logs.
+fn dev_name(dev: u64) -> String {
+    let major = ((dev >> 8) & 0xfff) | ((dev >> 32) & !0xfff);
+    let minor = (dev & 0xff) | ((dev >> 12) & !0xff);
+    format!("{major}:{minor}")
+}
+
+/// Say once which device the renderer is on, against the compositor's.
+pub(crate) fn say_device(api: &str, ours: &[u64], main: u64) {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        let how = if ours.is_empty() {
+            "a GPU that can't say whether it is"
+        } else if ours.contains(&main) {
+            "the GPU of"
+        } else {
+            "another GPU than"
+        };
+        eprintln!(
+            "stipple: {api} renders on {how} the Wayland compositor's main device ({})",
+            dev_name(main)
+        )
+    });
+}
+
+/// Say once how commits are synchronized (CI looks for it).
+pub(crate) fn say_sync(api: &str, fence: bool) {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        eprintln!(
+            "stipple: {api} frames go to the Wayland compositor with explicit sync ({})",
+            if fence {
+                "a GPU fence as the acquire point"
+            } else {
+                "the GPU waited for, then the acquire point signalled"
+            }
+        )
+    });
 }
 
 /// The window's sink and key, for a Wayland layer.
@@ -171,7 +247,6 @@ pub(crate) fn say_reading_back(api: &str, why: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::dmabuf::MOD_LINEAR;
 
     /// LINEAR, the one modifier a linear image has.
     fn linear() -> Vec<u64> {
@@ -208,6 +283,51 @@ mod tests {
         assert_eq!(choose(&[], |_, _| linear()), None);
     }
 
+    #[test]
+    fn scanout_tranches_come_first_and_other_devices_get_linear() {
+        let main = Tranche {
+            target: Some(0xe280),
+            scanout: false,
+            formats: vec![(XBGR8888, 7), (XBGR8888, MOD_LINEAR)],
+        };
+        let scanout = Tranche {
+            target: Some(0xe280),
+            scanout: true,
+            formats: vec![(XBGR8888, 9)],
+        };
+        let other = Tranche {
+            target: Some(0xe281),
+            scanout: false,
+            formats: vec![(ARGB8888, 3), (ARGB8888, MOD_LINEAR)],
+        };
+        let all = [main.clone(), scanout, other];
+        // Rendering on the main device: everything, scanout first; the
+        // other device's tranche LINEAR only.
+        let o = offered(&all, &[0xe200, 0xe280]);
+        assert_eq!(
+            o,
+            vec![
+                vec![(XBGR8888, 9)],
+                vec![(XBGR8888, 7), (XBGR8888, MOD_LINEAR)],
+                vec![(ARGB8888, MOD_LINEAR)]
+            ]
+        );
+        // The scanout tranche's modifier where the driver draws it...
+        let pick = choose_in(&o, |_, _| vec![MOD_LINEAR, 7, 9]);
+        assert_eq!(pick, Some((XBGR8888, Layout::Rgba, vec![9])));
+        // ...else the next tranche's, in the driver's order.
+        let pick = choose_in(&o, |_, _| vec![MOD_LINEAR, 7]);
+        assert_eq!(pick, Some((XBGR8888, Layout::Rgba, vec![MOD_LINEAR, 7])));
+        // On another device: LINEAR from the main device's tranches.
+        assert_eq!(
+            offered(std::slice::from_ref(&main), &[0xe281]),
+            vec![vec![(XBGR8888, MOD_LINEAR)]]
+        );
+        // Our device unknown: all of it.
+        assert_eq!(offered(&[main], &[])[0].len(), 2);
+        assert_eq!(dev_name(0xe280), "226:128");
+    }
+
     /// A compositor that holds every buffer committed until told otherwise.
     #[derive(Default)]
     struct Fake {
@@ -218,8 +338,11 @@ mod tests {
     }
 
     impl Present for Fake {
-        fn formats(&self) -> Vec<(u32, u64)> {
-            vec![(XBGR8888, MOD_LINEAR)]
+        fn tranches(&self) -> Vec<Tranche> {
+            vec![Tranche {
+                formats: vec![(XBGR8888, MOD_LINEAR)],
+                ..Tranche::default()
+            }]
         }
         fn ready(&self) -> bool {
             true
@@ -236,7 +359,13 @@ mod tests {
             self.held.borrow_mut().retain(|&h| h != id);
             ids.contains(&id).then_some(id)
         }
-        fn commit(&self, id: BufferId, _: (u32, u32), _: Option<[i32; 4]>) -> Result<(), String> {
+        fn commit(
+            &self,
+            id: BufferId,
+            _: (u32, u32),
+            _: Option<[i32; 4]>,
+            _: Option<std::os::fd::OwnedFd>,
+        ) -> Result<(), String> {
             self.held.borrow_mut().push(id);
             Ok(())
         }
@@ -264,7 +393,7 @@ mod tests {
                     .map_err(GpuError::Lost)?;
                 Ok(Slot { image: *made, id })
             })?;
-            sink.commit(ring.slots[i].id, (4, 4), None).unwrap();
+            sink.commit(ring.slots[i].id, (4, 4), None, None).unwrap();
             Ok(i)
         };
         // Three frames, three buffers, all held.

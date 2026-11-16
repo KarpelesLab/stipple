@@ -7,10 +7,18 @@
 //!
 //! The extensions need Vulkan 1.1 (external memory, dedicated allocations,
 //! `vkGetPhysicalDeviceFormatProperties2` are core there): the instance asks
-//! for 1.1 where the loader has it. The frame waits for its fence before the
-//! commit, so the compositor reads a finished buffer whether or not the
-//! driver synchronizes the `dma-buf` implicitly; the image is handed over
-//! with a release to `VK_QUEUE_FAMILY_EXTERNAL`.
+//! for 1.1 where the loader has it. With explicit sync the copy signals a
+//! semaphore exported as a `sync_file` (`VK_KHR_external_semaphore_fd`,
+//! `SYNC_FD`), which the commit carries as its acquire point; otherwise the
+//! frame waits for its fence before the commit, so the compositor reads a
+//! finished buffer whether or not the driver synchronizes the `dma-buf`
+//! implicitly. The image is handed over with a release to
+//! `VK_QUEUE_FAMILY_EXTERNAL`.
+//!
+//! Where the compositor names its main device, the physical device picked
+//! is the one `VK_EXT_physical_device_drm` says is that device
+//! ([`drm_devices`]), and formats from tranches another device reads are
+//! taken LINEAR only.
 
 #![allow(non_snake_case)]
 
@@ -18,7 +26,7 @@ use super::super::sys::*;
 use super::{VkExecutor, layers, subresource};
 use crate::gpu::dmabuf_present::{self as dp, Layout, Ring, Slot};
 use crate::gpu::renderer::GpuError;
-use crate::platform::dmabuf::{Buffer, MOD_LINEAR, Plane, Present};
+use crate::platform::dmabuf::{Buffer, MOD_LINEAR, Plane, Present, makedev};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
@@ -27,6 +35,8 @@ const VK_KHR_EXTERNAL_MEMORY_FD: &CStr = c"VK_KHR_external_memory_fd";
 const VK_EXT_EXTERNAL_MEMORY_DMA_BUF: &CStr = c"VK_EXT_external_memory_dma_buf";
 const VK_EXT_IMAGE_DRM_FORMAT_MODIFIER: &CStr = c"VK_EXT_image_drm_format_modifier";
 const VK_KHR_IMAGE_FORMAT_LIST: &CStr = c"VK_KHR_image_format_list";
+const VK_KHR_EXTERNAL_SEMAPHORE_FD: &CStr = c"VK_KHR_external_semaphore_fd";
+const VK_EXT_PHYSICAL_DEVICE_DRM: &CStr = c"VK_EXT_physical_device_drm";
 
 pub(super) const API_VERSION_1_1: u32 = (1 << 22) | (1 << 12);
 
@@ -38,6 +48,16 @@ const ST_MEMORY_DEDICATED_ALLOCATE_INFO: i32 = 1_000_127_001;
 const ST_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT: i32 = 1_000_158_000;
 const ST_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT: i32 = 1_000_158_003;
 const ST_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT: i32 = 1_000_158_005;
+const ST_PHYSICAL_DEVICE_PROPERTIES_2: i32 = 1_000_059_001;
+const ST_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO: i32 = 1_000_076_000;
+const ST_EXTERNAL_SEMAPHORE_PROPERTIES: i32 = 1_000_076_001;
+const ST_EXPORT_SEMAPHORE_CREATE_INFO: i32 = 1_000_077_000;
+const ST_SEMAPHORE_GET_FD_INFO_KHR: i32 = 1_000_079_001;
+const ST_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT: i32 = 1_000_353_000;
+/// `VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT`.
+const SEMAPHORE_SYNC_FD: u32 = 0x10;
+/// `VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT`.
+const SEMAPHORE_EXPORTABLE: u32 = 0x1;
 
 const HANDLE_TYPE_DMA_BUF: u32 = 0x200;
 const TILING_LINEAR: u32 = 1;
@@ -134,7 +154,65 @@ struct VkSubresourceLayout {
     depthPitch: u64,
 }
 
+#[repr(C)]
+struct VkExportSemaphoreCreateInfo {
+    sType: i32,
+    pNext: *const c_void,
+    handleTypes: u32,
+}
+
+#[repr(C)]
+struct VkSemaphoreGetFdInfoKHR {
+    sType: i32,
+    pNext: *const c_void,
+    semaphore: VkSemaphore,
+    handleType: u32,
+}
+
+#[repr(C)]
+struct VkPhysicalDeviceExternalSemaphoreInfo {
+    sType: i32,
+    pNext: *const c_void,
+    handleType: u32,
+}
+
+#[repr(C)]
+struct VkExternalSemaphoreProperties {
+    sType: i32,
+    pNext: *mut c_void,
+    exportFromImportedHandleTypes: u32,
+    compatibleHandleTypes: u32,
+    externalSemaphoreFeatures: u32,
+}
+
+#[repr(C)]
+struct VkPhysicalDeviceDrmPropertiesEXT {
+    sType: i32,
+    pNext: *mut c_void,
+    hasPrimary: u32,
+    hasRender: u32,
+    primaryMajor: i64,
+    primaryMinor: i64,
+    renderMajor: i64,
+    renderMinor: i64,
+}
+
+#[repr(C)]
+struct VkPhysicalDeviceProperties2 {
+    sType: i32,
+    pNext: *mut c_void,
+    properties: [u64; PROPS_SIZE / 8],
+}
+
 type P = *const c_void;
+type GetSemaphoreFd =
+    unsafe extern "system" fn(VkDevice, *const VkSemaphoreGetFdInfoKHR, *mut i32) -> VkResult;
+type GetExternalSemaphoreProperties = unsafe extern "system" fn(
+    VkPhysicalDevice,
+    *const VkPhysicalDeviceExternalSemaphoreInfo,
+    *mut VkExternalSemaphoreProperties,
+);
+type GetProperties2 = unsafe extern "system" fn(VkPhysicalDevice, *mut VkPhysicalDeviceProperties2);
 type GetFormatProperties2 =
     unsafe extern "system" fn(VkPhysicalDevice, u32, *mut VkFormatProperties2);
 type GetMemoryFd =
@@ -180,6 +258,66 @@ pub(super) unsafe fn instance_version(gipa: GetInstanceProcAddr) -> u32 {
 pub(super) struct Support {
     export: bool,
     modifiers: bool,
+    /// Semaphores exported as `sync_file`s (`VK_KHR_external_semaphore_fd`).
+    sync_fd: bool,
+}
+
+/// The `dev_t`s (primary and render node) of physical device `dev`, where
+/// it has `VK_EXT_physical_device_drm` (and the instance 1.1).
+pub(super) unsafe fn drm_devices(
+    vk: &super::super::sys::Fns,
+    instance: VkInstance,
+    dev: VkPhysicalDevice,
+) -> Vec<u64> {
+    unsafe {
+        let Ok(gipa) = loader() else {
+            return Vec::new();
+        };
+        let p = gipa(instance, c"vkGetPhysicalDeviceProperties2".as_ptr());
+        if p.is_null() || !device_has(vk, dev, VK_EXT_PHYSICAL_DEVICE_DRM) {
+            return Vec::new();
+        }
+        let get = std::mem::transmute::<P, GetProperties2>(p);
+        let mut drm: VkPhysicalDeviceDrmPropertiesEXT = std::mem::zeroed();
+        drm.sType = ST_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT;
+        let mut props = VkPhysicalDeviceProperties2 {
+            sType: ST_PHYSICAL_DEVICE_PROPERTIES_2,
+            pNext: (&mut drm as *mut VkPhysicalDeviceDrmPropertiesEXT).cast(),
+            properties: [0; PROPS_SIZE / 8],
+        };
+        get(dev, &mut props);
+        let mut out = Vec::new();
+        if drm.hasPrimary != 0 {
+            out.push(makedev(drm.primaryMajor as u64, drm.primaryMinor as u64));
+        }
+        if drm.hasRender != 0 {
+            out.push(makedev(drm.renderMajor as u64, drm.renderMinor as u64));
+        }
+        out
+    }
+}
+
+/// Whether physical device `dev` has extension `name`.
+unsafe fn device_has(vk: &super::super::sys::Fns, dev: VkPhysicalDevice, name: &CStr) -> bool {
+    unsafe {
+        let mut n = 0u32;
+        (vk.vkEnumerateDeviceExtensionProperties)(
+            dev,
+            std::ptr::null(),
+            &mut n,
+            std::ptr::null_mut(),
+        );
+        let mut v: Vec<VkExtensionProperties> = (0..n)
+            .map(|_| VkExtensionProperties {
+                extensionName: [0; 256],
+                specVersion: 0,
+            })
+            .collect();
+        (vk.vkEnumerateDeviceExtensionProperties)(dev, std::ptr::null(), &mut n, v.as_mut_ptr());
+        v.truncate(n as usize);
+        v.iter()
+            .any(|e| CStr::from_ptr(e.extensionName.as_ptr()) == name)
+    }
 }
 
 /// The device extensions to turn on for the export, if the instance and
@@ -204,11 +342,16 @@ pub(super) fn device_extensions(
         exts.push(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER.as_ptr());
         exts.push(VK_KHR_IMAGE_FORMAT_LIST.as_ptr());
     }
+    let sync_fd = has(VK_KHR_EXTERNAL_SEMAPHORE_FD);
+    if sync_fd {
+        exts.push(VK_KHR_EXTERNAL_SEMAPHORE_FD.as_ptr());
+    }
     (
         exts,
         Support {
             export: true,
             modifiers,
+            sync_fd,
         },
     )
 }
@@ -219,6 +362,8 @@ struct Fns {
     memory_fd: GetMemoryFd,
     subresource_layout: GetSubresourceLayout,
     modifier_properties: Option<GetModifierProperties>,
+    /// `vkGetSemaphoreFdKHR`, where semaphores export as `sync_file`s.
+    semaphore_fd: Option<GetSemaphoreFd>,
 }
 
 /// The format a window's buffers are made in.
@@ -252,6 +397,11 @@ pub(super) struct Wayland {
     /// The frame swizzled to `[B, G, R, A]`, for buffers in that order, and
     /// its size.
     swizzle: Option<(super::Image, (u32, u32))>,
+    /// The device's `dev_t`s (primary, render node), where it says.
+    devices: Vec<u64>,
+    /// The semaphore a frame's copy signals, exported as its fence (made
+    /// the first time; `NULL` before).
+    fence: VkSemaphore,
 }
 
 impl Wayland {
@@ -259,10 +409,33 @@ impl Wayland {
     pub(super) unsafe fn load(
         gipa: GetInstanceProcAddr,
         instance: VkInstance,
+        phys: VkPhysicalDevice,
+        devices: Vec<u64>,
         support: Support,
     ) -> Wayland {
         unsafe {
             let get = |name: &CStr| gipa(instance, name.as_ptr());
+            // Semaphores that export as sync_files, where the device says so.
+            let semaphore_fd = get(c"vkGetSemaphoreFdKHR");
+            let sem_props = get(c"vkGetPhysicalDeviceExternalSemaphoreProperties");
+            let sync_fd = support.sync_fd && !semaphore_fd.is_null() && !sem_props.is_null() && {
+                let f = std::mem::transmute::<P, GetExternalSemaphoreProperties>(sem_props);
+                let info = VkPhysicalDeviceExternalSemaphoreInfo {
+                    sType: ST_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO,
+                    pNext: std::ptr::null(),
+                    handleType: SEMAPHORE_SYNC_FD,
+                };
+                let mut p = VkExternalSemaphoreProperties {
+                    sType: ST_EXTERNAL_SEMAPHORE_PROPERTIES,
+                    pNext: std::ptr::null_mut(),
+                    exportFromImportedHandleTypes: 0,
+                    compatibleHandleTypes: 0,
+                    externalSemaphoreFeatures: 0,
+                };
+                f(phys, &info, &mut p);
+                p.compatibleHandleTypes & SEMAPHORE_SYNC_FD != 0
+                    && p.externalSemaphoreFeatures & SEMAPHORE_EXPORTABLE != 0
+            };
             let (fp2, fd, layout) = (
                 get(c"vkGetPhysicalDeviceFormatProperties2"),
                 get(c"vkGetMemoryFdKHR"),
@@ -276,6 +449,8 @@ impl Wayland {
                     subresource_layout: std::mem::transmute::<P, GetSubresourceLayout>(layout),
                     modifier_properties: (support.modifiers && !modifier.is_null())
                         .then(|| std::mem::transmute::<P, GetModifierProperties>(modifier)),
+                    semaphore_fd: sync_fd
+                        .then(|| std::mem::transmute::<P, GetSemaphoreFd>(semaphore_fd)),
                 });
             Wayland {
                 support: Support {
@@ -289,6 +464,8 @@ impl Wayland {
                 choice: RefCell::new(None),
                 rings: HashMap::new(),
                 swizzle: None,
+                devices,
+                fence: NULL,
             }
         }
     }
@@ -366,9 +543,14 @@ impl VkExecutor {
                 );
                 None
             } else {
-                let offered = sink.formats();
+                // Scanout tranches first; another device's, LINEAR only.
+                let ours = &self.wayland.devices;
+                if let Some(main) = crate::platform::dmabuf::main_device() {
+                    dp::say_device("Vulkan", ours, main);
+                }
+                let offered = dp::offered(&sink.tranches(), ours);
                 let mut planes = HashMap::new();
-                let picked = dp::choose(&offered, |fourcc, layout| {
+                let picked = dp::choose_in(&offered, |fourcc, layout| {
                     let format = vk_format(layout);
                     let mods = self.drawable(format, layout);
                     for &(m, n) in &mods {
@@ -381,7 +563,7 @@ impl VkExecutor {
                         "Vulkan",
                         &format!(
                             "no format the compositor takes ({} offered) can be exported",
-                            offered.len()
+                            offered.iter().map(Vec::len).sum::<usize>()
                         ),
                     );
                 }
@@ -743,15 +925,78 @@ impl VkExecutor {
             barrier.srcQueueFamilyIndex = self.family;
             barrier.dstQueueFamilyIndex = QUEUE_FAMILY_EXTERNAL;
             self.barrier(std::slice::from_ref(&barrier));
-            let submitted = self.submit(None, None);
+            // With explicit sync, the copy signals the frame's fence.
+            let signal = if sink.explicit_sync() {
+                self.fence_semaphore()
+            } else {
+                None
+            };
+            let submitted = self.submit(None, signal);
             self.end_frame();
             submitted?;
-            // The compositor reads it once the GPU is done with it.
-            self.wait()?;
+            let fence = signal.and_then(|s| self.export_fence(s));
+            if sink.explicit_sync() {
+                dp::say_sync("Vulkan", fence.is_some());
+            }
+            // Without a fence, the compositor reads it once the GPU is done.
+            if fence.is_none() {
+                self.wait()?;
+            }
             self.kept.presented(key, (w, h), dirty);
             let damage = ring.damage(dirty);
-            sink.commit(ring.slots[i].id, (w, h), damage)
+            sink.commit(ring.slots[i].id, (w, h), damage, fence)
                 .map_err(|e| GpuError::Lost(format!("committing the frame: {e}")))
+        }
+    }
+
+    /// The semaphore frames' copies signal for their fence, made the first
+    /// time; `None` where the device can't export one as a `sync_file`.
+    unsafe fn fence_semaphore(&mut self) -> Option<VkSemaphore> {
+        unsafe {
+            self.wayland.fns.as_ref()?.semaphore_fd?;
+            if self.wayland.fence == NULL {
+                let export = VkExportSemaphoreCreateInfo {
+                    sType: ST_EXPORT_SEMAPHORE_CREATE_INFO,
+                    pNext: std::ptr::null(),
+                    handleTypes: SEMAPHORE_SYNC_FD,
+                };
+                let ci = VkSemaphoreCreateInfo {
+                    sType: ST_SEMAPHORE_CREATE_INFO,
+                    pNext: (&export as *const VkExportSemaphoreCreateInfo).cast(),
+                    flags: 0,
+                };
+                let mut s = NULL;
+                if (self.vk.vkCreateSemaphore)(self.device, &ci, std::ptr::null(), &mut s)
+                    != VK_SUCCESS
+                {
+                    if let Some(f) = self.wayland.fns.as_mut() {
+                        f.semaphore_fd = None;
+                    }
+                    return None;
+                }
+                self.wayland.fence = s;
+            }
+            Some(self.wayland.fence)
+        }
+    }
+
+    /// The signal of `semaphore` just submitted, as a `sync_file` (the
+    /// export leaves the semaphore unsignalled, for the next frame).
+    unsafe fn export_fence(&self, semaphore: VkSemaphore) -> Option<std::os::fd::OwnedFd> {
+        unsafe {
+            use std::os::fd::FromRawFd;
+            let get = self.wayland.fns.as_ref()?.semaphore_fd?;
+            let info = VkSemaphoreGetFdInfoKHR {
+                sType: ST_SEMAPHORE_GET_FD_INFO_KHR,
+                pNext: std::ptr::null(),
+                semaphore,
+                handleType: SEMAPHORE_SYNC_FD,
+            };
+            let mut fd = -1;
+            let r = get(self.device, &info, &mut fd);
+            // -1 is a valid answer: already signalled, nothing to wait for;
+            // the compositor gets a point signalled at once (no fence).
+            (r == VK_SUCCESS && fd >= 0).then(|| std::os::fd::OwnedFd::from_raw_fd(fd))
         }
     }
 
@@ -843,6 +1088,10 @@ impl VkExecutor {
             if let Some((img, _)) = self.wayland.swizzle.take() {
                 self.free_image(img);
             }
+            let fence = std::mem::replace(&mut self.wayland.fence, NULL);
+            if fence != NULL {
+                (self.vk.vkDestroySemaphore)(self.device, fence, std::ptr::null());
+            }
         }
     }
 }
@@ -884,19 +1133,29 @@ mod tests {
         );
         assert_eq!(std::mem::size_of::<VkImageSubresource>(), 12);
         assert_eq!(std::mem::size_of::<VkSubresourceLayout>(), 40);
+        assert_eq!(std::mem::size_of::<VkExportSemaphoreCreateInfo>(), 24);
+        assert_eq!(std::mem::size_of::<VkSemaphoreGetFdInfoKHR>(), 32);
+        assert_eq!(
+            std::mem::size_of::<VkPhysicalDeviceExternalSemaphoreInfo>(),
+            24
+        );
+        assert_eq!(std::mem::size_of::<VkExternalSemaphoreProperties>(), 32);
+        assert_eq!(std::mem::size_of::<VkPhysicalDeviceDrmPropertiesEXT>(), 56);
+        assert_eq!(std::mem::size_of::<VkPhysicalDeviceProperties2>(), 840);
     }
 
     #[test]
     fn the_export_needs_1_1_and_both_extensions() {
         let all = |_: &CStr| true;
         let (exts, s) = device_extensions(API_VERSION_1_1, API_VERSION_1_1, all);
-        assert!(s.export && s.modifiers);
-        assert_eq!(exts.len(), 4);
+        assert!(s.export && s.modifiers && s.sync_fd);
+        assert_eq!(exts.len(), 5);
         let (exts, s) = device_extensions(API_VERSION_1_0, API_VERSION_1_1, all);
         assert!(!s.export && exts.is_empty());
-        let no_mods = |n: &CStr| n != VK_EXT_IMAGE_DRM_FORMAT_MODIFIER;
+        let no_mods =
+            |n: &CStr| n != VK_EXT_IMAGE_DRM_FORMAT_MODIFIER && n != VK_KHR_EXTERNAL_SEMAPHORE_FD;
         let (exts, s) = device_extensions(API_VERSION_1_1, API_VERSION_1_1, no_mods);
-        assert!(s.export && !s.modifiers);
+        assert!(s.export && !s.modifiers && !s.sync_fd);
         assert_eq!(exts.len(), 2);
         let no_dma = |n: &CStr| n != VK_EXT_EXTERNAL_MEMORY_DMA_BUF;
         assert!(

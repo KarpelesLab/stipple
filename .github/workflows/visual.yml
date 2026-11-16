@@ -1940,6 +1940,17 @@ jobs:
           grep -q "stipple: drawing with ${{ matrix.api }}" "$LOG"
           grep -q "stipple: presenting with ${{ matrix.api }} to the Wayland window through linux-dmabuf" "$LOG"
           ! grep -q "drawing on the CPU\|reading frames back" "$LOG"
+          # Explicit sync where this sway offers wp_linux_drm_syncobj_v1
+          # (sway 1.11 does when its renderer and DRM device do timeline
+          # syncobjs; vkms with llvmpipe doesn't), the compositor's main
+          # device: for the log.
+          if grep -q wp_linux_drm_syncobj_manager_v1 visual_output/wl-info.txt; then
+            echo "sway offers linux-drm-syncobj"
+            grep "explicit sync" "$LOG" || echo "::warning::sway offers linux-drm-syncobj but the app didn't use it"
+          else
+            echo "this sway has no linux-drm-syncobj: frames go waited for"
+          fi
+          grep "main device" "$LOG" || true
           colors=$(convert visual_output/stipple-wayland-dmabuf-${{ matrix.renderer }}.png -format '%k' info:)
           echo "distinct colors: $colors"
           [ "$colors" -gt 16 ]
@@ -1952,6 +1963,52 @@ jobs:
         if: always()
         run: |
           [ -n "$SWAY_PID" ] && kill "$SWAY_PID" 2>/dev/null || true
+
+      # Weston has no xdg-decoration: Stipple draws the title bar, and GPU
+      # frames go in a subsurface under it. Headless Weston with its GL
+      # renderer (llvmpipe) takes dma-bufs where Mesa imports them (udmabuf,
+      # loaded above). Not blocking yet.
+      - name: On Wayland (headless Weston), client-side decorations over dma-bufs with ${{ matrix.api }}
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          STIPPLE_RENDERER: ${{ matrix.renderer }}
+        run: |
+          sudo apt-get install -y weston wayland-utils
+          weston --version || true
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt-weston"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          weston --backend=headless --renderer=gl --width=1024 --height=768 --socket=wayland-csd --debug \
+            > visual_output/weston-${{ matrix.renderer }}.log 2>&1 &
+          echo "WESTON_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          export WAYLAND_DISPLAY=wayland-csd
+          wayland-info > visual_output/weston-info.txt 2>&1 || true
+          grep -E "zwp_linux_dmabuf_v1|zxdg_decoration|wp_linux_drm_syncobj|wl_subcompositor" visual_output/weston-info.txt || true
+          if ! grep -q zwp_linux_dmabuf_v1 visual_output/weston-info.txt; then
+            echo "::warning::headless Weston offers no linux-dmabuf here"
+            tail -20 visual_output/weston-${{ matrix.renderer }}.log
+            exit 1
+          fi
+          ! grep -q zxdg_decoration_manager_v1 visual_output/weston-info.txt
+          LOG=visual_output/weston-present-${{ matrix.renderer }}.log
+          STIPPLE_WAYLAND_DEBUG=1 ./target/release/examples/widgetsdemo > "$LOG" 2>&1 &
+          WL_APP=$!
+          sleep 6
+          weston-screenshooter 2>/dev/null && mv wayland-screenshot-*.png visual_output/stipple-weston-csd-${{ matrix.renderer }}.png 2>/dev/null || echo "no screenshot"
+          kill "$WL_APP" 2>/dev/null || true
+          grep -v "raw key" "$LOG" | head -40
+          grep -q "decorations: client-side" "$LOG"
+          grep -q "stipple: GPU frames go in a subsurface under the title bar Stipple draws" "$LOG"
+          grep -q "stipple: presenting with ${{ matrix.api }} to the Wayland window through linux-dmabuf" "$LOG"
+          ! grep -q "drawing on the CPU\|reading frames back" "$LOG"
+
+      - name: Stop Weston
+        if: always()
+        run: |
+          [ -n "$WESTON_PID" ] && kill "$WESTON_PID" 2>/dev/null || true
 
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4

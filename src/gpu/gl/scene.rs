@@ -533,6 +533,9 @@ impl State {
     unsafe fn new() -> Result<Self, String> {
         unsafe {
             let dpy = egl_init()?;
+            // On the Wayland compositor's GPU, where it named one.
+            #[cfg(target_os = "linux")]
+            let dpy = dmabuf::on_main_device(dpy);
             let ctx = eglGetCurrentContext();
             Self::build(dpy, ctx, Native::Offscreen, core::ptr::null_mut())
         }

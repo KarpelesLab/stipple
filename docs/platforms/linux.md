@@ -78,11 +78,15 @@ an EGL window surface on X11 (over a libxcb connection of the GPU's own), and
 on Wayland `dma-buf`s attached through `zwp_linux_dmabuf_v1` on the backend's
 own connection (the compositor's formats and modifiers from its feedback, a
 few buffers taken back with `wl_buffer.release`, each frame's damage, frame
-callbacks pacing them). A compositor without `zwp_linux_dmabuf_v1`, a driver
-that can't export what the compositor takes, or a window whose title bar
-Stipple draws (no `xdg-decoration`: GNOME, Weston) gets the GPU's frames read
-back and presented through `wl_shm`. See
-[gpu.md](../gpu.md#wayland).
+callbacks pacing them). The renderer picks the GPU the compositor names as
+its main device. Where the compositor has `wp_linux_drm_syncobj_v1`, frames
+go with explicit sync: the GPU's fence as each commit's acquire point,
+buffers free once their release point signals, no wait for the GPU before
+the commit. Under a title bar Stipple draws (no `xdg-decoration`: GNOME,
+Weston) the frames go in a subsurface, the decorations in the window's own
+surface around it. A compositor without `zwp_linux_dmabuf_v1`, or a driver
+that can't export what the compositor takes, gets the GPU's frames read back
+and presented through `wl_shm`. See [gpu.md](../gpu.md#wayland).
 
 ## Debugging
 
@@ -90,6 +94,8 @@ back and presented through `wl_shm`. See
   (and the `dma-buf` formats and commits of GPU frames).
 - `STIPPLE_WAYLAND_DMABUF=0` reads GPU frames back instead of handing the
   compositor `dma-buf`s.
+- `STIPPLE_WAYLAND_SYNCOBJ=0` keeps `dma-buf` frames off explicit sync (the
+  renderer waits for the GPU before each commit).
 - `STIPPLE_X11_DEBUG=1` logs X11 events.
 - `STIPPLE_COMPOSE_DEBUG=1` reports the Compose table when it loads.
 

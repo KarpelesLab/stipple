@@ -57,6 +57,8 @@ pub(super) struct Globals {
     /// The `zxdg_decoration_manager_v1`, and the seat window moves cite.
     pub decoration_manager: Option<u32>,
     pub seat: Option<u32>,
+    /// The `wl_subcompositor` (GPU frames under Stipple's decorations).
+    pub subcompositor: Option<u32>,
 }
 
 /// The protocol objects of one window.
@@ -207,6 +209,7 @@ pub(super) fn destroy(conn: &mut WlConn, objects: Objects) {
         super::decor::destroy(conn);
         conn.decor = conn.decors.pop().unwrap_or_default();
     }
+    super::syncobj::forget(conn, objects.surface);
     let _ = conn.send(objects.toplevel, XDG_TOPLEVEL_DESTROY, &[]);
     let _ = conn.send(objects.xdg_surface, XDG_SURFACE_DESTROY, &[]);
     let _ = conn.send(objects.surface, WL_SURFACE_DESTROY, &[]);
