@@ -272,6 +272,34 @@ jobs:
           echo "title: $colors colors"
           [ "$colors" -gt 50 ]
 
+      # The reference app (examples/mediabrowser) against a sample folder it
+      # generates: off screen, it navigates, sorts, types a name, selects
+      # several, previews a picture and Markdown, plays a sound and seeks it,
+      # loads the grid's thumbnails on worker threads, switches to French and
+      # Arabic (mirrored) and saves a PNG of each step; then it opens the real
+      # window for a few seconds (screenshotted here) and checks it there.
+      - name: Media browser selftest (non-blocking)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+          STIPPLE_AUDIO: "null"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          mkdir -p visual_output/mediabrowser
+          cargo build --release --example mediabrowser
+          L=visual_output/mediabrowser/selftest.log
+          timeout 120 ./target/release/examples/mediabrowser --selftest --hold 6 \
+            --out visual_output/mediabrowser > $L 2>&1 &
+          MB=$!
+          for i in $(seq 1 240); do grep -q "window shows the list" $L && break; sleep 0.25; done
+          sleep 1.5
+          import -window root -crop 1060x720+0+0 +repage visual_output/mediabrowser/window-x11.png || true
+          wait "$MB"; status=$?
+          cat $L
+          [ "$status" = 0 ]
+          grep -q 'mediabrowser: selftest ok' $L
+          grep -q 'mediabrowser: window ok' $L
+
       - name: Stop the app and Xvfb
         if: always()
         run: |
@@ -2894,6 +2922,31 @@ jobs:
           timeout 30 ./target/release/examples/canvasdemo.exe --selftest | tee canvas.log
           grep -q 'canvasdemo: selftest ok' canvas.log
 
+      # The reference app (examples/mediabrowser): its selftest off screen
+      # (PNG of each step) and in a real Win32 window; then its window
+      # screenshotted, and its tree read through UI Automation from outside.
+      - name: Media browser selftest (non-blocking)
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p visual_output
+          cargo build --release --example mediabrowser
+          timeout 180 ./target/release/examples/mediabrowser.exe --selftest --hold 4 \
+            --out visual_output 2>&1 | tee visual_output/mediabrowser-selftest.log
+          grep -q 'mediabrowser: selftest ok' visual_output/mediabrowser-selftest.log
+          grep -q 'mediabrowser: window ok' visual_output/mediabrowser-selftest.log
+
+      - name: Media browser window and UI Automation tree (non-blocking)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          .github\scripts\capture-window.ps1 -Exe target\release\examples\mediabrowser.exe `
+            -Out visual_output\mediabrowser-window-windows.png -Title "Media Browser" `
+            -Arguments "--sample --select Pictures/sunset.png"
+          .github\scripts\uia-roles.ps1 -Exe target\release\examples\mediabrowser.exe `
+            -Title "Media Browser" -Arguments "--sample --select Music/chime.wav" -Out visual_output `
+            -Expect "Tree|Folders","TreeItem|Music","DataGrid|Files","HeaderItem|Name","Button|Play","Slider|Position"
+
       - name: Round-trip text through the system clipboard
         shell: bash
         run: |
@@ -3925,6 +3978,28 @@ jobs:
           perl -e 'alarm 30; exec @ARGV' ./target/release/examples/canvasdemo --selftest | tee canvas.log
           grep -q 'canvasdemo: selftest ok' canvas.log
 
+      # The reference app (examples/mediabrowser): its selftest off screen
+      # (PNG of each step) and in a real AppKit window; then its window
+      # screenshotted.
+      - name: Media browser selftest and window (non-blocking)
+        continue-on-error: true
+        env:
+          STIPPLE_COCOA_A11Y: "1"
+        run: |
+          mkdir -p visual_output
+          cargo build --release --example mediabrowser
+          perl -e 'alarm 180; exec @ARGV' ./target/release/examples/mediabrowser --selftest --hold 4 \
+            --out visual_output 2>&1 | tee visual_output/mediabrowser-selftest.log
+          ./target/release/examples/mediabrowser --sample --select Pictures/sunset.png \
+            > visual_output/mediabrowser-window.log 2>&1 &
+          PID=$!
+          sleep 6
+          win=$(sed -n 's/^Cocoa window number: //p' visual_output/mediabrowser-window.log | head -1)
+          [ -n "$win" ] && screencapture -x -o -l "$win" visual_output/mediabrowser-window-macos.png
+          kill "$PID" 2>/dev/null || true
+          grep -q 'mediabrowser: selftest ok' visual_output/mediabrowser-selftest.log
+          grep -q 'mediabrowser: window ok' visual_output/mediabrowser-selftest.log
+
       - name: Round-trip text through the system clipboard
         run: |
           cargo build --release --example clipboarddemo
@@ -4133,6 +4208,33 @@ jobs:
           grep 'axprobe: depth notification' $L || echo "no notifications heard"
           exit $fail
 
+      # The reference app's tree as VoiceOver reads it (axprobe, built and
+      # trusted by the steps above): the folder outline, the table, the
+      # player's Play button (pressed through AXPress) and its slider.
+      - name: Media browser through the AX API (non-blocking)
+        continue-on-error: true
+        run: |
+          cargo build --release --example mediabrowser
+          ./target/release/examples/mediabrowser --sample --select Music/chime.wav \
+            > visual_output/mediabrowser-ax.log 2>&1 &
+          PID=$!
+          sleep 6
+          status=0
+          perl -e 'alarm 90; exec @ARGV' ./axprobe "$PID" "Play" > visual_output/axprobe-mediabrowser.log 2>&1 || status=$?
+          kill "$PID" 2>/dev/null || true
+          L=visual_output/axprobe-mediabrowser.log
+          cat $L
+          if [ "$status" = 3 ]; then
+            echo "::warning::macOS AX API refused to this process; the media browser's tree wasn't read"
+            exit 0
+          fi
+          [ "$status" = 0 ]
+          grep -qE 'role=AXOutline .*"Folders"' $L
+          grep -qE 'role=AXTable .*"Files"' $L
+          grep -qE 'role=AXButton desc="Play"' $L
+          grep -qE 'role=AXSlider ' $L
+          grep -q 'axprobe: AXPress "Play" -> AXError 0$' $L
+
       # A real screen reader: VoiceOver, driven through its AppleScript
       # interface (enabled by hand: its defaults, the
       # .VoiceOverAppleScriptEnabled file and TCC rows for Apple Events),
@@ -4310,6 +4412,16 @@ jobs:
           mkdir -p visual_output/depth
           DISPLAY=:99 ATSPI_WALK_DEPTH=1 dbus-run-session -- \
             bash .github/scripts/atspi-linux.sh target/release/examples/touchdemo visual_output/depth xdotool key Tab
+
+      # The reference app (examples/mediabrowser) through AT-SPI: its folder
+      # tree, file table (headers, rows, cells), the player's Play button and
+      # position slider, and the menu bar, found from outside.
+      - name: The media browser's tree through AT-SPI (X11, non-blocking)
+        continue-on-error: true
+        run: |
+          cargo build --release --example mediabrowser
+          DISPLAY=:99 dbus-run-session -- \
+            bash .github/scripts/atspi-mediabrowser.sh target/release/examples/mediabrowser visual_output
 
       # The accessibility bus itself restarting (at-spi-bus-launcher killed,
       # then started again on demand): the app reconnects and registers

@@ -873,6 +873,21 @@ abstraction is frozen at the end of Phase 2.
 - **Exit criteria:** a non-trivial reference application (e.g., a file/media
   browser using oxideav decoders) ships on all three desktops, accessible and
   localized.
+  _In progress: `examples/mediabrowser` ([docs/reference-app.md](docs/reference-app.md))
+  is that app: folder tree, breadcrumb, sortable table and thumbnail grid
+  (decoded on worker threads, cached, stale jobs cancelled), previews of
+  pictures, sounds (play, pause, seek) and text/Markdown, context menus,
+  drag out and drop in, menus and shortcuts, remembered window state and
+  theme; keyboard-complete, with roles and names checked by App-level tests;
+  English, French, Japanese and Arabic (mirrored) with locale formats; also
+  on the web over an in-memory sample. Its selftest passes locally on
+  X11/Xvfb (off screen and in the window), with an AT-SPI walk of its tree;
+  CI runs it on X11, Windows and macOS, with AT-SPI, UI Automation and AX
+  walks, all non-blocking and not yet seen passing there. Toolkit additions
+  it needed: `Voice::position`/`seek`/`is_paused`, `TableSpec::on_key`, and a
+  focusable `slider` with `Role::Slider`. Not done: slider values as
+  platform range values, restoring the window's position, packaged
+  installers for the three desktops._
 
 ### Phase 4 — Mobile (Android, iOS)
 *Goal: the same toolkit on touch.*

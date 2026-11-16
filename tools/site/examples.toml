@@ -58,6 +58,12 @@ title = "Calculator"
 group = "Apps"
 size = [320, 460]
 
+[web.mediabrowser]
+description = "The reference app: a file and media browser over a sample folder — folder tree, breadcrumb, sortable table and thumbnail grid, previews of pictures, sounds (play, pause, seek), text and Markdown, context menus, keyboard navigation and type-to-select, in English, French, Japanese and Arabic (mirrored)."
+title = "Media browser"
+group = "Apps"
+size = [1000, 640]
+
 [web.webdemo]
 description = "The web backend's showcase: a counter with a context menu, a spinner, timers, a text editor with copy and paste, opening and saving files."
 title = "Web demo"

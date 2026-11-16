@@ -5,7 +5,9 @@ covers what Stipple is; the [roadmap](../ROADMAP.md) covers where it's going; AP
 docs are on [docs.rs](https://docs.rs/stipple).
 
 New here? Start with [Getting started](getting-started.md): a todo list app,
-step by step, from `cargo new` to a headless test.
+step by step, from `cargo new` to a headless test. For a whole app, see
+[the reference app](reference-app.md): a file and media browser, accessible
+and localized.
 
 ## Platforms
 
@@ -91,6 +93,7 @@ How to build, package and run on each platform, and what works there today.
 | Camera: live preview, every frame, torch, zoom, focus, lenses (`stipple::camera`) | ❌ | ❌ | AVFoundation ⁷² | AVFoundation ⁷² | Camera2 NDK ⁷² | `getUserMedia` ⁷² |
 | Runtime permissions (`platform::permission`) | — | — | camera, microphone ⁷² | ✅ ⁷² | ✅ ⁷² | ✅ ⁷² |
 | In-app purchases (`platform::store`) | mock ⁷³ | mock ⁷³ | mock ⁷³ | StoreKit ⁷³ | Play Billing ⁷³ | mock ⁷³ |
+| Reference app (`examples/mediabrowser`): browse, sort, preview, play, accessible, four languages | ✅ ⁸⁵ | ✅ ⁸⁵ | ✅ ⁸⁵ | — | — | sample folder ⁸⁵ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
 ² Linux has no native UI framework; controls stay self-drawn in the system's colors.
@@ -673,6 +676,15 @@ Android's are unit-tested or compile-checked, and a Wayland compositor that does
 (sway) leaves a hidden animating window drawing at ~30 fps on the frame
 clock's fallback timer. See [gpu.md](gpu.md#occlusion).
 
+⁸⁵ `mediabrowser --selftest` drives the app off screen against a generated
+folder (navigation, sorting, type-to-select, multi-select, image and Markdown
+previews, a sound played and seeked, the thumbnail grid loading on worker
+threads, French and Arabic) and then in a real window. Passes locally on
+X11/Xvfb, with an AT-SPI walk of its tree; CI runs it non-blocking on X11
+(plus the AT-SPI walk), Windows (plus a UI Automation walk) and macOS (plus
+`axprobe`), not yet seen there. The web build browses the sample in memory
+(checked in headless Chrome locally). See [reference-app.md](reference-app.md).
+
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
 on iOS, Android and the web, which hand out contents rather than paths, so do
@@ -681,6 +693,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 ## Topics
 
 - [Layout](layout.md): stacks, wrapping, grids, and min/max sizes
+- [The reference app](reference-app.md): a file and media browser built from the toolkit's pieces, what it shows, how it's tested, and what the toolkit gained for it
 - [Lists, tables and trees](lists-and-tables.md): virtualized rows, selection, sorting, resizing, swipe actions, pull to refresh
 - [Widgets](widgets.md): select, number input, split pane, toolbar, toasts, tab bar,
   page stack and app bar, bottom sheet,

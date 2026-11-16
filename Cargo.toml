@@ -115,6 +115,10 @@ name = "localedemo"
 test = true
 
 [[example]]
+name = "mediabrowser"
+test = true
+
+[[example]]
 name = "menudemo"
 test = true
 
@@ -306,6 +310,11 @@ crate-type = ["cdylib"]
 [[example]]
 name = "material3demo_web"
 path = "examples/material3demo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "mediabrowser_web"
+path = "examples/mediabrowser/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]
