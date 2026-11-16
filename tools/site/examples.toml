@@ -202,6 +202,12 @@ title = "Rich and selectable text"
 group = "Text"
 size = [640, 520]
 
+[web.textflow]
+description = "Rich text flowing around shapes: a floated flower whose transparent glow the text may run over, a ring in the middle you can drag (text on both sides, or through its hole), and a floated card with a button."
+title = "Text flow around shapes"
+group = "Text"
+size = [960, 720]
+
 # --- Animation and graphics ---
 
 [web.motiondemo]

@@ -133,6 +133,9 @@ pub(crate) struct TextStyle {
     /// The runs of rich text ([`Element::rich_text`]), when they differ
     /// from one another.
     pub spans: Option<std::sync::Arc<[crate::render::rich::Span]>>,
+    /// The objects the text flows around, sized and placed by its
+    /// [`flow_text`](Element::flow_text) container when it's laid out.
+    pub flow: Option<std::sync::Arc<crate::render::TextFlow>>,
     /// An outline around the glyphs ([`Element::text_outline`]).
     pub outline: Option<TextOutline>,
     /// A shadow under them ([`Element::text_shadow`]).
@@ -172,6 +175,13 @@ impl TextStyle {
         ui: LayoutDirection,
     ) -> Option<crate::render::TextLayout<'a>> {
         let font = self.resolve(base)?;
+        if let Some(flow) = &self.flow {
+            let styling = match &self.spans {
+                None => crate::render::text_styling(&font, size),
+                Some(spans) => crate::render::rich::styling(spans, &font, size),
+            };
+            return Some(styling.layout_flow(text, direction, max_width, ui, Some(flow)));
+        }
         Some(match &self.spans {
             None => font.layout_with(text, size, direction, max_width, ui),
             Some(spans) => crate::render::rich::styling(spans, &font, size)
@@ -206,6 +216,15 @@ impl TextStyle {
             (None, false) => None,
         }
     }
+}
+
+/// How the children of a text-flow container ([`Element::flow_text`]) sit
+/// in its text: one [`FlowItem`](crate::render::FlowItem) per child after
+/// the text, and the flow's options.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct FlowBox {
+    pub items: Vec<crate::render::FlowItem>,
+    pub options: crate::render::FlowOptions,
 }
 
 /// What an element arranges; all kinds share [`Element::decoration`].
@@ -254,9 +273,14 @@ pub(crate) enum ElementKind {
     /// on top (and hit first): each is placed within the content box per
     /// `align` (horizontal, vertical), `Stretch` filling it. It measures as
     /// big as its biggest child. Built with [`Element::layers`].
+    ///
+    /// With `flow` (see [`Element::flow_text`]) the first child is a text
+    /// that flows around the others, each placed as its
+    /// [`FlowItem`](crate::render::FlowItem) says.
     Layers {
         align: (Align, Align),
         children: Vec<Element>,
+        flow: Option<Box<FlowBox>>,
     },
     /// An embedded-content viewport: a leaf reserving a rectangle the compositor
     /// fills with externally-rendered pixels for `id`. Sizes to its
@@ -668,9 +692,83 @@ impl Element {
             kind: ElementKind::Layers {
                 align: (Align::Stretch, Align::Stretch),
                 children,
+                flow: None,
             },
             ..Self::stack(Axis::Vertical, Vec::new())
         }
+    }
+
+    /// A text that flows around other elements: `text` (a text element,
+    /// such as a [`paragraph`](crate::widgets::paragraph) or
+    /// [`Element::rich_text`]; it's made to wrap) fills the container's
+    /// width line by line, around the children added with
+    /// [`flow_child`](Self::flow_child): floated left or right at the line
+    /// holding their anchor, or placed anywhere, each keeping text out of
+    /// its [shape](crate::render::FlowShape) grown by its margin. The
+    /// container is as tall as the text and the children.
+    ///
+    /// A child's shape is its box by default, rounded as its corners are
+    /// rounded; an image can keep text out of its opaque pixels only
+    /// ([`FlowShape::alpha`](crate::render::FlowShape::alpha)). The text
+    /// stays one text element: it selects (with
+    /// [`selectable`](Self::selectable)), copies and reads aloud in its
+    /// logical order. See `docs/text-flow.md` in the repository.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// use stipple::render::{FlowItem, FlowShape};
+    /// let theme = Theme::light();
+    /// let cx = &Cx::<()>::new(&theme);
+    /// let article = Element::flow_text(paragraph(cx, "Text flows around the card …"))
+    ///     .flow_child(
+    ///         FlowItem::float_right().margin(12.0),
+    ///         button(cx, "Subscribe"),
+    ///     )
+    ///     .flow_child(
+    ///         FlowItem::at(Point::new(120.0, 60.0)).shape(FlowShape::Ellipse),
+    ///         Element::boxed(BoxStyle::filled(theme.palette.primary).radius(40.0))
+    ///             .width(80.0)
+    ///             .height(80.0),
+    ///     );
+    /// # let _ = article;
+    /// ```
+    pub fn flow_text(text: Element) -> Self {
+        Self {
+            kind: ElementKind::Layers {
+                align: (Align::Start, Align::Start),
+                children: vec![text.wrap()],
+                flow: Some(Box::default()),
+            },
+            ..Self::stack(Axis::Vertical, Vec::new())
+        }
+    }
+
+    /// Add `child` to this [`flow_text`](Self::flow_text) container, placed
+    /// in its text as `item` says. On another element it does nothing.
+    pub fn flow_child(mut self, item: crate::render::FlowItem, child: Element) -> Self {
+        if let ElementKind::Layers {
+            children,
+            flow: Some(flow),
+            ..
+        } = &mut self.kind
+        {
+            flow.items.push(item);
+            children.push(child);
+        }
+        self
+    }
+
+    /// Flow this [`flow_text`](Self::flow_text) container's text with
+    /// `options` (the narrowest room it takes, the space between
+    /// paragraphs).
+    pub fn flow_options(mut self, options: crate::render::FlowOptions) -> Self {
+        if let ElementKind::Layers {
+            flow: Some(flow), ..
+        } = &mut self.kind
+        {
+            flow.options = options;
+        }
+        self
     }
 
     /// Route pointer taps on this element to `handler`, which runs against the

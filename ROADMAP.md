@@ -798,6 +798,21 @@ abstraction is frozen at the end of Phase 2.
   (`TextShadow`, blur as three stroked layers) on any text and in
   `TextPaint`; cached as glyph rasters on the GPU path. The game
   `DialogueBox` typewriter still reveals plain text.*
+- ✅ **Text flowing around shapes**: an engine laying plain and rich text
+  (runs, inline images, bidi) into a region around exclusions, line band by
+  line band, a band split into pieces around a shape in the middle and
+  re-measured at its tallest run's height. Shapes: rectangles, rounded
+  rectangles, ellipses, polygons and an image's alpha above a threshold
+  (per-row intervals cached per image, size, threshold and margin), each
+  grown by a round margin; floats left and right at their anchor's line, or
+  placed anywhere; wrap on both sides, the largest, left, right or neither,
+  and "through" into holes. `Element::flow_text` + `flow_child` flows text
+  around any elements; `RichText::float(FloatImage)` carries a float in the
+  text; `Font`/`RichText::layout_flow` for custom drawing. Hit testing,
+  selection and screen readers work across the pieces; filled bands are
+  memoized, so a moved shape refills only the lines it touches. See
+  [`docs/text-flow.md`](docs/text-flow.md). *Breaks at spaces only, pieces
+  start-aligned (no justification), floats don't avoid placed objects.*
 - ✅ **Selectable text** (#46): `.selectable()` on labels and paragraphs:
   drag, double/triple-click, Shift+arrows, Ctrl/Cmd+A/C, a Copy / Select All
   context menu, and a long press on touch. *One selection per window, inside

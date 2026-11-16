@@ -106,7 +106,7 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         } => match style.resolve(font).as_ref() {
             // Rich text measures as laid out, its lines as tall as their
             // tallest run or image.
-            Some(_) if style.spans.is_some() => {
+            Some(_) if style.spans.is_some() || style.flow.is_some() => {
                 let max = (el.wrap && inner.width.is_finite()).then_some(inner.width);
                 style
                     .layout(
@@ -161,6 +161,16 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
                 }
             }
             axis.size(main, cross)
+        }
+        ElementKind::Layers {
+            children,
+            flow: Some(flow),
+            ..
+        } if children
+            .first()
+            .is_some_and(|c| matches!(c.kind, ElementKind::Text { .. })) =>
+        {
+            flow_text(children, flow, inner, font).map_or(Size::ZERO, |t| measure(&t, inner, font))
         }
         ElementKind::Layers { children, .. } => children
             .iter()
@@ -665,7 +675,25 @@ fn layout_element(
         return node;
     }
 
-    if let ElementKind::Layers { align, children } = &el.kind {
+    if let ElementKind::Layers {
+        children,
+        flow: Some(flow),
+        ..
+    } = &el.kind
+        && let Some(placed) = flow_layout(children, flow, bounds.inset(el.layout.padding), font)
+    {
+        node.children.reserve(children.len());
+        for (child, rect) in placed {
+            node.children
+                .push(layout_with_direction(&child, rect, font, dir));
+        }
+        return node;
+    }
+
+    if let ElementKind::Layers {
+        align, children, ..
+    } = &el.kind
+    {
         let inner = bounds.inset(el.layout.padding);
         node.children.reserve(children.len());
         for child in children {
@@ -829,6 +857,80 @@ fn layout_element(
         cross_cursor += line_cross + *gap;
     }
     node
+}
+
+/// The text of a [`flow_text`](Element::flow_text) container (its first
+/// child), carrying the objects it flows around: each other child measured
+/// in `inner`, placed as its item says, shaped as its item says (a box
+/// rounded as the child's corners by default). `None` when the first child
+/// isn't text.
+fn flow_text(
+    children: &[Element],
+    flow: &crate::core::element::FlowBox,
+    inner: Size,
+    font: Option<&Font>,
+) -> Option<Element> {
+    let mut text = children.first()?.clone();
+    let ElementKind::Text { style, .. } = &mut text.kind else {
+        return None;
+    };
+    let mut spec = crate::render::TextFlow::new(inner.width).options(flow.options);
+    for (child, item) in children[1..].iter().zip(&flow.items) {
+        let size = measure(child, inner, font);
+        let mut item = item.clone();
+        if item.shape == crate::render::FlowShape::Rect && child.decoration.radius > 0.0 {
+            item.shape = crate::render::FlowShape::RoundRect(child.decoration.radius);
+        }
+        spec = spec.item(item, size);
+    }
+    style.flow = Some(std::sync::Arc::new(spec));
+    text.wrap = true;
+    Some(text)
+}
+
+/// A [`flow_text`](Element::flow_text) container's children and where each
+/// goes in `inner`: the text across it, the others where the flow placed
+/// them (children past the items at the top-left, at their size).
+fn flow_layout(
+    children: &[Element],
+    flow: &crate::core::element::FlowBox,
+    inner: Rect,
+    font: Option<&Font>,
+) -> Option<Vec<(Element, Rect)>> {
+    let text = flow_text(children, flow, inner.size, font)?;
+    let height = measure(&text, inner.size, font).height.max(inner.height());
+    let text_rect = Rect::new(inner.origin, Size::new(inner.width(), height));
+    let ElementKind::Text {
+        text: string,
+        size,
+        direction,
+        style,
+        ..
+    } = &text.kind
+    else {
+        return None;
+    };
+    let box_ = text_rect.inset(text.layout.padding);
+    let layout = style.layout(
+        font,
+        string,
+        *size,
+        *direction,
+        Some(box_.width()),
+        LayoutDirection::Ltr,
+    );
+    let mut out = Vec::with_capacity(children.len());
+    for (k, child) in children.iter().enumerate().skip(1) {
+        let rect = layout
+            .as_ref()
+            .and_then(|l| l.flow_item_rect(k - 1))
+            .filter(|_| k - 1 < flow.items.len())
+            .map(|r| r.translate(Vec2::new(box_.min_x(), box_.min_y())))
+            .unwrap_or_else(|| Rect::new(inner.origin, measure(child, inner.size, font)));
+        out.push((child.clone(), rect));
+    }
+    out.insert(0, (text, text_rect));
+    Some(out)
 }
 
 /// Overlay focus affordances for the focused element: a `ring` around its

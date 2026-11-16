@@ -222,6 +222,9 @@ paragraph(cx, RichText::new().push("You ").italic("really").push(" think so?"));
   `Element::rich_text(text, size, color)` is the bare element.
 - To draw it yourself: `Scene::fill_rich_text(&text, origin, &paint)`, or
   `text.layout(&font, size, direction, max_width)` and `Scene::fill_layout`.
+- A `FloatImage` (`RichText::float`) floats left or right, or sits anywhere,
+  and the text flows around it, keeping out of its box or of its opaque
+  pixels only: see [text-flow.md](text-flow.md).
 
 ## Outline and shadow
 

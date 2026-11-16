@@ -56,6 +56,7 @@ How to build, package and run on each platform, and what works there today.
 | Mirrored right-to-left layouts | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ | ✅ ²⁵ |
 | System fonts by family name | ✅ ³⁴ | ✅ ³⁴ | ✅ ³⁴ | ✅ ¹⁰ | ✅ ¹⁰ | — ³⁴ |
 | Bold, italic, per-element fonts, fallbacks, text decorations | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ | ✅ ³⁵ |
+| Text flowing around floats, shapes and images' opaque pixels | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ | ✅ ⁷⁵ |
 | Custom-paint canvases, repainting only what changed | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ⁴¹ | ✅ ¹⁰ | ✅ ¹⁰ | ✅ ¹⁰ |
 | Memoized subtrees, animation frames without a rebuild, painting only what shows | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ | ✅ ⁶⁹ |
 | Input methods (CJK IME) | ✅ ¹⁶ | ✅ ⁴⁸ | ✅ ¹⁶ | ✅ ⁵⁰ | ✅ ⁵⁵ | ✅ ²³ |
@@ -545,6 +546,11 @@ App-tested (dragging, paging, hover, the virtualized table's and tree's
 extents); on X11, CI drags `tabledemo`'s thumb with `xdotool`. The other
 backends deliver the same pointer events, unchecked there. Not in the
 accessibility tree. See [widgets.md](widgets.md#scroll-bars).
+⁷⁵ Laid out by the shared CPU text path, so the same everywhere; unit- and
+App-tested (no character box over a shape's opaque pixels, pieces of a line
+on both sides of a shape, floats, wrap sides, bidi, selection across the
+pieces). CI runs `textflow --check` and drags its ring with `xdotool` on
+X11; elsewhere only built. See [text-flow.md](text-flow.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
@@ -572,6 +578,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Transforms and opacity](transforms.md): scaling, rotating and moving any element, group opacity, and hit-testing through them
 - [Text editing](text-editing.md): keyboard shortcuts, undo, double- and triple-click, selectable labels and paragraphs
 - [Fonts and text decorations](fonts.md): system fonts by name, bold and italic, fallbacks, metrics, underlines and strikethrough, rich text with inline icons, outlines and shadows
+- [Text flowing around shapes](text-flow.md): floats, shapes in the middle of a column, images whose transparent pixels text runs over, margins, wrap sides and "through" wrapping, for plain and rich text
 - [Accessibility](accessibility.md): what each platform's screen readers get, and how CI checks it from outside the app
 - [Pointer events](pointer-events.md): every button, click counts, the wheel in lines or pixels, capture and the pointer leaving, for custom elements; touch gestures (scrolling, long press, pinch)
 - [Right-to-left and bidirectional text](bidi.md): Hebrew, Arabic, mixed lines, editing them, and mirrored right-to-left layouts

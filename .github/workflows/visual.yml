@@ -542,6 +542,9 @@ jobs:
   # system's CJK fallback: Noto Sans CJK, CFF outlines in a collection
   # (fonts-noto-cjk); `--cjk` requires every character to have a glyph.
   # The richtext example checks its styled runs and outlined title off screen.
+  # The textflow example checks off screen that text runs on both sides of
+  # its ring and never over its flower's petals; on screen, dragging the
+  # ring with xdotool must move it and reflow the text around it.
   visual-fonts:
     name: Visual test (Fonts and decorations / X11)
     runs-on: ubuntu-latest
@@ -553,10 +556,10 @@ jobs:
       - name: Install Xvfb, ImageMagick, fonts
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb imagemagick fonts-dejavu-core fonts-liberation fonts-noto-cjk
+          sudo apt-get install -y xvfb imagemagick xdotool fonts-dejavu-core fonts-liberation fonts-noto-cjk
 
       - name: Build the font demo
-        run: cargo build --release --example fontdemo --example richtext
+        run: cargo build --release --example fontdemo --example richtext --example textflow
 
       - name: List families and check the rendering off screen
         run: |
@@ -572,6 +575,9 @@ jobs:
           # Rich text's colored runs and the outlined, shadowed title.
           ./target/release/examples/richtext --check | tee visual_output/richtext-check.log
           grep -q 'richtext: ok' visual_output/richtext-check.log
+          # Text flowing around a float, a shape in the middle and a card.
+          ./target/release/examples/textflow --check | tee visual_output/textflow-check.log
+          grep -q 'textflow: ok' visual_output/textflow-check.log
 
       - name: Start Xvfb
         run: |
@@ -595,10 +601,41 @@ jobs:
           [ "$(red 7 | cut -d. -f1)" -gt 20 ]
           [ "$(red 5 | cut -d. -f1)" -eq 0 ]
 
+      - name: Screenshot the text flow and drag its ring
+        env:
+          DISPLAY: ":99"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          sleep 1
+          ./target/release/examples/textflow > visual_output/textflow.log 2>&1 &
+          echo "FLOW_PID=$!" >> "$GITHUB_ENV"
+          sleep 4
+          import -window root visual_output/root-flow.png
+          convert visual_output/root-flow.png -crop 960x720+0+0 +repage visual_output/stipple-x11-textflow.png
+          # The ring (200 px, at about (316, 250)) dragged 120 px right and 60 up.
+          xdotool mousemove 416 350 mousedown 1
+          sleep 0.3
+          for i in $(seq 1 10); do xdotool mousemove $((416 + i * 12)) $((350 - i * 6)); sleep 0.05; done
+          xdotool mouseup 1
+          sleep 1
+          import -window root visual_output/root-flow2.png
+          convert visual_output/root-flow2.png -crop 960x720+0+0 +repage visual_output/textflow-dragged.png
+          changed=$(compare -metric AE visual_output/stipple-x11-textflow.png visual_output/textflow-dragged.png null: 2>&1 || true)
+          echo "pixels changed by the drag: $changed"
+          [ "${changed%%[ .]*}" -gt 5000 ]
+          # The right edge of the ring's green moved right by about the drag.
+          right() { convert "$1" -fx '(abs(r-0.122)<0.04 && abs(g-0.541)<0.04 && abs(b-0.439)<0.04) ? 1 : 0' \
+                      -format '%@' info: | sed 's/^\([0-9]*\)x[0-9]*+\([0-9]*\)+.*/\1 \2/' | awk '{print $1 + $2}'; }
+          before=$(right visual_output/stipple-x11-textflow.png)
+          after=$(right visual_output/textflow-dragged.png)
+          echo "ring's right edge: $before -> $after"
+          [ $((after - before)) -gt 80 ]
+
       - name: Stop the app and Xvfb
         if: always()
         run: |
           [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
+          [ -n "${FLOW_PID:-}" ] && kill "$FLOW_PID" 2>/dev/null || true
           [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
 
       - name: Upload screenshot + log
@@ -5396,7 +5433,8 @@ jobs:
                       stipple-material3 stipple-x11-clicks stipple-x11-textinput \
                       stipple-windows-native stipple-macos-native stipple-ios-native \
                       stipple-x11-native stipple-x11-bidi stipple-x11-bidi-mirror \
-                      stipple-x11-fonts stipple-x11-sessions stipple-x11-sessions-alert-dark; do
+                      stipple-x11-fonts stipple-x11-textflow stipple-x11-sessions \
+                      stipple-x11-sessions-alert-dark; do
             found=$(find artifacts -name "$name.png" | head -n 1)
             if [ -n "$found" ]; then cp "$found" "docs/screenshots/$name.png"; else echo "missing: $name"; fi
           done

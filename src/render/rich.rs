@@ -9,8 +9,8 @@ use crate::geometry::{Point, Size};
 use crate::layout::LayoutDirection;
 use crate::render::text::{SpanFace, Styling};
 use crate::render::{
-    Color, Decoration, Font, FontWeight, ImageSource, Pixmap, Scene, Svg, TextDirection,
-    TextLayout, TextPaint, UnderlineStyle,
+    Color, Decoration, FloatImage, Font, FontWeight, ImageSource, Pixmap, Scene, Svg,
+    TextDirection, TextFlow, TextLayout, TextPaint, UnderlineStyle,
 };
 
 /// The character an inline image takes the place of in a [`RichText`]'s
@@ -187,6 +187,8 @@ pub(crate) struct Span {
     pub range: Range<usize>,
     pub style: SpanStyle,
     pub icon: Option<InlineIcon>,
+    /// A floating image anchored at the span's one U+FFFC.
+    pub float: Option<Arc<FloatImage>>,
 }
 
 /// Text made of runs, each with its own [`SpanStyle`] (color, weight,
@@ -230,13 +232,14 @@ impl RichText {
         self.text.push_str(text);
         match self.spans.last_mut() {
             // Joined to the run before when it looks the same.
-            Some(last) if last.icon.is_none() && last.style == style => {
+            Some(last) if last.icon.is_none() && last.float.is_none() && last.style == style => {
                 last.range.end = self.text.len();
             }
             _ => self.spans.push(Span {
                 range: start..self.text.len(),
                 style,
                 icon: None,
+                float: None,
             }),
         }
         self
@@ -277,8 +280,78 @@ impl RichText {
             range: start..self.text.len(),
             style,
             icon: Some(icon.into()),
+            float: None,
         });
         self
+    }
+
+    /// This text and a floating image after it: text flows around it, on
+    /// its other side (or both sides of one placed in the middle with
+    /// [`FloatImage::at`]), keeping out of its shape. It is anchored here,
+    /// as one U+FFFC taking no room in the line, and floats at the top of
+    /// that line (see [`crate::render::TextFlow`] for how text flows).
+    ///
+    /// Byte indices, copying and screen readers treat it as
+    /// [`icon`](Self::icon) does an inline image: its alternative text
+    /// stands for it. Without a width to wrap to (a text laid out on one
+    /// line), the text sits beside it.
+    pub fn float(mut self, image: FloatImage) -> Self {
+        let start = self.text.len();
+        self.text.push(OBJECT);
+        self.spans.push(Span {
+            range: start..self.text.len(),
+            style: SpanStyle::new(),
+            icon: None,
+            float: Some(Arc::new(image)),
+        });
+        self
+    }
+
+    /// Insert `image` floating at byte `at` of the text (a char boundary,
+    /// clamped to its end): for an editor adding a float to text it has
+    /// already built. See [`float`](Self::float).
+    pub fn insert_float(mut self, at: usize, image: FloatImage) -> Self {
+        let mut at = at.min(self.text.len());
+        while !self.text.is_char_boundary(at) {
+            at -= 1;
+        }
+        let len = OBJECT.len_utf8();
+        self.text.insert(at, OBJECT);
+        let mut spans = Vec::with_capacity(self.spans.len() + 2);
+        for mut s in std::mem::take(&mut self.spans) {
+            if s.range.end <= at {
+                spans.push(s);
+            } else if s.range.start >= at {
+                s.range = s.range.start + len..s.range.end + len;
+                spans.push(s);
+            } else {
+                // Split the run the image lands in.
+                let mut tail = s.clone();
+                s.range.end = at;
+                tail.range = at + len..tail.range.end + len;
+                spans.push(s);
+                spans.push(tail);
+            }
+        }
+        let k = spans.partition_point(|s| s.range.start < at);
+        spans.insert(
+            k,
+            Span {
+                range: at..at + len,
+                style: SpanStyle::new(),
+                icon: None,
+                float: Some(Arc::new(image)),
+            },
+        );
+        self.spans = spans;
+        self
+    }
+
+    /// The floating images, with the byte each is anchored at.
+    pub fn floats(&self) -> impl Iterator<Item = (usize, &FloatImage)> {
+        self.spans
+            .iter()
+            .filter_map(|s| Some((s.range.start, s.float.as_deref()?)))
     }
 
     /// The text laid out, each image standing as one U+FFFC (OBJECT
@@ -317,13 +390,25 @@ impl RichText {
         )
     }
 
+    /// [`layout`](Self::layout) into the region `flow` describes, around
+    /// its objects (and the text's own floating images); see [`TextFlow`].
+    pub fn layout_flow(&self, font: &Font, size: f64, flow: &TextFlow) -> TextLayout<'_> {
+        styling(&self.spans, font, size).layout_flow(
+            &self.text,
+            flow.direction,
+            Some(flow.width),
+            LayoutDirection::Ltr,
+            Some(flow),
+        )
+    }
+
     /// The text and, unless every run looks like the text around it, its
     /// runs.
     pub(crate) fn into_parts(self) -> (String, Option<Arc<[Span]>>) {
         let plain = self
             .spans
             .iter()
-            .all(|s| s.icon.is_none() && s.style == SpanStyle::default());
+            .all(|s| s.icon.is_none() && s.float.is_none() && s.style == SpanStyle::default());
         let spans = (!plain).then(|| Arc::from(self.spans));
         (self.text, spans)
     }
@@ -345,12 +430,20 @@ pub(crate) fn styling(spans: &[Span], font: &Font, size: f64) -> Styling {
                 style.italic = i;
             }
             let font = st.font.as_ref().unwrap_or(font).styled(style);
+            // A float's anchor takes no room in the line; the flow engine
+            // places and draws the image.
+            let icon = match (&s.icon, &s.float) {
+                (Some(i), _) => Some((i.source.clone(), i.size_at(size))),
+                (None, Some(f)) => Some((f.source.clone(), Size::ZERO)),
+                (None, None) => None,
+            };
             SpanFace {
-                icon: s.icon.as_ref().map(|i| (i.source.clone(), i.size_at(size))),
+                icon,
                 font,
                 size,
                 color: st.color,
                 decoration: st.decoration,
+                float: s.float.clone(),
             }
         })
         .collect();
@@ -368,12 +461,14 @@ pub(crate) fn plain_of(text: &str, spans: &[Span], range: Range<usize>) -> Strin
     for (i, c) in text[range.clone()].char_indices() {
         let at = range.start + i;
         if c == OBJECT
-            && let Some(icon) = spans
-                .iter()
-                .find(|s| s.range.start == at)
-                .and_then(|s| s.icon.as_ref())
+            && let Some(alt) = spans.iter().find(|s| s.range.start == at).and_then(|s| {
+                s.icon
+                    .as_ref()
+                    .map(|i| i.alt.as_str())
+                    .or(s.float.as_ref().map(|f| f.alt.as_str()))
+            })
         {
-            out.push_str(&icon.alt);
+            out.push_str(alt);
         } else {
             out.push(c);
         }

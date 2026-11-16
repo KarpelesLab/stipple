@@ -52,6 +52,8 @@ pub mod camera;
 #[cfg(test)]
 mod canvas_tests;
 pub mod core;
+#[cfg(test)]
+mod flow_tests;
 pub mod game;
 pub mod geometry;
 #[cfg(feature = "gpu")]
@@ -4620,6 +4622,7 @@ pub mod prelude {
         Canvas, Color, Font, GlyphRun, ImageFit, Path, Pixmap, StrokeStyle, Svg, TextDirection,
     };
     pub use crate::render::{Decoration, FontStyle, FontWeight, TextPaint, UnderlineStyle};
+    pub use crate::render::{FloatImage, FlowItem, FlowOptions, FlowShape, TextFlow, WrapSide};
     pub use crate::render::{InlineIcon, RichText, SpanStyle, TextOutline, TextShadow};
     pub use crate::style::Theme;
     pub use crate::style::{FocusLook, MotionTokens, Palette, ScrollBarLook, Spacing, Typography};

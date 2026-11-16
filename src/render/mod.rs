@@ -29,6 +29,7 @@ mod canvas;
 mod color;
 mod convert;
 mod decoration;
+pub(crate) mod flow;
 pub(crate) mod font;
 mod glyphs;
 mod image;
@@ -47,6 +48,7 @@ pub use bidi::TextDirection;
 pub use canvas::{Canvas, CanvasPaint};
 pub use color::Color;
 pub use decoration::{Decoration, UnderlineStyle};
+pub use flow::{FloatImage, FlowItem, FlowOptions, FlowPlacement, FlowShape, TextFlow, WrapSide};
 pub use font::{FontFamilyInfo, FontId, FontMetrics, FontStyle, FontWeight};
 pub use glyphs::GlyphRun;
 pub use image::{ImageError, ImageFit, ImageSource, Svg, image_formats};
@@ -58,6 +60,10 @@ pub use scene::{DrawCmd, Scene};
 pub use software::{RasterStats, SoftwareRenderer};
 pub use sprite::{Filter, ImageOptions};
 pub use surface::{Pixmap, Surface};
+/// The looks of plain text in `font` at `size`, for the flow engine.
+pub(crate) fn text_styling(font: &Font, size: f64) -> text::Styling {
+    text::Styling::plain(font, size)
+}
 pub use text::{Font, FontError, TextLayout, TextOutline, TextPaint, TextShadow};
 
 /// Low-level conversions to `oxideav-core` coordinate types. Exposed for

@@ -349,6 +349,25 @@ impl Font {
         self.layout_with(text, size_px, TextDirection::Auto, max_width, ui)
     }
 
+    /// [`layout`](Self::layout) into the region `flow` describes, around its
+    /// objects: floats, shapes placed anywhere, images whose transparent
+    /// pixels text may run over. See
+    /// [`TextFlow`](crate::render::TextFlow).
+    pub fn layout_flow<'a>(
+        &self,
+        text: &'a str,
+        size_px: f64,
+        flow: &crate::render::TextFlow,
+    ) -> TextLayout<'a> {
+        Styling::plain(self, size_px).layout_flow(
+            text,
+            flow.direction,
+            Some(flow.width),
+            LayoutDirection::Ltr,
+            Some(flow),
+        )
+    }
+
     /// [`layout`](Self::layout) in direction `direction` inside a UI laid out
     /// in `ui` direction: [`layout_in`](Self::layout_in) when `direction` is
     /// `Auto`, `layout` otherwise.
@@ -374,6 +393,9 @@ pub(crate) struct SpanFace {
     pub color: Option<Color>,
     pub decoration: Option<crate::render::Decoration>,
     pub icon: Option<(ImageSource, Size)>,
+    /// A floating image anchored at this span's one character (which then
+    /// takes no room in the line): text flows around it.
+    pub float: Option<Arc<crate::render::flow::FloatImage>>,
 }
 
 impl SpanFace {
@@ -385,17 +407,18 @@ impl SpanFace {
             color: None,
             decoration: None,
             icon: None,
+            float: None,
         }
     }
 
     /// The height of the middle of the capitals above the baseline: where an
     /// inline image is centered.
-    fn cap_middle(&self) -> f64 {
+    pub(super) fn cap_middle(&self) -> f64 {
         self.font.cap_height_em() * self.size / 2.0
     }
 
     /// How far it reaches above the baseline.
-    fn ascent(&self) -> f64 {
+    pub(super) fn ascent(&self) -> f64 {
         match &self.icon {
             Some((_, s)) => self.cap_middle() + s.height / 2.0,
             None => self.font.baseline(self.size),
@@ -403,7 +426,7 @@ impl SpanFace {
     }
 
     /// How far it reaches below the baseline.
-    fn descent(&self) -> f64 {
+    pub(super) fn descent(&self) -> f64 {
         match &self.icon {
             Some((_, s)) => (s.height / 2.0 - self.cap_middle()).max(0.0),
             None => self.font.line_height(self.size) - self.font.baseline(self.size),
@@ -423,9 +446,9 @@ impl SpanFace {
 /// is used. The first span starts at 0.
 #[derive(Clone, Debug)]
 pub(crate) struct Styling {
-    faces: Vec<SpanFace>,
+    pub(super) faces: Vec<SpanFace>,
     /// `(start byte, face index)`, by start.
-    spans: Vec<(usize, usize)>,
+    pub(super) spans: Vec<(usize, usize)>,
 }
 
 impl Styling {
@@ -453,22 +476,22 @@ impl Styling {
     }
 
     /// The span holding byte `b`.
-    fn span_at(&self, b: usize) -> usize {
+    pub(super) fn span_at(&self, b: usize) -> usize {
         self.spans.partition_point(|s| s.0 <= b).saturating_sub(1)
     }
 
     /// Where span `k` ends.
-    fn span_end(&self, k: usize) -> usize {
+    pub(super) fn span_end(&self, k: usize) -> usize {
         self.spans.get(k + 1).map_or(usize::MAX, |s| s.0)
     }
 
     /// The look of byte `b`.
-    fn face_at(&self, b: usize) -> &SpanFace {
+    pub(super) fn face_at(&self, b: usize) -> &SpanFace {
         &self.faces[self.spans[self.span_at(b)].1]
     }
 
     /// The advance of `text[r]` (no newlines), each span in its look.
-    fn width(&self, text: &str, r: Range<usize>) -> f64 {
+    pub(super) fn width(&self, text: &str, r: Range<usize>) -> f64 {
         let mut w = 0.0;
         let mut s = r.start;
         while s < r.end {
@@ -532,6 +555,10 @@ impl Styling {
         max_width: Option<f64>,
         ui: LayoutDirection,
     ) -> TextLayout<'_> {
+        // Floating images take text around them: the flow engine lays it out.
+        if self.faces.iter().any(|f| f.float.is_some()) {
+            return self.layout_flow(text, direction, max_width, ui, None);
+        }
         let start_right = ui.is_rtl() && direction == TextDirection::Auto;
         let mut lines = Vec::new();
         let mut start = 0usize;
@@ -578,6 +605,8 @@ impl Styling {
                     top,
                     ascent,
                     height: ascent + descent,
+                    left: 0.0,
+                    slot: None,
                 });
                 top += ascent + descent;
             }
@@ -591,6 +620,7 @@ impl Styling {
             width,
             align_width: width,
             start_right,
+            flow: None,
         }
     }
 
@@ -600,7 +630,7 @@ impl Styling {
     /// visual order (rule L2). `chars` is the line's char range within
     /// `para`, which starts at byte `para_start` of the text; `levels` are
     /// the line's levels.
-    fn shape_line(
+    pub(super) fn shape_line(
         &self,
         para: &str,
         para_start: usize,
@@ -768,52 +798,62 @@ fn glyph_cache_key(face: &Face, glyph_id: u16, size_px: f64, synth: Synthesis) -
 /// and from visual x positions.
 #[derive(Debug)]
 pub struct TextLayout<'a> {
-    text: &'a str,
-    styling: Styling,
-    lines: Vec<LayoutLine>,
-    width: f64,
-    align_width: f64,
+    pub(super) text: &'a str,
+    pub(super) styling: Styling,
+    pub(super) lines: Vec<LayoutLine>,
+    pub(super) width: f64,
+    pub(super) align_width: f64,
     /// Line every line up against the right edge (text in a right-to-left UI).
-    start_right: bool,
+    pub(super) start_right: bool,
+    /// Where the objects the text flowed around went, when it was laid out
+    /// by the flow engine ([`crate::render::flow`]).
+    pub(super) flow: Option<Box<crate::render::flow::FlowGeometry>>,
 }
 
-/// One display line of a [`TextLayout`].
-#[derive(Debug)]
-struct LayoutLine {
+/// One display line of a [`TextLayout`]: in flowed text, one segment of a
+/// line band, beside or between the shapes it flows around.
+#[derive(Clone, Debug)]
+pub(super) struct LayoutLine {
     /// Byte range in the layout's text, without the `\n` or the space the
     /// line wrapped at.
-    range: Range<usize>,
+    pub(super) range: Range<usize>,
     /// Whether the line's paragraph runs right to left.
-    rtl: bool,
-    width: f64,
+    pub(super) rtl: bool,
+    pub(super) width: f64,
     /// The line's runs, left to right.
-    runs: Vec<GlyphRun>,
+    pub(super) runs: Vec<GlyphRun>,
     /// The line's top, below the previous lines.
-    top: f64,
+    pub(super) top: f64,
     /// From the top to the baseline: the most any of its runs reaches above
     /// it.
-    ascent: f64,
-    height: f64,
+    pub(super) ascent: f64,
+    pub(super) height: f64,
+    /// The left edge of the room the line was placed in (flowed text).
+    pub(super) left: f64,
+    /// The width of that room, when the flow engine placed the line in one:
+    /// the line sits at its start (its right edge, right to left) instead of
+    /// against the layout's alignment width.
+    pub(super) slot: Option<f64>,
 }
 
 /// A run of one embedding level and one look, shaped.
-#[derive(Debug)]
-struct GlyphRun {
+#[derive(Clone, Debug)]
+pub(super) struct GlyphRun {
     /// Byte range in the layout's text (logical order).
-    range: Range<usize>,
-    rtl: bool,
+    pub(super) range: Range<usize>,
+    pub(super) rtl: bool,
     /// Resolved embedding level.
-    level: u8,
+    pub(super) level: u8,
     /// Left edge within the line.
-    x: f64,
-    width: f64,
+    pub(super) x: f64,
+    pub(super) width: f64,
     /// Shaped glyphs in visual (left-to-right) order (none for an image).
-    glyphs: Vec<PositionedGlyph>,
+    pub(super) glyphs: Vec<PositionedGlyph>,
     /// The text that was shaped: the run's text, with brackets mirrored in a
     /// right-to-left run.
-    shaped: String,
+    pub(super) shaped: String,
     /// The index of its [`SpanFace`] in the layout's styling.
-    face: usize,
+    pub(super) face: usize,
 }
 
 /// One character's box on a line.
@@ -839,6 +879,9 @@ impl TextLayout<'_> {
     /// The size of the laid-out text: the widest line by the lines' heights
     /// (each line as tall as the tallest text or image in it).
     pub fn size(&self) -> Size {
+        if let Some(flow) = &self.flow {
+            return flow.size;
+        }
         let height = self.lines.last().map_or(0.0, |l| l.top + l.height);
         Size::new(self.width, height)
     }
@@ -860,7 +903,14 @@ impl TextLayout<'_> {
 
     /// The left edge of a line within the box: right-to-left lines sit against
     /// the right edge of the alignment width.
-    fn line_x(&self, line: &LayoutLine) -> f64 {
+    pub(super) fn line_x(&self, line: &LayoutLine) -> f64 {
+        if let Some(slot) = line.slot {
+            return if line.rtl || self.start_right {
+                line.left + slot - line.width
+            } else {
+                line.left
+            };
+        }
         if line.rtl || self.start_right {
             self.align_width - line.width
         } else {
@@ -957,6 +1007,34 @@ impl TextLayout<'_> {
         out
     }
 
+    /// Of the lines sharing line `li`'s band (flowed text puts several
+    /// segments side by side, around a shape), the one under `x` or nearest
+    /// it.
+    fn segment_near(&self, li: usize, x: f64) -> usize {
+        let top = self.lines[li].top;
+        let same = |l: &LayoutLine| l.slot.is_some() && (l.top - top).abs() < 1e-6;
+        if !same(&self.lines[li]) {
+            return li;
+        }
+        let mut first = li;
+        while first > 0 && same(&self.lines[first - 1]) {
+            first -= 1;
+        }
+        let dist = |l: &LayoutLine| {
+            let (a, b) = (l.left, l.left + l.slot.unwrap_or(l.width));
+            if x < a {
+                a - x
+            } else if x > b {
+                x - b
+            } else {
+                0.0
+            }
+        };
+        (first..=li)
+            .min_by(|&a, &b| dist(&self.lines[a]).total_cmp(&dist(&self.lines[b])))
+            .unwrap_or(li)
+    }
+
     /// The display line holding caret position `index`.
     fn line_of(&self, index: usize) -> usize {
         self.lines
@@ -1007,6 +1085,7 @@ impl TextLayout<'_> {
             .iter()
             .rposition(|l| l.top <= point.y)
             .unwrap_or(0);
+        let li = self.segment_near(li, point.x);
         let line = &self.lines[li];
         let (boxes, _, carets) = self.caret_stops(line);
         let x = point.x;
@@ -1443,6 +1522,17 @@ impl Scene {
         color: Color,
         solid: Option<Solid>,
     ) {
+        if solid.is_none()
+            && let Some(flow) = &layout.flow
+        {
+            for (rect, source) in &flow.images {
+                self.draw_image_source(
+                    rect.translate(crate::geometry::Vec2::new(origin.x, origin.y)),
+                    source,
+                    crate::render::ImageFit::Fill,
+                );
+            }
+        }
         for line in &layout.lines {
             if line.runs.is_empty() {
                 continue;
@@ -1465,7 +1555,7 @@ impl Scene {
             for run in &line.runs {
                 let face = &layout.styling.faces[run.face];
                 if let Some((source, size)) = &face.icon {
-                    if solid.is_none() {
+                    if solid.is_none() && size.width > 0.0 {
                         let y = baseline - face.cap_middle() - size.height / 2.0;
                         let n = layout.text[run.range.clone()].chars().count();
                         for k in 0..n {

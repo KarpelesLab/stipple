@@ -43,6 +43,11 @@ fn selectable_at(node: &LayoutNode, point: Point) -> Option<(&LayoutNode, Point)
         if let Some(hit) = selectable_at(child, point) {
             return Some(hit);
         }
+        // Text under a card, an image or a control drawn over it (as in a
+        // text flowing around them) isn't under the pointer.
+        if covers(child, point) {
+            return None;
+        }
     }
     match &node.content {
         NodeContent::Text { style, .. }
@@ -52,6 +57,27 @@ fn selectable_at(node: &LayoutNode, point: Point) -> Option<(&LayoutNode, Point)
         }
         _ => None,
     }
+}
+
+/// Whether `node` (or one of its children) is drawn or takes input at
+/// `point`: something filled, an image, or a control.
+fn covers(node: &LayoutNode, point: Point) -> bool {
+    if node.offstage || node.hit_through {
+        return false;
+    }
+    let Some(point) = node.to_local(point) else {
+        return false;
+    };
+    if !node.bounds.contains(point) {
+        return false;
+    }
+    node.decoration.fill.is_some()
+        || matches!(node.content, NodeContent::Image { .. })
+        || node.action.is_some()
+        || node.drag.is_some()
+        || node.pointer.is_some()
+        || node.drag_source.is_some()
+        || node.children.iter().any(|c| covers(c, point))
 }
 
 /// The selectable text leaf with identity `key`.
