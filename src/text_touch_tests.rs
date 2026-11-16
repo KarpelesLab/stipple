@@ -401,6 +401,10 @@ fn a_finger_scrolling_over_a_field_neither_focuses_it_nor_selects() {
     app.render_once();
     assert_eq!(app.focused(), None);
     assert!(app.panes[0].text_touch.handles.is_empty());
+    // The moves' timing is the wall clock's: on a slow run they span enough
+    // time to measure, the lift starts a fling, and a tap would only catch
+    // it. Settle the gestures so the tap below is a plain tap.
+    app.panes[0].touch = Default::default();
     // A tap does focus it.
     app.touch(finger(2, TouchPhase::Started, at));
     app.touch(finger(2, TouchPhase::Ended, at));
