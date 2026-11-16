@@ -81,6 +81,11 @@ mod ios_pan_scroll;
 #[cfg(any(target_os = "ios", target_os = "android", test))]
 pub(crate) mod mobile_drop;
 
+/// Files dragged out of the app on Android: the provider's URIs and types
+/// (system-free, tested on hosts).
+#[cfg(any(target_os = "android", test))]
+pub(crate) mod mobile_drag;
+
 /// The Android entry point: an app's `ANativeActivity_onCreate` hands the
 /// activity to [`android::start`].
 #[cfg(target_os = "android")]

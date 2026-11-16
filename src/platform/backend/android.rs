@@ -72,6 +72,8 @@ mod dead_keys;
 mod drag;
 /// The system's edit menu over a text field: a floating `ActionMode`.
 mod edit_menu;
+// The app's FileProvider, for files dragged out of it.
+mod files;
 /// The input method's `InputConnection` to the focused text field.
 mod ime;
 /// The geometry of the system bars' insets (Android-free, tested on hosts).
@@ -1626,6 +1628,25 @@ impl Window for AndroidWindow {
     }
     fn set_drop_accepted(&self, accepted: bool) {
         drag::set_accepted(accepted);
+    }
+    fn lift_drag(&self, lift: &crate::platform::DragLift) -> bool {
+        if classes::host().view.get().is_null() {
+            return false;
+        }
+        if matches!(lift.data, crate::platform::DropData::Files(_)) {
+            let provider = with_activity(|a| unsafe {
+                jni::with_env(a.vm, |jni| Some(drag::has_provider(jni, a.clazz)))
+            })
+            .unwrap_or(false);
+            if !provider {
+                log(
+                    "stipple: files can't leave the app: its manifest declares no org.stipple.android.Files provider",
+                );
+                return false;
+            }
+        }
+        let what = drag::Dragged::Lift(lift.clone());
+        run_on_main(move |jni, activity| drag::start_drag(jni, activity, &what))
     }
     fn info(&self) -> crate::platform::WindowInfo {
         let mut info =

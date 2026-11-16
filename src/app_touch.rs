@@ -60,8 +60,10 @@ impl<S: 'static> Pane<S> {
         TouchTargets {
             scroll,
             // A text field selects a word instead.
+            // So does a drag source, which a long press lifts out of the app.
             long_press: context_target(tree, self.overlay_active, p).0.is_some()
-                || crate::app_text_touch::field_at(tree, self.overlay_active, p).is_some(),
+                || crate::app_text_touch::field_at(tree, self.overlay_active, p).is_some()
+                || crate::core::drag_source_at(layer, p).is_some(),
             pinch: pointer_at(layer, p, &|id| pointers.pointers_ref().has_pinch(id)),
             pull_down,
         }
@@ -176,7 +178,7 @@ impl<S: 'static> App<S> {
     /// wakes it): the press is cancelled and the context menu under the
     /// finger opens. Returns whether one did.
     pub fn advance_long_press(&mut self) -> bool {
-        self.pane_long_press(0)
+        self.pane_long_press(0, None)
     }
 
     /// A finger touched, moved or lifted: drive the gestures. Returns whether
@@ -268,18 +270,32 @@ impl<S: 'static> App<S> {
         }
     }
 
-    /// A finger held down long enough becomes a long press: cancel its press
-    /// and open the context menu (or run the context handler) under it.
-    /// Returns whether to repaint.
-    pub(crate) fn pane_long_press(&mut self, idx: usize) -> bool {
+    /// A finger held down long enough becomes a long press: on a drag
+    /// source whose payload can leave the app, lift it out through `window`
+    /// ([`pane_lift`](Self::pane_lift)) if the platform takes it; otherwise
+    /// cancel its press and open the context menu (or run the context
+    /// handler) under it. Returns whether to repaint.
+    pub(crate) fn pane_long_press(
+        &mut self,
+        idx: usize,
+        window: Option<&dyn crate::platform::Window>,
+    ) -> bool {
         let pane = &mut self.panes[idx];
         let now = pane.touch_now();
         let Some(at) = pane.touch.long_press_due(now) else {
             return false;
         };
         app_dbg(format_args!("long press at {at:?}"));
-        pane.cancel_press();
         self.sync_long_press_timer(idx);
+        if window.is_some_and(|w| self.pane_lift(idx, at, w)) {
+            return true;
+        }
+        let pane = &mut self.panes[idx];
+        pane.cancel_press();
+        // An in-app drag has the finger: it isn't a long press.
+        if pane.dnd.dragging_internally() {
+            return true;
+        }
         // In a text field it selects a word and shows the edit menu.
         if !self.text_long_press(idx, at) {
             self.pane_context_at(idx, at);

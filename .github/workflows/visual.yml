@@ -4940,6 +4940,36 @@ jobs:
           grep -qE "touchdemo: trackpad scrolled the list [0-9]+ -> [0-9]+" "$LOG"
           grep -q "touchdemo: mobile input passed" "$LOG"
 
+      # Dragging out and the trackpad's depth (touchdemo, after mobile
+      # input): the view's UIDragInteraction delegate asked for the items
+      # under "Rows tapped" (a text) and "Drag file" (a file) as UIKit asks
+      # after its long press, whose item providers (an NSString; a file
+      # representation named after the file) are then dropped on the pinch
+      # box through the drop interaction; a secondary click opening a row's
+      # context menu; the pointer interaction's I-beam over the text field;
+      # a trackpad flick coasting on after the fingers lift. A drag between
+      # two apps can't be scripted on the simulator (no split view from
+      # simctl or XCUITest); the real lift is in the XCUITest below. Not
+      # blocking until it has passed here.
+      - name: Dragging out, secondary click, pointer shape and trackpad momentum (touchdemo, not blocking)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/touchdemo.log"
+          for _ in $(seq 1 90); do
+            grep -qE "touchdemo: drag out and trackpad (passed|FAILED)" "$LOG" 2>/dev/null && break
+            sleep 1
+          done
+          grep -E "touchdemo: (lift|lifted|secondary click|pointer style|pointer after|trackpad flick|drag out and trackpad|check failed)" "$LOG" || true
+          grep -qE 'touchdemo: lift text drag_interaction=true enabled=true lifted 1 item\(s\) .* preview=true drop copy=true' "$LOG"
+          grep -qE 'touchdemo: lift file .*public\.plain-text.*name=Some\("touchdemo-lifted\.txt"\).* drop copy=true' "$LOG"
+          grep -qE 'touchdemo: lifted file dropped as /.+/stipple-drops/[0-9]+/touchdemo-lifted\.txt' "$LOG"
+          grep -qE 'touchdemo: secondary click menu Some' "$LOG"
+          grep -q "touchdemo: pointer style pointer_interaction=true cursor=Text style=beam uikit_style=true" "$LOG"
+          grep -qE "touchdemo: trackpad flick coasted the list [0-9]+ -> [0-9]+" "$LOG"
+          grep -q "touchdemo: drag out and trackpad passed" "$LOG"
+
       # touchdemo's second part, driven from here: the simulator switches to
       # dark mode (the app follows through traitCollectionDidChange:), the
       # app goes to the background (another app launched) and comes back
@@ -5147,6 +5177,10 @@ jobs:
           elif [ "$pasted" != "Copied by touchdemo" ]; then
             failed="$failed [pbpaste: \"$pasted\"]"
           fi
+          # New: a real lift (UIDragInteraction) dropped on the app's own
+          # drop target; a warning of its own until it has passed here.
+          grep -qF "stipple-touch: lift and drop passed" $L \
+            || echo "::warning::the real lift (UIDragInteraction) didn't drop on the pinch box"
           if [ -n "$failed" ] || [ "$status" != 0 ]; then
             tail -60 $L
             echo "::warning::real-touch checks failed:$failed (xcodebuild status $status)"
@@ -5689,6 +5723,7 @@ jobs:
           # The APK's Alarm receiver, whose <clinit> loads the app's library.
           "$dexdump" -d stipple-classes.receiver.dex > receiver.txt
           grep -q "Class descriptor  : 'Lorg/stipple/android/Alarm;'" receiver.txt
+          grep -q "Class descriptor  : 'Lorg/stipple/android/Files;'" receiver.txt
           grep -q "invoke-static {v0}, Ljava/lang/System;.loadLibrary" receiver.txt
 
       - name: Enable KVM
@@ -5730,6 +5765,8 @@ jobs:
             bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
             # Drops through the system's drag and drop (a text, and a file as a MediaStore content: URI) and a uinput keyboard's dead keys: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-input.sh visual_output || echo "::warning::test-input.sh failed (drag and drop, dead keys; non-blocking)"
+            # A text and a file (through androiddemo's FileProvider) dragged out of androiddemo into the probe app, the two in freeform windows: not blocking until it has passed on CI's emulators.
+            bash examples/androiddemo/test-drag-apps.sh clipprobe.apk visual_output || echo "::warning::test-drag-apps.sh failed (a drag into another app; non-blocking)"
             # Timers changing visible text, the clipboard both ways with another app, and a URL opened in the browser, by adb input touches: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-services.sh clipprobe.apk visual_output || echo "::warning::test-services.sh failed (timers, clipboard, opening a URL; non-blocking)"
             # Not blocking until it has passed on CI's x86_64 emulators.

@@ -75,7 +75,7 @@ How to build, package and run on each platform, and what works there today.
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ✅ ⁷⁹ | ✅ ⁷⁹ | ❌ |
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
-| Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | ❌ | ❌ | ❌ |
+| Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | long press ⁸⁶ | long press ⁸⁶ | ❌ |
 | Asking before closing and quitting | ✅ ³⁷ | ✅ ³⁷ | ✅ ³⁷ | — | — | — |
 | Background, foreground and memory warnings (`App::on_lifecycle`) | — | — | — | ✅ ⁵³ | ✅ ⁵⁷ | — |
 | Back navigation (`App::on_back`) | — | — | — | ✅ edge swipe ⁶⁴ | ✅ ⁵⁷ | — |
@@ -644,7 +644,8 @@ context menu), and the app's cursor as the pointer's shape
 (`UIPointerInteraction`: the I-beam, hidden). The conversion and the
 deceleration are unit-tested; `touchdemo`'s simulator self-test reads the
 recognizers' settings back and feeds scroll steps, a flick, a secondary
-click and hovers through the same code (not blocking yet); a real trackpad
+click and hovers through the same code (not blocking yet; passed in CI, one
+run); a real trackpad
 or mouse isn't used in CI. See
 [platforms/ios.md](platforms/ios.md#trackpad-and-mouse).
 ⁸¹ CI drives `touchdemo` on the iPhone simulator from an XCUITest runner
@@ -693,6 +694,19 @@ X11/Xvfb, with an AT-SPI walk of its tree; CI runs it non-blocking on X11
 (plus the AT-SPI walk), Windows (plus a UI Automation walk) and macOS (plus
 `axprobe`), not yet seen there. The web build browses the sample in memory
 (checked in headless Chrome locally). See [reference-app.md](reference-app.md).
+⁸⁶ A long press on a drag source of files or text lifts it out of the app:
+iOS's `UIDragInteraction` (its own long press asks the app for the items:
+an `NSString`, or a file representation per file) and Android's
+`View.startDragAndDrop` (files as `content:` URIs of the app's
+`FileProvider`, which the manifest declares). On Android a text and a file
+dragged into another app (a probe app in a freeform window) and onto the
+app itself passed on local API 34 and 30 emulators and in CI (into another
+app on API 34 and 30, onto the app on 34, 33 and 30); not blocking.
+On iOS the simulator self-test asks the drag delegate for the items and
+drops them on the app, and an XCUITest lifts and drops with a real touch
+inside the app (not blocking yet; both passed in CI); a drag between two apps can't be
+scripted on the simulator. See
+[drag-and-drop.md](drag-and-drop.md#dragging-out-of-the-app).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

@@ -2,9 +2,11 @@
 # Build androiddemo and package it as a signed debug APK, with no Gradle: the
 # NDK's clang links the cdylib, and the SDK's build tools (aapt, zipalign,
 # apksigner) package and sign it. The APK's classes.dex holds Stipple's
-# org.stipple.android.Alarm receiver and org.stipple.android.Tapped activity
+# org.stipple.android.Alarm receiver, org.stipple.android.Tapped activity and
+# org.stipple.android.Files provider
 # (stipple::platform::android_receiver_dex, written here by a host test), for
-# scheduled notifications and their taps. With STIPPLE_BILLING=1 it also
+# scheduled notifications and their taps, and files dragged out of the app.
+# With STIPPLE_BILLING=1 it also
 # carries the Play Billing Library, for in-app purchases (see
 # docs/purchases.md).
 #
@@ -69,7 +71,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/lib/$abi"
 cp "$lib" "$work/lib/$abi/libstipple_android.so"
-# The Alarm receiver and Tapped activity, loading libstipple_android.so (the dexdump test writes it
+# The Alarm receiver, Tapped activity and Files provider, loading libstipple_android.so (the dexdump test writes it
 # next to the backend's run-time classes).
 (cd "$root" && STIPPLE_DEX_OUT="$work/stipple-classes.dex" \
   cargo test --lib platform::dex::tests::writes_the_classes_for_dexdump >/dev/null)

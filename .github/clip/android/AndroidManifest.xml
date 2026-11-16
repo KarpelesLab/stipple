@@ -2,7 +2,9 @@
 <!-- Another app's side of the clipboard, for examples/androiddemo/test-services.sh:
      a receiver that puts a text on the clipboard (writing is allowed from the
      background), and an activity that reads it once it has focus (Android 10
-     and later only let the focused app read) and logs it. -->
+     and later only let the focused app read) and logs it; and a drop target
+     (examples/androiddemo/test-drag-apps.sh), resizable so it can sit beside
+     androiddemo in split screen or a freeform window. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="org.stipple.clip">
   <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
   <application android:label="Stipple clipboard probe">
@@ -13,5 +15,7 @@
     </receiver>
     <activity android:name=".Read" android:exported="true" android:excludeFromRecents="true"
         android:noHistory="true"/>
+    <activity android:name=".Drop" android:exported="true" android:resizeableActivity="true"
+        android:label="Drop probe"/>
   </application>
 </manifest>

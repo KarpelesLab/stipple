@@ -45,6 +45,8 @@ pub(crate) mod a11y_tree;
 mod display_link;
 /// The document the keyboard reads (UIKit-free, tested on hosts).
 pub(crate) mod doc;
+/// Dragging out of the app: `UIDragInteraction` on the view.
+mod drag;
 /// Drops from other apps: `UIDropInteraction` on the view.
 mod drop;
 /// The interactive back swipe from the leading edge (UIKit-free, tested on
@@ -467,6 +469,7 @@ unsafe fn show_window(window: Id) {
         screen::observe_keyboard(view);
         lifecycle::observe(view);
         drop::install(view);
+        drag::install(view);
         pointer::install(view);
         let vc = msg_id(
             msg_id(screen::register_controller_class(), sel("alloc")),
@@ -1089,6 +1092,30 @@ pub mod simulate {
         pointer::style_status()
     }
 
+    /// Lift what is at `at` (points) as UIKit's drag interaction does after
+    /// its long press (the delegate asked for the items, with a stand-in
+    /// session there), then drop the items it got at `to` through the drop
+    /// interaction, as UIKit would on the app's own view. `done` hears what
+    /// the items were (their providers' types and names), whether the drop
+    /// proposed a copy, and the interaction's state.
+    pub fn lift_and_drop(at: Point, to: Point, done: fn(String)) {
+        later(move || {
+            let said = crate::platform::native::objc::with_pool(|| unsafe {
+                let (items, described) = drag::simulate_lift(at);
+                let count = if items.is_null() {
+                    0
+                } else {
+                    // Kept past the pool while the drop loads them.
+                    msg_id(items, sel("retain"));
+                    msg_usize(items, sel("count"))
+                };
+                let copy = count > 0 && drop::simulate_items(items, at, to);
+                format!("{} lifted {described} drop copy={copy}", drag::status())
+            });
+            done(said);
+        });
+    }
+
     /// The pointer hovering at `at` (`Some`), or leaving (`None`), as the
     /// hover recognizer reports it.
     pub fn hover(at: Option<Point>) {
@@ -1426,6 +1453,9 @@ impl Window for IosWindow {
     }
     fn set_drop_accepted(&self, accepted: bool) {
         drop::set_accepted(accepted);
+    }
+    fn lift_drag(&self, lift: &crate::platform::DragLift) -> bool {
+        drag::lift(lift)
     }
     fn set_cursor(&self, cursor: crate::platform::CursorIcon) {
         pointer::set_cursor(cursor);

@@ -100,6 +100,19 @@ class AndroidTests(unittest.TestCase):
         self.assertIn('android:screenOrientation="portrait"', xml)
         self.assertNotIn("debuggable", xml)
 
+    def test_drag_files(self):
+        refs = {"label": "@string/app_name", "theme": "@style/AppTheme"}
+        xml = android.manifest_xml(manifest(), "my_app", refs)
+        self.assertNotIn("org.stipple.android.Files", xml)
+        m = manifest(android={"drag-files": True})
+        self.assertTrue(m.android_drag_files)
+        xml = android.manifest_xml(m, "my_app", refs)
+        self.assertIn('<provider android:name="org.stipple.android.Files"', xml)
+        self.assertIn(f'android:authorities="{m.android_package}.stipple.files"', xml)
+        self.assertIn('android:exported="false" android:grantUriPermissions="true"', xml)
+        # The provider's class is in the dex.
+        self.assertIn('android:hasCode="true"', xml)
+
     def test_billing(self):
         self.assertIsNone(manifest().android_billing)
         self.assertEqual(manifest(android={"billing": True}).android_billing, "8.3.0")

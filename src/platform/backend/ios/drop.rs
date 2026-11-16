@@ -576,6 +576,22 @@ pub(super) unsafe fn simulate(
             provider,
         );
         let items = init(class("NSArray"), sel("arrayWithObject:"), item);
+        simulate_items(items, from, to)
+    }
+}
+
+/// For self-tests: drop `items` (an `NSArray` of `UIDragItem`s) on the view
+/// as [`simulate`] does, entering at `from` and dropping at `to` (points).
+/// Returns whether the proposal for the last move was a copy.
+///
+/// # Safety
+/// On the main thread, with the view installed.
+pub(super) unsafe fn simulate_items(items: Id, from: Point, to: Point) -> bool {
+    unsafe {
+        let delegate = delegate();
+        if delegate.is_null() || items.is_null() {
+            return false;
+        }
         TEST_SESSION.with(|s| {
             *s.borrow_mut() = (
                 items,

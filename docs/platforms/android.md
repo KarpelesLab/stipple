@@ -102,6 +102,13 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
   through the `ContentResolver` into the app's temporary directory and
   delivered as `DropData::Files`. See
   [drag-and-drop.md](../drag-and-drop.md#ios-and-android).
+- **Dragging out to other apps.** A long press on a
+  [`drag_source`](../drag-and-drop.md#dragging-out-of-the-app) whose payload
+  is text or files starts a system drag (`View.startDragAndDrop` with
+  `DRAG_FLAG_GLOBAL | DRAG_FLAG_GLOBAL_URI_READ`) with a picture of the
+  element as its shadow: text as `ClipData` text, files as `content:` URIs of
+  the app's own read-only `FileProvider` (`org.stipple.android.Files`), which
+  the manifest must declare (see [Packaging](#packaging)).
 - **Menus.** Context menus are drawn by Stipple, not a `PopupMenu`, and open
   on a long press (or a mouse's right button); a tap picks an item, a tap
   outside or Back closes the menu. An `App::menu` bar is drawn across the top
@@ -522,12 +529,30 @@ does all of this for the demo (`build-apk.sh x86_64 stipple.apk`, or
 </manifest>
 ```
 
+For files dragged out of the app, the manifest also declares the provider
+(and `android:hasCode="true"`, with the `classes.dex` below, which holds its
+class):
+
+```xml
+    <provider android:name="org.stipple.android.Files"
+        android:authorities="com.example.yourapp.stipple.files"
+        android:exported="false" android:grantUriPermissions="true"/>
+```
+
+The authority is the package name and `.stipple.files`. The provider only
+reads: a URI names the file's absolute path, and other apps can open only
+the URIs a drag granted them. Without it, a long press on a drag source of
+files does what it would without one (a context menu), and the log says why.
+`cargo-stipple` writes it with `drag-files = true` under
+`[package.metadata.stipple.android]`.
+
 ```sh
 mkdir -p lib/arm64-v8a
 cp target/aarch64-linux-android/release/libstipple_android.so lib/arm64-v8a/
 aapt package -f -M AndroidManifest.xml -I "$ANDROID_HOME/platforms/android-34/android.jar" -F base.apk
 aapt add base.apk lib/arm64-v8a/libstipple_android.so
-# optional, for scheduled notifications and their taps (see above): classes.dex from
+# optional, for scheduled notifications and their taps (see above) and for
+# files dragged out of the app: classes.dex from
 # stipple::platform::android_receiver_dex("stipple_android")
 aapt add base.apk classes.dex
 zipalign -f -p 4 base.apk aligned.apk
@@ -608,17 +633,31 @@ count must come back.
   swipe, a cancelled one, declined), and the lifecycle.
 
 `examples/androiddemo/test-input.sh` then checks mobile input depth on the
-same device: a finger presses the greeting and moves, the app starts a
-system drag of a text from its host view (`android::drag_self_test`,
-`View.startDragAndDrop` with `DRAG_FLAG_GLOBAL`, as another app's view
-would), carries it over the button and lets go: the drop must reach the app
-through `onDragEvent`. The same with a file, a `MediaStore` `content:` URI
-(`android::drag_file_self_test`, Android 10 and later), which must arrive
-as a copy holding the file's bytes. Then a `uinput` keyboard types Alt+E, E,
-Alt+U, U into the field, which must end in `éü`. The drops passed on local API 34 and
-API 30 emulators and the dead keys on API 34 (after `test-on-device.sh`;
-Android 11 has no `uinput`, so they are skipped there); CI runs it without
-blocking.
+same device: a finger long-presses the greeting (a drag source of a text),
+which lifts it out of the app (`View.startDragAndDrop`), carries it over the
+button and lets go: the drop must reach the app through `onDragEvent`. The
+same with the heading, a drag source of a file, which leaves as a
+`content:` URI of the app's `FileProvider` and must come back as a copy
+holding its bytes; then a file another app's way, a `MediaStore` `content:`
+URI (`android::drag_file_self_test`, Android 10 and later). Then a `uinput`
+keyboard types Alt+E, E, Alt+U, U into the field, which must end in `éü`.
+The drops passed on local API 34 and 30 emulators and in CI on API 34, 33
+and 30, and the dead keys on API 34 (Android 11 has no `uinput`, so they are skipped there); CI runs it
+without blocking.
+
+`examples/androiddemo/test-drag-apps.sh clipprobe.apk` drags between two
+apps: androiddemo and the probe's drop target (`org.stipple.clip.Drop`, an
+ordinary Java view with an `OnDragListener`) in freeform windows one above
+the other (`settings put global enable_freeform_support 1`, `am start
+--windowingMode 5`, `am task resize`; it says so and stops where the windows
+don't come up in freeform mode).
+A long press lifts androiddemo's greeting into the probe, which must log the
+text; then its heading, whose file the probe must read through its own
+`ContentResolver` (display name, type and bytes) with the drag's URI
+permission. It passed on local API 34 and 30 emulators and in CI on API 34
+and 30; on CI's API 33 image `am task resize` doesn't move the freeform
+windows (the shell keeps them where they opened, overlapping), so the drop
+lands in androiddemo and it fails there. CI runs it without blocking.
 
 `examples/androiddemo/test-services.sh clipprobe.apk` then drives the
 system's services with `adb shell input` touches: the one-second
@@ -663,10 +702,13 @@ examples/androiddemo/test-on-device.sh stipple.apk shots
   selection move from a selection or mid-composition is refused. Hardware
   keyboards' dead keys compose (see [ime.md](../ime.md#dead-keys-on-mobile-hardware-keyboards)), checked with a
   `uinput` keyboard, not a person's.
-- **Drops come from the app itself in CI.** The emulator has no second app
-  in split screen to drag from; the drop path is the same, but a drag
-  between two apps (and its URI permissions) hasn't been run. Dragging out
-  of the app isn't done.
+- **Drags between apps run against a probe app.** The drag into another
+  app (text, and a file through the `FileProvider`) is tested with a small
+  Java drop target in freeform windows; drops into Stipple come from its own
+  drag sources and a self-test drag, not another app's. The drag shadow is
+  the element's picture with the finger at its center, not where it held it.
+  A file's type comes from its extension (a small table; unknown ones are
+  `application/octet-stream`).
 - **Predictive back on Android 13 itself is untried** (CI runs API 34); its
   callback has no progress there. While the app takes Back, the system shows
   no preview: drawing one (from `App::on_back_progress`) is the app's job.

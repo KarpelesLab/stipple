@@ -167,13 +167,26 @@ quote.drag_source(cx, move |s| Some(DropData::Text(s.quote.clone())))
   for you; a backend that can't take it returns `false`, and the drag stays
   in the app.
 
+On a touch screen (iOS, Android) dragging out starts with a long press, as
+the platform's own drags do: holding a finger still on a `drag_source`
+whose payload is files or text lifts it out of the app at once, a system
+drag with a picture of the element under the finger, which other apps (and
+this one's drop targets) can drop. A finger that moves right away drags in
+the app as above. A long press on such a source lifts it instead of opening
+its context menu; a source of an `Internal` payload keeps its long press.
+The App hands the lift to the platform through `Window::lift_drag`, on its
+own long press and when the platform's lift gesture asks
+(`Event::DragLift`, iOS); nothing else changes for the app.
+
 | Platform | How | Files | Text |
 |---|---|---|---|
 | X11 | XDND v5 source, by hand on the wire: owns `XdndSelection`, grabs the pointer and keyboard, finds the `XdndAware` window under the pointer, `XdndEnter` / `Position` / `Leave` / `Drop`, serves `SelectionRequest`s, waits for `XdndFinished` | `text/uri-list` | `UTF8_STRING`, `text/plain;charset=utf-8`, `text/plain`, `STRING` |
 | Wayland | a `wl_data_source` handed to `wl_data_device.start_drag` with the press's serial (copy action from v3); `send` is served from memory; `cancelled` / `dnd_finished` end it | `text/uri-list` | `text/plain;charset=utf-8` and friends |
 | Windows | OLE `DoDragDrop` with hand-written `IDataObject` and `IDropSource` vtables, run by the message loop after the handler returns | `CF_HDROP` | `CF_UNICODETEXT` |
 | macOS | `beginDraggingSessionWithItems:event:source:` on the view, which is the `NSDraggingSource` | an `NSURL` per file, with its Finder icon | `NSString` |
-| iOS, Android, web | not yet: the drag stays in the app | | |
+| iOS | a long press: `UIDragInteraction` on the view (enabled on iPhone too) recognizes the lift and asks for the items under the finger (`Event::DragLift`); the element's picture is the lift's preview | an `NSItemProvider` per file with a file representation of its type (`registerFileRepresentationForTypeIdentifier:`, the type from `UTType` by extension), named after the file | an `NSItemProvider` of the `NSString` |
+| Android | a long press: `View.startDragAndDrop` from the host view, `DRAG_FLAG_GLOBAL \| DRAG_FLAG_GLOBAL_URI_READ`, the element's picture as the shadow | `content:` URIs of the app's `FileProvider` (`org.stipple.android.Files`, which the manifest declares; see [android.md](platforms/android.md#packaging)), typed by extension | `ClipData` text |
+| Web | not yet: the drag stays in the app | | |
 
 Each platform shows its own drag feedback (X11: the core "fleur" cursor over
 a target that accepts, a "no" circle elsewhere; macOS: the file's icon), not
@@ -237,6 +250,16 @@ shows none.
 `file:` URIs are percent-decoded to paths (`stipple::platform::parse_uri_list`);
 other schemes, and files on other hosts, are skipped.
 
+Dragging out works the other way (see [above](#dragging-out-of-the-app)): a
+long press on a drag source of text or files lifts it. On iOS the drag
+interaction's own long press asks the app for the items there, and each
+file goes as a provider that hands the file over when the receiver loads
+it (the receiver gets a copy). On Android each file goes as a `content:`
+URI naming it (`content://<package>.stipple.files/root/<path>`), which the
+app's provider opens read-only for the app the drag granted it to; the
+provider has no state of its own, so a target may read it after the drag
+(while its grant lasts) even if the app's process was restarted.
+
 ## Testing
 
 - `App::drag_enter`, `drag_over`, `drag_leave` and `drop_data` feed drags to an
@@ -257,18 +280,34 @@ other schemes, and files on other hosts, are skipped.
   complete on the runner yet, so that step only reports; on macOS with
   `STIPPLE_COCOA_DROP=<path>`, which drives the view's own dragging methods
   with a stand-in `NSDraggingInfo` whose pasteboard holds the file's URL.
-- On the Android emulator, `examples/androiddemo/test-input.sh` has
-  `androiddemo` start a system drag itself (`View.startDragAndDrop` with
-  `DRAG_FLAG_GLOBAL`, from its host view, while the script's finger is down)
-  and carries it over the app's own window: a text, then a file as a
-  `MediaStore` `content:` URI, which must arrive copied, with its bytes. The
-  window gets the system's `DragEvent`s as it would from another app; a drag
-  between two apps hasn't been run. It passed on local API 34 and API 30 emulators; CI
-  runs it without blocking. On the iOS simulator `touchdemo`'s self-test
-  calls the drop interaction's delegate with a stand-in session over real
-  `NSItemProvider`s (a text, a file), also not blocking yet. The data
-  conversion (types, file names, the drop's directory, merging items) is
-  unit-tested on every host (`src/platform/backend/mobile_drop.rs`).
+- On the Android emulator, `examples/androiddemo/test-input.sh` long-presses
+  two of `androiddemo`'s drag sources (`adb shell input motionevent`), a
+  text and a file, which lift out of the app as system drags, and carries
+  them over the app's own window: the text must drop, and the file (a
+  `content:` URI of the app's `FileProvider`) must arrive copied, with its
+  bytes; then a self-test drag of a `MediaStore` `content:` URI (another
+  app's kind of file). `examples/androiddemo/test-drag-apps.sh` puts
+  `androiddemo` and a probe app (`.github/clip/android`, a plain Java drop
+  target) in freeform windows and lifts the same two into the probe, which
+  must log the text, and the file's name, type and bytes as its
+  `ContentResolver` reads them. `test-input.sh` passed on local API 34 and 30
+  emulators and in CI on API 34, 33 and 30; `test-drag-apps.sh` locally on
+  API 34 and 30 and in CI on API 34 and 30 (on API 33 `am task resize`
+  doesn't move the freeform windows, which then overlap, and the drop lands
+  in androiddemo). CI runs them without blocking.
+- On the iOS simulator `touchdemo`'s self-test calls the drop interaction's
+  delegate with a stand-in session over real `NSItemProvider`s (a text, a
+  file); and the drag interaction's, asking for the items under its two drag
+  sources as UIKit does after the long press, then drops those items on its
+  pinch box through the drop interaction, which must read the text and a
+  copy of the file. An XCUITest (`StippleRealTouchTests`) long-presses a
+  drag source with a real touch and drags it onto the pinch box: a real
+  lift and drop within the app. Both passed in CI (one run). A drag between
+  two apps can't be scripted on the simulator (`simctl` and XCUITest can't
+  open a second app beside it). Not blocking yet. The data conversion (types, file names, the drop's
+  directory, merging items; Android's provider URIs) is unit-tested on every
+  host (`src/platform/backend/mobile_drop.rs`, `mobile_drag.rs`), and the
+  App's lift (`Window::lift_drag`) against a stand-in window.
 - Wayland's protocol handling is unit-tested against a scripted compositor
   (drops, and the drag-out source: `start_drag`, `send`, `dnd_finished`); CI
   doesn't drag on Wayland. The X11 source's state machine and messages are

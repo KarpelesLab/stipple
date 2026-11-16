@@ -38,6 +38,11 @@
 //!   tapped` if one of its rows is tapped (a swipe must not tap one);
 //! - `androiddemo: row N pinned` when the item of a row's context menu is
 //!   picked: a long press (`adb shell input swipe x y x y 800`) opens it;
+//! - `stipple: lifted drag started: Some(true) (...)` when a long press on
+//!   the greeting (a drag source of a text) or the heading (of a file)
+//!   lifts it out of the app as a system drag (the file through the app's
+//!   FileProvider), and `androiddemo: dropped ...` when one lands on the
+//!   app (test-input.sh; test-drag-apps.sh drops them in another app);
 //! - `androiddemo: pinch Began|Changed|Ended scale S` as two fingers pinch
 //!   the button (`Element::on_pinch`), without tapping it; CI's script
 //!   touches it with two fingers on a virtual touch screen it makes with the
@@ -127,8 +132,10 @@ mod app {
     /// When the greeting last started a system drag (a press calls its drag
     /// handler on every move).
     static DRAG_STARTED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-    /// The text the greeting drags.
+    /// The text the greeting drags out of the app.
     const DRAGGED: &str = "Dropped by androiddemo";
+    /// What the file the heading drags out of the app holds.
+    const LIFTED_FILE: &str = "A file lifted out of androiddemo";
     /// What the file the "Running for" label drags holds.
     const DRAGGED_FILE: &str = "A file dragged by androiddemo";
 
@@ -187,8 +194,18 @@ mod app {
         if FRAMES.load(Ordering::Relaxed) == SELF_TEST_AT.load(Ordering::Relaxed) {
             android::input_connection_self_test();
         }
+        // A long press on the heading lifts a file out of the app (a system
+        // drag, the file through the app's FileProvider), which other apps
+        // (and this one) can drop.
+        let title = heading(cx, "Stipple on Android").drag_source(cx, |_: &mut State| {
+            let dir = stipple::platform::dirs().ok()?.cache;
+            let path = dir.join("androiddemo-lifted.txt");
+            std::fs::create_dir_all(&dir).ok()?;
+            std::fs::write(&path, LIFTED_FILE).ok()?;
+            Some(DropData::Files(vec![path]))
+        });
         let top = column(vec![
-            heading(cx, "Stipple on Android"),
+            title,
             label(cx, "Type your name:"),
             row(vec![field, code_field]).gap(theme.spacing.sm),
             row(vec![
@@ -297,14 +314,11 @@ mod app {
         }
         drop(last);
         let pad = theme.spacing.lg;
-        // Pressing the greeting and moving starts a system drag of a text
-        // (`drag_self_test`, as another app's view would), which the whole
-        // screen takes as a drop.
-        let greeting = label(cx, greeting).on_drag(cx, |_: &mut State, _| {
-            if start_drag() {
-                android::drag_self_test(DRAGGED);
-            }
-        });
+        // A long press on the greeting lifts its text out of the app (a
+        // system drag, `View.startDragAndDrop`), which the whole screen
+        // takes as a drop, as other apps can.
+        let greeting =
+            label(cx, greeting).drag_source(cx, |_| Some(DropData::Text(DRAGGED.into())));
         column(vec![top, tap, greeting, strip, list])
             .on_drop(cx, |_: &mut State, data, at| match data {
                 DropData::Text(t) => {

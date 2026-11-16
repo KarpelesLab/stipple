@@ -27,6 +27,8 @@ lib-name = "stipple_android"
 permissions = ["POST_NOTIFICATIONS"]
 # The Alarm receiver and its classes.dex (platform::schedule_notification).
 scheduled-notifications = true
+# The FileProvider files dragged out of the app go through (its classes.dex).
+drag-files = true
 splash-background = "#16181d"
 # The Play Billing Library for platform::store (tools/android/billing.py
 # fetches and dexes it: classes2.dex, and its manifest entries).

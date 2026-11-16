@@ -416,16 +416,178 @@ const DRAG_FLAG_GLOBAL: i32 = 1 << 8;
 /// `View.DRAG_FLAG_GLOBAL_URI_READ`: the target may read its URIs.
 const DRAG_FLAG_GLOBAL_URI_READ: i32 = 1;
 
-/// What a self-test drags.
+/// What a drag started from the host view carries.
 pub(super) enum Dragged {
+    /// A self-test's text.
     Text(String),
-    /// A file, put in `MediaStore`'s Downloads first (Android 10 and later)
-    /// so the drag carries a `content:` URI, as a file manager's does.
+    /// A self-test's file, put in `MediaStore`'s Downloads first (Android 10
+    /// and later) so the drag carries a `content:` URI, as a file manager's
+    /// does.
     File(crate::platform::shell::ShareFile),
+    /// What the app lifted ([`Window::lift_drag`](crate::platform::Window::lift_drag)):
+    /// text, or files as the app's provider's `content:` URIs
+    /// ([`files`](super::files)), with the element's picture as the shadow.
+    Lift(crate::platform::DragLift),
 }
 
-/// Start a system drag from the host view, on the main thread (see
-/// [`drag_self_test`](super::drag_self_test)).
+/// Whether the app's manifest declares its file provider (asked once):
+/// without it, files can't leave the app.
+pub(super) fn has_provider(jni: &Jni, activity: JObject) -> bool {
+    static HAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *HAS.get_or_init(|| {
+        (|| {
+            let package = jni
+                .call_object(activity, c"getPackageName", c"()Ljava/lang/String;", &[])
+                .and_then(|p| jni.to_rust16(p))?;
+            let pm = jni.call_object(
+                activity,
+                c"getPackageManager",
+                c"()Landroid/content/pm/PackageManager;",
+                &[],
+            )?;
+            let authority =
+                jni.string(&crate::platform::backend::mobile_drag::authority(&package))?;
+            let info = jni.call_object(
+                pm,
+                c"resolveContentProvider",
+                c"(Ljava/lang/String;I)Landroid/content/pm/ProviderInfo;",
+                &[JValue { l: authority }, JValue { i: 0 }],
+            );
+            Some(info.is_some())
+        })()
+        .unwrap_or(false)
+    })
+}
+
+/// The `ClipData` of a lifted payload: a text, or each file as the app's
+/// provider's `content:` URI, typed from its extension.
+fn lift_clip(jni: &Jni, label: JObject, data: &DropData) -> Option<JObject> {
+    use crate::platform::backend::mobile_drag;
+    match data {
+        DropData::Text(text) => {
+            let text = jni.string16(text)?;
+            jni.call_static_object(
+                c"android/content/ClipData",
+                c"newPlainText",
+                c"(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;",
+                &[JValue { l: label }, JValue { l: text }],
+            )
+        }
+        DropData::Files(paths) if !paths.is_empty() => {
+            let package = jni.to_rust16(super::classes::host().package.get())?;
+            let mut mimes: Vec<&str> = Vec::new();
+            for p in paths {
+                let mime = mobile_drag::mime_for_name(&mobile_drag::display_name(p));
+                if !mimes.contains(&mime) {
+                    mimes.push(mime);
+                }
+            }
+            let mimes = jni.string_array(&mimes)?;
+            let desc = jni.new_named(
+                c"android/content/ClipDescription",
+                c"(Ljava/lang/CharSequence;[Ljava/lang/String;)V",
+                &[JValue { l: label }, JValue { l: mimes }],
+            )?;
+            let item = |path: &std::path::Path| {
+                let uri = super::files::uri_for(jni, &package, path)?;
+                jni.new_named(
+                    c"android/content/ClipData$Item",
+                    c"(Landroid/net/Uri;)V",
+                    &[JValue { l: uri }],
+                )
+            };
+            let clip = jni.new_named(
+                c"android/content/ClipData",
+                c"(Landroid/content/ClipDescription;Landroid/content/ClipData$Item;)V",
+                &[
+                    JValue { l: desc },
+                    JValue {
+                        l: item(&paths[0])?,
+                    },
+                ],
+            )?;
+            for p in &paths[1..] {
+                jni.call_void(
+                    clip,
+                    c"addItem",
+                    c"(Landroid/content/ClipData$Item;)V",
+                    &[JValue { l: item(p)? }],
+                )?;
+            }
+            Some(clip)
+        }
+        _ => None,
+    }
+}
+
+/// A drag shadow showing `image`: an unattached `ImageView` laid out at the
+/// picture's size, which `View.DragShadowBuilder` draws (the finger at its
+/// center).
+fn picture_shadow(jni: &Jni, activity: JObject, image: &crate::render::Pixmap) -> Option<JObject> {
+    let size = image.size();
+    let (w, h) = (size.width as i32, size.height as i32);
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    // Straight RGBA to `Bitmap`'s ARGB ints.
+    let argb: Vec<i32> = image
+        .as_bytes()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| i32::from_be_bytes([p[3], p[0], p[1], p[2]]))
+        .collect();
+    let colors = jni.int_array_of(&argb)?;
+    let name = jni.string("ARGB_8888")?;
+    let config = jni.call_static_object(
+        c"android/graphics/Bitmap$Config",
+        c"valueOf",
+        c"(Ljava/lang/String;)Landroid/graphics/Bitmap$Config;",
+        &[JValue { l: name }],
+    )?;
+    let bitmap = jni.call_static_object(
+        c"android/graphics/Bitmap",
+        c"createBitmap",
+        c"([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;",
+        &[
+            JValue { l: colors },
+            JValue { i: w },
+            JValue { i: h },
+            JValue { l: config },
+        ],
+    )?;
+    let view = jni.new_named(
+        c"android/widget/ImageView",
+        c"(Landroid/content/Context;)V",
+        &[JValue { l: activity }],
+    )?;
+    jni.call_void(
+        view,
+        c"setImageBitmap",
+        c"(Landroid/graphics/Bitmap;)V",
+        &[JValue { l: bitmap }],
+    )?;
+    jni.call_void(
+        view,
+        c"layout",
+        c"(IIII)V",
+        &[
+            JValue { i: 0 },
+            JValue { i: 0 },
+            JValue { i: w },
+            JValue { i: h },
+        ],
+    )?;
+    jni.new_named(
+        c"android/view/View$DragShadowBuilder",
+        c"(Landroid/view/View;)V",
+        &[JValue { l: view }],
+    )
+}
+
+/// Start a system drag from the host view, on the main thread: a
+/// self-test's (see [`drag_self_test`](super::drag_self_test)) or what the
+/// app lifted.
 pub(super) fn start_drag(jni: &Jni, activity: JObject, what: &Dragged) {
     let view = super::classes::host().view.get();
     let started = (|| {
@@ -458,14 +620,25 @@ pub(super) fn start_drag(jni: &Jni, activity: JObject, what: &Dragged) {
                     &[JValue { l: resolver }, JValue { l: label }, JValue { l: uri }],
                 )?
             }
+            Dragged::Lift(lift) => lift_clip(jni, label, &lift.data)?,
         };
-        // The view's (empty) picture as the shadow: a zero-sized one is
+        let picture = match what {
+            Dragged::Lift(lift) => lift
+                .image
+                .as_deref()
+                .and_then(|image| picture_shadow(jni, activity, image)),
+            _ => None,
+        };
+        // Else the view's (empty) picture as the shadow: a zero-sized one is
         // refused.
-        let shadow = jni.new_named(
-            c"android/view/View$DragShadowBuilder",
-            c"(Landroid/view/View;)V",
-            &[JValue { l: view }],
-        )?;
+        let shadow = match picture {
+            Some(shadow) => shadow,
+            None => jni.new_named(
+                c"android/view/View$DragShadowBuilder",
+                c"(Landroid/view/View;)V",
+                &[JValue { l: view }],
+            )?,
+        };
         jni.call_bool(
             view,
             c"startDragAndDrop",
@@ -482,5 +655,17 @@ pub(super) fn start_drag(jni: &Jni, activity: JObject, what: &Dragged) {
             ],
         )
     })();
-    log(&format!("stipple: drag self-test started: {started:?}"));
+    match what {
+        Dragged::Lift(lift) => {
+            let what = match &lift.data {
+                DropData::Files(f) => format!("{} file(s)", f.len()),
+                DropData::Text(t) => format!("text ({} bytes)", t.len()),
+                DropData::Internal(_) => "internal".into(),
+            };
+            log(&format!(
+                "stipple: lifted drag started: {started:?} ({what})"
+            ));
+        }
+        _ => log(&format!("stipple: drag self-test started: {started:?}")),
+    }
 }

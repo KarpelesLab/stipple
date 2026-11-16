@@ -56,8 +56,10 @@
 //! loop through `AppHandle::update` ("Worker: done"), "Set clip" and "Get
 //! clip" buttons that write and read the system clipboard
 //! (`platform::clipboard`), an "Open URL" button (`AppHandle::open_url`),
-//! and labels with the list's offset and the rows pinned through their
-//! context menu. The list is shorter to make room. It logs
+//! and labels with the list's offset, the rows pinned through their
+//! context menu and the drops the pinch box took (a long press on "Rows
+//! tapped" lifts its text, which the test drops there). The list is shorter
+//! to make room. It logs
 //! `touchdemo: services ...` lines.
 //!
 //! **Self-test (iOS).** Launched with `TOUCHDEMO_SELFTEST` set (`xcrun simctl
@@ -97,7 +99,12 @@
 //!    marked text, then the composed letter), a text and a file dropped on
 //!    the pinch box through the view's `UIDropInteraction` delegate (with
 //!    real item providers), and the list scrolled by the trackpad's scroll
-//!    recognizer.
+//!    recognizer. Then dragging out and the trackpad's depth (`touchdemo:
+//!    drag out and trackpad passed`): its two drag sources ("Rows tapped",
+//!    a text; "Drag file", a file) lifted through the view's
+//!    `UIDragInteraction` delegate and their items dropped on the pinch box,
+//!    a secondary click opening a row's menu, the I-beam pointer over the
+//!    field, and a trackpad flick coasting on.
 //! 2. It then animates and waits for CI to switch the simulator to dark mode
 //!    (`xcrun simctl ui ... appearance dark`) and to send it to the background
 //!    and back; on coming back it logs how many frames it built while away
@@ -121,6 +128,10 @@ const LIST_H_SERVICES: f64 = 220.0;
 const COPIED: &str = "Copied by touchdemo";
 /// What "Open URL" opens.
 const URL: &str = "https://example.com/stipple-touchdemo";
+/// What a long press on "Rows tapped" lifts out of the app.
+const LIFTED_TEXT: &str = "Lifted out of touchdemo";
+/// What the file "Drag file" lifts out of the app holds.
+const LIFTED_FILE: &str = "A file lifted out of touchdemo\n";
 const STRIP_H: f64 = 44.0;
 const PINCH_H: f64 = 100.0;
 /// Whether it runs on a desktop (where the screen readers' checks use the
@@ -239,6 +250,7 @@ fn services_view(sv: &Services, state: &State, offset: f64, cx: &mut Cx<State>) 
         row(vec![
             label(cx, format!("List offset: {offset:.0}")),
             label(cx, format!("Pinned: {}", state.pinned.len())),
+            label(cx, format!("Drops: {}", state.dropped.len())),
             label(cx, sv.opened.clone()),
         ])
         .gap(12.0),
@@ -448,8 +460,18 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     let inset = |e: Element| column(vec![e]).padding(Insets::symmetric(PAD, 0.0));
     let mut parts = vec![inset(field)];
     parts.extend(services.map(inset));
+    // Long-pressed, these lift a text and a file out of the app (iOS's
+    // UIDragInteraction, Android's system drag), into another app or onto
+    // the pinch box.
+    let lift_text = label(cx, format!("Rows tapped: {}", state.tapped.len()))
+        .drag_source(cx, |_| Some(DropData::Text(LIFTED_TEXT.into())));
+    let lift_file = label(cx, "Drag file").drag_source(cx, |_| {
+        let path = std::env::temp_dir().join("touchdemo-lifted.txt");
+        std::fs::write(&path, LIFTED_FILE).ok()?;
+        Some(DropData::Files(vec![path]))
+    });
     parts.extend([
-        inset(label(cx, format!("Rows tapped: {}", state.tapped.len()))),
+        inset(row(vec![lift_text, lift_file]).gap(24.0)),
         inset(list),
         strip,
         inset(pinch),
@@ -935,6 +957,158 @@ mod selftest {
                 format!("trackpad scroll moved the list {before:.0} -> {after:.0}"),
             );
             report("mobile input");
+        });
+    }
+
+    /// What the last lift said (its items, and the drop's proposal).
+    static LIFTED: Mutex<String> = Mutex::new(String::new());
+    /// Drops before the lift.
+    static DROPS_BEFORE: AtomicUsize = AtomicUsize::new(0);
+
+    /// Dragging out and the trackpad's depth, reported on its own
+    /// (`touchdemo: drag out and trackpad passed`):
+    ///
+    /// - lifting: the view's `UIDragInteraction` delegate asked for the items
+    ///   at "Rows tapped" (a drag source of a text) and at "Drag file" (of a
+    ///   file) with a stand-in session, as UIKit asks after its long press;
+    ///   the items' providers (an `NSString`; a file representation of
+    ///   `public.plain-text` named after the file), and the lift's preview
+    ///   (the App's picture of the element), then those very items dropped
+    ///   on the pinch box through the drop interaction, which reads them as
+    ///   another app would: the text, and a copy of the file;
+    /// - a secondary click on a row (a trackpad's two-finger click, as the
+    ///   view maps one) opens its context menu;
+    /// - the pointer over the text field takes the I-beam (the pointer
+    ///   interaction's style for the app's cursor, asked as UIKit asks);
+    /// - a trackpad scroll whose fingers lift while moving coasts on after
+    ///   them, slowing down.
+    fn drag_out_and_trackpad(steps: &mut Steps) {
+        steps.run(300, |s| {
+            DROPS_BEFORE.store(s.dropped.len(), Ordering::Relaxed);
+            let at = element_center("Rows tapped").unwrap_or(Point::new(60.0, 105.0));
+            let to = element_center("Pinch me").unwrap_or(Point::new(180.0, 640.0));
+            simulate::lift_and_drop(at, to, |said| {
+                log(&format!("touchdemo: lift text {said}"));
+                *LIFTED.lock().unwrap() = said;
+            });
+        });
+        steps.until(|s| s.dropped.len() > DROPS_BEFORE.load(Ordering::Relaxed));
+        steps.run(0, |s| {
+            let said = LIFTED.lock().unwrap().clone();
+            check(
+                said.contains("drag_interaction=true enabled=true"),
+                format!("drag interaction: {said}"),
+            );
+            check(
+                said.contains("lifted 1 item(s)")
+                    && said.contains("preview=true")
+                    && said.contains("drop copy=true"),
+                format!("text lift: {said}"),
+            );
+            check(
+                s.dropped.last() == Some(&DropData::Text(LIFTED_TEXT.into())),
+                format!("the lifted text dropped as {:?}", s.dropped.last()),
+            );
+            DROPS_BEFORE.store(s.dropped.len(), Ordering::Relaxed);
+            let at = element_center("Drag file").unwrap_or(Point::new(200.0, 105.0));
+            let to = element_center("Pinch me").unwrap_or(Point::new(180.0, 640.0));
+            simulate::lift_and_drop(at, to, |said| {
+                log(&format!("touchdemo: lift file {said}"));
+                *LIFTED.lock().unwrap() = said;
+            });
+        });
+        steps.until(|s| s.dropped.len() > DROPS_BEFORE.load(Ordering::Relaxed));
+        steps.run(0, |s| {
+            let said = LIFTED.lock().unwrap().clone();
+            check(
+                said.contains("lifted 1 item(s)")
+                    && said.contains("public.plain-text")
+                    && said.contains("name=Some(\"touchdemo-lifted.txt\")")
+                    && said.contains("drop copy=true"),
+                format!("file lift: {said}"),
+            );
+            let original = std::env::temp_dir().join("touchdemo-lifted.txt");
+            match s.dropped.last() {
+                Some(DropData::Files(files)) => {
+                    let copy = files.first().cloned().unwrap_or_default();
+                    log(&format!(
+                        "touchdemo: lifted file dropped as {}",
+                        copy.display()
+                    ));
+                    check(
+                        files.len() == 1
+                            && copy != original
+                            && copy.file_name() == original.file_name()
+                            && std::fs::read_to_string(&copy).ok().as_deref() == Some(LIFTED_FILE),
+                        format!("the lifted file dropped as {files:?}"),
+                    );
+                }
+                other => check(false, format!("the lifted file dropped as {other:?}")),
+            }
+            // A secondary click on a row opens its context menu.
+            let at = visible_row().unwrap_or(Point::new(120.0, 300.0));
+            log(&format!("touchdemo: secondary click at {at:?}"));
+            DROPS_BEFORE.store(s.pinned.len(), Ordering::Relaxed);
+            simulate::secondary_click(at);
+        });
+        steps.until(|_| menu_item().is_some());
+        steps.run(0, |_| {
+            let item = menu_item();
+            log(&format!("touchdemo: secondary click menu {item:?}"));
+            check(item.is_some(), "the secondary click opened no menu");
+            if let Some((i, _)) = item {
+                simulate::activate_accessibility_element(i);
+            }
+        });
+        steps.until(|s| s.pinned.len() > DROPS_BEFORE.load(Ordering::Relaxed));
+        // The pointer over the text field: the I-beam.
+        steps.run(300, |_| {
+            simulate::hover(Some(Point::new(120.0, PAD + FIELD_H / 2.0)))
+        });
+        steps.until(|_| simulate::pointer_style().contains("style=beam"));
+        steps.run(0, |_| {
+            let style = simulate::pointer_style();
+            log(&format!("touchdemo: pointer style {style}"));
+            check(
+                style.contains("pointer_interaction=true cursor=Text style=beam uikit_style=true"),
+                format!("pointer style over the field: {style}"),
+            );
+            simulate::hover(None);
+        });
+        // A trackpad flick: the fingers move 60 points and lift at 1500
+        // points a second; the list coasts on well past the 60.
+        steps.run(300, |_| {
+            let at = visible_row().unwrap_or(Point::new(180.0, 300.0));
+            LIST_BEFORE.store(list_offset().to_bits(), Ordering::Relaxed);
+            let sign = if list_offset() > 600.0 { 1.0 } else { -1.0 };
+            let moves: Vec<Point> = (0..=3)
+                .map(|i| Point::new(0.0, sign * 20.0 * f64::from(i)))
+                .collect();
+            simulate::trackpad_fling(at, &moves, Point::new(0.0, sign * 1500.0));
+        });
+        steps.run(100, |_| {
+            log(&format!(
+                "touchdemo: pointer after the flick {}",
+                simulate::pointer_status()
+            ));
+        });
+        steps.until(|_| {
+            (list_offset() - f64::from_bits(LIST_BEFORE.load(Ordering::Relaxed))).abs() >= 200.0
+                && !simulate::pointer_status().contains("coasting=true")
+        });
+        steps.run(0, |_| {
+            let (before, after) = (
+                f64::from_bits(LIST_BEFORE.load(Ordering::Relaxed)),
+                list_offset(),
+            );
+            log(&format!(
+                "touchdemo: trackpad flick coasted the list {before:.0} -> {after:.0}"
+            ));
+            check(
+                (after - before).abs() >= 200.0,
+                format!("the flick moved the list {before:.0} -> {after:.0}"),
+            );
+            report("drag out and trackpad");
         });
     }
 
@@ -1629,6 +1803,7 @@ mod selftest {
             report("selftest");
         });
         mobile_input(&mut steps);
+        drag_out_and_trackpad(&mut steps);
 
         // Part 2: animate, and wait for CI to switch to dark mode and to
         // send the app to the background and back.

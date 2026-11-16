@@ -312,6 +312,24 @@ final class StippleRealTouchTests: XCTestCase {
             report("copy for simctl", set ? nil : "\"Set clip\" didn't write the clipboard (\"\(label)\")")
         }
 
+        // 4b. Dragging out: a long press on "Rows tapped" (a drag source of a
+        // text) lifts it through UIKit's drag interaction, a real lift; the
+        // finger carries it onto the pinch box, which takes it through the
+        // drop interaction as it would another app's drag: "Drops: N" counts
+        // up.
+        do {
+            var problem: String?
+            let drops = text(app, "Drops: ")
+            let before = drops.exists ? drops.label : "(missing)"
+            text(app, "Rows tapped: ").press(forDuration: 1.2, thenDragTo: text(app, "Pinch me"))
+            let (dropped, label) = waitLabel(drops, 8) { $0 != before }
+            log("after the lift: \"\(label)\" (was \"\(before)\")")
+            if !dropped {
+                problem = "the lifted text didn't drop on the pinch box (\"\(label)\")"
+            }
+            report("lift and drop", problem)
+        }
+
         // 5. Opening a URL: a tap on "Open URL" (AppHandle::open_url) brings
         // Safari to the foreground; then the app comes back.
         do {

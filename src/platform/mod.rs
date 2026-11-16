@@ -192,10 +192,10 @@ pub use store::{
 };
 #[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
 pub(crate) use window::GpuLayer;
-pub(crate) use window::Window;
 pub use window::{
     CursorIcon, ImeState, UserAttention, WindowAttributes, WindowInfo, WindowRequest,
 };
+pub(crate) use window::{DragLift, Window};
 #[cfg_attr(
     not(any(target_os = "windows", target_os = "macos")),
     allow(unused_imports)

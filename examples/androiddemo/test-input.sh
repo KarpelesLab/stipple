@@ -5,14 +5,19 @@
 #
 #   examples/androiddemo/test-input.sh [screenshot-dir]
 #
-# 1. Drag and drop: a finger presses the greeting under the "Tap me" button
-#    and moves; the app starts a system drag of a text from its host view
-#    (`android::drag_self_test`: `View.startDragAndDrop`, DRAG_FLAG_GLOBAL,
-#    as another app's view does), the finger carries it over the button and
-#    lets go. The window gets the system's DragEvents (STARTED, ENTERED,
-#    LOCATION, DROP) through the host view's onDragEvent, the path a drop
-#    from another app in split screen takes, and the app logs the drop
-#    (`androiddemo: dropped text "Dropped by androiddemo"`).
+# 1. Drag and drop: a finger long-presses the greeting under the "Tap me"
+#    button, which is a drag source of a text: the long press lifts it out
+#    of the app (`Window::lift_drag`: `View.startDragAndDrop`,
+#    DRAG_FLAG_GLOBAL), the finger carries it over the button and lets go.
+#    The window gets the system's DragEvents (STARTED, ENTERED, LOCATION,
+#    DROP) through the host view's onDragEvent, the path a drop from
+#    another app in split screen takes, and the app logs the drop
+#    (`androiddemo: dropped text "Dropped by androiddemo"`). Then the
+#    heading, a drag source of a file: it leaves as a content: URI of the
+#    app's own FileProvider (org.stipple.android.Files), which the drop
+#    reads back through the ContentResolver. Then a file another app's way
+#    (a MediaStore content: URI, `android::drag_file_self_test`).
+#    (examples/androiddemo/test-drag-apps.sh drops them in another app.)
 # 2. Dead keys on a hardware keyboard: a virtual keyboard (made with the
 #    shell's `uinput` command, Android 12 and later, so its keys go through
 #    the kernel and InputReader as a real keyboard's, with the Generic key
@@ -77,33 +82,44 @@ wait_for "androiddemo: tick" 60 >/dev/null || failed="$failed start"
 sleep 2
 
 ### 1. Drops, through the system's drag and drop.
-# Drag from the node matching $1 to the "Tap me" button: down, a small move
-# (the app starts the drag), a pause for the drag to take the finger, then
-# over the button in steps, and up.
+# Drag from the node matching $1 to the "Tap me" button: down, held still
+# ($2: "lift", a long press, which lifts a drag source out of the app), or a
+# small move ($2: "move", the self-test starts its drag), a pause for the
+# drag to take the finger, then over the button in steps, and up.
 drag_from() {
-  local from tap fx fy tx ty i path=""
+  local from tap fx fy tx ty i path="" start
   from="$(find_node "$1")" || return 1
   tap="$(find_node 'text="Tap me"')" || return 1
   read -r fx fy <<< "$from"
   read -r tx ty <<< "$tap"
-  echo "android input: dragging from $fx,$fy to \"Tap me\" at $tx,$ty"
+  echo "android input: dragging from $fx,$fy to \"Tap me\" at $tx,$ty ($2)"
   for i in 1 2 3 4 5 6 7 8; do
     path="$path $((fx + (tx - fx) * i / 8)),$((fy + (ty - fy) * i / 8))"
   done
-  adb shell "input motionevent DOWN $fx $fy; sleep 0.3; input motionevent MOVE $fx $((fy + 12)); sleep 1.5; \
+  if [ "$2" = lift ]; then
+    start="sleep 1.2"
+  else
+    start="sleep 0.3; input motionevent MOVE $fx $((fy + 12)); sleep 1.5"
+  fi
+  adb shell "input motionevent DOWN $fx $fy; $start; \
     for p in $path; do input motionevent MOVE \${p%,*} \${p#*,}; sleep 0.15; done; sleep 0.8; \
     input motionevent UP $tx $ty"
 }
 drop_part() {
-  local started
-  started="$(count "stipple: drag self-test started: Some\(true\)")"
-  # A text, from the greeting.
-  drag_from 'text="(Hello, [^"]*! )?Tapped [0-9]+ times"' || return 1
-  wait_for "stipple: drag self-test started: Some\(true\)" 10 || return 1
+  # A text, lifted from the greeting.
+  drag_from 'text="(Hello, [^"]*! )?Tapped [0-9]+ times"' lift || return 1
+  wait_for "stipple: lifted drag started: Some\(true\) \(text" 10 || return 1
   wait_for 'androiddemo: dropped text "Dropped by androiddemo" at [0-9]+,[0-9]+' 15 || return 1
   wait_for "androiddemo: drag over" 2 || return 1
   adb exec-out screencap -p > "$shots/android-dropped.png" || true
-  echo "android input: a text drop arrived through onDragEvent"
+  echo "android input: a lifted text dropped through onDragEvent"
+  sleep 3
+  # A file, lifted from the heading: through the app's own FileProvider.
+  drag_from 'text="Stipple on Android"' lift || return 1
+  wait_for "stipple: lifted drag started: Some\(true\) \(1 file" 10 || return 1
+  wait_for 'stipple: file provider opened "androiddemo-lifted.txt"' 15 || return 1
+  wait_for 'androiddemo: dropped files \[".*/stipple-drops/[0-9]+/androiddemo-lifted\.txt"\] holding Some\("A file lifted out of androiddemo"\)' 10 || return 1
+  echo "android input: a lifted file went through the app's FileProvider and came back"
   # A file (a MediaStore content: URI, Android 10 and later), from the
   # "Running for" label: copied through the ContentResolver into the app's
   # temporary directory, under its display name.
@@ -112,7 +128,7 @@ drop_part() {
     return 0
   fi
   sleep 3
-  drag_from 'text="Running for [0-9]+ s"' || return 1
+  drag_from 'text="Running for [0-9]+ s"' move || return 1
   wait_for 'stipple: dropped "stipple-dragged[^"]*\.txt" copied \([0-9]+ bytes\)' 20 || return 1
   wait_for 'androiddemo: dropped files \[".*/stipple-drops/[0-9]+/stipple-dragged[^"]*\.txt"\] holding Some\("A file dragged by androiddemo"\)' 10 || return 1
   echo "android input: a file drop (content: URI) was copied and arrived"

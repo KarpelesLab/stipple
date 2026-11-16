@@ -446,6 +446,13 @@ pub enum Event {
     /// The user dropped `data` at `position`. Ends the drag (no
     /// [`DragLeave`](Event::DragLeave) follows).
     Drop { position: Point, data: DropData },
+    /// The platform's own touch gesture is lifting what is at `position` to
+    /// drag it out of the app (iOS's `UIDragInteraction`, after a long
+    /// press): the app answers, while handling it, with the payload of the
+    /// [`drag_source`](crate::core::Element::drag_source) there (the App
+    /// does it), or not at all to let the lift fail. See
+    /// `docs/drag-and-drop.md`.
+    DragLift { position: Point },
     /// The answer to a clipboard read the owner answers later (X11): the
     /// content (`None` when the owner refused, had none of the formats
     /// asked for, or didn't answer in time).

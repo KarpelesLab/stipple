@@ -349,7 +349,7 @@ def manifest_xml(m, lib_name, refs):
     app = [
         f'android:label="{refs["label"]}"',
         f'android:theme="{refs["theme"]}"',
-        f'android:hasCode="{"true" if m.android_alarms or m.android_billing else "false"}"',
+        f'android:hasCode="{"true" if m.android_alarms or m.android_drag_files or m.android_billing else "false"}"',
         'android:enableOnBackInvokedCallback="true"',
     ]
     if "icon" in refs:
@@ -385,6 +385,13 @@ def manifest_xml(m, lib_name, refs):
             "      </intent-filter>",
             "    </receiver>",
         ]
+    if m.android_drag_files:
+        # Files dragged out of the app: read-only, granted per URI.
+        lines.append(
+            '    <provider android:name="org.stipple.android.Files"'
+            f' android:authorities={quoteattr(m.android_package + ".stipple.files")}'
+            ' android:exported="false" android:grantUriPermissions="true"/>'
+        )
     lines += ["  </application>", "</manifest>", ""]
     return "\n".join(lines)
 
@@ -507,7 +514,7 @@ def package(m, args, target, target_dir, work, helper):
     libs = build_libs(m, sdk, args, target, target_dir, work)
 
     dex = None
-    if m.android_alarms:
+    if m.android_alarms or m.android_drag_files:
         dex = work / "classes.dex"
         helper.dex(lib_name, dex)
 

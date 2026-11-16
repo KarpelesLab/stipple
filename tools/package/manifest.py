@@ -235,6 +235,8 @@ class Manifest:
                 p = "android.permission." + p.upper()
             self.android_permissions.append(p)
         self.android_alarms = bool(d.pop("scheduled-notifications", False))
+        # The FileProvider files dragged out of the app go through.
+        self.android_drag_files = bool(d.pop("drag-files", False))
         # The Play Billing Library for platform::store: true (the default
         # version tools/android/billing.py packages) or a version.
         billing = d.pop("billing", False)

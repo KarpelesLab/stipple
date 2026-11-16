@@ -80,6 +80,7 @@ const NEW_OBJECT_ARRAY: usize = 172;
 const GET_OBJECT_ARRAY_ELEMENT: usize = 173;
 const SET_OBJECT_ARRAY_ELEMENT: usize = 174;
 const GET_INT_ARRAY_REGION: usize = 203;
+const SET_INT_ARRAY_REGION: usize = 211;
 const REGISTER_NATIVES: usize = 215;
 const EXCEPTION_CHECK: usize = 228;
 const NEW_DIRECT_BYTE_BUFFER: usize = 229;
@@ -933,6 +934,17 @@ impl Jni {
                 std::mem::transmute(self.f(NEW_INT_ARRAY));
             self.ok(f(self.0, n as i32))
         }
+    }
+
+    /// A new `int[]` holding `values`.
+    pub(super) fn int_array_of(&self, values: &[i32]) -> Option<JObject> {
+        let array = self.int_array(values.len())?;
+        unsafe {
+            let f: unsafe extern "C" fn(Env, JObject, i32, i32, *const i32) =
+                std::mem::transmute(self.f(SET_INT_ARRAY_REGION));
+            f(self.0, array, 0, values.len() as i32, values.as_ptr());
+        }
+        (!self.clear()).then_some(array)
     }
 
     /// The first `N` elements of an `int[]`.

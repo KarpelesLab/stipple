@@ -757,9 +757,42 @@ pub(crate) const TAPPED: Class = Class {
     load_library: None,
 };
 
-/// A `classes.dex` holding [`ALARM`] and [`TAPPED`], each loading native
-/// library `lib` (the `android.app.lib_name` of the app's `NativeActivity`,
-/// without `lib` and `.so`), for the APK.
+const URI: &str = "Landroid/net/Uri;";
+const STRINGS: &str = "[Ljava/lang/String;";
+const VALUES: &str = "Landroid/content/ContentValues;";
+
+/// The app's `FileProvider` for files dragged out of it, when the app's
+/// manifest declares it (authority `<package>.stipple.files`, with the dex
+/// from [`receiver_dex`] in its APK): a read-only `ContentProvider` whose
+/// methods are the library's `Java_org_stipple_android_Files_*`.
+pub(crate) const FILES: Class = Class {
+    name: "Lorg/stipple/android/Files;",
+    superclass: "Landroid/content/ContentProvider;",
+    interfaces: &[],
+    ctor: &[],
+    natives: &[
+        native("onCreate", &[], "Z"),
+        native("getType", &[URI], STRING),
+        native(
+            "query",
+            &[URI, STRINGS, STRING, STRINGS, STRING],
+            "Landroid/database/Cursor;",
+        ),
+        native(
+            "openFile",
+            &[URI, STRING],
+            "Landroid/os/ParcelFileDescriptor;",
+        ),
+        native("insert", &[URI, VALUES], URI),
+        native("delete", &[URI, STRING, STRINGS], "I"),
+        native("update", &[URI, VALUES, STRING, STRINGS], "I"),
+    ],
+    load_library: None,
+};
+
+/// A `classes.dex` holding [`ALARM`], [`TAPPED`] and [`FILES`], each loading
+/// native library `lib` (the `android.app.lib_name` of the app's
+/// `NativeActivity`, without `lib` and `.so`), for the APK.
 pub(crate) fn receiver_dex(lib: &str) -> Vec<u8> {
     let lib: &'static str = Box::leak(lib.to_string().into_boxed_str());
     build(&[
@@ -770,6 +803,10 @@ pub(crate) fn receiver_dex(lib: &str) -> Vec<u8> {
         Class {
             load_library: Some(lib),
             ..TAPPED
+        },
+        Class {
+            load_library: Some(lib),
+            ..FILES
         },
     ])
 }
@@ -1017,7 +1054,7 @@ mod tests {
         let dex = build(&[RECEIVER]);
         assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
         let dex = receiver_dex("stipple_android");
-        assert_eq!(read_u32(&dex, 96), 2, "two classes");
+        assert_eq!(read_u32(&dex, 96), 3, "three classes");
         assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
         assert_eq!(&dex[12..32], &sha1(&dex[32..]));
         // Code items: each class's constructor and `<clinit>`, whose header
@@ -1035,7 +1072,9 @@ mod tests {
         assert!(dex.windows(11).any(|w| w == b"loadLibrary"));
         assert_eq!(binary_name(ALARM.name), "org.stipple.android.Alarm");
         assert_eq!(binary_name(TAPPED.name), "org.stipple.android.Tapped");
+        assert_eq!(binary_name(FILES.name), "org.stipple.android.Files");
         assert!(dex.windows(8).any(|w| w == b"onCreate"));
+        assert!(dex.windows(8).any(|w| w == b"openFile"));
     }
 
     /// With `STIPPLE_DEX_OUT` set, write the Android backend's classes there

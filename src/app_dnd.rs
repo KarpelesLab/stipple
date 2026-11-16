@@ -14,7 +14,9 @@ use std::sync::Arc;
 
 use crate::core::{DragSourceId, DropId, Font, LayoutNode, drag_source_at, drop_at, find_drop};
 use crate::geometry::{Point, Rect, Size};
-use crate::platform::{DragOffer, DropData, Window, WindowAttributes, WindowId, WindowInfo};
+use crate::platform::{
+    DragLift, DragOffer, DropData, Window, WindowAttributes, WindowId, WindowInfo,
+};
 use crate::render::{Color, Pixmap, Scene};
 use crate::style::Theme;
 use crate::{App, Pane};
@@ -367,7 +369,18 @@ impl<S: 'static> Pane<S> {
     /// that follows the pointer outside the windows: the pixels, their size
     /// in logical pixels, and where in it the press went down.
     fn source_picture(&self, font: Option<&Font>) -> Option<(Arc<Pixmap>, Size, Point)> {
-        let source = self.dnd.source?;
+        let (pixmap, rect) = self.picture_of(self.dnd.source?, font)?;
+        let size = rect.size;
+        let grab = Point::new(
+            (self.dnd.origin.x - rect.min_x()).clamp(0.0, size.width),
+            (self.dnd.origin.y - rect.min_y()).clamp(0.0, size.height),
+        );
+        Some((pixmap, size, grab))
+    }
+
+    /// A picture of drag source `source` (at most 600 by 200 logical pixels,
+    /// from its top-left corner), and where that is in the window.
+    fn picture_of(&self, source: DragSourceId, font: Option<&Font>) -> Option<(Arc<Pixmap>, Rect)> {
         let tree = self.tree.as_ref()?;
         let (node, to_window, _) =
             crate::core::node_to_window(tree, &|n| n.drag_source == Some(source))?;
@@ -385,11 +398,29 @@ impl<S: 'static> Pane<S> {
         scene.pop_layer();
         let pixmap = crate::render::SoftwareRenderer::new().render(scene, self.scale);
         let top_left = to_window.apply(Point::new(b.min_x(), b.min_y()));
-        let grab = Point::new(
-            (self.dnd.origin.x - top_left.x).clamp(0.0, size.width),
-            (self.dnd.origin.y - top_left.y).clamp(0.0, size.height),
-        );
-        Some((Arc::new(pixmap), size, grab))
+        Some((
+            Arc::new(pixmap),
+            Rect::from_xywh(top_left.x, top_left.y, size.width, size.height),
+        ))
+    }
+
+    /// What a touch lifting at `pos` takes out of the app: the in-app drag
+    /// in progress if its payload can leave the app, else the payload of the
+    /// drag source under `pos` if it can; with the drag source.
+    fn lift_payload(&mut self, state: &mut S, pos: Point) -> Option<(DropData, DragSourceId)> {
+        if let Some(data) = self.dnd.internal.as_ref() {
+            // A drag in progress keeps the finger: lifted, or nothing.
+            return data
+                .can_leave_app()
+                .then(|| Some((data.clone(), self.dnd.source?)))
+                .flatten();
+        }
+        let id = self.tree.as_ref().and_then(|t| drag_source_at(t, pos))?;
+        let data = self
+            .handlers
+            .dispatch_drag_source(id, state)
+            .filter(DropData::can_leave_app)?;
+        Some((data, id))
     }
 
     /// Cancel an in-app drag in progress (Escape). Returns whether there was
@@ -724,6 +755,44 @@ impl<S: 'static> App<S> {
         true
     }
 
+    /// A touch lifts what is at `pos` in window `idx` (a long press, or the
+    /// platform's own lift gesture asking with
+    /// [`Event::DragLift`](crate::platform::Event::DragLift)): hand the drag
+    /// source's payload there to `window` as a drag other applications can
+    /// take ([`Window::lift_drag`]), when it can leave the app. Returns
+    /// whether the platform took it; the press then no longer taps, and an
+    /// in-app drag of it ends here.
+    pub(crate) fn pane_lift(&mut self, idx: usize, pos: Point, window: &dyn Window) -> bool {
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            ..
+        } = self;
+        let pane = &mut panes[idx];
+        pane.ensure_tree(state, theme, font.get());
+        let Some((data, source)) = pane.lift_payload(state, pos) else {
+            return false;
+        };
+        let (image, rect) = match pane.picture_of(source, font.get()) {
+            Some((pixmap, rect)) => (Some(pixmap), rect),
+            None => (None, Rect::from_xywh(pos.x, pos.y, 0.0, 0.0)),
+        };
+        let lift = DragLift {
+            data,
+            source: rect,
+            image,
+        };
+        if !window.lift_drag(&lift) {
+            return false;
+        }
+        crate::app_dbg(format_args!("lifted at {pos:?}: {:?}", lift.data));
+        pane.cancel_press();
+        pane.handed_off(state);
+        true
+    }
+
     /// Press the left button at `pos` in the primary window as the event loop
     /// does (taps, drags, text selection and drag sources latch), for tests
     /// of in-app drags.
@@ -934,6 +1003,127 @@ mod tests {
         // The release (if the platform passes it on) drops nothing in-app.
         app.pointer_release(Point::new(20.0, 50.0));
         assert!(app.state().files.is_empty());
+    }
+
+    /// A touch-screen window that records the lifts handed to it, and takes
+    /// them when `takes` is set.
+    struct LiftWindow {
+        takes: bool,
+        lifted: std::cell::RefCell<Vec<crate::platform::DragLift>>,
+    }
+
+    impl crate::platform::Window for LiftWindow {
+        fn id(&self) -> crate::platform::WindowId {
+            crate::platform::WindowId(1)
+        }
+        fn inner_size(&self) -> crate::geometry::PhysicalSize {
+            crate::geometry::PhysicalSize::new(200, 80)
+        }
+        fn scale_factor(&self) -> crate::geometry::ScaleFactor {
+            crate::geometry::ScaleFactor::IDENTITY
+        }
+        fn request_redraw(&self) {}
+        fn set_title(&self, _title: &str) {}
+        fn create_surface(&self) -> Box<dyn crate::render::Surface> {
+            unreachable!()
+        }
+        fn lift_drag(&self, lift: &crate::platform::DragLift) -> bool {
+            self.lifted.borrow_mut().push(lift.clone());
+            self.takes
+        }
+    }
+
+    fn lift_window(takes: bool) -> LiftWindow {
+        LiftWindow {
+            takes,
+            lifted: Default::default(),
+        }
+    }
+
+    fn finger(phase: crate::platform::TouchPhase, at: Point) -> crate::platform::Touch {
+        crate::platform::Touch {
+            id: 1,
+            phase,
+            position: at,
+        }
+    }
+
+    #[test]
+    fn a_long_press_lifts_files_out_through_the_platform() {
+        use crate::platform::TouchPhase;
+        let file = DropData::Files(vec![PathBuf::from("/tmp/lifted.txt")]);
+        let mut app = source_app(file.clone());
+        let _ = app.render_frame();
+        let window = lift_window(true);
+        app.touch(finger(TouchPhase::Started, Point::new(30.0, 10.0)));
+        assert!(
+            app.panes[0].long_press_timer.is_some(),
+            "a drag source long-presses"
+        );
+        assert!(!app.pane_long_press(0, Some(&window)), "not yet");
+        app.panes[0].touch_epoch -= std::time::Duration::from_secs_f64(0.6);
+        assert!(app.pane_long_press(0, Some(&window)));
+        let lifted = window.lifted.borrow();
+        assert_eq!(lifted.len(), 1);
+        assert_eq!(lifted[0].data, file);
+        // The element's place and picture, for the platform's preview.
+        assert_eq!(
+            lifted[0].source,
+            crate::geometry::Rect::from_xywh(0.0, 0.0, 200.0, 40.0)
+        );
+        let image = lifted[0].image.as_ref().expect("a picture");
+        assert_eq!((image.size().width, image.size().height), (200, 40));
+        drop(lifted);
+        // The finger lifting afterwards neither drops nor taps in the app.
+        app.touch(finger(TouchPhase::Moved, Point::new(30.0, 60.0)));
+        app.touch(finger(TouchPhase::Ended, Point::new(30.0, 60.0)));
+        assert!(app.state().files.is_empty());
+        assert!(!app.panes[0].dnd.dragging_internally());
+    }
+
+    #[test]
+    fn internal_payloads_and_refusing_platforms_dont_lift() {
+        use crate::platform::TouchPhase;
+        // An internal payload never leaves: the platform isn't asked.
+        let mut app = source_app(DropData::Internal("item".into()));
+        let _ = app.render_frame();
+        let window = lift_window(true);
+        app.touch(finger(TouchPhase::Started, Point::new(30.0, 10.0)));
+        app.panes[0].touch_epoch -= std::time::Duration::from_secs_f64(0.6);
+        assert!(app.pane_long_press(0, Some(&window)));
+        assert!(window.lifted.borrow().is_empty());
+        app.touch(finger(TouchPhase::Ended, Point::new(30.0, 10.0)));
+
+        // Text on a platform that doesn't lift: asked, and nothing else.
+        let mut app = source_app(DropData::Text("hi".into()));
+        let _ = app.render_frame();
+        let window = lift_window(false);
+        assert!(!app.pane_lift(0, Point::new(30.0, 10.0), &window));
+        assert_eq!(window.lifted.borrow().len(), 1);
+        // Nowhere near a drag source: not asked.
+        assert!(!app.pane_lift(0, Point::new(30.0, 60.0), &window));
+        assert_eq!(window.lifted.borrow().len(), 1);
+    }
+
+    #[test]
+    fn the_platforms_lift_takes_over_an_in_app_drag() {
+        // iOS's lift asks (Event::DragLift) while the finger already drags
+        // the text in the app: the platform takes it from there.
+        let mut app = source_app(DropData::Text("quote".into()));
+        let _ = app.render_frame();
+        app.pointer_press(Point::new(20.0, 20.0));
+        app.pointer_drag_to(Point::new(20.0, 50.0));
+        assert!(app.panes[0].dnd.dragging_internally());
+        let window = lift_window(true);
+        assert!(app.pane_lift(0, Point::new(20.0, 50.0), &window));
+        assert_eq!(
+            window.lifted.borrow()[0].data,
+            DropData::Text("quote".into())
+        );
+        assert!(!app.panes[0].dnd.dragging_internally());
+        assert!(!app.state().hovering);
+        app.pointer_release(Point::new(20.0, 50.0));
+        assert!(app.state().moved.is_empty(), "not dropped in the app");
     }
 
     #[test]

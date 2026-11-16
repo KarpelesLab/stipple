@@ -764,6 +764,35 @@ pub trait Window {
     fn start_drag(&self, _data: &crate::platform::DropData) -> bool {
         false
     }
+    /// Lift `lift.data` (files or text) out of the app on a touch screen: the
+    /// App calls this when a long press lands on an
+    /// [`Element::drag_source`](crate::core::Element::drag_source) whose
+    /// payload can leave the app, and when the platform's own lift gesture
+    /// asks what is under the finger ([`Event::DragLift`](crate::platform::Event::DragLift)).
+    /// The platform runs the drag from there, with `lift.image` as its
+    /// picture; dropped on the app's own window it arrives like any drag
+    /// from another application. Returns whether the platform takes it; if
+    /// not (the default), the long press goes on as usual (a context menu).
+    /// Android starts a system drag (`View.startDragAndDrop`, files through
+    /// the app's `FileProvider`); iOS answers its `UIDragInteraction`. See
+    /// `docs/drag-and-drop.md`.
+    fn lift_drag(&self, _lift: &DragLift) -> bool {
+        false
+    }
+}
+
+/// A drag lifted out of the app by a touch (see [`Window::lift_drag`]).
+#[derive(Clone, Debug)]
+#[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+pub(crate) struct DragLift {
+    /// What is dragged: [`Files`](crate::platform::DropData::Files) or
+    /// [`Text`](crate::platform::DropData::Text).
+    pub data: crate::platform::DropData,
+    /// The element lifted, in window coordinates (logical pixels).
+    pub source: Rect,
+    /// A picture of the element (at the window's scale, `source`'s size in
+    /// logical pixels), for the platform's drag preview.
+    pub image: Option<std::sync::Arc<Pixmap>>,
 }
 
 /// Whether the app asks before quitting (it set

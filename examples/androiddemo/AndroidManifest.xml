@@ -6,8 +6,8 @@
      (Android 13 and later): Back goes to the app's OnBackInvokedCallback, which
      Stipple registers only while the app would go back. versionName and
      versionCode are what platform::app_info reports (test-on-device.sh
-     checks them). The APK carries a classes.dex with Stipple's Alarm receiver
-     and Tapped activity (build-apk.sh writes it), so scheduled notifications
+     checks them). The APK carries a classes.dex with Stipple's Alarm receiver,
+     Tapped activity and Files provider (build-apk.sh writes it), so scheduled notifications
      show while the process is gone, and are set again after a reboot, and a
      tap on one is reported while the activity runs too; the exact-alarm
      permissions let them show on time. See docs/platforms/android.md for
@@ -43,5 +43,10 @@
     <activity android:name="org.stipple.android.Tapped" android:exported="false"
         android:taskAffinity="" android:excludeFromRecents="true" android:noHistory="true"
         android:theme="@android:style/Theme.NoDisplay"/>
+    <!-- Files dragged out of the app (a long press on a drag source) go
+         to other apps as this provider's content: URIs, granted per drag. -->
+    <provider android:name="org.stipple.android.Files"
+        android:authorities="com.karpeleslab.stipple.stipple.files"
+        android:exported="false" android:grantUriPermissions="true"/>
   </application>
 </manifest>

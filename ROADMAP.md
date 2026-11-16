@@ -2263,9 +2263,32 @@ Most input only works on X11 today.
   and drops it on its own window: a text, then a `MediaStore` `content:`
   URI, which arrives copied with its bytes. **iOS**: `touchdemo`'s self-test
   drives the delegate with a stand-in session over real `NSItemProvider`s
-  (a text, a file; not blocking yet). Missing: a drag between two apps in
-  CI, and dragging out (`UIDragInteraction` lifts on a long press, which
-  doesn't fit `Window::start_drag`; Android files need a `FileProvider`).
+  (a text, a file; not blocking yet). **Dragging out:** a long press on a
+  `drag_source` of files or text lifts it out of the app
+  (`Window::lift_drag`, called by the App on its own long press and when
+  the platform's lift gesture asks, `Event::DragLift`): iOS's
+  `UIDragInteraction` (enabled on iPhone too) asks the app for the items
+  under its long press: an `NSString` provider, or per file a provider with
+  a file representation of its type (`registerFileRepresentation...`, the
+  type from `UTType`), named after it, with the App's picture of the element
+  as the lift's preview; Android starts `View.startDragAndDrop`
+  (`DRAG_FLAG_GLOBAL | DRAG_FLAG_GLOBAL_URI_READ`, the element's picture as
+  the shadow), files as `content:` URIs of the app's own read-only
+  `FileProvider` (`org.stipple.android.Files`, in the APK's `classes.dex`
+  with natives exported by the library; `cargo-stipple`'s `drag-files =
+  true` and `build-apk.sh` declare it). **Android, passed on local API 34
+  and 30 emulators:** `test-input.sh` lifts a text and a file onto the app itself
+  (the file read back through the provider), and `test-drag-apps.sh` puts
+  androiddemo and a probe app (`.github/clip/android`, a Java drop target)
+  in freeform windows and lifts both into the probe, which reads the file's
+  name, type and bytes through its `ContentResolver` (not blocking in CI;
+  in CI the first passed on API 34, 33 and 30, the second on API 34 and 30:
+  on API 33 `am task resize` doesn't move the freeform windows). **iOS**,
+  not blocking yet, passed in one CI run: `touchdemo`'s
+  self-test asks the drag delegate for the items under its two drag sources
+  and drops those items on its own drop target; an XCUITest lifts and drops
+  with a real long press inside the app. A drag between two apps can't be
+  scripted on the simulator (no split view from `simctl` or XCUITest).
   See [docs/drag-and-drop.md](docs/drag-and-drop.md#ios-and-android).
 - ✅ iOS: following appearance changes live: `traitCollectionDidChange:` on
   the view, when the screen's `userInterfaceStyle` changes (the screen's
@@ -2294,7 +2317,7 @@ Most input only works on X11 today.
   gives the app's cursor as the style (the I-beam over text, hidden). The
   self-test flicks the list (it must coast), secondary-clicks a row (its
   menu opens) and reads the style over the text field, through the same code
-  (not blocking yet, not yet run in CI). Not tried with a real trackpad or
+  (not blocking yet; passed in one CI run). Not tried with a real trackpad or
   mouse. See [docs/platforms/ios.md](docs/platforms/ios.md#trackpad-and-mouse).
 - 🚧 Mobile CI depth: run the iOS features that are only implemented (timers,
   clipboard, opening URLs) on the simulator, with real `UITouch`es rather than

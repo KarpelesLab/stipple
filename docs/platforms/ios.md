@@ -222,7 +222,11 @@ On an iPad with a trackpad or a mouse (iPadOS 13.4 and later):
 A `UIDropInteraction` on the view takes drops from other apps (iPad split
 view and Slide Over; iPhone apps since iOS 15): text and web links arrive as
 `DropData::Text`, images and files as `DropData::Files` (copies in the app's
-tmp directory). Dragging out of the app isn't done. See
+tmp directory). A `UIDragInteraction` (enabled on iPhone too) drags out of
+it: its long press lifts a `drag_source` whose payload is text (an
+`NSString` item) or files (an item per file, a file representation of the
+file's type, named after it), with the element's picture as the lift's
+preview; a source with nothing that can leave the app lets the lift go. See
 [drag-and-drop.md](../drag-and-drop.md#ios-and-android).
 
 ## Accessibility
@@ -433,8 +437,11 @@ applies.
   shape, and drops from another app, are self-tested through the same code
   as the recognizers' actions, the touch handler's secondary-click mapping
   and the delegates (with stand-in sessions), not with a real trackpad or
-  mouse: the simulator's XCUITest has no pointer. No drags out of the app
-  (`UIDragInteraction`), and no drag between two apps.
+  mouse: the simulator's XCUITest has no pointer. Dragging out is tested by
+  asking the drag interaction's delegate for the items (then dropping them
+  on the app) and by a real long-press lift within the app (XCUITest); a
+  drag between two apps can't be scripted on the simulator and hasn't been
+  run.
 - File pickers answer with contents only (`open_file` and friends return
   `None`), and there is no folder picker. Choosing a file in the picker can't
   be scripted on the simulator (its contents run in another process), so CI
@@ -480,7 +487,16 @@ view's drop delegate (`simulate::drop_item`: a stand-in session over real
 `NSItemProvider`s and `UIDragItem`s, so the file is loaded and copied as a
 real drop's is), reads the trackpad recognizers' settings back
 (`simulate::pointer_status`) and scrolls the list through their action's
-code (`simulate::trackpad_scroll`). It logs to `touchdemo.log` in the app's tmp
+code (`simulate::trackpad_scroll`). Another (`touchdemo: drag out and
+trackpad passed`, not blocking either) lifts its two drag sources through
+the drag interaction's delegate (`simulate::lift_and_drop`: the items it
+answers, their providers' types and names, the lift's preview) and drops
+those items on the pinch box, which must get the text and a copy of the
+file; opens a row's context menu with a secondary click
+(`simulate::secondary_click`); reads the pointer interaction's style over
+the text field (`simulate::pointer_style`: the I-beam); and flicks the list
+with the trackpad (`simulate::trackpad_fling`), which must coast on well
+past where the fingers stopped. It logs to `touchdemo.log` in the app's tmp
 directory. CI runs it, and drives the second half from outside: it switches
 the simulator to dark mode (`xcrun simctl ui booted appearance dark`), sends
 the app to the background by launching Settings and brings it back by

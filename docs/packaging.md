@@ -93,6 +93,7 @@ permissions = ["CAMERA", "POST_NOTIFICATIONS"]
 # abis = ["arm64-v8a", "armeabi-v7a", "x86_64"]
 # lib-name = "qr_master"           # android.app.lib_name: default, the [lib]'s name
 # scheduled-notifications = true   # platform::schedule_notification's receiver and dex
+# drag-files = true                # the FileProvider files dragged out of the app go through
 # billing = true                   # the Play Billing Library for platform::store (or a version: "8.3.0")
 # splash-background = "#16181d"    # Android 12's splash screen
 # icon-foreground = "icons/fg.svg" # the adaptive icon's layer (default: icon)
@@ -230,8 +231,9 @@ rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-and
 Play requires for 64-bit libraries on Android 15 (the tool checks each
 library's ELF segments). It writes the manifest (the `NativeActivity` with
 `android.app.lib_name`, the `configChanges` and `NoActionBar` theme Stipple
-needs, predictive back, the permissions, and for scheduled notifications
-the `Alarm` receiver with its `classes.dex`; see
+needs, predictive back, the permissions, for scheduled notifications
+the `Alarm` receiver with its `classes.dex`, and with `drag-files` the
+`FileProvider` files dragged out of the app go through (the same dex); see
 [android.md](platforms/android.md#packaging)), adds the Play Billing Library
 with `billing` (its dex files and manifest entries, from
 `tools/android/billing.py`; see [purchases.md](purchases.md)), compiles the resources with

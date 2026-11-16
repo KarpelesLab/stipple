@@ -3804,6 +3804,13 @@ impl<S: 'static> App<S> {
                     present(&mut self, &mut surfaces, idx, window, false);
                     ControlFlow::Wait
                 }
+                Event::DragLift { position } => {
+                    // The platform's lift asks what's under the finger.
+                    if self.pane_lift(idx, position, window) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::Drop { position, data } => {
                     let taken = self.pane_drop(idx, position, &data);
                     app_dbg(format_args!("drop at {position:?}: taken {taken}"));
@@ -3908,7 +3915,7 @@ impl<S: 'static> App<S> {
                     // A fling scrolls on with every frame.
                     let flung = self.pane_fling(idx);
                     // A finger held down long enough opens the context menu.
-                    let held = self.pane_long_press(idx);
+                    let held = self.pane_long_press(idx, Some(window));
                     // Updates and timers ran above (the loop wakes again at
                     // the next timer); re-render if they did, or if this
                     // window changed since it last presented (another
