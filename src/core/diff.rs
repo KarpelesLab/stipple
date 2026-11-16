@@ -159,16 +159,22 @@ pub(crate) fn to_window(node: &LayoutNode, outer: Affine) -> Affine {
 /// it has a border, whose anti-aliased edge reaches just outside.
 fn bleed(node: &LayoutNode) -> Rect {
     let b = node.bounds;
-    // Text's outline and shadow reach past its box.
-    if let crate::core::NodeContent::Text { style, .. } = &node.content
-        && let Some(r) = style.reach()
+    // Text that doesn't fit runs past its box, and its outline and shadow
+    // reach past the glyphs.
+    if let crate::core::NodeContent::Text {
+        style, overflow, ..
+    } = &node.content
     {
-        return Rect::from_xywh(
-            b.min_x() - r.left,
-            b.min_y() - r.top,
-            b.width() + r.left + r.right,
-            b.height() + r.top + r.bottom,
-        );
+        let r = style.reach().unwrap_or_default();
+        let (across, below) = (overflow.across as f64, overflow.below as f64);
+        if r != crate::geometry::Insets::ZERO || across > 0.0 || below > 0.0 {
+            return Rect::from_xywh(
+                b.min_x() - across - r.left,
+                b.min_y() - r.top,
+                b.width() + 2.0 * across + r.left + r.right,
+                b.height() + below + r.top + r.bottom,
+            );
+        }
     }
     if node.decoration.border.is_some() {
         Rect::from_xywh(
@@ -316,6 +322,7 @@ mod tests {
                 underline: None,
                 style: Default::default(),
                 padding: Default::default(),
+                overflow: Default::default(),
             },
             action: None,
             focus: None,

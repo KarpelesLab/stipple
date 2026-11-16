@@ -160,8 +160,9 @@ And a few it works around, still open:
   bar's height is estimated.
 - There is no image scaling API; the app box-filters thumbnails itself.
 - Text that overflows its box (a long path without spaces) isn't wrapped at
-  slashes, and when it changes its old glyphs outside the box can stay on
-  screen until something else repaints there: the app clips such values.
+  slashes; the app clips such values so they don't spill over their
+  neighbors. (Its old glyphs past the box used to stay on screen when it
+  changed; the damage now covers where the lines run.)
 - The window's position isn't restored (no `App` option for it).
-- Drag-out is a desktop feature: on iOS, Android and the web items don't
-  leave the app (see [drag-and-drop.md](drag-and-drop.md)).
+- Drag-out doesn't leave the app on the web (see
+  [drag-and-drop.md](drag-and-drop.md)).

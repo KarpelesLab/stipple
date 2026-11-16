@@ -59,6 +59,41 @@ fn child_room(el: &Element, axis: Axis, inner: Size) -> Size {
     }
 }
 
+/// The size `text` takes laid out at `size`, wrapped to `wrap` if set.
+fn text_size(
+    text: &str,
+    size: f64,
+    style: &crate::core::TextStyle,
+    wrap: Option<f64>,
+    font: Option<&Font>,
+) -> Size {
+    match style.resolve(font).as_ref() {
+        // Rich text measures as laid out, its lines as tall as their
+        // tallest run or image.
+        Some(_) if style.spans.is_some() || style.flow.is_some() => style
+            .layout(
+                font,
+                text,
+                size,
+                TextDirection::Auto,
+                wrap,
+                LayoutDirection::Ltr,
+            )
+            .map_or(Size::ZERO, |l| l.size()),
+        // Wrapping text takes the available width and grows in height.
+        Some(f) if let Some(width) = wrap => {
+            let lines = f.wrap(text, size, width);
+            let w = lines
+                .iter()
+                .map(|l| f.measure(l, size).width)
+                .fold(0.0_f64, f64::max);
+            Size::new(w, f.line_height(size) * lines.len() as f64)
+        }
+        Some(f) => f.measure(text, size),
+        None => Size::ZERO,
+    }
+}
+
 /// [`measure`], without a memoized subtree's cache.
 fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
     let pad = el.layout.padding;
@@ -103,34 +138,10 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         }
         ElementKind::Text {
             text, size, style, ..
-        } => match style.resolve(font).as_ref() {
-            // Rich text measures as laid out, its lines as tall as their
-            // tallest run or image.
-            Some(_) if style.spans.is_some() || style.flow.is_some() => {
-                let max = (el.wrap && inner.width.is_finite()).then_some(inner.width);
-                style
-                    .layout(
-                        font,
-                        text,
-                        *size,
-                        TextDirection::Auto,
-                        max,
-                        LayoutDirection::Ltr,
-                    )
-                    .map_or(Size::ZERO, |l| l.size())
-            }
-            // Wrapping text takes the available width and grows in height.
-            Some(f) if el.wrap && inner.width.is_finite() => {
-                let lines = f.wrap(text, *size, inner.width);
-                let w = lines
-                    .iter()
-                    .map(|l| f.measure(l, *size).width)
-                    .fold(0.0_f64, f64::max);
-                Size::new(w, f.line_height(*size) * lines.len() as f64)
-            }
-            Some(f) => f.measure(text, *size),
-            None => Size::ZERO,
-        },
+        } => {
+            let wrap = (el.wrap && inner.width.is_finite()).then_some(inner.width);
+            text_size(text, *size, style, wrap, font)
+        }
         ElementKind::Stack {
             axis,
             gap,
@@ -535,19 +546,32 @@ fn layout_element(
             direction,
             underline,
             style,
-        } => NodeContent::Text {
-            text: text.clone(),
-            size: *size,
-            color: *color,
-            direction: *direction,
-            underline: *underline,
-            style: style.clone(),
-            padding: if dir.is_rtl() {
+        } => {
+            let padding = if dir.is_rtl() {
                 el.layout.padding.mirrored()
             } else {
                 el.layout.padding
-            },
-        },
+            };
+            // How far the lines run past their box: a line too long for it,
+            // and lines too many for its height.
+            let room = bounds.inset(padding);
+            let wrap = (el.wrap && room.width().is_finite()).then_some(room.width());
+            let laid = text_size(text, *size, style, wrap, font);
+            let overflow = crate::core::runtime::TextOverflow {
+                across: (laid.width - room.width()).max(0.0) as f32,
+                below: (laid.height - room.height()).max(0.0) as f32,
+            };
+            NodeContent::Text {
+                text: text.clone(),
+                size: *size,
+                color: *color,
+                direction: *direction,
+                underline: *underline,
+                style: style.clone(),
+                padding,
+                overflow,
+            }
+        }
         ElementKind::Viewport { id } => NodeContent::Viewport(*id),
         ElementKind::Canvas {
             id,

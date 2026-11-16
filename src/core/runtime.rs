@@ -1459,6 +1459,16 @@ impl<S> core::fmt::Debug for Handlers<S> {
     }
 }
 
+/// How far a text node's lines run past their box (see
+/// [`NodeContent::Text`]); small, as the variant is already the largest.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct TextOverflow {
+    /// Past each side (a too-long line may be centered or right-aligned).
+    pub(crate) across: f32,
+    /// Past the bottom (more lines than its height holds).
+    pub(crate) below: f32,
+}
+
 /// Paintable leaf content carried by a [`LayoutNode`] beyond its decoration.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum NodeContent {
@@ -1482,6 +1492,9 @@ pub(crate) enum NodeContent {
         /// The element's padding (mirrored, right to left): the text sits
         /// inside it, as an image does.
         padding: crate::geometry::Insets,
+        /// How far its lines run past the box they're laid out in, when
+        /// they don't fit: drawn there too, so damaged there too.
+        overflow: TextOverflow,
     },
     /// An embedded-content viewport: the node's bounds reserve an area the
     /// compositor fills with externally-rendered pixels for this

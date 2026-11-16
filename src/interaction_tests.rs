@@ -442,3 +442,59 @@ fn the_tab_indicator_slides_and_presenting_only_the_damage_leaves_nothing_stale(
     let rest = tab_strip(1).render_once();
     assert!(screen == rest.as_bytes(), "stale pixels left on screen");
 }
+
+/// A tap target over a narrow box holding a long, unwrapped line: the line
+/// is drawn past the box. `long` picks which of two lines.
+fn overflowing_label(long: bool, font: crate::render::Font) -> App<bool> {
+    App::new(long, |s: &bool, cx: &mut Cx<bool>| {
+        let toggle = tile().on_tap(cx, |s: &mut bool| *s = !*s);
+        let line = if *s {
+            "/home/someone/Music/A very long album name"
+        } else {
+            "~/Videos/short"
+        };
+        let narrow = Element::text(line, 16.0, Color::WHITE).width(40.0);
+        Element::stack(Axis::Vertical, vec![toggle, narrow]).fill(Color::rgb(20, 20, 20))
+    })
+    .font(font)
+    .logical_size(Size::new(400.0, 100.0))
+}
+
+#[test]
+fn text_overflowing_its_box_is_damaged_where_it_is_drawn() {
+    use crate::core::Damage;
+    let Some(font) = crate::render::Font::system_default() else {
+        eprintln!("skipping: no system font");
+        return;
+    };
+    let mut app = overflowing_label(true, font.clone());
+    let (first, _) = app.render_frame();
+    let (w, h) = (first.size().width as usize, first.size().height as usize);
+    let stride = first.stride();
+    let mut screen = first.as_bytes().to_vec();
+    // The long line reaches well past its 40-pixel box.
+    let line = &tree(&app).children[1];
+    assert!(line.bounds.width() <= 40.0);
+    assert!(app.click_at(Point::new(5.0, 5.0)));
+    let full = crate::geometry::Rect::from_xywh(0.0, 0.0, w as f64, h as f64);
+    let (p, d) = app.render_frame();
+    let rects = match &d {
+        Damage::Full => panic!("only the label changed"),
+        Damage::None => vec![],
+        r => r.to_physical(crate::geometry::ScaleFactor::new(1.0), full),
+    };
+    for r in rects {
+        for y in r.min_y() as usize..r.max_y() as usize {
+            let (s, e) = (
+                y * stride + r.min_x() as usize * 4,
+                y * stride + r.max_x() as usize * 4,
+            );
+            screen[s..e].copy_from_slice(&p.as_bytes()[s..e]);
+        }
+    }
+    let fresh = overflowing_label(false, font).render_once();
+    assert!(
+        screen == fresh.as_bytes(),
+        "the long line's tail left on screen"
+    );
+}
