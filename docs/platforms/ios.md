@@ -145,6 +145,21 @@ the view out above it and scrolls the focused field into view (see
 [text-editing.md](../text-editing.md#the-on-screen-keyboard)). The view
 itself keeps its size, so nothing is redrawn at another resolution.
 
+**Editing with a finger.** Taps, double taps, long presses and the
+selection handles in text fields are the shared core's (see
+[text-editing.md](../text-editing.md#editing-with-a-finger)). The edit menu
+is the system's on iOS 16 and later: a `UIEditMenuInteraction` added to the
+view and presented at the selection (`presentEditMenuWithConfiguration:`,
+with a delegate whose `editMenuInteraction:targetRectForConfiguration:`
+gives the selection's rectangle). Its items are UIKit's suggested standard
+actions: the view says yes to `cut:`, `copy:`, `paste:` and `selectAll:` in
+`canPerformAction:withSender:` as the menu offers them (only while it
+shows, so a hardware keyboard's Cmd+C still arrives as a key), and its
+implementations of them reach the App as `Event::EditAction`. Before iOS 16
+the App draws its own menu. `simulate::edit_menu_status()` and
+`simulate::edit_menu_action(..)` read and drive it in `touchdemo`'s
+self-test (added, not yet run in CI: reported as a warning).
+
 **Composing.** The Japanese, Chinese and Korean keyboards compose through
 `UITextInput`: `setMarkedText:selectedRange:` is the composition, shown
 underlined at the caret (`Event::Ime(Ime::Preedit)`), and `insertText:` or

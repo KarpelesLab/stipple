@@ -9,7 +9,7 @@ use crate::render::{Color, Font, Scene};
 
 /// The focused node's editable text leaf, if the focused element is text
 /// entry (the same test the focus overlay uses to draw a caret).
-fn entry_leaf(tree: &LayoutNode, focused: FocusId) -> Option<&LayoutNode> {
+pub(crate) fn entry_leaf(tree: &LayoutNode, focused: FocusId) -> Option<&LayoutNode> {
     let node = find_focus(tree, focused)?;
     let entry = node
         .semantics

@@ -48,6 +48,8 @@ pub(crate) mod doc;
 /// The interactive back swipe from the leading edge (UIKit-free, tested on
 /// hosts).
 mod edge_swipe;
+/// The system's edit menu over a text field (`UIEditMenuInteraction`).
+mod edit_menu;
 /// Background, foreground, memory warnings and appearance changes.
 mod lifecycle;
 /// The state kept across process death (UIKit-free, tested on hosts).
@@ -983,6 +985,21 @@ pub mod simulate {
         super::screen::status()
     }
 
+    /// The system edit menu's state, read through objc dispatch as UIKit
+    /// reads it: whether `UIEditMenuInteraction` exists and was added, whether
+    /// the App asked for the menu, and the view's
+    /// `canPerformAction:withSender:` for `cut:`, `copy:`, `paste:` and
+    /// `selectAll:`.
+    pub fn edit_menu_status() -> String {
+        edit_menu::status()
+    }
+
+    /// Pick `action` in the system's edit menu, as its item does: the view
+    /// gets `cut:`, `copy:`, `paste:` or `selectAll:`.
+    pub fn edit_menu_action(action: crate::platform::EditAction) {
+        later(move || edit_menu::perform_action(action));
+    }
+
     /// A finger `id` at `position` (logical pixels, in the app's content).
     pub fn touch(id: u64, phase: TouchPhase, position: Point) {
         later(move || touch_input(phase, &[(id, position)]));
@@ -1196,6 +1213,7 @@ fn register_view_class() -> Class {
             c"B@:".as_ptr(),
         );
         text_input::add_methods(cls);
+        edit_menu::add_methods(cls);
         a11y::add_methods(cls);
         lifecycle::add_methods(cls);
         class_addMethod(
@@ -1279,6 +1297,12 @@ impl Window for IosWindow {
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         text_input::set_state(state);
+    }
+    fn has_edit_menu(&self) -> bool {
+        edit_menu::available()
+    }
+    fn show_edit_menu(&self, menu: Option<&crate::platform::EditMenu>) {
+        edit_menu::show(menu);
     }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         a11y::set_tree(root);

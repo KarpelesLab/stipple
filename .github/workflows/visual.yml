@@ -4426,6 +4426,14 @@ jobs:
           grep -q "touchdemo: went back" "$LOG"
           grep -q "touchdemo: back Cancelled" "$LOG"
           grep -q "touchdemo: selftest passed" "$LOG"
+          # Editing with a finger and the system's edit menu
+          # (UIEditMenuInteraction): a long press selects the word and asks
+          # for the menu, copy:/cut:/paste: sent to the view reach the field
+          # and the pasteboard. New and not yet run here: reported, not
+          # required.
+          grep -E "touchdemo: edit menu" "$LOG" || true
+          grep -q "touchdemo: edit menu passed" "$LOG" \
+            || echo "::warning::touchdemo's edit menu part didn't pass (see the log above)"
 
       # touchdemo's second part, driven from here: the simulator switches to
       # dark mode (the app follows through traitCollectionDidChange:), the

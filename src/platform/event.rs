@@ -409,6 +409,10 @@ pub enum Event {
     /// The user picked the item with this id from the native menu bar or the
     /// tray icon's menu.
     MenuCommand(u32),
+    /// The user picked an item of the system's edit menu, which the App
+    /// showed over a text field's selection on a touch screen: the App
+    /// applies it to the focused field. See `docs/text-editing.md`.
+    EditAction(crate::platform::EditAction),
     /// The user clicked the tray icon; its menu
     /// items arrive as [`MenuCommand`](Event::MenuCommand)s instead.
     TrayActivated,

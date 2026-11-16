@@ -59,7 +59,9 @@ impl<S: 'static> Pane<S> {
         });
         TouchTargets {
             scroll,
-            long_press: context_target(tree, self.overlay_active, p).0.is_some(),
+            // A text field selects a word instead.
+            long_press: context_target(tree, self.overlay_active, p).0.is_some()
+                || crate::app_text_touch::field_at(tree, self.overlay_active, p).is_some(),
             pinch: pointer_at(layer, p, &|id| pointers.pointers_ref().has_pinch(id)),
             pull_down,
         }
@@ -71,6 +73,7 @@ impl<S: 'static> Pane<S> {
         self.pressed = None;
         self.press_focus = None;
         self.press_at = None;
+        self.cancel_text_tap();
         if self.text_selecting.is_some() {
             self.end_text_select();
         }
@@ -157,6 +160,8 @@ impl<S: 'static> App<S> {
             // Released far away, so the press doesn't click.
             TouchPhase::Cancelled => self.pane_pointer_up(0, Point::new(-1.0e9, -1.0e9)),
         };
+        // A tap on the drawn edit menu.
+        changed |= self.run_edit_pick(0, None);
         changed
     }
 
@@ -188,6 +193,15 @@ impl<S: 'static> App<S> {
         if touch.phase == TouchPhase::Started {
             pane.ensure_tree(state, theme, font.get());
         }
+        let edited = self.text_touch_event(idx, &touch);
+        let App {
+            state,
+            theme,
+            font,
+            panes,
+            ..
+        } = self;
+        let pane = &mut panes[idx];
         let now = pane.touch_now();
         let mut gestures = std::mem::take(&mut pane.touch);
         let action = gestures.touch(&touch, now, |p| pane.touch_targets(p));
@@ -229,7 +243,7 @@ impl<S: 'static> App<S> {
             }
         };
         self.sync_long_press_timer(idx);
-        redraw
+        redraw || edited
     }
 
     /// Keep a timer running while a held finger may become a long press, so
@@ -266,7 +280,10 @@ impl<S: 'static> App<S> {
         app_dbg(format_args!("long press at {at:?}"));
         pane.cancel_press();
         self.sync_long_press_timer(idx);
-        self.pane_context_at(idx, at);
+        // In a text field it selects a word and shows the edit menu.
+        if !self.text_long_press(idx, at) {
+            self.pane_context_at(idx, at);
+        }
         true
     }
 

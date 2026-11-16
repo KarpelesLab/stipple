@@ -173,6 +173,53 @@ The app delivers double- and triple-clicks to the focused element as
 `KeyInput::SelectWord` and `KeyInput::SelectLine`, so a custom key handler can
 handle them too.
 
+## Editing with a finger
+
+On a touch screen (iOS, Android, and touch in a mobile browser) text fields,
+text areas and the [rich editor](rich-text-editing.md) behave as the
+platform's own fields do. It's all in the shared core, driven by the same
+touches on every platform; nothing to turn on.
+
+- **A tap** places the caret when the finger lifts, so a drag that scrolls
+  the page doesn't focus the field or move its caret first. A round handle
+  appears under the caret; drag it to move the caret.
+- **A tap on the caret** (or on its handle) shows the edit menu, and another
+  hides it.
+- **A double tap**, or **a long press**, selects the word and shows the
+  edit menu. In a field a long press does this instead of opening a context
+  menu. Keep the finger down after a long press and move it: the selection
+  grows from the word, a word's end at a time; lifting brings the menu back.
+- **The selection's handles** sit under its two ends, a knob on a stem in
+  the theme's `primary` color. Each takes a finger within 24 logical pixels
+  of its knob (below the text, which a tap still places the caret in), and
+  keeps the finger's offset from the line while it drags, so the finger
+  never covers where the end goes; there is no magnifier.
+- **The edit menu** offers Cut, Copy, Paste and Select All, as they apply:
+  Cut and Copy with a selection (never in a password field), Select All
+  unless everything is selected. Picking one does what Ctrl/Cmd+X, C, V and
+  A do, through the system clipboard. Select All keeps the menu up; the
+  others close it, as does any touch elsewhere.
+
+The handles go away when the text changes (typing hides them), when focus
+moves, and on a mouse press.
+
+| | The edit menu |
+|---|---|
+| iOS 16 and later | the system's, a `UIEditMenuInteraction` on the view. Its items are UIKit's standard `cut:`, `copy:`, `paste:` and `selectAll:` actions, which the view accepts (`canPerformAction:withSender:`) as the menu offers them; the delegate points it at the selection |
+| Android 8 and later | the system's floating toolbar: a floating `ActionMode` started on the app's view, its items titled with the system's own (translated) strings |
+| The web, older iOS and Android | drawn by Stipple: a row of buttons above the selection (below it when there's no room), menu items to screen readers |
+
+`App::edit_menu()` says what the menu shows, and `App::edit_action(..)`
+picks an item, for tests and scripted input; a backend reports a pick from
+the system's menu as `Event::EditAction`.
+
+The focused field stays above the on-screen keyboard as described
+[above](#the-on-screen-keyboard), its handles with it.
+
+Not done yet: the caret handle doesn't fade out on its own after a while (as
+Android's does), dragging a handle past a single-line field's edge doesn't
+scroll its text, and the menu offers Paste even when the clipboard is empty.
+
 ## The clipboard
 
 Ctrl/Cmd+C, X and V go through an in-process mirror

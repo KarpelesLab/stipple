@@ -573,6 +573,45 @@ if ! log | grep -qE "Stipple Android: keyboard inset [1-9]"; then
 fi
 adb exec-out screencap -p > "$shots/android-number-field.png"
 
+# Editing with a finger: a long press on the name field selects its word and
+# the system's edit menu (a floating ActionMode) shows, with the system's own
+# Cut / Copy / Paste / Select All; a tap on its Copy reaches the app. New and
+# not yet run here: a warning rather than a failure.
+wait_quiet() {
+  local i
+  for ((i = 0; i < $2; i++)); do
+    (($(count "$1") > 0)) && return 0
+    sleep 1
+  done
+  return 1
+}
+edit_menu_check() {
+  local b x1 y1 x2 y2
+  adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || return 1
+  b="$(adb shell cat /sdcard/stipple-ui.xml | sed 's/<node/\n<node/g' \
+    | grep -E 'class="android.widget.EditText"' | head -1 \
+    | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\]".*/\1 \2 \3 \4/p' || true)"
+  [ -n "$b" ] || { echo "no text field node" >&2; return 1; }
+  read -r x1 y1 x2 y2 <<< "$b"
+  # A quarter of the way in, on "Stipple日本".
+  local x=$((x1 + (x2 - x1) / 4)) y=$(((y1 + y2) / 2))
+  adb shell input swipe "$x" "$y" "$x" "$y" 800
+  wait_quiet "stipple: edit menu shown: Cut,Copy,Paste" 15 || { echo "no edit menu shown" >&2; return 1; }
+  sleep 2
+  adb exec-out screencap -p > "$shots/android-edit-menu.png"
+  adb shell uiautomator dump /sdcard/stipple-ui.xml >/dev/null 2>&1 || true
+  adb shell cat /sdcard/stipple-ui.xml > "$shots/android-edit-menu-ui.xml" || true
+  tap_node 'text="Copy"' || { echo "no Copy item on screen" >&2; return 1; }
+  wait_quiet "stipple: edit menu picked Copy" 10 || { echo "Copy didn't reach the app" >&2; return 1; }
+  wait_quiet "stipple: edit menu closed" 10 || { echo "the edit menu stayed" >&2; return 1; }
+}
+if edit_menu_check; then
+  echo "android: a long press selected a word and the floating edit menu's Copy reached the app"
+else
+  echo "::warning::the floating edit menu check didn't pass"
+  log | grep -E "edit menu|androiddemo: text" | tail -10 || true
+fi
+
 if ! adb shell pidof "$pkg" >/dev/null || log | grep -q "panicked"; then
   echo "the app crashed" >&2
   adb logcat -d | tail -60 >&2

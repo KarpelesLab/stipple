@@ -709,6 +709,20 @@ pub trait Window {
     /// [`set_text_input_active`](Self::set_text_input_active). Default: a
     /// no-op (desktops); honored on Android, iOS and the web.
     fn set_input_hints(&self, _hints: &crate::platform::InputHints) {}
+    /// Whether the platform shows the edit menu itself (see
+    /// [`show_edit_menu`](Self::show_edit_menu)); if not (the default), the
+    /// App draws one in the window. `UIEditMenuInteraction` on iOS 16 and
+    /// later, a floating `ActionMode` on Android 8 and later.
+    fn has_edit_menu(&self) -> bool {
+        false
+    }
+    /// Show the system's edit menu over a text field's selection (`Some`),
+    /// replacing one already shown, or close it (`None`). What the user picks
+    /// comes back as [`Event::EditAction`](crate::platform::Event::EditAction);
+    /// the menu closes itself then, and when the user taps elsewhere. Only
+    /// called where [`has_edit_menu`](Self::has_edit_menu) says so. Default:
+    /// a no-op.
+    fn show_edit_menu(&self, _menu: Option<&crate::platform::EditMenu>) {}
     /// Whether the window takes the drag that is over it, at the position of
     /// the last [`Event::DragEnter`](crate::platform::Event::DragEnter) or
     /// [`Event::DragOver`](crate::platform::Event::DragOver). Call it while

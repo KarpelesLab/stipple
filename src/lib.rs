@@ -46,6 +46,7 @@ mod app_locale;
 mod app_pointer;
 mod app_scroll_bar;
 mod app_select;
+mod app_text_touch;
 mod app_touch;
 pub mod audio;
 pub mod camera;
@@ -75,6 +76,8 @@ mod select_tests;
 pub mod style;
 #[cfg(test)]
 mod tab_focus_tests;
+#[cfg(test)]
+mod text_touch_tests;
 #[cfg(test)]
 mod touch_tests;
 mod web_app;
@@ -407,6 +410,9 @@ struct Pane<S> {
     // pointer drag is extending it, and its context menu this frame.
     read_sel: app_select::SharedSelection,
     read_selecting: bool,
+    // Editing text with a finger: the deferred tap, the selection handles
+    // and the edit menu.
+    text_touch: app_text_touch::TextTouch,
     select_menu: Option<crate::core::ContextId>,
     // Consecutive presses on text, for double-click (word) and triple-click
     // (line) selection.
@@ -572,6 +578,7 @@ impl<S: 'static> Pane<S> {
             text_selecting: None,
             read_sel: Default::default(),
             read_selecting: false,
+            text_touch: Default::default(),
             select_menu: None,
             clicks: ClickCounter::default(),
             dirty: true,
@@ -1293,6 +1300,8 @@ impl<S: 'static> Pane<S> {
         // The context menu of selectable text (Copy, Select All).
         let selected = self.selected_text();
         self.select_menu = Some(app_select::register_menu(&mut cx, &self.read_sel, selected));
+        // The edit menu a touch screen shows over a field's selection.
+        self.text_touch.declare_menu(&mut cx, &theme);
         self.context_menus = cx.take_context_menus();
         crate::widgets::menus::context(&mut cx, &theme, &self.context_menus, &self.menu_ui);
         // A message box drawn in the window, over everything else.
@@ -1541,6 +1550,7 @@ impl<S: 'static> Pane<S> {
         // painting, so the retained tree matches what's drawn for event routing.
         crate::core::apply_scroll(&mut tree, &mut self.scroll_offsets);
         self.reveal_caret(&mut tree, font);
+        self.stamp_text_touch(&mut tree, font);
         // Elements entering, leaving (drawn from the last frame's tree while
         // they do) and moving to where the layout put them.
         let old = self.tree.as_ref();
@@ -1623,6 +1633,7 @@ impl<S: 'static> Pane<S> {
             );
             crate::core::paint_preedit(tree, fid, &mut scene, font, theme.palette.text);
         }
+        self.text_touch.paint(&mut scene, theme);
         scene
     }
 
@@ -1812,6 +1823,8 @@ impl<S: 'static> Pane<S> {
         // present: the tree diff can't see those.
         let content = self.take_content_damage();
         let damage = merge_regions(damage, content);
+        // The selection handles, drawn over the tree.
+        let damage = merge_regions(damage, self.text_touch.take_damage());
         self.presented = self.tree.clone();
         self.painted_highlights = self.highlight_alphas.clone();
         self.painted_focused = self.focused;
@@ -3139,7 +3152,8 @@ impl<S: 'static> App<S> {
         // otherwise latch a drag if a draggable sits there, or else a drag
         // source.
         self.panes[idx].press_focus = None;
-        if self.pane_select_press_at(idx, position)
+        if self.panes[idx].text_touch_down(position)
+            || self.pane_select_press_at(idx, position)
             || self.pane_text_press_at(idx, position)
             || self.pane_drag_at_point(idx, position)
         {
@@ -3168,6 +3182,10 @@ impl<S: 'static> App<S> {
 
     fn pointer_move_inner(&mut self, idx: usize, position: Point) -> bool {
         self.panes[idx].last_pointer = position;
+        // A finger dragging a selection handle.
+        if let Some(redraw) = self.text_touch_move(idx, position) {
+            return redraw;
+        }
         if self.panes[idx].text_selecting.is_some() {
             self.pane_text_drag_at(idx, position)
         } else if self.panes[idx].read_selecting {
@@ -3193,6 +3211,10 @@ impl<S: 'static> App<S> {
     }
 
     fn pointer_up_inner(&mut self, idx: usize, position: Point) -> bool {
+        // A finger tapping a text field, or letting go of a handle.
+        if let Some(redraw) = self.text_touch_up(idx, position) {
+            return redraw;
+        }
         // Drop an in-app drag first: in another window, outside them all, or
         // here.
         if let Some(redraw) = self.cross_drag_release(idx, position) {
@@ -3384,6 +3406,7 @@ impl<S: 'static> App<S> {
             // Whether Back would reach the app (predictive back).
             app.sync_back();
             app.native_context_menu(idx, window);
+            app.run_edit_pick(idx, Some(window));
             let App {
                 state,
                 theme,
@@ -3411,6 +3434,7 @@ impl<S: 'static> App<S> {
                     let scene = pane.build_frame(state, theme, font.get());
                     app_dbg(format_args!("present: built"));
                     pane.sync_ime(window, font.get());
+                    pane.sync_edit_menu(window);
                     retitled = pane.sync_title(window);
                     // The view may have changed the cursor under a pointer at
                     // rest (a terminal hiding it while the user types).
@@ -3846,6 +3870,12 @@ impl<S: 'static> App<S> {
                     let at = self.panes[idx].last_pointer;
                     let (dx, dy) = delta.in_pixels();
                     if self.try_forward_wheel(idx, at, dy) || self.pane_scroll_by(idx, dx, dy) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::EditAction(action) => {
+                    if self.pane_edit_action(idx, action, Some(window)) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait

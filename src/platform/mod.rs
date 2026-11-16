@@ -51,6 +51,8 @@ pub(crate) mod compose;
 /// (and the one an APK carries, from [`android_receiver_dex`] on any host).
 #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
 pub(crate) mod dex;
+/// The edit menu over a text field's selection on a touch screen.
+mod edit_menu;
 
 /// A `classes.dex` for an Android APK holding the `org.stipple.android.Alarm`
 /// broadcast receiver, which shows the app's
@@ -146,6 +148,7 @@ pub(crate) use access::{A11yNode, A11yRole};
 pub use assets::{AssetError, AssetReader, Assets, assets, set_assets_dir};
 pub use back::{BackEdge, BackGesture, back_enabled, set_back_enabled};
 pub use bundle::{AppDirs, AppInfo, app_info, dirs, set_app_info};
+pub use edit_menu::{EditAction, EditMenu};
 pub use error::PlatformError;
 pub use event::{
     ButtonState, DragOffer, DropData, Event, Ime, KeyCode, Lifecycle, Modifiers, PointerButton,

@@ -31,6 +31,7 @@ How to build, package and run on each platform, and what works there today.
 | Touch scrolling (drag, fling, sideways strips) and multi-touch events | — | — | — | ✅ ²⁷ | ✅ ¹⁹ | ✅ ⁶⁰ |
 | Scroll bars (drag the thumb, page on the track) | ✅ ⁷⁴ | ✅ ⁷⁴ | overlay ⁷⁴ | indicator ⁷⁴ | indicator ⁷⁴ | ✅ ⁷⁴ |
 | Touch gestures: long press for the context menu, pinch and two-finger pan (`on_pinch`) | — | — | — | ✅ ⁶⁰ | ✅ ⁶⁰ | ✅ ⁶⁰ |
+| Editing text with a finger: tap for the caret, word selection, selection handles, the edit menu | — | — | — | ✅ ⁷⁷ | ✅ ⁷⁷ | ✅ ⁷⁷ |
 | Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹² |
 | Keyboard focus on buttons and toggles (Tab, Shift+Tab, Enter / Space) | ✅ ⁷⁰ | ✅ ⁷⁰ | ✅ ⁷⁰ | hardware keyboard ⁷⁰ | ✅ ⁷⁰ | ✅ ⁷⁰ |
 | Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
@@ -565,6 +566,15 @@ from other apps works where the clipboard carries them (X11, Wayland,
 Windows, macOS; HTML on the web; text only on iOS and Android). Code is
 shown in the system's monospaced font, which the web doesn't have. See
 [rich-text-editing.md](rich-text-editing.md).
+
+⁷⁷ In the shared core, from the platform's touches, for text fields, text
+areas and the rich editor: the handles and the web's edit menu are drawn by
+Stipple; iOS 16+ shows the system's menu (`UIEditMenuInteraction`) and
+Android 8+ a floating `ActionMode` (the drawn menu before those). App-tested
+with synthetic touches; the iOS simulator self-test and the Android emulator
+script check the system menus, added with this change and not yet run in CI
+(they warn rather than fail). See
+[text-editing.md](text-editing.md#editing-with-a-finger).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

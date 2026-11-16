@@ -587,6 +587,95 @@ mod selftest {
         move |_| simulate::text_input_status().contains(&format!("doc={text:?} "))
     }
 
+    /// What the edit menu's part found wrong (kept apart from the rest, so
+    /// it reports on its own line: it is new, and hasn't run in CI yet).
+    static EDIT_FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+    fn edit_check(ok: bool, what: impl Into<String>) {
+        if !ok {
+            let what = what.into();
+            log(&format!("touchdemo: edit menu check failed: {what}"));
+            EDIT_FAILURES.lock().unwrap().push(what);
+        }
+    }
+
+    /// Editing with a finger and the system's edit menu
+    /// (`UIEditMenuInteraction`), on the text field holding "HiJP": a long
+    /// press selects the word and asks for the menu, which the view backs
+    /// with `canPerformAction:withSender:`; Copy and Cut picked through the
+    /// view's `copy:` / `cut:` reach the field and the pasteboard; a tap on
+    /// the caret brings the menu back with Paste only, and `paste:` puts the
+    /// word back. Reports "touchdemo: edit menu passed" (or FAILED) on its
+    /// own.
+    fn edit_menu_steps(steps: &mut Steps) {
+        use stipple::platform::EditAction;
+        let at = Point::new(40.0, PAD + FIELD_H / 2.0);
+        steps.run(500, move |_| {
+            simulate::touch(7, TouchPhase::Started, at);
+        });
+        steps.run(900, move |_| simulate::touch(7, TouchPhase::Ended, at));
+        steps.until(|s| s.field.buffer().selection().is_some());
+        steps.run(300, |s| {
+            let status = simulate::edit_menu_status();
+            log(&format!("touchdemo: edit menu after long press {status}"));
+            edit_check(
+                s.field.buffer().selection() == Some((0, 4)),
+                format!("long press selected {:?}", s.field.buffer().selection()),
+            );
+            edit_check(
+                status.contains("interaction=true shown=true cut=true copy=true paste=true"),
+                format!("menu status {status}"),
+            );
+            simulate::edit_menu_action(EditAction::Copy);
+        });
+        steps.until(|_| stipple::platform::clipboard::text().as_deref() == Some("HiJP"));
+        steps.run(0, move |s| {
+            let pasteboard = stipple::platform::clipboard::text();
+            log(&format!("touchdemo: edit menu copied {pasteboard:?}"));
+            edit_check(pasteboard.as_deref() == Some("HiJP"), "Copy");
+            edit_check(s.field.text() == "HiJP", "Copy changed the text");
+            // Select it again, and cut.
+            simulate::touch(7, TouchPhase::Started, at);
+        });
+        steps.run(900, move |_| simulate::touch(7, TouchPhase::Ended, at));
+        steps.until(|s| s.field.buffer().selection().is_some());
+        steps.run(300, |_| simulate::edit_menu_action(EditAction::Cut));
+        steps.until(|s| s.field.text().is_empty());
+        steps.run(300, |s| {
+            log(&format!(
+                "touchdemo: edit menu cut, text {:?}",
+                s.field.text()
+            ));
+            edit_check(s.field.text().is_empty(), "Cut");
+            // A tap on the caret: the menu, with Paste.
+            tap(30.0, PAD + FIELD_H / 2.0);
+        });
+        steps.run(1000, |_| tap(30.0, PAD + FIELD_H / 2.0));
+        steps.run(500, |_| {
+            let status = simulate::edit_menu_status();
+            log(&format!("touchdemo: edit menu on the caret {status}"));
+            edit_check(
+                status.contains("shown=true cut=false copy=false paste=true"),
+                format!("caret menu {status}"),
+            );
+            simulate::edit_menu_action(EditAction::Paste);
+        });
+        steps.until(|s| s.field.text() == "HiJP");
+        steps.run(0, |s| {
+            log(&format!("touchdemo: edit menu pasted {:?}", s.field.text()));
+            edit_check(s.field.text() == "HiJP", "Paste");
+            let failures = std::mem::take(&mut *EDIT_FAILURES.lock().unwrap());
+            if failures.is_empty() {
+                log("touchdemo: edit menu passed");
+            } else {
+                log(&format!(
+                    "touchdemo: edit menu FAILED: {}",
+                    failures.join("; ")
+                ));
+            }
+        });
+    }
+
     /// The bundle's packaged files (`Stipple.app/assets/`, which CI copies
     /// from `examples/touchdemo/assets`) through `platform::assets`: where
     /// they are, a whole file with its size and FNV-1a hash, the listings,
@@ -761,6 +850,7 @@ mod selftest {
         steps.run(0, |s| {
             check(s.code_submitted, "Done didn't submit the barcode field")
         });
+        edit_menu_steps(&mut steps);
 
         // Drag the list up 300 points with a second finger id, a move every
         // 16 ms, so it scrolls and then flings.

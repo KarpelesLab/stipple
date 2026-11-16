@@ -71,7 +71,9 @@ pub use element::{Align, BoxStyle, Element};
 pub use handle::runtime;
 pub(crate) use handle::{AlertInput, AlertView};
 pub use handle::{AppHandle, StoreHandle, TimerId};
-pub(crate) use ime::{focused_caret, ime_state, input_hints, paint_preedit, secure_focused};
+pub(crate) use ime::{
+    entry_leaf, focused_caret, ime_state, input_hints, paint_preedit, secure_focused,
+};
 pub use interact::{ElementKey, Interaction};
 pub use keys::{FocusGroup, Handled, RawKeyId};
 pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
@@ -87,7 +89,7 @@ pub(crate) use pointer_events::{
 pub use presence::Effect;
 pub(crate) use render::{
     apply_scroll, caret_index_at, leaf_layout, mark_native_states, paint_focus_look, paint_hover,
-    reveal, scroll_range,
+    reveal, scroll_range, translate,
 };
 pub use render::{layout, layout_with_direction, measure, paint, paint_visible};
 pub use runtime::{

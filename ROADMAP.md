@@ -2011,12 +2011,37 @@ Most input only works on X11 today.
   Chrome) and pass; the iOS steps are added with this change and haven't run
   yet. Not yet tried on a real phone. See
   [docs/pointer-events.md](docs/pointer-events.md#touch-gestures).
-- ⬜ Mobile text editing UI: touch caret placement and selection handles,
-  the system's edit menu (cut / copy / paste / select all; `UIEditMenuInteraction`
-  on iOS, the floating action mode on Android), and keeping the focused field
-  above the on-screen keyboard: on iOS the keyboard can cover a field today
-  (follow the keyboard frame notifications); Android already shrinks the
-  content, but nothing scrolls the focused field into view.
+- ✅ Mobile text editing UI, in the shared core (`app_text_touch`) for text
+  fields, text areas and the rich editor alike, from the platform's touches:
+  a tap places the caret on release (so a scrolling drag doesn't focus the
+  field) and shows a caret handle; a tap on the caret toggles the edit menu;
+  a double tap or a long press (instead of the context menu, in a field)
+  selects the word, and the long-pressing finger then extends it a word's end
+  at a time; the selection's ends have handles drawn by Stipple (knob on a
+  stem, 48-pixel touch target below the text, the finger's offset kept, no
+  magnifier). The edit menu (Cut / Copy / Paste / Select All, as they apply;
+  no Cut or Copy in a password field) is the system's where there is one
+  (`Window::has_edit_menu` / `show_edit_menu`, picks back as
+  `Event::EditAction`): `UIEditMenuInteraction` on iOS 16+ (the view backs
+  the standard `cut:` / `copy:` / `paste:` / `selectAll:` through
+  `canPerformAction:withSender:`), a floating `ActionMode` on Android 8+ (a
+  run-time `ActionMode.Callback2`, system strings); else (the web, older
+  systems) a row of menu items Stipple draws above the selection. Keeping the
+  focused field above the keyboard was already done (#38: the view laid out
+  above `keyboard_inset`, the field scrolled into view), and the handles
+  follow it. App-tested with synthetic touches (caret, double tap, long press
+  and extend, handle drags, the drawn menu's items, a password field, a
+  scrolling drag, the rich editor, scroll-into-view under a keyboard inset,
+  and the system menu through a window's `show_edit_menu` and
+  `Event::EditAction`). `touchdemo`'s iOS self-test long-presses the field and
+  sends `copy:` / `cut:` / `paste:`; the Android emulator script long-presses
+  the name field and taps the floating toolbar's Copy: both added and not yet
+  run (they warn rather than fail); the native menus are build-checked only.
+  Not done: the caret handle doesn't fade on its own, a dragged handle doesn't
+  scroll a single-line field's text, Paste shows even with an empty
+  clipboard, and the system menu isn't told when the App's field moves under
+  it (it closes on the next touch). See
+  [docs/text-editing.md](docs/text-editing.md#editing-with-a-finger).
 - ✅ Menus on mobile: `Element::context_menu` opens on a long press as the
   menu Stipple draws, on iOS, Android and the web alike (chosen over `UIMenu`
   / `UIContextMenuInteraction` and `PopupMenu`: it follows the theme, keeps

@@ -232,6 +232,19 @@ suggestions and autocorrect work as in any Android app:
   (see [text-editing.md](../text-editing.md#the-on-screen-keyboard)). The
   content rectangle itself doesn't shrink for it. Logged as
   `Stipple Android: keyboard inset N`.
+- **The edit menu**, over a field's selection after a long press or a double
+  tap (see [text-editing.md](../text-editing.md#editing-with-a-finger)), is
+  the system's floating toolbar on Android 8 and later: a floating
+  `ActionMode` (`startActionMode(callback, TYPE_FLOATING)`) on the host
+  view, whose `ActionMode.Callback2` is a class of its own assembled at run
+  time and loaded on its own (like the back callback): `onPrepareActionMode`
+  adds the items the App's menu offers, titled with `android.R.string.cut`,
+  `copy`, `paste` and `selectAll`; `onGetContentRect` points it at the
+  selection; `onActionItemClicked` hands the pick to the App
+  (`Event::EditAction`). Logged as `stipple: edit menu shown: ...`,
+  `picked ...` and `closed`. Before Android 8 the App draws its own menu.
+  CI's emulator script long-presses the name field and taps the menu's Copy
+  (added, not yet run in CI: a warning if it fails).
 
 `stipple::platform::backend::android::input_connection_self_test()` drives
 the focused field's connection as a keyboard would and logs what it reads

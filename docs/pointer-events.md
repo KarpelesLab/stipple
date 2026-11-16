@@ -146,6 +146,10 @@ in the shared core (`core::touch`), so every platform behaves the same:
   a tap then picks from the menu. Moving first, or lifting before the delay,
   is a scroll or a tap as usual. Elsewhere, holding a button and lifting
   still taps it, as on iOS and Android.
+- **Text fields.** A tap in a text field places the caret when the finger
+  lifts; a long press there selects the word and shows the edit menu rather
+  than a context menu. See
+  [text-editing.md](text-editing.md#editing-with-a-finger).
 - **Pinch, two-finger pan and rotation.** A second finger landing while the
   first is still pressing (or scrolling) starts a pinch when the element
   under the midpoint has `on_pinch`; its handler gets a `PinchEvent` for the

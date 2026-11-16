@@ -1036,7 +1036,7 @@ impl TextLayout<'_> {
     }
 
     /// The display line holding caret position `index`.
-    fn line_of(&self, index: usize) -> usize {
+    pub(crate) fn line_of(&self, index: usize) -> usize {
         self.lines
             .iter()
             .position(|l| index <= l.range.end)

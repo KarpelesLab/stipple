@@ -66,6 +66,8 @@ mod back;
 pub(crate) mod billing;
 /// The Java classes defined at run time: the host view and friends.
 mod classes;
+/// The system's edit menu over a text field: a floating `ActionMode`.
+mod edit_menu;
 /// The input method's `InputConnection` to the focused text field.
 mod ime;
 /// The geometry of the system bars' insets (Android-free, tested on hosts).
@@ -1558,6 +1560,12 @@ impl Window for AndroidWindow {
             self.view
                 .request_ime(crate::platform::input_connection::Sync::Restart);
         }
+    }
+    fn has_edit_menu(&self) -> bool {
+        edit_menu::available(unsafe { (*self.view.instance.activity).sdk_version })
+    }
+    fn show_edit_menu(&self, menu: Option<&crate::platform::EditMenu>) {
+        edit_menu::show(menu, self.view.scale.get());
     }
     fn set_input_hints(&self, hints: &crate::platform::InputHints) {
         // A field wanting another keyboard: the input method starts over.
