@@ -219,6 +219,7 @@ export async function start(canvas, wasmUrl, options = {}) {
   // so going from one to the other swaps in a fresh canvas (swapCanvas).
   let ctx = null;
   let kind = null; // "2d" | "gpu"
+  let blank = false; // the 2D canvas came back blank: the next frame goes whole
   let renderer = "software";
   const enc = new TextEncoder();
   const dec = new TextDecoder();
@@ -623,6 +624,19 @@ export async function start(canvas, wasmUrl, options = {}) {
         if (!ctx) {
           ctx = canvas.getContext("2d");
           kind = "2d";
+          // Chrome drops the 2D context of a canvas out of sight (a hidden
+          // tab, an iframe scrolled away) and gives it back blank: draw the
+          // whole frame again then.
+          const c = canvas;
+          c.addEventListener("contextrestored", () => {
+            if (c !== canvas) return;
+            blank = true;
+            e?.stipple_redraw?.();
+          });
+        }
+        if (blank) {
+          blank = false;
+          n = 0;
         }
         if (canvas.width !== w || canvas.height !== h) {
           canvas.width = w; // clears the canvas, so draw it all
