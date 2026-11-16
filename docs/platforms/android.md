@@ -260,9 +260,11 @@ Android widget's class (a button reads as `android.widget.Button`, a field as
 text (or a container's content description), its state (focused, selected,
 checked, editable, password) and its bounds on screen. Actions: accessibility
 focus, click (a tap at the node's center), focus and select (the same tap),
-scroll forward and backward (a wheel step over it), set text (select all,
-then type). Changes to the tree send `TYPE_WINDOW_CONTENT_CHANGED`, and a
-moved focus `TYPE_VIEW_FOCUSED`. A hovering finger (TalkBack's explore by
+scroll forward and backward on any scroll container whose content overflows
+(a page, as a wheel over it, sideways for a horizontal strip; each offered
+only while it can go that way), set text (select all, then type). Changes to
+the tree send `TYPE_WINDOW_CONTENT_CHANGED`, a moved focus
+`TYPE_VIEW_FOCUSED`, and a container that scrolled `TYPE_VIEW_SCROLLED`. A hovering finger (TalkBack's explore by
 touch) goes to the host view, which announces the node under it. The host
 view's own node (the window) isn't focusable to accessibility, though the
 view takes input focus: TalkBack folds the text of a focusable node's

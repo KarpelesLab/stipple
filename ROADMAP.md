@@ -2237,14 +2237,44 @@ Most input only works on X11 today.
   tried locally); not yet seen in CI. Left: the X root window's `AT_SPI_BUS`
   property, controller-for / member-of relations (the tree doesn't know them),
   relations, caret and selection on the other desktops' bridges.
-- ⬜ Accessibility depth found by the out-of-process checks and the screen
-  readers: a plain scrollable container (`Element::scrollable`) is a group
-  with no scroll actions on every platform (only lists, trees and tables have
-  them); UIA has no Value, Toggle, Selection, ExpandCollapse, Scroll or Text
-  patterns and raises only the focus-changed event (no structure or property
-  changes); macOS elements have no value for fields; toasts are announced on
-  macOS, iOS and Android (and the web's ARIA alert) but not yet by UIA or
-  AT-SPI.
+- ✅ Accessibility depth found by the out-of-process checks and the screen
+  readers. **Scrolling:** a scroll container's node says where it is
+  scrolled (`AccessNode::scroll`, an `AccessScroll`: offset, range, viewport,
+  axis; a list, tree or table takes its body's), and every bridge scrolls it
+  the same way, a wheel at its middle (`platform::access`'s shared
+  actions): UIA's Scroll pattern on a Pane (and ScrollItem on what it
+  holds), an `AXScrollArea` with a settable `AXScrollBar` and
+  `AXScrollToVisible` (macOS), `accessibilityScroll:` with "Page N of M"
+  (iOS), `ACTION_SCROLL_FORWARD`/`BACKWARD` on any overflowing container,
+  offered only where it can go, and `TYPE_VIEW_SCROLLED` (Android), a scroll
+  pane with scroll actions, a settable `Value` and `Component.ScrollTo`
+  (AT-SPI), and focus moving to a control scrolled out of view bringing it
+  back (web). **UIA:** Value, Toggle, Selection / SelectionItem,
+  ExpandCollapse, Scroll / ScrollItem and Text (`ITextRangeProvider`
+  ranges by character, word, line and document: GetText, Select, Move,
+  MoveEndpointByUnit / ByRange, Compare, FindText, GetBoundingRectangles)
+  patterns, each with a hand-written vtable, and property-changed (name,
+  value, toggle, expand, selection, scroll), structure-changed and
+  ElementSelected events on tree swaps; COM-free logic in
+  `platform::uia_logic`. **macOS:** fields' `AXValue` (settable),
+  `AXSelectedTextRange` (settable), `AXNumberOfCharacters`,
+  `AXInsertionPointLineNumber`; checkboxes as `AXCheckBox` with a 0/1 value;
+  value, selection, expansion and layout notifications on tree swaps.
+  **Toasts:** announced by UIA (`UiaRaiseNotificationEvent`) and AT-SPI
+  (`object:announcement` from a polite live-region notification). Unit
+  tests for the shared actions and tree changes, the UIA and AX logic, the
+  AT-SPI interfaces and events, and App tests scrolling through the bridges'
+  events; `touchdemo` gets a "Remember" checkbox and a toast on desktops.
+  CI: new steps that don't fail their (required) jobs yet: the AT-SPI walk's
+  depth checks (scroll panes, ScrollTo, the check box, the announcement;
+  passing locally under Xvfb), `uia-patterns.ps1` and `uiademo --patterns`
+  (Windows), `axprobe --depth` (macOS); NVDA and Orca report whether they
+  speak the toast. The Windows, macOS and iOS code is build- and
+  clippy-checked only. Left: UIA text attributes, text-selection and
+  text-changed events, RangeValue, Grid / Table and `LabeledBy`; macOS title
+  elements and static text values; an activation of an item scrolled out
+  of view lands outside the viewport (screen readers bring it into view
+  first); the sway walk doesn't run the depth checks.
 - ✅ Keyboard focus for buttons and the other controls a tap activates
   (`core::tab_focus`): an `on_tap` element whose role is a button, checkbox,
   switch, tab, select, list or tree item, row, cell or column header (not a

@@ -293,6 +293,11 @@ a checkbox or switch; the built-in ones do).
 - **Focus, page to app.** Interactive elements are focusable (`tabindex=-1`);
   when a screen reader moves focus to a text field's element, the field is
   focused in the app.
+- **Scrolling.** A scroll container's element carries where it is scrolled
+  (`sc` in the JSON). When focus moves to an element scrolled out of its
+  container's view, the overlay scrolls the app's container to show it (a
+  wheel at the container's middle, the least movement that shows it). ARIA
+  has no scroll role or action to say more.
 
 ### Theme
 

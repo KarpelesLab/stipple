@@ -3,10 +3,11 @@
 Stipple draws every control itself, so the operating system can't see them on
 its own. Each frame, the `App` builds an accessibility tree from the layout
 (`stipple::core::AccessNode`: roles, names, bounds, focus, selected / checked /
-expanded state, a text field's caret and selection, and which element labels
-a field), maps it to the platform layer's neutral (crate-internal) `A11yNode`
-tree, and gives it to the window, whose backend exposes it to the platform's
-accessibility API. `App::accessibility_tree()` returns the tree for tests.
+expanded state, a text field's caret and selection, which element labels
+a field, and where a scroll container is scrolled), maps it to the platform
+layer's neutral (crate-internal) `A11yNode` tree, and gives it to the window,
+whose backend exposes it to the platform's accessibility API.
+`App::accessibility_tree()` returns the tree for tests.
 
 | Platform | What the tree reaches | Checked in CI from another process |
 | --- | --- | --- |
@@ -32,6 +33,46 @@ says or does:
 | Narrator, JAWS, VoiceOver on iOS | none | not tried |
 
 The rest of this page says what each check proves, and what it doesn't.
+
+## Scrolling
+
+A scroll container (`Element::scrollable`, which `widgets::scroll` and
+`scroll_horizontal` make) carries where it is scrolled in its node
+(`AccessNode::scroll`, an `AccessScroll`: the offset from its start, the
+largest offset, the viewport's length, whether it scrolls sideways and
+whether it runs right to left). A list, tree or table takes the scroll of
+the container that is its body, so the one container isn't reported twice.
+Every platform exposes it, and every one scrolls it the same way: a wheel at
+the container's middle, which the app gives the innermost container under it
+that scrolls that way (`platform::access`, shared by the bridges):
+
+| Platform | What a scroll container is | How a screen reader scrolls it |
+| --- | --- | --- |
+| Windows | a pane (or the list) with the Scroll pattern; its items have ScrollItem | `SetScrollPercent`, `Scroll` (a page or a line), `ScrollIntoView` |
+| macOS | an `AXScrollArea` (a list keeps its role) with an `AXScrollBar` | the bar's `AXValue` (0 to 1), `AXIncrement` / `AXDecrement`; `AXScrollToVisible` on what's inside |
+| iOS | elements inside it | `accessibilityScroll:` (VoiceOver's three-finger swipe), a page, with "Page N of M" |
+| Android | a scrollable node | `ACTION_SCROLL_FORWARD` / `BACKWARD`, a page, offered only where it can go; `TYPE_VIEW_SCROLLED` when it moved |
+| Linux | a scroll pane (a list keeps its role) with `Value` (the offset) | `Action` "scroll forward" / "scroll backward", setting `Value.CurrentValue`, `Component.ScrollTo` on what's inside |
+| Web | the overlay element, with the scroll in its data | focus moving to a control scrolled out of view brings it back |
+
+A page is 80% of the viewport. App tests (`src/a11y_scroll_tests.rs`) scroll
+a plain container a page, to its end and back to an item through the events
+the bridges make, and check the tree's offsets follow. Not covered: a click
+(an activation) on an item scrolled out of view lands where the item is laid
+out, outside the viewport, so a screen reader has to bring it into view first
+(they do, on most platforms, before activating); a container inside another
+under its middle can take a wheel meant for the outer one.
+
+## Toasts
+
+A toast is an `Alert` node. When one appears (a name the tree before didn't
+have), each platform announces it: UIA's notification event (Windows),
+`AXAnnouncementRequested` (macOS), `UIAccessibilityAnnouncementNotification`
+(iOS), `TYPE_ANNOUNCEMENT` (Android), `object:announcement` from the
+notification node, which is also a polite live region (`live`,
+`container-live` attributes), on Linux, and an ARIA `alert` on the web.
+`touchdemo` on a desktop raises one, "Row 2 tapped", when "Row 2" is tapped,
+for the out-of-process checks below.
 
 ## Keyboard focus
 
@@ -91,6 +132,42 @@ without it only learn of a Tab when they ask again. The root, which has no
 name of its own, leaves its name to the window's provider, so it reads as
 the window's title ("Stipple Touch window").
 
+Besides Invoke, each provider has the control patterns its node calls for,
+each an interface with a vtable of its own (`platform/uia/patterns.rs`,
+`uia/text.rs`; which node gets what, its name and value, the text units,
+the scroll math and the events a swap plans are worked out without COM in
+`platform::uia_logic`):
+
+- **Value** on text fields and spin buttons. A field whose text the tree
+  carries is named by the caption it is `labelled_by` (or nothing) and
+  valued by its text, so a screen reader doesn't read it twice; `SetValue`
+  focuses it and types the new text through the input-method path.
+- **Toggle** on checkboxes and switches (a click), which have their own
+  control types now, as selects, spin buttons, toolbars and separators do.
+- **Selection** on lists, trees, tables and tab bars, and **SelectionItem**
+  on their items and on radio buttons (select is a click).
+- **ExpandCollapse** on what expands and on selects (a tree item opens with
+  a click and the arrow key its tree takes).
+- **Scroll** on scroll containers (a plain `Element::scrollable` is a Pane):
+  the percentages and view sizes, `Scroll` a page or a line, and
+  `SetScrollPercent`; **ScrollItem** on what they hold (`ScrollIntoView`).
+- **Text** on fields, spin buttons and labels: the document range, the
+  selection (or an empty range at the caret), and ranges that read their
+  text, select it in the field, expand to and move by characters, words,
+  lines and the whole text, compare their endpoints, find text and report
+  their boxes (the node's box shared evenly between its characters). A
+  range is a COM object of its own, freed on its last release, holding a
+  reference on its element.
+
+A tree swap raises, besides the focus change, property-changed events
+(Name, Value, ToggleState, ExpandCollapseState, SelectionItemIsSelected,
+the scroll percentages), a `ChildrenInvalidated` structure change where
+children came or went, `ElementSelected` for a newly selected item, and
+`UiaRaiseNotificationEvent` for each toast that appeared (looked up at run
+time: Windows 10 1709 and later), which Narrator and NVDA read out. Pattern
+actions reach the window as events queued for it (`queue_a11y_events`),
+delivered once UIA's call returns.
+
 **CI** (`visual-windows`, *Read and drive a running window through UI
 Automation*): `.github/scripts/uia-walk.ps1` starts `touchdemo` and, from
 PowerShell's process, uses the .NET UI Automation client (the cross-process
@@ -111,7 +188,21 @@ path Narrator, NVDA and JAWS use):
   control in the window with keyboard focus (when the window got the
   foreground).
 
-`uiademo` still checks the providers through their vtables in-process.
+`uiademo` still checks the providers through their vtables in-process, and
+with `--patterns` drives every pattern through the interface
+`GetPatternProvider` hands out.
+
+A further step, *UI Automation patterns and events (not required yet)*,
+runs `uiademo --patterns`, then `.github/scripts/uia-patterns.ps1` against
+`touchdemo`: the field's Value is read and set (the app logs the text) and
+its Text read (the document range, the selection); "Remember" is toggled
+(the app logs it, the state reads back, a property-changed event comes);
+the list's Pane goes to 100% with `SetScrollPercent` (logged) and ScrollItem
+brings "Row 0" back; the strip pages with `Scroll`; and invoking "Row 2"
+raises a toast, which must appear in the tree with a structure-changed
+event. .NET's client has no API for UIA's notification event, so that one
+is left to NVDA. None of it has run on a runner yet (nor under Wine
+locally), so it doesn't fail the job.
 
 **NVDA** (`screen-reader-windows`): `.github/scripts/nvda-windows.ps1`
 downloads a pinned NVDA release from nvaccess.org (checked against its
@@ -140,7 +231,10 @@ commands (`keybd_event`, which NVDA's keyboard hook takes as typed keys):
   then Enter press it (the app logs both taps); Shift+Tab goes back to the
   field ("edit");
 - the mouse moved over "Row 1": NVDA's mouse tracking hit-tests through UIA
-  and says what is there (reported, not required).
+  and says what is there (reported, not required);
+- "Row 2" invoked through UIA: its toast is announced with UIA's
+  notification event, and whether NVDA speaks "Row 2 tapped" is reported,
+  not required (not yet run).
 
 The job uploads NVDA's whole log. It passes in CI (the window's name isn't
 spoken on the foreground change alone, only with the first focus inside
@@ -149,11 +243,14 @@ it, so that is reported, not required); the job is required.
 The keyboard steps (Tab to the button, Space, Enter, Shift+Tab) were added
 after the rest passed and haven't been seen in CI yet.
 
-Not covered: No Value,
-Toggle, Selection, ExpandCollapse, Scroll or Text patterns (a field's text is
-its name, and can't be set through UIA); of UIA's events only the focus
-change is raised (no structure or property changes), so a screen reader sees
-other changes only when it asks again. Narrator and JAWS aren't tried.
+Not covered: text attributes (`FindAttribute` finds nothing,
+`GetAttributeValue` says not supported), glyph-accurate character boxes,
+`RangeFromChild`, text-selection-changed and text-changed events; no
+RangeValue, Grid / Table or Window patterns, and no `LabeledBy` property;
+`CanSelectMultiple` is always false; the root's `ChildrenInvalidated`
+carries the tree's runtime id, not the window's. The patterns and events
+are build- and clippy-checked for Windows and their logic unit-tested on
+every host, but haven't run on Windows yet. Narrator and JAWS aren't tried.
 
 ## macOS
 
@@ -166,6 +263,35 @@ focused node's element is `AXFocused`, the view answers
 application's `AXFocusedUIElement`), and when focus moves to another node
 the window posts `AXFocusedUIElementChanged` on its element, which VoiceOver
 follows.
+
+The elements are run-time subclasses of `NSAccessibilityElement` that
+remember their node's path (`macos/ax_value.rs`; what they say is worked out
+by the AppKit-free `macos/ax_plan.rs`):
+
+- **Values.** A text field whose name is its text has that text as its
+  `AXValue`, with `AXNumberOfCharacters`, `AXSelectedTextRange` /
+  `AXSelectedText` (UTF-16 units), `AXInsertionPointLineNumber` (0: one
+  line) and `AXVisibleCharacterRange`; its label is then its caption
+  (`labelled_by`), or none, so VoiceOver doesn't read the text twice. A
+  password field is an `AXTextField` with the `AXSecureTextField` subrole
+  and no value. Checkboxes are `AXCheckBox` (a switch with the `AXSwitch`
+  subrole), combo boxes `AXPopUpButton`; checkboxes, switches, radio buttons
+  and tabs have an `AXValue` of 0 or 1.
+- **Setting.** An assistive app can set a field's `AXValue` (the field's
+  text is replaced through the input-method path, after a click to focus it)
+  and its `AXSelectedTextRange` (the field selects it); nothing else is
+  settable (`isAccessibilitySelectorAllowed:`).
+- **Scrolling.** A plain scroll container is an `AXScrollArea` (a list, tree
+  or table keeps its role) with an `AXScrollBar` after its content, also
+  its vertical or horizontal scroll bar: the bar's `AXValue` (0 to 1) is how
+  far it is scrolled and can be set, and `AXIncrement` / `AXDecrement` page
+  through it. Elements inside a scroll container have `AXScrollToVisible`,
+  which scrolls them into view.
+- **Notifications.** A tree swap posts what changed on the rebuilt elements:
+  `AXTitleChanged`, `AXValueChanged` (a field's text, a check, a scroll
+  bar), `AXSelectedTextChanged`, `AXSelectedChildrenChanged` /
+  `AXSelectedRowsChanged`, `AXRowExpanded` / `AXRowCollapsed` and
+  `AXLayoutChanged` (children or scrolling changed).
 
 **CI** (`visual-macos`, *Accessibility from outside the app*): `axprobe`
 (`.github/a11y/macos/axprobe.swift`) reads a running `touchdemo` through the
@@ -210,9 +336,23 @@ must each press it (the app logs the taps); these were added later and
 haven't run in CI yet. The step passes in CI and is required (it exits 3,
 with a warning, when the runner doesn't let AppleScript control VoiceOver).
 
-Not covered: there's no `AXValue` for fields, no layout notifications (the
-focus change is the only one posted), and the elements are built again each time AppKit asks for
-them (after the tree changes or the window moves).
+A further step, *Accessibility depth from outside the app (AX API, values
+and scrolling)*, runs `axprobe --depth` on a fresh `touchdemo`: the field's
+value is set to "hi" (the app logs it, and it reads back two characters),
+its selected range is set and read back, the "Remember" checkbox reads 0,
+then 1 after `AXPress` (the app logs it), "Row 2" raises a toast, the list
+is an `AXScrollArea` whose scroll bar's value, set to 0.5, scrolls it, and
+`AXScrollToVisible` on "Row 0" scrolls back; an `AXObserver` reports the
+notifications it hears. It hasn't run on a runner yet, so it doesn't fail
+the job.
+
+Not covered: static text has no `AXValue` (its label carries the text); no
+title elements (a field's caption is its label instead); the elements are
+built again after each tree change (or when the window moves), so an
+observer registered on an old element goes quiet; `AXScrollToVisible` goes
+through the legacy `accessibilityActionNames` / `accessibilityPerformAction:`
+(the protocol has no method for it). None of it has run on a Mac yet: build-
+and clippy-checked, with the AppKit-free logic unit-tested on every host.
 
 ## iOS
 
@@ -241,8 +381,15 @@ on the runner) runs in its own process on the simulator and drives
 `touchdemo`'s self-test also reads the elements in-process and activates a
 row through `accessibilityActivate`, which XCUITest can't call.
 
-Not covered: no adjustable (swipe up/down) or scroll actions; VoiceOver's
-own gestures and speech aren't exercised.
+VoiceOver's three-finger swipe (`accessibilityScroll:`) on an element
+scrolls the innermost scroll container around it along the swipe's axis by
+a page (up or left for the next page, the other way in a right-to-left
+strip), and VoiceOver says where it is ("Page N of M",
+`UIAccessibilityPageScrolledNotification`); it answers NO when nothing can
+move, so UIKit tries further up. Unit-tested; XCUITest doesn't exercise it.
+
+Not covered: no adjustable (swipe up/down) actions; VoiceOver's own
+gestures and speech aren't exercised.
 
 ## Android
 
@@ -250,7 +397,10 @@ The host view's `AccessibilityNodeProvider` gives a virtual view per node:
 the closest widget class (`Button`, `EditText`, `TextView`...), text, state
 (focused, selected, checked, editable, password), bounds on screen, and
 actions (accessibility focus, click, focus, select, set text, and scroll on
-lists, trees and tables). See [the Android page](platforms/android.md#accessibility).
+every scroll container whose content overflows: a page forward or back,
+each offered only while it can go that way, sideways for a horizontal
+strip; a container that scrolled sends `TYPE_VIEW_SCROLLED`). See
+[the Android page](platforms/android.md#accessibility).
 
 **CI** (`visual-android`): a small accessibility service stands in for
 TalkBack in the checks TalkBack can't be scripted for:
@@ -302,15 +452,19 @@ focus. On a failure the script logs the windows, the resumed activity and
 isn't read (the emulator may have no voice). The check passes in CI and is
 required.
 
-Not covered: TalkBack's speech, explore by touch; `androiddemo`'s list is a
-plain scroll container, which the tree reports as a group without scroll
-actions.
+Not covered: TalkBack's speech, explore by touch; the probe's
+`ACTION_SCROLL_FORWARD` now reaches plain scroll containers too
+(`androiddemo`'s list), not yet seen in CI.
 
 ## Web
 
 An invisible overlay of ARIA elements mirrors the tree over the canvas. The
-`visual-web` job's headless Chrome checks it from the page. See
-[the web page](platforms/web.md#accessibility).
+`visual-web` job's headless Chrome checks it from the page. A scroll
+container's element carries where it is scrolled; when a screen reader moves
+focus to a control in it that is scrolled out of view, the page scrolls the
+app's container to show it (a wheel at the container's middle). ARIA has no
+scroll role or action, so nothing else is exposed; not yet tried with a
+screen reader. See [the web page](platforms/web.md#accessibility).
 
 ## Linux
 
@@ -355,7 +509,18 @@ or `zbus`).
   (the text by character, word, sentence and line); fields have
   `EditableText` (setting, inserting or deleting text replaces the field's
   text through the input-method path, after a click to focus it); a spin
-  button with a number has `Value`.
+  button with a number has `Value` (setting it types the number).
+- **Scrolling.** A plain scroll container is a scroll pane (`SCROLL_PANE`; a
+  list, tree or table keeps its role) with `Action` ("scroll forward",
+  "scroll backward": a page) and `Value` (`CurrentValue` its offset in
+  logical pixels, 0 to the largest; setting it scrolls there).
+  `Component.ScrollTo` and `ScrollToPoint` on a node inside one scroll it
+  into view (the least movement that shows it, whatever the type asks).
+  A scroll raises `object:property-change:accessible-value`.
+- **Toasts.** A toast is a `NOTIFICATION` with the `live` and
+  `container-live` attributes `polite`; when one appears, it raises
+  `object:announcement` (politeness polite, its message as the data), as
+  GTK does for `gtk_accessible_announce`, which Orca speaks.
 - **Caret and selection.** A text field's tree node carries its caret and
   selection (byte indices into its text, from the field's editable text,
   as `EditBuffer` has them), so `Text.CaretOffset`, `GetNSelections` and
@@ -440,7 +605,19 @@ Without the re-registration the last check fails, as it should. A further
 step, *Survive the accessibility bus restarting*
 (`.github/scripts/atspi-bus-restart.sh`), kills `at-spi-bus-launcher`
 itself, asks for the bus again, and a fresh pyatspi client must find the
-app on the new bus; it passes locally and doesn't fail the job yet. The same
+app on the new bus; it passes locally and doesn't fail the job yet.
+Another, *Scroll panes, a check box and a toast's announcement through
+AT-SPI (X11)*, runs the walk with `ATSPI_WALK_DEPTH=1` on a fresh
+`touchdemo`: the list of rows is a scroll pane whose "scroll forward" action
+scrolls it (the app logs its offset, the pane's `Value` follows, with an
+`accessible-value` event), setting its `Value` to 0 scrolls back, and
+`ScrollTo` on "Row 20" brings it into view; the strip of chips is a scroll
+pane of its own that scrolls; the "Remember" check box's action checks it
+(the app logs it; `checked` state and event); and "Row 2"'s action raises a
+toast that arrives as `object:announcement` "Row 2 tapped", with a polite
+notification in the tree. It passes locally under Xvfb (at-spi2-core 2.58)
+and doesn't fail the job yet (not run under sway). The Orca script then
+also presses "Row 2" and reports whether Orca speaks the toast. The same
 walk under headless sway (`wtype` for the keys) and **Orca** itself
 (`.github/scripts/orca-linux.sh`: Orca runs headless with its debug log,
 which records every utterance as `SPEECH OUTPUT`, and must speak the entry
@@ -455,5 +632,5 @@ compositor outside CI.
 Not covered: no text attributes, character extents are the node's box split
 evenly (not the glyphs'), only labelled-by / label-for relations (and only
 where the app declares them), a spin button's `Value` has no range, and a
-plain scroll container has no scroll actions. Other desktops' bridges don't
-expose the caret, selection or relations yet.
+scroll pane has no scroll bar children (its `Value` stands for them); nodes
+scrolled out of view still say `showing`. Relations are AT-SPI's only.

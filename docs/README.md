@@ -163,8 +163,9 @@ checks the theme follows; a live switch is checked by handing the app a new
 scheme the way the `change` listener does, since headless Chrome can't flip it.
 ²² An invisible overlay of ARIA elements mirrors the accessibility tree over the
 canvas. CI checks the roles and names, that a click on an element (what a
-screen reader's "activate" does) taps the node, and `aria-checked`. Not yet
-tried with a real screen reader. See [the web page](platforms/web.md#accessibility).
+screen reader's "activate" does) taps the node, and `aria-checked`; focus
+moving to a control scrolled out of view scrolls it back. Not yet tried with
+a real screen reader. See [the web page](platforms/web.md#accessibility).
 ²³ Through a hidden `<textarea>` at the caret: composition events and `input`
 events. CI checks them with synthetic events in headless Chrome; no real input
 method was run.
@@ -320,8 +321,10 @@ label's static-text trait and a row's button trait, activates the row and
 checks it was tapped and the label's element followed. From another process,
 an XCUITest runner (the AX channel VoiceOver uses) reads the tree, taps a
 button at its element's frame and types into the field on the software
-keyboard (added with this change, not yet run in CI). Not yet tried with
-VoiceOver itself. See [accessibility.md](accessibility.md#ios).
+keyboard (added with this change, not yet run in CI). VoiceOver's
+three-finger swipe (`accessibilityScroll:`) scrolls the container around an
+element a page (unit-tested). Not yet tried with VoiceOver itself. See
+[accessibility.md](accessibility.md#ios).
 ⁵⁰ `UITextInput` on the view: marked text as the preedit, commits, the field's
 text around the caret for autocorrect and dictation, `replaceRange:withText:`
 and the caret rectangle for the candidate bar. CI's `touchdemo` self-test on
@@ -363,7 +366,8 @@ and deletes around the caret through the real Java objects; not yet tried by
 a person on a composing keyboard. See [platforms/android.md](platforms/android.md#input-methods).
 
 ⁵⁶ An `AccessibilityNodeProvider` with a virtual view per node (click, focus,
-scroll, set text); `uiautomator dump` on the CI emulator lists the nodes, and
+set text, and scroll forward and back on every scroll container that can go
+that way, with `TYPE_VIEW_SCROLLED`); `uiautomator dump` on the CI emulator lists the nodes, and
 an accessibility service standing in for TalkBack (enabled the way TalkBack
 is) moves accessibility focus through every node, clicks a button and sets
 the field's text, from its own process. TalkBack itself, which the API 34
@@ -473,8 +477,11 @@ field's caret and selection can be read and set (with caret-moved and
 selection-changed events), a control declared `labelled_by` its caption has
 labelled-by / label-for relations, and the app registers again when the
 registry or the accessibility bus restarts; the walk checks these too
-(passing locally, not yet seen in CI). See
-[accessibility.md](accessibility.md#linux).
+(passing locally, not yet seen in CI). A scroll container is a scroll pane
+with scroll actions, a `Value` (its offset, settable) and `ScrollTo` on what
+it holds, and a toast raises `object:announcement` from a polite live
+region; a further step checks these, with a check box (passing locally, not
+failing the job yet). See [accessibility.md](accessibility.md#linux).
 
 ⁶⁷ A hand-built provider per node, hosted by the window's provider: control
 type, name, bounds in screen pixels, keyboard focus, hit testing, and the
@@ -486,9 +493,12 @@ named by its title. NVDA itself is driven in CI: its log of what it says
 must name the window, the field Tab focuses and "Row 0" "button", and
 NVDA+Enter must press it (passing in CI; required); then Tab must reach
 "Row 0", NVDA announce it, and Space and Enter press it (added later, not
-yet run in CI). No Value, Toggle, Scroll or Text patterns, and no
-structure or property-change events. See
-[accessibility.md](accessibility.md#windows).
+yet run in CI). Value, Toggle, Selection / SelectionItem, ExpandCollapse,
+Scroll / ScrollItem and Text (ranges by character, word, line and document)
+patterns, property- and structure-changed events, and toasts announced
+with UIA's notification event, checked through their vtables and from the
+.NET client in a step that doesn't fail the job yet (not yet run on
+Windows). See [accessibility.md](accessibility.md#windows).
 
 ⁶⁸ An `NSAccessibilityElement` per node, with role, label and frame in screen
 coordinates. CI reads a running app's tree from another process through the
@@ -498,8 +508,12 @@ probe, and VoiceOver itself is driven through its AppleScript interface: it
 must speak "Row 0" as a button and press it (both passing in CI;
 required). The focused node is `AXFocused` and the application's
 `AXFocusedUIElement`, and a focus move posts `AXFocusedUIElementChanged`
-(added later, not yet seen in CI). See
-[accessibility.md](accessibility.md#macos).
+(added later, not yet seen in CI). Fields have a settable `AXValue` and
+selected text range, checkboxes a value, scroll containers an
+`AXScrollArea` with a settable scroll bar and `AXScrollToVisible` inside,
+and tree swaps post value, selection, expansion and layout notifications;
+`axprobe --depth` checks them in a step that doesn't fail the job yet (not
+yet run). See [accessibility.md](accessibility.md#macos).
 
 ⁶⁹ In the shared core, so the same everywhere: `Cx::memo` and `Cx::derive`,
 transition-only frames drawn from the tree on screen, and scenes culled to the
