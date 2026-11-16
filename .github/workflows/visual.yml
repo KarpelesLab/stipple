@@ -1778,7 +1778,7 @@ jobs:
   # window, not fall back to the CPU, and paint a real frame. Not blocking
   # until it has passed on the runners a few times.
   visual-gpu-present:
-    name: Visual test (GPU present / X11, ${{ matrix.renderer }})
+    name: Visual test (GPU present / X11 and Wayland, ${{ matrix.renderer }})
     runs-on: ubuntu-latest
     continue-on-error: true
     strategy:
@@ -1872,6 +1872,69 @@ jobs:
         run: |
           [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null || true
           [ -n "$XVFB_PID" ] && kill "$XVFB_PID" 2>/dev/null || true
+
+      # The same app on Wayland, drawn with ${{ matrix.api }} and handed to
+      # the compositor as dma-bufs (zwp_linux_dmabuf_v1) instead of read back.
+      # sway offers linux-dmabuf only with its GLES renderer, which needs a
+      # DRM device: here vkms (a virtual display, no GPU), driven by sway's
+      # DRM backend through seatd and rendered with llvmpipe; its vblank
+      # paces the frame callbacks. The app's Mesa (lavapipe, llvmpipe) exports
+      # through udmabuf. Not blocking yet.
+      - name: On Wayland (headless sway), presented through linux-dmabuf with ${{ matrix.api }}
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+          STIPPLE_RENDERER: ${{ matrix.renderer }}
+        run: |
+          sudo apt-get install -y sway grim seatd wayland-utils
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)" || true
+          sudo modprobe vkms || true
+          sudo modprobe udmabuf || true
+          sudo udevadm settle || true
+          sudo chmod 666 /dev/udmabuf /dev/dri/* || true
+          DEV=""
+          for c in /sys/class/drm/card*; do
+            [ "$(basename "$(readlink -f "$c/device")")" = vkms ] && DEV=/dev/dri/$(basename "$c")
+          done
+          echo "vkms device: '$DEV'"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt-dmabuf"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          export WLR_BACKENDS=drm WLR_DRM_DEVICES="$DEV" WLR_LIBINPUT_NO_DEVICES=1
+          export WLR_RENDERER=gles2 WLR_RENDERER_ALLOW_SOFTWARE=1
+          sudo seatd -g "$(id -gn)" > visual_output/wl-seatd.log 2>&1 &
+          sleep 1
+          export LIBSEAT_BACKEND=seatd
+          printf 'output HEADLESS-1 resolution 1024x768\nexec sleep 600\n' > sway-dmabuf.cfg
+          sway -c sway-dmabuf.cfg > visual_output/wl-sway-${{ matrix.renderer }}.log 2>&1 &
+          echo "SWAY_PID=$!" >> "$GITHUB_ENV"
+          sleep 6
+          export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
+          wayland-info > visual_output/wl-info.txt 2>&1 || true
+          grep -q zwp_linux_dmabuf_v1 visual_output/wl-info.txt
+          LOG=visual_output/wl-present-${{ matrix.renderer }}.log
+          STIPPLE_WAYLAND_DEBUG=1 ./target/release/examples/widgetsdemo > "$LOG" 2>&1 &
+          WL_APP=$!
+          sleep 6
+          grim visual_output/stipple-wayland-dmabuf-${{ matrix.renderer }}.png || echo "grim failed"
+          kill "$WL_APP" 2>/dev/null || true
+          grep -v "raw key" "$LOG" | head -40
+          grep -q "stipple: drawing with ${{ matrix.api }}" "$LOG"
+          grep -q "stipple: presenting with ${{ matrix.api }} to the Wayland window through linux-dmabuf" "$LOG"
+          ! grep -q "drawing on the CPU\|reading frames back" "$LOG"
+          colors=$(convert visual_output/stipple-wayland-dmabuf-${{ matrix.renderer }}.png -format '%k' info:)
+          echo "distinct colors: $colors"
+          [ "$colors" -gt 16 ]
+          # Frame callbacks pace the dma-buf commits as they do wl_shm ones.
+          STIPPLE_DEBUG_FRAMES=1 timeout 40 ./target/release/examples/framepacing 2>&1 | tee visual_output/wl-framepacing-${{ matrix.renderer }}.log
+          grep -q "through linux-dmabuf" visual_output/wl-framepacing-${{ matrix.renderer }}.log
+          grep -q 'framepacing: ok' visual_output/wl-framepacing-${{ matrix.renderer }}.log
+
+      - name: Stop sway
+        if: always()
+        run: |
+          [ -n "$SWAY_PID" ] && kill "$SWAY_PID" 2>/dev/null || true
 
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4

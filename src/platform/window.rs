@@ -439,6 +439,16 @@ pub(crate) enum GpuLayer {
     /// connection to the server.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     X11 { window: u32 },
+    /// A Wayland window, by its `wl_surface` id, and where the renderer
+    /// hands its frames as `dma-buf`s (see [`crate::platform::dmabuf`]): the
+    /// backend speaks the protocol itself, so there is no libwayland surface
+    /// for Vulkan or EGL to present to. The sink lives as long as the window;
+    /// the backend releases the layer through the renderer before it goes.
+    #[cfg(target_os = "linux")]
+    Wayland {
+        surface: u32,
+        sink: *const crate::platform::dmabuf::Sink,
+    },
     /// The activity's `ANativeWindow` (Android): the window is `size`
     /// pixels, and the app draws in its `content` rectangle (`[x0, y0, x1,
     /// y1]`, clear of the system bars unless edge to edge); the rest shows

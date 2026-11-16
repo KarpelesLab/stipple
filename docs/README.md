@@ -297,11 +297,13 @@ images (textures cached per image), text, clips, canvases and layers with
 transforms and opacity, games' sprites and pixel-art frames, all on the GPU.
 Presented straight to the window through a Vulkan swapchain or an EGL window surface on X11 and Android, a
 `CAMetalLayer` on macOS and iOS, a DXGI swap chain on Windows, the canvas on
-the web; on Wayland read back and presented as a bitmap. CI compares test
+the web, and on Wayland as `dma-buf`s through `zwp_linux_dmabuf_v1` (read back
+where the compositor or driver can't take them). CI compares test
 scenes and an app with the software renderer under Mesa's llvmpipe (GLES)
 and lavapipe (Vulkan), on the macOS runner's Metal device, on WARP and in
 headless Chrome, and screenshots an app presented with each; the X11 and
-Android present paths have run in CI only, iOS is compile-checked.
+Android present paths have run in CI only (Wayland's also locally on
+NVIDIA), iOS is compile-checked.
 External images (`dma-buf`, `IOSurface`, DXGI shared handles,
 `AHardwareBuffer`) are imported without a copy; the `dma-buf` import has
 run on GLES (llvmpipe, NVIDIA) and Vulkan (lavapipe), the others are

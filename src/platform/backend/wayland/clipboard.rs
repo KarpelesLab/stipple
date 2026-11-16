@@ -552,6 +552,7 @@ pub(super) mod tests {
             decors: Vec::new(),
             attention: Default::default(),
             lock: Default::default(),
+            dmabuf: Default::default(),
         };
         (conn, theirs)
     }

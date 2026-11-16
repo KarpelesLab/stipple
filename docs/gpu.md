@@ -7,8 +7,8 @@ features, each linking the OS's own driver through hand-written FFI:
 | Feature | Backend | What it does today |
 |---|---|---|
 | `mtl` | Metal (macOS, iOS) | Renders whole scenes and presents them straight to the window through a `CAMetalLayer`; `IOSurface` export and import |
-| `vk` | Vulkan (Linux, Android) | Renders whole scenes and presents them straight to the window through a swapchain (X11, Android); read back elsewhere; `dma-buf` import (Linux) |
-| `gl` | OpenGL ES 2 over EGL (Linux, Android) | Renders whole scenes and presents them straight to an EGL window surface (X11, Android) where there's no Vulkan; read back elsewhere; `dma-buf` export and import (Linux) |
+| `vk` | Vulkan (Linux, Android) | Renders whole scenes and presents them straight to the window through a swapchain (X11, Android) or as `dma-buf`s (Wayland); `dma-buf` import (Linux) |
+| `gl` | OpenGL ES 2 over EGL (Linux, Android) | Renders whole scenes and presents them straight to an EGL window surface (X11, Android) or as `dma-buf`s (Wayland) where there's no Vulkan; `dma-buf` export and import (Linux) |
 | `d3d` | Direct3D 11 (Windows) | Renders whole scenes and presents them straight to the window through a flip-model DXGI swap chain; shared-handle export and import |
 | `gpu` on the web | WebGPU, else WebGL2, through `web/gpu.js` | Renders whole scenes straight into the page's canvas |
 
@@ -28,9 +28,10 @@ let app = app.renderer(Renderer::Gpu);
   Windows (`--features stipple/d3d`); WebGPU or WebGL2 in a browser
   (`--features stipple/gpu`; see [the web](#the-web)). The frame goes
   straight to the window: into a `CAMetalLayer` over the view on macOS and
-  iOS, a Vulkan swapchain or an EGL window surface on X11 and Android, a DXGI
-  swap chain on Windows, the canvas on the web. On Wayland it is drawn on the
-  GPU, read back and presented as a bitmap (see [Wayland](#wayland) for why).
+  iOS, a Vulkan swapchain or an EGL window surface on X11 and Android,
+  `dma-buf`s handed to the compositor through `zwp_linux_dmabuf_v1` on
+  Wayland (see [Wayland](#wayland)), a DXGI swap chain on Windows, the canvas
+  on the web.
 - `Renderer::Auto`, the default, is the CPU for now. The GPU becomes the
   default platform by platform once it has been shown to match the CPU there
   and to be faster (Phase 6h).
@@ -61,9 +62,11 @@ Frames fall back to the CPU whenever there's no GPU to draw with:
   up again on the next one; if the device is lost a second time, the app
   stays on the CPU from then on.
 
-A window the GPU can't present to (Wayland; X11 without libxcb; an EGL
-without its XCB platform) is still drawn on the GPU: the frame is read back
-and presented as a bitmap. With `Renderer::Gpu` on Linux and Android, Vulkan
+A window the GPU can't present to (X11 without libxcb; an EGL without its
+XCB platform; a Wayland compositor without `zwp_linux_dmabuf_v1`, or a driver
+that can't export a buffer it takes; a Wayland window whose title bar Stipple
+draws) is still drawn on the GPU: the frame is read back and presented as a
+bitmap. With `Renderer::Gpu` on Linux and Android, Vulkan
 is tried first and OpenGL ES next, when both are built in.
 
 Each of these is said once on stderr. When a window falls back, its GPU layer
@@ -646,7 +649,7 @@ With `VK_GOOGLE_display_timing`, a new swapchain's refresh
   sized to the whole window, the app drawn at its content rectangle and the
   rest filled with the background. When the window goes away the backend has
   the swapchain destroyed before it hands the window back.
-- **Wayland**: read back; see below.
+- **Wayland**: as `dma-buf`s, see [below](#wayland).
 - **macOS**, for working on the executor: `vk` also builds there and runs on
   MoltenVK (the Vulkan SDK's, or Homebrew's `molten-vk` and `vulkan-loader`),
   presenting to the window's `CAMetalLayer` through `VK_EXT_metal_surface`.
@@ -656,19 +659,85 @@ With `VK_GOOGLE_display_timing`, a new swapchain's refresh
 
 ### Wayland
 
-On Wayland neither Vulkan nor GLES presents straight to the window yet.
 `VK_KHR_wayland_surface` and `wl_egl_window` both take libwayland-client's
 `wl_display` and the window's `wl_surface` proxy; the backend speaks the
 protocol itself, and its objects can't be lent to a second connection (a
 client's object ids are its own, and a subsurface must belong to the same
-client as its parent). Loading libwayland just for the surface would mean
-moving the whole backend onto it. The way that fits the backend is a
-`dma-buf`: draw into an exportable image (Vulkan's
-`VK_EXT_external_memory_dma_buf`, or GLES through GBM, as the `dma-buf` seam
-below already does) and attach it with `zwp_linux_dmabuf_v1` on the
-backend's own connection. That is planned with 6g's zero-copy work; until
-then a Wayland window's frames are drawn on the GPU, read back and presented
-through `wl_shm`.
+client as its parent). So on Wayland Vulkan and GLES present the way the
+compositor composites anyway, through `dma-buf`s on the backend's own
+connection:
+
+- The window's GPU layer (`GpuLayer::Wayland`) is its `wl_surface` and a
+  sink (`platform::dmabuf`) that the backend implements with
+  `zwp_linux_dmabuf_v1`, written by hand like the rest of the backend
+  (`backend/wayland/dmabuf.rs`). The formats and modifiers the compositor
+  takes come from its default feedback (version 4: a format table shared as
+  an fd, tranches of indices into it, `done`), or from the `modifier` events
+  of versions 3 and below; they are asked for the first time a window wants a
+  GPU layer.
+- The renderer keeps a ring of up to three buffers per window, each a
+  `wl_buffer` made once (`create_params`, an `add` per plane with its fd,
+  `create`, answered by `created` or `failed`), and draws into one the
+  compositor has released (`wl_buffer.release`), waiting a little for one
+  when all three are held. Each frame is drawn into the persistent frame
+  target as for any present (only the damage, over the window's last frame),
+  copied whole into the buffer on the GPU, and committed with
+  `wl_surface.damage_buffer` naming what changed (all of a new buffer ring's
+  first frame) and a `wl_surface.frame` callback, which paces the next frame
+  as for CPU frames.
+- **Vulkan** draws into an image whose memory is a `dma-buf`
+  (`VK_KHR_external_memory_fd` and `VK_EXT_external_memory_dma_buf`, with a
+  dedicated allocation; the instance asks for Vulkan 1.1, where these are
+  core or build on core). With `VK_EXT_image_drm_format_modifier` the image
+  is created with the modifiers both the driver and the compositor take (the
+  driver picks one and says which, and where each memory plane is);
+  without it, a linear image, which the compositor must take as `LINEAR`.
+  The format is `XBGR8888` where the compositor takes it (the frame target's
+  own byte order, opaque: a plain copy), else `ABGR8888`, `XRGB8888` or
+  `ARGB8888` (the frame blitted into a swizzled image first, as some drivers
+  can't blit into a linear one). The image is released to
+  `VK_QUEUE_FAMILY_EXTERNAL` after the copy.
+- **GLES** stays on its offscreen context (Mesa's surfaceless platform) and
+  copies the frame into a texture exported with
+  `EGL_MESA_image_dma_buf_export` (`glCopyTexSubImage2D`: the frame
+  target's rows are already top first). A GL texture's layout is the
+  driver's choice, so this works where the compositor takes the modifier
+  the export reports (any modifier for a GPU and compositor on the same
+  driver; `LINEAR` under llvmpipe). It is given to the compositor as
+  `XBGR8888` (the same bytes as the exported `ABGR8888`, alpha ignored).
+- **Synchronization**: the renderer waits for the GPU to finish the frame
+  (its fence, `glFinish`) before the commit, so the compositor never reads a
+  half-drawn buffer, with or without implicit synchronization on the
+  `dma-buf`. Explicit synchronization (`linux-drm-syncobj-v1`, or a
+  sync_file attached to the `dma-buf`) would let the commit go out before
+  the GPU is done; not yet.
+- **Falling back**: before the first frame the renderer exports a small
+  buffer and has the compositor import it. Without `zwp_linux_dmabuf_v1`,
+  without the export extensions, without a format and modifier both sides
+  take, or when the compositor fails the import, the window's frames are read
+  back and presented through `wl_shm` as before, and stderr says why once
+  (`stipple: Vulkan can't present to the Wayland window (…); reading frames
+  back`). `STIPPLE_WAYLAND_DMABUF=0` forces that. Windows whose title bar
+  Stipple draws (compositors without `xdg-decoration`, such as GNOME's and
+  Weston) are read back too: the title bar is drawn around the CPU's bitmap.
+
+When it works, stderr says so once, with what was chosen:
+
+```text
+stipple: presenting with Vulkan to the Wayland window through linux-dmabuf (XB24, modifier 0x0, 1 plane)
+```
+
+Run locally against a small scripted compositor (it maps `LINEAR` buffers
+and checks what they show): Vulkan on an NVIDIA driver (modifiers, linear
+`XBGR8888`, and `ARGB8888` through the swizzle), GLES on Mesa's llvmpipe
+(linear) and on NVIDIA's EGL (its block-linear modifier, where the
+compositor takes it), with frame pacing, a resize, the compositor refusing
+the buffer and an unknown modifier (both read back). CI runs widgetsdemo
+and framepacing under sway on a `vkms` virtual display (its DRM backend and
+GLES renderer, on llvmpipe), the app on lavapipe and llvmpipe (Mesa exports
+through `udmabuf`), screenshots it with `grim` and checks the frames come at
+the display's 60 Hz (`visual-gpu-present`, not blocking yet; seen passing
+with both).
 
 ## Frame pacing
 
@@ -682,7 +751,7 @@ all (a frame with no damage isn't drawn either). What paces each frame:
 | Platform | CPU frames | GPU frames |
 |---|---|---|
 | X11 | Present's `PresentNotifyMSC`, a `CompleteNotify` at the window's next vblank, on a connection of the clock's own | the same, the swapchain FIFO (Vulkan) or EGL's swap interval behind it |
-| Wayland | `wl_surface.frame`, requested with each commit | the same (frames are read back and committed as `wl_shm` buffers) |
+| Wayland | `wl_surface.frame`, requested with each commit | the same, requested with each `dma-buf` commit (or `wl_shm` one, read back) |
 | Windows | `DwmFlush`, DWM's composition pass | the swap chain's frame-latency waitable object, after a present |
 | macOS | `CVDisplayLink` | the same, into a display-synced `CAMetalLayer` |
 | iOS | `CADisplayLink` | the same |
@@ -732,7 +801,8 @@ An idle app logs nothing. The `framepacing` example animates for three
 seconds, then idles for three, and checks the presents came at roughly the
 display's rate and that the idle app presented nothing and never woke. CI
 runs it on Xvfb (CPU, and in `visual-gpu-present` with Vulkan on lavapipe
-and GLES on llvmpipe), under headless sway, and, not blocking yet, on
+and GLES on llvmpipe), under headless sway (CPU) and under sway on `vkms`
+(Vulkan and GLES through `dma-buf`s), and, not blocking yet, on
 Windows (CPU and Direct3D 11) and macOS (CPU and Metal). Run locally on
 Xvfb with the CPU, GLES and Vulkan: 60 presents a second from Present, none
 and no wakeups idle.
@@ -794,7 +864,8 @@ overrides the CPU baseline's renderer too. Build with only the API to test.)
 CI's GPU job runs them under Mesa's llvmpipe (GLES) and lavapipe (Vulkan) and
 screenshots `gpuwindow` under Xvfb; the `visual-gpu-present` jobs screenshot
 `widgetsdemo` presented straight to an Xvfb window with each of Vulkan and
-GLES; the Android emulator run (API 34) starts the demo built with `vk` and
+GLES, and to a Wayland window (sway on `vkms`) through `dma-buf`s; the
+Android emulator run (API 34) starts the demo built with `vk` and
 checks it presents with Vulkan (those two not blocking yet); the macOS visual
 job runs the corpus on the runner's Metal device, prints the frame times, and
 screenshots `widgetsdemo` with `STIPPLE_RENDERER=metal`; the Windows visual
@@ -815,9 +886,12 @@ window, is Phase 6 in the [roadmap](../ROADMAP.md#phase-6--hardware-rendering).
 Today:
 
 - GLES2, Vulkan, Metal, Direct3D 11, WebGPU and WebGL2 execute the scene.
-- On Wayland the GPU frame is read back and presented as a bitmap (see
-  [Wayland](#wayland)); Metal, Vulkan and GLES (X11, Android), Direct3D 11
-  and the web (into the canvas) present straight to the window.
+- Metal, Vulkan and GLES (X11, Android, and Wayland as `dma-buf`s),
+  Direct3D 11 and the web (into the canvas) present straight to the window.
+  On Wayland, a window whose title bar Stipple draws is still read back,
+  the renderer waits for the GPU before each commit (no explicit
+  synchronization yet), and occlusion isn't reported (compositors stop
+  frame callbacks for hidden windows, which already stops the frames).
 - The X11 and Android present paths (Vulkan and GLES) have been
   compile-checked and run in CI only, under Mesa's software drivers and the
   emulator; the Vulkan swapchain code has run on macOS through MoltenVK.
@@ -827,7 +901,8 @@ Today:
 - The Metal path on iOS is compile-checked; it hasn't run on a device or the
   simulator yet.
 - Only frames presented to a window are redrawn in part; a frame that is
-  read back (Wayland, `render_once`, the native benchmark's GPU runs) is
+  read back (`render_once`, the native benchmark's GPU runs, a Wayland
+  window that can't take `dma-buf`s) is
   drawn whole. The partial presents of Direct3D 11, Vulkan and GLES (X11,
   Android) have been compile-checked and run in CI only; the partial
   redraw itself is checked on every backend by the comparison tests.

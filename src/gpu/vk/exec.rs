@@ -49,6 +49,10 @@ use std::sync::{Arc, Weak};
 
 /// Textures of images not drawn for this many frames are freed.
 const TEXTURE_KEEP_FRAMES: u64 = 120;
+
+// Presenting to Wayland windows through dma-bufs.
+#[cfg(target_os = "linux")]
+mod dmabuf;
 /// Texture memory comes in blocks of this many bytes.
 const BLOCK: u64 = 16 << 20;
 /// A frame the GPU hasn't finished after this long is a lost device.
@@ -249,6 +253,9 @@ pub(crate) struct VkExecutor {
     count: u64,
     uploads: usize,
     draws: usize,
+    /// Wayland windows' dma-buf rings, and what the device can export.
+    #[cfg(target_os = "linux")]
+    wayland: dmabuf::Wayland,
 }
 
 impl VkExecutor {
@@ -320,6 +327,11 @@ impl VkExecutor {
                     exts.push(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES2.as_ptr());
                 }
             }
+            // 1.1 where there is: the Wayland dma-buf export needs it.
+            #[cfg(target_os = "linux")]
+            let api = dmabuf::instance_version(gipa);
+            #[cfg(not(target_os = "linux"))]
+            let api = API_VERSION_1_0;
             let app = VkApplicationInfo {
                 sType: ST_APPLICATION_INFO,
                 pNext: std::ptr::null(),
@@ -327,7 +339,7 @@ impl VkExecutor {
                 applicationVersion: 0,
                 pEngineName: c"stipple".as_ptr(),
                 engineVersion: 0,
-                apiVersion: API_VERSION_1_0,
+                apiVersion: api,
             };
             let ici = VkInstanceCreateInfo {
                 sType: ST_INSTANCE_CREATE_INFO,
@@ -351,12 +363,17 @@ impl VkExecutor {
             // Without its entry points there's nothing to destroy the
             // instance with: a one-off leak on a broken loader.
             let vk = Fns::load(gipa, instance)?;
-            Self::on_instance(vk, instance, surfaces)
+            Self::on_instance(vk, instance, surfaces, api)
         }
     }
 
     /// The rest of setting up, on `instance` (destroyed again on failure).
-    unsafe fn on_instance(vk: Fns, instance: VkInstance, surfaces: bool) -> Result<Self, String> {
+    unsafe fn on_instance(
+        vk: Fns,
+        instance: VkInstance,
+        surfaces: bool,
+        api: u32,
+    ) -> Result<Self, String> {
         unsafe {
             let picked = match pick_device(&vk, instance) {
                 Ok(p) => p,
@@ -428,6 +445,22 @@ impl VkExecutor {
             if dma_buf {
                 dexts.extend(external::DEVICE_EXTS.iter().map(|e| e.as_ptr()));
             }
+            // Exporting frames as dma-bufs, for Wayland windows: what the
+            // import didn't already turn on (each extension once).
+            #[cfg(target_os = "linux")]
+            let export = {
+                let device_api = u32::from_ne_bytes(props[0..4].try_into().unwrap());
+                let (exts, support) = dmabuf::device_extensions(api, device_api, dev_has);
+                for e in exts {
+                    let name = CStr::from_ptr(e);
+                    if !dexts.iter().any(|&d| CStr::from_ptr(d) == name) {
+                        dexts.push(e);
+                    }
+                }
+                support
+            };
+            #[cfg(not(target_os = "linux"))]
+            let _ = api;
             let priority = 1.0f32;
             let qci = VkDeviceQueueCreateInfo {
                 sType: ST_DEVICE_QUEUE_CREATE_INFO,
@@ -532,6 +565,8 @@ impl VkExecutor {
                 count: 0,
                 uploads: 0,
                 draws: 0,
+                #[cfg(target_os = "linux")]
+                wayland: dmabuf::Wayland::load(loader()?, instance, export),
             };
             // From here `me`'s Drop frees whatever was made.
             if stencil.is_none() {
@@ -2803,6 +2838,10 @@ impl Executor for VkExecutor {
     }
 
     fn can_present(&self, layer: &GpuLayer) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Some((_, sink)) = crate::gpu::dmabuf_present::sink_of(layer) {
+            return unsafe { self.can_present_dmabuf(sink) };
+        }
         self.has_swapchain
             && match *layer {
                 #[cfg(target_os = "linux")]
@@ -2821,10 +2860,19 @@ impl Executor for VkExecutor {
         _scale: ScaleFactor,
         dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
+        #[cfg(target_os = "linux")]
+        if let Some((surface, sink)) = crate::gpu::dmabuf_present::sink_of(layer) {
+            return unsafe { self.present_dmabuf(plan, surface, sink, dirty) };
+        }
         unsafe { self.present_to(plan, layer, dirty) }
     }
 
     fn release(&mut self, layer: &GpuLayer) {
+        #[cfg(target_os = "linux")]
+        if let Some((surface, sink)) = crate::gpu::dmabuf_present::sink_of(layer) {
+            unsafe { self.release_dmabuf(surface, sink) };
+            return;
+        }
         if let Some(swap) = layer_key(layer).and_then(|k| self.swaps.remove(&k)) {
             unsafe { self.drop_swap(swap) };
         }
@@ -2865,6 +2913,8 @@ impl Drop for VkExecutor {
             for (_, swap) in std::mem::take(&mut self.swaps) {
                 self.drop_swap(swap);
             }
+            #[cfg(target_os = "linux")]
+            self.drop_dmabufs();
             for (_, t) in std::mem::take(&mut self.textures) {
                 self.free_image(t.img);
             }

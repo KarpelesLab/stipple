@@ -909,7 +909,8 @@ stencil-and-cover paths, images and image regions, cached glyphs, layers,
 scissor and stencil clips, canvases). Metal executes it and presents straight
 to a `CAMetalLayer` (macOS, iOS); Vulkan and GLES2 execute it and present
 straight to the window on X11 and Android (a swapchain, an EGL window
-surface), reading back on Wayland; Direct3D 11 executes it into a
+surface) and on Wayland (`dma-buf`s through `zwp_linux_dmabuf_v1`);
+Direct3D 11 executes it into a
 flip-model swap chain (Windows); all are pixel-compared against the CPU in
 CI. WebGPU and WebGL2 execute it in the browser (`web/gpu.js`), straight into
 the canvas, compared with the CPU in headless Chrome. `App::renderer` /
@@ -926,8 +927,11 @@ CPU as the default and the fallback.
   Windows, which the renderer gives a DXGI swap chain; the canvas itself on
   the web; the X11 window (by id) and Android's `ANativeWindow` (with its
   content rectangle), released through the renderer before the window goes;
-  device loss comes back from the renderer. Wayland's surface comes later
-  (see 6c); occlusion isn't reported yet.*
+  on Wayland the `wl_surface` and a sink the backend hands `dma-buf`s to
+  (`platform::dmabuf`, `zwp_linux_dmabuf_v1`; see 6c), likewise released;
+  device loss comes back from the renderer. Occlusion isn't reported yet
+  (Wayland compositors stop a hidden window's frame callbacks, which stops
+  its frames).*
 - ✅ A renderer trait over the lowered operations, so each backend is an
   executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
   per-backend texture, glyph and offscreen-target caches behind it.
@@ -991,7 +995,7 @@ CPU as the default and the fallback.
   path today.
 
 #### 6c — Vulkan (Linux, Android), with GLES as the fallback
-- 🚧 The scene executor on Vulkan, presenting through `VK_KHR_wayland_surface`,
+- ✅ The scene executor on Vulkan, presenting through `VK_KHR_wayland_surface`,
   `VK_KHR_xcb_surface` and `VK_KHR_android_surface`.
   *`src/gpu/vk/`, feature `vk`, `libvulkan` loaded at run time: the whole
   operation list, recorded host-side (`record.rs`, unit-tested everywhere)
@@ -1000,18 +1004,34 @@ CPU as the default and the fallback.
   protocol itself) and `VK_KHR_android_surface`, copying the frame into the
   swapchain image. Run on macOS through MoltenVK (corpus, present, validation
   layers with sync checks clean); X11 and Android compile-checked and in CI.
-  Wayland reads back: its surfaces need libwayland's proxies of the backend's
-  own objects; a `zwp_linux_dmabuf_v1` path comes with 6g (docs/gpu.md).*
-- 🚧 GLES2/3 presenting straight to an EGL window surface (Wayland, X11,
+  On Wayland (whose surfaces need libwayland's proxies of the backend's own
+  objects) frames are copied into images with `dma-buf` memory
+  (`VK_EXT_external_memory_dma_buf`, Vulkan 1.1, modifiers from
+  `VK_EXT_image_drm_format_modifier` or a linear image) and attached through
+  `zwp_linux_dmabuf_v1`, written by hand in the backend: format feedback
+  (v4, or v3's modifier events), a ring of up to three buffers drawn into once
+  released, `damage_buffer`, frame callbacks, the GPU's fence waited before
+  the commit; read back where the compositor or the driver can't
+  (docs/gpu.md#wayland); windows whose title bar Stipple draws (no
+  `xdg-decoration`) still read back. Run locally on NVIDIA against a
+  scripted compositor; in CI on lavapipe under sway on `vkms`, not blocking
+  yet.*
+- ✅ GLES2/3 presenting straight to an EGL window surface (Wayland, X11,
   Android) for drivers without Vulkan, instead of reading back.
   *X11 (EGL's XCB platform) and Android; the context moves to the window's
-  display on the first frame. Wayland reads back, as for Vulkan.
-  Compile-checked; run in CI only.*
+  display on the first frame. On Wayland, not an EGL window surface (that
+  needs libwayland too) but the same `dma-buf` path as Vulkan: the frame
+  copied into a texture exported with `EGL_MESA_image_dma_buf_export`, where
+  the compositor takes the modifier the driver chose. X11 and Android
+  compile-checked and run in CI only; Wayland run locally (llvmpipe, NVIDIA)
+  and in CI on llvmpipe under sway on `vkms`.*
 - ✅ CI: lavapipe (Vulkan) and llvmpipe (GL) pixel comparisons, the Linux
   visual jobs with each renderer, and the Android emulator's GPU.
   *The Vulkan corpus under lavapipe in `visual-gpu`; `visual-gpu-present`
-  screenshots `widgetsdemo` on Xvfb with each renderer; the API 34 emulator
-  run starts androiddemo built with `vk` (`test-renderer.sh`). The last two
+  screenshots `widgetsdemo` on Xvfb with each renderer, and under sway on a
+  `vkms` display (GLES renderer on llvmpipe) checks it presents through
+  `linux-dmabuf` with each and paces at 60 Hz; the API 34 emulator run
+  starts androiddemo built with `vk` (`test-renderer.sh`). The last two
   aren't blocking yet.*
 
 #### 6d — Direct3D 11 (Windows)
@@ -2777,7 +2797,7 @@ game needs on top:
   from 84 ms through the rasterizer, on an M5 Max (`spritedemo --bench`).*
 - ✅ Present on the GPU (Phase 6) without a read-back.
   *With a GPU renderer a game's canvas is drawn straight by the executor
-  and presented to the window (read back only on Wayland, 6c); sprite
+  and presented to the window (on Wayland as `dma-buf`s, 6c); sprite
   sheets are textures uploaded once, sprites from one batched into a draw.
   `PixelViewport` now draws through `Scene::draw_offscreen`, which the GPU
   renderers execute as a resampled layer (the frame drawn in an offscreen

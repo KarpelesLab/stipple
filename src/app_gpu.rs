@@ -5,7 +5,8 @@
 //! A window that draws on the GPU presents straight into the GPU layer its
 //! backend lays over the content ([`Window::gpu_layer`]: a `CAMetalLayer` on
 //! macOS and iOS, the window's own DXGI swap chain on Windows, the canvas's
-//! WebGPU or WebGL2 context on the web), skipping the `Pixmap` and the
+//! WebGPU or WebGL2 context on the web, `dma-buf`s handed to the compositor
+//! on Wayland), skipping the `Pixmap` and the
 //! [`Surface`](crate::render::Surface).
 //! Where the backend has no GPU layer yet, the GPU draws the frame and it is
 //! read back and presented as a `Pixmap`, as [`App::render_once`](crate::App::render_once)

@@ -12,8 +12,8 @@
 //! in CI) and Direct3D 11 (Windows; feature `d3d`, on WARP in CI) execute it.
 //! Apps choose it with [`App::renderer`](crate::App::renderer); the frames go
 //! straight to the window's `CAMetalLayer` on macOS and iOS, to a Vulkan
-//! swapchain or EGL window surface on X11 and Android, and to a flip-model
-//! DXGI swap chain on Windows.
+//! swapchain or EGL window surface on X11 and Android, to the compositor as
+//! `dma-buf`s on Wayland, and to a flip-model DXGI swap chain on Windows.
 //!
 //! [`present_offscreen`] composites a finished CPU [`Pixmap`] through GLES2.
 //! Vulkan, Direct3D 11 and Metal also have device and triangle spikes below.
@@ -124,6 +124,12 @@ mod metal_scene;
 
 #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "gl"))]
 mod gl;
+
+// Presenting a Wayland window through dma-bufs (Vulkan, GLES); its format
+// choice and buffer ring are plain Rust, tested everywhere on Linux.
+#[cfg(target_os = "linux")]
+#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+pub(crate) mod dmabuf_present;
 
 // A libxcb connection of the GPU's own, for X11 window surfaces.
 #[cfg(all(target_os = "linux", any(feature = "gl", feature = "vk")))]

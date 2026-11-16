@@ -67,6 +67,8 @@ pub(super) struct Reg {
     pub closed: Vec<u32>,
     /// Surfaces of windows the app resized, and the size (logical).
     pub resized: Vec<(u32, Size)>,
+    /// Surfaces of windows to redraw (a GPU frame that couldn't be shown).
+    pub redraw: Vec<u32>,
 }
 
 /// Create a window's surface, `xdg_surface` and `xdg_toplevel` with `attrs`,

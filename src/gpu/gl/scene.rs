@@ -44,6 +44,10 @@ use std::collections::HashMap;
 use std::ffi::CStr;
 use std::sync::{Arc, Weak};
 
+// Presenting to Wayland windows through dma-bufs.
+#[cfg(target_os = "linux")]
+mod dmabuf;
+
 const GL_SCISSOR_TEST: GLenum = 0x0C11;
 const GL_STENCIL_TEST: GLenum = 0x0B90;
 const GL_STENCIL_BUFFER_BIT: GLbitfield = 0x0400;
@@ -489,6 +493,9 @@ struct State {
     uploads: usize,
     /// Draw calls in the last frame.
     draws: usize,
+    /// Wayland windows' dma-buf rings.
+    #[cfg(target_os = "linux")]
+    wayland: dmabuf::Wayland,
 }
 
 thread_local! {
@@ -597,6 +604,8 @@ impl State {
     unsafe fn destroy(mut self) {
         unsafe {
             self.externals.clear(self.dpy);
+            #[cfg(target_os = "linux")]
+            self.wayland.close();
             eglMakeCurrent(self.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             for &s in self.windows.values() {
                 eglDestroySurface(self.dpy, s);
@@ -672,6 +681,8 @@ impl State {
                 frame: 0,
                 uploads: 0,
                 draws: 0,
+                #[cfg(target_os = "linux")]
+                wayland: dmabuf::Wayland::default(),
             })
         }
     }
@@ -1671,6 +1682,11 @@ impl Executor for GlExecutor {
     }
 
     fn can_present(&self, layer: &GpuLayer) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Some((_, sink)) = crate::gpu::dmabuf_present::sink_of(layer) {
+            return with_state(|state| Ok(unsafe { state.can_present_dmabuf(sink) }))
+                .unwrap_or(false);
+        }
         can_present_to(layer)
     }
 
@@ -1681,6 +1697,11 @@ impl Executor for GlExecutor {
         _scale: crate::geometry::ScaleFactor,
         dirty: Option<[i32; 4]>,
     ) -> Result<(), GpuError> {
+        // A Wayland window: through a dma-buf, on the offscreen context.
+        #[cfg(target_os = "linux")]
+        if let Some((surface, sink)) = crate::gpu::dmabuf_present::sink_of(layer) {
+            return with_state(|state| unsafe { state.present_dmabuf(plan, surface, sink, dirty) });
+        }
         let offset = match *layer {
             GpuLayer::Android { content, .. } => (content[0], content[1]),
             _ => (0, 0),
@@ -1692,6 +1713,14 @@ impl Executor for GlExecutor {
     }
 
     fn release(&mut self, layer: &GpuLayer) {
+        #[cfg(target_os = "linux")]
+        if let Some((surface, sink)) = crate::gpu::dmabuf_present::sink_of(layer) {
+            let _ = with_state(|state| {
+                unsafe { state.release_dmabuf(surface, sink) };
+                Ok(())
+            });
+            return;
+        }
         let Some(key) = layer_key(layer) else {
             return;
         };

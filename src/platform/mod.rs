@@ -51,6 +51,10 @@ pub(crate) mod compose;
 /// (and the one an APK carries, from [`android_receiver_dex`] on any host).
 #[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
 pub(crate) mod dex;
+/// GPU frames handed to the compositor as `dma-buf`s (Wayland).
+#[cfg(target_os = "linux")]
+#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+pub(crate) mod dmabuf;
 /// The edit menu over a text field's selection on a touch screen.
 mod edit_menu;
 

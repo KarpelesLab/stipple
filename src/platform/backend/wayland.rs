@@ -15,6 +15,8 @@
 //! falls back to a layout-independent evdev table if none) and **pointer**
 //! (motion, buttons and `axis` scrolling via `wl_pointer`, coordinates from
 //! `wl_fixed`). The clipboard goes through `wl_data_device` (`wayland/clipboard.rs`).
+//! GPU renderers hand their frames over as `dma-buf`s through
+//! `zwp_linux_dmabuf_v1` (`wayland/dmabuf.rs`).
 //! The FFI footprint — `memfd_create`/`mmap`, `sendmsg`/`recvmsg` for fd
 //! passing — is the reason for the module-level `allow(unsafe_code)`.
 //!
@@ -30,6 +32,9 @@ mod attention;
 mod clipboard;
 /// Server-side decorations, or a title bar and borders drawn by Stipple.
 mod decor;
+/// GPU frames as `dma-buf`s (`zwp_linux_dmabuf_v1`).
+#[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
+mod dmabuf;
 /// Raw key events and client-side key repeat.
 mod keys;
 mod pointer;
@@ -735,6 +740,8 @@ struct WlConn {
     attention: attention::Attention,
     /// The pointer lock's globals and, while locked, objects.
     lock: pointer::Lock,
+    /// `zwp_linux_dmabuf_v1`: the formats, and the GPU frames' buffers.
+    dmabuf: dmabuf::Dmabuf,
 }
 
 impl WlConn {
@@ -752,7 +759,12 @@ impl WlConn {
             std::path::Path::new(&dir).join(path)
         };
         let stream = UnixStream::connect(&full).map_err(os)?;
-        Ok(Self {
+        Ok(Self::over(stream))
+    }
+
+    /// A connection over `stream`, nothing bound yet.
+    fn over(stream: UnixStream) -> Self {
+        Self {
             stream,
             next_id: 2,
             fds: VecDeque::new(),
@@ -768,7 +780,8 @@ impl WlConn {
             decors: Vec::new(),
             attention: attention::Attention::default(),
             lock: pointer::Lock::default(),
-        })
+            dmabuf: dmabuf::Dmabuf::default(),
+        }
     }
 
     /// Show the current cursor shape, if the compositor supports
@@ -1166,6 +1179,8 @@ struct WaylandWindow {
     /// Whether the app takes the drag over the surface (see
     /// `set_drop_accepted`).
     drop_accepted: std::cell::Cell<bool>,
+    /// Where a GPU renderer hands its frames as dma-bufs, once asked for.
+    gpu: RefCell<Option<Box<crate::platform::dmabuf::Sink>>>,
 }
 
 impl WaylandWindow {
@@ -1201,6 +1216,7 @@ impl WaylandWindow {
             configured: Rc::new(Cell::new(false)),
             icon: RefCell::new(icon),
             drop_accepted: Cell::new(false),
+            gpu: RefCell::new(None),
         }
     }
 
@@ -1308,7 +1324,16 @@ impl Window for WaylandWindow {
     fn scale_factor(&self) -> ScaleFactor {
         ScaleFactor::new(self.scale.get() as f64)
     }
-    fn request_redraw(&self) {}
+    fn request_redraw(&self) {
+        // Once the loop is back (a GPU frame that couldn't be shown); before
+        // the first configure, its redraw comes anyway.
+        if self.configured.get() {
+            let mut reg = self.reg.borrow_mut();
+            if !reg.redraw.contains(&self.surface) {
+                reg.redraw.push(self.surface);
+            }
+        }
+    }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         // Wayland hides window positions: screen coordinates are the window's.
         let scale = self.scale_factor().get();
@@ -1485,6 +1510,41 @@ impl Window for WaylandWindow {
         let _ = conn.send(self.surface, WL_SURFACE_COMMIT, &[]);
         let _ = conn.stream.flush();
         *self.icon.borrow_mut() = buf;
+    }
+    fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        // GPU frames go to the compositor as dma-bufs where it takes them.
+        // Not under decorations Stipple draws (they frame the CPU's bitmap):
+        // those windows' GPU frames are read back.
+        if !dmabuf::enabled() {
+            return None;
+        }
+        {
+            let mut conn = self.conn.lock().unwrap();
+            if !dmabuf::available(&conn) {
+                return None;
+            }
+            toplevel::use_decor(&mut conn, self.toplevel);
+            if conn.decor.title_height() > 0.0 {
+                return None;
+            }
+        }
+        let mut gpu = self.gpu.borrow_mut();
+        let sink = gpu.get_or_insert_with(|| {
+            Box::new(crate::platform::dmabuf::Sink(Box::new(
+                dmabuf::WindowSink {
+                    conn: self.conn.clone(),
+                    surface: self.surface,
+                    toplevel: self.toplevel,
+                    scale: self.scale.clone(),
+                    configured: self.configured.clone(),
+                    made: RefCell::new(Vec::new()),
+                },
+            )))
+        });
+        Some(crate::platform::GpuLayer::Wayland {
+            surface: self.surface,
+            sink: &**sink,
+        })
     }
     fn create_surface(&self) -> Box<dyn Surface> {
         Box::new(WaylandSurface {
@@ -1704,6 +1764,7 @@ where
     let mut primary_name = None;
     let mut constraints_name = None;
     let mut relative_name = None;
+    let mut dmabuf_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1733,6 +1794,7 @@ where
                     clipboard::primary::MANAGER => primary_name = Some(name),
                     pointer::CONSTRAINTS => constraints_name = Some(name),
                     pointer::RELATIVE => relative_name = Some(name),
+                    dmabuf::MANAGER => dmabuf_name = Some((name, version.min(dmabuf::VERSION))),
                     _ => {}
                 }
             }
@@ -1815,6 +1877,12 @@ where
     if let (Some(c), Some(r)) = (constraints_name, relative_name) {
         conn.lock.constraints = Some(bind(&mut conn, c, pointer::CONSTRAINTS, 1));
         conn.lock.relative_manager = Some(bind(&mut conn, r, pointer::RELATIVE, 1));
+    }
+    // Where GPU frames go as dma-bufs (their formats are asked for when a
+    // window first wants a GPU layer).
+    if let Some((name, version)) = dmabuf_name {
+        let manager = bind(&mut conn, name, dmabuf::MANAGER, version);
+        dmabuf::setup(&mut conn, manager, version);
     }
 
     // The first window; `open_window` makes more the same way.
@@ -1923,6 +1991,10 @@ where
                 && let Some(s) = message.2.get(4..8)
             {
                 drag_focus = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+            }
+            // A GPU frame's buffer released, the formats for them.
+            if dmabuf::handle(&mut conn, message.0, message.1, &message.2, false) {
+                continue;
             }
             if clipboard::handle(&mut conn, message.0, message.1, &message.2) {
                 let dnd = std::mem::take(&mut conn.clip.dnd);
@@ -2424,12 +2496,13 @@ fn settle<H>(
 where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {
-    let (opened, closed, resized) = {
+    let (opened, closed, resized, redraw) = {
         let mut r = reg.borrow_mut();
         (
             std::mem::take(&mut r.opened),
             std::mem::take(&mut r.closed),
             std::mem::take(&mut r.resized),
+            std::mem::take(&mut r.redraw),
         )
     };
     for win in opened {
@@ -2442,6 +2515,13 @@ where
     for surface in closed {
         if let Some(pos) = windows.iter().position(|w| w.surface == surface) {
             let win = windows.remove(pos);
+            // The GPU renderer lets go of the window's buffers first.
+            if let Some(sink) = win.gpu.borrow().as_deref() {
+                crate::app_gpu::release_gpu_layer(crate::platform::GpuLayer::Wayland {
+                    surface,
+                    sink,
+                });
+            }
             toplevel::destroy(&mut shared.lock().unwrap(), win.objects());
         }
     }
@@ -2459,6 +2539,13 @@ where
         win.set_logical(logical);
         if handler(Event::Resized(win.size.get()), win) == ControlFlow::Exit
             || handler(Event::RedrawRequested, win) == ControlFlow::Exit
+        {
+            return ControlFlow::Exit;
+        }
+    }
+    for surface in redraw {
+        if let Some(win) = windows.iter().find(|w| w.surface == surface)
+            && handler(Event::RedrawRequested, win) == ControlFlow::Exit
         {
             return ControlFlow::Exit;
         }
