@@ -158,18 +158,36 @@ public class Probe extends AccessibilityService {
         return null;
     }
 
+    /** The vertical list: of the nodes offering ACTION_SCROLL_FORWARD (the
+     *  sideways chip strip does too), the one taller than wide, else the
+     *  tallest. */
     AccessibilityNodeInfo findScrollable(AccessibilityNodeInfo n) {
+        java.util.List<AccessibilityNodeInfo> all = new java.util.ArrayList<>();
+        collectScrollable(n, all);
+        AccessibilityNodeInfo best = null;
+        int bestScore = Integer.MIN_VALUE;
+        for (AccessibilityNodeInfo c : all) {
+            android.graphics.Rect r = new android.graphics.Rect();
+            c.getBoundsInScreen(r);
+            int score = (r.height() > r.width() ? 1_000_000 : 0) + r.height();
+            if (score > bestScore) {
+                bestScore = score;
+                best = c;
+            }
+        }
+        return best;
+    }
+
+    void collectScrollable(AccessibilityNodeInfo n, java.util.List<AccessibilityNodeInfo> out) {
         if (n.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_FORWARD)) {
-            return n;
+            out.add(n);
         }
         for (int i = 0; i < n.getChildCount(); i++) {
             AccessibilityNodeInfo c = n.getChild(i);
-            AccessibilityNodeInfo found = c == null ? null : findScrollable(c);
-            if (found != null) {
-                return found;
+            if (c != null) {
+                collectScrollable(c, out);
             }
         }
-        return null;
     }
 
     AccessibilityNodeInfo targetRoot() {

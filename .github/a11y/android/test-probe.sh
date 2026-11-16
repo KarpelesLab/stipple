@@ -84,9 +84,9 @@ grep -q "probe event TYPE_VIEW_CLICKED" "$log" || fail "no TYPE_VIEW_CLICKED eve
 grep -q "probe set text -> true" "$log" || fail "ACTION_SET_TEXT failed"
 wait_for applog 'androiddemo: text "TalkBack"' 10 > /dev/null || fail "the field didn't take the text"
 grep -q 'probe field now "TalkBack"' "$log" || fail "the field's node doesn't read the new text"
-# Scrolling: androiddemo's list is a plain scrollable container, which the
-# tree reports as a group without scroll actions (only lists, trees and
-# tables have them; see ROADMAP.md). Where one offers them, it must scroll.
+# Scrolling: androiddemo's list is a plain scrollable container, which
+# offers ACTION_SCROLL_FORWARD as the sideways chip strip does; the probe
+# picks the vertical one, and the list must scroll.
 if grep -q 'probe scroll forward: no node offers it' "$log"; then
   echo "a11y probe: note: no node offers ACTION_SCROLL_FORWARD (a plain scroll container isn't marked scrollable)"
 else
