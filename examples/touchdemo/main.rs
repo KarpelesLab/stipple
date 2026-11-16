@@ -829,8 +829,8 @@ mod selftest {
     /// press selects the word and asks for the menu, which the view backs
     /// with `canPerformAction:withSender:`; Copy and Cut picked through the
     /// view's `copy:` / `cut:` reach the field and the pasteboard; a tap on
-    /// the caret brings the menu back with Paste only, and `paste:` puts the
-    /// word back. Reports "touchdemo: edit menu passed" (or FAILED) on its
+    /// the emptied field's caret brings the menu back with Paste only, and
+    /// `paste:` puts the word back. Reports "touchdemo: edit menu passed" (or FAILED) on its
     /// own.
     fn edit_menu_steps(steps: &mut Steps) {
         use stipple::platform::EditAction;
@@ -872,11 +872,12 @@ mod selftest {
                 s.field.text()
             ));
             edit_check(s.field.text().is_empty(), "Cut");
-            // A tap on the caret: the menu, with Paste.
+            // A tap on the caret (the field is empty and keeps focus, so
+            // anywhere in it is on the caret): the menu, with Paste. (A
+            // second tap would hide it again.)
             tap(30.0, PAD + FIELD_H / 2.0);
         });
-        steps.run(1000, |_| tap(30.0, PAD + FIELD_H / 2.0));
-        steps.run(500, |_| {
+        steps.run(700, |_| {
             let status = simulate::edit_menu_status();
             log(&format!("touchdemo: edit menu on the caret {status}"));
             edit_check(
@@ -1477,6 +1478,10 @@ mod selftest {
         });
         steps.until(|_| simulate::presented_controller() == PICKER);
         steps.run(600, |_| {
+            log(&format!(
+                "touchdemo: save picker to pick from: {}",
+                simulate::presented_controller()
+            ));
             // Where the user "saved" it.
             let dest = std::env::temp_dir().join("touchdemo-exported.txt");
             check(

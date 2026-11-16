@@ -767,8 +767,10 @@ impl<S: 'static> App<S> {
         pane.end_text_select();
         pane.ensure_tree(state, theme, font.get());
         let after = pane.touch_field(font.get());
+        // An empty field lays out a lone space (to keep its height), whose
+        // far side is index 1: there, any tap is on the caret.
         let on_caret = matches!((&before, &after, index), (Some(b), Some(a), Some(i))
-            if b.focus == a.focus && b.selection.is_none() && b.caret == i);
+            if b.focus == a.focus && b.selection.is_none() && b.caret == i.min(b.text.len()));
         let selected = after.as_ref().is_some_and(|f| f.selection.is_some());
         pane.text_touch.show(pane.focused);
         pane.text_touch.menu = selected || (on_caret && !menu_was);

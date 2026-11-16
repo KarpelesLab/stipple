@@ -4458,6 +4458,8 @@ jobs:
           echo "=== app debug: input ==="
           grep -E "touch|press|release|wake|Text|Key" visual_output/touchdemo-stderr.log | head -60 || true
           echo "=== app debug (last 20) ==="; tail -20 visual_output/touchdemo-stderr.log || true
+          echo "=== app debug: pickers, drops, edit menu ==="
+          grep -E "stipple-window: (picker|drop|edit menu)" visual_output/touchdemo-stderr.log || true
           # platform::app_info reads the bundle's Info.plist, and
           # platform::dirs gives (and creates) the container's directories.
           grep -E "touchdemo: (app|dirs) " "$LOG" || true

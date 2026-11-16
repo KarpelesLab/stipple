@@ -585,3 +585,27 @@ fn the_rich_editor_selects_and_copies_with_a_finger_too() {
     assert!(app.edit_action(EditAction::Copy));
     assert_eq!(clipboard_text(), "brave");
 }
+
+#[test]
+fn a_tap_on_an_empty_fields_caret_shows_the_edit_menu() {
+    let Some(font) = font() else { return };
+    let mut app = app(font);
+    let start = point_of(&mut app, LINE, 0);
+    let inside = point_of(&mut app, LINE, 5);
+    tap(&mut app, inside);
+    pause(&mut app);
+    assert!(app.edit_action(EditAction::SelectAll));
+    app.render_once();
+    assert!(app.edit_action(EditAction::Cut));
+    app.render_once();
+    assert_eq!(field(&app).text(), "");
+    // The empty field lays out a lone space; a tap just inside it is on the
+    // caret all the same: the menu, with Paste only.
+    let at = Point::new(start.x + 2.0, start.y);
+    tap(&mut app, at);
+    let menu = app.edit_menu().expect("the menu shows");
+    assert!(!menu.cut && !menu.copy && menu.paste && !menu.select_all);
+    pause(&mut app);
+    tap(&mut app, at);
+    assert_eq!(app.edit_menu(), None);
+}

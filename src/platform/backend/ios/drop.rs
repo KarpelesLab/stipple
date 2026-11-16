@@ -319,7 +319,11 @@ extern "C" fn perform_drop(_this: Id, _cmd: Sel, _interaction: Id, session: Id) 
                 .cloned()
                 .unwrap_or_default();
             let name = msg_id(provider, sel("suggestedName"));
-            (ty, (!name.is_null()).then(|| string_of(name)))
+            let name = (!name.is_null()).then(|| string_of(name));
+            crate::platform::window::debug_window(format_args!(
+                "drop: item {index} read as {read:?}, types {types:?}, loading {ty:?}, suggested name {name:?}"
+            ));
+            (ty, name)
         };
         let block = Box::leak(Box::new(LoadBlock {
             isa: &raw const _NSConcreteGlobalBlock,
@@ -439,6 +443,11 @@ unsafe fn copy_file(b: &LoadBlock, url: Id) -> Option<Item> {
     let name = mobile_drop::file_name(b.name.as_deref(), &fallback, Some(&b.ty));
     let dir = mobile_drop::drop_dir(&b.dir, b.drop_id).ok()?;
     let to = mobile_drop::unique_path(&dir, &name);
+    crate::platform::window::debug_window(format_args!(
+        "drop: copying {} to {}",
+        from.display(),
+        to.display()
+    ));
     match std::fs::copy(&from, &to) {
         Ok(_) => Some(Item::File(to)),
         Err(e) => {
@@ -539,11 +548,22 @@ pub(super) unsafe fn simulate(
             ),
             (None, Some(path)) => {
                 let url = init(class("NSURL"), sel("fileURLWithPath:"), nsstring(path));
-                init(
+                let provider = init(
                     msg_id(class("NSItemProvider"), sel("alloc")),
                     sel("initWithContentsOfURL:"),
                     url,
-                )
+                );
+                // Named after the file, as the Files app's drags are (a
+                // provider made from a URL has no name of its own on some
+                // iOS releases, and the file it loads is then "text.txt").
+                if !provider.is_null() {
+                    let name = std::path::Path::new(path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    super::msg_void_id(provider, sel("setSuggestedName:"), nsstring(&name));
+                }
+                provider
             }
             (None, None) => return false,
         };
