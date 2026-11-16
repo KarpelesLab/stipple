@@ -412,10 +412,26 @@ extern "C" fn selector_allowed(this: Id, cmd: Sel, selector: Sel) -> bool {
     }
 }
 
-/// The legacy `accessibilityActionNames`: AppKit's, plus `AXScrollToVisible`
-/// inside a scroll container.
+/// The protocol's action methods and the action each stands for.
+const PROTOCOL_ACTIONS: [(&str, &str); 8] = [
+    ("accessibilityPerformPress", "AXPress"),
+    ("accessibilityPerformIncrement", "AXIncrement"),
+    ("accessibilityPerformDecrement", "AXDecrement"),
+    ("accessibilityPerformShowMenu", "AXShowMenu"),
+    ("accessibilityPerformCancel", "AXCancel"),
+    ("accessibilityPerformConfirm", "AXConfirm"),
+    ("accessibilityPerformPick", "AXPick"),
+    ("accessibilityPerformRaise", "AXRaise"),
+];
+
+/// The legacy `accessibilityActionNames`: the actions of the protocol
+/// methods the element implements (and allows), plus `AXScrollToVisible`
+/// inside a scroll container. Overriding the legacy method means AppKit no
+/// longer derives the list from the protocol for us (its own legacy
+/// implementation returns nothing for an `NSAccessibilityElement`), so the
+/// protocol's actions are listed here.
 extern "C" fn action_names(this: Id, cmd: Sel) -> Id {
-    let names = unsafe {
+    let base_names = unsafe {
         let f: unsafe extern "C" fn(Id, Sel) -> Id =
             std::mem::transmute(base("accessibilityActionNames"));
         f(this, cmd)
@@ -424,16 +440,31 @@ extern "C" fn action_names(this: Id, cmd: Sel) -> Id {
         kind == Kind::Node && ax_plan::in_scroll(root, path)
     })
     .unwrap_or(false);
-    if !inside {
-        return names;
-    }
     unsafe {
-        let list = if names.is_null() {
+        let list = if base_names.is_null() {
             msg_id(class("NSMutableArray"), sel("array"))
         } else {
-            msg_id(msg_id(names, sel("mutableCopy")), sel("autorelease"))
+            msg_id(msg_id(base_names, sel("mutableCopy")), sel("autorelease"))
         };
-        msg_void_id(list, sel("addObject:"), nsstring("AXScrollToVisible"));
+        let responds: unsafe extern "C" fn(Id, Sel, Sel) -> i8 =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let contains: unsafe extern "C" fn(Id, Sel, Id) -> i8 =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        for (method, action) in PROTOCOL_ACTIONS {
+            let m = sel(method);
+            if responds(this, sel("respondsToSelector:"), m) == 0
+                || !selector_allowed(this, sel("isAccessibilitySelectorAllowed:"), m)
+            {
+                continue;
+            }
+            let name = nsstring(action);
+            if contains(list, sel("containsObject:"), name) == 0 {
+                msg_void_id(list, sel("addObject:"), name);
+            }
+        }
+        if inside {
+            msg_void_id(list, sel("addObject:"), nsstring("AXScrollToVisible"));
+        }
         list
     }
 }
@@ -451,6 +482,21 @@ extern "C" fn perform_action(this: Id, cmd: Sel, action: Id) {
             }
         });
         return;
+    }
+    // The protocol's actions, which the list above names: call the method
+    // (AppKit's legacy implementation doesn't, once it is overridden).
+    let name = nsstring_to_string(action);
+    if let Some((method, _)) = PROTOCOL_ACTIONS.iter().find(|(_, a)| *a == name) {
+        unsafe {
+            let responds: unsafe extern "C" fn(Id, Sel, Sel) -> i8 =
+                std::mem::transmute(objc_msgSend as *const c_void);
+            if responds(this, sel("respondsToSelector:"), sel(method)) != 0 {
+                let f: unsafe extern "C" fn(Id, Sel) -> i8 =
+                    std::mem::transmute(objc_msgSend as *const c_void);
+                f(this, sel(method));
+                return;
+            }
+        }
     }
     unsafe {
         let f: unsafe extern "C" fn(Id, Sel, Id) =
