@@ -8,6 +8,7 @@ use crate::geometry::Rect;
 
 /// An editing command from the edit menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum EditAction {
     /// Copy the selection to the clipboard and delete it.
     Cut,
@@ -59,6 +60,7 @@ impl EditAction {
 /// pixels of the window's content; the menu goes above it, or below when
 /// there's no room) and which actions it offers.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct EditMenu {
     /// What the menu points at.
     pub rect: Rect,

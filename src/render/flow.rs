@@ -552,6 +552,7 @@ impl TextFlow {
 /// assert_eq!(w.resolve(None, 120.0), 300.0); // unbounded: its cap
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct RelativeWidth {
     /// The fraction of the text's width (1 is all of it).
     pub fraction: f64,
