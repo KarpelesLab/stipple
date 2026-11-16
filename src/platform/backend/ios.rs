@@ -647,20 +647,32 @@ fn app_touches(phase: TouchPhase, touches: &[(u64, Point)]) {
     }
 }
 
-extern "C" fn touches_began(this: Id, _cmd: Sel, touches: Id, _event: Id) {
-    touch_input(TouchPhase::Started, &unsafe { touches_in(this, touches) });
+/// Touches that changed, but for a secondary click's (which is the
+/// pointer's right button: see [`pointer`]).
+unsafe fn touches_changed(phase: TouchPhase, view: Id, touches: Id, event: Id) {
+    let all = unsafe { touches_in(view, touches) };
+    let rest = unsafe { pointer::without_secondary(phase, all, event) };
+    if !rest.is_empty() {
+        touch_input(phase, &rest);
+    }
 }
 
-extern "C" fn touches_moved(this: Id, _cmd: Sel, touches: Id, _event: Id) {
-    touch_input(TouchPhase::Moved, &unsafe { touches_in(this, touches) });
+extern "C" fn touches_began(this: Id, _cmd: Sel, touches: Id, event: Id) {
+    // A finger on the screen stops a trackpad's coasting scroll.
+    pointer::stop_momentum();
+    unsafe { touches_changed(TouchPhase::Started, this, touches, event) };
 }
 
-extern "C" fn touches_ended(this: Id, _cmd: Sel, touches: Id, _event: Id) {
-    touch_input(TouchPhase::Ended, &unsafe { touches_in(this, touches) });
+extern "C" fn touches_moved(this: Id, _cmd: Sel, touches: Id, event: Id) {
+    unsafe { touches_changed(TouchPhase::Moved, this, touches, event) };
 }
 
-extern "C" fn touches_cancelled(this: Id, _cmd: Sel, touches: Id, _event: Id) {
-    touch_input(TouchPhase::Cancelled, &unsafe { touches_in(this, touches) });
+extern "C" fn touches_ended(this: Id, _cmd: Sel, touches: Id, event: Id) {
+    unsafe { touches_changed(TouchPhase::Ended, this, touches, event) };
+}
+
+extern "C" fn touches_cancelled(this: Id, _cmd: Sel, touches: Id, event: Id) {
+    unsafe { touches_changed(TouchPhase::Cancelled, this, touches, event) };
 }
 
 // ---- The keyboard (UIKeyInput / UITextInput, in `text_input`) ----------------
@@ -1037,8 +1049,15 @@ pub mod simulate {
 
     /// Scroll as a trackpad does: the scroll recognizer's action with the
     /// pointer at `at`, at each translation of `translations` (points since
-    /// the gesture began), then the end.
+    /// the gesture began), then the end, with the fingers still.
     pub fn trackpad_scroll(at: Point, translations: &[Point]) {
+        trackpad_fling(at, translations, Point::new(0.0, 0.0));
+    }
+
+    /// [`trackpad_scroll`], the fingers lifting at `velocity` (points per
+    /// second, as the recognizer's `velocityInView:` reports it): the
+    /// scroll coasts on, slowing down as a `UIScrollView` does.
+    pub fn trackpad_fling(at: Point, translations: &[Point], velocity: Point) {
         let translations = translations.to_vec();
         later(move || {
             for (i, &t) in translations.iter().enumerate() {
@@ -1047,11 +1066,27 @@ pub mod simulate {
                 } else {
                     pan_scroll::CHANGED
                 };
-                pointer::scrolled(state, at, t);
+                pointer::scrolled(state, at, t, Point::new(0.0, 0.0));
             }
             let last = translations.last().copied().unwrap_or(Point::new(0.0, 0.0));
-            pointer::scrolled(pan_scroll::ENDED, at, last);
+            pointer::scrolled(pan_scroll::ENDED, at, last, velocity);
         });
+    }
+
+    /// A secondary click at `at` (a trackpad's two-finger click, a mouse's
+    /// right button), as the view turns one into the app's pointer events.
+    pub fn secondary_click(at: Point) {
+        later(move || {
+            pointer::secondary(at, ButtonState::Pressed);
+            pointer::secondary(at, ButtonState::Released);
+        });
+    }
+
+    /// The pointer style the pointer interaction gives the app's cursor
+    /// now, as UIKit asks for it: `default`, `beam`, `beam-horizontal` or
+    /// `hidden` (and whether the interaction is on the view).
+    pub fn pointer_style() -> String {
+        pointer::style_status()
     }
 
     /// The pointer hovering at `at` (`Some`), or leaving (`None`), as the
@@ -1067,7 +1102,7 @@ pub mod simulate {
     /// recognizer is on the view, its `allowedScrollTypesMask` and how many
     /// touch types it takes, and whether the hover recognizer is on it.
     pub fn pointer_status() -> String {
-        pointer::status()
+        format!("{} coasting={}", pointer::status(), pointer::coasting())
     }
 
     /// Type `text`, as `[view insertText:text]`.
@@ -1391,6 +1426,9 @@ impl Window for IosWindow {
     }
     fn set_drop_accepted(&self, accepted: bool) {
         drop::set_accepted(accepted);
+    }
+    fn set_cursor(&self, cursor: crate::platform::CursorIcon) {
+        pointer::set_cursor(cursor);
     }
     fn set_orientations(&self, set: crate::platform::Orientations) {
         screen::set_orientations(set);

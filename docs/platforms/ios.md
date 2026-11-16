@@ -191,12 +191,31 @@ On an iPad with a trackpad or a mouse (iPadOS 13.4 and later):
   (points), following the fingers as UIKit's scroll views do (natural
   scrolling: fingers moving up scroll towards the end), with the gesture's
   phases (`ScrollPhase::Started`, `Moved`, `Ended`), after a `PointerMoved`
-  to where the pointer is, so the scroll container under it scrolls. There
-  is no momentum after the fingers lift (UIKit leaves that to the scroll
-  view; Stipple's containers don't coast on wheel input).
+  to where the pointer is, so the scroll container under it scrolls.
+- **Momentum.** Fingers that lift while moving (the recognizer's
+  `velocityInView:` at its end, from 50 points a second) leave the scroll
+  coasting: `ScrollPhase::Momentum` steps about every 16 ms (timers on the
+  main queue), slowing down as a `UIScrollView` does
+  at its normal deceleration rate (0.998 of the speed kept per
+  millisecond), until it's slower than 10 points a second, the fingers
+  scroll again, or a finger touches the screen. As on macOS, the app sees
+  the coast as scroll events.
 - **Hover.** A `UIHoverGestureRecognizer` reports the pointer's moves while
   nothing is pressed as `PointerMoved`, and its leaving as `PointerLeft`, so
   hover styles and tooltips work. A click is a touch, as before.
+- **Secondary click.** A trackpad's two-finger click or a mouse's right
+  button arrives as a touch of type `UITouchTypeIndirectPointer` whose
+  event's `buttonMask` has the secondary button: the view turns it into
+  `PointerButton::Right` pressed and released, so it opens the context menu
+  under the pointer, as a right-click does on a desktop, instead of tapping.
+  UIKit only says so with `UIApplicationSupportsIndirectInputEvents` in the
+  Info.plist, which `cargo-stipple ios` writes.
+- **The pointer's shape.** A `UIPointerInteraction` on the view gives the
+  app's cursor (`Element::cursor`, `Window::set_cursor`) as the pointer's
+  style: the I-beam over text (`CursorIcon::Text`), hidden for
+  `CursorIcon::Hidden`, and the system's round pointer for the rest (iPadOS
+  has no arrows, hands or resize cursors of its own). The interaction is
+  invalidated when the cursor changes, so UIKit asks again.
 
 ### Drag and drop
 
@@ -410,11 +429,12 @@ applies.
   view is first responder only then); they're build-checked, not run in CI.
   The self-test sends the view what UIKit sends for a dead key, not a real
   key press.
-- The trackpad's scrolling and hover, and drops from another app, are
-  self-tested through the same code as the recognizers' actions and the drop
-  delegate (with a stand-in drop session), not with a real trackpad or a
-  drag between two apps. No drags out of the app (`UIDragInteraction`), and
-  no right-click from a trackpad (a secondary click is a touch).
+- The trackpad's scrolling, momentum, hover, secondary click and pointer
+  shape, and drops from another app, are self-tested through the same code
+  as the recognizers' actions, the touch handler's secondary-click mapping
+  and the delegates (with stand-in sessions), not with a real trackpad or
+  mouse: the simulator's XCUITest has no pointer. No drags out of the app
+  (`UIDragInteraction`), and no drag between two apps.
 - File pickers answer with contents only (`open_file` and friends return
   `None`), and there is no folder picker. Choosing a file in the picker can't
   be scripted on the simulator (its contents run in another process), so CI

@@ -73,6 +73,9 @@ def info_plist(m, exe_name, simulator):
         "MinimumOSVersion": m.ios_minimum,
         "UIDeviceFamily": family,
         "UILaunchScreen": {},
+        # An iPad's trackpad and mouse clicks as indirect pointer touches,
+        # whose button mask tells a secondary click (a context menu).
+        "UIApplicationSupportsIndirectInputEvents": True,
         "UIApplicationSceneManifest": {
             "UIApplicationSupportsMultipleScenes": m.ios_multiple_scenes,
         },

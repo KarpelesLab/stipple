@@ -2283,9 +2283,19 @@ Most input only works on X11 today.
   `PointerMoved` / `PointerLeft` while nothing is pressed. The step
   conversion is unit-tested on the host (`ios/pan_scroll.rs`); `touchdemo`'s
   simulator self-test reads the recognizers' settings back and scrolls the
-  list through their action's code (not blocking yet). Not tried with a real
-  trackpad or mouse; no momentum after the fingers lift, and no secondary
-  click. See [docs/platforms/ios.md](docs/platforms/ios.md#trackpad-and-mouse).
+  list through their action's code (not blocking yet). **Momentum:** fingers
+  that lift while moving (`velocityInView:`) leave the scroll coasting as
+  `ScrollPhase::Momentum` steps every ~16 ms, at `UIScrollView`'s
+  normal deceleration (unit-tested in `ios/pan_scroll.rs`), stopped by a new
+  scroll or a finger on the screen. **Secondary click:** an indirect
+  pointer's touch with `buttonMask` secondary is `PointerButton::Right`
+  (the context menu), not a touch (`UIApplicationSupportsIndirectInputEvents`,
+  which `cargo-stipple` writes). **Pointer shape:** a `UIPointerInteraction`
+  gives the app's cursor as the style (the I-beam over text, hidden). The
+  self-test flicks the list (it must coast), secondary-clicks a row (its
+  menu opens) and reads the style over the text field, through the same code
+  (not blocking yet, not yet run in CI). Not tried with a real trackpad or
+  mouse. See [docs/platforms/ios.md](docs/platforms/ios.md#trackpad-and-mouse).
 - 🚧 Mobile CI depth: run the iOS features that are only implemented (timers,
   clipboard, opening URLs) on the simulator, with real `UITouch`es rather than
   the synthetic touch path, and try both platforms on physical devices before

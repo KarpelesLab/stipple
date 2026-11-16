@@ -637,10 +637,15 @@ aren't run in CI, and dragging out of the app isn't done on either. See
 ⁸⁰ iPadOS 13.4 and later: a `UIPanGestureRecognizer` taking only indirect
 scrolling (`allowedScrollTypesMask`: a trackpad's two fingers and a mouse's
 wheel, in points, with the gesture's phases; no touches) and a
-`UIHoverGestureRecognizer` for the pointer's moves while nothing is pressed.
-The conversion is unit-tested; `touchdemo`'s simulator self-test reads the
-recognizers' settings back and feeds scroll steps through the same code as
-their action (not blocking yet); a real trackpad isn't used in CI. See
+`UIHoverGestureRecognizer` for the pointer's moves while nothing is pressed;
+momentum after the fingers lift (`UIScrollView`'s deceleration, as
+`ScrollPhase::Momentum` steps), a secondary click as the right button (its
+context menu), and the app's cursor as the pointer's shape
+(`UIPointerInteraction`: the I-beam, hidden). The conversion and the
+deceleration are unit-tested; `touchdemo`'s simulator self-test reads the
+recognizers' settings back and feeds scroll steps, a flick, a secondary
+click and hovers through the same code (not blocking yet); a real trackpad
+or mouse isn't used in CI. See
 [platforms/ios.md](platforms/ios.md#trackpad-and-mouse).
 ⁸¹ CI drives `touchdemo` on the iPhone simulator from an XCUITest runner
 with real touches (not blocking yet; passed in one run): a repeating timer

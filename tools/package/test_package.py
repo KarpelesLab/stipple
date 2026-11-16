@@ -165,6 +165,7 @@ class IosTests(unittest.TestCase):
         self.assertEqual(info["NSCameraUsageDescription"], "Scan.")
         self.assertIs(info["UIStatusBarHidden"], True)
         self.assertEqual(info["UILaunchScreen"], {})
+        self.assertIs(info["UIApplicationSupportsIndirectInputEvents"], True)
         plistlib.dumps(info)
 
     def test_short_version(self):
