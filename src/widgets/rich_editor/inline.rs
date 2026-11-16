@@ -77,7 +77,10 @@ pub(crate) fn signature(pieces: &[Piece]) -> Vec<(String, Marks, Option<Arc<str>
     for p in pieces {
         let (text, attr) = match p {
             Piece::Text(t, a) => (t.clone(), a),
-            Piece::Image(i, a) => (format!("\u{FFFC}{}\u{0}{}", i.src, i.alt), a),
+            Piece::Image(i, a) => (
+                format!("\u{FFFC}{}\u{0}{}\u{0}{:?}", i.src, i.alt, i.float),
+                a,
+            ),
         };
         match out.last_mut() {
             Some(last)

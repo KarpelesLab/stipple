@@ -154,6 +154,54 @@ pub struct RichImage {
     pub alt: String,
     /// The decoded image, if loaded.
     pub pixmap: Option<Arc<Pixmap>>,
+    /// Whether it sits in the line or floats to a side, the text wrapping
+    /// around its opaque pixels.
+    pub float: ImageFloat,
+}
+
+/// Where a [`RichImage`] goes: in the line like a character, or floated
+/// against the left or right edge with the text flowing around it (around
+/// its opaque pixels: text runs over the transparent ones). Exported as
+/// `style="float: left"` (or `right`) on the `<img>`, in Markdown as an
+/// inline `<img>` tag.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ImageFloat {
+    /// In the line.
+    #[default]
+    Inline,
+    /// Floated left, text on its right.
+    Left,
+    /// Floated right, text on its left.
+    Right,
+}
+
+impl ImageFloat {
+    /// The CSS `float` value, if floated.
+    pub(crate) fn css(self) -> Option<&'static str> {
+        match self {
+            ImageFloat::Inline => None,
+            ImageFloat::Left => Some("left"),
+            ImageFloat::Right => Some("right"),
+        }
+    }
+
+    /// The float an `<img>`'s `style` (or legacy `align`) asks for.
+    pub(crate) fn from_attrs(style: Option<&str>, align: Option<&str>) -> ImageFloat {
+        let mut side = align.map(str::to_ascii_lowercase);
+        for decl in style.unwrap_or_default().split(';') {
+            if let Some((prop, value)) = decl.split_once(':')
+                && prop.trim().eq_ignore_ascii_case("float")
+            {
+                side = Some(value.trim().to_ascii_lowercase());
+            }
+        }
+        match side.as_deref() {
+            Some("left") => ImageFloat::Left,
+            Some("right") => ImageFloat::Right,
+            _ => ImageFloat::Inline,
+        }
+    }
 }
 
 impl RichImage {
@@ -163,6 +211,7 @@ impl RichImage {
             src: src.into(),
             alt: String::new(),
             pixmap,
+            float: ImageFloat::Inline,
         }
     }
 
@@ -185,6 +234,12 @@ impl RichImage {
     /// With `alt` as its alternative text.
     pub fn alt(mut self, alt: impl Into<String>) -> Self {
         self.alt = alt.into();
+        self
+    }
+
+    /// Placed per `float`: in the line, or floated left or right.
+    pub fn floated(mut self, float: ImageFloat) -> Self {
+        self.float = float;
         self
     }
 }

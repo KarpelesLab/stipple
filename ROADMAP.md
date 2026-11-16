@@ -826,6 +826,9 @@ abstraction is frozen at the end of Phase 2.
   text (the app reads every format for such an element). `to_markdown` /
   `from_markdown` (CommonMark-style, escaped, read back line by line with
   HTML-tag fallback) and `to_html` / `from_html`, round-trip tested.
+  Images float left or right (`set_image_float`), the text flowing around
+  their opaque pixels through the text flow engine, exported as
+  `style="float: …"` on an `<img>`.
   `Element::keeps_focus` for toolbar buttons. `examples/richeditor`,
   **CI-verified** on X11 (typing, Ctrl+B/I, toolbar clicks, the exported
   Markdown) and off screen. See

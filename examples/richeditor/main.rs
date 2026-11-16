@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use stipple::platform::dialog::{self, FileDialog};
 use stipple::prelude::*;
-use stipple::widgets::Marks;
+use stipple::widgets::{ImageFloat, Marks};
 
 /// Which export shows under the editor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,6 +185,14 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
             s.editor.redo();
         }),
     ]);
+    // Placing the image at the caret (or the selected ones): pressed for
+    // how it is placed now.
+    let placed = ed.image_float();
+    let float = |cx: &mut Cx<Doc>, label: &str, name: &str, f: ImageFloat| {
+        tool(cx, label, name, placed == Some(f), move |s| {
+            s.editor.set_image_float(f)
+        })
+    };
     let pick = insert_image_file(cx);
     let insert = toolbar(cx).children(vec![
         text_field(cx, &state.link, |s| &mut s.link)
@@ -202,6 +210,10 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
         tool(cx, "Sample image", "Insert the sample image", false, |s| {
             s.editor.insert_image(sample_image())
         }),
+        tool_separator(cx),
+        float(cx, "Inline", "Image in the line", ImageFloat::Inline),
+        float(cx, "◧", "Float the image left", ImageFloat::Left),
+        float(cx, "◨", "Float the image right", ImageFloat::Right),
     ]);
     let editor = rich_editor(cx, &state.editor, |s| &mut s.editor)
         .placeholder("Write something…")
@@ -283,6 +295,9 @@ fn check(mut app: App<Doc>) -> Result<(), String> {
     app.type_text(" & <safe>");
     app.press_key(KeyInput::Enter);
     click(&mut app, "Insert the sample image")?;
+    // Floated right, with text flowing beside it.
+    click(&mut app, "Float the image right")?;
+    app.type_text("The sunset floats right; this text runs on its left.");
     let pm = app.render_once();
     let md = app.state().editor.to_markdown();
     let html = app.state().editor.to_html();
@@ -297,7 +312,8 @@ fn check(mut app: App<Doc>) -> Result<(), String> {
         "- Lists",
         "> A quote.",
         "Checked **bold** \\& \\<safe\\>",
-        "![A sunset](data:image/png;base64,",
+        "<img src=\"data:image/png;base64,",
+        "alt=\"A sunset\" style=\"float: right\">The sunset floats right;",
     ] {
         if !md.contains(want) {
             return Err(format!("the Markdown has no {want:?}"));
@@ -309,6 +325,7 @@ fn check(mut app: App<Doc>) -> Result<(), String> {
         "<ul>\n<li>Lists</li>",
         "Checked <strong>bold</strong> &amp; &lt;safe&gt;",
         "<img src=\"data:image/png;base64,",
+        "style=\"float: right\">The sunset",
     ] {
         if !html.contains(want) {
             return Err(format!("the HTML has no {want:?}"));
@@ -321,19 +338,33 @@ fn check(mut app: App<Doc>) -> Result<(), String> {
         return Err("the HTML doesn't read back as the document".into());
     }
     // The sample image's sun and sea are drawn.
-    let (mut sun, mut sea) = (0, 0);
+    // The sample image's sun and sea are drawn, floated against the right.
+    let (mut sun, mut sea, mut left) = (0, 0, 0);
+    let w = pm.size().width;
     for y in 0..pm.size().height {
-        for x in 0..pm.size().width {
-            match pm.pixel(x, y) {
-                Some([0xff, 0xd2, 0x3f, _]) => sun += 1,
-                Some([0x1d, 0x4e, 0x89, _]) => sea += 1,
-                _ => {}
+        for x in 0..w {
+            let hit = match pm.pixel(x, y) {
+                Some([0xff, 0xd2, 0x3f, _]) => {
+                    sun += 1;
+                    true
+                }
+                Some([0x1d, 0x4e, 0x89, _]) => {
+                    sea += 1;
+                    true
+                }
+                _ => false,
+            };
+            if hit && x < w / 2 {
+                left += 1;
             }
         }
     }
-    println!("richeditor: {sun} sun pixels, {sea} sea pixels");
+    println!("richeditor: {sun} sun pixels, {sea} sea pixels, {left} on the left half");
     if sun < 50 || sea < 200 {
         return Err("the inserted image isn't drawn".into());
+    }
+    if left > 0 {
+        return Err("the image floated right is drawn on the left".into());
     }
     Ok(())
 }

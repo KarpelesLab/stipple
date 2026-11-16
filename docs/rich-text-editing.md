@@ -36,7 +36,8 @@ fn view(state: &Doc, cx: &mut Cx<Doc>) -> Element {
 ```
 
 `examples/richeditor` is a complete editor: a toolbar for every mark and
-block kind, links, an image from a file or a built-in sample, undo and redo,
+block kind, links, an image from a file or a built-in sample (in the line,
+or floated left or right), undo and redo,
 and the Markdown or HTML under the editor, saved to a file.
 
 ## The document
@@ -119,6 +120,18 @@ shows (a gray square while there is none).
   file path or `file://` URL.
 - `RichImage::new(src, pixmap)` keeps both as given: the example inserts a
   picked file under its file name, so the export refers to it by name.
+
+**Floating.** An image sits in the line by default (`ImageFloat::Inline`).
+`set_image_float(ImageFloat::Left)` (or `Right`) floats the selected
+images, or the one next to the caret, against that edge of the editor, the
+text flowing around its opaque pixels with a 6 px margin (the text flow
+engine, [text-flow.md](text-flow.md)): the transparent parts of a PNG let
+text in. `image_float()` says how the image at the caret is placed, for a
+toolbar's pressed state; `RichImage::floated` sets it on a new one. The
+image still stands as one U+FFFC in the text where it was inserted, so the
+caret, selection, undo and copying treat it as before. HTML exports it as
+`<img … style="float: left">` and reads that or `align="left"`; Markdown,
+which has no floats, as the same inline `<img>` tag.
 
 **Export uses `src` as it is**: Markdown writes `![alt](src)` and HTML
 `<img src="src" alt="alt">`. Nothing is re-encoded or embedded behind your

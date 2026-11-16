@@ -5,7 +5,9 @@
 use std::sync::Arc;
 
 use super::inline::{Event, Tag, events};
-use super::model::{Attr, BlockKind, DocBuilder, Marks, Piece, RichDocument, RichImage};
+use super::model::{
+    Attr, BlockKind, DocBuilder, ImageFloat, Marks, Piece, RichDocument, RichImage,
+};
 
 /// `text` with `&`, `<` and `>` escaped (and `"` too when `attr`).
 pub(crate) fn escape(text: &str, attr: bool, out: &mut String) {
@@ -95,7 +97,13 @@ fn inline_html(pieces: &[Piece], out: &mut String) {
                 escape(&i.src, true, out);
                 out.push_str("\" alt=\"");
                 escape(&i.alt, true, out);
-                out.push_str("\">");
+                out.push('"');
+                if let Some(side) = i.float.css() {
+                    out.push_str(" style=\"float: ");
+                    out.push_str(side);
+                    out.push('"');
+                }
+                out.push('>');
             }
         }
     }
@@ -640,7 +648,8 @@ impl Reader {
                     None
                 };
                 let alt = tag.attr("alt").unwrap_or_default();
-                let image = RichImage::new(src, pixmap).alt(alt);
+                let float = ImageFloat::from_attrs(tag.attr("style"), tag.attr("align"));
+                let image = RichImage::new(src, pixmap).alt(alt).floated(float);
                 self.ensure_block();
                 self.flush_space();
                 let attr = self.attr();

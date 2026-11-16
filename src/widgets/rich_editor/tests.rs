@@ -4,6 +4,46 @@ use crate::core::LayoutNode;
 use crate::geometry::Size;
 use crate::platform::{Modifiers, PhysicalKey};
 
+#[test]
+fn images_float_left_or_right() {
+    let mut ed = RichEditor::new();
+    ed.insert_image(sample_image());
+    typed(&mut ed, "text beside it");
+    assert_eq!(ed.image_float(), None, "no image at the caret");
+    ed.select(0, 0);
+    assert_eq!(ed.image_float(), Some(ImageFloat::Inline));
+    ed.set_image_float(ImageFloat::Left);
+    assert_eq!(ed.image_float(), Some(ImageFloat::Left));
+    let src = ed.document().images()[0].src.clone();
+    let tag = format!("<img src=\"{src}\" alt=\"a [gray] box\" style=\"float: left\">");
+    assert_eq!(ed.to_html(), format!("<p>{tag}text beside it</p>\n"));
+    assert_eq!(ed.to_markdown(), format!("{tag}text beside it\n"));
+    assert_eq!(RichDocument::from_html(&ed.to_html()), *ed.document());
+    assert_eq!(
+        RichDocument::from_markdown(&ed.to_markdown()),
+        *ed.document()
+    );
+    // `align` from older HTML.
+    let d = RichDocument::from_html("<p><img src=\"a.png\" align=\"right\">x</p>");
+    assert_eq!(d.images()[0].float, ImageFloat::Right);
+    // The leaf carries it as a float; the shown text is unchanged.
+    let leaf = ed.leaf(&Theme::light());
+    let crate::core::ElementKind::Text { text, style, .. } = &leaf.kind else {
+        panic!("a text leaf");
+    };
+    assert_eq!(text, "\u{FFFC}text beside it");
+    assert!(
+        style
+            .spans
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|s| s.float.is_some())
+    );
+    ed.undo();
+    assert_eq!(ed.image_float(), Some(ImageFloat::Inline));
+}
+
 fn typed(ed: &mut RichEditor, text: &str) {
     ed.apply(&KeyInput::Text(text.into()));
 }

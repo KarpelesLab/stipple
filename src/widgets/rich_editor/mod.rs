@@ -14,14 +14,15 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use model::{Attr, DocBuilder, OBJECT};
-pub use model::{Block, BlockKind, Inline, Marks, RichDocument, RichImage};
+pub use model::{Block, BlockKind, ImageFloat, Inline, Marks, RichDocument, RichImage};
 
 use crate::core::{Align, Axis, Cx, Element, Handled, KeyInput};
 use crate::geometry::{Insets, PhysicalSize};
 use crate::platform::clipboard::{ClipboardContent, ClipboardKind};
 use crate::platform::{ButtonState, KeyCode, KeyEvent};
 use crate::render::{
-    Decoration, Font, FontStyle, InlineIcon, Pixmap, RichText, SpanStyle, UnderlineStyle,
+    Decoration, FloatImage, Font, FontStyle, InlineIcon, Pixmap, RichText, SpanStyle,
+    UnderlineStyle,
 };
 use crate::style::Theme;
 
@@ -843,6 +844,67 @@ impl RichEditor {
         }
     }
 
+    /// The byte ranges of the images the selection holds, or of the image
+    /// just before the caret (else just after it).
+    fn image_ranges(&self) -> Vec<Range<usize>> {
+        let range = match self.selection() {
+            Some((s, e)) => s..e,
+            None => {
+                let c = self.nav.caret;
+                let before = self.prev_boundary(c);
+                let is_image = |at: usize| {
+                    self.doc.text[at..].starts_with(OBJECT)
+                        && self.doc.spans.at(at).is_some_and(|a| a.image.is_some())
+                };
+                if c > 0 && is_image(before) {
+                    before..c
+                } else if c < self.doc.text.len() && is_image(c) {
+                    c..c + OBJECT.len_utf8()
+                } else {
+                    return Vec::new();
+                }
+            }
+        };
+        self.doc
+            .spans
+            .ranges()
+            .filter(|(r, a)| a.image.is_some() && r.start < range.end && r.end > range.start)
+            .map(|(r, _)| r.start.max(range.start)..r.end.min(range.end))
+            .collect()
+    }
+
+    /// How the image at the caret (or the first selected one) is placed:
+    /// `None` when there is no image there. What a toolbar's inline / float
+    /// left / float right buttons show as pressed.
+    pub fn image_float(&self) -> Option<ImageFloat> {
+        let r = self.image_ranges().into_iter().next()?;
+        self.doc
+            .spans
+            .at(r.start)
+            .and_then(|a| a.image.as_ref())
+            .map(|i| i.float)
+    }
+
+    /// Place the selected images (or the one at the caret) per `float`: in
+    /// the line, or floated left or right with the text wrapping around
+    /// their opaque pixels. One undo step; nothing without an image there.
+    pub fn set_image_float(&mut self, float: ImageFloat) {
+        let ranges = self.image_ranges();
+        if ranges.is_empty() {
+            return;
+        }
+        self.begin(Step::Other);
+        for r in ranges {
+            self.doc.spans.update(r, |a| {
+                if let Some(image) = &a.image {
+                    a.image = Some(Arc::new((**image).clone().floated(float)));
+                }
+            });
+        }
+        self.history.open = None;
+        self.revision += 1;
+    }
+
     /// The kind of the block holding the caret.
     pub fn block_kind(&self) -> BlockKind {
         self.doc.kinds[self.doc.line_of(self.nav.caret)]
@@ -1060,9 +1122,15 @@ impl RichEditor {
                 match &a.image {
                     Some(image) => {
                         for ch in self.doc.text[r].chars() {
-                            if ch == OBJECT {
-                                rt = rt.icon_styled(image_icon(image, theme), style.clone());
+                            if ch != OBJECT {
+                                continue;
                             }
+                            rt = match image.float {
+                                ImageFloat::Inline => {
+                                    rt.icon_styled(image_icon(image, theme), style.clone())
+                                }
+                                side => rt.float(float_image(image, side, theme)),
+                            };
                         }
                     }
                     None => rt = rt.styled(&self.doc.text[r], style),
@@ -1134,6 +1202,28 @@ fn image_icon(image: &RichImage, theme: &Theme) -> InlineIcon {
         None => InlineIcon::new(placeholder_image()).height(theme.font_size),
     }
     .alt(OBJECT.to_string())
+}
+
+/// How a floated image shows: at its own size up to [`MAX_IMAGE_HEIGHT`],
+/// against `side`, the text keeping 6 px off its opaque pixels.
+fn float_image(image: &RichImage, side: ImageFloat, theme: &Theme) -> FloatImage {
+    let (px, h) = match &image.pixmap {
+        Some(px) => (
+            px.clone(),
+            f64::from(px.size().height).min(MAX_IMAGE_HEIGHT),
+        ),
+        None => (placeholder_image(), theme.font_size),
+    };
+    let f = FloatImage::new(px)
+        .height(h)
+        .alpha(0.5)
+        .margin(6.0)
+        .alt(OBJECT.to_string());
+    if side == ImageFloat::Left {
+        f.left()
+    } else {
+        f.right()
+    }
 }
 
 /// Whether `ev` is the platform's command modifier with `c` (Ctrl+B on

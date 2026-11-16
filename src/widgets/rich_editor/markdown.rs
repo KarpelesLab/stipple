@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use super::html::{HtmlTag, parse_entity, parse_tag};
 use super::inline::{Event, Tag, events, signature};
-use super::model::{Attr, BlockKind, DocBuilder, Marks, OBJECT, Piece, RichDocument, RichImage};
+use super::model::{
+    Attr, BlockKind, DocBuilder, ImageFloat, Marks, OBJECT, Piece, RichDocument, RichImage,
+};
 
 // --- Writing ---
 
@@ -203,6 +205,16 @@ fn inline_markdown(pieces: &[Piece], style: Style, out: &mut String) {
                 Some(c) => c.push_str(t),
                 None => escape(t, at_start, out),
             },
+            Event::Image(i) if i.float.css().is_some() => {
+                // Markdown has no floats: an HTML tag, which it allows.
+                out.push_str("<img src=\"");
+                super::html::escape(&i.src, true, out);
+                out.push_str("\" alt=\"");
+                super::html::escape(&i.alt, true, out);
+                out.push_str("\" style=\"float: ");
+                out.push_str(i.float.css().unwrap_or_default());
+                out.push_str("\">");
+            }
             Event::Image(i) => {
                 out.push_str("![");
                 escape(&i.alt, false, out);
@@ -617,6 +629,7 @@ enum Tok {
     Image {
         src: String,
         alt: String,
+        float: ImageFloat,
     },
     /// An inline HTML tag that opens (`true`) or closes a mark.
     Mark(Marks, bool),
@@ -836,6 +849,7 @@ fn html_tag(tag: &HtmlTag, toks: &mut Vec<Tok>, links: &mut usize) {
             toks.push(Tok::Image {
                 src: tag.attr("src").unwrap_or_default().to_string(),
                 alt: tag.attr("alt").unwrap_or_default().to_string(),
+                float: ImageFloat::from_attrs(tag.attr("style"), tag.attr("align")),
             });
             return;
         }
@@ -967,7 +981,11 @@ pub(crate) fn parse_inline(s: &str, out: &mut DocBuilder, decode_images: bool) {
                         if image {
                             let alt = plain(&toks[at + 1..]);
                             toks.truncate(at);
-                            toks.push(Tok::Image { src: dest, alt });
+                            toks.push(Tok::Image {
+                                src: dest,
+                                alt,
+                                float: ImageFloat::Inline,
+                            });
                         } else {
                             toks[at] = Tok::LinkOpen(Arc::from(dest.as_str()));
                             toks.push(Tok::LinkClose);
@@ -1097,13 +1115,13 @@ pub(crate) fn parse_inline(s: &str, out: &mut DocBuilder, decode_images: bool) {
                     (counts[k] - 1).max(0)
                 };
             }
-            Tok::Image { src, alt } => {
+            Tok::Image { src, alt, float } => {
                 let pixmap = if decode_images {
                     super::model::load_source(&src, false).map(Arc::new)
                 } else {
                     None
                 };
-                let image = RichImage::new(src, pixmap).alt(alt);
+                let image = RichImage::new(src, pixmap).alt(alt).floated(float);
                 let a = attr(&counts, &links);
                 out.push_image(Arc::new(image), &a);
             }
