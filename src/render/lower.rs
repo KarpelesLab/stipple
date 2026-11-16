@@ -14,15 +14,16 @@
 //!   cloned scene shares its bitmaps, and a canvas paints only what is
 //!   needed.
 
-use crate::geometry::{Rect, Vec2};
-use crate::render::Pixmap;
+use crate::geometry::{PhysicalSize, Rect, Vec2};
 use crate::render::canvas::{Canvas, CanvasPaint};
 use crate::render::scene::Scene;
 use crate::render::sprite::SpriteDraw;
+use crate::render::{Filter, ImageOptions, Pixmap, SoftwareRenderer};
 use oxideav_core::{
     Group, ImageRef, Node, Path, PathCommand, Rect as OxRect, Transform2D, VideoFrame, VideoPlane,
 };
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
+use std::rc::Rc;
 use std::sync::Arc;
 
 /// Content recorded by a [`Scene`] as a placeholder, made into nodes when the
@@ -44,6 +45,53 @@ pub(crate) enum Deferred {
     },
     /// A region of a bitmap ([`Scene::draw_image_region`]).
     Sprite(SpriteDraw),
+    /// A scene drawn at a resolution of its own, then scaled into the
+    /// placeholder ([`Scene::draw_offscreen`]).
+    Offscreen(Rc<Offscreen>),
+}
+
+/// What [`Scene::draw_offscreen`] records: `content` drawn into exactly
+/// `pixels`, then scaled into the placeholder's bounds with `filter`.
+pub(crate) struct Offscreen {
+    pub content: Scene,
+    pub pixels: PhysicalSize,
+    pub filter: Filter,
+    /// The content rasterized on the CPU, once, for the renderers that
+    /// draw it as a bitmap.
+    rendered: OnceCell<Arc<Pixmap>>,
+}
+
+impl Offscreen {
+    pub(crate) fn new(content: Scene, pixels: PhysicalSize, filter: Filter) -> Self {
+        Self {
+            content,
+            pixels,
+            filter,
+            rendered: OnceCell::new(),
+        }
+    }
+
+    /// The content as a bitmap of `pixels`, rasterized by the software
+    /// renderer (its fast blits) the first time it's asked for.
+    pub(crate) fn rendered(&self) -> Arc<Pixmap> {
+        self.rendered
+            .get_or_init(|| {
+                let size = self.content.logical_size();
+                let view = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+                Arc::new(SoftwareRenderer::new().render_area(&self.content, view, self.pixels))
+            })
+            .clone()
+    }
+
+    /// The rendered bitmap as an image region drawn whole with the filter.
+    pub(crate) fn sprite(&self) -> Option<SpriteDraw> {
+        let image = self.rendered();
+        let s = image.size();
+        let src = Rect::from_xywh(0.0, 0.0, s.width as f64, s.height as f64);
+        let mut opts = ImageOptions::new();
+        opts.filter = self.filter;
+        SpriteDraw::new(image, src, &opts)
+    }
 }
 
 impl std::fmt::Debug for Deferred {
@@ -54,6 +102,7 @@ impl std::fmt::Debug for Deferred {
                 f.debug_struct("Canvas").field("bounds", bounds).finish()
             }
             Deferred::Sprite(s) => f.debug_tuple("Sprite").field(&s.src).finish(),
+            Deferred::Offscreen(o) => f.debug_tuple("Offscreen").field(&o.pixels).finish(),
         }
     }
 }
@@ -389,18 +438,25 @@ impl Lower<'_> {
                 scale,
                 ..
             } => self.canvas(*bounds, paint, *scale, &local),
-            Deferred::Sprite(sprite) => Some(match self.sprites {
-                Some(sink) => {
-                    let mut sink = sink.borrow_mut();
-                    sink.push(sprite.clone());
-                    sprite_marker(sink.len() - 1, img)
-                }
-                None => {
-                    // Assume a 2× display: hard pixels at either density.
-                    let k = nearest_upscale(sprite, &r, &local) * 2;
-                    sprite.to_node(r, img.transform, k)
-                }
-            }),
+            Deferred::Sprite(sprite) => Some(self.sprite(sprite, img, &local)),
+            Deferred::Offscreen(o) => Some(self.sprite(&o.sprite()?, img, &local)),
+        }
+    }
+
+    /// Image region `sprite` in place of placeholder `img`: recorded for
+    /// the compositor's blits, or a plain image node.
+    fn sprite(&self, sprite: &SpriteDraw, img: &ImageRef, local: &Transform2D) -> Node {
+        match self.sprites {
+            Some(sink) => {
+                let mut sink = sink.borrow_mut();
+                sink.push(sprite.clone());
+                sprite_marker(sink.len() - 1, img)
+            }
+            None => {
+                // Assume a 2× display: hard pixels at either density.
+                let k = nearest_upscale(sprite, &img.bounds, local) * 2;
+                sprite.to_node(img.bounds, img.transform, k)
+            }
         }
     }
 

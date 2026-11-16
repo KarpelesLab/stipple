@@ -46,7 +46,7 @@ use super::canvas::{CanvasCache, CanvasFrame};
 use crate::core::CanvasId;
 use crate::geometry::{PhysicalSize, Rect};
 use crate::render::Filter;
-use crate::render::lower::{self, Bounds, Deferred};
+use crate::render::lower::{self, Bounds, Deferred, Offscreen};
 use crate::render::scene::{rect_path, round_rect_path};
 use crate::render::sprite::SpriteDraw;
 use crate::render::{CanvasPaint, Color, Pixmap, Scene};
@@ -102,7 +102,31 @@ pub(crate) enum Op {
     PushLayer {
         opacity: f32,
     },
+    /// Draw what follows (until the matching [`Op::PopLayer`]) into a layer
+    /// in the layer's own pixels, `[0, 0, size]`, unclipped by what encloses
+    /// it, then composite that part of it into `dst` ([`Scene::draw_offscreen`]:
+    /// a game's frame at a low resolution, scaled up).
+    PushResampled(Resample),
     PopLayer,
+}
+
+/// How an [`Op::PushResampled`] layer is drawn and composited.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Resample {
+    /// The pixels drawn, at the layer's top-left (within the frame's size).
+    pub size: [u32; 2],
+    /// Where they go in the parent, device pixels `[x0, y0, x1, y1]`.
+    pub dst: [f32; 4],
+    /// Sampled nearest-neighbor rather than bilinear.
+    pub nearest: bool,
+}
+
+impl Resample {
+    /// The scissor a resampled layer starts with: all it draws.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn scissor(&self) -> [i32; 4] {
+        [0, 0, self.size[0] as i32, self.size[1] as i32]
+    }
 }
 
 /// The bitmap an [`Op::Image`] draws.
@@ -219,10 +243,24 @@ impl Plan {
         let mut ops = Vec::with_capacity(old.len() + 3);
         ops.push(Op::PushClip(Clip::Rect(r)));
         ops.push(fill);
-        ops.extend(
-            old.into_iter()
-                .filter(|op| op_bounds(op).is_none_or(|b| intersects(&b, &keep))),
-        );
+        // What a resampled layer draws is in its own pixels, not the
+        // frame's: kept whole (its composite is what the clip limits).
+        let mut layers: Vec<bool> = Vec::new();
+        ops.extend(old.into_iter().filter(|op| match op {
+            Op::PushLayer { .. } => {
+                layers.push(false);
+                true
+            }
+            Op::PushResampled(_) => {
+                layers.push(true);
+                true
+            }
+            Op::PopLayer => {
+                layers.pop();
+                true
+            }
+            _ => layers.contains(&true) || op_bounds(op).is_none_or(|b| intersects(&b, &keep)),
+        }));
         ops.push(Op::PopClip);
         // Batched anew: what's left of the frame.
         let (cmds, quads) = batch::batch(&ops, &self.atlas);
@@ -278,7 +316,11 @@ fn op_bounds(op: &Op) -> Option<Bounds> {
             }
             Some([b[0] - 1.0, b[1] - 1.0, b[2] + 1.0, b[3] + 1.0])
         }
-        Op::PushClip(_) | Op::PopClip | Op::PushLayer { .. } | Op::PopLayer => None,
+        Op::PushClip(_)
+        | Op::PopClip
+        | Op::PushLayer { .. }
+        | Op::PushResampled(_)
+        | Op::PopLayer => None,
     }
 }
 
@@ -671,6 +713,7 @@ impl Walker<'_> {
                             scale,
                             id,
                         }) => self.canvas(*bounds, paint, *scale, &local, *id),
+                        Some(Deferred::Offscreen(o)) => self.offscreen(o, rect, &local),
                         None => {}
                     }
                 }
@@ -1039,6 +1082,65 @@ impl Walker<'_> {
         });
     }
 
+    /// A scene drawn at a resolution of its own ([`Scene::draw_offscreen`])
+    /// into the local rect `rect`: into a resampled layer of its pixels,
+    /// composited into `rect`, when it's drawn upright and fits the frame's
+    /// layers; else the software renderer's bitmap of it, as an image.
+    fn offscreen(&mut self, o: &Offscreen, rect: [f32; 4], local: &Transform2D) {
+        let (pw, ph) = (o.pixels.width, o.pixels.height);
+        let nearest = o.filter == Filter::Nearest;
+        let logical = o.content.logical_size();
+        let (lw, lh) = (logical.width as f32, logical.height as f32);
+        // The web's executor (`web/gpu.js`) doesn't composite part of a
+        // layer.
+        let resampled = cfg!(not(target_arch = "wasm32"))
+            && upright(local)
+            && local.a > 0.0
+            && local.d > 0.0
+            && lw > 0.0
+            && lh > 0.0
+            && pw as f32 <= self.target[2] - self.target[0]
+            && ph as f32 <= self.target[3] - self.target[1];
+        if !resampled {
+            self.ops.push(Op::Image {
+                image: Source::Image(o.rendered()),
+                transform: *local,
+                rect,
+                opacity: 1.0,
+                uv: FULL_UV,
+                tint: NO_TINT,
+                nearest,
+            });
+            return;
+        }
+        self.ops.push(Op::PushResampled(Resample {
+            size: [pw, ph],
+            dst: map_rect(local, rect),
+            nearest,
+        }));
+        // The content's extent fitted to its pixels, as the software
+        // renderer maps a scene's view box (xMidYMid meet).
+        let (w, h) = (pw as f32, ph as f32);
+        let s = (w / lw).min(h / lh);
+        let root = Transform2D {
+            a: s,
+            b: 0.0,
+            c: 0.0,
+            d: s,
+            e: (w - lw * s) / 2.0,
+            f: (h - lh * s) / 2.0,
+        };
+        // Culled to the layer's pixels; canvases in it (not the window's
+        // own) are painted straight.
+        let target = std::mem::replace(&mut self.target, [0.0, 0.0, w, h]);
+        let canvases = self.canvases.take();
+        o.content
+            .with_root(|nodes, deferred| self.nodes(deferred, nodes, &root));
+        self.target = target;
+        self.canvases = canvases;
+        self.ops.push(Op::PopLayer);
+    }
+
     /// A canvas: kept as a texture when it can be (`gpu::canvas`), else its
     /// paint callback runs for the part of `bounds` on the target, and what
     /// it drew is walked, clipped to `bounds`.
@@ -1187,6 +1289,99 @@ mod tests {
             matches!(&ops[..], [Op::Box { rect, .. }] if *rect == [5.0, 7.0, 15.0, 17.0]),
             "{ops:?}"
         );
+    }
+
+    #[test]
+    fn an_offscreen_scene_is_a_resampled_layer_in_its_own_pixels() {
+        use crate::render::Filter;
+        let mut low = Scene::new(Size::new(20.0, 10.0));
+        low.fill_rect(Rect::from_xywh(2.0, 3.0, 4.0, 5.0), Color::WHITE);
+        let mut s = Scene::new(Size::new(100.0, 50.0));
+        let dst = Rect::from_xywh(10.0, 5.0, 60.0, 30.0);
+        s.draw_offscreen(dst, PhysicalSize::new(20, 10), low, Filter::Nearest);
+        let mut cache = RasterCache::default();
+        let ops = lower(&s, &mut cache);
+        assert_eq!(ops.len(), 3, "{ops:?}");
+        let Op::PushResampled(r) = &ops[0] else {
+            panic!("{:?}", ops[0]);
+        };
+        assert_eq!(r.size, [20, 10]);
+        assert_eq!(r.dst, [10.0, 5.0, 70.0, 35.0]);
+        assert!(r.nearest);
+        // The fill is in the layer's pixels, not the frame's.
+        assert!(matches!(
+            ops[1],
+            Op::Box {
+                rect: [2.0, 3.0, 6.0, 8.0],
+                ..
+            }
+        ));
+        assert!(matches!(ops[2], Op::PopLayer));
+    }
+
+    #[test]
+    fn an_offscreen_scene_bigger_than_the_frame_is_its_bitmap() {
+        use crate::render::Filter;
+        let mut low = Scene::new(Size::new(200.0, 10.0));
+        low.fill_rect(Rect::from_xywh(2.0, 3.0, 4.0, 5.0), Color::WHITE);
+        let mut s = Scene::new(Size::new(100.0, 50.0));
+        let dst = Rect::from_xywh(0.0, 0.0, 100.0, 5.0);
+        s.draw_offscreen(dst, PhysicalSize::new(200, 10), low, Filter::Linear);
+        let ops = lower(&s, &mut RasterCache::default());
+        assert_eq!(ops.len(), 1);
+        let Op::Image {
+            image: Source::Image(image),
+            nearest: false,
+            ..
+        } = &ops[0]
+        else {
+            panic!("{:?}", ops[0]);
+        };
+        assert_eq!(image.size(), PhysicalSize::new(200, 10));
+    }
+
+    #[test]
+    fn a_limited_plan_keeps_what_a_resampled_layer_draws() {
+        let boxed = |x: f32| Op::Box {
+            rect: [x, 10.0, x + 10.0, 20.0],
+            radius: 0.0,
+            stroke: 0.0,
+            color: [1.0; 4],
+        };
+        let mut plan = Plan {
+            updates: Vec::new(),
+            size: PhysicalSize::new(200, 100),
+            background: Color::rgb(255, 0, 0),
+            ops: vec![
+                Op::PushResampled(Resample {
+                    size: [40, 30],
+                    dst: [100.0, 0.0, 180.0, 60.0],
+                    nearest: true,
+                }),
+                boxed(0.0),
+                Op::PopLayer,
+                boxed(0.0),
+            ],
+            partial: None,
+            atlas: Vec::new(),
+            cmds: Vec::new(),
+            quads: Vec::new(),
+        };
+        plan.limit([95, 0, 120, 50]);
+        let ops = &plan.ops;
+        // The clip, the fill, the layer with its box (in its own pixels,
+        // outside the region in the frame's), its pop and the clip's: the
+        // box after it, outside the region, is gone.
+        assert_eq!(ops.len(), 6, "{ops:?}");
+        assert!(matches!(ops[2], Op::PushResampled(_)));
+        assert!(matches!(
+            ops[3],
+            Op::Box {
+                rect: [0.0, ..],
+                ..
+            }
+        ));
+        assert!(matches!(ops[4], Op::PopLayer));
     }
 
     #[test]

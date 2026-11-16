@@ -1846,6 +1846,27 @@ jobs:
           grep -q "stipple: presenting with ${{ matrix.api }} straight to the window" visual_output/framepacing-${{ matrix.renderer }}.log
           grep -q 'framepacing: ok' visual_output/framepacing-${{ matrix.renderer }}.log
 
+      # A game on the GPU: spritedemo's 320×180 frame drawn into an
+      # offscreen target and scaled up on the GPU, presented straight to the
+      # window; the self-test fails if pixels were uploaded each frame. Then
+      # its benchmark on the same GPU (offscreen, not read back), next to
+      # the software renderer's, for the log: Mesa's software GPUs may well
+      # be slower than the CPU blits.
+      - name: spritedemo drawn with ${{ matrix.api }} (selftest, bench)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          cargo build --release --example spritedemo --features gl,vk
+          STIPPLE_RENDERER=${{ matrix.renderer }} timeout 60 ./target/release/examples/spritedemo --selftest 2>&1 | tee visual_output/spritedemo-${{ matrix.renderer }}.log
+          grep -q "stipple: presenting with ${{ matrix.api }} straight to the window" visual_output/spritedemo-${{ matrix.renderer }}.log
+          grep -q 'spritedemo selftest: .* after the warm-up 0 textures and 0 canvas bytes uploaded' visual_output/spritedemo-${{ matrix.renderer }}.log
+          ! grep -q 'drawn with the software renderer' visual_output/spritedemo-${{ matrix.renderer }}.log
+          STIPPLE_RENDERER=${{ matrix.renderer }} timeout 300 ./target/release/examples/spritedemo --bench 2>&1 | tee -a visual_output/spritedemo-${{ matrix.renderer }}.log
+          STIPPLE_RENDERER=software timeout 300 ./target/release/examples/spritedemo --bench 2>&1 | tee -a visual_output/spritedemo-${{ matrix.renderer }}.log
+
       - name: Stop the app and Xvfb
         if: always()
         run: |
@@ -2955,6 +2976,23 @@ jobs:
           grep -q 'DXGI frame-latency waitable' visual_output/framepacing-d3d11.log
           grep -q 'framepacing: ok' visual_output/framepacing-d3d11.log
 
+      # A game on the GPU: spritedemo's pixel-art frame drawn and scaled on
+      # Direct3D 11 (WARP here), nothing uploaded each frame; its benchmark
+      # there and on the CPU, for the log.
+      - name: spritedemo drawn with Direct3D 11 (selftest, bench)
+        continue-on-error: true
+        shell: bash
+        env:
+          STIPPLE_RENDERER: d3d11
+        run: |
+          cargo build --release --features d3d --example spritedemo
+          timeout 60 ./target/release/examples/spritedemo.exe --selftest 2>&1 | tee visual_output/spritedemo-d3d11.log
+          grep -q 'stipple: drawing with Direct3D 11' visual_output/spritedemo-d3d11.log
+          grep -q 'spritedemo selftest: .* after the warm-up 0 textures and 0 canvas bytes uploaded' visual_output/spritedemo-d3d11.log
+          ! grep -q 'drawn with the software renderer' visual_output/spritedemo-d3d11.log
+          timeout 300 ./target/release/examples/spritedemo.exe --bench 2>&1 | tee -a visual_output/spritedemo-d3d11.log
+          STIPPLE_RENDERER=software timeout 300 ./target/release/examples/spritedemo.exe --bench 2>&1 | tee -a visual_output/spritedemo-d3d11.log
+
       - name: Upload screenshot
         uses: actions/upload-artifact@v4
         if: always()
@@ -3602,6 +3640,22 @@ jobs:
           STIPPLE_RENDERER=metal perl -e 'alarm 40; exec @ARGV' ./target/release/examples/framepacing 2>&1 | tee visual_output/framepacing-metal.log
           grep -q 'stipple: drawing with Metal' visual_output/framepacing-metal.log
           grep -q 'framepacing: ok' visual_output/framepacing-metal.log
+
+      # A game on the GPU: spritedemo's pixel-art frame drawn and scaled on
+      # Metal, nothing uploaded each frame; its benchmark there and on the
+      # CPU, for the log.
+      - name: spritedemo drawn with Metal (selftest, bench)
+        continue-on-error: true
+        env:
+          STIPPLE_RENDERER: metal
+        run: |
+          cargo build --release --features mtl --example spritedemo
+          perl -e 'alarm 60; exec @ARGV' ./target/release/examples/spritedemo --selftest 2>&1 | tee visual_output/spritedemo-metal.log
+          grep -q 'stipple: drawing with Metal' visual_output/spritedemo-metal.log
+          grep -q 'spritedemo selftest: .* after the warm-up 0 textures and 0 canvas bytes uploaded' visual_output/spritedemo-metal.log
+          ! grep -q 'drawn with the software renderer' visual_output/spritedemo-metal.log
+          perl -e 'alarm 300; exec @ARGV' ./target/release/examples/spritedemo --bench 2>&1 | tee -a visual_output/spritedemo-metal.log
+          STIPPLE_RENDERER=software perl -e 'alarm 300; exec @ARGV' ./target/release/examples/spritedemo --bench 2>&1 | tee -a visual_output/spritedemo-metal.log
 
       - name: Launch the Stipple window and screenshot the screen
         env:

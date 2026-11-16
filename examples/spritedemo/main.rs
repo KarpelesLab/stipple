@@ -12,9 +12,18 @@
 //!
 //! Flags:
 //! - `--png FILE`: render one 1280×720 frame off-screen to `FILE` and quit.
-//! - `--bench`: time the software renderer drawing a 1920×1080 frame full of
-//!   32×32 sprites (about 2000 plus a background), through the fast blits and
-//!   through the general rasterizer path, and print ms per frame.
+//! - `--bench`: time drawing a 1920×1080 frame full of 32×32 sprites (about
+//!   2000 plus a background) and a 640×360 pixel-art frame scaled 3×, and
+//!   print ms per frame: on the software renderer (its fast blits, and the
+//!   general rasterizer path), or with `STIPPLE_RENDERER` naming a GPU
+//!   (`vulkan`, `gl`, `metal`, `d3d11`, `gpu`; built with its feature) on
+//!   that GPU, offscreen and waited for but not read back, what a frame
+//!   presented to a window costs.
+//! - `--selftest`: run the window for 240 frames, print the frame rate and
+//!   what drew it, and quit. Drawn on a GPU, it fails if anything was
+//!   uploaded to the GPU after the first frames: the sprite sheet is a
+//!   texture uploaded once, and the 320×180 frame is drawn on the GPU into
+//!   an offscreen target, never rasterized on the CPU and uploaded.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -292,7 +301,25 @@ struct Game {
     frames: u32,
     paint_time: Duration,
     since: Instant,
+    /// `--selftest`'s count.
+    selftest: Option<SelfTest>,
 }
+
+/// `--selftest`: frames seen, when the counted ones began, and what was
+/// uploaded to the GPU during them.
+#[derive(Default)]
+struct SelfTest {
+    frames: u32,
+    start: Option<Instant>,
+    uploads: usize,
+    canvas_bytes: usize,
+}
+
+/// Frames before the self-test starts counting (the sprite sheet's upload,
+/// the canvas becoming drawn straight on the GPU).
+const WARM_UP: u32 = 30;
+/// Frames the self-test counts.
+const TEST_FRAMES: u32 = 240;
 
 impl Game {
     fn new() -> Self {
@@ -330,7 +357,49 @@ impl Game {
             frames: 0,
             paint_time: Duration::ZERO,
             since: Instant::now(),
+            selftest: None,
         }
+    }
+
+    /// `--selftest`: count a frame (called as each is built, after the one
+    /// before was presented); after the last, report and quit.
+    fn self_test(&mut self) {
+        let Some(t) = &mut self.selftest else {
+            return;
+        };
+        t.frames += 1;
+        let (uploads, canvas_bytes) = gpu_uploads();
+        if t.frames == WARM_UP {
+            t.start = Some(Instant::now());
+        } else if t.frames > WARM_UP {
+            t.uploads += uploads;
+            t.canvas_bytes += canvas_bytes;
+        }
+        if t.frames < WARM_UP + TEST_FRAMES {
+            return;
+        }
+        let secs = t.start.map_or(0.0, |s| s.elapsed().as_secs_f64());
+        let drawn = gpu_device();
+        let f = stipple::platform::frame::stats();
+        println!(
+            "spritedemo selftest: {TEST_FRAMES} frames in {secs:.2} s ({:.1} fps), drawn with {}, \
+             after the warm-up {} textures and {} canvas bytes uploaded; presents {:.2} ms \
+             (max {:.2} ms), {} frames from the display ({}), {} from the timer",
+            TEST_FRAMES as f64 / secs.max(1e-9),
+            drawn.as_deref().unwrap_or("the software renderer"),
+            t.uploads,
+            t.canvas_bytes,
+            f.present_mean().as_secs_f64() * 1000.0,
+            f.present_max.as_secs_f64() * 1000.0,
+            f.from_display,
+            stipple::platform::frame::source_name(),
+            f.from_timer,
+        );
+        if drawn.is_some() && (t.uploads > 0 || t.canvas_bytes > 0) {
+            eprintln!("spritedemo selftest: FAILED: the GPU frames uploaded pixels each frame");
+            std::process::exit(1);
+        }
+        std::process::exit(0);
     }
 
     /// Advance to the frame at `now` on the app's timeline.
@@ -456,6 +525,7 @@ fn app(game: Rc<RefCell<Game>>) -> App<()> {
         let tick = {
             let mut g = game.borrow_mut();
             g.advance(cx.frame_time());
+            g.self_test();
             g.ticks
         };
         cx.request_frame();
@@ -492,6 +562,9 @@ fn main() {
         return;
     }
     let game = Rc::new(RefCell::new(Game::new()));
+    if args.iter().any(|a| a == "--selftest") {
+        game.borrow_mut().selftest = Some(SelfTest::default());
+    }
     // The view is rebuilt every frame (it asks for the next one), which
     // advances the game and bumps the canvas's revision so it repaints.
     app(game).run();
@@ -547,6 +620,8 @@ fn bench() {
             ((h >> 12) % (H as u32 - 32)) as f64,
         )
     };
+
+    let pixels = PixelViewport::new(640, 360).background(Color::rgb(40, 60, 90));
 
     type Draw<'a> = Box<dyn Fn(&mut Scene) + 'a>;
     let cases: Vec<(&str, usize, Draw)> = vec![
@@ -625,23 +700,124 @@ fn bench() {
                 }
             }),
         ),
+        (
+            "pixel art: a 640x360 PixelViewport of the sprites (16x16), 3x nearest",
+            30,
+            Box::new(|s: &mut Scene| {
+                pixels.paint(s, |s| {
+                    for i in 0..SPRITES {
+                        let (x, y) = spot(i);
+                        let (x, y) = ((x / 3.0).round(), (y / 3.0).round());
+                        let dst = Rect::from_xywh(x, y, 16.0, 16.0);
+                        sheet.draw(s, i % 64, dst, &ImageOptions::new().nearest());
+                    }
+                });
+            }),
+        ),
     ];
-    println!("spritedemo bench: 1920x1080, a background image and {SPRITES} 32x32 sprites");
+    let gpu = gpu_selected();
+    println!(
+        "spritedemo bench: 1920x1080, a background image and {SPRITES} 32x32 sprites, on {}",
+        if gpu {
+            "the GPU (offscreen, waited for, not read back)"
+        } else {
+            "the software renderer"
+        }
+    );
     for (name, runs, draw) in &cases {
+        let frame = || {
+            let mut s = Scene::new(Size::new(W, H));
+            draw(&mut s);
+            s
+        };
+        let draw_once = |s: Scene| -> Result<(), String> {
+            if gpu {
+                gpu_draw(&s)
+            } else {
+                let out = SoftwareRenderer::new().render(s, ScaleFactor::IDENTITY);
+                std::hint::black_box(&out);
+                Ok(())
+            }
+        };
+        // One frame first: on a GPU, the textures' upload.
+        if let Err(e) = draw_once(frame()) {
+            println!("  {name}: the GPU failed: {e}");
+            return;
+        }
         let mut total = Duration::ZERO;
         for _ in 0..*runs {
             let start = Instant::now();
-            let mut s = Scene::new(Size::new(W, H));
-            draw(&mut s);
-            let out = SoftwareRenderer::new().render(s, ScaleFactor::IDENTITY);
-            std::hint::black_box(&out);
+            draw_once(frame()).expect("a GPU frame");
             total += start.elapsed();
         }
         println!(
-            "  {name}: {:.2} ms/frame",
-            total.as_secs_f64() * 1000.0 / *runs as f64
+            "  {name}: {:.2} ms/frame{}",
+            total.as_secs_f64() * 1000.0 / *runs as f64,
+            if gpu { gpu_draw_calls() } else { String::new() }
         );
     }
+    if gpu {
+        println!(
+            "  (on {})",
+            gpu_device().unwrap_or_else(|| "an unnamed device".into())
+        );
+    }
+}
+
+/// Whether `STIPPLE_RENDERER` names a GPU (and the build has one).
+fn gpu_selected() -> bool {
+    let named = std::env::var("STIPPLE_RENDERER").is_ok_and(|v| {
+        matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "gpu" | "metal" | "mtl" | "vulkan" | "vk" | "gl" | "gles" | "opengl" | "d3d11" | "d3d"
+        )
+    });
+    named && cfg!(all(feature = "gpu", not(target_arch = "wasm32")))
+}
+
+/// Draw `scene` on the GPU offscreen and wait for it, not read back.
+#[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+fn gpu_draw(scene: &Scene) -> Result<(), String> {
+    stipple::gpu::draw_scene_scaled(scene, Color::BLACK, ScaleFactor::IDENTITY)
+}
+
+#[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+fn gpu_draw(_: &Scene) -> Result<(), String> {
+    Err("built without a GPU backend".into())
+}
+
+/// The last GPU frame's draw calls, for the bench's lines.
+#[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+fn gpu_draw_calls() -> String {
+    format!(", {} draw calls", stipple::gpu::last_frame_draw_calls())
+}
+
+#[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+fn gpu_draw_calls() -> String {
+    String::new()
+}
+
+/// The GPU device the thread draws on, if it draws on one.
+#[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+fn gpu_device() -> Option<String> {
+    stipple::gpu::device_name()
+}
+
+#[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+fn gpu_device() -> Option<String> {
+    None
+}
+
+/// The last GPU frame's uploads: whole textures, and canvas bytes.
+#[cfg(all(feature = "gpu", not(target_arch = "wasm32")))]
+fn gpu_uploads() -> (usize, usize) {
+    let s = stipple::gpu::stats();
+    (s.uploads, s.canvas_upload_bytes)
+}
+
+#[cfg(not(all(feature = "gpu", not(target_arch = "wasm32"))))]
+fn gpu_uploads() -> (usize, usize) {
+    (0, 0)
 }
 
 // In the browser, `web.rs` builds this file as a library and the page

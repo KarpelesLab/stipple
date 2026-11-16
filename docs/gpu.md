@@ -160,6 +160,18 @@ renderer does, and turns it into device-space draw operations:
   straight on the GPU: its paint callback runs for the part on screen and
   what it paints is drawn like the rest (a canvas back to changing little
   for ten frames becomes a texture again). `src/gpu/canvas.rs`.
+- **Offscreen scenes** (`Scene::draw_offscreen`: a game's `PixelViewport`
+  frame at 320×180, say, scaled up nearest-neighbor) are *resampled
+  layers* (`Op::PushResampled`): the scene is lowered in the layer's own
+  pixels, drawn into the top-left of a layer target (its scissor starts at
+  those pixels, not the enclosing clip, and a partial frame keeps all of
+  it), and that part of the target is composited into the destination
+  rectangle with the scene's filter, nearest or bilinear. So a pixel-art
+  game's frame never leaves the GPU and its sprite sheets stay textures,
+  where the software renderer's bitmap of it would be uploaded anew every
+  frame. Metal, Vulkan, GLES2 and Direct3D 11 execute them; on the web, drawn
+  rotated or flipped, or bigger than the frame, the scene is drawn as the
+  software renderer's bitmap instead. See [games.md](games.md#on-the-gpu).
 - Gradients, soft masks, raw `oxideav` image nodes and concave clips (none of
   which Stipple's own widgets make) are rasterized on the CPU for just their
   bounds and drawn as an image.
@@ -604,6 +616,14 @@ stipple: frame pacing: Present ticks every 16.71 ms (59.8 Hz), measured
 stipple: frames: 60 presents in 1.00 s (60.0/s): 60 from the display (Present), 0 from the timer, 60 wakeups
 ```
 
+Games are paced the same way: `App::game_loop`'s update runs when the
+clock delivers a frame, and the frame it repaints goes through the same
+present (`spritedemo --selftest` prints the presents' mean and longest
+times and where the frames came from). On Xvfb, 60 frames a second from
+Present with the CPU and with GLES on llvmpipe; with Vulkan on NVIDIA's
+driver (which has no DRI3 on Xvfb) a 1280×720 present takes about 20 ms
+and the game runs at about 50.
+
 An idle app logs nothing. The `framepacing` example animates for three
 seconds, then idles for three, and checks the presents came at roughly the
 display's rate and that the idle app presented nothing and never woke. CI
@@ -678,7 +698,11 @@ job runs them on WARP and screenshots `widgetsdemo` with
 `STIPPLE_RENDERER=d3d11` (both non-blocking until they have passed there:
 the executor was written and compile-checked on a Mac). Both also run
 `nativegallery --gpu-check`, the native theme on Metal and on Direct3D 11
-against the CPU (non-blocking). They all upload the frames.
+against the CPU (non-blocking). They all upload the frames. The
+`visual-gpu-present` jobs and the macOS and Windows visual jobs also run
+`spritedemo --selftest` drawn with their GPU (it fails if pixels were
+uploaded each frame) and `spritedemo --bench` on that GPU and on the CPU,
+not blocking yet.
 
 ## Not done yet
 

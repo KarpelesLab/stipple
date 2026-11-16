@@ -1785,6 +1785,7 @@ impl VkExecutor {
                             if nearest { self.nearest } else { self.linear },
                         ),
                         Texture::Layer(i) => (self.layers[i].color.view, self.linear),
+                        Texture::LayerNearest(i) => (self.layers[i].color.view, self.nearest),
                         Texture::Scratch => {
                             (self.scratch.as_ref().unwrap().color.view, self.linear)
                         }
@@ -1857,7 +1858,9 @@ impl VkExecutor {
                             Cmd::Pass { .. } => None,
                         }) {
                             let t = match d.texture {
-                                Some(Texture::Layer(l)) => Target::Layer(l),
+                                Some(Texture::Layer(l) | Texture::LayerNearest(l)) => {
+                                    Target::Layer(l)
+                                }
                                 Some(Texture::Scratch) => Target::Scratch,
                                 _ => continue,
                             };

@@ -359,6 +359,12 @@ impl WebExecutor {
                     buf.push(OP_LAYER);
                     push_f(&mut buf, &[*opacity]);
                 }
+                // Never lowered for the web (`Walker::offscreen` draws the
+                // software renderer's bitmap there): kept balanced anyway.
+                Op::PushResampled(_) => {
+                    buf.push(OP_LAYER);
+                    push_f(&mut buf, &[1.0]);
+                }
                 Op::PopLayer => buf.push(OP_POP_LAYER),
             }
         }

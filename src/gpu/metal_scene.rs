@@ -32,12 +32,11 @@
 use super::atlas::{AtlasPage, Upload};
 use super::batch::{self, Cmd, TexRef};
 use super::canvas::rekey;
-use super::ops::{Clip, Op, Plan, Sample};
+use super::ops::{Clip, Op, Plan, Resample};
 use super::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::geometry::{PhysicalSize, ScaleFactor};
 use crate::platform::GpuLayer;
 use crate::render::Pixmap;
-use oxideav_core::Transform2D;
 use std::collections::HashMap;
 use std::ffi::{CStr, c_char, c_void};
 use std::sync::{Arc, Weak};
@@ -379,6 +378,8 @@ struct Level {
     scissor: [i32; 4],
     depth: u32,
     undo: Vec<Undo>,
+    /// A resampled layer's composite ([`Op::PushResampled`]).
+    resample: Option<Resample>,
 }
 
 impl Level {
@@ -1119,6 +1120,7 @@ impl MetalExecutor {
                 scissor: [0, 0, w, h],
                 depth: 0,
                 undo: Vec::new(),
+                resample: None,
             };
             if !self.bind(f, &full, self.clip, ds, from) {
                 return Ok(());
@@ -1142,20 +1144,12 @@ impl MetalExecutor {
     ) -> Result<(), GpuError> {
         unsafe {
             let tex = self.layers[layer.layer.unwrap()].color;
-            let full = [0.0, 0.0, f.w as f32, f.h as f32];
             let mut v = std::mem::take(&mut self.scratch_quads);
             v.clear();
-            batch::tex_quad(
-                &mut v,
-                &Transform2D::identity(),
-                full,
-                layer.opacity,
-                true,
-                false,
-                &Sample::WHOLE,
-            );
+            let (w, h) = (f.w as u32, f.h as u32);
+            let nearest = batch::layer_quad(&mut v, layer.opacity, layer.resample.as_ref(), w, h);
             let count = (v.len() / batch::QUAD_FLOATS) as u32;
-            let drawn = self.draw_quads(f, parent, &v, 0, count, Some(tex), false);
+            let drawn = self.draw_quads(f, parent, &v, 0, count, Some(tex), nearest);
             self.scratch_quads = v;
             drawn
         }
@@ -1178,6 +1172,7 @@ impl MetalExecutor {
                 scissor: [0, 0, w, h],
                 depth: 0,
                 undo: Vec::new(),
+                resample: None,
             }];
             let bg = plan.background;
             let a = bg.a as f32 / 255.0;
@@ -1256,19 +1251,28 @@ impl MetalExecutor {
                             None => {}
                         }
                     }
-                    Op::PushLayer { opacity } => {
+                    Op::PushLayer { .. } | Op::PushResampled(_) => {
                         let index = levels.iter().filter(|l| l.layer.is_some()).count();
                         if self.layers.len() <= index {
                             self.layers
                                 .push(Target::new(self.device, w, h, PIXEL_BGRA8)?);
                         }
-                        let scissor = levels.last().unwrap().scissor;
+                        let (opacity, resample) = match op {
+                            Op::PushResampled(r) => (1.0, Some(*r)),
+                            Op::PushLayer { opacity } => (*opacity, None),
+                            _ => unreachable!(),
+                        };
+                        // A resampled layer draws in its own pixels.
+                        let scissor = resample
+                            .as_ref()
+                            .map_or(levels.last().unwrap().scissor, Resample::scissor);
                         levels.push(Level {
                             layer: Some(index),
-                            opacity: *opacity,
+                            opacity,
                             scissor,
                             depth: 0,
                             undo: Vec::new(),
+                            resample,
                         });
                         self.open(f, On::Layer(index), Some([0.0; 4]));
                     }

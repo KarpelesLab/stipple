@@ -17,9 +17,8 @@
 //! one of them.
 
 use crate::gpu::batch::{self, QUAD_FLOATS, TexRef};
-use crate::gpu::ops::{Clip, Op, Plan, Premul, Sample};
+use crate::gpu::ops::{Clip, Op, Plan, Premul, Resample};
 use crate::render::Pixmap;
-use oxideav_core::Transform2D;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -92,6 +91,8 @@ pub(crate) enum Texture {
     Atlas { page: usize, nearest: bool },
     /// A layer, composited into its parent.
     Layer(usize),
+    /// A resampled layer composited nearest-neighbor.
+    LayerNearest(usize),
     /// The scratch target, resolved.
     Scratch,
 }
@@ -203,6 +204,8 @@ struct Level {
     scissor: [i32; 4],
     depth: u32,
     undo: Vec<Undo>,
+    /// A resampled layer's composite ([`Op::PushResampled`]).
+    resample: Option<Resample>,
 }
 
 impl Level {
@@ -445,6 +448,7 @@ impl Recorder {
             scissor: [0, 0, self.w, self.h],
             depth: 0,
             undo: Vec::new(),
+            resample: None,
         };
         if !self.bind(&full) {
             return;
@@ -455,18 +459,15 @@ impl Recorder {
     }
 
     fn composite(&mut self, layer: &Level, parent: &Level) {
-        let full = [0.0, 0.0, self.w as f32, self.h as f32];
         let mut v = Vec::with_capacity(batch::QUAD_VERTICES * QUAD_FLOATS);
-        batch::tex_quad(
-            &mut v,
-            &Transform2D::identity(),
-            full,
-            layer.opacity,
-            true,
-            false,
-            &Sample::WHOLE,
-        );
-        let texture = Texture::Layer(layer.layer.unwrap());
+        let (w, h) = (self.w as u32, self.h as u32);
+        let nearest = batch::layer_quad(&mut v, layer.opacity, layer.resample.as_ref(), w, h);
+        let index = layer.layer.unwrap();
+        let texture = if nearest {
+            Texture::LayerNearest(index)
+        } else {
+            Texture::Layer(index)
+        };
         self.draw_quads(parent, &v, Some(texture));
     }
 
@@ -478,6 +479,7 @@ impl Recorder {
             scissor: [0, 0, w, h],
             depth: 0,
             undo: Vec::new(),
+            resample: None,
         }];
         let bg = plan.background;
         let a = bg.a as f32 / 255.0;
@@ -560,16 +562,24 @@ impl Recorder {
                     }
                     levels.push(level);
                 }
-                Op::PushLayer { opacity } => {
+                Op::PushLayer { .. } | Op::PushResampled(_) => {
                     let index = levels.iter().filter(|l| l.layer.is_some()).count();
                     self.out.layers = self.out.layers.max(index + 1);
-                    let scissor = levels.last().unwrap().scissor;
+                    let (opacity, resample) = match op {
+                        Op::PushResampled(r) => (1.0, Some(*r)),
+                        Op::PushLayer { opacity } => (*opacity, None),
+                        _ => unreachable!(),
+                    };
+                    let scissor = resample
+                        .as_ref()
+                        .map_or(levels.last().unwrap().scissor, Resample::scissor);
                     levels.push(Level {
                         layer: Some(index),
-                        opacity: *opacity,
+                        opacity,
                         scissor,
                         depth: 0,
                         undo: Vec::new(),
+                        resample,
                     });
                     self.pass(Target::Layer(index), Some([0.0; 4]));
                 }
@@ -613,6 +623,7 @@ mod tests {
     use crate::geometry::PhysicalSize;
     use crate::gpu::ops::{FULL_UV, NO_TINT};
     use crate::render::Color;
+    use oxideav_core::Transform2D;
 
     fn plan(ops: Vec<Op>) -> Plan {
         let (cmds, quads) = batch::batch(&ops, &[]);

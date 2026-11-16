@@ -34,7 +34,7 @@ use super::*;
 use crate::gpu::atlas::{AtlasPage, Upload};
 use crate::gpu::batch::{self, Cmd, QUAD_FLOATS, TexRef};
 use crate::gpu::canvas::rekey;
-use crate::gpu::ops::{Clip, Op, Plan, Sample};
+use crate::gpu::ops::{Clip, Op, Plan, Resample, Sample};
 use crate::gpu::renderer::{Api, Executor, GpuError, KeptFrame};
 use crate::platform::GpuLayer;
 use oxideav_core::Transform2D;
@@ -414,6 +414,8 @@ struct Level {
     scissor: [i32; 4],
     depth: u32,
     undo: Vec<Undo>,
+    /// A resampled layer's composite ([`Op::PushResampled`]).
+    resample: Option<Resample>,
 }
 
 /// Which EGL display a context is on.
@@ -929,16 +931,9 @@ impl State {
         unsafe {
             let tex = self.target(layer).tex;
             let mut v = Vec::with_capacity(batch::QUAD_VERTICES * QUAD_FLOATS);
-            batch::tex_quad(
-                &mut v,
-                &Transform2D::identity(),
-                [0.0, 0.0, w as f32, h as f32],
-                layer.opacity,
-                true,
-                false,
-                &Sample::WHOLE,
-            );
-            self.draw_quads(parent, &v, Some(tex), false);
+            let resample = layer.resample.as_ref();
+            let nearest = batch::layer_quad(&mut v, layer.opacity, resample, w as u32, h as u32);
+            self.draw_quads(parent, &v, Some(tex), nearest);
         }
     }
 
@@ -1272,6 +1267,7 @@ impl State {
                 scissor: full,
                 depth: 0,
                 undo: Vec::new(),
+                resample: None,
             }];
             self.bind(&levels[0]);
             let bg = plan.background;
@@ -1375,18 +1371,25 @@ impl State {
                         self.bind(&level);
                         levels.push(level);
                     }
-                    Op::PushLayer { opacity } => {
+                    Op::PushLayer { .. } | Op::PushResampled(_) => {
                         let index = levels.iter().filter(|l| l.layer.is_some()).count();
                         if self.layers.len() <= index {
                             self.layers.push(Target::new(w, h)?);
                         }
-                        let scissor = level.scissor;
+                        let (opacity, resample) = match op {
+                            Op::PushResampled(r) => (1.0, Some(*r)),
+                            Op::PushLayer { opacity } => (*opacity, None),
+                            _ => unreachable!(),
+                        };
+                        // A resampled layer draws in its own pixels.
+                        let scissor = resample.as_ref().map_or(level.scissor, Resample::scissor);
                         let layer = Level {
                             layer: Some(index),
-                            opacity: *opacity,
+                            opacity,
                             scissor,
                             depth: 0,
                             undo: Vec::new(),
+                            resample,
                         };
                         self.bind(&layer);
                         glStencilMask(0xff);

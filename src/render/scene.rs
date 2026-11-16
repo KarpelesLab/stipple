@@ -9,7 +9,7 @@
 use crate::geometry::{Affine, Point, Rect, Size};
 use crate::render::canvas::CanvasPaint;
 use crate::render::convert::{to_ox_point, to_transform2d};
-use crate::render::lower::{Deferred, Lower, placeholder};
+use crate::render::lower::{Deferred, Lower, Offscreen, placeholder};
 use crate::render::sprite::SpriteDraw;
 use crate::render::{Color, ImageOptions, Pixmap};
 use oxideav_core::{
@@ -230,6 +230,55 @@ impl Scene {
         let size = image.size();
         let src = Rect::from_xywh(0.0, 0.0, size.width as f64, size.height as f64);
         self.draw_image_region(src, dst, image, options);
+    }
+
+    /// Draw `content` rendered into exactly `pixels` (its logical extent
+    /// fitted to them, as [`SoftwareRenderer::render_at`] fits a scene),
+    /// then scaled into `dst` with `filter`: a frame drawn at a fixed low
+    /// resolution and scaled up as hard pixels (what
+    /// [`PixelViewport`](crate::game::PixelViewport) does).
+    ///
+    /// The software renderer rasterizes `content` into a bitmap of `pixels`
+    /// (through its fast blits) and blits that. The GPU renderers draw it
+    /// into an offscreen target of `pixels` and composite that target into
+    /// `dst`, all on the GPU: nothing is rasterized on the CPU or uploaded
+    /// each frame, and the sprite sheets `content` draws from stay
+    /// textures. (Drawn rotated or skewed, bigger than the frame, or on the
+    /// web, the GPU path draws the software renderer's bitmap instead.)
+    ///
+    /// ```
+    /// use stipple::geometry::{PhysicalSize, Rect, ScaleFactor, Size};
+    /// use stipple::render::{Color, Filter, Scene, SoftwareRenderer};
+    ///
+    /// // A 2×2 frame: one red pixel in its top-left corner.
+    /// let mut low = Scene::new(Size::new(2.0, 2.0));
+    /// low.fill_rect(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), Color::rgb(255, 0, 0));
+    /// let mut scene = Scene::new(Size::new(8.0, 8.0));
+    /// let dst = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
+    /// scene.draw_offscreen(dst, PhysicalSize::new(2, 2), low, Filter::Nearest);
+    /// let out = SoftwareRenderer::new().render(scene, ScaleFactor::IDENTITY);
+    /// // Each low pixel is a 4×4 block.
+    /// assert_eq!(out.pixel(3, 3), Some([255, 0, 0, 255]));
+    /// assert_eq!(out.pixel(4, 4), Some([0, 0, 0, 0]));
+    /// ```
+    ///
+    /// [`SoftwareRenderer::render_at`]: crate::render::SoftwareRenderer::render_at
+    pub fn draw_offscreen(
+        &mut self,
+        dst: Rect,
+        pixels: crate::geometry::PhysicalSize,
+        content: Scene,
+        filter: crate::render::Filter,
+    ) {
+        if dst.width() <= 0.0 || dst.height() <= 0.0 || pixels.width == 0 || pixels.height == 0 {
+            return;
+        }
+        let index = self.deferred.len();
+        self.deferred
+            .push(Deferred::Offscreen(std::rc::Rc::new(Offscreen::new(
+                content, pixels, filter,
+            ))));
+        self.emit_uncommanded(placeholder(index, dst));
     }
 
     /// Reserve `bounds` for a custom-paint canvas: `paint` draws it, in the

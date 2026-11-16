@@ -15,7 +15,8 @@ that are a game's own:
 - **Actions** ([below](#actions)): "jump", "move left", bound to inputs the
   player can change and save.
 - **Drawing** ([below](#drawing)): sprite sheets and animations, tilemaps, a
-  camera, and pixel art scaled by whole numbers, on fast blit paths.
+  camera, and pixel art scaled by whole numbers, on fast blit paths, or all
+  on the GPU when a GPU renderer draws the window.
 - **Game UI** ([below](#game-ui)): a game theme, menus driven by the
   keyboard and gamepads, settings rows (volume, rebinding, display), a HUD
   and dialogue boxes.
@@ -433,8 +434,10 @@ bitmaps, a game gets:
   move it each frame.
 - **`PixelViewport`**: a fixed virtual resolution for pixel art,
   `PixelViewport::new(320, 180)`. `vp.paint(canvas, |s| …)` gives the game a
-  `Scene` of 320×180 to draw into, rasterizes it at that size, and blits it
-  nearest-neighbor into the canvas at the largest whole-number scale that fits
+  `Scene` of 320×180 to draw into, draws it at that size, and scales it
+  nearest-neighbor into the canvas (`Scene::draw_offscreen`: rasterized and
+  blitted by the software renderer, or drawn into an offscreen target and
+  scaled on the GPU, see [below](#on-the-gpu)) at the largest whole-number scale that fits
   in device pixels, centered on whole pixels, with bars (`bar_color`) around
   it. `vp.pointer_to_virtual(e.position)` turns a pointer position on the
   canvas into virtual pixels (`None` on the bars); `layout(size, scale)` is
@@ -473,7 +476,8 @@ pixel at startup, a hero walking over a tilemap at 320×180 with the camera
 following, coins spinning, clouds in parallax, a click to send the hero
 somewhere (through `pointer_to_virtual` and `screen_to_world`), and the frame
 rate printed every second. `spritedemo --png FILE` renders a frame
-off-screen.
+off-screen; `spritedemo --selftest` runs 240 frames in a window and prints
+the frame rate and what drew them.
 
 ### How it draws, and what it costs
 
@@ -501,12 +505,6 @@ are drawn by the rasterizer as plain images (nearest regions upscaled first
 so they stay blocky). A canvas's paint callback now runs once per frame
 rendered, not once per band.
 
-The GPU path (`stipple::gpu`, see [gpu.md](gpu.md)) draws a region as a
-textured quad from the whole bitmap's texture (cached by its `Arc`, uploaded
-once): the region's texture coordinates (swapped for a flip), `GL_NEAREST`
-for nearest sampling, the tint and opacity in the shader, and the samples
-kept half a texel inside the region.
-
 `spritedemo --bench` times the software renderer drawing a 1920×1080 frame:
 a full-screen background image and 2000 32×32 sprites (discs with soft alpha
 edges, so every sprite blends), single-threaded, release build, Apple M5 Max:
@@ -525,9 +523,69 @@ they're drawn unscaled or scaled by whole numbers (what pixel art and most 2D
 games draw); smooth subpixel motion and rotation cost more, and fit when
 fewer sprites need them. A `PixelViewport` game rasterizes only its virtual
 resolution (320×180 is 1/36 of 1080p) plus one nearest blit to the window.
+The software blits run on one thread.
 
-Not yet: the frame isn't presented from the GPU without a read-back (Phase 6
-work), and the software blits run on one thread.
+### On the GPU
+
+With a GPU renderer (`App::renderer(Renderer::Gpu)` or `STIPPLE_RENDERER`,
+see [gpu.md](gpu.md#choosing-the-renderer)) a game's frames are drawn on the
+GPU and presented straight to the window like the rest of the app (read
+back only where the platform can't present yet: Wayland). Nothing about the
+game changes:
+
+- A game canvas repainted whole every frame is drawn straight on the GPU
+  after its first three frames (rather than kept as a texture updated in
+  place), so its paint callback's scene is lowered and drawn by the GPU
+  executor directly.
+- Each region is a textured quad from the whole bitmap's texture, cached by
+  its `Arc`: a sprite sheet or tileset is uploaded once and stays a texture.
+  The region's texture coordinates (swapped for a flip), nearest sampling
+  for `Filter::Nearest`, the tint and opacity in the shader, the samples kept
+  half a texel inside the region. Sprites from one sheet batch into one draw
+  call (2000 sprites over a background: two).
+- A `PixelViewport` frame (`Scene::draw_offscreen`) is drawn into an
+  offscreen target of the virtual resolution and composited into the canvas
+  nearest-neighbor: a *resampled layer* (`Op::PushResampled` in
+  `src/gpu/ops.rs`, executed by Metal, Vulkan, GLES and Direct3D 11). Before,
+  the 320×180 frame was rasterized on the CPU each frame and uploaded as a
+  new texture. On the web, drawn rotated, or with a virtual resolution
+  bigger than the window, it is still the software renderer's bitmap,
+  uploaded each frame.
+
+The frames are paced as every frame is (see
+[gpu.md](gpu.md#frame-pacing)): the display's clock asks for them, and the
+swapchain presents them; the loop's `render_time` is the time to build and
+submit a frame, not the GPU's.
+
+`spritedemo --selftest` checks it in a window: drawn on a GPU, it fails if
+any texture or canvas pixels were uploaded after the first 30 frames. With
+`STIPPLE_RENDERER` naming a GPU, `spritedemo --bench` times the same scenes
+on that GPU, drawn offscreen and waited for but not read back (what a frame
+presented to a window costs), plus a 640×360 `PixelViewport` of the sprites
+scaled 3×. On a Linux desktop (a Ryzen Threadripper 9970X; an NVIDIA RTX
+5080, and Mesa's llvmpipe, a software GPU running on the same CPU), ms per
+frame:
+
+| What | Software renderer | Vulkan, RTX 5080 | GLES, RTX 5080 | GLES, llvmpipe |
+|---|---|---|---|---|
+| `draw_image` (2001 textures, 2001 draws) | 85 | 0.78 | 4.1 | 12.4 |
+| Unscaled regions | 2.5 | 0.40 | 1.4 | 4.7 |
+| 2× nearest, flipped | 2.4 | 0.43 | 1.4 | 4.3 |
+| Tinted and faded | 7.0 | 0.42 | 1.4 | 4.4 |
+| Bilinear at fractional positions | 19 | 0.43 | 1.6 | 5.0 |
+| Turned (bilinear) | 45 | 0.44 | 1.5 | 5.1 |
+| 640×360 `PixelViewport`, 3× | 2.0 | 0.43 (1.15 before) | 1.5 (2.3 before) | 4.3 (3.3 before) |
+
+"Before" is the pixel-art frame rasterized on the CPU and uploaded each
+frame, as it was. On a hardware GPU everything is faster and no longer
+depends on how sprites are drawn; on llvmpipe the GPU path is slower than
+the CPU blits (it rasterizes every quad in software), and so is drawing the
+pixel-art frame there: the software renderer stays the right choice where
+there is no hardware GPU, as `Renderer::Auto` keeps it today. CI's runners
+say the same: on lavapipe and llvmpipe 17–21 ms for the sprite cases (12.5
+for the pixel-art frame) against 4–5 ms on their CPU, on WARP 26–31 ms
+(19) against 6.6–6.9 ms; the self-test passes on all three, uploading
+nothing after its warm-up.
 
 ## Game UI
 

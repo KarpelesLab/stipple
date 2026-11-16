@@ -34,12 +34,11 @@ use crate::gpu::atlas::{AtlasPage, Upload};
 use crate::gpu::batch::{self, Cmd, QUAD_FLOATS, TexRef};
 use crate::gpu::canvas::rekey;
 use crate::gpu::d3d_abi::*;
-use crate::gpu::ops::{Clip, Op, Plan, Sample};
+use crate::gpu::ops::{Clip, Op, Plan, Resample};
 use crate::gpu::renderer::{Api, DamageLog, Executor, GpuError};
 use crate::platform::GpuLayer;
 use crate::render::Pixmap;
 use core::ffi::c_void;
-use oxideav_core::Transform2D;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
@@ -215,6 +214,8 @@ struct Level {
     scissor: [i32; 4],
     depth: u32,
     undo: Vec<Undo>,
+    /// A resampled layer's composite ([`Op::PushResampled`]).
+    resample: Option<Resample>,
 }
 
 impl Level {
@@ -1182,6 +1183,7 @@ impl D3dExecutor {
                 scissor: [0, 0, w, h],
                 depth: 0,
                 undo: Vec::new(),
+                resample: None,
             };
             let ds = if dec {
                 &self.ds_clip_dec
@@ -1211,19 +1213,11 @@ impl D3dExecutor {
     ) -> Result<(), GpuError> {
         unsafe {
             let srv = self.layers[layer.layer.unwrap()].srv.ptr();
-            let full = [0.0, 0.0, f.w as f32, f.h as f32];
             let mut v = std::mem::take(&mut self.scratch_quads);
             v.clear();
-            batch::tex_quad(
-                &mut v,
-                &Transform2D::identity(),
-                full,
-                layer.opacity,
-                true,
-                false,
-                &Sample::WHOLE,
-            );
-            let drawn = self.draw_quads(f, parent, &v, Some(srv), false);
+            let (w, h) = (f.w as u32, f.h as u32);
+            let nearest = batch::layer_quad(&mut v, layer.opacity, layer.resample.as_ref(), w, h);
+            let drawn = self.draw_quads(f, parent, &v, Some(srv), nearest);
             self.scratch_quads = v;
             drawn
         }
@@ -1247,6 +1241,7 @@ impl D3dExecutor {
                 scissor: [0, 0, w, h],
                 depth: 0,
                 undo: Vec::new(),
+                resample: None,
             }];
             let bg = plan.background;
             let a = bg.a as f32 / 255.0;
@@ -1332,20 +1327,29 @@ impl D3dExecutor {
                             None => {}
                         }
                     }
-                    Op::PushLayer { opacity } => {
+                    Op::PushLayer { .. } | Op::PushResampled(_) => {
                         let index = levels.iter().filter(|l| l.layer.is_some()).count();
                         if self.layers.len() <= index {
                             let t =
                                 Target::new(self.device.ptr(), w, h, DXGI_FORMAT_B8G8R8A8_UNORM)?;
                             self.layers.push(t);
                         }
-                        let scissor = levels.last().unwrap().scissor;
+                        let (opacity, resample) = match op {
+                            Op::PushResampled(r) => (1.0, Some(*r)),
+                            Op::PushLayer { opacity } => (*opacity, None),
+                            _ => unreachable!(),
+                        };
+                        // A resampled layer draws in its own pixels.
+                        let scissor = resample
+                            .as_ref()
+                            .map_or(levels.last().unwrap().scissor, Resample::scissor);
                         levels.push(Level {
                             layer: Some(index),
-                            opacity: *opacity,
+                            opacity,
                             scissor,
                             depth: 0,
                             undo: Vec::new(),
+                            resample,
                         });
                         self.open(f, On::Layer(index), Some([0.0; 4]));
                     }

@@ -44,7 +44,7 @@
 //! quads out.
 
 use super::atlas::AtlasPage;
-use super::ops::{Op, Premul, Sample, Source};
+use super::ops::{Op, Premul, Resample, Sample, Source};
 use crate::render::Pixmap;
 use oxideav_core::{Point, Transform2D};
 use std::sync::Arc;
@@ -217,6 +217,39 @@ pub(crate) fn box_quad(
     rest[5] = stroke;
     rest[8] = MODE_BOX;
     push(out, [v(x0, y0), v(x1, y0), v(x0, y1), v(x1, y1)], &rest);
+}
+
+/// The quad compositing a layer of a `w`×`h` target into its parent at
+/// `opacity`: the whole target over the whole frame, or for a resampled
+/// layer ([`Resample`]) its top-left `size` pixels over `dst`. Returns
+/// whether to sample it nearest-neighbor.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) fn layer_quad(
+    out: &mut Vec<f32>,
+    opacity: f32,
+    resample: Option<&Resample>,
+    w: u32,
+    h: u32,
+) -> bool {
+    let identity = Transform2D::identity();
+    match resample {
+        None => {
+            let full = [0.0, 0.0, w as f32, h as f32];
+            tex_quad(out, &identity, full, opacity, true, false, &Sample::WHOLE);
+            false
+        }
+        Some(r) => {
+            let uv = [
+                0.0,
+                0.0,
+                r.size[0] as f32 / w.max(1) as f32,
+                r.size[1] as f32 / h.max(1) as f32,
+            ];
+            let sample = Sample::region(uv, w, h, super::ops::NO_TINT);
+            tex_quad(out, &identity, r.dst, opacity, true, false, &sample);
+            r.nearest
+        }
+    }
 }
 
 /// A texture over the local `rect` drawn through `m` at `opacity` as a

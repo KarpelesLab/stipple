@@ -54,6 +54,7 @@ pub(crate) fn cases(font: Option<&Font>) -> Vec<Case> {
     add("clips", clipped(), &[1.0, 2.0], 0.5, 0.005);
     add("canvas", canvas(), &[1.0], 0.5, 0.005);
     add("sprite-field", sprite_field(), &[1.0, 2.0], 1.5, 0.02);
+    add("pixel-viewport", pixel_viewport(), &[1.0, 2.0], 0.8, 0.01);
     if let Some(font) = font {
         add("text", text(font), &[1.0, 2.0], 1.0, 0.01);
         add("text-effects", text_effects(font), &[1.0, 2.0], 1.5, 0.02);
@@ -552,4 +553,60 @@ pub(crate) fn sprites() -> Scene {
         sprites.draw_image(Rect::from_xywh(x, y, 32.0, 32.0), sheet.clone());
     }
     sprites
+}
+
+/// A frame drawn at 40×30 and scaled up nearest-neighbor by 3 into the
+/// scene ([`Scene::draw_offscreen`], what `PixelViewport` draws): fills,
+/// sprites flipped and faded, a translucent layer, over bars. On the GPU
+/// renderers a resampled layer (no bitmap uploaded), on the web the
+/// software renderer's bitmap.
+pub(crate) fn pixel_viewport() -> Scene {
+    pixel_viewport_with(&ramp())
+}
+
+/// [`pixel_viewport`] drawing from `sheet`.
+pub(crate) fn pixel_viewport_with(sheet: &Arc<Pixmap>) -> Scene {
+    use crate::render::{Filter, ImageOptions};
+    let mut low = Scene::new(Size::new(40.0, 30.0));
+    low.fill_rect(
+        Rect::from_xywh(0.0, 0.0, 40.0, 30.0),
+        Color::rgb(90, 150, 220),
+    );
+    low.fill_rect(
+        Rect::from_xywh(0.0, 22.0, 40.0, 8.0),
+        Color::rgb(70, 140, 60),
+    );
+    let o = ImageOptions::new().nearest();
+    let quarter = Rect::from_xywh(8.0, 0.0, 8.0, 8.0);
+    low.draw_image_region(quarter, Rect::from_xywh(3.0, 14.0, 8.0, 8.0), sheet, &o);
+    let flipped = o.flip_x(true).opacity(0.6);
+    low.draw_image_region(
+        quarter,
+        Rect::from_xywh(15.0, 12.0, 8.0, 8.0),
+        sheet,
+        &flipped,
+    );
+    low.draw_image_with(Rect::from_xywh(23.0, 3.0, 16.0, 16.0), sheet, &o);
+    low.push_layer(Affine::IDENTITY, 0.5);
+    low.fill_rect(
+        Rect::from_xywh(5.0, 3.0, 14.0, 6.0),
+        Color::rgb(250, 250, 255),
+    );
+    low.fill_rect(
+        Rect::from_xywh(10.0, 5.0, 14.0, 6.0),
+        Color::rgb(250, 250, 255),
+    );
+    low.pop_layer();
+    let mut s = Scene::new(Size::new(160.0, 120.0));
+    s.fill_rect(
+        Rect::from_xywh(0.0, 0.0, 160.0, 120.0),
+        Color::rgb(12, 12, 18),
+    );
+    s.draw_offscreen(
+        Rect::from_xywh(20.0, 15.0, 120.0, 90.0),
+        PhysicalSize::new(40, 30),
+        low,
+        Filter::Nearest,
+    );
+    s
 }

@@ -204,6 +204,23 @@ fn a_sprite_field_matches_the_software_renderer() {
     agree("sprite-field@2", &s, 2.0, 1.5, 0.02);
 }
 
+/// A frame drawn at a low resolution and scaled up (`PixelViewport`): drawn
+/// into a resampled layer on the GPU, so after the first frame (the sprite
+/// sheet's upload) nothing is uploaded, where the bitmap the software
+/// renderer makes of it would be a new texture every frame.
+#[test]
+fn a_pixel_viewport_matches_the_software_renderer_without_uploads() {
+    let sheet = ramp();
+    let s = pixel_viewport_with(&sheet);
+    if agree("pixel-viewport", &s, 1.0, 0.8, 0.01).is_none() {
+        return;
+    }
+    agree("pixel-viewport@2", &s, 2.0, 0.8, 0.01);
+    // A new frame of it from the same sheet, as a game paints each frame.
+    gpu(&pixel_viewport_with(&sheet), BACKGROUND, 2.0).unwrap();
+    assert_eq!(uploads(), 0, "the low-resolution frame stays on the GPU");
+}
+
 #[test]
 fn canvases_match_the_software_renderer() {
     let s = canvas();

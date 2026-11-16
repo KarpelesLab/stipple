@@ -2741,7 +2741,21 @@ game needs on top:
   separable bilinear, pixel-aligned rect fills), the rest rasterized in runs:
   1080p + 2000 32×32 sprites in 4.4 ms (unscaled) and 4.1 ms (2× nearest),
   from 84 ms through the rasterizer, on an M5 Max (`spritedemo --bench`).*
-- ⬜ Later: present on the GPU (Phase 6) without a read-back.
+- ✅ Present on the GPU (Phase 6) without a read-back.
+  *With a GPU renderer a game's canvas is drawn straight by the executor
+  and presented to the window (read back only on Wayland, 6c); sprite
+  sheets are textures uploaded once, sprites from one batched into a draw.
+  `PixelViewport` now draws through `Scene::draw_offscreen`, which the GPU
+  renderers execute as a resampled layer (the frame drawn in an offscreen
+  target of the virtual size, composited nearest) instead of rasterizing
+  the 320×180 frame on the CPU and uploading it every frame; the software
+  renderer keeps its blits. `spritedemo --selftest` fails if a GPU frame
+  uploads anything; `spritedemo --bench` runs on a GPU too (offscreen, no
+  read-back): on an RTX 5080 0.4 ms for every sprite case, against 2.4 to
+  85 ms on the CPU; on llvmpipe 4–5 ms, slower than the CPU blits.
+  Run on Vulkan (NVIDIA) and GLES (llvmpipe, NVIDIA) under Xvfb, and in
+  CI on lavapipe, llvmpipe and WARP (Direct3D 11); Metal compile-checked,
+  run by the macOS job (non-blocking); the web keeps the bitmap. See [games.md](docs/games.md#on-the-gpu).*
 
 #### 9d — Audio
 - ✅ Audio output on every platform, each through the OS's own API with

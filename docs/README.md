@@ -295,8 +295,8 @@ See [animation.md](animation.md#enter-exit-and-layout-animations).
 and `gl` features (Linux, Android), `mtl` (macOS, iOS), `d3d` (Windows)
 and `gpu` (the web, through `web/gpu.js`): boxes, paths,
 images (textures cached per image), text, clips, canvases and layers with
-transforms and opacity, all on the GPU. Presented straight to the window
-through a Vulkan swapchain or an EGL window surface on X11 and Android, a
+transforms and opacity, games' sprites and pixel-art frames, all on the GPU.
+Presented straight to the window through a Vulkan swapchain or an EGL window surface on X11 and Android, a
 `CAMetalLayer` on macOS and iOS, a DXGI swap chain on Windows, the canvas on
 the web; on Wayland read back and presented as a bitmap. CI compares test
 scenes and an app with the software renderer under Mesa's llvmpipe (GLES)

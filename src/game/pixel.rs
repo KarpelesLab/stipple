@@ -1,7 +1,7 @@
 //! Pixel art at a fixed virtual resolution, scaled by whole numbers.
 
 use crate::geometry::{PhysicalSize, Point, Rect, Size};
-use crate::render::{Color, ImageOptions, Pixmap, Scene, SoftwareRenderer};
+use crate::render::{Color, Filter, ImageOptions, Pixmap, Scene, SoftwareRenderer};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -11,9 +11,10 @@ use std::sync::Arc;
 /// an exact square block of device pixels: no blur, no uneven rows.
 ///
 /// [`paint`](Self::paint) draws a frame: the game draws into a [`Scene`] of
-/// the virtual size, which is rasterized at that size (sprites drawn with
-/// [`Scene::draw_image_region`] take the software renderer's fast blits) and
-/// then blitted, nearest-neighbor, into the canvas.
+/// the virtual size, which is drawn at that size and scaled up,
+/// nearest-neighbor, into the canvas: by the software renderer (sprites
+/// drawn with [`Scene::draw_image_region`] take its fast blits), or on the
+/// GPU into an offscreen target when a GPU renderer draws the window.
 /// [`to_virtual`](Self::to_virtual) turns a pointer position on the canvas
 /// into virtual pixels.
 ///
@@ -166,6 +167,13 @@ impl PixelViewport {
     /// Show `frame` (a picture at the virtual resolution) on `scene` (a
     /// canvas): letterboxed by the bars, scaled nearest-neighbor.
     pub fn present(&self, scene: &mut Scene, frame: &Arc<Pixmap>) -> PixelLayout {
+        let layout = self.bars(scene);
+        scene.draw_image_with(layout.rect, frame, &ImageOptions::new().nearest());
+        layout
+    }
+
+    /// Lay the picture out on `scene` and draw the bars around it.
+    fn bars(&self, scene: &mut Scene) -> PixelLayout {
         let area = scene.logical_size();
         let layout = self.layout(area, scene.scale());
         self.last.set(Some(layout));
@@ -181,12 +189,19 @@ impl PixelViewport {
                 scene.fill_rect(bar, self.bar);
             }
         }
-        scene.draw_image_with(r, frame, &ImageOptions::new().nearest());
         layout
     }
 
-    /// Draw a frame: [`render`](Self::render) it at the virtual resolution
-    /// with `draw`, then [`present`](Self::present) it on `scene`.
+    /// Draw a frame: `draw` draws into a scene of [`size`](Self::size),
+    /// cleared to [`background`](Self::background), which is shown on
+    /// `scene` letterboxed and scaled nearest-neighbor, as
+    /// [`render`](Self::render) then [`present`](Self::present) would.
+    ///
+    /// It goes through [`Scene::draw_offscreen`]: the software renderer
+    /// rasterizes the frame at the virtual resolution (with its fast blits)
+    /// and blits it; the GPU renderers draw it into an offscreen target of
+    /// the virtual size and scale that up, so a game's frame never leaves
+    /// the GPU and its sprite sheets are uploaded once.
     ///
     /// ```
     /// use stipple::game::PixelViewport;
@@ -205,7 +220,15 @@ impl PixelViewport {
     /// assert_eq!(out.pixel(3, 2), Some([0, 0, 0, 255]));
     /// ```
     pub fn paint(&self, scene: &mut Scene, draw: impl FnOnce(&mut Scene)) -> PixelLayout {
-        let frame = Arc::new(self.render(draw));
-        self.present(scene, &frame)
+        let layout = self.bars(scene);
+        let mut frame = Scene::new(self.size());
+        if self.background.a > 0 {
+            let all = Rect::from_xywh(0.0, 0.0, self.width as f64, self.height as f64);
+            frame.fill_rect(all, self.background);
+        }
+        draw(&mut frame);
+        let pixels = PhysicalSize::new(self.width, self.height);
+        scene.draw_offscreen(layout.rect, pixels, frame, Filter::Nearest);
+        layout
     }
 }
