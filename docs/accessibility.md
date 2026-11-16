@@ -49,7 +49,7 @@ that scrolls that way (`platform::access`, shared by the bridges):
 | Platform | What a scroll container is | How a screen reader scrolls it |
 | --- | --- | --- |
 | Windows | a pane (or the list) with the Scroll pattern; its items have ScrollItem | `SetScrollPercent`, `Scroll` (a page or a line), `ScrollIntoView` |
-| macOS | an `AXScrollArea` (a list keeps its role) with an `AXScrollBar` | the bar's `AXValue` (0 to 1), `AXIncrement` / `AXDecrement`; `AXScrollToVisible` on what's inside |
+| macOS | an `AXScrollArea` (a list keeps its role) with an `AXScrollBar` | the bar's `AXValue` (0 to 1), `AXIncrement` / `AXDecrement` |
 | iOS | elements inside it | `accessibilityScroll:` (VoiceOver's three-finger swipe), a page, with "Page N of M" |
 | Android | a scrollable node | `ACTION_SCROLL_FORWARD` / `BACKWARD`, a page, offered only where it can go; `TYPE_VIEW_SCROLLED` when it moved |
 | Linux | a scroll pane (a list keeps its role) with `Value` (the offset) | `Action` "scroll forward" / "scroll backward", setting `Value.CurrentValue`, `Component.ScrollTo` on what's inside |
@@ -285,8 +285,10 @@ by the AppKit-free `macos/ax_plan.rs`):
   or table keeps its role) with an `AXScrollBar` after its content, also
   its vertical or horizontal scroll bar: the bar's `AXValue` (0 to 1) is how
   far it is scrolled and can be set, and `AXIncrement` / `AXDecrement` page
-  through it. Elements inside a scroll container have `AXScrollToVisible`,
-  which scrolls them into view.
+  through it. There's no `AXScrollToVisible`: the protocol has no method
+  for it, and overriding the legacy `accessibilityActionNames` to add one
+  left every element with no actions as AppKit reported them (`AXPress`
+  included; seen in CI), so it was taken out.
 - **Notifications.** A tree swap posts what changed on the rebuilt elements:
   `AXTitleChanged`, `AXValueChanged` (a field's text, a check, a scroll
   bar), `AXSelectedTextChanged`, `AXSelectedChildrenChanged` /
@@ -341,18 +343,16 @@ and scrolling)*, runs `axprobe --depth` on a fresh `touchdemo`: the field's
 value is set to "hi" (the app logs it, and it reads back two characters),
 its selected range is set and read back, the "Remember" checkbox reads 0,
 then 1 after `AXPress` (the app logs it), "Row 2" raises a toast, the list
-is an `AXScrollArea` whose scroll bar's value, set to 0.5, scrolls it, and
-`AXScrollToVisible` on "Row 0" scrolls back; an `AXObserver` reports the
+is an `AXScrollArea` whose scroll bar's value, set to 0.5, scrolls it; an `AXObserver` reports the
 notifications it hears. It hasn't run on a runner yet, so it doesn't fail
 the job.
 
 Not covered: static text has no `AXValue` (its label carries the text); no
 title elements (a field's caption is its label instead); the elements are
 built again after each tree change (or when the window moves), so an
-observer registered on an old element goes quiet; `AXScrollToVisible` goes
-through the legacy `accessibilityActionNames` / `accessibilityPerformAction:`
-(the protocol has no method for it). None of it has run on a Mac yet: build-
-and clippy-checked, with the AppKit-free logic unit-tested on every host.
+observer registered on an old element goes quiet; no `AXScrollToVisible`
+(see above). The depth checks haven't passed on a runner yet: build- and
+clippy-checked, with the AppKit-free logic unit-tested on every host.
 
 ## iOS
 

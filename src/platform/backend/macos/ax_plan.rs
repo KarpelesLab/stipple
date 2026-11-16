@@ -149,22 +149,6 @@ pub(crate) fn bar_frame(frame: (f64, f64, f64, f64), horizontal: bool, rtl: bool
     }
 }
 
-/// Whether the node at `path` lies inside a scroll container (not counting
-/// itself), so `AXScrollToVisible` can bring it into view.
-pub(crate) fn in_scroll(root: &A11yNode, path: &[usize]) -> bool {
-    let mut at = root;
-    for &i in path {
-        if at.scroll.is_some() {
-            return true;
-        }
-        match at.children.get(i) {
-            Some(c) => at = c,
-            None => return false,
-        }
-    }
-    false
-}
-
 /// One notification to post: `name` on the element of the node at `path`
 /// (the view for the root), or on its scroll bar when `bar`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -380,8 +364,5 @@ mod tests {
                 (vec![], "AXLayoutChanged", false),
             ]
         );
-        assert!(in_scroll(&new, &[2, 0]));
-        assert!(!in_scroll(&new, &[2]));
-        assert!(!in_scroll(&new, &[0]));
     }
 }

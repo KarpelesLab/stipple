@@ -2308,8 +2308,8 @@ Most input only works on X11 today.
   axis; a list, tree or table takes its body's), and every bridge scrolls it
   the same way, a wheel at its middle (`platform::access`'s shared
   actions): UIA's Scroll pattern on a Pane (and ScrollItem on what it
-  holds), an `AXScrollArea` with a settable `AXScrollBar` and
-  `AXScrollToVisible` (macOS), `accessibilityScroll:` with "Page N of M"
+  holds), an `AXScrollArea` with a settable `AXScrollBar` (macOS; no
+  `AXScrollToVisible`), `accessibilityScroll:` with "Page N of M"
   (iOS), `ACTION_SCROLL_FORWARD`/`BACKWARD` on any overflowing container,
   offered only where it can go, and `TYPE_VIEW_SCROLLED` (Android), a scroll
   pane with scroll actions, a settable `Value` and `Component.ScrollTo`

@@ -3832,8 +3832,8 @@ jobs:
       # app's field takes the text) and its AXSelectedTextRange, the
       # "Remember" checkbox's AXValue before and after AXPress, a toast
       # raised by "Row 2" (AXAnnouncementRequested), the list as an
-      # AXScrollArea whose AXScrollBar's AXValue scrolls it, and
-      # AXScrollToVisible bringing "Row 0" back into view. New and not yet
+      # AXScrollArea whose AXScrollBar's AXValue scrolls it (scrolled back
+      # through the bar too; no AXScrollToVisible, see ax_value.rs). New and not yet
       # seen on a runner, so it doesn't fail the job.
       - name: Accessibility depth from outside the app (AX API, values and scrolling)
         continue-on-error: true
@@ -3867,7 +3867,6 @@ jobs:
           check 'axprobe: depth scroll areas=[1-9]' $L
           check 'axprobe: depth scroll bar value=0 settable=true' $L
           check '^touchdemo: scrolled to [1-9]' $A
-          check 'axprobe: depth actions of "Row 0": .*AXScrollToVisible' $L
           check '^touchdemo: scrolled to 0$' $A
           # Reported, not required: the notifications the observer heard.
           grep 'axprobe: depth notification' $L || echo "no notifications heard"

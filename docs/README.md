@@ -511,7 +511,7 @@ required). The focused node is `AXFocused` and the application's
 `AXFocusedUIElement`, and a focus move posts `AXFocusedUIElementChanged`
 (added later, not yet seen in CI). Fields have a settable `AXValue` and
 selected text range, checkboxes a value, scroll containers an
-`AXScrollArea` with a settable scroll bar and `AXScrollToVisible` inside,
+`AXScrollArea` with a settable scroll bar,
 and tree swaps post value, selection, expansion and layout notifications;
 `axprobe --depth` checks them in a step that doesn't fail the job yet (not
 yet run). See [accessibility.md](accessibility.md#macos).
