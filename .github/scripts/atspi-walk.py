@@ -289,14 +289,21 @@ def keys(name):
     return [a.replace("Tab", name) for a in tab_cmd]
 
 
-def await_focus(cmd):
+def await_focus(cmd, settled=lambda: False):
+    """Send `cmd` and wait for a state-changed:focused event. A key that
+    focuses nothing, while `settled()` says focus hasn't moved, is sent once
+    more, with a warning (a key can be lost, as the first Tab above)."""
     del events[:]
-    subprocess.run(cmd, check=False)
-    for _ in range(40):
-        pump(0.25)
-        hits = [e for e in events if e[0].startswith("object:state-changed:focused") and e[1] == 1]
-        if hits:
-            return hits[-1]
+    for attempt in range(2):
+        subprocess.run(cmd, check=False)
+        for _ in range(20 if attempt == 0 else 40):
+            pump(0.25)
+            hits = [e for e in events if e[0].startswith("object:state-changed:focused") and e[1] == 1]
+            if hits:
+                return hits[-1]
+        if settled():
+            return None
+        print("warning: no focus event after {}; sending it again".format(" ".join(cmd)), flush=True)
     return None
 
 
@@ -306,7 +313,7 @@ def taps():
 
 
 if row0 is not None and field is not None:
-    focused = await_focus(tab_cmd)
+    focused = await_focus(tab_cmd, lambda: row0.getState().contains(pyatspi.STATE_FOCUSED))
     check(focused is not None and focused[2] == pyatspi.ROLE_PUSH_BUTTON and focused[3] == "Row 0",
           "Tab from the field focused the push button 'Row 0' ({})".format(focused))
     check(any(e[0] == "focus:" for e in events), "...with a focus: event")
@@ -321,7 +328,7 @@ if row0 is not None and field is not None:
                 pressed = True
                 break
         check(pressed, "{} on the focused 'Row 0' pressed it: the app logged the tap".format(what))
-    back = await_focus(keys("shift+Tab"))
+    back = await_focus(keys("shift+Tab"), lambda: field.getState().contains(pyatspi.STATE_FOCUSED))
     check(back is not None and back[2] == pyatspi.ROLE_ENTRY,
           "Shift+Tab went back to the entry ({})".format(back))
 

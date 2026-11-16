@@ -229,6 +229,11 @@ def check_examples(site, chrome, only, thumbs, timeout, gpu=()):
         print(line)
         if not ok:
             failed.append(name)
+            # What it drew, next to the thumbnails (CI uploads them).
+            if r.get("png", "").startswith("data:image/png;base64,"):
+                (site / "thumbs").mkdir(exist_ok=True)
+                (site / "thumbs" / f"FAILED-{name}.png").write_bytes(
+                    base64.b64decode(r["png"].split(",", 1)[1]))
         if thumbs and "key" not in ex and r.get("png", "").startswith("data:image/png;base64,") and ok:
             (site / "thumbs" / f"{name}.png").write_bytes(base64.b64decode(r["png"].split(",", 1)[1]))
     return failed
