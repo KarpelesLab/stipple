@@ -48,6 +48,7 @@ pub(crate) mod metal_layer;
 #[doc(hidden)]
 pub mod ios;
 // The iOS backend's UIKit-free parts, unit-tested on every host.
+// The macOS backend's AppKit-free accessibility parts, likewise.
 #[cfg(all(test, not(target_os = "ios")))]
 #[path = "ios/a11y_tree.rs"]
 mod ios_a11y_tree;
@@ -60,6 +61,9 @@ pub(crate) mod ios_edge_swipe;
 #[cfg(all(test, not(target_os = "ios")))]
 #[path = "ios/saved_state.rs"]
 mod ios_saved_state;
+#[cfg(all(test, not(target_os = "macos")))]
+#[path = "macos/ax_plan.rs"]
+mod macos_ax_plan;
 
 // The Android backend's NDK-free parts, unit-tested on every host.
 #[cfg(all(test, not(target_os = "android")))]

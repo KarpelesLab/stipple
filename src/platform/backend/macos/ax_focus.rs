@@ -43,7 +43,7 @@ pub(super) unsafe fn mark(el: Id, node: &A11yNode) {
 
 /// The element of the node at `path` (child indices from the tree's root)
 /// under `view`, from the elements the view hands out.
-fn element_at(view: Id, path: &[usize]) -> Option<Id> {
+pub(super) fn element_at(view: Id, path: &[usize]) -> Option<Id> {
     let mut el = view;
     for &i in path {
         let children = unsafe { msg_id(el, sel("accessibilityChildren")) };

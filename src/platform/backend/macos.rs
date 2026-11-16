@@ -35,8 +35,13 @@ use crate::render::{Pixmap, Surface};
 
 /// Keyboard focus through NSAccessibility (`AXFocused`, focus changes).
 mod ax_focus;
+/// What the elements say beyond role and label, and the notifications a
+/// tree swap posts (AppKit-free).
+mod ax_plan;
 /// `AXPress` on the elements of the controls a click activates.
 mod ax_press;
+/// Values, text ranges, scroll areas and change notifications.
+mod ax_value;
 /// Pacing animation frames by the display (`CVDisplayLink`).
 mod display_link;
 /// Receiving drops (`NSDraggingDestination`).
@@ -694,10 +699,12 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
         MenuBar => "AXMenuBar",
         Menu => "AXMenu",
         MenuItem => "AXMenuItem",
-        // Not named to NSAccessibility yet: the closest role above.
-        ComboBox | CheckBox | Switch => "AXButton",
+        // A switch is a checkbox with the `AXSwitch` subrole, as AppKit's.
+        CheckBox | Switch => "AXCheckBox",
+        ComboBox => "AXPopUpButton",
         RadioButton => "AXRadioButton",
         SpinButton => "AXTextField",
+        // Not named to NSAccessibility yet: the closest role above.
         Splitter | Toolbar | Separator | Alert => "AXGroup",
         TabList => "AXTabGroup",
         Tab => "AXRadioButton",
@@ -715,7 +722,16 @@ fn ax_role(role: crate::platform::access::A11yRole) -> &'static str {
 /// `frame` is in screen coordinates, as NSAccessibility wants it (and an
 /// assistive client reads back as `AXPosition`/`AXSize`): the node's bounds
 /// in the (flipped) `view`, converted through its window.
-unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id, view: Id) -> Id {
+///
+/// `path` is the node's place under `root` (child indices), which the
+/// element remembers (see [`ax_value`]).
+unsafe fn build_ax_element(
+    node: &crate::platform::access::A11yNode,
+    parent: Id,
+    view: Id,
+    root: Option<&crate::platform::access::A11yNode>,
+    path: &mut Vec<usize>,
+) -> Id {
     let (x, y, w, h) = node.bounds;
     let mut frame = CgRect {
         origin: CgPoint { x, y },
@@ -740,25 +756,16 @@ unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id,
             frame = to_screen(window, sel("convertRectToScreen:"), in_window);
         }
     }
-    let make: unsafe extern "C" fn(Id, Sel, Id, CgRect, Id, Id) -> Id =
-        unsafe { std::mem::transmute(objc_msgSend as *const c_void) };
     let (role, label) = (nsstring(ax_role(node.role)), nsstring(&node.name));
     // A control a click activates answers `AXPress` (VoiceOver's VO-Space).
-    let el = if ax_press::pressable(node.role) {
-        unsafe { ax_press::new_element(role, frame, label, parent) }
+    let cls = if ax_press::pressable(node.role) {
+        ax_press::press_class()
     } else {
-        unsafe {
-            make(
-                class("NSAccessibilityElement"),
-                sel("accessibilityElementWithRole:frame:label:parent:"),
-                role,
-                frame,
-                label,
-                parent,
-            )
-        }
+        ax_value::element_class()
     };
+    let el = unsafe { ax_value::new_element(cls, role, frame, label, parent) };
     unsafe { ax_focus::mark(el, node) };
+    unsafe { ax_value::decorate(el, node, path, root) };
     // A field's placeholder is its `AXPlaceholderValue`, which VoiceOver
     // reads after an empty field's role, as it does an `NSTextField`'s.
     if let Some(hint) = node.hint()
@@ -766,11 +773,30 @@ unsafe fn build_ax_element(node: &crate::platform::access::A11yNode, parent: Id,
     {
         unsafe { msg_void_id(el, sel("setAccessibilityPlaceholderValue:"), nsstring(hint)) };
     }
-    if !node.children.is_empty() {
+    // A scroll container's scroll bar comes after its content, so the
+    // content's children keep their indexes (their paths).
+    let bar = if el.is_null() {
+        None
+    } else {
+        unsafe { ax_value::scroll_bar(el, node, path, frame) }
+    };
+    if !node.children.is_empty() || bar.is_some() {
         let arr = unsafe { msg_id(class("NSMutableArray"), sel("array")) };
-        for child in &node.children {
-            let ce = unsafe { build_ax_element(child, el, view) };
+        for (i, child) in node.children.iter().enumerate() {
+            path.push(i);
+            let ce = unsafe { build_ax_element(child, el, view, root, path) };
+            path.pop();
             unsafe { msg_void_id(arr, sel("addObject:"), ce) };
+        }
+        if let Some(bar) = bar {
+            unsafe {
+                msg_void_id(
+                    el,
+                    sel("setAccessibilityContents:"),
+                    msg_id(msg_id(arr, sel("copy")), sel("autorelease")),
+                )
+            };
+            unsafe { msg_void_id(arr, sel("addObject:"), bar) };
         }
         unsafe { msg_void_id(el, sel("setAccessibilityChildren:"), arr) };
     }
@@ -786,10 +812,11 @@ unsafe fn dump_ax(el: Id, depth: usize) {
     let label = nsstring_to_string(unsafe { msg_id(el, sel("accessibilityLabel")) });
     let indent = "  ".repeat(depth);
     let hint = nsstring_to_string(unsafe { msg_id(el, sel("accessibilityPlaceholderValue")) });
+    let more = ax_value::describe(el);
     if hint.is_empty() {
-        println!("Cocoa a11y:{indent} role={role} label={label}");
+        println!("Cocoa a11y:{indent} role={role} label={label}{more}");
     } else {
-        println!("Cocoa a11y:{indent} role={role} label={label} placeholder={hint}");
+        println!("Cocoa a11y:{indent} role={role} label={label} placeholder={hint}{more}");
     }
     let children = unsafe { msg_id(el, sel("accessibilityChildren")) };
     if !children.is_null() {
@@ -832,8 +859,8 @@ extern "C" fn acc_children(this: Id, _cmd: Sel) -> Id {
             return arr;
         }
         let arr = msg_id(class("NSMutableArray"), sel("array"));
-        for child in &root.children {
-            let el = build_ax_element(child, this, this);
+        for (i, child) in root.children.iter().enumerate() {
+            let el = build_ax_element(child, this, this, Some(root), &mut vec![i]);
             msg_void_id(arr, sel("addObject:"), el);
         }
         msg_id(arr, sel("retain"));
@@ -1594,8 +1621,10 @@ impl Window for MacWindow {
         let moved = root.focus_moved_from(self.a11y_tree.borrow().as_ref());
         // So are alerts (toasts) that appeared.
         let alerts = root.alerts_new_since(self.a11y_tree.borrow().as_ref());
-        *self.a11y_tree.borrow_mut() = Some(root.clone());
+        let old = self.a11y_tree.borrow_mut().replace(root.clone());
         clear_ax_elements(self);
+        // And values, selections, expansions and layout that changed.
+        ax_value::announce(self.view, old.as_ref(), root);
         if let Some(path) = moved {
             ax_focus::announce(self.view, &path);
         }
@@ -2319,7 +2348,7 @@ mod tests {
         crate::platform::native::objc::with_pool(|| unsafe {
             let read = |node: &A11yNode| {
                 let null = std::ptr::null_mut();
-                let el = build_ax_element(node, null, null);
+                let el = build_ax_element(node, null, null, None, &mut vec![0]);
                 nsstring_to_string(msg_id(el, sel("accessibilityPlaceholderValue")))
             };
             let field = A11yNode {
@@ -2329,6 +2358,50 @@ mod tests {
             assert_eq!(read(&field), "Your name");
             let plain = A11yNode::new(A11yRole::TextField, "Ada", (0.0, 0.0, 100.0, 20.0));
             assert_eq!(read(&plain), "");
+        });
+    }
+
+    /// A field's text is its `AXValue` (and a checkbox's state), with its
+    /// text range attributes, read through objc dispatch.
+    #[test]
+    fn fields_and_checkboxes_have_values() {
+        crate::platform::native::objc::with_pool(|| unsafe {
+            let null = std::ptr::null_mut();
+            let value = |el: Id| {
+                let v = msg_id(el, sel("accessibilityValue"));
+                if v.is_null() {
+                    String::new()
+                } else {
+                    nsstring_to_string(msg_id(v, sel("description")))
+                }
+            };
+            let field = A11yNode {
+                caret: Some(2),
+                text_selection: Some((1, 2)),
+                ..A11yNode::new(A11yRole::TextField, "abc", (0.0, 0.0, 100.0, 20.0))
+            };
+            let el = build_ax_element(&field, null, null, None, &mut vec![0]);
+            assert_eq!(value(el), "abc");
+            assert_eq!(
+                nsstring_to_string(msg_id(el, sel("accessibilityLabel"))),
+                "",
+                "the text is the value, not the label too"
+            );
+            assert_eq!(msg_i64(el, sel("accessibilityNumberOfCharacters")), 3);
+            assert_eq!(
+                nsstring_to_string(msg_id(el, sel("accessibilitySelectedText"))),
+                "b"
+            );
+            let check = A11yNode {
+                checked: Some(true),
+                ..A11yNode::new(A11yRole::CheckBox, "Bold", (0.0, 0.0, 20.0, 20.0))
+            };
+            let el = build_ax_element(&check, null, null, None, &mut vec![1]);
+            assert_eq!(value(el), "1");
+            assert_eq!(
+                nsstring_to_string(msg_id(el, sel("accessibilityRole"))),
+                "AXCheckBox"
+            );
         });
     }
 }

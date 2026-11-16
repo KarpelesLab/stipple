@@ -22,6 +22,12 @@
 //! opening or closing, `UIAccessibilityScreenChangedNotification`. An alert
 //! (a toast) appearing is announced with
 //! `UIAccessibilityAnnouncementNotification`.
+//!
+//! VoiceOver's three-finger swipe (`accessibilityScroll:`) on an element
+//! scrolls the innermost scroll container around it (or the element itself,
+//! when it is one) on the swipe's axis, a page at a time, through a wheel at
+//! the container's middle, and says which page it's on
+//! (`UIAccessibilityPageScrolledNotification`, "Page N of M").
 
 use std::cell::RefCell;
 use std::ffi::c_void;
@@ -46,6 +52,7 @@ unsafe extern "C" {
     static UIAccessibilityLayoutChangedNotification: u32;
     static UIAccessibilityScreenChangedNotification: u32;
     static UIAccessibilityAnnouncementNotification: u32;
+    static UIAccessibilityPageScrolledNotification: u32;
     fn UIAccessibilityPostNotification(notification: u32, argument: Id);
     fn UIAccessibilityIsVoiceOverRunning() -> bool;
 }
@@ -67,6 +74,8 @@ struct Elements {
     /// The elements (retained), with the item each last showed and the
     /// view's position on screen then.
     elements: Vec<(Id, Option<Shown>)>,
+    /// For each item, the scroll containers around it, innermost first.
+    scrollers: Vec<Vec<a11y_tree::Scroller>>,
 }
 
 thread_local! {
@@ -114,6 +123,12 @@ fn element_class() -> Class {
             sel("accessibilityTraits"),
             traits as *const c_void,
             c"Q@:".as_ptr(),
+        );
+        class_addMethod(
+            cls,
+            sel("accessibilityScroll:"),
+            scroll as *const c_void,
+            c"B@:q".as_ptr(),
         );
         objc_registerClassPair(cls);
         cls
@@ -180,6 +195,32 @@ extern "C" fn activate(this: Id, _cmd: Sel) -> bool {
         super::touch_input(TouchPhase::Started, &[(ACTIVATE_TOUCH, at)]);
         super::touch_input(TouchPhase::Ended, &[(ACTIVATE_TOUCH, at)]);
     });
+    true
+}
+
+/// `accessibilityScroll:` (VoiceOver's three-finger swipe): scroll the
+/// container around the element on the swipe's axis a page, after this call
+/// returns, and say which page it shows. `NO` when none can move that way,
+/// so UIKit tries the element's containers.
+extern "C" fn scroll(this: Id, _cmd: Sel, direction: i64) -> bool {
+    let found = STATE.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let i = s.elements.iter().position(|(e, _)| *e == this)?;
+        let (target, forward) = a11y_tree::scroll_target(s.scrollers.get(i)?, direction)?;
+        let events = target.scroll_page_events(forward)?;
+        Some((events, a11y_tree::page_status(target, forward)))
+    });
+    let Some((events, status)) = found else {
+        return false;
+    };
+    super::later(move || {
+        for event in events {
+            super::call_handler(event, &super::current_window());
+        }
+    });
+    unsafe {
+        UIAccessibilityPostNotification(UIAccessibilityPageScrolledNotification, nsstring(&status));
+    }
     true
 }
 
@@ -295,8 +336,11 @@ unsafe fn show(el: Id, item: &Item, frame: CgRect) {
 /// away while VoiceOver runs, so the one it's on reads true.
 pub(super) fn set_tree(root: &A11yNode) {
     let items = a11y_tree::flatten(root);
+    let scrollers = a11y_tree::scrollers(root);
     let change = STATE.with(|s| {
         let mut s = s.borrow_mut();
+        // Offsets change without changing what an element shows.
+        s.scrollers = scrollers;
         if s.items == items {
             return None;
         }

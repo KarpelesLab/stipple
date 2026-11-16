@@ -3790,6 +3790,52 @@ jobs:
           grep -q 'axprobe: AXPress "Row 0" -> AXError 0$' $L
           grep -q '^touchdemo: row 0 tapped' visual_output/touchdemo-macos.log
 
+      # Accessibility depth, from outside the app (axprobe --depth): the text
+      # field's AXValue and AXNumberOfCharacters, setting its AXValue (the
+      # app's field takes the text) and its AXSelectedTextRange, the
+      # "Remember" checkbox's AXValue before and after AXPress, a toast
+      # raised by "Row 2" (AXAnnouncementRequested), the list as an
+      # AXScrollArea whose AXScrollBar's AXValue scrolls it, and
+      # AXScrollToVisible bringing "Row 0" back into view. New and not yet
+      # seen on a runner, so it doesn't fail the job.
+      - name: Accessibility depth from outside the app (AX API, values and scrolling)
+        continue-on-error: true
+        run: |
+          ./target/release/examples/touchdemo > visual_output/touchdemo-depth.log 2>&1 &
+          PID=$!
+          sleep 5
+          status=0
+          perl -e 'alarm 120; exec @ARGV' ./axprobe "$PID" --depth > visual_output/axprobe-depth.log 2>&1 || status=$?
+          kill "$PID" 2>/dev/null || true
+          L=visual_output/axprobe-depth.log
+          A=visual_output/touchdemo-depth.log
+          cat $L
+          echo "=== touchdemo log ==="; cat $A
+          if [ "$status" = 3 ]; then
+            echo "::warning::macOS AX API refused to this process; the depth checks didn't run"
+            exit 0
+          fi
+          [ "$status" = 0 ]
+          fail=0
+          check() { grep -qE "$1" "$2" || { echo "::warning::missing: $1"; fail=1; }; }
+          check 'axprobe: depth field value=.* settable=true' $L
+          check 'axprobe: depth set field value -> AXError 0$' $L
+          check '^touchdemo: text "hi"' $A
+          check 'axprobe: depth field value after="hi" characters=2' $L
+          check 'axprobe: depth field selected after=0,1' $L
+          check 'axprobe: depth checkbox value=0 ' $L
+          check 'axprobe: depth checkbox value after=1' $L
+          check '^touchdemo: remember on' $A
+          check '^touchdemo: toast "Row 2 tapped"' $A
+          check 'axprobe: depth scroll areas=[1-9]' $L
+          check 'axprobe: depth scroll bar value=0 settable=true' $L
+          check '^touchdemo: scrolled to [1-9]' $A
+          check 'axprobe: depth actions of "Row 0": .*AXScrollToVisible' $L
+          check '^touchdemo: scrolled to 0$' $A
+          # Reported, not required: the notifications the observer heard.
+          grep 'axprobe: depth notification' $L || echo "no notifications heard"
+          exit $fail
+
       # A real screen reader: VoiceOver, driven through its AppleScript
       # interface (enabled by hand: its defaults, the
       # .VoiceOverAppleScriptEnabled file and TCC rows for Apple Events),

@@ -118,6 +118,91 @@ pub(crate) fn flatten(root: &A11yNode) -> Vec<Item> {
     out
 }
 
+/// A scroll container an item sits in (or is), as VoiceOver's
+/// three-finger swipe scrolls it: the container's node without its
+/// children (its bounds and [`scroll`](A11yNode::scroll)).
+pub(crate) type Scroller = A11yNode;
+
+/// For each item [`flatten`] gives, in the same order, the scroll containers
+/// around it, innermost first (the node itself first when it is one), that
+/// scroll at all.
+pub(crate) fn scrollers(root: &A11yNode) -> Vec<Vec<Scroller>> {
+    fn walk(node: &A11yNode, around: &mut Vec<Scroller>, out: &mut Vec<Vec<Scroller>>) {
+        for child in &node.children {
+            let own = child.scroll.filter(|s| s.scrolls()).map(|s| A11yNode {
+                scroll: Some(s),
+                ..A11yNode::new(child.role, "", child.bounds)
+            });
+            let pushed = own.is_some();
+            if let Some(own) = own {
+                around.push(own);
+            }
+            out.push(around.iter().rev().cloned().collect());
+            walk(child, around, out);
+            if pushed {
+                around.pop();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &mut Vec::new(), &mut out);
+    out
+}
+
+/// `UIAccessibilityScrollDirection`: which way VoiceOver's three fingers
+/// swiped.
+pub(crate) const SCROLL_RIGHT: i64 = 1;
+pub(crate) const SCROLL_LEFT: i64 = 2;
+pub(crate) const SCROLL_UP: i64 = 3;
+pub(crate) const SCROLL_DOWN: i64 = 4;
+pub(crate) const SCROLL_NEXT: i64 = 5;
+pub(crate) const SCROLL_PREVIOUS: i64 = 6;
+
+/// What a swipe in `direction` scrolls, from the containers around an item
+/// (innermost first): the first one on the swipe's axis that can move that
+/// way, and whether forward (towards its end). Fingers swiping up bring the
+/// next page up (forward), left the next page in from the right (forward,
+/// except in a right-to-left strip, whose next page is on the left).
+pub(crate) fn scroll_target(around: &[Scroller], direction: i64) -> Option<(&Scroller, bool)> {
+    around.iter().find_map(|n| {
+        let s = n.scroll?;
+        let forward = match (direction, s.horizontal) {
+            (SCROLL_UP, false) => true,
+            (SCROLL_DOWN, false) => false,
+            (SCROLL_LEFT, true) => !s.rtl,
+            (SCROLL_RIGHT, true) => s.rtl,
+            (SCROLL_NEXT, _) => true,
+            (SCROLL_PREVIOUS, _) => false,
+            _ => return None,
+        };
+        let room = if forward {
+            s.offset < s.max - 0.5
+        } else {
+            s.offset > 0.5
+        };
+        room.then_some((n, forward))
+    })
+}
+
+/// What VoiceOver says after a scroll (`UIAccessibilityPageScrolledNotification`):
+/// "Page N of M", the page the offset will be on after scrolling `forward`.
+pub(crate) fn page_status(n: &Scroller, forward: bool) -> String {
+    let Some(s) = n.scroll else {
+        return String::new();
+    };
+    let step = s.page();
+    let offset = (s.offset + if forward { step } else { -step }).clamp(0.0, s.max);
+    // Pages of a viewport each: the last one ends at the content's end.
+    let view = s.viewport.max(1.0);
+    let pages = ((s.max + view) / view).ceil().max(1.0) as usize;
+    let at = if offset >= s.max - 0.5 {
+        pages
+    } else {
+        ((offset / view).round() as usize + 1).min(pages)
+    };
+    format!("Page {at} of {pages}")
+}
+
 /// What VoiceOver must hear of an update.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Change {
@@ -228,6 +313,47 @@ mod tests {
         );
         assert_eq!(items[0].frame, (1.0, 2.0, 30.0, 10.0));
         assert!(items.iter().all(|i| i.hint.is_empty()));
+    }
+
+    #[test]
+    fn three_finger_swipes_scroll_the_container_on_their_axis() {
+        use crate::platform::access::A11yScroll;
+        let scroll = |offset, horizontal, rtl| {
+            Some(A11yScroll {
+                offset,
+                max: 300.0,
+                viewport: 100.0,
+                horizontal,
+                rtl,
+            })
+        };
+        let strip = A11yNode {
+            scroll: scroll(0.0, true, false),
+            children: vec![node(A11yRole::Button, "Chip 0")],
+            ..node(A11yRole::Group, "")
+        };
+        let list = A11yNode {
+            scroll: scroll(120.0, false, false),
+            children: vec![node(A11yRole::Button, "Row 0"), strip],
+            ..node(A11yRole::Group, "")
+        };
+        let tree = window(vec![node(A11yRole::Text, "Title"), list]);
+        let around = scrollers(&tree);
+        assert_eq!(around.len(), flatten(&tree).len());
+        assert!(around[0].is_empty(), "the title is in no container");
+        // The list itself, its row, the strip, the chip.
+        let lens: Vec<_> = around.iter().map(Vec::len).collect();
+        assert_eq!(lens, [0, 1, 1, 2, 2]);
+        let chip = &around[4];
+        // Up and down pass the sideways strip by, to the list.
+        let (n, forward) = scroll_target(chip, SCROLL_UP).unwrap();
+        assert!(!n.scroll.unwrap().horizontal && forward);
+        let (n, forward) = scroll_target(chip, SCROLL_LEFT).unwrap();
+        assert!(n.scroll.unwrap().horizontal && forward);
+        // The strip is at its start: nothing scrolls it back.
+        assert!(scroll_target(chip, SCROLL_RIGHT).is_none());
+        assert_eq!(page_status(&around[1][0], true), "Page 3 of 4");
+        assert_eq!(page_status(&around[1][0], false), "Page 1 of 4");
     }
 
     #[test]

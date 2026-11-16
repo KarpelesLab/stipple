@@ -9,14 +9,15 @@
 //! queued for the window and delivered by the event loop once AppKit returns
 //! (as iOS's `accessibilityActivate` taps its node). AppKit lists `AXPress`
 //! among an element's actions when it implements the method, so the other
-//! elements, which have nothing to press, don't get the class.
+//! elements, which have nothing to press, don't get the class (they are
+//! `StippleAXElement`s; both have the methods of
+//! [`ax_value`](super::ax_value)).
 
 use std::ffi::c_void;
 
 use super::{
-    CTX, CgPoint, CgRect, Class, Id, Sel, class, class_addMethod, msg_id, msg_rect,
-    objc_allocateClassPair, objc_getClass, objc_msgSend, objc_registerClassPair, post_wake_event,
-    sel, window_for_view,
+    CTX, CgPoint, Class, Id, Sel, class, class_addMethod, msg_id, msg_rect, objc_allocateClassPair,
+    objc_getClass, objc_msgSend, objc_registerClassPair, post_wake_event, sel, window_for_view,
 };
 use crate::geometry::Point;
 use crate::platform::access::A11yRole;
@@ -43,6 +44,9 @@ pub(super) fn press_class() -> Class {
         if cls.is_null() {
             return class("NSAccessibilityElement");
         }
+        // The value, selection and scroll-to-visible methods every
+        // element has (see `ax_value`).
+        super::ax_value::add_common(cls);
         class_addMethod(
             cls,
             sel("accessibilityPerformPress"),
@@ -51,30 +55,6 @@ pub(super) fn press_class() -> Class {
         );
         objc_registerClassPair(cls);
         cls
-    }
-}
-
-/// A new (autoreleased) `StippleAXPressElement` with `role`, `frame` (screen
-/// coordinates), `label` and `parent`, as
-/// `+accessibilityElementWithRole:frame:label:parent:` makes one.
-///
-/// # Safety
-/// `role` and `label` are `NSString`s, `parent` an accessibility element.
-pub(super) unsafe fn new_element(role: Id, frame: CgRect, label: Id, parent: Id) -> Id {
-    unsafe {
-        let el = msg_id(msg_id(press_class(), sel("alloc")), sel("init"));
-        if el.is_null() {
-            return el;
-        }
-        let set_id: unsafe extern "C" fn(Id, Sel, Id) =
-            std::mem::transmute(objc_msgSend as *const c_void);
-        let set_rect: unsafe extern "C" fn(Id, Sel, CgRect) =
-            std::mem::transmute(objc_msgSend as *const c_void);
-        set_id(el, sel("setAccessibilityRole:"), role);
-        set_rect(el, sel("setAccessibilityFrame:"), frame);
-        set_id(el, sel("setAccessibilityLabel:"), label);
-        set_id(el, sel("setAccessibilityParent:"), parent);
-        msg_id(el, sel("autorelease"))
     }
 }
 
