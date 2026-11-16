@@ -4785,6 +4785,7 @@ jobs:
           status=0
           xcodebuild test -project .github/a11y/ios/StippleAX.xcodeproj -scheme StippleAXTests \
             -destination "platform=iOS Simulator,id=$DEV" \
+            -only-testing:StippleAXTests/StippleAccessibilityTests \
             -derivedDataPath "$RUNNER_TEMP/stipple-ax" > visual_output/xcuitest.log 2>&1 || status=$?
           xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-xcuitest.png || true
           echo "=== what the test saw ==="
@@ -4799,6 +4800,78 @@ jobs:
           grep -q 'stipple-ax: tapped "Row 0": the label now reads "Rows tapped: ' $L
           grep -qi 'stipple-ax: text field value ".*h.*i.*"' $L
           grep -q 'stipple-ax: passed' $L
+
+      # Real touches (the same XCUITest bundle, StippleRealTouchTests): the
+      # runner's taps, swipes, long presses and XCUICoordinate drags reach
+      # touchdemo as HID events, so as UITouches through UIKit's hit testing
+      # and the app's view, not the synthetic path its self-test calls. It
+      # launches touchdemo with TOUCHDEMO_SERVICES (timers, clipboard and URL
+      # buttons, and labels saying what they did) and reads the labels back
+      # through accessibility: a repeating timer counts up on its own, a
+      # one-shot timer fires and a thread's AppHandle::update arrives after
+      # a tap; a swipe scrolls the list without tapping a row and a slow
+      # drag scrolls it back; a tap at a row's coordinate taps it; a long
+      # press opens its context menu and a tap picks the item; the system
+      # edit menu's Paste (or the app's own button) puts what simctl pbcopy
+      # left into the app; "Set clip" writes the pasteboard, which simctl
+      # pbpaste reads back here; "Open URL" brings Safari to the foreground
+      # and the app comes back. Not blocking until it has passed here.
+      - name: Real touches, timers, clipboard and opening a URL (XCUITest, not blocking)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: |
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          xcrun simctl terminate "$DEV" com.apple.mobilesafari || true
+          # simctl's pasteboard commands can hang: give each 30 s.
+          limit() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+          if printf 'Pasted from simctl' | limit 30 xcrun simctl pbcopy "$DEV"; then
+            pbcopied=1
+          else
+            # The test then copies it itself, as another app (its runner).
+            pbcopied=0
+            echo "::warning::xcrun simctl pbcopy failed or timed out"
+          fi
+          echo "pasteboard before: $(limit 30 xcrun simctl pbpaste "$DEV" || echo '(pbpaste failed)')"
+          [ -d .github/a11y/ios/StippleAX.xcodeproj ] || (cd .github/a11y/ios && xcodegen generate)
+          status=0
+          TEST_RUNNER_STIPPLE_PBCOPIED=$pbcopied \
+            xcodebuild test -project .github/a11y/ios/StippleAX.xcodeproj -scheme StippleAXTests \
+            -destination "platform=iOS Simulator,id=$DEV" \
+            -only-testing:StippleAXTests/StippleRealTouchTests \
+            -derivedDataPath "$RUNNER_TEMP/stipple-ax" > visual_output/xcuitest-touch.log 2>&1 || status=$?
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-real-touch.png || true
+          # (pbpaste timed out here once, in the first run that got this far:
+          # up to three tries.)
+          pasted='(pbpaste failed)'
+          for _ in 1 2 3; do
+            if out=$(limit 30 xcrun simctl pbpaste "$DEV"); then pasted=$out; break; fi
+            sleep 5
+          done
+          echo "=== what the test saw ==="
+          grep "stipple-touch:" visual_output/xcuitest-touch.log || true
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          echo "=== touchdemo.log (services) ==="; grep "touchdemo: services" "$DATA/tmp/touchdemo.log" || true
+          echo "=== result ==="
+          grep -E "error:|Test Suite .*(passed|failed)|TEST (SUCCEEDED|FAILED)" visual_output/xcuitest-touch.log | tail -20 || true
+          echo "pasteboard after: $pasted"
+          L=visual_output/xcuitest-touch.log
+          failed=""
+          for part in "timers" "list swipe and drag" "row tap" "long press" "paste from simctl" "copy for simctl" "open URL"; do
+            grep -qF "stipple-touch: $part passed" $L || failed="$failed [$part]"
+          done
+          # The app's "Set clip" reached the simulator's pasteboard, when
+          # simctl can read it (the test saw the change count move either way).
+          if [ "$pasted" = '(pbpaste failed)' ]; then
+            echo "::warning::xcrun simctl pbpaste failed or timed out: the copy out of the app is unchecked"
+          elif [ "$pasted" != "Copied by touchdemo" ]; then
+            failed="$failed [pbpaste: \"$pasted\"]"
+          fi
+          if [ -n "$failed" ] || [ "$status" != 0 ]; then
+            tail -60 $L
+            echo "::warning::real-touch checks failed:$failed (xcodebuild status $status)"
+            exit 1
+          fi
 
       # The user closing the app (swiping it away in the app switcher) must
       # not bring its state back, as on iOS (and Android) generally: UIKit
@@ -5310,6 +5383,11 @@ jobs:
         if: matrix.api-level == 34
         run: bash .github/a11y/android/build-probe.sh a11yprobe.apk
 
+      # Another app's side of the clipboard (a receiver that copies, an
+      # activity that reads), for examples/androiddemo/test-services.sh.
+      - name: Build the clipboard probe APK
+        run: bash .github/clip/android/build-clip.sh clipprobe.apk
+
       # The backend writes its Java classes (the host view, its
       # InputConnection, the accessibility node provider) as a dex file at run
       # time: the SDK's dexdump must read the same bytes back.
@@ -5340,7 +5418,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run on the emulator (touch, pinch, keys, IME, accessibility, back, edge swipe, lifecycle, saved state, notifications, document picker)
+      - name: Run on the emulator (touch, pinch, keys, IME, accessibility, back, edge swipe, lifecycle, saved state, notifications, document picker, clipboard, URLs)
         uses: reactivecircus/android-emulator-runner@v2
         env:
           STIPPLE_ANDROID_QUICK: ${{ matrix.quick }}
@@ -5372,6 +5450,8 @@ jobs:
             bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
             # Drops through the system's drag and drop (a text, and a file as a MediaStore content: URI) and a uinput keyboard's dead keys: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-input.sh visual_output || echo "::warning::test-input.sh failed (drag and drop, dead keys; non-blocking)"
+            # Timers changing visible text, the clipboard both ways with another app, and a URL opened in the browser, by adb input touches: not blocking until it has passed on CI's emulators.
+            bash examples/androiddemo/test-services.sh clipprobe.apk visual_output || echo "::warning::test-services.sh failed (timers, clipboard, opening a URL; non-blocking)"
             # Not blocking until it has passed on CI's x86_64 emulators.
             bash .github/billing/android/test-billing.sh stipple.apk visual_output || echo "::warning::test-billing.sh failed (non-blocking)"
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi

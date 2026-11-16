@@ -143,7 +143,8 @@ pub unsafe extern "C" fn ANativeActivity_onCreate(
 - **System look.** `Theme::native()` follows night mode and, on Android 12 and
   later, the wallpaper's accent color (`system_accent1_*`), and switches live
   when night mode changes. Its surfaces are Material 3's baseline colors.
-- **Clipboard.** `ClipboardManager` over JNI, so copy and paste reach other apps.
+- **Clipboard.** `ClipboardManager` over JNI, so copy and paste reach other
+  apps (checked both ways with another app by `test-services.sh`, below).
 - **Fullscreen.** `WindowAttributes::fullscreen` and `AppHandle::window`
   hide the status bar.
 
@@ -618,6 +619,22 @@ Alt+U, U into the field, which must end in `éü`. The drops passed on local API
 API 30 emulators and the dead keys on API 34 (after `test-on-device.sh`;
 Android 11 has no `uinput`, so they are skipped there); CI runs it without
 blocking.
+
+`examples/androiddemo/test-services.sh clipprobe.apk` then drives the
+system's services with `adb shell input` touches: the one-second
+`AppHandle::every` timer must change the "Running for N s" label between
+two `uiautomator` dumps; swipes bring the strip's last chips into view, and
+a tap on *Set clip* writes the clipboard, which another app reads back (the
+clipboard probe, `.github/clip/android`, built by its `build-clip.sh`: an
+activity brought to the front, as Android 10 and later only let the focused
+app read); the probe's receiver copies a text (`am broadcast`, as another
+app copying) and a tap on *Get clip* reads it in the app; a tap on *Open
+link* (`AppHandle::open_url`) brings another app to the front, and `dumpsys
+activity` must show its `ACTION_VIEW` intent with the URL (Chrome's first-run
+screen on the `google_apis` image). It passed on a local API 34 emulator and
+in CI on the API 34 and API 30 emulators (one run); CI runs it after
+`test-input.sh` on each emulator, without blocking until it has passed
+there for longer.
 
 CI runs it on x86_64 emulators (the `visual-android` job): everything on
 API 34, and the quick checks on API 33 (`OnBackInvokedCallback` without

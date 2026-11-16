@@ -43,7 +43,10 @@
 //!   touches it with two fingers on a virtual touch screen it makes with the
 //!   shell's `uinput` command, since `adb shell input` has one finger;
 //! - `androiddemo: strip scrolled to N` as a sideways swipe scrolls the strip
-//!   of chips above the list;
+//!   of chips above the list; its last three chips are *Set clip*, *Get
+//!   clip* and *Open link*: `androiddemo: clipboard set true`,
+//!   `androiddemo: clipboard got Some("...")` and `androiddemo: opened URL
+//!   Ok(())` (test-services.sh);
 //! - `androiddemo: notify Ok(())` (or the error) when *Notify* posts a
 //!   notification, which asks for `POST_NOTIFICATIONS` first on Android 13;
 //! - `androiddemo: opened "name" (N bytes): "text"` / `open cancelled` once
@@ -265,10 +268,13 @@ mod app {
             .height(196.0)
             .scrollable(id)
             .align(Align::Start, Align::Center);
-        // A strip of chips a sideways swipe scrolls.
-        let chips = (0..12)
+        // A strip of chips a sideways swipe scrolls. The last three, out of
+        // view until the strip is scrolled, are the system's services: the
+        // clipboard and opening a URL (test-services.sh).
+        let mut chips: Vec<Element> = (0..9)
             .map(|i| button(cx, format!("Chip {i}")).width(90.0))
             .collect();
+        chips.extend(service_chips(cx));
         let strip_id = cx.register_scroll();
         let strip_offset = cx.scroll_offset(strip_id);
         if STRIP_OFFSET.swap(strip_offset.to_bits(), Ordering::Relaxed) != strip_offset.to_bits() {
@@ -322,6 +328,32 @@ mod app {
                 pad + safe.left,
             ))
             .grow(1.0)
+    }
+
+    /// What *Set clip* puts on the clipboard.
+    const COPIED: &str = "Copied by androiddemo";
+    /// What *Open link* opens.
+    const URL: &str = "https://example.com/stipple-androiddemo";
+
+    /// The chips at the strip's end: *Set clip* and *Get clip* write and
+    /// read the system clipboard (`platform::clipboard`, the
+    /// `ClipboardManager`), *Open link* opens a URL (an `ACTION_VIEW`
+    /// intent).
+    fn service_chips(cx: &mut Cx<State>) -> Vec<Element> {
+        let set = button(cx, "Set clip").width(90.0).on_tap(cx, |_| {
+            let ok = stipple::platform::clipboard::set_text(COPIED);
+            println!("androiddemo: clipboard set {ok}");
+        });
+        let get = button(cx, "Get clip").width(90.0).on_tap(cx, |_| {
+            let text = stipple::platform::clipboard::text();
+            println!("androiddemo: clipboard got {text:?}");
+        });
+        let handle = cx.handle();
+        let open = button(cx, "Open link").width(90.0).on_tap(cx, move |_| {
+            let opened = handle.open_url(URL);
+            println!("androiddemo: opened {URL} {opened:?}");
+        });
+        vec![set, get, open]
     }
 
     /// Buttons for the system's services: a notification, and the document

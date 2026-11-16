@@ -2189,10 +2189,32 @@ Most input only works on X11 today.
   list through their action's code (not blocking yet). Not tried with a real
   trackpad or mouse; no momentum after the fingers lift, and no secondary
   click. See [docs/platforms/ios.md](docs/platforms/ios.md#trackpad-and-mouse).
-- ⬜ Mobile CI depth: run the iOS features that are only implemented (timers,
+- 🚧 Mobile CI depth: run the iOS features that are only implemented (timers,
   clipboard, opening URLs) on the simulator, with real `UITouch`es rather than
   the synthetic touch path, and try both platforms on physical devices before
-  calling them supported.
+  calling them supported. **Simulator and emulator part done, not blocking
+  yet:** an XCUITest (`StippleRealTouchTests`, in the `visual-ios` job)
+  drives `touchdemo` with real touches (HID events the simulator turns into
+  `UITouch`es: taps, a swipe, an `XCUICoordinate` drag, a long press),
+  launched with `TOUCHDEMO_SERVICES` (timer, clipboard and URL buttons, and
+  labels it reads back through accessibility): an `AppHandle::every` timer
+  counting up, an `after` timer and a thread's `AppHandle::update` after a
+  tap, the list scrolled by a swipe (no row tapped) and back by a drag, a
+  row tapped at its coordinate, a long press's context menu and its item,
+  the system edit menu's Paste putting what `xcrun simctl pbcopy` copied into
+  the field, *Set clip* writing the pasteboard (read back with `simctl
+  pbpaste`), and *Open URL* bringing Safari to the foreground and the app
+  back. All of it passed in one CI run, except the `pbpaste` read-back,
+  which timed out there (now retried, and only a warning when simctl can't
+  read). On Android, `examples/androiddemo/test-services.sh` (with a small
+  clipboard probe app, `.github/clip/android`) checks with `adb shell input`
+  touches that the timer changes visible text, the clipboard both ways with
+  another app, and a URL opening in Chrome (`dumpsys activity` shows the
+  `ACTION_VIEW` intent); it passed in CI on the API 34 and API 30 emulators
+  and on a local API 34 one. **Missing:** physical devices (neither platform
+  has been tried on one), and a few passing runs before these steps block.
+  See [docs/platforms/ios.md](docs/platforms/ios.md#real-touches-from-xcuitest)
+  and [docs/platforms/android.md](docs/platforms/android.md#running-on-an-emulator).
 - ✅ Accessibility on the web (ARIA): `web/stipple.js` mirrors the
   accessibility tree in an invisible overlay of ARIA elements over the canvas
   (roles, names, `aria-selected` / `aria-expanded` / `aria-checked`), updated

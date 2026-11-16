@@ -34,7 +34,7 @@ How to build, package and run on each platform, and what works there today.
 | Editing text with a finger: tap for the caret, word selection, selection handles, the edit menu | — | — | — | ✅ ⁷⁷ | ✅ ⁷⁷ | ✅ ⁷⁷ |
 | Modifiers and shortcuts (Ctrl/Cmd, Shift-select) | ✅ ⁶ | ✅ ⁶ | ✅ ⁶ | hardware keyboard ¹⁰ | ✅ ¹⁰ | ✅ ¹² |
 | Keyboard focus on buttons and toggles (Tab, Shift+Tab, Enter / Space) | ✅ ⁷⁰ | ✅ ⁷⁰ | ✅ ⁷⁰ | hardware keyboard ⁷⁰ | ✅ ⁷⁰ | ✅ ⁷⁰ |
-| Timers and background updates | ✅ | ✅ | ✅ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
+| Timers and background updates | ✅ | ✅ | ✅ | ✅ ⁸¹ | ✅ ¹⁹ | ✅ ¹² |
 | Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ✅ ¹⁹ | ✅ ¹² |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
@@ -44,7 +44,7 @@ How to build, package and run on each platform, and what works there today.
 | Enter, exit and layout animations | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ | ✅ ⁴⁶ |
 | Reduced motion (OS setting) | ✅ ³² | ✅ ³² | ✅ ³² | ✅ ³ | ✅ ³² | ✅ ³¹ |
 | Built-in widgets animate by default (per-theme motion) | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ | ✅ ⁵⁴ |
-| System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ³ | ✅ ²⁰ | ✅ ¹³ |
+| System clipboard | ✅ ⁸ | ✅ ⁴ | ✅ ⁴ | ✅ ⁸¹ | ✅ ⁸² | ✅ ¹³ |
 | File dialogs | ✅ | ✅ ⁵ | ✅ ⁵ | ✅ ⁶² | ✅ ⁶² | ✅ ¹⁴ |
 | Accessibility | AT-SPI ⁶⁶ | UI Automation ⁶⁷ | NSAccessibility ⁶⁸ | UIAccessibility ⁴⁹ | node provider ⁵⁶ | ARIA ²² |
 | Window size limits, maximize, fullscreen | ✅ ⁹ | ✅ ¹⁰ | ✅ ¹⁰ | — | fullscreen ¹⁰ | ❌ |
@@ -68,7 +68,7 @@ How to build, package and run on each platform, and what works there today.
 | Key repeat | ✅ ⁴² | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | drawn ⁶¹ | drawn ⁶¹ | drawn ⁶¹ |
 | Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | drawn, long press ⁶⁰ | drawn, long press ⁶⁰ | drawn ⁶⁰ |
-| Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ³ | ✅ ¹⁰ | ✅ ¹⁰ |
+| Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁸¹ | ✅ ⁸² | ✅ ¹⁰ |
 | Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ✅ ⁶³ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ✅ ⁷⁹ | ✅ ⁷⁹ | ❌ |
@@ -154,8 +154,7 @@ its rows (a tap there still taps one), and Tab plus `adb shell input text`
 type into the field.
 The soft keyboard shows for a focused text input and types through key events.
 ²⁰ Implemented and tried by hand on an emulator (night mode switched with
-`adb shell cmd uimode night yes`, the clipboard read and written over JNI), but
-not checked in CI. The accent color needs Android 12.
+`adb shell cmd uimode night yes`), but not checked in CI. The accent color needs Android 12.
 ²¹ `prefers-color-scheme`, and its `change` event; the accent is the CSS
 `AccentColor`, where the browser has one (Chrome reports its own default blue,
 not the OS's). CI runs `webdemo`'s selftest with a dark and a light scheme and
@@ -630,6 +629,20 @@ The conversion is unit-tested; `touchdemo`'s simulator self-test reads the
 recognizers' settings back and feeds scroll steps through the same code as
 their action (not blocking yet); a real trackpad isn't used in CI. See
 [platforms/ios.md](platforms/ios.md#trackpad-and-mouse).
+⁸¹ CI drives `touchdemo` on the iPhone simulator from an XCUITest runner
+with real touches (not blocking yet; passed in one run): a repeating timer
+changes a label, a one-shot timer and a thread's `AppHandle::update` arrive
+after a tap, the system edit menu's Paste brings in what `xcrun simctl
+pbcopy` copied, the app writes the pasteboard (`simctl pbpaste` reads it
+back; that read timed out in the run), and `open_url` brings Safari to the
+foreground. Not tried on a physical device. See
+[platforms/ios.md](platforms/ios.md#real-touches-from-xcuitest).
+⁸² `examples/androiddemo/test-services.sh` (not blocking yet; passed in CI on
+the API 34 and API 30 emulators): the clipboard both ways with another app (a
+probe app that copies from a broadcast and reads once in front), and
+`open_url` bringing Chrome up with the `ACTION_VIEW` intent in `dumpsys
+activity`. Not tried on a physical device. See
+[platforms/android.md](platforms/android.md#running-on-an-emulator).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

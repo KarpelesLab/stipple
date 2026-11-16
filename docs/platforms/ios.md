@@ -423,13 +423,17 @@ applies.
   as UIKit does once the user picks one): the open callback gets the bytes and
   the export says it succeeded. The picker's own copy (`asCopy`) and its
   export of the file aren't exercised.
-- The clipboard (`UIPasteboard`) is wired up but untested; Cmd+C/V from a
-  hardware keyboard reach it.
+- The clipboard (`UIPasteboard`) is checked both ways in CI on the simulator
+  (see [Real touches from XCUITest](#real-touches-from-xcuitest)); Cmd+C/V
+  from a hardware keyboard reach it, untested.
+- Nothing has been tried on a physical iPhone or iPad yet: everything above
+  is the simulator's.
 
 ## Testing on the simulator
 
-A simulator can't script touches or typing, so `examples/touchdemo` drives
-itself when launched with `TOUCHDEMO_SELFTEST` set:
+`simctl` can't script touches or typing, so `examples/touchdemo` drives
+itself when launched with `TOUCHDEMO_SELFTEST` set (an XCUITest runner can,
+from outside: see [below](#real-touches-from-xcuitest)):
 
 ```sh
 SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1 xcrun simctl launch booted com.example.your-app
@@ -484,3 +488,48 @@ on an iPad simulator, from a copy of the bundle with
 `UIApplicationSupportsMultipleScenes` set to `<true/>` (the iPhone simulator
 refuses: "The current device does not support multiple scenes"), after
 checking the kill restores there too (`TOUCHDEMO_TYPE`).
+
+### Real touches from XCUITest
+
+The self-test's touches go through the backend's touch path directly. CI also
+drives `touchdemo` from an XCUITest runner, a separate process whose taps,
+swipes, long presses and `XCUICoordinate` drags the simulator delivers as HID
+events, so the app gets real `UITouch`es through UIKit's hit testing and its
+view (`.github/a11y/ios/UITests/StippleRealTouchTests.swift`, in the same
+XcodeGen project as the accessibility test). It launches `touchdemo` with
+`TOUCHDEMO_SERVICES` in the launch environment, which adds buttons for timers,
+the clipboard and opening a URL, and labels saying what they did, read back
+through the app's accessibility tree:
+
+- **Timers**: the "Ticks: N" label an `AppHandle::every` timer counts up
+  changes on its own; a tap on *Timer* arms an `AppHandle::after` timer
+  ("Timer: fired") and starts a thread whose `AppHandle::update` wakes the
+  loop ("Worker: done").
+- **The list**: a swipe scrolls it without tapping a row, a slow drag scrolls
+  it back, a tap at a row's coordinate taps it, and a long press opens its
+  context menu, whose item a tap picks.
+- **Clipboard in**: CI copies "Pasted from simctl" with `xcrun simctl
+  pbcopy` first; the test taps the text field's caret twice, which brings up
+  the system's edit menu (`UIEditMenuInteraction`), and its *Paste* puts the
+  text in the field. (The app's *Get clip* button is the fallback, with the
+  paste prompt answered.)
+- **Clipboard out**: *Set clip* writes the pasteboard; after the test, CI
+  reads it with `xcrun simctl pbpaste`.
+- **Opening a URL**: *Open URL* (`AppHandle::open_url`) brings Safari to the
+  foreground (`XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")`),
+  and the app comes back on `activate()` with `open_url`'s `Ok`.
+
+All of these passed in the one CI run that reached them (an iPhone simulator
+on `macos-latest`), with the edit menu's *Paste* taking the text and Safari
+coming up. The `pbpaste` after the test timed out in that run (the test saw
+the pasteboard's change count move and `hasStrings` true), so the step now
+retries it and only warns when simctl can't read. The step doesn't block the
+job yet. By hand, with `touchdemo` installed as `com.karpeleslab.stipple`:
+
+```sh
+brew install xcodegen
+(cd .github/a11y/ios && xcodegen generate)
+xcodebuild test -project .github/a11y/ios/StippleAX.xcodeproj -scheme StippleAXTests \
+  -destination "platform=iOS Simulator,name=iPhone 16" \
+  -only-testing:StippleAXTests/StippleRealTouchTests
+```

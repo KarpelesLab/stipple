@@ -46,6 +46,20 @@
 //! background`), for the state saved in the background and restored after a
 //! system kill.
 //!
+//! **Services (real touches).** Launched with `TOUCHDEMO_SERVICES` set (CI's
+//! XCUITest sets it in the launch environment), it shows a few more
+//! controls above the list, for a test that drives the app from outside with
+//! real touches (`.github/a11y/ios/UITests/StippleRealTouchTests.swift`)
+//! and reads what they did back from its accessibility tree: a "Ticks: N"
+//! label an `AppHandle::every` timer counts up, a "Timer" button that arms
+//! an `AppHandle::after` timer ("Timer: fired") and a thread that wakes the
+//! loop through `AppHandle::update` ("Worker: done"), "Set clip" and "Get
+//! clip" buttons that write and read the system clipboard
+//! (`platform::clipboard`), an "Open URL" button (`AppHandle::open_url`),
+//! and labels with the list's offset and the rows pinned through their
+//! context menu. The list is shorter to make room. It logs
+//! `touchdemo: services ...` lines.
+//!
 //! **Self-test (iOS).** Launched with `TOUCHDEMO_SELFTEST` set (`xcrun simctl
 //! launch` passes it on as `SIMCTL_CHILD_TOUCHDEMO_SELFTEST=1`), the app drives
 //! itself, since a simulator can't script touches or typing:
@@ -101,6 +115,12 @@ const ROWS: usize = 30;
 const PAD: f64 = 16.0;
 const FIELD_H: f64 = 44.0;
 const LIST_H: f64 = 400.0;
+/// The list's height with the services' controls shown above it.
+const LIST_H_SERVICES: f64 = 220.0;
+/// What "Set clip" puts on the clipboard.
+const COPIED: &str = "Copied by touchdemo";
+/// What "Open URL" opens.
+const URL: &str = "https://example.com/stipple-touchdemo";
 const STRIP_H: f64 = 44.0;
 const PINCH_H: f64 = 100.0;
 /// Whether it runs on a desktop (where the screen readers' checks use the
@@ -143,6 +163,88 @@ struct State {
     toasts: Toasts,
     /// What was dropped on the pinch box, from another app.
     dropped: Vec<stipple::platform::DropData>,
+    /// The services' controls and what they did (`TOUCHDEMO_SERVICES`).
+    services: Option<Services>,
+}
+
+/// What the services' controls show.
+#[derive(Default)]
+struct Services {
+    ticks: u32,
+    timer: &'static str,
+    worker: &'static str,
+    clipboard: String,
+    opened: String,
+}
+
+/// The services' controls: buttons for timers, the clipboard and opening a
+/// URL, and labels saying what they did.
+fn services_view(sv: &Services, state: &State, offset: f64, cx: &mut Cx<State>) -> Element {
+    let set = button(cx, "Set clip").on_tap(cx, |s: &mut State| {
+        let ok = stipple::platform::clipboard::set_text(COPIED);
+        log(&format!("touchdemo: services clipboard set {ok}"));
+        if let Some(sv) = s.services.as_mut() {
+            sv.clipboard = format!("Clipboard: set {ok}");
+        }
+    });
+    let get = button(cx, "Get clip").on_tap(cx, |s: &mut State| {
+        let text = stipple::platform::clipboard::text();
+        log(&format!("touchdemo: services clipboard got {text:?}"));
+        if let Some(sv) = s.services.as_mut() {
+            sv.clipboard = format!("Clipboard: got {text:?}");
+        }
+    });
+    let handle = cx.handle();
+    let timer = button(cx, "Timer").on_tap(cx, move |s: &mut State| {
+        log("touchdemo: services timer armed");
+        if let Some(sv) = s.services.as_mut() {
+            sv.timer = "waiting";
+            sv.worker = "working";
+        }
+        handle.after(Duration::from_millis(1500), |s: &mut State| {
+            log("touchdemo: services timer fired");
+            if let Some(sv) = s.services.as_mut() {
+                sv.timer = "fired";
+            }
+        });
+        // Work off the UI thread, which wakes the loop when it's done.
+        let handle = handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            handle.update(|s: &mut State| {
+                log("touchdemo: services worker done");
+                if let Some(sv) = s.services.as_mut() {
+                    sv.worker = "done";
+                }
+            });
+        });
+    });
+    let handle = cx.handle();
+    let open = button(cx, "Open URL").on_tap(cx, move |s: &mut State| {
+        let opened = handle.open_url(URL);
+        log(&format!("touchdemo: services opened {URL} {opened:?}"));
+        if let Some(sv) = s.services.as_mut() {
+            sv.opened = format!("Open: {opened:?}");
+        }
+    });
+    column(vec![
+        row(vec![set, get]).gap(8.0),
+        row(vec![timer, open]).gap(8.0),
+        row(vec![
+            label(cx, format!("Ticks: {}", sv.ticks)),
+            label(cx, format!("Timer: {}", sv.timer)),
+            label(cx, format!("Worker: {}", sv.worker)),
+        ])
+        .gap(12.0),
+        row(vec![
+            label(cx, format!("List offset: {offset:.0}")),
+            label(cx, format!("Pinned: {}", state.pinned.len())),
+            label(cx, sv.opened.clone()),
+        ])
+        .gap(12.0),
+        label(cx, sv.clipboard.clone()),
+    ])
+    .gap(8.0)
 }
 
 /// The list's scroll offset in the frame last built (`f64` bits).
@@ -277,9 +379,18 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     if OFFSET.swap(offset.to_bits(), Ordering::Relaxed) != offset.to_bits() {
         log(&format!("touchdemo: scrolled to {offset:.0}"));
     }
+    let list_h = if state.services.is_some() {
+        LIST_H_SERVICES
+    } else {
+        LIST_H
+    };
     let list = Element::stack(Axis::Vertical, vec![column(rows).gap(4.0)])
-        .height(LIST_H)
+        .height(list_h)
         .scrollable(id);
+    let services = state
+        .services
+        .as_ref()
+        .map(|sv| services_view(sv, state, offset, cx));
     // A sideways strip of chips, scrolled by a sideways drag.
     let chips = (0..12)
         .map(|i| button(cx, format!("Chip {i}")).width(90.0))
@@ -335,21 +446,31 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     // Everything but the strip keeps off the screen's edges; the strip runs
     // edge to edge, where the back swipe starts.
     let inset = |e: Element| column(vec![e]).padding(Insets::symmetric(PAD, 0.0));
-    column(vec![
-        inset(field),
+    let mut parts = vec![inset(field)];
+    parts.extend(services.map(inset));
+    parts.extend([
         inset(label(cx, format!("Rows tapped: {}", state.tapped.len()))),
         inset(list),
         strip,
         inset(pinch),
-    ])
-    .gap(12.0)
-    .padding(Insets::symmetric(0.0, PAD))
-    .grow(1.0)
+    ]);
+    column(parts)
+        .gap(12.0)
+        .padding(Insets::symmetric(0.0, PAD))
+        .grow(1.0)
 }
 
 fn main() {
+    let services = std::env::var_os("TOUCHDEMO_SERVICES").is_some();
     let state = State {
         zoom: 1.0,
+        services: services.then(|| Services {
+            timer: "idle",
+            worker: "idle",
+            clipboard: "Clipboard: untouched".into(),
+            opened: "Open: not yet".into(),
+            ..Services::default()
+        }),
         ..State::default()
     };
     let app = App::new(state, view)
@@ -401,6 +522,15 @@ fn main() {
             log(&format!("touchdemo: restored text {text:?}"));
             s.field = TextInput::from_text(text);
         });
+    if services {
+        log("touchdemo: services shown");
+        // The visible text a timer changes: one tick a second.
+        app.handle().every(Duration::from_secs(1), |s: &mut State| {
+            if let Some(sv) = s.services.as_mut() {
+                sv.ticks += 1;
+            }
+        });
+    }
     #[cfg(target_os = "ios")]
     {
         use stipple::platform::backend::ios::simulate;
