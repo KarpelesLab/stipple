@@ -89,13 +89,9 @@ fn key(state: ButtonState, physical: PhysicalKey) -> Event {
 }
 
 /// The frame clock delivers the frame asked for. Nothing else delivers
-/// frames in tests. (Each delivery is a second later than the last, past
-/// the clock's pacing.)
+/// frames in tests.
 fn deliver() -> bool {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static LATER: AtomicU64 = AtomicU64::new(10);
-    let later = Duration::from_secs(LATER.fetch_add(1, Ordering::Relaxed));
-    crate::platform::frame::take_due(crate::platform::time::Instant::now() + later)
+    crate::platform::frame::deliver_in_test()
 }
 
 #[test]

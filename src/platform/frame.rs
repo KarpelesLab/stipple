@@ -339,6 +339,20 @@ pub(crate) fn set_suspended(suspended: bool) {
 #[cfg(test)]
 pub(crate) static SUSPEND_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// For tests (holding [`SUSPEND_TEST_LOCK`]), which have no display: the
+/// fallback timer delivers the frame asked for, if one was. Each call is a
+/// second later than the last, past the clock's pacing, and far past any
+/// frame another test thread asked for on its own
+/// [test clock](crate::platform::time::test_clock) (they all share this one
+/// frame clock).
+#[cfg(test)]
+pub(crate) fn deliver_in_test() -> bool {
+    use std::sync::atomic::AtomicU64;
+    static LATER: AtomicU64 = AtomicU64::new(0);
+    let later = Duration::from_secs(1_000_000 + LATER.fetch_add(1, Ordering::Relaxed));
+    take_due(crate::platform::time::test_clock::base() + later)
+}
+
 /// Whether frames are suspended (the app is in the background).
 pub(crate) fn suspended() -> bool {
     SUSPENDED.load(Ordering::Acquire)
@@ -628,15 +642,21 @@ pub(crate) fn take_due(now: Instant) -> bool {
 /// ([`time::Instant`](super::time::Instant)); kept an `Option` for targets
 /// that may lack one.
 pub(crate) fn now() -> Option<Instant> {
-    Some(Instant::now())
+    Some(crate::platform::time::now())
 }
 
 /// Time since the frame clock started (the first call), the timeline animations
-/// sample. `None` on targets without a clock.
+/// sample. `None` on targets without a clock. In the crate's tests, time since
+/// the [test clock](crate::platform::time::test_clock)'s base, so the same on
+/// every thread.
 pub(crate) fn elapsed() -> Option<Duration> {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
     let now = now()?;
-    Some(now.saturating_duration_since(*EPOCH.get_or_init(|| now)))
+    #[cfg(test)]
+    let first = crate::platform::time::test_clock::base();
+    #[cfg(not(test))]
+    let first = now;
+    Some(now.saturating_duration_since(*EPOCH.get_or_init(|| first)))
 }
 
 #[cfg(test)]

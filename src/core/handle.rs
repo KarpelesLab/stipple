@@ -305,7 +305,7 @@ impl<S> AppHandle<S> {
             s.next_id += 1;
             s.timers.push(Timer {
                 id,
-                due: Instant::now() + delay,
+                due: crate::platform::time::now() + delay,
                 every,
                 tick: Box::new(f),
             });
@@ -987,17 +987,20 @@ mod tests {
         h.update(|s| s.push(1));
         h.update(|s| s.push(2));
         let mut state = Vec::new();
-        let (ran, next) = h.pump(&mut state, Instant::now());
+        let (ran, next) = h.pump(&mut state, crate::platform::time::now());
         assert!(ran);
         assert_eq!(state, [1, 2]);
         assert_eq!(next, None);
-        assert!(!h.pump(&mut state, Instant::now()).0, "updates run once");
+        assert!(
+            !h.pump(&mut state, crate::platform::time::now()).0,
+            "updates run once"
+        );
     }
 
     #[test]
     fn timers_fire_when_due_and_repeat() {
         let h = AppHandle::<u32>::new();
-        let start = Instant::now();
+        let start = crate::platform::time::now();
         h.after(Duration::from_millis(10), |s| *s += 100);
         let tick = h.every(Duration::from_millis(5), |s| *s += 1);
         let mut n = 0;
@@ -1023,9 +1026,9 @@ mod tests {
             again.update(|s| *s += 10); // runs on the next pump, no deadlock
         });
         let mut n = 0;
-        h.pump(&mut n, Instant::now());
+        h.pump(&mut n, crate::platform::time::now());
         assert_eq!(n, 1);
-        h.pump(&mut n, Instant::now());
+        h.pump(&mut n, crate::platform::time::now());
         assert_eq!(n, 11);
     }
 
@@ -1083,7 +1086,7 @@ mod tests {
             .join()
             .unwrap();
         let mut n = 0;
-        h.pump(&mut n, Instant::now());
+        h.pump(&mut n, crate::platform::time::now());
         assert_eq!(n, 7);
     }
 
@@ -1094,7 +1097,7 @@ mod tests {
         let task = h.spawn(async { 21 * 2 }, |s, v| *s = v);
         runtime().block_on(task).unwrap();
         let mut n = 0;
-        h.pump(&mut n, Instant::now());
+        h.pump(&mut n, crate::platform::time::now());
         assert_eq!(n, 42);
     }
 }

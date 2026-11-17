@@ -477,7 +477,7 @@ impl<S: 'static> App<S> {
     /// scroll) as the run loop would, minus repainting. Returns whether the
     /// window needs a repaint.
     pub fn pointer_event(&mut self, event: Event) -> bool {
-        let now = Instant::now();
+        let now = crate::platform::time::now();
         let input = self.pane_pointer_input(0, &event, now);
         if input.done {
             return input.redraw;

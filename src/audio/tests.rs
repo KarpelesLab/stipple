@@ -398,11 +398,9 @@ fn music_streams_loops_and_ends() {
     assert!(!v.is_playing());
 }
 
-/// Render `frames` of streamed music, after giving the decoder thread time to
-/// fill its buffer (an offline mixer runs faster than real time; the buffer
-/// holds more than any of these tests play).
+/// Render `frames` of streamed music. (An offline mixer runs faster than real
+/// time; in tests it waits for the decoder thread rather than run dry.)
 fn collect_stream(audio: &Audio, frames: usize) -> Vec<f32> {
-    std::thread::sleep(Duration::from_millis(150));
     let before = audio.stats().underruns;
     let out = render(audio, frames);
     assert_eq!(audio.stats().underruns, before, "the decoder kept up");
@@ -441,29 +439,39 @@ fn synthesized_tones_have_their_pitch_and_length() {
 }
 
 #[test]
-fn the_null_output_pulls_at_real_time_pace() {
-    let mut frames = 0usize;
+fn the_null_output_pulls_no_faster_than_real_time_until_paused() {
+    // Its pace is tested with fixed times (`output::null`); this is the thread,
+    // asserting nothing about how promptly a loaded machine runs it.
+    use std::sync::atomic::Ordering::Relaxed;
     let pulled = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let p = pulled.clone();
+    let opened = std::time::Instant::now();
     let mut device = output::null_for_tests(Box::new(move |buf: &mut [f32]| {
-        p.fetch_add(buf.len() / 2, std::sync::atomic::Ordering::Relaxed);
+        p.fetch_add(buf.len() / 2, Relaxed);
         buf.fill(0.0);
     }));
     assert_eq!(device.name(), "null");
-    std::thread::sleep(Duration::from_millis(200));
-    let n = pulled.load(std::sync::atomic::Ordering::Relaxed);
-    assert!((4_000..=20_000).contains(&n), "{n} frames in 200 ms");
-    device.set_paused(true);
-    std::thread::sleep(Duration::from_millis(30));
-    let a = pulled.load(std::sync::atomic::Ordering::Relaxed);
-    std::thread::sleep(Duration::from_millis(60));
-    assert_eq!(
-        pulled.load(std::sync::atomic::Ordering::Relaxed),
-        a,
-        "paused"
+    while pulled.load(Relaxed) == 0 && opened.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let n = pulled.load(Relaxed);
+    let most = opened.elapsed().as_secs_f64() * 48_000.0; // its rate
+    assert!(n > 0, "it pulls");
+    assert!(
+        n as f64 <= most,
+        "{n} frames, ahead of real time ({most:.0})"
     );
-    frames += a;
-    assert!(frames > 0);
+    // Paused: a pull under way may still finish, then nothing more comes.
+    device.set_paused(true);
+    let paused = std::time::Instant::now();
+    loop {
+        let a = pulled.load(Relaxed);
+        std::thread::sleep(Duration::from_millis(60));
+        if pulled.load(Relaxed) == a {
+            break;
+        }
+        assert!(paused.elapsed() < Duration::from_secs(10), "still pulling");
+    }
 }
 
 #[test]
@@ -500,11 +508,19 @@ fn output_stops_while_the_app_is_in_the_background() {
     };
     assert!(wait_for_frames());
     set_app_background(true);
-    // Let a pull in progress finish, then nothing more comes.
-    std::thread::sleep(Duration::from_millis(30));
-    let held = audio.stats().frames;
-    std::thread::sleep(Duration::from_millis(80));
-    assert_eq!(audio.stats().frames, held, "stopped in the background");
+    // A pull under way may still finish, then nothing more comes.
+    let stopped = std::time::Instant::now();
+    loop {
+        let held = audio.stats().frames;
+        std::thread::sleep(Duration::from_millis(80));
+        if audio.stats().frames == held {
+            break;
+        }
+        assert!(
+            stopped.elapsed() < Duration::from_secs(10),
+            "still pulling in the background"
+        );
+    }
     // An output opened while in the background starts stopped too.
     let late = Audio::with_null_output();
     std::thread::sleep(Duration::from_millis(50));

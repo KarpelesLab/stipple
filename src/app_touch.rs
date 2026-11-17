@@ -147,7 +147,7 @@ impl<S: 'static> App<S> {
                 position,
             },
         };
-        let now = crate::platform::time::Instant::now();
+        let now = crate::platform::time::now();
         changed |= self.pane_pointer_input(0, &event, now).redraw;
         changed |= match touch.phase {
             TouchPhase::Started => {

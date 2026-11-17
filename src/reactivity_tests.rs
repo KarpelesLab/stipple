@@ -11,6 +11,7 @@ use crate::anim::Easing;
 use crate::core::{Cx, Damage, Element, LayoutNode, ScrollId, Transition};
 use crate::geometry::{PhysicalSize, Point, Rect, Size, Transform};
 use crate::platform::DropData;
+use crate::platform::time::test_clock::advance;
 use crate::prelude::*;
 use crate::render::Surface;
 
@@ -458,11 +459,15 @@ fn a_moving_element_is_drawn_again_without_a_build_and_damages_only_its_path() {
     let _ = step(&mut app, &mut surface);
     assert!(app.animating());
     let built = builds.get();
+    // A frame into the move, so it's drawn translated (off the identity,
+    // which is drawn without the pixel of slack a transform gets).
+    advance(Duration::from_millis(5));
+    let _ = step(&mut app, &mut surface);
     let mut x = tree(&app).children[0]
         .transform
         .map_or(0.0, |t| t.translate.dx);
     for _ in 0..3 {
-        std::thread::sleep(Duration::from_millis(5));
+        advance(Duration::from_millis(5));
         let damage = step(&mut app, &mut surface);
         let tile = &tree(&app).children[0];
         let now = tile.transform.expect("moving").translate.dx;
@@ -503,7 +508,7 @@ fn a_color_change_repaints_just_the_element() {
     app.panes[0].dirty = true;
     let _ = step(&mut app, &mut surface);
     let built = builds.get();
-    std::thread::sleep(Duration::from_millis(100));
+    advance(Duration::from_millis(100));
     let damage = step(&mut app, &mut surface);
     assert_eq!(builds.get(), built);
     assert_eq!(
@@ -552,7 +557,7 @@ fn frames_the_view_asks_for_or_that_move_the_layout_are_built() {
     wide.set(true);
     app.panes[0].dirty = true;
     let _ = step(&mut app, &mut surface);
-    std::thread::sleep(Duration::from_millis(2));
+    advance(Duration::from_millis(2));
     let _ = step(&mut app, &mut surface);
     assert_eq!(builds.get(), 3);
 }
@@ -629,7 +634,7 @@ fn measure(app: &mut App<Bench>, frames: usize) -> (Duration, Duration, f64) {
     let mut surface = Sink::default();
     let (mut builds, mut presents, mut damaged) = (Vec::new(), Vec::new(), 0.0);
     for _ in 0..frames {
-        std::thread::sleep(Duration::from_millis(1));
+        advance(Duration::from_millis(16)); // a frame on the test clock
         let App {
             state,
             theme,

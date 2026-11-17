@@ -261,6 +261,18 @@ impl Consumer {
                 }
             }
         }
+        // In the crate's tests, an offline render waits for the decoder
+        // thread instead of racing it, however loaded the runner.
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        {
+            let waited = std::time::Instant::now();
+            while self.ring.len_frames() == 0
+                && !self.ring.is_ended()
+                && waited.elapsed() < std::time::Duration::from_secs(10)
+            {
+                std::thread::sleep(std::time::Duration::from_micros(200));
+            }
+        }
         match self.ring.pop() {
             Some(f) => Some(f),
             None if self.ring.is_ended() => None,

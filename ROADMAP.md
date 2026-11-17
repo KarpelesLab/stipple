@@ -3040,6 +3040,11 @@ game needs on top:
 
 - **Testing:** golden-image rendering tests, layout solver unit tests, input/
   event simulation, per-platform smoke tests in CI.
+  - ✅ *A test clock: in the crate's tests, timers, the frame clock (so
+    animations and transitions), touch velocity and flings, long presses
+    and double clicks read a per-thread clock that moves only when a test
+    advances it (`platform::time::test_clock`), so none sleeps or depends
+    on how fast the runner is. See [docs/ci.md](docs/ci.md#time-in-tests).*
 - **Docs & examples:** an examples gallery that doubles as the conformance
   corpus; rustdoc; platform and topic guides in [`docs/`](docs/README.md).
 - **Tooling (stretch):** a UI inspector/devtools overlay; hot-reload of `view`.

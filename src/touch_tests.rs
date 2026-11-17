@@ -94,9 +94,9 @@ fn menus(app: &App<Log>) -> Vec<AccessNode> {
         .collect()
 }
 
-/// Let `secs` pass on the touch clock.
-fn wait(app: &mut App<Log>, secs: f64) {
-    app.panes[0].touch_epoch -= Duration::from_secs_f64(secs);
+/// Let `secs` pass on the test clock.
+fn wait(secs: f64) {
+    crate::platform::time::test_clock::advance(Duration::from_secs_f64(secs));
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn a_long_press_opens_the_context_menu_and_doesnt_tap() {
         "a timer wakes the loop"
     );
     assert!(!app.advance_long_press(), "not yet");
-    wait(&mut app, 0.6);
+    wait(0.6);
     assert!(app.advance_long_press());
     assert!(app.panes[0].long_press_timer.is_none());
     app.render_once();
@@ -149,13 +149,13 @@ fn a_tap_or_a_drag_doesnt_long_press() {
     app.touch(finger(1, TouchPhase::Ended, 150.0, 160.0));
     assert_eq!(app.state().tapped, [2]);
     assert!(app.panes[0].long_press_timer.is_none());
-    wait(&mut app, 0.6);
+    wait(0.6);
     assert!(!app.advance_long_press());
     // A drag scrolls instead.
     app.touch(finger(1, TouchPhase::Started, 150.0, 260.0));
     app.touch(finger(1, TouchPhase::Moved, 150.0, 200.0));
     assert!(app.panes[0].long_press_timer.is_none());
-    wait(&mut app, 0.6);
+    wait(0.6);
     assert!(!app.advance_long_press());
     app.touch(finger(1, TouchPhase::Ended, 150.0, 200.0));
     app.render_once();
@@ -170,7 +170,7 @@ fn holding_a_row_without_a_menu_still_taps_it() {
     // Row 1 (y 90..140) has no context menu: no timer, and a long hold taps.
     app.touch(finger(1, TouchPhase::Started, 150.0, 110.0));
     assert!(app.panes[0].long_press_timer.is_none());
-    wait(&mut app, 1.0);
+    wait(1.0);
     assert!(!app.advance_long_press());
     app.touch(finger(1, TouchPhase::Ended, 150.0, 110.0));
     assert_eq!(app.state().tapped, [1]);

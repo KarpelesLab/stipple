@@ -21,6 +21,27 @@ Four workflows run on every push and pull request:
 - **Release-plz**: on `master`, opens release pull requests and publishes to
   crates.io when one is merged.
 
+## Time in tests
+
+The crate's own tests don't read the wall clock. What the library takes as
+"now" (timers, the frame clock and so animations and transitions, touch
+velocity and flings, long presses, double clicks, the renderer's import
+window) comes from `platform::time::now()`, which in a build is
+`Instant::now()` and under `cfg(test)` is a per-thread test clock: it starts
+at a point shared by every thread and moves only when a test calls
+`platform::time::test_clock::advance(duration)`. Events a test feeds in a row
+are simultaneous however loaded the runner is (a drag with no pause between
+its moves never flings), and a transition is exactly as far along as the test
+advanced it. A test that wants time to pass advances the clock instead of
+sleeping. What still uses real time is real concurrency, and there tests wait
+for a condition (with a generous timeout) rather than a fixed time: asset
+loading, the null audio output's thread (its pacing is tested with fixed
+times), and streamed music, whose offline render waits for the decoder
+thread in tests instead of counting an underrun. Save files' dates are
+`SystemTime`. The queue of events posted to the loop (tray picks, store
+transactions) is per thread in tests too, so `App::run_pending` in one test
+doesn't take another's.
+
 ## Published screenshots
 
 After a push to `master` where every job of the Visual workflow passed, its

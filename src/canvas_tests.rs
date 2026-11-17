@@ -62,7 +62,7 @@ impl<S: 'static> App<S> {
     fn wake_to(&mut self, surface: &mut Recorder) {
         let (ran, _) = self
             .handle
-            .pump(&mut self.state, crate::platform::time::Instant::now());
+            .pump(&mut self.state, crate::platform::time::now());
         let content = self.pump_content();
         if ran {
             self.panes[0].dirty = true;

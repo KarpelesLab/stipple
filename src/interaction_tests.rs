@@ -9,6 +9,7 @@ use crate::core::{Cx, Element, ElementKey, Interaction, LayoutNode, Transition};
 use crate::geometry::{Point, Size};
 use crate::layout::Axis;
 use crate::platform::DragOffer;
+use crate::platform::time::test_clock::advance;
 use crate::render::Color;
 
 const RED: Color = Color::rgb(255, 0, 0);
@@ -70,12 +71,16 @@ fn a_transition_animates_the_change_then_rests() {
     assert!(app.hover_at(Point::new(10.0, 10.0)));
     let _ = app.render_frame();
     assert!(app.animating(), "moving: frames");
-    // (Frames come from the wall clock here; fixed frame times are tested in
-    // `core::transition`.)
-    std::thread::sleep(Duration::from_millis(50));
+    // Frames come from the test clock: halfway through, then past the end.
+    advance(Duration::from_secs(1));
     let _ = app.render_frame();
     let mid = fill(&app, 0).expect("a fill");
     assert!(mid != GRAY && mid != RED, "between: {mid:?}");
+    advance(Duration::from_secs(1));
+    let _ = app.render_frame();
+    assert_eq!(fill(&app, 0), Some(RED), "arrived");
+    let _ = app.render_frame();
+    assert!(!app.animating(), "then rests");
 }
 
 #[test]
@@ -431,7 +436,7 @@ fn the_tab_indicator_slides_and_presenting_only_the_damage_leaves_nothing_stale(
                 screen[s..e].copy_from_slice(&p.as_bytes()[s..e]);
             }
         }
-        std::thread::sleep(Duration::from_millis(5));
+        advance(Duration::from_millis(16));
         if !app.animating() {
             break;
         }

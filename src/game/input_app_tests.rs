@@ -18,7 +18,6 @@ use crate::platform::{
 use crate::render::Surface;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
 
 const TOUCH: CanvasId = CanvasId(31);
 
@@ -89,10 +88,7 @@ fn update(g: &mut Game, frame: &mut Frame) {
 
 /// The frame clock delivers the frame asked for (see `app_tests`).
 fn deliver() -> bool {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static LATER: AtomicU64 = AtomicU64::new(1000);
-    let later = Duration::from_secs(LATER.fetch_add(1, Ordering::Relaxed));
-    crate::platform::frame::take_due(crate::platform::time::Instant::now() + later)
+    crate::platform::frame::deliver_in_test()
 }
 
 fn finger(id: u64, phase: TouchPhase, x: f64, y: f64) -> Event {

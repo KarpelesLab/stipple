@@ -205,7 +205,7 @@ fn a_tap_doesnt_select_but_a_long_press_selects_a_word() {
     app.render_once();
     assert_eq!(copied(&mut app), "");
     app.touch(finger(TouchPhase::Started));
-    app.panes[0].touch_epoch -= Duration::from_secs_f64(0.6);
+    crate::platform::time::test_clock::advance(Duration::from_secs_f64(0.6));
     assert!(app.advance_long_press());
     app.render_once();
     assert_eq!(copied(&mut app), "4006381333931");

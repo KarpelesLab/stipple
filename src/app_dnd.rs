@@ -1061,7 +1061,7 @@ mod tests {
             "a drag source long-presses"
         );
         assert!(!app.pane_long_press(0, Some(&window)), "not yet");
-        app.panes[0].touch_epoch -= std::time::Duration::from_secs_f64(0.6);
+        crate::platform::time::test_clock::advance(std::time::Duration::from_secs_f64(0.6));
         assert!(app.pane_long_press(0, Some(&window)));
         let lifted = window.lifted.borrow();
         assert_eq!(lifted.len(), 1);
@@ -1089,7 +1089,7 @@ mod tests {
         let _ = app.render_frame();
         let window = lift_window(true);
         app.touch(finger(TouchPhase::Started, Point::new(30.0, 10.0)));
-        app.panes[0].touch_epoch -= std::time::Duration::from_secs_f64(0.6);
+        crate::platform::time::test_clock::advance(std::time::Duration::from_secs_f64(0.6));
         assert!(app.pane_long_press(0, Some(&window)));
         assert!(window.lifted.borrow().is_empty());
         app.touch(finger(TouchPhase::Ended, Point::new(30.0, 10.0)));
@@ -1310,7 +1310,7 @@ mod tests {
         // It fades out with the target's drag-over level, then it's gone.
         let _ = app.render_frame();
         assert!(app.animating(), "fading out");
-        std::thread::sleep(crate::core::DROP_FADE * 2);
+        crate::platform::time::test_clock::advance(crate::core::DROP_FADE * 2);
         let (after, _) = app.render_frame();
         assert_eq!(before.as_bytes(), after.as_bytes(), "highlight gone");
     }

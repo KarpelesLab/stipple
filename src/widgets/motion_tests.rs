@@ -534,7 +534,7 @@ fn stateless_popups_come_in_through_the_core() {
         tree.children.last().unwrap().opacity
     };
     assert!(layer(&app) < 1.0, "the menu comes in: {}", layer(&app));
-    std::thread::sleep(Duration::from_millis(400));
+    crate::platform::time::test_clock::advance(Duration::from_millis(400));
     let _ = app.render_frame();
     assert_eq!(layer(&app), 1.0);
     let _ = app.render_frame();

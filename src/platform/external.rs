@@ -764,8 +764,7 @@ fn bit(format: ExternalFormat) -> u32 {
 #[allow(dead_code)] // by the GPU executors built in
 pub(crate) fn note_native(formats: &[ExternalFormat]) {
     let mask = formats.iter().fold(0, |m, f| m | bit(*f));
-    *NATIVE.lock().unwrap_or_else(|e| e.into_inner()) =
-        (mask, Some(crate::platform::time::Instant::now()));
+    *NATIVE.lock().unwrap_or_else(|e| e.into_inner()) = (mask, Some(crate::platform::time::now()));
 }
 
 /// Whether frames are being drawn (in the last half second) by a renderer
@@ -775,7 +774,10 @@ pub(crate) fn note_native(formats: &[ExternalFormat]) {
 pub fn imported_natively(format: ExternalFormat) -> bool {
     let (mask, at) = *NATIVE.lock().unwrap_or_else(|e| e.into_inner());
     mask & bit(format) != 0
-        && at.is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(500))
+        && at.is_some_and(|t| {
+            crate::platform::time::now().saturating_duration_since(t)
+                < std::time::Duration::from_millis(500)
+        })
 }
 
 // ---- Converting on the CPU -------------------------------------------------

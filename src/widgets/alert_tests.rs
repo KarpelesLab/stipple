@@ -187,7 +187,7 @@ fn layers(app: &App<State>) -> Vec<(bool, f32)> {
 
 #[test]
 fn a_box_and_its_scrim_fade_in_and_the_next_comes_in_as_it_leaves() {
-    // Five-second linear motion, so wall-clock frames land mid-way.
+    // Five-second linear motion, so frames land mid-way.
     let slow = crate::anim::Motion::tween(5.0, crate::anim::Easing::Linear);
     let theme = crate::style::Theme::light().motion(crate::style::MotionTokens {
         dialog: slow,
@@ -206,6 +206,11 @@ fn a_box_and_its_scrim_fade_in_and_the_next_comes_in_as_it_leaves() {
     let up = layers(&app);
     assert_eq!(up.len(), 2, "the scrim and the box: {up:?}");
     assert!(up.iter().all(|&(g, o)| !g && o < 0.5), "coming in: {up:?}");
+    // A second in (of five), on the test clock.
+    crate::platform::time::test_clock::advance(std::time::Duration::from_secs(1));
+    app.render_once();
+    let up = layers(&app);
+    assert!(up.iter().all(|&(_, o)| o > 0.0 && o < 0.5), "{up:?}");
     // Answered, with another waiting: the first leaves (with its scrim) as
     // the second comes in (with its own).
     ask(&app, MessageBox::new("Saved").drawn(true));

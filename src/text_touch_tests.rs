@@ -225,7 +225,7 @@ fn a_long_press_selects_the_word_instead_of_a_context_menu_and_extends() {
         app.panes[0].long_press_timer.is_some(),
         "a field long-presses"
     );
-    app.panes[0].touch_epoch -= Duration::from_secs_f64(0.6);
+    crate::platform::time::test_clock::advance(Duration::from_secs_f64(0.6));
     assert!(app.advance_long_press());
     app.render_once();
     assert!(app.focused().is_some());
@@ -361,7 +361,7 @@ fn a_password_field_offers_neither_cut_nor_copy() {
         .logical_size(Size::new(400.0, 500.0));
     let at = focused_or(&mut app, Role::PasswordField).center();
     app.touch(finger(1, TouchPhase::Started, at));
-    app.panes[0].touch_epoch -= Duration::from_secs_f64(0.6);
+    crate::platform::time::test_clock::advance(Duration::from_secs_f64(0.6));
     assert!(app.advance_long_press());
     app.touch(finger(1, TouchPhase::Ended, at));
     app.render_once();
@@ -401,10 +401,6 @@ fn a_finger_scrolling_over_a_field_neither_focuses_it_nor_selects() {
     app.render_once();
     assert_eq!(app.focused(), None);
     assert!(app.panes[0].text_touch.handles.is_empty());
-    // The moves' timing is the wall clock's: on a slow run they span enough
-    // time to measure, the lift starts a fling, and a tap would only catch
-    // it. Settle the gestures so the tap below is a plain tap.
-    app.panes[0].touch = Default::default();
     // A tap does focus it.
     app.touch(finger(2, TouchPhase::Started, at));
     app.touch(finger(2, TouchPhase::Ended, at));
@@ -579,7 +575,7 @@ fn the_rich_editor_selects_and_copies_with_a_finger_too() {
         Point::new(b.min_x() + p.x, b.min_y() + p.y + 6.0)
     };
     app.touch(finger(1, TouchPhase::Started, at));
-    app.panes[0].touch_epoch -= Duration::from_secs_f64(0.6);
+    crate::platform::time::test_clock::advance(Duration::from_secs_f64(0.6));
     assert!(app.advance_long_press());
     app.touch(finger(1, TouchPhase::Ended, at));
     app.render_once();

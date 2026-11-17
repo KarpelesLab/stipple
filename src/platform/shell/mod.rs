@@ -16,7 +16,6 @@
 use crate::platform::PlatformError;
 use crate::platform::event::Event;
 use std::path::Path;
-use std::sync::Mutex;
 
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
@@ -139,22 +138,37 @@ pub(crate) fn set_tray_shown(shown: bool) {
 
 /// Events raised away from the backend's own loop (a tray menu pick heard on
 /// the D-Bus thread), delivered ahead of the next [`Event::Wake`].
-static PENDING: Mutex<Vec<Event>> = Mutex::new(Vec::new());
+#[cfg(not(test))]
+static PENDING: std::sync::Mutex<Vec<Event>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+thread_local! {
+    /// In the crate's tests, one queue per thread, so that tests running side
+    /// by side (each posting, or taking with `App::run_pending`) don't take
+    /// each other's events.
+    static PENDING: std::cell::RefCell<Vec<Event>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn pending<R: Default>(f: impl FnOnce(&mut Vec<Event>) -> R) -> R {
+    #[cfg(not(test))]
+    {
+        PENDING.lock().map(|mut p| f(&mut p)).unwrap_or_default()
+    }
+    #[cfg(test)]
+    {
+        PENDING.with(|p| f(&mut p.borrow_mut()))
+    }
+}
 
 /// Queue `event` for the event loop and wake it. Safe from any thread.
 pub(crate) fn post(event: Event) {
-    if let Ok(mut p) = PENDING.lock() {
-        p.push(event);
-    }
+    pending(|p| p.push(event));
     crate::platform::wake::wake();
 }
 
 /// The events [`post`]ed since the last call.
 pub(crate) fn take_posted() -> Vec<Event> {
-    PENDING
-        .lock()
-        .map(|mut p| std::mem::take(&mut *p))
-        .unwrap_or_default()
+    pending(std::mem::take)
 }
 
 /// Whether `s` starts with a URI scheme (RFC 3986: a letter, then letters,

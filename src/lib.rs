@@ -623,7 +623,7 @@ impl<S: 'static> Pane<S> {
             scroll_requests: crate::core::ScrollRequests::default(),
             last_pointer: Point::new(0.0, 0.0),
             touch: Default::default(),
-            touch_epoch: crate::platform::time::Instant::now(),
+            touch_epoch: crate::platform::time::now(),
             long_press_timer: None,
             scroll_bars: Default::default(),
             overlay_active: false,
@@ -2644,7 +2644,7 @@ impl<S: 'static> Pane<S> {
 
     /// Seconds on the touch scroller's clock.
     fn touch_now(&self) -> f64 {
-        crate::platform::time::Instant::now()
+        crate::platform::time::now()
             .saturating_duration_since(self.touch_epoch)
             .as_secs_f64()
     }
@@ -2988,7 +2988,7 @@ impl<S: 'static> App<S> {
     pub fn run_pending(&mut self) -> bool {
         let (mut ran, _) = self
             .handle
-            .pump(&mut self.state, crate::platform::time::Instant::now());
+            .pump(&mut self.state, crate::platform::time::now());
         // The store's transactions; other posted events stay for the loop.
         let posted = crate::platform::shell::take_posted();
         if !posted.is_empty() {
@@ -3108,13 +3108,7 @@ impl<S: 'static> App<S> {
             panes,
             ..
         } = self;
-        panes[idx].text_press_at(
-            state,
-            theme,
-            font.get(),
-            pos,
-            crate::platform::time::Instant::now(),
-        )
+        panes[idx].text_press_at(state, theme, font.get(), pos, crate::platform::time::now())
     }
 
     /// A press at `pos` on selectable text in window `idx` (see
@@ -3130,12 +3124,7 @@ impl<S: 'static> App<S> {
         let pane = &mut panes[idx];
         pane.ensure_tree(state, theme, font.get());
         let tapping = pane.pressed.is_some();
-        pane.select_press_at(
-            font.get(),
-            pos,
-            crate::platform::time::Instant::now(),
-            tapping,
-        )
+        pane.select_press_at(font.get(), pos, crate::platform::time::now(), tapping)
     }
 
     fn pane_text_drag_at(&mut self, idx: usize, pos: Point) -> bool {
@@ -3499,7 +3488,7 @@ impl<S: 'static> App<S> {
             // each brings its own window up to date.
             let mut ran = false;
             if matches!(event, Event::Wake) {
-                let now = crate::platform::time::Instant::now();
+                let now = crate::platform::time::now();
                 let (did, next) = self.handle.pump(&mut self.state, now);
                 // A gamepad direction held in a menu repeats.
                 let did = self.gamepad_nav_wake(0, now) | did;
@@ -3580,8 +3569,7 @@ impl<S: 'static> App<S> {
             }
             // Pointer buttons, moves and wheels reach `on_pointer` and
             // `on_wheel` handlers first.
-            let pointer =
-                self.pane_pointer_input(idx, &event, crate::platform::time::Instant::now());
+            let pointer = self.pane_pointer_input(idx, &event, crate::platform::time::now());
             if pointer.redraw {
                 present(&mut self, &mut surfaces, idx, window, false);
             }
@@ -3982,7 +3970,7 @@ impl<S: 'static> App<S> {
                 }
                 Event::Gamepad(ref pad) => {
                     let heard = self.run_gamepad(pad);
-                    let now = crate::platform::time::Instant::now();
+                    let now = crate::platform::time::now();
                     let moved = self.gamepad_nav_event(idx, pad, now);
                     if (heard || moved) && !self.in_background() {
                         present(&mut self, &mut surfaces, idx, window, false);
@@ -5075,7 +5063,9 @@ mod tests {
             assert!(px[c] < from && px[c] > to, "between the themes: {px:?}");
         }
         // Once the fade is through, the new theme shows and frames stop.
-        std::thread::sleep(crate::core::THEME_FADE + std::time::Duration::from_millis(20));
+        crate::platform::time::test_clock::advance(
+            crate::core::THEME_FADE + std::time::Duration::from_millis(20),
+        );
         let (after, _) = app.render_frame();
         assert_eq!(after.pixel(150, 70), Some([dark.r, dark.g, dark.b, 255]));
         let _ = app.render_frame();
@@ -5147,7 +5137,7 @@ mod tests {
 
         // Let the fade-in settle first: mid-fade, the first fade-out frame can
         // land on the very alpha just painted, so nothing would change.
-        std::thread::sleep(crate::core::highlight::HOVER_FADE * 2);
+        crate::platform::time::test_clock::advance(crate::core::highlight::HOVER_FADE * 2);
         let _ = app.render_frame();
 
         // Moving the hover off any tappable clears the highlight, damaging the
@@ -5347,7 +5337,7 @@ mod tests {
             if !app.animating() {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(20));
+            crate::platform::time::test_clock::advance(std::time::Duration::from_millis(20));
             lit = app.render_once();
         }
         let px = |pm: &crate::render::Pixmap, p: Point| pm.pixel(p.x as u32, p.y as u32);
@@ -5606,34 +5596,19 @@ mod tests {
         app.panes[0].scroll_offsets.values().copied().sum()
     }
 
-    /// Drag the finger from `from` to `to` in five moves, `pause` apart.
+    /// Drag the finger from `from` to `to` in five moves, `pause` apart on the
+    /// test clock. With no pause the moves are simultaneous: too short a span
+    /// to measure a velocity, so the lift never flings.
     fn swipe(app: &mut App<Vec<usize>>, from: f64, to: f64, pause: std::time::Duration) {
         use crate::platform::TouchPhase;
         app.touch(finger(TouchPhase::Started, from));
         for i in 1..=5 {
-            std::thread::sleep(pause);
+            crate::platform::time::test_clock::advance(pause);
             app.touch(finger(
                 TouchPhase::Moved,
                 from + (to - from) * i as f64 / 5.0,
             ));
         }
-        app.touch(finger(TouchPhase::Ended, to));
-    }
-
-    /// [`swipe`] with no pause between moves, then the finger held still
-    /// before it lifts: a drag that never flings, however slowly the moves
-    /// run (their timing is the wall clock's).
-    fn drag_and_hold(app: &mut App<Vec<usize>>, from: f64, to: f64) {
-        use crate::platform::TouchPhase;
-        app.touch(finger(TouchPhase::Started, from));
-        for i in 1..=5 {
-            app.touch(finger(
-                TouchPhase::Moved,
-                from + (to - from) * i as f64 / 5.0,
-            ));
-        }
-        // Past the window the release velocity is measured over.
-        std::thread::sleep(std::time::Duration::from_millis(150));
         app.touch(finger(TouchPhase::Ended, to));
     }
 
@@ -5654,8 +5629,8 @@ mod tests {
     fn a_finger_drag_scrolls_the_list_without_clicking() {
         let mut app = list_app();
         app.render_once();
-        // Up 100 px, held still before lifting: no fling.
-        drag_and_hold(&mut app, 150.0, 50.0);
+        // Up 100 px in no time on the test clock: no fling.
+        swipe(&mut app, 150.0, 50.0, std::time::Duration::ZERO);
         assert!(app.state().is_empty(), "the pressed row didn't click");
         assert_eq!(list_offset(&app), 100.0 - crate::core::touch::SLOP);
         assert!(!app.advance_fling());
@@ -5664,7 +5639,7 @@ mod tests {
         app.click_at(Point::new(100.0, 25.0));
         assert_eq!(app.state(), &[2]);
         // Dragging down past the top stops at the top.
-        drag_and_hold(&mut app, 20.0, 190.0);
+        swipe(&mut app, 20.0, 190.0, std::time::Duration::ZERO);
         assert_eq!(list_offset(&app), 0.0);
         // The mouse wheel still scrolls as before.
         app.hover_at(Point::new(100.0, 100.0));
@@ -5679,12 +5654,12 @@ mod tests {
         let ms = std::time::Duration::from_millis;
         let mut app = list_app();
         app.render_once();
-        // 150 px in about 50 ms: a fling at a few thousand px/s.
+        // 150 px in 50 ms: a fling at a few thousand px/s.
         swipe(&mut app, 180.0, 30.0, ms(10));
         let after_drag = list_offset(&app);
         assert!(app.panes[0].touch.flinging());
         assert!(app.panes[0].animating, "a fling asks for frames");
-        std::thread::sleep(ms(16));
+        crate::platform::time::test_clock::advance(ms(16));
         assert!(app.advance_fling());
         assert!(list_offset(&app) > after_drag, "it keeps going");
         // A finger on the list catches it, and doesn't click the row.
@@ -5705,7 +5680,7 @@ mod tests {
             if !app.panes[0].touch.flinging() {
                 break;
             }
-            std::thread::sleep(ms(5));
+            crate::platform::time::test_clock::advance(ms(5));
             app.advance_fling();
         }
         assert!(!app.panes[0].touch.flinging(), "the end stops it");

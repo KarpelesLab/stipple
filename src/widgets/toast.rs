@@ -685,7 +685,6 @@ mod tests {
     use crate::App;
     use crate::core::AccessNode;
     use crate::geometry::{Point, Size};
-    use crate::platform::time::Instant;
     use crate::platform::{ButtonState, Event};
 
     #[test]
@@ -710,7 +709,7 @@ mod tests {
         let mut state = State {
             toasts: Toasts::new(),
         };
-        let start = Instant::now();
+        let start = crate::platform::time::now();
         let id = state.toasts.push("brief", ToastKind::Info);
         state
             .toasts
