@@ -2290,10 +2290,11 @@ Most input only works on X11 today.
   and 30 emulators:** `test-input.sh` lifts a text and a file onto the app itself
   (the file read back through the provider), and `test-drag-apps.sh` puts
   androiddemo and a probe app (`.github/clip/android`, a Java drop target)
-  in freeform windows and lifts both into the probe, which reads the file's
-  name, type and bytes through its `ContentResolver` (not blocking in CI;
-  in CI the first passed on API 34, 33 and 30, the second on API 34 and 30:
-  on API 33 `am task resize` doesn't move the freeform windows). **iOS**,
+  in freeform windows (split screen on API 33, where `am task resize`
+  doesn't move a freeform window's surface) and lifts both into the probe,
+  which reads the file's name, type and bytes through its `ContentResolver`
+  (not blocking in CI; in CI the first passed on API 34, 33 and 30, the
+  second on API 34 and 30, and locally on API 34, 33 and 30). **iOS**,
   not blocking yet, passed in one CI run: `touchdemo`'s
   self-test asks the drag delegate for the items under its two drag sources
   and drops those items on its own drop target; an XCUITest lifts and drops

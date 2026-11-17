@@ -288,13 +288,13 @@ provider has no state of its own, so a target may read it after the drag
   bytes; then a self-test drag of a `MediaStore` `content:` URI (another
   app's kind of file). `examples/androiddemo/test-drag-apps.sh` puts
   `androiddemo` and a probe app (`.github/clip/android`, a plain Java drop
-  target) in freeform windows and lifts the same two into the probe, which
-  must log the text, and the file's name, type and bytes as its
-  `ContentResolver` reads them. `test-input.sh` passed on local API 34 and 30
-  emulators and in CI on API 34, 33 and 30; `test-drag-apps.sh` locally on
-  API 34 and 30 and in CI on API 34 and 30 (on API 33 `am task resize`
-  doesn't move the freeform windows, which then overlap, and the drop lands
-  in androiddemo). CI runs them without blocking.
+  target) in freeform windows (in split screen on API 33, where `am task
+  resize` doesn't move a freeform window's surface) and lifts the same two
+  into the probe, which must log the text, and the file's name, type and
+  bytes as its `ContentResolver` reads them. `test-input.sh` passed on local
+  API 34 and 30 emulators and in CI on API 34, 33 and 30;
+  `test-drag-apps.sh` locally on API 34, 33 and 30 and in CI on API 34 and
+  30. CI runs them without blocking.
 - On the iOS simulator `touchdemo`'s self-test calls the drop interaction's
   delegate with a stand-in session over real `NSItemProvider`s (a text, a
   file); and the drag interaction's, asking for the items under its two drag

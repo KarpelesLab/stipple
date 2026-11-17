@@ -650,14 +650,24 @@ apps: androiddemo and the probe's drop target (`org.stipple.clip.Drop`, an
 ordinary Java view with an `OnDragListener`) in freeform windows one above
 the other (`settings put global enable_freeform_support 1`, `am start
 --windowingMode 5`, `am task resize`; it says so and stops where the windows
-don't come up in freeform mode).
+don't come up in freeform mode). On API 33 it uses split screen instead:
+there `am task resize` moves a freeform task's bounds in the window manager
+but the shell leaves its surface where it opened, so the windows overlap on
+screen and the drop lands back in androiddemo. Split screen is set up with
+the shell's own command (`dumpsys activity service SystemUIService WMShell
+splitscreen moveToSideStage <task> 0`, androiddemo in the top stage, the
+probe below), on a display made twice as tall for the test (`wm size`,
+reset afterwards) so androiddemo's half shows all of it; a split left over
+from an earlier run is ended first (`removeFromSideStage`), and the split
+must show just the two apps (the shell sometimes pairs androiddemo with an
+app it showed before, such as Chrome; then it is set up again, up to three
+times). `STIPPLE_DRAG_LAYOUT=freeform`
+or `split` picks one on any release.
 A long press lifts androiddemo's greeting into the probe, which must log the
 text; then its heading, whose file the probe must read through its own
 `ContentResolver` (display name, type and bytes) with the drag's URI
-permission. It passed on local API 34 and 30 emulators and in CI on API 34
-and 30; on CI's API 33 image `am task resize` doesn't move the freeform
-windows (the shell keeps them where they opened, overlapping), so the drop
-lands in androiddemo and it fails there. CI runs it without blocking.
+permission. It passed on local API 34, 33 and 30 emulators (several runs
+each) and in CI on API 34 and 30. CI runs it without blocking.
 
 `examples/androiddemo/test-services.sh clipprobe.apk` then drives the
 system's services with `adb shell input` touches: the one-second

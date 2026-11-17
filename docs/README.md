@@ -703,9 +703,10 @@ iOS's `UIDragInteraction` (its own long press asks the app for the items:
 an `NSString`, or a file representation per file) and Android's
 `View.startDragAndDrop` (files as `content:` URIs of the app's
 `FileProvider`, which the manifest declares). On Android a text and a file
-dragged into another app (a probe app in a freeform window) and onto the
-app itself passed on local API 34 and 30 emulators and in CI (into another
-app on API 34 and 30, onto the app on 34, 33 and 30); not blocking.
+dragged into another app (a probe app in a freeform window, or split
+screen on API 33) passed on local API 34, 33 and 30 emulators, and onto the
+app itself on local API 34 and 30 ones; in CI into another app on API 34 and
+30, onto the app on 34, 33 and 30; not blocking.
 On iOS the simulator self-test asks the drag delegate for the items and
 drops them on the app, and an XCUITest lifts and drops with a real touch
 inside the app (not blocking yet; both passed in CI); a drag between two apps can't be

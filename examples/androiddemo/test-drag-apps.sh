@@ -6,11 +6,19 @@
 #
 #   examples/androiddemo/test-drag-apps.sh clipprobe.apk [screenshot-dir]
 #
-# Both apps go into freeform windows, androiddemo above the probe's drop
-# target (`org.stipple.clip.Drop`, an ordinary Java view with an
-# OnDragListener): freeform support switched on with `settings put global
-# enable_freeform_support 1`, each started with `am start --windowingMode 5`
-# and placed with `am task resize`. Then a finger long-presses androiddemo's
+# Both apps go on screen at once, androiddemo above the probe's drop target
+# (`org.stipple.clip.Drop`, an ordinary Java view with an OnDragListener).
+# On most releases in freeform windows: freeform support switched on with
+# `settings put global enable_freeform_support 1`, each started with
+# `am start --windowingMode 5` and placed with `am task resize`. Android 13
+# (API 33) moves a freeform task's bounds in the window manager but leaves
+# its surface where it opened, so the windows overlap on screen and the drop
+# lands back in androiddemo: there the two go into split screen instead,
+# androiddemo moved to the top stage with the shell's own command
+# (`dumpsys activity service SystemUIService WMShell splitscreen
+# moveToSideStage`), on a display made twice as tall for the test
+# (`wm size`, reset afterwards) so androiddemo's half shows all of it.
+# STIPPLE_DRAG_LAYOUT=freeform|split picks one on any release. Then a finger long-presses androiddemo's
 # greeting (a drag source of a text), which lifts it out of the app
 # (`View.startDragAndDrop`, DRAG_FLAG_GLOBAL), and carries it into the probe's
 # window: the probe logs `drop text "Dropped by androiddemo"`. Then the
@@ -20,8 +28,8 @@
 # and reads through its ContentResolver: `drop file "androiddemo-lifted.txt"
 # ... "A file lifted out of androiddemo"`.
 #
-# Where the windows don't come up in freeform mode it says so and exits 0
-# without testing.
+# Where the windows don't come up in freeform mode (or split screen) it says
+# so and exits 0 without testing.
 set -uo pipefail
 
 probe_apk="${1:?usage: test-drag-apps.sh clipprobe.apk [screenshot-dir]}"
@@ -107,42 +115,126 @@ lift_to() {
 }
 
 sdk="$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
-echo "android apps: API $sdk"
+layout="${STIPPLE_DRAG_LAYOUT:-}"
+if [ -z "$layout" ]; then
+  if [ "$sdk" = 33 ]; then layout=split; else layout=freeform; fi
+fi
+echo "android apps: API $sdk, $layout windows"
 adb install -r -g "$probe_apk" >/dev/null || { echo "can't install $probe_apk" >&2; exit 1; }
-adb shell settings put global enable_freeform_support 1
-adb shell settings put global force_resizable_activities 1
+if [ "$layout" = freeform ]; then
+  adb shell settings put global enable_freeform_support 1
+  adb shell settings put global force_resizable_activities 1
+fi
+
+# End any split screen: each app task in a stage taken out of the side stage
+# (which ends the split). A split left over (an earlier run's, with a stopped
+# app's stage empty) would keep its other stage's task, whichever app that
+# is, as androiddemo's partner.
+unsplit() {
+  local task
+  for task in $(adb shell dumpsys activity activities \
+    | grep -E "^ *\* Task\{[0-9a-f]+ #[0-9]+ type=standard .*mode=multi-window" \
+    | sed -E 's/.*Task\{[0-9a-f]+ #([0-9]+).*/\1/' | sort -u); do
+    adb shell dumpsys activity service SystemUIService WMShell splitscreen \
+      removeFromSideStage "$task" >/dev/null 2>&1 || true
+  done
+}
+
+[ "$layout" = split ] && unsplit
 adb shell am force-stop "$pkg"
 adb shell am force-stop "$probe"
+[ "$layout" = split ] && { adb shell wm size reset; sleep 2; }
 read -r w h < <(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)
 
 restore() {
+  [ "$layout" = split ] && unsplit
   adb shell am force-stop "$probe" || true
   adb shell am force-stop "$pkg" || true
   adb shell settings put global enable_freeform_support 0 || true
   adb shell settings put global force_resizable_activities 0 || true
+  adb shell wm size reset || true
 }
 trap restore EXIT
 
-# androiddemo on top: its nodes are read while it has focus.
-adb shell am start --windowingMode 5 -n "$pkg/android.app.NativeActivity" >/dev/null
-sleep 3
-app_task="$(task_of "$pkg")"
-# Side by side, not overlapping: a touch on a freeform window raises it.
-place "$app_task" 0 0 "$w" $((h * 72 / 100))
-sleep 3
-if ! freeform "$pkg"; then
-  echo "android apps: androiddemo didn't open in a freeform window; skipping"
-  exit 0
+# The center of window $1's frame (dumpsys window), as "x y".
+window_center() {
+  adb shell dumpsys window windows | grep -E -A30 "Window #[0-9]+ Window\{[0-9a-f]+ u0 $1\}:" \
+    | grep -oE ' frame=\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]' | head -1 \
+    | sed -E 's/.*\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]/\1 \2 \3 \4/' \
+    | awk '{ print int(($1 + $3) / 2), int(($2 + $4) / 2) }'
+}
+
+# The packages of the visible apps' tasks in a split stage, one per line.
+split_visible() {
+  adb shell dumpsys activity activities \
+    | grep -E "^ *\* Task\{[0-9a-f]+ #[0-9]+ type=standard .* visible=true .*mode=multi-window" \
+    | sed -E 's/.* A=[0-9]+:([^ ]+) .*/\1/' | sort -u
+}
+
+# The probe full screen, then androiddemo, moved to the top stage: the probe
+# fills the other half. Whether the two (and only they) show split.
+split_up() {
+  adb shell am start -W -n "$probe/.Drop" >/dev/null
+  sleep 2
+  adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
+  sleep 3
+  adb shell dumpsys activity service SystemUIService WMShell splitscreen \
+    moveToSideStage "$(task_of "$pkg")" 0 >/dev/null
+  sleep 4
+  # The probe may have the focus now (uiautomator dumps the focused window):
+  # starting androiddemo again focuses its stage, still split.
+  adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
+  sleep 2
+  [ "$(split_visible | tr '\n' ' ')" = "$(printf '%s\n' "$pkg" "$probe" | sort | tr '\n' ' ')" ]
+}
+
+if [ "$layout" = split ]; then
+  # Twice as tall, so each half is about the screen androiddemo has alone.
+  adb shell wm size "${w}x$((h * 2))"
+  sleep 2
+  # The shell sometimes pairs androiddemo with another app it had shown
+  # (seen with Chrome): end that split and try again.
+  ok=""
+  for attempt in 1 2 3; do
+    split_up && { ok=1; break; }
+    echo "android apps: split screen showed: $(split_visible | tr '\n' ' ')(attempt $attempt)"
+    unsplit
+    adb shell am force-stop "$pkg"
+    adb shell am force-stop "$probe"
+    sleep 3
+  done
+  if [ -z "$ok" ]; then
+    echo "android apps: the two apps didn't go into split screen; skipping"
+    adb shell dumpsys activity activities | grep -E "^ *\* Task\{" >&2
+    exit 0
+  fi
+  greeting="$(find_node 'text="(Hello, [^"]*! )?Tapped [0-9]+ times"')" || exit 1
+  title="$(find_node 'text="Stipple on Android"')" || exit 1
+  # uiautomator dumps androiddemo's window, not the probe's: its middle.
+  target="$(window_center "$probe/$probe.Drop")"
+  [ -n "$target" ] || { echo "no window for $probe/.Drop" >&2; exit 1; }
+else
+  # androiddemo on top: its nodes are read while it has focus.
+  adb shell am start --windowingMode 5 -n "$pkg/android.app.NativeActivity" >/dev/null
+  sleep 3
+  app_task="$(task_of "$pkg")"
+  # Side by side, not overlapping: a touch on a freeform window raises it.
+  place "$app_task" 0 0 "$w" $((h * 72 / 100))
+  sleep 3
+  if ! freeform "$pkg"; then
+    echo "android apps: androiddemo didn't open in a freeform window; skipping"
+    exit 0
+  fi
+  greeting="$(find_node 'text="(Hello, [^"]*! )?Tapped [0-9]+ times"')" || exit 1
+  title="$(find_node 'text="Stipple on Android"')" || exit 1
+  # The probe below it.
+  adb shell am start --windowingMode 5 -n "$probe/.Drop" >/dev/null
+  sleep 3
+  probe_task="$(task_of "$probe")"
+  place "$probe_task" 0 $((h * 74 / 100)) "$w" $((h * 95 / 100))
+  sleep 3
+  target="$(find_node 'text="Drop here"')" || exit 1
 fi
-greeting="$(find_node 'text="(Hello, [^"]*! )?Tapped [0-9]+ times"')" || exit 1
-title="$(find_node 'text="Stipple on Android"')" || exit 1
-# The probe below it.
-adb shell am start --windowingMode 5 -n "$probe/.Drop" >/dev/null
-sleep 3
-probe_task="$(task_of "$probe")"
-place "$probe_task" 0 $((h * 74 / 100)) "$w" $((h * 95 / 100))
-sleep 3
-target="$(find_node 'text="Drop here"')" || exit 1
 adb exec-out screencap -p > "$shots/android-apps-side-by-side.png" || true
 
 failed=""

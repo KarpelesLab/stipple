@@ -5818,7 +5818,7 @@ jobs:
             bash examples/androiddemo/test-on-device.sh stipple.apk visual_output
             # Drops through the system's drag and drop (a text, and a file as a MediaStore content: URI) and a uinput keyboard's dead keys: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-input.sh visual_output || echo "::warning::test-input.sh failed (drag and drop, dead keys; non-blocking)"
-            # A text and a file (through androiddemo's FileProvider) dragged out of androiddemo into the probe app, the two in freeform windows: not blocking until it has passed on CI's emulators.
+            # A text and a file (through androiddemo's FileProvider) dragged out of androiddemo into the probe app, the two in freeform windows (split screen on API 33): not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-drag-apps.sh clipprobe.apk visual_output || echo "::warning::test-drag-apps.sh failed (a drag into another app; non-blocking)"
             # Timers changing visible text, the clipboard both ways with another app, and a URL opened in the browser, by adb input touches: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-services.sh clipprobe.apk visual_output || echo "::warning::test-services.sh failed (timers, clipboard, opening a URL; non-blocking)"
