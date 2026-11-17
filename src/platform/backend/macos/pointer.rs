@@ -35,6 +35,14 @@ unsafe extern "C" {
     fn CGWarpMouseCursorPosition(point: CgPoint) -> i32;
 }
 
+/// Whether an event of type `etype` is a mouse button going down.
+pub(super) fn is_press(etype: u64) -> bool {
+    matches!(
+        etype,
+        super::NS_LEFT_MOUSE_DOWN | super::NS_RIGHT_MOUSE_DOWN | NS_OTHER_MOUSE_DOWN
+    )
+}
+
 /// Whether an event of type `etype` is the mouse moving (with or without a
 /// button down), which the locked pointer reports as motion.
 pub(super) fn is_motion(etype: u64) -> bool {

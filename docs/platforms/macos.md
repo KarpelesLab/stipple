@@ -44,11 +44,24 @@ theme's background, so a dark theme gets a dark title bar.
 
 ## OS-drawn controls
 
-Under `Theme::native()` every control is drawn by a real, offscreen AppKit view
-(`NSButton`, `NSSwitch`, `NSSlider`, `NSProgressIndicator`, `NSTextField`)
-captured with `cacheDisplayInRect:toBitmapImageRep:`, so controls take the look of
-whichever macOS version runs the app. Switch sizes come from AppKit, since they
-differ between versions.
+Under `Theme::native()` buttons, checkboxes, radio buttons, switches, sliders
+and progress bars are real AppKit controls in the window's view (`NSButton`,
+`NSSwitch`, `NSSlider`, `NSProgressIndicator`; see
+[Real controls](../native-theme.md#real-controls)), live, with the look and
+effects of whichever macOS version runs the app (Liquid Glass on macOS 26).
+The primary button is tinted with the accent color (`bezelColor`) rather than
+made the window's default button, so Return stays the app's. The controls
+refuse first responder, so the keyboard stays with the app's view. The event
+loop leaves a mouse press that lands on one to AppKit, whose click tracking
+sends the control's action, which the app gets as the element's tap (or drag,
+for a slider). The view's accessibility children vend the control itself where
+it stands for a node.
+
+Where a control can't be live (under an overlay, a transform, a fade, half
+out of a scroll container; off screen) the same AppKit view draws it offscreen
+into a picture with `cacheDisplayInRect:toBitmapImageRep:`. Text-field frames
+are always pictures (editing stays Stipple's). Switch sizes come from AppKit,
+since they differ between versions.
 
 AppKit only draws a focus ring for a window's first responder, so Stipple draws
 its own around the focused control.

@@ -735,6 +735,13 @@ unsafe fn build_ax_element(
     root: Option<&crate::platform::access::A11yNode>,
     path: &mut Vec<usize>,
 ) -> Id {
+    // A live OS control speaks for itself.
+    if let Some(control) = node
+        .native_view
+        .and_then(|id| crate::platform::native::os_views::handle_of(view, id))
+    {
+        return control;
+    }
     let (x, y, w, h) = node.bounds;
     let mut frame = CgRect {
         origin: CgPoint { x, y },
@@ -1611,6 +1618,12 @@ impl Window for MacWindow {
     fn set_dark(&self, dark: bool) {
         unsafe { set_window_dark(self.window, dark) };
     }
+    fn hosts_native_views(&self) -> bool {
+        true
+    }
+    fn set_native_views(&self, views: &[crate::platform::native::NativeView]) {
+        crate::platform::native::os_views::sync(self.view, views);
+    }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         // Stash the tree; AppKit pulls `accessibilityChildren` lazily, so we just
         // keep the latest one. Adopt the root's name as the view's label too.
@@ -1964,6 +1977,7 @@ unsafe fn close_windows() {
     });
     for w in closed {
         clear_ax_elements(&w);
+        crate::platform::native::os_views::forget(w.view);
         if let Some(layer) = w.metal.borrow_mut().take() {
             unsafe { layer.detach() };
         }
@@ -1994,6 +2008,15 @@ unsafe fn close_windows() {
     {
         activate(&w);
     }
+}
+
+/// Queue `event` for the window whose view is `view`, delivered once
+/// AppKit's handling of the current event returns (a live OS control's
+/// action, `native::os_views`).
+pub(crate) fn queue_event(view: Id, event: Event) {
+    CTX.with(|c| c.borrow_mut().window_pending.push((view, event)));
+    // The loop delivers it once it turns, which a wait would hold up.
+    crate::platform::wake::wake();
 }
 
 /// Deliver the events AppKit raised inside its callbacks: a window's (drops,
@@ -2226,6 +2249,18 @@ where
                         let event = if win.pointer_locked.get() && pointer::is_motion(etype) {
                             let (dx, dy) = (msg_f64(ev, sel("deltaX")), msg_f64(ev, sel("deltaY")));
                             (dx != 0.0 || dy != 0.0).then_some(Event::PointerDelta { dx, dy })
+                        } else if pointer::is_press(etype)
+                            && crate::platform::native::os_views::owns(view, {
+                                let p = msg_point(ev, sel("locationInWindow"));
+                                crate::platform::native::os_views::CgPoint {
+                                    x: p.x,
+                                    y: view_h - p.y,
+                                }
+                            })
+                        {
+                            // On a live OS control: AppKit's (its click
+                            // tracks the mouse until it's let go).
+                            None
                         } else {
                             translate_event(etype, ev, view_h)
                         };
