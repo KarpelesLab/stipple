@@ -17,12 +17,13 @@ use std::sync::{Condvar, Mutex};
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub(crate) mod android_caps;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
+#[cfg_attr(test, allow(dead_code))]
 mod apple;
 #[cfg(any(target_os = "linux", test))]
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(crate) mod linux;
 #[cfg(any(target_os = "windows", test))]
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+#[cfg_attr(any(test, not(target_os = "windows")), allow(dead_code))]
 mod windows;
 
 /// What carries the default network's traffic.

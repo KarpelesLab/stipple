@@ -84,6 +84,7 @@ pub(crate) mod java;
 /// Hand-written JNI for the clipboard, key characters and the accent color.
 mod jni;
 /// The default network: a `ConnectivityManager.NetworkCallback`.
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) mod network;
 /// Notifications through `NotificationManager`.
 mod notify;

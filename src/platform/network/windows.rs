@@ -84,7 +84,7 @@ pub(crate) fn reading(best: Option<(u32, u32)>, hint: Option<Hint>) -> Reading {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(all(not(test), target_os = "windows"))]
 pub(super) use os::start;
 
 #[cfg(target_os = "windows")]
