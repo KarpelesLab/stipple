@@ -660,7 +660,8 @@ back; that read timed out in the run), and `open_url` brings Safari to the
 foreground. Not tried on a physical device. See
 [platforms/ios.md](platforms/ios.md#real-touches-from-xcuitest).
 ⁸² `examples/androiddemo/test-services.sh` (not blocking yet; passed on local
-API 34, 33 and 30 emulators): the clipboard both ways with another app (a
+API 34, 33 and 30 emulators and in a CI trial run on each, three times in a
+row): the clipboard both ways with another app (a
 probe app that copies from a broadcast and reads once in front), and
 `open_url` starting the `ACTION_VIEW` intent from the app into Chrome (the
 activity manager's logged start; Chrome's first run switched off). Not
@@ -706,8 +707,8 @@ an `NSString`, or a file representation per file) and Android's
 `FileProvider`, which the manifest declares). On Android a text and a file
 dragged into another app (a probe app in a freeform window, or split
 screen on API 33) passed on local API 34, 33 and 30 emulators, and onto the
-app itself on local API 34 and 30 ones; in CI into another app on API 34 and
-30, onto the app on 34, 33 and 30; not blocking.
+app itself on local API 34 and 30 ones; in CI both on API 34, 33 and 30;
+not blocking.
 On iOS the simulator self-test asks the drag delegate for the items and
 drops them on the app, and an XCUITest lifts and drops with a real touch
 inside the app (not blocking yet; both passed in CI); a drag between two apps can't be

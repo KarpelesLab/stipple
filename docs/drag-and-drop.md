@@ -293,8 +293,9 @@ provider has no state of its own, so a target may read it after the drag
   into the probe, which must log the text, and the file's name, type and
   bytes as its `ContentResolver` reads them. `test-input.sh` passed on local
   API 34 and 30 emulators and in CI on API 34, 33 and 30;
-  `test-drag-apps.sh` locally on API 34, 33 and 30 and in CI on API 34 and
-  30. CI runs them without blocking.
+  `test-drag-apps.sh` locally on API 34, 33 and 30 and in CI on API 34, 33
+  and 30 (three runs in a row on each in a trial run). CI runs them without
+  blocking.
 - On the iOS simulator `touchdemo`'s self-test calls the drop interaction's
   delegate with a stand-in session over real `NSItemProvider`s (a text, a
   file); and the drag interaction's, asking for the items under its two drag

@@ -2293,8 +2293,9 @@ Most input only works on X11 today.
   in freeform windows (split screen on API 33, where `am task resize`
   doesn't move a freeform window's surface) and lifts both into the probe,
   which reads the file's name, type and bytes through its `ContentResolver`
-  (not blocking in CI; in CI the first passed on API 34, 33 and 30, the
-  second on API 34 and 30, and locally on API 34, 33 and 30). **iOS**,
+  (not blocking in CI; both passed in CI on API 34, 33 and 30, the second
+  three times in a row on each in a trial run, and locally on API 34, 33
+  and 30). **iOS**,
   not blocking yet, passed in one CI run: `touchdemo`'s
   self-test asks the drag delegate for the items under its two drag sources
   and drops those items on its own drop target; an XCUITest lifts and drops
@@ -2353,7 +2354,8 @@ Most input only works on X11 today.
   another app, and a URL opening in Chrome (the activity manager logs the
   `ACTION_VIEW` intent started from the app's uid and resolved to Chrome,
   whose first run is switched off); it passed on local API 34, 33 and 30
-  emulators. **Missing:** physical devices (neither platform
+  emulators and in a CI trial run on each (three times in a row).
+  **Missing:** physical devices (neither platform
   has been tried on one), and a few passing runs before these steps block.
   See [docs/platforms/ios.md](docs/platforms/ios.md#real-touches-from-xcuitest)
   and [docs/platforms/android.md](docs/platforms/android.md#running-on-an-emulator).

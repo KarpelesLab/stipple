@@ -667,7 +667,8 @@ A long press lifts androiddemo's greeting into the probe, which must log the
 text; then its heading, whose file the probe must read through its own
 `ContentResolver` (display name, type and bytes) with the drag's URI
 permission. It passed on local API 34, 33 and 30 emulators (several runs
-each) and in CI on API 34 and 30. CI runs it without blocking.
+each) and in CI on API 34, 33 and 30 (three times in a row on each in a
+trial run). CI runs it without blocking.
 
 `examples/androiddemo/test-services.sh clipprobe.apk` then drives the
 system's services with `adb shell input` touches: the one-second
@@ -688,7 +689,8 @@ in `dumpsys activity`, which the check used to read) is also switched off
 for the part (`/data/local/tmp/chrome-command-line` with `--disable-fre
 --no-first-run`, Chrome made the debug app with `am set-debug-app
 --persistent`; both undone afterwards), so the page loads. It passed on
-local API 34, 33 and 30 emulators (several runs each); CI runs it after
+local API 34, 33 and 30 emulators (several runs each) and in a CI trial
+run on each (three times in a row); CI runs it after
 `test-input.sh` on each emulator, without blocking until it has passed
 there for longer.
 
