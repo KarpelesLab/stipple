@@ -83,6 +83,8 @@ mod insets;
 pub(crate) mod java;
 /// Hand-written JNI for the clipboard, key characters and the accent color.
 mod jni;
+/// The default network: a `ConnectivityManager.NetworkCallback`.
+pub(crate) mod network;
 /// Notifications through `NotificationManager`.
 mod notify;
 /// URLs that open the app: the `Link` activity's `VIEW` intents.

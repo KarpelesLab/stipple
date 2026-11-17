@@ -24,6 +24,9 @@
   <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
   <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+  <!-- platform::network and App::on_network: the default network's
+       callback. -->
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
   <application android:label="Stipple" android:hasCode="true" android:debuggable="true"
       android:enableOnBackInvokedCallback="true"
       android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">

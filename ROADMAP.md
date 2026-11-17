@@ -1809,6 +1809,17 @@ Most input only works on X11 today.
   `examples/intentresult` starts `VpnService.prepare`'s consent dialog:
   cancelled, then agreed to after the activity was recreated under it,
   passed on local API 34 and 30 emulators; CI runs it, not blocking yet._
+- ✅ Network status (`platform::network`, `App::on_network`, `Event::Network`,
+  #71): _online, the transport, metered, constrained (Low Data Mode, Data
+  Saver) and a generation that changes with the default network (Wi-Fi to
+  cellular while online). `nw_path_monitor` on macOS and iOS (loaded at run
+  time, a hand-built block), a run-time `NetworkCallback` subclass on Android
+  (`network = true` in `cargo-stipple` adds `ACCESS_NETWORK_STATE`), IP
+  Helper's route and connectivity-hint notifications on Windows, netlink plus
+  NetworkManager over D-Bus on Linux, `navigator.onLine` and
+  `navigator.connection` on the web. Run in a network namespace on Linux and
+  on API 34 and 30 emulators locally; Windows, macOS, iOS and the web
+  build-checked. See [docs/network.md](docs/network.md)._
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
   optional (secure) text field, answered asynchronously as a state update.

@@ -272,6 +272,11 @@ path = "examples/localedemo/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]
+name = "netstatus_web"
+path = "examples/netstatus/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
 name = "canvasdemo_web"
 path = "examples/canvasdemo/web.rs"
 crate-type = ["cdylib"]

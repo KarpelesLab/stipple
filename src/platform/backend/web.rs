@@ -919,6 +919,34 @@ pub fn locale(blob: String) {
     }
 }
 
+/// The page's network (see `web/stipple.js`): `navigator.onLine`, and
+/// `navigator.connection`'s `type` (`transport`: 1 Wi-Fi, 2 cellular, 3
+/// Ethernet, 0 anything else or unknown) and `saveData`, with a number that
+/// changes with the connection's type (`network`). Called before `start`,
+/// and again on `online`, `offline` and the connection's `change`, which a
+/// running app sees as [`Event::Network`].
+#[doc(hidden)]
+pub fn network(online: u32, transport: u32, metered: u32, constrained: u32, network: u32) {
+    use crate::platform::Transport;
+    let reading = crate::platform::network::Reading {
+        online: online != 0,
+        transport: match transport {
+            1 => Transport::Wifi,
+            2 => Transport::Cellular,
+            3 => Transport::Ethernet,
+            _ => Transport::Other,
+        },
+        metered: metered != 0,
+        constrained: constrained != 0,
+        network: network as u64,
+    };
+    if let Some(status) = crate::platform::network::note(reading)
+        && HOST.with(|h| h.handler.borrow().is_some())
+    {
+        deliver(Event::Network(status));
+    }
+}
+
 /// The page's `renderer` option (`auto`, `software`, `gpu`, `webgpu`,
 /// `webgl2`), which overrides the app's [`App::renderer`](crate::App::renderer)
 /// as `STIPPLE_RENDERER` does natively. Called before [`start`].

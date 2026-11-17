@@ -336,6 +336,12 @@ title = "Focus and closing"
 group = "Input"
 size = [420, 340]
 
+[web.netstatus]
+description = "Whether the device is online, over Wi-Fi, cellular or a cable, metered or saving data, and each change as it comes (in the browser, navigator.onLine and navigator.connection)."
+title = "Network status"
+group = "Input"
+size = [520, 420]
+
 [web.storedemo]
 description = "An in-app store screen: consumable gems, a no-ads unlock, a subscription waiting for a parent's approval, and Restore purchases, on the mock store (StoreKit or Google Play on a phone)."
 title = "In-app purchases"

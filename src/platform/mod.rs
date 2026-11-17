@@ -112,6 +112,8 @@ pub(crate) mod locale;
 pub(crate) mod menu;
 /// OS-drawn controls and system appearance for the native theme.
 pub mod native;
+/// Network connectivity: online, the transport, metered, constrained.
+pub(crate) mod network;
 /// Runtime permissions: the camera, the microphone, notifications, photos,
 /// the location.
 pub mod permission;
@@ -186,6 +188,7 @@ pub use locale::{locale, preferred_languages, set_preferred_languages};
 pub(crate) use menu::{MenuPopup, Shortcut};
 pub(crate) use menu::{NativeMenuBar, NativeTray, TRAY_ID_BASE};
 pub use menu::{mnemonic, mnemonic_at, mnemonic_range};
+pub use network::{NetworkStatus, Transport, network};
 pub use pointer::{
     DoubleClick, double_click, pointer_modifiers, set_double_click, set_pointer_modifiers,
 };

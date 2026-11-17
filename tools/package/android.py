@@ -338,6 +338,8 @@ def manifest_xml(m, lib_name, refs):
         for p in ("android.permission.RECEIVE_BOOT_COMPLETED", "android.permission.USE_EXACT_ALARM"):
             if p not in perms:
                 perms.append(p)
+    if m.android_network and "android.permission.ACCESS_NETWORK_STATE" not in perms:
+        perms.append("android.permission.ACCESS_NETWORK_STATE")
     lines = [
         '<?xml version="1.0" encoding="utf-8"?>',
         "<!-- Written by cargo-stipple from the app's packaging manifest. -->",

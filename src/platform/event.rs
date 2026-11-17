@@ -437,6 +437,14 @@ pub enum Event {
     /// [`platform::store`](crate::platform::store). See
     /// [`App::on_transaction`](crate::App::on_transaction).
     Transaction(crate::platform::Transaction),
+    /// The default network changed: online or offline, another transport,
+    /// metered or constrained, or another network altogether (Wi-Fi to
+    /// cellular, both online: a new
+    /// [`generation`](crate::platform::NetworkStatus::generation)). Sent
+    /// once the network is watched, by
+    /// [`App::on_network`](crate::App::on_network) or a first
+    /// [`network`](crate::platform::network) call.
+    Network(crate::platform::NetworkStatus),
 
     /// A drag from another application entered the window at `position`
     /// (logical pixels), carrying the kinds of data in `offer`. The app answers

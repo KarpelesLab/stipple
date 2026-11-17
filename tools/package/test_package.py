@@ -118,6 +118,19 @@ class AndroidTests(unittest.TestCase):
         # The provider's class is in the dex.
         self.assertIn('android:hasCode="true"', xml)
 
+    def test_network(self):
+        refs = {"label": "@string/app_name", "theme": "@style/AppTheme"}
+        xml = android.manifest_xml(manifest(), "my_app", refs)
+        self.assertNotIn("ACCESS_NETWORK_STATE", xml)
+        m = manifest(android={"network": True})
+        self.assertTrue(m.android_network)
+        xml = android.manifest_xml(m, "my_app", refs)
+        self.assertIn('<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>', xml)
+        # Not twice when it's in the permissions too.
+        m = manifest(android={"network": True, "permissions": ["ACCESS_NETWORK_STATE"]})
+        xml = android.manifest_xml(m, "my_app", refs)
+        self.assertEqual(xml.count("ACCESS_NETWORK_STATE"), 1)
+
     def test_billing(self):
         self.assertIsNone(manifest().android_billing)
         self.assertEqual(manifest(android={"billing": True}).android_billing, "8.3.0")

@@ -149,6 +149,17 @@ macro_rules! web_app {
                 glue::locale(unsafe { glue::take_string(ptr, len) });
             }
 
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_network(
+                online: u32,
+                transport: u32,
+                metered: u32,
+                constrained: u32,
+                network: u32,
+            ) {
+                glue::network(online, transport, metered, constrained, network);
+            }
+
             /// # Safety
             /// `ptr`/`len` come from one `stipple_alloc(len)`.
             #[unsafe(no_mangle)]

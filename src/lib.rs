@@ -48,6 +48,7 @@ mod app_gpu;
 mod app_keys;
 mod app_lifecycle;
 mod app_locale;
+mod app_network;
 mod app_occlusion;
 mod app_pointer;
 mod app_scroll_bar;
@@ -232,6 +233,8 @@ pub struct App<S> {
     gamepad: Option<app_gamepad::GamepadFn<S>>,
     // Menus driven by gamepads (`gamepad_navigation`).
     gamepad_nav: Option<app_gamepad::GamepadNav<S>>,
+    // `on_network`'s hook.
+    network: Option<app_network::NetworkFn<S>>,
     /// What draws the frames, for windows opened later ([`App::renderer`]).
     renderer: crate::render::Renderer,
 }
@@ -735,6 +738,7 @@ impl<S: 'static> App<S> {
             game: None,
             gamepad: None,
             gamepad_nav: None,
+            network: None,
             renderer: Default::default(),
         }
     }
@@ -3313,6 +3317,7 @@ impl<S: 'static> App<S> {
         S: 'static,
     {
         self.start_store();
+        self.start_network();
         #[cfg(target_arch = "wasm32")]
         let app = backend::web::adopt(self);
         #[cfg(not(target_arch = "wasm32"))]
@@ -3563,6 +3568,7 @@ impl<S: 'static> App<S> {
                     | Event::WindowChanged
                     | Event::ThemeChanged
                     | Event::LocaleChanged
+                    | Event::Network(_)
                     | Event::Lifecycle(_)
                     | Event::Occluded(_)
                     | Event::SaveState
@@ -3996,6 +4002,12 @@ impl<S: 'static> App<S> {
                 }
                 Event::Transaction(ref t) => {
                     if self.transaction(t) && !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::Network(ref status) => {
+                    if self.network_changed(status) && !self.in_background() {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait

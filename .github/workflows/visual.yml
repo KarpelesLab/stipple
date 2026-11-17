@@ -4588,6 +4588,19 @@ jobs:
           OUT_DIR: visual_output
         run: dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/examples/traydemo
 
+      # platform::network end to end: netstatus in a user and network
+      # namespace of its own, while the script adds and removes links and
+      # default routes (docs/network.md). Ubuntu's AppArmor keeps
+      # unprivileged user namespaces off by default: allowed for the step.
+      # Not blocking until it has passed on CI.
+      - name: Network status in a network namespace
+        continue-on-error: true
+        run: |
+          cargo build --release --example netstatus
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          mkdir -p visual_output
+          bash .github/scripts/network-linux.sh target/release/examples/netstatus 2>&1 | tee -a visual_output/network-linux.log
+
       - name: Upload logs
         uses: actions/upload-artifact@v4
         if: always()
@@ -4649,6 +4662,17 @@ jobs:
           powershell -NoProfile -Command "Get-Process | Where-Object { \$_.MainWindowTitle -like '*stipple-note*' } | Format-Table -AutoSize ProcessName,MainWindowTitle" | tee editors.txt
           grep -q stipple-note editors.txt || echo "::warning::open_path didn't show an editor with stipple-note.txt"
           powershell -NoProfile -Command "Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process" || true
+
+      # platform::network on the runner (IP Helper: online through its
+      # Ethernet adapter). Not blocking until it has passed on CI.
+      - name: Network status
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo build --release --example netstatus
+          timeout 60 ./target/release/examples/netstatus.exe --watch 3 2>&1 | tee net.log
+          grep -q "netstatus: online=1" net.log
+          grep -q "transport=Ethernet" net.log || echo "::warning::the runner's network isn't Ethernet"
 
       - name: Native message box (TaskDialogIndirect), answered by the self-test
         shell: powershell
@@ -4732,6 +4756,16 @@ jobs:
           for _ in $(seq 30); do pgrep -x TextEdit && break; sleep 0.5; done
           pgrep -x TextEdit
           kill $(pgrep -x TextEdit) 2>/dev/null || true
+
+      # platform::network on the runner (nw_path_monitor). Not blocking
+      # until it has passed on CI.
+      - name: Network status
+        continue-on-error: true
+        run: |
+          cargo build --release --example netstatus
+          perl -e 'alarm 60; exec @ARGV' ./target/release/examples/netstatus --watch 3 2>&1 | tee net.log
+          grep -q "netstatus: online=1" net.log
+          grep -q "generation=[1-9]" net.log
 
       - name: Native message box (NSAlert sheet), answered by the self-test
         env:
@@ -5984,6 +6018,8 @@ jobs:
             bash examples/androiddemo/test-open-url.sh visual_output || echo "::warning::test-open-url.sh failed (URLs opening the app; non-blocking)"
             # JNI access from the app and an activity started for a result (the VPN consent dialog: backed out of, then agreed to after the activity was recreated under it): not blocking until it has passed on CI's emulators.
             if [ -f intentresult.apk ]; then bash examples/intentresult/test-on-device.sh intentresult.apk visual_output || echo "::warning::intentresult/test-on-device.sh failed (activity results; non-blocking)"; fi
+            # The default network's changes as Wi-Fi and mobile data go off and on (svc wifi, svc data), heard by App::on_network: not blocking until it has passed on CI's emulators.
+            bash examples/androiddemo/test-network.sh || echo "::warning::test-network.sh failed (network changes; non-blocking)"
             # Not blocking until it has passed on CI's x86_64 emulators.
             bash .github/billing/android/test-billing.sh stipple.apk visual_output || echo "::warning::test-billing.sh failed (non-blocking)"
             # The app's own Java Service and BroadcastReceiver calling into Rust, the service in a process with no activity: not blocking until it has passed on CI's emulators.

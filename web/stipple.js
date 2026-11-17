@@ -1102,6 +1102,20 @@ export async function start(canvas, wasmUrl, options = {}) {
   };
   locale();
   window.addEventListener?.("languagechange", locale);
+  // The network (platform::network, Event::Network): navigator.onLine, and
+  // where the browser has it, navigator.connection's type (Wi-Fi, cellular,
+  // Ethernet: Chrome on Android) and saveData. Its type stands for the
+  // network: another type is another network. Cellular counts as metered.
+  const conn = navigator.connection;
+  const network = () => {
+    const kind = { wifi: 1, cellular: 2, ethernet: 3 }[conn?.type] ?? 0;
+    const online = navigator.onLine === false ? 0 : 1;
+    e.stipple_network?.(online, kind, kind === 2 ? 1 : 0, conn?.saveData ? 1 : 0, kind + 1);
+  };
+  network();
+  window.addEventListener?.("online", network);
+  window.addEventListener?.("offline", network);
+  conn?.addEventListener?.("change", network);
 
   // A canvas that CSS doesn't size would grow with its backing store at a
   // pixel ratio above 1, so pin it at its current size.

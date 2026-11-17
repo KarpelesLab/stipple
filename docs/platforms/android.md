@@ -195,6 +195,16 @@ whose `invoke` is native: behind `java.lang.reflect.Proxy` objects it
 implements the Play Billing Library's listener interfaces, which only the
 app's class loader has (see [In-app purchases](#in-app-purchases)).
 
+An app that watches the network (`platform::network`, `App::on_network`)
+gets `org.stipple.android.NetworkWatch` and `NetworkPolicy` (a receiver for
+Data Saver changes) as well, from a dex of their own: the first a
+`ConnectivityManager.NetworkCallback` registered with
+`registerDefaultNetworkCallback` on the application context (Android 7 and
+later). It needs `android.permission.ACCESS_NETWORK_STATE` in the manifest
+(`network = true` in `cargo-stipple`'s `[android]` table); `adb logcat -s
+stipple` shows `network callback registered`, or why it couldn't be. See
+[network.md](../network.md).
+
 Every method is `native`, bound to Rust with `RegisterNatives`; the only
 bytecode is each constructor's call to its superclass's. It runs on the main
 (Java) thread, and talks to the UI thread through the backend's command

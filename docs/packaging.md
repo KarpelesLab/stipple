@@ -98,6 +98,7 @@ permissions = ["CAMERA", "POST_NOTIFICATIONS"]
 # lib-name = "qr_master"           # android.app.lib_name: default, the [lib]'s name
 # scheduled-notifications = true   # platform::schedule_notification's receiver and dex
 # drag-files = true                # the FileProvider files dragged out of the app go through
+# network = true                   # ACCESS_NETWORK_STATE, for platform::network and App::on_network
 # billing = true                   # the Play Billing Library for platform::store (or a version: "8.3.0")
 # splash-background = "#16181d"    # Android 12's splash screen
 # icon-foreground = "icons/fg.svg" # the adaptive icon's layer (default: icon)

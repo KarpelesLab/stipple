@@ -536,6 +536,11 @@ mod app {
             Err(e) => println!("androiddemo: dirs unavailable: {e}"),
         }
         log_assets();
+        let net = stipple::platform::network();
+        println!(
+            "androiddemo: network online={} transport={:?} metered={} generation={}",
+            net.online, net.transport, net.metered, net.generation
+        );
         let state = State {
             taps: 0,
             ticks: 0,
@@ -586,6 +591,14 @@ mod app {
                 }
             })
             .on_lifecycle(|_: &mut State, change| println!("androiddemo: lifecycle {change:?}"))
+            // The default network's changes (test-network.sh turns Wi-Fi
+            // and mobile data off and on).
+            .on_network(|_: &mut State, net| {
+                println!(
+                    "androiddemo: network changed online={} transport={:?} metered={} constrained={} generation={}",
+                    net.online, net.transport, net.metered, net.constrained, net.generation
+                );
+            })
             .on_notification_tapped(|_: &mut State, id| {
                 println!("androiddemo: notification tapped {id:?}");
             })
