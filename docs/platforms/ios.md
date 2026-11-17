@@ -446,10 +446,32 @@ the main thread (`None` / `false` if it was cancelled). `open_file`,
 
 ## OS-drawn controls
 
-Under `Theme::native()` UIKit draws buttons, switches, sliders, progress bars
-and text-field frames: real, offscreen `UIControl`s snapshotted through the
-app's window. A plain layer render misses parts of current controls, such as a
-switch's knob. UIKit has no checkbox or radio button, so those stay self-drawn.
+Under `Theme::native()` buttons, switches, sliders and progress bars are real
+`UIButton`s, `UISwitch`es, `UISlider`s and `UIProgressView`s in the app's view
+(see [Real controls](../native-theme.md#real-controls)): subviews at the
+controls' frames, above the frame (and its Metal layer), live. Buttons use
+iOS 26's glass configurations (`prominentGlassButtonConfiguration` for the
+primary one, `glassButtonConfiguration`) where UIKit has them, else the filled
+and gray ones. Taps reach the app through a shared target's action; a switch
+the app sets slides with UIKit's animation. The view's accessibility elements
+vend the control itself where it stands for a node, so VoiceOver reads the
+`UISwitch` once, with the row's label. A drag that starts on a button or a
+switch scrolls the list under it (a pan recognizer on the view hands it to the
+app as a touch); a slider keeps its drags.
+
+Where a control can't be live (under an overlay, a transform, a fade, half
+out of a scroll container; off screen) UIKit draws it into a picture instead:
+the same control, offscreen, snapshotted through the app's window (a plain
+layer render misses parts of current controls, such as a switch's knob).
+Text-field frames are always pictures (editing stays Stipple's). UIKit has no
+checkbox or radio button, so those stay self-drawn.
+
+CI's `visual-ios` job runs `nativegallery`'s self-test on the simulator
+(`NATIVEGALLERY_SELFTEST`): the controls are `UIButton`s, a `UISwitch`, a
+`UISlider` and a `UIProgressView` where a tap at their middle lands, the app's
+handlers run when they're acted on, a panel over them turns them into pictures
+and back, a half-hidden row of a scrolled list is a picture, and VoiceOver's
+elements name each control once, as the UIKit control.
 
 ## Fonts
 

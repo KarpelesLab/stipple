@@ -1,0 +1,468 @@
+//! UIKit: the live controls, real `UIControl`s in the app's view (see
+//! [`views`](super::views)).
+//!
+//! Each [`NativeView`] is a `UIButton` (iOS 26's glass configurations where
+//! UIKit has them, else filled and gray), `UISwitch`, `UISlider` or
+//! `UIProgressView`, a subview of the app's view at the control's frame (in
+//! points, which are the window's logical pixels), above the frame's own
+//! layer and any Metal layer over it (`zPosition` 1). Its target is one
+//! shared `StippleNativeTarget`, whose action turns a tap
+//! (`UIControlEventTouchUpInside`) or a new value
+//! (`UIControlEventValueChanged`) into an
+//! [`Event::NativeView`](crate::platform::Event::NativeView). A switch set
+//! by the app moves with UIKit's animation; a slider the user is dragging
+//! isn't set back under their finger.
+//!
+//! A finger that goes down on a button or a switch and then drags is a
+//! scroll, as in a `UIScrollView`: a pan recognizer on the app's view, fed
+//! only touches that land on those controls, takes it from the control
+//! (which then doesn't fire) and hands it to the app as a touch, so a list
+//! of controls scrolls wherever it's dragged. A slider keeps its drags.
+
+use std::cell::RefCell;
+use std::ffi::c_void;
+
+use super::objc::{CgRect, Id, Sel, class, msg, nsstring, sel};
+use super::{NativeControl, NativeView, NativeViewEvent, ViewBackend, ViewSet};
+
+#[link(name = "objc", kind = "dylib")]
+unsafe extern "C" {
+    fn objc_allocateClassPair(superclass: Id, name: *const i8, extra: usize) -> Id;
+    fn objc_registerClassPair(cls: Id);
+    fn objc_getClass(name: *const i8) -> Id;
+    fn class_addMethod(cls: Id, name: Sel, imp: *const c_void, types: *const i8) -> bool;
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+struct CgPoint {
+    x: f64,
+    y: f64,
+}
+
+const TOUCH_UP_INSIDE: u64 = 1 << 6;
+const VALUE_CHANGED: u64 = 1 << 12;
+
+thread_local! {
+    static SET: RefCell<ViewSet<Id>> = RefCell::new(ViewSet::default());
+    static TARGET: std::cell::Cell<Id> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// The object every live control sends its actions to.
+fn target() -> Id {
+    TARGET.with(|t| {
+        if t.get().is_null() {
+            let cls = unsafe {
+                let name = c"StippleNativeTarget";
+                let existing = objc_getClass(name.as_ptr());
+                if existing.is_null() {
+                    let cls = objc_allocateClassPair(class("NSObject"), name.as_ptr(), 0);
+                    class_addMethod(
+                        cls,
+                        sel("stippleNativeAction:"),
+                        action as *const c_void,
+                        c"v@:@".as_ptr(),
+                    );
+                    class_addMethod(
+                        cls,
+                        sel("stipplePan:"),
+                        pan as *const c_void,
+                        c"v@:@".as_ptr(),
+                    );
+                    class_addMethod(
+                        cls,
+                        sel("gestureRecognizer:shouldReceiveTouch:"),
+                        pan_receives as *const c_void,
+                        c"B@:@@".as_ptr(),
+                    );
+                    objc_registerClassPair(cls);
+                    cls
+                } else {
+                    existing
+                }
+            };
+            t.set(unsafe { msg!(msg!(cls, "alloc", () -> Id), "init", () -> Id) });
+        }
+        t.get()
+    })
+}
+
+/// `stippleNativeAction:`: the user acted on `sender`.
+extern "C" fn action(_this: Id, _cmd: Sel, sender: Id) {
+    let Some((id, control)) = SET.with(|s| {
+        let s = s.try_borrow().ok()?;
+        let id = s.id_of(&sender)?;
+        Some((id, s.get(id)?.0.control))
+    }) else {
+        return;
+    };
+    let event = match control {
+        NativeControl::Slider { .. } => {
+            let v = unsafe { msg!(sender, "value", () -> f32) };
+            NativeViewEvent::Value(v as f64)
+        }
+        _ => NativeViewEvent::Activated,
+    };
+    crate::platform::backend::ios::send_event(crate::platform::Event::NativeView { id, event });
+}
+
+/// The touch id a pan over a control is forwarded as.
+const PAN_TOUCH: u64 = u64::MAX - 2;
+
+/// `gestureRecognizer:shouldReceiveTouch:`: the pan watches only fingers
+/// on a live button or switch (the app's view has its own touches, and a
+/// slider its drags).
+extern "C" fn pan_receives(_this: Id, _cmd: Sel, _pan: Id, touch: Id) -> bool {
+    let view = crate::platform::backend::ios::app_view();
+    unsafe {
+        let mut v: Id = msg!(touch, "view", () -> Id);
+        if v == view {
+            return false;
+        }
+        while !v.is_null() && v != view {
+            let cls = class("UISlider");
+            let slider: bool = msg!(v, "isKindOfClass:", (cls: Id) -> bool);
+            if slider {
+                return false;
+            }
+            v = msg!(v, "superview", () -> Id);
+        }
+        !v.is_null()
+    }
+}
+
+/// `stipplePan:`: a drag that began on a control, as the app's touch.
+extern "C" fn pan(_this: Id, _cmd: Sel, pan: Id) {
+    use crate::platform::TouchPhase;
+    let view = crate::platform::backend::ios::app_view();
+    let (state, at, moved) = unsafe {
+        let state: i64 = msg!(pan, "state", () -> i64);
+        let at: CgPoint = msg!(pan, "locationInView:", (view: Id) -> CgPoint);
+        let moved: CgPoint = msg!(pan, "translationInView:", (view: Id) -> CgPoint);
+        (state, at, moved)
+    };
+    let p = crate::geometry::Point::new(at.x, at.y);
+    let send = |phase, p| crate::platform::backend::ios::forwarded_touch(phase, PAN_TOUCH, p);
+    // UIGestureRecognizerState: Began 1, Changed 2, Ended 3, Cancelled 4.
+    match state {
+        1 => {
+            let from = crate::geometry::Point::new(at.x - moved.x, at.y - moved.y);
+            send(TouchPhase::Started, from);
+            send(TouchPhase::Moved, p);
+        }
+        2 => send(TouchPhase::Moved, p),
+        3 => send(TouchPhase::Ended, p),
+        4 | 5 => send(TouchPhase::Cancelled, p),
+        _ => {}
+    }
+}
+
+/// Put the pan on the app's view `view`, once.
+unsafe fn install_pan(view: Id) {
+    thread_local! {
+        static ON: std::cell::Cell<Id> = const { std::cell::Cell::new(std::ptr::null_mut()) };
+    }
+    if view.is_null() || ON.with(|o| o.get()) == view {
+        return;
+    }
+    ON.with(|o| o.set(view));
+    unsafe {
+        let t = target();
+        let a = sel("stipplePan:");
+        let alloc: Id = msg!(class("UIPanGestureRecognizer"), "alloc", () -> Id);
+        let pan: Id = msg!(alloc, "initWithTarget:action:", (t: Id, a: Sel) -> Id);
+        msg!(pan, "setDelegate:", (t: Id) -> ());
+        msg!(view, "addGestureRecognizer:", (pan: Id) -> ());
+    }
+}
+
+fn frame(v: &NativeView) -> CgRect {
+    CgRect {
+        x: v.frame.min_x(),
+        y: v.frame.min_y(),
+        width: v.frame.width(),
+        height: v.frame.height(),
+    }
+}
+
+/// The button configuration for a primary or regular button: iOS 26's
+/// glass ones where UIKit has them, else filled and gray. The snapshot
+/// path draws the same (`native::ios`).
+pub(super) unsafe fn button_config(primary: bool) -> Id {
+    unsafe {
+        let cls = class("UIButtonConfiguration");
+        let glass = if primary {
+            "prominentGlassButtonConfiguration"
+        } else {
+            "glassButtonConfiguration"
+        };
+        let name = if responds(cls, glass) {
+            glass
+        } else if primary {
+            "filledButtonConfiguration"
+        } else {
+            "grayButtonConfiguration"
+        };
+        msg!(cls, name, () -> Id)
+    }
+}
+
+/// Whether `obj` (a class or an instance) answers `selector`.
+unsafe fn responds(obj: Id, selector: &str) -> bool {
+    let s = sel(selector);
+    unsafe { msg!(obj, "respondsToSelector:", (s: Sel) -> bool) }
+}
+
+unsafe fn set_title(button: Id, title: &str) {
+    unsafe {
+        let config: Id = msg!(button, "configuration", () -> Id);
+        if config.is_null() {
+            return;
+        }
+        let text = nsstring(title);
+        msg!(config, "setTitle:", (text: Id) -> ());
+        msg!(button, "setConfiguration:", (config: Id) -> ());
+    }
+}
+
+/// Set what every control shows the same way: its frame, whether it's
+/// enabled, its look, its direction and its accessible name.
+unsafe fn set_common(view: Id, v: &NativeView) {
+    unsafe {
+        let f = frame(v);
+        msg!(view, "setFrame:", (f: CgRect) -> ());
+        let enabled = v.enabled;
+        if responds(view, "setEnabled:") {
+            msg!(view, "setEnabled:", (enabled: bool) -> ());
+        }
+        // UIUserInterfaceStyleDark = 2, Light = 1.
+        let style = if v.dark { 2_i64 } else { 1_i64 };
+        msg!(view, "setOverrideUserInterfaceStyle:", (style: i64) -> ());
+        // UISemanticContentAttributeForceRightToLeft = 4, ForceLeftToRight = 3.
+        let dir = if v.rtl { 4_i64 } else { 3_i64 };
+        msg!(view, "setSemanticContentAttribute:", (dir: i64) -> ());
+        let label = if v.label.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            nsstring(&v.label)
+        };
+        msg!(view, "setAccessibilityLabel:", (label: Id) -> ());
+    }
+}
+
+/// The app's view and the controls in it.
+struct Uikit {
+    view: Id,
+}
+
+impl ViewBackend for Uikit {
+    type Handle = Id;
+
+    fn create(&mut self, v: &NativeView) -> Option<Id> {
+        if self.view.is_null() {
+            return None;
+        }
+        unsafe {
+            let f = frame(v);
+            let init = |name: &str| -> Id {
+                let alloc: Id = msg!(class(name), "alloc", () -> Id);
+                msg!(alloc, "initWithFrame:", (f: CgRect) -> Id)
+            };
+            let (control, events) = match v.control {
+                NativeControl::Button { primary } => {
+                    let kind = 1_i64; // UIButtonTypeSystem
+                    let b: Id = msg!(class("UIButton"), "buttonWithType:", (kind: i64) -> Id);
+                    let b: Id = msg!(b, "retain", () -> Id);
+                    let config = button_config(primary);
+                    msg!(b, "setConfiguration:", (config: Id) -> ());
+                    set_title(b, &v.title);
+                    (b, TOUCH_UP_INSIDE)
+                }
+                NativeControl::Switch { on } => {
+                    let s = init("UISwitch");
+                    let animated = false;
+                    msg!(s, "setOn:animated:", (on: bool, animated: bool) -> ());
+                    (s, VALUE_CHANGED)
+                }
+                NativeControl::Slider { value } => {
+                    let s = init("UISlider");
+                    let v = value as f32 / 1000.0;
+                    msg!(s, "setValue:", (v: f32) -> ());
+                    (s, VALUE_CHANGED)
+                }
+                NativeControl::Progress { value } => {
+                    let style = 0_i64; // UIProgressViewStyleDefault
+                    let alloc: Id = msg!(class("UIProgressView"), "alloc", () -> Id);
+                    let p: Id = msg!(alloc, "initWithProgressViewStyle:", (style: i64) -> Id);
+                    let v = value as f32 / 1000.0;
+                    msg!(p, "setProgress:", (v: f32) -> ());
+                    (p, 0)
+                }
+                // Checkboxes and radios aren't UIKit's, and fields stay
+                // Stipple's.
+                _ => return None,
+            };
+            if control.is_null() {
+                return None;
+            }
+            if events != 0 {
+                let t = target();
+                let a = sel("stippleNativeAction:");
+                msg!(control, "addTarget:action:forControlEvents:", (t: Id, a: Sel, events: u64) -> ());
+            }
+            set_common(control, v);
+            // Over the frame's layer, and over a Metal layer added later.
+            let layer: Id = msg!(control, "layer", () -> Id);
+            let z = 1.0_f64;
+            msg!(layer, "setZPosition:", (z: f64) -> ());
+            let parent = self.view;
+            msg!(parent, "addSubview:", (control: Id) -> ());
+            Some(control)
+        }
+    }
+
+    fn update(&mut self, h: &mut Id, old: &NativeView, new: &NativeView) {
+        let h = *h;
+        unsafe {
+            set_common(h, new);
+            match new.control {
+                NativeControl::Button { .. } => {
+                    if old.title != new.title {
+                        set_title(h, &new.title);
+                    }
+                }
+                NativeControl::Switch { on } => {
+                    let shown: bool = msg!(h, "isOn", () -> bool);
+                    if shown != on {
+                        let animated = true;
+                        msg!(h, "setOn:animated:", (on: bool, animated: bool) -> ());
+                    }
+                }
+                NativeControl::Slider { value } => {
+                    let tracking: bool = msg!(h, "isTracking", () -> bool);
+                    let shown: f32 = msg!(h, "value", () -> f32);
+                    let v = value as f32 / 1000.0;
+                    if !tracking && (shown - v).abs() > 0.0015 {
+                        msg!(h, "setValue:", (v: f32) -> ());
+                    }
+                }
+                NativeControl::Progress { value } => {
+                    let v = value as f32 / 1000.0;
+                    let animated = true;
+                    msg!(h, "setProgress:animated:", (v: f32, animated: bool) -> ());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn destroy(&mut self, h: Id) {
+        unsafe {
+            msg!(h, "removeFromSuperview", () -> ());
+            msg!(h, "release", () -> ());
+        }
+    }
+}
+
+/// The controls that are live here (UIKit has no checkbox or radio button).
+pub(crate) fn live_kind(control: NativeControl) -> bool {
+    matches!(
+        control,
+        NativeControl::Button { .. }
+            | NativeControl::Switch { .. }
+            | NativeControl::Slider { .. }
+            | NativeControl::Progress { .. }
+    )
+}
+
+/// Show exactly `views` in the app's view (`Window::set_native_views`).
+pub(crate) fn sync(views: &[NativeView]) {
+    let mut backend = Uikit {
+        view: crate::platform::backend::ios::app_view(),
+    };
+    if !views.is_empty() {
+        unsafe { install_pan(backend.view) };
+    }
+    let restack = SET.with(|s| s.borrow_mut().sync(&mut backend, views));
+    if restack {
+        let order: Vec<Id> = SET.with(|s| s.borrow().in_order().map(|(_, h)| *h).collect());
+        for h in order {
+            unsafe { msg!(backend.view, "bringSubviewToFront:", (h: Id) -> ()) };
+        }
+    }
+}
+
+/// The control shown for `id`, for the accessibility container to vend in
+/// its node's place.
+pub(crate) fn handle_of(id: u64) -> Option<Id> {
+    SET.with(|s| s.try_borrow().ok()?.get(id).map(|(_, h)| *h))
+}
+
+pub(crate) fn live_controls() -> Vec<super::LiveControl> {
+    let view = crate::platform::backend::ios::app_view();
+    let shown: Vec<(u64, Id)> =
+        SET.with(|s| s.borrow().in_order().map(|(v, h)| (v.id, *h)).collect());
+    shown
+        .into_iter()
+        .map(|(id, h)| unsafe {
+            let name = super::objc::class_name(h);
+            // A configured button's title is its configuration's.
+            let config: Id = if responds(h, "configuration") {
+                msg!(h, "configuration", () -> Id)
+            } else {
+                std::ptr::null_mut()
+            };
+            let title = if config.is_null() {
+                String::new()
+            } else {
+                super::objc::rust_string(msg!(config, "title", () -> Id)).unwrap_or_default()
+            };
+            let f: CgRect = msg!(h, "frame", () -> CgRect);
+            let at = CgPoint {
+                x: f.x + f.width / 2.0,
+                y: f.y + f.height / 2.0,
+            };
+            let nil: Id = std::ptr::null_mut();
+            let mut hit: Id = msg!(view, "hitTest:withEvent:", (at: CgPoint, nil: Id) -> Id);
+            while !hit.is_null() && hit != h {
+                hit = msg!(hit, "superview", () -> Id);
+            }
+            super::LiveControl {
+                id,
+                class: name,
+                title,
+                frame: crate::geometry::Rect::from_xywh(f.x, f.y, f.width, f.height),
+                hit: !hit.is_null(),
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn poke(id: u64, value: Option<f64>) -> bool {
+    let Some((control, h)) = SET.with(|s| {
+        let s = s.borrow();
+        s.get(id).map(|(v, h)| (v.control, *h))
+    }) else {
+        return false;
+    };
+    unsafe {
+        let events = match control {
+            NativeControl::Button { .. } => TOUCH_UP_INSIDE,
+            NativeControl::Switch { .. } => {
+                let on: bool = msg!(h, "isOn", () -> bool);
+                let to = !on;
+                let animated = true;
+                msg!(h, "setOn:animated:", (to: bool, animated: bool) -> ());
+                VALUE_CHANGED
+            }
+            NativeControl::Slider { .. } => {
+                let v = value.unwrap_or(0.5) as f32;
+                msg!(h, "setValue:", (v: f32) -> ());
+                VALUE_CHANGED
+            }
+            _ => return true,
+        };
+        msg!(h, "sendActionsForControlEvents:", (events: u64) -> ());
+    }
+    true
+}

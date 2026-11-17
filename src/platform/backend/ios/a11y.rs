@@ -381,6 +381,20 @@ extern "C" fn is_accessibility_element(_this: Id, _cmd: Sel) -> bool {
     false
 }
 
+/// What the container vends at each position: the live OS control that
+/// stands for the node there, if one is shown, else its element.
+fn vended(s: &Elements) -> Vec<Id> {
+    s.elements
+        .iter()
+        .zip(&s.items)
+        .map(|((el, _), item)| {
+            item.native
+                .and_then(crate::platform::native::os_views::handle_of)
+                .unwrap_or(*el)
+        })
+        .collect()
+}
+
 extern "C" fn element_count(this: Id, _cmd: Sel) -> isize {
     sync(this);
     STATE.with(|s| s.borrow().elements.len() as isize)
@@ -391,7 +405,7 @@ extern "C" fn element_at(this: Id, _cmd: Sel, index: isize) -> Id {
     STATE.with(|s| {
         usize::try_from(index)
             .ok()
-            .and_then(|i| s.borrow().elements.get(i).map(|(e, _)| *e))
+            .and_then(|i| vended(&s.borrow()).get(i).copied())
             .unwrap_or(std::ptr::null_mut())
     })
 }
@@ -399,17 +413,16 @@ extern "C" fn element_at(this: Id, _cmd: Sel, index: isize) -> Id {
 extern "C" fn index_of(this: Id, _cmd: Sel, element: Id) -> isize {
     sync(this);
     STATE.with(|s| {
-        s.borrow()
-            .elements
+        vended(&s.borrow())
             .iter()
-            .position(|(e, _)| *e == element)
+            .position(|e| *e == element)
             .map_or(NOT_FOUND, |i| i as isize)
     })
 }
 
 extern "C" fn elements(this: Id, _cmd: Sel) -> Id {
     sync(this);
-    let ids: Vec<Id> = STATE.with(|s| s.borrow().elements.iter().map(|(e, _)| *e).collect());
+    let ids: Vec<Id> = STATE.with(|s| vended(&s.borrow()));
     unsafe {
         let f: unsafe extern "C" fn(Id, Sel, *const Id, usize) -> Id =
             std::mem::transmute(objc_msgSend as *const c_void);
@@ -470,6 +483,10 @@ pub struct AccessibilityElement {
     pub traits: String,
     /// `accessibilityFrame`: in screen coordinates (points).
     pub frame: crate::geometry::Rect,
+    /// The object's class: `StippleAccessibilityElement` for the app's
+    /// nodes, the control's (`UISwitch`) where a live OS control stands
+    /// for one.
+    pub class: String,
 }
 
 /// For self-tests: every element `view` vends, read through objc dispatch
@@ -514,6 +531,7 @@ pub(super) unsafe fn read_elements(view: Id) -> Vec<AccessibilityElement> {
                         f.size.width,
                         f.size.height,
                     ),
+                    class: crate::platform::native::objc::class_name(el),
                 })
             })
             .collect()

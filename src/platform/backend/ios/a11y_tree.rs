@@ -31,6 +31,9 @@ pub(crate) struct Item {
     pub(crate) traits: u8,
     /// `(x, y, width, height)` in the view's coordinates (logical pixels).
     pub(crate) frame: (f64, f64, f64, f64),
+    /// The live OS control that stands for the node, by id: the container
+    /// vends that `UIControl` (which speaks for itself) in its place.
+    pub(crate) native: Option<u64>,
 }
 
 /// The roles whose children VoiceOver reads instead of them (as
@@ -101,6 +104,7 @@ fn item(node: &A11yNode) -> Item {
         hint: node.hint().unwrap_or_default().to_string(),
         traits,
         frame: node.bounds,
+        native: node.native_view,
     }
 }
 
@@ -313,6 +317,20 @@ mod tests {
         );
         assert_eq!(items[0].frame, (1.0, 2.0, 30.0, 10.0));
         assert!(items.iter().all(|i| i.hint.is_empty()));
+        assert!(items.iter().all(|i| i.native.is_none()));
+    }
+
+    #[test]
+    fn a_node_a_live_control_stands_for_names_it() {
+        let tree = window(vec![A11yNode {
+            native_view: Some(42),
+            checked: Some(false),
+            ..node(A11yRole::Switch, "Sync")
+        }]);
+        let items = flatten(&tree);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].native, Some(42));
+        assert_eq!(items[0].label, "Sync");
     }
 
     #[test]

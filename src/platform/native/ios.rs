@@ -119,11 +119,7 @@ unsafe fn make_view(deco: NativeDeco, frame: CgRect) -> Id {
                 let kind = 1_i64; // UIButtonTypeSystem
                 let b: Id = msg!(class("UIButton"), "buttonWithType:", (kind: i64) -> Id);
                 let b: Id = msg!(b, "retain", () -> Id);
-                let config: Id = msg!(
-                    class("UIButtonConfiguration"),
-                    if primary { "filledButtonConfiguration" } else { "grayButtonConfiguration" },
-                    () -> Id
-                );
+                let config = super::os_views::button_config(primary);
                 msg!(b, "setConfiguration:", (config: Id) -> ());
                 msg!(b, "setFrame:", (frame: CgRect) -> ());
                 b

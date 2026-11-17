@@ -1232,6 +1232,19 @@ thread_local! {
         const { RefCell::new(std::collections::VecDeque::new()) };
 }
 
+/// A finger the app's view didn't get as a touch of its own (one that went
+/// down on a live OS control, and moved on as a pan: `native::os_views`),
+/// through the touch path, as if it had.
+pub(crate) fn forwarded_touch(phase: TouchPhase, id: u64, at: Point) {
+    touch_input(phase, &[(id, at)]);
+}
+
+/// Deliver `event` to the app from a callback of the backend's (a live OS
+/// control's action, `native::os_views`).
+pub(crate) fn send_event(event: Event) {
+    call_handler(event, &current_window());
+}
+
 /// Invoke the stashed Rust handler (if any). Called from inside the handler,
 /// the event is delivered once it returns.
 fn call_handler(event: Event, win: &dyn Window) {
@@ -1438,6 +1451,12 @@ impl Window for IosWindow {
     }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
         a11y::set_tree(root);
+    }
+    fn hosts_native_views(&self) -> bool {
+        true
+    }
+    fn set_native_views(&self, views: &[crate::platform::native::NativeView]) {
+        crate::platform::native::os_views::sync(views);
     }
     fn set_dark(&self, _dark: bool) {
         // The theme changed look: the area around the safe area takes the

@@ -87,6 +87,20 @@ pub fn rust_string(ns: Id) -> Option<String> {
     }
 }
 
+/// The name of `obj`'s class (`UISwitch`); empty for nil.
+pub fn class_name(obj: Id) -> String {
+    #[link(name = "objc", kind = "dylib")]
+    unsafe extern "C" {
+        fn object_getClassName(obj: Id) -> *const std::ffi::c_char;
+    }
+    if obj.is_null() {
+        return String::new();
+    }
+    unsafe { std::ffi::CStr::from_ptr(object_getClassName(obj)) }
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// Run `f` inside an autorelease pool, for calls made outside the event loop.
 pub fn with_pool<R>(f: impl FnOnce() -> R) -> R {
     unsafe {
