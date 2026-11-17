@@ -1055,9 +1055,11 @@ CPU elsewhere, and the CPU is always the fallback.
   the decorations in the window surface's `wl_shm` buffer around it. Run
   locally on NVIDIA against a scripted compositor; in CI on lavapipe under
   sway on `vkms` and (client-side decorations) headless Weston, not blocking
-  yet; explicit sync only against the scripted compositor (CI's sway 1.11
-  offers it only on a DRM device with timelines, which `vkms` isn't, and
-  headless Weston 14 not at all).*
+  yet. Explicit sync run against a real compositor locally: sway 1.11
+  (headless, GLES renderer) on NVIDIA, Vulkan and GLES, with and without a
+  title bar Stipple draws, release points signalled and buffers reused; not
+  in CI, where no DRM driver does timeline syncobjs (`vkms`, `vgem`), so no
+  compositor there can offer it (and headless Weston 14 doesn't at all).*
 - ✅ GLES2/3 presenting straight to an EGL window surface (Wayland, X11,
   Android) for drivers without Vulkan, instead of reading back.
   *X11 (EGL's XCB platform) and Android; the context moves to the window's

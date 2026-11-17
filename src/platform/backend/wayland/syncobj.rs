@@ -430,6 +430,9 @@ pub(super) fn set_points(
     }
     t.point = release;
     let timeline = t.object;
+    dbg(format_args!(
+        "explicit sync: buffer {id} acquire point {acquire}, release point {release}"
+    ));
     for (opcode, point) in [
         (SURFACE_SET_ACQUIRE_POINT, acquire),
         (SURFACE_SET_RELEASE_POINT, release),

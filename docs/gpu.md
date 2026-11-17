@@ -864,12 +864,30 @@ through `udmabuf`), screenshots it with `grim` and checks the frames come at
 the display's 60 Hz (`visual-gpu-present`, not blocking yet; seen passing
 with both), noting whether that sway offers explicit sync (the runner's
 sway 1.11 offers `linux-drm-syncobj` only when its renderer and DRM device
-do timeline syncobjs, which `vkms` with llvmpipe doesn't); and widgetsdemo
+do timeline syncobjs, which `vkms` with llvmpipe doesn't: no driver a
+runner has does, `vkms` and `vgem` lack `DRIVER_SYNCOBJ_TIMELINE`, so no
+compositor in CI can offer it; the step checks it's used should one ever
+do); and widgetsdemo
 under headless Weston 14 (no `xdg-decoration`, `linux-dmabuf` from its GL
 renderer on llvmpipe, no explicit sync), checking Stipple draws the
 title bar and the GPU frames go in the subsurface through `linux-dmabuf`,
 with Vulkan (lavapipe) and GLES (llvmpipe), screenshotting it with
 `weston-screenshooter` (not blocking yet; seen passing on a scratch run).
+
+Explicit sync against a real compositor: sway 1.11 (wlroots 0.19) built
+from source, its headless backend with the GLES renderer on an RTX 5080's
+render node (NVIDIA 595, `EGL_ANDROID_native_fence_sync` and
+`DRM_CAP_SYNCOBJ_TIMELINE`), which offers `wp_linux_drm_syncobj_manager_v1`.
+Vulkan and GLES both find the main device, use explicit sync (`frames go to
+the Wayland compositor with explicit sync (a GPU fence as the acquire
+point)`), and with `STIPPLE_WAYLAND_DEBUG` log each commit's points
+(`explicit sync: buffer … acquire point 3, release point 4`): buffers come
+back once sway signals their release points and are drawn into again (two
+or three buffers in turn over 240 frames), framepacing runs at the 60 Hz
+output from the frame callbacks, and grim's screenshot shows the widgets
+demo whole; the same with a title bar Stipple draws (that sway built
+without `xdg-decoration`), the GPU frames in the subsurface with explicit
+sync. No bug turned up.
 
 ## Frame pacing
 
@@ -1087,7 +1105,7 @@ stands (November 2026):
 
 | Criterion | macOS | iOS | Windows | Linux, X11 | Linux, Wayland | Android | Web |
 |---|---|---|---|---|---|---|---|
-| Presents straight to the window | **met**: Metal into a `CAMetalLayer`; CI screenshots `widgetsdemo` on the runner's (paravirtual) Metal, blocking; run on an M5 Max | **unverified**: compile-checked only, never run on a device or the simulator | **met on WARP only**: CI screenshots and paces `widgetsdemo` on Direct3D 11, non-blocking (passing); never run on a hardware GPU | **met**: CI presents with Vulkan (lavapipe) and GLES (llvmpipe) on Xvfb, non-blocking (passing); run locally with Vulkan and GLES on an RTX 5080 (Xvfb, 60 presents a second) | **partly**: `dma-buf`s for every window (under a title bar Stipple draws, in a subsurface), explicit sync where the compositor has `linux-drm-syncobj`; CI under sway on `vkms` and headless Weston (client-side decorations) non-blocking, never on a hardware GPU; explicit sync only against a scripted compositor (locally on NVIDIA and llvmpipe), no CI compositor offers it | **met on the emulator only**: Vulkan on API 34, non-blocking | **met**: WebGPU or WebGL2 into the canvas |
+| Presents straight to the window | **met**: Metal into a `CAMetalLayer`; CI screenshots `widgetsdemo` on the runner's (paravirtual) Metal, blocking; run on an M5 Max | **unverified**: compile-checked only, never run on a device or the simulator | **met on WARP only**: CI screenshots and paces `widgetsdemo` on Direct3D 11, non-blocking (passing); never run on a hardware GPU | **met**: CI presents with Vulkan (lavapipe) and GLES (llvmpipe) on Xvfb, non-blocking (passing); run locally with Vulkan and GLES on an RTX 5080 (Xvfb, 60 presents a second) | **partly**: `dma-buf`s for every window (under a title bar Stipple draws, in a subsurface), explicit sync where the compositor has `linux-drm-syncobj`; CI under sway on `vkms` and headless Weston (client-side decorations) non-blocking, never on a hardware GPU there; locally under sway 1.11 on an RTX 5080 with explicit sync (Vulkan and GLES), which no CI compositor can offer (no runner DRM driver does timeline syncobjs) | **met on the emulator only**: Vulkan on API 34, non-blocking | **met**: WebGPU or WebGL2 into the canvas |
 | Matches the CPU on the corpus in CI | **met**: `visual-macos`, Metal, blocking | **not met**: not run | **met on WARP**: `visual-windows`, non-blocking (passing: 93 tests) | **met**: `visual-gpu`, GLES on llvmpipe and Vulkan on lavapipe, blocking; also run locally on the RTX 5080 (104 tests, both APIs) | **met** (the same executors as X11) | **not met**: not run on Android | **met, non-blocking**: `gpucompare.html` in headless Chrome (SwiftShader, flaky) |
 | Benchmarks meet their targets on a hardware GPU | **met** on an M5 Max: 0.76 ms, 2.6 ms, 3.5 ms (locally; CI's runner has no hardware GPU) | **unverified**: the benchmark hasn't run on an iPhone | **unverified**: no hardware GPU run | **met with Vulkan** on an RTX 5080: 0.33 ms, 1.07 ms, p95 2.9 ms; **not with GLES**: 5.7 ms, 7.7 ms (p95 3.2 ms) (locally) | as X11 (the same offscreen benchmark) | **unverified**: not run on a phone | **unverified** for the benchmark (it runs on the CPU in the module); a 2560×1600 widget frame takes 2.8 ms on WebGPU on an M5 Max |
 | Device loss and a missing GPU fall back in tests | **met**: `compare.rs` loses the runner's Metal device (blocking); the App's fallback on a stand-in | as macOS, on the stand-in only | **met on WARP** (non-blocking) | **met**: on lavapipe (blocking) and the RTX 5080 (locally) | **met** (the same executors) | on the stand-in only | **met, non-blocking**: two lost devices in headless Chrome |
@@ -1097,9 +1115,10 @@ So `Auto` draws on the GPU on macOS (Metal) and X11 (Vulkan), and in a
 browser, and only on a hardware GPU. iOS, Windows and Android haven't run
 their GPU paths on the hardware `Auto` would pick (a phone, a Windows PC
 with a GPU), and Wayland's `dma-buf` path (now also under a title bar
-Stipple draws, with explicit sync where offered) hasn't run on a real
-compositor with a hardware GPU, nor explicit sync on any real compositor;
-they stay on the CPU until that's done. GLES stays an explicit
+Stipple draws, with explicit sync where offered) has run on a real
+compositor with a hardware GPU only locally (sway on NVIDIA, explicit sync
+included), not on AMD or Intel, Mutter or KWin; they stay on the CPU until
+that's done. GLES stays an explicit
 choice on Linux: on the one hardware GPU measured it missed the benchmarks'
 4 ms target (it's still several times faster than the CPU there).
 
@@ -1138,8 +1157,9 @@ Today:
 - GLES2, Vulkan, Metal, Direct3D 11, WebGPU and WebGL2 execute the scene.
 - Metal, Vulkan and GLES (X11, Android, and Wayland as `dma-buf`s),
   Direct3D 11 and the web (into the canvas) present straight to the window.
-  On Wayland, explicit sync hasn't run against a real compositor yet (only
-  the scripted one: CI's sway doesn't offer it), and the formats come from
+  On Wayland, explicit sync has run against one real compositor, locally
+  (sway 1.11 on NVIDIA; CI's can't offer it, no runner's DRM driver does
+  timeline syncobjs), and the formats come from
   the default feedback only (not the surface feedback a compositor updates
   when a window could be scanned out, so a format isn't chosen again then).
 - The X11 and Android present paths (Vulkan and GLES) have been

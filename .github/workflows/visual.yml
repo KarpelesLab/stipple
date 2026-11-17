@@ -1974,7 +1974,9 @@ jobs:
           # device: for the log.
           if grep -q wp_linux_drm_syncobj_manager_v1 visual_output/wl-info.txt; then
             echo "sway offers linux-drm-syncobj"
-            grep "explicit sync" "$LOG" || echo "::warning::sway offers linux-drm-syncobj but the app didn't use it"
+            grep -q "frames go to the Wayland compositor with explicit sync" "$LOG"
+            # A buffer drawn into again once its release point signalled.
+            grep -q "explicit sync: buffer [0-9]* acquire point 3, release point 4" "$LOG"
           else
             echo "this sway has no linux-drm-syncobj: frames go waited for"
           fi
