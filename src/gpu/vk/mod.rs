@@ -23,6 +23,16 @@ pub(crate) mod shaders;
     feature = "vk"
 ))]
 mod exec;
+// The Android hardware buffer import's structs and chains (tested on every
+// host).
+#[cfg(any(
+    test,
+    all(
+        any(target_os = "linux", target_os = "android", target_os = "macos"),
+        feature = "vk"
+    )
+))]
+mod ahb;
 // Also built for the tests, which check its structs against the C headers.
 #[cfg(any(
     test,

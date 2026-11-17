@@ -191,7 +191,14 @@ texture) is taken while the window's renderer imports the camera's format
   goes to the preview, imported through `eglGetNativeClientBufferANDROID`
   as a `GL_TEXTURE_EXTERNAL_OES` texture that the driver converts as it
   samples; the `AImage` stays out of the reader until the preview lets go
-  of it. (The Vulkan renderer doesn't import it: the preview converts there.)
+  of it.
+- Android, Vulkan: the same buffers, imported with
+  `VK_ANDROID_external_memory_android_hardware_buffer` and sampled through
+  a sampler YCbCr conversion (the driver's external format, and its
+  suggested model, range and chroma siting), each buffer imported once.
+  Not on the emulator, whose Vulkan reads the buffers' chroma wrong (see
+  [gpu.md](gpu.md#external-images-without-a-copy)): the preview converts
+  there, unless `debug.stipple.vk_ahb` is `1`.
 - The web, WebGPU or WebGL2: the camera's `<video>` itself (WebGPU imports
   it as a `texture_external`, WebGL2 hands it to `texImage2D`), and when the
   app has no `on_frame` callback the page doesn't read its pixels back at
@@ -247,6 +254,9 @@ the lens can't.
   opening says so cleanly, without a crash.
 - Android emulator (non-blocking): the APK built from `cameraview_android`,
   the permission granted with `pm grant`, and frames from the emulator's
-  virtual camera that aren't blank read back from logcat.
+  virtual camera that aren't blank read back from logcat; then the APK
+  built with `gl` and with `vk` (`examples/cameraview/test-gpu.sh`), each
+  drawing with its API and its preview taking the camera's buffers (Vulkan
+  with `debug.stipple.vk_ahb` set).
 - The frame conversion (rotation, mirroring, color), the preview's size and
   the frame-to-preview mapping are unit-tested on every host.

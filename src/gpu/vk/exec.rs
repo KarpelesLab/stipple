@@ -30,6 +30,8 @@
 
 // External images (`dma-buf`s) imported as images.
 mod external;
+// Android hardware buffers imported as images (the camera's YUV frames).
+mod ahb;
 
 use super::alloc::Ranges;
 use super::record::{self, Cmd, Draw, Pipe, Recording, Target, Texture};
@@ -307,8 +309,9 @@ impl VkExecutor {
                 exts.push(VK_KHR_SURFACE.as_ptr());
                 exts.push(surface_ext.as_ptr());
             }
-            // What importing a `dma-buf` builds on (`external`).
-            if cfg!(target_os = "linux") {
+            // What importing a `dma-buf` (`external`) or a hardware buffer
+            // (`ahb`) builds on.
+            if cfg!(any(target_os = "linux", target_os = "android")) {
                 for e in external::INSTANCE_EXTS {
                     if has(e) {
                         exts.push(e.as_ptr());
@@ -320,7 +323,7 @@ impl VkExecutor {
                 exts.push(VK_KHR_PORTABILITY_ENUMERATION.as_ptr());
                 // What the portability subset needs on a 1.0 instance.
                 if has(VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES2)
-                    && !(cfg!(target_os = "linux")
+                    && !(cfg!(any(target_os = "linux", target_os = "android"))
                         && external::INSTANCE_EXTS
                             .contains(&VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES2))
                 {
@@ -445,6 +448,10 @@ impl VkExecutor {
             if dma_buf {
                 dexts.extend(external::DEVICE_EXTS.iter().map(|e| e.as_ptr()));
             }
+            // Importing hardware buffers (Android): its extensions, and the
+            // YCbCr conversion feature.
+            let hardware_buffers = ahb::wanted(&vk, phys, &dev_has, &mut dexts);
+            let ycbcr = ahb::feature();
             // Exporting frames as dma-bufs, for Wayland windows: what the
             // import didn't already turn on (each extension once).
             #[cfg(target_os = "linux")]
@@ -472,7 +479,11 @@ impl VkExecutor {
             };
             let dci = VkDeviceCreateInfo {
                 sType: ST_DEVICE_CREATE_INFO,
-                pNext: std::ptr::null(),
+                pNext: if hardware_buffers {
+                    (&ycbcr as *const crate::gpu::vk::ahb::SamplerYcbcrConversionFeatures).cast()
+                } else {
+                    std::ptr::null()
+                },
                 flags: 0,
                 queueCreateInfoCount: 1,
                 pQueueCreateInfos: &qci,
@@ -516,6 +527,11 @@ impl VkExecutor {
                     None
                 },
                 dedicated: dma_buf,
+                ahb: if hardware_buffers {
+                    ahb::Ahb::load(&vk, device)
+                } else {
+                    None
+                },
                 ..Default::default()
             };
             #[cfg(target_os = "linux")]
@@ -823,7 +839,7 @@ impl VkExecutor {
                     Pipe::Resolve => (scene_vs, resolve),
                     _ => (scene_vs, flat),
                 };
-                match self.pipeline(pipe, vs, fs) {
+                match self.pipeline(pipe, vs, fs, self.layout) {
                     Ok(p) => {
                         pipes.insert(pipe, p);
                     }
@@ -839,13 +855,15 @@ impl VkExecutor {
         }
     }
 
-    /// The pipeline for `pipe`: its blend, color writes and stencil state,
-    /// with the viewport, scissor and stencil reference set per draw.
+    /// The pipeline for `pipe` on `layout`: its blend, color writes and
+    /// stencil state, with the viewport, scissor and stencil reference set
+    /// per draw.
     unsafe fn pipeline(
         &self,
         pipe: Pipe,
         vs: VkShaderModule,
         fs: VkShaderModule,
+        layout: VkPipelineLayout,
     ) -> Result<VkPipeline, GpuError> {
         unsafe {
             let face = |compare, pass, compare_mask, write_mask| VkStencilOpState {
@@ -1034,7 +1052,7 @@ impl VkExecutor {
                 pDepthStencilState: &ds,
                 pColorBlendState: &cb,
                 pDynamicState: &dy,
-                layout: self.layout,
+                layout,
                 renderPass: if pipe.on_scratch() {
                     self.scratch_pass
                 } else {
@@ -1802,6 +1820,7 @@ impl VkExecutor {
                     .and_then(|p| self.atlas.get(&p.id))
                     .map(|t| t.img.view)
             };
+            let mut sets = HashMap::new();
             let textures: Vec<Texture> = rec
                 .textures()
                 .into_iter()
@@ -1810,8 +1829,29 @@ impl VkExecutor {
                     !matches!(*t, Texture::External { index, .. }
                         if matches!(externals.get(index), None | Some(external::ExtView::Nothing)))
                 })
+                .filter(|t| {
+                    // A hardware buffer through a YCbCr conversion has its
+                    // own set (`ahb`).
+                    if let Texture::External { index, .. } = *t
+                        && let Some(&external::ExtView::Ycbcr {
+                            set,
+                            pipeline,
+                            layout,
+                        }) = externals.get(index)
+                    {
+                        sets.insert(
+                            *t,
+                            external::Set {
+                                set,
+                                yuv: None,
+                                own: Some((pipeline, layout)),
+                            },
+                        );
+                        return false;
+                    }
+                    true
+                })
                 .collect();
-            let mut sets = HashMap::new();
             if textures.is_empty() {
                 return Ok(sets);
             }
@@ -1893,7 +1933,9 @@ impl VkExecutor {
                                     luma
                                 }
                                 external::ExtView::Image(i) => images[i],
-                                external::ExtView::Nothing => unreachable!("filtered out"),
+                                external::ExtView::Nothing | external::ExtView::Ycbcr { .. } => {
+                                    unreachable!("filtered out")
+                                }
                             },
                             if nearest { self.nearest } else { self.linear },
                         ),
@@ -1952,6 +1994,7 @@ impl VkExecutor {
                     external::Set {
                         set,
                         yuv: y.map(|(_, color)| color),
+                        own: None,
                     },
                 );
             }
@@ -2123,7 +2166,16 @@ impl VkExecutor {
                 pipe = Pipe::QuadsYuv;
                 push[record::YUV_MATRIX..record::YUV_MATRIX + 12].copy_from_slice(&color.rows());
             }
-            if *bound != Some(pipe) {
+            // A hardware buffer's quads, through its conversion's pipeline
+            // and layout.
+            let mut layout = self.layout;
+            if let Some((own, own_layout)) = set.and_then(|s| s.own)
+                && pipe == Pipe::Quads
+            {
+                (self.vk.vkCmdBindPipeline)(cmd, BIND_POINT_GRAPHICS, own);
+                *bound = None;
+                layout = own_layout;
+            } else if *bound != Some(pipe) {
                 (self.vk.vkCmdBindPipeline)(cmd, BIND_POINT_GRAPHICS, self.pipes[&pipe]);
                 *bound = Some(pipe);
             }
@@ -2140,7 +2192,7 @@ impl VkExecutor {
             (self.vk.vkCmdSetStencilReference)(cmd, 3, d.reference);
             (self.vk.vkCmdPushConstants)(
                 cmd,
-                self.layout,
+                layout,
                 SHADER_STAGE_VERTEX | SHADER_STAGE_FRAGMENT,
                 0,
                 record::PUSH_BYTES,
@@ -2150,7 +2202,7 @@ impl VkExecutor {
                 (self.vk.vkCmdBindDescriptorSets)(
                     cmd,
                     BIND_POINT_GRAPHICS,
-                    self.layout,
+                    layout,
                     0,
                     1,
                     &s.set,

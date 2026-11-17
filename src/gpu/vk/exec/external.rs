@@ -54,11 +54,11 @@ const ST_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO: i32 = 1_000_158_004;
 const TILING_DRM_FORMAT_MODIFIER: u32 = 1_000_158_000;
 const HANDLE_DMA_BUF: u32 = 0x200;
 const LAYOUT_GENERAL: u32 = 1;
-const ACCESS_SHADER_READ: u32 = 0x20;
+pub(super) const ACCESS_SHADER_READ: u32 = 0x20;
 /// `VK_QUEUE_FAMILY_EXTERNAL`: the image's memory comes from outside.
 const QUEUE_FAMILY_EXTERNAL: u32 = !1;
-const SWIZZLE_IDENTITY: u32 = 0;
-const SWIZZLE_ONE: u32 = 6;
+pub(super) const SWIZZLE_IDENTITY: u32 = 0;
+pub(super) const SWIZZLE_ONE: u32 = 6;
 
 #[repr(C)]
 struct ExternalMemoryImageCreateInfo {
@@ -136,18 +136,29 @@ pub(super) enum ExtView {
     Imported(VkImageView),
     /// NV12's luma and chroma, and how to convert them.
     Yuv(VkImageView, VkImageView, YuvColorSpace),
+    /// A hardware buffer sampled through a YCbCr conversion (`ahb`): its
+    /// descriptor set, and the pipeline and layout made for its immutable
+    /// sampler.
+    Ycbcr {
+        set: VkDescriptorSet,
+        pipeline: VkPipeline,
+        layout: VkPipelineLayout,
+    },
     /// Its pixels, uploaded as [`Recording::images`]`[i]`.
     Image(usize),
     /// Nothing (it can't be imported or read).
     Nothing,
 }
 
-/// A texture's descriptor set, and for an NV12 image the color space its
-/// quads are converted with (by [`Pipe::QuadsYuv`]).
+/// A texture's descriptor set, for an NV12 image the color space its
+/// quads are converted with (by [`Pipe::QuadsYuv`]), and for a hardware
+/// buffer sampled through a YCbCr conversion the pipeline and layout its
+/// quads are drawn with.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Set {
     pub set: VkDescriptorSet,
     pub yuv: Option<YuvColorSpace>,
+    pub own: Option<(VkPipeline, VkPipelineLayout)>,
 }
 
 /// The executor's imports.
@@ -157,6 +168,8 @@ pub(super) struct Imports {
     /// are on, with `vkGetMemoryFdPropertiesKHR`.
     pub get_fd_properties: Option<GetMemoryFdProperties>,
     pub dedicated: bool,
+    /// Android hardware buffers' imports, where the device takes them.
+    pub(super) ahb: Option<super::ahb::Ahb>,
     pub(super) map: HashMap<usize, Import>,
     pub(super) held: Vec<Arc<ExternalImage>>,
 }
@@ -172,6 +185,8 @@ impl Imports {
                 ExternalFormat::Bgrx8,
                 ExternalFormat::Nv12,
             ]
+        } else if self.ahb.is_some() {
+            &[ExternalFormat::Yuv420]
         } else {
             &[]
         }
@@ -198,10 +213,17 @@ impl VkExecutor {
                 let i = self.externals.map.remove(&k).unwrap();
                 self.free_import(i);
             }
+            self.free_buffer_imports(TEXTURE_KEEP_FRAMES);
             crate::platform::external::note_native(self.externals.formats());
             let mut barriers = Vec::new();
             let mut views = Vec::with_capacity(rec.externals.len());
             for image in rec.externals.clone() {
+                // A hardware buffer, imported (or found imported) by itself.
+                if let Some(view) = self.import_hardware_buffer(&image, &mut barriers) {
+                    self.externals.held.push(image.clone());
+                    views.push(view);
+                    continue;
+                }
                 let key = Arc::as_ptr(&image) as usize;
                 if self
                     .externals
@@ -483,5 +505,6 @@ impl VkExecutor {
         for (_, i) in std::mem::take(&mut self.externals.map) {
             unsafe { self.free_import(i) };
         }
+        unsafe { self.free_buffer_imports(0) };
     }
 }

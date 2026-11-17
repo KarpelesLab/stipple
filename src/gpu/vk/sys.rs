@@ -1223,6 +1223,8 @@ entry_points! {
         vkCreateXcbSurfaceKHR: fn(VkInstance, *const VkXcbSurfaceCreateInfoKHR, P, *mut VkSurfaceKHR) -> VkResult;
         vkCreateAndroidSurfaceKHR: fn(VkInstance, *const VkAndroidSurfaceCreateInfoKHR, P, *mut VkSurfaceKHR) -> VkResult;
         vkGetMemoryFdPropertiesKHR: fn(VkDevice, u32, i32, *mut c_void) -> VkResult;
+        vkGetPhysicalDeviceFeatures2KHR: fn(VkPhysicalDevice, *mut c_void);
+        vkGetDeviceProcAddr: fn(VkDevice, *const c_char) -> PFN_vkVoidFunction;
         vkCreateMetalSurfaceEXT: fn(VkInstance, *const VkMetalSurfaceCreateInfoEXT, P, *mut VkSurfaceKHR) -> VkResult;
     }
 }

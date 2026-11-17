@@ -1178,7 +1178,7 @@ CPU elsewhere, and the CPU is always the fallback.
   *`ExternalImage` (handle, format, planes, modifier, release callback,
   acquire fence) drawn with `Scene::draw_external`, shown in a viewport with
   `set_viewport_external`; imported by GLES (`dma-buf`, `AHardwareBuffer`),
-  Vulkan (`dma-buf`), Metal (`IOSurface`, NV12 converted in the shader) and
+  Vulkan (`dma-buf`, `AHardwareBuffer`), Metal (`IOSurface`, NV12 converted in the shader) and
   Direct3D 11 (shared handles), read on the CPU elsewhere and by the
   software renderer. The macOS/iOS camera preview hands Metal its
   `CVPixelBuffer`. NV12 is imported everywhere it can be: Vulkan as an
@@ -1187,19 +1187,24 @@ CPU elsewhere, and the CPU is always the fallback.
   shader like GLES and Metal; YUV images carry their color space (BT.601 or
   BT.709, full or limited range), one matrix for every converter. The
   Android camera hands the preview each `AImage`'s `AHardwareBuffer`
-  (`Yuv420`), sampled by GLES as a `GL_TEXTURE_EXTERNAL_OES` texture; on the
+  (`Yuv420`), sampled by GLES as a `GL_TEXTURE_EXTERNAL_OES` texture and
+  by Vulkan through `VK_ANDROID_external_memory_android_hardware_buffer`
+  and a sampler YCbCr conversion (the driver's external format and
+  suggested model, range and siting; an immutable sampler in a set layout
+  and pipeline of its own; each buffer imported once); on the
   web a `<video>`, `VideoFrame`, `ImageBitmap` or canvas the page holds is
   an external image (`ExternalImage::web_source`), imported by WebGPU
   (`importExternalTexture`) or handed to WebGL2's `texImage2D` each frame,
   and the camera preview draws its `<video>` that way. Run: the `dma-buf`
   import on GLES (llvmpipe, and an NVIDIA GPU's own tiled buffers) and
   Vulkan (lavapipe, NV12 included), the shared NV12 texture on WARP
-  (Direct3D 11). Left: Vulkan's import of a tiled NVIDIA buffer samples
-  nothing; Vulkan's `AHardwareBuffer` import (it needs
-  `VK_ANDROID_external_memory_android_hardware_buffer` and a sampler YCbCr
-  conversion); Metal, the Android camera and the web's sources to run on
-  devices and in a browser with a video; video frames (no video decoder
-  yet).*
+  (Direct3D 11), the Android camera's buffers on the API 34 emulator with
+  GLES (the picture right) and Vulkan (imported and drawn, but the
+  emulator's gfxstream samples the three-plane buffers as NV12, scrambling
+  the chroma: off there unless `debug.stipple.vk_ahb` is `1`). Left:
+  Vulkan's import of a tiled NVIDIA buffer samples nothing; Metal, the
+  Android camera and the web's sources to run on devices and in a browser
+  with a video; video frames (no video decoder yet).*
 - 🚧 Natively drawn controls (`Theme::native()`) kept as cached textures, so
   the native theme works under the GPU renderers.
   *The bitmaps the OS draws, cached by control, value, state, appearance,

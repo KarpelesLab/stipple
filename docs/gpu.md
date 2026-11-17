@@ -325,6 +325,7 @@ identity as a `Pixmap`'s texture is:
 | `IOSurface` | Metal | `newTextureWithDescriptor:iosurface:plane:`, a texture per plane | BGRA, RGBA, NV12 (`R8Unorm` + `RG8Unorm`, converted in the shader) |
 | DXGI shared handle | Direct3D 11 | `ID3D11Device1::OpenSharedResource1` (NT handle) or `OpenSharedResource`, a view in the texture's format | all; a `DXGI_FORMAT_NV12` texture through an `R8_UNORM` and an `R8G8_UNORM` view, converted by `quad_yuv_ps` |
 | `AHardwareBuffer` | GLES (Android) | `eglGetNativeClientBufferANDROID`, `EGL_NATIVE_BUFFER_ANDROID` | `R8G8B8A8`, `R8G8B8X8`; `Y8Cb8Cr8_420` (`Yuv420`, the camera's) as a `GL_TEXTURE_EXTERNAL_OES` texture, which the driver converts as it samples (`samplerExternalOES`) |
+| `AHardwareBuffer` | Vulkan (Android) | `VK_ANDROID_external_memory_android_hardware_buffer`: the buffer's properties (`vkGetAndroidHardwareBufferPropertiesANDROID`), an image of its format (an external format through `VkExternalFormatANDROID` where it has no Vulkan one), its memory imported into a dedicated allocation, cached by buffer | `R8G8B8A8`, `R8G8B8X8` as they are; `Y8Cb8Cr8_420` (`Yuv420`) through a sampler YCbCr conversion with the model, range and chroma siting the driver suggests, its sampler immutable in a set layout (and pipeline) of its own |
 | web source | WebGPU | a `<video>` or `VideoFrame` imported each frame (`importExternalTexture`, a `texture_external` sampled by `quad_ext_fs`); an `ImageBitmap` or canvas copied on the GPU (`copyExternalImageToTexture`) | what the browser decodes |
 | web source | WebGL2 | `texImage2D` from the source each frame (the browser copies a video on the GPU) | what the browser decodes |
 
@@ -334,9 +335,20 @@ take the image's color space as three rows of a matrix (uniforms, push
 constants, the constant buffer), so BT.709 and limited range cost nothing
 more.
 
-Where an executor has no import for the handle or the format (Vulkan's
-`AHardwareBuffer`, which would need `VK_ANDROID_external_memory_android_hardware_buffer`
-and a sampler YCbCr conversion, not done), or the driver refuses it, the
+On Vulkan a hardware buffer's import (image, memory, view, and its
+descriptor set through the conversion) is kept by the buffer, not the
+image: the import holds a reference to the buffer, and a camera's reader
+cycles through a few buffers, so each is imported once (ten imports for
+four hundred frames on the emulator). Each frame that draws one takes it
+over from its producer (an image barrier from `VK_QUEUE_FAMILY_FOREIGN_EXT`,
+from an undefined layout, as Skia and ANGLE do), and its quads are drawn by
+`quad.frag` through the conversion's pipeline, which reads RGB. The device
+is created with the extension and what it builds on and the
+`samplerYcbcrConversion` feature only where it has them all; on the Android
+emulator it isn't (below), unless `debug.stipple.vk_ahb` is set to `1`.
+
+Where an executor has no import for the handle or the format, or the
+driver refuses it, the
 image is read on the CPU instead, once, and drawn as its pixels: a linear
 `dma-buf` is mapped (`mmap`, inside `DMA_BUF_IOCTL_SYNC`), an `IOSurface`
 locked, an `AHardwareBuffer` locked (a YUV one's planes through
@@ -365,7 +377,7 @@ While the window's renderer imports the camera's format, the preview gets
 the camera's own buffer instead of a frame converted on the capture
 thread: on macOS and iOS (NV12, Metal) the frame's `CVPixelBuffer`
 (retained, so the capture pool doesn't reuse it while drawn); on Android
-(`Yuv420`, GLES) the `AImage`'s `AHardwareBuffer`, the reader made with
+(`Yuv420`, GLES and Vulkan) the `AImage`'s `AHardwareBuffer`, the reader made with
 `AImageReader_newWithUsage` for the GPU to sample its images too and the
 `AImage` kept out of the reader until the preview lets go of it; on the
 web (WebGPU or WebGL2) the camera's `<video>` itself, and when the app has
@@ -426,18 +438,24 @@ Run so far:
 - CI's `visual-gpu` job runs these on llvmpipe and lavapipe with
   `/dev/udmabuf` opened up (the runner's kernel has it built in), not
   blocking yet.
-- Metal and the Android paths (the `AHardwareBuffer` import, the camera's
-  external-texture preview) are compile-checked only; the camera's
-  zero-copy preview hasn't run on a Mac, an iPhone or an Android device yet.
+- Metal is compile-checked only; the camera's zero-copy preview hasn't run
+  on a Mac, an iPhone or an Android device yet (the emulator, below).
 - The web's external sources on WebGPU and WebGL2 (SwiftShader, headless
   Chrome): a canvas and a `VideoFrame` drawn by `gpucompare` match the CPU
   exactly, with no upload. The camera's `<video>` preview hasn't run with a
   camera (headless Chrome has none).
-- Android: the camera's reader (`AImageReader_newWithUsage`, its images
-  sampled by the GPU and read by the CPU) runs on the emulator (frames with
-  a picture, on the CPU renderer); GLES doesn't come up there (the
-  emulator's EGL refuses a context without a surface), so the
-  external-texture import is compile-checked only.
+- Android, on the emulator (API 34, `-gpu swiftshader_indirect`): GLES's
+  preview samples the camera's buffers as external textures, the picture
+  as the CPU converts it. Vulkan (gfxstream over SwiftShader, which has the
+  extension and the conversion) imports them, caches them by buffer, and
+  draws them through the conversion's pipeline, the picture where it
+  should be and its luma right, but its chroma scrambled: the emulator's
+  gralloc lays a `Y8Cb8Cr8_420` buffer out as three planes (I420, a chroma
+  pixel stride of 1, as `AImage` reports it) and its Vulkan samples the
+  external format as two-plane NV12. So on the emulator Vulkan leaves the
+  camera to the CPU conversion unless `debug.stipple.vk_ahb` is `1` (CI
+  sets it, to run the path); on a device's driver, which knows its own
+  gralloc's layout, it imports. Not yet run on a device.
 
 ## Metal
 
@@ -1084,8 +1102,10 @@ screenshots `gpuwindow` under Xvfb; the `visual-gpu-present` jobs screenshot
 `widgetsdemo` presented straight to an Xvfb window with each of Vulkan and
 GLES, and to a Wayland window (sway on `vkms`, and headless Weston with
 client-side decorations) through `dma-buf`s; the
-Android emulator run (API 34) starts the demo built with `vk` and
-checks it presents with Vulkan (those two not blocking yet); the macOS visual
+Android emulator run (API 34) starts the demo built with `vk`, then with
+`gl`, and checks it presents with each, and the camera job runs
+`cameraview` with each, its preview drawing the camera's buffers (those
+not blocking yet); the macOS visual
 job runs the corpus on the runner's Metal device, prints the frame times, and
 screenshots `widgetsdemo` with `STIPPLE_RENDERER=metal`; the Windows visual
 job runs them on WARP and screenshots `widgetsdemo` with
