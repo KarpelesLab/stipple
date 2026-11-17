@@ -354,6 +354,12 @@ fn choose_size(sizes: &[(i32, i32)], want: PhysicalSize) -> (i32, i32) {
 /// so a late callback finds nothing) and how frames are turned.
 struct Ctx {
     sink: Mutex<Option<Arc<Sink>>>,
+    /// The reader whose images may be taken (0: none), held by `on_image`
+    /// for as long as it runs. `close` clears it before deleting the reader,
+    /// which waits for a callback in flight: `AImageReader_delete` joins the
+    /// reader's callback thread while holding the reader's own lock, so a
+    /// callback still taking or freeing an image would deadlock with it.
+    reader: Mutex<usize>,
     sensor: u32,
     front: bool,
 }
@@ -388,6 +394,12 @@ unsafe extern "C" fn on_image(ctx: *mut c_void, reader: *mut c_void) {
         return;
     };
     let ctx = unsafe { &*(ctx as *const Ctx) };
+    // Held to the end: see `Ctx::reader`. A callback that was queued before
+    // its reader went finds another reader here (or none) and leaves.
+    let live = ctx.reader.lock().unwrap_or_else(|e| e.into_inner());
+    if *live != reader as usize {
+        return;
+    }
     let mut image: P = std::ptr::null_mut();
     if unsafe { (lib.acquire_latest)(reader, &mut image) } != 0 || image.is_null() {
         return;
@@ -513,7 +525,7 @@ impl NdkSession {
             let callbacks: *mut DeviceCallbacks = &mut *o._device_callbacks;
             let r = (lib.open_camera)(o.manager, self.info.id.as_ptr(), callbacks, &mut o.device);
             if r != ACAMERA_OK || o.device.is_null() {
-                close(lib, o);
+                close(lib, self.ctx, o);
                 return Err(if r == -10013 {
                     // ACAMERA_ERROR_PERMISSION_DENIED.
                     CameraError::NotPermitted
@@ -524,13 +536,14 @@ impl NdkSession {
             let (w, h) = self.size;
             let r = hwbuf::new_reader(lib, w, h, AIMAGE_FORMAT_YUV_420_888, &mut o.reader);
             if r != 0 || o.reader.is_null() {
-                close(lib, o);
+                close(lib, self.ctx, o);
                 return Err(os("AImageReader_new", r));
             }
             let mut listener = ImageListener {
                 context: ctx,
                 on_image_available: Some(on_image),
             };
+            *self.ctx.reader.lock().unwrap_or_else(|e| e.into_inner()) = o.reader as usize;
             (lib.reader_listener)(o.reader, &mut listener);
             let mut window: P = std::ptr::null_mut();
             (lib.reader_window)(o.reader, &mut window);
@@ -539,14 +552,14 @@ impl NdkSession {
                 (lib.container_create)(&mut o.container),
             ];
             if steps.iter().any(|&r| r != ACAMERA_OK) {
-                close(lib, o);
+                close(lib, self.ctx, o);
                 return Err(os("making the session's output", steps[0].min(steps[1])));
             }
             (lib.container_add)(o.container, o.output);
             (lib.target_create)(window, &mut o.target);
             let r = (lib.create_request)(o.device, TEMPLATE_PREVIEW, &mut o.request);
             if r != ACAMERA_OK || o.request.is_null() {
-                close(lib, o);
+                close(lib, self.ctx, o);
                 return Err(os("making the capture request", r));
             }
             (lib.request_add_target)(o.request, o.target);
@@ -557,7 +570,7 @@ impl NdkSession {
                 &mut o.session,
             );
             if r != ACAMERA_OK || o.session.is_null() {
-                close(lib, o);
+                close(lib, self.ctx, o);
                 return Err(os("making the capture session", r));
             }
             self.open = Some(o);
@@ -618,7 +631,7 @@ impl NdkSession {
 
 /// Close what `o` made, in order: the session, the request and outputs, the
 /// device, then the reader.
-fn close(lib: &Lib, o: Open) {
+fn close(lib: &Lib, ctx: &Ctx, o: Open) {
     unsafe {
         if !o.session.is_null() {
             (lib.stop_repeating)(o.session);
@@ -645,6 +658,8 @@ fn close(lib: &Lib, o: Open) {
                 on_image_available: None,
             };
             (lib.reader_listener)(o.reader, &mut none);
+            // Wait for a callback in flight, and turn away those queued.
+            *ctx.reader.lock().unwrap_or_else(|e| e.into_inner()) = 0;
             hwbuf::delete_reader(lib, o.reader);
         }
         if !o.manager.is_null() {
@@ -666,7 +681,7 @@ impl Session for NdkSession {
 
     fn stop(&mut self) {
         if let (Some(lib), Some(o)) = (lib(), self.open.take()) {
-            close(lib, o);
+            close(lib, self.ctx, o);
         }
     }
 
@@ -739,6 +754,7 @@ pub(super) fn open(
     };
     let ctx: &'static Ctx = Box::leak(Box::new(Ctx {
         sink: Mutex::new(Some(sink)),
+        reader: Mutex::new(0),
         sensor: info.sensor,
         front: info.lens == Lens::Front,
     }));
