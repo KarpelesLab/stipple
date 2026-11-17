@@ -27,6 +27,11 @@
 pub mod a11y;
 /// Platform-neutral accessibility tree handed to each backend's OS bridge.
 pub(crate) mod access;
+/// JNI access for Android APIs Stipple doesn't wrap: the `JavaVM`, the
+/// activity, the application context, activities started for a result, the
+/// main thread.
+#[cfg(target_os = "android")]
+pub mod android;
 /// Files the app was packaged with: the APK's assets, the bundle's
 /// resources, a directory next to the executable, the web server's.
 mod assets;

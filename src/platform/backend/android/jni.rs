@@ -82,6 +82,7 @@ const SET_OBJECT_ARRAY_ELEMENT: usize = 174;
 const GET_INT_ARRAY_REGION: usize = 203;
 const SET_INT_ARRAY_REGION: usize = 211;
 const REGISTER_NATIVES: usize = 215;
+const GET_JAVA_VM: usize = 219;
 const EXCEPTION_CHECK: usize = 228;
 const NEW_DIRECT_BYTE_BUFFER: usize = 229;
 
@@ -189,6 +190,19 @@ impl Jni {
             clear(self.0);
             true
         }
+    }
+
+    /// The `JavaVM*` this env belongs to (null if the VM won't say).
+    pub(super) fn java_vm(&self) -> *mut c_void {
+        let mut vm: *mut c_void = std::ptr::null_mut();
+        unsafe {
+            let f: unsafe extern "C" fn(Env, *mut *mut c_void) -> i32 =
+                std::mem::transmute(self.f(GET_JAVA_VM));
+            if f(self.0, &mut vm) != JNI_OK {
+                return std::ptr::null_mut();
+            }
+        }
+        vm
     }
 
     pub(super) fn ok<T>(&self, value: *mut T) -> Option<*mut T> {

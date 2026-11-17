@@ -477,6 +477,92 @@ that answer in `test-on-device.sh`, then runs the purchase path against a
 stand-in for the library (`.github/billing/android/test-billing.sh`). See
 [purchases.md](../purchases.md) for the Play Console side and testing.
 
+## Calling Android APIs yourself
+
+For the Android APIs Stipple doesn't wrap, `stipple::platform::android`
+(Android only) hands out what JNI code needs. Stipple has no JNI crate in its
+API: the references are raw `jni.h` pointers, to wrap with your own bindings
+(the `jni` crate's `JavaVM::from_raw` and `JObject::from_raw`, or calls by
+hand as in [`examples/intentresult`](../../examples/intentresult)). Each
+function is callable from any thread.
+
+| | What it gives | Who deletes it |
+|---|---|---|
+| `java_vm()` | The process's `JavaVM*` (`*mut JavaVM`). Attach your threads to it as you need. | Nobody: it lives as long as the process. |
+| `activity()` | `Option<jobject>`: the current activity, the `NativeActivity`. It changes when Android recreates the activity, and is `None` while there is none (before `onCreate`, after `onDestroy`, in a process started for a receiver or a service). | **The caller**: it's a new global reference each time (`DeleteGlobalRef`). |
+| `application_context()` | `Option<jobject>`: the application `Context`, for code that runs without an activity. | Nobody: it's Stipple's global reference, kept for the life of the process. |
+| `start_activity_for_result(intent, callback)` | Starts `intent` and calls `callback(result_code, data)` with what `onActivityResult` gets. | The caller keeps its `intent`; `data` is a local reference valid during the callback. |
+| `run_on_ui_thread(f)` | Runs `f` on Android's main thread. | — |
+
+`RESULT_OK` (-1) and `RESULT_CANCELED` (0) are `Activity`'s result codes.
+
+**Starting an activity for a result.** Many APIs hand back an `Intent` to be
+started for a result: `VpnService.prepare(context)` (the VPN consent dialog;
+`null` once the user agreed), `Settings.ACTION_*` screens,
+`KeyguardManager.createConfirmDeviceCredentialIntent`,
+`MediaProjectionManager.createScreenCaptureIntent`, sign-in flows. A
+`NativeActivity` doesn't pass `onActivityResult` on, so
+`start_activity_for_result` starts the intent from Stipple's `Results` fragment
+(see [run-time classes](#run-time-classes)) with a request code of its own
+(bit 30 set, apart from Stipple's own requests), and keeps the callback under
+that code. It's `unsafe`: `intent` must be a valid local reference of the
+calling thread, or a global reference.
+
+```rust
+use stipple::platform::android;
+
+// From any thread, with an `intent` made with your JNI bindings.
+unsafe {
+    android::start_activity_for_result(intent, |code, data| {
+        // On Android's main thread. `data` (the result Intent, if any) is a
+        // local reference valid only here.
+        if code == android::RESULT_OK {
+            // e.g. start the VpnService.
+        }
+    });
+}
+```
+
+The callback runs once, on the main thread, attached to the VM. It survives
+the activity being recreated meanwhile (a configuration change the manifest
+doesn't declare in `android:configChanges`, "Don't keep activities"): the new
+activity adds its own `Results` fragment at once in `onCreate` while a request
+waits, before the framework delivers results (`onResume`), and the answer
+reaches the callback through it. It doesn't survive the process ending
+(Android may kill a backgrounded app while the other activity is up): the
+callback goes with the old process. When the intent can't be started (no
+activity, `ActivityNotFoundException`, a null intent) the callback gets
+`RESULT_CANCELED` and `None`. A panic in it is caught and logged.
+
+**The main thread.** `NativeActivity` calls the native callbacks on the Java
+main thread, but the `App` runs on Stipple's UI thread, a thread of its own
+(the one `main` runs on). Java APIs that must be called on the main thread
+(`View`s, `Toast`, `BiometricPrompt`, `new Handler()`) go through
+`run_on_ui_thread(f)`, which, as `Activity.runOnUiThread`, runs `f` at once
+when called there and otherwise queues it for the main thread's looper (a pipe
+it watches). It works without an activity once Stipple has run on the main
+thread in the process (the activity's `onCreate`, or the `Alarm` receiver, the
+`Tapped` activity or the `Files` provider being created), and returns `false`
+before that. To get back to the `App` from there, use an `AppHandle`
+(`handle.update(..)`), which is `Send`.
+
+**Without an activity.** A process Android starts for a receiver or a service
+(an always-on VPN's `VpnService`, after a reboot) has no activity:
+`activity()` is `None`, but `java_vm()` and `application_context()` still
+answer. The VM is kept from the first of Stipple's entry points that runs in
+the process, and from Android 12 asked of `libnativehelper`
+(`JNI_GetCreatedJavaVMs`) otherwise; the context is then
+`ActivityThread.currentApplication()`.
+
+`examples/intentresult` asks for VPN consent this way, and
+`examples/intentresult/test-on-device.sh` drives it on an emulator: an intent
+nothing handles is answered `RESULT_CANCELED`; the consent dialog backed out
+of is 0; the dialog agreed to after the font scale changed under it (which
+recreates the activity, as its manifest leaves `fontScale` out of
+`configChanges`) is -1, heard by the callback through the new activity; and
+`prepare` returns `null` afterwards. CI runs it on the API 34, 33 and 30
+emulators, not blocking yet.
+
 ## Building
 
 The app's crate builds as a `cdylib`, under the name the manifest gives:

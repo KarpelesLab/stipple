@@ -155,6 +155,11 @@ fn start(jni: &Jni, activity: JObject, intent: JObject, id: u32, waiting: Waitin
     Some(())
 }
 
+/// Whether a picker is up, waiting for its answer.
+pub(super) fn waiting() -> bool {
+    !lock().is_empty()
+}
+
 fn lock() -> std::sync::MutexGuard<'static, Vec<(i32, Waiting)>> {
     WAITING.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -173,6 +178,9 @@ pub(super) unsafe extern "C" fn on_activity_result(
     result: i32,
     data: JObject,
 ) {
+    if super::java::on_activity_result(code, result, data) {
+        return;
+    }
     if code & super::share::SHARE_CODE != 0 {
         super::share::closed(code);
         return;

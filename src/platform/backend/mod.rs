@@ -72,6 +72,9 @@ mod android_dead_keys;
 #[cfg(all(test, not(target_os = "android")))]
 #[path = "android/insets.rs"]
 mod android_insets;
+#[cfg(all(test, not(target_os = "android")))]
+#[path = "android/requests.rs"]
+mod android_requests;
 #[cfg(all(test, not(target_os = "ios")))]
 #[path = "ios/pan_scroll.rs"]
 mod ios_pan_scroll;

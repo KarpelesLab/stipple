@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The APK manifest for intentresult: a NativeActivity that loads
+     libstipple_android.so (built from the intentresult example), which asks
+     for VPN consent (VpnService.prepare) and starts the dialog for a result
+     through stipple::platform::android. Build it with
+       STIPPLE_APK_EXAMPLE=intentresult \
+       STIPPLE_APK_MANIFEST=examples/intentresult/AndroidManifest.xml \
+       bash examples/androiddemo/build-apk.sh x86_64 intentresult.apk
+     configChanges leaves out fontScale on purpose: test-on-device.sh changes
+     the font scale while the consent dialog is up, so Android recreates the
+     activity under it, and the answer must reach the callback through the new
+     one. No VpnService is declared: asking for consent doesn't need one. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.karpeleslab.stipple.intentresult"
+    android:versionCode="1" android:versionName="1.0">
+  <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
+  <application android:label="Stipple Results" android:hasCode="true" android:debuggable="true"
+      android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar">
+    <activity android:name="android.app.NativeActivity" android:exported="true"
+        android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|locale|layoutDirection">
+      <meta-data android:name="android.app.lib_name" android:value="stipple_android"/>
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>

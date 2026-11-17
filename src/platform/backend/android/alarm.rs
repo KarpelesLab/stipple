@@ -510,6 +510,7 @@ pub unsafe extern "C" fn Java_org_stipple_android_Alarm_onReceive(
     context: JObject,
     intent: JObject,
 ) {
+    super::java::entered(env);
     unsafe {
         jni::in_native(env, |jni| {
             received(jni, context, intent);
@@ -642,6 +643,7 @@ pub unsafe extern "C" fn Java_org_stipple_android_Tapped_onCreate(
     this: JObject,
     saved: JObject,
 ) {
+    super::java::entered(env);
     unsafe {
         jni::in_native(env, |jni| {
             // No window, whatever the manifest says: it finishes at once.

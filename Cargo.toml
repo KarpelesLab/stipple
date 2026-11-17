@@ -218,6 +218,16 @@ name = "cameraview_android"
 path = "examples/cameraview/android.rs"
 crate-type = ["cdylib"]
 
+# An Android app starting an activity for a result through
+# stipple::platform::android (VpnService.prepare's consent dialog):
+# libintentresult.so, which
+# `STIPPLE_APK_EXAMPLE=intentresult examples/androiddemo/build-apk.sh`
+# packages with examples/intentresult/AndroidManifest.xml.
+[[example]]
+name = "intentresult"
+path = "examples/intentresult/lib.rs"
+crate-type = ["cdylib"]
+
 # The benchmark in the browser (tools/bench/index.html; not on the site).
 [[example]]
 name = "bench_web"

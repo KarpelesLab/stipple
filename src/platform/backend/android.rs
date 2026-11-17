@@ -78,6 +78,9 @@ mod files;
 mod ime;
 /// The geometry of the system bars' insets (Android-free, tested on hosts).
 mod insets;
+/// JNI access for apps: the `JavaVM`, the activity, the application
+/// context, activities started for a result, the main thread.
+pub(crate) mod java;
 /// Hand-written JNI for the clipboard, key characters and the accent color.
 mod jni;
 /// Notifications through `NotificationManager`.
@@ -86,6 +89,9 @@ mod notify;
 pub(crate) mod permission;
 /// The Storage Access Framework's document picker.
 mod pick;
+/// The app's activity-result requests by request code (JVM-free, tested on
+/// hosts).
+mod requests;
 /// The system bars' insets, edge to edge, the orientation.
 mod screen;
 /// The share sheet: `ACTION_SEND` through the chooser.
@@ -744,6 +750,8 @@ pub unsafe fn start<F>(
             cb.on_low_memory = Some(on_low_memory);
         }
         (*activity).instance = Arc::into_raw(instance.clone()) as *mut c_void;
+        // The VM and the application context, for platform::android.
+        java::activity_created(&*activity);
         // The input method's connection, accessibility and memory warnings.
         classes::install(&*activity);
     }

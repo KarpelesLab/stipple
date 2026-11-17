@@ -264,6 +264,12 @@ pub(super) fn install(activity: &ANativeActivity) -> bool {
                 package: Global(jni.global(package) as usize),
                 activity: Global(jni.global(activity.clazz) as usize),
             };
+            // An answer on its way to the activity this one replaces goes
+            // to this one's fragment, which must be there before it's
+            // delivered (see `java`).
+            if super::java::waiting_for_results() || super::pick::waiting() {
+                results_fragment(jni, activity.clazz);
+            }
             Some(())
         })
     }

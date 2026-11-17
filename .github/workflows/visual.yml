@@ -5750,6 +5750,16 @@ jobs:
         if: matrix.api-level == 34
         run: bash .github/a11y/android/build-probe.sh a11yprobe.apk
 
+      # An app calling Android itself through stipple::platform::android:
+      # VpnService.prepare's consent dialog started for a result
+      # (examples/intentresult/test-on-device.sh, not blocking yet).
+      - name: Build the activity-result APK
+        run: >-
+          STIPPLE_APK_EXAMPLE=intentresult
+          STIPPLE_APK_MANIFEST=examples/intentresult/AndroidManifest.xml
+          bash examples/androiddemo/build-apk.sh x86_64 intentresult.apk
+          || echo "::warning::the intentresult APK didn't build (non-blocking)"
+
       # Another app's side of the clipboard (a receiver that copies, an
       # activity that reads), for examples/androiddemo/test-services.sh.
       - name: Build the clipboard probe APK
@@ -5822,6 +5832,8 @@ jobs:
             bash examples/androiddemo/test-drag-apps.sh clipprobe.apk visual_output || echo "::warning::test-drag-apps.sh failed (a drag into another app; non-blocking)"
             # Timers changing visible text, the clipboard both ways with another app, and a URL's VIEW intent started from the app into the browser (Chrome's first run off), by adb input touches: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-services.sh clipprobe.apk visual_output || echo "::warning::test-services.sh failed (timers, clipboard, opening a URL; non-blocking)"
+            # JNI access from the app and an activity started for a result (the VPN consent dialog: backed out of, then agreed to after the activity was recreated under it): not blocking until it has passed on CI's emulators.
+            if [ -f intentresult.apk ]; then bash examples/intentresult/test-on-device.sh intentresult.apk visual_output || echo "::warning::intentresult/test-on-device.sh failed (activity results; non-blocking)"; fi
             # Not blocking until it has passed on CI's x86_64 emulators.
             bash .github/billing/android/test-billing.sh stipple.apk visual_output || echo "::warning::test-billing.sh failed (non-blocking)"
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi

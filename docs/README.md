@@ -93,6 +93,7 @@ How to build, package and run on each platform, and what works there today.
 | Camera: live preview, every frame, torch, zoom, focus, lenses (`stipple::camera`) | ❌ | ❌ | AVFoundation ⁷² | AVFoundation ⁷² | Camera2 NDK ⁷² | `getUserMedia` ⁷² |
 | Runtime permissions (`platform::permission`) | — | — | camera, microphone ⁷² | ✅ ⁷² | ✅ ⁷² | ✅ ⁷² |
 | In-app purchases (`platform::store`) | mock ⁷³ | mock ⁷³ | mock ⁷³ | StoreKit ⁷³ | Play Billing ⁷³ | mock ⁷³ |
+| Calling the platform's own APIs: JNI access, activities started for a result (`platform::android`) | — | — | — | — | ✅ ⁸⁷ | — |
 | Reference app (`examples/mediabrowser`): browse, sort, preview, play, accessible, four languages | ✅ ⁸⁵ | ✅ ⁸⁵ | ✅ ⁸⁵ | — | — | sample folder ⁸⁵ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
@@ -714,6 +715,13 @@ drops them on the app, and an XCUITest lifts and drops with a real touch
 inside the app (not blocking yet; both passed in CI); a drag between two apps can't be
 scripted on the simulator. See
 [drag-and-drop.md](drag-and-drop.md#dragging-out-of-the-app).
+⁸⁷ The `JavaVM`, the current activity, the application context, work run on
+the Java main thread, and `start_activity_for_result`, whose callback survives
+the activity being recreated meanwhile. `examples/intentresult` asks for VPN
+consent (`VpnService.prepare`), cancels it, then agrees after a font-scale
+change recreated the activity under the dialog: passed on local API 34 and 30
+emulators; CI runs it on API 34, 33 and 30, not blocking yet. See
+[platforms/android.md](platforms/android.md#calling-android-apis-yourself).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

@@ -1781,6 +1781,15 @@ Most input only works on X11 today.
   `STIPPLE_STORE=mock`) everywhere, `Unavailable` on desktops and the web.
   CI runs the Android driver against a stand-in for the library; no real
   purchase has been made (that needs store listings and signed-in testers)._
+- ✅ JNI access for apps on Android (`platform::android`, #68): _the
+  `JavaVM`, the current activity (a global reference the caller owns), the
+  application context (also without an activity), `run_on_ui_thread` on the
+  Java main thread, and `start_activity_for_result` over the results
+  fragment, whose callback is kept by request code and still hears the
+  answer when the activity was recreated meanwhile.
+  `examples/intentresult` starts `VpnService.prepare`'s consent dialog:
+  cancelled, then agreed to after the activity was recreated under it,
+  passed on local API 34 and 30 emulators; CI runs it, not blocking yet._
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
   optional (secure) text field, answered asynchronously as a state update.

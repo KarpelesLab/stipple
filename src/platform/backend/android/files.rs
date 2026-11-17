@@ -38,7 +38,9 @@ fn path_of(jni: &Jni, uri: JObject) -> Option<PathBuf> {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn Java_org_stipple_android_Files_onCreate(_env: Env, _this: JObject) -> u8 {
+pub unsafe extern "C" fn Java_org_stipple_android_Files_onCreate(env: Env, _this: JObject) -> u8 {
+    // At the process's start, on the main thread: for platform::android.
+    super::java::entered(env);
     1
 }
 
