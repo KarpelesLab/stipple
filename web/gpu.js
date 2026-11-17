@@ -555,11 +555,22 @@ const WGSL_EXT = WGSL.slice(0, WGSL.indexOf("// Every program shares one vertex 
 `;
 
 // `claim()` hands over the canvas, at the last moment: a canvas that gave a
-// WebGPU context can't give a WebGL2 one.
-async function createWebGpu(claim, log) {
+// WebGPU context can't give a WebGL2 one. `fallback`: whether a fallback
+// adapter (a software one, SwiftShader) will do.
+async function createWebGpu(claim, log, fallback) {
   if (!navigator.gpu) return null;
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
   if (!adapter) return null;
+  // A fallback adapter runs on the CPU, slower than WebGL2 on the same
+  // rasterizer, and where the browser composites in software (Chrome
+  // without a GPU) its canvas can't show frames: asking for its texture
+  // fails in the GPU process, which then drops every GPU context of the
+  // page's process, WebGL2 and 2D canvases alike, other frames' too. Only
+  // when WebGPU was asked for by name.
+  if (!fallback && (adapter.info?.isFallbackAdapter ?? adapter.isFallbackAdapter)) {
+    log("stipple: WebGPU has only a fallback (software) adapter: WebGL2 instead");
+    return null;
+  }
   const device = await adapter.requestDevice();
   const format = navigator.gpu.getPreferredCanvasFormat();
   device.pushErrorScope("validation");
@@ -1465,7 +1476,7 @@ async function createRenderer(claim, want, log) {
       const r = await createWebGpu(() => {
         taken = true;
         return claim(false);
-      }, log);
+      }, log, want === 1);
       if (r) return r;
     } catch (err) {
       log(`stipple: WebGPU couldn't be set up: ${err.message ?? err}`);

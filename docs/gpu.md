@@ -615,7 +615,13 @@ Setting up is asynchronous (`requestAdapter`, `requestDevice`): the first
 frame waits for it, then the page asks for a whole frame. WebGPU is tried
 with a test clear of the canvas, since a browser without GPU compositing can
 hand out a device and still fail to give the canvas a texture; then WebGL2
-gets a fresh canvas. A lost device (`GPUDevice.lost`, `webglcontextlost`) is
+gets a fresh canvas. A fallback adapter (`isFallbackAdapter`: SwiftShader)
+is passed over unless WebGPU was asked for by name (`webgpu`): it is slower
+than WebGL2 on the same rasterizer, and in Chrome compositing in software
+(no GPU) that test clear itself fails in the GPU process, which drops every
+GPU context of the page's process, other frames' WebGL2 and 2D canvases
+included (they came back blank, which is what left the site check's
+examples blank). A lost device (`GPUDevice.lost`, `webglcontextlost`) is
 set up again once, as natively, and a second loss leaves the app on the CPU.
 So does a WebGPU validation error, which also asks for a new frame right
 away so the one it spoiled is drawn on the CPU.

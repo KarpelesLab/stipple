@@ -6,7 +6,8 @@
     python3 tools/site/check.py target/site --only todo,calculator
 
 A few examples (--gpu, default GPU_EXAMPLES) run a second time with
-`?renderer=gpu` (WebGPU, else WebGL2; SwiftShader here), reported as
+`?renderer=gpu` (WebGPU, else WebGL2: WebGL2 on SwiftShader here, which
+has only a fallback WebGPU adapter), reported as
 NAME@gpu: they must start and draw as well, and say what drew them (a
 browser with neither API draws them on the CPU, which is a warning, not a
 failure), and how many textures they uploaded over the second half of the
@@ -16,7 +17,8 @@ Links: every relative href/src in the site's pages must name a file in the
 site, and a #fragment an id in it.
 
 Examples: serves the site, opens every web example (examples/NAME.html?check)
-in headless Chrome, four at a time, in frames of the example's size; each
+in headless Chrome, four at a time, in frames of the example's size, all in
+view (frames out of view wait, as on a page scrolled away); each
 page posts back whether the app started, how many frames it presented, how
 many colors its canvas shows (a blank canvas has one), the errors it logged,
 and the canvas as a PNG, which becomes thumbs/NAME.png. Exits non-zero if
@@ -83,12 +85,18 @@ def check_links(site):
 
 
 CHECK_PAGE = """<!doctype html><meta charset="utf-8"><title>check</title>
-<style>body{margin:0;background:#888} iframe{border:0;display:block;margin:4px;background:#fff}</style>
+<style>body{margin:0;background:#888} iframe{border:0;position:absolute;background:#fff}</style>
 <script type="module">
 const list = %s;
 const queue = [...list];
-async function one(ex) {
+// Each worker has a cell of the window, a quarter of it, so its example is
+// in view: one out of view (below the fold) has its frames held back, as on
+// a page scrolled away.
+const CELL = %s;
+async function one(ex, slot) {
   const f = document.createElement("iframe");
+  f.style.left = (slot %% 2) * CELL[0] + "px";
+  f.style.top = Math.floor(slot / 2) * CELL[1] + "px";
   f.style.width = ex.size[0] + "px";
   f.style.height = ex.size[1] + "px";
   f.src = `examples/${ex.name}.html?embed&check${ex.query ?? ""}`;
@@ -102,8 +110,8 @@ async function one(ex) {
   }
   f.remove();
 }
-async function worker() { while (queue.length) await one(queue.shift()); }
-await Promise.all([worker(), worker(), worker(), worker()]);
+async function worker(slot) { while (queue.length) await one(queue.shift(), slot); }
+await Promise.all([worker(0), worker(1), worker(2), worker(3)]);
 await fetch("/__finished");
 </script>
 """
@@ -145,7 +153,9 @@ def check_examples(site, chrome, only, thumbs, timeout, gpu=()):
     ]
     reports = {}
     finished = threading.Event()
-    page = CHECK_PAGE % json.dumps(examples)
+    # A cell fits the largest example; the window, four cells.
+    cell = [max(e["size"][i] for e in meta["web"]) + 8 for i in (0, 1)]
+    page = CHECK_PAGE % (json.dumps(examples), json.dumps(cell))
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self, *a, **k):
@@ -195,7 +205,7 @@ def check_examples(site, chrome, only, thumbs, timeout, gpu=()):
         "--no-first-run",
         "--mute-audio",
         "--force-device-scale-factor=1",
-        "--window-size=2000,1400",
+        f"--window-size={2 * cell[0]},{2 * cell[1]}",
         # WebGPU and WebGL2 on SwiftShader, for the ?renderer=gpu runs.
         "--enable-unsafe-webgpu",
         "--use-angle=swiftshader",
@@ -274,8 +284,9 @@ def main():
         failed = check_examples(a.site, chrome, only, not a.no_thumbs, a.timeout, gpu)
         if failed:
             # Once more, in a fresh browser: on a loaded CI runner Chrome's
-            # GPU process (SwiftShader) can crash for a moment, leaving a
-            # run of examples, CPU-drawn ones too, with blank canvases.
+            # GPU process (SwiftShader) can fail for a moment, and with it
+            # every GPU context of the examples' process, CPU-drawn ones'
+            # 2D canvases too (they come back blank, and are drawn again).
             print(f"again, in a fresh browser: {', '.join(failed)}")
             names = {f.split("@")[0] for f in failed}
             again = check_examples(a.site, chrome, names, not a.no_thumbs, a.timeout,
