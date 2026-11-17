@@ -5647,6 +5647,81 @@ jobs:
           grep -qE "touchdemo: assets dir=/.+/Stipple Touch\.app/assets$" "$LOG"
           grep -qE "Stipple iOS: window shown, framebuffer [1-9][0-9]*x[1-9][0-9]*" "$DATA/tmp/stipple-ios.txt"
 
+      # App extensions (examples/extensiondemo/package.toml): extensiondemo
+      # with a notification service extension written in Rust in
+      # PlugIns/Service.appex, the two sharing an app group. The bundles are
+      # checked (the extension's Info.plist, both signatures and their
+      # app-group entitlements, the .ipa's layout); then the simulator .app
+      # is installed and launched (the app writes into the group's
+      # container), and the extension's executable is run inside its
+      # bundle in self-test mode: Stipple's non-UI parts answer without
+      # App::run (its own bundle id, directories, languages), it reads what
+      # the app wrote in the same container, and its principal class
+      # registers. NSExtensionMain itself only runs when the system starts
+      # the extension for a remote notification, which isn't scripted here.
+      # Not blocking yet.
+      - name: Package extensiondemo with its app extension (not blocking)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          tools/package/cargo-stipple ios --simulator --example extensiondemo --config examples/extensiondemo/package.toml
+          tools/package/cargo-stipple ios --example extensiondemo --config examples/extensiondemo/package.toml
+          for APP in "target/stipple-package/ios-sim/Stipple Extensions.app" "target/stipple-package/ios/Stipple Extensions.app"; do
+            EXT="$APP/PlugIns/Service.appex"
+            plutil -lint "$APP/Info.plist" "$EXT/Info.plist" "$EXT/PrivacyInfo.xcprivacy"
+            plutil -p "$EXT/Info.plist"
+            [ "$(plutil -extract CFBundlePackageType raw "$EXT/Info.plist")" = 'XPC!' ]
+            [ "$(plutil -extract CFBundleIdentifier raw "$EXT/Info.plist")" = com.karpeleslab.stipple.extdemo.service ]
+            [ "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw "$EXT/Info.plist")" = com.apple.usernotifications.service ]
+            [ "$(plutil -extract NSExtension.NSExtensionPrincipalClass raw "$EXT/Info.plist")" = ExtensionDemoService ]
+            [ "$(plutil -extract CFBundleVersion raw "$EXT/Info.plist")" = "$(plutil -extract CFBundleVersion raw "$APP/Info.plist")" ]
+            test -x "$EXT/extensiondemo_ext"
+            codesign --verify --strict "$EXT"
+            codesign --verify --deep --strict "$APP"
+            for B in "$EXT" "$APP"; do
+              codesign -d --entitlements - --xml "$B" > ent.xml 2>/dev/null || codesign -d --entitlements :- "$B" > ent.xml
+              cat ent.xml; echo
+              grep -q "group.com.karpeleslab.stipple.extdemo" ent.xml
+            done
+          done
+          unzip -l "target/stipple-package/ios/Stipple Extensions-1.0.0.ipa" > ipa.txt
+          cat ipa.txt
+          grep -q "Payload/Stipple Extensions.app/PlugIns/Service.appex/extensiondemo_ext$" ipa.txt
+          grep -q "Payload/Stipple Extensions.app/PlugIns/Service.appex/Info.plist$" ipa.txt
+          test -d "target/stipple-package/ios/Service.appex.dSYM"
+
+      - name: Run extensiondemo and its extension in the simulator (not blocking)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          DEV=$(xcrun simctl list devices booted -j | python3 -c "import sys,json;d=json.load(sys.stdin)['devices'];ids=[x['udid'] for rt,devs in d.items() if 'iOS' in rt for x in devs];print(ids[0] if ids else '')")
+          [ -n "$DEV" ] || { xcrun simctl list devices; exit 1; }
+          xcrun simctl install "$DEV" "target/stipple-package/ios-sim/Stipple Extensions.app"
+          # What the system registered (informational: pluginkit may not be
+          # in the simulator's runtime).
+          xcrun simctl spawn "$DEV" pluginkit -m -v -i com.karpeleslab.stipple.extdemo.service || true
+          xcrun simctl launch "$DEV" com.karpeleslab.stipple.extdemo
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple.extdemo data)
+          LOG="$DATA/tmp/extensiondemo.log"
+          for _ in $(seq 60); do
+            grep -q "extensiondemo: app wrote from-app.txt\|extensiondemo: app shared_dir=None" "$LOG" 2>/dev/null && break
+            sleep 1
+          done
+          cat "$LOG" || true
+          grep -qx "extensiondemo: app id=com.karpeleslab.stipple.extdemo" "$LOG"
+          grep -qE "extensiondemo: app shared_dir=/.+" "$LOG"
+          grep -q "extensiondemo: app wrote from-app.txt ok=true" "$LOG"
+          APPDIR=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple.extdemo app)
+          SIMCTL_CHILD_EXTENSIONDEMO_SELFTEST=1 xcrun simctl spawn "$DEV" "$APPDIR/PlugIns/Service.appex/extensiondemo_ext" | tee ext.txt
+          grep -qF 'extensiondemo_ext: id=com.karpeleslab.stipple.extdemo.service name="Service" version=Some("1.0.0") build=Some("3")' ext.txt
+          grep -qE "extensiondemo_ext: dirs data=/.+" ext.txt
+          grep -qE "extensiondemo_ext: languages=\[.+\] locale=" ext.txt
+          # The app and the extension see one container, and what the app
+          # wrote there.
+          [ "$(sed -n 's/^extensiondemo_ext: shared_dir=//p' ext.txt)" = "$(sed -n 's/^extensiondemo: app shared_dir=//p' "$LOG" | head -1)" ]
+          grep -qF 'extensiondemo_ext: from-app.txt Ok("hello from com.karpeleslab.stipple.extdemo")' ext.txt
+          grep -q "extensiondemo_ext: principal class registered=true" ext.txt
+
       - name: Upload the .ipa
         uses: actions/upload-artifact@v4
         if: always()

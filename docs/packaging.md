@@ -87,6 +87,7 @@ usage = { camera = "To scan QR codes.", photo-library = "To read a code from a p
 # entitlements = "ios/app.entitlements"
 # privacy-api = { UserDefaults = ["CA92.1"] }   # added to Stipple's own
 # info = { UIStatusBarHidden = true }           # any other Info.plist keys
+# app-groups = ["group.com.example.qrmaster"]   # shared containers (see App extensions)
 
 [package.metadata.stipple.android]
 permissions = ["CAMERA", "POST_NOTIFICATIONS"]
@@ -204,6 +205,7 @@ xcrun simctl launch booted com.example.qrmaster
 |---|---|
 | `STIPPLE_IOS_SIGN_IDENTITY` | the certificate: `"Apple Distribution: Example Inc (TEAMID1234)"` for the App Store, `"Apple Development: …"` for your devices, or its SHA-1 (`security find-identity -v -p codesigning`) |
 | `STIPPLE_IOS_PROVISIONING_PROFILE` | the `.mobileprovision` for the app id (App Store profile for the store; development or ad hoc for devices) |
+| `STIPPLE_IOS_PROVISIONING_PROFILE_<NAME>` | each [app extension](#app-extensions)'s profile, for its own app id (`_TUNNEL` for `name = "Tunnel"`) |
 | `STIPPLE_IOS_KEYCHAIN` | optional: the keychain holding the identity (CI) |
 
 The profile is copied into the bundle as `embedded.mobileprovision`, and its
@@ -230,6 +232,86 @@ What the bundle holds:
   `ios.privacy-manifest`. No tracking and no collected data are declared:
   if the app collects any, say so in a file of your own.
 - The icon, the `.lproj` directories, and `assets/`.
+
+### App extensions
+
+Widgets, share extensions, notification service extensions and Network
+Extension providers (a VPN's packet tunnel) are app extensions: separate
+executables the system starts, each in the app's `PlugIns/<Name>.appex`
+with its own `Info.plist`, entitlements and provisioning profile. Each
+`[[package.metadata.stipple.ios.extension]]` makes one:
+
+```toml
+[package.metadata.stipple.ios]
+app-groups = ["group.com.example.vpn"]   # com.apple.security.application-groups
+
+[[package.metadata.stipple.ios.extension]]
+name = "Tunnel"                          # PlugIns/Tunnel.appex
+bin = "tunnel"                           # the Cargo target (or example = "...")
+# bundle-id-suffix = "tunnel"            # the default: the name in lower case
+# bundle-id = "com.example.vpn.tunnel"   # or the whole id: the app's, a dot, more
+point = "com.apple.networkextension.packet-tunnel"   # NSExtensionPointIdentifier
+principal-class = "PacketTunnelProvider" # NSExtensionPrincipalClass
+app-groups = true                        # the app's groups (or a list of some of them)
+# entitlements = "ios/tunnel.entitlements"   # on top (Network Extensions, keychain groups...)
+# attributes = { NSExtensionActivationRule = "TRUEPREDICATE" }   # NSExtensionAttributes
+# extension = { NSExtensionMainStoryboard = "MainInterface" }   # other NSExtension keys
+# info = { CFBundleDisplayName = "Tunnel" }  # other Info.plist keys
+# minimum-os = "15.0"                    # default: the app's
+# entry = "main"                         # or "NSExtensionMain"
+```
+
+`cargo-stipple ios` builds each target for the app's Rust target and
+writes its bundle: the executable; an `Info.plist` with
+`CFBundlePackageType` `XPC!`, the `NSExtension` dictionary, and the app's
+version and build (App Store Connect refuses an extension whose differ);
+the privacy manifest; and, signing for a device, its profile as
+`embedded.mobileprovision` (and a `<Name>.appex.dSYM` next to the app's).
+Each extension is signed before the app, with entitlements made as the
+app's are, for its own id: the profile's, the app groups it opts into, then
+its `entitlements` file. The manifest is checked first: names, ids and
+profile variables are unique, every id is the app's followed by a dot and
+more, and an extension's groups are the app's. A warning says when a
+profile doesn't grant a group the bundle asks for.
+
+**The entry point.** An extension's executable runs Foundation's
+`NSExtensionMain`, which creates the principal class and serves the host.
+With `entry = "main"` (the default) the Rust `main` runs first: it
+registers the principal class with the Objective-C runtime
+(`objc_allocateClassPair` on the system's superclass,
+`NEPacketTunnelProvider` or `UNNotificationServiceExtension`;
+`class_addMethod` for each method it overrides; `objc_registerClassPair`),
+then calls
+[`platform::extension_main()`](os-integration.md#shared-containers-app-groups),
+which hands the process to `NSExtensionMain`.
+[`examples/extensiondemo/extension.rs`](../examples/extensiondemo/extension.rs)
+is a notification service extension written that way, in the
+`extensiondemo` app ([its manifest](../examples/extensiondemo/package.toml)).
+With `entry = "NSExtensionMain"` the executable is linked with
+`-e _NSExtensionMain` (and Foundation), as Xcode links extensions, and the
+Rust `main` never runs: for a principal class from elsewhere (a Swift or
+Objective-C static library linked into the binary).
+
+**What works inside an extension.** An extension has no `UIApplication`,
+and most get tight memory limits (a packet tunnel about 50 MB). Stipple's
+non-UI parts work without `App::run`: `platform::dirs()` (the extension's
+own container), `app_info()` (the `.appex`'s `Info.plist`),
+`platform::shared_dir(group)` (the app group's container, shared with the
+app), `preferred_languages()` and `locale()`, and files, threads and timers
+of the extension's own. Calls that need the app (`open_url`, message boxes,
+file pickers) fail or do nothing there rather than crash. Stipple UI inside
+an extension (a share sheet's view, a widget) isn't supported: widgets are
+SwiftUI views (WidgetKit), and an extension's view controller isn't wired to
+Stipple's renderer.
+
+**Signing for a device.** Each app id (the app's and every extension's) is
+registered in the developer account with the app group and its
+capabilities, and has its own provisioning profile: set
+`STIPPLE_IOS_PROVISIONING_PROFILE_<NAME>` for each extension next to the
+app's `STIPPLE_IOS_PROVISIONING_PROFILE`. A Network Extension also needs
+`com.apple.developer.networking.networkextension` (`["packet-tunnel-provider"]`)
+in an `entitlements` file for both the app and the extension, and runs only
+on a device, not in the simulator.
 
 **Uploading.** Use Apple's Transporter app (drag the `.ipa` in), or from a
 terminal with an [App Store Connect API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api):
@@ -324,7 +406,10 @@ The `package-ios` and `package-android` jobs in
 `touchdemo` and `androiddemo` on every push: the simulator `.app` is
 installed and launched (it reports the name, version and build the tool
 wrote), the device `.ipa` is checked (signature, icon catalog, plists, the
-`Payload/` layout), and the bundle is validated and split by bundletool and
+`Payload/` layout), `extensiondemo` is packaged with its extension (the
+`.appex`'s plist, both signatures and their app-group entitlements; in the
+simulator the extension's executable, run in its bundle, reads what the app
+wrote in the shared container; not blocking, passed in a CI trial run), and the bundle is validated and split by bundletool and
 the APK read back by `aapt2`, `apksigner` and `zipalign`. To sign for real
 in your own CI, decode the keystore or certificate and profile from secrets
 into files, and set the variables above. On macOS, import the `.p12` into a
@@ -342,7 +427,8 @@ export STIPPLE_IOS_KEYCHAIN=build.keychain
 
 - Play Asset Delivery (asset packs) and iOS on-demand resources: all assets
   go into the base module and the bundle.
-- App extensions (widgets, share extensions), App Clips and Instant Apps.
+- Stipple-drawn UI inside an app extension (see [App extensions](#app-extensions)),
+  App Clips and Instant Apps.
 - Uploading itself: the tool stops at the signed files.
 - macOS (`.app`/`.pkg` for the Mac App Store, notarization), Windows (MSIX)
   and Linux (Flatpak, AppImage) packages.

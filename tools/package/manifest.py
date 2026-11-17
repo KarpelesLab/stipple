@@ -254,6 +254,11 @@ class Manifest:
         self.ios_privacy_manifest = self._path(
             d.pop("privacy-manifest", None), "ios.privacy-manifest"
         )
+        # App groups and app extensions (ios_extensions.py).
+        import ios_extensions
+
+        self.ios_app_groups = ios_extensions.app_groups(d.pop("app-groups", []))
+        self.ios_extensions = ios_extensions.extensions(self, d.pop("extension", []))
         if d:
             raise ManifestError(f"unknown keys in ios: {', '.join(sorted(d))}")
 

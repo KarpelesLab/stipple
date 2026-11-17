@@ -1,0 +1,30 @@
+# extensiondemo's packaging manifest for cargo-stipple (tools/package): the
+# app and, in its PlugIns/, a notification service extension written in
+# Rust, sharing an app group. CI builds a simulator .app and an ad hoc .ipa:
+#
+#   tools/package/cargo-stipple ios --simulator --example extensiondemo \
+#       --config examples/extensiondemo/package.toml
+#
+# An app keeps the same keys in its Cargo.toml, under
+# [package.metadata.stipple]. See docs/packaging.md#app-extensions.
+id = "com.karpeleslab.stipple.extdemo"
+name = "Stipple Extensions"
+version = "1.0.0"
+build = 3
+icon = "../../tools/package/stipple-icon.svg"
+icon-background = "#16181d"
+
+[ios]
+minimum-os = "15.0"
+# com.apple.security.application-groups on the app, and on each extension
+# that sets app-groups = true.
+app-groups = ["group.com.karpeleslab.stipple.extdemo"]
+
+[[ios.extension]]
+name = "Service"                    # PlugIns/Service.appex
+example = "extensiondemo_ext"       # the Cargo target (bin = "..." for a binary)
+# bundle-id-suffix = "service"      # the default: the name, in lower case
+point = "com.apple.usernotifications.service"
+principal-class = "ExtensionDemoService"
+app-groups = true
+# Signed with STIPPLE_IOS_PROVISIONING_PROFILE_SERVICE for a device.

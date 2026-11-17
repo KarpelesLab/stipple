@@ -62,6 +62,8 @@ pub(crate) mod dex;
 pub(crate) mod dmabuf;
 /// The edit menu over a text field's selection on a touch screen.
 mod edit_menu;
+/// App extensions (`NSExtensionMain`) and app groups' shared containers.
+mod extension;
 
 /// A `classes.dex` for an Android APK holding the `org.stipple.android.Alarm`
 /// broadcast receiver, which shows the app's
@@ -173,6 +175,7 @@ pub use event::{
     SCROLL_LINE_PX, ScrollDelta, ScrollPhase, ScrollUnit, Touch, TouchPhase, WindowId,
     file_uri_to_path, parse_uri_list, path_to_file_uri, uri_list,
 };
+pub use extension::{extension_main, shared_dir};
 pub(crate) use input_hints::InputHints;
 pub use input_hints::{Autocapitalize, Autofill, EnterAction, InputKind};
 pub use key::{

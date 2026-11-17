@@ -11,6 +11,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import android  # noqa: E402
 import ios  # noqa: E402
+import ios_extensions  # noqa: E402
+from common import Target  # noqa: E402
 from manifest import ANDROID_TARGET_SDK, Manifest, ManifestError, android_qualifier  # noqa: E402
 
 PACKAGE = {"name": "my-app", "version": "0.3.1"}
@@ -287,6 +289,152 @@ class IosTests(unittest.TestCase):
 
     def test_strings(self):
         self.assertEqual(ios._strings_file({"A": 'say "hi"'}), '"A" = "say \\"hi\\"";\n')
+
+
+def with_extension(groups=("group.com.example.app",), **ext):
+    e = {"name": "Tunnel", "bin": "tunnel", "point": "com.apple.networkextension.packet-tunnel",
+         "principal-class": "PacketTunnelProvider"}
+    e.update(ext)
+    return manifest(ios={"app-groups": list(groups), "extension": [e]})
+
+
+class IosExtensionTests(unittest.TestCase):
+    def test_manifest(self):
+        m = with_extension(**{"app-groups": True})
+        self.assertEqual(m.ios_app_groups, ["group.com.example.app"])
+        (e,) = m.ios_extensions
+        self.assertEqual(e.bundle_id, "com.example.app.tunnel")
+        self.assertEqual(e.bundle_dir, "Tunnel.appex")
+        self.assertEqual(e.profile_env, "STIPPLE_IOS_PROVISIONING_PROFILE_TUNNEL")
+        self.assertEqual(e.app_groups, ["group.com.example.app"])
+        self.assertEqual((e.kind, e.target, e.entry), ("bin", "tunnel", "main"))
+        self.assertEqual(e.minimum_os, m.ios_minimum)
+        self.assertEqual(with_extension().ios_extensions[0].app_groups, [])
+        e = with_extension(**{"bundle-id-suffix": "vpn.provider"}).ios_extensions[0]
+        self.assertEqual(e.bundle_id, "com.example.app.vpn.provider")
+        e = with_extension(**{"bundle-id": "com.example.app.x"}).ios_extensions[0]
+        self.assertEqual(e.bundle_id, "com.example.app.x")
+        self.assertEqual(ios_extensions.profile_env("share-ext"),
+                         "STIPPLE_IOS_PROVISIONING_PROFILE_SHARE_EXT")
+        self.assertEqual(manifest().ios_extensions, [])
+        self.assertIn("Tunnel", repr(m.ios_extensions))
+
+    def test_rejects(self):
+        for bad in (
+            {"bundle-id": "com.example.other.tunnel"},
+            {"bundle-id": "com.example.application"},
+            {"bundle-id": "com.example.app"},
+            {"bundle-id": "com.example.app."},
+            {"bundle-id": "com.example.app.x", "bundle-id-suffix": "x"},
+            {"bundle-id-suffix": "a b"},
+            {"point": None},
+            {"example": "tunnel"},
+            {"name": "Two Words"},
+            {"entry": "start"},
+            {"app-groups": ["group.com.example.other"]},
+            {"nope": 1},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ManifestError):
+                ext = {"name": "Tunnel", "bin": "tunnel", "point": "p", **bad}
+                ext = {k: v for k, v in ext.items() if v is not None}
+                manifest(ios={"app-groups": ["group.com.example.app"], "extension": [ext]})
+        for groups in (["com.example.app"], ["group.x"], "group.com.example.app",
+                       ["group.com.a.b", "group.com.a.b"]):
+            with self.subTest(groups=groups), self.assertRaises(ManifestError):
+                manifest(ios={"app-groups": groups})
+        with self.assertRaises(ManifestError):
+            with_extension(groups=(), **{"app-groups": True})
+        two = {"name": "A", "bin": "a", "point": "p"}
+        for clash in ({"name": "A"}, {"name": "B", "bundle-id-suffix": "a"}, {"name": "a"}):
+            other = {"bin": "b", "point": "p", **clash}
+            with self.subTest(clash=clash), self.assertRaises(ManifestError):
+                manifest(ios={"extension": [two, other]})
+
+    def test_info_plist(self):
+        m = with_extension(
+            attributes={"NSExtensionActivationRule": "TRUEPREDICATE"},
+            info={"CFBundleDisplayName": "My Tunnel"},
+        )
+        m.build = 12
+        info = ios_extensions.info_plist(m, m.ios_extensions[0], "tunnel", False,
+                                         {"DTPlatformName": "iphoneos"})
+        self.assertEqual(info["CFBundlePackageType"], "XPC!")
+        self.assertEqual(info["CFBundleExecutable"], "tunnel")
+        self.assertEqual(info["CFBundleIdentifier"], "com.example.app.tunnel")
+        self.assertEqual(info["CFBundleVersion"], "12")
+        self.assertEqual(info["CFBundleShortVersionString"], "0.3.1")
+        self.assertEqual(info["CFBundleDisplayName"], "My Tunnel")
+        self.assertEqual(info["CFBundleSupportedPlatforms"], ["iPhoneOS"])
+        self.assertEqual(info["DTPlatformName"], "iphoneos")
+        self.assertEqual(info["NSExtension"], {
+            "NSExtensionPointIdentifier": "com.apple.networkextension.packet-tunnel",
+            "NSExtensionPrincipalClass": "PacketTunnelProvider",
+            "NSExtensionAttributes": {"NSExtensionActivationRule": "TRUEPREDICATE"},
+        })
+        # An app's keys stay out of an extension's.
+        for key in ("LSRequiresIPhoneOS", "UILaunchScreen", "UIApplicationSceneManifest"):
+            self.assertNotIn(key, info)
+        m = with_extension(extension={"NSExtensionMainStoryboard": "Main"})
+        m.ios_extensions[0].principal_class = None
+        info = ios_extensions.info_plist(m, m.ios_extensions[0], "tunnel", True, {})
+        self.assertEqual(info["NSExtension"]["NSExtensionMainStoryboard"], "Main")
+        self.assertNotIn("NSExtensionPrincipalClass", info["NSExtension"])
+        self.assertEqual(info["CFBundleSupportedPlatforms"], ["iPhoneSimulator"])
+        plistlib.dumps(info)
+
+    def test_entitlements(self):
+        m = with_extension(**{"app-groups": True})
+        key = "com.apple.security.application-groups"
+        self.assertEqual(ios.entitlements(m, None), {key: ["group.com.example.app"]})
+        self.assertEqual(ios.entitlements(manifest(), None), {})
+        e = m.ios_extensions[0]
+        profile = {
+            "TeamIdentifier": ["ABCDE12345"],
+            "Entitlements": {
+                "application-identifier": "ABCDE12345.*",
+                key: ["group.com.example.app", "group.com.example.old"],
+            },
+        }
+        ent = ios.bundle_entitlements(e.bundle_id, profile, e.entitlements, e.app_groups)
+        self.assertEqual(ent["application-identifier"], "ABCDE12345.com.example.app.tunnel")
+        self.assertEqual(ent[key], ["group.com.example.app"])
+        # An extension that doesn't opt in keeps none of the app's groups.
+        plain = with_extension().ios_extensions[0]
+        ent = ios.bundle_entitlements(plain.bundle_id, None, None, plain.app_groups)
+        self.assertNotIn(key, ent)
+        profile["Entitlements"]["application-identifier"] = "ABCDE12345.com.example.app"
+        with self.assertRaises(Exception):
+            ios.bundle_entitlements(e.bundle_id, profile, None, e.app_groups)
+        check = ios_extensions.check_profile_groups
+        self.assertEqual(check(["group.a.b"], {key: ["group.a.b"]}, "x"), [])
+        self.assertEqual(len(check(["group.a.b"], {key: ["group.c.d"]}, "x")), 1)
+        self.assertEqual(check(["group.a.b"], {}, "x"), [])
+
+    def test_cargo_command(self):
+        package = {"name": "app", "targets": [
+            {"name": "app", "kind": ["bin"]}, {"name": "tunnel", "kind": ["bin"]},
+            {"name": "ext", "kind": ["example"]},
+        ]}
+
+        class Args:
+            manifest_path = "Cargo.toml"
+            profile = "release"
+            features = None
+
+        e = with_extension().ios_extensions[0]
+        cmd = ios_extensions.cargo_command(Args, Target(package, "bin", "tunnel"),
+                                           "aarch64-apple-ios", e)
+        self.assertEqual(cmd[:2], ["cargo", "build"])
+        self.assertIn("--bin", cmd)
+        self.assertNotIn("--", cmd)
+        e = with_extension(entry="NSExtensionMain").ios_extensions[0]
+        cmd = ios_extensions.cargo_command(Args, Target(package, "example", "ext"),
+                                           "aarch64-apple-ios", e)
+        self.assertEqual(cmd[:2], ["cargo", "rustc"])
+        self.assertEqual(cmd[cmd.index("--example") + 1], "ext")
+        tail = cmd[cmd.index("--") + 1:]
+        self.assertIn("link-arg=_NSExtensionMain", tail)
+        self.assertIn("link-arg=Foundation", tail)
 
 
 if __name__ == "__main__":

@@ -154,6 +154,12 @@ test = true
 name = "widgetsdemo"
 test = true
 
+# extensiondemo's app extension (examples/extensiondemo/package.toml puts it
+# in the app's PlugIns/ as Service.appex).
+[[example]]
+name = "extensiondemo_ext"
+path = "examples/extensiondemo/extension.rs"
+
 # The raw GPU backends: `--features gpu`, or a backend (gl, vk, d3d, mtl).
 [[example]]
 name = "d3ddemo"

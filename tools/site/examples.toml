@@ -419,3 +419,7 @@ needs = "System fonts, found by family name; the web has only the font the page 
 [native.bench]
 description = "Stipple's benchmarks: frames, interactions, sprites, layout and text, timed on the software and GPU renderers, with a JSON report (docs/performance.md#benchmarks)."
 needs = "A terminal: it prints a table and writes JSON. In the browser it runs from tools/bench/ instead."
+
+[native.extensiondemo]
+description = "An iOS app with a notification service extension written in Rust (its principal class made at run time), sharing files through an app group's container."
+needs = "iOS: cargo-stipple packages the extension into the app's PlugIns/ (examples/extensiondemo/package.toml)."

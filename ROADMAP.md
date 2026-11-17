@@ -1863,8 +1863,26 @@ Most input only works on X11 today.
   and the iOS 27 simulator; signed with a development identity; CI
   packages both demos, launches the simulator `.app` and has bundletool
   validate and split the bundle (not blocking yet). Not yet: an upload to
-  either store, asset packs, on-demand resources, app extensions._ See
-  [docs/packaging.md](docs/packaging.md).
+  either store, asset packs, on-demand resources, Stipple UI inside app
+  extensions._ See [docs/packaging.md](docs/packaging.md).
+- ✅ iOS app extensions and app groups (#69): _`[[ios.extension]]` entries
+  (a Cargo bin or example, a bundle-id suffix checked to nest under the
+  app's, `NSExtensionPointIdentifier`, `NSExtensionPrincipalClass`,
+  attributes and extra keys, an entitlements file, its own
+  `STIPPLE_IOS_PROVISIONING_PROFILE_<NAME>`) built into
+  `PlugIns/<Name>.appex` (`XPC!`, the app's version) and signed before the
+  app; `ios.app-groups` as `com.apple.security.application-groups` on the
+  app and the extensions that opt in; `platform::shared_dir(group)`
+  (`containerURLForSecurityApplicationGroupIdentifier:`, iOS and macOS) and
+  `platform::extension_main()` (`NSExtensionMain`, after a Rust `main`
+  registers its principal class), or `entry = "NSExtensionMain"` to link it
+  as the entry point. `examples/extensiondemo` is a notification service
+  extension in Rust. Unit tests for the manifest, plist and entitlements; CI
+  packages it and runs the extension's executable in its bundle on the
+  simulator against the app's shared container (not blocking; passed in a CI trial run). Not
+  yet: the system launching an extension in CI, a device, Network
+  Extensions (device only), Stipple UI in an extension._ See
+  [docs/packaging.md](docs/packaging.md#app-extensions).
 - ✅ The user's languages and formats (#47): `platform::preferred_languages`
   (BCP 47 tags in order: `NSLocale.preferredLanguages`,
   `LocaleList.getDefault()` over JNI, `GetUserPreferredUILanguages`,

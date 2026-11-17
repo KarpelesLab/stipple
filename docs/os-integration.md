@@ -270,6 +270,33 @@ reads the simulator bundle's `Info.plist` values and container directories, and
 `versionCode`, and its files and cache directories. macOS was checked by hand,
 bundled and unbundled; Windows is build-checked only.
 
+### Shared containers (app groups)
+
+An iOS app and its [app extensions](packaging.md#app-extensions) are
+separate processes, each with its own container: inside an extension,
+`dirs()` are the extension's and `app_info()` reads the `.appex`'s
+`Info.plist`. They share files through an app group's container:
+
+```rust
+// ios.app-groups = ["group.com.example.vpn"] in the manifest.
+if let Some(dir) = platform::shared_dir("group.com.example.vpn") {
+    std::fs::write(dir.join("config.json"), b"{}")?;
+}
+```
+
+`shared_dir(group)` is `NSFileManager`'s
+`containerURLForSecurityApplicationGroupIdentifier:`. On a device it is
+`None` when the process isn't entitled to the group
+(`com.apple.security.application-groups`, which `cargo-stipple` signs in
+from `ios.app-groups`; the simulator is less strict), and on Windows, Linux,
+Android and the web, which have no app groups. On macOS the same call gives
+`~/Library/Group Containers/<group>` (created if missing; a sandboxed app
+needs the entitlement). Files there aren't coordinated: when both sides may
+write at once, write to a temporary name and rename. CI runs `extensiondemo`
+in the simulator, where the app writes into the group's container and the
+extension's executable reads it back (not blocking; passed in a CI trial run); macOS is
+build-checked only.
+
 ## Packaged assets
 
 Files the app ships with (art, fonts, sounds, levels) can be compiled in with

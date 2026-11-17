@@ -6,7 +6,8 @@ app icon (an asset catalog compiled by Xcode's actool when Xcode is there,
 else loose PNGs), the localized display name and permission prompts
 (`<lang>.lproj/InfoPlist.strings`), the privacy manifest, the app's assets,
 and, when signing for a device, the provisioning profile. codesign signs it
-with the entitlements the profile grants.
+with the entitlements the profile grants. App extensions go in `PlugIns/`
+and are signed first (ios_extensions.py).
 """
 
 import os
@@ -18,6 +19,7 @@ import sys
 import zipfile
 from pathlib import Path
 
+import ios_extensions
 from common import PackageError, cargo_build, copy_tree, log, run, warn, zip_add
 from manifest import ios_lproj
 
@@ -277,13 +279,22 @@ def profile_plist(path):
 
 
 def entitlements(m, profile):
-    """The entitlements to sign with: the profile's (its wildcard app id made
-    this app's), then the manifest's file on top."""
+    """The app's entitlements to sign with: the profile's (its wildcard app
+    id made this app's), the manifest's associated domains and app groups,
+    then the manifest's file on top."""
+    return bundle_entitlements(m.ios_bundle_id, profile, m.ios_entitlements, m.ios_app_groups,
+                               link_entitlements(m))
+
+
+def bundle_entitlements(bundle_id, profile, file, groups, extra=None):
+    """A bundle's entitlements (the app's or an extension's): `profile`'s
+    for `bundle_id`, `extra` (the app's associated domains), the app groups
+    (ios_extensions.group_entitlements), then `file`'s on top."""
     ent = {}
     if profile:
         ent = dict(profile.get("Entitlements", {}))
         team = (profile.get("TeamIdentifier") or [""])[0]
-        app_id = f"{team}.{m.ios_bundle_id}"
+        app_id = f"{team}.{bundle_id}"
         granted = ent.get("application-identifier", "")
         if granted.endswith(".*") and app_id.startswith(granted[:-1]):
             ent["application-identifier"] = app_id
@@ -294,26 +305,44 @@ def entitlements(m, profile):
         # Keychain groups and the like come as wildcards: keep the app's own.
         if "keychain-access-groups" in ent:
             ent["keychain-access-groups"] = [app_id]
-    links = link_entitlements(m)
-    if links and profile and "com.apple.developer.associated-domains" not in ent:
+    if extra and profile and "com.apple.developer.associated-domains" in extra \
+            and "com.apple.developer.associated-domains" not in ent:
         warn(
             "associated-domains: the provisioning profile doesn't grant Associated Domains "
             "(turn it on for the app id); a device won't install the app"
         )
-    ent.update(links)
-    if m.ios_entitlements:
-        with open(m.ios_entitlements, "rb") as f:
+    ent.update(extra or {})
+    ent.update(ios_extensions.group_entitlements(groups))
+    if file:
+        with open(file, "rb") as f:
             ent.update(plistlib.load(f))
     return ent
 
 
 def sign(m, app, work, simulator):
+    """Sign the app (after its extensions: the app's seal covers them)."""
+    return sign_bundle(
+        app, m.ios_bundle_id, m.ios_entitlements, m.ios_app_groups,
+        "STIPPLE_IOS_PROVISIONING_PROFILE", work / "entitlements.plist", simulator, "the app",
+        extra=link_entitlements(m),
+    )
+
+
+def sign_bundle(bundle, bundle_id, ent_path, groups, profile_var, ent_file, simulator, who,
+                extra=None):
     identity = os.environ.get("STIPPLE_IOS_SIGN_IDENTITY")
-    profile_path = os.environ.get("STIPPLE_IOS_PROVISIONING_PROFILE")
+    profile_path = os.environ.get(profile_var)
     if not identity:
-        # Ad hoc: runs on the simulator; a device needs a real identity.
-        run(["codesign", "--force", "--sign", "-", "--timestamp=none", app], quiet=True)
-        if not simulator:
+        # Ad hoc: runs on the simulator; a device needs a real identity. The
+        # entitlements still go in, for the simulator (app groups).
+        cmd = ["codesign", "--force", "--sign", "-", "--timestamp=none"]
+        ent = bundle_entitlements(bundle_id, None, ent_path, groups, extra)
+        if ent:
+            with open(ent_file, "wb") as f:
+                plistlib.dump(ent, f)
+            cmd += ["--entitlements", ent_file]
+        run(cmd + [bundle], quiet=True)
+        if not simulator and who == "the app":
             warn(
                 "signed ad hoc: set STIPPLE_IOS_SIGN_IDENTITY and "
                 "STIPPLE_IOS_PROVISIONING_PROFILE to install on a device or upload"
@@ -323,11 +352,12 @@ def sign(m, app, work, simulator):
     if profile_path:
         profile_path = Path(profile_path).expanduser()
         profile = profile_plist(profile_path)
-        shutil.copy(profile_path, app / "embedded.mobileprovision")
+        shutil.copy(profile_path, bundle / "embedded.mobileprovision")
+        for w in ios_extensions.check_profile_groups(groups, profile.get("Entitlements", {}), who):
+            warn(w)
     elif not simulator:
-        warn("no STIPPLE_IOS_PROVISIONING_PROFILE: a device won't install the app")
-    ent = entitlements(m, profile)
-    ent_file = work / "entitlements.plist"
+        warn(f"no {profile_var}: a device won't install {who}")
+    ent = bundle_entitlements(bundle_id, profile, ent_path, groups, extra)
     with open(ent_file, "wb") as f:
         plistlib.dump(ent, f)
     cmd = ["codesign", "--force", "--sign", identity, "--timestamp=none", "--generate-entitlement-der"]
@@ -336,7 +366,7 @@ def sign(m, app, work, simulator):
     keychain = os.environ.get("STIPPLE_IOS_KEYCHAIN")
     if keychain:
         cmd += ["--keychain", keychain]
-    run(cmd + [app], quiet=True)
+    run(cmd + [bundle], quiet=True)
     return True
 
 
@@ -401,6 +431,9 @@ def package(m, args, target, target_dir, work, helper):
         except PackageError:
             warn("dsymutil failed: no dSYM")
 
+    # The extensions in PlugIns/, each built and signed before the app.
+    ios_extensions.package_all(m, args, target.package, triple, target_dir, app, out_dir, work,
+                               simulator, env)
     signed = sign(m, app, work, simulator)
     run(["codesign", "--verify", "--deep", "--strict", app], quiet=True)
     log(f"wrote {app}")

@@ -95,6 +95,7 @@ How to build, package and run on each platform, and what works there today.
 | Runtime permissions (`platform::permission`) | — | — | camera, microphone ⁷² | ✅ ⁷² | ✅ ⁷² | ✅ ⁷² |
 | In-app purchases (`platform::store`) | mock ⁷³ | mock ⁷³ | mock ⁷³ | StoreKit ⁷³ | Play Billing ⁷³ | mock ⁷³ |
 | Calling the platform's own APIs: JNI access, activities started for a result (`platform::android`) | — | — | — | — | ✅ ⁸⁷ | — |
+| App extensions and app groups' shared containers (`platform::shared_dir`) | — | — | `shared_dir` ¹⁰ | ✅ ⁸⁹ | — | — |
 | Reference app (`examples/mediabrowser`): browse, sort, preview, play, accessible, four languages | ✅ ⁸⁵ | ✅ ⁸⁵ | ✅ ⁸⁵ | — | — | sample folder ⁸⁵ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
@@ -735,6 +736,16 @@ simulator's `simctl openurl` runs non-blocking in CI. macOS is
 protocol handler starts the app with on its command line (checked on X11),
 with no single-instance forwarding. The web has none: the page's URL is the
 app's. See [os-integration.md](os-integration.md#urls-that-open-the-app).
+⁸⁹ `cargo-stipple ios` builds `[[ios.extension]]` targets into
+`PlugIns/<Name>.appex` (the `NSExtension` plist, their own entitlements and
+provisioning profiles, signed before the app) and signs in `ios.app-groups`;
+an extension's Rust `main` registers its principal class and calls
+`platform::extension_main()`. CI packages `extensiondemo` (a notification
+service extension in Rust) and, in the simulator, runs the extension's
+executable in its bundle, where it reads what the app wrote in the group's
+container (not blocking; passed in a CI trial run). The system starting the extension, and
+Network Extensions (devices only), haven't been run. See
+[packaging.md](packaging.md#app-extensions).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

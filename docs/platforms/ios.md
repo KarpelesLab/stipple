@@ -80,6 +80,24 @@ A device build must also be signed with your Apple developer identity and a
 provisioning profile: `cargo-stipple ios` does it (see
 [packaging.md](../packaging.md#ios)), or Xcode, or `codesign`.
 
+### App extensions
+
+A widget, share extension, notification service or Network Extension
+provider is a separate executable in the app's `PlugIns/<Name>.appex`.
+`cargo-stipple ios` builds and signs them from
+`[[package.metadata.stipple.ios.extension]]` entries, and adds app groups
+(`ios.app-groups`) to the app's and the extensions' entitlements; see
+[App extensions](../packaging.md#app-extensions). The extension's Rust
+`main` registers its principal class at run time and calls
+`platform::extension_main()` (Foundation's `NSExtensionMain`);
+`examples/extensiondemo` is a notification service extension written so.
+Inside an extension there is no `UIApplication` and no `App::run`, but
+`platform::dirs()`, `app_info()`, `shared_dir(group)` (the container the
+app and its extensions share), `preferred_languages()` and `locale()` work.
+CI packages it and runs the extension's executable in its bundle on the
+simulator (not blocking; passed in a CI trial run). A Network Extension provider runs on devices
+only, and none has been tried yet.
+
 ## Layout
 
 The app fills the screen's safe area at `UIScreen.scale`, so it stays clear of
