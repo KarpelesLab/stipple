@@ -360,6 +360,10 @@ needs = "Android: a NativeActivity in an APK."
 description = "An Android app calling an API Stipple doesn't wrap through stipple::platform::android: VpnService.prepare's consent dialog, started for a result, whose answer survives the activity being recreated."
 needs = "Android: a NativeActivity in an APK."
 
+[native.androidservice]
+description = "An Android app with its own Java Service and BroadcastReceiver, declared in a manifest fragment, calling into Rust through native methods (packaged by cargo-stipple)."
+needs = "Android: an APK built by cargo-stipple."
+
 [native.contentproc]
 description = "A separate content process renders into shared memory, passed to the UI process and composited into a viewport (CPU dual of the GPU dma-buf path)."
 needs = "Linux, macOS or Windows: a second process sharing memory with the UI."

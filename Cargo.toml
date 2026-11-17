@@ -216,6 +216,14 @@ name = "androiddemo"
 path = "examples/androiddemo/lib.rs"
 crate-type = ["cdylib"]
 
+# An Android app with Java classes of its own (a Service and a
+# BroadcastReceiver calling into Rust), packaged by cargo-stipple from
+# examples/androidservice/package.toml.
+[[example]]
+name = "androidservice"
+path = "examples/androidservice/lib.rs"
+crate-type = ["cdylib"]
+
 # examples/cameraview as an Android app: libcameraview_android.so, which
 # `STIPPLE_APK_EXAMPLE=cameraview_android examples/androiddemo/build-apk.sh`
 # packages with examples/cameraview/AndroidManifest.xml.

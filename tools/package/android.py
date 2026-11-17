@@ -20,6 +20,7 @@ import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape, quoteattr
 
+import android_code
 from common import STORED, PackageError, cargo_build, log, run, walk, warn, zip_add
 from manifest import ANDROID_ABIS, android_qualifier
 
@@ -325,6 +326,12 @@ def screen_orientation(orientations):
     return None
 
 
+def has_code(m):
+    """Whether the package carries dex files: Stipple's own, the Play
+    Billing Library's, or the app's."""
+    return bool(needs_dex(m) or m.android_billing or m.android_java or m.android_dex)
+
+
 def manifest_xml(m, lib_name, refs):
     perms = list(m.android_permissions)
     if m.android_alarms:
@@ -349,7 +356,7 @@ def manifest_xml(m, lib_name, refs):
     app = [
         f'android:label="{refs["label"]}"',
         f'android:theme="{refs["theme"]}"',
-        f'android:hasCode="{"true" if needs_dex(m) or m.android_billing else "false"}"',
+        f'android:hasCode="{"true" if has_code(m) else "false"}"',
         'android:enableOnBackInvokedCallback="true"',
     ]
     if "icon" in refs:
@@ -565,10 +572,22 @@ def package(m, args, target, target_dir, work, helper):
         shutil.copy(m.android_manifest, manifest)
     else:
         manifest.write_text(manifest_xml(m, lib_name, refs), encoding="utf-8")
-    # The dex files: the receiver's, then the Play Billing Library's.
-    dexes = [("classes.dex", dex)] if dex else []
+    # The dex files: the receiver's, the Play Billing Library's, then the
+    # app's own (its Java sources, then its prebuilt dex files).
+    dexes = [dex] if dex else []
     if m.android_billing:
-        dexes += billing(m, manifest, work / "billing", len(dexes))
+        dexes += billing(m, manifest, work / "billing")
+    if m.android_java:
+        dexes += android_code.compile_java(
+            sdk, m.android_java, work / "java", m.android_min_sdk, args.profile == "release"
+        )
+    dexes += [android_code.check_dex(p) for p in m.android_dex]
+    dexes = android_code.dex_names(dexes)
+    if m.android_manifest_fragment:
+        android_code.merge_fragment_file(
+            manifest, m.android_manifest_fragment, m.android_package,
+            has_code(m) or bool(m.android_manifest),
+        )
     compiled = work / "compiled.zip"
     run([sdk.aapt2, "compile", "--dir", work / "res", "-o", compiled], quiet=True)
     link = [
@@ -647,11 +666,11 @@ def package(m, args, target, target_dir, work, helper):
     return aab, apk
 
 
-def billing(m, manifest, out, first):
+def billing(m, manifest, out):
     """The Play Billing Library and its dependencies for `platform::store`
     (tools/android/billing.py: fetched from Google's Maven repository, dexed),
-    as (name, path) dex files numbered after the `first` there are; adds the
-    library's manifest entries to `manifest`."""
+    as dex files in order; adds the library's manifest entries to
+    `manifest`."""
     script = Path(__file__).resolve().parent.parent / "android" / "billing.py"
     run(
         [
@@ -664,10 +683,7 @@ def billing(m, manifest, out, first):
     shutil.copy(out / "AndroidManifest.xml", manifest)
     files = sorted(out.glob("classes*.dex"), key=lambda p: int(p.stem[7:] or 1))
     log(f"Play Billing Library {m.android_billing}: {len(files)} dex file(s)")
-    return [
-        ("classes.dex" if first + i == 0 else f"classes{first + i + 1}.dex", p)
-        for i, p in enumerate(files)
-    ]
+    return files
 
 
 def find_bundletool():

@@ -25,7 +25,8 @@ path/to/stipple/tools/package/cargo-stipple ios       # .app + .ipa
 
 The results go to `target/stipple-package/<platform>/` (or `--out DIR`).
 `--build N` sets the build number (or `STIPPLE_BUILD_NUMBER`, for CI),
-`--features`, `--profile` and `-v` (print each command) do what they say.
+`--features`, `--profile` and `-v` (print each command) do what they say;
+`android --abi x86_64` (repeatable) builds only that ABI, for an emulator.
 Stipple's own examples have their manifests in separate files, given with
 `--config`: [`examples/androiddemo/package.toml`](../examples/androiddemo/package.toml)
 and [`examples/touchdemo/package.toml`](../examples/touchdemo/package.toml).
@@ -102,6 +103,9 @@ permissions = ["CAMERA", "POST_NOTIFICATIONS"]
 # icon-foreground = "icons/fg.svg" # the adaptive icon's layer (default: icon)
 # icon-monochrome = "icons/mono.svg"   # Android 13's themed icons
 # icon-scale = 0.667               # how much of the 108 dp layer the image covers
+# java = "android/java"            # the app's own Java sources (javac + d8), or a list of directories
+# dex = ["android/vpn.dex"]        # prebuilt dex files, added as classes<N>.dex
+# manifest-fragment = "android/manifest-fragment.xml"   # merged into the manifest (see below)
 ```
 
 `cargo-stipple check` prints what it understood; unknown keys are errors.
@@ -354,7 +358,9 @@ for `url-schemes` and `associated-domains` the `Link` activity and its intent
 filters (the same dex again); see
 [android.md](platforms/android.md#packaging)), adds the Play Billing Library
 with `billing` (its dex files and manifest entries, from
-`tools/android/billing.py`; see [purchases.md](purchases.md)), compiles the resources with
+`tools/android/billing.py`; see [purchases.md](purchases.md)), compiles and
+adds the app's own Java and dex files and merges its manifest fragment
+([below](#the-apps-own-java-classes-and-components)), compiles the resources with
 `aapt2`, and links them twice:
 
 - **The bundle** (`QR Master-2.1.0.aab`): the module `base/` with the manifest
@@ -372,6 +378,77 @@ With [bundletool](https://github.com/google/bundletool/releases) at hand
 bundle is checked with `bundletool validate`; `bundletool build-apks
 --bundle app.aab --output app.apks --connected-device` then installs exactly
 what Play would send to the device in front of you.
+
+### The app's own Java classes and components
+
+Some things Android only does through a Java class the system instantiates
+by name from the manifest: a `Service` (a `VpnService`, a foreground service
+for playback or sync), a `TileService` (a Quick Settings tile), a
+`BroadcastReceiver` (boot completed), an app widget provider, a push
+message service. An app ships those itself, next to what Stipple writes:
+
+- **`java`**: a directory of Java sources (or a list of them), in package
+  directories (`android/java/com/example/app/Tunnel.java`). The tool
+  compiles them with the JDK's `javac` (`$JAVA_HOME/bin/javac`, else the one
+  on `PATH`) as Java 8 against the platform's `android.jar`, dexes them with
+  the build-tools' `d8` (`--release` for the release profile, `--min-api`
+  the app's `min-sdk`), and adds the result as the next `classes<N>.dex`.
+  These are the developer's build tools, found at packaging time (a clear
+  error says which is missing); nothing is linked into the app. Only the
+  platform's classes are on the class path: no AndroidX, no AARs.
+- **`dex`**: prebuilt dex files (built some other way, or from a library),
+  each added as the next `classes<N>.dex` (the tool checks each is a dex).
+- **`manifest-fragment`**: an XML file with a bare `<manifest>` root, whose
+  entries are merged into the manifest the tool writes (or into
+  `android.manifest`), so the app keeps everything Stipple generates. At
+  the top level: `<uses-permission>` (and `-sdk-23`), `<uses-feature>`,
+  `<queries>`, `<permission>`, `<permission-group>`, `<permission-tree>`,
+  `<supports-screens>`, `<supports-gl-texture>`. In `<application>`: any
+  child (`<service>`, `<receiver>`, `<provider>`, `<activity>`,
+  `<meta-data>`, `<uses-library>`, ...), and attributes the generated
+  `<application>` doesn't set (`android:allowBackup`,
+  `android:usesCleartextTraffic`, ...). `${applicationId}` is the package,
+  and a component named with a leading `.` is in the app's package (written
+  out in full in the manifest), as in Gradle.
+
+The dex files go in this order: Stipple's own (`scheduled-notifications`,
+`drag-files`), the Play Billing Library's (`billing`), the `java` sources',
+then `dex`; with any of them the manifest says `android:hasCode="true"`.
+
+```xml
+<!-- android/manifest-fragment.xml -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <application>
+    <service android:name=".Tunnel" android:exported="false"
+        android:permission="android.permission.BIND_VPN_SERVICE">
+      <intent-filter><action android:name="android.net.VpnService"/></intent-filter>
+    </service>
+    <receiver android:name=".Boot" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
+    </receiver>
+  </application>
+</manifest>
+```
+
+**Conflicts are errors, not duplicates.** An entry the manifest already has
+is refused with what it clashes with: a permission listed in `permissions`
+or added by a Stipple feature (`scheduled-notifications` adds
+`RECEIVE_BOOT_COMPLETED`, `billing` adds `com.android.vending.BILLING`), a
+component class already declared (`android.app.NativeActivity`, Stipple's
+`org.stipple.android.Alarm` receiver, `Files` provider and `Link` activity, the billing
+library's activities), a provider authority already taken, a `<meta-data>`
+of the same name, or an `<application>` attribute with another value (the
+same value is fine). Entries the fragment repeats itself are refused too, as
+are `<uses-sdk>` (that's `min-sdk` and `target-sdk`), attributes on the
+fragment's `<manifest>`, and Gradle's `tools:` merge instructions.
+
+How the classes reach the app's Rust (`System.loadLibrary` and `native`
+methods, `JNI_OnLoad`), and what runs when Android starts the process for
+a service with no activity: see
+[android.md](platforms/android.md#the-apps-own-java-classes).
+[`examples/androidservice`](../examples/androidservice) is a working app
+with a `Service` and a `BroadcastReceiver`.
 
 **Signing.** Play signs what users download with a key it keeps (Play App
 Signing); you sign uploads with an upload key:
@@ -429,6 +506,12 @@ export STIPPLE_IOS_KEYCHAIN=build.keychain
   go into the base module and the bundle.
 - Stipple-drawn UI inside an app extension (see [App extensions](#app-extensions)),
   App Clips and Instant Apps.
+- Resources for the app's own Android components: an app widget provider
+  or a Quick Settings tile can be declared in the manifest fragment, but
+  resources of its own (an app widget's layout XML) aren't compiled.
+- Android libraries (AARs, AndroidX) for the app's Java: only the
+  platform's `android.jar` is on its class path; a library's classes can
+  come in already dexed through `dex`.
 - Uploading itself: the tool stops at the signed files.
 - macOS (`.app`/`.pkg` for the Mac App Store, notarization), Windows (MSIX)
   and Linux (Flatpak, AppImage) packages.

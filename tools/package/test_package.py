@@ -2,6 +2,7 @@
 and bundle config, the Info.plist): `python3 -m unittest discover tools/package`."""
 
 import plistlib
+import xml.etree.ElementTree as ET
 import struct
 import sys
 import tempfile
@@ -10,6 +11,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import android  # noqa: E402
+import android_code  # noqa: E402
+from common import PackageError  # noqa: E402
 import ios  # noqa: E402
 import ios_extensions  # noqa: E402
 from common import Target  # noqa: E402
@@ -200,6 +203,125 @@ class AndroidTests(unittest.TestCase):
             f.write(header + ph)
             f.flush()
             self.assertEqual(android.elf_load_alignment(f.name), (16384, 64))
+
+
+
+REFS = {"label": "@string/app_name", "theme": "@style/AppTheme"}
+
+FRAGMENT = """<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+  <queries><package android:name="com.example.other"/></queries>
+  <application android:allowBackup="false">
+    <service android:name=".Tunnel" android:exported="false"
+        android:permission="android.permission.BIND_VPN_SERVICE">
+      <intent-filter><action android:name="android.net.VpnService"/></intent-filter>
+    </service>
+    <receiver android:name="com.example.app.Boot" android:exported="true"/>
+    <provider android:name=".Data" android:authorities="${applicationId}.data"/>
+    <meta-data android:name="com.example.flag" android:value="on"/>
+  </application>
+</manifest>
+"""
+
+
+class AndroidCodeTests(unittest.TestCase):
+    def generated(self, **android_keys):
+        m = manifest(android=android_keys)
+        return m, android.manifest_xml(m, "my_app", REFS)
+
+    def test_keys(self):
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "java").mkdir()
+            (Path(d) / "x.dex").write_bytes(b"dex\n035\0")
+            m = Manifest(
+                {"id": "com.example.app", "android": {"java": "java", "dex": ["x.dex"]}},
+                Path(d), PACKAGE,
+            )
+            self.assertEqual(m.android_java, [(Path(d) / "java").resolve()])
+            self.assertEqual(m.android_dex, [(Path(d) / "x.dex").resolve()])
+            self.assertIn('android:hasCode="true"', android.manifest_xml(m, "a", REFS))
+            self.assertEqual(android_code.check_dex(m.android_dex[0]), m.android_dex[0])
+            (Path(d) / "y.dex").write_bytes(b"PK\3\4....")
+            with self.assertRaises(PackageError):
+                android_code.check_dex(Path(d) / "y.dex")
+            for bad in ({"java": "nope"}, {"dex": ["nope.dex"]}, {"manifest-fragment": "nope.xml"}):
+                with self.subTest(bad=bad), self.assertRaises(ManifestError):
+                    Manifest({"id": "com.example.app", "android": bad}, Path(d), PACKAGE)
+        self.assertIn('android:hasCode="false"', self.generated()[1])
+
+    def test_dex_names(self):
+        names = [n for n, _ in android_code.dex_names(["a", "b", "c"])]
+        self.assertEqual(names, ["classes.dex", "classes2.dex", "classes3.dex"])
+
+    def test_merge(self):
+        m, xml = self.generated(**{"scheduled-notifications": True, "drag-files": True})
+        out, components = android_code.merge_fragment(xml, FRAGMENT, m.android_package)
+        root = ET.fromstring(out)
+        A = android_code.A
+        app = root.find("application")
+        self.assertEqual(app.get(A + "allowBackup"), "false")
+        # Stipple's entries are all still there, the fragment's after them.
+        names = [c.get(A + "name") for c in app]
+        self.assertEqual(
+            names,
+            ["android.app.NativeActivity", "org.stipple.android.Alarm", "org.stipple.android.Files",
+             "com.example.app.Tunnel", "com.example.app.Boot", "com.example.app.Data",
+             "com.example.flag"],
+        )
+        self.assertEqual(len(components), 3)
+        authorities = [p.get(A + "authorities") for p in app.iter("provider")]
+        self.assertIn("com.example.app.data", authorities)
+        perms = [p.get(A + "name") for p in root.iter("uses-permission")]
+        self.assertIn("android.permission.FOREGROUND_SERVICE", perms)
+        self.assertIn("android.permission.RECEIVE_BOOT_COMPLETED", perms)
+        self.assertIsNotNone(root.find("queries"))
+        # Top-level entries come before <application>.
+        self.assertLess(out.index("FOREGROUND_SERVICE"), out.index("<application"))
+        service = app.find("service")
+        self.assertEqual(service.find("intent-filter/action").get(A + "name"), "android.net.VpnService")
+        self.assertNotIn("xmlns:android", out[out.index("<application"):])
+
+    def test_conflicts(self):
+        m, xml = self.generated(**{"scheduled-notifications": True, "drag-files": True,
+                                   "permissions": ["CAMERA"]})
+        pkg = m.android_package
+
+        def frag(body):
+            return ('<manifest xmlns:android="http://schemas.android.com/apk/res/android">'
+                    + body + "</manifest>")
+
+        for body in (
+            # Already generated: a permission, Stipple's receiver and activity,
+            # the FileProvider's authority, an <application> attribute.
+            '<uses-permission android:name="android.permission.CAMERA"/>',
+            '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>',
+            '<application><receiver android:name="org.stipple.android.Alarm"/></application>',
+            '<application><activity android:name="android.app.NativeActivity"/></application>',
+            '<application><provider android:name=".P" android:authorities="${applicationId}.stipple.files"/></application>',
+            '<application android:hasCode="false"/>',
+            # Twice in the fragment itself (".S" and "S" are the same class).
+            '<application><service android:name=".S"/><receiver android:name="S"/></application>',
+            '<application><meta-data android:name="x" android:value="1"/><meta-data android:name="x" android:value="2"/></application>',
+            # Not mergeable.
+            '<uses-sdk android:minSdkVersion="21"/>',
+            '<instrumentation android:name=".T"/>',
+            '<application><service/></application>',
+            '<application/><application/>',
+            '<application><service android:name=".S" xmlns:tools="http://schemas.android.com/tools" tools:node="remove"/></application>',
+        ):
+            with self.subTest(body=body), self.assertRaises(PackageError):
+                android_code.merge_fragment(xml, frag(body), pkg)
+        with self.assertRaises(PackageError):
+            android_code.merge_fragment(xml, '<fragment/>', pkg)
+        with self.assertRaises(PackageError):
+            android_code.merge_fragment(xml, '<manifest package="x"/>', pkg)
+        with self.assertRaises(PackageError):
+            android_code.merge_fragment(xml, '<manifest><oops></manifest>', pkg)
+        # The same attribute value isn't a conflict, and an empty fragment
+        # changes nothing.
+        out, _ = android_code.merge_fragment(xml, frag('<application android:hasCode="true"/>'), pkg)
+        self.assertEqual(out, xml)
 
 
 class IosTests(unittest.TestCase):

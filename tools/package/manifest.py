@@ -311,6 +311,23 @@ class Manifest:
             d.pop("icon-monochrome", None), "android.icon-monochrome"
         )
         self.android_manifest = self._path(d.pop("manifest", None), "android.manifest")
+        # The app's own code and manifest entries (android_code.py): Java
+        # source directories compiled with javac and d8, prebuilt dex files,
+        # and a fragment merged into the manifest.
+        java = d.pop("java", [])
+        if isinstance(java, str):
+            java = [java]
+        self.android_java = [self._path(j, "android.java") for j in java]
+        for j in self.android_java:
+            if not j.is_dir():
+                raise ManifestError(f"android.java: {j} isn't a directory")
+        dex = d.pop("dex", [])
+        if isinstance(dex, str):
+            dex = [dex]
+        self.android_dex = [self._path(x, "android.dex") for x in dex]
+        self.android_manifest_fragment = self._path(
+            d.pop("manifest-fragment", None), "android.manifest-fragment"
+        )
         self.android_debuggable = bool(d.pop("debuggable", False))
         if d:
             raise ManifestError(f"unknown keys in android: {', '.join(sorted(d))}")

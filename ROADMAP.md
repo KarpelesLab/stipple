@@ -1883,6 +1883,22 @@ Most input only works on X11 today.
   yet: the system launching an extension in CI, a device, Network
   Extensions (device only), Stipple UI in an extension._ See
   [docs/packaging.md](docs/packaging.md#app-extensions).
+- ✅ Android: the app's own Java classes and manifest components (#67):
+  _`android.java` (sources compiled with the developer's `javac` and the
+  build-tools' `d8` against `android.jar`), `android.dex` (prebuilt dex
+  files), each added as the next `classes<N>.dex`, and
+  `android.manifest-fragment`, merged into the generated manifest
+  (`<application>` children and attributes, top-level permissions, queries
+  and features), with clashes against Stipple's own entries (and the
+  billing library's) reported as errors. Stipple defines no `JNI_OnLoad`;
+  the app's classes reach Rust by `native` methods found by name or bound
+  with `RegisterNatives` from the app's own `JNI_OnLoad`, and work in a
+  process started for a component with no activity.
+  `examples/androidservice` (a `Service` and a `BroadcastReceiver`) passed on
+  a local API 34 emulator and in CI trial runs on API 34; CI packages it and
+  runs it there, not blocking yet. Not yet: AARs/AndroidX on the Java class path, resources for the
+  components (an app widget's layout)._ See
+  [docs/packaging.md](docs/packaging.md#the-apps-own-java-classes-and-components).
 - ✅ The user's languages and formats (#47): `platform::preferred_languages`
   (BCP 47 tags in order: `NSLocale.preferredLanguages`,
   `LocaleList.getDefault()` over JNI, `GetUserPreferredUILanguages`,

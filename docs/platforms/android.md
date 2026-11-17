@@ -202,6 +202,68 @@ queue. If loading fails (logged as `stipple: no host view`), the app runs as
 before: keys only, no accessibility. `adb logcat -s stipple` shows
 `stipple: host view installed` when it works.
 
+## The app's own Java classes
+
+Android instantiates some classes by the name the manifest gives: a
+`Service` (a `VpnService`, a foreground service), a `TileService`, a
+`BroadcastReceiver`, an app widget provider. Those can't come from a dex
+written at run time, so an app ships them in the APK: `cargo-stipple`
+compiles its Java sources (`android.java`) or adds prebuilt dex files
+(`android.dex`), and merges a manifest fragment (`android.manifest-fragment`)
+declaring them into the manifest it writes; see
+[packaging.md](../packaging.md#the-apps-own-java-classes-and-components).
+[`examples/androidservice`](../../examples/androidservice) has a `Service`
+and a `BroadcastReceiver` calling into Rust, and
+`examples/androidservice/test-on-device.sh` checks them on an emulator
+(passed on a local API 34 one and in CI trial runs on API 34; CI runs it
+there without blocking).
+
+**Reaching the Rust code.** The classes call into the app's library, the
+same `.so` the `NativeActivity` runs: a static initializer loads it with
+`System.loadLibrary("<lib-name>")` (the `[lib]` name, without `lib` and
+`.so`), and `native` methods are bound either way JNI allows:
+
+- **By name**: `static native String ping(String text)` in
+  `com.example.app.PingReceiver` is the library's exported
+  `Java_com_example_app_PingReceiver_ping(env, class, text)` (an
+  `#[unsafe(no_mangle)] pub unsafe extern "C" fn`; `_` in names is `_1`,
+  see the JNI specification).
+- **With `RegisterNatives`** from the library's `JNI_OnLoad`, which the VM
+  calls when a Java class loads the library with `System.loadLibrary`, once
+  per class loader; `FindClass` there uses the class loader of the class
+  that loaded it, so it finds the app's classes. `JNI_OnLoad` must return
+  the JNI version it needs (`JNI_VERSION_1_6`).
+
+**Stipple doesn't define `JNI_OnLoad`**, so the app's own is the only one in
+the library and the linker has nothing to clash with. Stipple's own
+classes find their natives by name (`Java_org_stipple_android_*`), or bind
+them with `RegisterNatives` when the backend loads its run-time dex; it keeps
+the `JavaVM` from its own entry points (see
+[Calling Android APIs yourself](#calling-android-apis-yourself)). Note that
+`JNI_OnLoad` doesn't run when the `NativeActivity` loads the library (it does
+that with `dlopen`): only when a Java class calls `System.loadLibrary`, which
+Stipple's own `Alarm` receiver, `Files` provider and `Link` activity also do.
+Code that must run once whatever starts the process belongs in a
+`std::sync::Once` called from each entry point.
+
+**There may be no activity.** Android starts the app's process for whichever
+component it needs: a service started at boot, a broadcast, a tile, a
+provider queried by another app. Then `ANativeActivity_onCreate` hasn't
+run, and perhaps never will in that process:
+`android::start` hasn't been called, there is no `App`, window or UI thread,
+and `println!` doesn't reach logcat yet (Stipple sends stdout there when its
+activity starts; log through liblog's `__android_log_write` instead, as the
+example does). The app's `JNI_OnLoad` and native methods must work without
+any of it, and keep what they share with the UI (the VPN's state, say) in
+their own statics or files. `platform::android::java_vm()` and
+`application_context()` answer there from Android 12; before, `java_vm()` is
+null until one of Stipple's own entry points has run, so keep the `JavaVM`
+that `JNI_OnLoad` is handed (or call `GetJavaVM` on a native method's
+`JNIEnv`). If the activity starts later, it runs in the same
+process. Native methods run on the thread Java calls them on (a component's
+callbacks are on the process's main thread, the activity's too); the
+`JNIEnv` they get is only good on that thread and for that call.
+
 ## Input methods
 
 The host view's `InputConnection` gives the keyboard a document to read and

@@ -4,7 +4,7 @@
 from the `[package.metadata.stipple]` section of the app's Cargo.toml.
 Standard library only (Python 3.11+, for tomllib).
 
-    cargo-stipple android [--example NAME | --lib] [--config FILE]
+    cargo-stipple android [--example NAME | --lib] [--abi ABI] [--config FILE]
     cargo-stipple ios [--simulator] [--example NAME | --bin NAME] [--config FILE]
     cargo-stipple check [--config FILE]       # read the manifest, print it
 
@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
 from common import PackageError, Target  # noqa: E402
-from manifest import ManifestError, load  # noqa: E402
+from manifest import ANDROID_ABIS, ManifestError, load  # noqa: E402
 
 
 def main(argv):
@@ -45,6 +45,10 @@ def main(argv):
         which.add_argument("--example", help="package an example of the package")
         if name == "android":
             which.add_argument("--lib", action="store_true", help="the package's cdylib (the default)")
+            p.add_argument(
+                "--abi", action="append",
+                help="build only this ABI (repeatable; default: android.abis), e.g. x86_64 for the emulator",
+            )
         else:
             which.add_argument("--bin", help="the binary to package")
             p.add_argument("--simulator", action="store_true", help="a .app for the simulator")
@@ -62,6 +66,11 @@ def main(argv):
     m, meta, package = load(args.manifest_path, args.config)
     args.manifest_path = str(Path(package["manifest_path"]))
     target_dir = Path(meta["target_directory"])
+    if getattr(args, "abi", None):
+        for abi in args.abi:
+            if abi not in ANDROID_ABIS:
+                raise ManifestError(f"--abi: {abi!r} isn't one of {', '.join(ANDROID_ABIS)}")
+        m.android_abis = list(dict.fromkeys(args.abi))
     if args.cmd == "check":
         for k, v in sorted(vars(m).items()):
             if k not in ("package", "base"):

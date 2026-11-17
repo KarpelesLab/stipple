@@ -96,6 +96,7 @@ How to build, package and run on each platform, and what works there today.
 | In-app purchases (`platform::store`) | mock ⁷³ | mock ⁷³ | mock ⁷³ | StoreKit ⁷³ | Play Billing ⁷³ | mock ⁷³ |
 | Calling the platform's own APIs: JNI access, activities started for a result (`platform::android`) | — | — | — | — | ✅ ⁸⁷ | — |
 | App extensions and app groups' shared containers (`platform::shared_dir`) | — | — | `shared_dir` ¹⁰ | ✅ ⁸⁹ | — | — |
+| The app's own platform code and manifest entries (`cargo-stipple`) | — | — | — | — | Java, dex, manifest fragment ⁹⁰ | — |
 | Reference app (`examples/mediabrowser`): browse, sort, preview, play, accessible, four languages | ✅ ⁸⁵ | ✅ ⁸⁵ | ✅ ⁸⁵ | — | — | sample folder ⁸⁵ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
@@ -746,6 +747,17 @@ executable in its bundle, where it reads what the app wrote in the group's
 container (not blocking; passed in a CI trial run). The system starting the extension, and
 Network Extensions (devices only), haven't been run. See
 [packaging.md](packaging.md#app-extensions).
+⁹⁰ `android.java` (sources compiled with the developer's `javac` and `d8`
+against `android.jar`), `android.dex` (prebuilt dex files) and
+`android.manifest-fragment` (services, receivers, providers, meta-data,
+permissions and queries merged into the manifest `cargo-stipple` writes;
+clashes with Stipple's own entries are errors). The classes call into the
+app's Rust through `native` methods; Stipple defines no `JNI_OnLoad`.
+`examples/androidservice` (a `Service` started with no activity and a
+`BroadcastReceiver`) passed on a local API 34 emulator and in two CI trial
+runs there (three times in a row each); CI packages it and runs it on API
+34 without blocking. See
+[packaging.md](packaging.md#the-apps-own-java-classes-and-components).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

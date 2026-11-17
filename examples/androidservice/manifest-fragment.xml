@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Merged by cargo-stipple into the manifest it writes (android.manifest-fragment
+     in package.toml). Names starting with "." are in the app's package.
+     Exported so that adb can start them (test-on-device.sh); a real app
+     guards an exported component with a permission, as a VpnService does
+     with android:permission="android.permission.BIND_VPN_SERVICE". -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <service android:name=".PingService" android:exported="true"/>
+    <receiver android:name=".PingReceiver" android:exported="true"/>
+    <meta-data android:name="org.stipple.servicedemo.fragment" android:value="merged"/>
+  </application>
+</manifest>
