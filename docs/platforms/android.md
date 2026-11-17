@@ -678,10 +678,17 @@ clipboard probe, `.github/clip/android`, built by its `build-clip.sh`: an
 activity brought to the front, as Android 10 and later only let the focused
 app read); the probe's receiver copies a text (`am broadcast`, as another
 app copying) and a tap on *Get clip* reads it in the app; a tap on *Open
-link* (`AppHandle::open_url`) brings another app to the front, and `dumpsys
-activity` must show its `ACTION_VIEW` intent with the URL (Chrome's first-run
-screen on the `google_apis` image). It passed on a local API 34 emulator and
-in CI on the API 34 and API 30 emulators (one run); CI runs it after
+link* (`AppHandle::open_url`) must start an `ACTION_VIEW` intent for the URL
+from the app's uid, resolved to another app (the activity manager's `START
+u0 {act=android.intent.action.VIEW dat=https://example.com/... cmp=...} from
+uid N` in logcat), and that app must come to the front. The check doesn't
+depend on what the browser shows: Chrome's first run (on the `google_apis`
+images its welcome screen replaced the page, and the VIEW intent with it
+in `dumpsys activity`, which the check used to read) is also switched off
+for the part (`/data/local/tmp/chrome-command-line` with `--disable-fre
+--no-first-run`, Chrome made the debug app with `am set-debug-app
+--persistent`; both undone afterwards), so the page loads. It passed on
+local API 34, 33 and 30 emulators (several runs each); CI runs it after
 `test-input.sh` on each emulator, without blocking until it has passed
 there for longer.
 

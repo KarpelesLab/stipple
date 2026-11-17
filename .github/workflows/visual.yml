@@ -5820,7 +5820,7 @@ jobs:
             bash examples/androiddemo/test-input.sh visual_output || echo "::warning::test-input.sh failed (drag and drop, dead keys; non-blocking)"
             # A text and a file (through androiddemo's FileProvider) dragged out of androiddemo into the probe app, the two in freeform windows (split screen on API 33): not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-drag-apps.sh clipprobe.apk visual_output || echo "::warning::test-drag-apps.sh failed (a drag into another app; non-blocking)"
-            # Timers changing visible text, the clipboard both ways with another app, and a URL opened in the browser, by adb input touches: not blocking until it has passed on CI's emulators.
+            # Timers changing visible text, the clipboard both ways with another app, and a URL's VIEW intent started from the app into the browser (Chrome's first run off), by adb input touches: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-services.sh clipprobe.apk visual_output || echo "::warning::test-services.sh failed (timers, clipboard, opening a URL; non-blocking)"
             # Not blocking until it has passed on CI's x86_64 emulators.
             bash .github/billing/android/test-billing.sh stipple.apk visual_output || echo "::warning::test-billing.sh failed (non-blocking)"

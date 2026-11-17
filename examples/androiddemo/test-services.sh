@@ -17,9 +17,13 @@
 #    clipboard, as another app copying (`am broadcast`), and a tap on *Get
 #    clip* reads it in the app.
 # 4. Opening a URL: a tap on *Open link* (AppHandle::open_url, an
-#    ACTION_VIEW intent) brings another app to the front, whose activity
-#    `dumpsys activity` shows with the URL's intent; the app is brought back
-#    with `am start`.
+#    ACTION_VIEW intent): the activity manager logs the VIEW intent with the
+#    URL started from the app's uid and resolved to another app (logcat's
+#    `START u0 {act=android.intent.action.VIEW dat=https://example.com/...
+#    cmp=...} from uid N`), and that app comes to the front; the app is
+#    brought back with `am start`. Chrome's first-run screen is switched off
+#    for it (its command-line file, Chrome as the debug app), though the
+#    check doesn't depend on what the browser shows.
 #
 # Each part reports and the script fails at the end if one didn't pass
 # (CI runs it without blocking until it has passed on its emulators).
@@ -147,33 +151,77 @@ paste_part() {
 paste_part || failed="$failed paste"
 
 ### 4. Opening a URL in another app.
+# Chrome's first run (its welcome screen, which takes the VIEW intent's place
+# in the activity stack) off while the part runs: Chrome reads its command
+# line from this file when it's the debug app (or on a debuggable build).
+chrome=com.android.chrome
+chrome_flags=/data/local/tmp/chrome-command-line
+no_first_run() {
+  adb shell pm path "$chrome" >/dev/null 2>&1 || return 0
+  adb shell "echo '_ --disable-fre --no-default-browser-check --no-first-run' > $chrome_flags"
+  adb shell am set-debug-app --persistent "$chrome" >/dev/null
+  adb shell am force-stop "$chrome"
+}
+first_run_back() {
+  adb shell pm path "$chrome" >/dev/null 2>&1 || return 0
+  adb shell am clear-debug-app >/dev/null || true
+  adb shell rm -f "$chrome_flags" || true
+}
+
+# The activity manager's line for an activity started with a VIEW intent
+# for the URL's host, from uid $1 (`START u0 {act=... dat=https://host/...
+# cmp=<what it resolved to>} from uid N`; Android 13 and later shorten the
+# URL's path to `...`).
+view_started() {
+  adb logcat -d -s ActivityTaskManager:I ActivityManager:I 2>/dev/null \
+    | grep -E "START u0 \{.*act=android.intent.action.VIEW .*dat=https://$url_host/.*\} .*from uid $1( |$)" \
+    | tail -1
+}
+
 url_part() {
-  local at top
+  local at top uid started
+  uid="$(adb shell cmd package list packages -U "$pkg" | grep -E "package:$pkg " \
+    | sed -n 's/.*uid:\([0-9]*\).*/\1/p' | head -1)"
+  [ -n "$uid" ] || { echo "no uid for $pkg" >&2; return 1; }
+  no_first_run
   at="$(chip "Open link")" || return 1
   adb shell input tap $at
   wait_for "androiddemo: opened https://$url_host/[^ ]* Ok\(\(\)\)" 10 || return 1
+  # The app's open_url fired a VIEW intent for the URL, which the system
+  # resolved to another app and started.
+  for _ in $(seq 10); do
+    started="$(view_started "$uid")"
+    [ -n "$started" ] && break
+    sleep 1
+  done
+  if [ -z "$started" ]; then
+    echo "no VIEW intent for $url_host started from uid $uid" >&2
+    adb logcat -d -s ActivityTaskManager:I ActivityManager:I | grep "START u0" | tail -5 >&2
+    return 1
+  fi
+  echo "android services: started:$(sed 's/.*START u0/ START u0/' <<< "$started")"
+  if grep -qE "cmp=$pkg/" <<< "$started"; then
+    echo "the URL's intent resolved to the app itself" >&2
+    return 1
+  fi
+  # ...which came to the front.
   for _ in $(seq 20); do
     top="$(resumed)"
     [ -n "$top" ] && ! grep -q "$pkg" <<< "$top" && break
     sleep 1
   done
   echo "android services: on top: $top"
+  sleep 2
   adb exec-out screencap -p > "$shots/android-opened-url.png" || true
   if grep -q "$pkg" <<< "$top"; then
     echo "the app is still on top after opening the URL" >&2
     return 1
   fi
-  # The VIEW intent with the URL, in the activity stack.
-  adb shell dumpsys activity activities | grep -E "act=android.intent.action.VIEW" | grep -F "$url_host" | head -3
-  adb shell dumpsys activity activities | grep -E "act=android.intent.action.VIEW" | grep -qF "$url_host" || {
-    echo "no VIEW intent for $url_host in dumpsys activity" >&2
-    adb shell dumpsys activity activities | grep -E "intent=\{" | head -10 >&2
-    return 1
-  }
   echo "android services: the URL opened in another app"
   adb shell am start -W -n "$pkg/android.app.NativeActivity" >/dev/null
 }
 url_part || failed="$failed url"
+first_run_back
 
 if ! adb shell pidof "$pkg" >/dev/null || log | grep -q "panicked"; then
   echo "the app crashed" >&2

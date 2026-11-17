@@ -2350,9 +2350,10 @@ Most input only works on X11 today.
   read). On Android, `examples/androiddemo/test-services.sh` (with a small
   clipboard probe app, `.github/clip/android`) checks with `adb shell input`
   touches that the timer changes visible text, the clipboard both ways with
-  another app, and a URL opening in Chrome (`dumpsys activity` shows the
-  `ACTION_VIEW` intent); it passed in CI on the API 34 and API 30 emulators
-  and on a local API 34 one. **Missing:** physical devices (neither platform
+  another app, and a URL opening in Chrome (the activity manager logs the
+  `ACTION_VIEW` intent started from the app's uid and resolved to Chrome,
+  whose first run is switched off); it passed on local API 34, 33 and 30
+  emulators. **Missing:** physical devices (neither platform
   has been tried on one), and a few passing runs before these steps block.
   See [docs/platforms/ios.md](docs/platforms/ios.md#real-touches-from-xcuitest)
   and [docs/platforms/android.md](docs/platforms/android.md#running-on-an-emulator).

@@ -659,11 +659,12 @@ pbcopy` copied, the app writes the pasteboard (`simctl pbpaste` reads it
 back; that read timed out in the run), and `open_url` brings Safari to the
 foreground. Not tried on a physical device. See
 [platforms/ios.md](platforms/ios.md#real-touches-from-xcuitest).
-⁸² `examples/androiddemo/test-services.sh` (not blocking yet; passed in CI on
-the API 34 and API 30 emulators): the clipboard both ways with another app (a
+⁸² `examples/androiddemo/test-services.sh` (not blocking yet; passed on local
+API 34, 33 and 30 emulators): the clipboard both ways with another app (a
 probe app that copies from a broadcast and reads once in front), and
-`open_url` bringing Chrome up with the `ACTION_VIEW` intent in `dumpsys
-activity`. Not tried on a physical device. See
+`open_url` starting the `ACTION_VIEW` intent from the app into Chrome (the
+activity manager's logged start; Chrome's first run switched off). Not
+tried on a physical device. See
 [platforms/android.md](platforms/android.md#running-on-an-emulator).
 ⁸³ Where the GPU path has met Phase 6's exit criteria (presenting straight
 to the window, matching the CPU on the corpus in CI, the benchmarks' targets
