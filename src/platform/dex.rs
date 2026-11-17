@@ -18,7 +18,8 @@
 //! JNI finds its natives by their exported names (`Java_pkg_Class_method`)
 //! without `RegisterNatives`. That is for a class the system instantiates in
 //! a process the app's code hasn't run in: the [`ALARM`] receiver and the
-//! [`TAPPED`] activity, written into an APK at build time ([`receiver_dex`]).
+//! [`TAPPED`] and [`LINK`] activities, written into an APK at build time
+//! ([`receiver_dex`]).
 //!
 //! The format is the one in AOSP's `dex-format` documentation; the sort
 //! orders and alignments below are the ones ART's `DexFileVerifier` checks.
@@ -757,6 +758,22 @@ pub(crate) const TAPPED: Class = Class {
     load_library: None,
 };
 
+/// The activity a URL opens when the app's manifest declares it with
+/// `VIEW` intent filters for the app's schemes and domains (with the dex from
+/// [`receiver_dex`] in its APK): like [`TAPPED`], with no window, it hands
+/// the intent's URL to the app, brings the app's own activity forward (or
+/// starts it, the event loop then finding the URL queued) and finishes, as a
+/// `NativeActivity` doesn't pass `onNewIntent` on. Its `onCreate` is the
+/// library's `Java_org_stipple_android_Link_onCreate`.
+pub(crate) const LINK: Class = Class {
+    name: "Lorg/stipple/android/Link;",
+    superclass: ACTIVITY,
+    interfaces: &[],
+    ctor: &[],
+    natives: &[native("onCreate", &[BUNDLE], "V")],
+    load_library: None,
+};
+
 const URI: &str = "Landroid/net/Uri;";
 const STRINGS: &str = "[Ljava/lang/String;";
 const VALUES: &str = "Landroid/content/ContentValues;";
@@ -790,7 +807,7 @@ pub(crate) const FILES: Class = Class {
     load_library: None,
 };
 
-/// A `classes.dex` holding [`ALARM`], [`TAPPED`] and [`FILES`], each loading
+/// A `classes.dex` holding [`ALARM`], [`TAPPED`], [`LINK`] and [`FILES`], each loading
 /// native library `lib` (the `android.app.lib_name` of the app's
 /// `NativeActivity`, without `lib` and `.so`), for the APK.
 pub(crate) fn receiver_dex(lib: &str) -> Vec<u8> {
@@ -803,6 +820,10 @@ pub(crate) fn receiver_dex(lib: &str) -> Vec<u8> {
         Class {
             load_library: Some(lib),
             ..TAPPED
+        },
+        Class {
+            load_library: Some(lib),
+            ..LINK
         },
         Class {
             load_library: Some(lib),
@@ -1054,7 +1075,7 @@ mod tests {
         let dex = build(&[RECEIVER]);
         assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
         let dex = receiver_dex("stipple_android");
-        assert_eq!(read_u32(&dex, 96), 3, "three classes");
+        assert_eq!(read_u32(&dex, 96), 4, "four classes");
         assert_eq!(read_u32(&dex, 8), adler32(&dex[12..]));
         assert_eq!(&dex[12..32], &sha1(&dex[32..]));
         // Code items: each class's constructor and `<clinit>`, whose header
@@ -1073,6 +1094,8 @@ mod tests {
         assert_eq!(binary_name(ALARM.name), "org.stipple.android.Alarm");
         assert_eq!(binary_name(TAPPED.name), "org.stipple.android.Tapped");
         assert_eq!(binary_name(FILES.name), "org.stipple.android.Files");
+        assert_eq!(binary_name(LINK.name), "org.stipple.android.Link");
+        assert!(dex.windows(26).any(|w| w == b"Lorg/stipple/android/Link;"));
         assert!(dex.windows(8).any(|w| w == b"onCreate"));
         assert!(dex.windows(8).any(|w| w == b"openFile"));
     }

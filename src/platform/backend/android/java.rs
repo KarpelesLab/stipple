@@ -110,9 +110,9 @@ pub(super) fn activity_created(activity: &ANativeActivity) {
 }
 
 /// From the APK's components' natives (the `Alarm` receiver, the `Tapped`
-/// activity, the `Files` provider), which may run in a process where no
-/// activity started: keep the VM, and watch the job pipe if on the main
-/// thread.
+/// and `Link` activities, the `Files` provider), which may run in a process
+/// where no activity started: keep the VM, and watch the job pipe if on the
+/// main thread.
 pub(super) fn entered(env: Env) {
     if !env.is_null() {
         record_vm(Jni(env).java_vm());

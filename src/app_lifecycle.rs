@@ -53,6 +53,8 @@ pub(crate) struct Hooks<S> {
     save: Option<SaveFn<S>>,
     restore: Option<RestoreFn<S>>,
     tapped: Option<TappedFn<S>>,
+    /// [`App::on_open_url`](crate::App::on_open_url).
+    open_url: Option<TappedFn<S>>,
     transaction: Option<TransactionFn<S>>,
     /// Whether the app is in the background (between
     /// [`Lifecycle::Background`] and [`Lifecycle::Foreground`]).
@@ -73,6 +75,7 @@ impl<S> Default for Hooks<S> {
             save: None,
             restore: None,
             tapped: None,
+            open_url: None,
             transaction: None,
             background: false,
         }
@@ -219,6 +222,50 @@ impl<S: 'static> App<S> {
             return false;
         };
         hook(&mut self.state, id);
+        for pane in &mut self.panes {
+            pane.dirty = true;
+        }
+        true
+    }
+
+    /// Hear the URLs that open the app: a custom scheme's
+    /// (`myapp://callback?code=…`, the browser handing an OAuth sign-in back),
+    /// a universal link (iOS) or a verified App Link (Android), whether it
+    /// launched the app or reached it while it runs. The hook may change the
+    /// state; the view is rebuilt.
+    ///
+    /// The URL that launched the app arrives once the app runs, after
+    /// [`restore_state`](Self::restore_state), with the first events. The app
+    /// claims its schemes and domains in its packaging manifest
+    /// (`url-schemes`, `associated-domains`; see `docs/packaging.md`).
+    /// Delivered on iOS, Android (through Stipple's `Link` activity), macOS
+    /// (`application:openURLs:`), and on Windows and Linux from the command
+    /// line the protocol handler starts the app with; see
+    /// `docs/os-integration.md`.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// struct State { code: Option<String> }
+    /// # fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+    /// App::new(State { code: None }, view)
+    ///     .on_open_url(|s, url| {
+    ///         if let Some(code) = url.strip_prefix("myapp://callback?code=") {
+    ///             s.code = Some(code.to_string());
+    ///         }
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn on_open_url(mut self, hook: impl FnMut(&mut S, &str) + 'static) -> Self {
+        self.lifecycle.open_url = Some(Box::new(hook));
+        self
+    }
+
+    /// Run the open-URL hook for `url`. Returns whether it ran.
+    pub(crate) fn open_url(&mut self, url: &str) -> bool {
+        let Some(hook) = self.lifecycle.open_url.as_mut() else {
+            return false;
+        };
+        hook(&mut self.state, url);
         for pane in &mut self.panes {
             pane.dirty = true;
         }

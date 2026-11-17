@@ -92,9 +92,40 @@ def info_plist(m, exe_name, simulator):
     info.update(toolchain_keys(simulator))
     if m.languages:
         info["CFBundleLocalizations"] = list(m.languages)
+    info.update(url_types(m))
     info.update(m.ios_usage)
     info.update(m.ios_info)
     return info
+
+
+def url_types(m):
+    """CFBundleURLTypes for the manifest's url-schemes: the schemes iOS opens
+    the app for (application:openURL:options:, scene:openURLContexts:)."""
+    if not m.url_schemes:
+        return {}
+    return {
+        "CFBundleURLTypes": [
+            {
+                "CFBundleURLName": m.ios_bundle_id,
+                "CFBundleTypeRole": "Viewer",
+                "CFBundleURLSchemes": list(m.url_schemes),
+            }
+        ]
+    }
+
+
+def link_entitlements(m):
+    """com.apple.developer.associated-domains for the manifest's
+    associated-domains: `applinks:host` (iOS takes the paths from the
+    domain's apple-app-site-association, not the entitlement)."""
+    if not m.link_domains:
+        return {}
+    return {
+        "com.apple.developer.associated-domains": [
+            f"applinks:{d['host']}" + (f"?mode={d['mode']}" if d["mode"] else "")
+            for d in m.link_domains
+        ]
+    }
 
 
 def toolchain_keys(simulator):
@@ -263,6 +294,13 @@ def entitlements(m, profile):
         # Keychain groups and the like come as wildcards: keep the app's own.
         if "keychain-access-groups" in ent:
             ent["keychain-access-groups"] = [app_id]
+    links = link_entitlements(m)
+    if links and profile and "com.apple.developer.associated-domains" not in ent:
+        warn(
+            "associated-domains: the provisioning profile doesn't grant Associated Domains "
+            "(turn it on for the app id); a device won't install the app"
+        )
+    ent.update(links)
     if m.ios_entitlements:
         with open(m.ios_entitlements, "rb") as f:
             ent.update(plistlib.load(f))

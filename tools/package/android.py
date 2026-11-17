@@ -349,7 +349,7 @@ def manifest_xml(m, lib_name, refs):
     app = [
         f'android:label="{refs["label"]}"',
         f'android:theme="{refs["theme"]}"',
-        f'android:hasCode="{"true" if m.android_alarms or m.android_drag_files or m.android_billing else "false"}"',
+        f'android:hasCode="{"true" if needs_dex(m) or m.android_billing else "false"}"',
         'android:enableOnBackInvokedCallback="true"',
     ]
     if "icon" in refs:
@@ -385,6 +385,7 @@ def manifest_xml(m, lib_name, refs):
             "      </intent-filter>",
             "    </receiver>",
         ]
+    lines += link_activity(m)
     if m.android_drag_files:
         # Files dragged out of the app: read-only, granted per URI.
         lines.append(
@@ -394,6 +395,45 @@ def manifest_xml(m, lib_name, refs):
         )
     lines += ["  </application>", "</manifest>", ""]
     return "\n".join(lines)
+
+
+def needs_dex(m):
+    """Whether the APK carries Stipple's classes.dex (receiver_dex): for the
+    Alarm receiver, the Files provider, or the Link activity."""
+    return bool(m.android_alarms or m.android_drag_files or m.url_schemes or m.link_domains)
+
+
+def link_activity(m):
+    """Stipple's Link activity, with a VIEW intent filter for the app's URL
+    schemes and one verified (autoVerify) https filter per associated domain,
+    when the manifest has any: a windowless trampoline that hands the URL to
+    the app and brings its NativeActivity forward, which doesn't pass
+    onNewIntent on (src/platform/backend/android/open_url.rs)."""
+    if not (m.url_schemes or m.link_domains):
+        return []
+    view = [
+        '        <action android:name="android.intent.action.VIEW"/>',
+        '        <category android:name="android.intent.category.DEFAULT"/>',
+        '        <category android:name="android.intent.category.BROWSABLE"/>',
+    ]
+    lines = [
+        '    <activity android:name="org.stipple.android.Link" android:exported="true"',
+        '        android:taskAffinity="" android:excludeFromRecents="true" android:noHistory="true"',
+        '        android:theme="@android:style/Theme.NoDisplay">',
+    ]
+    if m.url_schemes:
+        lines += ["      <intent-filter>", *view]
+        lines += [f"        <data android:scheme={quoteattr(s)}/>" for s in m.url_schemes]
+        lines.append("      </intent-filter>")
+    for d in m.link_domains:
+        lines += ['      <intent-filter android:autoVerify="true">', *view]
+        lines.append('        <data android:scheme="https"/>')
+        lines.append(f"        <data android:host={quoteattr(d['host'])}/>")
+        if d["path"] and d["path"] != "/":
+            lines.append(f"        <data android:pathPrefix={quoteattr(d['path'])}/>")
+        lines.append("      </intent-filter>")
+    lines.append("    </activity>")
+    return lines
 
 
 # --- Signing -----------------------------------------------------------------
@@ -514,7 +554,7 @@ def package(m, args, target, target_dir, work, helper):
     libs = build_libs(m, sdk, args, target, target_dir, work)
 
     dex = None
-    if m.android_alarms or m.android_drag_files:
+    if needs_dex(m):
         dex = work / "classes.dex"
         helper.dex(lib_name, dex)
 

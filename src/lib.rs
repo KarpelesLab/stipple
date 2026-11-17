@@ -69,6 +69,8 @@ pub mod gpu;
 mod interaction_tests;
 pub mod layout;
 pub mod locale;
+#[cfg(test)]
+mod open_url_tests;
 pub mod platform;
 #[cfg(test)]
 mod pointer_tests;
@@ -2981,20 +2983,23 @@ impl<S: 'static> App<S> {
     }
 
     /// Run what's queued on the app's [`AppHandle`] (updates, due timers,
-    /// message boxes asked for) and the [store](crate::platform::store)'s
-    /// transactions waiting for [`on_transaction`](Self::on_transaction), as
+    /// message boxes asked for), the [store](crate::platform::store)'s
+    /// transactions waiting for [`on_transaction`](Self::on_transaction) and
+    /// the URLs waiting for [`on_open_url`](Self::on_open_url), as
     /// the event loop does when woken. Returns whether anything ran. For
     /// tests, which have no loop.
     pub fn run_pending(&mut self) -> bool {
         let (mut ran, _) = self
             .handle
             .pump(&mut self.state, crate::platform::time::now());
-        // The store's transactions; other posted events stay for the loop.
+        // The store's transactions and opened URLs; other posted events stay
+        // for the loop.
         let posted = crate::platform::shell::take_posted();
         if !posted.is_empty() {
             for event in posted {
                 match event {
                     Event::Transaction(t) => ran |= self.transaction(&t),
+                    Event::OpenUrl(url) => ran |= self.open_url(&url),
                     other => crate::platform::shell::post(other),
                 }
             }
@@ -3979,6 +3984,12 @@ impl<S: 'static> App<S> {
                 }
                 Event::NotificationTapped(ref id) => {
                     if self.notification_tapped(id) && !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::OpenUrl(ref url) => {
+                    if self.open_url(url) && !self.in_background() {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait

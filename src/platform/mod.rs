@@ -89,6 +89,9 @@ pub(crate) mod external;
 pub mod frame;
 /// Gamepads: connection, buttons and axes on a standard layout, rumble.
 pub(crate) mod gamepad;
+/// URLs that open the app (custom schemes, universal links, App Links), for
+/// `App::on_open_url`.
+pub(crate) mod incoming_url;
 /// Key and scroll translation tables shared by the native backends.
 mod input;
 /// Android's `InputConnection` model of a Stipple text field.

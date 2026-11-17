@@ -583,6 +583,7 @@ static REPORTED: Mutex<Vec<i64>> = Mutex::new(Vec::new());
 pub(super) fn activity_created(jni: &Jni, activity: JObject, sdk: i32) {
     rearm(jni, activity, sdk);
     report_tap(jni, activity);
+    super::open_url::activity_created(jni, activity);
 }
 
 /// If `activity`'s intent is a scheduled notification's tap not reported
@@ -643,6 +644,28 @@ pub unsafe extern "C" fn Java_org_stipple_android_Tapped_onCreate(
     this: JObject,
     saved: JObject,
 ) {
+    unsafe { forward(env, this, saved, report_tap, "the notification") }
+}
+
+/// The `onCreate` of Stipple's windowless activities, which hear an intent
+/// for the app (a notification's tap: [`Tapped`](crate::platform::dex::TAPPED);
+/// a URL: [`Link`](crate::platform::dex::LINK)) where a `NativeActivity`
+/// would miss it, since it doesn't pass `onNewIntent` on: `report` tells the
+/// app what the activity's intent says, whatever runs; then the app's own
+/// activity comes forward with its launch intent (or starts, its event loop
+/// finding the report queued), and this one finishes. `what` names it in the
+/// log.
+///
+/// # Safety
+/// Called from the VM's call of the activity's native `onCreate`, with a
+/// valid `env` and references.
+pub(super) unsafe fn forward(
+    env: Env,
+    this: JObject,
+    saved: JObject,
+    report: fn(&Jni, JObject),
+    what: &str,
+) {
     super::java::entered(env);
     unsafe {
         jni::in_native(env, |jni| {
@@ -657,7 +680,7 @@ pub unsafe extern "C" fn Java_org_stipple_android_Tapped_onCreate(
                 c"(Landroid/os/Bundle;)V",
                 &[JValue { l: saved }],
             );
-            report_tap(jni, this);
+            report(jni, this);
             let opened = (|| {
                 let pm = jni.call_object(
                     this,
@@ -692,7 +715,7 @@ pub unsafe extern "C" fn Java_org_stipple_android_Tapped_onCreate(
                 )
             })();
             if opened.is_none() {
-                log("stipple: can't open the app from the notification");
+                log(&format!("stipple: can't open the app from {what}"));
             }
             jni.call_void(this, c"finish", c"()V", &[]);
             // No animation of its own on the way out.

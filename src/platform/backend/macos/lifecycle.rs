@@ -126,6 +126,7 @@ pub(super) unsafe fn install_app_delegate(app: Id) {
                 should_terminate as *const c_void,
                 c"Q@:@".as_ptr(),
             );
+            super::open_url::add_app_delegate_methods(cls);
             objc_registerClassPair(cls);
         }
         // Kept for the process's life: `setDelegate:` doesn't retain.

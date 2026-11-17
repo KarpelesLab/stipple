@@ -333,6 +333,26 @@ doesn't ask for permission: call
 `platform::permission::request(Permission::Notifications, …)` first. The center's delegate is set while the app finishes launching, so the
 tap that launched it reaches `App::on_notification_tapped` too.
 
+## URLs that open the app
+
+`App::on_open_url` hears the custom schemes of the bundle's
+`CFBundleURLTypes` and universal links (the
+`com.apple.developer.associated-domains` entitlement); cargo-stipple writes
+both from `url-schemes` and `associated-domains`. Under the scene lifecycle
+(cargo-stipple's `Info.plist`) the scene delegate hears them:
+`scene:openURLContexts:` and `scene:continueUserActivity:`
+(`NSUserActivityTypeBrowsingWeb`) while the app runs, and the
+`UISceneConnectionOptions` (`URLContexts`, `userActivities`) of
+`scene:willConnectToSession:options:` when one launched it. Without scenes,
+the app delegate's `application:openURL:options:` and
+`application:continueUserActivity:restorationHandler:`, plus the launch
+options' `UIApplicationLaunchOptionsURLKey` (delivered once, though UIKit
+hands the same URL to `application:openURL:options:` next). On the
+simulator, `xcrun simctl openurl booted 'myapp://callback?code=1'` opens one;
+universal links need the domain's `apple-app-site-association` (see
+[os-integration.md](../os-integration.md#urls-that-open-the-app)) and a
+signed app.
+
 ## Permissions and the camera
 
 `platform::permission` asks for and reports the camera and the microphone

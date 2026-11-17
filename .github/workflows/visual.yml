@@ -5528,6 +5528,52 @@ jobs:
           grep -q "cameraview: open failed: NoCamera" "$LOG"
           grep -q "cameraview: selftest passed" "$LOG"
 
+      # URLs that open the app (App::on_open_url): touchdemo's bundle claims
+      # the stipple-demo scheme (CFBundleURLTypes), and `simctl openurl`
+      # opens it as a link would: the URL launches the app (the scene's
+      # connection options) and then reaches it running
+      # (scene:openURLContexts:); touchdemo logs each. Universal links need a
+      # domain's apple-app-site-association and a signed entitlement, which
+      # the simulator can't check here. Not blocking until it has passed.
+      - name: URLs that open the app (touchdemo, not blocking)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          xcrun simctl boot "$DEV" || true
+          xcrun simctl bootstatus "$DEV" -b || true
+          APP="$RUNNER_TEMP/urls/Stipple.app"
+          rm -rf "$RUNNER_TEMP/urls"
+          mkdir -p "$RUNNER_TEMP/urls"
+          cp -R Stipple.app "$APP"
+          cp target/aarch64-apple-ios-sim/release/examples/touchdemo "$APP/window"
+          plutil -insert CFBundleURLTypes -json \
+            '[{"CFBundleURLName":"com.karpeleslab.stipple","CFBundleTypeRole":"Viewer","CFBundleURLSchemes":["stipple-demo"]}]' \
+            "$APP/Info.plist"
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          xcrun simctl install "$DEV" "$APP"
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          LOG="$DATA/tmp/touchdemo.log"
+          rm -f "$LOG"
+          wait_for() {
+            for _ in $(seq 1 30); do
+              grep -qF "$1" "$LOG" 2>/dev/null && return 0
+              sleep 1
+            done
+            echo "missing: $1"; cat "$LOG" || true
+            return 1
+          }
+          # Cold: the URL launches the app.
+          xcrun simctl openurl "$DEV" 'stipple-demo://callback?code=1'
+          wait_for 'touchdemo: opened url "stipple-demo://callback?code=1"'
+          sleep 2
+          # Warm: the running app hears the next one.
+          xcrun simctl openurl "$DEV" 'stipple-demo://callback?code=2'
+          wait_for 'touchdemo: opened url "stipple-demo://callback?code=2"'
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-open-url.png || true
+          grep -E "touchdemo: (opened url|lifecycle)" "$LOG"
+          [ "$(grep -c 'touchdemo: opened url' "$LOG")" -eq 2 ]
+
       - name: Upload screenshot + log
         uses: actions/upload-artifact@v4
         if: always()
@@ -5787,6 +5833,7 @@ jobs:
           "$dexdump" -d stipple-classes.receiver.dex > receiver.txt
           grep -q "Class descriptor  : 'Lorg/stipple/android/Alarm;'" receiver.txt
           grep -q "Class descriptor  : 'Lorg/stipple/android/Files;'" receiver.txt
+          grep -q "Class descriptor  : 'Lorg/stipple/android/Link;'" receiver.txt
           grep -q "invoke-static {v0}, Ljava/lang/System;.loadLibrary" receiver.txt
 
       - name: Enable KVM
@@ -5796,7 +5843,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run on the emulator (touch, pinch, keys, IME, accessibility, back, edge swipe, lifecycle, saved state, notifications, document picker, clipboard, URLs)
+      - name: Run on the emulator (touch, pinch, keys, IME, accessibility, back, edge swipe, lifecycle, saved state, notifications, document picker, clipboard, URLs both ways)
         uses: reactivecircus/android-emulator-runner@v2
         env:
           STIPPLE_ANDROID_QUICK: ${{ matrix.quick }}
@@ -5832,6 +5879,8 @@ jobs:
             bash examples/androiddemo/test-drag-apps.sh clipprobe.apk visual_output || echo "::warning::test-drag-apps.sh failed (a drag into another app; non-blocking)"
             # Timers changing visible text, the clipboard both ways with another app, and a URL's VIEW intent started from the app into the browser (Chrome's first run off), by adb input touches: not blocking until it has passed on CI's emulators.
             bash examples/androiddemo/test-services.sh clipprobe.apk visual_output || echo "::warning::test-services.sh failed (timers, clipboard, opening a URL; non-blocking)"
+            # URLs opening the app (App::on_open_url through Stipple's Link activity): a VIEW intent of the app's scheme cold, warm and from the background: not blocking until it has passed on CI's emulators.
+            bash examples/androiddemo/test-open-url.sh visual_output || echo "::warning::test-open-url.sh failed (URLs opening the app; non-blocking)"
             # JNI access from the app and an activity started for a result (the VPN consent dialog: backed out of, then agreed to after the activity was recreated under it): not blocking until it has passed on CI's emulators.
             if [ -f intentresult.apk ]; then bash examples/intentresult/test-on-device.sh intentresult.apk visual_output || echo "::warning::intentresult/test-on-device.sh failed (activity results; non-blocking)"; fi
             # Not blocking until it has passed on CI's x86_64 emulators.

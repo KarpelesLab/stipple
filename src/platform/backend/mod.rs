@@ -162,6 +162,9 @@ where
     H: FnMut(Event, &dyn Window) -> ControlFlow + 'static,
 {
     let handler = with_theme_changes(handler);
+    // A URL the desktop's protocol handler started the app with.
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    crate::platform::incoming_url::post_launch_args();
     // Window activation and screen-reader actions for the AT-SPI bridge.
     #[cfg(target_os = "linux")]
     let handler = crate::platform::atspi::wrap(handler);

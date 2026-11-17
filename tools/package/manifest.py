@@ -64,6 +64,15 @@ ANDROID_TARGET_SDK = 35
 APP_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$")
 IOS_ID = re.compile(r"^[A-Za-z0-9.-]+$")
 COLOR = re.compile(r"^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
+# A URL scheme as Android matches it (lowercase: its intent filters are
+# case-sensitive, and URIs' schemes are normalized to lowercase).
+URL_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*$")
+# An associated domain: a host (maybe `*.` for its subdomains), an optional
+# path prefix, an optional `?mode=developer` / `?mode=managed`.
+LINK_DOMAIN = re.compile(
+    r"^((?:\*\.)?[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)+)"
+    r"(/[^?\s]*)?(?:\?mode=(developer|managed|developer\+managed))?$"
+)
 LANG = re.compile(r"^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|[0-9]{3}))?$")
 
 
@@ -152,6 +161,7 @@ class Manifest:
             if lang not in self.languages:
                 self.languages.append(lang)
             self.localized[lang] = dict(strings)
+        self._links(d)
         self._ios(ios)
         self._android(android)
         if d:
@@ -171,6 +181,42 @@ class Manifest:
         if must_exist and not p.exists():
             raise ManifestError(f"{key}: {p} doesn't exist")
         return p
+
+    # --- Incoming URLs ------------------------------------------------------
+
+    def _links(self, d):
+        """`url-schemes` (custom schemes the app opens for) and
+        `associated-domains` (or `app-links`): the https domains whose links
+        open the app, as iOS universal links and Android's verified App
+        Links. A domain may end in a path prefix (Android only; iOS takes the
+        paths from the domain's apple-app-site-association) and carry iOS's
+        `?mode=developer`."""
+        self.url_schemes = []
+        for scheme in d.pop("url-schemes", []):
+            if not isinstance(scheme, str) or not URL_SCHEME.match(scheme):
+                raise ManifestError(
+                    f"url-schemes: {scheme!r} isn't a lowercase URL scheme (myapp, com.example.app)"
+                )
+            if scheme in ("http", "https", "file"):
+                raise ManifestError(
+                    f"url-schemes: {scheme!r} is for associated-domains (verified links)"
+                )
+            self.url_schemes.append(scheme)
+        domains = d.pop("associated-domains", None)
+        aliased = d.pop("app-links", None)
+        if domains is not None and aliased is not None:
+            raise ManifestError("associated-domains and app-links are the same key: give one")
+        self.link_domains = []
+        for entry in domains if domains is not None else (aliased or []):
+            m = LINK_DOMAIN.match(entry) if isinstance(entry, str) else None
+            if not m:
+                raise ManifestError(
+                    f"associated-domains: {entry!r} isn't a domain (example.com, "
+                    "*.example.com, example.com/auth)"
+                )
+            self.link_domains.append(
+                {"host": m.group(1).lower(), "path": m.group(2) or "", "mode": m.group(3)}
+            )
 
     # --- iOS -----------------------------------------------------------------
 

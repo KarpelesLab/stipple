@@ -99,6 +99,15 @@ and presented through `wl_shm`. See [gpu.md](../gpu.md#wayland).
 - `STIPPLE_X11_DEBUG=1` logs X11 events.
 - `STIPPLE_COMPOSE_DEBUG=1` reports the Compose table when it loads.
 
+## URLs that open the app
+
+A `.desktop` file with `MimeType=x-scheme-handler/myapp;` and `Exec=app %u`
+(made the default with `xdg-mime default app.desktop x-scheme-handler/myapp`)
+starts the app with the URL as its argument, which `App::on_open_url` hears
+as the loop starts. A URL while the app runs starts a second process: there
+is no single-instance forwarding yet. See
+[os-integration.md](../os-integration.md#urls-that-open-the-app).
+
 ## Known gaps
 
 - Typed text comes from a simple reading of the keymap: Shift (and Caps Lock, on

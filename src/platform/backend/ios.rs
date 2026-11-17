@@ -56,6 +56,8 @@ mod edge_swipe;
 mod edit_menu;
 /// Background, foreground, memory warnings and appearance changes.
 mod lifecycle;
+/// URLs that open the app: custom schemes and universal links.
+mod open_url;
 /// A trackpad's scrolling, as steps (UIKit-free, tested on hosts).
 mod pan_scroll;
 /// An iPad's trackpad and mouse: scrolling and hovering.
@@ -428,13 +430,15 @@ pub(crate) fn app_view() -> Id {
 /// `application:didFinishLaunchingWithOptions:` — without scenes, build the
 /// window + view, draw the first frame, and show it. With scenes, the scene
 /// delegate does when its scene connects ([`scene`]).
-extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, _opts: Id) -> bool {
+extern "C" fn did_finish_launching(_this: Id, _cmd: Sel, _app: Id, opts: Id) -> bool {
     // Before launching ends, so a notification tap that launched the app
     // reaches the center's delegate.
     crate::platform::shell::ios::install_delegate();
     // StoreKit's transaction observer, if the app listens for transactions:
     // the queue hands back the unfinished ones as soon as it's added.
     crate::platform::store::ios::launched();
+    // The URL that launched the app, if any (without scenes).
+    unsafe { open_url::launched(opts) };
     if !scene::uses_scenes() {
         unsafe {
             let bounds = msg_rect(msg_id(class("UIScreen"), sel("mainScreen")), sel("bounds"));
@@ -1381,6 +1385,7 @@ fn register_app_delegate() -> Class {
             c"c@:@@".as_ptr(),
         );
         scene::add_app_delegate_methods(cls);
+        open_url::add_app_delegate_methods(cls);
         objc_registerClassPair(cls);
         cls
     }

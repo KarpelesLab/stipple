@@ -421,6 +421,30 @@ Each scheduled notification is in an app group of its own, so Android doesn't
 bundle it with the app's other notifications under a summary of the system's,
 whose tap would open the app without saying which notification it was.
 
+## URLs that open the app
+
+`App::on_open_url` hears the app's custom schemes and verified App Links
+(`url-schemes` and `associated-domains` in cargo-stipple's manifest). They
+arrive as `ACTION_VIEW` intents, which a `NativeActivity` only sees when one
+starts it (no `onNewIntent`), so the intent filters go on
+`org.stipple.android.Link`, a windowless activity in the same `classes.dex`
+as `Alarm` and `Tapped`: it hands its intent's URL to the app, whatever
+runs, brings the app's activity forward (or starts it: the event loop finds
+the URL queued, and delivers it after the restored state) and finishes. The
+app's own activity stays a plain `NativeActivity` with its standard launch
+mode, so nothing else changes. `adb logcat -s stipple` shows `stipple: opened
+with "..."`. The manifest entry and the server's `assetlinks.json` are in
+[os-integration.md](../os-integration.md#urls-that-open-the-app). Check one
+with:
+
+```sh
+adb shell am start -a android.intent.action.VIEW -d 'myapp://callback?code=1'
+adb shell pm get-app-links com.example.app      # App Links: verified or not
+```
+
+`examples/androiddemo/test-open-url.sh` does it cold, warm and from the
+background (its manifest claims `stipple-demo`).
+
 ## Permissions and the camera
 
 `platform::permission` maps each permission to the manifest's

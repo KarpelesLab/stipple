@@ -125,6 +125,50 @@ class AndroidTests(unittest.TestCase):
         self.assertIn('android:hasCode="true"', xml)
         self.assertNotIn("org.stipple.android.Alarm", xml)
 
+    def test_url_schemes_and_app_links(self):
+        refs = {"label": "@string/app_name", "theme": "@style/AppTheme"}
+        plain = android.manifest_xml(manifest(), "my_app", refs)
+        self.assertNotIn("org.stipple.android.Link", plain)
+        self.assertNotIn("android.intent.action.VIEW", plain)
+        self.assertIn('android:hasCode="false"', plain)
+        self.assertFalse(android.needs_dex(manifest()))
+        m = manifest(
+            **{"url-schemes": ["myapp", "com.example.app"],
+               "associated-domains": ["example.com", "*.example.org/auth", "dev.example.com?mode=developer"]}
+        )
+        self.assertTrue(android.needs_dex(m))
+        xml = android.manifest_xml(m, "my_app", refs)
+        self.assertIn('android:hasCode="true"', xml)
+        self.assertIn('<activity android:name="org.stipple.android.Link" android:exported="true"', xml)
+        self.assertIn('android:theme="@android:style/Theme.NoDisplay"', xml)
+        # The app's own activity keeps only its launcher filter.
+        main = xml.split('android:name="android.app.NativeActivity"')[1].split("</activity>")[0]
+        self.assertNotIn("VIEW", main)
+        link = xml.split('android:name="org.stipple.android.Link"')[1].split("</activity>")[0]
+        self.assertEqual(link.count("<intent-filter"), 4, "the schemes' and one per domain")
+        self.assertEqual(link.count('android:autoVerify="true"'), 3)
+        self.assertEqual(link.count("android.intent.category.BROWSABLE"), 4)
+        self.assertEqual(link.count("android.intent.category.DEFAULT"), 4)
+        self.assertIn('<data android:scheme="myapp"/>', link)
+        self.assertIn('<data android:scheme="com.example.app"/>', link)
+        self.assertEqual(link.count('<data android:scheme="https"/>'), 3)
+        self.assertIn('<data android:host="*.example.org"/>', link)
+        self.assertIn('<data android:pathPrefix="/auth"/>', link)
+        self.assertIn('<data android:host="dev.example.com"/>', link)
+        self.assertNotIn("mode=", link)
+        # The alias, and what's refused.
+        self.assertEqual(manifest(**{"app-links": ["a.example"]}).link_domains[0]["host"], "a.example")
+        for bad in (
+            {"url-schemes": ["MyApp"]},
+            {"url-schemes": ["https"]},
+            {"url-schemes": ["my app"]},
+            {"associated-domains": ["https://example.com"]},
+            {"associated-domains": ["localhost"]},
+            {"associated-domains": ["a.com"], "app-links": ["b.com"]},
+        ):
+            with self.subTest(bad=bad), self.assertRaises(ManifestError):
+                manifest(**bad)
+
     def test_string_escapes(self):
         self.assertEqual(android._string("It's <b>"), "It\\'s &lt;b&gt;")
         self.assertEqual(android._string("@home"), "\\@home")
@@ -180,6 +224,36 @@ class IosTests(unittest.TestCase):
         self.assertEqual(info["UILaunchScreen"], {})
         self.assertIs(info["UIApplicationSupportsIndirectInputEvents"], True)
         plistlib.dumps(info)
+
+    def test_url_types_and_associated_domains(self):
+        info = ios.info_plist(manifest(), "my-app", simulator=False)
+        self.assertNotIn("CFBundleURLTypes", info)
+        self.assertEqual(ios.link_entitlements(manifest()), {})
+        m = manifest(
+            **{"url-schemes": ["myapp"],
+               "associated-domains": ["example.com/auth", "dev.example.com?mode=developer"]}
+        )
+        info = ios.info_plist(m, "my-app", simulator=False)
+        self.assertEqual(
+            info["CFBundleURLTypes"],
+            [{"CFBundleURLName": "com.example.app", "CFBundleTypeRole": "Viewer",
+              "CFBundleURLSchemes": ["myapp"]}],
+        )
+        plistlib.dumps(info)
+        domains = ["applinks:example.com", "applinks:dev.example.com?mode=developer"]
+        self.assertEqual(
+            ios.link_entitlements(m), {"com.apple.developer.associated-domains": domains}
+        )
+        profile = {
+            "TeamIdentifier": ["ABCDE12345"],
+            "Entitlements": {
+                "application-identifier": "ABCDE12345.com.example.app",
+                "com.apple.developer.associated-domains": "*",
+            },
+        }
+        ent = ios.entitlements(m, profile)
+        self.assertEqual(ent["com.apple.developer.associated-domains"], domains)
+        plistlib.dumps(ent)
 
     def test_short_version(self):
         self.assertEqual(ios._short_version("1.2.3-beta.1"), "1.2.3")

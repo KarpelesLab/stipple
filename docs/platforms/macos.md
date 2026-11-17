@@ -63,6 +63,16 @@ Helvetica and Arial, with Apple Symbols for symbols.
 `STIPPLE_COCOA_A11Y=1` prints the accessibility tree as an assistive client would
 see it, and the window number, which `screencapture -l` takes.
 
+## URLs that open the app
+
+A bundle whose `Info.plist` claims a scheme (`CFBundleURLTypes`) gets its
+URLs in `App::on_open_url`: Launch Services sends the `kAEGetURL` Apple
+event, and AppKit hands its URLs to the application delegate's
+`application:openURLs:`, at launch and while the app runs (file URLs left
+out). cargo-stipple doesn't build macOS bundles, so the app's own bundle
+carries the key; see
+[os-integration.md](../os-integration.md#urls-that-open-the-app).
+
 ## Known gaps
 
 - Without `App::menu`, the menu bar shows the executable's name and no menus.

@@ -39,6 +39,15 @@ drawn twice, over black and over white, to recover its alpha.
 `Font::system_default()` loads Segoe UI, falling back to Arial, with Segoe UI
 Symbol for symbols such as the checkbox's check mark.
 
+## URLs that open the app
+
+A protocol handler registered in the registry (`HKCU\Software\Classes\myapp`
+with `URL Protocol` and `shell\open\command` = `"app.exe" "%1"`) starts the
+app with the URL as its argument, which `App::on_open_url` hears as the
+loop starts. A URL while the app runs starts a second process: there is no
+single-instance forwarding yet. See
+[os-integration.md](../os-integration.md#urls-that-open-the-app).
+
 ## Known gaps
 
 - The system clipboard (`CF_UNICODETEXT`) works with Ctrl+C/X/V; file dialogs

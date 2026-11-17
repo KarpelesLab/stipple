@@ -76,6 +76,11 @@
 //!   what's still to show, and `androiddemo: notification tapped "..."` when a
 //!   tap on it starts the activity. The APK carries the `Alarm` receiver
 //!   (`classes.dex`, see `build-apk.sh`), so it shows with the process gone.
+//! - `androiddemo: opened url "..."` when a URL opens the app
+//!   (`App::on_open_url`): its manifest claims the `stipple-demo` scheme on
+//!   Stipple's `Link` activity, so `am start -a android.intent.action.VIEW -d
+//!   stipple-demo://callback?code=1` reaches it, at launch and while it runs
+//!   (`test-open-url.sh`).
 //! - `androiddemo: store products N` or `androiddemo: store error ...` at
 //!   start: `platform::store` asking Google Play about two products. Without
 //!   the Play Billing Library in the APK the error says so; with it
@@ -584,6 +589,7 @@ mod app {
             .on_notification_tapped(|_: &mut State, id| {
                 println!("androiddemo: notification tapped {id:?}");
             })
+            .on_open_url(|_: &mut State, url| println!("androiddemo: opened url {url:?}"))
             .on_transaction(|_: &mut State, t| {
                 println!(
                     "androiddemo: transaction {} {:?} {:?} id={} token={} kind={:?}",

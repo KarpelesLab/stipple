@@ -71,6 +71,7 @@ How to build, package and run on each platform, and what works there today.
 | Menu bar | drawn ¹⁸ | native ²⁴ | native ²⁴ | drawn ⁶¹ | drawn ⁶¹ | drawn ⁶¹ |
 | Context menus and shortcuts | ✅ ¹⁸ | native ²⁴ | native ²⁴ | drawn, long press ⁶⁰ | drawn, long press ⁶⁰ | drawn ⁶⁰ |
 | Opening URLs and files | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁸¹ | ✅ ⁸² | ✅ ¹⁰ |
+| URLs that open the app (`App::on_open_url`) | at launch ⁸⁸ | at launch ⁸⁸ | ✅ ⁸⁸ | ✅ ⁸⁸ | ✅ ⁸⁸ | — ⁸⁸ |
 | Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ✅ ⁶³ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ✅ ⁷⁹ | ✅ ⁷⁹ | ❌ |
@@ -722,6 +723,18 @@ consent (`VpnService.prepare`), cancels it, then agrees after a font-scale
 change recreated the activity under the dialog: passed on local API 34 and 30
 emulators; CI runs it on API 34, 33 and 30, not blocking yet. See
 [platforms/android.md](platforms/android.md#calling-android-apis-yourself).
+⁸⁸ Custom schemes, universal links (iOS) and verified App Links (Android),
+claimed with cargo-stipple's `url-schemes` and `associated-domains`. iOS
+hears them in the scene delegate (and the connection options at launch);
+Android through Stipple's `Link` activity, a windowless trampoline in its APK
+dex, as `NativeActivity` doesn't pass `onNewIntent` on: passed on local API
+34 and 30 emulators cold, warm and from the background
+(`examples/androiddemo/test-open-url.sh`), non-blocking in CI. The iOS
+simulator's `simctl openurl` runs non-blocking in CI. macOS is
+`application:openURLs:` (build-checked); Windows and Linux take the URL a
+protocol handler starts the app with on its command line (checked on X11),
+with no single-instance forwarding. The web has none: the page's URL is the
+app's. See [os-integration.md](os-integration.md#urls-that-open-the-app).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

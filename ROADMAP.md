@@ -1730,6 +1730,25 @@ Most input only works on X11 today.
   checks Linux (portal and `xdg-open`, against a mock), Windows (an HKCU URL
   protocol) and macOS (a `.txt` opens TextEdit); iOS, Android and the web are
   build-checked only.
+- ✅ URLs that open the app (`App::on_open_url`, #72): custom schemes,
+  universal links and verified App Links, at launch (after the restored
+  state) and while running. cargo-stipple's `url-schemes` and
+  `associated-domains` write `CFBundleURLTypes`, the
+  `com.apple.developer.associated-domains` entitlement and Android intent
+  filters (`autoVerify` for https). iOS: the scene delegate's
+  `scene:openURLContexts:` / `scene:continueUserActivity:` and connection
+  options, the app delegate's `application:openURL:options:` /
+  `continueUserActivity` and launch options without scenes. Android:
+  `org.stipple.android.Link`, a windowless trampoline activity in Stipple's
+  APK dex (like the notification taps' `Tapped`), since `NativeActivity`
+  doesn't pass `onNewIntent` on. macOS: `application:openURLs:`. Windows and
+  Linux: the URL on the command line (no single-instance forwarding). Passes
+  locally on API 34 and 30 emulators cold, warm and from the background, and
+  an App Link with a path prefix on API 34 (`test-open-url.sh`, non-blocking
+  in CI); the iOS simulator's `simctl openurl` runs non-blocking in CI, not
+  seen yet; macOS and the desktops' registration are build-checked, the
+  command line checked on X11. Still to do: `ASWebAuthenticationSession` /
+  Custom Tabs for OAuth, single-instance forwarding on the desktops.
 - ✅ Notifications (`platform::notify`, `AppHandle::notify`):
   `org.freedesktop.Notifications` on Linux, a `Shell_NotifyIconW` balloon (a
   toast on Windows 10 and 11), `osascript` on macOS (the notification

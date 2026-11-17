@@ -500,6 +500,9 @@ fn main() {
         .logical_size(Size::new(360.0, 720.0))
         // Follows the system's light and dark mode.
         .theme(Theme::native())
+        // URLs of the stipple-demo scheme that open the app (CI's iOS job
+        // adds it to the bundle's CFBundleURLTypes and opens two).
+        .on_open_url(|_, url| log(&format!("touchdemo: opened url {url:?}")))
         .on_lifecycle(|s, change| {
             log(&format!("touchdemo: lifecycle {change:?}"));
             s.lifecycle.push(change);

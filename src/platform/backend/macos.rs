@@ -54,6 +54,8 @@ mod keys;
 mod lifecycle;
 /// The CI self-test of the menus (`STIPPLE_COCOA_MENU_SELFTEST`).
 mod menu_check;
+/// URLs that open the app: `application:openURLs:`.
+mod open_url;
 /// The pointer leaving the view, hiding the cursor, double-click time.
 mod pointer;
 /// Putting frames on screen: the framebuffer, damage, `drawRect:`.

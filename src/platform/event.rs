@@ -428,6 +428,11 @@ pub enum Event {
     /// which brought the app up (launching it, where the platform can). See
     /// [`App::on_notification_tapped`](crate::App::on_notification_tapped).
     NotificationTapped(String),
+    /// A URL opened the app, or was handed to it while it runs: a custom
+    /// scheme's (`myapp://callback?code=…`, an OAuth redirect), a universal
+    /// link or a verified App Link. See
+    /// [`App::on_open_url`](crate::App::on_open_url) and `docs/os-integration.md`.
+    OpenUrl(String),
     /// A purchase changed: bought, restored or pending, from
     /// [`platform::store`](crate::platform::store). See
     /// [`App::on_transaction`](crate::App::on_transaction).

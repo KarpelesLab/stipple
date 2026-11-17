@@ -85,6 +85,8 @@ pub(crate) mod java;
 mod jni;
 /// Notifications through `NotificationManager`.
 mod notify;
+/// URLs that open the app: the `Link` activity's `VIEW` intents.
+mod open_url;
 /// Runtime permissions: `checkSelfPermission` and `requestPermissions`.
 pub(crate) mod permission;
 /// The Storage Access Framework's document picker.

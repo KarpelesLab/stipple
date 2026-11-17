@@ -460,3 +460,5 @@ natively and reads `performance.now()` on the web.
   updates (no `aria-live` regions; an `alert` node relies on its role).
 - No OS-drawn controls: `Theme::native()` uses the self-drawn look.
 - Window controls (size limits, maximize, fullscreen, icon) do nothing.
+- `App::on_open_url` hears nothing: a page is opened by its own URL, which
+  the app reads at start (`location`, through the page's JavaScript).

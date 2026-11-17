@@ -1,8 +1,9 @@
-# Tray icons, notifications, sharing, haptics, message boxes, opening URLs and app directories
+# Tray icons, notifications, sharing, haptics, message boxes, URLs and app directories
 
 Ways an app reaches past its window: a tray icon with a menu, notifications
 (now or scheduled), the system's share sheet, haptic feedback, message boxes,
-handing a URL or file to the app the user picked for it, finding where to keep
+handing a URL or file to the app the user picked for it, hearing the URLs that
+open the app, finding where to keep
 its files and what version it is, and reading the files it was packaged with.
 The user's languages and formatting settings are in
 [localization.md](localization.md). The `traydemo` example shows most of them
@@ -40,6 +41,155 @@ that opens it.
 
 Inside Flatpak or Snap, the portal is what lets a sandboxed app open a URL;
 outside, `xdg-open` follows the desktop's settings (and `$BROWSER`).
+
+## URLs that open the app
+
+The other direction: a URL that opens the app, or reaches it while it runs.
+An OAuth sign-in in the browser redirects back to `myapp://callback?code=…`,
+an email links to `https://example.com/invite/42`, a web page offers "open in
+the app". `App::on_open_url` hears each one:
+
+```rust
+App::new(state, view)
+    .on_open_url(|s, url| {
+        if let Some(code) = url.strip_prefix("myapp://callback?code=") {
+            s.sign_in_with(code);
+        }
+    })
+    .run();
+```
+
+The URL that launched the app arrives once the app runs, after
+`restore_state` (with the first events: the state exists, and the view is
+rebuilt after the hook); later ones arrive as they come, also while the app is
+in the background. The hook gets the URL as the system gave it (still
+percent-encoded); it is outside input, so parse it, don't trust it. Each one
+is also `Event::OpenUrl` at the platform level.
+
+The app claims its URLs in its packaging manifest (cargo-stipple, see
+[packaging.md](packaging.md#urls-that-open-the-app)):
+
+```toml
+url-schemes = ["myapp"]                 # myapp://…: any app or page can send these
+associated-domains = ["example.com"]    # https://example.com/…: verified as the app's
+```
+
+| | Custom schemes (`url-schemes`) | https links (`associated-domains`) | How Stipple hears them |
+|---|---|---|---|
+| iOS | `CFBundleURLTypes` | universal links: the `com.apple.developer.associated-domains` entitlement (`applinks:`) and the domain's `apple-app-site-association` | the scene delegate's `scene:openURLContexts:` and `scene:continueUserActivity:` (`NSUserActivityTypeBrowsingWeb`), and the connection options at launch; without scenes, the app delegate's `application:openURL:options:` and `application:continueUserActivity:restorationHandler:`, and the launch options |
+| Android | a `VIEW` / `BROWSABLE` intent filter for the scheme | App Links: an `android:autoVerify` https filter per domain and the domain's `assetlinks.json` | Stipple's `Link` activity (below) |
+| macOS | `CFBundleURLTypes` in the bundle's `Info.plist` | (universal links on macOS need an App Store or Developer ID app: not wired) | the application delegate's `application:openURLs:` (the `kAEGetURL` Apple event), at launch and while running |
+| Windows | a protocol handler in the registry (below) | — | the URL on the command line, at launch |
+| Linux | `MimeType=x-scheme-handler/myapp;` in the app's `.desktop` file | — | the URL on the command line, at launch |
+| Web | — | — | not delivered: the page's own URL is the app's (`location`), read at start |
+
+**Android.** A `NativeActivity` doesn't pass `onNewIntent` on, and an intent
+filter on it would start a second copy of it in the browser's task. So the
+filters go on `org.stipple.android.Link`, a windowless activity in Stipple's
+`classes.dex` (the same dex as the `Alarm` receiver and the `Tapped`
+activity, which notification taps go through for the same reason): it hands
+its intent's URL to the app, whatever runs, brings the app's activity forward
+with its launch intent (or starts it, the event loop then finding the URL
+queued) and finishes. cargo-stipple declares it and writes the dex; by hand:
+
+```xml
+<activity android:name="org.stipple.android.Link" android:exported="true"
+    android:taskAffinity="" android:excludeFromRecents="true" android:noHistory="true"
+    android:theme="@android:style/Theme.NoDisplay">
+  <intent-filter>
+    <action android:name="android.intent.action.VIEW"/>
+    <category android:name="android.intent.category.DEFAULT"/>
+    <category android:name="android.intent.category.BROWSABLE"/>
+    <data android:scheme="myapp"/>
+  </intent-filter>
+  <intent-filter android:autoVerify="true">
+    <action android:name="android.intent.action.VIEW"/>
+    <category android:name="android.intent.category.DEFAULT"/>
+    <category android:name="android.intent.category.BROWSABLE"/>
+    <data android:scheme="https"/>
+    <data android:host="example.com"/>
+  </intent-filter>
+</activity>
+```
+
+A manifest that puts `VIEW` filters on the `NativeActivity` itself still gets
+the URL that started it (Stipple reads the activity's launch intent), but not
+the ones that come while it runs.
+
+**The server side of verified links.** The domain says which apps may open
+its links, over https, without redirects:
+
+- iOS: `https://example.com/.well-known/apple-app-site-association` (JSON, no
+  extension, `Content-Type: application/json`), naming the app by team and
+  bundle id and the paths it takes:
+
+  ```json
+  { "applinks": { "details": [ {
+      "appIDs": ["ABCDE12345.com.example.app"],
+      "components": [ { "/": "/invite/*" }, { "/": "/auth/*" } ]
+  } ] } }
+  ```
+
+  Apple's CDN fetches it when the app is installed; for development, an
+  `associated-domains = ["example.com?mode=developer"]` entry fetches it
+  straight from the server on devices in developer mode. The provisioning
+  profile must have the Associated Domains capability.
+- Android: `https://example.com/.well-known/assetlinks.json`, naming the
+  package and the SHA-256 fingerprint of the signing certificate (Play's app
+  signing key for a Play build: Play Console, *App integrity*):
+
+  ```json
+  [ { "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": { "namespace": "android_app", "package_name": "com.example.app",
+                  "sha256_cert_fingerprints": ["AB:CD:…"] } } ]
+  ```
+
+  Android checks it at install (`adb shell pm get-app-links com.example.app`
+  shows the result; `pm verify-app-links --re-verify` asks again). Unverified,
+  the link opens a chooser (Android 11 and older) or the browser (12 and
+  later). A path prefix in the manifest's entry (`example.com/auth`) limits
+  the filter to it.
+
+**Desktop protocol handlers.** cargo-stipple doesn't package desktop apps, so
+the app's installer registers the scheme. The URL arrives as a command-line
+argument; Stipple delivers the arguments that look like URLs (a scheme, then
+`:/`, not `file:`), once, as the loop starts. There is no single-instance
+forwarding: a URL while the app runs starts a second process, which may hand
+it on to the first itself (a socket, a lock file) and exit.
+
+- Windows (per user, no administrator rights):
+
+  ```text
+  HKEY_CURRENT_USER\Software\Classes\myapp
+      (Default)      = "URL:My App"
+      URL Protocol   = ""
+  HKEY_CURRENT_USER\Software\Classes\myapp\shell\open\command
+      (Default)      = "C:\Program Files\My App\myapp.exe" "%1"
+  ```
+
+- Linux: a `.desktop` file with `Exec=myapp %u` and
+  `MimeType=x-scheme-handler/myapp;` in `~/.local/share/applications` (or
+  the package's `/usr/share/applications`), then
+  `xdg-mime default myapp.desktop x-scheme-handler/myapp`.
+- macOS: the bundle's `Info.plist`:
+
+  ```xml
+  <key>CFBundleURLTypes</key>
+  <array><dict>
+    <key>CFBundleURLName</key><string>com.example.app</string>
+    <key>CFBundleURLSchemes</key><array><string>myapp</string></array>
+  </dict></array>
+  ```
+
+  Launch Services finds the app once it has been run (or moved into
+  `/Applications`); `application:openURLs:` hears the URLs, file URLs (a
+  document dropped on the Dock icon) left out.
+
+**OAuth.** The usual browser sign-in: open the provider's page with
+`platform::open_url`, with `redirect_uri=myapp://callback` (and PKCE), and
+take the code in `on_open_url`. `ASWebAuthenticationSession` (iOS) and Custom
+Tabs (Android), which keep the sign-in in a sheet over the app, aren't wired
+yet: the round trip goes through the system browser.
 
 ## App directories and bundle information
 
@@ -541,6 +691,16 @@ its process is ended, the APK's `Alarm` receiver posts the notification
 Linux's `traydemo` self-test schedules one half a second on, which must reach
 the mock notification server. The macOS share picker and haptics, the iOS
 share sheet and the web paths are build-checked only.
+
+URLs that open the app: on the Android emulators,
+`examples/androiddemo/test-open-url.sh` starts `VIEW` intents of androiddemo's
+`stipple-demo` scheme with the app stopped, in front and in the background,
+and reads `on_open_url`'s log back (passed locally on API 34 and 30, plus a
+verified-by-hand App Link with a path prefix on API 34; non-blocking in CI).
+On the iOS simulator, touchdemo's bundle claims the scheme and `simctl
+openurl` opens two URLs, one launching it (non-blocking, not yet seen
+passing). macOS's `application:openURLs:` is build-checked; the desktops'
+command-line URL was checked by hand on X11.
 
 No real tray host or notification popup is looked at, and nothing clicks the
 real icons on Windows or macOS: there, the menus and click handling are

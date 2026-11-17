@@ -174,8 +174,10 @@ extern "C" fn did_discard_sessions(_this: Id, _cmd: Sel, _app: Id, sessions: Id)
 
 /// `scene:willConnectToSession:options:`: build the window on the scene,
 /// with the state its session saved, if any.
-extern "C" fn will_connect(_this: Id, _cmd: Sel, scene: Id, session: Id, _options: Id) {
+extern "C" fn will_connect(_this: Id, _cmd: Sel, scene: Id, session: Id, options: Id) {
     unsafe {
+        // The URLs that launched the app come only with the options.
+        super::open_url::scene_connected(options);
         let id = string_of(msg_id(session, sel("persistentIdentifier")));
         debug(format_args!("scene connected, session {id:?}"));
         // Connected (again): a live session, whose state is saved, even
@@ -248,6 +250,7 @@ pub(super) fn register_scene_delegate() -> Class {
             will_connect as *const c_void,
             c"v@:@@@".as_ptr(),
         );
+        super::open_url::add_scene_delegate_methods(cls);
         let protocol = objc_getProtocol(c"UIWindowSceneDelegate".as_ptr());
         if !protocol.is_null() {
             class_addProtocol(cls, protocol);

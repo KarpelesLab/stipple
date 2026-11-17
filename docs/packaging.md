@@ -72,6 +72,8 @@ icon-background = "#16181d"        # behind the icon (iOS icons are opaque)
 assets = "assets"                  # the files platform::assets() reads
 orientations = ["portrait"]        # portrait, portrait-upside-down, landscape(-left/-right), all
 languages = ["en", "fr", "ja"]     # the first is the development language
+# url-schemes = ["qrmaster"]       # qrmaster://… opens the app (App::on_open_url)
+# associated-domains = ["qrmaster.example"]   # its https links too: universal links, App Links
 
 [package.metadata.stipple.localized.fr]
 name = "QR Maître"
@@ -126,6 +128,38 @@ on iOS and `android:screenOrientation` on Android. An iPad gets every
 orientation (iPad multitasking requires it) unless `ios.ipad-orientations`
 says otherwise, which makes the app full screen. The app can narrow them
 further at run time with `App::orientations`.
+
+## URLs that open the app
+
+`url-schemes` and `associated-domains` claim the URLs `App::on_open_url`
+hears (see [os-integration.md](os-integration.md#urls-that-open-the-app)):
+
+- **`url-schemes`**: custom schemes, lowercase (`myapp`, `com.example.app`
+  for the reverse-DNS redirect URIs OAuth providers like). iOS gets a
+  `CFBundleURLTypes` entry; Android an intent filter (`VIEW`, `DEFAULT`,
+  `BROWSABLE`, the schemes) on Stipple's `Link` activity, with the
+  `classes.dex` it lives in. Any app can claim any scheme, so a scheme
+  proves nothing about who sends the URL: for a sign-in, use PKCE.
+- **`associated-domains`** (or its other name, `app-links`): https domains
+  whose links open the app, verified by a file the domain serves.
+  `example.com`, `*.example.com` (its subdomains), `example.com/auth` (on
+  Android, only links under that path; iOS takes the paths from the
+  server's file), `example.com?mode=developer` (iOS: fetched from the server
+  itself, on a device in developer mode, rather than Apple's CDN). iOS gets
+  the `com.apple.developer.associated-domains` entitlement (`applinks:`),
+  which the provisioning profile must allow (the app id's Associated Domains
+  capability; signing warns when it doesn't); Android an `android:autoVerify`
+  https intent filter per domain on the `Link` activity. The domain serves
+  `/.well-known/apple-app-site-association` and
+  `/.well-known/assetlinks.json`: their contents are in
+  [os-integration.md](os-integration.md#urls-that-open-the-app).
+
+```toml
+[package.metadata.stipple]
+url-schemes = ["myapp"]
+associated-domains = ["example.com", "*.example.com"]
+```
+
 
 ## Icons
 
@@ -233,7 +267,9 @@ library's ELF segments). It writes the manifest (the `NativeActivity` with
 `android.app.lib_name`, the `configChanges` and `NoActionBar` theme Stipple
 needs, predictive back, the permissions, for scheduled notifications
 the `Alarm` receiver with its `classes.dex`, and with `drag-files` the
-`FileProvider` files dragged out of the app go through (the same dex); see
+`FileProvider` files dragged out of the app go through (the same dex), and
+for `url-schemes` and `associated-domains` the `Link` activity and its intent
+filters (the same dex again); see
 [android.md](platforms/android.md#packaging)), adds the Play Billing Library
 with `billing` (its dex files and manifest entries, from
 `tools/android/billing.py`; see [purchases.md](purchases.md)), compiles the resources with
