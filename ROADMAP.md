@@ -1071,7 +1071,9 @@ CPU elsewhere, and the CPU is always the fallback.
   fence (`EGL_ANDROID_native_fence_sync`) as the explicit-sync acquire point;
   the context on the compositor's main device (`EGL_EXT_device_drm`,
   `EGL_EXT_platform_device`) where the surfaceless display is on another
-  GPU. X11 and Android compile-checked and run in CI only; Wayland run
+  GPU. Where EGL takes no context without a surface (the Android
+  emulator's), a 1×1 pbuffer stands in for drawing to no window. X11 run in
+  CI only, Android on the emulator (locally and in CI); Wayland run
   locally (llvmpipe, NVIDIA) and in CI on llvmpipe under sway on `vkms` and
   headless Weston.*
 - ✅ CI: lavapipe (Vulkan) and llvmpipe (GL) pixel comparisons, the Linux
@@ -1082,8 +1084,9 @@ CPU elsewhere, and the CPU is always the fallback.
   `linux-dmabuf` with each and paces at 60 Hz, and under headless Weston
   that GPU frames go in a subsurface under Stipple's title bar; the API 34
   emulator run
-  starts androiddemo built with `vk` (`test-renderer.sh`). The last two
-  aren't blocking yet.*
+  starts androiddemo built with `vk` and with `gl` (`test-renderer.sh`; GLES
+  there on a pbuffer, the emulator's EGL taking no context without a
+  surface). The last two aren't blocking yet.*
 
 #### 6d — Direct3D 11 (Windows)
 - ✅ The scene executor on Direct3D 11 (already the API the Windows spike

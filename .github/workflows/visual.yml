@@ -5736,6 +5736,14 @@ jobs:
         if: matrix.api-level == 34
         run: STIPPLE_APK_FEATURES=vk bash examples/androiddemo/build-apk.sh x86_64 stipple-vk.apk
 
+      # And with the GLES executor: it draws with OpenGL ES and presents to an
+      # EGL window surface (test-renderer.sh after the Vulkan one, on API 34;
+      # not blocking yet). The emulator's EGL takes no context without a
+      # surface: the offscreen context is current on a 1x1 pbuffer there.
+      - name: Build the GLES APK
+        if: matrix.api-level == 34
+        run: STIPPLE_APK_FEATURES=gl bash examples/androiddemo/build-apk.sh x86_64 stipple-gl.apk
+
       # An accessibility service standing in for TalkBack, and watching
       # TalkBack itself: see .github/a11y/android/Probe.java.
       - name: Build the accessibility probe APK
@@ -5819,6 +5827,7 @@ jobs:
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-probe.sh a11yprobe.apk visual_output; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-talkback.sh a11yprobe.apk visual_output; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash examples/androiddemo/test-renderer.sh stipple-vk.apk Vulkan visual_output || echo "::warning::androiddemo didn't present with Vulkan on the emulator (not blocking yet)"; fi
+            if [ "${{ matrix.api-level }}" = 34 ]; then bash examples/androiddemo/test-renderer.sh stipple-gl.apk "OpenGL ES" visual_output || echo "::warning::androiddemo didn't present with OpenGL ES on the emulator (not blocking yet)"; fi
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4

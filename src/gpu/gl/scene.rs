@@ -467,6 +467,9 @@ struct State {
     native: Native,
     /// The context's config (window-capable unless `Offscreen`).
     config: EGLConfig,
+    /// The 1×1 pbuffer the context is current on when it draws to no
+    /// window, where EGL takes no context without a surface (else null).
+    idle: EGLSurface,
     /// Window surfaces made, by window.
     windows: HashMap<usize, EGLSurface>,
     /// The windows whose surface has been swapped since it was made (a
@@ -548,7 +551,10 @@ impl State {
             #[cfg(target_os = "linux")]
             let dpy = dmabuf::on_main_device(dpy);
             let ctx = eglGetCurrentContext();
-            Self::build(dpy, ctx, Native::Offscreen, core::ptr::null_mut())
+            let mut state = Self::build(dpy, ctx, Native::Offscreen, core::ptr::null_mut())?;
+            // Current on a pbuffer where it can't go without a surface.
+            state.idle = eglGetCurrentSurface(EGL_DRAW);
+            Ok(state)
         }
     }
 
@@ -562,38 +568,51 @@ impl State {
                 return Err(format!("eglInitialize failed: {:#x}", eglGetError()));
             }
             eglBindAPI(EGL_OPENGL_ES_API);
-            let attribs: [EGLint; 11] = [
-                EGL_SURFACE_TYPE,
-                EGL_WINDOW_BIT,
-                EGL_RENDERABLE_TYPE,
-                EGL_OPENGL_ES2_BIT,
-                EGL_RED_SIZE,
-                8,
-                EGL_GREEN_SIZE,
-                8,
-                EGL_BLUE_SIZE,
-                8,
-                EGL_NONE,
-            ];
-            let mut configs = [core::ptr::null_mut(); 64];
-            let mut n: EGLint = 0;
-            if eglChooseConfig(dpy, attribs.as_ptr(), configs.as_mut_ptr(), 64, &mut n) == 0 {
-                return Err(format!("eglChooseConfig failed: {:#x}", eglGetError()));
-            }
+            // A config that makes pbuffers too where the context can't go
+            // without a surface (the Android emulator's EGL), for drawing
+            // to no window ([`make_current_offscreen`]).
+            let surfaceless = super::has_egl_extension(dpy, "EGL_KHR_surfaceless_context");
+            let kinds: &[EGLint] = if surfaceless {
+                &[EGL_WINDOW_BIT]
+            } else {
+                &[EGL_WINDOW_BIT | EGL_PBUFFER_BIT, EGL_WINDOW_BIT]
+            };
             // The first config the window takes (on X11, the one of the
             // window's visual).
-            let (config, surface) = configs[..n.max(0) as usize]
-                .iter()
-                .find_map(|&c| {
+            let mut found = None;
+            for &kind in kinds {
+                let attribs: [EGLint; 11] = [
+                    EGL_SURFACE_TYPE,
+                    kind,
+                    EGL_RENDERABLE_TYPE,
+                    EGL_OPENGL_ES2_BIT,
+                    EGL_RED_SIZE,
+                    8,
+                    EGL_GREEN_SIZE,
+                    8,
+                    EGL_BLUE_SIZE,
+                    8,
+                    EGL_NONE,
+                ];
+                let mut configs = [core::ptr::null_mut(); 64];
+                let mut n: EGLint = 0;
+                if eglChooseConfig(dpy, attribs.as_ptr(), configs.as_mut_ptr(), 64, &mut n) == 0 {
+                    return Err(format!("eglChooseConfig failed: {:#x}", eglGetError()));
+                }
+                found = configs[..n.max(0) as usize].iter().find_map(|&c| {
                     let s = create_window_surface(dpy, c, layer);
                     (!s.is_null()).then_some((c, s))
-                })
-                .ok_or_else(|| {
-                    format!(
-                        "no EGL config makes a surface on the window: {:#x}",
-                        eglGetError()
-                    )
-                })?;
+                });
+                if found.is_some() {
+                    break;
+                }
+            }
+            let (config, surface) = found.ok_or_else(|| {
+                format!(
+                    "no EGL config makes a surface on the window: {:#x}",
+                    eglGetError()
+                )
+            })?;
             let ctx_attribs: [EGLint; 3] = [EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE];
             let ctx = eglCreateContext(dpy, config, core::ptr::null_mut(), ctx_attribs.as_ptr());
             if ctx.is_null() || eglMakeCurrent(dpy, surface, surface, ctx) == 0 {
@@ -613,6 +632,12 @@ impl State {
         }
     }
 
+    /// Make the context current drawing to no window (surfaceless, or on
+    /// its pbuffer).
+    unsafe fn make_current_offscreen(&mut self) -> bool {
+        unsafe { make_current_offscreen(self.dpy, self.config, self.ctx, &mut self.idle) }
+    }
+
     /// Let go of the context (and everything made in it) and its window
     /// surfaces; the display stays, as other users may share it.
     unsafe fn destroy(mut self) {
@@ -623,6 +648,9 @@ impl State {
             eglMakeCurrent(self.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             for &s in self.windows.values() {
                 eglDestroySurface(self.dpy, s);
+            }
+            if !self.idle.is_null() {
+                eglDestroySurface(self.dpy, self.idle);
             }
             eglDestroyContext(self.dpy, self.ctx);
         }
@@ -690,6 +718,7 @@ impl State {
                 ctx,
                 native,
                 config,
+                idle: core::ptr::null_mut(),
                 windows: HashMap::new(),
                 swapped: std::collections::HashSet::new(),
                 kept: KeptFrame::default(),
@@ -1609,13 +1638,7 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> Result<T, GpuError>) -> Result<T,
         }
         let state = slot.as_mut().unwrap();
         unsafe {
-            if eglMakeCurrent(
-                state.dpy,
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                state.ctx,
-            ) == 0
-            {
+            if !state.make_current_offscreen() {
                 return Err(GpuError::Lost(format!(
                     "eglMakeCurrent failed: {:#x}",
                     eglGetError()
@@ -1748,7 +1771,7 @@ fn with_window<T>(
                 let e = eglGetError();
                 // The window is gone or broken: its surface goes too.
                 state.windows.remove(&key);
-                eglMakeCurrent(state.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, state.ctx);
+                state.make_current_offscreen();
                 eglDestroySurface(state.dpy, surface);
                 return Err(GpuError::Lost(format!("eglMakeCurrent failed: {e:#x}")));
             }
@@ -1816,7 +1839,7 @@ impl Executor for GlExecutor {
             {
                 state.swapped.remove(&key);
                 unsafe {
-                    eglMakeCurrent(state.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, state.ctx);
+                    state.make_current_offscreen();
                     eglDestroySurface(state.dpy, surface);
                 }
             }

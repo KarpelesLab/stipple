@@ -46,6 +46,7 @@ const EGL_RED_SIZE: EGLint = 0x3024;
 const EGL_GREEN_SIZE: EGLint = 0x3023;
 const EGL_BLUE_SIZE: EGLint = 0x3022;
 const EGL_EXTENSIONS: EGLint = 0x3055;
+const EGL_DRAW: EGLint = 0x3059;
 const EGL_WIDTH: EGLint = 0x3057;
 const EGL_HEIGHT: EGLint = 0x3056;
 const EGL_PLATFORM_XCB_EXT: EGLenum = 0x31DC;
@@ -111,6 +112,12 @@ unsafe extern "C" {
     fn eglGetError() -> EGLint;
     fn eglQueryString(dpy: EGLDisplay, name: EGLint) -> *const c_char;
     fn eglGetCurrentContext() -> EGLContext;
+    fn eglGetCurrentSurface(readdraw: EGLint) -> EGLSurface;
+    fn eglCreatePbufferSurface(
+        dpy: EGLDisplay,
+        config: EGLConfig,
+        attrib_list: *const EGLint,
+    ) -> EGLSurface;
     fn eglDestroySurface(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
     fn eglDestroyContext(dpy: EGLDisplay, ctx: EGLContext) -> EGLBoolean;
     fn eglSwapBuffers(dpy: EGLDisplay, surface: EGLSurface) -> EGLBoolean;
@@ -381,13 +388,63 @@ unsafe fn egl_finish(dpy: EGLDisplay, surface_type: EGLint) -> Result<EGLDisplay
         if ctx.is_null() {
             return Err(format!("eglCreateContext failed: {:#x}", eglGetError()));
         }
-        if eglMakeCurrent(dpy, core::ptr::null_mut(), core::ptr::null_mut(), ctx) == 0 {
+        let mut idle = core::ptr::null_mut();
+        if !make_current_offscreen(dpy, config, ctx, &mut idle) {
             return Err(format!(
-                "eglMakeCurrent (surfaceless) failed: {:#x}",
+                "eglMakeCurrent (surfaceless, and on a pbuffer) failed: {:#x}",
                 eglGetError()
             ));
         }
         Ok(dpy)
+    }
+}
+
+/// Make `ctx` current with no window: without a surface where EGL takes
+/// that (`EGL_KHR_surfaceless_context`), else on a 1×1 pbuffer of `config`
+/// (kept in `idle` and used from then on): the Android emulator's EGL
+/// (`libEGL_emulation`) refuses a context with no surface (`EGL_BAD_MATCH`).
+/// Everything is drawn into framebuffer objects either way.
+unsafe fn make_current_offscreen(
+    dpy: EGLDisplay,
+    config: EGLConfig,
+    ctx: EGLContext,
+    idle: &mut EGLSurface,
+) -> bool {
+    unsafe {
+        if !idle.is_null() {
+            return eglMakeCurrent(dpy, *idle, *idle, ctx) != 0;
+        }
+        if has_egl_extension(dpy, "EGL_KHR_surfaceless_context")
+            && eglMakeCurrent(dpy, core::ptr::null_mut(), core::ptr::null_mut(), ctx) != 0
+        {
+            return true;
+        }
+        if config.is_null() {
+            return false;
+        }
+        let attribs: [EGLint; 5] = [EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE];
+        let surface = eglCreatePbufferSurface(dpy, config, attribs.as_ptr());
+        if surface.is_null() {
+            return false;
+        }
+        if eglMakeCurrent(dpy, surface, surface, ctx) == 0 {
+            eglDestroySurface(dpy, surface);
+            return false;
+        }
+        *idle = surface;
+        true
+    }
+}
+
+/// Whether `dpy` lists the EGL extension `name`.
+unsafe fn has_egl_extension(dpy: EGLDisplay, name: &str) -> bool {
+    unsafe {
+        let s = eglQueryString(dpy, EGL_EXTENSIONS);
+        !s.is_null()
+            && std::ffi::CStr::from_ptr(s)
+                .to_string_lossy()
+                .split(' ')
+                .any(|e| e == name)
     }
 }
 
