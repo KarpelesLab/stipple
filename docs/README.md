@@ -98,6 +98,7 @@ How to build, package and run on each platform, and what works there today.
 | App extensions and app groups' shared containers (`platform::shared_dir`) | — | — | `shared_dir` ¹⁰ | ✅ ⁸⁹ | — | — |
 | The app's own platform code and manifest entries (`cargo-stipple`) | — | — | — | — | Java, dex, manifest fragment ⁹⁰ | — |
 | Network status and changes (`platform::network`, `App::on_network`) | netlink, NetworkManager ⁹¹ | IP Helper ⁹¹ | Network.framework ⁹¹ | Network.framework ⁹¹ | `ConnectivityManager` ⁹¹ | `navigator.onLine` ⁹¹ |
+| Secure storage for secrets (`platform::secure_store`) | Secret Service ⁹² | Credential Manager ⁹² | Keychain ⁹² | Keychain ⁹² | Keystore ⁹² | ❌ |
 | Reference app (`examples/mediabrowser`): browse, sort, preview, play, accessible, four languages | ✅ ⁸⁵ | ✅ ⁸⁵ | ✅ ⁸⁵ | — | — | sample folder ⁸⁵ |
 
 ¹ Implemented, but CI only has 1x displays, so it hasn't been seen on a real high-DPI one.
@@ -773,6 +774,20 @@ off and on on local API 34 and 30 emulators, heard by androiddemo's hook
 (`nw_path_monitor`) and the web: build-checked; Windows read the runner's
 Ethernet as online in a CI trial run, and macOS reads its network in CI
 (not blocking). See [network.md](network.md).
+⁹² Small values (keys and tokens, up to 2560 bytes) by key, under the app's
+id: Keychain generic passwords readable after the first unlock and never
+restored to another device (macOS: the data protection keychain for a
+signed app, the login keychain for an unsigned build), an optional keychain
+access group shared with an app extension; on Android, files in
+`no_backup/` sealed with AES-GCM by an `AndroidKeyStore` key (StrongBox
+when there is one); Windows Credential Manager; the Secret Service over
+D-Bus on Linux, unlocking through its prompt, and an error rather than a
+plain file without one. CI runs the Linux checks against GNOME Keyring in a
+private session (passing locally too), and the Android one on its
+emulators (passing on local API 34 and 30 emulators). In a CI trial run the
+Windows step passed, and the macOS selftest passed through the login keychain
+fallback; the iOS simulator's round trip is CI only. None blocks yet. See
+[secure-storage.md](secure-storage.md).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
@@ -791,6 +806,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
 - [Network status](network.md): online or offline, Wi-Fi, cellular or a cable, metered and Low Data Mode, and hearing the default network change
 - [In-app purchases](purchases.md): StoreKit and Google Play Billing, products, purchases, restoring, the mock store, and checking purchases on a server
+- [Secure storage](secure-storage.md): `platform::secure_store`: secrets in the Keychain, the Android Keystore, Credential Manager and the Secret Service, sharing them with an app extension, and what each platform protects
 - [Drag and drop](drag-and-drop.md): drop targets, their animated drag-over state, in-app drags, and dragging files and text out to other apps
 - [Timers and background work](async.md): `AppHandle`, threads and tokio
 - [Animation](animation.md): the display-driven frame clock, the spinner and hover fades,

@@ -4600,6 +4600,23 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           mkdir -p visual_output
           bash .github/scripts/network-linux.sh target/release/examples/netstatus 2>&1 | tee -a visual_output/network-linux.log
+      # platform::secure_store against GNOME Keyring's Secret Service in a
+      # private session bus (keyrings in a throwaway home): the example's
+      # selftest, secret-tool reading what Stipple stored and the reverse, a
+      # locked keyring answered as Locked, no Secret Service answered as
+      # unavailable with no file written, and the crate's round-trip test.
+      # Not blocking until it has passed on CI.
+      - name: Install GNOME Keyring and secret-tool
+        continue-on-error: true
+        run: sudo apt-get install -y gnome-keyring libsecret-tools
+
+      - name: Secure storage through the Secret Service (securestore selftest)
+        continue-on-error: true
+        env:
+          SECURE_STORE_CARGO_TEST: "1"
+        run: |
+          cargo build --release --example securestore
+          bash .github/scripts/secure-store-linux.sh target/release/examples/securestore
 
       - name: Upload logs
         uses: actions/upload-artifact@v4
@@ -4673,6 +4690,23 @@ jobs:
           timeout 60 ./target/release/examples/netstatus.exe --watch 3 2>&1 | tee net.log
           grep -q "netstatus: online=1" net.log
           grep -q "transport=Ethernet" net.log || echo "::warning::the runner's network isn't Ethernet"
+      # platform::secure_store through Credential Manager: the example's
+      # selftest, then a value stored by one process, listed by cmdkey as a
+      # generic credential, read back by another process, and removed. Not
+      # blocking until it has passed on CI.
+      - name: Secure storage in Credential Manager (securestore selftest)
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo build --release --example securestore
+          ex=./target/release/examples/securestore.exe
+          $ex selftest
+          $ex set ci-token "from one process"
+          MSYS_NO_PATHCONV=1 cmdkey /list:org.stipple.securestore/ci-token | tee cmdkey.txt
+          grep -q "org.stipple.securestore/ci-token" cmdkey.txt
+          [ "$($ex get ci-token | tr -d '\r')" = "from one process" ]
+          $ex remove ci-token
+          [ "$($ex get ci-token | tr -d '\r')" = none ]
 
       - name: Native message box (TaskDialogIndirect), answered by the self-test
         shell: powershell
@@ -4766,6 +4800,27 @@ jobs:
           perl -e 'alarm 60; exec @ARGV' ./target/release/examples/netstatus --watch 3 2>&1 | tee net.log
           grep -q "netstatus: online=1" net.log
           grep -q "generation=[1-9]" net.log
+      # platform::secure_store in the Keychain: an unsigned binary is refused
+      # the data protection keychain and falls back to the login keychain,
+      # where `security` finds the item one process stored and another
+      # process reads back. Not blocking until it has passed on CI.
+      - name: Secure storage in the Keychain (securestore selftest)
+        continue-on-error: true
+        env:
+          STIPPLE_DEBUG_SECURE_STORE: "1"
+        run: |
+          cargo build --release --example securestore
+          ex=./target/release/examples/securestore
+          perl -e 'alarm 60; exec @ARGV' $ex selftest 2>&1 | tee securestore.log
+          grep -q "securestore: selftest passed" securestore.log
+          perl -e 'alarm 30; exec @ARGV' $ex set ci-token "from one process"
+          # The item's attributes (not its secret: reading that from another
+          # binary, `security`, would ask the user through the item's ACL).
+          perl -e 'alarm 30; exec @ARGV' security find-generic-password -s org.stipple.securestore -a ci-token | tee found.txt
+          grep -q '"svce"<blob>="org.stipple.securestore"' found.txt
+          [ "$(perl -e 'alarm 30; exec @ARGV' $ex get ci-token)" = "from one process" ]
+          $ex remove ci-token
+          [ "$($ex get ci-token)" = none ]
 
       - name: Native message box (NSAlert sheet), answered by the self-test
         env:
@@ -4922,6 +4977,11 @@ jobs:
           grep -E "touchdemo: (app|dirs) " "$LOG" || true
           grep -qF 'touchdemo: app id=com.karpeleslab.stipple name="Stipple" version=1.0 build=1' "$LOG"
           grep -qE "touchdemo: dirs data=/.+/Library/Application Support cache=/.+/Library/Caches temp=/.+/tmp exist=true" "$LOG"
+          # platform::secure_store: a round trip through the Keychain (not
+          # blocking until it has passed on CI's simulators).
+          grep -E "touchdemo: secure store " "$LOG" || true
+          grep -qF "touchdemo: secure store set=Ok(()) same=Ok(true) removed=Ok(true)" "$LOG" \
+            || echo "::warning::the Keychain round trip didn't pass on the simulator (not blocking yet)"
           # platform::assets reads the bundle's assets/ (resourcePath): the
           # file's size and FNV-1a hash as on disk, the listings, a missing
           # file, and an SVG loaded off the UI thread (AppHandle::load_asset).
@@ -6028,6 +6088,8 @@ jobs:
             if [ "${{ matrix.api-level }}" = 34 ]; then bash .github/a11y/android/test-talkback.sh a11yprobe.apk visual_output; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash examples/androiddemo/test-renderer.sh stipple-vk.apk Vulkan visual_output || echo "::warning::androiddemo didn't present with Vulkan on the emulator (not blocking yet)"; fi
             if [ "${{ matrix.api-level }}" = 34 ]; then bash examples/androiddemo/test-renderer.sh stipple-gl.apk "OpenGL ES" visual_output || echo "::warning::androiddemo didn't present with OpenGL ES on the emulator (not blocking yet)"; fi
+            # platform::secure_store: a round trip through an AndroidKeyStore key, the value sealed in no_backup/, kept across process death, a changed file read as corrupt: not blocking until it has passed on CI's emulators.
+            bash examples/androiddemo/test-secure-store.sh stipple.apk visual_output || echo "::warning::test-secure-store.sh failed (non-blocking)"
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4

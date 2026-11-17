@@ -1209,6 +1209,24 @@ mod selftest {
         });
     }
 
+    /// `platform::secure_store` (the Keychain on iOS): a round trip of every
+    /// byte value, set, read back, removed.
+    fn log_secure_store() {
+        let store = stipple::platform::secure_store();
+        let value: Vec<u8> = (0..=255u8).collect();
+        let set = store.set("touchdemo-secret", &value);
+        let back = store
+            .get("touchdemo-secret")
+            .map(|v| v.as_deref() == Some(&value[..]));
+        let removed = store
+            .remove("touchdemo-secret")
+            .and_then(|()| store.get("touchdemo-secret"))
+            .map(|v| v.is_none());
+        log(&format!(
+            "touchdemo: secure store set={set:?} same={back:?} removed={removed:?}"
+        ));
+    }
+
     /// The bundle's packaged files (`Stipple.app/assets/`, which CI copies
     /// from `examples/touchdemo/assets`) through `platform::assets`: where
     /// they are, a whole file with its size and FNV-1a hash, the listings,
@@ -1268,6 +1286,7 @@ mod selftest {
             )),
             Err(e) => log(&format!("touchdemo: dirs unavailable: {e}")),
         }
+        log_secure_store();
         log_assets(handle);
         let mut steps = Steps(VecDeque::new());
 

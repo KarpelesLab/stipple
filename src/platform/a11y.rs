@@ -779,6 +779,8 @@ pub(crate) struct Message {
     pub(crate) interface: String,
     pub(crate) member: String,
     pub(crate) sender: String,
+    /// An `ERROR` message's name (`org.freedesktop.DBus.Error.ServiceUnknown`).
+    pub(crate) error_name: String,
     pub(crate) body: Vec<u8>,
 }
 
@@ -1311,6 +1313,7 @@ fn parse_fields(fields: &[u8]) -> Message {
                     1 => msg.path = value,
                     2 => msg.interface = value,
                     3 => msg.member = value,
+                    4 => msg.error_name = value,
                     7 => msg.sender = value,
                     _ => {}
                 }

@@ -136,6 +136,9 @@ pub mod scm;
 mod screen;
 /// Secure keyboard entry (macOS) while a password field has focus.
 mod secure;
+/// Secrets kept by the OS: the Keychain, the Android Keystore, Credential
+/// Manager, the Secret Service.
+pub(crate) mod secure_store;
 /// Opening URLs and files in the default app, notifications, and the plumbing
 /// behind tray icons.
 pub(crate) mod shell;
@@ -195,6 +198,7 @@ pub use pointer::{
 pub use saved_state::{save_state, take_restored_state};
 pub use screen::{Orientation, Orientations};
 pub use secure::{secure_input, set_secure_input};
+pub use secure_store::{SecureStore, SecureStoreError, secure_store};
 pub use shell::{
     Haptic, Notification, NotificationTime, ScheduledNotification, Share, ShareFile, ShareOutcome,
     cancel_all_notifications, cancel_notification, haptic, notify, open_path, open_url,

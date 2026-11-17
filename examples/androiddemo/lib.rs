@@ -481,6 +481,42 @@ mod app {
         );
     }
 
+    /// `platform::secure_store` (an AndroidKeyStore key sealing files in
+    /// the no-backup directory): what the last launch left (a launch count,
+    /// kept across process death, which examples/androiddemo/
+    /// test-secure-store.sh checks), then a round trip of every byte value.
+    fn log_secure_store() {
+        let store = stipple::platform::secure_store();
+        let previous = store.get("androiddemo-launches");
+        let launches = match &previous {
+            Ok(Some(v)) => String::from_utf8_lossy(v)
+                .trim_start_matches("androiddemo secret launch ")
+                .parse::<u32>()
+                .unwrap_or(0),
+            _ => 0,
+        } + 1;
+        println!(
+            "androiddemo: secure store previous={:?}",
+            previous.map(|v| v.map(|v| String::from_utf8_lossy(&v).into_owned()))
+        );
+        let set = store.set(
+            "androiddemo-launches",
+            format!("androiddemo secret launch {launches}").as_bytes(),
+        );
+        let value: Vec<u8> = (0..=255u8).collect();
+        let round_trip = store
+            .set("androiddemo-round-trip", &value)
+            .and_then(|()| store.get("androiddemo-round-trip"))
+            .map(|v| v.as_deref() == Some(&value[..]));
+        let removed = store
+            .remove("androiddemo-round-trip")
+            .and_then(|()| store.get("androiddemo-round-trip"))
+            .map(|v| v.is_none());
+        println!(
+            "androiddemo: secure store launch={launches} set={set:?} round_trip={round_trip:?} removed={removed:?}"
+        );
+    }
+
     /// FNV-1a, 32 bits: a hash CI recomputes from the file.
     fn fnv1a(bytes: &[u8]) -> u32 {
         bytes.iter().fold(0x811c_9dc5, |h, &b| {
@@ -541,6 +577,7 @@ mod app {
             "androiddemo: network online={} transport={:?} metered={} generation={}",
             net.online, net.transport, net.metered, net.generation
         );
+        log_secure_store();
         let state = State {
             taps: 0,
             ticks: 0,

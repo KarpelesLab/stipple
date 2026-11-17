@@ -261,7 +261,10 @@ Wayland, the id the app gave is also the window's app id
 
 There is no key-value settings store on top yet (`NSUserDefaults`,
 `SharedPreferences`, `localStorage`), and no web storage: write files in
-`dirs().config`.
+`dirs().config`. Secrets (tokens, private keys) don't belong in these
+files, which backups copy: keep them in
+[`platform::secure_store`](secure-storage.md), the Keychain, the Android
+Keystore, Credential Manager or the Secret Service.
 
 `lifecycle` prints both at start (`lifecycle: app ...`, `lifecycle: dirs ...`).
 CI checks the X11 job's XDG directories exist, `touchdemo`'s iOS self-test

@@ -1820,6 +1820,20 @@ Most input only works on X11 today.
   `navigator.connection` on the web. Run in a network namespace on Linux and
   on API 34 and 30 emulators locally; Windows, macOS, iOS and the web
   build-checked. See [docs/network.md](docs/network.md)._
+- ✅ Secure storage (`platform::secure_store`, #70): _small secrets by key
+  under the app's id. Keychain generic passwords through Security.framework
+  with hand-built CFDictionaries (`AfterFirstUnlockThisDeviceOnly`, an
+  optional access group for app extensions; macOS: the data protection
+  keychain, the login keychain for unsigned builds); an `AndroidKeyStore`
+  AES-GCM key (StrongBox when there is one) sealing files in
+  `getNoBackupFilesDir()`, over JNI; Windows Credential Manager; the Secret
+  Service over Stipple's D-Bus client with prompt-driven unlocking, and an
+  error rather than a file without one; unsupported on the web. CI runs it
+  against GNOME Keyring in a private session and on the Android emulators
+  (both passing locally), and on Windows and macOS (both passing in a CI
+  trial run, macOS through the login keychain) and the iOS simulator; not
+  blocking yet. User authentication (Face ID, fingerprint) per item is
+  still to do. See [docs/secure-storage.md](docs/secure-storage.md)._
 - ✅ Message boxes (`AppHandle::message`, `platform::dialog::message`): a
   question with a kind (icon), buttons, a default and a cancel button and an
   optional (secure) text field, answered asynchronously as a state update.

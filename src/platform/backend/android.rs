@@ -98,6 +98,8 @@ mod pick;
 mod requests;
 /// The system bars' insets, edge to edge, the orientation.
 mod screen;
+/// Secrets: values sealed by an `AndroidKeyStore` key, in no-backup files.
+pub(crate) mod secure_store;
 /// The share sheet: `ACTION_SEND` through the chooser.
 mod share;
 

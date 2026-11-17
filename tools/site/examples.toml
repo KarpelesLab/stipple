@@ -402,6 +402,10 @@ needs = "Linux: X11 with DRI3 and GBM."
 description = "A tray icon with a menu, a desktop notification, and opening URLs and files in their default apps."
 needs = "A desktop with a system tray (Linux, Windows or macOS)."
 
+[native.securestore]
+description = "Store, read back and remove secrets with platform::secure_store: the Keychain, Credential Manager or the Secret Service, from a terminal."
+needs = "The OS's secret store (the Keychain, Credential Manager, a Secret Service such as GNOME Keyring); the web has none."
+
 [native.filedialog]
 description = "Native file dialog via the xdg-desktop-portal FileChooser (D-Bus), with a built-in mock portal for headless verification."
 needs = "A desktop's file dialog (the portal on Linux, IFileDialog, NSOpenPanel). The web demo opens and saves files in the browser."
