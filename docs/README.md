@@ -39,7 +39,7 @@ How to build, package and run on each platform, and what works there today.
 | Timers and background updates | ✅ | ✅ | ✅ | ✅ ⁸¹ | ✅ ¹⁹ | ✅ ¹² |
 | Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ✅ ¹⁹ | ✅ ¹² |
-| OS-drawn controls (`Theme::native`) | — ² | ✅ | ✅ | ✅ | ❌ | ❌ |
+| OS-drawn controls (`Theme::native`) | — ² | ✅ ⁹³ | ✅ ⁹³ | ✅ ⁹³ | ❌ | ❌ |
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ✅ ²⁰ | ✅ ²¹ |
 | Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ✅ ⁵¹ | ✅ ²⁰ | ✅ ²¹ |
 | Theme changes cross-fade | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³¹ |
@@ -788,6 +788,14 @@ emulators (passing on local API 34 and 30 emulators). In a CI trial run the
 Windows step passed, and the macOS selftest passed through the login keychain
 fallback; the iOS simulator's round trip is CI only. None blocks yet. See
 [secure-storage.md](secure-storage.md).
+
+⁹³ In a window, buttons, switches, sliders and progress bars (and checkboxes
+and radio buttons on macOS) are the OS's real controls, live (`UIButton`,
+`NSSwitch`, a `BUTTON` child window...), with the OS's effects, input and
+accessibility; wherever one can't show (under an overlay, a transform or a
+fade, half out of a scroll container; off screen) and for text-field frames
+and `select`, the OS draws a picture of it instead. See
+[native-theme.md](native-theme.md#real-controls).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

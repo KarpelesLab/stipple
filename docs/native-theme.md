@@ -17,13 +17,18 @@ let app = App::new(state, view).theme(Theme::native());
 - **Moves like the platform**: the self-drawn widgets animate with the
   platform's durations and curves (Fluent, AppKit, UIKit, Material 3 or
   libadwaita; see [widgets.md](widgets.md#motion)).
-- **Has the OS draw the controls**, on Windows, macOS and iOS.
+- **Shows the OS's own controls**, on Windows, macOS and iOS: real ones in the
+  window, live, with the platform's effects (see [Real controls](#real-controls)),
+  and the OS's pictures of them wherever a live one can't show.
 
 ## OS-drawn controls
 
 For each control, the OS's own UI framework draws its chrome (bezel, check mark,
-switch, slider, text-field frame) into a bitmap, which Stipple draws as an image.
-Stipple still does layout, input, the caret and selection, and the labels.
+switch, slider, text-field frame). In a window, most controls are the OS's real
+ones ([below](#real-controls)); everywhere else (off screen, headless, in a
+GPU render without a window, under an overlay or a transform) the OS draws a
+picture of the control into a bitmap, which Stipple draws as an image, and
+Stipple does layout, input, the caret and selection, and the labels.
 
 | Control | Windows | macOS | iOS |
 |---|---|---|---|
@@ -45,6 +50,111 @@ new one on the theme's motion (see [widgets.md](widgets.md#motion)). Bitmaps are
 cached by control, state and size, so the OS is only asked again when one of
 those changes.
 
+## Real controls
+
+In a window on iOS, macOS and Windows, each OS-backed control is a real
+`UIView`, `NSView` or child `HWND` over the control's box, live: the OS
+draws it every frame with its own effects (iOS 26's and macOS 26's Liquid
+Glass, a switch's slide, a button's press, vibrancy), handles its touches
+and clicks, and speaks for it to screen readers. Stipple lays it out and
+says what it shows; the app's code doesn't change: `button(..)`,
+`switch(..)`, `slider(..)` still return Elements whose handlers run.
+
+| Control | Windows | macOS | iOS |
+|---|---|---|---|
+| `button`, `Button` (Primary, Secondary) | `BUTTON` | `NSButton` | `UIButton` (glass on iOS 26) |
+| `checkbox`, `radio` | picture ¹ | `NSButton` | self-drawn |
+| `switch` | self-drawn | `NSSwitch` | `UISwitch` |
+| `slider` | `msctls_trackbar32` | `NSSlider` | `UISlider` |
+| `progress_bar` | `msctls_progress32` | `NSProgressIndicator` | `UIProgressView` |
+| `text_field`, `text_area`, `number_input` | picture ² | picture ² | picture ² |
+| `select` | picture ³ | picture ³ | picture ³ |
+
+¹ A Win32 checkbox or radio button shows (and is named by) a text of its
+own, where Stipple draws the label beside the box. ² The field's editing
+(input methods, the caret, selection, the edit menu) stays Stipple's; only
+its frame is the OS's, as a picture. A real `UITextField` / `NSTextField` /
+`EDIT` taking over editing, kept in step with the field's
+[`TextInput`](text-editing.md), is the next step. ³ Its button shows two
+texts (the choice and a chevron); a real `NSPopUpButton` / `UIMenu` button
+would need the choices.
+
+### How it works
+
+It works like Flutter's platform views: a hybrid of Stipple's frame and the
+OS's controls over it.
+
+- **Planning, each frame** (`core::native_host`, platform-agnostic and
+  unit-tested). After layout, scrolling and the frame's animations, the App
+  walks the tree in paint order and decides which OS-drawn controls are live.
+  Each live one is marked on its node: the painter leaves it (and its label,
+  which is the OS control's title) out of the frame, and the window gets the
+  list of controls to show, each a `NativeView`: its kind and value
+  (checked, on, a slider's position), its frame in the window's logical
+  pixels, its title, the name a screen reader reads, light or dark, and its
+  direction.
+- **Identity.** A control is known across frames by its element's
+  [`key`](widgets.md), else its tap, drag or focus handle (as the
+  [cross-fades](#on-the-gpu) know it), else its place in the tree, together
+  with its kind. The window keeps one OS control per id: made the first time
+  it's listed, updated when what it shows changes (a switch the app turned
+  off slides off, with the OS's animation), destroyed when it's gone.
+- **Placing.** Each frame puts the control at its laid-out box: in points on
+  iOS and macOS (a subview of the app's view, above its Metal layer), in
+  physical pixels on Windows (the frame times the window's DPI scale, the
+  title in the app's text size at that DPI).
+- **Events.** A tap or click (`UIControlEventTouchUpInside`, an `NSControl`
+  action, `BN_CLICKED`) or a slider's move (`UIControlEventValueChanged`,
+  `WM_HSCROLL`) comes back as `Event::NativeView`, and the App runs the
+  handler of the element the control stands for: a button's tap handler, a
+  checkbox's or switch's row's (the box is part of a labeled row), a
+  slider's drag handler with the new position, as a tap or a drag there
+  would. The state is the app's: a switch the handler didn't turn on goes
+  back off on the next frame. The OS controls don't take the keyboard focus
+  (AppKit's refuse first responder, Win32's give it back): keys, Tab and the
+  focus ring stay Stipple's.
+- **Accessibility.** The OS control speaks for itself, and Stipple's tree
+  doesn't say it again: the node it stands for (the button, or the
+  checkbox's row) carries its id (`AccessNode::native_view`), and the bridge
+  exposes the OS control in its place, named with that node's name (VoiceOver
+  on iOS and macOS gets the `UISwitch` / `NSButton` in the view's elements),
+  or leaves the node out where the OS lists the control by itself (Win32's
+  child windows, under UI Automation).
+
+### When it's a picture instead
+
+The OS's controls sit above everything Stipple draws, so a control is live
+only where that's what the frame would show. It's the OS's picture of it (the
+path off screen rendering takes, and that every control took before) for as
+long as:
+
+- something drawn after it overlaps it, or something that takes input does:
+  an overlay, a menu, a dialog's scrim or a popup's click-catcher, a toast,
+  a drag image, a scroll bar, a badge;
+- it, or anything around it, is scaled, rotated or translucent: a page
+  transition, a fade, a theme cross-fade (a plain move it follows);
+- a clip cuts part of it off: a control half out of a scroll container is a
+  picture, cut at the edge, and live again once wholly in view (one wholly
+  out isn't shown at all). Clipping the live control itself, in a container
+  view per scroll viewport, is a later step;
+- it has the keyboard focus with the focus ring showing (the picture shows
+  the OS's focus look);
+- it's leaving (an exit animation) or off stage.
+
+The switch is per control and per frame, and the two look the same, so it
+doesn't show. On iOS a finger that goes down on a live button or switch and
+drags scrolls, as in a `UIScrollView` (a pan recognizer hands the drag to the
+app's view and the control doesn't fire); a slider keeps its drags.
+
+### Where it doesn't apply
+
+Off screen (`App::render_once`, `render_frame`, the GPU renders of
+`render_with`), headless and in tests there is no window, so every control is
+a picture, as before, and pixel tests and screenshots are unchanged. Linux,
+Android and the web keep Stipple's self-drawn controls. A window says whether
+it hosts OS controls with `Window::hosts_native_views`, and gets them with
+`Window::set_native_views`.
+
 How each platform draws them, and its quirks, is in the platform guides:
 [Windows](platforms/windows.md#os-drawn-controls), [macOS](platforms/macos.md#os-drawn-controls),
 [iOS](platforms/ios.md#os-drawn-controls).
@@ -62,6 +172,9 @@ with the same colors as on Linux.
 
 - **Other variants**: `Variant::Ghost` and `Variant::Danger` buttons have no OS
   equivalent and stay self-drawn.
+- **Buttons with more than a title**: a button whose content isn't a single
+  line of text (an icon, two texts) stays a picture: the OS control shows a
+  title.
 
 ## Following changes
 
@@ -86,10 +199,12 @@ keep it.
 
 ## On the GPU
 
-The native theme looks the same on every renderer. The OS draws each control
-into a bitmap once per control and value (checked, on, a slider's position),
-state (hovered, pressed, focused), light or dark, size in physical pixels
-and scale, and Stipple keeps those bitmaps. The software renderer copies
+The native theme looks the same on every renderer. Live controls are the
+OS's own views over the window, whichever renderer draws the frame under
+them. Where a control is a picture, the OS draws it into a bitmap once per
+control and value (checked, on, a slider's position), state (hovered,
+pressed, focused), light or dark, size in physical pixels and scale, and
+Stipple keeps those bitmaps. The software renderer copies
 them into the frame. The GPU renderers (`Renderer::Gpu`, `App::render_with` with
 `stipple::gpu::render_scene_scaled`; Metal, Direct3D 11, Vulkan, GLES) get
 the same bitmaps as images, and their image cache keys textures by the

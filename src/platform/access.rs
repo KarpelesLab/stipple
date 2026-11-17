@@ -127,6 +127,11 @@ pub struct A11yNode {
     pub placeholder: Option<String>,
     /// For a scroll container, where it is scrolled.
     pub scroll: Option<A11yScroll>,
+    /// The live OS control that stands for this node (see
+    /// [`NativeView`](crate::platform::native::NativeView)), by id: the
+    /// bridge exposes that control here, as the OS's own accessibility
+    /// does, instead of a node of its own.
+    pub native_view: Option<u64>,
     pub children: Vec<A11yNode>,
 }
 
@@ -149,6 +154,7 @@ impl A11yNode {
             labelled_by: None,
             placeholder: None,
             scroll: None,
+            native_view: None,
             children: Vec::new(),
         }
     }
@@ -156,6 +162,22 @@ impl A11yNode {
     /// Total node count (including this one), for tests/inspection.
     pub fn count(&self) -> usize {
         1 + self.children.iter().map(A11yNode::count).sum::<usize>()
+    }
+
+    /// This tree without the nodes live OS controls stand for (see
+    /// [`native_view`](Self::native_view)), for a bridge whose OS exposes
+    /// those controls by itself, beside the app's tree (Win32's child
+    /// windows, under UIA).
+    pub(crate) fn without_native_views(&self) -> A11yNode {
+        A11yNode {
+            children: self
+                .children
+                .iter()
+                .filter(|c| c.native_view.is_none())
+                .map(A11yNode::without_native_views)
+                .collect(),
+            ..self.clone()
+        }
     }
 
     /// The hint a screen reader reads with this node, when it has one: a
@@ -390,6 +412,32 @@ mod tests {
 
     fn leaf(role: A11yRole, name: &str) -> A11yNode {
         A11yNode::new(role, name, (0.0, 0.0, 0.0, 0.0))
+    }
+
+    #[test]
+    fn the_nodes_live_controls_stand_for_can_be_left_out() {
+        let tree = A11yNode {
+            children: vec![
+                A11yNode {
+                    native_view: Some(7),
+                    ..leaf(A11yRole::Button, "Save")
+                },
+                A11yNode {
+                    children: vec![
+                        leaf(A11yRole::Text, "Volume"),
+                        A11yNode {
+                            native_view: Some(8),
+                            ..leaf(A11yRole::Slider, "Volume")
+                        },
+                    ],
+                    ..leaf(A11yRole::Group, "")
+                },
+            ],
+            ..leaf(A11yRole::Window, "App")
+        };
+        let left = tree.without_native_views();
+        assert_eq!(left.count(), 3);
+        assert_eq!(left.children[0].children[0].name, "Volume");
     }
 
     #[test]

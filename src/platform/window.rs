@@ -490,6 +490,19 @@ pub trait Window {
     /// descendants as native accessibility elements.
     fn set_accessibility_tree(&self, _root: &crate::platform::access::A11yNode) {}
 
+    /// Whether this window can show real OS controls over its content
+    /// (UIKit, AppKit and Win32 windows): under
+    /// [`Theme::native`](crate::style::Theme::native) the App then hands it
+    /// the live ones with [`set_native_views`](Self::set_native_views).
+    fn hosts_native_views(&self) -> bool {
+        false
+    }
+
+    /// Show exactly these live OS controls over the content, in paint order
+    /// (see `docs/native-theme.md`, *Real controls*). What the user does to
+    /// them comes back as [`Event::NativeView`](crate::platform::Event::NativeView).
+    fn set_native_views(&self, _views: &[crate::platform::native::NativeView]) {}
+
     /// Create a [`Surface`] that presents into this window's drawable.
     fn create_surface(&self) -> Box<dyn Surface>;
 

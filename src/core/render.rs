@@ -613,6 +613,8 @@ fn layout_element(
         wrap: el.wrap,
         native: el.native,
         native_from: None,
+        native_live: None,
+        native_a11y: None,
         scroll: el.scroll,
         scroll_horizontal: el.scroll.is_some()
             && matches!(
@@ -1373,7 +1375,8 @@ fn drawn_near(node: &LayoutNode, visible: Rect) -> bool {
 fn paint_in(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible: Option<Rect>) {
     let affine = node.affine();
     let translucent = node.opacity < 1.0;
-    if node.opacity <= 0.0 {
+    // A live OS control shows itself, over the frame (`core::native_host`).
+    if node.opacity <= 0.0 || node.native_live.is_some() {
         return;
     }
     if affine.is_none() && !translucent {

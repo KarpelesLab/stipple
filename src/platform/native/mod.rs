@@ -22,6 +22,45 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[allow(unsafe_code)]
 pub(crate) mod objc;
 
+// Kept by the backends that host OS controls (and the tests).
+#[cfg_attr(
+    not(any(target_os = "ios", target_os = "macos", target_os = "windows")),
+    allow(dead_code)
+)]
+mod views;
+pub use views::{LiveControl, NativeView, NativeViewEvent, live_controls, poke_control};
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "windows"))]
+pub(crate) use views::{ViewBackend, ViewSet};
+
+/// The live controls of the windows that host them (see [`views`]).
+#[cfg(target_os = "ios")]
+#[allow(unsafe_code)]
+#[path = "ios_views.rs"]
+pub(crate) mod os_views;
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+#[path = "macos_views.rs"]
+pub(crate) mod os_views;
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+#[path = "windows_views.rs"]
+pub(crate) mod os_views;
+#[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "windows")))]
+pub(crate) mod os_views {
+    //! No window here hosts OS controls.
+    pub(crate) fn live_controls() -> Vec<super::LiveControl> {
+        Vec::new()
+    }
+    pub(crate) fn poke(_id: u64, _value: Option<f64>) -> bool {
+        false
+    }
+    /// What a window here would show live: no window does, but the
+    /// planning (and its tests) runs the same.
+    pub(crate) fn live_kind(control: super::NativeControl) -> bool {
+        !matches!(control, super::NativeControl::TextField)
+    }
+}
+
 #[cfg(target_os = "windows")]
 #[allow(unsafe_code)]
 #[path = "windows.rs"]

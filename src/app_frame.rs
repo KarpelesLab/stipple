@@ -43,6 +43,11 @@ impl<S: 'static> Pane<S> {
         {
             return None;
         }
+        // Something moving may move a live OS control, or move over one:
+        // the frame is planned again (`core::native_host`).
+        if self.native_host.any_live() && self.transitions.animating() {
+            return None;
+        }
         let painted = self.transitions.advance(now);
         let mut rects = Vec::new();
         if !painted.is_empty() {

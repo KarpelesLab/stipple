@@ -229,6 +229,10 @@ pub struct AccessNode {
     /// For a scroll container (an [`Element::scrollable`](crate::core::Element::scrollable)
     /// group, or the list, tree or table around one), where it is scrolled.
     pub scroll: Option<AccessScroll>,
+    /// When a live OS control stands for this node (under
+    /// [`Theme::native`](crate::style::Theme::native), in a window that
+    /// hosts them), its id: the platform exposes that control here.
+    pub native_view: Option<u64>,
     pub children: Vec<AccessNode>,
 }
 
@@ -243,6 +247,14 @@ fn text_of(node: &LayoutNode) -> String {
         Some(NodeContent::Text { text, style, .. }) => style.plain(text, 0..text.len()),
         _ => String::new(),
     }
+}
+
+/// The name a screen reader reads for `node`: its label, or its text.
+pub(crate) fn name_of(node: &LayoutNode) -> String {
+    node.semantics
+        .as_ref()
+        .and_then(|s| s.label.clone())
+        .unwrap_or_else(|| text_of(node))
 }
 
 /// The first text under `node`, skipping descendants that are controls of their
@@ -362,8 +374,13 @@ fn build(node: &LayoutNode, cx: &Ctx<'_>, is_root: bool) -> AccessNode {
         labelled_by: sem.and_then(|s| s.labelled_by.clone()),
         placeholder: sem.and_then(|s| s.placeholder.clone()),
         scroll: scroll_of(node, cx.offsets),
+        native_view: node.native_a11y.or(node.native_live),
         children,
     };
+    // A live OS control speaks for all of it (a button's label too).
+    if out.native_view.is_some() {
+        out.children.clear();
+    }
     hoist_scroll(&mut out);
     out
 }
@@ -429,7 +446,10 @@ impl AccessNode {
     /// A container with no name and no children carries no semantics, so it can
     /// be dropped from the tree.
     fn is_prunable(&self) -> bool {
-        self.role == Role::Group && self.name.is_empty() && self.children.is_empty()
+        self.role == Role::Group
+            && self.name.is_empty()
+            && self.children.is_empty()
+            && self.native_view.is_none()
     }
 
     /// Total node count (including this one), for tests/inspection.

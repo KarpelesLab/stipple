@@ -542,6 +542,16 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   (offscreen UIKit controls) the OS draws buttons, checkboxes, radio buttons,
   switches, sliders, progress bars and text-field frames into cached bitmaps.
   `examples/nativegallery` shows them, and CI screenshots it per platform.
+- ✅ **Real OS controls** under `Theme::native()`, in a window on iOS, macOS
+  and Windows: buttons, switches, sliders and progress bars (and checkboxes and
+  radio buttons on macOS) are live `UIView`s / `NSView`s / child `HWND`s over
+  their laid-out boxes, keyed per element, their state pushed each frame and
+  their taps, clicks and moves routed to the elements' handlers; the OS's
+  accessibility speaks for them. A control under something Stipple draws, under
+  a transform or fade, or half out of a scroll container is the OS's picture
+  for that time (`core::native_host`). Next: real text fields taking over
+  editing, `select` as a popup button, and clipping live controls in a
+  container view per scroll viewport. See `docs/native-theme.md`.
 - ✅ **High-DPI** on Windows (per-monitor v2), macOS (`backingScaleFactor`), iOS
   (`UIScreen.scale`), X11 (`Xft.dpi`) and Wayland (output scale). X11 and Wayland
   run at 2x in CI; Windows and macOS await a real high-DPI display.

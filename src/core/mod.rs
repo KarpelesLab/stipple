@@ -37,6 +37,7 @@ pub(crate) mod interact;
 pub(crate) mod keys;
 pub(crate) mod menu;
 pub(crate) mod native_fade;
+pub(crate) mod native_host;
 mod pointer;
 mod pointer_events;
 pub(crate) mod presence;

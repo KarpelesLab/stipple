@@ -494,6 +494,15 @@ pub enum Event {
     /// time the app goes to the background, the web when the page hides or
     /// unloads.
     SaveState,
+    /// The user acted on a live OS control (under
+    /// [`Theme::native`](crate::style::Theme::native), in a window that
+    /// hosts real controls; see
+    /// [`Window::set_native_views`](crate::platform::Window::set_native_views)):
+    /// the App runs the handler of the element it stands for.
+    NativeView {
+        id: u64,
+        event: crate::platform::native::NativeViewEvent,
+    },
     /// A gamepad connected or disconnected, or one of its buttons or axes
     /// changed (see [`gamepad`](crate::gamepad)). Only sent once
     /// gamepad support has started ([`gamepad::start`](crate::gamepad::start)).

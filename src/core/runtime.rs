@@ -1567,6 +1567,13 @@ pub struct LayoutNode {
     /// the picture it fades from, drawn over [`native`](Self::native) with
     /// this opacity (from 1 down to 0).
     pub(crate) native_from: Option<(crate::platform::native::NativeDeco, f32)>,
+    /// When the OS shows this control live, as a real control over its box
+    /// (see `core::native_host`): its id. The painter skips the node and its
+    /// subtree (its label is the OS control's title).
+    pub(crate) native_live: Option<u64>,
+    /// The live OS control a screen reader reads this node as (a
+    /// checkbox's row, whose box is the control), by id.
+    pub(crate) native_a11y: Option<u64>,
     /// Scroll container handle: wheel events over this node adjust the app's
     /// offset for `id`, and its children are laid out at natural size + shifted.
     pub(crate) scroll: Option<ScrollId>,
@@ -1657,6 +1664,8 @@ impl LayoutNode {
             wrap: false,
             native: None,
             native_from: None,
+            native_live: None,
+            native_a11y: None,
             scroll: None,
             scroll_horizontal: false,
             clip: false,
@@ -2236,6 +2245,8 @@ mod tests {
             wrap: false,
             native: None,
             native_from: None,
+            native_live: None,
+            native_a11y: None,
             scroll: None,
             scroll_horizontal: false,
             clip: false,
@@ -2303,6 +2314,8 @@ mod tests {
             wrap: false,
             native: None,
             native_from: None,
+            native_live: None,
+            native_a11y: None,
             scroll: None,
             scroll_horizontal: false,
             clip: false,

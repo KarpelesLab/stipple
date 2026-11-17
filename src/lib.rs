@@ -48,6 +48,7 @@ mod app_gpu;
 mod app_keys;
 mod app_lifecycle;
 mod app_locale;
+mod app_native_views;
 mod app_network;
 mod app_occlusion;
 mod app_pointer;
@@ -92,6 +93,8 @@ mod touch_tests;
 mod web_app;
 #[doc(hidden)]
 pub use web_app::WebEntry;
+#[cfg(test)]
+mod native_views_tests;
 pub mod widgets;
 #[cfg(test)]
 mod window_tests;
@@ -543,6 +546,10 @@ struct Pane<S> {
     presence: crate::core::presence::Presence,
     // OS-drawn controls fading between their states' pictures.
     native_fades: crate::core::native_fade::NativeFades,
+    // The OS controls shown live over the window (see `app_native_views`),
+    // and whether its window hosts them.
+    native_host: crate::core::native_host::NativeHost,
+    hosts_native: bool,
     watch: crate::core::interact::Watch,
     pointer_in: bool,
     press_at: Option<Point>,
@@ -643,6 +650,8 @@ impl<S: 'static> Pane<S> {
             transitions: Default::default(),
             presence: Default::default(),
             native_fades: Default::default(),
+            native_host: Default::default(),
+            hosts_native: false,
             watch: Default::default(),
             pointer_in: false,
             press_at: None,
@@ -1639,6 +1648,7 @@ impl<S: 'static> Pane<S> {
         if self.animating {
             crate::platform::frame::request();
         }
+        self.plan_native_views(&mut tree);
         self.tree = Some(tree);
         self.dirty = false;
         if entered.is_some() {
@@ -3407,6 +3417,7 @@ impl<S: 'static> App<S> {
             let pane = &mut panes[idx];
             let scale = window.scale_factor();
             pane.scale = scale;
+            pane.hosts_native = window.hosts_native_views();
             // Only canvases or viewport content changed: paint the tree on
             // screen again, without rebuilding the view.
             // A new title shows in the title bar Stipple may draw around the
@@ -3455,6 +3466,8 @@ impl<S: 'static> App<S> {
                     (scene, pane.take_damage())
                 }
             };
+            // The live OS controls of the tree on screen, built here or not.
+            pane.sync_native_views(window);
             let force = force || retitled || std::mem::take(&mut pane.gpu.force);
             // Straight to the window's GPU layer, when the window draws on
             // the GPU and has one.
@@ -3871,6 +3884,12 @@ impl<S: 'static> App<S> {
                     let at = self.panes[idx].last_pointer;
                     let (dx, dy) = delta.in_pixels();
                     if self.try_forward_wheel(idx, at, dy) || self.pane_scroll_by(idx, dx, dy) {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::NativeView { id, event } => {
+                    if self.pane_native_view(idx, id, event) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -4815,6 +4834,7 @@ pub(crate) fn to_platform_a11y(node: &crate::core::AccessNode) -> crate::platfor
             horizontal: s.horizontal,
             rtl: s.rtl,
         }),
+        native_view: node.native_view,
         children: node.children.iter().map(to_platform_a11y).collect(),
     }
 }
