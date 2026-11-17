@@ -5620,6 +5620,23 @@ mod tests {
         app.touch(finger(TouchPhase::Ended, to));
     }
 
+    /// [`swipe`] with no pause between moves, then the finger held still
+    /// before it lifts: a drag that never flings, however slowly the moves
+    /// run (their timing is the wall clock's).
+    fn drag_and_hold(app: &mut App<Vec<usize>>, from: f64, to: f64) {
+        use crate::platform::TouchPhase;
+        app.touch(finger(TouchPhase::Started, from));
+        for i in 1..=5 {
+            app.touch(finger(
+                TouchPhase::Moved,
+                from + (to - from) * i as f64 / 5.0,
+            ));
+        }
+        // Past the window the release velocity is measured over.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        app.touch(finger(TouchPhase::Ended, to));
+    }
+
     #[test]
     fn a_tap_on_a_touch_screen_still_clicks() {
         use crate::platform::TouchPhase;
@@ -5637,8 +5654,8 @@ mod tests {
     fn a_finger_drag_scrolls_the_list_without_clicking() {
         let mut app = list_app();
         app.render_once();
-        // Up 100 px, slowly enough not to fling.
-        swipe(&mut app, 150.0, 50.0, std::time::Duration::ZERO);
+        // Up 100 px, held still before lifting: no fling.
+        drag_and_hold(&mut app, 150.0, 50.0);
         assert!(app.state().is_empty(), "the pressed row didn't click");
         assert_eq!(list_offset(&app), 100.0 - crate::core::touch::SLOP);
         assert!(!app.advance_fling());
@@ -5647,7 +5664,7 @@ mod tests {
         app.click_at(Point::new(100.0, 25.0));
         assert_eq!(app.state(), &[2]);
         // Dragging down past the top stops at the top.
-        swipe(&mut app, 20.0, 190.0, std::time::Duration::ZERO);
+        drag_and_hold(&mut app, 20.0, 190.0);
         assert_eq!(list_offset(&app), 0.0);
         // The mouse wheel still scrolls as before.
         app.hover_at(Point::new(100.0, 100.0));
