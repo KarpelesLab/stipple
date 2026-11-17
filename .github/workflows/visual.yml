@@ -3113,6 +3113,17 @@ jobs:
           .github\scripts\capture-window.ps1 .\target\release\examples\window.exe visual_output\stipple-windows.png
           .github\scripts\capture-window.ps1 .\target\release\examples\nativegallery.exe visual_output\stipple-windows-native.png
 
+      # The native theme's real controls (docs/native-theme.md, "Real
+      # controls"): nativegallery's self-test reads its BUTTON, trackbar and
+      # progress child windows back and acts on them, a real click on Save
+      # (SendInput) reaches the app, a panel over the controls turns them into
+      # pictures (screenshotted) and back, and UI Automation sees Save once.
+      # Non-blocking until it has passed here a while.
+      - name: Real OS controls (nativegallery self-test, a click, UIA)
+        continue-on-error: true
+        shell: powershell
+        run: .github\scripts\native-views-windows.ps1
+
       # A mirrored (right-to-left) UI: bididemo --mirror-check renders it off
       # screen with the system font and checks it is laid out from the right
       # (the same checks the X11 job makes on its screenshot); then a real
@@ -4131,6 +4142,36 @@ jobs:
           screencapture -x -o -l "$win" visual_output/stipple-macos-native.png
           kill "$PID" 2>/dev/null || true
 
+      # The native theme's real controls (docs/native-theme.md, "Real
+      # controls"): nativegallery's self-test reads its NSButtons, NSSwitch,
+      # NSSlider and NSProgressIndicator back from the view, checks a click at
+      # each one's middle lands on it, acts on them (performClick:) and sees
+      # the app's handlers run, opens a panel over them (screenshotted: they
+      # are pictures under it) and checks a half-hidden list row is a
+      # picture. The accessibility dump (STIPPLE_COCOA_A11Y) must name Save
+      # once. Non-blocking until it has passed here a while.
+      - name: Real OS controls (nativegallery self-test)
+        continue-on-error: true
+        env:
+          STIPPLE_COCOA_A11Y: "1"
+          NATIVEGALLERY_SELFTEST: "1"
+        run: |
+          ./target/release/examples/nativegallery > visual_output/native-views.log 2>&1 &
+          PID=$!
+          for i in $(seq 1 60); do
+            grep -q 'panel up' visual_output/native-views.log && break
+            sleep 1
+          done
+          win=$(sed -n 's/^Cocoa window number: //p' visual_output/native-views.log)
+          screencapture -x -o -l "$win" visual_output/stipple-macos-native-panel.png || true
+          for i in $(seq 1 60); do
+            grep -q 'selftest:' visual_output/native-views.log && break
+            sleep 1
+          done
+          kill "$PID" 2>/dev/null || true
+          cat visual_output/native-views.log
+          grep -q 'nativegallery selftest: passed' visual_output/native-views.log
+
       # A mirrored (right-to-left) UI: bididemo --mirror-check renders it off
       # screen with the system font and checks it is laid out from the right
       # (the same checks the X11 job makes on its screenshot); then a real
@@ -4928,6 +4969,34 @@ jobs:
           xcrun simctl launch "$DEV" com.karpeleslab.stipple
           sleep 10
           xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-native.png
+
+      # The native theme's real controls (docs/native-theme.md, "Real
+      # controls"): nativegallery's self-test reads its UIButtons, UISwitch,
+      # UISlider and UIProgressView back from the view, checks a tap at each
+      # one's middle lands on it (hitTest:), acts on them
+      # (sendActionsForControlEvents:) and sees the app's handlers run, opens
+      # a panel over them (screenshotted: they are pictures under it), checks
+      # a half-hidden list row is a picture, and reads the view's
+      # accessibility elements as VoiceOver does: Save and Sync once each, as
+      # the UIKit controls. Non-blocking until it has passed here a while.
+      - name: Real OS controls (nativegallery self-test)
+        continue-on-error: true
+        run: |
+          xcrun simctl terminate "$DEV" com.karpeleslab.stipple || true
+          SIMCTL_CHILD_NATIVEGALLERY_SELFTEST=1 xcrun simctl launch "$DEV" com.karpeleslab.stipple
+          DATA=$(xcrun simctl get_app_container "$DEV" com.karpeleslab.stipple data)
+          for i in $(seq 1 60); do
+            grep -q 'panel up' "$DATA/tmp/nativegallery.log" 2>/dev/null && break
+            sleep 1
+          done
+          sleep 1
+          xcrun simctl io "$DEV" screenshot visual_output/stipple-ios-native-panel.png || true
+          for i in $(seq 1 60); do
+            grep -q 'selftest:' "$DATA/tmp/nativegallery.log" 2>/dev/null && break
+            sleep 1
+          done
+          cat "$DATA/tmp/nativegallery.log"
+          grep -q 'nativegallery selftest: passed' "$DATA/tmp/nativegallery.log"
 
       # The simulator can't script touches or typing, so touchdemo drives
       # itself (TOUCHDEMO_SELFTEST): it taps its text field, types through the
