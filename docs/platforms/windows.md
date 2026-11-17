@@ -34,6 +34,21 @@ drawn twice, over black and over white, to recover its alpha.
   the light class is used.
 - The text field draws its own focus, so Stipple's focus ring is left off it.
 
+In a window, buttons, sliders and progress bars are real child windows
+instead (`BUTTON`, `msctls_trackbar32`, `msctls_progress32`; see
+[Real controls](../native-theme.md#real-controls)), live: made under an
+activation context for Common Controls 6 (the manifest `shell32.dll` carries,
+so they get the visual styles without the app shipping a manifest), placed at
+the control's frame in physical pixels, in Segoe UI at the app's text size and the window's DPI, and
+`DarkMode_Explorer`-themed in dark mode. The window clips them out of its own
+painting (`WS_CLIPCHILDREN`) and answers their `WM_PRINTCLIENT` with its
+frame, which is what shows behind a themed button's rounded corners. A click
+(`BN_CLICKED`) or a slider's move (`WM_HSCROLL`) reaches the app as the
+element's tap or drag, and the keyboard focus goes back to the window. Under
+UI Automation each is its child window's element, so the app's tree leaves its
+node out. Checkboxes and radio buttons stay pictures (a Win32 one shows and is
+named by a text of its own, where Stipple draws the label beside the box).
+
 ## Fonts
 
 `Font::system_default()` loads Segoe UI, falling back to Arial, with Segoe UI

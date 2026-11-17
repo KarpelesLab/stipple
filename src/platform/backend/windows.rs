@@ -122,6 +122,8 @@ const WM_DPICHANGED: u32 = 0x02E0;
 const WM_QUIT: u32 = 0x0012;
 /// A menu item was picked (`HIWORD(wParam)` 0, `lParam` 0 for menus).
 const WM_COMMAND: u32 = 0x0111;
+const WM_HSCROLL: u32 = 0x0114;
+const WM_PRINTCLIENT: u32 = 0x0318;
 const MF_STRING: u32 = 0x0000;
 const MF_GRAYED: u32 = 0x0001;
 const MF_CHECKED: u32 = 0x0008;
@@ -1059,6 +1061,53 @@ fn icon_bits(rgba: &[u8], w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
     (bgra, mask)
 }
 
+/// Copy `hwnd`'s frame (the software framebuffer) into `hdc`, for
+/// `WM_PAINT` and for a child control's `WM_PRINTCLIENT`.
+unsafe fn blit_frame(hwnd: Hwnd, hdc: Handle) {
+    CTX.with(|c| {
+        let c = c.borrow();
+        let Some(c) = c.wins.get(&(hwnd as usize)) else {
+            return;
+        };
+        if !c.fb.is_empty() && !c.gpu {
+            let bmi = BitmapInfo {
+                header: BitmapInfoHeader {
+                    bi_size: core::mem::size_of::<BitmapInfoHeader>() as u32,
+                    bi_width: c.fb_w,
+                    // Negative height => top-down DIB (row 0 is the top).
+                    bi_height: -c.fb_h,
+                    bi_planes: 1,
+                    bi_bit_count: 32,
+                    bi_compression: BI_RGB,
+                    bi_size_image: 0,
+                    bi_x_pels_per_meter: 0,
+                    bi_y_pels_per_meter: 0,
+                    bi_clr_used: 0,
+                    bi_clr_important: 0,
+                },
+                colors: [0],
+            };
+            unsafe {
+                StretchDIBits(
+                    hdc,
+                    0,
+                    0,
+                    c.fb_w,
+                    c.fb_h,
+                    0,
+                    0,
+                    c.fb_w,
+                    c.fb_h,
+                    c.fb.as_ptr() as *const c_void,
+                    &bmi,
+                    DIB_RGB_COLORS,
+                    SRCCOPY,
+                );
+            }
+        }
+    });
+}
+
 unsafe extern "system" fn wnd_proc(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresult {
     // Events the message produces go to this window.
     with_current(hwnd, || unsafe { handle_message(hwnd, msg, wp, lp) })
@@ -1139,48 +1188,7 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
         WM_PAINT => {
             let mut ps: PaintStruct = unsafe { std::mem::zeroed() };
             let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
-            CTX.with(|c| {
-                let c = c.borrow();
-                let Some(c) = c.wins.get(&(hwnd as usize)) else {
-                    return;
-                };
-                if !c.fb.is_empty() && !c.gpu {
-                    let bmi = BitmapInfo {
-                        header: BitmapInfoHeader {
-                            bi_size: core::mem::size_of::<BitmapInfoHeader>() as u32,
-                            bi_width: c.fb_w,
-                            // Negative height => top-down DIB (row 0 is the top).
-                            bi_height: -c.fb_h,
-                            bi_planes: 1,
-                            bi_bit_count: 32,
-                            bi_compression: BI_RGB,
-                            bi_size_image: 0,
-                            bi_x_pels_per_meter: 0,
-                            bi_y_pels_per_meter: 0,
-                            bi_clr_used: 0,
-                            bi_clr_important: 0,
-                        },
-                        colors: [0],
-                    };
-                    unsafe {
-                        StretchDIBits(
-                            hdc,
-                            0,
-                            0,
-                            c.fb_w,
-                            c.fb_h,
-                            0,
-                            0,
-                            c.fb_w,
-                            c.fb_h,
-                            c.fb.as_ptr() as *const c_void,
-                            &bmi,
-                            DIB_RGB_COLORS,
-                            SRCCOPY,
-                        );
-                    }
-                }
-            });
+            unsafe { blit_frame(hwnd, hdc) };
             unsafe { EndPaint(hwnd, &ps) };
             // Painted: maybe uncloaked.
             occlusion::refresh(hwnd);
@@ -1414,6 +1422,30 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
             push_event(Event::MenuCommand((wp & 0xffff) as u32));
             0
         }
+        // A live OS control's click or move (`native::os_views`).
+        WM_COMMAND | WM_HSCROLL if lp != 0 => {
+            let child = lp as Hwnd;
+            let event = if msg == WM_COMMAND {
+                crate::platform::native::os_views::command(hwnd, wp, child)
+            } else {
+                crate::platform::native::os_views::scroll(hwnd, wp, child)
+            };
+            match event {
+                Some(event) => {
+                    // Posted too: a click the app made (`BM_CLICK`) comes
+                    // inside its own handler, and the loop may be waiting.
+                    push_event_to(hwnd, event);
+                    unsafe { PostMessageW(hwnd, WM_NULL, 0, 0) };
+                    0
+                }
+                None => unsafe { DefWindowProcW(hwnd, msg, wp, lp) },
+            }
+        }
+        // A themed control asks for what is behind it: the frame.
+        WM_PRINTCLIENT => {
+            unsafe { blit_frame(hwnd, wp as Handle) };
+            0
+        }
         tray::WM_APP_TRAY => {
             tray::callback(hwnd, wp, lp);
             0
@@ -1436,6 +1468,7 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
         attention::WM_QUERYENDSESSION => attention::query_end_session(hwnd),
         WM_DESTROY => {
             tsf::forget(hwnd);
+            crate::platform::native::os_views::forget(hwnd);
             if pointer::locked() == Some(hwnd) {
                 pointer::lock(hwnd, false);
             }
@@ -1625,7 +1658,16 @@ impl Window for WinWindow {
         with_win(self.hwnd, |w| w.gpu = false);
         unsafe { InvalidateRect(self.hwnd, std::ptr::null(), 0) };
     }
+    fn hosts_native_views(&self) -> bool {
+        true
+    }
+    fn set_native_views(&self, views: &[crate::platform::native::NativeView]) {
+        crate::platform::native::os_views::sync(self.hwnd, views);
+    }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
+        // A live OS control is its own UIA element (its child window's):
+        // its node isn't one too.
+        let root = &root.without_native_views();
         // Rebuild the UIA provider tree when it changed; `WM_GETOBJECT`
         // hands its root to UIA. The one it replaces stays while a client
         // holds any of its nodes.
