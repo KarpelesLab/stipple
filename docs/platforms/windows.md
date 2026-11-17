@@ -49,6 +49,31 @@ UI Automation each is its child window's element, so the app's tree leaves its
 node out. Checkboxes and radio buttons stay pictures (a Win32 one shows and is
 named by a text of its own, where Stipple draws the label beside the box).
 
+A `select` is a `COMBOBOX` (`CBS_DROPDOWNLIST`, `DarkMode_CFD` in dark
+mode): a click opens Windows' own drop-down list, and a pick
+(`CBN_SELENDOK`, or `CBN_SELCHANGE` from the keyboard with the list closed)
+runs the element's handler for that option; a pick the app refuses is set
+back. Its closed height is fitted to the select's (the selection field's
+item height), the wheel over a closed one scrolls what it's in rather than
+changing the choice, and UI Automation reads it once, as the combo box
+(the app's tree leaves its node out). Its name is the select's label,
+given through Dynamic Annotation (`IAccPropServices::SetHwndPropStr`) for
+the clients that read MSAA's annotations; the .NET UI Automation client
+CI uses reads it as a pane named by its choice, as it reads the buttons'
+child windows.
+
+A control in a scroll area is cut to the part the area shows by a window
+region (`SetWindowRgn`), which Windows draws, hit-tests and clips the
+window's own painting to: one half scrolled out stays live. (A region does
+what a clipping container child window would, without moving the controls
+into one and relaying their notifications and `WM_PRINTCLIENT`.)
+
+CI's `visual-windows` job (`.github/scripts/native-views-windows.ps1`) runs
+`nativegallery`'s self-test, clicks Save and picks Small in the select for
+real (a click on the combo box, then one on Small in its drop-down list,
+where UI Automation puts it), and checks the half-scrolled rows are live
+with their regions.
+
 ## Fonts
 
 `Font::system_default()` loads Segoe UI, falling back to Arial, with Segoe UI

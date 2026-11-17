@@ -3,8 +3,10 @@
 # reads its child-window controls back and acts on them; meanwhile click Save
 # for real (SendInput, at the BUTTON child window's middle) and check the app
 # counted it, screenshot the window with the self-test's panel over the
-# controls and after, and walk the window through UI Automation to check
-# each live control is one element (the BUTTON's), not two.
+# controls and after, walk the window through UI Automation to check
+# each live control is one element (the BUTTON's), not two, and pick Small
+# in the select for real (a click on its COMBOBOX, then one on Small in the
+# drop-down list Windows opens) and check the app took it.
 param(
   [string]$Exe = ".\target\release\examples\nativegallery.exe",
   [string]$Out = "visual_output"
@@ -34,6 +36,7 @@ public static class NV {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
+  [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
 }
 "@
 [NV]::SetProcessDPIAware() | Out-Null
@@ -104,6 +107,75 @@ try {
     [NV]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
   }
   if (-not (Wait-Log 'nativegallery: saves 2' 10)) { Write-Host "no second save logged" }
+
+  # The select is a COMBOBOX child window, read once by UIA: as the combo
+  # box (the app's tree leaves its node out). Its name is logged (Size,
+  # through Dynamic Annotation; the .NET client reads these child windows
+  # as panes named by their text).
+  $combo = [NV]::FindWindowExW($hwnd, [IntPtr]::Zero, "ComboBox", [NullString]::Value)
+  Write-Host "Size COMBOBOX child window: $combo"
+  if ($combo -eq [IntPtr]::Zero) { $failures += "no COMBOBOX child window" }
+  $selects = @($all | Where-Object {
+    $_.Current.Name -eq "Size" -or $_.Current.ClassName -eq "ComboBox" -or
+    $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::ComboBox })
+  foreach ($e in $selects) {
+    Write-Host ("the select in UIA: {0} '{1}' class={2}" -f $e.Current.LocalizedControlType, $e.Current.Name, $e.Current.ClassName)
+  }
+  if ($selects.Count -ne 1) { $failures += "UIA has $($selects.Count) elements for the select, not 1" }
+  # A real pick: click the combo box (Windows opens its own drop-down
+  # list), then Small in that list, where UIA says it is.
+  if ($combo -ne [IntPtr]::Zero) {
+    $r = New-Object RECT
+    [NV]::GetWindowRect($combo, [ref]$r) | Out-Null
+    $x = [int](($r.Left + $r.Right) / 2); $y = [int](($r.Top + $r.Bottom) / 2)
+    Write-Host "clicking the select at $x,$y"
+    [NV]::SetForegroundWindow($hwnd) | Out-Null
+    [NV]::SetCursorPos($x, $y) | Out-Null
+    Start-Sleep -Milliseconds 200
+    [NV]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 100
+    [NV]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 800
+    Shot $hwnd "windows-native-select-open.png"
+    # A list item named Small (the window has a radio button named Small).
+    $cond = New-Object System.Windows.Automation.AndCondition(
+      (New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::NameProperty, "Small")),
+      (New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::ListItem)))
+    $small = [System.Windows.Automation.AutomationElement]::FromHandle($combo).FindFirst(
+      [System.Windows.Automation.TreeScope]::Descendants, $cond)
+    if ($small -eq $null) {
+      $small = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+        [System.Windows.Automation.TreeScope]::Descendants, $cond)
+    }
+    $list = [NV]::FindWindowW("ComboLBox", [NullString]::Value)
+    Write-Host "drop-down list window: $list"
+    if ($small -ne $null) {
+      $b = $small.Current.BoundingRectangle
+      $x = [int]($b.X + $b.Width / 2); $y = [int]($b.Y + $b.Height / 2)
+    } elseif ($list -ne [IntPtr]::Zero) {
+      # Not in UIA's tree: Small is the first row of the drop-down list
+      # (Windows' ComboLBox popup), one item high.
+      $lr = New-Object RECT
+      [NV]::GetWindowRect($list, [ref]$lr) | Out-Null
+      $ih = [int][NV]::SendMessageW($list, 0x01A1, [IntPtr]::Zero, [IntPtr]::Zero) # LB_GETITEMHEIGHT
+      if ($ih -le 0) { $ih = 16 }
+      $x = [int](($lr.Left + $lr.Right) / 2); $y = [int]($lr.Top + 1 + $ih / 2)
+    } else {
+      $failures += "the select's drop-down list didn't open"
+    }
+    if ($small -ne $null -or $list -ne [IntPtr]::Zero) {
+      Write-Host "clicking Small at $x,$y"
+      [NV]::SetCursorPos($x, $y) | Out-Null
+      Start-Sleep -Milliseconds 200
+      [NV]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+      Start-Sleep -Milliseconds 100
+      [NV]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    }
+    if (-not (Wait-Log 'nativegallery: size Some\(0\)' 10)) { Write-Host "no pick of Small logged" }
+  }
   Shot $hwnd "windows-native-after.png"
 } finally {
   Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
@@ -113,5 +185,6 @@ try {
 $text = Get-Content -Raw $log
 if ($text -notmatch 'nativegallery selftest: passed') { $failures += "the self-test failed" }
 if ($text -notmatch 'nativegallery: saves 2') { $failures += "the real click on Save didn't reach the app (no 'saves 2')" }
+if ($text -notmatch 'nativegallery: size Some\(0\)') { $failures += "the real pick of Small didn't reach the app (no 'size Some(0)')" }
 if ($failures.Count -gt 0) { throw ("native views: " + ($failures -join "; ")) }
 Write-Host "native views: ok"

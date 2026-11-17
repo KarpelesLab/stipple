@@ -1577,6 +1577,8 @@ impl Window for MacWindow {
         let layer = metal.as_mut()?;
         let (size, scale) = (self.size.get(), self.scale.get());
         unsafe { layer.fit(size.width as f64 / scale, size.height as f64 / scale, scale) };
+        let live = crate::platform::native::os_views::any_live(self.view);
+        unsafe { layer.present_with_transaction(live) };
         Some(crate::platform::GpuLayer::Metal(layer.layer()))
     }
     fn drop_gpu_layer(&self) {

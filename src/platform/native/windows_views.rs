@@ -17,11 +17,19 @@
 //! keyboard focus back to the parent, so keys stay the app's. Checkboxes
 //! and radio buttons stay pictures: a Win32 one would show (and be named
 //! by) a text of its own, where Stipple draws the label beside the box.
+//!
+//! A select is a `COMBOBOX` (`windows_select`). A control in a scroll area
+//! is cut at the area's edge by a window region (`SetWindowRgn`, the part
+//! of it the areas show): Windows draws, hit-tests and clips the parent's
+//! painting (`WS_CLIPCHILDREN`) to it, so one half scrolled out stays live.
+//! (A region does what a clipping container child window would, without
+//! moving the controls into one and passing their notifications on.)
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 
+use super::os_select as select;
 use super::{NativeControl, NativeView, NativeViewEvent, ViewBackend, ViewSet};
 
 type Hwnd = *mut c_void;
@@ -92,6 +100,8 @@ unsafe extern "system" {
     fn EnableWindow(hwnd: Hwnd, enable: i32) -> i32;
     fn GetDpiForWindow(hwnd: Hwnd) -> u32;
     fn GetParent(hwnd: Hwnd) -> Hwnd;
+    fn SetWindowRgn(hwnd: Hwnd, rgn: *mut c_void, redraw: i32) -> i32;
+    fn GetWindowRgnBox(hwnd: Hwnd, rect: *mut Rect) -> i32;
 }
 
 #[link(name = "gdi32")]
@@ -112,6 +122,7 @@ unsafe extern "system" {
         pitch: u32,
         face: *const u16,
     ) -> *mut c_void;
+    fn CreateRectRgn(left: i32, top: i32, right: i32, bottom: i32) -> *mut c_void;
 }
 
 #[link(name = "uxtheme")]
@@ -191,6 +202,9 @@ thread_local! {
     /// failed), and the message font made per DPI.
     static CTX: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FONTS: RefCell<HashMap<u32, usize>> = RefCell::new(HashMap::new());
+    /// The region each control is cut to (in its window's coordinates),
+    /// for the ones a scroll area cuts.
+    static REGIONS: RefCell<HashMap<usize, (i32, i32, i32, i32)>> = RefCell::new(HashMap::new());
 }
 
 /// Run `f` under the Common Controls 6 activation context, made (and the
@@ -297,7 +311,45 @@ impl Win32 {
             (r.max_x() * s).round() as i32 - x,
             (r.max_y() * s).round() as i32 - y,
         );
-        unsafe { SetWindowPos(h, TOP, x, y, w, hh, SWP_NOZORDER | SWP_NOACTIVATE) };
+        // A combo box's height takes its drop-down list in too.
+        let height = if v.menu.is_some() {
+            select::window_height(hh)
+        } else {
+            hh
+        };
+        unsafe { SetWindowPos(h, TOP, x, y, w, height, SWP_NOZORDER | SWP_NOACTIVATE) };
+        if v.menu.is_some() {
+            select::fit(h, hh);
+        }
+        // Cut to the part its scroll areas show (in its own coordinates).
+        let cut = v.visible().filter(|c| *c != v.frame).map(|c| {
+            let (l, r) = (
+                (c.min_x() * s).round() as i32 - x,
+                (c.max_x() * s).round() as i32 - x,
+            );
+            // A mirrored (right-to-left) window counts from its right.
+            let (l, r) = if v.rtl { (w - r, w - l) } else { (l, r) };
+            (
+                l,
+                (c.min_y() * s).round() as i32 - y,
+                r,
+                (c.max_y() * s).round() as i32 - y,
+            )
+        });
+        let had = REGIONS.with(|r| r.borrow().get(&(h as usize)).copied());
+        if had != cut {
+            unsafe {
+                let rgn = cut.map_or(std::ptr::null_mut(), |(l, t, r, b)| {
+                    CreateRectRgn(l, t, r, b)
+                });
+                // The window owns the region from here on.
+                SetWindowRgn(h, rgn, 1);
+            }
+            REGIONS.with(|r| match cut {
+                Some(c) => r.borrow_mut().insert(h as usize, c),
+                None => r.borrow_mut().remove(&(h as usize)),
+            });
+        }
     }
 
     fn set_common(&self, h: Hwnd, v: &NativeView) {
@@ -308,15 +360,18 @@ impl Win32 {
             let px = (size * self.dpi as f64 / 96.0).round().max(1.0) as u32;
             SendMessageW(h, WM_SETFONT, font(px) as usize, 1);
             EnableWindow(h, v.enabled as i32);
-            let theme = wide(if v.dark {
-                "DarkMode_Explorer"
-            } else {
-                "Explorer"
+            // A combo box is dark in the common dialogs' theme.
+            let theme = wide(match (v.dark, v.menu.is_some()) {
+                (true, true) => "DarkMode_CFD",
+                (true, false) => "DarkMode_Explorer",
+                _ => "Explorer",
             });
             SetWindowTheme(h, theme.as_ptr(), std::ptr::null());
             // A button's text is its title; the others' (which they don't
-            // show) its name for a screen reader.
+            // show) its name for a screen reader. A combo box's is its
+            // choice (`windows_select` names it).
             let text = match v.control {
+                _ if v.menu.is_some() => return,
                 NativeControl::Button { .. } => &v.title,
                 _ => &v.label,
             };
@@ -330,6 +385,7 @@ impl ViewBackend for Win32 {
 
     fn create(&mut self, v: &NativeView) -> Option<usize> {
         let (class, style) = match v.control {
+            NativeControl::Button { .. } if v.menu.is_some() => (select::CLASS, select::STYLE),
             NativeControl::Button { primary } => (
                 "BUTTON",
                 if primary {
@@ -383,12 +439,19 @@ impl ViewBackend for Win32 {
             }
         }
         self.set_common(h, v);
+        if v.menu.is_some() {
+            select::init(h, v);
+        }
         Some(h as usize)
     }
 
     fn update(&mut self, h: &mut usize, old: &NativeView, new: &NativeView) {
         let h = *h as Hwnd;
         self.set_common(h, new);
+        if new.menu.is_some() {
+            select::update(h, old, new);
+            return;
+        }
         unsafe {
             match (old.control, new.control) {
                 (NativeControl::Button { primary: a }, NativeControl::Button { primary: b })
@@ -412,6 +475,7 @@ impl ViewBackend for Win32 {
     }
 
     fn destroy(&mut self, h: usize) {
+        REGIONS.with(|r| r.borrow_mut().remove(&h));
         unsafe { DestroyWindow(h as Hwnd) };
     }
 }
@@ -462,23 +526,51 @@ pub(crate) fn forget(parent: Hwnd) {
     SETS.with(|s| s.borrow_mut().remove(&(parent as usize)));
 }
 
-/// The live control `child` of `parent`, if it is one: its id and kind.
-fn find(parent: Hwnd, child: Hwnd) -> Option<(u64, NativeControl)> {
+/// The live control `child` of `parent`, if it is one: its id and kind,
+/// and whether it's a select.
+fn find(parent: Hwnd, child: Hwnd) -> Option<(u64, NativeControl, bool)> {
     SETS.with(|s| {
         let s = s.try_borrow().ok()?;
         let (_, set) = s.get(&(parent as usize))?;
         let id = set.id_of(&(child as usize))?;
-        Some((id, set.get(id)?.0.control))
+        let (v, _) = set.get(id)?;
+        Some((id, v.control, v.menu.is_some()))
     })
 }
 
+/// The user acted on control `id` of `parent`: the next list sets it to
+/// what the app's state says, changed or not.
+fn touched(parent: Hwnd, id: u64) {
+    SETS.with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut()
+            && let Some((_, set)) = s.get_mut(&(parent as usize))
+        {
+            set.touch(id);
+        }
+    });
+}
+
 /// `WM_COMMAND` from child `child` of `parent`: the event a button's click
-/// makes, if it is a live control's.
+/// or a select's pick makes, if it is a live control's.
 pub(crate) fn command(parent: Hwnd, wp: usize, child: Hwnd) -> Option<crate::platform::Event> {
-    let (id, _) = find(parent, child)?;
+    let (id, _, menu) = find(parent, child)?;
+    if menu {
+        let index = select::notified(child, (wp >> 16) & 0xffff)?;
+        let Some(index) = index else {
+            // The list closed: the keyboard goes back to the app.
+            unsafe { SetFocus(parent) };
+            return None;
+        };
+        touched(parent, id);
+        return Some(crate::platform::Event::NativeView {
+            id,
+            event: NativeViewEvent::Picked(index),
+        });
+    }
     if (wp >> 16) & 0xffff != BN_CLICKED {
         return None;
     }
+    touched(parent, id);
     // The keyboard stays the app's.
     unsafe { SetFocus(parent) };
     Some(crate::platform::Event::NativeView {
@@ -490,10 +582,11 @@ pub(crate) fn command(parent: Hwnd, wp: usize, child: Hwnd) -> Option<crate::pla
 /// `WM_HSCROLL` from child `child` of `parent`: the event a slider's move
 /// makes, if it is a live control's.
 pub(crate) fn scroll(parent: Hwnd, wp: usize, child: Hwnd) -> Option<crate::platform::Event> {
-    let (id, control) = find(parent, child)?;
+    let (id, control, _) = find(parent, child)?;
     if !matches!(control, NativeControl::Slider { .. }) {
         return None;
     }
+    touched(parent, id);
     if wp & 0xffff == TB_ENDTRACK {
         unsafe { SetFocus(parent) };
     }
@@ -554,21 +647,51 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
             };
             let s = dpi as f64 / 96.0;
             let (x0, x1) = (pts[0].x.min(pts[1].x), pts[0].x.max(pts[1].x));
+            let frame = crate::geometry::Rect::from_xywh(
+                x0 as f64 / s,
+                pts[0].y as f64 / s,
+                (x1 - x0) as f64 / s,
+                (pts[1].y - pts[0].y) as f64 / s,
+            );
+            // The window region it's cut to (in its own coordinates, left
+            // to right), if any: its middle is where a click lands on it.
+            let mut b = Rect::default();
+            const SIMPLEREGION: i32 = 2;
+            let cut = GetWindowRgnBox(h, &mut b) == SIMPLEREGION;
+            let (visible, hit) = if cut {
+                let visible = crate::geometry::Rect::from_xywh(
+                    (x0 + b.left) as f64 / s,
+                    (pts[0].y + b.top) as f64 / s,
+                    (b.right - b.left) as f64 / s,
+                    (b.bottom - b.top) as f64 / s,
+                );
+                let mid = Point {
+                    x: x0 + (b.left + b.right) / 2,
+                    y: pts[0].y + (b.top + b.bottom) / 2,
+                };
+                (
+                    visible,
+                    ChildWindowFromPointEx(parent, mid, CWP_SKIPINVISIBLE) == h,
+                )
+            } else {
+                (frame, hit)
+            };
+            let class = text_of(h, true);
             super::LiveControl {
                 id,
-                class: text_of(h, true),
-                title: if text_of(h, true).eq_ignore_ascii_case("button") {
+                // A button's title, a combo box's choice.
+                title: if class.eq_ignore_ascii_case("button")
+                    || class.eq_ignore_ascii_case("combobox")
+                {
                     text_of(h, false)
                 } else {
                     String::new()
                 },
-                frame: crate::geometry::Rect::from_xywh(
-                    x0 as f64 / s,
-                    pts[0].y as f64 / s,
-                    (x1 - x0) as f64 / s,
-                    (pts[1].y - pts[0].y) as f64 / s,
-                ),
+                class,
+                frame,
+                visible,
                 hit,
+                container: if cut { "HRGN".into() } else { String::new() },
             }
         })
         .collect()
@@ -576,13 +699,17 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
 
 pub(crate) fn poke(id: u64, value: Option<f64>) -> bool {
     let found = SETS.with(|s| {
-        s.borrow()
-            .values()
-            .find_map(|(_, set)| set.get(id).map(|(v, h)| (v.control, *h as Hwnd)))
+        s.borrow().values().find_map(|(_, set)| {
+            set.get(id)
+                .map(|(v, h)| (v.control, v.menu.is_some(), *h as Hwnd))
+        })
     });
-    let Some((control, h)) = found else {
+    let Some((control, menu, h)) = found else {
         return false;
     };
+    if menu {
+        return select::pick(h, value.unwrap_or(0.0) as usize);
+    }
     unsafe {
         match control {
             // A click, as the user's: the button tells its parent.

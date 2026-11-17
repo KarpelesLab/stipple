@@ -68,16 +68,27 @@ says what it shows; the app's code doesn't change: `button(..)`,
 | `slider` | `msctls_trackbar32` | `NSSlider` | `UISlider` |
 | `progress_bar` | `msctls_progress32` | `NSProgressIndicator` | `UIProgressView` |
 | `text_field`, `text_area`, `number_input` | picture ² | picture ² | picture ² |
-| `select` | picture ³ | picture ³ | picture ³ |
+| `select` | `COMBOBOX` ³ | `NSPopUpButton` ³ | `UIButton` with a `UIMenu` ³ |
 
 ¹ A Win32 checkbox or radio button shows (and is named by) a text of its
 own, where Stipple draws the label beside the box. ² The field's editing
 (input methods, the caret, selection, the edit menu) stays Stipple's; only
 its frame is the OS's, as a picture. A real `UITextField` / `NSTextField` /
 `EDIT` taking over editing, kept in step with the field's
-[`TextInput`](text-editing.md), is the next step. ³ Its button shows two
-texts (the choice and a chevron); a real `NSPopUpButton` / `UIMenu` button
-would need the choices.
+[`TextInput`](text-editing.md), is the next step. ³ The OS's pop-up
+button, its title the chosen option: a tap or click opens the OS's own menu
+or drop-down list (not Stipple's overlay), with the chosen option checked,
+and a pick runs the element's handler for it (`Select::choose`). The app's
+state stays the source of truth: the options and the choice come from the
+element each frame, and a pick the app refuses goes back. It's read once,
+as the OS control: named by the select's
+[`a11y_label`](accessibility.md), if it has one, its value the choice. With
+the keyboard focus (ring showing) it is the picture, and the keyboard opens
+Stipple's list, as before. On iOS it has the regular buttons' look (iOS
+26's glass) with the pop-up indicator, and the pick is a `UIAction` of its
+`UIMenu`; on macOS the menu pops up over it, the choice under the pointer;
+on Windows the wheel over a closed one scrolls what it's in rather than
+changing the choice.
 
 ### How it works
 
@@ -109,10 +120,30 @@ OS's controls over it.
   handler of the element the control stands for: a button's tap handler, a
   checkbox's or switch's row's (the box is part of a labeled row), a
   slider's drag handler with the new position, as a tap or a drag there
-  would. The state is the app's: a switch the handler didn't turn on goes
-  back off on the next frame. The OS controls don't take the keyboard focus
+  would; a select's pick (a `UIAction`, the `NSPopUpButton`'s action,
+  `CBN_SELENDOK`) comes back as `NativeViewEvent::Picked` and runs the
+  handler for that option. The state is the app's: the window is handed
+  the list again after every event, and a control the user acted on is set
+  to it even if it didn't change, so a switch the handler didn't turn on
+  goes back off, and a pick it refused goes back, on the next frame. The OS controls don't take the keyboard focus
   (AppKit's refuse first responder, Win32's give it back): keys, Tab and the
   focus ring stay Stipple's.
+- **Scroll areas.** Each scroll area that holds live controls is a
+  clipping container of the OS's (`NativeView::clips`, outermost first):
+  on iOS and macOS a `UIView` / `NSView` at the area's viewport that clips
+  its subviews (`clipsToBounds`, `masksToBounds`), the area's controls in
+  it, a nested area's container inside its outer one's; on Windows each
+  control's window region (`SetWindowRgn`), the part of it its areas show,
+  which Windows draws, hit-tests and clips the frame's painting to. So a
+  control half scrolled out stays live, cut at the edge by the OS; one
+  wholly out isn't shown. A container takes no input of its own: a touch
+  or click on it but on none of its controls goes on to the app's view,
+  which scrolls the area. Containers come and go with their areas, and a
+  control moves into the container of the area it is in now. Scrolling
+  moves the controls in the same pass that draws the frame, before it's
+  presented; on iOS and macOS, while controls are live, a Metal layer
+  presents with Core Animation's transaction (`presentsWithTransaction`),
+  so the frame and the controls' new places show together.
 - **Accessibility.** The OS control speaks for itself, and Stipple's tree
   doesn't say it again: the node it stands for (the button, or the
   checkbox's row) carries its id (`AccessNode::native_view`), and the bridge
@@ -130,21 +161,27 @@ long as:
 
 - something drawn after it overlaps it, or something that takes input does:
   an overlay, a menu, a dialog's scrim or a popup's click-catcher, a toast,
-  a drag image, a scroll bar, a badge;
+  a drag image, a scroll bar's track, a badge (only the part of it that
+  shows counts: a row scrolled out of its area doesn't cover what's beside
+  the area). An overlay scroll indicator's thumb alone (iOS's, macOS's
+  overlay scrollers' while a list scrolls) passes under the live controls
+  instead, rather than turning every row it crosses into a picture for as
+  long as the list moves;
 - it, or anything around it, is scaled, rotated or translucent: a page
   transition, a fade, a theme cross-fade (a plain move it follows);
-- a clip cuts part of it off: a control half out of a scroll container is a
-  picture, cut at the edge, and live again once wholly in view (one wholly
-  out isn't shown at all). Clipping the live control itself, in a container
-  view per scroll viewport, is a later step;
+- a clip that isn't a scroll area's (a rounded panel's, an overlay's) cuts
+  part of it off (a scroll area's is the OS's: see *Scroll areas* above);
 - it has the keyboard focus with the focus ring showing (the picture shows
   the OS's focus look);
 - it's leaving (an exit animation) or off stage.
 
 The switch is per control and per frame, and the two look the same, so it
-doesn't show. On iOS a finger that goes down on a live button or switch and
-drags scrolls, as in a `UIScrollView` (a pan recognizer hands the drag to the
-app's view and the control doesn't fire); a slider keeps its drags.
+doesn't show. On iOS a finger that goes down on a live button, switch or
+select and drags scrolls, as in a `UIScrollView` (a pan recognizer hands the
+drag to the app's view and the control doesn't fire); a slider keeps its
+drags. On macOS a scroll wheel or trackpad scroll over a control goes on to
+the app's view; on Windows a button passes the wheel to its parent, and a
+closed select's is passed on for it.
 
 ### Where it doesn't apply
 

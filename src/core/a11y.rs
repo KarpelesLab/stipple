@@ -190,6 +190,19 @@ pub(crate) struct Semantics {
     /// The element pastes HTML and images too: a paste reads every format
     /// from the system clipboard, not just text (a rich text editor).
     pub rich_paste: bool,
+    /// A select's options, for the OS's pop-up button that shows it live
+    /// under the native theme (see `core::native_host`).
+    pub choices: Option<std::sync::Arc<Choices>>,
+}
+
+/// A select's options as its live OS control shows them: their labels, the
+/// chosen one, and the tap handler a pick of each runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Choices {
+    pub labels: Vec<String>,
+    pub selected: Option<usize>,
+    /// One per label: what picking it does (the app may refuse it).
+    pub picks: Vec<crate::core::runtime::ActionId>,
 }
 
 /// A node in the accessibility tree.

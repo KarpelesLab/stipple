@@ -75,6 +75,8 @@ pub(crate) struct MetalLayer {
     layer: Id,
     frame: Rect,
     scale: f64,
+    /// Frames present with Core Animation's transaction.
+    with_transaction: bool,
 }
 
 impl MetalLayer {
@@ -110,6 +112,7 @@ impl MetalLayer {
                     h: 0.0,
                 },
                 scale: 0.0,
+                with_transaction: false,
             })
         }
     }
@@ -146,6 +149,20 @@ impl MetalLayer {
         }
         self.frame = frame;
         self.scale = scale;
+    }
+
+    /// Present frames with Core Animation's transaction while `on`: when
+    /// the view shows live OS controls (`native::os_views`), which move in
+    /// the same pass as the frame is drawn, so a scrolled frame and the
+    /// controls' new places show together rather than a frame apart.
+    ///
+    /// # Safety
+    /// Main thread.
+    pub(crate) unsafe fn present_with_transaction(&mut self, on: bool) {
+        if on != self.with_transaction {
+            unsafe { send_bool(self.layer, c"setPresentsWithTransaction:", on) };
+            self.with_transaction = on;
+        }
     }
 
     /// Take the layer off its view and release it.

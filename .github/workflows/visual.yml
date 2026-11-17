@@ -3115,9 +3115,12 @@ jobs:
 
       # The native theme's real controls (docs/native-theme.md, "Real
       # controls"): nativegallery's self-test reads its BUTTON, trackbar and
-      # progress child windows back and acts on them, a real click on Save
-      # (SendInput) reaches the app, a panel over the controls turns them into
-      # pictures (screenshotted) and back, and UI Automation sees Save once.
+      # progress child windows back and acts on them, picks a size from the
+      # COMBOBOX (and one the app refuses goes back), checks the list's
+      # half-scrolled rows stay live, cut by window regions, a real click on
+      # Save and a real pick in the select's drop-down list (SendInput) reach
+      # the app, a panel over the controls turns them into pictures
+      # (screenshotted) and back, and UI Automation sees Save and Size once.
       # Non-blocking until it has passed here a while.
       - name: Real OS controls (nativegallery self-test, a click, UIA)
         continue-on-error: true
@@ -4146,10 +4149,13 @@ jobs:
       # controls"): nativegallery's self-test reads its NSButtons, NSSwitch,
       # NSSlider and NSProgressIndicator back from the view, checks a click at
       # each one's middle lands on it, acts on them (performClick:) and sees
-      # the app's handlers run, opens a panel over them (screenshotted: they
-      # are pictures under it) and checks a half-hidden list row is a
-      # picture. The accessibility dump (STIPPLE_COCOA_A11Y) must name Save
-      # once. Non-blocking until it has passed here a while.
+      # the app's handlers run, picks a size in the NSPopUpButton's menu
+      # (performActionForItemAtIndex:; one the app refuses goes back), opens
+      # a panel over them (screenshotted: they are pictures under it) and
+      # checks the list's half-scrolled rows are live, in its clipping
+      # container and cut by it, before and after it scrolls. The
+      # accessibility dump (STIPPLE_COCOA_A11Y) must name Save once.
+      # Non-blocking until it has passed here a while.
       - name: Real OS controls (nativegallery self-test)
         continue-on-error: true
         env:
@@ -4975,10 +4981,13 @@ jobs:
       # UISlider and UIProgressView back from the view, checks a tap at each
       # one's middle lands on it (hitTest:), acts on them
       # (sendActionsForControlEvents:) and sees the app's handlers run, opens
-      # a panel over them (screenshotted: they are pictures under it), checks
-      # a half-hidden list row is a picture, and reads the view's
-      # accessibility elements as VoiceOver does: Save and Sync once each, as
-      # the UIKit controls. Non-blocking until it has passed here a while.
+      # a panel over them (screenshotted: they are pictures under it), picks a
+      # size through the select's UIMenu (a UIAction; one the app refuses
+      # goes back), checks the list's half-scrolled rows are live, in its
+      # clipping container and cut by it, before and after it scrolls, and
+      # reads the view's accessibility elements as VoiceOver does: Save, Sync
+      # and Size once each, as the UIKit controls. Non-blocking until it has
+      # passed here a while.
       - name: Real OS controls (nativegallery self-test)
         continue-on-error: true
         run: |

@@ -1299,6 +1299,15 @@ impl Element {
         self
     }
 
+    /// Give this (native) element a select's options, which its live OS
+    /// control (a pop-up button) shows and picks from.
+    pub(crate) fn native_choices(mut self, choices: crate::core::a11y::Choices) -> Self {
+        self.semantics
+            .get_or_insert_with(Semantics::default)
+            .choices = Some(std::sync::Arc::new(choices));
+        self
+    }
+
     /// Leave keyboard focus where it is when this element is pressed: a
     /// toolbar button acting on a text editor (Bold, Insert image) keeps the
     /// editor focused, its caret and selection in place, as native toolbars

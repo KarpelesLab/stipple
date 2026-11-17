@@ -167,7 +167,10 @@ fn next_match<T: AsRef<str>>(options: &[T], from: usize, typed: &str) -> Option<
 /// `field` is an accessor returning the [`Select`] inside the app state. Read
 /// the choice back with [`Select::selected`].
 ///
-/// Under [`Theme::native`] the OS draws the button's bezel. Reported to
+/// Under [`Theme::native`] the OS draws the button's bezel; in a window on
+/// iOS, macOS and Windows the select is the OS's own pop-up button (a
+/// `UIButton` with a `UIMenu`, an `NSPopUpButton`, a `COMBOBOX`), whose
+/// menu or list picks the option (see `docs/native-theme.md`). Reported to
 /// assistive technologies as a [`Role::ComboBox`] named by the chosen option,
 /// with a [`Role::List`] of [`Role::ListItem`]s while open.
 ///
@@ -231,6 +234,16 @@ pub fn select<S, T: AsRef<str>>(
         .width(200.0);
     if let Some(deco) = theme.native_deco(control) {
         el = native_size(el.native(deco), control).width(200.0);
+        // Where the window shows it live, it's the OS's pop-up button, whose
+        // own menu picks an option: each pick runs one of these.
+        let picks = (0..labels.len())
+            .map(|i| cx.register(move |s| field(s).choose(i)))
+            .collect();
+        el = el.native_choices(crate::core::a11y::Choices {
+            labels: labels.clone(),
+            selected: state.selected.filter(|&i| i < labels.len()),
+            picks,
+        });
     }
     el.action = Some(tap);
     el.role(Role::ComboBox).on_key(cx, move |s, k| {

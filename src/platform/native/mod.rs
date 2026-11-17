@@ -28,10 +28,29 @@ pub(crate) mod objc;
     allow(dead_code)
 )]
 mod views;
-pub use views::{LiveControl, NativeView, NativeViewEvent, live_controls, poke_control};
+pub use views::{
+    LiveControl, NativeClip, NativeMenu, NativeView, NativeViewEvent, live_controls, poke_control,
+};
 #[cfg(any(target_os = "ios", target_os = "macos", target_os = "windows"))]
 pub(crate) use views::{ViewBackend, ViewSet};
 
+/// A clipping container per scroll area, for the live controls in it.
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[allow(unsafe_code)]
+mod apple_clips;
+/// A live select: the OS's pop-up button.
+#[cfg(target_os = "ios")]
+#[allow(unsafe_code)]
+#[path = "ios_select.rs"]
+mod os_select;
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+#[path = "macos_select.rs"]
+mod os_select;
+#[cfg(target_os = "windows")]
+#[allow(unsafe_code)]
+#[path = "windows_select.rs"]
+mod os_select;
 /// The live controls of the windows that host them (see [`views`]).
 #[cfg(target_os = "ios")]
 #[allow(unsafe_code)]

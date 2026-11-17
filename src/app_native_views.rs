@@ -55,7 +55,15 @@ impl<S: 'static> App<S> {
                     pane.handlers.dispatch_drag_motion(drag, &motion, state);
                 }
             }
+            NativeViewEvent::Picked(i) => {
+                if let Some(&pick) = route.picks.get(i) {
+                    pane.handlers.dispatch(pick, state);
+                }
+            }
         }
+        // The control shows what the state says next frame, even where the
+        // handler kept it as it was (a pick or a flip refused goes back).
+        pane.native_host.resend();
         pane.dirty = true;
         true
     }

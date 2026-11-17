@@ -1695,8 +1695,17 @@ impl MetalExecutor {
                 frame; Id, 0usize; usize, 0usize; usize, origin; Size3, size; Size3,
                 color; Id, 0usize; usize, 0usize; usize, origin; Size3);
             send!((); blit, c"endEncoding");
-            send!((); f.cmd, c"presentDrawable:", drawable; Id);
-            send!((); f.cmd, c"commit");
+            // A window showing live OS controls (views over the layer, moved
+            // in the same pass) presents with Core Animation's transaction,
+            // so the frame and the views' new places show together.
+            if send!(bool; layer, c"presentsWithTransaction") {
+                send!((); f.cmd, c"commit");
+                send!((); f.cmd, c"waitUntilScheduled");
+                send!((); drawable, c"present");
+            } else {
+                send!((); f.cmd, c"presentDrawable:", drawable; Id);
+                send!((); f.cmd, c"commit");
+            }
             self.last = send!(Id; f.cmd, c"retain");
             self.kept.presented(key, (w as u32, h as u32), dirty);
             Ok(())

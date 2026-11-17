@@ -241,3 +241,95 @@ fn a_window_that_hosts_none_keeps_every_control_a_picture() {
     handler(Event::RedrawRequested, &window);
     assert!(seen.borrow().views.iter().all(|v| v.is_empty()));
 }
+
+/// A select as the native theme makes it in a window that hosts it, whose
+/// app refuses its last option.
+#[test]
+fn a_select_picks_through_the_os_menu_and_a_refused_pick_goes_back() {
+    struct Sizes {
+        selected: Option<usize>,
+    }
+    fn view(s: &Sizes, cx: &mut Cx<Sizes>) -> Element {
+        let labels = ["Small", "Medium", "Locked"];
+        let picks = (0..labels.len())
+            .map(|i| {
+                cx.register(move |s: &mut Sizes| {
+                    if i < 2 {
+                        s.selected = Some(i);
+                    }
+                })
+            })
+            .collect();
+        let shown = s.selected.map_or("\u{2014}", |i| labels[i]);
+        Element::stack(
+            Axis::Horizontal,
+            vec![
+                Element::text(shown, 14.0, Color::BLACK),
+                Element::text("\u{25BE}", 14.0, Color::BLACK),
+            ],
+        )
+        .native(deco(NativeControl::Button { primary: false }))
+        .width(200.0)
+        .height(30.0)
+        .role(crate::core::Role::ComboBox)
+        .on_tap(cx, |_| {})
+        .native_choices(crate::core::a11y::Choices {
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+            selected: s.selected,
+            picks,
+        })
+    }
+    let app = App::new(Sizes { selected: Some(0) }, view)
+        .no_font()
+        .logical_size(Size::new(300.0, 200.0));
+    let (_, handler) = app.into_handler();
+    let mut handler: Handler = Box::new(handler);
+    let seen = Rc::new(RefCell::new(Seen::default()));
+    let window = HostWindow {
+        seen: seen.clone(),
+        hosts: true,
+    };
+    handler(Event::RedrawRequested, &window);
+    let views = seen.borrow().views.last().cloned().unwrap();
+    assert_eq!(views.len(), 1);
+    let menu = views[0].menu.clone().expect("a pop-up button");
+    assert_eq!(menu.options, ["Small", "Medium", "Locked"]);
+    assert_eq!(menu.selected, Some(0));
+    assert_eq!(views[0].title, "Small");
+    // A select's name is its label (none here): its value is the OS's.
+    assert_eq!(views[0].label, "");
+    let id = views[0].id;
+    // Read once, as the OS control.
+    let a11y = seen.borrow().a11y.last().cloned().unwrap();
+    fn natives(n: &crate::platform::A11yNode, out: &mut Vec<u64>) {
+        out.extend(n.native_view);
+        n.children.iter().for_each(|c| natives(c, out));
+    }
+    let mut ids = Vec::new();
+    natives(&a11y, &mut ids);
+    assert_eq!(ids, [id]);
+    let pick = |handler: &mut Handler, i| {
+        handler(
+            Event::NativeView {
+                id,
+                event: NativeViewEvent::Picked(i),
+            },
+            &window,
+        );
+        handler(Event::RedrawRequested, &window);
+    };
+    // A pick the app takes.
+    pick(&mut handler, 1);
+    let views = seen.borrow().views.last().cloned().unwrap();
+    assert_eq!(views[0].menu.as_ref().unwrap().selected, Some(1));
+    assert_eq!(views[0].title, "Medium");
+    // One it refuses: the list goes to the window again, unchanged, so the
+    // OS control shows Medium again.
+    let sent = seen.borrow().views.len();
+    pick(&mut handler, 2);
+    assert_eq!(seen.borrow().views.len(), sent + 1);
+    let views = seen.borrow().views.last().cloned().unwrap();
+    assert_eq!(views[0].menu.as_ref().unwrap().selected, Some(1));
+    // Out of range: nothing runs.
+    pick(&mut handler, 7);
+}

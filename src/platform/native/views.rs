@@ -46,6 +46,45 @@ pub struct NativeView {
     pub dark: bool,
     /// Laid out right to left (a slider fills from the right).
     pub rtl: bool,
+    /// A select's choices: the control is the OS's pop-up button (a
+    /// `UIButton` with a `UIMenu`, an `NSPopUpButton`, a `COMBOBOX`), whose
+    /// own menu or list picks one.
+    pub menu: Option<NativeMenu>,
+    /// The scroll areas it is in, outermost first: each is a clipping
+    /// container the OS cuts the control off at (see [`NativeClip`]).
+    pub clips: Vec<NativeClip>,
+}
+
+/// A select's choices, as its OS control shows them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct NativeMenu {
+    /// The options, in order.
+    pub options: Vec<String>,
+    /// The chosen one, if any (the app's state says which).
+    pub selected: Option<usize>,
+}
+
+/// A scroll area a live control is in: the OS clips the control to it (a
+/// `UIView` / `NSView` that clips its subviews, a window region on Win32),
+/// so one that is half scrolled out stays live, cut at the edge.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct NativeClip {
+    /// What the area is known by across frames (one container per id).
+    pub id: u64,
+    /// Its viewport, in the window's logical pixels.
+    pub frame: Rect,
+}
+
+impl NativeView {
+    /// The part of the control its scroll areas show, in the window's
+    /// logical pixels (`None` when none of it is).
+    pub fn visible(&self) -> Option<Rect> {
+        self.clips
+            .iter()
+            .try_fold(self.frame, |r, c| r.intersection(c.frame))
+    }
 }
 
 /// What the user did to a live control.
@@ -56,6 +95,8 @@ pub enum NativeViewEvent {
     Activated,
     /// Moved a slider, to this position (`0..=1`).
     Value(f64),
+    /// Picked this option of a select, from the OS's own menu or list.
+    Picked(usize),
 }
 
 /// The OS side of a [`ViewSet`]: how a backend makes, changes and removes its
@@ -76,6 +117,10 @@ pub(crate) struct ViewSet<H> {
     shown: HashMap<u64, (NativeView, H)>,
     /// The ids in the order they were last listed (paint order).
     order: Vec<u64>,
+    /// Controls the user acted on since: the next sync brings them back to
+    /// their spec even if it didn't change (a pick or a flip the app
+    /// refused goes back).
+    stale: std::collections::HashSet<u64>,
 }
 
 impl<H> Default for ViewSet<H> {
@@ -83,6 +128,7 @@ impl<H> Default for ViewSet<H> {
         ViewSet {
             shown: HashMap::new(),
             order: Vec::new(),
+            stale: Default::default(),
         }
     }
 }
@@ -112,7 +158,7 @@ impl<H> ViewSet<H> {
         for view in views {
             match self.shown.get_mut(&view.id) {
                 Some((old, handle)) => {
-                    if old != view {
+                    if self.stale.remove(&view.id) || old != view {
                         backend.update(handle, old, view);
                         *old = view.clone();
                     }
@@ -128,7 +174,14 @@ impl<H> ViewSet<H> {
         }
         let restack = order != self.order;
         self.order = order;
+        self.stale.clear();
         restack
+    }
+
+    /// The user acted on control `id`: have the next sync set it to its spec
+    /// again, changed or not (the app's state decides what it shows).
+    pub(crate) fn touch(&mut self, id: u64) {
+        self.stale.insert(id);
     }
 
     /// The control shown for `id`, with its spec.
@@ -172,9 +225,17 @@ pub struct LiveControl {
     pub title: String,
     /// Its frame as the OS reports it, in logical pixels of the window.
     pub frame: Rect,
-    /// Whether a tap or click at its middle lands on it (the OS's own hit
-    /// test of the window's view hierarchy).
+    /// The part of it the OS shows: its frame cut by the clipping
+    /// containers it is in (all of it when none cuts it, empty when they
+    /// hide it).
+    pub visible: Rect,
+    /// Whether a tap or click at the middle of its [visible](Self::visible)
+    /// part lands on it (the OS's own hit test of the window's view
+    /// hierarchy).
     pub hit: bool,
+    /// The OS class of the container it is in, when it is in a scroll
+    /// area's (`StippleClipView`), else empty.
+    pub container: String,
 }
 
 /// For self-tests (CI): the live controls the window shows now, read back
@@ -186,8 +247,10 @@ pub fn live_controls() -> Vec<LiveControl> {
 
 /// For self-tests (CI): have the OS act on live control `id` as a user's tap
 /// or click would (`sendActionsForControlEvents:`, `performClick:`,
-/// `BM_CLICK`; a slider is set to `value`). Returns whether the control was
-/// there.
+/// `BM_CLICK`; a slider is set to `value`; a select picks option `value`
+/// through its own menu: `sendAction:` with the `UIAction`,
+/// `performActionForItemAtIndex:`, the `COMBOBOX`'s list). Returns whether
+/// the control was there.
 #[doc(hidden)]
 pub fn poke_control(id: u64, value: Option<f64>) -> bool {
     super::os_views::poke(id, value)
@@ -236,6 +299,8 @@ mod tests {
             enabled: true,
             dark: false,
             rtl: false,
+            menu: None,
+            clips: Vec::new(),
         }
     }
 
@@ -279,5 +344,41 @@ mod tests {
         assert!(set.sync(&mut os, &[view(3, "b"), view(1, "a")]));
         let ids: Vec<u64> = set.in_order().map(|(v, _)| v.id).collect();
         assert_eq!(ids, [3, 1]);
+    }
+
+    #[test]
+    fn a_touched_control_is_set_back_to_its_spec() {
+        let mut set = ViewSet::default();
+        let mut os = Mock::default();
+        set.sync(&mut os, &[view(1, "a")]);
+        os.log.clear();
+        // The user picked something the app didn't take: same spec, but the
+        // OS control is updated to it again, once.
+        set.touch(1);
+        set.sync(&mut os, &[view(1, "a")]);
+        assert_eq!(os.log, ["update 1: \"a\" -> \"a\""]);
+        os.log.clear();
+        set.sync(&mut os, &[view(1, "a")]);
+        assert!(os.log.is_empty());
+    }
+
+    #[test]
+    fn the_visible_part_is_what_every_clip_shows() {
+        let mut v = view(1, "a");
+        v.frame = Rect::from_xywh(0.0, 80.0, 80.0, 40.0);
+        assert_eq!(v.visible(), Some(v.frame));
+        v.clips = vec![
+            NativeClip {
+                id: 7,
+                frame: Rect::from_xywh(0.0, 0.0, 200.0, 100.0),
+            },
+            NativeClip {
+                id: 8,
+                frame: Rect::from_xywh(0.0, 50.0, 200.0, 200.0),
+            },
+        ];
+        assert_eq!(v.visible(), Some(Rect::from_xywh(0.0, 80.0, 80.0, 20.0)));
+        v.frame = Rect::from_xywh(0.0, 120.0, 80.0, 40.0);
+        assert_eq!(v.visible(), None);
     }
 }

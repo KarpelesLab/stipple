@@ -13,12 +13,18 @@
 //! delivered once AppKit's event handling returns (a click's tracking loop
 //! runs inside it). The backend leaves the mouse presses that land on a
 //! control to AppKit ([`owns`]).
+//!
+//! A select is an `NSPopUpButton` (`macos_select`). The controls in a
+//! scroll area are subviews of its clipping container (`apple_clips`),
+//! which cuts one half scrolled out at the area's edge.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 
+use super::apple_clips as clips;
 use super::objc::{CgRect, Id, Sel, class, msg, nsstring, sel};
+use super::os_select as select;
 use super::{NativeControl, NativeView, NativeViewEvent, ViewBackend, ViewSet};
 
 #[link(name = "objc", kind = "dylib")]
@@ -73,23 +79,32 @@ fn target() -> Id {
     })
 }
 
-/// The window view and id of the control `sender`, with its kind.
-fn find(sender: Id) -> Option<(Id, u64, NativeControl)> {
+/// The window view and id of the control `sender`, with its kind and
+/// whether it's a select; marked touched (the next list sets it to what the
+/// app's state says, changed or not).
+fn find(sender: Id) -> Option<(Id, u64, NativeControl, bool)> {
     SETS.with(|s| {
-        let s = s.try_borrow().ok()?;
-        s.iter().find_map(|(view, set)| {
+        let mut s = s.try_borrow_mut().ok()?;
+        s.iter_mut().find_map(|(view, set)| {
             let id = set.id_of(&sender)?;
-            Some((*view as Id, id, set.get(id)?.0.control))
+            let (v, _) = set.get(id)?;
+            let found = (*view as Id, id, v.control, v.menu.is_some());
+            set.touch(id);
+            Some(found)
         })
     })
 }
 
 /// `stippleNativeAction:`: the user acted on `sender`.
 extern "C" fn action(_this: Id, _cmd: Sel, sender: Id) {
-    let Some((view, id, control)) = find(sender) else {
+    let Some((view, id, control, menu)) = find(sender) else {
         return;
     };
     let event = match control {
+        _ if menu => match unsafe { select::picked(sender) } {
+            Some(i) => NativeViewEvent::Picked(i),
+            None => return,
+        },
         NativeControl::Slider { .. } => {
             let v = unsafe { msg!(sender, "doubleValue", () -> f64) };
             NativeViewEvent::Value(v)
@@ -102,13 +117,10 @@ extern "C" fn action(_this: Id, _cmd: Sel, sender: Id) {
     );
 }
 
+/// Where `v` goes in the view it is in (its scroll area's container, or
+/// the window's view).
 fn frame(v: &NativeView) -> CgRect {
-    CgRect {
-        x: v.frame.min_x(),
-        y: v.frame.min_y(),
-        width: v.frame.width(),
-        height: v.frame.height(),
-    }
+    clips::frame_in_parent(v)
 }
 
 unsafe fn set_state(control: Id, on: bool) {
@@ -174,6 +186,7 @@ impl ViewBackend for Appkit {
                 b
             };
             let control = match v.control {
+                NativeControl::Button { .. } if v.menu.is_some() => select::create(f, v),
                 NativeControl::Button { primary } => {
                     let b = button(BUTTON_MOMENTARY_PUSH_IN, &v.title);
                     msg!(b, "setBezelStyle:", (BEZEL_ROUNDED: u64) -> ());
@@ -232,7 +245,7 @@ impl ViewBackend for Appkit {
                 msg!(control, "setRefusesFirstResponder:", (yes: bool) -> ());
             }
             set_common(control, v);
-            let parent = self.view;
+            let parent = clips::parent_of(self.view, v);
             msg!(parent, "addSubview:", (control: Id) -> ());
             // Over a Metal layer the view may carry.
             let layer: Id = msg!(control, "layer", () -> Id);
@@ -247,8 +260,13 @@ impl ViewBackend for Appkit {
     fn update(&mut self, h: &mut Id, old: &NativeView, new: &NativeView) {
         let h = *h;
         unsafe {
+            // Into the container of the scroll area it is in now.
+            if old.clips.last().map(|c| c.id) != new.clips.last().map(|c| c.id) {
+                clips::reparent(h, clips::parent_of(self.view, new));
+            }
             set_common(h, new);
             match new.control {
+                NativeControl::Button { .. } if new.menu.is_some() => select::update(h, old, new),
                 NativeControl::Button { .. } => {
                     if old.title != new.title {
                         let text = nsstring(&new.title);
@@ -291,20 +309,28 @@ pub(crate) fn live_kind(control: NativeControl) -> bool {
 pub(crate) fn sync(view: Id, views: &[NativeView]) {
     let mut backend = Appkit { view };
     let mut set = SETS.with(|s| s.borrow_mut().remove(&(view as usize)).unwrap_or_default());
+    clips::prepare(view, views);
     let restack = set.sync(&mut backend, views);
+    clips::finish(view, views);
     if restack {
-        // Paint order: each on top of the ones before it.
-        for (_, h) in set.in_order() {
-            let h = *h;
-            unsafe {
-                msg!(h, "retain", () -> Id);
-                msg!(h, "removeFromSuperview", () -> ());
-                msg!(view, "addSubview:", (h: Id) -> ());
-                msg!(h, "release", () -> ());
-            }
+        // Paint order: each (and the containers it is in) on top of the
+        // ones before it.
+        let mut raised = Vec::new();
+        for (v, h) in set.in_order() {
+            clips::raise(view, v, &mut raised);
+            unsafe { clips::bring_to_front(*h) };
         }
     }
     SETS.with(|s| s.borrow_mut().insert(view as usize, set));
+}
+
+/// Whether window view `view` shows any live control (its Metal layer then
+/// presents with Core Animation's transaction).
+pub(crate) fn any_live(view: Id) -> bool {
+    SETS.with(|s| {
+        s.try_borrow()
+            .is_ok_and(|s| s.get(&(view as usize)).is_some_and(|s| s.len() > 0))
+    })
 }
 
 /// Forget window view `view`'s controls (it closed; AppKit releases its
@@ -314,6 +340,7 @@ pub(crate) fn forget(view: Id) {
     if let Some(mut set) = set {
         set.sync(&mut Appkit { view }, &[]);
     }
+    clips::forget(view);
 }
 
 /// `control`'s cell, if it has one (an `NSButton`'s, an `NSSlider`'s; not
@@ -391,10 +418,13 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
     shown
         .into_iter()
         .map(|(view, id, h)| unsafe {
-            let f: CgRect = msg!(h, "frame", () -> CgRect);
+            // In the window view's coordinates (it may be in a container).
+            let b: CgRect = msg!(h, "bounds", () -> CgRect);
+            let f: CgRect = msg!(h, "convertRect:toView:", (b: CgRect, view: Id) -> CgRect);
+            let (container, visible) = clips::shown(view, h);
             let at = CgPoint {
-                x: f.x + f.width / 2.0,
-                y: f.y + f.height / 2.0,
+                x: visible.min_x() + visible.width() / 2.0,
+                y: visible.min_y() + visible.height() / 2.0,
             };
             let s = sel("title");
             let title = if msg!(h, "respondsToSelector:", (s: Sel) -> bool) {
@@ -407,23 +437,46 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
                 class: super::objc::class_name(h),
                 title,
                 frame: crate::geometry::Rect::from_xywh(f.x, f.y, f.width, f.height),
-                hit: hit(view, at) == Some(h),
+                visible,
+                hit: visible.width() > 0.0 && visible.height() > 0.0 && lands_on(view, at, h),
+                container,
             }
         })
         .collect()
+}
+
+/// Whether a click at `at` (in `view`'s coordinates) lands on `control`
+/// (or a part of it), through any containers.
+unsafe fn lands_on(view: Id, at: CgPoint, control: Id) -> bool {
+    unsafe {
+        let parent: Id = msg!(view, "superview", () -> Id);
+        let p: CgPoint = if parent.is_null() {
+            at
+        } else {
+            msg!(view, "convertPoint:toView:", (at: CgPoint, parent: Id) -> CgPoint)
+        };
+        let mut h: Id = msg!(view, "hitTest:", (p: CgPoint) -> Id);
+        while !h.is_null() && h != view && h != control {
+            h = msg!(h, "superview", () -> Id);
+        }
+        h == control
+    }
 }
 
 pub(crate) fn poke(id: u64, value: Option<f64>) -> bool {
     let found = SETS.with(|s| {
         s.borrow()
             .values()
-            .find_map(|set| set.get(id).map(|(v, h)| (v.control, *h)))
+            .find_map(|set| set.get(id).map(|(v, h)| (v.control, v.menu.is_some(), *h)))
     });
-    let Some((control, h)) = found else {
+    let Some((control, menu, h)) = found else {
         return false;
     };
     unsafe {
         match control {
+            NativeControl::Button { .. } if menu => {
+                return select::pick(h, value.unwrap_or(0.0) as usize);
+            }
             NativeControl::Slider { .. } => {
                 let v = value.unwrap_or(0.5);
                 msg!(h, "setDoubleValue:", (v: f64) -> ());

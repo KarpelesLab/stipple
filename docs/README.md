@@ -789,12 +789,16 @@ Windows step passed, and the macOS selftest passed through the login keychain
 fallback; the iOS simulator's round trip is CI only. None blocks yet. See
 [secure-storage.md](secure-storage.md).
 
-⁹³ In a window, buttons, switches, sliders and progress bars (and checkboxes
-and radio buttons on macOS) are the OS's real controls, live (`UIButton`,
-`NSSwitch`, a `BUTTON` child window...), with the OS's effects, input and
-accessibility; wherever one can't show (under an overlay, a transform or a
-fade, half out of a scroll container; off screen) and for text-field frames
-and `select`, the OS draws a picture of it instead. See
+⁹³ In a window, buttons, switches, sliders, progress bars and selects (and
+checkboxes and radio buttons on macOS) are the OS's real controls, live
+(`UIButton`, `NSSwitch`, a `BUTTON` child window, a `UIButton` with a
+`UIMenu` / `NSPopUpButton` / `COMBOBOX` for a select, which picks through
+the OS's own menu or list), with the OS's effects, input and accessibility;
+one half scrolled out of a scroll area stays live, clipped by the OS (a
+clipping container view per area on iOS and macOS, a window region on
+Windows). Wherever one can't show (under an overlay, a transform or a fade,
+cut by a clip that isn't a scroll area's; off screen) and for text-field
+frames, the OS draws a picture of it instead. See
 [native-theme.md](native-theme.md#real-controls).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.

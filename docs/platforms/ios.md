@@ -459,8 +459,25 @@ vend the control itself where it stands for a node, so VoiceOver reads the
 switch scrolls the list under it (a pan recognizer on the view hands it to the
 app as a touch); a slider keeps its drags.
 
-Where a control can't be live (under an overlay, a transform, a fade, half
-out of a scroll container; off screen) UIKit draws it into a picture instead:
+A `select` is a `UIButton` (the same configuration as the other buttons, glass
+on iOS 26, with the pop-up indicator) whose `UIMenu` is its primary action,
+with `changesSelectionAsPrimaryAction`: a tap opens UIKit's menu from the
+button, the chosen option checked, and a pick runs a `UIAction` whose handler
+(one shared block, finding the control and option by the action's identifier)
+runs the element's handler for that option; a pick the app refuses is set
+back. VoiceOver reads it once, as the button, with the select's label and the
+choice as its value.
+
+The controls in a scroll area are subviews of a clipping container, a
+`StippleClipView` (a `UIView` with `clipsToBounds`) at the area's viewport,
+nested with nested areas: one half scrolled out stays live, cut at the area's
+edge. The container's `pointInside:withEvent:` is true only on its controls,
+so a touch elsewhere on it is the app's. While controls are live, a Metal layer
+presents with Core Animation's transaction (`presentsWithTransaction`), so a
+scrolled frame and the controls' new places show together.
+
+Where a control can't be live (under an overlay, a transform, a fade, cut by a
+clip that isn't a scroll area's; off screen) UIKit draws it into a picture instead:
 the same control, offscreen, snapshotted through the app's window (a plain
 layer render misses parts of current controls, such as a switch's knob).
 Text-field frames are always pictures (editing stays Stipple's). UIKit has no
@@ -469,9 +486,11 @@ checkbox or radio button, so those stay self-drawn.
 CI's `visual-ios` job runs `nativegallery`'s self-test on the simulator
 (`NATIVEGALLERY_SELFTEST`): the controls are `UIButton`s, a `UISwitch`, a
 `UISlider` and a `UIProgressView` where a tap at their middle lands, the app's
-handlers run when they're acted on, a panel over them turns them into pictures
-and back, a half-hidden row of a scrolled list is a picture, and VoiceOver's
-elements name each control once, as the UIKit control.
+handlers run when they're acted on, the select picks through its `UIMenu`'s
+`UIAction` (and a pick the app refuses goes back), a panel over them turns them
+into pictures and back, a half-hidden row of a scrolled list is live, in its
+clipping container and cut by it (and still once the list scrolls), and
+VoiceOver's elements name each control once, as the UIKit control.
 
 ## Fonts
 

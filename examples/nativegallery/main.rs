@@ -17,12 +17,17 @@
 //! controls back from the OS's view hierarchy (their classes, titles,
 //! frames, and whether a tap at their middle lands on them), acts on them
 //! as the user would (a press on Save, a flip of the switch, the slider
-//! moved) and checks the app's handlers ran, opens a panel over the top
-//! of the window and checks the controls under it became pictures (for
-//! about six seconds: CI screenshots it), and checks the list's
-//! half-hidden row isn't live. It logs to stdout and, on iOS, to
-//! `nativegallery.log` in its tmp dir, ending with `nativegallery
-//! selftest: passed` or `... FAILED: <what>`.
+//! moved) and checks the app's handlers ran, picks a size from the select
+//! through the OS's own menu (a `UIAction` of the `UIButton`'s `UIMenu`,
+//! an `NSPopUpButton`'s menu item, the `COMBOBOX`'s selection) and checks
+//! the app took it, then has the app refuse a pick and checks the OS
+//! control went back to the app's choice, opens a panel over the top of
+//! the window and checks the controls under it became pictures (for about
+//! six seconds: CI screenshots it), and checks the list's half-hidden row
+//! is live, in its scroll area's clipping container and cut by it, and
+//! that once the list scrolls the cut rows follow it, still live. It logs
+//! to stdout and, on iOS, to `nativegallery.log` in its tmp dir, ending
+//! with `nativegallery selftest: passed` or `... FAILED: <what>`.
 
 use stipple::prelude::*;
 
@@ -38,6 +43,21 @@ struct Gallery {
     panel: bool,
     /// The self-test runs (and the list shows).
     test: bool,
+    /// The select's choice.
+    size: Select,
+    /// Where picks go while the app refuses them (the self-test's
+    /// `locked`): the select keeps showing `size`.
+    refused: Select,
+    locked: bool,
+}
+
+/// The size options.
+const SIZES: [&str; 4] = ["Small", "Medium", "Large", "Extra large"];
+
+thread_local! {
+    /// The self-test's list and how to scroll it.
+    static LIST: std::cell::RefCell<Option<(stipple::core::ScrollRequests, stipple::core::ScrollId)>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
@@ -52,6 +72,14 @@ fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
     });
     let toggle = switch(cx, "Sync", state.on, |s| s.on = !s.on);
     let level = slider(cx, state.level, |s, v| s.level = v);
+    let size = select(cx, &SIZES, &state.size, |s| {
+        if s.locked {
+            &mut s.refused
+        } else {
+            &mut s.size
+        }
+    })
+    .a11y_label("Size");
     let name = text_field(cx, &state.name, |s| &mut s.name);
     let mut items = vec![
         heading(cx, "Native controls"),
@@ -73,8 +101,19 @@ fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
         progress_bar(cx, state.level),
     ];
     if state.test {
+        // A select (the window shows it in the self-test, where it's taller).
+        items.push(size);
+        // What the app has chosen, when it changes (the Windows script picks
+        // with a real click).
+        static SHOWN: std::sync::Mutex<Option<Option<usize>>> = std::sync::Mutex::new(None);
+        let now = Some(state.size.selected());
+        if std::mem::replace(&mut *SHOWN.lock().unwrap(), now) != now {
+            println!("nativegallery: size {:?}", state.size.selected());
+        }
         // Two rows and a half show: the half-hidden one is a picture.
         let id = cx.register_scroll();
+        let requests = cx.scroll_requests();
+        LIST.with(|l| *l.borrow_mut() = Some((requests, id)));
         let rows = (1..=4).map(|i| button(cx, format!("Row {i}"))).collect();
         let control = stipple::platform::native::NativeControl::Button { primary: true };
         let row = stipple::platform::native::size_hint(control)
@@ -108,6 +147,9 @@ fn gallery() -> Gallery {
         saves: 0,
         panel: false,
         test: false,
+        size: Select::new(Some(1)),
+        refused: Select::new(Some(1)),
+        locked: false,
     }
 }
 
@@ -121,7 +163,7 @@ fn main() {
         }
     }
     let test = std::env::var_os("NATIVEGALLERY_SELFTEST").is_some();
-    let height = if test { 480.0 } else { 340.0 };
+    let height = if test { 560.0 } else { 340.0 };
     let app = App::new(Gallery { test, ..gallery() }, view)
         .title("Stipple")
         .theme(Theme::native())
@@ -227,6 +269,11 @@ mod selftest {
     use stipple::prelude::AppHandle;
 
     static FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    /// The select's id, and where Row 1 was before the list scrolled.
+    static SELECT: Mutex<Option<u64>> = Mutex::new(None);
+    static ROW1: Mutex<Option<f64>> = Mutex::new(None);
+    /// How far the self-test scrolls the list.
+    static SCROLLED: Mutex<f64> = Mutex::new(0.0);
 
     fn log(line: &str) {
         println!("{line}");
@@ -263,6 +310,56 @@ mod selftest {
         })
     }
 
+    /// Log where live control `c` is.
+    fn describe(c: &LiveControl) {
+        log(&format!(
+            "nativegallery: live {} {:?} at {:.0},{:.0} {:.0}x{:.0} shown {:.0},{:.0} {:.0}x{:.0} in {:?} hit={}",
+            c.class,
+            c.title,
+            c.frame.min_x(),
+            c.frame.min_y(),
+            c.frame.width(),
+            c.frame.height(),
+            c.visible.min_x(),
+            c.visible.min_y(),
+            c.visible.width(),
+            c.visible.height(),
+            c.container,
+            c.hit
+        ));
+    }
+
+    /// Check live control `c` (named `what`) is cut by the OS: in a
+    /// clipping container, shown only in part (at the top or the bottom),
+    /// and a tap on that part lands on it.
+    fn cut(c: &LiveControl, what: &str, at_top: bool) {
+        check(
+            !c.container.is_empty(),
+            format!("{what} is in a clipping container"),
+        );
+        let shown = c.visible.height();
+        check(
+            shown > 1.0 && shown < c.frame.height() - 1.0,
+            format!(
+                "{what} is cut ({shown:.1} of {:.1} shown)",
+                c.frame.height()
+            ),
+        );
+        let edge = if at_top {
+            c.visible.min_y() - c.frame.min_y()
+        } else {
+            c.frame.max_y() - c.visible.max_y()
+        };
+        check(
+            edge > 1.0,
+            format!(
+                "{what} is cut at the {} ({edge:.1})",
+                if at_top { "top" } else { "bottom" }
+            ),
+        );
+        check(c.hit, format!("a tap on {what}'s shown part lands on it"));
+    }
+
     const SLIDER: &[&str] = &["slider", "trackbar"];
     const SWITCH: &[&str] = &["switch"];
 
@@ -280,16 +377,7 @@ mod selftest {
         at(handle, 2500, move |_| {
             let live = live_controls();
             for c in &live {
-                log(&format!(
-                    "nativegallery: live {} {:?} at {:.0},{:.0} {:.0}x{:.0} hit={}",
-                    c.class,
-                    c.title,
-                    c.frame.min_x(),
-                    c.frame.min_y(),
-                    c.frame.width(),
-                    c.frame.height(),
-                    c.hit
-                ));
+                describe(c);
             }
             if !hosts {
                 return;
@@ -306,15 +394,34 @@ mod selftest {
                 of_kind(&live, SLIDER).is_some(),
                 "the slider is a live control",
             );
-            // Half hidden by its list, or scrolled out of it: pictures.
-            check(
-                titled(&live, "Row 3").is_none(),
-                "the half-hidden row is a picture",
-            );
+            // Half hidden by its list: live, in the list's clipping
+            // container, which cuts it. Scrolled out of it: not shown.
+            let row3 = titled(&live, "Row 3");
+            check(row3.is_some(), "the half-hidden row is live");
+            if let Some(c) = row3 {
+                cut(c, "Row 3", false);
+            }
             check(
                 titled(&live, "Row 4").is_none(),
                 "the hidden row isn't shown",
             );
+            if let Some(c) = titled(&live, "Row 1") {
+                *ROW1.lock().unwrap() = Some(c.frame.min_y());
+                // Row heights: half a row down.
+                *SCROLLED.lock().unwrap() = (c.frame.height() / 2.0).round();
+            }
+            // The select is the OS's pop-up button, showing the app's
+            // choice; a pick in its menu reaches the app.
+            let size = titled(&live, "Medium");
+            check(
+                size.is_some(),
+                "the select is a live control showing Medium",
+            );
+            if let Some(size) = size {
+                *SELECT.lock().unwrap() = Some(size.id);
+                check(size.hit, "a tap on the select lands on it");
+                check(poke_control(size.id, Some(2.0)), "the select picks Large");
+            }
             if let Some(save) = titled(&live, "Save") {
                 check(poke_control(save.id, None), "Save takes a press");
             }
@@ -334,6 +441,15 @@ mod selftest {
                 (s.level - 0.2).abs() < 0.01,
                 format!("the slider's handler set 0.2 ({})", s.level),
             );
+            check(
+                s.size.selected() == Some(2),
+                format!(
+                    "the select's pick reached the app ({:?})",
+                    s.size.selected()
+                ),
+            );
+            // From now on the app refuses picks.
+            s.locked = true;
             let live = live_controls();
             if let Some(switch) = of_kind(&live, SWITCH) {
                 log(&format!("nativegallery: flipping the switch (on {})", s.on));
@@ -344,15 +460,69 @@ mod selftest {
             if hosts && cfg!(not(target_os = "windows")) {
                 check(!s.on, "the switch's handler turned it off");
             }
+            if hosts {
+                let live = live_controls();
+                let id = *SELECT.lock().unwrap();
+                let size = id.and_then(|id| live.iter().find(|c| c.id == id));
+                check(
+                    size.is_some_and(|c| c.title == "Large"),
+                    format!(
+                        "the select shows Large ({:?})",
+                        size.map(|c| c.title.as_str())
+                    ),
+                );
+                // A pick the app refuses.
+                if let Some(size) = size {
+                    check(poke_control(size.id, Some(0.0)), "the select picks Small");
+                }
+            }
+            // Half a row down: Row 1 cut at the top, Row 3 at the bottom.
+            let by = *SCROLLED.lock().unwrap();
+            super::LIST.with(|l| {
+                if let Some((requests, id)) = &*l.borrow() {
+                    requests.scroll_to(*id, by);
+                }
+            });
             s.panel = true;
         });
         at(handle, 5500, move |_| {
             let live = live_controls();
+            for c in &live {
+                describe(c);
+            }
             if hosts {
                 check(
                     titled(&live, "Save").is_none(),
                     "Save under the panel is a picture",
                 );
+                // The refused pick went back to the app's choice.
+                let id = *SELECT.lock().unwrap();
+                let size = id.and_then(|id| live.iter().find(|c| c.id == id));
+                check(
+                    size.is_some_and(|c| c.title == "Large"),
+                    format!(
+                        "the refused pick went back to Large ({:?})",
+                        size.map(|c| c.title.as_str())
+                    ),
+                );
+                // The scrolled list: its rows moved with it, still live,
+                // cut by its container at the top and the bottom.
+                let by = *SCROLLED.lock().unwrap();
+                let row1 = titled(&live, "Row 1");
+                check(row1.is_some(), "Row 1, half scrolled out, is live");
+                if let Some(c) = row1 {
+                    cut(c, "Row 1", true);
+                    if let Some(was) = *ROW1.lock().unwrap() {
+                        let moved = was - c.frame.min_y();
+                        check(
+                            (moved - by).abs() < 1.0,
+                            format!("Row 1 moved with the list ({moved:.1} for {by})"),
+                        );
+                    }
+                }
+                if let Some(c) = titled(&live, "Row 3") {
+                    cut(c, "Row 3 (scrolled)", false);
+                }
                 check(
                     of_kind(&live, SLIDER).is_some() || titled(&live, "Row 1").is_some(),
                     "controls clear of the panel stay live",
@@ -363,7 +533,7 @@ mod selftest {
         at(handle, 11500, move |s| {
             s.panel = false;
         });
-        at(handle, 12500, move |_| {
+        at(handle, 12500, move |s| {
             let live = live_controls();
             if hosts {
                 check(
@@ -381,7 +551,11 @@ mod selftest {
                         e.class, e.label, e.traits
                     ));
                 }
-                for (label, class) in [("Save", "UIButton"), ("Sync", "UISwitch")] {
+                for (label, class) in [
+                    ("Save", "UIButton"),
+                    ("Sync", "UISwitch"),
+                    ("Size", "UIButton"),
+                ] {
                     let found: Vec<_> = elements.iter().filter(|e| e.label == label).collect();
                     check(
                         found.len() == 1,
@@ -393,6 +567,17 @@ mod selftest {
                     );
                 }
             }
+            if hosts {
+                check(
+                    s.size.selected() == Some(2),
+                    format!(
+                        "the app kept Large through the refused pick ({:?})",
+                        s.size.selected()
+                    ),
+                );
+            }
+            // Picks reach the app again (a real one may follow: CI's).
+            s.locked = false;
             let failures = std::mem::take(&mut *FAILURES.lock().unwrap());
             if failures.is_empty() {
                 log("nativegallery selftest: passed");

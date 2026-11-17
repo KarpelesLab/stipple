@@ -11,10 +11,14 @@
 //!
 //! - something Stipple paints later overlaps it, or something that takes
 //!   input does (an overlay, a menu, a dialog's scrim or a popup's
-//!   click-catcher, a toast, a scroll bar, a badge);
+//!   click-catcher, a toast, a scroll bar's track, a badge); an overlay
+//!   scroll indicator's thumb alone passes under it;
 //! - it, or anything around it, is scaled, rotated or translucent (a page
 //!   transition, a fade); a plain move it follows;
-//! - a clip (a scroll container) cuts part of it off;
+//! - a clip that isn't a scroll area's (a rounded panel's) cuts part of it
+//!   off. A scroll area is a clipping container of the OS's (see
+//!   [`NativeClip`]): a control half scrolled out of it stays live, and the
+//!   OS cuts it at the edge; one wholly out of it isn't shown;
 //! - it holds keyboard focus with the focus ring showing (the OS's own
 //!   focus look is then drawn in the picture);
 //! - it is leaving ([ghost](LayoutNode::ghost)) or off stage;
@@ -41,10 +45,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use crate::core::runtime::{ActionId, DragId, FocusId, LayoutNode, NodeContent};
 use crate::geometry::{Affine, Rect};
-use crate::platform::native::{NativeControl, NativeView};
+use crate::platform::native::{NativeClip, NativeControl, NativeMenu, NativeView};
 
 /// How an OS control's events reach its element.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Route {
     /// The tap handler a press or a flip runs (a checkbox's row's).
     pub(crate) action: Option<ActionId>,
@@ -55,6 +59,8 @@ pub(crate) struct Route {
     pub(crate) bounds: Rect,
     /// Where it is in the window (a tap's pointer position).
     pub(crate) frame: Rect,
+    /// A select's: the tap handler a pick of each option runs.
+    pub(crate) picks: Vec<ActionId>,
 }
 
 /// What the App needs to decide this frame's live controls.
@@ -91,7 +97,13 @@ impl NativeHost {
                 cands: Vec::new(),
                 path: Vec::new(),
             };
-            walk.visit(tree, Affine::IDENTITY, 1.0, None, Owner::default());
+            walk.visit(
+                tree,
+                Affine::IDENTITY,
+                1.0,
+                &mut Clips::default(),
+                Owner::default(),
+            );
 
             let live: HashMap<Vec<u32>, (u64, Vec<u32>)> = walk
                 .cands
@@ -120,7 +132,14 @@ impl NativeHost {
 
     /// How control `id`'s events reach its element.
     pub(crate) fn route(&self, id: u64) -> Option<Route> {
-        self.routes.get(&id).copied()
+        self.routes.get(&id).cloned()
+    }
+
+    /// Hand the window the list again on the next frame, changed or not:
+    /// the user acted on a control, which then shows what the app's state
+    /// says (a pick or a flip the app refused goes back).
+    pub(crate) fn resend(&mut self) {
+        self.changed = true;
     }
 
     /// Whether any control is live.
@@ -184,9 +203,36 @@ struct Cand {
     ok: bool,
     /// Something painted after it overlaps it.
     covered: bool,
+    /// The part of it its scroll areas show (what something painted later
+    /// can cover), in window coordinates.
+    visible: Rect,
     /// Its subtree is being walked (what's in it is its own content, not
     /// over it).
     open: bool,
+}
+
+/// The clips around a node, in window coordinates.
+#[derive(Clone, Debug, Default)]
+struct Clips {
+    /// The ones that aren't scroll areas', intersected: a control must be
+    /// wholly inside them to be live.
+    hard: Option<Rect>,
+    /// The scroll areas, outermost first: the OS clips a live control to
+    /// them (each is a container of its own).
+    areas: Vec<NativeClip>,
+}
+
+impl Clips {
+    /// The part of `rect` they show (what's drawn there), if any.
+    fn cut(&self, rect: Rect) -> Option<Rect> {
+        let r = match self.hard {
+            Some(h) => rect.intersection(h)?,
+            None => rect,
+        };
+        self.areas
+            .iter()
+            .try_fold(r, |r, a| r.intersection(a.frame))
+    }
 }
 
 struct Walk {
@@ -260,13 +306,21 @@ fn sole_text(node: &LayoutNode) -> Option<(String, f64)> {
     }
 }
 
+/// The size of the first text in `node`.
+fn text_size(node: &LayoutNode) -> Option<f64> {
+    match &node.content {
+        NodeContent::Text { size, .. } => Some(*size),
+        _ => node.children.iter().find_map(text_size),
+    }
+}
+
 impl Walk {
     fn visit<'a>(
         &mut self,
         node: &'a LayoutNode,
         outer: Affine,
         opacity: f32,
-        clip: Option<Rect>,
+        clips: &mut Clips,
         owner: Owner<'a>,
     ) {
         let m = crate::core::diff::to_window(node, outer);
@@ -274,7 +328,7 @@ impl Walk {
         let rect = m.map_rect(node.bounds);
         // Over the controls before it?
         if paints(node) {
-            self.cover(rect);
+            self.cover(clips.cut(rect));
         }
         let owner = if node.action.is_some() {
             Owner {
@@ -287,45 +341,63 @@ impl Walk {
         let mut opened = None;
         if let Some(deco) = node.native.filter(|d| live_kind(d.control)) {
             opened = Some(self.cands.len());
-            let cand = self.candidate(node, deco, m, rect, opacity, clip, owner);
+            let cand = self.candidate(node, deco, m, rect, opacity, clips, owner);
             self.cands.push(cand);
         }
-        let inner_clip = if node.clip {
-            Some(clip.map_or(rect, |c| {
+        // A scroll area clips its content as a container of the OS's;
+        // another clip (a panel's) the controls must be inside of.
+        let outer_hard = clips.hard;
+        let area = node.clip && node.scroll.is_some();
+        if area {
+            clips.areas.push(NativeClip {
+                id: area_identity(node, &self.path),
+                frame: rect,
+            });
+        } else if node.clip {
+            clips.hard = Some(clips.hard.map_or(rect, |c| {
                 c.intersection(rect).unwrap_or(Rect::from_xywh(
                     rect.min_x(),
                     rect.min_y(),
                     0.0,
                     0.0,
                 ))
-            }))
-        } else {
-            clip
-        };
+            }));
+        }
         for (i, child) in node.children.iter().enumerate() {
             self.path.push(i as u32);
-            self.visit(child, m, opacity, inner_clip, owner);
+            self.visit(child, m, opacity, clips, owner);
             self.path.pop();
         }
+        if area {
+            clips.areas.pop();
+        }
+        clips.hard = outer_hard;
         if let Some(i) = opened {
             self.cands[i].open = false;
         }
-        // A scroll bar, over the container's content.
-        if let Some(bar) = &node.scroll_bar {
-            if let Some((track, _)) = bar.track {
-                self.cover(m.map_rect(track));
-            }
+        // A scroll bar, over the container's content. An overlay
+        // indicator's thumb alone (no track: iOS's, macOS's overlay
+        // scrollers' while scrolling) passes under the live controls
+        // rather than turning every row it crosses into a picture for as
+        // long as the list moves.
+        if let Some(bar) = &node.scroll_bar
+            && let Some((track, _)) = bar.track
+        {
+            self.cover(clips.cut(m.map_rect(track)));
             if bar.thumb_color.a > 0 && bar.thumb.width() > 0.0 {
-                self.cover(m.map_rect(bar.thumb));
+                self.cover(clips.cut(m.map_rect(bar.thumb)));
             }
         }
     }
 
-    /// Something drawn at `rect` (window coordinates) covers the controls
-    /// it overlaps that were drawn before it.
-    fn cover(&mut self, rect: Rect) {
+    /// Something drawn at `rect` (window coordinates, the part its clips
+    /// show) covers the controls it overlaps that were drawn before it.
+    fn cover(&mut self, rect: Option<Rect>) {
+        let Some(rect) = rect else {
+            return;
+        };
         for c in &mut self.cands {
-            if !c.open && !c.covered && rect.intersection(c.view.frame).is_some() {
+            if !c.open && !c.covered && rect.intersection(c.visible).is_some() {
                 c.covered = true;
             }
         }
@@ -339,7 +411,7 @@ impl Walk {
         m: Affine,
         rect: Rect,
         opacity: f32,
-        clip: Option<Rect>,
+        clips: &Clips,
         owner: Owner<'_>,
     ) -> Cand {
         let input = &self.input;
@@ -356,15 +428,33 @@ impl Walk {
         let mut ok = !input.suspend && !node.ghost && !node.offstage;
         // Only a plain move, fully opaque.
         ok &= is_translation(m) && opacity >= 1.0;
-        // Wholly inside its clips.
-        if let Some(c) = clip {
+        // Wholly inside the clips that aren't scroll areas', and at least
+        // partly in view in those that are (which the OS clips it to).
+        if let Some(c) = clips.hard {
             ok &= contains(c, rect);
         }
+        let visible = clips
+            .areas
+            .iter()
+            .try_fold(rect, |r, c| r.intersection(c.frame));
+        ok &= visible.is_some();
+        let visible = visible.unwrap_or(Rect::from_xywh(rect.min_x(), rect.min_y(), 0.0, 0.0));
+        // A select's options, which its OS control (a pop-up button) shows.
+        let choices = node.semantics.as_ref().and_then(|s| s.choices.clone());
         // Focused with the ring showing: the OS's focus look, in the
         // picture.
         let focus = node.focus.or(owner.node.and_then(|o| o.focus));
         ok &= !(input.focus_visible && focus.is_some() && focus == input.focused);
         let (title, font_size) = match deco.control {
+            // A select's title is its chosen option, in its text's size.
+            NativeControl::Button { .. } if choices.is_some() => {
+                let c = choices.as_deref().expect("choices");
+                let title = c.selected.and_then(|i| c.labels.get(i));
+                (
+                    title.cloned().unwrap_or_else(|| "\u{2014}".into()),
+                    text_size(node).unwrap_or(0.0),
+                )
+            }
             NativeControl::Button { .. } => sole_text(node).unwrap_or_else(|| {
                 ok = false;
                 (String::new(), 0.0)
@@ -377,7 +467,16 @@ impl Walk {
         // Stipple draws a control without a handler as it does one with, so
         // the OS control looks enabled too.
         let enabled = true;
-        let label = crate::core::a11y::name_of(owner.node.unwrap_or(node));
+        // A select is named by its label, if it has one (its text is its
+        // value, which the OS control reads out itself).
+        let label = match &choices {
+            Some(_) => node
+                .semantics
+                .as_ref()
+                .and_then(|s| s.label.clone())
+                .unwrap_or_default(),
+            None => crate::core::a11y::name_of(owner.node.unwrap_or(node)),
+        };
         let owner_path = match owner.node {
             Some(_) => path[..owner.depth].to_vec(),
             None => path.clone(),
@@ -393,17 +492,24 @@ impl Walk {
                 enabled,
                 dark: deco.dark,
                 rtl: node.rtl,
+                menu: choices.as_ref().map(|c| NativeMenu {
+                    options: c.labels.clone(),
+                    selected: c.selected,
+                }),
+                clips: clips.areas.clone(),
             },
             route: Route {
                 action,
                 drag: node.drag,
                 bounds: node.bounds,
                 frame: rect,
+                picks: choices.map(|c| c.picks.clone()).unwrap_or_default(),
             },
             path,
             owner_path,
             ok,
             covered: false,
+            visible,
             open: true,
         }
     }
@@ -416,6 +522,21 @@ fn contains(outer: Rect, inner: Rect) -> bool {
         && inner.min_y() >= outer.min_y() - E
         && inner.max_x() <= outer.max_x() + E
         && inner.max_y() <= outer.max_y() + E
+}
+
+/// What scroll area `node` (a clipping container) is known by across
+/// frames: its scroll handle, else its key, else its place in the tree.
+fn area_identity(node: &LayoutNode, path: &[u32]) -> u64 {
+    let mut h = DefaultHasher::new();
+    "scroll area".hash(&mut h);
+    if let Some(key) = node.key {
+        (0u8, key).hash(&mut h);
+    } else if let Some(id) = node.scroll {
+        (1u8, id).hash(&mut h);
+    } else {
+        (2u8, path).hash(&mut h);
+    }
+    h.finish()
 }
 
 /// What control `node` is known by across frames.
@@ -722,5 +843,231 @@ mod tests {
         host.plan(&mut tree, on());
         assert!(!host.any_live());
         let _ = Size::ZERO;
+    }
+
+    /// A list of `n` buttons 30 high, 8 apart, scrolled `offset` down, in a
+    /// scroll area `height` high at y 0.
+    fn scrolled_list(
+        cx: &mut Cx<u32>,
+        n: usize,
+        height: f64,
+        offset: f64,
+        after: Option<Element>,
+    ) -> LayoutNode {
+        let id = cx.register_scroll();
+        let rows = (1..=n).map(|i| button(cx, &format!("Row {i}"))).collect();
+        let list = Element::stack(Axis::Vertical, rows)
+            .gap(8.0)
+            .height(height)
+            .scrollable(id);
+        let mut items = vec![list];
+        items.extend(after);
+        let mut tree = lay(Element::stack(Axis::Vertical, items));
+        let mut offsets = HashMap::from([(id, offset)]);
+        crate::core::apply_scroll(&mut tree, &mut offsets);
+        tree
+    }
+
+    fn titled<'a>(host: &'a NativeHost, title: &str) -> Option<&'a NativeView> {
+        host.views().iter().find(|v| v.title == title)
+    }
+
+    #[test]
+    fn a_control_half_scrolled_out_stays_live_clipped_by_its_scroll_area() {
+        let theme = Theme::light();
+        let mut cx = Cx::<u32>::new(&theme);
+        // Rows at 0, 38, 76, 114: a 95-high area shows two and a half.
+        let mut tree = scrolled_list(&mut cx, 4, 95.0, 0.0, None);
+        let mut host = NativeHost::default();
+        host.plan(&mut tree, on());
+        let titles: Vec<&str> = host.views().iter().map(|v| v.title.as_str()).collect();
+        assert_eq!(titles, ["Row 1", "Row 2", "Row 3"]);
+        let third = titled(&host, "Row 3").unwrap();
+        assert_eq!(third.clips.len(), 1);
+        assert_eq!(third.clips[0].frame.height(), 95.0);
+        assert_eq!(third.frame, Rect::from_xywh(0.0, 76.0, 80.0, 30.0));
+        assert_eq!(
+            third.visible(),
+            Some(Rect::from_xywh(0.0, 76.0, 80.0, 19.0))
+        );
+        let first = titled(&host, "Row 1").unwrap().clone();
+        // Every row of the area is in the same container.
+        assert!(host.views().iter().all(|v| v.clips == first.clips));
+        // Scrolled 20 down: the first is cut at the top, the fourth comes in
+        // at the bottom; the area (the container) stays where it is.
+        let mut cx = Cx::<u32>::new(&theme);
+        let mut tree = scrolled_list(&mut cx, 4, 95.0, 20.0, None);
+        host.plan(&mut tree, on());
+        let titles: Vec<&str> = host.views().iter().map(|v| v.title.as_str()).collect();
+        assert_eq!(titles, ["Row 1", "Row 2", "Row 3", "Row 4"]);
+        let moved = titled(&host, "Row 1").unwrap();
+        assert_eq!(moved.id, first.id);
+        assert_eq!(moved.clips, first.clips);
+        assert_eq!(moved.frame.min_y(), -20.0);
+        // Scrolled past it: wholly out, it isn't shown.
+        let mut cx = Cx::<u32>::new(&theme);
+        let mut tree = scrolled_list(&mut cx, 4, 95.0, 40.0, None);
+        host.plan(&mut tree, on());
+        assert!(titled(&host, "Row 1").is_none());
+        assert!(titled(&host, "Row 2").is_some());
+    }
+
+    #[test]
+    fn what_is_drawn_after_a_scroll_area_covers_only_the_part_it_shows() {
+        let theme = Theme::light();
+        let mut cx = Cx::<u32>::new(&theme);
+        // A box right under the area, over Row 3's hidden part only.
+        let under = Element::boxed(crate::core::BoxStyle {
+            fill: Some(Color::rgb(255, 0, 0)),
+            radius: 0.0,
+            border: None,
+        })
+        .width(80.0)
+        .height(40.0);
+        let mut tree = scrolled_list(&mut cx, 4, 95.0, 0.0, Some(under));
+        let mut host = NativeHost::default();
+        host.plan(&mut tree, on());
+        assert!(titled(&host, "Row 3").is_some());
+    }
+
+    #[test]
+    fn a_row_scrolled_out_over_a_control_above_its_area_does_not_cover_it() {
+        let theme = Theme::light();
+        let mut cx = Cx::<u32>::new(&theme);
+        let id = cx.register_scroll();
+        let above = button(&mut cx, "Above");
+        let rows = (1..=3)
+            .map(|i| button(&mut cx, &format!("Row {i}")))
+            .collect();
+        let list = Element::stack(Axis::Vertical, rows)
+            .gap(8.0)
+            .height(60.0)
+            .scrollable(id);
+        // The list right under the button: its first row, scrolled 13 up,
+        // reaches over the button's box but is cut at the area's top.
+        let mut tree = lay(Element::stack(Axis::Vertical, vec![above, list]));
+        let mut offsets = HashMap::from([(id, 13.0)]);
+        crate::core::apply_scroll(&mut tree, &mut offsets);
+        let mut host = NativeHost::default();
+        host.plan(&mut tree, on());
+        assert!(titled(&host, "Above").is_some());
+        assert!(titled(&host, "Row 1").is_some());
+    }
+
+    #[test]
+    fn an_overlay_scroll_thumb_passes_under_live_rows_and_a_track_covers_them() {
+        use crate::core::scroll_bar::BarPaint;
+        let theme = Theme::light();
+        let mut cx = Cx::<u32>::new(&theme);
+        let mut tree = scrolled_list(&mut cx, 2, 95.0, 0.0, None);
+        // A thumb over the rows' right edge, as iOS draws its indicator.
+        let thumb = Rect::from_xywh(74.0, 2.0, 4.0, 40.0);
+        let mut bar = BarPaint {
+            track: None,
+            thumb,
+            thumb_color: Color::BLACK,
+        };
+        tree.children[0].scroll_bar = Some(Box::new(bar.clone()));
+        let mut host = NativeHost::default();
+        host.plan(&mut tree, on());
+        assert!(titled(&host, "Row 1").is_some());
+        bar.track = Some((Rect::from_xywh(72.0, 0.0, 8.0, 95.0), Color::WHITE));
+        tree.children[0].scroll_bar = Some(Box::new(bar));
+        host.plan(&mut tree, on());
+        assert!(titled(&host, "Row 1").is_none());
+    }
+
+    #[test]
+    fn nested_scroll_areas_nest_their_containers_and_other_clips_stay_strict() {
+        let theme = Theme::light();
+        let mut cx = Cx::<u32>::new(&theme);
+        let inner_id = cx.register_scroll();
+        let outer_id = cx.register_scroll();
+        let inner = Element::stack(
+            Axis::Vertical,
+            vec![button(&mut cx, "In 1"), button(&mut cx, "In 2")],
+        )
+        .gap(8.0)
+        .height(50.0)
+        .scrollable(inner_id);
+        let outer = Element::stack(Axis::Vertical, vec![button(&mut cx, "Top"), inner])
+            .gap(8.0)
+            .height(200.0)
+            .scrollable(outer_id);
+        let mut tree = lay(Element::stack(Axis::Vertical, vec![outer]));
+        let mut offsets = HashMap::new();
+        crate::core::apply_scroll(&mut tree, &mut offsets);
+        let mut host = NativeHost::default();
+        host.plan(&mut tree, on());
+        let top = titled(&host, "Top").unwrap();
+        let in2 = titled(&host, "In 2").unwrap();
+        assert_eq!(top.clips.len(), 1);
+        assert_eq!(in2.clips.len(), 2);
+        assert_eq!(in2.clips[0], top.clips[0]);
+        assert_ne!(in2.clips[1].id, in2.clips[0].id);
+        // In 2 at 38 + 38 = 76, its area from 38 to 88: 12 of it shows.
+        assert_eq!(in2.visible().unwrap().height(), 12.0);
+        // A clip that isn't a scroll area's (a panel's) still keeps a
+        // control it cuts a picture.
+        let mut cx = Cx::<u32>::new(&theme);
+        let panel = Element::stack(
+            Axis::Vertical,
+            vec![button(&mut cx, "One"), button(&mut cx, "Two")],
+        )
+        .height(45.0)
+        .clip();
+        let mut tree = lay(Element::stack(Axis::Vertical, vec![panel]));
+        host.plan(&mut tree, on());
+        let titles: Vec<&str> = host.views().iter().map(|v| v.title.as_str()).collect();
+        assert_eq!(titles, ["One"]);
+        assert!(host.views()[0].clips.is_empty());
+    }
+
+    #[test]
+    fn a_select_is_a_pop_up_button_with_its_options_and_one_pick_each() {
+        use crate::widgets::Select;
+        // The native theme's deco, whatever this OS draws.
+        let theme = Theme::light();
+        let mut cx = Cx::<Select>::new(&theme);
+        let state = Select::new(Some(1));
+        let tap = cx.register(|s: &mut Select| s.toggle());
+        let picks: Vec<ActionId> = (0..3)
+            .map(|i| cx.register(move |s: &mut Select| s.choose(i)))
+            .collect();
+        let el = Element::stack(
+            Axis::Horizontal,
+            vec![
+                Element::text("Medium", 14.0, Color::BLACK),
+                Element::text("\u{25BE}", 14.0, Color::BLACK),
+            ],
+        )
+        .native(deco(BUTTON))
+        .width(200.0)
+        .height(30.0)
+        .a11y_label("Size")
+        .native_choices(crate::core::a11y::Choices {
+            labels: vec!["Small".into(), "Medium".into(), "Large".into()],
+            selected: Some(1),
+            picks: picks.clone(),
+        });
+        let mut el = el;
+        el.action = Some(tap);
+        let mut tree = lay(el);
+        let mut host = NativeHost::default();
+        host.plan(&mut tree, on());
+        let v = &host.views()[0];
+        let menu = v.menu.as_ref().unwrap();
+        assert_eq!(menu.options, ["Small", "Medium", "Large"]);
+        assert_eq!(menu.selected, Some(1));
+        assert_eq!(v.title, "Medium");
+        assert_eq!(v.font_size, 14.0);
+        assert_eq!(v.label, "Size");
+        let route = host.route(v.id).unwrap();
+        assert_eq!(route.picks, picks);
+        assert_eq!(route.action, Some(tap));
+        let mut handlers = cx.into_handlers();
+        let mut s = state.clone();
+        handlers.dispatch(route.picks[2], &mut s);
+        assert_eq!(s.selected(), Some(2));
     }
 }

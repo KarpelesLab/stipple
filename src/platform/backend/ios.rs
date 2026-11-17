@@ -1505,6 +1505,8 @@ impl Window for IosWindow {
             let size = self.size;
             let layer = c.metal.as_mut()?;
             unsafe { layer.fit(size.width as f64 / scale, size.height as f64 / scale, scale) };
+            let live = crate::platform::native::os_views::any_live();
+            unsafe { layer.present_with_transaction(live) };
             Some(crate::platform::GpuLayer::Metal(layer.layer()))
         })
     }

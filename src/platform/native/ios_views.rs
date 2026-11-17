@@ -18,11 +18,17 @@
 //! only touches that land on those controls, takes it from the control
 //! (which then doesn't fire) and hands it to the app as a touch, so a list
 //! of controls scrolls wherever it's dragged. A slider keeps its drags.
+//!
+//! A select is a `UIButton` with a `UIMenu` (`ios_select`). The controls in
+//! a scroll area are subviews of its clipping container (`apple_clips`),
+//! which cuts one half scrolled out at the area's edge.
 
 use std::cell::RefCell;
 use std::ffi::c_void;
 
+use super::apple_clips as clips;
 use super::objc::{CgRect, Id, Sel, class, msg, nsstring, sel};
+use super::os_select as select;
 use super::{NativeControl, NativeView, NativeViewEvent, ViewBackend, ViewSet};
 
 #[link(name = "objc", kind = "dylib")]
@@ -103,6 +109,7 @@ extern "C" fn action(_this: Id, _cmd: Sel, sender: Id) {
         }
         _ => NativeViewEvent::Activated,
     };
+    touched(id);
     crate::platform::backend::ios::send_event(crate::platform::Event::NativeView { id, event });
 }
 
@@ -176,13 +183,20 @@ unsafe fn install_pan(view: Id) {
     }
 }
 
+/// Where `v` goes in the view it is in (its scroll area's container, or
+/// the app's view).
 fn frame(v: &NativeView) -> CgRect {
-    CgRect {
-        x: v.frame.min_x(),
-        y: v.frame.min_y(),
-        width: v.frame.width(),
-        height: v.frame.height(),
-    }
+    clips::frame_in_parent(v)
+}
+
+/// The user acted on control `id`: the next list sets it to what the app's
+/// state says, changed or not.
+pub(super) fn touched(id: u64) {
+    SET.with(|s| {
+        if let Ok(mut s) = s.try_borrow_mut() {
+            s.touch(id);
+        }
+    });
 }
 
 /// The button configuration for a primary or regular button: iOS 26's
@@ -213,7 +227,7 @@ unsafe fn responds(obj: Id, selector: &str) -> bool {
     unsafe { msg!(obj, "respondsToSelector:", (s: Sel) -> bool) }
 }
 
-unsafe fn set_title(button: Id, title: &str) {
+pub(super) unsafe fn set_title(button: Id, title: &str) {
     unsafe {
         let config: Id = msg!(button, "configuration", () -> Id);
         if config.is_null() {
@@ -269,6 +283,8 @@ impl ViewBackend for Uikit {
                 msg!(alloc, "initWithFrame:", (f: CgRect) -> Id)
             };
             let (control, events) = match v.control {
+                // A select: its menu's actions are its events.
+                NativeControl::Button { .. } if v.menu.is_some() => (select::create(v), 0),
                 NativeControl::Button { primary } => {
                     let kind = 1_i64; // UIButtonTypeSystem
                     let b: Id = msg!(class("UIButton"), "buttonWithType:", (kind: i64) -> Id);
@@ -315,7 +331,7 @@ impl ViewBackend for Uikit {
             let layer: Id = msg!(control, "layer", () -> Id);
             let z = 1.0_f64;
             msg!(layer, "setZPosition:", (z: f64) -> ());
-            let parent = self.view;
+            let parent = clips::parent_of(self.view, v);
             msg!(parent, "addSubview:", (control: Id) -> ());
             Some(control)
         }
@@ -324,8 +340,13 @@ impl ViewBackend for Uikit {
     fn update(&mut self, h: &mut Id, old: &NativeView, new: &NativeView) {
         let h = *h;
         unsafe {
+            // Into the container of the scroll area it is in now.
+            if old.clips.last().map(|c| c.id) != new.clips.last().map(|c| c.id) {
+                clips::reparent(h, clips::parent_of(self.view, new));
+            }
             set_common(h, new);
             match new.control {
+                NativeControl::Button { .. } if new.menu.is_some() => select::update(h, old, new),
                 NativeControl::Button { .. } => {
                     if old.title != new.title {
                         set_title(h, &new.title);
@@ -383,13 +404,33 @@ pub(crate) fn sync(views: &[NativeView]) {
     if !views.is_empty() {
         unsafe { install_pan(backend.view) };
     }
+    if backend.view.is_null() {
+        return;
+    }
+    clips::prepare(backend.view, views);
     let restack = SET.with(|s| s.borrow_mut().sync(&mut backend, views));
+    clips::finish(backend.view, views);
     if restack {
-        let order: Vec<Id> = SET.with(|s| s.borrow().in_order().map(|(_, h)| *h).collect());
-        for h in order {
-            unsafe { msg!(backend.view, "bringSubviewToFront:", (h: Id) -> ()) };
+        // Paint order: each (and the containers it is in) over the ones
+        // before it.
+        let order: Vec<(NativeView, Id)> = SET.with(|s| {
+            s.borrow()
+                .in_order()
+                .map(|(v, h)| (v.clone(), *h))
+                .collect()
+        });
+        let mut raised = Vec::new();
+        for (v, h) in order {
+            clips::raise(backend.view, &v, &mut raised);
+            unsafe { clips::bring_to_front(h) };
         }
     }
+}
+
+/// Whether any control is live (the Metal layer then presents with Core
+/// Animation's transaction, `MetalLayer::present_with_transaction`).
+pub(crate) fn any_live() -> bool {
+    SET.with(|s| s.try_borrow().is_ok_and(|s| s.len() > 0))
 }
 
 /// The control shown for `id`, for the accessibility container to vend in
@@ -417,10 +458,13 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
             } else {
                 super::objc::rust_string(msg!(config, "title", () -> Id)).unwrap_or_default()
             };
-            let f: CgRect = msg!(h, "frame", () -> CgRect);
+            // In the app view's coordinates (it may be in a container).
+            let b: CgRect = msg!(h, "bounds", () -> CgRect);
+            let f: CgRect = msg!(h, "convertRect:toView:", (b: CgRect, view: Id) -> CgRect);
+            let (container, visible) = clips::shown(view, h);
             let at = CgPoint {
-                x: f.x + f.width / 2.0,
-                y: f.y + f.height / 2.0,
+                x: visible.min_x() + visible.width() / 2.0,
+                y: visible.min_y() + visible.height() / 2.0,
             };
             let nil: Id = std::ptr::null_mut();
             let mut hit: Id = msg!(view, "hitTest:withEvent:", (at: CgPoint, nil: Id) -> Id);
@@ -432,21 +476,26 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
                 class: name,
                 title,
                 frame: crate::geometry::Rect::from_xywh(f.x, f.y, f.width, f.height),
-                hit: !hit.is_null(),
+                visible,
+                hit: !hit.is_null() && visible.width() > 0.0 && visible.height() > 0.0,
+                container,
             }
         })
         .collect()
 }
 
 pub(crate) fn poke(id: u64, value: Option<f64>) -> bool {
-    let Some((control, h)) = SET.with(|s| {
+    let Some((control, menu, h)) = SET.with(|s| {
         let s = s.borrow();
-        s.get(id).map(|(v, h)| (v.control, *h))
+        s.get(id).map(|(v, h)| (v.control, v.menu.is_some(), *h))
     }) else {
         return false;
     };
     unsafe {
         let events = match control {
+            NativeControl::Button { .. } if menu => {
+                return select::pick(h, value.unwrap_or(0.0) as usize);
+            }
             NativeControl::Button { .. } => TOUCH_UP_INSIDE,
             NativeControl::Switch { .. } => {
                 let on: bool = msg!(h, "isOn", () -> bool);

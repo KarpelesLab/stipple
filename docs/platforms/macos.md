@@ -57,8 +57,21 @@ sends the control's action, which the app gets as the element's tap (or drag,
 for a slider). The view's accessibility children vend the control itself where
 it stands for a node.
 
-Where a control can't be live (under an overlay, a transform, a fade, half
-out of a scroll container; off screen) the same AppKit view draws it offscreen
+A `select` is an `NSPopUpButton`: a click pops its menu up over it (the
+chosen item under the pointer), and a pick sends its action, which runs the
+element's handler for that option; a pick the app refuses is set back. Its
+items go into its menu directly, so options with the same text stay apart.
+
+The controls in a scroll area are subviews of a clipping container, a
+flipped `StippleClipView` (an `NSView` clipping its subviews, layer-backed
+with `masksToBounds`) at the area's viewport, nested with nested areas: one
+half scrolled out stays live, cut at the area's edge. The container's
+`hitTest:` finds only its controls, so a click elsewhere on it is the app's.
+While controls are live, a Metal layer presents with Core Animation's
+transaction, so a scrolled frame and the controls' new places show together.
+
+Where a control can't be live (under an overlay, a transform, a fade, cut by
+a clip that isn't a scroll area's; off screen) the same AppKit view draws it offscreen
 into a picture with `cacheDisplayInRect:toBitmapImageRep:`. Text-field frames
 are always pictures (editing stays Stipple's). Switch sizes come from AppKit,
 since they differ between versions.
