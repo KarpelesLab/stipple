@@ -950,7 +950,7 @@ becoming fully hidden, and visible again, as `Event::Occluded`:
 | iOS | the app in the background (`Lifecycle::Background`, as before: UIKit posts it once every scene is) | lifecycle tests |
 | Windows | `IsIconic`, or cloaked (`DWMWA_CLOAKED`: another virtual desktop), read on resize, move, paint and focus changes; and a swap chain's `DXGI_STATUS_OCCLUDED` from `Present` | CI minimizes `framepacing` on the CPU and on Direct3D 11 (WARP), non-blocking: 0 presents in 3 s hidden, 60 (CPU) and 46 (WARP) in the second back |
 | X11 | unmapped (iconified by an ICCCM window manager), `_NET_WM_STATE_HIDDEN`, or `VisibilityNotify` saying `FullyObscured` (never under a compositing manager) | locally under xfwm4 on Xvfb (CPU, Vulkan and GLES on NVIDIA); CI under openbox, non-blocking |
-| Wayland | `xdg_toplevel`'s `suspended` state (`xdg_wm_base` version 6, now bound up to 6) | unit-tested; binding version 6 run in CI under sway 1.11, which doesn't send `suspended` on a workspace switch (see below) |
+| Wayland | `xdg_toplevel`'s `suspended` state (`xdg_wm_base` version 6, now bound up to 6), or a frame callback unanswered for 500 ms (sway, which has no `suspended`; see below) | `suspended` against the scripted compositor; the frame callbacks locally under sway 1.11 (a workspace switch, on the CPU, Vulkan and GLES, with and without a title bar Stipple draws) and in CI under sway, non-blocking |
 | Android | the activity's window destroyed (`onNativeWindowDestroyed`) until a new one comes | compile-checked |
 | Web | the canvas out of view or the tab hidden (an `IntersectionObserver`, `visibilitychange`), as before | headless Chrome |
 
@@ -973,11 +973,25 @@ framepacing: hidden: 0 presents, 0 wakeups in 3.00 s; shown again: 60 presents i
 `STIPPLE_DEBUG_WINDOWS=1` logs each change (`occluded 0x… true`).
 
 On Wayland, a compositor that hides a window without `suspended` (sway 1.11
-on a workspace switch) only stops its frame callbacks, and the frame
-clock's fallback timer (meant for a compositor that skipped a callback)
-then keeps an animating window drawing at about 30 frames a second, as
-measured under sway in CI. Holding a window's frames while its callback is
-outstanding would stop that; it isn't done yet.
+on a workspace switch) only stops answering its frame callbacks, and the
+frame clock's fallback timer (meant for a compositor that skipped a
+callback) would keep an animating window drawing at about 30 frames a
+second. So each window keeps the frame callback of one of its commits
+outstanding (`backend/wayland/visibility.rs`), and one unanswered for
+500 ms, timed from the commit, means the window is hidden; the answer,
+which the compositor sends once it draws the window again, means it shows.
+A frame the app is slow to draw doesn't count (the callback goes with the
+commit), and a compositor would have to leave a window it shows undrawn
+for half a second for a false alarm, which the next answer ends. Where the
+compositor does send `suspended` it still counts, and its resuming the
+window is believed (the callback is timed afresh). An idle window asks for
+no callbacks, so it's reported only if the hide catches one outstanding.
+Under sway (CPU, Vulkan and GLES on NVIDIA, and in CI): about 500 ms of
+frames after the switch, then `occluded 0x… true (frame callback)` and
+nothing presented, no wakeups; back on its workspace,
+`occluded 0x… false (frame callback)` and 60 frames a second again
+(`framepacing --hidden 3 --hide-cmd "swaymsg workspace 2" --show-cmd
+"swaymsg workspace 1"`).
 
 Once the frame that answers the configure suspending it has gone out, a
 suspended Wayland window commits nothing: no frames (to its surface or,
@@ -1139,8 +1153,10 @@ Today:
   hardware GPU (NVIDIA, on Xvfb, where its driver has no DRI3); AMD and
   Intel, and a real X server, are yet to be tried.
 - Occlusion ([Occlusion](#occlusion)) has run on X11 and, in CI, on
-  Windows; macOS's is compile-checked (its CI step hasn't run yet); Wayland's `suspended` state and Android's are
-  unit-tested or compile-checked only, and a window covered by others is
+  Windows; macOS's is compile-checked (its CI step hasn't run yet); Wayland's
+  stalled frame callbacks under sway (locally, and in CI non-blocking),
+  its `suspended` state against the scripted compositor only; Android's is
+  compile-checked only, and a window covered by others is
   reported only on X11 without a compositing manager, on macOS, and by a
   Direct3D 11 swap chain.
 - The Metal path on iOS is compile-checked; it hasn't run on a device or the

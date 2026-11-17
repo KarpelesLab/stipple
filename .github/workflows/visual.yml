@@ -1986,6 +1986,14 @@ jobs:
           STIPPLE_DEBUG_FRAMES=1 timeout 40 ./target/release/examples/framepacing 2>&1 | tee visual_output/wl-framepacing-${{ matrix.renderer }}.log
           grep -q "through linux-dmabuf" visual_output/wl-framepacing-${{ matrix.renderer }}.log
           grep -q 'framepacing: ok' visual_output/wl-framepacing-${{ matrix.renderer }}.log
+          # On a hidden workspace (no `suspended` from sway: the frame
+          # callbacks stall), no GPU frames either; back, they resume.
+          export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
+          STIPPLE_DEBUG_WINDOWS=1 timeout 40 ./target/release/examples/framepacing --rate-only \
+            --hidden 3 --hide-cmd "swaymsg workspace 2" --show-cmd "swaymsg workspace 1" \
+            2>&1 | tee visual_output/wl-occluded-${{ matrix.renderer }}.log
+          grep -q 'occluded 0x[0-9a-f]* true (frame callback)' visual_output/wl-occluded-${{ matrix.renderer }}.log
+          grep -q 'framepacing: hidden ok, shown again ok' visual_output/wl-occluded-${{ matrix.renderer }}.log
 
       - name: Stop sway
         if: always()
@@ -2366,6 +2374,41 @@ jobs:
           echo "=== wl-input.log ==="; cat visual_output/wl-input.log || true
           identify visual_output/stipple-wayland.png || true
           kill "$SWAY_PID" 2>/dev/null || true
+
+      # A window on a hidden workspace: sway sends no `suspended`, it only
+      # stops answering the window's frame callbacks, which Stipple takes
+      # for the window being hidden after 500 ms (Event::Occluded). The
+      # animating framepacing switches to workspace 2 and back: nothing may
+      # be presented while it's away, and frames must come back. Not
+      # blocking until it has passed on the runners a few times.
+      - name: A window on a hidden sway workspace draws nothing (Occluded)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdgrt-occl"
+          mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+          export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+          export LIBSEAT_BACKEND=seatd
+          if ! pgrep -x seatd > /dev/null; then
+            sudo seatd -g "$(id -gn)" >> seatd.log 2>&1 &
+            sleep 1
+          fi
+          mkdir -p visual_output
+          printf 'output HEADLESS-1 resolution 1024x768\nexec sleep 600\n' > sway-occl.cfg
+          sway -c sway-occl.cfg > visual_output/sway-occl.log 2>&1 &
+          SWAY_PID=$!
+          sleep 6
+          export WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep -m1 '^wayland-[0-9]*$')
+          export SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.*.sock)
+          cargo build --release --example framepacing
+          STIPPLE_DEBUG_WINDOWS=1 STIPPLE_DEBUG_FRAMES=1 timeout 40 ./target/release/examples/framepacing \
+            --hidden 3 --hide-cmd "swaymsg workspace 2" --show-cmd "swaymsg workspace 1" \
+            2>&1 | tee visual_output/wl-occluded.log || true
+          kill "$SWAY_PID" 2>/dev/null || true
+          grep -q 'occluded 0x[0-9a-f]* true (frame callback)' visual_output/wl-occluded.log
+          grep -q 'occluded 0x[0-9a-f]* false (frame callback)' visual_output/wl-occluded.log
+          grep -q 'framepacing: hidden ok, shown again ok' visual_output/wl-occluded.log
+          grep -q 'framepacing: ok' visual_output/wl-occluded.log
 
       # A real input method behind zwp_text_input_v3: fcitx5 connects to sway
       # as an input method (input-method-v2) and sway relays it to the app's

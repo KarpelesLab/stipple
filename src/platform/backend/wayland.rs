@@ -49,6 +49,8 @@ mod syncobj;
 mod text_input;
 /// Several windows: creating, destroying and configuring toplevels.
 mod toplevel;
+/// Whether a window shows: `suspended`, or its frame callbacks stalled.
+mod visibility;
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -752,6 +754,8 @@ struct WlConn {
     dmabuf: dmabuf::Dmabuf,
     /// `wp_linux_drm_syncobj_v1`: the GPU frames' timelines.
     syncobj: syncobj::Syncobj,
+    /// The windows' outstanding frame callbacks.
+    frames: visibility::Callbacks,
 }
 
 impl WlConn {
@@ -792,6 +796,7 @@ impl WlConn {
             lock: pointer::Lock::default(),
             dmabuf: dmabuf::Dmabuf::default(),
             syncobj: syncobj::Syncobj::default(),
+            frames: visibility::Callbacks::default(),
         }
     }
 
@@ -1179,9 +1184,10 @@ struct WaylandWindow {
     pending_state: Cell<(bool, bool)>,
     state: Cell<(bool, bool)>,
     /// Whether the compositor suspended the window (`xdg_toplevel`'s
-    /// `suspended` state): from the last configure, and as last reported.
+    /// `suspended` state) in the last configure; and whether it shows, as
+    /// last reported (suspended, or its frame callback stalled).
     pending_suspended: Cell<bool>,
-    suspended: Cell<bool>,
+    visibility: Cell<visibility::Visibility>,
     /// Buffer pixels per surface unit (the scale of the output the window is
     /// on, which `output` names), shared with its surface.
     scale: Rc<Cell<u32>>,
@@ -1229,7 +1235,7 @@ impl WaylandWindow {
             pending_state: Cell::new((false, false)),
             state: Cell::new((false, false)),
             pending_suspended: Cell::new(false),
-            suspended: Cell::new(false),
+            visibility: Cell::new(visibility::Visibility::default()),
             scale: Rc::new(Cell::new(scale)),
             output: Cell::new(None),
             configured: Rc::new(Cell::new(false)),
@@ -1245,12 +1251,40 @@ impl WaylandWindow {
         }
     }
 
+    /// Its frame callback stalled (`true`) or was answered: report the
+    /// window hidden or shown if that changed.
+    fn set_stalled<H>(&self, stalled: bool, handler: &mut H) -> ControlFlow
+    where
+        H: FnMut(Event, &dyn Window) -> ControlFlow,
+    {
+        let mut visibility = self.visibility.get();
+        let change = visibility.set_stalled(stalled);
+        self.visibility.set(visibility);
+        match change {
+            Some(hidden) => self.report_hidden(hidden, "frame callback", handler),
+            None => ControlFlow::Wait,
+        }
+    }
+
+    /// Report the window hidden or shown again (`Event::Occluded`), as `why`
+    /// says.
+    fn report_hidden<H>(&self, hidden: bool, why: &str, handler: &mut H) -> ControlFlow
+    where
+        H: FnMut(Event, &dyn Window) -> ControlFlow,
+    {
+        crate::platform::window::debug_window(format_args!(
+            "occluded {:#x} {hidden} ({why})",
+            self.surface
+        ));
+        handler(Event::Occluded(hidden), self)
+    }
+
     /// Draw the decorations over a GPU frame again, if they look different
     /// (a frame read back is framed with them anyway).
     fn refresh_decorations(&self) {
-        // A suspended window commits nothing, the decorations over its GPU
+        // A hidden window commits nothing, the decorations over its GPU
         // frame included (they're brought up to date once it shows again).
-        if self.suspended.get() {
+        if self.visibility.get().hidden() {
             return;
         }
         let mut conn = self.conn.lock().unwrap();
@@ -1700,7 +1734,7 @@ impl Surface for WaylandSurface {
         arg_u32(&mut a, size.width / scale);
         arg_u32(&mut a, size.height / scale);
         let _ = conn.send(surface, WL_SURFACE_DAMAGE, &a);
-        request_frame_callback(&mut conn, surface);
+        request_frame_callback(&mut conn, surface, surface);
         let _ = conn.send(surface, WL_SURFACE_COMMIT, &[]);
         let _ = conn.stream.flush();
         dbg(format_args!(
@@ -1740,21 +1774,31 @@ const WL_SURFACE_FRAME: u16 = 3;
 static FRAME_CALLBACK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// If an animation wants a frame, ask the compositor for a frame callback with
-/// the commit that's about to go out, so the next frame is paced by its repaint
-/// (and stops while the window is hidden). Call just before `commit`.
-fn request_frame_callback(conn: &mut WlConn, surface: u32) {
+/// the commit to `surface` (of the window whose surface is `window`) that's
+/// about to go out, so the next frame is paced by its repaint (and stops
+/// while the window is hidden). The window keeps one outstanding, which
+/// tells whether it shows (`visibility`). Call just before `commit`.
+fn request_frame_callback(conn: &mut WlConn, surface: u32, window: u32) {
     use std::sync::atomic::Ordering;
     if !crate::platform::frame::wanted() {
         return;
     }
-    if FRAME_CALLBACK.load(Ordering::Acquire) == 0 {
+    let for_clock = FRAME_CALLBACK.load(Ordering::Acquire) == 0;
+    let for_window = !conn.frames.outstanding(window);
+    if for_clock || for_window {
         let callback = conn.new_id();
         let mut a = Vec::new();
         arg_u32(&mut a, callback);
         if conn.send(surface, WL_SURFACE_FRAME, &a).is_err() {
             return;
         }
-        FRAME_CALLBACK.store(callback, Ordering::Release);
+        if for_clock {
+            FRAME_CALLBACK.store(callback, Ordering::Release);
+        }
+        if for_window {
+            conn.frames
+                .sent(window, callback, std::time::Instant::now());
+        }
     }
     crate::platform::frame::claim();
 }
@@ -2017,11 +2061,26 @@ where
         {
             break;
         }
-        // Messages a paste read while it waited come first.
-        let queued = shared.lock().unwrap().queue.pop_front();
-        if queued.is_none()
-            && !crate::platform::wake::wait_readable_until(fd, keys.repeat.deadline())
+        // A window whose frame callback has gone unanswered is hidden.
+        let stalled = shared
+            .lock()
+            .unwrap()
+            .frames
+            .take_stalled(std::time::Instant::now());
+        if stalled
+            .into_iter()
+            .filter_map(|surface| windows.iter().find(|w| w.surface == surface))
+            .any(|win| win.set_stalled(true, &mut handler) == ControlFlow::Exit)
         {
+            break;
+        }
+        // Messages a paste read while it waited come first.
+        let (queued, stall) = {
+            let mut conn = shared.lock().unwrap();
+            (conn.queue.pop_front(), conn.frames.deadline())
+        };
+        let until = [keys.repeat.deadline(), stall].into_iter().flatten().min();
+        if queued.is_none() && !crate::platform::wake::wait_readable_until(fd, until) {
             // A held key repeats.
             let now = std::time::Instant::now();
             if let Some(key) = keys.repeat.due(now) {
@@ -2100,9 +2159,19 @@ where
             continue;
         }
         // The compositor is ready for the next animation frame: it arrives as
-        // a wake once this loop goes back to waiting.
-        if frame_callback_done(object, opcode) {
-            continue;
+        // a wake once this loop goes back to waiting. And it drew the window
+        // the callback was for, so that shows.
+        if opcode == WL_CALLBACK_DONE {
+            let shown = shared.lock().unwrap().frames.done(object);
+            let clock = frame_callback_done(object, opcode);
+            if let Some(win) = shown.and_then(|s| windows.iter().find(|w| w.surface == s))
+                && win.set_stalled(false, &mut handler) == ControlFlow::Exit
+            {
+                break;
+            }
+            if clock || shown.is_some() {
+                continue;
+            }
         }
         // An output's current mode: its refresh paces the fallback timer.
         if opcode == WL_OUTPUT_MODE && outputs.iter().any(|(id, _)| *id == object) {
@@ -2414,14 +2483,18 @@ where
             }
             // Suspended: nothing of it shows, and no frame callbacks come.
             let suspended = win.pending_suspended.get();
-            if suspended != win.suspended.replace(suspended) {
-                crate::platform::window::debug_window(format_args!(
-                    "occluded {:#x} {suspended}",
-                    win.surface
-                ));
-                if handler(Event::Occluded(suspended), win) == ControlFlow::Exit {
-                    break;
-                }
+            let mut visibility = win.visibility.get();
+            if visibility.resumes(suspended) {
+                // The compositor says it shows: time its callback afresh.
+                let now = std::time::Instant::now();
+                shared.lock().unwrap().frames.shown(win.surface, now);
+            }
+            let change = visibility.set_suspended(suspended);
+            win.visibility.set(visibility);
+            if let Some(hidden) = change
+                && win.report_hidden(hidden, "suspended", &mut handler) == ControlFlow::Exit
+            {
+                break;
             }
             // Paint the frame for this configure (and the decorations over
             // a GPU frame, whose focus may have changed).
@@ -2612,6 +2685,7 @@ where
             }
             let mut conn = shared.lock().unwrap();
             win.content.borrow_mut().destroy(&mut conn);
+            conn.frames.forget(win.surface);
             toplevel::destroy(&mut conn, win.objects());
         }
     }

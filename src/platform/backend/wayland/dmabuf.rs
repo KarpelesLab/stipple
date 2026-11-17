@@ -538,7 +538,7 @@ impl Present for WindowSink {
             &damage_args(damage, size),
         )
         .map_err(io)?;
-        super::request_frame_callback(&mut conn, surface);
+        super::request_frame_callback(&mut conn, surface, content.main());
         conn.send(surface, WL_SURFACE_COMMIT, &[]).map_err(io)?;
         if !main {
             content.finish(&mut conn, logical, scale).map_err(io)?;

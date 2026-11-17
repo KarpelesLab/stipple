@@ -678,13 +678,14 @@ the compositor: the window's frames stop, CPU and GPU, and the frame clock
 once every window is hidden; it's drawn afresh when it shows. X11 unmaps,
 `_NET_WM_STATE_HIDDEN` and `VisibilityNotify`; Windows `IsIconic`,
 `DWMWA_CLOAKED` and Direct3D 11's `DXGI_STATUS_OCCLUDED`; macOS
-`occlusionState`; Wayland `xdg_toplevel`'s `suspended`; Android the window
+`occlusionState`; Wayland `xdg_toplevel`'s `suspended`, or a frame callback
+left unanswered for 500 ms (sway hides a workspace that way); Android the window
 destroyed; iOS the app in the background; the web the canvas out of view.
 `framepacing --hidden` checks it on X11 (openbox) and Windows in CI, not
-blocking yet (macOS has the step, not seen run yet); Wayland's and
-Android's are unit-tested or compile-checked, and a Wayland compositor that doesn't send `suspended`
-(sway) leaves a hidden animating window drawing at ~30 fps on the frame
-clock's fallback timer. See [gpu.md](gpu.md#occlusion).
+blocking yet (macOS has the step, not seen run yet), and on Wayland under
+sway switching workspaces (locally, and in CI not blocking yet); Wayland's
+`suspended` against a scripted compositor, Android's compile-checked. See
+[gpu.md](gpu.md#occlusion).
 
 ⁸⁵ `mediabrowser --selftest` drives the app off screen against a generated
 folder (navigation, sorting, type-to-select, multi-select, image and Markdown

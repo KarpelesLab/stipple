@@ -955,11 +955,11 @@ CPU elsewhere, and the CPU is always the fallback.
   hidden the frame clock stops (docs/gpu.md#occlusion). Run on X11
   (locally under xfwm4 with the CPU, Vulkan and GLES; CI under openbox) and
   in CI on Windows, non-blocking (`framepacing --hidden`); macOS's
-  compile-checked (its CI step not seen run yet), Wayland's and Android's
-  unit-tested or compile-checked. Left: on Wayland
-  without `suspended` (sway 1.11 on a workspace switch) the frame clock's
-  fallback timer keeps a hidden animating window drawing at ~30 fps once
-  its frame callbacks stop.*
+  compile-checked (its CI step not seen run yet), Android's
+  compile-checked. On Wayland without `suspended` (sway 1.11 on a
+  workspace switch), a window's frame callback unanswered for 500 ms
+  (timed from its commit) hides it and the answer shows it again: run
+  under sway locally (CPU, Vulkan, GLES) and in CI, non-blocking.*
 - ✅ A renderer trait over the lowered operations, so each backend is an
   executor of `ops.rs`'s list (GLES2 becomes the first implementation), with
   per-backend texture, glyph and offscreen-target caches behind it.

@@ -554,6 +554,7 @@ pub(super) mod tests {
             lock: Default::default(),
             dmabuf: Default::default(),
             syncobj: Default::default(),
+            frames: Default::default(),
         };
         (conn, theirs)
     }

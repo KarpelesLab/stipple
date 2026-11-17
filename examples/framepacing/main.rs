@@ -17,7 +17,10 @@
 //! `--hidden SECS` adds a phase after the animation: the app minimizes its
 //! window, checks that nothing is presented for that long while it's
 //! hidden (`Event::Occluded`), restores it and checks the animation draws
-//! again. It needs a window manager that minimizes.
+//! again. It needs a window manager that minimizes. With `--hide-cmd CMD`
+//! and `--show-cmd CMD` the window is hidden and shown by those shell
+//! commands instead (say, `swaymsg workspace 2` and `swaymsg workspace 1`,
+//! for a compositor that doesn't minimize).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
@@ -61,6 +64,12 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     .padding(Insets::uniform(theme.spacing.lg))
 }
 
+fn arg_str(name: &str) -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    let i = args.iter().position(|a| a == name)?;
+    args.get(i + 1).cloned()
+}
+
 fn arg(name: &str, default: f64) -> f64 {
     let args: Vec<String> = std::env::args().collect();
     args.iter()
@@ -78,6 +87,7 @@ fn main() {
     let check_rate = !std::env::args().any(|a| a == "--idle-only");
     let check_idle = !std::env::args().any(|a| a == "--rate-only");
     let hidden = Duration::from_secs_f64(arg("--hidden", 0.0));
+    let commands = arg_str("--hide-cmd").zip(arg_str("--show-cmd"));
     let app = App::new(State { animating: true }, view)
         .title("Frame pacing")
         .logical_size(Size::new(360.0, 140.0));
@@ -89,7 +99,7 @@ fn main() {
         std::thread::sleep(animate);
         let (b, tb) = (stats(), Instant::now());
         if !hidden.is_zero() {
-            check_hidden(&handle, hidden);
+            check_hidden(&handle, hidden, commands.as_ref());
         }
         handle.update(|s: &mut State| s.animating = false);
         // The last frame, and any fade of it.
@@ -106,17 +116,26 @@ fn main() {
     }
 }
 
-/// Minimize the window for `hidden`, still animating, and check nothing is
-/// presented meanwhile; then restore it and check frames come back.
-fn check_hidden(handle: &AppHandle<State>, hidden: Duration) {
+/// Minimize the window for `hidden` (or hide it with the first of
+/// `commands`), still animating, and check nothing is presented meanwhile;
+/// then restore it (or run the second) and check frames come back.
+fn check_hidden(handle: &AppHandle<State>, hidden: Duration, commands: Option<&(String, String)>) {
     use stipple::platform::WindowRequest;
-    handle.window(WindowRequest::Minimized(true));
+    let show = |visible: bool| match commands {
+        Some((hide, show)) => {
+            let cmd = if visible { show } else { hide };
+            let status = std::process::Command::new("sh").args(["-c", cmd]).status();
+            println!("framepacing: ran `{cmd}`: {status:?}");
+        }
+        None => handle.window(WindowRequest::Minimized(!visible)),
+    };
+    show(false);
     // The window manager takes a moment.
     std::thread::sleep(Duration::from_secs(1));
     let (a, ta) = (stats(), Instant::now());
     std::thread::sleep(hidden);
     let (b, tb) = (stats(), Instant::now());
-    handle.window(WindowRequest::Minimized(false));
+    show(true);
     std::thread::sleep(Duration::from_secs(1));
     let c = stats();
     std::thread::sleep(Duration::from_secs(1));
