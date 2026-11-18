@@ -63,6 +63,8 @@ struct Gallery {
 /// The size options.
 const SIZES: [&str; 4] = ["Small", "Medium", "Large", "Extra large"];
 
+// On Android (emulated TLS) clippy flags even a `const` thread_local.
+#[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local))]
 thread_local! {
     /// The self-test's list and how to scroll it.
     static LIST: std::cell::RefCell<Option<(stipple::core::ScrollRequests, stipple::core::ScrollId)>> =
