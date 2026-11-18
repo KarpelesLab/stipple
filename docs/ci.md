@@ -13,7 +13,9 @@ Four workflows run on every push and pull request:
   sway and Weston (Wayland); iOS and Android under their simulator and
   emulator. It also packages `touchdemo` and `androiddemo` for the stores
   with [`cargo-stipple`](packaging.md) (an `.ipa` and a simulator `.app`, an
-  `.aab` and a universal APK) and checks the results.
+  `.aab` and a universal APK) and checks the results, and runs the GPU
+  renderer's comparison corpus and the benchmark in the simulator and on
+  the emulator (`tools/gpu-mobile.sh`).
 - **Perf**: the benchmarks (`examples/bench`, and in headless Chrome
   `tools/bench/`) on Linux, macOS, Windows and the web, on the software
   renderer and each platform's GPU renderer, compared with the committed

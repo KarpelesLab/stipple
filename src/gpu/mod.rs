@@ -745,9 +745,12 @@ pub fn render_scene(scene: &Scene, background: Color, font: &Font) -> Result<Pix
 #[cfg(all(
     test,
     any(
-        all(target_os = "linux", feature = "gl"),
-        all(any(target_os = "linux", target_os = "macos"), feature = "vk"),
-        all(target_os = "macos", feature = "mtl"),
+        all(any(target_os = "linux", target_os = "android"), feature = "gl"),
+        all(
+            any(target_os = "linux", target_os = "android", target_os = "macos"),
+            feature = "vk"
+        ),
+        all(any(target_os = "macos", target_os = "ios"), feature = "mtl"),
         all(target_os = "windows", feature = "d3d")
     )
 ))]

@@ -8,8 +8,9 @@
 //! cargo run --release --example bench -- --json out.json --only hover,type_char
 //! ```
 //!
-//! Options: `--renderer software|gpu|metal|gl|d3d11` (the GPU ones need the
-//! backend's feature: `mtl`, `gl`, `d3d`), `--json FILE`, `--only a,b` (by
+//! Options: `--renderer software|gpu|metal|vulkan|gl|d3d11` (the GPU ones
+//! need the backend's feature: `mtl`, `vk`, `gl`, `d3d`; `gpu` is the
+//! platform's preferred one), `--json FILE`, `--only a,b` (by
 //! scenario name), `--quick` (a third of the iterations), `--runner NAME`
 //! (a label stored in the JSON), `--list`.
 //!
@@ -1110,21 +1111,41 @@ fn cjk_available() -> bool {
     false
 }
 
-/// Whether `name` is this platform's GPU API, and it draws.
+/// Whether `name` is one of this platform's GPU APIs, and it draws; `gpu`
+/// is the platform's preferred one (Vulkan before OpenGL ES on Linux and
+/// Android, when both are built in). The API is pinned through
+/// `STIPPLE_RENDERER` for the whole run, so a build with both `vk` and `gl`
+/// measures the one asked for; it's unset again when the API doesn't draw.
 #[cfg(not(target_arch = "wasm32"))]
 fn gpu_probe(name: &str) -> Result<&'static str, String> {
-    let native = if cfg!(any(target_os = "macos", target_os = "ios")) {
-        "metal"
+    let apis: &[&'static str] = if cfg!(any(target_os = "macos", target_os = "ios")) {
+        &["metal"]
     } else if cfg!(target_os = "windows") {
-        "d3d11"
+        &["d3d11"]
+    } else if cfg!(feature = "vk") {
+        &["vulkan", "gl"]
     } else {
-        "gl"
+        &["gl", "vulkan"]
     };
-    if name != "gpu" && name != native {
-        return Err(format!("{name} isn't this platform's GPU API ({native})"));
-    }
+    let api = match name {
+        "gpu" => apis[0],
+        "vk" => "vulkan",
+        "gles" => "gl",
+        name => *apis.iter().find(|a| **a == name).ok_or_else(|| {
+            format!(
+                "{name} isn't one of this platform's GPU APIs ({})",
+                apis.join(", ")
+            )
+        })?,
+    };
+    // SAFETY: nothing else runs yet: the bench is single-threaded here and
+    // nothing has read the environment.
+    unsafe { std::env::set_var("STIPPLE_RENDERER", api) };
     let scene = Scene::new(Size::new(16.0, 16.0));
-    gpu_render(&scene).map(|_| native)
+    gpu_render(&scene).map(|_| api).inspect_err(|_| {
+        // SAFETY: as above.
+        unsafe { std::env::remove_var("STIPPLE_RENDERER") };
+    })
 }
 
 // --- Reporting ----------------------------------------------------------------
@@ -1228,7 +1249,7 @@ fn main() {
     };
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "bench [--renderer software|gpu|metal|gl|d3d11] [--json FILE] [--only a,b] [--quick] [--runner NAME] [--list]"
+            "bench [--renderer software|gpu|metal|vulkan|gl|d3d11] [--json FILE] [--only a,b] [--quick] [--runner NAME] [--list]"
         );
         return;
     }

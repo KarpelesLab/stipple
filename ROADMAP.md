@@ -1266,14 +1266,20 @@ CPU elsewhere, and the CPU is always the fallback.
   (`src/app_gpu/auto_tests.rs`). Measured on an RTX 5080: the corpus
   matches on Vulkan and GLES, Vulkan meets the benchmark targets (0.33 ms,
   1.07 ms, transition p95 2.9 ms) and GLES doesn't (5.7 ms, 7.7 ms), so
-  GLES stays an explicit choice. Left: iOS (Metal never run on a device),
-  Windows (Direct3D 11 never run on a hardware GPU), Android (the corpus
-  not run there, the benchmark not on a phone); Linux on AMD and Intel, X11
-  on a real X server. Wayland's decorated windows no longer read back
-  (their dma-bufs go in a subsurface under Stipple's title bar), so `Auto`
-  presents there too; its hardware runs so far: sway on NVIDIA only,
-  locally. CI adds headless Mutter and KWin on Mesa's software GPUs
-  (non-blocking; `Auto` stays on the CPU there).*
+  GLES stays an explicit choice. iOS and Android now run the corpus, the
+  device-loss test and the benchmark as plain executables
+  (`tools/gpu-mobile.sh`; `gpu-ios-sim` and `gpu-android` in CI, not
+  blocking): all matched in the iOS simulator (Metal) and on the emulator
+  (GLES and Vulkan, on SwiftShader and on the host's GPU), and the
+  simulator met the targets on an M5 Max (0.96 ms, 3.1 ms, p95 5.6 ms).
+  Wayland's decorated windows no longer read back (their dma-bufs go in a
+  subsurface under Stipple's title bar), so `Auto` presents there too; its
+  hardware runs so far: sway on NVIDIA only, locally. CI adds headless
+  Mutter and KWin on Mesa's software GPUs (non-blocking; `Auto` stays on
+  the CPU there). Left: iOS (Metal never run on an iPhone, nor presented
+  to a window), Windows (Direct3D 11 never run on a hardware GPU), Android
+  (the benchmark not on a phone); Linux on AMD and Intel, X11 on a real X
+  server.*
 - Later, not planned yet: an app-facing GPU element (custom shaders, 3D
   content in a viewport), wide color and HDR.
 

@@ -211,21 +211,41 @@ explicit choice ([gpu.md](gpu.md#the-default)). The report's
 The software renderer's `transition` frames are whole 1170×2532 frames,
 which is why phones draw on the GPU.
 
-**On a phone.** The benchmark draws offscreen, so on Android it runs as a
-plain executable over `adb`, on the GPU (GLES on EGL) or the CPU:
+**On a phone.** The benchmark draws offscreen, so it runs as a plain
+executable: over `adb` on an Android phone or emulator, spawned in the iOS
+simulator. `tools/gpu-mobile.sh` builds it for the device, runs it and
+brings the JSON back (and runs the GPU comparison corpus the same way,
+[gpu.md](gpu.md#the-default)):
 
 ```sh
-cargo build --release --example bench --features gl --target aarch64-linux-android  # with the NDK's linker
-adb push target/aarch64-linux-android/release/examples/bench /data/local/tmp/
-adb shell 'cd /data/local/tmp && ./bench --renderer gl --only transition,canvas_row --json phone.json'
-adb pull /data/local/tmp/phone.json && python3 tools/bench/compare.py phone.json
+tools/gpu-mobile.sh android bench --json phone.json                      # Vulkan where it's built and works
+tools/gpu-mobile.sh android bench --renderer gl --only transition,canvas_row
+tools/gpu-mobile.sh ios-sim bench --json sim.json                        # Metal, in the simulator
+tools/gpu-mobile.sh android corpus vk                                    # the corpus (gl or vk; ios-sim: Metal)
+python3 tools/bench/compare.py phone.json
 ```
 
+`--renderer vulkan` and `--renderer gl` pick the API in a build with both
+(`--renderer gpu` takes Vulkan first on Linux and Android). A physical
+iPhone runs only signed apps, so on iOS it's the simulator for now.
+
 Its `transition` frames are held to 8.3 ms at the 95th percentile (120 Hz;
-`perf/budgets.json`, platforms `android` and `ios`). On iOS there's no
-shell to run it from yet: the scenario is the same app code, so time it in
-an app on the device. CI only compile-checks the benchmark for both (the
-`mobile` job in `ci.yml`).
+`perf/budgets.json`, platforms `android` and `ios`). CI runs both in the
+simulator and on the API 34 emulator (`gpu-ios-sim`, `gpu-android` in
+`visual.yml`, not blocking), and compile-checks the benchmark for phones
+(the `mobile` job in `ci.yml`). Locally (November 2026), in the iOS 27
+simulator and on an API 35 arm64 emulator with the host's GPU, both on an
+Apple M5 Max, so a desktop GPU behind a translation layer, not a phone's:
+
+| Scenario | iOS simulator, software | iOS simulator, Metal | Emulator, Vulkan | Emulator, OpenGL ES |
+|---|---|---|---|---|
+| `gallery_4k` | 19 ms | 0.96 ms | 1.6 ms | 13 ms |
+| `sprites_10k` | 25 ms | 3.1 ms | 5.2 ms | 17 ms |
+| `canvas_row` | 0.41 ms | 1.7 ms | 2.4 ms | 2.7 ms |
+| `transition` (per frame, p95) | 42 ms | 5.6 ms | 6.7 ms | 8.4 ms |
+
+On the emulator's default SwiftShader (as on CI) the GPU numbers are
+several times those, and `gpu_hardware` is false.
 
 **In the browser**, the same scenarios run in the wasm module on the
 software renderer (its GPU renderers draw into the page's canvas only), and

@@ -2,10 +2,12 @@
 //! both ways and the frames compared pixel by pixel.
 //!
 //! They run on the platform's GPU API, with the same scenes and tolerances:
-//! Metal on macOS (feature `mtl`), Vulkan on Linux (feature `vk`; Mesa's
-//! lavapipe in CI) or on macOS over MoltenVK, GLES2 on Linux (feature `gl`;
-//! Mesa's llvmpipe, through surfaceless EGL), Direct3D 11 on Windows (feature
-//! `d3d`; WARP does, on CI's runner). Without a device they're skipped,
+//! Metal on macOS and iOS (feature `mtl`), Vulkan on Linux (feature `vk`;
+//! Mesa's lavapipe in CI), on Android or on macOS over MoltenVK, GLES2 on
+//! Linux (feature `gl`; Mesa's llvmpipe, through surfaceless EGL) and
+//! Android, Direct3D 11 on Windows (feature `d3d`; WARP does, on CI's
+//! runner). On iOS and Android the test executable runs in the simulator or
+//! on the device: `tools/gpu-mobile.sh`. Without a device they're skipped,
 //! unless `STIPPLE_REQUIRE_GPU` is set (as CI's GPU jobs do), when they fail.
 //! `STIPPLE_GPU_DUMP=<dir>` writes both frames of each
 //! comparison there as PNGs.

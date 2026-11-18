@@ -6407,6 +6407,80 @@ jobs:
             visual_output/*.log
           if-no-files-found: warn
 
+  # The GPU renderer's comparison corpus (src/gpu/compare.rs: every scene on
+  # Metal against the software renderer, the device-loss test with it) and
+  # the benchmark, spawned in the iOS simulator as plain executables
+  # (tools/gpu-mobile.sh). Not blocking until it has passed on the runner,
+  # whose simulator draws Metal on the VM's paravirtual GPU.
+  gpu-ios-sim:
+    name: GPU corpus (iOS simulator, Metal)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      - name: Compare Metal with the software renderer in the simulator
+        env:
+          STIPPLE_GPU_DUMP: visual_output/ios-metal-compare
+        run: tools/gpu-mobile.sh ios-sim corpus
+      - name: Run the benchmark in the simulator (for the log; the simulator isn't a phone)
+        run: tools/gpu-mobile.sh ios-sim bench --quick --json ios-sim-metal.json
+      - name: Upload the comparison frames and the benchmark
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-ios-sim-metal-compare
+          path: |
+            visual_output/ios-metal-compare/*
+            ios-sim-metal.json
+          if-no-files-found: warn
+
+  # The same corpus on the Android emulator (API 34, x86_64), with OpenGL ES
+  # and with Vulkan, each a test executable pushed and run over adb
+  # (tools/gpu-mobile.sh); then the benchmark on each. The runner's emulator
+  # has no host GPU: both APIs are SwiftShader's. Not blocking yet.
+  gpu-android:
+    name: GPU corpus (Android emulator, API 34, GLES and Vulkan)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Compare GLES and Vulkan with the software renderer on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          disable-animations: true
+          script: |
+            STIPPLE_GPU_DUMP=visual_output/android-gl-compare tools/gpu-mobile.sh android corpus gl
+            STIPPLE_GPU_DUMP=visual_output/android-vk-compare tools/gpu-mobile.sh android corpus vk
+            tools/gpu-mobile.sh android bench --quick --renderer gl --json android-gl.json
+            tools/gpu-mobile.sh android bench --quick --renderer vulkan --json android-vulkan.json
+      - name: Upload the comparison frames and the benchmark
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stipple-android-gpu-compare
+          path: |
+            visual_output/android-*-compare/*
+            android-*.json
+          if-no-files-found: warn
+
   # The camera on the Android emulator (Camera2 through the NDK, no Java):
   # cameraview reports the permission not determined until it's granted
   # (pm grant), then opens the back camera, the emulator's emulated one
