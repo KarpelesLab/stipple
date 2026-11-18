@@ -91,6 +91,40 @@ Element::canvas(CanvasId(2), |c: &mut Canvas| { /* … */ })
 Moving or resizing the canvas repaints it, like any element. Through a
 transform, invalidated areas are presented where the canvas is drawn.
 
+## Scrolling
+
+When a terminal's output scrolls by a line, nearly every pixel moves and only
+one row is new. `AppHandle::scroll_canvas_rect(id, rect, delta)` moves what
+the canvas shows in `rect` (its coordinates) by `delta` without painting it
+again: the pixels already on screen are copied, and the paint callback is
+asked only for the part of `rect` they uncover.
+
+```rust
+# use stipple::prelude::*;
+# use stipple::geometry::Vec2;
+# fn f(handle: AppHandle<()>, lines: &mut Vec<String>, size: Size) {
+# const GRID: CanvasId = CanvasId(1);
+lines.remove(0);
+lines.push("new output".into());
+// Everything up a row; the callback paints the bottom row.
+let screen = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+handle.scroll_canvas_rect(GRID, screen, Vec2::new(0.0, -17.0));
+# }
+```
+
+A scroll region (`DECSTBM`) passes just its rows. Change the data first, then
+scroll: the move applies to the canvas as it was last painted. Repaints asked
+for before the scroll move with the pixels, repaints asked for after it stay
+where they were asked for, and several scrolls in one frame add up. What is
+drawn over the canvas (a focus ring, a popup, a scroll bar) stays where it is.
+
+The pixels move with whatever shows through the canvas, so scroll an area the
+canvas paints opaquely, as a terminal does when it fills its background. A
+canvas drawn rotated, scaled or faded, or a move by part of a device pixel,
+repaints the whole of `rect` instead. On the software renderer the window's
+pixels are moved; on a GPU renderer the canvas's texture moves its own (see
+[gpu.md](gpu.md)).
+
 ## What to draw with
 
 - Rects and rounded rects: `fill_rect`, `stroke_rect`, `fill_round_rect`,
@@ -122,9 +156,17 @@ transform, invalidated areas are presented where the canvas is drawn.
 
 The software rasterizer works area by area: for an area repaint, everything that
 can't touch the area is dropped first, so repainting one row of a 120×36 grid
-costs about one row's worth (around 2 ms on a desktop CPU). A whole frame with
-many primitives (a screenful of glyphs, or any canvas) is rasterized in bands
-of 32 pixel rows the same way, with the same result.
+costs about one row's worth. A whole frame with many primitives (a screenful
+of glyphs, or any canvas) is rasterized in bands of 32 pixel rows the same way,
+with the same result.
+
+A glyph run's glyphs are rasterized once each (per font, glyph, size and
+position within a sixteenth of a pixel) and kept as coverage masks, then
+blended in the run's color wherever they're drawn; the GPU renderers keep them
+in their glyph atlas. Every cell of a 200×60 grid in mixed colors repaints in
+about 3 ms on an Apple M5 (6 ms at scale 2), and scrolling it by a line in
+0.2 ms (`canvas_full_1x`, `canvas_full_2x` and `canvas_scroll` in
+[performance.md](performance.md)).
 
 `RasterStats::get()` / `RasterStats::take()` report how many pixels the
 software rasterizer has filled, and in how many runs. The `canvasdemo` example

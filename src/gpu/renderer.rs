@@ -10,6 +10,7 @@
 
 use super::canvas::CanvasCache;
 use super::ops::{self, Plan, RasterCache};
+use crate::core::CanvasScroll;
 use crate::geometry::{Rect, ScaleFactor};
 use crate::platform::GpuLayer;
 use crate::render::{Color, Pixmap, Scene};
@@ -348,6 +349,8 @@ pub(crate) struct GpuRenderer {
     canvases: CanvasCache,
     /// Whose frame the next one is, and its damage ([`next_frame`](Self::next_frame)).
     next: Option<(u64, Option<Vec<Rect>>)>,
+    /// The canvas scrolls of the next frame (see [`next_scrolls`](Self::next_scrolls)).
+    scrolls: Vec<CanvasScroll>,
     /// Whose frame is being drawn.
     drawing: Option<u64>,
     /// The next frame fails as if the device were lost (tests).
@@ -414,6 +417,7 @@ impl GpuRenderer {
             rasters: RasterCache::default(),
             canvases: CanvasCache::default(),
             next: None,
+            scrolls: Vec::new(),
             drawing: None,
             #[cfg(test)]
             lose: false,
@@ -432,14 +436,23 @@ impl GpuRenderer {
         self.next = Some((owner, damage));
     }
 
+    /// In the next frame (one given to [`next_frame`](Self::next_frame)),
+    /// the pixels of these canvases moved before the damage: their textures
+    /// move theirs, rather than rasterize the area again.
+    pub(crate) fn next_scrolls(&mut self, scrolls: Vec<CanvasScroll>) {
+        self.scrolls = scrolls;
+    }
+
     fn plan(&mut self, scene: &Scene, background: Color, scale: ScaleFactor) -> Plan {
         let physical = scale.to_physical(scene.logical_size());
         let next = self.next.take();
         self.drawing = next.as_ref().map(|n| n.0);
+        let scrolls = std::mem::take(&mut self.scrolls);
         let canvases = next.map(|(owner, damage)| ops::CanvasArgs {
             cache: &mut self.canvases,
             owner,
             damage,
+            scrolls,
         });
         ops::plan_with(scene, background, physical, &mut self.rasters, canvases)
     }

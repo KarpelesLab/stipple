@@ -2,12 +2,16 @@
 //! terminal draws its grid (every cell at a multiple of the cell width,
 //! whatever the font's own advances say).
 
-use crate::geometry::Point;
+use crate::geometry::{Point, Rect};
 use crate::render::color_glyph::{ColorGlyph, color_glyph};
+use crate::render::font::Synthesis;
+use crate::render::glyph_mask::FastHash;
+use crate::render::lower::{Bounds, subtree_bounds};
 use crate::render::scene::Scene;
-use crate::render::text::{OBLIQUE_SHEAR, bold_stroke, embolden};
+use crate::render::text::{OBLIQUE_SHEAR, bold_stroke, embolden, glyph_cache_key};
 use crate::render::{Color, Decoration, Font};
 use oxideav_core::{Group, Node, Transform2D};
+use oxideav_scribe::Face;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
@@ -143,32 +147,166 @@ impl GlyphRun {
     }
 }
 
-/// Glyph outlines by face, glyph and size: building an outline node is the
-/// costly part of drawing a glyph, and a grid draws the same few glyphs over
-/// and over. Cleared wholesale past `MAX_OUTLINES` entries.
-///
-/// (Glyphs are drawn as plain outlines, not through the rasterizer's bitmap
-/// cache: its entries are keyed by position, so a grid rarely hits them, and
-/// rendering each glyph offscreen for the cache costs more than filling it.)
+/// Glyph outlines by face, glyph and size, with their bounds: building an
+/// outline node is the costly part of drawing a glyph, and a grid draws the
+/// same few glyphs over and over. Cleared wholesale past `MAX_OUTLINES`
+/// entries.
 type OutlineKey = (u64, u16, u32);
-static OUTLINES: Mutex<Option<HashMap<OutlineKey, Option<Node>>>> = Mutex::new(None);
+type Outlines = HashMap<OutlineKey, Option<(Node, Bounds)>, FastHash>;
+static OUTLINES: Mutex<Option<Outlines>> = Mutex::new(None);
 const MAX_OUTLINES: usize = 8192;
 
 pub(crate) fn outline(font: &Font, face_idx: u16, glyph: u16, size: f64) -> Option<Node> {
     let chain = font.chain();
     let face = chain.face(face_idx);
-    let key = (face.stable_id(), glyph, (size * 64.0).round() as u32);
+    with_outline(face, face.stable_id(), glyph, size, |n, _| n.clone())
+}
+
+/// `f` of the outline of `glyph` of `face` (whose `stable_id` is `id`: it
+/// hashes the face's header, worth doing once per run, not per glyph) at
+/// `size`, and its bounds; `None` if it has none (a space).
+fn with_outline<R>(
+    face: &Face,
+    id: u64,
+    glyph: u16,
+    size: f64,
+    f: impl FnOnce(&Node, Bounds) -> R,
+) -> Option<R> {
+    let key = (id, glyph, (size * 64.0).round() as u32);
     let mut cache = OUTLINES.lock().unwrap_or_else(|e| e.into_inner());
-    let map = cache.get_or_insert_with(HashMap::new);
-    if let Some(node) = map.get(&key) {
-        return node.clone();
+    let map = cache.get_or_insert_with(Outlines::default);
+    if let Some(entry) = map.get(&key) {
+        return entry.as_ref().map(|(n, b)| f(n, *b));
     }
-    let node = face.glyph_node(glyph, size as f32);
+    let entry = face.glyph_node(glyph, size as f32).and_then(|n| {
+        let b = subtree_bounds(std::slice::from_ref(&n))?;
+        Some((n, b))
+    });
     if map.len() >= MAX_OUTLINES {
         map.clear();
     }
-    map.insert(key, node.clone());
-    node
+    let out = entry.as_ref().map(|(n, b)| f(n, *b));
+    map.insert(key, entry);
+    out
+}
+
+/// `base` and `v` mixed into one key (SplitMix64's finalizer).
+fn mix(base: u64, v: u64) -> u64 {
+    let mut z = base ^ v.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// A face of the chain a [`GlyphDraw`] uses.
+#[derive(Debug)]
+struct RunFace {
+    /// Its index in the font's chain.
+    idx: u16,
+    /// Its `stable_id`.
+    id: u64,
+    synth: Synthesis,
+    /// What its glyphs' keys have in common.
+    base: u64,
+}
+
+/// One glyph of a [`GlyphDraw`]: which, and where its origin is.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RunGlyph {
+    /// Into the draw's faces.
+    face: u16,
+    glyph: u16,
+    /// One face, glyph, size and synthesis: what its raster is kept by.
+    pub key: u64,
+    x: f32,
+    y: f32,
+}
+
+/// A [`GlyphRun`] as a scene records it: its glyphs, shaped and placed, drawn
+/// when the scene is lowered. The software compositor blends each from a
+/// coverage mask it keeps (`render::glyph_mask`); anything else gets
+/// [`node`](Self::node), cache-keyed outlines (which the GPU renderers draw
+/// from their glyph atlas).
+#[derive(Debug)]
+pub(crate) struct GlyphDraw {
+    font: Font,
+    size: f64,
+    color: Color,
+    faces: Vec<RunFace>,
+    glyphs: Vec<RunGlyph>,
+}
+
+impl GlyphDraw {
+    pub(crate) fn glyphs(&self) -> &[RunGlyph] {
+        &self.glyphs
+    }
+
+    pub(crate) fn color(&self) -> Color {
+        self.color
+    }
+
+    /// Where `g`'s outline is drawn: at its origin, leaning when its face
+    /// is a synthesized oblique (about the baseline point; y grows downward,
+    /// so up is negative y).
+    pub(crate) fn place(&self, g: &RunGlyph) -> Transform2D {
+        let oblique = self.faces[g.face as usize].synth.oblique;
+        Transform2D {
+            a: 1.0,
+            b: 0.0,
+            c: if oblique { -OBLIQUE_SHEAR } else { 0.0 },
+            d: 1.0,
+            e: g.x,
+            f: g.y,
+        }
+    }
+
+    /// `g`'s outline at its origin, filled with `color` (and stroked, for a
+    /// synthesized bold).
+    pub(crate) fn outline(&self, g: &RunGlyph, color: Color) -> Option<Node> {
+        let face = &self.faces[g.face as usize];
+        let chain = self.font.chain();
+        let node = with_outline(chain.face(face.idx), face.id, g.glyph, self.size, |n, _| {
+            n.clone()
+        })?;
+        let stroke = if face.synth.bold {
+            bold_stroke(self.size)
+        } else {
+            0.0
+        };
+        Some(embolden(node, color, stroke))
+    }
+
+    /// Glyph `g` as a node: its outline in the run's color, placed; in a
+    /// group keyed for the GPU renderers' glyph atlas when `keyed` (not for
+    /// the CPU rasterizer: it would render a keyed group it hasn't seen into
+    /// a buffer the size of what it draws on).
+    pub(crate) fn glyph_node(&self, g: &RunGlyph, keyed: bool) -> Option<Node> {
+        let outline = self.outline(g, self.color)?;
+        let inner = if keyed {
+            Node::Group(Group {
+                cache_key: Some(g.key),
+                children: vec![outline],
+                ..Group::default()
+            })
+        } else {
+            outline
+        };
+        Some(Node::Group(
+            Group::new().with_transform(self.place(g)).with_child(inner),
+        ))
+    }
+
+    /// All of it as outlines, for the CPU rasterizer.
+    pub(crate) fn node(&self) -> Node {
+        Node::Group(
+            Group::new().with_children(
+                self.glyphs
+                    .iter()
+                    .filter_map(|g| self.glyph_node(g, false))
+                    .collect(),
+            ),
+        )
+    }
 }
 
 impl Scene {
@@ -181,8 +319,19 @@ impl Scene {
         }
         let font = &run.font;
         let top = font.baseline(run.size);
+        let chain = font.chain();
+        let mut faces: Vec<RunFace> = Vec::new();
         let mut glyphs = Vec::with_capacity(run.len());
+        // Color glyphs (emoji): layered ones as nodes, bitmaps after.
+        let mut colored = Vec::new();
         let mut bitmaps = Vec::new();
+        // The box around the glyphs' outlines.
+        let mut ink = [
+            f32::INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+        ];
         // Stretches of adjacent clusters on one baseline: (pen, width).
         let mut spans: Vec<(Point, f64)> = Vec::new();
         let mut start = 0;
@@ -190,7 +339,7 @@ impl Scene {
             let cluster = &run.text[start..end];
             start = end;
             // A structured command per cluster, for backends that draw from
-            // them (the CPU rasterizer uses the nodes below).
+            // them (the CPU rasterizer uses the glyphs below).
             if !cluster.trim().is_empty() {
                 self.record_text(cluster, Point::new(pen.x, pen.y - top), run.size, run.color);
             }
@@ -207,7 +356,7 @@ impl Scene {
                     run.color,
                 ) {
                     match art {
-                        ColorGlyph::Vector(node) => glyphs.push(Node::Group(
+                        ColorGlyph::Vector(node) => colored.push(Node::Group(
                             Group::new()
                                 .with_transform(Transform2D::translate(
                                     at,
@@ -216,7 +365,7 @@ impl Scene {
                                 .with_child(node),
                         )),
                         ColorGlyph::Bitmap(pixmap, rect) => {
-                            let face = font.chain().face(g.face_idx).stable_id();
+                            let face = chain.face(g.face_idx).stable_id();
                             let rect = rect.translate(crate::geometry::Vec2::new(
                                 at as f64,
                                 pen.y + g.y_offset as f64,
@@ -226,29 +375,45 @@ impl Scene {
                     }
                     continue;
                 }
-                let Some(node) = outline(font, g.face_idx, g.glyph_id, run.size) else {
+                let face = chain.face(g.face_idx);
+                let fi = match faces.iter().position(|f| f.idx == g.face_idx) {
+                    Some(i) => i,
+                    None => {
+                        let synth = font.synthesis(g.face_idx);
+                        faces.push(RunFace {
+                            idx: g.face_idx,
+                            id: face.stable_id(),
+                            synth,
+                            base: glyph_cache_key(face, 0, run.size, synth),
+                        });
+                        faces.len() - 1
+                    }
+                };
+                let f = &faces[fi];
+                let Some(b) = with_outline(face, f.id, g.glyph_id, run.size, |_, b| b) else {
                     continue;
                 };
-                let synth = font.synthesis(g.face_idx);
-                let stroke = if synth.bold {
-                    bold_stroke(run.size)
+                let glyph = RunGlyph {
+                    face: fi as u16,
+                    glyph: g.glyph_id,
+                    key: mix(f.base, g.glyph_id as u64),
+                    x: at,
+                    y: pen.y as f32 + g.y_offset,
+                };
+                // Bold strokes and the oblique's lean reach past the
+                // outline: a size's worth either side is plenty.
+                let pad = if f.synth.bold || f.synth.oblique {
+                    run.size as f32 * 0.5
                 } else {
                     0.0
                 };
-                let shear = if synth.oblique { -OBLIQUE_SHEAR } else { 0.0 };
-                let place = Transform2D {
-                    a: 1.0,
-                    b: 0.0,
-                    c: shear,
-                    d: 1.0,
-                    e: at,
-                    f: pen.y as f32 + g.y_offset,
-                };
-                glyphs.push(Node::Group(
-                    Group::new()
-                        .with_transform(place)
-                        .with_child(embolden(node, run.color, stroke)),
-                ));
+                ink = [
+                    ink[0].min(glyph.x + b[0] - pad),
+                    ink[1].min(glyph.y + b[1] - pad),
+                    ink[2].max(glyph.x + b[2] + pad),
+                    ink[3].max(glyph.y + b[3] + pad),
+                ];
+                glyphs.push(glyph);
             }
             if !run.decoration.is_none() {
                 let w = width.unwrap_or((x - pen.x as f32) as f64);
@@ -261,7 +426,26 @@ impl Scene {
             }
         }
         if !glyphs.is_empty() {
-            self.push_node(Node::Group(Group::new().with_children(glyphs)));
+            // One pixel around for antialiasing.
+            let bounds = Rect::from_xywh(
+                ink[0] as f64 - 1.0,
+                ink[1] as f64 - 1.0,
+                (ink[2] - ink[0]) as f64 + 2.0,
+                (ink[3] - ink[1]) as f64 + 2.0,
+            );
+            self.draw_glyphs(
+                bounds,
+                GlyphDraw {
+                    font: font.clone(),
+                    size: run.size,
+                    color: run.color,
+                    faces,
+                    glyphs,
+                },
+            );
+        }
+        if !colored.is_empty() {
+            self.push_node(Node::Group(Group::new().with_children(colored)));
         }
         for (rect, face, glyph, pixmap) in bitmaps {
             self.draw_color_bitmap(rect, face, glyph, &pixmap);
@@ -364,5 +548,54 @@ mod tests {
             !red_in(&out, Rect::from_xywh(73.0, y, 7.0, h)),
             "after the run"
         );
+    }
+
+    /// Drawn from coverage masks, runs are what their outlines filled by
+    /// the rasterizer are (up to the masks' sixteenth-of-a-pixel
+    /// positions), at any scale, synthesized bold and oblique included.
+    #[test]
+    fn masks_match_the_outlines() {
+        let Some(font) = Font::system_default() else {
+            return;
+        };
+        let mut scene = Scene::new(Size::new(160.0, 60.0));
+        for (i, f) in [font.clone(), font.bold(), font.italic()]
+            .iter()
+            .enumerate()
+        {
+            let c = [
+                Color::WHITE,
+                Color::rgb(90, 200, 120),
+                Color::rgb(80, 140, 255),
+            ][i];
+            let mut run = GlyphRun::new(f, 12.5, c);
+            run.push_cells(
+                "Wg@|~ 0Oj#",
+                Point::new(3.3 + i as f64 * 0.21, i as f64 * 17.7),
+                7.3,
+            );
+            scene.fill_glyph_run(&run);
+        }
+        // The same glyphs as plain outlines.
+        let mut outlines = Scene::new(scene.logical_size());
+        for node in scene.lower_root(None, &Transform2D::identity()) {
+            outlines.push_node(node);
+        }
+        let r = SoftwareRenderer::new().background(Color::rgb(20, 22, 28));
+        for scale in [1.0, 1.5, 2.0] {
+            let scale = ScaleFactor::new(scale);
+            let a = r.render(scene.clone(), scale);
+            let b = r.render(outlines.clone(), scale);
+            let (mut sum, mut worst) = (0u64, 0u8);
+            for (p, q) in a.as_bytes().iter().zip(b.as_bytes()) {
+                sum += p.abs_diff(*q) as u64;
+                worst = worst.max(p.abs_diff(*q));
+            }
+            let mean = sum as f64 / a.as_bytes().len() as f64;
+            assert!(
+                mean < 0.3 && worst <= 16,
+                "at {scale:?}: mean {mean}, worst {worst}"
+            );
+        }
     }
 }

@@ -457,6 +457,11 @@ struct Pane<S> {
     // because only those changed.
     canvas_pending: Vec<crate::core::CanvasInvalidation>,
     viewports_pending: Vec<ViewportId>,
+    // Canvas scrolls not yet presented: the pixels to move in the frame on
+    // screen before repainting (the software path), and the same moves for
+    // the GPU renderer's canvas textures.
+    canvas_blits: Vec<crate::core::FrameBlit>,
+    canvas_scrolls: Vec<crate::core::CanvasScroll>,
     repaint_only: bool,
     // The tree + overlay state that is currently on screen, used as the diff
     // baseline so a present can be limited to the region that actually changed.
@@ -639,6 +644,8 @@ impl<S: 'static> Pane<S> {
             dirty: true,
             canvas_pending: Vec::new(),
             viewports_pending: Vec::new(),
+            canvas_blits: Vec::new(),
+            canvas_scrolls: Vec::new(),
             repaint_only: false,
             presented: None,
             last_pixmap: None,
@@ -1823,17 +1830,64 @@ impl<S: 'static> Pane<S> {
 
     /// Where the canvas invalidations and viewport content changes not yet
     /// presented are drawn in the window (logical pixels), and forget them.
-    fn take_content_damage(&mut self) -> Vec<Rect> {
+    /// Canvas scrolls are kept for the present to move the pixels of
+    /// ([`FrameBlit`](crate::core::FrameBlit)); `changed` is what else changed
+    /// since the frame on screen, which mustn't move with them.
+    fn take_content_damage(&mut self, changed: &[Rect]) -> Vec<Rect> {
         let canvases = std::mem::take(&mut self.canvas_pending);
         let viewports = std::mem::take(&mut self.viewports_pending);
         let Some(tree) = self.tree.as_ref() else {
             return Vec::new();
         };
-        let mut rects = crate::core::invalidated_rects(tree, &canvases);
+        let mut over = self.overlays_drawn(tree);
+        over.extend_from_slice(changed);
+        let size = self.attrs.logical_size;
+        let window = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+        let content = crate::core::content_damage(tree, &canvases, self.scale.get(), window, &over);
+        let mut rects = content.repaint;
+        self.canvas_blits.extend(content.blits);
+        self.canvas_scrolls.extend(content.scrolls);
         for id in viewports {
             rects.extend(drawn_bounds(tree, &|n| viewport_is(n, id), 0.0));
         }
         rects
+    }
+
+    /// Where what is drawn over the tree is (logical pixels): the hover and
+    /// drop-target highlights, the focus ring (just the band it's drawn in)
+    /// and the selection handles.
+    fn overlays_drawn(&self, tree: &LayoutNode) -> Vec<Rect> {
+        let grow = |r: Rect, by: f64| {
+            Rect::from_xywh(
+                r.min_x() - by,
+                r.min_y() - by,
+                r.width() + 2.0 * by,
+                r.height() + 2.0 * by,
+            )
+        };
+        let mut out = Vec::new();
+        for &(id, _) in &self.highlight_alphas {
+            out.extend(drawn_bounds(tree, &|n| n.action == Some(id), 1.0));
+        }
+        for &(id, _) in &self.dnd.highlight {
+            out.extend(drawn_bounds(tree, &|n| n.drop == Some(id), 2.0));
+        }
+        if let Some(id) = self.focused
+            && let Some(b) = drawn_bounds(tree, &|n| n.focus == Some(id), 0.0)
+        {
+            let reach = self.built_theme.map_or(FOCUS_RING_MARGIN, |t| {
+                t.focus.reach().max(FOCUS_RING_MARGIN)
+            });
+            // The ring reaches into the box by at most half its width.
+            let inner = grow(b, -(reach + 2.0));
+            if inner.width() > 0.0 && inner.height() > 0.0 {
+                out.extend(crate::core::canvas_subtract(grow(b, reach + 1.0), inner));
+            } else {
+                out.push(grow(b, reach + 1.0));
+            }
+        }
+        out.extend(self.text_touch.handles.iter().map(|h| h.drawn()));
+        out
     }
 
     /// When only canvases or viewport content changed since the frame on
@@ -1865,8 +1919,8 @@ impl<S: 'static> Pane<S> {
         {
             return None;
         }
-        let rects = self.take_content_damage();
-        let damage = if rects.is_empty() {
+        let rects = self.take_content_damage(&[]);
+        let damage = if rects.is_empty() && self.canvas_blits.is_empty() {
             Damage::None
         } else {
             Damage::Regions(crate::core::coalesce(rects))
@@ -1894,10 +1948,13 @@ impl<S: 'static> Pane<S> {
         // A theme cross-fade presents the whole window each frame, but
         // only re-rasterizes what changed underneath.
         let fading = self.crossfade.needs_full();
+        // Canvas scrolls: pixels to move in the frame on screen.
+        let blits = std::mem::take(&mut self.canvas_blits);
+        let scrolls = std::mem::take(&mut self.canvas_scrolls);
 
         // Nothing changed since the last present: render nothing, upload
         // nothing. (Skips the whole rasterize, not just the upload.)
-        if !force && damage.is_empty() && !fading {
+        if !force && damage.is_empty() && !fading && blits.is_empty() {
             app_dbg(format_args!("present: no damage"));
             return;
         }
@@ -1917,18 +1974,30 @@ impl<S: 'static> Pane<S> {
             && (matches!(damage, Damage::Regions(_)) || (fading && damage.is_empty()))
             && self.last_pixmap.as_ref().map(Pixmap::size) == Some(phys_size);
 
+        // The moved pixels, presented but not rasterized.
+        let moved: Vec<Rect> = blits
+            .iter()
+            .filter_map(|b| {
+                let [x0, y0, x1, y1] = b.dst;
+                let r = Rect::from_xywh(x0 as f64, y0 as f64, (x1 - x0) as f64, (y1 - y0) as f64);
+                r.intersection(bounds)
+            })
+            .collect();
         if can_partial {
             let regions = if damage.is_empty() {
                 Vec::new()
             } else {
                 damage.to_physical(scale, bounds)
             };
-            if regions.is_empty() && !fading {
+            if regions.is_empty() && moved.is_empty() && !fading {
                 return; // damage fell entirely outside the surface
             }
             let s = scale.get();
             let renderer = SoftwareRenderer::new().background(theme.palette.background);
             let mut pixmap = self.last_pixmap.take().expect("checked by can_partial");
+            for b in &blits {
+                b.apply(&mut pixmap);
+            }
             for r in &regions {
                 let (pw, ph) = (r.width() as u32, r.height() as u32);
                 if pw == 0 || ph == 0 {
@@ -1947,23 +2016,28 @@ impl<S: 'static> Pane<S> {
             if !regions.is_empty() {
                 self.composite_viewports(&mut pixmap, viewport_content, scale);
             }
+            let mut shown = regions;
+            shown.extend(moved);
             match self.crossfade.compose(&pixmap) {
                 // The blend changes everywhere: present all of it.
                 Some(blend) => surface.present(&blend, &[]),
                 None if fading => surface.present(&pixmap, &[]),
-                None => surface.present(&pixmap, &regions),
+                None => surface.present(&pixmap, &shown),
             }
             self.last_pixmap = Some(pixmap);
         } else {
             // Full render: forced (expose/resize), GPU path, first frame, a
             // size change, or unlocalizable (`Damage::Full`) damage.
             self.gpu.damage = Some(app_gpu::canvas_damage(&damage, force));
+            self.gpu.scrolls = scrolls;
             let mut pixmap = self.rasterize(scene, theme, scale);
             self.composite_viewports(&mut pixmap, viewport_content, scale);
             let regions = if force || fading {
                 Vec::new()
             } else {
-                damage.to_physical(scale, bounds)
+                let mut r = damage.to_physical(scale, bounds);
+                r.extend(moved);
+                r
             };
             // Mid-fade, show the blend; keep the frame itself, which the
             // fade and later partial repaints build on.
@@ -2003,12 +2077,16 @@ impl<S: 'static> Pane<S> {
             }
             _ => Damage::Full,
         };
-        // Canvases invalidated and viewport content changed since the last
-        // present: the tree diff can't see those.
-        let content = self.take_content_damage();
-        let damage = merge_regions(damage, content);
         // The selection handles, drawn over the tree.
         let damage = merge_regions(damage, self.text_touch.take_damage());
+        // Canvases invalidated and viewport content changed since the last
+        // present: the tree diff can't see those.
+        let changed = match &damage {
+            Damage::Regions(rects) => rects.clone(),
+            _ => Vec::new(),
+        };
+        let content = self.take_content_damage(&changed);
+        let damage = merge_regions(damage, content);
         self.presented = self.tree.clone();
         self.painted_highlights = self.highlight_alphas.clone();
         self.painted_focused = self.focused;
@@ -2075,6 +2153,13 @@ impl<S: 'static> Pane<S> {
         let mut pixmap = self.rasterize(scene, theme, scale);
         self.composite_viewports(&mut pixmap, content, scale);
         let mut damage = self.take_damage();
+        // Drawn whole: canvas scrolls are only more damage.
+        let moved: Vec<Rect> = std::mem::take(&mut self.canvas_blits)
+            .iter()
+            .map(|b| b.logical(scale.get()))
+            .collect();
+        self.canvas_scrolls.clear();
+        damage = merge_regions(damage, moved);
         // Mid-fade, the frame is the blend, and all of it changes.
         if self.crossfade.needs_full() {
             damage = Damage::Full;

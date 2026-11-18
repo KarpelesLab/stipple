@@ -198,6 +198,8 @@ pub(crate) struct PaneGpu {
     /// The damage of the frame about to be drawn and read back, for its
     /// canvases ([`canvas_damage`]); `None` draws them straight.
     pub(crate) damage: Option<Option<Vec<crate::geometry::Rect>>>,
+    /// The canvas scrolls of that frame, for the textures of its canvases.
+    pub(crate) scrolls: Vec<crate::core::CanvasScroll>,
 }
 
 impl PaneGpu {
@@ -472,6 +474,7 @@ impl<S: 'static> Pane<S> {
         scale: crate::geometry::ScaleFactor,
     ) -> Option<Pixmap> {
         let damage = self.gpu.damage.take();
+        let scrolls = std::mem::take(&mut self.gpu.scrolls);
         // A browser's GPU draws into the canvas only, never read back: a
         // frame that comes here is the CPU's.
         if cfg!(target_arch = "wasm32") {
@@ -484,6 +487,7 @@ impl<S: 'static> Pane<S> {
             shared::with(which, false, |g| {
                 if let Some(damage) = damage {
                     g.next_frame(owner, damage);
+                    g.next_scrolls(scrolls);
                 }
                 g.render(scene, background, scale)
             })?
@@ -491,7 +495,7 @@ impl<S: 'static> Pane<S> {
         }
         #[cfg(not(feature = "gpu"))]
         {
-            let _ = (which, scene, background, scale, damage);
+            let _ = (which, scene, background, scale, damage, scrolls);
             no_gpu();
             None
         }
@@ -529,17 +533,27 @@ impl<S: 'static> Pane<S> {
             self.draw_viewport_content(&mut scene, viewport_content);
             let background = theme.palette.background;
             let scale = self.scale;
+            // What changed on screen: the damage, and what canvas scrolls
+            // moved (whose textures move their pixels, see `next_scrolls`).
+            let moved: Vec<crate::geometry::Rect> = self
+                .canvas_blits
+                .iter()
+                .map(|b| b.logical(scale.get()))
+                .collect();
+            let shown = crate::merge_regions(damage.clone(), moved);
             let dirty = if force {
                 None
             } else {
-                gpu_dirty(damage, scale, scale.to_physical(scene.logical_size()))
+                gpu_dirty(&shown, scale, scale.to_physical(scene.logical_size()))
             };
+            let scrolls = self.canvas_scrolls.clone();
             let owner = self.gpu.owner();
             let shown = shared::with(which, auto, |g| {
                 if !g.can_present(&layer) {
                     return Ok(false);
                 }
                 g.next_frame(owner, canvas_damage(damage, force));
+                g.next_scrolls(scrolls);
                 g.present(&scene, background, scale, &layer, dirty)
                     .map(|()| true)
                     .inspect(|_| {
@@ -555,6 +569,8 @@ impl<S: 'static> Pane<S> {
             match shown {
                 Some(Ok(true)) => {
                     self.gpu.layer = true;
+                    self.canvas_blits.clear();
+                    self.canvas_scrolls.clear();
                     // The CPU frame is gone: no partial repaint or fade from it.
                     self.last_pixmap = None;
                     None

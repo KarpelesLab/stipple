@@ -3,7 +3,7 @@
 
 use crate::geometry::{PhysicalSize, Rect, ScaleFactor};
 use crate::render::blit::Compositor;
-use crate::render::lower::Lower;
+use crate::render::lower::{Blits, Lower};
 use crate::render::scene::frame_for;
 use crate::render::{Color, Pixmap, Scene};
 use oxideav_core::{Group, Node, Transform2D, VectorFrame};
@@ -11,14 +11,14 @@ use oxideav_raster::Renderer;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Pixels rasterized and rasterizer runs since the process started (or the
-/// last [`RasterStats::take`]).
+/// Pixels rendered and renders since the process started (or the last
+/// [`RasterStats::take`]).
 static PIXELS: AtomicU64 = AtomicU64::new(0);
 static RUNS: AtomicU64 = AtomicU64::new(0);
 
-/// How much CPU rasterizing has happened: every [`SoftwareRenderer`] render
-/// (full, area or band) adds its pixels. A diagnostic: an app can check that
-/// a change re-rasterized only the area it touched.
+/// How much CPU rendering has happened: every [`SoftwareRenderer`] render
+/// (a whole scene, or an area of one) adds its pixels. A diagnostic: an app
+/// can check that a change re-rendered only the area it touched.
 ///
 /// ```
 /// use stipple::geometry::{Rect, ScaleFactor, Size};
@@ -33,10 +33,9 @@ static RUNS: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RasterStats {
-    /// Pixels rasterized.
+    /// Pixels rendered.
     pub pixels: u64,
-    /// Rasterizer runs (a full frame, one area of an area repaint, or one band
-    /// of a banded full frame).
+    /// Renders (a full frame, or one area of an area repaint).
     pub runs: u64,
 }
 
@@ -138,8 +137,10 @@ impl SoftwareRenderer {
         physical: PhysicalSize,
     ) -> Pixmap {
         let (w, h) = (physical.width.max(1), physical.height.max(1));
+        PIXELS.fetch_add(w as u64 * h as u64, Ordering::Relaxed);
+        RUNS.fetch_add(1, Ordering::Relaxed);
         let heavy = scene.primitive_count() > BAND_PRIMITIVES || scene.has_canvas();
-        let sprites = RefCell::new(Vec::new());
+        let sprites = RefCell::new(Blits::default());
         let cull_view = cull.then(|| Lower::view_of(view));
         let root = scene.lower_root_with(cull_view, &Transform2D::identity(), Some(&sprites));
         let sprites = sprites.into_inner();
@@ -206,8 +207,6 @@ impl SoftwareRenderer {
     /// RGBA plane into a tightly-packed [`Pixmap`] of `physical` pixels.
     fn rasterize_frame(&self, frame: oxideav_core::VectorFrame, physical: PhysicalSize) -> Pixmap {
         let (w, h) = (physical.width.max(1), physical.height.max(1));
-        PIXELS.fetch_add(w as u64 * h as u64, Ordering::Relaxed);
-        RUNS.fetch_add(1, Ordering::Relaxed);
         let mut renderer = Renderer::new(w, h);
         renderer.background = self.background.to_oxideav();
         let video = renderer.render(&frame);

@@ -18,7 +18,8 @@
 
 use super::ops::{FULL_UV, NO_TINT, Op, Source};
 use crate::core::CanvasId;
-use crate::geometry::{Affine, PhysicalSize, Rect, Size};
+use crate::core::{CanvasScroll, FrameBlit};
+use crate::geometry::{Affine, PhysicalSize, Point, Rect, Size, Vec2};
 use crate::render::{CanvasPaint, Pixmap, Scene, SoftwareRenderer};
 use oxideav_core::Transform2D;
 use std::collections::HashMap;
@@ -190,6 +191,7 @@ impl CanvasCache {
         &mut self,
         owner: u64,
         damage: Option<Vec<Rect>>,
+        scrolls: Vec<CanvasScroll>,
         root: &Transform2D,
         target: [f32; 4],
     ) -> CanvasFrame {
@@ -215,6 +217,7 @@ impl CanvasCache {
             owner,
             canvases,
             damage,
+            scrolls,
             target,
             updates: Vec::new(),
             uploaded: 0,
@@ -266,6 +269,9 @@ pub(crate) struct CanvasFrame {
     /// What changed since the window's last frame, in target pixels
     /// (`None`: everything).
     damage: Option<Vec<[i32; 4]>>,
+    /// Canvas scrolls, applied to the pixels kept before the damage is
+    /// rasterized.
+    scrolls: Vec<CanvasScroll>,
     target: [f32; 4],
     updates: Vec<TextureUpdate>,
     uploaded: usize,
@@ -313,6 +319,24 @@ impl CanvasFrame {
                 .collect(),
             None => vec![whole],
         };
+        // Scrolled: the pixels kept move, and what they uncover (or can't
+        // move whole) is rasterized.
+        let (mut blits, mut moved) = (Vec::new(), Vec::new());
+        let mut damaged = damaged;
+        if !fresh {
+            for s in self.scrolls.iter().filter(|s| s.id == id) {
+                match texel_blit(&key, s.rect, s.delta) {
+                    Some((blit, rest)) => {
+                        blits.push(blit);
+                        let [x0, y0, x1, y1] = blit.dst;
+                        moved.push([x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32]);
+                        damaged.extend(rest);
+                    }
+                    None => damaged.extend(texels(&key, s.rect)),
+                }
+            }
+        }
+        drop_contained(&mut damaged);
         let area: u64 = damaged.iter().map(|r| r[2] as u64 * r[3] as u64).sum();
         let mostly = area * 2 >= tw as u64 * th as u64;
         if entry.direct {
@@ -333,7 +357,7 @@ impl CanvasFrame {
             }
         }
         let rects = if fresh { vec![whole] } else { damaged };
-        if !rects.is_empty() {
+        if !rects.is_empty() || !moved.is_empty() {
             // The pixels kept, to change in place (their texture with them),
             // or new ones.
             let (old, mut pixels) = match entry.image.take() {
@@ -346,6 +370,9 @@ impl CanvasFrame {
                 }
                 _ => (None, Pixmap::new(PhysicalSize::new(tw, th))),
             };
+            for b in &blits {
+                b.apply(&mut pixels);
+            }
             let scene = canvas_scene(&key, bounds.size, paint);
             let renderer = SoftwareRenderer::new();
             let externals = crate::render::lower::externals_drawn();
@@ -355,6 +382,12 @@ impl CanvasFrame {
                 pixels.blit(&part, x, y);
                 self.uploaded += w as usize * h as usize * 4;
             }
+            // The moved pixels are uploaded, not rasterized.
+            for &[_, _, w, h] in &moved {
+                self.uploaded += w as usize * h as usize * 4;
+            }
+            let mut rects = rects;
+            rects.extend(moved);
             // It drew an external image: better imported than read back.
             if crate::render::lower::externals_drawn() != externals {
                 entry.external = true;
@@ -383,6 +416,70 @@ impl CanvasFrame {
             nearest: true,
         })
     }
+}
+
+/// Drop the rects (`[x, y, w, h]`) that another one holds.
+fn drop_contained(rects: &mut Vec<[u32; 4]>) {
+    let holds = |a: &[u32; 4], b: &[u32; 4]| {
+        a[0] <= b[0] && a[1] <= b[1] && a[0] + a[2] >= b[0] + b[2] && a[1] + a[3] >= b[1] + b[3]
+    };
+    let mut i = 0;
+    while i < rects.len() {
+        let r = rects[i];
+        let held = rects
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != i && holds(o, &r) && (o != &r || j < i));
+        if held {
+            rects.remove(i);
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// The texels of `rect` (canvas coordinates) in a texture placed as `key`
+/// says, rounded out, as `[x, y, w, h]`, or none.
+fn texels(key: &Key, rect: Rect) -> Option<[u32; 4]> {
+    let [a, d, e, f] = key.at.map(|v| v as f64);
+    let (tw, th) = (key.size.0 as f64, key.size.1 as f64);
+    let x0 = (rect.min_x() * a + e).floor().clamp(0.0, tw);
+    let y0 = (rect.min_y() * d + f).floor().clamp(0.0, th);
+    let x1 = (rect.max_x() * a + e).ceil().clamp(0.0, tw);
+    let y1 = (rect.max_y() * d + f).ceil().clamp(0.0, th);
+    (x1 > x0 && y1 > y0).then_some([x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32])
+}
+
+/// Scrolling `rect` (canvas coordinates) by `delta` in a texture placed as
+/// `key` says: the texels to move, and those left to rasterize (what the
+/// move uncovers, and the edges it doesn't move whole). `None` when the
+/// move isn't by whole texels.
+fn texel_blit(key: &Key, rect: Rect, delta: Vec2) -> Option<(FrameBlit, Vec<[u32; 4]>)> {
+    let [a, d, e, f] = key.at.map(|v| v as f64);
+    let (tw, th) = (key.size.0 as f64, key.size.1 as f64);
+    // The rect in texels, and the scroll.
+    let r = Rect::from_points(
+        Point::new(rect.min_x() * a + e, rect.min_y() * d + f),
+        Point::new(rect.max_x() * a + e, rect.max_y() * d + f),
+    )
+    .intersection(Rect::from_xywh(0.0, 0.0, tw, th))?;
+    let blit = crate::core::canvas_blit(r, r, Vec2::new(delta.dx * a, delta.dy * d), 1.0)?;
+    let [x0, y0, x1, y1] = blit.dst;
+    let dst = Rect::from_xywh(x0 as f64, y0 as f64, (x1 - x0) as f64, (y1 - y0) as f64);
+    let rest = crate::core::canvas_subtract(r, dst)
+        .into_iter()
+        .filter_map(|p| {
+            let (x0, y0) = (p.min_x().floor(), p.min_y().floor());
+            let (x1, y1) = (p.max_x().ceil(), p.max_y().ceil());
+            (x1 > x0 && y1 > y0).then_some([
+                x0 as u32,
+                y0 as u32,
+                (x1 - x0) as u32,
+                (y1 - y0) as u32,
+            ])
+        })
+        .collect();
+    Some((blit, rest))
 }
 
 /// Where a canvas of `size`, drawn through `t` (its corner at the origin),
@@ -450,7 +547,7 @@ mod tests {
     }
 
     fn frame(cache: &mut CanvasCache, damage: Option<Vec<Rect>>) -> CanvasFrame {
-        cache.begin(1, damage, &Transform2D::identity(), TARGET)
+        cache.begin(1, damage, Vec::new(), &Transform2D::identity(), TARGET)
     }
 
     fn bounds() -> Rect {
@@ -643,5 +740,96 @@ mod tests {
         let f = frame(&mut cache, Some(Vec::new()));
         cache.end(f);
         assert_eq!(cache.bytes(), 0, "not drawn: dropped");
+    }
+
+    /// A canvas of ten 5-px rows, each its color with a mark at a column of
+    /// its own; counting the area each paint is asked for.
+    fn rows(lines: Rc<std::cell::RefCell<Vec<u8>>>) -> (CanvasPaint, Rc<Cell<f64>>) {
+        let painted = Rc::new(Cell::new(0.0));
+        let p = painted.clone();
+        let paint: CanvasPaint = Rc::new(move |c: &mut Canvas| {
+            let d = c.dirty();
+            p.set(p.get() + d.width() * d.height());
+            for (i, &n) in lines.borrow().iter().enumerate() {
+                let r = Rect::from_xywh(0.0, i as f64 * 5.0, 100.0, 5.0);
+                c.fill_rect(r, Color::rgb(n.wrapping_mul(37), n.wrapping_mul(91), 99));
+                c.fill_rect(
+                    Rect::from_xywh((n % 90) as f64 + 0.5, r.min_y() + 1.0, 3.0, 3.0),
+                    Color::WHITE,
+                );
+            }
+        });
+        (paint, painted)
+    }
+
+    /// A scrolled canvas texture moves its pixels and rasterizes only what
+    /// they uncover, at scale 1 and 2, into the pixels it would have drawn
+    /// afresh; the moved texels are uploaded into the texture it had.
+    #[test]
+    fn a_scrolled_canvas_texture_moves_its_pixels() {
+        for scale in [1.0f32, 2.0] {
+            let lines = Rc::new(std::cell::RefCell::new((0..10u8).collect::<Vec<_>>()));
+            let (paint, painted) = rows(lines.clone());
+            let mut cache = CanvasCache::default();
+            let root = Transform2D::scale(scale, scale);
+            let target = [0.0, 0.0, 200.0 * scale, 100.0 * scale];
+            let mut f = cache.begin(1, None, Vec::new(), &root, target);
+            f.draw(CanvasId(1), bounds(), &paint, scale as f64, &root)
+                .unwrap();
+            cache.end(f);
+            // Up a row: a new line at the bottom.
+            {
+                let mut l = lines.borrow_mut();
+                l.remove(0);
+                l.push(10);
+            }
+            painted.set(0.0);
+            let scroll = CanvasScroll {
+                id: CanvasId(1),
+                rect: Rect::from_xywh(0.0, 0.0, 100.0, 50.0),
+                delta: Vec2::new(0.0, -5.0),
+            };
+            // The window's damage: the bottom row, where the canvas is.
+            let exposed = Rect::from_xywh(10.0, 65.0, 100.0, 5.0);
+            let mut f = cache.begin(1, Some(vec![exposed]), vec![scroll], &root, target);
+            let op = f
+                .draw(CanvasId(1), bounds(), &paint, scale as f64, &root)
+                .unwrap();
+            let updates = cache.end(f);
+            assert_eq!(
+                painted.get(),
+                500.0,
+                "at {scale}: only the new row is painted"
+            );
+            assert_eq!(updates.len(), 1, "the texture is updated in place");
+            let s = scale as u32;
+            assert!(
+                updates[0].rects.contains(&[0, 0, 100 * s, 45 * s]),
+                "{:?}",
+                updates[0].rects
+            );
+            let Op::Image {
+                image: Source::Image(image),
+                ..
+            } = op
+            else {
+                panic!()
+            };
+            // The same canvas drawn afresh.
+            let mut fresh = CanvasCache::default();
+            let mut f = fresh.begin(2, None, Vec::new(), &root, target);
+            let Some(Op::Image {
+                image: Source::Image(want),
+                ..
+            }) = f.draw(CanvasId(1), bounds(), &paint, scale as f64, &root)
+            else {
+                panic!()
+            };
+            fresh.end(f);
+            assert!(
+                *image == *want,
+                "at {scale}: the scrolled pixels differ from fresh ones"
+            );
+        }
     }
 }

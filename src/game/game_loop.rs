@@ -3,7 +3,7 @@
 
 use super::{InputState, TouchControls};
 use crate::App;
-use crate::core::{CanvasId, CanvasInvalidation};
+use crate::core::{CanvasChange, CanvasId, CanvasInvalidation};
 use crate::geometry::Rect;
 use crate::platform::Event;
 use std::time::Duration;
@@ -169,12 +169,12 @@ impl<'a> Frame<'a> {
 
     /// Paint canvas `id` again, without rebuilding the view.
     pub fn repaint(&mut self, id: CanvasId) {
-        self.repaint.push((id, None));
+        self.repaint.push((id, CanvasChange::Repaint(None)));
     }
 
     /// Paint `rect` (in the canvas's coordinates) of canvas `id` again.
     pub fn repaint_rect(&mut self, id: CanvasId, rect: Rect) {
-        self.repaint.push((id, Some(rect)));
+        self.repaint.push((id, CanvasChange::Repaint(Some(rect))));
     }
 
     /// Rebuild the view after this update: something it shows changed.
@@ -189,7 +189,10 @@ impl<'a> Frame<'a> {
 
     /// The canvas areas asked to repaint so far.
     pub fn repaints(&self) -> impl Iterator<Item = (CanvasId, Option<Rect>)> + '_ {
-        self.repaint.iter().copied()
+        self.repaint.iter().filter_map(|&(id, c)| match c {
+            CanvasChange::Repaint(r) => Some((id, r)),
+            CanvasChange::Scroll { .. } => None,
+        })
     }
 }
 

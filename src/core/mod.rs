@@ -50,8 +50,13 @@ pub(crate) mod touch;
 pub(crate) mod transition;
 
 pub use a11y::{AccessNode, AccessScroll, Role, accessibility_tree};
+#[cfg_attr(not(feature = "gpu"), allow(unused_imports))]
+pub(crate) use canvas::blit as canvas_blit;
+pub(crate) use canvas::{
+    CanvasChange, CanvasInvalidation, CanvasScroll, FrameBlit, content_damage,
+    subtract as canvas_subtract,
+};
 pub use canvas::{CanvasId, CanvasPainter};
-pub(crate) use canvas::{CanvasInvalidation, invalidated_rects};
 pub(crate) use clipboard::{
     ClipboardRequest, mirror as clipboard_mirror, selection_text, set_clipboard_content,
     take_requests as take_clipboard_requests, write_queued as clipboard_write_queued,

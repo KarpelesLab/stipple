@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(windows)* `WindowRequest::Activate(None)` raises a window and gives it focus on every desktop, quoting the user's last input (X11's event time, Wayland's input serial; Windows flashes the taskbar button when refused) (#79)
 - *(x11)* `WM_CLASS`, `_NET_WM_PID` and `WM_CLIENT_MACHINE` on every window; the launcher's `DESKTOP_STARTUP_ID` (X11) and `XDG_ACTIVATION_TOKEN` (Wayland) are used for the first window and removed from the environment (#80)
 - *(windows)* `WindowInfo::restored_position` and `restored_size`: where a maximized or fullscreen window goes back to (#87)
+- *(canvas)* `AppHandle::scroll_canvas_rect`: move what a canvas shows in a rect without repainting it, only what the move uncovers painted (#75)
+- *(bench)* `canvas_full_1x`, `canvas_full_2x` (a whole 200×60 terminal grid redrawn) and `canvas_scroll` (scrolled a line), with 16 ms budgets
 - *(video)* `stipple::video`: play MP4 and Matroska files (`Video`, `video_view`), H.264 and HEVC through VideoToolbox drawn by Metal from its `IOSurface`s without a copy, H.264 through VA-API, MPEG-2 in software (oxideav), the browser's `<video>` on the web (the `video` feature; 6g, #54)
 - *(package)* `cargo install stipple` installs `cargo stipple`, which runs the packaging scripts the app's own Stipple ships; iOS signing through Xcode's cloud-managed certificates (`STIPPLE_IOS_TEAM_ID`, an App Store Connect API key, optional upload); bundletool fetched when missing (#100)
 
@@ -46,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(text)* discretionary and historical ligatures (`dlig`, `hlig`) are no longer applied: only the default features (`liga`, `clig`, `rlig`, `calt`, and what complex scripts require) (#93)
 - *(widgets)* `VirtualList` takes the app state type (`VirtualList<'_, S>`) and its `height` is an `Option` (#98)
 - *(menus)* closing the first window no longer takes the menu bar from the others (#78)
+- *(render)* glyph runs are drawn from glyph coverage masks kept by the software renderer and from the glyph atlas on the GPU: a full 200×60 terminal grid redraws in about 3 ms on the CPU, 16× faster, and 60× faster on Metal (#74)
+- *(render)* `RasterStats` counts the pixels of each render (a whole frame or an area), not of each rasterizer run inside it
 - *(gpu)* `Renderer::Auto` draws on a hardware Vulkan device for Wayland windows too, as for X11's (6h)
 - *(macos)* the application menu is named after the app (`app_info().name`), not the primary window's title (#89)
 - *(widgets)* a `select` is 200 px wide unless a column stretches it, as a `text_field` is (#97)

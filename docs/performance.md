@@ -151,6 +151,8 @@ and the 95th percentile:
 | `gallery_4k` | The widget window at 3840×2160 (1920×1080 at scale 2), a whole frame drawn from its scene; on a GPU offscreen, waiting for it, not read back (what a frame presented to a window costs); `texture_mb`: the texture memory the GPU's caches hold after it |
 | `sprites_10k` | 10 000 sprites from a `SpriteSheet` over a 3840×2160 background, likewise |
 | `canvas_row` | One row of a 120×40 grid of characters drawn in an `Element::canvas` changed and invalidated, to the frame ready; on a GPU only the row is rasterized and uploaded into the canvas's texture (`upload_kb`) |
+| `canvas_full_1x`, `canvas_full_2x` | Every cell of a 200×60 terminal grid (8×16 cells, stretches of up to 24 cells in 8 colors, a quarter on colored backgrounds, a glyph run each) changed and the whole canvas invalidated, to the frame ready, at scale 1 and 2: `cat` of a big file, or a full-screen program redrawing |
+| `canvas_scroll` | The same grid scrolled up a line with `scroll_canvas_rect` (its pixels moved) and the new bottom line painted, to the frame ready |
 | `transition` | Each frame of a page pushed and popped on a `nav_stack` and a bottom sheet opened and dismissed, animating, on a phone-sized window (390×844 at scale 3) |
 | `layout_tree` | Laying out a tree of ~4,000 elements |
 | `text_layout`, `text_layout_cold`, `text_layout_cjk` | Laying out a 400-word paragraph wrapped at 560 px: with shaping cached, with a font just loaded, and 1,200 Japanese characters through the system's CJK fallback (when there is one) |
@@ -190,7 +192,10 @@ where these scenarios run in the module on the CPU):
 |---|---|---|---|
 | `gallery_4k` | 357 ms | 0.76 ms, 1 MB of textures | 3.7 s |
 | `sprites_10k` | 18 ms | 2.6 ms, 34 MB of textures | 27 ms |
-| `canvas_row` | 0.49 ms (18 432 pixels) | 1.4 ms (74 kB uploaded; 171 ms drawing the canvas straight) | 1.4 ms |
+| `canvas_row` | 0.03 ms (18 432 pixels) | 0.93 ms (74 kB uploaded) | 1.4 ms |
+| `canvas_full_1x` | 3.2 ms | 6.6 ms | — |
+| `canvas_full_2x` | 6.2 ms | 9.0 ms | — |
+| `canvas_scroll` | 0.23 ms (25 600 pixels) | 2.9 ms | — |
 | `transition` (per frame) | 103 ms | 3.5 ms (p95 4.1) | 494 ms |
 
 On Linux with an NVIDIA GeForce RTX 5080 (release build, November 2026),
@@ -279,8 +284,9 @@ The budgets are hard limits, whatever the baseline: on the desktop runners,
 `hover` and `type_char` must be ready within 16 ms (one frame at 60 Hz) on
 the software renderer and Metal; `scroll_list` (16 ms) and `theme_switch`
 (100 ms) warn for now, as do the browser's `web_hover` and `web_type_char`
-work (16 ms). `canvas_row` must be ready within 16 ms on the software
-renderer (and warns past it on a GPU). Thresholds and budgets live in
+work (16 ms). `canvas_row`, `canvas_full_1x` and `canvas_scroll` must be
+ready within 16 ms on the software renderer, and `canvas_full_2x` warns past
+it (it warns past it on a GPU too, as the others do on a hardware one). Thresholds and budgets live in
 `perf/budgets.json`.
 
 The GPU targets depend on the device, so a budget can say

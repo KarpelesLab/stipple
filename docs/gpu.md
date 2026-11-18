@@ -173,7 +173,10 @@ renderer does, and turns it into device-space draw operations:
   off the window, or sharing its id with another canvas is instead drawn
   straight on the GPU: its paint callback runs for the part on screen and
   what it paints is drawn like the rest (a canvas back to changing little
-  for ten frames becomes a texture again). `src/gpu/canvas.rs`.
+  for ten frames becomes a texture again). A canvas scrolled with
+  `scroll_canvas_rect` moves the pixels of its texture and rasterizes only
+  what they uncover; a canvas drawn straight draws its glyph runs from the
+  glyph atlas. `src/gpu/canvas.rs`.
 - **Offscreen scenes** (`Scene::draw_offscreen`: a game's `PixelViewport`
   frame at 320×180, say, scaled up nearest-neighbor) are *resampled
   layers* (`Op::PushResampled`): the scene is lowered in the layer's own

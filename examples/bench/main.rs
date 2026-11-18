@@ -37,6 +37,12 @@
 //!   glyph run) drawn in an `Element::canvas` changed and invalidated, to the frame ready: on the
 //!   GPU renderers only that row is rasterized and uploaded into the
 //!   canvas's texture (`upload_kb`).
+//! - `canvas_full_1x`, `canvas_full_2x`: every cell of a 200×60 terminal grid
+//!   (mixed foreground and background colors, a glyph run per color stretch)
+//!   changed and the whole canvas invalidated, to the frame ready, at scale
+//!   1 and 2: `cat` of a big file, or a full-screen program redrawing.
+//! - `canvas_scroll`: the same grid scrolled up a line (its pixels moved with
+//!   `AppHandle::scroll_canvas_rect`) and the new bottom row painted.
 //! - `transition`: each frame of a page pushed and popped on a `nav_stack`
 //!   and a bottom sheet opened and dismissed, on a phone-sized window
 //!   (390×844 at scale 3), animating. On a phone (see
@@ -64,6 +70,7 @@ use std::sync::Arc;
 
 use stipple::core::CanvasId;
 use stipple::game::SpriteSheet;
+use stipple::geometry::Vec2;
 use stipple::platform::time::Instant;
 use stipple::prelude::*;
 use stipple::render::{ImageOptions, RasterStats, Renderer, Scene, SoftwareRenderer, Surface};
@@ -322,7 +329,7 @@ impl Plan<'_> {
 fn run(plan: &Plan) -> Vec<Outcome> {
     type Scenario = fn(&Plan) -> Option<Outcome>;
     // Scenarios that draw nothing run on the software renderer's run only.
-    let all: [(&str, bool, Scenario); 17] = [
+    let all: [(&str, bool, Scenario); 20] = [
         ("calibration", true, calibration),
         ("startup", false, startup),
         ("first_frame_1x", false, |p| {
@@ -339,6 +346,13 @@ fn run(plan: &Plan) -> Vec<Outcome> {
         ("gallery_4k", false, gallery_4k),
         ("sprites_10k", false, sprites_10k),
         ("canvas_row", false, canvas_row),
+        ("canvas_full_1x", false, |p| {
+            canvas_full(p, "canvas_full_1x", 1.0)
+        }),
+        ("canvas_full_2x", false, |p| {
+            canvas_full(p, "canvas_full_2x", 2.0)
+        }),
+        ("canvas_scroll", false, canvas_scroll),
         ("transition", false, transition),
         ("layout_tree", true, layout_tree),
         ("text_layout", true, text_layout),
@@ -806,6 +820,186 @@ fn canvas_row(plan: &Plan) -> Option<Outcome> {
     Some(o)
 }
 
+/// The terminal grid `canvas_full_*` and `canvas_scroll` draw: 200 columns,
+/// 60 rows of 8×16 cells.
+const TERM: CanvasId = CanvasId(2);
+const TERM_COLS: usize = 200;
+const TERM_ROWS: usize = 60;
+const CELL_W: f64 = 8.0;
+const CELL_H: f64 = 16.0;
+
+/// A stretch of a terminal row in one color: its first column, its text,
+/// its foreground and its background (`None`: the terminal's).
+struct Stretch {
+    col: usize,
+    text: String,
+    fg: Color,
+    bg: Option<Color>,
+}
+
+/// A terminal row: stretches of 1 to 24 cells, in one of 8 colors, a
+/// quarter on a colored background, a few cells blank.
+fn term_line(rng: &mut Rng) -> Vec<Stretch> {
+    const FG: [(u8, u8, u8); 8] = [
+        (204, 204, 204),
+        (229, 80, 80),
+        (102, 204, 102),
+        (229, 192, 102),
+        (102, 153, 229),
+        (204, 120, 204),
+        (102, 204, 204),
+        (255, 255, 255),
+    ];
+    let mut out = Vec::new();
+    let mut col = 0;
+    while col < TERM_COLS {
+        let n = (1 + rng.next() % 24) as usize;
+        let n = n.min(TERM_COLS - col);
+        let text = (0..n)
+            .map(|_| match rng.next() % 10 {
+                0 => ' ',
+                _ => (b'!' + (rng.next() % 94) as u8) as char,
+            })
+            .collect();
+        let (r, g, b) = FG[(rng.next() % 8) as usize];
+        let bg = rng.next().is_multiple_of(4).then(|| {
+            let (r, g, b) = FG[(rng.next() % 8) as usize];
+            Color::rgb(r / 4, g / 4, b / 4)
+        });
+        out.push(Stretch {
+            col,
+            text,
+            fg: Color::rgb(r, g, b),
+            bg,
+        });
+        col += n;
+    }
+    out
+}
+
+type TermRows = Rc<RefCell<std::collections::VecDeque<Vec<Stretch>>>>;
+
+/// An app of one canvas drawing `rows` as a terminal would: the background,
+/// each stretch's background, then a glyph run per stretch, for the rows
+/// crossing the area asked for.
+fn term_app(plan: &Plan, rows: &TermRows, scale: f64) -> App<()> {
+    let view_rows = rows.clone();
+    let font = plan.font.clone();
+    App::new((), move |_: &(), _: &mut Cx<()>| {
+        let rows = view_rows.clone();
+        let font = font.clone();
+        Element::canvas(TERM, move |c: &mut Canvas| {
+            let size = c.size();
+            c.fill_rect(
+                Rect::from_xywh(0.0, 0.0, size.width, size.height),
+                Color::rgb(16, 18, 22),
+            );
+            for (i, line) in rows.borrow().iter().enumerate() {
+                let top = i as f64 * CELL_H;
+                if !c.needs_paint(Rect::from_xywh(0.0, top, size.width, CELL_H)) {
+                    continue;
+                }
+                for s in line {
+                    let x = s.col as f64 * CELL_W;
+                    if let Some(bg) = s.bg {
+                        let w = s.text.chars().count() as f64 * CELL_W;
+                        c.fill_rect(Rect::from_xywh(x, top, w, CELL_H), bg);
+                    }
+                    let mut run = GlyphRun::new(&font, 13.0, s.fg);
+                    run.push_cells(&s.text, Point::new(x, top), CELL_W);
+                    c.fill_glyph_run(&run);
+                }
+            }
+        })
+        .width(TERM_COLS as f64 * CELL_W)
+        .height(TERM_ROWS as f64 * CELL_H)
+    })
+    .logical_size(Size::new(
+        TERM_COLS as f64 * CELL_W,
+        TERM_ROWS as f64 * CELL_H,
+    ))
+    .scale(ScaleFactor::new(scale))
+    .font(plan.font.clone())
+    .renderer(plan.target.renderer())
+}
+
+fn term_rows(rng: &mut Rng) -> TermRows {
+    Rc::new(RefCell::new(
+        (0..TERM_ROWS).map(|_| term_line(rng)).collect(),
+    ))
+}
+
+/// Every cell of the grid changed, the whole canvas invalidated, to the
+/// frame ready.
+fn canvas_full(plan: &Plan, name: &'static str, scale: f64) -> Option<Outcome> {
+    let mut rng = Rng(SEED);
+    let rows = term_rows(&mut rng);
+    let mut app = term_app(plan, &rows, scale);
+    let mut sink = Sink(PhysicalSize::new(0, 0));
+    app.present_frame(&mut sink);
+    let handle = app.handle();
+    // Four screenfuls, cycled: every cell changes every frame.
+    let mut screens: Vec<Vec<Vec<Stretch>>> = (0..4)
+        .map(|_| (0..TERM_ROWS).map(|_| term_line(&mut rng)).collect())
+        .collect();
+    let n = if scale > 1.0 { plan.n(20) } else { plan.n(30) };
+    let samples = sample(3, n, |i| {
+        let k = i % screens.len();
+        {
+            let mut rows = rows.borrow_mut();
+            let next = std::mem::take(&mut screens[k]);
+            screens[k] = rows.drain(..).collect();
+            rows.extend(next);
+        }
+        let t = Instant::now();
+        handle.invalidate_canvas(TERM);
+        std::hint::black_box(app.present_frame(&mut sink));
+        ms_since(t)
+    });
+    let mut o = outcome(plan, name, samples, 3);
+    draw_calls(plan, &mut o);
+    Some(o)
+}
+
+/// The grid scrolled up by a line: its pixels moved, the new bottom row
+/// painted, to the frame ready.
+fn canvas_scroll(plan: &Plan) -> Option<Outcome> {
+    let mut rng = Rng(SEED);
+    let rows = term_rows(&mut rng);
+    let mut app = term_app(plan, &rows, 1.0);
+    let mut sink = Sink(PhysicalSize::new(0, 0));
+    app.present_frame(&mut sink);
+    let handle = app.handle();
+    let whole = Rect::from_xywh(
+        0.0,
+        0.0,
+        TERM_COLS as f64 * CELL_W,
+        TERM_ROWS as f64 * CELL_H,
+    );
+    let mut pixels = Vec::new();
+    let samples = sample(5, plan.n(60), |_| {
+        let line = term_line(&mut rng);
+        {
+            let mut rows = rows.borrow_mut();
+            rows.pop_front();
+            rows.push_back(line);
+        }
+        RasterStats::take();
+        let t = Instant::now();
+        handle.scroll_canvas_rect(TERM, whole, Vec2::new(0.0, -CELL_H));
+        std::hint::black_box(app.present_frame(&mut sink));
+        let ms = ms_since(t);
+        pixels.push(RasterStats::take().pixels as f64);
+        ms
+    });
+    let mut o = outcome(plan, "canvas_scroll", samples, 5);
+    if plan.target == Target::Software {
+        pixels.sort_by(f64::total_cmp);
+        o.extra.push(("pixels", median(&pixels)));
+    }
+    Some(o)
+}
+
 /// The phone-sized app the transitions run on: a page stack, and a sheet.
 struct Phone {
     nav: NavStack<u32>,
@@ -1118,7 +1312,10 @@ fn cjk_available() -> bool {
 /// measures the one asked for; it's unset again when the API doesn't draw.
 #[cfg(not(target_arch = "wasm32"))]
 fn gpu_probe(name: &str) -> Result<&'static str, String> {
-    let apis: &[&'static str] = if cfg!(any(target_os = "macos", target_os = "ios")) {
+    let apis: &[&'static str] = if cfg!(all(target_os = "macos", feature = "vk")) {
+        // Vulkan through MoltenVK, when it's installed.
+        &["metal", "vulkan"]
+    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
         &["metal"]
     } else if cfg!(target_os = "windows") {
         &["d3d11"]
@@ -1267,6 +1464,9 @@ fn main() {
             "gallery_4k",
             "sprites_10k",
             "canvas_row",
+            "canvas_full_1x",
+            "canvas_full_2x",
+            "canvas_scroll",
             "transition",
             "layout_tree",
             "text_layout",

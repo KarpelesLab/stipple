@@ -4,10 +4,10 @@ use crate::platform::time::Instant;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::core::canvas::{CanvasId, CanvasInvalidation};
+use crate::core::canvas::{CanvasChange, CanvasId, CanvasInvalidation};
 use crate::core::runtime::ViewportId;
 use crate::core::{Cx, Element};
-use crate::geometry::Rect;
+use crate::geometry::{Rect, Vec2};
 use crate::platform::wake;
 use crate::platform::{UserAttention, WindowId, WindowRequest};
 use crate::platform::{WindowAttributes, WindowInfo};
@@ -581,7 +581,7 @@ impl<S> AppHandle<S> {
     /// # }
     /// ```
     pub fn invalidate_canvas(&self, id: CanvasId) {
-        self.with(|s| s.canvases.push((id, None)));
+        self.with(|s| s.canvases.push((id, CanvasChange::Repaint(None))));
         wake::wake();
     }
 
@@ -591,7 +591,42 @@ impl<S> AppHandle<S> {
     /// the canvas's paint callback is asked for just that area. A terminal
     /// passes the rows that changed. Safe from any thread.
     pub fn invalidate_canvas_rect(&self, id: CanvasId, rect: Rect) {
-        self.with(|s| s.canvases.push((id, Some(rect))));
+        self.with(|s| s.canvases.push((id, CanvasChange::Repaint(Some(rect)))));
+        wake::wake();
+    }
+
+    /// Move what [canvas](crate::core::Element::canvas) `id` shows in `rect`
+    /// (its own coordinates) by `delta`, without repainting it: the pixels
+    /// already on screen are copied, and the paint callback is asked only
+    /// for the part of `rect` they uncover. What a terminal does when its
+    /// output scrolls a line: `delta` is one row up, and the callback paints
+    /// the new bottom row. Safe from any thread.
+    ///
+    /// It applies to the canvas as the app last painted it, so paint the
+    /// data that moved before calling it, and invalidate what changed
+    /// besides ([`invalidate_canvas_rect`](Self::invalidate_canvas_rect)),
+    /// before or after: a pending repaint moves with the pixels. Pixels move
+    /// with whatever shows through the canvas there, so `rect` should be
+    /// one the canvas paints opaquely (a terminal fills its background).
+    /// When they can't be moved as they are (a canvas drawn rotated, scaled,
+    /// faded, or by a fraction of a device pixel), the whole of `rect` is
+    /// repainted instead.
+    ///
+    /// ```no_run
+    /// # use stipple::prelude::*;
+    /// use stipple::geometry::Vec2;
+    /// # use std::sync::{Arc, Mutex};
+    /// # struct State;
+    /// # const ROW: f64 = 16.0;
+    /// # fn f(handle: AppHandle<State>, lines: Arc<Mutex<Vec<String>>>, size: Size) {
+    /// // A new line at the bottom of a terminal: the rest scrolls up a row.
+    /// lines.lock().unwrap().push("new output".into());
+    /// let screen = Rect::from_xywh(0.0, 0.0, size.width, size.height);
+    /// handle.scroll_canvas_rect(CanvasId(1), screen, Vec2::new(0.0, -ROW));
+    /// # }
+    /// ```
+    pub fn scroll_canvas_rect(&self, id: CanvasId, rect: Rect, delta: Vec2) {
+        self.with(|s| s.canvases.push((id, CanvasChange::Scroll { rect, delta })));
         wake::wake();
     }
 

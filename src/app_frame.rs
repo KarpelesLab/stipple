@@ -87,7 +87,11 @@ impl<S: 'static> Pane<S> {
             }
             None => Damage::Full,
         };
-        let damage = crate::merge_regions(damage, self.take_content_damage());
+        let changed = match &damage {
+            Damage::Regions(rects) => rects.clone(),
+            _ => Vec::new(),
+        };
+        let damage = crate::merge_regions(damage, self.take_content_damage(&changed));
         self.painted_highlights = self.highlight_alphas.clone();
         crate::app_dbg(format_args!("present: animated without a build"));
         Some((self.paint_scene(theme, font), damage))

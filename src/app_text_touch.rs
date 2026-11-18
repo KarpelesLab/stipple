@@ -93,7 +93,7 @@ impl Handle {
     }
 
     /// What is drawn, for damage.
-    fn drawn(&self) -> Rect {
+    pub(crate) fn drawn(&self) -> Rect {
         let k = self.knob();
         let s = self.stem();
         Rect::from_points(

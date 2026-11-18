@@ -48,6 +48,27 @@
       "blocking": false
     },
     {
+      "scenarios": ["canvas_full_1x", "canvas_scroll"],
+      "ms": 16,
+      "renderers": ["software"],
+      "platforms": ["linux", "macos", "windows"]
+    },
+    {
+      "scenarios": ["canvas_full_2x"],
+      "ms": 16,
+      "renderers": ["software"],
+      "platforms": ["linux", "macos", "windows"],
+      "blocking": false
+    },
+    {
+      "scenarios": ["canvas_full_1x", "canvas_full_2x", "canvas_scroll"],
+      "ms": 16,
+      "renderers": ["metal", "gl", "d3d11", "vulkan"],
+      "platforms": ["linux", "macos", "windows"],
+      "hardware": true,
+      "blocking": false
+    },
+    {
       "scenarios": ["gallery_4k"],
       "ms": 4,
       "renderers": ["metal", "gl", "d3d11", "vulkan"],

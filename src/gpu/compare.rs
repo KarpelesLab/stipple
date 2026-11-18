@@ -199,6 +199,20 @@ fn a_text_page_matches_the_software_renderer() {
     assert!(draws <= 1, "{draws} draw calls");
 }
 
+/// A terminal's grid of glyph runs: from the glyph atlas on the GPU, from
+/// coverage masks on the CPU.
+#[test]
+fn a_glyph_grid_matches_the_software_renderer() {
+    let Some(font) = Font::system_default() else {
+        eprintln!("skipping: no system font found");
+        return;
+    };
+    let s = glyph_grid(&font);
+    agree("glyph-grid", &s, 1.0, 1.0, 0.01);
+    agree("glyph-grid@2", &s, 2.0, 1.0, 0.01);
+    agree("glyph-grid@1.5", &s, 1.5, 1.0, 0.01);
+}
+
 #[test]
 fn a_sprite_field_matches_the_software_renderer() {
     let s = sprite_field();
@@ -581,6 +595,112 @@ fn an_invalidated_canvas_row_is_all_that_is_uploaded() {
             assert_eq!(uploaded, 600 * 400 * 4, "the first frame: all of it");
         } else {
             assert_eq!(uploaded, 600 * 40 * 4, "tick {tick}: just the row");
+            assert_eq!(crate::app_gpu::current(|r| r.unwrap().uploads()), 0);
+        }
+    }
+    crate::app_gpu::reset(None);
+}
+
+/// A terminal's canvas scrolled a line at a time (`scroll_canvas_rect`):
+/// its texture moves its pixels, only the new line is painted, and every
+/// frame matches the software renderer's (which moves the window's pixels).
+#[test]
+fn a_scrolled_canvas_matches_the_software_renderer() {
+    use crate::core::CanvasId;
+    use crate::geometry::Vec2;
+    use crate::prelude::*;
+    use crate::render::{GlyphRun, Renderer, Surface};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    if gpu(&Scene::new(Size::new(1.0, 1.0)), Color::BLACK, 1.0).is_none() {
+        return;
+    }
+    let Some(font) = Font::system_default() else {
+        return;
+    };
+    const GRID: CanvasId = CanvasId(8);
+    const ROW: f64 = 20.0;
+    struct Keep(PhysicalSize, Option<Pixmap>);
+    impl Surface for Keep {
+        fn resize(&mut self, size: PhysicalSize) {
+            self.0 = size;
+        }
+        fn size(&self) -> PhysicalSize {
+            self.0
+        }
+        fn present(&mut self, pixmap: &Pixmap, _: &[Rect]) {
+            self.1 = Some(pixmap.clone());
+        }
+    }
+    let make = |renderer: Renderer, rows: Rc<RefCell<Vec<String>>>, painted: Rc<Cell<f64>>| {
+        let f = font.clone();
+        App::new((), move |_: &(), _: &mut Cx<()>| {
+            let (rows, painted) = (rows.clone(), painted.clone());
+            let font = f.clone();
+            Element::canvas(GRID, move |c: &mut Canvas| {
+                let d = c.dirty();
+                painted.set(painted.get() + d.width() * d.height());
+                c.fill_rect(
+                    Rect::from_xywh(0.0, 0.0, 300.0, 200.0),
+                    Color::rgb(20, 24, 30),
+                );
+                for (i, text) in rows.borrow().iter().enumerate() {
+                    let top = i as f64 * ROW;
+                    if c.needs_paint(Rect::from_xywh(0.0, top, 300.0, ROW)) {
+                        let mut run = GlyphRun::new(&font, 14.0, Color::rgb(220, 230, 220));
+                        run.push_cells(text, Point::new(6.0, top + 2.0), 8.0);
+                        c.fill_glyph_run(&run);
+                    }
+                }
+            })
+            .width(300.0)
+            .height(200.0)
+        })
+        .theme(Theme::dark())
+        .logical_size(Size::new(300.0, 200.0))
+        .scale(ScaleFactor::new(2.0))
+        .font(font.clone())
+        .renderer(renderer)
+    };
+    let lines = (0..10).map(|i| format!("$ line {i}")).collect::<Vec<_>>();
+    let cpu_rows = Rc::new(RefCell::new(lines.clone()));
+    let gpu_rows = Rc::new(RefCell::new(lines));
+    let painted = Rc::new(Cell::new(0.0));
+    crate::app_gpu::reset(None);
+    let mut cpu = make(
+        Renderer::Software,
+        cpu_rows.clone(),
+        Rc::new(Cell::new(0.0)),
+    );
+    let mut gpu_app = make(Renderer::Gpu, gpu_rows.clone(), painted.clone());
+    let (mut a, mut b) = (
+        Keep(PhysicalSize::new(0, 0), None),
+        Keep(PhysicalSize::new(0, 0), None),
+    );
+    for tick in 0..4 {
+        if tick > 0 {
+            for rows in [&cpu_rows, &gpu_rows] {
+                let mut rows = rows.borrow_mut();
+                rows.remove(0);
+                rows.push(format!("$ output at tick {tick}"));
+            }
+            let whole = Rect::from_xywh(0.0, 0.0, 300.0, 200.0);
+            for app in [&cpu, &gpu_app] {
+                app.handle()
+                    .scroll_canvas_rect(GRID, whole, Vec2::new(0.0, -ROW));
+            }
+        }
+        painted.set(0.0);
+        cpu.present_frame(&mut a);
+        gpu_app.present_frame(&mut b);
+        let (c, g) = (a.1.as_ref().unwrap(), b.1.as_ref().unwrap());
+        dump(&format!("canvas-scroll-{tick}"), "gpu", g);
+        dump(&format!("canvas-scroll-{tick}"), "cpu", c);
+        let d = diff(g, c);
+        eprintln!("canvas scroll, tick {tick}: {d:?}");
+        assert!(d.mean < 1.0 && d.bad < 0.01, "tick {tick}: {d:?}");
+        if tick > 0 {
+            assert_eq!(painted.get(), 300.0 * ROW, "tick {tick}: just the new line");
             assert_eq!(crate::app_gpu::current(|r| r.unwrap().uploads()), 0);
         }
     }

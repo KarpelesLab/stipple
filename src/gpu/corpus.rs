@@ -59,6 +59,7 @@ pub(crate) fn cases(font: Option<&Font>) -> Vec<Case> {
         add("text", text(font), &[1.0, 2.0], 1.0, 0.01);
         add("text-effects", text_effects(font), &[1.0, 2.0], 1.5, 0.02);
         add("text-page", text_page(font), &[1.0, 2.0], 1.0, 0.01);
+        add("glyph-grid", glyph_grid(font), &[1.0, 2.0, 1.5], 1.0, 0.01);
     }
     let (before, after, changed) = canvas_update();
     out.push(Case {
@@ -405,6 +406,52 @@ pub(crate) fn text_page(font: &Font) -> Scene {
         );
         y += size * 1.25;
     }
+    s
+}
+
+/// A terminal's grid: glyph runs a cell apart, in several colors over cell
+/// backgrounds, bold, italic and undercurled, at a fractional offset, one
+/// clipped and one faded.
+pub(crate) fn glyph_grid(font: &Font) -> Scene {
+    use crate::render::{Decoration, GlyphRun, UnderlineStyle};
+    let mut s = Scene::new(Size::new(240.0, 140.0));
+    let colors = [
+        Color::rgb(0xcc, 0xcc, 0xcc),
+        Color::rgb(0x60, 0x9c, 0xff),
+        Color::rgb(0xef, 0x68, 0x68),
+        Color::rgb(0x9a, 0xd0, 0x7a),
+    ];
+    let line = "ls -la ~/src | grep 'stipple' && echo $?";
+    for row in 0..6 {
+        let top = 4.0 + row as f64 * 16.0;
+        if row % 2 == 1 {
+            s.fill_rect(
+                Rect::from_xywh(4.0 + 7.0 * 3.0, top, 7.0 * 9.0, 16.0),
+                Color::rgb(0x30, 0x36, 0x44),
+            );
+        }
+        let f = match row % 3 {
+            0 => font.clone(),
+            1 => font.bold(),
+            _ => font.italic(),
+        };
+        let mut run = GlyphRun::new(&f, 12.0 + (row % 2) as f64, colors[row % colors.len()]);
+        if row == 4 {
+            run = run.decoration(Decoration::NONE.underline(UnderlineStyle::Curly));
+        }
+        run.push_cells(line, Point::new(4.0 + row as f64 * 0.3, top), 7.0);
+        s.fill_glyph_run(&run);
+    }
+    s.push_clip(Rect::from_xywh(10.0, 100.0, 100.0, 9.0));
+    let mut run = GlyphRun::new(font, 13.0, Color::WHITE);
+    run.push_cells("clipped through the middle", Point::new(10.0, 100.0), 7.0);
+    s.fill_glyph_run(&run);
+    s.pop_clip();
+    s.push_layer(Affine::IDENTITY, 0.5);
+    let mut run = GlyphRun::new(font, 13.0, Color::rgb(0xff, 0xd7, 0x00));
+    run.push_cells("faded", Point::new(130.0, 116.0), 8.0);
+    s.fill_glyph_run(&run);
+    s.pop_layer();
     s
 }
 

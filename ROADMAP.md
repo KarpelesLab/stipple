@@ -926,6 +926,14 @@ abstraction is frozen at the end of Phase 2.
   rasterized in bands; `RasterStats` counts the pixels. `canvasdemo
   --selftest` checks in CI that only invalidated rows are rasterized. See
   [`docs/canvas.md`](docs/canvas.md).
+- ✅ **A terminal's grid at display rate** (#74, #75): glyph runs drawn from
+  cached glyph coverage masks on the CPU and the glyph atlas on the GPU, and
+  `AppHandle::scroll_canvas_rect` moving a canvas's pixels instead of
+  repainting them. *A full 200×60 grid in mixed colors: 51 → 3.2 ms on the
+  software renderer, 389 → 6.6 ms on Metal, 494 → 5.7 ms on Vulkan
+  (MoltenVK), on an M5 Max; scrolling it a line 0.23 ms (`canvas_full_*`,
+  `canvas_scroll`). The software path moves the window's pixels, the GPU
+  ones the canvas's texture; D3D11 and GLES compile-checked.*
 - Performance: render thread, layer caching, glyph atlas.
 - **Exit criteria:** a non-trivial reference application (e.g., a file/media
   browser using oxideav decoders) ships on all three desktops, accessible and

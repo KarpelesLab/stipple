@@ -26,7 +26,9 @@
 //! [`Scene::draw_image_region`]: crate::render::Scene::draw_image_region
 
 use crate::geometry::Rect;
-use crate::render::lower::{self, Bounds, nearest_upscale, sprite_index};
+use crate::render::glyph_mask;
+use crate::render::glyphs::GlyphDraw;
+use crate::render::lower::{self, Blits, Bounds, glyphs_index, nearest_upscale, sprite_index};
 use crate::render::sprite::{Filter, SpriteDraw};
 use crate::render::{Color, Pixmap};
 use oxideav_core::{Group, ImageRef, Node, Paint, PathNode, Transform2D};
@@ -37,7 +39,7 @@ pub(crate) type RasterRun<'a> = &'a dyn Fn(&[Node], [i32; 4], Color) -> Pixmap;
 
 pub(crate) struct Compositor<'a> {
     out: Pixmap,
-    sprites: &'a [SpriteDraw],
+    blits: &'a Blits,
     background: Color,
     raster: RasterRun<'a>,
     /// Nothing is drawn yet: the frame holds only the background.
@@ -60,9 +62,11 @@ fn upright(t: &Transform2D) -> bool {
     t.b == 0.0 && t.c == 0.0
 }
 
+/// Whether `nodes` hold a marker of something the compositor draws itself:
+/// an image region, or a glyph run.
 fn has_sprites(nodes: &[Node]) -> bool {
     nodes.iter().any(|n| match n {
-        Node::Image(img) => sprite_index(img).is_some(),
+        Node::Image(img) => sprite_index(img).is_some() || glyphs_index(img).is_some(),
         Node::Group(g) => has_sprites(&g.children),
         _ => false,
     })
@@ -95,13 +99,13 @@ impl<'a> Compositor<'a> {
         width: u32,
         height: u32,
         background: Color,
-        sprites: &'a [SpriteDraw],
+        blits: &'a Blits,
         raster: RasterRun<'a>,
     ) -> Self {
         Self {
             // Cleared to the background when something is first blitted.
             out: Pixmap::new(crate::geometry::PhysicalSize::new(width, height)),
-            sprites,
+            blits,
             background,
             raster,
             fresh: true,
@@ -142,9 +146,15 @@ impl<'a> Compositor<'a> {
                 Node::Image(img) => {
                     if let Some(i) = sprite_index(img) {
                         self.flush();
-                        if let Some(s) = self.sprites.get(i) {
+                        if let Some(s) = self.blits.sprites.get(i) {
                             self.start();
                             blit_sprite(&mut self.out, s, img, t, clip);
+                        }
+                        continue;
+                    }
+                    if let Some(i) = glyphs_index(img) {
+                        if let Some(run) = self.blits.glyphs.get(i) {
+                            self.glyphs(run, &t.compose(&img.transform), clip);
                         }
                         continue;
                     }
@@ -197,13 +207,22 @@ impl<'a> Compositor<'a> {
     /// its coordinates to device pixels).
     fn unmark(&self, node: &Node, t: &Transform2D) -> Node {
         match node {
-            Node::Image(img) => match sprite_index(img).and_then(|i| self.sprites.get(i)) {
-                Some(s) => {
-                    let k = nearest_upscale(s, &img.bounds, &t.compose(&img.transform));
-                    s.to_node(img.bounds, img.transform, k)
+            Node::Image(img) => {
+                if let Some(run) = glyphs_index(img).and_then(|i| self.blits.glyphs.get(i)) {
+                    return Node::Group(Group {
+                        transform: img.transform,
+                        children: vec![run.node()],
+                        ..Group::new()
+                    });
                 }
-                None => node.clone(),
-            },
+                match sprite_index(img).and_then(|i| self.blits.sprites.get(i)) {
+                    Some(s) => {
+                        let k = nearest_upscale(s, &img.bounds, &t.compose(&img.transform));
+                        s.to_node(img.bounds, img.transform, k)
+                    }
+                    None => node.clone(),
+                }
+            }
             Node::Group(g) if has_sprites(&g.children) => {
                 let local = t.compose(&g.transform);
                 Node::Group(Group {
@@ -254,6 +273,58 @@ impl<'a> Compositor<'a> {
             }
         }
         true
+    }
+
+    /// Draw glyph run `run`, through `t` and clipped to `clip`: each glyph
+    /// blended from its coverage mask in the run's color, or, one that has
+    /// none (a color emoji), filled by the rasterizer.
+    fn glyphs(&mut self, run: &GlyphDraw, t: &Transform2D, clip: [i32; 4]) {
+        let c = run.color();
+        if c.a == 0 {
+            return;
+        }
+        let (cr, cg, cb, ca) = (c.r as u32, c.g as u32, c.b as u32, c.a as u32);
+        for g in run.glyphs() {
+            let local = t.compose(&run.place(g));
+            let outline = || run.outline(g, glyph_mask::MASK_COLOR);
+            let Some(placed) = glyph_mask::place(g.key, &local, outline) else {
+                if let Some(node) = run.glyph_node(g, false) {
+                    self.push(node, t, clip);
+                }
+                continue;
+            };
+            let Some(mask) = placed.mask else {
+                continue;
+            };
+            let (ox, oy) = (placed.origin.0 + mask.x, placed.origin.1 + mask.y);
+            let r = intersect(clip, [ox, oy, ox + mask.w as i32, oy + mask.h as i32]);
+            if empty(r) {
+                continue;
+            }
+            // A run waiting under the glyph is drawn first; one beside it
+            // can wait.
+            if let Some(p) = self.pending_bounds
+                && (p[0].floor() as i32) < r[2]
+                && r[0] < p[2].ceil() as i32
+                && (p[1].floor() as i32) < r[3]
+                && r[1] < p[3].ceil() as i32
+            {
+                self.flush();
+            }
+            self.start();
+            let stride = self.out.stride();
+            let buf = self.out.as_bytes_mut();
+            let (w, cols) = (mask.w as usize, (r[0] - ox) as usize..(r[2] - ox) as usize);
+            for y in r[1]..r[3] {
+                let m = &mask.coverage[(y - oy) as usize * w..][cols.clone()];
+                let row = &mut buf[y as usize * stride + r[0] as usize * 4..][..m.len() * 4];
+                for (d, &k) in row.as_chunks_mut::<4>().0.iter_mut().zip(m) {
+                    if k != 0 {
+                        blend(d, cr, cg, cb, (k as u32 * ca + 127) / 255);
+                    }
+                }
+            }
+        }
     }
 
     /// Add `node`, drawn through `t` and clipped to `clip`, to the run.

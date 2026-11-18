@@ -809,7 +809,7 @@ pub(crate) fn bold_stroke(size_px: f64) -> f32 {
 
 /// A key for the rasterizer's glyph bitmap cache: one face, glyph, size and
 /// synthesis.
-fn glyph_cache_key(face: &Face, glyph_id: u16, size_px: f64, synth: Synthesis) -> u64 {
+pub(crate) fn glyph_cache_key(face: &Face, glyph_id: u16, size_px: f64, synth: Synthesis) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     b"stipple.glyph.v2".hash(&mut h);

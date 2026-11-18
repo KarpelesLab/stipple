@@ -350,6 +350,15 @@ impl Scene {
         self.emit_uncommanded(placeholder(index, bounds));
     }
 
+    /// Draw `glyphs` (a glyph run, shaped and placed), whose outlines lie
+    /// within `bounds`, when the scene is lowered.
+    pub(crate) fn draw_glyphs(&mut self, bounds: Rect, glyphs: crate::render::glyphs::GlyphDraw) {
+        let index = self.deferred.len();
+        self.deferred
+            .push(Deferred::Glyphs(std::rc::Rc::new(glyphs)));
+        self.emit(placeholder(index, bounds));
+    }
+
     /// Emit a node into the current (innermost) clip frame.
     fn emit(&mut self, node: Node) {
         self.primitives += 1;
@@ -604,7 +613,7 @@ impl Scene {
         &self,
         view: Option<[f32; 4]>,
         t: &Transform2D,
-        sprites: Option<&RefCell<Vec<SpriteDraw>>>,
+        sprites: Option<&RefCell<crate::render::lower::Blits>>,
     ) -> Vec<Node> {
         let lower = |s: &Scene| {
             Lower {

@@ -46,6 +46,8 @@ use super::canvas::{CanvasCache, CanvasFrame};
 use crate::core::CanvasId;
 use crate::geometry::{PhysicalSize, Rect};
 use crate::render::Filter;
+use crate::render::glyph_mask::FastHasher;
+use crate::render::glyphs::GlyphDraw;
 use crate::render::lower::{self, Bounds, Deferred, Offscreen};
 use crate::render::scene::{rect_path, round_rect_path};
 use crate::render::sprite::ExternalDraw;
@@ -399,6 +401,8 @@ pub(crate) struct CanvasArgs<'a> {
     pub cache: &'a mut CanvasCache,
     pub owner: u64,
     pub damage: Option<Vec<Rect>>,
+    /// Canvas scrolls before the damage.
+    pub scrolls: Vec<crate::core::CanvasScroll>,
 }
 
 /// [`plan`], keeping canvases as textures when `canvases` says whose frame
@@ -427,8 +431,12 @@ pub(crate) fn plan_with(
             f: (h - lh * s) / 2.0,
         };
         let target = [0.0, 0.0, w, h];
-        let mut frame =
-            canvases.map(|c| (c.cache.begin(c.owner, c.damage, &root, target), c.cache));
+        let mut frame = canvases.map(|c| {
+            (
+                c.cache.begin(c.owner, c.damage, c.scrolls, &root, target),
+                c.cache,
+            )
+        });
         let mut walker = Walker {
             ops: &mut ops,
             cache,
@@ -719,6 +727,7 @@ impl Walker<'_> {
                             id,
                         }) => self.canvas(*bounds, paint, *scale, &local, *id),
                         Some(Deferred::Offscreen(o)) => self.offscreen(o, rect, &local),
+                        Some(Deferred::Glyphs(g)) => self.glyph_run(deferred, g, &local),
                         None => {}
                     }
                 }
@@ -1021,6 +1030,85 @@ impl Walker<'_> {
             },
         );
         push(self.ops, Source::Image(image), (x0, y0), w, h);
+    }
+
+    /// A glyph run (`Scene::fill_glyph_run`): each glyph from the glyph
+    /// atlas, rasterized once per glyph, color, transform and sub-pixel
+    /// position (as [`cached`](Self::cached) draws a laid-out text's, keyed
+    /// without walking its outline). One the atlas can't take goes that way.
+    fn glyph_run(&mut self, deferred: &[Deferred], run: &GlyphDraw, t: &Transform2D) {
+        use std::hash::{Hash, Hasher};
+        let c = run.color();
+        let q = |v: f32| (v * SUBPIXEL).round() / SUBPIXEL;
+        let k4 = |v: f32| (v * 1e4).round() as i32;
+        for g in run.glyphs() {
+            let local = t.compose(&run.place(g));
+            let (ex, fy) = (q(local.e), q(local.f));
+            let (bx, by) = (ex.floor(), fy.floor());
+            let mut h = FastHasher::default();
+            (b"run", g.key).hash(&mut h);
+            [k4(local.a), k4(local.b), k4(local.c), k4(local.d)].hash(&mut h);
+            (((ex - bx) * SUBPIXEL) as u8, ((fy - by) * SUBPIXEL) as u8).hash(&mut h);
+            (c.r, c.g, c.b, c.a).hash(&mut h);
+            let k = h.finish();
+            let hit = match self.cache.atlas.get(k) {
+                Some((slot, &offset)) => Some((slot, offset)),
+                None => {
+                    // Rasterized now, into the atlas.
+                    let Some(outline) = run.outline(g, c) else {
+                        continue;
+                    };
+                    let Some(b) = lower::subtree_bounds(std::slice::from_ref(&outline)) else {
+                        continue;
+                    };
+                    let snapped = Transform2D {
+                        e: ex,
+                        f: fy,
+                        ..local
+                    };
+                    let dev = lower::map_bounds(&snapped, b);
+                    let (x0, y0) = (
+                        (dev[0] - bx).floor() as i32 - 1,
+                        (dev[1] - by).floor() as i32 - 1,
+                    );
+                    let (x1, y1) = (
+                        (dev[2] - bx).ceil() as i32 + 1,
+                        (dev[3] - by).ceil() as i32 + 1,
+                    );
+                    let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
+                    let at = Transform2D::translate(-bx, -by).compose(&snapped);
+                    let pixels = (w > 0 && h > 0 && w <= 2048 && h <= 2048)
+                        .then(|| raster_bytes(&outline, &at, x0, y0, w, h));
+                    pixels.and_then(|px| {
+                        let (slot, _) = self.cache.atlas.insert(k, w, h, &px, (x0, y0))?;
+                        Some((slot, (x0, y0)))
+                    })
+                }
+            };
+            let Some((slot, offset)) = hit else {
+                if let Some(node) = run.glyph_node(g, true) {
+                    self.node(deferred, &node, t);
+                }
+                continue;
+            };
+            let (ox, oy) = (bx + offset.0 as f32, by + offset.1 as f32);
+            let (w, h) = (slot.rect[2] as f32, slot.rect[3] as f32);
+            if !intersects(&[ox, oy, ox + w, oy + h], &self.target) {
+                continue;
+            }
+            self.ops.push(Op::Image {
+                image: Source::Atlas {
+                    page: slot.page,
+                    region: slot.rect,
+                },
+                transform: Transform2D::translate(ox, oy),
+                rect: [0.0, 0.0, w, h],
+                opacity: 1.0,
+                uv: FULL_UV,
+                tint: NO_TINT,
+                nearest: false,
+            });
+        }
     }
 
     /// [`fallback`](Self::fallback) for a group already composed into `local`.

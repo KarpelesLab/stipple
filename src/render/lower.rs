@@ -16,6 +16,7 @@
 
 use crate::geometry::{PhysicalSize, Rect, Vec2};
 use crate::render::canvas::{Canvas, CanvasPaint};
+use crate::render::glyphs::GlyphDraw;
 use crate::render::scene::Scene;
 use crate::render::sprite::{ExternalDraw, SpriteDraw};
 use crate::render::{Filter, ImageOptions, Pixmap, SoftwareRenderer};
@@ -63,6 +64,22 @@ pub(crate) enum Deferred {
     /// A region of an image in another API's memory
     /// ([`Scene::draw_external_region`]).
     External(ExternalDraw),
+    /// A glyph run, shaped and placed ([`Scene::fill_glyph_run`]).
+    Glyphs(Rc<GlyphDraw>),
+}
+
+/// What a lowering for the software compositor leaves to it (each as a
+/// marker node, see `render::blit`): image regions, and glyph runs.
+#[derive(Default)]
+pub(crate) struct Blits {
+    pub sprites: Vec<SpriteDraw>,
+    pub glyphs: Vec<Rc<GlyphDraw>>,
+}
+
+impl Blits {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.sprites.is_empty() && self.glyphs.is_empty()
+    }
 }
 
 /// What [`Scene::draw_offscreen`] records: `content` drawn into exactly
@@ -119,6 +136,7 @@ impl std::fmt::Debug for Deferred {
             Deferred::Sprite(s) => f.debug_tuple("Sprite").field(&s.src).finish(),
             Deferred::Offscreen(o) => f.debug_tuple("Offscreen").field(&o.pixels).finish(),
             Deferred::External(e) => f.debug_tuple("External").field(&e.src).finish(),
+            Deferred::Glyphs(g) => f.debug_tuple("Glyphs").field(&g.glyphs().len()).finish(),
         }
     }
 }
@@ -152,9 +170,15 @@ const SPRITE_TAG: i64 = 0x5350_5254_0000_0000;
 
 /// A marker for recorded region `index` in place of placeholder `img`.
 fn sprite_marker(index: usize, img: &ImageRef) -> Node {
+    marker(SPRITE_TAG, index, img)
+}
+
+/// A marker tagged `tag` for recorded entry `index` in place of
+/// placeholder `img`.
+fn marker(tag: i64, index: usize, img: &ImageRef) -> Node {
     Node::Image(ImageRef {
         frame: Box::new(VideoFrame {
-            pts: Some(SPRITE_TAG | index as i64),
+            pts: Some(tag | index as i64),
             planes: Vec::new(),
         }),
         bounds: img.bounds,
@@ -166,6 +190,17 @@ fn sprite_marker(index: usize, img: &ImageRef) -> Node {
 pub(crate) fn sprite_index(img: &ImageRef) -> Option<usize> {
     let pts = img.frame.pts?;
     (img.frame.planes.is_empty() && pts & TAG_MASK == SPRITE_TAG)
+        .then_some((pts & !TAG_MASK) as usize)
+}
+
+/// Glyph runs lowered for the software compositor are markers like image
+/// regions', with this tag and the index into the runs recorded.
+const GLYPHS_TAG: i64 = 0x474C_5950_0000_0000;
+
+/// The recorded glyph run a marker stands for.
+pub(crate) fn glyphs_index(img: &ImageRef) -> Option<usize> {
+    let pts = img.frame.pts?;
+    (img.frame.planes.is_empty() && pts & TAG_MASK == GLYPHS_TAG)
         .then_some((pts & !TAG_MASK) as usize)
 }
 
@@ -322,7 +357,7 @@ pub(crate) struct Lower<'a> {
     pub view: Option<Bounds>,
     /// Where image regions are recorded for the software compositor (each
     /// left as a marker node); without it they become plain image nodes.
-    pub sprites: Option<&'a RefCell<Vec<SpriteDraw>>>,
+    pub sprites: Option<&'a RefCell<Blits>>,
 }
 
 impl Lower<'_> {
@@ -461,6 +496,14 @@ impl Lower<'_> {
                 EXTERNALS_DRAWN.with(|n| n.set(n.get() + 1));
                 Some(self.sprite(&e.sprite()?, img, &local))
             }
+            Deferred::Glyphs(g) => Some(match self.sprites {
+                Some(sink) => {
+                    let mut sink = sink.borrow_mut();
+                    sink.glyphs.push(g.clone());
+                    marker(GLYPHS_TAG, sink.glyphs.len() - 1, img)
+                }
+                None => g.node(),
+            }),
         }
     }
 
@@ -470,8 +513,8 @@ impl Lower<'_> {
         match self.sprites {
             Some(sink) => {
                 let mut sink = sink.borrow_mut();
-                sink.push(sprite.clone());
-                sprite_marker(sink.len() - 1, img)
+                sink.sprites.push(sprite.clone());
+                sprite_marker(sink.sprites.len() - 1, img)
             }
             None => {
                 // Assume a 2× display: hard pixels at either density.
