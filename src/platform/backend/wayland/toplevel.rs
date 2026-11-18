@@ -163,6 +163,10 @@ pub(super) fn create(
         _ => None,
     };
 
+    // Its preferred (fractional) scale, and whether it is transparent.
+    super::fractional::watch(conn, surface)?;
+    super::backdrop::add(conn, surface, attrs.is_transparent(), attrs.blur);
+
     // Initial commit: the compositor responds with an xdg_surface.configure.
     conn.send(surface, WL_SURFACE_COMMIT, &[])?;
     conn.stream.flush()?;
@@ -215,6 +219,8 @@ pub(super) fn destroy(conn: &mut WlConn, objects: Objects) {
         conn.decor = conn.decors.pop().unwrap_or_default();
     }
     super::syncobj::forget(conn, objects.surface);
+    super::fractional::forget(conn, objects.surface);
+    super::backdrop::forget(conn, objects.surface);
     let _ = conn.send(objects.toplevel, XDG_TOPLEVEL_DESTROY, &[]);
     let _ = conn.send(objects.xdg_surface, XDG_SURFACE_DESTROY, &[]);
     let _ = conn.send(objects.surface, WL_SURFACE_DESTROY, &[]);

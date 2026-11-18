@@ -319,6 +319,18 @@ pub struct WindowAttributes {
     /// [`modal`](Self::modal) does) until it closes. Elsewhere it's a
     /// modal window. `false` by default; it needs a parent.
     pub sheet: bool,
+    /// Keep the frame's alpha all the way to the screen, so what is behind
+    /// the window shows through wherever the app paints with less than full
+    /// alpha (a theme whose `palette.background` is translucent, say).
+    /// `false` by default. Honored on macOS, Windows, X11 (with a compositing
+    /// manager running) and Wayland; see `docs/windows-and-cursors.md`.
+    pub transparent: bool,
+    /// Blur what shows through a [`transparent`](Self::transparent) window,
+    /// where the system offers it: a vibrancy view on macOS, the acrylic
+    /// backdrop on Windows 11, `ext-background-effect` or KWin's blur on
+    /// Wayland, `_KDE_NET_WM_BLUR_BEHIND_REGION` on X11. Implies
+    /// `transparent`.
+    pub blur: bool,
 }
 
 impl Default for WindowAttributes {
@@ -343,6 +355,8 @@ impl Default for WindowAttributes {
             parent: None,
             modal: false,
             sheet: false,
+            transparent: false,
+            blur: false,
         }
     }
 }
@@ -476,6 +490,34 @@ impl WindowAttributes {
     /// [`sheet`](Self::sheet), with a parent.
     pub(crate) fn blocks_parent(&self) -> bool {
         self.parent.is_some() && (self.modal || self.sheet)
+    }
+
+    /// Let what is behind the window show through where the app paints
+    /// translucently (see [`transparent`](Self::transparent)).
+    pub fn transparent(mut self, on: bool) -> Self {
+        self.transparent = on;
+        self
+    }
+
+    /// Blur what shows through the window, where the system can (see
+    /// [`blur`](Self::blur)); turns on [`transparent`](Self::transparent).
+    pub fn blur(mut self, on: bool) -> Self {
+        self.blur = on;
+        if on {
+            self.transparent = true;
+        }
+        self
+    }
+
+    /// Whether the window keeps its frame's alpha: asked for transparency,
+    /// or for blur, which implies it. (The phones and the web have no
+    /// transparent windows.)
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "windows", target_os = "linux")),
+        allow(dead_code)
+    )]
+    pub(crate) fn is_transparent(&self) -> bool {
+        self.transparent || self.blur
     }
 }
 
@@ -989,5 +1031,10 @@ mod tests {
         assert_eq!(a.max_size, Some(Size::new(800.0, 600.0)));
         assert!(a.maximized && a.fullscreen);
         assert_eq!(a.icon.map(|i| i.size()), Some(PhysicalSize::new(16, 16)));
+        assert!(!WindowAttributes::new().is_transparent());
+        let t = WindowAttributes::new().transparent(true);
+        assert!(t.is_transparent() && !t.blur);
+        let b = WindowAttributes::new().blur(true);
+        assert!(b.transparent && b.blur && b.is_transparent());
     }
 }

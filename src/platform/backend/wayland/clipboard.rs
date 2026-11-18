@@ -536,26 +536,7 @@ pub(super) mod tests {
     /// A connection whose other end plays the compositor.
     pub(in crate::platform::backend::wayland) fn conn_pair() -> (WlConn, UnixStream) {
         let (ours, theirs) = UnixStream::pair().unwrap();
-        let conn = WlConn {
-            stream: ours,
-            next_id: 2,
-            fds: Default::default(),
-            queue: Default::default(),
-            clip: Clipboard::default(),
-            buffer_scale: 1,
-            cursor_device: None,
-            enter_serial: None,
-            cursor: Default::default(),
-            text_input: Default::default(),
-            pointer: None,
-            decor: Default::default(),
-            decors: Vec::new(),
-            attention: Default::default(),
-            lock: Default::default(),
-            dmabuf: Default::default(),
-            syncobj: Default::default(),
-            frames: Default::default(),
-        };
+        let conn = WlConn::over(ours);
         (conn, theirs)
     }
 

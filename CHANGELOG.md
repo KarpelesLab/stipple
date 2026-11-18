@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(gpu)* the GPU comparison corpus, device-loss test and benchmark on the iOS simulator (Metal) and the Android emulator (GLES, Vulkan): `tools/gpu-mobile.sh`, and non-blocking `gpu-ios-sim` / `gpu-android` CI jobs (6h)
 - *(bench)* `--renderer vulkan`, and `--renderer gl` measures OpenGL ES in a build that also has Vulkan
+- *(window)* translucent windows: `App::transparent` / `WindowAttributes::transparent` keep the frame's alpha to the screen (macOS, Windows' DWM, X11's ARGB visual under a compositing manager, Wayland's ARGB buffers; Metal too), and `blur` blurs what shows through (`NSVisualEffectView`, acrylic, KDE's blur, `ext-background-effect-v1`); the `glass` example (#77)
+- *(wayland)* fractional scales: `wp_fractional_scale_v1` + `wp_viewporter`, buffers drawn at the preferred scale (#86)
+- *(x11)* the scale follows `Xft.dpi` while the app runs (`RESOURCE_MANAGER` changes) (#86)
 - *(video)* `stipple::video`: play MP4 and Matroska files (`Video`, `video_view`), H.264 and HEVC through VideoToolbox drawn by Metal from its `IOSurface`s without a copy, H.264 through VA-API, MPEG-2 in software (oxideav), the browser's `<video>` on the web (the `video` feature; 6g, #54)
 - *(package)* `cargo install stipple` installs `cargo stipple`, which runs the packaging scripts the app's own Stipple ships; iOS signing through Xcode's cloud-managed certificates (`STIPPLE_IOS_TEAM_ID`, an App Store Connect API key, optional upload); bundletool fetched when missing (#100)
 

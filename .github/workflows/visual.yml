@@ -150,6 +150,61 @@ jobs:
           echo "pixels changed by the click: $diff"
           [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 100 ]
 
+      # The scale follows Xft.dpi while the app runs: the root's
+      # RESOURCE_MANAGER changes, the app reads it again and lays out anew.
+      - name: Follow a live Xft.dpi change (2x to 1.5x)
+        env:
+          DISPLAY: ":99"
+          STIPPLE_X11_DEBUG: "1"
+        run: |
+          kill "$APP_PID" 2>/dev/null || true
+          sleep 1
+          ./target/release/examples/nativegallery > visual_output/live-scale.log 2>&1 &
+          LIVE_PID=$!
+          sleep 4
+          import -window root -crop 720x680+0+0 +repage visual_output/live-scale-2x.png
+          printf 'Xft.dpi: 144\n' | xrdb -nocpp -merge
+          sleep 2
+          import -window root -crop 720x680+0+0 +repage visual_output/stipple-x11-live-1.5x.png
+          kill "$LIVE_PID" 2>/dev/null || true
+          printf 'Xft.dpi: 192\n' | xrdb -nocpp -merge
+          grep 'Xft.dpi scale' visual_output/live-scale.log
+          grep -q 'Xft.dpi scale 2 -> 1.5' visual_output/live-scale.log
+          diff=$(compare -metric AE visual_output/live-scale-2x.png visual_output/stipple-x11-live-1.5x.png null: 2>&1 || true)
+          echo "pixels changed by the new scale: $diff"
+          [ "$(echo "$diff" | awk '{printf "%d", $1}')" -gt 1000 ]
+
+      # A transparent window gets the ARGB visual under a compositing manager:
+      # its background shows the (black) root through at 0% and doesn't at
+      # 100%. Non-blocking: xcompmgr's painting under Xvfb is untested here.
+      - name: A transparent window under a compositing manager (xcompmgr)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+          STIPPLE_X11_DEBUG: "1"
+        run: |
+          sudo apt-get install -y xcompmgr
+          cargo build --release --example glass
+          xsetroot -solid '#000000'
+          xcompmgr > visual_output/xcompmgr.log 2>&1 &
+          CM_PID=$!
+          sleep 1
+          for o in 0 100; do
+            ./target/release/examples/glass --opacity $o > visual_output/glass-x11-$o.log 2>&1 &
+            GLASS_PID=$!
+            sleep 4
+            import -window root -crop 960x640+0+0 +repage visual_output/stipple-x11-glass-$o.png
+            kill "$GLASS_PID" 2>/dev/null || true
+            sleep 1
+          done
+          kill "$CM_PID" 2>/dev/null || true
+          grep 'ARGB visual' visual_output/glass-x11-0.log
+          grep -q 'compositing manager: true' visual_output/glass-x11-0.log
+          clear=$(convert visual_output/stipple-x11-glass-0.png -format '%[pixel:p{20,20}]' info:)
+          solid=$(convert visual_output/stipple-x11-glass-100.png -format '%[pixel:p{20,20}]' info:)
+          echo "background at 0%: $clear, at 100%: $solid"
+          [ "$clear" != "$solid" ]
+
       - name: Timers and background work wake the event loop
         env:
           DISPLAY: ":99"
@@ -2415,7 +2470,7 @@ jobs:
         run: sudo apt-get install -y fcitx5 fcitx5-mozc fcitx5-chinese-addons fcitx5-hangul dbus-x11
 
       - name: Build the window, textinput, clipboard, rawkeys and multi-window examples
-        run: cargo build --release --example window --example textinput --example clipboarddemo --example rawkeys --example multiwindow
+        run: cargo build --release --example window --example textinput --example clipboarddemo --example rawkeys --example multiwindow --example glass
 
       - name: Run under headless sway and screenshot with grim
         run: |
@@ -2480,9 +2535,47 @@ jobs:
           sleep 5
           grim visual_output/stipple-wayland-2x.png || echo "grim failed"
           kill "$WIN_PID" 2>/dev/null || true
-          grep -q "buffer scale 2" visual_output/wl-2x.log
+          # The output's scale, or the compositor's preferred fractional one.
+          grep -qE "buffer scale 2|fractional scale 2" visual_output/wl-2x.log
+
+          # --- fractional scale: at 1.5x the buffer is 1.5 times the
+          # window's logical size (wp_fractional_scale_v1 + wp_viewporter),
+          # not a 2x buffer the compositor shrinks: tiled or floating, the
+          # window then fits the output's 1024 pixels across (a 2x buffer
+          # wouldn't: 2 × 683, or 2 × 640). ---
+          swaymsg output HEADLESS-1 scale 1.5
+          sleep 1
+          ./target/release/examples/window > visual_output/wl-1.5x.log 2>&1 &
+          WIN_PID=$!
+          sleep 5
+          grim visual_output/stipple-wayland-1.5x.png || echo "grim failed"
+          kill "$WIN_PID" 2>/dev/null || true
+          grep "fractional scale" visual_output/wl-1.5x.log
+          grep -q "fractional scale 1.5" visual_output/wl-1.5x.log
+          frac=$(grep -o 'present [0-9]*x' visual_output/wl-1.5x.log | tail -1 | tr -dc 0-9)
+          echo "buffer width at 1.5x: $frac"
+          [ "$frac" -ge 600 ] && [ "$frac" -le 1030 ]
           swaymsg output HEADLESS-1 scale 1
           sleep 1
+
+          # --- transparency: the glass window's background lets the (black)
+          # output show through at 0%, not at 100%. A warning for now. ---
+          for o in 0 100; do
+            ./target/release/examples/glass --opacity $o > visual_output/wl-glass-$o.log 2>&1 &
+            WIN_PID=$!
+            sleep 4
+            grim visual_output/stipple-wayland-glass-$o.png || echo "grim failed"
+            kill "$WIN_PID" 2>/dev/null || true
+            sleep 1
+          done
+          clear=$(convert visual_output/stipple-wayland-glass-0.png -format '%[pixel:p{40,200}]' info: || true)
+          solid=$(convert visual_output/stipple-wayland-glass-100.png -format '%[pixel:p{40,200}]' info: || true)
+          echo "glass background at 0%: $clear, at 100%: $solid"
+          if [ -n "$clear" ] && [ "$clear" != "$solid" ]; then
+            echo "ok: the transparent window shows what is behind it"
+          else
+            echo "::warning::the transparent window looked the same at 0% and 100% under sway"
+          fi
 
           # --- input: type into the textinput field via wtype (virtual
           # keyboard). Tab focuses the field, then we type text — exercising the
@@ -3208,6 +3301,24 @@ jobs:
           cargo build --release --example canvasdemo
           timeout 30 ./target/release/examples/canvasdemo.exe --selftest | tee canvas.log
           grep -q 'canvasdemo: selftest ok' canvas.log
+
+      # A transparent window (DWM's frame over the client area, the bitmap
+      # premultiplied): at 0% background opacity what is behind shows, at
+      # 100% the theme's background. Not yet seen on a runner.
+      - name: A transparent window (non-blocking)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo build --release --example glass
+          foreach ($o in 0, 100) {
+            .github\scripts\capture-window.ps1 -Exe target\release\examples\glass.exe `
+              -Out "visual_output\glass-windows-$o.png" -Title "Glass" -Arguments "--opacity $o"
+          }
+          Add-Type -AssemblyName System.Drawing
+          $clear = [System.Drawing.Bitmap]::new((Join-Path $PWD "visual_output\glass-windows-0.png")).GetPixel(30, 120)
+          $solid = [System.Drawing.Bitmap]::new((Join-Path $PWD "visual_output\glass-windows-100.png")).GetPixel(30, 120)
+          Write-Host "background at 0%: $clear, at 100%: $solid"
+          if ($clear.ToArgb() -eq $solid.ToArgb()) { throw "the transparent window looked the same at 0% and 100%" }
 
       # The reference app (examples/mediabrowser): its selftest off screen
       # (PNG of each step) and in a real Win32 window; then its window

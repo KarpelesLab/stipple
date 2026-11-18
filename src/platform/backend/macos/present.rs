@@ -13,13 +13,22 @@
 
 use std::ffi::c_void;
 
-use super::{CgPoint, CgRect, CgSize, Id, class, msg_id, msg_void_bool, msg_void_id, sel};
+use super::{
+    CgPoint, CgRect, CgSize, Id, class, msg_id, msg_rect, msg_void, msg_void_bool, msg_void_i64,
+    msg_void_id, msg_void_u64, sel,
+};
 use crate::geometry::Rect;
 use crate::render::Pixmap;
-use crate::render::surface::{copy_as_bgrx, damage_rects};
+use crate::render::surface::{copy_as_bgra, damage_rects};
 
 /// `kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little`.
 const CG_BITMAP_BGRX: u32 = 6 | (2 << 12);
+/// `kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little`: a
+/// transparent window's frames.
+const CG_BITMAP_BGRA: u32 = 2 | (2 << 12);
+/// `kCGBlendModeCopy`: a translucent frame replaces what the window showed
+/// instead of piling up over it.
+const CG_BLEND_COPY: i32 = 17;
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
@@ -53,18 +62,34 @@ unsafe extern "C" {
     fn CGContextRestoreGState(ctx: *mut c_void);
     fn CGContextTranslateCTM(ctx: *mut c_void, tx: f64, ty: f64);
     fn CGContextScaleCTM(ctx: *mut c_void, sx: f64, sy: f64);
+    fn CGContextSetBlendMode(ctx: *mut c_void, mode: i32);
 }
 
-/// A window's last frame: `B, G, R, X` bytes, top row first, in physical
-/// pixels.
+/// A window's last frame: `B, G, R, X` bytes (premultiplied `B, G, R, A` in
+/// a transparent window), top row first, in physical pixels.
 #[derive(Default)]
 pub(super) struct Framebuffer {
     px: Vec<u8>,
     w: usize,
     h: usize,
+    /// The window is transparent: keep the frame's alpha.
+    alpha: bool,
 }
 
 impl Framebuffer {
+    /// An empty frame, for a transparent window with `alpha`.
+    pub(super) fn new(alpha: bool) -> Self {
+        Self {
+            alpha,
+            ..Self::default()
+        }
+    }
+
+    /// Whether the window is transparent.
+    pub(super) fn alpha(&self) -> bool {
+        self.alpha
+    }
+
     /// Take a presented frame, of which `damage` (physical pixels; empty:
     /// all) changed. Returns the pixel rects to redisplay, and whether they
     /// are the whole frame.
@@ -73,7 +98,7 @@ impl Framebuffer {
         let (w, h) = (size.width as usize, size.height as usize);
         let whole = damage.is_empty() || (w, h) != (self.w, self.h);
         let rects = damage_rects(size, if whole { &[] } else { damage });
-        copy_as_bgrx(pixmap, &mut self.px, &rects);
+        copy_as_bgra(pixmap, &mut self.px, &rects, self.alpha);
         (self.w, self.h) = (w, h);
         let rects = rects
             .into_iter()
@@ -117,7 +142,11 @@ impl Framebuffer {
                 32,
                 self.w * 4,
                 space,
-                CG_BITMAP_BGRX,
+                if self.alpha {
+                    CG_BITMAP_BGRA
+                } else {
+                    CG_BITMAP_BGRX
+                },
                 provider,
                 std::ptr::null(),
                 false,
@@ -133,6 +162,9 @@ impl Framebuffer {
             CGContextSaveGState(cg);
             CGContextTranslateCTM(cg, 0.0, height);
             CGContextScaleCTM(cg, 1.0, -1.0);
+            if self.alpha {
+                CGContextSetBlendMode(cg, CG_BLEND_COPY);
+            }
             CGContextDrawImage(cg, rect, image);
             CGContextRestoreGState(cg);
             CGImageRelease(image);
@@ -167,6 +199,54 @@ pub(super) unsafe fn invalidate(view: Id, rects: &[Rect], whole: bool, scale: f6
             },
         };
         unsafe { set(view, sel("setNeedsDisplayInRect:"), rect) };
+    }
+}
+
+/// Make `window` (whose content view is `view`) let the desktop show through
+/// where its frames are translucent, and with `blur`, put a behind-window
+/// vibrancy view under `view` so what shows through is blurred: the vibrancy
+/// view becomes the content view, with `view` filling it.
+///
+/// # Safety
+/// Main thread, `view` the window's content view, before anything else
+/// (first responder, tracking) is set up on it.
+pub(super) unsafe fn make_transparent(window: Id, view: Id, blur: bool) {
+    unsafe {
+        msg_void_bool(window, sel("setOpaque:"), false);
+        let clear = msg_id(class("NSColor"), sel("clearColor"));
+        msg_void_id(window, sel("setBackgroundColor:"), clear);
+        if !blur {
+            return;
+        }
+        let effect_cls = class("NSVisualEffectView");
+        if effect_cls.is_null() {
+            return;
+        }
+        let bounds = msg_rect(view, sel("frame"));
+        let init: unsafe extern "C" fn(Id, super::Sel, CgRect) -> Id =
+            std::mem::transmute(super::objc_msgSend as *const c_void);
+        let effect = init(
+            msg_id(effect_cls, sel("alloc")),
+            sel("initWithFrame:"),
+            bounds,
+        );
+        if effect.is_null() {
+            return;
+        }
+        // Blending behind the window, always active (not only while the
+        // window is key), in the HUD material: a light blur that follows
+        // the appearance (the window background's is nearly opaque).
+        msg_void_i64(effect, sel("setBlendingMode:"), 0);
+        msg_void_i64(effect, sel("setState:"), 1);
+        msg_void_i64(effect, sel("setMaterial:"), 13);
+        // The vibrancy view holds the window's content; the view fills it
+        // (NSViewWidthSizable | NSViewHeightSizable) and draws over it.
+        msg_id(view, sel("retain"));
+        msg_void_id(window, sel("setContentView:"), effect);
+        msg_void_id(effect, sel("addSubview:"), view);
+        msg_void_u64(view, sel("setAutoresizingMask:"), 2 | 16);
+        msg_void(view, sel("release"));
+        msg_void(effect, sel("release"));
     }
 }
 

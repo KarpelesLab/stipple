@@ -22,7 +22,7 @@
 
 use super::{
     ShmBuffer, WL_SHM_FORMAT_ARGB8888, WL_SURFACE_ATTACH, WL_SURFACE_COMMIT, WL_SURFACE_DAMAGE,
-    WL_SURFACE_SET_BUFFER_SCALE, WlConn, arg_u32, dbg, decor, make_shm, syncobj,
+    WlConn, arg_u32, dbg, decor, fractional, make_shm, syncobj,
 };
 use crate::geometry::PhysicalSize;
 
@@ -39,8 +39,8 @@ const WL_SURFACE_SET_INPUT_REGION: u16 = 5;
 const WL_BUFFER_DESTROY: u16 = 0;
 
 /// What the decorations were last drawn for: their look, the content size
-/// (logical) and the scale.
-type Key = (decor::Look, PhysicalSize, u32);
+/// (logical) and the scale (its bits).
+type Key = (decor::Look, PhysicalSize, u64);
 
 /// A window's GPU content subsurface and the decorations around it.
 #[derive(Default)]
@@ -59,7 +59,7 @@ pub(super) struct Content {
     key: Option<Key>,
     /// The content's size (logical) and scale at the last frame.
     content: PhysicalSize,
-    scale: u32,
+    scale: f64,
 }
 
 impl Content {
@@ -136,11 +136,11 @@ impl Content {
         &mut self,
         conn: &mut WlConn,
         content: PhysicalSize,
-        scale: u32,
+        scale: f64,
     ) -> std::io::Result<()> {
         self.active = true;
         self.content = content;
-        self.scale = scale.max(1);
+        self.scale = scale;
         self.update(conn)?;
         conn.send(self.main, WL_SURFACE_COMMIT, &[])
     }
@@ -152,7 +152,7 @@ impl Content {
         if !self.active || conn.decor.title_height() <= 0.0 {
             return false;
         }
-        let key = (conn.decor.look(), self.content, self.scale);
+        let key = (conn.decor.look(), self.content, self.scale.to_bits());
         if self.key.as_ref() != Some(&key) && self.update(conn).is_ok() {
             let _ = conn.send(self.main, WL_SURFACE_COMMIT, &[]);
         }
@@ -173,9 +173,12 @@ impl Content {
             conn.send(subsurface, SUBSURFACE_SET_POSITION, &a)?;
             self.position = position;
         }
-        let key = (conn.decor.look(), self.content, s);
+        let key = (conn.decor.look(), self.content, s.to_bits());
         if self.key.as_ref() != Some(&key) {
-            let physical = PhysicalSize::new(self.content.width * s, self.content.height * s);
+            let physical = PhysicalSize::new(
+                fractional::physical(self.content.width, s),
+                fractional::physical(self.content.height, s),
+            );
             if let Some((size, argb)) = conn.decor.around(physical, s) {
                 if self.deco.as_ref().map(|b| b.size) != Some(size) {
                     if let Some(old) = self.deco.take() {
@@ -188,14 +191,20 @@ impl Content {
                     let buffer = buf.buffer;
                     // No sync object on a surface showing a wl_shm buffer.
                     syncobj::forget(conn, self.main);
-                    conn.send(self.main, WL_SURFACE_SET_BUFFER_SCALE, &s.to_le_bytes())?;
+                    // In surface units: the content and the insets around it.
+                    let (l, t, r, b) = conn.decor.insets();
+                    let units = (
+                        self.content.width + (l + r) as u32,
+                        self.content.height + (t + b) as u32,
+                    );
+                    fractional::set_scale(conn, self.main, s, units)?;
                     let mut a = Vec::new();
                     for v in [buffer, 0, 0] {
                         arg_u32(&mut a, v);
                     }
                     conn.send(self.main, WL_SURFACE_ATTACH, &a)?;
                     let mut a = Vec::new();
-                    for v in [0, 0, size.width / s, size.height / s] {
+                    for v in [0, 0, units.0, units.1] {
                         arg_u32(&mut a, v);
                     }
                     conn.send(self.main, WL_SURFACE_DAMAGE, &a)?;
@@ -229,6 +238,7 @@ impl Content {
     pub(super) fn destroy(&mut self, conn: &mut WlConn) {
         if let Some((surface, subsurface)) = self.sub.take() {
             syncobj::forget(conn, surface);
+            fractional::forget(conn, surface);
             let _ = conn.send(subsurface, SUBSURFACE_DESTROY, &[]);
             let _ = conn.send(surface, WL_SURFACE_DESTROY, &[]);
         }
@@ -298,7 +308,7 @@ mod tests {
         let target = content.target(&mut conn).unwrap();
         assert_ne!(target, MAIN);
         content
-            .finish(&mut conn, PhysicalSize::new(200, 100), 1)
+            .finish(&mut conn, PhysicalSize::new(200, 100), 1.0)
             .unwrap();
         conn.stream.flush().unwrap();
         let msgs = sent(&mut peer);

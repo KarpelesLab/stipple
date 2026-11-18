@@ -1524,8 +1524,9 @@ impl Window for IosWindow {
             }
             if c.metal.is_none() {
                 // Over the view's own layer, which `drawRect:` fills.
-                c.metal =
-                    unsafe { super::metal_layer::MetalLayer::attach(msg_id(c.view, sel("layer"))) };
+                c.metal = unsafe {
+                    super::metal_layer::MetalLayer::attach(msg_id(c.view, sel("layer")), true)
+                };
             }
             let scale = if c.scale > 0.0 { c.scale } else { 1.0 };
             let size = self.size;

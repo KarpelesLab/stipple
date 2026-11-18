@@ -244,6 +244,49 @@ keeps it only while the app is in the foreground.
 area outlined, buttons locking it upright or sideways, and a switch keeping
 the screen awake.
 
+## Translucent windows
+
+A window can let what is behind it show through: `App::transparent(true)`
+(or `WindowAttributes::transparent` for a window opened later) keeps the
+frame's alpha all the way to the screen, and wherever the app paints with
+less than full alpha the desktop shows. The usual way is a theme whose
+background is translucent; the panels, text and controls drawn over it keep
+their own colors:
+
+```rust,no_run
+# use stipple::prelude::*;
+# struct State;
+# fn view(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+App::new(State, view)
+    .transparent(true)
+    .blur(true) // blur what shows through, where the system can
+    .theme_with(|_: &State, system: &Theme| {
+        let mut theme = *system;
+        // 85% opaque.
+        theme.palette.background = theme.palette.background.with_alpha(217);
+        theme
+    })
+    .run();
+```
+
+`blur(true)` also blurs what shows through, and implies `transparent`. How
+each platform does it:
+
+| Platform | Transparency | Blur |
+|---|---|---|
+| macOS | `NSWindow` not opaque, clear background; the Metal layer not opaque | an `NSVisualEffectView` (behind the window, HUD material) under the content |
+| Windows | DWM's frame extended over the whole client area, the frame blitted premultiplied | the acrylic system backdrop (`DWMSBT_TRANSIENTWINDOW`), Windows 11 22H2 and later; none before |
+| X11 | a 32-bit ARGB visual and its colormap, when a compositing manager runs (`_NET_WM_CM_S0`); opaque otherwise | `_KDE_NET_WM_BLUR_BEHIND_REGION` (KWin, picom) |
+| Wayland | `ARGB8888` buffers with no opaque region | `ext-background-effect-v1` where the compositor can blur, else KWin's `org_kde_kwin_blur` |
+
+A transparent window is drawn on the CPU except on macOS, where Metal draws
+it too: the other GPU renderers present opaque swap chains. iOS, Android and
+the web ignore both settings.
+
+`cargo run --example glass` opens a translucent window whose slider sets the
+background's opacity (`--blur` blurs what is behind, `--opacity N` starts at
+N%).
+
 ## Cursors
 
 `CursorIcon` names the cursor shapes: `Default`, `Text`, `Pointer`,
@@ -320,6 +363,12 @@ checked there; they were checked by hand under xfwm4. It also types into
 `pointerdemo` and checks the app asks for the hidden cursor and back (the
 blank cursor itself isn't looked at). Wayland, Windows and macOS are
 build-checked only.
+
+Translucent windows: CI runs `glass` at 0% and 100% background opacity
+under sway, under Xvfb with `xcompmgr` as the compositing manager, and on
+Windows, and checks the background differs (non-blocking for now); it was
+looked at by hand on macOS, with and without blur. Blur is checked only by
+hand, on macOS.
 
 `multiwindow --selftest` changes its windows while it runs: the first
 window's title follows the state, the second is retitled, moved to 360,260

@@ -420,6 +420,10 @@ needs = "The OS's secret store (the Keychain, Credential Manager, a Secret Servi
 description = "Native file dialog via the xdg-desktop-portal FileChooser (D-Bus), with a built-in mock portal for headless verification."
 needs = "A desktop's file dialog (the portal on Linux, IFileDialog, NSOpenPanel). The web demo opens and saves files in the browser."
 
+[native.glass]
+description = "A translucent window: the desktop shows through its background, whose opacity a slider sets, optionally blurred (--blur)."
+needs = "A desktop window the compositor blends with what is behind it; the web's canvas is part of the page."
+
 [native.multiwindow]
 description = "Two real OS windows (X11), each a pane with its own view onto the shared app state."
 needs = "A desktop: two OS windows on one state. The web has one canvas per app."

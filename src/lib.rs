@@ -960,6 +960,25 @@ impl<S: 'static> App<S> {
         self
     }
 
+    /// Let what is behind the primary window show through wherever the app
+    /// paints translucently: give the theme a translucent
+    /// `palette.background` (say 85% alpha) and the desktop shows through it.
+    /// See [`WindowAttributes::transparent`] and `docs/windows-and-cursors.md`.
+    pub fn transparent(mut self, on: bool) -> Self {
+        self.primary().attrs.transparent = on;
+        self
+    }
+
+    /// Blur what shows through the primary window, where the system can;
+    /// turns on [`transparent`](Self::transparent). See
+    /// [`WindowAttributes::blur`].
+    pub fn blur(mut self, on: bool) -> Self {
+        let attrs = &mut self.primary().attrs;
+        attrs.blur = on;
+        attrs.transparent |= on;
+        self
+    }
+
     /// Declare the application's menu bar, as a function of the state: it is
     /// rebuilt as the state changes, so labels and enabled and checked states
     /// follow it. Picking an item (or pressing its shortcut, from any window)

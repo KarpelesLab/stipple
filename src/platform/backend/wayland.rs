@@ -31,6 +31,8 @@
 
 /// Attention requests (`xdg_activation_v1`) and the bell.
 mod attention;
+/// Transparent windows, and the blur behind them.
+mod backdrop;
 mod clipboard;
 /// GPU frames in a subsurface under decorations Stipple draws.
 #[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
@@ -40,6 +42,8 @@ mod decor;
 /// GPU frames as `dma-buf`s (`zwp_linux_dmabuf_v1`).
 #[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
 mod dmabuf;
+/// Fractional scales (`wp_fractional_scale_v1` and `wp_viewporter`).
+mod fractional;
 /// Raw key events and client-side key repeat.
 mod keys;
 mod owned;
@@ -757,6 +761,10 @@ struct WlConn {
     syncobj: syncobj::Syncobj,
     /// The windows' outstanding frame callbacks.
     frames: visibility::Callbacks,
+    /// Fractional scales: the globals, and each surface's objects.
+    fractional: fractional::Fractional,
+    /// Transparent windows and blur.
+    backdrop: backdrop::Backdrop,
 }
 
 impl WlConn {
@@ -798,6 +806,8 @@ impl WlConn {
             dmabuf: dmabuf::Dmabuf::default(),
             syncobj: syncobj::Syncobj::default(),
             frames: visibility::Callbacks::default(),
+            fractional: fractional::Fractional::default(),
+            backdrop: backdrop::Backdrop::default(),
         }
     }
 
@@ -1189,9 +1199,10 @@ struct WaylandWindow {
     /// last reported (suspended, or its frame callback stalled).
     pending_suspended: Cell<bool>,
     visibility: Cell<visibility::Visibility>,
-    /// Buffer pixels per surface unit (the scale of the output the window is
-    /// on, which `output` names), shared with its surface.
-    scale: Rc<Cell<u32>>,
+    /// Buffer pixels per surface unit, shared with its surface: the
+    /// compositor's preferred fractional scale, or else the (whole) scale of
+    /// the output the window is on, which `output` names.
+    scale: Rc<Cell<f64>>,
     output: Cell<Option<u32>>,
     /// Whether its `xdg_surface` has had its first configure: attaching a
     /// buffer before that is a protocol error, so presents wait for it.
@@ -1215,7 +1226,7 @@ impl WaylandWindow {
         globals: toplevel::Globals,
         reg: Rc<RefCell<toplevel::Reg>>,
         logical: PhysicalSize,
-        scale: u32,
+        scale: f64,
         icon: Option<ShmBuffer>,
     ) -> Self {
         Self {
@@ -1228,8 +1239,8 @@ impl WaylandWindow {
             globals,
             reg,
             size: Cell::new(PhysicalSize::new(
-                logical.width * scale,
-                logical.height * scale,
+                fractional::physical(logical.width, scale),
+                fractional::physical(logical.height, scale),
             )),
             logical: Cell::new(logical),
             pending_size: Cell::new(None),
@@ -1308,8 +1319,8 @@ impl WaylandWindow {
         let scale = self.scale.get();
         self.logical.set(logical);
         self.size.set(PhysicalSize::new(
-            logical.width * scale,
-            logical.height * scale,
+            fractional::physical(logical.width, scale),
+            fractional::physical(logical.height, scale),
         ));
     }
 
@@ -1397,7 +1408,7 @@ impl Window for WaylandWindow {
         self.size.get()
     }
     fn scale_factor(&self) -> ScaleFactor {
-        ScaleFactor::new(self.scale.get() as f64)
+        ScaleFactor::new(self.scale.get())
     }
     fn request_redraw(&self) {
         // Once the loop is back (a GPU frame that couldn't be shown); before
@@ -1608,7 +1619,9 @@ impl Window for WaylandWindow {
         }
         {
             let mut conn = self.conn.lock().unwrap();
-            if !dmabuf::available(&conn) {
+            // The GPU renderers' frames are opaque: a transparent window is
+            // drawn on the CPU.
+            if !dmabuf::available(&conn) || backdrop::is_transparent(&conn, self.surface) {
                 return None;
             }
             toplevel::use_decor(&mut conn, self.toplevel);
@@ -1660,8 +1673,8 @@ struct WaylandSurface {
     toplevel: u32,
     shm: u32,
     size: PhysicalSize,
-    /// Its window's buffer scale.
-    scale: Rc<Cell<u32>>,
+    /// Its window's scale.
+    scale: Rc<Cell<f64>>,
     /// Whether its window has been configured (no buffer before that).
     configured: Rc<Cell<bool>>,
     buffer: Option<ShmBuffer>,
@@ -1699,18 +1712,21 @@ impl Surface for WaylandSurface {
             return;
         }
         let mut conn = self.conn.lock().unwrap();
-        let scale = self.scale.get().max(1);
+        let scale = self.scale.get();
         toplevel::use_decor(&mut conn, self.toplevel);
         // After GPU frames: no frame under the decorations, and no sync
         // object on a surface showing a wl_shm buffer.
         self.content.borrow_mut().leave(&mut conn);
         syncobj::forget(&mut conn, self.surface);
         // Decorations Stipple draws go around the content, in an ARGB buffer
-        // (the resize margin is transparent).
+        // (the resize margin is transparent). A transparent window's frames
+        // keep their alpha.
         let content = size;
-        let framed = conn.decor.frame(pixmap, scale);
+        let alpha = backdrop::is_transparent(&conn, self.surface);
+        let framed = conn.decor.frame(pixmap, scale, alpha);
         let (size, format) = match &framed {
             Some((size, _)) => (*size, WL_SHM_FORMAT_ARGB8888),
+            None if alpha => (size, WL_SHM_FORMAT_ARGB8888),
             None => (size, WL_SHM_FORMAT_XRGB8888),
         };
         // (Re)create the shm buffer if missing or the size changed.
@@ -1725,28 +1741,54 @@ impl Surface for WaylandSurface {
         let buffer = buf.buffer;
         match &framed {
             Some((_, argb)) => buf.bytes()[..bytes].copy_from_slice(argb),
+            None if alpha => {
+                let all = crate::render::surface::damage_rects(content, &[]);
+                let mut argb = Vec::new();
+                crate::render::surface::copy_as_bgra(pixmap, &mut argb, &all, true);
+                buf.bytes()[..bytes].copy_from_slice(&argb);
+            }
             None => rgba_to_xrgb(pixmap.as_bytes(), &mut buf.bytes()[..bytes]),
         }
         // Which part is the window proper (all of it, without decorations).
-        let logical = PhysicalSize::new(content.width / scale, content.height / scale);
+        let logical = PhysicalSize::new(
+            fractional::logical(content.width, scale),
+            fractional::logical(content.height, scale),
+        );
         decor::send_geometry(&mut conn, logical);
+        // The buffer in surface units: the content and the decorations'
+        // insets around it.
+        let (l, t, r, b) = conn.decor.insets();
+        let units = if framed.is_some() {
+            (
+                logical.width + (l + r) as u32,
+                logical.height + (t + b) as u32,
+            )
+        } else {
+            (logical.width, logical.height)
+        };
+        // Blur behind the window proper, if it asked for it.
+        let (gx, gy, gw, gh) = conn.decor.geometry(logical);
+        let geometry = if framed.is_some() {
+            [gx as i32, gy as i32, gw as i32, gh as i32]
+        } else {
+            [0, 0, logical.width as i32, logical.height as i32]
+        };
+        let _ = backdrop::update(&mut conn, self.surface, geometry);
 
         let surface = self.surface;
         // attach(buffer, 0, 0); damage(0, 0, w, h); commit.
-        let mut a = Vec::new();
-        arg_u32(&mut a, scale);
-        let _ = conn.send(surface, WL_SURFACE_SET_BUFFER_SCALE, &a);
+        let _ = fractional::set_scale(&mut conn, surface, scale, units);
         let mut a = Vec::new();
         arg_u32(&mut a, buffer);
         arg_u32(&mut a, 0);
         arg_u32(&mut a, 0);
         let _ = conn.send(surface, WL_SURFACE_ATTACH, &a);
-        // Damage is in surface units, which the scale divides the buffer into.
+        // Damage is in surface units.
         let mut a = Vec::new();
         arg_u32(&mut a, 0);
         arg_u32(&mut a, 0);
-        arg_u32(&mut a, size.width / scale);
-        arg_u32(&mut a, size.height / scale);
+        arg_u32(&mut a, units.0);
+        arg_u32(&mut a, units.1);
         let _ = conn.send(surface, WL_SURFACE_DAMAGE, &a);
         request_frame_callback(&mut conn, surface, surface);
         let _ = conn.send(surface, WL_SURFACE_COMMIT, &[]);
@@ -1878,6 +1920,10 @@ where
     let mut dmabuf_name = None;
     let mut syncobj_name = None;
     let mut subcompositor_name = None;
+    let mut fractional_name = None;
+    let mut viewporter_name = None;
+    let mut effect_name = None;
+    let mut kde_blur_name = None;
     loop {
         let (object, opcode, args) = conn.recv().map_err(os)?;
         if object == registry && opcode == WL_REGISTRY_GLOBAL {
@@ -1888,6 +1934,10 @@ where
                     .map_or(1, |v| u32::from_le_bytes([v[0], v[1], v[2], v[3]]));
                 match iface.as_str() {
                     "wl_compositor" => compositor_name = Some(name),
+                    fractional::MANAGER => fractional_name = Some(name),
+                    fractional::VIEWPORTER => viewporter_name = Some(name),
+                    backdrop::BACKGROUND_EFFECT => effect_name = Some(name),
+                    backdrop::KDE_BLUR => kde_blur_name = Some(name),
                     "wl_shm" => shm_name = Some(name),
                     "xdg_wm_base" => {
                         wm_base_name = Some(name);
@@ -2010,6 +2060,19 @@ where
     // GPU frames under decorations Stipple draws go in a subsurface.
     let subcompositor =
         subcompositor_name.map(|name| bind(&mut conn, name, content::SUBCOMPOSITOR, 1));
+    // Fractional scales, where the compositor has both halves.
+    let (fractional_manager, viewporter) = match (fractional_name, viewporter_name) {
+        (Some(f), Some(v)) => (
+            Some(bind(&mut conn, f, fractional::MANAGER, 1)),
+            Some(bind(&mut conn, v, fractional::VIEWPORTER, 1)),
+        ),
+        _ => (None, None),
+    };
+    fractional::setup(&mut conn, fractional_manager, viewporter);
+    // Blur behind transparent windows.
+    let effect = effect_name.map(|name| bind(&mut conn, name, backdrop::BACKGROUND_EFFECT, 1));
+    let kde_blur = kde_blur_name.map(|name| bind(&mut conn, name, backdrop::KDE_BLUR, 1));
+    backdrop::setup(&mut conn, compositor, effect, kde_blur);
 
     // The first window; `open_window` makes more the same way.
     let globals = toplevel::Globals {
@@ -2035,7 +2098,7 @@ where
         globals,
         reg.clone(),
         size,
-        1,
+        1.0,
         icon,
     )];
     // The windows the pointer, the keyboard and a drag are over (surfaces).
@@ -2215,13 +2278,36 @@ where
             if (toplevel::use_decor_of(&mut conn, object)
                 && decor::handle(&mut conn, object, opcode, &args))
                 || attention::handle(&mut conn, object, opcode, &args)
+                || backdrop::handle(&mut conn, object, opcode, &args)
             {
                 let _ = conn.stream.flush();
                 continue;
             }
         }
+        // The compositor's preferred (fractional) scale for a window: render
+        // at the new resolution.
+        let preferred = fractional::preferred(&shared.lock().unwrap(), object, opcode, &args);
+        if let Some((surface, scale)) = preferred {
+            let Some(win) = windows.iter().find(|w| w.surface == surface) else {
+                continue;
+            };
+            if win.scale.get() != scale {
+                dbg(format_args!("fractional scale {scale}"));
+                win.scale.set(scale);
+                win.set_logical(win.logical.get());
+                if handler(Event::ScaleFactorChanged(ScaleFactor::new(scale)), win)
+                    == ControlFlow::Exit
+                    || handler(Event::Resized(win.size.get()), win) == ControlFlow::Exit
+                    || handler(Event::RedrawRequested, win) == ControlFlow::Exit
+                {
+                    return Ok(());
+                }
+            }
+            continue;
+        }
         // Moving to another output, or an output's scale changing, means rendering
-        // at a new resolution.
+        // at a new resolution (where the scale isn't the compositor's
+        // preferred one, which says it all).
         let entered = opcode == WL_SURFACE_ENTER && ours(object);
         let rescaled = opcode == WL_OUTPUT_SCALE && outputs.iter().any(|(id, _)| *id == object);
         if entered || rescaled {
@@ -2230,17 +2316,20 @@ where
             } else if let Some(entry) = outputs.iter_mut().find(|(id, _)| *id == object) {
                 entry.1 = first_word.max(1);
             }
+            if shared.lock().unwrap().fractional.enabled() {
+                continue;
+            }
             for win in &windows {
                 let scale = outputs
                     .iter()
                     .find(|(id, _)| Some(*id) == win.output.get())
                     .map_or(1, |(_, scale)| *scale);
-                if win.scale.get() == scale {
+                if win.scale.get() == scale as f64 {
                     continue;
                 }
                 dbg(format_args!("buffer scale {scale}"));
                 shared.lock().unwrap().buffer_scale = scale;
-                win.scale.set(scale);
+                win.scale.set(scale as f64);
                 win.set_logical(win.logical.get());
                 if handler(Event::Resized(win.size.get()), win) == ControlFlow::Exit
                     || handler(Event::RedrawRequested, win) == ControlFlow::Exit

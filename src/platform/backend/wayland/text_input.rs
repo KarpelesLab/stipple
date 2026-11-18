@@ -318,26 +318,8 @@ mod tests {
     #[test]
     fn enables_on_enter_and_disables_when_focus_leaves_text() {
         let (ours, mut theirs) = std::os::unix::net::UnixStream::pair().unwrap();
-        let mut conn = WlConn {
-            stream: ours,
-            next_id: 10,
-            fds: Default::default(),
-            queue: Default::default(),
-            clip: Default::default(),
-            buffer_scale: 1,
-            cursor_device: None,
-            enter_serial: None,
-            cursor: Default::default(),
-            text_input: Default::default(),
-            pointer: None,
-            decor: Default::default(),
-            decors: Vec::new(),
-            attention: Default::default(),
-            lock: Default::default(),
-            dmabuf: Default::default(),
-            syncobj: Default::default(),
-            frames: Default::default(),
-        };
+        let mut conn = WlConn::over(ours);
+        conn.next_id = 10;
         const MANAGER_ID: u32 = 5;
         const SEAT: u32 = 6;
         const SURFACE: u32 = 7;

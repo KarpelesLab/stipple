@@ -80,12 +80,13 @@ pub(crate) struct MetalLayer {
 }
 
 impl MetalLayer {
-    /// Lay a new `CAMetalLayer` over `parent` (a view's layer), or `None`
-    /// when Core Animation has none.
+    /// Lay a new `CAMetalLayer` over `parent` (a view's layer), `opaque`
+    /// unless its window is transparent, or `None` when Core Animation has
+    /// none.
     ///
     /// # Safety
     /// Main thread; `parent` is a live `CALayer`.
-    pub(crate) unsafe fn attach(parent: Id) -> Option<Self> {
+    pub(crate) unsafe fn attach(parent: Id, opaque: bool) -> Option<Self> {
         unsafe {
             let cls = objc_getClass(c"CAMetalLayer".as_ptr());
             if cls.is_null() || parent.is_null() {
@@ -95,7 +96,8 @@ impl MetalLayer {
             if layer.is_null() {
                 return None;
             }
-            send_bool(layer, c"setOpaque:", true);
+            // A transparent window's layer keeps its (premultiplied) alpha.
+            send_bool(layer, c"setOpaque:", opaque);
             // Presents wait for the display's refresh (the default, said
             // anyway: frames are paced by the display link and the layer
             // together, and an unsynced layer would tear). macOS only: iOS

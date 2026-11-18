@@ -624,8 +624,9 @@ fn colors(dark: bool, focused: bool) -> (Color, Color) {
 }
 
 impl Decor {
-    /// Draw the title bar for content `width` logical pixels wide, at `scale`.
-    fn title_bar(&mut self, width: f64, scale: u32) -> Pixmap {
+    /// Draw the title bar for content `width` logical pixels wide, `pixels`
+    /// physical ones (at the window's scale, which may be fractional).
+    fn title_bar(&mut self, width: f64, pixels: PhysicalSize) -> Pixmap {
         // Out of `self` while drawing, back at the end.
         let font = self.font.take().unwrap_or_else(Font::system_default);
         let (bg, fg) = colors(self.dark, self.focused);
@@ -702,11 +703,9 @@ impl Decor {
             scene.pop_clip();
         }
         self.font = Some(font);
-        let s = scale.max(1);
-        SoftwareRenderer::new().background(bg).render_at(
-            scene,
-            PhysicalSize::new((width as u32) * s, TITLE_HEIGHT as u32 * s),
-        )
+        SoftwareRenderer::new()
+            .background(bg)
+            .render_at(scene, pixels)
     }
 
     /// What the decorations look like: when it changes, they're drawn again.
@@ -728,14 +727,16 @@ impl Decor {
 
     /// The whole buffer for `content` (physical pixels, `scale` per logical
     /// one) with the decorations around it, as `wl_shm` ARGB8888 bytes
-    /// (premultiplied `[B, G, R, A]`), and its size. `None` when there are no
-    /// decorations to draw: the content is the buffer.
+    /// (premultiplied `[B, G, R, A]`), and its size. The content is opaque,
+    /// unless `alpha` (a transparent window) keeps its alpha. `None` when
+    /// there are no decorations to draw: the content is the buffer.
     pub(super) fn frame(
         &mut self,
         content: &Pixmap,
-        scale: u32,
+        scale: f64,
+        alpha: bool,
     ) -> Option<(PhysicalSize, Vec<u8>)> {
-        self.framed(content.size(), Some(content), scale)
+        self.framed(content.size(), Some((content, alpha)), scale)
     }
 
     /// The decorations alone around content of `size` (physical pixels),
@@ -744,7 +745,7 @@ impl Decor {
     pub(super) fn around(
         &mut self,
         size: PhysicalSize,
-        scale: u32,
+        scale: f64,
     ) -> Option<(PhysicalSize, Vec<u8>)> {
         self.framed(size, None, scale)
     }
@@ -752,21 +753,28 @@ impl Decor {
     fn framed(
         &mut self,
         size: PhysicalSize,
-        content: Option<&Pixmap>,
-        scale: u32,
+        content: Option<(&Pixmap, bool)>,
+        scale: f64,
     ) -> Option<(PhysicalSize, Vec<u8>)> {
         if !self.titled() {
             return None;
         }
-        let s = scale.max(1);
+        let s = if scale > 0.0 { scale } else { 1.0 };
+        // The insets in physical pixels (whole logical ones, rounded at a
+        // fractional scale).
+        let px = |v: f64| (v * s).round() as u32;
         let (l, t, r, b) = self.insets();
-        let (l, t, r, b) = (l as u32 * s, t as u32 * s, r as u32 * s, b as u32 * s);
-        let full = PhysicalSize::new(size.width + l + r, size.height + t + b);
+        let (left, top) = (px(l), px(t));
+        let full = PhysicalSize::new(size.width + px(l + r), size.height + px(t + b));
         let mut out = vec![0u8; full.width as usize * full.height as usize * 4];
         let stride = full.width as usize * 4;
-        let title = self.title_bar(size.width as f64 / s as f64, s);
-        let title_top = t - TITLE_HEIGHT as u32 * s;
-        let mut copy = |src: &Pixmap, x: u32, y: u32| {
+        let title_px = px(TITLE_HEIGHT);
+        let title = self.title_bar(
+            size.width as f64 / s,
+            PhysicalSize::new(size.width, title_px),
+        );
+        let title_top = top - title_px;
+        let mut copy = |src: &Pixmap, x: u32, y: u32, alpha: bool| {
             let sw = src.size().width.min(full.width.saturating_sub(x)) as usize;
             for row in 0..src.size().height.min(full.height.saturating_sub(y)) {
                 let from = &src.as_bytes()[row as usize * src.stride()..][..sw * 4];
@@ -777,14 +785,18 @@ impl Decor {
                     .iter_mut()
                     .zip(from.as_chunks::<4>().0)
                 {
-                    // Opaque: premultiplied is the color itself.
-                    *d = [p[2], p[1], p[0], 255];
+                    *d = if alpha {
+                        crate::render::surface::premultiplied_bgra(*p)
+                    } else {
+                        // Opaque: premultiplied is the color itself.
+                        [p[2], p[1], p[0], 255]
+                    };
                 }
             }
         };
-        copy(&title, l, title_top);
-        if let Some(content) = content {
-            copy(content, l, t);
+        copy(&title, left, title_top, false);
+        if let Some((content, alpha)) = content {
+            copy(content, left, top, alpha);
         }
         Some((full, out))
     }
@@ -934,7 +946,7 @@ mod tests {
         for px in content.as_bytes_mut().as_chunks_mut::<4>().0 {
             *px = [10, 20, 30, 255];
         }
-        let (size, bytes) = d.frame(&content, 1).expect("decorated");
+        let (size, bytes) = d.frame(&content, 1.0, false).expect("decorated");
         assert_eq!(size, PhysicalSize::new(316, 248));
         let px = |x: usize, y: usize| {
             let o = (y * size.width as usize + x) * 4;
@@ -947,11 +959,22 @@ mod tests {
         // At 2x, everything doubles.
         let mut content = Pixmap::new(PhysicalSize::new(600, 400));
         content.as_bytes_mut().fill(255);
-        let (size, _) = d.frame(&content, 2).unwrap();
+        let (size, _) = d.frame(&content, 2.0, false).unwrap();
         assert_eq!(size, PhysicalSize::new(632, 496));
+        // At 1.5x, the insets round to whole pixels: 8 → 12, 40 → 60.
+        let mut content = Pixmap::new(PhysicalSize::new(450, 300));
+        content.as_bytes_mut().fill(128);
+        let (size, bytes) = d.frame(&content, 1.5, true).unwrap();
+        assert_eq!(size, PhysicalSize::new(474, 372));
+        let o = (60 * size.width as usize + 12) * 4;
+        assert_eq!(
+            &bytes[o..o + 4],
+            &[64, 64, 64, 128],
+            "content keeps its alpha"
+        );
         // Fullscreen: no decorations.
         d.set_states(&[STATE_FULLSCREEN]);
-        assert!(d.frame(&content, 1).is_none());
+        assert!(d.frame(&content, 1.0, false).is_none());
     }
 
     mod protocol {

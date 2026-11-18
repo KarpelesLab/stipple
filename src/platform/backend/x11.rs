@@ -44,6 +44,8 @@ use crate::render::{Pixmap, Surface};
 
 /// Focus, attention requests, the bell and undecorated windows.
 mod attention;
+/// Transparent windows: the ARGB visual and blur behind.
+mod backdrop;
 /// Input methods (XIM), and the COMPOUND_TEXT they send.
 mod ctext;
 /// The monitor refresh rate, which paces animation frames.
@@ -58,6 +60,8 @@ mod owned;
 mod pointer;
 mod present_clock;
 mod refresh;
+/// The display's scale, and following it as it changes.
+mod scale;
 /// The CLIPBOARD and PRIMARY selections.
 mod selection;
 mod xim;
@@ -210,6 +214,8 @@ struct Setup {
     root: u32,
     root_visual: u32,
     root_depth: u8,
+    /// The screen's 32-bit (ARGB) TrueColor visual, for transparent windows.
+    argb_visual: Option<u32>,
     /// Server's max request length, in 4-byte units.
     max_request_len: u32,
     min_keycode: u8,
@@ -237,6 +243,7 @@ fn parse_setup(data: &[u8]) -> Option<Setup> {
     let root = rd_u32(data, screens_off)?;
     let root_visual = rd_u32(data, screens_off + 32)?;
     let root_depth = *data.get(screens_off + 38)?;
+    let argb_visual = backdrop::argb_visual(data, screens_off);
 
     Some(Setup {
         resource_id_base,
@@ -244,6 +251,7 @@ fn parse_setup(data: &[u8]) -> Option<Setup> {
         root,
         root_visual,
         root_depth,
+        argb_visual,
         max_request_len,
         min_keycode,
         max_keycode,
@@ -263,28 +271,31 @@ fn rd_u32(b: &[u8], off: usize) -> Option<u32> {
 }
 
 /// Convert a straight-RGBA8 pixmap row into X11 ZPixmap bytes for a 24-depth
-/// little-endian (LSBFirst) server: each pixel becomes `[B, G, R, 0]`.
-fn rgba_to_bgrx(rgba: &[u8], out: &mut Vec<u8>) {
+/// little-endian (LSBFirst) server: each pixel becomes `[B, G, R, 0]`; or,
+/// with `alpha` (a 32-depth ARGB window), premultiplied `[B, G, R, A]`.
+fn rgba_to_bgrx(rgba: &[u8], out: &mut Vec<u8>, alpha: bool) {
     out.clear();
-    out.reserve(rgba.len());
-    for px in rgba.as_chunks::<4>().0 {
-        out.extend_from_slice(&[px[2], px[1], px[0], 0]);
-    }
+    out.resize(rgba.len(), 0);
+    swizzle_row(rgba, out, alpha);
 }
 
-/// Swizzle a straight-RGBA8 row in place into a ZPixmap (`[B, G, R, 0]`) row of
-/// equal pixel count. Used to fill the shared-memory image without allocating.
-fn swizzle_row(src: &[u8], dst: &mut [u8]) {
-    for (s, d) in src
+/// Swizzle a straight-RGBA8 row in place into a ZPixmap (`[B, G, R, 0]`, or
+/// premultiplied `[B, G, R, A]` with `alpha`) row of equal pixel count. Used
+/// to fill the shared-memory image without allocating.
+fn swizzle_row(src: &[u8], dst: &mut [u8], alpha: bool) {
+    let pairs = src
         .as_chunks::<4>()
         .0
         .iter()
-        .zip(dst.as_chunks_mut::<4>().0.iter_mut())
-    {
-        d[0] = s[2];
-        d[1] = s[1];
-        d[2] = s[0];
-        d[3] = 0;
+        .zip(dst.as_chunks_mut::<4>().0.iter_mut());
+    if alpha {
+        for (s, d) in pairs {
+            *d = crate::render::surface::premultiplied_bgra(*s);
+        }
+    } else {
+        for (s, d) in pairs {
+            *d = [s[2], s[1], s[0], 0];
+        }
     }
 }
 
@@ -342,6 +353,7 @@ impl ShmState {
         conn: &mut Conn,
         window: u32,
         gc: u32,
+        depth: u8,
         pixmap: &Pixmap,
         damage: &[crate::geometry::Rect],
     ) -> bool {
@@ -377,11 +389,11 @@ impl ShmState {
             for row in y..y + rh {
                 let off = row * stride + x * 4;
                 let len = rw * 4;
-                swizzle_row(&src[off..off + len], &mut dst[off..off + len]);
+                swizzle_row(&src[off..off + len], &mut dst[off..off + len], depth == 32);
             }
             if conn
                 .send(&finish(shm_put_image(
-                    major, window, gc, seg, w, h, x, y, rw, rh,
+                    major, window, gc, seg, depth, w, h, x, y, rw, rh,
                 )))
                 .is_err()
             {
@@ -393,14 +405,15 @@ impl ShmState {
 }
 
 /// Encode a `ShmPutImage` request blitting the sub-rectangle `(x, y, rw, rh)` of
-/// a `total_w × total_h` ZPixmap image (depth 24) from the attached segment to
-/// the drawable at the same position.
+/// a `total_w × total_h` ZPixmap image (of `depth`, 24 or 32) from the attached
+/// segment to the drawable at the same position.
 #[allow(clippy::too_many_arguments)]
 fn shm_put_image(
     major: u8,
     drawable: u32,
     gc: u32,
     seg: u32,
+    depth: u8,
     total_w: usize,
     total_h: usize,
     x: usize,
@@ -419,7 +432,7 @@ fn shm_put_image(
     req.extend_from_slice(&(rh as u16).to_le_bytes()); // src-height
     req.extend_from_slice(&(x as i16).to_le_bytes()); // dst-x
     req.extend_from_slice(&(y as i16).to_le_bytes()); // dst-y
-    req.push(24); // depth
+    req.push(depth);
     req.push(2); // format: ZPixmap
     req.push(0); // send-event: false
     req.push(0); // unused
@@ -916,6 +929,8 @@ struct Conn {
     cursors: Vec<(u16, u32)>,
     /// The blank cursor for `CursorIcon::Hidden` (0 until first used).
     blank_cursor: u32,
+    /// What transparent windows need (empty until probed).
+    backdrop: backdrop::Backdrop,
 }
 
 impl Conn {
@@ -991,6 +1006,7 @@ impl Conn {
             cursor_font: 0,
             cursors: Vec::new(),
             blank_cursor: 0,
+            backdrop: backdrop::Backdrop::default(),
         })
     }
 
@@ -1081,6 +1097,9 @@ struct X11Window {
     /// Whether the window can be seen, as far as the server and the window
     /// manager say.
     occlusion: Cell<occlusion::Occlusion>,
+    /// The window's depth: 32 for a transparent window (ARGB visual), whose
+    /// frames keep their alpha; the root's otherwise.
+    depth: u8,
 }
 
 impl std::fmt::Debug for Conn {
@@ -1190,6 +1209,11 @@ impl Window for X11Window {
         true
     }
     fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        // The GPU renderers present opaque frames: a transparent window is
+        // drawn on the CPU.
+        if self.depth == 32 {
+            return None;
+        }
         // The window itself: a GPU renderer presents to it over its own
         // connection (see `GpuLayer::X11`). Nothing to put over it, and
         // nothing to take away in `drop_gpu_layer`: the surface's next
@@ -1205,6 +1229,7 @@ impl Window for X11Window {
             gc: self.gc,
             size: self.geo.get().size,
             shm: self.shm.borrow_mut().take(),
+            depth: self.depth,
         })
     }
     fn open_window(&self, attrs: WindowAttributes) -> Option<WindowId> {
@@ -1486,6 +1511,8 @@ struct X11Surface {
     size: PhysicalSize,
     /// Present via MIT-SHM when available; `None` falls back to `PutImage`.
     shm: Option<ShmState>,
+    /// The window's depth: at 32, frames go up premultiplied with their alpha.
+    depth: u8,
 }
 
 impl std::fmt::Debug for X11Surface {
@@ -1522,7 +1549,7 @@ impl Surface for X11Surface {
         // them. On failure (frame grew past the segment), drop shm and fall
         // through to PutImage for this and subsequent frames.
         if let Some(shm) = self.shm.as_mut() {
-            if shm.present(&mut conn, self.window, self.gc, pixmap, damage) {
+            if shm.present(&mut conn, self.window, self.gc, self.depth, pixmap, damage) {
                 return;
             }
             self.shm = None;
@@ -1542,7 +1569,7 @@ impl Surface for X11Surface {
             let band = rows_per.min((size.height - y) as usize);
             let start = y as usize * row_bytes;
             let end = start + band * row_bytes;
-            rgba_to_bgrx(&src[start..end], &mut bgrx);
+            rgba_to_bgrx(&src[start..end], &mut bgrx, self.depth == 32);
 
             let mut req = vec![OP_PUT_IMAGE, 2 /* ZPixmap */, 0, 0];
             req.extend_from_slice(&self.window.to_le_bytes());
@@ -1552,7 +1579,7 @@ impl Surface for X11Surface {
             req.extend_from_slice(&0i16.to_le_bytes()); // dst-x
             req.extend_from_slice(&(y as i16).to_le_bytes()); // dst-y
             req.push(0); // left-pad
-            req.push(24); // depth
+            req.push(self.depth);
             req.extend_from_slice(&0u16.to_le_bytes()); // pad
             req.extend_from_slice(&bgrx);
             pad4(&mut req);
@@ -1583,9 +1610,21 @@ fn create_window(
     let gc = conn.new_id();
     let setup = conn.setup;
 
+    // A transparent window has the ARGB visual, where a compositing manager
+    // blends it (see `backdrop`).
+    let argb = if attrs.is_transparent() {
+        backdrop::Backdrop::argb(conn)
+    } else {
+        None
+    };
+    let (depth, visual) = match argb {
+        Some((visual, _)) => (32, visual),
+        None => (setup.root_depth, setup.root_visual),
+    };
+
     // CreateWindow.
     let (x, y) = attrs.position.unwrap_or((0, 0));
-    let mut req = vec![OP_CREATE_WINDOW, setup.root_depth, 0, 0];
+    let mut req = vec![OP_CREATE_WINDOW, depth, 0, 0];
     req.extend_from_slice(&window.to_le_bytes());
     req.extend_from_slice(&setup.root.to_le_bytes());
     req.extend_from_slice(&(x as i16).to_le_bytes()); // x
@@ -1594,9 +1633,17 @@ fn create_window(
     req.extend_from_slice(&h.to_le_bytes());
     req.extend_from_slice(&0u16.to_le_bytes()); // border width
     req.extend_from_slice(&1u16.to_le_bytes()); // class: InputOutput
-    req.extend_from_slice(&setup.root_visual.to_le_bytes());
-    req.extend_from_slice(&(CW_BACK_PIXEL | CW_EVENT_MASK).to_le_bytes());
-    req.extend_from_slice(&0u32.to_le_bytes()); // back-pixel: black
+    req.extend_from_slice(&visual.to_le_bytes());
+    let mut values = CW_BACK_PIXEL | CW_EVENT_MASK;
+    if argb.is_some() {
+        values |= backdrop::CW_BORDER_PIXEL | backdrop::CW_COLORMAP;
+    }
+    req.extend_from_slice(&values.to_le_bytes());
+    // back-pixel: black (clear, in an ARGB window)
+    req.extend_from_slice(&0u32.to_le_bytes());
+    if argb.is_some() {
+        req.extend_from_slice(&0u32.to_le_bytes()); // border-pixel
+    }
     let mask = EV_EXPOSURE
         | EV_KEY_PRESS
         | EV_KEY_RELEASE
@@ -1610,7 +1657,13 @@ fn create_window(
         | attention::EV_FOCUS_CHANGE
         | selection::EV_PROPERTY_CHANGE;
     req.extend_from_slice(&mask.to_le_bytes());
+    if let Some((_, colormap)) = argb {
+        req.extend_from_slice(&colormap.to_le_bytes());
+    }
     conn.send(&finish(req)).map_err(os)?;
+    if argb.is_some() && attrs.blur {
+        backdrop::Backdrop::blur(conn, window).map_err(os)?;
+    }
 
     // CreateGC.
     let mut req = vec![OP_CREATE_GC, 0, 0, 0];
@@ -1730,6 +1783,7 @@ fn create_window(
         drop_accepted: Cell::new(false),
         lock: Cell::new(None),
         occlusion: Cell::default(),
+        depth,
     })
 }
 
@@ -1775,6 +1829,10 @@ where
         ..Default::default()
     };
     conn.scale = read_xft_scale(&mut conn).map_err(os)?;
+    // Hear the scale change (`Xft.dpi` in the root's resources).
+    scale::watch(&mut conn).map_err(os)?;
+    let argb_visual = conn.setup.argb_visual;
+    conn.backdrop = backdrop::Backdrop::probe(&mut conn, argb_visual).map_err(os)?;
     let _ = pointer::read_double_click(&mut conn);
     // Animation frames come from a timer at the monitor's refresh rate.
     if let Some(interval) = refresh::interval(&mut conn) {
@@ -1893,6 +1951,33 @@ where
                 u16::from_le_bytes([buf[8], buf[9]]),
                 rd_u32(&buf, 4).unwrap_or(0)
             ));
+            continue;
+        }
+        // The root's resources changed: maybe the scale (`Xft.dpi`). Every
+        // window hears a new one, then lays out again at its size.
+        let root = shared.lock().unwrap().setup.root;
+        if scale::is_root_property(root, &buf) {
+            let new = scale::changed(&mut shared.lock().unwrap(), &mut backlog, &buf);
+            if let Ok(Some(new)) = new {
+                let mut flow = ControlFlow::Wait;
+                for w in &windows {
+                    let (min, max) = w.limits.get();
+                    let mut conn = shared.lock().unwrap();
+                    let _ = set_size_hints(&mut conn, w.window, min, max, w.increments.get());
+                    drop(conn);
+                    flow = handler(Event::ScaleFactorChanged(ScaleFactor::new(new)), w);
+                    if flow == ControlFlow::Exit {
+                        break;
+                    }
+                    flow = handler(Event::Resized(w.geo.get().size), w);
+                    if flow == ControlFlow::Exit {
+                        break;
+                    }
+                }
+                if flow == ControlFlow::Exit {
+                    break;
+                }
+            }
             continue;
         }
         // Route the event to the window it names (falling back to the first);
@@ -2662,8 +2747,11 @@ mod tests {
     #[test]
     fn rgba_to_bgrx_swizzles() {
         let mut out = Vec::new();
-        rgba_to_bgrx(&[10, 20, 30, 255, 1, 2, 3, 128], &mut out);
+        rgba_to_bgrx(&[10, 20, 30, 255, 1, 2, 3, 128], &mut out, false);
         assert_eq!(out, vec![30, 20, 10, 0, 3, 2, 1, 0]);
+        // A transparent window's: premultiplied, with the alpha.
+        rgba_to_bgrx(&[10, 20, 30, 255, 200, 100, 50, 128], &mut out, true);
+        assert_eq!(out, vec![30, 20, 10, 255, 25, 50, 100, 128]);
     }
 
     #[test]
@@ -2721,14 +2809,16 @@ mod tests {
     #[test]
     fn swizzle_row_reorders_to_bgrx() {
         let mut dst = [0u8; 8];
-        swizzle_row(&[10, 20, 30, 255, 1, 2, 3, 128], &mut dst);
+        swizzle_row(&[10, 20, 30, 255, 1, 2, 3, 128], &mut dst, false);
         assert_eq!(dst, [30, 20, 10, 0, 3, 2, 1, 0]);
     }
 
     #[test]
     fn shm_put_image_encodes_fields() {
         // major=130, draw=0xaa, gc=0xbb, seg=0xcc, total 200x100, rect (8,16,4,2).
-        let req = finish(shm_put_image(130, 0xaa, 0xbb, 0xcc, 200, 100, 8, 16, 4, 2));
+        let req = finish(shm_put_image(
+            130, 0xaa, 0xbb, 0xcc, 24, 200, 100, 8, 16, 4, 2,
+        ));
         assert_eq!(req[0], 130); // major opcode
         assert_eq!(req[1], SHM_PUT_IMAGE); // minor opcode
         assert_eq!(u16::from_le_bytes([req[2], req[3]]), 10); // length in words

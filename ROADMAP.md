@@ -575,6 +575,13 @@ the buffer onto the screen, and the declarative UI toolkit itself.
 - ✅ **High-DPI** on Windows (per-monitor v2), macOS (`backingScaleFactor`), iOS
   (`UIScreen.scale`), X11 (`Xft.dpi`) and Wayland (output scale). X11 and Wayland
   run at 2x in CI; Windows and macOS await a real high-DPI display.
+  _Wayland's fractional scales (`wp_fractional_scale_v1` + `wp_viewporter`,
+  1.5x under sway in CI) and X11's live `Xft.dpi` changes (#86)._
+- ✅ **Translucent windows** (#77): _`App::transparent` / `blur`: macOS (run
+  by hand, Metal too), X11's ARGB visual and KDE blur, Wayland's ARGB
+  buffers and `ext-background-effect` / KWin blur (CI, non-blocking), Windows'
+  DWM frame and acrylic (build-checked); GPU renderers elsewhere fall back to
+  the CPU for such windows._
 - ✅ **iOS** runs full-screen in the safe area, with touch input (or edge to
   edge, with the safe area reported; it follows rotations).
 - ✅ **Title bars** match the content's light or dark on Windows and macOS.

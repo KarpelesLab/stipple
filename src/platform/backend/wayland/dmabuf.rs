@@ -38,8 +38,7 @@ use std::time::{Duration, Instant};
 
 use super::{
     MAP_PRIVATE, PROT_READ, Shared, WL_CALLBACK_DONE, WL_DISPLAY, WL_DISPLAY_SYNC,
-    WL_SURFACE_ATTACH, WL_SURFACE_COMMIT, WL_SURFACE_SET_BUFFER_SCALE, WlConn, arg_u32, close, dbg,
-    mmap, munmap, syncobj,
+    WL_SURFACE_ATTACH, WL_SURFACE_COMMIT, WlConn, arg_u32, close, dbg, mmap, munmap, syncobj,
 };
 use crate::geometry::PhysicalSize;
 use crate::platform::dmabuf::{Buffer, BufferId, MOD_INVALID, Present, Tranche};
@@ -438,7 +437,7 @@ fn import(conn: &mut WlConn, buffer: &Buffer) -> Result<u32, String> {
 pub(super) struct WindowSink {
     pub conn: Shared,
     pub toplevel: u32,
-    pub scale: std::rc::Rc<std::cell::Cell<u32>>,
+    pub scale: std::rc::Rc<std::cell::Cell<f64>>,
     pub configured: std::rc::Rc<std::cell::Cell<bool>>,
     /// Where frames go: the window's surface, or the subsurface under the
     /// decorations Stipple draws.
@@ -510,8 +509,11 @@ impl Present for WindowSink {
     ) -> Result<(), String> {
         let explicit = self.explicit();
         let mut conn = self.conn.lock().unwrap();
-        let scale = self.scale.get().max(1);
-        let logical = PhysicalSize::new(size.0 / scale, size.1 / scale);
+        let scale = self.scale.get();
+        let logical = PhysicalSize::new(
+            super::fractional::logical(size.0, scale),
+            super::fractional::logical(size.1, scale),
+        );
         super::toplevel::use_decor(&mut conn, self.toplevel);
         let io = |e: std::io::Error| e.to_string();
         // Under a title bar Stipple draws, the subsurface; else the window's
@@ -522,7 +524,7 @@ impl Present for WindowSink {
         if main {
             super::decor::send_geometry(&mut conn, logical);
         }
-        conn.send(surface, WL_SURFACE_SET_BUFFER_SCALE, &scale.to_le_bytes())
+        super::fractional::set_scale(&mut conn, surface, scale, (logical.width, logical.height))
             .map_err(io)?;
         if explicit {
             syncobj::set_points(&mut conn, surface, id, fence)?;

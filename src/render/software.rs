@@ -251,6 +251,25 @@ mod tests {
         assert_eq!((r, g, b, a), (255, 0, 0, 255));
     }
 
+    /// A translucent background stays translucent (a transparent window
+    /// shows what is behind it through), and what is drawn over it composites
+    /// as straight alpha: half-white over 50%-black is opaque-ish grey.
+    #[test]
+    fn a_translucent_background_keeps_its_alpha() {
+        let mut s = Scene::new(Size::new(4.0, 2.0));
+        s.fill_rect(
+            Rect::from_xywh(2.0, 0.0, 2.0, 2.0),
+            Color::rgba(255, 255, 255, 128),
+        );
+        let pm = SoftwareRenderer::new()
+            .background(Color::rgba(0, 0, 0, 128))
+            .render(s, ScaleFactor::IDENTITY);
+        assert_eq!(pm.pixel(0, 0), Some([0, 0, 0, 128]));
+        let [r, g, b, a] = pm.pixel(3, 1).unwrap();
+        assert!((190..=193).contains(&a), "alpha {a}");
+        assert!(r == g && g == b && (168..=172).contains(&r), "grey {r}");
+    }
+
     #[test]
     fn hidpi_scale_doubles_resolution() {
         let scene = Scene::new(Size::new(100.0, 80.0));

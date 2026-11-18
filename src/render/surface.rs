@@ -112,7 +112,10 @@ impl Pixmap {
 /// The integer pixel rects of `src` that `damage` (physical pixels) covers,
 /// as `(x, y, width, height)`, rounded outwards and clipped to it; the whole
 /// pixmap when `damage` is empty.
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux", test)),
+    allow(dead_code)
+)]
 pub(crate) fn damage_rects(size: PhysicalSize, damage: &[Rect]) -> Vec<(u32, u32, u32, u32)> {
     let (w, h) = (size.width, size.height);
     if damage.is_empty() {
@@ -135,11 +138,21 @@ pub(crate) fn damage_rects(size: PhysicalSize, damage: &[Rect]) -> Vec<(u32, u32
 }
 
 /// Copy the `rects` (from [`damage_rects`]) of `src` into `dst`, a buffer of
-/// the same size in Core Graphics' native order (`B, G, R, X`: 32-bit
-/// little-endian, alpha skipped first), resizing `dst` (to opaque black) if
-/// it's the wrong size.
-#[cfg_attr(not(any(target_os = "macos", test)), allow(dead_code))]
-pub(crate) fn copy_as_bgrx(src: &Pixmap, dst: &mut Vec<u8>, rects: &[(u32, u32, u32, u32)]) {
+/// the same size in Core Graphics' and Win32's native order (`B, G, R, A`:
+/// 32-bit little-endian, alpha first), resizing `dst` (to zeros) if it's the
+/// wrong size. With `alpha`, for a transparent window, the alpha is kept and
+/// the colors premultiplied by it, as compositors take them; without, every
+/// pixel is opaque (alpha 255, the colors as they are).
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux", test)),
+    allow(dead_code)
+)]
+pub(crate) fn copy_as_bgra(
+    src: &Pixmap,
+    dst: &mut Vec<u8>,
+    rects: &[(u32, u32, u32, u32)],
+    alpha: bool,
+) {
     let len = src.as_bytes().len();
     if dst.len() != len {
         dst.clear();
@@ -153,11 +166,33 @@ pub(crate) fn copy_as_bgrx(src: &Pixmap, dst: &mut Vec<u8>, rects: &[(u32, u32, 
             let end = start + w as usize * 4;
             let from = bytes[start..end].as_chunks::<4>().0;
             let to = dst[start..end].as_chunks_mut::<4>().0;
-            for (d, s) in to.iter_mut().zip(from) {
-                *d = [s[2], s[1], s[0], 0xff];
+            if alpha {
+                for (d, s) in to.iter_mut().zip(from) {
+                    *d = premultiplied_bgra(*s);
+                }
+            } else {
+                for (d, s) in to.iter_mut().zip(from) {
+                    *d = [s[2], s[1], s[0], 0xff];
+                }
             }
         }
     }
+}
+
+/// A straight-alpha `[r, g, b, a]` pixel as premultiplied `[b, g, r, a]`, the
+/// form a compositor blends a translucent window's pixels in.
+#[cfg_attr(
+    not(any(target_os = "macos", target_os = "windows", target_os = "linux", test)),
+    allow(dead_code)
+)]
+#[inline]
+pub(crate) fn premultiplied_bgra(s: [u8; 4]) -> [u8; 4] {
+    let a = s[3] as u32;
+    if a == 255 {
+        return [s[2], s[1], s[0], 255];
+    }
+    let m = |c: u8| ((c as u32 * a + 127) / 255) as u8;
+    [m(s[2]), m(s[1]), m(s[0]), s[3]]
 }
 
 /// A presentable destination owned by the platform layer (a window's drawable,
@@ -220,18 +255,31 @@ mod tests {
     }
 
     #[test]
-    fn copies_damage_as_bgrx() {
+    fn copies_damage_as_bgra() {
         let mut src = Pixmap::new(PhysicalSize::new(3, 2));
         for px in src.as_bytes_mut().as_chunks_mut::<4>().0 {
             px.copy_from_slice(&[1, 2, 3, 4]);
         }
         let mut dst = Vec::new();
-        copy_as_bgrx(&src, &mut dst, &[(1, 1, 2, 1)]);
+        copy_as_bgra(&src, &mut dst, &[(1, 1, 2, 1)], false);
         assert_eq!(dst.len(), 24, "sized to the pixmap");
         assert_eq!(&dst[..16], &[0; 16], "outside the damage: untouched");
         assert_eq!(&dst[16..], &[3, 2, 1, 255, 3, 2, 1, 255]);
-        copy_as_bgrx(&src, &mut dst, &damage_rects(src.size(), &[]));
+        copy_as_bgra(&src, &mut dst, &damage_rects(src.size(), &[]), false);
         assert!(dst.as_chunks::<4>().0.iter().all(|p| *p == [3, 2, 1, 255]));
+        // A transparent window's copy keeps the alpha, premultiplied.
+        for px in src.as_bytes_mut().as_chunks_mut::<4>().0 {
+            px.copy_from_slice(&[200, 100, 50, 128]);
+        }
+        copy_as_bgra(&src, &mut dst, &damage_rects(src.size(), &[]), true);
+        assert!(
+            dst.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [25, 50, 100, 128])
+        );
+        assert_eq!(premultiplied_bgra([1, 2, 3, 255]), [3, 2, 1, 255]);
+        assert_eq!(premultiplied_bgra([255, 255, 255, 0]), [0, 0, 0, 0]);
     }
 
     #[test]

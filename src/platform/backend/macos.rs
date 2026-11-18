@@ -1611,7 +1611,9 @@ impl Window for MacWindow {
             unsafe {
                 // A layer-backed view, with the Metal layer over its own.
                 msg_void_bool(self.view, sel("setWantsLayer:"), true);
-                *metal = super::metal_layer::MetalLayer::attach(msg_id(self.view, sel("layer")));
+                let parent = msg_id(self.view, sel("layer"));
+                let opaque = !self.fb.borrow().alpha();
+                *metal = super::metal_layer::MetalLayer::attach(parent, opaque);
             }
         }
         let layer = metal.as_mut()?;
@@ -1936,6 +1938,10 @@ unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, Platf
             init(alloc, sel("initWithFrame:"), content)
         };
         msg_void_id(window, sel("setContentView:"), view);
+        let transparent = attrs.is_transparent();
+        if transparent {
+            present::make_transparent(window, view, attrs.blur);
+        }
         // Take drops of files and text from other applications.
         dnd::register(view);
         // Hear the pointer leave the view, and the user's double-click time.
@@ -1985,7 +1991,7 @@ unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, Platf
             view,
             size: Cell::new(size),
             scale: Cell::new(scale),
-            fb: RefCell::new(Framebuffer::default()),
+            fb: RefCell::new(Framebuffer::new(transparent)),
             metal: RefCell::new(None),
             a11y_label: RefCell::new(attrs.title.clone()),
             a11y_tree: RefCell::new(None),

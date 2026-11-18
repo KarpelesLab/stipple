@@ -33,6 +33,7 @@ use crate::render::{Pixmap, Surface};
 
 /// Focus, session end, attention requests and the beep.
 mod attention;
+mod backdrop;
 /// Receiving drops (OLE `IDropTarget`, `WM_DROPFILES`).
 mod dnd;
 /// Resize increments (`WM_SIZING`) and UTF-16 titles.
@@ -446,6 +447,10 @@ struct PerWin {
     gpu: bool,
     /// Minimized or cloaked, as the app was last told ([`occlusion`]).
     occluded: bool,
+    /// The window keeps its frames' alpha ([`backdrop`]): the bitmap is
+    /// premultiplied, and the GPU renderer (whose swap chain is opaque)
+    /// leaves it to the CPU.
+    transparent: bool,
 }
 
 /// Per-thread state shared between the message loop, the [`WndProc`] and the
@@ -1681,6 +1686,11 @@ impl Window for WinWindow {
     }
     #[cfg(feature = "d3d")]
     fn gpu_layer(&self) -> Option<crate::platform::GpuLayer> {
+        // A flip-model swap chain on a window is opaque: a transparent
+        // window is drawn on the CPU.
+        if read_win(self.hwnd, |w| w.transparent) == Some(true) {
+            return None;
+        }
         // The renderer gives the window a flip-model swap chain and sizes its
         // buffers to each frame; from here on the bitmap isn't painted.
         with_win(self.hwnd, |w| w.gpu = true);
@@ -1819,20 +1829,12 @@ impl Surface for WinSurface {
     }
     fn present(&mut self, pixmap: &Pixmap, _damage: &[crate::geometry::Rect]) {
         let size = pixmap.size();
-        let src = pixmap.as_bytes();
-        // RGBA -> BGRA (Win32 DIBs are BGRA, top-down via negative height).
-        let mut fb = vec![0u8; src.len()];
-        for (d, s) in fb
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(src.as_chunks::<4>().0)
-        {
-            d[0] = s[2];
-            d[1] = s[1];
-            d[2] = s[0];
-            d[3] = s[3];
-        }
+        // RGBA -> BGRA (Win32 DIBs are BGRA, top-down via negative height),
+        // premultiplied for DWM in a transparent window.
+        let alpha = read_win(self.hwnd, |w| w.transparent) == Some(true);
+        let mut fb = Vec::new();
+        let all = crate::render::surface::damage_rects(size, &[]);
+        crate::render::surface::copy_as_bgra(pixmap, &mut fb, &all, alpha);
         with_win(self.hwnd, |w| {
             w.fb = fb;
             w.fb_w = size.width as i32;
@@ -1930,6 +1932,10 @@ fn create_window(attrs: &WindowAttributes) -> Result<Hwnd, PlatformError> {
     if let Some(dark) = attrs.dark {
         // A title bar matching the content.
         set_dark_title(hwnd, dark);
+    }
+    if attrs.is_transparent() {
+        backdrop::make_transparent(hwnd, attrs.blur);
+        with_win(hwnd, |w| w.transparent = true);
     }
     // `CreateWindowExW` sizes the whole window: make the client area the
     // size asked for.
