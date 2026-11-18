@@ -85,6 +85,8 @@ struct State {
     slots: HashMap<Key, Slot>,
     /// Jobs, newest last: the newest (what was just scrolled to) goes first.
     queue: Vec<Key>,
+    /// Jobs a worker has taken and not finished yet.
+    running: usize,
     stats: Stats,
 }
 
@@ -205,9 +207,10 @@ impl Loader {
         self.lock().stats
     }
 
-    /// Whether nothing is queued.
+    /// Whether nothing is queued or being loaded.
     pub fn idle(&self) -> bool {
-        self.lock().queue.is_empty()
+        let st = self.lock();
+        st.queue.is_empty() && st.running == 0
     }
 
     /// Take the next job still wanted, dropping (cancelling) the stale ones
@@ -221,7 +224,9 @@ impl Loader {
                 _ => false,
             };
             if fresh {
-                return Some((key, st.vfs.clone()?, st.generation));
+                let vfs = st.vfs.clone()?;
+                st.running += 1;
+                return Some((key, vfs, st.generation));
             }
             // Gone from the screen before its turn: drop it, so it's asked
             // for again if it comes back.
@@ -235,6 +240,7 @@ impl Loader {
 
     fn finish(&self, key: Key, generation: u64, done: Loaded) {
         let mut st = self.lock();
+        st.running -= 1;
         if st.generation != generation {
             return;
         }
