@@ -413,9 +413,19 @@ fn run(mut stream: Stream, shared: Arc<Shared>) {
                 continue;
             }
             if now > due + LATE && now - last_shown < Duration::from_millis(250) {
-                // Behind: skip this one.
-                pending = None;
-                continue;
+                // Behind: skip this one for the next, unless it is the last
+                // (playback ends on the last frame however late it is).
+                match stream.next() {
+                    Ok(Some(next)) => {
+                        pending = Some(next);
+                        continue;
+                    }
+                    Ok(None) => ended = true,
+                    Err(e) => {
+                        shared.set_status(VideoStatus::Failed(e));
+                        return;
+                    }
+                }
             }
         } else if playing {
             anchor = Some((now, frame.time));
