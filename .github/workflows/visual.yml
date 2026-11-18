@@ -6428,6 +6428,8 @@ jobs:
   gpu-ios-sim:
     name: GPU corpus (iOS simulator, Metal)
     runs-on: macos-latest
+    # A hung device fails here instead of holding the job for six hours.
+    timeout-minutes: 75
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
@@ -6458,6 +6460,8 @@ jobs:
   gpu-android:
     name: GPU corpus (Android emulator, API 34, GLES and Vulkan)
     runs-on: ubuntu-latest
+    # A hung device fails here instead of holding the job for six hours.
+    timeout-minutes: 75
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6

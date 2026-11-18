@@ -130,7 +130,13 @@ print((booted or devs or [{"udid": ""}])[0]["udid"])')
 android() {
   local adb="adb"
   command -v adb >/dev/null || adb="${ANDROID_HOME:?set ANDROID_HOME}/platform-tools/adb"
-  "$adb" wait-for-device
+  # A device that drops off (an emulator that died) would hang every adb
+  # command after: give it two minutes to come back.
+  if command -v timeout >/dev/null; then
+    timeout 120 "$adb" wait-for-device || { echo "gpu-mobile: no device answers adb" >&2; exit 1; }
+  else
+    "$adb" wait-for-device
+  fi
   local abi target
   abi=$("$adb" shell getprop ro.product.cpu.abi | tr -d '\r')
   case "$abi" in

@@ -440,10 +440,11 @@ def keys(name):
 
 def await_focus(cmd, settled=lambda: False):
     """Send `cmd` and wait for a state-changed:focused event. A key that
-    focuses nothing, while `settled()` says focus hasn't moved, is sent once
-    more, with a warning (a key can be lost, as the first Tab above)."""
+    focuses nothing, while `settled()` says focus hasn't moved, is sent again
+    (up to three times), with a warning (a key can be lost, as the first Tab
+    above)."""
     del events[:]
-    for attempt in range(2):
+    for attempt in range(3):
         subprocess.run(cmd, check=False)
         for _ in range(20 if attempt == 0 else 40):
             pump(0.25)
@@ -469,10 +470,12 @@ if row0 is not None and field is not None:
     check(row0.getState().contains(pyatspi.STATE_FOCUSED), "'Row 0' says it is focused")
     for key, what in (("space", "Space"), ("Return", "Enter")):
         # A key can be lost on the way (as the first Tab above): one that
-        # presses nothing is sent once more, with a warning.
+        # presses nothing is sent again, with a warning. Keys can be lost
+        # for seconds at a time (seen: Return twice in a row), so up to three
+        # times.
         before = taps()
         pressed = False
-        for attempt in range(2):
+        for attempt in range(3):
             subprocess.run(keys(key), check=False)
             for _ in range(20 if attempt == 0 else 40):
                 pump(0.25)
@@ -481,7 +484,8 @@ if row0 is not None and field is not None:
                     break
             if pressed:
                 break
-            print("warning: no tap after {}; sending it again".format(key), flush=True)
+            if attempt < 2:
+                print("warning: no tap after {}; sending it again".format(key), flush=True)
         check(pressed, "{} on the focused 'Row 0' pressed it: the app logged the tap".format(what))
     back = await_focus(keys("shift+Tab"), lambda: field.getState().contains(pyatspi.STATE_FOCUSED))
     check(back is not None and back[2] == pyatspi.ROLE_ENTRY,
