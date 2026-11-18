@@ -43,6 +43,9 @@ pub struct SpanStyle {
     /// The run's underline, strikethrough and overline (`Decoration::NONE`
     /// for none where the text has some).
     pub decoration: Option<Decoration>,
+    /// A color filled behind the run, as tall as its line: a highlighted
+    /// search match, a marked word.
+    pub background: Option<Color>,
 }
 
 impl SpanStyle {
@@ -89,6 +92,20 @@ impl SpanStyle {
     /// With `decoration`'s lines.
     pub fn decorate(mut self, decoration: Decoration) -> Self {
         self.decoration = Some(decoration);
+        self
+    }
+
+    /// On a `color` background, as tall as the line (a search match, a
+    /// highlighter's mark).
+    ///
+    /// ```
+    /// use stipple::render::{Color, RichText, SpanStyle};
+    /// let found = SpanStyle::new().background(Color::rgb(0xff, 0xe0, 0x66));
+    /// let line = RichText::new().push("error: ").styled("disk full", found);
+    /// # let _ = line;
+    /// ```
+    pub fn background(mut self, color: Color) -> Self {
+        self.background = Some(color);
         self
     }
 
@@ -465,6 +482,7 @@ pub(crate) fn styling(spans: &[Span], font: &Font, size: f64) -> Styling {
                 size,
                 color: st.color,
                 decoration: st.decoration,
+                background: st.background,
                 float: s.float.clone(),
                 icon_width: s.icon.as_ref().and_then(|i| i.relative_width),
                 frame: s.icon.as_ref().and_then(|i| i.frame),

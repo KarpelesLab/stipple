@@ -184,6 +184,12 @@ title = "Text area"
 group = "Text"
 size = [640, 320]
 
+[web.logview]
+description = "A log viewer: 10,000 virtualized lines that follow live appends, with find and selection across lines."
+title = "Log viewer"
+group = "Text"
+size = [900, 560]
+
 [web.clipboarddemo]
 description = "Copy/cut/paste in a text field (Ctrl+C/X/V), synced with the OS clipboard."
 title = "Clipboard"

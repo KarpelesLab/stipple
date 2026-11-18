@@ -59,6 +59,12 @@ pub struct TextHit {
     /// Each image in the text (inline or floating): the byte of its U+FFFC
     /// and its box, relative to the text's box.
     pub objects: Vec<(usize, Rect)>,
+    /// Which of the texts under the element the hit is in, counted in
+    /// order from 0, when it holds more than one (a stack of lines, as
+    /// [`text_view`](crate::widgets::text_view) builds): the one level with
+    /// the pointer, or the first or last when the pointer is above or below
+    /// them all. `index`, `point` and `objects` are that text's.
+    pub leaf: usize,
 }
 
 impl TextHit {
@@ -70,7 +76,14 @@ impl TextHit {
             point,
             width,
             objects: Vec::new(),
+            leaf: 0,
         }
+    }
+
+    /// In the `leaf`th text under the element.
+    pub fn leaf(mut self, leaf: usize) -> Self {
+        self.leaf = leaf;
+        self
     }
 
     /// With `objects`: images' bytes and boxes.
@@ -505,6 +518,11 @@ pub struct Cx<'a, S> {
     /// handlers push scroll requests onto.
     scroll_offsets: HashMap<ScrollId, f64>,
     scroll_requests: ScrollRequests,
+    /// The viewport sizes of the scroll containers that fill their parent, as
+    /// the last frame laid them out (seeded by the app), and the heights
+    /// this build assumed for them ([`Cx::fit_scroll_height`]).
+    scroll_viewports: HashMap<ScrollId, Size>,
+    scroll_fits: Vec<(ScrollId, f64)>,
     /// The running app's handle, for timers and background work.
     handle: AppHandle<S>,
     /// The frame's time on the animation timeline, and whether the view asked
@@ -573,6 +591,8 @@ impl<'a, S> Cx<'a, S> {
             memo: Default::default(),
             scroll_offsets: HashMap::new(),
             scroll_requests: ScrollRequests::default(),
+            scroll_viewports: HashMap::new(),
+            scroll_fits: Vec::new(),
             frame: FrameInfo {
                 time: crate::platform::frame::elapsed().unwrap_or_default(),
                 requested: false,
@@ -1118,6 +1138,58 @@ impl<'a, S> Cx<'a, S> {
         let id = ScrollId(self.next_scroll);
         self.next_scroll += 1;
         id
+    }
+
+    /// Register a scroll container under a key of the app's choosing, so it
+    /// keeps its scroll position whatever other containers the view builds
+    /// before it (a page of a [`page_stack`](crate::widgets::page_stack)
+    /// that shows a scroll only some of the time shifts the ids
+    /// [`register_scroll`](Self::register_scroll) hands out after it, and
+    /// their offsets with them). Two containers built with the same key in
+    /// one frame share an offset.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let mut cx = Cx::<()>::new(&theme);
+    /// let id = cx.register_scroll_keyed("history");
+    /// assert_eq!(id, cx.register_scroll_keyed("history"));
+    /// let list = Element::stack(Axis::Vertical, Vec::new()).scrollable(id);
+    /// # let _ = list;
+    /// ```
+    pub fn register_scroll_keyed(&mut self, key: impl std::hash::Hash) -> ScrollId {
+        use std::hash::Hasher;
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut h);
+        // Positional ids count up from zero; keyed ones live in the top half.
+        ScrollId((h.finish() as u32) | 0x8000_0000)
+    }
+
+    /// The height to build scroll container `id`'s visible content for, when
+    /// nothing fixes its height (it fills its parent, as
+    /// [`widgets::scroll`](crate::widgets::scroll) does): its height in the
+    /// last frame, or the window's before it was ever laid out. If the
+    /// layout gives it another height, the app builds the frame again.
+    pub(crate) fn fit_scroll_height(&mut self, id: ScrollId) -> f64 {
+        let h = match self.scroll_viewports.get(&id) {
+            Some(size) => size.height,
+            None if self.window_size.height > 0.0 => self.window_size.height,
+            None => 240.0,
+        };
+        self.scroll_fits.push((id, h));
+        h
+    }
+
+    /// Seed the viewport sizes of last frame's scroll containers that
+    /// [`fit_scroll_height`](Self::fit_scroll_height) asks about.
+    pub(crate) fn set_scroll_viewports(&mut self, viewports: HashMap<ScrollId, Size>) {
+        self.scroll_viewports = viewports;
+    }
+
+    /// The heights this build assumed for the containers that fill their
+    /// parent.
+    pub(crate) fn take_scroll_fits(&mut self) -> Vec<(ScrollId, f64)> {
+        std::mem::take(&mut self.scroll_fits)
     }
 
     /// The current offset of scroll container `id` (logical pixels from the

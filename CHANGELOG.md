@@ -26,10 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(text)* color emoji in Apple Color Emoji (`sbix`) and in `COLR`/`CPAL` fonts such as Segoe UI Emoji (version 0 layers and version 1 paint graphs), resampled or kept vector at the window's scale and cached (#76)
 - *(text)* `Element::max_lines(n)` and `Element::ellipsis(Ellipsis::End | Middle)`: text cut to its lines and its box with "…", read in full by screen readers (#95)
 
+- *(widgets)* `ListState::scroll_to_row` / `reveal` from any handler, and `VirtualList::stick_to_end` (#84)
+- *(widgets)* `virtual_list` fills its parent unless given a height; `VirtualList::plain`, `on_end_reached` for paging, `scroll_key` and `Cx::register_scroll_keyed` (#98)
+- *(widgets)* `text_view`: a virtualized read-only text (a log) with selection across lines, copy, live append with a line cap, and find; the `logview` example (#90)
+- *(text)* `SpanStyle::background`: a color behind a run of rich text (#90)
+- *(core)* `TextHit::leaf`: which of an element's texts a press or drag is in
+
 ### Changed
 
 - *(widgets)* `Dialog` is generic over the state (`Dialog<S>`) and has the `Dialog` role and its title as its label (#83)
 - *(text)* discretionary and historical ligatures (`dlig`, `hlig`) are no longer applied: only the default features (`liga`, `clig`, `rlig`, `calt`, and what complex scripts require) (#93)
+- *(widgets)* `VirtualList` takes the app state type (`VirtualList<'_, S>`) and its `height` is an `Option` (#98)
 - *(gpu)* `Renderer::Auto` draws on a hardware Vulkan device for Wayland windows too, as for X11's (6h)
 - *(macos)* the application menu is named after the app (`app_info().name`), not the primary window's title (#89)
 

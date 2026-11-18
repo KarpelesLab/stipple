@@ -1259,14 +1259,35 @@ pub(crate) fn text_hit_at(
     point: Point,
     font: Option<&Font>,
 ) -> Option<crate::core::TextHit> {
-    let leaf = first_text(node)?;
+    // Of several texts (lines), the one level with the pointer: the first
+    // that reaches below it (so of texts side by side, the first), or the
+    // last when the pointer is below them all.
+    let mut leaves = Vec::new();
+    text_leaves(node, &mut leaves);
+    let at = leaves
+        .iter()
+        .position(|l| l.bounds.max_y() > point.y)
+        .unwrap_or(leaves.len().saturating_sub(1));
+    let leaf = *leaves.get(at)?;
     let layout = leaf_layout(leaf, font)?;
     let b = leaf.text_rect();
     let local = Point::new(point.x - b.min_x(), point.y - b.min_y());
     Some(
         crate::core::TextHit::new(layout.index_at(local), local, b.width())
-            .objects(layout.object_rects()),
+            .objects(layout.object_rects())
+            .leaf(at),
     )
+}
+
+/// The text leaves under `node`, in order.
+fn text_leaves<'a>(node: &'a LayoutNode, out: &mut Vec<&'a LayoutNode>) {
+    if matches!(node.content, NodeContent::Text { .. }) {
+        out.push(node);
+    } else {
+        for c in &node.children {
+            text_leaves(c, out);
+        }
+    }
 }
 
 /// Overlay a `highlight` (typically translucent) on the hovered tappable

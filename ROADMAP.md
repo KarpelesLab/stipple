@@ -2133,6 +2133,12 @@ Most input only works on X11 today.
   `virtual_list(...)` builds only the rows in and around the viewport (fixed or
   per-row heights) while the scroll extent covers them all; keyboard navigation
   scrolls the cursor into view (`Cx::scroll_offset` / `Cx::scroll_requests`).
+  *`ListState::scroll_to_row` from any handler, `stick_to_end`, filling the
+  parent (built for the height the last frame gave it, rebuilt when the
+  layout gives another), `plain` rows, `on_end_reached` paging and keyed
+  scroll ids (#84, #98). `text_view` shows a `TextView` of lines on the
+  same engine: selection across lines, copy, append with a cap, find with
+  `SpanStyle::background` highlights (#90).*
 - ✅ Scroll bars on every scroll container (`scroll`, `scroll_horizontal`,
   `virtual_list`, `table`'s body, `tree`), shown while the content overflows.
   *`core::scroll_bar` lays each bar out from the laid-out tree (viewport,

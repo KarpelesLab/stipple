@@ -485,6 +485,10 @@ struct Pane<S> {
     // Scroll requests from handlers (`Cx::scroll_requests`), applied to
     // `scroll_offsets` before the next build.
     scroll_requests: crate::core::ScrollRequests,
+    // The scroll containers whose height the last build guessed
+    // (`Cx::fit_scroll_height`): the next build is told how tall the layout
+    // made them.
+    scroll_fits: Vec<crate::core::ScrollId>,
     // Last pointer position, so a `Scroll` event (which carries only a delta)
     // can find the scroll container under the cursor.
     last_pointer: Point,
@@ -647,6 +651,7 @@ impl<S: 'static> Pane<S> {
             memo_cache: Default::default(),
             scroll_offsets: std::collections::HashMap::new(),
             scroll_requests: crate::core::ScrollRequests::default(),
+            scroll_fits: Vec::new(),
             last_pointer: Point::new(0.0, 0.0),
             touch: Default::default(),
             touch_epoch: crate::platform::time::now(),
@@ -1353,6 +1358,16 @@ impl<S: 'static> Pane<S> {
             self.scroll_offsets.insert(id, offset.max(0.0));
         }
         cx.set_scroll_state(self.scroll_offsets.clone(), self.scroll_requests.clone());
+        if !self.scroll_fits.is_empty()
+            && let Some(tree) = self.tree.as_ref()
+        {
+            let sizes = self
+                .scroll_fits
+                .iter()
+                .filter_map(|&id| Some((id, crate::core::find_scroll(tree, id)?.bounds.size)))
+                .collect();
+            cx.set_scroll_viewports(sizes);
+        }
         // Drop targets' drag-over states, eased to this frame's time.
         let drop_now = crate::platform::frame::now().map(|_| cx.frame_time());
         self.dnd.fades.update(self.dnd.over, drop_now);
@@ -1366,6 +1381,7 @@ impl<S: 'static> Pane<S> {
         cx.set_window(self.id, info, self.window_focused);
         cx.set_pointer_locked(self.pointer.locked);
         let mut element = (self.view)(state, &mut cx);
+        let fits = cx.take_scroll_fits();
         self.info_read = cx.window_info_read();
         self.safe_area_read = cx.safe_area_read();
         self.built_title = cx.take_window_title();
@@ -1636,9 +1652,22 @@ impl<S: 'static> Pane<S> {
         // shows no hover or press highlight.
         let lit = |id: Option<ActionId>| id.filter(|id| !self.catchers.contains(id));
         let (hovered, pressed) = (lit(self.hovered), lit(self.pressed));
+        // Scrolls the build itself asked for (a list revealing a row, or
+        // following rows appended at its end) show in this frame, which was
+        // built for them.
+        for (id, offset) in self.scroll_requests.take() {
+            self.scroll_offsets.insert(id, offset.max(0.0));
+        }
         // Apply (and clamp) scroll-container offsets to the laid-out tree before
         // painting, so the retained tree matches what's drawn for event routing.
         crate::core::apply_scroll(&mut tree, &mut self.scroll_offsets);
+        // A container whose height the build guessed, and the layout made
+        // another: built again for the height it has.
+        let refit = fits.iter().any(|&(id, guessed)| {
+            crate::core::find_scroll(&tree, id)
+                .is_some_and(|n| (n.bounds.height() - guessed).abs() > 0.5)
+        });
+        self.scroll_fits = fits.into_iter().map(|(id, _)| id).collect();
         self.reveal_caret(&mut tree, font);
         self.stamp_text_touch(&mut tree, font);
         // Elements entering, leaving (drawn from the last frame's tree while
@@ -1687,8 +1716,9 @@ impl<S: 'static> Pane<S> {
         self.plan_native_views(&mut tree);
         self.tree = Some(tree);
         self.dirty = false;
-        if entered.is_some() || refocused {
-            // Built before it had focus: again, with its focused look.
+        if entered.is_some() || refocused || refit {
+            // Built before it had focus: again, with its focused look (or
+            // for the height a container turned out to have).
             self.dirty = true;
             crate::platform::frame::request();
         }
@@ -4842,6 +4872,7 @@ pub mod prelude {
     pub use crate::widgets::{
         RefreshState, SwipeAction, SwipeActions, SwipeState, pull_to_refresh, swipe_row,
     };
+    pub use crate::widgets::{ScrollAlign, TextView, TextViewOptions, text_view};
     pub use crate::widgets::{image, svg};
     pub use crate::{App, CloseResponse};
     pub use std::time::Duration;

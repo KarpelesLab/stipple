@@ -38,10 +38,55 @@ fn view(state: &App, cx: &mut Cx<App>) -> Element {
   checkboxes) and a `RowInfo` with the row's `index`, and whether it is
   `selected` and holds the keyboard `cursor`. The list adds the row's height,
   the selection tint and the click handling.
+- **Height**: `.height(px)` fixes the viewport. Without it the list fills its
+  parent as `scroll(cx)` does: under an app bar, the rest of the page. It's
+  built for the height the last frame gave it (the window's, the first
+  time), and built again in the same pass when the layout gives it another.
 - **How it works**: the list registers a scroll container and reads its offset
   with `Cx::scroll_offset`. Its content is a spacer for the rows above the
   viewport, the visible rows, and a spacer for the rows below. A wheel scroll
   rebuilds the frame, which builds the rows that scrolled in.
+
+### Scrolling from code, following the end, paging
+
+```rust
+// From any handler: a search field moving a quick-open list's cursor, a
+// "find next" jumping to a match.
+s.list.select(i);
+s.list.scroll_to_row(i, ScrollAlign::Center); // or Nearest, Start, End
+s.list.reveal(i);                             // = Nearest
+
+// A log or a chat: opens at the end and, while scrolled there, stays there
+// as rows are appended. Scrolling up stops following; back at the end it
+// resumes.
+VirtualList::fixed(s.lines.len(), 20.0).stick_to_end(true)
+
+// A history that loads 200 rows at a time: the hook runs on the state when
+// the viewport comes within 600 px of the end, once per row count (so again
+// once the new page is scrolled near its end, and right away while the rows
+// don't fill the viewport).
+VirtualList::fixed(s.items.len(), 72.0)
+    .plain(true)
+    .on_end_reached(600.0, |s: &mut App| s.load_next_page())
+```
+
+- **`scroll_to_row`** asks the next build for the scroll; that build makes it
+  and shows the row in the frame it builds, so there's no frame of blank
+  spacer. `set_cursor` doesn't scroll by itself: follow it with `reveal`.
+- **`stick_to_end`** compares where the list is with where its end was in
+  the last build, so appending any number of rows between frames keeps it
+  following. `ListState::truncate(0)` (the list cleared) starts following
+  again, and the end hook can run again.
+- **`plain(true)`** builds the rows as they are: no frame, border, row
+  padding or selection tint, no click or key selecting rows. Full-width
+  tiles whose own taps do what they do.
+- **`on_end_reached`** runs its hook after the frame, as an
+  `AppHandle::update` (so it takes a `Send + Sync` closure).
+- **`scroll_key(key)`** keeps the list's scroll position under a key instead
+  of by the order the view builds scroll containers in, so a page of a
+  `page_stack` that shows a scroll only some of the time doesn't move the
+  lists after it. Any scroll container can have one:
+  `Element::stack(Axis::Vertical, rows).scrollable(cx.register_scroll_keyed("history"))`.
 
 ### Selection and keys
 

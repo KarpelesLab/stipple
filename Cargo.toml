@@ -150,6 +150,10 @@ name = "mediabrowser"
 test = true
 
 [[example]]
+name = "logview"
+test = true
+
+[[example]]
 name = "menudemo"
 test = true
 
@@ -455,6 +459,11 @@ crate-type = ["cdylib"]
 [[example]]
 name = "tabsdemo_web"
 path = "examples/tabsdemo/web.rs"
+crate-type = ["cdylib"]
+
+[[example]]
+name = "logview_web"
+path = "examples/logview/web.rs"
 crate-type = ["cdylib"]
 
 [[example]]

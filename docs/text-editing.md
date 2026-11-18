@@ -316,6 +316,63 @@ column(vec![label(cx, "Order 1042"), label(cx, address)]).selectable();
 
 The highlight is the theme's `palette.selection`, drawn under the glyphs.
 
+## Large read-only text: logs
+
+A log, a terminal's scrollback or a build's output is too big for one
+selectable paragraph, and a list of selectable labels can't select across
+them. `text_view` shows a `TextView` (in the app state) a line at a time on
+the virtualized list's engine: only the lines on screen are laid out, so a
+10,000-line, megabyte log costs what a screenful does. The `logview` example
+follows a live log:
+
+```sh
+cargo run --example logview
+```
+
+<!-- live: logview -->
+
+```rust
+use stipple::prelude::*;
+use stipple::widgets::{FindOptions, TextView, TextViewOptions, text_view};
+
+struct App { log: TextView }
+
+fn view(state: &App, cx: &mut Cx<App>) -> Element {
+    // Fills the rest of the column; opens at the end and follows it.
+    let options = TextViewOptions::default().stick_to_end(true);
+    column(vec![heading(cx, "Output"), text_view(cx, &state.log, |s| &mut s.log, options)])
+}
+
+// Keep the last 10,000 lines.
+let mut log = TextView::new().max_lines(10_000);
+// As a process writes it: a chunk continues the open line, `\n` ends one.
+log.append_text("Compiling stipple v0.0.9\nwarning: unused ");
+log.append_text("variable\n");
+log.push_line("Finished");
+```
+
+- **Lines** are shown unwrapped in the system's monospaced font
+  (`TextViewOptions::font` for another), clipped when wider than the view.
+  `max_lines` drops the oldest as new ones come; what's on screen stays put
+  while you read, and `dropped()` counts the lines gone.
+- **Selection** spans any lines, scrolled out of view or not: drag (past the
+  edge to scroll more lines in), double-click a word, triple-click a line,
+  Shift+arrows. Ctrl/Cmd+C or the context menu copies it as the lines joined
+  by `\n`; Ctrl/Cmd+A selects all, Escape deselects. From code:
+  `select(LinePos::new(line, byte), ..)`, `selection()`, `selected_text()`.
+- **Find**: `find(query, FindOptions::default().case_sensitive(false))`
+  highlights every match, in the lines appended later too; `find_next` and
+  `find_previous` go to the next one (highlighted more) and scroll it into
+  view; `matches()` and `current_match()` read them. Regular expressions
+  aren't supported.
+- **Scrolling**: `stick_to_end` as for `virtual_list`; `scroll_to_line(i,
+  ScrollAlign::Center)` and `scroll_to_end()` from any handler; Up/Down
+  scroll a line and Home/End to the top and end while the view has the focus.
+- **Screen readers** read it as text named by the lines on screen.
+
+The highlights are rich text backgrounds, which any text can have:
+`SpanStyle::new().background(color)` fills behind a run, as tall as its line.
+
 ## Input methods
 
 Chinese, Japanese and Korean input methods, dead keys and compose sequences show

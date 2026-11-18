@@ -223,7 +223,8 @@ paragraph(cx, RichText::new().push("You ").italic("really").push(" think so?"));
 ```
 
 - `SpanStyle` sets a run's `color`, `font`, `weight` (`bold()`), `italic()`,
-  `size` and decoration (`decorate`, `underline`, `strikethrough`); whatever
+  `size`, decoration (`decorate`, `underline`, `strikethrough`) and
+  `background` (a color filled behind the run, as tall as its line); whatever
   it leaves unset is the element's (or the `TextPaint`'s). `RichText::bold`,
   `italic` and `colored` are shorthands.
 - A line is as tall as its tallest run or image, and every run of a line

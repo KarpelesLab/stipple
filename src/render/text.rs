@@ -397,6 +397,8 @@ pub(crate) struct SpanFace {
     pub size: f64,
     pub color: Option<Color>,
     pub decoration: Option<crate::render::Decoration>,
+    /// Filled behind the stretch, as tall as its line.
+    pub background: Option<Color>,
     pub icon: Option<(ImageSource, Size)>,
     /// A floating image anchored at this span's one character (which then
     /// takes no room in the line): text flows around it.
@@ -415,6 +417,7 @@ impl SpanFace {
             size,
             color: None,
             decoration: None,
+            background: None,
             icon: None,
             float: None,
             icon_width: None,
@@ -1477,6 +1480,25 @@ impl Scene {
         }
     }
 
+    /// Fill the backgrounds of the stretches of rich text that have one
+    /// ([`SpanStyle::background`](crate::render::SpanStyle::background)), each
+    /// as tall as its line, under where [`fill_layout`](Self::fill_layout)
+    /// draws the glyphs at `origin`.
+    fn backgrounds_layout(&mut self, layout: &TextLayout<'_>, origin: Point) {
+        if layout.styling.faces.iter().all(|f| f.background.is_none()) {
+            return;
+        }
+        for line in &layout.lines {
+            let x = origin.x + layout.line_x(line);
+            for run in &line.runs {
+                if let Some(color) = layout.styling.faces[run.face].background {
+                    let r = Rect::from_xywh(x + run.x, origin.y + line.top, run.width, line.height);
+                    self.fill_rect(r, color);
+                }
+            }
+        }
+    }
+
     /// Shape and paint `text` at `origin` (the top-left of the text box,
     /// logical pixels) in `paint`'s font, size and color, with its
     /// decoration, outline and shadow if it has them. Newlines (`\n`) start a
@@ -1517,6 +1539,7 @@ impl Scene {
         if let Some(shadow) = &paint.shadow {
             self.shadow_pass(layout, origin, shadow, outline);
         }
+        self.backgrounds_layout(layout, origin);
         if let Some(o) = &paint.outline {
             self.outline_layout(layout, origin, o);
         }
