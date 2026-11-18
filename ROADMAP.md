@@ -1246,7 +1246,8 @@ CPU elsewhere, and the CPU is always the fallback.
   their uploads), and `nativegallery --gpu-check` does on the main thread
   for AppKit on Metal and on Direct3D 11, both non-blocking for now. On
   WARP both have passed (mean difference under 0.14 of 255, no pixel off by
-  more than 64); the Metal run hasn't been seen yet. Linux has no OS-drawn
+  more than 64); on Metal, run on an M5 Max, AppKit's controls matched at
+  scales 1, 1.5 and 2 (mean 0.18, 0.11 and 0.06). Linux has no OS-drawn
   controls, so there only the self-drawn fallback is compared.*
 
 #### 6h — The default
