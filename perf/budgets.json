@@ -1,5 +1,5 @@
 {
-  "//": "Read by tools/bench/compare.py; see docs/performance.md#benchmarks. threshold: how many times the baseline's median (scaled by the calibration loop) a scenario may take; min_delta_ms: a smaller slowdown never counts; normalize false: don't scale by the calibration (latencies that wait for the display). budgets: hard limits, whatever the baseline (ms for a time, max for another metric); blocking false only warns; hardware true applies only to a run on a hardware GPU, false only to one on a software GPU (CI's: llvmpipe, WARP, SwiftShader, a VM's device).",
+  "//": "Read by tools/bench/compare.py; see docs/performance.md#benchmarks. threshold: how many times the baseline's median (scaled by the calibration loop) a scenario may take; min_delta_ms: a smaller slowdown never counts; normalize false: don't scale by the calibration (latencies that wait for the display; web_theme_switch is work, not a wait, so it is scaled: a runner 1.5-1.8x slower failed it). budgets: hard limits, whatever the baseline (ms for a time, max for another metric); blocking false only warns; hardware true applies only to a run on a hardware GPU, false only to one on a software GPU (CI's: llvmpipe, WARP, SwiftShader, a VM's device).",
   "threshold": 1.5,
   "min_delta_ms": 0.3,
   "scenarios": {
@@ -10,7 +10,8 @@
     "sprites_10k": { "threshold": 1.6, "min_delta_ms": 1.0 },
     "transition": { "threshold": 1.6, "min_delta_ms": 1.0 },
     "web_*": { "normalize": false, "threshold": 1.6, "min_delta_ms": 4.0 },
-    "web_startup": { "normalize": false, "threshold": 2.5, "min_delta_ms": 100.0 }
+    "web_startup": { "normalize": false, "threshold": 2.5, "min_delta_ms": 100.0 },
+    "web_theme_switch": { "normalize": true }
   },
   "budgets": [
     {
