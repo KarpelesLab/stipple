@@ -3120,7 +3120,10 @@ jobs:
       # half-scrolled rows stay live, cut by window regions, a real click on
       # Save and a real pick in the select's drop-down list (SendInput) reach
       # the app, a panel over the controls turns them into pictures
-      # (screenshotted) and back, and UI Automation sees Save and Size once.
+      # (screenshotted) and back, and UI Automation sees Save and Size once;
+      # its text field is an EDIT that takes typing (WM_CHAR, then real keys)
+      # into the app's state, follows the state the app sets, submits on
+      # Return; UI Automation sees it once and MSAA names it by its hint.
       # Non-blocking until it has passed here a while.
       - name: Real OS controls (nativegallery self-test, a click, UIA)
         continue-on-error: true
@@ -4153,7 +4156,10 @@ jobs:
       # (performActionForItemAtIndex:; one the app refuses goes back), opens
       # a panel over them (screenshotted: they are pictures under it) and
       # checks the list's half-scrolled rows are live, in its clipping
-      # container and cut by it, before and after it scrolls. The
+      # container and cut by it, before and after it scrolls; then its text
+      # field, an NSTextField, takes typing (insertText:) and a composition
+      # (setMarkedText:) into the app's state, follows the state the app sets
+      # and submits on Return. The
       # accessibility dump (STIPPLE_COCOA_A11Y) must name Save once.
       # Non-blocking until it has passed here a while.
       - name: Real OS controls (nativegallery self-test)
@@ -4985,10 +4991,12 @@ jobs:
       # a panel over them (screenshotted: they are pictures under it), picks a
       # size through the select's UIMenu (a UIAction; one the app refuses
       # goes back), checks the list's half-scrolled rows are live, in its
-      # clipping container and cut by it, before and after it scrolls, and
-      # reads the view's accessibility elements as VoiceOver does: Save, Sync
-      # and Size once each, as the UIKit controls. Non-blocking until it has
-      # passed here a while.
+      # clipping container and cut by it, before and after it scrolls, types
+      # (insertText:) and composes (setMarkedText:selectedRange:) in its
+      # UITextField and checks the app's state follows (and the field follows
+      # the state the app sets), and reads the view's accessibility elements
+      # as VoiceOver does: Save, Sync, Size and the field (Name) once each, as
+      # the UIKit controls. Non-blocking until it has passed here a while.
       - name: Real OS controls (nativegallery self-test)
         continue-on-error: true
         run: |

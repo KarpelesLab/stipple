@@ -1,12 +1,15 @@
 # The native theme's live controls on Windows (see docs/native-theme.md, "Real
 # controls"): run nativegallery's self-test (NATIVEGALLERY_SELFTEST), which
-# reads its child-window controls back and acts on them; meanwhile click Save
-# for real (SendInput, at the BUTTON child window's middle) and check the app
-# counted it, screenshot the window with the self-test's panel over the
-# controls and after, walk the window through UI Automation to check
-# each live control is one element (the BUTTON's), not two, and pick Small
-# in the select for real (a click on its COMBOBOX, then one on Small in the
-# drop-down list Windows opens) and check the app took it.
+# reads its child-window controls back and acts on them (its text field, an
+# EDIT, typed into and set by the app); meanwhile click Save for real
+# (SendInput, at the BUTTON child window's middle) and check the app counted
+# it, screenshot the window with the self-test's panel over the controls and
+# after, walk the window through UI Automation to check each live control is
+# one element (the BUTTON's, the EDIT's), not two, and that MSAA (as NVDA
+# reads an EDIT) names the field by its hint, pick Small in the select for
+# real (a click on its COMBOBOX, then one on Small in the drop-down list
+# Windows opens) and check the app took it, then click into the EDIT and
+# type into it for real (SendInput), and check the app's state followed.
 param(
   [string]$Exe = ".\target\release\examples\nativegallery.exe",
   [string]$Out = "visual_output"
@@ -20,6 +23,7 @@ $proc = Start-Process -FilePath $Exe -PassThru -RedirectStandardOutput $log `
 Remove-Item Env:NATIVEGALLERY_SELFTEST
 
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type @"
@@ -37,8 +41,17 @@ public static class NV {
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int size);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
+  [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr h, uint id, ref Guid iid, [MarshalAs(UnmanagedType.IUnknown)] out object acc);
+  static Accessibility.IAccessible Acc(IntPtr h) {
+    Guid iid = new Guid("618736E0-3C3D-11CF-810C-00AA00389B71");
+    object o;
+    if (h == IntPtr.Zero || AccessibleObjectFromWindow(h, 0xFFFFFFFC, ref iid, out o) != 0) return null;
+    return o as Accessibility.IAccessible;
+  }
+  public static string AccName(IntPtr h) { var a = Acc(h); return a == null ? null : a.get_accName(0); }
+  public static string AccRole(IntPtr h) { var a = Acc(h); return a == null ? null : Convert.ToString(a.get_accRole(0)); }
 }
-"@
+"@ -ReferencedAssemblies ([System.Reflection.Assembly]::LoadWithPartialName("Accessibility").Location)
 [NV]::SetProcessDPIAware() | Out-Null
 
 function Wait-Log([string]$pattern, [int]$seconds = 60) {
@@ -88,12 +101,28 @@ try {
     [System.Windows.Automation.Condition]::TrueCondition)
   $saves = 0
   $saveRect = $null
+  $edits = 0
+  $fieldRect = $null
   foreach ($e in $all) {
     $c = $e.Current
     Write-Host ("uia: {0} {1} '{2}' class={3} hwnd={4}" -f $c.ControlType.ProgrammaticName, $c.LocalizedControlType, $c.Name, $c.ClassName, $c.NativeWindowHandle)
     if ($c.Name -eq "Save") { $saves++; $saveRect = $c.BoundingRectangle }
+    # The text field: the window's provider puts the field's node in its
+    # EDIT child window's place, once.
+    if ($c.ControlType -eq [System.Windows.Automation.ControlType]::Edit) {
+      $edits++
+      $fieldRect = $c.BoundingRectangle
+      Write-Host ("the text field in UIA: '{0}' help '{1}'" -f $c.Name, $c.HelpText)
+    }
   }
   if ($saves -ne 1) { $failures += "UIA has $saves elements named Save, not 1" }
+  if ($edits -ne 1) { $failures += "UIA has $edits text field elements, not 1" }
+  # Its name, as MSAA (and NVDA) reads an EDIT: the field's hint, set with
+  # IAccPropServices (an EDIT has no label of its own).
+  $edit = [NV]::FindWindowExW($hwnd, [IntPtr]::Zero, "Edit", [NullString]::Value)
+  $accName = [NV]::AccName($edit)
+  Write-Host "msaa: EDIT $edit name '$accName' role $([NV]::AccRole($edit))"
+  if ($accName -ne "Name") { $failures += "MSAA names the EDIT '$accName', not 'Name'" }
 
   # A real click on Save, where UIA says its BUTTON is on screen.
   if ($saveRect -ne $null) {
@@ -174,6 +203,21 @@ try {
       [NV]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
     }
     if (-not (Wait-Log 'nativegallery: size Some\(0\)' 10)) { Write-Host "no pick of Small logged" }
+  }
+
+  # Real typing into the EDIT: a click into it, then keys (SendInput).
+  if ($fieldRect -ne $null) {
+    $x = [int]($fieldRect.X + $fieldRect.Width - 8); $y = [int]($fieldRect.Y + $fieldRect.Height / 2)
+    Write-Host "clicking the text field at $x,$y and typing"
+    [NV]::SetForegroundWindow($hwnd) | Out-Null
+    [NV]::SetCursorPos($x, $y) | Out-Null
+    Start-Sleep -Milliseconds 200
+    [NV]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 100
+    [NV]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 300
+    [System.Windows.Forms.SendKeys]::SendWait("{END}xy")
+    if (-not (Wait-Log 'nativegallery: name ".*xy"' 10)) { $failures += "typing into the EDIT didn't reach the app (no 'name ...xy')" }
   }
   Shot $hwnd "windows-native-after.png"
 } finally {

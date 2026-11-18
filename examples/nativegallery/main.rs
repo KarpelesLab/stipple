@@ -25,9 +25,16 @@
 //! the window and checks the controls under it became pictures (for about
 //! six seconds: CI screenshots it), and checks the list's half-hidden row
 //! is live, in its scroll area's clipping container and cut by it, and
-//! that once the list scrolls the cut rows follow it, still live. It logs
-//! to stdout and, on iOS, to `nativegallery.log` in its tmp dir, ending
-//! with `nativegallery selftest: passed` or `... FAILED: <what>`.
+//! that once the list scrolls the cut rows follow it, still live. Then the
+//! text field, a real `UITextField` / `NSTextField` / `EDIT`: it focuses it
+//! and types into it through the control's own text input, and checks the
+//! app's state follows; sets the state and checks the control follows;
+//! composes in it as an input method would (iOS and macOS) and checks the
+//! field's preedit; commits, and presses Return (the field's submit handler
+//! runs). It logs to stdout and, on iOS, to `nativegallery.log` in its tmp
+//! dir, ending with `nativegallery selftest: passed` or `... FAILED:
+//! <what>`; and, after that, each change of the field's text
+//! (`nativegallery: name "..."`), for CI's real typing.
 
 use stipple::prelude::*;
 
@@ -39,6 +46,8 @@ struct Gallery {
     name: TextInput,
     /// Presses on Save.
     saves: u32,
+    /// Returns pressed in the name field.
+    submits: u32,
     /// The self-test's panel over the top of the window shows.
     panel: bool,
     /// The self-test runs (and the list shows).
@@ -80,7 +89,14 @@ fn view(state: &Gallery, cx: &mut Cx<Gallery>) -> Element {
         }
     })
     .a11y_label("Size");
-    let name = text_field(cx, &state.name, |s| &mut s.name);
+    let name = text_field(cx, &state.name, |s| &mut s.name)
+        .placeholder("Name")
+        .on_change(cx, |s| {
+            if s.test {
+                println!("nativegallery: name {:?}", s.name.text());
+            }
+        })
+        .on_submit(cx, |s| s.submits += 1);
     let mut items = vec![
         heading(cx, "Native controls"),
         name,
@@ -145,6 +161,7 @@ fn gallery() -> Gallery {
         level: 0.6,
         name: TextInput::from_text("Stipple"),
         saves: 0,
+        submits: 0,
         panel: false,
         test: false,
         size: Select::new(Some(1)),
@@ -265,7 +282,9 @@ mod selftest {
     use super::Gallery;
     use std::sync::Mutex;
     use std::time::Duration;
-    use stipple::platform::native::{LiveControl, live_controls, poke_control};
+    use stipple::platform::native::{
+        LiveControl, TextPoke, live_controls, poke_control, poke_text, text_trace, trace_text,
+    };
     use stipple::prelude::AppHandle;
 
     static FAILURES: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -362,6 +381,7 @@ mod selftest {
 
     const SLIDER: &[&str] = &["slider", "trackbar"];
     const SWITCH: &[&str] = &["switch"];
+    const FIELD: &[&str] = &["textfield", "edit"];
 
     fn at(handle: &AppHandle<Gallery>, ms: u64, f: impl FnOnce(&mut Gallery) + Send + 'static) {
         handle.after(Duration::from_millis(ms), f);
@@ -540,6 +560,110 @@ mod selftest {
                     titled(&live, "Save").is_some(),
                     "Save is live again once the panel goes",
                 );
+                check(
+                    s.size.selected() == Some(2),
+                    format!(
+                        "the app kept Large through the refused pick ({:?})",
+                        s.size.selected()
+                    ),
+                );
+            }
+            // Picks reach the app again (a real one may follow: CI's).
+            s.locked = false;
+            // The text field is a real one, holding the app's text: focus it
+            // and type through its own text input.
+            trace_text(true);
+            if let Some(field) = of_kind(&live, FIELD) {
+                log(&format!(
+                    "nativegallery: field {} {:?} focused={}",
+                    field.class, field.value, field.focused
+                ));
+                check(field.value == "Stipple", "the field holds the app's text");
+                check(
+                    poke_text(field.id, TextPoke::Focus),
+                    "the field takes focus",
+                );
+                check(
+                    poke_text(field.id, TextPoke::Type("!".into())),
+                    "the field takes typing",
+                );
+            } else if hosts {
+                check(false, "the text field is a live control");
+            }
+        });
+        at(handle, 14500, move |s| {
+            if !hosts {
+                return;
+            }
+            check(
+                s.name.text() == "Stipple!",
+                format!("typing reached the app ({:?})", s.name.text()),
+            );
+            let live = live_controls();
+            check(
+                of_kind(&live, FIELD).is_some_and(|f| f.focused),
+                "the field being edited stays live, focused",
+            );
+            // The app sets the text: the field follows.
+            s.name = stipple::prelude::TextInput::from_text("Set by app");
+        });
+        at(handle, 16500, move |_| {
+            if !hosts {
+                return;
+            }
+            let live = live_controls();
+            let field = of_kind(&live, FIELD);
+            check(
+                field.is_some_and(|f| f.value == "Set by app"),
+                format!(
+                    "the field follows the app's text ({:?})",
+                    field.map(|f| f.value.as_str())
+                ),
+            );
+            // An input method's composition (UIKit and AppKit take one
+            // from outside; Windows' needs an input method installed).
+            if cfg!(not(target_os = "windows"))
+                && let Some(f) = field
+            {
+                check(
+                    poke_text(f.id, TextPoke::Compose("にほ".into())),
+                    "the field takes a composition",
+                );
+            }
+        });
+        at(handle, 18500, move |s| {
+            if !hosts {
+                return;
+            }
+            if cfg!(not(target_os = "windows")) {
+                check(
+                    s.name.buffer().preedit() == Some("にほ") && s.name.text() == "Set by app",
+                    format!(
+                        "the composition is the field's preedit ({:?} in {:?})",
+                        s.name.buffer().preedit(),
+                        s.name.text()
+                    ),
+                );
+            }
+            let live = live_controls();
+            if let Some(f) = of_kind(&live, FIELD) {
+                check(
+                    poke_text(f.id, TextPoke::Type("日本".into())),
+                    "the field takes the committed text",
+                );
+                check(poke_text(f.id, TextPoke::Enter), "the field takes Return");
+            }
+        });
+        at(handle, 20500, move |s| {
+            if hosts {
+                check(
+                    s.name.text() == "Set by app日本" && s.name.buffer().preedit().is_none(),
+                    format!("the commit reached the app ({:?})", s.name.text()),
+                );
+                check(
+                    s.submits == 1,
+                    format!("Return submitted the field once ({})", s.submits),
+                );
             }
             #[cfg(target_os = "ios")]
             {
@@ -555,6 +679,7 @@ mod selftest {
                     ("Save", "UIButton"),
                     ("Sync", "UISwitch"),
                     ("Size", "UIButton"),
+                    ("Name", "UITextField"),
                 ] {
                     let found: Vec<_> = elements.iter().filter(|e| e.label == label).collect();
                     check(
@@ -567,18 +692,13 @@ mod selftest {
                     );
                 }
             }
-            if hosts {
-                check(
-                    s.size.selected() == Some(2),
-                    format!(
-                        "the app kept Large through the refused pick ({:?})",
-                        s.size.selected()
-                    ),
-                );
-            }
-            // Picks reach the app again (a real one may follow: CI's).
-            s.locked = false;
             let failures = std::mem::take(&mut *FAILURES.lock().unwrap());
+            // What the text field's bookkeeping did, to tell why.
+            if !failures.is_empty() {
+                for line in text_trace() {
+                    log(&format!("nativegallery: text trace: {line}"));
+                }
+            }
             if failures.is_empty() {
                 log("nativegallery selftest: passed");
             } else {
