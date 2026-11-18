@@ -27,6 +27,11 @@ use super::objc::{CgRect, Id, Sel, class, msg, nsstring, sel};
 use super::os_select as select;
 use super::{NativeControl, NativeView, NativeViewEvent, ViewBackend, ViewSet};
 
+/// The live text fields.
+#[path = "macos_text.rs"]
+mod text;
+pub(crate) use text::{editing as text_editing, poll as poll_text};
+
 #[link(name = "objc", kind = "dylib")]
 unsafe extern "C" {
     fn objc_allocateClassPair(superclass: Id, name: *const i8, extra: usize) -> Id;
@@ -231,12 +236,15 @@ impl ViewBackend for Appkit {
                     msg!(p, "setDoubleValue:", (v: f64) -> ());
                     p
                 }
-                NativeControl::TextField => return None,
+                NativeControl::TextField => text::create(self.view, v)?,
             };
             if control.is_null() {
                 return None;
             }
-            if !matches!(v.control, NativeControl::Progress { .. }) {
+            if !matches!(
+                v.control,
+                NativeControl::Progress { .. } | NativeControl::TextField
+            ) {
                 let t = target();
                 msg!(control, "setTarget:", (t: Id) -> ());
                 let a = sel("stippleNativeAction:");
@@ -247,6 +255,11 @@ impl ViewBackend for Appkit {
             set_common(control, v);
             let parent = clips::parent_of(self.view, v);
             msg!(parent, "addSubview:", (control: Id) -> ());
+            // The text, the focus: once it is in the window.
+            if matches!(v.control, NativeControl::TextField) {
+                let mut c = control;
+                text::update(self.view, &mut c, v);
+            }
             // Over a Metal layer the view may carry.
             let layer: Id = msg!(control, "layer", () -> Id);
             if !layer.is_null() {
@@ -258,6 +271,20 @@ impl ViewBackend for Appkit {
     }
 
     fn update(&mut self, h: &mut Id, old: &NativeView, new: &NativeView) {
+        if let Some(t) = new.text.as_deref() {
+            // One line, a password or several lines: another control.
+            if !text::fits(*h, t)
+                && let Some(fresh) = self.create(new)
+            {
+                self.destroy(std::mem::replace(h, fresh));
+                return;
+            }
+            text::update(self.view, h, new);
+            // Typing: only the text changed, which that took care of.
+            if old.same_but_text(new) {
+                return;
+            }
+        }
         let h = *h;
         unsafe {
             // Into the container of the scroll area it is in now.
@@ -293,6 +320,7 @@ impl ViewBackend for Appkit {
     }
 
     fn destroy(&mut self, h: Id) {
+        text::destroy(h);
         unsafe {
             msg!(h, "removeFromSuperview", () -> ());
             msg!(h, "release", () -> ());
@@ -300,9 +328,9 @@ impl ViewBackend for Appkit {
     }
 }
 
-/// The controls that are live here: all but a text field.
-pub(crate) fn live_kind(control: NativeControl) -> bool {
-    !matches!(control, NativeControl::TextField)
+/// The controls that are live here: all of them.
+pub(crate) fn live_kind(_control: NativeControl) -> bool {
+    true
 }
 
 /// Show exactly `views` in window view `view` (`Window::set_native_views`).
@@ -432,10 +460,13 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
             } else {
                 String::new()
             };
+            let (value, focused) = text::value_of(h).unwrap_or_default();
             super::LiveControl {
                 id,
                 class: super::objc::class_name(h),
                 title,
+                value,
+                focused,
                 frame: crate::geometry::Rect::from_xywh(f.x, f.y, f.width, f.height),
                 visible,
                 hit: visible.width() > 0.0 && visible.height() > 0.0 && lands_on(view, at, h),
@@ -460,6 +491,18 @@ unsafe fn lands_on(view: Id, at: CgPoint, control: Id) -> bool {
             h = msg!(h, "superview", () -> Id);
         }
         h == control
+    }
+}
+
+pub(crate) fn poke_text(id: u64, poke: super::TextPoke) -> bool {
+    let found = SETS.with(|s| {
+        s.borrow()
+            .values()
+            .find_map(|set| set.get(id).map(|(v, h)| (v.control, *h)))
+    });
+    match found {
+        Some((NativeControl::TextField, h)) => text::poke(h, poke),
+        _ => false,
     }
 }
 

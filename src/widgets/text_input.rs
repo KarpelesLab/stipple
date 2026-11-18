@@ -413,7 +413,8 @@ pub fn text_field<S: 'static>(
     let theme = *cx.theme();
     let el = field_frame(&theme, field_leaf(&input.buffer, &theme))
         .default_width(200.0)
-        .native_text_frame(&theme);
+        .native_text_frame(&theme)
+        .native_text_state(&theme, &input.buffer, input.read_only, false, false);
     let (el, _) = field_keys(cx, el, true, move |s, k| match k {
         // Single-line: a triple-click selects the whole field.
         KeyInput::SelectLine => {
@@ -440,7 +441,8 @@ pub fn text_area<S: 'static>(
         .align(Align::Start, Align::Start)
         .default_width(280.0)
         .height(120.0)
-        .native_text_frame(&theme);
+        .native_text_frame(&theme)
+        .native_text_state(&theme, &input.buffer, input.read_only, false, false);
     let (mut el, _) = field_keys(cx, el, false, move |s, k| field(s).apply(k));
     el.input_hints().multiline = true;
     field_pointer(cx, el, field)

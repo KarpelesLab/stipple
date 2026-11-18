@@ -486,8 +486,21 @@ Where a control can't be live (under an overlay, a transform, a fade, cut by a
 clip that isn't a scroll area's; off screen) UIKit draws it into a picture instead:
 the same control, offscreen, snapshotted through the app's window (a plain
 layer render misses parts of current controls, such as a switch's knob).
-Text-field frames are always pictures (editing stays Stipple's). UIKit has no
-checkbox or radio button, so those stay self-drawn.
+UIKit has no checkbox or radio button, so those stay self-drawn.
+
+Text fields are `UITextField`s (rounded, `secureTextEntry` for a password), and
+a `text_area` a bordered `UITextView` (see
+[Text fields](../native-theme.md#text-fields)), with the field's keyboard: its
+`keyboardType`, capitals, corrections, `returnKeyType` and `textContentType`
+from the field's hints. While one is first responder the keyboard, its input
+methods, the edit menu, the magnifier and the selection handles are UIKit's,
+and the app's view isn't first responder. What it holds (`text`,
+`selectedTextRange`, `markedTextRange`) is read back on
+`UIControlEventEditingChanged` and the delegate's selection and change
+callbacks, and sent to the app as edits; `textFieldShouldReturn:` is Return
+for the app. The keyboard's dismiss key unfocuses the field. Unlike a
+button's, a text field's touches are its own (a tap places its caret, a drag
+selects). A hardware keyboard's Tab isn't passed on from the field yet.
 
 CI's `visual-ios` job runs `nativegallery`'s self-test on the simulator
 (`NATIVEGALLERY_SELFTEST`): the controls are `UIButton`s, a `UISwitch`, a
@@ -495,8 +508,11 @@ CI's `visual-ios` job runs `nativegallery`'s self-test on the simulator
 handlers run when they're acted on, the select picks through its `UIMenu`'s
 `UIAction` (and a pick the app refuses goes back), a panel over them turns them
 into pictures and back, a half-hidden row of a scrolled list is live, in its
-clipping container and cut by it (and still once the list scrolls), and
-VoiceOver's elements name each control once, as the UIKit control.
+clipping container and cut by it (and still once the list scrolls), the text
+field is a `UITextField` that takes typing (`insertText:`) and composition
+(`setMarkedText:selectedRange:`) into the app's state, follows the state the
+app sets and submits on Return, and VoiceOver's elements name each control
+once, as the UIKit control (the field by its hint).
 
 ## Fonts
 

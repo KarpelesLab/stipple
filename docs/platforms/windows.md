@@ -65,6 +65,27 @@ the clients that read MSAA's annotations; the .NET UI Automation client
 CI uses reads it as a pane named by its choice, as it reads the buttons'
 child windows.
 
+Text fields are `EDIT` child windows (`ES_AUTOHSCROLL`, `ES_PASSWORD` for a
+password, the hint as the cue banner; a `text_area` `ES_MULTILINE` with
+`ES_WANTRETURN` and a scroll bar; `DarkMode_CFD` in dark mode; see
+[Text fields](../native-theme.md#text-fields)). Unlike the buttons they keep the
+keyboard focus they take, so the message loop hands their keys to them: the
+caret, selection, clipboard, undo, context menu and the input method are
+Windows'. Each is subclassed: after a key, a character, a click, a paste or the
+input method's composition (read with `ImmGetCompositionStringW`), what it holds
+is read back (`\r\n` line ends as `\n`) and sent to the app as edits; Return,
+Tab, Shift-Tab, Escape and Up and Down in a one-line field go to the app
+instead, and Ctrl shortcuts other than the field's own (select all, copy, cut,
+paste, undo) and function keys go to the window, for the app's menus. Focus
+moving between the window and its fields isn't the window's focus coming or
+going, and the window taking the focus back (activated again) hands it to the
+field the app has focused. An `EDIT` has no label of its own: like a select's,
+its name is the field's label (or hint), through Dynamic Annotation
+(`PROPID_ACC_NAME`), which MSAA (and NVDA, which reads an `EDIT` through it)
+gives. Under UI Automation the window puts the field's own node in the
+`EDIT`'s place, as for the other controls: an edit with Stipple's value and
+the hint as its help text, once.
+
 A control in a scroll area is cut to the part the area shows by a window
 region (`SetWindowRgn`), which Windows draws, hit-tests and clips the
 window's own painting to: one half scrolled out stays live. (A region does
@@ -74,8 +95,9 @@ into one and relaying their notifications and `WM_PRINTCLIENT`.)
 CI's `visual-windows` job (`.github/scripts/native-views-windows.ps1`) runs
 `nativegallery`'s self-test, clicks Save and picks Small in the select for
 real (a click on the combo box, then one on Small in its drop-down list,
-where UI Automation puts it), and checks the half-scrolled rows are live
-with their regions.
+where UI Automation puts it), checks the half-scrolled rows are live
+with their regions, types into the text field's `EDIT` for real (a click,
+then keys) and checks MSAA names it by its hint.
 
 ## Fonts
 

@@ -70,7 +70,7 @@ mod scene;
 /// the status bar's look and the idle timer.
 mod screen;
 /// Input methods: `UITextInput` on the view.
-mod text_input;
+pub(crate) mod text_input;
 
 pub use a11y::AccessibilityElement;
 

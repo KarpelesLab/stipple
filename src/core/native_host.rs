@@ -24,8 +24,11 @@
 //! - it is leaving ([ghost](LayoutNode::ghost)) or off stage;
 //! - the window cross-fades between themes;
 //! - it is a button whose content isn't a single line of text (the OS
-//!   control shows a title, not Stipple's content), or a text field (whose
-//!   editing stays Stipple's; only its frame is the OS's).
+//!   control shows a title, not Stipple's content).
+//!
+//! A text field is live (a real text control, editing the field's state:
+//! see [`text`]) unless one of those holds, but its focus ring doesn't
+//! make it a picture: being edited, it is the OS's, focus ring and all.
 //!
 //! A live control is marked on its node (`native_live`): the painter skips
 //! it and its subtree (its label is the OS control's title), and the
@@ -47,6 +50,8 @@ use crate::core::runtime::{ActionId, DragId, FocusId, LayoutNode, NodeContent};
 use crate::geometry::{Affine, Rect};
 use crate::platform::native::{NativeClip, NativeControl, NativeMenu, NativeView};
 
+mod text;
+
 /// How an OS control's events reach its element.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Route {
@@ -61,6 +66,8 @@ pub(crate) struct Route {
     pub(crate) frame: Rect,
     /// A select's: the tap handler a pick of each option runs.
     pub(crate) picks: Vec<ActionId>,
+    /// The key handler a text field's edits and keys go to.
+    pub(crate) focus: Option<FocusId>,
 }
 
 /// What the App needs to decide this frame's live controls.
@@ -83,6 +90,9 @@ pub(crate) struct NativeHost {
     routes: HashMap<u64, Route>,
     /// The list changed since the window was last given it.
     changed: bool,
+    /// The last edit of each text control the app took in
+    /// ([`NativeText::seen`](crate::platform::native::NativeText::seen)).
+    seen: HashMap<u64, u64>,
 }
 
 impl NativeHost {
@@ -96,6 +106,7 @@ impl NativeHost {
                 input,
                 cands: Vec::new(),
                 path: Vec::new(),
+                labels: text::labels(tree),
             };
             walk.visit(
                 tree,
@@ -111,8 +122,11 @@ impl NativeHost {
                 .filter(|c| c.ok && !c.covered)
                 .map(|c| (c.path.clone(), (c.view.id, c.owner_path.clone())))
                 .collect();
-            for c in walk.cands.into_iter().filter(|c| c.ok && !c.covered) {
+            for mut c in walk.cands.into_iter().filter(|c| c.ok && !c.covered) {
                 routes.insert(c.view.id, c.route);
+                if let Some(t) = &mut c.view.text {
+                    t.seen = self.seen.get(&c.view.id).copied().unwrap_or(0);
+                }
                 views.push(c.view);
             }
             mark(tree, &live);
@@ -122,6 +136,13 @@ impl NativeHost {
         }
         self.views = views;
         self.routes = routes;
+        self.seen.retain(|id, _| self.routes.contains_key(id));
+    }
+
+    /// The app took in text control `id`'s edit `seq`: the next frames
+    /// say so, and the control takes the field's state from them again.
+    pub(crate) fn note_seen(&mut self, id: u64, seq: u64) {
+        self.seen.insert(id, seq);
     }
 
     /// The live controls, in paint order, if they changed since the last
@@ -155,7 +176,12 @@ impl NativeHost {
 }
 
 fn has_native(node: &LayoutNode) -> bool {
-    node.native.is_some() || node.children.iter().any(has_native)
+    node.native.is_some()
+        || node
+            .semantics
+            .as_ref()
+            .is_some_and(|s| s.native_text.is_some())
+        || node.children.iter().any(has_native)
 }
 
 /// Write the plan on the tree: `native_live` on each live control's node,
@@ -239,6 +265,8 @@ struct Walk {
     input: PlanInput,
     cands: Vec<Cand>,
     path: Vec<u32>,
+    /// The text of each node other nodes are labelled by, by its id.
+    labels: HashMap<String, String>,
 }
 
 /// Whether `a` is a plain move (what a live control can follow).
@@ -264,15 +292,11 @@ fn paints(node: &LayoutNode) -> bool {
                 || node.text_pos.is_some()))
 }
 
-/// The controls that can be live here (a text field's editing stays
-/// Stipple's; and not every OS has every control: `os_views::live_kind`).
+/// The controls that can be live here (not every OS has every control:
+/// `os_views::live_kind`).
 fn live_kind(control: NativeControl) -> bool {
     // The tests plan as for a window that shows every kind live.
-    if cfg!(test) {
-        !matches!(control, NativeControl::TextField)
-    } else {
-        crate::platform::native::os_views::live_kind(control)
-    }
+    cfg!(test) || crate::platform::native::os_views::live_kind(control)
 }
 
 /// A button's title and its size: its content, when that is one line of
@@ -339,7 +363,11 @@ impl Walk {
             owner
         };
         let mut opened = None;
-        if let Some(deco) = node.native.filter(|d| live_kind(d.control)) {
+        let deco = node
+            .native
+            .or_else(|| text::bare_field(node, &self.input))
+            .filter(|d| live_kind(d.control));
+        if let Some(deco) = deco {
             opened = Some(self.cands.len());
             let cand = self.candidate(node, deco, m, rect, opacity, clips, owner);
             self.cands.push(cand);
@@ -442,9 +470,12 @@ impl Walk {
         // A select's options, which its OS control (a pop-up button) shows.
         let choices = node.semantics.as_ref().and_then(|s| s.choices.clone());
         // Focused with the ring showing: the OS's focus look, in the
-        // picture.
+        // picture. Not a text field being edited: that's the OS's, focus
+        // ring and all.
         let focus = node.focus.or(owner.node.and_then(|o| o.focus));
-        ok &= !(input.focus_visible && focus.is_some() && focus == input.focused);
+        let focused = focus.is_some() && focus == input.focused;
+        let field = matches!(deco.control, NativeControl::TextField);
+        ok &= field || !(input.focus_visible && focused);
         let (title, font_size) = match deco.control {
             // A select's title is its chosen option, in its text's size.
             NativeControl::Button { .. } if choices.is_some() => {
@@ -459,7 +490,16 @@ impl Walk {
                 ok = false;
                 (String::new(), 0.0)
             }),
+            NativeControl::TextField => (String::new(), text_size(node).unwrap_or(0.0)),
             _ => (String::new(), 0.0),
+        };
+        // A text field the OS edits needs the field's state.
+        let text = if field {
+            let t = text::spec(node, focused);
+            ok &= t.is_some();
+            t
+        } else {
+            None
         };
         let path = self.path.clone();
         let id = identity(node, owner, &path, deco.control);
@@ -467,9 +507,11 @@ impl Walk {
         // Stipple draws a control without a handler as it does one with, so
         // the OS control looks enabled too.
         let enabled = true;
-        // A select is named by its label, if it has one (its text is its
-        // value, which the OS control reads out itself).
+        // A select is named by its label, if it has one, and a text field
+        // by its label, what it's labelled by or its hint (their text is
+        // their value, which the OS control reads out itself).
         let label = match &choices {
+            _ if field => text::label(node, &self.labels),
             Some(_) => node
                 .semantics
                 .as_ref()
@@ -498,6 +540,7 @@ impl Walk {
                     selected: c.selected,
                 }),
                 clips: clips.areas.clone(),
+                text,
             },
             route: Route {
                 action,
@@ -505,6 +548,7 @@ impl Walk {
                 bounds: node.bounds,
                 frame: rect,
                 picks: choices.map(|c| c.picks.clone()).unwrap_or_default(),
+                focus: node.focus,
             },
             path,
             owner_path,

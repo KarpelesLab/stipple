@@ -549,6 +549,12 @@ fn push_event_to(hwnd: Hwnd, ev: Event) {
     CTX.with(|c| c.borrow_mut().queue.push((hwnd as usize, ev)));
 }
 
+/// Queue `ev` for `hwnd` from a live OS control's window procedure
+/// (`native::os_views`), and post a message so the loop delivers it.
+pub(crate) fn queue_native_event(hwnd: *mut c_void, ev: Event) {
+    queue_a11y_events(hwnd, vec![ev]);
+}
+
 /// Queue what an assistive technology asked of `hwnd` (UIA's patterns: a
 /// click, typed text, a wheel), and post a message so the loop delivers it
 /// once UIA's call returns.
@@ -1458,8 +1464,20 @@ unsafe fn handle_message(hwnd: Hwnd, msg: u32, wp: Wparam, lp: Lparam) -> Lresul
             push_event(Event::CloseRequested);
             0
         }
+        // Focus moving to or from one of the window's live text fields
+        // stays in the window (`native::os_views`).
+        attention::WM_SETFOCUS | attention::WM_KILLFOCUS
+            if crate::platform::native::os_views::is_field_of(hwnd, wp as Hwnd) =>
+        {
+            0
+        }
         attention::WM_SETFOCUS | attention::WM_KILLFOCUS => {
             attention::focus_message(hwnd, msg);
+            // Back in the window: the field the app has focused takes the
+            // keyboard again.
+            if msg == attention::WM_SETFOCUS {
+                crate::platform::native::os_views::settle(hwnd);
+            }
             // Switching virtual desktops moves the focus, and cloaks or
             // uncloaks windows.
             occlusion::refresh(hwnd);

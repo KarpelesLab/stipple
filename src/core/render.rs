@@ -1000,6 +1000,10 @@ pub(crate) fn paint_focus_look(
     else {
         return;
     };
+    // A live OS control draws its own focus, caret and selection.
+    if node.native_live.is_some() {
+        return;
+    }
     // Drawn where the node is drawn, if it's transformed or translucent.
     let layer = !to_window.is_identity() || opacity < 1.0;
     if layer {

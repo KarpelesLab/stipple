@@ -232,6 +232,10 @@ pub struct Theme {
     pub font_size: f64,
     /// Whether widgets ask the OS to draw their chrome. See [`Theme::native`].
     pub native: bool,
+    /// Under [`native`](Self::native), whether text fields are the OS's
+    /// own text controls where the window hosts real controls (on in every
+    /// preset; see [`Theme::native_text_editing`]).
+    pub native_text_editing: bool,
     /// Whether the `App` rebuilds this theme with [`Theme::native`] when the
     /// system's light/dark mode or accent color changes. Set by
     /// [`Theme::native`]; clear it to keep a customized native theme as it is.
@@ -433,6 +437,7 @@ impl Theme {
             radius: 8.0,
             font_size: 14.0,
             native: false,
+            native_text_editing: true,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
             follows_locale: true,
@@ -452,6 +457,7 @@ impl Theme {
             radius: 8.0,
             font_size: 14.0,
             native: false,
+            native_text_editing: true,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
             follows_locale: true,
@@ -551,6 +557,21 @@ impl Theme {
     /// [`Theme::native`]).
     pub fn native_controls(mut self, native: bool) -> Self {
         self.native = native;
+        self
+    }
+
+    /// Set whether text fields ([`text_field`](crate::widgets::text_field),
+    /// [`text_area`](crate::widgets::text_area),
+    /// [`number_input`](crate::widgets::number_input),
+    /// [`password_field`](crate::widgets::password_field)) are the OS's own
+    /// text controls under the native theme, in a window that hosts real
+    /// controls (iOS, macOS, Windows): a `UITextField`, an `NSTextField`, an
+    /// `EDIT`, which edit the field's state with the OS's input methods,
+    /// caret, selection and edit menu. On by default; `false` keeps their
+    /// editing Stipple's, the OS drawing only their frame (as off screen).
+    /// See `docs/native-theme.md`, *Text fields*.
+    pub fn native_text_editing(mut self, on: bool) -> Self {
+        self.native_text_editing = on;
         self
     }
 
@@ -806,6 +827,7 @@ impl Theme {
             radius: 12.0,
             font_size: 14.0,
             native: false,
+            native_text_editing: true,
             follows_system: false,
             layout_direction: LayoutDirection::Ltr,
             follows_locale: true,

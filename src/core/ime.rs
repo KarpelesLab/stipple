@@ -64,6 +64,9 @@ pub(crate) fn paint_preedit(
     font: Option<&Font>,
     color: Color,
 ) {
+    if native_focused(tree, Some(focused)) {
+        return;
+    }
     let Some(leaf) = entry_leaf(tree, focused) else {
         return;
     };
@@ -85,14 +88,26 @@ pub(crate) fn paint_preedit(
     }
 }
 
-/// Whether the focused element is a password field: one whose text must not
-/// go through an input method (it would see, and may learn, the password).
-pub(crate) fn secure_focused(tree: &LayoutNode, focused: Option<FocusId>) -> bool {
+/// Whether the focused element is a live OS text control (see
+/// `core::native_host`): the OS's own text input edits it, and the window's
+/// input method, on-screen keyboard and secure entry for the app's view
+/// stay off.
+pub(crate) fn native_focused(tree: &LayoutNode, focused: Option<FocusId>) -> bool {
     focused
         .and_then(|f| find_focus(tree, f))
-        .and_then(|n| n.semantics.as_ref())
-        .and_then(|s| s.role)
-        == Some(crate::core::a11y::Role::PasswordField)
+        .is_some_and(|n| n.native_live.is_some())
+}
+
+/// Whether the focused element is a password field: one whose text must not
+/// go through an input method (it would see, and may learn, the password).
+/// A live OS one keeps its keystrokes to itself (`NSSecureTextField`).
+pub(crate) fn secure_focused(tree: &LayoutNode, focused: Option<FocusId>) -> bool {
+    !native_focused(tree, focused)
+        && focused
+            .and_then(|f| find_focus(tree, f))
+            .and_then(|n| n.semantics.as_ref())
+            .and_then(|s| s.role)
+            == Some(crate::core::a11y::Role::PasswordField)
 }
 
 /// The focused text field's hints for the on-screen keyboard, or `None` when
@@ -102,6 +117,9 @@ pub(crate) fn input_hints(
     tree: &LayoutNode,
     focused: Option<FocusId>,
 ) -> Option<crate::platform::InputHints> {
+    if native_focused(tree, focused) {
+        return None;
+    }
     let focused = focused?;
     entry_leaf(tree, focused)?;
     let node = find_focus(tree, focused)?;
@@ -140,7 +158,7 @@ pub(crate) fn ime_state(
     focused: Option<FocusId>,
     font: Option<&Font>,
 ) -> Option<ImeState> {
-    if secure_focused(tree, focused) {
+    if secure_focused(tree, focused) || native_focused(tree, focused) {
         return None;
     }
     let leaf = entry_leaf(tree, focused?)?;

@@ -40,6 +40,7 @@ How to build, package and run on each platform, and what works there today.
 | Display-paced animation (spinner, hover fades) | ✅ ¹¹ | ✅ ¹¹ | ✅ ¹¹ | ✅ ³ | ✅ ¹⁹ | ✅ ¹² |
 | High-DPI | ✅ | ✅ ¹ | ✅ ¹ | ✅ | ✅ ¹⁹ | ✅ ¹² |
 | OS-drawn controls (`Theme::native`) | — ² | ✅ ⁹³ | ✅ ⁹³ | ✅ ⁹³ | ❌ | ❌ |
+| Text fields as the OS's own (`Theme::native`) | — ² | ✅ ⁹⁴ | ✅ ⁹⁴ | ✅ ⁹⁴ | ❌ | ❌ |
 | System dark mode and accent | ✅ | ✅ | ✅ | ✅ | ✅ ²⁰ | ✅ ²¹ |
 | Following appearance changes live | ✅ ⁷ | ✅ ⁷ | ✅ ⁷ | ✅ ⁵¹ | ✅ ²⁰ | ✅ ²¹ |
 | Theme changes cross-fade | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³⁰ | ✅ ³¹ |
@@ -797,9 +798,22 @@ the OS's own menu or list), with the OS's effects, input and accessibility;
 one half scrolled out of a scroll area stays live, clipped by the OS (a
 clipping container view per area on iOS and macOS, a window region on
 Windows). Wherever one can't show (under an overlay, a transform or a fade,
-cut by a clip that isn't a scroll area's; off screen) and for text-field
-frames, the OS draws a picture of it instead. See
+cut by a clip that isn't a scroll area's; off screen), the OS draws a
+picture of it instead. See
 [native-theme.md](native-theme.md#real-controls).
+
+⁹⁴ In a window, `text_field`, `number_input` and `password_field` are a
+`UITextField` / `NSTextField` / `EDIT`, `text_area` a `UITextView` /
+`NSTextView` / multi-line `EDIT`, editing the field's `TextInput`: typing,
+selection, composition, the edit menu and undo are the OS's, and each edit
+reaches the field's state and handlers; the state the app sets goes back
+into the control. In CI trial runs (non-blocking steps for now)
+`nativegallery`'s self-test typed, composed (iOS, macOS), set the state and
+submitted through the real controls on all three; VoiceOver's elements and
+the macOS accessibility dump listed the field once, named by its hint; on
+Windows a real click and real keys typed into the `EDIT`, UI Automation
+listed it once and MSAA named it by its hint.
+See [native-theme.md](native-theme.md#text-fields).
 
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;

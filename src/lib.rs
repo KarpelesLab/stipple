@@ -94,6 +94,8 @@ mod web_app;
 #[doc(hidden)]
 pub use web_app::WebEntry;
 #[cfg(test)]
+mod native_text_tests;
+#[cfg(test)]
 mod native_views_tests;
 pub mod widgets;
 #[cfg(test)]
@@ -3455,6 +3457,7 @@ impl<S: 'static> App<S> {
                         fn typing(node: &crate::core::AccessNode) -> bool {
                             use crate::core::Role;
                             (node.focused
+                                && node.native_view.is_none()
                                 && matches!(
                                     node.role,
                                     Role::TextField | Role::SpinButton | Role::PasswordField
@@ -3972,6 +3975,7 @@ impl<S: 'static> App<S> {
                         let mut native = Theme::native();
                         native.layout_direction = self.base_theme.layout_direction;
                         native.follows_locale = self.base_theme.follows_locale;
+                        native.native_text_editing = self.base_theme.native_text_editing;
                         self.base_theme = native;
                         self.refresh_theme();
                         let dark = self.theme.is_dark();

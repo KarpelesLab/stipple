@@ -40,6 +40,13 @@ text_area(cx, &state.notes, |s| &mut s.notes);
   `buffer()` and `buffer_mut()` reach the `EditBuffer` (caret, selection,
   direction, undo).
 
+Under [`Theme::native()`](native-theme.md#text-fields), in a window on iOS,
+macOS and Windows, these fields are the OS's own text controls
+(`UITextField`, `NSTextField`, `EDIT`...): the OS does the typing, the caret,
+selection, input methods, edit menu and undo, and each edit reaches the
+`TextInput` (within its limits) and the field's handlers as described here.
+`Theme::native_text_editing(false)` keeps them Stipple's.
+
 ## Keyboard hints
 
 On a phone the field picks the on-screen keyboard. Tell it what the field

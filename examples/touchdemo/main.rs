@@ -498,8 +498,11 @@ fn main() {
     let app = App::new(state, view)
         .title("Stipple Touch")
         .logical_size(Size::new(360.0, 720.0))
-        // Follows the system's light and dark mode.
-        .theme(Theme::native())
+        // Follows the system's light and dark mode. Its field stays
+        // Stipple's own (the OS draws only its frame): the self-tests drive
+        // Stipple's text input, its input methods and edit menu, through the
+        // view (nativegallery's drives a real OS field).
+        .theme(Theme::native().native_text_editing(false))
         // URLs of the stipple-demo scheme that open the app (CI's iOS job
         // adds it to the bundle's CFBundleURLTypes and opens two).
         .on_open_url(|_, url| log(&format!("touchdemo: opened url {url:?}")))

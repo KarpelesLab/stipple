@@ -32,6 +32,11 @@ use std::ffi::c_void;
 use super::os_select as select;
 use super::{NativeControl, NativeView, NativeViewEvent, ViewBackend, ViewSet};
 
+/// The live text fields.
+#[path = "windows_text.rs"]
+mod text;
+pub(crate) use text::{is_field_of, settle};
+
 type Hwnd = *mut c_void;
 
 #[repr(C)]
@@ -360,8 +365,9 @@ impl Win32 {
             let px = (size * self.dpi as f64 / 96.0).round().max(1.0) as u32;
             SendMessageW(h, WM_SETFONT, font(px) as usize, 1);
             EnableWindow(h, v.enabled as i32);
-            // A combo box is dark in the common dialogs' theme.
-            let theme = wide(match (v.dark, v.menu.is_some()) {
+            // A combo box and an edit control are dark in the common dialogs'
+            // theme.
+            let theme = wide(match (v.dark, v.menu.is_some() || v.text.is_some()) {
                 (true, true) => "DarkMode_CFD",
                 (true, false) => "DarkMode_Explorer",
                 _ => "Explorer",
@@ -369,10 +375,12 @@ impl Win32 {
             SetWindowTheme(h, theme.as_ptr(), std::ptr::null());
             // A button's text is its title; the others' (which they don't
             // show) its name for a screen reader. A combo box's is its
-            // choice (`windows_select` names it).
+            // choice (`windows_select` names it), a text field's its text
+            // (`text::update`).
             let text = match v.control {
                 _ if v.menu.is_some() => return,
                 NativeControl::Button { .. } => &v.title,
+                NativeControl::TextField => return,
                 _ => &v.label,
             };
             SetWindowTextW(h, wide(text).as_ptr());
@@ -384,6 +392,7 @@ impl ViewBackend for Win32 {
     type Handle = usize;
 
     fn create(&mut self, v: &NativeView) -> Option<usize> {
+        let mut ex = 0;
         let (class, style) = match v.control {
             NativeControl::Button { .. } if v.menu.is_some() => (select::CLASS, select::STYLE),
             NativeControl::Button { primary } => (
@@ -396,14 +405,18 @@ impl ViewBackend for Win32 {
             ),
             NativeControl::Slider { .. } => ("msctls_trackbar32", TBS_NOTICKS | TBS_BOTH),
             NativeControl::Progress { .. } => ("msctls_progress32", 0),
+            NativeControl::TextField => {
+                ex = text::WS_EX_CLIENTEDGE;
+                ("EDIT", text::style(v.text.as_deref()?))
+            }
             _ => return None,
         };
-        let ex = WS_EX_NOPARENTNOTIFY | if v.rtl { WS_EX_LAYOUTRTL } else { 0 };
+        let ex = ex | WS_EX_NOPARENTNOTIFY | if v.rtl { WS_EX_LAYOUTRTL } else { 0 };
         let h = with_styles(|| unsafe {
             CreateWindowExW(
                 ex,
                 wide(class).as_ptr(),
-                wide(&v.title).as_ptr(),
+                wide(if v.text.is_some() { "" } else { &v.title }).as_ptr(),
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | style,
                 0,
                 0,
@@ -442,15 +455,35 @@ impl ViewBackend for Win32 {
         if v.menu.is_some() {
             select::init(h, v);
         }
+        if matches!(v.control, NativeControl::TextField) {
+            text::adopt(self.parent, h, v);
+        }
         Some(h as usize)
     }
 
     fn update(&mut self, h: &mut usize, old: &NativeView, new: &NativeView) {
+        // A field that changes between one line, a password and several
+        // lines is made again (an `EDIT` keeps its styles).
+        if let Some(t) = new.text.as_deref()
+            && !text::fits(*h as Hwnd, t)
+            && let Some(fresh) = self.create(new)
+        {
+            self.destroy(std::mem::replace(h, fresh));
+            return;
+        }
         let h = *h as Hwnd;
+        // Typing: only the text changed.
+        if matches!(new.control, NativeControl::TextField) && old.same_but_text(new) {
+            text::update(h, new);
+            return;
+        }
         self.set_common(h, new);
         if new.menu.is_some() {
             select::update(h, old, new);
             return;
+        }
+        if matches!(new.control, NativeControl::TextField) {
+            text::update(h, new);
         }
         unsafe {
             match (old.control, new.control) {
@@ -476,6 +509,7 @@ impl ViewBackend for Win32 {
 
     fn destroy(&mut self, h: usize) {
         REGIONS.with(|r| r.borrow_mut().remove(&h));
+        text::destroy(h as Hwnd);
         unsafe { DestroyWindow(h as Hwnd) };
     }
 }
@@ -488,6 +522,7 @@ pub(crate) fn live_kind(control: NativeControl) -> bool {
         NativeControl::Button { .. }
             | NativeControl::Slider { .. }
             | NativeControl::Progress { .. }
+            | NativeControl::TextField
     )
 }
 
@@ -553,7 +588,7 @@ fn touched(parent: Hwnd, id: u64) {
 /// `WM_COMMAND` from child `child` of `parent`: the event a button's click
 /// or a select's pick makes, if it is a live control's.
 pub(crate) fn command(parent: Hwnd, wp: usize, child: Hwnd) -> Option<crate::platform::Event> {
-    let (id, _, menu) = find(parent, child)?;
+    let (id, control, menu) = find(parent, child)?;
     if menu {
         let index = select::notified(child, (wp >> 16) & 0xffff)?;
         let Some(index) = index else {
@@ -567,7 +602,7 @@ pub(crate) fn command(parent: Hwnd, wp: usize, child: Hwnd) -> Option<crate::pla
             event: NativeViewEvent::Picked(index),
         });
     }
-    if (wp >> 16) & 0xffff != BN_CLICKED {
+    if (wp >> 16) & 0xffff != BN_CLICKED || matches!(control, NativeControl::TextField) {
         return None;
     }
     touched(parent, id);
@@ -676,6 +711,7 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
                 (frame, hit)
             };
             let class = text_of(h, true);
+            let (value, focused) = text::value_of(h).unwrap_or_default();
             super::LiveControl {
                 id,
                 // A button's title, a combo box's choice.
@@ -689,11 +725,22 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
                 class,
                 frame,
                 visible,
+                value,
+                focused,
                 hit,
                 container: if cut { "HRGN".into() } else { String::new() },
             }
         })
         .collect()
+}
+
+pub(crate) fn poke_text(id: u64, poke: super::TextPoke) -> bool {
+    let found = SETS.with(|s| {
+        s.borrow()
+            .values()
+            .find_map(|(_, set)| set.get(id).map(|(_, h)| *h as Hwnd))
+    });
+    found.is_some_and(|h| text::poke(h, poke))
 }
 
 pub(crate) fn poke(id: u64, value: Option<f64>) -> bool {

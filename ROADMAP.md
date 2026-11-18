@@ -555,8 +555,23 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   areas; a window region per control on Windows), so a control half
   scrolled out stays live, cut by the OS. A control under something Stipple
   draws, under a transform or fade, or cut by another clip is the OS's
-  picture for that time (`core::native_host`). Next: real text fields
-  taking over editing. See `docs/native-theme.md`.
+  picture for that time (`core::native_host`). See `docs/native-theme.md`.
+- ✅ **Real OS text fields** under `Theme::native()`, in a window on iOS,
+  macOS and Windows: `text_field`, `number_input` and `password_field` are
+  `UITextField`s / `NSTextField`s / `EDIT`s, `text_area` a `UITextView` /
+  `NSTextView` / multi-line `EDIT`, editing the field's state: their edits
+  come back as ranges replaced, selections and compositions applied to the
+  field as keys (so limits, filters and `on_change` / `on_submit` apply), the
+  app's state set back into them when it differs (numbered edits keep typing
+  from being undone), focus both ways, keyboard hints, secure entry, hint,
+  read-only; the OS control speaks for the field, named by its label. A
+  field being edited stays live through its focus ring (and an invalid
+  number). Verified in CI trial runs by `nativegallery`'s self-test on iOS,
+  macOS and Windows (typing, composition on iOS and macOS, state set by the
+  app, Return, the field read once by VoiceOver / the AX dump / UIA; on
+  Windows also real keys and MSAA's name). Not yet: Tab from a `UITextField`
+  on a hardware keyboard, composition driven by CI on Windows.
+  See `docs/native-theme.md`, *Text fields*.
 - ✅ **High-DPI** on Windows (per-monitor v2), macOS (`backingScaleFactor`), iOS
   (`UIScreen.scale`), X11 (`Xft.dpi`) and Wayland (output scale). X11 and Wayland
   run at 2x in CI; Windows and macOS await a real high-DPI display.

@@ -242,6 +242,7 @@ impl GameStyle {
             radius: self.radius,
             font_size: size,
             native: false,
+            native_text_editing: true,
             follows_system: false,
             layout_direction: crate::layout::LayoutDirection::Ltr,
             follows_locale: true,

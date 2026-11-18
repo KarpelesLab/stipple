@@ -286,14 +286,22 @@ pub(crate) fn password_field_with<S: 'static>(
         });
         children.push(toggle);
     }
-    Element::stack(Axis::Horizontal, children)
+    let field = Element::stack(Axis::Horizontal, children)
         .gap(theme.spacing.xs)
         .fill(theme.palette.surface)
         .radius(theme.radius)
         .border(theme.palette.border, 1.0)
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
         .default_width(200.0)
-        .native_text_frame(theme)
+        .native_text_frame(theme);
+    // A live OS field would cover the eye: with one, the editing stays
+    // Stipple's.
+    let field = if state.reveal_button {
+        field
+    } else {
+        field.native_text_state(theme, &state.buffer, false, false, !state.revealed)
+    };
+    field
         .cursor(crate::platform::CursorIcon::Text)
         .on_key(cx, move |s, k| {
             if keys.as_ref().is_some_and(|f| f(s, k)) {

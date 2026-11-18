@@ -118,13 +118,72 @@ fn native_size(mut el: Element, control: NativeControl) -> Element {
     el
 }
 
+/// The OS frame a text field takes under `theme`, if any.
+fn field_deco(theme: &Theme) -> Option<native::NativeDeco> {
+    // The tests plan live fields as a window that hosts them would.
+    #[cfg(test)]
+    if native_field_tests::FORCE.with(|f| f.get()) {
+        return Some(native::NativeDeco {
+            control: NativeControl::TextField,
+            dark: theme.is_dark(),
+            state: native::NativeState::default(),
+        });
+    }
+    theme.native_deco(NativeControl::TextField)
+}
+
+/// Lets the tests give text fields their OS frame (and their state for a
+/// live OS control) on hosts where the OS draws none.
+#[cfg(test)]
+pub(crate) mod native_field_tests {
+    thread_local! {
+        pub(crate) static FORCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+}
+
 impl Element {
     /// Under the native theme, have the OS draw this text field's frame.
     fn native_text_frame(self, theme: &Theme) -> Self {
-        match theme.native_deco(NativeControl::TextField) {
+        match field_deco(theme) {
             Some(deco) => self.native(deco),
             None => self,
         }
+    }
+
+    /// Under the native theme, the field's state for a live OS text control
+    /// to edit, in a window that hosts them (see `core::native_host`):
+    /// `buffer`'s text, selection and composition.
+    pub(crate) fn native_text_state(
+        mut self,
+        theme: &Theme,
+        buffer: &EditBuffer,
+        read_only: bool,
+        invalid: bool,
+        secure: bool,
+    ) -> Self {
+        if !theme.native_text_editing || field_deco(theme).is_none() {
+            return self;
+        }
+        let caret = buffer.caret;
+        let composing = buffer.preedit.as_ref().map(|p| native::Composition {
+            text: p.text.clone(),
+            cursor: p.cursor,
+        });
+        let state = native::NativeText {
+            text: buffer.text.clone(),
+            anchor: buffer.anchor.unwrap_or(caret),
+            caret,
+            composing,
+            read_only,
+            invalid,
+            secure,
+            dark: theme.is_dark(),
+            ..Default::default()
+        };
+        self.semantics
+            .get_or_insert_with(Default::default)
+            .native_text = Some(Box::new(state));
+        self
     }
 }
 

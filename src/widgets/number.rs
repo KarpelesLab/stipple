@@ -258,10 +258,12 @@ pub fn number_input<S>(
         .padding(Insets::symmetric(theme.spacing.md, theme.spacing.sm))
         .grow(1.0)
         .shrink(1.0);
-    // An invalid entry keeps the self-drawn frame, so its red border shows.
+    // An invalid entry keeps the self-drawn frame, so its red border shows
+    // (a live OS field being edited stays one, and shows it its own way).
     if state.is_valid() {
         edit = edit.native_text_frame(theme);
     }
+    let edit = edit.native_text_state(theme, &state.buffer, false, !state.is_valid(), false);
     let edit = edit
         .role(Role::SpinButton)
         .on_key(cx, move |s, k| {

@@ -193,6 +193,9 @@ pub(crate) struct Semantics {
     /// A select's options, for the OS's pop-up button that shows it live
     /// under the native theme (see `core::native_host`).
     pub choices: Option<std::sync::Arc<Choices>>,
+    /// A text field's state, for a live OS text control to edit (under
+    /// the native theme; see `core::native_host`).
+    pub native_text: Option<Box<crate::platform::native::NativeText>>,
 }
 
 /// A select's options as its live OS control shows them: their labels, the

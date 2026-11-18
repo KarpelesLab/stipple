@@ -700,6 +700,12 @@ extern "C" fn is_secure_text_entry(_this: Id, _cmd: Sel) -> bool {
 
 /// `textContentType`: UIKit's constant for what the field holds, or nil.
 extern "C" fn text_content_type(_this: Id, _cmd: Sel) -> Id {
+    content_type(current_traits().content)
+}
+
+/// UIKit's `UITextContentType` constant for `content`, or nil (a live
+/// `UITextField`'s too).
+pub(crate) fn content_type(content: Option<Autofill>) -> Id {
     #[link(name = "UIKit", kind = "framework")]
     unsafe extern "C" {
         static UITextContentTypeUsername: Id;
@@ -713,7 +719,7 @@ extern "C" fn text_content_type(_this: Id, _cmd: Sel) -> Id {
         static UITextContentTypeFullStreetAddress: Id;
         static UITextContentTypeURL: Id;
     }
-    let Some(content) = current_traits().content else {
+    let Some(content) = content else {
         return std::ptr::null_mut();
     };
     unsafe {

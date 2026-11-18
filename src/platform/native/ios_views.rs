@@ -39,6 +39,10 @@ use super::objc::{CgRect, Id, Sel, class, msg, nsstring, sel};
 use super::os_select as select;
 use super::{NativeControl, NativeView, NativeViewEvent, ViewBackend, ViewSet};
 
+/// The live text fields.
+#[path = "ios_text.rs"]
+mod text;
+
 #[link(name = "objc", kind = "dylib")]
 unsafe extern "C" {
     fn objc_allocateClassPair(superclass: Id, name: *const i8, extra: usize) -> Id;
@@ -291,8 +295,8 @@ impl ViewBackend for Uikit {
                     msg!(p, "setProgress:", (v: f32) -> ());
                     (p, 0)
                 }
-                // Checkboxes and radios aren't UIKit's, and fields stay
-                // Stipple's.
+                NativeControl::TextField => (text::create(v)?, 0),
+                // Checkboxes and radios aren't UIKit's.
                 _ => return None,
             };
             if control.is_null() {
@@ -314,11 +318,30 @@ impl ViewBackend for Uikit {
             msg!(layer, "setZPosition:", (z: f64) -> ());
             let parent = clips::parent_of(self.view, v);
             msg!(parent, "addSubview:", (control: Id) -> ());
+            // The text, the focus: once it is in the view.
+            if matches!(v.control, NativeControl::TextField) {
+                let mut c = control;
+                text::update(self.view, &mut c, v);
+            }
             Some(control)
         }
     }
 
     fn update(&mut self, h: &mut Id, old: &NativeView, new: &NativeView) {
+        if let Some(t) = new.text.as_deref() {
+            // One line or several: another control.
+            if !text::fits(*h, t)
+                && let Some(fresh) = self.create(new)
+            {
+                self.destroy(std::mem::replace(h, fresh));
+                return;
+            }
+            text::update(self.view, h, new);
+            // Typing: only the text changed, which that took care of.
+            if old.same_but_text(new) {
+                return;
+            }
+        }
         let h = *h;
         unsafe {
             // Into the container of the scroll area it is in now.
@@ -359,6 +382,7 @@ impl ViewBackend for Uikit {
     }
 
     fn destroy(&mut self, h: Id) {
+        text::destroy(h);
         unsafe {
             msg!(h, "removeFromSuperview", () -> ());
             msg!(h, "release", () -> ());
@@ -374,6 +398,7 @@ pub(crate) fn live_kind(control: NativeControl) -> bool {
             | NativeControl::Switch { .. }
             | NativeControl::Slider { .. }
             | NativeControl::Progress { .. }
+            | NativeControl::TextField
     )
 }
 
@@ -463,10 +488,13 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
             while !hit.is_null() && hit != h {
                 hit = msg!(hit, "superview", () -> Id);
             }
+            let (value, focused) = text::value_of(h).unwrap_or_default();
             super::LiveControl {
                 id,
                 class: name,
                 title,
+                value,
+                focused,
                 frame: crate::geometry::Rect::from_xywh(f.x, f.y, f.width, f.height),
                 visible,
                 hit: !hit.is_null() && visible.width() > 0.0 && visible.height() > 0.0,
@@ -474,6 +502,11 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
             }
         })
         .collect()
+}
+
+pub(crate) fn poke_text(id: u64, poke: super::TextPoke) -> bool {
+    let h = SET.with(|s| s.borrow().get(id).map(|(_, h)| *h));
+    h.is_some_and(|h| text::poke(h, poke))
 }
 
 pub(crate) fn poke(id: u64, value: Option<f64>) -> bool {

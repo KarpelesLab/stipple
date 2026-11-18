@@ -57,6 +57,9 @@ pub struct NativeView {
     /// The scroll areas it is in, outermost first: each is a clipping
     /// container the OS cuts the control off at (see [`NativeClip`]).
     pub clips: Vec<NativeClip>,
+    /// A text field's text, selection and settings (see
+    /// [`NativeText`](super::NativeText)); `None` for the other controls.
+    pub text: Option<Box<super::NativeText>>,
 }
 
 /// A select's choices, as its OS control shows them.
@@ -89,10 +92,24 @@ impl NativeView {
             .iter()
             .try_fold(self.frame, |r, c| r.intersection(c.frame))
     }
+
+    /// Whether `self` and `other` differ in their text field's state at
+    /// most (each keystroke): the control's other settings stay.
+    #[cfg_attr(
+        not(any(target_os = "ios", target_os = "macos", target_os = "windows")),
+        allow(dead_code)
+    )]
+    pub(crate) fn same_but_text(&self, other: &NativeView) -> bool {
+        let bare = |v: &NativeView| NativeView {
+            text: None,
+            ..v.clone()
+        };
+        bare(self) == bare(other)
+    }
 }
 
 /// What the user did to a live control.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum NativeViewEvent {
     /// Pressed a button, or flipped a switch, checkbox or radio button.
@@ -101,6 +118,13 @@ pub enum NativeViewEvent {
     Value(f64),
     /// Picked this option of a select, from the OS's own menu or list.
     Picked(usize),
+    /// Edited a text field's text, selection or composition.
+    Edited(super::NativeTextEdit),
+    /// The keyboard focus came to the control (`true`), or left it for
+    /// somewhere outside the app's view (`false`).
+    Focus(bool),
+    /// Pressed a key the text control leaves to the app.
+    Key(super::NativeKey),
 }
 
 /// The OS side of a [`ViewSet`]: how a backend makes, changes and removes its
@@ -227,6 +251,11 @@ pub struct LiveControl {
     pub class: String,
     /// Its title as the OS has it (a button's), else empty.
     pub title: String,
+    /// A text control's text as the OS has it, else empty.
+    pub value: String,
+    /// Whether it has the keyboard focus (a text control is the first
+    /// responder, or the focused window).
+    pub focused: bool,
     /// Its frame as the OS reports it, in logical pixels of the window.
     pub frame: Rect,
     /// The part of it the OS shows: its frame cut by the clipping
@@ -308,6 +337,7 @@ mod tests {
             rtl: false,
             menu: None,
             clips: Vec::new(),
+            text: None,
         }
     }
 

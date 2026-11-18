@@ -31,6 +31,16 @@ mod views;
 pub use views::{
     LiveControl, NativeClip, NativeMenu, NativeView, NativeViewEvent, live_controls, poke_control,
 };
+// Live text controls: their spec, their edits, and the bookkeeping the
+// backends keep them in step with.
+pub(crate) mod text;
+pub use text::{Composition, NativeKey, NativeText, NativeTextEdit};
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "windows"))]
+pub(crate) use text::{Held, TextMirror};
+#[doc(hidden)]
+pub use text::{TextPoke, poke_text, text_trace, trace_text};
+#[cfg(target_os = "windows")]
+pub(crate) use text::{from_crlf, to_crlf};
 #[cfg(any(target_os = "ios", target_os = "macos", target_os = "windows"))]
 pub(crate) use views::{ViewBackend, ViewSet};
 
@@ -73,10 +83,13 @@ pub(crate) mod os_views {
     pub(crate) fn poke(_id: u64, _value: Option<f64>) -> bool {
         false
     }
+    pub(crate) fn poke_text(_id: u64, _poke: super::TextPoke) -> bool {
+        false
+    }
     /// What a window here would show live: no window does, but the
     /// planning (and its tests) runs the same.
-    pub(crate) fn live_kind(control: super::NativeControl) -> bool {
-        !matches!(control, super::NativeControl::TextField)
+    pub(crate) fn live_kind(_control: super::NativeControl) -> bool {
+        true
     }
 }
 

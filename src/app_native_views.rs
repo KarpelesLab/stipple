@@ -6,6 +6,8 @@
 use crate::platform::native::NativeViewEvent;
 use crate::{App, Pane};
 
+pub(crate) mod text;
+
 impl<S: 'static> Pane<S> {
     /// Decide which of `tree`'s OS-drawn controls are live this frame and
     /// mark them on it.
@@ -33,6 +35,13 @@ impl<S: 'static> App<S> {
     /// the window needs a new frame (always, once handled: the control
     /// shows what the state says, even when the handler kept it as it was).
     pub(crate) fn pane_native_view(&mut self, idx: usize, id: u64, event: NativeViewEvent) -> bool {
+        // A text control's: its edits, focus and keys.
+        match event {
+            NativeViewEvent::Edited(edit) => return self.native_text_edited(idx, id, edit),
+            NativeViewEvent::Focus(on) => return self.native_text_focus(idx, id, on),
+            NativeViewEvent::Key(key) => return self.native_text_key(idx, id, key),
+            _ => {}
+        }
         let App { state, panes, .. } = self;
         let pane = &mut panes[idx];
         let Some(route) = pane.native_host.route(id) else {
@@ -60,6 +69,7 @@ impl<S: 'static> App<S> {
                     pane.handlers.dispatch(pick, state);
                 }
             }
+            _ => {}
         }
         // The control shows what the state says next frame, even where the
         // handler kept it as it was (a pick or a flip refused goes back).

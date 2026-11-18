@@ -2189,7 +2189,16 @@ where
                     }
                     w
                 };
-                if let Some(win) = target.filter(|w| !w.closing.get()) {
+                if let Some(win) = target.as_ref().filter(|w| !w.closing.get())
+                    && matches!(etype, NS_KEY_DOWN | NS_KEY_UP | keys::NS_FLAGS_CHANGED)
+                    && crate::platform::native::os_views::text_editing(win.view)
+                {
+                    // A live OS text field is first responder: its keys are
+                    // AppKit's (its field editor, input methods, menus), and
+                    // what they did is read back from it.
+                    msg_void_id(app, sel("sendEvent:"), ev);
+                    crate::platform::native::os_views::poll_text(win.view);
+                } else if let Some(win) = target.filter(|w| !w.closing.get()) {
                     let view = win.view;
                     // Positions stay in points, which are logical pixels.
                     let view_h = msg_rect(view, sel("bounds")).size.height;
@@ -2285,6 +2294,9 @@ where
                         // we're exiting on this event.
                         if !exit && !(used && etype != keys::NS_FLAGS_CHANGED) {
                             msg_void_id(app, sel("sendEvent:"), ev);
+                            // A click into a live text field, a selection
+                            // dragged in one: read back.
+                            crate::platform::native::os_views::poll_text(view);
                         }
                     }
                     // Keep the app's cursor over the content: AppKit resets it

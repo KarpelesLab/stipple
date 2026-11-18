@@ -72,9 +72,22 @@ transaction, so a scrolled frame and the controls' new places show together.
 
 Where a control can't be live (under an overlay, a transform, a fade, cut by
 a clip that isn't a scroll area's; off screen) the same AppKit view draws it offscreen
-into a picture with `cacheDisplayInRect:toBitmapImageRep:`. Text-field frames
-are always pictures (editing stays Stipple's). Switch sizes come from AppKit,
-since they differ between versions.
+into a picture with `cacheDisplayInRect:toBitmapImageRep:`. Switch sizes come
+from AppKit, since they differ between versions.
+
+Text fields are `NSTextField`s (`NSSecureTextField` for a password), and a
+`text_area` an `NSTextView` in a bordered `NSScrollView` (see
+[Text fields](../native-theme.md#text-fields)). Unlike the other controls they
+take first responder: while one has it, the event loop hands key events
+straight to AppKit (its field editor, the input methods, the Edit menu, undo),
+and what the field holds (the field editor's text, `selectedRange`,
+`markedRange`) is read back after every event AppKit handled and on the
+delegate's change notifications, and sent to the app as edits. The delegate's
+`control:textView:doCommandBySelector:` gives the app Return (`insertNewline:`),
+Tab, Shift-Tab, Escape (`cancelOperation:`) and Up and Down in a one-line
+field. The app focusing another element makes the window's view first
+responder again. An invalid number being edited gets a red ring (its layer's
+border).
 
 AppKit only draws a focus ring for a window's first responder, so Stipple draws
 its own around the focused control.
