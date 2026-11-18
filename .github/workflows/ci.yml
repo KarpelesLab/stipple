@@ -75,6 +75,15 @@ jobs:
         run: "cargo test --features audio audio::"
       - name: audiodemo selftest (no sound card, the null output)
         run: STIPPLE_AUDIO=null cargo run --example audiodemo -- --selftest --expect-backend null
+      # stipple::video: MPEG-2 decoded in software (oxideav), and H.264
+      # saying Unsupported where there's no VA-API device (the runner has
+      # none); the player shown off screen.
+      - name: clippy (video feature)
+        run: cargo clippy --all-targets --features video -- -D warnings
+      - name: test (video feature)
+        run: "cargo test --features video video::"
+      - name: videoplayer selftest (the MPEG-2 clip decoded in software, off-screen)
+        run: cargo run --example videoplayer --features video -- --selftest
       - name: gamedemo selftest (a seeded game played by script, its score and saves checked)
         run: STIPPLE_AUDIO=null cargo run --example gamedemo -- --selftest
       # The runners have no sound card: load ALSA's dummy driver (a card that

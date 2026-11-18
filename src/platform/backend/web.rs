@@ -57,6 +57,9 @@
 //! | `camera_pause(id, paused)` | stops handing frames over and disables the track, or the reverse |
 //! | `camera_close(id)` | stops the stream's tracks |
 //! | `camera_torch(id, on)`, `camera_zoom(id, factor)`, `camera_focus(id, x, y)` | `applyConstraints` with `torch`, `zoom`, `pointsOfInterest` |
+//! | `video_open(id, ptr, len, autoplay, looping)` | plays the file's bytes (a Blob URL) in a hidden, muted `<video>` (registered as an external source); reports `stipple_video_meta(id, width, height, seconds)` (-1: unknown duration), each new frame (and a seek's, a play's, a pause's) through `stipple_video_frame(id, source, width, height, seconds, paused)`, `stipple_video_ended(id)` and `stipple_video_failed(id, code)` (`MediaError.code`) |
+//! | `video_play(id, on)`, `video_seek(id, seconds)`, `video_loop(id, on)` | `play()` or `pause()`, `currentTime`, `loop` |
+//! | `video_close(id)` | lets go of the `<video>` and its URL |
 //!
 //! With the `gpu` feature the module also imports `gpu_init`, `gpu_texture`,
 //! `gpu_free`, `gpu_frame` and `gpu_release`, which `web/gpu.js` provides (see
@@ -149,6 +152,11 @@ mod js {
         pub fn camera_torch(id: u32, on: u32);
         pub fn camera_zoom(id: u32, factor: f64);
         pub fn camera_focus(id: u32, x: f64, y: f64);
+        pub fn video_open(id: u32, ptr: *const u8, len: usize, autoplay: u32, looping: u32);
+        pub fn video_play(id: u32, on: u32);
+        pub fn video_seek(id: u32, seconds: f64);
+        pub fn video_loop(id: u32, on: u32);
+        pub fn video_close(id: u32);
     }
 }
 
@@ -1215,6 +1223,64 @@ pub fn camera_caps(id: u32, flags: u32, zoom_min: f64, zoom_max: f64) {
 #[doc(hidden)]
 pub fn camera_failed(id: u32, code: u32) {
     crate::camera::os::failed(id, code);
+    drain();
+}
+
+/// Play the video file `bytes` as video `id`.
+pub(crate) fn video_open(id: u32, bytes: &[u8], autoplay: bool, looping: bool) {
+    unsafe {
+        js::video_open(
+            id,
+            bytes.as_ptr(),
+            bytes.len(),
+            u32::from(autoplay),
+            u32::from(looping),
+        )
+    }
+}
+
+pub(crate) fn video_play(id: u32, on: bool) {
+    unsafe { js::video_play(id, u32::from(on)) }
+}
+
+pub(crate) fn video_seek(id: u32, seconds: f64) {
+    unsafe { js::video_seek(id, seconds) }
+}
+
+pub(crate) fn video_loop(id: u32, on: bool) {
+    unsafe { js::video_loop(id, u32::from(on)) }
+}
+
+pub(crate) fn video_close(id: u32) {
+    unsafe { js::video_close(id) }
+}
+
+/// Video `id`'s header was read.
+#[doc(hidden)]
+pub fn video_meta(id: u32, width: u32, height: u32, seconds: f64) {
+    crate::video::web::meta(id, width, height, seconds);
+    drain();
+}
+
+/// Video `id` shows a new frame: its `<video>`, the page's external
+/// source `source`.
+#[doc(hidden)]
+pub fn video_frame(id: u32, source: u32, width: u32, height: u32, seconds: f64, paused: bool) {
+    crate::video::web::frame(id, source, width, height, seconds, paused);
+    drain();
+}
+
+/// Video `id` reached its end.
+#[doc(hidden)]
+pub fn video_ended(id: u32) {
+    crate::video::web::ended(id);
+    drain();
+}
+
+/// Video `id` couldn't be played (`MediaError.code`).
+#[doc(hidden)]
+pub fn video_failed(id: u32, code: u32) {
+    crate::video::web::failed(id, code);
     drain();
 }
 

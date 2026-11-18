@@ -94,6 +94,7 @@ How to build, package and run on each platform, and what works there today.
 | Sound: effects, streamed music, volume groups (`stipple::audio`) | ALSA ⁷¹ | WASAPI ⁷¹ | Core Audio ⁷¹ | Core Audio ⁷¹ | AAudio ⁷¹ | Web Audio ⁷¹ |
 | Camera: live preview, every frame, torch, zoom, focus, lenses (`stipple::camera`) | ❌ | ❌ | AVFoundation ⁷² | AVFoundation ⁷² | Camera2 NDK ⁷² | `getUserMedia` ⁷² |
 | Runtime permissions (`platform::permission`) | — | — | camera, microphone ⁷² | ✅ ⁷² | ✅ ⁷² | ✅ ⁷² |
+| Video playback, decoded in hardware (`stipple::video`) | VA-API ⁹⁵ | MPEG-2 ⁹⁵ | VideoToolbox ⁹⁵ | VideoToolbox ⁹⁵ | MPEG-2 ⁹⁵ | `<video>` ⁹⁵ |
 | In-app purchases (`platform::store`) | mock ⁷³ | mock ⁷³ | mock ⁷³ | StoreKit ⁷³ | Play Billing ⁷³ | mock ⁷³ |
 | Calling the platform's own APIs: JNI access, activities started for a result (`platform::android`) | — | — | — | — | ✅ ⁸⁷ | — |
 | App extensions and app groups' shared containers (`platform::shared_dir`) | — | — | `shared_dir` ¹⁰ | ✅ ⁸⁹ | — | — |
@@ -815,6 +816,15 @@ Windows a real click and real keys typed into the `EDIT`, UI Automation
 listed it once and MSAA named it by its hint.
 See [native-theme.md](native-theme.md#text-fields).
 
+⁹⁵ MP4 and Matroska natively, with the `video` feature: H.264 and HEVC
+through VideoToolbox on macOS and iOS (its `IOSurface`s drawn by Metal
+without a copy), H.264 through VA-API on Linux (read back once), and
+MPEG-1/2 everywhere through oxideav's software decoder; on the web,
+whatever the browser plays, in a `<video>` the GPU renderer imports. No
+sound yet. Run on macOS (VideoToolbox, Metal, the software decoder); CI runs
+the MPEG-2 tests on Linux; VA-API, iOS, Windows, Android and the web glue
+are compile-checked. See [video.md](video.md).
+
 Where the clipboard isn't wired up, copy and paste still work inside the app.
 Where file dialogs aren't, `open_file` and friends return `None`, as if cancelled;
 on iOS, Android and the web, which hand out contents rather than paths, so do
@@ -858,6 +868,7 @@ they: use `open_file_contents` and `save_file_contents` there.
 - [Windows and cursors](windows-and-cursors.md): several windows opened and closed at run time, titles, position, size and state, size limits, maximize, fullscreen, the icon, and cursor shapes
 - [Closing, quitting, focus and attention](window-lifecycle.md): asking before a window closes or the app quits, window focus, attention requests, the bell, Wayland title bars, and mobile apps going to the background
 - [The camera and permissions](camera.md): `stipple::camera`'s live preview, frames on a capture thread, torch, zoom, focus and lenses; asking for the camera, microphone, notifications, photos and location
+- [Video](video.md): `stipple::video`: playing MP4 and Matroska files decoded in hardware (VideoToolbox, VA-API) or software (MPEG-2), `video_view`, and frames drawn on the GPU without a copy
 - [Sound](audio.md): `stipple::audio`: sound effects, streamed music, volume groups, the formats, each platform's output, latency, and the web's autoplay rule
 - [Rendering on the GPU](gpu.md): `stipple::gpu` under `App::render_with`, what it draws how, how close it is to the software renderer, where it's the default, and hidden windows
 - [High-DPI](high-dpi.md): logical and physical pixels, and where the scale comes from

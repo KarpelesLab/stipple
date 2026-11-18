@@ -315,6 +315,8 @@ export async function start(canvas, wasmUrl, options = {}) {
     () => {},
   );
   const cameras = new Map();
+  // The videos (video_open), by id.
+  const videos = new Map();
   // Hand each new frame of an open camera to the module, as RGBA.
   const pumpCamera = (id, cam) => {
     const next = () => {
@@ -944,6 +946,76 @@ export async function start(canvas, wasmUrl, options = {}) {
         cameras.get(id)?.track?.applyConstraints({
           advanced: [{ pointsOfInterest: [{ x, y }], focusMode: "single-shot" }],
         }).catch(() => {});
+      },
+      // stipple::video: the file's bytes as a Blob URL in a hidden, muted
+      // <video> (an external source the GPU renderer imports each frame);
+      // each new frame, a seek's and a play or pause are told to the module.
+      video_open(id, ptr, len, autoplay, looping) {
+        const url = URL.createObjectURL(new Blob([new Uint8Array(e.memory.buffer, ptr, len).slice()]));
+        const video = document.createElement("video");
+        video.muted = true;
+        video.playsInline = true;
+        video.loop = looping !== 0;
+        video.preload = "auto";
+        video.setAttribute("aria-hidden", "true");
+        Object.assign(video.style, {
+          position: "fixed", left: "0", top: "0", width: "1px", height: "1px",
+          opacity: "0", pointerEvents: "none",
+        });
+        document.body.appendChild(video);
+        const v = { video, url, closed: false, source: externalSource(video) };
+        videos.set(id, v);
+        const frame = (meta) => {
+          const w = video.videoWidth, h = video.videoHeight;
+          if (v.closed || !w || !h || video.readyState < 2 || !e) return;
+          e.stipple_video_frame?.(id, v.source, w, h, meta?.mediaTime ?? video.currentTime,
+            video.paused ? 1 : 0);
+        };
+        const pump = () => {
+          if (v.closed) return;
+          if (video.requestVideoFrameCallback) {
+            video.requestVideoFrameCallback((_, meta) => { frame(meta); pump(); });
+          } else {
+            requestAnimationFrame(() => { if (!video.paused) frame(null); pump(); });
+          }
+        };
+        video.addEventListener("loadedmetadata", () => e?.stipple_video_meta?.(id,
+          video.videoWidth, video.videoHeight, Number.isFinite(video.duration) ? video.duration : -1));
+        for (const ev of ["loadeddata", "seeked", "play", "pause"]) {
+          video.addEventListener(ev, () => frame(null));
+        }
+        video.addEventListener("ended", () => e?.stipple_video_ended?.(id));
+        video.addEventListener("error", () => e?.stipple_video_failed?.(id, video.error?.code ?? 0));
+        video.src = url;
+        if (autoplay !== 0) video.play().catch(() => {});
+        pump();
+      },
+      video_play(id, on) {
+        const v = videos.get(id);
+        if (!v) return;
+        if (on !== 0) v.video.play().catch(() => {});
+        else v.video.pause();
+      },
+      video_seek(id, seconds) {
+        const v = videos.get(id);
+        if (v) v.video.currentTime = seconds;
+      },
+      video_loop(id, on) {
+        const v = videos.get(id);
+        if (v) v.video.loop = on !== 0;
+      },
+      video_close(id) {
+        const v = videos.get(id);
+        if (!v) return;
+        videos.delete(id);
+        v.closed = true;
+        externals.delete(v.source);
+        gpu.releaseExternal(v.source);
+        v.video.pause();
+        v.video.removeAttribute("src");
+        v.video.load();
+        v.video.remove();
+        URL.revokeObjectURL(v.url);
       },
       save_state(ptr, len) {
         if (!stateKey) return;

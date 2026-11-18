@@ -358,8 +358,12 @@ impl ExternalImage {
     }
 
     /// An image with no OS buffer behind it, only `pixels` (each renderer
-    /// uploads them as an image): for tests of the scene's plumbing.
-    #[cfg(test)]
+    /// uploads them as an image): for tests of the scene's plumbing, and a
+    /// software video decoder's frames.
+    #[cfg_attr(
+        not(any(test, all(feature = "video", not(target_arch = "wasm32")))),
+        allow(dead_code)
+    )]
     pub(crate) fn from_pixels(pixels: Arc<Pixmap>) -> Self {
         let size = pixels.size();
         let me = Self::with_handle(

@@ -90,6 +90,7 @@ mod tab_focus_tests;
 mod text_touch_tests;
 #[cfg(test)]
 mod touch_tests;
+pub mod video;
 mod web_app;
 #[doc(hidden)]
 pub use web_app::WebEntry;

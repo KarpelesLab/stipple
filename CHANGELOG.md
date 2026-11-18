@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - *(gpu)* the GPU comparison corpus, device-loss test and benchmark on the iOS simulator (Metal) and the Android emulator (GLES, Vulkan): `tools/gpu-mobile.sh`, and non-blocking `gpu-ios-sim` / `gpu-android` CI jobs (6h)
 - *(bench)* `--renderer vulkan`, and `--renderer gl` measures OpenGL ES in a build that also has Vulkan
+- *(video)* `stipple::video`: play MP4 and Matroska files (`Video`, `video_view`), H.264 and HEVC through VideoToolbox drawn by Metal from its `IOSurface`s without a copy, H.264 through VA-API, MPEG-2 in software (oxideav), the browser's `<video>` on the web (the `video` feature; 6g, #54)
 
 ### Changed
 

@@ -312,6 +312,12 @@ title = "Camera"
 group = "Input"
 size = [360, 640]
 
+[web.videoplayer]
+description = "A video player: an H.264 clip playing in a video view, with play and pause, a seek bar and looping. The browser decodes it in a <video> the GPU renderer draws from; natively VideoToolbox (macOS, iOS) or VA-API (Linux), else oxideav's MPEG-2 decoder."
+title = "Video"
+group = "Input"
+size = [560, 420]
+
 [web.screendemo]
 description = "A phone's screen: drawn edge to edge with the safe area outlined, the orientation read and locked, and the screen kept awake."
 title = "Screen"

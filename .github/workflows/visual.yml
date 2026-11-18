@@ -4099,6 +4099,17 @@ jobs:
           cargo test --features mtl --lib -- gpu:: app_gpu --nocapture --test-threads 1
           # The frame times, CPU against Metal, for the log.
           cargo test --release --features mtl --lib -- --ignored bench_cpu_against_gpu --nocapture
+      # Video on Metal: VideoToolbox's H.264 frames drawn from their
+      # IOSurfaces (nothing uploaded) against the software renderer, and the
+      # player off screen. Non-blocking: the runners' virtual machines may
+      # have no hardware decoder (the tests skip then) and a paravirtual GPU.
+      - name: Video through VideoToolbox, on Metal and the software renderer
+        continue-on-error: true
+        env:
+          STIPPLE_REQUIRE_GPU: "1"
+        run: |
+          cargo test --features video,mtl --lib video:: -- --nocapture
+          cargo run --features video --example videoplayer -- --selftest
       # The native theme on Metal: AppKit draws controls only on the main
       # thread, which the tests above aren't on, so the gallery compares
       # itself there: the controls AppKit draws, through Metal against the CPU

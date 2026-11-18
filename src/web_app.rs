@@ -329,6 +329,33 @@ macro_rules! web_app {
                 glue::camera_failed(id, code);
             }
 
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_video_meta(id: u32, width: u32, height: u32, seconds: f64) {
+                glue::video_meta(id, width, height, seconds);
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_video_frame(
+                id: u32,
+                source: u32,
+                width: u32,
+                height: u32,
+                seconds: f64,
+                paused: u32,
+            ) {
+                glue::video_frame(id, source, width, height, seconds, paused != 0);
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_video_ended(id: u32) {
+                glue::video_ended(id);
+            }
+
+            #[unsafe(no_mangle)]
+            pub extern "C" fn stipple_video_failed(id: u32, code: u32) {
+                glue::video_failed(id, code);
+            }
+
             /// # Safety
             /// `ptr`/`len` come from one `stipple_alloc(len)`.
             #[unsafe(no_mangle)]

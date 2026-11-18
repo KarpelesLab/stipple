@@ -313,7 +313,9 @@ uses the same 3×4 matrix for it. `Scene::draw_external(rect, &image)` and
 `Pixmap` would go (rotated, mirrored, faded, as `draw_image_region`); an
 embedded viewport shows one with `App::set_viewport_external` /
 `AppHandle::set_viewport_external`, and the camera's preview hands its
-frames over this way (below).
+frames over this way (below), as a video does
+([video.md](video.md): VideoToolbox's NV12 `IOSurface`s, the page's
+`<video>`).
 
 Each GPU executor imports the buffer as a texture, cached by the image's
 identity as a `Pixmap`'s texture is:
@@ -438,8 +440,13 @@ Run so far:
 - CI's `visual-gpu` job runs these on llvmpipe and lavapipe with
   `/dev/udmabuf` opened up (the runner's kernel has it built in), not
   blocking yet.
-- Metal is compile-checked only; the camera's zero-copy preview hasn't run
-  on a Mac, an iPhone or an Android device yet (the emulator, below).
+- Metal on an Apple M5 Max (macOS): VideoToolbox's decoded H.264 frames,
+  NV12 `IOSurface`s in the video range, bound as an `R8Unorm` and an
+  `RG8Unorm` texture and converted by `quad_yuv_fs`, with no texture
+  uploaded, within a mean of 3 of 255 of the software renderer, which locks
+  the surface (`video::tests`, `cargo test --features video,mtl video::`).
+  The camera's zero-copy preview hasn't run on a Mac, an iPhone or an
+  Android device yet (the emulator, below).
 - The web's external sources on WebGPU and WebGL2 (SwiftShader, headless
   Chrome): a canvas and a `VideoFrame` drawn by `gpucompare` match the CPU
   exactly, with no upload. The camera's `<video>` preview hasn't run with a

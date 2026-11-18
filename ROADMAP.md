@@ -1234,7 +1234,14 @@ CPU elsewhere, and the CPU is always the fallback.
   the chroma: off there unless `debug.stipple.vk_ahb` is `1`). Left:
   Vulkan's import of a tiled NVIDIA buffer samples nothing; Metal, the
   Android camera and the web's sources to run on devices and in a browser
-  with a video; video frames (no video decoder yet).*
+  with a video. Video frames (`stipple::video`, #54): VideoToolbox's NV12
+  `CVPixelBuffer`s (H.264, HEVC) are `IOSurface` external images, drawn by
+  Metal with nothing uploaded (run on an M5 Max, against the software
+  renderer); VA-API's H.264 surfaces are read back once (exporting them
+  as `dma-buf`s needs surfaces `oxideav-vaapi` doesn't reuse;
+  compile-checked); MPEG-2 decodes in software (oxideav) as pixels; the
+  web's `<video>` is a web source. Left: sound, and H.264 without a
+  hardware decoder (Windows, Android).*
 - 🚧 Natively drawn controls (`Theme::native()`) kept as cached textures, so
   the native theme works under the GPU renderers.
   *The bitmaps the OS draws, cached by control, value, state, appearance,
