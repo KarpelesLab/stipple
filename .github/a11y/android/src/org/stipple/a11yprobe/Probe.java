@@ -239,15 +239,17 @@ public class Probe extends AccessibilityService {
             AccessibilityNodeInfo fresh = targetRoot();
             AccessibilityNodeInfo f = fresh == null ? null
                     : fresh.findFocus(AccessibilityNodeInfo.FOCUS_ACCESSIBILITY);
-            // The same node: its class and place (a label may change, as the
-            // seconds counter does).
+            // The same node: its class and where it starts (a label may
+            // change, as the seconds counter does, and grow with it: "8 s"
+            // to "10 s" widens it).
             Rect a = new Rect();
             Rect b = new Rect();
             want.getBoundsInScreen(a);
             if (f != null) {
                 f.getBoundsInScreen(b);
             }
-            boolean same = f != null && a.equals(b) && f.getClassName() != null
+            boolean same = f != null && a.left == b.left && a.top == b.top
+                    && f.getClassName() != null
                     && f.getClassName().equals(want.getClassName());
             if (same) {
                 moved++;
