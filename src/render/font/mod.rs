@@ -15,6 +15,8 @@ pub(crate) mod warm;
 
 #[cfg(test)]
 mod cff_tests;
+#[cfg(test)]
+mod color_tests;
 
 use crate::render::text::{Font, FontError, ShapeCache};
 use oxideav_scribe::{Face, FaceChain, PositionedGlyph};

@@ -45,7 +45,13 @@ fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
   the name: `Toggle::checkbox("Select row 3", picked).label_visible(false)
   .view(cx).on_tap(cx, |s| …)`.
 - **Text.** `label` is a line of body text, `heading` a larger one, and
-  `paragraph` body text that wraps.
+  `paragraph` body text that wraps. `.max_lines(n)` shows at most `n` lines
+  (a paragraph's wrapped lines, a label's paragraphs), and
+  `.ellipsis(Ellipsis::End)` cuts what doesn't fit its box or its lines with
+  "…" (`Ellipsis::Middle` keeps both ends, for paths and URLs). The text is
+  cut where it's laid out, in the font it's drawn with, and screen readers
+  still read all of it; an element with an ellipsis shrinks in a row that
+  overflows.
 - **Text input.** `text_field` (one line) and `text_area` (several) edit a
   `TextInput` kept in the app state, reached through an accessor,
   `|s| &mut s.draft`. It has undo and redo, selection, the clipboard, input

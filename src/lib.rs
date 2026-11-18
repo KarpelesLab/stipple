@@ -4784,6 +4784,7 @@ pub mod prelude {
     pub use crate::platform::{KeyEvent, OptionAsMeta, PhysicalKey};
     pub use crate::platform::{Orientation, Orientations};
     pub use crate::platform::{WindowAttributes, WindowId, WindowInfo};
+    pub use crate::render::Ellipsis;
     pub use crate::render::{
         Canvas, Color, Font, GlyphRun, ImageFit, Path, Pixmap, StrokeStyle, Svg, TextDirection,
     };

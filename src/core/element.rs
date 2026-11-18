@@ -138,13 +138,47 @@ pub(crate) struct TextStyle {
     pub flow: Option<std::sync::Arc<crate::render::TextFlow>>,
     /// An outline around the glyphs ([`Element::text_outline`]).
     pub outline: Option<TextOutline>,
-    /// A shadow under them ([`Element::text_shadow`]).
-    pub shadow: Option<TextShadow>,
+    /// A shadow under them ([`Element::text_shadow`]); boxed, as most text
+    /// has none.
+    pub shadow: Option<Box<TextShadow>>,
     /// The text can be selected and copied ([`Element::selectable`]).
     pub selectable: bool,
     /// The color its selection is highlighted in, set by the app while it
     /// has one.
     pub highlight: Option<Color>,
+    /// Its line limit and ellipsis, when it has either (boxed: most text
+    /// has neither).
+    pub cut: Option<Box<TextCut>>,
+}
+
+/// How a text is cut short: [`Element::max_lines`] and
+/// [`Element::ellipsis`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct TextCut {
+    /// At most this many lines are shown.
+    pub max_lines: Option<usize>,
+    /// Text cut short ends in an ellipsis.
+    pub ellipsis: Option<crate::render::Ellipsis>,
+    /// The whole text, as read aloud, when what is shown was cut short
+    /// (set when it's laid out).
+    pub full: Option<std::sync::Arc<str>>,
+}
+
+impl TextStyle {
+    /// Its line limit.
+    pub(crate) fn max_lines(&self) -> Option<usize> {
+        self.cut.as_ref().and_then(|c| c.max_lines)
+    }
+
+    /// Its ellipsis.
+    pub(crate) fn ellipsis(&self) -> Option<crate::render::Ellipsis> {
+        self.cut.as_ref().and_then(|c| c.ellipsis)
+    }
+
+    /// The whole text, when what it shows was cut short.
+    pub(crate) fn full(&self) -> Option<&str> {
+        self.cut.as_ref().and_then(|c| c.full.as_deref())
+    }
 }
 
 impl TextStyle {
@@ -202,7 +236,7 @@ impl TextStyle {
     pub(crate) fn reach(&self) -> Option<crate::geometry::Insets> {
         let outline = self.outline.map_or(0.0, |o| o.width.max(0.0));
         let ring = Insets::uniform(outline + 1.0);
-        match (self.shadow, outline > 0.0) {
+        match (self.shadow.as_deref(), outline > 0.0) {
             (Some(shadow), _) => {
                 let s = shadow.reach(outline);
                 Some(crate::geometry::Insets {
@@ -1545,7 +1579,7 @@ impl Element {
     /// ```
     pub fn text_shadow(self, shadow: TextShadow) -> Self {
         self.text_style(&|s| {
-            s.shadow.get_or_insert(shadow);
+            s.shadow.get_or_insert(Box::new(shadow));
         })
     }
 
@@ -1587,6 +1621,59 @@ impl Element {
         }
         set(&mut self);
         self
+    }
+
+    /// Show at most `lines` lines of this text (or of the text inside this
+    /// container that sets no limit of its own): the lines of a wrapped text
+    /// ([`paragraph`](crate::widgets::paragraph), [`wrap`](Self::wrap)), or
+    /// the paragraphs of a text that doesn't wrap. The text measures as tall
+    /// as those lines. With [`ellipsis`](Self::ellipsis), the last one shown
+    /// ends in "…" when there is more; without, the rest is just not shown.
+    /// Screen readers still read the whole text.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let cx = Cx::<()>::new(&theme);
+    /// let summary = paragraph(&cx, "A long description that goes on and on…")
+    ///     .max_lines(2)
+    ///     .ellipsis(Ellipsis::End);
+    /// # let _ = summary;
+    /// ```
+    pub fn max_lines(self, lines: usize) -> Self {
+        self.text_style(&|s| {
+            let cut = s.cut.get_or_insert_with(Box::default);
+            cut.max_lines.get_or_insert(lines.max(1));
+        })
+    }
+
+    /// Cut this text (or the text inside this container) where it would run
+    /// past its box, or past its [`max_lines`](Self::max_lines), and put an
+    /// ellipsis (…) in its place: at the end ([`Ellipsis::End`]), or in the
+    /// middle of the last line shown ([`Ellipsis::Middle`], for paths and
+    /// URLs). Each line too wide for the box is cut, so a single-line
+    /// [`label`](crate::widgets::label) stays on its line. The element can
+    /// then [`shrink`](Self::shrink) (weight 1 unless set) in a row that
+    /// overflows, and measures no wider than the room it's given. Screen
+    /// readers still read the whole text.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// let theme = Theme::light();
+    /// let cx = Cx::<()>::new(&theme);
+    /// let file = label(&cx, "/home/me/projects/stipple/docs/report-final.pdf")
+    ///     .ellipsis(Ellipsis::Middle);
+    /// let row = row(vec![file, label(&cx, "12 KB")]);
+    /// # let _ = row;
+    /// ```
+    pub fn ellipsis(mut self, at: crate::render::Ellipsis) -> Self {
+        if self.layout.shrink <= 0.0 {
+            self.layout.shrink = 1.0;
+        }
+        self.text_style(&|s| {
+            let cut = s.cut.get_or_insert_with(Box::default);
+            cut.ellipsis.get_or_insert(at);
+        })
     }
 
     /// Strike this text through ([`decorate`](Self::decorate)).

@@ -235,6 +235,9 @@ paragraph(cx, RichText::new().push("You ").italic("really").push(" think so?"));
   copied or read by a screen reader (`RichText::plain_text`).
 - Shaping happens per run, so a ligature or Arabic joining doesn't cross a
   change of style.
+- Cut to its box or to a number of lines with an ellipsis, rich text keeps
+  its runs: `.ellipsis(Ellipsis::End)` and `.max_lines(n)` on the element
+  (see [widgets.md](widgets.md)).
 - `label`, `heading` and `paragraph` take a `RichText` or a string;
   `Element::rich_text(text, size, color)` is the bare element.
 - To draw it yourself: `Scene::fill_rich_text(&text, origin, &paint)`, or
@@ -274,12 +277,34 @@ decoration; `--family "Name"` picks another family, `--list` prints the
 installed families, and `--check` renders off screen and checks the result (CI
 runs it on X11, Windows and macOS, and screenshots the window on X11).
 
+## Ligatures and color glyphs
+
+Text is shaped with the OpenType features other toolkits turn on by default:
+`ccmp`, `liga`, `clig`, `rlig`, `calt`, kerning and mark positioning, and the
+substitutions complex scripts need. Discretionary (`dlig`), historical
+(`hlig`) and stylistic forms stay off, so Roboto doesn't join every "st".
+
+Emoji and other color glyphs draw in their own colors in every format the
+system fonts use: `sbix` bitmaps (Apple Color Emoji), `CBDT` bitmaps (Noto
+Color Emoji), and `COLR`/`CPAL` layers (Segoe UI Emoji, Twemoji), both version
+0's flat layers and version 1's paint graphs (gradients, transforms). A
+bitmap is resampled to the pixels it covers at the window's scale; a layered
+glyph stays vector. Layers in the text's color take the color it is drawn
+in. Both are cached, so a screen of emoji isn't rebuilt every frame.
+
 ## Limits
 
 - Shaping consults the fallbacks per character, and the shaper re-parses a
   face's tables for each lookup (oxideav-scribe issue #17), so long fallback
   chains make shaping new strings slower; shaped runs are cached per font and
   style.
+- Apple Color Emoji joins skin tones, flags and ZWJ sequences through its
+  `morx` (AAT) table, which isn't read: they show as their parts on macOS
+  (fonts whose sequences are in `GSUB`, as Noto Color Emoji's and Segoe UI
+  Emoji's are, join). In a `COLR` version 1 glyph, sweep gradients draw as
+  one color and composite modes other than source-over approximately.
+- OpenType features can't be chosen per text yet (`tnum`, `liga` off for
+  code).
 - Variable fonts draw their default instance; weights come from separate
   faces or synthesis.
 - Synthetic bold doesn't widen advances, so it keeps a monospaced grid.

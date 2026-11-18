@@ -3,6 +3,7 @@
 //! whatever the font's own advances say).
 
 use crate::geometry::Point;
+use crate::render::color_glyph::{ColorGlyph, color_glyph};
 use crate::render::scene::Scene;
 use crate::render::text::{OBLIQUE_SHEAR, bold_stroke, embolden};
 use crate::render::{Color, Decoration, Font};
@@ -181,6 +182,7 @@ impl Scene {
         let font = &run.font;
         let top = font.baseline(run.size);
         let mut glyphs = Vec::with_capacity(run.len());
+        let mut bitmaps = Vec::new();
         // Stretches of adjacent clusters on one baseline: (pen, width).
         let mut spans: Vec<(Point, f64)> = Vec::new();
         let mut start = 0;
@@ -196,6 +198,34 @@ impl Scene {
             for g in font.shaped(cluster, run.size) {
                 let at = x + g.x_offset;
                 x += g.x_advance;
+                if let Some(art) = color_glyph(
+                    font,
+                    g.face_idx,
+                    g.glyph_id,
+                    run.size,
+                    self.scale(),
+                    run.color,
+                ) {
+                    match art {
+                        ColorGlyph::Vector(node) => glyphs.push(Node::Group(
+                            Group::new()
+                                .with_transform(Transform2D::translate(
+                                    at,
+                                    pen.y as f32 + g.y_offset,
+                                ))
+                                .with_child(node),
+                        )),
+                        ColorGlyph::Bitmap(pixmap, rect) => {
+                            let face = font.chain().face(g.face_idx).stable_id();
+                            let rect = rect.translate(crate::geometry::Vec2::new(
+                                at as f64,
+                                pen.y + g.y_offset as f64,
+                            ));
+                            bitmaps.push((rect, face, g.glyph_id, pixmap));
+                        }
+                    }
+                    continue;
+                }
                 let Some(node) = outline(font, g.face_idx, g.glyph_id, run.size) else {
                     continue;
                 };
@@ -232,6 +262,9 @@ impl Scene {
         }
         if !glyphs.is_empty() {
             self.push_node(Node::Group(Group::new().with_children(glyphs)));
+        }
+        for (rect, face, glyph, pixmap) in bitmaps {
+            self.draw_color_bitmap(rect, face, glyph, &pixmap);
         }
         if !spans.is_empty() {
             let metrics = font.metrics(run.size);

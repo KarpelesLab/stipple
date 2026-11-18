@@ -30,6 +30,7 @@ pub(crate) mod crossfade;
 pub(crate) mod diff;
 mod dnd;
 mod element;
+mod elide;
 mod handle;
 pub(crate) mod highlight;
 mod ime;

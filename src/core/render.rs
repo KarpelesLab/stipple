@@ -59,8 +59,40 @@ fn child_room(el: &Element, axis: Axis, inner: Size) -> Size {
     }
 }
 
-/// The size `text` takes laid out at `size`, wrapped to `wrap` if set.
+/// The size `text` takes laid out at `size`, wrapped to `wrap` if set,
+/// given `room` across: no more lines than its style's
+/// [`max_lines`](Element::max_lines), and no wider than `room` when it ends
+/// in an [ellipsis](Element::ellipsis).
 fn text_size(
+    text: &str,
+    size: f64,
+    style: &crate::core::TextStyle,
+    wrap: Option<f64>,
+    room: f64,
+    font: Option<&Font>,
+) -> Size {
+    let mut laid = laid_size(text, size, style, wrap, font);
+    if let Some(max) = style.max_lines()
+        && let Some(layout) = style.layout(
+            font,
+            text,
+            size,
+            TextDirection::Auto,
+            wrap,
+            LayoutDirection::Ltr,
+        )
+        && layout.line_count() > max
+    {
+        laid.height = (0..max).map(|i| layout.line_height(i)).sum();
+    }
+    if style.ellipsis().is_some() && room.is_finite() {
+        laid.width = laid.width.min(room.max(0.0));
+    }
+    laid
+}
+
+/// [`text_size`] with all its lines, as wide as they are.
+fn laid_size(
     text: &str,
     size: f64,
     style: &crate::core::TextStyle,
@@ -140,7 +172,7 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
             text, size, style, ..
         } => {
             let wrap = (el.wrap && inner.width.is_finite()).then_some(inner.width);
-            text_size(text, *size, style, wrap, font)
+            text_size(text, *size, style, wrap, inner.width, font)
         }
         ElementKind::Stack {
             axis,
@@ -556,18 +588,38 @@ fn layout_element(
             // and lines too many for its height.
             let room = bounds.inset(padding);
             let wrap = (el.wrap && room.width().is_finite()).then_some(room.width());
-            let laid = text_size(text, *size, style, wrap, font);
+            // Cut to its lines and its box, when it says so.
+            let original = text;
+            let (text, style) = match crate::core::elide::elide(
+                style,
+                font,
+                text,
+                *size,
+                *direction,
+                wrap,
+                room.width(),
+                dir,
+            ) {
+                Some((shown, style)) => (shown, style),
+                None => (text.clone(), style.clone()),
+            };
+            let laid = text_size(&text, *size, &style, wrap, room.width(), font);
             let overflow = crate::core::runtime::TextOverflow {
                 across: (laid.width - room.width()).max(0.0) as f32,
                 below: (laid.height - room.height()).max(0.0) as f32,
             };
+            // A mnemonic's underline stays where the text still is.
+            let underline = underline.filter(|&(_, e)| {
+                text.get(..e)
+                    .is_some_and(|shown| original.get(..e) == Some(shown))
+            });
             NodeContent::Text {
-                text: text.clone(),
+                text,
                 size: *size,
                 color: *color,
                 direction: *direction,
-                underline: *underline,
-                style: style.clone(),
+                underline,
+                style,
                 padding,
                 overflow,
             }
@@ -1447,7 +1499,7 @@ fn paint_node(node: &LayoutNode, scene: &mut Scene, font: Option<&Font>, visible
                 if let Some(outline) = style.outline {
                     paint = paint.outline(outline);
                 }
-                if let Some(shadow) = style.shadow {
+                if let Some(&shadow) = style.shadow.as_deref() {
                     paint = paint.shadow(shadow);
                 }
                 scene.paint_layout(&layout, o, &paint);

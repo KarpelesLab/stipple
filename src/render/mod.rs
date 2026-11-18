@@ -27,6 +27,7 @@ pub(crate) mod bidi;
 mod blit;
 mod canvas;
 mod color;
+mod color_glyph;
 mod convert;
 mod decoration;
 pub(crate) mod flow;
@@ -39,6 +40,7 @@ mod path;
 mod renderer;
 pub(crate) mod rich;
 pub(crate) mod scene;
+mod shaping;
 mod software;
 pub(crate) mod sprite;
 pub(crate) mod surface;
@@ -81,7 +83,7 @@ pub use surface::{Pixmap, Surface};
 pub(crate) fn text_styling(font: &Font, size: f64) -> text::Styling {
     text::Styling::plain(font, size)
 }
-pub use text::{Font, FontError, TextLayout, TextOutline, TextPaint, TextShadow};
+pub use text::{Ellipsis, Font, FontError, TextLayout, TextOutline, TextPaint, TextShadow};
 
 /// Low-level conversions to `oxideav-core` coordinate types. Exposed for
 /// crates that build scene-graph nodes directly (e.g. the future text-run

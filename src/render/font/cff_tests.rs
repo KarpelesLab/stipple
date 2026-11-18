@@ -103,6 +103,15 @@ fn cmap(map: &[(char, u16)]) -> Vec<u8> {
 
 /// The TrueType twin: glyph 1 a square, glyph 2 an arch (one quadratic).
 fn ttf(family: &str, chars: [char; 2]) -> Vec<u8> {
+    ttf_with(family, chars, Vec::new())
+}
+
+/// [`ttf`] with `extra` tables (color, substitution) added.
+pub(super) fn ttf_with(
+    family: &str,
+    chars: [char; 2],
+    extra: Vec<(&'static [u8; 4], Vec<u8>)>,
+) -> Vec<u8> {
     // (x, y, on-curve) per point, absolute; one contour per glyph.
     let square = [
         (100, 0, true),
@@ -143,6 +152,7 @@ fn ttf(family: &str, chars: [char; 2]) -> Vec<u8> {
     tables.push((b"glyf", [a, b].concat()));
     tables.push((b"loca", loca));
     tables.push((b"maxp", maxp));
+    tables.extend(extra);
     tables.sort_by_key(|t| *t.0);
     build_sfnt(0x0001_0000, &tables)
 }

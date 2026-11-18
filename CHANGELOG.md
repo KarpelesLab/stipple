@@ -20,10 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(platform)* one instance per app: `App::single_instance`, `platform::forward_launch` and `Launch` (arguments, directory, environment, activation token), over a Unix socket on Linux and macOS and a named pipe on Windows; `WindowRequest::Activate` brings a window up with the launch's token (#88)
 - *(macos)* `App::on_reopen` (a Dock click), `App::on_open_files` (files dropped on the Dock icon, opened from the Finder), `App::dock_menu`, and `Menu::role(MenuRole::Window | Services | Help)` for the system's Window, Services and Help menus (#89)
 - *(examples)* instancedemo: single instance, reopen, opened files and the Dock menu
+- *(text)* color emoji in Apple Color Emoji (`sbix`) and in `COLR`/`CPAL` fonts such as Segoe UI Emoji (version 0 layers and version 1 paint graphs), resampled or kept vector at the window's scale and cached (#76)
+- *(text)* `Element::max_lines(n)` and `Element::ellipsis(Ellipsis::End | Middle)`: text cut to its lines and its box with "…", read in full by screen readers (#95)
 
 ### Changed
 
 - *(widgets)* `Dialog` is generic over the state (`Dialog<S>`) and has the `Dialog` role and its title as its label (#83)
+- *(text)* discretionary and historical ligatures (`dlig`, `hlig`) are no longer applied: only the default features (`liga`, `clig`, `rlig`, `calt`, and what complex scripts require) (#93)
 - *(gpu)* `Renderer::Auto` draws on a hardware Vulkan device for Wayland windows too, as for X11's (6h)
 - *(macos)* the application menu is named after the app (`app_info().name`), not the primary window's title (#89)
 

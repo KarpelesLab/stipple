@@ -16,6 +16,7 @@ use crate::render::bidi::{
     ParagraphLevels, TextDirection, VisualChar, boundary_carets, caret_boundary, has_strong,
     visual_order,
 };
+use crate::render::color_glyph::ColorGlyph;
 use crate::render::font::{Chain, FaceSource, Family, FontStyle, FontWeight, Synthesis, Variant};
 use crate::render::scene::Scene;
 use crate::render::software::SoftwareRenderer;
@@ -86,7 +87,7 @@ impl ShapeCache {
         {
             return glyphs.clone();
         }
-        let glyphs = chain.shape(text, size_px as f32).unwrap_or_default();
+        let glyphs = super::shaping::shape(chain, text, size_px as f32);
         if let Ok(mut map) = self.0.lock() {
             if map.len() >= Self::MAX {
                 map.clear();
@@ -919,6 +920,11 @@ impl TextLayout<'_> {
         self.lines.len()
     }
 
+    /// How wide display line `line` is.
+    pub(crate) fn line_width(&self, line: usize) -> f64 {
+        self.lines.get(line).map_or(0.0, |l| l.width)
+    }
+
     /// Where each image of a rich text was drawn, inline ones and floating
     /// ones, in text order: the byte of its U+FFFC and its box, relative to
     /// the text box. What an editor hit-tests to select, resize or move one.
@@ -1286,6 +1292,19 @@ impl TextPaint {
     }
 }
 
+/// Where text too long for its box (or for its
+/// [`max_lines`](crate::core::Element::max_lines)) is cut and an ellipsis
+/// (…) put in its place: see [`Element::ellipsis`](crate::core::Element::ellipsis).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Ellipsis {
+    /// Keep the start: `A long file na…`. For names and sentences.
+    End,
+    /// Keep the start and the end: `/home/me/…/report.pdf`. For paths,
+    /// URLs and file names, whose end matters as much as their start.
+    Middle,
+}
+
 /// A stroke around text's glyphs, drawn behind them so the letters keep
 /// their shape: what makes a name readable over artwork. `width` is how far
 /// it reaches beyond the glyphs' edges, in logical pixels.
@@ -1615,6 +1634,7 @@ impl Scene {
             let baseline = top + line.ascent;
             let mut glyphs = Vec::new();
             let mut images = Vec::new();
+            let mut bitmaps = Vec::new();
             for run in &line.runs {
                 let face = &layout.styling.faces[run.face];
                 if let Some((source, size)) = &face.icon {
@@ -1646,6 +1666,53 @@ impl Scene {
                     let x = pen + g.x_offset;
                     pen += g.x_advance;
                     let gface = chain.face(g.face_idx);
+                    // An emoji in its own colors: drawn as it is (an outline
+                    // or shadow pass draws a vector one's silhouette, and
+                    // skips a bitmap).
+                    if let Some(art) = super::color_glyph::color_glyph(
+                        font,
+                        g.face_idx,
+                        g.glyph_id,
+                        size,
+                        self.scale(),
+                        fill,
+                    ) {
+                        match art {
+                            ColorGlyph::Vector(node) => {
+                                let mut key = salted(
+                                    glyph_cache_key(gface, g.glyph_id, size, Synthesis::default()),
+                                    u32::from_be_bytes([fill.r, fill.g, fill.b, fill.a]) as u64
+                                        | 1 << 40,
+                                );
+                                let node = match solid {
+                                    Some(s) => {
+                                        key = salted(key, s.salt);
+                                        embolden(node, fill, s.stroke)
+                                    }
+                                    None => node,
+                                };
+                                let cached = Group {
+                                    cache_key: Some(key),
+                                    children: vec![node],
+                                    ..Group::default()
+                                };
+                                glyphs.push(Node::Group(
+                                    Group::new()
+                                        .with_transform(Transform2D::translate(x, g.y_offset))
+                                        .with_child(Node::Group(cached)),
+                                ));
+                            }
+                            ColorGlyph::Bitmap(pixmap, rect) if solid.is_none() => {
+                                let at = rect.translate(crate::geometry::Vec2::new(
+                                    origin.x + lx + x as f64,
+                                    baseline + g.y_offset as f64,
+                                ));
+                                bitmaps.push((at, gface.stable_id(), g.glyph_id, pixmap));
+                            }
+                            ColorGlyph::Bitmap(..) => {}
+                        }
+                        continue;
+                    }
                     // Cached: building a glyph's node re-parses its font.
                     let Some(node) = super::glyphs::outline(font, g.face_idx, g.glyph_id, size)
                     else {
@@ -1704,7 +1771,28 @@ impl Scene {
                     self.draw_selection_frame(rect, c);
                 }
             }
+            for (rect, face, glyph, pixmap) in bitmaps {
+                self.draw_color_bitmap(rect, face, glyph, &pixmap);
+            }
         }
+    }
+
+    /// Draw bitmap glyph `glyph` of face `face` into `rect`, resampled to
+    /// the pixels it covers.
+    pub(crate) fn draw_color_bitmap(
+        &mut self,
+        rect: Rect,
+        face: u64,
+        glyph: u16,
+        pixmap: &Arc<crate::render::Pixmap>,
+    ) {
+        let scale = self.scale();
+        let size = crate::geometry::PhysicalSize::new(
+            (rect.width() * scale).round().max(1.0) as u32,
+            (rect.height() * scale).round().max(1.0) as u32,
+        );
+        let scaled = super::color_glyph::scaled_bitmap(face, glyph, pixmap, size);
+        self.draw_image(rect, scaled);
     }
 
     /// A selected image's frame: an outline along the inside of `rect` and

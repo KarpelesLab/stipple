@@ -260,7 +260,11 @@ fn text_of(node: &LayoutNode) -> String {
         first_text(node)
     };
     match found.map(|n| &n.content) {
-        Some(NodeContent::Text { text, style, .. }) => style.plain(text, 0..text.len()),
+        // Text cut short with an ellipsis reads in full.
+        Some(NodeContent::Text { text, style, .. }) => match style.full() {
+            Some(full) => full.to_string(),
+            None => style.plain(text, 0..text.len()),
+        },
         _ => String::new(),
     }
 }
