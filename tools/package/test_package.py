@@ -572,5 +572,114 @@ class IosExtensionTests(unittest.TestCase):
         self.assertIn("link-arg=Foundation", tail)
 
 
+class XcodeSigningTests(unittest.TestCase):
+    def test_signing_through_xcode_needs_a_team_and_no_identity(self):
+        import os
+        from unittest import mock
+
+        with mock.patch.dict(os.environ, {"STIPPLE_IOS_TEAM_ID": "ABCDE12345"}, clear=True):
+            self.assertTrue(ios.xcode_signing())
+        with mock.patch.dict(os.environ, {"STIPPLE_IOS_TEAM_ID": "ABCDE12345",
+                                          "STIPPLE_IOS_SIGN_IDENTITY": "Apple Distribution: X"}, clear=True):
+            self.assertFalse(ios.xcode_signing())
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(ios.xcode_signing())
+
+    def test_export_options(self):
+        o = ios.export_options({"STIPPLE_IOS_TEAM_ID": "ABCDE12345"})
+        self.assertEqual(o["method"], "app-store-connect")
+        self.assertEqual(o["signingStyle"], "automatic")
+        self.assertEqual(o["teamID"], "ABCDE12345")
+        self.assertEqual(o["destination"], "export")
+        self.assertFalse(o["manageAppVersionAndBuildNumber"])
+        up = ios.export_options({"STIPPLE_IOS_TEAM_ID": "T", "STIPPLE_IOS_UPLOAD": "1"})
+        self.assertEqual(up["destination"], "upload")
+        with self.assertRaises(PackageError):
+            ios.export_options({"STIPPLE_IOS_TEAM_ID": "T", "STIPPLE_IOS_EXPORT_METHOD": "store"})
+        with self.assertRaises(PackageError):
+            ios.export_options({"STIPPLE_IOS_TEAM_ID": "T", "STIPPLE_IOS_EXPORT_METHOD": "debugging",
+                                "STIPPLE_IOS_UPLOAD": "1"})
+
+    def test_asc_key_args(self):
+        self.assertEqual(ios.asc_key_args({}), [])
+        with self.assertRaises(PackageError):
+            ios.asc_key_args({"STIPPLE_ASC_KEY_ID": "KEY123"})
+        with tempfile.TemporaryDirectory() as d:
+            key = Path(d) / "AuthKey_KEY123.p8"
+            key.write_text("-----BEGIN PRIVATE KEY-----\n")
+            args = ios.asc_key_args({"STIPPLE_ASC_KEY_ID": "KEY123", "STIPPLE_ASC_ISSUER_ID": "ISS",
+                                     "STIPPLE_ASC_KEY_PATH": str(key)})
+            self.assertEqual(args[0], "-authenticationKeyPath")
+            self.assertEqual(Path(args[1]), key.resolve())
+            self.assertEqual(args[2:], ["-authenticationKeyID", "KEY123", "-authenticationKeyIssuerID", "ISS"])
+            with self.assertRaises(PackageError):
+                ios.asc_key_args({"STIPPLE_ASC_KEY_ID": "KEY123", "STIPPLE_ASC_ISSUER_ID": "ISS",
+                                  "STIPPLE_ASC_KEY_PATH": str(Path(d) / "missing.p8")})
+
+    def test_archive_layout(self):
+        import plistlib
+
+        with tempfile.TemporaryDirectory() as d:
+            app = Path(d) / "My App.app"
+            app.mkdir()
+            (app / "my-app").write_bytes(b"\0")
+            with open(app / "Info.plist", "wb") as f:
+                plistlib.dump({"CFBundleIdentifier": "com.example.app",
+                               "CFBundleShortVersionString": "1.2.3", "CFBundleVersion": "7"}, f)
+            dsym = Path(d) / "My App.app.dSYM"
+            (dsym / "Contents").mkdir(parents=True)
+            archive = Path(d) / "My App.xcarchive"
+            ios.write_archive(app, dsym, archive, "ABCDE12345")
+            self.assertTrue((archive / "Products/Applications/My App.app/my-app").is_file())
+            self.assertTrue((archive / "dSYMs/My App.app.dSYM/Contents").is_dir())
+            with open(archive / "Info.plist", "rb") as f:
+                info = plistlib.load(f)
+            props = info["ApplicationProperties"]
+            self.assertEqual(props["ApplicationPath"], "Applications/My App.app")
+            self.assertEqual(props["CFBundleIdentifier"], "com.example.app")
+            self.assertEqual(props["CFBundleVersion"], "7")
+            self.assertEqual(props["Team"], "ABCDE12345")
+            self.assertEqual(info["ArchiveVersion"], 2)
+
+
+class InstalledToolTests(unittest.TestCase):
+    def test_the_installed_binary_is_the_helper_only_for_its_own_release(self):
+        import os
+        from unittest import mock
+
+        import common
+
+        registry = "registry+https://github.com/rust-lang/crates.io-index"
+        env = {"STIPPLE_PACKAGE_HELPER": "/bin/cargo-stipple", "STIPPLE_PACKAGE_VERSION": "0.1.0"}
+        cases = [
+            ({"version": "0.1.0", "source": registry}, ["/bin/cargo-stipple", "__stipple-helper"]),
+            ({"version": "0.0.9", "source": registry}, None),
+            ({"version": "0.1.0", "source": None}, None),  # a path dependency: maybe edited
+            (None, None),
+        ]
+        for pkg, want in cases:
+            with mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.object(common, "stipple_package", return_value=pkg):
+                self.assertEqual(common.installed_helper("Cargo.toml"), want, pkg)
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(common, "stipple_package", return_value=cases[0][0]):
+            self.assertIsNone(common.installed_helper("Cargo.toml"))
+
+    def test_the_binary_carries_every_script(self):
+        # src/bin/cargo-stipple.rs embeds the scripts, and Cargo.toml's
+        # `include` ships them: each module the tool imports is in both.
+        root = Path(__file__).resolve().parent.parent.parent
+        bin_rs = (root / "src/bin/cargo-stipple.rs").read_text()
+        cargo = (root / "Cargo.toml").read_text()
+        for f in sorted(Path(__file__).resolve().parent.glob("*.py")):
+            if f.name.startswith("test_"):
+                continue
+            self.assertIn(f'"tools/package/{f.name}"', bin_rs, f.name)
+        for f in ("tools/package/cargo-stipple", "tools/package/helper.rs", "tools/android/billing.py"):
+            self.assertIn(f'"{f}"', bin_rs, f)
+            self.assertIn(f'"{f}"', cargo, f)
+        self.assertIn('"tools/package/*.py"', cargo)
+
+
 if __name__ == "__main__":
     unittest.main()

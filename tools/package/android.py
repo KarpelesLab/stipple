@@ -659,12 +659,12 @@ def package(m, args, target, target_dir, work, helper):
     if m.android_debuggable:
         warn("android.debuggable is set: Google Play rejects debuggable apps")
 
-    bundletool = find_bundletool()
+    bundletool = find_bundletool(Path(target_dir) / "stipple-package")
     if bundletool:
         run(bundletool + ["validate", "--bundle", aab], quiet=True)
         log("bundletool validate: ok")
     else:
-        log("bundletool not found (set BUNDLETOOL to its jar to validate the bundle)")
+        log("bundletool skipped: the bundle isn't validated")
     return aab, apk
 
 
@@ -688,12 +688,46 @@ def billing(m, manifest, out):
     return files
 
 
-def find_bundletool():
+# The bundletool release fetched when none is at hand, and its jar's SHA-256.
+BUNDLETOOL_FETCH = "1.18.1"
+BUNDLETOOL_SHA256 = "675786493983787ffa11550bdb7c0715679a44e1643f3ff980a529e9c822595c"
+
+
+def find_bundletool(work=None):
+    """bundletool's command: BUNDLETOOL (a jar or an executable, or `none`
+    to skip validation), `bundletool` on PATH, else the release jar fetched
+    from GitHub into `work` (checked against its SHA-256), run with java."""
     bt = os.environ.get("BUNDLETOOL")
+    if bt == "none":
+        return None
     if bt:
         return ["java", "-jar", bt] if bt.endswith(".jar") else [bt]
     exe = shutil.which("bundletool")
-    return [exe] if exe else None
+    if exe:
+        return [exe]
+    if work is None:
+        return None
+    jar = Path(work) / f"bundletool-all-{BUNDLETOOL_FETCH}.jar"
+    if not jar.is_file():
+        import hashlib
+        import urllib.request
+
+        url = (f"https://github.com/google/bundletool/releases/download/{BUNDLETOOL_FETCH}/"
+               f"bundletool-all-{BUNDLETOOL_FETCH}.jar")
+        log(f"fetching bundletool {BUNDLETOOL_FETCH} to validate the bundle")
+        try:
+            with urllib.request.urlopen(url, timeout=60) as r:
+                data = r.read()
+        except OSError as e:
+            warn(f"couldn't fetch bundletool ({e}): the bundle isn't validated "
+                 "(set BUNDLETOOL to its jar)")
+            return None
+        if hashlib.sha256(data).hexdigest() != BUNDLETOOL_SHA256:
+            raise PackageError(f"{url}: not the expected file (SHA-256 mismatch)")
+        tmp = jar.with_suffix(".part")
+        tmp.write_bytes(data)
+        tmp.replace(jar)
+    return ["java", "-jar", jar]
 
 
 def _file_name(name):

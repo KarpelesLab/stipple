@@ -103,29 +103,62 @@ def cargo_build(manifest_path, target, triple, profile, features, env=None):
 # --- The host helper -------------------------------------------------------
 
 
+def stipple_package(manifest_path):
+    """The app's Stipple from `cargo metadata` (its version, its source, its
+    manifest_path in Cargo's download), or None when the app has none."""
+    from manifest import cargo_metadata
+
+    key = str(Path(manifest_path).resolve())
+    if key not in _STIPPLE:
+        meta = cargo_metadata(manifest_path, deps=True)
+        _STIPPLE[key] = next((p for p in meta["packages"] if p["name"] == "stipple"), None)
+    return _STIPPLE[key]
+
+
+_STIPPLE = {}
+
+
+def installed_helper(manifest_path):
+    """The installed `cargo-stipple` (src/bin/cargo-stipple.rs) as the helper
+    command, when it is what ran this script and it was built from the very
+    release the app depends on (from crates.io): it carries helper.rs, so
+    nothing needs building. None otherwise."""
+    exe = os.environ.get("STIPPLE_PACKAGE_HELPER")
+    version = os.environ.get("STIPPLE_PACKAGE_VERSION")
+    if not exe or not version:
+        return None
+    p = stipple_package(manifest_path)
+    if p and p["version"] == version and (p.get("source") or "").startswith("registry+"):
+        return [exe, "__stipple-helper"]
+    return None
+
+
 class Helper:
-    """The scratch crate around helper.rs, built once per run against the
-    app's own Stipple (its source from `cargo metadata`, its versions from the
-    app's Cargo.lock)."""
+    """The host helper: the installed `cargo-stipple` when it matches the
+    app's Stipple (installed_helper), else the scratch crate around
+    helper.rs, built once per run against the app's own Stipple (its source
+    from `cargo metadata`, its versions from the app's Cargo.lock)."""
 
     def __init__(self, manifest_path, work, target_dir):
         self.manifest_path = Path(manifest_path)
         self.work = Path(work) / "helper"
         self.target_dir = Path(target_dir) / "stipple-package-helper"
-        self.exe = None
+        self.cmd = None
 
     def _stipple_dir(self):
-        from manifest import cargo_metadata
-
-        meta = cargo_metadata(self.manifest_path, deps=True)
-        for p in meta["packages"]:
-            if p["name"] == "stipple":
-                return Path(p["manifest_path"]).parent
-        raise PackageError("the app doesn't depend on stipple")
+        p = stipple_package(self.manifest_path)
+        if p is None:
+            raise PackageError("the app doesn't depend on stipple")
+        return Path(p["manifest_path"]).parent
 
     def build(self):
-        if self.exe:
-            return self.exe
+        """The helper's command (a list), built the first time."""
+        if self.cmd:
+            return self.cmd
+        installed = installed_helper(self.manifest_path)
+        if installed:
+            self.cmd = installed
+            return self.cmd
         self.work.mkdir(parents=True, exist_ok=True)
         (self.work / "src").mkdir(exist_ok=True)
         stipple = self._stipple_dir()
@@ -153,25 +186,26 @@ class Helper:
         exe = self.target_dir / "release" / "stipple-package-helper"
         if os.name == "nt":
             exe = exe.with_suffix(".exe")
-        self.exe = exe
-        return exe
+        self.cmd = [exe]
+        return self.cmd
 
     def dex(self, lib_name, out):
-        run([self.build(), "dex", lib_name, out])
+        run(self.build() + ["dex", lib_name, out])
 
     def icons(self, jobs):
         """`jobs`: (out, size, scale, background (r, g, b, a) or None, source)."""
         if not jobs:
             return
-        exe = self.build()
+        cmd = self.build()
         lines = []
         for out, size, scale, bg, src in jobs:
             Path(out).parent.mkdir(parents=True, exist_ok=True)
             bgs = "-" if bg is None else "".join(f"{c:02x}" for c in bg)
             lines.append(f"{out}\t{size}\t{scale:.6f}\t{bgs}\t{src}")
+        self.work.mkdir(parents=True, exist_ok=True)
         f = self.work / "icons.tsv"
         f.write_text("\n".join(lines) + "\n")
-        run([exe, "icons", f])
+        run(cmd + ["icons", f])
 
 
 def _find_lock(start):

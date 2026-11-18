@@ -8,16 +8,24 @@ Standard library only (Python 3.11+, for tomllib).
     cargo-stipple ios [--simulator] [--example NAME | --bin NAME] [--config FILE]
     cargo-stipple check [--config FILE]       # read the manifest, print it
 
-With this directory on PATH, Cargo runs it as a subcommand:
-`cargo stipple android`. See docs/packaging.md for the manifest's keys,
+`cargo install stipple` installs it as `cargo stipple` (src/bin/cargo-stipple.rs
+carries these scripts and runs them); with this directory on PATH, Cargo runs
+it as a subcommand too. See docs/packaging.md for the manifest's keys,
 signing (environment variables) and uploading.
 """
 
 import argparse
+import os
+import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+if sys.version_info < (3, 11):
+    sys.exit(f"cargo-stipple: error: needs Python 3.11 or later (this is {sys.version.split()[0]}); "
+             "set STIPPLE_PYTHON to one")
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 import common  # noqa: E402
 from common import PackageError, Target  # noqa: E402
 from manifest import ANDROID_ABIS, ManifestError, load  # noqa: E402
@@ -58,9 +66,10 @@ def main(argv):
         p.add_argument("--out", help="the output directory (target/stipple-package/<platform>)")
     args = ap.parse_args(argv)
     common.VERBOSE = args.verbose
+    redirected = redirect(args.manifest_path, argv)
+    if redirected is not None:
+        return redirected
     if args.build is not None:
-        import os
-
         os.environ["STIPPLE_BUILD_NUMBER"] = str(args.build)
 
     m, meta, package = load(args.manifest_path, args.config)
@@ -95,6 +104,36 @@ def main(argv):
 
         ios.package(m, args, target, target_dir, work, helper)
     return 0
+
+
+def redirect(manifest_path, argv):
+    """Run the packaging scripts of the app's own Stipple, when it ships
+    them (a release from crates.io carries tools/package, as does a git or
+    path dependency) and they aren't these: the tool then always matches the
+    library the app builds against. Returns its exit status, or None to go
+    on here."""
+    if os.environ.get("STIPPLE_PACKAGE_REDIRECTED") or not Path(manifest_path).exists():
+        return None
+    try:
+        p = common.stipple_package(manifest_path)
+    except (OSError, subprocess.CalledProcessError):
+        return None  # load() says what's wrong with the manifest
+    if p is None:
+        return None
+    theirs = Path(p["manifest_path"]).parent / "tools" / "package" / "cargo-stipple"
+    version = os.environ.get("STIPPLE_PACKAGE_VERSION")
+    if not theirs.is_file():
+        if version and p["version"] != version:
+            common.warn(f"the app uses stipple {p['version']}, which doesn't ship its packaging "
+                        f"scripts: packaging with cargo-stipple {version}'s")
+        return None
+    if theirs.resolve().parent == HERE:
+        return None
+    # No __pycache__ written into Cargo's copy of the crate.
+    env = {**os.environ, "STIPPLE_PACKAGE_REDIRECTED": "1", "PYTHONDONTWRITEBYTECODE": "1"}
+    if common.VERBOSE:
+        common.log(f"running stipple {p['version']}'s packaging scripts ({theirs})")
+    return subprocess.run([sys.executable, theirs, *argv], env=env).returncode
 
 
 if __name__ == "__main__":

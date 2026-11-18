@@ -6017,9 +6017,14 @@ jobs:
       - name: The packaging tool's tests
         run: python3 -m unittest discover tools/package -v
 
+      # The simulator build goes through the installed tool (`cargo install
+      # stipple`: src/bin/cargo-stipple.rs), the device build through the
+      # script in the checkout.
       - name: Package touchdemo for the simulator and a device (ad hoc)
         run: |
-          tools/package/cargo-stipple ios --simulator --example touchdemo --config examples/touchdemo/package.toml
+          cargo install --path . --bin cargo-stipple --root "$RUNNER_TEMP/stipple-tool"
+          "$RUNNER_TEMP/stipple-tool/bin/cargo-stipple" --version
+          PATH="$RUNNER_TEMP/stipple-tool/bin:$PATH" cargo stipple ios --simulator --example touchdemo --config examples/touchdemo/package.toml
           tools/package/cargo-stipple ios --example touchdemo --config examples/touchdemo/package.toml
 
       - name: Check the bundle and the .ipa

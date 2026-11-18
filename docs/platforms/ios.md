@@ -16,7 +16,8 @@ cargo build --release -p your-app --target aarch64-apple-ios       # device
 For the App Store, [`cargo-stipple ios`](../packaging.md) writes the bundle
 below from a manifest in the app's `Cargo.toml` (with the icon catalog,
 localized names and permission prompts, the privacy manifest and the
-assets), signs it with your identity and provisioning profile, and zips the
+assets), signs it with your identity and provisioning profile (or has
+Xcode sign it with the team's cloud-managed certificate), and zips the
 `.ipa`; `--simulator` makes a simulator `.app`. See
 [packaging.md](../packaging.md). What follows is the bundle by hand.
 

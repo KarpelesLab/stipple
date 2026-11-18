@@ -1,7 +1,9 @@
 //! The packaging tool's host helper, built by `cargo-stipple` in a scratch
 //! crate against the app's own Stipple: it draws the app icons with Stipple's
 //! image code (any format `Pixmap::decode` reads, and SVG drawn at each size),
-//! and writes the `classes.dex` an Android package carries.
+//! and writes the `classes.dex` an Android package carries. The installed
+//! `cargo-stipple` carries this file as a module, and is the helper itself
+//! when the app's Stipple is the release it was built from.
 //!
 //!     helper dex <lib_name> <out.dex>
 //!     helper icons <jobs.tsv>
@@ -22,8 +24,16 @@ enum Source {
     Raster(Pixmap),
 }
 
+// Unused where the installed `cargo-stipple` (src/bin/cargo-stipple.rs)
+// carries this file as a module and calls `run`.
+#[allow(dead_code)]
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    run(&args)
+}
+
+/// The helper's commands: `args` without the program name.
+pub fn run(args: &[String]) -> ExitCode {
     let result = match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["dex", lib, out] => std::fs::write(out, stipple::platform::android_receiver_dex(lib))
             .map_err(|e| format!("{out}: {e}")),

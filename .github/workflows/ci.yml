@@ -52,6 +52,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt
         run: cargo fmt --all -- --check
+      # `cargo install stipple` gives `cargo stipple`: the published crate
+      # carries the packaging scripts it runs.
+      - name: the packaging tool is in the published crate
+        run: |
+          cargo package --list --allow-dirty > package-list.txt
+          for f in tools/package/cargo-stipple tools/package/ios.py tools/package/helper.rs tools/android/billing.py src/bin/cargo-stipple.rs; do
+            grep -qx "$f" package-list.txt || { echo "missing from the crate: $f"; exit 1; }
+          done
       # `gpu`: the GPU examples need it (they're skipped without).
       - name: clippy
         run: cargo clippy --all-targets --features gpu -- -D warnings

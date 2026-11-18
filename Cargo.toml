@@ -10,8 +10,19 @@ rust-version = "1.95"
 license = "MIT"
 repository = "https://github.com/KarpelesLab/stipple"
 authors = ["Karpelès Lab Inc."]
-# Keep the published crate to the library: no examples, screenshots or web glue.
-include = ["src/**/*", "tests/**/*", "docs/getting-started.md", "Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE"]
+# Keep the published crate to the library and the packaging tool
+# (`cargo install stipple` gives `cargo stipple`; the scripts are also run
+# from an app's own copy of the crate): no examples, screenshots or web glue.
+include = [
+    "src/**/*", "tests/**/*", "docs/getting-started.md", "Cargo.toml", "README.md", "CHANGELOG.md", "LICENSE",
+    "tools/package/cargo-stipple", "tools/package/*.py", "tools/package/helper.rs", "tools/android/billing.py",
+]
+
+# The store packaging tool (tools/package, docs/packaging.md). A dependency's
+# binaries aren't built, so apps don't pay for it.
+[[bin]]
+name = "cargo-stipple"
+path = "src/bin/cargo-stipple.rs"
 
 [features]
 # The raw GPU backends (`stipple::gpu`). Off by default.

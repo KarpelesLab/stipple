@@ -342,7 +342,7 @@ def sign_bundle(bundle, bundle_id, ent_path, groups, profile_var, ent_file, simu
                 plistlib.dump(ent, f)
             cmd += ["--entitlements", ent_file]
         run(cmd + [bundle], quiet=True)
-        if not simulator and who == "the app":
+        if not simulator and who == "the app" and not xcode_signing():
             warn(
                 "signed ad hoc: set STIPPLE_IOS_SIGN_IDENTITY and "
                 "STIPPLE_IOS_PROVISIONING_PROFILE to install on a device or upload"
@@ -367,6 +367,146 @@ def sign_bundle(bundle, bundle_id, ent_path, groups, profile_var, ent_file, simu
     if keychain:
         cmd += ["--keychain", keychain]
     run(cmd + [bundle], quiet=True)
+    return True
+
+
+# --- Signing through Xcode (cloud-managed certificates) -----------------------
+
+EXPORT_METHODS = ("app-store-connect", "release-testing", "debugging", "enterprise",
+                  "app-store", "ad-hoc", "development")
+
+
+def xcode_signing():
+    """Whether Xcode signs the device build: a team is set and no identity
+    of our own (STIPPLE_IOS_SIGN_IDENTITY) is."""
+    return bool(os.environ.get("STIPPLE_IOS_TEAM_ID")) and not os.environ.get("STIPPLE_IOS_SIGN_IDENTITY")
+
+
+def asc_key_args(env=os.environ):
+    """xcodebuild's App Store Connect API key arguments, from STIPPLE_ASC_KEY_ID,
+    STIPPLE_ASC_ISSUER_ID and STIPPLE_ASC_KEY_PATH (default: AuthKey_<ID>.p8
+    where altool looks: ./private_keys, ~/private_keys, ~/.private_keys,
+    ~/.appstoreconnect/private_keys). None without a key id: Xcode then uses
+    the account signed in under Settings > Accounts."""
+    key_id = env.get("STIPPLE_ASC_KEY_ID")
+    if not key_id:
+        return []
+    issuer = env.get("STIPPLE_ASC_ISSUER_ID")
+    if not issuer:
+        raise PackageError("STIPPLE_ASC_KEY_ID is set but not STIPPLE_ASC_ISSUER_ID (the key's issuer id)")
+    path = env.get("STIPPLE_ASC_KEY_PATH")
+    if path:
+        path = Path(path).expanduser()
+        if not path.is_file():
+            raise PackageError(f"STIPPLE_ASC_KEY_PATH: no file {path}")
+    else:
+        name = f"AuthKey_{key_id}.p8"
+        dirs = [Path("private_keys"), Path("~/private_keys"), Path("~/.private_keys"),
+                Path("~/.appstoreconnect/private_keys")]
+        found = [d.expanduser() / name for d in dirs if (d.expanduser() / name).is_file()]
+        if not found:
+            raise PackageError(
+                f"no {name} in ./private_keys, ~/private_keys, ~/.private_keys or "
+                "~/.appstoreconnect/private_keys: set STIPPLE_ASC_KEY_PATH to the key file"
+            )
+        path = found[0]
+    return ["-authenticationKeyPath", path.resolve(), "-authenticationKeyID", key_id,
+            "-authenticationKeyIssuerID", issuer]
+
+
+def export_options(env=os.environ):
+    """The -exportOptionsPlist for xcodebuild: automatic signing for the team,
+    the method, and whether to upload to App Store Connect."""
+    method = env.get("STIPPLE_IOS_EXPORT_METHOD") or "app-store-connect"
+    if method not in EXPORT_METHODS:
+        raise PackageError(f"STIPPLE_IOS_EXPORT_METHOD: {method!r} isn't one of {', '.join(EXPORT_METHODS[:4])}")
+    upload = env.get("STIPPLE_IOS_UPLOAD", "") not in ("", "0", "false", "no")
+    if upload and method not in ("app-store-connect", "app-store"):
+        raise PackageError(f"STIPPLE_IOS_UPLOAD: only the app-store-connect method uploads, not {method}")
+    return {
+        "method": method,
+        "teamID": env["STIPPLE_IOS_TEAM_ID"],
+        "signingStyle": "automatic",
+        # The build number is the manifest's (or --build's), not Xcode's.
+        "manageAppVersionAndBuildNumber": False,
+        "uploadSymbols": True,
+        "destination": "upload" if upload else "export",
+    }
+
+
+def write_archive(app, dsym, archive, team):
+    """An `.xcarchive` around the (ad hoc signed) bundle and its dSYM, as
+    `xcodebuild archive` would leave it: what `-exportArchive` re-signs."""
+    if archive.exists():
+        shutil.rmtree(archive)
+    apps = archive / "Products" / "Applications"
+    apps.mkdir(parents=True)
+    shutil.copytree(app, apps / app.name, symlinks=True)
+    if dsym and dsym.exists():
+        shutil.copytree(dsym, archive / "dSYMs" / dsym.name, symlinks=True)
+    with open(app / "Info.plist", "rb") as f:
+        info = plistlib.load(f)
+    import datetime
+
+    with open(archive / "Info.plist", "wb") as f:
+        plistlib.dump({
+            "ApplicationProperties": {
+                "ApplicationPath": f"Applications/{app.name}",
+                "Architectures": ["arm64"],
+                "CFBundleIdentifier": info["CFBundleIdentifier"],
+                "CFBundleShortVersionString": info["CFBundleShortVersionString"],
+                "CFBundleVersion": info["CFBundleVersion"],
+                "Team": team,
+            },
+            "ArchiveVersion": 2,
+            "CreationDate": datetime.datetime.now(datetime.UTC).replace(tzinfo=None),
+            "Name": app.stem,
+            "SchemeName": app.stem,
+        }, f)
+
+
+def xcode_export(app, dsym, work, ipa):
+    """Have Xcode sign the bundle with the team's cloud-managed distribution
+    certificate, making the provisioning profiles it needs
+    (`-allowProvisioningUpdates`), signed in through an App Store Connect API
+    key or Xcode's account; write the `.ipa` (and put the signed bundle in
+    place of `app`), or upload it with STIPPLE_IOS_UPLOAD. Returns whether
+    there is an `.ipa`."""
+    opts = export_options()
+    archive = work / f"{app.stem}.xcarchive"
+    write_archive(app, dsym, archive, opts["teamID"])
+    opts_path = work / "ExportOptions.plist"
+    with open(opts_path, "wb") as f:
+        plistlib.dump(opts, f)
+    export = work / "export"
+    if export.exists():
+        shutil.rmtree(export)
+    log(f"signing through Xcode for team {opts['teamID']} ({opts['method']})")
+    key = asc_key_args()
+    try:
+        run(["xcodebuild", "-exportArchive", "-archivePath", archive, "-exportOptionsPlist", opts_path,
+             "-exportPath", export, "-allowProvisioningUpdates", *key], quiet=True)
+    except PackageError as e:
+        how = "the App Store Connect key (an Admin or App Manager key)" if key else \
+            "the account signed in under Xcode > Settings > Accounts (or set STIPPLE_ASC_KEY_ID)"
+        raise PackageError(
+            f"{e}: Xcode couldn't sign for team {opts['teamID']} through {how}; the app's "
+            "bundle id (and each extension's) must be registered in the account, with its capabilities"
+        ) from None
+    if opts["destination"] == "upload":
+        log("uploaded to App Store Connect")
+        return False
+    exported = sorted(export.glob("*.ipa"))
+    if not exported:
+        raise PackageError(f"xcodebuild wrote no .ipa in {export}")
+    shutil.move(exported[0], ipa)
+    # The signed bundle, from the .ipa, in place of the ad hoc one.
+    unpacked = work / "signed"
+    if unpacked.exists():
+        shutil.rmtree(unpacked)
+    run(["ditto", "-x", "-k", ipa, unpacked], quiet=True)
+    shutil.rmtree(app)
+    shutil.move(unpacked / "Payload" / app.name, app)
     return True
 
 
@@ -443,6 +583,13 @@ def package(m, args, target, target_dir, work, helper):
         return app, None
 
     ipa = out_dir / f"{app_name}-{m.version}.ipa"
+    if xcode_signing():
+        dsym = out_dir / f"{app_name}.app.dSYM"
+        if not xcode_export(app, dsym, work, ipa):
+            return app, None
+        run(["codesign", "--verify", "--deep", "--strict", app], quiet=True)
+        log(f"wrote {ipa} (signed by Xcode)")
+        return app, ipa
     write_ipa(app, ipa)
     log(f"wrote {ipa}" + ("" if signed else " (ad hoc: not uploadable)"))
     return app, ipa

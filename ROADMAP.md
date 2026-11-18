@@ -1939,6 +1939,19 @@ Most input only works on X11 today.
   validate and split the bundle (not blocking yet). Not yet: an upload to
   either store, asset packs, on-demand resources, Stipple UI inside app
   extensions._ See [docs/packaging.md](docs/packaging.md).
+- ✅ `cargo install stipple` and Xcode-managed signing (#100): _the crate's
+  `cargo-stipple` binary carries the scripts and runs the copy the app's
+  own Stipple ships (published with the crate), and is the icon and dex
+  helper itself for its own release; with `STIPPLE_IOS_TEAM_ID` and no
+  identity, the ad hoc bundle goes into a hand-made `.xcarchive` that
+  `xcodebuild -exportArchive -allowProvisioningUpdates` re-signs with the
+  team's cloud-managed certificate (an App Store Connect API key or Xcode's
+  account), or uploads; bundletool fetched (SHA-256 pinned) when missing.
+  Run locally: the installed binary on a simulator build from an app
+  outside the repo, and the export up to the account check (no account to
+  sign with here). Not yet: a real cloud-signed build or upload, Xcode
+  registering app ids itself._ See
+  [docs/packaging.md](docs/packaging.md#signing-through-xcode-cloud-managed-certificates).
 - ✅ iOS app extensions and app groups (#69): _`[[ios.extension]]` entries
   (a Cargo bin or example, a bundle-id suffix checked to nest under the
   app's, `NSExtensionPointIdentifier`, `NSExtensionPrincipalClass`,

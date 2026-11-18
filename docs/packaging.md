@@ -1,6 +1,6 @@
 # Packaging for the App Store and Google Play
 
-`cargo-stipple` ([`tools/package`](../tools/package)) turns a Stipple app
+`cargo stipple` ([`tools/package`](../tools/package)) turns a Stipple app
 into what the stores take: a signed `.ipa` for App Store Connect (and a
 `.app` for the simulator), and an Android App Bundle (`.aab`) for Google Play
 with a universal APK to install for testing. It reads a manifest in the
@@ -9,19 +9,34 @@ image, writes the platform files (`Info.plist`, `AndroidManifest.xml`, the
 resources), and signs with keys it finds in environment variables. There is
 no Xcode project and no Gradle.
 
-It is a Python script (3.11 or later, standard library only) plus a small
-Rust helper it builds against the app's own Stipple, which draws the icons
-with Stipple's image code and writes the Android `classes.dex`. Nothing is
-added to the app's dependencies.
+It comes with the crate:
 
 ```sh
-# Run it from the app's directory, or put tools/package on PATH and use
-# `cargo stipple ...` (Cargo runs cargo-stipple as a subcommand).
-path/to/stipple/tools/package/cargo-stipple check     # read the manifest
-path/to/stipple/tools/package/cargo-stipple android   # .aab + universal APK
-path/to/stipple/tools/package/cargo-stipple ios --simulator
-path/to/stipple/tools/package/cargo-stipple ios       # .app + .ipa
+cargo install stipple      # installs cargo-stipple, which Cargo runs as `cargo stipple`
 ```
+
+and then, in the app's directory:
+
+```sh
+cargo stipple check        # read the manifest
+cargo stipple android      # .aab + universal APK
+cargo stipple ios --simulator
+cargo stipple ios          # .app + .ipa
+```
+
+The tool is Python scripts (3.11 or later, standard library only;
+`STIPPLE_PYTHON` names the interpreter, else `python3`, or `py -3` on
+Windows) that the installed binary carries and runs. The published crate
+ships them too, so `cargo stipple` runs the copy in the app's own Stipple
+(the release in its `Cargo.lock`) whenever there is one: the packaging
+always matches the library the app builds against, whichever release is
+installed (an app on a release that didn't ship them, 0.0.9 and earlier,
+gets the installed tool's, with a warning). The scripts draw the icons with Stipple's
+image code and write the Android `classes.dex` through a small helper:
+the installed binary itself when it is the app's release, else a scratch
+crate built once against the app's own Stipple. Nothing is added to the
+app's dependencies. (Within a checkout of the repository,
+`tools/package/cargo-stipple` runs as it is.)
 
 The results go to `target/stipple-package/<platform>/` (or `--out DIR`).
 `--build N` sets the build number (or `STIPPLE_BUILD_NUMBER`, for CI),
@@ -218,7 +233,41 @@ entitlements (the app id, made specific when the profile's is a wildcard;
 the team; `get-task-allow` for development) are signed in, with
 `ios.entitlements` on top for push, iCloud, associated domains and the
 like. Without an identity the bundle is signed ad hoc: fine for the
-simulator, refused by devices and the store.
+simulator, refused by devices and the store, unless Xcode signs it (below).
+
+### Signing through Xcode (cloud-managed certificates)
+
+An app that Xcode signed with automatic signing has no distribution
+certificate in any keychain: Apple keeps it in the cloud, and Xcode uses it
+when it exports a build. `cargo stipple ios` does the same when given the
+team and no identity: it signs the bundle ad hoc, wraps it in an
+`.xcarchive` (with the dSYM), and runs `xcodebuild -exportArchive
+-allowProvisioningUpdates`, which re-signs it with the team's cloud-managed
+certificate and makes the provisioning profiles it needs (the app's and each
+extension's). The `.ipa` and the signed `.app` land where they always do.
+
+| Variable | |
+|---|---|
+| `STIPPLE_IOS_TEAM_ID` | the team (`ABCDE12345`, under Membership in the developer account); with no `STIPPLE_IOS_SIGN_IDENTITY`, Xcode signs |
+| `STIPPLE_ASC_KEY_ID`, `STIPPLE_ASC_ISSUER_ID` | an [App Store Connect API key](https://developer.apple.com/documentation/appstoreconnectapi/creating-api-keys-for-app-store-connect-api) (Admin or App Manager) to sign in with; without them, the account added in Xcode > Settings > Accounts |
+| `STIPPLE_ASC_KEY_PATH` | the key's `.p8` (default: `AuthKey_<KEYID>.p8` in `./private_keys`, `~/private_keys`, `~/.private_keys` or `~/.appstoreconnect/private_keys`, where `altool` looks) |
+| `STIPPLE_IOS_EXPORT_METHOD` | `app-store-connect` (the default), `release-testing` (ad hoc), `debugging` (development), `enterprise` |
+| `STIPPLE_IOS_UPLOAD` | `1`: Xcode uploads the build to App Store Connect instead of writing the `.ipa` |
+
+```sh
+STIPPLE_IOS_TEAM_ID=ABCDE12345 STIPPLE_ASC_KEY_ID=KEYID STIPPLE_ASC_ISSUER_ID=ISSUER-UUID \
+    cargo stipple ios
+```
+
+Xcode makes certificates and profiles but, for a build it didn't archive
+itself, doesn't register app ids or change their capabilities: each bundle
+id (the app's and its extensions') is registered in the account, with its
+app groups, associated domains and the like turned on, as they are for an
+app that Xcode built before. The entitlements are the ones the bundle is
+signed with ad hoc (the manifest's associated domains, app groups and
+`entitlements` file); Xcode adds the team's and the profile's. The build
+number stays the manifest's (`manageAppVersionAndBuildNumber` is off). Xcode
+is needed (not only its command line tools), and this runs only on a Mac.
 
 What the bundle holds:
 
@@ -374,9 +423,12 @@ adds the app's own Java and dex files and merges its manifest fragment
   libraries stored uncompressed and aligned to 16 KB, signed with
   `apksigner` (v2 and v3). `adb install` it to test what you'll upload.
 
-With [bundletool](https://github.com/google/bundletool/releases) at hand
-(`BUNDLETOOL=/path/to/bundletool-all.jar`, or `bundletool` on `PATH`), the
-bundle is checked with `bundletool validate`; `bundletool build-apks
+The bundle is checked with [bundletool](https://github.com/google/bundletool/releases)'s
+`bundletool validate`: `BUNDLETOOL=/path/to/bundletool-all.jar` (or an
+executable), else `bundletool` on `PATH`, else the tool fetches release
+1.18.1's jar from GitHub into `target/stipple-package/` once, checked
+against its SHA-256, and runs it with `java` (`BUNDLETOOL=none` skips the
+check); `bundletool build-apks
 --bundle app.aab --output app.apks --connected-device` then installs exactly
 what Play would send to the device in front of you.
 
@@ -501,6 +553,11 @@ security list-keychains -s build.keychain login.keychain
 export STIPPLE_IOS_KEYCHAIN=build.keychain
 ```
 
+Or, with no certificate to import, let Xcode sign: write the App Store
+Connect key's `.p8` from a secret into a file, and set
+`STIPPLE_IOS_TEAM_ID`, `STIPPLE_ASC_KEY_ID`, `STIPPLE_ASC_ISSUER_ID` and
+`STIPPLE_ASC_KEY_PATH` ([above](#signing-through-xcode-cloud-managed-certificates)).
+
 ## Not yet
 
 - Play Asset Delivery (asset packs) and iOS on-demand resources: all assets
@@ -513,6 +570,7 @@ export STIPPLE_IOS_KEYCHAIN=build.keychain
 - Android libraries (AARs, AndroidX) for the app's Java: only the
   platform's `android.jar` is on its class path; a library's classes can
   come in already dexed through `dex`.
-- Uploading itself: the tool stops at the signed files.
+- Uploading itself: the tool stops at the signed files, except through
+  Xcode (`STIPPLE_IOS_UPLOAD`).
 - macOS (`.app`/`.pkg` for the Mac App Store, notarization), Windows (MSIX)
   and Linux (Flatpak, AppImage) packages.
