@@ -1281,9 +1281,9 @@ CPU elsewhere, and the CPU is always the fallback.
   simulator met the targets on an M5 Max (0.96 ms, 3.1 ms, p95 5.6 ms).
   Wayland's decorated windows no longer read back (their dma-bufs go in a
   subsurface under Stipple's title bar), so `Auto` presents there too; its
-  hardware runs so far: sway on NVIDIA only, locally. CI adds headless
-  Mutter and KWin on Mesa's software GPUs (non-blocking; `Auto` stays on
-  the CPU there). Left: iOS (Metal never run on an iPhone, nor presented
+  hardware runs so far: sway on NVIDIA only, locally. CI presents under
+  headless Mutter and KWin too, Vulkan and GLES, on Mesa's software GPUs
+  (non-blocking, passing; `Auto` stays on the CPU there). Left: iOS (Metal never run on an iPhone, nor presented
   to a window), Windows (Direct3D 11 never run on a hardware GPU), Android
   (the benchmark not on a phone); Linux on AMD and Intel, X11 on a real X
   server.*

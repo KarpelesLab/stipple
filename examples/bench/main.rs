@@ -1375,6 +1375,19 @@ fn main() {
         std::fs::write(&path, json).expect("write the JSON");
         eprintln!("bench: wrote {path}");
     }
+    // The Android emulator's GLES translator tears itself down at exit and
+    // then trips on its own destroyed mutex (`FORTIFY: pthread_mutex_lock
+    // called on a destroyed mutex`, an abort). Everything is written: leave
+    // without running the libraries' exit handlers.
+    #[cfg(target_os = "android")]
+    {
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        unsafe extern "C" {
+            fn _exit(status: i32) -> !;
+        }
+        unsafe { _exit(0) }
+    }
 }
 
 // --- In the browser -------------------------------------------------------------
