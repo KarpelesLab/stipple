@@ -114,9 +114,6 @@ fn the_loop_updates_per_frame_repaints_without_builds_and_pauses() {
     let requests = app.game.as_ref().unwrap().requests.clone();
     let handle = app.handle();
     let (_, mut handler) = app.into_handler();
-    // No real event loop runs: keep native alerts off for the tests that
-    // check the drawn ones.
-    crate::platform::dialog::set_event_loop_running(false);
     let window = FakeWindow {
         minimized: Cell::new(false),
     };

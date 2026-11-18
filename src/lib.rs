@@ -3335,6 +3335,9 @@ impl<S: 'static> App<S> {
         #[cfg(not(target_arch = "wasm32"))]
         let app = self;
         let (attrs, handler) = app.into_handler();
+        // Native message boxes can show from now on (not in tests, which
+        // build handlers of their own but run no loop).
+        crate::platform::dialog::set_event_loop_running(true);
         backend::run(attrs, handler);
     }
 
@@ -3495,8 +3498,6 @@ impl<S: 'static> App<S> {
             crate::platform::frame::note_present(began.elapsed());
         };
 
-        // Native message boxes can show from now on.
-        crate::platform::dialog::set_event_loop_running(true);
         let handler = move |event: Event, window: &dyn crate::platform::Window| {
             let wid = window.id();
             // On the first event we learn the primary window's id; register it

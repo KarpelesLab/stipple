@@ -136,7 +136,6 @@ fn pads_touch_controls_and_the_locked_pointer_reach_the_actions() {
     // Locked from the start, as a platform granting it would.
     assert!(app.set_pointer_locked(true, true));
     let (_, mut handler) = app.into_handler();
-    crate::platform::dialog::set_event_loop_running(false);
     let window = FakeWindow;
     let mut send = |event: Event| handler(event, &window);
     // Deliver a frame and run its update.
