@@ -246,6 +246,17 @@ struct MonitorInfo {
     flags: u32,
 }
 
+/// `WINDOWPLACEMENT`.
+#[repr(C)]
+struct WindowPlacement {
+    length: u32,
+    flags: u32,
+    show_cmd: u32,
+    min_position: Point,
+    max_position: Point,
+    normal_position: Rect,
+}
+
 #[repr(C)]
 struct PaintStruct {
     hdc: Handle,
@@ -377,6 +388,8 @@ unsafe extern "system" {
     ) -> i32;
     fn ClientToScreen(hwnd: Hwnd, point: *mut Point) -> i32;
     fn SetForegroundWindow(hwnd: Hwnd) -> i32;
+    fn BringWindowToTop(hwnd: Hwnd) -> i32;
+    fn GetWindowPlacement(hwnd: Hwnd, placement: *mut WindowPlacement) -> i32;
     fn MonitorFromWindow(hwnd: Hwnd, flags: u32) -> Handle;
     fn GetMonitorInfoW(monitor: Handle, info: *mut MonitorInfo) -> i32;
     fn AdjustWindowRectExForDpi(
@@ -640,13 +653,91 @@ fn read_info(hwnd: Hwnd, prev: Option<WindowInfo>) -> WindowInfo {
         work_area,
         safe_area: crate::geometry::Insets::ZERO,
         keyboard_inset: 0.0,
+        restored_position: Some(crate::geometry::Point::new(
+            logical(outer.left),
+            logical(outer.top),
+        )),
+        restored_size: Size::new(
+            logical(client.right - client.left),
+            logical(client.bottom - client.top),
+        ),
     };
+    if (maximized || minimized || fullscreen)
+        && let Some(((x, y), (w, h))) = restored_bounds(hwnd, maximized)
+    {
+        info.restored_position = Some(crate::geometry::Point::new(logical(x), logical(y)));
+        info.restored_size = Size::new(logical(w), logical(h));
+    }
     if minimized && let Some(prev) = prev {
         info.position = prev.position;
         info.inner_size = prev.inner_size;
         info.outer_size = prev.outer_size;
     }
     info
+}
+
+/// Where `hwnd` goes back to when it is restored, in physical pixels: its
+/// outer top-left on the screen and its client size. Fullscreen (unless it
+/// was maximized before) that is the rectangle it had before; otherwise the
+/// system's normal placement (`GetWindowPlacement`).
+fn restored_bounds(hwnd: Hwnd, maximized: bool) -> Option<((i32, i32), (i32, i32))> {
+    // The frame around the client area, with the window's usual style (a
+    // fullscreen window has none while fullscreen).
+    let saved = read_win(hwnd, |w| w.restore).flatten();
+    let style = match saved {
+        Some((style, _)) => style as u32,
+        None => (unsafe { GetWindowLongW(hwnd, GWL_STYLE) }) as u32,
+    };
+    let dpi = match unsafe { GetDpiForWindow(hwnd) } {
+        0 => 96,
+        dpi => dpi,
+    };
+    let mut r = zero_rect();
+    let menu = read_win(hwnd, |w| w.menu != 0).unwrap_or(false) as i32;
+    unsafe { AdjustWindowRectExForDpi(&mut r, style, menu, 0, dpi) };
+    let frame = [-r.left, -r.top, r.right, r.bottom];
+    if let Some((_, [left, top, right, bottom])) = saved
+        && !maximized
+    {
+        return Some(geometry::normal_bounds(
+            [left, top, right, bottom],
+            (0, 0),
+            frame,
+        ));
+    }
+    let mut placement = WindowPlacement {
+        length: core::mem::size_of::<WindowPlacement>() as u32,
+        flags: 0,
+        show_cmd: 0,
+        min_position: Point { x: 0, y: 0 },
+        max_position: Point { x: 0, y: 0 },
+        normal_position: zero_rect(),
+    };
+    if unsafe { GetWindowPlacement(hwnd, &mut placement) } == 0 {
+        return None;
+    }
+    // Workspace coordinates: from the work area's corner.
+    let mut info = MonitorInfo {
+        cb_size: core::mem::size_of::<MonitorInfo>() as u32,
+        rc_monitor: zero_rect(),
+        rc_work: zero_rect(),
+        flags: 0,
+    };
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    let offset = if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+        (
+            info.rc_work.left - info.rc_monitor.left,
+            info.rc_work.top - info.rc_monitor.top,
+        )
+    } else {
+        (0, 0)
+    };
+    let n = placement.normal_position;
+    Some(geometry::normal_bounds(
+        [n.left, n.top, n.right, n.bottom],
+        offset,
+        frame,
+    ))
 }
 
 /// Read `hwnd`'s position and state again after a move or resize, and tell
@@ -1626,14 +1717,23 @@ impl Window for WinWindow {
         unsafe { ShowWindow(self.hwnd, cmd) };
     }
     fn activate(&self, _token: Option<&str>) {
-        // The launch that asked for it let this process take the foreground
-        // (`AllowSetForegroundWindow`, see `platform::instance`).
+        // A launch the running instance heard let this process take the
+        // foreground (`AllowSetForegroundWindow`, see `platform::instance`);
+        // otherwise the system allows it right after the user's input here.
         unsafe {
-            if IsIconic(self.hwnd) != 0 {
-                ShowWindow(self.hwnd, SW_RESTORE);
-            }
-            SetForegroundWindow(self.hwnd);
+            let cmd = if IsIconic(self.hwnd) != 0 {
+                SW_RESTORE
+            } else {
+                SW_SHOW
+            };
+            ShowWindow(self.hwnd, cmd);
+            BringWindowToTop(self.hwnd);
         }
+        // Refused, the taskbar button flashes until the user gets there.
+        if unsafe { SetForegroundWindow(self.hwnd) } == 0 {
+            attention::flash(self.hwnd, Some(crate::platform::UserAttention::Critical));
+        }
+        debug_window(format_args!("activate {:#x}", self.hwnd as u64));
     }
     fn clipboard(&self) -> Option<String> {
         crate::platform::clipboard::text()
@@ -1795,6 +1895,11 @@ impl Window for WinWindow {
     }
     fn set_menu_bar(&self, menu: &NativeMenuBar) -> bool {
         set_menu_bar(self.hwnd, menu);
+        debug_window(format_args!(
+            "menu {:#x} {} menus",
+            self.hwnd as u64,
+            menu.menus.len()
+        ));
         true
     }
     fn popup_menu(&self, menu: &NativeMenu, at: crate::geometry::Point) -> MenuPopup {

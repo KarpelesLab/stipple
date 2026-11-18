@@ -79,8 +79,16 @@ pub(super) unsafe fn read_info(window: Id, view: Id) -> WindowInfo {
             work_area,
             safe_area: crate::geometry::Insets::ZERO,
             keyboard_inset: 0.0,
+            restored_position: Some(Point::new(outer.min_x(), outer.min_y())),
+            restored_size: Size::new(bounds.size.width, bounds.size.height),
         }
     }
+}
+
+/// Whether a window in this state is in its normal bounds: neither zoomed,
+/// fullscreen nor miniaturized.
+fn is_normal(info: &WindowInfo) -> bool {
+    !(info.maximized || info.fullscreen || info.minimized)
 }
 
 /// Whether anything but the sizes and scale (which come with
@@ -94,10 +102,43 @@ fn state_differs(a: &WindowInfo, b: &WindowInfo) -> bool {
 }
 
 impl MacWindow {
+    /// The window's info from AppKit, with the bounds it restores to: the
+    /// current ones while it is in them (which are then remembered), else
+    /// the ones it last had.
+    pub(super) fn read_info(&self) -> WindowInfo {
+        let mut info = unsafe { read_info(self.window, self.view) };
+        if is_normal(&info) {
+            // Frames AppKit animates through on the way into zoom or
+            // fullscreen aren't the normal ones.
+            if !self.leaving_normal.get() {
+                self.normal.set(info.position.map(|p| (p, info.inner_size)));
+            }
+        } else {
+            self.leaving_normal.set(false);
+        }
+        if (!is_normal(&info) || self.leaving_normal.get())
+            && let Some((at, size)) = self.normal.get()
+        {
+            info.restored_position = Some(at);
+            info.restored_size = size;
+        }
+        info
+    }
+
+    /// Remember the current frame as the normal one, if the window is in it,
+    /// before it zooms or goes fullscreen.
+    pub(super) fn note_normal(&self) {
+        self.leaving_normal.set(false);
+        let info = unsafe { read_info(self.window, self.view) };
+        if is_normal(&info) {
+            self.normal.set(info.position.map(|p| (p, info.inner_size)));
+        }
+    }
+
     /// Read the window's info again; when it moved or changed state, queue
     /// [`Event::WindowChanged`] for it.
     pub(super) fn refresh_info(&self) {
-        let now = unsafe { read_info(self.window, self.view) };
+        let now = self.read_info();
         let before = self.info.replace(now);
         if state_differs(&before, &now) {
             debug_window(format_args!(
@@ -191,6 +232,28 @@ extern "C" fn state_changed(this: Id, _cmd: Sel, _notification: Id) {
     }
 }
 
+/// `windowShouldZoom:toFrame:` and `windowWillEnterFullScreen:` — the window
+/// is about to leave its normal bounds (if it is in them): remember them.
+/// Zooming is always allowed.
+extern "C" fn will_leave_normal(this: Id, _cmd: Sel, _window: Id) -> i8 {
+    if let Some(w) = window_for_view(this) {
+        let info = unsafe { read_info(w.window, w.view) };
+        if is_normal(&info) {
+            w.note_normal();
+            w.leaving_normal.set(true);
+        }
+    }
+    1
+}
+
+/// `windowDidFailToEnterFullScreen:`: still in the normal bounds.
+extern "C" fn stayed_normal(this: Id, _cmd: Sel, _window: Id) {
+    if let Some(w) = window_for_view(this) {
+        w.leaving_normal.set(false);
+        w.refresh_info();
+    }
+}
+
 /// `windowShouldClose:` — the close button (or ⌘W): ask the app, which closes
 /// the window itself with `Window::close_window` if it agrees.
 extern "C" fn window_should_close(this: Id, _cmd: Sel, _sender: Id) -> i8 {
@@ -232,6 +295,23 @@ pub(super) unsafe fn add_methods(cls: Class) {
                 c"v@:@".as_ptr(),
             );
         }
+        // `windowShouldZoom:toFrame:` takes the new frame by value too; the
+        // method ignores it, and the rectangle travels in registers that the
+        // shorter signature leaves alone, on both arm64 and x86-64.
+        for name in ["windowShouldZoom:toFrame:", "windowWillEnterFullScreen:"] {
+            class_addMethod(
+                cls,
+                sel(name),
+                will_leave_normal as *const c_void,
+                c"c@:@".as_ptr(),
+            );
+        }
+        class_addMethod(
+            cls,
+            sel("windowDidFailToEnterFullScreen:"),
+            stayed_normal as *const c_void,
+            c"v@:@".as_ptr(),
+        );
         class_addMethod(
             cls,
             sel("windowShouldClose:"),

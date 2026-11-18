@@ -1493,6 +1493,12 @@ struct MacWindow {
     ime: RefCell<Option<crate::platform::ImeState>>,
     /// Geometry and state as AppKit last reported them (see `geometry`).
     info: Cell<WindowInfo>,
+    /// The frame's top-left and the content size the window last had while
+    /// neither zoomed nor fullscreen (its restored bounds), and whether it is
+    /// on its way into either (so the frames AppKit animates through aren't
+    /// taken for them).
+    normal: Cell<Option<(Point, Size)>>,
+    leaving_normal: Cell<bool>,
     /// The app closed it (or AppKit did): drop it once the handler returns.
     closing: Cell<bool>,
 }
@@ -1736,7 +1742,23 @@ impl Window for MacWindow {
         }
     }
     fn set_menu_bar(&self, menu: &NativeMenuBar) -> bool {
-        unsafe { install_menu_bar(menu) };
+        // One menu bar for the app: every window hands the same one over,
+        // and only a change is installed.
+        thread_local! {
+            static INSTALLED: RefCell<Option<NativeMenuBar>> = const { RefCell::new(None) };
+        }
+        let changed = INSTALLED.with(|i| {
+            let mut i = i.borrow_mut();
+            let changed = i.as_ref() != Some(menu);
+            if changed {
+                *i = Some(menu.clone());
+            }
+            changed
+        });
+        if changed {
+            unsafe { install_menu_bar(menu) };
+            debug_window(format_args!("menu app {} menus", menu.menus.len()));
+        }
         true
     }
     fn popup_menu(&self, menu: &NativeMenu, at: Point) -> MenuPopup {
@@ -1762,6 +1784,7 @@ impl Window for MacWindow {
                 std::ptr::null_mut(),
             );
         }
+        debug_window(format_args!("activate {:#x}", self.id));
     }
     fn set_icon(&self, icon: Option<&Pixmap>) {
         // macOS has no per-window icons; this is the app's Dock icon. `nil`
@@ -2000,6 +2023,8 @@ unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, Platf
             pointer_locked: Cell::new(false),
             ime: RefCell::new(None),
             info: Cell::new(WindowInfo::from_size(size, ScaleFactor::new(scale))),
+            normal: Cell::new(None),
+            leaving_normal: Cell::new(false),
             closing: Cell::new(false),
         });
         w.set_min_size(attrs.min_size);
@@ -2025,6 +2050,8 @@ unsafe fn create_window(attrs: &WindowAttributes) -> Result<Rc<MacWindow>, Platf
 /// # Safety
 /// `w` must be a window from [`create_window`].
 unsafe fn finish_window(w: &MacWindow, attrs: &WindowAttributes) {
+    // The frame it opens with is the one it restores to.
+    w.note_normal();
     if attrs.maximized {
         w.set_maximized(true);
     }
@@ -2036,7 +2063,7 @@ unsafe fn finish_window(w: &MacWindow, attrs: &WindowAttributes) {
             .window_pending
             .retain(|(view, e)| *view != w.view || *e != Event::WindowChanged)
     });
-    w.info.set(unsafe { geometry::read_info(w.window, w.view) });
+    w.info.set(w.read_info());
     debug_window(format_args!("opened {:#x} {:?}", w.id, w.title()));
 }
 

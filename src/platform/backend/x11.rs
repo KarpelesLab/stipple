@@ -931,6 +931,9 @@ struct Conn {
     blank_cursor: u32,
     /// What transparent windows need (empty until probed).
     backdrop: backdrop::Backdrop,
+    /// The launcher's startup id (`DESKTOP_STARTUP_ID`), until the first
+    /// window takes it.
+    startup_id: Option<String>,
 }
 
 impl Conn {
@@ -1007,6 +1010,7 @@ impl Conn {
             cursors: Vec::new(),
             blank_cursor: 0,
             backdrop: backdrop::Backdrop::default(),
+            startup_id: None,
         })
     }
 
@@ -1168,9 +1172,18 @@ impl Window for X11Window {
         let _ = geometry::set_minimized(&mut conn, self.window, minimized);
     }
     fn activate(&self, token: Option<&str>) {
+        let managed = self.geo.get().reparented;
         let mut conn = self.conn.lock().unwrap();
-        let time = token.map_or(0, geometry::startup_time);
-        let _ = geometry::activate(&mut conn, self.window, time);
+        // A launch's token carries the time of the user's action that
+        // started it; else the user's last key or button press.
+        let time = token.and_then(super::startup::startup_time);
+        let _ = geometry::activate(&mut conn, self.window, time, managed);
+        // A forwarded launch's startup id: that launch is over too (its
+        // launcher's busy cursor stops).
+        if let Some(id) = token {
+            let _ = geometry::startup_complete(&mut conn, self.window, id);
+        }
+        crate::platform::window::debug_window(format_args!("activate {:#x}", self.window));
     }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         // The input method places its candidate window at the caret's bottom
@@ -1679,6 +1692,11 @@ fn create_window(
     let (wm_protocols, wm_delete) = (conn.atom_wm_protocols, conn.atom_wm_delete);
     set_property_atoms(conn, window, wm_protocols, &[wm_delete]).map_err(os)?;
 
+    // Whose window it is (WM_CLASS, the pid), and on the first window the
+    // launch it ends.
+    let startup_id = conn.startup_id.take();
+    geometry::set_identity(conn, window, startup_id.as_deref()).map_err(os)?;
+
     // Size limits, initial state and icon, all read by the window manager when
     // the window maps. A fixed-size window has its size as both limits.
     let limits = if attrs.resizable {
@@ -1753,6 +1771,10 @@ fn create_window(
     let mut req = vec![OP_MAP_WINDOW, 0, 0, 0];
     req.extend_from_slice(&window.to_le_bytes());
     conn.send(&finish(req)).map_err(os)?;
+    // The app is up: the launcher's busy cursor can stop.
+    if let Some(id) = &startup_id {
+        geometry::startup_complete(conn, window, id).map_err(os)?;
+    }
 
     // Grab keyboard focus so key events arrive even with no window manager
     // (e.g. under Xvfb in CI). revert-to = PointerRoot (1), time = 0
@@ -1797,6 +1819,10 @@ where
     H: FnMut(Event, &dyn Window) -> ControlFlow,
 {
     let mut conn = Conn::connect()?;
+
+    // How the launcher started the app (and nothing the app starts inherits
+    // it).
+    conn.startup_id = super::startup::take().desktop_startup_id;
 
     // Fetch the keyboard mapping up front (no window yet, so the reply is the
     // next message and won't interleave with events).
@@ -1952,6 +1978,11 @@ where
                 rd_u32(&buf, 4).unwrap_or(0)
             ));
             continue;
+        }
+        // A key or button press is the user's latest action, whose time an
+        // activation request quotes.
+        if matches!(buf[0] & 0x7f, X_KEY_PRESS | X_BUTTON_PRESS) {
+            geometry::note_user_time(rd_u32(&buf, 4).unwrap_or(0));
         }
         // The root's resources changed: maybe the scale (`Xft.dpi`). Every
         // window hears a new one, then lays out again at its size.

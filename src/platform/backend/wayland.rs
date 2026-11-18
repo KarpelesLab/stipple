@@ -1194,6 +1194,10 @@ struct WaylandWindow {
     pending_size: Cell<Option<PhysicalSize>>,
     pending_state: Cell<(bool, bool)>,
     state: Cell<(bool, bool)>,
+    /// The content's size (surface units) the last time the window was
+    /// neither maximized nor fullscreen: what it goes back to when the
+    /// compositor leaves the size to it, and its restored size.
+    normal: Cell<PhysicalSize>,
     /// Whether the compositor suspended the window (`xdg_toplevel`'s
     /// `suspended` state) in the last configure; and whether it shows, as
     /// last reported (suspended, or its frame callback stalled).
@@ -1246,6 +1250,7 @@ impl WaylandWindow {
             pending_size: Cell::new(None),
             pending_state: Cell::new((false, false)),
             state: Cell::new((false, false)),
+            normal: Cell::new(logical),
             pending_suspended: Cell::new(false),
             visibility: Cell::new(visibility::Visibility::default()),
             scale: Rc::new(Cell::new(scale)),
@@ -1472,6 +1477,10 @@ impl Window for WaylandWindow {
     fn info(&self) -> crate::platform::WindowInfo {
         let mut info = crate::platform::WindowInfo::from_size(self.size.get(), self.scale_factor());
         (info.maximized, info.fullscreen) = self.state.get();
+        if info.maximized || info.fullscreen {
+            let normal = self.normal.get();
+            info.restored_size = Size::new(normal.width as f64, normal.height as f64);
+        }
         info
     }
     fn set_inner_size(&self, size: Size) {
@@ -1501,12 +1510,18 @@ impl Window for WaylandWindow {
         match token {
             // A launcher's token lets the compositor hand the window the
             // focus.
-            Some(token) => attention::activate(&mut conn, token, self.surface),
+            Some(token) => {
+                attention::activate_with(&mut conn, token, self.surface);
+            }
+            // Else a token of our own, quoting the user's last input.
             None => {
-                attention::request(&mut conn, self.surface);
+                let serial = conn.clip.serial;
+                attention::activate(&mut conn, self.surface, serial);
             }
         }
         let _ = conn.stream.flush();
+        drop(conn);
+        crate::platform::window::debug_window(format_args!("activate {:#x}", self.surface));
     }
     fn clipboard(&self) -> Option<String> {
         clipboard::text(&mut self.conn.lock().unwrap())
@@ -1884,6 +1899,9 @@ where
 {
     let mut conn = WlConn::connect()?;
     crate::platform::frame::name_source("wl_surface.frame");
+    // The launcher's activation token (which nothing the app starts
+    // inherits), for the first window.
+    let mut startup_token = super::startup::take().activation_token;
     let size = ScaleFactor::IDENTITY.to_physical(attrs.logical_size);
     let size = PhysicalSize::new(size.width.max(1), size.height.max(1));
 
@@ -2041,6 +2059,7 @@ where
     let activation = activation_name.map(|name| bind(&mut conn, name, attention::ACTIVATION, 1));
     let bell = bell_name.map(|name| bind(&mut conn, name, attention::SYSTEM_BELL, 1));
     attention::setup(&mut conn, activation, bell);
+    conn.attention.seat = seat;
     // The pointer lock, when the compositor has both halves.
     if let (Some(c), Some(r)) = (constraints_name, relative_name) {
         conn.lock.constraints = Some(bind(&mut conn, c, pointer::CONSTRAINTS, 1));
@@ -2574,6 +2593,9 @@ where
                 }
             }
             let state = win.pending_state.get();
+            if state == (false, false) {
+                win.normal.set(win.logical.get());
+            }
             if state != win.state.get() {
                 win.state.set(state);
                 crate::platform::window::debug_window(format_args!(
@@ -2605,6 +2627,15 @@ where
             if handler(Event::RedrawRequested, win) == ControlFlow::Exit {
                 break;
             }
+            // Launched with a token: once the first window shows, the
+            // compositor focuses it as the launch's (past its focus-stealing
+            // prevention).
+            if let Some(token) = startup_token.take() {
+                let mut conn = shared.lock().unwrap();
+                let used = attention::activate_with(&mut conn, &token, win.surface);
+                let _ = conn.stream.flush();
+                dbg(format_args!("startup activation token used={used}"));
+            }
         } else if let Some(win) = windows
             .iter()
             .find(|w| w.toplevel == object && opcode == XDG_TOPLEVEL_CONFIGURE)
@@ -2623,9 +2654,14 @@ where
                 let focus = conn.decor.set_states(&states);
                 win.pending_size.set(Some(configure.size.unwrap_or_else(|| {
                     // The client picks: keep the content's size (the title
-                    // bar may have come or gone).
+                    // bar may have come or gone), or, leaving maximized or
+                    // fullscreen, go back to the size it had before.
                     let title = conn.decor.title_height() as u32;
-                    let logical = win.logical.get();
+                    let logical = if configure.maximized || configure.fullscreen {
+                        win.logical.get()
+                    } else {
+                        win.normal.get()
+                    };
                     PhysicalSize::new(logical.width, logical.height + title)
                 })));
                 focus
@@ -2704,6 +2740,7 @@ where
         } else if Some(object) == keyboard && opcode == WL_KEYBOARD_LEAVE {
             // Focus left the surface: keys held now are released elsewhere.
             keys.reset();
+            shared.lock().unwrap().attention.keyboard_focus = None;
             dbg(format_args!("keyboard leave"));
         } else if Some(object) == keyboard && opcode == WL_KEYBOARD_REPEAT_INFO {
             // rate (keys per second, 0 = off), delay (ms).
@@ -2723,6 +2760,7 @@ where
                 && let Some(s) = args.get(4..8)
             {
                 keyboard_focus = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
+                shared.lock().unwrap().attention.keyboard_focus = Some(keyboard_focus);
             }
             dbg(format_args!("keyboard event {opcode}"));
         } else if object == WL_DISPLAY && opcode == WL_DISPLAY_ERROR {

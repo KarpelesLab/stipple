@@ -26,6 +26,12 @@ pub(crate) mod headless;
 #[cfg(target_os = "linux")]
 pub(crate) mod wayland;
 
+/// The launcher's startup id and activation token, and `WM_CLASS` (Linux;
+/// its pure parts tested everywhere).
+#[cfg(any(target_os = "linux", test))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub(crate) mod startup;
+
 // Public only for the repository's `dri3probe` and `dmabuftest` harness
 // examples, which drive the DRI3/Present probes directly.
 #[cfg(target_os = "linux")]

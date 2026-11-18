@@ -396,6 +396,20 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   `AppHandle::window_info` and `App::on_window_change`, with
   `Event::WindowChanged`. **CI-verified** on X11 (xprop/xdotool) and Wayland
   (swaymsg); the Windows and macOS jobs check values read back from the OS.
+- ✅ **Windows for an app with many equal ones** (#78, #79, #80, #87): every
+  window has the menu bar *(drawn in each, an `HMENU` per window on Windows;
+  kept when the first closes)*, and `MenuItem::for_window` commands learn the
+  window they were picked from; `WindowRequest::Activate(None)` raises and activates
+  a window *(`_NET_ACTIVE_WINDOW` with the last input's time,
+  `xdg_activation_v1` with its serial, `SetForegroundWindow`,
+  `makeKeyAndOrderFront:` + `activate`)*; X11 windows carry `WM_CLASS`,
+  `_NET_WM_PID` and `WM_CLIENT_MACHINE`, and the launcher's
+  `DESKTOP_STARTUP_ID` / `XDG_ACTIVATION_TOKEN` are used for the first window
+  and taken out of the environment; `WindowInfo::restored_position` /
+  `restored_size` give a maximized or fullscreen window's normal bounds, which
+  `WindowAttributes::position` / `logical_size` restore to. *Run on macOS and
+  in unit tests; X11, Wayland and Windows checked in CI through
+  `multiwindow --selftest`. Still to do: an app-wide "Bring All to Front".*
 - ✅ **Embedded GPU content (browser viewport)**: toward using Stipple as a web
   browser's UI, the chosen model is **Stipple-as-compositor with shared GPU
   textures** (the Chromium model): a separate, sandboxed content process renders

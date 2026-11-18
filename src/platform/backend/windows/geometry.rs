@@ -61,6 +61,27 @@ pub(super) fn snap_sizing(
     [left, top, right, bottom]
 }
 
+/// A window's restored (normal) bounds on the screen, from
+/// `WINDOWPLACEMENT.rcNormalPosition` (`[left, top, right, bottom]`, in
+/// workspace coordinates: relative to the work area of the monitor, which
+/// starts `work_offset` from the monitor's corner when a taskbar is at its
+/// top or left), and `frame`, the window size minus its client size
+/// (`[left, top, right, bottom]` insets). Returns the outer top-left on the
+/// screen and the client size, physical pixels.
+pub(super) fn normal_bounds(
+    normal: [i32; 4],
+    work_offset: (i32, i32),
+    frame: [i32; 4],
+) -> ((i32, i32), (i32, i32)) {
+    let [left, top, right, bottom] = normal;
+    let at = (left + work_offset.0, top + work_offset.1);
+    let inner = (
+        (right - left - frame[0] - frame[2]).max(0),
+        (bottom - top - frame[1] - frame[3]).max(0),
+    );
+    (at, inner)
+}
+
 /// `s` as NUL-terminated UTF-16.
 pub(super) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -116,6 +137,19 @@ mod tests {
         assert_eq!(r, [5, 0, 105, 77]);
         let r = snap_sizing(WMSZ_BOTTOM, [0, 0, 105, 77], (0, 0), (0, 0), (10, 10));
         assert_eq!(r, [0, 0, 105, 70]);
+    }
+
+    #[test]
+    fn normal_bounds_move_out_of_the_workspace_and_drop_the_frame() {
+        // A taskbar 48 px tall at the top: workspace (0, 0) is screen (0, 48).
+        let (at, inner) = normal_bounds([100, 50, 916, 689], (0, 48), [8, 31, 8, 8]);
+        assert_eq!(at, (100, 98));
+        assert_eq!(inner, (800, 600));
+        assert_eq!(
+            normal_bounds([0, 0, 4, 4], (0, 0), [8, 31, 8, 8]).1,
+            (0, 0),
+            "never negative"
+        );
     }
 
     #[test]

@@ -24,6 +24,9 @@ struct Desk {
     open: RefCell<Vec<u64>>,
     log: RefCell<Vec<String>>,
     info: RefCell<HashMap<u64, WindowInfo>>,
+    /// Whether windows show a native menu bar (as on Windows) or the app
+    /// draws one (as on Linux).
+    native_menus: Cell<bool>,
 }
 
 impl Desk {
@@ -131,6 +134,22 @@ impl Window for FakeWindow {
             .log
             .borrow_mut()
             .push(format!("orientations {} {set:?}", self.id));
+    }
+    fn activate(&self, token: Option<&str>) {
+        let line = match token {
+            Some(token) => format!("activate {} {token}", self.id),
+            None => format!("activate {}", self.id),
+        };
+        self.desk.log.borrow_mut().push(line);
+    }
+    fn set_menu_bar(&self, menu: &crate::platform::NativeMenuBar) -> bool {
+        if self.desk.native_menus.get() {
+            self.desk
+                .log
+                .borrow_mut()
+                .push(format!("menu {} {}", self.id, menu.menus.len()));
+        }
+        self.desk.native_menus.get()
     }
     fn set_input_hints(&self, hints: &crate::platform::InputHints) {
         self.desk.log.borrow_mut().push(format!(
@@ -632,4 +651,164 @@ fn a_drawn_message_box_shows_in_the_window_it_is_for() {
             .map(|v| v.mb.text),
         Some("Saved".to_string())
     );
+}
+
+/// The state of an app whose menu command acts on a window: the windows it
+/// was picked from, shared with the test.
+struct Tabs {
+    opened_in: Rc<RefCell<Vec<WindowId>>>,
+}
+
+fn tabs_app() -> (App<Tabs>, Rc<RefCell<Vec<WindowId>>>) {
+    use crate::core::{Menu, MenuBar, MenuItem, Shortcut};
+    let opened: Rc<RefCell<Vec<WindowId>>> = Default::default();
+    let state = Tabs {
+        opened_in: opened.clone(),
+    };
+    let app = App::new(state, |_: &Tabs, _: &mut Cx<Tabs>| crate::widgets::spacer())
+        .no_font()
+        .menu(|_: &Tabs| {
+            MenuBar::new().menu(
+                Menu::new("&File").item(
+                    MenuItem::for_window("New &Tab", |s: &mut Tabs, window| {
+                        s.opened_in.borrow_mut().push(window)
+                    })
+                    .shortcut(Shortcut::cmd('t')),
+                ),
+            )
+        });
+    (app, opened)
+}
+
+fn blank(_: &Tabs, _: &mut Cx<Tabs>) -> Element {
+    crate::widgets::spacer()
+}
+
+/// Press and release `code` in window `id`.
+fn tap_key<H: FnMut(Event, &dyn Window) -> ControlFlow>(
+    run: &mut Run<H>,
+    id: u64,
+    code: crate::platform::KeyCode,
+    modifiers: crate::platform::Modifiers,
+) {
+    for state in [ButtonState::Pressed, ButtonState::Released] {
+        run.send(
+            id,
+            Event::Key {
+                code,
+                state,
+                modifiers,
+            },
+        );
+    }
+}
+
+/// Open the drawn menu bar's first menu from the keyboard and pick its first
+/// command, in window `id`.
+fn pick_from_drawn_bar<H: FnMut(Event, &dyn Window) -> ControlFlow>(run: &mut Run<H>, id: u64) {
+    use crate::platform::{KeyCode, Modifiers};
+    let none = Modifiers::default();
+    tap_key(run, id, KeyCode::F10, none);
+    run.send(id, Event::RedrawRequested);
+    tap_key(run, id, KeyCode::ArrowDown, none);
+    run.send(id, Event::RedrawRequested);
+    tap_key(run, id, KeyCode::Enter, none);
+}
+
+#[test]
+fn every_window_draws_the_menu_bar_and_its_commands_know_the_window() {
+    let (mut app, opened) = tabs_app();
+    let second = app.open_window(WindowAttributes::new().title("Second"), blank);
+    let handle = app.handle();
+    let mut run = run(app);
+    run.send(101, Event::RedrawRequested);
+    // The second window's drawn bar runs the command for it, the first's for
+    // the first, and a shortcut for the window it's pressed in.
+    pick_from_drawn_bar(&mut run, 101);
+    pick_from_drawn_bar(&mut run, 100);
+    let cmd = crate::platform::Modifiers {
+        ctrl: !cfg!(target_os = "macos"),
+        meta: cfg!(target_os = "macos"),
+        ..Default::default()
+    };
+    tap_key(&mut run, 101, crate::platform::KeyCode::Char('t'), cmd);
+    // Closing the first window leaves the other with its bar.
+    assert_eq!(run.send(100, Event::CloseRequested), ControlFlow::Wait);
+    assert_eq!(handle.windows(), [second]);
+    run.send(101, Event::RedrawRequested);
+    pick_from_drawn_bar(&mut run, 101);
+    assert_eq!(
+        *opened.borrow(),
+        [second, WindowId::PRIMARY, second, second],
+        "the window each pick came from"
+    );
+    let log = run.desk.take_log();
+    assert!(!log.iter().any(|l| l.starts_with("menu ")), "{log:?}");
+}
+
+#[test]
+fn every_window_gets_the_native_menu_bar_and_picks_come_from_their_window() {
+    let (mut app, opened) = tabs_app();
+    let second = app.open_window(WindowAttributes::new().title("Second"), blank);
+    let handle = app.handle();
+    let (_, handler) = app.into_handler();
+    let desk = Desk::new();
+    desk.native_menus.set(true);
+    let mut run = Run { desk, handler };
+    run.send(100, Event::RedrawRequested);
+    run.send(101, Event::RedrawRequested);
+    let log = run.desk.take_log();
+    assert!(log.contains(&"menu 100 1".to_string()), "{log:?}");
+    assert!(log.contains(&"menu 101 1".to_string()), "{log:?}");
+    // A pick from the second window's bar is for the second window.
+    run.send(101, Event::MenuCommand(1));
+    run.send(100, Event::MenuCommand(1));
+    // The first closing doesn't take the other's bar; a window opened later
+    // gets one too.
+    assert_eq!(run.send(100, Event::CloseRequested), ControlFlow::Wait);
+    let third = handle.open_window(WindowAttributes::new().title("Third"), blank);
+    run.wake();
+    run.send(102, Event::RedrawRequested);
+    let log = run.desk.take_log();
+    assert!(log.contains(&"menu 102 1".to_string()), "{log:?}");
+    assert!(
+        !log.contains(&"menu 101 1".to_string()),
+        "unchanged: {log:?}"
+    );
+    run.send(102, Event::MenuCommand(1));
+    assert_eq!(*opened.borrow(), [second, WindowId::PRIMARY, third]);
+}
+
+#[test]
+fn a_focus_request_activates_its_window() {
+    let mut app = App::new(doc(), titled).no_font();
+    let other = app.open_window(WindowAttributes::new().title("Other"), titled);
+    let handle = app.handle();
+    let mut run = run(app);
+    run.desk.take_log();
+    handle.window_to(other, WindowRequest::Activate(None));
+    run.wake();
+    let log = run.desk.take_log();
+    assert!(log.contains(&"activate 101".to_string()), "{log:?}");
+    assert!(!log.contains(&"activate 100".to_string()), "{log:?}");
+}
+
+#[test]
+fn a_window_opened_maximized_restores_to_the_bounds_it_was_opened_with() {
+    let app = App::new(doc(), titled).no_font();
+    let handle = app.handle();
+    let mut run = run(app);
+    let id = handle.open_window(
+        WindowAttributes::new()
+            .title("Saved")
+            .position(30, 40)
+            .logical_size(Size::new(640.0, 480.0))
+            .maximized(true),
+        titled,
+    );
+    run.wake();
+    let info = handle.window_info(id).unwrap();
+    assert!(info.maximized);
+    assert_eq!(info.restored_position, Some(Point::new(30.0, 40.0)));
+    assert_eq!(info.restored_size, Size::new(640.0, 480.0));
 }

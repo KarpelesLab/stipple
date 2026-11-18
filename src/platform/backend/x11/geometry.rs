@@ -15,9 +15,22 @@
 //!   when it changes, and the work area from the root's `_NET_WORKAREA` (the
 //!   whole desktop's: X11 has no per-monitor work area).
 //! - **Resize increments** are `PResizeInc` in `WM_NORMAL_HINTS`.
+//! - **Restored bounds** (where a maximized or fullscreen window goes back
+//!   to) are the last geometry the window had in its normal state. A window
+//!   manager may send the `ConfigureNotify` that maximizes before the
+//!   `_NET_WM_STATE` change or after it; when the last "normal" geometry
+//!   covers the work area, it was the maximized one, and the one before it
+//!   is used.
+//! - **Identity**: `WM_CLASS` (see `backend::startup`), `_NET_WM_PID` and
+//!   `WM_CLIENT_MACHINE`, and the launcher's startup id: `_NET_STARTUP_ID`
+//!   on the first window, then a `remove` message once it maps.
+//! - **Activation** is a `_NET_ACTIVE_WINDOW` request from the application
+//!   (source 1) with the time of the user's last key or button press (or of
+//!   the launch); without a window manager, a raise and `SetInputFocus`.
 
 use std::collections::VecDeque;
 use std::io::{self, Read};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::{Conn, finish, intern_atom, rd_u32};
 use crate::geometry::{PhysicalSize, Point, Rect, ScaleFactor, Size};
@@ -31,6 +44,12 @@ const OP_SEND_EVENT: u8 = 25;
 const ATOM_STRING: u32 = 31;
 const ATOM_WM_NAME: u32 = 39;
 const ATOM_CARDINAL: u32 = 6;
+const ATOM_WM_CLIENT_MACHINE: u32 = 36;
+const ATOM_WM_CLASS: u32 = 67;
+const OP_SET_INPUT_FOCUS: u8 = 42;
+/// `PropertyChangeMask`, which startup-notification messages go to the root
+/// with.
+const PROPERTY_CHANGE_MASK: u32 = 0x0040_0000;
 /// The `ReparentNotify` event code.
 pub(super) const X_REPARENT_NOTIFY: u8 = 21;
 /// `WM_SIZE_HINTS` flags: a position the user (here: the app) asked for, and
@@ -51,6 +70,10 @@ pub(super) struct Atoms {
     pub change_state: u32,
     pub user_time: u32,
     pub utf8: u32,
+    pub pid: u32,
+    pub startup_id: u32,
+    pub startup_info_begin: u32,
+    pub startup_info: u32,
 }
 
 impl Atoms {
@@ -64,6 +87,10 @@ impl Atoms {
             change_state: intern_atom(conn, b"WM_CHANGE_STATE")?,
             user_time: intern_atom(conn, b"_NET_WM_USER_TIME")?,
             utf8: intern_atom(conn, b"UTF8_STRING")?,
+            pid: intern_atom(conn, b"_NET_WM_PID")?,
+            startup_id: intern_atom(conn, b"_NET_STARTUP_ID")?,
+            startup_info_begin: intern_atom(conn, b"_NET_STARTUP_INFO_BEGIN")?,
+            startup_info: intern_atom(conn, b"_NET_STARTUP_INFO")?,
         })
     }
 }
@@ -83,6 +110,12 @@ pub(super) struct Geometry {
     pub minimized: bool,
     /// The desktop's work area: x, y, width, height.
     pub work_area: Option<[u32; 4]>,
+    /// The last two geometries seen in the normal state (neither maximized,
+    /// fullscreen nor minimized), newest first: the outer top-left and the
+    /// content size. See [`Geometry::restored`].
+    pub normal: [Option<((i32, i32), PhysicalSize)>; 2],
+    /// Where the window goes back to, from when it left the normal state.
+    pub restore_to: Option<((i32, i32), PhysicalSize)>,
 }
 
 impl Geometry {
@@ -104,12 +137,73 @@ impl Geometry {
         let h = u16::from_le_bytes([ev[22], ev[23]]) as u32;
         self.size = PhysicalSize::new(w, h);
         // Inside a frame, a real event's position is relative to the frame.
+        let mut moved = false;
         if synthetic || !self.reparented {
-            let moved = self.origin != (x, y);
+            moved = self.origin != (x, y);
             self.origin = (x, y);
-            return moved;
         }
-        false
+        self.note_normal();
+        moved
+    }
+
+    /// Whether the window is in its normal state.
+    fn is_normal(&self) -> bool {
+        !(self.maximized || self.fullscreen || self.minimized)
+    }
+
+    /// The outer top-left corner (the frame's), physical pixels.
+    fn outer_origin(&self) -> (i32, i32) {
+        (
+            self.origin.0 - self.frame[0] as i32,
+            self.origin.1 - self.frame[2] as i32,
+        )
+    }
+
+    /// Remember the geometry, if the window is in its normal state.
+    fn note_normal(&mut self) {
+        if !self.is_normal() {
+            return;
+        }
+        let now = (self.outer_origin(), self.size);
+        if self.normal[0] != Some(now) {
+            self.normal = [Some(now), self.normal[0]];
+        }
+    }
+
+    /// The state may have changed (from `_NET_WM_STATE`; `was_normal` says
+    /// how it was before): leaving the normal state fixes where the window
+    /// goes back to.
+    pub fn state_changed(&mut self, was_normal: bool) {
+        if !was_normal || self.is_normal() {
+            self.note_normal();
+            return;
+        }
+        // The window manager may have resized it before saying it
+        // maximized it: a "normal" geometry covering the work area is that.
+        let covers = |(at, size): ((i32, i32), PhysicalSize)| match self.work_area {
+            Some([x, y, w, h]) => {
+                let [l, r, t, b] = self.frame;
+                at.0 <= x as i32
+                    && at.1 <= y as i32
+                    && size.width + l + r >= w
+                    && size.height + t + b >= h
+            }
+            None => false,
+        };
+        self.restore_to = match self.normal {
+            [Some(last), prev] if covers(last) => prev.or(Some(last)),
+            [last, _] => last,
+        };
+    }
+
+    /// Where the window goes back to when it leaves maximized, fullscreen or
+    /// minimized: its outer top-left and content size, physical pixels. Its
+    /// current geometry while it is in none of them.
+    pub fn restored(&self) -> ((i32, i32), PhysicalSize) {
+        match self.restore_to {
+            Some(bounds) if !self.is_normal() => bounds,
+            _ => (self.outer_origin(), self.size),
+        }
     }
 
     /// Take in a `ReparentNotify` naming `root` as the root window.
@@ -128,6 +222,7 @@ impl Geometry {
         let s = scale.get();
         let [left, right, top, bottom] = self.frame.map(|v| v as f64);
         let inner = scale.to_logical(self.size);
+        let ((rx, ry), restored) = self.restored();
         WindowInfo {
             position: Some(Point::new(
                 (self.origin.0 as f64 - left) / s,
@@ -147,6 +242,8 @@ impl Geometry {
             }),
             safe_area: crate::geometry::Insets::ZERO,
             keyboard_inset: 0.0,
+            restored_position: Some(Point::new(rx as f64 / s, ry as f64 / s)),
+            restored_size: scale.to_logical(restored),
         }
     }
 }
@@ -253,28 +350,142 @@ pub(super) fn set_minimized(conn: &mut Conn, window: u32, minimized: bool) -> io
     }
 }
 
-/// Map a window and ask the window manager to activate it, as an
-/// application's request (EWMH source 1) made at `time`: the launch's, from
+/// The X server time of the user's last key or button press (or of the
+/// launch, from the startup id), which activation requests quote; 0
+/// (`CurrentTime`) before there is one.
+static USER_TIME: AtomicU32 = AtomicU32::new(0);
+
+/// Note the time of a key or button press.
+pub(super) fn note_user_time(time: u32) {
+    if time != 0 {
+        USER_TIME.store(time, Ordering::Relaxed);
+    }
+}
+
+/// Bring a window to the front and give it focus: map it (bringing it back
+/// if minimized) and ask the window manager to activate it, as an
+/// application's request (EWMH source 1) made at `time`: a launch's, from
 /// its startup id, which lets the window manager weigh it against what the
-/// user did since; 0 when unknown.
-pub(super) fn activate(conn: &mut Conn, window: u32, time: u32) -> io::Result<()> {
+/// user did since; else the user's last key or button press. With no window
+/// manager (`managed` false: the window isn't in a frame), raise it and focus
+/// it ourselves.
+pub(super) fn activate(
+    conn: &mut Conn,
+    window: u32,
+    time: Option<u32>,
+    managed: bool,
+) -> io::Result<()> {
     let root = conn.setup.root;
     let geo = conn.geo;
+    let time = time
+        .filter(|t| *t != 0)
+        .unwrap_or_else(|| USER_TIME.load(Ordering::Relaxed));
     conn.send(&map_request(window, true))?;
     conn.send(&root_message(
         root,
         window,
         geo.active_window,
         [1, time, 0, 0, 0],
-    ))
+    ))?;
+    if !managed {
+        conn.send(&raise_request(window))?;
+        let mut req = vec![OP_SET_INPUT_FOCUS, 1, 0, 0];
+        req.extend_from_slice(&window.to_le_bytes());
+        req.extend_from_slice(&time.to_le_bytes());
+        conn.send(&finish(req))?;
+    }
+    Ok(())
 }
 
-/// The X server time a startup id carries (the startup-notification spec's
-/// `…_TIME<timestamp>` suffix), or 0.
-pub(super) fn startup_time(id: &str) -> u32 {
-    id.rsplit_once("_TIME")
-        .and_then(|(_, t)| t.parse().ok())
-        .unwrap_or(0)
+/// A `ConfigureWindow` putting a window above its siblings.
+fn raise_request(window: u32) -> Vec<u8> {
+    const STACK_MODE: u16 = 0x40;
+    const ABOVE: u32 = 0;
+    let mut req = vec![OP_CONFIGURE_WINDOW, 0, 0, 0];
+    req.extend_from_slice(&window.to_le_bytes());
+    req.extend_from_slice(&STACK_MODE.to_le_bytes());
+    req.extend_from_slice(&0u16.to_le_bytes());
+    req.extend_from_slice(&ABOVE.to_le_bytes());
+    finish(req)
+}
+
+/// Say who the window belongs to: `WM_CLASS`, `_NET_WM_PID` and
+/// `WM_CLIENT_MACHINE`; and, on the app's first window, the launcher's
+/// startup id (`_NET_STARTUP_ID`), which the window manager matches to the
+/// launch (for focus, and for the launcher's busy cursor).
+pub(super) fn set_identity(
+    conn: &mut Conn,
+    window: u32,
+    startup_id: Option<&str>,
+) -> io::Result<()> {
+    let class = crate::platform::backend::startup::own_wm_class();
+    super::set_property_str(conn, window, ATOM_WM_CLASS, ATOM_STRING, &class)?;
+    let atoms = conn.geo;
+    if atoms.pid != 0 {
+        super::set_property32(
+            conn,
+            window,
+            atoms.pid,
+            ATOM_CARDINAL,
+            &[std::process::id()],
+        )?;
+    }
+    if let Some(host) = crate::platform::backend::startup::host_name() {
+        super::set_property_str(
+            conn,
+            window,
+            ATOM_WM_CLIENT_MACHINE,
+            ATOM_STRING,
+            host.as_bytes(),
+        )?;
+    }
+    if let Some(id) = startup_id
+        && atoms.startup_id != 0
+        && atoms.utf8 != 0
+    {
+        super::set_property_str(conn, window, atoms.startup_id, atoms.utf8, id.as_bytes())?;
+        if let Some(time) = crate::platform::backend::startup::startup_time(id) {
+            note_user_time(time);
+        }
+    }
+    Ok(())
+}
+
+/// Tell the launcher the launch with startup id `id` is over (its busy
+/// cursor stops): a `remove` message, in 20-byte client messages to the
+/// root about `window`.
+pub(super) fn startup_complete(conn: &mut Conn, window: u32, id: &str) -> io::Result<()> {
+    let atoms = conn.geo;
+    if atoms.startup_info_begin == 0 || atoms.startup_info == 0 {
+        return Ok(());
+    }
+    let root = conn.setup.root;
+    let message = crate::platform::backend::startup::remove_message(id);
+    for (i, chunk) in crate::platform::backend::startup::message_chunks(&message)
+        .iter()
+        .enumerate()
+    {
+        let ty = if i == 0 {
+            atoms.startup_info_begin
+        } else {
+            atoms.startup_info
+        };
+        conn.send(&startup_info_request(root, window, ty, chunk))?;
+    }
+    Ok(())
+}
+
+/// A format-8 client message of startup-notification text to the root.
+fn startup_info_request(root: u32, window: u32, ty: u32, chunk: &[u8; 20]) -> Vec<u8> {
+    const CLIENT_MESSAGE: u8 = 33;
+    let mut req = vec![OP_SEND_EVENT, 0, 0, 0];
+    req.extend_from_slice(&root.to_le_bytes());
+    req.extend_from_slice(&PROPERTY_CHANGE_MASK.to_le_bytes());
+    req.extend_from_slice(&[CLIENT_MESSAGE, 8, 0, 0]);
+    req.extend_from_slice(&window.to_le_bytes());
+    req.extend_from_slice(&ty.to_le_bytes());
+    req.extend_from_slice(chunk);
+    finish(req)
 }
 
 /// Read a format-32 property while the event loop runs: events that arrive
@@ -329,6 +540,7 @@ pub(super) fn refresh(
     geo: &mut Geometry,
 ) -> io::Result<bool> {
     let before = *geo;
+    let was_normal = !(geo.maximized || geo.fullscreen || geo.minimized);
     let atoms = conn.geo;
     let (state, max_v, max_h, full) = (
         conn.atom_net_wm_state,
@@ -357,6 +569,7 @@ pub(super) fn refresh(
             _ => None,
         };
     }
+    geo.state_changed(was_normal);
     Ok(*geo != before)
 }
 
@@ -387,13 +600,6 @@ mod tests {
         ev[20..22].copy_from_slice(&w.to_le_bytes());
         ev[22..24].copy_from_slice(&h.to_le_bytes());
         ev
-    }
-
-    #[test]
-    fn startup_ids_carry_their_time() {
-        assert_eq!(startup_time("kde-term-4242-host-1_TIME123456"), 123456);
-        assert_eq!(startup_time("no-time-here"), 0);
-        assert_eq!(startup_time("x_TIMEnope"), 0);
     }
 
     #[test]
@@ -431,6 +637,58 @@ mod tests {
             info.work_area,
             Some(Rect::from_xywh(0.0, 16.0, 960.0, 524.0))
         );
+    }
+
+    #[test]
+    fn restored_bounds_are_the_last_normal_geometry() {
+        let mut geo = Geometry::new((0, 0), PhysicalSize::new(10, 10));
+        geo.work_area = Some([0, 0, 1000, 800]);
+        assert!(geo.configure(&configure(100, 50, 400, 300, false)));
+        assert_eq!(geo.restored(), ((100, 50), PhysicalSize::new(400, 300)));
+        // Maximized, the state first: the window goes back to 400x300.
+        geo.maximized = true;
+        geo.state_changed(true);
+        geo.configure(&configure(0, 0, 1000, 800, false));
+        assert_eq!(geo.restored(), ((100, 50), PhysicalSize::new(400, 300)));
+        let info = geo.info(ScaleFactor::new(2.0));
+        assert_eq!(info.restored_position, Some(Point::new(50.0, 25.0)));
+        assert_eq!(info.restored_size, Size::new(200.0, 150.0));
+        assert_eq!(info.inner_size, Size::new(500.0, 400.0));
+        // Restored: the current geometry again.
+        geo.maximized = false;
+        geo.state_changed(false);
+        geo.configure(&configure(100, 50, 400, 300, false));
+        assert_eq!(geo.restored(), ((100, 50), PhysicalSize::new(400, 300)));
+        // Maximized with the resize first: that one covers the work area, so
+        // the geometry before it is the normal one.
+        geo.configure(&configure(0, 0, 1000, 800, false));
+        geo.maximized = true;
+        geo.state_changed(true);
+        assert_eq!(geo.restored(), ((100, 50), PhysicalSize::new(400, 300)));
+    }
+
+    #[test]
+    fn activation_asks_the_window_manager_with_the_user_time() {
+        let req = root_message(1, 2, 3, [1, 1234, 0, 0, 0]);
+        assert_eq!(rd_u32(&req, 24), Some(1), "source: application");
+        assert_eq!(rd_u32(&req, 28), Some(1234), "timestamp");
+        let raise = raise_request(9);
+        assert_eq!(raise.len(), 16);
+        assert_eq!(u16::from_le_bytes([raise[8], raise[9]]), 0x40);
+    }
+
+    #[test]
+    fn startup_info_is_a_format_8_message_to_the_root() {
+        let mut chunk = [0u8; 20];
+        chunk[..6].copy_from_slice(b"remove");
+        let req = startup_info_request(1, 2, 3, &chunk);
+        assert_eq!(req.len(), 44);
+        assert_eq!(req[0], OP_SEND_EVENT);
+        assert_eq!(rd_u32(&req, 8), Some(PROPERTY_CHANGE_MASK));
+        assert_eq!((req[12], req[13]), (33, 8));
+        assert_eq!(rd_u32(&req, 16), Some(2));
+        assert_eq!(rd_u32(&req, 20), Some(3));
+        assert_eq!(&req[24..30], b"remove");
     }
 
     #[test]

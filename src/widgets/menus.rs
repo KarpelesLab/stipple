@@ -666,11 +666,12 @@ fn panel<S: 'static>(
             ItemKind::Action { .. } => item.action().map(|action| {
                 let ui = ui.clone();
                 let picked = picked.cloned();
+                let window = cx.window_id();
                 cx.register(move |s| {
                     ui.borrow_mut().close();
-                    (action.borrow_mut())(s);
+                    (action.borrow_mut())(s, window);
                     if let Some(picked) = &picked {
-                        (picked.borrow_mut())(s);
+                        (picked.borrow_mut())(s, window);
                     }
                 })
             }),

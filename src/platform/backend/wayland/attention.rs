@@ -7,6 +7,12 @@
 //! (sway, KDE and GNOME do), which is what an attention request wants. The
 //! bell is `xdg_system_bell_v1` where the compositor has it; elsewhere there
 //! is no beep on Wayland.
+//!
+//! Activating a window on purpose ([`activate`]) asks for a token that
+//! quotes the serial of the user's last input event and the surface that had
+//! the keyboard then, which is what lets a compositor hand focus over; a
+//! token from the launcher (`XDG_ACTIVATION_TOKEN`) activates the first
+//! window ([`activate_with`]).
 
 use super::{WlConn, arg_str, arg_u32, read_str};
 
@@ -17,6 +23,7 @@ pub(super) const SYSTEM_BELL: &str = "xdg_system_bell_v1";
 const ACTIVATION_GET_TOKEN: u16 = 1;
 const ACTIVATION_ACTIVATE: u16 = 2;
 // xdg_activation_token_v1 requests, and its event.
+const TOKEN_SET_SERIAL: u16 = 0;
 const TOKEN_SET_SURFACE: u16 = 2;
 const TOKEN_COMMIT: u16 = 3;
 const TOKEN_DESTROY: u16 = 4;
@@ -31,6 +38,10 @@ pub(super) struct Attention {
     bell: Option<u32>,
     /// Tokens asked for, and the surface each will activate.
     pending: Vec<(u32, u32)>,
+    /// The seat, and the surface with its keyboard focus (if one of ours),
+    /// which activation tokens quote.
+    pub(super) seat: Option<u32>,
+    pub(super) keyboard_focus: Option<u32>,
 }
 
 /// Keep the bound globals.
@@ -43,6 +54,22 @@ pub(super) fn setup(conn: &mut WlConn, activation: Option<u32>, bell: Option<u32
 /// attention request while it isn't focused. Returns whether the compositor
 /// supports it.
 pub(super) fn request(conn: &mut WlConn, surface: u32) -> bool {
+    token_for(conn, surface, None, surface)
+}
+
+/// Bring `surface` to the front and focus it: a token quoting `serial`, the
+/// user's last input event (and the surface with the keyboard), which a
+/// compositor honors while the app is the one in use; refused, it marks the
+/// window urgent instead. Returns whether the compositor supports it.
+pub(super) fn activate(conn: &mut WlConn, surface: u32, serial: u32) -> bool {
+    let requester = conn.attention.keyboard_focus.unwrap_or(surface);
+    let quoted = conn.attention.seat.map(|seat| (serial, seat));
+    token_for(conn, requester, quoted, surface)
+}
+
+/// Ask for a token from `requester` (quoting an input event's serial and
+/// seat, if given) that will activate `target`.
+fn token_for(conn: &mut WlConn, requester: u32, serial: Option<(u32, u32)>, target: u32) -> bool {
     let Some(activation) = conn.attention.activation else {
         return false;
     };
@@ -53,22 +80,31 @@ pub(super) fn request(conn: &mut WlConn, surface: u32) -> bool {
     {
         return false;
     }
-    let _ = conn.send(token, TOKEN_SET_SURFACE, &surface.to_le_bytes());
+    if let Some((serial, seat)) = serial {
+        let mut a = Vec::new();
+        arg_u32(&mut a, serial);
+        arg_u32(&mut a, seat);
+        let _ = conn.send(token, TOKEN_SET_SERIAL, &a);
+    }
+    let _ = conn.send(token, TOKEN_SET_SURFACE, &requester.to_le_bytes());
     let _ = conn.send(token, TOKEN_COMMIT, &[]);
-    conn.attention.pending.push((token, surface));
+    conn.attention.pending.push((token, target));
     true
 }
 
-/// Activate `surface` with a token another client (a launcher, a second
-/// launch of the app) handed over.
-pub(super) fn activate(conn: &mut WlConn, token: &str, surface: u32) {
-    if let Some(activation) = conn.attention.activation {
-        let _ = conn.send(
-            activation,
-            ACTIVATION_ACTIVATE,
-            &activate_args(token, surface),
-        );
-    }
+/// Activate `surface` with a token someone else got: the launcher's
+/// (`XDG_ACTIVATION_TOKEN`), for the app's first window. Returns whether the
+/// compositor supports it.
+pub(super) fn activate_with(conn: &mut WlConn, token: &str, surface: u32) -> bool {
+    let Some(activation) = conn.attention.activation else {
+        return false;
+    };
+    conn.send(
+        activation,
+        ACTIVATION_ACTIVATE,
+        &activate_args(token, surface),
+    )
+    .is_ok()
 }
 
 /// Ring the system bell for `surface`. Returns whether the compositor has one.
@@ -154,6 +190,37 @@ mod tests {
         let (object, opcode, _, _) = read_request(&compositor);
         assert_eq!((object, opcode), (token, TOKEN_DESTROY));
         assert!(!handle(&mut conn, token, TOKEN_DONE, &[]), "done with it");
+    }
+
+    #[test]
+    fn activation_quotes_the_last_input_and_the_focused_surface() {
+        use super::super::clipboard::tests::{conn_pair, read_request};
+        let (mut conn, compositor) = conn_pair();
+        setup(&mut conn, Some(3), None);
+        conn.attention.seat = Some(5);
+        conn.attention.keyboard_focus = Some(8);
+        assert!(activate(&mut conn, 7, 42));
+        let (object, opcode, args, _) = read_request(&compositor);
+        assert_eq!((object, opcode), (3, ACTIVATION_GET_TOKEN));
+        let token = u32::from_le_bytes(args[..4].try_into().unwrap());
+        let (object, opcode, args, _) = read_request(&compositor);
+        assert_eq!((object, opcode), (token, TOKEN_SET_SERIAL));
+        assert_eq!(args, [42, 0, 0, 0, 5, 0, 0, 0]);
+        let (object, opcode, args, _) = read_request(&compositor);
+        assert_eq!(
+            (object, opcode, args),
+            (token, TOKEN_SET_SURFACE, 8u32.to_le_bytes().to_vec()),
+            "asked for by the surface with the keyboard"
+        );
+        let (_, opcode, _, _) = read_request(&compositor);
+        assert_eq!(opcode, TOKEN_COMMIT);
+        // The token activates the window asked for.
+        assert_eq!(conn.attention.pending, [(token, 7)]);
+        // A launcher's token activates directly.
+        assert!(activate_with(&mut conn, "launch", 7));
+        let (object, opcode, args, _) = read_request(&compositor);
+        assert_eq!((object, opcode), (3, ACTIVATION_ACTIVATE));
+        assert_eq!(args, activate_args("launch", 7));
     }
 
     #[test]

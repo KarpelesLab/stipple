@@ -66,9 +66,26 @@ impl Launch {
     /// environment, and the activation token in the environment.
     pub fn current() -> Self {
         let lossy = |s: std::ffi::OsString| s.to_string_lossy().into_owned();
-        let env: Vec<(String, String)> = std::env::vars_os()
+        #[allow(unused_mut)]
+        let mut env: Vec<(String, String)> = std::env::vars_os()
             .map(|(k, v)| (lossy(k), lossy(v)))
             .collect();
+        // The backend takes the launcher's startup id and activation token
+        // out of the environment as it starts (so the app's children don't
+        // inherit them); the launch had them.
+        #[cfg(target_os = "linux")]
+        if let Some(startup) = crate::platform::backend::startup::taken() {
+            for (name, value) in [
+                ("XDG_ACTIVATION_TOKEN", startup.activation_token),
+                ("DESKTOP_STARTUP_ID", startup.desktop_startup_id),
+            ] {
+                if let Some(value) = value
+                    && !env.iter().any(|(k, _)| k == name)
+                {
+                    env.push((name.to_string(), value));
+                }
+            }
+        }
         let token = ["XDG_ACTIVATION_TOKEN", "DESKTOP_STARTUP_ID"]
             .iter()
             .find_map(|name| {

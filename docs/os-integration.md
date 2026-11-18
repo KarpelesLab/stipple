@@ -355,8 +355,9 @@ resource unless a build script adds one (`winres`, `embed-resource`), so desktop
 apps should call `App::app_info` with their id and `env!("CARGO_PKG_VERSION")`.
 Call it before `dirs()`: desktop directories are named after the id. On
 Wayland, the id the app gave is also the window's app id
-(`xdg_toplevel.set_app_id`), which the compositor matches to the app's
-`.desktop` file.
+(`xdg_toplevel.set_app_id`), and on X11 the class in its `WM_CLASS`, which
+the compositor or window manager matches to the app's `.desktop` file (see
+[windows-and-cursors.md](windows-and-cursors.md#launching-and-who-the-window-belongs-to)).
 
 There is no key-value settings store on top yet (`NSUserDefaults`,
 `SharedPreferences`, `localStorage`), and no web storage: write files in

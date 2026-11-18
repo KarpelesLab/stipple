@@ -113,12 +113,16 @@ pub enum WindowRequest {
     /// [`AppHandle::set_orientations`](crate::core::AppHandle::set_orientations).
     Orientations(Orientations),
     /// Bring the window to the front, restored if minimized, with the
-    /// keyboard focus: for the window that shows a
-    /// [`Launch`](crate::platform::Launch) the running instance heard, with
+    /// keyboard focus. Desktops guard against focus stealing, so this works
+    /// best right after the user did something in the app: without a token
+    /// the request quotes the user's last input (its time on X11, its serial
+    /// on Wayland). For the window that shows a
+    /// [`Launch`](crate::platform::Launch) the running instance heard, pass
     /// its [`activation_token`](crate::platform::Launch::activation_token),
     /// which Wayland compositors ask for (and X11 window managers use) before
-    /// they let a window take the focus. Without a token, Wayland only marks
-    /// the window as wanting attention.
+    /// they let another app's launch take the focus. A system that refuses
+    /// asks for the user's attention instead (see
+    /// `docs/windows-and-cursors.md`, *Bringing a window to the front*).
     Activate(Option<String>),
 }
 
@@ -208,6 +212,20 @@ pub struct WindowInfo {
     /// focused text field in view; read it from a view with
     /// [`Cx::keyboard_inset`](crate::core::Cx::keyboard_inset).
     pub keyboard_inset: f64,
+    /// Where the window's outer top-left corner goes back to when it leaves
+    /// maximized or fullscreen (its normal bounds): [`position`](Self::position)
+    /// while it is neither. `None` where the system doesn't tell (Wayland).
+    /// To bring a window back as it was, open it with this as
+    /// [`WindowAttributes::position`], [`restored_size`](Self::restored_size)
+    /// as [`logical_size`](WindowAttributes::logical_size), and
+    /// [`maximized`](WindowAttributes::maximized) or
+    /// [`fullscreen`](WindowAttributes::fullscreen): un-maximizing it then
+    /// returns to these bounds.
+    pub restored_position: Option<Point>,
+    /// The content area's size when the window leaves maximized or
+    /// fullscreen (see [`restored_position`](Self::restored_position)):
+    /// [`inner_size`](Self::inner_size) while it is neither.
+    pub restored_size: Size,
 }
 
 impl WindowInfo {
@@ -225,6 +243,8 @@ impl WindowInfo {
             work_area: None,
             safe_area: Insets::ZERO,
             keyboard_inset: 0.0,
+            restored_position: None,
+            restored_size: size,
         }
     }
 
@@ -257,7 +277,11 @@ pub struct WindowAttributes {
     pub resizable: bool,
     /// Optional initial top-left position in logical pixels. `None` lets the
     /// window manager place the window (and, with no WM, the server uses 0,0).
-    /// Used to lay multiple windows out side by side.
+    /// Used to lay multiple windows out side by side. With
+    /// [`maximized`](Self::maximized) or [`fullscreen`](Self::fullscreen),
+    /// this position and [`logical_size`](Self::logical_size) are the bounds
+    /// the window returns to when it leaves that state (see
+    /// [`WindowInfo::restored_position`]).
     pub position: Option<(i32, i32)>,
     /// Whether the window's title bar should be dark, to match its content.
     /// `None` leaves it to the OS. Honored on Windows and macOS.
@@ -269,7 +293,8 @@ pub struct WindowAttributes {
     pub min_size: Option<Size>,
     /// Largest inner size the user can resize to, in logical pixels.
     pub max_size: Option<Size>,
-    /// Open maximized.
+    /// Open maximized, with [`position`](Self::position) and
+    /// [`logical_size`](Self::logical_size) as the bounds it restores to.
     pub maximized: bool,
     /// Open fullscreen (borderless, covering the display).
     pub fullscreen: bool,
@@ -833,10 +858,21 @@ pub trait Window {
     fn set_dock_menu(&self, _menu: Option<&crate::platform::menu::NativeMenu>) -> bool {
         false
     }
-    /// Bring the window to the front and give it the keyboard focus, with
-    /// the activation token a launcher handed the app where the platform
-    /// asks for one (Wayland's `xdg_activation_v1`, X11's startup id).
+    /// Bring the window to the front and give it keyboard focus, restoring
+    /// it first if it is minimized ([`WindowRequest::Activate`]), with the
+    /// activation token a launcher handed the app where there is one.
     /// Default: a no-op.
+    ///
+    /// - macOS: `makeKeyAndOrderFront:` and activating the app.
+    /// - Windows: `SetForegroundWindow`, which the system only allows the
+    ///   foreground app (or one it handed the right on); refused, the
+    ///   taskbar button flashes instead.
+    /// - X11: a `_NET_ACTIVE_WINDOW` request (source: application) with the
+    ///   token's time, else the time of the last key or button press; with
+    ///   no window manager, a raise and `SetInputFocus`.
+    /// - Wayland: `xdg_activation_v1` with the token, else a token for the
+    ///   last input event; a compositor that refuses it marks the window
+    ///   urgent instead.
     fn activate(&self, _token: Option<&str>) {}
     /// Whether a text input has keyboard focus, so a touch platform can show
     /// its on-screen keyboard (and hide it again). The app calls this after

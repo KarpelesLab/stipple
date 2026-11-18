@@ -16,8 +16,16 @@
 //!    steps;
 //! 2. a third window opens (`AppHandle::open_window`), without taking focus;
 //! 3. every window's geometry is printed (`AppHandle::window_info`);
-//! 4. the third window closes (`AppHandle::close_window`);
-//! 5. the open windows are counted, then the app exits.
+//! 4. the third window closes (`AppHandle::close_window`), the second is
+//!    maximized and the first brought to the front (`WindowRequest::Activate(None)`);
+//! 5. the open windows are counted, each one's restored bounds printed
+//!    (`WindowInfo::restored_position`, `restored_size`: the second's are
+//!    where it was before it was maximized), and whether the launcher's
+//!    `DESKTOP_STARTUP_ID` / `XDG_ACTIVATION_TOKEN` were taken out of the
+//!    environment (Linux); then the app exits.
+//!
+//! The self-test also gives every window the menu bar, with a command that
+//! knows which window it was picked from (`MenuItem::for_window`).
 
 use std::time::Duration;
 
@@ -82,6 +90,8 @@ fn selftest(handle: &AppHandle<Shared>, b: WindowId) {
         let h2 = h.clone();
         h.after(step * 2, move |_: &mut Shared| {
             h2.close_window(c);
+            h2.window_to(b, WindowRequest::Maximized(true));
+            h2.window(WindowRequest::Activate(None));
             say(format_args!("step 4"));
         });
     });
@@ -105,6 +115,28 @@ fn selftest(handle: &AppHandle<Shared>, b: WindowId) {
     handle.after(step * 5, move |s: &mut Shared| {
         s.step = 5;
         say(format_args!("windows={}", h.windows().len()));
+        for id in h.windows() {
+            if let Some(info) = h.window_info(id) {
+                let pos = info
+                    .restored_position
+                    .map_or("unknown".to_string(), |p| format!("{:.0},{:.0}", p.x, p.y));
+                say(format_args!(
+                    "restored {id:?} maximized={} pos={pos} inner={:.0}x{:.0}",
+                    info.maximized, info.restored_size.width, info.restored_size.height
+                ));
+            }
+        }
+        for var in ["DESKTOP_STARTUP_ID", "XDG_ACTIVATION_TOKEN"] {
+            let value = std::env::var(var).unwrap_or_else(|_| "unset".into());
+            say(format_args!("env {var}={value}"));
+        }
+        // ...while the launch, as a running instance would hear it, still
+        // has its token.
+        let token = stipple::platform::Launch::current().activation_token;
+        say(format_args!(
+            "launch token={}",
+            token.as_deref().unwrap_or("none")
+        ));
         say(format_args!("step 5"));
         let h2 = h.clone();
         h.after(Duration::from_secs(2), move |_: &mut Shared| h2.exit());
@@ -145,6 +177,15 @@ fn main() {
 
     if selftest_mode {
         selftest(&app.handle(), b);
+        // Every window has the menu bar; its command knows the window.
+        app = app.menu(|_: &Shared| {
+            MenuBar::new().menu(
+                Menu::new("&Window")
+                    .item(MenuItem::for_window("&Which", |_: &mut Shared, window| {
+                        say(format_args!("menu picked in {window:?}"))
+                    })),
+            )
+        });
     }
     app.run();
     if selftest_mode {

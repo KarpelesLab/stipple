@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(window)* translucent windows: `App::transparent` / `WindowAttributes::transparent` keep the frame's alpha to the screen (macOS, Windows' DWM, X11's ARGB visual under a compositing manager, Wayland's ARGB buffers; Metal too), and `blur` blurs what shows through (`NSVisualEffectView`, acrylic, KDE's blur, `ext-background-effect-v1`); the `glass` example (#77)
 - *(wayland)* fractional scales: `wp_fractional_scale_v1` + `wp_viewporter`, buffers drawn at the preferred scale (#86)
 - *(x11)* the scale follows `Xft.dpi` while the app runs (`RESOURCE_MANAGER` changes) (#86)
+- *(windows)* every window has the menu bar (drawn in each on Linux, its own `HMENU` on Windows), and `MenuItem::for_window` commands get the window they were picked from (#78)
+- *(windows)* `WindowRequest::Activate(None)` raises a window and gives it focus on every desktop, quoting the user's last input (X11's event time, Wayland's input serial; Windows flashes the taskbar button when refused) (#79)
+- *(x11)* `WM_CLASS`, `_NET_WM_PID` and `WM_CLIENT_MACHINE` on every window; the launcher's `DESKTOP_STARTUP_ID` (X11) and `XDG_ACTIVATION_TOKEN` (Wayland) are used for the first window and removed from the environment (#80)
+- *(windows)* `WindowInfo::restored_position` and `restored_size`: where a maximized or fullscreen window goes back to (#87)
 - *(video)* `stipple::video`: play MP4 and Matroska files (`Video`, `video_view`), H.264 and HEVC through VideoToolbox drawn by Metal from its `IOSurface`s without a copy, H.264 through VA-API, MPEG-2 in software (oxideav), the browser's `<video>` on the web (the `video` feature; 6g, #54)
 - *(package)* `cargo install stipple` installs `cargo stipple`, which runs the packaging scripts the app's own Stipple ships; iOS signing through Xcode's cloud-managed certificates (`STIPPLE_IOS_TEAM_ID`, an App Store Connect API key, optional upload); bundletool fetched when missing (#100)
 
@@ -37,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(widgets)* `Dialog` is generic over the state (`Dialog<S>`) and has the `Dialog` role and its title as its label (#83)
 - *(text)* discretionary and historical ligatures (`dlig`, `hlig`) are no longer applied: only the default features (`liga`, `clig`, `rlig`, `calt`, and what complex scripts require) (#93)
 - *(widgets)* `VirtualList` takes the app state type (`VirtualList<'_, S>`) and its `height` is an `Option` (#98)
+- *(menus)* closing the first window no longer takes the menu bar from the others (#78)
 - *(gpu)* `Renderer::Auto` draws on a hardware Vulkan device for Wayland windows too, as for X11's (6h)
 - *(macos)* the application menu is named after the app (`app_info().name`), not the primary window's title (#89)
 

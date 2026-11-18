@@ -12,6 +12,12 @@
 # - wayland (sway): finds the titles and the third window in `swaymsg -t
 #   get_tree` (sway places windows itself, so positions aren't checked);
 # - log (Windows, macOS): the debug lines carry what the OS read back.
+#
+# It also launches the app as a desktop launcher would, with a startup id and
+# an activation token: on Linux both leave the environment (and on X11 the
+# id lands in _NET_STARTUP_ID, next to WM_CLASS and _NET_WM_PID). Step 4
+# maximizes B (whose restored bounds are where it was) and brings A to the
+# front (with no window manager, X11's focus is checked with xdotool).
 set -euo pipefail
 
 app="$1"
@@ -20,7 +26,8 @@ out=${OUT_DIR:-visual_output}
 mkdir -p "$out"
 log="$out/runtime-windows.log"
 
-STIPPLE_DEBUG_WINDOWS=1 "$app" --selftest > "$log" 2>&1 &
+STIPPLE_DEBUG_WINDOWS=1 DESKTOP_STARTUP_ID=stipple-runtime-test_TIME0 \
+  XDG_ACTIVATION_TOKEN=stipple-runtime-token "$app" --selftest > "$log" 2>&1 &
 pid=$!
 trap 'kill $pid 2>/dev/null || true' EXIT
 
@@ -56,6 +63,14 @@ if [ "$mode" = x11 ]; then
   echo "window A=$a B=$b"
   # The first title from the view, in UTF-8 (the em dash isn't Latin-1).
   eventually "x11_title $a | grep -qF 'Stipple — A step 0'"
+  # Who the windows belong to, for docks and the window manager, and the
+  # launch the first one ends.
+  name=$(basename "$app")
+  eventually "xprop -id $a WM_CLASS | grep -qF '\"$name\", \"${name^}\"'"
+  eventually "xprop -id $b WM_CLASS | grep -qF '\"$name\"'"
+  eventually "xprop -id $a _NET_WM_PID | grep -q '= $pid\$'"
+  eventually "xprop -id $a _NET_STARTUP_ID | grep -qF 'stipple-runtime-test_TIME0'"
+  xprop -id "$a" WM_CLASS _NET_WM_PID WM_CLIENT_MACHINE _NET_STARTUP_ID
 fi
 if [ "$mode" = wayland ]; then
   eventually "sway_names | grep -qF 'Stipple — B'"
@@ -98,6 +113,8 @@ grep -q "multiwindow: info WindowId(2) " "$log"
 wait_for "multiwindow: step 4"
 if [ "$mode" = x11 ]; then
   eventually '! xdotool search --name "Stipple — C"'
+  # WindowRequest::Activate(None): with no window manager, a raise and SetInputFocus.
+  eventually "[ \"\$(xdotool getwindowfocus)\" = \"$a\" ]"
 fi
 if [ "$mode" = wayland ]; then
   eventually "! sway_names | grep -qF 'Stipple — C'"
@@ -105,6 +122,19 @@ fi
 
 wait_for "multiwindow: step 5"
 grep -q "multiwindow: windows=2" "$log"
+grep "multiwindow: restored" "$log"
+grep "multiwindow: env" "$log"
+if [ "$mode" != log ]; then
+  # The launcher's hand-off was taken, so the app's children don't inherit it.
+  grep -q "multiwindow: env DESKTOP_STARTUP_ID=unset" "$log"
+  grep -q "multiwindow: env XDG_ACTIVATION_TOKEN=unset" "$log"
+  # ...and a launch forwarded to a running instance would still carry it.
+  grep -q "multiwindow: launch token=stipple-runtime-token" "$log"
+fi
+if [ "$mode" = log ]; then
+  # Maximized, B goes back to where it was moved and resized.
+  grep -q "multiwindow: restored WindowId(1) maximized=true pos=360,260 inner=300x200" "$log"
+fi
 wait_for "multiwindow: event loop exited"
 wait "$pid"
 trap - EXIT
@@ -118,6 +148,17 @@ if [ "$mode" = log ]; then
   grep -q 'stipple-window: title .*"Stipple — B ✓ retitled"' "$log"
   grep -q "stipple-window: frame .* pos=360,260 inner=300x200" "$log"
   grep -q "stipple-window: increments .* 8x16" "$log"
+  grep -q "stipple-window: activate " "$log"
+  # Every window has the menu bar: one per window on Windows, the app's one
+  # on macOS.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      menus=$(grep -o "stipple-window: menu 0x[0-9a-f]*" "$log" | sort -u | wc -l)
+      echo "windows with a menu bar: $menus"
+      [ "$menus" -ge 2 ]
+      ;;
+    *) grep -q "stipple-window: menu app 1 menus" "$log" ;;
+  esac
 fi
 if [ "$mode" = wayland ]; then
   grep -q 'stipple-window: title .*"Stipple — B ✓ retitled"' "$log"

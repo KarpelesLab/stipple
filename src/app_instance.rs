@@ -203,8 +203,14 @@ impl<S: 'static> App<S> {
         let Some(dock) = self.instance.dock.clone() else {
             return false;
         };
-        let ran =
-            dock(&self.state).activate_from(crate::platform::DOCK_ID_BASE, id, &mut self.state);
+        // The Dock's commands belong to the app, not a window: the
+        // primary's id stands in.
+        let ran = dock(&self.state).activate_from(
+            crate::platform::DOCK_ID_BASE,
+            id,
+            &mut self.state,
+            crate::platform::WindowId::PRIMARY,
+        );
         if ran {
             self.mark_all_dirty();
         }

@@ -48,7 +48,8 @@ button(cx, "Fullscreen").on_tap(cx, move |s| {
 The requests are `Maximized(bool)`, `Fullscreen(bool)`, `Minimized(bool)`,
 `MinSize(Option<Size>)`, `MaxSize(Option<Size>)`, `Icon(Option<Pixmap>)`,
 `Title(String)`, `Position(Point)` (the outer top-left corner),
-`InnerSize(Size)` and `ResizeIncrements(Option<Size>)`, and for the app as
+`InnerSize(Size)`, `ResizeIncrements(Option<Size>)` and `Activate(..)` (see
+[below](#bringing-a-window-to-the-front)), and for the app as
 a whole (whichever window they're sent to) `KeepAwake(bool)` and
 `Orientations(..)`, which `handle.set_keep_awake(..)` and
 `handle.set_orientations(..)` send (see
@@ -57,8 +58,8 @@ changes the primary window; `handle.window_to(id, ..)` any window. Code that
 drives a backend directly calls the same methods on the `Window` trait
 (`set_min_size`, `set_max_size`, `set_maximized`, `set_fullscreen`,
 `set_icon`, `set_title`, `set_position`, `set_inner_size`,
-`set_resize_increments`, `set_minimized`); backends that lack a feature
-ignore it.
+`set_resize_increments`, `set_minimized`, `activate`); backends that lack a
+feature ignore it.
 
 How each platform does it:
 
@@ -160,6 +161,46 @@ handle.open_window(
 | macOS | one `NSWindow` per window | another `NSWindow` |
 | iOS, Android, web | one window: other windows are ignored | — |
 
+### Bringing a window to the front
+
+`handle.window_to(id, WindowRequest::Activate(None))` raises a window and
+gives it keyboard focus, restoring it first if it was minimized: the window
+with a bell in it, a document that is already open. Desktops guard against
+apps stealing focus, so it works best right after the user did something in
+the app (the request quotes that input); where the system refuses, the user
+is told the window wants attention instead. For a launch the running
+instance heard (see [os-integration.md](os-integration.md)), pass the
+launch's activation token instead of `None`: the launcher's token is what
+lets another app's launch take the focus.
+
+| | How | When the system refuses |
+|---|---|---|
+| X11 | `_NET_ACTIVE_WINDOW` from the application, with the token's `_TIME` stamp, else the time of the user's last key or button press (or of the app's launch); without a window manager, a raise and `SetInputFocus` | the window manager's own (usually: urgent) |
+| Wayland | `xdg_activation_v1` with the token, else with one quoting the last input event's serial and the surface with the keyboard | the compositor marks it urgent |
+| Windows | `ShowWindow` (`SW_RESTORE` if minimized), `BringWindowToTop`, `SetForegroundWindow`; only the foreground app (or one it allowed with `AllowSetForegroundWindow`) may take the foreground | the taskbar button flashes (`FlashWindowEx`) |
+| macOS | `deminiaturize:`, `activateIgnoringOtherApps:`, `makeKeyAndOrderFront:` | — |
+
+### Launching and who the window belongs to
+
+On Linux a launcher (the dock, the app grid, `gtk-launch`) hands the app a
+startup id (`DESKTOP_STARTUP_ID`, X11) or an activation token
+(`XDG_ACTIVATION_TOKEN`, Wayland). Stipple takes both out of the environment
+as it starts, so the processes the app starts (a terminal's shells) don't
+inherit a stale one (`Launch::current()` still reports them, so a launch
+forwarded to a running instance carries its token), and uses them for its
+first window: on X11 it sets
+`_NET_STARTUP_ID` on it and sends the startup-notification `remove` message
+once it maps (the launcher's busy cursor stops), on Wayland it activates the
+window with the token once it shows. The window manager then focuses the new
+window as the launch's, past its focus-stealing prevention.
+
+Docks and taskbars match windows to the app's `.desktop` file. On X11 every
+window has `WM_CLASS`: the program's file name (or `RESOURCE_NAME`) as the
+instance, and as the class the id given to `App::app_info` (the same id
+Wayland's `xdg_toplevel.set_app_id` carries; set `StartupWMClass` to it), or
+else the capitalized program name. `_NET_WM_PID` and `WM_CLIENT_MACHINE` say
+which process the window is.
+
 ## Titles
 
 The title starts as `WindowAttributes::title` (`App::title` for the primary
@@ -189,6 +230,21 @@ in logical pixels. Read it:
 
 Backends report moves and state changes as `Event::WindowChanged` and resizes
 as `Event::Resized`.
+
+`restored_position` and `restored_size` are where the window goes back to
+when it leaves maximized or fullscreen (its normal bounds; the current ones
+while it is neither). An app that saves its windows and brings them back (a
+seamless upgrade, a restored session) opens each with them as
+`WindowAttributes::position` and `logical_size`, plus `maximized(true)` or
+`fullscreen(true)`: a window opened maximized restores to the position and
+size it was opened with.
+
+| | Restored bounds |
+|---|---|
+| X11 | the last geometry in the normal state (when the window manager resized before saying it maximized, the one before it); opened maximized, `_NET_WM_STATE` set before the window maps at its normal size |
+| Wayland | the last size in the normal state (no position); the window goes back to it when the compositor leaves the size to it |
+| Windows | `GetWindowPlacement`'s `rcNormalPosition` (from workspace to screen coordinates), or the rectangle saved going fullscreen |
+| macOS | the frame before `zoom:` or fullscreen (`windowShouldZoom:toFrame:`, `windowWillEnterFullScreen:`) |
 
 Resize increments make the user's resizing snap to whole steps (a terminal's
 character cell) counted from the minimum size.
@@ -373,7 +429,13 @@ hand, on macOS.
 `multiwindow --selftest` changes its windows while it runs: the first
 window's title follows the state, the second is retitled, moved to 360,260
 and resized to 300x200, the first gets 8x16 resize increments, and a third
-window opens and then closes (see `.github/scripts/runtime-windows.sh`). CI
+window opens and then closes; then the second is maximized (its restored
+bounds must be 360,260 and 300x200, checked on Windows and macOS) and the
+first brought to the front (on X11, with no window manager, `xdotool
+getwindowfocus` must name it). It is started with a startup id and an
+activation token, which must be gone from its environment on Linux, and on
+X11 `xprop` reads `WM_CLASS`, `_NET_WM_PID` and `_NET_STARTUP_ID` back (see
+`.github/scripts/runtime-windows.sh`). CI
 runs it on X11 (titles read back with `xprop`, increments from
 `WM_NORMAL_HINTS`, geometry with `xdotool`, the third window found and gone),
 on Wayland under sway (titles and the third window in `swaymsg -t get_tree`;

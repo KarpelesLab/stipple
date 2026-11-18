@@ -1589,16 +1589,17 @@ pub fn open_menu<S: 'static>(
     cx: &mut Cx<S>,
     at: Point,
     menu: crate::core::menu::Menu<S>,
-    on_close: impl FnMut(&mut S) + 'static,
+    mut on_close: impl FnMut(&mut S) + 'static,
 ) {
     let theme = &theme_of(cx);
     let on_close: crate::core::menu::MenuAction<S> =
-        std::rc::Rc::new(std::cell::RefCell::new(on_close));
+        std::rc::Rc::new(std::cell::RefCell::new(move |s: &mut S, _| on_close(s)));
     // It grows in from its corner as it opens, and shrinks back as it closes.
     let content = menus::dropdown(cx, theme, &menu, &on_close)
         .enter(motion::popup_effect(&theme.motion, (0.0, 0.0)))
         .exit(motion::popup_exit(&theme.motion, (0.0, 0.0)));
-    let dismiss = cx.register(move |s| (on_close.borrow_mut())(s));
+    let window = cx.window_id();
+    let dismiss = cx.register(move |s| (on_close.borrow_mut())(s, window));
     cx.overlay(OverlaySpec {
         content,
         anchor: Anchor::At(at),

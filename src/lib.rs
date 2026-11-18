@@ -212,10 +212,12 @@ pub struct App<S> {
     menu: Option<MenuFn<S>>,
     // Draw the menu bar in the window even where a native one exists.
     menu_in_window: bool,
-    // The menu bar last handed to the native backend, so it's only rebuilt on
-    // a change; and whether the backend turned out to have none.
-    native_menu: Option<crate::platform::NativeMenuBar>,
+    // Whether the backend turned out to have no native menu bar (each
+    // window's last one is its pane's `native_menu`).
     native_menu_unsupported: bool,
+    // The name macOS's application menu shows (About, Hide, Quit): the
+    // primary window's title as the app starts, kept when that window closes.
+    menu_app_name: Option<String>,
     // The backend has no native context menus: draw them.
     native_popup_unsupported: bool,
     // Alt went down with no other key since: its release focuses the menu bar.
@@ -539,9 +541,12 @@ struct Pane<S> {
     option_sent: crate::platform::OptionAsMeta,
     // The menus Stipple draws for this window: which is open and highlighted.
     menu_ui: std::rc::Rc<std::cell::RefCell<crate::widgets::menus::MenuUi>>,
-    // The menu bar to draw at the top of the window (the primary window, where
-    // the platform shows no native one).
+    // The menu bar to draw at the top of the window, where the platform
+    // shows no native one: every window has the app's menu bar.
     menu_bar: Option<MenuFn<S>>,
+    // The menu bar last handed to this window as a native one, so it's only
+    // rebuilt on a change.
+    native_menu: Option<crate::platform::NativeMenuBar>,
     // The elements with a context menu in the frame just built, and their
     // menus.
     context_menus: Vec<(crate::core::ContextId, crate::core::Menu<S>)>,
@@ -662,6 +667,7 @@ impl<S: 'static> Pane<S> {
             cursor: CursorIcon::Default,
             menu_ui: Default::default(),
             menu_bar: None,
+            native_menu: None,
             context_menus: Vec::new(),
             catchers: Vec::new(),
             dnd: Default::default(),
@@ -750,8 +756,8 @@ impl<S: 'static> App<S> {
             handle,
             menu: None,
             menu_in_window: false,
-            native_menu: None,
             native_menu_unsupported: false,
+            menu_app_name: None,
             native_popup_unsupported: false,
             alt_armed: false,
             tray: None,
@@ -800,6 +806,7 @@ impl<S: 'static> App<S> {
         let mut pane = Pane::new(id, Box::new(view), self.handle.clone());
         pane.attrs = attrs;
         pane.gpu.choice = self.renderer;
+        pane.menu_bar = self.menu.clone();
         self.panes.push(pane);
         id
     }
@@ -990,9 +997,10 @@ impl<S: 'static> App<S> {
     /// runs its action against the state.
     ///
     /// macOS shows it as the native menu bar, with the standard application
-    /// menu (About, Hide, Quit) in front; Windows as the window's native menu
-    /// bar; elsewhere Stipple draws it across the top of the primary window.
-    /// See `docs/menus.md`.
+    /// menu (About, Hide, Quit) in front; Windows as each window's native
+    /// menu bar; elsewhere Stipple draws it across the top of every window.
+    /// An item made with [`MenuItem::for_window`](crate::core::MenuItem::for_window)
+    /// learns which window it was picked from. See `docs/menus.md`.
     ///
     /// ```
     /// use stipple::prelude::*;
@@ -1012,7 +1020,9 @@ impl<S: 'static> App<S> {
     /// ```
     pub fn menu(mut self, menu: impl Fn(&S) -> crate::core::MenuBar<S> + 'static) -> Self {
         let menu: MenuFn<S> = std::rc::Rc::new(menu);
-        self.panes[0].menu_bar = Some(menu.clone());
+        for pane in &mut self.panes {
+            pane.menu_bar = Some(menu.clone());
+        }
         self.menu = Some(menu);
         self
     }
@@ -3477,8 +3487,8 @@ impl<S: 'static> App<S> {
                 app.panes[idx].dark_sent = Some(dark);
                 window.set_dark(dark);
             }
+            app.sync_menu_bar(idx, window);
             if idx == 0 {
-                app.sync_menu_bar(window);
                 app.sync_tray(window);
                 app.sync_dock(window);
             }
@@ -4141,7 +4151,7 @@ impl<S: 'static> App<S> {
                     ControlFlow::Wait
                 }
                 Event::MenuCommand(id) => {
-                    if self.run_menu_command(id) {
+                    if self.run_menu_command(id, self.panes[idx].id) {
                         present(&mut self, &mut surfaces, idx, window, false);
                     }
                     ControlFlow::Wait
@@ -4321,6 +4331,7 @@ impl<S: 'static> App<S> {
             };
             let mut pane = Pane::new(request.id, request.view, self.handle.clone());
             pane.gpu.choice = self.renderer;
+            pane.menu_bar = self.menu.clone();
             pane.native = Some(native);
             pane.dark_sent = attrs.dark;
             pane.info = provisional_info(&attrs, window.scale_factor());
@@ -4397,6 +4408,8 @@ fn provisional_info(attrs: &WindowAttributes, scale: ScaleFactor) -> crate::plat
         work_area: None,
         safe_area: crate::geometry::Insets::ZERO,
         keyboard_inset: 0.0,
+        restored_position: attrs.position.map(|(x, y)| Point::new(x as f64, y as f64)),
+        restored_size: attrs.logical_size,
     }
 }
 
@@ -4463,7 +4476,7 @@ impl<S: 'static> App<S> {
         let bar = menu(state);
         match bar.find_shortcut(code, mods) {
             Some(item) => {
-                item.activate(state);
+                item.activate_in(state, pane.id);
                 for pane in panes.iter_mut() {
                     pane.dirty = true;
                 }
@@ -4558,8 +4571,8 @@ impl<S: 'static> App<S> {
     }
 
     /// Run the menu bar command with native id `id` (from
-    /// [`Event::MenuCommand`]). Returns whether it ran.
-    fn run_menu_command(&mut self, id: u32) -> bool {
+    /// [`Event::MenuCommand`]), picked from `window`. Returns whether it ran.
+    fn run_menu_command(&mut self, id: u32, window: WindowId) -> bool {
         if id >= crate::platform::DOCK_ID_BASE {
             return self.run_dock_command(id);
         }
@@ -4567,12 +4580,12 @@ impl<S: 'static> App<S> {
             let Some(tray) = self.tray.clone() else {
                 return false;
             };
-            tray(&self.state).activate_command(id, &mut self.state)
+            tray(&self.state).activate_command(id, &mut self.state, window)
         } else {
             let Some(menu) = self.menu.clone() else {
                 return false;
             };
-            menu(&self.state).activate(id, &mut self.state)
+            menu(&self.state).activate_in(id, &mut self.state, window)
         };
         if ran {
             for pane in &mut self.panes {
@@ -4611,9 +4624,11 @@ impl<S: 'static> App<S> {
         self.native_tray = Some(native);
     }
 
-    /// Hand the menu bar to `window` as a native one when it changed. Where
-    /// the platform shows it, the primary window stops drawing its own.
-    fn sync_menu_bar(&mut self, window: &dyn crate::platform::Window) {
+    /// Hand the menu bar to pane `idx`'s `window` as a native one when it
+    /// changed. Where the platform shows it, the window stops drawing its own.
+    /// Every window gets it: where menu bars are per window (Windows), each
+    /// has its own; macOS has one for the app, which the backend sets once.
+    fn sync_menu_bar(&mut self, idx: usize, window: &dyn crate::platform::Window) {
         if self.menu_in_window || self.native_menu_unsupported {
             return;
         }
@@ -4621,21 +4636,24 @@ impl<S: 'static> App<S> {
             return;
         };
         // The application menu is named after the app (the bundle's name,
-        // or `App::app_info`'s), else the window.
-        let name = crate::platform::app_info().name;
-        let name = if name.is_empty() {
-            self.panes[0].attrs.title.clone()
-        } else {
-            name
-        };
-        let native = menu(&self.state).to_native(&name);
-        if self.native_menu.as_ref() == Some(&native) {
+        // or `App::app_info`'s), else the primary window's title as the app
+        // started, kept when that window closes.
+        let name = self.menu_app_name.get_or_insert_with(|| {
+            let name = crate::platform::app_info().name;
+            if name.is_empty() {
+                self.panes[0].attrs.title.clone()
+            } else {
+                name
+            }
+        });
+        let native = menu(&self.state).to_native(name);
+        let pane = &mut self.panes[idx];
+        if pane.native_menu.as_ref() == Some(&native) {
             return;
         }
         let shown = window.set_menu_bar(&native);
-        self.native_menu = Some(native);
+        pane.native_menu = Some(native);
         self.native_menu_unsupported = !shown;
-        let pane = &mut self.panes[0];
         if shown && pane.menu_bar.is_some() {
             pane.menu_bar = None;
             pane.dirty = true;
@@ -4672,8 +4690,9 @@ impl<S: 'static> App<S> {
             MenuPopup::Dismissed => {}
             MenuPopup::Picked(cmd) => {
                 let action = menu.command(cmd).and_then(|item| item.action());
+                let id = pane.id;
                 if let Some(action) = action {
-                    (action.borrow_mut())(&mut self.state);
+                    (action.borrow_mut())(&mut self.state, id);
                     for pane in &mut self.panes {
                         pane.dirty = true;
                     }
@@ -4715,7 +4734,7 @@ impl<S: 'static> App<S> {
     /// Run the menu bar command with native id `id`, as a pick from a native
     /// menu bar does (see [`MenuBar::commands`](crate::core::MenuBar::commands)).
     pub fn menu_command(&mut self, id: u32) -> bool {
-        self.run_menu_command(id)
+        self.run_menu_command(id, WindowId::PRIMARY)
     }
 
     /// Click the tray icon, as [`Event::TrayActivated`] does. Returns whether

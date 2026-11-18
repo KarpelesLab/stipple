@@ -38,14 +38,14 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::platform::menu::{NativeMenu, NativeMenuBar, NativeMenuItem};
-use crate::platform::{KeyCode, Modifiers};
+use crate::platform::{KeyCode, Modifiers, WindowId};
 
 pub use crate::platform::menu::{MenuRole, Shortcut};
 pub(crate) use crate::platform::mnemonic;
 
 /// A menu item's action, shared between the bar, the drawn menus and the
-/// shortcut table.
-pub(crate) type MenuAction<S> = Rc<RefCell<dyn FnMut(&mut S)>>;
+/// shortcut table. It gets the window the pick came from.
+pub(crate) type MenuAction<S> = Rc<RefCell<dyn FnMut(&mut S, WindowId)>>;
 
 /// One entry of a [`Menu`]: a command, a separator, or a submenu.
 ///
@@ -69,7 +69,31 @@ pub(crate) enum ItemKind<S> {
 
 impl<S> MenuItem<S> {
     /// A command that runs `action` against the app state when picked.
-    pub fn new(label: impl Into<String>, action: impl FnMut(&mut S) + 'static) -> Self {
+    pub fn new(label: impl Into<String>, mut action: impl FnMut(&mut S) + 'static) -> Self {
+        Self::for_window(label, move |s, _| action(s))
+    }
+
+    /// A command that runs `action` against the app state and the window it
+    /// was picked from: the window whose drawn or native menu bar (on macOS,
+    /// the key window) was used, whose shortcut was pressed, or where the
+    /// context menu opened. For commands that act on one window (New Tab,
+    /// Close Tab, Find…) in an app with several.
+    ///
+    /// ```
+    /// use stipple::core::MenuItem;
+    /// use stipple::platform::WindowId;
+    /// struct Tabs { opened_in: Vec<WindowId> }
+    /// let item = MenuItem::for_window("New &Tab", |s: &mut Tabs, window| {
+    ///     s.opened_in.push(window)
+    /// });
+    /// let mut tabs = Tabs { opened_in: Vec::new() };
+    /// item.activate_in(&mut tabs, WindowId::PRIMARY);
+    /// assert_eq!(tabs.opened_in, [WindowId::PRIMARY]);
+    /// ```
+    pub fn for_window(
+        label: impl Into<String>,
+        action: impl FnMut(&mut S, WindowId) + 'static,
+    ) -> Self {
         Self {
             kind: ItemKind::Action {
                 label: label.into(),
@@ -169,15 +193,23 @@ impl<S> MenuItem<S> {
         }
     }
 
-    /// Run the command against `state` if it is enabled. Returns whether it ran.
+    /// Run the command against `state` if it is enabled, as picked from the
+    /// primary window. Returns whether it ran.
     pub fn activate(&self, state: &mut S) -> bool {
+        self.activate_in(state, WindowId::PRIMARY)
+    }
+
+    /// Run the command against `state` if it is enabled, as picked from
+    /// `window` (see [`for_window`](Self::for_window)). Returns whether it
+    /// ran.
+    pub fn activate_in(&self, state: &mut S, window: WindowId) -> bool {
         match &self.kind {
             ItemKind::Action {
                 action,
                 enabled: true,
                 ..
             } => {
-                (action.borrow_mut())(state);
+                (action.borrow_mut())(state, window);
                 true
             }
             _ => false,
@@ -356,13 +388,19 @@ impl<S> Menu<S> {
 
     /// Run the command numbered `id` from `base` (as in
     /// [`to_native_from`](Self::to_native_from)) if it exists and is enabled.
-    /// Returns whether it ran.
-    pub(crate) fn activate_from(&self, base: u32, id: u32, state: &mut S) -> bool {
+    /// Returns whether it ran, as picked from `window`.
+    pub(crate) fn activate_from(
+        &self,
+        base: u32,
+        id: u32,
+        state: &mut S,
+        window: WindowId,
+    ) -> bool {
         let mut out = Vec::new();
         self.number(&mut { base }, &mut out);
         out.into_iter()
             .find(|(i, _)| *i == id)
-            .is_some_and(|(_, item)| item.activate(state))
+            .is_some_and(|(_, item)| item.activate_in(state, window))
     }
 
     /// Visit every command depth-first, numbering them from `*next`.
@@ -472,10 +510,17 @@ impl<S> MenuBar<S> {
             .find_map(|(i, item)| (i == id).then_some(item))
     }
 
-    /// Run command `id` against `state` if it exists and is enabled. Returns
-    /// whether it ran.
+    /// Run command `id` against `state` if it exists and is enabled, as
+    /// picked from the primary window. Returns whether it ran.
     pub fn activate(&self, id: u32, state: &mut S) -> bool {
-        self.command(id).is_some_and(|item| item.activate(state))
+        self.activate_in(id, state, WindowId::PRIMARY)
+    }
+
+    /// Run command `id` against `state` if it exists and is enabled, as
+    /// picked from `window`. Returns whether it ran.
+    pub fn activate_in(&self, id: u32, state: &mut S, window: WindowId) -> bool {
+        self.command(id)
+            .is_some_and(|item| item.activate_in(state, window))
     }
 
     /// The first enabled command whose shortcut `key` with `modifiers`
@@ -563,8 +608,8 @@ impl<S> Tray<S> {
 
     /// Run `action` when the icon is clicked (a left click on Windows, the
     /// host's "activate" on Linux; on macOS only when there's no menu).
-    pub fn on_activate(mut self, action: impl FnMut(&mut S) + 'static) -> Self {
-        self.on_activate = Some(Rc::new(RefCell::new(action)));
+    pub fn on_activate(mut self, mut action: impl FnMut(&mut S) + 'static) -> Self {
+        self.on_activate = Some(Rc::new(RefCell::new(move |s: &mut S, _| action(s))));
         self
     }
 
@@ -583,18 +628,19 @@ impl<S> Tray<S> {
     }
 
     /// Run the menu command with native id `id` (from `TRAY_ID_BASE`) if it
-    /// exists and is enabled. Returns whether it ran.
-    pub(crate) fn activate_command(&self, id: u32, state: &mut S) -> bool {
-        self.menu
-            .as_ref()
-            .is_some_and(|menu| menu.activate_from(crate::platform::TRAY_ID_BASE, id, state))
+    /// exists and is enabled, for `window` (the window the pick was
+    /// delivered to). Returns whether it ran.
+    pub(crate) fn activate_command(&self, id: u32, state: &mut S, window: WindowId) -> bool {
+        self.menu.as_ref().is_some_and(|menu| {
+            menu.activate_from(crate::platform::TRAY_ID_BASE, id, state, window)
+        })
     }
 
     /// Run the click action, if there is one. Returns whether it ran.
     pub fn activate(&self, state: &mut S) -> bool {
         match &self.on_activate {
             Some(action) => {
-                (action.borrow_mut())(state);
+                (action.borrow_mut())(state, WindowId::PRIMARY);
                 true
             }
             None => false,
@@ -648,8 +694,8 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let mut log = Vec::new();
-        assert!(tray.activate_command(base + 1, &mut log));
-        assert!(!tray.activate_command(1, &mut log));
+        assert!(tray.activate_command(base + 1, &mut log, WindowId::PRIMARY));
+        assert!(!tray.activate_command(1, &mut log, WindowId::PRIMARY));
         assert!(tray.activate(&mut log));
         assert_eq!(log, vec!["b", "click"]);
     }
@@ -755,9 +801,12 @@ mod tests {
             other => panic!("{other:?}"),
         }
         let mut log = Vec::new();
-        assert!(dock.activate_from(base, base, &mut log));
-        assert!(!dock.activate_from(base, base + 1, &mut log), "disabled");
-        assert!(!dock.activate_from(base, 1, &mut log));
+        assert!(dock.activate_from(base, base, &mut log, WindowId::PRIMARY));
+        assert!(
+            !dock.activate_from(base, base + 1, &mut log, WindowId::PRIMARY),
+            "disabled"
+        );
+        assert!(!dock.activate_from(base, 1, &mut log, WindowId::PRIMARY));
         assert_eq!(log, ["new"]);
     }
 

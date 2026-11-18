@@ -37,7 +37,12 @@ App::new(doc, view).menu(|doc: &Doc| {
 })
 ```
 
-- `MenuItem::new(label, action)` is a command. `.shortcut(..)`, `.enabled(..)`
+- `MenuItem::new(label, action)` is a command. `MenuItem::for_window(label,
+  |state, window| ..)` is one that also learns which window it was picked
+  from: the window whose menu bar was used (on macOS, the key window), whose
+  shortcut was pressed, or where the context menu opened. That is the window
+  New Tab, Close Tab or Find act on in an app with several windows; no need to
+  track the last focused one. `.shortcut(..)`, `.enabled(..)`
   and `.checked(..)` set its shortcut, whether it can be picked, and makes it
   checkable with a check mark. A disabled item is greyed out and its shortcut
   does nothing.
@@ -55,8 +60,8 @@ To quit from a menu, keep a clone of `App::handle()` in the closure and call
 | | Menu bar | Shortcuts | Context menus |
 |---|---|---|---|
 | macOS | the system menu bar (`NSMenu`), behind the standard application menu | ✅ | native (`NSMenu`) |
-| Windows | the window's native menu bar (`HMENU`) | ✅ | native (`TrackPopupMenuEx`) |
-| Linux (X11, Wayland) | drawn by Stipple across the top of the window | ✅ | drawn by Stipple |
+| Windows | each window's native menu bar (`HMENU`) | ✅ | native (`TrackPopupMenuEx`) |
+| Linux (X11, Wayland) | drawn by Stipple across the top of each window | ✅ | drawn by Stipple |
 | iOS, Android, web | drawn by Stipple | where keys arrive | drawn by Stipple; a long press opens them on a touch screen |
 
 **macOS.** The menu bar belongs to the application. Stipple puts the
@@ -89,6 +94,10 @@ MenuBar::new()
 The Dock icon's menu is declared the same way, with `App::dock_menu`; see
 [os-integration.md](os-integration.md#one-instance-reopening-and-the-dock).
 
+Every window has the menu bar: windows opened with `App::open_window` or
+`AppHandle::open_window` get it as the first one does, and closing the first
+window doesn't take it from the others.
+
 **Windows.** Each top-level menu is a popup on the window's menu bar. The
 mnemonics work as usual (Alt, Alt+letter and F10 are handled by Windows),
 shortcuts are shown right-aligned, and disabled and checked items look like
@@ -96,7 +105,7 @@ every other Windows menu. Adding the bar grows the window so the content keeps
 its size.
 
 **Linux and elsewhere.** There's no system menu bar to use, so Stipple draws
-one above the primary window's content, in the theme's colors. Clicking a title
+one above each window's content, in the theme's colors. Clicking a title
 opens its menu below it; while one is open, moving over another title switches
 to it and moving over a submenu's item opens the submenu beside it. A press
 outside closes the menus. From the keyboard:
@@ -204,6 +213,14 @@ dividers), which UI Automation, NSAccessibility and AT-SPI map to their own menu
 roles. Native menu bars on macOS and Windows are exposed by the OS itself.
 
 ## How it's tested
+
+- **Several windows** (the App, unit-tested with a pretend multi-window
+  backend in `src/window_tests.rs`): every window draws the bar (or gets the
+  native one), a command picked from either window's bar or by a shortcut in
+  it gets that window's id, and the bar stays when the first window closes.
+  `multiwindow --selftest` gives its windows a menu bar, and CI checks on
+  Windows that each `HWND` got its own `HMENU` (the backend's
+  `STIPPLE_DEBUG_WINDOWS` lines).
 
 - **X11** (Xvfb, `xdotool`): CI holds Alt and checks the bar's mnemonics are
   underlined (and nothing else changed), opens File with Alt+F and with a
