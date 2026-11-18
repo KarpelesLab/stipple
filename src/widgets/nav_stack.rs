@@ -115,6 +115,8 @@ pub struct NavStack<P> {
     /// The `page` motion of the theme the stack was last shown under, for
     /// pushes and pops from handlers (which have no theme).
     motion: Cell<Motion>,
+    /// Counts pushes and pops, for [`NavStackView::on_change`].
+    revision: u64,
 }
 
 impl<P> NavStack<P> {
@@ -128,6 +130,7 @@ impl<P> NavStack<P> {
             predictive: false,
             transition: None,
             motion: Cell::new(MotionTokens::standard().page),
+            revision: 0,
         }
     }
 
@@ -189,6 +192,7 @@ impl<P> NavStack<P> {
 
     pub(crate) fn push_at(&mut self, page: P, now: Duration) {
         self.pages.push(page);
+        self.revision += 1;
         self.leaving = None;
         self.gesture = false;
         self.predictive = false;
@@ -206,6 +210,7 @@ impl<P> NavStack<P> {
             self.shown.set(1.0);
         }
         self.leaving = self.pages.pop();
+        self.revision += 1;
         self.predictive = self.gesture;
         self.gesture = false;
         self.shown.animate_to(0.0, self.motion.get(), now);
@@ -338,16 +343,119 @@ fn poses(transition: PageTransition, t: f64, width: f64, predictive: bool) -> (P
 /// follows (iOS's edge swipe drags it off, Android 14's predictive back
 /// shrinks it into a card) until it lifts and the page settles, gone or
 /// back in place. Put the back button in the page's [`app_bar`].
+///
+/// To hear the pages change (a page pushed over this one, or the one over
+/// it gone back from, by Back or by the app), build a [`NavStackView`]
+/// with an [`on_change`](NavStackView::on_change) handler instead.
 pub fn nav_stack<S: 'static, P: 'static>(
     cx: &mut Cx<S>,
     nav: &NavStack<P>,
     access: impl Fn(&mut S) -> &mut NavStack<P> + 'static,
+    page: impl FnMut(&mut Cx<S>, &P) -> Element,
+) -> Element {
+    NavStackView::new(nav, access).view(cx, page)
+}
+
+/// How a nav stack reaches its pages in the app state.
+type NavAccess<S, P> = Rc<dyn Fn(&mut S) -> &mut NavStack<P>>;
+/// A nav stack's change handler.
+type OnChange<S> = Box<dyn FnMut(&mut S)>;
+
+/// A [`nav_stack`] being built, with a handler for its pages changing.
+///
+/// ```
+/// use stipple::prelude::*;
+/// use stipple::widgets::NavStackView;
+///
+/// #[derive(Clone, Copy)]
+/// enum Page { Scanner, Result }
+///
+/// struct App { nav: NavStack<Page>, camera_on: bool }
+///
+/// fn view(state: &App, cx: &mut Cx<App>) -> Element {
+///     NavStackView::new(&state.nav, |s: &mut App| &mut s.nav)
+///         // The scanner's camera runs while the scanner is on top.
+///         .on_change(|s| s.camera_on = s.nav.depth() == 1)
+///         .view(cx, |cx, page| match page {
+///             Page::Scanner => button(cx, "Scanned!").on_tap(cx, |s| {
+///                 s.nav.push(Page::Result);
+///             }),
+///             Page::Result => label(cx, "https://example.com"),
+///         })
+/// }
+/// # let theme = Theme::light();
+/// # let app = App { nav: NavStack::new(Page::Scanner), camera_on: true };
+/// # let _ = view(&app, &mut Cx::new(&theme));
+/// ```
+#[must_use = "a nav stack shows once `.view(cx, page)` builds it"]
+pub struct NavStackView<'a, S, P> {
+    nav: &'a NavStack<P>,
+    access: NavAccess<S, P>,
+    on_change: Option<OnChange<S>>,
+}
+
+impl<S, P: std::fmt::Debug> std::fmt::Debug for NavStackView<'_, S, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NavStackView")
+            .field("nav", &self.nav)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, S: 'static, P: 'static> NavStackView<'a, S, P> {
+    /// The pages of `nav`, which `access` reaches in the app state.
+    pub fn new(
+        nav: &'a NavStack<P>,
+        access: impl Fn(&mut S) -> &mut NavStack<P> + 'static,
+    ) -> Self {
+        Self {
+            nav,
+            access: Rc::new(access),
+            on_change: None,
+        }
+    }
+
+    /// Run `on_change` after a page is pushed or popped: by Back (the
+    /// button, the gesture, a gamepad's B, Escape), or by any of the app's
+    /// handlers in this window calling [`NavStack::push`] or
+    /// [`NavStack::pop`]. It runs once per handler that changed the pages,
+    /// as it returns; read [`NavStack::top`] or [`NavStack::depth`] for
+    /// where it is now.
+    pub fn on_change(mut self, on_change: impl FnMut(&mut S) + 'static) -> Self {
+        self.on_change = Some(Box::new(on_change));
+        self
+    }
+
+    /// Build the stack, each page by `page`: see [`nav_stack`].
+    pub fn view(self, cx: &mut Cx<S>, page: impl FnMut(&mut Cx<S>, &P) -> Element) -> Element {
+        let NavStackView {
+            nav,
+            access,
+            on_change,
+        } = self;
+        if let Some(mut hook) = on_change {
+            let (access, mut seen) = (access.clone(), nav.revision);
+            cx.watch(move |s| {
+                let now = access(s).revision;
+                if now != seen {
+                    seen = now;
+                    hook(s);
+                }
+            });
+        }
+        build_stack(cx, nav, access, page)
+    }
+}
+
+fn build_stack<S: 'static, P: 'static>(
+    cx: &mut Cx<S>,
+    nav: &NavStack<P>,
+    access: NavAccess<S, P>,
     mut page: impl FnMut(&mut Cx<S>, &P) -> Element,
 ) -> Element {
     let theme = super::theme_of(cx);
     let transition = nav.transition.unwrap_or_else(|| PageTransition::of(&theme));
     nav.motion.set(theme.motion.page);
-    let access = Rc::new(access);
     // Declared before the pages, so a sheet a page opens closes first.
     if nav.can_pop() {
         let pop = access.clone();

@@ -641,6 +641,7 @@ impl<S: 'static> App<S> {
             return false;
         }
         handler.back(state);
+        panes[idx].handlers.settle(state);
         for pane in panes.iter_mut() {
             pane.dirty = true;
         }

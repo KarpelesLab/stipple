@@ -91,6 +91,11 @@ impl RefreshState {
         self
     }
 
+    /// Rename the refresh action from now on (the user's language changed).
+    pub fn set_label(&mut self, label: impl Into<String>) {
+        self.label = label.into();
+    }
+
     /// Whether the app is refreshing: from a pull (or [`begin`](Self::begin))
     /// until [`finish`](Self::finish). The indicator spins meanwhile.
     pub fn is_refreshing(&self) -> bool {

@@ -128,6 +128,7 @@ impl<S: 'static> Pane<S> {
         crate::app_dbg(format_args!("pointer {ev:?} to {id:?}"));
         let ran = self.handlers.pointers().dispatch_pointer(id, &ev, state);
         if ran {
+            self.handlers.settle(state);
             self.dirty = true;
         }
         // The handler took the press for a drag of its own (a sheet): the
@@ -390,6 +391,7 @@ impl<S: 'static> Pane<S> {
         crate::app_dbg(format_args!("wheel {ev:?} to {id:?}"));
         let ran = self.handlers.pointers().dispatch_wheel(id, &ev, state);
         if ran {
+            self.handlers.settle(state);
             self.dirty = true;
         }
         ran

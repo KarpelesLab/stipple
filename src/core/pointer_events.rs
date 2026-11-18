@@ -393,23 +393,61 @@ impl<S> PointerHandlers<S> {
 /// The top-most node under `point` (window coordinates) with a pointer id
 /// that `wants`, through transforms and clipping, as the other `*_at`
 /// queries find theirs.
+///
+/// A control taking presses of its own (a button, a slider, a field) laid
+/// over the element, rather than inside it, keeps the press: a torch button
+/// over a camera view doesn't also press the camera. One inside the element
+/// (a button on a sheet that drags) leaves it the element's too.
 pub(crate) fn pointer_at(
     node: &LayoutNode,
     point: Point,
     wants: &dyn Fn(PointerId) -> bool,
 ) -> Option<PointerId> {
-    let point = node.to_local(point)?;
-    if crate::core::runtime::clipped_out(node, point) {
-        return None;
+    match pointer_hit(node, point, wants) {
+        Hit::Pointer(id) => Some(id),
+        Hit::Control | Hit::Nothing => None,
     }
+}
+
+/// What a press at a point lands on, for [`pointer_at`].
+enum Hit {
+    /// An element with a pointer handler.
+    Pointer(PointerId),
+    /// A control taking presses, with no pointer handler around it (yet).
+    Control,
+    Nothing,
+}
+
+fn pointer_hit(node: &LayoutNode, point: Point, wants: &dyn Fn(PointerId) -> bool) -> Hit {
+    let Some(point) = node.to_local(point) else {
+        return Hit::Nothing;
+    };
+    if crate::core::runtime::clipped_out(node, point) {
+        return Hit::Nothing;
+    }
+    let mut under = Hit::Nothing;
     for child in node.children.iter().rev() {
-        if let Some(id) = pointer_at(child, point, wants) {
-            return Some(id);
+        match pointer_hit(child, point, wants) {
+            Hit::Nothing => continue,
+            hit => {
+                under = hit;
+                break;
+            }
         }
     }
+    if let Hit::Pointer(id) = under {
+        return Hit::Pointer(id);
+    }
+    let inside = !node.hit_through && node.bounds.contains(point);
     match node.pointer {
-        Some(id) if wants(id) && !node.hit_through && node.bounds.contains(point) => Some(id),
-        _ => None,
+        Some(id) if wants(id) && inside => Hit::Pointer(id),
+        _ if inside
+            && !node.ghost
+            && (node.action.is_some() || node.drag.is_some() || node.text_pos.is_some()) =>
+        {
+            Hit::Control
+        }
+        _ => under,
     }
 }
 

@@ -150,6 +150,28 @@ cells. Content measures against the bounded space, so a paragraph with
 `.max_width(260.0)` wraps at 260 even in a wider container. When a minimum is
 larger than the maximum, the minimum wins, as in CSS.
 
+### Aspect ratio
+
+`.aspect_ratio(w / h)` keeps an element's width over its height, as CSS's
+`aspect-ratio` does: "as wide as there is, and square" (a QR code, a camera's
+scan window), 16:9 for a video, 4:3 thumbnails, with no window size in the
+view, so it holds inside a dialog or one pane of a split view too.
+
+```rust
+column(vec![
+    Element::canvas(CanvasId(1), draw_code).aspect_ratio(1.0), // the column's width, square
+    grid(vec![Track::fr(1.0); 3], thumbnails),                 // each .aspect_ratio(4.0 / 3.0)
+])
+```
+
+The height follows the width once that is decided: a fixed `.width(..)`, or
+the width it is given (a column's, a grid cell's, or, in a row, a share of
+the free width, as if it grew; rows of squares share the row evenly, and the
+row is as tall as they are). With only `.height(..)` fixed, the width follows
+the height instead; with both fixed the ratio does nothing. Bounds still apply
+to each side, so `.aspect_ratio(16.0 / 9.0).max_width(320.0)` is at most
+320 × 180.
+
 ## Scroll containers
 
 A `scroll(cx)` list or a `scroll_horizontal(cx)` strip lays its content out

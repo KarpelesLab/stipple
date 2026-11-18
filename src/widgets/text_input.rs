@@ -235,10 +235,12 @@ impl Element {
     }
 
     /// Run `handler` after the user changes this field's text: a
-    /// [`text_field`], [`text_area`] or
-    /// [`password_field`](super::password_field). It runs after the edit, so
-    /// the state already holds the new text. On any other element this does
-    /// nothing.
+    /// [`text_field`], [`text_area`],
+    /// [`password_field`](super::password_field) or
+    /// [`combo_box`](super::combo_box) (typing, or taking a suggestion); or
+    /// after the user chooses another option of a [`select`](super::select).
+    /// It runs after the change, so the state already holds the new text or
+    /// choice. On any other element this does nothing.
     pub fn on_change<S>(self, cx: &mut Cx<'_, S>, handler: impl FnMut(&mut S) + 'static) -> Self {
         if let Some(hooks) = self.focus.and_then(|id| cx.field_hooks(id)) {
             hooks.change.borrow_mut().push(Box::new(handler));
@@ -429,6 +431,59 @@ pub fn text_field<S: 'static>(
         _ => field(s).apply(k),
     });
     field_pointer(cx, el, field)
+}
+
+/// What a [`keyed_text_field`]'s key handler did with a key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FieldKey {
+    /// It changed the field's text: the change handlers run.
+    Changed,
+    /// It took the key without changing the text.
+    Kept,
+    /// The field submits: the submit handlers run.
+    Submit,
+}
+
+/// A [`text_field`] whose keys all go to `keys` (which edits the field,
+/// see [`TextInput::apply`], or does something else with them): the base
+/// of a field with a popup taking Up, Down, Enter and Escape. `hooks` are
+/// its submit and change handlers ([`Element::on_change`] adds to them),
+/// for the popup to run too.
+pub(crate) fn keyed_text_field<S: 'static>(
+    cx: &mut Cx<S>,
+    input: &TextInput,
+    field: impl Fn(&mut S) -> &mut TextInput + Copy + 'static,
+    hooks: Rc<FieldHooks<S>>,
+    mut keys: impl FnMut(&mut S, &KeyInput) -> FieldKey + 'static,
+) -> Element {
+    let theme = *cx.theme();
+    let el = field_frame(&theme, field_leaf(&input.buffer, &theme))
+        .default_width(200.0)
+        .native_text_frame(&theme)
+        .native_text_state(&theme, &input.buffer, input.read_only, false, false);
+    let h = hooks.clone();
+    let el = el.on_key(cx, move |s, k| match keys(s, k) {
+        FieldKey::Changed => h.changed(s),
+        FieldKey::Kept => {}
+        FieldKey::Submit => h.submit(s),
+    });
+    let id = el.focus.expect("on_key sets it");
+    cx.set_field_hooks(id, hooks);
+    field_pointer(cx, el, field)
+}
+
+/// A single-line field's own handling of key `k` on `input`: a triple-click
+/// selects all of it, Enter submits, the rest edits.
+pub(crate) fn line_key(input: &mut TextInput, k: &KeyInput) -> FieldKey {
+    match k {
+        KeyInput::SelectLine => {
+            input.buffer.select_all();
+            FieldKey::Kept
+        }
+        KeyInput::Enter => FieldKey::Submit,
+        _ if input.apply(k) => FieldKey::Changed,
+        _ => FieldKey::Kept,
+    }
 }
 
 /// A multi-line text area editing `input`, the [`TextInput`] that `field`

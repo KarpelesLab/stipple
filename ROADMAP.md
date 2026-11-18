@@ -2171,6 +2171,23 @@ Most input only works on X11 today.
   hover, overlay, table and tree extents); `visual-table` drags the
   `tabledemo` thumb on X11. Not yet: press-and-hold paging, arrow buttons,
   a gutter for scrolling grids, scroll-bar accessibility roles, skins.*
+- ✅ Combo box and searchable select (#85, #97): `combo_box` + `ComboBox`
+  (free text with the matching suggestions below, Up/Down/Enter/Tab/Escape, a
+  ▾ listing them all), `Select::searchable` (a search field atop the list),
+  `select(..).on_change`, and a select as wide as its column. *Both lists
+  build only the rows in view and follow the highlight; a searchable select
+  isn't the OS's pop-up button under `Theme::native()`.*
+- ✅ Aspect ratio (#96): `Element::aspect_ratio`, the height following a
+  decided width (a column's, a grid cell's, a row's share) or the width a
+  fixed height, as CSS's `aspect-ratio`.
+- ✅ Focus-visible (#94): _the ring shows after the keyboard, not after a
+  tap or a click (but on a text field), and is drawn with its layer, under a
+  sheet, scrim or popup over it._
+- ✅ Small gaps (#99): `NavStackView::on_change`, `BottomSheetView::a11y_label`,
+  `Button::view` a `Role::Button` whatever is added, `SwipeAction::icon_only`
+  and `SwipeRow::radius`, `Tabs::equal`, `RefreshState::set_label`, a button
+  over an `on_pointer` element keeping its press, `App::state_mut` and Escape
+  through `App::press_key`.
 
 #### 7f — Platform completeness
 - ✅ Edge to edge, orientation and keeping awake (#38, #58, #62):

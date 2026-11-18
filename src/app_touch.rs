@@ -107,6 +107,7 @@ impl<S: 'static> Pane<S> {
             .pointers()
             .dispatch_pinch(pinch.target, &ev, state);
         if ran {
+            self.handlers.settle(state);
             self.dirty = true;
         }
         ran

@@ -181,7 +181,8 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
             ..
         } => {
             let room = child_room(el, *axis, inner);
-            let sizes: Vec<Size> = children.iter().map(|c| measure(c, room, font)).collect();
+            let mut sizes: Vec<Size> = children.iter().map(|c| measure(c, room, font)).collect();
+            settle_row_aspect(el, *axis, *gap, axis.main(inner), children, &mut sizes);
             let lines = if el.wrap {
                 let mains: Vec<f64> = sizes.iter().map(|s| axis.main(*s)).collect();
                 break_lines(axis.main(inner), *gap, &mains)
@@ -256,6 +257,9 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         clamp_len(w, min.width, max.width),
         clamp_len(h, min.height, max.height),
     );
+    if let Some(ratio) = el.layout.aspect {
+        size = aspect_size(el, ratio, size, natural, avail);
+    }
     // A scroll container sized by nothing else is as long as its content
     // along its scroll axis, but no longer than the space there is (or it
     // would never scroll), and no shorter than its floor.
@@ -283,6 +287,154 @@ fn measure_element(el: &Element, avail: Size, font: Option<&Font>) -> Size {
         }
     }
     size
+}
+
+/// The size of `el`, keeping width over height at `ratio`, out of the size
+/// it would otherwise measure (`size`, its content's `natural` size) in
+/// `avail`: the height follows a fixed width, or else the width it is
+/// given (all of `avail`'s, when that is finite); the width follows a fixed
+/// height when only that is fixed.
+fn aspect_size(el: &Element, ratio: f64, size: Size, natural: Size, avail: Size) -> Size {
+    let (min, max) = (min_size(el), max_size(el));
+    match (el.layout.size.width, el.layout.size.height) {
+        (Some(_), Some(_)) => size,
+        (None, Some(_)) => Size::new(
+            clamp_len(size.height * ratio, min.width, max.width),
+            size.height,
+        ),
+        (fixed, None) => {
+            let w = match fixed {
+                Some(_) => size.width,
+                None if avail.width.is_finite() => clamp_len(avail.width, min.width, max.width),
+                None => clamp_len(
+                    natural.width.max(natural.height * ratio),
+                    min.width,
+                    max.width,
+                ),
+            };
+            Size::new(w, clamp_len(w / ratio, min.height, max.height))
+        }
+    }
+}
+
+/// `el`'s height, when something other than its container decides it: a
+/// fixed one, or one following its width by its aspect ratio. A container
+/// stretching its children across leaves such a height alone.
+fn decided_height(el: &Element) -> Option<f64> {
+    el.layout
+        .size
+        .height
+        .or_else(|| el.layout.aspect.map(|_| 0.0))
+}
+
+/// `el`'s width, when something other than its container decides it: a
+/// fixed one, or one following a fixed height by its aspect ratio.
+fn sized_width(el: &Element) -> Option<f64> {
+    el.layout
+        .size
+        .width
+        .or_else(|| el.layout.aspect.filter(|_| el.layout.size.height.is_some()))
+}
+
+/// [`sized_width`], but not a widget's default width, which a column
+/// stretches.
+fn decided_width(el: &Element) -> Option<f64> {
+    sized_width(el).filter(|_| !el.layout.soft_width)
+}
+
+/// Whether `child` of a row keeps an aspect ratio with neither side fixed:
+/// it then takes a share of the row's free width (as if it grew), and its
+/// height follows the width it gets.
+fn row_aspect(child: &Element) -> bool {
+    child.layout.aspect.is_some()
+        && child.layout.size.width.is_none()
+        && child.layout.size.height.is_none()
+}
+
+/// The flex item `child` of a stack along `axis` is, measured `m`.
+fn flex_item(child: &Element, axis: Axis, m: Size) -> FlexItem {
+    let item = FlexItem::fixed(axis.main(m))
+        .grow(child.layout.grow)
+        .shrink(child.layout.shrink)
+        .bounds(axis.main(min_size(child)), axis.main(max_size(child)));
+    // A scroll container along this axis, with no length of its own, takes
+    // the free space and gives it back when its siblings overflow (down to
+    // its floor).
+    if scroll_fill_axis(child) == Some(axis) {
+        FlexItem {
+            grow: if child.layout.grow > 0.0 {
+                child.layout.grow
+            } else {
+                1.0
+            },
+            shrink: if child.layout.shrink > 0.0 {
+                child.layout.shrink
+            } else {
+                1.0
+            },
+            min: scroll_floor(child, axis, axis.main(m)),
+            ..item
+        }
+    } else {
+        item
+    }
+}
+
+/// In a row that neither wraps nor scrolls, `main` wide: the children that
+/// keep an aspect ratio with neither side fixed share the free width with
+/// the growing ones (as growing items with no width of their own), and
+/// their `measured` sizes become the width each gets and the height
+/// following it. Returns which children those are (none, elsewhere).
+fn settle_row_aspect(
+    el: &Element,
+    axis: Axis,
+    gap: f64,
+    main: f64,
+    children: &[Element],
+    measured: &mut [Size],
+) -> Vec<bool> {
+    let settled: Vec<bool> = children.iter().map(row_aspect).collect();
+    if axis != Axis::Horizontal
+        || el.wrap
+        || el.scroll.is_some()
+        || !main.is_finite()
+        || !settled.contains(&true)
+    {
+        return vec![false; children.len()];
+    }
+    let items: Vec<FlexItem> = children
+        .iter()
+        .zip(measured.iter())
+        .zip(&settled)
+        .map(|((c, m), &aspect)| {
+            let item = flex_item(c, axis, *m);
+            if aspect {
+                FlexItem {
+                    basis: 0.0,
+                    grow: if c.layout.grow > 0.0 {
+                        c.layout.grow
+                    } else {
+                        1.0
+                    },
+                    ..item
+                }
+            } else {
+                item
+            }
+        })
+        .collect();
+    let spans = solve_main_axis(main, gap, &items);
+    for ((c, m), (span, &aspect)) in children
+        .iter()
+        .zip(measured.iter_mut())
+        .zip(spans.iter().zip(&settled))
+    {
+        if let (true, Some(ratio)) = (aspect, c.layout.aspect) {
+            let h = clamp_len(span.length / ratio, min_size(c).height, max_size(c).height);
+            *m = Size::new(span.length, h);
+        }
+    }
+    settled
 }
 
 /// The axis of a scroll container that keeps a gutter for its scroll bar
@@ -730,7 +882,7 @@ fn layout_element(
             let (dx, w) = align_in(
                 fixed(
                     child.layout.justify_self.unwrap_or(align.0),
-                    child.layout.size.width,
+                    sized_width(child),
                 ),
                 m.width,
                 cw,
@@ -740,7 +892,7 @@ fn layout_element(
             let (dy, h) = align_in(
                 fixed(
                     child.layout.align_self.unwrap_or(align.1),
-                    child.layout.size.height,
+                    decided_height(child),
                 ),
                 m.height,
                 ch,
@@ -787,14 +939,14 @@ fn layout_element(
                 _ => a,
             };
             let (dx, w) = align_in(
-                fixed(align.0, child.layout.size.width),
+                fixed(align.0, sized_width(child)),
                 m.width,
                 inner.width(),
                 min.width,
                 max.width,
             );
             let (dy, h) = align_in(
-                fixed(align.1, child.layout.size.height),
+                fixed(align.1, decided_height(child)),
                 m.height,
                 inner.height(),
                 min.height,
@@ -826,7 +978,8 @@ fn layout_element(
 
     // Main-axis distribution. A scroll container whose content overflows
     // keeps a gutter across for its scroll bar (see `core::scroll_bar`).
-    let (avail, measured) = gutter_layout(el, axis, *gap, inner.size, children, font);
+    let (avail, mut measured) = gutter_layout(el, axis, *gap, inner.size, children, font);
+    let settled = settle_row_aspect(el, axis, *gap, main_avail, children, &mut measured);
     // A wrapping stack flows children onto lines that fit the main axis; each
     // line is then laid out like an unwrapped stack whose cross extent is the
     // line's tallest child. Lines pack from the cross start, `gap` apart.
@@ -842,6 +995,7 @@ fn layout_element(
     for line in lines {
         let line_children = &children[line.clone()];
         let line_measured = &measured[line.clone()];
+        let line_settled = &settled[line.clone()];
         // A scroll container lays its children out at their *natural* main size
         // (so content can overflow the viewport), stacked from the start with no
         // grow/shrink; the offset + clip are applied afterward (see
@@ -856,31 +1010,14 @@ fn layout_element(
             let items: Vec<FlexItem> = line_children
                 .iter()
                 .zip(line_measured)
-                .map(|(c, m)| {
-                    let item = FlexItem::fixed(axis.main(*m))
-                        .grow(c.layout.grow)
-                        .shrink(c.layout.shrink)
-                        .bounds(axis.main(min_size(c)), axis.main(max_size(c)));
-                    // A scroll container along this axis, with no length of
-                    // its own, takes the free space and gives it back when
-                    // its siblings overflow (down to its floor).
-                    if scroll_fill_axis(c) == Some(axis) {
-                        FlexItem {
-                            grow: if c.layout.grow > 0.0 {
-                                c.layout.grow
-                            } else {
-                                1.0
-                            },
-                            shrink: if c.layout.shrink > 0.0 {
-                                c.layout.shrink
-                            } else {
-                                1.0
-                            },
-                            min: scroll_floor(c, axis, axis.main(*m)),
-                            ..item
-                        }
+                .zip(line_settled)
+                .map(|((c, m), &settled)| {
+                    // A child keeping its aspect ratio already took its
+                    // share of the row (see `settle_row_aspect`).
+                    if settled {
+                        FlexItem::fixed(axis.main(*m))
                     } else {
-                        item
+                        flex_item(c, axis, *m)
                     }
                 })
                 .collect();
@@ -908,8 +1045,8 @@ fn layout_element(
         for ((child, m), span) in line_children.iter().zip(line_measured).zip(&spans) {
             // As in a grid cell, `Stretch` leaves a child sized across alone.
             let fixed_cross = match axis {
-                Axis::Horizontal => child.layout.size.height,
-                Axis::Vertical => child.layout.size.width.filter(|_| !child.layout.soft_width),
+                Axis::Horizontal => decided_height(child),
+                Axis::Vertical => decided_width(child),
             };
             let align = match (child.layout.align_self.unwrap_or(*cross_align), fixed_cross) {
                 (Align::Stretch, Some(_)) => Align::Start,
@@ -1030,7 +1167,7 @@ pub(crate) fn paint_focus(
         focused,
         scene,
         font,
-        (ring, &crate::style::FocusLook::STANDARD),
+        (ring, &crate::style::FocusLook::STANDARD, true),
         caret,
         selection,
     );
@@ -1038,13 +1175,15 @@ pub(crate) fn paint_focus(
 
 /// [`paint_focus`] with the ring drawn the way `look` says (its width, how
 /// far it stands off a button, its glow; see
-/// [`Theme::focus`](crate::style::Theme::focus)).
+/// [`Theme::focus`](crate::style::Theme::focus)), if `visible` (the focus
+/// came from the keyboard: CSS's `:focus-visible`) or the focused element
+/// is a text field, whose ring shows however it got the focus.
 pub(crate) fn paint_focus_look(
     tree: &LayoutNode,
     focused: FocusId,
     scene: &mut Scene,
     font: Option<&Font>,
-    (ring, look): (Color, &crate::style::FocusLook),
+    (ring, look, visible): (Color, &crate::style::FocusLook, bool),
     caret: Color,
     selection: Color,
 ) {
@@ -1061,7 +1200,7 @@ pub(crate) fn paint_focus_look(
     if layer {
         scene.push_layer(to_window, opacity);
     }
-    paint_focus_node(node, scene, font, (ring, look), caret, selection);
+    paint_focus_node(node, scene, font, (ring, look, visible), caret, selection);
     if layer {
         scene.pop_layer();
     }
@@ -1072,14 +1211,31 @@ fn paint_focus_node(
     node: &LayoutNode,
     scene: &mut Scene,
     font: Option<&Font>,
-    (ring, look): (Color, &crate::style::FocusLook),
+    (ring, look, visible): (Color, &crate::style::FocusLook, bool),
     caret: Color,
     selection: Color,
 ) {
     let os_focus = node
         .native
         .is_some_and(|n| crate::platform::native::draws_focus(n.control));
-    if !os_focus {
+    // Only text entry shows a caret: not a focusable that also takes taps (a
+    // select's button), nor a list, table or tree taking focus as a whole.
+    let entry = node
+        .semantics
+        .as_ref()
+        .and_then(|s| s.role)
+        .is_none_or(|r| {
+            matches!(
+                r,
+                crate::core::a11y::Role::TextField
+                    | crate::core::a11y::Role::SpinButton
+                    | crate::core::a11y::Role::PasswordField
+            )
+        })
+        && node.action.is_none();
+    // A field being typed in (placing its caret with the pointer) shows its
+    // ring whatever moved the focus there.
+    if !os_focus && (visible || (entry && node.text_pos.is_some())) {
         // A button's ring stands off it, following its corners, so it
         // shows on a button filled with the ring's color too.
         let tap = crate::core::tab_focus::is_tap_focus(node);
@@ -1115,21 +1271,7 @@ fn paint_focus_node(
             scene.stroke_rect(b, ring, look.width);
         }
     }
-    // Only text entry shows a caret: not a focusable that also takes taps (a
-    // select's button), nor a list, table or tree taking focus as a whole.
-    let entry = node
-        .semantics
-        .as_ref()
-        .and_then(|s| s.role)
-        .is_none_or(|r| {
-            matches!(
-                r,
-                crate::core::a11y::Role::TextField
-                    | crate::core::a11y::Role::SpinButton
-                    | crate::core::a11y::Role::PasswordField
-            )
-        });
-    if node.action.is_some() || !entry {
+    if !entry {
         return;
     }
 

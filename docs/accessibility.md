@@ -105,6 +105,14 @@ a list's rows are part of a list that takes focus as a whole).
   `:focus-visible` behave: a pointer user never sees a ring left on the
   button they clicked. A click on a button takes the focus away from a field,
   as before; a click on a field focuses it.
+- **The ring shows for the keyboard** (`:focus-visible`): after Tab, the
+  arrow keys, Home, End, Enter or Space, or a gamepad. A click or a tap on
+  something that takes the focus (a navigation bar, a list) moves it there
+  without a ring, until a key is used; a text field shows its ring however
+  it got the focus, as the web does. A game menu's spatial group taking the
+  focus by itself shows it unless a tap came last. The ring is drawn with
+  the layer its element is in, so a sheet, a dialog's scrim or a popup over
+  the element covers it.
 
 ### Moving focus from the app
 

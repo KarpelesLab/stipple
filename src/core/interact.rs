@@ -227,7 +227,7 @@ impl ElementKey {
         let kind = |a: &Anchor| match a {
             Anchor::At(_) => 1,
             Anchor::Center => 2,
-            Anchor::Below(_) => 3,
+            Anchor::Below(_) | Anchor::BelowFocus(_) => 3,
             Anchor::Popup(_) => 4,
             Anchor::RightOf(_) => 5,
             Anchor::Aligned { .. } | Anchor::Inset { .. } => 6,

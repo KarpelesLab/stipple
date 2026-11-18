@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(widgets)* `text_view`: a virtualized read-only text (a log) with selection across lines, copy, live append with a line cap, and find; the `logview` example (#90)
 - *(text)* `SpanStyle::background`: a color behind a run of rich text (#90)
 - *(core)* `TextHit::leaf`: which of an element's texts a press or drag is in
+- *(widgets)* `combo_box` + `ComboBox`: a text field with matching suggestions below it; `Select::searchable`, a search field atop a select's list; both lists build only the rows in view and follow the keyboard's highlight (#85)
+- *(widgets)* `select(..).on_change(cx, ..)` (#97)
+- *(layout)* `Element::aspect_ratio` (#96)
+- *(widgets)* `NavStackView::on_change`, `BottomSheetView::a11y_label`, `SwipeAction::icon_only`, `SwipeRow::radius`, `Tabs` with `equal` widths, `RefreshState::set_label`, `App::state_mut`, `Anchor::BelowFocus` (#99)
 
 ### Changed
 
@@ -44,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(menus)* closing the first window no longer takes the menu bar from the others (#78)
 - *(gpu)* `Renderer::Auto` draws on a hardware Vulkan device for Wayland windows too, as for X11's (6h)
 - *(macos)* the application menu is named after the app (`app_info().name`), not the primary window's title (#89)
+- *(widgets)* a `select` is 200 px wide unless a column stretches it, as a `text_field` is (#97)
+- *(a11y)* the focus ring shows for the keyboard only (`:focus-visible`), except on text fields, and is drawn under the sheets, scrims and popups over its element (#94)
+- *(widgets)* `Button::view` is a `Role::Button` whatever is added to it; an untitled sheet has no English "Sheet" name; a press on a button laid over an `on_pointer` element no longer reaches that element; `App::press_key(KeyInput::Escape)` goes back as the keyboard does, and `press_key_code(Tab)` honors `captures_tab` (#99)
 
 ## [0.0.9](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.8...stipple-v0.0.9) - 2026-11-16
 

@@ -298,6 +298,9 @@ pub enum Anchor {
     /// flips above when there's no room below, and is kept inside the window.
     /// Falls back to the window's top-left when no such element is laid out.
     Below(ActionId),
+    /// [`Below`](Self::Below) the element with this keyboard focus (a combo
+    /// box's suggestions under its text field), which needn't take taps.
+    BelowFocus(FocusId),
     /// Place the overlay's top-left at a window point (a context menu at the
     /// pointer), moved left or up as needed to keep it inside the window.
     Popup(Point),
@@ -547,6 +550,8 @@ pub struct Cx<'a, S> {
     /// runs in a dialog (see `focus`).
     focus_requests: Vec<FocusRequest>,
     defaults: Vec<DefaultAction<S>>,
+    /// What runs after each of this build's handlers (see [`Cx::watch`]).
+    watchers: Vec<TapFn<S>>,
 }
 
 /// Per-build animation bookkeeping for a [`Cx`].
@@ -609,6 +614,7 @@ impl<'a, S> Cx<'a, S> {
             backs: Vec::new(),
             focus_requests: Vec::new(),
             defaults: Vec::new(),
+            watchers: Vec::new(),
         }
     }
 
@@ -1241,9 +1247,19 @@ impl<'a, S> Cx<'a, S> {
         std::mem::take(&mut self.overlays)
     }
 
+    /// Run `watcher` after each handler of this build runs (a tap, a key, a
+    /// drag, a pointer event, Back), until the next build: how a widget
+    /// hears its state changed by the app's handlers as well as its own
+    /// (a nav stack's `on_change`). It should check that something changed,
+    /// and remember what it saw.
+    pub(crate) fn watch(&mut self, watcher: impl FnMut(&mut S) + 'static) {
+        self.watchers.push(Box::new(watcher));
+    }
+
     /// Consume the context, yielding the accumulated [`Handlers`] table.
     pub fn into_handlers(self) -> Handlers<S> {
         Handlers {
+            watchers: self.watchers,
             taps: self.taps,
             keys: self.keys,
             raw_keys: self.raw_keys,
@@ -1309,13 +1325,22 @@ pub struct Handlers<S> {
     drops: Vec<DropTarget<S>>,
     drag_sources: Vec<DragSource<S>>,
     pointers: crate::core::PointerHandlers<S>,
+    watchers: Vec<TapFn<S>>,
 }
 
 impl<S> Handlers<S> {
+    /// Run the watchers (see [`Cx::watch`]): a handler just ran.
+    pub(crate) fn settle(&mut self, state: &mut S) {
+        for watcher in &mut self.watchers {
+            watcher(state);
+        }
+    }
+
     /// Invoke the tap handler for `id`. Returns `true` if one existed and ran.
     pub fn dispatch(&mut self, id: ActionId, state: &mut S) -> bool {
         if let Some(handler) = self.taps.get_mut(id.0 as usize) {
             handler(state);
+            self.settle(state);
             true
         } else {
             false
@@ -1327,6 +1352,7 @@ impl<S> Handlers<S> {
     pub(crate) fn dispatch_key(&mut self, id: FocusId, input: &KeyInput, state: &mut S) -> bool {
         if let Some(handler) = self.keys.get_mut(id.0 as usize) {
             handler(state, input);
+            self.settle(state);
             true
         } else {
             false
@@ -1342,7 +1368,9 @@ impl<S> Handlers<S> {
         state: &mut S,
     ) -> Option<crate::core::keys::Handled> {
         let handler = self.raw_keys.get_mut(id.0 as usize)?;
-        Some(handler(state, event))
+        let handled = handler(state, event);
+        self.settle(state);
+        Some(handled)
     }
 
     /// Invoke the drag handler for `id` with `motion`. Returns `true` if one
@@ -1355,6 +1383,7 @@ impl<S> Handlers<S> {
     ) -> bool {
         if let Some(handler) = self.drags.get_mut(id.0 as usize) {
             handler(state, motion);
+            self.settle(state);
             true
         } else {
             false
@@ -1386,6 +1415,7 @@ impl<S> Handlers<S> {
     ) -> bool {
         if let Some(handler) = self.text_pos.get_mut(id.0 as usize) {
             handler(state, hit, extend);
+            self.settle(state);
             true
         } else {
             false
@@ -1397,6 +1427,7 @@ impl<S> Handlers<S> {
     pub(crate) fn dispatch_context(&mut self, id: ContextId, pos: Point, state: &mut S) -> bool {
         if let Some(handler) = self.contexts.get_mut(id.0 as usize) {
             handler(state, pos);
+            self.settle(state);
             true
         } else {
             false
@@ -1421,6 +1452,7 @@ impl<S> Handlers<S> {
         match self.drops.get_mut(id.0 as usize) {
             Some(target) => {
                 (target.on_drop)(state, data, pos);
+                self.settle(state);
                 true
             }
             None => false,
@@ -1524,6 +1556,7 @@ impl<S> Default for Handlers<S> {
             drops: Vec::new(),
             drag_sources: Vec::new(),
             pointers: Default::default(),
+            watchers: Vec::new(),
         }
     }
 }

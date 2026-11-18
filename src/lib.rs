@@ -59,6 +59,8 @@ mod app_scroll_bar;
 mod app_select;
 mod app_text_touch;
 mod app_touch;
+#[cfg(test)]
+mod aspect_tests;
 pub mod audio;
 pub mod camera;
 #[cfg(test)]
@@ -68,6 +70,8 @@ pub mod core;
 mod flow_tests;
 #[cfg(test)]
 mod focus_tests;
+#[cfg(test)]
+mod focus_visible_tests;
 pub mod game;
 pub mod geometry;
 #[cfg(feature = "gpu")]
@@ -575,7 +579,12 @@ struct Pane<S> {
     watch: crate::core::interact::Watch,
     pointer_in: bool,
     press_at: Option<Point>,
+    /// Whether the focus shows its ring (CSS's `:focus-visible`): it was
+    /// moved, or used, with the keyboard (or a gamepad), not a press.
     focus_visible: bool,
+    /// Whether the last input was the keyboard's (or a gamepad's) rather
+    /// than a press: a spatial group taking focus by itself shows it then.
+    keyboard_led: bool,
     styled_actions: Vec<ActionId>,
     styled_drops: Vec<crate::core::DropId>,
     // Whether the window has
@@ -681,6 +690,7 @@ impl<S: 'static> Pane<S> {
             pointer_in: false,
             press_at: None,
             focus_visible: false,
+            keyboard_led: true,
             styled_actions: Vec::new(),
             styled_drops: Vec::new(),
             window_focused: true,
@@ -1125,6 +1135,15 @@ impl<S: 'static> App<S> {
         &self.state
     }
 
+    /// Change the current state, as a handler would (for tests and scripted
+    /// input): every window rebuilds from it.
+    pub fn state_mut(&mut self) -> &mut S {
+        for pane in &mut self.panes {
+            pane.dirty = true;
+        }
+        &mut self.state
+    }
+
     /// Seed the content for an embedded [`viewport`](Element::viewport) at build
     /// time (builder form of [`set_viewport_content`](App::set_viewport_content)).
     pub fn viewport_content(mut self, id: ViewportId, content: Pixmap) -> Self {
@@ -1566,7 +1585,11 @@ impl<S: 'static> Pane<S> {
                         }
                         None => Point::new(0.0, 0.0),
                     },
-                    Anchor::Below(id) => match find_action(&roots[0], id) {
+                    Anchor::Below(_) | Anchor::BelowFocus(_) => match match spec.anchor {
+                        Anchor::BelowFocus(id) => crate::core::find_focus(&roots[0], id),
+                        Anchor::Below(id) => find_action(&roots[0], id),
+                        _ => None,
+                    } {
                         Some(node) => {
                             let b = flip(node.bounds);
                             m.width = m.width.max(b.width());
@@ -1693,6 +1716,10 @@ impl<S: 'static> Pane<S> {
         }
         // Focus the view asked for, and autofocus elements that appeared.
         let refocused = self.apply_focus(&tree, focus_requests);
+        if refocused {
+            // Moved by the app: its ring shows if the keyboard was in use.
+            self.focus_visible = self.keyboard_led;
+        }
         // The scroll bars of the containers whose content overflows.
         self.stamp_scroll_bars(&mut tree, &theme, now);
         // A spatial group (a game's menu) takes focus when nothing in the
@@ -1700,7 +1727,8 @@ impl<S: 'static> Pane<S> {
         let entered = crate::core::tab_focus::spatial_entry(&tree, modal_layers, self.focused);
         if let Some(first) = entered {
             self.focused = Some(first);
-            self.focus_visible = true;
+            // Its ring shows unless a press (a tap) was the last input.
+            self.focus_visible = self.keyboard_led;
         }
         crate::core::mark_native_states(&mut tree, hovered, pressed, self.focused);
         self.native_fades.update(&mut tree, &theme.motion, now);
@@ -1745,7 +1773,40 @@ impl<S: 'static> Pane<S> {
         };
         let size = self.attrs.logical_size;
         let window = Rect::from_xywh(0.0, 0.0, size.width, size.height);
-        crate::core::paint_visible(tree, &mut scene, font, window);
+        // The focus ring and caret, over the focused element.
+        let focus = |scene: &mut Scene| {
+            if let Some(fid) = self.focused {
+                crate::core::paint_focus_look(
+                    tree,
+                    fid,
+                    scene,
+                    font,
+                    (theme.palette.focus_ring, &theme.focus, self.focus_visible),
+                    theme.palette.text,
+                    theme.palette.selection,
+                );
+                crate::core::paint_preedit(tree, fid, scene, font, theme.palette.text);
+            }
+        };
+        // With overlays up, the ring is drawn with the layer the focus is
+        // in, under the layers over it (a sheet, a popup, a scrim).
+        let layered = self.overlay_active && tree.affine().is_none() && tree.opacity >= 1.0;
+        let focus_layer = self.focused.filter(|_| layered).and_then(|f| {
+            tree.children
+                .iter()
+                .position(|l| crate::core::find_focus(l, f).is_some())
+        });
+        match focus_layer {
+            Some(at) => {
+                for (i, layer) in tree.children.iter().enumerate() {
+                    crate::core::paint_visible(layer, &mut scene, font, window);
+                    if i == at {
+                        focus(&mut scene);
+                    }
+                }
+            }
+            None => crate::core::paint_visible(tree, &mut scene, font, window),
+        }
         let overlay = theme.palette.hover_overlay;
         for &(id, a) in &self.highlight_alphas {
             paint_hover(tree, id, &mut scene, Color { a, ..overlay });
@@ -1753,18 +1814,8 @@ impl<S: 'static> Pane<S> {
         for &(id, level) in &self.dnd.highlight {
             app_dnd::paint_drop_target(tree, id, &mut scene, theme, level);
         }
-        // Overlay a focus ring + caret on the focused element.
-        if let Some(fid) = self.focused {
-            crate::core::paint_focus_look(
-                tree,
-                fid,
-                &mut scene,
-                font,
-                (theme.palette.focus_ring, &theme.focus),
-                theme.palette.text,
-                theme.palette.selection,
-            );
-            crate::core::paint_preedit(tree, fid, &mut scene, font, theme.palette.text);
+        if focus_layer.is_none() {
+            focus(&mut scene);
         }
         self.text_touch.paint(&mut scene, theme);
         scene
@@ -2117,9 +2168,9 @@ impl<S: 'static> Pane<S> {
         let refocused = !keeps && foc != self.focused;
         if refocused {
             self.focused = foc;
-            self.focus_visible = false;
             self.dirty = true;
         }
+        self.pressed_focus();
         let ran = match hit {
             Some(id) => {
                 crate::core::set_pointer_position(pos, None);
@@ -2260,6 +2311,20 @@ impl<S: 'static> Pane<S> {
         let Some(id) = self.focused else {
             return self.enter_spatial(&input);
         };
+        // Moving about or pressing with the keys shows where the focus is.
+        if matches!(
+            input,
+            KeyInput::Up
+                | KeyInput::Down
+                | KeyInput::Left
+                | KeyInput::Right
+                | KeyInput::Home
+                | KeyInput::End
+                | KeyInput::Enter
+        ) || crate::core::tab_focus::activates(&input)
+        {
+            self.keyed_focus();
+        }
         // In a spatial group (a game's menu), the arrows move focus by where
         // the controls are.
         if self
@@ -2293,6 +2358,26 @@ impl<S: 'static> Pane<S> {
         ran
     }
 
+    /// A press (a click, a tap) came: the focus, wherever it is now, shows
+    /// no ring until the keyboard is used.
+    fn pressed_focus(&mut self) {
+        self.keyboard_led = false;
+        if self.focus_visible {
+            self.focus_visible = false;
+            self.dirty = true;
+        }
+    }
+
+    /// The keyboard (or a gamepad) moved or used the focus: it shows its
+    /// ring.
+    fn keyed_focus(&mut self) {
+        self.keyboard_led = true;
+        if !self.focus_visible {
+            self.focus_visible = true;
+            self.dirty = true;
+        }
+    }
+
     /// An arrow key on a button inside a
     /// [`focus_group`](crate::core::Element::focus_group): move focus to the
     /// group's next control (pressing it, in a radio-like group). Returns
@@ -2306,7 +2391,7 @@ impl<S: 'static> Pane<S> {
             return false;
         };
         self.focused = Some(next);
-        self.focus_visible = true;
+        self.keyed_focus();
         self.dirty = true;
         if let Some((action, at)) = press {
             crate::core::set_pointer_position(at, None);
@@ -2327,7 +2412,7 @@ impl<S: 'static> Pane<S> {
             return false;
         };
         self.focused = Some(first);
-        self.focus_visible = true;
+        self.keyed_focus();
         self.dirty = true;
         true
     }
@@ -2451,7 +2536,7 @@ impl<S: 'static> Pane<S> {
         };
         let changed = self.focused != Some(next) || !self.focus_visible;
         self.focused = Some(next);
-        self.focus_visible = true;
+        self.keyed_focus();
         self.dirty = true;
         changed
     }
@@ -2540,8 +2625,8 @@ impl<S: 'static> Pane<S> {
         };
         if foc != self.focused {
             self.focused = foc;
-            self.focus_visible = false;
         }
+        self.pressed_focus();
         self.text_selecting = Some(id);
         self.handlers.dispatch_text_hit(id, &hit, false, state);
         match self.clicks.press(now, pos) {
@@ -3017,9 +3102,13 @@ impl<S: 'static> App<S> {
         self.pane_type_text(0, text)
     }
 
-    /// Deliver an editing key to the primary window's focused element.
+    /// Deliver an editing key to the primary window's focused element. An
+    /// Escape nothing focused takes goes back, as from the keyboard (it
+    /// closes a sheet or a dialog, see
+    /// [`Cx::on_back`](crate::core::Cx::on_back)).
     pub fn press_key(&mut self, input: KeyInput) -> bool {
-        self.pane_press_key(0, input)
+        let escape = input == KeyInput::Escape;
+        self.pane_press_key(0, input) || (escape && self.escape_back(0))
     }
 
     /// Move focus to the next focusable element in the primary window (Tab).
@@ -4710,7 +4799,7 @@ impl<S: 'static> App<S> {
             return true;
         }
         if code == KeyCode::Tab {
-            return self.pane_focus_next(0);
+            return self.tab_key(0, modifiers);
         }
         map_key(code, modifiers).is_some_and(|input| {
             let escape = input == KeyInput::Escape;
@@ -4880,6 +4969,7 @@ pub mod prelude {
         Column, ListState, SelectionMode, SortOrder, TableSpec, TableState, TreeModel, TreeSpec,
         TreeState, VirtualList, table, tree, virtual_list,
     };
+    pub use crate::widgets::{ComboBox, combo_box};
     pub use crate::widgets::{
         NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail,
         page_stack, safe_area,

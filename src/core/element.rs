@@ -74,6 +74,9 @@ pub(crate) struct LayoutStyle {
     /// a column stretching its children stretches this one too. Cleared by
     /// [`Element::width`].
     pub soft_width: bool,
+    /// Width over height: the other side follows the one decided (CSS's
+    /// `aspect-ratio`). Set via [`Element::aspect_ratio`].
+    pub aspect: Option<f64>,
 }
 
 /// The painted decoration of an element's box: fill, corner radius, border.
@@ -1243,6 +1246,33 @@ impl Element {
     /// `shrink`, when its flex siblings overflow (stopping at its minimum).
     pub fn shrink(mut self, shrink: f64) -> Self {
         self.layout.shrink = shrink;
+        self
+    }
+
+    /// Keep this element's width over its height at `ratio` (`1.0` square,
+    /// `16.0 / 9.0` widescreen), as CSS's `aspect-ratio` does: the height
+    /// follows the width once that is decided, by a fixed
+    /// [`width`](Element::width) or by the room it is given (a column's
+    /// width, a grid cell's, a row's share when it [`grow`](Element::grow)s),
+    /// so "as wide as there is, and square" needs no window size. With only a
+    /// [`height`](Element::height) fixed, the width follows it instead; with
+    /// both fixed the ratio has nothing to do. Min and max bounds still apply
+    /// to each side. A ratio that isn't a positive finite number is ignored.
+    ///
+    /// ```
+    /// use stipple::prelude::*;
+    /// fn view(_: &(), cx: &mut Cx<()>) -> Element {
+    ///     column(vec![
+    ///         // As wide as the column, and square.
+    ///         Element::canvas(CanvasId(1), |_| {}).aspect_ratio(1.0),
+    ///         label(cx, "Scan the code"),
+    ///     ])
+    /// }
+    /// # let theme = Theme::light();
+    /// # let _ = view(&(), &mut Cx::new(&theme));
+    /// ```
+    pub fn aspect_ratio(mut self, ratio: f64) -> Self {
+        self.layout.aspect = (ratio.is_finite() && ratio > 0.0).then_some(ratio);
         self
     }
 

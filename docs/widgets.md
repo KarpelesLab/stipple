@@ -33,7 +33,12 @@ fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
   or for custom content, build a `Button` and finish it with `view(cx)`:
   `Button::new("Delete").variant(Variant::Danger).view(cx)`,
   `Button::from_content(icon).variant(Variant::Ghost).view(cx)`. Make any of
-  them do something with `.on_tap(cx, |s| …)`.
+  them do something with `.on_tap(cx, |s| …)`. A button is a `Role::Button`
+  whatever is added to it (`.disabled(true)` with no handler, `.expanded(…)`).
+- **Segmented controls.** `tabs(cx, &["Day", "Week"], selected, |s, i| …)`
+  sizes each tab to its label; `Tabs::new(labels, selected, on_select)
+  .equal(true).view(cx)` makes them all as wide, sharing the width it's
+  given, as phones show them.
 - **Checkboxes, switches and radio buttons** take their label:
   `checkbox(cx, "Show hidden files", checked, |s| …)`,
   `switch(cx, "Sync", on, |s| …)`, `radio(cx, "Large", selected, |s| …)`.
@@ -118,12 +123,47 @@ struct App { size: Select }
 select(cx, &["Small", "Medium", "Large"], &state.size, |s| &mut s.size)
 ```
 
-Read the choice with `state.size.selected()`. The list closes when an option
+Read the choice with `state.size.selected()`, or hear it change with
+`.on_change(cx, |s| …)` (after the user picks another option, by any route:
+a click, the keys, the OS's own menu under `Theme::native()`). The list closes when an option
 is chosen, on Escape, or on a press outside it. While the select has focus,
 Down, Up, Enter and Space open the list. In the open list the arrow keys, Home
 and End move the highlight, and Enter or Space chooses. Typing a letter jumps to
-the next option that starts with it. Lists longer than eight options scroll, but
-moving the highlight with the keyboard doesn't scroll them yet.
+the next option that starts with it. Lists longer than eight options scroll,
+following the highlight, and build only the rows in view. It is 200 px wide
+unless a column stretches it, as a `text_field` is; `.width(..)` sets another.
+
+For a long list (a font family out of `Font::families()`), make it
+searchable: `Select::new(None).searchable(true)` puts a search field at the
+top of the list. It takes the focus as the list opens (an on-screen keyboard
+shows) and gives it back to the select when the list closes; typing on the
+focused select opens it searching too. Only the options containing the text
+show, and Up, Down and Enter pick among them. `state.size.query()` reads the
+text. A searchable select is always Stipple's own, even under
+`Theme::native()` (the OS pop-up buttons don't search).
+
+## Combo box
+
+A text field that suggests entries as you type (a host from the history, a
+font family): free text, with a list of the suggestions containing it below,
+the ones starting with it first. `ComboBox` is its state (the `TextInput`,
+whether the list shows, the highlight).
+
+```rust
+struct App { host: ComboBox, history: Vec<String> }
+// in the view:
+combo_box(cx, &state.host, &state.history, |s| &mut s.host)
+    .placeholder("user@host")
+    .on_submit(cx, |s| connect(s.host.text()))
+```
+
+Down opens the list (on every suggestion when the text matches none) and
+moves the highlight; Up moves it back, and off the top returns to the typed
+text. Enter or Tab takes the highlighted suggestion, Escape closes the list
+keeping the text, and Enter with nothing highlighted submits. A tap on a
+suggestion takes it, and the ▾ at the field's end lists them all.
+`.on_change` runs after the text changes, by typing or by taking a
+suggestion. Long lists scroll and build only the rows in view.
 
 ## Number input
 
@@ -501,6 +541,12 @@ fn view(state: &App, cx: &mut Cx<App>) -> Element {
   it into a card that shifts toward the edge. Let go, it settles on the
   `page` motion, gone (the pop) or back in place (the gesture cancelled),
   from where the finger left it. Escape doesn't pop.
+- **Hearing the pages change.** Build a `NavStackView` instead of calling
+  `nav_stack`, with an `on_change` handler: it runs after any handler in the
+  window pushes or pops a page (the app's, or the stack's own Back), so a
+  scanner page restarts its camera when the page over it leaves:
+  `NavStackView::new(&state.nav, |s: &mut App| &mut s.nav).on_change(|s|
+  s.camera_on = s.nav.depth() == 1).view(cx, |cx, page| …)`.
 - `app_bar(cx, title)` is the bar along the top of a page:
   `.on_back(handler)` adds the back button (Material's arrow, or iOS's
   chevron with `.back_label(…)`, the previous page's title, beside it; its
@@ -555,7 +601,9 @@ fn view(state: &App, cx: &mut Cx<App>) -> Element {
   closes it with `dismiss()`. It slides in and out on the theme's `dialog`
   and `dialog_exit` motion, its scrim fading with it.
 - Focus stays inside it while it's up, and assistive technologies see a
-  `Dialog` named by its title.
+  `Dialog` named by its title, or by `.a11y_label(…)` (in the user's
+  language) for a sheet without one; with neither it is an unnamed dialog,
+  which a screen reader announces in its own words.
 - **On a wide window** (at least `SHEET_WIDE`, 640 px) it shows as a centered
   dialog instead, without the handle or detents; `.adaptive(false)` keeps the
   sheet (up to 640 px wide, centered).
@@ -802,6 +850,7 @@ unit tests: CI's Windows and macOS runs don't hover native controls.
 | Widget | Role | Name |
 |---|---|---|
 | Select | `ComboBox`; its open list is a `List` of `ListItem`s | the chosen option |
+| Combo box | `TextField`; its suggestions a `List` of `ListItem`s while they show | the text |
 | Number input | `SpinButton`, with `Increase` and `Decrease` buttons | the text |
 | Split pane divider | `Splitter` | — |
 | Slider | `Slider` (focusable: the arrows step it by 5%, Home and End go to the ends, Left and Right swap right to left) | its `a11y_label`, which can carry the value |

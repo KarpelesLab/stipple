@@ -160,7 +160,11 @@ struct App { mail: Vec<Mail>, list: ListState, swipe: SwipeState }
   runs, its row is shut at once: the app removes the item, the row slides
   out and fades (its exit), and the rows below glide up into the gap. A
   side's first action is the theme's primary color by default, the others
-  gray; `.color(c)` sets one.
+  gray; `.color(c)` sets one. `.icon(i).icon_only()` shows the icon without
+  the label (which still names it for screen readers and the context menu).
+- **Rounded rows.** In an inset card list, `swipe_row(…).radius(12.0)`
+  rounds the row's corners: the content as it moves, and the buttons beside
+  it.
 - **Scrolling still works.** A drag only swipes once it is mostly sideways,
   decided where it leaves the 8-pixel touch slop, on the same move as the
   touch recognizer: a vertical drag scrolls the list, and a row inside a

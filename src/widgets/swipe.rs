@@ -61,6 +61,7 @@ const STEP_PAUSE: f64 = 0.35;
 pub struct SwipeAction<S> {
     label: String,
     icon: Option<ImageSource>,
+    icon_only: bool,
     color: Option<Color>,
     destructive: bool,
     run: Rc<dyn Fn(&mut S)>,
@@ -71,6 +72,7 @@ impl<S> Clone for SwipeAction<S> {
         Self {
             label: self.label.clone(),
             icon: self.icon.clone(),
+            icon_only: self.icon_only,
             color: self.color,
             destructive: self.destructive,
             run: self.run.clone(),
@@ -94,6 +96,7 @@ impl<S> SwipeAction<S> {
         Self {
             label: label.into(),
             icon: None,
+            icon_only: false,
             color: None,
             destructive: false,
             run: Rc::new(run),
@@ -104,6 +107,14 @@ impl<S> SwipeAction<S> {
     /// [`Svg`](crate::render::Svg), 22 px, drawn in white) above the label.
     pub fn icon(mut self, icon: impl Into<ImageSource>) -> Self {
         self.icon = Some(icon.into());
+        self
+    }
+
+    /// Show the [`icon`](Self::icon) alone, without the label under it (a
+    /// trash can, a flag). The label still names the button for assistive
+    /// technologies, and the action in the row's context menu.
+    pub fn icon_only(mut self) -> Self {
+        self.icon_only = true;
         self
     }
 
@@ -448,7 +459,9 @@ fn menu_label(label: &str) -> String {
 pub struct SwipeRow {
     key: u64,
     /// The actions behind, laid out for the row's current offset.
-    behind: Option<Element>,
+    behind: Option<Behind>,
+    /// The row's corner radius.
+    radius: f64,
     /// How far the content is moved (logical pixels, positive right).
     dx: f64,
     pointer: crate::core::PointerId,
@@ -558,11 +571,13 @@ pub fn swipe_row<S: 'static>(
                 if let Some(icon) = &a.icon {
                     inner.push(Element::image(icon.clone()).width(22.0).height(22.0));
                 }
-                inner.push(Element::text(
-                    a.label.clone(),
-                    theme.typography.caption,
-                    Color::WHITE,
-                ));
+                if !(a.icon_only && a.icon.is_some()) {
+                    inner.push(Element::text(
+                        a.label.clone(),
+                        theme.typography.caption,
+                        Color::WHITE,
+                    ));
+                }
                 let run = a.run.clone();
                 let access = access.clone();
                 let destructive = a.destructive;
@@ -589,19 +604,12 @@ pub fn swipe_row<S: 'static>(
         if sign < 0.0 {
             buttons.reverse();
         }
-        let mut area = Element::stack(Axis::Horizontal, buttons)
-            .width(offset.abs())
-            .align(Align::Start, Align::Stretch);
-        if let Some(first) = side.first() {
-            area = area.fill(action_color(first, true, &theme));
+        Behind {
+            buttons,
+            width: offset.abs(),
+            fill: side.first().map(|first| action_color(first, true, &theme)),
+            leading: sign > 0.0,
         }
-        let gap = super::spacer();
-        let children = if sign > 0.0 {
-            vec![area, gap]
-        } else {
-            vec![gap, area]
-        };
-        Element::stack(Axis::Horizontal, children).align(Align::Start, Align::Stretch)
     });
 
     let swiper = Rc::new(Swiper {
@@ -654,6 +662,7 @@ pub fn swipe_row<S: 'static>(
     SwipeRow {
         key,
         behind,
+        radius: 0.0,
         dx: offset * dir,
         pointer,
         shut,
@@ -678,10 +687,56 @@ fn action_color<S>(a: &SwipeAction<S>, first: bool, theme: &crate::style::Theme)
     })
 }
 
+/// The buttons a swiped row shows, on the side it was swiped from.
+struct Behind {
+    buttons: Vec<Element>,
+    /// How wide they are together: how far the row moved.
+    width: f64,
+    /// The color under them (the first action's, as a full swipe stretches
+    /// it).
+    fill: Option<Color>,
+    /// On the leading side (the row moved toward the trailing edge).
+    leading: bool,
+}
+
+impl Behind {
+    /// The buttons beside the moved row, their corners rounded by `radius`
+    /// as the row's are.
+    fn view(self, radius: f64) -> Element {
+        let buttons = self
+            .buttons
+            .into_iter()
+            .map(|b| if radius > 0.0 { b.radius(radius) } else { b })
+            .collect();
+        let mut area = Element::stack(Axis::Horizontal, buttons)
+            .width(self.width)
+            .align(Align::Start, Align::Stretch)
+            .radius(radius);
+        if let Some(fill) = self.fill {
+            area = area.fill(fill);
+        }
+        let gap = super::spacer();
+        let children = if self.leading {
+            vec![area, gap]
+        } else {
+            vec![gap, area]
+        };
+        Element::stack(Axis::Horizontal, children).align(Align::Start, Align::Stretch)
+    }
+}
+
 impl SwipeRow {
+    /// Round the row's corners by `radius` (an inset card list): the content
+    /// as it moves, and the action buttons beside it, follow them.
+    pub fn radius(mut self, radius: f64) -> Self {
+        self.radius = radius.max(0.0);
+        self
+    }
+
     /// Build the row around `content`.
     pub fn child(self, content: Element) -> Element {
         let chrome = self.chrome.unwrap_or_default();
+        let radius = self.radius;
         let mut front = Element::stack(Axis::Horizontal, vec![content.grow(1.0)])
             .align(Align::Start, Align::Center)
             .padding(chrome.padding);
@@ -693,11 +748,12 @@ impl SwipeRow {
             front = Element::stack(Axis::Horizontal, vec![front.grow(1.0)])
                 .align(Align::Start, Align::Stretch)
                 .fill(self.surface)
+                .radius(radius)
                 .transform(Transform::IDENTITY.translate(self.dx, 0.0));
         }
         front.action = self.shut;
         let mut layers = Vec::with_capacity(2);
-        layers.extend(self.behind);
+        layers.extend(self.behind.map(|b| b.view(radius)));
         layers.push(front);
         let mut el = Element::layers(layers)
             .grow(1.0)

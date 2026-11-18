@@ -157,7 +157,8 @@ pub(super) type Access<S> = Rc<dyn Fn(&mut S) -> &mut BottomSheet>;
 /// [`BottomSheet::dismiss`]. Its content scrolls beyond the tallest detent.
 ///
 /// Focus stays inside it while it's up, and assistive technologies see a
-/// [`Role::Dialog`] named by its [`title`](BottomSheetView::title). On a
+/// [`Role::Dialog`] named by its [`a11y_label`](BottomSheetView::a11y_label)
+/// or its [`title`](BottomSheetView::title). On a
 /// window at least [`SHEET_WIDE`] wide it shows as a centered dialog instead, with
 /// no handle or detents ([`adaptive`](BottomSheetView::adaptive) turns that
 /// off).
@@ -196,6 +197,7 @@ pub fn bottom_sheet<'a, S: 'static>(
         access: Rc::new(access),
         id: String::new(),
         title: None,
+        name: None,
         content: Vec::new(),
         detents: vec![SheetDetent::Fit],
         handle: true,
@@ -213,6 +215,7 @@ pub struct BottomSheetView<'a, S> {
     access: Access<S>,
     id: String,
     title: Option<String>,
+    name: Option<String>,
     content: Vec<Element>,
     detents: Vec<SheetDetent>,
     handle: bool,
@@ -227,6 +230,7 @@ impl<S> std::fmt::Debug for BottomSheetView<'_, S> {
             .field("sheet", &self.sheet)
             .field("id", &self.id)
             .field("title", &self.title)
+            .field("name", &self.name)
             .field("detents", &self.detents)
             .field("handle", &self.handle)
             .field("adaptive", &self.adaptive)
@@ -246,6 +250,15 @@ impl<S: 'static> BottomSheetView<'_, S> {
     /// sheet), and the sheet's accessible name.
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    /// The sheet's accessible name, in the user's language, for a sheet with
+    /// no [`title`](Self::title) (or to be read out as something other than
+    /// it). Without either, it is an unnamed dialog, which a screen reader
+    /// announces in its own words.
+    pub fn a11y_label(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
         self
     }
 
@@ -326,7 +339,11 @@ impl<S: 'static> BottomSheetView<'_, S> {
             let close = close.clone();
             cx.on_back(BackHandler::new(move |s| close(s)).escape(true));
         }
-        let label = self.title.clone().unwrap_or_else(|| "Sheet".into());
+        let label = self.name.clone().or_else(|| self.title.clone());
+        let named = move |el: Element| match label {
+            Some(name) => el.a11y_label(name),
+            None => el,
+        };
         let key = ("stipple-sheet", self.id.clone());
 
         if self.adaptive && win.width >= SHEET_WIDE {
@@ -341,8 +358,8 @@ impl<S: 'static> BottomSheetView<'_, S> {
             let content = super::panel_frame(&theme, children)
                 .width((win.width - 48.0).clamp(0.0, 560.0))
                 .max_height((win.height * 0.85).max(0.0))
-                .role(Role::Dialog)
-                .a11y_label(label)
+                .role(Role::Dialog);
+            let content = named(content)
                 .key(key)
                 .enter(super::motion::dialog_effect(&m))
                 .exit(super::motion::dialog_exit(&m));
@@ -467,9 +484,7 @@ impl<S: 'static> BottomSheetView<'_, S> {
         }
         // It slides up from below the window, and back down.
         let travel = laid.or(sheet.fit).unwrap_or(max) + dy;
-        el = el
-            .role(Role::Dialog)
-            .a11y_label(label)
+        el = named(el.role(Role::Dialog))
             .key(key)
             .enter(Effect::slide(0.0, travel).transition(Transition(m.dialog)))
             .exit(Effect::slide(0.0, travel).transition(Transition(m.dialog_exit)));

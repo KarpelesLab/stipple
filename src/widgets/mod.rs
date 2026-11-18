@@ -24,6 +24,9 @@ mod chips;
 #[cfg(test)]
 mod chips_tests;
 mod color_picker;
+mod combo;
+#[cfg(test)]
+mod gaps_tests;
 pub(crate) mod menus;
 #[cfg(test)]
 mod menus_tests;
@@ -38,6 +41,7 @@ mod navigation;
 mod navigation_tests;
 mod number;
 mod password;
+mod popup_list;
 mod preedit;
 mod rich_editor;
 mod select;
@@ -55,7 +59,8 @@ mod toolbar;
 
 pub use chips::{Chip, chip, choice_chips, filter_chips};
 pub use color_picker::{ColorPicker, color_button, color_picker};
-pub use nav_stack::{AppBar, NavStack, PageTransition, app_bar, nav_stack};
+pub use combo::{ComboBox, combo_box};
+pub use nav_stack::{AppBar, NavStack, NavStackView, PageTransition, app_bar, nav_stack};
 pub use navigation::{
     NavBadge, NavIcon, NavItem, NavLook, NavigationBar, navigation_bar, navigation_rail,
     page_stack, safe_area,
@@ -485,8 +490,15 @@ impl Button {
         self
     }
 
-    /// The button, in `cx`'s theme.
+    /// The button, in `cx`'s theme. It is a [`Role::Button`] to assistive
+    /// technologies (and to [`App::find`](crate::App::find)) whatever is
+    /// added to it after: no tap handler yet, [`disabled`](Element::disabled),
+    /// [`expanded`](Element::expanded).
     pub fn view<S>(self, cx: &Cx<S>) -> Element {
+        self.draw(cx).role(Role::Button)
+    }
+
+    fn draw<S>(self, cx: &Cx<S>) -> Element {
         let theme = cx.theme();
         let p = &theme.palette;
         let variant = self.variant;
@@ -1431,11 +1443,94 @@ pub fn swatch(color: Color, size: f64, radius: f64) -> Element {
 ///
 /// `on_select` must be `Clone` because it is stamped onto every tab (each with
 /// its own index); a plain closure capturing `Copy`/`Clone` data satisfies this.
+/// Each tab is as wide as its label (the strip's spare width shared out);
+/// build a [`Tabs`] for equal tabs filling the width.
 pub fn tabs<S>(
     cx: &mut Cx<S>,
     labels: &[&str],
     selected: usize,
     on_select: impl Fn(&mut S, usize) + Clone + 'static,
+) -> Element {
+    Tabs::new(labels, selected, on_select).view(cx)
+}
+
+/// A tab strip (segmented control) being built: see [`tabs`], the common
+/// case. [`equal`](Self::equal) makes its tabs all as wide, sharing the
+/// width the strip is given, as phones usually show them ("2D" as wide as
+/// "Stacked").
+///
+/// ```
+/// use stipple::prelude::*;
+/// use stipple::widgets::Tabs;
+/// struct Chart { mode: usize }
+/// fn view(state: &Chart, cx: &mut Cx<Chart>) -> Element {
+///     column(vec![
+///         Tabs::new(&["2D", "Stacked", "3D"], state.mode, |s: &mut Chart, i| s.mode = i)
+///             .equal(true)
+///             .view(cx),
+///     ])
+/// }
+/// # let theme = Theme::light();
+/// # let _ = view(&Chart { mode: 0 }, &mut Cx::new(&theme));
+/// ```
+pub struct Tabs<'a, F> {
+    labels: &'a [&'a str],
+    selected: usize,
+    on_select: F,
+    equal: bool,
+}
+
+impl<F> std::fmt::Debug for Tabs<'_, F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Tabs")
+            .field("labels", &self.labels)
+            .field("selected", &self.selected)
+            .field("equal", &self.equal)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'a, F> Tabs<'a, F> {
+    /// A strip of `labels`, `selected` filled, a tap on tab `i` running
+    /// `on_select` with `i`.
+    pub fn new(labels: &'a [&'a str], selected: usize, on_select: F) -> Self {
+        Self {
+            labels,
+            selected,
+            on_select,
+            equal: false,
+        }
+    }
+
+    /// Make every tab as wide as the others (`true`), sharing the width the
+    /// strip is given (a column's, or a [`width`](Element::width)), instead
+    /// of each as wide as its label.
+    pub fn equal(mut self, equal: bool) -> Self {
+        self.equal = equal;
+        self
+    }
+
+    /// The strip, in `cx`'s theme.
+    pub fn view<S>(self, cx: &mut Cx<S>) -> Element
+    where
+        F: Fn(&mut S, usize) + Clone + 'static,
+    {
+        let Tabs {
+            labels,
+            selected,
+            on_select,
+            equal,
+        } = self;
+        tab_strip(cx, labels, selected, on_select, equal)
+    }
+}
+
+fn tab_strip<S>(
+    cx: &mut Cx<S>,
+    labels: &[&str],
+    selected: usize,
+    on_select: impl Fn(&mut S, usize) + Clone + 'static,
+    equal: bool,
 ) -> Element {
     let theme = &theme_of(cx);
     let p = &theme.palette;
@@ -1447,11 +1542,13 @@ pub fn tabs<S>(
     // so all three line up. At rest this draws exactly what one row of
     // filled cells would.
     let cell = |content: Element| {
-        Element::stack(Axis::Horizontal, vec![content])
+        let cell = Element::stack(Axis::Horizontal, vec![content])
             .radius(theme.radius)
             .padding(pad)
             .align(Align::Center, Align::Center)
-            .grow(1.0)
+            .grow(1.0);
+        // Equal tabs grow from nothing, so they share the width evenly.
+        if equal { cell.width(0.0) } else { cell }
     };
     let sizer = |text: &str| {
         Element::text(text, theme.typography.body, p.text)
