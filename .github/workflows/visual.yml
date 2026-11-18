@@ -4815,13 +4815,13 @@ jobs:
               /org/stippleui/a11y/1 org.freedesktop.DBus.Properties.Get \
               string:org.a11y.atspi.Accessible string:Parent | tee cparent.log
             grep -q '"/org/stippleui/a11y"' cparent.log
-            # The button's label nests one level deeper: /2 (a panel/group) holds
-            # /3, the "OK" label — proving multi-level navigation.
+            # The button is one leaf: /2 is a push button (role 44) named by
+            # its label, with no children of its own.
             dbus-send --session --print-reply --dest=org.stippleui.A11yDemo \
-              /org/stippleui/a11y/2 org.a11y.atspi.Accessible.GetChildren | tee gc.log
-            grep -q '/org/stippleui/a11y/3' gc.log
+              /org/stippleui/a11y/2 org.a11y.atspi.Accessible.GetRole | tee brole.log
+            grep -q "uint32 44" brole.log
             dbus-send --session --print-reply --dest=org.stippleui.A11yDemo \
-              /org/stippleui/a11y/3 org.freedesktop.DBus.Properties.Get \
+              /org/stippleui/a11y/2 org.freedesktop.DBus.Properties.Get \
               string:org.a11y.atspi.Accessible string:Name | tee okname.log
             grep -q "OK" okname.log
 

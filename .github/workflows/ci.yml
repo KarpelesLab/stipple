@@ -165,7 +165,7 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: cargo build (the library)
-        run: cargo build --target ${{ matrix.target }}
+        run: cargo build --lib --target ${{ matrix.target }}
       # The benchmark runs on a phone too (its `transition` frames are held
       # to 120 Hz there, docs/performance.md); CI can only build it.
       - name: cargo check (the benchmark, with the GPU renderer)

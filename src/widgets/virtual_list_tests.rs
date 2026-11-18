@@ -194,6 +194,13 @@ fn with_no_height_it_fills_the_rest_of_the_column() {
 fn plain_rows_have_no_frame_and_select_nothing() {
     let mut app = app(Feed::new(50), |s| {
         VirtualList::fixed(s.rows, ROW).height(240.0).plain(true)
+    })
+    // An overlay bar takes no width, so the rows span the list on every
+    // platform (a classic bar would leave them 12 px short).
+    .theme({
+        let mut theme = crate::Theme::light();
+        theme.scroll_bar = crate::style::ScrollBarLook::OVERLAY;
+        theme
     });
     app.render_once();
     let first = items(&app).into_iter().next().unwrap();
