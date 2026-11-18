@@ -99,6 +99,7 @@ pub(crate) fn offered(tranches: &[Tranche], ours: &[u64]) -> Vec<Vec<(u32, u64)>
 
 /// [`choose`] over each of `offered`'s tranches in turn: the first that
 /// has a format both sides take.
+#[cfg_attr(not(feature = "vk"), allow(dead_code))] // Vulkan's
 pub(crate) fn choose_in(
     offered: &[Vec<(u32, u64)>],
     mut drawable: impl FnMut(u32, Layout) -> Vec<u64>,

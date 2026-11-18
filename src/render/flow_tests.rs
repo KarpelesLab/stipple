@@ -288,7 +288,13 @@ fn floats_go_to_their_edges_and_stack() {
     let line = (0..layout.line_count())
         .find(|&i| layout.line_range(i).unwrap().contains(&anchor))
         .unwrap();
-    assert_eq!(f.min_y(), layout.line_rect(line).unwrap().min_y());
+    // At the line the anchor landed on; wrapped around the float, the
+    // anchor's word may have moved to the next one.
+    let tops: Vec<_> = [line.saturating_sub(1), line]
+        .iter()
+        .map(|&i| layout.line_rect(i).unwrap().min_y())
+        .collect();
+    assert!(tops.contains(&f.min_y()), "{f:?} not at {tops:?}");
     assert!(f.min_y() > 0.0);
 }
 

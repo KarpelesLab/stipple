@@ -337,7 +337,8 @@ pub struct FlowItem {
     /// [`WrapSide::Both`].
     pub through: bool,
     /// For a float: the byte of the text it's anchored to (it floats at the
-    /// top of the line holding that byte).
+    /// top of the line holding that byte; as in CSS, the text then wraps
+    /// around it, which can carry the anchor's word to the next line).
     pub anchor: usize,
 }
 
@@ -404,7 +405,8 @@ impl FlowItem {
         self
     }
 
-    /// Floats at the line holding byte `anchor` of the text.
+    /// Floats at the line holding byte `anchor` of the text (the text then
+    /// wraps around it, which can carry the anchor's word to the next line).
     pub fn anchor(mut self, anchor: usize) -> Self {
         self.anchor = anchor;
         self

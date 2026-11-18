@@ -74,6 +74,13 @@ fn app() -> App<Log> {
         column(vec![scroll(cx).height(300.0).children(items), photo])
     })
     .no_font()
+    // Classic scroll bars on every platform (macOS's own are overlaid, so the
+    // list's bar would leave the strip 12 px more).
+    .theme({
+        let mut theme = crate::Theme::light();
+        theme.scroll_bar = crate::style::ScrollBarLook::CLASSIC;
+        theme
+    })
     .logical_size(Size::new(300.0, 400.0))
 }
 
