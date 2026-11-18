@@ -1,7 +1,9 @@
 //! Closing, quitting, focus, occlusion and attention on macOS: the window
 //! delegate's `windowShouldClose:`, `windowDidBecomeKey:`,
 //! `windowDidResignKey:` and `windowDidChangeOcclusionState:`, an
-//! application delegate answering `applicationShouldTerminate:`, and
+//! application delegate answering `applicationShouldTerminate:` (and, with
+//! `open_url` and `dock`, opening URLs and files, reopening and the Dock
+//! menu), and
 //! `requestUserAttention:`, the Dock tile's badge and `NSBeep`.
 
 use std::cell::Cell;
@@ -127,6 +129,7 @@ pub(super) unsafe fn install_app_delegate(app: Id) {
                 c"Q@:@".as_ptr(),
             );
             super::open_url::add_app_delegate_methods(cls);
+            super::dock::add_app_delegate_methods(cls);
             objc_registerClassPair(cls);
         }
         // Kept for the process's life: `setDelegate:` doesn't retain.

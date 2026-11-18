@@ -10,7 +10,7 @@
 //! | iOS | `application:openURL:options:` (and the launch options), or the scene's `connectionOptions` | `application:openURL:options:` / `scene:openURLContexts:`; `continueUserActivity` for universal links |
 //! | Android | the `Link` activity's intent (or the app's activity's own, with a hand-written manifest) | the `Link` activity again, as `NativeActivity` doesn't pass `onNewIntent` on |
 //! | macOS | `application:openURLs:` | `application:openURLs:` |
-//! | Windows, Linux | the command line ([`launch_urls`]) | — (the system starts a second process) |
+//! | Windows, Linux | the command line ([`launch_urls`]) | the second process's command line, with [`App::single_instance`](crate::App::single_instance) |
 //! | Web | — (the page's own URL is the app's) | — |
 //!
 //! A URL delivered before the event loop runs waits in the posted-event
@@ -64,7 +64,7 @@ pub(crate) fn deliver_opened(url: String) {
 /// `com.example.app:/oauth`, but not `key:value` or `C:\path` (a drive
 /// letter), nor `file:` URLs, which name files rather than open the app.
 #[cfg_attr(
-    not(any(target_os = "linux", target_os = "windows", test)),
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos", test)),
     allow(dead_code)
 )]
 pub(crate) fn launch_urls(args: impl IntoIterator<Item = String>) -> Vec<String> {

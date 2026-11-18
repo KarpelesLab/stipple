@@ -796,6 +796,7 @@ mod tests {
                         enabled: false,
                         checked: Some(true),
                     }],
+                    role: None,
                 }),
             ],
         }

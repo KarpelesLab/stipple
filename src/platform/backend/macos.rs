@@ -28,7 +28,8 @@ use crate::platform::error::PlatformError;
 use crate::platform::event::{ButtonState, Event, KeyCode, PointerButton, ScrollPhase, WindowId};
 use crate::platform::input;
 use crate::platform::menu::{
-    MenuPopup, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray, TRAY_ID_BASE, mnemonic,
+    DOCK_ID_BASE, MenuPopup, MenuRole, NativeMenu, NativeMenuBar, NativeMenuItem, NativeTray,
+    TRAY_ID_BASE, mnemonic,
 };
 use crate::platform::window::{CursorIcon, Window, WindowAttributes, WindowInfo, debug_window};
 use crate::render::{Pixmap, Surface};
@@ -46,6 +47,8 @@ mod ax_value;
 mod display_link;
 /// Receiving drops (`NSDraggingDestination`).
 mod dnd;
+/// Reopening, the Dock menu, and the Window, Services and Help menus.
+mod dock;
 /// Window geometry and state, and the window delegate.
 mod geometry;
 /// Raw key events (`Event::RawKey`).
@@ -1140,6 +1143,12 @@ unsafe fn fill_menu(menu: Id, items: &[NativeMenuItem], target: Id, context: boo
                 let title = mnemonic(&sub.label).0;
                 let m = ns_menu(&title);
                 fill_menu(m, &sub.items, target, context);
+                if !context {
+                    dock::prepare(m, sub.role);
+                    if let Some(role) = sub.role {
+                        dock::apply_roles(&[(m, role)]);
+                    }
+                }
                 add_submenu(menu, &title, m);
             },
         }
@@ -1192,9 +1201,9 @@ unsafe fn set_status_item(tray: Option<&NativeTray>) -> bool {
         let bar = msg_id(class("NSStatusBar"), sel("systemStatusBar"));
         let existing = CTX.with(|c| c.borrow().status_item);
         CTX.with(|c| {
-            c.borrow_mut()
-                .menu_states
-                .retain(|&tag, _| tag < i64::from(TRAY_ID_BASE))
+            c.borrow_mut().menu_states.retain(|&tag, _| {
+                !(i64::from(TRAY_ID_BASE)..i64::from(DOCK_ID_BASE)).contains(&tag)
+            })
         });
         let Some(tray) = tray else {
             if !existing.is_null() {
@@ -1280,8 +1289,9 @@ unsafe fn set_status_item(tray: Option<&NativeTray>) -> bool {
 }
 
 /// Install `bar` as the application's main menu: the standard application
-/// menu (About, Hide, Hide Others, Show All, Quit) followed by the app's
-/// menus.
+/// menu (About, the app's Services menu if it has one, Hide, Hide Others,
+/// Show All, Quit) followed by the app's menus, the Window, Services and Help
+/// ones made AppKit's.
 unsafe fn install_menu_bar(bar: &NativeMenuBar) {
     let target = menu_target();
     // Keep the tray menu's states.
@@ -1306,6 +1316,25 @@ unsafe fn install_menu_bar(bar: &NativeMenuBar) {
             sel("addItem:"),
             msg_id(class("NSMenuItem"), sel("separatorItem")),
         );
+        // The roles the bar's menus play, for once the main menu holds them.
+        let mut roles = Vec::new();
+        // A Services menu goes in the application menu.
+        for menu in bar
+            .menus
+            .iter()
+            .filter(|m| m.role == Some(MenuRole::Services))
+        {
+            let title = mnemonic(&menu.label).0;
+            let m = ns_menu(&title);
+            fill_menu(m, &menu.items, target, false);
+            roles.push((m, MenuRole::Services));
+            add_submenu(app_menu, &title, m);
+            msg_void_id(
+                app_menu,
+                sel("addItem:"),
+                msg_id(class("NSMenuItem"), sel("separatorItem")),
+            );
+        }
         let hide = format!("Hide {name}");
         add_item(app_menu, menu_item(&hide, Some(sel("hide:")), "h", CMD));
         add_item(
@@ -1334,13 +1363,21 @@ unsafe fn install_menu_bar(bar: &NativeMenuBar) {
         add_submenu(main, name, app_menu);
 
         for menu in &bar.menus {
+            if menu.role == Some(MenuRole::Services) {
+                continue;
+            }
             let title = mnemonic(&menu.label).0;
             let m = ns_menu(&title);
             fill_menu(m, &menu.items, target, false);
+            dock::prepare(m, menu.role);
+            if let Some(role) = menu.role {
+                roles.push((m, role));
+            }
             add_submenu(main, &title, m);
         }
         let app = msg_id(class("NSApplication"), sel("sharedApplication"));
         msg_void_id(app, sel("setMainMenu:"), main);
+        dock::apply_roles(&roles);
         msg_void(main, sel("release"));
     }
 }
@@ -1705,6 +1742,24 @@ impl Window for MacWindow {
     }
     fn set_tray(&self, tray: Option<&NativeTray>) -> bool {
         unsafe { set_status_item(tray) }
+    }
+    fn set_dock_menu(&self, menu: Option<&NativeMenu>) -> bool {
+        unsafe { dock::set_dock_menu(menu) };
+        true
+    }
+    fn activate(&self, _token: Option<&str>) {
+        unsafe {
+            if msg_bool(self.window, sel("isMiniaturized")) {
+                msg_void_id(self.window, sel("deminiaturize:"), std::ptr::null_mut());
+            }
+            let app = msg_id(class("NSApplication"), sel("sharedApplication"));
+            msg_void_bool(app, sel("activateIgnoringOtherApps:"), true);
+            msg_void_id(
+                self.window,
+                sel("makeKeyAndOrderFront:"),
+                std::ptr::null_mut(),
+            );
+        }
     }
     fn set_icon(&self, icon: Option<&Pixmap>) {
         // macOS has no per-window icons; this is the app's Dock icon. `nil`
@@ -2145,6 +2200,7 @@ where
         msg_void(app, sel("finishLaunching"));
         menu_check::start(window, view);
         lifecycle::self_test(window);
+        dock::self_test();
         finish_window(&primary, &attrs);
         drop(primary);
 

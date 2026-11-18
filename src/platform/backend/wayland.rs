@@ -1485,6 +1485,18 @@ impl Window for WaylandWindow {
         attention::ring(&mut conn, self.surface);
         let _ = conn.stream.flush();
     }
+    fn activate(&self, token: Option<&str>) {
+        let mut conn = self.conn.lock().unwrap();
+        match token {
+            // A launcher's token lets the compositor hand the window the
+            // focus.
+            Some(token) => attention::activate(&mut conn, token, self.surface),
+            None => {
+                attention::request(&mut conn, self.surface);
+            }
+        }
+        let _ = conn.stream.flush();
+    }
     fn clipboard(&self) -> Option<String> {
         clipboard::text(&mut self.conn.lock().unwrap())
     }

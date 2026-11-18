@@ -101,6 +101,8 @@ mod input;
 pub(crate) mod input_connection;
 /// The on-screen keyboard's hints for a text field, and their platform tables.
 pub(crate) mod input_hints;
+/// One running instance per app: a second launch forwards itself.
+pub(crate) mod instance;
 /// Raw key events: physical keys, key text, left/right modifiers, repeat.
 mod key;
 /// X11 keysym names and their Unicode characters (generated table).
@@ -183,13 +185,14 @@ pub use event::{
 pub use extension::{extension_main, shared_dir};
 pub(crate) use input_hints::InputHints;
 pub use input_hints::{Autocapitalize, Autofill, EnterAction, InputKind};
+pub use instance::{Launch, forward_launch};
 pub use key::{
     KeyEvent, KeyLocation, ModifierSides, OptionAsMeta, PhysicalKey, consume_key, handle_back,
 };
 pub(crate) use locale::utc_offset;
 pub use locale::{locale, preferred_languages, set_preferred_languages};
+pub(crate) use menu::{DOCK_ID_BASE, NativeMenu, NativeMenuBar, NativeTray, TRAY_ID_BASE};
 pub(crate) use menu::{MenuPopup, Shortcut};
-pub(crate) use menu::{NativeMenuBar, NativeTray, TRAY_ID_BASE};
 pub use menu::{mnemonic, mnemonic_at, mnemonic_range};
 pub use network::{NetworkStatus, Transport, network};
 pub use pointer::{

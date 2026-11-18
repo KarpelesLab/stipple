@@ -4,8 +4,9 @@
 //! sends as a `kAEGetURL` Apple event. AppKit hands its URLs to the
 //! application delegate's `application:openURLs:` (macOS 10.13), at launch
 //! (once `finishLaunching` ran) and while the app runs. File URLs (a
-//! document dropped on the Dock icon) are left out: they name files, not
-//! links.
+//! document dropped on the Dock icon, a folder opened with the app from the
+//! Finder) go to [`App::on_open_files`](crate::App::on_open_files) instead,
+//! together.
 
 use std::ffi::c_void;
 
@@ -21,13 +22,24 @@ extern "C" fn open_urls(_this: Id, _cmd: Sel, _app: Id, urls: Id) {
             std::mem::transmute(super::objc_msgSend as *const c_void);
         let at: unsafe extern "C" fn(Id, Sel, usize) -> Id =
             std::mem::transmute(super::objc_msgSend as *const c_void);
+        let mut files = Vec::new();
         for i in 0..count(urls, sel("count")) {
             let url = at(urls, sel("objectAtIndex:"), i);
-            if url.is_null() || msg_bool(url, sel("isFileURL")) {
+            if url.is_null() {
+                continue;
+            }
+            if msg_bool(url, sel("isFileURL")) {
+                let path = nsstring_to_string(msg_id(url, sel("path")));
+                if !path.is_empty() {
+                    files.push(std::path::PathBuf::from(path));
+                }
                 continue;
             }
             let url = nsstring_to_string(msg_id(url, sel("absoluteString")));
             crate::platform::incoming_url::deliver(url);
+        }
+        if !files.is_empty() {
+            crate::platform::shell::post(crate::platform::Event::OpenFiles(files));
         }
     }
 }

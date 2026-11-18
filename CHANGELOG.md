@@ -17,11 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(window)* windows that belong to another: `WindowAttributes::parent`, `.modal` (the parent blocked) and `.sheet` (macOS), on X11, Wayland, Windows and macOS; `MessageBox::window` shows a message box in, on or owned by a given window (#81)
 - *(focus)* `Element::autofocus`, `Cx::focus` / `Cx::blur` and `AppHandle::focus` / `AppHandle::blur` move keyboard focus by element key (#82)
 - *(widgets)* `dialog`: Escape and Back dismiss it (`cancel_on_escape`), Enter runs `default_action` / `default_button`, and `width`, `min_width` and `max_width` size it, clamped to the window (#83)
+- *(platform)* one instance per app: `App::single_instance`, `platform::forward_launch` and `Launch` (arguments, directory, environment, activation token), over a Unix socket on Linux and macOS and a named pipe on Windows; `WindowRequest::Activate` brings a window up with the launch's token (#88)
+- *(macos)* `App::on_reopen` (a Dock click), `App::on_open_files` (files dropped on the Dock icon, opened from the Finder), `App::dock_menu`, and `Menu::role(MenuRole::Window | Services | Help)` for the system's Window, Services and Help menus (#89)
+- *(examples)* instancedemo: single instance, reopen, opened files and the Dock menu
 
 ### Changed
 
 - *(widgets)* `Dialog` is generic over the state (`Dialog<S>`) and has the `Dialog` role and its title as its label (#83)
 - *(gpu)* `Renderer::Auto` draws on a hardware Vulkan device for Wayland windows too, as for X11's (6h)
+- *(macos)* the application menu is named after the app (`app_info().name`), not the primary window's title (#89)
 
 ## [0.0.9](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.8...stipple-v0.0.9) - 2026-11-16
 

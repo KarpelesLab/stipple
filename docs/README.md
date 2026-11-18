@@ -75,6 +75,8 @@ How to build, package and run on each platform, and what works there today.
 | URLs that open the app (`App::on_open_url`) | at launch ⁸⁸ | at launch ⁸⁸ | ✅ ⁸⁸ | ✅ ⁸⁸ | ✅ ⁸⁸ | — ⁸⁸ |
 | Notifications | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | ✅ ⁵² | ✅ ⁶³ | ✅ ¹⁰ |
 | Tray icon with a menu | ✅ ²⁶ | ✅ ²⁶ | ✅ ²⁶ | — | — | — |
+| One running instance, later launches forwarded (`App::single_instance`) | ✅ ¹⁰ | ✅ ¹⁰ | ✅ | — | — | — |
+| Dock menu, reopening, files opened with the app, Window/Services/Help menus | — | — | ✅ | — | — | — |
 | Dropping files and text from other apps | ✅ ²⁸ | ✅ ²⁸ | ✅ ²⁸ | ✅ ⁷⁹ | ✅ ⁷⁹ | ❌ |
 | Dragging inside the app | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ | ✅ ²⁹ |
 | Dragging files and text out to other apps | ✅ ³³ | ✅ ³³ | ✅ ³³ | long press ⁸⁶ | long press ⁸⁶ | ❌ |
@@ -739,7 +741,8 @@ dex, as `NativeActivity` doesn't pass `onNewIntent` on: passed on local API
 simulator's `simctl openurl` runs non-blocking in CI. macOS is
 `application:openURLs:` (build-checked); Windows and Linux take the URL a
 protocol handler starts the app with on its command line (checked on X11),
-with no single-instance forwarding. The web has none: the page's URL is the
+and with `App::single_instance` the one a second launch hands the running
+app. The web has none: the page's URL is the
 app's. See [os-integration.md](os-integration.md#urls-that-open-the-app).
 ⁸⁹ `cargo-stipple ios` builds `[[ios.extension]]` targets into
 `PlugIns/<Name>.appex` (the `NSExtension` plist, their own entitlements and
@@ -839,7 +842,7 @@ they: use `open_file_contents` and `save_file_contents` there.
   page stack and app bar, bottom sheet,
   password field and color picker
 - [Menus](menus.md): the menu bar, shortcuts and context menus (long press on touch screens)
-- [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`
+- [Tray icons, notifications and opening URLs](os-integration.md): `App::tray`, `notify`, `open_url`, `App::single_instance`, `App::dock_menu`
 - [Network status](network.md): online or offline, Wi-Fi, cellular or a cable, metered and Low Data Mode, and hearing the default network change
 - [In-app purchases](purchases.md): StoreKit and Google Play Billing, products, purchases, restoring, the mock store, and checking purchases on a server
 - [Secure storage](secure-storage.md): `platform::secure_store`: secrets in the Keychain, the Android Keystore, Credential Manager and the Secret Service, sharing them with an app extension, and what each platform protects

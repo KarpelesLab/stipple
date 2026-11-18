@@ -46,6 +46,7 @@ mod app_focus;
 mod app_frame;
 mod app_gamepad;
 mod app_gpu;
+mod app_instance;
 mod app_keys;
 mod app_lifecycle;
 mod app_locale;
@@ -225,6 +226,9 @@ pub struct App<S> {
     native_tray: Option<crate::platform::NativeTray>,
     // Close/quit confirmation and window focus hooks (see `app_lifecycle`).
     lifecycle: app_lifecycle::Hooks<S>,
+    // Single instance, reopening, opened files, the Dock menu (see
+    // `app_instance`).
+    instance: app_instance::Hooks<S>,
     // The languages the app ships and `on_locale_change` (see `app_locale`).
     locale: app_locale::LocaleState<S>,
     // Pending clipboard reads, the primary selection, and `on_clipboard`.
@@ -748,6 +752,7 @@ impl<S: 'static> App<S> {
             tray: None,
             native_tray: None,
             lifecycle: Default::default(),
+            instance: Default::default(),
             locale: Default::default(),
             clipboard: Default::default(),
             exit_on_last_closed: true,
@@ -3026,6 +3031,8 @@ impl<S: 'static> App<S> {
                 match event {
                     Event::Transaction(t) => ran |= self.transaction(&t),
                     Event::OpenUrl(url) => ran |= self.open_url(&url),
+                    Event::Launch(launch) => ran |= self.launched(&launch),
+                    Event::OpenFiles(files) => ran |= self.open_files(&files),
                     other => crate::platform::shell::post(other),
                 }
             }
@@ -3343,6 +3350,10 @@ impl<S: 'static> App<S> {
     where
         S: 'static,
     {
+        // Another process of the app took this launch (`single_instance`).
+        if self.forwarded_to_instance() {
+            return;
+        }
         self.start_store();
         self.start_network();
         #[cfg(target_arch = "wasm32")]
@@ -3420,6 +3431,7 @@ impl<S: 'static> App<S> {
             if idx == 0 {
                 app.sync_menu_bar(window);
                 app.sync_tray(window);
+                app.sync_dock(window);
             }
             // Whether Back would reach the app (predictive back).
             app.sync_back();
@@ -4043,6 +4055,24 @@ impl<S: 'static> App<S> {
                     }
                     ControlFlow::Wait
                 }
+                Event::Launch(ref launch) => {
+                    if self.launched(launch) && !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::Reopen(visible) => {
+                    if self.reopened(visible) && !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
+                Event::OpenFiles(ref files) => {
+                    if self.open_files(files) && !self.in_background() {
+                        present(&mut self, &mut surfaces, idx, window, false);
+                    }
+                    ControlFlow::Wait
+                }
                 Event::Transaction(ref t) => {
                     if self.transaction(t) && !self.in_background() {
                         present(&mut self, &mut surfaces, idx, window, false);
@@ -4481,6 +4511,9 @@ impl<S: 'static> App<S> {
     /// Run the menu bar command with native id `id` (from
     /// [`Event::MenuCommand`]). Returns whether it ran.
     fn run_menu_command(&mut self, id: u32) -> bool {
+        if id >= crate::platform::DOCK_ID_BASE {
+            return self.run_dock_command(id);
+        }
         let ran = if id >= crate::platform::TRAY_ID_BASE {
             let Some(tray) = self.tray.clone() else {
                 return false;
@@ -4538,7 +4571,15 @@ impl<S: 'static> App<S> {
         let Some(menu) = self.menu.clone() else {
             return;
         };
-        let native = menu(&self.state).to_native(&self.panes[0].attrs.title);
+        // The application menu is named after the app (the bundle's name,
+        // or `App::app_info`'s), else the window.
+        let name = crate::platform::app_info().name;
+        let name = if name.is_empty() {
+            self.panes[0].attrs.title.clone()
+        } else {
+            name
+        };
+        let native = menu(&self.state).to_native(&name);
         if self.native_menu.as_ref() == Some(&native) {
             return;
         }
@@ -4729,7 +4770,7 @@ pub mod prelude {
     pub use crate::core::{CanvasId, ViewportId};
     pub use crate::core::{DROP_FADE, DropState};
     pub use crate::core::{FocusGroup, Handled};
-    pub use crate::core::{Menu, MenuBar, MenuItem, Shortcut, Tray};
+    pub use crate::core::{Menu, MenuBar, MenuItem, MenuRole, Shortcut, Tray};
     pub use crate::core::{PointerEvent, PointerEventKind, WheelEvent};
     pub use crate::geometry::Transform;
     pub use crate::geometry::{Insets, PhysicalSize, Point, Rect, ScaleFactor, Size};

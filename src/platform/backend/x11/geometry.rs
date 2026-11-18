@@ -253,6 +253,30 @@ pub(super) fn set_minimized(conn: &mut Conn, window: u32, minimized: bool) -> io
     }
 }
 
+/// Map a window and ask the window manager to activate it, as an
+/// application's request (EWMH source 1) made at `time`: the launch's, from
+/// its startup id, which lets the window manager weigh it against what the
+/// user did since; 0 when unknown.
+pub(super) fn activate(conn: &mut Conn, window: u32, time: u32) -> io::Result<()> {
+    let root = conn.setup.root;
+    let geo = conn.geo;
+    conn.send(&map_request(window, true))?;
+    conn.send(&root_message(
+        root,
+        window,
+        geo.active_window,
+        [1, time, 0, 0, 0],
+    ))
+}
+
+/// The X server time a startup id carries (the startup-notification spec's
+/// `…_TIME<timestamp>` suffix), or 0.
+pub(super) fn startup_time(id: &str) -> u32 {
+    id.rsplit_once("_TIME")
+        .and_then(|(_, t)| t.parse().ok())
+        .unwrap_or(0)
+}
+
 /// Read a format-32 property while the event loop runs: events that arrive
 /// before the reply wait in `backlog`. `None` if the property is missing or
 /// the request failed.
@@ -363,6 +387,13 @@ mod tests {
         ev[20..22].copy_from_slice(&w.to_le_bytes());
         ev[22..24].copy_from_slice(&h.to_le_bytes());
         ev
+    }
+
+    #[test]
+    fn startup_ids_carry_their_time() {
+        assert_eq!(startup_time("kde-term-4242-host-1_TIME123456"), 123456);
+        assert_eq!(startup_time("no-time-here"), 0);
+        assert_eq!(startup_time("x_TIMEnope"), 0);
     }
 
     #[test]

@@ -1620,6 +1620,16 @@ impl Window for WinWindow {
         let cmd = if minimized { SW_MINIMIZE } else { SW_RESTORE };
         unsafe { ShowWindow(self.hwnd, cmd) };
     }
+    fn activate(&self, _token: Option<&str>) {
+        // The launch that asked for it let this process take the foreground
+        // (`AllowSetForegroundWindow`, see `platform::instance`).
+        unsafe {
+            if IsIconic(self.hwnd) != 0 {
+                ShowWindow(self.hwnd, SW_RESTORE);
+            }
+            SetForegroundWindow(self.hwnd);
+        }
+    }
     fn clipboard(&self) -> Option<String> {
         crate::platform::clipboard::text()
     }

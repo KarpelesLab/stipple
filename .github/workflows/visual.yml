@@ -4897,6 +4897,17 @@ jobs:
           OUT_DIR: visual_output
         run: dbus-run-session -- bash .github/scripts/os-integration-linux.sh target/release/examples/traydemo
 
+      # App::single_instance: a second launch hands its arguments, directory
+      # and startup id to the first over a Unix socket in $XDG_RUNTIME_DIR,
+      # and exits. Not blocking until it has passed on CI.
+      - name: Single instance (instancedemo, two launches)
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+        run: |
+          cargo build --release --example instancedemo
+          bash .github/scripts/single-instance.sh target/release/examples/instancedemo
+
       # platform::network end to end: netstatus in a user and network
       # namespace of its own, while the script adds and removes links and
       # default routes (docs/network.md). Ubuntu's AppArmor keeps
@@ -4988,6 +4999,16 @@ jobs:
           powershell -NoProfile -Command "Get-Process | Where-Object { \$_.MainWindowTitle -like '*stipple-note*' } | Format-Table -AutoSize ProcessName,MainWindowTitle" | tee editors.txt
           grep -q stipple-note editors.txt || echo "::warning::open_path didn't show an editor with stipple-note.txt"
           powershell -NoProfile -Command "Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process" || true
+
+      # App::single_instance over a named mutex and pipe: a second launch
+      # hands its arguments to the first and exits. Not blocking until it has
+      # passed on CI.
+      - name: Single instance (instancedemo, two launches)
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo build --release --example instancedemo
+          bash .github/scripts/single-instance.sh target/release/examples/instancedemo.exe
 
       # platform::network on the runner (IP Helper: online through its
       # Ethernet adapter). Not blocking until it has passed on CI.
@@ -5099,6 +5120,23 @@ jobs:
           for _ in $(seq 30); do pgrep -x TextEdit && break; sleep 0.5; done
           pgrep -x TextEdit
           kill $(pgrep -x TextEdit) 2>/dev/null || true
+
+      # App::single_instance (a Unix socket in $TMPDIR), then the app
+      # delegate: a reopen, a folder and a URL through application:openURLs:,
+      # the Dock menu (its first item picked), and the Window, Services and
+      # Help menus AppKit took.
+      - name: Single instance, reopen, opened files and the Dock menu
+        run: |
+          cargo build --release --example instancedemo
+          bash .github/scripts/single-instance.sh target/release/examples/instancedemo
+          STIPPLE_COCOA_APP_DELEGATE=1 perl -e 'alarm 30; exec @ARGV' ./target/release/examples/instancedemo --quit-after 4 2>&1 | tee dock.log
+          grep -q 'Cocoa app delegate: reopen=true dock=\["New Window", "Clear"\] windows=Some("Window") services=Some("Services") help=Some("Help")' dock.log
+          grep -q 'windows menu=\["Minimize", "Zoom", "", "Bring All to Front"' dock.log
+          grep -q 'app menu "Instance Demo"=\["About Instance Demo", "", "Services"' dock.log
+          grep -q "instancedemo: dock: New Window" dock.log
+          grep -q "instancedemo: reopen visible=false" dock.log
+          grep -q "instancedemo: open url stipple-selftest://open?x=1" dock.log
+          grep -q 'instancedemo: open files \["/tmp"\]' dock.log
 
       # platform::network on the runner (nw_path_monitor). Not blocking
       # until it has passed on CI.

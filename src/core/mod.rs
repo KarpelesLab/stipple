@@ -78,7 +78,7 @@ pub(crate) use ime::{
 };
 pub use interact::{ElementKey, Interaction};
 pub use keys::{FocusGroup, Handled, RawKeyId};
-pub use menu::{Menu, MenuBar, MenuItem, Shortcut, Tray};
+pub use menu::{Menu, MenuBar, MenuItem, MenuRole, Shortcut, Tray};
 pub(crate) use pointer::set_pointer_position;
 pub use pointer::{PointerInfo, pointer};
 pub use pointer_events::{

@@ -433,6 +433,18 @@ pub enum Event {
     /// link or a verified App Link. See
     /// [`App::on_open_url`](crate::App::on_open_url) and `docs/os-integration.md`.
     OpenUrl(String),
+    /// Another launch of the app handed itself to this, the running
+    /// instance, and exited. See
+    /// [`App::single_instance`](crate::App::single_instance).
+    Launch(crate::platform::Launch),
+    /// The user opened the app again while it runs (on macOS, clicked its
+    /// Dock icon or launched it from the Finder), with whether any of its
+    /// windows show. See [`App::on_reopen`](crate::App::on_reopen).
+    Reopen(bool),
+    /// Files to open: dropped on the app's Dock icon, or opened with the app
+    /// from the Finder (macOS). See
+    /// [`App::on_open_files`](crate::App::on_open_files).
+    OpenFiles(Vec<std::path::PathBuf>),
     /// A purchase changed: bought, restored or pending, from
     /// [`platform::store`](crate::platform::store). See
     /// [`App::on_transaction`](crate::App::on_transaction).

@@ -60,11 +60,34 @@ To quit from a menu, keep a clone of `App::handle()` in the closure and call
 | iOS, Android, web | drawn by Stipple | where keys arrive | drawn by Stipple; a long press opens them on a touch screen |
 
 **macOS.** The menu bar belongs to the application. Stipple puts the
-standard application menu first, named after the window title: About, Hide
-(⌘H), Hide Others (⌥⌘H), Show All and Quit (⌘Q), then the app's menus. Items
-show their shortcuts as key equivalents, and AppKit asks Stipple whether each
-is enabled (`validateMenuItem:`) before showing it. `&` mnemonics are dropped,
-as macOS has none. Quit ends the event loop the way closing the window does.
+standard application menu first, named after the app (the bundle's name, or
+`App::app_info`'s; the window title if neither): About, Hide (⌘H), Hide
+Others (⌥⌘H), Show All and Quit (⌘Q), then the app's menus. Items show their
+shortcuts as key equivalents, and AppKit asks Stipple whether each is enabled
+(`validateMenuItem:`) before showing it. `&` mnemonics are dropped, as macOS
+has none. Quit ends the event loop the way closing the window does.
+
+### The Window, Services and Help menus
+
+`Menu::role` gives a menu its part in macOS's menu bar, which then fills it
+with the system's own items:
+
+```rust
+MenuBar::new()
+    .menu(Menu::new("&File").item(/* … */))
+    .menu(Menu::new("Services").role(MenuRole::Services))
+    .menu(Menu::new("&Window").role(MenuRole::Window))
+    .menu(Menu::new("&Help").role(MenuRole::Help).item(MenuItem::new("My App Help", show_help)))
+```
+
+| Role | On macOS | Elsewhere |
+|---|---|---|
+| `MenuRole::Window` | `NSApp.windowsMenu`: Minimize (⌘M), Zoom, the app's own items, Bring All to Front, then the list of open windows AppKit keeps | a menu like any other |
+| `MenuRole::Services` | `NSApp.servicesMenu`, which macOS fills with the services for the selection; declared as a menu of the bar, it goes in the application menu (after About), where Mac apps have it | left out |
+| `MenuRole::Help` | `NSApp.helpMenu`: macOS adds a search field that finds the app's menu items | a menu like any other |
+
+The Dock icon's menu is declared the same way, with `App::dock_menu`; see
+[os-integration.md](os-integration.md#one-instance-reopening-and-the-dock).
 
 **Windows.** Each top-level menu is a popup on the window's menu bar. The
 mnemonics work as usual (Alt, Alt+letter and F10 are handled by Windows),
@@ -204,6 +227,9 @@ roles. Native menu bars on macOS and Windows are exposed by the OS itself.
   CI checks that each ran once and ⌘C in the field didn't run the menu item.
   Steps are given in the variable, e.g.
   `perform=Edit/Add Item;key=cmd+d;right=320,300;key=tab;key=cmd+c`.
+  `instancedemo`'s self-test (`STIPPLE_COCOA_APP_DELEGATE`) reads back the
+  Window, Services and Help menus AppKit took, the Window menu's items and
+  the application menu's title.
 
 - **Touch** (the App, unit-tested; and on devices): a long press opens a
   context menu and a tap picks from it (`src/touch_tests.rs`); CI does the

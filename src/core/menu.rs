@@ -40,7 +40,7 @@ use std::rc::Rc;
 use crate::platform::menu::{NativeMenu, NativeMenuBar, NativeMenuItem};
 use crate::platform::{KeyCode, Modifiers};
 
-pub use crate::platform::menu::Shortcut;
+pub use crate::platform::menu::{MenuRole, Shortcut};
 pub(crate) use crate::platform::mnemonic;
 
 /// A menu item's action, shared between the bar, the drawn menus and the
@@ -224,6 +224,12 @@ impl<S> std::fmt::Debug for MenuItem<S> {
 pub struct Menu<S> {
     pub(crate) label: String,
     pub(crate) items: Vec<MenuItem<S>>,
+    pub(crate) role: Option<MenuRole>,
+}
+
+/// Whether `menu` has no place on this platform: a Services menu off macOS.
+fn left_out<S>(menu: &Menu<S>) -> bool {
+    menu.role == Some(MenuRole::Services) && !cfg!(target_os = "macos")
 }
 
 impl<S> Menu<S> {
@@ -233,11 +239,34 @@ impl<S> Menu<S> {
         Self {
             label: label.into(),
             items: Vec::new(),
+            role: None,
         }
     }
 
-    /// Append `item`.
+    /// Give the menu a part in macOS's menu bar, which then fills it with
+    /// the system's own items: the Window menu's window list, the Services
+    /// menu, the Help menu's search field. See [`MenuRole`].
+    ///
+    /// ```
+    /// use stipple::core::{Menu, MenuBar, MenuItem, MenuRole};
+    /// let bar: MenuBar<()> = MenuBar::new()
+    ///     .menu(Menu::new("Services").role(MenuRole::Services))
+    ///     .menu(Menu::new("&Window").role(MenuRole::Window))
+    ///     .menu(Menu::new("&Help").role(MenuRole::Help).item(MenuItem::new("Guide", |_: &mut ()| {})));
+    /// // A Services menu only exists on macOS.
+    /// assert_eq!(bar.menus().len(), if cfg!(target_os = "macos") { 3 } else { 2 });
+    /// ```
+    pub fn role(mut self, role: MenuRole) -> Self {
+        self.role = Some(role);
+        self
+    }
+
+    /// Append `item`. A Services menu is left out off macOS (see
+    /// [`MenuRole::Services`]).
     pub fn item(mut self, item: MenuItem<S>) -> Self {
+        if item.child_menu().is_some_and(left_out) {
+            return self;
+        }
         self.items.push(item);
         self
     }
@@ -308,6 +337,34 @@ impl<S> Menu<S> {
         self.native_from(&mut 1)
     }
 
+    /// The native description with its commands numbered from `base` (a
+    /// tray's or the Dock's menu), shortcuts dropped.
+    pub(crate) fn to_native_from(&self, base: u32) -> NativeMenu {
+        fn strip(items: &mut [NativeMenuItem]) {
+            for item in items {
+                match item {
+                    NativeMenuItem::Action { shortcut, .. } => *shortcut = None,
+                    NativeMenuItem::Submenu(m) => strip(&mut m.items),
+                    NativeMenuItem::Separator => {}
+                }
+            }
+        }
+        let mut menu = self.native_from(&mut { base });
+        strip(&mut menu.items);
+        menu
+    }
+
+    /// Run the command numbered `id` from `base` (as in
+    /// [`to_native_from`](Self::to_native_from)) if it exists and is enabled.
+    /// Returns whether it ran.
+    pub(crate) fn activate_from(&self, base: u32, id: u32, state: &mut S) -> bool {
+        let mut out = Vec::new();
+        self.number(&mut { base }, &mut out);
+        out.into_iter()
+            .find(|(i, _)| *i == id)
+            .is_some_and(|(_, item)| item.activate(state))
+    }
+
     /// Visit every command depth-first, numbering them from `*next`.
     fn number<'a>(&'a self, next: &mut u32, out: &mut Vec<(u32, &'a MenuItem<S>)>) {
         for item in &self.items {
@@ -351,6 +408,7 @@ impl<S> Menu<S> {
         NativeMenu {
             label: self.label.clone(),
             items,
+            role: self.role,
         }
     }
 }
@@ -382,9 +440,12 @@ impl<S> MenuBar<S> {
         Self::default()
     }
 
-    /// Append `menu`.
+    /// Append `menu`. A Services menu is left out off macOS (see
+    /// [`MenuRole::Services`]).
     pub fn menu(mut self, menu: Menu<S>) -> Self {
-        self.menus.push(menu);
+        if !left_out(&menu) {
+            self.menus.push(menu);
+        }
         self
     }
 
@@ -510,23 +571,10 @@ impl<S> Tray<S> {
     /// The description handed to the platform: command ids start at
     /// `TRAY_ID_BASE`, shortcuts dropped.
     pub(crate) fn to_native(&self) -> crate::platform::NativeTray {
-        fn strip(items: &mut [NativeMenuItem]) {
-            for item in items {
-                match item {
-                    NativeMenuItem::Action { shortcut, .. } => *shortcut = None,
-                    NativeMenuItem::Submenu(m) => strip(&mut m.items),
-                    NativeMenuItem::Separator => {}
-                }
-            }
-        }
-        let mut items = match &self.menu {
-            Some(menu) => {
-                let mut next = crate::platform::TRAY_ID_BASE;
-                menu.native_from(&mut next).items
-            }
+        let items = match &self.menu {
+            Some(menu) => menu.to_native_from(crate::platform::TRAY_ID_BASE).items,
             None => Vec::new(),
         };
-        strip(&mut items);
         crate::platform::NativeTray {
             tooltip: self.tooltip.clone(),
             icon: self.icon.clone(),
@@ -537,15 +585,9 @@ impl<S> Tray<S> {
     /// Run the menu command with native id `id` (from `TRAY_ID_BASE`) if it
     /// exists and is enabled. Returns whether it ran.
     pub(crate) fn activate_command(&self, id: u32, state: &mut S) -> bool {
-        let Some(menu) = &self.menu else {
-            return false;
-        };
-        let mut out = Vec::new();
-        let mut next = crate::platform::TRAY_ID_BASE;
-        menu.number(&mut next, &mut out);
-        out.into_iter()
-            .find(|(i, _)| *i == id)
-            .is_some_and(|(_, item)| item.activate(state))
+        self.menu
+            .as_ref()
+            .is_some_and(|menu| menu.activate_from(crate::platform::TRAY_ID_BASE, id, state))
     }
 
     /// Run the click action, if there is one. Returns whether it ran.
@@ -692,6 +734,43 @@ mod tests {
         assert_eq!(file.command(2).map(|i| i.label()), Some("one"));
         assert_eq!(file.command(4).map(|i| i.label()), Some("&Quit"));
         assert!(file.command(5).is_none());
+    }
+
+    #[test]
+    fn a_menu_numbers_from_a_base_and_keeps_its_role() {
+        let base = crate::platform::DOCK_ID_BASE;
+        let dock = Menu::new("")
+            .role(MenuRole::Window)
+            .item(
+                MenuItem::new("New Window", |s: &mut Vec<&str>| s.push("new"))
+                    .shortcut(Shortcut::cmd('n')),
+            )
+            .item(MenuItem::new("Off", |s: &mut Vec<&str>| s.push("off")).enabled(false));
+        let native = dock.to_native_from(base);
+        assert_eq!(native.role, Some(MenuRole::Window));
+        match &native.items[0] {
+            NativeMenuItem::Action { id, shortcut, .. } => {
+                assert_eq!((*id, *shortcut), (base, None))
+            }
+            other => panic!("{other:?}"),
+        }
+        let mut log = Vec::new();
+        assert!(dock.activate_from(base, base, &mut log));
+        assert!(!dock.activate_from(base, base + 1, &mut log), "disabled");
+        assert!(!dock.activate_from(base, 1, &mut log));
+        assert_eq!(log, ["new"]);
+    }
+
+    #[test]
+    fn services_menus_exist_on_macos_only() {
+        let services = || Menu::<()>::new("Services").role(MenuRole::Services);
+        let bar = MenuBar::new()
+            .menu(services())
+            .menu(Menu::new("&File").submenu(services()));
+        let mac = cfg!(target_os = "macos");
+        assert_eq!(bar.menus().len(), if mac { 2 } else { 1 });
+        let file = bar.menus().last().unwrap();
+        assert_eq!(file.items().len(), usize::from(mac));
     }
 
     #[test]

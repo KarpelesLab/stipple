@@ -112,6 +112,14 @@ pub enum WindowRequest {
     /// app, whichever window it is sent to; a no-op on desktops. See
     /// [`AppHandle::set_orientations`](crate::core::AppHandle::set_orientations).
     Orientations(Orientations),
+    /// Bring the window to the front, restored if minimized, with the
+    /// keyboard focus: for the window that shows a
+    /// [`Launch`](crate::platform::Launch) the running instance heard, with
+    /// its [`activation_token`](crate::platform::Launch::activation_token),
+    /// which Wayland compositors ask for (and X11 window managers use) before
+    /// they let a window take the focus. Without a token, Wayland only marks
+    /// the window as wanting attention.
+    Activate(Option<String>),
 }
 
 /// How insistently [`WindowRequest::Attention`] asks for the user's
@@ -150,6 +158,7 @@ impl WindowRequest {
             }
             WindowRequest::KeepAwake(on) => window.set_keep_awake(*on),
             WindowRequest::Orientations(set) => window.set_orientations(*set),
+            WindowRequest::Activate(token) => window.activate(token.as_deref()),
         }
     }
 }
@@ -774,6 +783,19 @@ pub trait Window {
     fn set_tray(&self, _tray: Option<&crate::platform::menu::NativeTray>) -> bool {
         false
     }
+    /// Set the application's Dock menu (macOS), or remove it (`None`).
+    /// Command ids start at
+    /// [`DOCK_ID_BASE`](crate::platform::menu::DOCK_ID_BASE) and come back
+    /// as [`Event::MenuCommand`](crate::platform::Event::MenuCommand)s.
+    /// Returns whether the platform has one; default: `false`.
+    fn set_dock_menu(&self, _menu: Option<&crate::platform::menu::NativeMenu>) -> bool {
+        false
+    }
+    /// Bring the window to the front and give it the keyboard focus, with
+    /// the activation token a launcher handed the app where the platform
+    /// asks for one (Wayland's `xdg_activation_v1`, X11's startup id).
+    /// Default: a no-op.
+    fn activate(&self, _token: Option<&str>) {}
     /// Whether a text input has keyboard focus, so a touch platform can show
     /// its on-screen keyboard (and hide it again). The app calls this after
     /// each frame it presents. Default: a no-op. Honored on Android.

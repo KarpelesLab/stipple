@@ -1791,13 +1791,27 @@ Most input only works on X11 today.
   `org.stipple.android.Link`, a windowless trampoline activity in Stipple's
   APK dex (like the notification taps' `Tapped`), since `NativeActivity`
   doesn't pass `onNewIntent` on. macOS: `application:openURLs:`. Windows and
-  Linux: the URL on the command line (no single-instance forwarding). Passes
+  Linux: the URL on the command line (and, while running, a single instance's
+  second launch's). Passes
   locally on API 34 and 30 emulators cold, warm and from the background, and
   an App Link with a path prefix on API 34 (`test-open-url.sh`, non-blocking
   in CI); the iOS simulator's `simctl openurl` runs non-blocking in CI, not
   seen yet; macOS and the desktops' registration are build-checked, the
   command line checked on X11. Still to do: `ASWebAuthenticationSession` /
-  Custom Tabs for OAuth, single-instance forwarding on the desktops.
+  Custom Tabs for OAuth.
+- ✅ One instance per app (`App::single_instance`, `platform::forward_launch`,
+  `Launch`, `WindowRequest::Activate`, #88): *a second launch hands its
+  arguments, directory, environment and activation token to the running one
+  over a Unix socket beside an `flock` (Linux, macOS) or a named pipe behind a
+  named mutex (Windows), and exits; its URLs reach `on_open_url`. Two launches
+  pass on macOS; Linux (Xvfb) and Windows run non-blocking in CI. D-Bus
+  `org.freedesktop.Application` activation isn't there.*
+- ✅ macOS's Dock and system menus (`App::on_reopen`, `on_open_files`,
+  `dock_menu`, `Menu::role(MenuRole::Window | Services | Help)`, #89):
+  *`applicationShouldHandleReopen:hasVisibleWindows:`, `applicationDockMenu:`,
+  file URLs of `application:openURLs:`, `NSApp.windowsMenu` / `servicesMenu` /
+  `helpMenu`, and the application menu named after the app; a self-test
+  through the real delegate passes locally and in CI.*
 - ✅ Notifications (`platform::notify`, `AppHandle::notify`):
   `org.freedesktop.Notifications` on Linux, a `Shell_NotifyIconW` balloon (a
   toast on Windows 10 and 11), `osascript` on macOS (the notification

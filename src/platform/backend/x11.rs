@@ -1148,6 +1148,11 @@ impl Window for X11Window {
         let mut conn = self.conn.lock().unwrap();
         let _ = geometry::set_minimized(&mut conn, self.window, minimized);
     }
+    fn activate(&self, token: Option<&str>) {
+        let mut conn = self.conn.lock().unwrap();
+        let time = token.map_or(0, geometry::startup_time);
+        let _ = geometry::activate(&mut conn, self.window, time);
+    }
     fn set_ime(&self, state: Option<&crate::platform::ImeState>) {
         // The input method places its candidate window at the caret's bottom
         // left, in window pixels.

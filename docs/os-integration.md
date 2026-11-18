@@ -3,7 +3,8 @@
 Ways an app reaches past its window: a tray icon with a menu, notifications
 (now or scheduled), the system's share sheet, haptic feedback, message boxes,
 handing a URL or file to the app the user picked for it, hearing the URLs that
-open the app, finding where to keep
+open the app, running as one instance that later launches hand themselves to,
+the Dock (reopening, files dropped on it, its menu), finding where to keep
 its files and what version it is, and reading the files it was packaged with.
 The user's languages and formatting settings are in
 [localization.md](localization.md). The `traydemo` example shows most of them
@@ -79,8 +80,8 @@ associated-domains = ["example.com"]    # https://example.com/…: verified as t
 | iOS | `CFBundleURLTypes` | universal links: the `com.apple.developer.associated-domains` entitlement (`applinks:`) and the domain's `apple-app-site-association` | the scene delegate's `scene:openURLContexts:` and `scene:continueUserActivity:` (`NSUserActivityTypeBrowsingWeb`), and the connection options at launch; without scenes, the app delegate's `application:openURL:options:` and `application:continueUserActivity:restorationHandler:`, and the launch options |
 | Android | a `VIEW` / `BROWSABLE` intent filter for the scheme | App Links: an `android:autoVerify` https filter per domain and the domain's `assetlinks.json` | Stipple's `Link` activity (below) |
 | macOS | `CFBundleURLTypes` in the bundle's `Info.plist` | (universal links on macOS need an App Store or Developer ID app: not wired) | the application delegate's `application:openURLs:` (the `kAEGetURL` Apple event), at launch and while running |
-| Windows | a protocol handler in the registry (below) | — | the URL on the command line, at launch |
-| Linux | `MimeType=x-scheme-handler/myapp;` in the app's `.desktop` file | — | the URL on the command line, at launch |
+| Windows | a protocol handler in the registry (below) | — | the URL on the command line, at launch; while it runs, a [single instance](#one-instance-reopening-and-the-dock)'s from the second launch |
+| Linux | `MimeType=x-scheme-handler/myapp;` in the app's `.desktop` file | — | the URL on the command line, at launch; while it runs, a [single instance](#one-instance-reopening-and-the-dock)'s from the second launch |
 | Web | — | — | not delivered: the page's own URL is the app's (`location`), read at start |
 
 **Android.** A `NativeActivity` doesn't pass `onNewIntent` on, and an intent
@@ -153,9 +154,10 @@ its links, over https, without redirects:
 **Desktop protocol handlers.** cargo-stipple doesn't package desktop apps, so
 the app's installer registers the scheme. The URL arrives as a command-line
 argument; Stipple delivers the arguments that look like URLs (a scheme, then
-`:/`, not `file:`), once, as the loop starts. There is no single-instance
-forwarding: a URL while the app runs starts a second process, which may hand
-it on to the first itself (a socket, a lock file) and exit.
+`:/`, not `file:`), once, as the loop starts. A URL while the app runs starts
+a second process: with [`App::single_instance`](#one-instance-reopening-and-the-dock),
+that one hands its arguments to the running app, whose `on_open_url` hears
+the URL, and exits.
 
 - Windows (per user, no administrator rights):
 
@@ -183,13 +185,110 @@ it on to the first itself (a socket, a lock file) and exit.
 
   Launch Services finds the app once it has been run (or moved into
   `/Applications`); `application:openURLs:` hears the URLs, file URLs (a
-  document dropped on the Dock icon) left out.
+  document dropped on the Dock icon) going to `on_open_files` instead.
 
 **OAuth.** The usual browser sign-in: open the provider's page with
 `platform::open_url`, with `redirect_uri=myapp://callback` (and PKCE), and
 take the code in `on_open_url`. `ASWebAuthenticationSession` (iOS) and Custom
 Tabs (Android), which keep the sign-in in a sheet over the app, aren't wired
 yet: the round trip goes through the system browser.
+
+## One instance, reopening and the Dock
+
+Editors, browsers and terminals run once: launching them again (from a
+launcher, a file manager's "Open in…", a script) opens a window in the
+process already running. `App::single_instance` makes the app one of them:
+
+```rust
+let app = App::new(state, view);
+let handle = app.handle();
+app.single_instance("org.example.Term", move |s, launch: &Launch| {
+    // launch.args, launch.cwd, launch.env, launch.activation_token
+    let id = handle.open_window(WindowAttributes::new().title("Term"), view);
+    handle.window_to(id, WindowRequest::Activate(launch.activation_token.clone()));
+})
+.run();
+```
+
+When `run` finds a process of the app already owning the id, it hands that
+one this launch and returns at once, so `main` ends; otherwise the app runs,
+and every later launch reaches the hook. A `Launch` carries the arguments
+(past the program's name), the working directory they're relative to, the
+whole environment, and the activation token the launcher gave
+(`XDG_ACTIVATION_TOKEN`, else `DESKTOP_STARTUP_ID`). URLs among the arguments
+(a protocol handler's) also reach `on_open_url`. `Launch::current()` is this
+process's own, to treat the first launch the same way. An app that must know
+before it builds its state (one that reconnects to sessions the running
+instance already has) asks first:
+
+```rust
+if stipple::platform::forward_launch("org.example.Term") {
+    return; // the running instance took it
+}
+```
+
+`WindowRequest::Activate(token)` brings a window to the front (restored if
+minimized) with the focus. Window managers keep a background process from
+taking the focus, which is what the token is for: Wayland compositors want an
+`xdg_activation_v1` token before they let a window be activated (without one,
+the window is only marked as wanting attention); X11 window managers weigh
+the `_NET_ACTIVE_WINDOW` request against the user's last input by the
+startup id's `_TIME` stamp; on Windows the second launch lets the first take
+the foreground (`AllowSetForegroundWindow`).
+
+| | Who owns the id | How a launch travels |
+|---|---|---|
+| Linux | an `flock` on `$XDG_RUNTIME_DIR/<id>.instance.lock` (or a `stipple-<uid>` directory of the user's own under `/tmp`) | the Unix socket `<id>.instance` beside it |
+| macOS | the same in the per-user `$TMPDIR` | the same; opening a bundled app again doesn't start a process at all: Launch Services reopens the running one (below) |
+| Windows | the named mutex `Local\stipple-instance-<id>` (per logon session) | the named pipe `\\.\pipe\stipple-instance-<id>-<session>`, remote clients refused |
+| iOS, Android, web | — the system keeps one instance; the hook never runs | |
+
+The lock goes with the process, so a crash leaves at most a stale socket,
+which the next owner replaces. The second launch waits up to three seconds
+for the owner's answer; one that doesn't answer leaves the app to run as a
+second instance. The id is the app's reverse-DNS identifier, as in
+`AppInfo`.
+
+**Reopening (macOS).** Clicking the Dock icon, or opening the app from the
+Finder while it runs, is `applicationShouldHandleReopen:hasVisibleWindows:`,
+which `App::on_reopen` hears, with whether any window shows. An app that keeps
+running with no window (`exit_on_last_window_closed(false)`, the Mac habit)
+opens one there:
+
+```rust
+let app = App::new(state, view).exit_on_last_window_closed(false);
+let handle = app.handle();
+app.on_reopen(move |_, has_visible_windows| {
+    if !has_visible_windows {
+        handle.open_window(WindowAttributes::new().title("Untitled"), view);
+    }
+})
+.run();
+```
+
+**Opening files (macOS).** Files and folders dropped on the Dock icon, opened
+with the app from the Finder (Open With, a document type the bundle claims,
+"Open in Terminal" style services) come through `application:openURLs:` as
+file URLs, and `App::on_open_files(|s, files: &[PathBuf]| …)` hears them, at
+launch or while the app runs. Elsewhere files come on the command line (and
+to a single instance, in its `Launch`'s arguments).
+
+**The Dock menu (macOS).** `App::dock_menu` declares the Dock icon's
+right-click menu as a function of the state, like the tray's: New Window, New
+Tab, recent documents. Picks run their action against the state; shortcuts
+don't apply. Other platforms have no Dock menu. The menu bar's Window,
+Services and Help menus are in [menus.md](menus.md#the-window-services-and-help-menus).
+
+At the platform level: `Event::Launch`, `Event::Reopen(has_visible_windows)`,
+`Event::OpenFiles(paths)`, and the Dock menu's picks as `Event::MenuCommand`
+ids above the tray's.
+
+The `instancedemo` example shows all of it:
+
+```sh
+cargo run --example instancedemo &
+cargo run --example instancedemo -- some args   # forwarded; the first lists it
+```
 
 ## App directories and bundle information
 
@@ -736,6 +835,19 @@ On the iOS simulator, touchdemo's bundle claims the scheme and `simctl
 openurl` opens two URLs, one launching it (non-blocking, not yet seen
 passing). macOS's `application:openURLs:` is build-checked; the desktops'
 command-line URL was checked by hand on X11.
+
+Single instance: `.github/scripts/single-instance.sh` starts `instancedemo`,
+then launches it again from another directory with arguments and a
+`DESKTOP_STARTUP_ID`; the second must say it forwarded, and the first must
+list the arguments, the directory and the token, and quit. It runs on macOS
+(blocking), and on Linux under Xvfb and on Windows (both not blocking until
+they have passed on CI). On macOS, `STIPPLE_COCOA_APP_DELEGATE` then makes
+the backend send the application delegate a reopen and an
+`application:openURLs:` with a folder and a URL, ask it for the Dock menu and
+pick its first item, through real Objective-C dispatch: each must reach its
+hook, and the Window, Services and Help menus must be AppKit's. A real Dock
+click and a real `open` of a bundle aren't tested, nor `WindowRequest::Activate`
+on Wayland and X11 (build-checked).
 
 No real tray host or notification popup is looked at, and nothing clicks the
 real icons on Windows or macOS: there, the menus and click handling are

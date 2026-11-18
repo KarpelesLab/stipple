@@ -59,6 +59,18 @@ pub(super) fn request(conn: &mut WlConn, surface: u32) -> bool {
     true
 }
 
+/// Activate `surface` with a token another client (a launcher, a second
+/// launch of the app) handed over.
+pub(super) fn activate(conn: &mut WlConn, token: &str, surface: u32) {
+    if let Some(activation) = conn.attention.activation {
+        let _ = conn.send(
+            activation,
+            ACTIVATION_ACTIVATE,
+            &activate_args(token, surface),
+        );
+    }
+}
+
 /// Ring the system bell for `surface`. Returns whether the compositor has one.
 pub(super) fn ring(conn: &mut WlConn, surface: u32) -> bool {
     let Some(bell) = conn.attention.bell else {

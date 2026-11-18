@@ -240,7 +240,8 @@ impl<S: 'static> App<S> {
     /// (`url-schemes`, `associated-domains`; see `docs/packaging.md`).
     /// Delivered on iOS, Android (through Stipple's `Link` activity), macOS
     /// (`application:openURLs:`), and on Windows and Linux from the command
-    /// line the protocol handler starts the app with; see
+    /// line the protocol handler starts the app with (while it runs, a
+    /// [`single_instance`](Self::single_instance)'s second launch's); see
     /// `docs/os-integration.md`.
     ///
     /// ```no_run

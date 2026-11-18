@@ -304,6 +304,27 @@ pub struct NativeMenu {
     pub label: String,
     /// The entries, top to bottom.
     pub items: Vec<NativeMenuItem>,
+    /// The part it plays in macOS's menu bar, if any.
+    pub role: Option<MenuRole>,
+}
+
+/// The part a menu plays in macOS's menu bar, which fills it with the
+/// system's own items (see [`Menu::role`](crate::core::Menu::role)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MenuRole {
+    /// The Window menu: macOS lists the app's windows in it, after the
+    /// Minimize, Zoom and Bring All to Front items Stipple adds around the
+    /// app's own. Elsewhere, a menu like any other.
+    Window,
+    /// The Services menu, which macOS fills with the services that apply to
+    /// what's selected. Declared as a menu of the bar, it goes in the
+    /// application menu, where Mac apps have it; anywhere else, it stays
+    /// where it is. It has no place off macOS, where it is left out.
+    Services,
+    /// The Help menu: macOS adds a search field that finds the app's menu
+    /// items. Elsewhere, a menu like any other.
+    Help,
 }
 
 /// A whole menu bar, as the app hands it to the platform (from a
@@ -336,6 +357,12 @@ pub(crate) enum MenuPopup {
 /// stream serves both.
 pub const TRAY_ID_BASE: u32 = 0x8000;
 
+/// The first id of the Dock menu's commands (macOS; see
+/// [`App::dock_menu`](crate::App::dock_menu)): above the tray's, so one
+/// [`Event::MenuCommand`](crate::platform::Event::MenuCommand) stream serves
+/// all three.
+pub const DOCK_ID_BASE: u32 = 0xC000;
+
 /// A tray icon (a status item on macOS, a notification-area icon on Windows, a
 /// `StatusNotifierItem` on Linux), as the app hands it to the platform (from a
 /// [`Tray`](crate::core::Tray)).
@@ -347,7 +374,8 @@ pub struct NativeTray {
     /// The icon, straight RGBA. `None` shows a plain placeholder.
     pub icon: Option<crate::render::Pixmap>,
     /// The menu shown on a right-click (on macOS, any click). Command ids
-    /// start at [`TRAY_ID_BASE`]; shortcuts are ignored.
+    /// start at [`TRAY_ID_BASE`] (and stay below [`DOCK_ID_BASE`]);
+    /// shortcuts are ignored.
     pub menu: Vec<NativeMenuItem>,
 }
 

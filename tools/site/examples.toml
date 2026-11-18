@@ -408,6 +408,10 @@ needs = "Linux: X11 with DRI3 and GBM."
 description = "A tray icon with a menu, a desktop notification, and opening URLs and files in their default apps."
 needs = "A desktop with a system tray (Linux, Windows or macOS)."
 
+[native.instancedemo]
+description = "One instance per user: a second launch hands its arguments, directory and activation token to the running one and exits; on macOS, the Dock's reopen, files dropped on its icon, its menu, and the Window, Services and Help menus."
+needs = "A desktop (Linux, Windows or macOS)."
+
 [native.securestore]
 description = "Store, read back and remove secrets with platform::secure_store: the Keychain, Credential Manager or the Secret Service, from a terminal."
 needs = "The OS's secret store (the Keychain, Credential Manager, a Secret Service such as GNOME Keyring); the web has none."
