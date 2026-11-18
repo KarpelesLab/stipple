@@ -18,7 +18,11 @@ struct Seen {
     made: Cell<u32>,
     gpu: Cell<u32>,
     cpu: Cell<u32>,
+    read: Cell<u32>,
     occlude: Cell<bool>,
+    /// The GPU can't present to the window's layer (a compositor that
+    /// takes none of its `dma-buf`s).
+    refuse: Cell<bool>,
 }
 
 struct Gpu {
@@ -31,10 +35,11 @@ impl Executor for Gpu {
         Api::Metal
     }
     fn read_back(&mut self, plan: &Plan) -> Result<Pixmap, GpuError> {
+        self.seen.read.set(self.seen.read.get() + 1);
         Ok(Pixmap::new(plan.size))
     }
     fn can_present(&self, _: &GpuLayer) -> bool {
-        true
+        !self.seen.refuse.get()
     }
     fn present(
         &mut self,
@@ -75,7 +80,7 @@ impl Surface for Counting {
 /// A window with a GPU layer (or without one).
 struct Win {
     seen: Rc<Seen>,
-    layer: bool,
+    layer: Option<GpuLayer>,
 }
 
 impl Window for Win {
@@ -97,7 +102,7 @@ impl Window for Win {
         ))
     }
     fn gpu_layer(&self) -> Option<GpuLayer> {
-        self.layer.then_some(GpuLayer::Web)
+        self.layer
     }
 }
 
@@ -119,13 +124,16 @@ fn app(renderer: Renderer) -> App<()> {
         .renderer(renderer)
 }
 
+/// A browser canvas's layer: any layer the stand-in GPU presents to.
+const LAYER: Option<GpuLayer> = Some(GpuLayer::Web);
+
 /// Run an app choosing `renderer`, where `Auto` tries the GPU, on a GPU
 /// named `device`, in a window with a GPU layer (or not); `send` delivers an
 /// event and says how many frames went to the GPU and to the CPU.
 fn rig(
     renderer: Renderer,
     device: &'static str,
-    layer: bool,
+    layer: Option<GpuLayer>,
 ) -> (Rc<Seen>, impl FnMut(Event) -> (u32, u32)) {
     super::AUTO_TRIES_GPU.with(|a| a.set(Some(true)));
     let seen = Rc::new(Seen::default());
@@ -158,7 +166,7 @@ fn done() {
 
 #[test]
 fn auto_draws_on_a_hardware_gpu() {
-    let (seen, mut send) = rig(Renderer::Auto, "NVIDIA GeForce RTX 5080", true);
+    let (seen, mut send) = rig(Renderer::Auto, "NVIDIA GeForce RTX 5080", LAYER);
     assert_eq!(send(Event::RedrawRequested), (1, 0), "on the GPU");
     assert_eq!(send(Event::Wake), (1, 0));
     assert_eq!(seen.made.get(), 1);
@@ -174,14 +182,14 @@ fn auto_stays_on_the_cpu_with_a_software_gpu() {
         "Google SwiftShader",
         "",
     ] {
-        let (seen, mut send) = rig(Renderer::Auto, device, true);
+        let (seen, mut send) = rig(Renderer::Auto, device, LAYER);
         assert_eq!(send(Event::RedrawRequested), (0, 1), "{device:?}: the CPU");
         assert_eq!(send(Event::Wake), (0, 1));
         assert_eq!(seen.made.get(), 1, "{device:?}: asked once");
         done();
     }
     // Asked for, it draws there anyway.
-    let (_, mut send) = rig(Renderer::Gpu, "llvmpipe (LLVM 19.1.7, 256 bits)", true);
+    let (_, mut send) = rig(Renderer::Gpu, "llvmpipe (LLVM 19.1.7, 256 bits)", LAYER);
     assert_eq!(send(Event::RedrawRequested), (1, 0));
     done();
 }
@@ -190,7 +198,7 @@ fn auto_stays_on_the_cpu_with_a_software_gpu() {
 fn auto_never_reads_back() {
     // A window the GPU can't present to draws on the CPU, and the GPU isn't
     // even set up.
-    let (seen, mut send) = rig(Renderer::Auto, "Apple M5 Max", false);
+    let (seen, mut send) = rig(Renderer::Auto, "Apple M5 Max", None);
     assert_eq!(send(Event::RedrawRequested), (0, 1));
     assert_eq!(seen.made.get(), 0);
     done();
@@ -207,6 +215,50 @@ fn auto_never_reads_back() {
     done();
 }
 
+/// A Wayland window's layer: frames go to the compositor as `dma-buf`s,
+/// under a title bar Stipple draws or not (the backend hands out the layer
+/// either way; the sink is the backend's, never touched by the stand-in).
+#[cfg(target_os = "linux")]
+const WAYLAND: Option<GpuLayer> = Some(GpuLayer::Wayland {
+    surface: 3,
+    sink: std::ptr::null(),
+});
+
+#[cfg(target_os = "linux")]
+#[test]
+fn auto_presents_to_a_wayland_window_on_a_hardware_gpu() {
+    let (seen, mut send) = rig(Renderer::Auto, "NVIDIA GeForce RTX 5080", WAYLAND);
+    assert_eq!(send(Event::RedrawRequested), (1, 0), "dma-bufs, on the GPU");
+    assert_eq!(send(Event::Wake), (1, 0));
+    assert_eq!(seen.read.get(), 0, "nothing read back");
+    done();
+    // On lavapipe, as on CI's runners, the CPU.
+    let (seen, mut send) = rig(Renderer::Auto, "llvmpipe (LLVM 19.1.7, 256 bits)", WAYLAND);
+    assert_eq!(send(Event::RedrawRequested), (0, 1));
+    assert_eq!(seen.read.get(), 0);
+    done();
+}
+
+#[test]
+fn auto_draws_on_the_cpu_where_the_gpu_cant_present() {
+    // A compositor that takes none of the GPU's dma-bufs (or a layer the
+    // GPU can't present to): `Auto` draws on the CPU rather than read back.
+    let (seen, mut send) = rig(Renderer::Auto, "NVIDIA GeForce RTX 5080", LAYER);
+    seen.refuse.set(true);
+    assert_eq!(send(Event::RedrawRequested), (0, 1), "the CPU");
+    assert_eq!(send(Event::Wake), (0, 1));
+    assert_eq!(seen.read.get(), 0, "nothing read back");
+    done();
+    #[cfg(target_os = "linux")]
+    {
+        let (seen, mut send) = rig(Renderer::Auto, "NVIDIA GeForce RTX 5080", WAYLAND);
+        seen.refuse.set(true);
+        assert_eq!(send(Event::RedrawRequested), (0, 1));
+        assert_eq!(seen.read.get(), 0);
+        done();
+    }
+}
+
 #[test]
 fn auto_falls_back_when_the_gpu_fails_to_start_or_is_lost() {
     super::AUTO_TRIES_GPU.with(|a| a.set(Some(true)));
@@ -217,14 +269,14 @@ fn auto_falls_back_when_the_gpu_fails_to_start_or_is_lost() {
     let (_, mut handler) = app(Renderer::Auto).into_handler();
     let win = Win {
         seen: seen.clone(),
-        layer: true,
+        layer: LAYER,
     };
     handler(Event::RedrawRequested, &win);
     assert_eq!(seen.cpu.get(), 1, "no device: the CPU");
     assert!(super::given_up());
     done();
 
-    let (seen, mut send) = rig(Renderer::Auto, "Apple M5 Max", true);
+    let (seen, mut send) = rig(Renderer::Auto, "Apple M5 Max", LAYER);
     assert_eq!(send(Event::RedrawRequested), (1, 0));
     super::current(|r| r.expect("a renderer").lose_device());
     assert_eq!(send(Event::Wake), (0, 1), "lost: that frame on the CPU");
@@ -257,7 +309,7 @@ fn a_window_the_gpu_finds_hidden_stops_drawing_until_seen() {
     let _lock = crate::platform::frame::SUSPEND_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let (seen, mut send) = rig(Renderer::Gpu, "Apple M5 Max", true);
+    let (seen, mut send) = rig(Renderer::Gpu, "Apple M5 Max", LAYER);
     assert_eq!(send(Event::RedrawRequested), (1, 0));
     seen.occlude.set(true);
     assert_eq!(send(Event::Wake), (1, 0), "presented, but went nowhere");

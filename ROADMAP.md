@@ -960,7 +960,7 @@ flip-model swap chain (Windows); all are pixel-compared against the CPU in
 CI. WebGPU and WebGL2 execute it in the browser (`web/gpu.js`), straight into
 the canvas, compared with the CPU in headless Chrome. `App::renderer` /
 `STIPPLE_RENDERER` (the page's `renderer` option on the web) choose; the
-default draws on a hardware GPU on macOS, X11 and the web (6h) and on the
+default draws on a hardware GPU on macOS, Linux and the web (6h) and on the
 CPU elsewhere, and the CPU is always the fallback.
 
 #### 6a — The architecture
@@ -1255,7 +1255,8 @@ CPU elsewhere, and the CPU is always the fallback.
   chooses the GPU there by default; software stays the fallback and the
   choice for headless rendering and tests.
   *Audited per platform in docs/gpu.md#the-default. `Auto` now draws on
-  the GPU on macOS (Metal) and X11 (Vulkan), as on the web, and only on a
+  the GPU on macOS (Metal) and Linux (Vulkan, X11 and Wayland), as on the
+  web, and only on a
   hardware GPU (`gpu::is_hardware_device`: llvmpipe, lavapipe, WARP,
   SwiftShader and paravirtual devices are slower than the CPU renderer, so
   `Auto` stays there, as on all of CI's runners); never for a frame it
@@ -1267,8 +1268,12 @@ CPU elsewhere, and the CPU is always the fallback.
   1.07 ms, transition p95 2.9 ms) and GLES doesn't (5.7 ms, 7.7 ms), so
   GLES stays an explicit choice. Left: iOS (Metal never run on a device),
   Windows (Direct3D 11 never run on a hardware GPU), Android (the corpus
-  not run there, the benchmark not on a phone) and Wayland (decorated
-  windows read back); X11 on AMD and Intel and on a real X server.*
+  not run there, the benchmark not on a phone); Linux on AMD and Intel, X11
+  on a real X server. Wayland's decorated windows no longer read back
+  (their dma-bufs go in a subsurface under Stipple's title bar), so `Auto`
+  presents there too; its hardware runs so far: sway on NVIDIA only,
+  locally. CI adds headless Mutter and KWin on Mesa's software GPUs
+  (non-blocking; `Auto` stays on the CPU there).*
 - Later, not planned yet: an app-facing GPU element (custom shaders, 3D
   content in a viewport), wide color and HDR.
 

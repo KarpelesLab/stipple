@@ -116,8 +116,8 @@ fn auto_gpu() -> bool {
 /// Whether [`Renderer::Auto`] tries the GPU on this platform ([`Want::Auto`]):
 /// where the GPU path has met Phase 6's exit criteria (`docs/gpu.md`, "The
 /// default"), in a build with its API: Metal on macOS, Vulkan on Linux
-/// (presenting to X11 windows: see [`auto_presents_to`]). iOS, Windows,
-/// Android and Wayland stay on the CPU until theirs are met.
+/// (X11 windows, and Wayland ones through `dma-buf`s). iOS, Windows and
+/// Android stay on the CPU until theirs are met.
 fn auto_tries_gpu() -> bool {
     #[cfg(test)]
     if let Some(on) = AUTO_TRIES_GPU.with(|a| a.get()) {
@@ -139,18 +139,6 @@ fn auto_api() -> Which {
     } else {
         Which::Native
     }
-}
-
-/// Whether [`Want::Auto`] presents to `layer` on the GPU: not to a Wayland
-/// window yet (its `dma-buf` presentation hasn't met the exit criteria).
-#[cfg(feature = "gpu")]
-fn auto_presents_to(layer: &crate::platform::GpuLayer) -> bool {
-    #[cfg(target_os = "linux")]
-    if matches!(layer, crate::platform::GpuLayer::Wayland { .. }) {
-        return false;
-    }
-    let _ = layer;
-    true
 }
 
 #[cfg(test)]
@@ -537,9 +525,6 @@ impl<S: 'static> Pane<S> {
             let Some(layer) = window.gpu_layer() else {
                 return Some(scene);
             };
-            if auto && !auto_presents_to(&layer) {
-                return self.leave_gpu(window, scene);
-            }
             let mut scene = scene;
             self.draw_viewport_content(&mut scene, viewport_content);
             let background = theme.palette.background;

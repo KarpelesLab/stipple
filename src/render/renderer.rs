@@ -20,13 +20,13 @@ pub enum Renderer {
     /// Stipple's choice: the GPU where its path has met Phase 6's exit
     /// criteria and the device is a hardware GPU, the CPU everywhere else.
     /// That is, in a build with the platform's GPU feature: Metal on macOS
-    /// and Vulkan on Linux, for windows the GPU presents to straight (X11's;
-    /// not Wayland's yet), and in a browser WebGPU / WebGL2 on a hardware
+    /// and Vulkan on Linux, for windows the GPU presents to straight (X11's,
+    /// and Wayland's as `dma-buf`s), and in a browser WebGPU / WebGL2 on a hardware
     /// GPU. A software GPU (llvmpipe, lavapipe, WARP, SwiftShader, a virtual
     /// machine's) is slower than the CPU renderer, so `Auto` stays on the
     /// CPU there, as it does for headless rendering
-    /// ([`App::render_once`](crate::App::render_once)) and on iOS, Windows,
-    /// Android and Wayland for now. A GPU that fails to start or is lost
+    /// ([`App::render_once`](crate::App::render_once)) and on iOS, Windows
+    /// and Android for now. A GPU that fails to start or is lost
     /// falls back to the CPU. See `docs/gpu.md`, "The default".
     #[default]
     Auto,

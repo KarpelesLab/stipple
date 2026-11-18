@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- *(gpu)* `Renderer::Auto` draws on a hardware Vulkan device for Wayland windows too, as for X11's (6h)
+
 ## [0.0.9](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.8...stipple-v0.0.9) - 2026-11-16
 
 ### Added
