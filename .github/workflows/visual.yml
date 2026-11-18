@@ -4091,6 +4091,8 @@ jobs:
       # instead of skipping when there's no Metal device. The frames go up
       # as an artifact.
       - name: Compare the Metal renderer with the software one
+        # A hang fails here instead of holding the job until it's cancelled.
+        timeout-minutes: 25
         env:
           STIPPLE_REQUIRE_GPU: "1"
           STIPPLE_GPU_DUMP: visual_output/metal-compare

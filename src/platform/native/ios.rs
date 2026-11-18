@@ -92,6 +92,13 @@ pub fn size_hint(control: NativeControl) -> (Option<f64>, Option<f64>) {
 /// The switch's size varies between iOS versions, so ask UIKit for it.
 fn switch_size() -> (Option<f64>, Option<f64>) {
     static SIZE: std::sync::OnceLock<CgSize> = std::sync::OnceLock::new();
+    // Creating a view off the main thread can wait on the main queue, which
+    // nothing drains there (a test thread rendering headless): that hangs.
+    // Off the main thread, until the main thread has asked, take the usual
+    // size, and don't keep it.
+    if SIZE.get().is_none() && !super::objc::on_main_thread() {
+        return (Some(51.0), Some(31.0));
+    }
     let size = SIZE.get_or_init(|| {
         with_pool(|| unsafe {
             let alloc: Id = msg!(class("UISwitch"), "alloc", () -> Id);
