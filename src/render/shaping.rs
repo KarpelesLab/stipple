@@ -82,29 +82,79 @@ fn ligatures_of(face: &oxideav_scribe::Face) -> Arc<Vec<u16>> {
 /// `text` shaped through `chain` at `size_px`, with the default features
 /// only.
 pub(crate) fn shape(chain: &FaceChain, text: &str, size_px: f32) -> Vec<PositionedGlyph> {
-    // No features: each character's face and glyph, after the chain's
-    // joining and reordering, one glyph per entry.
-    let Ok(mapped) = chain.shape_with_features(text, size_px, &[]) else {
+    if text.is_empty() || size_px <= 0.0 {
         return Vec::new();
+    }
+    // Each character's face and glyph, one entry per glyph.
+    let mapped: Vec<(u16, u16)> = match simple_mapping(chain, text) {
+        Some(m) => m,
+        // The chain's own mapping, after its Arabic joining, Indic
+        // reordering and keeping marks with their base. It positions the
+        // glyphs too, which is thrown away: so only for text that needs it.
+        None => match chain.shape_with_features(text, size_px, &[]) {
+            Ok(glyphs) => glyphs.iter().map(|g| (g.face_idx, g.glyph_id)).collect(),
+            Err(_) => return Vec::new(),
+        },
     };
     let mut out = Vec::with_capacity(mapped.len());
     let mut start = 0;
     while start < mapped.len() {
-        let face_idx = mapped[start].face_idx;
+        let face_idx = mapped[start].0;
         let mut end = start + 1;
-        while end < mapped.len() && mapped[end].face_idx == face_idx {
+        while end < mapped.len() && mapped[end].0 == face_idx {
             end += 1;
         }
-        let gids: Vec<u16> = mapped[start..end].iter().map(|g| g.glyph_id).collect();
+        let gids: Vec<u16> = mapped[start..end].iter().map(|g| g.1).collect();
         let face = chain.face(face_idx);
         let lookups = ligatures_of(face);
         match face.with_font(|font| shape_run(font, &gids, size_px, face_idx, &lookups)) {
             Ok(mut run) => out.append(&mut run),
-            Err(_) => out.extend_from_slice(&mapped[start..end]),
+            Err(_) => return chain.shape(text, size_px).unwrap_or_default(),
         }
         start = end;
     }
     out
+}
+
+/// Whether the chain maps `c` on its own, from the first face that has it:
+/// Latin before the combining marks, and the punctuation, currency,
+/// letterlike and arrow blocks without the joiners and direction marks.
+/// No combining mark, Arabic or Indic letter is among them, which are what
+/// the chain's joining, reordering and mark handling change.
+fn maps_alone(c: char) -> bool {
+    matches!(c,
+        '\0'..='\u{02FF}'
+        | '\u{2000}'..='\u{200B}'
+        | '\u{2010}'..='\u{2027}'
+        | '\u{202F}'..='\u{205F}'
+        | '\u{20A0}'..='\u{20CF}'
+        | '\u{2100}'..='\u{21FF}')
+}
+
+/// The chain's mapping of `text` when every character [maps
+/// alone](maps_alone): each from the first face that has it (the
+/// primary's `.notdef` if none does). That is what the chain's own mapping
+/// gives such text, without the positioning pass that comes with it.
+fn simple_mapping(chain: &FaceChain, text: &str) -> Option<Vec<(u16, u16)>> {
+    if !text.chars().all(maps_alone) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        let mut found = (0, 0);
+        for idx in 0..chain.len() as u16 {
+            match chain.face(idx).with_font(|font| font.glyph_index(ch)) {
+                Ok(Some(gid)) if gid != 0 => {
+                    found = (idx, gid);
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        }
+        out.push(found);
+    }
+    Some(out)
 }
 
 /// One face's run: `ccmp`, the ligatures of `lookups` (at each glyph the
