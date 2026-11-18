@@ -179,6 +179,16 @@ pub fn app_info() -> AppInfo {
     merge(os_info(), given, exe_name())
 }
 
+/// The app's name as the bundle or `App::app_info` gives it, if either does
+/// (not the executable's name, which [`app_info`] falls back to).
+pub(crate) fn declared_name() -> Option<String> {
+    let given = GIVEN.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    os_info()
+        .name
+        .filter(|s| !s.is_empty())
+        .or_else(|| given.map(|g| g.name).filter(|s| !s.is_empty()))
+}
+
 /// The OS's values, then the app's, then `fallback` for the id and name.
 fn merge(os: OsInfo, given: Option<AppInfo>, fallback: Option<String>) -> AppInfo {
     let given = given.unwrap_or_default();

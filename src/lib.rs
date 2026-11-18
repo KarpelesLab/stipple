@@ -4813,12 +4813,9 @@ impl<S: 'static> App<S> {
         // or `App::app_info`'s), else the primary window's title as the app
         // started, kept when that window closes.
         let name = self.menu_app_name.get_or_insert_with(|| {
-            let name = crate::platform::app_info().name;
-            if name.is_empty() {
-                self.panes[0].attrs.title.clone()
-            } else {
-                name
-            }
+            crate::platform::declared_name()
+                .or_else(|| Some(self.panes[0].attrs.title.clone()).filter(|t| !t.is_empty()))
+                .unwrap_or_else(|| crate::platform::app_info().name)
         });
         let native = menu(&self.state).to_native(name);
         let pane = &mut self.panes[idx];
