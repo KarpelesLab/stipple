@@ -452,12 +452,18 @@ Under `Theme::native()` buttons, switches, sliders and progress bars are real
 controls' frames, above the frame (and its Metal layer), live. Buttons use
 iOS 26's glass configurations (`prominentGlassButtonConfiguration` for the
 primary one, `glassButtonConfiguration`) where UIKit has them, else the filled
-and gray ones. Taps reach the app through a shared target's action; a switch
-the app sets slides with UIKit's animation. The view's accessibility elements
-vend the control itself where it stands for a node, so VoiceOver reads the
-`UISwitch` once, with the row's label. A drag that starts on a button or a
-switch scrolls the list under it (a pan recognizer on the view hands it to the
-app as a touch); a slider keeps its drags.
+and gray ones. A button's or a switch's touches are the app's view's
+(`userInteractionEnabled` off), so a finger on one is the app's as on any
+element: a tap runs its handler, a drag scrolls the list it is in, a long
+press opens its context menu, an edge swipe goes back; the button shows its
+pressed look (`highlighted`) while the app holds it. A slider keeps its drags
+(its moves come back through a shared target's action), and a switch the app
+sets slides with UIKit's animation. The view's accessibility elements vend the
+control itself where it stands for a node, so VoiceOver reads the `UISwitch`
+once, with the row's label; a button carries the button trait and every
+control its frame on screen whether or not UIKit's accessibility runtime is
+loaded, and VoiceOver's double tap (a tap at the control's middle) lands on
+the app's view, which runs the element's handler.
 
 A `select` is a `UIButton` (the same configuration as the other buttons, glass
 on iOS 26, with the pop-up indicator) whose `UIMenu` is its primary action,

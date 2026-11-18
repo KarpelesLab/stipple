@@ -135,8 +135,13 @@ let (found, windowFrames) = readTree()
 let roles = found.roles.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
 print("axprobe: windows=\(windows.count) elements=\(found.count) \(roles)")
 
-// Whether the elements' frames are where the window is on screen.
-for (label, e) in found.buttons.sorted(by: { $0.key < $1.key }).prefix(3) {
+// Whether the elements' frames are where the window is on screen: the
+// button to press (the step checks it by name), and the first few others.
+var framed = Array(found.buttons.sorted(by: { $0.key < $1.key }).prefix(3))
+if let press, let e = found.buttons[press], !framed.contains(where: { $0.key == press }) {
+    framed.insert((key: press, value: e), at: 0)
+}
+for (label, e) in framed {
     if let f = frame(e) {
         let inside = windowFrames.contains { $0.insetBy(dx: -1, dy: -1).contains(f) }
         print("axprobe: button \"\(label)\" frame inside its window=\(inside)")

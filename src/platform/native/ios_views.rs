@@ -13,11 +13,19 @@
 //! by the app moves with UIKit's animation; a slider the user is dragging
 //! isn't set back under their finger.
 //!
-//! A finger that goes down on a button or a switch and then drags is a
-//! scroll, as in a `UIScrollView`: a pan recognizer on the app's view, fed
-//! only touches that land on those controls, takes it from the control
-//! (which then doesn't fire) and hands it to the app as a touch, so a list
-//! of controls scrolls wherever it's dragged. A slider keeps its drags.
+//! A button's or a switch's touches are the app's view's
+//! (`userInteractionEnabled` off): a finger on one goes to the app as on any
+//! element, so a tap runs the element's handler, a drag scrolls the list it
+//! is in (and flings it), a long press opens its context menu, and an edge
+//! swipe is the back gesture, as with the controls drawn as pictures. The
+//! button shows its pressed look while the app holds it
+//! ([`NativeView::pressed`]). A slider keeps its own drags.
+//!
+//! VoiceOver reads the control itself (the view's accessibility container
+//! vends it in place of the node it stands for), named with the node's name,
+//! a button with the button trait, and its frame on screen set each frame;
+//! its double tap is a tap at the control's middle, which the app's view
+//! takes.
 //!
 //! A select is a `UIButton` with a `UIMenu` (`ios_select`). The controls in
 //! a scroll area are subviews of its clipping container (`apple_clips`),
@@ -37,6 +45,12 @@ unsafe extern "C" {
     fn objc_registerClassPair(cls: Id);
     fn objc_getClass(name: *const i8) -> Id;
     fn class_addMethod(cls: Id, name: Sel, imp: *const c_void, types: *const i8) -> bool;
+}
+
+#[link(name = "UIKit", kind = "framework")]
+unsafe extern "C" {
+    static UIAccessibilityTraitButton: u64;
+    static UIAccessibilityTraitNotEnabled: u64;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -69,18 +83,6 @@ fn target() -> Id {
                         action as *const c_void,
                         c"v@:@".as_ptr(),
                     );
-                    class_addMethod(
-                        cls,
-                        sel("stipplePan:"),
-                        pan as *const c_void,
-                        c"v@:@".as_ptr(),
-                    );
-                    class_addMethod(
-                        cls,
-                        sel("gestureRecognizer:shouldReceiveTouch:"),
-                        pan_receives as *const c_void,
-                        c"B@:@@".as_ptr(),
-                    );
                     objc_registerClassPair(cls);
                     cls
                 } else {
@@ -111,76 +113,6 @@ extern "C" fn action(_this: Id, _cmd: Sel, sender: Id) {
     };
     touched(id);
     crate::platform::backend::ios::send_event(crate::platform::Event::NativeView { id, event });
-}
-
-/// The touch id a pan over a control is forwarded as.
-const PAN_TOUCH: u64 = u64::MAX - 2;
-
-/// `gestureRecognizer:shouldReceiveTouch:`: the pan watches only fingers
-/// on a live button or switch (the app's view has its own touches, and a
-/// slider its drags).
-extern "C" fn pan_receives(_this: Id, _cmd: Sel, _pan: Id, touch: Id) -> bool {
-    let view = crate::platform::backend::ios::app_view();
-    unsafe {
-        let mut v: Id = msg!(touch, "view", () -> Id);
-        if v == view {
-            return false;
-        }
-        while !v.is_null() && v != view {
-            let cls = class("UISlider");
-            let slider: bool = msg!(v, "isKindOfClass:", (cls: Id) -> bool);
-            if slider {
-                return false;
-            }
-            v = msg!(v, "superview", () -> Id);
-        }
-        !v.is_null()
-    }
-}
-
-/// `stipplePan:`: a drag that began on a control, as the app's touch.
-extern "C" fn pan(_this: Id, _cmd: Sel, pan: Id) {
-    use crate::platform::TouchPhase;
-    let view = crate::platform::backend::ios::app_view();
-    let (state, at, moved) = unsafe {
-        let state: i64 = msg!(pan, "state", () -> i64);
-        let at: CgPoint = msg!(pan, "locationInView:", (view: Id) -> CgPoint);
-        let moved: CgPoint = msg!(pan, "translationInView:", (view: Id) -> CgPoint);
-        (state, at, moved)
-    };
-    let p = crate::geometry::Point::new(at.x, at.y);
-    let send = |phase, p| crate::platform::backend::ios::forwarded_touch(phase, PAN_TOUCH, p);
-    // UIGestureRecognizerState: Began 1, Changed 2, Ended 3, Cancelled 4.
-    match state {
-        1 => {
-            let from = crate::geometry::Point::new(at.x - moved.x, at.y - moved.y);
-            send(TouchPhase::Started, from);
-            send(TouchPhase::Moved, p);
-        }
-        2 => send(TouchPhase::Moved, p),
-        3 => send(TouchPhase::Ended, p),
-        4 | 5 => send(TouchPhase::Cancelled, p),
-        _ => {}
-    }
-}
-
-/// Put the pan on the app's view `view`, once.
-unsafe fn install_pan(view: Id) {
-    thread_local! {
-        static ON: std::cell::Cell<Id> = const { std::cell::Cell::new(std::ptr::null_mut()) };
-    }
-    if view.is_null() || ON.with(|o| o.get()) == view {
-        return;
-    }
-    ON.with(|o| o.set(view));
-    unsafe {
-        let t = target();
-        let a = sel("stipplePan:");
-        let alloc: Id = msg!(class("UIPanGestureRecognizer"), "alloc", () -> Id);
-        let pan: Id = msg!(alloc, "initWithTarget:action:", (t: Id, a: Sel) -> Id);
-        msg!(pan, "setDelegate:", (t: Id) -> ());
-        msg!(view, "addGestureRecognizer:", (pan: Id) -> ());
-    }
 }
 
 /// Where `v` goes in the view it is in (its scroll area's container, or
@@ -261,6 +193,51 @@ unsafe fn set_common(view: Id, v: &NativeView) {
             nsstring(&v.label)
         };
         msg!(view, "setAccessibilityLabel:", (label: Id) -> ());
+        if let NativeControl::Button { .. } = v.control {
+            // What UIKit's accessibility runtime says of a button when it's
+            // loaded (with VoiceOver on), said always, so every reader of
+            // the elements (and the app's self-tests) gets it.
+            let mut traits = UIAccessibilityTraitButton;
+            if !v.enabled {
+                traits |= UIAccessibilityTraitNotEnabled;
+            }
+            msg!(view, "setAccessibilityTraits:", (traits: u64) -> ());
+            let pressed = v.pressed;
+            msg!(view, "setHighlighted:", (pressed: bool) -> ());
+        }
+    }
+}
+
+/// Whether the app's view takes `control`'s touches (see the module's
+/// docs).
+fn app_takes_touches(control: NativeControl) -> bool {
+    matches!(
+        control,
+        NativeControl::Button { .. } | NativeControl::Switch { .. }
+    )
+}
+
+/// Set `control`'s accessibility frame: its bounds on screen, as VoiceOver
+/// reads it (UIKit's accessibility runtime works it out by itself, but only
+/// while VoiceOver is on).
+unsafe fn set_screen_frame(control: Id) {
+    unsafe {
+        let view = control;
+        let f: CgRect = msg!(control, "bounds", () -> CgRect);
+        let window: Id = msg!(view, "window", () -> Id);
+        let screen: Id = if window.is_null() {
+            std::ptr::null_mut()
+        } else {
+            msg!(window, "screen", () -> Id)
+        };
+        let on_screen: CgRect = if screen.is_null() {
+            let nil: Id = std::ptr::null_mut();
+            msg!(view, "convertRect:toView:", (f: CgRect, nil: Id) -> CgRect)
+        } else {
+            let space: Id = msg!(screen, "coordinateSpace", () -> Id);
+            msg!(view, "convertRect:toCoordinateSpace:", (f: CgRect, space: Id) -> CgRect)
+        };
+        msg!(control, "setAccessibilityFrame:", (on_screen: CgRect) -> ());
     }
 }
 
@@ -327,6 +304,10 @@ impl ViewBackend for Uikit {
                 msg!(control, "addTarget:action:forControlEvents:", (t: Id, a: Sel, events: u64) -> ());
             }
             set_common(control, v);
+            if app_takes_touches(v.control) {
+                let no = false;
+                msg!(control, "setUserInteractionEnabled:", (no: bool) -> ());
+            }
             // Over the frame's layer, and over a Metal layer added later.
             let layer: Id = msg!(control, "layer", () -> Id);
             let z = 1.0_f64;
@@ -401,9 +382,6 @@ pub(crate) fn sync(views: &[NativeView]) {
     let mut backend = Uikit {
         view: crate::platform::backend::ios::app_view(),
     };
-    if !views.is_empty() {
-        unsafe { install_pan(backend.view) };
-    }
     if backend.view.is_null() {
         return;
     }
@@ -425,6 +403,11 @@ pub(crate) fn sync(views: &[NativeView]) {
             unsafe { clips::bring_to_front(h) };
         }
     }
+    // Each frame: the view itself may have moved on screen.
+    let shown: Vec<Id> = SET.with(|s| s.borrow().in_order().map(|(_, h)| *h).collect());
+    for h in shown {
+        unsafe { set_screen_frame(h) };
+    }
 }
 
 /// Whether any control is live (the Metal layer then presents with Core
@@ -441,11 +424,15 @@ pub(crate) fn handle_of(id: u64) -> Option<Id> {
 
 pub(crate) fn live_controls() -> Vec<super::LiveControl> {
     let view = crate::platform::backend::ios::app_view();
-    let shown: Vec<(u64, Id)> =
-        SET.with(|s| s.borrow().in_order().map(|(v, h)| (v.id, *h)).collect());
+    let shown: Vec<(u64, NativeControl, Id)> = SET.with(|s| {
+        s.borrow()
+            .in_order()
+            .map(|(v, h)| (v.id, v.control, *h))
+            .collect()
+    });
     shown
         .into_iter()
-        .map(|(id, h)| unsafe {
+        .map(|(id, control, h)| unsafe {
             let name = super::objc::class_name(h);
             // A configured button's title is its configuration's.
             let config: Id = if responds(h, "configuration") {
@@ -468,6 +455,11 @@ pub(crate) fn live_controls() -> Vec<super::LiveControl> {
             };
             let nil: Id = std::ptr::null_mut();
             let mut hit: Id = msg!(view, "hitTest:withEvent:", (at: CgPoint, nil: Id) -> Id);
+            // A tap there reaches the control: through the app's view, for
+            // one whose touches it takes.
+            if hit == view && app_takes_touches(control) {
+                hit = h;
+            }
             while !hit.is_null() && hit != h {
                 hit = msg!(hit, "superview", () -> Id);
             }

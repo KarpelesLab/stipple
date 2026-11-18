@@ -42,6 +42,10 @@ pub struct NativeView {
     pub label: String,
     /// Whether it looks enabled and takes input.
     pub enabled: bool,
+    /// Held down through the app's own input: where the app's view takes
+    /// a control's touches (iOS's buttons), the control shows its pressed
+    /// look from this.
+    pub pressed: bool,
     /// Drawn in the dark appearance.
     pub dark: bool,
     /// Laid out right to left (a slider fills from the right).
@@ -230,8 +234,10 @@ pub struct LiveControl {
     /// hide it).
     pub visible: Rect,
     /// Whether a tap or click at the middle of its [visible](Self::visible)
-    /// part lands on it (the OS's own hit test of the window's view
-    /// hierarchy).
+    /// part reaches it (the OS's own hit test of the window's view
+    /// hierarchy): it lands on the control, or, for one whose touches the
+    /// app's view takes (iOS's buttons and switches), on that view, with
+    /// nothing else over it.
     pub hit: bool,
     /// The OS class of the container it is in, when it is in a scroll
     /// area's (`StippleClipView`), else empty.
@@ -297,6 +303,7 @@ mod tests {
             font_size: 14.0,
             label: title.into(),
             enabled: true,
+            pressed: false,
             dark: false,
             rtl: false,
             menu: None,

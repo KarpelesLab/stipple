@@ -598,7 +598,6 @@ pub(crate) fn scroll(parent: Hwnd, wp: usize, child: Hwnd) -> Option<crate::plat
 }
 
 /// The child window `id` is shown in, for the accessibility bridge.
-#[allow(dead_code)]
 pub(crate) fn handle_of(parent: Hwnd, id: u64) -> Option<Hwnd> {
     SETS.with(|s| {
         let s = s.try_borrow().ok()?;

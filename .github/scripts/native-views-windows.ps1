@@ -82,7 +82,7 @@ try {
   if (-not (Wait-Log 'selftest:' 30)) { $failures += "the self-test never finished" }
   Start-Sleep -Seconds 1
 
-  # Screen readers: each live control once, as the child window's element.
+  # Screen readers: each live control once, its child window at its node.
   $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
   $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
     [System.Windows.Automation.Condition]::TrueCondition)
@@ -108,10 +108,9 @@ try {
   }
   if (-not (Wait-Log 'nativegallery: saves 2' 10)) { Write-Host "no second save logged" }
 
-  # The select is a COMBOBOX child window, read once by UIA: as the combo
-  # box (the app's tree leaves its node out). Its name is logged (Size,
-  # through Dynamic Annotation; the .NET client reads these child windows
-  # as panes named by their text).
+  # The select is a COMBOBOX child window, read once by UIA: the window's
+  # provider puts the child window at the select's node, a combo box named
+  # Size (IRawElementProviderHwndOverride).
   $combo = [NV]::FindWindowExW($hwnd, [IntPtr]::Zero, "ComboBox", [NullString]::Value)
   Write-Host "Size COMBOBOX child window: $combo"
   if ($combo -eq [IntPtr]::Zero) { $failures += "no COMBOBOX child window" }

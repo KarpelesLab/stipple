@@ -1665,9 +1665,8 @@ impl Window for WinWindow {
         crate::platform::native::os_views::sync(self.hwnd, views);
     }
     fn set_accessibility_tree(&self, root: &crate::platform::access::A11yNode) {
-        // A live OS control is its own UIA element (its child window's):
-        // its node isn't one too.
-        let root = &root.without_native_views();
+        // A live OS control's child window is the node it stands for, in
+        // its place in the tree (`uia::get_override_provider_for_hwnd`).
         // Rebuild the UIA provider tree when it changed; `WM_GETOBJECT`
         // hands its root to UIA. The one it replaces stays while a client
         // holds any of its nodes.

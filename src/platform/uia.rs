@@ -167,6 +167,12 @@ const IID_IRawElementProviderFragmentRoot: Guid = Guid(
     0x40a9,
     [0x86, 0xcb, 0xde, 0x3c, 0x75, 0x59, 0x9b, 0x58],
 );
+const IID_IRawElementProviderHwndOverride: Guid = Guid(
+    0x1d5d_f27c,
+    0x8947,
+    0x4425,
+    [0xb8, 0xd9, 0x79, 0x78, 0x7b, 0xb4, 0x60, 0xb8],
+);
 const IID_IInvokeProvider: Guid = Guid(
     0x54fc_b24b,
     0xe18e,
@@ -309,6 +315,18 @@ struct RootVtbl {
     get_focus: unsafe extern "system" fn(*mut c_void, *mut *mut c_void) -> Hresult,
 }
 
+/// `IRawElementProviderHwndOverride`'s vtable: `IUnknown`, then
+/// `GetOverrideProviderForHwnd`.
+#[repr(C)]
+struct HwndOverrideVtbl {
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const Guid, *mut *mut c_void) -> Hresult,
+    add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
+    release: unsafe extern "system" fn(*mut c_void) -> u32,
+    get_override_provider_for_hwnd:
+        unsafe extern "system" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> Hresult,
+}
+
 /// `IInvokeProvider`'s vtable: `IUnknown`, then `Invoke`.
 #[repr(C)]
 struct InvokeVtbl {
@@ -332,6 +350,9 @@ struct Provider {
     /// The `IRawElementProviderFragmentRoot` interface pointer is this
     /// field's address (answered by the root only).
     root_vtable: *const RootVtbl,
+    /// The `IRawElementProviderHwndOverride` interface pointer is this
+    /// field's address (answered by a window's root only).
+    hwnd_override_vtable: *const HwndOverrideVtbl,
     /// The `IInvokeProvider` interface pointer is this field's address.
     invoke_vtable: *const InvokeVtbl,
     // The other patterns' interface pointers, each its field's address (see
@@ -481,6 +502,9 @@ unsafe fn query(p: *mut Provider, iid: *const Guid, ppv: *mut *mut c_void) -> Hr
             IID_IUnknown | IID_IRawElementProviderSimple => p as *mut c_void,
             IID_IRawElementProviderFragment => fragment_of(p),
             IID_IRawElementProviderFragmentRoot if (*p).parent.is_null() => root_of(p),
+            IID_IRawElementProviderHwndOverride if is_hosted_root(p) => {
+                &raw mut (*p).hwnd_override_vtable as *mut c_void
+            }
             _ => return E_NOINTERFACE,
         };
         add_ref(p as *mut c_void);
@@ -528,6 +552,99 @@ unsafe extern "system" fn root_add_ref(this: *mut c_void) -> u32 {
 unsafe extern "system" fn root_release(this: *mut c_void) -> u32 {
     unsafe { release(root_owner(this) as *mut c_void) }
 }
+
+/// The provider an `IRawElementProviderHwndOverride` pointer belongs to.
+unsafe fn override_owner(this: *mut c_void) -> *mut Provider {
+    unsafe {
+        (this as *mut u8).sub(core::mem::offset_of!(Provider, hwnd_override_vtable))
+            as *mut Provider
+    }
+}
+
+unsafe extern "system" fn override_qi(
+    this: *mut c_void,
+    iid: *const Guid,
+    ppv: *mut *mut c_void,
+) -> Hresult {
+    unsafe { query(override_owner(this), iid, ppv) }
+}
+
+unsafe extern "system" fn override_add_ref(this: *mut c_void) -> u32 {
+    unsafe { add_ref(override_owner(this) as *mut c_void) }
+}
+
+unsafe extern "system" fn override_release(this: *mut c_void) -> u32 {
+    unsafe { release(override_owner(this) as *mut c_void) }
+}
+
+/// The child window a live OS control is shown in, for the node `p` it
+/// stands for (`A11yNode::native_view`), if it is shown now.
+unsafe fn native_child(p: *const Provider) -> *mut c_void {
+    unsafe {
+        let hwnd = (*p).hwnd;
+        if hwnd.is_null() || (*p).parent.is_null() {
+            return core::ptr::null_mut();
+        }
+        node_of(p)
+            .and_then(|n| n.native_view)
+            .and_then(|id| crate::platform::native::os_views::handle_of(hwnd, id))
+            .unwrap_or(core::ptr::null_mut())
+    }
+}
+
+/// The node of the tree under `p` that the live control in child window
+/// `child` stands for.
+unsafe fn find_native(p: *mut Provider, child: *mut c_void) -> *mut Provider {
+    unsafe {
+        if native_child(p) == child {
+            return p;
+        }
+        let children: &[*mut Provider] = &(*p).children;
+        for &c in children {
+            let f = find_native(c, child);
+            if !f.is_null() {
+                return f;
+            }
+        }
+        core::ptr::null_mut()
+    }
+}
+
+/// `GetOverrideProviderForHwnd`: a live OS control's child window is the
+/// node it stands for, where that node is in the tree. UIA would otherwise
+/// list each child window by itself, ahead of the app's tree, read through
+/// whatever proxy its class has (the .NET client's reads a pane, with no
+/// Invoke), and a screen reader walking the tree couldn't get from those to
+/// the rest of the window. The node stays a plain fragment (no host
+/// provider of its own): hosting it by the child window made UIA walk the
+/// child windows as siblings again from there, and the .NET client's
+/// walk of the window never ended.
+unsafe extern "system" fn get_override_provider_for_hwnd(
+    this: *mut c_void,
+    child: *mut c_void,
+    ret: *mut *mut c_void,
+) -> Hresult {
+    unsafe {
+        if ret.is_null() {
+            return E_POINTER;
+        }
+        let root = live_root((*override_owner(this)).root);
+        let found = if child.is_null() {
+            core::ptr::null_mut()
+        } else {
+            find_native(root, child)
+        };
+        yield_provider(found, |p| p as *mut c_void, ret);
+    }
+    S_OK
+}
+
+static HWND_OVERRIDE_VTBL: HwndOverrideVtbl = HwndOverrideVtbl {
+    query_interface: override_qi,
+    add_ref: override_add_ref,
+    release: override_release,
+    get_override_provider_for_hwnd,
+};
 
 unsafe extern "system" fn add_ref(this: *mut c_void) -> u32 {
     unsafe {
@@ -1120,6 +1237,7 @@ impl UiaTree {
                     vtable: &PROVIDER_VTBL,
                     fragment_vtable: &FRAGMENT_VTBL,
                     root_vtable: &ROOT_VTBL,
+                    hwnd_override_vtable: &HWND_OVERRIDE_VTBL,
                     invoke_vtable: &INVOKE_VTBL,
                     value_vtable: &patterns::VALUE_VTBL,
                     toggle_vtable: &patterns::TOGGLE_VTBL,

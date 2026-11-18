@@ -921,16 +921,49 @@ pub mod simulate {
         crate::platform::native::objc::with_pool(|| unsafe { a11y::read_elements(view) })
     }
 
-    /// Activate the element at `index`, as VoiceOver's double tap does
-    /// (`accessibilityActivate`).
+    /// Activate the element at `index`, as VoiceOver's double tap does:
+    /// `accessibilityActivate`, and where the element doesn't activate
+    /// itself that way (a live OS control), a tap at its middle, to the view
+    /// UIKit's hit test finds there (the app's view, which takes a live
+    /// button's touches, or a control, which then gets its tap's action).
     pub fn activate_accessibility_element(index: usize) {
+        /// The finger a double tap's tap is.
+        const TAP: u64 = u64::MAX - 3;
         later(move || {
             let view = view();
-            if !view.is_null() {
-                let done = unsafe { a11y::activate_at(view, index) };
-                crate::platform::window::debug_window(format_args!(
-                    "accessibilityActivate {index}: {done}"
-                ));
+            if view.is_null() {
+                return;
+            }
+            let done = unsafe { a11y::activate_at(view, index) };
+            crate::platform::window::debug_window(format_args!(
+                "accessibilityActivate {index}: {done}"
+            ));
+            if done {
+                return;
+            }
+            let Some((hit, at)) = (unsafe { a11y::double_tap_at(view, index) }) else {
+                return;
+            };
+            crate::platform::window::debug_window(format_args!(
+                "double tap {index} at {at:?}: on the view {}",
+                hit == view
+            ));
+            if hit == view {
+                touch_input(TouchPhase::Started, &[(TAP, at)]);
+                later(move || touch_input(TouchPhase::Ended, &[(TAP, at)]));
+            } else if !hit.is_null() {
+                // UIControlEventTouchUpInside.
+                let events: u64 = 1 << 6;
+                let send = sel("sendActionsForControlEvents:");
+                unsafe {
+                    let responds: unsafe extern "C" fn(Id, Sel, Sel) -> bool =
+                        std::mem::transmute(objc_msgSend as *const c_void);
+                    let f: unsafe extern "C" fn(Id, Sel, u64) =
+                        std::mem::transmute(objc_msgSend as *const c_void);
+                    if responds(hit, sel("respondsToSelector:"), send) {
+                        f(hit, send, events);
+                    }
+                }
             }
         });
     }
@@ -1230,13 +1263,6 @@ thread_local! {
     static IN_HANDLER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static DEFERRED: RefCell<std::collections::VecDeque<Event>> =
         const { RefCell::new(std::collections::VecDeque::new()) };
-}
-
-/// A finger the app's view didn't get as a touch of its own (one that went
-/// down on a live OS control, and moved on as a pan: `native::os_views`),
-/// through the touch path, as if it had.
-pub(crate) fn forwarded_touch(phase: TouchPhase, id: u64, at: Point) {
-    touch_input(phase, &[(id, at)]);
 }
 
 /// Deliver `event` to the app from a callback of the backend's (a live OS

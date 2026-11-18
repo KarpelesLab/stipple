@@ -538,6 +538,45 @@ pub(super) unsafe fn read_elements(view: Id) -> Vec<AccessibilityElement> {
     }
 }
 
+/// For self-tests: where VoiceOver's double tap lands on the element at
+/// `index` when it doesn't activate itself (`accessibilityActivate`
+/// answers NO, as a live `UIButton` does): a tap at its activation point
+/// (the middle of its `accessibilityFrame`), in `view`'s coordinates, and
+/// the view UIKit's hit test delivers it to there.
+///
+/// # Safety
+/// `view` must be the live `StippleUIView`.
+pub(super) unsafe fn double_tap_at(view: Id, index: usize) -> Option<(Id, Point)> {
+    unsafe {
+        let el = msg_id_usize(view, sel("accessibilityElementAtIndex:"), index);
+        if el.is_null() {
+            return None;
+        }
+        let f = super::msg_rect(el, sel("accessibilityFrame"));
+        let mid = CgPoint {
+            x: f.origin.x + f.size.width / 2.0,
+            y: f.origin.y + f.size.height / 2.0,
+        };
+        let window = msg_id(view, sel("window"));
+        let screen = if window.is_null() {
+            std::ptr::null_mut()
+        } else {
+            msg_id(window, sel("screen"))
+        };
+        if screen.is_null() {
+            return None;
+        }
+        let space = msg_id(screen, sel("coordinateSpace"));
+        let convert: unsafe extern "C" fn(Id, Sel, CgPoint, Id) -> CgPoint =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let at = convert(view, sel("convertPoint:fromCoordinateSpace:"), mid, space);
+        let hit_test: unsafe extern "C" fn(Id, Sel, CgPoint, Id) -> Id =
+            std::mem::transmute(objc_msgSend as *const c_void);
+        let hit = hit_test(view, sel("hitTest:withEvent:"), at, std::ptr::null_mut());
+        Some((hit, Point::new(at.x, at.y)))
+    }
+}
+
 /// For self-tests: `[[view accessibilityElementAtIndex:index] accessibilityActivate]`.
 ///
 /// # Safety

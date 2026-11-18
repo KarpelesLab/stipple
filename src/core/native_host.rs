@@ -490,6 +490,7 @@ impl Walk {
                 font_size,
                 label,
                 enabled,
+                pressed: deco.state.pressed,
                 dark: deco.dark,
                 rtl: node.rtl,
                 menu: choices.as_ref().map(|c| NativeMenu {

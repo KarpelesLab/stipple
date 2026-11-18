@@ -4247,7 +4247,8 @@ jobs:
           [ "$status" = 0 ]
           grep -q 'axprobe: trusted=true' $L
           grep -qE 'axprobe: role=AXWindow .*title="Stipple Touch"' $L
-          grep -qE 'role=AXButton desc="Row 0" frame=' $L
+          # (A live NSButton has its title too, which axprobe prints.)
+          grep -qE 'role=AXButton desc="Row 0" (title="Row 0" )?frame=' $L
           grep -qE 'role=AXTextField .*frame=' $L
           grep -qE 'role=AXStaticText desc="Rows tapped: [0-9]+"' $L
           # Frames are in screen coordinates: the button lies inside its window.

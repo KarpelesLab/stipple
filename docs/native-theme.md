@@ -55,8 +55,9 @@ those changes.
 In a window on iOS, macOS and Windows, each OS-backed control is a real
 `UIView`, `NSView` or child `HWND` over the control's box, live: the OS
 draws it every frame with its own effects (iOS 26's and macOS 26's Liquid
-Glass, a switch's slide, a button's press, vibrancy), handles its touches
-and clicks, and speaks for it to screen readers. Stipple lays it out and
+Glass, a switch's slide, a button's press, vibrancy), handles its clicks
+(on iOS a button's and a switch's touches stay the app's, below), and speaks
+for it to screen readers. Stipple lays it out and
 says what it shows; the app's code doesn't change: `button(..)`,
 `switch(..)`, `slider(..)` still return Elements whose handlers run.
 
@@ -125,7 +126,11 @@ OS's controls over it.
   handler for that option. The state is the app's: the window is handed
   the list again after every event, and a control the user acted on is set
   to it even if it didn't change, so a switch the handler didn't turn on
-  goes back off, and a pick it refused goes back, on the next frame. The OS controls don't take the keyboard focus
+  goes back off, and a pick it refused goes back, on the next frame. On iOS a button's and a switch's touches are
+  the app's view's, as a picture's would be: a drag that starts on one
+  scrolls its list, a long press opens its context menu, an edge swipe goes
+  back, and a tap is the element's tap (the button shows UIKit's pressed
+  look while the app holds it, `NativeView::pressed`). The OS controls don't take the keyboard focus
   (AppKit's refuse first responder, Win32's give it back): keys, Tab and the
   focus ring stay Stipple's.
 - **Scroll areas.** Each scroll area that holds live controls is a
@@ -148,9 +153,9 @@ OS's controls over it.
   doesn't say it again: the node it stands for (the button, or the
   checkbox's row) carries its id (`AccessNode::native_view`), and the bridge
   exposes the OS control in its place, named with that node's name (VoiceOver
-  on iOS and macOS gets the `UISwitch` / `NSButton` in the view's elements),
-  or leaves the node out where the OS lists the control by itself (Win32's
-  child windows, under UI Automation).
+  on iOS and macOS gets the `UISwitch` / `NSButton` in the view's elements;
+  under UI Automation the window's provider puts the control's child window
+  at the node, as one element with the node's role, name and Invoke).
 
 ### When it's a picture instead
 
@@ -176,10 +181,10 @@ long as:
 - it's leaving (an exit animation) or off stage.
 
 The switch is per control and per frame, and the two look the same, so it
-doesn't show. On iOS a finger that goes down on a live button, switch or
-select and drags scrolls, as in a `UIScrollView` (a pan recognizer hands the
-drag to the app's view and the control doesn't fire); a slider keeps its
-drags. On macOS a scroll wheel or trackpad scroll over a control goes on to
+doesn't show. On iOS a live button's and switch's touches are the app's
+view's, so a drag that starts on one scrolls as on a picture; a slider and
+a select keep their touches (a drag that starts on a select doesn't scroll
+its list yet). On macOS a scroll wheel or trackpad scroll over a control goes on to
 the app's view; on Windows a button passes the wheel to its parent, and a
 closed select's is passed on for it.
 

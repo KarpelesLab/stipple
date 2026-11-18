@@ -45,8 +45,11 @@ painting (`WS_CLIPCHILDREN`) and answers their `WM_PRINTCLIENT` with its
 frame, which is what shows behind a themed button's rounded corners. A click
 (`BN_CLICKED`) or a slider's move (`WM_HSCROLL`) reaches the app as the
 element's tap or drag, and the keyboard focus goes back to the window. Under
-UI Automation each is its child window's element, so the app's tree leaves its
-node out. Checkboxes and radio buttons stay pictures (a Win32 one shows and is
+UI Automation the window's provider places each child window at its node, in
+the app's tree (`IRawElementProviderHwndOverride`): one element, with the
+node's role, name and Invoke, where a client walking the tree (NVDA's object
+navigation, its say-all) reaches it between its neighbors, instead of a
+separate element ahead of the app's tree that the .NET client reads as a pane. Checkboxes and radio buttons stay pictures (a Win32 one shows and is
 named by a text of its own, where Stipple draws the label beside the box).
 
 A `select` is a `COMBOBOX` (`CBS_DROPDOWNLIST`, `DarkMode_CFD` in dark
