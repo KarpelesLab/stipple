@@ -613,6 +613,11 @@ wait for the answer (an SSH host-key prompt) sends it back over a channel from
 the closure and waits on that, not on the UI. Boxes asked for while one is up
 wait their turn.
 
+`.window(id)` says which window a box is about (an SSH prompt belongs to its
+session's window): it's drawn in that window, a sheet on it on macOS, and
+owned by it on Windows. Without it, a drawn box goes in the primary window
+and a native one on the key or active window.
+
 | | How |
 |---|---|
 | Windows | `TaskDialogIndirect`, with common controls 6 activated for the call (an executable without a manifest gets version 5, which has no task dialog; shell32's manifest resource asks for 6), else `MessageBoxW` when the buttons are a standard set (OK, OK/Cancel, Yes/No, Yes/No/Cancel, Retry/Cancel, Abort/Retry/Ignore). It runs on a thread of its own, owned by the active window, which it disables while it's up |
@@ -621,8 +626,8 @@ wait their turn.
 | Web | `window.alert` for one button and `window.confirm` for two; they block the page, as browsers do. More buttons are drawn |
 | Linux, Android | drawn in the window (no toolkit-free alert API exists on Linux, and the desktop portal has none; Android's `AlertDialog` needs a Java listener class) |
 
-A box drawn in the window is a panel in the theme over a scrim, in the primary
-window: an icon for its kind, the message and detail, the text field, and the
+A box drawn in the window is a panel in the theme over a scrim, in its window
+(the primary one by default): an icon for its kind, the message and detail, the text field, and the
 buttons, the default one filled. The default button (or the text field) takes
 focus while it's up, and focus goes back after; Enter presses the default
 button and Escape the cancel one. Clicks outside it do nothing. It's a `Dialog`

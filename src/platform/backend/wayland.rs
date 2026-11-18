@@ -42,6 +42,7 @@ mod decor;
 mod dmabuf;
 /// Raw key events and client-side key repeat.
 mod keys;
+mod owned;
 mod pointer;
 /// Explicit sync for GPU frames (`wp_linux_drm_syncobj_v1`).
 #[cfg_attr(not(any(feature = "gl", feature = "vk")), allow(dead_code))]
@@ -1451,6 +1452,7 @@ impl Window for WaylandWindow {
     }
     fn close_window(&self) {
         crate::platform::atspi::closed(self.id());
+        owned::forget(self.surface);
         self.reg.borrow_mut().closed.push(self.surface);
     }
     fn set_visible(&self, visible: bool) {

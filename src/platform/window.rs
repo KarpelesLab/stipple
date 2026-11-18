@@ -288,6 +288,28 @@ pub struct WindowAttributes {
     /// the bundle (`Info.plist`, the manifest). See
     /// [`App::orientations`](crate::App::orientations).
     pub orientations: Option<Orientations>,
+    /// The window this one belongs to (a dialog's terminal window, say): it
+    /// stays above it, opens centered on it, and goes away with it.
+    /// `WM_TRANSIENT_FOR` and the dialog window type on X11,
+    /// `xdg_toplevel.set_parent` on Wayland, the owner window on Windows,
+    /// and a child window (or, with [`sheet`](Self::sheet), a sheet) on
+    /// macOS. The id is the app's (from
+    /// [`App::open_window`](crate::App::open_window),
+    /// [`AppHandle::open_window`](crate::core::AppHandle::open_window) or
+    /// [`Cx::window_id`](crate::core::Cx::window_id)); the app hands the
+    /// backend its own. `None` by default.
+    pub parent: Option<WindowId>,
+    /// While this window is open, its [`parent`](Self::parent) takes no
+    /// input: the parent is disabled on Windows, and marked modal for the
+    /// window manager on X11 (`_NET_WM_STATE_MODAL`); everywhere the app
+    /// drops the parent's pointer and key input meanwhile. `false` by
+    /// default; it needs a parent.
+    pub modal: bool,
+    /// On macOS, show the window as a sheet sliding out of its
+    /// [`parent`](Self::parent)'s title bar, which blocks the parent (as
+    /// [`modal`](Self::modal) does) until it closes. Elsewhere it's a
+    /// modal window. `false` by default; it needs a parent.
+    pub sheet: bool,
 }
 
 impl Default for WindowAttributes {
@@ -309,6 +331,9 @@ impl Default for WindowAttributes {
             focus: true,
             edge_to_edge: false,
             orientations: None,
+            parent: None,
+            modal: false,
+            sheet: false,
         }
     }
 }
@@ -415,6 +440,33 @@ impl WindowAttributes {
     pub fn orientations(mut self, set: Orientations) -> Self {
         self.orientations = Some(set);
         self
+    }
+
+    /// Make the window belong to window `parent` (see
+    /// [`parent`](Self::parent)): above it, centered on it, gone with it.
+    pub fn parent(mut self, parent: WindowId) -> Self {
+        self.parent = Some(parent);
+        self
+    }
+
+    /// Block the [`parent`](Self::parent) while this window is open (see
+    /// [`modal`](Self::modal)).
+    pub fn modal(mut self, modal: bool) -> Self {
+        self.modal = modal;
+        self
+    }
+
+    /// On macOS, a sheet on the [`parent`](Self::parent) (see
+    /// [`sheet`](Self::sheet)); a modal window elsewhere.
+    pub fn sheet(mut self, sheet: bool) -> Self {
+        self.sheet = sheet;
+        self
+    }
+
+    /// Whether the window blocks its parent: [`modal`](Self::modal) or a
+    /// [`sheet`](Self::sheet), with a parent.
+    pub(crate) fn blocks_parent(&self) -> bool {
+        self.parent.is_some() && (self.modal || self.sheet)
     }
 }
 

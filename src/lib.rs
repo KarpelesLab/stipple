@@ -42,6 +42,7 @@ mod a11y_scroll_tests;
 pub mod anim;
 mod app_clipboard;
 mod app_dnd;
+mod app_focus;
 mod app_frame;
 mod app_gamepad;
 mod app_gpu;
@@ -51,6 +52,7 @@ mod app_locale;
 mod app_native_views;
 mod app_network;
 mod app_occlusion;
+mod app_owned;
 mod app_pointer;
 mod app_scroll_bar;
 mod app_select;
@@ -63,6 +65,8 @@ mod canvas_tests;
 pub mod core;
 #[cfg(test)]
 mod flow_tests;
+#[cfg(test)]
+mod focus_tests;
 pub mod game;
 pub mod geometry;
 #[cfg(feature = "gpu")]
@@ -518,6 +522,8 @@ struct Pane<S> {
     // With a modal overlay up, how many of the root's layers it and those
     // above it take, at the end: Tab stays among them (see `tab_focus`).
     modal_layers: Option<usize>,
+    // Autofocus, focus asked for by key, and dialogs' default actions.
+    focus_state: app_focus::FocusState<S>,
     // The element showing input-method composition text, so it can be told to
     // drop it when focus moves away mid-composition.
     preedit_owner: Option<FocusId>,
@@ -631,6 +637,7 @@ impl<S: 'static> Pane<S> {
             primary: false,
             alert_return: None,
             modal_layers: None,
+            focus_state: Default::default(),
             preedit_owner: None,
             option_sent: Default::default(),
             memo_cache: Default::default(),
@@ -1364,11 +1371,8 @@ impl<S: 'static> Pane<S> {
         self.context_menus = cx.take_context_menus();
         crate::widgets::menus::context(&mut cx, &theme, &self.context_menus, &self.menu_ui);
         // A message box drawn in the window, over everything else.
-        let alert_focus = if self.primary {
-            crate::widgets::alert::overlay(&mut cx, &theme, &self.handle)
-        } else {
-            None
-        };
+        let alert_focus =
+            crate::widgets::alert::overlay(&mut cx, &theme, &self.handle, self.primary);
         // The animation timeline, or `None` where there's no clock.
         let now = crate::platform::frame::now().map(|_| cx.frame_time());
         let frame_requested = cx.frame_requested();
@@ -1387,6 +1391,9 @@ impl<S: 'static> Pane<S> {
         self.dnd.queried = cx.take_drop_queried();
         let queried = cx.take_interaction_queried();
         self.backs = cx.take_back_handlers();
+        let focus_requests = cx.take_focus_requests();
+        self.focus_state.defaults = cx.take_default_actions();
+        self.focus_state.submitting = cx.submitting_fields();
         self.handlers = cx.into_handlers();
         // Lower the tree: give elements their identities, apply the overrides
         // of the states they're in, and animate what changed.
@@ -1621,6 +1628,8 @@ impl<S: 'static> Pane<S> {
         if crate::core::presence::retire_offstage(&mut tree, self.focused) {
             self.focused = None;
         }
+        // Focus the view asked for, and autofocus elements that appeared.
+        let refocused = self.apply_focus(&tree, focus_requests);
         // The scroll bars of the containers whose content overflows.
         self.stamp_scroll_bars(&mut tree, &theme, now);
         // A spatial group (a game's menu) takes focus when nothing in the
@@ -1654,7 +1663,7 @@ impl<S: 'static> Pane<S> {
         self.plan_native_views(&mut tree);
         self.tree = Some(tree);
         self.dirty = false;
-        if entered.is_some() {
+        if entered.is_some() || refocused {
             // Built before it had focus: again, with its focused look.
             self.dirty = true;
             crate::platform::frame::request();
@@ -3067,6 +3076,11 @@ impl<S: 'static> App<S> {
     }
 
     fn pane_press_key(&mut self, idx: usize, input: KeyInput) -> bool {
+        // Enter runs an open dialog's default action; Escape in a field
+        // closes the dialog.
+        if self.default_enter(idx, &input) || self.escape_first(idx, &input) {
+            return true;
+        }
         // A field whose action key is Next: Enter submits it (a single-line
         // one), then focus moves on.
         if matches!(input, KeyInput::Enter) {
@@ -3595,6 +3609,10 @@ impl<S: 'static> App<S> {
             // but a wake.
             if !matches!(event, Event::Wake | Event::Occluded(_)) {
                 self.window_seen(idx);
+            }
+            // A modal window over this one holds its input back.
+            if is_input && self.input_blocked(idx, &event) {
+                return ControlFlow::Wait;
             }
             // Pointer buttons, moves and wheels reach `on_pointer` and
             // `on_wheel` handlers first.
@@ -4183,7 +4201,7 @@ impl<S: 'static> App<S> {
         self.panes[0].native = Some(window.id());
         let mut idx = 1;
         while idx < self.panes.len() {
-            let attrs = self.panes[idx].attrs.clone();
+            let attrs = self.native_attrs(self.panes[idx].attrs.clone());
             match window.open_window(attrs) {
                 Some(native) => {
                     self.panes[idx].native = Some(native);
@@ -4200,6 +4218,9 @@ impl<S: 'static> App<S> {
             pane.dark_sent = pane.attrs.dark;
             pane.info = provisional_info(&pane.attrs, scale);
             self.handle.set_window_info(pane.id, Some(pane.info));
+            if let Some(native) = pane.native {
+                self.handle.set_native(pane.id, native);
+            }
         }
     }
 
@@ -4215,7 +4236,7 @@ impl<S: 'static> App<S> {
             attrs
                 .background
                 .get_or_insert(self.theme.palette.background);
-            let Some(native) = window.open_window(attrs.clone()) else {
+            let Some(native) = window.open_window(self.native_attrs(attrs.clone())) else {
                 app_dbg(format_args!("the backend has a single window"));
                 continue;
             };
@@ -4226,6 +4247,7 @@ impl<S: 'static> App<S> {
             pane.info = provisional_info(&attrs, window.scale_factor());
             pane.attrs = attrs;
             self.handle.set_window_info(pane.id, Some(pane.info));
+            self.handle.set_native(pane.id, native);
             self.panes.push(pane);
             surfaces.push(None);
         }
@@ -4250,6 +4272,8 @@ impl<S: 'static> App<S> {
         host: &mut Option<WindowId>,
     ) -> ControlFlow {
         let id = self.panes[idx].id;
+        // The windows that belong to it go with it.
+        self.close_children(id);
         let last = self.panes.len() == 1;
         // A locked pointer goes free with its window.
         if self.panes[idx].pointer.locked {

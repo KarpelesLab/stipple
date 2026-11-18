@@ -109,6 +109,11 @@ pub(super) fn create(
     let mut a = Vec::new();
     arg_str(&mut a, &attrs.title);
     conn.send(toplevel, XDG_TOPLEVEL_SET_TITLE, &a)?;
+    // A window that belongs to another stays above it.
+    super::owned::note(surface, toplevel);
+    if let Some(parent) = attrs.parent {
+        super::owned::set_parent(conn, toplevel, parent.0 as u32)?;
+    }
     // The id the app gave (`App::app_info`), which the compositor matches to
     // its `.desktop` file; without one, the compositor picks.
     if let Some(id) = crate::platform::bundle::given_id() {

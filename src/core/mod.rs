@@ -99,6 +99,7 @@ pub use runtime::{
     FocusId, Handlers, KeyInput, LayoutNode, OverlaySpec, ScrollId, ScrollRequests, TextHit,
     TextPosId, ViewportEvent, ViewportId, hit_test, local_point, node_to_window,
 };
+pub(crate) use runtime::{DefaultAction, FocusRequest};
 pub(crate) use runtime::{
     MemoCache, NodeContent, ScrollTargets, collect_focusables, collect_viewports, context_at,
     cursor_at, drag_hit_at, drag_source_at, drop_at, find_action, find_drop, find_focus,

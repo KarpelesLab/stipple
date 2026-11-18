@@ -1913,7 +1913,7 @@ impl Element {
         }
     }
 
-    fn reactive_mut(&mut self) -> &mut Reactive {
+    pub(crate) fn reactive_mut(&mut self) -> &mut Reactive {
         self.reactive.get_or_insert_with(Default::default)
     }
 

@@ -194,6 +194,11 @@ impl<S> FieldHooks<S> {
         }
     }
 
+    /// Whether Enter runs anything (an `on_submit` handler).
+    pub(crate) fn submits(&self) -> bool {
+        !self.submit.borrow().is_empty()
+    }
+
     /// Run the change handlers.
     pub(crate) fn changed(&self, state: &mut S) {
         for handler in self.change.borrow_mut().iter_mut() {

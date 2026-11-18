@@ -420,6 +420,10 @@ needs = "A desktop's file dialog (the portal on Linux, IFileDialog, NSOpenPanel)
 description = "Two real OS windows (X11), each a pane with its own view onto the shared app state."
 needs = "A desktop: two OS windows on one state. The web has one canvas per app."
 
+[native.ownedwindows]
+description = "Windows that belong to another: a modal Preferences sheet, an owned tool window, a message box for one window, and a find bar that takes focus as it opens."
+needs = "A desktop: windows owned by other windows. The web has one canvas per app."
+
 [native.asyncdemo]
 description = "Timers and background work updating the UI through an AppHandle."
 needs = "Threads: it runs background work on a thread, which `wasm32-unknown-unknown` doesn't have."

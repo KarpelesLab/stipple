@@ -18,15 +18,17 @@ use super::{Button, PasswordField, Variant, field_text};
 /// The panel's width, in logical pixels.
 const WIDTH: f64 = 400.0;
 
-/// Draw the first message box waiting on `handle` as a modal overlay, if
-/// there is one. Returns the focus that should be in it while it's up (its
+/// Draw the first message box waiting on `handle` for this window as a
+/// modal overlay, if there is one (`primary`: this is the primary window,
+/// which shows those for no window). Returns the focus that should be in it while it's up (its
 /// text field, or else its default button).
 pub(crate) fn overlay<S: 'static>(
     cx: &mut Cx<S>,
     theme: &Theme,
     handle: &AppHandle<S>,
+    primary: bool,
 ) -> Option<FocusId> {
-    let AlertView { id, mb, input } = handle.alert_view()?;
+    let AlertView { id, mb, input } = handle.alert_view(cx.window_id(), primary)?;
     let p = theme.palette;
     let labels = mb.button_labels();
     let default = mb.default_index();

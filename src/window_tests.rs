@@ -72,6 +72,13 @@ impl Window for FakeWindow {
             .log
             .borrow_mut()
             .push(format!("open {id} {} focus={}", attrs.title, attrs.focus));
+        if let Some(parent) = attrs.parent {
+            self.desk.log.borrow_mut().push(format!(
+                "parent {id} {} modal={}",
+                parent.0,
+                attrs.blocks_parent()
+            ));
+        }
         Some(WindowId(id))
     }
     fn close_window(&self) {
@@ -516,5 +523,113 @@ fn the_focused_fields_keyboard_hints_reach_the_window_and_the_view_sees_the_keyb
         run.desk
             .take_log()
             .contains(&"title 100 keyboard 60 bottom 0".to_string())
+    );
+}
+
+#[test]
+fn a_modal_window_belongs_to_its_parent_blocks_it_and_closes_with_it() {
+    let app = App::new(doc(), titled)
+        .no_font()
+        .logical_size(Size::new(200.0, 100.0));
+    let handle = app.handle();
+    let mut run = run(app);
+    run.desk.take_log();
+    // The backend hears the parent by its own id (100), not the app's (0).
+    let child = handle.open_window(
+        WindowAttributes::new()
+            .title("Prefs")
+            .parent(WindowId::PRIMARY)
+            .modal(true),
+        |_: &Doc, _: &mut Cx<Doc>| crate::widgets::spacer(),
+    );
+    run.wake();
+    assert_eq!(
+        run.desk.take_log(),
+        ["open 101 Prefs focus=true", "parent 101 100 modal=true"]
+    );
+    run.send(101, Event::RedrawRequested);
+    run.desk.take_log();
+
+    // Clicks in the parent don't reach it while the modal window is open,
+    // and neither does closing it.
+    let click = |run: &mut Run<_>| {
+        for state in [ButtonState::Pressed, ButtonState::Released] {
+            run.send(
+                100,
+                Event::PointerButton {
+                    button: PointerButton::Left,
+                    state,
+                    position: Point::new(50.0, 50.0),
+                },
+            );
+        }
+    };
+    click(&mut run);
+    assert!(run.desk.take_log().is_empty());
+    assert_eq!(run.send(100, Event::CloseRequested), ControlFlow::Wait);
+    assert_eq!(handle.windows(), [WindowId::PRIMARY, child]);
+
+    // Once it closes, the parent takes input again.
+    handle.close_window(child);
+    run.wake();
+    assert_eq!(run.desk.take_log(), ["close 101"]);
+    click(&mut run);
+    assert_eq!(run.desk.take_log(), ["title 100 a.txt (1)"]);
+
+    // A window that belongs to another closes with it.
+    let other = handle.open_window(
+        WindowAttributes::new()
+            .title("Owned")
+            .parent(WindowId::PRIMARY),
+        |_: &Doc, _: &mut Cx<Doc>| crate::widgets::spacer(),
+    );
+    let second = handle.open_window(WindowAttributes::new().title("Second"), titled);
+    run.wake();
+    let log = run.desk.take_log();
+    assert!(
+        log.contains(&"parent 102 100 modal=false".to_string()),
+        "{log:?}"
+    );
+    assert_eq!(handle.windows(), [WindowId::PRIMARY, other, second]);
+    assert_eq!(run.send(100, Event::CloseRequested), ControlFlow::Wait);
+    run.wake();
+    assert_eq!(handle.windows(), [second]);
+}
+
+#[test]
+fn a_drawn_message_box_shows_in_the_window_it_is_for() {
+    let app = App::new(doc(), titled)
+        .no_font()
+        .logical_size(Size::new(400.0, 300.0));
+    let handle = app.handle();
+    let mut run = run(app);
+    let other = handle.open_window(
+        WindowAttributes::new().title("Other"),
+        |_: &Doc, _: &mut Cx<Doc>| crate::widgets::spacer(),
+    );
+    run.wake();
+    handle.message(
+        crate::platform::dialog::MessageBox::new("Host key changed")
+            .drawn(true)
+            .window(other),
+        |_: &mut Doc, _| {},
+    );
+    // Drawn in the other window only.
+    let seen = handle.alert_view(other, false).map(|v| v.mb.text);
+    assert_eq!(seen, None, "not asked yet: the pump starts it");
+    run.wake();
+    assert!(handle.alert_view(other, false).is_some());
+    assert!(handle.alert_view(WindowId::PRIMARY, true).is_none());
+    // A box for no window shows in the primary one.
+    handle.message(
+        crate::platform::dialog::MessageBox::new("Saved").drawn(true),
+        |_: &mut Doc, _| {},
+    );
+    run.wake();
+    assert_eq!(
+        handle
+            .alert_view(WindowId::PRIMARY, true)
+            .map(|v| v.mb.text),
+        Some("Saved".to_string())
     );
 }

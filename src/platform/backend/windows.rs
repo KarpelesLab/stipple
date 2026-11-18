@@ -42,6 +42,7 @@ mod ime;
 /// Raw key events (`Event::RawKey`).
 mod keys;
 mod occlusion;
+mod owned;
 /// `WM_MOUSELEAVE` and the double-click settings.
 mod pointer;
 /// The notification-area icon and notification balloons.
@@ -1548,6 +1549,11 @@ impl Window for WinWindow {
     }
     fn open_window(&self, attrs: WindowAttributes) -> Option<WindowId> {
         let hwnd = create_window(&attrs).ok()?;
+        if attrs.blocks_parent()
+            && let Some(owner) = owned::owner_of(&attrs)
+        {
+            owned::begin_modal(hwnd, owner);
+        }
         show_window(hwnd, &attrs, attrs.focus);
         // The loop adopts it once the handler returns, then draws it.
         CTX.with(|c| c.borrow_mut().opened.push(hwnd as usize));
@@ -1868,12 +1874,16 @@ fn create_window(attrs: &WindowAttributes) -> Result<Hwnd, PlatformError> {
         style &= !(WS_THICKFRAME | WS_MAXIMIZEBOX);
         (min, max) = (Some(attrs.logical_size), Some(attrs.logical_size));
     }
-    let (x, y) = match attrs.position {
-        Some((x, y)) => (
+    // A window that belongs to another is owned by it, and opens centered
+    // on it.
+    let owner = owned::owner_of(attrs);
+    let (x, y) = match (attrs.position, owner) {
+        (Some((x, y)), _) => (
             (x as f64 * scale.get()).round() as i32,
             (y as f64 * scale.get()).round() as i32,
         ),
-        None => (CW_USEDEFAULT, CW_USEDEFAULT),
+        (None, Some(owner)) => owned::centered_on(owner, size.width as i32, size.height as i32),
+        (None, None) => (CW_USEDEFAULT, CW_USEDEFAULT),
     };
     // Size limits, read on `WM_GETMINMAXINFO` (first sent while creating).
     let increments = attrs.resize_increments;
@@ -1888,7 +1898,7 @@ fn create_window(attrs: &WindowAttributes) -> Result<Hwnd, PlatformError> {
             y,
             size.width as i32,
             size.height as i32,
-            std::ptr::null_mut(),
+            owner.unwrap_or(std::ptr::null_mut()),
             std::ptr::null_mut(),
             GetModuleHandleW(std::ptr::null()),
             std::ptr::null_mut(),
@@ -1983,6 +1993,7 @@ fn settle(windows: &mut Vec<WinWindow>) {
     for hwnd in closed {
         if let Some(pos) = windows.iter().position(|w| w.hwnd as usize == hwnd) {
             windows.remove(pos);
+            owned::closing(hwnd as Hwnd);
             unsafe { DestroyWindow(hwnd as Hwnd) };
             debug_window(format_args!("closed {:#x}", hwnd as u64));
         }

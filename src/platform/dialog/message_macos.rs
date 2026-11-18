@@ -148,7 +148,14 @@ pub(super) fn show(mb: &MessageBox, done: MessageDone) -> Result<(), MessageDone
             }
             None => std::ptr::null_mut(),
         };
-        let mut window = msg!(app, "keyWindow", () -> Id);
+        // The window it is about, else the key one.
+        let mut window = mb
+            .window
+            .and_then(crate::platform::backend::macos::ns_window)
+            .map_or(std::ptr::null_mut(), |w| w as Id);
+        if window.is_null() {
+            window = msg!(app, "keyWindow", () -> Id);
+        }
         if window.is_null() {
             window = msg!(app, "mainWindow", () -> Id);
         }

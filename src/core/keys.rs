@@ -46,6 +46,8 @@ pub(crate) struct KeyConfig {
     /// The arrow keys move focus among the controls inside the element
     /// (see [`Element::focus_group`]).
     pub focus_group: Option<FocusGroup>,
+    /// Take focus when first laid out (see [`Element::autofocus`]).
+    pub autofocus: bool,
 }
 
 /// How the arrow keys move focus among the controls a tap activates inside

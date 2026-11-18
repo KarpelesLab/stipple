@@ -121,6 +121,37 @@ one let go outside them all can open a window of its own (see
 [drag-and-drop.md](drag-and-drop.md#across-windows-and-out-of-them) and the
 [tab bar](widgets.md#tabs-between-windows)).
 
+A window can belong to another, as a terminal's Preferences or a document's
+dialogs do: `WindowAttributes::parent(id)` keeps it above that window, opens
+it centered on it and closes it with it. `.modal(true)` also blocks the
+parent while it's open: the app drops the parent's pointer, key and close
+input, and the platform knows too. `.sheet(true)` makes it a sheet on macOS
+(a modal window elsewhere). The `ownedwindows` example opens one of each.
+
+```rust,no_run
+# use stipple::prelude::*;
+# use stipple::platform::WindowAttributes;
+# struct State;
+# fn prefs(_: &State, _: &mut Cx<State>) -> Element { spacer() }
+# fn f(handle: AppHandle<State>, terminal: WindowId) {
+handle.open_window(
+    WindowAttributes::new()
+        .title("Preferences")
+        .parent(terminal)
+        .modal(true)
+        .sheet(true),
+    prefs,
+);
+# }
+```
+
+| | Belonging to a window | Modal |
+|---|---|---|
+| X11 | `WM_TRANSIENT_FOR` and `_NET_WM_WINDOW_TYPE_DIALOG`: the window manager keeps it above and usually centers it | `_NET_WM_STATE_MODAL` |
+| Wayland | `xdg_toplevel.set_parent` | the app only (`xdg-dialog-v1` isn't spoken yet) |
+| Windows | the owner window (`CreateWindowExW`'s parent): above it, minimized with it, no taskbar button; centered on it | the owner disabled (`EnableWindow`) until it closes |
+| macOS | a child window (`addChildWindow:ordered:`), centered on it | `.sheet(true)`: `beginSheet:completionHandler:`; else the app only |
+
 | | Several windows | Opening at run time |
 |---|---|---|
 | X11 | top-level windows on one connection | `CreateWindow` |

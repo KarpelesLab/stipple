@@ -121,6 +121,10 @@ struct Shared<S> {
     next_window: u64,
     /// What the app last learned of each open window.
     info: HashMap<WindowId, WindowInfo>,
+    /// The backend's id for each open window, for native message boxes.
+    natives: HashMap<WindowId, WindowId>,
+    /// Focus changes queued by [`AppHandle::focus`] and [`AppHandle::blur`].
+    focus: Vec<(WindowId, crate::core::runtime::FocusRequest)>,
 }
 
 /// A handle to a running app, for changing its state from outside a widget
@@ -187,6 +191,8 @@ impl<S> AppHandle<S> {
                 closes: Vec::new(),
                 next_window: 1,
                 info: HashMap::new(),
+                focus: Vec::new(),
+                natives: HashMap::new(),
             })),
         }
     }
@@ -695,6 +701,11 @@ impl<S> AppHandle<S> {
         let mut drawn = false;
         for Asked { mb, answer } in asked {
             let answer = std::sync::Arc::new(Mutex::new(Some(answer)));
+            // The platform knows the window by its own id.
+            let mut native_mb = mb.clone();
+            native_mb.window = mb
+                .window
+                .and_then(|w| self.with(|s| s.natives.get(&w).copied()));
             let native = if crate::platform::dialog::native_allowed() {
                 let handle = self.clone();
                 let a = answer.clone();
@@ -705,7 +716,7 @@ impl<S> AppHandle<S> {
                         }
                     })
                 });
-                crate::platform::dialog::message(&mb, done).is_ok()
+                crate::platform::dialog::message(&native_mb, done).is_ok()
             } else {
                 false
             };
@@ -730,10 +741,16 @@ impl<S> AppHandle<S> {
         drawn
     }
 
-    /// The drawn message box up now (the first asked), to draw.
-    pub(crate) fn alert_view(&self) -> Option<AlertView> {
+    /// The drawn message box up now in window `window` (the first asked
+    /// for it), to draw. The primary window also shows those for no window,
+    /// or for one that has closed.
+    pub(crate) fn alert_view(&self, window: WindowId, primary: bool) -> Option<AlertView> {
         self.with(|s| {
-            s.drawn.first().map(|d| AlertView {
+            let here = |d: &&Drawn<S>| match d.mb.window {
+                Some(w) if s.info.contains_key(&w) => w == window,
+                _ => primary,
+            };
+            s.drawn.iter().find(here).map(|d| AlertView {
                 id: d.id,
                 mb: d.mb.clone(),
                 input: d.input.clone(),
@@ -769,6 +786,30 @@ impl<S> AppHandle<S> {
             input: d.input.as_ref().map(|i| i.text().to_string()),
         };
         (d.answer)(state, response);
+    }
+
+    /// Queue a focus change for window `id`, and re-render.
+    pub(crate) fn request_focus(&self, id: WindowId, request: crate::core::runtime::FocusRequest) {
+        self.with(|s| {
+            s.focus.push((id, request));
+            // An update that does nothing, so the window builds again.
+            s.updates.push(Box::new(|_| {}));
+        });
+        wake::wake();
+    }
+
+    /// Take the focus changes queued for window `id`.
+    pub(crate) fn take_focus_requests(
+        &self,
+        id: WindowId,
+    ) -> Vec<crate::core::runtime::FocusRequest> {
+        self.with(|s| {
+            let (mine, rest) = std::mem::take(&mut s.focus)
+                .into_iter()
+                .partition(|(to, _)| *to == id);
+            s.focus = rest;
+            mine.into_iter().map(|(_, r)| r).collect()
+        })
     }
 
     /// Take the window changes queued for window `id`.
@@ -814,8 +855,14 @@ impl<S> AppHandle<S> {
             }
             None => {
                 s.info.remove(&id);
+                s.natives.remove(&id);
             }
         });
+    }
+
+    /// Record the backend's id for window `id`.
+    pub(crate) fn set_native(&self, id: WindowId, native: WindowId) {
+        self.with(|s| s.natives.insert(id, native));
     }
 
     /// Apply queued updates and due timers to `state`, as of `now`. Returns

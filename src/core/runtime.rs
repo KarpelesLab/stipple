@@ -23,8 +23,10 @@ use crate::style::Theme;
 use std::collections::HashMap;
 
 mod back;
+mod focus;
 mod memo;
 pub use back::BackHandler;
+pub(crate) use focus::{DefaultAction, FocusRequest};
 pub(crate) use memo::MemoCache;
 pub(crate) use memo::MemoMark;
 
@@ -523,6 +525,10 @@ pub struct Cx<'a, S> {
     window_size: Size,
     /// What Back does while this build is on screen ([`Cx::on_back`]).
     backs: Vec<BackHandler<S>>,
+    /// Focus changes asked for ([`Cx::focus`], [`Cx::blur`]) and what Enter
+    /// runs in a dialog (see `focus`).
+    focus_requests: Vec<FocusRequest>,
+    defaults: Vec<DefaultAction<S>>,
 }
 
 /// Per-build animation bookkeeping for a [`Cx`].
@@ -581,6 +587,8 @@ impl<'a, S> Cx<'a, S> {
             window_title: None,
             window_size: Size::new(0.0, 0.0),
             backs: Vec::new(),
+            focus_requests: Vec::new(),
+            defaults: Vec::new(),
         }
     }
 

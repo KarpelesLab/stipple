@@ -15,6 +15,7 @@ type Hresult = i32;
 #[link(name = "user32")]
 unsafe extern "system" {
     fn GetActiveWindow() -> Hwnd;
+    fn IsWindow(hwnd: Hwnd) -> i32;
     fn MessageBoxW(hwnd: Hwnd, text: *const u16, caption: *const u16, kind: u32) -> i32;
     fn PostMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> i32;
     fn FindWindowW(class: *const u16, title: *const u16) -> Hwnd;
@@ -186,7 +187,11 @@ pub(super) fn show(mb: &MessageBox, done: MessageDone) -> Result<(), MessageDone
     if !task && standard_set(&labels).is_none() {
         return Err(done);
     }
-    let owner = unsafe { GetActiveWindow() } as usize;
+    // Owned by the window it is about, else the active one.
+    let owner = match mb.window.map(|w| w.0 as usize as Hwnd) {
+        Some(w) if unsafe { IsWindow(w) } != 0 => w,
+        _ => unsafe { GetActiveWindow() },
+    } as usize;
     let mb = mb.clone();
     let spawned = std::thread::Builder::new()
         .name("stipple-message".into())

@@ -9,8 +9,8 @@
 //!
 //! | | Native alert |
 //! |---|---|
-//! | Windows | `TaskDialogIndirect` (common controls 6, activated for the call), else `MessageBoxW` when the buttons are a standard set, run on a thread of its own and owned by the active window |
-//! | macOS | `NSAlert`, as a sheet on the key window (`runModal` when there's none) |
+//! | Windows | `TaskDialogIndirect` (common controls 6, activated for the call), else `MessageBoxW` when the buttons are a standard set, run on a thread of its own and owned by its [`window`](MessageBox::window), else the active one |
+//! | macOS | `NSAlert`, as a sheet on its [`window`](MessageBox::window), else on the key window (`runModal` when there's none) |
 //! | iOS | `UIAlertController`, presented from the key window's root view controller |
 //! | Web | `window.alert` (one button) or `window.confirm` (two) |
 //! | Linux, Android | none: drawn in the window |
@@ -78,6 +78,13 @@ pub struct MessageBox {
     /// Draw it in the window, in the theme, even where the platform has an
     /// alert.
     pub drawn: bool,
+    /// The window it is about: drawn in that window, a sheet on it on macOS,
+    /// owned by it on Windows. `None`: the primary window where it's drawn,
+    /// the key (or active) window natively. Through
+    /// [`AppHandle::message`](crate::core::AppHandle::message) it's the
+    /// app's id for the window ([`Cx::window_id`](crate::core::Cx::window_id));
+    /// [`message`](fn@message) on its own takes the backend's id for it.
+    pub window: Option<crate::platform::WindowId>,
 }
 
 impl MessageBox {
@@ -139,6 +146,13 @@ impl MessageBox {
     /// Draw it in the window even where there's a native alert.
     pub fn drawn(mut self, drawn: bool) -> Self {
         self.drawn = drawn;
+        self
+    }
+
+    /// Show it for window `window` (see [`window`](Self::window)): in it,
+    /// as a sheet on it, or owned by it.
+    pub fn window(mut self, window: crate::platform::WindowId) -> Self {
+        self.window = Some(window);
         self
     }
 

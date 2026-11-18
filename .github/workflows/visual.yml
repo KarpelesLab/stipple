@@ -1504,6 +1504,30 @@ jobs:
           sleep 1
           timeout 60 bash .github/scripts/runtime-windows.sh target/release/examples/multiwindow x11
 
+      # A modal window owned by the first: WM_TRANSIENT_FOR names the parent,
+      # and it is a modal dialog (ownedwindows --selftest opens it at 1.2 s
+      # and closes it at 2.4 s). Not blocking yet.
+      - name: An owned modal window
+        continue-on-error: true
+        env:
+          DISPLAY: ":99"
+        run: |
+          cargo build --release --example ownedwindows
+          ./target/release/examples/ownedwindows --selftest > visual_output/ownedwindows.log 2>&1 &
+          pid=$!
+          for _ in $(seq 50); do grep -q "opened" visual_output/ownedwindows.log && break; sleep 0.1; done
+          sleep 0.3
+          prefs=$(xdotool search --name '^Preferences$' | head -n1)
+          main=$(xdotool search --name '^Owned windows$' | head -n1)
+          echo "prefs=$prefs main=$main"
+          xprop -id "$prefs" WM_TRANSIENT_FOR _NET_WM_WINDOW_TYPE _NET_WM_STATE | tee visual_output/ownedwindows.xprop
+          wait "$pid" || true
+          cat visual_output/ownedwindows.log
+          grep -q "window id # $(printf '0x%x' "$main")" visual_output/ownedwindows.xprop
+          grep -q "_NET_WM_WINDOW_TYPE_DIALOG" visual_output/ownedwindows.xprop
+          grep -q "_NET_WM_STATE_MODAL" visual_output/ownedwindows.xprop
+          grep -q "windows=1" visual_output/ownedwindows.log
+
       - name: Stop the app and Xvfb
         if: always()
         run: |

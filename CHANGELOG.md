@@ -14,8 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(video)* `stipple::video`: play MP4 and Matroska files (`Video`, `video_view`), H.264 and HEVC through VideoToolbox drawn by Metal from its `IOSurface`s without a copy, H.264 through VA-API, MPEG-2 in software (oxideav), the browser's `<video>` on the web (the `video` feature; 6g, #54)
 - *(package)* `cargo install stipple` installs `cargo stipple`, which runs the packaging scripts the app's own Stipple ships; iOS signing through Xcode's cloud-managed certificates (`STIPPLE_IOS_TEAM_ID`, an App Store Connect API key, optional upload); bundletool fetched when missing (#100)
 
+- *(window)* windows that belong to another: `WindowAttributes::parent`, `.modal` (the parent blocked) and `.sheet` (macOS), on X11, Wayland, Windows and macOS; `MessageBox::window` shows a message box in, on or owned by a given window (#81)
+- *(focus)* `Element::autofocus`, `Cx::focus` / `Cx::blur` and `AppHandle::focus` / `AppHandle::blur` move keyboard focus by element key (#82)
+- *(widgets)* `dialog`: Escape and Back dismiss it (`cancel_on_escape`), Enter runs `default_action` / `default_button`, and `width`, `min_width` and `max_width` size it, clamped to the window (#83)
+
 ### Changed
 
+- *(widgets)* `Dialog` is generic over the state (`Dialog<S>`) and has the `Dialog` role and its title as its label (#83)
 - *(gpu)* `Renderer::Auto` draws on a hardware Vulkan device for Wayland windows too, as for X11's (6h)
 
 ## [0.0.9](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.8...stipple-v0.0.9) - 2026-11-16

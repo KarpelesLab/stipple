@@ -67,6 +67,15 @@ fn view(state: &Todo, cx: &mut Cx<Todo>) -> Element {
   is built before the children, so they can use `cx` too. `split_pane`
   takes its two `.panes(first, second)`, and `dialog` its content and
   `.actions(…)` before `.open(cx)`.
+- **Dialogs.** `dialog(cx, title, on_dismiss)` is a modal panel: the scrim,
+  Escape and Back run `on_dismiss` (`.cancel_on_escape(false)` keeps
+  Escape and Back from it). `.default_button(cx, label, action)` adds the
+  filled button Enter presses, and `.default_action(action)` makes Enter run
+  `action` without one: unless a button (which Enter presses), a multi-line
+  field or a field with its own `on_submit` has focus. It is 340 logical
+  pixels wide; `.width(px)`, `.min_width(px)` and `.max_width(px)` change
+  that, and it never gets wider than the window. Give a field in it
+  `.autofocus()` to focus it as the dialog opens.
 - **Another theme for part of a view**, for previews and theme galleries:
   `cx.themed(Theme::dark(), |cx| panel(cx).children(…))`.
 

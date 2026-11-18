@@ -1893,6 +1893,22 @@ Most input only works on X11 today.
   Linux and Android. CI answers the native alert in-process on Windows and
   macOS and drives the drawn one on X11. `dialog::pick_color` opens
   `ChooseColorW` on Windows. See [docs/os-integration.md](docs/os-integration.md#message-boxes).
+- ✅ Owned and modal windows (#81): `WindowAttributes::parent`, `.modal`,
+  `.sheet` and `MessageBox::window`. _`WM_TRANSIENT_FOR`, the dialog type and
+  `_NET_WM_STATE_MODAL` on X11, `xdg_toplevel.set_parent` on Wayland, an owner
+  `HWND` disabled while modal on Windows, child windows and
+  `beginSheet:` on macOS; the app drops a blocked parent's input and closes a
+  parent's windows with it. A drawn message box goes in its window. Run on
+  macOS (the sheet) and through a pretend backend in unit tests; X11, Wayland
+  and Windows compile-checked only. `xdg-dialog-v1` is still to do._
+- ✅ Programmatic focus (#82): `Element::autofocus`, `Cx::focus`/`blur` and
+  `AppHandle::focus`/`blur` by element key. _Applied after the next build's
+  layout, inside the modal layers; an autofocus element that leaves with
+  focus gives it back._
+- ✅ Dialog keys and width (#83): Escape and Back dismiss a `dialog`
+  (`cancel_on_escape`), Enter runs its `default_action` / `default_button`
+  unless a button, a multi-line field or a submitting field has focus;
+  `width`, `min_width`, `max_width`, clamped to the window.
 - ✅ Tray icons: a declarative `Tray` (`App::tray`, rebuilt from the state)
   with a tooltip, an icon, a menu from the menu model and a click action;
   `Shell_NotifyIconW` with a popup `HMENU` on Windows, an `NSStatusItem` with an

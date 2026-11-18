@@ -106,10 +106,29 @@ a list's rows are part of a list that takes focus as a whole).
   button they clicked. A click on a button takes the focus away from a field,
   as before; a click on a field focuses it.
 
+### Moving focus from the app
+
+- `.autofocus()` on an element focuses it the first time it's laid out
+  (or the first focusable inside it): the search field of a popup that
+  opens, the name field of a dialog, the field of a window that opens. It
+  doesn't take focus again while it stays; when it goes away with focus in
+  it, focus goes back to where it was before.
+- `cx.focus(key)` in a view, and `handle.focus(window, key)` from a handler
+  or another thread, focus the element keyed `key` (`Element::key`), or the
+  first focusable inside it, once the window's next build is laid out, so an
+  element the same handler made appear can take it. A find bar that closes
+  gives focus back to the terminal with
+  `handle.focus(cx.window_id(), "terminal")`. `cx.blur()` and
+  `handle.blur(window)` take focus away.
+- While a modal overlay is up, focus only moves into it (or the overlays
+  above it), as Tab does.
+
 `App::focus_next` and `App::focus_prev` move it from tests. The App tests in
 `src/tab_focus_tests.rs` tab across a field, two buttons and a checkbox
 both ways, press with Enter and Space, check the ring's pixels, that a click
-leaves no focus on a button and that a modal dialog keeps Tab inside it.
+leaves no focus on a button and that a modal dialog keeps Tab inside it;
+`src/focus_tests.rs` checks autofocus, focus by key and a dialog's Enter and
+Escape.
 
 ## Windows
 

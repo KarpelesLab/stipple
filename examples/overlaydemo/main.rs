@@ -60,6 +60,8 @@ fn view(state: &State, cx: &mut Cx<State>) -> Element {
     if state.dialog_open {
         dialog(cx, "Confirm", |s| s.dialog_open = false)
             .child(label(cx, "Apply changes?"))
+            // Enter presses OK; Escape cancels.
+            .default_action(|s| s.dialog_open = false)
             .actions(vec![
                 button(cx, "Cancel")
                     .on_tap(cx, |s| s.dialog_open = false)

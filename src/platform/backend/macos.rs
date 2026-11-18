@@ -56,6 +56,9 @@ mod lifecycle;
 mod menu_check;
 /// URLs that open the app: `application:openURLs:`.
 mod open_url;
+/// Child windows and sheets (`WindowAttributes::parent`).
+mod owned;
+pub(crate) use owned::ns_window;
 /// The pointer leaving the view, hiding the cursor, double-click time.
 mod pointer;
 /// Putting frames on screen: the framebuffer, damage, `drawRect:`.
@@ -1717,24 +1720,36 @@ impl Window for MacWindow {
     }
     fn open_window(&self, attrs: WindowAttributes) -> Option<WindowId> {
         let w = unsafe { create_window(&attrs) }.ok()?;
+        let parent = owned::parent_of(&attrs);
         unsafe {
-            // Placed where asked, else down and to the right of this one.
-            let at = match attrs.position {
-                Some((x, y)) => Some(Point::new(x as f64, y as f64)),
-                None => self
-                    .info
-                    .get()
-                    .position
-                    .map(|p| Point::new(p.x + 24.0, p.y + 24.0)),
-            };
-            match at {
-                Some(p) => w.move_to(p),
-                None => msg_void_id(w.window, sel("center"), std::ptr::null_mut()),
-            }
-            if attrs.focus {
-                msg_void_id(w.window, sel("makeKeyAndOrderFront:"), std::ptr::null_mut());
+            if let Some(parent) = parent.filter(|_| attrs.sheet) {
+                // A sheet places and shows itself.
+                owned::begin_sheet(&w, parent);
             } else {
-                msg_void_id(w.window, sel("orderFront:"), std::ptr::null_mut());
+                // Placed where asked, else centered on its parent, else down
+                // and to the right of this one.
+                let at = match attrs.position {
+                    Some((x, y)) => Some(Point::new(x as f64, y as f64)),
+                    None if parent.is_some() => None,
+                    None => self
+                        .info
+                        .get()
+                        .position
+                        .map(|p| Point::new(p.x + 24.0, p.y + 24.0)),
+                };
+                match (at, parent) {
+                    (Some(p), _) => w.move_to(p),
+                    (None, Some(parent)) => owned::center_on(w.window, parent),
+                    (None, None) => msg_void_id(w.window, sel("center"), std::ptr::null_mut()),
+                }
+                if attrs.focus {
+                    msg_void_id(w.window, sel("makeKeyAndOrderFront:"), std::ptr::null_mut());
+                } else {
+                    msg_void_id(w.window, sel("orderFront:"), std::ptr::null_mut());
+                }
+                if let Some(parent) = parent {
+                    owned::add_child(&w, parent);
+                }
             }
         }
         unsafe { finish_window(&w, &attrs) };
@@ -1986,6 +2001,7 @@ unsafe fn close_windows() {
         unsafe {
             // No more callbacks into a window we no longer know.
             msg_void_id(w.window, sel("setDelegate:"), std::ptr::null_mut());
+            owned::closing(&w);
             msg_void_id(w.window, sel("orderOut:"), std::ptr::null_mut());
             msg_void(w.window, sel("close"));
             msg_void(w.window, sel("release"));

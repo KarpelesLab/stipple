@@ -85,6 +85,8 @@ use crate::geometry::{Insets, Point, Transform};
 use crate::platform::native::{self, NativeControl};
 use crate::render::{Color, ImageSource, RichText, Svg, TextDirection};
 use crate::style::Theme;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 mod refresh;
@@ -1602,10 +1604,15 @@ pub fn open_menu<S: 'static>(
 /// [`child`](Dialog::child) or [`children`](Dialog::children)) and a
 /// right-aligned row of [`actions`](Dialog::actions) (buttons). Declare it
 /// with [`open`](Dialog::open) on each build while it should show. A dark
-/// scrim behind it blocks the tree; pressing the scrim runs `on_dismiss`. It
-/// scales in when it opens and back out, with its scrim, when the view stops
-/// declaring it (taking no input meanwhile), on the theme's `dialog` and
-/// `dialog_exit` motion.
+/// scrim behind it blocks the tree; pressing the scrim, Escape (unless
+/// [`cancel_on_escape`](Dialog::cancel_on_escape) turns it off) and Back
+/// run `on_dismiss`. Enter runs its [`default_action`](Dialog::default_action),
+/// if it has one, unless a button, a multi-line field or a field with its
+/// own `on_submit` has focus. It is 340 logical pixels wide unless
+/// [`width`](Dialog::width) says otherwise, and never wider than the window.
+/// It scales in when it opens and back out, with its scrim, when the view
+/// stops declaring it (taking no input meanwhile), on the theme's `dialog`
+/// and `dialog_exit` motion.
 ///
 /// ```
 /// use stipple::prelude::*;
@@ -1614,10 +1621,8 @@ pub fn open_menu<S: 'static>(
 ///     if state.confirming {
 ///         dialog(cx, "Delete everything?", |s| s.confirming = false)
 ///             .child(label(cx, "This can't be undone."))
-///             .actions(vec![
-///                 button(cx, "Cancel").on_tap(cx, |s| s.confirming = false),
-///                 button(cx, "Delete").on_tap(cx, |s| s.confirming = false),
-///             ])
+///             .actions(vec![button(cx, "Cancel").on_tap(cx, |s| s.confirming = false)])
+///             .default_button(cx, "Delete", |s| s.confirming = false)
 ///             .open(cx);
 ///     }
 ///     button(cx, "Delete…").on_tap(cx, |s| s.confirming = true)
@@ -1629,27 +1634,54 @@ pub fn dialog<S>(
     cx: &mut Cx<S>,
     title: impl Into<String>,
     on_dismiss: impl FnMut(&mut S) + 'static,
-) -> Dialog {
+) -> Dialog<S> {
+    let _ = cx;
     Dialog {
         title: title.into(),
-        dismiss: cx.register(on_dismiss),
+        dismiss: Rc::new(RefCell::new(on_dismiss)),
         content: Vec::new(),
         actions: Vec::new(),
+        default: None,
+        escape: true,
+        width: DIALOG_WIDTH,
+        min_width: None,
+        max_width: None,
     }
 }
 
+/// A dialog's width unless [`Dialog::width`] says otherwise.
+const DIALOG_WIDTH: f64 = 340.0;
+
+/// What a dialog runs (its dismiss or default action).
+type DialogFn<S> = Rc<RefCell<dyn FnMut(&mut S)>>;
+
 /// A modal dialog being built: see [`dialog`]. It shows once
 /// [`open`](Self::open) declares it.
-#[derive(Debug)]
 #[must_use = "a dialog shows only once `.open(cx)` declares it"]
-pub struct Dialog {
+pub struct Dialog<S> {
     title: String,
-    dismiss: crate::core::ActionId,
+    dismiss: DialogFn<S>,
     content: Vec<Element>,
     actions: Vec<Element>,
+    default: Option<DialogFn<S>>,
+    escape: bool,
+    width: f64,
+    min_width: Option<f64>,
+    max_width: Option<f64>,
 }
 
-impl Dialog {
+impl<S> std::fmt::Debug for Dialog<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dialog")
+            .field("title", &self.title)
+            .field("default", &self.default.is_some())
+            .field("escape", &self.escape)
+            .field("width", &self.width)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S: 'static> Dialog<S> {
     /// Add `child` to the dialog's content, under the title.
     pub fn child(mut self, child: Element) -> Self {
         self.content.push(child);
@@ -1668,11 +1700,88 @@ impl Dialog {
         self
     }
 
+    /// Run `action` on Enter, as a native dialog's default button does:
+    /// with nothing focused, or with focus on anything in the dialog but a
+    /// button (which Enter presses), a multi-line field (where it starts a
+    /// new line) or a field with its own
+    /// [`on_submit`](crate::core::Element::on_submit). Give the button that
+    /// does the same the [`Primary`](Variant::Primary) look, or add it with
+    /// [`default_button`](Self::default_button).
+    pub fn default_action(mut self, action: impl FnMut(&mut S) + 'static) -> Self {
+        self.default = Some(Rc::new(RefCell::new(action)));
+        self
+    }
+
+    /// Add a [`Primary`](Variant::Primary) button labelled `label` at the end
+    /// of the [`actions`](Self::actions), running `action` when it's pressed
+    /// and on Enter (it is the [`default_action`](Self::default_action)).
+    pub fn default_button(
+        mut self,
+        cx: &mut Cx<S>,
+        label: impl Into<String>,
+        action: impl FnMut(&mut S) + 'static,
+    ) -> Self {
+        let action: DialogFn<S> = Rc::new(RefCell::new(action));
+        let tap = action.clone();
+        let button = Button::new(label)
+            .variant(Variant::Primary)
+            .view(cx)
+            .on_tap(cx, move |s| (tap.borrow_mut())(s));
+        self.actions.push(button);
+        self.default = Some(action);
+        self
+    }
+
+    /// Whether Escape (and Back) run `on_dismiss`, as pressing the scrim
+    /// does (`true` by default).
+    pub fn cancel_on_escape(mut self, cancel: bool) -> Self {
+        self.escape = cancel;
+        self
+    }
+
+    /// Make the dialog `width` logical pixels wide (340 by default), or as
+    /// wide as the window allows when it is narrower.
+    pub fn width(mut self, width: f64) -> Self {
+        self.width = width.max(0.0);
+        self
+    }
+
+    /// Never make the dialog narrower than `width` logical pixels, unless the
+    /// window is.
+    pub fn min_width(mut self, width: f64) -> Self {
+        self.min_width = Some(width.max(0.0));
+        self
+    }
+
+    /// Never make the dialog wider than `width` logical pixels.
+    pub fn max_width(mut self, width: f64) -> Self {
+        self.max_width = Some(width.max(0.0));
+        self
+    }
+
+    /// The dialog's width in a window `window` logical pixels wide (zero:
+    /// not known yet), `margin` clear of its sides.
+    fn width_in(&self, window: f64, margin: f64) -> f64 {
+        let mut w = self.width;
+        if let Some(min) = self.min_width {
+            w = w.max(min);
+        }
+        if let Some(max) = self.max_width {
+            w = w.min(max);
+        }
+        if window > 0.0 {
+            w = w.min((window - 2.0 * margin).max(0.0));
+        }
+        w
+    }
+
     /// Declare the dialog as an overlay on this build.
-    pub fn open<S>(self, cx: &mut Cx<S>) {
+    pub fn open(self, cx: &mut Cx<S>) {
         let theme = &theme_of(cx);
+        let width = self.width_in(cx.window_size().width, theme.spacing.lg);
+        let key = ("stipple-dialog", self.title.clone());
         let mut children = vec![Element::text(
-            self.title,
+            self.title.clone(),
             theme.typography.heading,
             theme.palette.text,
         )];
@@ -1684,15 +1793,29 @@ impl Dialog {
                     .align(Align::End, Align::Center),
             );
         }
+        let dismiss = {
+            let f = self.dismiss.clone();
+            cx.register(move |s| (f.borrow_mut())(s))
+        };
+        if self.escape {
+            let f = self.dismiss.clone();
+            cx.on_back(crate::core::BackHandler::new(move |s| (f.borrow_mut())(s)).escape(true));
+        }
+        if let Some(run) = self.default {
+            cx.default_action(crate::core::ElementKey::new(&key), run);
+        }
         let content = panel_frame(theme, children)
-            .width(340.0)
+            .width(width)
+            .role(Role::Dialog)
+            .a11y_label(self.title)
+            .key(key)
             .enter(motion::dialog_effect(&theme.motion))
             .exit(motion::dialog_exit(&theme.motion));
         cx.overlay(OverlaySpec {
             content,
             anchor: Anchor::Center,
             modal: true,
-            dismiss: Some(self.dismiss),
+            dismiss: Some(dismiss),
         });
     }
 }

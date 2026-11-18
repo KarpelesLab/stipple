@@ -54,6 +54,7 @@ mod geometry;
 /// Raw key events: physical keys, key text, sides and repeats.
 mod keys;
 mod occlusion;
+mod owned;
 mod pointer;
 mod present_clock;
 mod refresh;
@@ -907,6 +908,8 @@ struct Conn {
     attention: attention::Atoms,
     /// The atoms for titles, geometry and state (0 until set).
     geo: geometry::Atoms,
+    /// Owned and modal windows' atoms (see `owned`).
+    owned: owned::Atoms,
     /// The core `cursor` font, opened on first use (0 until then).
     cursor_font: u32,
     /// Cursors created so far, by glyph.
@@ -984,6 +987,7 @@ impl Conn {
             xdnd: dnd::Atoms::default(),
             attention: attention::Atoms::default(),
             geo: geometry::Atoms::default(),
+            owned: owned::Atoms::default(),
             cursor_font: 0,
             cursors: Vec::new(),
             blank_cursor: 0,
@@ -1651,6 +1655,14 @@ fn create_window(
     if attrs.fullscreen {
         states.push(conn.atom_fullscreen);
     }
+    // A window that belongs to another: a dialog transient for it, and
+    // modal when it blocks it.
+    if let Some(parent) = attrs.parent {
+        owned::set_parent(conn, window, parent.0 as u32).map_err(os)?;
+        if attrs.blocks_parent() && conn.owned.state_modal != 0 {
+            states.push(conn.owned.state_modal);
+        }
+    }
     if !states.is_empty() {
         let prop = conn.atom_net_wm_state;
         set_property_atoms(conn, window, prop, &states).map_err(os)?;
@@ -1752,6 +1764,7 @@ where
     conn.xdnd = dnd::Atoms::intern(&mut conn).map_err(os)?;
     conn.attention = attention::Atoms::intern(&mut conn).map_err(os)?;
     conn.geo = geometry::Atoms::intern(&mut conn).map_err(os)?;
+    conn.owned = owned::Atoms::intern(&mut conn).map_err(os)?;
     let mut xdnd = dnd::Xdnd {
         atoms: conn.xdnd,
         ..Default::default()
