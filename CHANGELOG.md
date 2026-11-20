@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.10](https://github.com/KarpelesLab/stipple/compare/stipple-v0.0.9...stipple-v0.0.10) - 2026-11-20
+
+### Added
+
+- *(native)* live Win32 checkboxes and radio buttons, showing their own labels
+- *(native)* drags and wheels on live sliders and selects scroll their list; Tab from iPad fields
+- *(widgets)* combo box, searchable select with on_change, aspect ratio, focus-visible, and small widget gaps
+- *(windows)* a menu bar on every window, menu commands that know their window, Activate without a token, WM_CLASS and launch tokens, restored bounds (#78, #79, #80, #87)
+- *(widgets)* virtual_list scrolls to a row from code, follows its end, fills its parent, plain rows and paging; text_view for large read-only text (#84, #98, #90)
+- *(window)* translucent windows with blur behind ([#77](https://github.com/KarpelesLab/stipple/pull/77)); Wayland fractional scales and live X11 Xft.dpi changes ([#86](https://github.com/KarpelesLab/stipple/pull/86))
+- *(text)* color emoji (sbix, COLR v0/v1), default ligatures only, max_lines and ellipsis (#76, #93, #95)
+- *(platform)* one instance per app, and macOS's Dock and system menus (#88, #89)
+- owned and modal windows, programmatic focus, dialog keys and width (#81, #82, #83)
+- *(package)* cargo install stipple gives cargo stipple; iOS signing through Xcode's cloud-managed certificates ([#100](https://github.com/KarpelesLab/stipple/pull/100))
+- *(video)* play MP4 and Matroska files, VideoToolbox frames drawn by Metal without a copy (6g, #54)
+- *(gpu)* Renderer::Auto presents to Wayland windows on a hardware Vulkan device (6h, #54)
+- *(native)* text fields as real OS text controls under Theme::native
+- *(native)* a real select and per-scroll-area clipping of live controls
+- *(macos)* live AppKit controls under Theme::native
+- *(windows)* live Win32 controls under Theme::native
+- *(ios)* live UIKit controls under Theme::native, glass buttons on iOS 26
+- *(native)* real OS controls under Theme::native: the retained host, planning and fallback
+- *(platform)* secure storage for secrets: Keychain, Android Keystore, Credential Manager, Secret Service ([#70](https://github.com/KarpelesLab/stipple/pull/70))
+- *(platform)* network status and change events ([#71](https://github.com/KarpelesLab/stipple/pull/71))
+- *(package)* an Android app's own Java classes, dex files and manifest fragment ([#67](https://github.com/KarpelesLab/stipple/pull/67))
+- *(ios)* app extensions and app groups in cargo-stipple; platform::shared_dir and extension_main ([#69](https://github.com/KarpelesLab/stipple/pull/69))
+- *(platform)* URLs that open the app: custom schemes, universal links and App Links ([#72](https://github.com/KarpelesLab/stipple/pull/72))
+- *(android)* JNI access for apps and activities started for a result ([#68](https://github.com/KarpelesLab/stipple/pull/68))
+- *(vk)* Android hardware buffers imported on Vulkan, the camera's YUV through a sampler YCbCr conversion (6g)
+- *(wayland)* a window on a hidden sway workspace is occluded
+
+### Fixed
+
+- *(menu)* an unbundled app's menu is named after its window again, not its executable
+- *(mediabrowser)* the loader isn't idle while a worker is still loading
+- *(video)* a video that falls behind still ends on its last frame
+- *(bench)* leave with _exit on Android, past the emulator's GLES translator's exit abort; Mutter and KWin presents passing in CI
+- *(native)* the switch's size isn't asked of AppKit or UIKit off the main thread
+- *(test)* native alerts allowed only once App::run starts the loop, not when a test builds a handler
+- *(examples)* nativegallery's Android clippy allow as a crate attribute
+- *(examples)* nativegallery clippy-clean on Android (thread_local false positive)
+- *(native)* live controls reachable through UIA, NVDA and VoiceOver; iOS touches stay the app's
+- *(platform)* network backends' test builds clippy-clean on Apple, Windows and Android
+- *(web)* pass over a fallback WebGPU adapter; the site check keeps every example in view
+- *(gles)* the GLES renderer comes up on the Android emulator
+
+### Other
+
+- *(windows)* compose through the Japanese IME into a live EDIT
+- *(windows)* require the steps that pass on the runner
+- *(windows)* the OLE drop harness drags from its own window
+- *(windows)* uia-patterns subscribes to UIA events from C#
+- *(text_view)* sample the find highlight between glyphs, not where a tall glyph may reach
+- update screenshots from CI
+- *(text)* shaping positions glyphs once
+- the Android cross-compile builds the library (not the host-only cargo-stipple bin); the AT-SPI check reads the button as one leaf; plain virtual_list rows measured under an overlay bar
+- *(render)* glyph runs from cached coverage masks and the GPU glyph atlas; scroll_canvas_rect moves a canvas's pixels (#74, #75)
+- web_theme_switch scaled by the runner's calibration, as it is work rather than a wait for the display
+- a hung Android or iOS device fails the GPU corpus job in 75 minutes, not six hours; the AT-SPI walk sends a lost key up to three times
+- update screenshots from CI
+- *(android)* the a11y probe knows a node by where it starts, as a counter's label widens from 8 s to 10 s
+- update screenshots from CI
+- *(gpu)* the comparison corpus and the benchmark on the iOS simulator and the Android emulator ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- the touch strip test asks for classic scroll bars, an anchored float may sit a line above its wrapped anchor; gl-only Linux builds clippy-clean
+- the Wayland GPU present under headless Mutter and KWin (non-blocking) ([#54](https://github.com/KarpelesLab/stipple/pull/54))
+- *(roadmap)* the native theme's GPU check passed on Metal (M5 Max)
+- type into nativegallery's real OS text field on iOS, macOS and Windows
+- the native theme's real controls on iOS, macOS and Windows (non-blocking)
+- *(android)* drag between apps and open-URL checks passed in a CI trial run on API 34, 33 and 30
+- *(android)* the open-URL check proves the intent, past Chrome's first run
+- *(android)* drag between apps in split screen on API 33
+- a test clock, so no test sleeps or depends on the runner's speed
+- *(wayland)* explicit sync run against a real compositor (sway on NVIDIA)
+- *(touch)* the non-fling drag holds still before lifting
+
 ### Added
 
 - *(gpu)* the GPU comparison corpus, device-loss test and benchmark on the iOS simulator (Metal) and the Android emulator (GLES, Vulkan): `tools/gpu-mobile.sh`, and non-blocking `gpu-ios-sim` / `gpu-android` CI jobs (6h)
