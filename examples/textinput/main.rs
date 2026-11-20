@@ -5,6 +5,11 @@
 //! with `xdotool type`, and screenshots — confirming the
 //! keysym → text → [`TextInput`] → re-present path on a real X server. The
 //! buffer is caret-aware, so arrow keys move the caret and insert mid-string.
+//!
+//! With `STIPPLE_TEXTINPUT_NATIVE` set it runs under [`Theme::native`],
+//! where (on Windows, macOS and iOS) the field is the OS's own text control
+//! and its input method composes there; CI's Windows IME job types into it
+//! that way too.
 
 use stipple::prelude::*;
 
@@ -42,9 +47,14 @@ fn view(state: &Form, cx: &mut Cx<Form>) -> Element {
 }
 
 fn main() {
+    let theme = if std::env::var_os("STIPPLE_TEXTINPUT_NATIVE").is_some() {
+        Theme::native()
+    } else {
+        Theme::dark()
+    };
     let app = App::new(Form::default(), view)
         .title("Stipple Text Input")
-        .theme(Theme::dark())
+        .theme(theme)
         .logical_size(Size::new(640.0, 240.0));
     app.run();
 }

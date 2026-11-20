@@ -822,7 +822,8 @@ the macOS accessibility dump listed the field once, named by its hint; on
 Windows a real click and real keys typed into the `EDIT`, UI Automation
 listed it once and MSAA named it by its hint. An iPad's hardware Tab moves
 focus out of a `UITextField` / `UITextView` (key commands, self-tested
-through UIKit's action dispatch, not with real keys).
+through UIKit's action dispatch, not with real keys); CI's Windows IME job
+also composes Japanese into a live `EDIT` (non-blocking).
 See [native-theme.md](native-theme.md#text-fields).
 
 ⁹⁵ MP4 and Matroska natively, with the `video` feature: H.264 and HEVC

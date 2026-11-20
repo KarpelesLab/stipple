@@ -119,6 +119,13 @@ Toggle), that real clicks on them reach the app and leave them showing the
 app's state, and that a real wheel over the trackbar in a list scrolls the
 list without moving the slider and a horizontal one moves it.
 
+The `ime-windows` job types Japanese through the Microsoft IME into
+`textinput` twice: into Stipple's own field (TSF) and, with
+`STIPPLE_TEXTINPUT_NATIVE` (`Theme::native`), into a live `EDIT`, where
+the app's state must show the IME's hiragana preedit, its kanji
+conversion and the commit (a non-blocking step until it has passed a
+while).
+
 ## Fonts
 
 `Font::system_default()` loads Segoe UI, falling back to Arial, with Segoe UI

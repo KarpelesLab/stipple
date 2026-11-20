@@ -3648,6 +3648,16 @@ jobs:
       - name: Type through the Microsoft Japanese IME
         shell: powershell
         run: .github\scripts\ime-windows.ps1 .\target\release\examples\textinput.exe visual_output
+      # The same, into a live EDIT (Theme::native: docs/native-theme.md,
+      # "Text fields"): the IME composes in the EDIT, and the app's state
+      # must show the hiragana preedit, the kanji conversion and the commit,
+      # read back from the EDIT's composition. Non-blocking until it has
+      # passed here a while.
+      - name: Type through the Microsoft Japanese IME into a live EDIT
+        if: always()
+        continue-on-error: true
+        shell: powershell
+        run: .github\scripts\ime-windows.ps1 .\target\release\examples\textinput.exe visual_output -Native
       - name: Upload logs and screenshots
         uses: actions/upload-artifact@v4
         if: always()

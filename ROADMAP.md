@@ -591,8 +591,9 @@ the buffer onto the screen, and the declarative UI toolkit itself.
   app, Return, the field read once by VoiceOver / the AX dump / UIA; on
   Windows also real keys and MSAA's name). Tab and Shift-Tab from a live
   `UITextField` / `UITextView` on a hardware keyboard (key commands with
-  priority; self-tested through UIKit's action dispatch, not real keys).
-  Not yet: composition driven by CI on Windows.
+  priority; self-tested through UIKit's action dispatch, not real keys);
+  composition into a live `EDIT` through the Microsoft Japanese IME in the
+  `ime-windows` job (non-blocking).
   See `docs/native-theme.md`, *Text fields*.
 - ✅ **High-DPI** on Windows (per-monitor v2), macOS (`backingScaleFactor`), iOS
   (`UIScreen.scale`), X11 (`Xft.dpi`) and Wayland (output scale). X11 and Wayland

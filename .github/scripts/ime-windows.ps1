@@ -1,7 +1,15 @@
 # Type Japanese into examples/textinput through the real Microsoft Japanese
 # IME, by way of TSF.
 #
-#   .github\scripts\ime-windows.ps1 <textinput.exe> [out dir]
+#   .github\scripts\ime-windows.ps1 <textinput.exe> [out dir] [-Native]
+#
+# With -Native the app runs under Theme::native (STIPPLE_TEXTINPUT_NATIVE),
+# where its field is a live EDIT child window (docs/native-theme.md, "Text
+# fields"): the IME composes in the EDIT itself, the app reads the
+# composition back (ImmGetCompositionStringW) as its preedit, and the same
+# echo of the app's state is checked. The field's focus is then the EDIT
+# having the keyboard focus (the app's own TSF document stays off), and the
+# logs and screenshots are named *-native.
 #
 # 1. The IME: the Japanese language's typing feature carries it. If its TSF
 #    profile isn't registered, try to add it (Add-WindowsCapability, then
@@ -25,7 +33,7 @@
 # field's focus, the IME's on state, an empty field) is retried; what is
 # under test (the preedit, the conversion, the commit) gets one retry of the
 # whole word from an empty field. Exit code 0 only when the commit arrived.
-param([string]$App, [string]$Out = "visual_output")
+param([string]$App, [string]$Out = "visual_output", [switch]$Native)
 
 $ErrorActionPreference = 'Continue'
 New-Item -ItemType Directory -Force -Path $Out | Out-Null
@@ -203,10 +211,12 @@ public static class Ime {
 }
 "@
 
-$log = Join-Path $Out 'ime-windows.log'
-$err = Join-Path $Out 'ime-windows.err.log'
+$suffix = if ($Native) { '-native' } else { '' }
+$log = Join-Path $Out "ime-windows$suffix.log"
+$err = Join-Path $Out "ime-windows$suffix.err.log"
 $env:STIPPLE_TEXTINPUT_ECHO = '1'
 $env:STIPPLE_DEBUG_TSF = '1'
+if ($Native) { $env:STIPPLE_TEXTINPUT_NATIVE = '1' }
 
 # The app's output: its field (stdout) and its TSF trace (stderr). Read
 # while the app holds them open.
@@ -247,9 +257,9 @@ $proc = Start-Process -FilePath $App -PassThru -RedirectStandardOutput $log -Red
 function Finish([int]$Code) {
   Stop-Process -Id $proc.Id -ErrorAction SilentlyContinue
   Start-Sleep -Milliseconds 500
-  Write-Host "=== ime-windows.log ==="
+  Write-Host "=== ime-windows$suffix.log ==="
   Get-Content $log -Encoding UTF8
-  Write-Host "=== ime-windows.err.log ==="
+  Write-Host "=== ime-windows$suffix.err.log ==="
   Get-Content $err -Encoding UTF8 -ErrorAction SilentlyContinue
   exit $Code
 }
@@ -326,8 +336,22 @@ function Send-Keys([uint16[]]$Keys, [int]$Delay = 150) {
 }
 
 function Shot($name) {
+  if ($Native) { $name = $name -replace '\.png$', '-native.png' }
   & powershell -NoProfile -ExecutionPolicy Bypass -File .github/scripts/post-key.ps1 -Title $title `
     -Screenshot (Join-Path $Out $name) | Out-Null
+}
+
+# The live EDIT has the keyboard focus (-Native), waiting up to $Ms.
+function Edit-Focused([int]$Ms = 3000) {
+  $deadline = [DateTime]::Now.AddMilliseconds($Ms)
+  do {
+    $g = [Ime]::Gui($thread)
+    $c = New-Object Text.StringBuilder 64
+    [Ime]::GetClassNameW($g.hwndFocus, $c, 64) | Out-Null
+    if ($c.ToString() -eq 'Edit') { return $true }
+    Start-Sleep -Milliseconds 100
+  } while ([DateTime]::Now -lt $deadline)
+  return $false
 }
 
 Stage "before any key: $(Input-State)"
@@ -340,8 +364,11 @@ for ($try = 1; $try -le 3 -and -not $focused; $try++) {
   if (-not (Front 'focus the field')) { Stage "attempt $try`: can't bring the window forward"; continue }
   $m = Mark
   Send-Keys @(0x09)
-  $focused = Wait-For $m 1 'stipple-tsf: focus ' 3000
+  $focused = if ($Native) { Edit-Focused 3000 } else { Wait-For $m 1 'stipple-tsf: focus ' 3000 }
   if (-not $focused) { Stage "attempt $try`: Tab didn't focus the field: $(Input-State)" }
+}
+if (-not $focused -and $Native) {
+  Fail 'field focus' "the live EDIT didn't take the keyboard focus after three Tabs"
 }
 if (-not $focused) {
   if ((Tsf-Log).Contains('stipple-tsf: off')) { Fail 'field focus' "TSF is off in the app: $((Tsf-Log).Trim())" }
@@ -468,7 +495,7 @@ foreach ($want in @($wantPreedit, $wantConverted, $wantCommit)) {
   if ($text.Contains($want)) { Stage "ok: $want" } else { Stage "missing: $want" }
 }
 if (-not $done) {
-  if (-not (Tsf-Log).Contains('composition started')) {
+  if (-not $Native -and -not (Tsf-Log).Contains('composition started')) {
     Fail 'compose' 'the IME started no composition (keys didn''t reach it, or it stayed in direct input)'
   }
   Fail 'compose' "the word didn't go through preedit, conversion and commit; the field: $(Last-Field)"
