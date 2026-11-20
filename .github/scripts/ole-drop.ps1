@@ -3,9 +3,10 @@
 #   powershell -File ole-drop.ps1 -Title "Stipple drop demo" -Files C:\a.txt
 #   powershell -File ole-drop.ps1 -Title "Stipple drop demo" -Text "hello"
 #
-# Runs DoDragDrop with our own IDropSource: it puts the cursor over the
-# window's client area at (-X, -Y), holds the left button and moves the mouse
-# with synthesized input so the target sees DragEnter and DragOver, then drops. The target's
+# Runs DoDragDrop with our own IDropSource: it presses the left button on a
+# small window of its own beside the target, then moves the mouse with
+# synthesized input onto the target's client point (-X, -Y), so the target
+# sees DragEnter and DragOver, and lets go there: the drop. The target's
 # IDropTarget receives the drop exactly as from Explorer. Prints the effect
 # the target chose; exits 1 when it refused (effect none) or on error.
 # Windows PowerShell (5.1) runs scripts in an STA, which OLE needs.
@@ -19,7 +20,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
@@ -45,20 +46,28 @@ public class OleDrop : IOleDropSource {
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
+    [DllImport("user32.dll")] static extern IntPtr WindowFromPoint(POINT p);
+    [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after,
+        int x, int y, int cx, int cy, uint flags);
+    const uint SWP_NOSIZE = 1, SWP_NOMOVE = 2, SWP_NOACTIVATE = 0x10;
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetPropW(IntPtr hwnd, string name);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern int GetClassNameW(IntPtr hwnd, System.Text.StringBuilder name, int max);
     [DllImport("user32.dll")] static extern void mouse_event(uint flags, int dx, int dy, uint data, UIntPtr extra);
-    const uint MOUSEEVENTF_MOVE = 1, MOUSEEVENTF_LEFTDOWN = 2, MOUSEEVENTF_LEFTUP = 4;
+    const uint MOUSEEVENTF_MOVE = 1, MOUSEEVENTF_LEFTDOWN = 2, MOUSEEVENTF_LEFTUP = 4,
+        MOUSEEVENTF_ABSOLUTE = 0x8000;
 
     int calls;
-    public POINT origin;
     public uint LastFeedback;
 
     // Called on every pass of DoDragDrop's loop (on mouse and key
-    // messages): move along, then drop.
+    // messages): keep dragging until the button is up, then drop.
     public int QueryContinueDrag(int esc, uint keys) {
         calls++;
         if (esc != 0) return 0x00040101; // DRAGDROP_S_CANCEL
-        // Drop once the button is up (MK_LBUTTON clear) or after enough moves.
-        if ((keys & 1) == 0 || calls >= 12) return 0x00040100; // DRAGDROP_S_DROP
+        if ((keys & 1) == 0) return 0x00040100; // DRAGDROP_S_DROP (MK_LBUTTON clear)
         return 0; // S_OK: keep dragging
     }
 
@@ -67,28 +76,73 @@ public class OleDrop : IOleDropSource {
         return 0x00040102; // DRAGDROP_S_USEDEFAULTCURSORS
     }
 
+    // Move the pointer to a screen point with real (absolute) input, which
+    // posts the mouse messages DoDragDrop's loop runs on.
+    static void MoveTo(int x, int y) {
+        int w = GetSystemMetrics(0), h = GetSystemMetrics(1); // SM_CXSCREEN, SM_CYSCREEN
+        mouse_event(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+            (x * 65535 + (w - 1) / 2) / (w - 1), (y * 65535 + (h - 1) / 2) / (h - 1), 0, UIntPtr.Zero);
+    }
+
+    // What OLE finds at `p`: the window, whether it is (in) the target, and
+    // whether that registered an IDropTarget.
+    static string Under(POINT p, IntPtr target) {
+        IntPtr under = WindowFromPoint(p);
+        IntPtr top = GetAncestor(under, 2); // GA_ROOT
+        var cls = new System.Text.StringBuilder(128);
+        GetClassNameW(top, cls, cls.Capacity);
+        return "under the drop point: 0x" + top.ToString("x") + " class " + cls
+            + (top == target ? " (the target)" : " (NOT the target 0x" + target.ToString("x") + ")")
+            + ", OleDropTargetInterface " + (GetPropW(top, "OleDropTargetInterface") != IntPtr.Zero ? "set" : "unset");
+    }
+
     public static int Run(string title, string[] files, string text, int x, int y) {
         SetProcessDPIAware();
         int hr = OleInitialize(IntPtr.Zero);
         Console.WriteLine("ole-drop: OleInitialize 0x" + hr.ToString("x"));
         IntPtr hwnd = FindWindow(null, title);
         if (hwnd == IntPtr.Zero) { Console.WriteLine("ole-drop: window not found"); return 2; }
-        SetForegroundWindow(hwnd);
         var p = new POINT { X = x, Y = y };
         ClientToScreen(hwnd, ref p);
-        var src = new OleDrop { origin = p };
-        SetCursorPos(p.X, p.Y);
-        // DoDragDrop runs on real input: hold the left button (as a user who
-        // started a drag would), and from another thread move the mouse a
-        // little at a time, then let go. Each mouse message turns its loop,
-        // which asks QueryContinueDrag below; the button's release ends the
-        // drag with a drop even if the source hasn't said so yet.
+        // Nothing may cover the drop point (on the runner a console window
+        // can sit over the target): keep the target on top for the drag.
+        SetWindowPos(hwnd, new IntPtr(-1), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); // HWND_TOPMOST
+        SetForegroundWindow(hwnd);
+        System.Threading.Thread.Sleep(200);
+        Console.WriteLine("ole-drop: " + Under(p, hwnd));
+        // The drag starts on a window of our own, as a user's drag starts in
+        // the source app: the press goes to our thread, and DoDragDrop's
+        // capture then takes the mouse. A press over the target instead goes
+        // to the target, which captures the mouse for itself (as any app does
+        // on a press), and DoDragDrop's loop never sees a mouse message.
+        var form = new Form {
+            FormBorderStyle = FormBorderStyle.None, ShowInTaskbar = false, TopMost = true,
+            StartPosition = FormStartPosition.Manual, BackColor = System.Drawing.Color.SteelBlue,
+            Bounds = new System.Drawing.Rectangle(Math.Max(0, p.X - 160), Math.Max(0, p.Y - 30), 60, 60),
+        };
+        form.Show();
+        Application.DoEvents();
+        var start = new POINT { X = form.Left + 30, Y = form.Top + 30 };
+        SetForegroundWindow(form.Handle);
+        SetCursorPos(start.X, start.Y);
+        MoveTo(start.X, start.Y);
         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, UIntPtr.Zero);
+        for (int i = 0; i < 10; i++) { System.Threading.Thread.Sleep(20); Application.DoEvents(); }
+        var src = new OleDrop();
+        // From another thread, once DoDragDrop runs: move onto the target a
+        // step at a time, wiggle there (DragOver), then let go (the drop).
         var mover = new System.Threading.Thread(() => {
-            for (int i = 0; i < 20; i++) {
-                System.Threading.Thread.Sleep(60);
-                mouse_event(MOUSEEVENTF_MOVE, (i & 1) == 0 ? 2 : -1, 0, 0, UIntPtr.Zero);
+            System.Threading.Thread.Sleep(300);
+            const int steps = 16;
+            for (int i = 1; i <= steps; i++) {
+                MoveTo(start.X + (p.X - start.X) * i / steps, start.Y + (p.Y - start.Y) * i / steps);
+                System.Threading.Thread.Sleep(50);
             }
+            for (int i = 0; i < 8; i++) {
+                MoveTo(p.X + (i & 1), p.Y);
+                System.Threading.Thread.Sleep(50);
+            }
+            Console.WriteLine("ole-drop: at the drop: " + Under(p, hwnd) + ", feedback so far " + src.LastFeedback);
             mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, UIntPtr.Zero);
         });
         mover.IsBackground = true;
@@ -110,10 +164,12 @@ public class OleDrop : IOleDropSource {
             ? new DataObject(DataFormats.FileDrop, files)
             : new DataObject(DataFormats.UnicodeText, text);
         uint effect;
-        Console.WriteLine("ole-drop: dragging from " + p.X + "," + p.Y);
+        Console.WriteLine("ole-drop: dragging from " + start.X + "," + start.Y + " to " + p.X + "," + p.Y);
         hr = DoDragDrop(data, src, 1 | 2 | 4, out effect);
         Console.WriteLine("ole-drop: DoDragDrop 0x" + hr.ToString("x") + " effect " + effect
             + " (last feedback " + src.LastFeedback + ", " + src.calls + " passes)");
+        form.Close();
+        SetWindowPos(hwnd, new IntPtr(-2), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE); // HWND_NOTOPMOST
         // DRAGDROP_S_DROP with an effect other than none: the target took it.
         return hr == 0x00040100 && effect != 0 ? 0 : 1;
     }

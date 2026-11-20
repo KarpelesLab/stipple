@@ -210,9 +210,9 @@ backend's touch path, past `UITouch`. Hardware keyboard keys (`pressesBegan:`)
 are only build-checked. Composition goes through `UITextInput` (⁵⁰).
 ²⁸ XDND on X11 and `wl_data_device` on Wayland, OLE `IDropTarget` (and
 `WM_DROPFILES`) on Windows, `NSDraggingDestination` on macOS. CI drops files and
-text on `dropdemo` with an XDND source on X11 and drives the view's dragging
-methods with a stand-in drag on macOS. Windows is build-checked: CI's real OLE
-`DoDragDrop` doesn't complete on the runner yet.
+text on `dropdemo` with an XDND source on X11, with a real OLE `DoDragDrop`
+from another process on Windows, and drives the view's dragging methods with a
+stand-in drag on macOS.
 Wayland is unit-tested against a scripted compositor only. See
 [drag-and-drop.md](drag-and-drop.md).
 ²⁹ Shared code, so the same everywhere; unit-tested, and CI drags a chip in

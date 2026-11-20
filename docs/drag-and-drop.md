@@ -275,9 +275,10 @@ provider has no state of its own, so a target may read it after the drag
   the text; another drag out is cancelled with Escape (the target sees a
   leave, no drop), and one goes out and back onto the app's own zone, which
   takes it as a drop of files. On
-  Windows CI tries `.github/scripts/ole-drop.ps1` (real OLE `DoDragDrop`
-  from another process, for a file and for text), but the drag doesn't
-  complete on the runner yet, so that step only reports; on macOS with
+  Windows `.github/scripts/ole-drop.ps1` drags a file, then text, from
+  another process with a real OLE `DoDragDrop` (pressed on its own window,
+  moved onto the target with synthesized input, dropped on the first zone),
+  and both must land; on macOS with
   `STIPPLE_COCOA_DROP=<path>`, which drives the view's own dragging methods
   with a stand-in `NSDraggingInfo` whose pasteboard holds the file's URL.
 - On the Android emulator, `examples/androiddemo/test-input.sh` long-presses
